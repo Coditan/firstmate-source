@@ -127,6 +127,29 @@ if fm_backend_tmux_resolve_bare_selector "no-such-window-xyz" 2>/dev/null; then
 fi
 pass "real tmux: fm_backend_tmux_resolve_bare_selector fails for a window that does not exist"
 
+# --- fm_tmux_ensure_own_window (firstmate must not sit in a crew window) ------
+# The helper reads the CALLER's own window (no -t), so drive it from INSIDE a
+# window via send-keys and assert the rename, exactly the resume path it guards.
+tmux new-window -d -t "$SESSION" -n "fm-selftest" -c "$HOME"
+tmux send-keys -t "$SESSION:fm-selftest" -l ". '$ROOT/bin/fm-tmux-lib.sh' && fm_tmux_ensure_own_window >/dev/null"
+tmux send-keys -t "$SESSION:fm-selftest" Enter
+sleep 0.5
+if tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -qx "fm-selftest"; then
+  fail "fm_tmux_ensure_own_window left firstmate in a crew (fm-*) window"
+fi
+tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -qx "firstmate" \
+  || fail "fm_tmux_ensure_own_window should have renamed the crew window to 'firstmate'"
+pass "real tmux: fm_tmux_ensure_own_window renames firstmate out of a crew (fm-*) window"
+
+# A deliberately non-crew window name is left untouched.
+tmux new-window -d -t "$SESSION" -n "captain-cockpit" -c "$HOME"
+tmux send-keys -t "$SESSION:captain-cockpit" -l ". '$ROOT/bin/fm-tmux-lib.sh' && fm_tmux_ensure_own_window >/dev/null"
+tmux send-keys -t "$SESSION:captain-cockpit" Enter
+sleep 0.5
+tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -qx "captain-cockpit" \
+  || fail "fm_tmux_ensure_own_window must leave a non-crew window name untouched"
+pass "real tmux: fm_tmux_ensure_own_window leaves a non-crew window name untouched"
+
 # --- kill ---------------------------------------------------------------------
 
 fm_backend_tmux_kill "$TARGET"

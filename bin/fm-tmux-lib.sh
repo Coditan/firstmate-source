@@ -191,3 +191,42 @@ fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle>
   sleep "$settle"
   fm_tmux_submit_enter_core "$target" "$retries" "$sleep_s"
 }
+
+# fm_tmux_ensure_own_window: keep firstmate out of a crew window.
+# Incident (2026-07-06): firstmate and its crews share one tmux session, so on a
+# resume `tmux new -A -s <session>` can attach the primary firstmate process INTO
+# a crew's fm-<id> window. Two hazards follow: fm-crew-state and the watcher then
+# read firstmate's OWN pane as that crew's pane (a busy firstmate reads as a
+# "working" crew, a stale one as a stalled crew), and a respawn of <id> collides
+# on the duplicate window name. When we are inside tmux and our current window is
+# named like a crew window (fm-*), rename it to the reserved 'firstmate' name.
+# The rename targets the caller's own window (no -t), needs no lock, and is
+# idempotent. It is a no-op outside tmux, and it never touches a window the
+# operator named anything other than fm-* (a deliberate cockpit name is kept).
+# Echoes the action taken (renamed|kept|not-tmux) so callers and tests can assert.
+fm_tmux_ensure_own_window() {
+  if [ -z "${TMUX:-}" ]; then printf 'not-tmux'; return 0; fi
+  # Target our OWN pane's window via $TMUX_PANE, never a bare (targetless)
+  # call: without -t, display-message/rename-window act on whichever window is
+  # ACTIVE in the session, which is not necessarily the one firstmate runs in
+  # (verified 2026-07-06: a bare display-message from a background window
+  # reported the session's active window instead). $TMUX_PANE is set for every
+  # pane whenever $TMUX is, so this reliably names our own window.
+  local pane=${TMUX_PANE:-} wname
+  if [ -n "$pane" ]; then
+    wname=$(tmux display-message -p -t "$pane" '#{window_name}' 2>/dev/null) || { printf 'not-tmux'; return 0; }
+  else
+    wname=$(tmux display-message -p '#{window_name}' 2>/dev/null) || { printf 'not-tmux'; return 0; }
+  fi
+  case "$wname" in
+    fm-*)
+      if [ -n "$pane" ]; then
+        tmux rename-window -t "$pane" firstmate 2>/dev/null || true
+      else
+        tmux rename-window firstmate 2>/dev/null || true
+      fi
+      printf 'renamed' ;;
+    *) printf 'kept' ;;
+  esac
+  return 0
+}
