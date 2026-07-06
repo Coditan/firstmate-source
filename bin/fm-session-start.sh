@@ -110,6 +110,8 @@ PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # shellcheck source=bin/fm-role-lib.sh
 . "$SCRIPT_DIR/fm-role-lib.sh"
+# shellcheck source=bin/fm-tmux-lib.sh
+. "$SCRIPT_DIR/fm-tmux-lib.sh"
 
 STATUS_TAIL=${FM_SESSION_START_STATUS_TAIL:-5}
 case "$STATUS_TAIL" in ''|*[!0-9]*) STATUS_TAIL=5 ;; esac
@@ -249,6 +251,12 @@ pi_extension_loaded() {
 }
 
 section "SESSION START - $FM_HOME"
+
+# On resume the captain's `tmux new -A` can land firstmate inside a crew's
+# fm-<id> window; move back to our own window before anything reads panes
+# (see fm_tmux_ensure_own_window in fm-tmux-lib.sh). Safe, lock-free, no-op
+# outside tmux.
+fm_tmux_ensure_own_window >/dev/null 2>&1 || true
 
 # --- 1. lock -----------------------------------------------------------
 subsection "LOCK"
