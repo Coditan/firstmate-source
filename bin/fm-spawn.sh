@@ -1092,6 +1092,12 @@ exclude_path() {
 if [ "$KIND" != secondmate ]; then
   case "$HARNESS" in
     claude*)
+      # A DISTINCT filename, never .claude/settings.local.json: Claude Code writes
+      # that path itself at runtime and a project may track it, so a truncating
+      # redirect there destroys repo content and then leaves a tracked-and-dirty
+      # file that teardown refuses. Claude Code does not read arbitrary sibling
+      # settings files, so this name only works because launch_template passes
+      # --settings for it; dropping that flag disarms the turn-end signal silently.
       mkdir -p "$WT/.claude"
       cat > "$WT/.claude/settings.fm-task.json" <<EOF
 {"hooks":{"Stop":[{"hooks":[{"type":"command","command":"touch '$TURNEND'"}]}]}}

@@ -661,6 +661,11 @@ validate_worktree_teardown_safety() {
     echo "Restore the git index state, or get the captain's explicit OK to discard, then --force." >&2
     return 1
   fi
+  # The '?? ' branch only skips UNTRACKED generated hook files. The task's own
+  # Claude settings overlay needs the wider '.. ' branch too: if a repo ever tracks
+  # that exact path, a regenerated copy shows up as tracked-and-dirty, which would
+  # otherwise make the worktree permanently unteardownable without --force. Kept to
+  # that one filename so genuine uncommitted work still refuses.
   dirty=$(printf '%s\n' "$dirty_raw" \
     | grep -vE '^(\?\? (\.claude/|\.fm-grok-turnend$)|.. \.claude/settings\.fm-task\.json$)' \
     | head -1 || true)
