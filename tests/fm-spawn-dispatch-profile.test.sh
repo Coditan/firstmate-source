@@ -120,9 +120,38 @@ test_no_profile_keeps_claude_profile_defaults() {
   assert_meta_profile "$HOME_DIR/state/$id.meta" claude default default
 
   launch=$(cat "$LAUNCH_LOG")
-  expected="CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions \"\$('${ROOT}/bin/fm-operational-input.sh' encode launch-brief < '$HOME_DIR/data/$id/brief.md')\""
+  expected="CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions --settings '$WT_DIR/.claude/settings.fm-task.json' \"\$('${ROOT}/bin/fm-operational-input.sh' encode launch-brief < '$HOME_DIR/data/$id/brief.md')\""
   [ "$launch" = "$expected" ] || fail "no-profile claude launch did not use the canonical launch kind"$'\n'"expected: $expected"$'\n'"actual:   $launch"
   pass "no --model/--effort records defaults and types the claude launch instructions"
+}
+
+test_claude_hook_preserves_repo_local_settings() {
+  local rec id out status launch local_settings overlay exclude
+  id=profile-claude-overlay-z1
+  rec=$(make_spawn_case profile-claude-overlay claude "$id")
+  read_case_record "$rec"
+  local_settings="$WT_DIR/.claude/settings.local.json"
+  overlay="$WT_DIR/.claude/settings.fm-task.json"
+  mkdir -p "$WT_DIR/.claude"
+  printf '%s\n' '{"permissions":{"allow":["Bash(git status:*)"]}}' > "$local_settings"
+  git -C "$WT_DIR" add .claude/settings.local.json
+  git -C "$WT_DIR" -c user.email=t@t -c user.name=t commit -q -m "track repository-local Claude settings"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "Claude spawn with tracked local settings should succeed"
+  [ "$(cat "$local_settings")" = '{"permissions":{"allow":["Bash(git status:*)"]}}' ] \
+    || fail "Claude spawn truncated the repository's tracked settings.local.json"
+  [ -f "$overlay" ] || fail "Claude spawn did not write the distinct per-task settings overlay"
+  jq -e '.hooks.Stop[0].hooks[0].command | startswith("touch ")' "$overlay" >/dev/null \
+    || fail "Claude per-task settings overlay does not contain the Stop hook"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "--settings '$overlay'" \
+    "Claude launch did not explicitly load the per-task settings overlay"
+  exclude=$(git -C "$WT_DIR" rev-parse --git-path info/exclude)
+  assert_grep '.claude/settings.fm-task.json' "$exclude" \
+    "Claude per-task settings overlay is not excluded from git"
+  pass "Claude spawn preserves tracked local settings and explicitly loads the distinct hook overlay"
 }
 
 test_active_dispatch_profile_requires_explicit_harness_for_ship() {
@@ -223,7 +252,7 @@ test_claude_threads_model_and_effort() {
   expect_code 0 "$status" "claude spawn with profile flags should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" claude sonnet high
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "claude --dangerously-skip-permissions --model 'sonnet' --effort 'high'" \
+  assert_contains "$launch" "claude --dangerously-skip-permissions --settings '$WT_DIR/.claude/settings.fm-task.json' --model 'sonnet' --effort 'high'" \
     "claude launch did not thread model and effort flags"
   pass "claude receives --model and --effort profile flags"
 }
@@ -429,6 +458,7 @@ test_active_dispatch_profile_does_not_block_secondmate_launch() {
 }
 
 test_no_profile_keeps_claude_profile_defaults
+test_claude_hook_preserves_repo_local_settings
 test_active_dispatch_profile_requires_explicit_harness_for_ship
 test_active_dispatch_profile_requires_explicit_harness_for_scout
 test_active_dispatch_profile_allows_explicit_harness

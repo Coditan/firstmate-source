@@ -49,6 +49,8 @@
 #   (w) index.lock mtime read failure                         -> lock kept, REFUSE
 #   (x) transient lock cleared after first failed return      -> retry ALLOW
 #   (y) persistent lock (never clears, not provably stale)    -> REFUSE loudly
+#   (z) tracked-and-dirty Claude task overlay                  -> ALLOW narrowly
+#   (aa) Claude task overlay plus genuine dirty work           -> REFUSE
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -867,6 +869,55 @@ test_dirty_worktree_refuses() {
   pass "dirty worktree is refused even when its committed work has landed (dirty always wins)"
 }
 
+test_tracked_dirty_claude_task_overlay_allows() {
+  local case_dir rc
+  case_dir=$(make_case tracked-dirty-claude-task-overlay)
+  write_meta "$case_dir" no-mistakes ship
+  mkdir -p "$case_dir/wt/.claude"
+  printf '%s\n' '{"hooks":{"Stop":[]}}' > "$case_dir/wt/.claude/settings.fm-task.json"
+  git -C "$case_dir/wt" add .claude/settings.fm-task.json
+  git -C "$case_dir/wt" -c user.email=t@t -c user.name=t \
+    commit -q -m "track Claude task overlay fixture"
+  git -C "$case_dir/wt" push -q origin fm/task-x1
+  git -C "$case_dir/project" fetch -q origin
+  printf '%s\n' '{"hooks":{"Stop":[{"hooks":[]}]}}' > "$case_dir/wt/.claude/settings.fm-task.json"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "tracked-dirty-claude-task-overlay: teardown should ignore only the generated Claude task overlay"
+  ! grep -q REFUSED "$case_dir/stderr" \
+    || fail "tracked-dirty-claude-task-overlay: teardown refused the generated overlay"
+  pass "tracked-and-dirty Claude task overlay does not make a landed ship worktree unteardownable"
+}
+
+test_claude_task_overlay_does_not_mask_other_dirty_work() {
+  local case_dir rc
+  case_dir=$(make_case claude-task-overlay-plus-dirty-work)
+  write_meta "$case_dir" no-mistakes ship
+  mkdir -p "$case_dir/wt/.claude"
+  printf '%s\n' '{"hooks":{"Stop":[]}}' > "$case_dir/wt/.claude/settings.fm-task.json"
+  git -C "$case_dir/wt" add .claude/settings.fm-task.json
+  git -C "$case_dir/wt" -c user.email=t@t -c user.name=t \
+    commit -q -m "track Claude task overlay fixture"
+  git -C "$case_dir/wt" push -q origin fm/task-x1
+  git -C "$case_dir/project" fetch -q origin
+  printf '%s\n' '{"hooks":{"Stop":[{"hooks":[]}]}}' > "$case_dir/wt/.claude/settings.fm-task.json"
+  printf '%s\n' "genuine uncommitted work" > "$case_dir/wt/feature.txt"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "claude-task-overlay-plus-dirty-work: teardown must refuse genuine dirty work"
+  grep -q "uncommitted changes" "$case_dir/stderr" \
+    || fail "claude-task-overlay-plus-dirty-work: refusal did not cite uncommitted changes"
+  pass "Claude task overlay tolerance does not mask other uncommitted work"
+}
+
 test_gh_error_and_content_absent_refuses() {
   local case_dir rc
   case_dir=$(make_case gh-error)
@@ -1393,6 +1444,8 @@ test_pr_check_records_remote_head_when_local_lags
 test_content_in_default_fallback_allows
 test_content_fallback_refreshes_stale_origin_ref
 test_dirty_worktree_refuses
+test_tracked_dirty_claude_task_overlay_allows
+test_claude_task_overlay_does_not_mask_other_dirty_work
 test_gh_error_and_content_absent_refuses
 test_stale_index_lock_cleared_and_teardown_succeeds
 test_live_index_lock_is_never_removed_and_teardown_refuses
