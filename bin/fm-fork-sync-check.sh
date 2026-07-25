@@ -111,9 +111,23 @@ done <<EOF
 $upstream_list
 EOF
 
+merge_authored_files() {
+  local merge=$1 reconstructed parents
+  mapfile -t parents < <(git -C "$compare_repo" rev-parse "$merge^@" 2>/dev/null)
+  if [ "${#parents[@]}" -eq 2 ]; then
+    reconstructed=$(git -C "$compare_repo" merge-tree --write-tree "${parents[0]}" "${parents[1]}" 2>/dev/null)
+    reconstructed=${reconstructed%%$'\n'*}
+    if [ -n "$reconstructed" ] && git -C "$compare_repo" rev-parse --verify -q "$reconstructed^{tree}" >/dev/null 2>&1; then
+      git -C "$compare_repo" diff --name-only "$reconstructed" "$merge^{tree}"
+      return 0
+    fi
+  fi
+  git -C "$compare_repo" diff-tree -c --no-commit-id --name-only -r "$merge"
+}
+
 while IFS=' ' read -r commit summary; do
   [ -n "$commit" ] || continue
-  mapfile -t files < <(git -C "$compare_repo" diff-tree -c --no-commit-id --name-only -r "$commit")
+  mapfile -t files < <(merge_authored_files "$commit")
   [ "${#files[@]}" -gt 0 ] || continue
   git -C "$compare_repo" diff --quiet "$fork" "$upstream" -- "${files[@]}" && continue
   upstream_count=$((upstream_count + 1))

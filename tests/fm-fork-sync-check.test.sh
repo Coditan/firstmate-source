@@ -16,6 +16,15 @@ commit_file() {
   git -C "$repo" rev-parse HEAD
 }
 
+commit_lines() {
+  local repo=$1 path=$2 message=$3
+  shift 3
+  printf '%s\n' "$@" > "$repo/$path"
+  git -C "$repo" add "$path"
+  git -C "$repo" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -q -m "$message"
+  git -C "$repo" rev-parse HEAD
+}
+
 run_check() {
   local repo=$1 state=$2 fork=$3 upstream=$4 now=$5
   FM_ROOT_OVERRIDE="$repo" FM_HOME="$repo" FM_STATE_OVERRIDE="$state" \
@@ -140,6 +149,39 @@ test_absorbed_upstream_merge_commit_clears_diagnostics() {
   pass "a conflict-free upstream merge over absorbed content clears persisted diagnostics"
 }
 
+test_same_file_automerge_over_fork_patch_clears_diagnostics() {
+  local repo state base fork upstream out
+  repo="$TMP_ROOT/upstream-automerge"
+  state="$TMP_ROOT/upstream-automerge-state"
+  fm_git_init_commit "$repo"
+  commit_lines "$repo" shared.txt shared-base l1 l2 l3 l4 l5 l6 l7 l8 l9 l10 l11 l12 >/dev/null
+  base=$(git -C "$repo" rev-parse HEAD)
+  commit_lines "$repo" shared.txt fork-head l1-upstream l2 l3 l4 l5 l6 l7 l8 l9 l10 l11 l12 >/dev/null
+  commit_lines "$repo" shared.txt fork-tail l1-upstream l2 l3 l4 l5 l6 l7 l8 l9 l10 l11 l12-upstream >/dev/null
+  fork=$(commit_lines "$repo" shared.txt fork-patch l1-upstream l2 l3 l4 l5 l6-fork l7 l8 l9 l10 l11 l12-upstream)
+  git -C "$repo" checkout -q -b upstream-line "$base"
+  commit_lines "$repo" shared.txt upstream-head l1-upstream l2 l3 l4 l5 l6 l7 l8 l9 l10 l11 l12 >/dev/null
+  git -C "$repo" checkout -q -b upstream-side "$base"
+  commit_lines "$repo" shared.txt upstream-tail l1 l2 l3 l4 l5 l6 l7 l8 l9 l10 l11 l12-upstream >/dev/null
+  git -C "$repo" checkout -q upstream-line
+  git -C "$repo" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    merge -q --no-ff --no-edit -m upstream-automerge upstream-side >/dev/null 2>&1 \
+    || fail "fixture same-file automerge did not apply cleanly"
+  upstream=$(git -C "$repo" rev-parse HEAD)
+  git -C "$repo" diff --quiet "$fork" "$upstream" -- shared.txt \
+    && fail "fixture did not leave a fork-only patch on the auto-merged path"
+  mkdir -p "$state"
+  printf 'old\n' > "$state/fork-sync.pending"
+  printf 'old\n' > "$state/fork-sync.stuck"
+
+  out=$(run_check "$repo" "$state" "$fork" "$upstream" 2920000)
+  [ -z "$out" ] || fail "conflict-free same-file automerge emitted a diagnostic: $out"
+  [ ! -f "$state/fork-sync.pending" ] || fail "same-file automerge check did not clear pending"
+  [ ! -f "$state/fork-sync.stuck" ] || fail "same-file automerge check did not clear stuck"
+  [ "$(cat "$state/fork-sync.last-run")" = 2920000 ] || fail "same-file automerge check did not stamp last-run"
+  pass "a mechanical same-file automerge over a fork patch is not counted as drift"
+}
+
 test_upstream_merge_resolution_content_reports_drift() {
   local repo state base fork upstream out
   repo="$TMP_ROOT/upstream-merge-resolution"
@@ -196,5 +238,6 @@ test_content_convergence_prefilters_absorbed_patch
 test_content_convergence_clears_absorbed_upstream_commit
 test_mixed_upstream_commits_report_corrected_count
 test_absorbed_upstream_merge_commit_clears_diagnostics
+test_same_file_automerge_over_fork_patch_clears_diagnostics
 test_upstream_merge_resolution_content_reports_drift
 test_up_to_date_clears_diagnostics
