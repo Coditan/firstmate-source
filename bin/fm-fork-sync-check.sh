@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Detect whether the curated fork needs its next upstream merge and bound the
-# fork-only patch review with mechanical absorption hints.
+# Detect whether the curated fork lacks upstream content and bound both sides
+# of the commit review with mechanical absorption hints.
 #
 # This script never changes the checkout or merges history. It fetches into a
 # temporary bare repository and writes only FM_HOME/state/fork-sync.*. Run it
@@ -82,13 +82,66 @@ if git -C "$compare_repo" merge-base --is-ancestor "$upstream" "$fork" 2>/dev/nu
 fi
 git -C "$compare_repo" merge-base "$fork" "$upstream" >/dev/null 2>&1 || record_stuck "fork and upstream histories have no merge base"
 
-upstream_list=$(git -C "$compare_repo" rev-list --oneline "$fork..$upstream") || record_stuck "upstream-only commit list cannot be computed"
+upstream_list=$(git -C "$compare_repo" rev-list --oneline --no-merges "$fork..$upstream") || record_stuck "upstream-only commit list cannot be computed"
+upstream_merge_list=$(git -C "$compare_repo" rev-list --oneline --merges "$fork..$upstream") || record_stuck "upstream merge commit list cannot be computed"
 fork_list=$(git -C "$compare_repo" rev-list --oneline --no-merges "$upstream..$fork") || record_stuck "fork-only commit list cannot be computed"
+upstream_cherry=$(git -C "$compare_repo" cherry "$fork" "$upstream") || record_stuck "upstream patch equivalence cannot be computed"
 cherry=$(git -C "$compare_repo" cherry "$upstream" "$fork") || record_stuck "patch equivalence cannot be computed"
-upstream_count=$(printf '%s\n' "$upstream_list" | awk 'NF { count++ } END { print count+0 }')
 fork_count=$(printf '%s\n' "$fork_list" | awk 'NF { count++ } END { print count+0 }')
+upstream_count=0
 absorbed_count=0
+upstream_review_detail=""
 review_detail=""
+
+while IFS=' ' read -r commit summary; do
+  [ -n "$commit" ] || continue
+  verdict=needs-review
+  if printf '%s\n' "$upstream_cherry" | grep -q "^- $commit"; then
+    verdict=absorbed
+  else
+    mapfile -t files < <(git -C "$compare_repo" diff-tree --no-commit-id --name-only -r "$commit")
+    if [ "${#files[@]}" -gt 0 ] && git -C "$compare_repo" diff --quiet "$fork" "$upstream" -- "${files[@]}"; then
+      verdict=absorbed
+    fi
+  fi
+  [ "$verdict" = absorbed ] || upstream_count=$((upstream_count + 1))
+  upstream_review_detail="${upstream_review_detail}  $verdict $commit $summary
+"
+done <<EOF
+$upstream_list
+EOF
+
+merge_authored_files() {
+  local merge=$1 reconstructed parents
+  mapfile -t parents < <(git -C "$compare_repo" rev-parse "$merge^@" 2>/dev/null)
+  if [ "${#parents[@]}" -eq 2 ]; then
+    reconstructed=$(git -C "$compare_repo" merge-tree --write-tree "${parents[0]}" "${parents[1]}" 2>/dev/null)
+    reconstructed=${reconstructed%%$'\n'*}
+    if [ -n "$reconstructed" ] && git -C "$compare_repo" rev-parse --verify -q "$reconstructed^{tree}" >/dev/null 2>&1; then
+      git -C "$compare_repo" diff --name-only "$reconstructed" "$merge^{tree}"
+      return 0
+    fi
+  fi
+  git -C "$compare_repo" diff-tree -c --no-commit-id --name-only -r "$merge"
+}
+
+while IFS=' ' read -r commit summary; do
+  [ -n "$commit" ] || continue
+  mapfile -t files < <(merge_authored_files "$commit")
+  [ "${#files[@]}" -gt 0 ] || continue
+  git -C "$compare_repo" diff --quiet "$fork" "$upstream" -- "${files[@]}" && continue
+  upstream_count=$((upstream_count + 1))
+  upstream_review_detail="${upstream_review_detail}  needs-review $commit $summary
+"
+done <<EOF
+$upstream_merge_list
+EOF
+
+if [ "$upstream_count" -eq 0 ]; then
+  rm -f "$PENDING" "$STUCK"
+  printf '%s\n' "$NOW" > "$LAST_RUN"
+  exit 0
+fi
 
 while IFS=' ' read -r commit summary; do
   [ -n "$commit" ] || continue
@@ -111,7 +164,7 @@ EOF
 {
   printf 'FORK_SYNC: upstream %.7s not merged into fork (%s upstream-only commits); %s local patches to re-evaluate (%s provably absorbed): dispatch a fork-sync crewmate\n' "$upstream" "$upstream_count" "$fork_count" "$absorbed_count"
   printf '  upstream-only commits:\n'
-  printf '%s\n' "$upstream_list" | sed '/^$/d; s/^/    /'
+  printf '%s' "$upstream_review_detail"
   printf '  fork-only patches:\n'
   printf '%s' "$review_detail"
 } > "$PENDING"

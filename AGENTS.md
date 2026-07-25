@@ -470,7 +470,7 @@ The scaffold is a safety contract, not a suggestion.
 
 Firstmate's shared instruction surface reaches running homes only after it lands on the default branch and those homes fast-forward.
 Only `AGENTS.md`, `bin/`, and `.agents/skills/` are loaded by a running firstmate; public `skills/` is an installer-facing surface.
-`bin/fm-firstmate-update-check.sh` detects upstream-only changes to that instruction surface, while `bin/fm-fork-sync-check.sh` detects when the curated fork is behind its real upstream; `docs/configuration.md` owns scheduling and `docs/fork-patches.md` owns fork-only patch review.
+`bin/fm-firstmate-update-check.sh` detects upstream-only changes to that instruction surface, while `bin/fm-fork-sync-check.sh` detects real-upstream content the curated fork has not absorbed; `docs/configuration.md` owns scheduling and `docs/fork-patches.md` owns fork-only patch review.
 When bootstrap prints `FIRSTMATE_UPDATE_AVAILABLE:`, dispatch a crewmate to notify the whole fleet through Bridge All-Ships rather than writing to Bridge directly.
 Fork `main` advances without rewriting history, and every upstream-sync PR must land as a true merge commit rather than a squash.
 When the captain invokes `/updatefirstmate` or asks to update firstmate, load the `/updatefirstmate` skill.
