@@ -56,12 +56,56 @@ test_content_convergence_prefilters_absorbed_patch() {
   git -C "$repo" reset -q --hard "$base"
   upstream=$(commit_file "$repo" shared.txt shared-content)
   git -C "$repo" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -q --amend -m upstream-summary
-  upstream=$(git -C "$repo" rev-parse HEAD)
+  upstream=$(commit_file "$repo" upstream.txt upstream-only)
 
   out=$(run_check "$repo" "$state" "$fork" "$upstream" 2000000)
   assert_contains "$out" '1 provably absorbed' "content-converged patch was not prefiltered"
   assert_grep '  absorbed ' "$state/fork-sync.pending" "absorbed detail was not persisted"
   pass "tip content convergence mechanically prefilters an absorbed fork patch"
+}
+
+test_content_convergence_clears_absorbed_upstream_commit() {
+  local repo state base fork upstream out
+  repo="$TMP_ROOT/upstream-absorbed"
+  state="$TMP_ROOT/upstream-absorbed-state"
+  fm_git_init_commit "$repo"
+  base=$(git -C "$repo" rev-parse HEAD)
+  fork=$(commit_file "$repo" shared.txt shared-content)
+  git -C "$repo" reset -q --hard "$base"
+  upstream=$(commit_file "$repo" shared.txt shared-content)
+  git -C "$repo" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -q --amend -m upstream-summary
+  upstream=$(git -C "$repo" rev-parse HEAD)
+  mkdir -p "$state"
+  printf 'old\n' > "$state/fork-sync.pending"
+  printf 'old\n' > "$state/fork-sync.stuck"
+
+  out=$(run_check "$repo" "$state" "$fork" "$upstream" 2500000)
+  [ -z "$out" ] || fail "absorbed upstream commit emitted a diagnostic: $out"
+  [ ! -f "$state/fork-sync.pending" ] || fail "absorbed upstream check did not clear pending"
+  [ ! -f "$state/fork-sync.stuck" ] || fail "absorbed upstream check did not clear stuck"
+  [ "$(cat "$state/fork-sync.last-run")" = 2500000 ] || fail "absorbed upstream check did not stamp last-run"
+  pass "content-equivalent upstream history clears persisted diagnostics"
+}
+
+test_mixed_upstream_commits_report_corrected_count() {
+  local repo state base fork upstream absorbed_upstream out
+  repo="$TMP_ROOT/upstream-mixed"
+  state="$TMP_ROOT/upstream-mixed-state"
+  fm_git_init_commit "$repo"
+  base=$(git -C "$repo" rev-parse HEAD)
+  fork=$(commit_file "$repo" shared.txt shared-content)
+  git -C "$repo" reset -q --hard "$base"
+  commit_file "$repo" shared.txt shared-content >/dev/null
+  git -C "$repo" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -q --amend -m upstream-summary
+  absorbed_upstream=$(git -C "$repo" rev-parse HEAD)
+  upstream=$(commit_file "$repo" new.txt genuinely-new)
+
+  out=$(run_check "$repo" "$state" "$fork" "$upstream" 2750000)
+  assert_contains "$out" 'FORK_SYNC:' "mixed upstream divergence was not reported"
+  assert_contains "$out" '1 upstream-only commits' "absorbed upstream commit was included in the count"
+  assert_contains "$out" "  absorbed ${absorbed_upstream:0:7} upstream-summary" "absorbed upstream detail was not persisted"
+  assert_contains "$out" "  needs-review ${upstream:0:7} genuinely-new" "new upstream detail was not persisted"
+  pass "mixed upstream history reports only genuinely new commits"
 }
 
 test_up_to_date_clears_diagnostics() {
@@ -84,4 +128,6 @@ test_up_to_date_clears_diagnostics() {
 
 test_pending_lists_and_cadence_gate
 test_content_convergence_prefilters_absorbed_patch
+test_content_convergence_clears_absorbed_upstream_commit
+test_mixed_upstream_commits_report_corrected_count
 test_up_to_date_clears_diagnostics
