@@ -82,7 +82,7 @@ if git -C "$compare_repo" merge-base --is-ancestor "$upstream" "$fork" 2>/dev/nu
 fi
 git -C "$compare_repo" merge-base "$fork" "$upstream" >/dev/null 2>&1 || record_stuck "fork and upstream histories have no merge base"
 
-upstream_list=$(git -C "$compare_repo" rev-list --oneline "$fork..$upstream") || record_stuck "upstream-only commit list cannot be computed"
+upstream_list=$(git -C "$compare_repo" rev-list --oneline --no-merges "$fork..$upstream") || record_stuck "upstream-only commit list cannot be computed"
 fork_list=$(git -C "$compare_repo" rev-list --oneline --no-merges "$upstream..$fork") || record_stuck "fork-only commit list cannot be computed"
 upstream_cherry=$(git -C "$compare_repo" cherry "$fork" "$upstream") || record_stuck "upstream patch equivalence cannot be computed"
 cherry=$(git -C "$compare_repo" cherry "$upstream" "$fork") || record_stuck "patch equivalence cannot be computed"
