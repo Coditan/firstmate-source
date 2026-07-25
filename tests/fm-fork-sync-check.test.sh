@@ -120,7 +120,7 @@ test_absorbed_upstream_merge_commit_clears_diagnostics() {
   commit_file "$repo" alpha.txt alpha-content >/dev/null
   git -C "$repo" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
     commit -q --amend -m upstream-alpha
-  git -C "$repo" checkout -q -b upstream-side
+  git -C "$repo" checkout -q -b upstream-side "$base"
   commit_file "$repo" beta.txt beta-content >/dev/null
   git -C "$repo" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
     commit -q --amend -m upstream-beta
@@ -137,7 +137,40 @@ test_absorbed_upstream_merge_commit_clears_diagnostics() {
   [ ! -f "$state/fork-sync.pending" ] || fail "absorbed upstream merge check did not clear pending"
   [ ! -f "$state/fork-sync.stuck" ] || fail "absorbed upstream merge check did not clear stuck"
   [ "$(cat "$state/fork-sync.last-run")" = 2900000 ] || fail "absorbed upstream merge check did not stamp last-run"
-  pass "an upstream merge over absorbed content clears persisted diagnostics"
+  pass "a conflict-free upstream merge over absorbed content clears persisted diagnostics"
+}
+
+test_upstream_merge_resolution_content_reports_drift() {
+  local repo state base fork upstream out
+  repo="$TMP_ROOT/upstream-merge-resolution"
+  state="$TMP_ROOT/upstream-merge-resolution-state"
+  fm_git_init_commit "$repo"
+  base=$(git -C "$repo" rev-parse HEAD)
+  commit_file "$repo" alpha.txt alpha-content >/dev/null
+  fork=$(commit_file "$repo" beta.txt beta-content)
+  git -C "$repo" checkout -q -b upstream-line "$base"
+  commit_file "$repo" alpha.txt alpha-content >/dev/null
+  git -C "$repo" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -q --amend -m upstream-alpha
+  git -C "$repo" checkout -q -b upstream-side "$base"
+  commit_file "$repo" beta.txt beta-content >/dev/null
+  git -C "$repo" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -q --amend -m upstream-beta
+  git -C "$repo" checkout -q upstream-line
+  git -C "$repo" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    merge -q --no-ff --no-edit -m upstream-merge upstream-side
+  printf 'alpha-resolved\n' > "$repo/alpha.txt"
+  git -C "$repo" add alpha.txt
+  git -C "$repo" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -q --amend --no-edit
+  upstream=$(git -C "$repo" rev-parse HEAD)
+
+  out=$(run_check "$repo" "$state" "$fork" "$upstream" 2950000)
+  assert_contains "$out" 'FORK_SYNC:' "merge-only resolution drift was not reported"
+  assert_contains "$out" '1 upstream-only commits' "merge-only resolution drift was miscounted"
+  assert_contains "$out" "  needs-review ${upstream:0:7} upstream-merge" "unabsorbed merge detail was not persisted"
+  [ ! -f "$state/fork-sync.stuck" ] || fail "merge-resolution check recorded a stuck diagnostic"
+  pass "content carried only by an upstream merge resolution still reports drift"
 }
 
 test_up_to_date_clears_diagnostics() {
@@ -163,4 +196,5 @@ test_content_convergence_prefilters_absorbed_patch
 test_content_convergence_clears_absorbed_upstream_commit
 test_mixed_upstream_commits_report_corrected_count
 test_absorbed_upstream_merge_commit_clears_diagnostics
+test_upstream_merge_resolution_content_reports_drift
 test_up_to_date_clears_diagnostics

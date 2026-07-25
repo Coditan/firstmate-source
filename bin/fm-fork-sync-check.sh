@@ -83,6 +83,7 @@ fi
 git -C "$compare_repo" merge-base "$fork" "$upstream" >/dev/null 2>&1 || record_stuck "fork and upstream histories have no merge base"
 
 upstream_list=$(git -C "$compare_repo" rev-list --oneline --no-merges "$fork..$upstream") || record_stuck "upstream-only commit list cannot be computed"
+upstream_merge_list=$(git -C "$compare_repo" rev-list --oneline --merges "$fork..$upstream") || record_stuck "upstream merge commit list cannot be computed"
 fork_list=$(git -C "$compare_repo" rev-list --oneline --no-merges "$upstream..$fork") || record_stuck "fork-only commit list cannot be computed"
 upstream_cherry=$(git -C "$compare_repo" cherry "$fork" "$upstream") || record_stuck "upstream patch equivalence cannot be computed"
 cherry=$(git -C "$compare_repo" cherry "$upstream" "$fork") || record_stuck "patch equivalence cannot be computed"
@@ -108,6 +109,18 @@ while IFS=' ' read -r commit summary; do
 "
 done <<EOF
 $upstream_list
+EOF
+
+while IFS=' ' read -r commit summary; do
+  [ -n "$commit" ] || continue
+  mapfile -t files < <(git -C "$compare_repo" diff-tree -c --no-commit-id --name-only -r "$commit")
+  [ "${#files[@]}" -gt 0 ] || continue
+  git -C "$compare_repo" diff --quiet "$fork" "$upstream" -- "${files[@]}" && continue
+  upstream_count=$((upstream_count + 1))
+  upstream_review_detail="${upstream_review_detail}  needs-review $commit $summary
+"
+done <<EOF
+$upstream_merge_list
 EOF
 
 if [ "$upstream_count" -eq 0 ]; then
