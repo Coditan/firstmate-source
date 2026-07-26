@@ -607,9 +607,12 @@ effort_flag_for_harness() {
       # The installed codex config schema uses model_reasoning_effort. As of
       # codex-cli 0.145.0 the bundled catalog advertises effort per model: every
       # model accepts low|medium|high|xhigh, while only the newest ones add max
-      # and ultra. Codex silently substitutes the middle supported level for an
-      # unsupported one instead of failing, so emit only the universally
-      # accepted range rather than risk a silent downgrade.
+      # and ultra. low|medium|high|xhigh is the one range every catalogued model
+      # accepts and the range fm-dispatch-select.sh and fm-bootstrap.sh validate
+      # codex against, so that is what gets emitted. Omitting the flag is not
+      # downgrade protection: it falls through to the model's own
+      # default_reasoning_level, which the 0.145.0 catalog sets to low for
+      # gpt-5.6-sol and medium for gpt-5.6-luna.
       case "$effort" in
         low|medium|high|xhigh) printf -- '-c %s ' "$(shell_quote "model_reasoning_effort=\"$effort\"")" ;;
       esac

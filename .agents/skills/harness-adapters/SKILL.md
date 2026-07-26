@@ -186,7 +186,9 @@ The busy signature is composed, not a literal: the status row renders the elapse
 Codex's default interrupt binding is a plain Escape, whose label renders as `esc`, which is why the pane shows `esc to interrupt` and why `fm-watch.sh` and `fm-tmux-lib.sh` still need no change.
 Two conditions change that string, and both are worth knowing before trusting a busy read.
 A captain who remaps `tui.keymap.chat.interrupt_turn` in their own Codex config gets that key's label instead (a remap to F12 renders `f12 to interrupt`), and unbinding it entirely drops the hint so the row shows only the elapsed time.
-Firstmate never writes that key, so every firstmate-launched Codex worker keeps the default, but a captain-configured Codex primary could read as idle while working.
+Firstmate never writes that key itself, but it also never overrides `HOME` or `CODEX_HOME` for spawned workers, so every firstmate-launched Codex worker loads the operator's own `~/.codex/config.toml`.
+A single remap or unbind of `tui.keymap.chat.interrupt_turn` therefore blinds the watcher to every Codex worker at once, not just to a captain-configured primary.
+The concrete harm is that a blinded watcher reads a working agent as stopped, so a healthy crewmate gets disruptively recovered mid-task.
 Codex also renders the same `<key> to interrupt` hint in the overlay it shows when the model asks the user a question, so a Codex worker blocked on a question presents as busy rather than as waiting.
 Treat a long-running Codex pane that never reaches turn end as a candidate for that state rather than assuming forward progress.
 
@@ -224,7 +226,9 @@ Reasoning effort is the one fact that moved.
 Codex's effort vocabulary is now per-model rather than fleet-wide, and the newest models accept levels above `xhigh`: as of 0.145.0 the bundled catalog gives `gpt-5.6-sol` and `gpt-5.6-terra` low through `ultra`, `gpt-5.6-luna` low through `max`, and every older model low through `xhigh`.
 Passing a level a model does not support is silently downgraded rather than rejected, because Codex substitutes the middle supported level instead of failing, so a bad value costs reasoning depth without any visible error.
 `fm-spawn` therefore keeps emitting only low through `xhigh` for codex, which every catalogued model accepts.
-Selecting `max` for a codex worker still needs the captain's explicit preference under the generic effort policy above, and it is only meaningful on a model whose catalog entry lists it.
+`max` is unreachable for a codex worker through firstmate's own validators, whatever the model's catalog entry says.
+Both `bin/fm-dispatch-select.sh` and `bin/fm-bootstrap.sh` restrict codex to low, medium, high, and xhigh, so a dispatch profile of `{harness: codex, effort: max}` is rejected outright rather than downgraded, and editing the profile is not a way around the ceiling.
+The ad-hoc `fm-spawn` path emits no effort flag at all for `max`, which leaves the worker on the model's own `default_reasoning_level`.
 
 **Primary-session guard fact (verified 2026-07-08, codex-cli 0.142.1).**
 The firstmate PRIMARY's own `.codex/hooks.json` registers a Stop hook that pipes Codex's Stop payload to `bin/fm-turnend-guard.sh`.
