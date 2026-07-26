@@ -1,5 +1,8 @@
 # Curated fork patch registry
 
+This ledger is the fork-maintenance tax that the fleet repository is meant to end; see [`docs/admiralty-fleet-repo.md`](admiralty-fleet-repo.md) for what replaces it and how far that work has got.
+Until a vessel is actually cut over, this registry stays authoritative.
+
 Each fork-only, non-merge commit has one row recording its current verdict against the named real-upstream tip.
 Use `absorbed` when upstream fully replaces the patch, `keep` while fork-specific behavior remains necessary, and `upstream-candidate` when the patch should be proposed upstream.
 Re-review a row when the upstream tip moves.
