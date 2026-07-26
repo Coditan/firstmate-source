@@ -69,6 +69,22 @@ SH
   printf '%s\n' "$fb"
 }
 
+# wait_for_log_line <log> <needle> [tries]: the `herdr server` launch is
+# backgrounded on purpose, so its log write is not ordered against the caller's
+# return - reading the log once can race the write. Poll for the line with a
+# bounded timeout (default ~2s) before asserting on it. Returns non-zero on
+# timeout so the caller's own assertion still produces the failure message.
+wait_for_log_line() {
+  local log=$1 needle=$2 tries=${3:-100} i
+  for (( i = 0; i < tries; i++ )); do
+    case "$(cat "$log" 2>/dev/null)" in
+      *"$needle"*) return 0 ;;
+    esac
+    sleep 0.02
+  done
+  return 1
+}
+
 # make_herdr_statefake: a STATEFUL `herdr` stub that models the parts of herdr's
 # real container behavior the workspace-leak fix (and the default-tab-prune
 # safety fix) depend on, so a full spawn->teardown cycle can be replayed
@@ -317,6 +333,7 @@ test_container_ensure_starts_server_and_workspace() {
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 HERDR_SESSION=fmtest \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_container_ensure /tmp' "$ROOT" )
   [ "$out" = $'fmtest:w1\tw1:t9' ] || fail "container_ensure should echo '<session>:<workspace_id>\\t<seeded_default_tab_id>', got '$out'"
+  wait_for_log_line "$log" "HERDR_SESSION=fmtest"$'\x1f''server' || :
   assert_contains "$(cat "$log")" "HERDR_SESSION=fmtest"$'\x1f''server' "container_ensure did not start the herdr server"
   assert_contains "$(cat "$log")" $'\x1f''workspace'$'\x1f''create'$'\x1f''--cwd'$'\x1f''/tmp'$'\x1f''--label'$'\x1f''firstmate' \
     "container_ensure did not create the firstmate workspace with the given cwd"

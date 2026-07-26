@@ -202,15 +202,19 @@ A single remap or unbind of `tui.keymap.chat.interrupt_turn` therefore blinds th
 The concrete harm is that a blinded watcher reads a working agent as stopped, so a healthy crewmate gets disruptively recovered mid-task.
 Codex also renders the same `<key> to interrupt` hint in the overlay it shows when the model asks the user a question, so a Codex worker blocked on a question presents as busy rather than as waiting.
 Treat a long-running Codex pane that never reaches turn end as a candidate for that state rather than assuming forward progress.
-That overlay fact is source-derived rather than live-verified, and it is the only one in this section that is: it comes from reading the 0.145.0 overlay rendering, not from watching a running binary.
+That overlay fact is source-derived rather than live-verified: it comes from reading the 0.145.0 overlay rendering, not from watching a running binary.
 Two attempts to force the overlay failed to reproduce it, because gpt-5.5 answered the question in plain transcript text instead of opening the overlay.
 Two failed attempts are not evidence against the claim, so it stands as written, but treat it as unconfirmed until a live run renders the overlay.
 
-Idle never reads as busy; the error only runs the other way, as the streaming gap above shows.
+Both directions of misread are real, and neither cancels the other.
+The streaming gap hides a working agent: the pane reads idle while the answer streams, so a crewmate making progress can be taken for a wedged one.
+The question overlay hides a stuck one: a pane waiting on human input carries the interrupt hint, matches the busy pattern, and is read as forward progress, so it never surfaces for supervision at all.
+Do not treat either direction as ruled out when reading a Codex pane.
+
 An idle Codex pane on 0.145.0 shows a composer suggestion drawn from a list ("Explain this codebase", "Write tests for @filename", "Improve documentation in @filename") rather than a fixed placeholder, and its collapsed footer is the model, the effort, and the working directory, rendered as `<model> <effort> · <cwd>`.
 The suggestion does not cycle: it is drawn fresh per composer and then held, so one idle pane sampled every five seconds for a minute never rotated off its single entry, while five separate launches and composer resets produced a different suggestion apiece.
 There is no `Ask Codex` placeholder in this version: `strings` on the installed binary finds zero occurrences of it.
-The operationally load-bearing half is confirmed and unchanged by that correction - an idle pane carries no interrupt hint of any kind, so the watcher cannot read idle as busy.
+The operationally load-bearing half is confirmed and unchanged by that correction - the idle composer itself carries no interrupt hint of any kind, so a pane sitting at it cannot be misread as busy; only the question overlay drawn over the composer puts the hint back.
 Expanding the footer while a turn runs adds `ctrl + c to interrupt`, which is a distinct string from the status row's `esc to interrupt` and so does not create a second busy match.
 
 Ctrl+C is an exit path alongside `/quit` and `/exit`, but what it takes depends on the state of the pane.
@@ -220,6 +224,7 @@ During a running turn a single Ctrl+C interrupts the turn rather than quitting, 
 That interrupt returns the composer to the idle-and-empty state, which is exactly the state described two lines above as quitting on a single press with no confirmation.
 A single further press therefore quits, so two mid-turn presses do exit.
 Never script or send a second Ctrl+C expecting it to interrupt harder, because it exits the session and loses the turn's work instead.
+Inside a side conversation Ctrl+C returns to the main thread rather than exiting or interrupting (source-derived: the binary carries "'/delete' is unavailable in side conversations. Press Ctrl+C to return to the main thread first."); firstmate never opens one, so this completes the state table rather than describing a current hazard.
 Codex's own shortcuts panel, opened with `?`, documents the binding as `ctrl + c to exit`.
 `/archive` and `/delete` also exit, and they act on the saved session as well, so never send them as a plain exit.
 
@@ -234,12 +239,13 @@ Directory trust dialog on first run per repo root: "Do you trust the contents of
 Accept with Enter, which takes the pre-highlighted "Yes, continue" option.
 Escape is not accept here; it selects "No, quit" and exits Codex.
 The dialog appears exactly while the active project has no recorded trust level, and Codex resolves a git worktree to its main repository root before recording that decision, so later worktrees of the same project skip it.
+That worktree-resolution step is source-derived rather than live-verified: it was read off the 0.145.0 trust-recording path, not observed across two worktrees of one repo.
 
 Resume after exit with `codex resume <session-id>`, which is still the correct non-interactive form and takes either the session UUID or a session name.
 Bare `codex resume` opens a picker instead, and `codex resume --last` continues the most recent session without one.
 On quit Codex prints `To continue this session, run <command>` rather than a bare id.
 For an unnamed session that command is literally `codex resume <uuid>`, but a named session instead yields the non-runnable hint `codex resume, then select <name> (<uuid>)`, so read the id out of that line rather than expecting a ready-to-run command.
-A bare `Session ID: <uuid>` line appears only when Codex exits fatally with no resume hint.
+A bare `Session ID: <uuid>` line appears only when Codex exits fatally with no resume hint - source-derived rather than live-verified, since a normal run never takes that path, and `To continue this session, run ` sits adjacent to `Session ID: ` in the binary's strings, so which one prints when is not settled by a clean-exit observation.
 0.145.0 also exposes `codex fork`, `codex archive`, `codex unarchive`, and `codex delete` as siblings of `resume`; firstmate uses none of them, and `archive` and `delete` are destructive to the saved session.
 
 The launch surface `fm-spawn` depends on is unchanged in 0.145.0, verified against both the binary's own help and the 0.145.0 source.
