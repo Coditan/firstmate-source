@@ -157,8 +157,16 @@ Its broader dark-TRUECOLOR placeholder handling and dark-theme tradeoff are docu
 That styled capture is internal to the boolean detector only.
 `fm-peek` and every other human or LLM-facing capture path stays plain `tmux capture-pane` with no escape codes.
 
+**Per-task crewmate hook fact (verified 2026-07-25, Claude Code 2.1.220).**
+The crewmate turn-end hook lives in the task's own `.claude/settings.fm-task.json`, never in `.claude/settings.local.json`, which Claude Code rewrites at runtime and a project is free to track.
+Claude Code does not read arbitrary sibling settings files, so that distinct name only works because the launch passes `--settings` for it; dropping the flag silently disarms the turn-end signal without any visible error.
+`fm-spawn` keeps the write and the load coupled: it writes the overlay only when the launch command names it, and it injects the flag into a raw launch command whose program word is genuinely `claude` and that does not already pass its own `--settings`.
+A claude-shaped wrapper such as `claude-yolo` is left alone, since an unknown flag can stop it from launching at all; it gets no overlay and one warning instead.
+`--settings` adds to the merged settings rather than replacing the project scopes, so a repository's own Claude settings still apply to a crewmate.
+See `docs/turnend-guard.md`'s 2026-07-25 subsection for the validation transcript.
+
 **Primary-session guard fact (verified 2026-07-04, Claude Code 2.1.201; preserved 2026-07-08, Claude Code 2.1.204).**
-This is separate from the per-task crewmate turn-end hook above (that one just `touch`es a marker file in a task's own `.claude/settings.local.json`).
+This is separate from the per-task crewmate turn-end hook above.
 The firstmate PRIMARY's own `.claude/settings.json` registers `bin/fm-turnend-guard.sh` as a Stop hook, and exiting with status 2 plus stderr reliably forces the model to continue.
 Claude Code's stdin payload to a Stop hook carries a `stop_hook_active` boolean that is `true` exactly when the current stop attempt is itself a forced continuation from an earlier block this turn; a hook can and should use that as its own loop-guard (always allow the stop when it is already `true`) rather than tracking state itself.
 A project-level `.claude/settings.json` only takes effect when Claude Code's project root is that exact directory - it does not walk up from a subdirectory looking for one, so firstmate launches the primary from the repo root.

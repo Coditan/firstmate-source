@@ -163,8 +163,41 @@ So the model was re-invoked solely by the background task's completion while idl
 This matches the harness tool contract that a `run_in_background` task "keeps running across turns and re-invokes you when it exits", and reproduces the 11s latency the task audit measured independently on the same harness version.
 No Herdr command was issued and no fleet state was touched; the experiment wrote only to the session scratchpad, which was discarded.
 
+### 2026-07-25: the per-task crewmate hook moved off `.claude/settings.local.json`
+
+This subsection covers the per-task CREWMATE turn-end hook that `bin/fm-spawn.sh` writes, not the primary guard the rest of this document owns.
+It is recorded here because this document already holds every Stop-hook validation transcript.
+
+`fm-spawn` used to write that hook with a truncating redirect to `<worktree>/.claude/settings.local.json`.
+Claude Code writes that same path at runtime whenever a session records a permission, and a repository is free to track it, so the redirect silently destroyed any tracked content at that path for every firstmate-on-itself crewmate or scout.
+Teardown then refused forever, because its dirty-worktree filter only skipped that path when git reported it as untracked (`?? `), so a tracked-and-dirty copy reached the uncommitted-changes check and only `--force` could clear it.
+The hook now goes to the distinct `<worktree>/.claude/settings.fm-task.json`, and teardown's filter skips exactly that one filename whether it is untracked or tracked-and-dirty.
+
+Claude Code does not read arbitrary sibling settings files, so the rename alone would have silently disarmed the crewmate turn-end signal.
+The claude launch template therefore passes `--settings <worktree>/.claude/settings.fm-task.json`, and the pairing was validated first-hand rather than by reading code, because the whole failure mode is "looked right, silently did nothing".
+
+Validated on 2026-07-25 against Claude Code 2.1.220 in a scratch git repo that tracked a `.claude/settings.local.json` containing `{"permissions":{"allow":["Bash(git status:*)"]}}`, with the overlay carrying the real `touch` Stop hook `fm-spawn` generates.
+Print-mode command run: `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions --settings <wt>/.claude/settings.fm-task.json -p "Reply with exactly: ok"`.
+Observed output: the marker file was created, the tracked `settings.local.json` was byte-identical afterward, and Claude emitted `Ignoring 1 permissions.allow entry from .claude/settings.local.json: this workspace has not been trusted`, which proves it read BOTH files and that `--settings` adds to the merged settings rather than replacing the project scopes.
+Interactive command run, the exact shape `fm-spawn` launches: the same command without `-p` and with the brief as a positional prompt, started detached in a tmux pane.
+Observed output: the launch first showed the trust dialog (expected in a fresh untrusted scratch folder, and the dialog explicitly named the tracked `settings.local.json` pre-approval), the marker appeared within about 9 seconds of accepting it, a second prompt in the same session re-created the marker after it was deleted, confirming the hook fires at every turn boundary and not only at session end, and `git status --porcelain` reported only `?? .claude/settings.fm-task.json`.
+Negative control command run: the identical print-mode invocation with the overlay file still present but `--settings` omitted.
+Observed output: the model answered normally and the marker was NOT created, confirming the flag is load-bearing and that shipping the rename without it would have disarmed supervision for every Claude crewmate.
+
+Because the filename and the flag are coupled, `fm-spawn` only writes the overlay when the resolved launch command actually names it.
+The raw launch-command escape hatch therefore gets `--settings <overlay>` injected after the program word, but only when that word is genuinely `claude` (an exact name or a path whose basename is `claude`).
+A claude-shaped wrapper such as `claude-yolo` may not accept the flag, and splicing an unknown flag into its argv would turn a missing turn-end signal into a crewmate that never launches, so a wrapper - like a raw command carrying its own `--settings` - gets no overlay at all plus a warning that the turn-end signal is unarmed.
+
+Teardown removes a pre-upgrade worktree's legacy `.claude/settings.local.json` hook only when git affirmatively reports that path untracked and it still holds firstmate's generated turn-end `touch`.
+Every inconclusive git answer - no git, not a work tree, a transient failure - keeps the file, so the failure direction is never the data loss this rename exists to prevent.
+A repository-tracked copy is left untouched for the same reason.
+
+Firstmate deliberately does not track `.claude/settings.local.json` anywhere.
+`bin/fm-ff-lib.sh`'s `dirty_status` refuses to fast-forward any dirty checkout, and Claude Code rewrites that path at runtime, so a tracked copy would freeze self-update across the fleet one vessel at a time.
+
 ## Tests
 
 `tests/fm-turnend-guard.test.sh` covers the split daemon-and-delivery predicate, independent repair lines, delivery-stub pid and identity matching, primary scoping, `FM_HOME` and `FM_STATE_OVERRIDE` precedence, away-mode delivery ownership, fail-open behavior without `jq`, tracked hook registration for all five harnesses, and passive-adapter loop guards.
+The per-task crewmate overlay recorded in the 2026-07-25 subsection is pinned from the spawn side by `tests/fm-spawn-dispatch-profile.test.sh` (a repository-tracked `.claude/settings.local.json` survives a claude spawn, the overlay is written under the distinct name and git-excluded, and the launch line carries `--settings` for it) and from the teardown side by `tests/fm-teardown.test.sh` cases (z) through (dd) (a tracked-and-dirty overlay still tears down, that tolerance does not mask other genuine uncommitted work, and a repository-tracked legacy `settings.local.json` is never removed).
 The default behavior suite does not invoke live language-model harnesses.
 `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh` opts into the isolated interactive Pi regression recorded above.
