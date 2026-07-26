@@ -160,6 +160,7 @@ That styled capture is internal to the boolean detector only.
 **Per-task crewmate hook fact (verified 2026-07-25, Claude Code 2.1.220).**
 The crewmate turn-end hook lives in the task's own `.claude/settings.fm-task.json`, never in `.claude/settings.local.json`, which Claude Code rewrites at runtime and a project is free to track.
 Claude Code does not read arbitrary sibling settings files, so that distinct name only works because the launch passes `--settings` for it; dropping the flag silently disarms the turn-end signal without any visible error.
+`fm-spawn` keeps the write and the load coupled: it writes the overlay only when the launch command names it, and it injects the flag into a claude-shaped raw launch command that does not already pass its own `--settings`.
 `--settings` adds to the merged settings rather than replacing the project scopes, so a repository's own Claude settings still apply to a crewmate.
 See `docs/turnend-guard.md`'s 2026-07-25 subsection for the validation transcript.
 

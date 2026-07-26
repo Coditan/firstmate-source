@@ -143,8 +143,8 @@ test_claude_hook_preserves_repo_local_settings() {
   [ "$(cat "$local_settings")" = '{"permissions":{"allow":["Bash(git status:*)"]}}' ] \
     || fail "Claude spawn truncated the repository's tracked settings.local.json"
   [ -f "$overlay" ] || fail "Claude spawn did not write the distinct per-task settings overlay"
-  jq -e '.hooks.Stop[0].hooks[0].command | startswith("touch ")' "$overlay" >/dev/null \
-    || fail "Claude per-task settings overlay does not contain the Stop hook"
+  assert_grep '"hooks":{"Stop":[{"hooks":[{"type":"command","command":"touch ' "$overlay" \
+    "Claude per-task settings overlay does not contain the Stop hook"
   launch=$(cat "$LAUNCH_LOG")
   assert_contains "$launch" "--settings '$overlay'" \
     "Claude launch did not explicitly load the per-task settings overlay"
@@ -239,6 +239,44 @@ test_active_dispatch_profile_allows_raw_launch_command() {
   launch=$(cat "$LAUNCH_LOG")
   [ "$launch" = "custom-agent --flag" ] || fail "raw launch command changed"$'\n'"actual: $launch"
   pass "active crew-dispatch profile allows the raw launch-command escape hatch"
+}
+
+test_raw_claude_launch_loads_the_task_overlay() {
+  local rec id out status launch overlay
+  id=raw-claude-overlay-z16
+  rec=$(make_spawn_case raw-claude-overlay claude "$id")
+  read_case_record "$rec"
+  overlay="$WT_DIR/.claude/settings.fm-task.json"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id" "$PROJ_DIR" "FOO=1 claude --dangerously-skip-permissions")
+  status=$?
+  expect_code 0 "$status" "raw claude launch command should succeed"
+  [ -f "$overlay" ] || fail "raw claude launch did not write the per-task settings overlay"
+  launch=$(cat "$LAUNCH_LOG")
+  [ "$launch" = "FOO=1 claude --settings '$overlay' --dangerously-skip-permissions" ] \
+    || fail "raw claude launch did not load the per-task settings overlay"$'\n'"actual: $launch"
+  pass "a raw claude launch command loads the per-task hook overlay it is given"
+}
+
+test_raw_claude_launch_with_own_settings_writes_no_overlay() {
+  local rec id out status launch
+  id=raw-claude-own-settings-z17
+  rec=$(make_spawn_case raw-claude-own-settings claude "$id")
+  read_case_record "$rec"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id" "$PROJ_DIR" "claude --settings /tmp/captain-settings.json")
+  status=$?
+  expect_code 0 "$status" "raw claude launch with its own --settings should succeed"
+  assert_absent "$WT_DIR/.claude/settings.fm-task.json" \
+    "spawn wrote a per-task overlay the launch command would never load"
+  assert_contains "$out" "turn-end hook was NOT installed" \
+    "spawn did not warn that the turn-end hook is unarmed"
+  launch=$(cat "$LAUNCH_LOG")
+  [ "$launch" = "claude --settings /tmp/captain-settings.json" ] \
+    || fail "raw launch command changed"$'\n'"actual: $launch"
+  pass "a raw claude command carrying its own --settings warns instead of writing a dead hook"
 }
 
 test_claude_threads_model_and_effort() {
@@ -464,6 +502,8 @@ test_active_dispatch_profile_requires_explicit_harness_for_scout
 test_active_dispatch_profile_allows_explicit_harness
 test_active_dispatch_profile_allows_positional_harness
 test_active_dispatch_profile_allows_raw_launch_command
+test_raw_claude_launch_loads_the_task_overlay
+test_raw_claude_launch_with_own_settings_writes_no_overlay
 test_claude_threads_model_and_effort
 test_codex_threads_model_and_effort
 test_codex_omits_invalid_max_effort

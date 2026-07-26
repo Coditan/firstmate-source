@@ -184,6 +184,12 @@ Observed output: the launch first showed the trust dialog (expected in a fresh u
 Negative control command run: the identical print-mode invocation with the overlay file still present but `--settings` omitted.
 Observed output: the model answered normally and the marker was NOT created, confirming the flag is load-bearing and that shipping the rename without it would have disarmed supervision for every Claude crewmate.
 
+Because the filename and the flag are coupled, `fm-spawn` only writes the overlay when the resolved launch command actually names it.
+The raw launch-command escape hatch therefore gets `--settings <overlay>` injected after the program word when the command is claude-shaped, and a raw command that carries its own `--settings` gets no overlay at all plus a warning that the turn-end signal is unarmed.
+
+Teardown removes a pre-upgrade worktree's legacy `.claude/settings.local.json` hook only when git reports that path untracked and it still holds firstmate's generated turn-end `touch`.
+A repository-tracked copy is left untouched, since removing it would discard repo content for exactly the reason the rename exists.
+
 Firstmate deliberately does not track `.claude/settings.local.json` anywhere.
 `bin/fm-ff-lib.sh`'s `dirty_status` refuses to fast-forward any dirty checkout, and Claude Code rewrites that path at runtime, so a tracked copy would freeze self-update across the fleet one vessel at a time.
 

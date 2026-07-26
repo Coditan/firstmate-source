@@ -95,7 +95,9 @@
 #     __BRIEF__    absolute path to data/<task-id>/brief.md
 #     __TURNEND__  absolute path to state/<task-id>.turn-ended (for harnesses whose
 #                  turn-end signal rides the launch command, e.g. codex -c notify=[...])
-#     __CLAUDESETTINGS__ absolute path to the per-task Claude settings overlay
+#     __CLAUDESETTINGS__ absolute path to the per-task Claude settings overlay; the
+#                  overlay is written ONLY when the launch command names it, and a
+#                  claude-shaped raw launch command gets --settings for it injected
 #     __CODEXCONFIG__ Codex profile overrides parsed from .codex/config.toml
 #     __PIEXT__    absolute path to state/<task-id>.pi-ext.ts (pi turn-end extension,
 #                  written by this script; outside the worktree to avoid pi's trust gate)
@@ -461,9 +463,35 @@ case "$ARG3" in
   *' '*)  # raw launch command (unverified-adapter escape hatch)
     LAUNCH=$ARG3
     HARNESS=""
-    for word in $LAUNCH; do
+    launch_head=""
+    launch_tail=$ARG3
+    while [ -n "$launch_tail" ]; do
+      launch_ws=${launch_tail%%[![:space:]]*}
+      if [ -n "$launch_ws" ]; then
+        launch_head=$launch_head$launch_ws
+        launch_tail=${launch_tail#"$launch_ws"}
+        continue
+      fi
+      word=${launch_tail%%[[:space:]]*}
+      launch_head=$launch_head$word
+      launch_tail=${launch_tail#"$word"}
       case "$word" in [A-Za-z_]*=*) continue ;; *) HARNESS=$(basename "$word"); break ;; esac
     done
+    # A claude-shaped raw command still gets the per-task turn-end hook written
+    # below, and Claude Code only reads it when the launch names it, so inject the
+    # flag here rather than leaving a path that writes a hook nothing loads. A raw
+    # command carrying its own --settings is left alone; the hook write below then
+    # skips and warns instead of installing a file that would never be read.
+    case "$HARNESS" in
+      claude*)
+        if [ "$KIND" != secondmate ]; then
+          case "$LAUNCH" in
+            *__CLAUDESETTINGS__*|*--settings*) ;;
+            *) LAUNCH="$launch_head --settings __CLAUDESETTINGS__$launch_tail" ;;
+          esac
+        fi
+        ;;
+    esac
     ;;
   '')
     # No explicit harness: resolve from config. A secondmate AGENT launches on the
@@ -1096,13 +1124,22 @@ if [ "$KIND" != secondmate ]; then
       # that path itself at runtime and a project may track it, so a truncating
       # redirect there destroys repo content and then leaves a tracked-and-dirty
       # file that teardown refuses. Claude Code does not read arbitrary sibling
-      # settings files, so this name only works because launch_template passes
+      # settings files, so this name only works because the launch passes
       # --settings for it; dropping that flag disarms the turn-end signal silently.
-      mkdir -p "$WT/.claude"
-      cat > "$WT/.claude/settings.fm-task.json" <<EOF
+      # Writing is therefore gated on the launch naming the overlay, so no path can
+      # end up with a hook file Claude never reads.
+      case "$LAUNCH" in
+        *__CLAUDESETTINGS__*)
+          mkdir -p "$WT/.claude"
+          cat > "$WT/.claude/settings.fm-task.json" <<EOF
 {"hooks":{"Stop":[{"hooks":[{"type":"command","command":"touch '$TURNEND'"}]}]}}
 EOF
-      exclude_path '.claude/settings.fm-task.json'
+          exclude_path '.claude/settings.fm-task.json'
+          ;;
+        *)
+          echo "warning: this claude launch command passes its own --settings, so firstmate's per-task turn-end hook was NOT installed and this crewmate will not signal turn end; put __CLAUDESETTINGS__ in the --settings value to arm it." >&2
+          ;;
+      esac
       ;;
     opencode*)
       mkdir -p "$WT/.opencode/plugins"
