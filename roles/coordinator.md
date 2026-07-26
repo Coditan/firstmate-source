@@ -19,8 +19,9 @@ A coordinator dispatches no crewmates and no scouts.
 `bin/fm-spawn.sh` refuses a ship or scout spawn in a coordinator home, so the posture holds even if these instructions are forgotten or compacted away.
 Work that would otherwise need a crewmate goes to the peer vessel whose domain owns it; when no peer owns it, say so and ask the captain where it belongs rather than doing the project work here.
 
-`AGENTS.md` section 1's never-write-to-a-project rule is unchanged and, with no crews, this home has no sanctioned path to project changes at all.
+`AGENTS.md` section 1's never-write-to-a-project rule is unchanged and, with no crews, there is no direct crew path to project changes from this home.
 Persistent secondmates are a separate mechanism and remain available under the unchanged `secondmate-provisioning` contract; the refusal covers crews, which is what a coordinator does not own.
+Delegating through a subordinate home stays legitimate: `config/role` is deliberately not inherited, so a coordinator's secondmate is a full vessel that owns crews of its own.
 
 ## Kept in full: this home's own durable records
 

@@ -354,9 +354,10 @@ section "CONTEXT"
 # loud diagnostic for that belongs to bootstrap above (ROLE_INVALID), not here.
 # Unlike the per-home data/ files below, the overlay is TRACKED and lives under
 # the code root, so it fast-forwards with the rest of the instruction surface.
-if ROLE_OVERLAY=$(fm_role_overlay_path "$FM_ROOT" "$(fm_role_value "$CONFIG")"); then
+ROLE=$(fm_role_value "$CONFIG")
+if ROLE_OVERLAY=$(fm_role_overlay_path "$FM_ROOT" "$ROLE"); then
   print_file_or_absent "$ROLE_OVERLAY" \
-    "roles/$(basename "$ROLE_OVERLAY") (ACTIVE ROLE OVERLAY - amends AGENTS.md; every AGENTS.md rule still binds except where it narrows one)"
+    "roles/$ROLE.md (ACTIVE ROLE OVERLAY - amends AGENTS.md; every AGENTS.md rule still binds except where it narrows one)"
 fi
 print_file_or_absent "$DATA/projects.md" "data/projects.md"
 print_file_or_absent "$DATA/secondmates.md" "data/secondmates.md"
