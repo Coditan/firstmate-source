@@ -183,17 +183,32 @@ Claude Code's primary delivery protocol is the lowest-friction path: run `bin/fm
 | Skill invocation | `$<skill>` (e.g. `$no-mistakes`); `/<skill>` is claude-only and codex rejects it as "Unrecognized command" |
 
 The busy signature is composed, not a literal: the status row renders the elapsed time, then the configured interrupt key's own label, then the fixed text ` to interrupt)`.
-Codex's default interrupt binding is a plain Escape, whose label renders as `esc`, which is why the pane shows `esc to interrupt` and why `fm-watch.sh` and `fm-tmux-lib.sh` still need no change.
-Two conditions change that string, and both are worth knowing before trusting a busy read.
+Codex's default interrupt binding is a plain Escape, whose label renders as `esc`, so the string `fm-watch.sh` and `fm-tmux-lib.sh` already match is the one the pane still shows.
+Three conditions break a busy read on 0.145.0, and the first is different in kind from the other two: nothing has to be misconfigured for it to happen.
+
+Under stock configuration Codex renders the status row only during the pre-answer phase of a turn.
+As soon as it begins streaming its answer it removes the row entirely, and the pane then renders identically to an idle one - the composer suggestion plus the `<model> <effort> · <cwd>` footer, with no interrupt hint anywhere in it.
+Measured against Codex's own `notify` turn-end hook, so that turn end is observed rather than inferred, this was roughly 32 seconds of a 39-second turn during which firstmate's own `fm_pane_is_busy` read idle for a demonstrably working worker.
+It holds for every Codex worker on every turn, not only for a captain who has changed something.
+The busy string itself has not moved and still matches whenever it is rendered, but it is absent for most of a turn's wall clock, so a busy read cannot be treated as a reliable liveness signal for a Codex worker.
+That measurement is established; its consequence is not.
+Whether it actually produces a false wedge escalation depends on the watcher's absorb logic and its grace windows, which this verification did not trace, and other signals such as the turn-end hook and the worker's own status writes may already cover it.
+Establishing that is a separate piece of work, which is why this diff still leaves `fm-watch.sh` and `fm-tmux-lib.sh` untouched.
+
+The other two conditions each require something to change first.
 A captain who remaps `tui.keymap.chat.interrupt_turn` in their own Codex config gets that key's label instead (a remap to F12 renders `f12 to interrupt`), and unbinding it entirely drops the hint so the row shows only the elapsed time.
 Firstmate never writes that key itself, but it also never overrides `HOME` or `CODEX_HOME` for spawned workers, so every firstmate-launched Codex worker loads the operator's own `~/.codex/config.toml`.
 A single remap or unbind of `tui.keymap.chat.interrupt_turn` therefore blinds the watcher to every Codex worker at once, not just to a captain-configured primary.
 The concrete harm is that a blinded watcher reads a working agent as stopped, so a healthy crewmate gets disruptively recovered mid-task.
 Codex also renders the same `<key> to interrupt` hint in the overlay it shows when the model asks the user a question, so a Codex worker blocked on a question presents as busy rather than as waiting.
 Treat a long-running Codex pane that never reaches turn end as a candidate for that state rather than assuming forward progress.
+That overlay fact is source-derived rather than live-verified, and it is the only one in this section that is: it comes from reading the 0.145.0 overlay rendering, not from watching a running binary.
+Two attempts to force the overlay failed to reproduce it, because gpt-5.5 answered the question in plain transcript text instead of opening the overlay.
+Two failed attempts are not evidence against the claim, so it stands as written, but treat it as unconfirmed until a live run renders the overlay.
 
-Idle is unambiguous and cannot be misread as busy.
-An idle Codex pane on 0.145.0 cycles a suggestion list in the composer ("Explain this codebase", "Write tests for @filename", "Improve documentation in @filename") rather than showing a fixed placeholder, and its collapsed footer is the model, the effort, and the working directory, rendered as `<model> <effort> · <cwd>`.
+Idle never reads as busy; the error only runs the other way, as the streaming gap above shows.
+An idle Codex pane on 0.145.0 shows a composer suggestion drawn from a list ("Explain this codebase", "Write tests for @filename", "Improve documentation in @filename") rather than a fixed placeholder, and its collapsed footer is the model, the effort, and the working directory, rendered as `<model> <effort> · <cwd>`.
+The suggestion does not cycle: it is drawn fresh per composer and then held, so one idle pane sampled every five seconds for a minute never rotated off its single entry, while five separate launches and composer resets produced a different suggestion apiece.
 There is no `Ask Codex` placeholder in this version: `strings` on the installed binary finds zero occurrences of it.
 The operationally load-bearing half is confirmed and unchanged by that correction - an idle pane carries no interrupt hint of any kind, so the watcher cannot read idle as busy.
 Expanding the footer while a turn runs adds `ctrl + c to interrupt`, which is a distinct string from the status row's `esc to interrupt` and so does not create a second busy match.
