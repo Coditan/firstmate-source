@@ -210,7 +210,10 @@ That overlay fact is source-derived rather than live-verified: it comes from rea
 Two attempts to force the overlay failed to reproduce it, because gpt-5.5 answered the question in plain transcript text instead of opening the overlay.
 Two failed attempts are not evidence against the claim, so it stands as written, but treat it as unconfirmed until a live run renders the overlay.
 
-Both directions of misread are real and neither cancels the other, so do not treat either as ruled out when reading a Codex pane: one that reads idle may be a worker mid-stream, and one that reads busy may be a worker waiting on an answer nobody is going to give it.
+Both directions of misread are real, and they do not rest on the same quality of evidence.
+The streaming direction is reproduced by live measurement against Codex's own turn-end hook; the overlay direction is read off the 0.145.0 source, and two attempts to force it failed to reproduce it, so it stands unconfirmed rather than disproved.
+That asymmetry can be stated without weakening the guidance, because the operational conclusion holds whether or not a live run ever renders the overlay: a busy read is not proof of life, and a quiet pane is not proof of a stuck worker.
+Neither direction cancels the other, so do not treat either as ruled out when reading a Codex pane: one that reads idle may be a worker mid-stream, and one that reads busy may be a worker waiting on an answer nobody is going to give it.
 
 An idle Codex pane on 0.145.0 shows a composer suggestion drawn from a list ("Explain this codebase", "Write tests for @filename", "Improve documentation in @filename") rather than a fixed placeholder, and its collapsed footer is the model, the effort, and the working directory, rendered as `<model> <effort> · <cwd>`.
 The suggestion does not cycle: it is drawn fresh per composer and then held, so one idle pane sampled every five seconds for a minute never rotated off its single entry, while five separate launches and composer resets produced a different suggestion apiece.
