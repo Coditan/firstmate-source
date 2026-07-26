@@ -12,8 +12,9 @@
 #     fast-forward of one worktree never disturbs another worktree's checkout
 #     or the shared default branch.
 #   - The caller-action summary is correct: reread-firstmate flips to yes only
-#     when the instruction surface (AGENTS.md / bin / .agents/skills) changed, and
-#     nudge-secondmates lists exactly the live secondmates that advanced.
+#     when the instruction surface (AGENTS.md / bin / roles / .agents/skills)
+#     changed, and nudge-secondmates lists exactly the live secondmates that
+#     advanced.
 #   - Secondmate homes resolve from both state/<id>.meta and the
 #     data/secondmates.md registry, deduped, and the firstmate repo is never
 #     re-processed as one of its own secondmates.

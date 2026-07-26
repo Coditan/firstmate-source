@@ -29,13 +29,13 @@
 #          When a RUNNING secondmate worktree is fast-forwarded to firstmate's
 #          own current default-branch commit (a purely LOCAL fast-forward, never
 #          an origin fetch) AND its loaded instruction surface (AGENTS.md, bin/,
-#          or .agents/skills/) actually changed, bootstrap immediately nudges it
-#          via FM_HOME=<active-home> bin/fm-send.sh fm-<id> so meta resolves the
-#          current backend target and the standard from-firstmate marker is
-#          applied. A successful send prints one BOOTSTRAP_INFO line with the
-#          exact target and message sent; a failed send leaves an idempotent
-#          retry marker under state/.secondmate-nudge-pending/ and prints an
-#          actionable NUDGE_SECONDMATES line.
+#          roles/, or .agents/skills/) actually changed, bootstrap immediately
+#          nudges it via FM_HOME=<active-home> bin/fm-send.sh fm-<id> so meta
+#          resolves the current backend target and the standard from-firstmate
+#          marker is applied. A successful send prints one BOOTSTRAP_INFO line
+#          with the exact target and message sent; a failed send leaves an
+#          idempotent retry marker under state/.secondmate-nudge-pending/ and
+#          prints an actionable NUDGE_SECONDMATES line.
 #          Already-current or no-instruction-change homes are silently left alone.
 #          The secondmate sweep also propagates declared inherited local material
 #          into each validated live secondmate home.
@@ -271,12 +271,13 @@ secondmate_sync() {
   # fetch, no origin dependency: a linked-worktree home already holds the primary's
   # commit (fm-ff-lib.sh), while a standalone clone without it is skipped until
   # /updatefirstmate refreshes it from origin. Startup sends reread nudges only
-  # for RUNNING secondmates whose instruction surface (AGENTS.md, bin/, or
-  # .agents/skills/) actually changed, so a secondmate already on the primary's
-  # version is never disturbed (AGENTS.md bootstrap + supervision). Unlike
-  # /updatefirstmate, startup owns the live-convergence send itself because it is
-  # a deterministic locked sweep and can report success as BOOTSTRAP_INFO while
-  # preserving failed sends as NUDGE_SECONDMATES retry markers.
+  # for RUNNING secondmates whose instruction surface (AGENTS.md, bin/, roles/,
+  # or .agents/skills/) actually changed, so a secondmate already on the
+  # primary's version is never disturbed (AGENTS.md bootstrap + supervision).
+  # Unlike /updatefirstmate, startup owns the live-convergence send itself
+  # because it is a deterministic locked sweep and can report success as
+  # BOOTSTRAP_INFO while preserving failed sends as NUDGE_SECONDMATES retry
+  # markers.
   [ -d "$STATE" ] || return 0
   local primary_head
   if ! primary_head=$(primary_head_commit "$FM_ROOT"); then
