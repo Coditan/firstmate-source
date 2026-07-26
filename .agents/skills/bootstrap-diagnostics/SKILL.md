@@ -2,7 +2,7 @@
 name: bootstrap-diagnostics
 description: >-
   Agent-only handling playbook for session-start bootstrap diagnostics.
-  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, SELF_DRIFT, CREW_DISPATCH invalid, CURRENCY_BASE, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, AXI_SUITE_UPDATED, AXI_SUITE_REVIEW, AXI_SUITE_STUCK, FIRSTMATE_UPDATE_AVAILABLE, FIRSTMATE_UPDATE_STUCK, FORK_SYNC, FORK_SYNC_STUCK, WATCHER_UNIT, FREQUENCY_MONITOR_UNIT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
+  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, ROLE_INVALID, ROLE_OVERLAY_MISSING, NEEDS_GH_AUTH, TANGLE, SELF_DRIFT, CREW_DISPATCH invalid, CURRENCY_BASE, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, AXI_SUITE_UPDATED, AXI_SUITE_REVIEW, AXI_SUITE_STUCK, FIRSTMATE_UPDATE_AVAILABLE, FIRSTMATE_UPDATE_STUCK, FORK_SYNC, FORK_SYNC_STUCK, WATCHER_UNIT, FREQUENCY_MONITOR_UNIT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
   A silent bootstrap section, or a BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -23,6 +23,12 @@ When any diagnostic needs captain attention, report the plain consequence and re
   For `quota-axi`, bootstrap requires it because every crew-dispatch profile array calls it automatically; `bin/fm-dispatch-select.sh` still selects uniformly from valid candidates with OS-backed randomness when quota data is unavailable.
 - `MISSING_MANUAL: <tool> (instructions: <url>)` - tell the captain why the tool is required and give them the printed instructions URL, but do not pass the tool to `bin/fm-bootstrap.sh install`; wait for the captain to complete the manual installation, then rerun session start to confirm the dependency is present.
 - `BACKEND_INVALID: <name> (known: <names>)` - the resolved runtime backend has no verified dependency or lifecycle contract, so do not dispatch work until the invalid `FM_BACKEND` or `config/backend` value is corrected to one of the listed backends.
+- `ROLE_INVALID: <name> (known: <names>)` - `config/role` names a role that does not exist, so no overlay was delivered and this session is running unamended `AGENTS.md`.
+  Report the concrete consequence to the captain, correct the file to one of the listed values or remove it to return this home to the default `vessel` role, then rerun session start so the overlay actually reaches the session.
+  Do not guess which role was meant.
+- `ROLE_OVERLAY_MISSING: <name> (expected: roles/<name>.md)` - the selected role is recognized but its tracked overlay file is not present in this code root, so the role's instructions were not delivered.
+  Either this home is behind the fork that carries the overlay, in which case `/updatefirstmate` resolves it, or the overlay has not been written yet, in which case the role is not usable and the home should return to `vessel` until it is.
+  Do not write the missing overlay from memory to silence the line.
 - `NEEDS_GH_AUTH` - ask the captain to run `! gh auth login` (interactive; you cannot run it for them).
 - `WATCHER_UNIT: missing ...` or `WATCHER_UNIT: ... disabled ...` - explain that persistent supervision needs the per-home user-service instance, ask for explicit consent, then run `bin/fm-bootstrap.sh install watcher-unit` only after approval.
   The installation copies the tracked template, writes this home's private environment, reloads the user manager, and enables and starts only the instance encoded from this home.

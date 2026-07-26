@@ -33,9 +33,11 @@
 #                       when this session actually holds the lock.
 #   3. wake-drain     - mutates the durable wake queue, so it also only runs
 #                       when locked.
-#   4. context digest - data/projects.md, data/secondmates.md, data/captain.md,
-#                       data/captain-shared.md, data/learnings.md: read-only,
-#                       always safe, always runs.
+#   4. context digest - the active role overlay (roles/<name>.md, emitted only
+#                       when config/role selects a recognized non-default role),
+#                       then data/projects.md, data/secondmates.md,
+#                       data/captain.md, data/captain-shared.md,
+#                       data/learnings.md: read-only, always safe, always runs.
 #   5. fleet digest   - a compact data/backlog.md identity/metadata listing,
 #                       every state/*.meta, a bounded state/*.status tail,
 #                       state/.afk, and a cheap per-task endpoint-liveness read:
@@ -101,6 +103,8 @@ PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-tasks-axi-lib.sh
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
+# shellcheck source=bin/fm-role-lib.sh
+. "$SCRIPT_DIR/fm-role-lib.sh"
 
 STATUS_TAIL=${FM_SESSION_START_STATUS_TAIL:-5}
 case "$STATUS_TAIL" in ''|*[!0-9]*) STATUS_TAIL=5 ;; esac
@@ -342,6 +346,18 @@ fi
 
 # --- 6. context digest -----------------------------------------------------
 section "CONTEXT"
+# The active role overlay leads the context digest because it amends AGENTS.md
+# itself, so it outranks every per-home record that follows. It is emitted ONLY
+# when config/role selects a recognized non-default role: a home with no
+# config/role file (the default `vessel`) prints nothing extra here, exactly as
+# before this seam existed. An unrecognized value prints nothing either - the one
+# loud diagnostic for that belongs to bootstrap above (ROLE_INVALID), not here.
+# Unlike the per-home data/ files below, the overlay is TRACKED and lives under
+# the code root, so it fast-forwards with the rest of the instruction surface.
+if ROLE_OVERLAY=$(fm_role_overlay_path "$FM_ROOT" "$(fm_role_value "$CONFIG")"); then
+  print_file_or_absent "$ROLE_OVERLAY" \
+    "roles/$(basename "$ROLE_OVERLAY") (ACTIVE ROLE OVERLAY - amends AGENTS.md; every AGENTS.md rule still binds except where it narrows one)"
+fi
 print_file_or_absent "$DATA/projects.md" "data/projects.md"
 print_file_or_absent "$DATA/secondmates.md" "data/secondmates.md"
 print_file_or_absent "$DATA/captain.md" "data/captain.md"

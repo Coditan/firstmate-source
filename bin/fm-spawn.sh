@@ -79,6 +79,11 @@
 #   --scout records kind=scout in the task's meta (report deliverable, scratch worktree;
 #   see AGENTS.md task lifecycle); --secondmate records kind=secondmate and launches in a
 #   provisioned firstmate home; the default is kind=ship.
+#   A home whose config/role is `coordinator` owns no crews, so ship and scout
+#   spawns are refused here (docs/configuration.md "Vessel role"). --secondmate is
+#   unaffected: a persistent secondmate is a separate mechanism, not a crew. The
+#   refusal is a misconfiguration backstop, not a security boundary - anything
+#   running as this account can edit config/role or drive a backend directly.
 #   Before a secondmate launch, the home is locally fast-forwarded to the primary
 #   default-branch commit when safe; skipped syncs warn and launch unchanged.
 #   Ship/scout spawns refuse to launch unless the resolved task path is a real
@@ -116,7 +121,7 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
-  sed -n '2,78p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,86p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 case "${1:-}" in
@@ -142,6 +147,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-role-lib.sh
+. "$SCRIPT_DIR/fm-role-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -339,6 +346,19 @@ spawn_herdr_presentation_order_lock_release() {
   HERDR_PRESENTATION_ORDER_LOCK_HELD=0
   fm_lock_release "$HERDR_PRESENTATION_ORDER_LOCK" || true
 }
+
+# Role backstop: a coordinator home owns no crews, so refuse ship and scout spawns
+# here, before any batch fan-out, worktree allocation, or backend session exists.
+# This is the same shape as the crew-dispatch backstop below - a cheap config read
+# that stops a spawn the home's configuration says should not happen - and it is
+# deliberately NOT a security boundary: this account can edit config/role or drive a
+# backend directly, so it catches misconfiguration and forgotten instructions, not a
+# determined bypass. --secondmate is exempt: a persistent secondmate home is a
+# separate mechanism with its own contract, not a crew.
+if [ "$KIND" != secondmate ] && fm_role_is_coordinator "$CONFIG"; then
+  echo "error: config/role is coordinator - this home owns no crews, so it does not spawn ship or scout tasks. Route the work to the peer vessel whose domain owns it (docs/configuration.md \"Vessel role\")." >&2
+  exit 1
+fi
 
 # Batch dispatch (see header): when the first positional is an `id=repo` pair, treat every
 # positional as one and spawn each by re-execing this script in single-task mode. We use

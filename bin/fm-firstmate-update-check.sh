@@ -8,10 +8,11 @@
 # contacts Bridge. A supervising firstmate relays FIRSTMATE_UPDATE_AVAILABLE
 # through the normal crewmate-dispatch path.
 #
-# "Relevant" means an upstream-only commit changes AGENTS.md, bin/, or
+# "Relevant" means an upstream-only commit changes AGENTS.md, roles/, bin/, or
 # .agents/skills/. These are the running instruction surfaces named by
-# AGENTS.md section 12. Public skills/ are installer-facing and do not trigger
-# a fleet-wide running-vessel update by themselves.
+# AGENTS.md section 12; roles/ is included because a role overlay amends
+# AGENTS.md for whichever home selects it. Public skills/ are installer-facing
+# and do not trigger a fleet-wide running-vessel update by themselves.
 #
 # This script is not invoked by bootstrap or any other firstmate flow; it
 # only reads and writes local state. Schedule it externally per firstmate
@@ -91,7 +92,7 @@ if git -C "$compare_repo" merge-base --is-ancestor "$upstream" "$current" 2>/dev
 fi
 
 base=$(git -C "$compare_repo" merge-base "$current" "$upstream" 2>/dev/null) || record_stuck "local and upstream histories have no merge base"
-if git -C "$compare_repo" diff --quiet "$base" "$upstream" -- AGENTS.md bin .agents/skills; then
+if git -C "$compare_repo" diff --quiet "$base" "$upstream" -- AGENTS.md roles bin .agents/skills; then
   rm -f "$AVAILABLE" "$STUCK"
   exit 0
 fi

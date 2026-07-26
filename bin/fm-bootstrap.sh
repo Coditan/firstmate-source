@@ -8,6 +8,8 @@
 #          Lines: "MISSING: <tool> (install: <command>)",
 #                 "MISSING_MANUAL: <tool> (instructions: <url>)", "NEEDS_GH_AUTH",
 #                 "BACKEND_INVALID: <name> (known: <names>)",
+#                 "ROLE_INVALID: <name> (known: <names>)",
+#                 "ROLE_OVERLAY_MISSING: <name> (expected: roles/<name>.md)",
 #                 "CREW_DISPATCH: invalid config/crew-dispatch.json - <reason>",
 #                 "CURRENCY_BASE: config/<file> is unusable - <reason>; <remediation>",
 #                 "FLEET_SYNC: <repo>: skipped|recovered|STUCK: <detail>",
@@ -114,6 +116,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-currency-base-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-currency-base-lib.sh"
+# shellcheck source=bin/fm-role-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-role-lib.sh"
 
 fleet_sync_origin_backed_project_count() {
   local count proj
@@ -865,6 +869,15 @@ fi
 
 if [ "$BACKEND_VALID" -eq 0 ]; then
   echo "BACKEND_INVALID: $BACKEND (known: $FM_BACKEND_KNOWN)"
+fi
+# Vessel role: a selected role that cannot be delivered must be loud here, not a
+# silent unamended session. An absent config/role resolves to the default and
+# prints nothing at all, so a home that never opted in sees no new line.
+ROLE=$(fm_role_value "$CONFIG")
+if ! fm_role_is_known "$ROLE"; then
+  echo "ROLE_INVALID: $ROLE (known: $FM_ROLE_KNOWN)"
+elif ROLE_OVERLAY=$(fm_role_overlay_path "$FM_ROOT" "$ROLE") && [ ! -f "$ROLE_OVERLAY" ]; then
+  echo "ROLE_OVERLAY_MISSING: $ROLE (expected: roles/$ROLE.md)"
 fi
 for t in $BACKEND_TOOLS; do
   fm_backend_required_tool_available "$BACKEND" "$t" \
