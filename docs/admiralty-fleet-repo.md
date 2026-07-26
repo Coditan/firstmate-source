@@ -12,14 +12,28 @@ Cutover stays sequenced behind proving a staged rollout, with this vessel as can
 
 ## The property everything else depends on
 
-`admiralty`'s `main` descends from this fork's `main`.
+`admiralty`'s `main` descends from this fork's `main` as it stood at `e52cc76`, the genesis base.
+That property is permanent, and it is what makes the shared object store and the linked-worktree secondmate model work at all.
 
-`bin/fm-ff-lib.sh` advances a checkout only when its `HEAD` is an ancestor of the new base, and skips silently when it is not.
-A fresh-history fleet repository would therefore have delivered nothing to any vessel, forever, while reporting nothing wrong, and secondmate homes are linked worktrees that depend on the shared object store for the same reason.
+`bin/fm-ff-lib.sh` advances a checkout only when its `HEAD` is an ancestor of the new base.
+When it is not, the advance is refused rather than failed: `ff_target` prints one `<label>: skipped: diverged from <base>` line for that target and returns success, and `bin/fm-update.sh` surfaces one such line per target, which is easy to miss in a longer sync report.
+A fresh-history fleet repository would therefore have delivered nothing to any vessel, forever, while the sync kept reporting success overall, and secondmate homes are linked worktrees that depend on the shared object store for the same reason.
 
 So `admiralty` was built from this history: one commit on top of the fork's `main` at `e52cc76`, transforming the tree into its vendored-plus-overlay shape.
 That genesis commit is `2cbf8c7`; `492361e` on top of it corrects the branch-protection doctrine described below.
-The proof is in the pull request that carried this document, run through firstmate's own `ff_target` rather than a hand-rolled `git merge`.
+The proof is a run of firstmate's own `ff_target` rather than a hand-rolled `git merge`:
+
+```
+$ git rev-parse HEAD # a vessel at the fork's main
+e52cc7642f495af2f0cae9cb8e28706faa2a3a6d
+$ git remote set-url origin https://github.com/Freudator86/admiralty.git
+$ . bin/fm-ff-lib.sh; ff_target "$PWD" vessel origin
+vessel: updated e52cc76..492361e
+FF_STATUS=updated
+```
+
+This fork's `main` has since advanced to `ce43899`, which is not an ancestor of `492361e`.
+A vessel sitting at the fork's current `main` and pointed at `admiralty`'s `main` would therefore hit exactly the refused advance described above, and how that is repaired before cutover is still open; see "What is not built yet".
 
 ## The shape of the repository
 
@@ -124,5 +138,9 @@ That is a property of the current fork, not of `admiralty`.
 ## What is not built yet
 
 - No vessel is cut over. Origins still point at `Freudator86/firstmate`.
+- Restoring the ancestry as this fork's `main` advances past `e52cc76` is an open captain decision, not a solved problem.
+  Ancestry is a property of the commit graph and not of tree content, so a pin bump alone does not restore it: a bump commit on `admiralty` copies the fork's newer tree, but it does not add the fork's newer commits to `admiralty`'s ancestor set.
+  Absorbing that history so an already-updated vessel stays fast-forwardable needs a true merge of the fork's `main` into `admiralty`'s `main`, which is consistent with the standing rule that upstream-sync pull requests land as true merge commits rather than squashes.
+  The unresolved part is how such a merge interacts with the drift gate, because the merge brings vendored file changes in directly, so the manifest has to be regenerated in the same commit.
 - The Bridge extraction, the fork-maintenance tooling retirement, and the Bucket-A upstreaming are unstarted; the fork-first ratchet prices each as its own reviewed pin bump.
 - `fleet/decisions/`, `fleet/vessels/`, and `fleet/roles/` are empty placeholders.
