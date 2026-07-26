@@ -33,7 +33,7 @@ vessel: updated e52cc76..492361e
 FF_STATUS=updated
 ```
 
-This fork's `main` has since advanced to `ce43899`, which is not an ancestor of `492361e`.
+This fork's `main` has since advanced past `e52cc76`, so its tip is no longer an ancestor of `492361e`; it stood at `ce43899` when this document was written.
 A vessel sitting at the fork's current `main` and pointed at `admiralty`'s `main` would therefore hit exactly the refused advance described above, and how that is repaired before cutover is still open; see "What is not built yet".
 
 ## The shape of the repository
