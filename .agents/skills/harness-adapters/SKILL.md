@@ -116,7 +116,7 @@ The supported launch-profile flags below are verified locally; each row records 
 | Harness | Model flag | Effort flag | Notes |
 |---|---|---|---|
 | claude | `--model <model>` | `--effort <low\|medium\|high\|xhigh\|max>` | Verified on Claude Code 2.1.196. |
-| codex | `--model <model>` | `-c 'model_reasoning_effort="<low\|medium\|high\|xhigh>"'` | Verified on codex-cli 0.142.1. The installed binary schema contains `model_reasoning_effort`, the active config uses it, and the bundled model catalog advertises only low/medium/high/xhigh. `max` is omitted. |
+| codex | `--model <model>` | `-c 'model_reasoning_effort="<low\|medium\|high\|xhigh>"'` | Re-verified 2026-07-26 on codex-cli 0.145.0. `-c/--config`, `-m/--model`, and the `model_reasoning_effort` and `notify` config keys are all still accepted with unchanged meaning. The bundled catalog now advertises `max` and `ultra` for the newest models only, so `fm-spawn` still stops at `xhigh` (see the codex section for why). |
 | grok | `--model <model>` | `--reasoning-effort <low\|medium\|high>` | Verified on grok 0.2.99 (2026-07-13). `--effort` is an alias, but firstmate's profile axis is reasoning effort. As of 0.2.99 the ceiling is `high`; both `xhigh` and `max` are rejected with `use one of: high, medium, low`, so firstmate omits them. |
 | pi | `--model <model>` | `--thinking <low\|medium\|high\|xhigh\|max>` | Verified 2026-07-13 on Pi 0.80.6. `pi --help` advertises `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; `pi --print --model openai-codex/gpt-5.6-sol --thinking max 'Reply with exactly OK.'` completed successfully. |
 | opencode | `--model <provider/model>` | none for firstmate's interactive launch | Verified on opencode 1.17.6. `opencode run` has `--variant`, but firstmate launches the interactive `opencode --prompt` path, which has no verified effort flag. |
@@ -173,27 +173,99 @@ A project-level `.claude/settings.json` only takes effect when Claude Code's pro
 After those settings are loaded, hook command resolution is still cwd-sensitive because Claude Code runs commands through `/bin/sh` against the session's current cwd; keep the tracked command anchored through `"$CLAUDE_PROJECT_DIR"/bin/fm-turnend-guard.sh` and see `docs/turnend-guard.md` for the verified Stop-hook details.
 Claude Code's primary delivery protocol is the lowest-friction path: run `bin/fm-watch-arm.sh` as its own Claude Code background task and treat delivery-stub completion as the wake.
 
-## codex (VERIFIED 2026-06-11, codex-cli 0.139.0)
+## codex (VERIFIED 2026-06-11, codex-cli 0.139.0; re-verified 2026-07-26 against codex-cli 0.145.0, both the source at tag `rust-v0.145.0` and the installed binary)
 
 | Fact | Value |
 |---|---|
 | Busy-pane signature | `esc to interrupt` (shown as `• Working (Xs • esc to interrupt)`) |
-| Exit command | `/quit` (slash popup needs about 1 second between text and Enter; `fm-send` handles it) |
+| Exit command | `/quit`, with `/exit` as an equal alias (slash popup needs about 1 second between text and Enter; `fm-send` handles it) |
 | Interrupt | single Escape |
 | Skill invocation | `$<skill>` (e.g. `$no-mistakes`); `/<skill>` is claude-only and codex rejects it as "Unrecognized command" |
+
+The busy signature is composed, not a literal: the status row renders the elapsed time, then the configured interrupt key's own label, then the fixed text ` to interrupt)`.
+Codex's default interrupt binding is a plain Escape, whose label renders as `esc`, so the string `fm-watch.sh` and `fm-tmux-lib.sh` already match is the one the pane still shows.
+Three conditions make a Codex pane's state misread on 0.145.0, and they group by what each one requires rather than by how exotic it is.
+The streaming gap and the question overlay both happen under entirely stock configuration - the streaming gap on every turn unconditionally, the overlay whenever the model chooses to ask the user a question - and only a remapped or unbound `tui.keymap.chat.interrupt_turn` requires an operator to have changed anything.
+They also run in opposite directions: the streaming gap and the keymap case hide a working agent, while the question overlay hides a stuck one.
+
+Under stock configuration Codex renders the status row only during the pre-answer phase of a turn.
+As soon as it begins streaming its answer it removes the row entirely, and the pane then renders identically to an idle one - the composer suggestion plus the `<model> <effort> · <cwd>` footer, with no interrupt hint anywhere in it.
+Measured against Codex's own `notify` turn-end hook, so that turn end is observed rather than inferred, this was roughly 32 seconds of a 39-second turn during which firstmate's own `fm_pane_is_busy` read idle for a demonstrably working worker.
+It holds for every Codex worker on every turn, not only for a captain who has changed something.
+The busy string itself has not moved and still matches whenever it is rendered, but it is absent for most of a turn's wall clock, so a busy read cannot be treated as a reliable liveness signal for a Codex worker.
+That measurement is established; its consequence is not.
+Whether it actually produces a false wedge escalation depends on the watcher's absorb logic and its grace windows, which this verification did not trace, and other signals such as the turn-end hook and the worker's own status writes may already cover it.
+Establishing that is separate work, which is why the busy-signature matching in `fm-watch.sh` and `fm-tmux-lib.sh` is deliberately unchanged.
+
+The keymap case is the one that requires an operator to have changed something.
+A captain who remaps `tui.keymap.chat.interrupt_turn` in their own Codex config gets that key's label instead (a remap to F12 renders `f12 to interrupt`), and unbinding it entirely drops the hint so the row shows only the elapsed time.
+Firstmate never writes that key itself, but it also never overrides `HOME` or `CODEX_HOME` for spawned workers, so every firstmate-launched Codex worker loads the operator's own `~/.codex/config.toml`.
+A single remap or unbind of `tui.keymap.chat.interrupt_turn` therefore blinds the watcher to every Codex worker at once, not just to a captain-configured primary.
+The concrete harm is that a blinded watcher reads a working agent as stopped, so a healthy crewmate gets disruptively recovered mid-task.
+
+The question overlay needs no configuration change and no unusual state: it appears under stock configuration whenever the model chooses to ask the user something.
+Codex renders the same `<key> to interrupt` hint in that overlay, so a Codex worker blocked on a question presents as busy rather than as waiting.
+Treat a long-running Codex pane that never reaches turn end as a candidate for that state rather than assuming forward progress.
+That overlay fact is source-derived rather than live-verified: it comes from reading the 0.145.0 overlay rendering, not from watching a running binary.
+Two attempts to force the overlay failed to reproduce it, because gpt-5.5 answered the question in plain transcript text instead of opening the overlay.
+Two failed attempts are not evidence against the claim, so it stands as written, but treat it as unconfirmed until a live run renders the overlay.
+
+Both directions of misread are real, and they do not rest on the same quality of evidence.
+The streaming direction is reproduced by live measurement against Codex's own turn-end hook; the overlay direction is read off the 0.145.0 source, and two attempts to force it failed to reproduce it, so it stands unconfirmed rather than disproved.
+That asymmetry can be stated without weakening the guidance, because the operational conclusion holds whether or not a live run ever renders the overlay: a busy read is not proof of life, and a quiet pane is not proof of a stuck worker.
+Neither direction cancels the other, so do not treat either as ruled out when reading a Codex pane: one that reads idle may be a worker mid-stream, and one that reads busy may be a worker waiting on an answer nobody is going to give it.
+
+An idle Codex pane on 0.145.0 shows a composer suggestion drawn from a list ("Explain this codebase", "Write tests for @filename", "Improve documentation in @filename") rather than a fixed placeholder, and its collapsed footer is the model, the effort, and the working directory, rendered as `<model> <effort> · <cwd>`.
+The suggestion does not cycle: it is drawn fresh per composer and then held, so one idle pane sampled every five seconds for a minute never rotated off its single entry, while five separate launches and composer resets produced a different suggestion apiece.
+There is no `Ask Codex` placeholder in this version: `strings` on the installed binary finds zero occurrences of it.
+The operationally load-bearing half is confirmed and unchanged by that correction - the idle composer itself carries no interrupt hint of any kind, so a pane sitting at it cannot be misread as busy; only the question overlay drawn over the composer puts the hint back.
+Expanding the footer while a turn runs adds `ctrl + c to interrupt`, which is a distinct string from the status row's `esc to interrupt` and so does not create a second busy match.
+
+Ctrl+C is an exit path alongside `/quit` and `/exit`, but what it takes depends on the state of the pane.
+From an idle empty composer a single Ctrl+C quits immediately with no confirmation.
+With text in the composer the first press clears the text and a further press quits.
+During a running turn a single Ctrl+C interrupts the turn rather than quitting, and Codex survives it: the pane renders `Conversation interrupted - tell the model what to do differently`.
+That interrupt returns the composer to the idle-and-empty state, which is exactly the state described two lines above as quitting on a single press with no confirmation.
+A single further press therefore quits, so two mid-turn presses do exit.
+Never script or send a second Ctrl+C expecting it to interrupt harder, because it exits the session and loses the turn's work instead.
+Inside a side conversation Ctrl+C returns to the main thread rather than exiting or interrupting (source-derived: the binary carries "'/delete' is unavailable in side conversations. Press Ctrl+C to return to the main thread first."); firstmate never opens one, so this completes the state table rather than describing a current hazard.
+Codex's own shortcuts panel, opened with `?`, documents the binding as `ctrl + c to exit`.
+`/archive` and `/delete` also exit, and they act on the saved session as well, so never send them as a plain exit.
 
 A `$<skill>` invocation opens a `$`-autocomplete (skill) popup, the same hazard as the `/` slash popup: submitting too fast lets the popup swallow the Enter, so the invocation never lands.
 `fm-send` handles it the same way it handles `/` - it gives the popup a longer settle (1.2s) between typing and the first Enter, with the target backend's submit retry as the safety net - but the `$` settle is scoped to `harness=codex`, read from the target metadata for exact task ids or legacy `fm-<id>` labels.
 That scope matters because, unlike `/`, a leading `$` commonly starts ordinary text (`$5/month`, `$HOME`), so a universal `$` rule would needlessly slow plain steers to claude/opencode/pi; only a codex target receiving a `$...` message gets the popup-settle.
 An explicit `session:window` target has no meta, so its harness is unknown and treated as non-codex (the safe fast-path default).
 This is why the validation trigger (`$no-mistakes`) to a codex crew now lands on the first Enter instead of biting the popup.
+The hazard is still real in 0.145.0: with a `$` prefix typed, Enter selects the highlighted popup entry and rewrites the composer text instead of submitting, so the settle stays necessary.
 
 Directory trust dialog on first run per repo root: "Do you trust the contents of this directory?"
-Accept with Enter.
-The decision persists for the repo, so later worktrees of the same project skip it.
+Accept with Enter, which takes the pre-highlighted "Yes, continue" option.
+Escape is not accept here; it selects "No, quit" and exits Codex.
+The dialog appears exactly while the active project has no recorded trust level, and Codex resolves a git worktree to its main repository root before recording that decision, so later worktrees of the same project skip it.
+That worktree-resolution step is source-derived rather than live-verified: it was read off the 0.145.0 trust-recording path, not observed across two worktrees of one repo.
 
-Resume after exit with `codex resume <session-id>`.
-The session id is printed on quit.
+Resume after exit with `codex resume <session-id>`, which is still the correct non-interactive form and takes either the session UUID or a session name.
+Bare `codex resume` opens a picker instead, and `codex resume --last` continues the most recent session without one.
+On quit Codex prints `To continue this session, run <command>` rather than a bare id.
+For an unnamed session that command is literally `codex resume <uuid>`, but a named session instead yields the non-runnable hint `codex resume, then select <name> (<uuid>)`, so read the id out of that line rather than expecting a ready-to-run command.
+A bare `Session ID: <uuid>` line appears only when Codex exits fatally with no resume hint - source-derived rather than live-verified, since a normal run never takes that path, and `To continue this session, run ` sits adjacent to `Session ID: ` in the binary's strings, so which one prints when is not settled by a clean-exit observation.
+0.145.0 also exposes `codex fork`, `codex archive`, `codex unarchive`, and `codex delete` as siblings of `resume`; firstmate uses none of them, and `archive` and `delete` are destructive to the saved session.
+
+The launch surface `fm-spawn` depends on is unchanged in 0.145.0, verified against both the binary's own help and the 0.145.0 source.
+`-c/--config` still takes `key=value` with a dotted path and TOML-parsed value, `-m/--model` still selects the model, and the `.codex/config.toml` profile keys `sandbox_mode`, `approval_policy`, and `approvals_reviewer` are all still recognized, including the `auto_review` reviewer value.
+The turn-end signal still works the way firstmate relies on: `notify` is an argv list that Codex spawns once per completed agent turn, appending a JSON payload as a final argument that firstmate's `bash -c "touch ..."` form ignores.
+
+Reasoning effort is the one fact that moved.
+Codex's effort vocabulary is now per-model rather than fleet-wide, and the newest models accept levels above `xhigh`: as of 0.145.0 the bundled catalog gives `gpt-5.6-sol` and `gpt-5.6-terra` low through `ultra`, `gpt-5.6-luna` low through `max`, and every older model low through `xhigh`.
+Passing a level a model does not support is rejected outright on the `-c model_reasoning_effort=...` launch path firstmate actually uses, and the whole turn dies with it.
+Exercised against 0.145.0: `codex exec --model gpt-5.5 -c 'model_reasoning_effort="max"'` returns an `invalid_request_error` reading `Invalid value: 'max'`, and the turn produces no work at all.
+`ultra` is mapped down one step to `max` and still fails the same way.
+The cost of an out-of-range level is therefore the entire turn, not just reasoning depth.
+`fm-spawn` therefore keeps emitting only low through `xhigh` for codex, which every catalogued model accepts.
+`max` is unreachable for a codex worker through firstmate's own validators, whatever the model's catalog entry says.
+Both `bin/fm-dispatch-select.sh` and `bin/fm-bootstrap.sh` restrict codex to low, medium, high, and xhigh, so a dispatch profile of `{harness: codex, effort: max}` is rejected before it ever reaches Codex, and editing the profile is not a way around the ceiling.
+The ad-hoc `fm-spawn` path emits no effort flag at all for `max`, which leaves the worker on the model's own `default_reasoning_level`.
 
 **Primary-session guard fact (verified 2026-07-08, codex-cli 0.142.1).**
 The firstmate PRIMARY's own `.codex/hooks.json` registers a Stop hook that pipes Codex's Stop payload to `bin/fm-turnend-guard.sh`.

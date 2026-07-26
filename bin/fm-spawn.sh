@@ -604,9 +604,15 @@ effort_flag_for_harness() {
       esac
       ;;
     codex)
-      # The installed codex config schema uses model_reasoning_effort, and the
-      # bundled model catalog advertises low|medium|high|xhigh. Omit max rather
-      # than passing an unsupported value.
+      # The installed codex config schema uses model_reasoning_effort. Codex
+      # advertises effort per model, and an out-of-range level is not silently
+      # downgraded - it is rejected outright and the whole turn dies with it.
+      # low|medium|high|xhigh is the one range every catalogued model accepts
+      # and the range fm-dispatch-select.sh and fm-bootstrap.sh validate codex
+      # against, so that is what gets emitted. Omitting the flag falls through
+      # to the model's own default_reasoning_level. Per-model levels and
+      # defaults are version-specific and owned by the codex section of
+      # .agents/skills/harness-adapters/SKILL.md; re-verify there, not here.
       case "$effort" in
         low|medium|high|xhigh) printf -- '-c %s ' "$(shell_quote "model_reasoning_effort=\"$effort\"")" ;;
       esac

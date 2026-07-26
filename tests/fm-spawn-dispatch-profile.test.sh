@@ -358,7 +358,7 @@ test_codex_threads_model_and_effort() {
   pass "codex receives --model and model_reasoning_effort profile flags"
 }
 
-test_codex_omits_invalid_max_effort() {
+test_codex_omits_out_of_range_max_effort() {
   local rec id out status launch
   id=profile-codex-max-z4
   rec=$(make_spawn_case profile-codex-max codex "$id")
@@ -366,15 +366,16 @@ test_codex_omits_invalid_max_effort() {
 
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-5 --effort max)
   status=$?
-  expect_code 0 "$status" "codex spawn with unsupported max effort should omit the effort flag"
+  expect_code 0 "$status" "codex spawn with out-of-range max effort should omit the effort flag"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 max
   launch=$(cat "$LAUNCH_LOG")
   assert_contains "$launch" "codex --model 'gpt-5' $CODEX_PROFILE_FLAGS" \
     "codex launch did not preserve the model flag and profile config when max effort was omitted"
-  assert_not_contains "$launch" "model_reasoning_effort" "codex launch must omit unsupported max reasoning effort"
+  assert_not_contains "$launch" "model_reasoning_effort" \
+    "codex launch must omit max reasoning effort, which is above firstmate's codex ceiling of xhigh"
   assert_not_contains "$launch" "--dangerously-bypass-approvals-and-sandbox" \
     "codex launch must not bypass the profile-driven sandbox and approval policy"
-  pass "codex omits unsupported max effort instead of passing a bad config value"
+  pass "codex omits max effort because firstmate's validators cap codex at xhigh"
 }
 
 test_grok_threads_model_and_reasoning_effort() {
@@ -553,7 +554,7 @@ test_raw_claude_launch_with_own_settings_writes_no_overlay
 test_raw_claude_shaped_wrapper_gets_no_settings_flag
 test_claude_threads_model_and_effort
 test_codex_threads_model_and_effort
-test_codex_omits_invalid_max_effort
+test_codex_omits_out_of_range_max_effort
 test_grok_threads_model_and_reasoning_effort
 test_grok_omits_invalid_max_reasoning_effort
 test_grok_omits_invalid_xhigh_reasoning_effort
