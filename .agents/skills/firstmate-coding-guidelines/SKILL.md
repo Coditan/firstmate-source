@@ -20,7 +20,7 @@ Applying the rules below on every change is what keeps that from happening again
 Before writing a new fact anywhere in this repo, ask where it belongs, in this order.
 
 1. Does the firstmate AGENT need this on every session or every turn to operate?
-   If yes: `AGENTS.md`, inline.
+   If yes: `AGENTS.md`, inline - unless it binds only in homes whose `config/role` selects one vessel role, in which case it belongs in that role's `roles/<name>.md` overlay, which amends `AGENTS.md` rather than replacing it (`docs/configuration.md` "Vessel role").
 2. Does the agent need it only in a nameable situation - a spawn, a recovery, a specific wake type, a specific lifecycle step?
    If yes: an agent-only skill under `.agents/skills/`, plus a one-line trigger pointer left inline in `AGENTS.md` (usually section 13).
 3. Is it human/reference detail - a wire format, a verification record, a mechanism narrative, an incident writeup?
