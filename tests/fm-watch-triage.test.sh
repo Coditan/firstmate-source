@@ -433,6 +433,40 @@ test_single_turn_two_files_enqueue_one_wake() {
   pass "a two-file single crewmate turn enqueues exactly one wake while both markers advance"
 }
 
+# Away mode collapses signal records per task too, deliberately: away mode still
+# enqueues every actionable wake, but a duplicate record kept only for the
+# `historical` annotation is exactly the noise away mode tolerates least, and the
+# surviving .status key is a strict superset of the dropped .turn-ended key's
+# information (fm_wake_status_key_map resolves both to the same status file, and
+# fm_wake_annotation_manifest already lets `direct` win over `historical`).
+test_afk_single_turn_two_files_enqueue_one_wake() {
+  local dir state fakebin out drain_out pid records
+  dir=$(make_case afk-single-turn-two-files); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"
+  # A benign no-verb turn: only afk_present makes it actionable, so surfacing
+  # here also proves the collapse runs on the away-mode branch.
+  printf 'working: routine note\n' > "$state/task.status"
+  : > "$state/task.turn-ended"
+  date '+%s' > "$state/.afk"
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "with .afk present the watcher did not surface the benign turn: $(cat "$out")"
+  records=$(grep -c "$(printf '\tsignal\t')" "$state/.wake-queue" 2>/dev/null || true)
+  [ "$records" = 1 ] || fail "one crewmate turn enqueued $records signal records in away mode (expected 1): $(cat "$state/.wake-queue")"
+  grep "$(printf '\tsignal\ttask.status\t')" "$state/.wake-queue" >/dev/null \
+    || fail "the surviving away-mode record is not keyed on the status file: $(cat "$state/.wake-queue")"
+  # Both markers must still advance, or this same turn re-fires next poll.
+  [ -s "$state/.seen-task_status" ] || fail "the status file's .seen-* suppressor did not advance in away mode"
+  [ -s "$state/.seen-task_turn-ended" ] || fail "the turn-end marker's .seen-* suppressor did not advance in away mode"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the collapsed away-mode signal failed"
+  grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "$state/task.status" >/dev/null \
+    || fail "the collapsed away-mode signal did not reach the drain with its full reason"
+  unset FM_FAKE_CREW_STATE
+  reap "$pid"
+  pass "away mode collapses a two-file crewmate turn to one wake while both markers advance"
+}
+
 test_two_crewmates_signal_once_each() {
   local dir state fakebin out pid records
   dir=$(make_case two-crewmates-signal); state="$dir/state"; fakebin="$dir/fakebin"
@@ -1229,6 +1263,65 @@ test_paused_authoritative_working_preserves_wedge_timer() {
   pass "a paused status overridden by authoritative working keeps its wedge timer and holds the ladder while the run is active"
 }
 
+# The hold's bounded recheck must reach this path too. hold_age is anchored on the
+# frozen pane hash's own mtime (.stale-<key>), so any per-poll rewrite of that
+# marker on a ladder-holding path would reset the anchor every poll and let a run
+# whose agent died mid-step - it reports `running` forever - rot invisibly behind
+# a permanent hold.
+test_paused_authoritative_working_hold_gets_bounded_recheck() {
+  local dir state fakebin out capture_file window key pane_hash sig pid back stale_mtime
+  dir=$(make_case paused-working-hold-recheck); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-paused-frozen"
+  printf 'idle awaiting external\n' > "$capture_file"
+  printf 'window=%s\nkind=ship\n' "$window" > "$state/paused-frozen.meta"
+  printf 'paused: awaiting the upstream release\n' > "$state/paused-frozen.status"
+  sig=$(seen_sig "$state/paused-frozen.status"); printf '%s' "$sig" > "$state/.seen-paused-frozen_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle awaiting external")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '%s' "$pane_hash" > "$state/.stale-$key"
+  printf '1\n' > "$state/.count-$key"
+  : > "$state/.paused-$key"
+  # This pane froze long ago: back-date the hash marker that anchors hold_age.
+  back=$(( $(date +%s) - 500 ))
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$state/.stale-$key"
+  else touch -m -d "@$back" "$state/.stale-$key"; fi
+  stale_mtime=$(file_mtime "$state/.stale-$key")
+  echo "$back" > "$state/.stale-since-$key"
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "a long-held ladder on the paused-then-working path never got its bounded recheck: $(cat "$out")"
+  grep -F "bounded recheck" "$out" >/dev/null || fail "the recheck did not identify itself as a bounded recheck: $(cat "$out")"
+  grep -F "possible wedge" "$out" >/dev/null && fail "a bounded recheck was mislabeled a wedge escalation: $(cat "$out")"
+  [ ! -e "$state/.wedge-escalations-$key" ] || fail "a bounded recheck on the paused-then-working path climbed the wedge-escalation ladder"
+  [ -s "$state/.wedgeheld-$key" ] || fail "the bounded recheck did not record its throttle marker"
+  [ "$(file_mtime "$state/.stale-$key")" = "$stale_mtime" ] \
+    || fail "the repeat poll refreshed the .stale-<key> anchor, which would defeat the bounded recheck"
+
+  # Throttled: the next poll inside the same recheck window is absorbed again.
+  echo "$back" > "$state/.stale-since-$key"
+  : > "$out"
+  : > "$state/.wake-queue"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 30; then
+    reap "$pid"; fail "the bounded recheck repeated inside its own cadence: $(cat "$out")"
+  fi
+  [ ! -s "$state/.wake-queue" ] || fail "a throttled hold recheck on the paused-then-working path enqueued another wake"
+  [ ! -e "$state/.wedge-escalations-$key" ] || fail "a throttled hold recheck climbed the wedge-escalation ladder"
+  reap "$pid"
+  unset FM_FAKE_CREW_STATE
+  pass "a ladder hold on the paused-then-working path surfaces one bounded recheck without climbing the ladder"
+}
+
 # --- consecutive wedge escalations on the same pane demand deep inspection ----
 # Root cause of the PR #252 incident's ~20 minutes of unnoticed green: each
 # wedge escalation fires, gets classified as "still validating" one poll later
@@ -1705,6 +1798,7 @@ test_turn_ended_not_working_surfaced
 test_working_note_not_working_surfaced
 test_actionable_signal_surfaced
 test_single_turn_two_files_enqueue_one_wake
+test_afk_single_turn_two_files_enqueue_one_wake
 test_two_crewmates_signal_once_each
 test_lone_turn_end_keeps_its_own_key
 test_terminal_stale_surfaced
@@ -1729,6 +1823,7 @@ test_secondmate_unpause_clears_pause_tracking
 test_nonterminal_stale_pause_transitions_reclassify_unchanged_hash
 test_nonterminal_paused_rechecks_authoritative_state
 test_paused_authoritative_working_preserves_wedge_timer
+test_paused_authoritative_working_hold_gets_bounded_recheck
 test_nonterminal_stale_repairs_missing_or_corrupt_timer
 test_triage_log_size_cap_accepts_spaced_wc_counts
 test_heartbeat_no_change_absorbed

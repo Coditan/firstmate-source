@@ -12,7 +12,9 @@
 # re-surfaces only on its long bounded cadence. A new status write still surfaces
 # immediately in normal mode and clears parked tracking.
 # While state/.afk exists, the away daemon owns triage and this watcher queues
-# every wake without running the more expensive normal-mode classifiers.
+# every actionable wake without running the more expensive normal-mode
+# classifiers, though signal records are collapsed to one per task in away mode
+# too.
 # Printed reason lines:
 #   signal: <file>...      status/turn-end signals, surfaced when a listed status
 #                          has a captain-relevant verb OR a no-verb signal's crew
@@ -156,8 +158,9 @@ BUSY_REGEX=${FM_BUSY_REGEX:-'esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel'}
 # climb the wedge ladder (wedge_timer_check).
 # In daemon mode the loop continues and the delivery stub wakes the model.
 # The same classifier (fm-classify-lib.sh) backs the away-mode daemon; while
-# state/.afk exists this watcher enqueues every wake and skips the costly
-# provably-working read so the away daemon can triage each new queue record.
+# state/.afk exists this watcher enqueues every actionable wake (signal records
+# still collapsed to one per task) and skips the costly provably-working read so
+# the away daemon can triage each new queue record.
 STALE_ESCALATE_SECS=${FM_STALE_ESCALATE_SECS:-240}  # idle secs before a provably-working stale escalates as a possible wedge
 # A crew that DECLARED a pause (paused: <reason>, fm-classify-lib.sh), or a terminal
 # task that firstmate marks state/.parked-<window-key> after relaying its outcome,
@@ -185,8 +188,9 @@ _event_cap_fails=0
 _event_cap_probe_epoch=0
 
 # afk_present: 0 while the away-mode flag exists.
-# When set, the away daemon owns triage, so the watcher must enqueue every wake
-# and let the daemon classify it instead of absorbing it here.
+# When set, the away daemon owns triage, so the watcher must enqueue every
+# actionable wake (one signal record per task) and let the daemon classify it
+# instead of absorbing it here.
 afk_present() { [ -e "$STATE/.afk" ]; }
 
 # Append one line to the triage debug log explaining an absorbed (benign) wake,
@@ -391,7 +395,7 @@ handle_paused_stale() {  # <window> <task> <hash>
   key=$(printf '%s' "$win" | tr ':/.' '___')
   printf '%s' "$h" > "$STATE/.stale-$key"
   : > "$STATE/.paused-$key"
-  rm -f "$STATE/.stale-since-$key" "$STATE/.wedge-escalations-$key"
+  rm -f "$STATE/.stale-since-$key" "$STATE/.wedge-escalations-$key" "$STATE/.wedgeheld-$key"
   statusf="$STATE/$task.status"
   mtime=$(stat_mtime "$statusf")
   case "$mtime" in ''|*[!0-9]*) mtime=$(date +%s) ;; esac
@@ -422,7 +426,7 @@ clear_pause_tracking() {  # <window>
   key=${key//\//_}
   key=${key//./_}
   clear_pause_state "$win"
-  rm -f "$STATE/.stale-$key" "$STATE/.stale-since-$key" "$STATE/.wedge-escalations-$key"
+  rm -f "$STATE/.stale-$key" "$STATE/.stale-since-$key" "$STATE/.wedge-escalations-$key" "$STATE/.wedgeheld-$key"
 }
 
 window_state_key() {  # <window>
@@ -466,7 +470,7 @@ mark_parked() {  # <window>
 clear_parked_key_tracking() {  # <window-key>
   local key=$1
   rm -f "$STATE/.parked-$key" "$STATE/.parkedmeta-$key" "$STATE/.parkedresurfaced-$key"
-  rm -f "$STATE/.stale-$key" "$STATE/.stale-since-$key" "$STATE/.wedge-escalations-$key"
+  rm -f "$STATE/.stale-$key" "$STATE/.stale-since-$key" "$STATE/.wedge-escalations-$key" "$STATE/.wedgeheld-$key"
 }
 
 clear_parked_tracking() {  # <window>
@@ -574,7 +578,7 @@ handle_parked_stale() {  # <window> <hash>
   local win=$1 h=$2 key reason age
   key=$(window_state_key "$win")
   printf '%s' "$h" > "$STATE/.stale-$key"
-  rm -f "$STATE/.stale-since-$key" "$STATE/.wedge-escalations-$key"
+  rm -f "$STATE/.stale-since-$key" "$STATE/.wedge-escalations-$key" "$STATE/.wedgeheld-$key"
   reason=$(parked_recheck_reason "$win")
   if [ -n "$reason" ]; then
     fm_wake_append stale "$win" "$reason" || exit 1
@@ -637,7 +641,7 @@ surface_nonterminal_stale() {  # <window> <hash>
   key=$(printf '%s' "$win" | tr ':/.' '___')
   fm_wake_append stale "$win" "stale: $win" || exit 1
   printf '%s' "$h" > "$STATE/.stale-$key"
-  rm -f "$STATE/.stale-since-$key" "$STATE/.paused-$key" "$STATE/.paused-rechecked-$key" "$STATE/.paused-resurfaced-$key"
+  rm -f "$STATE/.stale-since-$key" "$STATE/.wedgeheld-$key" "$STATE/.paused-$key" "$STATE/.paused-rechecked-$key" "$STATE/.paused-resurfaced-$key"
   wake "stale: $win"
   return
 }
@@ -1387,7 +1391,6 @@ EOF
               case "$(pause_state_class "$w" "$task")" in
                 paused)  handle_paused_stale "$w" "$task" "$h" ;;
                 working) clear_pause_state "$w"
-                         printf '%s' "$h" > "$sf"
                          wedge_timer_check "$w" "$ssf" "non-terminal stale (provably working after a declared pause)" "$ewf"
                          triage_log "absorbed non-terminal stale (provably working): $w" ;;
                 *)       handle_paused_stale "$w" "$task" "$h" ;;
