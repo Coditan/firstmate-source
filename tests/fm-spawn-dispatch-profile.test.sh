@@ -154,6 +154,31 @@ test_claude_hook_preserves_repo_local_settings() {
   pass "Claude spawn preserves tracked local settings and explicitly loads the distinct hook overlay"
 }
 
+# fm-spawn writes the per-task Claude settings overlay only when KIND != secondmate,
+# so the secondmate launch line must NOT carry --settings for it: the flag would name
+# a file that is never written and Claude would fail to start. This pins the pairing
+# from the other side of the branch, the way the codex and pi templates are pinned.
+test_secondmate_claude_launch_omits_the_task_overlay() {
+  local rec id sm out status launch
+  id=secondmate-claude-overlay-z19
+  rec=$(make_spawn_case secondmate-claude-overlay claude "$id")
+  read_case_record "$rec"
+  sm="$CASE_DIR/secondmate-home"
+  make_seeded_secondmate_home "$sm" "$id"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
+  status=$?
+  expect_code 0 "$status" "secondmate claude spawn should succeed"
+  assert_contains "$out" "spawned $id harness=claude kind=secondmate" "secondmate launch did not resolve claude"
+  assert_absent "$sm/.claude/settings.fm-task.json" \
+    "spawn wrote a per-task Claude overlay for a secondmate"
+  launch=$(cat "$LAUNCH_LOG")
+  case "$launch" in
+    *--settings*) fail "secondmate claude launch passes --settings for an overlay spawn never writes"$'\n'"actual: $launch" ;;
+  esac
+  pass "a secondmate claude launch omits --settings because no per-task overlay is written"
+}
+
 test_active_dispatch_profile_requires_explicit_harness_for_ship() {
   local rec id out status
   id=profile-required-ship-z11
@@ -517,6 +542,7 @@ test_active_dispatch_profile_does_not_block_secondmate_launch() {
 
 test_no_profile_keeps_claude_profile_defaults
 test_claude_hook_preserves_repo_local_settings
+test_secondmate_claude_launch_omits_the_task_overlay
 test_active_dispatch_profile_requires_explicit_harness_for_ship
 test_active_dispatch_profile_requires_explicit_harness_for_scout
 test_active_dispatch_profile_allows_explicit_harness
