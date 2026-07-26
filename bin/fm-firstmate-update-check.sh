@@ -16,7 +16,8 @@
 # This script is not invoked by bootstrap or any other firstmate flow; it
 # only reads and writes local state. Schedule it externally per firstmate
 # home, at a cadence around twice daily, with cron or a systemd timer - see
-# docs/configuration.md "Upstream firstmate update check" for the recipe.
+# docs/configuration.md "Upstream firstmate and curated-fork checks" for the
+# scheduling contract.
 #
 # The compared source comes from FM_FIRSTMATE_UPSTREAM_URL, then the local
 # gitignored config/firstmate-update-base file, then the canonical default - see
