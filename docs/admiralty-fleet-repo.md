@@ -21,7 +21,8 @@ A fresh-history fleet repository would therefore have delivered nothing to any v
 
 So `admiralty` was built from this history: one commit on top of the fork's `main` at `e52cc76`, transforming the tree into its vendored-plus-overlay shape.
 That genesis commit is `2cbf8c7`; `492361e` on top of it corrects the branch-protection doctrine described below.
-The proof is a run of firstmate's own `ff_target` rather than a hand-rolled `git merge`:
+The proof is a run of firstmate's own `ff_target` rather than a hand-rolled `git merge`, in a throwaway clone of the fork made in a temporary directory for this purpose and discarded afterwards.
+No vessel home was involved, so the re-pointing below simulates a cutover rather than performing one.
 
 ```
 $ git rev-parse HEAD # a vessel at the fork's main
