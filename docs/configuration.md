@@ -26,6 +26,40 @@ The tmux fallback also records `state/.watch-keeper.pid`, while systemd converge
 `AGENTS.md` retains the run-once and read-once operator rules, lock-refusal safety, installation consent, and direct-report recovery boundaries because those facts apply at every session start.
 Ordinary dead-direct-report recovery is owned by `stuck-crewmate-recovery`, while persistent-secondmate recovery is owned by `secondmate-provisioning`.
 
+## Vessel role (config/role / roles/)
+
+This section is the single owner of the vessel-role contract; `bin/fm-role-lib.sh`'s header owns the resolution mechanics and `roles/<name>.md` owns each role's own instructions.
+
+A role is configuration, not a codebase.
+Every fleet member runs the same tracked code root, and the local, gitignored `config/role` file selects which tracked `roles/<name>.md` overlay amends `AGENTS.md` for that one home.
+The recognized values are `vessel`, `coordinator`, and `executor`.
+`vessel` is the default and is also the meaning of an absent file: no overlay, `AGENTS.md` unamended, and no role-related output anywhere in a session.
+`roles/vessel.md` deliberately does not exist, because "no amendment" is not a document.
+`coordinator` relays captain authority to peer vessels and routes across their domains; [`roles/coordinator.md`](../roles/coordinator.md) owns what that means.
+`executor` is a recognized selector whose overlay has not been written yet, so a home that selects it is told so rather than being left silently unamended.
+
+The value is the first non-empty line of the file with whitespace stripped, exactly like `config/backend`.
+There is deliberately no `FM_ROLE` environment override: the role is a property of the home, not of a session, and a session-level variable is precisely what would relax the spawn refusal below.
+An unrecognized value emits `ROLE_INVALID: <name> (known: <names>)` at session start and delivers no overlay, rather than silently falling back to `vessel`.
+A recognized non-default role whose overlay file is absent from this code root emits `ROLE_OVERLAY_MISSING: <name> (expected: roles/<name>.md)`, because a selected role that cannot be delivered is a misconfiguration, not a default.
+[`bootstrap-diagnostics`](../.agents/skills/bootstrap-diagnostics/SKILL.md) owns the handling of both lines.
+
+Delivery uses two seams that already existed, and no new instruction-include mechanism.
+`bin/fm-session-start.sh` prints the active overlay at the head of its context digest, the same channel that already carries `data/captain.md`, which gives deterministic delivery at every session start.
+`AGENTS.md`'s own load line tells an agent to load `roles/<name>.md` when `config/role` names a role, which gives persistence after context compaction.
+Both are deliberate: the digest is authoritative at startup, the instruction line survives a context reset.
+`AGENTS.md` itself is never swapped per role, because CI hard-requires the `CLAUDE.md -> AGENTS.md` symlink.
+`roles/` is tracked instruction surface alongside `AGENTS.md`, `bin/`, and `.agents/skills/`, so an overlay change fast-forwards to running homes and counts as an upstream instruction update.
+
+`config/role` is deliberately NOT in the inheritable set that `bin/fm-config-inherit-lib.sh` declares, exactly like `config/secondmate-harness`.
+A coordinator's secondmate is not itself a coordinator, and inheriting the role would silently spread a no-crew posture into homes that need crews.
+
+Enforcement is one refusal: `bin/fm-spawn.sh` refuses a ship or scout spawn in a `coordinator` home, before any batch fan-out, worktree allocation, or backend session exists.
+`--secondmate` is exempt, because a persistent secondmate home is a separate mechanism with its own contract rather than a crew.
+That refusal is a misconfiguration backstop and deliberate friction, not a security boundary: anything running as this Linux account can edit `config/role`, drive a backend directly, or start an agent by hand, so the account is the real boundary.
+It is the same honesty [`subagent-guard.md`](subagent-guard.md) states about its own scope, and it must not be described to anyone as a guarantee.
+The shipped primary-session delegation guard already denies delegation-shaped tools in every primary home regardless of role, so no coordinator-specific extension of it is needed.
+
 ## Backlog backend (.tasks.toml / config/backlog-backend)
 
 The tracked `.tasks.toml` pins the default `tasks-axi` markdown backend to `data/backlog.md`, with `done_keep = 10` and an archive at `data/done-archive.md`.
@@ -330,7 +364,7 @@ Successful changes emit `AXI_SUITE_UPDATED:`, and bounded registry, permission, 
 
 ### Upstream firstmate and curated-fork checks
 
-`bin/fm-firstmate-update-check.sh` compares the local default branch with the configured comparison base and persists a signal only when an upstream-only commit changes `AGENTS.md`, `bin/`, or `.agents/skills/`.
+`bin/fm-firstmate-update-check.sh` compares the local default branch with the configured comparison base and persists a signal only when an upstream-only commit changes `AGENTS.md`, `bin/`, `roles/`, or `.agents/skills/`.
 `bin/fm-fork-sync-check.sh` compares the curated fork with real upstream, self-gates successful checks to a three-day cadence, and points fork-only review at `docs/fork-patches.md`.
 Neither script mutates the checkout or runs from bootstrap, so schedule them externally; their headers and `--help` output own exact overrides and mechanics.
 
@@ -356,7 +390,7 @@ On that signature only, `fm-fleet-sync.sh` retries the fetch with a bounded wait
 It never removes a live lock, leaves any other failure shape untouched, and prints every wait, retry, and removal to stderr plus a one-line `recovered:` summary to stdout on success so that this session-start relay still surfaces the recovery.
 The locked session-start bootstrap step also runs the guarded local secondmate sync for recorded live secondmate homes, then propagates declared inherited local material into each validated live home.
 It emits `SECONDMATE_SYNC:` only when a home was skipped for an actionable sync reason, inheritance failed, or a divergent shared captain-preference copy was quarantined.
-When a running home advances and its loaded instruction surface (`AGENTS.md`, `bin/`, or `.agents/skills/`) changed, bootstrap sends the re-read nudge itself through the stable `fm-<id>` selector and reports the exact completed send as `BOOTSTRAP_INFO:`.
+When a running home advances and its loaded instruction surface (`AGENTS.md`, `bin/`, `roles/`, or `.agents/skills/`) changed, bootstrap sends the re-read nudge itself through the stable `fm-<id>` selector and reports the exact completed send as `BOOTSTRAP_INFO:`.
 If that send fails, bootstrap keeps an idempotent retry marker and emits `NUDGE_SECONDMATES:` with the failure reason.
 The same bootstrap run emits `SECONDMATE_LIVENESS:` only when a live secondmate endpoint is skipped or respawn fails; already-live and successfully respawned endpoints are handled silently.
 For a mid-session inherited local-material edit where tracked-file sync is not needed, run `bin/fm-config-push.sh`.

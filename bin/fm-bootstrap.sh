@@ -8,6 +8,8 @@
 #          Lines: "MISSING: <tool> (install: <command>)",
 #                 "MISSING_MANUAL: <tool> (instructions: <url>)", "NEEDS_GH_AUTH",
 #                 "BACKEND_INVALID: <name> (known: <names>)",
+#                 "ROLE_INVALID: <name> (known: <names>)",
+#                 "ROLE_OVERLAY_MISSING: <name> (expected: roles/<name>.md)",
 #                 "CREW_DISPATCH: invalid config/crew-dispatch.json - <reason>",
 #                 "CURRENCY_BASE: config/<file> is unusable - <reason>; <remediation>",
 #                 "FLEET_SYNC: <repo>: skipped|recovered|STUCK: <detail>",
@@ -27,13 +29,13 @@
 #          When a RUNNING secondmate worktree is fast-forwarded to firstmate's
 #          own current default-branch commit (a purely LOCAL fast-forward, never
 #          an origin fetch) AND its loaded instruction surface (AGENTS.md, bin/,
-#          or .agents/skills/) actually changed, bootstrap immediately nudges it
-#          via FM_HOME=<active-home> bin/fm-send.sh fm-<id> so meta resolves the
-#          current backend target and the standard from-firstmate marker is
-#          applied. A successful send prints one BOOTSTRAP_INFO line with the
-#          exact target and message sent; a failed send leaves an idempotent
-#          retry marker under state/.secondmate-nudge-pending/ and prints an
-#          actionable NUDGE_SECONDMATES line.
+#          roles/, or .agents/skills/) actually changed, bootstrap immediately
+#          nudges it via FM_HOME=<active-home> bin/fm-send.sh fm-<id> so meta
+#          resolves the current backend target and the standard from-firstmate
+#          marker is applied. A successful send prints one BOOTSTRAP_INFO line
+#          with the exact target and message sent; a failed send leaves an
+#          idempotent retry marker under state/.secondmate-nudge-pending/ and
+#          prints an actionable NUDGE_SECONDMATES line.
 #          Already-current or no-instruction-change homes are silently left alone.
 #          The secondmate sweep also propagates declared inherited local material
 #          into each validated live secondmate home.
@@ -114,6 +116,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-currency-base-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-currency-base-lib.sh"
+# shellcheck source=bin/fm-role-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-role-lib.sh"
 
 fleet_sync_origin_backed_project_count() {
   local count proj
@@ -267,12 +271,13 @@ secondmate_sync() {
   # fetch, no origin dependency: a linked-worktree home already holds the primary's
   # commit (fm-ff-lib.sh), while a standalone clone without it is skipped until
   # /updatefirstmate refreshes it from origin. Startup sends reread nudges only
-  # for RUNNING secondmates whose instruction surface (AGENTS.md, bin/, or
-  # .agents/skills/) actually changed, so a secondmate already on the primary's
-  # version is never disturbed (AGENTS.md bootstrap + supervision). Unlike
-  # /updatefirstmate, startup owns the live-convergence send itself because it is
-  # a deterministic locked sweep and can report success as BOOTSTRAP_INFO while
-  # preserving failed sends as NUDGE_SECONDMATES retry markers.
+  # for RUNNING secondmates whose instruction surface (AGENTS.md, bin/, roles/,
+  # or .agents/skills/) actually changed, so a secondmate already on the
+  # primary's version is never disturbed (AGENTS.md bootstrap + supervision).
+  # Unlike /updatefirstmate, startup owns the live-convergence send itself
+  # because it is a deterministic locked sweep and can report success as
+  # BOOTSTRAP_INFO while preserving failed sends as NUDGE_SECONDMATES retry
+  # markers.
   [ -d "$STATE" ] || return 0
   local primary_head
   if ! primary_head=$(primary_head_commit "$FM_ROOT"); then
@@ -865,6 +870,15 @@ fi
 
 if [ "$BACKEND_VALID" -eq 0 ]; then
   echo "BACKEND_INVALID: $BACKEND (known: $FM_BACKEND_KNOWN)"
+fi
+# Vessel role: a selected role that cannot be delivered must be loud here, not a
+# silent unamended session. An absent config/role resolves to the default and
+# prints nothing at all, so a home that never opted in sees no new line.
+ROLE=$(fm_role_value "$CONFIG")
+if ! fm_role_is_known "$ROLE"; then
+  echo "ROLE_INVALID: $ROLE (known: $FM_ROLE_KNOWN)"
+elif ROLE_OVERLAY=$(fm_role_overlay_path "$FM_ROOT" "$ROLE") && [ ! -f "$ROLE_OVERLAY" ]; then
+  echo "ROLE_OVERLAY_MISSING: $ROLE (expected: roles/$ROLE.md)"
 fi
 for t in $BACKEND_TOOLS; do
   fm_backend_required_tool_available "$BACKEND" "$t" \
