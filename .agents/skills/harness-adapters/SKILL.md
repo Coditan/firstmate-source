@@ -184,7 +184,9 @@ Claude Code's primary delivery protocol is the lowest-friction path: run `bin/fm
 
 The busy signature is composed, not a literal: the status row renders the elapsed time, then the configured interrupt key's own label, then the fixed text ` to interrupt)`.
 Codex's default interrupt binding is a plain Escape, whose label renders as `esc`, so the string `fm-watch.sh` and `fm-tmux-lib.sh` already match is the one the pane still shows.
-Three conditions break a busy read on 0.145.0, and the first is different in kind from the other two: nothing has to be misconfigured for it to happen.
+Three conditions make a Codex pane's state misread on 0.145.0, and they group by what each one requires rather than by how exotic it is.
+The streaming gap and the question overlay both happen under entirely stock configuration - the streaming gap on every turn unconditionally, the overlay whenever the model chooses to ask the user a question - and only a remapped or unbound `tui.keymap.chat.interrupt_turn` requires an operator to have changed anything.
+They also run in opposite directions: the streaming gap and the keymap case hide a working agent, while the question overlay hides a stuck one.
 
 Under stock configuration Codex renders the status row only during the pre-answer phase of a turn.
 As soon as it begins streaming its answer it removes the row entirely, and the pane then renders identically to an idle one - the composer suggestion plus the `<model> <effort> · <cwd>` footer, with no interrupt hint anywhere in it.
@@ -195,21 +197,20 @@ That measurement is established; its consequence is not.
 Whether it actually produces a false wedge escalation depends on the watcher's absorb logic and its grace windows, which this verification did not trace, and other signals such as the turn-end hook and the worker's own status writes may already cover it.
 Establishing that is a separate piece of work, which is why this diff still leaves `fm-watch.sh` and `fm-tmux-lib.sh` untouched.
 
-The other two conditions each require something to change first.
+The keymap case is the one that requires an operator to have changed something.
 A captain who remaps `tui.keymap.chat.interrupt_turn` in their own Codex config gets that key's label instead (a remap to F12 renders `f12 to interrupt`), and unbinding it entirely drops the hint so the row shows only the elapsed time.
 Firstmate never writes that key itself, but it also never overrides `HOME` or `CODEX_HOME` for spawned workers, so every firstmate-launched Codex worker loads the operator's own `~/.codex/config.toml`.
 A single remap or unbind of `tui.keymap.chat.interrupt_turn` therefore blinds the watcher to every Codex worker at once, not just to a captain-configured primary.
 The concrete harm is that a blinded watcher reads a working agent as stopped, so a healthy crewmate gets disruptively recovered mid-task.
-Codex also renders the same `<key> to interrupt` hint in the overlay it shows when the model asks the user a question, so a Codex worker blocked on a question presents as busy rather than as waiting.
+
+The question overlay needs no configuration change and no unusual state: it appears under stock configuration whenever the model chooses to ask the user something.
+Codex renders the same `<key> to interrupt` hint in that overlay, so a Codex worker blocked on a question presents as busy rather than as waiting.
 Treat a long-running Codex pane that never reaches turn end as a candidate for that state rather than assuming forward progress.
 That overlay fact is source-derived rather than live-verified: it comes from reading the 0.145.0 overlay rendering, not from watching a running binary.
 Two attempts to force the overlay failed to reproduce it, because gpt-5.5 answered the question in plain transcript text instead of opening the overlay.
 Two failed attempts are not evidence against the claim, so it stands as written, but treat it as unconfirmed until a live run renders the overlay.
 
-Both directions of misread are real, and neither cancels the other.
-The streaming gap hides a working agent: the pane reads idle while the answer streams, so a crewmate making progress can be taken for a wedged one.
-The question overlay hides a stuck one: a pane waiting on human input carries the interrupt hint, matches the busy pattern, and is read as forward progress, so it never surfaces for supervision at all.
-Do not treat either direction as ruled out when reading a Codex pane.
+Both directions of misread are real and neither cancels the other, so do not treat either as ruled out when reading a Codex pane: one that reads idle may be a worker mid-stream, and one that reads busy may be a worker waiting on an answer nobody is going to give it.
 
 An idle Codex pane on 0.145.0 shows a composer suggestion drawn from a list ("Explain this codebase", "Write tests for @filename", "Improve documentation in @filename") rather than a fixed placeholder, and its collapsed footer is the model, the effort, and the working directory, rendered as `<model> <effort> · <cwd>`.
 The suggestion does not cycle: it is drawn fresh per composer and then held, so one idle pane sampled every five seconds for a minute never rotated off its single entry, while five separate launches and composer resets produced a different suggestion apiece.
