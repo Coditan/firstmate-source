@@ -195,7 +195,7 @@ It holds for every Codex worker on every turn, not only for a captain who has ch
 The busy string itself has not moved and still matches whenever it is rendered, but it is absent for most of a turn's wall clock, so a busy read cannot be treated as a reliable liveness signal for a Codex worker.
 That measurement is established; its consequence is not.
 Whether it actually produces a false wedge escalation depends on the watcher's absorb logic and its grace windows, which this verification did not trace, and other signals such as the turn-end hook and the worker's own status writes may already cover it.
-Establishing that is a separate piece of work, which is why this diff still leaves `fm-watch.sh` and `fm-tmux-lib.sh` untouched.
+Establishing that is separate work, which is why the busy-signature matching in `fm-watch.sh` and `fm-tmux-lib.sh` is deliberately unchanged.
 
 The keymap case is the one that requires an operator to have changed something.
 A captain who remaps `tui.keymap.chat.interrupt_turn` in their own Codex config gets that key's label instead (a remap to F12 renders `f12 to interrupt`), and unbinding it entirely drops the hint so the row shows only the elapsed time.
