@@ -216,7 +216,10 @@ Expanding the footer while a turn runs adds `ctrl + c to interrupt`, which is a 
 Ctrl+C is an exit path alongside `/quit` and `/exit`, but what it takes depends on the state of the pane.
 From an idle empty composer a single Ctrl+C quits immediately with no confirmation.
 With text in the composer the first press clears the text and a further press quits.
-During a running turn Ctrl+C interrupts the turn and does not quit, however many times it is pressed.
+During a running turn a single Ctrl+C interrupts the turn rather than quitting, and Codex survives it: the pane renders `Conversation interrupted - tell the model what to do differently`.
+That interrupt returns the composer to the idle-and-empty state, which is exactly the state described two lines above as quitting on a single press with no confirmation.
+A single further press therefore quits, so two mid-turn presses do exit.
+Never script or send a second Ctrl+C expecting it to interrupt harder, because it exits the session and loses the turn's work instead.
 Codex's own shortcuts panel, opened with `?`, documents the binding as `ctrl + c to exit`.
 `/archive` and `/delete` also exit, and they act on the saved session as well, so never send them as a plain exit.
 
