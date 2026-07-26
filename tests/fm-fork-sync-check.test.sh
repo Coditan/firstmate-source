@@ -233,6 +233,77 @@ test_up_to_date_clears_diagnostics() {
   pass "a fork containing upstream clears persisted diagnostics"
 }
 
+# Real fetch path (no FM_FORK_SYNC_COMPARE_REPO), so the resolved comparison
+# base is actually the repository git reads from. Both sides are local paths, so
+# these stay network-free.
+run_fetching_check() {
+  local repo=$1 state=$2 config=$3 fork_url=$4 now=$5
+  FM_ROOT_OVERRIDE="$repo" FM_HOME="$repo" FM_STATE_OVERRIDE="$state" \
+    FM_CONFIG_OVERRIDE="$config" FM_FIRSTMATE_FORK_URL="$fork_url" \
+    FM_FORK_SYNC_NOW="$now" \
+    "$ROOT/bin/fm-fork-sync-check.sh"
+}
+
+# Fork and upstream clones that diverge by one commit on each side.
+make_fork_and_upstream() {
+  local name=$1 upstream fork
+  upstream="$TMP_ROOT/$name-upstream"
+  fork="$TMP_ROOT/$name-fork"
+  fm_git_init_commit "$upstream"
+  git clone -q "$upstream" "$fork"
+  commit_file "$fork" fork.txt fork-only >/dev/null
+  commit_file "$upstream" upstream.txt upstream-only >/dev/null
+}
+
+test_configured_upstream_base_is_the_repository_compared() {
+  local repo state config out
+  make_fork_and_upstream configured
+  repo="$TMP_ROOT/configured-fork"
+  state="$TMP_ROOT/configured-state"
+  config="$TMP_ROOT/configured-config"
+  mkdir -p "$config"
+  printf '%s\n' "$TMP_ROOT/configured-upstream" > "$config/fork-sync-upstream"
+
+  out=$(run_fetching_check "$repo" "$state" "$config" "$repo" 4000000)
+  assert_contains "$out" 'FORK_SYNC:' "the configured upstream base was not compared against"
+  assert_contains "$out" '1 upstream-only commits' "the configured upstream base produced the wrong comparison"
+  [ ! -f "$state/fork-sync.stuck" ] || fail "a usable configured base recorded a stuck diagnostic"
+  pass "a configured fork-sync upstream base is the repository actually compared"
+}
+
+test_environment_override_beats_the_configured_base() {
+  local repo state config out
+  make_fork_and_upstream envwins
+  repo="$TMP_ROOT/envwins-fork"
+  state="$TMP_ROOT/envwins-state"
+  config="$TMP_ROOT/envwins-config"
+  mkdir -p "$config"
+  printf '%s\n' "$TMP_ROOT/envwins-absent-upstream" > "$config/fork-sync-upstream"
+
+  out=$(FM_FIRSTMATE_UPSTREAM_URL="$TMP_ROOT/envwins-upstream" \
+    run_fetching_check "$repo" "$state" "$config" "$repo" 4100000)
+  assert_contains "$out" 'FORK_SYNC:' "the environment override was not used as the comparison base"
+  assert_not_contains "$out" 'FORK_SYNC_STUCK:' "the environment override did not beat the configured base"
+  pass "an explicit environment base outranks the configured fork-sync base"
+}
+
+test_unusable_configured_base_refuses_loudly() {
+  local repo state config out
+  repo="$TMP_ROOT/badconfig"
+  state="$TMP_ROOT/badconfig-state"
+  config="$TMP_ROOT/badconfig-config"
+  fm_git_init_commit "$repo"
+  mkdir -p "$config"
+  printf 'not a url\n' > "$config/fork-sync-upstream"
+
+  out=$(run_fetching_check "$repo" "$state" "$config" "$repo" 4200000)
+  assert_contains "$out" 'FORK_SYNC_STUCK: config/fork-sync-upstream is unusable' \
+    "an unusable configured base did not refuse loudly"
+  assert_grep 'is unusable' "$state/fork-sync.stuck" "the refusal was not persisted"
+  [ ! -f "$state/fork-sync.last-run" ] || fail "a refused check stamped a completed run"
+  pass "an unusable configured fork-sync base refuses instead of comparing against the default"
+}
+
 test_pending_lists_and_cadence_gate
 test_content_convergence_prefilters_absorbed_patch
 test_content_convergence_clears_absorbed_upstream_commit
@@ -241,3 +312,6 @@ test_absorbed_upstream_merge_commit_clears_diagnostics
 test_same_file_automerge_over_fork_patch_clears_diagnostics
 test_upstream_merge_resolution_content_reports_drift
 test_up_to_date_clears_diagnostics
+test_configured_upstream_base_is_the_repository_compared
+test_environment_override_beats_the_configured_base
+test_unusable_configured_base_refuses_loudly

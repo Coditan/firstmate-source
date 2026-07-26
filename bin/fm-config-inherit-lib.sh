@@ -6,7 +6,9 @@
 # profile rules, primary config/crew-harness=codex makes a secondmate's crewmates
 # spawn on codex too, primary config/backlog-backend=manual makes that home
 # hand-edit backlog files too, and primary config/herdr-presentation-spaces
-# enables the same default-off Herdr presentation projection). It also pushes
+# enables the same default-off Herdr presentation projection, and primary
+# config/firstmate-update-base points every home's instruction-surface currency
+# check at the same source this deployment updates from). It also pushes
 # the one primary-authoritative shared captain-preference file,
 # data/captain-shared.md, into each secondmate home's data/ as a read-only copy.
 #
@@ -29,7 +31,8 @@
 # convergence point inherits it - no other change needed. config/secondmate-harness
 # is deliberately NOT in the list: it is the primary's own setting for launching
 # secondmates, and a secondmate never spawns secondmates, so it must not flow
-# downstream.
+# downstream. config/fork-sync-upstream is likewise excluded: only the curator
+# vessel compares the curated fork against real upstream.
 
 # The one shared data file in this inheritance contract. There is deliberately
 # no shared learnings file.
@@ -40,7 +43,7 @@ FM_SHARED_CAPTAIN_MODE="444"
 # The declared inheritable set (space-separated, config-dir-relative item paths).
 # Extend here to inherit more of the primary's local config; override via the
 # environment only in tests. Items must not contain whitespace.
-FM_INHERITABLE_CONFIG="${FM_INHERITABLE_CONFIG:-crew-dispatch.json crew-harness backlog-backend herdr-presentation-spaces}"
+FM_INHERITABLE_CONFIG="${FM_INHERITABLE_CONFIG:-crew-dispatch.json crew-harness backlog-backend herdr-presentation-spaces firstmate-update-base}"
 
 fm_inherit_file_mode() {
   if [ "$(uname)" = Darwin ]; then

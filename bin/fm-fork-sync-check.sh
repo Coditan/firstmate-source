@@ -12,9 +12,16 @@
 #   fork-sync.pending   FORK_SYNC diagnostic and commit review lists
 #   fork-sync.stuck     FORK_SYNC_STUCK diagnostic for an incomplete check
 #
+# The real upstream this curated fork tracks comes from FM_FIRSTMATE_UPSTREAM_URL,
+# then the local gitignored config/fork-sync-upstream file, then the canonical
+# default - see bin/fm-currency-base-lib.sh for the full precedence and for why
+# this base is deliberately separate from config/firstmate-update-base. A
+# present but unusable config file records FORK_SYNC_STUCK rather than silently
+# comparing against the wrong upstream.
+#
 # Usage: fm-fork-sync-check.sh
 # Environment:
-#   FM_FIRSTMATE_UPSTREAM_URL overrides the canonical upstream URL.
+#   FM_FIRSTMATE_UPSTREAM_URL overrides the configured upstream URL.
 #   FM_FIRSTMATE_FORK_URL overrides the fork URL (default: origin of FM_ROOT).
 #   FM_FORK_SYNC_COMPARE_REPO uses an existing repository (tests only).
 #   FM_FORK_SYNC_UPSTREAM_HEAD and FM_FORK_SYNC_FORK_HEAD name commits already
@@ -26,7 +33,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
-UPSTREAM_URL="${FM_FIRSTMATE_UPSTREAM_URL:-https://github.com/kunchenguid/firstmate.git}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 PENDING="$STATE/fork-sync.pending"
 STUCK="$STATE/fork-sync.stuck"
 LAST_RUN="$STATE/fork-sync.last-run"
@@ -43,6 +50,12 @@ record_stuck() {
   cat "$STUCK"
   exit 0
 }
+
+# shellcheck source=bin/fm-currency-base-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-currency-base-lib.sh"
+fm_currency_base_resolve "$CONFIG" "$FM_CURRENCY_BASE_FORK_ITEM" ||
+  record_stuck "config/$FM_CURRENCY_BASE_FORK_ITEM is unusable - $FM_CURRENCY_BASE_REASON"
+UPSTREAM_URL=$FM_CURRENCY_BASE_VALUE
 
 case $NOW in *[!0-9]*|'') record_stuck "current epoch is invalid" ;; esac
 if [ -f "$LAST_RUN" ]; then
