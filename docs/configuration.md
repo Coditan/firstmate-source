@@ -340,6 +340,7 @@ The local gitignored `config/fork-sync-upstream` names the real upstream the cur
 Each file holds exactly one non-empty line naming a git URL (`https://`, `http://`, `ssh://`, `git://`, `git+ssh://`, or `file://`), an scp-style `host:path` remote, or an absolute local path; a relative path is refused because it would resolve against each caller's working directory.
 Precedence for both, highest first, is the explicit `FM_FIRSTMATE_UPSTREAM_URL` environment variable, then the config file, then the default `https://github.com/kunchenguid/firstmate.git`.
 The environment variable is passed through unvalidated so existing harnesses keep working, and it overrides both checks at once.
+A config path that exists but is not a readable regular file, such as a directory or a dangling symlink, is refused for that reason rather than treated as absent.
 An absent file changes nothing for an unconfigured home, but a present unusable file never silently falls back to the default: bootstrap reports it at startup as `CURRENCY_BASE:`, and the affected check records its own `FIRSTMATE_UPDATE_STUCK:` or `FORK_SYNC_STUCK:` rather than comparing against the wrong base.
 `bin/fm-currency-base-lib.sh` is the single owner of that resolution and validation.
 `config/firstmate-update-base` is inherited by secondmate homes since every home in a deployment updates from the same source; `config/fork-sync-upstream` is not, because only the curator vessel curates the fork.

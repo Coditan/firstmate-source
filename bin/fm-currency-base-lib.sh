@@ -71,15 +71,21 @@ fm_currency_base_validate() {
     https://?*|http://?*|ssh://?*|git://?*|git+ssh://?*|file://?*|/?*)
       return 0
       ;;
+  esac
+  # scp-style host:path, git's other native remote spelling. Git recognises it
+  # by a colon appearing before the first slash, so this must be decided ahead
+  # of the relative-path refusal: git@host:owner/repo.git has both.
+  case ${value%%/*} in
+    ?*:*)
+      return 0
+      ;;
+  esac
+  case $value in
     */*)
       # A relative path would resolve against each caller's differing working
       # directory, so it is never a durable per-home setting.
       FM_CURRENCY_BASE_REASON="the value is a relative path; use an absolute path or a URL"
       return 1
-      ;;
-    ?*:?*)
-      # scp-style host:path, git's other native remote spelling.
-      return 0
       ;;
   esac
   FM_CURRENCY_BASE_REASON="the value is not a git URL or an absolute path"
@@ -95,7 +101,20 @@ fm_currency_base_file_value() {
   file="$config_dir/$item"
   FM_CURRENCY_BASE_REASON=""
   FM_CURRENCY_BASE_VALUE=""
-  [ -f "$file" ] || return 2
+  if [ ! -e "$file" ] && [ ! -L "$file" ]; then
+    return 2
+  fi
+  # Present but not a readable regular file: a directory, a device, or a
+  # dangling symlink is a configured intent this resolver cannot honour, so it
+  # refuses rather than resolving the default behind the operator's back.
+  if [ ! -f "$file" ]; then
+    FM_CURRENCY_BASE_REASON="the path exists but is not a regular file"
+    return 1
+  fi
+  if [ ! -r "$file" ]; then
+    FM_CURRENCY_BASE_REASON="the file is not readable"
+    return 1
+  fi
   while IFS= read -r line || [ -n "$line" ]; do
     trimmed=${line#"${line%%[![:space:]]*}"}
     trimmed=${trimmed%"${trimmed##*[![:space:]]}"}

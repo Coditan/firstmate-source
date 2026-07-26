@@ -178,7 +178,8 @@ test_resolver_rejects_unusable_values() {
   # shellcheck source=bin/fm-currency-base-lib.sh disable=SC1091
   . "$ROOT/bin/fm-currency-base-lib.sh"
 
-  for value in '' '   ' '--upload-pack=evil' 'relative/path' 'not a url' 'plainword'; do
+  for value in '' '   ' '--upload-pack=evil' 'relative/path' 'not a url' 'plainword' \
+    'relative/path:withcolon'; do
     printf '%s\n' "$value" > "$config/$FM_CURRENCY_BASE_UPDATE_ITEM"
     if fm_currency_base_resolve "$config" "$FM_CURRENCY_BASE_UPDATE_ITEM"; then
       fail "unusable base '$value' was accepted as $FM_CURRENCY_BASE_VALUE"
@@ -192,13 +193,68 @@ test_resolver_rejects_unusable_values() {
     && fail "an ambiguous two-value file was accepted"
 
   for value in 'https://example.invalid/fleet.git' 'ssh://git@example.invalid/fleet.git' \
-    'git@example.invalid:fleet.git' '/srv/fleet.git' 'file:///srv/fleet.git'; do
+    'git@example.invalid:fleet.git' 'git@github.com:kunchenguid/firstmate.git' \
+    'example.invalid:srv/fleet.git' 'git@example.invalid:/srv/fleet.git' \
+    '/srv/fleet.git' 'file:///srv/fleet.git'; do
     printf '%s\n' "$value" > "$config/$FM_CURRENCY_BASE_UPDATE_ITEM"
     fm_currency_base_resolve "$config" "$FM_CURRENCY_BASE_UPDATE_ITEM" \
       || fail "usable base '$value' was refused: $FM_CURRENCY_BASE_REASON"
+    [ "$FM_CURRENCY_BASE_VALUE" = "$value" ] \
+      || fail "usable base '$value' resolved to $FM_CURRENCY_BASE_VALUE"
   done
 
   pass "the shared resolver refuses unusable bases with a reason and accepts git's remote spellings"
+}
+
+# A configured item that exists but cannot be read is an operator intent this
+# resolver cannot honour, so it must refuse rather than resolve the default.
+test_resolver_refuses_present_but_unusable_file() {
+  local config dangling
+  config="$TMP_ROOT/unusable-file-config"
+  mkdir -p "$config"
+  unset FM_FIRSTMATE_UPSTREAM_URL
+  # shellcheck source=bin/fm-currency-base-lib.sh disable=SC1091
+  . "$ROOT/bin/fm-currency-base-lib.sh"
+
+  mkdir -p "$config/$FM_CURRENCY_BASE_UPDATE_ITEM"
+  if fm_currency_base_resolve "$config" "$FM_CURRENCY_BASE_UPDATE_ITEM"; then
+    fail "a directory in place of the config file resolved $FM_CURRENCY_BASE_VALUE"
+  fi
+  [ "$FM_CURRENCY_BASE_VALUE" != "$FM_CURRENCY_BASE_DEFAULT" ] \
+    || fail "a directory in place of the config file silently fell back to the default"
+  assert_contains "$FM_CURRENCY_BASE_REASON" 'not a regular file' \
+    "a directory config path gave the wrong reason"
+  rmdir "$config/$FM_CURRENCY_BASE_UPDATE_ITEM"
+
+  dangling="$TMP_ROOT/unusable-file-config-missing-target"
+  ln -s "$dangling" "$config/$FM_CURRENCY_BASE_UPDATE_ITEM"
+  if fm_currency_base_resolve "$config" "$FM_CURRENCY_BASE_UPDATE_ITEM"; then
+    fail "a dangling symlink resolved $FM_CURRENCY_BASE_VALUE"
+  fi
+  [ -n "$FM_CURRENCY_BASE_REASON" ] || fail "a dangling symlink produced no reason"
+  rm -f "$config/$FM_CURRENCY_BASE_UPDATE_ITEM"
+
+  printf 'https://example.invalid/fleet.git\n' > "$config/$FM_CURRENCY_BASE_UPDATE_ITEM"
+  chmod 000 "$config/$FM_CURRENCY_BASE_UPDATE_ITEM"
+  if [ -r "$config/$FM_CURRENCY_BASE_UPDATE_ITEM" ]; then
+    # Root ignores the mode bits, so the unreadable case is unreachable here.
+    chmod 644 "$config/$FM_CURRENCY_BASE_UPDATE_ITEM"
+  else
+    if fm_currency_base_resolve "$config" "$FM_CURRENCY_BASE_UPDATE_ITEM" 2>/dev/null; then
+      fail "an unreadable config file resolved $FM_CURRENCY_BASE_VALUE"
+    fi
+    assert_contains "$FM_CURRENCY_BASE_REASON" 'not readable' \
+      "an unreadable config file gave the wrong reason"
+    chmod 644 "$config/$FM_CURRENCY_BASE_UPDATE_ITEM"
+  fi
+
+  rm -f "$config/$FM_CURRENCY_BASE_UPDATE_ITEM"
+  fm_currency_base_resolve "$config" "$FM_CURRENCY_BASE_UPDATE_ITEM" \
+    || fail "a genuinely absent config file refused: $FM_CURRENCY_BASE_REASON"
+  [ "$FM_CURRENCY_BASE_VALUE" = "$FM_CURRENCY_BASE_DEFAULT" ] \
+    || fail "a genuinely absent config file did not resolve the default: $FM_CURRENCY_BASE_VALUE"
+
+  pass "a present but unusable config item refuses with its own reason instead of falling back"
 }
 
 test_relevant_update_found_and_cleared_when_current
@@ -208,3 +264,4 @@ test_environment_override_beats_the_configured_base
 test_unusable_configured_base_refuses_loudly
 test_resolver_precedence_and_default
 test_resolver_rejects_unusable_values
+test_resolver_refuses_present_but_unusable_file
