@@ -173,7 +173,7 @@ A project-level `.claude/settings.json` only takes effect when Claude Code's pro
 After those settings are loaded, hook command resolution is still cwd-sensitive because Claude Code runs commands through `/bin/sh` against the session's current cwd; keep the tracked command anchored through `"$CLAUDE_PROJECT_DIR"/bin/fm-turnend-guard.sh` and see `docs/turnend-guard.md` for the verified Stop-hook details.
 Claude Code's primary delivery protocol is the lowest-friction path: run `bin/fm-watch-arm.sh` as its own Claude Code background task and treat delivery-stub completion as the wake.
 
-## codex (VERIFIED 2026-06-11, codex-cli 0.139.0; re-verified 2026-07-26 against codex-cli 0.145.0 source at tag `rust-v0.145.0`)
+## codex (VERIFIED 2026-06-11, codex-cli 0.139.0; re-verified 2026-07-26 against codex-cli 0.145.0, both the source at tag `rust-v0.145.0` and the installed binary)
 
 | Fact | Value |
 |---|---|
@@ -193,10 +193,16 @@ Codex also renders the same `<key> to interrupt` hint in the overlay it shows wh
 Treat a long-running Codex pane that never reaches turn end as a candidate for that state rather than assuming forward progress.
 
 Idle is unambiguous and cannot be misread as busy.
-An idle Codex pane shows the composer placeholder `› Ask Codex to do anything` with a footer of `? for shortcuts` on the left and `NN% context left` on the right, and contains no interrupt hint at all.
-Expanding that footer while a turn runs adds `ctrl + c to interrupt`, which is a distinct string from the status row's `esc to interrupt` and so does not create a second busy match.
+An idle Codex pane on 0.145.0 cycles a suggestion list in the composer ("Explain this codebase", "Write tests for @filename", "Improve documentation in @filename") rather than showing a fixed placeholder, and its collapsed footer is the model, the effort, and the working directory, rendered as `<model> <effort> · <cwd>`.
+There is no `Ask Codex` placeholder in this version: `strings` on the installed binary finds zero occurrences of it.
+The operationally load-bearing half is confirmed and unchanged by that correction - an idle pane carries no interrupt hint of any kind, so the watcher cannot read idle as busy.
+Expanding the footer while a turn runs adds `ctrl + c to interrupt`, which is a distinct string from the status row's `esc to interrupt` and so does not create a second busy match.
 
-Ctrl+C twice is a working exit path alongside `/quit` and `/exit`; the first press shows `ctrl + c again to quit`.
+Ctrl+C is an exit path alongside `/quit` and `/exit`, but what it takes depends on the state of the pane.
+From an idle empty composer a single Ctrl+C quits immediately with no confirmation.
+With text in the composer the first press clears the text and a further press quits.
+During a running turn Ctrl+C interrupts the turn and does not quit, however many times it is pressed.
+Codex's own shortcuts panel, opened with `?`, documents the binding as `ctrl + c to exit`.
 `/archive` and `/delete` also exit, and they act on the saved session as well, so never send them as a plain exit.
 
 A `$<skill>` invocation opens a `$`-autocomplete (skill) popup, the same hazard as the `/` slash popup: submitting too fast lets the popup swallow the Enter, so the invocation never lands.
@@ -224,10 +230,13 @@ The turn-end signal still works the way firstmate relies on: `notify` is an argv
 
 Reasoning effort is the one fact that moved.
 Codex's effort vocabulary is now per-model rather than fleet-wide, and the newest models accept levels above `xhigh`: as of 0.145.0 the bundled catalog gives `gpt-5.6-sol` and `gpt-5.6-terra` low through `ultra`, `gpt-5.6-luna` low through `max`, and every older model low through `xhigh`.
-Passing a level a model does not support is silently downgraded rather than rejected, because Codex substitutes the middle supported level instead of failing, so a bad value costs reasoning depth without any visible error.
+Passing a level a model does not support is rejected outright on the `-c model_reasoning_effort=...` launch path firstmate actually uses, and the whole turn dies with it.
+Exercised against 0.145.0: `codex exec --model gpt-5.5 -c 'model_reasoning_effort="max"'` returns an `invalid_request_error` reading `Invalid value: 'max'`, and the turn produces no work at all.
+`ultra` is mapped down one step to `max` and still fails the same way.
+The cost of an out-of-range level is therefore the entire turn, not just reasoning depth.
 `fm-spawn` therefore keeps emitting only low through `xhigh` for codex, which every catalogued model accepts.
 `max` is unreachable for a codex worker through firstmate's own validators, whatever the model's catalog entry says.
-Both `bin/fm-dispatch-select.sh` and `bin/fm-bootstrap.sh` restrict codex to low, medium, high, and xhigh, so a dispatch profile of `{harness: codex, effort: max}` is rejected outright rather than downgraded, and editing the profile is not a way around the ceiling.
+Both `bin/fm-dispatch-select.sh` and `bin/fm-bootstrap.sh` restrict codex to low, medium, high, and xhigh, so a dispatch profile of `{harness: codex, effort: max}` is rejected before it ever reaches Codex, and editing the profile is not a way around the ceiling.
 The ad-hoc `fm-spawn` path emits no effort flag at all for `max`, which leaves the worker on the model's own `default_reasoning_level`.
 
 **Primary-session guard fact (verified 2026-07-08, codex-cli 0.142.1).**
