@@ -1194,6 +1194,91 @@ test_active_run_descendant_fix_head_remains_current() {
   pass "active run with valid descendant fix head remains current"
 }
 
+# Head-binding: a PIPELINE-OWNED run commits its fix rounds in no-mistakes' own
+# working copy and does not push them to the crew's worktree, so mid-run the run
+# head is not an object in this repo at all. Rejecting that lost the crew its
+# only current-state source for the whole validation, and the watcher then
+# re-surfaced a legitimately static pane (live 2026-07-26: run 01KYDF72FZ on
+# fm/fm-overlay-hook-truncation-fix reporting `status: running` with an absent
+# `head: 67d35e35`, while fm-crew-state.sh answered `unknown - none` and the
+# watcher wedge-escalated a pipeline that was in fix round 1).
+test_active_run_unpushed_pipeline_head_attributed() {
+  reset_fakes
+  local d out
+  d=$(new_case pipeline-owned-head)
+  make_repo_on_branch "$d/wt" fm/feat-owned
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/owned.meta" "window=fm:fm-owned" "worktree=$d/wt" "kind=ship"
+  # Decision-only last line (never a state) and an idle pane: with the run
+  # rejected there is no state source left at all.
+  printf 'needs-decision: pick A or B\nresolved: captain chose option A\n' > "$d/state/owned.status"
+  FM_FAKE_BUSY=0
+  FM_FAKE_RUN_HEAD=67d35e35
+  git -C "$d/wt" rev-parse --verify '67d35e35^{commit}' >/dev/null 2>&1 \
+    && fail "fixture invalid: the run head must be absent from this worktree"
+  FM_FAKE_AXI_STATUS="$(run_fixing fm/feat-owned)"
+  out=$(run_crew_state "$d" owned)
+  assert_contains "$out" "source: run-step" "an active pipeline-owned run stays attributable without its head"
+  assert_contains "$out" "state: working" "an active pipeline-owned run reports working"
+  PATH="$d/fakebin:$PATH" FM_STATE_OVERRIDE="$d/state" crew_is_provably_working owned \
+    || fail "a crew mid-pipeline was not provably working, so its static pane would keep surfacing"
+  pass "an active run whose unpushed pipeline head is absent locally is still attributed"
+}
+
+# The other half of the same rule: once the run is TERMINAL, its head is the only
+# evidence tying it to this code, so an unbindable one stays rejected - a stopped
+# crew must still surface and escalate rather than be absorbed on a stale run.
+test_terminal_run_unbindable_head_not_attributed() {
+  reset_fakes
+  local d out
+  d=$(new_case terminal-unbindable-head)
+  make_repo_on_branch "$d/wt" fm/feat-gone
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/gone.meta" "window=fm:fm-gone" "worktree=$d/wt" "kind=ship"
+  printf 'resolved: captain chose option A\n' > "$d/state/gone.status"
+  FM_FAKE_BUSY=0
+  FM_FAKE_RUN_HEAD=67d35e35
+  FM_FAKE_AXI_STATUS="$(run_passed fm/feat-gone)"
+  out=$(run_crew_state "$d" gone)
+  assert_not_contains "$out" "source: run-step" "a terminal run with an unbindable head must not be attributed"
+  assert_contains "$out" "state: unknown" "no bindable evidence -> unknown"
+  PATH="$d/fakebin:$PATH" FM_STATE_OVERRIDE="$d/state" crew_is_provably_working gone \
+    && fail "a stopped crew was treated as provably working, which would swallow its finish"
+  pass "a terminal run with an unbindable head is still rejected (stopped crews keep surfacing)"
+}
+
+# The coarse runs-list fallback follows the same rule, with the row's own status
+# word as its only activity evidence.
+test_coarse_running_row_with_unpushed_head_attributed() {
+  reset_fakes
+  local d out
+  d=$(new_case coarse-unpushed-head)
+  make_repo_on_branch "$d/wt" fm/feat-coarse
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/coarse.meta" "window=fm:fm-coarse" "worktree=$d/wt" "kind=ship"
+  printf 'resolved: captain chose option A\n' > "$d/state/coarse.status"
+  FM_FAKE_BUSY=0
+  # The bare axi answer belongs to another branch, so attribution falls to the
+  # runs list, whose row for this branch carries an absent pipeline head.
+  FM_FAKE_AXI_STATUS="$(run_running fm/other-crew)"
+  FM_FAKE_RUNS_LIST="$(cat <<'EOF'
+  running    fm/feat-coarse 67d35e35  2026-07-26 00:24
+  completed  fm/feat-stale 67d35e36  2026-07-25 20:24
+EOF
+)"
+  out=$(run_crew_state "$d" coarse)
+  assert_contains "$out" "source: run-step" "a running coarse row with an unpushed head stays attributable"
+  assert_contains "$out" "state: working" "a running coarse row reports working"
+  # A completed row with the same unbindable head must not be attributed.
+  reset_fakes
+  FM_FAKE_BUSY=0
+  FM_FAKE_AXI_STATUS="$(run_running fm/other-crew)"
+  FM_FAKE_RUNS_LIST='  completed  fm/feat-coarse 67d35e35  2026-07-26 00:24'
+  out=$(run_crew_state "$d" coarse)
+  assert_not_contains "$out" "source: run-step" "a completed coarse row with an unbindable head must not be attributed"
+  pass "the coarse runs-list fallback accepts an unpushed head only while the row is running"
+}
+
 # Head-binding: local work that advanced past the run head invalidates the run.
 test_local_advanced_past_run_head_invalidates() {
   reset_fakes
@@ -1278,6 +1363,9 @@ test_not_provably_working_when_stopped
 test_usage_error
 test_historical_same_branch_rewritten_head_not_current
 test_active_run_descendant_fix_head_remains_current
+test_active_run_unpushed_pipeline_head_attributed
+test_terminal_run_unbindable_head_not_attributed
+test_coarse_running_row_with_unpushed_head_attributed
 test_local_advanced_past_run_head_invalidates
 test_missing_run_head_falls_back_to_current_state
 
