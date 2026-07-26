@@ -960,16 +960,21 @@ validate_firstmate_home_children_removal() {
 # worktree cannot fire signals for a dead task. Worktrees spawned before the Claude
 # hook moved to .claude/settings.fm-task.json still carry the legacy
 # .claude/settings.local.json copy, which Claude Code auto-loads, so it has to go
-# too - but ONLY when git reports that path untracked AND it still holds firstmate's
-# generated turn-end hook. A repository is free to track that path, and an
-# unconditional removal there would discard repo content.
+# too - but ONLY when git AFFIRMATIVELY reports that path untracked AND it still
+# holds firstmate's generated turn-end hook. A repository is free to track that
+# path, and an unconditional removal there would discard repo content. Every
+# inconclusive git answer (no git, not a work tree, a transient failure) is treated
+# as "assume tracked, keep the file", so the failure direction is never data loss.
 remove_task_turnend_hooks() {
-  local wt=$1 legacy
+  local wt=$1 legacy inside tracked
   [ -n "$wt" ] || return 0
   rm -f "$wt/.claude/settings.fm-task.json" "$wt/.opencode/plugins/fm-turn-end.js" "$wt/.fm-grok-turnend"
   legacy="$wt/.claude/settings.local.json"
   [ -f "$legacy" ] || return 0
-  ! git -C "$wt" ls-files --error-unmatch -- .claude/settings.local.json >/dev/null 2>&1 || return 0
+  inside=$(git -C "$wt" rev-parse --is-inside-work-tree 2>/dev/null) || return 0
+  [ "$inside" = true ] || return 0
+  tracked=$(git -C "$wt" ls-files -- .claude/settings.local.json 2>/dev/null) || return 0
+  [ -z "$tracked" ] || return 0
   grep -q '\.turn-ended' "$legacy" 2>/dev/null || return 0
   rm -f "$legacy"
 }

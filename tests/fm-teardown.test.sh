@@ -53,6 +53,7 @@
 #   (aa) Claude task overlay plus genuine dirty work           -> REFUSE
 #   (bb) untracked legacy .claude/settings.local.json hook      -> REMOVED
 #   (cc) repository-tracked .claude/settings.local.json         -> KEPT
+#   (dd) legacy hook whose tracked-ness git cannot answer       -> KEPT
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -940,6 +941,31 @@ test_untracked_legacy_claude_hook_is_removed() {
   pass "an untracked legacy Claude hook file is removed so a reused worktree cannot signal for a dead task"
 }
 
+test_legacy_claude_hook_survives_an_inconclusive_git_query() {
+  local case_dir rc legacy before
+  case_dir=$(make_case legacy-claude-hook-no-work-tree)
+  write_meta "$case_dir" local-only ship
+  legacy="$case_dir/wt/.claude/settings.local.json"
+  # No work tree here, so git cannot answer whether the path is tracked. --force is
+  # the only way to reach the cleanup without the safety check, which is exactly the
+  # path the fail-closed guard has to hold on.
+  rm -rf "$case_dir/wt"
+  mkdir -p "$case_dir/wt/.claude"
+  printf '%s\n' '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"touch '"'"'/tmp/state/old.turn-ended'"'"'"}]}]}}' \
+    > "$legacy"
+  before=$(cat "$legacy")
+
+  set +e
+  run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "legacy-claude-hook-no-work-tree: forced teardown should still complete"
+  [ -f "$legacy" ] && [ "$(cat "$legacy")" = "$before" ] \
+    || fail "legacy-claude-hook-no-work-tree: an inconclusive tracked-ness query deleted the file instead of keeping it"
+  pass "an inconclusive git tracked-ness query keeps the legacy settings.local.json (fails closed)"
+}
+
 test_tracked_legacy_claude_settings_survive_teardown() {
   local case_dir rc legacy before
   case_dir=$(make_case tracked-legacy-claude-settings)
@@ -1495,6 +1521,7 @@ test_dirty_worktree_refuses
 test_tracked_dirty_claude_task_overlay_allows
 test_claude_task_overlay_does_not_mask_other_dirty_work
 test_untracked_legacy_claude_hook_is_removed
+test_legacy_claude_hook_survives_an_inconclusive_git_query
 test_tracked_legacy_claude_settings_survive_teardown
 test_gh_error_and_content_absent_refuses
 test_stale_index_lock_cleared_and_teardown_succeeds

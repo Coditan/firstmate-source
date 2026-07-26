@@ -279,6 +279,26 @@ test_raw_claude_launch_with_own_settings_writes_no_overlay() {
   pass "a raw claude command carrying its own --settings warns instead of writing a dead hook"
 }
 
+test_raw_claude_shaped_wrapper_gets_no_settings_flag() {
+  local rec id out status launch
+  id=raw-claude-wrapper-z18
+  rec=$(make_spawn_case raw-claude-wrapper claude "$id")
+  read_case_record "$rec"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id" "$PROJ_DIR" "claude-yolo --dangerously-skip-permissions")
+  status=$?
+  expect_code 0 "$status" "raw claude-shaped wrapper launch should succeed"
+  assert_absent "$WT_DIR/.claude/settings.fm-task.json" \
+    "spawn wrote a per-task overlay the wrapper would never load"
+  assert_contains "$out" "turn-end hook was NOT installed" \
+    "spawn did not warn that the wrapper's turn-end hook is unarmed"
+  launch=$(cat "$LAUNCH_LOG")
+  [ "$launch" = "claude-yolo --dangerously-skip-permissions" ] \
+    || fail "spawn spliced flags into a claude-shaped wrapper command"$'\n'"actual: $launch"
+  pass "a claude-shaped wrapper keeps its own argv and degrades with a warning"
+}
+
 test_claude_threads_model_and_effort() {
   local rec id out status launch
   id=profile-claude-z2
@@ -504,6 +524,7 @@ test_active_dispatch_profile_allows_positional_harness
 test_active_dispatch_profile_allows_raw_launch_command
 test_raw_claude_launch_loads_the_task_overlay
 test_raw_claude_launch_with_own_settings_writes_no_overlay
+test_raw_claude_shaped_wrapper_gets_no_settings_flag
 test_claude_threads_model_and_effort
 test_codex_threads_model_and_effort
 test_codex_omits_invalid_max_effort

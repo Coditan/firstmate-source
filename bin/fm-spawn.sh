@@ -477,21 +477,21 @@ case "$ARG3" in
       launch_tail=${launch_tail#"$word"}
       case "$word" in [A-Za-z_]*=*) continue ;; *) HARNESS=$(basename "$word"); break ;; esac
     done
-    # A claude-shaped raw command still gets the per-task turn-end hook written
+    # A genuine claude raw command still gets the per-task turn-end hook written
     # below, and Claude Code only reads it when the launch names it, so inject the
-    # flag here rather than leaving a path that writes a hook nothing loads. A raw
-    # command carrying its own --settings is left alone; the hook write below then
-    # skips and warns instead of installing a file that would never be read.
-    case "$HARNESS" in
-      claude*)
-        if [ "$KIND" != secondmate ]; then
-          case "$LAUNCH" in
-            *__CLAUDESETTINGS__*|*--settings*) ;;
-            *) LAUNCH="$launch_head --settings __CLAUDESETTINGS__$launch_tail" ;;
-          esac
-        fi
-        ;;
-    esac
+    # flag here rather than leaving a path that writes a hook nothing loads. The
+    # match is exact (HARNESS is already a basename, so it also covers /path/to/claude):
+    # a claude-SHAPED wrapper may not accept --settings, and splicing an unknown flag
+    # into its argv would turn a missing turn-end signal into a crewmate that never
+    # launches. A wrapper, and a raw command carrying its own --settings, are left
+    # alone; the hook write below then skips and warns instead of installing a file
+    # that would never be read.
+    if [ "$HARNESS" = claude ] && [ "$KIND" != secondmate ]; then
+      case "$LAUNCH" in
+        *__CLAUDESETTINGS__*|*--settings*) ;;
+        *) LAUNCH="$launch_head --settings __CLAUDESETTINGS__$launch_tail" ;;
+      esac
+    fi
     ;;
   '')
     # No explicit harness: resolve from config. A secondmate AGENT launches on the
@@ -1137,7 +1137,7 @@ EOF
           exclude_path '.claude/settings.fm-task.json'
           ;;
         *)
-          echo "warning: this claude launch command passes its own --settings, so firstmate's per-task turn-end hook was NOT installed and this crewmate will not signal turn end; put __CLAUDESETTINGS__ in the --settings value to arm it." >&2
+          echo "warning: this launch command does not load firstmate's per-task Claude settings overlay (it is a claude-shaped wrapper, or it passes its own --settings), so the per-task turn-end hook was NOT installed and this crewmate will not signal turn end; put __CLAUDESETTINGS__ in a --settings value it accepts to arm it." >&2
           ;;
       esac
       ;;
