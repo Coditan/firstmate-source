@@ -747,6 +747,37 @@ test_crew_dispatch_active_rules_are_verbose_bootstrap_info() {
   pass "bootstrap surfaces active crew-dispatch rules only as verbose BOOTSTRAP_INFO"
 }
 
+test_currency_base_validation() {
+  local label item body mode expect case_dir fakebin out n
+  n=0
+  while IFS='^' read -r label item body mode expect; do
+    [ -n "$label" ] || continue
+    n=$((n + 1))
+    case_dir="$TMP_ROOT/currency-$n"
+    mkdir -p "$case_dir/home/config"
+    printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+    [ -z "$item" ] || printf '%s\n' "$body" > "$case_dir/home/config/$item"
+    fakebin=$(make_fake_toolchain "$case_dir")
+    out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+      FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+    case "$mode" in
+      empty)
+        [ -z "$out" ] || fail "$label: expected silence, got: $out" ;;
+      grep)
+        printf '%s\n' "$out" | grep -F "$expect" >/dev/null || fail "$label: missing '$expect' (got: $out)" ;;
+    esac
+  done <<'ROWS'
+no configured base is silent^^^empty^
+usable update base is silent^firstmate-update-base^https://example.invalid/fleet.git^empty^
+usable fork base is silent^fork-sync-upstream^git@example.invalid:fleet.git^empty^
+unusable update base is flagged^firstmate-update-base^relative/path^grep^CURRENCY_BASE: config/firstmate-update-base is unusable - the value is a relative path
+unusable fork base is flagged^fork-sync-upstream^not a url^grep^CURRENCY_BASE: config/fork-sync-upstream is unusable - the value contains whitespace
+empty update base is flagged^firstmate-update-base^^grep^CURRENCY_BASE: config/firstmate-update-base is unusable - the file is empty
+option-shaped update base is flagged^firstmate-update-base^--upload-pack=evil^grep^CURRENCY_BASE: config/firstmate-update-base is unusable - the value starts with '-'
+ROWS
+  pass "bootstrap flags an unusable currency comparison base and stays silent otherwise"
+}
+
 test_crew_dispatch_validation() {
   local label body expect mode case_dir fakebin out n
   n=0
@@ -816,3 +847,4 @@ test_routine_bootstrap_contract_runs_under_system_bash
 test_bootstrap_info_is_no_load_and_actionable_lines_trigger
 test_crew_dispatch_active_rules_are_verbose_bootstrap_info
 test_crew_dispatch_validation
+test_currency_base_validation

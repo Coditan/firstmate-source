@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Check whether kunchenguid/firstmate has instruction-surface updates that are
-# not present in this deployment.
+# Check whether the source this deployment updates from has instruction-surface
+# updates that are not present in it.
 #
 # This is read-only with respect to the deployment checkout: comparison objects
 # are fetched into a temporary repository, and the only persistent writes are
@@ -18,9 +18,16 @@
 # home, at a cadence around twice daily, with cron or a systemd timer - see
 # docs/configuration.md "Upstream firstmate update check" for the recipe.
 #
+# The compared source comes from FM_FIRSTMATE_UPSTREAM_URL, then the local
+# gitignored config/firstmate-update-base file, then the canonical default - see
+# bin/fm-currency-base-lib.sh for the full precedence and for why this base is
+# deliberately separate from config/fork-sync-upstream. A present but unusable
+# config file records FIRSTMATE_UPDATE_STUCK rather than silently comparing
+# against a source this deployment never updates from.
+#
 # Usage: fm-firstmate-update-check.sh
 # Environment:
-#   FM_FIRSTMATE_UPSTREAM_URL overrides the canonical upstream URL.
+#   FM_FIRSTMATE_UPSTREAM_URL overrides the configured comparison base.
 #   FM_FIRSTMATE_UPSTREAM_HEAD skips network discovery and uses the named
 #     commit already present in FM_FIRSTMATE_COMPARE_REPO (tests only).
 #   FM_FIRSTMATE_COMPARE_REPO overrides the comparison repository (tests only).
@@ -30,7 +37,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
-UPSTREAM_URL="${FM_FIRSTMATE_UPSTREAM_URL:-https://github.com/kunchenguid/firstmate.git}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 AVAILABLE="$STATE/firstmate-update.available"
 STUCK="$STATE/firstmate-update.stuck"
 
@@ -44,6 +51,12 @@ record_stuck() {
   cat "$STUCK"
   exit 0
 }
+
+# shellcheck source=bin/fm-currency-base-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-currency-base-lib.sh"
+fm_currency_base_resolve "$CONFIG" "$FM_CURRENCY_BASE_UPDATE_ITEM" ||
+  record_stuck "config/$FM_CURRENCY_BASE_UPDATE_ITEM is unusable - $FM_CURRENCY_BASE_REASON"
+UPSTREAM_URL=$FM_CURRENCY_BASE_VALUE
 
 # Match fm-update.sh: compare from the deployment's local default-branch ref,
 # not a possibly detached or feature-branch HEAD.

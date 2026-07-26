@@ -19,3 +19,5 @@ config/cmux-socket-password
 config/wedge-alarm
 graphify-out/
 config/herdr-presentation-spaces
+config/firstmate-update-base
+config/fork-sync-upstream

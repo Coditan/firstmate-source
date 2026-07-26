@@ -330,9 +330,19 @@ Successful changes emit `AXI_SUITE_UPDATED:`, and bounded registry, permission, 
 
 ### Upstream firstmate and curated-fork checks
 
-`bin/fm-firstmate-update-check.sh` compares the local default branch with the configured real upstream and persists a signal only when an upstream-only commit changes `AGENTS.md`, `bin/`, or `.agents/skills/`.
+`bin/fm-firstmate-update-check.sh` compares the local default branch with the configured comparison base and persists a signal only when an upstream-only commit changes `AGENTS.md`, `bin/`, or `.agents/skills/`.
 `bin/fm-fork-sync-check.sh` compares the curated fork with real upstream, self-gates successful checks to a three-day cadence, and points fork-only review at `docs/fork-patches.md`.
 Neither script mutates the checkout or runs from bootstrap, so schedule them externally; their headers and `--help` output own exact overrides and mechanics.
+
+Each check reads its own comparison base because the two answer different questions, and a curator vessel running from a fleet repository needs both at once.
+The local gitignored `config/firstmate-update-base` names the artifact this deployment actually updates from, so the instruction-surface check compares against the right source instead of assuming the original template.
+The local gitignored `config/fork-sync-upstream` names the real upstream the curated fork tracks, so the fork check keeps asking whether the fork absorbed upstream content even when the deployment itself runs from somewhere else.
+Each file holds exactly one non-empty line naming a git URL (`https://`, `http://`, `ssh://`, `git://`, `git+ssh://`, or `file://`), an scp-style `host:path` remote, or an absolute local path; a relative path is refused because it would resolve against each caller's working directory.
+Precedence for both, highest first, is the explicit `FM_FIRSTMATE_UPSTREAM_URL` environment variable, then the config file, then the default `https://github.com/kunchenguid/firstmate.git`.
+The environment variable is passed through unvalidated so existing harnesses keep working, and it overrides both checks at once.
+An absent file changes nothing for an unconfigured home, but a present unusable file never silently falls back to the default: bootstrap reports it at startup as `CURRENCY_BASE:`, and the affected check records its own `FIRSTMATE_UPDATE_STUCK:` or `FORK_SYNC_STUCK:` rather than comparing against the wrong base.
+`bin/fm-currency-base-lib.sh` is the single owner of that resolution and validation.
+`config/firstmate-update-base` is inherited by secondmate homes since every home in a deployment updates from the same source; `config/fork-sync-upstream` is not, because only the curator vessel curates the fork.
 Bootstrap also reports a `TANGLE:` line when `FM_ROOT` is on a named non-default branch; follow the printed checkout remediation rather than treating it as an installable tool problem.
 In a read-only session that did not get the fleet lock, the same line is advisory and omits the checkout command.
 When `FM_ROOT` sits on its default branch instead, bootstrap reports a `SELF_DRIFT:` line if that branch and its own origin disagree; [architecture.md](architecture.md#self-updates-stay-safe) owns the detection and remediation, and `FM_SELF_DRIFT_BOOTSTRAP_TIMEOUT` below bounds its fetch.
@@ -349,7 +359,7 @@ When a running home advances and its loaded instruction surface (`AGENTS.md`, `b
 If that send fails, bootstrap keeps an idempotent retry marker and emits `NUDGE_SECONDMATES:` with the failure reason.
 The same bootstrap run emits `SECONDMATE_LIVENESS:` only when a live secondmate endpoint is skipped or respawn fails; already-live and successfully respawned endpoints are handled silently.
 For a mid-session inherited local-material edit where tracked-file sync is not needed, run `bin/fm-config-push.sh`.
-It uses the same live secondmate discovery and propagation helper as bootstrap, prints each live home's `crew-dispatch.json`, `crew-harness`, `backlog-backend`, `herdr-presentation-spaces`, and `data/captain-shared.md` result as `pushed`, `unchanged`, `skipped`, or `error`, and exits non-zero for real propagation errors or config-reread send failures.
+It uses the same live secondmate discovery and propagation helper as bootstrap, prints each live home's `crew-dispatch.json`, `crew-harness`, `backlog-backend`, `herdr-presentation-spaces`, `firstmate-update-base`, and `data/captain-shared.md` result as `pushed`, `unchanged`, `skipped`, or `error`, and exits non-zero for real propagation errors or config-reread send failures.
 When an allowlisted config item changes for an already-running home, it sends the literal-content reread pointer described in [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md); unchanged allowlisted config sends no pointer unless a previous delivery is pending.
 The locked bootstrap inheritance pass uses the same per-home changed-set and reread path for already-running homes; see `secondmate-provisioning` for the single contract owner.
 That live discovery starts from `state/*.meta` records with `kind=secondmate`; `data/secondmates.md` only backfills `home=` for older or incomplete meta records.
@@ -526,6 +536,7 @@ FM_WEDGE_DEMAND_INSPECT_COUNT=3    # consecutive stale escalations on the same u
 FM_WATCH_TRIAGE_LOG_MAX_BYTES=262144   # size cap for the watcher's absorbed-wake debug log
 FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT=     # optional seconds allowed for bootstrap's best-effort clone refresh; unset/blank defaults to max(20, 5 + 3 * origin-backed-project-count)
 FM_SELF_DRIFT_BOOTSTRAP_TIMEOUT=10   # seconds allowed for bootstrap's best-effort origin fetch when checking the primary checkout's default branch for self-drift
+FM_FIRSTMATE_UPSTREAM_URL=      # highest-precedence currency comparison base for BOTH upstream checks, above config/firstmate-update-base and config/fork-sync-upstream; passed through unvalidated
 FM_FLEET_PRUNE=1        # set to 0 to skip pruning local branches whose upstream is gone
 FM_STALE_WORKTREE_LOCK_AGE_SECS=30       # min mtime age before fm-teardown.sh treats a leftover worktree git index.lock as provably stale
 FM_TREEHOUSE_RETURN_LOCK_RETRIES=3        # retries after a treehouse return fails on the transient git index.lock signature

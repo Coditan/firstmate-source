@@ -9,6 +9,7 @@
 #                 "MISSING_MANUAL: <tool> (instructions: <url>)", "NEEDS_GH_AUTH",
 #                 "BACKEND_INVALID: <name> (known: <names>)",
 #                 "CREW_DISPATCH: invalid config/crew-dispatch.json - <reason>",
+#                 "CURRENCY_BASE: config/<file> is unusable - <reason>; <remediation>",
 #                 "FLEET_SYNC: <repo>: skipped|recovered|STUCK: <detail>",
 #                 "PR_CHECK_MIGRATION: <private remediation>",
 #                 "TANGLE: <remediation>",
@@ -111,6 +112,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-x-lib.sh"
 # shellcheck source=bin/fm-backend.sh disable=SC1091
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-currency-base-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-currency-base-lib.sh"
 
 fleet_sync_origin_backed_project_count() {
   local count proj
@@ -708,6 +711,20 @@ EOF
   echo "FMX: X mode on - relay poll armed via state/x-watch.check.sh; 30s watcher cadence in config/x-mode.env"
 }
 
+# Detect-only: a currency comparison base that is configured but unusable. The
+# two upstream checks run externally, so without this the captain would not
+# learn about a bad base until the next scheduled run wrote its own STUCK file.
+currency_base_validate() {
+  local item status
+  for item in "$FM_CURRENCY_BASE_UPDATE_ITEM" "$FM_CURRENCY_BASE_FORK_ITEM"; do
+    fm_currency_base_file_value "$CONFIG" "$item"
+    status=$?
+    # 0 is a usable value and 2 is an absent file; only 1 is actionable.
+    [ "$status" -eq 1 ] || continue
+    echo "CURRENCY_BASE: config/$item is unusable - $FM_CURRENCY_BASE_REASON; fix it or remove the file to compare against $FM_CURRENCY_BASE_DEFAULT"
+  done
+}
+
 crew_dispatch_validate() {
   local file err
   file="$CONFIG/crew-dispatch.json"
@@ -890,6 +907,7 @@ if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] && [ -n "$crew" ] && [ "$crew" != 
   echo "BOOTSTRAP_INFO: crew harness override active: $crew"
 fi
 crew_dispatch_validate
+currency_base_validate
 if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] \
   && ! fm_backlog_backend_manual "$CONFIG" && fm_tasks_axi_compatible; then
   echo "BOOTSTRAP_INFO: tasks-axi available"
