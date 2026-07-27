@@ -62,6 +62,8 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-merge-local.sh`      | Fast-forward a `local-only` project's local default branch after approval            |
 | `fm-bridge-relay.sh`     | Guardedly relay envelope-only `send`/`inbox`/`status`/`broadcast` calls to the coditan-bridge checkout's own scripts |
 | `fm-review-diff.sh`      | Review a crewmate branch or recorded PR head against the authoritative base          |
+| `fm-pdf-finish.sh`       | Assemble a generated PDF through a conforming producer and publish it only if the gate passes (docs/pdf-output.md) |
+| `fm-pdf-verify.sh`       | Refuse a PDF a real reader cannot read as spec-conforming; fails closed when it cannot check |
 | `fm-marker-lib.sh`       | Compatibility entry point for the from-firstmate carrier owned by `fm-operational-input.sh` |
 | `fm-mark-parked.sh`      | Validate and declare an ordinary terminal task parked through a seatbelt-safe wrapper |
 | `fm-pending-reply-lib.sh` | Parent-owned secondmate pending-reply expectations, recovery, and one-shot escalation |
