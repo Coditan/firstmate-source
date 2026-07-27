@@ -306,6 +306,283 @@ EOF
   pass "non-forced scout teardown always requires durable inventory verification"
 }
 
+test_archived_resolution_satisfies_gate_but_missing_open_hold_refuses() {
+  local home origin hold
+  home=$(make_home archived-resolution)
+  origin=sample-archived-review
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Review archived sample decision" \
+    --kind scout --repo sample --start >/dev/null \
+    || fail "could not create archived-resolution origin"
+  write_origin_meta "$home" "$origin"
+  printf 'needs-decision [key=route]: choose route north or route south\ndone: report complete\n' \
+    > "$home/state/$origin.status"
+  printf '# Archived sample review\n\nThe route needs a captain decision.\n' \
+    > "$home/data/$origin/report.md"
+  hold=$(run_decisions "$home" hold "$origin" route \
+    --title "Choose archived sample route" --reason "captain route choice pending" --repo sample) \
+    || fail "could not register archived-resolution hold"
+  run_decisions "$home" complete "$origin" route >/dev/null \
+    || fail "could not record archived-resolution inventory"
+  tasks_in "$home" add sample-archived-route "Apply archived sample route" \
+    --kind ship --repo sample --blocked-by "$hold" >/dev/null \
+    || fail "could not create archived-resolution dependent"
+  printf 'Use route north for the archived sample.\n' > "$home/route-decision.txt"
+  run_decisions "$home" resolve "$origin" route \
+    --decision-file "$home/route-decision.txt" --routed-to sample-archived-route >/dev/null \
+    || fail "could not resolve archived-resolution hold"
+  tasks_in "$home" prune --state "done" --keep 0 >/dev/null \
+    || fail "could not rotate resolved hold into the archive"
+  assert_no_grep "- [x] $hold -" "$home/data/backlog.md" \
+    "resolved hold remained in the live backlog"
+  assert_grep "- [x] $hold -" "$home/data/done-archive.md" \
+    "resolved hold did not reach the archive"
+  run_decisions "$home" complete "$origin" route >/dev/null \
+    || fail "completion did not accept a resolved archived hold"
+  run_decisions "$home" verify "$origin" >/dev/null \
+    || fail "verification did not accept a resolved archived hold"
+  if run_decisions "$home" hold "$origin" route \
+    --title "Choose archived sample route" --reason "captain route choice pending" --repo sample \
+    > "$home/archived-hold.out" 2> "$home/archived-hold.err"; then
+    fail "hold reopened an identity already resolved in the archive"
+  fi
+  assert_grep "already durably resolved" "$home/archived-hold.err" \
+    "archived resolution did not refuse a reused decision identity"
+  assert_no_grep "- [ ] $hold -" "$home/data/backlog.md" \
+    "refused hold still created a fresh open decision under a resolved identity"
+  run_teardown "$home" "$origin" >/dev/null 2> "$home/archived-teardown.err" \
+    || fail "cleanup refused a resolved archived hold: $(cat "$home/archived-teardown.err")"
+
+  home=$(make_home stale-archived-reuse)
+  origin=sample-stale-reuse-review
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Review stale reuse sample decision" \
+    --kind scout --repo sample --start >/dev/null \
+    || fail "could not create stale-reuse origin"
+  write_origin_meta "$home" "$origin"
+  printf 'decisions_reviewed=1\ndecision_keys=route\n' >> "$home/state/$origin.meta"
+  printf 'needs-decision [key=route]: choose route north or route south\n' \
+    > "$home/state/$origin.status"
+  printf '# Stale reuse sample review\n\nThe route still needs a captain decision.\n' \
+    > "$home/data/$origin/report.md"
+  cat > "$home/data/done-archive.md" <<EOF
+## Archived 2026-07-20
+- [x] $origin-decision-route - Choose the stale sample route (repo: sample) (kind: captain)
+  Resolution recorded by fm-decision-hold.
+  Decision digest: 0000000000000000000000000000000000000000000000000000000000000000
+  Routed identities: sample-stale-route
+
+  Captain decision:
+  Use route north for the stale sample.
+
+  Routed work:
+  - sample-stale-route
+
+## Archived 2026-07-27
+- [x] $origin-decision-route - Choose the stale sample route again (repo: sample) (kind: captain)
+  Origin: $origin
+  Decision key: route
+  State: awaiting captain decision.
+EOF
+  if run_decisions "$home" verify "$origin" \
+    > "$home/stale-reuse-verify.out" 2> "$home/stale-reuse-verify.err"; then
+    fail "a stale archived resolution vouched for a later unresolved decision under the same key"
+  fi
+  assert_grep "records no captain answer" "$home/stale-reuse-verify.err" \
+    "reused decision identity did not retain the fail-closed refusal"
+  assert_grep "Choose the stale sample route again" "$home/stale-reuse-verify.err" \
+    "refusal did not name the archived entry that blocked the identity"
+  assert_grep "$home/data/done-archive.md:14:" "$home/stale-reuse-verify.err" \
+    "refusal did not locate the blocking archived entry"
+  assert_grep "recovery:" "$home/stale-reuse-verify.err" \
+    "refusal did not state how to repair the permanent lockout"
+  if run_decisions "$home" hold "$origin" route \
+    --title "Choose the stale sample route again" --reason "captain route choice pending" --repo sample \
+    > "$home/stale-reuse-hold.out" 2> "$home/stale-reuse-hold.err"; then
+    fail "hold reopened an identity whose archive already carries a durable resolution"
+  fi
+  assert_grep "already durably resolved" "$home/stale-reuse-hold.err" \
+    "a mixed archive did not refuse reopening a resolved decision identity"
+  assert_no_grep "$origin-decision-route" "$home/data/backlog.md" \
+    "refused mixed-archive hold still created a fresh open decision"
+
+  home=$(make_home legacy-bullet-archive)
+  origin=sample-legacy-bullet-review
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Review legacy bullet sample decision" \
+    --kind scout --repo sample --start >/dev/null \
+    || fail "could not create legacy-bullet origin"
+  write_origin_meta "$home" "$origin"
+  printf 'decisions_reviewed=1\ndecision_keys=route\n' >> "$home/state/$origin.meta"
+  printf 'needs-decision [key=route]: choose route north or route south\n' \
+    > "$home/state/$origin.status"
+  printf '# Legacy bullet sample review\n\nThe route still needs a captain decision.\n' \
+    > "$home/data/$origin/report.md"
+  # tasks-axi still parses the older in-flight bullet form, and prune copies raw
+  # lines, so an unresolved entry can reach the archive as `- **<id>** - `.
+  cat > "$home/data/done-archive.md" <<EOF
+## Archived 2026-07-20
+- [x] $origin-decision-route - Choose the legacy sample route (repo: sample) (kind: captain)
+  Resolution recorded by fm-decision-hold.
+  Decision digest: 2222222222222222222222222222222222222222222222222222222222222222
+  Routed identities: sample-legacy-route
+
+  Captain decision:
+  Use route north for the legacy sample.
+
+  Routed work:
+  - sample-legacy-route
+
+## Archived 2026-07-27
+- **$origin-decision-route** - Choose the legacy sample route again (repo: sample) (kind: captain)
+  Origin: $origin
+  Decision key: route
+  State: awaiting captain decision.
+EOF
+  if run_decisions "$home" verify "$origin" \
+    > "$home/legacy-bullet-verify.out" 2> "$home/legacy-bullet-verify.err"; then
+    fail "a legacy-form archived entry was invisible and a stale resolution satisfied the gate"
+  fi
+  assert_grep "records no captain answer" "$home/legacy-bullet-verify.err" \
+    "legacy-form archived entry did not count as unresolved"
+  assert_grep "Choose the legacy sample route again" "$home/legacy-bullet-verify.err" \
+    "refusal did not name the legacy-form archived entry"
+  if run_teardown "$home" "$origin" \
+    > "$home/legacy-bullet-teardown.out" 2> "$home/legacy-bullet-teardown.err"; then
+    fail "cleanup accepted a stale resolution behind a legacy-form archived entry"
+  fi
+  assert_present "$home/state/$origin.meta" \
+    "refused legacy-bullet cleanup removed origin metadata"
+
+  home=$(make_home scoped-archive-predicate)
+  origin=sample-scoped-archive-review
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Review scoped archive sample decision" \
+    --kind scout --repo sample --start >/dev/null \
+    || fail "could not create scoped-archive origin"
+  write_origin_meta "$home" "$origin"
+  printf 'decisions_reviewed=1\ndecision_keys=route\n' >> "$home/state/$origin.meta"
+  printf 'needs-decision [key=route]: choose route north or route south\ndone: report complete\n' \
+    > "$home/state/$origin.status"
+  printf '# Scoped archive sample review\n\nThe route decision was answered.\n' \
+    > "$home/data/$origin/report.md"
+  cat > "$home/data/done-archive.md" <<EOF
+## Archived 2026-07-20
+- [ ] $origin-decision-pace - Choose the scoped sample pace (repo: sample) (kind: captain)
+  Origin: $origin
+  Decision key: pace
+  State: awaiting captain decision.
+
+## Archived 2026-07-27
+- [x] $origin-decision-route - Choose the scoped sample route (repo: sample) (kind: captain)
+  Resolution recorded by fm-decision-hold.
+  Decision digest: 1111111111111111111111111111111111111111111111111111111111111111
+  Routed identities: sample-scoped-route
+
+  Captain decision:
+  Use route north for the scoped sample.
+
+  Routed work:
+  - sample-scoped-route
+EOF
+  run_decisions "$home" complete "$origin" route >/dev/null \
+    || fail "a stale unresolved entry for another identity locked out a resolved decision"
+  run_decisions "$home" verify "$origin" >/dev/null \
+    || fail "verification refused a resolved identity over an unrelated unresolved archive entry"
+  run_teardown "$home" "$origin" >/dev/null 2> "$home/scoped-archive-teardown.err" \
+    || fail "cleanup refused a resolved archived hold: $(cat "$home/scoped-archive-teardown.err")"
+
+  home=$(make_home checked-archived-lookalike)
+  origin=sample-checked-lookalike-review
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Review checked lookalike sample decision" \
+    --kind scout --repo sample --start >/dev/null \
+    || fail "could not create checked-lookalike origin"
+  write_origin_meta "$home" "$origin"
+  printf 'decisions_reviewed=1\ndecision_keys=route\n' >> "$home/state/$origin.meta"
+  printf 'needs-decision [key=route]: choose route north or route south\n' \
+    > "$home/state/$origin.status"
+  printf '# Checked lookalike sample review\n\nThe route still needs a captain decision.\n' \
+    > "$home/data/$origin/report.md"
+  # A captain hold closed with a bare `tasks-axi done <id>` and then pruned: checked
+  # and kind captain, but carrying no recorded answer and no routed work.
+  cat > "$home/data/done-archive.md" <<EOF
+## Archived 2026-07-27
+- [x] $origin-decision-route - Choose the lookalike sample route (repo: sample) (kind: captain)
+  Origin: $origin
+  Decision key: route
+  State: awaiting captain decision.
+EOF
+  if run_decisions "$home" verify "$origin" \
+    > "$home/checked-lookalike-verify.out" 2> "$home/checked-lookalike-verify.err"; then
+    fail "verification accepted a checked archived captain item with no recorded resolution"
+  fi
+  assert_grep "records no captain answer" "$home/checked-lookalike-verify.err" \
+    "checked unresolved archive lookalike did not retain the fail-closed refusal"
+  assert_grep "Choose the lookalike sample route" "$home/checked-lookalike-verify.err" \
+    "refusal did not name the checked unresolved archived entry"
+  if run_teardown "$home" "$origin" \
+    > "$home/checked-lookalike-teardown.out" 2> "$home/checked-lookalike-teardown.err"; then
+    fail "cleanup accepted a checked archived captain item with no recorded resolution"
+  fi
+  assert_present "$home/state/$origin.meta" \
+    "refused checked-lookalike cleanup removed origin metadata"
+
+  home=$(make_home no-archived-record)
+  origin=sample-no-archive-review
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Review unarchived sample decision" \
+    --kind scout --repo sample --start >/dev/null \
+    || fail "could not create no-archive origin"
+  write_origin_meta "$home" "$origin"
+  printf 'decisions_reviewed=1\ndecision_keys=route\n' >> "$home/state/$origin.meta"
+  printf 'needs-decision [key=route]: choose route north or route south\n' \
+    > "$home/state/$origin.status"
+  printf '# Unarchived sample review\n\nThe route still needs a captain decision.\n' \
+    > "$home/data/$origin/report.md"
+  if run_decisions "$home" verify "$origin" \
+    > "$home/no-archive-verify.out" 2> "$home/no-archive-verify.err"; then
+    fail "verification accepted a decision with no live and no archived record"
+  fi
+  assert_grep "has no resolved record" "$home/no-archive-verify.err" \
+    "an identity absent from both the backlog and the archive lost its refusal"
+
+  home=$(make_home missing-open-hold)
+  origin=sample-missing-open-review
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Review missing open sample decision" \
+    --kind scout --repo sample --start >/dev/null \
+    || fail "could not create missing-open origin"
+  write_origin_meta "$home" "$origin"
+  printf 'decisions_reviewed=1\ndecision_keys=route\n' >> "$home/state/$origin.meta"
+  printf 'needs-decision [key=route]: choose route north or route south\n' \
+    > "$home/state/$origin.status"
+  printf '# Missing open sample review\n\nThe route still needs a captain decision.\n' \
+    > "$home/data/$origin/report.md"
+  cat > "$home/data/done-archive.md" <<EOF
+## Archived 2026-07-27
+- [ ] $origin-decision-route - Choose the missing sample route (repo: sample) (kind: captain)
+  Origin: $origin
+  Decision key: route
+  State: awaiting captain decision.
+EOF
+  if run_decisions "$home" verify "$origin" \
+    > "$home/missing-open-verify.out" 2> "$home/missing-open-verify.err"; then
+    fail "verification accepted an open decision missing from the live backlog"
+  fi
+  assert_grep "is absent from $home/data/backlog.md" "$home/missing-open-verify.err" \
+    "missing open decision did not retain the fail-closed refusal"
+  assert_grep "Choose the missing sample route" "$home/missing-open-verify.err" \
+    "refusal did not name the still-open archived entry"
+  if run_teardown "$home" "$origin" \
+    > "$home/missing-open-teardown.out" 2> "$home/missing-open-teardown.err"; then
+    fail "cleanup accepted an open decision missing from the live backlog"
+  fi
+  assert_present "$home/state/$origin.meta" \
+    "refused missing-open cleanup removed origin metadata"
+  pass "resolved archived holds satisfy cleanup while reused, unresolved, and missing holds still refuse"
+}
+
 test_origin_slug_validation_precedes_path_construction() {
   local home escaped
   home=$(make_home origin-validation)
@@ -554,6 +831,7 @@ test_resolve_matches_quoted_blocked_by_edges() {
 test_uninventoried_report_decision_refuses_completion
 
 test_scout_teardown_always_requires_inventory_verification
+test_archived_resolution_satisfies_gate_but_missing_open_hold_refuses
 test_structured_holds_survive_teardown_and_route_resolution
 test_origin_slug_validation_precedes_path_construction
 test_visual_review_uses_shared_completion_owner
