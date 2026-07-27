@@ -306,6 +306,22 @@ The locked bootstrap inheritance pass uses the same per-home changed-set and rer
 That live discovery starts from `state/*.meta` records with `kind=secondmate`; `data/secondmates.md` only backfills `home=` for older or incomplete meta records.
 Skipped items, such as a destination checkout that does not yet gitignore the item, are visible warnings but not hard failures.
 
+## Bridge inbox check (config/bridge-vessel / FM_BRIDGE_*)
+
+`bin/fm-watch.sh` can turn pending Bridge envelopes into durable `check:` wakes.
+The check is read-only: it fetches the Bridge clone's `origin/main` and reads `inbox/<vessel>/new/` from that fetched ref, never acknowledging, moving, or otherwise mutating an envelope, and never touching the clone's working tree.
+`bin/fm-bridge-inbox-lib.sh`'s header owns the exact detection, caching, and wake-publication mechanics.
+
+`FM_BRIDGE_VESSEL` selects one or more space-separated vessels, each watched independently, and falls through to the effective home's `config/bridge-vessel` when unset or empty.
+When neither is set the feature is silent and disabled: the watcher performs no fetch and no scan at all.
+A pre-existing single-vessel value keeps working unchanged, as a one-element list.
+`FM_BRIDGE_ROOT` selects the shared clone that every listed vessel reads from, and a home without that clone is treated exactly like an unconfigured one.
+
+A vessel wakes once per change to its pending mail rather than once per poll, and each vessel is independent, so one vessel's wake never suppresses or is suppressed by another's.
+`FM_BRIDGE_URGENT_CHECK_INTERVAL` tightens the shared Bridge fetch-and-check cadence whenever any one vessel's highest pending priority is `high` or `immediate`; it changes only the Bridge poll, never `FM_CHECK_INTERVAL` for the watcher's other slow checks.
+Every fetch and read is bounded by `FM_CHECK_TIMEOUT`.
+The wake reason is listed with the watcher's other reasons in `bin/fm-watch.sh`'s header.
+
 ## X mode (.env)
 
 X mode lets a firstmate instance answer public `@myfirstmate` mentions and act on normal reversible mention requests through firstmate's normal lifecycle.
@@ -487,6 +503,9 @@ FM_HEARTBEAT=600        # base seconds between heartbeat scans; no-change heartb
 FM_HEARTBEAT_MAX=7200   # heartbeat backoff cap
 FM_CHECK_INTERVAL=300   # seconds between slow checks (authenticated merge polls, custom checks, or X-mode dispatch)
 FM_CHECK_TIMEOUT=30     # seconds allowed per slow check script
+FM_BRIDGE_VESSEL=       # optional override for config/bridge-vessel; one or more space-separated vessels; absent disables Bridge inbox scanning
+FM_BRIDGE_ROOT=$FM_HOME/projects/coditan-bridge   # Bridge clone whose fetched origin/main ref the watcher reads
+FM_BRIDGE_URGENT_CHECK_INTERVAL=30   # Bridge-only cadence while any watched vessel's highest pending priority is high or immediate
 FM_PROCEVENT_MAX_OUTPUT_BYTES=1048576   # bound on one captured process-to-event result
 FM_PROCEVENT_CLAIM_ROOT=                # machine-wide source claim root; default $XDG_STATE_HOME/firstmate/procevent-claims
 FM_CODEX_WATCH_CHECKPOINT=180   # seconds per foreground watcher checkpoint in Codex primary supervision

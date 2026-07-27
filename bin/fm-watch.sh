@@ -51,6 +51,11 @@
 #   check: rejected unauthenticated PR poll retirement receipts: <paths>
 #                          invalid pending retirements were preserved without
 #                          running a check or removing poll artifacts
+#   check: bridge-inbox: bridge-inbox <vessel> pending=<n> highest=<priority>[; ...]
+#                          a watched Bridge vessel's fetched inbox tree carries
+#                          pending mail this watcher has not surfaced yet; read
+#                          only, on its own cadence, and silent while the tree is
+#                          unchanged (bin/fm-bridge-inbox-lib.sh)
 #   heartbeat              fleet-scan backstop found an unsurfaced captain-relevant
 #                          status, unless afk is active
 # For normal supervision, resume the session-start primary-harness protocol
@@ -113,6 +118,10 @@ HEARTBEAT=${FM_HEARTBEAT:-600}        # base seconds between heartbeat scans
 HEARTBEAT_MAX=${FM_HEARTBEAT_MAX:-7200}  # heartbeat backoff cap
 CHECK_INTERVAL=${FM_CHECK_INTERVAL:-300}  # seconds between *.check.sh sweeps
 CHECK_TIMEOUT=${FM_CHECK_TIMEOUT:-30}     # seconds allowed per *.check.sh
+# Read-only Bridge inbox detection and enqueue-before-marker deduplication.
+# Sourced AFTER CHECK_TIMEOUT so it inherits this cycle's bounded-read budget.
+# shellcheck source=bin/fm-bridge-inbox-lib.sh
+. "$SCRIPT_DIR/fm-bridge-inbox-lib.sh"
 SIGNAL_GRACE=${FM_SIGNAL_GRACE:-30}   # seconds to linger after a signal so trailing
                                       # signals (a status write, then the same turn's
                                       # turn-end hook) coalesce into one wake
@@ -858,6 +867,27 @@ while :; do
       wake "$reason"
     fi
     touch "$STATE/.last-check"
+  fi
+
+  # Read-only Bridge inbox poll, on its own cadence. Discovery fetches the
+  # shared clone and re-derives the interval no more often than the urgent
+  # interval, caching it so the cheap cycles in between never spawn a scan.
+  # A home with no configured vessel, or no Bridge clone, does neither.
+  if [ "${#BRIDGE_VESSELS[@]}" -eq 0 ] || [ ! -d "$BRIDGE_ROOT/.git" ]; then
+    bridge_interval=$CHECK_INTERVAL
+  elif [ "$(age_of "$STATE/.last-bridge-discovery")" -ge "$BRIDGE_URGENT_CHECK_INTERVAL" ]; then
+    bridge_inbox_fetch
+    bridge_interval=$(bridge_check_interval)
+    printf '%s' "$bridge_interval" > "$STATE/.bridge-interval-cache" 2>/dev/null || true
+    touch "$STATE/.last-bridge-discovery"
+  else
+    bridge_interval=$(cat "$STATE/.bridge-interval-cache" 2>/dev/null)
+    [ -n "$bridge_interval" ] || bridge_interval=$CHECK_INTERVAL
+  fi
+  if [ "$(age_of "$STATE/.last-bridge-check")" -ge "$bridge_interval" ]; then
+    reason=$(bridge_inbox_surface) || exit 1
+    touch "$STATE/.last-bridge-check"
+    [ -z "$reason" ] || wake "$reason"
   fi
 
   # On the first changed signal, linger one grace period and re-scan before
