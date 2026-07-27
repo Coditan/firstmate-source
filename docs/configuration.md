@@ -316,9 +316,11 @@ The check is read-only: it fetches the Bridge clone's `origin/main` and reads `i
 When neither is set the feature is silent and disabled: the watcher performs no fetch and no scan at all.
 A pre-existing single-vessel value keeps working unchanged, as a one-element list.
 `FM_BRIDGE_ROOT` selects the shared clone that every listed vessel reads from, and a home without that clone is treated exactly like an unconfigured one.
+The vessel list, the clone path, and the urgent interval are each resolved once at watcher start, so writing `config/bridge-vessel` or changing any `FM_BRIDGE_*` value while a watcher is already running takes effect only after that home-scoped watcher restarts, exactly like the `FM_CHECK_INTERVAL` transition below.
 
 A vessel wakes once per change to its pending mail rather than once per poll, and each vessel is independent, so one vessel's wake never suppresses or is suppressed by another's.
 `FM_BRIDGE_URGENT_CHECK_INTERVAL` tightens the shared Bridge fetch-and-check cadence whenever any one vessel's highest pending priority is `high` or `immediate`; it changes only the Bridge poll, never `FM_CHECK_INTERVAL` for the watcher's other slow checks.
+Reading an envelope's priority needs `jq`, which is not a universal toolchain requirement (see "Toolchain" above): without it every envelope counts as `normal`, so vessels still wake on new mail but the urgent cadence never engages.
 Every fetch and read is bounded by `FM_CHECK_TIMEOUT`.
 The wake reason is listed with the watcher's other reasons in `bin/fm-watch.sh`'s header.
 
