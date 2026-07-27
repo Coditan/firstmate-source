@@ -406,6 +406,54 @@ EOF
   assert_no_grep "$origin-decision-route" "$home/data/backlog.md" \
     "refused mixed-archive hold still created a fresh open decision"
 
+  home=$(make_home legacy-bullet-archive)
+  origin=sample-legacy-bullet-review
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Review legacy bullet sample decision" \
+    --kind scout --repo sample --start >/dev/null \
+    || fail "could not create legacy-bullet origin"
+  write_origin_meta "$home" "$origin"
+  printf 'decisions_reviewed=1\ndecision_keys=route\n' >> "$home/state/$origin.meta"
+  printf 'needs-decision [key=route]: choose route north or route south\n' \
+    > "$home/state/$origin.status"
+  printf '# Legacy bullet sample review\n\nThe route still needs a captain decision.\n' \
+    > "$home/data/$origin/report.md"
+  # tasks-axi still parses the older in-flight bullet form, and prune copies raw
+  # lines, so an unresolved entry can reach the archive as `- **<id>** - `.
+  cat > "$home/data/done-archive.md" <<EOF
+## Archived 2026-07-20
+- [x] $origin-decision-route - Choose the legacy sample route (repo: sample) (kind: captain)
+  Resolution recorded by fm-decision-hold.
+  Decision digest: 2222222222222222222222222222222222222222222222222222222222222222
+  Routed identities: sample-legacy-route
+
+  Captain decision:
+  Use route north for the legacy sample.
+
+  Routed work:
+  - sample-legacy-route
+
+## Archived 2026-07-27
+- **$origin-decision-route** - Choose the legacy sample route again (repo: sample) (kind: captain)
+  Origin: $origin
+  Decision key: route
+  State: awaiting captain decision.
+EOF
+  if run_decisions "$home" verify "$origin" \
+    > "$home/legacy-bullet-verify.out" 2> "$home/legacy-bullet-verify.err"; then
+    fail "a legacy-form archived entry was invisible and a stale resolution satisfied the gate"
+  fi
+  assert_grep "records no captain answer" "$home/legacy-bullet-verify.err" \
+    "legacy-form archived entry did not count as unresolved"
+  assert_grep "Choose the legacy sample route again" "$home/legacy-bullet-verify.err" \
+    "refusal did not name the legacy-form archived entry"
+  if run_teardown "$home" "$origin" \
+    > "$home/legacy-bullet-teardown.out" 2> "$home/legacy-bullet-teardown.err"; then
+    fail "cleanup accepted a stale resolution behind a legacy-form archived entry"
+  fi
+  assert_present "$home/state/$origin.meta" \
+    "refused legacy-bullet cleanup removed origin metadata"
+
   home=$(make_home scoped-archive-predicate)
   origin=sample-scoped-archive-review
   mkdir -p "$home/data/$origin"

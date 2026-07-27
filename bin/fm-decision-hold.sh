@@ -219,7 +219,8 @@ scan_archived_hold() {  # <hold-id> <all|any|unresolved>
       active = 0
     }
     function is_task_header(line) {
-      return line ~ /^- \[( |x)\] [A-Za-z0-9][A-Za-z0-9._-]* - /
+      if (line ~ /^- \[( |x)\] [A-Za-z0-9][A-Za-z0-9._-]* - /) return 1
+      return line ~ /^- \*\*[A-Za-z0-9][A-Za-z0-9._-]*\*\* - /
     }
     {
       line = $0
@@ -227,7 +228,8 @@ scan_archived_hold() {  # <hold-id> <all|any|unresolved>
       if (is_task_header(line)) {
         finish_entry()
         checked = index(line, "- [x] " target " - ") == 1
-        active = checked || index(line, "- [ ] " target " - ") == 1
+        active = checked || index(line, "- [ ] " target " - ") == 1 \
+          || index(line, "- **" target "** - ") == 1
         if (active) {
           captain = index(line, "(kind: captain)") > 0
           resolution = 0
