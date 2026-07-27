@@ -82,6 +82,9 @@ mkdir -p "$STATE"
 . "$SCRIPT_DIR/fm-x-lib.sh"
 # shellcheck source=bin/fm-check-lib.sh
 . "$SCRIPT_DIR/fm-check-lib.sh"
+# Every timed read this watcher makes is bounded by the one shared helper here.
+# shellcheck source=bin/fm-bounded-process-lib.sh
+. "$SCRIPT_DIR/fm-bounded-process-lib.sh"
 # Parent-owned secondmate missed-report guards: durable pending-reply
 # expectations created by fm-send on marked secondmate requests. The tick is
 # cheap when no records exist and never scrapes secondmate conversation.
@@ -517,23 +520,6 @@ procevent_surface_queued() {
   reason="check: process-event result captured:$PROCEVENT_SURFACED"
   FM_WAKE_POST_OUTPUT_ACTION=procevent_surface_after_output
   wake "$reason"
-}
-
-# The one bounded-child implementation in this tree: every timed read the
-# watcher makes runs through it, so the fallback's signal hardening (the same
-# handler on ALRM and on HUP/INT/TERM, tearing down the child's process group
-# instead of orphaning it) can never be half-present in a second copy.
-run_bounded_process() {  # <timeout-seconds> <command> [args...]
-  local t=$1
-  shift
-  if [ "${FM_CHECK_FORCE_FALLBACK:-0}" != 1 ] && command -v timeout >/dev/null 2>&1; then
-    exec timeout "$t" "$@"
-  elif [ "${FM_CHECK_FORCE_FALLBACK:-0}" != 1 ] && command -v gtimeout >/dev/null 2>&1; then
-    exec gtimeout "$t" "$@"
-  else
-    # shellcheck disable=SC2016  # single quotes are deliberate: Perl expands its own variables.
-    exec perl -e 'my $t = shift; my $owned = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setpgrp(0, 0) unless $owned; exec @ARGV } my $group = $owned ? getpgrp(0) : $pid; my $stop = sub { $SIG{HUP} = $SIG{INT} = $SIG{TERM} = "IGNORE"; kill "TERM", -$group; select undef, undef, undef, 0.2; kill "KILL", -$group; waitpid $pid, 0; exit 124 }; local $SIG{ALRM} = $stop; local $SIG{HUP} = $stop; local $SIG{INT} = $stop; local $SIG{TERM} = $stop; alarm $t; waitpid $pid, 0; exit($? >> 8)' "$t" "${FM_CHECK_OWNED_GROUP:-0}" "$@"
-  fi
 }
 
 run_check_process() {

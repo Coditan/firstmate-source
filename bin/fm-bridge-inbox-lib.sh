@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Shared read-only Bridge inbox detection and durable wake publication.
 #
-# Source after bin/fm-wake-lib.sh, which owns fm_wake_append, and from a caller
-# that owns run_bounded_process (bin/fm-watch.sh) - every Bridge read goes
-# through that one bounded-process helper rather than a private copy, so the
-# child's process group is torn down with the watcher on HUP/INT/TERM too.
+# Source after bin/fm-wake-lib.sh, which owns fm_wake_append. The bounded-child
+# helper every Bridge read goes through is required here directly rather than
+# expected from the caller, because a missing one would otherwise degrade into
+# every read timing out and every vessel being skipped in silence.
 #
 # bridge_inbox_surface
 #   Compares every watched vessel's fetched inbox tree against its own surfaced
@@ -28,6 +28,8 @@
 # or otherwise write an envelope: acknowledgement stays with the Bridge tooling.
 
 FM_BRIDGE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-bounded-process-lib.sh
+. "$FM_BRIDGE_LIB_DIR/fm-bounded-process-lib.sh"
 FM_BRIDGE_LIB_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$FM_BRIDGE_LIB_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_BRIDGE_LIB_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-${STATE:-$FM_HOME/state}}"
@@ -35,6 +37,9 @@ BRIDGE_CHECK_TIMEOUT=${FM_CHECK_TIMEOUT:-${CHECK_TIMEOUT:-30}}
 BRIDGE_CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 BRIDGE_ROOT=${FM_BRIDGE_ROOT:-${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}/coditan-bridge}
 BRIDGE_URGENT_CHECK_INTERVAL=${FM_BRIDGE_URGENT_CHECK_INTERVAL:-30}
+case "$BRIDGE_URGENT_CHECK_INTERVAL" in
+  ''|*[!0-9]*) BRIDGE_URGENT_CHECK_INTERVAL=30 ;;
+esac
 
 # read reports failure at EOF on a final line with no newline, having already
 # assigned it, so the vessel is taken from the variable rather than the status.

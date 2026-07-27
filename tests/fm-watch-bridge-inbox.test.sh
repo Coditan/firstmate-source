@@ -6,9 +6,10 @@
 # envelope producing exactly one durable check wake per inbox-tree signature;
 # silence for an empty, unchanged, or acknowledged inbox; per-vessel independence
 # in a multi-vessel list, including in an undrained queue; the urgent cadence
-# tightening only the Bridge poll and never freezing the fetch that advances
-# origin/main; the signature-keyed priority cache; and reads resolving against
-# the fetched origin/main rather than a stale working tree.
+# tightening only the Bridge poll, never freezing the fetch that advances
+# origin/main, and falling back to its default when set to a non-number; the
+# signature-keyed priority cache; and reads resolving against the fetched
+# origin/main rather than a stale working tree.
 #
 # Each case drives a real fm-watch.sh subprocess against a throwaway Bridge
 # clone, so the assertions are on observable watcher output plus durable state,
@@ -19,6 +20,7 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 WATCH="$ROOT/bin/fm-watch.sh"
+LIB="$ROOT/bin/fm-bridge-inbox-lib.sh"
 DRAIN="$ROOT/bin/fm-wake-drain.sh"
 TMP_ROOT=$(fm_test_tmproot fm-watch-bridge-inbox)
 fm_git_identity
@@ -428,6 +430,49 @@ test_priority_tightens_only_bridge_cadence() {
   pass "high-priority Bridge traffic tightens only the Bridge poll interval"
 }
 
+test_non_numeric_urgent_interval_falls_back_to_the_default() {
+  local home resolved interval
+  home=$(make_home bad-urgent)
+  write_envelope "$home" flash immediate
+
+  resolved=$(
+    # shellcheck disable=SC2016
+    FM_HOME="$home" FM_BRIDGE_URGENT_CHECK_INTERVAL=30s \
+      bash -c '. "$1"; printf "%s" "$BRIDGE_URGENT_CHECK_INTERVAL"' _ "$WATCH"
+  )
+  [ "$resolved" = 30 ] || \
+    fail "a non-numeric FM_BRIDGE_URGENT_CHECK_INTERVAL reached the interval comparisons: '$resolved'"
+
+  # Every consumer of the interval must see a number, or the arithmetic tests it
+  # feeds error out on each poll cycle instead of tightening the cadence.
+  interval=$(
+    # shellcheck disable=SC2016
+    FM_HOME="$home" FM_CHECK_INTERVAL=300 FM_BRIDGE_URGENT_CHECK_INTERVAL=30s \
+      bash -c '. "$1"; bridge_check_interval' _ "$WATCH" 2>/dev/null
+  )
+  [ "$interval" = 30 ] || \
+    fail "urgent tightening did not fall back to the documented default: $interval"
+  pass "a non-numeric urgent interval falls back to the documented default rather than propagating"
+}
+
+test_library_carries_its_own_bounded_reader() {
+  local home sig
+  # Sourced on its own, without the watcher: a bounded-child helper expected
+  # from the caller instead of required here would leave every read reporting a
+  # timeout and every vessel silently skipped.
+  home=$(make_home standalone-lib)
+  write_envelope "$home" solo normal
+
+  sig=$(
+    # shellcheck disable=SC2016
+    FM_HOME="$home" bash -c '. "$1"; bridge_inbox_signature' _ "$LIB"
+  )
+  case "$sig" in
+    timeout|empty|'') fail "the library sourced on its own could not complete a bounded Bridge read: '$sig'" ;;
+  esac
+  pass "the library sources the bounded-child helper it needs instead of expecting it from a caller"
+}
+
 test_multi_vessel_cadence_reflects_any_vessel() {
   local home interval
   home=$(make_home multi-cadence captain)
@@ -594,6 +639,8 @@ test_bridge_inbox_surfaces_each_signature_once
 test_multi_vessel_each_surfaces_independently
 test_multi_vessel_wakes_survive_an_undrained_queue
 test_priority_tightens_only_bridge_cadence
+test_non_numeric_urgent_interval_falls_back_to_the_default
+test_library_carries_its_own_bounded_reader
 test_multi_vessel_cadence_reflects_any_vessel
 test_cache_skips_rescan_when_unchanged
 test_inplace_edit_invalidates_cache
