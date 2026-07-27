@@ -130,7 +130,8 @@ Silence from a checking tool is not evidence of a clean file, and a gate that pa
 ## Rejected versus could not verify
 
 The two refusals are told apart deliberately, and both fail closed.
-`REJECTED` (exit 1) means the reader's output positively named a document problem, which includes a non-PDF file and a truncated one, because the real reader names those.
+`REJECTED` (exit 1) means the reader's output positively named a document problem, or the gate itself found no readable, non-empty file to hand over.
+A damaged file - a truncated document, or one that is not a PDF at all - is normally named by the reader and lands here, but which of the two refusals it draws follows the installed reader's wording and is deliberately not pinned (see "Proof in both directions").
 `CANNOT VERIFY` (exit 3) means the check did not happen: no reader, a reader that exited non-zero without naming a document problem, or a reader that printed nothing recognizable.
 That second class carries the reader's own message verbatim, so the failure is attributable.
 
@@ -161,6 +162,7 @@ A developer run without Ghostscript skips, as it does for every other optional-t
 Any path that generates a PDF finishes through `bin/fm-pdf-finish.sh` rather than writing its output file directly, and passes `--pages` whenever the expected length is known.
 Use `bin/fm-pdf-verify.sh` on its own only to audit a file that already exists.
 Both treat any non-zero exit as a failure, including exit 3, which means the check could not be performed.
+Both need Ghostscript on the machine that generates, resolved through `FM_PDF_GS` and defaulting to `gs`; when it is absent they refuse with exit 3 and publish nothing rather than falling back to an unchecked file.
 
 The failing document was assembled by splitting a browser-printed file and reuniting it, because the browser draws the page footer on the cover as well and the cover has to come from a separate footerless print.
 That shape is fine; only the reassembly tool was wrong.
