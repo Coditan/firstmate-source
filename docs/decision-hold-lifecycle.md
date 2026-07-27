@@ -11,7 +11,7 @@ It never reads report bodies, review artifacts, terminal output, or chat.
 
 The `hold` subcommand maps an originating work id and stable decision key to `<origin-id>-decision-<decision-key>`.
 It creates a kind `captain` backlog item when absent and invokes `tasks-axi hold <id> --reason <reason> --kind captain` on every retry.
-It rejects an identity collision, a changed title, and attempts to reopen an already resolved identity.
+It rejects an identity collision, a changed title, and attempts to reopen an already resolved identity, including one that retention has already moved into the archive.
 
 The `complete` subcommand unions the reviewed keys into `decision_keys=` and appends `decisions_reviewed=1` while originating task metadata is live.
 A post-teardown visual review can complete against the surviving report and durable holds without recreating volatile task metadata.
@@ -22,6 +22,11 @@ For an open keyed status decision, it appends a `captain-held [key=<key>]: ...` 
 
 Scout teardown calls the script's read-only `verify` subcommand after checking for the report and before removing any source state.
 The `--force` path remains the explicit captain-approved discard escape hatch.
+
+When an identity is no longer in the live backlog, `complete` and `verify` fall back to `data/done-archive.md`, where retention moves Done work.
+That archive record satisfies the gate only when every archived entry under the identity is a completed kind `captain` item carrying both the recorded resolution and its routed work, so a stale resolution can never vouch for a later decision that reused the same key.
+An entry that is still open, is not kind `captain`, or lacks either marker refuses, which keeps the gate fail-closed.
+The archive path is pinned to `data/done-archive.md` rather than resolved from tasks-axi configuration; repointing `markdown.archive` or moving `FM_DATA_OVERRIDE` away from `$FM_HOME/data` refuses cleanup rather than accepting it wrongly.
 
 The `resolve` subcommand requires a decision file and at least one existing dependent task whose structured `blocked-by` edge points to the hold.
 It records the decision digest and routed task identities as a retry identity in the hold body, clears each dependency edge through tasks-axi, and marks the hold Done only after those writes succeed.
@@ -43,11 +48,13 @@ The projection remains read-only and does not inspect historical prose.
 Verification date: 2026-07-14.
 Additional quoted `blocked_by` regression verification date: 2026-07-17.
 Plural blocker-readiness and mixed-home projection verification date: 2026-07-22.
+Archived-resolution fallback verification date: 2026-07-27.
 
 The focused end-to-end regression uses only synthetic `sample` identities and decision text.
 It begins with a completed investigation and visual review whose genuine unresolved choice exists only in the report.
 The initial Bearings snapshot correctly has no open decision, and the new teardown gate refuses to erase the source.
 A later regression covers tasks-axi's quoted multi-entry `blocked_by` output so `resolve` matches the first, middle, and last ids and rejects a genuinely absent id.
+A further regression resolves a hold, rotates it into the archive with `tasks-axi prune`, and proves cleanup then succeeds while the same identity can no longer be reopened, and that a reused identity, a completed captain entry with no recorded resolution, and a still-open archive lookalike each still refuse.
 
 The final verification commands and their exact summarized outputs follow.
 
@@ -55,6 +62,7 @@ The final verification commands and their exact summarized outputs follow.
 $ bash tests/fm-decision-hold-lifecycle.test.sh
 ok - report-only unresolved decision is reproduced and completion refuses before loss
 ok - non-forced scout teardown always requires durable inventory verification
+ok - resolved archived holds satisfy cleanup while reused, unresolved, and missing holds still refuse
 ok - captain holds are idempotent, distinct, teardown-safe, Bearings-visible, and durably routed before close
 ok - completion and verification validate origins before constructing paths
 ok - ended visual review follows the same decision-hold completion owner

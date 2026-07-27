@@ -12,7 +12,9 @@
 #
 # A hold identity is <origin-id>-decision-<decision-key>. Origin ids and decision
 # keys must already be privacy-safe slugs. Repeating `hold` with the same identity
-# is idempotent. A different decision key creates a different backlog identity.
+# is idempotent. A different decision key creates a different backlog identity. An
+# identity already durably resolved, in the live backlog or in data/done-archive.md,
+# is never reopened.
 # All backlog mutations run in the active FM_HOME, which keeps main-home and
 # secondmate-home ownership aligned with the work that discovered the decision.
 #
@@ -32,7 +34,8 @@
 # complete against the surviving report and holds without recreating task state.
 # `verify` is read-only and is called by scout teardown so teardown cannot erase a
 # source before this gate has succeeded. A resolved captain hold that retention
-# moved into data/done-archive.md remains a durable completion record.
+# moved into data/done-archive.md remains a durable completion record, but only
+# while every archived entry under that identity is itself a resolved captain hold.
 #
 # `resolve` requires every --routed-to task to exist and to be blocked by the hold.
 # It writes the captain decision and routed identities into the hold body, clears
@@ -185,12 +188,24 @@ verify_hold_resolved() {  # <hold-id>
   return 1
 }
 
+# The archive location is pinned rather than read from tasks-axi configuration.
+# That is correct only because the tracked root .tasks.toml pins
+# archive = "data/done-archive.md" and every fleet home is a checkout carrying it.
+# It diverges if markdown.archive is repointed or if FM_DATA_OVERRIDE moves away
+# from $FM_HOME/data, because tasks-axi resolves the archive relative to $FM_HOME.
+# The divergence is fail-closed: cleanup is refused, never wrongly accepted.
 archived_hold_resolved() {  # <hold-id>
   local id=$1 archive="$DATA/done-archive.md"
   [ -f "$archive" ] || return 1
+  # Every archived entry under this identity must be a resolved captain hold. A
+  # single unresolved entry refuses, so a stale resolution can never vouch for a
+  # later decision that reused the same key.
   awk -v target="$id" '
-    function finish_task() {
-      if (active && captain && resolution && routed) valid = 1
+    function finish_entry() {
+      if (active) {
+        matched = 1
+        if (!(checked && captain && resolution && routed)) unresolved = 1
+      }
       active = 0
     }
     function is_task_header(line) {
@@ -200,8 +215,9 @@ archived_hold_resolved() {  # <hold-id>
       line = $0
       sub(/\r$/, "", line)
       if (is_task_header(line)) {
-        finish_task()
-        active = index(line, "- [x] " target " - ") == 1
+        finish_entry()
+        checked = index(line, "- [x] " target " - ") == 1
+        active = checked || index(line, "- [ ] " target " - ") == 1
         if (active) {
           captain = index(line, "(kind: captain)") > 0
           resolution = 0
@@ -211,17 +227,17 @@ archived_hold_resolved() {  # <hold-id>
       }
       if (active && line == "  Resolution recorded by fm-decision-hold.") resolution = 1
       if (active && index(line, "  Routed work:") == 1) routed = 1
-      if (active && line != "" && index(line, "  ") != 1) finish_task()
+      if (active && line != "" && index(line, "  ") != 1) finish_entry()
     }
     END {
-      finish_task()
-      exit(valid ? 0 : 1)
+      finish_entry()
+      exit(matched && !unresolved ? 0 : 1)
     }
   ' "$archive"
 }
 
 verify_hold_durable() {  # <hold-id>
-  local id=$1 show state held kind hold_kind body
+  local id=$1 show state held kind hold_kind
   if ! show=$(task_show "$id"); then
     archived_hold_resolved "$id" && return 0
     fail "captain decision $id is absent from $FM_HOME/data/backlog.md and has no resolved record in $DATA/done-archive.md"
@@ -230,14 +246,11 @@ verify_hold_durable() {  # <hold-id>
   held=$(show_field "$show" held)
   kind=$(show_field "$show" kind)
   hold_kind=$(show_field "$show" hold_kind)
-  body=$(show_field "$show" body)
   if [ "$state" = queued ] && [ "$held" = yes ] && [ "$kind" = captain ] && [ "$hold_kind" = captain ]; then
     return 0
   fi
-  if [ "$state" = "done" ] && [ "$kind" = captain ]; then
-    case "$body" in
-      *"Resolution recorded by fm-decision-hold."*"Routed work:"*) return 0 ;;
-    esac
+  if verify_hold_resolved "$id"; then
+    return 0
   fi
   fail "captain decision $id is neither actively held nor durably resolved"
 }
@@ -296,6 +309,9 @@ command_hold() {
     [ "$kind" = captain ] || fail "existing backlog identity $id is not kind captain"
     [ "$existing_title" = "$title" ] || fail "existing captain hold $id has a different title"
   else
+    if archived_hold_resolved "$id"; then
+      fail "captain decision $id is already durably resolved in $DATA/done-archive.md; use a new decision key for a new decision"
+    fi
     if [ -z "$repo" ] && [ -f "$STATE/$origin.meta" ]; then
       repo=$(meta_value "$STATE/$origin.meta" project)
       repo=${repo%/}
