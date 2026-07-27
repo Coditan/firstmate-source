@@ -363,6 +363,16 @@ test_judge_without_a_verdict_offers_a_recorded_rejudge() {
   say_status "$home" rj-b 'done: b finished'
   out=$(run_panel "$home" advance rj) || fail "advance failed: $out"
 
+  # A judge that still looks live must not be superseded out from under itself.
+  out=$(run_panel "$home" advance rj --rejudge) || status=$?
+  expect_code 2 "$status" "re-judging a judge that still looks live must be refused"
+  assert_contains "$out" "rj-judge" "the refusal must name the judge it will not replace"
+  assert_contains "$out" "appears to be running" "the refusal must say why it refuses"
+  assert_contains "$out" "tear it down" "the refusal must name what the operator can do instead"
+  assert_not_contains "$(spawn_log "$home")" "rj-judge2" "a refused re-judge must dispatch nothing"
+  assert_no_grep 'superseded_judges' "$home/data/rj/panel.meta" "a refused re-judge must record nothing"
+  assert_grep 'judge_task=rj-judge' "$home/data/rj/panel.meta" "a refused re-judge must leave the judge in place"
+
   # The judge dies without a verdict. The evidence is complete and untouched, so
   # this must not discard two finished investigations.
   say_status "$home" rj-judge 'failed: ran out of budget'
@@ -399,6 +409,39 @@ test_judge_without_a_verdict_offers_a_recorded_rejudge() {
     "the replacement judge must be able to complete the panel"
   assert_not_contains "$out" "CAVEAT" "a replaced judge is not an accepted-unfinished one"
   pass "a judge that leaves no verdict is replaced by an explicit recorded re-judge"
+}
+
+test_rejudge_replaces_a_torn_down_judge_and_records_only_after_dispatch() {
+  local home out status=0
+  home=$(new_home rejudge-torndown "$TWO_MODELS")
+  out=$(run_panel "$home" start --id rf --project "$home/subject" "Anything?") \
+    || fail "start failed: $out"
+  printf 'analyst a findings\n' > "$home/data/rf-a/report.md"
+  printf 'analyst b findings\n' > "$home/data/rf-b/report.md"
+  say_status "$home" rf-a 'done: a finished'
+  say_status "$home" rf-b 'done: b finished'
+  out=$(run_panel "$home" advance rf) || fail "advance failed: $out"
+
+  # Real teardown removes the status file and the runtime record together, so a
+  # torn-down judge has neither. It must still be replaceable: a precondition
+  # that required the status file would make it unreplaceable forever.
+  rm -f "$home/state/rf-judge.status" "$home/state/rf-judge.meta"
+
+  # A replacement whose dispatch fails must leave the record exactly as it was.
+  out=$(FM_FAKE_SPAWN_FAIL_ID=rf-judge2 run_panel "$home" advance rf --rejudge) || status=$?
+  [ "$status" -ne 0 ] || fail "a failed replacement dispatch must not report success"
+  assert_no_grep 'superseded_judges' "$home/data/rf/panel.meta" \
+    "a failed replacement dispatch must not record a supersede that did not happen"
+  assert_grep 'judge_task=rf-judge' "$home/data/rf/panel.meta" \
+    "a failed replacement dispatch must leave judge_task naming the original judge"
+
+  out=$(run_panel "$home" advance rf --rejudge) || fail "rejudge of a torn-down judge failed: $out"
+  assert_contains "$(spawn_log "$home")" "rf-judge2 " "a torn-down judge must be replaceable"
+  assert_grep 'judge_task=rf-judge2' "$home/data/rf/panel.meta" "the record does not point at the replacement judge"
+  assert_grep 'superseded_judges=rf-judge' "$home/data/rf/panel.meta" "the superseded judge was not recorded"
+  assert_no_grep 'accepted_unfinished' "$home/data/rf/panel.meta" \
+    "replacing a torn-down judge must not stamp any report"
+  pass "a torn-down judge is replaceable, and the record is written only after the dispatch succeeds"
 }
 
 test_generated_task_ids_stay_within_the_task_id_limit() {
@@ -673,6 +716,7 @@ test_judge_waits_for_every_report_then_gets_both
 test_terminal_member_without_a_report_stands_the_panel_down
 test_readiness_latch_survives_teardown
 test_judge_without_a_verdict_offers_a_recorded_rejudge
+test_rejudge_replaces_a_torn_down_judge_and_records_only_after_dispatch
 test_generated_task_ids_stay_within_the_task_id_limit
 test_accepted_judge_caveat_repeats_on_every_complete
 test_acceptance_is_not_recorded_when_the_stage_cannot_use_it

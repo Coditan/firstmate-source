@@ -72,9 +72,13 @@
 #                         replacement judge over the existing, unchanged analyst
 #                         reports after the current judge ended without writing a
 #                         verdict. Explicit and recorded, never automatic: the
-#                         superseded judge task is written to the panel record,
-#                         and no report is stamped incomplete by it. It refuses
-#                         when the judge did leave a verdict.
+#                         superseded judge task is written to the panel record
+#                         after the replacement is dispatched, and no report is
+#                         stamped incomplete by it. It refuses when the judge did
+#                         leave a verdict, and while the judge still LOOKS LIVE:
+#                         a runtime record with no terminal status event yet. A
+#                         judge with a terminal event, or one whose runtime record
+#                         is gone, can be replaced.
 #   --dry-run             with `start`, resolve and print the lineup without
 #                         writing or dispatching anything.
 #
@@ -127,7 +131,10 @@
 # time `advance` observes both conditions for a member, that readiness is written
 # to `ready_members` in data/<panel-id>/panel.meta, which does survive teardown,
 # and every later invocation trusts the latch. Do not re-derive readiness from
-# state/ alone.
+# state/ alone. A narrow window remains: a member torn down before any `advance`
+# observed it is never latched, so it can still be classified `unsignalled-gone`
+# and stamped `accepted_unfinished` on a complete report, which is an accepted
+# bounded tradeoff of this design.
 #
 # That gate can WEDGE, and the escape from it is deliberately manual and
 # deliberately narrow. Writing the report and appending the terminal line are two
@@ -1102,21 +1109,31 @@ cmd_advance() {
       "${accept[*]}"
   fi
 
-  local gate=0
+  local gate=0 superseded='' superseded_of=''
   if [ "$rejudge" -eq 1 ]; then
     [ "$stage" = judge ] \
       || die "--rejudge replaces a judge that was dispatched and left no verdict, but panel '$panel_id' is at stage '$stage'" 2
     [ ! -s "$report_judge" ] \
       || die "$id_judge left a verdict at $report_judge, so there is nothing to re-judge; discarding a written verdict is not this command's job" 2
-    local superseded
+    # Refused only while the judge still LOOKS live. Requiring a terminal event
+    # outright would make a torn-down judge unreplaceable forever, because
+    # teardown removes the status file that would prove it.
+    if member_still_present "$id_judge" && ! status_has_finished_event "$STATE/$id_judge.status"; then
+      printf 'error: %s still has a runtime record and has written no terminal status event, so it appears to be running and may still be writing its verdict.\n' "$id_judge" >&2
+      printf '  Wait for it to append done: or failed:, and re-run --rejudge if it finishes without a verdict.\n' >&2
+      printf '  If you know it is dead, tear it down first; a judge with no runtime record can be replaced immediately.\n' >&2
+      exit 2
+    fi
     superseded=$(panel_meta_get "$meta" superseded_judges)
     local replacement
     replacement=$(panel_next_judge_id "$panel_id" "$superseded")
-    [ ! -e "$DATA/$replacement" ] \
-      || die "the replacement judge task $replacement already has a data directory; reconcile it before re-judging"
-    panel_meta_set "$meta" superseded_judges "${superseded:+$superseded }$id_judge"
-    panel_meta_set "$meta" judge_task "$replacement"
-    printf 'panel: %s is superseded; dispatching %s over the same unchanged analyst reports\n' "$id_judge" "$replacement"
+    # A directory left by a failed replacement dispatch is ours to reuse, on the
+    # same terms as the judge path below: only a report or a runtime record means
+    # the id is genuinely taken.
+    [ ! -s "$DATA/$replacement/report.md" ] \
+      || die "the replacement judge task $replacement already has a report at $DATA/$replacement/report.md; reconcile it before re-judging"
+    printf 'panel: replacing %s with %s over the same unchanged analyst reports\n' "$id_judge" "$replacement"
+    superseded_of=$id_judge
     id_judge=$replacement
     report_judge="$DATA/$id_judge/report.md"
   elif [ "$stage" = judge ]; then
@@ -1173,6 +1190,10 @@ cmd_advance() {
   scaffold_scout_brief "$id_judge" "$(basename "$project")" "$task_judge"
   dispatch_scout "$id_judge" "$project" "$profile_judge" \
     || die "could not dispatch the judge ($id_judge); every analyst report is still in place, so this is safe to retry"
+  if [ -n "$superseded_of" ]; then
+    panel_meta_set "$meta" superseded_judges "${superseded:+$superseded }$superseded_of"
+    panel_meta_set "$meta" judge_task "$id_judge"
+  fi
   panel_meta_set "$meta" stage judge
   panel_next_hint "$panel_id" "once the judge reports done"
 }
