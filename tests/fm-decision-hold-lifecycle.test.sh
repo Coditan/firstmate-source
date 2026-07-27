@@ -388,8 +388,14 @@ EOF
     > "$home/stale-reuse-verify.out" 2> "$home/stale-reuse-verify.err"; then
     fail "a stale archived resolution vouched for a later unresolved decision under the same key"
   fi
-  assert_grep "has no resolved record" "$home/stale-reuse-verify.err" \
+  assert_grep "records no captain answer" "$home/stale-reuse-verify.err" \
     "reused decision identity did not retain the fail-closed refusal"
+  assert_grep "Choose the stale sample route again" "$home/stale-reuse-verify.err" \
+    "refusal did not name the archived entry that blocked the identity"
+  assert_grep "$home/data/done-archive.md:14:" "$home/stale-reuse-verify.err" \
+    "refusal did not locate the blocking archived entry"
+  assert_grep "recovery:" "$home/stale-reuse-verify.err" \
+    "refusal did not state how to repair the permanent lockout"
   if run_decisions "$home" hold "$origin" route \
     --title "Choose the stale sample route again" --reason "captain route choice pending" --repo sample \
     > "$home/stale-reuse-hold.out" 2> "$home/stale-reuse-hold.err"; then
@@ -463,14 +469,35 @@ EOF
     > "$home/checked-lookalike-verify.out" 2> "$home/checked-lookalike-verify.err"; then
     fail "verification accepted a checked archived captain item with no recorded resolution"
   fi
-  assert_grep "has no resolved record" "$home/checked-lookalike-verify.err" \
+  assert_grep "records no captain answer" "$home/checked-lookalike-verify.err" \
     "checked unresolved archive lookalike did not retain the fail-closed refusal"
+  assert_grep "Choose the lookalike sample route" "$home/checked-lookalike-verify.err" \
+    "refusal did not name the checked unresolved archived entry"
   if run_teardown "$home" "$origin" \
     > "$home/checked-lookalike-teardown.out" 2> "$home/checked-lookalike-teardown.err"; then
     fail "cleanup accepted a checked archived captain item with no recorded resolution"
   fi
   assert_present "$home/state/$origin.meta" \
     "refused checked-lookalike cleanup removed origin metadata"
+
+  home=$(make_home no-archived-record)
+  origin=sample-no-archive-review
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Review unarchived sample decision" \
+    --kind scout --repo sample --start >/dev/null \
+    || fail "could not create no-archive origin"
+  write_origin_meta "$home" "$origin"
+  printf 'decisions_reviewed=1\ndecision_keys=route\n' >> "$home/state/$origin.meta"
+  printf 'needs-decision [key=route]: choose route north or route south\n' \
+    > "$home/state/$origin.status"
+  printf '# Unarchived sample review\n\nThe route still needs a captain decision.\n' \
+    > "$home/data/$origin/report.md"
+  if run_decisions "$home" verify "$origin" \
+    > "$home/no-archive-verify.out" 2> "$home/no-archive-verify.err"; then
+    fail "verification accepted a decision with no live and no archived record"
+  fi
+  assert_grep "has no resolved record" "$home/no-archive-verify.err" \
+    "an identity absent from both the backlog and the archive lost its refusal"
 
   home=$(make_home missing-open-hold)
   origin=sample-missing-open-review
@@ -497,6 +524,8 @@ EOF
   fi
   assert_grep "is absent from $home/data/backlog.md" "$home/missing-open-verify.err" \
     "missing open decision did not retain the fail-closed refusal"
+  assert_grep "Choose the missing sample route" "$home/missing-open-verify.err" \
+    "refusal did not name the still-open archived entry"
   if run_teardown "$home" "$origin" \
     > "$home/missing-open-teardown.out" 2> "$home/missing-open-teardown.err"; then
     fail "cleanup accepted an open decision missing from the live backlog"

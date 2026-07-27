@@ -28,6 +28,9 @@ That archive record satisfies the gate only when every archived entry under the 
 An entry that is still open, is not kind `captain`, or lacks either marker refuses, which keeps the gate fail-closed.
 Both questions are scoped to the one identity, so an unresolved entry for a different decision never affects it.
 The `hold` reopen guard reads the same archive with the opposite question — whether *any* archived entry under the identity already carries a resolution — so a mixed archive still refuses to reopen a decision the captain has answered.
+When an archived entry is what refuses, the message names that entry by archive path and line and states the repair, so a permanent refusal explains itself instead of reading as an unexplained gate failure.
+An accepted limitation follows from the all-resolved question: one identity carrying both a resolved and an unresolved archived entry stays refused until an operator repairs the archive.
+Reaching that state needs a manual `tasks-axi prune --state queued` or a hand edit, since retention runs `tasks-axi done --keep <n>` over the Done section only, and the lockout is preferred over trusting chronological append order in exactly the hand-edited case that produces it.
 The archive path is pinned to `data/done-archive.md` rather than resolved from tasks-axi configuration; repointing `markdown.archive` or moving `FM_DATA_OVERRIDE` away from `$FM_HOME/data` refuses cleanup rather than accepting it wrongly.
 
 The `resolve` subcommand requires a decision file and at least one existing dependent task whose structured `blocked-by` edge points to the hold.
@@ -58,6 +61,7 @@ The initial Bearings snapshot correctly has no open decision, and the new teardo
 A later regression covers tasks-axi's quoted multi-entry `blocked_by` output so `resolve` matches the first, middle, and last ids and rejects a genuinely absent id.
 A further regression resolves a hold, rotates it into the archive with `tasks-axi prune`, and proves cleanup then succeeds while the same identity can no longer be reopened, and that a reused identity, a completed captain entry with no recorded resolution, and a still-open archive lookalike each still refuse.
 It also covers a mixed archive in both directions: an identity carrying both a resolved and an unresolved entry still refuses to reopen, and a genuinely resolved identity still satisfies the gate when an unrelated identity's unresolved entry sits in the same archive.
+Each archive-driven refusal asserts that the message names the blocking entry and its repair, and an identity absent from both the backlog and the archive keeps its own distinct refusal.
 
 The final verification commands and their exact summarized outputs follow.
 
