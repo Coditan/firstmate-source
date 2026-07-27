@@ -192,8 +192,8 @@ Teardown removes a pre-upgrade worktree's legacy `.claude/settings.local.json` h
 Every inconclusive git answer - no git, not a work tree, a transient failure - keeps the file, so the failure direction is never the data loss this rename exists to prevent.
 A repository-tracked copy is left untouched for the same reason.
 
-Firstmate deliberately does not track `.claude/settings.local.json` anywhere.
-`bin/fm-ff-lib.sh`'s `dirty_status` refuses to fast-forward any dirty checkout, and Claude Code rewrites that path at runtime, so a tracked copy would freeze self-update across the fleet one vessel at a time.
+Firstmate deliberately does not track `.claude/settings.local.json` anywhere, and the tracked root `.gitignore` now also keeps it and its sibling harness runtime artifacts out of a checkout's porcelain status.
+[configuration.md](configuration.md) "Operational home layout and state" owns that contract and the self-update reason behind it; `tests/fm-runtime-ignore.test.sh` regresses it.
 
 ## Tests
 
