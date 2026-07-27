@@ -82,7 +82,7 @@ Say so when relaying the verdict, because a panel completed over an unfinished r
 
 ## When an analyst finishes without a report
 
-`advance` prints a `stood down:` block and exits 1 when an ANALYST ends with a terminal status event and no report at all.
+`advance` prints a `stood down:` block and exits 1 when an ANALYST stops writing without leaving a report, either by ending with a terminal status event or by losing its runtime record.
 That member has stopped writing, so no report can arrive, and the panel cannot produce a verdict.
 
 Stand the panel down and tell the captain it produced nothing.
@@ -91,11 +91,12 @@ If the captain still wants the surviving analysis, that is a NEW single-analyst 
 
 ## When the judge finishes without a verdict
 
-`advance` prints a `verdict lost:` block when the JUDGE ends with a terminal status event and no report.
+`advance` prints a `verdict lost:` block when the JUDGE stops writing without leaving a report, either by ending with a terminal status event or by losing its runtime record.
 This is not a dead panel: both analyst reports are complete and untouched, and only the adjudication is missing, so the formation is intact.
 
 Run `bin/fm-model-panel.sh advance <panel-id> --rejudge` to dispatch one replacement judge over those same unchanged reports.
 The superseded judge task is recorded in the panel record, no report is stamped incomplete by it, and nothing re-dispatches on its own.
+A judge that still holds its runtime record and has written nothing is indistinguishable from one that is working, so `advance` prints the plain `waiting:` line and `--rejudge` refuses; if you know that judge is dead, such as one killed by a harness crash that left its runtime record behind, tear it down first and then `--rejudge`, which is permitted once the record is gone.
 Mention when relaying that the verdict came from a replacement judge, because the captain is entitled to know a judge was lost.
 
 ## When the panel cannot be a panel

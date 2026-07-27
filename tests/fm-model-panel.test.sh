@@ -312,6 +312,64 @@ test_terminal_member_without_a_report_stands_the_panel_down() {
   pass "a member that finishes with no report stands the panel down, durably and unwaivably"
 }
 
+test_gone_analyst_with_nothing_stands_the_panel_down() {
+  local home out status=0
+  home=$(new_home gone-empty "$TWO_MODELS")
+  out=$(run_panel "$home" start --id ge --project "$home/subject" "Anything?") \
+    || fail "start failed: $out"
+
+  # Both analysts were just dispatched and still hold their runtime records, so
+  # this is the ordinary early window and must stay a plain wait.
+  out=$(run_panel "$home" advance ge) || fail "advance failed: $out"
+  assert_contains "$out" "waiting:" "a member that has only just started must still be a plain wait"
+  assert_not_contains "$out" "stood down:" "the early window must not be mistaken for a member that is gone"
+  assert_not_contains "$out" "--accept-unfinished" "the early window must not advertise the override"
+
+  # Analyst B is torn down before writing anything, and teardown removes its
+  # status file and runtime record together, so nothing further can ever arrive.
+  printf 'analyst a findings\n' > "$home/data/ge-a/report.md"
+  say_status "$home" ge-a 'done: a finished'
+  rm -f "$home/state/ge-b.status" "$home/state/ge-b.meta"
+  out=$(run_panel "$home" advance ge) || status=$?
+  [ "$status" -ne 0 ] || fail "a panel whose analyst is gone with nothing must not report success"
+  assert_contains "$out" "stood down:" "a gone analyst that produced nothing must not wait forever"
+  assert_contains "$out" "ge-b" "the stand-down must name the analyst that produced nothing"
+  assert_not_contains "$out" "next step is" "a dead panel must not hint at a next advance"
+  assert_grep 'stage=stood-down' "$home/data/ge/panel.meta" "the dead panel was not recorded durably"
+  assert_grep 'stood_down=ge-b' "$home/data/ge/panel.meta" "the record does not name the member that killed the panel"
+  assert_not_contains "$(spawn_log "$home")" "ge-judge" "a stood-down panel must never dispatch a judge"
+  pass "an analyst that is gone having produced nothing stands the panel down instead of waiting forever"
+}
+
+test_gone_judge_with_nothing_offers_the_rejudge() {
+  local home out
+  home=$(new_home gone-judge "$TWO_MODELS")
+  out=$(run_panel "$home" start --id gj --project "$home/subject" "Anything?") \
+    || fail "start failed: $out"
+  printf 'analyst a findings\n' > "$home/data/gj-a/report.md"
+  printf 'analyst b findings\n' > "$home/data/gj-b/report.md"
+  say_status "$home" gj-a 'done: a finished'
+  say_status "$home" gj-b 'done: b finished'
+  out=$(run_panel "$home" advance gj) || fail "advance failed: $out"
+
+  # The judge is torn down before writing anything. The evidence is intact, so
+  # this is the same lost verdict as a judge that declared itself finished.
+  rm -f "$home/state/gj-judge.status" "$home/state/gj-judge.meta"
+  out=$(run_panel "$home" advance gj) \
+    || fail "a panel that only lost its verdict must not report failure: $out"
+  assert_contains "$out" "verdict lost:" "a gone judge that produced nothing must be offered the re-judge"
+  assert_not_contains "$out" "stood down:" "a healthy panel must not be stood down over its judge"
+  assert_contains "$out" "advance gj --rejudge" "the block must print the exact re-judge command"
+  assert_no_grep 'stage=stood-down' "$home/data/gj/panel.meta" "a healthy panel must not be recorded dead"
+
+  out=$(run_panel "$home" advance gj --rejudge) || fail "the re-judge must be permitted for a gone judge: $out"
+  assert_contains "$(spawn_log "$home")" "gj-judge2 " "the offered re-judge must actually dispatch"
+  assert_grep 'superseded_judges=gj-judge' "$home/data/gj/panel.meta" "the superseded judge was not recorded"
+  assert_no_grep 'accepted_unfinished' "$home/data/gj/panel.meta" \
+    "replacing a gone judge must not stamp the analysts' complete reports"
+  pass "a judge that is gone having produced nothing is offered the re-judge the state actually permits"
+}
+
 test_readiness_latch_survives_teardown() {
   local home out status=0
   home=$(new_home latch "$TWO_MODELS")
@@ -714,6 +772,8 @@ test_reduced_form_is_named_not_a_panel
 test_analyst_briefs_share_the_question_and_forbid_peeking
 test_judge_waits_for_every_report_then_gets_both
 test_terminal_member_without_a_report_stands_the_panel_down
+test_gone_analyst_with_nothing_stands_the_panel_down
+test_gone_judge_with_nothing_offers_the_rejudge
 test_readiness_latch_survives_teardown
 test_judge_without_a_verdict_offers_a_recorded_rejudge
 test_rejudge_replaces_a_torn_down_judge_and_records_only_after_dispatch

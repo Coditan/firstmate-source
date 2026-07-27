@@ -30,12 +30,13 @@
 #             facts is missing for which member (exit 0); a `wedged:` block when a
 #             member left a report and is GONE without ever declaring itself
 #             finished, which is the one state that can never clear on its own
-#             (exit 0); a `stood down:` block when an ANALYST ended terminal with
-#             no report at all, which is the one state where the panel's premise
-#             has failed (recorded as `stage=stood-down`, exit 1); or a
-#             `verdict lost:` block when the JUDGE ended terminal with no report,
+#             (exit 0); a `stood down:` block when an ANALYST stopped writing
+#             with no report at all, which is the one state where the panel's
+#             premise has failed (recorded as `stage=stood-down`, exit 1); or a
+#             `verdict lost:` block when the JUDGE stopped writing with no report,
 #             where the evidence is intact and only the adjudication is missing,
-#             so `--rejudge` replaces it (exit 0).
+#             so `--rejudge` replaces it (exit 0). A member has stopped writing
+#             once it wrote a terminal event or lost its runtime record.
 #   status    print the panel record without changing anything.
 #
 #   --id <panel-id>       explicit panel id (default: derived from the question
@@ -118,6 +119,12 @@
 # and handing the panel's final verdict out under a weaker rule than the one
 # guarding its inputs would be absurd.
 #
+# ROOT CAUSE FOR ANY FUTURE CLASSIFICATION, stated once because it has already
+# cost three separate repairs: bin/fm-teardown.sh removes a member's
+# state/<id>.status and state/<id>.meta together, so the ABSENCE of either means
+# TORN DOWN rather than NEVER EXISTED, and any new member classification must
+# decide which of those two it is before it decides anything else.
+#
 # READINESS IS LATCHED, and the reason is a maintenance warning worth keeping.
 # The gate was originally designed on the premise that the terminal status event
 # is durable and survives cleanup. It is not: bin/fm-teardown.sh removes
@@ -159,8 +166,9 @@
 # no-escape dead end; used that way it warns loudly, on that invocation, that the
 # member may still be writing.
 #
-# An ANALYST that ends terminal with NO report is a different fact again: it has
-# stopped writing, so no report can arrive and the panel's premise has failed.
+# An ANALYST that stops writing with NO report is a different fact again, whether
+# it declared itself finished or simply went away: no report can arrive and the
+# panel's premise has failed.
 # That prints a `stood down:` block naming the member, records `stage=stood-down`
 # so the panel record says honestly what happened, and exits 1. The override
 # never waives it, because a verdict built on the one report that survived is not
@@ -168,7 +176,7 @@
 # review started deliberately with `--reduced` and labelled as such everywhere,
 # never this panel converted in place.
 #
-# A JUDGE that ends terminal with no report costs something else entirely: the
+# A JUDGE that stops writing with no report costs something else entirely: the
 # evidence is complete and untouched, and only the adjudication is missing, so
 # standing the panel down would discard two finished investigations because the
 # third member crashed. That prints a `verdict lost:` block instead, and
@@ -842,9 +850,10 @@ member_still_present() {  # <task-id>
 #   ready             both conditions hold, now or at a latched earlier moment
 #                     (or the terminal event was explicitly waived)
 #   finished-empty    ended terminal with no report; nothing further can arrive
+#   gone-empty        gone with no report and no terminal event; same fact
 #   unsignalled-gone  a report is there, its author is gone and never declared
 #   unsignalled-live  a report is there and its author is still present
-#   working           neither condition holds yet
+#   working           still present and nothing written yet
 member_state() {  # <task-id> <accepted-list> <latched-list>
   local id=$1 accepted=$2 latched=$3 finished=0
   if member_ready_latched "$id" "$latched"; then
@@ -864,7 +873,13 @@ member_state() {  # <task-id> <accepted-list> <latched-list>
       printf 'unsignalled-gone\n'
     fi
   else
-    if [ "$finished" -eq 1 ]; then printf 'finished-empty\n'; else printf 'working\n'; fi
+    if [ "$finished" -eq 1 ]; then
+      printf 'finished-empty\n'
+    elif member_still_present "$id"; then
+      printf 'working\n'
+    else
+      printf 'gone-empty\n'
+    fi
   fi
 }
 
@@ -875,6 +890,9 @@ member_wait_reason() {  # <task-id> <accepted-list> <latched-list>
   case "$(member_state "$id" "$2" "$3")" in
     finished-empty)
       printf '%s has finished but its report %s is empty or absent\n' "$id" "$DATA/$id/report.md" ;;
+    gone-empty)
+      printf '%s is gone without ever writing a terminal status event or a report at %s\n' \
+        "$id" "$DATA/$id/report.md" ;;
     unsignalled-gone)
       printf '%s left a report but is gone without ever writing a terminal status event\n' "$id" ;;
     unsignalled-live)
@@ -910,7 +928,7 @@ panel_stood_down_block() {  # <panel-id> <task-id>...
   shift
   printf 'stood down: panel %s cannot be completed.\n' "$panel_id"
   for id in "$@"; do
-    printf 'panel:   %s ended with a terminal status event and no report at %s, so it has stopped writing and no report can arrive.\n' \
+    printf 'panel:   %s has stopped writing and left no report at %s, so no report can arrive.\n' \
       "$id" "$DATA/$id/report.md"
   done
   printf 'panel:   --accept-unfinished deliberately refuses to waive a report that does not exist: a verdict built on what survives is not a panel.\n'
@@ -926,7 +944,7 @@ panel_stood_down_block() {  # <panel-id> <task-id>...
 panel_rejudge_block() {  # <panel-id> <judge-task-id>
   local panel_id=$1 id=$2
   printf 'verdict lost: panel %s has every analyst report but no verdict.\n' "$panel_id"
-  printf 'panel:   %s ended with a terminal status event and no report at %s, so the adjudication is missing while the evidence is untouched.\n' \
+  printf 'panel:   %s has stopped writing and left no verdict at %s, so the adjudication is missing while the evidence is untouched.\n' \
     "$id" "$DATA/$id/report.md"
   printf 'panel:   Every analyst report is complete and unchanged, so a fresh judge can adjudicate exactly the same evidence:\n'
   printf 'panel:     %s advance %s --rejudge\n' "$0" "$panel_id"
@@ -958,6 +976,7 @@ panel_gate_wait() {  # <panel-id> <gate-sentence> <hint-tail> <accepted-list> <l
     [ "$state" != ready ] || continue
     [ "$state" != unsignalled-gone ] || gone+=("$id")
     [ "$state" != finished-empty ] || empty+=("$id")
+    [ "$state" != gone-empty ] || empty+=("$id")
     reasons="${reasons:+$reasons; }$(member_wait_reason "$id" "$accepted" "$latched")"
   done
   [ -n "$reasons" ] || return 1
