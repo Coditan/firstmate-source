@@ -27,9 +27,10 @@ jobs:
       github.event.pull_request.user.login != 'dependabot[bot]'
     steps:
       - name: Verify no-mistakes signature in PR body
+        id: signature
+        continue-on-error: true
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -eu
@@ -38,17 +39,168 @@ jobs:
             echo "Found no-mistakes signature in PR #${PR_NUMBER} body."
             exit 0
           fi
-          {
-            echo "::error::This PR was not raised through no-mistakes."
-            echo
-            echo "Contributions to this repository must be submitted via 'git push no-mistakes'."
-            echo "That pipeline runs the required review/test/lint/CI steps and writes a"
-            echo "deterministic '## Pipeline' section into the PR body containing:"
-            echo
-            echo "    $marker"
-            echo
-            echo "See CONTRIBUTING.md for setup and the full workflow."
-            echo
-            echo "PR author: ${PR_AUTHOR}"
-          } >&2
+          echo "No no-mistakes signature in PR #${PR_NUMBER} body."
           exit 1
+
+      # An ancestry-restoring merge is the one pull request no-mistakes cannot
+      # raise. The pipeline rebases, and a rebase replays a merge commit as a
+      # linear one: the tree still matches exactly while `git merge-base
+      # --is-ancestor` turns false. Ancestry is the entire deliverable of such a
+      # merge, so routing it through the pipeline destroys it while leaving it
+      # looking correct.
+      #
+      # The exemption is decided from the commit graph alone - never from the
+      # title, the branch name, or any phrase in the body - and it is available
+      # only in a repository whose base branch declares a vendoring pin in
+      # `firstmate.lock`. A repository without that file has no trusted external
+      # source, so this step always denies and the gate behaves exactly as it
+      # did before the exemption existed.
+      #
+      # docs/no-mistakes-gate-ancestry-exemption.md owns the full contract, the
+      # safety argument, and the residual this deliberately accepts.
+      - name: Verify ancestry-restoring merge
+        if: steps.signature.outcome == 'failure'
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          REPO_URL: ${{ github.event.repository.clone_url }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+
+          marker='Updates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)'
+
+          # Every denial prints the same contributor guidance, plus the one
+          # concrete reason this pull request is not an ancestry-restoring merge.
+          deny() {
+            {
+              echo "::error::This PR was not raised through no-mistakes."
+              echo
+              echo "Contributions to this repository must be submitted via 'git push no-mistakes'."
+              echo "That pipeline runs the required review/test/lint/CI steps and writes a"
+              echo "deterministic '## Pipeline' section into the PR body containing:"
+              echo
+              echo "    $marker"
+              echo
+              echo "See CONTRIBUTING.md for setup and the full workflow."
+              echo
+              echo "The single exception is an ancestry-restoring merge, which no-mistakes"
+              echo "cannot raise because its rebase would flatten the ancestry such a merge"
+              echo "exists to create. See docs/no-mistakes-gate-ancestry-exemption.md."
+              echo "This pull request does not qualify: $1"
+              echo
+              echo "PR author: ${PR_AUTHOR}"
+            } >&2
+            exit 1
+          }
+
+          WORK="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/no-mistakes-ancestry-$$"
+          rm -rf "$WORK"
+          mkdir -p "$WORK"
+          trap 'rm -rf "$WORK"' EXIT
+          git init -q "$WORK/repo"
+          cd "$WORK/repo"
+
+          # Objects only. Nothing authored by the pull request is ever checked
+          # out or executed; this step reads the commit graph with plumbing.
+          fetch_base_repo() {
+            if [ -n "${GH_TOKEN:-}" ]; then
+              auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')
+              git -c "http.extraheader=AUTHORIZATION: basic $auth" \
+                fetch -q --no-tags "$REPO_URL" "$@"
+            else
+              git fetch -q --no-tags "$REPO_URL" "$@"
+            fi
+          }
+
+          if ! fetch_base_repo "+refs/heads/${BASE_REF}:refs/fm/base" \
+                               "+refs/pull/${PR_NUMBER}/head:refs/fm/head"; then
+            deny "the base branch and the pull request head could not be read"
+          fi
+
+          # The trusted source is read from the BASE branch, so a pull request
+          # cannot nominate its own. An absent pin means no exemption at all.
+          if ! lock=$(git cat-file -p refs/fm/base:firstmate.lock 2>/dev/null); then
+            deny "the base branch declares no vendoring pin (firstmate.lock), so no external source is trusted here"
+          fi
+          source_url=$(printf '%s\n' "$lock" | sed -n 's/^source_url=[[:space:]]*//p' | head -1)
+          source_ref=$(printf '%s\n' "$lock" | sed -n 's/^source_ref=[[:space:]]*//p' | head -1)
+          [ -n "$source_ref" ] || source_ref=main
+          case "$source_url" in
+            https://*|file:///*|/*) : ;;
+            *) deny "firstmate.lock on the base branch names no usable pin source URL" ;;
+          esac
+
+          # Anonymous on purpose: the automatic token carries no rights in the
+          # source repository, and an unreadable source denies rather than
+          # widening what this job can reach.
+          if ! git fetch -q --no-tags "$source_url" "+refs/heads/${source_ref}:refs/fm/source"; then
+            deny "the pin source ${source_url} (${source_ref}) could not be read"
+          fi
+
+          range=$(git rev-list refs/fm/base..refs/fm/head)
+
+          # 1 and 2. Some commit here must be a real merge with a parent that is
+          # published in the pin source and is not already an ancestor of the
+          # base branch. That is ancestry this pull request adds, and no
+          # ordinary pull request shape can add it.
+          merge_parent=
+          for commit in $range; do
+            parents=$(git log -1 --format=%P "$commit")
+            count=0
+            for parent in $parents; do count=$((count + 1)); done
+            [ "$count" -ge 2 ] || continue
+            for parent in $parents; do
+              if git merge-base --is-ancestor "$parent" refs/fm/base; then continue; fi
+              if git merge-base --is-ancestor "$parent" refs/fm/source; then
+                merge_parent=$parent
+                break
+              fi
+            done
+            [ -z "$merge_parent" ] || break
+          done
+          if [ -z "$merge_parent" ]; then
+            deny "no merge commit here brings in ancestry from ${source_url} (${source_ref})"
+          fi
+
+          # 3. Nothing new may ride along. Content carried by the pin source is
+          # already gated where it was authored. Everything else in this pull
+          # request may only touch files the base branch already has and the pin
+          # source does not track - so an exempt pull request can add no new
+          # file, and can hand-edit no vendored one.
+          for commit in $range; do
+            if git merge-base --is-ancestor "$commit" refs/fm/source; then continue; fi
+            parents=$(git log -1 --format=%P "$commit")
+            if [ -z "$parents" ]; then
+              deny "commit ${commit} has no parent, so its content cannot be attributed"
+            fi
+            # Content a commit introduces on its own: for a merge, the paths that
+            # differ from EVERY parent, which is exactly an evil merge's payload.
+            seen=0
+            for parent in $parents; do
+              git diff --no-renames --name-only "$parent" "$commit" | LC_ALL=C sort > "$WORK/cur"
+              seen=$((seen + 1))
+              if [ "$seen" -eq 1 ]; then
+                cp "$WORK/cur" "$WORK/own"
+              else
+                LC_ALL=C comm -12 "$WORK/own" "$WORK/cur" > "$WORK/next"
+                mv "$WORK/next" "$WORK/own"
+              fi
+            done
+            while IFS= read -r path; do
+              [ -n "$path" ] || continue
+              if git cat-file -e "refs/fm/source:$path" 2>/dev/null; then
+                deny "commit ${commit} changes ${path} by hand, and the pin source tracks that path"
+              fi
+              if ! git cat-file -e "refs/fm/base:$path" 2>/dev/null; then
+                deny "commit ${commit} adds ${path}, which the base branch does not already carry"
+              fi
+            done < "$WORK/own"
+          done
+
+          echo "PR #${PR_NUMBER} is an ancestry-restoring merge."
+          echo "  merge parent ${merge_parent} is published in ${source_url} (${source_ref})"
+          echo "  and is not yet an ancestor of ${BASE_REF}."
+          echo "  Every other change is carried by that source, or touches only files"
+          echo "  the base branch already has and the source does not track."
