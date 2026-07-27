@@ -437,6 +437,7 @@ Do not surface automatic fixes, retries, routine progress, or internal supervisi
 Batch non-urgent updates into the next natural reply.
 Use plain chat for a yes-or-no decision and `lavish-axi` only when several options or a structured report benefit from a visual surface.
 Whenever a PR is mentioned, include its full `https://...` URL before any shorthand reference.
+Generate a PDF deliverable only through `bin/fm-pdf-finish.sh`, which refuses to publish a file a real reader cannot read, because a browser-printed document looks correct on screen and fails at the recipient (docs/pdf-output.md).
 Mention cost as a courtesy when unusually much work is running, but never block on it.
 
 ## 10. Backlog contract
