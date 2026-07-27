@@ -8,6 +8,20 @@ data/
 __pycache__/
 *.pyc
 .env
+# Claude Code and firstmate write these local runtime artifacts into a checkout.
+# Keep the patterns narrow so tracked .claude/settings.json and .claude/skills remain visible.
+.claude/settings.local.json
+**/.claude/scheduled_tasks.lock
+**/.claude/scheduled_tasks.json
+**/.claude/routines/.state/
+**/.claude/worktrees/
+**/.claude/checkpoints/
+**/.claude/mailbox/
+**/.claude/agent-registry.json
+**/.claude/agent-memory-local
+**/.claude/first-run
+**/.claude/assistant-daemon-state.json
+.claude/settings.fm-task.json
 config/crew-harness
 config/crew-dispatch.json
 config/secondmate-harness

@@ -14,6 +14,10 @@ The tracked code root contains the shared instruction, skill, documentation, wor
 `state/` holds volatile runtime records such as task metadata, append-only status events, endpoint signals, watcher and wake-queue coordination, away-mode state, generated X-mode artifacts, private secondmate config-reread generations with their retry and quarantine state, and parent-owned secondmate pending-reply records under `state/pending-replies/` (`bin/fm-pending-reply-lib.sh`).
 `config/` holds local gitignored operating choices, and `projects/` holds the local project clones that Firstmate reads but changes only through the guarded exceptions in `AGENTS.md`.
 
+A home's checkout also accumulates runtime artifacts that a supported harness or firstmate writes into the tracked tree itself: Claude Code's local permissions and settings file plus its scheduler, routine, worktree, checkpoint, mailbox, agent-registry, agent-memory, first-run, and daemon state, and firstmate's generated per-task hook overlay.
+The tracked root `.gitignore` owns the exact path list and is the only correct place for it: `dirty_status` in `bin/fm-ff-lib.sh` reads `git status --porcelain`, which reports untracked files too, so any of those artifacts would otherwise make a vessel dirty and silently drop it out of every guarded fast-forward, and a clone-private `.git/info/exclude` cannot carry the rule because a fresh clone does not inherit one.
+The patterns stay narrow so the tracked `.claude/settings.json` and the tracked `.claude/skills` symlink remain visible to `git add`, and `tests/fm-runtime-ignore.test.sh` proves in a fresh clone that every artifact form is ignored by the tracked `.gitignore` rather than a private or global exclude, that the tracked paths are not, and that `.claude/settings.local.json` is never tracked.
+
 `bin/fm-spawn.sh` owns the base task-metadata fields it emits, while the runtime-backend section below owns backend-specific fields and selector interpretation.
 The producing PR and X helpers own the fields they append, `bin/fm-classify-lib.sh` owns status-event vocabulary, and `bin/fm-crew-state.sh` owns current-state reconciliation.
 Wake, watcher, direct Telegram receiver, away-mode, and X-specific state mechanics remain with their named scripts and reference sections rather than being duplicated into one exhaustive state tree here.
@@ -198,7 +202,7 @@ Set `FM_SECONDMATE_CHARTER` to seed from inline charter text when no filled char
 The seeded home's `data/charter.md` owns the standard secondmate lifecycle and escalation contract; the route file points to it through the existing `home:` field instead of adding another pointer.
 Each seed writes an `.fm-secondmate-home` identity marker at the home root.
 The tracked root `.gitignore` ignores that marker, so validation can read it without making a freshly seeded home appear dirty to porcelain-based safety checks.
-This does not relax protection for any other untracked file.
+This marker rule relaxes protection for nothing else; the separately narrow checkout-local runtime artifacts are covered in "Operational home layout and state" above.
 An existing linked-worktree home that predates this rule advances through its marker-only state during its next bootstrap or spawn local sync, after which Git ignores the marker normally.
 A standalone-clone home cannot receive a primary-local commit through that no-fetch sync, so it receives the rule through `/updatefirstmate`'s origin refresh instead.
 

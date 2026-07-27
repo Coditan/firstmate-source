@@ -133,8 +133,9 @@ The genesis commit was pushed directly to `main`, because a branch must exist be
 Claude Code writes to it at runtime, and `dirty_status` in `bin/fm-ff-lib.sh` skips a fast-forward for any dirty checkout, so a tracked copy of a file the harness rewrites would freeze self-update fleet-wide, one vessel at a time.
 `fleet-ci.yml` asserts it is untracked on every pull request, alongside the two symlinks and the private operational directories.
 
-A related interaction is worth knowing before cutover and is not fixed here: `dirty_status` reads `git status --porcelain`, which reports untracked files too, so an untracked `.claude/settings.local.json` in a home already blocks that home's fast-forward today.
-That is a property of the current fork, not of `admiralty`.
+A related interaction used to bite even without tracking: `dirty_status` reads `git status --porcelain`, which reports untracked files too, so an untracked `.claude/settings.local.json` in a home blocked that home's fast-forward on its own.
+The fork's tracked root `.gitignore` now ignores it along with the other checkout-local harness runtime artifacts, so it no longer does; [configuration.md](configuration.md) "Operational home layout and state" owns that contract.
+Because `.gitignore` is a vendored path, `admiralty` picks the rule up with the next pin bump rather than needing fleet-owned material of its own.
 
 ## What is not built yet
 
