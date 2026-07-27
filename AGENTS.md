@@ -74,7 +74,7 @@ config/startup-memory-budget     primary-authoritative per-home startup-memory b
 config/herdr-presentation-spaces  optional presence flag for Herdr's default-off disposable single-task visual projection; LOCAL, gitignored; inherited by secondmate homes; see docs/herdr-backend.md "Optional presentation spaces"
 config/cmux-socket-password  optional cmux control-socket password; LOCAL, gitignored; read fresh on every cmux CLI call and passed through without ever overriding an operator's own ambient CMUX_SOCKET_PASSWORD when absent (docs/cmux-backend.md "Setup")
 config/wedge-alarm  optional away-mode wedge-alarm active-alert directives; LOCAL, gitignored; absent means auto (macOS Notification Center when available); see docs/wedge-alarm.md
-config/bridge-vessel  optional Bridge inbox vessel name(s), space-separated; LOCAL, gitignored; read only when FM_BRIDGE_VESSEL is unset, and absent with that variable also unset disables Bridge inbox scanning entirely (docs/configuration.md "Bridge inbox check")
+config/bridge-vessel  optional Bridge inbox vessel name(s), space-separated; LOCAL, gitignored; read only when FM_BRIDGE_VESSEL is unset or empty, and absent with that variable also unset or empty disables Bridge inbox scanning entirely (docs/configuration.md "Bridge inbox check")
 config/x-mode.env    generated X-mode watcher cadence; LOCAL, gitignored; source before arming watcher when present
 data/                personal fleet records; LOCAL, gitignored as a whole
   backlog.md         task queue, dependencies, history

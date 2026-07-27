@@ -5,9 +5,10 @@
 # Covered contract: vessel resolution and the disabled default; a pending
 # envelope producing exactly one durable check wake per inbox-tree signature;
 # silence for an empty, unchanged, or acknowledged inbox; per-vessel independence
-# in a multi-vessel list; the urgent cadence tightening only the Bridge poll; the
-# signature-keyed priority cache; and reads resolving against the fetched
-# origin/main rather than a stale working tree.
+# in a multi-vessel list, including in an undrained queue; the urgent cadence
+# tightening only the Bridge poll and never freezing the fetch that advances
+# origin/main; the signature-keyed priority cache; and reads resolving against
+# the fetched origin/main rather than a stale working tree.
 #
 # Each case drives a real fm-watch.sh subprocess against a throwaway Bridge
 # clone, so the assertions are on observable watcher output plus durable state,
@@ -18,6 +19,7 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 WATCH="$ROOT/bin/fm-watch.sh"
+DRAIN="$ROOT/bin/fm-wake-drain.sh"
 TMP_ROOT=$(fm_test_tmproot fm-watch-bridge-inbox)
 fm_git_identity
 
@@ -106,6 +108,21 @@ count_lines() { wc -l < "$1" | tr -d '[:space:]'; }
 # Bridge can print. Trailing arguments are appended last and therefore override
 # these defaults.
 
+# Wait up to <limit> 0.1s ticks for <pid> to exit; 0 if it exited, 1 on expiry.
+# A regressed check would otherwise loop forever and block the whole suite,
+# which applies no per-test timeout, instead of failing with a diagnostic.
+wait_exit() {  # <pid> [limit]
+  local pid=$1 limit=${2:-600} i=0
+  while [ "$i" -lt "$limit" ]; do
+    kill -0 "$pid" 2>/dev/null || return 0
+    sleep 0.1
+    i=$((i + 1))
+  done
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  return 1
+}
+
 # Run the watcher until it exits on its own; the caller expects a wake.
 watch_until_wake() {  # <home> <out> [extra env assignments...]
   local home=$1 out=$2 pid
@@ -113,6 +130,7 @@ watch_until_wake() {  # <home> <out> [extra env assignments...]
   env FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=0 \
     FM_BRIDGE_URGENT_CHECK_INTERVAL=0 FM_HEARTBEAT=999999 "$@" "$WATCH" > "$out" &
   pid=$!
+  wait_exit "$pid" || fail "the watcher never produced a Bridge wake"
   wait "$pid"
 }
 
@@ -154,7 +172,35 @@ test_vessel_resolution_precedence() {
       bash -c '. "$1"; printf "%s" "$BRIDGE_VESSEL"' _ "$WATCH"
   )
   [ "$resolved" = tugboat ] || fail "an empty FM_BRIDGE_VESSEL shadowed config/bridge-vessel: $resolved"
-  pass "Bridge vessel resolution prefers a non-empty env value and falls back to per-home config"
+
+  # A caller reading another home redirects config the same way every other
+  # config reader in bin/ is redirected.
+  mkdir -p "$home/alt-config"
+  printf '%s\n' dinghy > "$home/alt-config/bridge-vessel"
+  resolved=$(
+    # shellcheck disable=SC2016
+    env -u FM_BRIDGE_VESSEL FM_HOME="$home" FM_CONFIG_OVERRIDE="$home/alt-config" \
+      bash -c '. "$1"; printf "%s" "$BRIDGE_VESSEL"' _ "$WATCH"
+  )
+  [ "$resolved" = dinghy ] || fail "FM_CONFIG_OVERRIDE was ignored when reading bridge-vessel: $resolved"
+  pass "Bridge vessel resolution prefers a non-empty env value and falls back to the effective home's config"
+}
+
+test_vessel_config_without_trailing_newline_resolves() {
+  local home resolved
+  home=$(make_home vessel-no-newline)
+  mkdir -p "$home/config"
+  # An editor with no final EOL, or printf/echo -n, writes the file this way.
+  printf tugboat > "$home/config/bridge-vessel"
+
+  resolved=$(
+    # shellcheck disable=SC2016
+    env -u FM_BRIDGE_VESSEL FM_HOME="$home" \
+      bash -c '. "$1"; printf "%s" "$BRIDGE_VESSEL"' _ "$WATCH"
+  )
+  [ "$resolved" = tugboat ] || \
+    fail "config/bridge-vessel without a trailing newline silently disabled the check: '$resolved'"
+  pass "a config/bridge-vessel written without a final newline still resolves its vessel"
 }
 
 test_multi_vessel_list_resolves_into_array() {
@@ -242,8 +288,8 @@ test_bridge_inbox_surfaces_each_signature_once() {
   watch_until_wake "$home" "$out" || fail "watcher failed while checking a pending Bridge envelope"
   assert_contains "$(cat "$out")" "check: bridge-inbox: bridge-inbox coditan pending=1 highest=high" \
     "pending Bridge envelope did not produce an actionable check wake"
-  assert_contains "$(cat "$home/state/.wake-queue")" $'\tcheck\tbridge-inbox\t' \
-    "Bridge check wake was not queued durably"
+  assert_contains "$(cat "$home/state/.wake-queue")" $'\tcheck\tbridge-inbox:coditan\t' \
+    "Bridge check wake was not queued durably under its own vessel key"
   first_marker=$(cat "$home/state/.bridge-surfaced")
   [ -n "$first_marker" ] || fail "first surfaced inbox signature was not recorded"
 
@@ -323,6 +369,34 @@ test_multi_vessel_each_surfaces_independently() {
   assert_present "$home/state/.bridge-surfaced-captain" \
     "the secondary vessel's surfaced marker was not recorded"
   pass "each configured vessel surfaces its own pending mail independently of the others"
+}
+
+test_multi_vessel_wakes_survive_an_undrained_queue() {
+  local home out drained
+  home=$(make_home multi-undrained captain)
+  out="$home/watch.out"
+
+  # The primary vessel's wake is queued and its marker advances, and only then
+  # does the secondary vessel get mail. The queue keeps one record per kind and
+  # key, so a key shared between vessels would drop the primary's still-pending
+  # mail here for good: its marker already claims the mail was surfaced.
+  write_envelope "$home" first high coditan
+  watch_until_wake "$home" "$out" 'FM_BRIDGE_VESSEL=coditan captain' \
+    || fail "watcher failed while checking the primary vessel's pending envelope"
+
+  write_envelope "$home" second normal captain
+  : > "$out"
+  watch_until_wake "$home" "$out" 'FM_BRIDGE_VESSEL=coditan captain' \
+    || fail "watcher failed while checking the secondary vessel's pending envelope"
+
+  drained="$home/drain.out"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DRAIN" > "$drained" \
+    || fail "draining the queued Bridge wakes failed"
+  assert_contains "$(cat "$drained")" "bridge-inbox coditan pending=1 highest=high" \
+    "the primary vessel's undrained wake was collapsed by the secondary vessel's later wake"
+  assert_contains "$(cat "$drained")" "bridge-inbox captain pending=1 highest=normal" \
+    "the secondary vessel's wake was not drained"
+  pass "a vessel queued before the queue drains is still named once a later vessel queues its own wake"
 }
 
 test_priority_tightens_only_bridge_cadence() {
@@ -446,6 +520,43 @@ test_discovery_gated_by_urgent_interval() {
   pass "repeated loop cycles do not keep spawning Bridge scans within the urgent window"
 }
 
+test_wide_urgent_interval_does_not_freeze_detection() {
+  local home out peer pid i=0
+  # The discovery fetch is the only thing that advances the watcher's own
+  # origin/main, so an urgent interval WIDER than the interval actually in force
+  # must not gate it: gating on the urgent interval alone leaves the ref frozen
+  # at the value it had when the watcher started, and mail that arrives later is
+  # never seen. Bridge delivers from its own clone, so this envelope is pushed
+  # from a peer: a push made from the watcher's clone would advance that clone's
+  # remote-tracking ref by itself and hide a frozen fetch.
+  home=$(make_home wide-urgent)
+  out="$home/watch.out"
+  peer="$home/bridge-peer"
+  git clone -q "$home/bridge-origin.git" "$peer"
+
+  env FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=0 \
+    FM_BRIDGE_URGENT_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+
+  while [ ! -e "$home/state/.last-bridge-discovery" ]; do
+    [ "$i" -lt 300 ] || { kill "$pid" 2>/dev/null || true; fail "the first Bridge discovery never ran"; }
+    sleep 0.1
+    i=$((i + 1))
+  done
+
+  printf '{"schema":"bridge-envelope.v1","id":"late","priority":"normal","state":"new"}\n' \
+    > "$peer/inbox/coditan/new/late.json"
+  git -C "$peer" add inbox/coditan/new/late.json
+  git -C "$peer" commit -qm "add late"
+  git -C "$peer" push -q origin main
+  wait_exit "$pid" \
+    || fail "a wide FM_BRIDGE_URGENT_CHECK_INTERVAL froze Bridge detection: mail arriving after the first discovery was never seen"
+  wait "$pid" || fail "watcher failed while detecting mail under a wide urgent interval"
+  assert_contains "$(cat "$out")" "check: bridge-inbox: bridge-inbox coditan pending=1 highest=normal" \
+    "mail arriving after the first discovery did not produce a wake"
+  pass "a wide urgent interval only tightens the Bridge cadence and never stops refreshing origin/main"
+}
+
 test_acked_on_origin_ignores_stale_working_tree() {
   local home bridge peer out
   home=$(make_home stale-working-tree)
@@ -474,15 +585,18 @@ test_acked_on_origin_ignores_stale_working_tree() {
 }
 
 test_vessel_resolution_precedence
+test_vessel_config_without_trailing_newline_resolves
 test_multi_vessel_list_resolves_into_array
 test_unconfigured_home_skips_bridge_scan
 test_missing_bridge_clone_skips_scan
 test_empty_inbox_is_silent
 test_bridge_inbox_surfaces_each_signature_once
 test_multi_vessel_each_surfaces_independently
+test_multi_vessel_wakes_survive_an_undrained_queue
 test_priority_tightens_only_bridge_cadence
 test_multi_vessel_cadence_reflects_any_vessel
 test_cache_skips_rescan_when_unchanged
 test_inplace_edit_invalidates_cache
 test_discovery_gated_by_urgent_interval
+test_wide_urgent_interval_does_not_freeze_detection
 test_acked_on_origin_ignores_stale_working_tree

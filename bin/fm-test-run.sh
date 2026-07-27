@@ -1365,7 +1365,8 @@ else
       export TMPDIR="$work/tmp"
       export TMP="$work/tmp"
       unset FM_HOME FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_ROOT_OVERRIDE \
-        FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE FM_BACKEND 2>/dev/null || true
+        FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE FM_BACKEND \
+        FM_BRIDGE_VESSEL FM_BRIDGE_ROOT FM_BRIDGE_URGENT_CHECK_INTERVAL 2>/dev/null || true
       cd "$ROOT" || exit 1
       begin_ms=$(now_ms)
       bash "$script" >"$work/output" 2>&1

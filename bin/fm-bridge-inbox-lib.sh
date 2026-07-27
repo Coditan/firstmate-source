@@ -1,14 +1,22 @@
 #!/usr/bin/env bash
 # Shared read-only Bridge inbox detection and durable wake publication.
 #
-# Source after bin/fm-wake-lib.sh, which owns fm_wake_append.
+# Source after bin/fm-wake-lib.sh, which owns fm_wake_append, and from a caller
+# that owns run_bounded_process (bin/fm-watch.sh) - every Bridge read goes
+# through that one bounded-process helper rather than a private copy, so the
+# child's process group is torn down with the watcher on HUP/INT/TERM too.
 #
 # bridge_inbox_surface
 #   Compares every watched vessel's fetched inbox tree against its own surfaced
-#   marker, appends ONE durable check wake covering the vessels whose pending
-#   mail is new, and publishes their markers only after that append succeeded.
-#   Prints one actionable reason only when it durably appended a new wake, so a
-#   crash between detection and enqueue re-detects instead of losing the mail.
+#   marker and, for each vessel whose pending mail is new, appends a durable
+#   check wake keyed on that vessel alone, publishing that vessel's marker only
+#   after its own append succeeded. The queue keeps the last record per kind and
+#   key, so a shared key would let a vessel enqueued later collapse an earlier
+#   vessel's still-undrained record while that vessel's marker already claims it
+#   was surfaced; per-vessel keys are what make each vessel independent in the
+#   drained output too. Prints one actionable reason naming every vessel
+#   surfaced this cycle, and only for vessels whose append succeeded, so a crash
+#   between detection and enqueue re-detects instead of losing the mail.
 #
 # bridge_inbox_fetch
 #   Refreshes the shared clone's origin/main ref. Every read below resolves
@@ -24,15 +32,17 @@ FM_BRIDGE_LIB_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$FM_BRIDGE_LIB_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_BRIDGE_LIB_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-${STATE:-$FM_HOME/state}}"
 BRIDGE_CHECK_TIMEOUT=${FM_CHECK_TIMEOUT:-${CHECK_TIMEOUT:-30}}
-BRIDGE_ROOT=${FM_BRIDGE_ROOT:-$FM_HOME/projects/coditan-bridge}
+BRIDGE_CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+BRIDGE_ROOT=${FM_BRIDGE_ROOT:-${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}/coditan-bridge}
 BRIDGE_URGENT_CHECK_INTERVAL=${FM_BRIDGE_URGENT_CHECK_INTERVAL:-30}
 
+# read reports failure at EOF on a final line with no newline, having already
+# assigned it, so the vessel is taken from the variable rather than the status.
+BRIDGE_VESSEL_RAW=
 if [ -n "${FM_BRIDGE_VESSEL:-}" ]; then
   BRIDGE_VESSEL_RAW=$FM_BRIDGE_VESSEL
-elif [ -f "$FM_HOME/config/bridge-vessel" ]; then
-  IFS= read -r BRIDGE_VESSEL_RAW < "$FM_HOME/config/bridge-vessel" || BRIDGE_VESSEL_RAW=
-else
-  BRIDGE_VESSEL_RAW=
+elif [ -f "$BRIDGE_CONFIG/bridge-vessel" ]; then
+  IFS= read -r BRIDGE_VESSEL_RAW < "$BRIDGE_CONFIG/bridge-vessel" || true
 fi
 
 # BRIDGE_VESSEL keeps the first/primary value so a pre-existing single-vessel
@@ -43,39 +53,33 @@ read -r -a BRIDGE_VESSELS <<< "$BRIDGE_VESSEL_RAW"
 BRIDGE_VESSEL=${BRIDGE_VESSELS[0]:-}
 
 bridge_run_bounded() {
-  if [ "${FM_CHECK_FORCE_FALLBACK:-0}" != 1 ] && command -v timeout >/dev/null 2>&1; then
-    timeout "$BRIDGE_CHECK_TIMEOUT" "$@" 2>/dev/null || true
-  elif [ "${FM_CHECK_FORCE_FALLBACK:-0}" != 1 ] && command -v gtimeout >/dev/null 2>&1; then
-    gtimeout "$BRIDGE_CHECK_TIMEOUT" "$@" 2>/dev/null || true
-  else
-    # shellcheck disable=SC2016
-    perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setpgrp(0, 0); exec @ARGV } local $SIG{ALRM} = sub { kill "TERM", -$pid; select undef, undef, undef, 0.2; kill "KILL", -$pid; exit 124 }; alarm $t; waitpid $pid, 0; exit($? >> 8)' "$BRIDGE_CHECK_TIMEOUT" "$@" 2>/dev/null || true
-  fi
+  ( run_bounded_process "$BRIDGE_CHECK_TIMEOUT" "$@" ) 2>/dev/null || true
 }
 
-bridge_pending_priority_scan() {
-  local inbox="inbox/$BRIDGE_VESSEL/new" f priority rank=-1
-  while IFS= read -r -d '' f; do
-    case "$f" in *.json) ;; *) continue ;; esac
-    priority=$(git -C "$BRIDGE_ROOT" show "origin/main:$inbox/$f" 2>/dev/null | jq -r '.priority // "normal"' 2>/dev/null || echo normal)
-    case "$priority" in
-      immediate) rank=3 ;;
-      high) [ "$rank" -lt 2 ] && rank=2 ;;
-      normal) [ "$rank" -lt 1 ] && rank=1 ;;
-      low) [ "$rank" -lt 0 ] && rank=0 ;;
-      *) [ "$rank" -lt 1 ] && rank=1 ;;
-    esac
-  done < <(git -C "$BRIDGE_ROOT" ls-tree -z --name-only "origin/main:$inbox" 2>/dev/null)
-  case "$rank" in 3) echo immediate ;; 2) echo high ;; 1) echo normal ;; 0) echo low ;; *) echo none ;; esac
-}
-export -f bridge_pending_priority_scan
+# A whole scan, not a single git call, is what has to stay inside one bounded
+# read, so each scan runs as a child shell. Their programs are passed inline
+# with the clone and vessel as positional arguments, so nothing about this
+# default-off feature is exported into the environment of every other process
+# the watcher spawns.
+# shellcheck disable=SC2016  # single quotes are deliberate: the child shell expands these.
+BRIDGE_SIGNATURE_SCAN='sig=$(git -C "$1" rev-parse "origin/main:inbox/$2/new" 2>/dev/null || true); printf "%s" "${sig:-empty}"'
 
-bridge_inbox_signature_scan() {
-  local inbox="inbox/$BRIDGE_VESSEL/new" sig
-  sig=$(git -C "$BRIDGE_ROOT" rev-parse "origin/main:$inbox" 2>/dev/null || true)
-  printf '%s' "${sig:-empty}"
-}
-export -f bridge_inbox_signature_scan
+# shellcheck disable=SC2016
+BRIDGE_PRIORITY_SCAN='
+root=$1; inbox="inbox/$2/new"; rank=-1
+while IFS= read -r -d "" f; do
+  case "$f" in *.json) ;; *) continue ;; esac
+  priority=$(git -C "$root" show "origin/main:$inbox/$f" 2>/dev/null | jq -r ".priority // \"normal\"" 2>/dev/null || echo normal)
+  case "$priority" in
+    immediate) rank=3 ;;
+    high) [ "$rank" -lt 2 ] && rank=2 ;;
+    normal) [ "$rank" -lt 1 ] && rank=1 ;;
+    low) [ "$rank" -lt 0 ] && rank=0 ;;
+    *) [ "$rank" -lt 1 ] && rank=1 ;;
+  esac
+done < <(git -C "$root" ls-tree -z --name-only "origin/main:$inbox" 2>/dev/null)
+case "$rank" in 3) echo immediate ;; 2) echo high ;; 1) echo normal ;; 0) echo low ;; *) echo none ;; esac
+'
 
 # The fetched inbox tree object id is the whole change signal: it advances on a
 # new, edited, or acknowledged envelope and on nothing else. "timeout" is a
@@ -83,7 +87,7 @@ export -f bridge_inbox_signature_scan
 # for an empty inbox.
 bridge_inbox_signature() {
   local vessel=${1:-$BRIDGE_VESSEL} out
-  out=$(BRIDGE_ROOT="$BRIDGE_ROOT" BRIDGE_VESSEL="$vessel" bridge_run_bounded bash -c 'bridge_inbox_signature_scan')
+  out=$(bridge_run_bounded bash -c "$BRIDGE_SIGNATURE_SCAN" _ "$BRIDGE_ROOT" "$vessel")
   printf '%s' "${out:-timeout}"
 }
 
@@ -108,7 +112,7 @@ bridge_pending_priority() {
   fi
   if [ "$sig" = timeout ]; then printf '%s' "${cached_priority:-none}"; return; fi
   if [ -n "$cached_sig" ] && [ "$sig" = "$cached_sig" ]; then printf '%s' "${cached_priority:-none}"; return; fi
-  out=$(BRIDGE_ROOT="$BRIDGE_ROOT" BRIDGE_VESSEL="$vessel" bridge_run_bounded bash -c 'bridge_pending_priority_scan')
+  out=$(bridge_run_bounded bash -c "$BRIDGE_PRIORITY_SCAN" _ "$BRIDGE_ROOT" "$vessel")
   if [ -z "$out" ]; then printf '%s' "${cached_priority:-none}"; return; fi
   printf '%s\t%s\n' "$sig" "$out" > "$cache" 2>/dev/null || true
   printf '%s' "$out"
@@ -140,8 +144,7 @@ bridge_inbox_fetch() {
 }
 
 bridge_inbox_surface() {
-  local vessel marker sig surfaced vessel_out out="" reason="" i
-  local marker_paths=() marker_sigs=()
+  local vessel marker sig surfaced vessel_out out=""
 
   [ "${#BRIDGE_VESSELS[@]}" -gt 0 ] || return 0
   [ -d "$BRIDGE_ROOT/.git" ] || return 0
@@ -154,9 +157,9 @@ bridge_inbox_surface() {
     [ "$sig" != "$surfaced" ] || continue
     vessel_out=$(bridge_inbox_check "$vessel" "$sig")
     if [ -n "$vessel_out" ]; then
+      fm_wake_append check "bridge-inbox:$vessel" "check: bridge-inbox: $vessel_out" || return "$?"
+      printf '%s' "$sig" > "$marker" 2>/dev/null || true
       out="${out:+$out; }$vessel_out"
-      marker_paths[${#marker_paths[@]}]=$marker
-      marker_sigs[${#marker_sigs[@]}]=$sig
     else
       # An acknowledged inbox drops its marker so the same envelopes surface
       # again if Bridge re-delivers them byte-identically later.
@@ -165,12 +168,5 @@ bridge_inbox_surface() {
   done
 
   [ -n "$out" ] || return 0
-  reason="check: bridge-inbox: $out"
-  fm_wake_append check bridge-inbox "$reason" || return "$?"
-  i=0
-  while [ "$i" -lt "${#marker_paths[@]}" ]; do
-    printf '%s' "${marker_sigs[$i]}" > "${marker_paths[$i]}" 2>/dev/null || true
-    i=$((i + 1))
-  done
-  printf '%s\n' "$reason"
+  printf 'check: bridge-inbox: %s\n' "$out"
 }

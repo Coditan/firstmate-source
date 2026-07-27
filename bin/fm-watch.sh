@@ -55,7 +55,9 @@
 #                          a watched Bridge vessel's fetched inbox tree carries
 #                          pending mail this watcher has not surfaced yet; read
 #                          only, on its own cadence, and silent while the tree is
-#                          unchanged (bin/fm-bridge-inbox-lib.sh)
+#                          unchanged. The reason names every vessel surfaced this
+#                          cycle, and each of them queues its own durable record
+#                          (bin/fm-bridge-inbox-lib.sh)
 #   heartbeat              fleet-scan backstop found an unsurfaced captain-relevant
 #                          status, unless afk is active
 # For normal supervision, resume the session-start primary-harness protocol
@@ -517,17 +519,27 @@ procevent_surface_queued() {
   wake "$reason"
 }
 
+# The one bounded-child implementation in this tree: every timed read the
+# watcher makes runs through it, so the fallback's signal hardening (the same
+# handler on ALRM and on HUP/INT/TERM, tearing down the child's process group
+# instead of orphaning it) can never be half-present in a second copy.
+run_bounded_process() {  # <timeout-seconds> <command> [args...]
+  local t=$1
+  shift
+  if [ "${FM_CHECK_FORCE_FALLBACK:-0}" != 1 ] && command -v timeout >/dev/null 2>&1; then
+    exec timeout "$t" "$@"
+  elif [ "${FM_CHECK_FORCE_FALLBACK:-0}" != 1 ] && command -v gtimeout >/dev/null 2>&1; then
+    exec gtimeout "$t" "$@"
+  else
+    # shellcheck disable=SC2016  # single quotes are deliberate: Perl expands its own variables.
+    exec perl -e 'my $t = shift; my $owned = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setpgrp(0, 0) unless $owned; exec @ARGV } my $group = $owned ? getpgrp(0) : $pid; my $stop = sub { $SIG{HUP} = $SIG{INT} = $SIG{TERM} = "IGNORE"; kill "TERM", -$group; select undef, undef, undef, 0.2; kill "KILL", -$group; waitpid $pid, 0; exit 124 }; local $SIG{ALRM} = $stop; local $SIG{HUP} = $stop; local $SIG{INT} = $stop; local $SIG{TERM} = $stop; alarm $t; waitpid $pid, 0; exit($? >> 8)' "$t" "${FM_CHECK_OWNED_GROUP:-0}" "$@"
+  fi
+}
+
 run_check_process() {
   local c=$1
   shift
-  if [ "${FM_CHECK_FORCE_FALLBACK:-0}" != 1 ] && command -v timeout >/dev/null 2>&1; then
-    exec timeout "$CHECK_TIMEOUT" bash "$c" "$@"
-  elif [ "${FM_CHECK_FORCE_FALLBACK:-0}" != 1 ] && command -v gtimeout >/dev/null 2>&1; then
-    exec gtimeout "$CHECK_TIMEOUT" bash "$c" "$@"
-  else
-    # shellcheck disable=SC2016  # single quotes are deliberate: Perl expands its own variables.
-    exec perl -e 'my $t = shift; my $owned = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setpgrp(0, 0) unless $owned; exec @ARGV } my $group = $owned ? getpgrp(0) : $pid; my $stop = sub { $SIG{HUP} = $SIG{INT} = $SIG{TERM} = "IGNORE"; kill "TERM", -$group; select undef, undef, undef, 0.2; kill "KILL", -$group; waitpid $pid, 0; exit 124 }; local $SIG{ALRM} = $stop; local $SIG{HUP} = $stop; local $SIG{INT} = $stop; local $SIG{TERM} = $stop; alarm $t; waitpid $pid, 0; exit($? >> 8)' "$CHECK_TIMEOUT" "${FM_CHECK_OWNED_GROUP:-0}" bash "$c" "$@"
-  fi
+  run_bounded_process "$CHECK_TIMEOUT" bash "$c" "$@"
 }
 
 run_check() {
@@ -869,25 +881,32 @@ while :; do
     touch "$STATE/.last-check"
   fi
 
-  # Read-only Bridge inbox poll, on its own cadence. Discovery fetches the
-  # shared clone and re-derives the interval no more often than the urgent
-  # interval, caching it so the cheap cycles in between never spawn a scan.
-  # A home with no configured vessel, or no Bridge clone, does neither.
-  if [ "${#BRIDGE_VESSELS[@]}" -eq 0 ] || [ ! -d "$BRIDGE_ROOT/.git" ]; then
-    bridge_interval=$CHECK_INTERVAL
-  elif [ "$(age_of "$STATE/.last-bridge-discovery")" -ge "$BRIDGE_URGENT_CHECK_INTERVAL" ]; then
-    bridge_inbox_fetch
-    bridge_interval=$(bridge_check_interval)
-    printf '%s' "$bridge_interval" > "$STATE/.bridge-interval-cache" 2>/dev/null || true
-    touch "$STATE/.last-bridge-discovery"
-  else
-    bridge_interval=$(cat "$STATE/.bridge-interval-cache" 2>/dev/null)
-    [ -n "$bridge_interval" ] || bridge_interval=$CHECK_INTERVAL
-  fi
-  if [ "$(age_of "$STATE/.last-bridge-check")" -ge "$bridge_interval" ]; then
-    reason=$(bridge_inbox_surface) || exit 1
-    touch "$STATE/.last-bridge-check"
-    [ -z "$reason" ] || wake "$reason"
+  # Read-only Bridge inbox poll, on its own cadence. A home with no configured
+  # vessel, or no Bridge clone, skips the whole block: no fetch, no scan, and no
+  # Bridge state file. Discovery fetches the shared clone and re-derives the
+  # interval, caching it so the cheap cycles in between never spawn a scan. The
+  # urgent interval only ever TIGHTENS that cadence: discovery runs on whichever
+  # of it and the interval in force is smaller, because this fetch is the only
+  # thing that advances origin/main, and gating it on the urgent interval alone
+  # would let a widened urgent knob freeze detection on a ref that never moves.
+  if [ "${#BRIDGE_VESSELS[@]}" -gt 0 ] && [ -d "$BRIDGE_ROOT/.git" ]; then
+    bridge_interval=$(cat "$STATE/.bridge-interval-cache" 2>/dev/null || true)
+    case "$bridge_interval" in
+      ''|*[!0-9]*) bridge_interval=$CHECK_INTERVAL ;;
+    esac
+    bridge_discovery_interval=$BRIDGE_URGENT_CHECK_INTERVAL
+    [ "$bridge_discovery_interval" -le "$bridge_interval" ] || bridge_discovery_interval=$bridge_interval
+    if [ "$(age_of "$STATE/.last-bridge-discovery")" -ge "$bridge_discovery_interval" ]; then
+      bridge_inbox_fetch
+      bridge_interval=$(bridge_check_interval)
+      printf '%s' "$bridge_interval" > "$STATE/.bridge-interval-cache" 2>/dev/null || true
+      touch "$STATE/.last-bridge-discovery"
+    fi
+    if [ "$(age_of "$STATE/.last-bridge-check")" -ge "$bridge_interval" ]; then
+      reason=$(bridge_inbox_surface) || exit 1
+      touch "$STATE/.last-bridge-check"
+      [ -z "$reason" ] || wake "$reason"
+    fi
   fi
 
   # On the first changed signal, linger one grace period and re-scan before
