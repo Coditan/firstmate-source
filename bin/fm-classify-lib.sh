@@ -93,6 +93,44 @@ status_is_terminal_verb() {
   esac
 }
 
+# The verbs that declare a task STOPPED WRITING. Deliberately narrower than the
+# terminal captain verbs above: needs-decision and blocked stop the agent's turn
+# but expect it to resume and keep working (the scaffolds have it append
+# `resolved:` and carry on), so they say nothing about the work being finished.
+# Callers asking "must the captain see this" use status_is_terminal_verb; callers
+# asking "will anything more be written" use the two helpers below.
+# FM_CLASSIFY_FINISHED_VERBS overrides the set.
+FM_CLASSIFY_FINISHED_VERBS_DEFAULT='done failed'
+
+# 0 if the given status line's leading verb declares the task finished.
+status_is_finished_verb() {  # <status-line>
+  local line=$1 verb
+  [ -n "$line" ] || return 1
+  verb=$(status_line_verb "$line")
+  [ -n "$verb" ] || return 1
+  case " ${FM_CLASSIFY_FINISHED_VERBS:-$FM_CLASSIFY_FINISHED_VERBS_DEFAULT} " in
+    *" $verb "*) return 0 ;;
+  esac
+  return 1
+}
+
+# 0 if a status file EVER recorded a finished event. The status stream is an
+# append-only EVENT log, so this deliberately scans every line instead of reading
+# the last one: "this task finished at some point" is monotonic, and a later
+# unrelated line never un-finishes it. Consumers that need the CURRENT state of a
+# live crew use fm-crew-state.sh instead; this one answers a durable question that
+# still has an answer after the pane is gone.
+status_has_finished_event() {  # <status-file>
+  local f=$1 line
+  [ -e "$f" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    if status_is_finished_verb "$line"; then
+      return 0
+    fi
+  done < "$f"
+  return 1
+}
+
 # 0 if the given (last) status line matches a captain-relevant verb.
 # Verb-aware by default: terminal verbs always match; nonterminal progress verbs
 # (working, resolved, captain-held) and paused never match from free-text prose;

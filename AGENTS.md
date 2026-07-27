@@ -78,6 +78,7 @@ bin/                 helper scripts, committed; read each script's header before
 .env                 optional X-mode pairing token; LOCAL, gitignored; presence-gates section 14
 config/crew-harness  crewmate harness override; LOCAL, gitignored; absent or "default" = same as firstmate. Inherited as the literal file: a concrete primary adapter value also controls a secondmate home's own crewmates (section 4)
 config/crew-dispatch.json  optional crewmate dispatch profiles; LOCAL, gitignored; firstmate-maintained but human-editable natural-language rules that choose a per-task harness/model/effort profile (section 4). Inherited by secondmate homes
+config/model-panel.json  optional model-panel role profiles; LOCAL, gitignored; maps the pinned analyst and judge roles to concrete models, falling back to config/crew-dispatch.json's default profile set. NOT inherited by secondmate homes, because it names the models one home can actually reach (docs/configuration.md "Model panel roles")
 config/secondmate-harness  harness the PRIMARY uses to launch SECONDMATE agents, optionally followed by a model and effort token on the same line ("<harness> [<model>] [<effort>]"; section 4); LOCAL, gitignored; absent or "default" harness falls back to config/crew-harness then firstmate's own. The primary's own setting; NOT inherited into secondmate homes (secondmates do not spawn secondmates)
 config/firstmate-update-base  comparison base for the instruction-surface currency check, naming the source this deployment updates from; LOCAL, gitignored; absent means the canonical upstream template; inherited by secondmate homes (docs/configuration.md "Upstream firstmate and curated-fork checks")
 config/fork-sync-upstream  comparison base for the curated-fork check, naming the real upstream the fork tracks; LOCAL, gitignored; absent means the canonical upstream template; curator-only, NOT inherited by secondmate homes
@@ -100,6 +101,8 @@ data/                personal fleet records; LOCAL, gitignored as a whole
   secondmates.md      secondmate routing table; firstmate-private, maintained by fm-home-seed.sh (section 6)
   <id>/brief.md      per-task crewmate brief, or per-secondmate charter brief when kind=secondmate
   <id>/report.md     scout task deliverable, written by the crewmate; survives teardown
+  <panel-id>/panel.meta  model-panel record written by bin/fm-model-panel.sh: form, project, question pointer, stage, member task ids, and each role's resolved profile
+  <panel-id>/question.md  the one question text every member of that panel was given, written by bin/fm-model-panel.sh; survives teardown like the reports
 projects/            cloned repos; gitignored; READ-ONLY for you
 graphify-out/        local Graphify knowledge graph artifacts; gitignored, expected to drift after hook or incremental updates
 state/               volatile runtime signals; gitignored
@@ -255,6 +258,9 @@ Classify the deliverable:
 
 - **Ship** is the default and produces a project change through the selected delivery mode.
 - **Scout** produces knowledge in `data/<id>/report.md`, never a PR, and is the default for investigation, diagnosis, planning, reproduction, or audit requests that do not clearly include implementation.
+
+When the captain invokes `/panel`, asks for a panel, a second opinion from another model, or an adversarial cross-check of an answer, load the `panel` skill.
+It owns that formation of independent scouts plus a judge, and when it is worth its cost.
 
 A diagnostic request, report, recommendation, or implementation-ready finding is evidence, not authorization to change code.
 Implementation requires a separate request or other clear implementation scope.
