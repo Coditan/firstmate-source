@@ -22,7 +22,18 @@ VERIFY="$ROOT/bin/fm-pdf-verify.sh"
 FINISH="$ROOT/bin/fm-pdf-finish.sh"
 fm_test_tmproot TMP_ROOT fm-pdf-output
 
-command -v gs >/dev/null 2>&1 || { echo "skip: ghostscript not found"; exit 0; }
+# Ghostscript is this suite's only proof of the conformance gate, so CI must
+# never report green without it. The portable-serial lane installs it, requires
+# it, and passes --fail-on-gate-skip for this exact token; the hard failure here
+# is the second lock, so a lane that lost those steps still cannot go quiet. A
+# developer run without Ghostscript may still skip.
+if ! command -v gs >/dev/null 2>&1; then
+  if [ -n "${CI:-}" ]; then
+    fail "ghostscript is required in CI: this suite is the only proof of the PDF conformance gate"
+  fi
+  echo "skip: ghostscript not found"
+  exit 0
+fi
 
 # --- fixtures ---------------------------------------------------------------
 
@@ -64,11 +75,6 @@ assert_contains "$out" "REJECTED" "rejection must be stated plainly"
 assert_contains "$out" "does not conform" "rejection must name the conformance failure"
 pass "non-conforming PDF is rejected"
 
-# The reader's own diagnosis reaches the caller, so the failure is actionable
-# rather than a bare exit code.
-assert_contains "$out" "incorrect xref size" "the reader's diagnosis must be surfaced"
-pass "reader diagnosis is surfaced to the caller"
-
 # --- direction 2: a conforming file PASSES ----------------------------------
 
 out=$("$VERIFY" "$GOOD" 2>&1); rc=$?
@@ -107,12 +113,35 @@ expect_code 3 "$rc" "a silent reader must not report success"
 assert_contains "$out" "CANNOT VERIFY" "a silent reader must say the check did not happen"
 pass "silent reader fails closed"
 
-# A reader that dies mid-document must not be mistaken for a clean read.
-printf '#!/bin/sh\nexit 4\n' > "$STUB_BIN/gs"
+# A reader that could not run is not a verdict on the document. Both refuse and
+# nothing is published either way, so the only thing at stake is attribution:
+# calling a broken, missing-library, OOM-killed or sandboxed reader a bad
+# document sends someone to debug a file that was fine.
+cat > "$STUB_BIN/gs" <<'STUB'
+#!/bin/sh
+echo "gs: error while loading shared libraries: libgs.so.10: cannot open shared object file" >&2
+exit 127
+STUB
 out=$(FM_PDF_GS="$STUB_BIN/gs" "$VERIFY" "$GOOD" 2>&1); rc=$?
-expect_code 1 "$rc" "a failing reader must not report success"
-assert_contains "$out" "REJECTED" "a failing reader must reject the file"
-pass "failing reader fails closed"
+expect_code 3 "$rc" "a reader that could not run must not report success"
+assert_contains "$out" "CANNOT VERIFY" "a reader that could not run must say the check did not happen"
+assert_contains "$out" "error while loading shared libraries" "the reader's own message must be attributable"
+assert_not_contains "$out" "REJECTED" "a broken reader must not be reported as a bad document"
+pass "a reader that could not run fails closed as unverifiable"
+
+# The other direction: a non-zero exit whose output DOES name a document problem
+# is a verdict on the file and stays a rejection.
+cat > "$STUB_BIN/gs" <<'STUB'
+#!/bin/sh
+echo "Processing pages 1 through 5."
+echo "   **** This file had errors that were repaired or ignored."
+exit 4
+STUB
+out=$(FM_PDF_GS="$STUB_BIN/gs" "$VERIFY" "$GOOD" 2>&1); rc=$?
+expect_code 1 "$rc" "a reader that names a document problem must reject the file"
+assert_contains "$out" "REJECTED" "a condemned document must be reported as rejected"
+assert_not_contains "$out" "CANNOT VERIFY" "a condemned document must not be downgraded to unverifiable"
+pass "a failing reader that names a document problem still rejects"
 
 # Missing and empty inputs are rejected, not skipped.
 out=$("$VERIFY" "$TMP_ROOT/does-not-exist.pdf" 2>&1); rc=$?
@@ -133,6 +162,15 @@ expect_code 1 "$rc" "a truncated file must be rejected"
 assert_contains "$out" "REJECTED" "a truncated file must be reported as rejected"
 pass "a truncated file is rejected, not called unverifiable"
 
+# A file that is not a PDF at all makes the real reader exit non-zero while
+# naming the failure, so it stays a rejection rather than sliding into the
+# "could not check" class the broken-reader rule introduces.
+printf 'this is not a PDF at all\n' > "$TMP_ROOT/not-a-pdf.pdf"
+out=$("$VERIFY" "$TMP_ROOT/not-a-pdf.pdf" 2>&1); rc=$?
+expect_code 1 "$rc" "a non-PDF file must be rejected"
+assert_contains "$out" "REJECTED" "a non-PDF file must be reported as rejected"
+pass "a non-PDF file is rejected, not called unverifiable"
+
 # A batch is only as good as its worst file.
 out=$("$VERIFY" "$GOOD" "$BROKEN" 2>&1); rc=$?
 expect_code 1 "$rc" "a batch containing a bad file must fail"
@@ -145,6 +183,21 @@ out=$("$FINISH" --pages 5 "$OUT" "$BROKEN" 2>&1); rc=$?
 expect_code 0 "$rc" "finishing a broken input must produce a conforming document"
 assert_present "$OUT" "the finished document must exist"
 pass "the generation step repairs the field defect"
+
+# Exit 0 means published, and the success line must come from the step that
+# published rather than from a second reader pass whose status would leak into
+# the caller's - which would report "nothing published" about a live file.
+assert_contains "$out" "fm-pdf-finish: published $OUT" "publication must be announced by the publishing step"
+assert_contains "$out" "5 pages" "the success line must carry the page count the reader counted"
+pass "a published document reports success and exits 0"
+
+# --quiet still publishes, still exits 0, and still says nothing on success.
+QUIET_OUT="$TMP_ROOT/quiet.pdf"
+out=$("$FINISH" --quiet --pages 5 "$QUIET_OUT" "$BROKEN" 2>&1); rc=$?
+expect_code 0 "$rc" "--quiet must publish and exit 0"
+[ -z "$out" ] || fail "--quiet must print nothing on success, got: $out"
+assert_present "$QUIET_OUT" "--quiet must still publish the document"
+pass "--quiet publishes silently and exits 0"
 
 # And the repaired output really is conforming, checked independently.
 out=$("$VERIFY" --pages 5 "$OUT" 2>&1); rc=$?

@@ -36,6 +36,13 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERIFY="$SCRIPT_DIR/fm-pdf-verify.sh"
+PDF_LIB="$SCRIPT_DIR/fm-pdf-lib.sh"
+# shellcheck source=bin/fm-pdf-lib.sh
+# shellcheck disable=SC1091
+. "$PDF_LIB" || {
+  echo "fm-pdf-finish: CANNOT VERIFY - helper library missing at $PDF_LIB" >&2
+  exit 3
+}
 
 usage() {
   cat >&2 <<'EOF'
@@ -52,27 +59,16 @@ Exit codes: 0 published, 1 rejected, 2 usage, 3 could not verify.
 EOF
 }
 
-EXPECT_PAGES=""
-QUIET=0
-
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --pages)
-      [ "$#" -ge 2 ] || { echo "fm-pdf-finish: --pages needs a value" >&2; usage; exit 2; }
-      EXPECT_PAGES=$2
-      case "$EXPECT_PAGES" in
-        ''|*[!0-9]*) echo "fm-pdf-finish: --pages must be a positive integer, got '$EXPECT_PAGES'" >&2; exit 2 ;;
-      esac
-      [ "$EXPECT_PAGES" -gt 0 ] || { echo "fm-pdf-finish: --pages must be a positive integer" >&2; exit 2; }
-      shift 2
-      ;;
-    --quiet) QUIET=1; shift ;;
-    -h|--help) usage; exit 0 ;;
-    --) shift; break ;;
-    -*) echo "fm-pdf-finish: unknown option '$1'" >&2; usage; exit 2 ;;
-    *) break ;;
-  esac
-done
+fm_pdf_parse_options fm-pdf-finish usage "$@"
+parse_rc=$?
+case "$parse_rc" in
+  0) ;;
+  10) exit 0 ;;
+  *) exit "$parse_rc" ;;
+esac
+set -- "${FM_PDF_ARGV[@]+"${FM_PDF_ARGV[@]}"}"
+EXPECT_PAGES=$FM_PDF_EXPECT_PAGES
+QUIET=$FM_PDF_QUIET
 
 [ "$#" -ge 2 ] || { usage; exit 2; }
 
@@ -86,7 +82,7 @@ done
 
 [ -x "$VERIFY" ] || { echo "fm-pdf-finish: CANNOT VERIFY - gate script missing at $VERIFY" >&2; exit 3; }
 
-GS_BIN=${FM_PDF_GS:-gs}
+GS_BIN=$(fm_pdf_gs_bin)
 command -v "$GS_BIN" >/dev/null 2>&1 || {
   echo "fm-pdf-finish: no PDF producer found (looked for '$GS_BIN'; install ghostscript)" >&2
   exit 3
@@ -131,13 +127,18 @@ fi
 
 VERIFY_ARGS=()
 [ -n "$EXPECT_PAGES" ] && VERIFY_ARGS+=(--pages "$EXPECT_PAGES")
-VERIFY_ARGS+=(--quiet)
 
-"$VERIFY" "${VERIFY_ARGS[@]}" "$TMP_OUT"
+# The gate runs exactly once, here, on the temporary file, and its verdict is
+# the only one. The result is captured rather than re-derived after publication:
+# a second reader pass would double the cost of every generation and, being the
+# last command, would hand its own status to the caller - reporting "nothing
+# published" about a document that is already live at <out>.
+gate_out=$("$VERIFY" "${VERIFY_ARGS[@]+"${VERIFY_ARGS[@]}"}" "$TMP_OUT" 2>&1)
 verdict=$?
 
 if [ "$verdict" -ne 0 ]; then
   # The gate refused, so nothing reaches <out>. A previous <out> stays as it was.
+  printf '%s\n' "$gate_out" >&2
   if [ "$verdict" -eq 3 ]; then
     echo "fm-pdf-finish: CANNOT VERIFY the finished document - nothing published to $OUT" >&2
   else
@@ -155,5 +156,15 @@ trap - EXIT
 chmod 644 "$OUT" 2>/dev/null || true
 
 if [ "$QUIET" -eq 0 ]; then
-  "$VERIFY" "$OUT"
+  # The page count is the one the reader itself counted during the gate run.
+  pages=$(printf '%s\n' "$gate_out" \
+    | sed -n 's/.*(\([0-9][0-9]*\) pages, conforming)$/\1/p' \
+    | tail -n 1)
+  if [ -n "$pages" ]; then
+    echo "fm-pdf-finish: published $OUT ($pages pages, conforming)"
+  else
+    echo "fm-pdf-finish: published $OUT (conforming)"
+  fi
 fi
+
+exit 0

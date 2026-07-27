@@ -22,6 +22,14 @@
 # that passes when it could not actually check reads like an assurance and is
 # not one.
 #
+# The two refusals are told apart on purpose. REJECTED means the reader's output
+# positively named a document problem. CANNOT VERIFY means the check did not
+# happen - no reader, a reader that could not run, or a reader that said nothing
+# recognizable - and it carries the reader's own message so the failure is
+# attributable. Nothing is published either way, so the only thing at stake is
+# whose fault it is: calling a broken, missing-library, OOM-killed or sandboxed
+# reader a bad document sends someone to debug a file that was fine.
+#
 # Usage: fm-pdf-verify.sh [--pages <n>] [--quiet] <pdf> [<pdf>...]
 #   --pages <n>  also require every file to have exactly <n> pages, counted by
 #                the reader itself, so a generation path cannot quietly drop or
@@ -31,6 +39,15 @@
 # Exit: 0 every file conforms; 1 a file was rejected; 2 usage error;
 #       3 verification could not be performed (treat as a failure, not a pass).
 set -u
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PDF_LIB="$SCRIPT_DIR/fm-pdf-lib.sh"
+# shellcheck source=bin/fm-pdf-lib.sh
+# shellcheck disable=SC1091
+. "$PDF_LIB" || {
+  echo "fm-pdf-verify: CANNOT VERIFY - helper library missing at $PDF_LIB" >&2
+  exit 3
+}
 
 usage() {
   cat >&2 <<'EOF'
@@ -46,31 +63,20 @@ Exit codes: 0 all conform, 1 rejected, 2 usage, 3 could not verify.
 EOF
 }
 
-EXPECT_PAGES=""
-QUIET=0
-
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --pages)
-      [ "$#" -ge 2 ] || { echo "fm-pdf-verify: --pages needs a value" >&2; usage; exit 2; }
-      EXPECT_PAGES=$2
-      case "$EXPECT_PAGES" in
-        ''|*[!0-9]*) echo "fm-pdf-verify: --pages must be a positive integer, got '$EXPECT_PAGES'" >&2; exit 2 ;;
-      esac
-      [ "$EXPECT_PAGES" -gt 0 ] || { echo "fm-pdf-verify: --pages must be a positive integer" >&2; exit 2; }
-      shift 2
-      ;;
-    --quiet) QUIET=1; shift ;;
-    -h|--help) usage; exit 0 ;;
-    --) shift; break ;;
-    -*) echo "fm-pdf-verify: unknown option '$1'" >&2; usage; exit 2 ;;
-    *) break ;;
-  esac
-done
+fm_pdf_parse_options fm-pdf-verify usage "$@"
+parse_rc=$?
+case "$parse_rc" in
+  0) ;;
+  10) exit 0 ;;
+  *) exit "$parse_rc" ;;
+esac
+set -- "${FM_PDF_ARGV[@]+"${FM_PDF_ARGV[@]}"}"
+EXPECT_PAGES=$FM_PDF_EXPECT_PAGES
+QUIET=$FM_PDF_QUIET
 
 [ "$#" -ge 1 ] || { usage; exit 2; }
 
-GS_BIN=${FM_PDF_GS:-gs}
+GS_BIN=$(fm_pdf_gs_bin)
 if ! command -v "$GS_BIN" >/dev/null 2>&1; then
   # Fail closed: with no reader there is no verdict, and "unverified" must never
   # be reported as "conforming".
@@ -82,7 +88,10 @@ fi
 REASON=""
 
 # read_pdf <file> - interpret every page and echo the reader's combined output.
-# Deliberately runs without -q so the conformance diagnostics survive.
+# Deliberately runs without -q so the conformance diagnostics survive, and with
+# -dSAFER like the producer in bin/fm-pdf-finish.sh, because this script is also
+# pointed at files this repo did not make and the reader interprets whatever it
+# is handed. -dSAFER does not change the diagnostics the verdict is taken from.
 # Ghostscript reads a leading `-` as an option and `--` as "run this file as a
 # program", so the path is always passed absolute and never bare.
 read_pdf() {
@@ -91,12 +100,12 @@ read_pdf() {
     /*) : ;;
     *) abs="$PWD/$abs" ;;
   esac
-  "$GS_BIN" -o /dev/null -sDEVICE=nullpage -dNOPAUSE -dBATCH "$abs" 2>&1
+  "$GS_BIN" -o /dev/null -sDEVICE=nullpage -dNOPAUSE -dBATCH -dSAFER "$abs" 2>&1
 }
 
 # check_file <file> - 0 conforming, 1 rejected (REASON set), 3 unverifiable.
 check_file() {
-  local file=$1 out rc pages last_page
+  local file=$1 out rc pages last_page complaint
 
   if [ ! -f "$file" ]; then
     REASON="not a file"
@@ -114,19 +123,12 @@ check_file() {
   out=$(read_pdf "$file")
   rc=$?
 
-  # A reader that failed to run at all is an unverifiable result, not a pass.
-  if [ "$rc" -ne 0 ]; then
-    REASON="the PDF reader failed (exit $rc) - file unreadable or reader broken"
-    printf '%s\n' "$out" >&2
-    return 1
-  fi
-
-  # The verdict comes first, before any proof-of-work check, so that a file the
-  # reader positively condemned is reported as rejected rather than as merely
-  # unverifiable. A badly truncated file, for instance, draws the banner without
-  # ever reaching a page report, and it is a bad file, not an unchecked one.
-  # Ghostscript prints this banner while still exiting 0; `****` prefixes its
-  # error and repair notices.
+  # The reader's own complaint comes first - before its exit status and before
+  # any proof-of-work check - so that a file the reader positively condemned is
+  # reported as rejected rather than as merely unverifiable. A badly truncated
+  # file, for instance, draws the banner without ever reaching a page report,
+  # and it is a bad file, not an unchecked one. Ghostscript prints this banner
+  # while still exiting 0; `****` prefixes its error and repair notices.
   case "$out" in
     *"does not conform"*)
       REASON="does not conform to the PDF specification"
@@ -149,6 +151,17 @@ check_file() {
       return 1
       ;;
   esac
+
+  # Only the reader's output condemns a document. A non-zero exit that named no
+  # document problem is a reader that could not run - a missing library, an OOM
+  # kill, a sandbox denial - so it is reported as an unperformed check with the
+  # reader's own message attached, not as a bad file. It still fails closed.
+  if [ "$rc" -ne 0 ]; then
+    complaint=$(printf '%s\n' "$out" | awk 'NF { print; exit }')
+    REASON="the PDF reader failed (exit $rc) without naming a document problem: ${complaint:-no output}"
+    printf '%s\n' "$out" >&2
+    return 3
+  fi
 
   # Proof of work. The reader announces its page range before interpreting, so
   # its absence - with no complaint either - means the tool did not do what this

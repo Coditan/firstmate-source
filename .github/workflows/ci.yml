@@ -133,11 +133,28 @@ jobs:
           set -eu
           npm install -g tasks-axi
           tasks-axi --version
+      - name: Require Ghostscript for the PDF conformance gate
+        run: |
+          set -eu
+          # tests/fm-pdf-output.test.sh is the only proof that the PDF gate
+          # works. Without Ghostscript it would self-skip and CI would stay
+          # green while nothing was checked, which is the exact class of failure
+          # that gate exists to prevent.
+          command -v gs >/dev/null || {
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ghostscript
+          }
+          command -v gs >/dev/null || {
+            echo "::error::ghostscript is required for the PDF conformance gate proof"
+            exit 1
+          }
+          gs --version
       - name: Run portable serial remainder
         run: |
           set -eu
           mkdir -p "$RUNNER_TEMP/fm-test"
           bin/fm-test-run.sh --lane portable-serial \
+            --fail-on-gate-skip 'ghostscript not found' \
             --json "$RUNNER_TEMP/fm-test/fm-test-timing-portable-serial.json"
       - name: Upload portable serial timing artifact
         if: always()

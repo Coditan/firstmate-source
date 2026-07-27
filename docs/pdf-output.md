@@ -5,6 +5,7 @@ On 2026-07-26 one of those documents reached the captain unopenable, and this pa
 It is evidence, not narrative: every command and every quoted output below was run on 2026-07-27 against the file that actually failed.
 
 `bin/fm-pdf-finish.sh` and `bin/fm-pdf-verify.sh` own the mechanics; their headers and `--help` are authoritative for flags and exit codes.
+They share one option surface, parsed in `bin/fm-pdf-lib.sh`, so the two cannot drift apart when only one is corrected.
 
 ## The incident
 
@@ -85,8 +86,11 @@ Assembly no longer goes through `pdfunite`.
 
 ```
 $ bin/fm-pdf-finish.sh --pages 27 handover.pdf rendered.pdf
-fm-pdf-verify: OK handover.pdf (27 pages, conforming)
+fm-pdf-finish: published handover.pdf (27 pages, conforming)
 ```
+
+The gate runs once, on the temporary file, before publication.
+The success line reports that single verdict rather than re-reading the published document, so a 27-page file is interpreted once and the step's exit status stays its own: 0 means published.
 
 Applied to the file that failed, this reproduces the original repair exactly: 2,448,482 bytes in, 780,372 bytes out, 27 pages, conforming.
 The reduction comes from rebuilding the document, not from dropping content - the page count is asserted, so a repair that lost pages would fail the gate rather than ship.
@@ -123,15 +127,31 @@ The last one is the reason the script asserts that the reader announced its page
 The reader's own complaint is weighed before that proof-of-work check, so a file the reader positively condemns is reported as rejected rather than as unchecked; badly truncated files draw the banner without ever reaching a page report, and they are bad files, not unexamined ones.
 Silence from a checking tool is not evidence of a clean file, and a gate that passes when it could not actually check reads like an assurance while being none.
 
+## Rejected versus could not verify
+
+The two refusals are told apart deliberately, and both fail closed.
+`REJECTED` (exit 1) means the reader's output positively named a document problem, which includes a non-PDF file and a truncated one, because the real reader names those.
+`CANNOT VERIFY` (exit 3) means the check did not happen: no reader, a reader that exited non-zero without naming a document problem, or a reader that printed nothing recognizable.
+That second class carries the reader's own message verbatim, so the failure is attributable.
+
+Nothing is published either way, so the only thing at stake is whose fault it is.
+Calling a broken, missing-library, OOM-killed or sandboxed reader a bad document sends someone to debug a file that was fine.
+Understating genuine garbage is the safer error here, because the file is still refused.
+
 ## Proof in both directions
 
 `tests/fm-pdf-output.test.sh` covers the contract and is proven in both directions, because a gate that only ever rejects is as useless as one that only ever accepts.
 It builds its own conforming fixture with Ghostscript, then reproduces the field defect deterministically by rewriting only the trailer's `/Size` - the body is copied byte-for-byte, so the fixture needs no poppler and cannot drift.
 When poppler is present it additionally asserts against genuine `pdfunite` output.
 
-The suite asserts that a non-conforming file is rejected with the reader's own diagnosis surfaced, that a conforming file passes with its real page count, that a wrong page count is rejected and the right one accepted, that a missing reader, a silent reader, and a failing reader each refuse rather than pass, that assembly repairs the defect while preserving every page, and that a rejected result never reaches the destination, never overwrites a previous file, and leaves no temporary artifacts.
+The suite asserts that a non-conforming file is rejected with the reader's own diagnosis surfaced, that a conforming file passes with its real page count, that a wrong page count is rejected and the right one accepted, that a missing reader, a silent reader, and a reader that could not run each refuse rather than pass, that a reader naming a document problem still rejects, that assembly repairs the defect while preserving every page, and that a rejected result never reaches the destination, never overwrites a previous file, and leaves no temporary artifacts.
+It asserts on Ghostscript's `does not conform` banner, which is what the gate itself matches on, and not on version-specific warning wording, because no Ghostscript version is pinned in this repo.
 
 The suite is not vacuous: replacing the gate with an unconditional success - which is behaviorally what an exit-code-only check would be here, since the reader exits 0 on the broken file - fails it at the first assertion.
+
+The proof has to actually run.
+Without Ghostscript the suite would skip and CI would stay green while nothing was checked, so the `portable-serial` lane in `.github/workflows/ci.yml` installs Ghostscript, requires it, and passes `--fail-on-gate-skip 'ghostscript not found'`, and the suite itself hard-fails rather than skipping when `CI` is set.
+A developer run without Ghostscript may still skip.
 
 ## Using it
 
