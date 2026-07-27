@@ -101,7 +101,8 @@ data/                personal fleet records; LOCAL, gitignored as a whole
   secondmates.md      secondmate routing table; firstmate-private, maintained by fm-home-seed.sh (section 6)
   <id>/brief.md      per-task crewmate brief, or per-secondmate charter brief when kind=secondmate
   <id>/report.md     scout task deliverable, written by the crewmate; survives teardown
-  <panel-id>/panel.meta  model-panel record written by bin/fm-model-panel.sh: form, project, question pointer, stage, and each role's resolved profile
+  <panel-id>/panel.meta  model-panel record written by bin/fm-model-panel.sh: form, project, question pointer, stage, member task ids, and each role's resolved profile
+  <panel-id>/question.md  the one question text every member of that panel was given, written by bin/fm-model-panel.sh; survives teardown like the reports
 projects/            cloned repos; gitignored; READ-ONLY for you
 graphify-out/        local Graphify knowledge graph artifacts; gitignored, expected to drift after hook or incremental updates
 state/               volatile runtime signals; gitignored
