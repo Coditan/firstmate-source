@@ -214,7 +214,7 @@ test_judge_waits_for_every_report_then_gets_both() {
 
   printf 'analyst a findings\n' > "$home/data/jg-a/report.md"
   out=$(run_panel "$home" advance jg) || fail "advance failed: $out"
-  assert_contains "$out" "waiting:" "advance must still wait while the second report is missing"
+  assert_contains "$out" "jg-b" "advance must still wait while the second report is missing"
   assert_not_contains "$(spawn_log "$home")" "jg-judge" "the judge must wait for every analyst report"
 
   # Both reports EXIST now, but neither analyst has said it is finished. A file
@@ -223,9 +223,8 @@ test_judge_waits_for_every_report_then_gets_both() {
   printf 'analyst b findings\n' > "$home/data/jg-b/report.md"
   say_status "$home" jg-a 'working: still drafting'
   out=$(run_panel "$home" advance jg) || fail "advance failed: $out"
-  assert_contains "$out" "waiting:" "advance must wait while an analyst has written no terminal status event"
-  assert_contains "$out" "no terminal status event" "the waiting line must name the missing terminal event"
-  assert_contains "$out" "jg-a" "the waiting line must name the analyst that has not finished"
+  assert_contains "$out" "no terminal status event" "the outcome must name the missing terminal event"
+  assert_contains "$out" "jg-a" "the outcome must name the analyst that has not finished"
   assert_not_contains "$(spawn_log "$home")" "jg-judge" \
     "the judge must not be dispatched against a report whose analyst is still writing"
 
@@ -260,12 +259,96 @@ test_judge_waits_for_every_report_then_gets_both() {
   assert_no_grep 'claude-opus-5' "$brief" "the judge must not be told which model wrote which report"
   assert_no_grep 'gpt-5.6-sol' "$brief" "the judge must not be told which model wrote which report"
 
+  # The judge's own report passes the SAME two-condition gate: a report that
+  # exists is not a report that is finished, on the final hop either.
+  printf 'partial verdict\n' > "$home/data/jg-judge/report.md"
+  out=$(run_panel "$home" advance jg) || fail "advance failed: $out"
+  assert_not_contains "$out" "complete:" "a half-written judge report must not complete the panel"
+  assert_contains "$out" "jg-judge" "the outcome must name the judge that has not finished"
+  assert_no_grep 'stage=complete' "$home/data/jg/panel.meta" \
+    "the panel must not record itself complete over an unfinished judge"
+
+  say_status "$home" jg-judge 'done: verdict written'
+  : > "$home/data/jg-judge/report.md"
+  out=$(run_panel "$home" advance jg) || fail "advance failed: $out"
+  assert_contains "$out" "waiting:" "a finished judge with an empty report must still wait"
+  assert_contains "$out" "empty or absent" "the waiting line must name the empty judge report"
+  assert_no_grep 'stage=complete' "$home/data/jg/panel.meta" \
+    "the panel must not record itself complete over an empty judge report"
+
   printf 'judgement\n' > "$home/data/jg-judge/report.md"
   out=$(run_panel "$home" advance jg) || fail "advance failed: $out"
   assert_contains "$out" "complete: $home/data/jg-judge/report.md" \
     "a finished panel does not report its judge report path"
   assert_grep 'stage=complete' "$home/data/jg/panel.meta" "the panel record did not reach the complete stage"
   pass "the judge is created only once every analyst report exists, and sees both blind"
+}
+
+test_wedged_member_names_its_override_and_the_override_is_per_member() {
+  local home out brief
+  home=$(new_home wedged "$TWO_MODELS")
+  out=$(run_panel "$home" start --id wd --project "$home/subject" "Which claim holds up?") \
+    || fail "start failed: $out"
+
+  # Both analysts left a report and neither ever signalled that it finished:
+  # the one state that never clears on its own.
+  printf 'analyst a findings\n' > "$home/data/wd-a/report.md"
+  printf 'analyst b findings\n' > "$home/data/wd-b/report.md"
+  out=$(run_panel "$home" advance wd) || fail "advance failed: $out"
+  assert_contains "$out" "wedged:" "a member with a report but no terminal event must not print the bland waiting line"
+  assert_contains "$out" "wd-a" "the wedged block must name the wedged member"
+  assert_contains "$out" "advance wd --accept-unfinished wd-a" \
+    "the wedged block must print the exact override command"
+  assert_contains "$out" "INCOMPLETE" "the wedged block must say the accepted report may be incomplete"
+  assert_contains "$out" "no timeout" "the wedged block must say nothing advances on its own"
+
+  # Per-member: accepting one analyst waives nothing for the other.
+  out=$(run_panel "$home" advance wd --accept-unfinished wd-a) || fail "advance failed: $out"
+  assert_contains "$out" "wedged:" "overriding one member must not waive the gate for another"
+  assert_contains "$out" "wd-b" "the still-wedged member must still be named"
+  assert_not_contains "$out" "advance wd --accept-unfinished wd-a" \
+    "an already-accepted member must not still be offered the override"
+  assert_not_contains "$(spawn_log "$home")" "wd-judge" \
+    "one accepted member must not be enough to dispatch the judge"
+  assert_grep 'accepted_unfinished=wd-a' "$home/data/wd/panel.meta" \
+    "the override was not recorded durably in the panel record"
+
+  out=$(run_panel "$home" advance wd --accept-unfinished wd-b) || fail "advance failed: $out"
+  assert_contains "$(spawn_log "$home")" "wd-judge " "accepting every member must let the judge be dispatched"
+  assert_grep 'accepted_unfinished=wd-a wd-b' "$home/data/wd/panel.meta" \
+    "the panel record must carry every accepted member"
+
+  brief="$home/data/wd-judge/brief.md"
+  assert_grep 'Reports accepted without their author finishing' "$brief" \
+    "the judge brief does not disclose that a report was accepted unfinished"
+  assert_grep "- Analyst A: \`$home/data/wd-a/report.md\`" "$brief" \
+    "the judge brief does not name the possibly incomplete report"
+  assert_grep 'truncated or incomplete' "$brief" \
+    "the judge brief does not tell the judge to treat that report as possibly incomplete"
+  assert_no_grep 'claude-opus-5' "$brief" "disclosing completeness must not disclose the model"
+  assert_no_grep 'gpt-5.6-sol' "$brief" "disclosing completeness must not disclose the model"
+  pass "the wedge names its per-member override, which is recorded and disclosed to the judge"
+}
+
+test_accept_unfinished_refuses_a_nonmember_and_a_missing_report() {
+  local home out status=0
+  home=$(new_home accept-guard "$TWO_MODELS")
+  out=$(run_panel "$home" start --id ag --project "$home/subject" "Anything?") \
+    || fail "start failed: $out"
+
+  out=$(run_panel "$home" advance ag --accept-unfinished not-a-member) || status=$?
+  expect_code 2 "$status" "accepting a task that is not a panel member must be a usage error"
+  assert_contains "$out" "not a member" "the refusal does not say the task is not a panel member"
+  assert_no_grep 'accepted_unfinished' "$home/data/ag/panel.meta" \
+    "a refused override must not be recorded"
+
+  status=0
+  out=$(run_panel "$home" advance ag --accept-unfinished ag-a) || status=$?
+  expect_code 2 "$status" "accepting a member with no report at all must be a usage error"
+  assert_contains "$out" "nothing to accept" "the refusal does not say there is no report to accept"
+  assert_no_grep 'accepted_unfinished' "$home/data/ag/panel.meta" \
+    "a refused override must not be recorded"
+  pass "the override refuses a non-member and refuses to waive a report that does not exist"
 }
 
 test_failed_analyst_with_a_report_still_reaches_the_judge() {
@@ -277,7 +360,7 @@ test_failed_analyst_with_a_report_still_reaches_the_judge() {
   # The reduced form's single analyst is gated exactly like a panel's two.
   printf 'partial findings\n' > "$home/data/fa-a/report.md"
   out=$(run_panel "$home" advance fa) || fail "advance failed: $out"
-  assert_contains "$out" "waiting:" "the single analyst of the reduced form must be gated too"
+  assert_contains "$out" "fa-a" "the single analyst of the reduced form must be gated too"
   assert_not_contains "$(spawn_log "$home")" "fa-judge" \
     "the reduced form must not dispatch the judge before its analyst has finished"
 
@@ -402,6 +485,8 @@ test_same_model_through_two_harnesses_refuses
 test_reduced_form_is_named_not_a_panel
 test_analyst_briefs_share_the_question_and_forbid_peeking
 test_judge_waits_for_every_report_then_gets_both
+test_wedged_member_names_its_override_and_the_override_is_per_member
+test_accept_unfinished_refuses_a_nonmember_and_a_missing_report
 test_failed_analyst_with_a_report_still_reaches_the_judge
 test_crew_dispatch_default_is_the_documented_fallback
 test_no_configuration_refuses_with_both_paths_named

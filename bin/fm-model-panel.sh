@@ -10,21 +10,25 @@
 #   fm-model-panel.sh start [--id <panel-id>] [--project <name-or-path>]
 #                           [--reduced] [--dry-run]
 #                           (<question> | --question-file <path>)
-#   fm-model-panel.sh advance <panel-id>
+#   fm-model-panel.sh advance <panel-id> [--accept-unfinished <task-id>]
 #   fm-model-panel.sh status <panel-id>
 #
 #   start     resolve the three roles, write the question and both analyst
 #             briefs, and dispatch the analysts concurrently. The judge is NOT
 #             dispatched here: it is created only once every analyst has
 #             finished, which `advance` enforces.
-#   advance   idempotent next step. The judge is created only when BOTH of these
-#             hold for EVERY analyst: the analyst wrote a terminal status event
-#             (a `done:` or `failed:` line in state/<task-id>.status), and its
-#             data/<task-id>/report.md exists and is non-empty. Until then it
-#             prints one `waiting:` line naming which of the two facts is missing
-#             for which analyst and changes nothing; with both satisfied for
-#             every analyst it scaffolds and dispatches the judge; with the judge
-#             report present it prints `complete: <report path>`.
+#   advance   idempotent next step, gated on the SAME two conditions for every
+#             member, analysts and judge alike: the member wrote a terminal
+#             status event (a `done:` or `failed:` line in state/<task-id>.status)
+#             AND its data/<task-id>/report.md exists and is non-empty. With both
+#             satisfied for every analyst it scaffolds and dispatches the judge;
+#             with both satisfied for the judge it prints
+#             `complete: <report path>` and records the panel complete, which is
+#             the last thing it does. Until then it changes nothing and prints one
+#             of two outcomes, both exit 0: a `waiting:` line naming which of the
+#             two facts is missing for which member, or a `wedged:` block when a
+#             member left a report but no terminal event, which is the one state
+#             that may never clear on its own.
 #   status    print the panel record without changing anything.
 #
 #   --id <panel-id>       explicit panel id (default: derived from the question
@@ -46,6 +50,14 @@
 #                         read the question from a file instead of the
 #                         positional argument. Exactly one of the two is
 #                         required; a long question belongs in a file.
+#   --accept-unfinished <task-id>
+#                         with `advance`, accept ONE named member's existing
+#                         report as final even though that member never wrote a
+#                         terminal status event. It is explicit and per-member: it
+#                         names one task id and waives nothing for any other
+#                         member, it is never on by default, and it refuses a
+#                         member that has no report to accept. Repeat the flag to
+#                         accept more than one member.
 #   --dry-run             with `start`, resolve and print the lineup without
 #                         writing or dispatching anything.
 #
@@ -80,7 +92,26 @@
 # non-empty report is finished. The verbs are recognized through
 # bin/fm-classify-lib.sh, this repo's owner of the status-event vocabulary, and
 # the scan asks only whether such an event EVER appeared, which is monotonic -
-# never what the last line currently says.
+# never what the last line currently says. The gate governs the judge's own
+# report on exactly the same terms: the trap does not care which hop it is on,
+# and handing the panel's final verdict out under a weaker rule than the one
+# guarding its inputs would be absurd.
+#
+# That gate can WEDGE, and the escape from it is deliberately manual. A member
+# killed after it wrote its report but before it appended its terminal line will
+# never append that line, so `advance` prints a `wedged:` block rather than the
+# bland `waiting:` one: it names the member, says whether a runtime record still
+# exists for it, gives the exact `--accept-unfinished <task-id>` command, and
+# says plainly that accepting means judging a possibly INCOMPLETE report. The
+# acceptance is recorded in the panel record as `accepted_unfinished`, so the
+# provenance of the verdict carries the caveat forever, and the judge's brief
+# names the report it must treat as possibly truncated.
+#
+# There is deliberately NO time-based, retry-count-based, or attempt-count-based
+# path that advances a panel on its own, and none may be added. An automatic
+# timeout would reinstate exactly the half-written-report failure this gate
+# closes, only on a delay and with nobody watching. Waiting waits forever until a
+# human decides.
 #
 # Panel record: data/<panel-id>/panel.meta (key=value), with the question at
 # data/<panel-id>/question.md. Both are durable and survive scout teardown, as do
@@ -365,7 +396,7 @@ EOF
 }
 
 compose_judge_task() {
-  local out=$1 question_file=$2 report_path=$3 form=$4 report_a=$5 report_b=$6
+  local out=$1 question_file=$2 report_path=$3 form=$4 report_a=$5 report_b=$6 unfinished=${7:-}
   {
     if [ "$form" = panel ]; then
       cat <<'EOF'
@@ -407,6 +438,20 @@ EOF
 - Analyst: \`$report_a\`
 
 The model behind it is deliberately withheld from you; judge the work, not the runtime.
+EOF
+    fi
+    if [ -n "$unfinished" ]; then
+      cat <<'EOF'
+
+## Reports accepted without their author finishing
+
+EOF
+      printf '%s\n' "$unfinished"
+      cat <<'EOF'
+
+Each report listed above was accepted although its author never signalled that it had finished, so it may be truncated or incomplete.
+Treat what is absent from it as missing rather than as evidence that there was nothing to find, and say plainly in your own report which report was incomplete and what that cost the verdict.
+This discloses the report's completeness only; which model wrote it is still withheld, and blind judging is unchanged.
 EOF
     fi
     cat <<'EOF'
@@ -682,22 +727,94 @@ require_panel() {
   printf '%s\n' "$meta"
 }
 
-# Print why one analyst is not ready for the judge yet, or nothing when it is.
+# 0 when this member's terminal status event was explicitly waived by an operator.
+member_accepted_unfinished() {  # <task-id> <accepted-list>
+  case " $2 " in
+    *" $1 "*) return 0 ;;
+  esac
+  return 1
+}
+
+# One member's position against the two gate conditions. The same predicate
+# serves every member, analysts and judge alike, because the judge is an ordinary
+# scout that appends `done:` exactly as they do. status_has_finished_event comes
+# from bin/fm-classify-lib.sh and asks only whether a terminal event EVER
+# appeared.
+#   ready           both conditions hold (or the terminal event was accepted)
+#   finished-empty  finished, but there is no report to judge
+#   unsignalled     a report is there, but nothing says its author finished
+#   working         neither condition holds yet
+member_state() {  # <task-id> <accepted-list>
+  local id=$1 accepted=$2 finished=0
+  if status_has_finished_event "$STATE/$id.status" \
+    || member_accepted_unfinished "$id" "$accepted"; then
+    finished=1
+  fi
+  if [ -s "$DATA/$id/report.md" ]; then
+    if [ "$finished" -eq 1 ]; then printf 'ready\n'; else printf 'unsignalled\n'; fi
+  else
+    if [ "$finished" -eq 1 ]; then printf 'finished-empty\n'; else printf 'working\n'; fi
+  fi
+}
+
 # The two conditions are different facts and the operator needs to know which one
-# is missing, so each names itself. status_has_finished_event comes from
-# bin/fm-classify-lib.sh and asks only whether a terminal event EVER appeared.
-analyst_not_ready() {  # <task-id>
-  local id=$1 status_file report
-  status_file="$STATE/$id.status"
-  report="$DATA/$id/report.md"
-  if ! status_has_finished_event "$status_file"; then
-    printf '%s has written no terminal status event yet (no done: or failed: line in %s)\n' "$id" "$status_file"
-    return 0
+# is missing, so each names itself.
+member_wait_reason() {  # <task-id> <accepted-list>
+  local id=$1
+  case "$(member_state "$id" "$2")" in
+    finished-empty)
+      printf '%s has finished but its report %s is empty or absent\n' "$id" "$DATA/$id/report.md" ;;
+    unsignalled)
+      printf '%s left a report but has written no terminal status event\n' "$id" ;;
+    working)
+      printf '%s has written no terminal status event yet (no done: or failed: line in %s) and no report\n' \
+        "$id" "$STATE/$id.status" ;;
+  esac
+}
+
+# The one state that may never clear on its own, so it is the one state that
+# names its own escape rather than repeating an unactionable wait.
+member_unsignalled_advice() {  # <panel-id> <task-id>
+  local panel_id=$1 id=$2
+  printf 'panel:   %s left a non-empty report at %s but never wrote a terminal status event.\n' \
+    "$id" "$DATA/$id/report.md"
+  if [ -f "$STATE/$id.meta" ]; then
+    printf 'panel:   %s still has a runtime record, so it may simply still be working; if it is, wait and it will append done: itself.\n' "$id"
+  else
+    printf 'panel:   %s has no runtime record left, so it was torn down or died and that line will never arrive.\n' "$id"
   fi
-  if [ ! -s "$report" ]; then
-    printf '%s has finished but its report %s is empty or absent\n' "$id" "$report"
-    return 0
+  printf 'panel:   To accept its report as final anyway, naming that one member explicitly:\n'
+  printf 'panel:     %s advance %s --accept-unfinished %s\n' "$0" "$panel_id" "$id"
+  printf 'panel:   That accepts a report which may be INCOMPLETE: it is recorded permanently in %s, and the judge is told to treat that report as possibly truncated.\n' \
+    "$(panel_meta_path "$panel_id")"
+  printf 'panel:   There is no timeout and nothing advances on its own; this panel waits until you decide.\n'
+}
+
+# Print the gate outcome for these members and return 0 when the panel must NOT
+# advance, 1 when every member is ready. Every non-terminal outcome names the
+# next command.
+panel_gate_wait() {  # <panel-id> <gate-sentence> <hint-tail> <accepted-list> <task-id>...
+  local panel_id=$1 sentence=$2 hint=$3 accepted=$4
+  shift 4
+  local id state reasons=''
+  local -a unsignalled=()
+  for id in "$@"; do
+    state=$(member_state "$id" "$accepted")
+    [ "$state" != ready ] || continue
+    [ "$state" != unsignalled ] || unsignalled+=("$id")
+    reasons="${reasons:+$reasons; }$(member_wait_reason "$id" "$accepted")"
+  done
+  [ -n "$reasons" ] || return 1
+  if [ "${#unsignalled[@]}" -gt 0 ]; then
+    printf 'wedged: %s; %s\n' "$sentence" "$reasons"
+    for id in "${unsignalled[@]}"; do
+      member_unsignalled_advice "$panel_id" "$id"
+    done
+  else
+    printf 'waiting: %s; %s\n' "$sentence" "$reasons"
   fi
+  panel_next_hint "$panel_id" "$hint"
+  return 0
 }
 
 cmd_status() {
@@ -709,7 +826,25 @@ cmd_status() {
 }
 
 cmd_advance() {
-  local panel_id=${1:-}
+  local panel_id='' want_value='' arg
+  local -a accept=()
+  for arg in "$@"; do
+    if [ -n "$want_value" ]; then
+      accept+=("$arg")
+      want_value=
+      continue
+    fi
+    case "$arg" in
+      --accept-unfinished) want_value=accept ;;
+      --accept-unfinished=*) accept+=("${arg#--accept-unfinished=}") ;;
+      --*) die "unknown option $arg" 2 ;;
+      *)
+        [ -z "$panel_id" ] || die "advance takes exactly one panel id" 2
+        panel_id=$arg
+        ;;
+    esac
+  done
+  [ -z "$want_value" ] || die "--accept-unfinished requires a task id" 2
   [ -n "$panel_id" ] || die "advance requires a panel id" 2
   local meta form stage project id_a id_b id_judge profile_judge question_path
   meta=$(require_panel "$panel_id")
@@ -725,6 +860,26 @@ cmd_advance() {
   local report_b=''
   [ -z "$id_b" ] || report_b="$DATA/$id_b/report.md"
 
+  local accepted
+  accepted=$(panel_meta_get "$meta" accepted_unfinished)
+  if [ "${#accept[@]}" -gt 0 ]; then
+    local want
+    for want in "${accept[@]}"; do
+      case "$want" in
+        "$id_a"|"$id_judge") : ;;
+        "${id_b:-$id_a}") : ;;
+        *) die "'$want' is not a member of panel '$panel_id' (its members are $id_a${id_b:+, $id_b}, and $id_judge)" 2 ;;
+      esac
+      [ -s "$DATA/$want/report.md" ] \
+        || die "$want has no report at $DATA/$want/report.md, so there is nothing to accept; a missing report is never waived" 2
+      member_accepted_unfinished "$want" "$accepted" \
+        || accepted="${accepted:+$accepted }$want"
+    done
+    panel_meta_set "$meta" accepted_unfinished "$accepted"
+    printf 'panel: recorded %s as accepted without a terminal status event; that report may be incomplete and the panel record now says so permanently\n' \
+      "${accept[*]}"
+  fi
+
   case "$stage" in
     incomplete)
       die "panel '$panel_id' never finished dispatching; decide whether to retry it or stand it down before advancing"
@@ -735,31 +890,23 @@ cmd_advance() {
       return 0
       ;;
     judge)
-      if [ -f "$report_judge" ]; then
-        panel_meta_set "$meta" stage complete
-        printf 'complete: %s\n' "$report_judge"
-        printf 'panel: read that report, relay its findings, and pass the shared completion gate before standing the panel down\n'
-      else
-        printf 'waiting: the judge has not written %s yet\n' "$report_judge"
-        panel_next_hint "$panel_id" "once the judge reports done"
+      if panel_gate_wait "$panel_id" \
+        'the panel is complete only once the judge has finished AND left a non-empty report' \
+        "once the judge reports done" "$accepted" "$id_judge"; then
+        return 0
       fi
+      panel_meta_set "$meta" stage complete
+      printf 'complete: %s\n' "$report_judge"
+      printf 'panel: read that report, relay its findings, and pass the shared completion gate before standing the panel down\n'
       return 0
       ;;
     analysts) ;;
     *) die "panel '$panel_id' has an unknown stage '$stage'" ;;
   esac
 
-  local waiting reason
-  waiting=''
-  reason=$(analyst_not_ready "$id_a")
-  [ -z "$reason" ] || waiting="$reason"
-  if [ -n "$id_b" ]; then
-    reason=$(analyst_not_ready "$id_b")
-    [ -z "$reason" ] || waiting="${waiting:+$waiting; }$reason"
-  fi
-  if [ -n "$waiting" ]; then
-    printf 'waiting: the judge is created only once every analyst has finished AND left a non-empty report; %s\n' "$waiting"
-    panel_next_hint "$panel_id" "after the next analyst finishes"
+  if panel_gate_wait "$panel_id" \
+    'the judge is created only once every analyst has finished AND left a non-empty report' \
+    "after the next analyst finishes" "$accepted" "$id_a" ${id_b:+"$id_b"}; then
     return 0
   fi
 
@@ -770,10 +917,20 @@ cmd_advance() {
   fi
   rm -f "$DATA/$id_judge/brief.md"
 
+  local unfinished='' label_a='Analyst A'
+  [ "$form" = panel ] || label_a='Analyst'
+  if member_accepted_unfinished "$id_a" "$accepted"; then
+    unfinished="- $label_a: \`$report_a\`"
+  fi
+  if [ -n "$id_b" ] && member_accepted_unfinished "$id_b" "$accepted"; then
+    unfinished="${unfinished:+$unfinished
+}- Analyst B: \`$report_b\`"
+  fi
+
   local task_judge
   trap panel_cleanup EXIT
   task_judge=$(panel_mktemp)
-  compose_judge_task "$task_judge" "$question_path" "$report_judge" "$form" "$report_a" "$report_b"
+  compose_judge_task "$task_judge" "$question_path" "$report_judge" "$form" "$report_a" "$report_b" "$unfinished"
   scaffold_scout_brief "$id_judge" "$(basename "$project")" "$task_judge"
   dispatch_scout "$id_judge" "$project" "$profile_judge" \
     || die "could not dispatch the judge ($id_judge); every analyst report is still in place, so this is safe to retry"

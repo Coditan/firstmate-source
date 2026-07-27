@@ -54,7 +54,8 @@ Both analysts receive byte-identical text and nothing else, so a vague question 
    `bin/fm-model-panel.sh advance <panel-id>` refuses to create the judge until every analyst has both written a terminal status event and left a non-empty report, so run it after each analyst finishes and let it tell you whether it is still waiting.
    A `waiting:` line means nothing to do yet, and it names which of the two facts is still missing for which analyst.
 4. **Supervise the judge, then advance again.**
-   The second `advance` prints `complete: <report path>` once the judge's report exists.
+   The second `advance` prints `complete: <report path>` once the judge has both reported a terminal status event and left a non-empty report, which is the same gate its analysts passed.
+   A `wedged:` block instead of a `waiting:` line means a member left a report but never signalled that it finished; read the next section before doing anything about it.
 5. **Read the judge's report and relay its findings.**
    Relay the answer, the contested facts and what the evidence showed, any mistake shared by both analysts, and what remains unverified.
    Say which models argued and which judged: that is substance the captain asked for, not internal machinery.
@@ -64,6 +65,20 @@ Both analysts receive byte-identical text and nothing else, so a vague question 
    Load `decision-hold-lifecycle` and register every unresolved decision from that inventory before calling the panel complete.
 7. **Tear down the members normally.**
    Every report survives teardown at `data/<task-id>/report.md`, and the panel record at `data/<panel-id>/panel.meta` records which model filled which role.
+
+## When a member never signals that it finished
+
+`advance` prints a `wedged:` block when a member left a non-empty report but never appended a terminal `done:` or `failed:` status line.
+That happens when a member is torn down, crashes, or runs out of quota after writing its report and before signalling, and nothing clears it on its own.
+The block names the member, says whether a runtime record still exists for it, and prints the exact command to run.
+
+If the member is still working, do nothing: it will append `done:` itself and the next `advance` proceeds.
+If it is gone, accept its report as final with `bin/fm-model-panel.sh advance <panel-id> --accept-unfinished <task-id>`.
+
+That override is per-member and deliberate.
+It names one task id and waives nothing for any other member, it is recorded permanently in the panel record as `accepted_unfinished`, and the judge's brief is told to treat that report as possibly truncated and to say so in its own report.
+There is no timeout anywhere in this formation: a panel waits forever rather than judging an unfinished report on its own, so the decision to accept one is always yours.
+Say so when relaying the verdict, because a panel completed over an unfinished report is a weaker result than one that was not.
 
 ## When the panel cannot be a panel
 

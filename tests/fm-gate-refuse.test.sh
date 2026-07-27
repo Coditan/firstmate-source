@@ -380,6 +380,12 @@ JSON
   printf '%s\n' "$home"
 }
 
+# The panel dispatches through the real bin/fm-spawn.sh, so it gets the SAME
+# stubbed dispatch path the fm-spawn section builds: a regression that let the
+# guard through could otherwise reach a real backend session before the
+# assertions report it.
+PANEL_FAKEBIN=$(make_spawn_fakebin "$TMP/panel-fake")
+
 # run_panel <cwd> <home> [ASSIGN...] -- <panel args...> -> combined output
 run_panel() {
   local cwd=$1 home=$2; shift 2
@@ -393,6 +399,8 @@ run_panel() {
       "FM_DATA_OVERRIDE=$home/data" "FM_STATE_OVERRIDE=$home/state" \
       "FM_CONFIG_OVERRIDE=$home/config" "FM_PROJECTS_OVERRIDE=$home/projects" \
       "FM_DISPATCH_QUOTA_AXI=fm-test-absent-quota-axi" \
+      "FM_SPAWN_NO_GUARD=1" "FM_FAKE_PANE_PATH=$home/subject" "TMUX=fake,1,0" \
+      "PATH=$PANEL_FAKEBIN:$PATH" \
       ${assigns[@]+"${assigns[@]}"} \
       "$PANEL" "$@" ) 2>&1
 }

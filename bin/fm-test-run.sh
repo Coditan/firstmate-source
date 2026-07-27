@@ -638,8 +638,14 @@ families_for_changed_path() {
       printf '%s\n' backend-dispatch
       printf '%s\n' real-herdr-gated
       ;;
+    bin/fm-classify-lib.sh)
+      printf '%s\n' watcher-wake-lock
+      # The status-event vocabulary also backs bin/fm-model-panel.sh's judge
+      # gate, whose test lives in the pure-contract-unit family.
+      printf '%s\n' pure-contract-unit
+      ;;
     bin/fm-watch*|bin/fm-wake*|\
-    bin/fm-classify-lib.sh|bin/fm-daemon*|bin/fm-turnend-guard*|bin/fm-guard.sh)
+    bin/fm-daemon*|bin/fm-turnend-guard*|bin/fm-guard.sh)
       printf '%s\n' watcher-wake-lock
       ;;
     bin/fm-afk*)
