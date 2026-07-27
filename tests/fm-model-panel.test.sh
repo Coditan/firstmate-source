@@ -62,6 +62,12 @@ spawn_log() {
   cat "$1/spawn.log" 2>/dev/null || true
 }
 
+# Append one status EVENT for a panel member, exactly as its scout scaffold tells
+# it to. The judge gate reads these, so tests must produce them the same way.
+say_status() {  # <home> <task-id> <line>
+  printf '%s\n' "$3" >> "$1/state/$2.status"
+}
+
 TWO_MODELS='{"roles":{
   "analyst_a":{"harness":"claude","model":"claude-opus-5","effort":"xhigh"},
   "analyst_b":{"harness":"codex","model":"gpt-5.6-sol","effort":"xhigh"},
@@ -211,6 +217,29 @@ test_judge_waits_for_every_report_then_gets_both() {
   assert_contains "$out" "waiting:" "advance must still wait while the second report is missing"
   assert_not_contains "$(spawn_log "$home")" "jg-judge" "the judge must wait for every analyst report"
 
+  # Both reports EXIST now, but neither analyst has said it is finished. A file
+  # that exists is not a file that is finished, so this must still wait, and a
+  # nonterminal progress line must not be mistaken for a terminal event.
+  printf 'analyst b findings\n' > "$home/data/jg-b/report.md"
+  say_status "$home" jg-a 'working: still drafting'
+  out=$(run_panel "$home" advance jg) || fail "advance failed: $out"
+  assert_contains "$out" "waiting:" "advance must wait while an analyst has written no terminal status event"
+  assert_contains "$out" "no terminal status event" "the waiting line must name the missing terminal event"
+  assert_contains "$out" "jg-a" "the waiting line must name the analyst that has not finished"
+  assert_not_contains "$(spawn_log "$home")" "jg-judge" \
+    "the judge must not be dispatched against a report whose analyst is still writing"
+
+  # Terminal events on both sides, but analyst B's report is empty: the other
+  # half of the gate, and a different fact the waiting line must distinguish.
+  say_status "$home" jg-a 'done: analyst a finished'
+  say_status "$home" jg-b 'done: analyst b finished'
+  : > "$home/data/jg-b/report.md"
+  out=$(run_panel "$home" advance jg) || fail "advance failed: $out"
+  assert_contains "$out" "waiting:" "advance must wait while a finished analyst left an empty report"
+  assert_contains "$out" "empty or absent" "the waiting line must name the empty report"
+  assert_contains "$out" "jg-b" "the waiting line must name the analyst with the empty report"
+  assert_not_contains "$(spawn_log "$home")" "jg-judge" "the judge must not judge an empty report"
+
   printf 'analyst b findings\n' > "$home/data/jg-b/report.md"
   out=$(run_panel "$home" advance jg) || fail "advance failed: $out"
   log=$(spawn_log "$home")
@@ -237,6 +266,29 @@ test_judge_waits_for_every_report_then_gets_both() {
     "a finished panel does not report its judge report path"
   assert_grep 'stage=complete' "$home/data/jg/panel.meta" "the panel record did not reach the complete stage"
   pass "the judge is created only once every analyst report exists, and sees both blind"
+}
+
+test_failed_analyst_with_a_report_still_reaches_the_judge() {
+  local home out
+  home=$(new_home failed-analyst "$ONE_MODEL")
+  out=$(run_panel "$home" start --id fa --project "$home/subject" --reduced "Anything?") \
+    || fail "reduced start failed: $out"
+
+  # The reduced form's single analyst is gated exactly like a panel's two.
+  printf 'partial findings\n' > "$home/data/fa-a/report.md"
+  out=$(run_panel "$home" advance fa) || fail "advance failed: $out"
+  assert_contains "$out" "waiting:" "the single analyst of the reduced form must be gated too"
+  assert_not_contains "$(spawn_log "$home")" "fa-judge" \
+    "the reduced form must not dispatch the judge before its analyst has finished"
+
+  # The gate asks whether the analyst stopped writing, not whether it succeeded.
+  say_status "$home" fa-a 'failed: ran out of budget partway'
+  out=$(run_panel "$home" advance fa) || fail "advance failed: $out"
+  assert_contains "$(spawn_log "$home")" "fa-judge " \
+    "a failed analyst that still left a report must reach the judge"
+  assert_grep 'stage=judge' "$home/data/fa/panel.meta" \
+    "the panel record did not advance to the judge stage after a terminal failure"
+  pass "failed: is terminal too, and the reduced form's single analyst is gated the same way"
 }
 
 test_crew_dispatch_default_is_the_documented_fallback() {
@@ -298,6 +350,39 @@ test_failed_second_dispatch_is_reported_and_blocks_advance() {
   pass "a half-dispatched panel reports the failure and refuses to advance"
 }
 
+test_failed_first_dispatch_records_incomplete() {
+  local home status=0 out
+  home=$(new_home first-dispatch "$TWO_MODELS")
+  out=$(FM_FAKE_SPAWN_FAIL_ID=fd-a run_panel "$home" start --id fd --project "$home/subject" "Anything?") \
+    || status=$?
+  [ "$status" -ne 0 ] || fail "a failed first dispatch must not report success"
+  assert_contains "$out" "fd-a" "the failure does not name the analyst that never dispatched"
+  assert_grep 'stage=incomplete' "$home/data/fd/panel.meta" \
+    "a panel whose first analyst never dispatched must record that it never finished dispatching"
+  status=0
+  out=$(run_panel "$home" advance fd) || status=$?
+  [ "$status" -ne 0 ] || fail "advance must refuse a panel whose first analyst never dispatched"
+  pass "a failed analyst-A dispatch is recorded, so advance refuses instead of waiting on a report nobody will write"
+}
+
+test_rollback_never_deletes_a_directory_it_did_not_create() {
+  local home status=0 out
+  home=$(new_home rollback "$TWO_MODELS")
+  # An earlier scout's durable report survived teardown under the task id this
+  # panel is about to use, and so did its brief, so the shared scaffold refuses
+  # and start dies before it attempts any dispatch.
+  mkdir -p "$home/data/rb-a"
+  printf 'an earlier scout report\n' > "$home/data/rb-a/report.md"
+  printf 'an earlier brief\n' > "$home/data/rb-a/brief.md"
+  out=$(run_panel "$home" start --id rb --project "$home/subject" "Anything?") || status=$?
+  [ "$status" -ne 0 ] || fail "start must fail when a task directory already holds a brief: $out"
+  assert_present "$home/data/rb-a/report.md" "the rollback deleted a report this run did not create"
+  assert_grep 'an earlier scout report' "$home/data/rb-a/report.md" \
+    "the pre-existing report was clobbered by the failed start"
+  assert_absent "$home/data/rb" "a start that failed before dispatch must roll back the record it did create"
+  pass "a failed start rolls back only what it created and leaves an earlier task's report intact"
+}
+
 test_start_refuses_to_clobber_an_existing_panel() {
   local home status=0 out
   home=$(new_home existing "$TWO_MODELS")
@@ -317,8 +402,11 @@ test_same_model_through_two_harnesses_refuses
 test_reduced_form_is_named_not_a_panel
 test_analyst_briefs_share_the_question_and_forbid_peeking
 test_judge_waits_for_every_report_then_gets_both
+test_failed_analyst_with_a_report_still_reaches_the_judge
 test_crew_dispatch_default_is_the_documented_fallback
 test_no_configuration_refuses_with_both_paths_named
 test_dry_run_shows_the_lineup_without_spending_anything
 test_failed_second_dispatch_is_reported_and_blocks_advance
+test_failed_first_dispatch_records_incomplete
+test_rollback_never_deletes_a_directory_it_did_not_create
 test_start_refuses_to_clobber_an_existing_panel

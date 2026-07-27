@@ -15,11 +15,15 @@
 #
 #   start     resolve the three roles, write the question and both analyst
 #             briefs, and dispatch the analysts concurrently. The judge is NOT
-#             dispatched here: it is created only once every analyst report
-#             exists, which `advance` enforces.
-#   advance   idempotent next step. With reports still missing it prints one
-#             `waiting:` line and changes nothing; with every analyst report
-#             present it scaffolds and dispatches the judge; with the judge
+#             dispatched here: it is created only once every analyst has
+#             finished, which `advance` enforces.
+#   advance   idempotent next step. The judge is created only when BOTH of these
+#             hold for EVERY analyst: the analyst wrote a terminal status event
+#             (a `done:` or `failed:` line in state/<task-id>.status), and its
+#             data/<task-id>/report.md exists and is non-empty. Until then it
+#             prints one `waiting:` line naming which of the two facts is missing
+#             for which analyst and changes nothing; with both satisfied for
+#             every analyst it scaffolds and dispatches the judge; with the judge
 #             report present it prints `complete: <report path>`.
 #   status    print the panel record without changing anything.
 #
@@ -65,6 +69,19 @@
 # is a printed warning rather than a refusal, because the judge's independence
 # comes from re-verifying against live state with both reports in hand.
 #
+# The two-condition judge gate is deliberate. A report file that EXISTS is not a
+# report that is FINISHED, and dispatching the judge against a half-written
+# analysis silently judges a truncated argument. The completion half is a durable
+# status EVENT rather than a live crew-state read, because panel members are
+# ordinary scouts that may be torn down before the judge is dispatched, and a
+# gate with a fallback for that case would quietly become the fallback. `failed:`
+# counts as terminal on purpose: the question is whether the analyst stopped
+# writing, not whether it succeeded, and a failed analyst that still left a
+# non-empty report is finished. The verbs are recognized through
+# bin/fm-classify-lib.sh, this repo's owner of the status-event vocabulary, and
+# the scan asks only whether such an event EVER appeared, which is monotonic -
+# never what the last line currently says.
+#
 # Panel record: data/<panel-id>/panel.meta (key=value), with the question at
 # data/<panel-id>/question.md. Both are durable and survive scout teardown, as do
 # the reports at data/<task-id>/report.md.
@@ -96,6 +113,10 @@ esac
 # shellcheck source=bin/fm-gate-refuse-lib.sh
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 fm_refuse_if_gate_agent
+
+# The owner of the status-event vocabulary the judge gate reads.
+# shellcheck source=bin/fm-classify-lib.sh
+. "$SCRIPT_DIR/fm-classify-lib.sh"
 
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
@@ -138,15 +159,19 @@ role_spec() {
   printf '%s\n' "$spec"
 }
 
-# Normalize one resolved profile to its model identity. Keep this in step with
+# The ONE definition of a profile's model identity, interpolated by every jq
+# program below so the exit-4 distinctness check and the exclusion filter cannot
+# disagree about what counts as one model. Keep it in step with
 # bin/fm-dispatch-select.sh's model_name normalization.
+# shellcheck disable=SC2016  # $m is a jq binding, deliberately not shell-expanded
+PANEL_IDENT_JQ='def ident:
+  (.model // "") as $m
+  | if ($m | length) > 0 then ($m | split("/") | last | split(":") | first | ascii_downcase)
+    else "harness:" + (.harness // "")
+    end;'
+
 profile_identity() {
-  printf '%s\n' "$1" | jq -r '
-    (.model // "") as $m
-    | if ($m | length) > 0 then ($m | split("/") | last | split(":") | first | ascii_downcase)
-      else "harness:" + (.harness // "")
-      end
-  '
+  printf '%s\n' "$1" | jq -r "$PANEL_IDENT_JQ"' ident'
 }
 
 profile_field() {
@@ -158,12 +183,7 @@ profile_field() {
 # using instead of duplicating one.
 filter_spec() {
   local spec=$1 excluded=$2
-  printf '%s\n' "$spec" | jq -c --arg excluded "$excluded" '
-    def ident:
-      (.model // "") as $m
-      | if ($m | length) > 0 then ($m | split("/") | last | split(":") | first | ascii_downcase)
-        else "harness:" + (.harness // "")
-        end;
+  printf '%s\n' "$spec" | jq -c --arg excluded "$excluded" "$PANEL_IDENT_JQ"'
     ($excluded | split("\n") | map(select(length > 0))) as $ex
     | (if type == "array" then . else [.] end)
     | map(select((ident) as $i | ($ex | index($i)) == null))
@@ -594,8 +614,13 @@ $identity_b"
 
   [ ! -e "$(panel_dir "$panel_id")" ] || die "panel '$panel_id' already exists at $(panel_dir "$panel_id")"
   panel_rollback_register "$(panel_dir "$panel_id")"
-  panel_rollback_register "$DATA/$id_a"
-  [ "$form" != panel ] || panel_rollback_register "$DATA/$id_b"
+  # A task directory that already existed is NOT ours to roll back: reports
+  # survive teardown, so an earlier task's durable report can be sitting there.
+  # Only what this run creates is registered.
+  [ -e "$DATA/$id_a" ] || panel_rollback_register "$DATA/$id_a"
+  if [ "$form" = panel ] && [ ! -e "$DATA/$id_b" ]; then
+    panel_rollback_register "$DATA/$id_b"
+  fi
   mkdir -p "$(panel_dir "$panel_id")"
   cat "$staged_question" > "$DATA/$panel_id/question.md"
   local question_path="$DATA/$panel_id/question.md"
@@ -635,8 +660,10 @@ $identity_b"
 
   printf 'panel: %s form=%s project=%s\n' "$panel_id" "$form" "$project"
   PANEL_DISPATCH_STARTED=1
-  dispatch_scout "$id_a" "$project" "$profile_a" \
-    || die "could not dispatch analyst A ($id_a); no other panel member was dispatched"
+  if ! dispatch_scout "$id_a" "$project" "$profile_a"; then
+    panel_meta_set "$meta" stage incomplete
+    die "could not dispatch analyst A ($id_a); no other panel member was dispatched"
+  fi
   if [ "$form" = panel ]; then
     if ! dispatch_scout "$id_b" "$project" "$profile_b"; then
       panel_meta_set "$meta" stage incomplete
@@ -653,6 +680,24 @@ require_panel() {
   meta=$(panel_meta_path "$panel_id")
   [ -f "$meta" ] || die "no panel record at $meta"
   printf '%s\n' "$meta"
+}
+
+# Print why one analyst is not ready for the judge yet, or nothing when it is.
+# The two conditions are different facts and the operator needs to know which one
+# is missing, so each names itself. status_has_finished_event comes from
+# bin/fm-classify-lib.sh and asks only whether a terminal event EVER appeared.
+analyst_not_ready() {  # <task-id>
+  local id=$1 status_file report
+  status_file="$STATE/$id.status"
+  report="$DATA/$id/report.md"
+  if ! status_has_finished_event "$status_file"; then
+    printf '%s has written no terminal status event yet (no done: or failed: line in %s)\n' "$id" "$status_file"
+    return 0
+  fi
+  if [ ! -s "$report" ]; then
+    printf '%s has finished but its report %s is empty or absent\n' "$id" "$report"
+    return 0
+  fi
 }
 
 cmd_status() {
@@ -704,14 +749,17 @@ cmd_advance() {
     *) die "panel '$panel_id' has an unknown stage '$stage'" ;;
   esac
 
-  local missing=''
-  [ -f "$report_a" ] || missing="$report_a"
-  if [ -n "$report_b" ] && [ ! -f "$report_b" ]; then
-    missing="${missing:+$missing }$report_b"
+  local waiting reason
+  waiting=''
+  reason=$(analyst_not_ready "$id_a")
+  [ -z "$reason" ] || waiting="$reason"
+  if [ -n "$id_b" ]; then
+    reason=$(analyst_not_ready "$id_b")
+    [ -z "$reason" ] || waiting="${waiting:+$waiting; }$reason"
   fi
-  if [ -n "$missing" ]; then
-    printf 'waiting: the judge is created only once every analyst report exists; still missing %s\n' "$missing"
-    panel_next_hint "$panel_id" "after the next analyst report lands"
+  if [ -n "$waiting" ]; then
+    printf 'waiting: the judge is created only once every analyst has finished AND left a non-empty report; %s\n' "$waiting"
+    panel_next_hint "$panel_id" "after the next analyst finishes"
     return 0
   fi
 

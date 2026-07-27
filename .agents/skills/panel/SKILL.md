@@ -20,7 +20,7 @@ This skill owns when to run one and how to carry it through.
 
 ## Is this question worth a panel
 
-A panel costs three full investigations plus a judge that re-checks their evidence, and two rounds of supervision between dispatch and answer.
+A panel costs two full investigations plus a judge that re-checks their evidence, and two rounds of supervision between dispatch and answer.
 Spend that only where a second independent answer would change what happens next.
 
 Worth it:
@@ -51,8 +51,8 @@ Both analysts receive byte-identical text and nothing else, so a vague question 
    They report through the normal status path and wake you the normal way.
    Do not relay their individual reports to the captain and do not let one analyst see the other's work; the independence rule in their briefs is the whole point.
 3. **Advance once every analyst has reported.**
-   `bin/fm-model-panel.sh advance <panel-id>` refuses to create the judge until every analyst report exists, so run it after each analyst finishes and let it tell you whether it is still waiting.
-   A `waiting:` line means nothing to do yet.
+   `bin/fm-model-panel.sh advance <panel-id>` refuses to create the judge until every analyst has both written a terminal status event and left a non-empty report, so run it after each analyst finishes and let it tell you whether it is still waiting.
+   A `waiting:` line means nothing to do yet, and it names which of the two facts is still missing for which analyst.
 4. **Supervise the judge, then advance again.**
    The second `advance` prints `complete: <report path>` once the judge's report exists.
 5. **Read the judge's report and relay its findings.**

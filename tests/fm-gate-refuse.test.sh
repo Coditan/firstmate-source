@@ -2,9 +2,10 @@
 # Behavior tests for the no-mistakes GATE-agent fleet-lifecycle refusal.
 #
 # A confused no-mistakes gate agent runs inside a firstmate checkout, adopts the
-# captain identity from AGENTS.md, and reaches for fm-spawn/fm-send/fm-teardown.
+# captain identity from AGENTS.md, and reaches for a fleet-mutating entrypoint:
+# fm-spawn, fm-send, fm-teardown, or fm-model-panel.
 # bin/fm-gate-refuse-lib.sh is the firstmate capability-removal half: sourced at
-# the top of those three entrypoints and called before any fleet mutation, it
+# the top of those entrypoints and called before any fleet mutation, it
 # fails closed on either of two independent signals:
 #   1. NO_MISTAKES_GATE set in the environment (the marker no-mistakes stamps);
 #   2. the current worktree's git-common-dir resolves under a no-mistakes gate
@@ -34,6 +35,7 @@ GATE_LIB="$ROOT/bin/fm-gate-refuse-lib.sh"
 SPAWN="$ROOT/bin/fm-spawn.sh"
 SEND="$ROOT/bin/fm-send.sh"
 TEARDOWN="$ROOT/bin/fm-teardown.sh"
+PANEL="$ROOT/bin/fm-model-panel.sh"
 
 fm_test_tmproot TMP fm-gate-refuse
 
@@ -359,6 +361,75 @@ test_teardown_refuses_and_admits() {
   pass "fm-teardown: refuses on marker and gate-worktree backstop; a normal teardown is unaffected"
 }
 
+# --- fm-model-panel ---------------------------------------------------------
+
+# make_panel_home <name> -> echoes a home whose panel configuration resolves a
+# full lineup, so a non-refused run gets all the way past role resolution. The
+# quota reader is pointed at an absent command, so nothing reaches a live
+# service; the refusal must fire before any of it anyway.
+make_panel_home() {
+  local name=$1 home
+  home="$TMP/$name"
+  mkdir -p "$home/data" "$home/state" "$home/config" "$home/projects" "$home/subject"
+  cat > "$home/config/model-panel.json" <<'JSON'
+{"roles":{
+  "analyst_a":{"harness":"claude","model":"claude-opus-5"},
+  "analyst_b":{"harness":"codex","model":"gpt-5.6-sol"},
+  "judge":{"harness":"grok","model":"grok-4-fast"}}}
+JSON
+  printf '%s\n' "$home"
+}
+
+# run_panel <cwd> <home> [ASSIGN...] -- <panel args...> -> combined output
+run_panel() {
+  local cwd=$1 home=$2; shift 2
+  local -a assigns=()
+  while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+    assigns+=("$1"); shift
+  done
+  [ "$#" -eq 0 ] || shift
+  ( cd "$cwd" && env -u NO_MISTAKES_GATE -u FM_GATE_REFUSE_BYPASS \
+      "FM_ROOT_OVERRIDE=$ROOT" "FM_HOME=$home" \
+      "FM_DATA_OVERRIDE=$home/data" "FM_STATE_OVERRIDE=$home/state" \
+      "FM_CONFIG_OVERRIDE=$home/config" "FM_PROJECTS_OVERRIDE=$home/projects" \
+      "FM_DISPATCH_QUOTA_AXI=fm-test-absent-quota-axi" \
+      ${assigns[@]+"${assigns[@]}"} \
+      "$PANEL" "$@" ) 2>&1
+}
+
+test_panel_refuses_and_admits() {
+  local home out rc
+
+  # env-marker refuse: neutral cwd, marker set. A real `start` is used, so the
+  # guard has to fire BEFORE role resolution and any panel record is written.
+  home=$(make_panel_home panel-envmark)
+  out=$(run_panel "$NORMAL_CWD" "$home" NO_MISTAKES_GATE=1 -- \
+    start --id gp --project "$home/subject" "Anything?"); rc=$?
+  expect_code 3 "$rc" "panel: NO_MISTAKES_GATE must refuse"
+  assert_contains "$out" "$ENV_MSG" "panel: env-marker refusal message"
+  assert_absent "$home/data/gp" "panel: refused env-marker start must not write a panel record"
+  assert_absent "$home/data/gp-a" "panel: refused env-marker start must not scaffold an analyst"
+
+  # path-backstop refuse: gate-worktree cwd, marker UNSET.
+  home=$(make_panel_home panel-backstop)
+  out=$(run_panel "$GATE_WT" "$home" -- start --id gp --project "$home/subject" "Anything?"); rc=$?
+  expect_code 3 "$rc" "panel: gate-worktree cwd must refuse with the marker unset"
+  assert_contains "$out" "$PATH_MSG" "panel: path-backstop refusal message"
+  assert_absent "$home/data/gp" "panel: refused backstop start must not write a panel record"
+  assert_absent "$home/data/gp-a" "panel: refused backstop start must not scaffold an analyst"
+
+  # no-regression: neutral cwd, marker UNSET. --dry-run resolves the real lineup
+  # and prints it, which is everything up to dispatch without spending a model.
+  home=$(make_panel_home panel-ok)
+  out=$(run_panel "$NORMAL_CWD" "$home" -- \
+    start --id gp --project "$home/subject" --dry-run "Anything?"); rc=$?
+  expect_code 0 "$rc" "panel: a normal session must still resolve a panel"
+  assert_contains "$out" "form=panel" "panel: normal dry run should print the resolved lineup"
+  assert_not_contains "$out" "$ENV_MSG" "panel: normal run must not print the gate refusal"
+  assert_not_contains "$out" "$PATH_MSG" "panel: normal run must not print the backstop refusal"
+  pass "fm-model-panel: refuses on marker and gate-worktree backstop; a normal panel is unaffected"
+}
+
 # --- tracked .no-mistakes.yaml ----------------------------------------------
 
 test_no_mistakes_yaml_disables_project_settings() {
@@ -396,4 +467,5 @@ test_helper_normal_is_noop
 test_spawn_refuses_and_admits
 test_send_refuses_and_admits
 test_teardown_refuses_and_admits
+test_panel_refuses_and_admits
 test_no_mistakes_yaml_disables_project_settings
