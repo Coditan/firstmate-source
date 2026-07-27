@@ -31,7 +31,8 @@
 # metadata inventory is unioned idempotently. A post-teardown visual review can
 # complete against the surviving report and holds without recreating task state.
 # `verify` is read-only and is called by scout teardown so teardown cannot erase a
-# source before this gate has succeeded.
+# source before this gate has succeeded. A resolved captain hold that retention
+# moved into data/done-archive.md remains a durable completion record.
 #
 # `resolve` requires every --routed-to task to exist and to be blocked by the hold.
 # It writes the captain decision and routed identities into the hold body, clears
@@ -184,9 +185,47 @@ verify_hold_resolved() {  # <hold-id>
   return 1
 }
 
+archived_hold_resolved() {  # <hold-id>
+  local id=$1 archive="$DATA/done-archive.md"
+  [ -f "$archive" ] || return 1
+  awk -v target="$id" '
+    function finish_task() {
+      if (active && captain && resolution && routed) valid = 1
+      active = 0
+    }
+    function is_task_header(line) {
+      return line ~ /^- \[( |x)\] [A-Za-z0-9][A-Za-z0-9._-]* - /
+    }
+    {
+      line = $0
+      sub(/\r$/, "", line)
+      if (is_task_header(line)) {
+        finish_task()
+        active = index(line, "- [x] " target " - ") == 1
+        if (active) {
+          captain = index(line, "(kind: captain)") > 0
+          resolution = 0
+          routed = 0
+        }
+        next
+      }
+      if (active && line == "  Resolution recorded by fm-decision-hold.") resolution = 1
+      if (active && index(line, "  Routed work:") == 1) routed = 1
+      if (active && line != "" && index(line, "  ") != 1) finish_task()
+    }
+    END {
+      finish_task()
+      exit(valid ? 0 : 1)
+    }
+  ' "$archive"
+}
+
 verify_hold_durable() {  # <hold-id>
   local id=$1 show state held kind hold_kind body
-  show=$(task_show "$id") || fail "captain decision $id is absent from $FM_HOME/data/backlog.md"
+  if ! show=$(task_show "$id"); then
+    archived_hold_resolved "$id" && return 0
+    fail "captain decision $id is absent from $FM_HOME/data/backlog.md and has no resolved record in $DATA/done-archive.md"
+  fi
   state=$(show_field "$show" state)
   held=$(show_field "$show" held)
   kind=$(show_field "$show" kind)

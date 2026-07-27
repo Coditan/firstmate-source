@@ -306,6 +306,78 @@ EOF
   pass "non-forced scout teardown always requires durable inventory verification"
 }
 
+test_archived_resolution_satisfies_gate_but_missing_open_hold_refuses() {
+  local home origin hold
+  home=$(make_home archived-resolution)
+  origin=sample-archived-review
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Review archived sample decision" \
+    --kind scout --repo sample --start >/dev/null \
+    || fail "could not create archived-resolution origin"
+  write_origin_meta "$home" "$origin"
+  printf 'needs-decision [key=route]: choose route north or route south\ndone: report complete\n' \
+    > "$home/state/$origin.status"
+  printf '# Archived sample review\n\nThe route needs a captain decision.\n' \
+    > "$home/data/$origin/report.md"
+  hold=$(run_decisions "$home" hold "$origin" route \
+    --title "Choose archived sample route" --reason "captain route choice pending" --repo sample) \
+    || fail "could not register archived-resolution hold"
+  run_decisions "$home" complete "$origin" route >/dev/null \
+    || fail "could not record archived-resolution inventory"
+  tasks_in "$home" add sample-archived-route "Apply archived sample route" \
+    --kind ship --repo sample --blocked-by "$hold" >/dev/null \
+    || fail "could not create archived-resolution dependent"
+  printf 'Use route north for the archived sample.\n' > "$home/route-decision.txt"
+  run_decisions "$home" resolve "$origin" route \
+    --decision-file "$home/route-decision.txt" --routed-to sample-archived-route >/dev/null \
+    || fail "could not resolve archived-resolution hold"
+  tasks_in "$home" prune --state "done" --keep 0 >/dev/null \
+    || fail "could not rotate resolved hold into the archive"
+  assert_no_grep "- [x] $hold -" "$home/data/backlog.md" \
+    "resolved hold remained in the live backlog"
+  assert_grep "- [x] $hold -" "$home/data/done-archive.md" \
+    "resolved hold did not reach the archive"
+  run_decisions "$home" complete "$origin" route >/dev/null \
+    || fail "completion did not accept a resolved archived hold"
+  run_decisions "$home" verify "$origin" >/dev/null \
+    || fail "verification did not accept a resolved archived hold"
+  run_teardown "$home" "$origin" >/dev/null 2> "$home/archived-teardown.err" \
+    || fail "cleanup refused a resolved archived hold: $(cat "$home/archived-teardown.err")"
+
+  home=$(make_home missing-open-hold)
+  origin=sample-missing-open-review
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Review missing open sample decision" \
+    --kind scout --repo sample --start >/dev/null \
+    || fail "could not create missing-open origin"
+  write_origin_meta "$home" "$origin"
+  printf 'decisions_reviewed=1\ndecision_keys=route\n' >> "$home/state/$origin.meta"
+  printf 'needs-decision [key=route]: choose route north or route south\n' \
+    > "$home/state/$origin.status"
+  printf '# Missing open sample review\n\nThe route still needs a captain decision.\n' \
+    > "$home/data/$origin/report.md"
+  cat > "$home/data/done-archive.md" <<EOF
+## Archived 2026-07-27
+- [ ] $origin-decision-route - Choose the missing sample route (repo: sample) (kind: captain)
+  Origin: $origin
+  Decision key: route
+  State: awaiting captain decision.
+EOF
+  if run_decisions "$home" verify "$origin" \
+    > "$home/missing-open-verify.out" 2> "$home/missing-open-verify.err"; then
+    fail "verification accepted an open decision missing from the live backlog"
+  fi
+  assert_grep "is absent from $home/data/backlog.md" "$home/missing-open-verify.err" \
+    "missing open decision did not retain the fail-closed refusal"
+  if run_teardown "$home" "$origin" \
+    > "$home/missing-open-teardown.out" 2> "$home/missing-open-teardown.err"; then
+    fail "cleanup accepted an open decision missing from the live backlog"
+  fi
+  assert_present "$home/state/$origin.meta" \
+    "refused missing-open cleanup removed origin metadata"
+  pass "resolved archived holds satisfy cleanup while missing open holds still refuse"
+}
+
 test_origin_slug_validation_precedes_path_construction() {
   local home escaped
   home=$(make_home origin-validation)
@@ -554,6 +626,7 @@ test_resolve_matches_quoted_blocked_by_edges() {
 test_uninventoried_report_decision_refuses_completion
 
 test_scout_teardown_always_requires_inventory_verification
+test_archived_resolution_satisfies_gate_but_missing_open_hold_refuses
 test_structured_holds_survive_teardown_and_route_resolution
 test_origin_slug_validation_precedes_path_construction
 test_visual_review_uses_shared_completion_owner
