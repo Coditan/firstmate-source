@@ -146,12 +146,15 @@ When poppler is present it additionally asserts against genuine `pdfunite` outpu
 
 The suite asserts that a non-conforming file is rejected with the reader's own diagnosis surfaced, that a conforming file passes with its real page count, that a wrong page count is rejected and the right one accepted, that a missing reader, a silent reader, and a reader that could not run each refuse rather than pass, that a reader naming a document problem still rejects, that assembly repairs the defect while preserving every page, and that a rejected result never reaches the destination, never overwrites a previous file, and leaves no temporary artifacts.
 It asserts on Ghostscript's `does not conform` banner, which is what the gate itself matches on, and not on version-specific warning wording, because no Ghostscript version is pinned in this repo.
+For the same reason, damaged real files are asserted only to be refused with nothing published, not to land in one exact refusal class: which class they land in follows the installed reader's wording.
+The `REJECTED` versus `CANNOT VERIFY` distinction is locked exactly by the stub-reader cases, where the suite controls the reader's output byte for byte.
 
 The suite is not vacuous: replacing the gate with an unconditional success - which is behaviorally what an exit-code-only check would be here, since the reader exits 0 on the broken file - fails it at the first assertion.
 
 The proof has to actually run.
-Without Ghostscript the suite would skip and CI would stay green while nothing was checked, so the `portable-serial` lane in `.github/workflows/ci.yml` installs Ghostscript, requires it, and passes `--fail-on-gate-skip 'ghostscript not found'`, and the suite itself hard-fails rather than skipping when `CI` is set.
-A developer run without Ghostscript may still skip.
+Without Ghostscript the suite would skip and CI would stay green while nothing was checked, so the `portable-serial` lane in `.github/workflows/ci.yml` installs Ghostscript, requires it, and passes `--fail-on-gate-skip 'ghostscript not found'`, which turns that skip into a lane failure.
+The lane is the single owner of that requirement.
+A developer run without Ghostscript skips, as it does for every other optional-tool suite in this repo.
 
 ## Using it
 

@@ -23,17 +23,22 @@ FINISH="$ROOT/bin/fm-pdf-finish.sh"
 fm_test_tmproot TMP_ROOT fm-pdf-output
 
 # Ghostscript is this suite's only proof of the conformance gate, so CI must
-# never report green without it. The portable-serial lane installs it, requires
-# it, and passes --fail-on-gate-skip for this exact token; the hard failure here
-# is the second lock, so a lane that lost those steps still cannot go quiet. A
-# developer run without Ghostscript may still skip.
-if ! command -v gs >/dev/null 2>&1; then
-  if [ -n "${CI:-}" ]; then
-    fail "ghostscript is required in CI: this suite is the only proof of the PDF conformance gate"
-  fi
-  echo "skip: ghostscript not found"
-  exit 0
-fi
+# never report green without it. The portable-serial lane owns that: it installs
+# Ghostscript, requires it, and passes --fail-on-gate-skip for this exact token,
+# which turns the skip below into a lane failure. A developer run without
+# Ghostscript skips.
+command -v gs >/dev/null 2>&1 || { echo "skip: ghostscript not found"; exit 0; }
+
+# --- one owner for the shared option surface --------------------------------
+
+# Both scripts parse --pages and --quiet and resolve the reader the same way.
+# They must do it through bin/fm-pdf-lib.sh rather than each carrying a copy,
+# because two copies drift apart the first time only one gets corrected.
+PDF_LIB="$ROOT/bin/fm-pdf-lib.sh"
+assert_present "$PDF_LIB" "the shared PDF option library must exist"
+assert_grep 'fm-pdf-lib.sh' "$VERIFY" "the gate must source the shared option library"
+assert_grep 'fm-pdf-lib.sh' "$FINISH" "the generation step must source the shared option library"
+pass "both PDF scripts share one option library"
 
 # --- fixtures ---------------------------------------------------------------
 
@@ -152,24 +157,33 @@ expect_code 1 "$rc" "an empty file must be rejected"
 assert_contains "$out" "empty file" "an empty file must say so"
 pass "missing and empty inputs are rejected"
 
-# A file the reader positively condemns is REJECTED, not merely unverifiable,
-# even when the damage stops it from reaching a page report. Truncation is the
-# ordinary way that happens, and calling it "could not check" would understate a
-# file that is definitely bad.
-head -c 900 "$GOOD" > "$TMP_ROOT/truncated.pdf"
-out=$("$VERIFY" "$TMP_ROOT/truncated.pdf" 2>&1); rc=$?
-expect_code 1 "$rc" "a truncated file must be rejected"
-assert_contains "$out" "REJECTED" "a truncated file must be reported as rejected"
-pass "a truncated file is rejected, not called unverifiable"
+# Damaged real files must be REFUSED, and nothing may be published from them.
+# Which refusal class they land in is decided by the installed reader's own
+# wording, and no Ghostscript version is pinned anywhere in this repo, so
+# pinning the exact class here would fail on a correct gate the day the runner
+# image moves. The stub cases above own the class distinction, because there the
+# reader's output is controlled byte for byte.
+#
+# refuses_damaged <file> <label> - the gate refuses with a non-zero status and
+# never prints a pass, and the damaged content cannot reach a destination that
+# declares the length it was supposed to have.
+refuses_damaged() {
+  local file=$1 label=$2 dest="$TMP_ROOT/from-damaged.pdf" verdict rc
+  verdict=$("$VERIFY" "$file" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "$label must be refused, got exit 0"
+  assert_not_contains "$verdict" "OK $file" "$label must never be reported as conforming"
+  rm -f "$dest"
+  "$FINISH" --pages 5 "$dest" "$file" >/dev/null 2>&1
+  assert_absent "$dest" "$label must not publish a document of the declared length"
+}
 
-# A file that is not a PDF at all makes the real reader exit non-zero while
-# naming the failure, so it stays a rejection rather than sliding into the
-# "could not check" class the broken-reader rule introduces.
+head -c 900 "$GOOD" > "$TMP_ROOT/truncated.pdf"
+refuses_damaged "$TMP_ROOT/truncated.pdf" "a truncated file"
+pass "a truncated file is refused and cannot ship as a full document"
+
 printf 'this is not a PDF at all\n' > "$TMP_ROOT/not-a-pdf.pdf"
-out=$("$VERIFY" "$TMP_ROOT/not-a-pdf.pdf" 2>&1); rc=$?
-expect_code 1 "$rc" "a non-PDF file must be rejected"
-assert_contains "$out" "REJECTED" "a non-PDF file must be reported as rejected"
-pass "a non-PDF file is rejected, not called unverifiable"
+refuses_damaged "$TMP_ROOT/not-a-pdf.pdf" "a non-PDF file"
+pass "a non-PDF file is refused and cannot ship as a full document"
 
 # A batch is only as good as its worst file.
 out=$("$VERIFY" "$GOOD" "$BROKEN" 2>&1); rc=$?
