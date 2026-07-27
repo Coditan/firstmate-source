@@ -11,6 +11,7 @@
 #                           [--reduced] [--dry-run]
 #                           (<question> | --question-file <path>)
 #   fm-model-panel.sh advance <panel-id> [--accept-unfinished <task-id>]
+#                                        [--rejudge]
 #   fm-model-panel.sh status <panel-id>
 #
 #   start     resolve the three roles, write the question and both analyst
@@ -25,20 +26,25 @@
 #             with both satisfied for the judge it prints
 #             `complete: <report path>` and records the panel complete, which is
 #             the last thing it does. Until then it changes nothing and prints
-#             one of three outcomes: a `waiting:` line naming which of the two
+#             one of four outcomes: a `waiting:` line naming which of the two
 #             facts is missing for which member (exit 0); a `wedged:` block when a
 #             member left a report and is GONE without ever declaring itself
 #             finished, which is the one state that can never clear on its own
-#             (exit 0); or a `stood down:` block when a member ended terminal with
+#             (exit 0); a `stood down:` block when an ANALYST ended terminal with
 #             no report at all, which is the one state where the panel's premise
-#             has failed (recorded as `stage=stood-down`, exit 1).
+#             has failed (recorded as `stage=stood-down`, exit 1); or a
+#             `verdict lost:` block when the JUDGE ended terminal with no report,
+#             where the evidence is intact and only the adjudication is missing,
+#             so `--rejudge` replaces it (exit 0).
 #   status    print the panel record without changing anything.
 #
 #   --id <panel-id>       explicit panel id (default: derived from the question
 #                         plus a random suffix). Task ids are <panel-id>-a,
-#                         <panel-id>-b, and <panel-id>-judge, so the panel id is
-#                         capped so every task id stays within the 64-character
-#                         task-id limit.
+#                         <panel-id>-b, <panel-id>-judge, and <panel-id>-judge<N>
+#                         for a replacement judge, so the panel id is capped at 56
+#                         characters: the longest suffix is `-judge99` at 8, which
+#                         keeps every task id within the 64-character task-id
+#                         limit.
 #   --project <name-or-path>
 #                         the repo the scouts get a worktree of: an existing
 #                         directory, or a name resolved under the home's
@@ -58,9 +64,17 @@
 #                         report as final even though that member never wrote a
 #                         terminal status event. It is explicit and per-member: it
 #                         names one task id and waives nothing for any other
-#                         member, it is never on by default, and it refuses a
-#                         member that has no report to accept. Repeat the flag to
+#                         member, it is never on by default, and it refuses both
+#                         a member that has no report to accept and one that was
+#                         ever observed to finish properly. Repeat the flag to
 #                         accept more than one member.
+#   --rejudge             with `advance` at the judge stage, dispatch ONE
+#                         replacement judge over the existing, unchanged analyst
+#                         reports after the current judge ended without writing a
+#                         verdict. Explicit and recorded, never automatic: the
+#                         superseded judge task is written to the panel record,
+#                         and no report is stamped incomplete by it. It refuses
+#                         when the judge did leave a verdict.
 #   --dry-run             with `start`, resolve and print the lineup without
 #                         writing or dispatching anything.
 #
@@ -86,10 +100,10 @@
 #
 # The two-condition judge gate is deliberate. A report file that EXISTS is not a
 # report that is FINISHED, and dispatching the judge against a half-written
-# analysis silently judges a truncated argument. The completion half is a durable
-# status EVENT rather than a live crew-state read, because panel members are
-# ordinary scouts that may be torn down before the judge is dispatched, and a
-# gate with a fallback for that case would quietly become the fallback. `failed:`
+# analysis silently judges a truncated argument. The completion half is a status
+# EVENT rather than a live crew-state read, because panel members are ordinary
+# scouts that may be torn down before the judge is dispatched, and a gate with a
+# fallback for that case would quietly become the fallback. `failed:`
 # counts as terminal on purpose: the question is whether the analyst stopped
 # writing, not whether it succeeded, and a failed analyst that still left a
 # non-empty report is finished. The verbs are recognized through
@@ -100,6 +114,21 @@
 # and handing the panel's final verdict out under a weaker rule than the one
 # guarding its inputs would be absurd.
 #
+# READINESS IS LATCHED, and the reason is a maintenance warning worth keeping.
+# The gate was originally designed on the premise that the terminal status event
+# is durable and survives cleanup. It is not: bin/fm-teardown.sh removes
+# state/<id>.status and state/<id>.meta together, so a member that finished
+# correctly and was then torn down became indistinguishable from one that
+# vanished mid-write, and the only way past it stamped `accepted_unfinished` on a
+# COMPLETE report and told the judge to distrust it. The premise was relayed and
+# ruled on without anyone reading the code that deletes those files, which is
+# exactly the verify-status-prose-against-live-state discipline the briefs below
+# impose on every analyst; the capability's own design skipped it. So the FIRST
+# time `advance` observes both conditions for a member, that readiness is written
+# to `ready_members` in data/<panel-id>/panel.meta, which does survive teardown,
+# and every later invocation trusts the latch. Do not re-derive readiness from
+# state/ alone.
+#
 # That gate can WEDGE, and the escape from it is deliberately manual and
 # deliberately narrow. Writing the report and appending the terminal line are two
 # separate acts, and the gap between them is the ORDINARY window: a member that
@@ -108,9 +137,10 @@
 # the escape in that window would invite the operator to recreate the exact race
 # this gate closes, at the one moment it looks most reasonable to accept.
 #
-# The `wedged:` block is therefore gated on the member being GONE: no runtime
-# record means it was torn down or died, so its terminal line will never arrive
-# and only an operator can decide. That block names the member, gives the exact
+# The `wedged:` block is therefore gated on the member being GONE with no latched
+# readiness: it left a report, nothing ever recorded it as finished, and its
+# runtime record is no longer there, so only an operator can decide. That block
+# names the member, gives the exact
 # `--accept-unfinished <task-id>` command, and says plainly that accepting means
 # judging a possibly INCOMPLETE report. The acceptance is recorded in the panel
 # record as `accepted_unfinished`, so the provenance of the verdict carries the
@@ -122,7 +152,7 @@
 # no-escape dead end; used that way it warns loudly, on that invocation, that the
 # member may still be writing.
 #
-# A member that ends terminal with NO report is a different fact again: it has
+# An ANALYST that ends terminal with NO report is a different fact again: it has
 # stopped writing, so no report can arrive and the panel's premise has failed.
 # That prints a `stood down:` block naming the member, records `stage=stood-down`
 # so the panel record says honestly what happened, and exits 1. The override
@@ -130,6 +160,15 @@
 # a panel. If that surviving analysis is still wanted, it is a NEW single-analyst
 # review started deliberately with `--reduced` and labelled as such everywhere,
 # never this panel converted in place.
+#
+# A JUDGE that ends terminal with no report costs something else entirely: the
+# evidence is complete and untouched, and only the adjudication is missing, so
+# standing the panel down would discard two finished investigations because the
+# third member crashed. That prints a `verdict lost:` block instead, and
+# `--rejudge` dispatches ONE replacement judge over the same unchanged reports,
+# recording the superseded task in `superseded_judges`. It is explicit and
+# recorded exactly like `--accept-unfinished`, never automatic, and it stamps no
+# incompleteness on reports that were complete.
 #
 # There is deliberately NO time-based, retry-count-based, or attempt-count-based
 # path that advances a panel on its own, and none may be added. An automatic
@@ -638,7 +677,7 @@ cmd_start() {
   case "$panel_id" in
     ''|.*|*[!A-Za-z0-9._-]*) die "invalid panel id '$panel_id'" 2 ;;
   esac
-  [ "${#panel_id}" -le 58 ] || die "panel id '$panel_id' is too long; task ids append -judge and must stay within 64 characters" 2
+  [ "${#panel_id}" -le 56 ] || die "panel id '$panel_id' is too long; task ids append up to -judge99 and must stay within 64 characters" 2
 
   # Resolve the lineup. analyst-b excludes analyst-a's model so an array-backed
   # role picks a second model rather than duplicating the first, and the judge
@@ -759,9 +798,31 @@ member_accepted_unfinished() {  # <task-id> <accepted-list>
   return 1
 }
 
-# 0 while the fleet still tracks this task: the runtime record fm-spawn.sh wrote
-# is removed by teardown, so its ABSENCE is the durable proof that no further
-# line will ever be appended for that member.
+# 0 when this member was ALREADY observed to satisfy both gate conditions and
+# that observation was latched into the panel record. The latch is the durable
+# half of the gate: state/<id>.status does not survive teardown, so without it a
+# member that finished correctly and was then cleaned up is indistinguishable
+# from one that vanished mid-write.
+member_ready_latched() {  # <task-id> <latched-list>
+  case " $2 " in
+    *" $1 "*) return 0 ;;
+  esac
+  return 1
+}
+
+# 0 when both gate conditions are observable RIGHT NOW from live signals. True
+# only while state/<id>.status still exists, which is why the result is latched
+# the first time it is seen.
+member_observed_ready() {  # <task-id>
+  [ -s "$DATA/$1/report.md" ] || return 1
+  status_has_finished_event "$STATE/$1.status"
+}
+
+# 0 while the fleet still tracks this task. Its absence does NOT prove the member
+# died without declaring itself: teardown removes state/<id>.meta and
+# state/<id>.status together, so this only separates a member that is still
+# around from one that is not, and the latch above is what keeps a finished
+# member from being misread as a vanished one.
 member_still_present() {  # <task-id>
   [ -f "$STATE/$1.meta" ]
 }
@@ -771,13 +832,18 @@ member_still_present() {  # <task-id>
 # scout that appends `done:` exactly as they do. status_has_finished_event comes
 # from bin/fm-classify-lib.sh and asks only whether a terminal event EVER
 # appeared.
-#   ready             both conditions hold (or the terminal event was accepted)
+#   ready             both conditions hold, now or at a latched earlier moment
+#                     (or the terminal event was explicitly waived)
 #   finished-empty    ended terminal with no report; nothing further can arrive
 #   unsignalled-gone  a report is there, its author is gone and never declared
 #   unsignalled-live  a report is there and its author is still present
 #   working           neither condition holds yet
-member_state() {  # <task-id> <accepted-list>
-  local id=$1 accepted=$2 finished=0
+member_state() {  # <task-id> <accepted-list> <latched-list>
+  local id=$1 accepted=$2 latched=$3 finished=0
+  if member_ready_latched "$id" "$latched"; then
+    printf 'ready\n'
+    return 0
+  fi
   if status_has_finished_event "$STATE/$id.status" \
     || member_accepted_unfinished "$id" "$accepted"; then
     finished=1
@@ -797,9 +863,9 @@ member_state() {  # <task-id> <accepted-list>
 
 # The two conditions are different facts and the operator needs to know which one
 # is missing, so each names itself.
-member_wait_reason() {  # <task-id> <accepted-list>
+member_wait_reason() {  # <task-id> <accepted-list> <latched-list>
   local id=$1
-  case "$(member_state "$id" "$2")" in
+  case "$(member_state "$id" "$2" "$3")" in
     finished-empty)
       printf '%s has finished but its report %s is empty or absent\n' "$id" "$DATA/$id/report.md" ;;
     unsignalled-gone)
@@ -846,28 +912,50 @@ panel_stood_down_block() {  # <panel-id> <task-id>...
   printf 'panel:   If the surviving analysis is still wanted, that is a NEW single-analyst review started deliberately with `start --reduced`, which is labelled as such everywhere, never this panel converted in place.\n'
 }
 
+# A dead JUDGE is a different failure from a dead analyst: the evidence is
+# complete and intact, only the adjudication is missing, so re-judging the same
+# unchanged reports preserves the formation's property exactly rather than
+# salvaging around it.
+panel_rejudge_block() {  # <panel-id> <judge-task-id>
+  local panel_id=$1 id=$2
+  printf 'verdict lost: panel %s has every analyst report but no verdict.\n' "$panel_id"
+  printf 'panel:   %s ended with a terminal status event and no report at %s, so the adjudication is missing while the evidence is untouched.\n' \
+    "$id" "$DATA/$id/report.md"
+  printf 'panel:   Every analyst report is complete and unchanged, so a fresh judge can adjudicate exactly the same evidence:\n'
+  printf 'panel:     %s advance %s --rejudge\n' "$0" "$panel_id"
+  printf 'panel:   That dispatches ONE replacement judge over those same reports, records %s as superseded in %s, and stamps no incompleteness on any report.\n' \
+    "$id" "$(panel_meta_path "$panel_id")"
+  printf 'panel:   Nothing re-dispatches on its own; this panel waits until you decide.\n'
+}
+
 # Print the gate outcome for these members and return:
 #   0 the panel must not advance yet; a `waiting:` or `wedged:` outcome was printed
 #   1 every member is ready
-#   2 the panel is dead; the caller must record the stand-down and exit
-# Every non-terminal outcome names the next command.
+#   2 a member ended terminal with no report; the caller owns that outcome,
+#     because it costs a panel its premise but costs a judge only its verdict
+# Every non-terminal outcome names the next command. Members observed ready for
+# the first time are reported in PANEL_NEWLY_READY for the caller to latch.
 PANEL_STOOD_DOWN=''
-panel_gate_wait() {  # <panel-id> <gate-sentence> <hint-tail> <accepted-list> <task-id>...
-  local panel_id=$1 sentence=$2 hint=$3 accepted=$4
-  shift 4
+PANEL_NEWLY_READY=''
+panel_gate_wait() {  # <panel-id> <gate-sentence> <hint-tail> <accepted-list> <latched-list> <task-id>...
+  local panel_id=$1 sentence=$2 hint=$3 accepted=$4 latched=$5
+  shift 5
   local id state reasons=''
   local -a gone=() empty=()
+  PANEL_NEWLY_READY=''
   for id in "$@"; do
-    state=$(member_state "$id" "$accepted")
+    if ! member_ready_latched "$id" "$latched" && member_observed_ready "$id"; then
+      PANEL_NEWLY_READY="${PANEL_NEWLY_READY:+$PANEL_NEWLY_READY }$id"
+    fi
+    state=$(member_state "$id" "$accepted" "$latched")
     [ "$state" != ready ] || continue
     [ "$state" != unsignalled-gone ] || gone+=("$id")
     [ "$state" != finished-empty ] || empty+=("$id")
-    reasons="${reasons:+$reasons; }$(member_wait_reason "$id" "$accepted")"
+    reasons="${reasons:+$reasons; }$(member_wait_reason "$id" "$accepted" "$latched")"
   done
   [ -n "$reasons" ] || return 1
   if [ "${#empty[@]}" -gt 0 ]; then
     PANEL_STOOD_DOWN="${empty[*]}"
-    panel_stood_down_block "$panel_id" "${empty[@]}"
     return 2
   fi
   if [ "${#gone[@]}" -gt 0 ]; then
@@ -901,6 +989,28 @@ panel_stand_down() {  # <meta-path>
   exit 1
 }
 
+# Move the readiness just observed into the panel record, which lives under
+# data/ and genuinely survives teardown, and echo the updated list.
+panel_latch_ready() {  # <meta-path> <latched-list>
+  local meta=$1 latched=$2
+  if [ -n "$PANEL_NEWLY_READY" ]; then
+    latched="${latched:+$latched }$PANEL_NEWLY_READY"
+    panel_meta_set "$meta" ready_members "$latched"
+  fi
+  printf '%s\n' "$latched"
+}
+
+# The task id for a replacement judge. The panel id is capped so that every id
+# this can generate stays within the 64-character task-id limit.
+panel_next_judge_id() {  # <panel-id> <superseded-list>
+  local panel_id=$1 n=2 id
+  for id in $2; do
+    n=$((n + 1))
+  done
+  [ "$n" -le 99 ] || die "panel '$panel_id' has already replaced its judge $((n - 2)) times; stand it down rather than replacing it again"
+  printf '%s-judge%s\n' "$panel_id" "$n"
+}
+
 cmd_status() {
   local panel_id=${1:-}
   [ -n "$panel_id" ] || die "status requires a panel id" 2
@@ -910,7 +1020,7 @@ cmd_status() {
 }
 
 cmd_advance() {
-  local panel_id='' want_value='' arg
+  local panel_id='' want_value='' arg rejudge=0
   local -a accept=()
   for arg in "$@"; do
     if [ -n "$want_value" ]; then
@@ -921,6 +1031,7 @@ cmd_advance() {
     case "$arg" in
       --accept-unfinished) want_value=accept ;;
       --accept-unfinished=*) accept+=("${arg#--accept-unfinished=}") ;;
+      --rejudge) rejudge=1 ;;
       --*) die "unknown option $arg" 2 ;;
       *)
         [ -z "$panel_id" ] || die "advance takes exactly one panel id" 2
@@ -944,8 +1055,9 @@ cmd_advance() {
   local report_b=''
   [ -z "$id_b" ] || report_b="$DATA/$id_b/report.md"
 
-  local accepted
+  local accepted latched
   accepted=$(panel_meta_get "$meta" accepted_unfinished)
+  latched=$(panel_meta_get "$meta" ready_members)
 
   # The stage is settled before any acceptance is recorded, so the panel record
   # never carries verdict provenance for a panel that cannot use it.
@@ -976,6 +1088,9 @@ cmd_advance() {
       esac
       [ -s "$DATA/$want/report.md" ] \
         || die "$want has no report at $DATA/$want/report.md, so there is nothing to accept; a missing report is never waived" 2
+      if member_ready_latched "$want" "$latched" || member_observed_ready "$want"; then
+        die "$want finished and left a report at $DATA/$want/report.md, so there is nothing to waive; the caveat is only for a report whose author never declared it finished" 2
+      fi
       if member_still_present "$want"; then
         warn "$want still has a runtime record, so it may STILL BE WRITING $DATA/$want/report.md; accepting it now risks judging a report that is not finished"
       fi
@@ -988,26 +1103,51 @@ cmd_advance() {
   fi
 
   local gate=0
-  if [ "$stage" = judge ]; then
+  if [ "$rejudge" -eq 1 ]; then
+    [ "$stage" = judge ] \
+      || die "--rejudge replaces a judge that was dispatched and left no verdict, but panel '$panel_id' is at stage '$stage'" 2
+    [ ! -s "$report_judge" ] \
+      || die "$id_judge left a verdict at $report_judge, so there is nothing to re-judge; discarding a written verdict is not this command's job" 2
+    local superseded
+    superseded=$(panel_meta_get "$meta" superseded_judges)
+    local replacement
+    replacement=$(panel_next_judge_id "$panel_id" "$superseded")
+    [ ! -e "$DATA/$replacement" ] \
+      || die "the replacement judge task $replacement already has a data directory; reconcile it before re-judging"
+    panel_meta_set "$meta" superseded_judges "${superseded:+$superseded }$id_judge"
+    panel_meta_set "$meta" judge_task "$replacement"
+    printf 'panel: %s is superseded; dispatching %s over the same unchanged analyst reports\n' "$id_judge" "$replacement"
+    id_judge=$replacement
+    report_judge="$DATA/$id_judge/report.md"
+  elif [ "$stage" = judge ]; then
     panel_gate_wait "$panel_id" \
       'the panel is complete only once the judge has finished AND left a non-empty report' \
-      "once the judge reports done" "$accepted" "$id_judge" || gate=$?
+      "once the judge reports done" "$accepted" "$latched" "$id_judge" || gate=$?
+    latched=$(panel_latch_ready "$meta" "$latched")
     case "$gate" in
       0) return 0 ;;
-      2) panel_stand_down "$meta" ;;
+      2)
+        panel_rejudge_block "$panel_id" "$id_judge"
+        return 0
+        ;;
     esac
     panel_meta_set "$meta" stage complete
     panel_complete_output "$report_judge" "$id_judge" "$accepted"
     return 0
+  else
+    panel_gate_wait "$panel_id" \
+      'the judge is created only once every analyst has finished AND left a non-empty report' \
+      "after the next analyst finishes" "$accepted" "$latched" "$id_a" ${id_b:+"$id_b"} || gate=$?
+    latched=$(panel_latch_ready "$meta" "$latched")
+    case "$gate" in
+      0) return 0 ;;
+      2)
+        # shellcheck disable=SC2086  # the member list is space-separated, deliberately split
+        panel_stood_down_block "$panel_id" $PANEL_STOOD_DOWN
+        panel_stand_down "$meta"
+        ;;
+    esac
   fi
-
-  panel_gate_wait "$panel_id" \
-    'the judge is created only once every analyst has finished AND left a non-empty report' \
-    "after the next analyst finishes" "$accepted" "$id_a" ${id_b:+"$id_b"} || gate=$?
-  case "$gate" in
-    0) return 0 ;;
-    2) panel_stand_down "$meta" ;;
-  esac
 
   # The judge task was never dispatched if it has no runtime record, so a brief
   # left behind by a failed dispatch is ours to regenerate.

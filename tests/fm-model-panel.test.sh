@@ -312,6 +312,111 @@ test_terminal_member_without_a_report_stands_the_panel_down() {
   pass "a member that finishes with no report stands the panel down, durably and unwaivably"
 }
 
+test_readiness_latch_survives_teardown() {
+  local home out status=0
+  home=$(new_home latch "$TWO_MODELS")
+  out=$(run_panel "$home" start --id lt --project "$home/subject" "Anything?") \
+    || fail "start failed: $out"
+  printf 'analyst a findings\n' > "$home/data/lt-a/report.md"
+  say_status "$home" lt-a 'done: a finished'
+
+  # The first observation latches lt-a even while the panel waits for lt-b.
+  out=$(run_panel "$home" advance lt) || fail "advance failed: $out"
+  assert_contains "$out" "waiting:" "the panel must still wait for the second analyst"
+  assert_grep 'ready_members=lt-a' "$home/data/lt/panel.meta" \
+    "readiness was not latched on first observation"
+
+  # Real teardown removes the status file and the runtime record together, so a
+  # gate that re-derived readiness from state/ would now call lt-a wedged.
+  rm -f "$home/state/lt-a.status" "$home/state/lt-a.meta"
+  out=$(run_panel "$home" advance lt) || fail "advance failed: $out"
+  assert_contains "$out" "waiting:" "a torn-down member that was observed ready must not change the outcome"
+  assert_not_contains "$out" "wedged:" "a torn-down member that was observed ready must not become wedged"
+  assert_not_contains "$out" "lt-a" "a latched member must not be reported as missing anything"
+  assert_not_contains "$out" "--accept-unfinished" "a latched member must never be offered the override"
+
+  out=$(run_panel "$home" advance lt --accept-unfinished lt-a) || status=$?
+  expect_code 2 "$status" "a member already observed ready must not be waivable"
+  assert_contains "$out" "nothing to waive" "the refusal must say the report was already finished"
+  assert_no_grep 'accepted_unfinished' "$home/data/lt/panel.meta" \
+    "a refused override must never stamp a complete report"
+
+  printf 'analyst b findings\n' > "$home/data/lt-b/report.md"
+  say_status "$home" lt-b 'done: b finished'
+  out=$(run_panel "$home" advance lt) || fail "advance failed: $out"
+  assert_contains "$(spawn_log "$home")" "lt-judge " "the judge must be dispatched on the latched readiness"
+  assert_no_grep 'accepted_unfinished' "$home/data/lt/panel.meta" \
+    "no acceptance may be recorded for members that finished properly"
+  assert_no_grep 'Reports accepted without their author finishing' "$home/data/lt-judge/brief.md" \
+    "the judge brief must never call a complete report possibly incomplete"
+  pass "readiness is latched on first observation and survives teardown of the status file"
+}
+
+test_judge_without_a_verdict_offers_a_recorded_rejudge() {
+  local home out log status=0
+  home=$(new_home rejudge "$TWO_MODELS")
+  out=$(run_panel "$home" start --id rj --project "$home/subject" "Anything?") \
+    || fail "start failed: $out"
+  printf 'analyst a findings\n' > "$home/data/rj-a/report.md"
+  printf 'analyst b findings\n' > "$home/data/rj-b/report.md"
+  say_status "$home" rj-a 'done: a finished'
+  say_status "$home" rj-b 'done: b finished'
+  out=$(run_panel "$home" advance rj) || fail "advance failed: $out"
+
+  # The judge dies without a verdict. The evidence is complete and untouched, so
+  # this must not discard two finished investigations.
+  say_status "$home" rj-judge 'failed: ran out of budget'
+  out=$(run_panel "$home" advance rj) \
+    || fail "a panel that only lost its verdict must not report failure: $out"
+  assert_contains "$out" "verdict lost:" "a reportless judge must not print the analyst stand-down"
+  assert_not_contains "$out" "stood down:" "a healthy panel must not be stood down over its judge"
+  assert_contains "$out" "rj-judge" "the block must name the judge that left no verdict"
+  assert_contains "$out" "advance rj --rejudge" "the block must print the exact re-judge command"
+  assert_no_grep 'stage=stood-down' "$home/data/rj/panel.meta" "a healthy panel must not be recorded dead"
+
+  out=$(run_panel "$home" advance rj --rejudge) || fail "rejudge failed: $out"
+  log=$(spawn_log "$home")
+  assert_contains "$log" "rj-judge2 $home/subject --harness grok --scout --model grok-4-fast --effort high" \
+    "the replacement judge was not dispatched on the judge profile"
+  assert_grep 'judge_task=rj-judge2' "$home/data/rj/panel.meta" "the record does not point at the replacement judge"
+  assert_grep 'superseded_judges=rj-judge' "$home/data/rj/panel.meta" "the superseded judge was not recorded"
+  assert_no_grep 'accepted_unfinished' "$home/data/rj/panel.meta" \
+    "replacing a judge must not stamp the analysts' complete reports"
+  assert_grep "$home/data/rj-a/report.md" "$home/data/rj-judge2/brief.md" \
+    "the replacement judge was not given the unchanged analyst reports"
+  assert_no_grep 'Reports accepted without their author finishing' "$home/data/rj-judge2/brief.md" \
+    "the replacement judge must not be told a complete report is truncated"
+  assert_grep 'analyst a findings' "$home/data/rj-a/report.md" "the analyst reports must be left untouched"
+
+  printf 'verdict\n' > "$home/data/rj-judge2/report.md"
+  say_status "$home" rj-judge2 'done: verdict written'
+  out=$(run_panel "$home" advance rj --rejudge) || status=$?
+  expect_code 2 "$status" "re-judging a judge that left a verdict must be refused"
+  assert_contains "$out" "nothing to re-judge" "the refusal must say a verdict already exists"
+
+  out=$(run_panel "$home" advance rj) || fail "advance failed: $out"
+  assert_contains "$out" "complete: $home/data/rj-judge2/report.md" \
+    "the replacement judge must be able to complete the panel"
+  assert_not_contains "$out" "CAVEAT" "a replaced judge is not an accepted-unfinished one"
+  pass "a judge that leaves no verdict is replaced by an explicit recorded re-judge"
+}
+
+test_generated_task_ids_stay_within_the_task_id_limit() {
+  local home out id longest=panel-id-length-check status=0
+  home=$(new_home id-length "$TWO_MODELS")
+  while [ "${#longest}" -lt 56 ]; do longest="${longest}x"; done
+  out=$(run_panel "$home" start --id "$longest" --project "$home/subject" "Anything?") \
+    || fail "the documented maximum panel id must be accepted: $out"
+  for id in "$longest-a" "$longest-b" "$longest-judge" "$longest-judge99"; do
+    [ "${#id}" -le 64 ] || fail "generated task id $id exceeds the 64-character limit (${#id})"
+  done
+
+  out=$(run_panel "$home" start --id "${longest}x" --project "$home/subject" "Anything?") || status=$?
+  expect_code 2 "$status" "a panel id one character over the cap must be refused"
+  assert_contains "$out" "64 characters" "the refusal must name the task-id limit"
+  pass "every generated task id stays within the 64-character task-id limit"
+}
+
 test_accepted_judge_caveat_repeats_on_every_complete() {
   local home out
   home=$(new_home judge-caveat "$TWO_MODELS")
@@ -566,6 +671,9 @@ test_reduced_form_is_named_not_a_panel
 test_analyst_briefs_share_the_question_and_forbid_peeking
 test_judge_waits_for_every_report_then_gets_both
 test_terminal_member_without_a_report_stands_the_panel_down
+test_readiness_latch_survives_teardown
+test_judge_without_a_verdict_offers_a_recorded_rejudge
+test_generated_task_ids_stay_within_the_task_id_limit
 test_accepted_judge_caveat_repeats_on_every_complete
 test_acceptance_is_not_recorded_when_the_stage_cannot_use_it
 test_wedged_member_names_its_override_and_the_override_is_per_member

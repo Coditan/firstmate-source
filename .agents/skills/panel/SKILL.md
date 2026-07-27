@@ -55,7 +55,7 @@ Both analysts receive byte-identical text and nothing else, so a vague question 
    A `waiting:` line means nothing to do yet, and it names which of the two facts is still missing for which analyst.
 4. **Supervise the judge, then advance again.**
    The second `advance` prints `complete: <report path>` once the judge has both reported a terminal status event and left a non-empty report, which is the same gate its analysts passed.
-   A `wedged:` or `stood down:` block instead of a `waiting:` line means the panel needs a decision from you; read the next section before doing anything about it.
+   A `wedged:`, `stood down:`, or `verdict lost:` block instead of a `waiting:` line means the panel needs a decision from you; read the next sections before doing anything about it.
 5. **Read the judge's report and relay its findings.**
    Relay the answer, the contested facts and what the evidence showed, any mistake shared by both analysts, and what remains unverified.
    Say which models argued and which judged: that is substance the captain asked for, not internal machinery.
@@ -80,14 +80,23 @@ It also stays available for a member that still looks present but you know is de
 There is no timeout anywhere in this formation: a panel waits forever rather than judging an unfinished report on its own, so the decision to accept one is always yours.
 Say so when relaying the verdict, because a panel completed over an unfinished report is a weaker result than one that was not.
 
-## When a member finishes without a report
+## When an analyst finishes without a report
 
-`advance` prints a `stood down:` block and exits 1 when a member ends with a terminal status event and no report at all.
+`advance` prints a `stood down:` block and exits 1 when an ANALYST ends with a terminal status event and no report at all.
 That member has stopped writing, so no report can arrive, and the panel cannot produce a verdict.
 
 Stand the panel down and tell the captain it produced nothing.
 The override deliberately refuses to waive a missing report: a verdict built on the one report that survived is not a panel, and presenting it as one would rebuild the echo-as-corroboration failure this formation exists to refuse.
 If the captain still wants the surviving analysis, that is a NEW single-analyst review started deliberately with `--reduced`, which is labelled as such in the briefs, the record, and the judge's own report, and never this panel converted in place.
+
+## When the judge finishes without a verdict
+
+`advance` prints a `verdict lost:` block when the JUDGE ends with a terminal status event and no report.
+This is not a dead panel: both analyst reports are complete and untouched, and only the adjudication is missing, so the formation is intact.
+
+Run `bin/fm-model-panel.sh advance <panel-id> --rejudge` to dispatch one replacement judge over those same unchanged reports.
+The superseded judge task is recorded in the panel record, no report is stamped incomplete by it, and nothing re-dispatches on its own.
+Mention when relaying that the verdict came from a replacement judge, because the captain is entitled to know a judge was lost.
 
 ## When the panel cannot be a panel
 
