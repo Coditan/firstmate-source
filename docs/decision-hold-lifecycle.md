@@ -103,6 +103,21 @@ fm-lint.sh: ShellCheck 0.11.0 (pinned 0.11.0)
 $ git diff --check
 (no output)
 
-$ for test_script in tests/*.test.sh; do bash "$test_script"; done
-ALL 71 TEST SCRIPTS PASSED
+$ bin/fm-test-run.sh --all
+FM_TEST_SUMMARY total=110 failed=1 skipped_gate=19 duration_ms=1285836
+
+$ env -u NO_MISTAKES_GATE bash tests/fm-sessionstart-nudge.test.sh
+ok - fm-sessionstart-nudge: a genuine primary gets one explicitly marked instruction line
+ok - fm-sessionstart-nudge: NO_MISTAKES_GATE is silent
+ok - fm-sessionstart-nudge: .no-mistakes gate common-dir is silent
+ok - fm-sessionstart-nudge: an unmarked linked task worktree is silent
+ok - fm-sessionstart-nudge: a marked linked secondmate home is a primary
+ok - fm-sessionstart-nudge: a checkout without state is silent
+ok - fm-sessionstart-nudge: a lock holder in process ancestry is already run
+ok - OpenCode session.created delivers the exact wrapper nudge once per session
+ok - all five verified harnesses register the shared session-start nudge
 ```
+
+The complete-regression walk above ran every one of the 110 `tests/*.test.sh` scripts through their owner, `bin/fm-test-run.sh --all`; none were skipped by selection, and the 19 counted gate skips are scripts that self-skip when an optional multiplexer or harness binary is absent.
+Its one failure, `tests/fm-sessionstart-nudge.test.sh`, is an artifact of the review environment rather than a regression: that script asserts the session-start nudge prints, and `bin/fm-sessionstart-nudge.sh` is deliberately silent whenever `NO_MISTAKES_GATE` is set, which it is inside a no-mistakes gate agent.
+Re-running that single script with the variable unset passes all nine of its cases, as recorded above.
