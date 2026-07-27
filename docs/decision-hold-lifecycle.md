@@ -26,6 +26,8 @@ The `--force` path remains the explicit captain-approved discard escape hatch.
 When an identity is no longer in the live backlog, `complete` and `verify` fall back to `data/done-archive.md`, where retention moves Done work.
 That archive record satisfies the gate only when every archived entry under the identity is a completed kind `captain` item carrying both the recorded resolution and its routed work, so a stale resolution can never vouch for a later decision that reused the same key.
 An entry that is still open, is not kind `captain`, or lacks either marker refuses, which keeps the gate fail-closed.
+Both questions are scoped to the one identity, so an unresolved entry for a different decision never affects it.
+The `hold` reopen guard reads the same archive with the opposite question — whether *any* archived entry under the identity already carries a resolution — so a mixed archive still refuses to reopen a decision the captain has answered.
 The archive path is pinned to `data/done-archive.md` rather than resolved from tasks-axi configuration; repointing `markdown.archive` or moving `FM_DATA_OVERRIDE` away from `$FM_HOME/data` refuses cleanup rather than accepting it wrongly.
 
 The `resolve` subcommand requires a decision file and at least one existing dependent task whose structured `blocked-by` edge points to the hold.
@@ -55,6 +57,7 @@ It begins with a completed investigation and visual review whose genuine unresol
 The initial Bearings snapshot correctly has no open decision, and the new teardown gate refuses to erase the source.
 A later regression covers tasks-axi's quoted multi-entry `blocked_by` output so `resolve` matches the first, middle, and last ids and rejects a genuinely absent id.
 A further regression resolves a hold, rotates it into the archive with `tasks-axi prune`, and proves cleanup then succeeds while the same identity can no longer be reopened, and that a reused identity, a completed captain entry with no recorded resolution, and a still-open archive lookalike each still refuse.
+It also covers a mixed archive in both directions: an identity carrying both a resolved and an unresolved entry still refuses to reopen, and a genuinely resolved identity still satisfies the gate when an unrelated identity's unresolved entry sits in the same archive.
 
 The final verification commands and their exact summarized outputs follow.
 

@@ -194,17 +194,14 @@ verify_hold_resolved() {  # <hold-id>
 # It diverges if markdown.archive is repointed or if FM_DATA_OVERRIDE moves away
 # from $FM_HOME/data, because tasks-axi resolves the archive relative to $FM_HOME.
 # The divergence is fail-closed: cleanup is refused, never wrongly accepted.
-archived_hold_resolved() {  # <hold-id>
-  local id=$1 archive="$DATA/done-archive.md"
+scan_archived_hold() {  # <hold-id> <all|any>
+  local id=$1 mode=$2 archive="$DATA/done-archive.md"
   [ -f "$archive" ] || return 1
-  # Every archived entry under this identity must be a resolved captain hold. A
-  # single unresolved entry refuses, so a stale resolution can never vouch for a
-  # later decision that reused the same key.
-  awk -v target="$id" '
+  awk -v target="$id" -v mode="$mode" '
     function finish_entry() {
       if (active) {
-        matched = 1
-        if (!(checked && captain && resolution && routed)) unresolved = 1
+        if (checked && captain && resolution && routed) resolved_seen = 1
+        else unresolved_seen = 1
       }
       active = 0
     }
@@ -231,9 +228,23 @@ archived_hold_resolved() {  # <hold-id>
     }
     END {
       finish_entry()
-      exit(matched && !unresolved ? 0 : 1)
+      if (mode == "any") exit(resolved_seen ? 0 : 1)
+      exit(resolved_seen && !unresolved_seen ? 0 : 1)
     }
   ' "$archive"
+}
+
+# The completion gate needs every archived entry under this identity to be a
+# resolved captain hold, so a stale resolution never vouches for a later decision
+# that reused the same key.
+archived_hold_resolved() {  # <hold-id>
+  scan_archived_hold "$1" all
+}
+
+# The reopen guard asks the opposite question: does any archived entry already
+# carry a durable resolution for this identity.
+archived_hold_resolution_exists() {  # <hold-id>
+  scan_archived_hold "$1" any
 }
 
 verify_hold_durable() {  # <hold-id>
@@ -309,7 +320,7 @@ command_hold() {
     [ "$kind" = captain ] || fail "existing backlog identity $id is not kind captain"
     [ "$existing_title" = "$title" ] || fail "existing captain hold $id has a different title"
   else
-    if archived_hold_resolved "$id"; then
+    if archived_hold_resolution_exists "$id"; then
       fail "captain decision $id is already durably resolved in $DATA/done-archive.md; use a new decision key for a new decision"
     fi
     if [ -z "$repo" ] && [ -f "$STATE/$origin.meta" ]; then

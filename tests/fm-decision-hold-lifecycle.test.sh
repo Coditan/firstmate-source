@@ -390,6 +390,53 @@ EOF
   fi
   assert_grep "has no resolved record" "$home/stale-reuse-verify.err" \
     "reused decision identity did not retain the fail-closed refusal"
+  if run_decisions "$home" hold "$origin" route \
+    --title "Choose the stale sample route again" --reason "captain route choice pending" --repo sample \
+    > "$home/stale-reuse-hold.out" 2> "$home/stale-reuse-hold.err"; then
+    fail "hold reopened an identity whose archive already carries a durable resolution"
+  fi
+  assert_grep "already durably resolved" "$home/stale-reuse-hold.err" \
+    "a mixed archive did not refuse reopening a resolved decision identity"
+  assert_no_grep "$origin-decision-route" "$home/data/backlog.md" \
+    "refused mixed-archive hold still created a fresh open decision"
+
+  home=$(make_home scoped-archive-predicate)
+  origin=sample-scoped-archive-review
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Review scoped archive sample decision" \
+    --kind scout --repo sample --start >/dev/null \
+    || fail "could not create scoped-archive origin"
+  write_origin_meta "$home" "$origin"
+  printf 'decisions_reviewed=1\ndecision_keys=route\n' >> "$home/state/$origin.meta"
+  printf 'needs-decision [key=route]: choose route north or route south\ndone: report complete\n' \
+    > "$home/state/$origin.status"
+  printf '# Scoped archive sample review\n\nThe route decision was answered.\n' \
+    > "$home/data/$origin/report.md"
+  cat > "$home/data/done-archive.md" <<EOF
+## Archived 2026-07-20
+- [ ] $origin-decision-pace - Choose the scoped sample pace (repo: sample) (kind: captain)
+  Origin: $origin
+  Decision key: pace
+  State: awaiting captain decision.
+
+## Archived 2026-07-27
+- [x] $origin-decision-route - Choose the scoped sample route (repo: sample) (kind: captain)
+  Resolution recorded by fm-decision-hold.
+  Decision digest: 1111111111111111111111111111111111111111111111111111111111111111
+  Routed identities: sample-scoped-route
+
+  Captain decision:
+  Use route north for the scoped sample.
+
+  Routed work:
+  - sample-scoped-route
+EOF
+  run_decisions "$home" complete "$origin" route >/dev/null \
+    || fail "a stale unresolved entry for another identity locked out a resolved decision"
+  run_decisions "$home" verify "$origin" >/dev/null \
+    || fail "verification refused a resolved identity over an unrelated unresolved archive entry"
+  run_teardown "$home" "$origin" >/dev/null 2> "$home/scoped-archive-teardown.err" \
+    || fail "cleanup refused a resolved archived hold: $(cat "$home/scoped-archive-teardown.err")"
 
   home=$(make_home checked-archived-lookalike)
   origin=sample-checked-lookalike-review
