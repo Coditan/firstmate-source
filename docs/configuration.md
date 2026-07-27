@@ -338,6 +338,47 @@ Malformed JSON, an empty or malformed rule/default array, an unverified harness,
 Because the spawn backstop is gated by file presence, any fallback path after a missing match, validation error, or missing `jq` still passes a resolved harness explicitly until the file is fixed or removed.
 Secondmate homes inherit this file from the primary, so a secondmate's own crewmates apply the same dispatch profile behavior.
 
+## Model panel roles (config/model-panel.json)
+
+A model panel has two analysts answering one question independently on different models and a third model judging both reports.
+The roles are pinned in `bin/fm-model-panel.sh`; the models filling them are configuration, because a model name in tracked code rots silently and a home can only run a panel on the models it can actually reach.
+This section is the single owner of the panel's configuration schema, resolution order, and degradation contract; the script's header owns its commands and flags, and the [`panel` skill](../.agents/skills/panel/SKILL.md) owns when a panel is worth its cost.
+
+`config/model-panel.json` is an optional local, gitignored file mapping each role to a dispatch profile.
+
+```json
+{
+  "roles": {
+    "analyst_a": { "harness": "<adapter>", "model": "<optional model>", "effort": "<optional effort>" },
+    "analyst_b": { "harness": "<adapter>", "model": "<optional model>", "effort": "<optional effort>" },
+    "judge": [
+      { "harness": "<adapter>", "model": "<optional model>", "effort": "<optional effort>" }
+    ]
+  }
+}
+```
+
+A role's value is one profile object or a non-empty array of them, exactly the shape "Crew dispatch profiles" above defines, and every role resolves through `bin/fm-dispatch-select.sh`.
+Panel profiles therefore get the same validation and the same quota-aware array selection as crew dispatch profiles, with no second selector.
+An omitted `model` or `effort` leaves that axis at the harness's own default; there is deliberately no injected effort default, because a profile carrying an effort its harness does not accept is rejected as an invalid pair.
+Panels are ambiguous investigation work, so a high effort level is usually the right configured value - see [`docs/examples/model-panel.json`](examples/model-panel.json) for a starting point to copy.
+
+Each role resolves in this order: its entry in `config/model-panel.json`, then the top-level `default` profile set in `config/crew-dispatch.json`.
+That fallback is the documented default, and it is why a home that already declares which runtimes it dispatches on can run a panel with no panel-specific configuration at all.
+When neither file supplies a profile for a role, the panel refuses and names both files rather than guessing a model.
+A role backed by an array prefers a candidate whose model the panel is not already using, so the second analyst picks a second model instead of duplicating the first.
+
+Model identity for that comparison is the profile's model name with any provider prefix and any `:suffix` removed - the normalization `bin/fm-dispatch-select.sh` already uses - or `harness:<name>` when the profile pins no model.
+Two profiles naming the same model through different harnesses are therefore correctly one model, not two.
+
+Degradation is explicit and never silent.
+When both analysts would resolve to the same model identity, `start` refuses with exit 4 and names both the configuration fix and the reduced form; two identical analysts are not independent, and presenting them as a panel is worse than running none.
+The reduced form is opt-in through `--reduced` and is recorded and labelled everywhere as a single-analyst review rather than a panel, in the briefs, in the panel record, and in the judge's own report.
+When no third distinct model is available, the judge may share an analyst's model; that prints a warning and proceeds, because the judge's independence comes from re-verifying claims against live state with every report in hand.
+
+`config/model-panel.json` is deliberately NOT in the inheritable set that `bin/fm-config-inherit-lib.sh` declares, for the same reason as `config/backend`: it names the models a specific home can actually reach, and pushing the primary's list into every secondmate would overwrite exactly the local knowledge that lets each home field a real panel.
+A secondmate home that needs a different lineup writes its own file, and a home that writes none still inherits the primary's `config/crew-dispatch.json` default profile set through the normal inheritance path.
+
 ## Toolchain
 
 On session start the first mate detects what its required toolchain is missing or too old and lists each problem with either an exact install command or manual instructions.

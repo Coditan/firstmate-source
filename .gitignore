@@ -24,6 +24,7 @@ __pycache__/
 .claude/settings.fm-task.json
 config/crew-harness
 config/crew-dispatch.json
+config/model-panel.json
 config/secondmate-harness
 config/backlog-backend
 config/backend
