@@ -214,32 +214,28 @@ test_judge_waits_for_every_report_then_gets_both() {
 
   printf 'analyst a findings\n' > "$home/data/jg-a/report.md"
   out=$(run_panel "$home" advance jg) || fail "advance failed: $out"
-  assert_contains "$out" "jg-b" "advance must still wait while the second report is missing"
+  assert_contains "$out" "waiting:" "advance must still wait while the second report is missing"
+  assert_contains "$out" "jg-b" "the waiting line must name the analyst with no report"
   assert_not_contains "$(spawn_log "$home")" "jg-judge" "the judge must wait for every analyst report"
 
   # Both reports EXIST now, but neither analyst has said it is finished. A file
   # that exists is not a file that is finished, so this must still wait, and a
-  # nonterminal progress line must not be mistaken for a terminal event.
+  # nonterminal progress line must not be mistaken for a terminal event. Both
+  # analysts are still present, so this is the ordinary write-then-declare window
+  # and the override must not be advertised in it.
   printf 'analyst b findings\n' > "$home/data/jg-b/report.md"
   say_status "$home" jg-a 'working: still drafting'
   out=$(run_panel "$home" advance jg) || fail "advance failed: $out"
-  assert_contains "$out" "no terminal status event" "the outcome must name the missing terminal event"
+  assert_contains "$out" "waiting:" "the ordinary write-then-declare window must print the plain waiting line"
+  assert_contains "$out" "terminal status event" "the outcome must name the missing terminal event"
   assert_contains "$out" "jg-a" "the outcome must name the analyst that has not finished"
+  assert_not_contains "$out" "--accept-unfinished" \
+    "the override must not be advertised while the analyst is still present and may be writing"
   assert_not_contains "$(spawn_log "$home")" "jg-judge" \
     "the judge must not be dispatched against a report whose analyst is still writing"
 
-  # Terminal events on both sides, but analyst B's report is empty: the other
-  # half of the gate, and a different fact the waiting line must distinguish.
   say_status "$home" jg-a 'done: analyst a finished'
   say_status "$home" jg-b 'done: analyst b finished'
-  : > "$home/data/jg-b/report.md"
-  out=$(run_panel "$home" advance jg) || fail "advance failed: $out"
-  assert_contains "$out" "waiting:" "advance must wait while a finished analyst left an empty report"
-  assert_contains "$out" "empty or absent" "the waiting line must name the empty report"
-  assert_contains "$out" "jg-b" "the waiting line must name the analyst with the empty report"
-  assert_not_contains "$(spawn_log "$home")" "jg-judge" "the judge must not judge an empty report"
-
-  printf 'analyst b findings\n' > "$home/data/jg-b/report.md"
   out=$(run_panel "$home" advance jg) || fail "advance failed: $out"
   log=$(spawn_log "$home")
   assert_contains "$log" "jg-judge $home/subject --harness grok --scout --model grok-4-fast --effort high" \
@@ -263,25 +259,101 @@ test_judge_waits_for_every_report_then_gets_both() {
   # exists is not a report that is finished, on the final hop either.
   printf 'partial verdict\n' > "$home/data/jg-judge/report.md"
   out=$(run_panel "$home" advance jg) || fail "advance failed: $out"
+  assert_contains "$out" "waiting:" "a half-written judge report must not complete the panel"
   assert_not_contains "$out" "complete:" "a half-written judge report must not complete the panel"
   assert_contains "$out" "jg-judge" "the outcome must name the judge that has not finished"
   assert_no_grep 'stage=complete' "$home/data/jg/panel.meta" \
     "the panel must not record itself complete over an unfinished judge"
 
   say_status "$home" jg-judge 'done: verdict written'
-  : > "$home/data/jg-judge/report.md"
-  out=$(run_panel "$home" advance jg) || fail "advance failed: $out"
-  assert_contains "$out" "waiting:" "a finished judge with an empty report must still wait"
-  assert_contains "$out" "empty or absent" "the waiting line must name the empty judge report"
-  assert_no_grep 'stage=complete' "$home/data/jg/panel.meta" \
-    "the panel must not record itself complete over an empty judge report"
-
-  printf 'judgement\n' > "$home/data/jg-judge/report.md"
   out=$(run_panel "$home" advance jg) || fail "advance failed: $out"
   assert_contains "$out" "complete: $home/data/jg-judge/report.md" \
     "a finished panel does not report its judge report path"
+  assert_not_contains "$out" "CAVEAT" "a panel nobody overrode must not carry an accepted-unfinished caveat"
   assert_grep 'stage=complete' "$home/data/jg/panel.meta" "the panel record did not reach the complete stage"
   pass "the judge is created only once every analyst report exists, and sees both blind"
+}
+
+test_terminal_member_without_a_report_stands_the_panel_down() {
+  local home out status=0
+  home=$(new_home stand-down "$TWO_MODELS")
+  out=$(run_panel "$home" start --id sd --project "$home/subject" "Anything?") \
+    || fail "start failed: $out"
+
+  # A member that ended terminal with no report has stopped writing, so no report
+  # can arrive: the panel's premise has failed and it cannot be waited out.
+  printf 'analyst a findings\n' > "$home/data/sd-a/report.md"
+  say_status "$home" sd-a 'done: analyst a finished'
+  say_status "$home" sd-b 'failed: ran out of budget before writing anything'
+  out=$(run_panel "$home" advance sd) || status=$?
+  [ "$status" -ne 0 ] || fail "a panel that can never complete must not report success"
+  assert_contains "$out" "stood down:" "a member that finished with no report must not print the bland waiting line"
+  assert_contains "$out" "sd-b" "the stand-down block must name the member that left no report"
+  assert_contains "$out" "Stand this panel down" "the stand-down block must name the operator's action"
+  assert_contains "$out" "--reduced" "the stand-down block must name the deliberate salvage path"
+  assert_not_contains "$out" "next step is" "a dead panel must not hint at a next advance"
+  assert_grep 'stage=stood-down' "$home/data/sd/panel.meta" "the dead panel was not recorded durably"
+  assert_grep 'stood_down=sd-b' "$home/data/sd/panel.meta" "the record does not name the member that killed the panel"
+  assert_not_contains "$(spawn_log "$home")" "sd-judge" "a stood-down panel must never dispatch a judge"
+
+  # Idempotent: the recorded stand-down keeps saying the same thing.
+  status=0
+  out=$(run_panel "$home" advance sd) || status=$?
+  [ "$status" -ne 0 ] || fail "a recorded stand-down must keep reporting failure"
+  assert_contains "$out" "stood down:" "the recorded stand-down must re-print its block"
+  assert_contains "$out" "sd-b" "the recorded stand-down must keep naming the member"
+
+  # The override never manufactures a panel out of the one report that survived.
+  status=0
+  out=$(run_panel "$home" advance sd --accept-unfinished sd-b) || status=$?
+  [ "$status" -ne 0 ] || fail "a missing report must never be waivable"
+  assert_no_grep 'accepted_unfinished' "$home/data/sd/panel.meta" \
+    "a stood-down panel must not record an acceptance it can never use"
+  pass "a member that finishes with no report stands the panel down, durably and unwaivably"
+}
+
+test_accepted_judge_caveat_repeats_on_every_complete() {
+  local home out
+  home=$(new_home judge-caveat "$TWO_MODELS")
+  out=$(run_panel "$home" start --id jc --project "$home/subject" "Anything?") \
+    || fail "start failed: $out"
+  printf 'analyst a findings\n' > "$home/data/jc-a/report.md"
+  printf 'analyst b findings\n' > "$home/data/jc-b/report.md"
+  say_status "$home" jc-a 'done: a finished'
+  say_status "$home" jc-b 'done: b finished'
+  out=$(run_panel "$home" advance jc) || fail "advance failed: $out"
+
+  # The judge wrote a verdict and was then torn down without declaring itself
+  # finished, so the operator accepts it explicitly.
+  printf 'partial verdict\n' > "$home/data/jc-judge/report.md"
+  rm -f "$home/state/jc-judge.meta"
+  out=$(run_panel "$home" advance jc --accept-unfinished jc-judge) || fail "advance failed: $out"
+  assert_contains "$out" "complete: $home/data/jc-judge/report.md" "the accepted judge must complete the panel"
+  assert_contains "$out" "CAVEAT" "the completing invocation must carry the caveat"
+
+  # A later idempotent advance reads on a fresh context and must say the same.
+  out=$(run_panel "$home" advance jc) || fail "advance failed: $out"
+  assert_contains "$out" "complete: $home/data/jc-judge/report.md" "the repeat advance must still report completion"
+  assert_contains "$out" "CAVEAT" "every complete: output must carry the caveat, not only the one that recorded it"
+  assert_contains "$out" "jc-judge" "the caveat must name the member whose report may be incomplete"
+  pass "an accepted judge report carries its caveat on every complete: output"
+}
+
+test_acceptance_is_not_recorded_when_the_stage_cannot_use_it() {
+  local home out status=0
+  home=$(new_home accept-stage "$TWO_MODELS")
+  out=$(FM_FAKE_SPAWN_FAIL_ID=as-b run_panel "$home" start --id as --project "$home/subject" "Anything?") \
+    || status=$?
+  [ "$status" -ne 0 ] || fail "a failed analyst dispatch must not report success"
+  printf 'analyst a findings\n' > "$home/data/as-a/report.md"
+
+  status=0
+  out=$(run_panel "$home" advance as --accept-unfinished as-a) || status=$?
+  [ "$status" -ne 0 ] || fail "advance must still refuse a panel that never finished dispatching"
+  assert_contains "$out" "never finished dispatching" "the stage refusal must still be the reported failure"
+  assert_no_grep 'accepted_unfinished' "$home/data/as/panel.meta" \
+    "an acceptance the stage can never use must not be recorded as verdict provenance"
+  pass "an acceptance is recorded only on a stage that can actually use it"
 }
 
 test_wedged_member_names_its_override_and_the_override_is_per_member() {
@@ -290,12 +362,19 @@ test_wedged_member_names_its_override_and_the_override_is_per_member() {
   out=$(run_panel "$home" start --id wd --project "$home/subject" "Which claim holds up?") \
     || fail "start failed: $out"
 
-  # Both analysts left a report and neither ever signalled that it finished:
-  # the one state that never clears on its own.
+  # Both analysts left a report and were then torn down without ever signalling
+  # that they finished: the one state that can never clear on its own.
   printf 'analyst a findings\n' > "$home/data/wd-a/report.md"
   printf 'analyst b findings\n' > "$home/data/wd-b/report.md"
   out=$(run_panel "$home" advance wd) || fail "advance failed: $out"
-  assert_contains "$out" "wedged:" "a member with a report but no terminal event must not print the bland waiting line"
+  assert_contains "$out" "waiting:" "a member that is still present is in the ordinary window, not wedged"
+  assert_not_contains "$out" "--accept-unfinished" \
+    "the override must not be advertised while both analysts are still present"
+
+  rm -f "$home/state/wd-a.meta" "$home/state/wd-b.meta"
+  out=$(run_panel "$home" advance wd) || fail "advance failed: $out"
+  assert_contains "$out" "wedged:" "a member with a report and no runtime record left must not print the bland waiting line"
+  assert_contains "$out" "torn down or died" "the wedged block must say why the terminal line will never arrive"
   assert_contains "$out" "wd-a" "the wedged block must name the wedged member"
   assert_contains "$out" "advance wd --accept-unfinished wd-a" \
     "the wedged block must print the exact override command"
@@ -360,7 +439,8 @@ test_failed_analyst_with_a_report_still_reaches_the_judge() {
   # The reduced form's single analyst is gated exactly like a panel's two.
   printf 'partial findings\n' > "$home/data/fa-a/report.md"
   out=$(run_panel "$home" advance fa) || fail "advance failed: $out"
-  assert_contains "$out" "fa-a" "the single analyst of the reduced form must be gated too"
+  assert_contains "$out" "waiting:" "the single analyst of the reduced form must be gated too"
+  assert_contains "$out" "fa-a" "the waiting line must name the single analyst"
   assert_not_contains "$(spawn_log "$home")" "fa-judge" \
     "the reduced form must not dispatch the judge before its analyst has finished"
 
@@ -485,6 +565,9 @@ test_same_model_through_two_harnesses_refuses
 test_reduced_form_is_named_not_a_panel
 test_analyst_briefs_share_the_question_and_forbid_peeking
 test_judge_waits_for_every_report_then_gets_both
+test_terminal_member_without_a_report_stands_the_panel_down
+test_accepted_judge_caveat_repeats_on_every_complete
+test_acceptance_is_not_recorded_when_the_stage_cannot_use_it
 test_wedged_member_names_its_override_and_the_override_is_per_member
 test_accept_unfinished_refuses_a_nonmember_and_a_missing_report
 test_failed_analyst_with_a_report_still_reaches_the_judge

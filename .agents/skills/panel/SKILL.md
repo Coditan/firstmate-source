@@ -55,7 +55,7 @@ Both analysts receive byte-identical text and nothing else, so a vague question 
    A `waiting:` line means nothing to do yet, and it names which of the two facts is still missing for which analyst.
 4. **Supervise the judge, then advance again.**
    The second `advance` prints `complete: <report path>` once the judge has both reported a terminal status event and left a non-empty report, which is the same gate its analysts passed.
-   A `wedged:` block instead of a `waiting:` line means a member left a report but never signalled that it finished; read the next section before doing anything about it.
+   A `wedged:` or `stood down:` block instead of a `waiting:` line means the panel needs a decision from you; read the next section before doing anything about it.
 5. **Read the judge's report and relay its findings.**
    Relay the answer, the contested facts and what the evidence showed, any mistake shared by both analysts, and what remains unverified.
    Say which models argued and which judged: that is substance the captain asked for, not internal machinery.
@@ -68,17 +68,26 @@ Both analysts receive byte-identical text and nothing else, so a vague question 
 
 ## When a member never signals that it finished
 
-`advance` prints a `wedged:` block when a member left a non-empty report but never appended a terminal `done:` or `failed:` status line.
-That happens when a member is torn down, crashes, or runs out of quota after writing its report and before signalling, and nothing clears it on its own.
-The block names the member, says whether a runtime record still exists for it, and prints the exact command to run.
+Writing the report and appending the terminal `done:` or `failed:` line are two separate acts, and a member that is between them is doing something completely ordinary.
+So a member that still has its runtime record gets the plain `waiting:` line, and there is nothing for you to do: it will append its own terminal line and the next `advance` proceeds.
 
-If the member is still working, do nothing: it will append `done:` itself and the next `advance` proceeds.
-If it is gone, accept its report as final with `bin/fm-model-panel.sh advance <panel-id> --accept-unfinished <task-id>`.
+`advance` prints a `wedged:` block only when the member left a non-empty report and is GONE, with no runtime record left, because it was torn down or crashed after writing its report and before signalling.
+That line will never arrive on its own, so the block names the member and prints the exact command: `bin/fm-model-panel.sh advance <panel-id> --accept-unfinished <task-id>`.
 
 That override is per-member and deliberate.
-It names one task id and waives nothing for any other member, it is recorded permanently in the panel record as `accepted_unfinished`, and the judge's brief is told to treat that report as possibly truncated and to say so in its own report.
+It names one task id and waives nothing for any other member, it is recorded permanently in the panel record as `accepted_unfinished`, the judge's brief is told to treat that report as possibly truncated and to say so in its own report, and an accepted judge report puts the caveat on every `complete:` output.
+It also stays available for a member that still looks present but you know is dead, such as one killed by a harness crash that left its runtime record behind; used that way it warns you that the member may still be writing, and you should be sure before overriding it.
 There is no timeout anywhere in this formation: a panel waits forever rather than judging an unfinished report on its own, so the decision to accept one is always yours.
 Say so when relaying the verdict, because a panel completed over an unfinished report is a weaker result than one that was not.
+
+## When a member finishes without a report
+
+`advance` prints a `stood down:` block and exits 1 when a member ends with a terminal status event and no report at all.
+That member has stopped writing, so no report can arrive, and the panel cannot produce a verdict.
+
+Stand the panel down and tell the captain it produced nothing.
+The override deliberately refuses to waive a missing report: a verdict built on the one report that survived is not a panel, and presenting it as one would rebuild the echo-as-corroboration failure this formation exists to refuse.
+If the captain still wants the surviving analysis, that is a NEW single-analyst review started deliberately with `--reduced`, which is labelled as such in the briefs, the record, and the judge's own report, and never this panel converted in place.
 
 ## When the panel cannot be a panel
 
