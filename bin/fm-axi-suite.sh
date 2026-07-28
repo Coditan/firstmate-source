@@ -24,7 +24,8 @@
 # A vessel copy that answers without a version would otherwise shadow an intact
 # external copy forever, so it is removed and reseeded instead of trusted. One
 # that never answers at all is reported and left in place, because a bounded
-# probe cannot tell a hung copy from a very slow working one.
+# probe cannot tell a hung copy from a very slow working one, and so is one that
+# was never run because the probe budget was already spent.
 #
 # Hook setup for the hook-owning tools stays a shared user-global write that no
 # prefix can isolate; it is invoked by name through the vessel bin directory so
@@ -37,9 +38,11 @@
 # suite's cumulative registry lookup, install, and hook-setup time in seconds
 # (default 30), so an unreachable registry cannot multiply the stall across
 # every tool in the suite. FM_AXI_SUITE_PROBE_TIMEOUT bounds the suite's
-# cumulative local `--version` probing in seconds (default 15) under a separate
-# budget, so a hung binary can neither wedge session start nor consume the
-# registry budget. FM_AXI_SUITE_TOOLS overrides the space-separated
+# cumulative local `--version` probing in seconds (default 15). Each budget is
+# charged only for the time its own calls spend, so a hung binary can neither
+# wedge session start nor consume the registry budget, and slow registry or
+# install work cannot consume the probe budget. FM_AXI_SUITE_TOOLS overrides
+# the space-separated
 # suite tool list (default: quota-axi gh-axi tasks-axi gnhf lavish-axi
 # chrome-devtools-axi).
 set -u
@@ -104,38 +107,60 @@ bounded() {
   esac
 }
 
-STARTED=$(date +%s 2>/dev/null || echo 0)
-PHASE_DEADLINE=$((STARTED + NET_TIMEOUT))
-PROBE_DEADLINE=$((STARTED + PROBE_TIMEOUT))
-remaining_budget() {
-  local deadline=$1 cap=$2 now rem
-  now=$(date +%s 2>/dev/null || echo 0)
-  rem=$((deadline - now))
+# Each budget is an accumulator over the time its own calls actually spend, not
+# a wall-clock deadline: a deadline would let registry and install time drain
+# the probe budget (and probe time drain the registry budget) even though the
+# two bound unrelated failure modes. Callers must therefore stay in this shell -
+# running a budgeted call inside a command substitution would discard the charge
+# it made.
+NET_SPENT=0
+PROBE_SPENT=0
+NET_GRANTED=0
+PROBE_GRANTED=0
+
+budget_grant() {
+  local rem
+  rem=$(($1 - $2))
   [ "$rem" -gt 0 ] || rem=0
-  [ "$rem" -le "$cap" ] || rem=$cap
   printf '%s' "$rem"
+}
+
+seconds_since() {
+  local now spent
+  now=$(date +%s 2>/dev/null || echo 0)
+  spent=$((now - $1))
+  [ "$spent" -ge 0 ] || spent=0
+  printf '%s' "$spent"
 }
 
 # Bounds the whole suite's cumulative network exposure to NET_TIMEOUT instead
 # of NET_TIMEOUT per tool, so an unreachable registry cannot multiply the
-# stall across every entry in FM_AXI_SUITE_TOOLS. Once the phase budget is
-# spent, remaining calls fail fast without touching the network at all.
+# stall across every entry in FM_AXI_SUITE_TOOLS. Once the budget is spent,
+# remaining calls fail fast without touching the network at all.
 net_call() {
-  local budget
-  budget=$(remaining_budget "$PHASE_DEADLINE" "$NET_TIMEOUT")
-  [ "$budget" -gt 0 ] || return 124
-  bounded "$budget" "$@"
+  local started status=0
+  NET_GRANTED=$(budget_grant "$NET_TIMEOUT" "$NET_SPENT")
+  [ "$NET_GRANTED" -gt 0 ] || return 124
+  started=$(date +%s 2>/dev/null || echo 0)
+  bounded "$NET_GRANTED" "$@" || status=$?
+  NET_SPENT=$((NET_SPENT + $(seconds_since "$started")))
+  return "$status"
 }
 
 # Running a local suite binary is its own stall risk: a half-installed shim can
 # hang instead of exiting, and it must never wedge bootstrap or session start.
 # Probes carry a cumulative budget of their own so a hung binary cannot spend
-# the registry budget and an unreachable registry cannot starve the probes.
+# the registry budget and slow registry or install work cannot starve the
+# probes. PROBE_GRANTED is 0 when the budget was already spent, which tells a
+# caller that the binary was never run rather than that it failed to answer.
 probe_call() {
-  local budget
-  budget=$(remaining_budget "$PROBE_DEADLINE" "$PROBE_TIMEOUT")
-  [ "$budget" -gt 0 ] || return 124
-  bounded "$budget" "$@"
+  local started status=0
+  PROBE_GRANTED=$(budget_grant "$PROBE_TIMEOUT" "$PROBE_SPENT")
+  [ "$PROBE_GRANTED" -gt 0 ] || return 124
+  started=$(date +%s 2>/dev/null || echo 0)
+  bounded "$PROBE_GRANTED" "$@" || status=$?
+  PROBE_SPENT=$((PROBE_SPENT + $(seconds_since "$started")))
+  return "$status"
 }
 
 is_hook_tool() {
@@ -182,24 +207,31 @@ mkdir -p "$STATE" 2>/dev/null || {
 tmp_diag=$(mktemp "${TMPDIR:-/tmp}/fm-axi-suite-diag.XXXXXX") || exit 0
 tmp_stuck=$(mktemp "${TMPDIR:-/tmp}/fm-axi-suite-stuck.XXXXXX") || { rm -f "$tmp_diag"; exit 0; }
 tmp_diag_persist=$(mktemp "${TMPDIR:-/tmp}/fm-axi-suite-diag-persist.XXXXXX") || { rm -f "$tmp_diag" "$tmp_stuck"; exit 0; }
-trap 'rm -f "$tmp_diag" "$tmp_stuck" "$tmp_diag_persist"' EXIT
+tmp_read=$(mktemp "${TMPDIR:-/tmp}/fm-axi-suite-read.XXXXXX") || { rm -f "$tmp_diag" "$tmp_stuck" "$tmp_diag_persist"; exit 0; }
+trap 'rm -f "$tmp_diag" "$tmp_stuck" "$tmp_diag_persist" "$tmp_read"' EXIT
 
 # Reads one binary's version under the probe budget with stdin closed, and
 # publishes both halves of the answer: VERSION_READ is the parsed version and
-# VERSION_PROBE distinguishes a copy that answered without a version (empty,
-# and therefore replaceable) from one that never answered at all (timeout,
-# which is reported and retried instead of removed). Every caller reuses the
-# published values rather than probing the same binary twice.
+# VERSION_PROBE separates a copy that answered without a version (empty, and
+# therefore replaceable) from one that ran but never answered (timeout) and one
+# that was never run because the probe budget was already spent (skipped).
+# Only `empty` is evidence about the binary itself, so only `empty` may lead to
+# a removal. Every caller reuses the published values rather than probing the
+# same binary twice. The probe writes to a file because a command substitution
+# would run the budgeted call in a subshell and discard its charge.
 VERSION_READ=
 VERSION_PROBE=empty
 read_version() {
-  local out status=0
+  local status=0
   VERSION_READ=
   VERSION_PROBE=empty
-  out=$(probe_call "$1" --version </dev/null 2>/dev/null) || status=$?
-  VERSION_READ=$(printf '%s\n' "$out" | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+  : > "$tmp_read"
+  probe_call "$1" --version </dev/null >"$tmp_read" 2>/dev/null || status=$?
+  VERSION_READ=$(grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' "$tmp_read" 2>/dev/null | head -n 1)
   if [ -n "$VERSION_READ" ]; then
     VERSION_PROBE=ok
+  elif [ "$PROBE_GRANTED" -eq 0 ]; then
+    VERSION_PROBE=skipped
   else
     case "$status" in 124|137|143) VERSION_PROBE=timeout ;; esac
   fi
@@ -243,15 +275,18 @@ install_home_tool() {
   path=$(home_tool_path "$tool")
   if net_call npm install -g --prefix "$AXI_PREFIX" "$spec" >/dev/null 2>&1; then
     read_version "$path"
-    [ "$VERSION_READ" = "$expected" ] || status=1
+    if [ "$VERSION_PROBE" = skipped ]; then
+      status=0
+    elif [ "$VERSION_READ" != "$expected" ]; then
+      status=1
+    fi
   else
     status=1
     VERSION_READ=
-    VERSION_PROBE=empty
+    VERSION_PROBE=skipped
     [ ! -x "$path" ] || read_version "$path"
   fi
-  if [ "$status" -ne 0 ] && [ -e "$path" ] \
-    && [ -z "$VERSION_READ" ] && [ "$VERSION_PROBE" != timeout ]; then
+  if [ "$status" -ne 0 ] && [ -e "$path" ] && [ "$VERSION_PROBE" = empty ]; then
     discard_home_tool "$tool" || true
   fi
   return "$status"
@@ -314,6 +349,11 @@ for tool in $SUITE; do
     if [ -z "$home_version" ]; then
       if [ "$VERSION_PROBE" = timeout ]; then
         printf 'AXI_SUITE_STUCK: %s vessel copy at %s did not answer --version within %ss\n' \
+          "$tool" "$AXI_PREFIX" "$PROBE_GRANTED" >> "$tmp_stuck"
+        continue
+      fi
+      if [ "$VERSION_PROBE" = skipped ]; then
+        printf 'AXI_SUITE_STUCK: %s vessel copy at %s was not checked: the %ss probe budget is spent\n' \
           "$tool" "$AXI_PREFIX" "$PROBE_TIMEOUT" >> "$tmp_stuck"
         continue
       fi
@@ -345,15 +385,21 @@ for tool in $SUITE; do
     read_version "$tool"
     installed=$VERSION_READ
     if [ -z "$installed" ]; then
-      printf 'AXI_SUITE_STUCK: %s installed version could not be read\n' "$tool" >> "$tmp_stuck"
+      if [ "$VERSION_PROBE" = skipped ]; then
+        printf 'AXI_SUITE_STUCK: %s was not checked: the %ss probe budget is spent\n' \
+          "$tool" "$PROBE_TIMEOUT" >> "$tmp_stuck"
+      else
+        printf 'AXI_SUITE_STUCK: %s installed version could not be read\n' "$tool" >> "$tmp_stuck"
+      fi
       continue
     fi
   fi
-  if ! latest=$(net_call npm view "$tool" version 2>/dev/null); then
+  : > "$tmp_read"
+  if ! net_call npm view "$tool" version >"$tmp_read" 2>/dev/null; then
     printf 'AXI_SUITE_STUCK: %s latest version lookup failed\n' "$tool" >> "$tmp_stuck"
     continue
   fi
-  latest=$(printf '%s\n' "$latest" | sed -nE 's/^([0-9]+\.[0-9]+\.[0-9]+)$/\1/p' | head -n 1)
+  latest=$(sed -nE 's/^([0-9]+\.[0-9]+\.[0-9]+)$/\1/p' "$tmp_read" 2>/dev/null | head -n 1)
   if [ -z "$latest" ]; then
     printf 'AXI_SUITE_STUCK: %s registry returned an invalid version\n' "$tool" >> "$tmp_stuck"
     continue

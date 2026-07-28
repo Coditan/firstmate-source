@@ -33,6 +33,7 @@ make_npm() {
   cat > "$bin/npm" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = view ]; then
+  sleep "${FM_TEST_VIEW_SLEEP:-0}"
   sed -n "s/^${2}=//p" "$FM_TEST_VERSIONS"
   exit 0
 fi
@@ -396,6 +397,34 @@ test_hung_vessel_copy_is_bounded_and_kept() {
   pass "a hung vessel copy is bounded, reported, and not removed"
 }
 
+test_registry_and_install_time_do_not_spend_the_probe_budget() {
+  local w out t
+  w="$TMP_ROOT/probe-budget"
+  mkdir -p "$w/bin" "$w/home" "$w/state"
+  make_npm "$w/bin" "$w/versions" "$w/install.log"
+  : > "$w/versions"
+  for t in slow-one-axi slow-two-axi slow-three-axi; do
+    make_tool "$w/bin" "$t" 1.0.0
+    printf '%s=1.0.0\n' "$t" >> "$w/versions"
+  done
+  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/state" \
+    FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="slow-one-axi slow-two-axi slow-three-axi" \
+    FM_AXI_SUITE_CHECK_INTERVAL=0 FM_AXI_SUITE_NETWORK_TIMEOUT=60 FM_AXI_SUITE_PROBE_TIMEOUT=2 \
+    FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
+    FM_TEST_VIEW_SLEEP=1 FM_TEST_INSTALL_SLEEP=1 \
+    "$ROOT/bin/fm-axi-suite.sh" --force)
+  assert_no_grep 'AXI_SUITE_STUCK' <(printf '%s\n' "$out") \
+    "slow registry and install work was charged to the probe budget"
+  for t in slow-one-axi slow-two-axi slow-three-axi; do
+    assert_contains "$out" "AXI_SUITE_UPDATED: $t 1.0.0 installed in vessel prefix" \
+      "$t was not seeded after earlier tools spent wall-clock time"
+    assert_grep "--prefix $w/home/.local/axi $t@1.0.0" "$w/install.log" \
+      "$t never reached the vessel prefix"
+  done
+  assert_absent "$w/state/axi-suite-update.stuck" "a successful cutover persisted a stuck signal"
+  pass "registry and install time never spends the local probe budget"
+}
+
 test_unpublished_ahead_version_is_not_a_recurring_alarm() {
   local w out
   w="$TMP_ROOT/ahead-unpublished"
@@ -423,6 +452,7 @@ test_currency_clock_survives_prefix_cutover
 test_failed_seed_still_honours_the_cadence
 test_unreadable_vessel_copy_is_replaced
 test_hung_vessel_copy_is_bounded_and_kept
+test_registry_and_install_time_do_not_spend_the_probe_budget
 test_unpublished_ahead_version_is_not_a_recurring_alarm
 test_failed_update_persists_stuck_signal
 test_check_only_never_runs_hook_setup

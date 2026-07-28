@@ -422,6 +422,7 @@ Hook setup for `gh-axi`, `chrome-devtools-axi`, and `lavish-axi` is the one part
 The updater and the printed install commands therefore invoke the tool by name with the vessel bin directory first on `PATH`, so the installer records the portable command name rather than one home's private path and every vessel converges on identical content.
 Removing a vessel home cannot break another home's hook wiring as a result, but the wiring itself stays shared: the last vessel to run hook setup owns the version of that shared config on disk.
 `FM_AXI_SUITE_NETWORK_TIMEOUT` bounds the whole suite's registry, install, and hook work, `FM_AXI_SUITE_PROBE_TIMEOUT` separately bounds its cumulative local version probing so a hung suite binary cannot wedge session start, and `FM_AXI_SUITE_DISABLE` is reserved for tests or emergency diagnosis.
+Each budget is charged only for the time its own calls spend, so a slow registry or a long first-cutover install cannot exhaust the probe budget and leave later tools unseeded, and a hung binary cannot exhaust the registry budget.
 
 ### Upstream firstmate and curated-fork checks
 
