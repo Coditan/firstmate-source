@@ -36,6 +36,13 @@
 # FM_DISPATCH_RANDOM_SOURCE overrides /dev/urandom for deterministic tests only.
 set -u
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+# shellcheck source=bin/fm-axi-path-lib.sh
+. "$SCRIPT_DIR/fm-axi-path-lib.sh"
+fm_axi_prepend_path "$FM_HOME"
+
 STALE_CLEAR_MARGIN=${FM_DISPATCH_STALE_CLEAR_MARGIN:-20}
 SELECT_OVERRIDE=
 QUOTA_JSON_FILE=

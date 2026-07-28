@@ -10,6 +10,7 @@ fm_test_tmproot TMP_ROOT fm-runtime-ignore
 
 runtime_artifacts() {
   cat <<'PATHS'
+.local/axi/bin/gh-axi
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
 .claude/scheduled_tasks.json

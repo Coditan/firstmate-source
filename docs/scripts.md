@@ -12,6 +12,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-operational-input.sh` | Construct and parse the canonical cross-language operational-input protocol |
 | `fm-bootstrap.sh`        | Detect toolchain and fleet problems, run the locked session-start sweeps, and install approved tools |
 | `fm-axi-suite.sh`        | Check and gate patch/minor self-updates of the npm-distributed AXI CLI suite     |
+| `fm-axi-path-lib.sh`     | Resolve and prepend one vessel's home-private AXI npm prefix                     |
 | `fm-firstmate-update-check.sh` | Read-only check for relevant instruction-surface commits on the source this deployment updates from |
 | `fm-fork-sync-check.sh` | Detect unabsorbed real-upstream content in the curated fork and prefilter both sides of its commit review |
 | `fm-lint.sh`             | Single owner of firstmate's shell-lint definition: file set, config, and pinned ShellCheck version |

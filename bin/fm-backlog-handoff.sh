@@ -50,6 +50,9 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 REG="$DATA/secondmates.md"
+# shellcheck source=bin/fm-axi-path-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-axi-path-lib.sh"
+fm_axi_prepend_path "$FM_HOME"
 MAIN_BACKLOG="$DATA/backlog.md"
 # shellcheck source=bin/fm-tasks-axi-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"

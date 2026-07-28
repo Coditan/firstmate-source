@@ -12,9 +12,10 @@ This section is the single owner of the top-level operational-home layout; produ
 The tracked code root contains the shared instruction, skill, documentation, workflow, and `bin/` surfaces, while each effective `FM_HOME` contains private operational directories.
 `data/` holds durable private fleet records such as the project and secondmate registries, captain preferences, optional shared captain preferences, learnings, backlog, briefs, and scout reports.
 `state/` holds volatile runtime records such as task metadata, append-only status events, endpoint signals, watcher and wake-queue coordination, away-mode state, generated X-mode artifacts, private secondmate config-reread generations with their retry and quarantine state, and parent-owned secondmate pending-reply records under `state/pending-replies/` (`bin/fm-pending-reply-lib.sh`).
+`.local/axi/` is the home-private npm prefix for the managed AXI CLI suite.
 `config/` holds local gitignored operating choices, and `projects/` holds the local project clones that Firstmate reads but changes only through the guarded exceptions in `AGENTS.md`.
 
-A home's checkout also accumulates runtime artifacts that a supported harness or firstmate writes into the tracked tree itself: Claude Code's local permissions and settings file plus its scheduler, routine, worktree, checkpoint, mailbox, agent-registry, agent-memory, first-run, and daemon state, and firstmate's generated per-task hook overlay.
+A home's checkout also accumulates runtime artifacts that a supported harness or firstmate writes into the tracked tree itself: Claude Code's local permissions and settings file plus its scheduler, routine, worktree, checkpoint, mailbox, agent-registry, agent-memory, first-run, and daemon state, firstmate's generated per-task hook overlay, and - whenever the home is the checkout root - the `.local/axi/` prefix above.
 The tracked root `.gitignore` owns the exact path list and is the only correct place for it: `dirty_status` in `bin/fm-ff-lib.sh` reads `git status --porcelain`, which reports untracked files too, so any of those artifacts would otherwise make a vessel dirty and silently drop it out of every guarded fast-forward, and a clone-private `.git/info/exclude` cannot carry the rule because a fresh clone does not inherit one.
 The patterns stay narrow so the tracked `.claude/settings.json` and the tracked `.claude/skills` symlink remain visible to `git add`, and `tests/fm-runtime-ignore.test.sh` proves in a fresh clone that every artifact form is ignored by the tracked `.gitignore` rather than a private or global exclude, that the tracked paths are not, and that `.claude/settings.local.json` is never tracked.
 
@@ -214,7 +215,7 @@ A standalone-clone home cannot receive a primary-local commit through that no-fe
 ## FM_HOME
 
 `FM_HOME` selects the operational home for one firstmate instance.
-When it is unset, most scripts use the repo root as the home; when it is set, scripts still run from this repo's `bin/`, but `state/`, `data/`, `config/`, and `projects/` come from `$FM_HOME`.
+When it is unset, most scripts use the repo root as the home; when it is set, scripts still run from this repo's `bin/`, but `state/`, `data/`, `config/`, `projects/`, and the `.local/axi/` npm prefix come from `$FM_HOME`.
 `FM_ROOT_OVERRIDE` overrides the firstmate repo root used by scripts, including the primary checkout watched by the worktree-tangle guard.
 When `FM_HOME` is unset, it also behaves as the old whole-root override.
 `bin/fm-send.sh` is intentionally stricter than that general fallback: it requires `FM_HOME` to be set before resolving a target, so operator steers cannot silently resolve against the wrong home.
@@ -402,15 +403,35 @@ Graphify is optional: Codex's PreToolUse hook fails open when `graphify` is abse
 When `config/crew-dispatch.json` exists, bootstrap also requires `jq` for dispatch profile validation.
 When X mode is opted in, bootstrap also requires `curl` and `jq` before arming the relay poll shim.
 `tasks-axi` and `quota-axi` are required bootstrap tools in every profile, the same class as `lavish-axi`.
-An absent or incompatible `tasks-axi` reports `MISSING: tasks-axi (install: npm install -g tasks-axi)`; when `config/backlog-backend` is not `manual` and compatible `tasks-axi` is on `PATH`, bootstrap stays silent and firstmate uses its verbs for routine backlog mutations, otherwise it hand-edits `data/backlog.md` until installation is approved and completed.
-An absent `quota-axi` reports `MISSING: quota-axi (install: npm install -g quota-axi)`; `bin/fm-dispatch-select.sh` still selects uniformly from the valid candidate array with an OS-backed random source when quota data is unavailable.
+An absent or incompatible `tasks-axi` reports `MISSING: tasks-axi` with an install command targeting `$FM_HOME/.local/axi`; when `config/backlog-backend` is not `manual` and compatible `tasks-axi` is on `PATH`, bootstrap stays silent and firstmate uses its verbs for routine backlog mutations, otherwise it hand-edits `data/backlog.md` until installation is approved and completed.
+An absent `quota-axi` reports `MISSING: quota-axi` with the same home-owned prefix; `bin/fm-dispatch-select.sh` still selects uniformly from the valid candidate array with an OS-backed random source when quota data is unavailable.
 
 ### AXI-suite self-update
 
 Locked bootstrap runs `bin/fm-axi-suite.sh` at most once per `FM_AXI_SUITE_CHECK_INTERVAL` for the configured AXI commands.
-Patch and minor releases update automatically in the active npm prefix, while major releases and newly required commands emit `AXI_SUITE_REVIEW:` for captain approval.
-Successful changes emit `AXI_SUITE_UPDATED:`, and bounded registry, permission, install, or hook failures emit `AXI_SUITE_STUCK:` and persist under `state/` until a successful check clears them.
-`FM_AXI_SUITE_NETWORK_TIMEOUT` bounds the whole suite check, and `FM_AXI_SUITE_DISABLE` is reserved for tests or emergency diagnosis.
+Each vessel derives its npm prefix as `$FM_HOME/.local/axi` without configuration, so different operational homes never share the updater's write destination.
+Firstmate entrypoints put `$FM_HOME/.local/axi/bin` first on `PATH`, and `bin/fm-spawn.sh` exports the owning vessel's bin first for every crewmate while a secondmate launch receives the secondmate home's bin first.
+The recommended primary launch commands also prepend that directory before the harness starts, so a bare AXI command resolves the vessel copy whenever it exists and uses an inherited external installation only as the pre-cutover fallback.
+On the first normal currency check, an existing external AXI installation is left untouched and its installed version is re-installed into the vessel prefix, or an eligible patch/minor release is installed there directly.
+No existing installation is moved or removed.
+Patch and minor releases update automatically in the vessel prefix, while major releases and newly required commands emit `AXI_SUITE_REVIEW:` for captain approval.
+When a major release is pending and the vessel copy is absent, the updater seeds the currently installed major into the vessel prefix without accepting the major upgrade.
+A vessel copy that answers without reporting a version would shadow the intact external copy for every consumer of that home's `PATH`, so the updater removes it and reseeds from a readable version instead of trusting it; the same removal happens when an install leaves a copy that cannot be read back.
+A copy that never answers is reported and left alone instead, because a bounded probe cannot distinguish a hung binary from a very slow working one.
+A locally-ahead build that the registry cannot supply is reported as `AXI_SUITE_REVIEW:` rather than a failure, because the external copy remains the working fallback until that build is published or the vessel accepts the registry version.
+Successful changes emit `AXI_SUITE_UPDATED:`, and bounded registry, permission, install, verification, or hook failures emit `AXI_SUITE_STUCK:` and persist under `state/` until a successful check clears them.
+The cadence stamp remains under that vessel's `state/`, and `state/axi-suite-prefix-v1.cutover` records that this home already attempted the isolated seeding, so a stamp written before the cutover cannot postpone it.
+The marker records the attempt and not its outcome: a home that could not seed every tool retries on the next cadence window instead of paying a full registry sweep, and a repeated alarm, on every session.
+
+Hook setup for `gh-axi`, `chrome-devtools-axi`, and `lavish-axi` is the one part of the suite that the prefix cannot isolate: `<tool> setup hooks` writes the user-global harness surfaces (`~/.claude/settings.json`, `~/.codex/`, `~/.config/opencode/plugins/`) that every vessel on the host shares.
+The updater and the printed install commands therefore invoke the tool by name with the vessel bin directory first on `PATH`, so the installer records the portable command name rather than one home's private path and every vessel converges on identical content.
+Removing a vessel home cannot break another home's hook wiring as a result, but the wiring itself stays shared: the last vessel to run hook setup owns the version of that shared config on disk.
+`FM_AXI_SUITE_NETWORK_TIMEOUT` bounds the suite's steady-state registry, update, and hook work, `FM_AXI_SUITE_PROBE_TIMEOUT` separately bounds its cumulative local version probing so a hung suite binary cannot wedge session start, `FM_AXI_SUITE_SEED_TIMEOUT` separately bounds the one-time installs that give a fresh vessel its own copies, and `FM_AXI_SUITE_DISABLE` is reserved for tests or emergency diagnosis.
+Each budget is charged only for the time its own calls spend, so no kind of work can exhaust another's: a first cutover installs the whole suite at once and would otherwise consume the tight steady-state network budget and report a healthy vessel as stuck.
+An install that creates the vessel's copy is charged to the seeding budget and an install that replaces an existing vessel copy is an ordinary update, so the distinction never depends on which code path reached it.
+Because seeding is much slower than a steady-state check, it reports on standard error which tool is installing and how much of the seeding budget remains, then closes with how many installs it attempted and how much of the budget it used.
+That output streams live when a captain runs `bin/fm-bootstrap.sh` in a terminal; `bin/fm-session-start.sh` captures bootstrap output for the digest, so under automated session start the same lines arrive together once bootstrap returns, and the summary is what makes the pass interpretable after the fact.
+A seed that genuinely stalls, or that is never attempted because the seeding budget is already spent, is still reported as `AXI_SUITE_STUCK:` naming which of the two happened, identically from both install paths; the external copy remains the fallback and the next cadence window retries.
 
 ### Upstream firstmate and curated-fork checks
 

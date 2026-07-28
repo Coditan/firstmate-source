@@ -64,6 +64,9 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 # trusting append order, which is not trustworthy in exactly the hand-edited case
 # that produces it.
 ARCHIVE="$DATA/done-archive.md"
+# shellcheck source=bin/fm-axi-path-lib.sh
+. "$SCRIPT_DIR/fm-axi-path-lib.sh"
+fm_axi_prepend_path "$FM_HOME"
 
 # shellcheck source=bin/fm-classify-lib.sh
 # shellcheck disable=SC1091

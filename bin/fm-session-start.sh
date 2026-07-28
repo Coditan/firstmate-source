@@ -27,9 +27,11 @@
 #
 #   1. lock          - acquire the per-home session lock FIRST, before any
 #                       mutating step runs.
-#   2. bootstrap      - detect-only diagnostics always run. The five
-#                       MUTATING sweeps (legacy PR-check migration, secondmate
-#                       fast-forward, secondmate liveness, X-mode artifact writes, fleet sync) run only
+#   2. bootstrap      - detect-only diagnostics always run. The six
+#                       MUTATING sweeps (legacy PR-check migration, the AXI-suite
+#                       currency check that installs into this home's own npm prefix,
+#                       secondmate fast-forward, secondmate liveness, X-mode artifact
+#                       writes, fleet sync) run only
 #                       when this session actually holds the lock.
 #   3. wake-drain     - mutates the durable wake queue, so it also only runs
 #                       when locked.
@@ -97,6 +99,9 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+# shellcheck source=bin/fm-axi-path-lib.sh
+. "$SCRIPT_DIR/fm-axi-path-lib.sh"
+fm_axi_prepend_path "$FM_HOME"
 PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 
 # shellcheck source=bin/fm-backend.sh
