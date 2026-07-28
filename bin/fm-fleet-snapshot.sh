@@ -3,6 +3,10 @@
 #
 # Output contract: `--json` prints one object with schema
 # `fm-fleet-snapshot.v1`.
+# `--backlog-json [<path>]` prints only the same parsed backlog object used by
+# that snapshot, without scanning live task or secondmate state.
+# It accepts tasks-axi live backlogs and done archives; `## Archived <date>`
+# sections normalize to Done records.
 # The command is read-only: it does not acquire the session lock, drain wakes,
 # arm watchers, mutate backlog state, or write reports.
 #
@@ -139,9 +143,14 @@ usage() {
   cat <<'EOF'
 usage: fm-fleet-snapshot.sh --json
        fm-fleet-snapshot.sh --secondmate-home-summary
+       fm-fleet-snapshot.sh --backlog-json [<path>]
 
 Print a read-only structured snapshot of the firstmate fleet.
 JSON is the stable machine-readable output contract.
+
+--backlog-json exposes the snapshot's own structured Markdown reader without
+scanning fleet state. It defaults to data/backlog.md and accepts a tasks-axi
+done archive path, whose dated Archived sections normalize to Done records.
 
 --secondmate-home-summary emits the bounded structured summary used after a
 validated registered-home handoff. It is local-only, skips nested secondmate
@@ -165,9 +174,15 @@ EOF
 }
 
 OUTPUT_MODE=json
+BACKLOG_PATH=$BACKLOG
 case "${1:---json}" in
   --json) ;;
   --secondmate-home-summary) OUTPUT_MODE=secondmate-home-summary ;;
+  --backlog-json)
+    [ "$#" -le 2 ] || { usage >&2; exit 2; }
+    OUTPUT_MODE=backlog-json
+    BACKLOG_PATH=${2:-$BACKLOG}
+    ;;
   -h|--help) usage; exit 0 ;;
   *) usage >&2; exit 2 ;;
 esac
@@ -261,6 +276,7 @@ backlog_json() {  # [<backlog-path>] - defaults to this home's $BACKLOG
       if . == "In flight" then "in_flight"
       elif . == "Queued" then "queued"
       elif . == "Done" then "done"
+      elif test("^Archived[[:space:]]+") then "done"
       else null end;
     def cap($rest; $re):
       (((($rest | capture($re)?) // {}) | .v) // null) as $v
@@ -1290,7 +1306,13 @@ scout_report_lines() {
     | jq -s 'sort_by(.id)'
 }
 
-BACKLOG_JSON=$(backlog_json) || { echo "fm-fleet-snapshot: backlog read failed" >&2; exit 1; }
+BACKLOG_JSON=$(backlog_json "$BACKLOG_PATH") || { echo "fm-fleet-snapshot: backlog read failed" >&2; exit 1; }
+
+if [ "$OUTPUT_MODE" = backlog-json ]; then
+  printf '%s\n' "$BACKLOG_JSON"
+  exit 0
+fi
+
 TASKS_JSON=$(task_json_lines) || { echo "fm-fleet-snapshot: task snapshot failed" >&2; exit 1; }
 
 if [ "$OUTPUT_MODE" = secondmate-home-summary ]; then

@@ -78,6 +78,8 @@ Bootstrap requires compatible `tasks-axi` on every profile; see "Toolchain" belo
 Set the local, gitignored `config/backlog-backend` file to `manual` to force manual backlog editing and suppress the verbose `BOOTSTRAP_INFO: tasks-axi available` fact, not missing-tool reporting.
 Absent or `tasks-axi` selects the default tasks-axi backend.
 The file format is unchanged in both modes; tasks-axi and manual edits produce the same `## In flight`, `## Queued`, and `## Done` sections.
+At session start, `bin/fm-backlog-lint.sh` read-only checks current `blocked-by:` edges for missing targets, already-Done targets, and the archived-target disagreement between `tasks-axi` and `bin/fm-fleet-snapshot.sh`.
+It is silent when clean, never blocks or mutates records, and is also available as a standalone command.
 
 ## Runtime backend (config/backend / FM_BACKEND)
 
