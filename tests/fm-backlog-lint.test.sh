@@ -198,7 +198,7 @@ EOF
 EOF
   out=$(run_lint "$home")
   assert_not_contains "$out" "BACKLOG_STALE:" \
-    "a record tasks-axi cannot resolve must never become a finding"
+    "an edge whose staleness could not be decided must never become a finding"
   [ "$(lint_status)" = 1 ] \
     || fail "an unreadable tasks-axi answer must exit 1, got $(lint_status)"
   [ -z "$(lint_stderr)" ] \
@@ -216,6 +216,65 @@ EOF
   assert_grep "BACKLOG_UNREADABLE" "$ROOT/AGENTS.md" \
     "the coded diagnostic must be registered with the other bootstrap codes"
   pass "an unresolvable record is a coded documented diagnostic, not a reader-disagreement false alarm"
+}
+
+test_unresolvable_record_still_reports_edges_decided_without_tasks_axi() {
+  local home out
+  home=$(make_home unresolvable-decidable)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## In flight
+## Queued
+- [ ] **decidable-dependent** - Id tasks-axi cannot resolve blocked-by: decidable-missing (repo: sample) (kind: ship)
+- [ ] **decidable-done-dependent** - Id tasks-axi cannot resolve blocked-by: decidable-done (repo: sample) (kind: ship)
+## Done
+- [x] decidable-done - Already complete (repo: sample) (kind: ship) (done 2026-07-28)
+EOF
+  out=$(run_lint "$home")
+  assert_ok "edges the parsed backlog alone decides must leave the run decided"
+  assert_not_contains "$out" "BACKLOG_UNREADABLE" \
+    "BACKLOG_UNREADABLE is only for edges whose staleness could not be decided"
+  assert_contains "$out" "BACKLOG_STALE: task **decidable-dependent** has dangling blocked-by decidable-missing" \
+    "a dangling edge stays a finding when the readers decide it without tasks-axi"
+  assert_contains "$out" "BACKLOG_STALE: task **decidable-done-dependent** has satisfied blocked-by decidable-done" \
+    "an already-Done edge stays a finding when the readers decide it without tasks-axi"
+  assert_contains "$out" 'fix: no tasks-axi fix is available because tasks-axi cannot resolve task **decidable-dependent** in data/backlog.md, so edit data/backlog.md by hand and delete the blocked-by token "blocked-by: decidable-missing" naming blocker decidable-missing from the record for task **decidable-dependent**' \
+    "an unresolvable record must get hand-edit guidance naming file, record, token, and blocker"
+  assert_not_contains "$out" "tasks-axi unblock" \
+    "the lint must never prescribe a tasks-axi command that cannot run"
+  pass "an unresolvable record keeps the findings its own row decides, with a runnable fix"
+}
+
+test_unresolvable_record_separates_decided_and_undecided_edges() {
+  local home out unreadable_lines
+  home=$(make_home unresolvable-mixed)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## In flight
+## Queued
+- [ ] **mixed-dependent** - Two faults blocked-by: mixed-missing blocked-by: mixed-archived (repo: sample) (kind: ship)
+## Done
+EOF
+  cat > "$home/data/done-archive.md" <<'EOF'
+## Archived 2026-07-01
+
+- [x] mixed-archived - Rotated out of the live backlog (repo: sample) (kind: ship) (done 2026-06-01)
+EOF
+  out=$(run_lint "$home")
+  [ "$(lint_status)" = 1 ] \
+    || fail "one undecided edge must still mark the run undecided, got $(lint_status)"
+  assert_contains "$out" "BACKLOG_STALE: task **mixed-dependent** has dangling blocked-by mixed-missing" \
+    "the decided edge of an unresolvable record must still be reported"
+  assert_not_contains "$out" "reader-disagreement" \
+    "the undecided edge of the same record must not be guessed at"
+  assert_contains "$out" "BACKLOG_UNREADABLE: task **mixed-dependent** in data/backlog.md" \
+    "the undecided edge must be reported as the coded diagnostic"
+  unreadable_lines=$(printf '%s\n' "$out" | grep -c "^BACKLOG_UNREADABLE:")
+  [ "$unreadable_lines" = 1 ] \
+    || fail "a record must report BACKLOG_UNREADABLE once, got $unreadable_lines"
+  pass "one record reports its decided edge and its undecided edge under the right code"
 }
 
 test_bootstrap_surfaces_the_unreadable_record_diagnostic() {
@@ -245,16 +304,14 @@ test_manual_backend_prints_hand_edit_fix() {
   local home out
   home=$(make_home manual-backend)
   printf '%s\n' manual > "$home/config/backlog-backend"
-  cat > "$home/data/backlog.md" <<'EOF'
-# Backlog
-
-## In flight
-## Queued
-- [ ] manual-dependent - Bad missing edge blocked-by: manual-missing (repo: sample) (kind: ship)
-- [ ] manual-done-dependent - Bad satisfied edge blocked-by:   manual-done (repo: sample) (kind: ship)
-## Done
-- [x] manual-done - Already complete (repo: sample) (kind: ship) (done 2026-07-28)
-EOF
+  {
+    printf '%s\n' '# Backlog' '' '## In flight' '## Queued'
+    printf -- '- [ ] manual-dependent - Bad missing edge blocked-by: manual-missing (repo: sample) (kind: ship)\n'
+    printf -- '- [ ] manual-done-dependent - Bad satisfied edge blocked-by:   manual-done (repo: sample) (kind: ship)\n'
+    printf -- '- [ ] manual-tab-dependent - Tab separated edge blocked-by:\tmanual-tab-missing (repo: sample) (kind: ship)\n'
+    printf '%s\n' '## Done'
+    printf -- '- [x] manual-done - Already complete (repo: sample) (kind: ship) (done 2026-07-28)\n'
+  } > "$home/data/backlog.md"
   out=$(run_lint "$home")
   assert_ok "the lint must still run under config/backlog-backend=manual"
   assert_contains "$out" "BACKLOG_STALE: task manual-dependent has dangling blocked-by manual-missing" \
@@ -262,7 +319,11 @@ EOF
   assert_contains "$out" 'fix: edit data/backlog.md by hand and delete the blocked-by token "blocked-by: manual-missing" naming blocker manual-missing from the record for task manual-dependent' \
     "manual mode must name the file, record, blocked-by token, and blocker id"
   assert_contains "$out" 'delete the blocked-by token "blocked-by:   manual-done" naming blocker manual-done from the record for task manual-done-dependent' \
-    "manual mode must quote the blocked-by token as the record actually spells it"
+    "manual mode must quote a multi-space blocked-by token as the record actually spells it"
+  assert_contains "$out" $'delete the blocked-by token "blocked-by:\tmanual-tab-missing" naming blocker manual-tab-missing from the record for task manual-tab-dependent' \
+    "manual mode must quote a tab-separated blocked-by token without escaping it"
+  assert_not_contains "$out" 'blocked-by:\tmanual-tab-missing' \
+    "the quoted token must not carry a two-character escape the file does not contain"
   assert_not_contains "$out" "tasks-axi unblock" \
     "manual mode must not prescribe the backend the home opted out of"
   while IFS= read -r quoted; do
@@ -307,6 +368,8 @@ test_dangling_edge_names_fault_and_closable_fix
 test_done_edge_names_fault_and_closable_fix
 test_archive_rotation_reader_disagreement_and_fix
 test_unresolvable_record_is_a_coded_diagnostic_not_a_finding
+test_unresolvable_record_still_reports_edges_decided_without_tasks_axi
+test_unresolvable_record_separates_decided_and_undecided_edges
 test_bootstrap_surfaces_the_unreadable_record_diagnostic
 test_manual_backend_prints_hand_edit_fix
 test_bootstrap_surfaces_findings_and_stays_silent_when_clean

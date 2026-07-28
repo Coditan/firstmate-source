@@ -80,8 +80,8 @@ Absent or `tasks-axi` selects the default tasks-axi backend.
 The file format is unchanged in both modes; tasks-axi and manual edits produce the same `## In flight`, `## Queued`, and `## Done` sections.
 At session start, `bin/fm-backlog-lint.sh` read-only checks current `blocked-by:` edges for missing targets, already-Done targets, and the archived-target disagreement between `tasks-axi` and `bin/fm-fleet-snapshot.sh`.
 It is silent when clean, never blocks or mutates records, and is also available as a standalone command.
-It runs in both backend modes; under `manual` each finding's fix clause names the backlog file, the record, the blocker id, and the `blocked-by:` token quoted as that record actually spells it, instead of prescribing a `tasks-axi unblock` command.
-A record `fm-fleet-snapshot.sh` parses but `tasks-axi` cannot resolve is never a `BACKLOG_STALE` finding: it reports the coded `BACKLOG_UNREADABLE` bootstrap diagnostic naming the record and the row repair that closes it, skips only that record's archived-target edges, and exits 1 to mark the run incomplete without blocking session start.
+It runs in both backend modes; the fix clause prescribes `tasks-axi unblock` only where that command would actually run, and otherwise names the backlog file, the record, the blocker id, and the `blocked-by:` token quoted as that record actually spells it - under `manual`, and on any record `tasks-axi` cannot resolve, where it also says no automated fix is available.
+The classification boundary is what the readers could decide: dangling and already-Done edges are decided from the parsed backlog and archive alone and stay `BACKLOG_STALE` findings even for an unresolvable record, while the reader-disagreement class needs `tasks-axi`'s own answer, so an unresolvable record reports the coded `BACKLOG_UNREADABLE` bootstrap diagnostic naming the record and the row repair that closes it, reports no stale edge for that class, and exits 1 to mark the run undecided without blocking session start.
 
 ## Runtime backend (config/backend / FM_BACKEND)
 
