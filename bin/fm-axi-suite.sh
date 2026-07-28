@@ -21,8 +21,10 @@
 # stamp cannot postpone the cutover while a failed attempt still costs at most
 # one sweep per cadence window instead of one per session.
 #
-# A vessel copy whose version cannot be read would otherwise shadow an intact
-# external copy forever, so it is removed and reseeded instead of trusted.
+# A vessel copy that answers without a version would otherwise shadow an intact
+# external copy forever, so it is removed and reseeded instead of trusted. One
+# that never answers at all is reported and left in place, because a bounded
+# probe cannot tell a hung copy from a very slow working one.
 #
 # Hook setup for the hook-owning tools stays a shared user-global write that no
 # prefix can isolate; it is invoked by name through the vessel bin directory so
@@ -34,7 +36,10 @@
 # emergency diagnosis only). FM_AXI_SUITE_NETWORK_TIMEOUT bounds the whole
 # suite's cumulative registry lookup, install, and hook-setup time in seconds
 # (default 30), so an unreachable registry cannot multiply the stall across
-# every tool in the suite. FM_AXI_SUITE_TOOLS overrides the space-separated
+# every tool in the suite. FM_AXI_SUITE_PROBE_TIMEOUT bounds the suite's
+# cumulative local `--version` probing in seconds (default 15) under a separate
+# budget, so a hung binary can neither wedge session start nor consume the
+# registry budget. FM_AXI_SUITE_TOOLS overrides the space-separated
 # suite tool list (default: quota-axi gh-axi tasks-axi gnhf lavish-axi
 # chrome-devtools-axi).
 set -u
@@ -53,6 +58,7 @@ CHECK_ONLY=0
 FORCE=0
 SUITE="${FM_AXI_SUITE_TOOLS:-quota-axi gh-axi tasks-axi gnhf lavish-axi chrome-devtools-axi}"
 NET_TIMEOUT=${FM_AXI_SUITE_NETWORK_TIMEOUT:-30}
+PROBE_TIMEOUT=${FM_AXI_SUITE_PROBE_TIMEOUT:-15}
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -66,6 +72,7 @@ done
 [ "${FM_AXI_SUITE_DISABLE:-0}" = 1 ] && exit 0
 case "$INTERVAL" in ''|*[!0-9]*) INTERVAL=86400 ;; esac
 case "$NET_TIMEOUT" in ''|*[!0-9]*) NET_TIMEOUT=30 ;; esac
+case "$PROBE_TIMEOUT" in ''|*[!0-9]*) PROBE_TIMEOUT=15 ;; esac
 
 HAVE_TIMEOUT=none
 if command -v timeout >/dev/null 2>&1; then HAVE_TIMEOUT=timeout
@@ -83,7 +90,10 @@ bounded() {
       "$@" &
       cmd_pid=$!
       set +m
-      ( sleep "$call_timeout"; kill -TERM "-$cmd_pid" 2>/dev/null; sleep 1; kill -KILL "-$cmd_pid" 2>/dev/null ) &
+      # The watchdog must not inherit the caller's stdout: a command
+      # substitution stays open until every writer closes the pipe, so an
+      # attached watchdog would hold a fast call open for its whole budget.
+      ( sleep "$call_timeout"; kill -TERM "-$cmd_pid" 2>/dev/null; sleep 1; kill -KILL "-$cmd_pid" 2>/dev/null ) >/dev/null 2>&1 &
       local watchdog_pid=$!
       wait "$cmd_pid" 2>/dev/null
       status=$?
@@ -94,13 +104,15 @@ bounded() {
   esac
 }
 
-PHASE_DEADLINE=$(( $(date +%s 2>/dev/null || echo 0) + NET_TIMEOUT ))
+STARTED=$(date +%s 2>/dev/null || echo 0)
+PHASE_DEADLINE=$((STARTED + NET_TIMEOUT))
+PROBE_DEADLINE=$((STARTED + PROBE_TIMEOUT))
 remaining_budget() {
-  local now rem
+  local deadline=$1 cap=$2 now rem
   now=$(date +%s 2>/dev/null || echo 0)
-  rem=$((PHASE_DEADLINE - now))
+  rem=$((deadline - now))
   [ "$rem" -gt 0 ] || rem=0
-  [ "$rem" -le "$NET_TIMEOUT" ] || rem=$NET_TIMEOUT
+  [ "$rem" -le "$cap" ] || rem=$cap
   printf '%s' "$rem"
 }
 
@@ -110,7 +122,18 @@ remaining_budget() {
 # spent, remaining calls fail fast without touching the network at all.
 net_call() {
   local budget
-  budget=$(remaining_budget)
+  budget=$(remaining_budget "$PHASE_DEADLINE" "$NET_TIMEOUT")
+  [ "$budget" -gt 0 ] || return 124
+  bounded "$budget" "$@"
+}
+
+# Running a local suite binary is its own stall risk: a half-installed shim can
+# hang instead of exiting, and it must never wedge bootstrap or session start.
+# Probes carry a cumulative budget of their own so a hung binary cannot spend
+# the registry budget and an unreachable registry cannot starve the probes.
+probe_call() {
+  local budget
+  budget=$(remaining_budget "$PROBE_DEADLINE" "$PROBE_TIMEOUT")
   [ "$budget" -gt 0 ] || return 124
   bounded "$budget" "$@"
 }
@@ -161,8 +184,25 @@ tmp_stuck=$(mktemp "${TMPDIR:-/tmp}/fm-axi-suite-stuck.XXXXXX") || { rm -f "$tmp
 tmp_diag_persist=$(mktemp "${TMPDIR:-/tmp}/fm-axi-suite-diag-persist.XXXXXX") || { rm -f "$tmp_diag" "$tmp_stuck"; exit 0; }
 trap 'rm -f "$tmp_diag" "$tmp_stuck" "$tmp_diag_persist"' EXIT
 
-version_of() {
-  "$1" --version 2>/dev/null | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1
+# Reads one binary's version under the probe budget with stdin closed, and
+# publishes both halves of the answer: VERSION_READ is the parsed version and
+# VERSION_PROBE distinguishes a copy that answered without a version (empty,
+# and therefore replaceable) from one that never answered at all (timeout,
+# which is reported and retried instead of removed). Every caller reuses the
+# published values rather than probing the same binary twice.
+VERSION_READ=
+VERSION_PROBE=empty
+read_version() {
+  local out status=0
+  VERSION_READ=
+  VERSION_PROBE=empty
+  out=$(probe_call "$1" --version </dev/null 2>/dev/null) || status=$?
+  VERSION_READ=$(printf '%s\n' "$out" | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+  if [ -n "$VERSION_READ" ]; then
+    VERSION_PROBE=ok
+  else
+    case "$status" in 124|137|143) VERSION_PROBE=timeout ;; esac
+  fi
 }
 
 major_of() {
@@ -183,34 +223,37 @@ home_tool_path() {
   printf '%s/%s\n' "$AXI_BIN" "$1"
 }
 
-home_tool_is_readable() {
-  [ -n "$(version_of "$(home_tool_path "$1")")" ]
-}
-
 # The vessel bin directory resolves before every inherited PATH entry, so a
 # vessel copy that cannot report its version shadows an intact external copy for
 # every consumer. Dropping it restores that fallback and lets the normal seeding
-# path reinstall from a version that can actually be read.
-discard_broken_home_tool() {
-  local tool=$1 path
-  path=$(home_tool_path "$tool")
+# path reinstall from a version that can actually be read. The caller owns the
+# readability verdict; this only performs the removal.
+discard_home_tool() {
+  local path
+  path=$(home_tool_path "$1")
   [ -e "$path" ] || return 0
-  home_tool_is_readable "$tool" && return 0
   rm -f "$path" 2>/dev/null
   hash -r 2>/dev/null || true
   [ ! -e "$path" ]
 }
 
 install_home_tool() {
-  local tool=$1 spec=$2 expected installed status=0
+  local tool=$1 spec=$2 expected path status=0
   expected=$3
-  if ! net_call npm install -g --prefix "$AXI_PREFIX" "$spec" >/dev/null 2>&1; then
-    status=1
+  path=$(home_tool_path "$tool")
+  if net_call npm install -g --prefix "$AXI_PREFIX" "$spec" >/dev/null 2>&1; then
+    read_version "$path"
+    [ "$VERSION_READ" = "$expected" ] || status=1
   else
-    installed=$(version_of "$(home_tool_path "$tool")")
-    [ "$installed" = "$expected" ] || status=1
+    status=1
+    VERSION_READ=
+    VERSION_PROBE=empty
+    [ ! -x "$path" ] || read_version "$path"
   fi
-  [ "$status" -eq 0 ] || discard_broken_home_tool "$tool" >/dev/null 2>&1 || true
+  if [ "$status" -ne 0 ] && [ -e "$path" ] \
+    && [ -z "$VERSION_READ" ] && [ "$VERSION_PROBE" != timeout ]; then
+    discard_home_tool "$tool" || true
+  fi
   return "$status"
 }
 
@@ -241,28 +284,49 @@ seed_home_tool() {
     "$tool" "$version" >> "$tmp_diag"
 }
 
-# Returns 0 when the vessel already owns a copy, 1 when this call reported or
-# performed the seeding for an absent one.
+# Returns 0 when the vessel owns a copy once this call is done, 1 when it does
+# not. HOME_COPY_ACTION records what this call did, so a caller can tell an
+# untouched pre-existing copy (present) from one whose seeding - hook setup
+# included - already ran in this pass (attempted) or was only reported
+# (reported).
+HOME_COPY_ACTION=present
 ensure_home_copy() {
   local tool=$1 version=$2 registry_latest=${3:-}
+  HOME_COPY_ACTION=present
   [ ! -x "$(home_tool_path "$tool")" ] || return 0
   if [ "$CHECK_ONLY" -eq 1 ]; then
+    HOME_COPY_ACTION=reported
     printf 'AXI_SUITE_UPDATE: %s %s needs vessel-prefix installation\n' \
       "$tool" "$version" >> "$tmp_diag"
-  else
-    seed_home_tool "$tool" "$version" "$registry_latest" || true
+    return 1
   fi
-  return 1
+  HOME_COPY_ACTION=attempted
+  seed_home_tool "$tool" "$version" "$registry_latest" || true
+  [ -x "$(home_tool_path "$tool")" ]
 }
 
 for tool in $SUITE; do
-  if [ -x "$(home_tool_path "$tool")" ] && ! home_tool_is_readable "$tool"; then
+  home_version=
+  home_broken=0
+  if [ -x "$(home_tool_path "$tool")" ]; then
+    read_version "$(home_tool_path "$tool")"
+    home_version=$VERSION_READ
+    if [ -z "$home_version" ]; then
+      if [ "$VERSION_PROBE" = timeout ]; then
+        printf 'AXI_SUITE_STUCK: %s vessel copy at %s did not answer --version within %ss\n' \
+          "$tool" "$AXI_PREFIX" "$PROBE_TIMEOUT" >> "$tmp_stuck"
+        continue
+      fi
+      home_broken=1
+    fi
+  fi
+  if [ "$home_broken" -eq 1 ]; then
     if [ "$CHECK_ONLY" -eq 1 ]; then
       printf 'AXI_SUITE_STUCK: %s vessel copy at %s is unreadable (removal pending)\n' \
         "$tool" "$AXI_PREFIX" >> "$tmp_stuck"
       continue
     fi
-    if discard_broken_home_tool "$tool"; then
+    if discard_home_tool "$tool"; then
       printf 'AXI_SUITE_UPDATED: %s unreadable vessel copy removed from %s\n' \
         "$tool" "$AXI_PREFIX" >> "$tmp_diag"
     else
@@ -271,14 +335,19 @@ for tool in $SUITE; do
       continue
     fi
   fi
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    printf 'AXI_SUITE_REVIEW: %s is not installed (install: %s)\n' "$tool" "$(install_hint "$tool" "$tool")" >> "$tmp_diag"
-    continue
-  fi
-  installed=$(version_of "$tool")
-  if [ -z "$installed" ]; then
-    printf 'AXI_SUITE_STUCK: %s installed version could not be read\n' "$tool" >> "$tmp_stuck"
-    continue
+  if [ -n "$home_version" ]; then
+    installed=$home_version
+  else
+    if ! command -v "$tool" >/dev/null 2>&1; then
+      printf 'AXI_SUITE_REVIEW: %s is not installed (install: %s)\n' "$tool" "$(install_hint "$tool" "$tool")" >> "$tmp_diag"
+      continue
+    fi
+    read_version "$tool"
+    installed=$VERSION_READ
+    if [ -z "$installed" ]; then
+      printf 'AXI_SUITE_STUCK: %s installed version could not be read\n' "$tool" >> "$tmp_stuck"
+      continue
+    fi
   fi
   if ! latest=$(net_call npm view "$tool" version 2>/dev/null); then
     printf 'AXI_SUITE_STUCK: %s latest version lookup failed\n' "$tool" >> "$tmp_stuck"
@@ -292,7 +361,8 @@ for tool in $SUITE; do
   if [ "$installed" = "$latest" ]; then
     home_present=0
     ensure_home_copy "$tool" "$installed" && home_present=1
-    if is_hook_tool "$tool" && grep -q "^AXI_SUITE_STUCK: $tool " "$STUCK" 2>/dev/null; then
+    if is_hook_tool "$tool" && [ "$HOME_COPY_ACTION" != attempted ] \
+      && grep -q "^AXI_SUITE_STUCK: $tool " "$STUCK" 2>/dev/null; then
       if [ "$CHECK_ONLY" -eq 1 ]; then
         printf 'AXI_SUITE_STUCK: %s hook setup retry pending (already at %s)\n' "$tool" "$latest" >> "$tmp_stuck"
       elif [ "$home_present" -eq 1 ] && ! setup_home_hooks "$tool"; then

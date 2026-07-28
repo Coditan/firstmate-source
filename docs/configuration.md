@@ -411,7 +411,8 @@ On the first normal currency check, an existing external AXI installation is lef
 No existing installation is moved or removed.
 Patch and minor releases update automatically in the vessel prefix, while major releases and newly required commands emit `AXI_SUITE_REVIEW:` for captain approval.
 When a major release is pending and the vessel copy is absent, the updater seeds the currently installed major into the vessel prefix without accepting the major upgrade.
-A vessel copy that cannot report its version would shadow the intact external copy for every consumer of that home's `PATH`, so the updater removes it and reseeds from a readable version instead of trusting it; the same removal happens when an install leaves a copy that cannot be read back.
+A vessel copy that answers without reporting a version would shadow the intact external copy for every consumer of that home's `PATH`, so the updater removes it and reseeds from a readable version instead of trusting it; the same removal happens when an install leaves a copy that cannot be read back.
+A copy that never answers is reported and left alone instead, because a bounded probe cannot distinguish a hung binary from a very slow working one.
 A locally-ahead build that the registry cannot supply is reported as `AXI_SUITE_REVIEW:` rather than a failure, because the external copy remains the working fallback until that build is published or the vessel accepts the registry version.
 Successful changes emit `AXI_SUITE_UPDATED:`, and bounded registry, permission, install, verification, or hook failures emit `AXI_SUITE_STUCK:` and persist under `state/` until a successful check clears them.
 The cadence stamp remains under that vessel's `state/`, and `state/axi-suite-prefix-v1.cutover` records that this home already attempted the isolated seeding, so a stamp written before the cutover cannot postpone it.
@@ -420,7 +421,7 @@ The marker records the attempt and not its outcome: a home that could not seed e
 Hook setup for `gh-axi`, `chrome-devtools-axi`, and `lavish-axi` is the one part of the suite that the prefix cannot isolate: `<tool> setup hooks` writes the user-global harness surfaces (`~/.claude/settings.json`, `~/.codex/`, `~/.config/opencode/plugins/`) that every vessel on the host shares.
 The updater and the printed install commands therefore invoke the tool by name with the vessel bin directory first on `PATH`, so the installer records the portable command name rather than one home's private path and every vessel converges on identical content.
 Removing a vessel home cannot break another home's hook wiring as a result, but the wiring itself stays shared: the last vessel to run hook setup owns the version of that shared config on disk.
-`FM_AXI_SUITE_NETWORK_TIMEOUT` bounds the whole suite check, and `FM_AXI_SUITE_DISABLE` is reserved for tests or emergency diagnosis.
+`FM_AXI_SUITE_NETWORK_TIMEOUT` bounds the whole suite's registry, install, and hook work, `FM_AXI_SUITE_PROBE_TIMEOUT` separately bounds its cumulative local version probing so a hung suite binary cannot wedge session start, and `FM_AXI_SUITE_DISABLE` is reserved for tests or emergency diagnosis.
 
 ### Upstream firstmate and curated-fork checks
 

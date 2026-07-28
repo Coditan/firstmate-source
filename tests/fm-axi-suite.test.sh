@@ -369,6 +369,33 @@ test_unreadable_vessel_copy_is_replaced() {
   pass "an unreadable vessel copy is removed instead of shadowing the intact external copy"
 }
 
+test_hung_vessel_copy_is_bounded_and_kept() {
+  local w out start end elapsed
+  w="$TMP_ROOT/hung-copy"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  make_npm "$w/bin" "$w/versions" "$w/install.log"
+  make_tool "$w/bin" hungcopy-axi 1.0.0
+  printf '#!/usr/bin/env bash\nsleep 30\n' > "$w/home/.local/axi/bin/hungcopy-axi"
+  chmod +x "$w/home/.local/axi/bin/hungcopy-axi"
+  printf '%s\n' 'hungcopy-axi=1.0.0' > "$w/versions"
+  start=$(date +%s)
+  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/state" \
+    FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS=hungcopy-axi FM_AXI_SUITE_CHECK_INTERVAL=0 \
+    FM_AXI_SUITE_PROBE_TIMEOUT=1 \
+    FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
+    "$ROOT/bin/fm-axi-suite.sh" --force)
+  end=$(date +%s)
+  elapsed=$((end - start))
+  [ "$elapsed" -lt 15 ] || fail "a hung vessel copy stalled the check for ${elapsed}s"
+  assert_contains "$out" 'AXI_SUITE_STUCK: hungcopy-axi vessel copy at' \
+    "a hung vessel copy was not reported"
+  assert_present "$w/home/.local/axi/bin/hungcopy-axi" \
+    "a vessel copy that only failed to answer in time was removed"
+  assert_present "$w/state/axi-suite-prefix-v1.cutover" \
+    "a hung vessel copy blocked the cadence marker"
+  pass "a hung vessel copy is bounded, reported, and not removed"
+}
+
 test_unpublished_ahead_version_is_not_a_recurring_alarm() {
   local w out
   w="$TMP_ROOT/ahead-unpublished"
@@ -395,6 +422,7 @@ test_vessel_prefix_wins_over_inherited_path
 test_currency_clock_survives_prefix_cutover
 test_failed_seed_still_honours_the_cadence
 test_unreadable_vessel_copy_is_replaced
+test_hung_vessel_copy_is_bounded_and_kept
 test_unpublished_ahead_version_is_not_a_recurring_alarm
 test_failed_update_persists_stuck_signal
 test_check_only_never_runs_hook_setup
