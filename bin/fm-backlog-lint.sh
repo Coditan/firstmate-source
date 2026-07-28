@@ -19,12 +19,17 @@
 #     tasks-axi but unresolved by fm-fleet-snapshot
 #
 # Every finding names the dependent task, blocker, fault, and the exact fix that
-# removes the stale edge: the tasks-axi command on the default backend, and the
-# precise hand edit when config/backlog-backend is manual.
-# Missing prerequisites and unreadable structured inputs are command errors,
-# not findings: they go to stderr and set exit status 1, never a BACKLOG_STALE
-# line. Bootstrap calls this only after its normal tool checks and treats
-# command failure as non-blocking.
+# removes the stale edge: the tasks-axi command on the default backend, and on
+# the manual backend the hand edit, quoting the blocked-by token as the record
+# actually spells it.
+# A record fm-fleet-snapshot parses but tasks-axi cannot resolve is never a
+# BACKLOG_STALE finding: it prints one coded BACKLOG_UNREADABLE line naming the
+# record, the reader that failed, and the row repair that closes it.
+# Missing prerequisites and unreadable structured inputs are command errors, not
+# findings: they abort on stderr.
+# Either condition sets exit status 1, meaning some edge stayed unchecked;
+# bootstrap calls this only after its normal tool checks and treats command
+# failure as non-blocking.
 set -uf
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -101,10 +106,10 @@ csv_has() {  # <csv> <value>
 BACKEND_MANUAL=0
 fm_backlog_backend_manual "$CONFIG" && BACKEND_MANUAL=1
 
-fix_clause() {  # <task> <blocker>
+fix_clause() {  # <task> <blocker> <edge-token-as-written>
   if [ "$BACKEND_MANUAL" = 1 ]; then
-    printf 'edit data/backlog.md by hand and delete the exact text "blocked-by: %s" from the record for task %s' \
-      "$2" "$1"
+    printf 'edit data/backlog.md by hand and delete the blocked-by token "%s" naming blocker %s from the record for task %s' \
+      "$3" "$2" "$1"
   else
     printf 'run tasks-axi unblock %s --by %s' "$1" "$2"
   fi
@@ -116,6 +121,11 @@ ROWS_FILE="$LINT_TMP/edges.tsv"
 jq -nr \
   --slurpfile backlog "$BACKLOG_JSON_FILE" \
   --slurpfile archive "$ARCHIVE_JSON_FILE" '
+    def edge_token($raw; $blocker):
+      ([($raw // "") | scan("blocked-by:[[:space:]]+[^[:space:])]+")]
+        | map(select(sub("^blocked-by:[[:space:]]+"; "") == $blocker))
+        | .[0])
+      // ("blocked-by: " + $blocker);
     ($backlog[0].records
       | map(select(.structured == true))
       | map({key:.id,value:.state})
@@ -137,7 +147,8 @@ jq -nr \
          elif $archived[$blocker] == true then "archived"
          else "missing"
          end),
-        ((($record.unresolved_blocker_ids // []) | index($blocker)) != null)
+        ((($record.unresolved_blocker_ids // []) | index($blocker)) != null),
+        edge_token($record.raw; $blocker)
       ]
     | @tsv
   ' > "$ROWS_FILE" \
@@ -146,16 +157,16 @@ jq -nr \
 task_axi_unresolved=
 task_axi_readable=1
 last_task=
-while IFS="$(printf '\t')" read -r task blocker target_class snapshot_unresolved; do
+while IFS="$(printf '\t')" read -r task blocker target_class snapshot_unresolved edge_token; do
   [ -n "$task" ] || continue
   case "$target_class" in
     missing)
       printf "BACKLOG_STALE: task %s has dangling blocked-by %s (target is absent from data/backlog.md and data/done-archive.md); fix: %s, then add the intended existing blocker if this id was a typo\n" \
-        "$task" "$blocker" "$(fix_clause "$task" "$blocker")"
+        "$task" "$blocker" "$(fix_clause "$task" "$blocker" "$edge_token")"
       ;;
     done)
       printf "BACKLOG_STALE: task %s has satisfied blocked-by %s (target is already Done in data/backlog.md); fix: %s\n" \
-        "$task" "$blocker" "$(fix_clause "$task" "$blocker")"
+        "$task" "$blocker" "$(fix_clause "$task" "$blocker" "$edge_token")"
       ;;
     archived)
       if [ "$task" != "$last_task" ]; then
@@ -172,7 +183,8 @@ while IFS="$(printf '\t')" read -r task blocker target_class snapshot_unresolved
         if [ "$show_status" -ne 0 ] || [ -z "$blocked_by_line" ]; then
           task_axi_readable=0
           LINT_STATUS=1
-          echo "fm-backlog-lint: tasks-axi could not resolve task $task in $BACKLOG; its archived-target edges are unchecked" >&2
+          printf "BACKLOG_UNREADABLE: task %s in data/backlog.md is parsed by fm-fleet-snapshot but tasks-axi show returns no blocked_by: property for it, so this record's archived-target edges stay unchecked; fix: repair that row in data/backlog.md - tasks-axi resolves only a slug-shaped id (letters, digits, \".\", \"_\", \"-\", no spaces and no Markdown emphasis) in a \"- [ ] <id> - <title>\" row - until tasks-axi show <id> --file data/backlog.md prints a blocked_by: line\n" \
+            "$task"
         else
           task_axi_unresolved=$blocked_by_line
           case "$task_axi_unresolved" in
@@ -188,7 +200,7 @@ while IFS="$(printf '\t')" read -r task blocker target_class snapshot_unresolved
         && [ "$snapshot_unresolved" = true ] \
         && ! csv_has "$task_axi_unresolved" "$blocker"; then
         printf "BACKLOG_STALE: task %s has reader-disagreement blocked-by %s (tasks-axi says satisfied; fm-fleet-snapshot says unresolved after the target moved to data/done-archive.md); fix: %s\n" \
-          "$task" "$blocker" "$(fix_clause "$task" "$blocker")"
+          "$task" "$blocker" "$(fix_clause "$task" "$blocker" "$edge_token")"
       fi
       ;;
   esac

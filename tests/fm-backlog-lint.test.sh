@@ -180,7 +180,7 @@ test_archive_rotation_reader_disagreement_and_fix() {
   pass "retention-created reader disagreement fires and its printed fix makes the lint silent"
 }
 
-test_unresolvable_record_is_a_command_error_not_a_finding() {
+test_unresolvable_record_is_a_coded_diagnostic_not_a_finding() {
   local home out
   home=$(make_home unresolvable)
   cat > "$home/data/backlog.md" <<'EOF'
@@ -201,9 +201,44 @@ EOF
     "a record tasks-axi cannot resolve must never become a finding"
   [ "$(lint_status)" = 1 ] \
     || fail "an unreadable tasks-axi answer must exit 1, got $(lint_status)"
-  assert_contains "$(lint_stderr)" "tasks-axi could not resolve task **unresolvable-dependent**" \
-    "an unreadable tasks-axi answer must name the record on stderr"
-  pass "an unresolvable record is a command error instead of a reader-disagreement false alarm"
+  [ -z "$(lint_stderr)" ] \
+    || fail "the unreadable-record report must be a coded line, not stderr: $(lint_stderr)"
+  assert_contains "$out" "BACKLOG_UNREADABLE: task **unresolvable-dependent** in data/backlog.md" \
+    "the unreadable-record diagnostic must be coded and name the record and file"
+  assert_contains "$out" "is parsed by fm-fleet-snapshot but tasks-axi show returns no blocked_by: property for it" \
+    "the unreadable-record diagnostic must name the reader that failed and the missing property"
+  assert_contains "$out" "fix: repair that row in data/backlog.md" \
+    "the unreadable-record diagnostic must say which record text to repair"
+  assert_contains "$out" "tasks-axi show <id> --file data/backlog.md prints a blocked_by: line" \
+    "the unreadable-record diagnostic must name its closing condition"
+  assert_grep "BACKLOG_UNREADABLE" "$ROOT/.agents/skills/bootstrap-diagnostics/SKILL.md" \
+    "the coded diagnostic must have a documented handling procedure"
+  assert_grep "BACKLOG_UNREADABLE" "$ROOT/AGENTS.md" \
+    "the coded diagnostic must be registered with the other bootstrap codes"
+  pass "an unresolvable record is a coded documented diagnostic, not a reader-disagreement false alarm"
+}
+
+test_bootstrap_surfaces_the_unreadable_record_diagnostic() {
+  local home out
+  home=$(make_home bootstrap-unreadable)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## In flight
+## Queued
+- [ ] **bootstrap-unreadable-dependent** - Id tasks-axi cannot resolve blocked-by: bootstrap-archived (repo: sample) (kind: ship)
+## Done
+EOF
+  cat > "$home/data/done-archive.md" <<'EOF'
+## Archived 2026-07-01
+
+- [x] bootstrap-archived - Rotated out of the live backlog (repo: sample) (kind: ship) (done 2026-06-01)
+EOF
+  out=$(FM_HOME="$home" FM_BOOTSTRAP_DETECT_ONLY=1 "$ROOT/bin/fm-bootstrap.sh" 2>&1) \
+    || fail "the unreadable-record diagnostic must not make bootstrap fail"
+  assert_contains "$out" "BACKLOG_UNREADABLE: task **bootstrap-unreadable-dependent** in data/backlog.md" \
+    "session-start bootstrap must surface the coded unreadable-record diagnostic"
+  pass "bootstrap surfaces the coded unreadable-record diagnostic without blocking"
 }
 
 test_manual_backend_prints_hand_edit_fix() {
@@ -216,7 +251,7 @@ test_manual_backend_prints_hand_edit_fix() {
 ## In flight
 ## Queued
 - [ ] manual-dependent - Bad missing edge blocked-by: manual-missing (repo: sample) (kind: ship)
-- [ ] manual-done-dependent - Bad satisfied edge blocked-by: manual-done (repo: sample) (kind: ship)
+- [ ] manual-done-dependent - Bad satisfied edge blocked-by:   manual-done (repo: sample) (kind: ship)
 ## Done
 - [x] manual-done - Already complete (repo: sample) (kind: ship) (done 2026-07-28)
 EOF
@@ -224,12 +259,16 @@ EOF
   assert_ok "the lint must still run under config/backlog-backend=manual"
   assert_contains "$out" "BACKLOG_STALE: task manual-dependent has dangling blocked-by manual-missing" \
     "manual mode must keep the finding message shape"
-  assert_contains "$out" 'fix: edit data/backlog.md by hand and delete the exact text "blocked-by: manual-missing" from the record for task manual-dependent' \
-    "manual mode must name the file, record, and exact blocked-by text"
-  assert_contains "$out" 'fix: edit data/backlog.md by hand and delete the exact text "blocked-by: manual-done" from the record for task manual-done-dependent' \
-    "manual mode must give hand-edit guidance for every finding class"
+  assert_contains "$out" 'fix: edit data/backlog.md by hand and delete the blocked-by token "blocked-by: manual-missing" naming blocker manual-missing from the record for task manual-dependent' \
+    "manual mode must name the file, record, blocked-by token, and blocker id"
+  assert_contains "$out" 'delete the blocked-by token "blocked-by:   manual-done" naming blocker manual-done from the record for task manual-done-dependent' \
+    "manual mode must quote the blocked-by token as the record actually spells it"
   assert_not_contains "$out" "tasks-axi unblock" \
     "manual mode must not prescribe the backend the home opted out of"
+  while IFS= read -r quoted; do
+    assert_grep "$quoted" "$home/data/backlog.md" \
+      "a quoted blocked-by token must be findable in the backlog file"
+  done < <(printf '%s\n' "$out" | sed -n 's/.*delete the blocked-by token "\([^"]*\)".*/\1/p')
   pass "manual backend keeps the lint enabled with closable hand-edit fixes"
 }
 
@@ -267,6 +306,7 @@ test_large_clean_backlog_is_silent
 test_dangling_edge_names_fault_and_closable_fix
 test_done_edge_names_fault_and_closable_fix
 test_archive_rotation_reader_disagreement_and_fix
-test_unresolvable_record_is_a_command_error_not_a_finding
+test_unresolvable_record_is_a_coded_diagnostic_not_a_finding
+test_bootstrap_surfaces_the_unreadable_record_diagnostic
 test_manual_backend_prints_hand_edit_fix
 test_bootstrap_surfaces_findings_and_stays_silent_when_clean

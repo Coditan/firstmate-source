@@ -2,7 +2,7 @@
 name: bootstrap-diagnostics
 description: >-
   Agent-only handling playbook for session-start bootstrap diagnostics.
-  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, ROLE_INVALID, ROLE_OVERLAY_MISSING, NEEDS_GH_AUTH, TANGLE, SELF_DRIFT, CREW_DISPATCH invalid, CURRENCY_BASE, BACKLOG_STALE, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, AXI_SUITE_UPDATED, AXI_SUITE_REVIEW, AXI_SUITE_STUCK, FIRSTMATE_UPDATE_AVAILABLE, FIRSTMATE_UPDATE_STUCK, FORK_SYNC, FORK_SYNC_STUCK, WATCHER_UNIT, FREQUENCY_MONITOR_UNIT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
+  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, ROLE_INVALID, ROLE_OVERLAY_MISSING, NEEDS_GH_AUTH, TANGLE, SELF_DRIFT, CREW_DISPATCH invalid, CURRENCY_BASE, BACKLOG_STALE, BACKLOG_UNREADABLE, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, AXI_SUITE_UPDATED, AXI_SUITE_REVIEW, AXI_SUITE_STUCK, FIRSTMATE_UPDATE_AVAILABLE, FIRSTMATE_UPDATE_STUCK, FORK_SYNC, FORK_SYNC_STUCK, WATCHER_UNIT, FREQUENCY_MONITOR_UNIT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
   A silent bootstrap section, or a BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -69,6 +69,10 @@ When any diagnostic needs captain attention, report the plain consequence and re
 - `BACKLOG_STALE: task <id> has <fault>; fix: <command>` - a current durable backlog record has a mechanically stale dependency edge.
   Inspect the named record and apply the exact printed fix - the `tasks-axi unblock` command on the default backend, or the named hand edit to `data/backlog.md` when `config/backlog-backend` is `manual` - and add the intended existing blocker afterward only when the dangling id was a typo.
   The check itself is detect-only and must never run the repair command, block startup, or mutate retention behavior.
+- `BACKLOG_UNREADABLE: task <id> in <backlog file> is parsed by fm-fleet-snapshot but tasks-axi show returns no blocked_by: property for it ...; fix: <row repair>` - the two structured readers cannot be compared on that one record, so its archived-target edges were skipped rather than guessed at.
+  This is a malformed-record report, not a stale-edge finding: open the named row in the named backlog file and check the id token first, because `tasks-axi` resolves only a slug-shaped id (letters, digits, `.`, `_`, `-`, no spaces and no Markdown emphasis) inside a `- [ ] <id> - <title>` row, while `fm-fleet-snapshot` also accepts a `- **<id>** - <title>` row.
+  Rewrite the id or the row shape, then confirm the repair with `tasks-axi show <id> --file <backlog file>` printing a `blocked_by:` line; the record's other stale-edge classes are still reported normally, and the rest of the backlog is still checked.
+  It repeats every session start until the row is fixed, it never blocks startup, and the check must not rewrite the row itself.
 - `FLEET_SYNC: <repo>: skipped: <reason>` - a benign one-off skip (offline, no origin, local-only); bootstrap continued, investigate only if it blocks work.
   A skip can also report the bounded fleet-refresh timeout (`FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT`, or a fleet-size-aware default with a 20 second floor); a timeout never blocks startup.
 - `FLEET_SYNC: <repo>: recovered: <detail>` - the clone had drifted onto a clean detached HEAD holding no unique commits and the sync self-healed it (re-attached the default branch and fast-forwarded); no action needed, it is reported only so the self-heal is visible.

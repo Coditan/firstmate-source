@@ -80,8 +80,8 @@ Absent or `tasks-axi` selects the default tasks-axi backend.
 The file format is unchanged in both modes; tasks-axi and manual edits produce the same `## In flight`, `## Queued`, and `## Done` sections.
 At session start, `bin/fm-backlog-lint.sh` read-only checks current `blocked-by:` edges for missing targets, already-Done targets, and the archived-target disagreement between `tasks-axi` and `bin/fm-fleet-snapshot.sh`.
 It is silent when clean, never blocks or mutates records, and is also available as a standalone command.
-It runs in both backend modes; under `manual` each finding's fix clause names the backlog file, the record, and the exact `blocked-by:` text to delete instead of prescribing a `tasks-axi unblock` command.
-A record `tasks-axi` cannot resolve is a command error on stderr with exit status 1, never a `BACKLOG_STALE` finding.
+It runs in both backend modes; under `manual` each finding's fix clause names the backlog file, the record, the blocker id, and the `blocked-by:` token quoted as that record actually spells it, instead of prescribing a `tasks-axi unblock` command.
+A record `fm-fleet-snapshot.sh` parses but `tasks-axi` cannot resolve is never a `BACKLOG_STALE` finding: it reports the coded `BACKLOG_UNREADABLE` bootstrap diagnostic naming the record and the row repair that closes it, skips only that record's archived-target edges, and exits 1 to mark the run incomplete without blocking session start.
 
 ## Runtime backend (config/backend / FM_BACKEND)
 
