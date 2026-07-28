@@ -49,6 +49,8 @@ A harness with a native tracked-background tool (`claude`, `grok`) is sent down 
 Because the repair runs mid-away-session rather than at a fresh away entry, the line states in place that `stop` exits away mode by clearing `state/.afk` and must be followed immediately by a fresh away entry; that consequence is never left implicit.
 Every other harness gets the terminal-backed `bin/fm-afk-launch.sh start`.
 The away branch is deliberately never prefixed with the drain instruction, because the away daemon reads the durable queue through its own cursor and the session must not drain it.
+For the same reason the banner's closing maintenance line also branches on away mode: an away turn is told to restore away delivery and end silently, while a normal session keeps the drain-and-restore wording.
+An away banner that named a drain would be a data-loss instruction, since `bin/fm-wake-drain.sh` would consume records the daemon's cursor has not read yet; `bin/fm-afk-return.sh` owns that drain at return time instead.
 
 If the away daemon dies during an unattended stretch, the next attempted turn end forces one maintenance continuation that directs the agent to restore away delivery.
 The hook loop guard then permits that turn to stop, so daemon death cannot create an autonomous endless continuation loop.
@@ -213,7 +215,7 @@ Firstmate deliberately does not track `.claude/settings.local.json` anywhere, an
 
 ## Tests
 
-`tests/fm-turnend-guard.test.sh` covers the split daemon-and-delivery predicate, independent repair lines, delivery-stub pid and identity matching, primary scoping, `FM_HOME` and `FM_STATE_OVERRIDE` precedence, dead and healthy away-pusher states with queued wakes, queued wakes with no `state/*.meta` record left, the drain-first delivery repair a queued-wake activation prints, fail-open behavior without `jq`, tracked hook registration for all five harnesses, and passive-adapter loop guards.
+`tests/fm-turnend-guard.test.sh` covers the split daemon-and-delivery predicate, independent repair lines, delivery-stub pid and identity matching, primary scoping, `FM_HOME` and `FM_STATE_OVERRIDE` precedence, dead and healthy away-pusher states with queued wakes, queued wakes with no `state/*.meta` record left, the drain-first delivery repair a queued-wake activation prints, both closing-banner branches (away restores delivery and never names a drain anywhere in the banner; a normal session keeps drain-and-restore), fail-open behavior without `jq`, tracked hook registration for all five harnesses, and passive-adapter loop guards.
 The per-task crewmate overlay recorded in the 2026-07-25 subsection is pinned from the spawn side by `tests/fm-spawn-dispatch-profile.test.sh` (a repository-tracked `.claude/settings.local.json` survives a claude spawn, the overlay is written under the distinct name and git-excluded, and the launch line carries `--settings` for it) and from the teardown side by `tests/fm-teardown.test.sh` cases (z) through (dd) (a tracked-and-dirty overlay still tears down, that tolerance does not mask other genuine uncommitted work, and a repository-tracked legacy `settings.local.json` is never removed).
 The default behavior suite does not invoke live language-model harnesses.
 `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh` opts into the isolated interactive Pi regression recorded above.

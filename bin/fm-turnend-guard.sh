@@ -131,7 +131,11 @@ rule='━━━━━━━━━━━━━━━━━━━━━━━━�
     fi
     printf '●  Delivery repair: %s\n' "$DELIVERY_REASON"
   fi
-  printf '●  This forced continuation is internal maintenance; after draining and restoring delivery, end silently unless a queued wake is captain-relevant under AGENTS.md section 9.\n'
+  if [ "$afk" -eq 1 ]; then
+    printf '●  This forced continuation is internal maintenance; after restoring away delivery, end silently unless a queued wake is captain-relevant under AGENTS.md section 9.\n'
+  else
+    printf '●  This forced continuation is internal maintenance; after draining and restoring delivery, end silently unless a queued wake is captain-relevant under AGENTS.md section 9.\n'
+  fi
   printf '●%s\n' "$rule"
 } >&2
 exit 2
