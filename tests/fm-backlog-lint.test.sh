@@ -20,14 +20,35 @@ make_home() {  # <name>
   printf '%s\n' "$home"
 }
 
+# run_lint keeps the lint's stdout on stdout so callers can capture it, and
+# records exit status and stderr in files that survive the capture subshell.
+LINT_STATUS_FILE=$TMP_ROOT/lint-status
+LINT_ERR_FILE=$TMP_ROOT/lint-stderr
+
 run_lint() {  # <home>
-  FM_HOME="$1" "$LINT"
+  local status=0
+  FM_HOME="$1" "$LINT" 2>"$LINT_ERR_FILE" || status=$?
+  printf '%s\n' "$status" > "$LINT_STATUS_FILE"
+}
+
+lint_status() {
+  cat "$LINT_STATUS_FILE"
+}
+
+lint_stderr() {
+  cat "$LINT_ERR_FILE"
+}
+
+assert_ok() {  # <message>
+  [ "$(lint_status)" = 0 ] || fail "$1: lint exited $(lint_status) instead of succeeding"
+  [ -z "$(lint_stderr)" ] || fail "$1: lint wrote to stderr: $(lint_stderr)"
 }
 
 assert_clean() {  # <home> <message>
   local out
   out=$(run_lint "$1")
   [ -z "$out" ] || fail "$2: $out"
+  assert_ok "$2"
 }
 
 test_clean_live_edge_is_silent() {
@@ -79,6 +100,7 @@ test_dangling_edge_names_fault_and_closable_fix() {
 ## Done
 EOF
   out=$(run_lint "$home")
+  assert_ok "a dangling edge is a finding, not a command error"
   assert_contains "$out" "BACKLOG_STALE: task dangling-dependent has dangling blocked-by never-existed" \
     "dangling finding must name the record and missing target"
   assert_contains "$out" "target is absent from data/backlog.md and data/done-archive.md" \
@@ -103,6 +125,7 @@ test_done_edge_names_fault_and_closable_fix() {
 - [x] done-blocker - Already complete (repo: sample) (kind: ship) (done 2026-07-28)
 EOF
   out=$(run_lint "$home")
+  assert_ok "an already-Done edge is a finding, not a command error"
   assert_contains "$out" "BACKLOG_STALE: task done-dependent has satisfied blocked-by done-blocker" \
     "Done finding must name the record and satisfied target"
   assert_contains "$out" "target is already Done in data/backlog.md" \
@@ -145,6 +168,7 @@ test_archive_rotation_reader_disagreement_and_fix() {
   ' >/dev/null || fail "fleet snapshot did not reproduce the opposite unresolved answer"
 
   out=$(run_lint "$home")
+  assert_ok "a reader-disagreement edge is a finding, not a command error"
   assert_contains "$out" "BACKLOG_STALE: task archived-dependent has reader-disagreement blocked-by archived-blocker" \
     "reader-disagreement finding must name the record and edge"
   assert_contains "$out" "tasks-axi says satisfied; fm-fleet-snapshot says unresolved" \
@@ -154,6 +178,59 @@ test_archive_rotation_reader_disagreement_and_fix() {
   (cd "$home" && tasks-axi unblock archived-dependent --by archived-blocker >/dev/null)
   assert_clean "$home" "reader-disagreement finding must clear after its printed fix"
   pass "retention-created reader disagreement fires and its printed fix makes the lint silent"
+}
+
+test_unresolvable_record_is_a_command_error_not_a_finding() {
+  local home out
+  home=$(make_home unresolvable)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## In flight
+## Queued
+- [ ] **unresolvable-dependent** - Id tasks-axi cannot resolve blocked-by: unresolvable-blocker (repo: sample) (kind: ship)
+## Done
+EOF
+  cat > "$home/data/done-archive.md" <<'EOF'
+## Archived 2026-07-01
+
+- [x] unresolvable-blocker - Rotated out of the live backlog (repo: sample) (kind: ship) (done 2026-06-01)
+EOF
+  out=$(run_lint "$home")
+  assert_not_contains "$out" "BACKLOG_STALE:" \
+    "a record tasks-axi cannot resolve must never become a finding"
+  [ "$(lint_status)" = 1 ] \
+    || fail "an unreadable tasks-axi answer must exit 1, got $(lint_status)"
+  assert_contains "$(lint_stderr)" "tasks-axi could not resolve task **unresolvable-dependent**" \
+    "an unreadable tasks-axi answer must name the record on stderr"
+  pass "an unresolvable record is a command error instead of a reader-disagreement false alarm"
+}
+
+test_manual_backend_prints_hand_edit_fix() {
+  local home out
+  home=$(make_home manual-backend)
+  printf '%s\n' manual > "$home/config/backlog-backend"
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## In flight
+## Queued
+- [ ] manual-dependent - Bad missing edge blocked-by: manual-missing (repo: sample) (kind: ship)
+- [ ] manual-done-dependent - Bad satisfied edge blocked-by: manual-done (repo: sample) (kind: ship)
+## Done
+- [x] manual-done - Already complete (repo: sample) (kind: ship) (done 2026-07-28)
+EOF
+  out=$(run_lint "$home")
+  assert_ok "the lint must still run under config/backlog-backend=manual"
+  assert_contains "$out" "BACKLOG_STALE: task manual-dependent has dangling blocked-by manual-missing" \
+    "manual mode must keep the finding message shape"
+  assert_contains "$out" 'fix: edit data/backlog.md by hand and delete the exact text "blocked-by: manual-missing" from the record for task manual-dependent' \
+    "manual mode must name the file, record, and exact blocked-by text"
+  assert_contains "$out" 'fix: edit data/backlog.md by hand and delete the exact text "blocked-by: manual-done" from the record for task manual-done-dependent' \
+    "manual mode must give hand-edit guidance for every finding class"
+  assert_not_contains "$out" "tasks-axi unblock" \
+    "manual mode must not prescribe the backend the home opted out of"
+  pass "manual backend keeps the lint enabled with closable hand-edit fixes"
 }
 
 test_bootstrap_surfaces_findings_and_stays_silent_when_clean() {
@@ -190,4 +267,6 @@ test_large_clean_backlog_is_silent
 test_dangling_edge_names_fault_and_closable_fix
 test_done_edge_names_fault_and_closable_fix
 test_archive_rotation_reader_disagreement_and_fix
+test_unresolvable_record_is_a_command_error_not_a_finding
+test_manual_backend_prints_hand_edit_fix
 test_bootstrap_surfaces_findings_and_stays_silent_when_clean
