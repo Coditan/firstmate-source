@@ -114,7 +114,7 @@ EOF
 
 test_done_edge_names_fault_and_closable_fix() {
   local home out
-  home=$(make_home done)
+  home=$(make_home 'done')
   cat > "$home/data/backlog.md" <<'EOF'
 # Backlog
 
@@ -146,10 +146,10 @@ test_archive_rotation_reader_disagreement_and_fix() {
     tasks-axi add archived-dependent "Captain decision" --kind captain --repo sample \
       --blocked-by archived-blocker >/dev/null
     tasks-axi hold archived-dependent --reason "captain decision" --kind captain >/dev/null
-    tasks-axi done archived-blocker --note "completed" >/dev/null
+    tasks-axi 'done' archived-blocker --note "completed" >/dev/null
     for n in 01 02 03 04 05 06 07 08 09 10; do
       tasks-axi add "archived-filler-$n" "Unrelated filler $n" --kind ship --repo sample >/dev/null
-      tasks-axi done "archived-filler-$n" --note "completed" >/dev/null
+      tasks-axi 'done' "archived-filler-$n" --note "completed" >/dev/null
     done
   )
 

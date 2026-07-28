@@ -76,6 +76,7 @@ LINT_TMP=$(
   mktemp -d "${TMPDIR:-/tmp}/fm-backlog-lint.XXXXXX"
 ) || { echo "fm-backlog-lint: could not create private temporary directory" >&2; exit 1; }
 
+# shellcheck disable=SC2329  # invoked indirectly by the EXIT trap below
 cleanup() {
   rm -rf "$LINT_TMP"
 }

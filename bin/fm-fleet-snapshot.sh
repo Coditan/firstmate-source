@@ -180,7 +180,7 @@ case "${1:---json}" in
   --secondmate-home-summary) OUTPUT_MODE=secondmate-home-summary ;;
   --backlog-json)
     [ "$#" -le 2 ] || { usage >&2; exit 2; }
-    OUTPUT_MODE=backlog-json
+    OUTPUT_MODE='backlog-json'
     BACKLOG_PATH=${2:-$BACKLOG}
     ;;
   -h|--help) usage; exit 0 ;;
