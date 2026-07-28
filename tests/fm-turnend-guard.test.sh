@@ -22,6 +22,21 @@ fm_git_identity fmtest fmtest@example.invalid
 
 REQUIRED_REASON='re-arm wake delivery with bin/fm-watch-arm.sh as its own Claude Code background task'
 SILENT_REASON='This forced continuation is internal maintenance'
+AWAY_REPAIR_REASON='bin/fm-afk-launch.sh start-native'
+AWAY_NATIVE_ENTRY='FM_AFK_STATE_PREPARED=1 bin/fm-afk-start.sh as its own Claude Code background task'
+AWAY_STOP_CAVEAT='bin/fm-afk-launch.sh stop, which EXITS away mode'
+DRAIN_FIRST_REASON='After draining queued wakes, '
+AWAY_CLOSING_REASON='This forced continuation is internal maintenance; after restoring away delivery, end silently unless a queued wake is captain-relevant under AGENTS.md section 9.'
+SESSION_CLOSING_REASON='This forced continuation is internal maintenance; after draining and restoring delivery, end silently unless a queued wake is captain-relevant under AGENTS.md section 9.'
+
+# The away daemon reads state/.wake-queue through its own cursor, so any drain
+# wording anywhere in an away banner is a data-loss instruction: fm-wake-drain.sh
+# would consume records the daemon has not read yet.
+assert_away_output_never_says_drain() {
+  local out=$1 context=$2
+  assert_not_contains "$out" "drain" "$context"
+  assert_not_contains "$out" "Drain" "$context"
+}
 
 # --- PREDICATE: bin/fm-supervision-lib.sh -----------------------------------
 
@@ -274,6 +289,14 @@ record_stub_lock() {
   printf '%s\n' "$identity" > "$dir/state/.wake-stub.lock/pid-identity"
 }
 
+record_pusher_lock() {
+  local dir=$1 pid=$2 identity=$3
+  mkdir -p "$dir/state/.supervise-daemon.lock"
+  printf '%s\n' "$pid" > "$dir/state/.supervise-daemon.pid"
+  printf '%s\n' "$pid" > "$dir/state/.supervise-daemon.lock/pid"
+  printf '%s\n' "$identity" > "$dir/state/.supervise-daemon.lock/pid-identity"
+}
+
 test_hook_silent_when_no_work_in_flight() {
   local dir out status
   dir=$(make_primary_dir "$TMP_ROOT/hook-idle")
@@ -346,6 +369,110 @@ test_hook_blocks_with_live_daemon_but_no_stub() {
   assert_contains "$out" "Wake delivery missing" "split predicate did not identify the missing delivery half"
   assert_not_contains "$out" "Watcher daemon down" "split predicate falsely reported the daemon half down"
   pass "fm-turnend-guard: healthy daemon without a session delivery stub blocks with the cheap re-arm repair"
+}
+
+test_hook_afk_blocks_with_dead_pusher_and_queued_wakes() {
+  local dir watcher_pid watcher_identity dead out status queue_lines
+  dir=$(make_primary_dir "$TMP_ROOT/hook-afk-dead-pusher")
+  : > "$dir/state/task1.meta"
+  : > "$dir/state/.afk"
+  printf '1\t1\tsignal\ttask1.status\tdone: one\n1\t2\tsignal\ttask2.status\tdone: two\n1\t3\tcheck\ttask3\tcheck: three\n' > "$dir/state/.wake-queue"
+  sleep 60 &
+  watcher_pid=$!
+  watcher_identity=$(watcher_identity "$dir" "$watcher_pid") || fail "could not identify live watcher holder"
+  record_watcher_lock "$dir" "$watcher_pid" "$watcher_identity"
+  touch "$dir/state/.last-watcher-beat"
+  dead=$(nonexistent_pid)
+  record_pusher_lock "$dir" "$dead" "dead pusher identity"
+  out=$(run_hook "$dir" false); status=$?
+  queue_lines=$(wc -l < "$dir/state/.wake-queue")
+  kill "$watcher_pid" 2>/dev/null || true
+  wait "$watcher_pid" 2>/dev/null || true
+  expect_code 2 "$status" "away hook must block when the pusher is dead with queued wakes"
+  assert_contains "$out" "Away wake delivery missing" "away hook did not identify the dead pusher"
+  assert_not_contains "$out" "Watcher daemon down" "away hook falsely reported the healthy watcher down"
+  assert_contains "$out" "$AWAY_REPAIR_REASON" "away repair line did not name the concrete away-daemon restart"
+  assert_contains "$out" "$AWAY_NATIVE_ENTRY" "away repair line did not host the daemon in this harness's native background tool"
+  assert_contains "$out" "$AWAY_STOP_CAVEAT" "away repair line offered the stop rollback without saying it leaves away mode"
+  assert_contains "$out" "fresh away entry" "away repair line did not require re-entering away mode after the stop rollback"
+  assert_not_contains "$out" "load /afk" "away repair line still described the old delivery-ownership contract"
+  assert_contains "$out" "$AWAY_CLOSING_REASON" "away banner did not close with the restore-away-delivery instruction"
+  assert_not_contains "$out" "$SESSION_CLOSING_REASON" "away banner closed with the session drain-and-restore wording"
+  assert_away_output_never_says_drain "$out" "away banner told the session to drain the daemon-owned queue"
+  [ "$queue_lines" -eq 3 ] || fail "away hook changed the queued wakes while checking pusher health"
+  pass "fm-turnend-guard: dead away pusher with queued wakes blocks the turn"
+}
+
+# Terminal wakes can outlive their state/*.meta records (the drain/cleanup path
+# removes the meta while the queue record is still unread), so the queue alone
+# must keep the guard active.
+test_hook_afk_blocks_with_queued_wakes_and_no_meta() {
+  local dir dead out status queue_lines
+  dir=$(make_primary_dir "$TMP_ROOT/hook-afk-queued-no-meta")
+  : > "$dir/state/.afk"
+  printf '1\t1\tsignal\ttask1.status\tdone: one\n1\t2\tcheck\ttask2\tcheck: two\n' > "$dir/state/.wake-queue"
+  dead=$(nonexistent_pid)
+  record_pusher_lock "$dir" "$dead" "dead pusher identity"
+  out=$(run_hook "$dir" false); status=$?
+  queue_lines=$(wc -l < "$dir/state/.wake-queue")
+  [ -z "$(find "$dir/state" -maxdepth 1 -name '*.meta' -print -quit)" ] \
+    || fail "fixture must carry zero state/*.meta records"
+  expect_code 2 "$status" "away hook must block on queued wakes with a dead pusher and zero meta records"
+  assert_contains "$out" "Away wake delivery missing" "queued-wake block did not identify the dead pusher"
+  assert_contains "$out" "$AWAY_REPAIR_REASON" "queued-wake block did not name the concrete away-daemon restart"
+  assert_contains "$out" "Watcher daemon down: queued wake(s) pending" "banner did not name the queued wakes as the protected work"
+  assert_not_contains "$out" "0 task(s) in flight" "banner claimed an in-flight count it does not have"
+  assert_contains "$out" "$AWAY_CLOSING_REASON" "away banner did not close with the restore-away-delivery instruction"
+  assert_away_output_never_says_drain "$out" "away banner told the session to drain the daemon-owned queue"
+  [ "$queue_lines" -eq 2 ] || fail "away hook changed the queued wakes while checking pusher health"
+  pass "fm-turnend-guard: queued wakes with no state/*.meta keep the guard active for a dead away pusher"
+}
+
+test_hook_queued_wakes_repair_names_the_drain() {
+  local dir pid identity out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-queued-no-meta-session")
+  printf '1\t1\tsignal\ttask1.status\tdone: one\n' > "$dir/state/.wake-queue"
+  sleep 60 &
+  pid=$!
+  identity=$(watcher_identity "$dir" "$pid") || fail "could not identify live watcher holder"
+  record_watcher_lock "$dir" "$pid" "$identity"
+  touch "$dir/state/.last-watcher-beat"
+  out=$(run_hook "$dir" false); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 2 "$status" "hook must block on queued wakes with a healthy watcher and no armed stub"
+  assert_contains "$out" "Wake delivery missing" "queued-wake block did not identify the missing delivery half"
+  assert_contains "$out" "$DRAIN_FIRST_REASON" "delivery repair did not say the queued wakes must be drained before re-arming"
+  assert_contains "$out" "$REQUIRED_REASON" "delivery repair lost the harness re-arm instruction"
+  assert_contains "$out" "$SESSION_CLOSING_REASON" "session banner lost the drain-and-restore closing instruction"
+  assert_not_contains "$out" "$AWAY_CLOSING_REASON" "session banner closed with the away-only wording"
+  pass "fm-turnend-guard: a queued-wake activation names the drain in the delivery repair line"
+}
+
+test_hook_afk_silent_with_healthy_pusher() {
+  local dir watcher_pid watcher_identity pusher_pid pusher_identity out status queue_lines
+  dir=$(make_primary_dir "$TMP_ROOT/hook-afk-healthy-pusher")
+  : > "$dir/state/task1.meta"
+  : > "$dir/state/.afk"
+  printf '1\t1\tsignal\ttask1.status\tdone: queued\n' > "$dir/state/.wake-queue"
+  sleep 60 &
+  watcher_pid=$!
+  sleep 60 &
+  pusher_pid=$!
+  watcher_identity=$(watcher_identity "$dir" "$watcher_pid") || fail "could not identify live watcher holder"
+  pusher_identity=$(watcher_identity "$dir" "$pusher_pid") || fail "could not identify live pusher holder"
+  record_watcher_lock "$dir" "$watcher_pid" "$watcher_identity"
+  record_pusher_lock "$dir" "$pusher_pid" "$pusher_identity"
+  touch "$dir/state/.last-watcher-beat"
+  out=$(run_hook "$dir" false); status=$?
+  queue_lines=$(wc -l < "$dir/state/.wake-queue")
+  kill "$watcher_pid" "$pusher_pid" 2>/dev/null || true
+  wait "$watcher_pid" 2>/dev/null || true
+  wait "$pusher_pid" 2>/dev/null || true
+  expect_code 0 "$status" "away hook must allow the turn with a healthy identity-matched pusher"
+  [ -z "$out" ] || fail "away hook produced output despite a healthy identity-matched pusher: $out"
+  [ "$queue_lines" -eq 1 ] || fail "away hook changed the queued wake while checking pusher health"
+  pass "fm-turnend-guard: healthy identity-matched away pusher allows the turn"
 }
 
 test_hook_blocks_with_live_lock_and_stale_beacon() {
@@ -1064,6 +1191,10 @@ test_hook_blocks_when_fresh_beacon_has_no_live_lock
 test_hook_blocks_when_dead_lock_has_fresh_beacon
 test_hook_silent_with_live_lock_and_fresh_beacon
 test_hook_blocks_with_live_daemon_but_no_stub
+test_hook_afk_blocks_with_dead_pusher_and_queued_wakes
+test_hook_afk_blocks_with_queued_wakes_and_no_meta
+test_hook_queued_wakes_repair_names_the_drain
+test_hook_afk_silent_with_healthy_pusher
 test_hook_blocks_with_live_lock_and_stale_beacon
 test_hook_blocks_when_unhealthy_in_primary
 test_hook_blocks_from_fm_home_state

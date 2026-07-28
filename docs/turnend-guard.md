@@ -27,8 +27,10 @@ It also requires `AGENTS.md`, `bin/`, and the effective state directory to exist
 
 For an in-scope primary checkout, it counts supervision-relevant work from `state/*.meta`.
 A `kind=secondmate` record with explicit `state=resting` remains registered but is excluded; every ordinary task, active secondmate, and legacy secondmate with no state still counts.
-If no supervision-relevant work remains, it exits silently.
-If work is in flight, the first half requires `fm_watcher_healthy <state-dir> <watch-path> [grace-seconds] [home]` from `bin/fm-wake-lib.sh`.
+An unread record in `state/.wake-queue` is protected work in its own right, because a terminal wake can outlive the `state/*.meta` record it came from: the guard stays active whenever `FM_SUP_IN_FLIGHT` is above zero **or** `FM_SUP_QUEUE_PENDING` is true, and the daemon-down banner then names the queued wakes instead of an in-flight count.
+That queue state is also passed to the repair-line renderer as `--queue-pending`, exactly as `bin/fm-guard.sh` does, so a session-delivery repair says the queued wakes must be drained before re-arming.
+If neither remains, it exits silently.
+If work is protected, the first half requires `fm_watcher_healthy <state-dir> <watch-path> [grace-seconds] [home]` from `bin/fm-wake-lib.sh`.
 That daemon predicate is unchanged: it requires an identity-matched live watcher lock and a fresh beacon.
 A stale beacon blocks even if the watcher pid is still live, and a fresh leftover beacon blocks if the watcher lock is missing, dead, or identity-mismatched.
 The second half requires `fm_wake_stub_armed <state-dir> <stub-path> [home]` from the same library.
@@ -37,7 +39,23 @@ The stub needs no beacon because it is a pure blocking wait over the durable que
 Daemon failure and delivery failure produce separate repair lines.
 The daemon line names the scoped systemd instance restart or tmux keeper repair and is treated as a real supervision incident.
 The delivery line points to the active harness protocol and costs one cheap re-arm.
-While `state/.afk` is present, the away daemon consumes new durable queue records and intentionally satisfies the delivery half without a session stub; daemon health remains mandatory.
+While `state/.afk` is present, the away daemon consumes new durable queue records and intentionally replaces the session stub.
+The away flag alone does not satisfy the delivery half.
+`fm_pusher_healthy <state-dir>` requires `state/.supervise-daemon.pid` to name a live pid that matches the portable lock's pid and recorded process identity.
+Those are exactly the three files `bin/fm-supervise-daemon.sh` publishes at startup, and `tests/fm-daemon.test.sh` pins the predicate against that real publication rather than a fixture.
+Watcher health remains independently mandatory.
+The away delivery repair line names the concrete daemon relaunch the `/afk` skill prescribes for the resolved harness, and never tells an away session to arm a session delivery wait.
+A harness with a native tracked-background tool (`claude`, `grok`) is sent down the no-separate-terminal path: `bin/fm-afk-launch.sh start-native`, then `FM_AFK_STATE_PREPARED=1 bin/fm-afk-start.sh` through that tool, with `bin/fm-afk-launch.sh stop` as the rollback when that native launch fails.
+Because the repair runs mid-away-session rather than at a fresh away entry, the line states in place that `stop` exits away mode by clearing `state/.afk` and must be followed immediately by a fresh away entry; that consequence is never left implicit.
+Every other harness gets the terminal-backed `bin/fm-afk-launch.sh start`.
+The away branch is deliberately never prefixed with the drain instruction, because the away daemon reads the durable queue through its own cursor and the session must not drain it.
+For the same reason the banner's closing maintenance line also branches on away mode: an away turn is told to restore away delivery and end silently, while a normal session keeps the drain-and-restore wording.
+An away banner that named a drain would be a data-loss instruction, since `bin/fm-wake-drain.sh` would consume records the daemon's cursor has not read yet; `bin/fm-afk-return.sh` owns that drain at return time instead.
+
+If the away daemon dies during an unattended stretch, the next attempted turn end forces one maintenance continuation that directs the agent to restore away delivery.
+The hook loop guard then permits that turn to stop, so daemon death cannot create an autonomous endless continuation loop.
+A later independent turn alerts again until delivery is repaired.
+The daemon-owned max-defer alarm cannot run after the daemon itself dies, so it is not treated as substitute coverage; queued wakes remain durable and the turn-end force is the recovery signal.
 
 `FM_STATE_OVERRIDE` wins over `FM_HOME/state`, and `FM_HOME` wins over repo-root `state/`.
 `FM_GUARD_GRACE` controls only the daemon beacon freshness window and defaults to 300 seconds.
@@ -197,7 +215,7 @@ Firstmate deliberately does not track `.claude/settings.local.json` anywhere, an
 
 ## Tests
 
-`tests/fm-turnend-guard.test.sh` covers the split daemon-and-delivery predicate, independent repair lines, delivery-stub pid and identity matching, primary scoping, `FM_HOME` and `FM_STATE_OVERRIDE` precedence, away-mode delivery ownership, fail-open behavior without `jq`, tracked hook registration for all five harnesses, and passive-adapter loop guards.
+`tests/fm-turnend-guard.test.sh` covers the split daemon-and-delivery predicate, independent repair lines, delivery-stub pid and identity matching, primary scoping, `FM_HOME` and `FM_STATE_OVERRIDE` precedence, dead and healthy away-pusher states with queued wakes, queued wakes with no `state/*.meta` record left, the drain-first delivery repair a queued-wake activation prints, both closing-banner branches (away restores delivery and never names a drain anywhere in the banner; a normal session keeps drain-and-restore), fail-open behavior without `jq`, tracked hook registration for all five harnesses, and passive-adapter loop guards.
 The per-task crewmate overlay recorded in the 2026-07-25 subsection is pinned from the spawn side by `tests/fm-spawn-dispatch-profile.test.sh` (a repository-tracked `.claude/settings.local.json` survives a claude spawn, the overlay is written under the distinct name and git-excluded, and the launch line carries `--settings` for it) and from the teardown side by `tests/fm-teardown.test.sh` cases (z) through (dd) (a tracked-and-dirty overlay still tears down, that tolerance does not mask other genuine uncommitted work, and a repository-tracked legacy `settings.local.json` is never removed).
 The default behavior suite does not invoke live language-model harnesses.
 `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh` opts into the isolated interactive Pi regression recorded above.

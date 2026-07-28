@@ -104,13 +104,36 @@ render_snippet() {
   done < "$SNIPPET"
 }
 
+# Away delivery is the daemon, not a session stub, so this branch names the
+# daemon relaunch the /afk skill prescribes for the resolved harness: the
+# no-separate-terminal native path where the harness owns a tracked background
+# job, and the terminal-backed launcher everywhere else. Draining stays out of
+# it: the away daemon reads the durable queue through its own cursor.
+away_repair_line() {
+  local relaunch native_tool
+  case "$HARNESS" in
+    claude) native_tool='Claude Code background task' ;;
+    grok) native_tool='Grok tracked background task' ;;
+    *) native_tool='' ;;
+  esac
+  if [ -n "$native_tool" ]; then
+    relaunch="prepare the lifecycle with bin/fm-afk-launch.sh start-native, then run FM_AFK_STATE_PREPARED=1 bin/fm-afk-start.sh as its own $native_tool (never shell &); if that native launch fails, roll the preparation back with bin/fm-afk-launch.sh stop, which EXITS away mode by clearing state/.afk and therefore must be followed immediately by a fresh away entry so the captain is not left unattended without it"
+  else
+    relaunch='restart its non-visible tracked terminal with bin/fm-afk-launch.sh start'
+  fi
+  printf '%s%s%s\n' \
+    'Away mode owns wake delivery and no live identity-matched away daemon is reading the durable queue: ' \
+    "$relaunch" \
+    '. Then confirm state/.supervise-daemon.pid names a live pid matching the daemon lock identity; do not arm a session delivery wait instead.'
+}
+
 repair_line() {
   if [ "$READ_ONLY" -eq 1 ]; then
     printf '%s\n' 'Watcher repair belongs to the session holding the fleet lock; do not drain, arm, or repair from this read-only session.'
     return 0
   fi
   if [ "$AFK" -eq 1 ]; then
-    printf '%s\n' 'Away mode owns wake delivery; load /afk and ensure the daemon is reading the durable queue instead of arming a session delivery wait.'
+    away_repair_line
     return 0
   fi
 
