@@ -940,6 +940,9 @@ if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] \
 fi
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   "$SCRIPT_DIR/fm-axi-suite.sh"
+  # The suite may have just seeded this home's own copies into $FM_HOME/.local/axi;
+  # drop the cached lookups so the sweeps below resolve the vessel copy, not the
+  # external one this shell already hashed.
   hash -r
   secondmate_sync
   secondmate_liveness_sweep

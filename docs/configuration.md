@@ -15,7 +15,7 @@ The tracked code root contains the shared instruction, skill, documentation, wor
 `.local/axi/` is the home-private npm prefix for the managed AXI CLI suite.
 `config/` holds local gitignored operating choices, and `projects/` holds the local project clones that Firstmate reads but changes only through the guarded exceptions in `AGENTS.md`.
 
-A home's checkout also accumulates runtime artifacts that a supported harness or firstmate writes into the tracked tree itself: Claude Code's local permissions and settings file plus its scheduler, routine, worktree, checkpoint, mailbox, agent-registry, agent-memory, first-run, and daemon state, and firstmate's generated per-task hook overlay.
+A home's checkout also accumulates runtime artifacts that a supported harness or firstmate writes into the tracked tree itself: Claude Code's local permissions and settings file plus its scheduler, routine, worktree, checkpoint, mailbox, agent-registry, agent-memory, first-run, and daemon state, firstmate's generated per-task hook overlay, and - whenever the home is the checkout root - the `.local/axi/` prefix above.
 The tracked root `.gitignore` owns the exact path list and is the only correct place for it: `dirty_status` in `bin/fm-ff-lib.sh` reads `git status --porcelain`, which reports untracked files too, so any of those artifacts would otherwise make a vessel dirty and silently drop it out of every guarded fast-forward, and a clone-private `.git/info/exclude` cannot carry the rule because a fresh clone does not inherit one.
 The patterns stay narrow so the tracked `.claude/settings.json` and the tracked `.claude/skills` symlink remain visible to `git add`, and `tests/fm-runtime-ignore.test.sh` proves in a fresh clone that every artifact form is ignored by the tracked `.gitignore` rather than a private or global exclude, that the tracked paths are not, and that `.claude/settings.local.json` is never tracked.
 
@@ -210,7 +210,7 @@ A standalone-clone home cannot receive a primary-local commit through that no-fe
 ## FM_HOME
 
 `FM_HOME` selects the operational home for one firstmate instance.
-When it is unset, most scripts use the repo root as the home; when it is set, scripts still run from this repo's `bin/`, but `state/`, `data/`, `config/`, and `projects/` come from `$FM_HOME`.
+When it is unset, most scripts use the repo root as the home; when it is set, scripts still run from this repo's `bin/`, but `state/`, `data/`, `config/`, `projects/`, and the `.local/axi/` npm prefix come from `$FM_HOME`.
 `FM_ROOT_OVERRIDE` overrides the firstmate repo root used by scripts, including the primary checkout watched by the worktree-tangle guard.
 When `FM_HOME` is unset, it also behaves as the old whole-root override.
 `bin/fm-send.sh` is intentionally stricter than that general fallback: it requires `FM_HOME` to be set before resolving a target, so operator steers cannot silently resolve against the wrong home.

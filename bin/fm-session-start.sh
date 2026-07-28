@@ -27,9 +27,11 @@
 #
 #   1. lock          - acquire the per-home session lock FIRST, before any
 #                       mutating step runs.
-#   2. bootstrap      - detect-only diagnostics always run. The five
-#                       MUTATING sweeps (legacy PR-check migration, secondmate
-#                       fast-forward, secondmate liveness, X-mode artifact writes, fleet sync) run only
+#   2. bootstrap      - detect-only diagnostics always run. The six
+#                       MUTATING sweeps (legacy PR-check migration, the AXI-suite
+#                       currency check that installs into this home's own npm prefix,
+#                       secondmate fast-forward, secondmate liveness, X-mode artifact
+#                       writes, fleet sync) run only
 #                       when this session actually holds the lock.
 #   3. wake-drain     - mutates the durable wake queue, so it also only runs
 #                       when locked.
