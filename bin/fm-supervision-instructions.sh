@@ -104,13 +104,37 @@ render_snippet() {
   done < "$SNIPPET"
 }
 
+# Away delivery is the daemon, not a session stub, so this branch names the
+# daemon relaunch the /afk skill prescribes for the resolved harness: the
+# no-separate-terminal native path where the harness owns a tracked background
+# job, and the terminal-backed launcher everywhere else. Draining stays out of
+# it: the away daemon reads the durable queue through its own cursor.
+away_repair_line() {
+  local relaunch
+  case "$HARNESS" in
+    claude)
+      relaunch='prepare the lifecycle with bin/fm-afk-launch.sh start-native, then run FM_AFK_STATE_PREPARED=1 bin/fm-afk-start.sh as its own Claude Code background task (never shell &), rolling the preparation back with bin/fm-afk-launch.sh stop if that native launch fails'
+      ;;
+    grok)
+      relaunch='prepare the lifecycle with bin/fm-afk-launch.sh start-native, then run FM_AFK_STATE_PREPARED=1 bin/fm-afk-start.sh as its own Grok tracked background task (never shell &), rolling the preparation back with bin/fm-afk-launch.sh stop if that native launch fails'
+      ;;
+    *)
+      relaunch='restart its non-visible tracked terminal with bin/fm-afk-launch.sh start'
+      ;;
+  esac
+  printf '%s%s%s\n' \
+    'Away mode owns wake delivery and no live identity-matched away daemon is reading the durable queue: ' \
+    "$relaunch" \
+    '. Then confirm state/.supervise-daemon.pid names a live pid matching the daemon lock identity; do not arm a session delivery wait instead.'
+}
+
 repair_line() {
   if [ "$READ_ONLY" -eq 1 ]; then
     printf '%s\n' 'Watcher repair belongs to the session holding the fleet lock; do not drain, arm, or repair from this read-only session.'
     return 0
   fi
   if [ "$AFK" -eq 1 ]; then
-    printf '%s\n' 'Away mode owns wake delivery and no live identity-matched away daemon is reading the durable queue: restart it with bin/fm-afk-launch.sh start, then confirm state/.supervise-daemon.pid names a live pid matching the daemon lock identity; do not arm a session delivery wait instead.'
+    away_repair_line
     return 0
   fi
 

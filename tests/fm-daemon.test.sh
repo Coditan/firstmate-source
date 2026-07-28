@@ -93,7 +93,7 @@ pid_identity_of() {
 # predicate to that REAL publication, so a drift in either daemon-side write
 # fails here instead of silently reading a healthy away daemon as dead.
 test_pusher_healthy_accepts_real_daemon_publication() {
-  local dir state fakebin pid i live_rc dead_rc published_pid lock_pid lock_identity live_identity
+  local dir state fakebin pid i live_rc dead_rc exit_rc published_pid lock_pid lock_identity live_identity
   dir=$(make_supercase pusher-healthy-real-daemon)
   state="$dir/state"
   fakebin="$dir/fakebin"
@@ -120,9 +120,12 @@ test_pusher_healthy_accepts_real_daemon_publication() {
   pusher_healthy_status "$state" || live_rc=$?
 
   kill -TERM "$pid" 2>/dev/null || true
-  wait "$pid" 2>/dev/null || true
+  exit_rc=0
+  wait_for_exit "$pid" 50 || exit_rc=$?
   dead_rc=0
   pusher_healthy_status "$state" || dead_rc=$?
+
+  [ "$exit_rc" -ne 124 ] || fail "the away daemon did not exit within the bounded wait after SIGTERM"
 
   [ "$published_pid" = "$pid" ] \
     || fail "daemon pidfile does not name the running daemon (pidfile '$published_pid', daemon $pid): $(cat "$dir/daemon.err" 2>/dev/null)"

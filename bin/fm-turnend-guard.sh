@@ -103,7 +103,10 @@ fi
 [ "$daemon_healthy" -eq 1 ] && [ "$delivery_armed" -eq 1 ] && exit 0
 x_mode=0
 [ -f "$CONFIG/x-mode.env" ] && x_mode=1
-DELIVERY_REASON=$("$SCRIPT_DIR/fm-supervision-instructions.sh" --afk "$afk" --x-mode "$x_mode" --repair-line 2>/dev/null \
+queue_pending=0
+[ "$FM_SUP_QUEUE_PENDING" = true ] && queue_pending=1
+DELIVERY_REASON=$("$SCRIPT_DIR/fm-supervision-instructions.sh" --afk "$afk" --x-mode "$x_mode" \
+  --queue-pending "$queue_pending" --repair-line 2>/dev/null \
   || printf '%s\n' 're-arm wake delivery according to the session-start operating block before ending the turn')
 DAEMON_REASON=$("$SCRIPT_DIR/fm-watcher-service.sh" repair-command 2>/dev/null \
   || printf '%s\n' 'bin/fm-watcher-service.sh restart')

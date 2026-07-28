@@ -61,10 +61,28 @@ test_repair_lines() {
   assert_contains "$out" "bin/fm-watch-checkpoint.sh --seconds 7" "x-mode codex repair line lost the checkpoint helper"
 
   out=$(FM_HOME="$home" "$RENDER" --harness claude --afk 1 --repair-line)
-  assert_contains "$out" "bin/fm-afk-launch.sh start" "away repair line does not name the concrete away-daemon restart"
   assert_contains "$out" "no live identity-matched away daemon" "away repair line does not describe the dead-daemon situation"
+  assert_contains "$out" "bin/fm-afk-launch.sh start-native" "claude away repair line does not use the native no-terminal preparation"
+  assert_contains "$out" "FM_AFK_STATE_PREPARED=1 bin/fm-afk-start.sh" "claude away repair line does not name the native daemon entry"
+  assert_contains "$out" "Claude Code background task" "claude away repair line does not host the daemon in the native background tool"
   assert_not_contains "$out" "load /afk" "away repair line still described the old delivery-ownership contract"
   assert_not_contains "$out" "bin/fm-watch-arm.sh" "away repair line leaked the session-stub re-arm command"
+
+  out=$(FM_HOME="$home" "$RENDER" --harness grok --afk 1 --repair-line)
+  assert_contains "$out" "bin/fm-afk-launch.sh start-native" "grok away repair line does not use the native no-terminal preparation"
+  assert_contains "$out" "Grok tracked background task" "grok away repair line does not host the daemon in the native background tool"
+
+  out=$(FM_HOME="$home" "$RENDER" --harness pi --afk 1 --repair-line)
+  assert_contains "$out" "bin/fm-afk-launch.sh start" "pi away repair line does not name the terminal-backed launcher"
+  assert_not_contains "$out" "start-native" "pi has no native background tool and must not be sent down the native path"
+  assert_not_contains "$out" "fm_watch_arm_pi" "away repair line leaked the session-stub re-arm tool"
+
+  out=$(FM_HOME="$home" "$RENDER" --harness codex --afk 1 --repair-line)
+  assert_contains "$out" "bin/fm-afk-launch.sh start" "codex away repair line does not name the terminal-backed launcher"
+  assert_not_contains "$out" "start-native" "codex wake supervision forbids native background hosting"
+
+  out=$(FM_HOME="$home" "$RENDER" --harness claude --afk 1 --queue-pending 1 --repair-line)
+  assert_not_contains "$out" "After draining queued wakes" "away mode must not tell the session to drain the daemon-owned queue"
 
   out=$(FM_HOME="$home" "$RENDER" --harness opencode --read-only 1 --repair-line)
   assert_contains "$out" "session holding the fleet lock" "read-only repair line missing"
