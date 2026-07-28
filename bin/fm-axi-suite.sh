@@ -38,11 +38,16 @@
 # suite's cumulative registry lookup, install, and hook-setup time in seconds
 # (default 30), so an unreachable registry cannot multiply the stall across
 # every tool in the suite. FM_AXI_SUITE_PROBE_TIMEOUT bounds the suite's
-# cumulative local `--version` probing in seconds (default 15). Each budget is
-# charged only for the time its own calls spend, so a hung binary can neither
-# wedge session start nor consume the registry budget, and slow registry or
-# install work cannot consume the probe budget. FM_AXI_SUITE_TOOLS overrides
-# the space-separated
+# cumulative local `--version` probing in seconds (default 15).
+# FM_AXI_SUITE_SEED_TIMEOUT bounds the one-time installs that give a fresh
+# vessel its own copies (default 120), because a first cutover installs the
+# whole suite at once and would otherwise exhaust the steady-state network
+# budget and report a healthy vessel as stuck. Each budget is charged only for
+# the time its own calls spend, so no kind of work can consume another's.
+# Seeding announces its progress on stderr while it runs, and a seed that
+# genuinely stalls or outlives the seeding budget is still reported as
+# AXI_SUITE_STUCK and retried on the next cadence window.
+# FM_AXI_SUITE_TOOLS overrides the space-separated
 # suite tool list (default: quota-axi gh-axi tasks-axi gnhf lavish-axi
 # chrome-devtools-axi).
 set -u
@@ -62,6 +67,7 @@ FORCE=0
 SUITE="${FM_AXI_SUITE_TOOLS:-quota-axi gh-axi tasks-axi gnhf lavish-axi chrome-devtools-axi}"
 NET_TIMEOUT=${FM_AXI_SUITE_NETWORK_TIMEOUT:-30}
 PROBE_TIMEOUT=${FM_AXI_SUITE_PROBE_TIMEOUT:-15}
+SEED_TIMEOUT=${FM_AXI_SUITE_SEED_TIMEOUT:-120}
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -76,6 +82,7 @@ done
 case "$INTERVAL" in ''|*[!0-9]*) INTERVAL=86400 ;; esac
 case "$NET_TIMEOUT" in ''|*[!0-9]*) NET_TIMEOUT=30 ;; esac
 case "$PROBE_TIMEOUT" in ''|*[!0-9]*) PROBE_TIMEOUT=15 ;; esac
+case "$SEED_TIMEOUT" in ''|*[!0-9]*) SEED_TIMEOUT=120 ;; esac
 
 HAVE_TIMEOUT=none
 if command -v timeout >/dev/null 2>&1; then HAVE_TIMEOUT=timeout
@@ -108,15 +115,24 @@ bounded() {
 }
 
 # Each budget is an accumulator over the time its own calls actually spend, not
-# a wall-clock deadline: a deadline would let registry and install time drain
-# the probe budget (and probe time drain the registry budget) even though the
-# two bound unrelated failure modes. Callers must therefore stay in this shell -
-# running a budgeted call inside a command substitution would discard the charge
-# it made.
+# a wall-clock deadline: a deadline would let one kind of work drain another's
+# budget even though they bound unrelated failure modes. Callers must therefore
+# stay in this shell - running a budgeted call inside a command substitution
+# would discard the charge it made.
+#
+# The three budgets exist because their work has three different shapes: steady
+# registry and update traffic (net), running a local suite binary (probe), and
+# the one-time installs that give a fresh vessel its own copies (seed). Seeding
+# is charged separately because a first cutover installs the whole suite at
+# once, which would otherwise exhaust the tight steady-state network budget and
+# report a healthy vessel as stuck.
 NET_SPENT=0
 PROBE_SPENT=0
-NET_GRANTED=0
+SEED_SPENT=0
 PROBE_GRANTED=0
+SEED_GRANTED=0
+BUDGET_GRANTED=0
+BUDGET_SPENT_DELTA=0
 
 budget_grant() {
   local rem
@@ -133,33 +149,52 @@ seconds_since() {
   printf '%s' "$spent"
 }
 
-# Bounds the whole suite's cumulative network exposure to NET_TIMEOUT instead
-# of NET_TIMEOUT per tool, so an unreachable registry cannot multiply the
-# stall across every entry in FM_AXI_SUITE_TOOLS. Once the budget is spent,
-# remaining calls fail fast without touching the network at all.
-net_call() {
-  local started status=0
-  NET_GRANTED=$(budget_grant "$NET_TIMEOUT" "$NET_SPENT")
-  [ "$NET_GRANTED" -gt 0 ] || return 124
+# Runs one bounded call against <cap> given <already-spent>, publishing the
+# granted budget and the time the call actually consumed so each wrapper can
+# charge its own accumulator. Returns 124 without running anything at all once
+# that budget is spent.
+run_budgeted() {
+  local cap=$1 spent=$2 started status=0
+  shift 2
+  BUDGET_SPENT_DELTA=0
+  BUDGET_GRANTED=$(budget_grant "$cap" "$spent")
+  [ "$BUDGET_GRANTED" -gt 0 ] || return 124
   started=$(date +%s 2>/dev/null || echo 0)
-  bounded "$NET_GRANTED" "$@" || status=$?
-  NET_SPENT=$((NET_SPENT + $(seconds_since "$started")))
+  bounded "$BUDGET_GRANTED" "$@" || status=$?
+  BUDGET_SPENT_DELTA=$(seconds_since "$started")
+  return "$status"
+}
+
+# Bounds the whole suite's cumulative registry and update exposure to
+# NET_TIMEOUT instead of NET_TIMEOUT per tool, so an unreachable registry
+# cannot multiply the stall across every entry in FM_AXI_SUITE_TOOLS.
+net_call() {
+  local status=0
+  run_budgeted "$NET_TIMEOUT" "$NET_SPENT" "$@" || status=$?
+  NET_SPENT=$((NET_SPENT + BUDGET_SPENT_DELTA))
   return "$status"
 }
 
 # Running a local suite binary is its own stall risk: a half-installed shim can
 # hang instead of exiting, and it must never wedge bootstrap or session start.
-# Probes carry a cumulative budget of their own so a hung binary cannot spend
-# the registry budget and slow registry or install work cannot starve the
-# probes. PROBE_GRANTED is 0 when the budget was already spent, which tells a
-# caller that the binary was never run rather than that it failed to answer.
+# PROBE_GRANTED is 0 when the budget was already spent, which tells a caller
+# that the binary was never run rather than that it failed to answer.
 probe_call() {
-  local started status=0
-  PROBE_GRANTED=$(budget_grant "$PROBE_TIMEOUT" "$PROBE_SPENT")
-  [ "$PROBE_GRANTED" -gt 0 ] || return 124
-  started=$(date +%s 2>/dev/null || echo 0)
-  bounded "$PROBE_GRANTED" "$@" || status=$?
-  PROBE_SPENT=$((PROBE_SPENT + $(seconds_since "$started")))
+  local status=0
+  run_budgeted "$PROBE_TIMEOUT" "$PROBE_SPENT" "$@" || status=$?
+  PROBE_SPENT=$((PROBE_SPENT + BUDGET_SPENT_DELTA))
+  PROBE_GRANTED=$BUDGET_GRANTED
+  return "$status"
+}
+
+# The one-time installs that give this vessel its own copies. SEED_GRANTED is 0
+# when the budget was already spent, which separates "never attempted" from an
+# install that ran and failed.
+seed_call() {
+  local status=0
+  run_budgeted "$SEED_TIMEOUT" "$SEED_SPENT" "$@" || status=$?
+  SEED_SPENT=$((SEED_SPENT + BUDGET_SPENT_DELTA))
+  SEED_GRANTED=$BUDGET_GRANTED
   return "$status"
 }
 
@@ -269,11 +304,42 @@ discard_home_tool() {
   [ ! -e "$path" ]
 }
 
+# Seeding can take much longer than a steady-state check, and it runs inside a
+# locked bootstrap where the operator sees only a pause. These lines go to
+# stderr as the work happens - stdout is collected and emitted once at the end -
+# so a fresh vessel shows which tool is installing and how much of the seeding
+# budget is left, which is what separates normal installation work from a hang.
+SEEDING_ANNOUNCED=0
+announce_seeding() {
+  local spec=$1 left
+  left=$(budget_grant "$SEED_TIMEOUT" "$SEED_SPENT")
+  if [ "$SEEDING_ANNOUNCED" -eq 0 ]; then
+    SEEDING_ANNOUNCED=1
+    printf 'fm-axi-suite.sh: seeding this vessel AXI prefix (%s) for the first time; these installs run under a separate %ss seeding budget, so this check takes longer than a steady-state one\n' \
+      "$AXI_PREFIX" "$SEED_TIMEOUT" >&2
+  fi
+  printf 'fm-axi-suite.sh: installing %s into %s (%ss of the seeding budget left)\n' \
+    "$spec" "$AXI_PREFIX" "$left" >&2
+}
+
+# An install that creates the vessel's copy is first-cutover seeding; one that
+# replaces an existing vessel copy is an ordinary update. Deriving the budget
+# from the copy itself keeps the two entry points - seed_home_tool and the
+# patch/minor update path - from drifting apart.
 install_home_tool() {
-  local tool=$1 spec=$2 expected path status=0
+  local tool=$1 spec=$2 expected path status=0 install_status=0
   expected=$3
   path=$(home_tool_path "$tool")
-  if net_call npm install -g --prefix "$AXI_PREFIX" "$spec" >/dev/null 2>&1; then
+  if [ -x "$path" ]; then
+    net_call npm install -g --prefix "$AXI_PREFIX" "$spec" >/dev/null 2>&1 || install_status=$?
+  else
+    SEED_GRANTED=0
+    if [ "$(budget_grant "$SEED_TIMEOUT" "$SEED_SPENT")" -gt 0 ]; then
+      announce_seeding "$spec"
+    fi
+    seed_call npm install -g --prefix "$AXI_PREFIX" "$spec" >/dev/null 2>&1 || install_status=$?
+  fi
+  if [ "$install_status" -eq 0 ]; then
     read_version "$path"
     if [ "$VERSION_PROBE" = skipped ]; then
       status=0
@@ -300,6 +366,11 @@ setup_home_hooks() {
 seed_home_tool() {
   local tool=$1 version=$2 registry_latest=${3:-}
   if ! install_home_tool "$tool" "$tool@$version" "$version"; then
+    if [ "$SEED_GRANTED" -eq 0 ]; then
+      printf 'AXI_SUITE_STUCK: %s vessel-prefix seeding at %s was not attempted: the %ss seeding budget is spent; the external copy stays the fallback and the next check retries\n' \
+        "$tool" "$AXI_PREFIX" "$SEED_TIMEOUT" >> "$tmp_stuck"
+      return 1
+    fi
     if [ -n "$registry_latest" ]; then
       printf 'AXI_SUITE_REVIEW: %s %s is ahead of registry latest %s and is not installable into %s; the external copy stays the fallback until it is published or %s is accepted (install: %s)\n' \
         "$tool" "$version" "$registry_latest" "$AXI_PREFIX" "$registry_latest" \

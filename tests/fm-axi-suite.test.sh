@@ -397,6 +397,67 @@ test_hung_vessel_copy_is_bounded_and_kept() {
   pass "a hung vessel copy is bounded, reported, and not removed"
 }
 
+test_first_cutover_seeds_whole_suite_without_alarming() {
+  local w out t tools
+  w="$TMP_ROOT/first-cutover"
+  tools="one-axi two-axi three-axi four-axi five-axi six-axi"
+  mkdir -p "$w/bin" "$w/home" "$w/state"
+  make_npm "$w/bin" "$w/versions" "$w/install.log"
+  : > "$w/versions"
+  for t in $tools; do
+    make_tool "$w/bin" "$t" 1.0.0
+    printf '%s=1.0.0\n' "$t" >> "$w/versions"
+  done
+  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/state" \
+    FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="$tools" FM_AXI_SUITE_CHECK_INTERVAL=0 \
+    FM_AXI_SUITE_NETWORK_TIMEOUT=3 FM_AXI_SUITE_SEED_TIMEOUT=60 \
+    FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
+    FM_TEST_INSTALL_SLEEP=1 \
+    "$ROOT/bin/fm-axi-suite.sh" --force 2>"$w/progress.log")
+  for t in $tools; do
+    assert_contains "$out" "AXI_SUITE_UPDATED: $t 1.0.0 installed in vessel prefix" \
+      "$t was not seeded during the first cutover"
+    assert_grep "--prefix $w/home/.local/axi $t@1.0.0" "$w/install.log" \
+      "$t never reached the vessel prefix"
+  done
+  assert_absent "$w/state/axi-suite-update.stuck" \
+    "a healthy six-tool first cutover raised a stuck alarm"
+  assert_grep 'seeding this vessel AXI prefix' "$w/progress.log" \
+    "the first cutover never announced that seeding was in progress"
+  assert_grep 'seeding budget left' "$w/progress.log" \
+    "the seeding progress output did not report the remaining budget"
+  pass "a healthy six-tool first cutover seeds every tool without alarming"
+}
+
+test_stalled_first_cutover_alarms_and_stays_bounded() {
+  local w out start end elapsed
+  w="$TMP_ROOT/stalled-cutover"
+  mkdir -p "$w/bin" "$w/home" "$w/state"
+  make_npm "$w/bin" "$w/versions" "$w/install.log"
+  make_tool "$w/bin" stall-one-axi 1.0.0
+  make_tool "$w/bin" stall-two-axi 1.0.0
+  printf '%s\n' 'stall-one-axi=1.0.0' 'stall-two-axi=1.0.0' > "$w/versions"
+  start=$(date +%s)
+  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/state" \
+    FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="stall-one-axi stall-two-axi" \
+    FM_AXI_SUITE_CHECK_INTERVAL=0 FM_AXI_SUITE_SEED_TIMEOUT=1 \
+    FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
+    FM_TEST_INSTALL_SLEEP=30 \
+    "$ROOT/bin/fm-axi-suite.sh" --force 2>/dev/null)
+  end=$(date +%s)
+  elapsed=$((end - start))
+  [ "$elapsed" -lt 20 ] || fail "a stalled first cutover ran for ${elapsed}s instead of staying inside its seeding budget"
+  assert_contains "$out" 'AXI_SUITE_STUCK: stall-one-axi vessel-prefix installation' \
+    "a stalled seeding install was not reported"
+  assert_contains "$out" 'AXI_SUITE_STUCK: stall-two-axi vessel-prefix seeding at' \
+    "the tool left unseeded by the spent budget was not reported"
+  assert_contains "$out" 'seeding budget is spent' \
+    "the unattempted seed did not name the spent seeding budget"
+  assert_present "$w/state/axi-suite-prefix-v1.cutover" \
+    "a stalled first cutover blocked the cadence marker"
+  pass "a stalled first cutover alarms clearly and stays inside its seeding budget"
+}
+
 test_registry_and_install_time_do_not_spend_the_probe_budget() {
   local w out t
   w="$TMP_ROOT/probe-budget"
@@ -453,6 +514,8 @@ test_failed_seed_still_honours_the_cadence
 test_unreadable_vessel_copy_is_replaced
 test_hung_vessel_copy_is_bounded_and_kept
 test_registry_and_install_time_do_not_spend_the_probe_budget
+test_first_cutover_seeds_whole_suite_without_alarming
+test_stalled_first_cutover_alarms_and_stays_bounded
 test_unpublished_ahead_version_is_not_a_recurring_alarm
 test_failed_update_persists_stuck_signal
 test_check_only_never_runs_hook_setup
