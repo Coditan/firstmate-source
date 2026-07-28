@@ -17,7 +17,9 @@ fm_axi_prefix() {
 }
 
 fm_axi_bin_dir() {
-  printf '%s/bin\n' "$(fm_axi_prefix "${1:-${FM_HOME:-}}")"
+  local prefix
+  prefix=$(fm_axi_prefix "${1:-${FM_HOME:-}}") || return 1
+  printf '%s/bin\n' "$prefix"
 }
 
 fm_axi_prepend_path() {

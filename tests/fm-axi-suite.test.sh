@@ -301,7 +301,7 @@ test_currency_clock_survives_prefix_cutover() {
   assert_contains "$first" 'AXI_SUITE_UPDATED: clock-axi 1.2.3 -> 1.2.4' \
     "the first currency check did not update the vessel copy"
   assert_present "$w/home/state/axi-suite-update.checked" "the per-home currency stamp was not written"
-  assert_present "$w/home/state/axi-suite-prefix-v1.ready" "the vessel-prefix readiness marker was not written"
+  assert_present "$w/home/state/axi-suite-prefix-v1.cutover" "the vessel-prefix cutover marker was not written"
   installs_after_first=$(wc -l < "$w/install.log" | tr -d ' ')
   printf '%s\n' 'clock-axi=1.2.5' > "$w/versions"
   second=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" \
@@ -320,11 +320,82 @@ test_currency_clock_survives_prefix_cutover() {
   pass "the per-home currency clock still gates and resumes vessel-prefix updates"
 }
 
+test_failed_seed_still_honours_the_cadence() {
+  local w first second installs_after_first installs_after_second
+  w="$TMP_ROOT/failed-seed-cadence"
+  mkdir -p "$w/bin" "$w/home/state"
+  make_npm "$w/bin" "$w/versions" "$w/install.log"
+  make_tool "$w/bin" offline-axi 1.0.0
+  printf '%s\n' 'offline-axi=1.0.0' > "$w/versions"
+  sed -i 's/if \[ "${1:-}" = install \]; then/if [ "${1:-}" = install ]; then printf "%s\\n" "$*" >> "$FM_TEST_INSTALL_LOG"; exit 1; fi\nif false; then/' "$w/bin/npm"
+  first=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" \
+    FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS=offline-axi FM_AXI_SUITE_CHECK_INTERVAL=86400 \
+    FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
+    "$ROOT/bin/fm-axi-suite.sh")
+  assert_contains "$first" 'AXI_SUITE_STUCK: offline-axi vessel-prefix installation' \
+    "the failed seed was not surfaced"
+  assert_present "$w/home/state/axi-suite-prefix-v1.cutover" \
+    "a failed seed did not record the cutover attempt"
+  installs_after_first=$(wc -l < "$w/install.log" | tr -d ' ')
+  second=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" \
+    FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS=offline-axi FM_AXI_SUITE_CHECK_INTERVAL=86400 \
+    FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
+    "$ROOT/bin/fm-axi-suite.sh")
+  installs_after_second=$(wc -l < "$w/install.log" | tr -d ' ')
+  [ "$installs_after_second" = "$installs_after_first" ] || fail "a failed seed repeated the whole sweep in the same cadence window"
+  assert_contains "$second" 'AXI_SUITE_STUCK: offline-axi vessel-prefix installation' \
+    "the cached run dropped the persisted stuck signal"
+  pass "a failed vessel seed keeps the cadence and retries on the next window"
+}
+
+test_unreadable_vessel_copy_is_replaced() {
+  local w out
+  w="$TMP_ROOT/broken-copy"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/home/state"
+  make_npm "$w/bin" "$w/versions" "$w/install.log"
+  make_tool "$w/bin" repair-axi 1.2.3
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$w/home/.local/axi/bin/repair-axi"
+  chmod +x "$w/home/.local/axi/bin/repair-axi"
+  printf '%s\n' 'repair-axi=1.2.3' > "$w/versions"
+  out=$(run_case "$w" "repair-axi")
+  assert_contains "$out" 'AXI_SUITE_UPDATED: repair-axi unreadable vessel copy removed' \
+    "the unreadable vessel copy was not removed"
+  assert_grep "--prefix $w/home/.local/axi repair-axi@1.2.3" "$w/install.log" \
+    "the removed vessel copy was not reseeded from the intact external copy"
+  [ "$("$w/home/.local/axi/bin/repair-axi" --version)" = 'repair-axi 1.2.3' ] \
+    || fail "the repaired vessel copy still cannot report its version"
+  assert_absent "$w/state/axi-suite-update.stuck" \
+    "the broken vessel copy left a permanent stuck signal"
+  pass "an unreadable vessel copy is removed instead of shadowing the intact external copy"
+}
+
+test_unpublished_ahead_version_is_not_a_recurring_alarm() {
+  local w out
+  w="$TMP_ROOT/ahead-unpublished"
+  mkdir -p "$w/bin" "$w/home/state"
+  make_npm "$w/bin" "$w/versions" "$w/install.log"
+  make_tool "$w/bin" dev-axi 3.1.0
+  printf '%s\n' 'dev-axi=3.0.0' > "$w/versions"
+  sed -i 's/if \[ "${1:-}" = install \]; then/if [ "${1:-}" = install ]; then printf "%s\\n" "$*" >> "$FM_TEST_INSTALL_LOG"; exit 1; fi\nif false; then/' "$w/bin/npm"
+  out=$(run_case "$w" "dev-axi")
+  assert_contains "$out" 'AXI_SUITE_REVIEW: dev-axi 3.1.0 is ahead of registry latest 3.0.0' \
+    "an unpublishable locally-ahead build was not reported for review"
+  assert_absent "$w/state/axi-suite-update.stuck" \
+    "an unpublishable locally-ahead build raised a permanent stuck alarm"
+  assert_no_grep 'dev-axi@3.0.0' "$w/install.log" "the locally-ahead build was downgraded to the registry latest"
+  assert_present "$w/state/axi-suite-prefix-v1.cutover" \
+    "an unpublishable locally-ahead build blocked the cadence marker"
+  pass "an unpublishable locally-ahead build reports for review instead of alarming forever"
+}
+
 test_patch_and_minor_auto_update
 test_major_and_missing_wait_for_review
 test_two_homes_update_distinct_prefixes_concurrently
 test_vessel_prefix_wins_over_inherited_path
 test_currency_clock_survives_prefix_cutover
+test_failed_seed_still_honours_the_cadence
+test_unreadable_vessel_copy_is_replaced
+test_unpublished_ahead_version_is_not_a_recurring_alarm
 test_failed_update_persists_stuck_signal
 test_check_only_never_runs_hook_setup
 test_hook_retry_self_clears_stuck_signal

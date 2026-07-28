@@ -516,8 +516,12 @@ install_cmd() {
     treehouse) echo "curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh" ;;
     no-mistakes) echo "curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh" ;;
     gh-axi|chrome-devtools-axi|lavish-axi)
-      tool_bin=$(fm_axi_bin_dir "$FM_HOME")/$1
-      printf 'npm install -g --prefix %q %q && %q setup hooks\n' "$prefix" "$1" "$tool_bin"
+      # The tool is named, not absolute, so its hook installer records a
+      # PATH-portable command in the shared user-global harness config instead
+      # of this home's private path (docs/configuration.md "AXI-suite
+      # self-update").
+      tool_bin=$(fm_axi_bin_dir "$FM_HOME")
+      printf 'npm install -g --prefix %q %q && PATH=%q:%s %q setup hooks\n' "$prefix" "$1" "$tool_bin" "\$PATH" "$1"
       ;;
     tasks-axi|quota-axi) printf 'npm install -g --prefix %q %q\n' "$prefix" "$1" ;;
     *) return 1 ;;

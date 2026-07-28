@@ -16,9 +16,18 @@
 # removed. Major releases and missing suite commands are reported for review
 # and never installed. A failed registry lookup or update is recorded in
 # state/axi-suite-update.stuck and reported on every later invocation until a
-# successful check clears it. state/axi-suite-prefix-v1.ready records that every
-# installed suite command has a vessel copy, so a pre-cutover cadence stamp can
-# never postpone the first isolated install.
+# successful check clears it. state/axi-suite-prefix-v1.cutover records that this
+# home has already attempted the isolated seeding once, so a pre-cutover cadence
+# stamp cannot postpone the cutover while a failed attempt still costs at most
+# one sweep per cadence window instead of one per session.
+#
+# A vessel copy whose version cannot be read would otherwise shadow an intact
+# external copy forever, so it is removed and reseeded instead of trusted.
+#
+# Hook setup for the hook-owning tools stays a shared user-global write that no
+# prefix can isolate; it is invoked by name through the vessel bin directory so
+# every home writes the same PATH-portable command (docs/configuration.md
+# "AXI-suite self-update" owns that boundary).
 #
 # FM_AXI_SUITE_CHECK_INTERVAL overrides the cadence in seconds. Set it to 0 to
 # check every time. FM_AXI_SUITE_DISABLE=1 disables the mechanism (tests and
@@ -114,16 +123,16 @@ is_hook_tool() {
 }
 
 install_hint() {
-  local tool=$1 spec=$2 hint quoted_prefix quoted_tool
+  local tool=$1 spec=$2 hint quoted_prefix quoted_bin
   printf -v quoted_prefix '%q' "$AXI_PREFIX"
-  printf -v quoted_tool '%q' "$AXI_BIN/$tool"
+  printf -v quoted_bin '%q' "$AXI_BIN"
   hint="npm install -g --prefix $quoted_prefix $spec"
-  is_hook_tool "$tool" && hint="$hint && $quoted_tool setup hooks"
+  is_hook_tool "$tool" && hint="$hint && PATH=$quoted_bin:\$PATH $tool setup hooks"
   printf '%s' "$hint"
 }
 
 STAMP="$STATE/axi-suite-update.checked"
-PREFIX_READY="$STATE/axi-suite-prefix-v1.ready"
+PREFIX_CUTOVER="$STATE/axi-suite-prefix-v1.cutover"
 DIAGNOSTICS="$STATE/axi-suite-update.diagnostics"
 STUCK="$STATE/axi-suite-update.stuck"
 
@@ -133,7 +142,7 @@ emit_cached() {
 }
 
 now=$(date +%s 2>/dev/null || echo 0)
-if [ "$FORCE" -ne 1 ] && [ -f "$STAMP" ] && [ -f "$PREFIX_READY" ]; then
+if [ "$FORCE" -ne 1 ] && [ -f "$STAMP" ] && [ -f "$PREFIX_CUTOVER" ]; then
   checked=$(cat "$STAMP" 2>/dev/null || echo 0)
   case "$checked" in ''|*[!0-9]*) checked=0 ;; esac
   if [ "$now" -ge "$checked" ] && [ $((now - checked)) -lt "$INTERVAL" ]; then
@@ -174,23 +183,51 @@ home_tool_path() {
   printf '%s/%s\n' "$AXI_BIN" "$1"
 }
 
+home_tool_is_readable() {
+  [ -n "$(version_of "$(home_tool_path "$1")")" ]
+}
+
+# The vessel bin directory resolves before every inherited PATH entry, so a
+# vessel copy that cannot report its version shadows an intact external copy for
+# every consumer. Dropping it restores that fallback and lets the normal seeding
+# path reinstall from a version that can actually be read.
+discard_broken_home_tool() {
+  local tool=$1 path
+  path=$(home_tool_path "$tool")
+  [ -e "$path" ] || return 0
+  home_tool_is_readable "$tool" && return 0
+  rm -f "$path" 2>/dev/null
+  hash -r 2>/dev/null || true
+  [ ! -e "$path" ]
+}
+
 install_home_tool() {
-  local tool=$1 spec=$2 expected installed
+  local tool=$1 spec=$2 expected installed status=0
   expected=$3
   if ! net_call npm install -g --prefix "$AXI_PREFIX" "$spec" >/dev/null 2>&1; then
-    return 1
+    status=1
+  else
+    installed=$(version_of "$(home_tool_path "$tool")")
+    [ "$installed" = "$expected" ] || status=1
   fi
-  installed=$(version_of "$(home_tool_path "$tool")")
-  [ "$installed" = "$expected" ]
+  [ "$status" -eq 0 ] || discard_broken_home_tool "$tool" >/dev/null 2>&1 || true
+  return "$status"
 }
 
 setup_home_hooks() {
-  net_call "$(home_tool_path "$1")" setup hooks >/dev/null 2>&1
+  local tool=$1
+  net_call env PATH="$AXI_BIN:$PATH" "$tool" setup hooks >/dev/null 2>&1
 }
 
 seed_home_tool() {
-  local tool=$1 version=$2
+  local tool=$1 version=$2 registry_latest=${3:-}
   if ! install_home_tool "$tool" "$tool@$version" "$version"; then
+    if [ -n "$registry_latest" ]; then
+      printf 'AXI_SUITE_REVIEW: %s %s is ahead of registry latest %s and is not installable into %s; the external copy stays the fallback until it is published or %s is accepted (install: %s)\n' \
+        "$tool" "$version" "$registry_latest" "$AXI_PREFIX" "$registry_latest" \
+        "$(install_hint "$tool" "$tool@$registry_latest")" >> "$tmp_diag"
+      return 1
+    fi
     printf 'AXI_SUITE_STUCK: %s vessel-prefix installation at %s failed\n' \
       "$tool" "$AXI_PREFIX" >> "$tmp_stuck"
     return 1
@@ -204,7 +241,36 @@ seed_home_tool() {
     "$tool" "$version" >> "$tmp_diag"
 }
 
+# Returns 0 when the vessel already owns a copy, 1 when this call reported or
+# performed the seeding for an absent one.
+ensure_home_copy() {
+  local tool=$1 version=$2 registry_latest=${3:-}
+  [ ! -x "$(home_tool_path "$tool")" ] || return 0
+  if [ "$CHECK_ONLY" -eq 1 ]; then
+    printf 'AXI_SUITE_UPDATE: %s %s needs vessel-prefix installation\n' \
+      "$tool" "$version" >> "$tmp_diag"
+  else
+    seed_home_tool "$tool" "$version" "$registry_latest" || true
+  fi
+  return 1
+}
+
 for tool in $SUITE; do
+  if [ -x "$(home_tool_path "$tool")" ] && ! home_tool_is_readable "$tool"; then
+    if [ "$CHECK_ONLY" -eq 1 ]; then
+      printf 'AXI_SUITE_STUCK: %s vessel copy at %s is unreadable (removal pending)\n' \
+        "$tool" "$AXI_PREFIX" >> "$tmp_stuck"
+      continue
+    fi
+    if discard_broken_home_tool "$tool"; then
+      printf 'AXI_SUITE_UPDATED: %s unreadable vessel copy removed from %s\n' \
+        "$tool" "$AXI_PREFIX" >> "$tmp_diag"
+    else
+      printf 'AXI_SUITE_STUCK: %s unreadable vessel copy at %s could not be removed\n' \
+        "$tool" "$AXI_PREFIX" >> "$tmp_stuck"
+      continue
+    fi
+  fi
   if ! command -v "$tool" >/dev/null 2>&1; then
     printf 'AXI_SUITE_REVIEW: %s is not installed (install: %s)\n' "$tool" "$(install_hint "$tool" "$tool")" >> "$tmp_diag"
     continue
@@ -223,54 +289,26 @@ for tool in $SUITE; do
     printf 'AXI_SUITE_STUCK: %s registry returned an invalid version\n' "$tool" >> "$tmp_stuck"
     continue
   fi
-  home_tool=$(home_tool_path "$tool")
-  home_installed=0
-  [ -x "$home_tool" ] && home_installed=1
   if [ "$installed" = "$latest" ]; then
-    if [ "$home_installed" -eq 0 ]; then
-      if [ "$CHECK_ONLY" -eq 1 ]; then
-        printf 'AXI_SUITE_UPDATE: %s %s needs vessel-prefix installation\n' \
-          "$tool" "$installed" >> "$tmp_diag"
-        if is_hook_tool "$tool" && grep -q "^AXI_SUITE_STUCK: $tool " "$STUCK" 2>/dev/null; then
-          printf 'AXI_SUITE_STUCK: %s hook setup retry pending (already at %s)\n' \
-            "$tool" "$latest" >> "$tmp_stuck"
-        fi
-      else
-        seed_home_tool "$tool" "$installed" || true
-      fi
-      continue
-    fi
+    home_present=0
+    ensure_home_copy "$tool" "$installed" && home_present=1
     if is_hook_tool "$tool" && grep -q "^AXI_SUITE_STUCK: $tool " "$STUCK" 2>/dev/null; then
       if [ "$CHECK_ONLY" -eq 1 ]; then
         printf 'AXI_SUITE_STUCK: %s hook setup retry pending (already at %s)\n' "$tool" "$latest" >> "$tmp_stuck"
-      elif ! setup_home_hooks "$tool"; then
+      elif [ "$home_present" -eq 1 ] && ! setup_home_hooks "$tool"; then
         printf 'AXI_SUITE_STUCK: %s hook setup failed (already at %s)\n' "$tool" "$latest" >> "$tmp_stuck"
       fi
     fi
     continue
   fi
   if version_gt "$installed" "$latest"; then
-    if [ "$home_installed" -eq 0 ]; then
-      if [ "$CHECK_ONLY" -eq 1 ]; then
-        printf 'AXI_SUITE_UPDATE: %s %s needs vessel-prefix installation\n' \
-          "$tool" "$installed" >> "$tmp_diag"
-      else
-        seed_home_tool "$tool" "$installed" || true
-      fi
-    fi
+    ensure_home_copy "$tool" "$installed" "$latest" || true
     continue
   fi
   if [ "$(major_of "$installed")" != "$(major_of "$latest")" ]; then
     printf 'AXI_SUITE_REVIEW: %s major update %s -> %s (install: %s)\n' \
       "$tool" "$installed" "$latest" "$(install_hint "$tool" "$tool@$latest")" >> "$tmp_diag"
-    if [ "$home_installed" -eq 0 ]; then
-      if [ "$CHECK_ONLY" -eq 1 ]; then
-        printf 'AXI_SUITE_UPDATE: %s %s needs vessel-prefix installation\n' \
-          "$tool" "$installed" >> "$tmp_diag"
-      else
-        seed_home_tool "$tool" "$installed" || true
-      fi
-    fi
+    ensure_home_copy "$tool" "$installed" || true
     continue
   fi
   [ "$CHECK_ONLY" -eq 0 ] || {
@@ -298,18 +336,10 @@ if [ "$CHECK_ONLY" -eq 0 ]; then
   fi
   if [ -s "$tmp_stuck" ]; then cp "$tmp_stuck" "$STUCK"; else rm -f "$STUCK"; fi
   printf '%s\n' "$now" > "$STAMP"
-  prefix_ready=1
-  for tool in $SUITE; do
-    if command -v "$tool" >/dev/null 2>&1 && [ ! -x "$(home_tool_path "$tool")" ]; then
-      prefix_ready=0
-      break
-    fi
-  done
-  if [ "$prefix_ready" -eq 1 ]; then
-    : > "$PREFIX_READY"
-  else
-    rm -f "$PREFIX_READY"
-  fi
+  # Records the attempt, not its outcome: a home that could not seed every tool
+  # retries on the next cadence window instead of paying a full sweep, and a
+  # recurring alarm, on every single session.
+  : > "$PREFIX_CUTOVER"
 fi
 cat "$tmp_diag" 2>/dev/null
 cat "$tmp_stuck" 2>/dev/null
