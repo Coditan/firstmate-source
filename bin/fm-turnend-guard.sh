@@ -83,7 +83,11 @@ fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 
 fm_supervision_status "$STATE" "$GRACE"
-[ "$FM_SUP_IN_FLIGHT" -gt 0 ] || exit 0
+# A queued durable wake is protected work in its own right: state/*.meta records
+# can be cleaned up while terminal wakes still sit unread in state/.wake-queue.
+if [ "$FM_SUP_IN_FLIGHT" -eq 0 ] && [ "$FM_SUP_QUEUE_PENDING" != true ]; then
+  exit 0
+fi
 daemon_healthy=0
 delivery_armed=0
 afk=0
@@ -103,12 +107,17 @@ DELIVERY_REASON=$("$SCRIPT_DIR/fm-supervision-instructions.sh" --afk "$afk" --x-
   || printf '%s\n' 're-arm wake delivery according to the session-start operating block before ending the turn')
 DAEMON_REASON=$("$SCRIPT_DIR/fm-watcher-service.sh" repair-command 2>/dev/null \
   || printf '%s\n' 'bin/fm-watcher-service.sh restart')
+if [ "$FM_SUP_IN_FLIGHT" -gt 0 ]; then
+  protected_desc="$FM_SUP_IN_FLIGHT task(s) in flight"
+else
+  protected_desc='queued wake(s) pending in the durable queue'
+fi
 rule='━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
 {
   printf '●%s\n' "$rule"
   printf '●  TURN WOULD END BLIND - SUPERVISION IS INCOMPLETE\n'
   if [ "$daemon_healthy" -eq 0 ]; then
-    printf '●  Watcher daemon down: %s task(s) in flight and no healthy daemon holds this home lock (last beat: %s).\n' "$FM_SUP_IN_FLIGHT" "$FM_SUP_BEACON_DESC"
+    printf '●  Watcher daemon down: %s and no healthy daemon holds this home lock (last beat: %s).\n' "$protected_desc" "$FM_SUP_BEACON_DESC"
     printf '●  Daemon repair: %s; treat this as a supervision incident and verify the beacon+lock predicate.\n' "$DAEMON_REASON"
   fi
   if [ "$delivery_armed" -eq 0 ]; then

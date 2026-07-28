@@ -75,6 +75,65 @@ test_afk_start_reclaims_stale_daemon_lock_reused_pid() {
   pass "fm-afk-start.sh reclaims stale daemon locks whose live pid identity no longer matches"
 }
 
+# Run bin/fm-wake-lib.sh's away-pusher predicate in a child shell: the library
+# resolves its own state root at source time, and this file only sources the
+# daemon's classifiers.
+pusher_healthy_status() {
+  local state=$1
+  FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pusher_healthy "$2"' _ "$ROOT/bin/fm-wake-lib.sh" "$state"
+}
+
+pid_identity_of() {
+  local state=$1 pid=$2
+  FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$ROOT/bin/fm-wake-lib.sh" "$pid"
+}
+
+# The turn-end guard's away half (bin/fm-turnend-guard.sh -> fm_pusher_healthy)
+# reads the pidfile and lock identity the daemon publishes itself. Pin the
+# predicate to that REAL publication, so a drift in either daemon-side write
+# fails here instead of silently reading a healthy away daemon as dead.
+test_pusher_healthy_accepts_real_daemon_publication() {
+  local dir state fakebin pid i live_rc dead_rc published_pid lock_pid lock_identity live_identity
+  dir=$(make_supercase pusher-healthy-real-daemon)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_SUPERVISOR_BACKEND=tmux \
+    FM_SUPERVISOR_TARGET=fakepane FM_FAKE_TMUX_PANE_ALIVE=1 \
+    "$DAEMON" > "$dir/daemon.out" 2> "$dir/daemon.err" &
+  pid=$!
+  i=0
+  while [ "$i" -lt 100 ]; do
+    if [ -s "$state/.supervise-daemon.pid" ] && [ -s "$state/.supervise-daemon.lock/pid-identity" ]; then
+      break
+    fi
+    is_live_non_zombie "$pid" || break
+    sleep 0.1
+    i=$((i + 1))
+  done
+
+  published_pid=$(cat "$state/.supervise-daemon.pid" 2>/dev/null || true)
+  lock_pid=$(cat "$state/.supervise-daemon.lock/pid" 2>/dev/null || true)
+  lock_identity=$(cat "$state/.supervise-daemon.lock/pid-identity" 2>/dev/null || true)
+  live_identity=$(pid_identity_of "$state" "$pid" || true)
+  live_rc=0
+  pusher_healthy_status "$state" || live_rc=$?
+
+  kill -TERM "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  dead_rc=0
+  pusher_healthy_status "$state" || dead_rc=$?
+
+  [ "$published_pid" = "$pid" ] \
+    || fail "daemon pidfile does not name the running daemon (pidfile '$published_pid', daemon $pid): $(cat "$dir/daemon.err" 2>/dev/null)"
+  [ "$lock_pid" = "$pid" ] || fail "daemon lock pid does not name the running daemon: '$lock_pid'"
+  [ -n "$lock_identity" ] || fail "daemon published an empty lock pid-identity, which reads as a dead pusher"
+  [ "$lock_identity" = "$live_identity" ] || fail "published lock identity does not match the live daemon identity"
+  [ "$live_rc" -eq 0 ] || fail "fm_pusher_healthy rejected the real away daemon's own published pidfile and lock"
+  [ "$dead_rc" -ne 0 ] || fail "fm_pusher_healthy still reported a healthy pusher after the daemon exited"
+  pass "fm_pusher_healthy accepts the real away daemon's published pidfile and lock identity, and rejects it after shutdown"
+}
+
 test_daemon_state_root_uses_fm_home() {
   local dir home override out
   dir=$(make_supercase daemon-fm-home)
@@ -1717,6 +1776,7 @@ test_inject_msg_defers_on_dead_shell_unknown() {
 test_afk_start_refuses_when_flag_cannot_be_written
 test_afk_start_ignores_stale_pidfile_without_lock
 test_afk_start_reclaims_stale_daemon_lock_reused_pid
+test_pusher_healthy_accepts_real_daemon_publication
 test_daemon_state_root_uses_fm_home
 test_classify_routine_signal_self
 test_classify_terminal_signal_escalates

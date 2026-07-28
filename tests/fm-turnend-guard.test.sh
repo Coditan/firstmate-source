@@ -22,6 +22,7 @@ fm_git_identity fmtest fmtest@example.invalid
 
 REQUIRED_REASON='re-arm wake delivery with bin/fm-watch-arm.sh as its own Claude Code background task'
 SILENT_REASON='This forced continuation is internal maintenance'
+AWAY_REPAIR_REASON='restart it with bin/fm-afk-launch.sh start'
 
 # --- PREDICATE: bin/fm-supervision-lib.sh -----------------------------------
 
@@ -376,8 +377,33 @@ test_hook_afk_blocks_with_dead_pusher_and_queued_wakes() {
   expect_code 2 "$status" "away hook must block when the pusher is dead with queued wakes"
   assert_contains "$out" "Away wake delivery missing" "away hook did not identify the dead pusher"
   assert_not_contains "$out" "Watcher daemon down" "away hook falsely reported the healthy watcher down"
+  assert_contains "$out" "$AWAY_REPAIR_REASON" "away repair line did not name the concrete away-daemon restart"
+  assert_not_contains "$out" "load /afk" "away repair line still described the old delivery-ownership contract"
   [ "$queue_lines" -eq 3 ] || fail "away hook changed the queued wakes while checking pusher health"
   pass "fm-turnend-guard: dead away pusher with queued wakes blocks the turn"
+}
+
+# Terminal wakes can outlive their state/*.meta records (the drain/cleanup path
+# removes the meta while the queue record is still unread), so the queue alone
+# must keep the guard active.
+test_hook_afk_blocks_with_queued_wakes_and_no_meta() {
+  local dir dead out status queue_lines
+  dir=$(make_primary_dir "$TMP_ROOT/hook-afk-queued-no-meta")
+  : > "$dir/state/.afk"
+  printf '1\t1\tsignal\ttask1.status\tdone: one\n1\t2\tcheck\ttask2\tcheck: two\n' > "$dir/state/.wake-queue"
+  dead=$(nonexistent_pid)
+  record_pusher_lock "$dir" "$dead" "dead pusher identity"
+  out=$(run_hook "$dir" false); status=$?
+  queue_lines=$(wc -l < "$dir/state/.wake-queue")
+  [ -z "$(find "$dir/state" -maxdepth 1 -name '*.meta' -print -quit)" ] \
+    || fail "fixture must carry zero state/*.meta records"
+  expect_code 2 "$status" "away hook must block on queued wakes with a dead pusher and zero meta records"
+  assert_contains "$out" "Away wake delivery missing" "queued-wake block did not identify the dead pusher"
+  assert_contains "$out" "$AWAY_REPAIR_REASON" "queued-wake block did not name the concrete away-daemon restart"
+  assert_contains "$out" "Watcher daemon down: queued wake(s) pending" "banner did not name the queued wakes as the protected work"
+  assert_not_contains "$out" "0 task(s) in flight" "banner claimed an in-flight count it does not have"
+  [ "$queue_lines" -eq 2 ] || fail "away hook changed the queued wakes while checking pusher health"
+  pass "fm-turnend-guard: queued wakes with no state/*.meta keep the guard active for a dead away pusher"
 }
 
 test_hook_afk_silent_with_healthy_pusher() {
@@ -1123,6 +1149,7 @@ test_hook_blocks_when_dead_lock_has_fresh_beacon
 test_hook_silent_with_live_lock_and_fresh_beacon
 test_hook_blocks_with_live_daemon_but_no_stub
 test_hook_afk_blocks_with_dead_pusher_and_queued_wakes
+test_hook_afk_blocks_with_queued_wakes_and_no_meta
 test_hook_afk_silent_with_healthy_pusher
 test_hook_blocks_with_live_lock_and_stale_beacon
 test_hook_blocks_when_unhealthy_in_primary

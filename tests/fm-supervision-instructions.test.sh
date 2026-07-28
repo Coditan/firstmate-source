@@ -60,6 +60,12 @@ test_repair_lines() {
   assert_not_contains "$out" "source '$home/config/x-mode.env' first" "x-mode delivery repair still sourced daemon-owned cadence"
   assert_contains "$out" "bin/fm-watch-checkpoint.sh --seconds 7" "x-mode codex repair line lost the checkpoint helper"
 
+  out=$(FM_HOME="$home" "$RENDER" --harness claude --afk 1 --repair-line)
+  assert_contains "$out" "bin/fm-afk-launch.sh start" "away repair line does not name the concrete away-daemon restart"
+  assert_contains "$out" "no live identity-matched away daemon" "away repair line does not describe the dead-daemon situation"
+  assert_not_contains "$out" "load /afk" "away repair line still described the old delivery-ownership contract"
+  assert_not_contains "$out" "bin/fm-watch-arm.sh" "away repair line leaked the session-stub re-arm command"
+
   out=$(FM_HOME="$home" "$RENDER" --harness opencode --read-only 1 --repair-line)
   assert_contains "$out" "session holding the fleet lock" "read-only repair line missing"
 

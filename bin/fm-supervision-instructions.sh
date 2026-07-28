@@ -110,7 +110,7 @@ repair_line() {
     return 0
   fi
   if [ "$AFK" -eq 1 ]; then
-    printf '%s\n' 'Away mode owns wake delivery; load /afk and ensure the daemon is reading the durable queue instead of arming a session delivery wait.'
+    printf '%s\n' 'Away mode owns wake delivery and no live identity-matched away daemon is reading the durable queue: restart it with bin/fm-afk-launch.sh start, then confirm state/.supervise-daemon.pid names a live pid matching the daemon lock identity; do not arm a session delivery wait instead.'
     return 0
   fi
 
