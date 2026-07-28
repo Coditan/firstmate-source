@@ -45,7 +45,8 @@ The away flag alone does not satisfy the delivery half.
 Those are exactly the three files `bin/fm-supervise-daemon.sh` publishes at startup, and `tests/fm-daemon.test.sh` pins the predicate against that real publication rather than a fixture.
 Watcher health remains independently mandatory.
 The away delivery repair line names the concrete daemon relaunch the `/afk` skill prescribes for the resolved harness, and never tells an away session to arm a session delivery wait.
-A harness with a native tracked-background tool (`claude`, `grok`) is sent down the no-separate-terminal path: `bin/fm-afk-launch.sh start-native`, then `FM_AFK_STATE_PREPARED=1 bin/fm-afk-start.sh` through that tool, with `bin/fm-afk-launch.sh stop` as the rollback.
+A harness with a native tracked-background tool (`claude`, `grok`) is sent down the no-separate-terminal path: `bin/fm-afk-launch.sh start-native`, then `FM_AFK_STATE_PREPARED=1 bin/fm-afk-start.sh` through that tool, with `bin/fm-afk-launch.sh stop` as the rollback when that native launch fails.
+Because the repair runs mid-away-session rather than at a fresh away entry, the line states in place that `stop` exits away mode by clearing `state/.afk` and must be followed immediately by a fresh away entry; that consequence is never left implicit.
 Every other harness gets the terminal-backed `bin/fm-afk-launch.sh start`.
 The away branch is deliberately never prefixed with the drain instruction, because the away daemon reads the durable queue through its own cursor and the session must not drain it.
 

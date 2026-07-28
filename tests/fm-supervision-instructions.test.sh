@@ -65,6 +65,8 @@ test_repair_lines() {
   assert_contains "$out" "bin/fm-afk-launch.sh start-native" "claude away repair line does not use the native no-terminal preparation"
   assert_contains "$out" "FM_AFK_STATE_PREPARED=1 bin/fm-afk-start.sh" "claude away repair line does not name the native daemon entry"
   assert_contains "$out" "Claude Code background task" "claude away repair line does not host the daemon in the native background tool"
+  assert_contains "$out" "bin/fm-afk-launch.sh stop, which EXITS away mode by clearing state/.afk" "away rollback does not state that it leaves away mode"
+  assert_contains "$out" "followed immediately by a fresh away entry" "away rollback does not require re-entering away mode"
   assert_not_contains "$out" "load /afk" "away repair line still described the old delivery-ownership contract"
   assert_not_contains "$out" "bin/fm-watch-arm.sh" "away repair line leaked the session-stub re-arm command"
 

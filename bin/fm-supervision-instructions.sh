@@ -110,18 +110,17 @@ render_snippet() {
 # job, and the terminal-backed launcher everywhere else. Draining stays out of
 # it: the away daemon reads the durable queue through its own cursor.
 away_repair_line() {
-  local relaunch
+  local relaunch native_tool
   case "$HARNESS" in
-    claude)
-      relaunch='prepare the lifecycle with bin/fm-afk-launch.sh start-native, then run FM_AFK_STATE_PREPARED=1 bin/fm-afk-start.sh as its own Claude Code background task (never shell &), rolling the preparation back with bin/fm-afk-launch.sh stop if that native launch fails'
-      ;;
-    grok)
-      relaunch='prepare the lifecycle with bin/fm-afk-launch.sh start-native, then run FM_AFK_STATE_PREPARED=1 bin/fm-afk-start.sh as its own Grok tracked background task (never shell &), rolling the preparation back with bin/fm-afk-launch.sh stop if that native launch fails'
-      ;;
-    *)
-      relaunch='restart its non-visible tracked terminal with bin/fm-afk-launch.sh start'
-      ;;
+    claude) native_tool='Claude Code background task' ;;
+    grok) native_tool='Grok tracked background task' ;;
+    *) native_tool='' ;;
   esac
+  if [ -n "$native_tool" ]; then
+    relaunch="prepare the lifecycle with bin/fm-afk-launch.sh start-native, then run FM_AFK_STATE_PREPARED=1 bin/fm-afk-start.sh as its own $native_tool (never shell &); if that native launch fails, roll the preparation back with bin/fm-afk-launch.sh stop, which EXITS away mode by clearing state/.afk and therefore must be followed immediately by a fresh away entry so the captain is not left unattended without it"
+  else
+    relaunch='restart its non-visible tracked terminal with bin/fm-afk-launch.sh start'
+  fi
   printf '%s%s%s\n' \
     'Away mode owns wake delivery and no live identity-matched away daemon is reading the durable queue: ' \
     "$relaunch" \

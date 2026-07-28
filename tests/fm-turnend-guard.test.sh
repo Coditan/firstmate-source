@@ -24,6 +24,7 @@ REQUIRED_REASON='re-arm wake delivery with bin/fm-watch-arm.sh as its own Claude
 SILENT_REASON='This forced continuation is internal maintenance'
 AWAY_REPAIR_REASON='bin/fm-afk-launch.sh start-native'
 AWAY_NATIVE_ENTRY='FM_AFK_STATE_PREPARED=1 bin/fm-afk-start.sh as its own Claude Code background task'
+AWAY_STOP_CAVEAT='bin/fm-afk-launch.sh stop, which EXITS away mode'
 DRAIN_FIRST_REASON='After draining queued wakes, '
 
 # --- PREDICATE: bin/fm-supervision-lib.sh -----------------------------------
@@ -381,6 +382,8 @@ test_hook_afk_blocks_with_dead_pusher_and_queued_wakes() {
   assert_not_contains "$out" "Watcher daemon down" "away hook falsely reported the healthy watcher down"
   assert_contains "$out" "$AWAY_REPAIR_REASON" "away repair line did not name the concrete away-daemon restart"
   assert_contains "$out" "$AWAY_NATIVE_ENTRY" "away repair line did not host the daemon in this harness's native background tool"
+  assert_contains "$out" "$AWAY_STOP_CAVEAT" "away repair line offered the stop rollback without saying it leaves away mode"
+  assert_contains "$out" "fresh away entry" "away repair line did not require re-entering away mode after the stop rollback"
   assert_not_contains "$out" "load /afk" "away repair line still described the old delivery-ownership contract"
   assert_not_contains "$out" "$DRAIN_FIRST_REASON" "away repair line told the session to drain the daemon-owned queue"
   [ "$queue_lines" -eq 3 ] || fail "away hook changed the queued wakes while checking pusher health"
