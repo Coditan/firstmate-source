@@ -130,6 +130,9 @@ esac
 
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+# shellcheck source=bin/fm-axi-path-lib.sh
+. "$SCRIPT_DIR/fm-axi-path-lib.sh"
+fm_axi_prepend_path "$FM_HOME"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
@@ -1326,6 +1329,9 @@ sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
 sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts")
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
 sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
+AXI_LAUNCH_HOME=$FM_HOME
+[ "$KIND" != secondmate ] || AXI_LAUNCH_HOME=$PROJ_ABS
+sq_axi_bin=$(shell_quote "$(fm_axi_bin_dir "$AXI_LAUNCH_HOME")")
 PIBRIEFENV=
 [ "$HARNESS" != pi ] || PIBRIEFENV="FM_FIRSTMATE_PI_LAUNCH_BRIEF=$sq_brief"
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
@@ -1347,6 +1353,8 @@ fi
 # process (go build, go test, ...) inherit it. Sent before the launch command so
 # the env is set when the agent starts; the brief sleep lets the export land.
 spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
+sleep 0.3
+spawn_send_text_line "$T" "export PATH=$sq_axi_bin:\$PATH"
 sleep 0.3
 spawn_send_literal "$T" "$LAUNCH"
 sleep 0.3

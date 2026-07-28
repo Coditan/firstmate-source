@@ -86,21 +86,24 @@ Then launch one of the co-primary harnesses; AGENTS.md takes over from there:
 **Claude Code**
 
 ```sh
-claude
+PATH="$PWD/.local/axi/bin:$PATH" claude
 ```
 
 **Grok**
 
 ```sh
-grok --trust
+PATH="$PWD/.local/axi/bin:$PATH" grok --trust
 ```
 
 **Pi**
 
 ```sh
-pi
+PATH="$PWD/.local/axi/bin:$PATH" pi
 ```
 
+The prefix directory may be absent on first launch; keeping it first from process start makes the vessel-owned AXI copies take precedence as soon as bootstrap installs them.
+When `FM_HOME` differs from the checkout root, prepend `$FM_HOME/.local/axi/bin` instead.
+Codex and OpenCode use the same PATH assignment before their `codex` or `opencode` launch command.
 For Grok, `--trust` is needed once per clone so project hooks and the turn-end guard load; `/hooks-trust` inside Grok works too.
 For Pi, approve the project trust prompt once per clone on first launch so the tracked `.pi/extensions/*.ts` files auto-load.
 Every Pi session starts with calm mode off; `/calm` is a session-local conversation-focused transcript toggle.

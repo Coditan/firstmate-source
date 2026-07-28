@@ -104,6 +104,7 @@ data/                personal fleet records; LOCAL, gitignored as a whole
   <panel-id>/panel.meta  model-panel record written by bin/fm-model-panel.sh: form, project, question pointer, stage, member task ids, and each role's resolved profile
   <panel-id>/question.md  the one question text every member of that panel was given, written by bin/fm-model-panel.sh; survives teardown like the reports
 projects/            cloned repos; gitignored; READ-ONLY for you
+.local/axi/           home-private npm prefix for this vessel's managed AXI CLI suite; gitignored
 graphify-out/        local Graphify knowledge graph artifacts; gitignored, expected to drift after hook or incremental updates
 state/               volatile runtime signals; gitignored
   <id>.status        appended by crewmates: "<state>: <note>" wake-event lines, not current-state truth

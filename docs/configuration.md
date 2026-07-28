@@ -12,6 +12,7 @@ This section is the single owner of the top-level operational-home layout; produ
 The tracked code root contains the shared instruction, skill, documentation, workflow, and `bin/` surfaces, while each effective `FM_HOME` contains private operational directories.
 `data/` holds durable private fleet records such as the project and secondmate registries, captain preferences, optional shared captain preferences, learnings, backlog, briefs, and scout reports.
 `state/` holds volatile runtime records such as task metadata, append-only status events, endpoint signals, watcher and wake-queue coordination, away-mode state, generated X-mode artifacts, private secondmate config-reread generations with their retry and quarantine state, and parent-owned secondmate pending-reply records under `state/pending-replies/` (`bin/fm-pending-reply-lib.sh`).
+`.local/axi/` is the home-private npm prefix for the managed AXI CLI suite.
 `config/` holds local gitignored operating choices, and `projects/` holds the local project clones that Firstmate reads but changes only through the guarded exceptions in `AGENTS.md`.
 
 A home's checkout also accumulates runtime artifacts that a supported harness or firstmate writes into the tracked tree itself: Claude Code's local permissions and settings file plus its scheduler, routine, worktree, checkpoint, mailbox, agent-registry, agent-memory, first-run, and daemon state, and firstmate's generated per-task hook overlay.
@@ -397,14 +398,21 @@ Graphify is optional: Codex's PreToolUse hook fails open when `graphify` is abse
 When `config/crew-dispatch.json` exists, bootstrap also requires `jq` for dispatch profile validation.
 When X mode is opted in, bootstrap also requires `curl` and `jq` before arming the relay poll shim.
 `tasks-axi` and `quota-axi` are required bootstrap tools in every profile, the same class as `lavish-axi`.
-An absent or incompatible `tasks-axi` reports `MISSING: tasks-axi (install: npm install -g tasks-axi)`; when `config/backlog-backend` is not `manual` and compatible `tasks-axi` is on `PATH`, bootstrap stays silent and firstmate uses its verbs for routine backlog mutations, otherwise it hand-edits `data/backlog.md` until installation is approved and completed.
-An absent `quota-axi` reports `MISSING: quota-axi (install: npm install -g quota-axi)`; `bin/fm-dispatch-select.sh` still selects uniformly from the valid candidate array with an OS-backed random source when quota data is unavailable.
+An absent or incompatible `tasks-axi` reports `MISSING: tasks-axi` with an install command targeting `$FM_HOME/.local/axi`; when `config/backlog-backend` is not `manual` and compatible `tasks-axi` is on `PATH`, bootstrap stays silent and firstmate uses its verbs for routine backlog mutations, otherwise it hand-edits `data/backlog.md` until installation is approved and completed.
+An absent `quota-axi` reports `MISSING: quota-axi` with the same home-owned prefix; `bin/fm-dispatch-select.sh` still selects uniformly from the valid candidate array with an OS-backed random source when quota data is unavailable.
 
 ### AXI-suite self-update
 
 Locked bootstrap runs `bin/fm-axi-suite.sh` at most once per `FM_AXI_SUITE_CHECK_INTERVAL` for the configured AXI commands.
-Patch and minor releases update automatically in the active npm prefix, while major releases and newly required commands emit `AXI_SUITE_REVIEW:` for captain approval.
-Successful changes emit `AXI_SUITE_UPDATED:`, and bounded registry, permission, install, or hook failures emit `AXI_SUITE_STUCK:` and persist under `state/` until a successful check clears them.
+Each vessel derives its npm prefix as `$FM_HOME/.local/axi` without configuration, so different operational homes never share the updater's write destination.
+Firstmate entrypoints put `$FM_HOME/.local/axi/bin` first on `PATH`, and `bin/fm-spawn.sh` exports the owning vessel's bin first for every crewmate while a secondmate launch receives the secondmate home's bin first.
+The recommended primary launch commands also prepend that directory before the harness starts, so a bare AXI command resolves the vessel copy whenever it exists and uses an inherited external installation only as the pre-cutover fallback.
+On the first normal currency check, an existing external AXI installation is left untouched and its installed version is re-installed into the vessel prefix, or an eligible patch/minor release is installed there directly.
+No existing installation is moved or removed.
+Patch and minor releases update automatically in the vessel prefix, while major releases and newly required commands emit `AXI_SUITE_REVIEW:` for captain approval.
+When a major release is pending and the vessel copy is absent, the updater seeds the currently installed major into the vessel prefix without accepting the major upgrade.
+Successful changes emit `AXI_SUITE_UPDATED:`, and bounded registry, permission, install, verification, or hook failures emit `AXI_SUITE_STUCK:` and persist under `state/` until a successful check clears them.
+The cadence stamp remains under that vessel's `state/`, but a stamp created before the isolated prefix is ready cannot postpone the one-time cutover; after readiness is recorded, cached invocations skip registry and install work exactly as before.
 `FM_AXI_SUITE_NETWORK_TIMEOUT` bounds the whole suite check, and `FM_AXI_SUITE_DISABLE` is reserved for tests or emergency diagnosis.
 
 ### Upstream firstmate and curated-fork checks

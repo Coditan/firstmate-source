@@ -265,6 +265,7 @@ test_bootstrap_reporting() {
     # ambient checkout (CI runs on a feature branch) must not leak a TANGLE line in.
     out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
       FM_FAKE_TREEHOUSE_LEASE_HELP="$lease" "$ROOT/bin/fm-bootstrap.sh")
+    expect=${expect//__AXI_PREFIX__/$case_dir\/home\/.local\/axi}
     case "$mode" in
       empty)
         [ -z "$out" ] || fail "$label: expected silence, got: $out" ;;
@@ -281,12 +282,12 @@ test_bootstrap_reporting() {
 treehouse --lease support is accepted silently^1^0.1.1^1^manual^empty^^
 treehouse without --lease reports an upgrade, gh auth is fine^0^0.1.1^1^-^grep^MISSING: treehouse (install: curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh)^NEEDS_GH_AUTH
 compatible tasks-axi is silent by default^1^0.1.1^1^-^empty^^
-missing tasks-axi is required by default^1^-^1^-^exact^MISSING: tasks-axi (install: npm install -g tasks-axi)^
-incompatible tasks-axi is required by default^1^0.1.0^1^-^exact^MISSING: tasks-axi (install: npm install -g tasks-axi)^
-tasks-axi without archive-body is required by default^1^0.1.2:noarchive^1^-^exact^MISSING: tasks-axi (install: npm install -g tasks-axi)^
-tasks-axi without multi-id mv is required by default^1^0.2.2:nomulti^1^-^exact^MISSING: tasks-axi (install: npm install -g tasks-axi)^
-missing quota-axi is required by default^1^0.1.1^0^manual^exact^MISSING: quota-axi (install: npm install -g quota-axi)^
-manual backlog backend still requires missing tasks-axi^1^-^1^manual^exact^MISSING: tasks-axi (install: npm install -g tasks-axi)^
+missing tasks-axi is required by default^1^-^1^-^exact^MISSING: tasks-axi (install: npm install -g --prefix __AXI_PREFIX__ tasks-axi)^
+incompatible tasks-axi is required by default^1^0.1.0^1^-^exact^MISSING: tasks-axi (install: npm install -g --prefix __AXI_PREFIX__ tasks-axi)^
+tasks-axi without archive-body is required by default^1^0.1.2:noarchive^1^-^exact^MISSING: tasks-axi (install: npm install -g --prefix __AXI_PREFIX__ tasks-axi)^
+tasks-axi without multi-id mv is required by default^1^0.2.2:nomulti^1^-^exact^MISSING: tasks-axi (install: npm install -g --prefix __AXI_PREFIX__ tasks-axi)^
+missing quota-axi is required by default^1^0.1.1^0^manual^exact^MISSING: quota-axi (install: npm install -g --prefix __AXI_PREFIX__ quota-axi)^
+manual backlog backend still requires missing tasks-axi^1^-^1^manual^exact^MISSING: tasks-axi (install: npm install -g --prefix __AXI_PREFIX__ tasks-axi)^
 manual backlog backend suppresses tasks-axi availability^1^0.1.1^1^manual^empty^^
 ROWS
   pass "bootstrap reports treehouse lease + tasks-axi/quota-axi bootstrap contracts"
@@ -826,6 +827,45 @@ ROWS
   pass "bootstrap validates crew-dispatch.json and reports malformed or unverified configs"
 }
 
+test_approved_axi_install_uses_vessel_prefix() {
+  local case_dir home fakebin out
+  case_dir="$TMP_ROOT/approved-axi-install"
+  home="$case_dir/home"
+  fakebin=$(fm_fakebin "$case_dir")
+  mkdir -p "$home"
+  cat > "$fakebin/npm" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FM_FAKE_NPM_LOG"
+prefix=
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --prefix ]; then prefix=${2:-}; break; fi
+  shift
+done
+[ -n "$prefix" ] || exit 1
+mkdir -p "$prefix/bin"
+cat > "$prefix/bin/gh-axi" <<'TOOL'
+#!/usr/bin/env bash
+if [ "${1:-}" = setup ] && [ "${2:-}" = hooks ]; then
+  printf '%s\n' setup-hooks >> "$FM_FAKE_HOOK_LOG"
+fi
+TOOL
+chmod +x "$prefix/bin/gh-axi"
+SH
+  chmod +x "$fakebin/npm"
+  : > "$case_dir/npm.log"
+  : > "$case_dir/hook.log"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" \
+    FM_FAKE_NPM_LOG="$case_dir/npm.log" FM_FAKE_HOOK_LOG="$case_dir/hook.log" \
+    "$ROOT/bin/fm-bootstrap.sh" install gh-axi)
+  assert_contains "$out" "npm install -g --prefix $home/.local/axi gh-axi" \
+    "bootstrap did not disclose the vessel-owned install prefix"
+  assert_grep "install -g --prefix $home/.local/axi gh-axi" "$case_dir/npm.log" \
+    "bootstrap npm execution did not use the vessel-owned prefix"
+  assert_grep setup-hooks "$case_dir/hook.log" \
+    "bootstrap did not run hooks through the newly installed vessel binary"
+  pass "captain-approved AXI installs and hooks use the vessel prefix"
+}
+
 test_bootstrap_reporting
 test_no_mistakes_min_version
 test_git_is_required_with_supported_install_instruction
@@ -848,3 +888,4 @@ test_bootstrap_info_is_no_load_and_actionable_lines_trigger
 test_crew_dispatch_active_rules_are_verbose_bootstrap_info
 test_crew_dispatch_validation
 test_currency_base_validation
+test_approved_axi_install_uses_vessel_prefix

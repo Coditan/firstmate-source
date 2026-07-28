@@ -32,6 +32,9 @@ case "${1:-}" in
     if [ -n "${FM_FAKE_LAUNCH_LOG:-}" ]; then
       prev=
       for a in "$@"; do
+        case "$a" in
+          'export PATH='*) printf '%s\n' "$a" >> "$FM_FAKE_LAUNCH_LOG.path" ;;
+        esac
         if [ "$prev" = "-l" ]; then
           printf '%s\n' "$a" >> "$FM_FAKE_LAUNCH_LOG"
         fi
@@ -122,6 +125,8 @@ test_no_profile_keeps_claude_profile_defaults() {
   launch=$(cat "$LAUNCH_LOG")
   expected="CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions --settings '$WT_DIR/.claude/settings.fm-task.json' \"\$('${ROOT}/bin/fm-operational-input.sh' encode launch-brief < '$HOME_DIR/data/$id/brief.md')\""
   [ "$launch" = "$expected" ] || fail "no-profile claude launch did not use the canonical launch kind"$'\n'"expected: $expected"$'\n'"actual:   $launch"
+  assert_grep "export PATH='$HOME_DIR/.local/axi/bin':\$PATH" "$LAUNCH_LOG.path" \
+    "ordinary crew did not receive the owning vessel's AXI bin first"
   pass "no --model/--effort records defaults and types the claude launch instructions"
 }
 
@@ -176,6 +181,10 @@ test_secondmate_claude_launch_omits_the_task_overlay() {
   case "$launch" in
     *--settings*) fail "secondmate claude launch passes --settings for an overlay spawn never writes"$'\n'"actual: $launch" ;;
   esac
+  assert_grep "export PATH='$sm/.local/axi/bin':\$PATH" "$LAUNCH_LOG.path" \
+    "secondmate launch did not receive its own home's AXI bin first"
+  assert_no_grep "$HOME_DIR/.local/axi/bin" "$LAUNCH_LOG.path" \
+    "secondmate launch inherited the primary vessel's AXI bin as its first entry"
   pass "a secondmate claude launch omits --settings because no per-task overlay is written"
 }
 

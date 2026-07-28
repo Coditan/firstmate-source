@@ -8,12 +8,17 @@
 #                 AXI_SUITE_STUCK: ... retry pending instead).
 #   --force       run the check now regardless of the cadence stamp.
 #
-# The default cadence is once every 24 hours per FM_HOME. Patch and minor
-# releases are installed into the same npm prefix as the command currently on
-# PATH. Major releases and missing suite commands are reported for review and
-# never installed. A failed registry lookup or update is recorded in
+# The default cadence is once every 24 hours per FM_HOME. Every home owns the
+# npm prefix $FM_HOME/.local/axi, whose bin directory resolves before inherited
+# PATH entries. A normal check seeds an absent home copy from the installed
+# version on PATH, or directly installs an eligible patch/minor release there.
+# Existing external installs are fallback inputs only and are never modified or
+# removed. Major releases and missing suite commands are reported for review
+# and never installed. A failed registry lookup or update is recorded in
 # state/axi-suite-update.stuck and reported on every later invocation until a
-# successful check clears it.
+# successful check clears it. state/axi-suite-prefix-v1.ready records that every
+# installed suite command has a vessel copy, so a pre-cutover cadence stamp can
+# never postpone the first isolated install.
 #
 # FM_AXI_SUITE_CHECK_INTERVAL overrides the cadence in seconds. Set it to 0 to
 # check every time. FM_AXI_SUITE_DISABLE=1 disables the mechanism (tests and
@@ -29,6 +34,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+# shellcheck source=bin/fm-axi-path-lib.sh
+. "$SCRIPT_DIR/fm-axi-path-lib.sh"
+AXI_PREFIX=$(fm_axi_prefix "$FM_HOME")
+AXI_BIN=$(fm_axi_bin_dir "$FM_HOME")
+fm_axi_prepend_path "$FM_HOME"
 INTERVAL=${FM_AXI_SUITE_CHECK_INTERVAL:-86400}
 CHECK_ONLY=0
 FORCE=0
@@ -104,13 +114,16 @@ is_hook_tool() {
 }
 
 install_hint() {
-  local tool=$1 spec=$2 hint
-  hint="npm install -g $spec"
-  is_hook_tool "$tool" && hint="$hint && $tool setup hooks"
+  local tool=$1 spec=$2 hint quoted_prefix quoted_tool
+  printf -v quoted_prefix '%q' "$AXI_PREFIX"
+  printf -v quoted_tool '%q' "$AXI_BIN/$tool"
+  hint="npm install -g --prefix $quoted_prefix $spec"
+  is_hook_tool "$tool" && hint="$hint && $quoted_tool setup hooks"
   printf '%s' "$hint"
 }
 
 STAMP="$STATE/axi-suite-update.checked"
+PREFIX_READY="$STATE/axi-suite-prefix-v1.ready"
 DIAGNOSTICS="$STATE/axi-suite-update.diagnostics"
 STUCK="$STATE/axi-suite-update.stuck"
 
@@ -120,7 +133,7 @@ emit_cached() {
 }
 
 now=$(date +%s 2>/dev/null || echo 0)
-if [ "$FORCE" -ne 1 ] && [ -f "$STAMP" ]; then
+if [ "$FORCE" -ne 1 ] && [ -f "$STAMP" ] && [ -f "$PREFIX_READY" ]; then
   checked=$(cat "$STAMP" 2>/dev/null || echo 0)
   case "$checked" in ''|*[!0-9]*) checked=0 ;; esac
   if [ "$now" -ge "$checked" ] && [ $((now - checked)) -lt "$INTERVAL" ]; then
@@ -157,11 +170,38 @@ version_gt() {
   [ "$a3" -gt "$b3" ] 2>/dev/null
 }
 
-npm_prefix_for() {
-  local command_path bin_dir
-  command_path=$(command -v "$1") || return 1
-  bin_dir=$(dirname "$command_path")
-  dirname "$bin_dir"
+home_tool_path() {
+  printf '%s/%s\n' "$AXI_BIN" "$1"
+}
+
+install_home_tool() {
+  local tool=$1 spec=$2 expected installed
+  expected=$3
+  if ! net_call npm install -g --prefix "$AXI_PREFIX" "$spec" >/dev/null 2>&1; then
+    return 1
+  fi
+  installed=$(version_of "$(home_tool_path "$tool")")
+  [ "$installed" = "$expected" ]
+}
+
+setup_home_hooks() {
+  net_call "$(home_tool_path "$1")" setup hooks >/dev/null 2>&1
+}
+
+seed_home_tool() {
+  local tool=$1 version=$2
+  if ! install_home_tool "$tool" "$tool@$version" "$version"; then
+    printf 'AXI_SUITE_STUCK: %s vessel-prefix installation at %s failed\n' \
+      "$tool" "$AXI_PREFIX" >> "$tmp_stuck"
+    return 1
+  fi
+  if is_hook_tool "$tool" && ! setup_home_hooks "$tool"; then
+    printf 'AXI_SUITE_STUCK: %s installed at %s but hook setup failed\n' \
+      "$tool" "$AXI_PREFIX" >> "$tmp_stuck"
+    return 1
+  fi
+  printf 'AXI_SUITE_UPDATED: %s %s installed in vessel prefix\n' \
+    "$tool" "$version" >> "$tmp_diag"
 }
 
 for tool in $SUITE; do
@@ -183,33 +223,66 @@ for tool in $SUITE; do
     printf 'AXI_SUITE_STUCK: %s registry returned an invalid version\n' "$tool" >> "$tmp_stuck"
     continue
   fi
+  home_tool=$(home_tool_path "$tool")
+  home_installed=0
+  [ -x "$home_tool" ] && home_installed=1
   if [ "$installed" = "$latest" ]; then
+    if [ "$home_installed" -eq 0 ]; then
+      if [ "$CHECK_ONLY" -eq 1 ]; then
+        printf 'AXI_SUITE_UPDATE: %s %s needs vessel-prefix installation\n' \
+          "$tool" "$installed" >> "$tmp_diag"
+        if is_hook_tool "$tool" && grep -q "^AXI_SUITE_STUCK: $tool " "$STUCK" 2>/dev/null; then
+          printf 'AXI_SUITE_STUCK: %s hook setup retry pending (already at %s)\n' \
+            "$tool" "$latest" >> "$tmp_stuck"
+        fi
+      else
+        seed_home_tool "$tool" "$installed" || true
+      fi
+      continue
+    fi
     if is_hook_tool "$tool" && grep -q "^AXI_SUITE_STUCK: $tool " "$STUCK" 2>/dev/null; then
       if [ "$CHECK_ONLY" -eq 1 ]; then
         printf 'AXI_SUITE_STUCK: %s hook setup retry pending (already at %s)\n' "$tool" "$latest" >> "$tmp_stuck"
-      elif ! net_call "$tool" setup hooks >/dev/null 2>&1; then
+      elif ! setup_home_hooks "$tool"; then
         printf 'AXI_SUITE_STUCK: %s hook setup failed (already at %s)\n' "$tool" "$latest" >> "$tmp_stuck"
       fi
     fi
     continue
   fi
-  version_gt "$installed" "$latest" && continue
+  if version_gt "$installed" "$latest"; then
+    if [ "$home_installed" -eq 0 ]; then
+      if [ "$CHECK_ONLY" -eq 1 ]; then
+        printf 'AXI_SUITE_UPDATE: %s %s needs vessel-prefix installation\n' \
+          "$tool" "$installed" >> "$tmp_diag"
+      else
+        seed_home_tool "$tool" "$installed" || true
+      fi
+    fi
+    continue
+  fi
   if [ "$(major_of "$installed")" != "$(major_of "$latest")" ]; then
     printf 'AXI_SUITE_REVIEW: %s major update %s -> %s (install: %s)\n' \
       "$tool" "$installed" "$latest" "$(install_hint "$tool" "$tool@$latest")" >> "$tmp_diag"
+    if [ "$home_installed" -eq 0 ]; then
+      if [ "$CHECK_ONLY" -eq 1 ]; then
+        printf 'AXI_SUITE_UPDATE: %s %s needs vessel-prefix installation\n' \
+          "$tool" "$installed" >> "$tmp_diag"
+      else
+        seed_home_tool "$tool" "$installed" || true
+      fi
+    fi
     continue
   fi
   [ "$CHECK_ONLY" -eq 0 ] || {
     printf 'AXI_SUITE_UPDATE: %s %s -> %s is eligible for automatic update\n' "$tool" "$installed" "$latest" >> "$tmp_diag"
     continue
   }
-  prefix=$(npm_prefix_for "$tool")
-  if ! net_call npm install -g --prefix "$prefix" "$tool@$latest" >/dev/null 2>&1; then
+  if ! install_home_tool "$tool" "$tool@$latest" "$latest"; then
     printf 'AXI_SUITE_STUCK: %s automatic update %s -> %s failed (npm prefix %s)\n' \
-      "$tool" "$installed" "$latest" "$prefix" >> "$tmp_stuck"
+      "$tool" "$installed" "$latest" "$AXI_PREFIX" >> "$tmp_stuck"
     continue
   fi
-  if is_hook_tool "$tool" && ! net_call "$tool" setup hooks >/dev/null 2>&1; then
+  if is_hook_tool "$tool" && ! setup_home_hooks "$tool"; then
     printf 'AXI_SUITE_STUCK: %s updated to %s but hook setup failed\n' "$tool" "$latest" >> "$tmp_stuck"
     continue
   fi
@@ -225,6 +298,18 @@ if [ "$CHECK_ONLY" -eq 0 ]; then
   fi
   if [ -s "$tmp_stuck" ]; then cp "$tmp_stuck" "$STUCK"; else rm -f "$STUCK"; fi
   printf '%s\n' "$now" > "$STAMP"
+  prefix_ready=1
+  for tool in $SUITE; do
+    if command -v "$tool" >/dev/null 2>&1 && [ ! -x "$(home_tool_path "$tool")" ]; then
+      prefix_ready=0
+      break
+    fi
+  done
+  if [ "$prefix_ready" -eq 1 ]; then
+    : > "$PREFIX_READY"
+  else
+    rm -f "$PREFIX_READY"
+  fi
 fi
 cat "$tmp_diag" 2>/dev/null
 cat "$tmp_stuck" 2>/dev/null

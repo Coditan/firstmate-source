@@ -102,6 +102,9 @@ PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+# shellcheck source=bin/fm-axi-path-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-axi-path-lib.sh"
+fm_axi_prepend_path "$FM_HOME"
 # shellcheck source=bin/fm-tasks-axi-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # shellcheck source=bin/fm-tangle-lib.sh disable=SC1091
@@ -505,13 +508,18 @@ secondmate_liveness_sweep() {
 }
 
 install_cmd() {
+  local prefix tool_bin
+  prefix=$(fm_axi_prefix "$FM_HOME")
   case "$1" in
     tmux|node|git|gh|curl|jq|orca|zellij) echo "brew install $1  # or the platform's package manager" ;;
     cmux) echo "brew install --cask cmux  # or see https://cmux.com" ;;
     treehouse) echo "curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh" ;;
     no-mistakes) echo "curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh" ;;
-    gh-axi|chrome-devtools-axi|lavish-axi) echo "npm install -g $1 && $1 setup hooks" ;;
-    tasks-axi|quota-axi) echo "npm install -g $1" ;;
+    gh-axi|chrome-devtools-axi|lavish-axi)
+      tool_bin=$(fm_axi_bin_dir "$FM_HOME")/$1
+      printf 'npm install -g --prefix %q %q && %q setup hooks\n' "$prefix" "$1" "$tool_bin"
+      ;;
+    tasks-axi|quota-axi) printf 'npm install -g --prefix %q %q\n' "$prefix" "$1" ;;
     *) return 1 ;;
   esac
 }
@@ -928,6 +936,7 @@ if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] \
 fi
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   "$SCRIPT_DIR/fm-axi-suite.sh"
+  hash -r
   secondmate_sync
   secondmate_liveness_sweep
   x_mode_setup
