@@ -205,11 +205,11 @@ EOF
     || fail "the unreadable-record report must be a coded line, not stderr: $(lint_stderr)"
   assert_contains "$out" "BACKLOG_UNREADABLE: task **unresolvable-dependent** in data/backlog.md" \
     "the unreadable-record diagnostic must be coded and name the record and file"
-  assert_contains "$out" "is parsed by fm-fleet-snapshot but tasks-axi show returns no blocked_by: property for it" \
-    "the unreadable-record diagnostic must name the reader that failed and the missing property"
+  assert_contains "$out" "is parsed by fm-fleet-snapshot but tasks-axi does not list that record when reading the same file" \
+    "the unreadable-record diagnostic must name the reader that failed and the mismatch"
   assert_contains "$out" "fix: repair that row in data/backlog.md" \
     "the unreadable-record diagnostic must say which record text to repair"
-  assert_contains "$out" "tasks-axi show <id> --file data/backlog.md prints a blocked_by: line" \
+  assert_contains "$out" "tasks-axi list --file data/backlog.md shows that id" \
     "the unreadable-record diagnostic must name its closing condition"
   assert_grep "BACKLOG_UNREADABLE" "$ROOT/.agents/skills/bootstrap-diagnostics/SKILL.md" \
     "the coded diagnostic must have a documented handling procedure"
@@ -239,7 +239,7 @@ EOF
     "a dangling edge stays a finding when the readers decide it without tasks-axi"
   assert_contains "$out" "BACKLOG_STALE: task **decidable-done-dependent** has satisfied blocked-by decidable-done" \
     "an already-Done edge stays a finding when the readers decide it without tasks-axi"
-  assert_contains "$out" 'fix: no tasks-axi fix is available because tasks-axi cannot resolve task **decidable-dependent** in data/backlog.md, so edit data/backlog.md by hand and delete the blocked-by token "blocked-by: decidable-missing" naming blocker decidable-missing from the record for task **decidable-dependent**' \
+  assert_contains "$out" 'fix: no tasks-axi fix is available because tasks-axi does not list task **decidable-dependent** when reading data/backlog.md, so edit data/backlog.md by hand and delete the blocked-by token "blocked-by: decidable-missing" naming blocker decidable-missing from the record for task **decidable-dependent**' \
     "an unresolvable record must get hand-edit guidance naming file, record, token, and blocker"
   assert_not_contains "$out" "tasks-axi unblock" \
     "the lint must never prescribe a tasks-axi command that cannot run"
@@ -275,6 +275,53 @@ EOF
   [ "$unreadable_lines" = 1 ] \
     || fail "a record must report BACKLOG_UNREADABLE once, got $unreadable_lines"
   pass "one record reports its decided edge and its undecided edge under the right code"
+}
+
+test_lint_cost_stays_bounded_as_backlog_rot_grows() {
+  local home_clean home_rot shim log n calls
+  shim=$TMP_ROOT/tasks-axi-shim
+  log=$TMP_ROOT/tasks-axi-calls
+  mkdir -p "$shim"
+  cat > "$shim/tasks-axi" <<EOF
+#!/usr/bin/env bash
+printf 'call\n' >> "\$FM_TEST_TASKS_AXI_CALL_LOG"
+exec $(command -v tasks-axi) "\$@"
+EOF
+  chmod +x "$shim/tasks-axi"
+
+  home_clean=$(make_home bounded-clean)
+  home_rot=$(make_home bounded-rot)
+  {
+    printf '%s\n' '# Backlog' '' '## In flight' '## Queued'
+    n=0
+    while [ "$n" -lt 40 ]; do
+      printf -- '- [ ] bounded-live-%02d - Clean queued task (repo: sample) (kind: ship)\n' "$n"
+      n=$((n + 1))
+    done
+    printf '%s\n' '## Done'
+  } > "$home_clean/data/backlog.md"
+  {
+    printf '%s\n' '# Backlog' '' '## In flight' '## Queued'
+    n=0
+    while [ "$n" -lt 40 ]; do
+      printf -- '- [ ] bounded-rot-%02d - Stale task blocked-by: bounded-ghost-%02d (repo: sample) (kind: ship)\n' "$n" "$n"
+      n=$((n + 1))
+    done
+    printf '%s\n' '## Done'
+  } > "$home_rot/data/backlog.md"
+
+  : > "$log"
+  PATH="$shim:$PATH" FM_TEST_TASKS_AXI_CALL_LOG="$log" FM_HOME="$home_clean" "$LINT" >/dev/null 2>&1
+  calls=$(wc -l < "$log" | tr -d '[:space:]')
+  [ "$calls" = 0 ] \
+    || fail "a clean backlog must start no tasks-axi process, started $calls"
+
+  : > "$log"
+  PATH="$shim:$PATH" FM_TEST_TASKS_AXI_CALL_LOG="$log" FM_HOME="$home_rot" "$LINT" >/dev/null 2>&1
+  calls=$(wc -l < "$log" | tr -d '[:space:]')
+  [ "$calls" = 1 ] \
+    || fail "40 stale edges must be resolved by one tasks-axi process, started $calls"
+  pass "session-start lint cost stays bounded as backlog rot grows"
 }
 
 test_bootstrap_surfaces_the_unreadable_record_diagnostic() {
@@ -370,6 +417,7 @@ test_archive_rotation_reader_disagreement_and_fix
 test_unresolvable_record_is_a_coded_diagnostic_not_a_finding
 test_unresolvable_record_still_reports_edges_decided_without_tasks_axi
 test_unresolvable_record_separates_decided_and_undecided_edges
+test_lint_cost_stays_bounded_as_backlog_rot_grows
 test_bootstrap_surfaces_the_unreadable_record_diagnostic
 test_manual_backend_prints_hand_edit_fix
 test_bootstrap_surfaces_findings_and_stays_silent_when_clean

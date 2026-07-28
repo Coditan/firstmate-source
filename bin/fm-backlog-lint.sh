@@ -116,61 +116,23 @@ csv_has() {  # <csv> <value>
 BACKEND_MANUAL=0
 fm_backlog_backend_manual "$CONFIG" && BACKEND_MANUAL=1
 
-decode_token() {  # <base64 edge token>
-  printf '%s' "$1" | jq -Rrj '@base64d' 2>/dev/null
-}
-
-fix_clause() {  # <task> <blocker> <base64 edge token> <task-resolvable>
-  local token
-  if [ "$BACKEND_MANUAL" = 1 ] || [ "$4" = 0 ]; then
-    token=$(decode_token "$3")
-    [ -n "$token" ] || token="blocked-by: $2"
-  fi
+fix_clause() {  # <task> <blocker> <edge token as written> <task-resolvable>
   if [ "$BACKEND_MANUAL" = 1 ]; then
     printf 'edit data/backlog.md by hand and delete the blocked-by token "%s" naming blocker %s from the record for task %s' \
-      "$token" "$2" "$1"
-  elif [ "$4" = 0 ]; then
-    printf 'no tasks-axi fix is available because tasks-axi cannot resolve task %s in data/backlog.md, so edit data/backlog.md by hand and delete the blocked-by token "%s" naming blocker %s from the record for task %s' \
-      "$1" "$token" "$2" "$1"
+      "$3" "$2" "$1"
+  elif [ "$4" = false ]; then
+    printf 'no tasks-axi fix is available because tasks-axi does not list task %s when reading data/backlog.md, so edit data/backlog.md by hand and delete the blocked-by token "%s" naming blocker %s from the record for task %s' \
+      "$1" "$3" "$2" "$1"
   else
     printf 'run tasks-axi unblock %s --by %s' "$1" "$2"
   fi
 }
 
-probe_task=
-task_axi_readable=1
-task_axi_unresolved=
-unreadable_reported=0
-
-probe_dependent_record() {  # <task> - memoized per task, read-only
-  local show_status=0 show_out blocked_by_line
-  [ "$1" != "$probe_task" ] || return 0
-  probe_task=$1
-  task_axi_readable=1
-  task_axi_unresolved=
-  unreadable_reported=0
-  show_out=$(tasks-axi show "$1" --file "$BACKLOG" </dev/null 2>/dev/null) || show_status=$?
-  blocked_by_line=$(
-    printf '%s\n' "$show_out" |
-      sed -n 's/^[[:space:]]*blocked_by:[[:space:]]*//p' |
-      head -1
-  )
-  if [ "$show_status" -ne 0 ] || [ -z "$blocked_by_line" ]; then
-    task_axi_readable=0
-    return 0
-  fi
-  task_axi_unresolved=$blocked_by_line
-  case "$task_axi_unresolved" in
-    none|-) task_axi_unresolved= ;;
-    \"*)
-      task_axi_unresolved=${task_axi_unresolved#\"}
-      task_axi_unresolved=${task_axi_unresolved%\"}
-      ;;
-  esac
-}
-
 LINT_STATUS=0
-ROWS_FILE="$LINT_TMP/edges.tsv"
+UNIT=$(printf '\001')
+EDGES_FILE="$LINT_TMP/edges"
+AXI_LIST_FILE="$LINT_TMP/axi-list"
+ROWS_FILE="$LINT_TMP/rows"
 
 jq -nr \
   --slurpfile backlog "$BACKLOG_JSON_FILE" \
@@ -193,46 +155,92 @@ jq -nr \
     | . as $record
     | (.blocked_by_ids // [])[]
     | . as $blocker
+    | (if $live[$blocker] == "done" then "done"
+       elif $live[$blocker] != null then "live"
+       elif $archived[$blocker] == true then "archived"
+       else "missing"
+       end) as $class
+    | select($class != "live")
     | [
         $record.id,
         $blocker,
-        (if $live[$blocker] == "done" then "done"
-         elif $live[$blocker] != null then "live"
-         elif $archived[$blocker] == true then "archived"
-         else "missing"
-         end),
-        ((($record.unresolved_blocker_ids // []) | index($blocker)) != null),
-        (edge_token($record.raw; $blocker) | @base64)
+        $class,
+        ((($record.unresolved_blocker_ids // []) | index($blocker)) != null | tostring),
+        edge_token($record.raw; $blocker)
       ]
-    | @tsv
-  ' > "$ROWS_FILE" \
+    | join("\u0001")
+  ' > "$EDGES_FILE" \
   || { echo "fm-backlog-lint: dependency edge extraction failed for $BACKLOG" >&2; exit 1; }
 
-while IFS="$(printf '\t')" read -r task blocker target_class snapshot_unresolved edge_token; do
+[ -s "$EDGES_FILE" ] || exit 0
+
+tasks-axi list --file "$BACKLOG" --fields blocked_by </dev/null > "$AXI_LIST_FILE" 2>/dev/null \
+  || { echo "fm-backlog-lint: tasks-axi blocker listing failed: $BACKLOG" >&2; exit 1; }
+grep -q '^tasks\[[0-9][0-9]*\]{id,state,kind,repo,title,blocked_by}:$' "$AXI_LIST_FILE" \
+  || grep -q '^count: 0$' "$AXI_LIST_FILE" \
+  || { echo "fm-backlog-lint: unexpected tasks-axi list schema for $BACKLOG" >&2; exit 1; }
+
+awk -v listing="$AXI_LIST_FILE" '
+  BEGIN { FS = "\001"; OFS = "\001" }
+  FILENAME == listing {
+    if (rows && $0 !~ /^  /) { rows = 0 }
+    if ($0 ~ /^tasks\[/) { rows = 1; next }
+    if (!rows) { next }
+    line = substr($0, 3)
+    comma = index(line, ",")
+    if (comma < 2) { next }
+    id = substr(line, 1, comma - 1)
+    if (substr(line, length(line), 1) == "\"") {
+      start = 0
+      scan = 1
+      while ((hit = index(substr(line, scan), ",\"")) > 0) {
+        start = scan + hit - 1
+        scan = start + 1
+      }
+      if (start == 0) { next }
+      blockers = substr(line, start + 2, length(line) - start - 2)
+    } else {
+      start = 0
+      for (i = length(line); i > 0; i--) {
+        if (substr(line, i, 1) == ",") { start = i; break }
+      }
+      if (start == 0) { next }
+      blockers = substr(line, start + 1)
+    }
+    if (blockers == "none" || blockers == "-") { blockers = "" }
+    listed[id] = 1
+    blocked_by[id] = blockers
+    next
+  }
+  { print $1, $2, $3, $4, ($1 in listed ? "true" : "false"), blocked_by[$1], $5 }
+' "$AXI_LIST_FILE" "$EDGES_FILE" > "$ROWS_FILE" \
+  || { echo "fm-backlog-lint: tasks-axi blocker table read failed for $BACKLOG" >&2; exit 1; }
+
+unreadable_task=
+while IFS="$UNIT" read -r task blocker target_class snapshot_unresolved \
+  axi_resolvable axi_blocked_by edge_token; do
   [ -n "$task" ] || continue
-  [ "$target_class" = live ] && continue
-  probe_dependent_record "$task"
   case "$target_class" in
     missing)
       printf "BACKLOG_STALE: task %s has dangling blocked-by %s (target is absent from data/backlog.md and data/done-archive.md); fix: %s, then add the intended existing blocker if this id was a typo\n" \
-        "$task" "$blocker" "$(fix_clause "$task" "$blocker" "$edge_token" "$task_axi_readable")"
+        "$task" "$blocker" "$(fix_clause "$task" "$blocker" "$edge_token" "$axi_resolvable")"
       ;;
     done)
       printf "BACKLOG_STALE: task %s has satisfied blocked-by %s (target is already Done in data/backlog.md); fix: %s\n" \
-        "$task" "$blocker" "$(fix_clause "$task" "$blocker" "$edge_token" "$task_axi_readable")"
+        "$task" "$blocker" "$(fix_clause "$task" "$blocker" "$edge_token" "$axi_resolvable")"
       ;;
     archived)
-      if [ "$task_axi_readable" = 0 ]; then
-        if [ "$unreadable_reported" = 0 ]; then
-          unreadable_reported=1
+      if [ "$axi_resolvable" = false ]; then
+        if [ "$task" != "$unreadable_task" ]; then
+          unreadable_task=$task
           LINT_STATUS=1
-          printf "BACKLOG_UNREADABLE: task %s in data/backlog.md is parsed by fm-fleet-snapshot but tasks-axi show returns no blocked_by: property for it, so whether its archived-target edges are stale stays undecided and none is reported; fix: repair that row in data/backlog.md - tasks-axi resolves only a slug-shaped id (letters, digits, \".\", \"_\", \"-\", no spaces and no Markdown emphasis) in a \"- [ ] <id> - <title>\" row - until tasks-axi show <id> --file data/backlog.md prints a blocked_by: line\n" \
+          printf "BACKLOG_UNREADABLE: task %s in data/backlog.md is parsed by fm-fleet-snapshot but tasks-axi does not list that record when reading the same file, so whether its archived-target edges are stale stays undecided and none is reported; fix: repair that row in data/backlog.md - tasks-axi resolves only a slug-shaped id (letters, digits, \".\", \"_\", \"-\", no spaces and no Markdown emphasis) in a \"- [ ] <id> - <title>\" row - until tasks-axi list --file data/backlog.md shows that id\n" \
             "$task"
         fi
       elif [ "$snapshot_unresolved" = true ] \
-        && ! csv_has "$task_axi_unresolved" "$blocker"; then
+        && ! csv_has "$axi_blocked_by" "$blocker"; then
         printf "BACKLOG_STALE: task %s has reader-disagreement blocked-by %s (tasks-axi says satisfied; fm-fleet-snapshot says unresolved after the target moved to data/done-archive.md); fix: %s\n" \
-          "$task" "$blocker" "$(fix_clause "$task" "$blocker" "$edge_token" "$task_axi_readable")"
+          "$task" "$blocker" "$(fix_clause "$task" "$blocker" "$edge_token" "$axi_resolvable")"
       fi
       ;;
   esac
