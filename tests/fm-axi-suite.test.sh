@@ -458,6 +458,31 @@ test_stalled_first_cutover_alarms_and_stays_bounded() {
   pass "a stalled first cutover alarms clearly and stays inside its seeding budget"
 }
 
+test_stalled_cutover_of_stale_installs_reports_the_same_way() {
+  local w out
+  w="$TMP_ROOT/stalled-stale-cutover"
+  mkdir -p "$w/bin" "$w/home" "$w/state"
+  make_npm "$w/bin" "$w/versions" "$w/install.log"
+  make_tool "$w/bin" stale-one-axi 1.0.0
+  make_tool "$w/bin" stale-two-axi 1.0.0
+  printf '%s\n' 'stale-one-axi=1.0.1' 'stale-two-axi=1.0.1' > "$w/versions"
+  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/state" \
+    FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="stale-one-axi stale-two-axi" \
+    FM_AXI_SUITE_CHECK_INTERVAL=0 FM_AXI_SUITE_SEED_TIMEOUT=1 \
+    FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
+    FM_TEST_INSTALL_SLEEP=30 \
+    "$ROOT/bin/fm-axi-suite.sh" --force 2>"$w/progress.log")
+  assert_contains "$out" 'AXI_SUITE_STUCK: stale-two-axi vessel-prefix seeding at' \
+    "a first cutover through the update path blamed a broken install for a spent seeding budget"
+  assert_contains "$out" 'seeding budget is spent' \
+    "the unattempted seed did not name the spent seeding budget"
+  assert_grep 'seeding this vessel AXI prefix' "$w/progress.log" \
+    "seeding stale shared installs did not announce the cutover"
+  assert_grep 'seeding pass finished' "$w/progress.log" \
+    "the seeding pass did not summarise what it attempted"
+  pass "a spent seeding budget reads the same through the update path as through seeding"
+}
+
 test_registry_and_install_time_do_not_spend_the_probe_budget() {
   local w out t
   w="$TMP_ROOT/probe-budget"
@@ -516,6 +541,7 @@ test_hung_vessel_copy_is_bounded_and_kept
 test_registry_and_install_time_do_not_spend_the_probe_budget
 test_first_cutover_seeds_whole_suite_without_alarming
 test_stalled_first_cutover_alarms_and_stays_bounded
+test_stalled_cutover_of_stale_installs_reports_the_same_way
 test_unpublished_ahead_version_is_not_a_recurring_alarm
 test_failed_update_persists_stuck_signal
 test_check_only_never_runs_hook_setup

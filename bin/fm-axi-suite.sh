@@ -44,9 +44,11 @@
 # whole suite at once and would otherwise exhaust the steady-state network
 # budget and report a healthy vessel as stuck. Each budget is charged only for
 # the time its own calls spend, so no kind of work can consume another's.
-# Seeding announces its progress on stderr while it runs, and a seed that
-# genuinely stalls or outlives the seeding budget is still reported as
-# AXI_SUITE_STUCK and retried on the next cadence window.
+# Seeding reports its progress and a closing summary on stderr - live when
+# bootstrap is run directly in a terminal, and captured with the rest of the
+# bootstrap output under automated session start. A seed that genuinely stalls
+# or outlives the seeding budget is still reported as AXI_SUITE_STUCK, names
+# which of the two happened, and is retried on the next cadence window.
 # FM_AXI_SUITE_TOOLS overrides the space-separated
 # suite tool list (default: quota-axi gh-axi tasks-axi gnhf lavish-axi
 # chrome-devtools-axi).
@@ -304,12 +306,20 @@ discard_home_tool() {
   [ ! -e "$path" ]
 }
 
-# Seeding can take much longer than a steady-state check, and it runs inside a
-# locked bootstrap where the operator sees only a pause. These lines go to
-# stderr as the work happens - stdout is collected and emitted once at the end -
-# so a fresh vessel shows which tool is installing and how much of the seeding
-# budget is left, which is what separates normal installation work from a hang.
+# Seeding can take much longer than a steady-state check, so it says which tool
+# it is installing and how much of the seeding budget is left. These lines go to
+# stderr, separate from the diagnostics stdout carries.
+#
+# How live that is depends on the caller: a captain running bin/fm-bootstrap.sh
+# in a terminal sees each line as the work happens, but bin/fm-session-start.sh
+# captures bootstrap with `2>&1` inside a command substitution, so under
+# automated session start these lines are buffered with everything else and
+# reach the digest only once bootstrap returns. The per-tool lines and the
+# closing summary are therefore written to be readable after the fact as well:
+# together they say how far the pass got and how much budget it consumed, which
+# is what makes a later AXI_SUITE_STUCK budget line interpretable.
 SEEDING_ANNOUNCED=0
+SEEDED_COUNT=0
 announce_seeding() {
   local spec=$1 left
   left=$(budget_grant "$SEED_TIMEOUT" "$SEED_SPENT")
@@ -318,21 +328,31 @@ announce_seeding() {
     printf 'fm-axi-suite.sh: seeding this vessel AXI prefix (%s) for the first time; these installs run under a separate %ss seeding budget, so this check takes longer than a steady-state one\n' \
       "$AXI_PREFIX" "$SEED_TIMEOUT" >&2
   fi
+  SEEDED_COUNT=$((SEEDED_COUNT + 1))
   printf 'fm-axi-suite.sh: installing %s into %s (%ss of the seeding budget left)\n' \
     "$spec" "$AXI_PREFIX" "$left" >&2
+}
+
+summarize_seeding() {
+  [ "$SEEDING_ANNOUNCED" -eq 1 ] || return 0
+  printf 'fm-axi-suite.sh: seeding pass finished: %s install(s) attempted into %s, %ss of the %ss seeding budget used\n' \
+    "$SEEDED_COUNT" "$AXI_PREFIX" "$SEED_SPENT" "$SEED_TIMEOUT" >&2
 }
 
 # An install that creates the vessel's copy is first-cutover seeding; one that
 # replaces an existing vessel copy is an ordinary update. Deriving the budget
 # from the copy itself keeps the two entry points - seed_home_tool and the
 # patch/minor update path - from drifting apart.
+INSTALL_BUDGET=net
 install_home_tool() {
   local tool=$1 spec=$2 expected path status=0 install_status=0
   expected=$3
   path=$(home_tool_path "$tool")
   if [ -x "$path" ]; then
+    INSTALL_BUDGET=net
     net_call npm install -g --prefix "$AXI_PREFIX" "$spec" >/dev/null 2>&1 || install_status=$?
   else
+    INSTALL_BUDGET=seed
     SEED_GRANTED=0
     if [ "$(budget_grant "$SEED_TIMEOUT" "$SEED_SPENT")" -gt 0 ]; then
       announce_seeding "$spec"
@@ -363,12 +383,20 @@ setup_home_hooks() {
   net_call env PATH="$AXI_BIN:$PATH" "$tool" setup hooks >/dev/null 2>&1
 }
 
+# Both install call sites can be the one that seeds this vessel, so both must
+# describe a spent seeding budget the same way: an install that was never
+# allowed to start is not a broken install. Reporting it from the state
+# install_home_tool published keeps the two descriptions from drifting apart.
+report_unattempted_seed() {
+  [ "$INSTALL_BUDGET" = seed ] && [ "$SEED_GRANTED" -eq 0 ] || return 1
+  printf 'AXI_SUITE_STUCK: %s vessel-prefix seeding at %s was not attempted: the %ss seeding budget is spent; the external copy stays the fallback and the next check retries\n' \
+    "$1" "$AXI_PREFIX" "$SEED_TIMEOUT" >> "$tmp_stuck"
+}
+
 seed_home_tool() {
   local tool=$1 version=$2 registry_latest=${3:-}
   if ! install_home_tool "$tool" "$tool@$version" "$version"; then
-    if [ "$SEED_GRANTED" -eq 0 ]; then
-      printf 'AXI_SUITE_STUCK: %s vessel-prefix seeding at %s was not attempted: the %ss seeding budget is spent; the external copy stays the fallback and the next check retries\n' \
-        "$tool" "$AXI_PREFIX" "$SEED_TIMEOUT" >> "$tmp_stuck"
+    if report_unattempted_seed "$tool"; then
       return 1
     fi
     if [ -n "$registry_latest" ]; then
@@ -503,8 +531,10 @@ for tool in $SUITE; do
     continue
   }
   if ! install_home_tool "$tool" "$tool@$latest" "$latest"; then
-    printf 'AXI_SUITE_STUCK: %s automatic update %s -> %s failed (npm prefix %s)\n' \
-      "$tool" "$installed" "$latest" "$AXI_PREFIX" >> "$tmp_stuck"
+    if ! report_unattempted_seed "$tool"; then
+      printf 'AXI_SUITE_STUCK: %s automatic update %s -> %s failed (npm prefix %s)\n' \
+        "$tool" "$installed" "$latest" "$AXI_PREFIX" >> "$tmp_stuck"
+    fi
     continue
   fi
   if is_hook_tool "$tool" && ! setup_home_hooks "$tool"; then
@@ -522,6 +552,7 @@ if [ "$CHECK_ONLY" -eq 0 ]; then
     rm -f "$DIAGNOSTICS"
   fi
   if [ -s "$tmp_stuck" ]; then cp "$tmp_stuck" "$STUCK"; else rm -f "$STUCK"; fi
+  summarize_seeding
   printf '%s\n' "$now" > "$STAMP"
   # Records the attempt, not its outcome: a home that could not seed every tool
   # retries on the next cadence window instead of paying a full sweep, and a
