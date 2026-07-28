@@ -12,6 +12,8 @@
 #                 "ROLE_OVERLAY_MISSING: <name> (expected: roles/<name>.md)",
 #                 "CREW_DISPATCH: invalid config/crew-dispatch.json - <reason>",
 #                 "CURRENCY_BASE: config/<file> is unusable - <reason>; <remediation>",
+#                 "BACKLOG_STALE: task <id> has <fault>; fix: <command>",
+#                 "BACKLOG_UNREADABLE: task <id> in <backlog file> is parsed by <reader> but not <reader>; fix: <row repair>",
 #                 "FLEET_SYNC: <repo>: skipped|recovered|STUCK: <detail>",
 #                 "PR_CHECK_MIGRATION: <private remediation>",
 #                 "TANGLE: <remediation>",
@@ -922,6 +924,9 @@ if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] && [ -n "$crew" ] && [ "$crew" != 
 fi
 crew_dispatch_validate
 currency_base_validate
+if fm_tasks_axi_compatible && command -v jq >/dev/null 2>&1; then
+  "$SCRIPT_DIR/fm-backlog-lint.sh" || true
+fi
 if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] \
   && ! fm_backlog_backend_manual "$CONFIG" && fm_tasks_axi_compatible; then
   echo "BOOTSTRAP_INFO: tasks-axi available"
