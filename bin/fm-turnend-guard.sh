@@ -86,18 +86,17 @@ fm_supervision_status "$STATE" "$GRACE"
 [ "$FM_SUP_IN_FLIGHT" -gt 0 ] || exit 0
 daemon_healthy=0
 delivery_armed=0
+afk=0
+[ -e "$STATE/.afk" ] && afk=1
 fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME" && daemon_healthy=1
-if [ -e "$STATE/.afk" ]; then
+if [ "$afk" -eq 1 ]; then
   # Away mode's own daemon consumes new durable queue records; normal session
   # delivery waits remain intentionally paused under the /afk contract.
-  delivery_armed=1
+  fm_pusher_healthy "$STATE" && delivery_armed=1
 elif fm_wake_stub_armed "$STATE" "$STUB" "$FM_HOME"; then
   delivery_armed=1
 fi
 [ "$daemon_healthy" -eq 1 ] && [ "$delivery_armed" -eq 1 ] && exit 0
-
-afk=0
-[ -e "$STATE/.afk" ] && afk=1
 x_mode=0
 [ -f "$CONFIG/x-mode.env" ] && x_mode=1
 DELIVERY_REASON=$("$SCRIPT_DIR/fm-supervision-instructions.sh" --afk "$afk" --x-mode "$x_mode" --repair-line 2>/dev/null \
@@ -113,10 +112,14 @@ rule='━━━━━━━━━━━━━━━━━━━━━━━━�
     printf '●  Daemon repair: %s; treat this as a supervision incident and verify the beacon+lock predicate.\n' "$DAEMON_REASON"
   fi
   if [ "$delivery_armed" -eq 0 ]; then
-    printf '●  Wake delivery missing: no identity-matched delivery stub is armed for this session.\n'
+    if [ "$afk" -eq 1 ]; then
+      printf '●  Away wake delivery missing: no live identity-matched pusher holds the supervise-daemon lock.\n'
+    else
+      printf '●  Wake delivery missing: no identity-matched delivery stub is armed for this session.\n'
+    fi
     printf '●  Delivery repair: %s\n' "$DELIVERY_REASON"
   fi
-  printf '●  This forced continuation is internal maintenance; after draining and re-arming, end silently unless a queued wake is captain-relevant under AGENTS.md section 9.\n'
+  printf '●  This forced continuation is internal maintenance; after draining and restoring delivery, end silently unless a queued wake is captain-relevant under AGENTS.md section 9.\n'
   printf '●%s\n' "$rule"
 } >&2
 exit 2

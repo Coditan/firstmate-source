@@ -37,7 +37,15 @@ The stub needs no beacon because it is a pure blocking wait over the durable que
 Daemon failure and delivery failure produce separate repair lines.
 The daemon line names the scoped systemd instance restart or tmux keeper repair and is treated as a real supervision incident.
 The delivery line points to the active harness protocol and costs one cheap re-arm.
-While `state/.afk` is present, the away daemon consumes new durable queue records and intentionally satisfies the delivery half without a session stub; daemon health remains mandatory.
+While `state/.afk` is present, the away daemon consumes new durable queue records and intentionally replaces the session stub.
+The away flag alone does not satisfy the delivery half.
+`fm_pusher_healthy <state-dir>` requires `state/.supervise-daemon.pid` to name a live pid that matches the portable lock's pid and recorded process identity.
+Watcher health remains independently mandatory.
+
+If the away daemon dies during an unattended stretch, the next attempted turn end forces one maintenance continuation that directs the agent to restore away delivery.
+The hook loop guard then permits that turn to stop, so daemon death cannot create an autonomous endless continuation loop.
+A later independent turn alerts again until delivery is repaired.
+The daemon-owned max-defer alarm cannot run after the daemon itself dies, so it is not treated as substitute coverage; queued wakes remain durable and the turn-end force is the recovery signal.
 
 `FM_STATE_OVERRIDE` wins over `FM_HOME/state`, and `FM_HOME` wins over repo-root `state/`.
 `FM_GUARD_GRACE` controls only the daemon beacon freshness window and defaults to 300 seconds.
@@ -197,7 +205,7 @@ Firstmate deliberately does not track `.claude/settings.local.json` anywhere, an
 
 ## Tests
 
-`tests/fm-turnend-guard.test.sh` covers the split daemon-and-delivery predicate, independent repair lines, delivery-stub pid and identity matching, primary scoping, `FM_HOME` and `FM_STATE_OVERRIDE` precedence, away-mode delivery ownership, fail-open behavior without `jq`, tracked hook registration for all five harnesses, and passive-adapter loop guards.
+`tests/fm-turnend-guard.test.sh` covers the split daemon-and-delivery predicate, independent repair lines, delivery-stub pid and identity matching, primary scoping, `FM_HOME` and `FM_STATE_OVERRIDE` precedence, dead and healthy away-pusher states with queued wakes, fail-open behavior without `jq`, tracked hook registration for all five harnesses, and passive-adapter loop guards.
 The per-task crewmate overlay recorded in the 2026-07-25 subsection is pinned from the spawn side by `tests/fm-spawn-dispatch-profile.test.sh` (a repository-tracked `.claude/settings.local.json` survives a claude spawn, the overlay is written under the distinct name and git-excluded, and the launch line carries `--settings` for it) and from the teardown side by `tests/fm-teardown.test.sh` cases (z) through (dd) (a tracked-and-dirty overlay still tears down, that tolerance does not mask other genuine uncommitted work, and a repository-tracked legacy `settings.local.json` is never removed).
 The default behavior suite does not invoke live language-model harnesses.
 `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh` opts into the isolated interactive Pi regression recorded above.

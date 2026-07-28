@@ -274,6 +274,14 @@ record_stub_lock() {
   printf '%s\n' "$identity" > "$dir/state/.wake-stub.lock/pid-identity"
 }
 
+record_pusher_lock() {
+  local dir=$1 pid=$2 identity=$3
+  mkdir -p "$dir/state/.supervise-daemon.lock"
+  printf '%s\n' "$pid" > "$dir/state/.supervise-daemon.pid"
+  printf '%s\n' "$pid" > "$dir/state/.supervise-daemon.lock/pid"
+  printf '%s\n' "$identity" > "$dir/state/.supervise-daemon.lock/pid-identity"
+}
+
 test_hook_silent_when_no_work_in_flight() {
   local dir out status
   dir=$(make_primary_dir "$TMP_ROOT/hook-idle")
@@ -346,6 +354,56 @@ test_hook_blocks_with_live_daemon_but_no_stub() {
   assert_contains "$out" "Wake delivery missing" "split predicate did not identify the missing delivery half"
   assert_not_contains "$out" "Watcher daemon down" "split predicate falsely reported the daemon half down"
   pass "fm-turnend-guard: healthy daemon without a session delivery stub blocks with the cheap re-arm repair"
+}
+
+test_hook_afk_blocks_with_dead_pusher_and_queued_wakes() {
+  local dir watcher_pid watcher_identity dead out status queue_lines
+  dir=$(make_primary_dir "$TMP_ROOT/hook-afk-dead-pusher")
+  : > "$dir/state/task1.meta"
+  : > "$dir/state/.afk"
+  printf '1\t1\tsignal\ttask1.status\tdone: one\n1\t2\tsignal\ttask2.status\tdone: two\n1\t3\tcheck\ttask3\tcheck: three\n' > "$dir/state/.wake-queue"
+  sleep 60 &
+  watcher_pid=$!
+  watcher_identity=$(watcher_identity "$dir" "$watcher_pid") || fail "could not identify live watcher holder"
+  record_watcher_lock "$dir" "$watcher_pid" "$watcher_identity"
+  touch "$dir/state/.last-watcher-beat"
+  dead=$(nonexistent_pid)
+  record_pusher_lock "$dir" "$dead" "dead pusher identity"
+  out=$(run_hook "$dir" false); status=$?
+  queue_lines=$(wc -l < "$dir/state/.wake-queue")
+  kill "$watcher_pid" 2>/dev/null || true
+  wait "$watcher_pid" 2>/dev/null || true
+  expect_code 2 "$status" "away hook must block when the pusher is dead with queued wakes"
+  assert_contains "$out" "Away wake delivery missing" "away hook did not identify the dead pusher"
+  assert_not_contains "$out" "Watcher daemon down" "away hook falsely reported the healthy watcher down"
+  [ "$queue_lines" -eq 3 ] || fail "away hook changed the queued wakes while checking pusher health"
+  pass "fm-turnend-guard: dead away pusher with queued wakes blocks the turn"
+}
+
+test_hook_afk_silent_with_healthy_pusher() {
+  local dir watcher_pid watcher_identity pusher_pid pusher_identity out status queue_lines
+  dir=$(make_primary_dir "$TMP_ROOT/hook-afk-healthy-pusher")
+  : > "$dir/state/task1.meta"
+  : > "$dir/state/.afk"
+  printf '1\t1\tsignal\ttask1.status\tdone: queued\n' > "$dir/state/.wake-queue"
+  sleep 60 &
+  watcher_pid=$!
+  sleep 60 &
+  pusher_pid=$!
+  watcher_identity=$(watcher_identity "$dir" "$watcher_pid") || fail "could not identify live watcher holder"
+  pusher_identity=$(watcher_identity "$dir" "$pusher_pid") || fail "could not identify live pusher holder"
+  record_watcher_lock "$dir" "$watcher_pid" "$watcher_identity"
+  record_pusher_lock "$dir" "$pusher_pid" "$pusher_identity"
+  touch "$dir/state/.last-watcher-beat"
+  out=$(run_hook "$dir" false); status=$?
+  queue_lines=$(wc -l < "$dir/state/.wake-queue")
+  kill "$watcher_pid" "$pusher_pid" 2>/dev/null || true
+  wait "$watcher_pid" 2>/dev/null || true
+  wait "$pusher_pid" 2>/dev/null || true
+  expect_code 0 "$status" "away hook must allow the turn with a healthy identity-matched pusher"
+  [ -z "$out" ] || fail "away hook produced output despite a healthy identity-matched pusher: $out"
+  [ "$queue_lines" -eq 1 ] || fail "away hook changed the queued wake while checking pusher health"
+  pass "fm-turnend-guard: healthy identity-matched away pusher allows the turn"
 }
 
 test_hook_blocks_with_live_lock_and_stale_beacon() {
@@ -1064,6 +1122,8 @@ test_hook_blocks_when_fresh_beacon_has_no_live_lock
 test_hook_blocks_when_dead_lock_has_fresh_beacon
 test_hook_silent_with_live_lock_and_fresh_beacon
 test_hook_blocks_with_live_daemon_but_no_stub
+test_hook_afk_blocks_with_dead_pusher_and_queued_wakes
+test_hook_afk_silent_with_healthy_pusher
 test_hook_blocks_with_live_lock_and_stale_beacon
 test_hook_blocks_when_unhealthy_in_primary
 test_hook_blocks_from_fm_home_state

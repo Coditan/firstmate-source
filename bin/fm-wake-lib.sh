@@ -133,6 +133,29 @@ fm_watcher_healthy() {
   return 0
 }
 
+fm_pusher_lock_matches_pid() {
+  local state=$1 pid=$2 lockdir lock_pid lock_identity current_identity
+  lockdir="$state/.supervise-daemon.lock"
+  lock_pid=$(cat "$lockdir/pid" 2>/dev/null || true)
+  lock_identity=$(cat "$lockdir/pid-identity" 2>/dev/null || true)
+  [ "$lock_pid" = "$pid" ] || return 1
+  [ -n "$lock_identity" ] || return 1
+  current_identity=$(fm_pid_identity "$pid") || return 1
+  [ "$current_identity" = "$lock_identity" ]
+}
+
+FM_PUSHER_HEALTHY_PID=
+fm_pusher_healthy() {
+  local state=$1 pid
+  FM_PUSHER_HEALTHY_PID=
+  pid=$(cat "$state/.supervise-daemon.pid" 2>/dev/null || true)
+  fm_pid_alive "$pid" || return 1
+  fm_pusher_lock_matches_pid "$state" "$pid" || return 1
+  # shellcheck disable=SC2034 # Read by callers after fm_pusher_healthy returns.
+  FM_PUSHER_HEALTHY_PID=$pid
+  return 0
+}
+
 fm_lock_clean_known_files() {
   local lockdir=$1
   rm -f \
