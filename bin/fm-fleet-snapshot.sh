@@ -212,9 +212,12 @@ bool_json() {
 # `input` binds in stream order, so each caller's leading `input as $name` lines
 # must match its argument order. Small, explicitly bounded values (counts, flags,
 # paths, single status lines) stay on --arg/--argjson where they read better.
-# Exit status is jq's, so callers keep their existing hard-failure checks.
+# When jq fails before draining stdin, Bash's builtin printf reports the expected
+# EPIPE as a second error. The consumer owns the pipeline failure, so suppress
+# that writer diagnostic; exit status remains jq's and callers keep their
+# existing hard-failure checks.
 json_stdin() {  # <json>...
-  printf '%s\n' "$@"
+  printf '%s\n' "$@" 2>/dev/null
 }
 
 path_present_json() {  # <path>
