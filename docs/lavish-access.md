@@ -7,6 +7,17 @@ The failure is silent: the board renders correctly on the machine that made it, 
 `bin/fm-lavish.sh` is the entry point that fixes it, `bin/fm-service-port.sh` is the general port allocator underneath it, and `bin/fm-lavish-pretool-check.sh` is the guard that stops an agent reaching for the old command out of habit.
 Each script's header owns its exact flags and mechanics; this document owns the contract between them, the reasoning, and the validation record.
 
+## Read this first: one acceptance criterion is not proven
+
+The second acceptance criterion - an HTTP 200 for a board fetched from a *different* device on the tailnet - is **not proven**.
+It could not be proven from the machine this was built on: the other Linux nodes reject `tailscale ssh` with no known host key, and the captain's PC and phone cannot be driven by an agent.
+
+What is proven is everything on this side of the wire: the server binds only the tailnet address and loopback is not served, the emitted hostname resolves to that address, a request carrying the tailnet name is accepted by the Host allowlist and returns 200, and the tailnet peer path to the captain's PC answers.
+So the mechanism is demonstrated up to the last hop, and the last hop is the part nobody here can perform.
+
+One fetch of a wrapper-emitted link, from the captain's own PC or phone, closes it.
+The phone is the case worth doing specifically, for the reason recorded under "Open gap: the off-device request" at the end of this document, which also carries the full attempt log.
+
 ## Why this could not be a documented environment variable
 
 `~/.bashrc` returns immediately for non-interactive shells, and an agent tool shell loads its own snapshot instead, so an operator's profile export never reaches an agent's invocation.
