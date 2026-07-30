@@ -171,6 +171,7 @@ export async function loadPiTurnendExtension(plugin) {
     .replace(/function runChecker\(script: string, command: string\): Promise<\{ code: number; stderr: string \}>/, "function runChecker(script, command)")
     .replace(/function runPretoolCheck\(command: string\): Promise<\{ code: number; stderr: string \}>/, "function runPretoolCheck(command)")
     .replace(/function runCdCheck\(command: string\): Promise<\{ code: number; stderr: string \}>/, "function runCdCheck(command)")
+    .replace(/function runLavishCheck\(command: string\): Promise<\{ code: number; stderr: string \}>/, "function runLavishCheck(command)")
     .replace(/\(event as \{ reason\?: unknown \}\)/g, "event")
     .replace(/\(event.input as \{ command\?: unknown \}\)/g, "event.input");
   return import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
