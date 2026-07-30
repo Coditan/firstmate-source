@@ -340,6 +340,35 @@ assert_contains "$log" "ARGS=poll $HOME_A/.lavish/board.html" "arguments pass th
 assert_contains "$log" "HOST=127.0.0.1" "a follow-up command resolves the same server, not the default port"
 pass "poll and other follow-ups resolve the same server the open call did"
 
+# --- entry point: a flag-led invocation that opens nothing --------------------
+#
+# The guard denies bare `lavish-axi --version` and names this wrapper as the way
+# to run it, so the wrapper has to treat it as what lavish-axi treats it as: a
+# command that opens no board at all.
+
+HOME_F=$(make_home "$TMP_ROOT/vessel-f")
+export FM_TEST_LAVISH_LOG="$TMP_ROOT/lavish-f.log"
+: > "$FM_TEST_LAVISH_LOG"
+out=$(FM_TEST_TS_MODE=stopped FM_HOME="$HOME_F" FM_SERVICE_PORT_RANGE=4740-4759 \
+  "$ROOT/bin/fm-lavish.sh" --version 2>&1)
+expect_code 0 "$?" "a flag-led invocation that opens nothing must still run"
+assert_contains "$(cat "$FM_TEST_LAVISH_LOG")" "ARGS=--version" "its arguments reach lavish-axi intact"
+assert_absent "$HOME_F/state/service-port.lavish" "a command that opens no board must claim no port"
+assert_absent "$HOME_F/state/lavish/fm-owner" "a command that opens no board must not rewrite the owner record"
+assert_not_contains "$out" "does not answer here" "nothing may report on a link for a board that was never opened"
+assert_not_contains "$out" "opens only on this machine" "nothing may describe the reach of a board that was never opened"
+pass "a flag-led invocation carrying no board file claims nothing and reports on nothing"
+
+: > "$FM_TEST_LAVISH_LOG"
+FM_HOME="$HOME_F" FM_SERVICE_PORT_RANGE=4740-4759 \
+  "$ROOT/bin/fm-lavish.sh" --version "$HOME_F/.lavish/board.html" >/dev/null 2>&1
+log=$(cat "$FM_TEST_LAVISH_LOG")
+assert_contains "$log" "HOST=127.0.0.1" "a flag in front of a board file is still an open"
+assert_contains "$log" "ARGS=--version $HOME_F/.lavish/board.html" "the open still passes its arguments through untouched"
+assert_present "$HOME_F/state/service-port.lavish" "an open claims a port however its arguments are ordered"
+assert_present "$HOME_F/state/lavish/fm-owner" "an open records what it launched a server with"
+pass "a flag-led invocation that does carry a board file takes the full open path"
+
 # --- entry point: honest degradation to the captain --------------------------
 
 export FM_TEST_LAVISH_LOG="$TMP_ROOT/lavish-b.log"

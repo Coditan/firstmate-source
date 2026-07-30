@@ -130,6 +130,8 @@ The same reasoning allows the subcommands that neither start a server nor emit a
 Those four are safe to allow for one specific reason: `lavish-axi` rewrites an argv into `open` only when the first word is not one of its own subcommands, so an HTML path after `export` cannot turn it into a board.
 Version and help flags are NOT allowed, even though they serve nothing on their own, because that rewrite makes `lavish-axi --version board.html` an `open`.
 Separating those would mean keeping a second copy of `lavish-axi`'s argv normalisation in this guard, which would drift; a wrong allow here is silent, while a wrong deny is loud and answered by running the wrapper.
+Because that deny sends `lavish-axi --version` through `bin/fm-lavish.sh`, the wrapper does mirror the one fact the guard refuses to: a flag-led argv opens a board only when some argument is an html path.
+The asymmetry is the point rather than an inconsistency - the guard fails safe by denying and never runs anything, while the wrapper has to run the command, and treating `--version` as an open would claim a port, rewrite this home's records, and then report on a board that was never opened.
 `stop` is deliberately not on that list either: shutting a server down is the ownership-sensitive action described above, and the wrapper is the path that proves the port first.
 
 ## The startup regression check

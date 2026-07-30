@@ -28,6 +28,11 @@
 # as the invocation that opened the board. A wrapper that fronted only the open
 # call would leave every follow-up pointed at the compiled-in default port.
 #
+# A flag-led invocation carrying no .html or .htm argument - `--version`,
+# `--help` - opens nothing, so it claims no port, writes no record, and gets no
+# reachability or link line. `--version <board>.html` IS an open, because that
+# is how lavish-axi itself reads it, and takes the full open path.
+#
 # `stop --port <n>` is held to exactly the same ownership proof as a bare
 # `stop`: the claim token has to answer on <n> first. lavish-axi's own stop path
 # shuts down any server that answers /health with a lavish-axi body, and every
@@ -156,6 +161,27 @@ for arg in "${ARGS[@]}"; do
     --port=*) EXPLICIT_PORT=1; EXPLICIT_PORT_VALUE=${arg#--port=} ;;
   esac
 done
+
+# lavish-axi rewrites a flag-led argv into `open` only when some argument is an
+# html path, and otherwise passes it through untouched. This wrapper mirrors
+# that one fact because it has to actually RUN the command: treating
+# `--version` as an open would claim a port, rewrite this home's records, and
+# then report on a board that was never opened. bin/fm-lavish-command-policy.mjs
+# deliberately mirrors nothing of the sort, because it fails safe by denying
+# rather than running anything.
+if [ "$SUBCOMMAND" = open ]; then
+  case "${ARGS[0]}" in
+    -*)
+      OPENS_BOARD=0
+      for arg in "${ARGS[@]}"; do
+        case "$(printf '%s' "$arg" | tr '[:upper:]' '[:lower:]')" in
+          *.html|*.htm) OPENS_BOARD=1; break ;;
+        esac
+      done
+      [ "$OPENS_BOARD" -eq 1 ] || SUBCOMMAND=passthrough
+      ;;
+  esac
+fi
 
 if [ "$SUBCOMMAND" = share ] && [ "$ALLOW_SHARE" != 1 ]; then
   die "refusing to publish this board to third-party hosting: review boards carry fleet names, security findings, and captain decisions, and the transport is meant to stay inside the tailnet. Pass --fm-allow-share (or set FM_LAVISH_ALLOW_SHARE=1) if this particular board is genuinely not private." 3
@@ -365,10 +391,12 @@ if [ "$NEEDS_PORT" -eq 1 ]; then
       "$PORT" "$ADDR" "$LINK_HOST" "$ALLOWED" > "$OWNER" ) 2>/dev/null || true
 fi
 
-if [ "$REACHABILITY" != tailnet ]; then
-  note "no tailnet on this host (${REASON:-reason unavailable}) - this board opens only on this machine."
-elif [ -n "$REASON" ]; then
-  note "$REASON"
+if [ "$NEEDS_PORT" -eq 1 ]; then
+  if [ "$REACHABILITY" != tailnet ]; then
+    note "no tailnet on this host (${REASON:-reason unavailable}) - this board opens only on this machine."
+  elif [ -n "$REASON" ]; then
+    note "$REASON"
+  fi
 fi
 
 # --- run --------------------------------------------------------------------
