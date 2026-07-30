@@ -245,6 +245,8 @@ The report is the only thing that survives, so anything worth keeping must be in
 1. Never push to any remote and never open a PR.
 2. Stay inside this worktree; the only files you may write outside it are the report and the status file below.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
+   To open a Lavish review board, run \`$FM_ROOT/bin/fm-lavish.sh\` instead of bare lavish-axi:
+   bare lavish-axi emits a link that opens nothing outside this machine.
 4. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
    States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
@@ -352,6 +354,8 @@ If the top-level path is the primary checkout or not the worktree you were launc
 $RULE1
 2. Stay inside this worktree; modify nothing outside it.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
+   To open a Lavish review board, run \`$FM_ROOT/bin/fm-lavish.sh\` instead of bare lavish-axi:
+   bare lavish-axi emits a link that opens nothing outside this machine.
 4. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
    States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.

@@ -121,6 +121,8 @@ state/               volatile runtime signals; gitignored
   .pr-check-migration-scan-v1  private marker proving the non-executing scan disabled every unsafe legacy check; .pr-check-migration-v1 separately records completed private repairs
   x-watch.check.sh   generated X-mode relay poll shim; present only when opted in (section 14)
   pending-replies/   parent-owned secondmate pending-reply records (correlation id, delivery vs reply, recovery, escalation); fm-pending-reply-lib.sh
+  service-port.<service>  published record of the address and port one vessel-local service took; a record, NEVER a lock, so nothing may read it to decide a port is free (bin/fm-service-port.sh; docs/lavish-access.md)
+  lavish/            this home's private review-board server state, session store, and claim token; owned by bin/fm-lavish.sh
   x-inbox/           generated X-mode pending mention payloads; fmx-respond drains it (section 14)
   x-context/         generated X-mode durable per-request reply context and one-wake offer markers, keyed by request_id; survives inbox cleanup and expires within seven days (section 14; bin/fm-x-lib.sh)
   x-outbox/          generated X-mode dry-run reply and dismiss previews; inspect it when FMX_DRY_RUN is set (section 14)
@@ -171,7 +173,7 @@ A lock-refused session must not spawn, steer, merge, drain the wake queue, repai
 
 Bootstrap detects first, asks for consent, and installs only after the captain approves in the current session.
 Do not dispatch until the required tools are present and GitHub authentication is good.
-Use `gh-axi` for GitHub, `chrome-devtools-axi` for browser work, and `lavish-axi` for structured decisions or reports; consult current help rather than memorizing flags.
+Use `gh-axi` for GitHub, `chrome-devtools-axi` for browser work, and `bin/fm-lavish.sh` - never bare `lavish-axi` - for structured decisions or reports; consult current help rather than memorizing flags.
 A silent bootstrap section needs no action; for any printed actionable diagnostic line, load `bootstrap-diagnostics` and follow its owner procedure.
 `BOOTSTRAP_INFO:` lines are completed no-action facts and do not require loading a skill.
 `secondmate-provisioning` owns startup secondmate sync, liveness, and inherited local-material convergence.
@@ -442,7 +444,7 @@ Reach the captain immediately for:
 
 Do not surface automatic fixes, retries, routine progress, or internal supervision mechanics.
 Batch non-urgent updates into the next natural reply.
-Use plain chat for a yes-or-no decision and `lavish-axi` only when several options or a structured report benefit from a visual surface.
+Use plain chat for a yes-or-no decision and `bin/fm-lavish.sh` only when several options or a structured report benefit from a visual surface; it is the only sanctioned way to open a review board, because bare `lavish-axi` hands the captain a link that opens nowhere but this machine (docs/lavish-access.md).
 Whenever a PR is mentioned, include its full `https://...` URL before any shorthand reference.
 Generate a PDF deliverable only through `bin/fm-pdf-finish.sh`, which refuses to publish a file a real reader cannot read, because a browser-printed document looks correct on screen and fails at the recipient (docs/pdf-output.md).
 Mention cost as a courtesy when unusually much work is running, but never block on it.
@@ -496,7 +498,7 @@ Bootstrap separately detects when the primary checkout's own default branch has 
 
 These skills are not captain-invocable; load them only at their precise triggers.
 
-- `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `ROLE_INVALID:`, `ROLE_OVERLAY_MISSING:`, `NEEDS_GH_AUTH`, `TANGLE:`, `SELF_DRIFT:`, `CREW_DISPATCH: invalid`, `CURRENCY_BASE:`, `BACKLOG_STALE:`, `BACKLOG_UNREADABLE:`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `NUDGE_SECONDMATES:`, `AXI_SUITE_UPDATED:`, `AXI_SUITE_REVIEW:`, `AXI_SUITE_STUCK:`, `FIRSTMATE_UPDATE_AVAILABLE:`, `FIRSTMATE_UPDATE_STUCK:`, `FORK_SYNC:`, `FORK_SYNC_STUCK:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
+- `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `ROLE_INVALID:`, `ROLE_OVERLAY_MISSING:`, `NEEDS_GH_AUTH`, `TANGLE:`, `SELF_DRIFT:`, `CREW_DISPATCH: invalid`, `CURRENCY_BASE:`, `LAVISH_ACCESS:`, `BACKLOG_STALE:`, `BACKLOG_UNREADABLE:`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `NUDGE_SECONDMATES:`, `AXI_SUITE_UPDATED:`, `AXI_SUITE_REVIEW:`, `AXI_SUITE_STUCK:`, `FIRSTMATE_UPDATE_AVAILABLE:`, `FIRSTMATE_UPDATE_STUCK:`, `FORK_SYNC:`, `FORK_SYNC_STUCK:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
 - `diagnostic-reasoning` - load before scoping a reported bug and before acting on a diagnostic report.
 - `harness-adapters` - load before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
 - `firstmate-orca` - load before switching to Orca, spawning or supervising Orca-backed work, smoke-testing Orca backend behavior, debugging Orca task state, or reconciling Orca-backed task metadata.

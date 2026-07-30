@@ -1,0 +1,346 @@
+#!/usr/bin/env bash
+# Resolve one vessel-local service's reachable address and a port it can
+# actually bind, on a machine that may carry several vessels as separate UNIX
+# accounts.
+#
+# This is a GENERAL allocator. Lavish review boards are its first consumer
+# (bin/fm-lavish.sh), not its subject: any vessel-local service has the same
+# problem, so nothing here knows what the service does.
+#
+# Two rules this script exists to enforce, both learned the hard way:
+#
+#   1. A successful bind is the ONLY proof a port is free. No registry file can
+#      stop another UNIX account's process from taking a port, so this script
+#      never consults a record to decide availability - it probes
+#      (bin/fm-service-port-probe.mjs) and treats EADDRINUSE as authoritative.
+#      The record it writes afterwards is a published fact, not a reservation.
+#   2. Nothing is emitted that implies reach the vessel has not established.
+#      With no usable tailnet this prints reachability=loopback with a concrete
+#      reason instead of a tailnet address the consumer would put into a link
+#      that opens nothing off this machine.
+#
+# Usage:
+#   fm-service-port.sh <service> [--mine <port>]... [--check]
+#
+#   <service>   lowercase slug naming the service, e.g. lavish
+#   --mine      a port the CALLER has already proved it owns and is still using.
+#               The first such port is returned unprobed, because probing a port
+#               you are yourself listening on would report a false collision.
+#               The ownership proof belongs to the caller; this script does not
+#               and cannot verify it.
+#   --check     resolve identity and reachability only. No bind is attempted and
+#               no record is written, so no port is claimed: the output carries
+#               seat= (the deterministic preference) and no port= at all.
+#
+# Output: key=value lines on stdout, exit 0.
+#
+#   service=lavish
+#   vessel=coditan
+#   machine=crew-hlr
+#   dnsname=crew-hlr.tail7b8448.ts.net
+#   addr=100.121.172.63
+#   seat=4413
+#   window=4400-4499
+#   port=4413
+#   reachability=tailnet
+#   reason=
+#
+#   machine     tailnet node name, the only fleet-unique machine identity
+#               available; unknown-<vessel> when there is no tailnet, so a
+#               machine that cannot be identified is never silently treated as
+#               a distinct one.
+#   dnsname     the hostname a link may use. Set ONLY when it resolves over IPv4
+#               to addr, so a consumer never writes a name into a URL without
+#               that name having been checked. Empty means "use addr".
+#   seat        the deterministic preferred port for this service in this home.
+#   port        the port actually bound (absent under --check).
+#   reason      empty when fully nominal; otherwise one plain sentence naming
+#               the concrete thing that is missing or degraded.
+#
+# Exit codes:
+#   0  resolved
+#   1  every candidate in the window is taken (a real, reportable collision)
+#   2  usage error
+#   3  the resolved address cannot be bound on this host, or the probe runtime
+#      is unavailable - distinct from 1, because no port was ever contended
+#
+# The port window defaults to 4400-4499: above lavish-axi's compiled-in 4387
+# default so a stray bare invocation never lands on an allocated seat, and far
+# below the ephemeral range. Override with FM_SERVICE_PORT_RANGE=<start>-<end>.
+#
+# The record is written to FM_HOME/state/service-port.<service>. Read it to see
+# who holds what; never read it to decide whether a port is free.
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+FM_HOME="${FM_HOME:-$FM_ROOT}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+PROBE="$SCRIPT_DIR/fm-service-port-probe.mjs"
+
+die() {
+  printf 'SERVICE_PORT: %s\n' "$1" >&2
+  exit "${2:-2}"
+}
+
+usage() {
+  cat <<'EOF'
+Usage: fm-service-port.sh <service> [--mine <port>]... [--check]
+
+Prints key=value lines describing this vessel's reachable address and a port it
+actually bound for <service>. --check resolves identity and reachability only
+and claims no port. See the script header for the full contract.
+EOF
+}
+
+SERVICE=""
+CHECK_ONLY=0
+MINE=""
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --check)
+      CHECK_ONLY=1
+      shift
+      ;;
+    --mine)
+      [ "$#" -gt 1 ] || die "--mine requires a port"
+      MINE="$MINE $2"
+      shift 2
+      ;;
+    --mine=*)
+      MINE="$MINE ${1#--mine=}"
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    -*)
+      usage >&2
+      die "unknown argument: $1"
+      ;;
+    *)
+      [ -z "$SERVICE" ] || { usage >&2; die "unexpected argument: $1"; }
+      SERVICE=$1
+      shift
+      ;;
+  esac
+done
+
+[ -n "$SERVICE" ] || { usage >&2; die "a service name is required"; }
+case "$SERVICE" in
+  [a-z0-9]|[a-z0-9][a-z0-9-]*) ;;
+  *) die "service name must be a lowercase slug: $SERVICE" ;;
+esac
+
+# --- identity ---------------------------------------------------------------
+
+# The vessel id names the fleet member. It is NOT sufficient on its own to
+# separate a secondmate from its parent: they share both the id and the UNIX
+# account, so the realpath of FM_HOME is what actually separates their seats.
+resolve_vessel() {
+  local raw=""
+  if [ -n "${FM_BRIDGE_VESSEL:-}" ]; then
+    raw=${FM_BRIDGE_VESSEL%% *}
+  elif [ -r "$CONFIG/bridge-vessel" ]; then
+    raw=$(tr -s '[:space:]' ' ' < "$CONFIG/bridge-vessel" 2>/dev/null || true)
+    raw=${raw## }
+    raw=${raw%% *}
+  fi
+  [ -n "$raw" ] || raw=$(basename -- "$FM_HOME")
+  raw=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')
+  raw=${raw%%-}
+  [ -n "$raw" ] || raw=vessel
+  printf '%s\n' "$raw"
+}
+
+VESSEL=$(resolve_vessel)
+HOME_REAL=$(cd "$FM_HOME" 2>/dev/null && pwd -P) || HOME_REAL=$FM_HOME
+
+# --- address ----------------------------------------------------------------
+#
+# Everything below is read from the running tailscale at runtime. Nothing
+# vessel-specific is compiled in, so this resolves correctly on every vessel
+# including secondmate homes.
+
+ADDR=""
+DNSNAME=""
+MACHINE=""
+REACHABILITY=loopback
+REASON=""
+
+tailscale_json() {
+  command -v jq >/dev/null 2>&1 || return 1
+  tailscale status --json 2>/dev/null
+}
+
+resolve_tailnet() {
+  local json state addr host suffix dnsname
+  command -v tailscale >/dev/null 2>&1 || {
+    REASON="tailscale is not installed on this host"
+    return 1
+  }
+  json=$(tailscale_json) || {
+    REASON="tailscale status could not be read as JSON (jq missing or tailscale not responding)"
+    return 1
+  }
+  [ -n "$json" ] || {
+    REASON="tailscale status returned nothing"
+    return 1
+  }
+  state=$(printf '%s' "$json" | jq -r '.BackendState // empty' 2>/dev/null)
+  [ "$state" = "Running" ] || {
+    REASON="tailscale is installed but not running (backend state: ${state:-unknown})"
+    return 1
+  }
+  addr=$(printf '%s' "$json" | jq -r '[.Self.TailscaleIPs // [] | .[] | select(test("^[0-9]+\\.")) ] | first // empty' 2>/dev/null)
+  case "$addr" in
+    [0-9]*.[0-9]*.[0-9]*.[0-9]*) ;;
+    *)
+      REASON="tailscale reports no IPv4 address for this node"
+      return 1
+      ;;
+  esac
+  host=$(printf '%s' "$json" | jq -r '.Self.HostName // empty' 2>/dev/null)
+  suffix=$(printf '%s' "$json" | jq -r '.MagicDNSSuffix // empty' 2>/dev/null)
+  dnsname=$(printf '%s' "$json" | jq -r '.Self.DNSName // empty' 2>/dev/null)
+  dnsname=${dnsname%.}
+  [ -n "$dnsname" ] || { [ -z "$host" ] || [ -z "$suffix" ] || dnsname="$host.$suffix"; }
+  ADDR=$addr
+  MACHINE=$host
+  REACHABILITY=tailnet
+  # A name is only worth writing into a link once it has been checked, so an
+  # unresolvable or misdirected name degrades to the bare address with a reason
+  # rather than becoming a URL that fails on the captain's device.
+  if [ -n "$dnsname" ] && [ -x "$PROBE" ] && command -v node >/dev/null 2>&1 \
+    && node "$PROBE" resolve "$dnsname" "$addr" >/dev/null 2>&1; then
+    DNSNAME=$dnsname
+  elif [ -n "$dnsname" ]; then
+    REASON="the tailnet name $dnsname does not resolve to $addr here, so links use the address instead"
+  fi
+  return 0
+}
+
+if ! resolve_tailnet; then
+  ADDR=127.0.0.1
+  DNSNAME=""
+  REACHABILITY=loopback
+  MACHINE=""
+fi
+[ -n "$MACHINE" ] || MACHINE="unknown-$VESSEL"
+
+# --- window and deterministic seat ------------------------------------------
+
+WINDOW_START=4400
+WINDOW_END=4499
+if [ -n "${FM_SERVICE_PORT_RANGE:-}" ]; then
+  case "$FM_SERVICE_PORT_RANGE" in
+    [0-9]*-[0-9]*)
+      WINDOW_START=${FM_SERVICE_PORT_RANGE%%-*}
+      WINDOW_END=${FM_SERVICE_PORT_RANGE##*-}
+      ;;
+    *) die "FM_SERVICE_PORT_RANGE must be <start>-<end>: $FM_SERVICE_PORT_RANGE" ;;
+  esac
+fi
+if [ "$WINDOW_START" -lt 1 ] || [ "$WINDOW_END" -gt 65535 ] || [ "$WINDOW_START" -gt "$WINDOW_END" ]; then
+  die "port window $WINDOW_START-$WINDOW_END is not a usable range"
+fi
+WINDOW_SIZE=$((WINDOW_END - WINDOW_START + 1))
+
+# FM_HOME's realpath is in the key, not just the vessel id, because a secondmate
+# home shares both the id and the UNIX account with its parent - exactly the
+# case that must not collide.
+SEAT_KEY=$(printf '%s\n%s\n%s\n' "$SERVICE" "$VESSEL" "$HOME_REAL")
+SEAT_SUM=$(printf '%s' "$SEAT_KEY" | cksum | awk '{print $1}')
+[ -n "$SEAT_SUM" ] || die "could not derive a deterministic seat (cksum unavailable)" 3
+SEAT=$((WINDOW_START + SEAT_SUM % WINDOW_SIZE))
+
+emit() {
+  printf 'service=%s\n' "$SERVICE"
+  printf 'vessel=%s\n' "$VESSEL"
+  printf 'machine=%s\n' "$MACHINE"
+  printf 'dnsname=%s\n' "$DNSNAME"
+  printf 'addr=%s\n' "$ADDR"
+  printf 'seat=%s\n' "$SEAT"
+  printf 'window=%s-%s\n' "$WINDOW_START" "$WINDOW_END"
+  [ -z "${1:-}" ] || printf 'port=%s\n' "$1"
+  printf 'reachability=%s\n' "$REACHABILITY"
+  printf 'reason=%s\n' "$REASON"
+}
+
+if [ "$CHECK_ONLY" -eq 1 ]; then
+  emit
+  exit 0
+fi
+
+# --- a port the caller already owns -----------------------------------------
+
+for candidate in $MINE; do
+  case "$candidate" in
+    ''|*[!0-9]*) die "--mine must be a port number: $candidate" ;;
+  esac
+  if [ "$candidate" -ge 1 ] && [ "$candidate" -le 65535 ]; then
+    PORT=$candidate
+    break
+  fi
+  die "--mine must be a port number: $candidate"
+done
+
+# --- bind ------------------------------------------------------------------
+
+if [ -z "${PORT:-}" ]; then
+  command -v node >/dev/null 2>&1 || die "node is required to prove a port is free" 3
+  [ -f "$PROBE" ] || die "port probe is missing: $PROBE" 3
+
+  CANDIDATES=""
+  offset=0
+  while [ "$offset" -lt "$WINDOW_SIZE" ]; do
+    next=$((WINDOW_START + (SEAT - WINDOW_START + offset) % WINDOW_SIZE))
+    CANDIDATES="$CANDIDATES $next"
+    offset=$((offset + 1))
+  done
+
+  # shellcheck disable=SC2086
+  PORT=$(node "$PROBE" bind "$ADDR" $CANDIDATES 2>/dev/null)
+  probe_status=$?
+  case "$probe_status" in
+    0) ;;
+    3)
+      die "no free port in $WINDOW_START-$WINDOW_END on $ADDR for $SERVICE; every candidate is held by another process, so $SERVICE cannot start until one is released or FM_SERVICE_PORT_RANGE names a different window" 1
+      ;;
+    4)
+      die "$ADDR cannot be bound on this host, so $SERVICE has no address to serve on; re-check the network interface before treating this as a port collision" 3
+      ;;
+    *)
+      die "the port probe failed for $SERVICE on $ADDR (exit $probe_status)" 3
+      ;;
+  esac
+  case "$PORT" in
+    ''|*[!0-9]*) die "the port probe returned no usable port for $SERVICE on $ADDR" 3 ;;
+  esac
+fi
+
+# --- published record -------------------------------------------------------
+#
+# Written after the fact, never consulted to decide availability.
+
+RECORD="$STATE/service-port.$SERVICE"
+if mkdir -p "$STATE" 2>/dev/null; then
+  {
+    printf '# PUBLISHED RECORD, NOT A LOCK.\n'
+    printf '# Nothing may treat this port as reserved and no allocator may read this\n'
+    printf '# file to decide whether a port is free. The only proof that a port is\n'
+    printf '# available is a successful bind. This exists so a human or an agent can\n'
+    printf '# see who holds what, and can spot a collision after the fact.\n'
+    printf '# Written by bin/fm-service-port.sh.\n'
+    emit "$PORT"
+    printf 'home=%s\n' "$HOME_REAL"
+    printf 'recorded_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$RECORD.tmp.$$" 2>/dev/null && mv -f "$RECORD.tmp.$$" "$RECORD" 2>/dev/null
+  rm -f "$RECORD.tmp.$$" 2>/dev/null || true
+fi
+
+emit "$PORT"
+exit 0

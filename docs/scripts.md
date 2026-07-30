@@ -45,6 +45,11 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-cd-pretool-check.sh` | Stable PreToolUse transport for the cd-guard command policy (docs/cd-guard.md)       |
 | `fm-cd-command-policy.mjs` | Semantic owner of the cd-guard PreToolUse policy (docs/cd-guard.md)               |
 | `fm-subagent-pretool-check.sh` | Primary-home delegation-shape PreToolUse guard (docs/subagent-guard.md) |
+| `fm-lavish-pretool-check.sh` | Stable PreToolUse transport for the lavish-guard command policy (docs/lavish-access.md) |
+| `fm-lavish-command-policy.mjs` | Semantic owner of the bare-`lavish-axi` PreToolUse policy (docs/lavish-access.md) |
+| `fm-lavish.sh`           | Open review boards on this vessel's own tailnet address and port (docs/lavish-access.md) |
+| `fm-service-port.sh`     | Resolve one vessel-local service's reachable address and a port it actually bound     |
+| `fm-service-port-probe.mjs` | Bind, DNS, and readiness oracle for the service-port allocator                    |
 | `fm-supervision-instructions.sh` | Render the session-start primary-harness supervision block or the one-line repair instruction |
 | `fm-home-seed.sh`        | Transactionally provision a secondmate home and maintain `data/secondmates.md`       |
 | `fm-spawn.sh`            | Spawn crewmates, scouts, `id=repo` batches, and secondmates on the resolved harness and runtime backend |

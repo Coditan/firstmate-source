@@ -12,6 +12,7 @@
 #                 "ROLE_OVERLAY_MISSING: <name> (expected: roles/<name>.md)",
 #                 "CREW_DISPATCH: invalid config/crew-dispatch.json - <reason>",
 #                 "CURRENCY_BASE: config/<file> is unusable - <reason>; <remediation>",
+#                 "LAVISH_ACCESS: <N> open review board link(s) still point at this machine only ...",
 #                 "BACKLOG_STALE: task <id> has <fault>; fix: <command>",
 #                 "BACKLOG_UNREADABLE: task <id> in <backlog file> is parsed by <reader> but not <reader>; fix: <row repair>",
 #                 "FLEET_SYNC: <repo>: skipped|recovered|STUCK: <detail>",
@@ -744,6 +745,59 @@ currency_base_validate() {
   done
 }
 
+# Detect-only: this vessel is still handing the captain review-board links that
+# open nothing on his own devices. The whole point of bin/fm-lavish.sh is that
+# this failure is silent - a loopback board looks correct on the machine that
+# made it - so without a startup check it regresses unnoticed, which it already
+# did once while the fix sat queued.
+#
+# Deliberately ordered cheap-first: the session stores are plain file reads, and
+# the address resolver only runs once a loopback link has actually been found.
+# A host with no tailnet is honestly limited rather than regressed, so it is
+# silent.
+lavish_access_check() {
+  local loopback found=0 reach shared
+  command -v jq >/dev/null 2>&1 || return 0
+  # This home's own store, written by bin/fm-lavish.sh. Everything in it belongs
+  # to this home, so no attribution filter is needed.
+  if [ -r "$STATE/lavish/state.json" ]; then
+    loopback=$(jq -r '
+      [ (.sessions // {}) | to_entries[]
+        | select(.value.status != "ended")
+        | .value.url // ""
+        | select(test("^https?://(127\\.0\\.0\\.1|localhost|\\[::1\\])[:/]"))
+      ] | length' "$STATE/lavish/state.json" 2>/dev/null) || loopback=
+    case "${loopback:-}" in
+      ''|*[!0-9]*) ;;
+      *) found=$((found + loopback)) ;;
+    esac
+  fi
+  # lavish-axi's default store, which is where a bypass lands. It is shared by
+  # every home of one UNIX account, so a session counts only when its board file
+  # lives under THIS home - otherwise a parent and its secondmate would both
+  # report the same boards, and an unrelated home's boards would be blamed here.
+  shared="$HOME/.lavish-axi/state.json"
+  if [ -r "$shared" ] && [ "$shared" != "$STATE/lavish/state.json" ]; then
+    loopback=$(FM_HOME_PREFIX="$FM_HOME/" jq -r '
+      ($ENV.FM_HOME_PREFIX) as $home
+      | [ (.sessions // {}) | to_entries[]
+          | select(.value.status != "ended")
+          | select((.value.file // "") | startswith($home))
+          | .value.url // ""
+          | select(test("^https?://(127\\.0\\.0\\.1|localhost|\\[::1\\])[:/]"))
+        ] | length' "$shared" 2>/dev/null) || loopback=
+    case "${loopback:-}" in
+      ''|*[!0-9]*) ;;
+      *) found=$((found + loopback)) ;;
+    esac
+  fi
+  [ "$found" -gt 0 ] || return 0
+  reach=$("$SCRIPT_DIR/fm-service-port.sh" lavish --check 2>/dev/null \
+    | sed -n 's/^reachability=\(.*\)$/\1/p' | head -1)
+  [ "$reach" = tailnet ] || return 0
+  echo "LAVISH_ACCESS: $found open review board link(s) still point at this machine only and will not open on the captain's devices; reopen them with bin/fm-lavish.sh"
+}
+
 crew_dispatch_validate() {
   local file err
   file="$CONFIG/crew-dispatch.json"
@@ -936,6 +990,7 @@ if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] && [ -n "$crew" ] && [ "$crew" != 
 fi
 crew_dispatch_validate
 currency_base_validate
+lavish_access_check
 if fm_tasks_axi_compatible && command -v jq >/dev/null 2>&1; then
   "$SCRIPT_DIR/fm-backlog-lint.sh" || true
 fi
