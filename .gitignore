@@ -4,11 +4,24 @@ data/
 .no-mistakes/
 .lavish/
 .local/axi/
+graphify-out/
 .fm-secondmate-home
 .DS_Store
 __pycache__/
 *.pyc
+# Captain-private local configuration and credentials.
+# These are directory- and prefix-wide rules on purpose. An ignore list that
+# enumerates private files one at a time fails open for every private file added
+# after the list was last edited: config/telegram.env and config/fm-tg-recv.sh
+# were declared "LOCAL, gitignored" in AGENTS.md and docs/configuration.md while
+# no rule covered them, so a plain `git add -A` in a home with the Telegram
+# receiver enabled would have staged a live bot token into this shared template.
+# config/* rather than config/ so a genuinely shared config file can still be
+# re-included with an explicit negation below; today none is, and adding one has
+# to be a deliberate act - which is the safe direction for the mistake to fall.
 .env
+.env.*
+config/*
 # Claude Code and firstmate write these local runtime artifacts into a checkout.
 # Keep the patterns narrow so tracked .claude/settings.json and .claude/skills remain visible.
 .claude/settings.local.json
@@ -23,18 +36,3 @@ __pycache__/
 **/.claude/first-run
 **/.claude/assistant-daemon-state.json
 .claude/settings.fm-task.json
-config/crew-harness
-config/crew-dispatch.json
-config/model-panel.json
-config/secondmate-harness
-config/backlog-backend
-config/backend
-config/role
-config/bridge-vessel
-config/x-mode.env
-config/cmux-socket-password
-config/wedge-alarm
-graphify-out/
-config/herdr-presentation-spaces
-config/firstmate-update-base
-config/fork-sync-upstream
