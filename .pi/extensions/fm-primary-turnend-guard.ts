@@ -85,8 +85,12 @@ function runGuard(): Promise<{ code: number; stderr: string }> {
 // pi.on("tool_call", ...) can block (verified 2026-07-09 against pi 0.80.5:
 // returning {block: true} prevents the bash command from running). Each owner
 // script owns its own decision and its own scope: the first two are inert
-// outside the real primary checkout, while the lavish guard fires wherever
-// bin/fm-lavish.sh exists, including a crew worktree.
+// outside the real primary checkout, while the lavish guard's own scope is any
+// checkout carrying bin/fm-lavish.sh. What THIS file delivers is narrower than
+// that scope: fm-spawn launches a Pi crewmate or scout with a generated
+// per-task extension carrying only a turn_end handler, so this file is loaded
+// by the primary session and by a Pi secondmate home, not by a Pi crew
+// worktree (docs/lavish-access.md records that limit).
 function runChecker(script: string, command: string): Promise<{ code: number; stderr: string }> {
   return new Promise((resolveResult) => {
     const child = spawn(`${root}/bin/${script}`, ["--command", command], {

@@ -35,7 +35,10 @@
 //                port on this address could ever have worked.
 //       Exit 5 - no candidate was bindable and at least one failure was neither
 //                a collision nor address-scoped (EACCES on a privileged port,
-//                for instance). Each such port is named on stderr. This is a
+//                for instance). One summary line on stderr counts how many
+//                candidates were held and how many were refused, and names the
+//                distinct errnos, because "held" and "refused" are different
+//                facts and neither may be asserted for the other. This is a
 //                port-scoped verdict, so callers must not report it as an
 //                unusable address either.
 //   fm-service-port-probe.mjs resolve <hostname> <expected-ipv4>
@@ -114,7 +117,8 @@ async function bindMode(argv) {
     usage();
     return 2;
   }
-  let refused = 0;
+  let taken = 0;
+  const refused = [];
   for (const raw of ports) {
     const port = Number(raw);
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -132,15 +136,17 @@ async function bindMode(argv) {
       );
       return 4;
     }
-    if (verdict.state === "refused") {
-      // Port-scoped, so the walk continues: the next candidate may well bind.
-      refused += 1;
-      process.stderr.write(
-        `fm-service-port-probe: ${addr}:${port} was refused (${verdict.code})\n`,
-      );
-    }
+    if (verdict.state === "taken") taken += 1;
+    // Port-scoped, so the walk continues: the next candidate may well bind.
+    if (verdict.state === "refused") refused.push(verdict.code);
   }
-  return refused > 0 ? 5 : 3;
+  if (refused.length === 0) return 3;
+  const codes = [...new Set(refused)].join(", ");
+  process.stderr.write(
+    `fm-service-port-probe: nothing bound on ${addr}: ${taken} candidate(s) held (EADDRINUSE), ` +
+      `${refused.length} refused (${codes})\n`,
+  );
+  return 5;
 }
 
 async function resolveMode(argv) {

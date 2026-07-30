@@ -31,13 +31,24 @@ import { fileURLToPath } from "node:url";
 
 const GUARDED = "lavish-axi";
 
-// Subcommands and flags that neither start a server nor emit a link, so denying
-// them would prevent nothing. `setup hooks` in particular is part of the install
+// Subcommands that neither start a server nor emit a link, so denying them
+// would prevent nothing. `setup hooks` in particular is part of the install
 // command bin/fm-bootstrap.sh and bin/fm-axi-suite.sh print for the captain to
-// run. `stop` is deliberately absent: shutting a server down is ownership
+// run. Each of these is a subcommand lavish-axi itself recognises, which is what
+// makes the list safe: lavish-axi only rewrites an argv into `open` when the
+// first word is NOT one of its own subcommands.
+//
+// Version and help flags are deliberately absent even though they serve
+// nothing on their own: a flag-led argv carrying an html path is rewritten into
+// `open` by lavish-axi, so `lavish-axi --version board.html` opens a board.
+// Telling those apart would mean keeping a second copy of lavish-axi's argv
+// normalisation here, and a wrong ALLOW is silent while a wrong DENY is loud
+// and answered by running the wrapper.
+//
+// `stop` is absent for a different reason: shutting a server down is ownership
 // sensitive and belongs to the wrapper, which proves the port is this home's
 // first.
-const NON_SERVING = new Set(["setup", "playbook", "design", "export", "--version", "-v", "--help", "-h"]);
+const NON_SERVING = new Set(["setup", "playbook", "design", "export"]);
 
 function reasonFor(wrapper) {
   return (
@@ -66,9 +77,10 @@ function hasCommandQueryPrefix(position) {
   return false;
 }
 
-// Mirror lavish-axi's own dispatch: the first argument decides the command, and
-// a first argument that is not a known subcommand is the board file. So only
-// that word can make an invocation non-serving.
+// A first argument that lavish-axi recognises as one of its own subcommands is
+// dispatched to that subcommand, whatever follows it. Anything else - a board
+// file, a flag, nothing at all - can end up opening a board, so only a word
+// from the list above makes an invocation non-serving.
 function isNonServing(words, index) {
   const first = words[index + 1];
   return Boolean(first) && NON_SERVING.has(first.value);

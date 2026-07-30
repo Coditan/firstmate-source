@@ -160,7 +160,17 @@ if [ "$low_port_status" -eq 5 ]; then
   out=$(node "$PROBE" bind 127.0.0.1 80 4733 2>/dev/null)
   expect_code 0 "$?" "a refused candidate must not end the walk"
   [ "$out" = 4733 ] || fail "the walk should continue past a refused port and return 4733, got '$out'"
-  pass "a refused port keeps the walk going and is reported apart from an unusable address"
+  # The summary must count what happened rather than assert contention that was
+  # never observed: nothing was held here, and saying otherwise would be the
+  # same false-concrete-diagnosis class the reason lines exist to avoid.
+  summary=$(node "$PROBE" bind 127.0.0.1 80 81 2>&1 >/dev/null)
+  assert_contains "$summary" "0 candidate(s) held" "an all-refused window must not claim any candidate was held"
+  assert_contains "$summary" "2 refused" "the summary counts the refusals it actually saw"
+  assert_contains "$summary" "EACCES" "the summary names the concrete errno"
+  mixed=$(node "$PROBE" bind 127.0.0.1 80 4731 2>&1 >/dev/null)
+  expect_code 5 "$?" "a window of one refused and one held candidate is neither exhaustion nor an unusable address"
+  assert_contains "$mixed" "1 candidate(s) held" "a mixed window counts the held candidate"
+  pass "a refused port keeps the walk going and is counted apart from a held one"
 else
   pass "this host lets an unprivileged account bind port 80, so the refused-port branch is not exercisable here"
 fi
@@ -385,12 +395,11 @@ expect_code 2 "$?" "stopping a server is ownership sensitive and belongs to the 
 pass "the guard denies the invocation that emits an unreachable link and nothing else"
 
 # Subcommands that neither start a server nor emit a link prevent nothing by
-# being denied, and this repo prints some of them for the captain to run.
+# being denied, and this repo prints some of them for the captain to run. Each
+# one is a subcommand lavish-axi recognises, so an html argument after it cannot
+# promote the invocation to `open`.
 for allowed in \
   'lavish-axi setup hooks' \
-  'lavish-axi --version' \
-  'lavish-axi -v' \
-  'lavish-axi --help' \
   'lavish-axi playbook table' \
   'lavish-axi design' \
   'lavish-axi export board.html --out /tmp/board.html'; do
@@ -398,6 +407,18 @@ for allowed in \
   expect_code 0 "$?" "a non-serving invocation must not be denied: $allowed"
 done
 pass "non-serving subcommands stay available, because denying them prevents nothing"
+
+# lavish-axi rewrites a flag-led argv carrying an html path into `open`, so a
+# version or help flag is not proof that no board is opened.
+for flagged in \
+  'lavish-axi --version board.html' \
+  'lavish-axi -v /tmp/b.html' \
+  'lavish-axi --help board.html' \
+  'lavish-axi -h b.htm'; do
+  "$GUARD" --command "$flagged" >/dev/null 2>&1
+  expect_code 2 "$?" "a flag in front of a board file still opens a board: $flagged"
+done
+pass "a version or help flag never buys an invocation past the guard"
 
 # The exact shapes bin/fm-bootstrap.sh install_cmd and bin/fm-axi-suite.sh
 # install_hint print inside MISSING: and AXI_SUITE_REVIEW: diagnostics. They are
@@ -486,7 +507,15 @@ assert_grep 'runLavishCheck(command)' "$PI_EXTENSION" \
   "the Pi extension must run the lavish check on a tool call"
 assert_grep 'block: true' "$PI_EXTENSION" \
   "the Pi extension must block the command it denies"
-pass "the guard is wired into all five tracked harness surfaces"
+
+# Pi's registration reaches the sessions launched with this extension, which is
+# not every session bin/fm-spawn.sh starts. The doc has to say so, because the
+# whole point of this change is not overstating reach.
+assert_grep 'not by a Pi crew' "$PI_EXTENSION" \
+  "the Pi extension must state which sessions actually load it"
+assert_grep 'does not reach a Pi crewmate or scout' "$ROOT/docs/lavish-access.md" \
+  "the doc must name the Pi sessions this registration does not reach"
+pass "the guard is registered on all five tracked harness surfaces, with Pi's crew limit stated rather than rounded up"
 
 # --- the instruction surface points at the entry point -----------------------
 

@@ -126,8 +126,11 @@ Its structural limit, stated rather than implied: the hook is registered by firs
 `bin/fm-brief.sh` covers that gap by naming the wrapper in every generated brief's rules.
 
 `command -v lavish-axi` and `type lavish-axi` are allowed: they ask whether the tool exists, never start a server, and `bin/fm-bootstrap.sh` does exactly this, so denying them would break tool detection to prevent nothing.
-The same reasoning allows the subcommands that neither start a server nor emit a link - `setup`, `playbook`, `design`, `export`, and the version and help flags - because `bin/fm-bootstrap.sh` and `bin/fm-axi-suite.sh` print `... && PATH=<bin>:$PATH lavish-axi setup hooks` as the install command the captain is told to run, and a guard that denies its own repo's instructions prevents nothing while costing trust in every other denial.
-`stop` is deliberately not on that list: shutting a server down is the ownership-sensitive action described below, and the wrapper is the path that proves the port first.
+The same reasoning allows the subcommands that neither start a server nor emit a link - `setup`, `playbook`, `design`, and `export` - because `bin/fm-bootstrap.sh` and `bin/fm-axi-suite.sh` print `... && PATH=<bin>:$PATH lavish-axi setup hooks` as the install command the captain is told to run, and a guard that denies its own repo's instructions prevents nothing while costing trust in every other denial.
+Those four are safe to allow for one specific reason: `lavish-axi` rewrites an argv into `open` only when the first word is not one of its own subcommands, so an HTML path after `export` cannot turn it into a board.
+Version and help flags are NOT allowed, even though they serve nothing on their own, because that rewrite makes `lavish-axi --version board.html` an `open`.
+Separating those would mean keeping a second copy of `lavish-axi`'s argv normalisation in this guard, which would drift; a wrong allow here is silent, while a wrong deny is loud and answered by running the wrapper.
+`stop` is deliberately not on that list either: shutting a server down is the ownership-sensitive action described above, and the wrapper is the path that proves the port first.
 
 ## The startup regression check
 
@@ -143,7 +146,12 @@ This check is the reason the fix cannot regress unnoticed, which matters because
 - **Harnesses** (claude, codex, opencode, pi, grok) - the wrapper and the allocator are ordinary scripts and are harness-neutral.
   The guard is not, and is registered on all five surfaces the way the cd-guard is: `.claude/settings.json` for Claude, `.codex/hooks.json` for Codex with the same self-registration check the other Codex hooks use, `.grok/hooks/fm-primary-lavish-check.json` for Grok, `.opencode/plugins/fm-primary-lavish-check.js` for OpenCode, and a `runChecker` call in `.pi/extensions/fm-primary-turnend-guard.ts`'s `tool_call` handler for Pi.
   The last two consume the `--command` CLI form plus exit 2 and stderr, which the transport already emits.
-  Registering only the three JSON surfaces would leave the guard inert on two harnesses crewmates are spawned on, which is the same "inert exactly where the mistake happens" failure the scope decision above exists to avoid.
+  Leaving OpenCode and Pi unregistered would have left the guard inert on two of the five harnesses this fleet spawns agents on, which is the same "inert exactly where the mistake happens" failure the scope decision above exists to avoid.
+  What each registration actually reaches differs, and the difference is worth stating rather than rounding up.
+  OpenCode reaches everything: a crewmate runs inside its worktree and OpenCode discovers `.opencode/plugins/` from the project root, so the plugin loads there as well as in the primary.
+  Pi reaches the primary session and a Pi secondmate home, which are the sessions launched with `-e .pi/extensions/fm-primary-turnend-guard.ts`, and it does not reach a Pi crewmate or scout: `bin/fm-spawn.sh` launches those with a generated per-task extension that carries a `turn_end` handler and no `tool_call` hook at all.
+  That is the same structural limit the cd-guard already has on Pi crews and is not something this change introduces; closing it means changing what `bin/fm-spawn.sh` generates for every Pi crew launch, which is its own task rather than a rider on this one.
+  A Pi crewmate is covered by the brief rule instead, which is the same fallback `bin/fm-brief.sh` provides for worktrees of other projects.
 - **Runtime backends** (tmux, herdr, zellij, orca, cmux) - not applicable, confirmed by inspecting `bin/fm-backend.sh`'s surface rather than assumed.
   No backend touches service ports or the AXI prefix, and the allocator runs inside an already-spawned worker's shell.
 - **Secondmate homes** - covered by construction: the seat key includes the realpath of `FM_HOME`, and `LAVISH_AXI_STATE_DIR` is per home, so a secondmate and its parent never share a seat or a session store despite sharing a UNIX account.

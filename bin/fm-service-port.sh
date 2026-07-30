@@ -61,7 +61,8 @@
 #   0  resolved
 #   1  no port in the window could be bound: every candidate is held by another
 #      process, or some were refused by this host (a privileged port, say). Both
-#      are port-scoped, and the diagnostic says which of the two happened.
+#      are port-scoped, and the probe's own line counts how many candidates fell
+#      into each case and names the errnos, so neither is asserted for the other.
 #   2  usage error
 #   3  the resolved address cannot be bound on this host, or the probe runtime
 #      is unavailable - distinct from 1, because no port was ever contended
@@ -310,8 +311,10 @@ if [ -z "${PORT:-}" ]; then
     offset=$((offset + 1))
   done
 
+  # The probe's stderr is deliberately not discarded: it is silent on success,
+  # and on failure it is the only thing that names the concrete errnos.
   # shellcheck disable=SC2086
-  PORT=$(node "$PROBE" bind "$ADDR" $CANDIDATES 2>/dev/null)
+  PORT=$(node "$PROBE" bind "$ADDR" $CANDIDATES)
   probe_status=$?
   case "$probe_status" in
     0) ;;
@@ -322,7 +325,7 @@ if [ -z "${PORT:-}" ]; then
       die "$ADDR cannot be bound on this host, so $SERVICE has no address to serve on; re-check the network interface before treating this as a port collision" 3
       ;;
     5)
-      die "no bindable port in $WINDOW_START-$WINDOW_END on $ADDR for $SERVICE; some candidates are held by another process and this host refused others outright, so $SERVICE cannot start until FM_SERVICE_PORT_RANGE names a window this account may bind" 1
+      die "no bindable port in $WINDOW_START-$WINDOW_END on $ADDR for $SERVICE; the port probe's line above counts how many candidates were held and how many this host refused, and names the errnos, so read it before deciding whether the window or the account's permissions is what has to change" 1
       ;;
     *)
       die "the port probe failed for $SERVICE on $ADDR (exit $probe_status)" 3
