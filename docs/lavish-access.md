@@ -101,7 +101,7 @@ Probing loopback while a service binds only a tailnet address reports a healthy 
 
 ### The wrapper observes rather than predicts
 
-Every one of those sentences is about a board, so the wrapper says none of them until it has seen a board.
+Sentences about a **link** are held back until the wrapper has seen a link.
 It decides that from a session URL in what the run printed, not from the shape of the arguments it was given.
 
 The reason is that argument shapes cannot answer the question.
@@ -109,10 +109,18 @@ The reason is that argument shapes cannot answer the question.
 Predicting that from argv means keeping a copy of somebody else's argument handling and getting it wrong on the next shape, which is what happened twice here before this rule replaced it.
 Observation has no such failure mode: no session URL means no link exists, and silence is the only honest thing to say about a link that does not exist.
 
+Sentences about the **host** are a different kind of fact and must not be held back with them.
+Whether this vessel has a usable tailnet is settled before anything runs, and no run changes it, so `no tailnet on this host ... this board opens only on this machine.` goes out on every invocation that could open a board.
+Telling somebody their boards are local-only when they only asked for help is harmless noise; staying quiet about it on a genuinely loopback-only host is the exact silent failure this mechanism exists to end, so the two are deliberately not gated together.
+
+That leaves one dependency on somebody else's output shape, and it is pinned rather than trusted.
+`tests/fm-lavish-access.test.sh` opens a board with the *installed* `lavish-axi` and asserts its output still carries the session URL the wrapper looks for, so a future release that changes that shape fails a test here instead of quietly disabling the link check.
+The test skips visibly when `lavish-axi` is not installed, because a check that passes without checking anything is the same failure in a smaller package.
+
 Two things still have to be decided before the run, and are therefore still decided from the arguments.
 The port claim comes first because a port has to exist before the command can run at all, so `bin/fm-lavish.sh open --help <board>.html` does take a port from the window and does rewrite `state/service-port.lavish` and `state/lavish/fm-owner`, and can restart or relocate this vessel's own server on the way.
 That is the wrapper's ordinary open bookkeeping against its own home rather than a false statement to the captain, and closing it would mean running the command before knowing what port to run it on.
-The other is a command that replaces this process with `lavish-axi` (`poll`, `end`, `server`): nothing after an `exec` can observe anything, so those emit their degradation notice up front.
+The other is a command that replaces this process with `lavish-axi` (`poll`, `end`, `server`): nothing after an `exec` can observe anything, which is one more reason the host's own reachability is stated before the run rather than after it.
 
 ## Third-party publishing is refused by default
 

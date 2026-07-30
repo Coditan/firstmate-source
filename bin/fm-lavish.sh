@@ -35,11 +35,13 @@
 #
 # Whether a board actually opened is decided by what the run PRINTED, never by
 # what its arguments looked like: an argv that dispatches `open` still opens
-# nothing when it carries --help. So every line this wrapper says about a link
-# or about reachability waits for a session URL in the output. What has to be
-# decided before the run - the port claim and the records that follow it - is
-# still decided from the arguments, because a port must exist before the
-# command can run at all.
+# nothing when it carries --help. So every line this wrapper says about a LINK
+# waits for a session URL in the output. Whether this host has a tailnet is a
+# different kind of fact - already known, and unchanged by anything the run
+# does - so that one is stated up front instead. What has to be decided before
+# the run - the port claim and the records that follow it - is likewise decided
+# from the arguments, because a port must exist before the command can run at
+# all.
 #
 # `stop --port <n>` is held to exactly the same ownership proof as a bare
 # `stop`: the claim token has to answer on <n> first. lavish-axi's own stop path
@@ -399,21 +401,23 @@ if [ "$NEEDS_PORT" -eq 1 ]; then
       "$PORT" "$ADDR" "$LINK_HOST" "$ALLOWED" > "$OWNER" ) 2>/dev/null || true
 fi
 
-reachability_note() {
+# This describes the HOST, not the outcome, and it is already known: no run can
+# make a loopback-only vessel reachable or a tailnet one unreachable. So it goes
+# out on every invocation that could open a board, before that board is opened.
+# Saying it to somebody who only asked for help is noise; withholding it on a
+# genuinely loopback-only host is the silent failure this whole mechanism exists
+# to end.
+if [ "$NEEDS_PORT" -eq 1 ]; then
   if [ "$REACHABILITY" != tailnet ]; then
     note "no tailnet on this host (${REASON:-reason unavailable}) - this board opens only on this machine."
   elif [ -n "$REASON" ]; then
     note "$REASON"
   fi
-}
+fi
 
 # --- run --------------------------------------------------------------------
 
-# Anything that execs cannot be observed afterwards, so its degradation notice
-# has to go out first. The open path can be observed, so its notice waits until
-# a board has actually been opened.
 if [ "$SUBCOMMAND" != open ]; then
-  [ "$NEEDS_PORT" -eq 0 ] || reachability_note
   exec "$LAVISH" "${ARGS[@]}"
 fi
 
@@ -428,13 +432,14 @@ STATUS=$?
 
 # A session link in the output is the evidence that a board is now serving and
 # that a link has been handed over. Without it there is no link to make any
-# claim about, and silence is the honest answer.
+# claim about, and silence is the honest answer. Only claims ABOUT A LINK hang
+# off this; the host's own reachability is stated above regardless, so a change
+# in lavish-axi's output shape can never silence that. The shape itself is
+# pinned against the installed tool by tests/fm-lavish-access.test.sh.
 case "$OUTPUT" in
   *://*/session/*) OPENED=1 ;;
   *) OPENED=0 ;;
 esac
-
-[ "$OPENED" -eq 0 ] || reachability_note
 
 # Verify the name that is now sitting in the captain's link, not the address we
 # bound. A bind that succeeded proves nothing about whether the emitted URL

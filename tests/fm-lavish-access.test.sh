@@ -391,10 +391,12 @@ for helped in "--help $HOME_F/.lavish/board.html" "open --help $HOME_F/.lavish/b
   assert_contains "$out" "Usage: lavish-axi" "the help text still reaches the caller: $helped"
   assert_not_contains "$out" "does not answer here" \
     "nothing may report a link for a board that was never opened: $helped"
-  assert_not_contains "$out" "opens only on this machine" \
-    "nothing may describe the reach of a board that was never opened: $helped"
+  # The host's own reachability is not a claim about a link, and withholding it
+  # is the silent failure this mechanism exists to end.
+  assert_contains "$out" "opens only on this machine" \
+    "a loopback-only host is still named on an invocation that could open a board: $helped"
 done
-pass "an argv that dispatches open but opens nothing says nothing about a board"
+pass "an argv that dispatches open but opens nothing makes no claim about a link"
 
 : > "$FM_TEST_LAVISH_LOG"
 out=$(FM_TEST_TS_MODE=stopped FM_HOME="$HOME_F" FM_SERVICE_PORT_RANGE=4740-4759 \
@@ -405,6 +407,36 @@ assert_contains "$out" "does not answer here" \
 assert_contains "$out" "opens only on this machine" \
   "a genuine open still says plainly that this board is local only"
 pass "a genuine open still gets every line the captain needs about its link"
+
+# --- the observed-open shape is pinned to the real tool ----------------------
+#
+# The wrapper decides that a board opened from a session URL in lavish-axi's own
+# output, so a change to that output would disable the link check silently. The
+# fake above cannot catch that, because this suite writes the very shape the
+# wrapper reads, so the expectation is taken from the installed tool instead.
+
+assert_grep '*://*/session/*' "$ROOT/bin/fm-lavish.sh" \
+  "the wrapper must still recognise an open by the session URL shape pinned below"
+REAL_LAVISH=$(command -v lavish-axi 2>/dev/null || true)
+if [ -z "$REAL_LAVISH" ]; then
+  echo "skip: lavish-axi not installed, so the observed-open shape was not pinned against the real tool"
+else
+  HOME_R=$(make_home "$TMP_ROOT/vessel-real")
+  real_port=$(node "$PROBE" bind 127.0.0.1 4796 4797 4798)
+  [ -n "$real_port" ] || fail "no free port to open a real board on"
+  real_out=$(LAVISH_AXI_HOST=127.0.0.1 LAVISH_AXI_PORT="$real_port" \
+    LAVISH_AXI_LINK_HOST=127.0.0.1 LAVISH_AXI_ALLOWED_HOSTS="127.0.0.1 localhost" \
+    LAVISH_AXI_STATE_DIR="$HOME_R/state/lavish" \
+    "$REAL_LAVISH" "$HOME_R/.lavish/board.html" --no-open 2>&1) || true
+  LAVISH_AXI_HOST=127.0.0.1 LAVISH_AXI_PORT="$real_port" \
+    LAVISH_AXI_STATE_DIR="$HOME_R/state/lavish" \
+    "$REAL_LAVISH" stop --port "$real_port" >/dev/null 2>&1 || true
+  case "$real_out" in
+    *://*/session/*) : ;;
+    *) fail "the installed lavish-axi no longer prints a session URL in the shape the wrapper reads: $real_out" ;;
+  esac
+  pass "the shape the wrapper reads as an open is the shape the installed lavish-axi prints"
+fi
 
 # --- entry point: honest degradation to the captain --------------------------
 
