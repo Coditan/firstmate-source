@@ -51,6 +51,10 @@ The session URL is built inside the server process from the environment it was b
 So exporting a corrected `LAVISH_AXI_LINK_HOST` on a later invocation changes nothing while a healthy server is still running on that port.
 `bin/fm-lavish.sh` records the configuration it launched a server with, compares it on the next run, and restarts its own server on a mismatch - which is safe only because the claim token has already proved the process belongs to this home.
 
+Stopping reaches into a running process the same way, so it carries the same proof, and an explicitly named port is no exception.
+`lavish-axi stop` shuts down whatever answers `/health` with a lavish-axi body on the address it is handed, without authentication and without regard for the owning UNIX account, and every co-hosted vessel binds that same address.
+So `bin/fm-lavish.sh stop --port <n>` runs the claim-token probe against `<n>` before it reaches `lavish-axi` at all: a port that answers but is not this home's is refused by name and left running, and a port that answers nothing is reported as nothing to stop.
+
 A port outside the currently resolved window counts as the same kind of staleness: an operator who narrows `FM_SERVICE_PORT_RANGE` to move this service off a conflict would otherwise keep the old port forever, because it is still legitimately ours.
 The two cases are handled differently on purpose.
 When the same port is still wanted, the old server is stopped first so the seat can be reclaimed immediately.
@@ -83,10 +87,13 @@ The rule is that no URL is emitted implying reach the vessel has not established
 - **No usable tailnet** - `reachability=loopback` with a concrete reason, and the wrapper prints `no tailnet on this host (<reason>) - this board opens only on this machine.` before Lavish's own output.
   The board still opens locally and is never presented as reachable.
 - **The tailnet name does not resolve to the bound address** - the link falls back to the address and the reason says so, rather than writing an unchecked name into the captain's link.
+- **The tailnet name could not be checked at all**, because `node` or the probe is unavailable - the link falls back to the address and the reason says *that*, since reporting a resolution failure that was never attempted is a concrete diagnosis that happens to be untrue.
 - **The link host does not answer after the board opens** - the wrapper names the address form that does work.
 - **Every candidate port is taken** - `bin/fm-service-port.sh` exits non-zero with one plain sentence and no board is opened.
   There is deliberately no silent loopback downgrade here, because that would reproduce the original bug somewhere new.
 - **The address cannot be bound at all** - a distinct exit code and message, because that is a network-interface problem and reporting it as a port collision would send the reader hunting the wrong thing.
+  Only address-scoped errnos (`EADDRNOTAVAIL`, `EAFNOSUPPORT`, `EINVAL`) count as this, and they are the only ones that end the walk early, since no port on that address could have worked.
+  A port-scoped refusal such as `EACCES` on a privileged port is neither a collision nor an unusable address: the walk continues past it, and only if nothing in the window binds does the allocator report that some candidates were held and others refused.
 
 A readiness probe must target the address that was bound.
 Probing loopback while a service binds only a tailnet address reports a healthy server as failed to start; that happened during this investigation and cost real time.
@@ -119,6 +126,8 @@ Its structural limit, stated rather than implied: the hook is registered by firs
 `bin/fm-brief.sh` covers that gap by naming the wrapper in every generated brief's rules.
 
 `command -v lavish-axi` and `type lavish-axi` are allowed: they ask whether the tool exists, never start a server, and `bin/fm-bootstrap.sh` does exactly this, so denying them would break tool detection to prevent nothing.
+The same reasoning allows the subcommands that neither start a server nor emit a link - `setup`, `playbook`, `design`, `export`, and the version and help flags - because `bin/fm-bootstrap.sh` and `bin/fm-axi-suite.sh` print `... && PATH=<bin>:$PATH lavish-axi setup hooks` as the install command the captain is told to run, and a guard that denies its own repo's instructions prevents nothing while costing trust in every other denial.
+`stop` is deliberately not on that list: shutting a server down is the ownership-sensitive action described below, and the wrapper is the path that proves the port first.
 
 ## The startup regression check
 
@@ -132,8 +141,9 @@ This check is the reason the fix cannot regress unnoticed, which matters because
 ## Compatibility review
 
 - **Harnesses** (claude, codex, opencode, pi, grok) - the wrapper and the allocator are ordinary scripts and are harness-neutral.
-  The guard is not, and is wired the same way its four siblings are: `.claude/settings.json` for Claude, `.codex/hooks.json` for Codex with the same self-registration check the other Codex hooks use, and `.grok/hooks/fm-primary-lavish-check.json` for Grok.
-  OpenCode and Pi consume the `--command` CLI form plus exit 2 and stderr, which the transport already emits.
+  The guard is not, and is registered on all five surfaces the way the cd-guard is: `.claude/settings.json` for Claude, `.codex/hooks.json` for Codex with the same self-registration check the other Codex hooks use, `.grok/hooks/fm-primary-lavish-check.json` for Grok, `.opencode/plugins/fm-primary-lavish-check.js` for OpenCode, and a `runChecker` call in `.pi/extensions/fm-primary-turnend-guard.ts`'s `tool_call` handler for Pi.
+  The last two consume the `--command` CLI form plus exit 2 and stderr, which the transport already emits.
+  Registering only the three JSON surfaces would leave the guard inert on two harnesses crewmates are spawned on, which is the same "inert exactly where the mistake happens" failure the scope decision above exists to avoid.
 - **Runtime backends** (tmux, herdr, zellij, orca, cmux) - not applicable, confirmed by inspecting `bin/fm-backend.sh`'s surface rather than assumed.
   No backend touches service ports or the AXI prefix, and the allocator runs inside an already-spawned worker's shell.
 - **Secondmate homes** - covered by construction: the seat key includes the realpath of `FM_HOME`, and `LAVISH_AXI_STATE_DIR` is per home, so a secondmate and its parent never share a seat or a session store despite sharing a UNIX account.

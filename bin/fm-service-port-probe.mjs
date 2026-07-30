@@ -29,8 +29,15 @@
 //       Prints the first port that binds on <addr>, exit 0.
 //       Exit 3 - every candidate is in use (EADDRINUSE).
 //       Exit 4 - <addr> cannot be bound at all on this host
-//                (EADDRNOTAVAIL, EACCES, EAFNOSUPPORT); the reason is on stderr.
+//                (EADDRNOTAVAIL, EAFNOSUPPORT, EINVAL); the reason is on stderr.
 //                This is NOT a collision and callers must not report it as one.
+//                Only these address-scoped errnos abort the walk, because no
+//                port on this address could ever have worked.
+//       Exit 5 - no candidate was bindable and at least one failure was neither
+//                a collision nor address-scoped (EACCES on a privileged port,
+//                for instance). Each such port is named on stderr. This is a
+//                port-scoped verdict, so callers must not report it as an
+//                unusable address either.
 //   fm-service-port-probe.mjs resolve <hostname> <expected-ipv4>
 //       Exit 0 - <hostname> resolves over IPv4 to <expected-ipv4>.
 //       Exit 1 - it does not resolve, or resolves elsewhere; reason on stderr.
@@ -46,8 +53,12 @@ import http from "node:http";
 
 // Errors that mean "this address is unusable here", never "someone else holds
 // this port". Reporting one of these as a collision would send the caller
-// walking a whole port window that could never have worked.
-const ADDRESS_UNUSABLE = new Set(["EADDRNOTAVAIL", "EACCES", "EAFNOSUPPORT", "EINVAL"]);
+// walking a whole port window that could never have worked - and, the other way
+// round, reporting a port-scoped errno as one of these would abort a walk that
+// the very next candidate would have satisfied. EACCES is deliberately NOT
+// here: it is what a privileged port answers, which says nothing about the
+// address.
+const ADDRESS_UNUSABLE = new Set(["EADDRNOTAVAIL", "EAFNOSUPPORT", "EINVAL"]);
 
 function usage() {
   process.stderr.write(
@@ -83,7 +94,7 @@ function tryBind(addr, port) {
         finish({ state: "unusable", code });
         return;
       }
-      finish({ state: "unusable", code });
+      finish({ state: "refused", code });
     });
     server.once("listening", () => {
       // Close before reporting free, so the caller's own listen() is the next
@@ -103,6 +114,7 @@ async function bindMode(argv) {
     usage();
     return 2;
   }
+  let refused = 0;
   for (const raw of ports) {
     const port = Number(raw);
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -120,8 +132,15 @@ async function bindMode(argv) {
       );
       return 4;
     }
+    if (verdict.state === "refused") {
+      // Port-scoped, so the walk continues: the next candidate may well bind.
+      refused += 1;
+      process.stderr.write(
+        `fm-service-port-probe: ${addr}:${port} was refused (${verdict.code})\n`,
+      );
+    }
   }
-  return 3;
+  return refused > 0 ? 5 : 3;
 }
 
 async function resolveMode(argv) {

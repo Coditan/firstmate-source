@@ -28,6 +28,14 @@
 # as the invocation that opened the board. A wrapper that fronted only the open
 # call would leave every follow-up pointed at the compiled-in default port.
 #
+# `stop --port <n>` is held to exactly the same ownership proof as a bare
+# `stop`: the claim token has to answer on <n> first. lavish-axi's own stop path
+# shuts down any server that answers /health with a lavish-axi body, and every
+# vessel on this machine binds this same address, so an explicitly named port
+# that was never proved would be a neighbour's board. An unproven port that is
+# serving is refused by name; one that answers nothing at all is reported as
+# nothing to stop.
+#
 # What it sets, and why each one is needed:
 #   LAVISH_AXI_HOST            the tailnet address, so the server is reachable
 #                              off this machine. Never a wildcard: an
@@ -128,7 +136,9 @@ fi
 # subcommand is a file, which means the default open command.
 SUBCOMMAND=open
 EXPLICIT_PORT=0
+EXPLICIT_PORT_VALUE=""
 first=1
+want_port=0
 for arg in "${ARGS[@]}"; do
   if [ "$first" -eq 1 ]; then
     first=0
@@ -136,8 +146,14 @@ for arg in "${ARGS[@]}"; do
       poll|end|stop|server|playbook|design|setup|export|share|open) SUBCOMMAND=$arg ;;
     esac
   fi
+  if [ "$want_port" -eq 1 ]; then
+    EXPLICIT_PORT_VALUE=$arg
+    want_port=0
+    continue
+  fi
   case "$arg" in
-    --port|--port=*) EXPLICIT_PORT=1 ;;
+    --port) EXPLICIT_PORT=1; want_port=1 ;;
+    --port=*) EXPLICIT_PORT=1; EXPLICIT_PORT_VALUE=${arg#--port=} ;;
   esac
 done
 
@@ -210,14 +226,27 @@ ALLOWED="$LINK_HOST $ADDR $CLAIM_TOKEN"
 # distinguishes our server from a same-version one belonging to another UNIX
 # account on this machine.
 
+port_is_ours() {
+  command -v node >/dev/null 2>&1 || return 1
+  [ -f "$PROBE" ] || return 1
+  node "$PROBE" http "http://$ADDR:$1/health" "$CLAIM_TOKEN" >/dev/null 2>&1
+}
+
+# Deliberately without the token: it separates "a board is serving here and it
+# is not ours" from "nothing is serving here at all", which are different facts
+# and deserve different answers.
+port_answers() {
+  command -v node >/dev/null 2>&1 || return 1
+  [ -f "$PROBE" ] || return 1
+  node "$PROBE" http "http://$ADDR:$1/health" >/dev/null 2>&1
+}
+
 owned_port() {
   local record="$STATE/service-port.lavish" recorded=""
   [ -r "$record" ] || return 1
   recorded=$(sed -n 's/^port=\([0-9][0-9]*\)$/\1/p' "$record" | head -1)
   [ -n "$recorded" ] || return 1
-  command -v node >/dev/null 2>&1 || return 1
-  [ -f "$PROBE" ] || return 1
-  node "$PROBE" http "http://$ADDR:$recorded/health" "$CLAIM_TOKEN" >/dev/null 2>&1 || return 1
+  port_is_ours "$recorded" || return 1
   printf '%s\n' "$recorded"
 }
 
@@ -295,7 +324,30 @@ else
   PORT=${MINE:-${PROVEN:-$SEAT}}
 fi
 
-if [ "$SUBCOMMAND" = stop ] && [ -z "$PROVEN" ] && [ "$EXPLICIT_PORT" -eq 0 ]; then
+# Without the probe there is no proof either way, and "nothing to stop" would be
+# a concrete claim this vessel cannot make.
+if [ "$SUBCOMMAND" = stop ] && { ! command -v node >/dev/null 2>&1 || [ ! -f "$PROBE" ]; }; then
+  die "cannot check whether a board server on $ADDR belongs to this vessel (node or $PROBE is unavailable), so nothing was stopped" 7
+fi
+
+if [ "$SUBCOMMAND" = stop ] && [ "$EXPLICIT_PORT" -eq 1 ]; then
+  # An explicitly named port earns no shortcut. It gets the same claim-token
+  # proof the recorded port gets, because lavish-axi's stop reaches any
+  # lavish-shaped server on the address it is handed.
+  case "$EXPLICIT_PORT_VALUE" in
+    ''|*[!0-9]*)
+      die "--port needs a port number, so this vessel can prove the server on it is its own before stopping it" 2
+      ;;
+  esac
+  if ! port_is_ours "$EXPLICIT_PORT_VALUE"; then
+    if port_answers "$EXPLICIT_PORT_VALUE"; then
+      die "the board server on $ADDR port $EXPLICIT_PORT_VALUE is not one this vessel can prove is its own, so it was not stopped; a co-hosted vessel serves on this same address, and only the home that opened a board may stop it" 7
+    fi
+    note "no review-board server owned by this vessel is running on $ADDR port $EXPLICIT_PORT_VALUE; nothing to stop"
+    exit 0
+  fi
+  PORT=$EXPLICIT_PORT_VALUE
+elif [ "$SUBCOMMAND" = stop ] && [ -z "$PROVEN" ]; then
   note "no review-board server owned by this vessel is running on $ADDR; nothing to stop"
   exit 0
 fi

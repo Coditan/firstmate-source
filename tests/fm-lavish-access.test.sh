@@ -151,6 +151,20 @@ node "$PROBE" bind 203.0.113.7 4731 >/dev/null 2>&1
 expect_code 4 "$?" "an unbindable address is exit 4, never a collision"
 pass "an unusable address is reported apart from a port collision"
 
+# A refused port (EACCES on a privileged port) is port-scoped: it says nothing
+# about the address, so it must neither end the walk nor be dressed up as an
+# unusable address, which would send the reader hunting the network interface.
+node "$PROBE" bind 127.0.0.1 80 >/dev/null 2>&1
+low_port_status=$?
+if [ "$low_port_status" -eq 5 ]; then
+  out=$(node "$PROBE" bind 127.0.0.1 80 4733 2>/dev/null)
+  expect_code 0 "$?" "a refused candidate must not end the walk"
+  [ "$out" = 4733 ] || fail "the walk should continue past a refused port and return 4733, got '$out'"
+  pass "a refused port keeps the walk going and is reported apart from an unusable address"
+else
+  pass "this host lets an unprivileged account bind port 80, so the refused-port branch is not exercisable here"
+fi
+
 node "$PROBE" resolve localhost 127.0.0.1 >/dev/null 2>&1
 expect_code 0 "$?" "localhost resolves to 127.0.0.1"
 node "$PROBE" resolve nowhere.invalid 127.0.0.1 >/dev/null 2>&1
@@ -366,7 +380,34 @@ expect_code 0 "$?" "installing the package is not opening a board"
 expect_code 2 "$?" "a later command in the list is still denied"
 "$GUARD" --command '/opt/axi/bin/lavish-axi x.html' >/dev/null 2>&1
 expect_code 2 "$?" "a path-qualified invocation is the same mistake"
+"$GUARD" --command 'lavish-axi stop' >/dev/null 2>&1
+expect_code 2 "$?" "stopping a server is ownership sensitive and belongs to the wrapper"
 pass "the guard denies the invocation that emits an unreachable link and nothing else"
+
+# Subcommands that neither start a server nor emit a link prevent nothing by
+# being denied, and this repo prints some of them for the captain to run.
+for allowed in \
+  'lavish-axi setup hooks' \
+  'lavish-axi --version' \
+  'lavish-axi -v' \
+  'lavish-axi --help' \
+  'lavish-axi playbook table' \
+  'lavish-axi design' \
+  'lavish-axi export board.html --out /tmp/board.html'; do
+  "$GUARD" --command "$allowed" >/dev/null 2>&1
+  expect_code 0 "$?" "a non-serving invocation must not be denied: $allowed"
+done
+pass "non-serving subcommands stay available, because denying them prevents nothing"
+
+# The exact shapes bin/fm-bootstrap.sh install_cmd and bin/fm-axi-suite.sh
+# install_hint print inside MISSING: and AXI_SUITE_REVIEW: diagnostics. They are
+# handed to the captain and to agents as commands to run, so a guard that denies
+# them would break the repo's own instructions.
+"$GUARD" --command 'npm install -g --prefix /home/coditan/.local/axi lavish-axi && PATH=/home/coditan/.local/axi/bin:$PATH lavish-axi setup hooks' >/dev/null 2>&1
+expect_code 0 "$?" "the install command bin/fm-bootstrap.sh prints must be allowed"
+"$GUARD" --command 'npm install -g --prefix /home/coditan/.local/axi lavish-axi@0.1.43 && PATH=/home/coditan/.local/axi/bin:$PATH lavish-axi setup hooks' >/dev/null 2>&1
+expect_code 0 "$?" "the install hint bin/fm-axi-suite.sh prints must be allowed"
+pass "the install commands this repo itself emits are not denied by its own guard"
 
 deny_out=$("$GUARD" --command 'lavish-axi board.html' 2>/dev/null || true)
 assert_contains "$deny_out" '"decision":"deny"' "grok consumes the stdout decision object"
@@ -426,7 +467,26 @@ jq -e 'any(.hooks.PreToolUse[]?.hooks[]?.command?; type == "string" and contains
 jq -e 'any(.hooks.PreToolUse[]?.hooks[]?.command?; type == "string" and contains("fm-lavish-pretool-check.sh"))' \
   "$ROOT/.grok/hooks/fm-primary-lavish-check.json" >/dev/null \
   || fail ".grok/hooks must register the lavish guard"
-pass "the guard is wired into every tracked harness surface"
+
+# OpenCode and Pi are not JSON hook surfaces; they call the guard through their
+# own plugin and extension, exactly as the cd-guard is wired.
+OPENCODE_PLUGIN="$ROOT/.opencode/plugins/fm-primary-lavish-check.js"
+assert_present "$OPENCODE_PLUGIN" ".opencode/plugins must carry a lavish guard plugin"
+assert_grep 'tool.execute.before' "$OPENCODE_PLUGIN" \
+  "the OpenCode plugin must run before the bash tool executes"
+assert_grep 'fm-lavish-pretool-check.sh' "$OPENCODE_PLUGIN" \
+  "the OpenCode plugin must invoke the lavish guard owner"
+assert_grep 'throw new Error' "$OPENCODE_PLUGIN" \
+  "the OpenCode plugin must block by throwing"
+
+PI_EXTENSION="$ROOT/.pi/extensions/fm-primary-turnend-guard.ts"
+assert_grep 'fm-lavish-pretool-check.sh' "$PI_EXTENSION" \
+  "the Pi extension must invoke the lavish guard owner"
+assert_grep 'runLavishCheck(command)' "$PI_EXTENSION" \
+  "the Pi extension must run the lavish check on a tool call"
+assert_grep 'block: true' "$PI_EXTENSION" \
+  "the Pi extension must block the command it denies"
+pass "the guard is wired into all five tracked harness surfaces"
 
 # --- the instruction surface points at the entry point -----------------------
 
@@ -580,3 +640,44 @@ assert_contains "$out" "stopped" "stop reaches this vessel's own server"
 out=$(FM_HOME="$HOME_C" FM_SERVICE_PORT_RANGE=4792-4793 "$ROOT/bin/fm-lavish.sh" stop 2>&1)
 assert_contains "$out" "nothing to stop" "a second stop has nothing left to reach"
 pass "stop reaches this vessel's own server and then reports honestly that none is left"
+
+# --- entry point: an explicit --port earns no shortcut -----------------------
+#
+# lavish-axi's own stop shuts down whatever answers /health on the address it is
+# handed, and every co-hosted vessel binds that same address, so a named port
+# has to clear the same claim-token proof the recorded one does.
+
+reopened=$(FM_HOME="$HOME_C" FM_SERVICE_PORT_RANGE=4792-4793 \
+  "$ROOT/bin/fm-lavish.sh" "$HOME_C/.lavish/board.html" 2>/dev/null)
+own_port=$(printf '%s\n' "$reopened" | sed -n 's|.*:\([0-9][0-9]*\)/session.*|\1|p')
+[ -n "$own_port" ] || fail "reopening the board should emit a port"
+out=$(FM_HOME="$HOME_C" FM_SERVICE_PORT_RANGE=4792-4793 \
+  "$ROOT/bin/fm-lavish.sh" stop --port "$own_port" 2>&1)
+expect_code 0 "$?" "an explicit --port on a proven-own server is a normal stop"
+assert_contains "$out" "stopped" "a proven-own port is still stopped when named explicitly"
+
+neighbour_ready="$TMP_ROOT/neighbour.ready"
+rm -f "$neighbour_ready"
+node "$TMP_ROOT/board-server.mjs" "$neighbour_ready" 127.0.0.1 4794 localhost \
+  </dev/null >"$TMP_ROOT/neighbour.log" 2>&1 &
+NEIGHBOUR_PID=$!
+for _ in $(seq 1 100); do [ -s "$neighbour_ready" ] && break; sleep 0.05; done
+[ -s "$neighbour_ready" ] || fail "the neighbouring server did not come up"
+
+err=$(FM_HOME="$HOME_C" FM_SERVICE_PORT_RANGE=4792-4793 \
+  "$ROOT/bin/fm-lavish.sh" stop --port 4794 2>&1 >/dev/null)
+expect_code 7 "$?" "an unproven --port must be refused, not obeyed"
+assert_contains "$err" "4794" "the refusal names the port it declined to touch"
+assert_contains "$err" "not one this vessel can prove is its own" \
+  "the refusal says plainly why the port was left alone"
+alive=$(node "$ROOT/bin/fm-service-port-probe.mjs" http http://127.0.0.1:4794/health 2>/dev/null)
+[ "$alive" = 200 ] || fail "a neighbour's board must still be serving after a refused stop"
+kill "$NEIGHBOUR_PID" 2>/dev/null || true
+wait "$NEIGHBOUR_PID" 2>/dev/null || true
+
+out=$(FM_HOME="$HOME_C" FM_SERVICE_PORT_RANGE=4792-4793 \
+  "$ROOT/bin/fm-lavish.sh" stop --port 4795 2>&1)
+expect_code 0 "$?" "a named port with nothing on it is not a failure"
+assert_contains "$out" "nothing to stop" "an empty port is reported as nothing to stop"
+assert_contains "$out" "4795" "the message names the port that was checked"
+pass "stop --port is held to the same ownership proof as a bare stop"

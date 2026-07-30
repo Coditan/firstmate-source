@@ -31,6 +31,14 @@ import { fileURLToPath } from "node:url";
 
 const GUARDED = "lavish-axi";
 
+// Subcommands and flags that neither start a server nor emit a link, so denying
+// them would prevent nothing. `setup hooks` in particular is part of the install
+// command bin/fm-bootstrap.sh and bin/fm-axi-suite.sh print for the captain to
+// run. `stop` is deliberately absent: shutting a server down is ownership
+// sensitive and belongs to the wrapper, which proves the port is this home's
+// first.
+const NON_SERVING = new Set(["setup", "playbook", "design", "export", "--version", "-v", "--help", "-h"]);
+
 function reasonFor(wrapper) {
   return (
     `bare \`${GUARDED}\` is blocked in a firstmate checkout because it binds loopback and writes a http://127.0.0.1 link that opens nothing on the captain's own devices, and it fails silently. Run \`${wrapper}\` with the same arguments instead: it resolves this vessel's tailnet address and a port no co-hosted vessel is using, and it says so plainly when there is no tailnet rather than emitting a link that will not open.`
@@ -58,6 +66,14 @@ function hasCommandQueryPrefix(position) {
   return false;
 }
 
+// Mirror lavish-axi's own dispatch: the first argument decides the command, and
+// a first argument that is not a known subcommand is the board file. So only
+// that word can make an invocation non-serving.
+function isNonServing(words, index) {
+  const first = words[index + 1];
+  return Boolean(first) && NON_SERVING.has(first.value);
+}
+
 function decision(command, wrapper = "bin/fm-lavish.sh") {
   const lexed = new Lexer(command).tokenize();
   // Fail open on syntax this classifier cannot tokenize. The threat model is an
@@ -80,6 +96,7 @@ function decision(command, wrapper = "bin/fm-lavish.sh") {
     }
     if (!executed) continue;
     if (basename(executed.value) !== GUARDED) continue;
+    if (isNonServing(position.words, wordIndex)) continue;
     return { decision: "deny", code: "bare-lavish-axi", reason: reasonFor(wrapper) };
   }
   return { decision: "allow" };

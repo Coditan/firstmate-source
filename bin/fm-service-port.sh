@@ -59,7 +59,9 @@
 #
 # Exit codes:
 #   0  resolved
-#   1  every candidate in the window is taken (a real, reportable collision)
+#   1  no port in the window could be bound: every candidate is held by another
+#      process, or some were refused by this host (a privileged port, say). Both
+#      are port-scoped, and the diagnostic says which of the two happened.
 #   2  usage error
 #   3  the resolved address cannot be bound on this host, or the probe runtime
 #      is unavailable - distinct from 1, because no port was ever contended
@@ -213,12 +215,18 @@ resolve_tailnet() {
   REACHABILITY=tailnet
   # A name is only worth writing into a link once it has been checked, so an
   # unresolvable or misdirected name degrades to the bare address with a reason
-  # rather than becoming a URL that fails on the captain's device.
-  if [ -n "$dnsname" ] && [ -x "$PROBE" ] && command -v node >/dev/null 2>&1 \
-    && node "$PROBE" resolve "$dnsname" "$addr" >/dev/null 2>&1; then
-    DNSNAME=$dnsname
-  elif [ -n "$dnsname" ]; then
-    REASON="the tailnet name $dnsname does not resolve to $addr here, so links use the address instead"
+  # rather than becoming a URL that fails on the captain's device. A name that
+  # could not be checked at all is a different fact from one that was checked
+  # and pointed elsewhere, and saying the second when the first happened would
+  # hand the reader a concrete diagnosis that is simply untrue.
+  if [ -n "$dnsname" ]; then
+    if ! command -v node >/dev/null 2>&1 || [ ! -f "$PROBE" ]; then
+      REASON="the tailnet name $dnsname could not be checked here (node or $PROBE is unavailable), so links use the address instead"
+    elif node "$PROBE" resolve "$dnsname" "$addr" >/dev/null 2>&1; then
+      DNSNAME=$dnsname
+    else
+      REASON="the tailnet name $dnsname does not resolve to $addr here, so links use the address instead"
+    fi
   fi
   return 0
 }
@@ -312,6 +320,9 @@ if [ -z "${PORT:-}" ]; then
       ;;
     4)
       die "$ADDR cannot be bound on this host, so $SERVICE has no address to serve on; re-check the network interface before treating this as a port collision" 3
+      ;;
+    5)
+      die "no bindable port in $WINDOW_START-$WINDOW_END on $ADDR for $SERVICE; some candidates are held by another process and this host refused others outright, so $SERVICE cannot start until FM_SERVICE_PORT_RANGE names a window this account may bind" 1
       ;;
     *)
       die "the port probe failed for $SERVICE on $ADDR (exit $probe_status)" 3
