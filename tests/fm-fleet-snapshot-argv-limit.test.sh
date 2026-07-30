@@ -30,6 +30,12 @@ command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 # stops crossing it is a test failure rather than a silent no-op.
 ARGV_STRING_LIMIT=131072
 
+# Rendering a 400-row backlog into a ~140 KB summary is slower than the child
+# read's 8-second production default, and a timeout there degrades the record to
+# the parent-event fallback - the exact shape this suite reports as a genuine
+# regression. Pin a generous bound so a loaded runner cannot forge that signal.
+CHILD_SUMMARY_TIMEOUT=${FM_TEST_CHILD_SUMMARY_TIMEOUT:-120}
+
 make_home() {  # <name>
   local home=$TMP_ROOT/$1
   mkdir -p "$home/state" "$home/data" "$home/config" "$home/projects"
@@ -148,6 +154,7 @@ test_oversized_secondmate_home_stays_readable() {
   # An unbounded per-home landed cap is what lets one home's summary cross the
   # argv ceiling while still passing the snapshot's own byte validation.
   summary=$(PATH="$fakebin:$PATH" FM_HOME="$mate" FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME=0 \
+    FM_SNAPSHOT_SECONDMATE_TIMEOUT="$CHILD_SUMMARY_TIMEOUT" \
     "$SNAPSHOT" --secondmate-home-summary) || fail "child home summary failed"
   bytes=$(printf '%s' "$summary" | LC_ALL=C wc -c | tr -d ' ')
   assert_over_ceiling "$bytes" "the child home summary fixture"
@@ -155,6 +162,7 @@ test_oversized_secondmate_home_stays_readable() {
     || fail "child home summary is $bytes bytes, past the snapshot's own 262144-byte validation cap"
 
   out=$(PATH="$fakebin:$PATH" FM_HOME="$main" FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME=0 \
+    FM_SNAPSHOT_SECONDMATE_TIMEOUT="$CHILD_SUMMARY_TIMEOUT" \
     "$SNAPSHOT" --json) || fail "--json failed with an oversized secondmate home"
   printf '%s' "$out" | jq -e '
     .secondmate_current.records | length == 1
@@ -176,32 +184,86 @@ test_oversized_secondmate_home_stays_readable() {
   pass "oversized secondmate home summary stays structured and keeps its landed work"
 }
 
-# Plumbing the values through stdin must not soften the contract: a jq failure
-# still has to surface as a non-zero exit and a named stage, never as a silent
-# empty result.
-test_hard_failure_still_surfaces() {
-  local home fakebin fb err rc out
-  home=$(make_home failure-semantics)
+# The task inventory crosses the ceiling on its own axis: it grows with the
+# number of live tasks, with no backlog involvement at all, and it reaches jq at
+# four separate consumers. A home with enough tasks must still render.
+#
+# The fixture inflates each task row rather than writing the ~90 rows real growth
+# would need, because per-task state reconciliation dominates the runtime; the
+# axis under test is the size of the rendered inventory either way. Tasks carry
+# no endpoint on purpose, which keeps the fixture from paying for backend probes.
+test_oversized_task_inventory_still_renders() {
+  local home i pad out bytes
+  home=$(make_home oversized-tasks)
   printf '## In flight\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
-  fakebin=$(make_fakebin "$home")
-  # A jq that refuses every composition is the cheapest way to prove the callers
-  # still check status. It must not shadow the real jq during the fixture build.
-  fb=$fakebin
-  cat > "$fb/jq" <<'SH'
+  pad=$(printf 'p%.0s' $(seq 1 2400))
+  for i in $(seq 1 30); do
+    fm_write_meta "$home/state/bulk-$(printf '%03d' "$i").meta" \
+      "worktree=$home/projects/w-$pad$i" \
+      "project=alpha-$pad$i" \
+      "harness=codex" \
+      "kind=ship" \
+      "mode=ship"
+  done
+
+  out=$(FM_HOME="$home" "$SNAPSHOT" --json) \
+    || fail "--json failed on a home with an oversized task inventory"
+  bytes=$(printf '%s' "$out" | jq -c '.tasks' | LC_ALL=C wc -c | tr -d ' ')
+  assert_over_ceiling "$bytes" "the rendered task inventory fixture"
+  printf '%s' "$out" | jq -e '
+    (.tasks | length) == 30
+      and .secondmate_current.total == 0
+      and (.secondmate_current.records | length) == 0
+      and (.secondmate_landed.records | length) == 0
+  ' >/dev/null || fail "oversized task inventory broke the secondmate aggregation: $(
+      printf '%s' "$out" | jq -c '{tasks:(.tasks|length),sm:.secondmate_current.total}')"
+  pass "oversized task inventory renders through every consumer that binds it"
+}
+
+# Plumbing the values through stdin must not soften the contract. The property
+# that is genuinely new here is that a two-stage `json_stdin | jq` pipeline, with
+# no `set -o pipefail`, still reports jq's non-zero status rather than the
+# writer's - and does it while a large value is mid-flight, where the consumer
+# exits without draining and the writer takes SIGPIPE.
+#
+# So the stub must fail a converted site, not the first jq the script happens to
+# reach. It passes `-Rn` through to the real jq (that is backlog_json, an
+# untouched call site that must succeed to build the oversized value) and fails
+# only `-n`, the first of which is main_inventory_json - a converted site fed the
+# whole rendered backlog.
+test_hard_failure_still_surfaces() {
+  local home fb err rc out
+  home=$(make_home failure-semantics)
+  write_oversized_backlog "$home" 400
+  fb=$(fm_fakebin "$home")
+  cat > "$fb/jq" <<SH
 #!/usr/bin/env bash
-echo "jq: simulated composition failure" >&2
-exit 5
+if [ "\${1:-}" = "-n" ]; then
+  echo "jq: simulated composition failure" >&2
+  exit 5
+fi
+exec $(command -v jq) "\$@"
 SH
   chmod +x "$fb/jq"
+
   err=$(PATH="$fb:$PATH" FM_HOME="$home" "$SNAPSHOT" --json 2>&1 >/dev/null)
   rc=$?
-  [ "$rc" -ne 0 ] || fail "a failing jq must not produce a successful snapshot"
-  assert_contains "$err" "fm-fleet-snapshot:" "a failing composition must name the stage that failed"
+  [ "$rc" -ne 0 ] || fail "a failing composition must not produce a successful snapshot"
+  # Naming the stage proves execution reached a CONVERTED site: backlog_json is
+  # untouched and would have reported "backlog read failed" instead.
+  assert_contains "$err" "fm-fleet-snapshot: main inventory summary failed" \
+    "a failing converted composition must name its own stage"
+  # The writer dying on SIGPIPE must not leak shell diagnostics into the report.
+  case "$err" in
+    *[Bb]roken*pipe*|*"write error"*)
+      fail "a failed composition leaked writer-side pipe noise: $err" ;;
+  esac
   out=$(PATH="$fb:$PATH" FM_HOME="$home" "$SNAPSHOT" --json 2>/dev/null || true)
   [ -z "$out" ] || fail "a failing snapshot must not print a partial result"
-  pass "a failed composition still exits non-zero and names its stage"
+  pass "a failed composition on a large piped value still exits non-zero and names its stage"
 }
 
 test_oversized_backlog_still_renders
+test_oversized_task_inventory_still_renders
 test_oversized_secondmate_home_stays_readable
 test_hard_failure_still_surfaces
