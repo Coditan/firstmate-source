@@ -212,10 +212,16 @@ bool_json() {
 # `input` binds in stream order, so each caller's leading `input as $name` lines
 # must match its argument order. Small, explicitly bounded values (counts, flags,
 # paths, single status lines) stay on --arg/--argjson where they read better.
-# When jq fails before draining stdin, Bash's builtin printf reports the expected
-# EPIPE as a second error. The consumer owns the pipeline failure, so suppress
-# that writer diagnostic; exit status remains jq's and callers keep their
-# existing hard-failure checks.
+# When jq fails before draining stdin the writer hits EPIPE, and whether that is
+# visible depends on the inherited SIGPIPE disposition: at the default the writer
+# is killed silently, but where SIGPIPE is ignored - systemd services default to
+# IgnoreSIGPIPE=yes and the watcher units drive this script - Bash's builtin
+# printf outlives the closed pipe and reports the write error itself, wedging
+# writer noise into an otherwise clean failure report. The consumer owns the
+# pipeline failure, so the redirect below suppresses that writer diagnostic
+# unconditionally; exit status remains jq's and callers keep their existing
+# hard-failure checks. tests/fm-fleet-snapshot-argv-limit.test.sh pins both
+# dispositions.
 json_stdin() {  # <json>...
   printf '%s\n' "$@" 2>/dev/null
 }

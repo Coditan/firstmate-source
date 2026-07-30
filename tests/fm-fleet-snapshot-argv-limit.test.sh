@@ -260,6 +260,27 @@ SH
   esac
   out=$(PATH="$fb:$PATH" FM_HOME="$home" "$SNAPSHOT" --json 2>/dev/null || true)
   [ -z "$out" ] || fail "a failing snapshot must not print a partial result"
+
+  # With SIGPIPE at its default disposition the writer is killed silently, so the
+  # clean report above does not actually pin the suppression. Production often
+  # runs with SIGPIPE ignored - systemd services default to IgnoreSIGPIPE=yes and
+  # the watcher units drive this script - and an inherited SIG_IGN survives
+  # execve, so there Bash's builtin printf outlives the closed pipe and reports
+  # the EPIPE itself. Re-run the same failure under that disposition: the report
+  # must still be jq plus the named stage, with no writer diagnostic wedged
+  # between them.
+  err=$(PATH="$fb:$PATH" FM_HOME="$home" \
+    bash -c 'trap "" PIPE; exec "$1" --json' _ "$SNAPSHOT" 2>&1 >/dev/null)
+  rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "a failing composition must not produce a successful snapshot with SIGPIPE ignored"
+  assert_contains "$err" "fm-fleet-snapshot: main inventory summary failed" \
+    "a failing converted composition must name its own stage with SIGPIPE ignored"
+  case "$err" in
+    *[Bb]roken*pipe*|*"write error"*)
+      fail "a failed composition leaked writer-side pipe noise with SIGPIPE ignored: $err" ;;
+  esac
+
   pass "a failed composition on a large piped value still exits non-zero and names its stage"
 }
 
