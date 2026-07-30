@@ -65,6 +65,13 @@ make_fake_lavish() {
   mkdir -p "$bindir"
   cat > "$bindir/lavish-axi" <<'SH'
 #!/usr/bin/env bash
+# lavish-axi's CLI layer answers --help with the command's help text and never
+# reaches the handler, so an argv that dispatches `open` can still open nothing.
+for arg in "$@"; do
+  [ "$arg" = --help ] || continue
+  printf 'Usage: lavish-axi <html-file> [--no-open] [--no-gate] [--reopen]\n'
+  exit 0
+done
 {
   printf 'ARGS=%s\n' "$*"
   printf 'HOST=%s\n' "${LAVISH_AXI_HOST:-}"
@@ -368,6 +375,36 @@ assert_contains "$log" "ARGS=--version $HOME_F/.lavish/board.html" "the open sti
 assert_present "$HOME_F/state/service-port.lavish" "an open claims a port however its arguments are ordered"
 assert_present "$HOME_F/state/lavish/fm-owner" "an open records what it launched a server with"
 pass "a flag-led invocation that does carry a board file takes the full open path"
+
+# --- entry point: what it says about a board is what it observed --------------
+#
+# An argv can dispatch `open` and still open nothing, because lavish-axi answers
+# --help with help text and never reaches the handler. The wrapper therefore
+# decides from the session URL in the output, not from the argument shape.
+
+for helped in "--help $HOME_F/.lavish/board.html" "open --help $HOME_F/.lavish/board.html"; do
+  : > "$FM_TEST_LAVISH_LOG"
+  # shellcheck disable=SC2086
+  out=$(FM_TEST_TS_MODE=stopped FM_HOME="$HOME_F" FM_SERVICE_PORT_RANGE=4740-4759 \
+    "$ROOT/bin/fm-lavish.sh" $helped 2>&1)
+  expect_code 0 "$?" "asking for help must succeed: $helped"
+  assert_contains "$out" "Usage: lavish-axi" "the help text still reaches the caller: $helped"
+  assert_not_contains "$out" "does not answer here" \
+    "nothing may report a link for a board that was never opened: $helped"
+  assert_not_contains "$out" "opens only on this machine" \
+    "nothing may describe the reach of a board that was never opened: $helped"
+done
+pass "an argv that dispatches open but opens nothing says nothing about a board"
+
+: > "$FM_TEST_LAVISH_LOG"
+out=$(FM_TEST_TS_MODE=stopped FM_HOME="$HOME_F" FM_SERVICE_PORT_RANGE=4740-4759 \
+  "$ROOT/bin/fm-lavish.sh" "$HOME_F/.lavish/board.html" 2>&1)
+assert_contains "$out" "/session/" "a genuine open emits the session link"
+assert_contains "$out" "does not answer here" \
+  "a genuine open still verifies the hostname now sitting in the captain's link"
+assert_contains "$out" "opens only on this machine" \
+  "a genuine open still says plainly that this board is local only"
+pass "a genuine open still gets every line the captain needs about its link"
 
 # --- entry point: honest degradation to the captain --------------------------
 

@@ -33,6 +33,14 @@
 # reachability or link line. `--version <board>.html` IS an open, because that
 # is how lavish-axi itself reads it, and takes the full open path.
 #
+# Whether a board actually opened is decided by what the run PRINTED, never by
+# what its arguments looked like: an argv that dispatches `open` still opens
+# nothing when it carries --help. So every line this wrapper says about a link
+# or about reachability waits for a session URL in the output. What has to be
+# decided before the run - the port claim and the records that follow it - is
+# still decided from the arguments, because a port must exist before the
+# command can run at all.
+#
 # `stop --port <n>` is held to exactly the same ownership proof as a bare
 # `stop`: the claim token has to answer on <n> first. lavish-axi's own stop path
 # shuts down any server that answers /health with a lavish-axi body, and every
@@ -391,29 +399,49 @@ if [ "$NEEDS_PORT" -eq 1 ]; then
       "$PORT" "$ADDR" "$LINK_HOST" "$ALLOWED" > "$OWNER" ) 2>/dev/null || true
 fi
 
-if [ "$NEEDS_PORT" -eq 1 ]; then
+reachability_note() {
   if [ "$REACHABILITY" != tailnet ]; then
     note "no tailnet on this host (${REASON:-reason unavailable}) - this board opens only on this machine."
   elif [ -n "$REASON" ]; then
     note "$REASON"
   fi
-fi
+}
 
 # --- run --------------------------------------------------------------------
 
+# Anything that execs cannot be observed afterwards, so its degradation notice
+# has to go out first. The open path can be observed, so its notice waits until
+# a board has actually been opened.
 if [ "$SUBCOMMAND" != open ]; then
+  [ "$NEEDS_PORT" -eq 0 ] || reachability_note
   exec "$LAVISH" "${ARGS[@]}"
 fi
 
-"$LAVISH" "${ARGS[@]}"
+# stdout is captured and replayed so this wrapper can read what the run
+# actually produced. An argument shape cannot answer "did a board open": a
+# lavish-axi argv that dispatches `open` still opens nothing when it carries
+# --help, and a wrapper that predicts instead of observing ends up describing a
+# board that does not exist.
+OUTPUT=$("$LAVISH" "${ARGS[@]}")
 STATUS=$?
+[ -z "$OUTPUT" ] || printf '%s\n' "$OUTPUT"
+
+# A session link in the output is the evidence that a board is now serving and
+# that a link has been handed over. Without it there is no link to make any
+# claim about, and silence is the honest answer.
+case "$OUTPUT" in
+  *://*/session/*) OPENED=1 ;;
+  *) OPENED=0 ;;
+esac
+
+[ "$OPENED" -eq 0 ] || reachability_note
 
 # Verify the name that is now sitting in the captain's link, not the address we
 # bound. A bind that succeeded proves nothing about whether the emitted URL
 # resolves and answers, and the emitted URL is the only thing he can act on.
 # This is still a same-host probe: it proves the name and the allowlist, not
 # that his device has tailnet reach.
-if [ "$STATUS" -eq 0 ] && command -v node >/dev/null 2>&1 && [ -f "$PROBE" ]; then
+if [ "$OPENED" -eq 1 ] && [ "$STATUS" -eq 0 ] && command -v node >/dev/null 2>&1 && [ -f "$PROBE" ]; then
   if ! node "$PROBE" http "http://$LINK_HOST:$PORT/health" >/dev/null 2>&1; then
     note "the board is serving, but the link's hostname ($LINK_HOST) does not answer here - hand over http://$ADDR:$PORT/... instead and check this vessel's tailnet name."
   fi

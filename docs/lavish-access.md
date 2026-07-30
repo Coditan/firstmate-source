@@ -84,7 +84,7 @@ A bound port that is released before the consumer's own `listen()` is a genuine 
 
 The rule is that no URL is emitted implying reach the vessel has not established.
 
-- **No usable tailnet** - `reachability=loopback` with a concrete reason, and the wrapper prints `no tailnet on this host (<reason>) - this board opens only on this machine.` before Lavish's own output.
+- **No usable tailnet** - `reachability=loopback` with a concrete reason, and the wrapper prints `no tailnet on this host (<reason>) - this board opens only on this machine.` alongside Lavish's own output.
   The board still opens locally and is never presented as reachable.
 - **The tailnet name does not resolve to the bound address** - the link falls back to the address and the reason says so, rather than writing an unchecked name into the captain's link.
 - **The tailnet name could not be checked at all**, because `node` or the probe is unavailable - the link falls back to the address and the reason says *that*, since reporting a resolution failure that was never attempted is a concrete diagnosis that happens to be untrue.
@@ -98,6 +98,21 @@ The rule is that no URL is emitted implying reach the vessel has not established
 A readiness probe must target the address that was bound.
 Probing loopback while a service binds only a tailnet address reports a healthy server as failed to start; that happened during this investigation and cost real time.
 `bin/fm-service-port-probe.mjs http` exists so callers cannot get this wrong by accident.
+
+### The wrapper observes rather than predicts
+
+Every one of those sentences is about a board, so the wrapper says none of them until it has seen a board.
+It decides that from a session URL in what the run printed, not from the shape of the arguments it was given.
+
+The reason is that argument shapes cannot answer the question.
+`lavish-axi` dispatches `open` for `--help <board>.html` and for `open --help`, and then its CLI layer returns the command's help text without ever calling the handler, so an invocation that dispatches `open` can still open nothing.
+Predicting that from argv means keeping a copy of somebody else's argument handling and getting it wrong on the next shape, which is what happened twice here before this rule replaced it.
+Observation has no such failure mode: no session URL means no link exists, and silence is the only honest thing to say about a link that does not exist.
+
+Two things still have to be decided before the run, and are therefore still decided from the arguments.
+The port claim comes first because a port has to exist before the command can run at all, so `bin/fm-lavish.sh open --help <board>.html` does take a port from the window and does rewrite `state/service-port.lavish` and `state/lavish/fm-owner`, and can restart or relocate this vessel's own server on the way.
+That is the wrapper's ordinary open bookkeeping against its own home rather than a false statement to the captain, and closing it would mean running the command before knowing what port to run it on.
+The other is a command that replaces this process with `lavish-axi` (`poll`, `end`, `server`): nothing after an `exec` can observe anything, so those emit their degradation notice up front.
 
 ## Third-party publishing is refused by default
 
