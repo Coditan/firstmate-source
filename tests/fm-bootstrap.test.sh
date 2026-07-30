@@ -866,6 +866,71 @@ SH
   pass "captain-approved AXI installs and hooks use the vessel prefix"
 }
 
+# A vessel that has a tailnet but is still emitting loopback board links is the
+# regression this check exists to catch: it is silent by construction, because a
+# loopback board renders correctly on the machine that made it.
+test_lavish_access_detection() {
+  local case_dir fakebin home out
+  case_dir="$TMP_ROOT/lavish-access"
+  home="$case_dir/home"
+  mkdir -p "$home/config" "$home/state/lavish"
+  printf '%s\n' manual > "$home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  # A fake tailscale so the verdict never depends on whether the machine
+  # running this suite happens to be on a tailnet.
+  cat > "$fakebin/tailscale" <<'SH'
+#!/usr/bin/env bash
+[ "${1:-}" = status ] && [ "${2:-}" = --json ] || exit 1
+case "${FM_FAKE_TAILNET:-on}" in
+  on) printf '{"BackendState":"Running","MagicDNSSuffix":"","Self":{"HostName":"localhost","DNSName":"localhost.","TailscaleIPs":["127.0.0.1"]}}\n' ;;
+  *)  printf '{"BackendState":"Stopped","Self":{}}\n' ;;
+esac
+SH
+  chmod +x "$fakebin/tailscale"
+
+  run_case() {
+    PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+      FM_FAKE_TREEHOUSE_LEASE_HELP=1 HOME="$case_dir/fakehome" \
+      FM_FAKE_TAILNET="${1:-on}" "$ROOT/bin/fm-bootstrap.sh"
+  }
+  mkdir -p "$case_dir/fakehome"
+
+  out=$(run_case on)
+  assert_not_contains "$out" "LAVISH_ACCESS:" "no boards at all must stay silent"
+
+  printf '{"sessions":{"a":{"url":"http://crew.example:4411/session/a","status":"open"}}}\n' \
+    > "$home/state/lavish/state.json"
+  out=$(run_case on)
+  assert_not_contains "$out" "LAVISH_ACCESS:" "a reachable board link must stay silent"
+
+  printf '{"sessions":{"a":{"url":"http://127.0.0.1:4387/session/a","status":"open"},"b":{"url":"http://127.0.0.1:4387/session/b","status":"ended"}}}\n' \
+    > "$home/state/lavish/state.json"
+  out=$(run_case on)
+  assert_contains "$out" "LAVISH_ACCESS: 1 open review board link(s)" \
+    "an open loopback board link must be reported, and an ended one must not be counted"
+
+  out=$(run_case off)
+  assert_not_contains "$out" "LAVISH_ACCESS:" \
+    "a host with no tailnet is honestly limited, not regressed, so it stays silent"
+
+  # lavish-axi's default store is shared by every home of one UNIX account, so a
+  # board belonging to another home must never be blamed on this one.
+  rm -f "$home/state/lavish/state.json"
+  mkdir -p "$case_dir/fakehome/.lavish-axi"
+  printf '{"sessions":{"a":{"file":"/somewhere/else/.lavish/x.html","url":"http://127.0.0.1:4387/session/a","status":"open"}}}\n' \
+    > "$case_dir/fakehome/.lavish-axi/state.json"
+  out=$(run_case on)
+  assert_not_contains "$out" "LAVISH_ACCESS:" \
+    "another home's board in the shared store must not be reported here"
+
+  printf '{"sessions":{"a":{"file":"%s/.lavish/x.html","url":"http://127.0.0.1:4387/session/a","status":"open"}}}\n' \
+    "$home" > "$case_dir/fakehome/.lavish-axi/state.json"
+  out=$(run_case on)
+  assert_contains "$out" "LAVISH_ACCESS: 1 open review board link(s)" \
+    "a bypass that wrote to the shared store is still caught for this home"
+  pass "bootstrap reports open loopback board links only where a tailnet makes them fixable"
+}
+
 test_bootstrap_reporting
 test_no_mistakes_min_version
 test_git_is_required_with_supported_install_instruction
@@ -889,3 +954,4 @@ test_crew_dispatch_active_rules_are_verbose_bootstrap_info
 test_crew_dispatch_validation
 test_currency_base_validation
 test_approved_axi_install_uses_vessel_prefix
+test_lavish_access_detection

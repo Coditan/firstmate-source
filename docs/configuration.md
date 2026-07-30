@@ -23,6 +23,10 @@ The patterns stay narrow so the tracked `.claude/settings.json` and the tracked 
 The producing PR and X helpers own the fields they append, `bin/fm-classify-lib.sh` owns status-event vocabulary, and `bin/fm-crew-state.sh` owns current-state reconciliation.
 Wake, watcher, direct Telegram receiver, away-mode, and X-specific state mechanics remain with their named scripts and reference sections rather than being duplicated into one exhaustive state tree here.
 
+Vessel-local service reachability uses `state/service-port.<service>` for the address and port one service took, and `state/lavish/` for this home's private review-board server state, session store, and claim token.
+`bin/fm-service-port.sh` owns the record's fields and the allocation contract, and `docs/lavish-access.md` owns the reasoning; the one rule that binds every reader is that the record is a published fact written after the fact and never a reservation, so nothing may read it to decide whether a port is free.
+Several vessels can share one machine as separate UNIX accounts, so a successful bind is the only proof a port is available.
+
 Watcher coordination uses `state/.watch.lock` for the daemon pid, executable, home, manager, source, and X-mode identities, `state/.last-watcher-beat` for daemon freshness, `state/.wake-queue` for durable delivery, `state/.wake-queue.lock` for atomic append and drain, and `state/.wake-stub.lock` for the current session's delivery-stub pid plus executable, home, and session-lock identities.
 The tmux fallback also records `state/.watch-keeper.pid`, while systemd convergence writes the private mode-`0600` `state/.watch-service.env` environment file.
 
@@ -168,7 +172,7 @@ Those overrides currently set `sandbox_mode = "workspace-write"`, `approval_poli
 The tracked `.codex/hooks.json` has `SessionStart`, `PreToolUse`, and `Stop` project hooks.
 Its `SessionStart` hook is the Codex integration for `bin/fm-sessionstart-nudge.sh`; see [`docs/sessionstart-nudge.md`](sessionstart-nudge.md) for the full native session-start nudge contract.
 Its `Stop` hook is the Codex integration for `bin/fm-turnend-guard.sh`; see [`docs/turnend-guard.md`](turnend-guard.md) for the full primary turn-end supervision contract.
-Its `PreToolUse` hooks run the supervision-arm and cd-guard seatbelts plus a fail-open Graphify check.
+Its `PreToolUse` hooks run the supervision-arm, cd-guard, and lavish-guard seatbelts plus a fail-open Graphify check.
 The Graphify hook exits successfully if `graphify` is not on `PATH`; otherwise it runs `graphify hook-check` with a ten-second timeout.
 That hook is intentionally portable and bounded so Codex tool use is not blocked by a missing Graphify install or a slow hook.
 
@@ -582,6 +586,9 @@ FM_ZELLIJ_SESSION=firstmate  # zellij-only: named session for normal backend ops
 FM_BACKEND_CMUX_COMPOSER_LINES=20  # cmux-only: tail lines scanned to locate the composer row for submit verification
 FM_BACKEND_CMUX_IDLE_RE='^Type a message\.\.\.$'  # cmux-only: empty-composer placeholder regex after border/prompt stripping
 CMUX_SOCKET_PASSWORD=   # cmux-only: socket password fallback when config/cmux-socket-password is absent (docs/cmux-backend.md)
+FM_SERVICE_PORT_RANGE=4400-4499   # port window bin/fm-service-port.sh probes; above lavish-axi's 4387 default and below the ephemeral range
+FM_SERVICE_PORT_PROBE_TIMEOUT=4000   # milliseconds allowed per readiness probe in bin/fm-service-port-probe.mjs http
+FM_LAVISH_ALLOW_SHARE=0   # 1 permits `fm-lavish.sh share`, which publishes a review board to third-party hosting (docs/lavish-access.md)
 FM_SESSION_START_STATUS_TAIL=5   # state/*.status lines printed per task in the session-start digest
 FM_BOOTSTRAP_DETECT_ONLY=0   # internal/read-only session-start mode: skip bootstrap's mutating sweeps and print advisory TANGLE wording
 FM_GUARD_READ_ONLY=0    # internal/read-only guard mode: keep alarms but suppress drain, supervision repair, and checkout repair commands

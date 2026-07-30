@@ -2,7 +2,7 @@
 name: bootstrap-diagnostics
 description: >-
   Agent-only handling playbook for session-start bootstrap diagnostics.
-  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, ROLE_INVALID, ROLE_OVERLAY_MISSING, NEEDS_GH_AUTH, TANGLE, SELF_DRIFT, CREW_DISPATCH invalid, CURRENCY_BASE, BACKLOG_STALE, BACKLOG_UNREADABLE, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, AXI_SUITE_UPDATED, AXI_SUITE_REVIEW, AXI_SUITE_STUCK, FIRSTMATE_UPDATE_AVAILABLE, FIRSTMATE_UPDATE_STUCK, FORK_SYNC, FORK_SYNC_STUCK, WATCHER_UNIT, FREQUENCY_MONITOR_UNIT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
+  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, ROLE_INVALID, ROLE_OVERLAY_MISSING, NEEDS_GH_AUTH, TANGLE, SELF_DRIFT, CREW_DISPATCH invalid, CURRENCY_BASE, LAVISH_ACCESS, BACKLOG_STALE, BACKLOG_UNREADABLE, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, AXI_SUITE_UPDATED, AXI_SUITE_REVIEW, AXI_SUITE_STUCK, FIRSTMATE_UPDATE_AVAILABLE, FIRSTMATE_UPDATE_STUCK, FORK_SYNC, FORK_SYNC_STUCK, WATCHER_UNIT, FREQUENCY_MONITOR_UNIT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
   A silent bootstrap section, or a BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -71,6 +71,11 @@ When any diagnostic needs captain attention, report the plain consequence and re
 - `CURRENCY_BASE: config/<file> is unusable - <reason>; <remediation>` - the home configured a comparison base for one of the two upstream checks, but the file cannot be used, so that check refuses rather than silently comparing against the wrong source.
   Fix the named file to one non-empty git URL or absolute path, or remove it to fall back to the canonical upstream template; `docs/configuration.md` "Upstream firstmate and curated-fork checks" owns which check reads which file and why they are separate.
   Until it is fixed, treat that check's currency signal as absent rather than as evidence the deployment is current.
+- `LAVISH_ACCESS: <N> open review board link(s) still point at this machine only ...` - this vessel has a tailnet, so those boards could be reachable, but the links already handed over open nothing on the captain's own devices.
+  Nothing is broken and nothing is at risk; the boards work locally, and the failure is silent precisely because they look correct here.
+  Reopen each affected board with `bin/fm-lavish.sh <html-file>`, which moves it onto this vessel's tailnet address and prints the new link, then give the captain that new link if he was already sent the old one.
+  Do not hand-set the `LAVISH_AXI_*` variables to silence this: a server that is already running keeps emitting the hostname it was started with, so only reopening through the wrapper actually changes the link.
+  The check is detect-only, stays silent on a host with no tailnet, and repeats each session start until the affected sessions are reopened or ended.
 - `BACKLOG_STALE: task <id> has <fault>; fix: <command>` - a current durable backlog record has a mechanically stale dependency edge.
   Inspect the named record and apply the exact printed fix, and add the intended existing blocker afterward only when the dangling id was a typo.
   The fix is a `tasks-axi unblock` command only when that command would actually run; when the clause instead names a hand edit to `data/backlog.md` - because `config/backlog-backend` is `manual`, or because the line says no tasks-axi fix is available since tasks-axi cannot resolve that record - delete the quoted `blocked-by:` token from the named record by hand and do not substitute a `tasks-axi` command for it.

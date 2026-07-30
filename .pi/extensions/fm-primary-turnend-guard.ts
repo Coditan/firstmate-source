@@ -78,12 +78,19 @@ function runGuard(): Promise<{ code: number; stderr: string }> {
 }
 
 // PreToolUse seatbelts (bin/fm-arm-pretool-check.sh, docs/arm-pretool-check.md;
-// bin/fm-cd-pretool-check.sh, docs/cd-guard.md). Both piggyback on this same
-// extension file rather than separate ones so no extra Pi -e flag is needed at
-// launch - the primary already loads this file for the turn-end guard, and
+// bin/fm-cd-pretool-check.sh, docs/cd-guard.md; bin/fm-lavish-pretool-check.sh,
+// docs/lavish-access.md). All three piggyback on this same extension file
+// rather than separate ones so no extra Pi -e flag is needed at launch - the
+// primary already loads this file for the turn-end guard, and
 // pi.on("tool_call", ...) can block (verified 2026-07-09 against pi 0.80.5:
 // returning {block: true} prevents the bash command from running). Each owner
-// script owns its own decision and is inert outside the real primary checkout.
+// script owns its own decision and its own scope: the first two are inert
+// outside the real primary checkout, while the lavish guard's own scope is any
+// checkout carrying bin/fm-lavish.sh. What THIS file delivers is narrower than
+// that scope: fm-spawn launches a Pi crewmate or scout with a generated
+// per-task extension carrying only a turn_end handler, so this file is loaded
+// by the primary session and by a Pi secondmate home, not by a Pi crew
+// worktree (docs/lavish-access.md records that limit).
 function runChecker(script: string, command: string): Promise<{ code: number; stderr: string }> {
   return new Promise((resolveResult) => {
     const child = spawn(`${root}/bin/${script}`, ["--command", command], {
@@ -106,6 +113,10 @@ function runCdCheck(command: string): Promise<{ code: number; stderr: string }> 
   return runChecker("fm-cd-pretool-check.sh", command);
 }
 
+function runLavishCheck(command: string): Promise<{ code: number; stderr: string }> {
+  return runChecker("fm-lavish-pretool-check.sh", command);
+}
+
 export default function (pi: ExtensionAPI) {
   pi.on?.("session_start", (event) => {
     const reason = String((event as { reason?: unknown }).reason ?? "");
@@ -125,6 +136,10 @@ export default function (pi: ExtensionAPI) {
     const cdResult = await runCdCheck(command);
     if (cdResult.code === 2) {
       return { block: true, reason: cdResult.stderr.trim() || "denied by the cd-guard PreToolUse seatbelt" };
+    }
+    const lavishResult = await runLavishCheck(command);
+    if (lavishResult.code === 2) {
+      return { block: true, reason: lavishResult.stderr.trim() || "denied by the lavish-guard PreToolUse seatbelt" };
     }
     const result = await runPretoolCheck(command);
     if (result.code !== 2) return {};
