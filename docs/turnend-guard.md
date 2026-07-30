@@ -4,7 +4,7 @@ This is the authoritative contract for the "no turn ends blind" primary guard re
 The turn-end supervision predicate lives in `bin/fm-turnend-guard.sh`.
 Its primary-checkout scope lives in `bin/fm-primary-scope-lib.sh`, shared with the native session-start nudge documented in `docs/sessionstart-nudge.md`.
 Harness-specific tracked hook files only adapt each verified harness's real turn-end mechanism to that shared predicate.
-Related but separate PreToolUse guards deny a bad tool or command shape before it runs rather than detecting a blind turn end afterward: the supervision-arm seatbelt (`bin/fm-arm-pretool-check.sh`, `docs/arm-pretool-check.md`), the cd-guard (`bin/fm-cd-pretool-check.sh`, `docs/cd-guard.md`), and the primary delegation-shape guard (`bin/fm-subagent-pretool-check.sh`, `docs/subagent-guard.md`).
+Related but separate PreToolUse guards deny a bad tool or command shape before it runs rather than detecting a blind turn end afterward: the supervision-arm seatbelt (`bin/fm-arm-pretool-check.sh`, `docs/arm-pretool-check.md`), the cd-guard (`bin/fm-cd-pretool-check.sh`, `docs/cd-guard.md`), the primary delegation-shape guard (`bin/fm-subagent-pretool-check.sh`, `docs/subagent-guard.md`), and the lavish-guard (`bin/fm-lavish-pretool-check.sh`, `docs/lavish-access.md`), which unlike the others is not primary-checkout-scoped.
 Each guard's own document defines its scope; do not infer this guard's scoping, loop safety, or fail-open tradeoffs for its PreToolUse siblings.
 
 ## Gap Closed

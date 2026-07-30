@@ -172,7 +172,7 @@ Those overrides currently set `sandbox_mode = "workspace-write"`, `approval_poli
 The tracked `.codex/hooks.json` has `SessionStart`, `PreToolUse`, and `Stop` project hooks.
 Its `SessionStart` hook is the Codex integration for `bin/fm-sessionstart-nudge.sh`; see [`docs/sessionstart-nudge.md`](sessionstart-nudge.md) for the full native session-start nudge contract.
 Its `Stop` hook is the Codex integration for `bin/fm-turnend-guard.sh`; see [`docs/turnend-guard.md`](turnend-guard.md) for the full primary turn-end supervision contract.
-Its `PreToolUse` hooks run the supervision-arm and cd-guard seatbelts plus a fail-open Graphify check.
+Its `PreToolUse` hooks run the supervision-arm, cd-guard, and lavish-guard seatbelts plus a fail-open Graphify check.
 The Graphify hook exits successfully if `graphify` is not on `PATH`; otherwise it runs `graphify hook-check` with a ten-second timeout.
 That hook is intentionally portable and bounded so Codex tool use is not blocked by a missing Graphify install or a slow hook.
 
