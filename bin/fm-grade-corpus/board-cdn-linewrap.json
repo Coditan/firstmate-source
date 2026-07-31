@@ -1,0 +1,40 @@
+{
+  "case_id": "board-cdn-linewrap",
+  "repo": "firstmate-fork",
+  "class": "guard-bypass",
+  "added": "2026-07-31",
+  "summary": "bin/fm-board.sh --check reported 'no external network requests' (exit 0) for a board whose stylesheet <link> tag was split across two lines, so a board could load a remote CDN asset while the guard that exists to forbid exactly that reported the file clean. The guard matched only single-line tags.",
+  "defect_commit": "879bf5052a6af1626f04527c095bd5958ee6d7b0",
+  "fixed_commit": "f6b585a9782941db2f7e3f2def2859ccc55f6c76",
+  "defect_paths": ["bin/fm-board.sh"],
+  "why_material": "A board that silently loads a CDN asset fails for the reader it was built for, and the guard's clean verdict is what would have let it merge. The damage is invisible on the author's machine, which is the case a review has to catch.",
+  "detection": {
+    "must_mention_paths": ["bin/fm-board.sh"],
+    "must_match_any": [
+      "(?i)(multi.?line|line.?wrap|wrapped|split across|across lines|newline)",
+      "(?i)(cdn|external|remote).{0,60}(link|stylesheet|href|asset)"
+    ]
+  },
+  "proof": {
+    "kind": "executed-reproduction",
+    "evidence": "~/.no-mistakes/logs/01KYV7KGTWSB0HCSX8YT67KH74/review.log:8",
+    "independently_reproduced": "2026-07-31, by extracting bin/fm-board.sh at both commits and running --check against the fixture below; the defect build printed 'no external network requests' and exited 0, the fixed build refused and exited 1. Recorded here so the case does not rest on the reviewing tool's own account of its own catch.",
+    "reproduce": {
+      "extract": [
+        {"path": "bin/fm-board.sh", "as": "subject.sh", "mode": "0755"}
+      ],
+      "fixture": {
+        "wrapped.html": "<html><head><link rel=\"stylesheet\"\n  href=\"https://cdn.jsdelivr.net/npm/x/dist/x.css\">\n</head><body><p>hi</p></body></html>\n"
+      },
+      "command": ["./subject.sh", "--check", "wrapped.html"],
+      "defect_expect": {
+        "exit": 0,
+        "output_matches": "no external network requests"
+      },
+      "fixed_expect": {
+        "exit": 1,
+        "output_matches": "REFUSED"
+      }
+    }
+  }
+}
