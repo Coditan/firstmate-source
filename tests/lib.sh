@@ -290,25 +290,39 @@ assert_no_grep() {
 # consult .gitignore at all - so a checkout with `/config/` privately excluded
 # answers "ignored" whether or not the shared rule still exists.
 assert_gitignore_ignores() {
-  local path=$1 msg=$2
+  local path=$1 msg=$2 match status=0
   fm_tracked_gitignore_probe
-  fm_gitignore_match "$FM_TRACKED_GITIGNORE_PROBE" "$path" >/dev/null \
-    || fail "$msg (the tracked .gitignore alone does not ignore it, so a fresh vessel is unprotected)"
+  match=$(fm_gitignore_match "$FM_TRACKED_GITIGNORE_PROBE" "$path") || status=$?
+  case "$status" in
+    0) ;;
+    3) fail "$msg (the tracked .gitignore could not be tested at all: $match)" ;;
+    *) fail "$msg (the tracked .gitignore alone does not ignore it, so a fresh vessel is unprotected)" ;;
+  esac
 }
 
 # fm_gitignore_match <repo> <path>: print the `check-ignore -v` match for <path>
 # in <repo>, with the developer's global ignore file disabled. Exit 0 when the
-# tracked .gitignore is the source, 1 when nothing ignores <path>, and 2 when
-# some other source does.
+# tracked .gitignore is the source, 1 when nothing ignores <path>, 2 when some
+# other source does, and 3 when git itself failed - a broken or unreadable repo
+# is not the same answer as a missing ignore rule, and reporting it as one sends
+# the reader after the wrong cause.
 #
 # Which source matched is the whole question: check-ignore succeeds just as
 # happily for a clone-private .git/info/exclude or a global core.excludesFile,
 # and those are exactly the rules a fresh vessel does not inherit. This is the
 # single owner of that check, so every ignore assertion in the suite gets it.
 fm_gitignore_match() {
-  local repo=$1 path=$2 match
+  local repo=$1 path=$2 match status=0
   match=$(git -C "$repo" -c core.excludesFile=/dev/null \
-    check-ignore -v --no-index -- "$path") || return 1
+    check-ignore -v --no-index -- "$path") || status=$?
+  case "$status" in
+    0) ;;
+    1) return 1 ;;
+    *)
+      printf 'git check-ignore exited %s in %s\n' "$status" "$repo"
+      return 3
+      ;;
+  esac
   printf '%s\n' "$match"
   case "$match" in
     .gitignore:*) return 0 ;;
@@ -317,7 +331,7 @@ fm_gitignore_match() {
 }
 
 # fm_assert_ignored_by_tracked_gitignore <repo> <path> <subject>: <path> must be
-# ignored in <repo> by the tracked .gitignore. <subject> opens both failure
+# ignored in <repo> by the tracked .gitignore. <subject> opens the failure
 # messages so each suite keeps its own wording.
 fm_assert_ignored_by_tracked_gitignore() {
   local repo=$1 path=$2 subject=$3 match status=0
@@ -325,7 +339,8 @@ fm_assert_ignored_by_tracked_gitignore() {
   case "$status" in
     0) ;;
     1) fail "$subject has no shared ignore rule: $path" ;;
-    *) fail "$subject is ignored by a private or global exclude, not the tracked .gitignore: $match" ;;
+    2) fail "$subject is ignored by a private or global exclude, not the tracked .gitignore: $match" ;;
+    *) fail "could not test the ignore rules for $subject $path: $match" ;;
   esac
 }
 
@@ -337,8 +352,29 @@ fm_assert_ignored_by_tracked_gitignore() {
 # those answers the developer's question, not the fresh vessel's: a global rule
 # for `config/` or `*.json` would report a captain-private path as ignored with
 # the shared rule deleted outright.
+#
+# It only ever operates on a throwaway repository this test process created
+# under fm_test_tmproot, and refuses anything else. The sibling assert in this
+# family is routinely pointed at the live checkout, so the symmetric-looking
+# call is one edit away - and here it would destroy a working home's private
+# .git/info/exclude and rewrite the real repository's git config, silently.
 fm_ignore_probe_isolate() {
-  local repo=$1 gitdir
+  local repo=$1 gitdir here root_dir owned=0 dir
+  here=$(cd "$repo" 2>/dev/null && pwd -P) \
+    || fail "could not resolve the ignore probe directory $repo"
+  root_dir=$(cd "$ROOT" && pwd -P) || fail "could not resolve $ROOT"
+  if [ "$here" = "$root_dir" ]; then
+    fail "refusing to isolate the live checkout at $ROOT: that would delete its private .git/info/exclude and rewrite its git config"
+  fi
+  for dir in "${FM_TEST_CLEANUP_DIRS[@]+"${FM_TEST_CLEANUP_DIRS[@]}"}"; do
+    dir=$(cd "$dir" 2>/dev/null && pwd -P) || continue
+    case "$here" in
+      "$dir"|"$dir"/*) owned=1; break ;;
+    esac
+  done
+  if [ "$owned" -ne 1 ]; then
+    fail "refusing to isolate $repo: it is not a throwaway probe this test process created (build it under fm_test_tmproot)"
+  fi
   gitdir=$(git -C "$repo" rev-parse --absolute-git-dir) \
     || fail "could not locate the git directory of the ignore probe at $repo"
   mkdir -p "$gitdir/info" || fail "could not create $gitdir/info"

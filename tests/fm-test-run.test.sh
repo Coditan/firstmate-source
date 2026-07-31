@@ -189,14 +189,24 @@ test_changed_dependency_selection_and_unmapped_failure() {
 # enumeration that fell out of date is the whole reason that arm exists: the
 # first validation run of the wholesale-config change went red because two
 # suites asserted against .gitignore without being selected by it. Derive the
-# dependents from the suite itself rather than restating a list here.
+# dependents from the suite itself rather than restating a list here, in both
+# forms a suite can take that dependency - a call to one of the tests/lib.sh
+# ignore helpers, and a raw read of the tracked ignore file, which is the exact
+# form (grep -qxF '<literal>' "$ROOT/.gitignore") that went red.
+GITIGNORE_DEPENDENT_RE='(assert_gitignore_ignores|fm_assert_ignored_by_tracked_gitignore|fm_fresh_ignore_clone|fm_gitignore_match|fm_tracked_gitignore_probe|fm_ignore_probe_isolate|[$][{]?ROOT[}]?["]?/[.]gitignore)'
+
 test_gitignore_change_selects_every_dependent_suite() {
   local tmp repo listed script name dependents
-  # Anchored at a call site, so this suite's own mention of the helper names
-  # below is not mistaken for a dependency on the tracked .gitignore.
-  dependents=$(grep -lE \
-    '^[[:space:]]*(assert_gitignore_ignores|fm_assert_ignored_by_tracked_gitignore|fm_fresh_ignore_clone)[[:space:]]' \
-    -- "$ROOT"/tests/*.test.sh) \
+  local -a candidates=()
+  # This suite spells the patterns out above, so scanning it would always match;
+  # excluding it by name keeps the pattern free to match anywhere on a line.
+  for script in "$ROOT"/tests/*.test.sh; do
+    if [ "$(basename "$script")" = "fm-test-run.test.sh" ]; then
+      continue
+    fi
+    candidates+=("$script")
+  done
+  dependents=$(grep -lE "$GITIGNORE_DEPENDENT_RE" -- "${candidates[@]}") \
     || fail "no suite asserts against the tracked .gitignore: have the tests/lib.sh ignore helpers been renamed?"
 
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-gitignore.XXXXXX")
@@ -218,7 +228,7 @@ test_gitignore_change_selects_every_dependent_suite() {
     [ -n "$script" ] || continue
     name=$(basename "$script")
     assert_contains "$listed" "tests/$name" \
-      "editing .gitignore must select $name, which asserts against the tracked .gitignore"
+      "editing .gitignore must select $name, which asserts against the tracked .gitignore: add it to the .gitignore arm of families_for_changed_path"
   done <<<"$dependents"
   rm -rf "$tmp"
   pass "editing .gitignore selects every suite that asserts against it"

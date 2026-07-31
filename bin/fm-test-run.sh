@@ -710,11 +710,15 @@ families_for_changed_path() {
       ;;
     .gitignore)
       # Every suite that asserts against the tracked .gitignore; this arm is the
-      # single owner of that list, so a new dependent belongs here too.
-      printf '%s\n' "__script__:fm-runtime-ignore.test.sh"
-      printf '%s\n' "__script__:fm-private-material-ignore.test.sh"
-      printf '%s\n' "__script__:fm-model-panel.test.sh"
-      printf '%s\n' "__script__:fm-role-config.test.sh"
+      # single owner of that list, so a new dependent belongs here too, and
+      # tests/fm-test-run.test.sh fails when one is missing. __script_required__
+      # names a script this map promises exists, unlike the __script__ entries
+      # derived from a changed path, which may name a file the change deleted.
+      printf '%s\n' "__script_required__:fm-runtime-ignore.test.sh"
+      printf '%s\n' "__script_required__:fm-private-material-ignore.test.sh"
+      printf '%s\n' "__script_required__:fm-model-panel.test.sh"
+      printf '%s\n' "__script_required__:fm-role-config.test.sh"
+      printf '%s\n' "__script_required__:fm-secondmate-sync.test.sh"
       ;;
     tests/lib.sh|tests/*-helpers.sh)
       families_for_test_reference "$(basename "$path")" \
@@ -740,6 +744,7 @@ select_changed() {
   local base=$1 path entry fam script_name s
   local -a wanted_families=()
   local -a wanted_scripts=()
+  local -a required_scripts=()
 
   if ! git -C "$ROOT" rev-parse --verify "$base" >/dev/null 2>&1; then
     die "changed-file base ref not found: $base (pass --base <ref>)"
@@ -750,6 +755,9 @@ select_changed() {
     while IFS= read -r entry; do
       [ -n "$entry" ] || continue
       case "$entry" in
+        __script_required__:*)
+          required_scripts+=("${entry#__script_required__:}")
+          ;;
         __script__:*)
           script_name=${entry#__script__:}
           wanted_scripts+=("$script_name")
@@ -786,11 +794,19 @@ select_changed() {
     done < <(all_repo_tests)
   done
 
+  # A changed path may name a script the change itself deleted or renamed, so a
+  # miss here is normal and stays silent.
   for script_name in "${wanted_scripts[@]+"${wanted_scripts[@]}"}"; do
     if [ -f "tests/$script_name" ]; then
       add_script "tests/$script_name"
+    fi
+  done
+
+  for script_name in "${required_scripts[@]+"${required_scripts[@]}"}"; do
+    if [ -f "tests/$script_name" ]; then
+      add_script "tests/$script_name"
     else
-      die "changed-test mapping names a missing test script: tests/$script_name (rename it in families_for_changed_path or restore the suite)"
+      die "changed-test map names a test script that does not exist: tests/$script_name (update the map in families_for_changed_path or restore the suite)"
     fi
   done
 
