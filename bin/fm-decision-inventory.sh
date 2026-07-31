@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# fm-decision-inventory.sh - collapse the open captain decisions into the set of
-# distinct questions, for the /decisionboard skill to lay out.
+# fm-decision-inventory.sh - group the open captain decisions
+# by originating investigation and keep the judge's record where a judge ruled,
+# for the /decisionboard skill to lay out.
+# That the judge raised one hold per distinct question the analysts raised is
+# ASSUMED, never verified here; see LIMIT below.
 #
 # WHY
 # A model panel registers its holds per MEMBER, so one question becomes up to

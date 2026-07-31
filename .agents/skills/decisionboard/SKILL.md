@@ -3,7 +3,7 @@ name: decisionboard
 description: >-
   Lay the fleet's open captain decisions out as a visual board, on the shared standard layout, and open it for the captain.
   Use when the captain invokes /decisionboard, asks to see the open decisions as a board, asks what is waiting on him visually, or asks for the decision backlog laid out rather than listed.
-  Presents only: it collapses the per-member panel records into the distinct questions, shows what each decision gates, and never records an answer.
+  Presents only: it groups the per-member panel records by originating investigation and keeps the judge's record where a judge ruled, without verifying that the judge covered every question the analysts raised, shows what each decision gates, and never records an answer.
 user-invocable: true
 metadata:
   internal: true

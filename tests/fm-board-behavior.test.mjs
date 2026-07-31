@@ -170,13 +170,17 @@ function reinit(doc, forms, offline) {
 // --- 4. the wiring derives the Lavish question attribute -------------------
 
 {
-  const { doc } = install({ withLavish: true });
+  const { doc, warnings } = install({ withLavish: true });
   const form = makeElement('form', { 'data-fm-question': 'frage-d' });
   doc._handlers.DOMContentLoaded ? doc._handlers.DOMContentLoaded() : null;
   // init() already ran at load with no forms; re-run it through the load path.
   reinit(doc, [form]);
   check(form.getAttribute('data-lavish-question') === 'frage-d',
     'data-lavish-question is derived from data-fm-question, declared once');
+  // This form carries no .fm-queued box, so nothing on it could ever report an
+  // empty submit. That is the one remaining silent path, and it is named.
+  check(warnings.some((w) => w.includes('.fm-queued') && w.includes('frage-d')),
+    'a form with no .fm-queued box is reported at startup rather than left silent');
 }
 
 // --- 5. a radio name that does not match the question key ------------------

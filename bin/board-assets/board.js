@@ -30,7 +30,9 @@
  * it is sending them is worse than one that says nothing.
  *
  * No submit is silent. An answer that carries neither a choice nor a note says
- * so in the form's own .fm-queued box rather than doing nothing at all.
+ * so in the form's own .fm-queued box rather than doing nothing at all, and a
+ * form built without that box is named on the console at startup, so the one
+ * position where nothing could be shown is still not a quiet one.
  */
 (function () {
   'use strict';
@@ -150,6 +152,11 @@
   // cadence after the notice appears, so a runtime that lands late takes the
   // notice back down rather than leaving the captain reading that his answers
   // cannot be sent back while they are in fact being sent.
+  //
+  // The poll gives up after about 122 seconds - 6 tries at 400ms, then 60 at
+  // 2000ms. A runtime that lands after that leaves the notice standing until the
+  // captain's first successful submit clears it; the submit path is the backstop
+  // here, not the poll.
   function watchForBridge(quietLeft, slowLeft) {
     if (bridge()) {
       showOffline(false);
@@ -170,14 +177,24 @@
     }, 2000);
   }
 
-  // The radio name must equal data-fm-question (docs/board-layout.md). A board
-  // that breaks the rule still works, because answerOf falls back to the form's
-  // own checked control, but the mismatch is named rather than left silent.
-  function reportKeyMismatch(form) {
-    if (!form.querySelectorAll || !window.console || !window.console.warn) {
+  // docs/board-layout.md states two rules a board body has to follow: the radio
+  // name equals data-fm-question, and every question form carries a .fm-queued
+  // box. Neither can be enforced from prose, and a board that breaks either one
+  // builds and renders, so both are named on the console at startup. Breaking
+  // the first costs nothing, because answerOf falls back to the form's own
+  // checked control; breaking the second is what would make a submit silent.
+  function reportFormDefects(form) {
+    if (!window.console || !window.console.warn) {
       return;
     }
     var key = form.getAttribute('data-fm-question');
+    if (form.querySelector && !form.querySelector('.fm-queued')) {
+      window.console.warn('fm-board: the form for "' + key +
+        '" has no .fm-queued box, so nothing on it can report a queued or an empty answer.');
+    }
+    if (!form.querySelectorAll) {
+      return;
+    }
     var radios = form.querySelectorAll('input[type="radio"]');
     for (var i = 0; i < radios.length; i++) {
       if (radios[i].name && radios[i].name !== key) {
@@ -197,7 +214,7 @@
       if (!forms[i].hasAttribute('data-lavish-question')) {
         forms[i].setAttribute('data-lavish-question', forms[i].getAttribute('data-fm-question'));
       }
-      reportKeyMismatch(forms[i]);
+      reportFormDefects(forms[i]);
     }
     watchForBridge(6, 60);
   }

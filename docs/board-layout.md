@@ -143,7 +143,8 @@ A submit that carries neither a choice nor a note is never silent: the box says 
 
 Add one `<div class="fm-offline"></div>` per board.
 It stays hidden on a served board and appears when the board was opened with no Lavish server, where queueing has nowhere to go.
-It is advisory and reversible: a Lavish runtime that lands late, or a queue that succeeds, takes it back down.
+It is advisory and reversible: a queue that succeeds takes it back down, and so does a Lavish runtime that appears while the board is still polling for one.
+That poll gives up after about 122 seconds, so a runtime landing later leaves the notice standing until the captain's first successful submit clears it.
 
 German boards are written with real umlauts - ä, ö, ü, and ß - never ae, oe, ue, or ss.
 That applies to the board's own text, not to code identifiers, attribute names, or CSS values.

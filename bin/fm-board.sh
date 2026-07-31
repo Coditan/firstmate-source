@@ -78,12 +78,17 @@ html_escape() {
 }
 
 # fold_open_constructs - print `<line-number>:<text>`, one logical construct per
-# line, with newlines inside an unfinished tag, url(), or @import folded away.
+# line, with newlines inside an unclosed tag or an unclosed url() folded away.
 #
 # grep only ever sees one PHYSICAL line, so a scan written against
 # `<link rel=... href="https://...">` says nothing about the same tag with its
 # attributes wrapped across lines - which is ordinary generated HTML. Folding
 # first makes attribute formatting irrelevant to the verdict.
+#
+# Only genuinely unterminated syntax folds: a `<name` with no closing `>` yet,
+# and a `url(` with no closing `)` yet. A trailing keyword never does, because
+# joining on one would let a line whose last word happens to be a CSS at-rule
+# name pull the next line in and manufacture a rule out of prose.
 #
 # A `<` only opens a construct when a tag name follows it immediately, so
 # `i < notes.length` in an inlined script does not swallow the rest of the file.
@@ -93,7 +98,7 @@ html_escape() {
 fold_open_constructs() {  # <file>
   awk '
     function unfinished(s) {
-      return (s ~ /<[[:alpha:]!\/][^>]*$/) || (s ~ /url\([^)]*$/) || (s ~ /@import[[:space:]]*$/)
+      return (s ~ /<[[:alpha:]!\/][^>]*$/) || (s ~ /url\([^)]*$/)
     }
     {
       if (held == 0) { start = NR; buf = $0 } else { buf = buf " " $0 }
@@ -128,12 +133,36 @@ scan_remote_refs() {  # <file>
     | sed 's/^/  remote href on a subresource element: /' || true
 
   # CSS: an @import rule, and any remote url() or image-set() - webfonts and
-  # remote artwork arrive that way. @import is matched as real CSS syntax
-  # (@import url(...) or @import "...") rather than on the bare word, so a board
-  # that DISCUSSES this rule in prose or in a comment is not refused for saying
-  # its name.
-  printf '%s\n' "$folded" | grep -Ei "@import[[:space:]]*(url\(|[\"'])" \
-    | sed 's/^/  @import rule (a board inlines its styling): /' || true
+  # remote artwork arrive that way.
+  #
+  # @import counts as a rule only where it STARTS a statement - at the beginning
+  # of the file or after ;, {, }, or > - and the next non-whitespace token, which
+  # may sit on a later line, is url( or a quoted target. Prose and code comments
+  # that merely name the rule fail the first condition, so a board explaining
+  # this very rule is not refused for saying its name however it is wrapped.
+  printf '%s\n' "$folded" | awk '
+    BEGIN { stmt = 1 }
+    {
+      at = index($0, ":"); num = substr($0, 1, at - 1); text = substr($0, at + 1)
+      low = tolower(text); n = length(text)
+      for (i = 1; i <= n; i++) {
+        c = substr(text, i, 1)
+        if (awaiting) {
+          if (c == " " || c == "\t") { continue }
+          if (substr(low, i, 4) == "url(" || c == "\"" || c == "\047") {
+            printf "  @import rule (a board inlines its styling): %s:%s\n", imnum, imtext
+          }
+          awaiting = 0
+        }
+        if (stmt && substr(low, i, 7) == "@import") {
+          awaiting = 1; imnum = num; imtext = text; stmt = 0; i += 6
+          continue
+        }
+        if (c == ";" || c == "{" || c == "}" || c == ">") { stmt = 1 }
+        else if (c != " " && c != "\t") { stmt = 0 }
+      }
+    }
+  ' || true
   printf '%s\n' "$folded" \
     | grep -Ei "(url|image-set|-webkit-image-set)\([[:space:]]*[\"']?${remote}" \
     | sed 's/^/  remote url() in CSS: /' || true

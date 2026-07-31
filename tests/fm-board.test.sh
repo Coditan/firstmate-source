@@ -80,6 +80,8 @@ wrapped daisyui stylesheet|<link\n  rel="stylesheet"\n  href="https://cdn.jsdeli
 wrapped tailwind script|<script\n  src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.2.4/dist/index.global.js"></script>
 wrapped remote image|<img\n  alt="x"\n  src="https://example.com/logo.png">
 wrapped svg use|<svg><use\n  href="https://example.com/i.svg#x"></use></svg>
+wrapped css import url|<style>\n@import\n  url("https://example.com/x.css");\n</style>
+wrapped css import quoted|<style>\n@import\n  "https://example.com/x.css";\n</style>
 EOF
   pass "a reference wrapped across lines is refused exactly like the one-line form"
 }
@@ -108,13 +110,24 @@ test_guard_allows_a_navigational_link_split_across_lines() {
 }
 
 test_guard_allows_prose_naming_the_rule() {
-  # The guard matches @import as CSS syntax, not as a word, so a board that
-  # explains this very rule is not refused for naming it.
+  # @import is refused as a STATEMENT, not as a word, so a board that explains
+  # this very rule is not refused for naming it.
   build '<p>Kein CDN, kein @import, keine externe Schrift.</p>'
   expect_code 0 "$(build_status)" "prose naming @import must not be refused"
   build "$(printf '%b' '<!-- Ein Kommentar, der @import\n     und url() nur benennt. -->\n<p>Inhalt</p>')"
   expect_code 0 "$(build_status)" "a comment naming @import across lines must not be refused"
   pass "prose that names the rule is not mistaken for the rule being broken"
+}
+
+test_guard_allows_prose_that_ends_a_line_on_the_rule_name() {
+  # The worst position for the word: last token on its line, with a quote
+  # opening the next one. Nothing here starts a statement with @import, so
+  # nothing here is a rule - however aggressively the two lines are joined.
+  build "$(printf '%b' '<p>Kein @import\n"und kein CDN".</p>')"
+  expect_code 0 "$(build_status)" "prose ending a line on @import must not be refused"
+  build "$(printf '%b' '<p>Wir nennen es @import</p>\n<p>"und meinen die Regel".</p>')"
+  expect_code 0 "$(build_status)" "prose ending a paragraph on @import must not be refused"
+  pass "prose whose line ends on the rule name is not folded into a rule"
 }
 
 # --- what the builder actually produces --------------------------------------
@@ -249,6 +262,7 @@ test_guard_refuses_a_tag_whose_attributes_span_lines
 test_guard_allows_navigational_links
 test_guard_allows_a_navigational_link_split_across_lines
 test_guard_allows_prose_naming_the_rule
+test_guard_allows_prose_that_ends_a_line_on_the_rule_name
 test_board_is_self_contained
 test_board_escapes_its_title
 test_check_mode_reports_both_verdicts

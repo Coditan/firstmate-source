@@ -158,6 +158,30 @@ test_the_fold_does_not_claim_to_be_exact() {
   pass "neither the tool nor the skill claims the collapse counts exactly"
 }
 
+test_every_stated_purpose_describes_the_fold_the_same_way() {
+  # The three surfaces a reader actually meets - the --help synopsis, the skill
+  # frontmatter an agent reads before loading, and the scripts table - each used
+  # to promise "the distinct questions". They drifted from the header once, so
+  # they are pinned to one shared phrase.
+  local out skill=$ROOT/.agents/skills/decisionboard/SKILL.md
+  local scripts=$ROOT/docs/scripts.md
+  out=$("$INV" --help)
+  assert_contains "$out" "by originating investigation" \
+    "the synopsis must say what the tool does, not promise distinct questions"
+  case "$out" in
+    *"set of distinct questions"*) fail "the synopsis still promises the distinct questions" ;;
+  esac
+  assert_grep 'by originating investigation' "$skill" \
+    "the skill description must describe the same fold as the tool"
+  assert_no_grep 'into the distinct questions' "$skill" \
+    "the skill description must not promise the distinct questions"
+  assert_grep 'by originating investigation' "$scripts" \
+    "the scripts table must describe the same fold as the tool"
+  assert_no_grep 'into distinct questions' "$scripts" \
+    "the scripts table must not promise distinct questions"
+  pass "help, skill description, and scripts table describe the fold identically"
+}
+
 test_folded_records_must_stay_visible_on_the_board() {
   # Making the failure mode visible is the whole mitigation: a record folded away
   # and never rendered is a question the captain cannot see.
@@ -189,5 +213,6 @@ test_separate_investigations_do_not_merge
 test_empty_inventory_is_not_an_error
 test_summary_names_the_unpaired_variants
 test_the_fold_does_not_claim_to_be_exact
+test_every_stated_purpose_describes_the_fold_the_same_way
 test_folded_records_must_stay_visible_on_the_board
 test_inventory_is_read_only
