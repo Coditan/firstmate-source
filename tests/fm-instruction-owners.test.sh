@@ -10,6 +10,7 @@ set -u
 DIAG="$ROOT/.agents/skills/diagnostic-reasoning/SKILL.md"
 PROJECT="$ROOT/.agents/skills/project-management/SKILL.md"
 SECRETS="$ROOT/.agents/skills/secrets-handling/SKILL.md"
+ASKUSER="$ROOT/.agents/skills/ask-user-authority/SKILL.md"
 HARNESS="$ROOT/.agents/skills/harness-adapters/SKILL.md"
 CODING="$ROOT/.agents/skills/firstmate-coding-guidelines/SKILL.md"
 RECOVERY="$ROOT/.agents/skills/stuck-crewmate-recovery/SKILL.md"
@@ -20,7 +21,7 @@ BRIEF="$ROOT/bin/fm-brief.sh"
 
 test_new_skill_metadata_and_triggers() {
   local skill name count
-  for pair in "diagnostic-reasoning:$DIAG" "project-management:$PROJECT" "secrets-handling:$SECRETS"; do
+  for pair in "diagnostic-reasoning:$DIAG" "project-management:$PROJECT" "secrets-handling:$SECRETS" "ask-user-authority:$ASKUSER"; do
     name=${pair%%:*}
     skill=${pair#*:}
     assert_present "$skill" "$name skill is missing"
@@ -42,6 +43,10 @@ test_new_skill_metadata_and_triggers() {
     "secrets-handling skill metadata lost its precise load trigger"
   assert_grep '`secrets-handling` - load before reading, sourcing, injecting, inspecting, or transporting secrets or credentials, and whenever one is exposed in agent or tool output.' "$ROOT/AGENTS.md" \
     "AGENTS.md lost the secrets-handling trigger"
+  assert_grep 'Use before deciding any ask-user finding, regardless of the project'"'"'s yolo posture, to distinguish corrections within accepted intent from product or engineering contract expansion that requires the captain.' "$ASKUSER" \
+    "ask-user-authority skill metadata lost its precise load trigger"
+  assert_grep '`ask-user-authority` - load before deciding any ask-user finding, regardless of the project'"'"'s `yolo` posture.' "$ROOT/AGENTS.md" \
+    "AGENTS.md lost the ask-user-authority trigger"
   pass "new internal skills have one precise AGENTS.md trigger each"
 }
 
