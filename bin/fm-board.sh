@@ -42,8 +42,8 @@
 # WHAT IT DOES NOT COVER, stated rather than papered over:
 #   - a URL assembled at runtime from fragments inside a script; this is a
 #     textual scan and cannot follow code,
-#   - the word @import outside a CSS region, which is DELIBERATELY read as prose:
-#     a board explaining this rule is not a board breaking it,
+#   - the words @import and url() outside a CSS region, which are DELIBERATELY
+#     read as prose: a board explaining this rule is not a board breaking it,
 #   - a style attribute written in a form this extractor does not recognise; it
 #     reads a double-quoted, single-quoted, or unquoted value, and is not a
 #     general HTML tokenizer.

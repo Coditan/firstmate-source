@@ -30,7 +30,7 @@ A self-contained board satisfies both without a copying step.
 - **System fonts.** No webfont is loaded, so text paints immediately.
 - **Light and dark**, following the reader's device via `prefers-color-scheme`, both directions readable.
 - **Responsive** from a narrow phone to a wide desktop, with no horizontal scrolling at body level. Wide content scrolls inside its own container.
-- **Navigational links stay allowed.** `<a href="https://...">` is not a network request; AGENTS.md section 9 requires boards to carry full PR URLs.
+- **Navigational links stay allowed.** `<a href="https://...">` is not a network request.
 
 ## Writing a body fragment
 
@@ -159,20 +159,11 @@ That applies to the board's own text, not to code identifiers, attribute names, 
 Runs the same guard over existing files.
 `tests/fm-board.test.sh` pins the refusals, including the exact CDN regression above.
 
-### What the guard does and does not cover
+### What the guard covers
 
-It covers four things, and only those four:
+`bin/fm-board.sh --help` states the exact patterns and the limits it does not cover; read it there rather than here.
 
-- **static remote references in HTML subresource attributes** - `src` and the `data-src` lazy-load handoff to one, `srcset`, `poster`, `action`, `formaction`, `background`, `manifest`, `xlink:href`, and `<object data>`. Attribute formatting does not change the verdict: a tag whose attributes are wrapped across lines is refused exactly like the one-line form.
-- **a remote `href` on a subresource element** - `<link>`, `<base>`, and SVG `<use>`/`<image>`. Never on `<a>`.
-- **CSS constructs inside a `<style>` element and inside a `style` attribute** - `@import`, and a remote `url()` or `image-set()`.
-- **an absolute remote URL inside `<script>`**.
-
-Three things it does not cover, named so nobody has to rediscover them:
-
-- A URL assembled at runtime from fragments inside a script. This is a textual scan and cannot follow code.
-- The word `@import` outside a CSS region, which is deliberately read as prose. Everywhere but a `<style>` element and a `style` attribute, `@import` and `url()` are words rather than constructs, so a board explaining this rule in a paragraph, a list item, a heading, or a comment is never refused for naming it.
-- A `style` attribute written in a form the extractor does not recognise. It reads a double-quoted, single-quoted, or unquoted value, and is deliberately not a general HTML tokenizer.
+One asymmetry is worth knowing while writing a body: a navigational `<a href="https://...">` is allowed and must stay allowed, because AGENTS.md section 9 requires boards to carry full PR URLs, while an `href` on a subresource element is refused.
 
 It is a guard against the regression that actually happened, not a sandbox.
 
