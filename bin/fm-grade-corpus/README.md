@@ -70,6 +70,8 @@ The scored rule matches `must_mention_paths` against the finding's own `file` fi
 A finding that names the wrong file does not count however its prose reads, because acting on it sends a reader to the wrong place.
 Both sides are normalised first and compared on their shared path suffix, so an absolute path, a `./` prefix, or a path written relative to a different root still names the same file.
 The rule rejects wrong files, not wrong formatting: a challenger whose path convention differs from the incumbent's must not lose points for that alone.
+A candidate may be more specific than the case, which is what a differently rooted path is, but not less: a bare filename against a directory-qualified case path is not a location.
+`README.md` ends every README in the tree, and accepting it would score a finding about a different file as a hit - a bare basename is a less specific locator, not another spelling of the same path.
 The report also prints `blind_detection_rate_lenient`, which additionally accepts the path appearing anywhere in the finding's text.
 That figure is never the score; it is printed beside the score so the gap between them is visible, because the distance between the two is exactly how precisely the candidate localised what it found.
 

@@ -6,7 +6,7 @@ Method, tier definitions, and the falsifiability argument live in [review-gradin
 ## Provenance
 
 - Date: 2026-07-31
-- Run database: `~/.no-mistakes/state.sqlite`, opened `mode=ro`, 176 runs, 639 finding objects, latest run 2026-07-31
+- Run database: `~/.no-mistakes/state.sqlite`, opened `mode=ro`, 176 runs, 644 finding objects, latest run 2026-07-31
 - Repositories blamed: the 7 clones the run database names, all reachable
 - Commands:
 
@@ -25,7 +25,7 @@ The unit this tier measures is the commit, not the run row; identical chains are
 All three are fixed, every figure below was recomputed by running the tool afterwards, and no superseded number is reproduced anywhere in this file.
 That two readings taken with the scale had to be thrown away because the scale was wrong is the behaviour this document is supposed to record, not an embarrassment to hide.
 
-The finding count differs from the 605, 612, 614, 621, and 631 quoted earlier the same week because runs kept landing while those figures were taken.
+The finding count differs from the 605, 612, 614, 621, 631, and 639 quoted earlier the same week because runs kept landing while those figures were taken.
 That drift is the reason a report defends its own snapshot and nothing else.
 
 The report was run twice over the same snapshot and reproduced every git-tier figure exactly, which is the property that lets a challenger be compared later.
@@ -36,12 +36,12 @@ The report was run twice over the same snapshot and reproduced every git-tier fi
 
 | metric | value | n |
 |---|---|---|
-| `findings_total` | 639 | 639 |
-| `abstention_rate` | 35.7% | 639 |
-| `autofix_share` | 40.8% | 639 |
-| `error_severity_share` | 7.0% | 639 |
+| `findings_total` | 644 | 644 |
+| `abstention_rate` | 35.6% | 644 |
+| `autofix_share` | 41.0% | 644 |
+| `error_severity_share` | 7.0% | 644 |
 | `review_rounds_median` | 2.0 | 171 |
-| `runs_needing_3plus_review_rounds` | 21.6% | 171 |
+| `runs_needing_3plus_review_rounds` | 22.2% | 171 |
 | `run_completion_rate` | 83.5% | 176 |
 
 ### Tier G - what actually happened to the code (INDEPENDENT)
@@ -110,7 +110,7 @@ The pattern is not a tool that fails; it is a tool whose first pass does real wo
 The extra rounds are where the cost sits, and no self-reported number made that visible.
 
 **A third of findings were never decided by the tool at all.**
-35.7% are `ask-user`, which is human workload no fix rate prices.
+35.6% are `ask-user`, which is human workload no fix rate prices.
 
 ## What this reading cannot yet say
 

@@ -86,6 +86,10 @@ HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 # Path-shaped runs pulled out of finding prose, so the lenient rate compares
 # paths the same way the strict rate does instead of matching a raw substring.
 PATH_TOKEN_RE = re.compile(r"[A-Za-z0-9_./\\-]*[./\\][A-Za-z0-9_./\\-]*")
+# A path that ends a sentence carries the full stop into the token, and prose
+# ends in a full stop constantly. Only the trailing side is trimmed: a leading
+# dot belongs to the path, in `./bin/x` and in a dotfile alike.
+PATH_TOKEN_TAIL = ".,;:!?)]}\"'`"
 
 # The verdicts a ballot may carry. A hand-filled ballot is exactly where a typo
 # lands, and an unrecognised string would inflate every denominator while
@@ -854,6 +858,11 @@ def verify_case_repro(case, tmpdir):
                                "absent at the fixing commit", "phases": results}
 
 
+def path_tokens(text):
+    """Path-shaped words in a block of prose, with sentence punctuation removed."""
+    return [t for t in (m.rstrip(PATH_TOKEN_TAIL) for m in PATH_TOKEN_RE.findall(text)) if t]
+
+
 def normalise_path(path):
     """Reduce a path to comparable components.
 
@@ -876,12 +885,21 @@ def same_file(expected, candidate):
     was not chosen to punish formatting, and a challenger whose path convention
     differs from the incumbent's must not lose points for that alone - favouring
     the incumbent is the one bias this scale cannot carry.
+
+    A candidate may be MORE specific than the case - that is what a differently
+    rooted path is - but not less. Collapsing to a single component when the case
+    names a directory would make a bare filename a location, and it is not one:
+    `README.md` ends every README in the tree and `main.py` every main, so
+    accepting it would score a finding about a different file as a hit and lean
+    the scale toward the tool being graded.
     """
     want = normalise_path(expected)
     got = normalise_path(candidate)
     if not want or not got:
         return False
     depth = min(len(want), len(got))
+    if depth < 2 and len(got) < len(want):
+        return False
     return want[-depth:] == got[-depth:]
 
 
@@ -924,7 +942,7 @@ def score_submission(case, findings):
             fpath = str(f.get("file") or "")
             located = any(same_file(p, fpath) for p in paths)
             mentioned = located or any(
-                any(same_file(p, token) for token in PATH_TOKEN_RE.findall(text))
+                any(same_file(p, token) for token in path_tokens(text))
                 for p in paths)
         else:
             located = mentioned = True

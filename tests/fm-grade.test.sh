@@ -614,12 +614,34 @@ for SPELLING in "./bin/thing.sh" "/home/somebody/checkout/bin/thing.sh" "bin//th
     || fail "path spelling $SPELLING must still locate the file, got $GOT"
 done
 
-# Normalisation must not blur two genuinely different files into one.
-for WRONG in "bin/other.sh" "bin/thing.sh.bak" "docs/thing.sh"; do
+# Normalisation must not blur two genuinely different files into one. A bare
+# filename is the case that matters: it is a less specific locator rather than
+# another spelling, and accepting it would let `README.md` match every README in
+# the tree - an error that flatters the graded tool, the one direction this
+# scale must never lean.
+for WRONG in "bin/other.sh" "bin/thing.sh.bak" "docs/thing.sh" "thing.sh"; do
   GOT=$(detection_rate "$WRONG")
   [ "$GOT" = "0.0" ] \
-    || fail "$WRONG is a different file and must not score as a detection, got $GOT"
+    || fail "$WRONG is not a location for this case and must not score, got $GOT"
 done
+
+# Prose ends in a full stop constantly, and the lenient rate promises to accept
+# the path appearing anywhere in the text. A path-shaped word must therefore be
+# compared without its sentence punctuation, or the strict-vs-lenient gap - the
+# whole point of reporting both - reads narrower than it is.
+cat > "$SUB" <<'JSON'
+{"score-case": {"findings": [
+  {"file": "bin/elsewhere.sh",
+   "description": "a line-wrapped tag slips past the guard in bin/thing.sh."}
+]}}
+JSON
+PUNCT=$(run_engine --submission "$SUB" --json report 2>/dev/null | python3 -c '
+import json, sys
+vals = {m["key"]: m["value"] for m in json.load(sys.stdin)["tiers"]["bench"]["metrics"]}
+print("%s %s" % (vals.get("blind_detection_rate"),
+                 vals.get("blind_detection_rate_lenient")))')
+[ "$PUNCT" = "0.0 100.0" ] \
+  || fail "a sentence-final path must still count as a lenient mention, got $PUNCT"
 
 # --- the wrapper never writes to the run database ---------------------------
 

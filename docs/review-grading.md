@@ -97,6 +97,8 @@ What it reports is therefore a detection rather than a confirmation.
 Detection is generous about wording and strict about location.
 The scored rule matches the case's path against the finding's own `file` field: a finding that names the wrong file is not a detection however its prose reads, because acting on it sends a reader to the wrong place.
 Both sides are normalised and compared on their shared path suffix, so an absolute path or a `./` prefix names the same file; the rule rejects wrong files, not wrong formatting, because a challenger penalised for its path convention would flatter the incumbent.
+A candidate may be more specific than the case, which is what a differently rooted path is, but not less: a bare filename against a directory-qualified case path is a less specific locator rather than another spelling, and accepting it would let a finding about a different file score as a hit.
+The lenient rate reads the same comparison over path-shaped words in the prose, with sentence punctuation trimmed, so a path that ends a sentence still counts as a mention.
 A lenient rate, which also accepts the path appearing anywhere in the finding's text, is printed beside the scored one and never instead of it, so the gap between them - which measures how precisely the candidate localises what it found - is visible rather than buried in a scoring choice.
 
 A case is scored in the headline rate only if the proof that its defect was real is an observed event: an executed reproduction, a failing test, a CI failure, or a revert.
