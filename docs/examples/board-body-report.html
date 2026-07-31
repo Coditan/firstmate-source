@@ -1,0 +1,67 @@
+<!-- A worked board body: the REPORT shape.
+     Build it with:
+       bin/fm-board.sh --title "Titel" --subtitle "Untertitel" \
+         --body docs/examples/board-body-report.html --out .lavish/beispiel.html
+
+     It is deliberately a different shape from a decision board: no decision
+     controls, and it leans on the distribution bar, status line, and table
+     instead of the gate map and answer forms. Both shapes come off the same
+     versioned layout without copying any of it, which is the point.
+
+     Content here is generic on purpose - docs/ is shared, tracked material, so
+     no fleet specifics belong in it. docs/board-layout.md lists every component. -->
+
+<div class="fm-stats">
+  <div class="fm-stat is-hot"><b>11</b><span>Faelle mit Befund</span></div>
+  <div class="fm-stat"><b>12</b><span>geprueft</span></div>
+  <div class="fm-stat is-calm"><b>1</b><span>ohne Beanstandung</span></div>
+  <div class="fm-stat"><b>3</b><span>Ursachen</span></div>
+</div>
+
+<div class="fm-offline">Ohne laufenden Lavish-Server geoeffnet: vollstaendig lesbar, aber es kann nichts zurueckgesendet werden.</div>
+
+<h2>Der Befund</h2>
+<div class="fm-card is-wide">
+  <p class="fm-stake">Was gefunden wurde, in einem Satz, und was daran zaehlt.</p>
+  <p class="fm-ev">Worauf sich das stuetzt: gemessen, wann, womit. Belege gehoeren in diese Zeile, nicht in die darueber.</p>
+</div>
+
+<h2>Verteilung</h2>
+<div class="fm-card is-wide">
+  <div class="fm-dist">
+    <span style="width:91.7%;background:var(--fm-hot)">11 mit Befund</span>
+    <span style="width:8.3%;background:var(--fm-calm)">1</span>
+  </div>
+  <div class="fm-dist-legend">
+    <span><i style="background:var(--fm-hot)"></i>mit Befund</span>
+    <span><i style="background:var(--fm-calm)"></i>ohne Beanstandung</span>
+  </div>
+</div>
+
+<h2>Stand der Arbeit</h2>
+<div class="fm-card is-wide">
+  <div class="fm-statusline">
+    <div class="fm-step is-done"><b>&#10003;</b><span>gemessen</span></div>
+    <div class="fm-step-link"></div>
+    <div class="fm-step is-done"><b>&#10003;</b><span>behoben</span></div>
+    <div class="fm-step-link"></div>
+    <div class="fm-step is-now"><b>3</b><span>wartet auf Abnahme</span></div>
+  </div>
+  <p class="fm-ev">Was noch aussteht, und warum - offen benannt, statt als erledigt gezeigt.</p>
+</div>
+
+<h2>Fall fuer Fall</h2>
+<div class="fm-panel">
+<!-- Eine breite Tabelle scrollt in ihrem EIGENEN Container. Niemals auf Body-Ebene. -->
+<div class="fm-scroll">
+<table class="fm-table">
+  <thead><tr><th>Gegenstand</th><th>Befund</th><th>Ursache</th><th>Groesse</th></tr></thead>
+  <tbody>
+    <tr><td><code>beispiel-eins</code></td><td>3</td><td>nachgeladen</td><td>22 KB</td></tr>
+    <tr><td><code>beispiel-zwei</code></td><td>3</td><td>nachgeladen</td><td>16 KB</td></tr>
+    <tr><td><code>beispiel-drei</code></td><td>0</td><td>-</td><td>30 KB</td></tr>
+  </tbody>
+</table>
+</div>
+</div>
+<p class="fm-note" style="margin-top:10px">Eine Fussnote zur Tabelle: was die Zahlen NICHT sagen, gehoert hierhin.</p>

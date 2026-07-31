@@ -1,0 +1,90 @@
+---
+name: decisionboard
+description: >-
+  Lay the fleet's open captain decisions out as a visual board, on the shared standard layout, and open it for the captain.
+  Use when the captain invokes /decisionboard, asks to see the open decisions as a board, asks what is waiting on him visually, or asks for the decision backlog laid out rather than listed.
+  Presents only: it collapses the per-member panel records into the distinct questions, shows what each decision gates, and never records an answer.
+user-invocable: true
+metadata:
+  internal: true
+---
+
+# Decision board
+
+Lay every open captain decision out as one visual surface, so the captain can see what is waiting on him, what each answer unlocks, and which questions are really the same question asked three times.
+
+This skill **presents**.
+It never writes, resolves, reorders, or closes a decision.
+`.agents/skills/decision-hold-lifecycle` owns the decision lifecycle and `bin/fm-decision-hold.sh resolve` owns recording an answer.
+A board that quietly changed a record would put a second owner on that contract.
+
+## Why a board and not a list
+
+A list understates two things that a board can show at a glance.
+
+A model panel registers its holds per member, so one question arrives as up to three records.
+On 2026-07-31 the open set was 26 records carrying 12 distinct questions - a list would have told the captain that more than twice as much was waiting on him as actually was.
+
+And a list flattens the gate structure.
+When one strategic answer settles five downstream questions, a flat list gives no reason to answer that one first, which is how these decisions sat unanswered for days.
+
+## Sequence
+
+1. **Read the structured inventory.**
+   `bin/fm-decision-inventory.sh --summary` for a read, `--json` for the data to lay out.
+   It reads the structured decision inventory through `bin/fm-bearings-snapshot.sh` and owns the collapse rule, its limits, and the output contract.
+   Never assemble decisions from report prose, chat, or terminal output - the same rule the bearings header states for itself.
+
+2. **Judge what each decision is actually about.**
+   The inventory gives identity, grouping, and the recorded summary.
+   What is at stake, what the options are, and which evidence makes one option obvious are yours to write, from the originating report and the hold's own reason.
+   That part cannot be scripted, and it is most of a board's value.
+
+3. **Establish the gate structure, and label how you know it.**
+   See "Showing the gate structure" below.
+
+4. **Write the body fragment and build the board.**
+   `bin/fm-board.sh --title <t> --subtitle <s> --body <fragment> --out .lavish/<name>-<date>.html`
+   The builder owns the standard layout and refuses a board that would reach the network.
+   `docs/board-layout.md` lists the components and the markup each expects.
+   Do not hand-write a board's styling or scripting: that is exactly the drift this layout exists to stop.
+
+5. **Open it.**
+   `bin/fm-lavish.sh <file>`, never bare `lavish-axi`, which emits a link that opens nowhere but this machine.
+
+6. **Poll for the captain's answers,** then route each one through `bin/fm-decision-hold.sh resolve` under the `decision-hold-lifecycle` contract.
+   The board queues the captain's answers; it does not record them.
+
+## Showing the gate structure
+
+Show all three relationship kinds, and make clear on the board **how each one was established**.
+Confidence that is not shown is confidence the captain cannot check.
+
+- **Recorded gate** - a decision another item is genuinely blocked by, from the backlog's own dependency edges.
+  Draw it as a solid edge. This is proven.
+- **Same investigation** - decisions sharing an origin group, from the inventory.
+  Draw it as a cluster. This is structural, and it is weaker than a gate: shared origin means related, not blocking.
+- **Named gate** - your own reading that one decision decides others.
+  Label it as your reading on the board itself, in the captain's own words, not as a recorded fact.
+
+Pre-answer gating between decisions is **not** recorded structurally today.
+`decision-hold-lifecycle` step 6 creates dependency edges only after the captain decides, which is deliberate: the edges exist to route an answer to dependent work.
+So a named gate stays a named gate.
+If you find that a gate ought to be durable, raise it with that skill's owner rather than inventing a second place to record it.
+
+## What the board must not claim
+
+The collapse counts exactly, but pairing a specific superseded variant to a specific decision is best-effort, and the inventory marks which pairings it is confident about.
+Render a confident pairing under its decision; render everything else at group level as further variants of the same investigation.
+Never assert which question an unpaired variant restates.
+
+## Language
+
+Give the captain his board in the language the task was set in.
+A German request gets a German board.
+
+## Scope
+
+One board, from the current inventory, opened for the captain.
+It is read-only with respect to every decision on it.
+If the inventory is empty, say so plainly in chat and do not build a board for nothing.
