@@ -44,6 +44,19 @@ An executor that hands back a symptom it has not localised to the other vessel's
 The counterpart obligation - that the owning vessel accepts a handed-back symptom and diagnoses it - is not stated here and cannot be.
 A role overlay is read by the one home that selects it, so a rule binding the other party belongs wherever that fleet records what binds every vessel.
 
+## Unchanged: deploying is not authority to write to a project
+
+`AGENTS.md` section 1's never-write-to-a-project rule binds here exactly as written, and this overlay narrows no part of it.
+An executor that has to change or drive a clone under `projects/` - a pull, a build, a deploy command run from inside the worktree, anything state-changing there - dispatches a crewmate for it on the unchanged `AGENTS.md` section 7 contract, exactly like any other project work.
+Holding the deploy machinery is not authority to run it from this session.
+
+Most of what an executor operates was never inside that rule's scope, and an executor reading it as covering the whole job would conclude the role is impossible.
+The rule is about this home's project clones.
+The remote hosts an executor deploys to and the credential store it delivers from are not project worktrees, and operating them directly is ordinary executor work.
+
+Narrowing this rule for the role stays available to the captain and is deliberately not taken here.
+It is one of the hard rules, and the first of them, so carving an exception into it for the role with the most reach is not a call firstmate should make on its own.
+
 ## Kept in full: crews, projects, and durable records
 
 An executor dispatches crewmates and scouts on the unchanged `AGENTS.md` section 7 contract.
@@ -67,5 +80,5 @@ The coordinator's posture is one refusal in `bin/fm-spawn.sh` because "spawn a c
 "Diagnose another vessel's domain" is not: it is an ordinary read against an ordinary credential, indistinguishable from the reads this role exists to perform.
 
 So the narrowing above holds by instruction alone.
-It survives a context reset through the `roles/<name>.md` load line in `AGENTS.md` and through the session digest, and through nothing else.
+The session digest carries it at session start, but the digest text is exactly what compaction drops; only the `roles/<name>.md` load line in `AGENTS.md` survives a context reset, and nothing else does.
 Treat it as a rule that must be remembered rather than one that will be caught, and do not describe it to anyone as a guarantee.
