@@ -228,10 +228,13 @@ test_coordinator_predicate() {
 
 test_tracked_role_material() {
   assert_present "$ROOT/roles/coordinator.md" "the tracked coordinator overlay is missing"
+  assert_present "$ROOT/roles/executor.md" "the tracked executor overlay is missing"
   assert_absent "$ROOT/roles/vessel.md" \
     "roles/vessel.md must not exist: the default role is an unamended AGENTS.md, not a document"
   assert_grep 'amends `AGENTS.md`' "$ROOT/roles/coordinator.md" \
     "the coordinator overlay must declare itself an amendment to AGENTS.md"
+  assert_grep 'amends `AGENTS.md`' "$ROOT/roles/executor.md" \
+    "the executor overlay must declare itself an amendment to AGENTS.md"
   assert_gitignore_ignores 'config/role' "config/role must be gitignored like its config siblings"
   assert_grep 'Vessel role (config/role / roles/)' "$ROOT/docs/configuration.md" \
     "docs/configuration.md must own the vessel-role schema"
@@ -336,6 +339,11 @@ test_unrecognized_role_delivers_no_overlay() {
 }
 
 test_selected_role_with_no_overlay_is_reported_not_silent() {
+  # The fixture root deliberately carries no roles/ directory, so this drives the
+  # case where a recognized role's overlay is absent from THIS code root. Every
+  # recognized non-default role now ships an overlay in the real tree, which makes
+  # the live case a home that selected the role before fast-forwarding to the
+  # commit that carries it - not a role nobody has written.
   local rec out role_section
   rec=$(new_home overlay-missing)
   read_home_record "$rec"
@@ -377,6 +385,36 @@ test_valid_role_is_delivered_through_the_digest() {
     *) fail "the role overlay must lead CONTEXT, it amends AGENTS.md itself; got: $first" ;;
   esac
   pass "a valid role is delivered at the head of the session digest"
+}
+
+test_tracked_executor_overlay_reaches_the_digest() {
+  # The seeded-overlay tests above prove the mechanism. This one proves the
+  # shipped document actually arrives: the tracked roles/executor.md is copied
+  # into the fixture root verbatim, so a mismatch between what is written and
+  # what an executor home reads at session start fails here.
+  local rec out labels first
+  rec=$(new_home digest-executor)
+  read_home_record "$rec"
+  mkdir -p "$ROOT_DIR/roles"
+  cp "$ROOT/roles/executor.md" "$ROOT_DIR/roles/executor.md"
+  set_role "$HOME_DIR" executor
+
+  out=$(run_session_start "$HOME_DIR" "$ROOT_DIR" "$FAKEBIN_DIR")
+  assert_not_contains "$out" "ROLE_OVERLAY_MISSING" \
+    "a home selecting executor must no longer be told the overlay is missing"
+  assert_contains "$out" \
+    "Where an executor operates work another vessel develops, that vessel owns diagnosing its own domain." \
+    "the digest did not carry the executor overlay's one narrowing"
+  assert_contains "$out" "This role has no mechanical enforcement" \
+    "the digest did not carry the executor overlay's enforcement ceiling"
+
+  labels=$(context_labels "$out")
+  first=$(printf '%s\n' "$labels" | head -1)
+  case "$first" in
+    "roles/executor.md (ACTIVE ROLE OVERLAY"*) : ;;
+    *) fail "the executor overlay must lead CONTEXT like any role overlay; got: $first" ;;
+  esac
+  pass "the tracked executor overlay is delivered at the head of the session digest"
 }
 
 test_valid_role_leaves_bootstrap_quiet() {
@@ -499,6 +537,25 @@ test_explicit_vessel_role_spawns_normally() {
   pass "an explicit vessel role spawns crews normally"
 }
 
+test_executor_role_spawns_crews_normally() {
+  # roles/executor.md states that the coordinator's crew refusal does not apply
+  # to this role and that the ordinary task lifecycle is kept in full. That is a
+  # behavior claim, so it is driven through the real fm-spawn.sh rather than
+  # inferred from the coordinator-only predicate.
+  local rec out status
+  rec=$(make_spawn_case spawn-executor role-executor-h8)
+  read_spawn_record "$rec"
+  set_role "$HOME_DIR" executor
+
+  out=$(run_spawn "$HOME_DIR" role-executor-h8 "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "an executor home must spawn crews normally"$'\n'"$out"
+  assert_not_contains "$out" "owns no crews" "an executor home must never see the coordinator refusal"
+  assert_present "$HOME_DIR/state/role-executor-h8.meta" \
+    "an executor spawn must still record task metadata"
+  pass "an executor home spawns crews normally"
+}
+
 test_coordinator_does_not_block_a_secondmate_spawn() {
   local rec out
   rec=$(make_spawn_case spawn-coordinator-secondmate role-second-g7)
@@ -558,11 +615,13 @@ test_unrecognized_role_is_a_loud_diagnostic
 test_unrecognized_role_delivers_no_overlay
 test_selected_role_with_no_overlay_is_reported_not_silent
 test_valid_role_is_delivered_through_the_digest
+test_tracked_executor_overlay_reaches_the_digest
 test_valid_role_leaves_bootstrap_quiet
 test_coordinator_refuses_a_ship_spawn
 test_coordinator_refuses_a_scout_spawn
 test_coordinator_refuses_a_batch_spawn_before_fan_out
 test_explicit_vessel_role_spawns_normally
+test_executor_role_spawns_crews_normally
 test_coordinator_does_not_block_a_secondmate_spawn
 test_role_is_not_in_the_declared_inheritable_set
 test_role_does_not_propagate_into_a_secondmate_home
