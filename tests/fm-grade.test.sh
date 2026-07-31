@@ -1,0 +1,350 @@
+#!/usr/bin/env bash
+# Behavior tests for the review-quality scale (bin/fm-grade.sh).
+#
+# The load-bearing test here is rework detection: the scale's whole claim to
+# independence is that git can show a correction undoing an earlier correction
+# when the tool's own ledger records both as successes. That is proven against a
+# synthetic repository with a known answer rather than against live history,
+# so the assertion has a fixed expected value.
+set -u
+
+# shellcheck source=tests/lib.sh
+# shellcheck disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+GRADE="$ROOT/bin/fm-grade.sh"
+ENGINE="$ROOT/bin/fm-grade-engine.py"
+fm_test_tmproot TMP_ROOT fm-grade
+
+command -v python3 >/dev/null 2>&1 || { echo "skip: python3 not found"; exit 0; }
+command -v git >/dev/null 2>&1 || { echo "skip: git not found"; exit 0; }
+
+CORPUS=$TMP_ROOT/corpus
+mkdir -p "$CORPUS"
+
+# --- a synthetic repo whose rework answer we know exactly -------------------
+#
+# work   writes five lines
+# fix-1  replaces line two          -> deletes 1 author line, 0 pipeline lines
+# fix-2  replaces what fix-1 wrote  -> deletes 1 pipeline line, 0 author lines
+#
+# So among follow-up fixes every deleted line is rework: 100%.
+
+REPO=$TMP_ROOT/repo
+mkdir -p "$REPO"
+git -C "$REPO" init -q -b main
+git -C "$REPO" config user.email test@example.invalid
+git -C "$REPO" config user.name "Test"
+
+printf 'one\ntwo\nthree\nfour\nfive\n' > "$REPO/file.txt"
+git -C "$REPO" add file.txt
+git -C "$REPO" commit -qm "work: author writes the file"
+
+printf 'one\nTWO-fix1\nthree\nfour\nfive\n' > "$REPO/file.txt"
+git -C "$REPO" commit -qam "no-mistakes(review): first correction"
+
+printf 'one\nTWO-fix2\nthree\nfour\nfive\n' > "$REPO/file.txt"
+git -C "$REPO" commit -qam "no-mistakes(review): second correction"
+
+HEAD_SHA=$(git -C "$REPO" rev-parse HEAD)
+
+# --- a synthetic run database matching that repo ----------------------------
+
+DB=$TMP_ROOT/state.sqlite
+python3 - "$DB" "$REPO" "$HEAD_SHA" <<'PY'
+import sqlite3, sys
+db, repo, head = sys.argv[1], sys.argv[2], sys.argv[3]
+con = sqlite3.connect(db)
+con.executescript("""
+create table repos(id text primary key, working_path text, upstream_url text,
+                   default_branch text, created_at integer);
+create table runs(id text primary key, repo_id text, branch text, head_sha text,
+                  base_sha text, status text, pr_url text, created_at integer,
+                  updated_at integer);
+create table step_results(id text primary key, run_id text, step_name text,
+                          step_order integer, status text);
+create table step_rounds(id text primary key, step_result_id text, round integer,
+                         trigger_type text, findings_json text,
+                         user_findings_json text, fix_summary text,
+                         duration_ms integer, created_at integer);
+""")
+con.execute("insert into repos values('r1',?,'u','main',0)", (repo,))
+con.execute("insert into runs values('run1','r1','b',?,?,'completed',null,1,1)",
+            (head, "0" * 40))
+con.execute("insert into step_results values('s1','run1','review',3,'completed')")
+findings = ('{"findings":[{"id":"f1","severity":"error","action":"ask-user",'
+            '"file":"file.txt","line":2,"description":"token=abcdefghijklmnop leaked"},'
+            '{"id":"f2","severity":"warning","action":"auto-fix","file":"file.txt",'
+            '"line":3,"description":"second claim"}]}')
+con.execute("insert into step_rounds values('r1a','s1',1,'initial',?,null,'',0,1)",
+            (findings,))
+con.execute("insert into step_rounds values('r1b','s1',2,'auto_fix',null,null,"
+            "'first correction',0,1)")
+con.execute("insert into step_rounds values('r1c','s1',3,'auto_fix',null,null,"
+            "'second correction',0,1)")
+con.commit()
+con.close()
+PY
+
+run_engine() {  # <args...>
+  python3 "$ENGINE" --db "$DB" --corpus "$CORPUS" --quiet "$@"
+}
+
+# --- rework detection -------------------------------------------------------
+
+OUT=$(run_engine --json report 2>/dev/null) || fail "engine report failed"
+
+get_metric() {  # <tier> <key>
+  printf '%s' "$OUT" | python3 -c '
+import json, sys
+tier, key = sys.argv[1], sys.argv[2]
+d = json.load(sys.stdin)
+for m in d["tiers"][tier]["metrics"]:
+    if m["key"] == key:
+        print(m["value"])
+        break
+else:
+    print("MISSING")
+' "$1" "$2"
+}
+
+[ "$(get_metric git runs_git_resolved)" = "1" ] \
+  || fail "git tier did not resolve the synthetic run (got $(get_metric git runs_git_resolved))"
+
+FOLLOWUP=$(get_metric git fix_rework_rate_followups)
+[ "$FOLLOWUP" = "100.0" ] \
+  || fail "follow-up rework rate should be 100.0 for the synthetic repo, got $FOLLOWUP"
+
+REWORKED=$(get_metric git fixes_that_reworked_a_prior_fix)
+[ "$REWORKED" = "100.0" ] \
+  || fail "every follow-up fix reworked a prior fix here, got $REWORKED"
+
+# The first correction deletes only author code, so the all-fixes rate must be
+# strictly lower than the follow-up-only rate. If these ever match, the
+# denominator stopped including first fixes and the headline number silently
+# became less conservative.
+ALL=$(get_metric git fix_rework_rate)
+python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) < float(sys.argv[2]) else 1)' \
+  "$ALL" "$FOLLOWUP" || fail "all-fix rework rate ($ALL) must be below follow-up rate ($FOLLOWUP)"
+
+# --- every number carries provenance ---------------------------------------
+
+printf '%s' "$OUT" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+bad = []
+for tier, body in d["tiers"].items():
+    for m in body["metrics"]:
+        if not m.get("source") or m.get("n") is None or not m.get("method"):
+            bad.append("%s/%s" % (tier, m["key"]))
+if bad:
+    print("metrics without provenance: " + ", ".join(bad))
+    sys.exit(1)
+' || fail "a metric was emitted without a named source and sample size"
+
+# A Metric must be impossible to construct without provenance, not merely
+# discouraged, or the guarantee is only a convention.
+python3 -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("eng", sys.argv[1])
+eng = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(eng)
+for args in ((None, 1, 1, "src", "method"), ("k", 1, None, "src", "method"),
+             ("k", 1, 1, "", "method"), ("k", 1, 1, "src", "")):
+    try:
+        eng.Metric(*args)
+    except ValueError:
+        continue
+    print("Metric accepted missing provenance: %r" % (args,))
+    sys.exit(1)
+' "$ENGINE" || fail "Metric did not refuse to construct without provenance"
+
+# --- the ledger tier is labelled as self-reported ---------------------------
+
+LEDGER_SRC=$(printf '%s' "$OUT" | python3 -c '
+import json, sys
+print(json.load(sys.stdin)["tiers"]["ledger"]["metrics"][0]["source"])')
+assert_contains "$LEDGER_SRC" "SELF-REPORTED" "ledger metrics must be marked self-reported"
+
+# --- materiality refuses to invent a number ---------------------------------
+
+MAT=$(get_metric materiality material_finding_rate)
+[ "$MAT" = "None" ] \
+  || fail "materiality must report no value without adjudication, got $MAT"
+
+BALLOT=$TMP_ROOT/ballot.json
+run_engine --out "$BALLOT" --sample-size 2 sample >/dev/null 2>&1 \
+  || fail "sample command failed"
+assert_grep '"adjudicator": ""' "$BALLOT" "ballot must ask for a named adjudicator"
+assert_grep '"verdict": ""' "$BALLOT" "ballot must carry empty verdicts to fill in"
+
+# The tool's own severity and action labels must not reach the ballot: judging
+# them would re-import the self-assessment this scale exists to replace.
+assert_no_grep '"severity"' "$BALLOT" "blind ballot must not leak the tool's severity label"
+assert_no_grep '"action"' "$BALLOT" "blind ballot must not leak the tool's action label"
+
+# Secret-shaped text in a finding must be redacted before it is written out.
+assert_no_grep 'abcdefghijklmnop' "$BALLOT" "ballot must redact secret-shaped finding text"
+assert_grep 'REDACTED' "$BALLOT" "redaction must be visible, not silent"
+
+# An unsigned ballot is not a verdict.
+python3 - "$BALLOT" <<'PY'
+import json, sys
+b = json.load(open(sys.argv[1]))
+b["ballots"][0]["verdict"] = "harmful"
+json.dump(b, open(sys.argv[1], "w"))
+PY
+if run_engine --ballots "$BALLOT" report >/dev/null 2>&1; then
+  fail "engine accepted adjudication with no named adjudicator"
+fi
+
+# A signed ballot produces a number, with n and an interval.
+python3 - "$BALLOT" <<'PY'
+import json, sys
+b = json.load(open(sys.argv[1]))
+b["adjudicator"] = "Test Adjudicator"
+json.dump(b, open(sys.argv[1], "w"))
+PY
+SIGNED=$(run_engine --ballots "$BALLOT" --json report 2>/dev/null) \
+  || fail "signed ballot report failed"
+printf '%s' "$SIGNED" | grep -q 'Test Adjudicator' \
+  || fail "adjudicator must be named in the metric source"
+printf '%s' "$SIGNED" | grep -q 'Wilson interval' \
+  || fail "adjudicated rate must ship its uncertainty interval"
+
+# --- corpus admissibility ---------------------------------------------------
+
+cat > "$CORPUS/asserted-case.json" <<'JSON'
+{
+  "case_id": "asserted-case",
+  "repo": "nowhere",
+  "defect_commit": "0000000000000000000000000000000000000001",
+  "defect_paths": ["a.txt"],
+  "detection": {"must_match_any": ["something"]},
+  "proof": {"kind": "asserted", "evidence": "a reviewer thought so"}
+}
+JSON
+OUT2=$(run_engine --json report 2>/dev/null) || fail "report with corpus failed"
+ADMISSIBLE=$(printf '%s' "$OUT2" | python3 -c '
+import json, sys
+for m in json.load(sys.stdin)["tiers"]["bench"]["metrics"]:
+    if m["key"] == "corpus_cases_admissible":
+        print(m["value"])')
+[ "$ADMISSIBLE" = "0" ] \
+  || fail "an asserted-proof case must not count as admissible, got $ADMISSIBLE"
+
+CORPUS_OUT=$(run_engine corpus 2>&1)
+assert_contains "$CORPUS_OUT" "tier2" "asserted case must be listed at tier 2"
+
+# A malformed case is reported, not silently skipped.
+printf '{ not json' > "$CORPUS/broken.json"
+if run_engine corpus >/dev/null 2>&1; then
+  fail "corpus validation must fail on a malformed case"
+fi
+rm -f "$CORPUS/broken.json"
+
+# --- executable answer key --------------------------------------------------
+#
+# A case that declares a reproduce block must actually reproduce: the subject
+# must show the defect at defect_commit and not show it at fixed_commit.
+
+cat > "$CORPUS/repro-case.json" <<JSON
+{
+  "case_id": "repro-case",
+  "repo": "synthetic",
+  "repo_path": "$REPO",
+  "defect_commit": "$(git -C "$REPO" rev-parse HEAD~2)",
+  "fixed_commit": "$(git -C "$REPO" rev-parse HEAD~1)",
+  "defect_paths": ["file.txt"],
+  "detection": {"must_mention_paths": ["file.txt"], "must_match_any": ["two"]},
+  "proof": {
+    "kind": "executed-reproduction",
+    "evidence": "synthetic",
+    "reproduce": {
+      "extract": [{"path": "file.txt", "as": "file.txt"}],
+      "command": ["grep", "-c", "^two$", "file.txt"],
+      "defect_expect": {"exit": 0, "output_matches": "1"},
+      "fixed_expect": {"exit": 1}
+    }
+  }
+}
+JSON
+rm -f "$CORPUS/asserted-case.json"
+VERIFY=$(run_engine --verify corpus 2>&1) || fail "corpus --verify failed: $VERIFY"
+assert_contains "$VERIFY" "RE-PROVEN" "a sound reproduce block must re-prove the case"
+
+# Break the expectation and the case must fail rather than pass on trust.
+python3 - "$CORPUS/repro-case.json" <<'PY'
+import json, sys
+c = json.load(open(sys.argv[1]))
+c["proof"]["reproduce"]["defect_expect"] = {"exit": 99}
+json.dump(c, open(sys.argv[1], "w"))
+PY
+if run_engine --verify corpus >/dev/null 2>&1; then
+  fail "corpus --verify must fail when the declared reproduction does not hold"
+fi
+rm -f "$CORPUS/repro-case.json"
+
+# --- blind scoring ----------------------------------------------------------
+
+cat > "$CORPUS/score-case.json" <<'JSON'
+{
+  "case_id": "score-case",
+  "repo": "synthetic",
+  "defect_commit": "0000000000000000000000000000000000000002",
+  "defect_paths": ["bin/thing.sh"],
+  "detection": {
+    "must_mention_paths": ["bin/thing.sh"],
+    "must_match_any": ["(?i)line.?wrap"]
+  },
+  "proof": {"kind": "executed-reproduction", "evidence": "synthetic"}
+}
+JSON
+
+SUB=$TMP_ROOT/submission.json
+cat > "$SUB" <<'JSON'
+{"score-case": {"findings": [
+  {"file": "bin/thing.sh", "description": "the guard misses a line-wrapped tag"},
+  {"file": "bin/other.sh", "description": "unrelated remark"}
+]}}
+JSON
+SCORED=$(run_engine --submission "$SUB" --json report 2>/dev/null) || fail "scoring failed"
+DETECT=$(printf '%s' "$SCORED" | python3 -c '
+import json, sys
+for m in json.load(sys.stdin)["tiers"]["bench"]["metrics"]:
+    if m["key"] == "blind_detection_rate":
+        print(m["value"])')
+[ "$DETECT" = "100.0" ] || fail "a matching finding must score as detected, got $DETECT"
+
+# A candidate that reports the right words about the wrong file has not found it.
+cat > "$SUB" <<'JSON'
+{"score-case": {"findings": [
+  {"file": "bin/elsewhere.sh", "description": "something line-wrapped here"}
+]}}
+JSON
+MISSED=$(run_engine --submission "$SUB" --json report 2>/dev/null | python3 -c '
+import json, sys
+for m in json.load(sys.stdin)["tiers"]["bench"]["metrics"]:
+    if m["key"] == "blind_detection_rate":
+        print(m["value"])')
+[ "$MISSED" = "0.0" ] || fail "wrong-file finding must not count as detection, got $MISSED"
+
+# --- the wrapper never writes to the run database ---------------------------
+
+BEFORE=$(md5sum "$DB" | awk '{print $1}')
+FM_GRADE_DB="$DB" FM_GRADE_CORPUS="$CORPUS" "$GRADE" report --quiet >/dev/null 2>&1
+AFTER=$(md5sum "$DB" | awk '{print $1}')
+[ "$BEFORE" = "$AFTER" ] || fail "grading modified the run database"
+
+# --- wrapper surface --------------------------------------------------------
+
+HELP=$("$GRADE" --help 2>&1)
+assert_contains "$HELP" "fm-grade.sh report" "help must document the report command"
+assert_contains "$HELP" "corpus" "help must document the corpus command"
+
+FM_GRADE_DB=$TMP_ROOT/absent.sqlite "$GRADE" report >/dev/null 2>&1 \
+  && fail "missing run database must be refused, not invented"
+
+"$GRADE" bogus-command >/dev/null 2>&1 && fail "unknown command must be refused"
+
+pass "fm-grade grades review quality on git-derived evidence and refuses to grade itself"

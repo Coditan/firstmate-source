@@ -28,6 +28,8 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-decision-inventory.sh` | Group the open captain decisions by originating investigation and keep the judge's record where a judge ruled, for `/decisionboard` (the fold is assumed, not verified) |
 | `fm-brief.sh`            | Scaffold ship, scout, secondmate-charter, and Herdr-lab briefs                       |
 | `fm-model-panel.sh`      | Run a model panel: two independent analysts on different models, then a judge that re-verifies both |
+| `fm-grade.sh`            | Grade review quality on git-derived and blind evidence rather than the reviewed tool's own ledger (docs/review-grading.md) |
+| `fm-grade-engine.py`     | Measurement engine for the review-quality scale; every metric carries its evidence class and sample size |
 | `fm-herdr-lab.sh`        | Provision and guardedly operate an isolated, never-default Herdr lab session         |
 | `fm-install-herdr.sh`    | Install CI's exact-version Herdr pin with official asset URL, SHA-256, and protocol checks |
 | `fm-install-treehouse.sh`| Install CI's exact-version Treehouse pin for real-Herdr E2E that needs spawn worktrees |
