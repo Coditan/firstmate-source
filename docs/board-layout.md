@@ -161,6 +161,9 @@ Runs the same guard over existing files.
 It refuses the documented class of **static** remote references: subresource attributes including `<object data>`, remote `href` on `<link>`, `<base>`, and SVG `<use>`/`<image>`, `@import` rules, remote `url()` and `image-set()` in CSS, and absolute remote URLs inside `<script>`.
 Attribute formatting does not change the verdict: a tag whose attributes are wrapped across lines is refused exactly like the one-line form.
 
+The CSS rules are matched only where a browser runs CSS: inside a `<style>` element and inside a `style` attribute.
+Everywhere else in the document, `@import` and `url()` are words rather than constructs, so a board that explains this rule in a paragraph, a list item, a heading, or a comment is never refused for naming it.
+
 It is a textual scan, so a URL assembled at runtime from fragments inside a script is not detected.
 It is a guard against the regression that actually happened, not a sandbox.
 

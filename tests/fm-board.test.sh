@@ -58,6 +58,9 @@ remote srcset|<img srcset="https://example.com/a.png 1x" alt="a">
 svg use from remote|<svg><use href="https://example.com/i.svg#x"></use></svg>
 object data attribute|<object data="https://example.com/x.svg"></object>
 css image-set|<style>.x{background-image:image-set("https://example.com/a.png" 1x)}</style>
+css import with a quoted target|<style>@import "https://cdn.jsdelivr.net/x.css";</style>
+css import behind a comment|<style>/* c */@import "https://cdn.jsdelivr.net/x.css";</style>
+css url in a style attribute|<div style="background:url(https://example.com/a.png)">x</div>
 EOF
   pass "the guard refuses every documented remote-reference form and writes nothing"
 }
@@ -82,6 +85,8 @@ wrapped remote image|<img\n  alt="x"\n  src="https://example.com/logo.png">
 wrapped svg use|<svg><use\n  href="https://example.com/i.svg#x"></use></svg>
 wrapped css import url|<style>\n@import\n  url("https://example.com/x.css");\n</style>
 wrapped css import quoted|<style>\n@import\n  "https://example.com/x.css";\n</style>
+css import behind a comment on its own line|<style>\n/* eine Bemerkung */\n@import "https://cdn.jsdelivr.net/x.css";\n</style>
+css import behind a comment spanning lines|<style>\n/* eine Bemerkung,\n   die weitergeht */\n@import "https://cdn.jsdelivr.net/x.css";\n</style>
 EOF
   pass "a reference wrapped across lines is refused exactly like the one-line form"
 }
@@ -109,25 +114,42 @@ test_guard_allows_a_navigational_link_split_across_lines() {
   pass "a navigational link stays allowed when its attributes span lines"
 }
 
-test_guard_allows_prose_naming_the_rule() {
-  # @import is refused as a STATEMENT, not as a word, so a board that explains
-  # this very rule is not refused for naming it.
-  build '<p>Kein CDN, kein @import, keine externe Schrift.</p>'
-  expect_code 0 "$(build_status)" "prose naming @import must not be refused"
-  build "$(printf '%b' '<!-- Ein Kommentar, der @import\n     und url() nur benennt. -->\n<p>Inhalt</p>')"
-  expect_code 0 "$(build_status)" "a comment naming @import across lines must not be refused"
-  pass "prose that names the rule is not mistaken for the rule being broken"
+test_guard_allows_prose_that_names_a_css_construct() {
+  # CSS runs inside a <style> element and inside a style attribute, and nowhere
+  # else in an HTML document. So the word @import in a paragraph, a list item or
+  # a comment is text, and text can never be an import rule. Every entry here is
+  # a board that EXPLAINS the rule, which the captain requires to stay buildable.
+  local label case_html
+  while IFS='|' read -r label case_html; do
+    [ -n "$label" ] || continue
+    build "$(printf '%b' "$case_html")"
+    expect_code 0 "$(build_status)" \
+      "the guard refused prose: $label"$'\n'"$(build_stderr)"
+  done <<'EOF'
+@import named mid-sentence|<p>Kein CDN, kein @import, keine externe Schrift.</p>
+@import as the last token on its line|<p>Kein @import\n"und kein CDN".</p>
+@import ending a paragraph|<p>Wir nennen es @import</p>\n<p>"und meinen die Regel".</p>
+@import opening a paragraph|<p>@import "https://example.com/x.css" wäre ein Fehler.</p>
+@import opening a list item|<ul><li>@import "https://example.com/x.css" ist verboten</li></ul>
+@import opening a heading|<h2>@import "https://example.com/x.css"</h2>
+@import and url() named in a comment|<!-- Ein Kommentar, der @import\n     und url("https://example.com/x.css") nur benennt. -->\n<p>Inhalt</p>
+url() named in prose|<p>Eine externe url("https://example.com/a.png") gehört nicht auf ein Brett.</p>
+EOF
+  pass "prose that names a CSS construct is not mistaken for the construct"
 }
 
-test_guard_allows_prose_that_ends_a_line_on_the_rule_name() {
-  # The worst position for the word: last token on its line, with a quote
-  # opening the next one. Nothing here starts a statement with @import, so
-  # nothing here is a rule - however aggressively the two lines are joined.
-  build "$(printf '%b' '<p>Kein @import\n"und kein CDN".</p>')"
-  expect_code 0 "$(build_status)" "prose ending a line on @import must not be refused"
-  build "$(printf '%b' '<p>Wir nennen es @import</p>\n<p>"und meinen die Regel".</p>')"
-  expect_code 0 "$(build_status)" "prose ending a paragraph on @import must not be refused"
-  pass "prose whose line ends on the rule name is not folded into a rule"
+test_guard_allows_the_stylesheet_that_documents_itself() {
+  # Every board inlines layout.css, whose own header names @import and url() in
+  # prose. If that could be mistaken for the rule, no board would build at all.
+  local status=0
+  assert_grep '@import' "$ROOT/bin/board-assets/layout.css" \
+    "this test is pointless unless the stylesheet still names the rule"
+  rm -f "$OUT"
+  "$BOARD" --title "Beispiel" --body "$ROOT/docs/examples/board-body-report.html" \
+    --out "$OUT" >/dev/null 2>"$BUILD_ERR_FILE" || status=$?
+  expect_code 0 "$status" \
+    "the pinned example board must build although its stylesheet names @import"$'\n'"$(build_stderr)"
+  pass "a stylesheet whose comments name the rule still builds every board"
 }
 
 # --- what the builder actually produces --------------------------------------
@@ -261,8 +283,8 @@ test_guard_refuses_remote_references
 test_guard_refuses_a_tag_whose_attributes_span_lines
 test_guard_allows_navigational_links
 test_guard_allows_a_navigational_link_split_across_lines
-test_guard_allows_prose_naming_the_rule
-test_guard_allows_prose_that_ends_a_line_on_the_rule_name
+test_guard_allows_prose_that_names_a_css_construct
+test_guard_allows_the_stylesheet_that_documents_itself
 test_board_is_self_contained
 test_board_escapes_its_title
 test_check_mode_reports_both_verdicts

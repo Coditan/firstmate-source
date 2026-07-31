@@ -29,6 +29,11 @@
 # full PR URLs. What is refused is anything the browser FETCHES on load - a
 # stylesheet, script, font, image, iframe, or a form that posts outward.
 #
+# The CSS rules are matched where a browser RUNS css - inside a <style> element
+# and inside a style attribute - and against nothing else in the document. A
+# board that names @import or url() in a paragraph, a list item, or a comment is
+# explaining the rule, not breaking it, and must stay buildable.
+#
 # Known limits of the guard, stated rather than papered over: it is a textual
 # scan, so a remote URL assembled at runtime from fragments inside a script is
 # not detected. It refuses the whole documented class of static remote
@@ -77,38 +82,120 @@ html_escape() {
   printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
 }
 
-# fold_open_constructs - print `<line-number>:<text>`, one logical construct per
-# line, with newlines inside an unclosed tag or an unclosed url() folded away.
+# fold_open_tags - print `<line-number>:<text>` with the newlines inside an
+# unclosed tag folded away, so attribute formatting cannot change a verdict.
 #
 # grep only ever sees one PHYSICAL line, so a scan written against
 # `<link rel=... href="https://...">` says nothing about the same tag with its
-# attributes wrapped across lines - which is ordinary generated HTML. Folding
-# first makes attribute formatting irrelevant to the verdict.
+# attributes wrapped across lines - which is ordinary generated HTML.
 #
-# Only genuinely unterminated syntax folds: a `<name` with no closing `>` yet,
-# and a `url(` with no closing `)` yet. A trailing keyword never does, because
-# joining on one would let a line whose last word happens to be a CSS at-rule
-# name pull the next line in and manufacture a rule out of prose.
-#
-# A `<` only opens a construct when a tag name follows it immediately, so
-# `i < notes.length` in an inlined script does not swallow the rest of the file.
-# The `[^>]*` bound inside the patterns below still stops a match from crossing
-# out of one tag into the next, and the folded text carries the line number the
-# construct STARTED on so a refusal still points at the right place.
-fold_open_constructs() {  # <file>
+# Only an unclosed tag folds here. A `<` opens one just when a tag name follows
+# it immediately, so `i < notes.length` in an inlined script does not swallow the
+# rest of the file. The `[^>]*` bound inside the patterns below still stops a
+# match from crossing out of one tag into the next, and the folded text carries
+# the line number the tag STARTED on so a refusal still points at the right
+# place. CSS is not folded here: css_regions carries its own wrapped constructs,
+# and one question answered by two mechanisms is how this drifted before.
+fold_open_tags() {  # <file>
   awk '
-    function unfinished(s) {
-      return (s ~ /<[[:alpha:]!\/][^>]*$/) || (s ~ /url\([^)]*$/)
-    }
     {
       if (held == 0) { start = NR; buf = $0 } else { buf = buf " " $0 }
       held++
-      if (unfinished(buf) && held < 200) { next }
+      if (buf ~ /<[[:alpha:]!\/][^>]*$/ && held < 200) { next }
       print start ":" buf
       held = 0; buf = ""
     }
     END { if (held > 0) { print start ":" buf } }
   ' "$1"
+}
+
+# css_regions - print `<line-number>:<css>` for the CSS a browser executes.
+#
+# Whether an occurrence of `@import` is a rule or the word `@import` sitting in
+# prose is a STRUCTURAL question, and it is answered structurally: CSS runs
+# inside a <style> element and inside a style attribute, and nowhere else in an
+# HTML document. So those two regions are extracted first and the CSS patterns
+# are matched against nothing else. A board that EXPLAINS the rule in a
+# paragraph, a list item, a heading, or a code comment is prose, and prose is
+# never mistaken for the rule it names.
+#
+# Two liberties are safe INSIDE a region and would not be outside one. A
+# `/* ... */` span is genuinely a comment, so comments are stripped before
+# matching. And a construct left unfinished at a line end is genuinely
+# unfinished, so a trailing `@import` or an unclosed `url(` joins the line that
+# continues it.
+css_regions() {  # reads the folded stream on stdin
+  awk '
+    function decomment(s,   out, p) {
+      out = ""
+      while (s != "") {
+        if (incomment) {
+          p = index(s, "*/")
+          if (p == 0) { return out }
+          s = substr(s, p + 2); incomment = 0
+        } else {
+          p = index(s, "/*")
+          if (p == 0) { return out s }
+          out = out substr(s, 1, p - 1)
+          s = substr(s, p + 2); incomment = 1
+        }
+      }
+      return out
+    }
+
+    function flush() {
+      if (held > 0) { print start ":" buf }
+      buf = ""; held = 0
+    }
+
+    function css_chunk(s, num) {
+      s = decomment(s)
+      if (s ~ /^[[:space:]]*$/) { return }
+      if (held == 0) { start = num; buf = s } else { buf = buf " " s }
+      held++
+      if (held < 200 && (buf ~ /(url|image-set)\([^)]*$/ || buf ~ /@import[[:space:]]*$/)) { return }
+      flush()
+    }
+
+    function style_attrs(s, num,   low, p, m, q, r) {
+      low = tolower(s); p = 1
+      while (p <= length(s)) {
+        m = match(substr(low, p), /[[:space:]]style[[:space:]]*=[[:space:]]*["\047]/)
+        if (m == 0) { return }
+        q = p + m + RLENGTH - 2
+        r = index(substr(s, q + 1), substr(s, q, 1))
+        if (r == 0) { return }
+        print num ":" substr(s, q + 1, r - 1)
+        p = q + r + 1
+      }
+    }
+
+    {
+      at = index($0, ":"); num = substr($0, 1, at - 1); text = substr($0, at + 1)
+      low = tolower(text); n = length(text); pos = 1
+      while (pos <= n) {
+        if (instyle) {
+          e = index(substr(low, pos), "</style")
+          if (e == 0) { css_chunk(substr(text, pos), num); pos = n + 1 }
+          else {
+            if (e > 1) { css_chunk(substr(text, pos, e - 1), num) }
+            flush(); instyle = 0; incomment = 0
+            pos = pos + e + 6
+          }
+        } else {
+          s = index(substr(low, pos), "<style")
+          if (s == 0) { style_attrs(substr(text, pos), num); pos = n + 1 }
+          else {
+            if (s > 1) { style_attrs(substr(text, pos, s - 1), num) }
+            g = index(substr(text, pos + s - 1), ">")
+            if (g == 0) { pos = n + 1 }
+            else { instyle = 1; pos = pos + s + g - 1 }
+          }
+        }
+      }
+    }
+    END { flush() }
+  '
 }
 
 # scan_remote_refs - print one line per load-time remote reference found.
@@ -117,8 +204,9 @@ fold_open_constructs() {  # <file>
 # refused only where it names a subresource (<link>, <base>, SVG <use>/<image>),
 # never on <a>, so a board can and must still print full PR URLs.
 scan_remote_refs() {  # <file>
-  local file=$1 remote='(https?:)?//' folded
-  folded=$(fold_open_constructs "$file")
+  local file=$1 remote='(https?:)?//' folded css
+  folded=$(fold_open_tags "$file")
+  css=$(printf '%s\n' "$folded" | css_regions)
 
   # Subresource attributes: the browser fetches these without any user action.
   # `data` carries a leading space so it matches <object data="..."> and not the
@@ -133,39 +221,16 @@ scan_remote_refs() {  # <file>
     | sed 's/^/  remote href on a subresource element: /' || true
 
   # CSS: an @import rule, and any remote url() or image-set() - webfonts and
-  # remote artwork arrive that way.
-  #
-  # @import counts as a rule only where it STARTS a statement - at the beginning
-  # of the file or after ;, {, }, or > - and the next non-whitespace token, which
-  # may sit on a later line, is url( or a quoted target. Prose and code comments
-  # that merely name the rule fail the first condition, so a board explaining
-  # this very rule is not refused for saying its name however it is wrapped.
-  printf '%s\n' "$folded" | awk '
-    BEGIN { stmt = 1 }
-    {
-      at = index($0, ":"); num = substr($0, 1, at - 1); text = substr($0, at + 1)
-      low = tolower(text); n = length(text)
-      for (i = 1; i <= n; i++) {
-        c = substr(text, i, 1)
-        if (awaiting) {
-          if (c == " " || c == "\t") { continue }
-          if (substr(low, i, 4) == "url(" || c == "\"" || c == "\047") {
-            printf "  @import rule (a board inlines its styling): %s:%s\n", imnum, imtext
-          }
-          awaiting = 0
-        }
-        if (stmt && substr(low, i, 7) == "@import") {
-          awaiting = 1; imnum = num; imtext = text; stmt = 0; i += 6
-          continue
-        }
-        if (c == ";" || c == "{" || c == "}" || c == ">") { stmt = 1 }
-        else if (c != " " && c != "\t") { stmt = 0 }
-      }
-    }
-  ' || true
-  printf '%s\n' "$folded" \
-    | grep -Ei "(url|image-set|-webkit-image-set)\([[:space:]]*[\"']?${remote}" \
-    | sed 's/^/  remote url() in CSS: /' || true
+  # remote artwork arrive that way. Both are matched against the CSS regions
+  # only, never against the rest of the document, so the guard cannot mistake a
+  # board that names these constructs for one that uses them.
+  if [ -n "$css" ]; then
+    printf '%s\n' "$css" | grep -Ei "@import[[:space:]]*(url\(|[\"'])" \
+      | sed 's/^/  @import rule (a board inlines its styling): /' || true
+    printf '%s\n' "$css" \
+      | grep -Ei "(url|image-set)\([[:space:]]*[\"']?${remote}" \
+      | sed 's/^/  remote url() in CSS: /' || true
+  fi
 
   # Absolute remote URLs inside script. Protocol-relative // is not matched here
   # because // opens a comment in JavaScript.
