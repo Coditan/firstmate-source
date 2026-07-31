@@ -5,8 +5,8 @@
 # WHY
 # A model panel registers its holds per MEMBER, so one question becomes up to
 # three records: two analysts and a judge each inventory the same investigation
-# independently. On 2026-07-31 the open set was 26 records carrying 12 distinct
-# questions. A board that listed all 26 would misrepresent how much is actually
+# independently. On 2026-07-31 the open set was 26 records that collapsed to 12.
+# A board that listed all 26 would misrepresent how much is actually
 # waiting on the captain, so the collapse has to happen somewhere - and in a
 # script rather than in skill prose, because a rule restated per invocation is a
 # rule that drifts.
@@ -28,20 +28,35 @@
 #   1. Split the identity on the first `-decision-` into origin and key.
 #   2. Strip a trailing panel role (-a, -b, -judge, -judge<N>) off the origin.
 #      What remains is the ORIGIN GROUP: one investigation or panel.
-#   3. Within a group that has a judge, the JUDGE's records are authoritative and
-#      every non-judge record in that group is a superseded variant of the same
+#   3. Within a group that has a judge, the JUDGE's records are kept and every
+#      non-judge record in that group is folded away as a variant of the same
 #      investigation. The judge re-verified both analysts, so its formulation is
 #      the one the captain should answer.
 #   4. A group with no judge contributes its records unchanged.
 #
 # LIMIT, STATED RATHER THAN PAPERED OVER
-# Step 3 collapses reliably at the GROUP level. Attaching a specific analyst
-# variant to a specific judge decision does not: judges reword keys freely. On
-# 2026-07-31, 9 of 14 records in the upstream-pr-review group had no matching
-# judge key. So an exact key match is reported as a confident pairing, and every
-# other variant is reported at group level with paired=false. The board must show
-# those as "further variants of the same investigation", never assert which
-# question they belong to. Counting is exact; pairing is best-effort and says so.
+# Step 3 is an ASSUMPTION this script cannot check: that the judge raised one
+# hold per distinct question the analysts raised. Nothing here verifies it. So
+# the count reported is the JUDGE's count of a judged group, not a proven count
+# of distinct questions - a question only an analyst raised is folded away rather
+# than counted. That is a deliberate trade: the alternative, matching on key
+# text, was measured and is worse (see below).
+#
+# Attaching a specific analyst variant to a specific judge decision is separately
+# best-effort, because judges reword keys freely: on 2026-07-31 exactly one of
+# the 14 records in the upstream-pr-review group matched a judge key at all, so
+# key matching would have turned 12 decisions into roughly 21, nearly all
+# duplicates. An exact key match is therefore reported as a confident pairing and
+# every other variant is reported at group level with paired=false. The board must
+# show those as "further variants of the same investigation", never assert which
+# question they belong to.
+#
+# Because neither the fold nor the pairing is proven, no folded record may
+# disappear: the board renders the records folded into each decision as a
+# collapsed list (`.fm-variants` in docs/board-layout.md), so a question only an
+# analyst raised is discoverable by eye instead of silently absent. Making the
+# failure mode visible is the point; this script cannot read meaning and does not
+# pretend to.
 #
 # A group whose ids do not follow these conventions simply does not collapse, and
 # each record stands alone. That is the safe direction: the board would show too
@@ -65,7 +80,7 @@
 #
 # Output contract: `fm-decision-inventory.v1`.
 #   records          how many open captain-hold records bearings reported
-#   decisions        how many distinct questions they carry
+#   decisions        how many records the collapse keeps, under the LIMIT above
 #   groups[]         one per origin group: group, has_judge, decisions[], variants[]
 #   decisions[]      id, key, group, role, summary, owner, variants[]
 #   variants[]       id, key, role, summary, paired (true only on an exact key match)
@@ -179,7 +194,10 @@ INVENTORY=$(printf '%s' "$SNAPSHOT" | jq '
 
 if [ "$MODE" = "summary" ]; then
   printf '%s' "$INVENTORY" | jq -r '
-    "records: \(.records)   distinct decisions: \(.decisions)",
+    "records: \(.records)   decisions kept: \(.decisions)",
+    "a judged group keeps the judge records and folds the rest away; that the",
+    "judge raised one hold per distinct analyst question is NOT verified here, so",
+    "every folded record is listed below and belongs on the board as well.",
     "",
     (.groups[] |
       "group \(.group)  [\(.record_count) records -> \(.decision_count) decisions, judge: \(.has_judge)]",

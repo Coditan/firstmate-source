@@ -73,6 +73,22 @@ Then open it with `bin/fm-lavish.sh <file>` - never bare `lavish-axi`.
 `is-gate` marks a card as the one that decides others; `is-wide` makes it span the full row.
 Tag variants: `is-gate`, `is-hot`, `is-calm`.
 
+### Folded records
+
+`fm-variants` is a `<details>` block for the records a card stands in for.
+
+    <details class="fm-variants">
+      <summary>2 weitere Aufzeichnungen zu dieser Untersuchung</summary>
+      <ul>
+        <li><code>panel-x-a-decision-store-location</code> - gleiche Frage, andere Formulierung</li>
+        <li><code>panel-x-b-decision-store-location</code> - gleiche Frage, andere Formulierung</li>
+      </ul>
+    </details>
+
+Use it wherever a board shows one item in place of several.
+`bin/fm-decision-inventory.sh` folds a judged panel group down to the judge's records on an assumption it cannot verify, so a decision board renders this block on every decision card and lists the group's unpaired variants the same way.
+A folded record that is not rendered is a question the captain cannot see.
+
 ### Graphics
 
 Graphics are inline SVG and CSS - no diagram library, and nothing that only decorates.
@@ -110,21 +126,27 @@ Segment widths and colours are set inline by the generator.
       <div class="fm-opts">
         <label class="fm-opt">
           <input type="radio" name="upstream-strategie" value="selektiv">
-          <span><b>Selektiv</b><span class="fm-rec">nachstliegend</span><br>
+          <span><b>Selektiv</b><span class="fm-rec">nächstliegend</span><br>
           <em>Only this category has ever merged there.</em></span>
         </label>
       </div>
-      <textarea class="fm-free" data-fm-note placeholder="Begrundung (optional)"></textarea>
+      <textarea class="fm-free" data-fm-note placeholder="Begründung (optional)"></textarea>
       <button type="submit" class="fm-submit">Antwort vormerken</button>
       <div class="fm-queued"></div>
     </form>
 
 The radio `name` must equal `data-fm-question`.
+A board that breaks that rule still submits - `board.js` falls back to the form's own checked radio and warns on the console - but the two are meant to be one declared key.
 Selecting an option only updates local state; the explicit submit queues exactly one prompt, under the question key as `queueKey`, so re-answering replaces the earlier unsent answer instead of appending a second one.
-Queued state is shown separately from selected state.
+Queued state is shown separately from selected state, in the same `fm-queued` box.
+A submit that carries neither a choice nor a note is never silent: the box says so, in `is-warn` colour.
 
 Add one `<div class="fm-offline"></div>` per board.
 It stays hidden on a served board and appears when the board was opened with no Lavish server, where queueing has nowhere to go.
+It is advisory and reversible: a Lavish runtime that lands late, or a queue that succeeds, takes it back down.
+
+German boards are written with real umlauts - ä, ö, ü, and ß - never ae, oe, ue, or ss.
+That applies to the board's own text, not to code identifiers, attribute names, or CSS values.
 
 ## Verifying a board
 
@@ -135,7 +157,8 @@ Runs the same guard over existing files.
 
 ### What the guard does and does not cover
 
-It refuses the documented class of **static** remote references: subresource attributes, remote `href` on `<link>`, `<base>`, and SVG `<use>`/`<image>`, `@import` rules, remote `url()` in CSS, and absolute remote URLs inside `<script>`.
+It refuses the documented class of **static** remote references: subresource attributes including `<object data>`, remote `href` on `<link>`, `<base>`, and SVG `<use>`/`<image>`, `@import` rules, remote `url()` and `image-set()` in CSS, and absolute remote URLs inside `<script>`.
+Attribute formatting does not change the verdict: a tag whose attributes are wrapped across lines is refused exactly like the one-line form.
 
 It is a textual scan, so a URL assembled at runtime from fragments inside a script is not detected.
 It is a guard against the regression that actually happened, not a sandbox.

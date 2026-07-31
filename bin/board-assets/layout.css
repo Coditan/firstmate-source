@@ -579,7 +579,9 @@ p {
 .fm-submit:disabled { opacity: .5; cursor: default; }
 
 /* Queued state is shown separately from selected state, so the reviewer can
- * tell what will actually be sent back. board.js toggles is-shown. */
+ * tell what will actually be sent back. board.js toggles is-shown, and adds
+ * is-warn for a submit that carried no answer at all - that must be visible
+ * rather than a silent no-op. */
 .fm-queued {
   display: none;
   font-size: 12.5px;
@@ -588,6 +590,7 @@ p {
 }
 
 .fm-queued.is-shown { display: block; }
+.fm-queued.is-warn { color: var(--fm-hot); }
 
 /* Shown only when the board is opened without a Lavish server, where queueing
  * has nowhere to go. board.js reveals it. */

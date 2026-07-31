@@ -23,7 +23,7 @@ A board that quietly changed a record would put a second owner on that contract.
 A list understates two things that a board can show at a glance.
 
 A model panel registers its holds per member, so one question arrives as up to three records.
-On 2026-07-31 the open set was 26 records carrying 12 distinct questions - a list would have told the captain that more than twice as much was waiting on him as actually was.
+On 2026-07-31 the open set was 26 records that collapsed to 12 - a list would have told the captain that more than twice as much was waiting on him as actually was.
 
 And a list flattens the gate structure.
 When one strategic answer settles five downstream questions, a flat list gives no reason to answer that one first, which is how these decisions sat unanswered for days.
@@ -47,6 +47,7 @@ When one strategic answer settles five downstream questions, a flat list gives n
    `bin/fm-board.sh --title <t> --subtitle <s> --body <fragment> --out .lavish/<name>-<date>.html`
    The builder owns the standard layout and refuses a board that would reach the network.
    `docs/board-layout.md` lists the components and the markup each expects.
+   Every decision card carries its `.fm-variants` block, per "Every folded record stays visible" below.
    Do not hand-write a board's styling or scripting: that is exactly the drift this layout exists to stop.
 
 5. **Open it.**
@@ -74,14 +75,29 @@ If you find that a gate ought to be durable, raise it with that skill's owner ra
 
 ## What the board must not claim
 
-The collapse counts exactly, but pairing a specific superseded variant to a specific decision is best-effort, and the inventory marks which pairings it is confident about.
+The collapse keeps the judge's record for a judged group and folds the other members' records away.
+That rests on an assumption the tool cannot check: that the judge raised one hold per distinct question the analysts raised.
+Nothing verifies it, so the count is what the collapse kept, not a proven count of distinct questions.
+Say that on the board rather than presenting the number as exact.
+
+Pairing a specific folded record to a specific decision is separately best-effort, and the inventory marks which pairings it is confident about.
 Render a confident pairing under its decision; render everything else at group level as further variants of the same investigation.
 Never assert which question an unpaired variant restates.
+
+## Every folded record stays visible
+
+Because the fold is unverified, no record may vanish from the board.
+Each decision renders the records folded into it as a collapsed list, and each group renders its unpaired variants the same way, so a question only an analyst raised is discoverable by eye instead of silently absent.
+
+Use `.fm-variants`, the details/summary block `docs/board-layout.md` documents for exactly this.
+Do not invent another component, and do not omit the block when a decision folded nothing in - an empty fold is itself worth seeing.
 
 ## Language
 
 Give the captain his board in the language the task was set in.
 A German request gets a German board.
+A German board is written with real umlauts - ä, ö, ü, and ß - never ae, oe, ue, or ss transliteration.
+That applies to the board's own text; code identifiers, attribute names, and CSS values keep their spelling.
 
 ## Scope
 

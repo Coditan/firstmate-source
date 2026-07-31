@@ -77,37 +77,75 @@ html_escape() {
   printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
 }
 
+# fold_open_constructs - print `<line-number>:<text>`, one logical construct per
+# line, with newlines inside an unfinished tag, url(), or @import folded away.
+#
+# grep only ever sees one PHYSICAL line, so a scan written against
+# `<link rel=... href="https://...">` says nothing about the same tag with its
+# attributes wrapped across lines - which is ordinary generated HTML. Folding
+# first makes attribute formatting irrelevant to the verdict.
+#
+# A `<` only opens a construct when a tag name follows it immediately, so
+# `i < notes.length` in an inlined script does not swallow the rest of the file.
+# The `[^>]*` bound inside the patterns below still stops a match from crossing
+# out of one tag into the next, and the folded text carries the line number the
+# construct STARTED on so a refusal still points at the right place.
+fold_open_constructs() {  # <file>
+  awk '
+    function unfinished(s) {
+      return (s ~ /<[[:alpha:]!\/][^>]*$/) || (s ~ /url\([^)]*$/) || (s ~ /@import[[:space:]]*$/)
+    }
+    {
+      if (held == 0) { start = NR; buf = $0 } else { buf = buf " " $0 }
+      held++
+      if (unfinished(buf) && held < 200) { next }
+      print start ":" buf
+      held = 0; buf = ""
+    }
+    END { if (held > 0) { print start ":" buf } }
+  ' "$1"
+}
+
 # scan_remote_refs - print one line per load-time remote reference found.
 #
 # Each pattern targets a reference the browser resolves by itself. `href` is
 # refused only where it names a subresource (<link>, <base>, SVG <use>/<image>),
 # never on <a>, so a board can and must still print full PR URLs.
 scan_remote_refs() {  # <file>
-  local file=$1 remote='(https?:)?//'
+  local file=$1 remote='(https?:)?//' folded
+  folded=$(fold_open_constructs "$file")
 
   # Subresource attributes: the browser fetches these without any user action.
-  grep -nEi "(src|srcset|poster|data-src|action|formaction|background|manifest|xlink:href)[[:space:]]*=[[:space:]]*[\"']?${remote}" \
-    "$file" | sed 's/^/  remote subresource attribute: /' || true
+  # `data` carries a leading space so it matches <object data="..."> and not the
+  # tail of an unrelated attribute name.
+  printf '%s\n' "$folded" \
+    | grep -Ei "(src|srcset|poster|data-src|action|formaction|background|manifest|xlink:href|[[:space:]]data)[[:space:]]*=[[:space:]]*[\"']?${remote}" \
+    | sed 's/^/  remote subresource attribute: /' || true
 
   # <link>, <base>, and SVG <use>/<image> use href for a subresource.
-  grep -nEi "<(link|base|use|image)[^>]*href[[:space:]]*=[[:space:]]*[\"']?${remote}" \
-    "$file" | sed 's/^/  remote href on a subresource element: /' || true
+  printf '%s\n' "$folded" \
+    | grep -Ei "<(link|base|use|image)[^>]*href[[:space:]]*=[[:space:]]*[\"']?${remote}" \
+    | sed 's/^/  remote href on a subresource element: /' || true
 
-  # CSS: an @import rule, and any remote url() - webfonts arrive this way.
-  # Matched as real CSS syntax (@import url(...) or @import "...") rather than on
-  # the bare word, so a board that DISCUSSES this rule in prose or in a comment
-  # is not refused for saying its name.
-  grep -nEi "@import[[:space:]]*(url\(|[\"'])" "$file" \
+  # CSS: an @import rule, and any remote url() or image-set() - webfonts and
+  # remote artwork arrive that way. @import is matched as real CSS syntax
+  # (@import url(...) or @import "...") rather than on the bare word, so a board
+  # that DISCUSSES this rule in prose or in a comment is not refused for saying
+  # its name.
+  printf '%s\n' "$folded" | grep -Ei "@import[[:space:]]*(url\(|[\"'])" \
     | sed 's/^/  @import rule (a board inlines its styling): /' || true
-  grep -nEi "url\([[:space:]]*[\"']?${remote}" "$file" | sed 's/^/  remote url() in CSS: /' || true
+  printf '%s\n' "$folded" \
+    | grep -Ei "(url|image-set|-webkit-image-set)\([[:space:]]*[\"']?${remote}" \
+    | sed 's/^/  remote url() in CSS: /' || true
 
   # Absolute remote URLs inside script. Protocol-relative // is not matched here
   # because // opens a comment in JavaScript.
-  awk '
+  printf '%s\n' "$folded" | awk '
+    { at = index($0, ":"); num = substr($0, 1, at - 1); text = substr($0, at + 1) }
     /<script/ { inscript = 1 }
-    inscript && /https?:\/\// { printf "  remote URL inside <script>: %d:%s\n", NR, $0 }
+    inscript && text ~ /https?:\/\// { printf "  remote URL inside <script>: %s:%s\n", num, text }
     /<\/script>/ { inscript = 0 }
-  ' "$file" || true
+  ' || true
 }
 
 # guard - refuse a board that would reach the network on load.

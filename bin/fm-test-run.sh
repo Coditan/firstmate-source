@@ -737,6 +737,11 @@ families_for_changed_path() {
     tests/*)
       printf '%s\n' "__unmapped__:$path"
       ;;
+    docs/examples/*)
+      # Worked examples are load-bearing test input, not prose: fm-board.test.sh
+      # builds them and pins what they must still contain.
+      printf '%s\n' "__script__:fm-board.test.sh"
+      ;;
     README.md|LICENSE|assets/*|docs/*)
       ;;
     *)

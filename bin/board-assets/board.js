@@ -24,8 +24,13 @@
  *
  * A board is also opened directly from disk, with no Lavish server and thus no
  * window.lavish. That is a supported way to read a board, so this file must not
- * throw there: it detects the missing bridge once and reveals the .fm-offline
- * notice instead of failing on submit.
+ * throw there: it reveals the .fm-offline notice instead of failing on submit.
+ * The notice is advisory and reversible - a Lavish runtime that lands late hides
+ * it again, because a board that keeps saying answers cannot be sent back while
+ * it is sending them is worse than one that says nothing.
+ *
+ * No submit is silent. An answer that carries neither a choice nor a note says
+ * so in the form's own .fm-queued box rather than doing nothing at all.
  */
 (function () {
   'use strict';
@@ -39,6 +44,13 @@
     var data = new FormData(form);
     var key = form.getAttribute('data-fm-question');
     var choice = data.get(key);
+    if (choice === null || choice === undefined || choice === '') {
+      // The radio name is meant to equal data-fm-question, but nothing enforces
+      // that at build time. Read the checked control out of the form itself so a
+      // mismatched name costs a console warning and never the captain's answer.
+      var checked = form.querySelector('input[type="radio"]:checked');
+      choice = checked ? checked.value : '';
+    }
     var note = form.querySelector('[data-fm-note]');
     var text = note && note.value ? note.value.trim() : '';
     if (!choice && !text) {
@@ -50,22 +62,35 @@
   function promptFor(label, answer) {
     var parts = [];
     parts.push('Entscheidung "' + label + '": ');
-    parts.push(answer.choice ? answer.choice : '(keine Option gewaehlt)');
+    parts.push(answer.choice ? answer.choice : '(keine Option gewählt)');
     if (answer.note) {
       parts.push(' - Anmerkung des Captains: ' + answer.note);
     }
     return parts.join('');
   }
 
-  function markQueued(form, answer) {
+  function say(form, text, warn) {
     var box = form.querySelector('.fm-queued');
     if (!box) {
       return;
     }
-    box.textContent = answer.choice
-      ? 'Vorgemerkt: ' + answer.choice
-      : 'Vorgemerkt: freie Anmerkung';
+    box.textContent = text;
+    if (warn) {
+      box.classList.add('is-warn');
+    } else {
+      box.classList.remove('is-warn');
+    }
     box.classList.add('is-shown');
+  }
+
+  function markQueued(form, answer) {
+    say(form, answer.choice
+      ? 'Vorgemerkt: ' + answer.choice
+      : 'Vorgemerkt: freie Anmerkung', false);
+  }
+
+  function markUnanswered(form) {
+    say(form, 'Nichts vorgemerkt: bitte eine Option wählen oder eine Anmerkung schreiben.', true);
   }
 
   function onSubmit(event) {
@@ -77,6 +102,7 @@
 
     var answer = answerOf(form);
     if (!answer) {
+      markUnanswered(form);
       return;
     }
 
@@ -98,32 +124,69 @@
       element: form,
       data: { question: key, answer: answer.choice, note: answer.note }
     });
+    // The queue just worked, so any offline notice on this board is stale.
+    showOffline(false);
     markQueued(form, answer);
   }
 
-  function revealOffline() {
+  function showOffline(show) {
     var notes = document.querySelectorAll('.fm-offline');
     for (var i = 0; i < notes.length; i++) {
-      notes[i].classList.add('is-shown');
+      if (show) {
+        notes[i].classList.add('is-shown');
+      } else {
+        notes[i].classList.remove('is-shown');
+      }
     }
+  }
+
+  function revealOffline() {
+    showOffline(true);
   }
 
   // Lavish injects its own runtime, and this inlined script may run before that
   // injection lands. A single check at startup would therefore report a served
-  // board as offline. Poll briefly instead and give up only after the bridge has
-  // had a fair chance to appear; the submit path re-checks live regardless, so a
-  // wrong guess here costs an advisory line and never a lost answer.
-  function watchForBridge(triesLeft) {
+  // board as offline. Poll briefly instead, and keep checking at a slower
+  // cadence after the notice appears, so a runtime that lands late takes the
+  // notice back down rather than leaving the captain reading that his answers
+  // cannot be sent back while they are in fact being sent.
+  function watchForBridge(quietLeft, slowLeft) {
     if (bridge()) {
+      showOffline(false);
       return;
     }
-    if (triesLeft <= 0) {
-      revealOffline();
+    if (quietLeft > 0) {
+      window.setTimeout(function () {
+        watchForBridge(quietLeft - 1, slowLeft);
+      }, 400);
+      return;
+    }
+    revealOffline();
+    if (slowLeft <= 0) {
       return;
     }
     window.setTimeout(function () {
-      watchForBridge(triesLeft - 1);
-    }, 400);
+      watchForBridge(0, slowLeft - 1);
+    }, 2000);
+  }
+
+  // The radio name must equal data-fm-question (docs/board-layout.md). A board
+  // that breaks the rule still works, because answerOf falls back to the form's
+  // own checked control, but the mismatch is named rather than left silent.
+  function reportKeyMismatch(form) {
+    if (!form.querySelectorAll || !window.console || !window.console.warn) {
+      return;
+    }
+    var key = form.getAttribute('data-fm-question');
+    var radios = form.querySelectorAll('input[type="radio"]');
+    for (var i = 0; i < radios.length; i++) {
+      if (radios[i].name && radios[i].name !== key) {
+        window.console.warn('fm-board: radio name "' + radios[i].name +
+          '" does not match data-fm-question "' + key +
+          '"; the answer is read from the form instead.');
+        return;
+      }
+    }
   }
 
   function init() {
@@ -134,8 +197,9 @@
       if (!forms[i].hasAttribute('data-lavish-question')) {
         forms[i].setAttribute('data-lavish-question', forms[i].getAttribute('data-fm-question'));
       }
+      reportKeyMismatch(forms[i]);
     }
-    watchForBridge(6);
+    watchForBridge(6, 60);
   }
 
   document.addEventListener('submit', onSubmit);

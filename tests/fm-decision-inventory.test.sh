@@ -136,10 +136,40 @@ test_summary_names_the_unpaired_variants() {
   local cap out
   cap=$(capture "grp-b-decision-upstream-engagement" "grp-judge-decision-other-wording")
   out=$("$INV" --summary --from "$cap")
-  assert_contains "$out" "records: 2   distinct decisions: 1" "summary lost its counts"
+  assert_contains "$out" "records: 2   decisions kept: 1" "summary lost its counts"
   assert_contains "$out" "pairing not established" \
     "summary must disclose that a variant's pairing is unestablished"
   pass "the summary discloses counts and unestablished pairings"
+}
+
+test_the_fold_does_not_claim_to_be_exact() {
+  # The fold keeps the judge's records on an assumption the script cannot check:
+  # that the judge raised one hold per distinct question the analysts raised. A
+  # question only an analyst raised is folded away, so the count must not be
+  # presented as a proven count of distinct questions.
+  local cap out skill=$ROOT/.agents/skills/decisionboard/SKILL.md
+  cap=$(capture "grp-b-decision-upstream-engagement" "grp-judge-decision-other-wording")
+  out=$("$INV" --summary --from "$cap")
+  assert_contains "$out" "NOT verified" \
+    "the summary must disclose that the fold's assumption is unverified"
+  assert_no_grep 'ounting is exact' "$INV" "the header must not claim exact counting"
+  assert_present "$skill" "the decisionboard skill is missing"
+  assert_no_grep 'counts exactly' "$skill" "the skill must not claim the collapse counts exactly"
+  pass "neither the tool nor the skill claims the collapse counts exactly"
+}
+
+test_folded_records_must_stay_visible_on_the_board() {
+  # Making the failure mode visible is the whole mitigation: a record folded away
+  # and never rendered is a question the captain cannot see.
+  local skill=$ROOT/.agents/skills/decisionboard/SKILL.md
+  local layout=$ROOT/docs/board-layout.md
+  assert_grep 'fm-variants' "$skill" \
+    "the skill must require the folded records to be rendered"
+  assert_grep 'fm-variants' "$layout" \
+    "the layout reference must document the component the skill is told to use"
+  assert_grep 'fm-variants' "$ROOT/bin/board-assets/layout.css" \
+    "the folded-records component must exist in the shared layout"
+  pass "the folded records are required to stay visible, in a documented component"
 }
 
 test_inventory_is_read_only() {
@@ -158,4 +188,6 @@ test_unconventional_ids_stand_alone
 test_separate_investigations_do_not_merge
 test_empty_inventory_is_not_an_error
 test_summary_names_the_unpaired_variants
+test_the_fold_does_not_claim_to_be_exact
+test_folded_records_must_stay_visible_on_the_board
 test_inventory_is_read_only

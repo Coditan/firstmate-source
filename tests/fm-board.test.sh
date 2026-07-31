@@ -56,8 +56,32 @@ outward form post|<form action="https://example.com/collect"><button>go</button>
 fetch inside script|<script>fetch("https://api.example.com/x")</script>
 remote srcset|<img srcset="https://example.com/a.png 1x" alt="a">
 svg use from remote|<svg><use href="https://example.com/i.svg#x"></use></svg>
+object data attribute|<object data="https://example.com/x.svg"></object>
+css image-set|<style>.x{background-image:image-set("https://example.com/a.png" 1x)}</style>
 EOF
   pass "the guard refuses every documented remote-reference form and writes nothing"
+}
+
+test_guard_refuses_a_tag_whose_attributes_span_lines() {
+  # grep sees one PHYSICAL line at a time, and wrapping attributes across lines
+  # is ordinary generated HTML - so a line-anchored scan would let exactly the
+  # CDN stylesheet this guard exists to refuse back in. The wrapped form is the
+  # same regression and must be refused the same way.
+  local label case_html
+  while IFS='|' read -r label case_html; do
+    [ -n "$label" ] || continue
+    # \n in the fixture stands for a real newline inside the tag.
+    build "$(printf '%b' "$case_html")"
+    [ "$(build_status)" != 0 ] || fail "guard let a line-wrapped reference through: $label"
+    assert_absent "$OUT" "guard refused '$label' but still wrote the board"
+    assert_contains "$(build_stderr)" "REFUSED" "refusal for '$label' did not say REFUSED"
+  done <<'EOF'
+wrapped daisyui stylesheet|<link\n  rel="stylesheet"\n  href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/daisyui.css">
+wrapped tailwind script|<script\n  src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.2.4/dist/index.global.js"></script>
+wrapped remote image|<img\n  alt="x"\n  src="https://example.com/logo.png">
+wrapped svg use|<svg><use\n  href="https://example.com/i.svg#x"></use></svg>
+EOF
+  pass "a reference wrapped across lines is refused exactly like the one-line form"
 }
 
 # --- the guard does not refuse what a board legitimately needs ---------------
@@ -73,11 +97,23 @@ test_guard_allows_navigational_links() {
   pass "a full PR hyperlink is allowed and preserved"
 }
 
+test_guard_allows_a_navigational_link_split_across_lines() {
+  # Folding tag lines together must not cost the <a> exemption: a hyperlink is
+  # still not a network request, however its attributes are formatted.
+  build "$(printf '%b' '<p>PR:\n  <a\n    href="https://github.com/Freudator86/admiralty/pull/1355">1355</a></p>')"
+  expect_code 0 "$(build_status)" "a line-wrapped PR hyperlink must still be allowed"
+  assert_grep 'https://github.com/Freudator86/admiralty/pull/1355' "$OUT" \
+    "the PR URL did not survive into the board"
+  pass "a navigational link stays allowed when its attributes span lines"
+}
+
 test_guard_allows_prose_naming_the_rule() {
   # The guard matches @import as CSS syntax, not as a word, so a board that
   # explains this very rule is not refused for naming it.
   build '<p>Kein CDN, kein @import, keine externe Schrift.</p>'
   expect_code 0 "$(build_status)" "prose naming @import must not be refused"
+  build "$(printf '%b' '<!-- Ein Kommentar, der @import\n     und url() nur benennt. -->\n<p>Inhalt</p>')"
+  expect_code 0 "$(build_status)" "a comment naming @import across lines must not be refused"
   pass "prose that names the rule is not mistaken for the rule being broken"
 }
 
@@ -124,6 +160,14 @@ test_check_mode_reports_both_verdicts() {
   out=$("$BOARD" --check "$TMP_ROOT/dirty.html" 2>&1) || status=$?
   [ "$status" != 0 ] || fail "--check accepted a board with a CDN stylesheet"
   assert_contains "$out" "cdn.jsdelivr.net" "--check did not name the offending reference"
+
+  # The same stylesheet with its attributes wrapped is the same defect.
+  printf '<link\n  rel="stylesheet"\n  href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/daisyui.css">\n' \
+    > "$TMP_ROOT/dirty-wrapped.html"
+  status=0
+  out=$("$BOARD" --check "$TMP_ROOT/dirty-wrapped.html" 2>&1) || status=$?
+  [ "$status" != 0 ] || fail "--check accepted a line-wrapped CDN stylesheet"
+  assert_contains "$out" "cdn.jsdelivr.net" "--check did not name the wrapped reference"
   pass "--check reports a clean board and names the reference in a dirty one"
 }
 
@@ -201,7 +245,9 @@ test_board_behavior_contract() {
 }
 
 test_guard_refuses_remote_references
+test_guard_refuses_a_tag_whose_attributes_span_lines
 test_guard_allows_navigational_links
+test_guard_allows_a_navigational_link_split_across_lines
 test_guard_allows_prose_naming_the_rule
 test_board_is_self_contained
 test_board_escapes_its_title

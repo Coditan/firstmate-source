@@ -4,13 +4,16 @@
 // LOGIC checks against a minimal DOM stand-in, not rendering checks. They prove
 // what the script does; they say nothing about how a board looks.
 //
-// Two behaviors are worth pinning:
+// Behaviors worth pinning:
 //   1. A board opened straight from disk has no window.lavish. That is a normal
 //      way to read a board, so submitting there must not throw - it must reveal
-//      the offline notice instead.
+//      the offline notice instead, and take it back down once a bridge appears.
 //   2. On a served board, one submit queues exactly ONE prompt, carrying the
 //      question key as queueKey so a changed answer replaces the earlier unsent
 //      one instead of appending a second.
+//   3. No submit is silent: an answer carrying neither a choice nor a note says
+//      so, and a radio whose name does not match data-fm-question still yields
+//      the captain's answer instead of swallowing it.
 
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -27,6 +30,11 @@ function check(ok, label) {
 
 // --- a DOM stand-in with only what board.js touches ------------------------
 
+function selectorsOf(el) {
+  if (Array.isArray(el._sel)) return el._sel;
+  return el._sel ? [el._sel] : [];
+}
+
 function makeElement(tag, attrs = {}) {
   const el = {
     tagName: tag.toUpperCase(),
@@ -40,13 +48,18 @@ function makeElement(tag, attrs = {}) {
     hasAttribute: (n) => n in el._attrs,
     matches: (sel) => sel === 'form[data-fm-question]'
       && el.tagName === 'FORM' && 'data-fm-question' in el._attrs,
-    classList: { add: (c) => el._classes.add(c), contains: (c) => el._classes.has(c) },
-    querySelector: (sel) => el.children.find((c) => c._sel === sel) || null,
+    classList: {
+      add: (c) => el._classes.add(c),
+      remove: (c) => el._classes.delete(c),
+      contains: (c) => el._classes.has(c),
+    },
+    querySelector: (sel) => el.children.find((c) => selectorsOf(c).includes(sel)) || null,
+    querySelectorAll: (sel) => el.children.filter((c) => selectorsOf(c).includes(sel)),
   };
   return el;
 }
 
-function buildForm(key, { choice, note }) {
+function buildForm(key, { choice, note, radio }) {
   const form = makeElement('form', { 'data-fm-question': key, 'data-fm-label': 'Testfrage' });
   const queued = makeElement('div');
   queued._sel = '.fm-queued';
@@ -54,12 +67,22 @@ function buildForm(key, { choice, note }) {
   noteEl._sel = '[data-fm-note]';
   noteEl.value = note || '';
   form.children.push(queued, noteEl);
+  if (radio) {
+    const input = makeElement('input', { type: 'radio' });
+    input.name = radio.name;
+    input.value = radio.value;
+    input._sel = radio.checked
+      ? ['input[type="radio"]', 'input[type="radio"]:checked']
+      : ['input[type="radio"]'];
+    form.children.push(input);
+  }
   form._formData = new Map([[key, choice]]);
   return { form, queued };
 }
 
 function install({ withLavish }) {
   const queued = [];
+  const warnings = [];
   const offline = makeElement('div');
   const doc = {
     readyState: 'complete',
@@ -70,6 +93,7 @@ function install({ withLavish }) {
   global.document = doc;
   global.window = {
     setTimeout: (fn) => { /* never fire: keeps the poll from looping in-test */ },
+    console: { warn: (m) => warnings.push(String(m)) },
     lavish: withLavish
       ? { queuePrompt: (text, opts) => queued.push({ text, opts }) }
       : undefined,
@@ -81,7 +105,17 @@ function install({ withLavish }) {
   // Evaluate the real script against these globals.
   // eslint-disable-next-line no-new-func
   new Function('window', 'document', 'FormData', source)(global.window, doc, global.FormData);
-  return { doc, queued, offline };
+  return { doc, queued, offline, warnings };
+}
+
+// reinit - re-run the script with these forms visible, so init() sees them.
+function reinit(doc, forms, offline) {
+  doc.querySelectorAll = (sel) => {
+    if (sel === 'form[data-fm-question]') return forms;
+    if (sel === '.fm-offline') return offline ? [offline] : [];
+    return [];
+  };
+  new Function('window', 'document', 'FormData', source)(global.window, doc, global.FormData);
 }
 
 // --- 1. opened from disk, no Lavish server ---------------------------------
@@ -122,13 +156,15 @@ function install({ withLavish }) {
     're-answering reuses the same queueKey so Lavish replaces the unsent answer');
 }
 
-// --- 3. an empty answer is not submitted -----------------------------------
+// --- 3. an empty answer is not submitted, and is not silent either ---------
 
 {
   const { doc, queued } = install({ withLavish: true });
-  const { form } = buildForm('frage-c', { choice: undefined });
+  const { form, queued: box } = buildForm('frage-c', { choice: undefined });
   doc._handlers.submit({ target: form, preventDefault() {} });
   check(queued.length === 0, 'an empty answer queues nothing');
+  check(box._classes.has('is-shown') && box._classes.has('is-warn'),
+    'an empty submit says so instead of being a silent no-op');
 }
 
 // --- 4. the wiring derives the Lavish question attribute -------------------
@@ -136,12 +172,45 @@ function install({ withLavish }) {
 {
   const { doc } = install({ withLavish: true });
   const form = makeElement('form', { 'data-fm-question': 'frage-d' });
-  doc.querySelectorAll = (sel) => (sel === 'form[data-fm-question]' ? [form] : []);
   doc._handlers.DOMContentLoaded ? doc._handlers.DOMContentLoaded() : null;
   // init() already ran at load with no forms; re-run it through the load path.
-  new Function('window', 'document', 'FormData', source)(global.window, doc, global.FormData);
+  reinit(doc, [form]);
   check(form.getAttribute('data-lavish-question') === 'frage-d',
     'data-lavish-question is derived from data-fm-question, declared once');
+}
+
+// --- 5. a radio name that does not match the question key ------------------
+
+{
+  // The name-must-match rule lives in prose, so a one-character mismatch has to
+  // cost a console warning rather than the captain's answer.
+  const { doc, queued, warnings } = install({ withLavish: true });
+  const { form } = buildForm('frage-e', {
+    choice: undefined,
+    radio: { name: 'frage-E', value: 'Option E', checked: true },
+  });
+  reinit(doc, [form]);
+  doc._handlers.submit({ target: form, preventDefault() {} });
+  check(queued.length === 1 && queued[0].opts.data.answer === 'Option E',
+    'a mismatched radio name still yields the answer, read from the form itself');
+  check(warnings.some((w) => w.includes('frage-e')),
+    'the mismatch is reported rather than swallowed');
+}
+
+// --- 6. a Lavish runtime that arrives late ---------------------------------
+
+{
+  // The offline notice is advisory. Leaving it up while answers are being sent
+  // tells the captain the opposite of what is happening.
+  const { doc, offline } = install({ withLavish: false });
+  const { form } = buildForm('frage-f', { choice: 'Option F' });
+  doc._handlers.submit({ target: form, preventDefault() {} });
+  check(offline._classes.has('is-shown'), 'no bridge at submit reveals the offline notice');
+
+  global.window.lavish = { queuePrompt: () => {} };
+  doc._handlers.submit({ target: form, preventDefault() {} });
+  check(!offline._classes.has('is-shown'),
+    'a queue that succeeds takes the offline notice back down');
 }
 
 process.exit(failures === 0 ? 0 : 1);
