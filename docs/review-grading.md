@@ -1,6 +1,7 @@
 # Grading review quality
 
 `bin/fm-grade.sh` grades how good a code review actually is, on a scale the reviewed tool does not control.
+What the scale actually read on its first run is recorded in [review-grading-first-reading.md](review-grading-first-reading.md); this file owns the method, the tier definitions, and the falsifiability argument.
 
 ## The problem it exists for
 
