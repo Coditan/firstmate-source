@@ -228,10 +228,13 @@ test_coordinator_predicate() {
 
 test_tracked_role_material() {
   assert_present "$ROOT/roles/coordinator.md" "the tracked coordinator overlay is missing"
+  assert_present "$ROOT/roles/executor.md" "the tracked executor overlay is missing"
   assert_absent "$ROOT/roles/vessel.md" \
     "roles/vessel.md must not exist: the default role is an unamended AGENTS.md, not a document"
   assert_grep 'amends `AGENTS.md`' "$ROOT/roles/coordinator.md" \
     "the coordinator overlay must declare itself an amendment to AGENTS.md"
+  assert_grep 'amends `AGENTS.md`' "$ROOT/roles/executor.md" \
+    "the executor overlay must declare itself an amendment to AGENTS.md"
   assert_gitignore_ignores 'config/role' "config/role must be gitignored like its config siblings"
   assert_grep 'Vessel role (config/role / roles/)' "$ROOT/docs/configuration.md" \
     "docs/configuration.md must own the vessel-role schema"
@@ -336,6 +339,11 @@ test_unrecognized_role_delivers_no_overlay() {
 }
 
 test_selected_role_with_no_overlay_is_reported_not_silent() {
+  # The fixture root deliberately carries no roles/ directory, so this drives the
+  # case where a recognized role's overlay is absent from THIS code root. Every
+  # recognized non-default role now ships an overlay in the real tree, which makes
+  # the live case a home that selected the role before fast-forwarding to the
+  # commit that carries it - not a role nobody has written.
   local rec out role_section
   rec=$(new_home overlay-missing)
   read_home_record "$rec"

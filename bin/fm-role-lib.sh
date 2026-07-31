@@ -15,9 +15,9 @@
 #                not exist, because "no amendment" is not a document.
 #   coordinator  relays captain authority to peer vessels and routes across
 #                their domains; dispatches no crews (roles/coordinator.md).
-#   executor     recognized selector, overlay not yet written; a home that
-#                selects it gets ROLE_OVERLAY_MISSING from bootstrap rather
-#                than a silent unamended session.
+#   executor     deploys, watches, and delivers the fleet's work, and leaves
+#                another vessel's domain to that vessel to diagnose
+#                (roles/executor.md).
 #
 # There is deliberately no FM_ROLE environment override. The role is a property
 # of the HOME, not of a session, and an in-session variable would be exactly the

@@ -53,7 +53,7 @@ The recognized values are `vessel`, `coordinator`, and `executor`.
 `vessel` is the default and is also the meaning of an absent file: no overlay, `AGENTS.md` unamended, and no role-related output anywhere in a session.
 `roles/vessel.md` deliberately does not exist, because "no amendment" is not a document.
 `coordinator` relays captain authority to peer vessels and routes across their domains; [`roles/coordinator.md`](../roles/coordinator.md) owns what that means.
-`executor` is a recognized selector whose overlay has not been written yet, so a home that selects it is told so rather than being left silently unamended.
+`executor` runs the fleet's work where it lives - deploying, watching, and delivering - and hands another vessel's domain back to that vessel to diagnose; [`roles/executor.md`](../roles/executor.md) owns what that means.
 
 The value is the first non-empty line of the file with whitespace stripped, exactly like `config/backend`.
 There is deliberately no `FM_ROLE` environment override: the role is a property of the home, not of a session, and a session-level variable is precisely what would relax the spawn refusal below.
