@@ -81,6 +81,12 @@ import time
 
 DEFAULT_DB = os.path.expanduser("~/.no-mistakes/state.sqlite")
 FIX_SUBJECT_RE = re.compile(r"^no-mistakes\(([a-z]+)\):\s*(.*)$")
+HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+# The verdicts a ballot may carry. A hand-filled ballot is exactly where a typo
+# lands, and an unrecognised string would inflate every denominator while
+# contributing to no numerator, so the vocabulary is closed and enforced.
+BALLOT_VERDICTS = ("harmful", "minor", "wrong")
 
 # Secret shapes are redacted before any finding text is shown. The list is
 # deliberately broad: a false redaction costs a reader some context, while a
@@ -223,6 +229,49 @@ class Git:
         self._blame[key] = mapping
         return mapping
 
+    def hunks(self, sha):
+        """Parse a commit's diff into hunks carrying BOTH sides' paths.
+
+        Deleted lines have to be blamed against the path they lived at in the
+        parent, which is not always the path they land at: a deletion emits
+        `+++ /dev/null` and a rename emits a different path on each side. Keying
+        everything off the `+++` side would leave the previous file's path in
+        place for a deletion and blame that file's lines by mistake, so each
+        side is tracked separately and only inside a real file header - a
+        removed line of content can itself begin with `---`.
+        """
+        diff = self.run("show", "--format=", "--unified=0", "-M", sha)
+        if diff is None:
+            return None
+        out = []
+        old_path = new_path = None
+        in_header = False
+        for line in diff.splitlines():
+            if line.startswith("diff --git "):
+                old_path = new_path = None
+                in_header = True
+                continue
+            if in_header and line.startswith("--- "):
+                m = re.match(r"^--- a/(.*)$", line)
+                old_path = m.group(1) if m else None
+                continue
+            if in_header and line.startswith("+++ "):
+                m = re.match(r"^\+\+\+ b/(.*)$", line)
+                new_path = m.group(1) if m else None
+                continue
+            m = HUNK_RE.match(line)
+            if m:
+                in_header = False
+                out.append({
+                    "old_path": old_path,
+                    "new_path": new_path,
+                    "old_start": int(m.group(1)),
+                    "old_count": int(m.group(2)) if m.group(2) is not None else 1,
+                    "new_start": int(m.group(3)),
+                    "new_count": int(m.group(4)) if m.group(4) is not None else 1,
+                })
+        return out
+
     def deleted_line_sources(self, sha):
         """Which commit wrote each line this commit deletes?
 
@@ -235,26 +284,15 @@ class Git:
         if not parent:
             return None
         parent = parent.strip()
-        diff = self.run("show", "--format=", "--unified=0", "-M", sha)
-        if diff is None:
+        hunks = self.hunks(sha)
+        if hunks is None:
             return None
         ranges = collections.defaultdict(list)
-        current = None
-        for line in diff.splitlines():
-            m = re.match(r"^\+\+\+ b/(.*)$", line)
-            if m:
-                current = m.group(1)
+        for h in hunks:
+            if not h["old_path"] or h["old_count"] <= 0:
                 continue
-            m = re.match(r"^--- a/(.*)$", line)
-            if m and m.group(1) == "dev/null":
-                current = None
-                continue
-            m = re.match(r"^@@ -(\d+)(?:,(\d+))? \+", line)
-            if m and current:
-                start = int(m.group(1))
-                count = int(m.group(2)) if m.group(2) is not None else 1
-                if count > 0:
-                    ranges[current].append((start, start + count - 1))
+            start = h["old_start"]
+            ranges[h["old_path"]].append((start, start + h["old_count"] - 1))
         sources = collections.Counter()
         total = 0
         for path, spans in ranges.items():
@@ -273,20 +311,14 @@ class Git:
         A correction whose lines were all overwritten before the branch was
         finished left nothing behind, however the ledger counted it.
         """
-        diff = self.run("show", "--format=", "--unified=0", "-M", sha)
-        if diff is None:
+        hunks = self.hunks(sha)
+        if hunks is None:
             return None
         added = collections.defaultdict(int)
-        current = None
-        for line in diff.splitlines():
-            m = re.match(r"^\+\+\+ b/(.*)$", line)
-            if m:
-                current = m.group(1)
+        for h in hunks:
+            if not h["new_path"] or h["new_count"] <= 0:
                 continue
-            m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))?", line)
-            if m and current:
-                count = int(m.group(2)) if m.group(2) is not None else 1
-                added[current] += count
+            added[h["new_path"]] += h["new_count"]
         total_added = sum(added.values())
         if total_added == 0:
             return {"added": 0, "surviving": 0}
@@ -444,7 +476,7 @@ def tier_ledger(runs, rounds):
     }
 
 
-def map_fix_commits(run, git):
+def map_fix_commits(run, git, boundaries=frozenset()):
     """Find the pipeline's own fix commits for a run, and verify the mapping.
 
     The pipeline lands each correction as a real commit subject-prefixed
@@ -453,6 +485,14 @@ def map_fix_commits(run, git):
     that run appended. The mapping is only used when the recovered subjects
     actually match the fix summaries the database recorded, so an unverified
     guess is dropped rather than silently counted.
+
+    A non-pipeline subject is NOT the only boundary. When two runs execute on
+    the same branch with no author commit between them, the later run's walk
+    runs straight into the earlier run's corrections and adopts them - which
+    would make an earlier RUN's fix look like an earlier fix in THIS run, the
+    exact invariant the rework metrics are defined on. `boundaries` carries the
+    head commits other runs recorded in the same repository; the walk stops
+    there, because that commit and everything behind it belongs to that run.
     """
     if not run["head"] or set(run["head"]) == {"0"}:
         return None
@@ -466,6 +506,8 @@ def map_fix_commits(run, git):
         if "\x1f" not in line:
             continue
         sha, subject = line.split("\x1f", 1)
+        if chain and sha in boundaries:
+            break
         m = FIX_SUBJECT_RE.match(subject)
         if not m:
             break
@@ -489,13 +531,21 @@ def tier_git(runs, rounds, repo_roots, progress=None):
         if r["fix_summary"]:
             summaries[r["run_id"]].add(r["fix_summary"])
 
+    # Every other run's recorded head, per repository, bounds this run's walk so
+    # one run cannot adopt another's corrections as its own.
+    heads_by_repo = collections.defaultdict(set)
+    for run in runs:
+        if run["head"] and set(run["head"]) != {"0"}:
+            heads_by_repo[run["repo"]].add(run["head"])
+
     mapped, unmapped_no_repo, unmapped_no_match = [], 0, 0
     for run in runs:
         root = repo_roots.get(run["repo"])
         if root is None or not root.available:
             unmapped_no_repo += 1
             continue
-        chain = map_fix_commits(run, root)
+        boundaries = heads_by_repo[run["repo"]] - {run["head"]}
+        chain = map_fix_commits(run, root, boundaries)
         if not chain:
             unmapped_no_match += 1
             continue
@@ -513,7 +563,10 @@ def tier_git(runs, rounds, repo_roots, progress=None):
         "fix summaries the database recorded",
         caveat="Unresolved runs are excluded from every git metric rather than "
                "assumed clean. %d had no reachable clone, %d had no verifiable "
-               "commit chain." % (unmapped_no_repo, unmapped_no_match),
+               "commit chain. Each chain also stops at any commit another run "
+               "in the same repository recorded as its head, so a run that "
+               "followed another on the same branch cannot absorb its "
+               "corrections." % (unmapped_no_repo, unmapped_no_match),
     ))
 
     rework_num = rework_den = 0
@@ -533,6 +586,13 @@ def tier_git(runs, rounds, repo_roots, progress=None):
         run_num = run_den = 0
         for c in chain:
             info = git.deleted_line_sources(c["sha"])
+            # Every non-first fix commit enters the denominator, including one
+            # that deleted nothing or whose deletions had no resolvable blame
+            # origin. Counting only the resolvable ones would quietly narrow the
+            # denominator to a strictly smaller set than the stated method names.
+            is_followup = bool(seen)
+            if is_followup:
+                considered_fixes += 1
             if info and info["total"]:
                 # Only lines written by an EARLIER fix in this same run count as
                 # rework. Deleting the author's own code is the review doing its
@@ -544,8 +604,7 @@ def tier_git(runs, rounds, repo_roots, progress=None):
                 run_den += info["total"]
                 step_rework[c["step"]][0] += prior
                 step_rework[c["step"]][1] += info["total"]
-                if seen:
-                    considered_fixes += 1
+                if is_followup:
                     followup_num += prior
                     followup_den += info["total"]
                     if prior:
@@ -587,6 +646,11 @@ def tier_git(runs, rounds, repo_roots, progress=None):
             100.0 * reworked_fixes / considered_fixes, considered_fixes, src,
             "share of non-first fix commits that deleted at least one line an "
             "earlier fix in the same run wrote", unit="%",
+            caveat="The denominator is EVERY non-first fix commit, including "
+                   "ones that deleted nothing and ones whose deleted lines had "
+                   "no resolvable blame origin. Those cannot rework anything "
+                   "that can be shown, so they count against the rate rather "
+                   "than being dropped from it.",
         ))
     if survival_den:
         metrics.append(Metric(
@@ -763,22 +827,44 @@ def score_submission(case, findings):
     candidate should not lose a point for phrasing, but pointing at the wrong
     file is not a detection. The candidate never sees this file, so it cannot
     tune to the oracle.
+
+    STRICT is the scored rule and it matches the finding's own `file` field. A
+    finding that names the wrong file is wrong however its prose reads, because
+    acting on it sends a reader to the wrong place; prose that happens to quote
+    the expected path somewhere in an argument is not a location.
+
+    LENIENT also accepts the path appearing anywhere in the finding's text. It
+    is computed and reported alongside the strict figure rather than folded into
+    it, because the gap between the two is itself the measurement of how
+    precisely the candidate localises what it found. Burying that gap inside a
+    scoring choice would hide it; only the strict number is scored.
+
+    Returns {"strict": finding|None, "lenient": finding|None}. A strict hit is
+    always a lenient hit, so lenient >= strict by construction.
     """
     det = case.get("detection") or {}
     paths = set(det.get("must_mention_paths") or [])
     patterns = [re.compile(p) for p in (det.get("must_match_any") or [])]
+    if not paths and not patterns:
+        return {"strict": None, "lenient": None}
+    strict = lenient = None
     for f in findings:
         text = " ".join(str(f.get(k, "")) for k in ("file", "id", "description", "summary", "title"))
-        if paths:
-            fpath = str(f.get("file") or "")
-            if not any(p == fpath or p in text for p in paths):
-                continue
         if patterns and not any(p.search(text) for p in patterns):
             continue
-        if not paths and not patterns:
-            continue
-        return f
-    return None
+        if paths:
+            fpath = str(f.get("file") or "")
+            located = any(p == fpath for p in paths)
+            mentioned = located or any(p in text for p in paths)
+        else:
+            located = mentioned = True
+        if located and strict is None:
+            strict = f
+        if mentioned and lenient is None:
+            lenient = f
+        if strict is not None and lenient is not None:
+            break
+    return {"strict": strict, "lenient": lenient}
 
 
 def tier_bench(corpus, submission_path):
@@ -813,25 +899,47 @@ def tier_bench(corpus, submission_path):
         submission = json.load(fh)
     results = []
     hits = 0
+    lenient_hits = 0
     noise_total = 0
     for case in tier1:
         reported = submission.get(case["case_id"]) or {}
         findings = reported.get("findings") or []
-        hit = score_submission(case, findings)
+        scored = score_submission(case, findings)
+        hit = scored["strict"]
         if hit:
             hits += 1
+        if scored["lenient"]:
+            lenient_hits += 1
         noise_total += max(0, len(findings) - (1 if hit else 0))
         results.append({"case_id": case["case_id"], "detected": bool(hit),
+                        "detected_lenient": bool(scored["lenient"]),
                         "findings_emitted": len(findings)})
     lo, hi = wilson_interval(hits, len(tier1))
     metrics.append(Metric(
         "blind_detection_rate", 100.0 * hits / len(tier1) if tier1 else None,
         len(tier1), src + " | candidate: " + os.path.basename(submission_path),
         "share of admissible cases the candidate found without being told they "
-        "existed", unit="%",
+        "existed, matching the finding's own `file` field against the case's "
+        "path (STRICT - this is the scored rule)", unit="%",
         caveat="95%% Wilson interval %.0f-%.0f%%. At n=%d this interval is wide; "
                "it is reported so the number is not read as precision it does "
-               "not have." % ((lo or 0) * 100, (hi or 0) * 100, len(tier1)),
+               "not have. A finding that names the wrong file does not count "
+               "however its prose reads, because acting on it sends a reader to "
+               "the wrong place." % ((lo or 0) * 100, (hi or 0) * 100, len(tier1)),
+    ))
+    llo, lhi = wilson_interval(lenient_hits, len(tier1))
+    metrics.append(Metric(
+        "blind_detection_rate_lenient",
+        100.0 * lenient_hits / len(tier1) if tier1 else None,
+        len(tier1), src + " | candidate: " + os.path.basename(submission_path),
+        "the same replay scored LENIENTLY, accepting the case's path anywhere "
+        "in the finding's text rather than in its `file` field", unit="%",
+        caveat="95%% Wilson interval %.0f-%.0f%%. NOT the score - reported "
+               "alongside it so the gap is visible rather than buried in a "
+               "scoring choice. The distance from `blind_detection_rate` (%d vs "
+               "%d of %d cases) measures how precisely the candidate localises "
+               "what it found."
+               % ((llo or 0) * 100, (lhi or 0) * 100, lenient_hits, hits, len(tier1)),
     ))
     if tier1:
         metrics.append(Metric(
@@ -845,12 +953,12 @@ def tier_bench(corpus, submission_path):
                                            "tier2": len(tier2)}}
 
 
-def build_sample(rounds, size, seed):
-    """Draw a reproducible, stratified, blind sample of findings.
+def build_pool(rounds):
+    """Every finding that could be sampled, with a stable ballot identity.
 
-    Stratified by severity so the rare error-severity findings are actually
-    represented; seeded so anyone can redraw the identical sample and check the
-    adjudication rather than take it on trust.
+    The identity is derived from the finding's own coordinates rather than its
+    position in a query result, so a ballot drawn today can still be joined back
+    to its stratum after the pipeline has kept running.
     """
     pool = []
     for r in rounds:
@@ -869,6 +977,23 @@ def build_sample(rounds, size, seed):
                 "line": f.get("line"),
                 "description": redact(str(f.get("description") or "")),
             })
+    return pool
+
+
+def build_sample(rounds, size, seed):
+    """Draw a reproducible, stratified, blind sample of findings.
+
+    Stratified by severity so the rare error-severity findings are actually
+    represented; seeded so anyone can redraw the identical sample and check the
+    adjudication rather than take it on trust.
+
+    The stratification is why results are reported PER STRATUM and never pooled:
+    equal allocation makes the ballot's composition differ from the population's
+    on purpose, and the only way to collapse it back would be to weight by the
+    graded tool's own severity labels, which is the dependence this scale exists
+    to remove.
+    """
+    pool = build_pool(rounds)
     strata = collections.defaultdict(list)
     for item in pool:
         strata[item["severity"]].append(item)
@@ -893,7 +1018,7 @@ def build_sample(rounds, size, seed):
     return chosen[:size], len(pool)
 
 
-def tier_materiality(rounds, ballots_path, sample_size, seed):
+def tier_materiality(rounds, ballots_path, seed):
     """Whether a finding would really have hurt. Not computed - adjudicated.
 
     There is no evidence in the run database that answers this, and asking a
@@ -902,8 +1027,15 @@ def tier_materiality(rounds, ballots_path, sample_size, seed):
     instrument and refuses to produce the number.
     """
     metrics = []
-    _, pool_size = build_sample(rounds, sample_size, seed)
-    if not ballots_path or not os.path.exists(ballots_path):
+    pool = build_pool(rounds)
+    pool_size = len(pool)
+    if ballots_path and not os.path.exists(ballots_path):
+        # Falling through to UNADJUDICATED here would print "Deliberately
+        # absent" at an operator who believes they just supplied signed
+        # verdicts - a false provenance claim in the one tier whose whole
+        # purpose is refusing to assert what it cannot source.
+        raise SystemExit("fm-grade: --ballots file not found: %s" % ballots_path)
+    if not ballots_path:
         metrics.append(Metric(
             "material_finding_rate", None, 0,
             "UNADJUDICATED - requires a named human adjudicator",
@@ -923,25 +1055,70 @@ def tier_materiality(rounds, ballots_path, sample_size, seed):
     if not adjudicator:
         raise SystemExit("fm-grade: ballot file has no `adjudicator` - a verdict "
                          "without a named judge is exactly what this replaces")
+    # Provenance is checked, not asserted. Printing `--seed` as the recipe for
+    # redrawing a ballot that was drawn under a different seed would send a
+    # reader after a sample that cannot be reconciled with this one.
+    drawn_seed = ballots.get("seed")
+    if drawn_seed is not None and str(drawn_seed) != str(seed):
+        raise SystemExit(
+            "fm-grade: ballot records seed %r but --seed is %r - the report "
+            "would print an unreproducible recipe. Re-run with --seed %s, or "
+            "redraw and re-adjudicate." % (drawn_seed, seed, drawn_seed))
+    drawn_population = ballots.get("population")
+
     verdicts = [b for b in ballots.get("ballots", []) if b.get("verdict")]
-    counts = collections.Counter(b["verdict"] for b in verdicts)
+    unknown = sorted({str(b["verdict"]) for b in verdicts} - set(BALLOT_VERDICTS))
+    if unknown:
+        raise SystemExit(
+            "fm-grade: ballot has unrecognised verdict(s) %s - accepted values "
+            "are %s, and an empty verdict abstains. An unrecognised string would "
+            "count into n while contributing to no rate."
+            % (", ".join(repr(u) for u in unknown), ", ".join(BALLOT_VERDICTS)))
+
+    # Rejoin each verdict to the stratum it was drawn from. The stratum is NOT
+    # carried in the ballot on purpose - showing the adjudicator the tool's own
+    # severity label would re-import the self-assessment this scale replaces -
+    # so it is recovered here from the finding's stable ballot identity.
+    stratum_of = {item["ballot_id"]: item["severity"] for item in pool}
+    by_stratum = collections.defaultdict(collections.Counter)
+    for b in verdicts:
+        by_stratum[stratum_of.get(b.get("ballot_id"), "(no longer in pool)")][b["verdict"]] += 1
+
     n = len(verdicts)
     src = "blind human adjudication by %s (labels stripped)" % adjudicator
-    for verdict, label in (("harmful", "material_finding_rate"),
-                           ("minor", "minor_finding_rate"),
-                           ("wrong", "false_positive_rate")):
-        k = counts.get(verdict, 0)
-        lo, hi = wilson_interval(k, n)
-        metrics.append(Metric(
-            label, 100.0 * k / n if n else None, n, src,
-            "blind verdict `%s` over a seeded stratified sample" % verdict, unit="%",
-            caveat="95%% Wilson interval %.0f-%.0f%%. Sample drawn with seed %s "
-                   "from %d findings; redraw and re-adjudicate to challenge it."
-                   % ((lo or 0) * 100, (hi or 0) * 100, seed, pool_size),
-        ))
-    return {"metrics": metrics, "detail": {"pool": pool_size, "adjudicated": n,
-                                           "adjudicator": adjudicator,
-                                           "counts": dict(counts)}}
+    frame_note = (
+        "The strata are the GRADED TOOL'S OWN severity labels, so the sampling "
+        "FRAME is not independent of the tool under test even though each "
+        "verdict is. Rates are therefore reported per stratum and never pooled "
+        "into one headline: pooling would have to weight by those same labels.")
+    for stratum in sorted(by_stratum):
+        counts = by_stratum[stratum]
+        sn = sum(counts.values())
+        for verdict, label in (("harmful", "material_finding_rate"),
+                               ("minor", "minor_finding_rate"),
+                               ("wrong", "false_positive_rate")):
+            k = counts.get(verdict, 0)
+            lo, hi = wilson_interval(k, sn)
+            metrics.append(Metric(
+                "%s[severity=%s]" % (label, stratum),
+                100.0 * k / sn if sn else None, sn, src,
+                "blind verdict `%s` among sampled findings the tool had "
+                "labelled severity=%s" % (verdict, stratum), unit="%",
+                caveat="95%% Wilson interval %.0f-%.0f%%. Ballot drawn with seed "
+                       "%s from a population of %s findings (%d in the pool now); "
+                       "redraw and re-adjudicate to challenge it. %s"
+                       % ((lo or 0) * 100, (hi or 0) * 100, seed,
+                          drawn_population if drawn_population is not None else "?",
+                          pool_size, frame_note),
+            ))
+    return {"metrics": metrics,
+            "detail": {"pool": pool_size, "adjudicated": n,
+                       "adjudicator": adjudicator,
+                       "drawn_seed": drawn_seed,
+                       "drawn_population": drawn_population,
+                       "counts_by_stratum": {k: dict(v) for k, v in by_stratum.items()},
+                       "pooled_rate_withheld":
+                           "Deliberately not computed. " + frame_note}}
 
 
 def render_report(snapshot, tiers, out):
@@ -975,7 +1152,12 @@ def render_report(snapshot, tiers, out):
         ("materiality", "Tier M - materiality (HUMAN, SAMPLED)",
          "Whether a finding would really have hurt at merge cannot be computed "
          "from this data.\nThe engine draws a reproducible blind sample and "
-         "reports UNADJUDICATED until a named human returns verdicts."),
+         "reports UNADJUDICATED until a named human returns verdicts.\nThe "
+         "sample is stratified by the graded tool's own severity labels, so "
+         "rates are reported per stratum with their own n and interval.\nThere "
+         "is deliberately no pooled headline rate: collapsing the strata would "
+         "have to weight them by those same labels, which is the dependence "
+         "this scale exists to remove."),
     ]
     for key, title, blurb in order:
         tier = tiers.get(key)
@@ -1010,6 +1192,13 @@ def render_report(snapshot, tiers, out):
 
 
 def cmd_report(args):
+    # A mistyped path must be loud. Silently reporting UNADJUDICATED or an
+    # unscored corpus at an operator who believes they just supplied evidence
+    # would be a false provenance claim, which is the one thing this engine
+    # must never make.
+    for flag, path in (("--ballots", args.ballots), ("--submission", args.submission)):
+        if path and not os.path.exists(path):
+            raise SystemExit("fm-grade: %s file not found: %s" % (flag, path))
     con = open_db(args.db)
     if con is None:
         raise SystemExit("fm-grade: no run database at %s" % args.db)
@@ -1039,18 +1228,18 @@ def cmd_report(args):
         if not args.quiet:
             sys.stderr.write("\r" + " " * 60 + "\r")
     tiers["bench"] = tier_bench(load_corpus(args.corpus), args.submission)
-    tiers["materiality"] = tier_materiality(rounds, args.ballots, args.sample_size, args.seed)
+    tiers["materiality"] = tier_materiality(rounds, args.ballots, args.seed)
 
-    if args.json:
-        payload = {"snapshot": snapshot,
-                   "tiers": {k: {"metrics": [m.as_dict() for m in v["metrics"]],
-                                 "detail": v.get("detail", {})} for k, v in tiers.items()}}
-        json.dump(payload, sys.stdout, indent=2, default=str)
-        sys.stdout.write("\n")
-        return 0
     out = open(args.out, "w", encoding="utf-8") if args.out else sys.stdout
     try:
-        render_report(snapshot, tiers, out)
+        if args.json:
+            payload = {"snapshot": snapshot,
+                       "tiers": {k: {"metrics": [m.as_dict() for m in v["metrics"]],
+                                     "detail": v.get("detail", {})} for k, v in tiers.items()}}
+            json.dump(payload, out, indent=2, default=str)
+            out.write("\n")
+        else:
+            render_report(snapshot, tiers, out)
     finally:
         if args.out:
             out.close()

@@ -127,6 +127,105 @@ ALL=$(get_metric git fix_rework_rate)
 python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) < float(sys.argv[2]) else 1)' \
   "$ALL" "$FOLLOWUP" || fail "all-fix rework rate ($ALL) must be below follow-up rate ($FOLLOWUP)"
 
+# --- one run must not adopt another run's corrections -----------------------
+#
+# Two runs on the same branch with no author commit between them leave one
+# contiguous block of pipeline commits. Walking back until a non-pipeline
+# subject would make the SECOND run swallow the first run's correction and then
+# treat it as "an earlier fix in the same run" - which is the exact invariant
+# every rework metric is defined on. The recorded head of the earlier run is the
+# boundary, so here each run owns exactly one correction and nothing reworks
+# anything.
+
+DB2=$TMP_ROOT/two-runs.sqlite
+python3 - "$DB2" "$REPO" "$(git -C "$REPO" rev-parse HEAD~1)" "$HEAD_SHA" <<'PY'
+import sqlite3, sys
+db, repo, first, second = sys.argv[1:5]
+con = sqlite3.connect(db)
+con.executescript("""
+create table repos(id text primary key, working_path text, upstream_url text,
+                   default_branch text, created_at integer);
+create table runs(id text primary key, repo_id text, branch text, head_sha text,
+                  base_sha text, status text, pr_url text, created_at integer,
+                  updated_at integer);
+create table step_results(id text primary key, run_id text, step_name text,
+                          step_order integer, status text);
+create table step_rounds(id text primary key, step_result_id text, round integer,
+                         trigger_type text, findings_json text,
+                         user_findings_json text, fix_summary text,
+                         duration_ms integer, created_at integer);
+""")
+con.execute("insert into repos values('r1',?,'u','main',0)", (repo,))
+zero = "0" * 40
+con.execute("insert into runs values('runA','r1','b',?,?,'completed',null,1,1)", (first, zero))
+con.execute("insert into runs values('runB','r1','b',?,?,'completed',null,2,2)", (second, zero))
+for run, sid, summary in (("runA", "sA", "first correction"),
+                          ("runB", "sB", "second correction")):
+    con.execute("insert into step_results values(?,?,'review',3,'completed')", (sid, run))
+    con.execute("insert into step_rounds values(?,?,1,'auto_fix',null,null,?,0,1)",
+                (sid + "r", sid, summary))
+con.commit()
+con.close()
+PY
+
+TWO=$(python3 "$ENGINE" --db "$DB2" --corpus "$CORPUS" --quiet --json report 2>/dev/null) \
+  || fail "two-run report failed"
+printf '%s' "$TWO" | python3 -c '
+import json, sys
+vals = {m["key"]: m for m in json.load(sys.stdin)["tiers"]["git"]["metrics"]}
+if vals["runs_git_resolved"]["value"] != 2:
+    print("both runs should resolve, got %s" % vals["runs_git_resolved"]["value"]); sys.exit(1)
+if "fixes_that_reworked_a_prior_fix" in vals or "fix_rework_rate_followups" in vals:
+    print("a run absorbed the other runs correction and counted it as a follow-up")
+    sys.exit(1)
+if vals["fix_rework_rate"]["value"] != 0.0:
+    print("cross-run rework leaked into the rate: %s" % vals["fix_rework_rate"]["value"])
+    sys.exit(1)
+' || fail "a run adopted an earlier run's fix commits as its own"
+
+# --- deleted files are blamed against the file that was deleted -------------
+#
+# git emits `--- a/<path>` then `+++ /dev/null` for a deletion, so keying hunks
+# off the `+++` side leaves the PREVIOUS file's path in place and blames that
+# unrelated file's lines. A correction that removes a dead file is ordinary, so
+# this has to hold before the git tier can be trusted.
+
+DELREPO=$TMP_ROOT/delrepo
+mkdir -p "$DELREPO"
+git -C "$DELREPO" init -q -b main
+git -C "$DELREPO" config user.email test@example.invalid
+git -C "$DELREPO" config user.name "Test"
+printf 'a1\na2\na3\n' > "$DELREPO/gone.txt"
+printf 'b1\nb2\nb3\n' > "$DELREPO/kept.txt"
+git -C "$DELREPO" add gone.txt kept.txt
+git -C "$DELREPO" commit -qm "work: two files"
+git -C "$DELREPO" rm -q gone.txt
+printf 'b1\nCHANGED\nb3\n' > "$DELREPO/kept.txt"
+git -C "$DELREPO" commit -qam "no-mistakes(review): drop the dead file"
+
+python3 - "$ENGINE" "$DELREPO" "$(git -C "$DELREPO" rev-parse HEAD)" <<'PY' \
+  || fail "deleted-file hunks were attributed to the wrong file"
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("eng", sys.argv[1])
+eng = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(eng)
+git = eng.Git(sys.argv[2])
+by_path = {}
+for h in git.hunks(sys.argv[3]):
+    by_path.setdefault(h["old_path"], 0)
+    by_path[h["old_path"]] += h["old_count"]
+if by_path.get("gone.txt") != 3:
+    print("deleted file's 3 lines not attributed to gone.txt: %r" % by_path)
+    sys.exit(1)
+if by_path.get("kept.txt") != 1:
+    print("modified file should contribute exactly its own 1 deleted line: %r" % by_path)
+    sys.exit(1)
+info = git.deleted_line_sources(sys.argv[3])
+if info["total"] != 4:
+    print("expected 4 blame-resolvable deleted lines, got %r" % info)
+    sys.exit(1)
+PY
+
 # --- every number carries provenance ---------------------------------------
 
 printf '%s' "$OUT" | python3 -c '
@@ -211,6 +310,71 @@ printf '%s' "$SIGNED" | grep -q 'Test Adjudicator' \
   || fail "adjudicator must be named in the metric source"
 printf '%s' "$SIGNED" | grep -q 'Wilson interval' \
   || fail "adjudicated rate must ship its uncertainty interval"
+
+# The sample is allocated equally across strata, so its composition is not the
+# population's. Rates are therefore reported per stratum and a single pooled
+# headline must NOT exist: collapsing the strata would have to weight them by
+# the graded tool's own severity labels, which is the dependence this scale
+# exists to remove.
+printf '%s' "$SIGNED" | python3 -c '
+import json, sys
+keys = [m["key"] for m in json.load(sys.stdin)["tiers"]["materiality"]["metrics"]]
+pooled = [k for k in keys if k in ("material_finding_rate", "minor_finding_rate",
+                                   "false_positive_rate")]
+if pooled:
+    print("pooled rate emitted as a headline: " + ", ".join(pooled)); sys.exit(1)
+if not any(k.startswith("material_finding_rate[severity=") for k in keys):
+    print("no per-stratum rate emitted: " + ", ".join(keys)); sys.exit(1)
+' || fail "adjudicated materiality must report per-stratum rates and no pooled headline"
+
+# The reader has to be told the strata come from the tool under test, or the
+# sampling frame looks independent when it is not.
+printf '%s' "$SIGNED" | grep -q "GRADED TOOL'S OWN severity labels" \
+  || fail "per-stratum rates must disclose that the sampling frame is the graded tool's labels"
+
+# A verdict outside the closed vocabulary would count into n while contributing
+# to no rate, so every published share would silently read low.
+python3 - "$BALLOT" <<'PY'
+import json, sys
+b = json.load(open(sys.argv[1]))
+b["ballots"][0]["verdict"] = "harmfull"
+json.dump(b, open(sys.argv[1], "w"))
+PY
+if run_engine --ballots "$BALLOT" report >/dev/null 2>&1; then
+  fail "engine accepted a verdict outside the harmful|minor|wrong vocabulary"
+fi
+python3 - "$BALLOT" <<'PY'
+import json, sys
+b = json.load(open(sys.argv[1]))
+b["ballots"][0]["verdict"] = "harmful"
+json.dump(b, open(sys.argv[1], "w"))
+PY
+
+# The report prints the seed as the recipe for redrawing the sample. Reporting a
+# ballot under a seed it was not drawn with would print a recipe that does not
+# reproduce it.
+if run_engine --ballots "$BALLOT" --seed some-other-seed report >/dev/null 2>&1; then
+  fail "engine reported a ballot under a seed it was not drawn with"
+fi
+
+# A mistyped ballot path must be loud. Falling through to UNADJUDICATED would
+# assert that no human has voted at an operator who believes they just supplied
+# signed verdicts.
+if run_engine --ballots "$TMP_ROOT/no-such-ballot.json" report >/dev/null 2>&1; then
+  fail "a nonexistent --ballots path must be refused, not reported as unadjudicated"
+fi
+if run_engine --submission "$TMP_ROOT/no-such-submission.json" report >/dev/null 2>&1; then
+  fail "a nonexistent --submission path must be refused"
+fi
+
+# --out and --json are documented together, so the combination must write the
+# file rather than silently printing to stdout and creating nothing.
+JSON_OUT=$TMP_ROOT/grade.json
+run_engine --json --out "$JSON_OUT" report >/dev/null 2>&1 \
+  || fail "report --json --out failed"
+[ -s "$JSON_OUT" ] || fail "--json --out must write the JSON to the file"
+python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$JSON_OUT" \
+  || fail "--json --out must write valid JSON"
 
 # --- corpus admissibility ---------------------------------------------------
 
@@ -328,6 +492,25 @@ for m in json.load(sys.stdin)["tiers"]["bench"]["metrics"]:
     if m["key"] == "blind_detection_rate":
         print(m["value"])')
 [ "$MISSED" = "0.0" ] || fail "wrong-file finding must not count as detection, got $MISSED"
+
+# The scored rule reads the finding's own `file` field, not its prose. A finding
+# that points somewhere else while quoting the expected path in its argument
+# sends a reader to the wrong place, so it is a MISS - but the lenient rate must
+# still record it, because the gap between the two rates is the measurement of
+# how precisely the candidate localised what it found.
+cat > "$SUB" <<'JSON'
+{"score-case": {"findings": [
+  {"file": "bin/elsewhere.sh",
+   "description": "unlike bin/thing.sh, this guard misses a line-wrapped tag"}
+]}}
+JSON
+BOTH=$(run_engine --submission "$SUB" --json report 2>/dev/null | python3 -c '
+import json, sys
+vals = {m["key"]: m["value"] for m in json.load(sys.stdin)["tiers"]["bench"]["metrics"]}
+print("%s %s" % (vals.get("blind_detection_rate"),
+                 vals.get("blind_detection_rate_lenient")))')
+[ "$BOTH" = "0.0 100.0" ] \
+  || fail "prose quoting the path must be a strict MISS and a lenient HIT, got $BOTH"
 
 # --- the wrapper never writes to the run database ---------------------------
 

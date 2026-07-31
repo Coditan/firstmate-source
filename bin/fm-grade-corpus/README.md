@@ -66,6 +66,11 @@ A case that stops reproducing is reported as failed rather than silently carried
 A candidate should not lose a point for describing the defect differently than we did, but pointing at the wrong file is not a detection.
 Keep `must_match_any` broad enough that an independent reviewer who genuinely found the defect will match at least one alternative.
 
+The scored rule matches `must_mention_paths` against the finding's own `file` field and nothing else.
+A finding that names the wrong file does not count however its prose reads, because acting on it sends a reader to the wrong place.
+The report also prints `blind_detection_rate_lenient`, which additionally accepts the path appearing anywhere in the finding's text.
+That figure is never the score; it is printed beside the score so the gap between them is visible, because the distance between the two is exactly how precisely the candidate localised what it found.
+
 `repo` is a directory name rather than a path because these files are shared.
 The engine tries the explicit `repo_path`, then `FM_GRADE_REPO_<NAME>`, then `FM_HOME/projects/<repo>`, then the firstmate checkout and its siblings, and accepts the first clone that actually contains `defect_commit`.
 

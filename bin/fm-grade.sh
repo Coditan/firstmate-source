@@ -47,7 +47,7 @@ USAGE
   fm-grade.sh report   [--out FILE] [--json] [--no-git] [--ballots FILE]
                        [--submission FILE] [--seed S] [--sample-size N] [--quiet]
   fm-grade.sh sample   [--out FILE] [--seed S] [--sample-size N]
-  fm-grade.sh corpus
+  fm-grade.sh corpus   [--verify]
   fm-grade.sh replay   [--tier1-only]
 
 COMMANDS
@@ -63,7 +63,8 @@ COMMANDS
   corpus      List and validate the sealed defect corpus. A case is admissible
               at tier 1 only when its proof that the defect was real is an
               OBSERVED event - an executed reproduction, a failing test, a CI
-              failure, or a revert - never a reviewer's assertion.
+              failure, or a revert - never a reviewer's assertion. Add --verify
+              to re-prove each case by execution instead of on trust.
   replay      Emit the blind task list for a candidate reviewer: the commit to
               inspect and nothing else. It is not told whether a defect is
               present, what kind, where, or how many. Score its answers with
@@ -79,6 +80,11 @@ OPTIONS
   --seed S          Sampling seed, recorded in the report so the draw is
                     reproducible and therefore contestable (default fm-grade-v1).
   --sample-size N   Findings to draw for adjudication (default 40).
+  --verify          (corpus) Re-prove each case by executing its declared
+                    reproduction: the subject is extracted at defect_commit and
+                    must show the defect, then at fixed_commit and must not.
+                    Runs in a throwaway directory under a 60s timeout, and a
+                    case that stops reproducing is reported FAILED, not carried.
   --quiet           Suppress progress on stderr.
 
 ENVIRONMENT
