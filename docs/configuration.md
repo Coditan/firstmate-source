@@ -22,7 +22,8 @@ The patterns stay narrow so the tracked `.claude/settings.json` and the tracked 
 Captain-private material is ignored by directory- and prefix-wide rules rather than by naming files one at a time, because an enumerating list fails open for every private file added after it was last edited.
 The list had drifted exactly that way: `config/telegram.env` and `config/fm-tg-recv.sh` were documented as local and gitignored while no rule covered them, so a plain `git add -A` in a home with the direct Telegram receiver enabled would have staged a working bot token into this shared template.
 The rule is `config/*` rather than `config/` so a config file that genuinely must be shared can still be re-included with an explicit negation; nothing under `config/` is tracked today, and tracking one has to be a deliberate edit.
-`tests/fm-private-material-ignore.test.sh` proves in a fresh clone that a private file invented after those rules were written is still ignored by the tracked `.gitignore`, that the negation escape hatch works, and that no captain-private material is tracked.
+`tests/fm-private-material-ignore.test.sh` proves in a fresh clone that a private file invented after those rules were written is still ignored by the tracked `.gitignore`, that the negation escape hatch works, that no captain-private material is tracked, and - the opposite direction, which a rule broad enough to swallow the repository would otherwise pass - that no tracked file is hidden from `git add` by the shared ignore.
+Editing `.gitignore` therefore selects both ignore suites under `bin/fm-test-run.sh --changed`.
 
 `bin/fm-spawn.sh` owns the base task-metadata fields it emits, while the runtime-backend section below owns backend-specific fields and selector interpretation.
 The producing PR and X helpers own the fields they append, `bin/fm-classify-lib.sh` owns status-event vocabulary, and `bin/fm-crew-state.sh` owns current-state reconciliation.

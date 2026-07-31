@@ -708,6 +708,10 @@ families_for_changed_path() {
     docs/configuration.md|docs/supervision-protocols/*)
       printf '%s\n' pure-contract-unit
       ;;
+    .gitignore)
+      printf '%s\n' "__script__:fm-runtime-ignore.test.sh"
+      printf '%s\n' "__script__:fm-private-material-ignore.test.sh"
+      ;;
     tests/lib.sh|tests/*-helpers.sh)
       families_for_test_reference "$(basename "$path")" \
         || printf '%s\n' "__unmapped__:$path"
@@ -719,7 +723,7 @@ families_for_changed_path() {
     tests/*)
       printf '%s\n' "__unmapped__:$path"
       ;;
-    README.md|LICENSE|assets/*|docs/*|.gitignore)
+    README.md|LICENSE|assets/*|docs/*)
       ;;
     *)
       families_for_test_reference "$path" \

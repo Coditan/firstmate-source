@@ -36,6 +36,25 @@ graphify-out/$UNFORESEEN.json
 PATHS
 }
 
+# The shared tracked surface AGENTS.md section 1 names. Every other assertion in
+# this file proves the private rules are broad ENOUGH; without this list a
+# .gitignore of just "*" would pass them all, so this is the direction that
+# catches a widening which swallows the repository itself.
+shared_tracked_surface() {
+  cat <<'PATHS'
+AGENTS.md
+README.md
+CONTRIBUTING.md
+.tasks.toml
+bin/
+roles/
+.agents/skills/
+skills/
+.github/workflows/
+tests/
+PATHS
+}
+
 # The shared rule has to be the one doing the ignoring: check-ignore succeeds for
 # a clone-private .git/info/exclude or a developer's global core.excludesFile
 # too, and those are exactly the sources a fresh vessel does not inherit. This
@@ -114,8 +133,30 @@ test_no_captain_private_material_is_tracked() {
   pass "no captain-private material has ever been committed"
 }
 
+test_the_shared_tracked_surface_stays_visible_to_git_add() {
+  local clone path hidden
+  clone="$TMP_ROOT/breadth-clone"
+  seed_fresh_clone "$TMP_ROOT/breadth-seed" "$clone"
+
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    [ -n "$(git -C "$ROOT" ls-files -- "$path")" ] \
+      || fail "fixture is broken: the shared surface $path is not tracked in $ROOT"
+    ! git -C "$clone" check-ignore -q --no-index -- "$path" \
+      || fail "the shared ignore is too broad and hides the tracked shared surface $path from git add"
+  done < <(shared_tracked_surface)
+
+  hidden=$(git -C "$ROOT" ls-files \
+    | git -C "$clone" check-ignore --stdin --no-index || true) \
+    || fail "could not test the tracked file list against the shared ignore"
+  [ -z "$hidden" ] \
+    || fail "the shared ignore hides tracked files from git add: $hidden"
+  pass "no tracked file is swallowed by the captain-private ignore rules"
+}
+
 test_unforeseen_private_files_are_ignored_by_default
 test_a_config_file_can_still_be_deliberately_tracked
 test_no_captain_private_material_is_tracked
+test_the_shared_tracked_surface_stays_visible_to_git_add
 
 echo "# all fm-private-material-ignore tests passed"
