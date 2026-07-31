@@ -134,7 +134,7 @@ test_no_captain_private_material_is_tracked() {
 }
 
 test_the_shared_tracked_surface_stays_visible_to_git_add() {
-  local clone path hidden
+  local clone path tracked hidden status
   clone="$TMP_ROOT/breadth-clone"
   seed_fresh_clone "$TMP_ROOT/breadth-seed" "$clone"
 
@@ -146,9 +146,17 @@ test_the_shared_tracked_surface_stays_visible_to_git_add() {
       || fail "the shared ignore is too broad and hides the tracked shared surface $path from git add"
   done < <(shared_tracked_surface)
 
-  hidden=$(git -C "$ROOT" ls-files \
-    | git -C "$clone" check-ignore --stdin --no-index || true) \
-    || fail "could not test the tracked file list against the shared ignore"
+  tracked=$(git -C "$ROOT" ls-files) \
+    || fail "could not query the tracked file list in $ROOT"
+  [ -n "$tracked" ] \
+    || fail "fixture is broken: $ROOT reports no tracked files, so this check would prove nothing"
+
+  status=0
+  hidden=$(printf '%s\n' "$tracked" | git -C "$clone" check-ignore --stdin --no-index) || status=$?
+  case "$status" in
+    0|1) ;;
+    *) fail "could not test the tracked file list against the shared ignore: git check-ignore exited $status" ;;
+  esac
   [ -z "$hidden" ] \
     || fail "the shared ignore hides tracked files from git add: $hidden"
   pass "no tracked file is swallowed by the captain-private ignore rules"
