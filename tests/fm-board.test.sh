@@ -61,6 +61,9 @@ css image-set|<style>.x{background-image:image-set("https://example.com/a.png" 1
 css import with a quoted target|<style>@import "https://cdn.jsdelivr.net/x.css";</style>
 css import behind a comment|<style>/* c */@import "https://cdn.jsdelivr.net/x.css";</style>
 css url in a style attribute|<div style="background:url(https://example.com/a.png)">x</div>
+css url in a single-quoted style attribute|<div style='background:url(https://example.com/a.png)'>x</div>
+css url in an unquoted style attribute|<div style=background:url(https://example.com/a.png)>x</div>
+css url in a style attribute with no space before its name|<div class="a"style="background:url(https://example.com/a.png)">x</div>
 EOF
   pass "the guard refuses every documented remote-reference form and writes nothing"
 }
@@ -134,6 +137,7 @@ test_guard_allows_prose_that_names_a_css_construct() {
 @import opening a heading|<h2>@import "https://example.com/x.css"</h2>
 @import and url() named in a comment|<!-- Ein Kommentar, der @import\n     und url("https://example.com/x.css") nur benennt. -->\n<p>Inhalt</p>
 url() named in prose|<p>Eine externe url("https://example.com/a.png") gehört nicht auf ein Brett.</p>
+url() parked in a data attribute, which no browser fetches|<div data-style="background:url(https://example.com/a.png)">x</div>
 EOF
   pass "prose that names a CSS construct is not mistaken for the construct"
 }

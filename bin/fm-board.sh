@@ -29,16 +29,26 @@
 # full PR URLs. What is refused is anything the browser FETCHES on load - a
 # stylesheet, script, font, image, iframe, or a form that posts outward.
 #
-# The CSS rules are matched where a browser RUNS css - inside a <style> element
-# and inside a style attribute - and against nothing else in the document. A
-# board that names @import or url() in a paragraph, a list item, or a comment is
-# explaining the rule, not breaking it, and must stay buildable.
+# WHAT THE GUARD COVERS, exactly:
+#   - static remote references in HTML subresource attributes (src, srcset,
+#     poster, action, formaction, background, manifest, xlink:href, object data),
+#     including a tag whose attributes are split across lines,
+#   - a remote href on a subresource element: <link>, <base>, SVG <use>/<image>,
+#   - CSS constructs inside a <style> element and inside a style attribute:
+#     @import, and a remote url() or image-set(),
+#   - an absolute remote URL inside <script>.
 #
-# Known limits of the guard, stated rather than papered over: it is a textual
-# scan, so a remote URL assembled at runtime from fragments inside a script is
-# not detected. It refuses the whole documented class of static remote
-# references, which is the regression that actually happened; it is not a
-# sandbox. tests/fm-board.test.sh pins the refusals.
+# WHAT IT DOES NOT COVER, stated rather than papered over:
+#   - a URL assembled at runtime from fragments inside a script; this is a
+#     textual scan and cannot follow code,
+#   - the word @import outside a CSS region, which is DELIBERATELY read as prose:
+#     a board explaining this rule is not a board breaking it,
+#   - a style attribute written in a form this extractor does not recognise; it
+#     reads a double-quoted, single-quoted, or unquoted value, and is not a
+#     general HTML tokenizer.
+#
+# It is a guard against the regression that actually happened, not a sandbox.
+# tests/fm-board.test.sh pins both directions.
 #
 # Usage:
 #   fm-board.sh --title <title> --body <file|-> --out <path> [options]
@@ -157,16 +167,24 @@ css_regions() {  # reads the folded stream on stdin
       flush()
     }
 
-    function style_attrs(s, num,   low, p, m, q, r) {
+    function style_attrs(s, num,   low, p, m, q, ch, r, val) {
       low = tolower(s); p = 1
       while (p <= length(s)) {
-        m = match(substr(low, p), /[[:space:]]style[[:space:]]*=[[:space:]]*["\047]/)
+        m = match(substr(low, p), /[^-_[:alnum:]]style[[:space:]]*=[[:space:]]*/)
         if (m == 0) { return }
-        q = p + m + RLENGTH - 2
-        r = index(substr(s, q + 1), substr(s, q, 1))
-        if (r == 0) { return }
-        print num ":" substr(s, q + 1, r - 1)
-        p = q + r + 1
+        q = p + m + RLENGTH - 1
+        ch = substr(s, q, 1)
+        if (ch == "\"" || ch == "\047") {
+          r = index(substr(s, q + 1), ch)
+          if (r == 0) { return }
+          val = substr(s, q + 1, r - 1)
+          p = q + r
+        } else {
+          r = match(substr(s, q), /[[:space:]>]/)
+          if (r == 0) { val = substr(s, q); p = length(s) + 1 }
+          else { val = substr(s, q, r - 1); p = q + r - 1 }
+        }
+        if (val != "") { print num ":" val }
       }
     }
 

@@ -158,13 +158,19 @@ Runs the same guard over existing files.
 
 ### What the guard does and does not cover
 
-It refuses the documented class of **static** remote references: subresource attributes including `<object data>`, remote `href` on `<link>`, `<base>`, and SVG `<use>`/`<image>`, `@import` rules, remote `url()` and `image-set()` in CSS, and absolute remote URLs inside `<script>`.
-Attribute formatting does not change the verdict: a tag whose attributes are wrapped across lines is refused exactly like the one-line form.
+It covers four things, and only those four:
 
-The CSS rules are matched only where a browser runs CSS: inside a `<style>` element and inside a `style` attribute.
-Everywhere else in the document, `@import` and `url()` are words rather than constructs, so a board that explains this rule in a paragraph, a list item, a heading, or a comment is never refused for naming it.
+- **static remote references in HTML subresource attributes** - `src`, `srcset`, `poster`, `action`, `formaction`, `background`, `manifest`, `xlink:href`, and `<object data>`. Attribute formatting does not change the verdict: a tag whose attributes are wrapped across lines is refused exactly like the one-line form.
+- **a remote `href` on a subresource element** - `<link>`, `<base>`, and SVG `<use>`/`<image>`. Never on `<a>`.
+- **CSS constructs inside a `<style>` element and inside a `style` attribute** - `@import`, and a remote `url()` or `image-set()`.
+- **an absolute remote URL inside `<script>`**.
 
-It is a textual scan, so a URL assembled at runtime from fragments inside a script is not detected.
+Three things it does not cover, named so nobody has to rediscover them:
+
+- A URL assembled at runtime from fragments inside a script. This is a textual scan and cannot follow code.
+- The word `@import` outside a CSS region, which is deliberately read as prose. Everywhere but a `<style>` element and a `style` attribute, `@import` and `url()` are words rather than constructs, so a board explaining this rule in a paragraph, a list item, a heading, or a comment is never refused for naming it.
+- A `style` attribute written in a form the extractor does not recognise. It reads a double-quoted, single-quoted, or unquoted value, and is deliberately not a general HTML tokenizer.
+
 It is a guard against the regression that actually happened, not a sandbox.
 
 ## Maintaining this file
