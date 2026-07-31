@@ -20,33 +20,37 @@ AGENTS="$ROOT/AGENTS.md"
 BRIEF="$ROOT/bin/fm-brief.sh"
 
 test_new_skill_metadata_and_triggers() {
-  local skill name count
-  for pair in "diagnostic-reasoning:$DIAG" "project-management:$PROJECT" "secrets-handling:$SECRETS" "ask-user-authority:$ASKUSER"; do
-    name=${pair%%:*}
-    skill=${pair#*:}
+  local skill name skill_trigger agents_trigger count i
+  # Four fields per owner: skill name, SKILL.md path, its description load
+  # trigger, and the AGENTS.md section 13 trigger line.
+  local -a owners=(
+    'diagnostic-reasoning' "$DIAG"
+    'Use before scoping a reported bug and before acting on a diagnostic report.'
+    '`diagnostic-reasoning` - load before scoping a reported bug and before acting on a diagnostic report.'
+    'project-management' "$PROJECT"
+    'Use before adding, creating, removing, or initializing a project.'
+    '`project-management` - load before adding, creating, removing, or initializing a project.'
+    'secrets-handling' "$SECRETS"
+    'Use before reading, sourcing, injecting, inspecting, or transporting secrets or credentials, and whenever one is exposed in agent or tool output.'
+    '`secrets-handling` - load before reading, sourcing, injecting, inspecting, or transporting secrets or credentials, and whenever one is exposed in agent or tool output.'
+    'ask-user-authority' "$ASKUSER"
+    'Use before deciding any ask-user finding, regardless of the project'"'"'s yolo posture, to distinguish corrections within accepted intent from product or engineering contract expansion that requires the captain.'
+    '`ask-user-authority` - load before deciding any ask-user finding, regardless of the project'"'"'s `yolo` posture.'
+  )
+  for ((i = 0; i < ${#owners[@]}; i += 4)); do
+    name=${owners[i]}
+    skill=${owners[i + 1]}
+    skill_trigger=${owners[i + 2]}
+    agents_trigger=${owners[i + 3]}
     assert_present "$skill" "$name skill is missing"
     assert_grep "name: $name" "$skill" "$name skill metadata has the wrong name"
     assert_grep "user-invocable: false" "$skill" "$name skill must not be user-invocable"
     assert_grep "  internal: true" "$skill" "$name skill must be internal"
-    count=$(grep -Fc -- "- \`$name\` -" "$ROOT/AGENTS.md")
+    count=$(grep -Fc -- "- \`$name\` -" "$AGENTS")
     [ "$count" -eq 1 ] || fail "$name must have exactly one AGENTS.md trigger entry, found $count"
+    assert_grep "$skill_trigger" "$skill" "$name skill metadata lost its precise load trigger"
+    assert_grep "$agents_trigger" "$AGENTS" "AGENTS.md lost the $name trigger"
   done
-  assert_grep 'Use before scoping a reported bug and before acting on a diagnostic report.' "$DIAG" \
-    "diagnostic skill metadata lost its precise load trigger"
-  assert_grep '`diagnostic-reasoning` - load before scoping a reported bug and before acting on a diagnostic report.' "$ROOT/AGENTS.md" \
-    "AGENTS.md lost the diagnostic-reasoning trigger"
-  assert_grep 'Use before adding, creating, removing, or initializing a project.' "$PROJECT" \
-    "project-management skill metadata lost its precise load trigger"
-  assert_grep '`project-management` - load before adding, creating, removing, or initializing a project.' "$ROOT/AGENTS.md" \
-    "AGENTS.md lost the project-management trigger"
-  assert_grep 'Use before reading, sourcing, injecting, inspecting, or transporting secrets or credentials, and whenever one is exposed in agent or tool output.' "$SECRETS" \
-    "secrets-handling skill metadata lost its precise load trigger"
-  assert_grep '`secrets-handling` - load before reading, sourcing, injecting, inspecting, or transporting secrets or credentials, and whenever one is exposed in agent or tool output.' "$ROOT/AGENTS.md" \
-    "AGENTS.md lost the secrets-handling trigger"
-  assert_grep 'Use before deciding any ask-user finding, regardless of the project'"'"'s yolo posture, to distinguish corrections within accepted intent from product or engineering contract expansion that requires the captain.' "$ASKUSER" \
-    "ask-user-authority skill metadata lost its precise load trigger"
-  assert_grep '`ask-user-authority` - load before deciding any ask-user finding, regardless of the project'"'"'s `yolo` posture.' "$ROOT/AGENTS.md" \
-    "AGENTS.md lost the ask-user-authority trigger"
   pass "new internal skills have one precise AGENTS.md trigger each"
 }
 
@@ -102,6 +106,51 @@ test_secrets_owner_covers_exposure_response() {
   assert_grep 'Escalate immediately when the exposure reached or may have reached durable storage, a shared or remote channel, source control, an untrusted audience, or an unknown boundary, or when suspicious use means containment is uncertain.' "$SECRETS" \
     "secrets-handling owner lost the durable/shared/remote/untrusted/uncertain escalation trigger"
   pass "secrets-handling owns the dangerous-command doctrine, contained stow-and-clear scope, and escalation triggers"
+}
+
+test_ask_user_owner_covers_authority_procedure() {
+  local procedure escalation steps elements phrase
+  assert_grep "single owner of the decision procedure for ask-user findings" "$ASKUSER" \
+    "ask-user-authority skill does not declare ownership"
+  assert_grep '## Decide who has authority' "$ASKUSER" \
+    "ask-user-authority lost the authority decision section"
+  assert_grep '## Captain-facing escalation' "$ASKUSER" \
+    "ask-user-authority lost the captain-facing escalation section"
+  procedure=$(awk '
+    /^## Decide who has authority$/ { found = 1; next }
+    found && /^## / { exit }
+    found { print }
+  ' "$ASKUSER")
+  escalation=$(awk '
+    /^## Captain-facing escalation$/ { found = 1; next }
+    found && /^## / { exit }
+    found { print }
+  ' "$ASKUSER")
+  steps=$(printf '%s\n' "$procedure" | grep -Ec '^[0-9]+\. ')
+  [ "$steps" -eq 8 ] || fail "ask-user-authority must keep all 8 numbered authority steps, found $steps"
+  elements=$(printf '%s\n' "$escalation" | grep -Ec '^[0-9]+\. ')
+  [ "$elements" -eq 5 ] || fail "ask-user-authority must keep all 5 numbered escalation elements, found $elements"
+  for phrase in \
+    '`yolo`' \
+    'accepted contract' \
+    'materially expand the contract' \
+    'never as authority to broaden the task' \
+    'causal theme' \
+    'Destructive, irreversible' \
+    'routes the decision to firstmate'; do
+    assert_contains "$procedure" "$phrase" "ask-user-authority procedure is missing '$phrase'"
+  done
+  for phrase in \
+    'evidence-first' \
+    'accepted task criterion' \
+    'contract expansion' \
+    'smallest alternative' \
+    'consequences of accepting and declining' \
+    'recommendation' \
+    'reviewer labels'; do
+    assert_contains "$escalation" "$phrase" "ask-user-authority escalation is missing '$phrase'"
+  done
+  pass "ask-user-authority owns the authority procedure and the evidence-first escalation contract"
 }
 
 test_generic_effort_fallback_respects_precedence() {
@@ -252,6 +301,7 @@ test_new_skill_metadata_and_triggers
 test_diagnostic_owner_covers_causal_procedure
 test_project_management_owner_covers_guarded_operations
 test_secrets_owner_covers_exposure_response
+test_ask_user_owner_covers_authority_procedure
 test_generic_effort_fallback_respects_precedence
 test_shared_authoring_requirements_are_owned
 test_secondmate_registry_contract_stays_concise
