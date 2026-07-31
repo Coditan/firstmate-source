@@ -297,7 +297,87 @@ test_compressed_agents_retains_authority_and_supervision_safety() {
   pass "compressed AGENTS.md retains authority, supervision, AFK, and X safety"
 }
 
+# fm_skill_description <skill-dir>: print the frontmatter description as one
+# line, flattening the folded-block forms, so an empty or absent description
+# prints nothing.
+fm_skill_description() {
+  awk '
+    /^description:/ {
+      sub(/^description:[[:space:]]*/, "")
+      if ($0 != ">-" && $0 != ">" && $0 != "|" && $0 != "|-") printf "%s ", $0
+      inblock = 1
+      next
+    }
+    inblock && /^[[:space:]]+[^[:space:]]/ { sub(/^[[:space:]]+/, ""); printf "%s ", $0; next }
+    inblock { exit }
+  ' "$1/SKILL.md"
+}
+
+# Every skill under .agents/skills/ must carry a load trigger on each surface
+# that can reach it, and every section 13 entry must name a real skill. This
+# enumerates the directory on purpose: a hand-maintained list of guarded skills
+# has the same silent-staleness failure mode as the missing trigger it is meant
+# to catch, so it would miss every skill added after it was written.
+#
+# Two surfaces are checked because a skill can arrive by two routes, and a
+# deployment may only have one of them. AGENTS.md section 13 is the route for a
+# firstmate reading its own instruction surface. The SKILL.md description is the
+# route for the harness skill listing, and it is the ONLY route where no
+# instruction-surface trigger line is possible, so it is required of every skill
+# rather than only the harness-listed ones.
+test_every_skill_declares_a_load_trigger() {
+  local dir name invocable count section desc
+  local missing="" toneless="" dangling=""
+  section=$(awk '/^## 13\. /{f=1} f && /^## 14\. /{exit} f' "$AGENTS")
+  [ -n "$section" ] || fail "AGENTS.md section 13 is missing or unparseable"
+  for dir in "$ROOT"/.agents/skills/*/; do
+    name=$(basename "$dir")
+    [ -f "$dir/SKILL.md" ] || fail "skill $name has no SKILL.md"
+    grep -qx "name: $name" "$dir/SKILL.md" \
+      || fail "skill $name declares a metadata name that is not its directory"
+    invocable=$(grep -m1 '^user-invocable:' "$dir/SKILL.md" | awk '{print $2}')
+    case "$invocable" in
+      false)
+        count=$(printf '%s\n' "$section" | grep -Fc -- "- \`$name\` - ")
+        [ "$count" -eq 1 ] || missing="$missing $name(section-13-entries=$count)"
+        ;;
+      true) ;;
+      *)
+        fail "skill $name does not declare user-invocable true or false"
+        ;;
+    esac
+    # An empty or absent description leaves the skill listed by bare name, with
+    # no condition an agent could match against. That degradation is invisible:
+    # the file is still present and still valid.
+    desc=$(fm_skill_description "$dir")
+    if [ -z "$(printf '%s' "$desc" | tr -d '[:space:]')" ]; then
+      missing="$missing $name(no-description-trigger)"
+    elif ! printf '%s' "$desc" | grep -Eqi '(^|[^[:alnum:]])(when|whenever|before|after)([^[:alnum:]]|$)'; then
+      # A floor, not a wording contract: it proves the description states some
+      # condition rather than being a bare summary of what the skill contains.
+      toneless="$toneless $name"
+    fi
+  done
+  if [ -n "$missing" ]; then
+    fail "skills with no load trigger:$missing"
+  fi
+  if [ -n "$toneless" ]; then
+    fail "skill descriptions state no load condition (no when/whenever/before/after):$toneless"
+  fi
+  while read -r name; do
+    [ -n "$name" ] || continue
+    [ -d "$ROOT/.agents/skills/$name" ] || dangling="$dangling $name"
+  done <<EOF
+$(printf '%s\n' "$section" | sed -n 's/^- `\([a-z0-9-]*\)` - .*/\1/p')
+EOF
+  if [ -n "$dangling" ]; then
+    fail "AGENTS.md section 13 triggers a skill that does not exist:$dangling"
+  fi
+  pass "every skill declares a load trigger and every section 13 trigger names a real skill"
+}
+
 test_new_skill_metadata_and_triggers
+test_every_skill_declares_a_load_trigger
 test_diagnostic_owner_covers_causal_procedure
 test_project_management_owner_covers_guarded_operations
 test_secrets_owner_covers_exposure_response
