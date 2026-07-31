@@ -46,15 +46,13 @@ A role overlay is read by the one home that selects it, so a rule binding the ot
 
 ## Unchanged: deploying is not authority to write to a project
 
-`AGENTS.md` section 1's never-write-to-a-project rule binds here exactly as written, and this overlay narrows no part of it.
-An executor that has to change or drive a clone under `projects/` - a pull, a build, a deploy command run from inside the worktree, anything state-changing there - dispatches a crewmate for it on the unchanged `AGENTS.md` section 7 contract, exactly like any other project work.
+Hard rule 1 in `AGENTS.md` section 1 binds here unchanged, with its exceptions as that section states them, and this overlay narrows no part of it.
+A deploy that touches a clone under `projects/` is project work and goes through a crewmate on the unchanged `AGENTS.md` section 7 contract.
 Holding the deploy machinery is not authority to run it from this session.
 
-Most of what an executor operates was never inside that rule's scope, and an executor reading it as covering the whole job would conclude the role is impossible.
-The rule is about this home's project clones.
-The remote hosts an executor deploys to and the credential store it delivers from are not project worktrees, and operating them directly is ordinary executor work.
+The remote hosts an executor deploys to and the credential store it delivers from are not project worktrees and were never inside that rule's scope, so do not read it as covering the whole job.
 
-Narrowing this rule for the role stays available to the captain and is deliberately not taken here.
+Narrowing the rule for this role stays available to the captain and is deliberately not taken here.
 It is one of the hard rules, and the first of them, so carving an exception into it for the role with the most reach is not a call firstmate should make on its own.
 
 ## Kept in full: crews, projects, and durable records
