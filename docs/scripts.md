@@ -25,6 +25,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-backlog-handoff.sh`  | Validate and delegate queued backlog-item moves into a secondmate home               |
 | `fm-backlog-lint.sh`     | Detect-only report of mechanically stale `blocked-by:` edges in the durable backlog  |
 | `fm-decision-hold.sh`    | Create, verify, complete, and resolve durable captain-held decisions                 |
+| `fm-decision-inventory.sh` | Group the open captain decisions by originating investigation and keep the judge's record where a judge ruled, for `/decisionboard` (the fold is assumed, not verified) |
 | `fm-brief.sh`            | Scaffold ship, scout, secondmate-charter, and Herdr-lab briefs                       |
 | `fm-model-panel.sh`      | Run a model panel: two independent analysts on different models, then a judge that re-verifies both |
 | `fm-herdr-lab.sh`        | Provision and guardedly operate an isolated, never-default Herdr lab session         |
@@ -48,6 +49,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-lavish-pretool-check.sh` | Stable PreToolUse transport for the lavish-guard command policy (docs/lavish-access.md) |
 | `fm-lavish-command-policy.mjs` | Semantic owner of the bare-`lavish-axi` PreToolUse policy (docs/lavish-access.md) |
 | `fm-lavish.sh`           | Open review boards on this vessel's own tailnet address and port (docs/lavish-access.md) |
+| `fm-board.sh`            | Build a review board on the shared standard layout and refuse one that reaches the network (docs/board-layout.md) |
 | `fm-service-port.sh`     | Resolve one vessel-local service's reachable address and a port it actually bound     |
 | `fm-service-port-probe.mjs` | Bind, DNS, and readiness oracle for the service-port allocator                    |
 | `fm-supervision-instructions.sh` | Render the session-start primary-harness supervision block or the one-line repair instruction |
