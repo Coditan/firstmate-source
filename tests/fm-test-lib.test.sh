@@ -32,6 +32,35 @@ esac
 PROBE
 chmod +x "$PROBE"
 
+# fm_ignore_probe_isolate deletes a repository's private .git/info/exclude and
+# rewrites its git config, so its refusals are the only thing standing between a
+# mis-aimed call and a working home losing protection it can never get back.
+# fail() exits, so the refusals have to be exercised in a child process.
+ISOLATE_PROBE="$TMP_ROOT/isolate-probe.sh"
+cat > "$ISOLATE_PROBE" <<'PROBE'
+#!/usr/bin/env bash
+set -u
+. "$1"
+fm_ignore_probe_isolate "$2"
+printf 'isolate-mutated-the-target\n'
+PROBE
+chmod +x "$ISOLATE_PROBE"
+
+# Every ignore source a mis-aimed call would destroy, as one comparable string.
+# A worktree keeps info/exclude in the common git dir, so both are recorded.
+ignore_source_fingerprint() {
+  local repo=$1 dir
+  for dir in "$(git -C "$repo" rev-parse --absolute-git-dir)" \
+             "$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)"; do
+    if [ -f "$dir/info/exclude" ]; then
+      printf '%s: %s\n' "$dir/info/exclude" "$(cksum < "$dir/info/exclude")"
+    else
+      printf '%s: absent\n' "$dir/info/exclude"
+    fi
+  done
+  git -C "$repo" config --local --list 2>/dev/null || true
+}
+
 wait_for_path() {
   local file=$1 pid=$2 i=0
   while [ "$i" -lt 50 ] && [ ! -s "$file" ]; do
@@ -95,7 +124,44 @@ test_output_var_named_root_is_assigned() {
   pass "fm_test_tmproot assigns a caller variable named 'root' without collision"
 }
 
+test_ignore_probe_isolate_refuses_the_live_checkout() {
+  local before after out rc=0
+  before=$(ignore_source_fingerprint "$ROOT")
+  out=$(bash "$ISOLATE_PROBE" "$ROOT/tests/lib.sh" "$ROOT" 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "fm_ignore_probe_isolate accepted the live checkout instead of refusing it"
+  assert_contains "$out" "refusing to isolate the live checkout" \
+    "the live-checkout refusal does not say which repository it protected"
+  after=$(ignore_source_fingerprint "$ROOT")
+  [ "$before" = "$after" ] \
+    || fail "fm_ignore_probe_isolate changed the live checkout's ignore sources before refusing"$'\n'"--- before ---"$'\n'"$before"$'\n'"--- after ---"$'\n'"$after"
+  pass "fm_ignore_probe_isolate refuses the live checkout without touching it"
+}
+
+test_ignore_probe_isolate_refuses_a_repository_it_did_not_create() {
+  local scratch before after out rc=0
+  scratch=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-lib-unowned.XXXXXX") \
+    || fail "could not create the unowned probe repository"
+  git -C "$scratch" init -q || { rm -rf "$scratch"; fail "could not init $scratch"; }
+  printf '/config/\n' > "$scratch/.git/info/exclude" \
+    || { rm -rf "$scratch"; fail "could not seed the private exclude in $scratch"; }
+  before=$(ignore_source_fingerprint "$scratch")
+
+  out=$(bash "$ISOLATE_PROBE" "$ROOT/tests/lib.sh" "$scratch" 2>&1) || rc=$?
+  after=$(ignore_source_fingerprint "$scratch")
+  rm -rf "$scratch"
+  [ "$rc" -ne 0 ] \
+    || fail "fm_ignore_probe_isolate accepted a repository no test process created"
+  assert_contains "$out" "is not a throwaway probe this test process created" \
+    "the unowned-repository refusal does not say what it expected"
+  [ "$before" = "$after" ] \
+    || fail "fm_ignore_probe_isolate changed an unowned repository's ignore sources before refusing"$'\n'"--- before ---"$'\n'"$before"$'\n'"--- after ---"$'\n'"$after"
+  pass "fm_ignore_probe_isolate refuses a repository it did not create as a throwaway"
+}
+
 test_normal_exit_cleans_registered_root
 test_failed_exit_cleans_registered_root
 test_term_runs_custom_exit_and_cleans_registered_root
 test_output_var_named_root_is_assigned
+test_ignore_probe_isolate_refuses_the_live_checkout
+test_ignore_probe_isolate_refuses_a_repository_it_did_not_create

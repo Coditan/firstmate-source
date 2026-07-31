@@ -719,6 +719,7 @@ families_for_changed_path() {
       printf '%s\n' "__script_required__:fm-model-panel.test.sh"
       printf '%s\n' "__script_required__:fm-role-config.test.sh"
       printf '%s\n' "__script_required__:fm-secondmate-sync.test.sh"
+      printf '%s\n' "__script_required__:fm-test-lib.test.sh"
       ;;
     tests/lib.sh|tests/*-helpers.sh)
       families_for_test_reference "$(basename "$path")" \
