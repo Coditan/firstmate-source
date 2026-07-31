@@ -834,11 +834,14 @@ test_seed_marker_does_not_mask_real_dirt() {
 }
 
 # --- T15: the shipped firstmate repo gitignores the seed marker -----------------
-# Pins the actual fix so it cannot silently regress: without this .gitignore entry
-# every seeded home would read dirty again the moment it lands on this repo's HEAD.
+# Pins the actual fix so it cannot silently regress: with no shared ignore rule for
+# the seed marker every seeded home would read dirty again the moment it lands on
+# this repo's HEAD, which is how seeded homes once reported STUCK forever. The
+# requirement is that the marker is ignored, not that .gitignore spells it on a
+# line of its own, so this asks git rather than grepping for the literal.
 test_repo_gitignores_seed_marker() {
-  grep -qxF '.fm-secondmate-home' "$ROOT/.gitignore" \
-    || fail "the firstmate repo .gitignore must ignore the seed marker (.fm-secondmate-home)"
+  assert_gitignore_ignores '.fm-secondmate-home' \
+    "the firstmate repo .gitignore must ignore the seed marker (.fm-secondmate-home)"
   pass "T15 the firstmate repo gitignores the secondmate seed marker"
 }
 

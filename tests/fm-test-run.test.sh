@@ -185,6 +185,55 @@ test_changed_dependency_selection_and_unmapped_failure() {
   pass "changed selection covers dependents and fails closed for unmapped source"
 }
 
+# The .gitignore arm of the changed-file map is an enumeration, and an ignore
+# enumeration that fell out of date is the whole reason that arm exists: the
+# first validation run of the wholesale-config change went red because two
+# suites asserted against .gitignore without being selected by it. Derive the
+# dependents from the suite itself rather than restating a list here, in both
+# forms a suite can take that dependency - a call to one of the tests/lib.sh
+# ignore helpers, and a raw read of the tracked ignore file, which is the exact
+# form (grep -qxF '<literal>' "$ROOT/.gitignore") that went red.
+GITIGNORE_DEPENDENT_RE='(assert_gitignore_ignores|fm_assert_ignored_by_tracked_gitignore|fm_fresh_ignore_clone|fm_gitignore_match|fm_tracked_gitignore_probe|fm_ignore_probe_isolate|[$][{]?ROOT[}]?["]?/[.]gitignore)'
+
+test_gitignore_change_selects_every_dependent_suite() {
+  local tmp repo listed script name dependents
+  local -a candidates=()
+  # This suite spells the patterns out above, so scanning it would always match;
+  # excluding it by name keeps the pattern free to match anywhere on a line.
+  for script in "$ROOT"/tests/*.test.sh; do
+    if [ "$(basename "$script")" = "fm-test-run.test.sh" ]; then
+      continue
+    fi
+    candidates+=("$script")
+  done
+  dependents=$(grep -lE "$GITIGNORE_DEPENDENT_RE" -- "${candidates[@]}") \
+    || fail "no suite asserts against the tracked .gitignore: have the tests/lib.sh ignore helpers been renamed?"
+
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-gitignore.XXXXXX")
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+  for script in "$ROOT"/tests/*.test.sh; do
+    name=$(basename "$script")
+    printf '#!/usr/bin/env bash\n' >"$repo/tests/$name"
+    chmod +x "$repo/tests/$name"
+  done
+  : >"$repo/.gitignore"
+  git -C "$repo" add -A
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm gitignore-baseline
+
+  printf '\n' >>"$repo/.gitignore"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD) \
+    || fail "changed selection failed for a .gitignore edit"
+  while IFS= read -r script; do
+    [ -n "$script" ] || continue
+    name=$(basename "$script")
+    assert_contains "$listed" "tests/$name" \
+      "editing .gitignore must select $name, which asserts against the tracked .gitignore: add it to the .gitignore arm of families_for_changed_path"
+  done <<<"$dependents"
+  rm -rf "$tmp"
+  pass "editing .gitignore selects every suite that asserts against it"
+}
+
 test_empty_selection_emits_summary() {
   local tmp repo out json
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-empty.XXXXXX")
@@ -653,6 +702,7 @@ test_family_selection
 test_single_script_selection
 test_changed_file_selection_is_conservative
 test_changed_dependency_selection_and_unmapped_failure
+test_gitignore_change_selects_every_dependent_suite
 test_empty_selection_emits_summary
 test_timing_markers_and_json
 test_aggregate_exit_behavior

@@ -33,45 +33,22 @@ tracked_claude_paths() {
 PATHS
 }
 
-# The shared rule has to be the one doing the ignoring: check-ignore succeeds for
-# a clone-private .git/info/exclude or a developer's global core.excludesFile
+# tests/lib.sh owns the fresh-clone builder and the match-source check: the
+# shared rule has to be the one doing the ignoring, because check-ignore succeeds
+# for a clone-private .git/info/exclude or a developer's global core.excludesFile
 # too, and those are exactly the sources a fresh vessel does not inherit.
-assert_ignored_by_tracked_gitignore() {
-  local repo=$1 path=$2 match
-  match=$(git -C "$repo" check-ignore -v --no-index -- "$path") \
-    || fail "runtime artifact has no shared ignore rule: $path"
-  case "$match" in
-    .gitignore:*) ;;
-    *) fail "runtime artifact is ignored by a private or global exclude, not the tracked .gitignore: $match" ;;
-  esac
-}
-
 test_runtime_artifacts_leave_a_fresh_clone_clean() {
-  local seed clone path skills_target status
+  local seed clone path status
   seed="$TMP_ROOT/seed"
   clone="$TMP_ROOT/fresh-clone"
 
-  mkdir -p "$seed/.claude" || fail "could not create the seed checkout under $TMP_ROOT"
-  cp "$ROOT/.gitignore" "$seed/.gitignore" \
-    || fail "could not seed .gitignore: is $ROOT/.gitignore still the tracked ignore file?"
-  cp "$ROOT/.claude/settings.json" "$seed/.claude/settings.json" \
-    || fail "could not seed .claude/settings.json: has the tracked shared settings file moved?"
-  skills_target=$(readlink "$ROOT/.claude/skills") \
-    || fail "could not read $ROOT/.claude/skills: has the tracked skills symlink moved or become a directory?"
-  ln -s "$skills_target" "$seed/.claude/skills" \
-    || fail "could not seed the .claude/skills symlink pointing at $skills_target"
-  fm_git_identity
-  git -C "$seed" init -q || fail "could not init the seed repository at $seed"
-  git -C "$seed" add --force .gitignore .claude/settings.json .claude/skills \
-    || fail "could not stage the tracked fixture files in $seed"
-  git -C "$seed" commit -qm baseline || fail "could not commit the seed baseline in $seed"
-  git clone --quiet "$seed" "$clone" || fail "could not clone $seed into $clone"
+  fm_fresh_ignore_clone "$seed" "$clone" .claude/settings.json .claude/skills
 
   while IFS= read -r path; do
     [ -n "$path" ] || continue
     mkdir -p "$(dirname "$clone/$path")" || fail "could not create the fixture parent for $path"
     : > "$clone/$path" || fail "could not create the runtime artifact fixture $path"
-    assert_ignored_by_tracked_gitignore "$clone" "$path"
+    fm_assert_ignored_by_tracked_gitignore "$clone" "$path" "runtime artifact"
   done < <(runtime_artifacts)
 
   while IFS= read -r path; do
@@ -95,7 +72,7 @@ test_local_settings_can_never_become_tracked_accidentally() {
     || fail "could not query the tracked file list in $ROOT"
   [ -z "$tracked" ] \
     || fail ".claude/settings.local.json is tracked and would freeze fleet self-update"
-  assert_ignored_by_tracked_gitignore "$ROOT" .claude/settings.local.json
+  fm_assert_ignored_by_tracked_gitignore "$ROOT" .claude/settings.local.json "runtime artifact"
   pass "Claude's runtime-rewritten local settings remain untracked and shared-ignored"
 }
 
