@@ -30,9 +30,10 @@
 # stylesheet, script, font, image, iframe, or a form that posts outward.
 #
 # WHAT THE GUARD COVERS, exactly:
-#   - static remote references in HTML subresource attributes (src, srcset,
-#     poster, action, formaction, background, manifest, xlink:href, object data),
-#     including a tag whose attributes are split across lines,
+#   - static remote references in HTML subresource attributes (src, the data-src
+#     lazy-load handoff to one, srcset, poster, action, formaction, background,
+#     manifest, xlink:href, object data), including a tag whose attributes are
+#     split across lines,
 #   - a remote href on a subresource element: <link>, <base>, SVG <use>/<image>,
 #   - CSS constructs inside a <style> element and inside a style attribute:
 #     @import, and a remote url() or image-set(),

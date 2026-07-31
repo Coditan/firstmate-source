@@ -53,6 +53,8 @@ Then open it with `bin/fm-lavish.sh <file>` - never bare `lavish-axi`.
 | `fm-note` | Dim secondary text anywhere. |
 | `fm-panel` | A bordered surface around a table or block. |
 | `fm-scroll` | **The only sanctioned way to carry content wider than the viewport.** Wrap a wide table or diagram in it. Never put horizontal scrolling on the body. |
+| `fm-table` | A plain `<table>` styling; it keeps a `min-width`, so put it inside `fm-scroll`. |
+| `fm-mono` | Monospace a span of text without making it `<code>`. |
 | `fm-foot` | Provenance line at the bottom; `--footer` writes one. |
 
 ### Cards
@@ -98,6 +100,7 @@ An inline `<svg>` inside `.fm-map`.
 The SVG keeps a `min-width` so shapes stay legible on a phone and scroll inside the panel instead of squashing.
 Node classes: `fm-map-node`, `fm-map-node-gate`, `fm-map-node-open`.
 Edge classes: `fm-map-edge`, `fm-map-edge-gate`, and `fm-map-edge-soft` for a relationship that is weaker than a recorded one.
+Label text is `fm-map-dim` where it should read as secondary.
 Add a `.fm-legend` under it.
 
 **Age bar** - how long something has waited.
@@ -105,7 +108,7 @@ Add a `.fm-legend` under it.
     <div class="fm-age is-hot"><span>seit 29.07.</span>
       <div class="fm-agebar"><i style="width:60%"></i></div><span>3 Tage</span></div>
 
-**Distribution bar** - one bar split into labelled proportional segments, with a `.fm-dist-legend` under it.
+**Distribution bar** - `.fm-dist` with one `<span>` per segment, labelled and proportional, and a `.fm-dist-legend` under it.
 Segment widths and colours are set inline by the generator.
 
 **Status line** - a run of steps with the reached ones filled.
@@ -160,7 +163,7 @@ Runs the same guard over existing files.
 
 It covers four things, and only those four:
 
-- **static remote references in HTML subresource attributes** - `src`, `srcset`, `poster`, `action`, `formaction`, `background`, `manifest`, `xlink:href`, and `<object data>`. Attribute formatting does not change the verdict: a tag whose attributes are wrapped across lines is refused exactly like the one-line form.
+- **static remote references in HTML subresource attributes** - `src` and the `data-src` lazy-load handoff to one, `srcset`, `poster`, `action`, `formaction`, `background`, `manifest`, `xlink:href`, and `<object data>`. Attribute formatting does not change the verdict: a tag whose attributes are wrapped across lines is refused exactly like the one-line form.
 - **a remote `href` on a subresource element** - `<link>`, `<base>`, and SVG `<use>`/`<image>`. Never on `<a>`.
 - **CSS constructs inside a `<style>` element and inside a `style` attribute** - `@import`, and a remote `url()` or `image-set()`.
 - **an absolute remote URL inside `<script>`**.
