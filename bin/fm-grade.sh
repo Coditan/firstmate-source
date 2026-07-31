@@ -45,7 +45,7 @@ fm-grade.sh - grade review quality on a scale the reviewed tool does not control
 
 USAGE
   fm-grade.sh report   [--out FILE] [--json] [--no-git] [--ballots FILE]
-                       [--submission FILE] [--seed S] [--sample-size N] [--quiet]
+                       [--submission FILE] [--seed S] [--quiet]
   fm-grade.sh sample   [--out FILE] [--seed S] [--sample-size N]
   fm-grade.sh corpus   [--verify]
   fm-grade.sh replay   [--tier1-only]
@@ -79,7 +79,11 @@ OPTIONS
   --submission FILE A candidate's blind corpus answers, as printed by `replay`.
   --seed S          Sampling seed, recorded in the report so the draw is
                     reproducible and therefore contestable (default fm-grade-v1).
-  --sample-size N   Findings to draw for adjudication (default 40).
+                    On `report` it must match the seed the ballot records, which
+                    is refused rather than reported under the wrong recipe.
+  --sample-size N   (sample) Findings to draw for adjudication (default 40).
+                    `report` reads whatever the ballot already holds, so the
+                    size is fixed when the ballot is drawn and not at report time.
   --verify          (corpus) Re-prove each case by executing its declared
                     reproduction: the subject is extracted at defect_commit and
                     must show the defect, then at fixed_commit and must not.

@@ -68,6 +68,8 @@ Keep `must_match_any` broad enough that an independent reviewer who genuinely fo
 
 The scored rule matches `must_mention_paths` against the finding's own `file` field and nothing else.
 A finding that names the wrong file does not count however its prose reads, because acting on it sends a reader to the wrong place.
+Both sides are normalised first and compared on their shared path suffix, so an absolute path, a `./` prefix, or a path written relative to a different root still names the same file.
+The rule rejects wrong files, not wrong formatting: a challenger whose path convention differs from the incumbent's must not lose points for that alone.
 The report also prints `blind_detection_rate_lenient`, which additionally accepts the path appearing anywhere in the finding's text.
 That figure is never the score; it is printed beside the score so the gap between them is visible, because the distance between the two is exactly how precisely the candidate localised what it found.
 

@@ -83,6 +83,10 @@ DEFAULT_DB = os.path.expanduser("~/.no-mistakes/state.sqlite")
 FIX_SUBJECT_RE = re.compile(r"^no-mistakes\(([a-z]+)\):\s*(.*)$")
 HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
+# Path-shaped runs pulled out of finding prose, so the lenient rate compares
+# paths the same way the strict rate does instead of matching a raw substring.
+PATH_TOKEN_RE = re.compile(r"[A-Za-z0-9_./\\-]*[./\\][A-Za-z0-9_./\\-]*")
+
 # The verdicts a ballot may carry. A hand-filled ballot is exactly where a typo
 # lands, and an unrecognised string would inflate every denominator while
 # contributing to no numerator, so the vocabulary is closed and enforced.
@@ -557,6 +561,21 @@ def tier_git(runs, rounds, repo_roots, progress=None):
             continue
         mapped.append({"run": run, "git": root, "chain": chain})
 
+    # The unit under measurement is the COMMIT, not the run row. Two run rows
+    # that recorded the same head - a run cancelled or failed without adding a
+    # commit, then retried - are one piece of reality written down twice, and
+    # letting both contribute would inflate every aggregate with bookkeeping
+    # artefacts, which is the contamination this whole tier exists to avoid.
+    distinct, collapsed_rows = [], 0
+    seen_chains = set()
+    for entry in mapped:
+        key = (entry["run"]["repo"], tuple(c["sha"] for c in entry["chain"]))
+        if key in seen_chains:
+            collapsed_rows += 1
+            continue
+        seen_chains.add(key)
+        distinct.append(entry)
+
     metrics.append(Metric(
         "runs_git_resolved", len(mapped), len(runs), src,
         "runs whose pipeline fix commits were located in git AND matched the "
@@ -566,7 +585,20 @@ def tier_git(runs, rounds, repo_roots, progress=None):
                "commit chain. Each chain also stops at any commit another run "
                "in the same repository recorded as its head, so a run that "
                "followed another on the same branch cannot absorb its "
-               "corrections." % (unmapped_no_repo, unmapped_no_match),
+               "corrections. %d of these rows recorded a chain another row had "
+               "already recorded and are collapsed, so this count is run rows "
+               "and not independent evidence - see "
+               "distinct_fix_chains_measured."
+               % (unmapped_no_repo, unmapped_no_match, collapsed_rows),
+    ))
+    metrics.append(Metric(
+        "distinct_fix_chains_measured", len(distinct), len(mapped), src,
+        "distinct pipeline fix chains behind those runs, after collapsing run "
+        "rows that recorded an identical chain",
+        caveat="Every git metric below is computed over these chains, each "
+               "counted once. A run row that ended at a commit another row had "
+               "already ended at contributes no second copy of the same "
+               "deleted and added lines.",
     ))
 
     rework_num = rework_den = 0
@@ -577,9 +609,9 @@ def tier_git(runs, rounds, repo_roots, progress=None):
     considered_fixes = 0
     step_rework = collections.defaultdict(lambda: [0, 0])
 
-    for i, entry in enumerate(mapped):
+    for i, entry in enumerate(distinct):
         if progress:
-            progress(i + 1, len(mapped), entry["run"]["id"])
+            progress(i + 1, len(distinct), entry["run"]["id"])
         git = entry["git"]
         chain = entry["chain"]
         seen = set()
@@ -667,6 +699,8 @@ def tier_git(runs, rounds, repo_roots, progress=None):
         "unmapped_no_repo": unmapped_no_repo,
         "unmapped_no_match": unmapped_no_match,
         "mapped_runs": len(mapped),
+        "distinct_chains": len(distinct),
+        "collapsed_duplicate_rows": collapsed_rows,
     }
     return {"metrics": metrics, "detail": detail}
 
@@ -820,6 +854,37 @@ def verify_case_repro(case, tmpdir):
                                "absent at the fixing commit", "phases": results}
 
 
+def normalise_path(path):
+    """Reduce a path to comparable components.
+
+    Only spelling is removed: separators, a `./` prefix, repeated slashes and a
+    trailing slash. Nothing here can turn one file into another.
+    """
+    text = str(path or "").strip().replace("\\", "/")
+    while text.startswith("./"):
+        text = text[2:]
+    text = re.sub(r"/+", "/", text)
+    return [p for p in text.split("/") if p and p != "."]
+
+
+def same_file(expected, candidate):
+    """Do two spellings name the same file?
+
+    Compared on the shared path suffix, so an absolute path, a `./` prefix, or a
+    path written relative to a different root still names the file it names.
+    Strictness was chosen so that pointing at the WRONG file counts as wrong; it
+    was not chosen to punish formatting, and a challenger whose path convention
+    differs from the incumbent's must not lose points for that alone - favouring
+    the incumbent is the one bias this scale cannot carry.
+    """
+    want = normalise_path(expected)
+    got = normalise_path(candidate)
+    if not want or not got:
+        return False
+    depth = min(len(want), len(got))
+    return want[-depth:] == got[-depth:]
+
+
 def score_submission(case, findings):
     """Did a blind candidate report this case's defect?
 
@@ -831,7 +896,10 @@ def score_submission(case, findings):
     STRICT is the scored rule and it matches the finding's own `file` field. A
     finding that names the wrong file is wrong however its prose reads, because
     acting on it sends a reader to the wrong place; prose that happens to quote
-    the expected path somewhere in an argument is not a location.
+    the expected path somewhere in an argument is not a location. Both sides are
+    normalised first and compared on their shared path suffix, so a differently
+    rooted spelling of the same file is the same file - the rule rejects wrong
+    files, not wrong formatting.
 
     LENIENT also accepts the path appearing anywhere in the finding's text. It
     is computed and reported alongside the strict figure rather than folded into
@@ -854,8 +922,10 @@ def score_submission(case, findings):
             continue
         if paths:
             fpath = str(f.get("file") or "")
-            located = any(p == fpath for p in paths)
-            mentioned = located or any(p in text for p in paths)
+            located = any(same_file(p, fpath) for p in paths)
+            mentioned = located or any(
+                any(same_file(p, token) for token in PATH_TOKEN_RE.findall(text))
+                for p in paths)
         else:
             located = mentioned = True
         if located and strict is None:
@@ -1086,6 +1156,27 @@ def tier_materiality(rounds, ballots_path, seed):
 
     n = len(verdicts)
     src = "blind human adjudication by %s (labels stripped)" % adjudicator
+    if not n:
+        # A signed ballot with every finding abstained has adjudicated nothing.
+        # Emitting no metric at all would render an empty table, which reads as
+        # an omission; this tier's job is to say plainly that it has nothing to
+        # assert, so it says it.
+        metrics.append(Metric(
+            "material_finding_rate", None, 0,
+            "UNADJUDICATED - ballot signed by %s carries no verdict" % adjudicator,
+            "share of sampled findings a blind human adjudicator rated as "
+            "would-have-caused-real-damage-at-merge", unit="%",
+            caveat="The ballot is signed but every drawn finding was abstained, "
+                   "and an abstention is excluded from n rather than counted as "
+                   "agreement. Population is %d findings; fill in verdicts and "
+                   "report again." % pool_size,
+        ))
+        return {"metrics": metrics,
+                "detail": {"pool": pool_size, "adjudicated": 0,
+                           "adjudicator": adjudicator,
+                           "drawn_seed": drawn_seed,
+                           "drawn_population": drawn_population,
+                           "status": "signed-but-all-abstained"}}
     frame_note = (
         "The strata are the GRADED TOOL'S OWN severity labels, so the sampling "
         "FRAME is not independent of the tool under test even though each "

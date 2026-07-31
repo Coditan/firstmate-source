@@ -84,6 +84,8 @@ Lines that did not survive were overwritten before the branch finished, so that 
 
 Runs whose commit chain cannot be located and verified against the recorded fix summaries are excluded and counted, never assumed clean.
 A run's chain also stops at any commit another run in the same repository recorded as its head, because two runs can execute on the same branch with no author commit between them; without that boundary the later run would adopt the earlier run's corrections and count them as its own earlier fixes, which is precisely the invariant the rework rate is defined on.
+The unit measured is the commit, not the run row, so run rows that recorded an identical chain - a run cancelled or failed without adding a commit, then retried - are collapsed and counted once.
+`runs_git_resolved` reports the run rows and `distinct_fix_chains_measured` reports the chains actually measured, so the count of rows is never read as more independent evidence than exists.
 
 ### Tier B - blind replay against known-real defects
 
@@ -94,6 +96,7 @@ What it reports is therefore a detection rather than a confirmation.
 
 Detection is generous about wording and strict about location.
 The scored rule matches the case's path against the finding's own `file` field: a finding that names the wrong file is not a detection however its prose reads, because acting on it sends a reader to the wrong place.
+Both sides are normalised and compared on their shared path suffix, so an absolute path or a `./` prefix names the same file; the rule rejects wrong files, not wrong formatting, because a challenger penalised for its path convention would flatter the incumbent.
 A lenient rate, which also accepts the path appearing anywhere in the finding's text, is printed beside the scored one and never instead of it, so the gap between them - which measures how precisely the candidate localises what it found - is visible rather than buried in a scoring choice.
 
 A case is scored in the headline rate only if the proof that its defect was real is an observed event: an executed reproduction, a failing test, a CI failure, or a revert.

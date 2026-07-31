@@ -183,6 +183,46 @@ if vals["fix_rework_rate"]["value"] != 0.0:
     sys.exit(1)
 ' || fail "a run adopted an earlier run's fix commits as its own"
 
+# --- two run rows that ended at the same commit are one measurement ---------
+#
+# A run cancelled or failed without adding a commit and then retried leaves two
+# run rows recording the identical head. The unit this tier measures is the
+# COMMIT, so letting both contribute would feed the same deleted and added lines
+# into every aggregate twice - bookkeeping counted as evidence, which is the
+# contamination the whole tier exists to avoid.
+
+python3 - "$DB2" "$HEAD_SHA" <<'PY'
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+con.execute("insert into runs values('runC','r1','b',?,?,'cancelled',null,3,3)",
+            (sys.argv[2], "0" * 40))
+con.execute("insert into step_results values('sC','runC','review',3,'completed')")
+con.execute("insert into step_rounds values('sCr','sC',1,'auto_fix',null,null,"
+            "'second correction',0,1)")
+con.commit()
+con.close()
+PY
+
+DUP=$(python3 "$ENGINE" --db "$DB2" --corpus "$CORPUS" --quiet --json report 2>/dev/null) \
+  || fail "duplicate-head report failed"
+printf '%s' "$TWO$(printf '\036')$DUP" | python3 -c '
+import json, sys
+before, after = sys.stdin.read().split("\036")
+b = {m["key"]: m for m in json.loads(before)["tiers"]["git"]["metrics"]}
+a = {m["key"]: m for m in json.loads(after)["tiers"]["git"]["metrics"]}
+if a["runs_git_resolved"]["value"] != 3:
+    print("the third run row should still resolve, got %s"
+          % a["runs_git_resolved"]["value"]); sys.exit(1)
+if a["distinct_fix_chains_measured"]["value"] != 2:
+    print("identical chains must collapse to 2, got %s"
+          % a["distinct_fix_chains_measured"]["value"]); sys.exit(1)
+for key in ("fix_rework_rate", "fix_line_survival"):
+    if (a[key]["value"], a[key]["n"]) != (b[key]["value"], b[key]["n"]):
+        print("%s changed when a duplicate run row was added: %s n=%s -> %s n=%s"
+              % (key, b[key]["value"], b[key]["n"], a[key]["value"], a[key]["n"]))
+        sys.exit(1)
+' || fail "a duplicate run row contributed its chain to the aggregates twice"
+
 # --- deleted files are blamed against the file that was deleted -------------
 #
 # git emits `--- a/<path>` then `+++ /dev/null` for a deletion, so keying hunks
@@ -331,6 +371,45 @@ if not any(k.startswith("material_finding_rate[severity=") for k in keys):
 # sampling frame looks independent when it is not.
 printf '%s' "$SIGNED" | grep -q "GRADED TOOL'S OWN severity labels" \
   || fail "per-stratum rates must disclose that the sampling frame is the graded tool's labels"
+
+# A signed ballot on which everyone abstained has adjudicated nothing. It must
+# say UNADJUDICATED plainly rather than rendering an empty table, which is the
+# one thing this tier exists to do.
+python3 - "$BALLOT" <<'PY'
+import json, sys
+b = json.load(open(sys.argv[1]))
+for entry in b["ballots"]:
+    entry["verdict"] = ""
+json.dump(b, open(sys.argv[1], "w"))
+PY
+ABSTAINED=$(run_engine --ballots "$BALLOT" --json report 2>/dev/null) \
+  || fail "all-abstained ballot report failed"
+printf '%s' "$ABSTAINED" | python3 -c '
+import json, sys
+ms = json.load(sys.stdin)["tiers"]["materiality"]["metrics"]
+if not ms:
+    print("all-abstained ballot emitted no metric at all"); sys.exit(1)
+rate = [m for m in ms if m["key"] == "material_finding_rate"]
+if not rate:
+    print("expected material_finding_rate, got " + ", ".join(m["key"] for m in ms))
+    sys.exit(1)
+if rate[0]["value"] is not None:
+    print("abstentions must not become a number: %s" % rate[0]["value"]); sys.exit(1)
+if "UNADJUDICATED" not in rate[0]["source"]:
+    print("source must say UNADJUDICATED, got %s" % rate[0]["source"]); sys.exit(1)
+' || fail "an all-abstained signed ballot must report UNADJUDICATED, not an empty table"
+
+ABSTAINED_MD=$(run_engine --ballots "$BALLOT" report 2>/dev/null) \
+  || fail "all-abstained markdown report failed"
+assert_contains "$ABSTAINED_MD" "UNADJUDICATED" \
+  "the rendered Tier M table must carry an UNADJUDICATED row, not be empty"
+
+python3 - "$BALLOT" <<'PY'
+import json, sys
+b = json.load(open(sys.argv[1]))
+b["ballots"][0]["verdict"] = "harmful"
+json.dump(b, open(sys.argv[1], "w"))
+PY
 
 # A verdict outside the closed vocabulary would count into n while contributing
 # to no rate, so every published share would silently read low.
@@ -511,6 +590,36 @@ print("%s %s" % (vals.get("blind_detection_rate"),
                  vals.get("blind_detection_rate_lenient")))')
 [ "$BOTH" = "0.0 100.0" ] \
   || fail "prose quoting the path must be a strict MISS and a lenient HIT, got $BOTH"
+
+# Strictness rejects the wrong FILE, not the wrong SPELLING. A challenger whose
+# path convention is absolute or './'-prefixed must not lose a point it earned,
+# because penalising an unknown convention would flatter the incumbent - the one
+# bias this scale cannot carry.
+detection_rate() {  # <file-field>
+  cat > "$SUB" <<JSON
+{"score-case": {"findings": [
+  {"file": "$1", "description": "the guard misses a line-wrapped tag"}
+]}}
+JSON
+  run_engine --submission "$SUB" --json report 2>/dev/null | python3 -c '
+import json, sys
+for m in json.load(sys.stdin)["tiers"]["bench"]["metrics"]:
+    if m["key"] == "blind_detection_rate":
+        print(m["value"])'
+}
+
+for SPELLING in "./bin/thing.sh" "/home/somebody/checkout/bin/thing.sh" "bin//thing.sh"; do
+  GOT=$(detection_rate "$SPELLING")
+  [ "$GOT" = "100.0" ] \
+    || fail "path spelling $SPELLING must still locate the file, got $GOT"
+done
+
+# Normalisation must not blur two genuinely different files into one.
+for WRONG in "bin/other.sh" "bin/thing.sh.bak" "docs/thing.sh"; do
+  GOT=$(detection_rate "$WRONG")
+  [ "$GOT" = "0.0" ] \
+    || fail "$WRONG is a different file and must not score as a detection, got $GOT"
+done
 
 # --- the wrapper never writes to the run database ---------------------------
 

@@ -6,7 +6,7 @@ Method, tier definitions, and the falsifiability argument live in [review-gradin
 ## Provenance
 
 - Date: 2026-07-31
-- Run database: `~/.no-mistakes/state.sqlite`, opened `mode=ro`, 175 runs, 631 finding objects, latest run 2026-07-31
+- Run database: `~/.no-mistakes/state.sqlite`, opened `mode=ro`, 176 runs, 639 finding objects, latest run 2026-07-31
 - Repositories blamed: the 7 clones the run database names, all reachable
 - Commands:
 
@@ -16,13 +16,16 @@ bin/fm-grade.sh report --out grade.md
 bin/fm-grade.sh report --json --out grade.json
 ```
 
-An earlier reading was taken before review found two defects in the engine itself.
-Its chain walk stopped only at the first non-pipeline commit, so when two runs executed on the same branch with no author commit between them the later run adopted the earlier run's corrections and then counted them as its own earlier fixes - which is exactly the invariant the rework metrics are defined on.
+Two earlier readings were taken before review found three defects in the engine itself, and both were discarded rather than adjusted.
+The first engine walked its commit chain back only to the first non-pipeline commit, so when two runs executed on the same branch with no author commit between them the later run adopted the earlier run's corrections and then counted them as its own earlier fixes - exactly the invariant the rework metrics are defined on.
 Its diff parser also keyed hunks off the `+++` side alone, so a correction that deleted a file would have blamed the previous file's lines.
-Both are fixed, every figure here was recomputed by running the tool afterwards, and the superseded numbers are not reproduced anywhere in this file.
-That a reading taken with the scale had to be discarded because the scale was wrong is the behaviour this document is supposed to record, not an embarrassment to hide.
+The second engine fixed both but still let two run rows that recorded the identical head commit each contribute that chain, so the same deleted and added lines entered every aggregate twice.
+The unit this tier measures is the commit, not the run row; identical chains are now collapsed and counted once.
 
-The finding count differs from the 605, 612, 614, and 621 quoted earlier the same week because runs kept landing while those figures were taken.
+All three are fixed, every figure below was recomputed by running the tool afterwards, and no superseded number is reproduced anywhere in this file.
+That two readings taken with the scale had to be thrown away because the scale was wrong is the behaviour this document is supposed to record, not an embarrassment to hide.
+
+The finding count differs from the 605, 612, 614, 621, and 631 quoted earlier the same week because runs kept landing while those figures were taken.
 That drift is the reason a report defends its own snapshot and nothing else.
 
 The report was run twice over the same snapshot and reproduced every git-tier figure exactly, which is the property that lets a challenger be compared later.
@@ -33,27 +36,30 @@ The report was run twice over the same snapshot and reproduced every git-tier fi
 
 | metric | value | n |
 |---|---|---|
-| `findings_total` | 631 | 631 |
-| `abstention_rate` | 35.7% | 631 |
-| `autofix_share` | 40.7% | 631 |
-| `error_severity_share` | 7.1% | 631 |
-| `review_rounds_median` | 2.0 | 170 |
-| `runs_needing_3plus_review_rounds` | 21.8% | 170 |
-| `run_completion_rate` | 84.0% | 175 |
+| `findings_total` | 639 | 639 |
+| `abstention_rate` | 35.7% | 639 |
+| `autofix_share` | 40.8% | 639 |
+| `error_severity_share` | 7.0% | 639 |
+| `review_rounds_median` | 2.0 | 171 |
+| `runs_needing_3plus_review_rounds` | 21.6% | 171 |
+| `run_completion_rate` | 83.5% | 176 |
 
 ### Tier G - what actually happened to the code (INDEPENDENT)
 
 | metric | value | n |
 |---|---|---|
-| `runs_git_resolved` | 137 | 175 |
-| `fix_rework_rate` | 32.0% | 3529 deleted lines |
-| `fix_rework_rate_followups` | 66.1% | 1712 deleted lines |
-| `fixes_that_reworked_a_prior_fix` | 46.5% | 157 fix commits |
-| `fix_line_survival` | 89.1% | 18449 added lines |
+| `runs_git_resolved` | 137 | 176 |
+| `distinct_fix_chains_measured` | 135 | 137 |
+| `fix_rework_rate` | 36.0% | 3143 deleted lines |
+| `fix_rework_rate_followups` | 66.8% | 1694 deleted lines |
+| `fixes_that_reworked_a_prior_fix` | 47.1% | 155 fix commits |
+| `fix_line_survival` | 89.1% | 18234 added lines |
 
-38 runs were excluded because no fix-commit chain could be verified against the recorded fix summaries; none was excluded for an unreachable clone.
-They are excluded rather than assumed clean, so every git figure above is over the 137 runs that could be checked.
+39 runs were excluded because no fix-commit chain could be verified against the recorded fix summaries; none was excluded for an unreachable clone.
+They are excluded rather than assumed clean, so every git figure above is over the runs that could be checked.
 Each chain also stops at any commit another run in the same repository recorded as its head, so the corrections counted for a run are that run's own.
+Of the 137 resolved run rows, 2 recorded a chain another row had already recorded - a run cancelled or failed without adding a commit, then retried - so 135 distinct chains carry every figure above.
+Those rows are collapsed rather than counted twice, because the unit under measurement is the commit and two records of one commit are not two pieces of evidence.
 
 Runs where corrections most undid earlier corrections, as emitted:
 
@@ -87,10 +93,10 @@ Runs where corrections most undid earlier corrections, as emitted:
 
 **The incumbent's own headline is not refuted; it is shown to be counting the wrong thing.**
 A fix rate counts corrections attempted.
-Of the lines a follow-up correction removed, 66.1% had been written by the pipeline's own earlier correction rather than by the author, and 46.5% of follow-up corrections removed at least one such line.
+Of the lines a follow-up correction removed, 66.8% had been written by the pipeline's own earlier correction rather than by the author, and 47.1% of follow-up corrections removed at least one such line.
 Both of those were counted as fixes by the ledger, and the second one exists only because the first did not hold.
 
-The 46.5% is measured over every non-first fix commit, including ones that deleted nothing and ones whose deleted lines had no resolvable blame origin.
+The 47.1% is measured over every non-first fix commit, including ones that deleted nothing and ones whose deleted lines had no resolvable blame origin.
 Those cannot rework anything that can be shown, so they count against the rate rather than being dropped from the denominator.
 
 **The case that prompted this work is typical, not exceptional.**
