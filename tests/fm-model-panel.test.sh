@@ -116,7 +116,7 @@ test_configuration_doc_owns_the_schema_and_degradation() {
     "the documented degradation contract does not state the refusal"
   assert_grep 'config/model-panel.json` is deliberately NOT in the inheritable set' "$CONFIG_DOC" \
     "the documented contract does not explain why the panel config is not inherited"
-  assert_grep 'config/model-panel.json' "$ROOT/.gitignore" \
+  assert_gitignore_ignores 'config/model-panel.json' \
     "the local panel configuration file is not gitignored"
   assert_present "$ROOT/docs/examples/model-panel.json" "the copyable example config is missing"
   pass "docs/configuration.md owns the panel schema, default, and degradation contract"

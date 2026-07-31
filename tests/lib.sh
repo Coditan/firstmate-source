@@ -276,6 +276,38 @@ assert_no_grep() {
   ! grep -F -- "$1" "$2" >/dev/null || fail "$3"
 }
 
+# assert_gitignore_ignores <path> <msg>: the tracked .gitignore must ignore
+# <path>. Assert the BEHAVIOR, never a literal line: the captain-private rules
+# are deliberately directory- and prefix-wide (docs/configuration.md owns why),
+# so grepping for one file name both fails on a correct wholesale rule and would
+# pass on a rule that no longer ignores anything.
+#
+# The question is only ever "would a FRESH VESSEL be protected", so this probes
+# the tracked .gitignore alone, in a throwaway repo. Asking the live checkout
+# instead proves nothing: a working home may carry a private
+# .git/info/exclude or a global core.excludesFile the fleet does not inherit,
+# and when such a rule excludes a whole directory git never descends into it to
+# consult .gitignore at all - so a checkout with `/config/` privately excluded
+# answers "ignored" whether or not the shared rule still exists.
+assert_gitignore_ignores() {
+  local path=$1 msg=$2
+  fm_tracked_gitignore_probe
+  git -C "$FM_TRACKED_GITIGNORE_PROBE" check-ignore -q --no-index -- "$path" \
+    || fail "$msg (the tracked .gitignore alone does not ignore it, so a fresh vessel is unprotected)"
+}
+
+# fm_tracked_gitignore_probe: build (once per test process) a throwaway repo
+# carrying only the tracked .gitignore, and set FM_TRACKED_GITIGNORE_PROBE to it.
+fm_tracked_gitignore_probe() {
+  [ -z "${FM_TRACKED_GITIGNORE_PROBE:-}" ] || return 0
+  local probe
+  fm_test_tmproot probe fm-gitignore-probe
+  cp "$ROOT/.gitignore" "$probe/.gitignore" \
+    || fail "could not copy $ROOT/.gitignore: is it still the tracked ignore file?"
+  git -C "$probe" init -q || fail "could not init the ignore probe repository at $probe"
+  FM_TRACKED_GITIGNORE_PROBE=$probe
+}
+
 # assert_absent <path> <msg>: path must not exist.
 assert_absent() {
   [ ! -e "$1" ] || fail "$2"

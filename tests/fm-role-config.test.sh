@@ -232,7 +232,7 @@ test_tracked_role_material() {
     "roles/vessel.md must not exist: the default role is an unamended AGENTS.md, not a document"
   assert_grep 'amends `AGENTS.md`' "$ROOT/roles/coordinator.md" \
     "the coordinator overlay must declare itself an amendment to AGENTS.md"
-  assert_grep 'config/role' "$ROOT/.gitignore" "config/role must be gitignored like its config siblings"
+  assert_gitignore_ignores 'config/role' "config/role must be gitignored like its config siblings"
   assert_grep 'Vessel role (config/role / roles/)' "$ROOT/docs/configuration.md" \
     "docs/configuration.md must own the vessel-role schema"
   pass "the tracked role material is present and gitignored where it should be"
