@@ -292,8 +292,60 @@ assert_no_grep() {
 assert_gitignore_ignores() {
   local path=$1 msg=$2
   fm_tracked_gitignore_probe
-  git -C "$FM_TRACKED_GITIGNORE_PROBE" check-ignore -q --no-index -- "$path" \
+  fm_gitignore_match "$FM_TRACKED_GITIGNORE_PROBE" "$path" >/dev/null \
     || fail "$msg (the tracked .gitignore alone does not ignore it, so a fresh vessel is unprotected)"
+}
+
+# fm_gitignore_match <repo> <path>: print the `check-ignore -v` match for <path>
+# in <repo>, with the developer's global ignore file disabled. Exit 0 when the
+# tracked .gitignore is the source, 1 when nothing ignores <path>, and 2 when
+# some other source does.
+#
+# Which source matched is the whole question: check-ignore succeeds just as
+# happily for a clone-private .git/info/exclude or a global core.excludesFile,
+# and those are exactly the rules a fresh vessel does not inherit. This is the
+# single owner of that check, so every ignore assertion in the suite gets it.
+fm_gitignore_match() {
+  local repo=$1 path=$2 match
+  match=$(git -C "$repo" -c core.excludesFile=/dev/null \
+    check-ignore -v --no-index -- "$path") || return 1
+  printf '%s\n' "$match"
+  case "$match" in
+    .gitignore:*) return 0 ;;
+    *) return 2 ;;
+  esac
+}
+
+# fm_assert_ignored_by_tracked_gitignore <repo> <path> <subject>: <path> must be
+# ignored in <repo> by the tracked .gitignore. <subject> opens both failure
+# messages so each suite keeps its own wording.
+fm_assert_ignored_by_tracked_gitignore() {
+  local repo=$1 path=$2 subject=$3 match status=0
+  match=$(fm_gitignore_match "$repo" "$path") || status=$?
+  case "$status" in
+    0) ;;
+    1) fail "$subject has no shared ignore rule: $path" ;;
+    *) fail "$subject is ignored by a private or global exclude, not the tracked .gitignore: $match" ;;
+  esac
+}
+
+# fm_ignore_probe_isolate <repo>: strip every ignore source from <repo> except
+# its own working-tree .gitignore. Both `git init` and `git clone` apply the
+# developer's init.templateDir, which may install a .git/info/exclude, and both
+# inherit the global core.excludesFile - including the XDG ~/.config/git/ignore
+# default, which applies even when no git config names it. A probe that keeps
+# those answers the developer's question, not the fresh vessel's: a global rule
+# for `config/` or `*.json` would report a captain-private path as ignored with
+# the shared rule deleted outright.
+fm_ignore_probe_isolate() {
+  local repo=$1 gitdir
+  gitdir=$(git -C "$repo" rev-parse --absolute-git-dir) \
+    || fail "could not locate the git directory of the ignore probe at $repo"
+  mkdir -p "$gitdir/info" || fail "could not create $gitdir/info"
+  : > "$gitdir/info/exclude" \
+    || fail "could not clear the private exclude of the ignore probe at $repo"
+  git -C "$repo" config core.excludesFile /dev/null \
+    || fail "could not disable the global ignore file for the ignore probe at $repo"
 }
 
 # fm_tracked_gitignore_probe: build (once per test process) a throwaway repo
@@ -305,7 +357,39 @@ fm_tracked_gitignore_probe() {
   cp "$ROOT/.gitignore" "$probe/.gitignore" \
     || fail "could not copy $ROOT/.gitignore: is it still the tracked ignore file?"
   git -C "$probe" init -q || fail "could not init the ignore probe repository at $probe"
+  fm_ignore_probe_isolate "$probe"
   FM_TRACKED_GITIGNORE_PROBE=$probe
+}
+
+# fm_fresh_ignore_clone <seed> <clone> [tracked-path ...]: build a clone that
+# carries the tracked .gitignore plus any named tracked paths from $ROOT
+# (symlinks preserved) and no other ignore source, so an assertion made in it
+# answers only "would a fresh vessel be protected".
+fm_fresh_ignore_clone() {
+  local seed=$1 clone=$2 path target
+  shift 2
+  mkdir -p "$seed" || fail "could not create the seed checkout at $seed"
+  cp "$ROOT/.gitignore" "$seed/.gitignore" \
+    || fail "could not seed .gitignore: is $ROOT/.gitignore still the tracked ignore file?"
+  for path in "$@"; do
+    mkdir -p "$(dirname "$seed/$path")" || fail "could not create the seed parent for $path"
+    if [ -L "$ROOT/$path" ]; then
+      target=$(readlink "$ROOT/$path") \
+        || fail "could not read the tracked symlink $ROOT/$path"
+      ln -s "$target" "$seed/$path" \
+        || fail "could not seed the $path symlink pointing at $target"
+    else
+      cp "$ROOT/$path" "$seed/$path" \
+        || fail "could not seed $path: has the tracked file moved or become a directory?"
+    fi
+  done
+  fm_git_identity
+  git -C "$seed" init -q || fail "could not init the seed repository at $seed"
+  git -C "$seed" add --force .gitignore "$@" \
+    || fail "could not stage the tracked fixture files in $seed"
+  git -C "$seed" commit -qm baseline || fail "could not commit the seed baseline in $seed"
+  git clone --quiet "$seed" "$clone" || fail "could not clone $seed into $clone"
+  fm_ignore_probe_isolate "$clone"
 }
 
 # assert_absent <path> <msg>: path must not exist.

@@ -709,8 +709,12 @@ families_for_changed_path() {
       printf '%s\n' pure-contract-unit
       ;;
     .gitignore)
+      # Every suite that asserts against the tracked .gitignore; this arm is the
+      # single owner of that list, so a new dependent belongs here too.
       printf '%s\n' "__script__:fm-runtime-ignore.test.sh"
       printf '%s\n' "__script__:fm-private-material-ignore.test.sh"
+      printf '%s\n' "__script__:fm-model-panel.test.sh"
+      printf '%s\n' "__script__:fm-role-config.test.sh"
       ;;
     tests/lib.sh|tests/*-helpers.sh)
       families_for_test_reference "$(basename "$path")" \
@@ -785,6 +789,8 @@ select_changed() {
   for script_name in "${wanted_scripts[@]+"${wanted_scripts[@]}"}"; do
     if [ -f "tests/$script_name" ]; then
       add_script "tests/$script_name"
+    else
+      die "changed-test mapping names a missing test script: tests/$script_name (rename it in families_for_changed_path or restore the suite)"
     fi
   done
 

@@ -55,45 +55,22 @@ tests/
 PATHS
 }
 
-# The shared rule has to be the one doing the ignoring: check-ignore succeeds for
-# a clone-private .git/info/exclude or a developer's global core.excludesFile
+# tests/lib.sh owns the fresh-clone builder and the match-source check: the
+# shared rule has to be the one doing the ignoring, because check-ignore succeeds
+# for a clone-private .git/info/exclude or a developer's global core.excludesFile
 # too, and those are exactly the sources a fresh vessel does not inherit. This
-# checkout carries such a private exclude for config/, so asserting on the match
-# source is what keeps this test honest here.
-assert_ignored_by_tracked_gitignore() {
-  local repo=$1 path=$2 match
-  match=$(git -C "$repo" check-ignore -v --no-index -- "$path") \
-    || fail "captain-private path has no shared ignore rule: $path"
-  case "$match" in
-    .gitignore:*) ;;
-    *) fail "captain-private path is ignored by a private or global exclude, not the tracked .gitignore: $match" ;;
-  esac
-}
-
-# A fresh clone that carries only the tracked .gitignore, so no private exclude
-# from this checkout can mask a missing shared rule.
-seed_fresh_clone() {
-  local seed=$1 clone=$2
-  mkdir -p "$seed" || fail "could not create the seed checkout under $TMP_ROOT"
-  cp "$ROOT/.gitignore" "$seed/.gitignore" \
-    || fail "could not seed .gitignore: is $ROOT/.gitignore still the tracked ignore file?"
-  fm_git_identity
-  git -C "$seed" init -q || fail "could not init the seed repository at $seed"
-  git -C "$seed" add --force .gitignore || fail "could not stage .gitignore in $seed"
-  git -C "$seed" commit -qm baseline || fail "could not commit the seed baseline in $seed"
-  git clone --quiet "$seed" "$clone" || fail "could not clone $seed into $clone"
-}
-
+# checkout carries such a private exclude for config/, so that is what keeps this
+# test honest here.
 test_unforeseen_private_files_are_ignored_by_default() {
   local clone path status
   clone="$TMP_ROOT/fresh-clone"
-  seed_fresh_clone "$TMP_ROOT/seed" "$clone"
+  fm_fresh_ignore_clone "$TMP_ROOT/seed" "$clone"
 
   while IFS= read -r path; do
     [ -n "$path" ] || continue
     mkdir -p "$(dirname "$clone/$path")" || fail "could not create the fixture parent for $path"
     : > "$clone/$path" || fail "could not create the private fixture $path"
-    assert_ignored_by_tracked_gitignore "$clone" "$path"
+    fm_assert_ignored_by_tracked_gitignore "$clone" "$path" "captain-private path"
   done < <(unforeseen_private_paths)
 
   status=$(git -C "$clone" status --porcelain --untracked-files=all) \
@@ -111,7 +88,7 @@ test_a_config_file_can_still_be_deliberately_tracked() {
   local clone path
   clone="$TMP_ROOT/negation-clone"
   path="config/shared-example.toml"
-  seed_fresh_clone "$TMP_ROOT/negation-seed" "$clone"
+  fm_fresh_ignore_clone "$TMP_ROOT/negation-seed" "$clone"
 
   printf '!%s\n' "$path" >> "$clone/.gitignore" \
     || fail "could not append the negation rule in $clone"
@@ -136,7 +113,7 @@ test_no_captain_private_material_is_tracked() {
 test_the_shared_tracked_surface_stays_visible_to_git_add() {
   local clone path tracked hidden status
   clone="$TMP_ROOT/breadth-clone"
-  seed_fresh_clone "$TMP_ROOT/breadth-seed" "$clone"
+  fm_fresh_ignore_clone "$TMP_ROOT/breadth-seed" "$clone"
 
   while IFS= read -r path; do
     [ -n "$path" ] || continue
