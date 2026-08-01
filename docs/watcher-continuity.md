@@ -43,11 +43,35 @@ The file is size-capped through `FM_WATCH_CYCLE_LOG_MAX_BYTES` and `FM_WATCH_CYC
 The default 300-second grace is unchanged.
 Only the watcher process touches `state/.last-watcher-beat`; no helper process can make a wedged watcher appear healthy.
 
+## Surviving a host suspend
+
+A machine suspend freezes the watcher along with everything else on the host, so on resume the beacon is necessarily as old as the sleep.
+`bin/fm-wake-wait.sh` used to read the beacon once and exit, which meant every wake from sleep unarmed wake delivery until a human noticed - a silent supervision gap dressed as a loud warning.
+The two states are distinguishable without any suspend detection, because `fm_watcher_healthy` in `bin/fm-wake-lib.sh` tests three independent conditions: a live pid, a lock whose recorded home, executable, and process identity still match that pid, and a beacon inside the grace.
+A suspend fails only the third; a real death fails the first.
+`fm_watcher_healthy` therefore classifies its own verdict in `FM_WATCHER_HEALTH` as `healthy`, `beacon-stale`, or `dead`, and is the single owner of that distinction.
+
+When and only when the beacon age is the sole failing condition, the delivery stub opens one bounded beat-confirmation window of `FM_WAKE_BEAT_CONFIRM` seconds (default 90) and exits only if the beacon mtime does not advance within it.
+The stub keeps polling the durable queue for the whole window, so delivery stays armed while it waits, and a beat that arrives closes the window, announces the recovery on stderr, and returns the stub to ordinary waiting.
+That closing line exists so a recovered suspend and a watcher that never came back cannot read the same way in the log.
+A `dead` verdict never opens the window: no live identity-matched watcher can produce a beat, so that case still exits on the first reading past grace, exactly as before.
+
+The window is bounded precisely so an alive-but-wedged watcher - one still holding the lock and no longer beating - is still reported rather than waited on forever.
+That case is the one this costs: it is reported at grace plus the window instead of at grace, measured as 30s against a 10s grace and a 20s window, versus 10s before.
+The genuinely dead case is unchanged, measured at exactly the grace both before and after (10s, 30s, and the production 300s default).
+Raising `FM_GUARD_GRACE` is not an alternative fix: it would convert a visible false alarm into a silently longer blind window for every failure mode at once, including the real ones.
+
+The window must also stay comfortably under `FM_CODEX_WATCH_CHECKPOINT` (180s), because the Codex foreground checkpoint is the one caller that gives the stub a bounded lifetime.
+A window longer than that checkpoint would be restarted by every new checkpoint and would never reach its own deadline, which would turn that bounded delay into never reporting a wedged watcher at all under that harness.
+`tests/fm-wake-wait.test.sh` enforces the ordering of the two defaults rather than leaving it to be remembered.
+
 ## Regression coverage
 
 `tests/fm-pi-watch-extension.test.sh` checks Pi's first-cycle-or-explicit-repair tool metadata and ownership-based redundant-call no-ops, then simulates actionable and empty child closes against the actual Pi and OpenCode close handlers, blocks prompt delivery to prove the successor launches first, verifies single-flight behavior, changes the session lock before close to prove ownership is rechecked, and hangs each successor arm to prove bounded fallback delivery includes the typed restoration failure.
 `tests/fm-watcher-lock.test.sh` covers verified-successor attach, the typed self-eviction failure, bounded and successor-linked lifecycle rows, and a SIGSTOP counterfactual that distinguishes a live PID from a stale beacon before classifying termination.
 `tests/fm-continuity-pretool-check.test.sh` proves the Claude gate rejects only non-recovery fleet execution in the precise unhealthy state and preserves the existing Stop registration.
+`tests/fm-wake-wait.test.sh` proves the suspend contract by freezing rather than by reading the beacon: it SIGSTOPs a real `bin/fm-watch.sh` and the delivery stub together, resumes the stub first so it is forced to read an aged beacon before the watcher can beat, and requires the stub to still be armed and still deliver the next queued wake.
+It also pins both sides of the latency trade - a live watcher that never beats is still reported once the confirmation window elapses, and a killed watcher is reported on the first reading past grace with a deliberately huge `FM_WAKE_BEAT_CONFIRM` that the dead path must never consult.
 
 ## Sanitized live evidence, 2026-07-17
 

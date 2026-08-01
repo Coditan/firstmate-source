@@ -98,7 +98,8 @@ test_stub_exits_loudly_on_stale_daemon_beacon() {
   record_fake_daemon "$home" "$state" "$daemon"
   touch -t 200001010000 "$state/.last-watcher-beat"
   status=0
-  FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=1 "$WAIT" > "$out" 2>&1 || status=$?
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=1 FM_WAKE_BEAT_CONFIRM=2 \
+    "$WAIT" > "$out" 2>&1 || status=$?
   kill -TERM "$daemon" 2>/dev/null || true
   wait "$daemon" 2>/dev/null || true
   [ "$status" -ne 0 ] || fail "delivery stub succeeded with a stale daemon beacon"
@@ -106,6 +107,144 @@ test_stub_exits_loudly_on_stale_daemon_beacon() {
   pass "delivery stub exits loudly when the daemon beacon exceeds guard grace"
 }
 
+# A watcher pid that is alive and identity-matched but never beats is a wedge,
+# not a sleep: the beat-confirmation window is bounded so it is still reported.
+test_wedged_live_watcher_is_reported_after_the_bounded_window() {
+  local home state daemon out status started elapsed
+  home="$TMP_ROOT/stub-wedged"
+  state="$home/state"
+  out="$home/wedged.out"
+  mkdir -p "$state"
+  sleep 60 & daemon=$!
+  record_fake_daemon "$home" "$state" "$daemon"
+  touch -t 200001010000 "$state/.last-watcher-beat"
+  started=$(date +%s)
+  status=0
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=1 FM_WAKE_BEAT_CONFIRM=4 \
+    "$WAIT" > "$out" 2>&1 || status=$?
+  elapsed=$(( $(date +%s) - started ))
+  kill -TERM "$daemon" 2>/dev/null || true
+  wait "$daemon" 2>/dev/null || true
+  [ "$status" -ne 0 ] || fail "delivery stub survived a live watcher that never beat"
+  assert_contains "$(cat "$out")" "produced no beat in 4s" \
+    "wedged-watcher failure did not name the elapsed confirmation window"
+  [ "$elapsed" -ge 4 ] || fail "wedged watcher was reported before its confirmation window elapsed (${elapsed}s)"
+  [ "$elapsed" -lt 20 ] || fail "wedged watcher report was not bounded by the confirmation window (${elapsed}s)"
+  pass "a live watcher that never beats is still reported, bounded by the confirmation window"
+}
+
+# The beat-confirmation window must never be consulted when no live,
+# identity-matched watcher holds the lock: a genuinely dead watcher has to be
+# reported on the first reading past grace, exactly as before this window
+# existed. The huge FM_WAKE_BEAT_CONFIRM here is the assertion - if the dead
+# path ever fell into the window, this test would hang for 600s.
+test_dead_watcher_is_reported_without_waiting_for_a_beat() {
+  local home state daemon out status started elapsed
+  home="$TMP_ROOT/stub-dead"
+  state="$home/state"
+  out="$home/dead.out"
+  mkdir -p "$state"
+  sleep 60 & daemon=$!
+  record_fake_daemon "$home" "$state" "$daemon"
+  kill -KILL "$daemon" 2>/dev/null || true
+  wait "$daemon" 2>/dev/null || true
+  touch -t 200001010000 "$state/.last-watcher-beat"
+  started=$(date +%s)
+  status=0
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=1 FM_WAKE_BEAT_CONFIRM=600 \
+    "$WAIT" > "$out" 2>&1 || status=$?
+  elapsed=$(( $(date +%s) - started ))
+  [ "$status" -ne 0 ] || fail "delivery stub survived a dead watcher with a stale beacon"
+  assert_contains "$(cat "$out")" "watcher beacon stale" "dead-watcher failure was not loud"
+  case "$(cat "$out")" in
+    *"waiting up to"*) fail "dead watcher opened a beat-confirmation window it can never satisfy" ;;
+  esac
+  [ "$elapsed" -lt 10 ] || fail "dead watcher was not reported on the first reading past grace (${elapsed}s)"
+  pass "a dead watcher is reported on the first reading past grace, never through the confirmation window"
+}
+
+# The suspend regression, proven by freezing rather than by reading the code.
+# SIGSTOP on BOTH the real watcher and the delivery stub reproduces what a
+# machine suspend does to this pair: neither process runs, wall clock advances,
+# and the beacon ages past grace because nothing can touch it. The stub is
+# resumed first and given time to observe the aged beacon before the watcher is
+# resumed, which is strictly harsher than a real resume, where both come back
+# together and the stub may not even get a reading before the next beat.
+test_stub_survives_a_freeze_of_both_watcher_and_stub() {
+  local dir state fakebin watcher stub queued out err
+  dir=$(make_case suspend-equivalent)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  out="$dir/wait.out"
+  err="$dir/wait.err"
+  mark_pr_check_migration_complete "$state"
+  PATH="$fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$state" FM_WATCH_DAEMON=1 \
+    FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    "$WATCH" > "$dir/watch.out" 2>&1 &
+  watcher=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    [ -e "$state/.last-watcher-beat" ] && break
+    sleep 0.1
+  done
+  [ -e "$state/.last-watcher-beat" ] || fail "watcher never established its beacon"
+
+  FM_HOME="$dir" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=4 FM_WAKE_BEAT_CONFIRM=60 \
+    "$WAIT" > "$out" 2>"$err" &
+  stub=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -e "$state/.wake-stub.lock/pid" ] && break
+    sleep 0.1
+  done
+  [ -e "$state/.wake-stub.lock/pid" ] || fail "delivery stub did not publish its lock"
+
+  kill -STOP "$watcher" 2>/dev/null || fail "could not freeze the watcher"
+  kill -STOP "$stub" 2>/dev/null || fail "could not freeze the delivery stub"
+  sleep 7
+  kill -CONT "$stub" 2>/dev/null || fail "could not resume the delivery stub"
+  sleep 2
+  kill -0 "$stub" 2>/dev/null \
+    || fail "delivery stub unarmed itself on resume before the watcher could beat again"
+  kill -CONT "$watcher" 2>/dev/null || fail "could not resume the watcher"
+  sleep 3
+  kill -0 "$stub" 2>/dev/null || fail "delivery stub unarmed itself across a host freeze"
+  assert_contains "$(cat "$err")" "waiting up to 60s for a fresh beat" \
+    "stub did not record that it was waiting on the resumed watcher's next beat"
+  assert_contains "$(cat "$err")" "delivery stayed armed across the stale beacon" \
+    "a recovered stale beacon left no trace distinguishing it from a watcher that never came back"
+
+  append_wake "$state" signal demo.status "signal: demo.status"
+  wait "$stub" || fail "the surviving delivery stub did not deliver the wake queued after resume"
+  queued=$(cat "$state/.wake-queue")
+  assert_contains "$(cat "$out")" "wake: queued" "resumed stub did not deliver the queued-wake nudge"
+  assert_contains "$queued" "signal: demo.status" "resumed stub drained the durable wake"
+  kill -TERM "$watcher" 2>/dev/null || true
+  wait "$watcher" 2>/dev/null || true
+  pass "wake delivery stays armed across a freeze of both the watcher and the delivery stub"
+}
+
+# The Codex foreground checkpoint is the one caller that gives the delivery stub
+# a bounded lifetime. A beat-confirmation window at or above that bound would be
+# restarted by every new checkpoint and would never reach its own deadline, so a
+# wedged watcher would never be reported under that harness at all - a bounded
+# delay silently becoming no report. Enforce the ordering rather than trusting
+# whoever next tunes either default to remember the coupling.
+test_default_confirm_window_fits_inside_the_codex_checkpoint() {
+  local window checkpoint
+  window=$(sed -n 's/^BEAT_CONFIRM=.*FM_WAKE_BEAT_CONFIRM:-\([0-9]\{1,\}\).*/\1/p' \
+    "$ROOT/bin/fm-wake-wait.sh" | head -1)
+  checkpoint=$(sed -n 's/^SECONDS_ARG=.*FM_CODEX_WATCH_CHECKPOINT:-\([0-9]\{1,\}\).*/\1/p' \
+    "$ROOT/bin/fm-watch-checkpoint.sh" | head -1)
+  [ -n "$window" ] || fail "could not read the default FM_WAKE_BEAT_CONFIRM from bin/fm-wake-wait.sh"
+  [ -n "$checkpoint" ] || fail "could not read the default FM_CODEX_WATCH_CHECKPOINT from bin/fm-watch-checkpoint.sh"
+  [ "$window" -lt "$checkpoint" ] \
+    || fail "beat-confirmation window ${window}s does not fit inside the ${checkpoint}s Codex checkpoint, so a wedged watcher would never be reported under Codex"
+  pass "the default beat-confirmation window (${window}s) fits inside the Codex foreground checkpoint (${checkpoint}s)"
+}
+
 test_daemon_enqueues_and_continues_without_arm_owner
 test_killed_stub_loses_no_wake_and_costs_one_rearm
 test_stub_exits_loudly_on_stale_daemon_beacon
+test_wedged_live_watcher_is_reported_after_the_bounded_window
+test_dead_watcher_is_reported_without_waiting_for_a_beat
+test_stub_survives_a_freeze_of_both_watcher_and_stub
+test_default_confirm_window_fits_inside_the_codex_checkpoint
