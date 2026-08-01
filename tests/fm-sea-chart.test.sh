@@ -283,6 +283,14 @@ test_withheld_records_name_their_own_cause() {
 - [ ] voy-open - The work still holding it (repo: r) (kind: ship) (since 2026-07-30)
 - [ ] voy-unheld - Queued with nothing recorded as asked (repo: r) (kind: captain) (since 2026-07-30)
 - [ ] voy-future - Held, but not for the captain (repo: r) (kind: captain) (since 2026-07-30) (hold: Wait for the release) (hold-kind: future)
+- [ ] voy-plainhold - Held with no kind given (repo: r) (kind: captain) (since 2026-07-30) (hold: The captain must weigh in)
+- [ ] voy-stale - Waits on nothing at all blocked-by: voy-setup (repo: r) (kind: captain) (since 2026-07-28) (hold: Which route) (hold-kind: captain)
+EOF
+  cat > "$home/data/done-archive.md" <<'EOF'
+# Done archive
+
+## Archived 2026-07-20
+- [x] voy-setup - Long since finished (repo: r) (kind: ship) (done 2026-07-20)
 EOF
   cap=$(capture causes)
   out=$(chart_json "$home" voy "$cap")
@@ -295,9 +303,23 @@ EOF
     || fail "a queued captain record with no hold recorded has its own cause"
   [ "$(printf '%s' "$causes" | jq -r '.["voy-future"]')" = "other-hold" ] \
     || fail "a record held for something other than the captain has its own cause"
+  # The chart already re-resolved this edge, so it must say what it knows rather
+  # than filing the likeliest case under the bucket meant for anomalies.
+  [ "$(printf '%s' "$causes" | jq -r '.["voy-stale"]')" = "stale-edge" ] \
+    || fail "a decision held off only by a blocker that is Done in the archive must be named as answerable now, not reported as an unexplained absence"
+  assert_contains "$(printf '%s' "$out" | jq -r '.withheld[]|select(.id=="voy-stale")|.why')" "voy-setup" \
+    "the stale edge must name the archived blocker, or the reader cannot go and clear it"
+  assert_contains "$(printf '%s' "$out" | jq -r '.withheld[]|select(.id=="voy-stale")|.why')" "answered now" \
+    "the stale-edge reason must state the consequence: this decision can be answered now"
+  # A hold with no kind states no audience; it must never render as a raw null.
+  case "$(printf '%s' "$out" | jq -r '.withheld[]|select(.id=="voy-plainhold")|.why')" in
+    *null*) fail "a literal null reached a sentence written for the captain" ;;
+  esac
+  assert_contains "$(printf '%s' "$out" | jq -r '.withheld[]|select(.id=="voy-plainhold")|.why')" "no hold kind recorded" \
+    "a hold carrying no kind must say so in words"
   # The reasons in words must not collapse back into one shared sentence.
-  [ "$(printf '%s' "$out" | jq -r '[.withheld[].why]|unique|length')" = 4 ] \
-    || fail "four distinct causes must carry four distinct reasons, or the labels have silently collapsed"
+  [ "$(printf '%s' "$out" | jq -r '[.withheld[].why]|unique|length')" = 6 ] \
+    || fail "six distinct situations must carry six distinct reasons, or the labels have silently collapsed"
   assert_contains "$(printf '%s' "$out" | jq -r '.withheld[]|select(.id=="voy-blocked")|.held_by')" "voy-open" \
     "a blocked record must still name what is holding it"
   pass "each withheld record names the cause that kept it off the actionable surface"

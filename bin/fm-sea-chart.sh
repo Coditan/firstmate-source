@@ -126,8 +126,9 @@
 #   decisions[]        open decisions, after the board's collapse rule
 #   withheld[]         captain-gated records the actionable surface did not
 #                      return, each with the `cause` that kept it off - blocked,
-#                      in-flight, no-hold, other-hold, not-returned - and `why`
-#                      in words; blocked is the one that means a lost decision
+#                      in-flight, no-hold, other-hold, stale-edge, not-returned -
+#                      and `why` in words; blocked means a decision the fleet has
+#                      lost, stale-edge means one it can answer right now
 #   fog[]              named dark patches on this course
 #   out_of_course[]    deliberate scope boundaries; these never rise
 #   takeable[]         work with no unresolved blocker and no hold, each with a
@@ -286,13 +287,23 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # leaves it sitting. See the header for where this and the snapshot diverge.
   def unresolved($done): [ (.blocked_by_ids // .unresolved_blocker_ids // [])[] | select($done[.] != true) ];
 
+  # Blockers this record names that ARE Done, but only somewhere the live backlog
+  # alone cannot see - the archive. These are what the snapshot still counts as
+  # holding the record, and they are the reason it fell off the actionable
+  # surface even though nothing is really holding it.
+  def stale_edges($done; $live_done):
+    [ (.blocked_by_ids // [])[] | select($done[.] == true and $live_done[.] != true) ];
+
   # Why a captain-gated record never reached the actionable surface. These are
   # different pieces of news and must not share one sentence: a blocked record is
   # one the fleet has lost track of, while an in-flight one is being worked right
   # now. Captain-actionability (bin/fm-fleet-snapshot.sh) wants a queued record of
   # kind captain, held with hold-kind captain, and nothing unresolved against it,
   # so each failing clause gets its own name and its own words.
-  def withheld_reason($done):
+  # The stale-edge clause comes last of the named ones ON PURPOSE: reaching it
+  # means every other clause of that predicate already passes, which is what
+  # makes the claim that the decision can be answered now true rather than hoped.
+  def withheld_reason($done; $live_done):
     if (unresolved($done) | length) > 0
     then {cause: "blocked",
           why: "blocked by another record that has not resolved, so it never reaches the actionable surface"}
@@ -304,7 +315,12 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
           why: "queued with no hold recorded, so nothing on the record states what the captain is being asked"}
     elif .hold_kind != "captain"
     then {cause: "other-hold",
-          why: "held as \(.hold_kind), which is not a captain hold, so the actionable surface never carries it"}
+          why: (if .hold_kind == null
+                then "held with no hold kind recorded, so nothing on it names the captain as the audience and the actionable surface never carries it"
+                else "held as \(.hold_kind), which is not a captain hold, so the actionable surface never carries it" end)}
+    elif (stale_edges($done; $live_done) | length) > 0
+    then {cause: "stale-edge",
+          why: "held off by a stale edge only: it names \(stale_edges($done; $live_done) | join(", ")) as blocking, and that lies Done in the archive where a reader of the live backlog alone cannot see it. Nothing is holding this decision - it can be answered now, and the blocked-by edge wants clearing."}
     else {cause: "not-returned",
           why: "present in the backlog but not returned as actionable"}
     end;
@@ -315,6 +331,8 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   | ([ $live.records[]?, $arch.records[]? | select(.structured) ]) as $all
   | ([ $all[] | select(.id != null) ] | group_by(.id)
      | map({key: .[0].id, value: all(.[]; .state == "done")}) | from_entries) as $done
+  | ([ $live.records[]? | select(.structured and .id != null) ] | group_by(.id)
+     | map({key: .[0].id, value: all(.[]; .state == "done")}) | from_entries) as $live_done
   | ([ $all[] | select(member(.id)) ]) as $mine
 
   # The destination, read from records the fleet already keeps, never invented here.
@@ -346,7 +364,7 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   | ([ $mine[] | select(open_state and .kind == "captain") ]) as $own_decision_records
   | ([ $own_decision_records[]
        | select(.id as $id | ($seen | index($id)) == null)
-       | withheld_reason($done) as $reason
+       | withheld_reason($done; $live_done) as $reason
        | {id, key:(.id | dkey), title:(.title // ""),
           held_by:(unresolved($done) | join(", ")),
           cause: $reason.cause,
