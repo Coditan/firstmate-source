@@ -109,10 +109,10 @@ Default fields: schema, home, generated, prs, in_flight{id,kind,state,doing},
   secondmates{id,state,doing,provenance,freshness,age_seconds,contradiction,reason},
   decisions_open{id,key,verb,summary,owner}, landed{id,what,artifact,owner},
   gates{id,title,blocked_by,reason,owner}, reports{id,path}, recorded_prs{id,url},
+  unhealthy_endpoints{...} (only when non-empty), omitted{surface,reveal}.
 gates excludes the sea-chart kinds (fog, out-of-course), which are held on purpose
   and would otherwise crowd it permanently; the count withheld is disclosed in
   omitted[] and --all-queued puts them back.
-  unhealthy_endpoints{...} (only when non-empty), omitted{surface,reveal}.
 landed merges this home's Done with registered secondmate homes' Done, bounded by
   a per-home cap (FM_BEARINGS_LANDED_PER_HOME) and an overall cap (FM_BEARINGS_LANDED),
   with omitted[] disclosure. Default selection is balanced across deterministic home

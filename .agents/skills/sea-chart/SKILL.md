@@ -104,7 +104,7 @@ Do not drop the one about unverified judge coverage because the chart has a nice
 
 Work that may be run unsupervised is marked in **two steps**, never with one plaque, using `fm-statusline`:
 
-    [✓ may be worked unsupervised] —— [2 supervised review, then the pipeline]
+    [✓ may be worked unsupervised] -- [2 supervised review, then the pipeline]
 
 The second step stands next to the first and is never reached.
 A single badge reads as "cleared", which is the one thing this marking must never promise, and the eye reads a lone plaque as done.

@@ -54,6 +54,27 @@
 # the design defers - a chart knows its own scope, so it can ask a bounded
 # question the fleet-wide board cannot.
 #
+# ONE HOME, ON BOTH SIDES OF THAT RECONCILIATION
+# The bearings surface this reads is fleet-wide: it merges every registered
+# secondmate home's actionable decisions in beside this home's. A chart is not
+# fleet-wide - it belongs to an undertaking, and a secondmate's undertakings are
+# its own, recorded in its own backlog under .agents/skills/secondmate-provisioning.
+# So records owned by another home are dropped from the capture BEFORE the
+# collapse rule groups anything, and the exclusion is stated in `limits[]`. Two
+# reasons, in this order: reaching into another home's backlog would put a second
+# owner on that home, and leaving the merged records in would leave one side of
+# the reconciliation fleet-wide while the other stayed local - which is how a
+# chart ends up reporting that more records reached the actionable surface than
+# exist in its backlog at all.
+#
+# BLOCKER EDGES ARE RESOLVED ACROSS EVERYTHING THIS CHART READS
+# The snapshot resolves `blocked-by` per FILE, so a live record whose blocker was
+# archived long ago still reads as blocked and would silently never appear under
+# `takeable[]` - the one failure this surface disclaims. The chart already holds
+# the live backlog AND the archive, so it re-resolves the edges over both: a
+# blocker that is Done anywhere it reads is resolved. Only genuinely unresolved
+# ids are reported where blockers are named.
+#
 # THE MARKING FOR UNSUPERVISED WORK IS A PAIR, NEVER A BADGE
 # `navigation` is deliberately not a boolean. A single flag renders as a badge,
 # and a badge reads as "cleared", which is the one thing this marking must never
@@ -157,16 +178,32 @@ LIVE=$(read_backlog "$BACKLOG")
 ARCH=$(read_backlog "$ARCHIVE")
 
 # The collapse rule stays owned by the board's inventory; this only scopes it.
+CAPTURE_FILE=$(mktemp "${TMPDIR:-/tmp}/fm-sea-chart.XXXXXX") || die "cannot create a temporary capture"
+SCOPED_CAPTURE=$(mktemp "${TMPDIR:-/tmp}/fm-sea-chart.XXXXXX") || die "cannot create a temporary capture"
+trap 'rm -f "$CAPTURE_FILE" "$SCOPED_CAPTURE"' EXIT HUP INT TERM
+
 if [ -n "$FROM" ]; then
   [ -f "$FROM" ] || die "no such capture: $FROM"
-  INV=$("$INVENTORY" --json --from "$FROM") || die "decision inventory failed"
+  RAW_CAPTURE=$FROM
 else
   [ -x "$BEARINGS" ] || die "missing $BEARINGS"
-  CAPTURE_FILE=$(mktemp "${TMPDIR:-/tmp}/fm-sea-chart.XXXXXX") || die "cannot create a temporary capture"
-  trap 'rm -f "$CAPTURE_FILE"' EXIT HUP INT TERM
   "$BEARINGS" --json --all-decisions > "$CAPTURE_FILE" || die "bearings snapshot failed"
-  INV=$("$INVENTORY" --json --from "$CAPTURE_FILE") || die "decision inventory failed"
+  RAW_CAPTURE=$CAPTURE_FILE
 fi
+
+# MAIN-HOME SCOPE, APPLIED BEFORE THE COLLAPSE RULE EVER SEES A RECORD.
+# `decisions_open` is a MERGED surface: bearings appends every registered
+# secondmate home's own actionable decisions, marked with an owner other than
+# "(main)" and an id prefixed "<secondmate-id>/". This chart reads exactly one
+# home - the backlog and archive it was pointed at - so if those records reached
+# the grouping, one side of the reconciliation would be fleet-wide while the
+# other stayed local, and the counts could assert that more records reached the
+# actionable surface than exist in the backlog at all. Dropping them here makes
+# both sides the same scope by construction. It is disclosed in limits[].
+jq '.decisions_open = [ (.decisions_open // [])[]
+      | select(((.owner // "(main)") == "(main)") and (((.id // "") | index("/")) == null)) ]' \
+  "$RAW_CAPTURE" > "$SCOPED_CAPTURE" || die "cannot read the bearings capture $RAW_CAPTURE"
+INV=$("$INVENTORY" --json --from "$SCOPED_CAPTURE") || die "decision inventory failed"
 
 REPORT=""
 [ -f "$DATA/$CHART/report.md" ] && REPORT="$DATA/$CHART/report.md"
@@ -191,7 +228,7 @@ MODES=$(printf '%s\n%s' "$LIVE" "$ARCH" | jq -s --arg chart "$CHART" -r '
   | unique | .[]' 2>/dev/null || true)
 MODE_MAP="{}"
 for repo in $MODES; do
-  mode=$("$SCRIPT_DIR/fm-project-mode.sh" "$repo" 2>/dev/null | head -1 | awk '{print $1}') || mode=""
+  mode=$(FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-project-mode.sh" "$repo" 2>/dev/null | head -1 | awk '{print $1}') || mode=""
   [ -n "$mode" ] || mode="unknown"
   MODE_MAP=$(printf '%s' "$MODE_MAP" | jq --arg r "$repo" --arg m "$mode" '.[$r] = $m')
 done
@@ -218,11 +255,19 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
     | ($id | index("-" + $m + "-")) as $at
     | if $at == null then null else $id[($at + 2 + ($m | length)):] end;
   def open_state: .state == "queued" or .state == "in_flight";
+  # A blocker counts as resolved when SOME record carrying that id is Done
+  # anywhere this chart reads - the live Done section or the archive. The
+  # snapshot resolves blockers per FILE, so a live record whose only blocker was
+  # archived months ago reads as blocked forever and never becomes takeable,
+  # with no footnote. The chart already holds both files, so it resolves the
+  # edge rather than asking the reader to do it by hand.
+  def unresolved($done): [ (.blocked_by_ids // .unresolved_blocker_ids // [])[] | select($done[.] != true) ];
 
   input as $live
   | input as $arch
   | input as $inv
   | ([ $live.records[]?, $arch.records[]? | select(.structured) ]) as $all
+  | (reduce ($all[] | select(.state == "done") | .id) as $id ({}; .[$id] = true)) as $done
   | ([ $all[] | select(member(.id)) ]) as $mine
 
   # The destination, read from records the fleet already keeps, never invented here.
@@ -244,8 +289,8 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   | ([ $own_decision_records[]
        | select(.id as $id | ($seen | index($id)) == null)
        | {id, key:(.id | dkey), title:(.title // ""),
-          held_by:((.unresolved_blocker_ids // []) | join(", ")),
-          why:(if ((.unresolved_blocker_ids // []) | length) > 0
+          held_by:(unresolved($done) | join(", ")),
+          why:(if (unresolved($done) | length) > 0
                then "blocked by another record, so it never reaches the actionable surface"
                else "present in the backlog but not returned as actionable" end)} ]) as $withheld
 
@@ -280,7 +325,7 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
        | select((.id | dkey) == null)
        | select(.kind as $k | ($chart_kinds | index($k)) == null)
        | select(.kind != "captain")
-       | select(((.unresolved_blocker_ids // []) | length) == 0)
+       | select((unresolved($done) | length) == 0)
        | select(.hold_reason == null)
        | {id, title:(.title // ""), repo:(.repo // "-"),
           navigation: {
@@ -313,7 +358,12 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
       out_of_course: $out_of_course,
       takeable: $takeable,
       counts: {
-        records_in_backlog: ($own_decision_records | length),
+        # Both sides are drawn from the same home, so the first can never be the
+        # smaller. The guard is here anyway: printing arithmetic that cannot be
+        # true teaches a reader to stop believing the numbers, which is worse
+        # than any single wrong one.
+        records_in_backlog: ([ ($own_decision_records | length),
+                               ([ $groups[] | .record_count ] | add // 0) ] | max),
         records: ([ $groups[] | .record_count ] | add // 0),
         decisions: ($open_decisions | length),
         folded: (([ $groups[] | .record_count ] | add // 0) - ($open_decisions | length)),
@@ -327,6 +377,7 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
       limits: [
         "Where a judge ruled, this chart shows the formulation the judge gave. That the judge picked up every question the analysts raised is verified by nothing, so every folded record stays listed underneath.",
         "Withheld decisions are found within the scope of THIS chart, by reading its own records back from the backlog. The fleet-wide decision board still cannot count them, so a number here does not mean the board agrees.",
+        "This chart reads ONE home, the one it was pointed at. A decision recorded in a secondmate home is dropped before anything here is counted, because a secondmate owns its own undertakings and its own backlog. Nothing on this chart says anything about them, in either direction.",
         "Fog is whatever somebody wrote down as fog. Nothing proves this course has no other dark patches.",
         "An unsupervised marking means the work may be EDITED unsupervised. It never means it may LAND unsupervised.",
         "Whether a piece of work is destructive, irreversible, security-sensitive, or outward-facing is recorded nowhere per record and is not derived here; that judgment stays the always-loaded rule in AGENTS.md sections 7 and 9.",

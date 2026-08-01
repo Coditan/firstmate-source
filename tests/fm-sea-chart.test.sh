@@ -104,6 +104,88 @@ EOF
   pass "the silent loss is reproduced, and the chart counts and names it instead"
 }
 
+test_a_secondmate_decision_reaches_the_merged_surface_then_stays_off_this_chart() {
+  # PART 1 - REPRODUCE. The surface a chart is handed is FLEET-WIDE: bearings
+  # merges every registered secondmate home's actionable decisions in beside this
+  # home's, marked with an owner and an id prefixed "<secondmate-id>/". Fed
+  # straight to the collapse rule, such a record groups exactly like a local one.
+  local home raw grouped
+  home=$(make_home secondmate)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking in THIS home (repo: r) (kind: ship) (since 2026-07-28)
+EOF
+  raw=$TMP_ROOT/secondmate.capture.json
+  cat > "$raw" <<'EOF'
+{"schema":"fm-bearings.v1","decisions_open":[
+  {"id":"mate-1/voy-judge-decision-shape","key":"shape","verb":"captain-hold",
+   "summary":"A decision recorded in the secondmate home","owner":"mate-1"}
+]}
+EOF
+  grouped=$("$INV" --json --from "$raw")
+  [ "$(printf '%s' "$grouped" | jq -r '.records')" = 1 ] \
+    || fail "the reproduction is stale: the merged surface no longer carries another home's decisions"
+  [ "$(printf '%s' "$grouped" | jq -r '.groups[0].group')" = "mate-1/voy" ] \
+    || fail "the reproduction is stale: a secondmate record no longer groups under its own home prefix. Re-derive the chart's home scoping before relaxing this."
+
+  # PART 2 - THE CHART DOES NOT COUNT IT. Drawn for exactly the id that record
+  # groups under, so the membership rule would match it if it were still there.
+  local out
+  mkdir -p "$home/data/mate-1/voy"
+  printf '# Report\n\nThe surviving report.\n' > "$home/data/mate-1/voy/report.md"
+  out=$(chart_json "$home" mate-1/voy "$raw")
+  [ "$(printf '%s' "$out" | jq -r '.counts.records')" = 0 ] \
+    || fail "a decision owned by another home must never be counted onto this chart"
+  [ "$(printf '%s' "$out" | jq -r '.decisions|length')" = 0 ] \
+    || fail "a decision owned by another home must never be shown on this chart"
+  # Both sides of the reconciliation now come from the same home, so the
+  # arithmetic cannot contradict itself.
+  [ "$(printf '%s' "$out" | jq -r '.counts.records_in_backlog >= .counts.records')" = true ] \
+    || fail "the chart must never report more records reaching the actionable surface than it found in the backlog"
+  # And the exclusion is stated, because a silent one is the loss this tool exists against.
+  assert_contains "$(printf '%s' "$out" | jq -r '.limits|join(" ")')" "secondmate home" \
+    "dropping another home's decisions must be disclosed on the chart, never silent"
+  pass "a secondmate decision reaches the merged surface and is kept off a main-home chart, disclosed"
+}
+
+test_a_blocker_that_is_done_in_the_archive_no_longer_hides_takeable_work() {
+  # PART 1 - REPRODUCE. Blocker resolution in the snapshot is per FILE, so a live
+  # record whose blocker was archived long ago still reads as blocked. That is
+  # what would drop it out of takeable[] with no footnote.
+  local home cap out live
+  home=$(make_home archblock)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-implement - Implement the reader blocked-by: voy-setup (repo: r) (kind: ship) (since 2026-07-30)
+- [ ] voy-later - Waits on something still open blocked-by: voy-open (repo: r) (kind: ship) (since 2026-07-30)
+- [ ] voy-open - Still open (repo: r) (kind: ship) (since 2026-07-30)
+EOF
+  cat > "$home/data/done-archive.md" <<'EOF'
+# Done archive
+
+## Archived 2026-07-20
+- [x] voy-setup - Set the reader up (repo: r) (kind: ship) (done 2026-07-20)
+EOF
+  live=$("$ROOT/bin/fm-fleet-snapshot.sh" --backlog-json "$home/data/backlog.md")
+  [ "$(printf '%s' "$live" | jq -r '[.records[]|select(.id=="voy-implement")|.unresolved_blocker_ids[]]|join(",")')" = "voy-setup" ] \
+    || fail "the reproduction is stale: the per-file reader now resolves blockers it cannot see. Re-derive the chart's blocker resolution before relaxing this."
+
+  # PART 2 - THE CHART RESOLVES IT, because it already reads both files.
+  cap=$(capture archblock)
+  out=$(chart_json "$home" voy "$cap")
+  [ "$(printf '%s' "$out" | jq -r '[.takeable[].id]|index("voy-implement")')" != "null" ] \
+    || fail "work whose only blocker is Done in the archive must be takeable, not silently dropped"
+  # And a genuinely unresolved blocker still holds its work back.
+  [ "$(printf '%s' "$out" | jq -r '[.takeable[].id]|index("voy-later")')" = "null" ] \
+    || fail "a blocker that is still open must keep its work out of takeable"
+  pass "a blocker Done in the archive stops hiding takeable work, and a live one still holds"
+}
+
 test_fog_and_out_of_course_can_never_be_a_captain_decision() {
   # Structure, not prose: captain-actionability requires kind captain.
   local home out
@@ -351,6 +433,8 @@ test_both_surfaces_state_the_boundary_between_them() {
 }
 
 test_the_silent_loss_is_reproduced_then_absent
+test_a_secondmate_decision_reaches_the_merged_surface_then_stays_off_this_chart
+test_a_blocker_that_is_done_in_the_archive_no_longer_hides_takeable_work
 test_fog_and_out_of_course_can_never_be_a_captain_decision
 test_chart_kinds_stay_off_the_blockage_surface_but_are_disclosed
 test_a_chart_without_a_destination_is_refused
