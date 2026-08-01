@@ -6,6 +6,7 @@ The 2026-08-01 review, extended on 2026-08-02, records all 94 fork-only, non-mer
 That fork commit is a pinned snapshot of the fork's default branch, not a live reference.
 `bin/fm-fork-sync-check.sh` resolves its own fork side from the live origin `HEAD` instead, so its commit set grows the moment anything lands on the fork's default branch while this pin stays where it is.
 A divergence between the check's count and this registry's row count is therefore expected and is not a defect in either.
+`Freudator86/firstmate` is a shared repository into which other vessels also push, so part of such a divergence is their work rather than an omission on this home's side.
 The remedy is to add one row per unrecorded commit and re-stamp the pin in the sentence above; `git rev-list --oneline --no-merges <pinned-fork>..origin/main` names exactly what a stale pin is missing.
 The registry is deliberately not self-updating, because a generated row could only restate the diff, which is the reconstructed motive this document exists to prevent.
 
