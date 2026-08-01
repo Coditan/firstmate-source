@@ -230,13 +230,13 @@ Covering the third surface needed no second mechanism.
 It enforces a convention that is already written down - `firstmate-coding-guidelines` "Trigger hygiene" says "a new skill is dead weight if nothing loads it", requires a section 13 line for every agent-only skill, and requires the trigger be stated as a condition rather than a vague pointer - and follows the same skill's instruction to prefer deterministic enforcement over agent memory for critical infrastructure.
 It extends the existing test rather than adding a runner, per the repo's colocation rule.
 
-**Cost.** 80 lines, including a 15-line shared helper that flattens the folded-block description forms.
+**Cost.** 91 lines, including 26 lines of shared helpers: one that isolates the YAML frontmatter block so a column-0 key in the body cannot satisfy a frontmatter probe, and one that flattens the folded-block description forms.
 Runs in under 300 ms inside the existing `pure-contract-unit` family, no new dependency, `shellcheck` clean.
 It passes on the tree unchanged.
 Ongoing cost is one `AGENTS.md` line per new agent-only skill and a description that says when to load it, both of which the placement rules already require.
 Because it reads the directory, it cannot go stale as the directory grows.
 
-**Verified to bite**, by removal, in 34 scenarios:
+**Verified to bite**, by removal, in 34 scenarios, all run at base `6fa6926` and counted against that tree:
 
 - all 12 agent-only skills, section 13 entry removed individually - red in every case, including the 7 that were green before this change;
 - all 19 skills, `description` emptied individually but the key left present - red in every case.

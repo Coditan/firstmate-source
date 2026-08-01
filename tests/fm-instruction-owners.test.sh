@@ -344,7 +344,7 @@ test_every_skill_declares_a_load_trigger() {
   for dir in "$ROOT"/.agents/skills/*/; do
     name=$(basename "$dir")
     [ -f "$dir/SKILL.md" ] || fail "skill $name has no SKILL.md"
-    grep -qx "name: $name" "$dir/SKILL.md" \
+    fm_skill_frontmatter "$dir" | grep -qx "name: $name" \
       || fail "skill $name declares a metadata name that is not its directory"
     invocable=$(fm_skill_frontmatter "$dir" | grep -m1 '^user-invocable:' | awk '{print $2}')
     case "$invocable" in
