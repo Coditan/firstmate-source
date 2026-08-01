@@ -263,6 +263,46 @@ EOF
   pass "a blocked captain thread with no decision key is recovered, and keyless records are never twinned"
 }
 
+test_withheld_records_name_their_own_cause() {
+  # Every open captain record under the chart is listed, which is the right
+  # trade - but they are off the actionable surface for different reasons, and
+  # one sentence covering all of them would be a small untruth in the one place
+  # this chart exists to be honest. A record somebody is working right now must
+  # not read like a decision the fleet has lost.
+  local home cap out causes
+  home=$(make_home causes)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## In flight
+- [ ] voy-worked - Being worked right now (repo: r) (kind: captain) (since 2026-07-29) (hold: Which shape) (hold-kind: captain)
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-blocked - Blocked by live work blocked-by: voy-open (repo: r) (kind: captain) (since 2026-07-28) (hold: Which one) (hold-kind: captain)
+- [ ] voy-open - The work still holding it (repo: r) (kind: ship) (since 2026-07-30)
+- [ ] voy-unheld - Queued with nothing recorded as asked (repo: r) (kind: captain) (since 2026-07-30)
+- [ ] voy-future - Held, but not for the captain (repo: r) (kind: captain) (since 2026-07-30) (hold: Wait for the release) (hold-kind: future)
+EOF
+  cap=$(capture causes)
+  out=$(chart_json "$home" voy "$cap")
+  causes=$(printf '%s' "$out" | jq -r '[.withheld[]|{(.id): .cause}]|add|tojson')
+  [ "$(printf '%s' "$causes" | jq -r '.["voy-blocked"]')" = "blocked" ] \
+    || fail "a record held back by an unresolved blocker is the lost decision this chart exists for and must say so"
+  [ "$(printf '%s' "$causes" | jq -r '.["voy-worked"]')" = "in-flight" ] \
+    || fail "a captain record being worked right now must not be reported the same way as a lost one"
+  [ "$(printf '%s' "$causes" | jq -r '.["voy-unheld"]')" = "no-hold" ] \
+    || fail "a queued captain record with no hold recorded has its own cause"
+  [ "$(printf '%s' "$causes" | jq -r '.["voy-future"]')" = "other-hold" ] \
+    || fail "a record held for something other than the captain has its own cause"
+  # The reasons in words must not collapse back into one shared sentence.
+  [ "$(printf '%s' "$out" | jq -r '[.withheld[].why]|unique|length')" = 4 ] \
+    || fail "four distinct causes must carry four distinct reasons, or the labels have silently collapsed"
+  assert_contains "$(printf '%s' "$out" | jq -r '.withheld[]|select(.id=="voy-blocked")|.held_by')" "voy-open" \
+    "a blocked record must still name what is holding it"
+  pass "each withheld record names the cause that kept it off the actionable surface"
+}
+
 test_fog_and_out_of_course_can_never_be_a_captain_decision() {
   # Structure, not prose: captain-actionability requires kind captain.
   local home out
@@ -514,6 +554,7 @@ test_a_secondmate_decision_reaches_the_merged_surface_then_stays_off_this_chart
 test_a_blocker_that_is_done_in_the_archive_no_longer_hides_takeable_work
 test_an_archived_twin_never_cancels_a_live_blocker
 test_a_captain_thread_without_a_decision_key_is_recovered
+test_withheld_records_name_their_own_cause
 test_fog_and_out_of_course_can_never_be_a_captain_decision
 test_chart_kinds_stay_off_the_blockage_surface_but_are_disclosed
 test_a_chart_without_a_destination_is_refused

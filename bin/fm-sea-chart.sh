@@ -49,13 +49,18 @@
 # So this script never trusts that surface alone. It reads its own chart's
 # captain-gated records straight from the backlog and RECONCILES: any record
 # under this chart that the actionable surface did not return is reported in
-# `withheld[]` with the blocker holding it, and counted. What makes a record
-# captain-gated is its KIND, never its name: a thread held with `--kind captain`
-# carries no `-decision-` in its id and is exactly as lost when it is blocked.
-# Being per-chart is what
-# makes this possible without the fleet-wide `decisions_blocked[]` surface that
-# the design defers - a chart knows its own scope, so it can ask a bounded
-# question the fleet-wide board cannot.
+# `withheld[]`, named, counted, and given the reason it did not reach the
+# surface - blocked, in flight, or held some other way. What makes a record
+# captain-gated is its KIND, never its name: `kind: captain` together with
+# `hold-kind: captain` is the only shape captain-actionability can ever admit,
+# and a captain record named without `-decision-` is exactly as lost when it is
+# blocked. A record of a DIFFERENT kind carrying a captain hold is not this gap
+# and is not recovered here: it never reaches `decisions_open` at all, so the
+# decision board cannot see it either. That belongs to the predicate in
+# bin/fm-fleet-snapshot.sh and is filed as `fm-snapshot-captain-shape-invisible`.
+# Being per-chart is what makes the recovery possible without the fleet-wide
+# `decisions_blocked[]` surface that the design defers - a chart knows its own
+# scope, so it can ask a bounded question the fleet-wide board cannot.
 #
 # ONE HOME, ON BOTH SIDES OF THAT RECONCILIATION
 # The bearings surface this reads is fleet-wide: it merges every registered
@@ -70,18 +75,22 @@
 # chart ends up reporting that more records reached the actionable surface than
 # exist in its backlog at all.
 #
-# BLOCKER EDGES ARE RE-RESOLVED WIDER, BUT BY THE OWNER RULE
+# BLOCKER EDGES ARE RE-RESOLVED WIDER, AND IN THE SAFE DIRECTION
 # The snapshot resolves `blocked-by` per FILE, so a live record whose blocker was
 # archived long ago still reads as blocked and would silently never appear under
 # `takeable[]` - the one failure this surface disclaims. The chart already holds
-# the live backlog AND the archive, so it re-resolves the edges over both.
-# It widens only the EVIDENCE, never the rule: an id is resolved when every
-# record carrying it is Done, which is the rule bin/fm-fleet-snapshot.sh states
-# for a blocker, so a live queued row is never cancelled out by an archived Done
-# twin of the same id. Where a duplicated id makes the two readings differ, this
-# takes the one that holds work back: a chart that offers gated work invites an
-# action, and a wrong invitation costs more than a wrong omission. Only genuinely
-# unresolved ids are reported where blockers are named.
+# the live backlog AND the archive, so it re-resolves the edges over both, and an
+# id counts as resolved only when EVERY record carrying it is Done.
+# That last part is a choice made here, not a copy of anything: the snapshot
+# reduce READS as an and-fold but is not one, because jq evaluates `false // true`
+# to true, so in practice the last row carrying an id decides it there. Requiring
+# all of them is the safe direction, and that is the whole reason. Presenting
+# blocked work as takeable invites someone to pick up something that is still
+# gated; holding ready work back merely leaves it sitting, and a wrong invitation
+# costs more than a wrong omission. So on a duplicated id the two readings
+# differ, this one takes the answer that holds work back, and the divergence
+# itself is filed as `fm-snapshot-blocker-and-is-not-and` rather than papered
+# over here. Only genuinely unresolved ids are reported where blockers are named.
 #
 # THE MARKING FOR UNSUPERVISED WORK IS A PAIR, NEVER A BADGE
 # `navigation` is deliberately not a boolean. A single flag renders as a badge,
@@ -115,7 +124,10 @@
 #   membership         the rule in one line, plus the member count it produced
 #   decided[]          resolved decisions of this chart, newest first
 #   decisions[]        open decisions, after the board's collapse rule
-#   withheld[]         captain-gated records the actionable surface did not return
+#   withheld[]         captain-gated records the actionable surface did not
+#                      return, each with the `cause` that kept it off - blocked,
+#                      in-flight, no-hold, other-hold, not-returned - and `why`
+#                      in words; blocked is the one that means a lost decision
 #   fog[]              named dark patches on this course
 #   out_of_course[]    deliberate scope boundaries; these never rise
 #   takeable[]         work with no unresolved blocker and no hold, each with a
@@ -263,16 +275,39 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
     | ($id | index("-" + $m + "-")) as $at
     | if $at == null then null else $id[($at + 2 + ($m | length)):] end;
   def open_state: .state == "queued" or .state == "in_flight";
-  # The rule bin/fm-fleet-snapshot.sh states for a blocker and this reads rather
-  # than restates: an id is resolved only when EVERY record carrying it is Done.
-  # What this script widens is how much it looks at, never the rule. The snapshot
+  # An id is resolved only when EVERY record carrying it is Done. The snapshot
   # resolves per FILE, so a live record whose blocker was archived long ago reads
   # as blocked forever and never becomes takeable, with no footnote; the chart
-  # holds the live backlog and the archive together and asks the same question of
-  # both. A live queued row is therefore never cancelled by an archived Done twin
-  # of the same id - that direction would invite someone to pick up work that is
-  # still gated, which is worse than leaving ready work sitting.
+  # holds the live backlog and the archive together and asks across both.
+  # Requiring all of them is chosen for the DIRECTION of the error, not because
+  # it copies anything: a live queued row is never cancelled by an archived Done
+  # twin of the same id, because presenting gated work as takeable invites
+  # someone to pick up something still held, while holding ready work back only
+  # leaves it sitting. See the header for where this and the snapshot diverge.
   def unresolved($done): [ (.blocked_by_ids // .unresolved_blocker_ids // [])[] | select($done[.] != true) ];
+
+  # Why a captain-gated record never reached the actionable surface. These are
+  # different pieces of news and must not share one sentence: a blocked record is
+  # one the fleet has lost track of, while an in-flight one is being worked right
+  # now. Captain-actionability (bin/fm-fleet-snapshot.sh) wants a queued record of
+  # kind captain, held with hold-kind captain, and nothing unresolved against it,
+  # so each failing clause gets its own name and its own words.
+  def withheld_reason($done):
+    if (unresolved($done) | length) > 0
+    then {cause: "blocked",
+          why: "blocked by another record that has not resolved, so it never reaches the actionable surface"}
+    elif .state != "queued"
+    then {cause: "in-flight",
+          why: "in flight rather than queued: somebody is working it right now, so it is not a decision lying unanswered"}
+    elif .hold_reason == null
+    then {cause: "no-hold",
+          why: "queued with no hold recorded, so nothing on the record states what the captain is being asked"}
+    elif .hold_kind != "captain"
+    then {cause: "other-hold",
+          why: "held as \(.hold_kind), which is not a captain hold, so the actionable surface never carries it"}
+    else {cause: "not-returned",
+          why: "present in the backlog but not returned as actionable"}
+    end;
 
   input as $live
   | input as $arch
@@ -297,19 +332,25 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
 
   # RECONCILIATION. Every record this chart owns that waits on the captain,
   # straight from the backlog - then whatever the actionable surface did not
-  # return. The test is the KIND, never the identifier: AGENTS.md section 10
-  # sanctions holding an ordinary thread with `--kind captain`, and such a record
-  # carries no `-decision-` in its name. Keying on the name would leave a blocked
-  # captain thread not merely undercounted but invisible, every count reading
-  # zero - the same silent loss this chart exists against, on a third flank.
+  # return. The test is the KIND, never the identifier: `kind: captain` with
+  # `hold-kind: captain` is the only shape captain-actionability can ever admit,
+  # so the record kind IS the thing while a name is only what it happens to be
+  # called. Keying on `-decision-` in the id would leave a blocked captain record
+  # named any other way not merely undercounted but invisible, every count
+  # reading zero - the same silent loss this chart exists against, on a third
+  # flank. A record of some other kind carrying a captain hold is a different
+  # gap: it never reaches `decisions_open` either, so the decision board cannot
+  # see it in the first place. That one belongs to the captain-actionable
+  # predicate in bin/fm-fleet-snapshot.sh and is filed as
+  # `fm-snapshot-captain-shape-invisible`; this chart cannot close it.
   | ([ $mine[] | select(open_state and .kind == "captain") ]) as $own_decision_records
   | ([ $own_decision_records[]
        | select(.id as $id | ($seen | index($id)) == null)
+       | withheld_reason($done) as $reason
        | {id, key:(.id | dkey), title:(.title // ""),
           held_by:(unresolved($done) | join(", ")),
-          why:(if (unresolved($done) | length) > 0
-               then "blocked by another record, so it never reaches the actionable surface"
-               else "present in the backlog but not returned as actionable" end)} ]) as $withheld
+          cause: $reason.cause,
+          why: $reason.why} ]) as $withheld
 
   | ([ $mine[] | select(.state == "done" and (.id | dkey) != null)
        | {id, key:(.id | dkey), title:(.title // ""),
