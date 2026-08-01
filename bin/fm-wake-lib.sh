@@ -11,6 +11,13 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-${STATE:-$FM_HOME/state}}"
 FM_WAKE_QUEUE="${FM_WAKE_QUEUE:-$STATE/.wake-queue}"
 FM_WAKE_QUEUE_LOCK="${FM_WAKE_QUEUE_LOCK:-$STATE/.wake-queue.lock}"
+# Default seconds bin/fm-wake-wait.sh gives a live, identity-matched watcher to
+# get its beacon back inside the grace before reporting it. It lives here rather
+# than in that script because bin/fm-watch-checkpoint.sh has to clamp the child's
+# window below its own bound and therefore needs the very same number; two
+# literals would be two things to keep in step.
+# shellcheck disable=SC2034 # Read by bin/fm-wake-wait.sh and bin/fm-watch-checkpoint.sh.
+FM_WAKE_BEAT_CONFIRM_DEFAULT=90
 FM_LOCK_STALE_AFTER="${FM_LOCK_STALE_AFTER:-2}"
 FM_LOCK_STEAL_MAX_DEPTH="${FM_LOCK_STEAL_MAX_DEPTH:-8}"
 FM_LOCK_WAIT_TIMEOUT="${FM_LOCK_WAIT_TIMEOUT:-30}"

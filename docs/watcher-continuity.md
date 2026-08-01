@@ -51,10 +51,20 @@ The two states are distinguishable without any suspend detection, because `fm_wa
 A suspend fails only the third; a real death fails the first.
 `fm_watcher_healthy` therefore classifies its own verdict in `FM_WATCHER_HEALTH` as `healthy`, `beacon-stale`, or `dead`, and is the single owner of that distinction.
 
-When and only when the beacon age is the sole failing condition, the delivery stub opens one bounded beat-confirmation window of `FM_WAKE_BEAT_CONFIRM` seconds (default 90) and exits only if the beacon mtime does not advance within it.
-The stub keeps polling the durable queue for the whole window, so delivery stays armed while it waits, and a beat that arrives closes the window, announces the recovery on stderr, and returns the stub to ordinary waiting.
+When and only when the beacon age is the sole failing condition, the delivery stub opens one bounded beat-confirmation window of `FM_WAKE_BEAT_CONFIRM` seconds (default 90) and exits only if the beacon has not come back inside the grace by the time it closes.
+The stub keeps polling the durable queue for the whole window, so delivery stays armed while it waits, and a beacon back inside the grace closes the window, announces the recovery on stderr, and returns the stub to ordinary waiting.
 That closing line exists so a recovered suspend and a watcher that never came back cannot read the same way in the log.
 A `dead` verdict never opens the window: no live identity-matched watcher can produce a beat, so that case still exits on the first reading past grace, exactly as before.
+
+Recovery is defined as the beacon being back inside the grace, not as its mtime having moved at all.
+A watcher that keeps beating but always slower than the grace would otherwise flap stale-window-beat-close indefinitely and never be reported, which would quietly remove a case that was loudly reportable before the window existed.
+So an advanced but still-stale beacon neither closes the open window nor extends it, and the failure line says the beacon never came back inside the grace within the window rather than claiming no beat was produced.
+
+Those `FM_WAKE_BEAT_CONFIRM` seconds are awake seconds, not wall-clock seconds.
+A window can already be open when the host suspends, and wall clock keeps running while the stub does not, so a wall-clock deadline would expire unobserved and fail on the first post-resume reading - the exact bug the window exists to prevent, re-created inside the fix.
+The stub sleeps `FM_WAKE_WAIT_POLL` between iterations, so an inter-iteration gap far larger than that poll is direct local evidence that the whole host was frozen; no `/proc`, `CLOCK_BOOTTIME`, or platform suspend detection is involved.
+The threshold is derived from the poll interval rather than configured, and the whole measured gap is added back to an open deadline, because frozen time was never time the watcher had to prove itself in.
+Erring long is safe here - it only lets a live, identity-matched watcher run a little further inside a still-bounded window - while erring short brings the suspend failure back.
 
 The window is bounded precisely so an alive-but-wedged watcher - one still holding the lock and no longer beating - is still reported rather than waited on forever.
 That case is the one this costs: it is reported at grace plus the window instead of at grace, measured as 30s against a 10s grace and a 20s window, versus 10s before.
@@ -63,7 +73,9 @@ Raising `FM_GUARD_GRACE` is not an alternative fix: it would convert a visible f
 
 The window must also stay comfortably under `FM_CODEX_WATCH_CHECKPOINT` (180s), because the Codex foreground checkpoint is the one caller that gives the stub a bounded lifetime.
 A window longer than that checkpoint would be restarted by every new checkpoint and would never reach its own deadline, which would turn that bounded delay into never reporting a wedged watcher at all under that harness.
-`tests/fm-wake-wait.test.sh` enforces the ordering of the two defaults rather than leaving it to be remembered.
+That coupling holds by construction rather than by memory: `bin/fm-watch-checkpoint.sh` clamps the `FM_WAKE_BEAT_CONFIRM` it exports to the child so it is strictly below the checkpoint length, covering both an ambient value and the stub's own default, and it says on stderr when it clamps.
+The default itself lives in `bin/fm-wake-lib.sh` as `FM_WAKE_BEAT_CONFIRM_DEFAULT`, so the stub and the checkpoint read one number rather than two literals that can drift apart.
+`tests/fm-wake-wait.test.sh` pins the ordering of the two defaults and proves the runtime clamp fires for a short `--seconds`.
 
 ## Regression coverage
 
@@ -72,6 +84,7 @@ A window longer than that checkpoint would be restarted by every new checkpoint 
 `tests/fm-continuity-pretool-check.test.sh` proves the Claude gate rejects only non-recovery fleet execution in the precise unhealthy state and preserves the existing Stop registration.
 `tests/fm-wake-wait.test.sh` proves the suspend contract by freezing rather than by reading the beacon: it SIGSTOPs a real `bin/fm-watch.sh` and the delivery stub together, resumes the stub first so it is forced to read an aged beacon before the watcher can beat, and requires the stub to still be armed and still deliver the next queued wake.
 It also pins both sides of the latency trade - a live watcher that never beats is still reported once the confirmation window elapses, and a killed watcher is reported on the first reading past grace with a deliberately huge `FM_WAKE_BEAT_CONFIRM` that the dead path must never consult.
+A second freeze test covers the dark-wake sequence the first cannot reach - resume, open the window, freeze again for longer than the window, resume - which fails on a wall-clock deadline and passes on an awake-time one, and both freeze tests assert the stub's identity lock still exists rather than trusting `kill -0`, which succeeds for a stub that already exited.
 
 ## Sanitized live evidence, 2026-07-17
 

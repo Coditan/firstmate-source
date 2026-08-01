@@ -4,6 +4,9 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-wake-lib.sh
+. "$SCRIPT_DIR/fm-wake-lib.sh"
+
 SECONDS_ARG=${FM_CODEX_WATCH_CHECKPOINT:-180}
 
 usage() {
@@ -43,6 +46,23 @@ case "$SECONDS_ARG" in
   ''|*[!0-9]*) echo "error: --seconds must be a positive integer" >&2; exit 2 ;;
   0) echo "error: --seconds must be greater than zero" >&2; exit 2 ;;
 esac
+
+# This checkpoint is the only caller that gives bin/fm-wake-wait.sh a bounded
+# lifetime, so its beat-confirmation window has to fit strictly inside this
+# bound: a window at or above it would be restarted by every new checkpoint,
+# never reach its own deadline, and never report a wedged watcher at all under
+# Codex - a bounded delay silently becoming no report. Clamp rather than trust
+# whoever set FM_WAKE_BEAT_CONFIRM, or the stub's own default, to have been
+# chosen with this coupling in mind; an invariant that holds by construction
+# beats one that holds by memory.
+BEAT_CONFIRM=${FM_WAKE_BEAT_CONFIRM:-$FM_WAKE_BEAT_CONFIRM_DEFAULT}
+case "$BEAT_CONFIRM" in ''|*[!0-9]*) BEAT_CONFIRM=$FM_WAKE_BEAT_CONFIRM_DEFAULT ;; esac
+if [ "$BEAT_CONFIRM" -ge "$SECONDS_ARG" ]; then
+  printf 'checkpoint: beat-confirmation window %ss does not fit inside this %ss checkpoint; clamping it to %ss\n' \
+    "$BEAT_CONFIRM" "$SECONDS_ARG" "$((SECONDS_ARG / 2))" >&2
+  BEAT_CONFIRM=$((SECONDS_ARG / 2))
+fi
+export FM_WAKE_BEAT_CONFIRM=$BEAT_CONFIRM
 
 OUT=$(mktemp "${TMPDIR:-/tmp}/fm-watch-checkpoint.out.XXXXXX") || exit 1
 ERR=$(mktemp "${TMPDIR:-/tmp}/fm-watch-checkpoint.err.XXXXXX") || {
