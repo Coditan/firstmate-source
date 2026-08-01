@@ -110,6 +110,39 @@ SH
   printf '%s\n' "$fakebin"
 }
 
+# The other half of the same race, and the one that takes .git/index.lock: the
+# concurrent sync wins the fast-forward merge - so the clone really does end up
+# level with origin - while this one's merge fails on the lock it already holds.
+# The shim reproduces that end state by letting the real merge happen and then
+# reporting the loser's failure. Echoes the fakebin dir to prepend to PATH.
+shim_git_merge_lock_contention() {
+  local home=$1 lock=$2 fakebin real
+  real=$(command -v git)
+  fakebin=$(fm_fakebin "$home")
+  cat > "$fakebin/git" <<SH
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  if [ "\$arg" = merge ]; then
+    "$real" "\$@" >/dev/null 2>&1 || true
+    printf "fatal: Unable to create '%s': File exists.\\n" "$lock" >&2
+    exit 128
+  fi
+done
+exec "$real" "\$@"
+SH
+  chmod +x "$fakebin/git"
+  printf '%s\n' "$fakebin"
+}
+
+# Put the fixture home in the state fm-guard.sh alarms on: work in flight with no
+# live watcher. fm-fleet-sync.sh runs that guard, so this is what a Bridge call
+# meets whenever supervision is down.
+strand_watcher() {
+  local home=$1
+  mkdir -p "$home/state" "$home/config"
+  fm_write_meta "$home/state/task.meta" "window=firstmate:fm-task" "kind=ship"
+}
+
 # Shim sed so fm-fleet-sync.sh dies mid-run instead of reporting a per-project
 # outcome: it composes its skip reason through sed, so the crash lands the relay
 # on the genuine no-outcome path, where fleet-sync's stderr is the only
@@ -240,6 +273,9 @@ test_no_outcome_refusal_surfaces_the_refresh_error() {
   home=$(make_bridge no-outcome)
   publish_envelope_at_origin no-outcome tugboat
   strand_clone no-outcome
+  # Supervision is down too, so fm-guard.sh's banner shares the captured stderr:
+  # the diagnosis must be fleet-sync's error, never the guard's rule line.
+  strand_watcher "$home"
   RELAY_PATH_PREFIX=$(shim_broken_sed "$home")
 
   out=$(run_relay "$home" inbox --vessel tugboat); rc=$?
@@ -251,8 +287,41 @@ test_no_outcome_refusal_surfaces_the_refresh_error() {
     "a refresh that reported nothing was not described as incomplete"
   assert_contains "$out" 'sed: simulated tool failure' \
     "the no-outcome refusal threw away the only diagnosis fleet-sync produced"
+  assert_not_contains "$out" 'fm-fleet-sync.sh stderr: ●' \
+    "the guard's banner rule line was mistaken for fleet-sync's error text"
   assert_absent "$home/capture" "a refresh that reported nothing still invoked the Bridge script"
   pass "Bridge relay surfaces fleet-sync's stderr when the refresh reported no outcome at all"
+}
+
+test_guard_alarm_reaches_the_caller() {
+  local home out rc
+  home=$(make_bridge guarded)
+  strand_watcher "$home"
+
+  out=$(run_relay "$home" inbox --vessel tugboat); rc=$?
+  expect_code 0 "$rc" "read on a current clone while supervision is down"
+  assert_contains "$out" 'WATCHER DAEMON DOWN - SUPERVISION IS OFF' \
+    "the guard's once-per-episode alarm was swallowed by the relay's stderr capture"
+  assert_grep 'script=bridge-inbox.sh' "$home/capture" \
+    "the guarded read never reached the Bridge script"
+
+  # The full banner is spent for this episode; the reminder that replaces it must
+  # reach the caller too, on the refusal path as well as the dispatching one.
+  rm -f "$home/capture"
+  out=$(run_relay "$home" inbox --vessel tugboat); rc=$?
+  expect_code 0 "$rc" "second read while supervision is down"
+  assert_contains "$out" 'WARNING: watcher still down' \
+    "the guard's episode reminder was swallowed by the relay's stderr capture"
+
+  publish_envelope_at_origin guarded tugboat
+  strand_clone guarded
+  rm -f "$home/capture"
+  out=$(run_relay "$home" inbox --vessel tugboat); rc=$?
+  expect_code 1 "$rc" "refused read while supervision is down"
+  assert_contains "$out" 'STALE CHECKOUT' "the refusal was lost while supervision was down"
+  assert_contains "$out" 'WARNING: watcher still down' \
+    "a refusing call swallowed the guard's episode reminder"
+  pass "Bridge relay passes fm-guard.sh's supervision alarms through to its own stderr"
 }
 
 test_diverged_checkout_refuses_a_read() {
@@ -324,6 +393,26 @@ test_lock_contention_proceeds_only_while_level() {
   pass "Bridge relay proceeds through lock contention only while the clone is provably level"
 }
 
+test_fast_forward_lock_contention_proceeds_when_level() {
+  local home bridge out rc RELAY_PATH_PREFIX
+  home=$(make_bridge contended-ff)
+  bridge="$home/projects/coditan-bridge"
+  publish_envelope_at_origin contended-ff tugboat
+  # The fetch succeeds and the fast-forward is the step that loses the race, on
+  # .git/index.lock rather than .git/packed-refs.lock - the likelier collision
+  # with the session-start whole-fleet sync, and the one that leaves the clone
+  # level because the winner moved it.
+  RELAY_PATH_PREFIX=$(shim_git_merge_lock_contention "$home" "$bridge/.git/index.lock")
+
+  out=$(run_relay "$home" inbox --vessel tugboat); rc=$?
+  expect_code 0 "$rc" "read after the fast-forward lost a lock race on a clone left level"
+  assert_contains "$out" 'lost a race for a git lock' \
+    "the relaxed read never said it proceeded on a contended fast-forward"
+  assert_grep 'seen=inbox/tugboat/new/2026-08-01T00-56-11Z-envelope.json' "$home/capture" \
+    "a read on a clone the winning sync had already moved level was refused"
+  pass "Bridge relay treats a fast-forward that lost .git/index.lock as contention, not staleness"
+}
+
 test_only_read_shaped_calls_refuse() {
   local home out rc capture
   home=$(make_bridge shapes)
@@ -359,7 +448,9 @@ test_valid_calls_dispatch_verbatim
 test_behind_checkout_is_refreshed_before_a_read
 test_stranded_checkout_refuses_a_read
 test_no_outcome_refusal_surfaces_the_refresh_error
+test_guard_alarm_reaches_the_caller
 test_diverged_checkout_refuses_a_read
 test_unrecognized_status_form_refuses_a_read
 test_lock_contention_proceeds_only_while_level
+test_fast_forward_lock_contention_proceeds_when_level
 test_only_read_shaped_calls_refuse

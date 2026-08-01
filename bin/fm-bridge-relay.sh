@@ -22,7 +22,12 @@
 # call proceeds, with a one-line note on stderr so the relaxation is never
 # silent, because nothing about its currency is actually unproven. Every other
 # blocked, absent, or unreadable proof still refuses. See
-# is_contended_fetch_failure.
+# is_contended_refresh_failure.
+# fm-fleet-sync.sh runs bin/fm-guard.sh, whose supervision alarms go to stderr
+# and whose full banner is emitted only once per stale episode, so this relay
+# captures that stderr but passes every guard line straight back out on its own
+# stderr, on the success path too; only the remaining lines are treated as
+# fleet-sync's own diagnosis. Stdout stays untouched for the Bridge script.
 # Only the selected whitelisted Bridge script receives the remaining arguments,
 # unchanged and from inside the Bridge checkout, and owns any resulting publish.
 set -eu
@@ -64,6 +69,11 @@ esac
 # answering from a clone it could not prove current. The forwarded arguments are
 # inspected, never rewritten: `inbox` writes only in its `--gc` form, `status`
 # only in its `--push` form, and `send`/`broadcast` are writes whole.
+# The `--push` spelling was verified by reading bridge-status.sh in the
+# coditan-bridge checkout, which is out of scope for this change and so was read,
+# not changed: its parser accepts exactly `--push` (write) and `--show <vessel>`
+# (read) and rejects every other option with "unknown option" and exit 2, so an
+# unrecognised status form can never be a publish this refusal would strand.
 classify_read_shaped() {
   local arg
   case "$subcommand" in
@@ -156,40 +166,71 @@ classify_refresh_line() {
   esac
 }
 
-# is_contended_fetch_failure: true when this fleet-sync outcome line reports a
-# fetch that lost a race for a git lock (.git/packed-refs.lock or .git/index.lock
-# held by a concurrent fleet sync - bin/fm-bootstrap.sh runs one over the whole
-# fleet at session start), rather than a refresh that could not reach or reconcile
-# with origin. The signature mirrors is_packed_refs_lock_error in
-# bin/fm-fleet-sync.sh, widened to index.lock; an unreachable origin, an
-# authentication failure, and every other fetch failure are NOT contention.
-is_contended_fetch_failure() {
+# is_contended_refresh_failure: true when this fleet-sync outcome line reports a
+# refresh step that lost a race for a git lock to a concurrent fleet sync
+# (bin/fm-bootstrap.sh runs one over the whole fleet at session start), rather
+# than a refresh that could not reach or reconcile with origin. Both losing steps
+# count, because they take different locks: the fetch loses .git/packed-refs.lock
+# and is reported as "skipped: fetch failed: ...", while the fast-forward merge
+# loses .git/index.lock and is reported as "skipped: fast-forward failed: ...".
+# fleet-sync relays git's message through its own first_line, which keeps only
+# git's FIRST output line with whitespace runs squeezed, so this matches that one
+# line and not git's full output the way is_packed_refs_lock_error does: a lock
+# error git does not put on its first output line still refuses. An unreachable
+# origin, an authentication failure, and every other fetch or fast-forward
+# failure are NOT contention.
+is_contended_refresh_failure() {
   case "$1" in
-    *": skipped: fetch failed: "*) ;;
+    *": skipped: fetch failed: "*|*": skipped: fast-forward failed: "*) ;;
     *) return 1 ;;
   esac
   printf '%s\n' "$1" | grep -Eq "Unable to create ['\"][^'\"]*(packed-refs|index)\.lock['\"]: File exists"
 }
 
+# is_guard_banner_line: true for a line bin/fm-guard.sh writes to stderr as one
+# of its supervision alarms - the '●'-prefixed banner lines and the one-line
+# reminder it prints for the rest of a stale episode.
+is_guard_banner_line() {
+  case "$1" in
+    "●"*|"WARNING: watcher still down"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # refresh_checkout: refresh this clone through fm-fleet-sync.sh, the single
 # sanctioned path that moves a project clone, and record its outcome in
-# REFRESH_VERDICT/REFRESH_DETAIL. Its stderr and exit status are kept in
-# REFRESH_ERROR/REFRESH_STATUS rather than discarded, because a run that dies
-# before printing any per-project outcome leaves them as the only diagnosis.
-# Branch pruning is off because only the fast-forward is wanted here.
+# REFRESH_VERDICT/REFRESH_DETAIL. Its exit status is kept in REFRESH_STATUS, and
+# the stderr it produces is split rather than discarded: fm-guard.sh's alarm
+# lines are relayed to this script's stderr unchanged, and the last
+# REFRESH_ERROR_TAIL_LINES of what remains are kept in REFRESH_ERROR, because a
+# run that dies before printing any per-project outcome leaves them as the only
+# diagnosis. Branch pruning is off because only the fast-forward is wanted here.
 REFRESH_VERDICT=none
 REFRESH_DETAIL=""
 REFRESH_ERROR=""
 REFRESH_STATUS=0
+REFRESH_ERROR_TAIL_LINES=5
 refresh_checkout() {
   local out line verdict errfile rc=0
+  local -a diagnosis=()
   errfile=$(mktemp "${TMPDIR:-/tmp}/fm-bridge-relay-refresh.XXXXXX") || errfile=""
   if [ -n "$errfile" ]; then
     out=$(FM_FLEET_PRUNE=0 "$SCRIPT_DIR/fm-fleet-sync.sh" "$BRIDGE_ROOT" 2>"$errfile") || rc=$?
-    REFRESH_ERROR=$(head -n 1 "$errfile" 2>/dev/null) || REFRESH_ERROR=""
+    while IFS= read -r line; do
+      if is_guard_banner_line "$line"; then
+        printf '%s\n' "$line" >&2
+        continue
+      fi
+      [ -n "$line" ] || continue
+      diagnosis+=("$line")
+      if [ "${#diagnosis[@]}" -gt "$REFRESH_ERROR_TAIL_LINES" ]; then
+        diagnosis=("${diagnosis[@]: -$REFRESH_ERROR_TAIL_LINES}")
+      fi
+    done < "$errfile"
     rm -f "$errfile"
+    [ "${#diagnosis[@]}" -eq 0 ] || REFRESH_ERROR=$(printf '%s\n' "${diagnosis[@]}")
   else
-    out=$(FM_FLEET_PRUNE=0 "$SCRIPT_DIR/fm-fleet-sync.sh" "$BRIDGE_ROOT" 2>/dev/null) || rc=$?
+    out=$(FM_FLEET_PRUNE=0 "$SCRIPT_DIR/fm-fleet-sync.sh" "$BRIDGE_ROOT") || rc=$?
   fi
   REFRESH_STATUS=$rc
   while IFS= read -r line; do
@@ -208,7 +249,7 @@ stale_remedy=""
 if [ "$REFRESH_VERDICT" = current ]; then
   :
 elif [ "$REFRESH_VERDICT" = blocked ] \
-    && is_contended_fetch_failure "$REFRESH_DETAIL" && [ "$behind" = 0 ]; then
+    && is_contended_refresh_failure "$REFRESH_DETAIL" && [ "$behind" = 0 ]; then
   echo "fm-bridge-relay: the refresh lost a race for a git lock, but local '$default' is level with $upstream, so '$subcommand' proceeds ($REFRESH_DETAIL)" >&2
 elif [ "$REFRESH_VERDICT" = blocked ]; then
   stale=yes
@@ -222,6 +263,10 @@ elif [ "$REFRESH_VERDICT" = blocked ]; then
       stale_remedy="clear the condition that outcome names, then re-run this command"
       ;;
   esac
+elif [ "$REFRESH_STATUS" -eq 0 ]; then
+  stale=yes
+  stale_reason="fm-fleet-sync.sh exited 0 but printed no outcome for $label that this relay recognises, so the refresh most likely SUCCEEDED while its outcome vocabulary and classify_refresh_line here have drifted apart"
+  stale_remedy="reconcile classify_refresh_line in bin/fm-bridge-relay.sh with the per-project outcome vocabulary bin/fm-fleet-sync.sh actually prints; re-running the fleet sync cannot clear this, because it already succeeded"
 else
   stale=yes
   stale_reason="the guarded refresh did not complete (fm-fleet-sync.sh exited $REFRESH_STATUS reporting no outcome for $label), so the clone's currency is unknown"
@@ -240,11 +285,7 @@ if [ "$stale" = no ]; then
 fi
 
 if [ "$stale" = yes ]; then
-  refresh_line=$REFRESH_DETAIL
-  if [ -z "$refresh_line" ]; then
-    refresh_line="fm-fleet-sync.sh reported no outcome for $label"
-    [ -z "$REFRESH_ERROR" ] || refresh_line="$refresh_line; its first stderr line was: $REFRESH_ERROR"
-  fi
+  refresh_line=${REFRESH_DETAIL:-fm-fleet-sync.sh reported no outcome for $label}
   if [ "$read_shaped" = yes ]; then
     {
       echo "fm-bridge-relay: STALE CHECKOUT - refusing to run '$subcommand' against $BRIDGE_ROOT"
@@ -252,6 +293,11 @@ if [ "$stale" = yes ]; then
       echo "fm-bridge-relay: unread mail may be waiting at origin and would not have been listed."
       echo "fm-bridge-relay: reason: $stale_reason"
       echo "fm-bridge-relay: refresh: $refresh_line"
+      if [ -z "$REFRESH_DETAIL" ] && [ -n "$REFRESH_ERROR" ]; then
+        while IFS= read -r diagnosis_line; do
+          echo "fm-bridge-relay: fm-fleet-sync.sh stderr: $diagnosis_line"
+        done <<< "$REFRESH_ERROR"
+      fi
       echo "fm-bridge-relay: remedy: $stale_remedy"
     } >&2
     exit 1
