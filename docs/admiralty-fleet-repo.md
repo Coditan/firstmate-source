@@ -48,7 +48,7 @@ A vessel sitting at the fork's current `main` and pointed at `admiralty`'s `main
 | `fleet/doctrine/` | fleet | the partition, the pin and bump contract, branch protection |
 | `fleet/decisions/`, `fleet/vessels/`, `fleet/roles/` | fleet | placeholders for fleet-wide decisions, per-vessel material, and fleet-authored roles |
 | `.github/workflows/fleet-ci.yml` | fleet | the gates |
-| everything else, 308 paths | vendored | firstmate at the pin, byte for byte |
+| everything else, 353 paths at the current pin `de0b95b` and 308 at the genesis pin `e52cc76` | vendored | firstmate at the pin, byte for byte |
 
 Ownership is decided by name, in a fixed order, by `fleet/bin/fmf-ownership.sh`.
 The four control files, anything under `fleet/`, and `.github/workflows/fleet-*.yml` are fleet-owned; then the `.fleet-overlay` registry; then `.fleet-excluded`; then everything else is vendored.
