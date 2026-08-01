@@ -297,11 +297,22 @@ test_compressed_agents_retains_authority_and_supervision_safety() {
   pass "compressed AGENTS.md retains authority, supervision, AFK, and X safety"
 }
 
+# fm_skill_frontmatter <skill-dir>: print the YAML frontmatter block only, from
+# the opening `---` on line 1 to the next `---`, so a column-0 key anywhere in
+# the SKILL.md body can never satisfy a frontmatter probe.
+fm_skill_frontmatter() {
+  awk '
+    NR == 1 { if ($0 !~ /^---[[:space:]]*$/) exit; next }
+    /^---[[:space:]]*$/ { exit }
+    { print }
+  ' "$1/SKILL.md"
+}
+
 # fm_skill_description <skill-dir>: print the frontmatter description as one
 # line, flattening the folded-block forms, so an empty or absent description
 # prints nothing.
 fm_skill_description() {
-  awk '
+  fm_skill_frontmatter "$1" | awk '
     /^description:/ {
       sub(/^description:[[:space:]]*/, "")
       if ($0 != ">-" && $0 != ">" && $0 != "|" && $0 != "|-") printf "%s ", $0
@@ -310,7 +321,7 @@ fm_skill_description() {
     }
     inblock && /^[[:space:]]+[^[:space:]]/ { sub(/^[[:space:]]+/, ""); printf "%s ", $0; next }
     inblock { exit }
-  ' "$1/SKILL.md"
+  '
 }
 
 # Every skill under .agents/skills/ must carry a load trigger on each surface
@@ -335,7 +346,7 @@ test_every_skill_declares_a_load_trigger() {
     [ -f "$dir/SKILL.md" ] || fail "skill $name has no SKILL.md"
     grep -qx "name: $name" "$dir/SKILL.md" \
       || fail "skill $name declares a metadata name that is not its directory"
-    invocable=$(grep -m1 '^user-invocable:' "$dir/SKILL.md" | awk '{print $2}')
+    invocable=$(fm_skill_frontmatter "$dir" | grep -m1 '^user-invocable:' | awk '{print $2}')
     case "$invocable" in
       false)
         count=$(printf '%s\n' "$section" | grep -Fc -- "- \`$name\` - ")

@@ -65,6 +65,7 @@ Briefs for tasks that touch firstmate's own tracked material should tell the cre
 `bin/fm-brief.sh`'s `REPO` argument is a caller-supplied string with no reliable signal that it names firstmate's own repo, unlike a project registered in `data/projects.md`, so there is no clean point inside the scaffold to detect this case automatically.
 Firstmate adds this skill's load instruction to firstmate-repo briefs by hand instead.
 `CONTRIBUTING.md`'s "Development" section carries the same instruction as a durable reminder.
+`docs/skill-trigger-coverage-audit.md` records the audit that measured how well this convention was actually held and the check that now enforces it.
 
 ## Compatibility and enforcement
 

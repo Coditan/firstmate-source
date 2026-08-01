@@ -23,8 +23,9 @@ That was observed directly during this audit, not inferred.
 The auditing agent's own live skill listing resolves to this worktree's `.agents/skills/`, and while the descriptions were cut it degraded to `afk: afk`, `harness-adapters: harness-adapters`, and so on for every skill, then recovered when they were restored.
 All nineteen files stayed present and syntactically valid throughout.
 
-**After the change that ships with this report**, rows one and three read 0 of 19 and row two reads 0 of 12: every skill's section 13 entry and every skill's description now turn a test red when removed.
-No skill can now lose every route that reaches it: the agent-only twelve are held by both their section 13 entry and their description, the harness-listed seven by their description.
+**After the change that ships with this report**, measured on the same base `6fa6926` tree these counts were taken from, rows one and three read 0 of 19 and row two reads 0 of 12: every skill's section 13 entry and every skill's description now turn a test red when removed.
+No skill in that tree can now lose every route that reaches it: the agent-only twelve are held by both their section 13 entry and their description, the harness-listed seven by their description.
+This branch's base is `de0b95b`, whose merged tree carries 20 skill directories and 13 section 13 entries after the `ask-user-authority` restore landed mid-audit; that tree was deliberately not re-measured, because restating removal-proven counts against a tree nobody re-ran the removals on is the exact unverified-number failure this audit exists to catch, and the enumerating check covers the added skill with no separate verdict row needed (`ask-user-authority` has exactly one section 13 entry and a "Use before ..." description, and the check passes on the merged tree unchanged).
 What can still vanish silently is an individual inline stub, such as the `/afk` invocation line in section 8 or the `/stow` line in section 6.
 Those are a degradation rather than a disappearance now that a backstop exists, and they are the one gap left open deliberately.
 See Recommendation.
@@ -221,7 +222,7 @@ It is implemented and verified on this branch as `test_every_skill_declares_a_lo
 It covers two surfaces because a skill can arrive by two routes and a deployment may only have one.
 Section 13 is the route for a firstmate reading its own instruction surface.
 The description is the route for the harness skill listing, and it is the only route left where no instruction-surface trigger line is possible at all.
-That is why the description clauses apply to all nineteen skills rather than only the seven the harness lists today: a skill that lands in a deployment with no section 13 available has its description as its sole arrival path, and the surface that carries a skill alone is the last one that should be unguarded.
+That is why the description clauses apply to every skill in the directory, all nineteen of them at base `6fa6926`, rather than only the seven the harness listed there: a skill that lands in a deployment with no section 13 available has its description as its sole arrival path, and the surface that carries a skill alone is the last one that should be unguarded.
 
 Both clauses live in the same loop over the same directory listing, sharing one accumulator and one failure report.
 Covering the third surface needed no second mechanism.
