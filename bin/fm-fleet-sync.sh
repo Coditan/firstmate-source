@@ -19,6 +19,11 @@
 # killed mid-write - e.g. a timed-out bootstrap sync or a teardown process kill),
 # it is retried with a bounded wait and removed only when provably stale; see
 # fetch_with_packed_refs_lock_guard and the FM_FLEET_SYNC_PACKED_REFS_LOCK_* knobs.
+# The per-project outcome lines printed here ("already current", "synced ...",
+# "recovered: ...", "skipped: ...", "STUCK: ...") are a parsed contract, not just
+# prose: bin/fm-bridge-relay.sh classifies them to decide whether a Bridge read may
+# answer at all, so rewording one changes that decision and must re-run
+# tests/fm-bridge-relay.test.sh (bin/fm-test-run.sh selects it from this path).
 # Usage: fm-fleet-sync.sh [<project-dir-or-name>]
 # The single-project form accepts either a path (absolute, or relative to the
 # caller's cwd) or a bare "<name>"/"projects/<name>" form, resolved against
