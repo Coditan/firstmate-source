@@ -192,6 +192,12 @@ classify_refresh_line() {
 # fetch failures are relayed verbatim into that last form and can end in wording
 # a later pattern here would otherwise match, so it is rejected first. The list
 # is a whitelist: an outcome this relay does not know is never taken as proof.
+# Each accepted form is anchored to the spelling fleet-sync uses for it, naming
+# the branch side ("local <branch>", "origin/<branch>") or the step
+# ("fast-forward") that only exists past the fetch, because an open "skipped:
+# ... does not exist" or "skipped: cannot read ..." would also admit a
+# pre-fetch skip added to fleet-sync later - and widening in that direction is
+# exactly the stale-clone read this guard exists to refuse.
 refresh_fetch_proven() {
   local rest
   rest=$(strip_project_label "$1") || return 1
@@ -199,8 +205,8 @@ refresh_fetch_proven() {
     "skipped: fetch failed"*) return 1 ;;
     "STUCK: "*) return 0 ;;
     "skipped: cannot determine default branch") return 0 ;;
-    "skipped: "*" does not exist") return 0 ;;
-    "skipped: cannot read "*) return 0 ;;
+    "skipped: local "*" does not exist"|"skipped: origin/"*" does not exist") return 0 ;;
+    "skipped: cannot read local "*|"skipped: cannot read origin/"*) return 0 ;;
     "skipped: fast-forward "*) return 0 ;;
     *) return 1 ;;
   esac

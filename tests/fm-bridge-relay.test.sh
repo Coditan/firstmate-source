@@ -512,20 +512,48 @@ test_ahead_only_checkout_still_answers_a_read() {
 }
 
 test_unproven_fetch_still_refuses_a_level_read() {
-  local home bridge out rc RELAY_BIN
+  local home out rc RELAY_BIN outcome
   home=$(make_bridge unproven-fetch)
-  bridge="$home/projects/coditan-bridge"
-  # Level with origin, but the refresh was blocked at a step that proves nothing
-  # about the fetch, so @{upstream} may be stale and the count means nothing.
-  RELAY_BIN=$(stub_fleet_sync "$home" "coditan-bridge: skipped: no origin remote")
+  # Level with origin, but each of these outcomes was reported at a step that
+  # proves nothing about the fetch, so @{upstream} may be stale and the count
+  # means nothing. The last two are the shape a pre-fetch skip added to
+  # fm-fleet-sync.sh later would take: an outcome this relay has never seen must
+  # never be read as proof that origin was reached, however close its wording
+  # comes to a form that is.
+  for outcome in "skipped: no origin remote" "skipped: data/projects.md does not exist" \
+      "skipped: cannot read data/projects.md"; do
+    RELAY_BIN=$(stub_fleet_sync "$home" "coditan-bridge: $outcome")
+    rm -f "$home/capture"
+    out=$(run_relay "$home" inbox --vessel tugboat); rc=$?
+    expect_code 1 "$rc" "read after the refresh reported '$outcome'"
+    assert_contains "$out" 'STALE CHECKOUT' "'$outcome' was accepted as proof of a fetch"
+    assert_contains "$out" 'never proved it updated' \
+      "the refusal for '$outcome' did not say the count of 0 rests on an unproven ref"
+    assert_absent "$home/capture" "'$outcome' still invoked the Bridge script"
+  done
+  pass "Bridge relay takes a level count as proof only for outcomes that prove the fetch ran"
+}
 
-  out=$(run_relay "$home" inbox --vessel tugboat); rc=$?
-  expect_code 1 "$rc" "read after a refresh that never reached origin"
-  assert_contains "$out" 'STALE CHECKOUT' "a refresh that never fetched was accepted as proof"
-  assert_contains "$out" 'never proved it updated' \
-    "the refusal did not say the count of 0 rests on an unproven remote-tracking ref"
-  assert_absent "$home/capture" "a read the refresh never proved still invoked the Bridge script"
-  pass "Bridge relay takes a level count as proof only when the refresh proved it fetched"
+test_post_fetch_block_on_a_level_clone_reads() {
+  local home out rc RELAY_BIN outcome
+  home=$(make_bridge post-fetch-block)
+  # The other side of the same whitelist: every outcome fleet-sync can only
+  # reach past a successful fetch does prove the fetch, so a clone holding
+  # everything that fetch brought back still answers a read.
+  for outcome in "skipped: local main does not exist" "skipped: origin/main does not exist" \
+      "skipped: cannot read local main" "skipped: cannot read origin/main" \
+      "skipped: cannot determine default branch" \
+      "skipped: fast-forward failed: fatal: refusing to merge unrelated histories"; do
+    RELAY_BIN=$(stub_fleet_sync "$home" "coditan-bridge: $outcome")
+    rm -f "$home/capture"
+    out=$(run_relay "$home" inbox --vessel tugboat); rc=$?
+    expect_code 0 "$rc" "read after the refresh reported '$outcome' on a level clone"
+    assert_contains "$out" 'holds everything that fetch brought back' \
+      "'$outcome' was not recognised as an outcome that proves the fetch ran"
+    assert_grep 'script=bridge-inbox.sh' "$home/capture" \
+      "'$outcome' on a level clone never reached the Bridge script"
+  done
+  pass "Bridge relay still reads a level clone through every block that proves its fetch ran"
 }
 
 test_unrecognized_status_form_refuses_a_read() {
@@ -635,6 +663,7 @@ test_guard_alarm_reaches_the_caller
 test_diverged_checkout_refuses_a_read
 test_ahead_only_checkout_still_answers_a_read
 test_unproven_fetch_still_refuses_a_level_read
+test_post_fetch_block_on_a_level_clone_reads
 test_unrecognized_status_form_refuses_a_read
 test_lock_contention_proceeds_only_while_level
 test_fast_forward_lock_contention_proceeds_when_level
