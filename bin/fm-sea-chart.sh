@@ -47,9 +47,12 @@
 # footnote anywhere. A chart built naively on that surface drops an open decision
 # and says nothing.
 # So this script never trusts that surface alone. It reads its own chart's
-# decision records straight from the backlog and RECONCILES: any decision record
+# captain-gated records straight from the backlog and RECONCILES: any record
 # under this chart that the actionable surface did not return is reported in
-# `withheld[]` with the blocker holding it, and counted. Being per-chart is what
+# `withheld[]` with the blocker holding it, and counted. What makes a record
+# captain-gated is its KIND, never its name: a thread held with `--kind captain`
+# carries no `-decision-` in its id and is exactly as lost when it is blocked.
+# Being per-chart is what
 # makes this possible without the fleet-wide `decisions_blocked[]` surface that
 # the design defers - a chart knows its own scope, so it can ask a bounded
 # question the fleet-wide board cannot.
@@ -67,13 +70,18 @@
 # chart ends up reporting that more records reached the actionable surface than
 # exist in its backlog at all.
 #
-# BLOCKER EDGES ARE RESOLVED ACROSS EVERYTHING THIS CHART READS
+# BLOCKER EDGES ARE RE-RESOLVED WIDER, BUT BY THE OWNER RULE
 # The snapshot resolves `blocked-by` per FILE, so a live record whose blocker was
 # archived long ago still reads as blocked and would silently never appear under
 # `takeable[]` - the one failure this surface disclaims. The chart already holds
-# the live backlog AND the archive, so it re-resolves the edges over both: a
-# blocker that is Done anywhere it reads is resolved. Only genuinely unresolved
-# ids are reported where blockers are named.
+# the live backlog AND the archive, so it re-resolves the edges over both.
+# It widens only the EVIDENCE, never the rule: an id is resolved when every
+# record carrying it is Done, which is the rule bin/fm-fleet-snapshot.sh states
+# for a blocker, so a live queued row is never cancelled out by an archived Done
+# twin of the same id. Where a duplicated id makes the two readings differ, this
+# takes the one that holds work back: a chart that offers gated work invites an
+# action, and a wrong invitation costs more than a wrong omission. Only genuinely
+# unresolved ids are reported where blockers are named.
 #
 # THE MARKING FOR UNSUPERVISED WORK IS A PAIR, NEVER A BADGE
 # `navigation` is deliberately not a boolean. A single flag renders as a badge,
@@ -107,7 +115,7 @@
 #   membership         the rule in one line, plus the member count it produced
 #   decided[]          resolved decisions of this chart, newest first
 #   decisions[]        open decisions, after the board's collapse rule
-#   withheld[]         decision records the actionable surface did not return
+#   withheld[]         captain-gated records the actionable surface did not return
 #   fog[]              named dark patches on this course
 #   out_of_course[]    deliberate scope boundaries; these never rise
 #   takeable[]         work with no unresolved blocker and no hold, each with a
@@ -255,19 +263,23 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
     | ($id | index("-" + $m + "-")) as $at
     | if $at == null then null else $id[($at + 2 + ($m | length)):] end;
   def open_state: .state == "queued" or .state == "in_flight";
-  # A blocker counts as resolved when SOME record carrying that id is Done
-  # anywhere this chart reads - the live Done section or the archive. The
-  # snapshot resolves blockers per FILE, so a live record whose only blocker was
-  # archived months ago reads as blocked forever and never becomes takeable,
-  # with no footnote. The chart already holds both files, so it resolves the
-  # edge rather than asking the reader to do it by hand.
+  # The rule bin/fm-fleet-snapshot.sh states for a blocker and this reads rather
+  # than restates: an id is resolved only when EVERY record carrying it is Done.
+  # What this script widens is how much it looks at, never the rule. The snapshot
+  # resolves per FILE, so a live record whose blocker was archived long ago reads
+  # as blocked forever and never becomes takeable, with no footnote; the chart
+  # holds the live backlog and the archive together and asks the same question of
+  # both. A live queued row is therefore never cancelled by an archived Done twin
+  # of the same id - that direction would invite someone to pick up work that is
+  # still gated, which is worse than leaving ready work sitting.
   def unresolved($done): [ (.blocked_by_ids // .unresolved_blocker_ids // [])[] | select($done[.] != true) ];
 
   input as $live
   | input as $arch
   | input as $inv
   | ([ $live.records[]?, $arch.records[]? | select(.structured) ]) as $all
-  | (reduce ($all[] | select(.state == "done") | .id) as $id ({}; .[$id] = true)) as $done
+  | ([ $all[] | select(.id != null) ] | group_by(.id)
+     | map({key: .[0].id, value: all(.[]; .state == "done")}) | from_entries) as $done
   | ([ $all[] | select(member(.id)) ]) as $mine
 
   # The destination, read from records the fleet already keeps, never invented here.
@@ -283,9 +295,14 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   | ([ $groups[]
        | (.decisions[]? | .id), (.decisions[]?.variants[]? | .id), (.unpaired_variants[]? | .id) ]) as $seen
 
-  # RECONCILIATION. Every decision record this chart owns, straight from the
-  # backlog - then whatever the actionable surface did not return.
-  | ([ $mine[] | select(open_state and (.id | dkey) != null and .kind == "captain") ]) as $own_decision_records
+  # RECONCILIATION. Every record this chart owns that waits on the captain,
+  # straight from the backlog - then whatever the actionable surface did not
+  # return. The test is the KIND, never the identifier: AGENTS.md section 10
+  # sanctions holding an ordinary thread with `--kind captain`, and such a record
+  # carries no `-decision-` in its name. Keying on the name would leave a blocked
+  # captain thread not merely undercounted but invisible, every count reading
+  # zero - the same silent loss this chart exists against, on a third flank.
+  | ([ $mine[] | select(open_state and .kind == "captain") ]) as $own_decision_records
   | ([ $own_decision_records[]
        | select(.id as $id | ($seen | index($id)) == null)
        | {id, key:(.id | dkey), title:(.title // ""),
@@ -303,10 +320,13 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # not only the ones the fold kept - because the record that actually rots is
   # the folded analyst variant whose judge twin was answered and closed while it
   # stayed open. A record is never its own twin: the finding is that a SIBLING
-  # under this chart already closed the same decision key.
+  # under this chart already closed the same decision key. A record with NO key
+  # has no twin either - two absent keys are not the same question, they are two
+  # questions nobody named - so a keyless record is skipped rather than paired.
   | ([ $own_decision_records[]
        | . as $r
        | ($r.id | dkey) as $k
+       | select($k != null)
        | ([ $decided[] | select(.key == $k and .id != $r.id) | .id ]) as $twins
        | select(($twins | length) > 0)
        | {id: $r.id, key: $k, twin: $twins[0]} ]) as $possibly_answered
@@ -401,7 +421,7 @@ if [ "$MODE" = "summary" ]; then
     (if .destination.question != null then "  question: \(.destination.question)" else empty end),
     "",
     "INCOMPLETENESS, computed fresh for this build:",
-    "  \(.counts.records_in_backlog) decision records in the backlog for this chart",
+    "  \(.counts.records_in_backlog) captain-gated \(if .counts.records_in_backlog == 1 then "record" else "records" end) in the backlog for this chart",
     "    of those, \(.counts.records) reached the actionable surface -> \(.counts.decisions) shown (\(.counts.folded) folded away)",
     "    withheld from the actionable surface: \(.counts.withheld)",
     "  possibly already answered: \(.counts.possibly_answered)",
@@ -409,7 +429,7 @@ if [ "$MODE" = "summary" ]; then
     "members: \(.membership.members)   rule: \(.membership.rule)",
     "",
     (if (.withheld | length) > 0 then
-      "WITHHELD - open decisions the actionable surface did not return:",
+      "WITHHELD - open captain-gated records the actionable surface did not return:",
       (.withheld[] | "  ! \(.id)\n      \(.why)" +
         (if .held_by != "" then "\n      held by: \(.held_by)" else "" end)),
       "" else empty end),

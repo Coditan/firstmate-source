@@ -186,6 +186,83 @@ EOF
   pass "a blocker Done in the archive stops hiding takeable work, and a live one still holds"
 }
 
+test_an_archived_twin_never_cancels_a_live_blocker() {
+  # PART 1 - PIN WHAT THE LIVE RECORDS SAY ON THEIR OWN. The blocker is an open
+  # captain decision sitting in the live backlog, and reading that file alone -
+  # which is all the snapshot ever does - it is unresolved. Widening to the
+  # archive is the chart's business; it must widen the EVIDENCE without letting a
+  # stale archived row of the same id decide the question.
+  local home cap out owner
+  home=$(make_home twinblock)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-judge-decision-k - The open question (repo: r) (kind: captain) (since 2026-07-28) (hold: Which one) (hold-kind: captain)
+- [ ] voy-depends - Waits on that question blocked-by: voy-judge-decision-k (repo: r) (kind: ship) (since 2026-07-30)
+EOF
+  owner=$("$ROOT/bin/fm-fleet-snapshot.sh" --backlog-json "$home/data/backlog.md")
+  [ "$(printf '%s' "$owner" | jq -r '[.records[]|select(.id=="voy-depends")|.unresolved_blocker_ids[]]|join(",")')" = "voy-judge-decision-k" ] \
+    || fail "the reproduction is stale: a live queued blocker no longer reads as unresolved. Re-derive the chart's resolution before relaxing this."
+
+  # PART 2 - AN ARCHIVED DUPLICATE DOES NOT CANCEL IT. The same id also sits Done
+  # in the archive, which is the stale state the ageing probe exists to surface.
+  cat > "$home/data/done-archive.md" <<'EOF'
+# Done archive
+
+## Archived 2026-07-31
+- [x] voy-judge-decision-k - A stale duplicate of the same id (repo: r) (kind: captain) (done 2026-07-31)
+EOF
+  cap=$(capture twinblock)
+  out=$(chart_json "$home" voy "$cap")
+  [ "$(printf '%s' "$out" | jq -r '[.takeable[].id]|index("voy-depends")')" = "null" ] \
+    || fail "an archived duplicate must never cancel a live blocker: work still gated by an open captain decision was offered as takeable"
+  pass "an archived twin never cancels a live blocker: the evidence widens, the rule does not"
+}
+
+test_a_captain_thread_without_a_decision_key_is_recovered() {
+  # PART 1 - REPRODUCE. AGENTS.md sanctions holding an ordinary thread with
+  # --kind captain, and such a record carries no "-decision-" in its id. Blocked,
+  # it fails captain-actionability and leaves the surface entirely, exactly like
+  # a blocked decision record - so nothing hands it to the chart.
+  local home cap out live
+  home=$(make_home thread)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-thread - A captain-gated thread with no decision key blocked-by: voy-open (repo: r) (kind: captain) (since 2026-07-28) (hold: Needs a call from the captain) (hold-kind: captain)
+- [ ] voy-open - The work still holding it (repo: r) (kind: ship) (since 2026-07-30)
+EOF
+  cat > "$home/data/done-archive.md" <<'EOF'
+# Done archive
+
+## Archived 2026-07-31
+- [x] voy-earlier-thread - An earlier captain thread, also with no decision key (repo: r) (kind: captain) (done 2026-07-31)
+EOF
+  live=$("$ROOT/bin/fm-fleet-snapshot.sh" --backlog-json "$home/data/backlog.md")
+  [ "$(printf '%s' "$live" | jq -r '[.records[]|select(.id=="voy-thread")|.captain_actionable]|join(",")')" = "false" ] \
+    || fail "the reproduction is stale: a blocked captain-gated thread now reaches the actionable surface on its own"
+
+  # PART 2 - THE RECONCILIATION RECOVERS IT, on the kind and not on the name.
+  cap=$(capture thread)
+  out=$(chart_json "$home" voy "$cap")
+  [ "$(printf '%s' "$out" | jq -r '[.withheld[].id]|index("voy-thread")')" != "null" ] \
+    || fail "a blocked captain-gated thread must be named on the chart, not left invisible because its id carries no decision key"
+  assert_contains "$(printf '%s' "$out" | jq -r '.withheld[]|select(.id=="voy-thread")|.held_by')" "voy-open" \
+    "a withheld thread must name what is holding it, the same way a withheld decision record does"
+  [ "$(printf '%s' "$out" | jq -r '.counts.records_in_backlog')" -ge 1 ] \
+    || fail "a captain-gated thread must be counted among the records this chart owns"
+
+  # PART 3 - AND NO KEY IS NOT A SHARED KEY. Two records that both lack a
+  # decision key are two questions nobody named, never one already answered.
+  [ "$(printf '%s' "$out" | jq -r '.counts.possibly_answered')" = 0 ] \
+    || fail "a keyless record must never be twinned with another keyless record"
+  pass "a blocked captain thread with no decision key is recovered, and keyless records are never twinned"
+}
+
 test_fog_and_out_of_course_can_never_be_a_captain_decision() {
   # Structure, not prose: captain-actionability requires kind captain.
   local home out
@@ -435,6 +512,8 @@ test_both_surfaces_state_the_boundary_between_them() {
 test_the_silent_loss_is_reproduced_then_absent
 test_a_secondmate_decision_reaches_the_merged_surface_then_stays_off_this_chart
 test_a_blocker_that_is_done_in_the_archive_no_longer_hides_takeable_work
+test_an_archived_twin_never_cancels_a_live_blocker
+test_a_captain_thread_without_a_decision_key_is_recovered
 test_fog_and_out_of_course_can_never_be_a_captain_decision
 test_chart_kinds_stay_off_the_blockage_surface_but_are_disclosed
 test_a_chart_without_a_destination_is_refused
