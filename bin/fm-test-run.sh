@@ -650,8 +650,16 @@ families_for_changed_path() {
       # gate, whose test lives in the pure-contract-unit family.
       printf '%s\n' pure-contract-unit
       ;;
+    bin/fm-guard.sh)
+      printf '%s\n' watcher-wake-lock
+      # bin/fm-bridge-relay.sh matches this script's supervision alarms line by
+      # line to tell them apart from fleet-sync's diagnosis and relay them to the
+      # caller, so a reword here must re-run the relay's own suite; its basename
+      # family (watcher-wake-lock) would never select it from this path.
+      printf '%s\n' "__script_required__:fm-bridge-relay.test.sh"
+      ;;
     bin/fm-watch*|bin/fm-wake*|\
-    bin/fm-daemon*|bin/fm-turnend-guard*|bin/fm-guard.sh)
+    bin/fm-daemon*|bin/fm-turnend-guard*)
       printf '%s\n' watcher-wake-lock
       ;;
     bin/fm-afk*)
@@ -668,7 +676,15 @@ families_for_changed_path() {
     bin/fm-config-inherit-lib.sh|bin/fm-config-push.sh|bin/fm-shared*)
       printf '%s\n' secondmate
       ;;
-    bin/fm-session-start.sh|bin/fm-bootstrap.sh|bin/fm-fleet-sync.sh|\
+    bin/fm-fleet-sync.sh)
+      printf '%s\n' session-bootstrap
+      # bin/fm-bridge-relay.sh classifies this script's per-project outcome
+      # vocabulary to decide whether a Bridge read may answer at all, so a reword
+      # here must re-run the relay's own suite; its basename family
+      # (unclassified) would never select it from this path.
+      printf '%s\n' "__script_required__:fm-bridge-relay.test.sh"
+      ;;
+    bin/fm-session-start.sh|bin/fm-bootstrap.sh|\
     bin/fm-sessionstart-nudge.sh|bin/fm-tangle*|bin/fm-update.sh|\
     bin/fm-gate-refuse*|bin/fm-lock*)
       printf '%s\n' session-bootstrap
