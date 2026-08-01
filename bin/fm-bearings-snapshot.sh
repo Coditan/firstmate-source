@@ -60,6 +60,9 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FLEET="$SCRIPT_DIR/fm-fleet-snapshot.sh"
+# shellcheck source=bin/fm-chart-kinds-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-chart-kinds-lib.sh"  # FM_CHART_KINDS: the sea-chart kinds kept out of gates
 
 # Bounds (overridable for tests / large fleets).
 FM_BEARINGS_LANDED=${FM_BEARINGS_LANDED:-6}
@@ -106,6 +109,9 @@ Default fields: schema, home, generated, prs, in_flight{id,kind,state,doing},
   secondmates{id,state,doing,provenance,freshness,age_seconds,contradiction,reason},
   decisions_open{id,key,verb,summary,owner}, landed{id,what,artifact,owner},
   gates{id,title,blocked_by,reason,owner}, reports{id,path}, recorded_prs{id,url},
+gates excludes the sea-chart kinds (fog, out-of-course), which are held on purpose
+  and would otherwise crowd it permanently; the count withheld is disclosed in
+  omitted[] and --all-queued puts them back.
   unhealthy_endpoints{...} (only when non-empty), omitted{surface,reveal}.
 landed merges this home's Done with registered secondmate homes' Done, bounded by
   a per-home cap (FM_BEARINGS_LANDED_PER_HOME) and an overall cap (FM_BEARINGS_LANDED),
@@ -285,6 +291,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
   --argjson decisions_n "$FM_BEARINGS_DECISIONS" \
   --argjson secondmates_n "$FM_BEARINGS_SECONDMATES" \
   --argjson gates_n "$FM_BEARINGS_GATES" \
+  --argjson chart_kinds "$(fm_chart_kinds_json)" \
   --argjson reports_n "$FM_BEARINGS_REPORTS" \
   --argjson recorded_prs_n "$FM_BEARINGS_RECORDED_PRS" \
   --argjson unhealthy_n "$FM_BEARINGS_UNHEALTHY" \
@@ -405,16 +412,26 @@ MODEL=$(printf '%s' "$SNAP" | jq \
          | select(.captain_actionable != true)
          | select(($all_queued == 1)
                   or (((.body_excerpt // "") | test("SUPERSEDED|NOT REQUIRED|NOT-REQUIRED|DEFERRED"; "i")) | not))
-         | {id, title:(.title | trunc(60)),
+         | {id, title:(.title | trunc(60)), kind:(.kind // ""),
             blocked_by:((.unresolved_blocker_ids // []) | if length > 0 then join(",") else "-" end | trunc(120)),
             reason:((.hold_reason // .blocked_reason // "-") | trunc(40)),owner:"(main)"} ]
      + [ (.secondmate_current.records // [])[] as $m
          | select($m.provenance.selected == "structured-home")
          | $m.queued[]?
          | select(.captain_actionable != true)
-         | {id,title:(.title | trunc(60)),
+         | {id,title:(.title | trunc(60)), kind:(.kind // ""),
             blocked_by:((.unresolved_blocker_ids // []) | if length > 0 then join(",") else "-" end | trunc(120)),
-            reason:((.hold_reason // .blocked_reason // "-") | trunc(40)),owner:$m.id} ]) as $gates_all
+            reason:((.hold_reason // .blocked_reason // "-") | trunc(40)),owner:$m.id} ]) as $gates_typed
+  # fog and out-of-course are sea-chart material, not blockages. They are held on
+  # purpose and never clear, so left here they permanently crowd a surface that is
+  # already truncated. Withholding them is DISCLOSED in omitted[] and reversed by
+  # --all-queued: a surface that drops records quietly is the exact failure this
+  # family of tools exists against. A record carrying no kind is kept, because
+  # showing one blockage too many is recoverable and hiding one is not.
+  | ([ $gates_typed[] | select((.kind // "") as $k | ($chart_kinds | index($k)) != null) ] | length) as $chart_kind_hidden
+  | ([ $gates_typed[]
+       | select($all_queued == 1 or ((.kind // "") as $k | ($chart_kinds | index($k)) == null))
+       | del(.kind) ]) as $gates_all
   | ([ .scout_reports[]
        | . as $r
        | select(($all_reports == 1) or (($rel_ids | index($r.id)) != null))
@@ -468,6 +485,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         (([($snap.secondmate_current.records // [])[] | select(.parent_event.activity_scan.available == false)] | length) as $n | if $n > 0 then {surface:("secondmate parent activity evidence unavailable for \($n) record(s)"), reveal:"inspect the parent status logs"} else empty end),
         (if $all_decisions == 0 and ($decisions_all | length) > $decisions_n then {surface:("decisions_open showing \($decisions_n) of \($decisions_all | length)"), reveal:"--all-decisions"} else empty end),
         (if $all_queued == 0 and ($gates_all | length) > $gates_n then {surface:("gates showing \($gates_n) of \($gates_all | length)"), reveal:"--all-queued"} else empty end),
+        (if $all_queued == 0 and $chart_kind_hidden > 0 then {surface:("sea-chart items (\($chart_kinds | join(", "))) kept out of gates: \($chart_kind_hidden)"), reveal:"--all-queued"} else empty end),
         (if $all_reports == 0 and ($reports_all | length) > $reports_n then {surface:("reports showing \($reports_n) of \($reports_all | length)"), reveal:"--all-reports"} else empty end),
         (if $all_recorded_prs == 0 and ($recorded_prs_all | length) > $recorded_prs_n then {surface:("recorded_prs showing \($recorded_prs_n) of \($recorded_prs_all | length)"), reveal:"--all-recorded-prs"} else empty end),
         (if $all_unhealthy == 0 and ($unhealthy_all | length) > $unhealthy_n then {surface:("unhealthy_endpoints showing \($unhealthy_n) of \($unhealthy_all | length)"), reveal:"--all-unhealthy"} else empty end),

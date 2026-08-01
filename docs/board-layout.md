@@ -89,6 +89,7 @@ Tag variants: `is-gate`, `is-hot`, `is-calm`.
 
 Use it wherever a board shows one item in place of several.
 `bin/fm-decision-inventory.sh` folds a judged panel group down to the judge's records on an assumption it cannot verify, so a decision board renders this block on every decision card and lists the group's unpaired variants the same way.
+A sea chart carries the same fold and renders the same block, for the same reason.
 A folded record that is not rendered is a question the captain cannot see.
 
 ### Graphics

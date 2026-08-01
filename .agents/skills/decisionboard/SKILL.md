@@ -3,6 +3,7 @@ name: decisionboard
 description: >-
   Lay the fleet's open captain decisions out as a visual board, on the shared standard layout, and open it for the captain.
   Use when the captain invokes /decisionboard, asks to see the open decisions as a board, asks what is waiting on him visually, or asks for the decision backlog laid out rather than listed.
+  For one named undertaking and where it stands against its own destination, use the sea chart instead.
   Presents only: it groups the per-member panel records by originating investigation and keeps the judge's record where a judge ruled, without verifying that the judge covered every question the analysts raised, shows what each decision gates, and never records an answer.
 user-invocable: true
 metadata:
@@ -17,6 +18,17 @@ This skill **presents**.
 It never writes, resolves, reorders, or closes a decision.
 `.agents/skills/decision-hold-lifecycle` owns the decision lifecycle and `bin/fm-decision-hold.sh resolve` owns recording an answer.
 A board that quietly changed a record would put a second owner on that contract.
+
+## This board, or a sea chart
+
+This board is a **standing inbox**: everything waiting on the captain, across every project and investigation, with no destination and no end state.
+It is never finished - it empties and refills.
+
+`.agents/skills/sea-chart` is the other shape: **one undertaking, one destination**, finished when the way is clear.
+Because this board has no scope, nothing can be outside it, so it carries no course boundary and no fog towards anything - that is what the chart is for.
+
+If the captain names one investigation or undertaking and asks where it stands, load that skill instead of this one.
+If he asks what is waiting on him, or what to answer next, this is the right surface.
 
 ## Why a board and not a list
 
