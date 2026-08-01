@@ -75,11 +75,55 @@ strand_clone() {
   mv "$TMP_ROOT/$name/origin.git" "$TMP_ROOT/$name/origin-gone.git"
 }
 
+# run_relay <home> [args...]: run the relay against a fixture home with stderr
+# merged into stdout. Two knobs a caller may set for the duration of its own
+# calls: RELAY_PATH_PREFIX prepends a fakebin dir to PATH, and
+# RELAY_FLEET_SYNC_RETRIES overrides fleet-sync's packed-refs lock retry count so
+# a simulated lock race does not sit through its real retry waits.
 run_relay() {
   local home=$1
   shift
-  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" BRIDGE_RELAY_CAPTURE="$home/capture" \
+  PATH="${RELAY_PATH_PREFIX:+$RELAY_PATH_PREFIX:}$PATH" \
+    FM_FLEET_SYNC_PACKED_REFS_LOCK_RETRIES="${RELAY_FLEET_SYNC_RETRIES:-3}" \
+    FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" BRIDGE_RELAY_CAPTURE="$home/capture" \
     "$RELAY" "$@" 2>&1
+}
+
+# Shim git so every fetch loses a race for a lock the way a concurrent
+# whole-fleet sync (bin/fm-bootstrap.sh) makes it lose one, while every other
+# git call stays real. Echoes the fakebin dir to prepend to PATH.
+shim_git_fetch_lock_contention() {
+  local home=$1 lock=$2 fakebin real
+  real=$(command -v git)
+  fakebin=$(fm_fakebin "$home")
+  cat > "$fakebin/git" <<SH
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  if [ "\$arg" = fetch ]; then
+    printf "fatal: Unable to create '%s': File exists.\\n" "$lock" >&2
+    exit 128
+  fi
+done
+exec "$real" "\$@"
+SH
+  chmod +x "$fakebin/git"
+  printf '%s\n' "$fakebin"
+}
+
+# Shim sed so fm-fleet-sync.sh dies mid-run instead of reporting a per-project
+# outcome: it composes its skip reason through sed, so the crash lands the relay
+# on the genuine no-outcome path, where fleet-sync's stderr is the only
+# diagnosis the operator has. Echoes the fakebin dir to prepend to PATH.
+shim_broken_sed() {
+  local home=$1 fakebin
+  fakebin=$(fm_fakebin "$home")
+  cat > "$fakebin/sed" <<'SH'
+#!/usr/bin/env bash
+echo "sed: simulated tool failure" >&2
+exit 1
+SH
+  chmod +x "$fakebin/sed"
+  printf '%s\n' "$fakebin"
 }
 
 test_unknown_subcommand_is_rejected() {
@@ -178,9 +222,37 @@ test_stranded_checkout_refuses_a_read() {
   assert_contains "$out" 'STALE CHECKOUT' "stale refusal was not identified as such"
   assert_contains "$out" 'NOTHING WAS READ' \
     "stale refusal could be mistaken for an empty mailbox"
-  assert_contains "$out" 'the guarded refresh did not complete' "stale refusal gave no reason"
+  assert_contains "$out" 'unread mail may be waiting at origin' \
+    "stale refusal did not warn about mail left unread"
+  # The refresh DID run here and reported a fetch failure, so the refusal must
+  # report that outcome rather than claim the refresh never completed.
+  assert_contains "$out" 'the refresh ran and was blocked by the outcome it reports below' \
+    "stale refusal gave no reason"
+  assert_contains "$out" 'skipped: fetch failed' "stale refusal did not quote the refresh outcome"
+  assert_not_contains "$out" 'the guarded refresh did not complete' \
+    "a refresh that ran and reported a fetch failure was described as not having completed"
   assert_absent "$home/capture" "stale checkout still invoked the Bridge script"
   pass "Bridge relay refuses a read it cannot prove current, instead of answering empty"
+}
+
+test_no_outcome_refusal_surfaces_the_refresh_error() {
+  local home out rc RELAY_PATH_PREFIX
+  home=$(make_bridge no-outcome)
+  publish_envelope_at_origin no-outcome tugboat
+  strand_clone no-outcome
+  RELAY_PATH_PREFIX=$(shim_broken_sed "$home")
+
+  out=$(run_relay "$home" inbox --vessel tugboat); rc=$?
+  expect_code 1 "$rc" "read after a refresh that reported no outcome"
+  assert_contains "$out" 'STALE CHECKOUT' "no-outcome refusal was not identified as stale"
+  assert_contains "$out" 'NOTHING WAS READ' \
+    "no-outcome refusal could be mistaken for an empty mailbox"
+  assert_contains "$out" 'the guarded refresh did not complete' \
+    "a refresh that reported nothing was not described as incomplete"
+  assert_contains "$out" 'sed: simulated tool failure' \
+    "the no-outcome refusal threw away the only diagnosis fleet-sync produced"
+  assert_absent "$home/capture" "a refresh that reported nothing still invoked the Bridge script"
+  pass "Bridge relay surfaces fleet-sync's stderr when the refresh reported no outcome at all"
 }
 
 test_diverged_checkout_refuses_a_read() {
@@ -196,8 +268,60 @@ test_diverged_checkout_refuses_a_read() {
   expect_code 1 "$rc" "read against a diverged checkout"
   assert_contains "$out" 'STALE CHECKOUT' "diverged refusal was not identified as stale"
   assert_contains "$out" 'STUCK: on diverged main' "diverged refusal did not relay the refresh outcome"
+  assert_contains "$out" 'reported the clone stuck' "diverged refusal misstated why it refused"
+  assert_not_contains "$out" 'the guarded refresh did not complete' \
+    "a refresh that ran and proved the clone stuck was described as not having completed"
+  # The remedy must not be the command that just produced the STUCK line: fleet
+  # sync never forces, resets, or pushes, so re-running it can never clear this.
+  assert_contains "$out" "reconcile $bridge with " "diverged refusal did not ask for manual reconciliation"
+  assert_not_contains "$out" 'bin/fm-fleet-sync.sh coditan-bridge' \
+    "diverged refusal sent the operator back to the command that just reported STUCK"
   assert_absent "$home/capture" "diverged checkout still invoked the Bridge script"
   pass "Bridge relay refuses a read when the checkout cannot be fast-forwarded"
+}
+
+test_unrecognized_status_form_refuses_a_read() {
+  local home out rc form
+  home=$(make_bridge status-forms)
+  publish_envelope_at_origin status-forms tugboat
+  strand_clone status-forms
+
+  # Anything not positively recognised as a write is a read: an unrecognised
+  # status spelling must refuse, never answer from a clone proven not current.
+  for form in "status" "status --vessel tugboat" "status --show=tugboat" "status --list"; do
+    rm -f "$home/capture"
+    # shellcheck disable=SC2086
+    out=$(run_relay "$home" $form); rc=$?
+    expect_code 1 "$rc" "unrecognised status form '$form' against a stranded checkout"
+    assert_contains "$out" 'STALE CHECKOUT' "status form '$form' did not refuse as a read"
+    assert_absent "$home/capture" "status form '$form' still invoked the Bridge script"
+  done
+  pass "Bridge relay treats every status form it cannot recognise as a write as a read that refuses"
+}
+
+test_lock_contention_proceeds_only_while_level() {
+  local home bridge out rc RELAY_PATH_PREFIX RELAY_FLEET_SYNC_RETRIES=0
+  home=$(make_bridge contended)
+  bridge="$home/projects/coditan-bridge"
+  RELAY_PATH_PREFIX=$(shim_git_fetch_lock_contention "$home" "$bridge/.git/packed-refs.lock")
+
+  out=$(run_relay "$home" inbox --vessel tugboat); rc=$?
+  expect_code 0 "$rc" "read while the refresh lost a lock race on a level clone"
+  assert_contains "$out" 'lost a race for a git lock' \
+    "the relaxed read never said it proceeded on a contended refresh"
+  assert_grep 'script=bridge-inbox.sh' "$home/capture" \
+    "a read on a provably level clone was refused over mere lock contention"
+
+  # Same contention, but the clone is provably behind: nothing is proven now, so
+  # the read must still refuse.
+  publish_envelope_at_origin contended tugboat
+  git -C "$bridge" fetch -q origin main
+  rm -f "$home/capture"
+  out=$(run_relay "$home" inbox --vessel tugboat); rc=$?
+  expect_code 1 "$rc" "read while the refresh lost a lock race on a behind clone"
+  assert_contains "$out" 'STALE CHECKOUT' "contended refresh on a behind clone did not refuse"
+  assert_absent "$home/capture" "contended refresh on a behind clone still invoked the Bridge script"
+  pass "Bridge relay proceeds through lock contention only while the clone is provably level"
 }
 
 test_only_read_shaped_calls_refuse() {
@@ -234,5 +358,8 @@ test_untracked_default_branch_is_rejected
 test_valid_calls_dispatch_verbatim
 test_behind_checkout_is_refreshed_before_a_read
 test_stranded_checkout_refuses_a_read
+test_no_outcome_refusal_surfaces_the_refresh_error
 test_diverged_checkout_refuses_a_read
+test_unrecognized_status_form_refuses_a_read
+test_lock_contention_proceeds_only_while_level
 test_only_read_shaped_calls_refuse
