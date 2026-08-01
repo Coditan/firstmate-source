@@ -66,6 +66,9 @@ The stub sleeps `FM_WAKE_WAIT_POLL` between iterations, so an inter-iteration ga
 The threshold is derived from the poll interval rather than configured, and the whole measured gap is added back to an open deadline, because frozen time was never time the watcher had to prove itself in.
 Erring long is safe here - it only lets a live, identity-matched watcher run a little further inside a still-bounded window - while erring short brings the suspend failure back.
 
+One residual is accepted deliberately and stated here so it is not invisible: the credit has no cumulative bound, so on a host whose loop body itself consistently exceeds the freeze threshold - a stalled filesystem under `state/` blocking the `stat` and `/proc` reads, for instance - the deadline can advance as fast as wall clock and a wedged watcher would not be reported.
+Bounding cumulative credit would close that but would break the primary case this exists for, a laptop that dark-wakes several times inside one open window; the bound that would preserve both is a cap on cumulative credit rather than on a single gap.
+
 The window is bounded precisely so an alive-but-wedged watcher - one still holding the lock and no longer beating - is still reported rather than waited on forever.
 That case is the one this costs: it is reported at grace plus the window instead of at grace, measured as 30s against a 10s grace and a 20s window, versus 10s before.
 The genuinely dead case is unchanged, measured at exactly the grace both before and after (10s, 30s, and the production 300s default).
@@ -73,9 +76,10 @@ Raising `FM_GUARD_GRACE` is not an alternative fix: it would convert a visible f
 
 The window must also stay comfortably under `FM_CODEX_WATCH_CHECKPOINT` (180s), because the Codex foreground checkpoint is the one caller that gives the stub a bounded lifetime.
 A window longer than that checkpoint would be restarted by every new checkpoint and would never reach its own deadline, which would turn that bounded delay into never reporting a wedged watcher at all under that harness.
-That coupling holds by construction rather than by memory: `bin/fm-watch-checkpoint.sh` clamps the `FM_WAKE_BEAT_CONFIRM` it exports to the child so it is strictly below the checkpoint length, covering both an ambient value and the stub's own default, and it says on stderr when it clamps.
+That coupling holds by construction rather than by memory: `bin/fm-watch-checkpoint.sh` clamps the `FM_WAKE_BEAT_CONFIRM` it exports to the child so it is below the checkpoint length, covering both an ambient value and the stub's own default, and it says on stderr when it clamps.
+The clamped value is floored at one second, because 0 is not a short window - the stub reads 0 as no window at all - so a clamp can shorten suspend survival but never switch it off.
 The default itself lives in `bin/fm-wake-lib.sh` as `FM_WAKE_BEAT_CONFIRM_DEFAULT`, so the stub and the checkpoint read one number rather than two literals that can drift apart.
-`tests/fm-wake-wait.test.sh` pins the ordering of the two defaults and proves the runtime clamp fires for a short `--seconds`.
+`tests/fm-wake-wait.test.sh` pins the ordering of the two defaults and proves the runtime clamp fires for a short `--seconds`, and `tests/fm-watch-checkpoint.test.sh` pins the floor at the small end of the range.
 
 ## Regression coverage
 

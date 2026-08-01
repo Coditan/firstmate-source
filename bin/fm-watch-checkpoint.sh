@@ -55,12 +55,17 @@ esac
 # whoever set FM_WAKE_BEAT_CONFIRM, or the stub's own default, to have been
 # chosen with this coupling in mind; an invariant that holds by construction
 # beats one that holds by memory.
+# The clamp is floored at 1 because 0 is not a short window: bin/fm-wake-wait.sh
+# reads 0 as "window disabled, one reading is the whole verdict", so a clamp that
+# reached 0 would switch off the very suspend survival it exists to protect.
 BEAT_CONFIRM=${FM_WAKE_BEAT_CONFIRM:-$FM_WAKE_BEAT_CONFIRM_DEFAULT}
 case "$BEAT_CONFIRM" in ''|*[!0-9]*) BEAT_CONFIRM=$FM_WAKE_BEAT_CONFIRM_DEFAULT ;; esac
 if [ "$BEAT_CONFIRM" -ge "$SECONDS_ARG" ]; then
+  CLAMPED=$((SECONDS_ARG / 2))
+  [ "$CLAMPED" -ge 1 ] || CLAMPED=1
   printf 'checkpoint: beat-confirmation window %ss does not fit inside this %ss checkpoint; clamping it to %ss\n' \
-    "$BEAT_CONFIRM" "$SECONDS_ARG" "$((SECONDS_ARG / 2))" >&2
-  BEAT_CONFIRM=$((SECONDS_ARG / 2))
+    "$BEAT_CONFIRM" "$SECONDS_ARG" "$CLAMPED" >&2
+  BEAT_CONFIRM=$CLAMPED
 fi
 export FM_WAKE_BEAT_CONFIRM=$BEAT_CONFIRM
 

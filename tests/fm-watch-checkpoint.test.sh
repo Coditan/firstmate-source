@@ -39,8 +39,40 @@ test_quiet_checkpoint_exits_124_cleanly() {
   wait "$daemon" 2>/dev/null || true
   expect_code 124 "$status" "quiet checkpoint exit"
   assert_contains "$(cat "$out")" "checkpoint: no actionable wake within 1s" "quiet checkpoint line missing"
+  assert_contains "$(cat "$err")" "clamping it to 1s" \
+    "a 1s checkpoint did not clamp the child's beat-confirmation window to the 1s floor"
   assert_absent "$home/state/.wake-stub.lock/pid" "stub lock pid survived quiet checkpoint timeout"
   pass "quiet checkpoint exits 124 and its timed-out delivery stub releases the lock"
+}
+
+# The clamp may shorten the window but must never switch it off. 0 is the one
+# value bin/fm-wake-wait.sh reads as "no window at all, one reading is the whole
+# verdict", so an unfloored SECONDS_ARG/2 would disable suspend survival for the
+# shortest checkpoints - the silent gap the clamp was added to prevent.
+test_clamp_floors_the_window_at_one_second() {
+  local home out err daemon seconds
+  for seconds in 1 2 3; do
+    home=$(make_home "clamp-floor-$seconds")
+    out="$home/out.txt"
+    err="$home/err.txt"
+    sleep 60 & daemon=$!
+    record_fake_daemon "$home" "$daemon"
+    touch -t 200001010000 "$home/state/.last-watcher-beat"
+    FM_HOME="$home" FM_GUARD_GRACE=1 "$CHECKPOINT" --seconds "$seconds" >"$out" 2>"$err" || true
+    kill "$daemon" 2>/dev/null || true
+    wait "$daemon" 2>/dev/null || true
+    case "$(cat "$err")" in
+      *"clamping it to 0s"*)
+        fail "--seconds $seconds clamped the beat-confirmation window to 0s, disabling it entirely" ;;
+    esac
+    assert_contains "$(cat "$err")" "clamping it to 1s" \
+      "--seconds $seconds did not clamp the beat-confirmation window to the 1s floor"
+    if [ "$seconds" -gt 1 ]; then
+      assert_contains "$(cat "$err")" "waiting up to 1s for a fresh beat" \
+        "--seconds $seconds left a stale-beacon watcher with no confirmation window at all"
+    fi
+  done
+  pass "a short checkpoint clamps the beat-confirmation window to at least 1s, never to 0s"
 }
 
 test_queued_wake_passes_through_and_exits_zero() {
@@ -88,5 +120,6 @@ test_existing_delivery_stub_is_not_success() {
 }
 
 test_quiet_checkpoint_exits_124_cleanly
+test_clamp_floors_the_window_at_one_second
 test_queued_wake_passes_through_and_exits_zero
 test_existing_delivery_stub_is_not_success

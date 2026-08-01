@@ -14,6 +14,14 @@ fm_test_tmproot TMP_ROOT fm-wake-wait
 # reaped, so it would pass for the exact regression these assertions exist to
 # catch. The stub's identity lock is released by its EXIT trap, so its presence
 # is what actually distinguishes a still-armed stub from a dead one.
+fm_path_mtime_of() {
+  if [ "$(uname)" = Darwin ]; then
+    stat -f %m "$1"
+  else
+    stat -c %Y "$1"
+  fi
+}
+
 assert_stub_armed() {
   local state=$1 stub=$2 message=$3
   kill -0 "$stub" 2>/dev/null || fail "$message"
@@ -150,7 +158,7 @@ test_wedged_live_watcher_is_reported_after_the_bounded_window() {
 # window on a bare mtime change would let it flap stale-window-beat-close
 # forever and turn a loud report into no report at all.
 test_beacon_advancing_outside_the_grace_is_not_recovery() {
-  local home state daemon toucher out status started elapsed
+  local home state daemon toucher out status started elapsed first_mtime last_mtime
   home="$TMP_ROOT/stub-chronic-stall"
   state="$home/state"
   out="$home/chronic.out"
@@ -158,10 +166,18 @@ test_beacon_advancing_outside_the_grace_is_not_recovery() {
   sleep 60 & daemon=$!
   record_fake_daemon "$home" "$state" "$daemon"
   # A beacon whose mtime advances every second but is always stamped well past
-  # the grace: beating, never healthy.
+  # the grace: beating, never healthy. Prove the backdating mechanism works
+  # before relying on it - a silently failing toucher leaves an ordinary aging
+  # beacon behind, which the stub reports at the same window for the wrong
+  # reason, and this test is the only coverage of the grace-gated recovery rule.
+  backdate_beacon() {
+    perl -e 'my $t = time - 30; utime($t, $t, $ARGV[0]) or exit 1;' "$state/.last-watcher-beat"
+  }
+  backdate_beacon || fail "could not backdate the watcher beacon, so the chronic-stall case was never set up"
+  first_mtime=$(fm_path_mtime_of "$state/.last-watcher-beat")
   (
     while :; do
-      perl -e 'my $t = time - 30; utime($t, $t, $ARGV[0]);' "$state/.last-watcher-beat" 2>/dev/null
+      backdate_beacon || exit 1
       sleep 1
     done
   ) & toucher=$!
@@ -170,10 +186,13 @@ test_beacon_advancing_outside_the_grace_is_not_recovery() {
   FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=3 FM_WAKE_BEAT_CONFIRM=4 \
     "$WAIT" > "$out" 2>&1 || status=$?
   elapsed=$(( $(date +%s) - started ))
+  last_mtime=$(fm_path_mtime_of "$state/.last-watcher-beat")
   kill -TERM "$toucher" 2>/dev/null || true
   wait "$toucher" 2>/dev/null || true
   kill -TERM "$daemon" 2>/dev/null || true
   wait "$daemon" 2>/dev/null || true
+  [ "$last_mtime" -gt "$first_mtime" ] \
+    || fail "the beacon mtime never advanced during the run, so nothing about grace-gated recovery was exercised"
   [ "$status" -ne 0 ] || fail "a beacon advancing outside the grace was accepted as recovery"
   assert_contains "$(cat "$out")" "never came back inside the grace within the 4s confirmation window" \
     "chronically stalling watcher was not reported against the confirmation window"

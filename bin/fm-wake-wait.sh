@@ -123,6 +123,16 @@ while :; do
   # Give an open window back every second the host spent frozen.  The gap is
   # tracked on every iteration, window or not, so a freeze that straddles the
   # moment a window opens is measured against the right previous reading.
+  #
+  # Known residual, accepted deliberately: this credit has no cumulative bound.
+  # On a host where the loop body ITSELF consistently exceeds FREEZE_GAP - a
+  # stalled filesystem under STATE blocking the stat and /proc reads, say - the
+  # deadline advances as fast as wall clock and a wedged watcher is never
+  # reported.  Bounding cumulative credit would close that, but it would also
+  # break the primary case this exists for, a laptop that dark-wakes several
+  # times inside one open window, so the residual is kept and named instead.
+  # The bound that would preserve both is a cap on cumulative credit, not on a
+  # single gap.
   if [ -n "$confirm_deadline" ] && [ "$gap" -ge "$FREEZE_GAP" ]; then
     confirm_deadline=$((confirm_deadline + gap))
   fi
