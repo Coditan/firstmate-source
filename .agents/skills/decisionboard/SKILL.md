@@ -1,10 +1,11 @@
 ---
 name: decisionboard
 description: >-
-  Lay the fleet's open captain decisions out as a visual board, on the shared standard layout, and open it for the captain.
+  Lay the fleet's captain-actionable decisions out as a visual board, on the shared standard layout, and open it for the captain.
   Use when the captain invokes /decisionboard, asks to see the open decisions as a board, asks what is waiting on him visually, or asks for the decision backlog laid out rather than listed.
   For one named undertaking and where it stands against its own destination, use the sea chart instead.
   Presents only: it groups the per-member panel records by originating investigation and keeps the judge's record where a judge ruled, without verifying that the judge covered every question the analysts raised, shows what each decision gates, and never records an answer.
+  Shows only what the captain-actionable surface returns, which is not every open captain decision: one blocked by another record never reaches that surface and so never reaches this board.
 user-invocable: true
 metadata:
   internal: true
@@ -12,7 +13,7 @@ metadata:
 
 # Decision board
 
-Lay every open captain decision out as one visual surface, so the captain can see what is waiting on him, what each answer unlocks, and which questions are really the same question asked three times.
+Lay every captain-actionable decision out as one visual surface, so the captain can see what is waiting on him, what each answer unlocks, and which questions are really the same question asked three times.
 
 This skill **presents**.
 It never writes, resolves, reorders, or closes a decision.
@@ -95,6 +96,13 @@ Say that on the board rather than presenting the number as exact.
 Pairing a specific folded record to a specific decision is separately best-effort, and the inventory marks which pairings it is confident about.
 Render a confident pairing under its decision; render everything else at group level as further variants of the same investigation.
 Never assert which question an unpaired variant restates.
+
+A decision blocked by another record is not on this board at all, and nothing on the board marks that it is missing.
+Captain-actionability is a single predicate in `bin/fm-fleet-snapshot.sh` and a record blocked by anything fails it, so that decision leaves `decisions_open` entirely and lands in `gates`, which carries no kind and is already truncated.
+Measured on a two-decision fixture, adding one `blocked-by` edge takes the reported inventory from "records: 2 decisions kept: 2" to "records: 1 decisions kept: 1", with no footnote anywhere.
+So this is the captain-actionable set, not the open set: say that on the board in the same breath as the unverified fold, and never present it as everything waiting on him.
+For one named undertaking, `.agents/skills/sea-chart` reconciles its own records against the backlog and reports each withheld one by name with its cause - fleet-wide there is no such count yet.
+The same predicate separately hides a captain hold carried on a record of another kind, filed as `fm-snapshot-captain-shape-invisible`; both losses belong to the snapshot and neither can be closed from this board.
 
 ## Every folded record stays visible
 
