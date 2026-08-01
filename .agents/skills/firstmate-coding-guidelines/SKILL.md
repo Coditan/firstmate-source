@@ -61,10 +61,14 @@ When in doubt, write the fact into the skill or doc first, and add only the one-
 A new skill is dead weight if nothing loads it.
 Every new skill needs its load trigger declared inline: section 13 for agent-only reference skills, or the relevant operating section for anything else.
 State the trigger as a condition ("load before X", "load on Y wake"), never as a vague pointer.
+The `SKILL.md` frontmatter `description` is a second, independent arrival route - it is the trigger text the harness shows in its skill listing, and the only route left in a deployment where no instruction-surface trigger line is possible - so state a condition there too, for user-invocable and agent-only skills alike.
+`test_every_skill_declares_a_load_trigger` in `tests/fm-instruction-owners.test.sh` enumerates `.agents/skills/` and enforces the floor: a frontmatter `name` that is not the directory name, an undeclared `user-invocable`, an agent-only skill without exactly one section 13 entry, a section 13 entry naming a skill that no longer exists, or a description that is empty or states no condition each fail it.
+That check proves a condition is stated, not that it is the right one, so keep writing precise triggers rather than writing to the check.
 Briefs for tasks that touch firstmate's own tracked material should tell the crewmate to load this skill.
 `bin/fm-brief.sh`'s `REPO` argument is a caller-supplied string with no reliable signal that it names firstmate's own repo, unlike a project registered in `data/projects.md`, so there is no clean point inside the scaffold to detect this case automatically.
 Firstmate adds this skill's load instruction to firstmate-repo briefs by hand instead.
 `CONTRIBUTING.md`'s "Development" section carries the same instruction as a durable reminder.
+`docs/skill-trigger-coverage-audit.md` records the audit that measured how well this convention was actually held and the check that now enforces it.
 
 ## Compatibility and enforcement
 
