@@ -74,10 +74,14 @@ That case is the one this costs: it is reported at grace plus the window instead
 The genuinely dead case is unchanged, measured at exactly the grace both before and after (10s, 30s, and the production 300s default).
 Raising `FM_GUARD_GRACE` is not an alternative fix: it would convert a visible false alarm into a silently longer blind window for every failure mode at once, including the real ones.
 
+The fix is deliberately scoped to the delivery stub, so a resumed host is not silently supervision-free everywhere else.
+`bin/fm-guard.sh` and `bin/fm-turnend-guard.sh` still read a post-resume stale beacon as unhealthy and warn or block until the next beat lands, because loosening a Stop gate that deliberately errs toward supervision is its own decision rather than a ride-along here; `docs/turnend-guard.md` owns that gate.
+`bin/fm-watch.sh` is untouched, the watcher never being the defect, and `bin/fm-watch-arm.sh` can still restart a healthy watcher when an arm lands in the seconds between resume and the next beat - a repair rather than a silent gap, and one a suspend no longer reaches now that the stub does not exit on resume.
+
 The window must also stay comfortably under `FM_CODEX_WATCH_CHECKPOINT` (180s), because the Codex foreground checkpoint is the one caller that gives the stub a bounded lifetime.
 A window longer than that checkpoint would be restarted by every new checkpoint and would never reach its own deadline, which would turn that bounded delay into never reporting a wedged watcher at all under that harness.
-That coupling holds by construction rather than by memory: `bin/fm-watch-checkpoint.sh` clamps the `FM_WAKE_BEAT_CONFIRM` it exports to the child so it is below the checkpoint length, covering both an ambient value and the stub's own default, and it says on stderr when it clamps.
-The clamped value is floored at one second, because 0 is not a short window - the stub reads 0 as no window at all - so a clamp can shorten suspend survival but never switch it off.
+That coupling holds by construction rather than by memory: whenever the window it would pass down does not fit inside its own `--seconds`, `bin/fm-watch-checkpoint.sh` clamps the `FM_WAKE_BEAT_CONFIRM` it exports to the child to half that length, covering both an ambient value and the stub's own default, and it says on stderr when it clamps.
+The clamped value is floored at one second, because 0 is not a short window - the stub reads 0 as no window at all - so a clamp can shorten suspend survival but never switch it off; only a one-second checkpoint, far below any production value, leaves that floor as long as the checkpoint itself.
 The default itself lives in `bin/fm-wake-lib.sh` as `FM_WAKE_BEAT_CONFIRM_DEFAULT`, so the stub and the checkpoint read one number rather than two literals that can drift apart.
 `tests/fm-wake-wait.test.sh` pins the ordering of the two defaults and proves the runtime clamp fires for a short `--seconds`, and `tests/fm-watch-checkpoint.test.sh` pins the floor at the small end of the range.
 
