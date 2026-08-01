@@ -650,8 +650,16 @@ families_for_changed_path() {
       # gate, whose test lives in the pure-contract-unit family.
       printf '%s\n' pure-contract-unit
       ;;
+    bin/fm-guard.sh)
+      printf '%s\n' watcher-wake-lock
+      # bin/fm-bridge-relay.sh matches this script's supervision alarms line by
+      # line to tell them apart from fleet-sync's diagnosis and relay them to the
+      # caller, so a reword here must re-run the relay's own suite; its basename
+      # family (watcher-wake-lock) would never select it from this path.
+      printf '%s\n' "__script_required__:fm-bridge-relay.test.sh"
+      ;;
     bin/fm-watch*|bin/fm-wake*|\
-    bin/fm-daemon*|bin/fm-turnend-guard*|bin/fm-guard.sh)
+    bin/fm-daemon*|bin/fm-turnend-guard*)
       printf '%s\n' watcher-wake-lock
       ;;
     bin/fm-afk*)

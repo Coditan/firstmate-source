@@ -352,6 +352,42 @@ test_blocked_refusal_surfaces_the_refresh_error() {
   pass "Bridge relay surfaces fleet-sync's stderr on a blocked refusal, not only a no-outcome one"
 }
 
+test_write_warning_surfaces_the_refresh_error() {
+  local home bridge out rc RELAY_PATH_PREFIX RELAY_FLEET_SYNC_RETRIES=1
+  home=$(make_bridge write-diagnosis)
+  bridge="$home/projects/coditan-bridge"
+  publish_envelope_at_origin write-diagnosis tugboat
+  git -C "$bridge" fetch -q origin main
+  RELAY_PATH_PREFIX=$(shim_git_fetch_lock_contention "$home" "$bridge/.git/packed-refs.lock")
+
+  out=$(run_relay "$home" send hlr status subject --from tugboat); rc=$?
+  expect_code 0 "$rc" "write against a checkout the refresh could not prove current"
+  assert_contains "$out" 'not proven current' "the write dispatched with no warning at all"
+  assert_contains "$out" 'skipped: fetch failed' "the write warning did not quote the refresh outcome"
+  # The verdict without its context is the half the operator cannot act on.
+  assert_contains "$out" 'fm-fleet-sync.sh stderr: coditan-bridge: fetch blocked by packed-refs lock' \
+    "the write warning dropped the lock context fleet-sync reported on stderr"
+  assert_grep 'script=bridge-send.sh' "$home/capture" "the warned write never reached the Bridge script"
+  pass "Bridge relay hands the write-shaped warning the same fleet-sync diagnosis the refusal gets"
+}
+
+test_recovered_refresh_is_never_silent() {
+  local home out rc RELAY_BIN
+  home=$(make_bridge recovered)
+  # fleet-sync reports its lock recovery on stdout, ahead of the outcome line,
+  # and the clone it recovered is current, so nothing else here would speak.
+  RELAY_BIN=$(stub_fleet_sync "$home" "coditan-bridge: recovered: removed a stale packed-refs lock (no live holder)
+coditan-bridge: already current")
+
+  out=$(run_relay "$home" inbox --vessel tugboat); rc=$?
+  expect_code 0 "$rc" "read after a refresh that removed a stale lock"
+  assert_contains "$out" 'the refresh repaired the Bridge checkout: removed a stale packed-refs lock' \
+    "a relay call deleted a lock file inside the Bridge clone's .git without saying so"
+  assert_grep 'script=bridge-inbox.sh' "$home/capture" \
+    "the recovered read never reached the Bridge script"
+  pass "Bridge relay reports a refresh that repaired the Bridge checkout, on the dispatching path too"
+}
+
 test_unrecognised_outcome_vocabulary_refuses_a_read() {
   local home out rc RELAY_BIN
   home=$(make_bridge vocab-drift)
@@ -435,6 +471,11 @@ test_diverged_checkout_refuses_a_read() {
   assert_contains "$out" 'STALE CHECKOUT' "diverged refusal was not identified as stale"
   assert_contains "$out" 'STUCK: on diverged main' "diverged refusal did not relay the refresh outcome"
   assert_contains "$out" 'reported the clone stuck' "diverged refusal misstated why it refused"
+  # A refusal names the distance it actually measured. This clone is genuinely
+  # behind as well as ahead, and saying so is what keeps the refusal from
+  # contradicting a count of 0 the way it did when it just asserted staleness.
+  assert_contains "$out" "is 1 commit(s) behind origin/main" \
+    "diverged refusal did not say how far behind the clone actually is"
   assert_not_contains "$out" 'the guarded refresh did not complete' \
     "a refresh that ran and proved the clone stuck was described as not having completed"
   # The remedy must not be the command that just produced the STUCK line: fleet
@@ -444,6 +485,47 @@ test_diverged_checkout_refuses_a_read() {
     "diverged refusal sent the operator back to the command that just reported STUCK"
   assert_absent "$home/capture" "diverged checkout still invoked the Bridge script"
   pass "Bridge relay refuses a read when the checkout cannot be fast-forwarded"
+}
+
+test_ahead_only_checkout_still_answers_a_read() {
+  local home bridge out rc
+  home=$(make_bridge ahead-only)
+  bridge="$home/projects/coditan-bridge"
+  # The window a Bridge publish leaves open between its commit and its push, and
+  # the state a publish that failed after committing leaves behind: the clone is
+  # ahead of origin and holds everything origin holds, so a read is answerable.
+  # fleet-sync reports that as STUCK on a diverged default branch all the same.
+  printf 'outbound\n' > "$bridge/outbound.txt"
+  git -C "$bridge" add outbound.txt
+  git -C "$bridge" commit -qm "publish committed but not yet pushed"
+
+  out=$(run_relay "$home" inbox --vessel tugboat); rc=$?
+  expect_code 0 "$rc" "read against a clone that is only ahead of origin"
+  assert_not_contains "$out" 'STALE CHECKOUT' "a clone that is only ahead of origin was called stale"
+  assert_contains "$out" 'STUCK: on diverged main' \
+    "the read proceeded without naming the blocked outcome it proceeded through"
+  assert_contains "$out" 'holds everything that fetch brought back' \
+    "the relaxed read never said why it proceeded through a blocked refresh"
+  assert_grep 'script=bridge-inbox.sh' "$home/capture" \
+    "a read on a clone that is level with everything origin holds was refused"
+  pass "Bridge relay reads a clone that is only ahead of origin instead of calling it stale"
+}
+
+test_unproven_fetch_still_refuses_a_level_read() {
+  local home bridge out rc RELAY_BIN
+  home=$(make_bridge unproven-fetch)
+  bridge="$home/projects/coditan-bridge"
+  # Level with origin, but the refresh was blocked at a step that proves nothing
+  # about the fetch, so @{upstream} may be stale and the count means nothing.
+  RELAY_BIN=$(stub_fleet_sync "$home" "coditan-bridge: skipped: no origin remote")
+
+  out=$(run_relay "$home" inbox --vessel tugboat); rc=$?
+  expect_code 1 "$rc" "read after a refresh that never reached origin"
+  assert_contains "$out" 'STALE CHECKOUT' "a refresh that never fetched was accepted as proof"
+  assert_contains "$out" 'never proved it updated' \
+    "the refusal did not say the count of 0 rests on an unproven remote-tracking ref"
+  assert_absent "$home/capture" "a read the refresh never proved still invoked the Bridge script"
+  pass "Bridge relay takes a level count as proof only when the refresh proved it fetched"
 }
 
 test_unrecognized_status_form_refuses_a_read() {
@@ -546,9 +628,13 @@ test_behind_checkout_is_refreshed_before_a_read
 test_stranded_checkout_refuses_a_read
 test_no_outcome_refusal_surfaces_the_refresh_error
 test_blocked_refusal_surfaces_the_refresh_error
+test_write_warning_surfaces_the_refresh_error
+test_recovered_refresh_is_never_silent
 test_unrecognised_outcome_vocabulary_refuses_a_read
 test_guard_alarm_reaches_the_caller
 test_diverged_checkout_refuses_a_read
+test_ahead_only_checkout_still_answers_a_read
+test_unproven_fetch_still_refuses_a_level_read
 test_unrecognized_status_form_refuses_a_read
 test_lock_contention_proceeds_only_while_level
 test_fast_forward_lock_contention_proceeds_when_level

@@ -17,17 +17,27 @@
 # stderr and proceeds, because its own publish path already reconciles with
 # origin. See classify_read_shaped for which call is which: read-shaped is the
 # default, so only a positively recognised write escapes that refusal.
-# The single relaxation is a refresh that merely lost a race for a git lock to a
-# concurrent fleet sync while the clone is already level with its upstream: that
-# call proceeds, with a one-line note on stderr so the relaxation is never
-# silent, because nothing about its currency is actually unproven. Every other
-# blocked, absent, or unreadable proof still refuses. See
-# is_contended_refresh_failure.
+# Two relaxations exist, both narrow and neither silent. A refresh that merely
+# lost a race for a git lock to a concurrent fleet sync while the clone is
+# already level with its upstream proceeds, because nothing about its currency is
+# actually unproven; see is_contended_refresh_failure. So does a refresh whose
+# fetch provably reached origin and that was then blocked while leaving the clone
+# level with what that fetch brought back, because being AHEAD of origin - the
+# state between a Bridge publish's commit and its push, and the state a failed
+# publish leaves behind - does not make a clone stale for reading: its working
+# tree holds everything origin holds. See refresh_fetch_proven. Both note the
+# blocked outcome on stderr. Every other blocked, absent, or unreadable proof
+# still refuses, and a refusal names which of behind, unknown, or unproven-fetch
+# it actually is rather than asserting staleness a count contradicts.
 # fm-fleet-sync.sh runs bin/fm-guard.sh, whose supervision alarms go to stderr
 # and whose full banner is emitted only once per stale episode, so this relay
 # captures that stderr but passes every guard line straight back out on its own
 # stderr, on the success path too; only the remaining lines are treated as
-# fleet-sync's own diagnosis. Stdout stays untouched for the Bridge script.
+# fleet-sync's own diagnosis, and that diagnosis is printed with the write-shaped
+# warning as well as with the refusal. fleet-sync's own "recovered: ..." notices
+# are re-emitted on stderr on every path including success, because they report a
+# mutation inside the Bridge clone's .git - a stale lock file removed - that must
+# never be invisible. Stdout stays untouched for the Bridge script.
 # Only the selected whitelisted Bridge script receives the remaining arguments,
 # unchanged and from inside the Bridge checkout, and owns any resulting publish.
 set -eu
@@ -144,24 +154,54 @@ target="$BRIDGE_ROOT/bin/$bridge_script"
 
 label=$(basename "$BRIDGE_ROOT")
 
-# classify_refresh_line: echo "current" or "blocked" for one fleet-sync outcome
-# line about this clone, or fail for any other line. fleet-sync labels a project
-# by basename or by full path depending on how the path was spelled, and it also
-# prints unrelated guard banners on stdout, so every accepted label form is
-# stripped first and only its documented per-project outcome vocabulary
-# ("already current", "synced ...", "recovered: ...", "skipped: ...", "STUCK: ...")
-# is classified.
-classify_refresh_line() {
-  local line=$1 rest
+# strip_project_label: echo one fleet-sync line with this clone's label removed,
+# or fail for a line about anything else. fleet-sync labels a project by basename
+# or by full path depending on how the path was spelled, and it also prints
+# unrelated guard banners on stdout, so every accepted label form is recognised
+# here and nothing else is ever read as an outcome for this clone.
+strip_project_label() {
+  local line=$1
   case "$line" in
-    "$label: "*) rest=${line#"$label: "} ;;
-    "$BRIDGE_ROOT: "*) rest=${line#"$BRIDGE_ROOT: "} ;;
-    "$bridge_root: "*) rest=${line#"$bridge_root: "} ;;
+    "$label: "*) printf '%s\n' "${line#"$label: "}" ;;
+    "$BRIDGE_ROOT: "*) printf '%s\n' "${line#"$BRIDGE_ROOT: "}" ;;
+    "$bridge_root: "*) printf '%s\n' "${line#"$bridge_root: "}" ;;
     *) return 1 ;;
   esac
+}
+
+# classify_refresh_line: echo "current" or "blocked" for one fleet-sync outcome
+# line about this clone, or fail for any other line. Only fleet-sync's documented
+# per-project outcome vocabulary ("already current", "synced ...",
+# "recovered: ...", "skipped: ...", "STUCK: ...") is classified.
+classify_refresh_line() {
+  local rest
+  rest=$(strip_project_label "$1") || return 1
   case "$rest" in
     "skipped: "*|"STUCK: "*) echo blocked ;;
     "already current"|"synced "*|"recovered: "*) echo current ;;
+    *) return 1 ;;
+  esac
+}
+
+# refresh_fetch_proven: true when this blocked fleet-sync outcome can only have
+# been printed after its fetch of origin succeeded, so the clone's
+# remote-tracking ref is fresh and HEAD..@{upstream} is worth trusting. Every
+# outcome fleet-sync reaches before or at its fetch step ("not a directory",
+# "not a git repo", "local-only project", "no origin remote", and every
+# "fetch failed" form) leaves that ref possibly stale and is not proof; git's own
+# fetch failures are relayed verbatim into that last form and can end in wording
+# a later pattern here would otherwise match, so it is rejected first. The list
+# is a whitelist: an outcome this relay does not know is never taken as proof.
+refresh_fetch_proven() {
+  local rest
+  rest=$(strip_project_label "$1") || return 1
+  case "$rest" in
+    "skipped: fetch failed"*) return 1 ;;
+    "STUCK: "*) return 0 ;;
+    "skipped: cannot determine default branch") return 0 ;;
+    "skipped: "*" does not exist") return 0 ;;
+    "skipped: cannot read "*) return 0 ;;
+    "skipped: fast-forward "*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -209,17 +249,22 @@ is_guard_banner_line() {
 # the stderr it produces is split rather than discarded: fm-guard.sh's alarm
 # lines are relayed to this script's stderr unchanged, and the last
 # REFRESH_ERROR_TAIL_LINES of what remains are kept in REFRESH_ERROR and printed
-# with every refusal, because they carry the lock-retry and lock-removal context
-# the one-line outcome omits, and a run that dies before printing any outcome at
-# all leaves them as the only diagnosis there is. Branch pruning is off because
-# only the fast-forward is wanted here.
+# with every refusal and every warning, because they carry the lock-retry and
+# lock-removal context the one-line outcome omits, and a run that dies before
+# printing any outcome at all leaves them as the only diagnosis there is. Every
+# "recovered: ..." line fleet-sync writes to stdout is echoed to this script's
+# stderr as it is read, including on the path that goes on to dispatch: those
+# lines report that the refresh re-attached the clone's default branch or deleted
+# a lock file inside its .git, and a relay call must never mutate another
+# checkout silently. Branch pruning is off because only the fast-forward is
+# wanted here.
 REFRESH_VERDICT=none
 REFRESH_DETAIL=""
 REFRESH_ERROR=""
 REFRESH_STATUS=0
 REFRESH_ERROR_TAIL_LINES=5
 refresh_checkout() {
-  local out line verdict errfile rc=0
+  local out line rest verdict errfile rc=0
   local -a diagnosis=()
   errfile=$(mktemp "${TMPDIR:-/tmp}/fm-bridge-relay-refresh.XXXXXX") || errfile=""
   if [ -n "$errfile" ]; then
@@ -243,6 +288,12 @@ refresh_checkout() {
   REFRESH_STATUS=$rc
   while IFS= read -r line; do
     verdict=$(classify_refresh_line "$line") || continue
+    rest=$(strip_project_label "$line") || rest=""
+    case "$rest" in
+      "recovered: "*)
+        echo "fm-bridge-relay: the refresh repaired the Bridge checkout: ${rest#recovered: }" >&2
+        ;;
+    esac
     REFRESH_VERDICT=$verdict
     REFRESH_DETAIL=$line
     [ "$verdict" != blocked ] || return 0
@@ -254,20 +305,31 @@ behind=$(git -C "$BRIDGE_ROOT" rev-list --count "HEAD..@{upstream}" 2>/dev/null)
 stale=no
 stale_reason=""
 stale_remedy=""
+distance=""
 if [ "$REFRESH_VERDICT" = current ]; then
   :
 elif [ "$REFRESH_VERDICT" = blocked ] \
     && is_contended_refresh_failure "$REFRESH_DETAIL" && [ "$behind" = 0 ]; then
   echo "fm-bridge-relay: the refresh lost a race for a git lock, but local '$default' is level with $upstream, so '$subcommand' proceeds ($REFRESH_DETAIL)" >&2
+elif [ "$REFRESH_VERDICT" = blocked ] \
+    && refresh_fetch_proven "$REFRESH_DETAIL" && [ "$behind" = 0 ]; then
+  echo "fm-bridge-relay: the refresh fetched $upstream and was then blocked, but local '$default' holds everything that fetch brought back, so '$subcommand' proceeds ($REFRESH_DETAIL)" >&2
 elif [ "$REFRESH_VERDICT" = blocked ]; then
   stale=yes
+  if [ -z "$behind" ]; then
+    distance="and the clone's distance from $upstream could not be read afterwards, so whether it is current is unknown"
+  elif [ "$behind" != 0 ]; then
+    distance="and local '$default' is $behind commit(s) behind $upstream"
+  else
+    distance="and although local '$default' counts 0 commits behind $upstream, that count is against a remote-tracking ref the refresh never proved it updated, so currency stays unproven"
+  fi
   case "$REFRESH_DETAIL" in
     *": STUCK: "*)
-      stale_reason="the refresh ran and reported the clone stuck, which proves it is NOT current and cannot be fast-forwarded to $upstream"
-      stale_remedy="reconcile $BRIDGE_ROOT with $upstream by hand, landing or dropping whatever the clone holds - a Bridge publish that failed after committing leaves the clone ahead of origin, which is reported as diverged too; the fleet sync never forces, resets, or pushes, so running it again only reports the same state"
+      stale_reason="the refresh ran and reported the clone stuck, $distance"
+      stale_remedy="reconcile $BRIDGE_ROOT with $upstream by hand, landing or dropping whatever the clone holds; the fleet sync never forces, resets, or pushes, so running it again only reports the same state"
       ;;
     *)
-      stale_reason="the refresh ran and was blocked by the outcome it reports below, before it could bring the clone current"
+      stale_reason="the refresh ran and was blocked by the outcome it reports below, $distance"
       stale_remedy="clear the condition that outcome names, then re-run this command"
       ;;
   esac
@@ -292,6 +354,18 @@ if [ "$stale" = no ]; then
   fi
 fi
 
+# emit_refresh_diagnosis: print the kept tail of fleet-sync's own stderr, one
+# attributed line at a time. Both unproven paths call it: the refusal and the
+# write-shaped warning describe the same unproven clone, so the context that
+# explains the verdict belongs to both.
+emit_refresh_diagnosis() {
+  local diagnosis_line
+  [ -n "$REFRESH_ERROR" ] || return 0
+  while IFS= read -r diagnosis_line; do
+    echo "fm-bridge-relay: fm-fleet-sync.sh stderr: $diagnosis_line"
+  done <<< "$REFRESH_ERROR"
+}
+
 if [ "$stale" = yes ]; then
   refresh_line=${REFRESH_DETAIL:-fm-fleet-sync.sh reported no outcome for $label}
   if [ "$read_shaped" = yes ]; then
@@ -301,16 +375,16 @@ if [ "$stale" = yes ]; then
       echo "fm-bridge-relay: unread mail may be waiting at origin and would not have been listed."
       echo "fm-bridge-relay: reason: $stale_reason"
       echo "fm-bridge-relay: refresh: $refresh_line"
-      if [ -n "$REFRESH_ERROR" ]; then
-        while IFS= read -r diagnosis_line; do
-          echo "fm-bridge-relay: fm-fleet-sync.sh stderr: $diagnosis_line"
-        done <<< "$REFRESH_ERROR"
-      fi
+      emit_refresh_diagnosis
       echo "fm-bridge-relay: remedy: $stale_remedy"
     } >&2
     exit 1
   fi
-  echo "fm-bridge-relay: warning: running '$subcommand' against a checkout that is not proven current ($stale_reason); its own publish path must reconcile with $upstream" >&2
+  {
+    echo "fm-bridge-relay: warning: running '$subcommand' against a checkout that is not proven current ($stale_reason); its own publish path must reconcile with $upstream"
+    echo "fm-bridge-relay: refresh: $refresh_line"
+    emit_refresh_diagnosis
+  } >&2
 fi
 
 cd "$BRIDGE_ROOT"
