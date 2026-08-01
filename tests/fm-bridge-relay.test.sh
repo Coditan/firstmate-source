@@ -164,6 +164,23 @@ strand_watcher() {
   fm_write_meta "$home/state/task.meta" "window=firstmate:fm-task" "kind=ship"
 }
 
+# relay_own_output <text>: drop the bin/fm-guard.sh alarm lines the relay
+# deliberately relays out of fleet-sync's stderr, leaving only what the relay
+# itself produced. Those alarms describe the firstmate root the suite runs from,
+# never the fixture: a crewmate or developer runs this suite from a worktree on a
+# named branch, which is exactly the state fm-guard.sh's worktree-tangle banner
+# fires on, so every relay call there carries a banner the relay is required to
+# pass through. A silence assertion is about the relay's own output and must not
+# depend on that root being healthy. test_guard_alarm_reaches_the_caller
+# deliberately does NOT use this and asserts the alarms do reach the caller.
+relay_own_output() {
+  printf '%s\n' "$1" | grep -v \
+    -e '^●' \
+    -e '^WARNING: watcher still down' \
+    -e '^WARNING: wake delivery stub missing' \
+    -e '^WARNING: queued wakes pending' || true
+}
+
 # Shim sed so fm-fleet-sync.sh dies mid-run instead of reporting a per-project
 # outcome: it composes its skip reason through sed, so the crash lands the relay
 # on the genuine no-outcome path, where fleet-sync's stderr is the only
@@ -239,7 +256,7 @@ test_valid_calls_dispatch_verbatim() {
   for subcommand in send inbox status broadcast; do
     capture="$home/capture"
     rm -f "$capture"
-    out=$(run_relay "$home" "$subcommand" 'argument with spaces' '--literal=*' '')
+    out=$(relay_own_output "$(run_relay "$home" "$subcommand" 'argument with spaces' '--literal=*' '')")
     [ -z "$out" ] || fail "$subcommand dispatch produced unexpected output: $out"
     assert_grep "script=bridge-$subcommand.sh" "$capture" \
       "$subcommand did not select its matching Bridge script"
@@ -253,13 +270,14 @@ test_valid_calls_dispatch_verbatim() {
 }
 
 test_behind_checkout_is_refreshed_before_a_read() {
-  local home out rc
+  local home out own rc
   home=$(make_bridge behind)
   publish_envelope_at_origin behind tugboat
 
   out=$(run_relay "$home" inbox --vessel tugboat); rc=$?
   expect_code 0 "$rc" "read against a behind checkout"
-  [ -z "$out" ] || fail "read against a behind checkout produced unexpected output: $out"
+  own=$(relay_own_output "$out")
+  [ -z "$own" ] || fail "read against a behind checkout produced unexpected output: $own"
   assert_grep 'seen=inbox/tugboat/new/2026-08-01T00-56-11Z-envelope.json' "$home/capture" \
     "the read still answered from a checkout that was behind origin"
   pass "Bridge relay brings the checkout current before a read, so mail at origin is visible"
