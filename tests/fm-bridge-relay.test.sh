@@ -76,17 +76,38 @@ strand_clone() {
 }
 
 # run_relay <home> [args...]: run the relay against a fixture home with stderr
-# merged into stdout. Two knobs a caller may set for the duration of its own
-# calls: RELAY_PATH_PREFIX prepends a fakebin dir to PATH, and
+# merged into stdout. Three knobs a caller may set for the duration of its own
+# calls: RELAY_PATH_PREFIX prepends a fakebin dir to PATH,
 # RELAY_FLEET_SYNC_RETRIES overrides fleet-sync's packed-refs lock retry count so
-# a simulated lock race does not sit through its real retry waits.
+# a simulated lock race does not sit through its real retry waits, and RELAY_BIN
+# runs a different copy of the relay (see stub_fleet_sync).
 run_relay() {
   local home=$1
   shift
   PATH="${RELAY_PATH_PREFIX:+$RELAY_PATH_PREFIX:}$PATH" \
     FM_FLEET_SYNC_PACKED_REFS_LOCK_RETRIES="${RELAY_FLEET_SYNC_RETRIES:-3}" \
     FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" BRIDGE_RELAY_CAPTURE="$home/capture" \
-    "$RELAY" "$@" 2>&1
+    "${RELAY_BIN:-$RELAY}" "$@" 2>&1
+}
+
+# Stand the real relay up beside a stubbed fm-fleet-sync.sh that prints <line>
+# and exits 0. The relay resolves its sibling scripts from its own directory, so
+# a symlink into a fixture bin runs the unmodified script against a fleet sync
+# whose outcome vocabulary this relay does not recognise. Echoes the relay path
+# for RELAY_BIN.
+stub_fleet_sync() {
+  local home=$1 line=$2 bin
+  bin="$home/bin"
+  mkdir -p "$bin"
+  ln -sf "$ROOT/bin/fm-bridge-relay.sh" "$bin/fm-bridge-relay.sh"
+  ln -sf "$ROOT/bin/fm-tangle-lib.sh" "$bin/fm-tangle-lib.sh"
+  cat > "$bin/fm-fleet-sync.sh" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "$line"
+exit 0
+SH
+  chmod +x "$bin/fm-fleet-sync.sh"
+  printf '%s\n' "$bin/fm-bridge-relay.sh"
 }
 
 # Shim git so every fetch loses a race for a lock the way a concurrent
@@ -293,6 +314,48 @@ test_no_outcome_refusal_surfaces_the_refresh_error() {
   pass "Bridge relay surfaces fleet-sync's stderr when the refresh reported no outcome at all"
 }
 
+test_blocked_refusal_surfaces_the_refresh_error() {
+  local home bridge out rc RELAY_PATH_PREFIX RELAY_FLEET_SYNC_RETRIES=1
+  home=$(make_bridge blocked-diagnosis)
+  bridge="$home/projects/coditan-bridge"
+  publish_envelope_at_origin blocked-diagnosis tugboat
+  git -C "$bridge" fetch -q origin main
+  RELAY_PATH_PREFIX=$(shim_git_fetch_lock_contention "$home" "$bridge/.git/packed-refs.lock")
+
+  out=$(run_relay "$home" inbox --vessel tugboat); rc=$?
+  expect_code 1 "$rc" "read blocked by a fetch failure on a behind clone"
+  assert_contains "$out" 'STALE CHECKOUT' "blocked refusal was not identified as stale"
+  assert_contains "$out" 'skipped: fetch failed' "blocked refusal did not quote the refresh outcome"
+  # The one-line outcome omits what fleet-sync only says on stderr: how hard it
+  # tried for the lock, and whether it could clear it.
+  assert_contains "$out" 'fm-fleet-sync.sh stderr: coditan-bridge: fetch blocked by packed-refs lock' \
+    "the blocked refusal dropped the lock context fleet-sync reported on stderr"
+  assert_absent "$home/capture" "a blocked refusal still invoked the Bridge script"
+  pass "Bridge relay surfaces fleet-sync's stderr on a blocked refusal, not only a no-outcome one"
+}
+
+test_unrecognised_outcome_vocabulary_refuses_a_read() {
+  local home out rc RELAY_BIN
+  home=$(make_bridge vocab-drift)
+  # A clone that is perfectly current, refreshed by a fleet sync that succeeded
+  # and said so in wording classify_refresh_line does not know.
+  RELAY_BIN=$(stub_fleet_sync "$home" "coditan-bridge: up to date")
+
+  out=$(run_relay "$home" inbox --vessel tugboat); rc=$?
+  expect_code 1 "$rc" "read after a refresh whose outcome wording is unrecognised"
+  assert_contains "$out" 'STALE CHECKOUT' "vocabulary-drift refusal was not identified as stale"
+  assert_contains "$out" 'NOTHING WAS READ' \
+    "vocabulary-drift refusal could be mistaken for an empty mailbox"
+  assert_contains "$out" 'exited 0 but printed no outcome' \
+    "a refresh that succeeded was not named as a vocabulary mismatch"
+  assert_contains "$out" 'reconcile classify_refresh_line' \
+    "vocabulary-drift refusal did not point at reconciling the two vocabularies"
+  assert_not_contains "$out" 'the guarded refresh did not complete' \
+    "a refresh that exited 0 was described as not having completed"
+  assert_absent "$home/capture" "vocabulary-drift refusal still invoked the Bridge script"
+  pass "Bridge relay names a drifted fleet-sync outcome vocabulary instead of looping on the fleet sync"
+}
+
 test_guard_alarm_reaches_the_caller() {
   local home out rc
   home=$(make_bridge guarded)
@@ -321,6 +384,22 @@ test_guard_alarm_reaches_the_caller() {
   assert_contains "$out" 'STALE CHECKOUT' "the refusal was lost while supervision was down"
   assert_contains "$out" 'WARNING: watcher still down' \
     "a refusing call swallowed the guard's episode reminder"
+
+  # The guard's other two alarms are independent of the stale-episode dedup and
+  # are meant to be seen on every fleet action, so they must be relayed too, and
+  # never re-attributed to fleet-sync.
+  fm_test_record_supervision_healthy "$home"
+  rm -rf "$home/state/.wake-stub.lock"
+  printf 'wake\n' > "$home/state/.wake-queue"
+  rm -f "$home/capture"
+  out=$(run_relay "$home" inbox --vessel tugboat); rc=$?
+  expect_code 1 "$rc" "read while the wake stub is missing and wakes are queued"
+  assert_contains "$out" 'WARNING: wake delivery stub missing' \
+    "the guard's missing-delivery-stub alarm was swallowed by the relay's stderr capture"
+  assert_contains "$out" 'WARNING: queued wakes pending' \
+    "the guard's queued-wakes alarm was swallowed by the relay's stderr capture"
+  assert_not_contains "$out" 'fm-fleet-sync.sh stderr: WARNING: queued wakes pending' \
+    "a guard alarm was re-attributed to fleet-sync's error text"
   pass "Bridge relay passes fm-guard.sh's supervision alarms through to its own stderr"
 }
 
@@ -448,6 +527,8 @@ test_valid_calls_dispatch_verbatim
 test_behind_checkout_is_refreshed_before_a_read
 test_stranded_checkout_refuses_a_read
 test_no_outcome_refusal_surfaces_the_refresh_error
+test_blocked_refusal_surfaces_the_refresh_error
+test_unrecognised_outcome_vocabulary_refuses_a_read
 test_guard_alarm_reaches_the_caller
 test_diverged_checkout_refuses_a_read
 test_unrecognized_status_form_refuses_a_read

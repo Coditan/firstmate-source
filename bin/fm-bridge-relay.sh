@@ -188,11 +188,17 @@ is_contended_refresh_failure() {
 }
 
 # is_guard_banner_line: true for a line bin/fm-guard.sh writes to stderr as one
-# of its supervision alarms - the '●'-prefixed banner lines and the one-line
-# reminder it prints for the rest of a stale episode.
+# of its supervision alarms - the '●'-prefixed banner lines, the one-line
+# reminder it prints for the rest of a stale episode, and its two independent
+# warnings about a missing wake-delivery stub and pending queued wakes, which the
+# banner dedup never suppresses. All of them belong to the caller, never to
+# fleet-sync's diagnosis.
 is_guard_banner_line() {
   case "$1" in
-    "●"*|"WARNING: watcher still down"*) return 0 ;;
+    "●"*) return 0 ;;
+    "WARNING: watcher still down"*) return 0 ;;
+    "WARNING: wake delivery stub missing"*) return 0 ;;
+    "WARNING: queued wakes pending"*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -202,9 +208,11 @@ is_guard_banner_line() {
 # REFRESH_VERDICT/REFRESH_DETAIL. Its exit status is kept in REFRESH_STATUS, and
 # the stderr it produces is split rather than discarded: fm-guard.sh's alarm
 # lines are relayed to this script's stderr unchanged, and the last
-# REFRESH_ERROR_TAIL_LINES of what remains are kept in REFRESH_ERROR, because a
-# run that dies before printing any per-project outcome leaves them as the only
-# diagnosis. Branch pruning is off because only the fast-forward is wanted here.
+# REFRESH_ERROR_TAIL_LINES of what remains are kept in REFRESH_ERROR and printed
+# with every refusal, because they carry the lock-retry and lock-removal context
+# the one-line outcome omits, and a run that dies before printing any outcome at
+# all leaves them as the only diagnosis there is. Branch pruning is off because
+# only the fast-forward is wanted here.
 REFRESH_VERDICT=none
 REFRESH_DETAIL=""
 REFRESH_ERROR=""
@@ -293,7 +301,7 @@ if [ "$stale" = yes ]; then
       echo "fm-bridge-relay: unread mail may be waiting at origin and would not have been listed."
       echo "fm-bridge-relay: reason: $stale_reason"
       echo "fm-bridge-relay: refresh: $refresh_line"
-      if [ -z "$REFRESH_DETAIL" ] && [ -n "$REFRESH_ERROR" ]; then
+      if [ -n "$REFRESH_ERROR" ]; then
         while IFS= read -r diagnosis_line; do
           echo "fm-bridge-relay: fm-fleet-sync.sh stderr: $diagnosis_line"
         done <<< "$REFRESH_ERROR"
