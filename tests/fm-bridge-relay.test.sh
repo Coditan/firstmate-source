@@ -67,6 +67,22 @@ publish_envelope_at_origin() {
   git -C "$work" push -q origin main
 }
 
+# Point the clone's default branch at a SECOND remote that sits exactly where the
+# clone does. The fleet sync only ever fetches origin and only ever judges
+# against origin/<default>, so after this the branch's own '@{upstream}' is a ref
+# nothing in the refresh path touches - and a distance measured against it says
+# nothing about the mail waiting at origin.
+add_level_mirror_upstream() {
+  local name=$1 bridge mirror mirror_abs
+  bridge="$TMP_ROOT/$name/home/projects/coditan-bridge"
+  mirror="$TMP_ROOT/$name/mirror.git"
+  git clone -q --bare "$bridge" "$mirror"
+  mirror_abs=$(cd "$mirror" && pwd -P)
+  git -C "$bridge" remote add mirror "file://$mirror_abs"
+  git -C "$bridge" fetch -q mirror
+  git -C "$bridge" branch --quiet --set-upstream-to=mirror/main main >/dev/null 2>&1
+}
+
 # Let the clone learn it is behind, then make origin unreachable so the guarded
 # refresh cannot complete.
 strand_clone() {
@@ -511,6 +527,35 @@ test_ahead_only_checkout_still_answers_a_read() {
   pass "Bridge relay reads a clone that is only ahead of origin instead of calling it stale"
 }
 
+test_upstream_that_is_not_the_fetched_ref_refuses_a_read() {
+  local home bridge out rc
+  home=$(make_bridge mirror-upstream)
+  bridge="$home/projects/coditan-bridge"
+  # Mail waits at origin, the clone holds a commit of its own, and its branch
+  # tracks a mirror that sits exactly at HEAD. The fleet sync fetches origin and
+  # reports the clone stuck on a diverged default branch; a distance taken
+  # against the mirror would read 0 and answer the read from a stale mailbox,
+  # which is the original defect this whole guard exists to prevent.
+  publish_envelope_at_origin mirror-upstream tugboat
+  printf 'local\n' > "$bridge/local.txt"
+  git -C "$bridge" add local.txt
+  git -C "$bridge" commit -qm "local-only commit"
+  add_level_mirror_upstream mirror-upstream
+
+  out=$(run_relay "$home" inbox --vessel tugboat); rc=$?
+  expect_code 1 "$rc" "read against a clone tracking a ref the refresh never fetched"
+  assert_contains "$out" 'STALE CHECKOUT' "a level mirror was accepted as proof of currency"
+  assert_contains "$out" 'NOTHING WAS READ' \
+    "the mirror-tracked refusal could be mistaken for an empty mailbox"
+  assert_contains "$out" "is 1 commit(s) behind origin/main" \
+    "the refusal did not measure the clone against the ref the refresh actually fetched"
+  assert_not_contains "$out" 'holds everything that fetch brought back' \
+    "the relay claimed the clone held everything origin holds while mail waited at origin"
+  assert_absent "$home/capture" \
+    "a read measured against an unfetched ref still invoked the Bridge script"
+  pass "Bridge relay measures currency against the ref the refresh fetched, not whatever the branch tracks"
+}
+
 test_unproven_fetch_still_refuses_a_level_read() {
   local home out rc RELAY_BIN outcome
   home=$(make_bridge unproven-fetch)
@@ -662,6 +707,7 @@ test_unrecognised_outcome_vocabulary_refuses_a_read
 test_guard_alarm_reaches_the_caller
 test_diverged_checkout_refuses_a_read
 test_ahead_only_checkout_still_answers_a_read
+test_upstream_that_is_not_the_fetched_ref_refuses_a_read
 test_unproven_fetch_still_refuses_a_level_read
 test_post_fetch_block_on_a_level_clone_reads
 test_unrecognized_status_form_refuses_a_read

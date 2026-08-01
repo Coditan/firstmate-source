@@ -17,18 +17,29 @@
 # stderr and proceeds, because its own publish path already reconciles with
 # origin. See classify_read_shaped for which call is which: read-shaped is the
 # default, so only a positively recognised write escapes that refusal.
+# The clone's distance is always measured against "origin/<default branch>", the
+# ref bin/fm-fleet-sync.sh actually fetches and judges, and never against
+# '@{upstream}': a branch is free to track some other remote, and a count taken
+# against a ref nobody fetched is not proof of anything. Tracking an upstream is
+# still required, because a branch with none is a checkout nobody can publish
+# from, but the tracked ref is not what currency is measured against. When
+# origin/<default> cannot be read the proof is absent, which refuses like every
+# other absent proof.
 # Two relaxations exist, both narrow and neither silent. A refresh that merely
 # lost a race for a git lock to a concurrent fleet sync while the clone is
-# already level with its upstream proceeds, because nothing about its currency is
+# already level with that ref proceeds, because nothing about its currency is
 # actually unproven; see is_contended_refresh_failure. So does a refresh whose
 # fetch provably reached origin and that was then blocked while leaving the clone
 # level with what that fetch brought back, because being AHEAD of origin - the
 # state between a Bridge publish's commit and its push, and the state a failed
 # publish leaves behind - does not make a clone stale for reading: its working
-# tree holds everything origin holds. See refresh_fetch_proven. Both note the
-# blocked outcome on stderr. Every other blocked, absent, or unreadable proof
-# still refuses, and a refusal names which of behind, unknown, or unproven-fetch
-# it actually is rather than asserting staleness a count contradicts.
+# tree holds everything origin holds. See refresh_fetch_proven. Both are gated on
+# a measured count of exactly 0 against that same fetched ref, so a note that
+# says the clone holds everything the fetch brought back can never be printed
+# beside a verdict that says otherwise, and both name the blocked outcome on
+# stderr. Every other blocked, absent, or unreadable proof still refuses, and a
+# refusal names which of behind, unknown, or unproven-fetch it actually is rather
+# than asserting staleness a count contradicts.
 # fm-fleet-sync.sh runs bin/fm-guard.sh, whose supervision alarms go to stderr
 # and whose full banner is emitted only once per stale episode, so this relay
 # captures that stderr but passes every guard line straight back out on its own
@@ -136,6 +147,7 @@ upstream=$(git -C "$BRIDGE_ROOT" rev-parse --abbrev-ref --symbolic-full-name '@{
   echo "fm-bridge-relay: default branch '$default' is not tracking an upstream" >&2
   exit 1
 }
+base="origin/$default"
 
 if ! dirty=$(git -C "$BRIDGE_ROOT" status --porcelain 2>/dev/null); then
   echo "fm-bridge-relay: cannot inspect Bridge checkout cleanliness: $BRIDGE_ROOT" >&2
@@ -185,7 +197,7 @@ classify_refresh_line() {
 
 # refresh_fetch_proven: true when this blocked fleet-sync outcome can only have
 # been printed after its fetch of origin succeeded, so the clone's
-# remote-tracking ref is fresh and HEAD..@{upstream} is worth trusting. Every
+# origin/<default> is fresh and the count taken against it is worth trusting. Every
 # outcome fleet-sync reaches before or at its fetch step ("not a directory",
 # "not a git repo", "local-only project", "no origin remote", and every
 # "fetch failed" form) leaves that ref possibly stale and is not proof; git's own
@@ -307,7 +319,7 @@ refresh_checkout() {
 }
 
 refresh_checkout
-behind=$(git -C "$BRIDGE_ROOT" rev-list --count "HEAD..@{upstream}" 2>/dev/null) || behind=
+behind=$(git -C "$BRIDGE_ROOT" rev-list --count "HEAD..$base" 2>/dev/null) || behind=
 stale=no
 stale_reason=""
 stale_remedy=""
@@ -316,23 +328,23 @@ if [ "$REFRESH_VERDICT" = current ]; then
   :
 elif [ "$REFRESH_VERDICT" = blocked ] \
     && is_contended_refresh_failure "$REFRESH_DETAIL" && [ "$behind" = 0 ]; then
-  echo "fm-bridge-relay: the refresh lost a race for a git lock, but local '$default' is level with $upstream, so '$subcommand' proceeds ($REFRESH_DETAIL)" >&2
+  echo "fm-bridge-relay: the refresh lost a race for a git lock, but local '$default' is level with $base, so '$subcommand' proceeds ($REFRESH_DETAIL)" >&2
 elif [ "$REFRESH_VERDICT" = blocked ] \
     && refresh_fetch_proven "$REFRESH_DETAIL" && [ "$behind" = 0 ]; then
-  echo "fm-bridge-relay: the refresh fetched $upstream and was then blocked, but local '$default' holds everything that fetch brought back, so '$subcommand' proceeds ($REFRESH_DETAIL)" >&2
+  echo "fm-bridge-relay: the refresh fetched origin and was then blocked, but local '$default' is level with $base and so holds everything that fetch brought back, so '$subcommand' proceeds ($REFRESH_DETAIL)" >&2
 elif [ "$REFRESH_VERDICT" = blocked ]; then
   stale=yes
   if [ -z "$behind" ]; then
-    distance="and the clone's distance from $upstream could not be read afterwards, so whether it is current is unknown"
+    distance="and the clone's distance from $base could not be read afterwards, so whether it is current is unknown"
   elif [ "$behind" != 0 ]; then
-    distance="and local '$default' is $behind commit(s) behind $upstream"
+    distance="and local '$default' is $behind commit(s) behind $base"
   else
-    distance="and although local '$default' counts 0 commits behind $upstream, that count is against a remote-tracking ref the refresh never proved it updated, so currency stays unproven"
+    distance="and although local '$default' counts 0 commits behind $base, the refresh never proved it updated that ref, so currency stays unproven"
   fi
   case "$REFRESH_DETAIL" in
     *": STUCK: "*)
       stale_reason="the refresh ran and reported the clone stuck, $distance"
-      stale_remedy="reconcile $BRIDGE_ROOT with $upstream by hand, landing or dropping whatever the clone holds; the fleet sync never forces, resets, or pushes, so running it again only reports the same state"
+      stale_remedy="reconcile $BRIDGE_ROOT with $base by hand, landing or dropping whatever the clone holds; the fleet sync never forces, resets, or pushes, so running it again only reports the same state"
       ;;
     *)
       stale_reason="the refresh ran and was blocked by the outcome it reports below, $distance"
@@ -351,12 +363,12 @@ fi
 if [ "$stale" = no ]; then
   if [ -z "$behind" ]; then
     stale=yes
-    stale_reason="the clone's distance from $upstream could not be read"
-    stale_remedy="restore $BRIDGE_ROOT's tracking of $upstream, then re-run this command"
+    stale_reason="the clone's distance from $base could not be read, so the refresh's own outcome is the only proof there is and this relay requires two"
+    stale_remedy="restore $base in $BRIDGE_ROOT (git -C $BRIDGE_ROOT fetch origin), then re-run this command"
   elif [ "$behind" != 0 ]; then
     stale=yes
-    stale_reason="local '$default' is still $behind commit(s) behind $upstream after the refresh"
-    stale_remedy="reconcile $BRIDGE_ROOT with $upstream, then re-run this command"
+    stale_reason="local '$default' is still $behind commit(s) behind $base after the refresh"
+    stale_remedy="reconcile $BRIDGE_ROOT with $base, then re-run this command"
   fi
 fi
 
@@ -387,7 +399,7 @@ if [ "$stale" = yes ]; then
     exit 1
   fi
   {
-    echo "fm-bridge-relay: warning: running '$subcommand' against a checkout that is not proven current ($stale_reason); its own publish path must reconcile with $upstream"
+    echo "fm-bridge-relay: warning: running '$subcommand' against a checkout that is not proven current ($stale_reason); its own publish path must reconcile with $base"
     echo "fm-bridge-relay: refresh: $refresh_line"
     emit_refresh_diagnosis
   } >&2
