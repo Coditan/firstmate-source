@@ -48,7 +48,7 @@ A vessel sitting at the fork's current `main` and pointed at `admiralty`'s `main
 | `fleet/doctrine/` | fleet | the partition, the pin and bump contract, branch protection |
 | `fleet/decisions/`, `fleet/vessels/`, `fleet/roles/` | fleet | placeholders for fleet-wide decisions, per-vessel material, and fleet-authored roles |
 | `.github/workflows/fleet-ci.yml` | fleet | the gates |
-| everything else, 308 paths | vendored | firstmate at the pin, byte for byte |
+| everything else, 353 paths at the current pin `de0b95b` and 308 at the genesis pin `e52cc76` | vendored | firstmate at the pin, byte for byte |
 
 Ownership is decided by name, in a fixed order, by `fleet/bin/fmf-ownership.sh`.
 The four control files, anything under `fleet/`, and `.github/workflows/fleet-*.yml` are fleet-owned; then the `.fleet-overlay` registry; then `.fleet-excluded`; then everything else is vendored.
@@ -137,12 +137,26 @@ A related interaction used to bite even without tracking: `dirty_status` reads `
 The fork's tracked root `.gitignore` now ignores it along with the other checkout-local harness runtime artifacts, so it no longer does; [configuration.md](configuration.md) "Operational home layout and state" owns that contract.
 Because `.gitignore` is a vendored path, `admiralty` picks the rule up with the next pin bump rather than needing fleet-owned material of its own.
 
+## Measuring divergence against admiralty
+
+`admiralty` carries firstmate vendored under a pin whose source is this same fork, so a bump lands this fork's content as a single import commit carrying its own patch id.
+`git cherry admiralty/main HEAD` compares patch ids and cannot see across that vendor-import boundary, so it reports commits as missing even when they are byte-identical on `admiralty`.
+The right test for a single commit is `git merge-base --is-ancestor <commit> <pin>` against the pin, and for a whole tree it is the mode, blob and path triples from `git ls-tree -r` on both sides, minus the fleet-owned paths.
+Measured on 2026-08-01 UTC: the pin's tree holds 353 paths, all 353 are present on `admiralty` as vendored paths, and all 353 are identical in mode, blob and path, with none differing and none missing.
+Of the 37 lines `git cherry` reported as missing, 27 were already there, and the fleet recomputed this independently.
+None of that means the canonical upstream template absorbed those patches: the verdicts in [fork-patches.md](fork-patches.md) measure against that template, which this evidence leaves untouched, and that document owns the absorption rule.
+
 ## What is not built yet
 
 - No vessel is cut over. Origins still point at `Freudator86/firstmate`.
 - Restoring the ancestry as this fork's `main` advances past `e52cc76` is an open captain decision, not a solved problem.
   Ancestry is a property of the commit graph and not of tree content, so a pin bump alone does not restore it: a bump commit on `admiralty` copies the fork's newer tree, but it does not add the fork's newer commits to `admiralty`'s ancestor set.
   Absorbing that history so an already-updated vessel stays fast-forwardable needs a true merge of the fork's `main` into `admiralty`'s `main`, which is consistent with the standing rule that upstream-sync pull requests land as true merge commits rather than squashes.
-  The unresolved part is how such a merge interacts with the drift gate, because the merge brings vendored file changes in directly, so the manifest has to be regenerated in the same commit.
+  How such a merge interacts with the drift gate is no longer the open part: `admiralty`'s own `fleet/doctrine/pin-and-bump.md` owns the merge-bump procedure, including regenerating the manifest in that same commit and the verification to put in the pull request.
+  What remains open is that the procedure has not been applied.
+  The 2026-08-01 pin bump to `de0b95b` landed as an ordinary single-parent commit rather than a merge, so it copied the tree without absorbing the history, and even a vessel sitting exactly at the current pin cannot fast-forward onto `admiralty`.
+  Measured on 2026-08-01 UTC in a throwaway clone of `Freudator86/admiralty` whose `main` was `285289c24be625f5b27d5ae846dd09024114534c`, with this fork fetched into it so both sides are present: `git merge-base --is-ancestor de0b95b7a13e72256089707aeab6aac83d00e90d 285289c24be625f5b27d5ae846dd09024114534c` exits 1, and the newest fork commit that is still an ancestor of that `admiralty` `main` is `bbf0023` of 2026-07-30.
+  Name the `admiralty` commit rather than a bare `origin/main`, because in this repository `origin/main` is the fork itself, where `de0b95b` is an ancestor and the same command exits 0.
+  That merge bump cannot be raised through no-mistakes, because its rebase would flatten the ancestry the merge exists to create, so it is authorized on the captain's word instead.
 - The Bridge extraction, the fork-maintenance tooling retirement, and the Bucket-A upstreaming are unstarted; the fork-first ratchet prices each as its own reviewed pin bump.
 - `fleet/decisions/`, `fleet/vessels/`, and `fleet/roles/` are empty placeholders.
