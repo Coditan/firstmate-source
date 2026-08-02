@@ -277,6 +277,7 @@ The watcher service's separately consented lingering setting applies to the same
 
 claude, codex, opencode, pi, and grok are all empirically verified; new harnesses get verified through a supervised trial task before joining the set.
 The verified adapter knowledge - busy signatures, interrupt and exit commands, skill-invocation syntax, and per-harness quirks - lives in [`.agents/skills/harness-adapters/SKILL.md`](../.agents/skills/harness-adapters/SKILL.md).
+The Codex 0.145.0 busy-row evidence behind its watcher liveness backstop lives in [`docs/codex-busy-detection.md`](codex-busy-detection.md).
 Launch mechanics, including the verified command templates, live in [`bin/fm-spawn.sh`](../bin/fm-spawn.sh).
 Primary-session turn-end guard integrations for verified harnesses are tracked as repo-level hook files and documented in [`docs/turnend-guard.md`](turnend-guard.md).
 The Codex repo-local profile and Graphify PreToolUse hook are documented above because they are Codex configuration, not harness launch mechanics.

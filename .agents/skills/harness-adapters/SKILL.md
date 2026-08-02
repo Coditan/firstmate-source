@@ -173,7 +173,7 @@ A project-level `.claude/settings.json` only takes effect when Claude Code's pro
 After those settings are loaded, hook command resolution is still cwd-sensitive because Claude Code runs commands through `/bin/sh` against the session's current cwd; keep the tracked command anchored through `"$CLAUDE_PROJECT_DIR"/bin/fm-turnend-guard.sh` and see `docs/turnend-guard.md` for the verified Stop-hook details.
 Claude Code's primary delivery protocol is the lowest-friction path: run `bin/fm-watch-arm.sh` as its own Claude Code background task and treat delivery-stub completion as the wake.
 
-## codex (VERIFIED 2026-06-11, codex-cli 0.139.0; re-verified 2026-07-26 against codex-cli 0.145.0, both the source at tag `rust-v0.145.0` and the installed binary)
+## codex (VERIFIED 2026-06-11, codex-cli 0.139.0; re-verified 2026-07-26 against codex-cli 0.145.0, both the source at tag `rust-v0.145.0` and the installed binary; busy-row consequence and agent-liveness backstop verified 2026-08-02 on codex-cli 0.145.0, see docs/codex-busy-detection.md)
 
 | Fact | Value |
 |---|---|
@@ -193,9 +193,12 @@ As soon as it begins streaming its answer it removes the row entirely, and the p
 Measured against Codex's own `notify` turn-end hook, so that turn end is observed rather than inferred, this was roughly 32 seconds of a 39-second turn during which firstmate's own `fm_pane_is_busy` read idle for a demonstrably working worker.
 It holds for every Codex worker on every turn, not only for a captain who has changed something.
 The busy string itself has not moved and still matches whenever it is rendered, but it is absent for most of a turn's wall clock, so a busy read cannot be treated as a reliable liveness signal for a Codex worker.
-That measurement is established; its consequence is not.
-Whether it actually produces a false wedge escalation depends on the watcher's absorb logic and its grace windows, which this verification did not trace, and other signals such as the turn-end hook and the worker's own status writes may already cover it.
-Establishing that is separate work, which is why the busy-signature matching in `fm-watch.sh` and `fm-tmux-lib.sh` is deliberately unchanged.
+That measurement is established, and as of 2026-08-02 so is its consequence.
+The false-wedge exposure is real and was reproduced live (docs/codex-busy-detection.md): during answer streaming the pane repeatedly holds STATIC between token bursts with no `esc to interrupt` row, so once such a pane holds two watcher polls the non-terminal-stale path would surface a healthy worker as a possible wedge.
+The busy-signature matching in `fm-watch.sh` and `fm-tmux-lib.sh` stays deliberately unchanged - the row still matches whenever it renders - but the absorb path now carries an interface-text-INDEPENDENT backstop scoped to codex.
+`codex_static_pane_upgrade` in `bin/fm-watch.sh` treats an otherwise-stale codex pane as provably working (absorb plus wedge timer) whenever the codex agent PROCESS is confidently alive: `fm_backend_agent_alive` reads `alive` because the pane's foreground command stays `codex` for the entire turn (verified 100/100 samples), a signal that does not depend on the busy row at all.
+A crashed codex reads `dead` (bare shell) and still surfaces at once, and a genuinely wedged codex still escalates past `STALE_ESCALATE_SECS` and on to demand-deep-inspection, so the backstop hides a healthy worker without hiding a stuck one.
+This also covers the keymap-remap blind spot below, because it does not read the interrupt-hint text.
 
 The keymap case is the one that requires an operator to have changed something.
 A captain who remaps `tui.keymap.chat.interrupt_turn` in their own Codex config gets that key's label instead (a remap to F12 renders `f12 to interrupt`), and unbinding it entirely drops the hint so the row shows only the elapsed time.
