@@ -1546,6 +1546,120 @@ EOF
   pass "OpenCode watcher plugin rearms after a watcher wake"
 }
 
+# An already-armed close is healthy, but it ends the cycle with delivery owned by
+# a stub the plugin does not own, so the plugin has to keep re-attempting until it
+# takes ownership back - quietly, and only until an attempt becomes the delivery
+# wait itself. Absorbing the close without that cadence would leave the session
+# with no plugin-owned delivery at all once the holder exits.
+# The repeat attempt must be the cheap delivery stub, not the full arm: the full
+# arm re-runs watcher-service convergence, which at this cadence would mean
+# systemctl probes and a multi-file hash every few seconds for as long as the
+# holder lives. Convergence still happens, on its own far longer interval, and
+# this fixture logs the two entry points separately so both halves are pinned.
+test_opencode_armed_close_repolls_until_it_takes_delivery_over() {
+  local plugin repo home log holder stop out status
+  plugin="$ROOT/.opencode/plugins/fm-primary-watch-arm.js"
+  repo="$TMP_ROOT/opencode-armed-repoll-root"
+  home="$TMP_ROOT/opencode-armed-repoll-home"
+  log="$TMP_ROOT/opencode-armed-repoll.log"
+  holder="$TMP_ROOT/opencode-armed-repoll.holder"
+  stop="$TMP_ROOT/opencode-armed-repoll.stop"
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  git init -q "$repo"
+  : > "$repo/AGENTS.md"
+  : > "$home/state/task.meta"
+  : > "$holder"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+printf 'watcher: attached pid=1 (beacon 0s)\n'
+exec "$FM_ROOT_OVERRIDE/bin/fm-wake-wait.sh"
+SH
+  cat > "$repo/bin/fm-wake-wait.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'stub=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+if [ -e "${FM_HOLDER_FILE:?}" ]; then
+  printf 'wake delivery: already armed pid=4242 (same session)\n'
+  exit 0
+fi
+mkdir -p "${FM_HOME:?}/state/.wake-stub.lock"
+printf '%s\n' "$$" > "$FM_HOME/state/.wake-stub.lock/pid"
+printf 'own=%s\n' "$$" >> "$FM_ARM_LOG"
+trap 'exit 0' TERM INT
+while [ ! -e "${FM_STOP_FILE:?}" ]; do sleep 0.02; done
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh" "$repo/bin/fm-wake-wait.sh"
+  out=$(PLUGIN="$plugin" WORKTREE="$repo" FM_HOME="$home" FM_ARM_LOG="$log" FM_HOLDER_FILE="$holder" \
+    FM_STOP_FILE="$stop" FM_WATCH_CHECKPOINT_REARM_POLL=1 FM_WATCH_ARM_CONVERGE_INTERVAL=3 node 2>&1 <<'EOF'
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const rows = () => (existsSync(process.env.FM_ARM_LOG)
+  ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").filter(Boolean)
+  : []);
+const count = (prefix) => rows().filter((line) => line.startsWith(prefix)).length;
+const owned = () => rows().some((line) => line.startsWith("own="));
+const waitFor = async (predicate, label) => {
+  for (let i = 0; i < 600; i += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  console.error(`${label}: ${rows().join(" | ")}`);
+  process.exit(1);
+};
+
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+let prompts = 0;
+const client = {
+  session: {
+    promptAsync: async () => {
+      prompts += 1;
+    },
+  },
+};
+const hooks = await mod.FmPrimaryWatchArm({
+  client,
+  directory: process.env.WORKTREE,
+  worktree: process.env.WORKTREE,
+});
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
+
+// The holder still owns delivery, so the armed close must schedule another
+// attempt instead of ending the cycle - and that attempt must be the cheap
+// stub, reached without another trip through the full arm.
+await waitFor(() => count("stub=") >= 2, "armed close did not re-attempt while the holder owned delivery");
+if (count("arm=") !== 1) {
+  console.error(`repeat attempts paid for watcher-service convergence: ${rows().join(" | ")}`);
+  process.exit(1);
+}
+
+// Convergence is not abandoned, only moved onto its own much longer interval.
+await waitFor(() => count("arm=") >= 2, "the full arm never ran again at its convergence interval");
+
+// The holder lets go: the next attempt has to win the lock and stay.
+rmSync(process.env.FM_HOLDER_FILE);
+await waitFor(owned, "plugin did not take delivery over once the holder released");
+const afterTakeover = rows().length;
+await new Promise((resolve) => setTimeout(resolve, 2500));
+if (rows().length !== afterTakeover) {
+  console.error(`cadence kept attempting after taking delivery over: ${rows().join(" | ")}`);
+  process.exit(1);
+}
+if (prompts !== 0) {
+  console.error(`an already-armed close surfaced ${prompts} prompts`);
+  process.exit(1);
+}
+writeFileSync(process.env.FM_STOP_FILE, "stop\n");
+process.exit(0);
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "OpenCode plugin must re-attempt an already-armed close with the cheap stub until it owns delivery"
+  [ -z "$out" ] || fail "OpenCode armed-repoll test printed output: $out"
+  pass "OpenCode watcher plugin re-attempts an already-armed close cheaply and stops once it owns delivery"
+}
+
 test_opencode_watch_arm_coordinates_with_turnend_guard() {
   local arm_plugin guard_plugin repo home log guard_log out status
   arm_plugin="$ROOT/.opencode/plugins/fm-primary-watch-arm.js"
@@ -1669,7 +1783,12 @@ const guardHooks = await guardMod.FmPrimaryTurnendGuard({
 });
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 await guardHooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
-for (let i = 0; i < 250 && !existsSync(process.env.FM_GUARD_LOG); i += 1) {
+// One idle event here costs a worktree probe, a session-lock ancestry walk, an
+// arm child and the guard script - a dozen process spawns before the guard log
+// can exist. Wait the same 12s the plugin's own readiness bound allows rather
+// than a shorter budget a loaded host can miss, so a slow machine reads as slow
+// rather than as a suppressed guard.
+for (let i = 0; i < 600 && !existsSync(process.env.FM_GUARD_LOG); i += 1) {
   await new Promise((resolve) => setTimeout(resolve, 20));
 }
 if (!existsSync(process.env.FM_ARM_LOG)) {
@@ -1722,5 +1841,6 @@ test_opencode_primary_watch_plugin_leaves_config_to_service
 test_opencode_primary_watch_plugin_requires_session_lock
 test_opencode_watch_arm_coordinator_respects_primary_scope
 test_opencode_primary_watch_plugin_rearms_after_wake
+test_opencode_armed_close_repolls_until_it_takes_delivery_over
 test_opencode_watch_arm_coordinates_with_turnend_guard
 test_opencode_healthy_arm_output_does_not_suppress_guard

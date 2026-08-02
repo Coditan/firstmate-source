@@ -107,6 +107,101 @@ test_killed_stub_loses_no_wake_and_costs_one_rearm() {
   pass "SIGTERM of the delivery stub costs one re-arm and loses zero queued wakes"
 }
 
+# Re-arming while a healthy stub of the SAME session already holds the lock is
+# the state bin/fm-turnend-guard.sh judges armed and healthy through
+# fm_wake_stub_armed. The arm path used to call the identical state FAILED and
+# exit 1, so one repo returned two verdicts and the operator was shown only the
+# alarming one - with no remedy but killing a working delivery path.
+test_healthy_same_session_stub_reports_already_armed() {
+  local home state daemon first out status armed_pid
+  home="$TMP_ROOT/stub-same-session"
+  state="$home/state"
+  out="$home/rearm.out"
+  mkdir -p "$state"
+  sleep 60 & daemon=$!
+  record_fake_daemon "$home" "$state" "$daemon"
+  printf '4242\n' > "$state/.lock"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$WAIT" >/dev/null 2>&1 & first=$!
+  # pid-identity is the LAST file the stub publishes, so waiting on it - rather
+  # than on the pid the lock directory acquires first - is what keeps this test
+  # out of the window where the lock metadata is still incomplete and the armed
+  # predicate would answer about a half-published lock.
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -e "$state/.wake-stub.lock/pid-identity" ] && break
+    sleep 0.1
+  done
+  [ -e "$state/.wake-stub.lock/pid-identity" ] || fail "initial delivery stub did not publish its lock"
+  armed_pid=$(cat "$state/.wake-stub.lock/pid")
+
+  status=0
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$WAIT" > "$out" 2>&1 || status=$?
+  assert_stub_armed "$state" "$first" "re-arming unarmed the healthy stub that already held the lock"
+  kill -TERM "$first" 2>/dev/null || true
+  wait "$first" 2>/dev/null || true
+  kill -TERM "$daemon" 2>/dev/null || true
+  wait "$daemon" 2>/dev/null || true
+
+  [ "$status" -eq 0 ] || fail "re-arming against a healthy same-session stub exited $status instead of 0"
+  assert_contains "$(cat "$out")" "already armed pid=$armed_pid (same session)" \
+    "re-arm did not name the healthy stub it found already armed"
+  case "$(cat "$out")" in
+    *FAILED*) fail "a healthy same-session stub was still reported as a delivery failure" ;;
+  esac
+  pass "re-arming while a healthy same-session stub holds the lock succeeds and names it"
+}
+
+# The other half of the same branch: everything fm_wake_stub_armed rejects is a
+# real conflict and has to stay exactly as loud as it was. A live holder is not
+# enough - the lock has to belong to THIS session and match its recorded
+# identity - so both a session takeover and a lock whose identity no longer
+# matches must still fail.
+test_foreign_stub_lock_still_fails_loudly() {
+  local home state daemon first out status
+  home="$TMP_ROOT/stub-foreign"
+  state="$home/state"
+  mkdir -p "$state"
+  sleep 60 & daemon=$!
+  record_fake_daemon "$home" "$state" "$daemon"
+  printf '4242\n' > "$state/.lock"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$WAIT" >/dev/null 2>&1 & first=$!
+  # Wait for pid-identity, the last published file: rewriting state/.lock while
+  # the stub is still between acquiring the lock and recording session-lock-pid
+  # would make the holder record 9999 as its OWN session and flip this test's
+  # verdict to the healthy branch, failing for a reason unrelated to the code.
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -e "$state/.wake-stub.lock/pid-identity" ] && break
+    sleep 0.1
+  done
+  [ -e "$state/.wake-stub.lock/pid-identity" ] || fail "initial delivery stub did not publish its lock"
+
+  # A different session now owns this home: the lock was recorded under session
+  # 4242 and the live session lock reads 9999.
+  printf '9999\n' > "$state/.lock"
+  out="$home/other-session.out"
+  status=0
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$WAIT" > "$out" 2>&1 || status=$?
+  [ "$status" -eq 1 ] || fail "a stub lock held by another session exited $status instead of 1"
+  assert_contains "$(cat "$out")" "FAILED - another delivery stub already holds" \
+    "another session's stub lock was not reported as a delivery failure"
+
+  # Same session again, but the recorded identity no longer matches the live pid
+  # behind the lock - a stale lock survived by pid reuse.
+  printf '4242\n' > "$state/.lock"
+  printf '%s\n' 'linux-starttime=1 cmdline-hex=00' > "$state/.wake-stub.lock/pid-identity"
+  out="$home/stale-identity.out"
+  status=0
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$WAIT" > "$out" 2>&1 || status=$?
+  kill -TERM "$first" 2>/dev/null || true
+  wait "$first" 2>/dev/null || true
+  kill -TERM "$daemon" 2>/dev/null || true
+  wait "$daemon" 2>/dev/null || true
+
+  [ "$status" -eq 1 ] || fail "a stub lock whose identity no longer matches exited $status instead of 1"
+  assert_contains "$(cat "$out")" "FAILED - another delivery stub already holds" \
+    "a stale stub lock was not reported as a delivery failure"
+  pass "a stub lock from another session or with a stale identity still fails loudly"
+}
+
 test_stub_exits_loudly_on_stale_daemon_beacon() {
   local home state daemon out status
   home="$TMP_ROOT/stub-stale"
@@ -456,6 +551,8 @@ test_default_confirm_window_fits_inside_the_codex_checkpoint() {
 
 test_daemon_enqueues_and_continues_without_arm_owner
 test_killed_stub_loses_no_wake_and_costs_one_rearm
+test_healthy_same_session_stub_reports_already_armed
+test_foreign_stub_lock_still_fails_loudly
 test_stub_exits_loudly_on_stale_daemon_beacon
 test_wedged_live_watcher_is_reported_after_the_bounded_window
 test_beacon_advancing_outside_the_grace_is_not_recovery

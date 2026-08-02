@@ -9,11 +9,33 @@ const ARM_RETIRE_TIMEOUT_MS = positiveInteger("FM_WATCH_ARM_RETIRE_TIMEOUT_MS", 
 const REARM_RETRY_BASE_MS = positiveInteger("FM_WATCH_REARM_RETRY_BASE_MS", 250);
 const REARM_RETRY_MAX_MS = positiveInteger("FM_WATCH_REARM_RETRY_MAX_MS", 4000);
 const REARM_RETRY_LIMIT = positiveInteger("FM_WATCH_REARM_RETRY_LIMIT", 5);
+// Cadence for re-attempting delivery while a healthy stub of this session still
+// owns it, shared with bin/fm-watch-checkpoint.sh rather than given a second
+// name, because it is the same question at a different layer: how soon does this
+// session take delivery back once the holder lets go.
+const ARMED_REPOLL_MS = positiveInteger("FM_WATCH_CHECKPOINT_REARM_POLL", 5) * 1000;
+// How long the plugin may go without re-running the FULL arm while that cadence
+// is running. A re-attempt at the cadence above runs only bin/fm-wake-wait.sh,
+// exactly what the checkpoint re-runs, because the watcher service was already
+// converged and verified by the arm that opened this cycle. Re-running
+// bin/fm-watch-arm.sh every few seconds would repeat bin/fm-watcher-service.sh
+// ensure instead - systemctl probes plus a sha256 over the tracked watcher
+// sources on every tick, and in a degraded state a unit restart every tick.
+// Convergence still has to happen eventually, so it happens on its own much
+// longer interval, far enough from the cheap cadence that the two cannot be
+// confused for one knob.
+const ARM_CONVERGE_MS = positiveInteger("FM_WATCH_ARM_CONVERGE_INTERVAL", 900) * 1000;
+// A delivery stub that wins the lock prints nothing at all, so a cheap
+// re-attempt cannot settle readiness from an arm header line the way a full arm
+// does. It settles on the evidence instead: the stub lock recording this child's
+// own pid.
+const CHEAP_READY_POLL_MS = 50;
 
 let child = null;
 let armStatus = "idle";
 let retryTimer = null;
 let retryFailures = 0;
+let lastFullArmAt = 0;
 let spawnDecisionInFlight = Promise.resolve();
 let restorationInFlight = null;
 let armClose = new WeakMap();
@@ -125,10 +147,21 @@ async function sessionOwnsLock(paths) {
   return false;
 }
 
+// Arming is idempotent for one session: when a healthy stub of this session
+// already holds state/.wake-stub.lock, bin/fm-wake-wait.sh reports it and exits
+// 0 (see docs/watcher-continuity.md). Delivery is armed, so this is a healthy
+// close - recognised explicitly rather than left to the clean-exit default, so
+// the outcome is intentional and greppable rather than incidental.
+function alreadyArmedLine(output) {
+  return output.split(/\r?\n/).find((line) => /^wake delivery: already armed\b/.test(line)) || "";
+}
+
 function classifyArmClose(stdout, stderr, code, signal) {
   const combined = `${stdout}\n${stderr}`;
   const reason = combined.split(/\r?\n/).find((line) => /^(wake: queued|signal:|stale:|check:|heartbeat($|:))/.test(line));
   if (reason) return { kind: "actionable", message: reason };
+  const armed = alreadyArmedLine(combined);
+  if (armed) return { kind: "armed", message: armed };
   const failed = combined.split(/\r?\n/).find((line) => /^(watcher: FAILED|wake delivery: FAILED)/.test(line));
   if (failed) return { kind: "failure", message: failed };
   if (signal) {
@@ -155,7 +188,7 @@ function observeArmOutput(stdout, stderr, settleReadiness) {
     settleReadiness("wake");
     return;
   }
-  if (combined.split(/\r?\n/).some((line) => /^watcher: (?:started|attached)\b/.test(line))) {
+  if (alreadyArmedLine(combined) || combined.split(/\r?\n/).some((line) => /^watcher: (?:started|attached)\b/.test(line))) {
     setArmStatus("armed");
     settleReadiness("armed");
     return;
@@ -239,6 +272,29 @@ async function restoreAfterActionableClose(paths, sessionID, client, predecessor
   return `${failure}\nwatcher: FAILED - OpenCode could not restore watcher continuity after ${REARM_RETRY_LIMIT} retries`;
 }
 
+// An armed close is healthy, but it still ends this arm cycle with delivery
+// owned by a stub the plugin does not own, so something has to take ownership
+// back when that stub lets go. This is the checkpoint's cadence at the adapter
+// layer: a quiet fixed-interval re-attempt, never the exponential failure retry.
+// It borrows the same single timer slot as that retry, so the one-child-or-one-
+// timer invariant and every launch-time ownership recheck keep holding
+// unchanged. It cannot storm: each re-attempt is one process, one interval
+// apart, and the cadence ends by itself the moment an attempt wins the lock and
+// becomes the delivery wait.
+// Each tick runs the cheap delivery stub; only a tick past ARM_CONVERGE_MS since
+// the last full arm pays for watcher-service convergence again, so a cadence
+// that lasts hours costs one convergence per interval rather than one per tick.
+function scheduleArmedRepoll(paths, sessionID, client, predecessorArmPid) {
+  if (child || retryTimer) return;
+  const timer = setTimeout(() => {
+    if (retryTimer === timer) retryTimer = null;
+    const kind = Date.now() - lastFullArmAt >= ARM_CONVERGE_MS ? "arm" : "stub";
+    void ensureArm(paths, sessionID, client, predecessorArmPid, false, kind);
+  }, ARMED_REPOLL_MS);
+  timer.unref();
+  retryTimer = timer;
+}
+
 async function scheduleRetry(paths, sessionID, client, reason, predecessorArmPid) {
   if (child || retryTimer) return;
   if (!(await sessionOwnsLock(paths))) {
@@ -264,7 +320,38 @@ async function scheduleRetry(paths, sessionID, client, reason, predecessorArmPid
   retryTimer = timer;
 }
 
-function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
+// A stub attempt reaches delivery without re-verifying the watcher service, so
+// its readiness has no header line to key on. Poll the stub lock for this
+// child's own pid instead, which is the moment it actually owns delivery, and
+// give up quietly at the same bound waitForArmReady already applies, so an
+// attempt that never takes the lock can never hang a caller longer than a full
+// arm would.
+function settleStubReadinessWhenHolding(paths, armChild, settleReadiness) {
+  const pidPath = `${paths.state}/.wake-stub.lock/pid`;
+  let waited = 0;
+  const check = () => {
+    if (armChild.exitCode !== null || armChild.signalCode !== null) return;
+    let holder = "";
+    try {
+      holder = readFileSync(pidPath, "utf8").trim();
+    } catch {
+      holder = "";
+    }
+    if (holder && holder === String(armChild.pid)) {
+      setArmStatus("armed");
+      settleReadiness("armed");
+      return;
+    }
+    waited += CHEAP_READY_POLL_MS;
+    if (waited >= ARM_READY_TIMEOUT_MS) return;
+    const timer = setTimeout(check, CHEAP_READY_POLL_MS);
+    timer.unref();
+  };
+  const timer = setTimeout(check, CHEAP_READY_POLL_MS);
+  timer.unref();
+}
+
+function spawnArm(paths, sessionID, client, predecessorArmPid = "", kind = "arm") {
   setArmStatus("starting");
   const env = {
     ...process.env,
@@ -273,7 +360,11 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
     FM_CONFIG_OVERRIDE: paths.config,
     FM_WATCH_PREDECESSOR_ARM_PID: predecessorArmPid,
   };
-  const armChild = spawn("bash", ["-lc", 'exec "$FM_ROOT_OVERRIDE/bin/fm-watch-arm.sh"'], {
+  const launch = kind === "stub"
+    ? 'exec "$FM_ROOT_OVERRIDE/bin/fm-wake-wait.sh"'
+    : 'exec "$FM_ROOT_OVERRIDE/bin/fm-watch-arm.sh"';
+  if (kind !== "stub") lastFullArmAt = Date.now();
+  const armChild = spawn("bash", ["-lc", launch], {
     cwd: paths.root,
     env,
     stdio: ["ignore", "pipe", "pipe"],
@@ -301,6 +392,7 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
   const releaseChild = () => {
     if (child === armChild) child = null;
   };
+  if (kind === "stub") settleStubReadinessWhenHolding(paths, armChild, settleReadiness);
   armChild.stdout.on("data", (chunk) => {
     stdout += chunk.toString();
     observeArmOutput(stdout, stderr, settleReadiness);
@@ -316,9 +408,23 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
     releaseChild();
     const classification = classifyArmClose(stdout, stderr, code, signal);
     settleReadiness(
-      classification.kind === "actionable" ? "wake" : classification.kind === "idle" ? "idle" : "failed",
+      classification.kind === "actionable"
+        ? "wake"
+        : classification.kind === "armed"
+          ? "armed"
+          : classification.kind === "idle"
+            ? "idle"
+            : "failed",
     );
     const predecessor = String(armChild.pid ?? "");
+    if (classification.kind === "armed") {
+      // Another healthy stub of this session owns delivery, so there is no wake
+      // to surface and no failure to retry - only ownership to take back when
+      // that stub releases the lock.
+      setArmStatus("armed");
+      scheduleArmedRepoll(paths, sessionID, client, predecessor);
+      return;
+    }
     if (classification.kind === "actionable") {
       retryFailures = 0;
       setArmStatus("wake");
@@ -366,7 +472,7 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
   return armChild;
 }
 
-async function beginArm(paths, sessionID, client, predecessorArmPid) {
+async function beginArm(paths, sessionID, client, predecessorArmPid, kind = "arm") {
   if (!sessionID) return { status: "skipped", armChild: null };
   if (!(await isPrimaryRoot(paths.root, paths.home))) return { status: "not-primary", armChild: null };
   if (!(await sessionOwnsLock(paths))) return { status: "read-only", armChild: null };
@@ -384,7 +490,7 @@ async function beginArm(paths, sessionID, client, predecessorArmPid) {
     if (child) return { status: "existing", armChild: child };
     if (retryTimer) return { status: "retrying", armChild: null };
     if (!shouldArm(paths)) return { status: "not-needed", armChild: null };
-    return { status: "spawned", armChild: spawnArm(paths, sessionID, client, predecessorArmPid) };
+    return { status: "spawned", armChild: spawnArm(paths, sessionID, client, predecessorArmPid, kind) };
   } finally {
     releaseSpawnDecision();
   }
@@ -394,8 +500,8 @@ function armAttempt(status, armChild, includeArmChild) {
   return includeArmChild ? { status, armChild } : status;
 }
 
-async function ensureArm(paths, sessionID, client, predecessorArmPid = "", includeArmChild = false) {
-  const launchResult = await beginArm(paths, sessionID, client, predecessorArmPid);
+async function ensureArm(paths, sessionID, client, predecessorArmPid = "", includeArmChild = false, kind = "arm") {
+  const launchResult = await beginArm(paths, sessionID, client, predecessorArmPid, kind);
   const armChild = launchResult.armChild;
   if (!armChild) {
     return armAttempt(launchResult.status, null, includeArmChild);

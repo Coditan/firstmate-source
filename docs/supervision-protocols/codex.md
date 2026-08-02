@@ -8,6 +8,8 @@ When this session owns supervision and away mode is not active:
 2. Run one foreground delivery checkpoint with `bin/fm-watch-checkpoint.sh --seconds "${FM_CODEX_WATCH_CHECKPOINT:-180}"`.
 3. If the command prints `wake: queued`, drain and handle queued wakes, then start the next checkpoint.
 4. If the command prints `checkpoint:` or exits 124 with no wake, drain queued wakes anyway, process any queued user message now visible to Codex, then start the next checkpoint.
+   `checkpoint: delivery stayed armed by a same-session stub; no actionable wake within <n>s` is one of those quiet outcomes, not a failure: a healthy delivery stub of this session already owned the lock, and the checkpoint spent its full window re-attempting rather than returning early, so treat it exactly like any other 124 and start the next checkpoint.
+   Never kill that holder to clear the line; it is a working delivery path, and `bin/fm-turnend-guard.sh` judges the same state armed.
 5. Because the checkpoint blocks reasoning, make it the next tool call after wake handling and do not compose an idle reply before it.
 6. Never use shell `&` or Codex background tasks for firstmate wake delivery.
 7. Do not run `bin/fm-watch-arm.sh` as Codex's normal delivery command.
