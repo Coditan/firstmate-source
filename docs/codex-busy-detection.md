@@ -7,13 +7,13 @@ It is evidence, not narrative: every claim below carries the date, version, exac
 
 Codex 0.145.0 renders its `esc to interrupt` busy row only during the pre-answer phase of a turn.
 It drops the row while an answer streams and, depending on the tool, during a mid-turn tool call, so a healthy codex worker can sit on a pane that renders no busy text at all.
-Firstmate's layered busy absorb covers the phases where the pane still carries a signal:
+Firstmate's ordinary pane evidence still covers the phases where the pane carries a visible signal:
 
-- the streaming phase changes pane content, so the pane hash moves and the watcher never reaches the stale path;
+- streaming token bursts change pane content, so the pane hash moves and the watcher does not treat those changed samples as stale;
 - the pre-answer phase renders the row, so `window_is_busy` reads busy.
 
-The gap is a worker on a STATIC pane with the row absent for longer than the two polls the non-terminal-stale path needs.
-That worker reads idle to `fm_pane_is_busy` and would surface as a possible wedge.
+The gap is a worker on a STATIC pane between visible updates, or in a static tool-call phase, with the row absent for longer than the two polls the non-terminal-stale path needs.
+That worker reads idle to `window_is_busy` and would surface as a possible wedge.
 The backstop adds a signal that does not read interface text at all: the codex agent PROCESS itself, via `fm_backend_agent_alive`.
 
 ## Environment

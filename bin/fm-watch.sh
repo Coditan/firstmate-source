@@ -609,12 +609,12 @@ handle_parked_stale() {  # <window> <hash>
 # codex false-idle regression. Codex 0.145.0 renders its "esc to interrupt" busy
 # row ONLY in the pre-answer phase of a turn: it drops the row while an answer
 # streams and for the whole of a mid-turn tool call (fleet-verified against tag
-# rust-v0.145.0, docs/codex-busy-detection.md). Our layered busy absorb still
-# covers the streaming phase (pane content changes, so the pane hash moves and we
-# never reach the stale path) and the pre-answer phase (the row is present), but a
-# healthy codex worker sitting on a STATIC pane mid tool-call renders NO busy text
-# at all, so window_is_busy reads idle and the wake would otherwise surface as a
-# possible wedge the moment the pane held still past two polls.
+# rust-v0.145.0, docs/codex-busy-detection.md). Our ordinary pane evidence still
+# covers streaming bursts that change the pane hash and the pre-answer phase where
+# the row is present, but a healthy codex worker sitting on a STATIC pane between
+# visible updates, or in a static tool-call phase, renders NO busy text at all, so
+# window_is_busy reads idle and the wake would otherwise surface as a possible
+# wedge the moment the pane held still past two polls.
 #
 # Corroborate with a signal that does not read interface text: the codex agent
 # PROCESS itself. When fm_backend_agent_alive confidently reports the codex binary
