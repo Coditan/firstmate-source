@@ -16,6 +16,9 @@ When this session owns supervision and away mode is not active:
    Drain and handle the queued wake, then call `fm_watch_arm_pi` before composing a reply or beginning long work.
 7. A non-actionable child failure uses the extension's bounded retry path and surfaces a typed failure if continuity cannot be restored.
 8. If the extension reports a watcher failure, drain queued wakes, inspect the failure text, and restart Pi with both extensions loaded if needed.
+   One case behind that text is known and uncovered rather than a bug to chase: a close in which a healthy delivery stub of this session already held the lock is clean and non-actionable, and `__FM_PI_EXT__` is deliberately untouched, so its `classifyClose` falls through to the unconditional `watcher: FAILED - Pi extension arm cycle ended without an actionable reason`.
+   That alarm is less specific than the `wake delivery: FAILED - another delivery stub already holds ...` it replaced, so read it as possibly meaning that instead of restarting on it alone.
+   `docs/watcher-continuity.md` owns the rule for an already-armed close and why Pi is excluded from it.
 9. Never use shell `&` for wake delivery.
    The arm mechanism above is extension-owned, but a manual recovery probe that backgrounds, pipes, or bundles the arm is denied automatically by the PreToolUse seatbelt (`bin/fm-arm-pretool-check.sh`, wired into the turn-end guard extension at `__FM_PI_TURNEND_EXT__`).
 10. If nothing reaches `AGENTS.md` section 9's escalation bar, end the turn with tool calls only and send no chat text.
