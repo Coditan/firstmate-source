@@ -23,7 +23,7 @@ type ArmResult = {
 type LockOwnership = "owned" | "missing" | "other";
 
 type CloseClassification = {
-  kind: "actionable" | "armed" | "failure";
+  kind: "actionable" | "failure";
   message: string;
 };
 
@@ -74,11 +74,6 @@ const retryMaxMs = positiveInteger("FM_WATCH_REARM_RETRY_MAX_MS", 4000);
 const retryLimit = positiveInteger("FM_WATCH_REARM_RETRY_LIMIT", 5);
 const armReadyTimeoutMs = positiveInteger("FM_PI_ARM_READY_TIMEOUT_MS", 12000);
 const armRetireTimeoutMs = positiveInteger("FM_WATCH_ARM_RETIRE_TIMEOUT_MS", 1000);
-// Cadence for re-attempting delivery while a healthy stub of this session still
-// owns it, shared with bin/fm-watch-checkpoint.sh rather than given a second
-// name, because it is the same question at a different layer: how soon does this
-// session take delivery back once the holder lets go.
-const armedRepollMs = positiveInteger("FM_WATCH_CHECKPOINT_REARM_POLL", 5) * 1000;
 const repairOnlyHint = "call fm_watch_arm_pi again only after a later notification says the cycle is missing, failed, or unhealthy";
 
 let child: ChildProcess | null = null;
@@ -147,24 +142,10 @@ function queueDrainPending(message: string): boolean {
   return message.startsWith("wake: queued");
 }
 
-// Arming is idempotent for one session: when a healthy stub of this session
-// already holds state/.wake-stub.lock, bin/fm-wake-wait.sh reports it and exits
-// 0 (see docs/watcher-continuity.md). Delivery is armed, so there is nothing to
-// retry and nothing to report - but nothing to fall through to a catch-all
-// either, which would turn the healthy close into a FAILED alarm and a bounded
-// retry storm against a stub that is already delivering. Recognised explicitly
-// rather than absorbed by the default, so the outcome is intentional.
-function alreadyArmedLine(output: string): string {
-  const lines = output.split(/\r?\n/);
-  return lines.find((line) => /^wake delivery: already armed\b/.test(line)) || "";
-}
-
 function classifyClose(stdout: string, stderr: string, code: number | null, signal: NodeJS.Signals | null): CloseClassification {
   const combined = `${stdout}\n${stderr}`.trim();
   const reason = actionableLine(combined);
   if (reason) return { kind: "actionable", message: reason };
-  const armed = alreadyArmedLine(combined);
-  if (armed) return { kind: "armed", message: armed };
   const failed = combined.split(/\r?\n/).find((line) => /^(watcher: FAILED|wake delivery: FAILED)/.test(line));
   if (failed) return { kind: "failure", message: failed };
   if (signal) {
@@ -299,25 +280,6 @@ export default function (pi: ExtensionAPI) {
     return `${failure}\nwatcher: FAILED - Pi extension could not restore watcher continuity after ${retryLimit} retries`;
   }
 
-  // An armed close is healthy, but it still ends this arm cycle with delivery
-  // owned by a stub the extension does not own, so something has to take
-  // ownership back when that stub lets go.  This is the checkpoint's cadence at
-  // the adapter layer: a quiet fixed-interval re-attempt, never the exponential
-  // failure retry.  It borrows the same single timer slot as that retry, so the
-  // one-child-or-one-timer invariant, the shutdown path, and every launch-time
-  // ownership recheck keep holding unchanged.  It cannot storm: each re-attempt
-  // is one arm, one interval apart, and the cadence ends by itself the moment an
-  // attempt wins the lock and becomes the delivery wait.
-  function scheduleArmedRepoll(predecessorArmPid: string): void {
-    if (stopping || child || retryTimer) return;
-    const timer = setTimeout(() => {
-      if (retryTimer === timer) retryTimer = null;
-      startArm(predecessorArmPid);
-    }, armedRepollMs);
-    timer.unref();
-    retryTimer = timer;
-  }
-
   function scheduleRetry(message: string, predecessorArmPid: string): void {
     if (stopping || child || retryTimer) return;
     const ownership = lockOwnership();
@@ -404,7 +366,7 @@ export default function (pi: ExtensionAPI) {
         settleReadiness("wake");
         return;
       }
-      if (alreadyArmedLine(combined) || /^watcher: (?:started|attached)\b/m.test(combined)) {
+      if (/^watcher: (?:started|attached)\b/m.test(combined)) {
         settleReadiness("armed");
       }
     };
@@ -429,17 +391,8 @@ export default function (pi: ExtensionAPI) {
         return;
       }
       const classification = classifyClose(stdout, stderr, code, signal);
-      settleReadiness(
-        classification.kind === "actionable" ? "wake" : classification.kind === "armed" ? "armed" : "failed",
-      );
+      settleReadiness(classification.kind === "actionable" ? "wake" : "failed");
       const predecessor = String(armChild.pid ?? "");
-      if (classification.kind === "armed") {
-        // Another healthy stub of this session owns delivery, so there is no
-        // wake to surface and no failure to retry - only ownership to take back
-        // when that stub releases the lock.
-        scheduleArmedRepoll(predecessor);
-        return;
-      }
       if (classification.kind === "actionable") {
         retryFailures = 0;
         if (queueDrainPending(classification.message)) {

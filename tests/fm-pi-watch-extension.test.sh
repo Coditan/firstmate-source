@@ -984,97 +984,6 @@ EOF
   pass "Pi established clean closes stop at the configured retry limit"
 }
 
-# The Pi mirror of the OpenCode armed-close case: same fixture, same three
-# assertions, so both adapters are held to one behavior wherever a Node new
-# enough to import .ts natively exists. On an older Node this skips, so the Pi
-# side of that contract is unproven there and only the OpenCode side runs.
-test_pi_armed_close_repolls_until_it_takes_delivery_over() {
-  if ! fm_node_supports_ts_import; then
-    echo "skip: node lacks native .ts import support (needs Node 22.6+ --experimental-strip-types or 23.6+)"
-    return
-  fi
-  local repo home plugin log holder stop out status
-  repo="$TMP_ROOT/pi-armed-repoll-root"
-  home="$TMP_ROOT/pi-armed-repoll-home"
-  log="$TMP_ROOT/pi-armed-repoll.log"
-  holder="$TMP_ROOT/pi-armed-repoll.holder"
-  stop="$TMP_ROOT/pi-armed-repoll.stop"
-  mkdir -p "$repo/bin" "$home/state" "$home/config"
-  install_pi_watch_extension_fixture "$repo"
-  plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
-  : > "$holder"
-  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
-#!/usr/bin/env bash
-printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
-printf 'watcher: attached pid=1 (beacon 0s)\n'
-if [ -e "${FM_HOLDER_FILE:?}" ]; then
-  printf 'wake delivery: already armed pid=4242 (same session)\n'
-  exit 0
-fi
-printf 'own=%s\n' "$$" >> "$FM_ARM_LOG"
-trap 'exit 0' TERM INT
-while [ ! -e "${FM_STOP_FILE:?}" ]; do sleep 0.02; done
-SH
-  chmod +x "$repo/bin/fm-watch-arm.sh"
-  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" FM_HOLDER_FILE="$holder" \
-    FM_STOP_FILE="$stop" FM_WATCH_CHECKPOINT_REARM_POLL=1 node --input-type=module 2>&1 <<'EOF'
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
-
-const rows = () => (existsSync(process.env.FM_ARM_LOG)
-  ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").filter(Boolean)
-  : []);
-const arms = () => rows().filter((line) => line.startsWith("arm=")).length;
-const owned = () => rows().some((line) => line.startsWith("own="));
-const waitFor = async (predicate, label) => {
-  for (let i = 0; i < 400; i += 1) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  throw new Error(`${label}: ${rows().join(" | ")}`);
-};
-
-let tool = null;
-let prompts = 0;
-const pi = {
-  on() {},
-  registerCommand() {},
-  registerTool(candidate) {
-    if (candidate.name === "fm_watch_arm_pi") tool = candidate;
-  },
-  appendEntry() {},
-  sendMessage() {
-    prompts += 1;
-  },
-};
-writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
-const mod = await import(pathToFileURL(process.env.PLUGIN).href);
-mod.default(pi);
-await tool.execute("tool-call-armed-repoll", {}, undefined, undefined, {});
-
-// The holder still owns delivery, so the armed close must schedule another
-// attempt instead of ending the cycle.
-await waitFor(() => arms() >= 2, "armed close did not re-attempt while the holder owned delivery");
-
-// The holder lets go: the next attempt has to win the lock and stay.
-rmSync(process.env.FM_HOLDER_FILE);
-await waitFor(owned, "extension did not take delivery over once the holder released");
-const afterTakeover = arms();
-await new Promise((resolve) => setTimeout(resolve, 2500));
-if (arms() !== afterTakeover) {
-  throw new Error(`cadence kept arming after taking delivery over: ${rows().join(" | ")}`);
-}
-if (prompts !== 0) throw new Error(`an already-armed close surfaced ${prompts} prompts`);
-writeFileSync(process.env.FM_STOP_FILE, "stop\n");
-process.exit(0);
-EOF
-)
-  status=$?
-  expect_code 0 "$status" "Pi extension must re-attempt an already-armed close until it owns delivery"
-  [ -z "$out" ] || fail "Pi armed-repoll test printed output: $out"
-  pass "Pi watcher extension re-attempts an already-armed close and stops once it owns delivery"
-}
-
 test_pi_actionable_close_rechecks_session_lock() {
   if ! fm_node_supports_ts_import; then
     echo "skip: node lacks native .ts import support (needs Node 22.6+ --experimental-strip-types or 23.6+)"
@@ -1642,6 +1551,11 @@ EOF
 # takes ownership back - quietly, and only until an attempt becomes the delivery
 # wait itself. Absorbing the close without that cadence would leave the session
 # with no plugin-owned delivery at all once the holder exits.
+# The repeat attempt must be the cheap delivery stub, not the full arm: the full
+# arm re-runs watcher-service convergence, which at this cadence would mean
+# systemctl probes and a multi-file hash every few seconds for as long as the
+# holder lives. Convergence still happens, on its own far longer interval, and
+# this fixture logs the two entry points separately so both halves are pinned.
 test_opencode_armed_close_repolls_until_it_takes_delivery_over() {
   local plugin repo home log holder stop out status
   plugin="$ROOT/.opencode/plugins/fm-primary-watch-arm.js"
@@ -1659,27 +1573,34 @@ test_opencode_armed_close_repolls_until_it_takes_delivery_over() {
 #!/usr/bin/env bash
 printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
 printf 'watcher: attached pid=1 (beacon 0s)\n'
+exec "$FM_ROOT_OVERRIDE/bin/fm-wake-wait.sh"
+SH
+  cat > "$repo/bin/fm-wake-wait.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'stub=%s\n' "$$" >> "${FM_ARM_LOG:?}"
 if [ -e "${FM_HOLDER_FILE:?}" ]; then
   printf 'wake delivery: already armed pid=4242 (same session)\n'
   exit 0
 fi
+mkdir -p "${FM_HOME:?}/state/.wake-stub.lock"
+printf '%s\n' "$$" > "$FM_HOME/state/.wake-stub.lock/pid"
 printf 'own=%s\n' "$$" >> "$FM_ARM_LOG"
 trap 'exit 0' TERM INT
 while [ ! -e "${FM_STOP_FILE:?}" ]; do sleep 0.02; done
 SH
-  chmod +x "$repo/bin/fm-watch-arm.sh"
+  chmod +x "$repo/bin/fm-watch-arm.sh" "$repo/bin/fm-wake-wait.sh"
   out=$(PLUGIN="$plugin" WORKTREE="$repo" FM_HOME="$home" FM_ARM_LOG="$log" FM_HOLDER_FILE="$holder" \
-    FM_STOP_FILE="$stop" FM_WATCH_CHECKPOINT_REARM_POLL=1 node 2>&1 <<'EOF'
+    FM_STOP_FILE="$stop" FM_WATCH_CHECKPOINT_REARM_POLL=1 FM_WATCH_ARM_CONVERGE_INTERVAL=3 node 2>&1 <<'EOF'
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const rows = () => (existsSync(process.env.FM_ARM_LOG)
   ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").filter(Boolean)
   : []);
-const arms = () => rows().filter((line) => line.startsWith("arm=")).length;
+const count = (prefix) => rows().filter((line) => line.startsWith(prefix)).length;
 const owned = () => rows().some((line) => line.startsWith("own="));
 const waitFor = async (predicate, label) => {
-  for (let i = 0; i < 400; i += 1) {
+  for (let i = 0; i < 600; i += 1) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
@@ -1705,16 +1626,24 @@ writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
 
 // The holder still owns delivery, so the armed close must schedule another
-// attempt instead of ending the cycle.
-await waitFor(() => arms() >= 2, "armed close did not re-attempt while the holder owned delivery");
+// attempt instead of ending the cycle - and that attempt must be the cheap
+// stub, reached without another trip through the full arm.
+await waitFor(() => count("stub=") >= 2, "armed close did not re-attempt while the holder owned delivery");
+if (count("arm=") !== 1) {
+  console.error(`repeat attempts paid for watcher-service convergence: ${rows().join(" | ")}`);
+  process.exit(1);
+}
+
+// Convergence is not abandoned, only moved onto its own much longer interval.
+await waitFor(() => count("arm=") >= 2, "the full arm never ran again at its convergence interval");
 
 // The holder lets go: the next attempt has to win the lock and stay.
 rmSync(process.env.FM_HOLDER_FILE);
 await waitFor(owned, "plugin did not take delivery over once the holder released");
-const afterTakeover = arms();
+const afterTakeover = rows().length;
 await new Promise((resolve) => setTimeout(resolve, 2500));
-if (arms() !== afterTakeover) {
-  console.error(`cadence kept arming after taking delivery over: ${rows().join(" | ")}`);
+if (rows().length !== afterTakeover) {
+  console.error(`cadence kept attempting after taking delivery over: ${rows().join(" | ")}`);
   process.exit(1);
 }
 if (prompts !== 0) {
@@ -1726,9 +1655,9 @@ process.exit(0);
 EOF
 )
   status=$?
-  expect_code 0 "$status" "OpenCode plugin must re-attempt an already-armed close until it owns delivery"
+  expect_code 0 "$status" "OpenCode plugin must re-attempt an already-armed close with the cheap stub until it owns delivery"
   [ -z "$out" ] || fail "OpenCode armed-repoll test printed output: $out"
-  pass "OpenCode watcher plugin re-attempts an already-armed close and stops once it owns delivery"
+  pass "OpenCode watcher plugin re-attempts an already-armed close cheaply and stops once it owns delivery"
 }
 
 test_opencode_watch_arm_coordinates_with_turnend_guard() {
@@ -1854,7 +1783,12 @@ const guardHooks = await guardMod.FmPrimaryTurnendGuard({
 });
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 await guardHooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
-for (let i = 0; i < 250 && !existsSync(process.env.FM_GUARD_LOG); i += 1) {
+// One idle event here costs a worktree probe, a session-lock ancestry walk, an
+// arm child and the guard script - a dozen process spawns before the guard log
+// can exist. Wait the same 12s the plugin's own readiness bound allows rather
+// than a shorter budget a loaded host can miss, so a slow machine reads as slow
+// rather than as a suppressed guard.
+for (let i = 0; i < 600 && !existsSync(process.env.FM_GUARD_LOG); i += 1) {
   await new Promise((resolve) => setTimeout(resolve, 20));
 }
 if (!existsSync(process.env.FM_ARM_LOG)) {
@@ -1896,7 +1830,6 @@ test_pi_unretired_successor_falls_back_without_retry
 test_pi_late_unretired_close_resumes_supervision
 test_pi_empty_close_retries_instead_of_disappearing
 test_pi_established_empty_close_honors_retry_limit
-test_pi_armed_close_repolls_until_it_takes_delivery_over
 test_pi_actionable_close_rechecks_session_lock
 test_pi_arm_distinguishes_session_lock_ownership
 test_pi_process_exit_cleanup_listener_lifecycle

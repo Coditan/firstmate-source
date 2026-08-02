@@ -16,9 +16,9 @@
 # The exec'd stub can then close immediately with:
 #   wake delivery: already armed pid=<N> (same session)
 # which is a HEALTHY close, not a wake and not a failure: a stub of this session
-# already owns delivery, so this arm has nothing left to do.  Every adapter that
-# consumes this output classifies it as armed rather than retrying it; see
-# docs/watcher-continuity.md.
+# already owns delivery, so this arm has nothing left to do.  The arm-layer cycle
+# contract in docs/watcher-continuity.md defines how a consumer classifies it,
+# and records which consumers implement that contract today.
 #
 # `--restart` scopes the restart to this FM_HOME's systemd template instance or
 # tmux keeper, verifies the unchanged fm_watcher_healthy predicate, then waits in
