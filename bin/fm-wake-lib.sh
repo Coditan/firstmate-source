@@ -11,6 +11,13 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-${STATE:-$FM_HOME/state}}"
 FM_WAKE_QUEUE="${FM_WAKE_QUEUE:-$STATE/.wake-queue}"
 FM_WAKE_QUEUE_LOCK="${FM_WAKE_QUEUE_LOCK:-$STATE/.wake-queue.lock}"
+# Default seconds bin/fm-wake-wait.sh gives a live, identity-matched watcher to
+# get its beacon back inside the grace before reporting it. It lives here rather
+# than in that script because bin/fm-watch-checkpoint.sh has to clamp the child's
+# window below its own bound and therefore needs the very same number; two
+# literals would be two things to keep in step.
+# shellcheck disable=SC2034 # Read by bin/fm-wake-wait.sh and bin/fm-watch-checkpoint.sh.
+FM_WAKE_BEAT_CONFIRM_DEFAULT=90
 FM_LOCK_STALE_AFTER="${FM_LOCK_STALE_AFTER:-2}"
 FM_LOCK_STEAL_MAX_DEPTH="${FM_LOCK_STEAL_MAX_DEPTH:-8}"
 FM_LOCK_WAIT_TIMEOUT="${FM_LOCK_WAIT_TIMEOUT:-30}"
@@ -117,17 +124,42 @@ fm_wake_stub_armed() {
   return 0
 }
 
+# The single owner of the watcher-health predicate. Its return value is
+# unchanged (0 healthy, 1 not), and it additionally classifies WHY an unhealthy
+# watcher is unhealthy in FM_WATCHER_HEALTH:
+#   healthy       a live, identity-matched watcher whose beacon is inside grace
+#   beacon-stale  a live, identity-matched watcher whose beacon has aged out;
+#                 the beacon cannot be touched while the host is frozen, so a
+#                 machine suspend necessarily leaves exactly this state behind
+#   dead          no live, identity-matched watcher process at all
+# The pid and lock-identity conditions hold across a suspend and fail on a real
+# death, so this classification is what lets bin/fm-wake-wait.sh tell a slept
+# watcher from a dead one with no suspend detection of any kind.
+# FM_WATCHER_LIVE_PID carries the live pid for both healthy and beacon-stale, so
+# a caller reporting a beacon-stale watcher can name the process it is waiting
+# on; FM_WATCHER_HEALTHY_PID keeps its narrower healthy-only meaning.
 FM_WATCHER_HEALTHY_PID=
+FM_WATCHER_LIVE_PID=
+FM_WATCHER_HEALTH=
 fm_watcher_healthy() {
   local state=$1 watch_path=$2 grace=${3:-${FM_GUARD_GRACE:-300}} home=${4:-$FM_HOME} lockdir beat pid age
   FM_WATCHER_HEALTHY_PID=
+  FM_WATCHER_LIVE_PID=
+  FM_WATCHER_HEALTH=dead
   lockdir="$state/.watch.lock"
   beat="$state/.last-watcher-beat"
   pid=$(cat "$lockdir/pid" 2>/dev/null || true)
   fm_pid_alive "$pid" || return 1
   fm_watcher_lock_matches_pid "$state" "$watch_path" "$pid" "$home" || return 1
+  # shellcheck disable=SC2034 # Read by callers after fm_watcher_healthy returns.
+  FM_WATCHER_LIVE_PID=$pid
   age=$(fm_path_age "$beat")
-  [ "$age" -lt "$grace" ] || return 1
+  if [ "$age" -ge "$grace" ]; then
+    FM_WATCHER_HEALTH=beacon-stale
+    return 1
+  fi
+  # shellcheck disable=SC2034 # Read by callers after fm_watcher_healthy returns.
+  FM_WATCHER_HEALTH=healthy
   # shellcheck disable=SC2034 # Read by callers after fm_watcher_healthy returns.
   FM_WATCHER_HEALTHY_PID=$pid
   return 0
