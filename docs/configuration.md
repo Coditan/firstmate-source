@@ -612,6 +612,7 @@ FM_BRIDGE_URGENT_CHECK_INTERVAL=30   # Bridge-only cadence while highest pending
 FM_FREQUENCY_MONITOR_INTERVAL=5   # seconds between plain-shell Bridge fetch/check cycles in the optional fast service
 FM_FREQUENCY_MONITOR_CONFIRM_TIMEOUT=10   # seconds fm-frequency-monitor-service waits to confirm a fresh unit before reporting failure
 FM_CODEX_WATCH_CHECKPOINT=180   # seconds per foreground watcher checkpoint in Codex primary supervision
+FM_WATCH_CHECKPOINT_REARM_POLL=5   # seconds between delivery re-attempts while a healthy same-session stub already owns the lock, read by bin/fm-watch-checkpoint.sh and by the Pi/OpenCode adapters so all three take delivery back on one cadence; it only trades how quickly delivery is taken over once the holder releases against how often an attempt runs while the holder is healthy, and a non-numeric or zero value falls back to 5 (docs/watcher-continuity.md "Re-arming a session that is already armed")
 FM_CREW_STATE_NM_TIMEOUT=10   # seconds allowed per no-mistakes query inside fm-crew-state.sh
 FM_CREW_STATE_RUNS_LIMIT=200  # recent no-mistakes run rows scanned when axi status cannot be attributed to the current code
 FM_CREW_STATE_BIN=bin/fm-crew-state.sh   # test override for the current-state reader used by working/paused watcher triage

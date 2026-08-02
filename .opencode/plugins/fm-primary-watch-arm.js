@@ -9,6 +9,11 @@ const ARM_RETIRE_TIMEOUT_MS = positiveInteger("FM_WATCH_ARM_RETIRE_TIMEOUT_MS", 
 const REARM_RETRY_BASE_MS = positiveInteger("FM_WATCH_REARM_RETRY_BASE_MS", 250);
 const REARM_RETRY_MAX_MS = positiveInteger("FM_WATCH_REARM_RETRY_MAX_MS", 4000);
 const REARM_RETRY_LIMIT = positiveInteger("FM_WATCH_REARM_RETRY_LIMIT", 5);
+// Cadence for re-attempting delivery while a healthy stub of this session still
+// owns it, shared with bin/fm-watch-checkpoint.sh rather than given a second
+// name, because it is the same question at a different layer: how soon does this
+// session take delivery back once the holder lets go.
+const ARMED_REPOLL_MS = positiveInteger("FM_WATCH_CHECKPOINT_REARM_POLL", 5) * 1000;
 
 let child = null;
 let armStatus = "idle";
@@ -250,6 +255,25 @@ async function restoreAfterActionableClose(paths, sessionID, client, predecessor
   return `${failure}\nwatcher: FAILED - OpenCode could not restore watcher continuity after ${REARM_RETRY_LIMIT} retries`;
 }
 
+// An armed close is healthy, but it still ends this arm cycle with delivery
+// owned by a stub the plugin does not own, so something has to take ownership
+// back when that stub lets go. This is the checkpoint's cadence at the adapter
+// layer: a quiet fixed-interval re-attempt, never the exponential failure retry.
+// It borrows the same single timer slot as that retry, so the one-child-or-one-
+// timer invariant and every launch-time ownership recheck keep holding
+// unchanged. It cannot storm: each re-attempt is one arm, one interval apart,
+// and the cadence ends by itself the moment an attempt wins the lock and becomes
+// the delivery wait.
+function scheduleArmedRepoll(paths, sessionID, client, predecessorArmPid) {
+  if (child || retryTimer) return;
+  const timer = setTimeout(() => {
+    if (retryTimer === timer) retryTimer = null;
+    void ensureArm(paths, sessionID, client, predecessorArmPid);
+  }, ARMED_REPOLL_MS);
+  timer.unref();
+  retryTimer = timer;
+}
+
 async function scheduleRetry(paths, sessionID, client, reason, predecessorArmPid) {
   if (child || retryTimer) return;
   if (!(await sessionOwnsLock(paths))) {
@@ -337,9 +361,11 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
     );
     const predecessor = String(armChild.pid ?? "");
     if (classification.kind === "armed") {
-      // Another healthy stub of this session owns delivery, so continuity is
-      // intact: neither a wake to surface nor a failure to retry.
+      // Another healthy stub of this session owns delivery, so there is no wake
+      // to surface and no failure to retry - only ownership to take back when
+      // that stub releases the lock.
       setArmStatus("armed");
+      scheduleArmedRepoll(paths, sessionID, client, predecessor);
       return;
     }
     if (classification.kind === "actionable") {

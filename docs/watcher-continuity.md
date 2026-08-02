@@ -33,7 +33,10 @@ They remain the final backstop rather than the normal continuity mechanism.
 `bin/fm-watch-arm.sh` never returns a clean empty success.
 An actionable child output returns that reason normally.
 A `watcher: FAILED` or `wake delivery: FAILED` line, an unexpected signal, or a nonzero exit is a typed failure that drives the bounded retry described above.
-A `wake delivery: already armed pid=<N> (same session)` line is a recognized healthy close, classified armed: a stub of this session already owns delivery, so the cycle is neither retried nor reported and arm readiness settles as armed.
+A `wake delivery: already armed pid=<N> (same session)` line is a recognized healthy close, classified armed: a stub of this session already owns delivery, so nothing is retried and nothing is reported, and arm readiness settles as armed.
+An armed close is nevertheless the one healthy close that ends an arm cycle with delivery owned by a stub the adapter does not own, so it schedules one quiet re-attempt every `FM_WATCH_CHECKPOINT_REARM_POLL` seconds (default 5) until an attempt wins the lock and becomes the delivery wait itself.
+That is deliberately the same cadence `bin/fm-watch-checkpoint.sh` runs, so every adapter takes delivery back at the moment the holder releases it rather than waiting for the next turn end.
+It borrows the failure retry's single timer slot but none of its semantics: an armed close never increments the failure count, never counts against `FM_WATCH_REARM_RETRY_LIMIT`, never surfaces a message, and rechecks session-lock ownership and single-flight at each launch exactly like any other arm, so the one-child-or-one-timer invariant is unchanged.
 A clean child close with no actionable, armed, or failure marker recognized is classified as idle and absorbed silently: it is neither retried nor reported, since that cycle simply did not establish supervision.
 
 The arm layer appends one tab-separated record per observed cycle to `state/.watch-cycle-exits.log`.
@@ -61,8 +64,9 @@ A live holder is not sufficient: the lock must also record this home, this stub 
 No caller turns that success into a spin or into a phantom wake, and each one had to be given the rule explicitly rather than left to a default.
 `bin/fm-watch-arm.sh` execs the stub, so the already-armed line reaches every adapter that consumes an arm close, and its own header records that contract.
 
-Pi's `.pi/extensions/fm-primary-pi-watch.ts` and OpenCode's `.opencode/plugins/fm-primary-watch-arm.js` both match the line in their close classifier and return the `armed` classification described in the arm-layer contract above: no retry, no surfaced failure, and readiness settled as armed rather than failed.
-Recognizing it explicitly matters more than the absorption itself.
+Pi's `.pi/extensions/fm-primary-pi-watch.ts` and OpenCode's `.opencode/plugins/fm-primary-watch-arm.js` both match the line in their close classifier and return the `armed` classification the arm-layer contract above defines, including the quiet re-attempt cadence that contract owns.
+Absorbing the close without that cadence would have been a different bug rather than a fix: the holder can only be a stub the adapter does not own, so an adapter that merely fell silent would stop owning delivery for the rest of the session, and Pi in particular has no other automatic trigger that would ever start it again.
+Recognizing the line explicitly matters more than the absorption itself.
 OpenCode would have absorbed it anyway through its clean-exit idle default, but Pi's classifier ends in an unconditional failure, so an unrecognized already-armed close became `watcher: FAILED - Pi extension arm cycle ended without an actionable reason`, then the bounded retry storm, then `watcher: FAILED - Pi extension could not restore watcher continuity after 5 retries` - the exact alarm this change removes, reappearing one layer up and less diagnosable than the line it replaced.
 Pi keeps that unconditional default for genuinely unrecognized closes; only this line no longer reaches it.
 
@@ -74,8 +78,13 @@ Its exit-0 wake path stays gated on the literal `wake: queued` line, so an alrea
 Measured on 2026-08-02 with `bash tests/fm-watch-checkpoint.test.sh`, which reported `ok - an already-armed same-session stub is reported distinctly without collapsing the checkpoint`, `ok - checkpoint takes delivery over from a released holder within its own window`, and `ok - checkpoint rejects a delivery stub belonging to another session`.
 The first of those asserts the checkpoint spent at least 4 of its 5 seconds rather than returning early, which is the property the spin would have broken.
 
-`docs/supervision-protocols/codex.md` and `docs/supervision-protocols/grok.md` state the rule for the two harnesses that loop on this result.
-Grok is the one harness where absorption alone would not have been enough: its re-arm step fires on every background-task-completed reminder unconditionally, so an instant already-armed completion would produce drain, re-arm, instant completion without end, so its protocol now says not to re-arm against a holder that is already delivering.
+The adapter cadence was measured the same day with `bash tests/fm-pi-watch-extension.test.sh`, which reported `ok - OpenCode watcher plugin re-attempts an already-armed close and stops once it owns delivery`.
+That run was on Node v20.20.2, where every Pi behavior test in the file prints `skip: node lacks native .ts import support (needs Node 22.6+ --experimental-strip-types or 23.6+)`, including the mirrored Pi case, so the OpenCode adapter is the one proven there and the Pi adapter's identical code path is asserted by reading rather than by execution.
+
+`docs/supervision-protocols/codex.md` and `docs/supervision-protocols/grok.md` state the rule for the two harnesses that consume this result as a model-driven loop rather than through an adapter process.
+Grok is the one harness that cannot hold the cadence itself, and the limit is worth naming rather than papering over: its re-arm step fires on every background-task-completed reminder, it has no timer of its own, and pacing the re-arm in-shell would mean bundling a sleep onto the arm, which the PreToolUse seatbelt denies by design.
+So its protocol re-arms exactly once against an already-armed completion, which is what takes delivery back if the holder released in the meantime, and ends the turn if that re-arm reports already armed again, because a second identical answer means the holder is still delivering and chaining another arm would only produce the same instant completion.
+Under Grok the holder is normally that session's own previous tracked background arm, whose completion still notifies; an untracked orphan is the residual case, and there `bin/fm-turnend-guard.sh` remains the backstop it always was rather than the mechanism.
 Claude re-arms only on `wake: queued` and needs no new rule.
 
 ## Surviving a host suspend
@@ -119,7 +128,9 @@ The fix is deliberately scoped to the delivery stub, so a resumed host is not si
 
 The window must also stay comfortably under `FM_CODEX_WATCH_CHECKPOINT` (180s), because the Codex foreground checkpoint is the one caller that gives the stub a bounded lifetime.
 A window longer than that checkpoint would be restarted by every new checkpoint and would never reach its own deadline, which would turn that bounded delay into never reporting a wedged watcher at all under that harness.
-That coupling holds by construction rather than by memory: whenever the window it would pass down does not fit inside its own `--seconds`, `bin/fm-watch-checkpoint.sh` clamps the `FM_WAKE_BEAT_CONFIRM` it exports to the child to half that length, covering both an ambient value and the stub's own default, and it says on stderr when it clamps.
+That coupling holds by construction rather than by memory: whenever the window it would pass down does not fit inside the delivery attempt it is about to start, `bin/fm-watch-checkpoint.sh` clamps the `FM_WAKE_BEAT_CONFIRM` it exports to the child to half that length, covering both an ambient value and the stub's own default.
+The clamp is recomputed per delivery attempt against the window that attempt actually has, so the first attempt is clamped against the whole `--seconds` and a re-attempt inside a shortened remainder is clamped against that remainder, and each recomputation starts from the requested value rather than from the previous clamp, so the window cannot ratchet downward across attempts.
+Only the first clamp is announced on stderr, which is why a checkpoint that re-attempts many times prints that diagnostic once rather than dozens of times.
 The clamped value is floored at one second, because 0 is not a short window - the stub reads 0 as no window at all - so a clamp can shorten suspend survival but never switch it off; only a one-second checkpoint, far below any production value, leaves that floor as long as the checkpoint itself.
 The default itself lives in `bin/fm-wake-lib.sh` as `FM_WAKE_BEAT_CONFIRM_DEFAULT`, so the stub and the checkpoint read one number rather than two literals that can drift apart.
 `tests/fm-wake-wait.test.sh` pins the ordering of the two defaults and proves the runtime clamp fires for a short `--seconds`, and `tests/fm-watch-checkpoint.test.sh` pins the floor at the small end of the range.
@@ -127,6 +138,8 @@ The default itself lives in `bin/fm-wake-lib.sh` as `FM_WAKE_BEAT_CONFIRM_DEFAUL
 ## Regression coverage
 
 `tests/fm-pi-watch-extension.test.sh` checks Pi's first-cycle-or-explicit-repair tool metadata and ownership-based redundant-call no-ops, then simulates actionable and empty child closes against the actual Pi and OpenCode close handlers, blocks prompt delivery to prove the successor launches first, verifies single-flight behavior, changes the session lock before close to prove ownership is rechecked, and hangs each successor arm to prove bounded fallback delivery includes the typed restoration failure.
+It also covers the armed close on both adapters with one fixture: an arm that reports `wake delivery: already armed ...` while a holder marker exists and becomes a long-lived delivery wait once that marker is removed, asserting the adapter re-attempts while the holder owns delivery, takes delivery over on the attempt after it is released, stops re-attempting once it does, and surfaces nothing to the model throughout.
+The Pi half of that pair, like every other Pi behavior test in the file, skips on a Node without native `.ts` import support (below 22.6), so on such a host only the OpenCode half actually runs and the Pi adapter's copy of this behavior is unproven there.
 `tests/fm-watcher-lock.test.sh` covers verified-successor attach, the typed self-eviction failure, bounded and successor-linked lifecycle rows, and a SIGSTOP counterfactual that distinguishes a live PID from a stale beacon before classifying termination.
 `tests/fm-continuity-pretool-check.test.sh` proves the Claude gate rejects only non-recovery fleet execution in the precise unhealthy state and preserves the existing Stop registration.
 `tests/fm-wake-wait.test.sh` proves the suspend contract by freezing rather than by reading the beacon: it SIGSTOPs a real `bin/fm-watch.sh` and the delivery stub together, resumes the stub first so it is forced to read an aged beacon before the watcher can beat, and requires the stub to still be armed and still deliver the next queued wake.

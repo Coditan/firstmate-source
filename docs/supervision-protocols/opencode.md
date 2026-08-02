@@ -8,6 +8,7 @@ When this session owns supervision and away mode is not active:
 2. Let `.opencode/plugins/fm-primary-watch-arm.js` arm delivery after the OpenCode session goes idle.
 3. The plugin listens for `session.idle`, spawns and awaits `bin/fm-watch-arm.sh`, and calls `client.session.promptAsync` when the delivery stub exits with `wake: queued` or a failure.
 4. `watcher: started ...` or `watcher: attached ...` means the external watcher service is healthy and the plugin's delivery wait is armed.
+   A close carrying `wake delivery: already armed pid=<N> (same session)` is healthy too: a delivery stub of this session already owns the lock, and the plugin quietly re-attempts on a fixed cadence until it takes delivery back, so no manual re-arm is needed and no prompt is due.
 5. If the plugin reports a watcher failure, drain queued wakes, inspect the failure text, and use `bin/fm-watch-arm.sh` manually only as a short recovery probe.
 6. Never use shell `&` for wake delivery.
    The arm mechanism above is plugin-owned, but a manual recovery probe that backgrounds, pipes, or bundles the arm is denied automatically by the PreToolUse seatbelt (`.opencode/plugins/fm-primary-pretool-check.js`, `bin/fm-arm-pretool-check.sh`).
