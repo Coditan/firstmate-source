@@ -5,6 +5,8 @@
 # It never drains state/.wake-queue; bin/fm-wake-drain.sh remains the sole
 # model-invoked atomic drain.  The stub owns state/.wake-stub.lock while waiting
 # and exits loudly if the external watcher beacon ages past FM_GUARD_GRACE.
+# Arming is idempotent for one session: when a healthy stub of the same session
+# already holds that lock, this reports the existing arm and succeeds.
 #
 # One beacon reading is not proof of a dead watcher.  A machine suspend freezes
 # the watcher along with everything else, so on resume the beacon is necessarily
@@ -88,6 +90,22 @@ if [ "$lock_rc" -ne 0 ]; then
     echo "wake delivery: FAILED - lock acquisition failed for $STUB_LOCK" >&2
     exit 1
   fi
+  # Losing this lock to a HEALTHY stub of the same session is the arm path
+  # succeeding, not failing: delivery is already armed, which is precisely what
+  # the caller asked for.  fm_wake_stub_armed is the repo's existing owner of
+  # that question - bin/fm-guard.sh and bin/fm-turnend-guard.sh both judge this
+  # same state armed through it - so consulting it here is what stops one repo
+  # from returning two verdicts on one state.  Reporting FAILED here was worse
+  # than noise: the operating instructions treat FAILED as an alarm to clear
+  # before the turn ends, this case has no remedy, and the obvious reaction -
+  # kill the holder and re-arm - destroys a working delivery path.
+  if fm_wake_stub_armed "$STATE" "$STUB_PATH" "$FM_HOME"; then
+    echo "wake delivery: already armed pid=$FM_WAKE_STUB_ARMED_PID (same session)"
+    exit 0
+  fi
+  # Anything the predicate rejects is a genuine conflict - another session,
+  # another home, or a lock whose recorded identity no longer matches - and
+  # stays exactly as loud as it was.
   echo "wake delivery: FAILED - another delivery stub already holds $STUB_LOCK" >&2
   exit 1
 fi

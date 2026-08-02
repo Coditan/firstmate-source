@@ -97,13 +97,19 @@ test_queued_wake_passes_through_and_exits_zero() {
   pass "checkpoint reports a queued wake and leaves the queue untouched"
 }
 
-test_existing_delivery_stub_is_not_success() {
+# A stub of THIS session already holding the lock means delivery is already
+# armed, so bin/fm-wake-wait.sh reports it and succeeds rather than raising an
+# alarm with no remedy. What must not happen at this layer is the checkpoint
+# passing that off as a delivered wake: its exit-0 path is gated on the literal
+# "wake: queued" line, and the already-armed line must never satisfy it.
+test_existing_same_session_stub_is_reported_not_alarmed() {
   local home out err status daemon first
   home=$(make_home singleton)
   out="$home/out.txt"
   err="$home/err.txt"
   sleep 60 & daemon=$!
   record_fake_daemon "$home" "$daemon"
+  printf '4242\n' > "$home/state/.lock"
   FM_HOME="$home" "$ROOT/bin/fm-wake-wait.sh" >/dev/null 2>&1 & first=$!
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     [ -e "$home/state/.wake-stub.lock/pid" ] && break
@@ -114,12 +120,43 @@ test_existing_delivery_stub_is_not_success() {
   kill "$first" "$daemon" 2>/dev/null || true
   wait "$first" 2>/dev/null || true
   wait "$daemon" 2>/dev/null || true
+  expect_code 0 "$status" "same-session delivery checkpoint exit"
+  assert_contains "$(cat "$out")" "already armed pid=" "checkpoint did not report the stub that was already armed"
+  case "$(cat "$out")$(cat "$err")" in
+    *FAILED*) fail "a healthy same-session stub was still reported as a delivery failure" ;;
+    *"wake: queued"*) fail "an already-armed stub was passed off as a delivered wake" ;;
+  esac
+  pass "checkpoint reports an already-armed same-session stub instead of alarming"
+}
+
+# The other side of that branch at this layer: a stub belonging to a DIFFERENT
+# session is a genuine conflict and must still fail exactly as it always did.
+test_foreign_session_delivery_stub_is_not_success() {
+  local home out err status daemon first
+  home=$(make_home singleton-foreign)
+  out="$home/out.txt"
+  err="$home/err.txt"
+  sleep 60 & daemon=$!
+  record_fake_daemon "$home" "$daemon"
+  printf '4242\n' > "$home/state/.lock"
+  FM_HOME="$home" "$ROOT/bin/fm-wake-wait.sh" >/dev/null 2>&1 & first=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -e "$home/state/.wake-stub.lock/pid" ] && break
+    sleep 0.1
+  done
+  printf '9999\n' > "$home/state/.lock"
+  status=0
+  FM_HOME="$home" "$CHECKPOINT" --seconds 5 >"$out" 2>"$err" || status=$?
+  kill "$first" "$daemon" 2>/dev/null || true
+  wait "$first" 2>/dev/null || true
+  wait "$daemon" 2>/dev/null || true
   expect_code 1 "$status" "duplicate delivery checkpoint exit"
   assert_contains "$(cat "$err")" "another delivery stub already holds" "duplicate delivery failure was not explained"
-  pass "checkpoint rejects a duplicate session delivery stub"
+  pass "checkpoint rejects a delivery stub belonging to another session"
 }
 
 test_quiet_checkpoint_exits_124_cleanly
 test_clamp_floors_the_window_at_one_second
 test_queued_wake_passes_through_and_exits_zero
-test_existing_delivery_stub_is_not_success
+test_existing_same_session_stub_is_reported_not_alarmed
+test_foreign_session_delivery_stub_is_not_success

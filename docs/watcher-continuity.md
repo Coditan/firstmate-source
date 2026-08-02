@@ -43,6 +43,24 @@ The file is size-capped through `FM_WATCH_CYCLE_LOG_MAX_BYTES` and `FM_WATCH_CYC
 The default 300-second grace is unchanged.
 Only the watcher process touches `state/.last-watcher-beat`; no helper process can make a wedged watcher appear healthy.
 
+## Re-arming a session that is already armed
+
+Arming is idempotent for one session.
+When `bin/fm-wake-wait.sh` cannot take `state/.wake-stub.lock` because a healthy stub of the same session already holds it, delivery is already armed - which is exactly what the caller asked for - so it prints `wake delivery: already armed pid=<N> (same session)` and exits 0.
+It decides that through `fm_wake_stub_armed` in `bin/fm-wake-lib.sh`, the same predicate `bin/fm-guard.sh` and `bin/fm-turnend-guard.sh` already use, so one state cannot produce two verdicts.
+
+Until that call existed, the arm path reported every lost acquisition other than an operational lock failure as `wake delivery: FAILED - another delivery stub already holds ...` and exited 1, including this one.
+That was worse than noise: the operating instructions treat `FAILED` as an alarm to clear before the turn ends, this case has no remedy, and the obvious reaction - kill the holder and re-arm - destroys a working delivery path.
+Under a background-task harness it also produced a stream of failed job notifications for a completely healthy fleet.
+
+Everything the predicate rejects stays as loud as it was.
+A live holder is not sufficient: the lock must also record this home, this stub executable, this session's lock pid, and a process identity that still matches the live pid, so another session, another home, and a lock surviving on pid reuse all still fail.
+`tests/fm-wake-wait.test.sh` covers both branches - the healthy same-session re-arm, and a session takeover plus a stale recorded identity.
+
+Neither caller turns that success into a spin or into a phantom wake.
+`bin/fm-watch-arm.sh` execs the stub, so an already-armed close carries no failure marker and is classified idle by the arm-layer contract above: absorbed silently rather than retried against a stub that is already delivering, which is what the old typed failure did.
+`bin/fm-watch-checkpoint.sh` still gates its own exit-0 wake path on the literal `wake: queued` line, so an already-armed close reports the existing arm without ever being passed off as a delivered wake, and `tests/fm-watch-checkpoint.test.sh` pins both sides at that layer.
+
 ## Surviving a host suspend
 
 A machine suspend freezes the watcher along with everything else on the host, so on resume the beacon is necessarily as old as the sleep.
@@ -73,6 +91,10 @@ The window is bounded precisely so an alive-but-wedged watcher - one still holdi
 That case is the one this costs: it is reported at grace plus the window instead of at grace, measured as 30s against a 10s grace and a 20s window, versus 10s before.
 The genuinely dead case is unchanged, measured at exactly the grace both before and after (10s, 30s, and the production 300s default).
 Raising `FM_GUARD_GRACE` is not an alternative fix: it would convert a visible false alarm into a silently longer blind window for every failure mode at once, including the real ones.
+
+Both production numbers were re-measured end to end at the shipped defaults on 2026-08-02, after the same-session arm change above, by stopping a fake watcher's beacon and timing the stub's report from that last beat.
+A killed watcher was reported at 300s with `wake delivery: FAILED - watcher beacon stale for 300s (grace 300s)`, and a live watcher that stopped beating opened its window at 300s and was reported at 390s with `... pid <N> is alive but its beacon never came back inside the grace within the 90s confirmation window`.
+Both matched the values recorded when the window landed, so the arm-path change moves neither.
 
 The fix is deliberately scoped to the delivery stub, so a resumed host is not silently supervision-free everywhere else.
 `bin/fm-guard.sh` and `bin/fm-turnend-guard.sh` still read a post-resume stale beacon as unhealthy and warn or block until the next beat lands, because loosening a Stop gate that deliberately errs toward supervision is its own decision rather than a ride-along here; `docs/turnend-guard.md` owns that gate.
