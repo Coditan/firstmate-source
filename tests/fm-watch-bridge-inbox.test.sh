@@ -473,6 +473,27 @@ test_library_carries_its_own_bounded_reader() {
   pass "the library sources the bounded-child helper it needs instead of expecting it from a caller"
 }
 
+# bin/fm-bounded-process-lib.sh is the one bounded-child owner every timed read
+# in this tree goes through, so its bound is asserted directly rather than only
+# through a caller. The perl path is exercised explicitly because it is the
+# fallback whose signal hardening has no other coverage, and a machine with
+# timeout installed would otherwise never reach it.
+test_bounded_process_lib_bounds_a_runaway_child() {
+  local bounded_lib path rc
+  bounded_lib="$ROOT/bin/fm-bounded-process-lib.sh"
+  for path in default fallback; do
+    rc=0
+    (
+      [ "$path" = fallback ] && export FM_CHECK_FORCE_FALLBACK=1
+      # shellcheck disable=SC2016
+      bash -c '. "$1"; run_bounded_process 1 sleep 30' _ "$bounded_lib"
+    ) >/dev/null 2>&1 || rc=$?
+    [ "$rc" -eq 124 ] \
+      || fail "bin/fm-bounded-process-lib.sh ($path path) did not bound a runaway child: exit $rc"
+  done
+  pass "the shared bounded-child helper stops a runaway child on both the timeout and perl paths"
+}
+
 test_multi_vessel_cadence_reflects_any_vessel() {
   local home interval
   home=$(make_home multi-cadence captain)
@@ -641,6 +662,7 @@ test_multi_vessel_wakes_survive_an_undrained_queue
 test_priority_tightens_only_bridge_cadence
 test_non_numeric_urgent_interval_falls_back_to_the_default
 test_library_carries_its_own_bounded_reader
+test_bounded_process_lib_bounds_a_runaway_child
 test_multi_vessel_cadence_reflects_any_vessel
 test_cache_skips_rescan_when_unchanged
 test_inplace_edit_invalidates_cache
