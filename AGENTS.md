@@ -268,6 +268,7 @@ It owns that formation of independent scouts plus a judge, and when it is worth 
 A diagnostic request, report, recommendation, or implementation-ready finding is evidence, not authorization to change code.
 Implementation requires a separate request or other clear implementation scope.
 Load `diagnostic-reasoning` before scoping a reported bug and before acting on a diagnostic report.
+Load `project-discipline` at intake when the work will produce a change others depend on, and again before declaring that work complete; not for a question, a read-only check, or a single-file fix.
 
 Classify work as dispatchable when it does not overlap work under way, or queued and blocked when it touches the same project subsystem or depends on unlanded work.
 Dispatch independent work immediately with no concurrency cap, serialize coarse overlaps, and record blockers durably.
@@ -509,6 +510,7 @@ These skills are not captain-invocable; load them only at their precise triggers
 - `ask-user-authority` - load before deciding any ask-user finding, regardless of the project's `yolo` posture.
 - `harness-adapters` - load before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
 - `firstmate-orca` - load before switching to Orca, spawning or supervising Orca-backed work, smoke-testing Orca backend behavior, debugging Orca task state, or reconciling Orca-backed task metadata.
+- `project-discipline` - load at intake when the work will produce a change others depend on, and again before declaring that work complete; not for a question, a read-only check, or a single-file fix.
 - `project-management` - load before adding, creating, removing, or initializing a project.
 - `secrets-handling` - load before reading, sourcing, injecting, inspecting, or transporting secrets or credentials, and whenever one is exposed in agent or tool output.
 - `stuck-crewmate-recovery` - load when the session-start digest reports an ordinary direct report's endpoint dead or its metadata has no window, or after a stale wake, looping pane, repeated confusion, an answered-by-brief question, an unresponsive crewmate, or a failed steer.
