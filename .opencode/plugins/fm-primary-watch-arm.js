@@ -125,10 +125,21 @@ async function sessionOwnsLock(paths) {
   return false;
 }
 
+// Arming is idempotent for one session: when a healthy stub of this session
+// already holds state/.wake-stub.lock, bin/fm-wake-wait.sh reports it and exits
+// 0 (see docs/watcher-continuity.md). Delivery is armed, so this is a healthy
+// close - recognised explicitly rather than left to the clean-exit default, so
+// the outcome is intentional here and identical to the Pi extension's.
+function alreadyArmedLine(output) {
+  return output.split(/\r?\n/).find((line) => /^wake delivery: already armed\b/.test(line)) || "";
+}
+
 function classifyArmClose(stdout, stderr, code, signal) {
   const combined = `${stdout}\n${stderr}`;
   const reason = combined.split(/\r?\n/).find((line) => /^(wake: queued|signal:|stale:|check:|heartbeat($|:))/.test(line));
   if (reason) return { kind: "actionable", message: reason };
+  const armed = alreadyArmedLine(combined);
+  if (armed) return { kind: "armed", message: armed };
   const failed = combined.split(/\r?\n/).find((line) => /^(watcher: FAILED|wake delivery: FAILED)/.test(line));
   if (failed) return { kind: "failure", message: failed };
   if (signal) {
@@ -155,7 +166,7 @@ function observeArmOutput(stdout, stderr, settleReadiness) {
     settleReadiness("wake");
     return;
   }
-  if (combined.split(/\r?\n/).some((line) => /^watcher: (?:started|attached)\b/.test(line))) {
+  if (alreadyArmedLine(combined) || combined.split(/\r?\n/).some((line) => /^watcher: (?:started|attached)\b/.test(line))) {
     setArmStatus("armed");
     settleReadiness("armed");
     return;
@@ -316,9 +327,21 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
     releaseChild();
     const classification = classifyArmClose(stdout, stderr, code, signal);
     settleReadiness(
-      classification.kind === "actionable" ? "wake" : classification.kind === "idle" ? "idle" : "failed",
+      classification.kind === "actionable"
+        ? "wake"
+        : classification.kind === "armed"
+          ? "armed"
+          : classification.kind === "idle"
+            ? "idle"
+            : "failed",
     );
     const predecessor = String(armChild.pid ?? "");
+    if (classification.kind === "armed") {
+      // Another healthy stub of this session owns delivery, so continuity is
+      // intact: neither a wake to surface nor a failure to retry.
+      setArmStatus("armed");
+      return;
+    }
     if (classification.kind === "actionable") {
       retryFailures = 0;
       setArmStatus("wake");

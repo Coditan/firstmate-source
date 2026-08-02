@@ -122,11 +122,15 @@ test_healthy_same_session_stub_reports_already_armed() {
   record_fake_daemon "$home" "$state" "$daemon"
   printf '4242\n' > "$state/.lock"
   FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$WAIT" >/dev/null 2>&1 & first=$!
+  # pid-identity is the LAST file the stub publishes, so waiting on it - rather
+  # than on the pid the lock directory acquires first - is what keeps this test
+  # out of the window where the lock metadata is still incomplete and the armed
+  # predicate would answer about a half-published lock.
   for _ in 1 2 3 4 5 6 7 8 9 10; do
-    [ -e "$state/.wake-stub.lock/pid" ] && break
+    [ -e "$state/.wake-stub.lock/pid-identity" ] && break
     sleep 0.1
   done
-  [ -e "$state/.wake-stub.lock/pid" ] || fail "initial delivery stub did not publish its lock"
+  [ -e "$state/.wake-stub.lock/pid-identity" ] || fail "initial delivery stub did not publish its lock"
   armed_pid=$(cat "$state/.wake-stub.lock/pid")
 
   status=0
@@ -160,11 +164,15 @@ test_foreign_stub_lock_still_fails_loudly() {
   record_fake_daemon "$home" "$state" "$daemon"
   printf '4242\n' > "$state/.lock"
   FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$WAIT" >/dev/null 2>&1 & first=$!
+  # Wait for pid-identity, the last published file: rewriting state/.lock while
+  # the stub is still between acquiring the lock and recording session-lock-pid
+  # would make the holder record 9999 as its OWN session and flip this test's
+  # verdict to the healthy branch, failing for a reason unrelated to the code.
   for _ in 1 2 3 4 5 6 7 8 9 10; do
-    [ -e "$state/.wake-stub.lock/pid" ] && break
+    [ -e "$state/.wake-stub.lock/pid-identity" ] && break
     sleep 0.1
   done
-  [ -e "$state/.wake-stub.lock/pid" ] || fail "initial delivery stub did not publish its lock"
+  [ -e "$state/.wake-stub.lock/pid-identity" ] || fail "initial delivery stub did not publish its lock"
 
   # A different session now owns this home: the lock was recorded under session
   # 4242 and the live session lock reads 9999.

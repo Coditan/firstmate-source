@@ -23,7 +23,7 @@ type ArmResult = {
 type LockOwnership = "owned" | "missing" | "other";
 
 type CloseClassification = {
-  kind: "actionable" | "failure";
+  kind: "actionable" | "armed" | "failure";
   message: string;
 };
 
@@ -142,10 +142,24 @@ function queueDrainPending(message: string): boolean {
   return message.startsWith("wake: queued");
 }
 
+// Arming is idempotent for one session: when a healthy stub of this session
+// already holds state/.wake-stub.lock, bin/fm-wake-wait.sh reports it and exits
+// 0 (see docs/watcher-continuity.md). Delivery is armed, so there is nothing to
+// retry and nothing to report - but nothing to fall through to a catch-all
+// either, which would turn the healthy close into a FAILED alarm and a bounded
+// retry storm against a stub that is already delivering. Recognised explicitly
+// rather than absorbed by the default, so the outcome is intentional.
+function alreadyArmedLine(output: string): string {
+  const lines = output.split(/\r?\n/);
+  return lines.find((line) => /^wake delivery: already armed\b/.test(line)) || "";
+}
+
 function classifyClose(stdout: string, stderr: string, code: number | null, signal: NodeJS.Signals | null): CloseClassification {
   const combined = `${stdout}\n${stderr}`.trim();
   const reason = actionableLine(combined);
   if (reason) return { kind: "actionable", message: reason };
+  const armed = alreadyArmedLine(combined);
+  if (armed) return { kind: "armed", message: armed };
   const failed = combined.split(/\r?\n/).find((line) => /^(watcher: FAILED|wake delivery: FAILED)/.test(line));
   if (failed) return { kind: "failure", message: failed };
   if (signal) {
@@ -366,7 +380,7 @@ export default function (pi: ExtensionAPI) {
         settleReadiness("wake");
         return;
       }
-      if (/^watcher: (?:started|attached)\b/m.test(combined)) {
+      if (alreadyArmedLine(combined) || /^watcher: (?:started|attached)\b/m.test(combined)) {
         settleReadiness("armed");
       }
     };
@@ -391,8 +405,15 @@ export default function (pi: ExtensionAPI) {
         return;
       }
       const classification = classifyClose(stdout, stderr, code, signal);
-      settleReadiness(classification.kind === "actionable" ? "wake" : "failed");
+      settleReadiness(
+        classification.kind === "actionable" ? "wake" : classification.kind === "armed" ? "armed" : "failed",
+      );
       const predecessor = String(armChild.pid ?? "");
+      if (classification.kind === "armed") {
+        // Another healthy stub of this session owns delivery, so continuity is
+        // intact: neither a wake to surface nor a failure to retry.
+        return;
+      }
       if (classification.kind === "actionable") {
         retryFailures = 0;
         if (queueDrainPending(classification.message)) {

@@ -97,13 +97,30 @@ test_queued_wake_passes_through_and_exits_zero() {
   pass "checkpoint reports a queued wake and leaves the queue untouched"
 }
 
+# pid-identity is the LAST file bin/fm-wake-wait.sh publishes into the stub lock,
+# so a test that waits only for the pid the lock directory acquires first can act
+# inside the window where fm-home, stub-path and session-lock-pid are still
+# missing - and then the armed predicate answers about a half-published lock
+# instead of about the code under test.
+wait_for_published_stub_lock() {
+  local home=$1
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -e "$home/state/.wake-stub.lock/pid-identity" ] && return 0
+    sleep 0.1
+  done
+  fail "initial delivery stub did not publish its lock"
+}
+
 # A stub of THIS session already holding the lock means delivery is already
 # armed, so bin/fm-wake-wait.sh reports it and succeeds rather than raising an
-# alarm with no remedy. What must not happen at this layer is the checkpoint
-# passing that off as a delivered wake: its exit-0 path is gated on the literal
-# "wake: queued" line, and the already-armed line must never satisfy it.
-test_existing_same_session_stub_is_reported_not_alarmed() {
-  local home out err status daemon first
+# alarm with no remedy. Two things must not happen at this layer. The checkpoint
+# must not pass that off as a delivered wake: its exit-0 path is gated on the
+# literal "wake: queued" line, which the already-armed line must never satisfy.
+# And it must not return early: Codex starts the next checkpoint after every
+# close, so an instant return would turn the bounded foreground wait that IS its
+# delivery mechanism into a busy loop of instant tool calls.
+test_existing_same_session_stub_keeps_the_bounded_cadence() {
+  local home out err status daemon first started elapsed
   home=$(make_home singleton)
   out="$home/out.txt"
   err="$home/err.txt"
@@ -111,22 +128,55 @@ test_existing_same_session_stub_is_reported_not_alarmed() {
   record_fake_daemon "$home" "$daemon"
   printf '4242\n' > "$home/state/.lock"
   FM_HOME="$home" "$ROOT/bin/fm-wake-wait.sh" >/dev/null 2>&1 & first=$!
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    [ -e "$home/state/.wake-stub.lock/pid" ] && break
-    sleep 0.1
-  done
+  wait_for_published_stub_lock "$home"
   status=0
-  FM_HOME="$home" "$CHECKPOINT" --seconds 5 >"$out" 2>"$err" || status=$?
+  started=$(date +%s)
+  FM_HOME="$home" FM_WATCH_CHECKPOINT_REARM_POLL=1 "$CHECKPOINT" --seconds 5 >"$out" 2>"$err" || status=$?
+  elapsed=$(( $(date +%s) - started ))
   kill "$first" "$daemon" 2>/dev/null || true
   wait "$first" 2>/dev/null || true
   wait "$daemon" 2>/dev/null || true
-  expect_code 0 "$status" "same-session delivery checkpoint exit"
+  expect_code 124 "$status" "same-session delivery checkpoint exit"
   assert_contains "$(cat "$out")" "already armed pid=" "checkpoint did not report the stub that was already armed"
+  assert_contains "$(cat "$out")" \
+    "checkpoint: delivery stayed armed by a same-session stub; no actionable wake within 5s" \
+    "checkpoint did not report the already-armed close distinctly"
   case "$(cat "$out")$(cat "$err")" in
     *FAILED*) fail "a healthy same-session stub was still reported as a delivery failure" ;;
     *"wake: queued"*) fail "an already-armed stub was passed off as a delivered wake" ;;
   esac
-  pass "checkpoint reports an already-armed same-session stub instead of alarming"
+  [ "$elapsed" -ge 4 ] \
+    || fail "an already-armed close returned after ${elapsed}s instead of holding the 5s checkpoint cadence"
+  pass "an already-armed same-session stub is reported distinctly without collapsing the checkpoint"
+}
+
+# Re-attempting is not polling for its own sake: the moment the holder lets go is
+# the moment this checkpoint can take delivery over, and a wake the holder saw is
+# still there to be found because the durable queue outlives the stub.
+test_checkpoint_takes_delivery_over_when_the_holder_lets_go() {
+  local home out err status daemon first
+  home=$(make_home takeover)
+  out="$home/out.txt"
+  err="$home/err.txt"
+  sleep 60 & daemon=$!
+  record_fake_daemon "$home" "$daemon"
+  printf '4242\n' > "$home/state/.lock"
+  FM_HOME="$home" "$ROOT/bin/fm-wake-wait.sh" >/dev/null 2>&1 & first=$!
+  wait_for_published_stub_lock "$home"
+  (
+    sleep 1
+    FM_HOME="$home" bash -c '. "$1"; fm_wake_append signal demo.status "signal: demo.status"' _ "$ROOT/bin/fm-wake-lib.sh"
+    kill "$first" 2>/dev/null || true
+  ) &
+  status=0
+  FM_HOME="$home" FM_WATCH_CHECKPOINT_REARM_POLL=1 "$CHECKPOINT" --seconds 10 >"$out" 2>"$err" || status=$?
+  kill "$first" "$daemon" 2>/dev/null || true
+  wait "$first" 2>/dev/null || true
+  wait "$daemon" 2>/dev/null || true
+  expect_code 0 "$status" "takeover checkpoint exit"
+  assert_contains "$(cat "$out")" "wake: queued" \
+    "checkpoint did not take delivery over and report the wake left in the durable queue"
+  pass "checkpoint takes delivery over from a released holder within its own window"
 }
 
 # The other side of that branch at this layer: a stub belonging to a DIFFERENT
@@ -140,10 +190,7 @@ test_foreign_session_delivery_stub_is_not_success() {
   record_fake_daemon "$home" "$daemon"
   printf '4242\n' > "$home/state/.lock"
   FM_HOME="$home" "$ROOT/bin/fm-wake-wait.sh" >/dev/null 2>&1 & first=$!
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    [ -e "$home/state/.wake-stub.lock/pid" ] && break
-    sleep 0.1
-  done
+  wait_for_published_stub_lock "$home"
   printf '9999\n' > "$home/state/.lock"
   status=0
   FM_HOME="$home" "$CHECKPOINT" --seconds 5 >"$out" 2>"$err" || status=$?
@@ -158,5 +205,6 @@ test_foreign_session_delivery_stub_is_not_success() {
 test_quiet_checkpoint_exits_124_cleanly
 test_clamp_floors_the_window_at_one_second
 test_queued_wake_passes_through_and_exits_zero
-test_existing_same_session_stub_is_reported_not_alarmed
+test_existing_same_session_stub_keeps_the_bounded_cadence
+test_checkpoint_takes_delivery_over_when_the_holder_lets_go
 test_foreign_session_delivery_stub_is_not_success
