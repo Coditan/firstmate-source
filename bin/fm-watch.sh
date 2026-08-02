@@ -258,6 +258,21 @@ window_backend() {
   echo tmux
 }
 
+# window_harness: the harness recorded in the meta whose window= matches <w>,
+# empty when no matching meta carries the field. Read only to scope the codex
+# static-pane liveness backstop in pause_state_class - never to pick a busy
+# regex, which stays harness-agnostic.
+window_harness() {
+  local w=$1 meta harness
+  meta=$(fm_backend_meta_for_window "$w" "$STATE" 2>/dev/null || true)
+  if [ -n "$meta" ]; then
+    harness=$(grep '^harness=' "$meta" | cut -d= -f2- || true)
+    echo "$harness"
+    return 0
+  fi
+  echo ""
+}
+
 window_label() {
   local w=$1 task
   task=$(window_to_task "$w" "$STATE")
@@ -590,6 +605,50 @@ handle_parked_stale() {  # <window> <hash>
   triage_log "absorbed stale (parked terminal wait, age ${age}s): $win"
 }
 
+# codex_static_pane_upgrade: interface-text-INDEPENDENT liveness backstop for the
+# codex false-idle regression. Codex 0.145.0 renders its "esc to interrupt" busy
+# row ONLY in the pre-answer phase of a turn: it drops the row while an answer
+# streams and for the whole of a mid-turn tool call (fleet-verified against tag
+# rust-v0.145.0, docs/codex-busy-detection.md). Our layered busy absorb still
+# covers the streaming phase (pane content changes, so the pane hash moves and we
+# never reach the stale path) and the pre-answer phase (the row is present), but a
+# healthy codex worker sitting on a STATIC pane mid tool-call renders NO busy text
+# at all, so window_is_busy reads idle and the wake would otherwise surface as a
+# possible wedge the moment the pane held still past two polls.
+#
+# Corroborate with a signal that does not read interface text: the codex agent
+# PROCESS itself. When fm_backend_agent_alive confidently reports the codex binary
+# still running in the pane (`alive`), treat an otherwise-`none` stale verdict as
+# provably working - absorb and start the wedge timer - instead of surfacing
+# immediately. A genuinely wedged codex still escalates past STALE_ESCALATE_SECS
+# and on to demand-deep-inspection, and a crashed codex reads `dead` (a bare shell
+# is the foreground command) and still surfaces at once. Only `alive` upgrades;
+# `dead`/`unknown` keep the caller's fallback verdict.
+#
+# Scoped to codex on purpose: the other verified harnesses keep rendering their
+# busy indicator for the whole turn, so their static-pane stale really is idle.
+# This is confined to the STALE path (not crew_absorb_class itself) because agent
+# liveness cannot tell a mid-tool-call apart from an idle post-turn composer - both
+# leave codex running - so the signal/turn-end absorb path must keep the pure
+# crew_absorb_class semantics, and only the two-poll-static, no-captain-relevant-line
+# stale context here justifies trusting process liveness (see the two-poll gate below).
+#
+# SUPERVISION-INFRA CAVEAT: the busy regex this backstops is built from codex's
+# DEFAULT Escape keybinding ("esc to interrupt"). An operator who remaps or unbinds
+# tui.keymap.chat.interrupt_turn blinds the busy-row layer for EVERY codex worker on
+# the host, at which point this process-liveness backstop is the only thing between
+# a healthy static-pane codex worker and a false wedge. Keep it in the absorb path;
+# do not fold it back into the interface-text layer.
+codex_static_pane_upgrade() {  # <window> <fallback-class>
+  local win=$1 fallback=$2 alive
+  [ "$fallback" = none ] || { printf '%s' "$fallback"; return; }
+  [ "$(window_harness "$win")" = codex ] || { printf '%s' "$fallback"; return; }
+  [ "$(window_kind "$win")" != secondmate ] || { printf '%s' "$fallback"; return; }
+  alive=$(fm_backend_agent_alive "$(window_backend "$win")" "$win" 2>/dev/null) || alive=unknown
+  if [ "$alive" = alive ]; then printf 'working'; return; fi
+  printf '%s' "$fallback"
+}
+
 pause_state_class() {  # <window> <task>
   local win=$1 task=$2 key last recheck_file class agent_alive
   key=${win//:/_}
@@ -599,7 +658,7 @@ pause_state_class() {  # <window> <task>
   recheck_file="$STATE/.paused-rechecked-$key"
   if ! status_is_paused_or_captain_held "$last"; then
     rm -f "$recheck_file"
-    crew_absorb_class "$task"
+    codex_static_pane_upgrade "$win" "$(crew_absorb_class "$task")"
     return
   fi
   if [ -e "$STATE/.paused-$key" ] && [ "$(age_of "$recheck_file")" -lt "$STALE_ESCALATE_SECS" ]; then

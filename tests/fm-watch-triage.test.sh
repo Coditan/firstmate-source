@@ -835,6 +835,104 @@ test_nonterminal_stale_provably_working_absorbed_then_escalated() {
   pass "provably-working non-terminal stale is absorbed, holds the ladder while its run is active, and escalates once the run stops"
 }
 
+# --- codex static-pane liveness backstop (0.145.0 false-idle) ----------------
+# codex 0.145.0 drops its "esc to interrupt" busy row while an answer streams and
+# mid tool-call, so a healthy codex worker on a STATIC pane renders no busy text
+# and crew_absorb_class reports `none` (no run-step, no busy signature). Without a
+# backstop that reads none-of-the-interface-text, the non-terminal-stale path would
+# surface it as a possible wedge (docs/codex-busy-detection.md). codex_static_pane_upgrade
+# corroborates with the codex agent PROCESS: an `alive` process (foreground command
+# still `codex`) upgrades none -> working (absorb + wedge timer), while a `dead`
+# process (bare shell) and any non-codex harness keep surfacing at once.
+_codex_backstop_case() {  # <dir-name> <window> <harness> <current-command>
+  local dir state fakebin capture_file window key pane_hash sig
+  dir=$(make_case "$1"); state="$dir/state"; fakebin="$dir/fakebin"
+  capture_file="$dir/pane.txt"; window=$2
+  printf 'idle mid tool-call, no busy row' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=%s\n' "$window" "$3" > "$state/w.meta"
+  # Non-terminal status, .seen-* primed so the signal scan does not pre-empt the stale path.
+  printf 'working: running a shell tool\n' > "$state/w.status"
+  sig=$(seen_sig "$state/w.status"); printf '%s' "$sig" > "$state/.seen-w_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle mid tool-call, no busy row")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  # No run-step and no busy signature: crew_absorb_class is `none`.
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · no current-state source available'
+  # Echo the fields the caller needs, then the caller launches the watcher itself
+  # with the right FM_FAKE_TMUX_CURRENT_COMMAND ($4) so agent-liveness is stubbed.
+  printf '%s\t%s\t%s\t%s\n' "$dir" "$state" "$fakebin" "$key"
+}
+
+test_codex_static_pane_alive_absorbed() {
+  local fields dir state fakebin key out window pid pane_hash
+  window="test:fm-codexbusy"
+  fields=$(_codex_backstop_case codex-backstop-alive "$window" codex codex)
+  IFS=$'\t' read -r dir state fakebin key <<< "$fields"
+  out="$dir/watch.out"; pane_hash=$(hash_text "idle mid tool-call, no busy row")
+  # A healthy codex worker: process alive (foreground command `codex`), high wedge
+  # threshold so a first sighting can only be absorbed, never escalated.
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=codex \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 30; then
+    reap "$pid"; fail "watcher surfaced a healthy static-pane codex worker (should absorb via agent liveness): $(cat "$out")"
+  fi
+  [ ! -s "$out" ] || fail "codex liveness absorb printed a wake reason"
+  [ ! -s "$state/.wake-queue" ] || fail "codex liveness absorb enqueued a wake"
+  [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" = "$pane_hash" ] || fail "stale suppressor not advanced on codex liveness absorb"
+  [ -s "$state/.stale-since-$key" ] || fail "codex liveness absorb did not start the wedge timer (a wedged codex must still escalate)"
+  reap "$pid"
+  unset FM_FAKE_CREW_STATE
+  pass "a healthy static-pane codex worker with an alive process is absorbed (agent-liveness backstop), and the wedge timer still arms"
+}
+
+test_codex_static_pane_dead_surfaces() {
+  local fields dir state fakebin key out drain_out window pid
+  window="test:fm-codexdead"
+  fields=$(_codex_backstop_case codex-backstop-dead "$window" codex bash)
+  IFS=$'\t' read -r dir state fakebin key <<< "$fields"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"
+  # A crashed codex: the pane's foreground command is a bare shell (`dead`). The
+  # backstop must NOT absorb this - it surfaces immediately even under a high threshold.
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=bash \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "watcher did not surface a codex pane whose process is dead"
+  grep -Fx "stale: $window" "$out" >/dev/null || fail "dead-process codex did not print the immediate stale wake"
+  grep -F "possible wedge" "$out" >/dev/null && fail "a dead-process codex was mislabeled a wedge instead of an immediate surface"
+  [ ! -e "$state/.stale-since-$key" ] || fail "a dead-process codex must not start the wedge timer (immediate surface)"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the dead-process surface failed"
+  grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "dead-process stale wake was not queued"
+  unset FM_FAKE_CREW_STATE
+  pass "a codex pane whose process is dead surfaces immediately (the backstop never masks a crash)"
+}
+
+test_codex_backstop_scoped_to_codex() {
+  local fields dir state fakebin key out window pid
+  window="test:fm-claudealive"
+  # Same static pane and an alive process, but harness=claude: the backstop is
+  # codex-scoped (other harnesses keep rendering their busy row all turn), so an
+  # otherwise-`none` stale surfaces at once regardless of process liveness.
+  fields=$(_codex_backstop_case codex-backstop-scope "$window" claude claude)
+  IFS=$'\t' read -r dir state fakebin key <<< "$fields"
+  out="$dir/watch.out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=claude \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "the codex backstop leaked to a claude worker (should surface at once)"
+  grep -Fx "stale: $window" "$out" >/dev/null || fail "a non-codex worker did not print the immediate stale wake"
+  [ ! -e "$state/.stale-since-$key" ] || fail "a non-codex worker must not get the codex liveness absorb"
+  unset FM_FAKE_CREW_STATE
+  pass "the agent-liveness absorb is scoped to codex: a claude worker with an alive process still surfaces immediately"
+}
+
 # --- non-terminal stale, crew NOT provably working: surfaced immediately ------
 # The key requirement: a crew with no running pipeline that has gone quiet (and is
 # not busy) has stopped - it may be done via interactive menus, waiting, or wedged.
@@ -1809,6 +1907,9 @@ test_mark_parked_wrapper
 test_mark_parked_wrapper_rejects_secondmate
 test_stale_terminal_status_overridden_by_active_run
 test_nonterminal_stale_provably_working_absorbed_then_escalated
+test_codex_static_pane_alive_absorbed
+test_codex_static_pane_dead_surfaces
+test_codex_backstop_scoped_to_codex
 test_terminal_stale_already_surfaced_absorbed_then_escalates
 test_terminal_stale_changed_line_still_surfaces
 test_wedge_escalation_marks_demand_deep_inspection_after_threshold
