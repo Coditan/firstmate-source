@@ -29,6 +29,11 @@
 # gaps in omitted[] and, when invalid, a Charted Next gate line so the four-section
 # chat cannot claim an empty fleet while main current state is broken.
 #
+# Dangling `blocked-by:` tokens are data-integrity warnings, not live blockers.
+# The canonical snapshot removes them from unresolved_blocker_ids and records
+# them in dangling_blocker_ids; this projection exposes those ready-with-caution
+# rows under top-level integrity[] so Charted Next can say the edge wants clearing.
+#
 # The landed section merges this home's Done with the canonical snapshot's
 # secondmate_landed roll-up (fm-fleet-snapshot.sh), so merges a secondmate managed -
 # recorded in ITS OWN backlog, never the main one - are visible. It stays bounded by
@@ -109,7 +114,8 @@ Default fields: schema, home, generated, prs, in_flight{id,kind,state,doing},
   secondmates{id,state,doing,provenance,freshness,age_seconds,contradiction,reason},
   decisions_open{id,key,verb,summary,owner}, landed{id,what,artifact,owner},
   gates{id,title,blocked_by,reason,owner}, reports{id,path}, recorded_prs{id,url},
-  unhealthy_endpoints{...} (only when non-empty), omitted{surface,reveal}.
+  integrity{id,title,phantom_blocked_by,owner}, unhealthy_endpoints{...} (only when non-empty),
+  omitted{surface,reveal}.
 gates excludes the sea-chart kinds (fog, out-of-course), which are held on purpose
   and would otherwise crowd it permanently; the count withheld is disclosed in
   omitted[] and --all-queued puts them back.
@@ -432,6 +438,27 @@ MODEL=$(printf '%s' "$SNAP" | jq \
   | ([ $gates_typed[]
        | select($all_queued == 1 or ((.kind // "") as $k | ($chart_kinds | index($k)) == null))
        | del(.kind) ]) as $gates_all
+  # DATA-INTEGRITY, not a blockage. A record naming a blocked-by target that is
+  # real in neither the live backlog nor the done archive is READY - the canonical
+  # snapshot already dropped that phantom from unresolved_blocker_ids, so the row
+  # above shows it with no blocker - but the stale edge would keep re-appearing as
+  # a silent gate to any reader that trusts the token. Surface it loudly here so
+  # the edge gets cleared, never bury it under a blocked line.
+  | ([ .backlog.records[]
+       | . as $record
+       | select(.structured and
+           (.state == "queued" or
+            (.state == "in_flight" and .current_role == "held" and ($working_ids | index($record.id) | not))))
+       | select(((.dangling_blocker_ids // []) | length) > 0)
+       | {id, title:(.title | trunc(60)),
+          phantom_blocked_by:((.dangling_blocker_ids // []) | join(",") | trunc(120)),
+          owner:"(main)"}
+     ] + [ (.secondmate_current.records // [])[] as $m
+       | select($m.provenance.selected == "structured-home")
+       | (($m.queued[]?, $m.holds[]?) | select(((.dangling_blocker_ids // []) | length) > 0))
+       | {id, title:(.title | trunc(60)),
+          phantom_blocked_by:((.dangling_blocker_ids // []) | join(",") | trunc(120)),
+          owner:$m.id} ] | unique_by([.owner, .id, .phantom_blocked_by])) as $integrity_all
   | ([ .scout_reports[]
        | . as $r
        | select(($all_reports == 1) or (($rel_ids | index($r.id)) != null))
@@ -449,6 +476,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
       landed: ($done | map({id, what:(.title | trunc(70)),
                             artifact:(.pr_url // .report_path // .local_note // "-"),owner:.home_id})),
       gates: (if $all_queued == 1 then $gates_all else $gates_all[:$gates_n] end),
+      integrity: (if $all_queued == 1 then $integrity_all else $integrity_all[:$gates_n] end),
       reports: (if $all_reports == 1 then $reports_all else $reports_all[:$reports_n] end),
       recorded_prs: (if $all_recorded_prs == 1 then $recorded_prs_all else $recorded_prs_all[:$recorded_prs_n] end)
     }
@@ -485,6 +513,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         (([($snap.secondmate_current.records // [])[] | select(.parent_event.activity_scan.available == false)] | length) as $n | if $n > 0 then {surface:("secondmate parent activity evidence unavailable for \($n) record(s)"), reveal:"inspect the parent status logs"} else empty end),
         (if $all_decisions == 0 and ($decisions_all | length) > $decisions_n then {surface:("decisions_open showing \($decisions_n) of \($decisions_all | length)"), reveal:"--all-decisions"} else empty end),
         (if $all_queued == 0 and ($gates_all | length) > $gates_n then {surface:("gates showing \($gates_n) of \($gates_all | length)"), reveal:"--all-queued"} else empty end),
+        (if $all_queued == 0 and ($integrity_all | length) > $gates_n then {surface:("integrity warnings showing \($gates_n) of \($integrity_all | length)"), reveal:"--all-queued"} else empty end),
         (if $all_queued == 0 and $chart_kind_hidden > 0 then {surface:("sea-chart items (\($chart_kinds | join(", "))) kept out of gates: \($chart_kind_hidden)"), reveal:"--all-queued"} else empty end),
         (if $all_reports == 0 and ($reports_all | length) > $reports_n then {surface:("reports showing \($reports_n) of \($reports_all | length)"), reveal:"--all-reports"} else empty end),
         (if $all_recorded_prs == 0 and ($recorded_prs_all | length) > $recorded_prs_n then {surface:("recorded_prs showing \($recorded_prs_n) of \($recorded_prs_all | length)"), reveal:"--all-recorded-prs"} else empty end),

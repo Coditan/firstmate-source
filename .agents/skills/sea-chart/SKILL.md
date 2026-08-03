@@ -94,7 +94,7 @@ A withheld or possibly-answered count above zero is not a footnote.
 Render those records in full, with the blocker or the closed twin named, near the top.
 Withheld records do not all carry the same news, and each one says which it is in `cause` with the reason in `why`.
 A `blocked` record is a decision the fleet has lost track of and belongs at the top with its blocker named; an `in-flight` one is simply being worked right now, and `no-hold` or `other-hold` mean the record never asked the captain anything in the first place.
-A `stale-edge` record belongs at the top too, for the opposite reason: nothing is holding it, the blocker it names is Done in the archive, and the captain can answer it now once somebody clears the edge.
+A `stale-edge` or `dangling-edge` record belongs at the top too, for the opposite reason: nothing is holding it, the blocker it names is either Done in the archive or a real record nowhere, and the captain can answer it now once somebody clears the edge.
 Print each `why` beside its record so the difference is on the page rather than in the reader's head, and never let the milder causes crowd a `blocked` record down the list or off it.
 The whole point is that a chart which quietly omits an open decision is more harmful than no chart at all.
 

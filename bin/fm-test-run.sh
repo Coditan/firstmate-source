@@ -701,6 +701,15 @@ families_for_changed_path() {
     bin/fm-bearings-snapshot.sh|bin/fm-fleet-snapshot.sh|bin/fm-fleet-view.sh)
       printf '%s\n' snapshot-bearings
       ;;
+    bin/fm-blocker-class-lib.sh)
+      # The one owner of "is a blocked-by target real", spliced into the fleet
+      # snapshot, bearings, sea chart, and backlog lint. Its tests do not name this
+      # file by basename, so the grep resolution the bin/* fallthrough uses cannot
+      # find them: select every reader explicitly instead.
+      printf '%s\n' snapshot-bearings
+      printf '%s\n' "__script_required__:fm-sea-chart.test.sh"
+      printf '%s\n' "__script_required__:fm-backlog-lint.test.sh"
+      ;;
     bin/fm-install-herdr.sh|bin/fm-install-treehouse.sh|bin/fm-herdr-ci-cleanup.sh)
       printf '%s\n' pure-contract-unit
       # Pin or cleanup changes also select the real-Herdr family so the required

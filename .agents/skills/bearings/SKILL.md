@@ -27,6 +27,7 @@ It never tears down a task, merges a PR, dispatches new work, or mutates any tas
    Structured captain-held decisions come from `decision-hold-lifecycle` and appear under `decisions_open`; do not scrape reports or visual-review artifacts to supplement them.
    A queued item under `gates` only becomes "next work" when its blocker is gone and its time/date gate has arrived; until then it stays queued with the reason.
    The `(main-inventory)` gate is an action-free integrity warning rather than queued work: render it under Charted Next with the related `omitted` disclosure, never invent an Underway row from backlog-only state, and never move it into Captain's Call.
+   Each row under the top-level `integrity` array is a queued item that names a blocked-by target which is a real record nowhere in the backlog or archive: it is READY, not blocked, so present it as ready work under Charted Next and add its `phantom_blocked_by` as a one-line data-integrity caution ("names <id> as blocking, which exists nowhere - the edge wants clearing"), never as a live blocker and never buried as blocked.
 
 2. **Compose the detailed report file around the four-section spine, adding the richer detail the chat leaves out.**
    The gather step is deterministic; your judgment is scoped to the last mile only - ranking the command's facts by what matters right now and writing the scannable prose.
@@ -36,7 +37,7 @@ It never tears down a task, merges a PR, dispatches new work, or mutates any tas
    - **Captain's Call** - every open decision summarized with its options from the structured decision record, plus each PR ready to merge and each needed credential or login, every PR with the full `https://...` URL, never a bare `#number`.
    - **Recently Landed** - the bounded current recent-completions baseline from structured state across the main fleet and every registered secondmate home, rendered in full on every run.
    - **Underway** - each live direct report making progress, with its current state, and the plans / main pickup pointers worth reopening (`data/<id>/report.md` files, `.lavish/*.html` boards).
-   - **Charted Next** - queued or gated work, including any main-inventory integrity warning, with each item's blocker, date, or integrity reason.
+   - **Charted Next** - queued or gated work, including any main-inventory integrity warning and any `integrity`-array item shown as ready with its dangling-edge caution, with each item's blocker, date, or integrity reason.
 
 3. **Write the dated report file so it persists, then surface the mandatory four-section digest in chat.**
    - Write the full report to `data/status-report-<YYYY-MM-DD>.md` using today's date.

@@ -53,6 +53,8 @@ SNAPSHOT="$SCRIPT_DIR/fm-fleet-snapshot.sh"
 
 # shellcheck source=bin/fm-tasks-axi-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
+# shellcheck source=bin/fm-blocker-class-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-blocker-class-lib.sh"  # FM_BLOCKER_CLASS_JQ: one owner of "is a blocked-by target real"
 
 usage() {
   sed -n '2,/^set -uf$/s/^# \{0,1\}//p' "$0"
@@ -137,7 +139,8 @@ ROWS_FILE="$LINT_TMP/rows"
 
 jq -nr \
   --slurpfile backlog "$BACKLOG_JSON_FILE" \
-  --slurpfile archive "$ARCHIVE_JSON_FILE" '
+  --slurpfile archive "$ARCHIVE_JSON_FILE" \
+  "$FM_BLOCKER_CLASS_JQ"'
     def edge_token($raw; $blocker):
       ([($raw // "") | scan("blocked-by:[[:space:]]+[^[:space:])]+")]
         | map(select(sub("^blocked-by:[[:space:]]+"; "") == $blocker))
@@ -158,7 +161,7 @@ jq -nr \
     | . as $blocker
     | (if $live[$blocker] == "done" then "done"
        elif $live[$blocker] != null then "live"
-       elif $archived[$blocker] == true then "archived"
+       elif fm_blocker_is_real($blocker; {}; $archived) then "archived"
        else "missing"
        end) as $class
     | select($class != "live")

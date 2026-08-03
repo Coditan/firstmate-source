@@ -327,16 +327,70 @@ EOF
       and .captain_actionable == true
   ' >/dev/null || fail "completed blockers did not make the captain hold actionable: $out"
 
+  # A blocked-by target that is real in neither the live backlog nor the archive is
+  # a data-integrity fault, not a gate: it leaves unresolved_blocker_ids (so it no
+  # longer silently holds the record off the actionable surface) and is named in
+  # dangling_blocker_ids instead. captain_actionable stays false because the record
+  # still carries a broken edge that wants clearing before the decision is offered.
   sed 's/blocked-by: review/blocked-by: missing/' "$home/data/backlog.md" > "$home/data/backlog.next"
   mv "$home/data/backlog.next" "$home/data/backlog.md"
   out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
   printf '%s' "$out" | jq -e '
     .backlog.records[] | select(.id == "captain-run")
     | .blocked_by_ids == ["worker", "missing"]
-      and .unresolved_blocker_ids == ["missing"]
+      and .unresolved_blocker_ids == []
+      and .dangling_blocker_ids == ["missing"]
       and .captain_actionable == false
-  ' >/dev/null || fail "a missing blocker was incorrectly treated as resolved: $out"
-  pass "backlog normalization preserves strict roles and resolves every blocker compatibly"
+  ' >/dev/null || fail "a dangling blocker was not surfaced as an integrity fault instead of a silent gate: $out"
+  pass "backlog normalization preserves strict roles, resolves real blockers, and flags a dangling one"
+}
+
+# The canonical snapshot decides "is this blocker target real" across BOTH the
+# live backlog and the done archive, so a target that is real in neither is a
+# data-integrity fault the reader must surface, while a target still present as a
+# not-Done record - live or long-archived - keeps gating exactly as before. This
+# is the one contract fm-backlog-lint, fm-bearings-snapshot, and fm-sea-chart all
+# rely on.
+test_dangling_blocker_is_integrity_not_a_gate() {
+  local home fakebin out
+  home=$(make_home dangling-blocker)
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] real-target - A genuine not-yet-done blocker (repo: alpha) (kind: ship)
+- [ ] phantom-blocked - Ready work masked as blocked blocked-by: ghost-x - waits (repo: alpha) (kind: ship)
+- [ ] real-blocked - Genuinely blocked blocked-by: real-target - waits (repo: alpha) (kind: ship)
+- [ ] archived-blocked - Waits on archived done blocked-by: old-done - waits (repo: alpha) (kind: ship)
+
+## Done
+EOF
+  cat > "$home/data/done-archive.md" <<'EOF'
+# Done archive
+
+## Archived 2026-07-01
+- [x] old-done - An old finished blocker (repo: alpha) (kind: ship)
+EOF
+  fakebin=$(make_fakebin "$home")
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
+  printf '%s' "$out" | jq -e '
+    (.backlog.records[] | select(.id == "phantom-blocked")
+      | .unresolved_blocker_ids == [] and .dangling_blocker_ids == ["ghost-x"])
+    and (.backlog.records[] | select(.id == "real-blocked")
+      | .unresolved_blocker_ids == ["real-target"] and .dangling_blocker_ids == [])
+    and (.backlog.records[] | select(.id == "archived-blocked")
+      | .unresolved_blocker_ids == ["old-done"] and .dangling_blocker_ids == [])
+  ' >/dev/null || fail "dangling vs real vs archived blocker classification was wrong: $out"
+
+  # The per-file reader keeps its single-file semantics untouched, so callers that
+  # combine live and archive themselves (fm-backlog-lint, fm-sea-chart) still see
+  # the raw token in unresolved_blocker_ids and no dangling field.
+  raw=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --backlog-json "$home/data/backlog.md")
+  printf '%s' "$raw" | jq -e '
+    (.records[] | select(.id == "phantom-blocked")
+      | .unresolved_blocker_ids == ["ghost-x"] and (has("dangling_blocker_ids") | not))
+  ' >/dev/null || fail "per-file --backlog-json must stay unchanged for the combining readers: $raw"
+  pass "a dangling blocker leaves the gate and is flagged; real and archived blockers still gate"
 }
 
 test_event_hints_follow_reconciled_current_state() {
@@ -756,6 +810,7 @@ test_empty_fleet_json
 test_fixture_snapshot_json
 test_main_inventory_orphan_and_unstructured_disclosure
 test_normalized_roles_and_plural_blocker_readiness
+test_dangling_blocker_is_integrity_not_a_gate
 test_event_hints_follow_reconciled_current_state
 test_open_decision_survives_later_unrelated_event
 test_secondmate_open_decision_survives_live_endpoint

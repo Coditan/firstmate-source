@@ -185,6 +185,14 @@ write_domain_alpha_fixture() {  # <parent-home> <secondmate-home>
 
 ## Done
 EOF
+  cat > "$mate/data/done-archive.md" <<'EOF'
+## In flight
+
+## Queued
+
+## Done
+- [x] external-legal - External legal dependency record (repo: sample) (kind: ship) (done 2026-07-01)
+EOF
   i=1
   while [ "$i" -le 7 ]; do
     printf -- '- [x] phase%s - Sample rollout Phase %s (repo: sample) (kind: ship) (done 2026-07-%02d)\n' \
@@ -616,6 +624,14 @@ test_parent_evidence_reconciles_by_verb_and_key() {
 
 ## Done
 EOF
+  cat > "$hold/data/done-archive.md" <<'EOF'
+## In flight
+
+## Queued
+
+## Done
+- [x] external-legal - External legal dependency record (repo: sample) (kind: ship) (done 2026-07-01)
+EOF
   cat > "$blocked/data/backlog.md" <<'EOF'
 ## In flight
 
@@ -623,6 +639,14 @@ EOF
 - [ ] vendor-release - Vendor release blocked-by: external-vendor - vendor review (repo: sample) (kind: ship)
 
 ## Done
+EOF
+  cat > "$blocked/data/done-archive.md" <<'EOF'
+## In flight
+
+## Queued
+
+## Done
+- [x] external-vendor - External vendor dependency record (repo: sample) (kind: ship) (done 2026-07-01)
 EOF
   child='decision-child'
   mkdir -p "$decision/projects/$child"
@@ -1769,8 +1793,9 @@ EOF
   json=$(run "$home" "$fakebin" --json)
   printf '%s' "$json" | jq -e '
     (.decisions_open | any(.id == "home-assistant/captain-run") | not)
-      and (.gates | any(.id == "captain-run" and .owner == "home-assistant" and .blocked_by == "missing"))
-  ' >/dev/null || fail "a missing Home Assistant blocker was treated as Done: $json"
+      and (.gates | any(.id == "captain-run" and .owner == "home-assistant" and .blocked_by == "-"))
+      and (.integrity | any(.id == "captain-run" and .owner == "home-assistant" and .phantom_blocked_by == "missing"))
+  ' >/dev/null || fail "a missing Home Assistant blocker was not surfaced as an integrity warning: $json"
 
   sed 's/(kind: program)/(kind: mystery)/' "$hibit/data/backlog.md" > "$hibit/data/backlog.next"
   mv "$hibit/data/backlog.next" "$hibit/data/backlog.md"
@@ -1890,6 +1915,98 @@ test_chat_contract_four_sections() {
   pass "the /bearings skill states the four-section chat contract in order, with empty-states and the At Anchor exclusion"
 }
 
+# A queued item whose only blocked-by target is real in neither the backlog nor
+# the archive is READY, not blocked: it must appear under Charted Next with no
+# blocker AND be named in the loud integrity surface, never buried as blocked. A
+# genuinely blocked item still shows its real blocker and stays off integrity.
+test_dangling_blocker_surfaces_ready_with_integrity_warning() {
+  local home fakebin json
+  home=$(make_home dangling-gate)
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+- [ ] active-phantom - Active held work with stale token blocked-by: ghost-active - waits (repo: alpha) (kind: ship) (hold: external wait) (hold-kind: external)
+
+## Queued
+- [ ] phantom-item - Ready work masked as blocked blocked-by: ghost-x - waits (repo: alpha) (kind: ship)
+- [ ] real-target - A genuine blocker (repo: alpha) (kind: ship)
+- [ ] real-blocked - Genuinely blocked blocked-by: real-target - waits (repo: alpha) (kind: ship)
+
+## Done
+- [x] done-phantom - Completed work with stale token blocked-by: ghost-done - waits (repo: alpha) (kind: ship) (done 2026-07-11)
+EOF
+  : > "$home/data/done-archive.md"
+  mkdir -p "$home/projects/active-phantom"
+  fm_write_meta "$home/state/active-phantom.meta" \
+    "window=firstmate:fm-active-phantom" \
+    "worktree=$home/projects/active-phantom" \
+    "project=alpha" \
+    "harness=codex" \
+    "kind=ship"
+  printf 'working: active stale token\n' > "$home/state/active-phantom.status"
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    (.gates | any(.[]; .id == "phantom-item" and .blocked_by == "-"))
+    and (.gates | any(.[]; .id == "real-blocked" and .blocked_by == "real-target"))
+    and (.integrity | any(.[]; .id == "phantom-item" and .phantom_blocked_by == "ghost-x"))
+    and (.integrity | any(.[]; .id == "real-blocked") | not)
+    and (.integrity | any(.[]; .id == "done-phantom") | not)
+    and (.integrity | any(.[]; .id == "active-phantom") | not)
+  ' >/dev/null || fail "a dangling-blocked item was not surfaced as ready-with-integrity-warning: $json"
+  pass "Bearings surfaces a phantom-blocked item as ready plus a loud integrity warning, not as blocked"
+}
+
+test_secondmate_dangling_blocker_surfaces_ready_with_integrity_warning() {
+  local home mate fakebin json
+  home=$(make_home secondmate-dangling-gate-parent)
+  mate="$TMP_ROOT/secondmate-dangling-gate-home"
+  mkdir -p "$mate/data" "$mate/state" "$mate/config" "$mate/projects" "$mate/bin"
+  printf '# Firstmate fixture\n' > "$mate/AGENTS.md"
+  printf 'mate\n' > "$mate/.fm-secondmate-home"
+  printf -- '- mate - fixture domain (home: %s; scope: fixture work; projects: alpha; added 2026-07-11)\n' \
+    "$mate" > "$home/data/secondmates.md"
+  fm_write_secondmate_meta "$home/state/mate.meta" "$mate" "firstmate:fm-mate" alpha
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+
+## Done
+EOF
+  cat > "$mate/data/backlog.md" <<'EOF'
+## In flight
+- [ ] active-phantom - Active secondmate work with stale token blocked-by: ghost-active - waits (repo: alpha) (kind: ship) (hold: external wait) (hold-kind: external)
+
+## Queued
+- [ ] phantom-item - Ready secondmate work masked as blocked blocked-by: ghost-x - waits (repo: alpha) (kind: ship)
+- [ ] real-target - A genuine blocker (repo: alpha) (kind: ship)
+- [ ] real-blocked - Genuinely blocked blocked-by: real-target - waits (repo: alpha) (kind: ship)
+
+## Done
+- [x] done-phantom - Completed secondmate work with stale token blocked-by: ghost-done - waits (repo: alpha) (kind: ship) (done 2026-07-11)
+EOF
+  : > "$mate/data/done-archive.md"
+  mkdir -p "$mate/projects/active-phantom"
+  fm_write_meta "$mate/state/active-phantom.meta" \
+    "window=firstmate:fm-active-phantom" \
+    "worktree=$mate/projects/active-phantom" \
+    "project=alpha" \
+    "harness=codex" \
+    "kind=ship"
+  printf 'working: active secondmate stale token\n' > "$mate/state/active-phantom.status"
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    (.gates | any(.[]; .id == "phantom-item" and .owner == "mate" and .blocked_by == "-"))
+    and (.gates | any(.[]; .id == "real-blocked" and .owner == "mate" and .blocked_by == "real-target"))
+    and (.integrity | any(.[]; .id == "phantom-item" and .owner == "mate" and .phantom_blocked_by == "ghost-x"))
+    and (.integrity | any(.[]; .id == "real-blocked") | not)
+    and (.integrity | any(.[]; .id == "done-phantom" and .owner == "mate") | not)
+    and (.integrity | any(.[]; .id == "active-phantom" and .owner == "mate") | not)
+  ' >/dev/null || fail "a secondmate dangling blocker was not surfaced as ready-with-integrity-warning: $json"
+  pass "Bearings surfaces a secondmate phantom blocker as ready plus a loud integrity warning"
+}
+
 test_domain_alpha_stale_parent_event_does_not_become_current_work
 test_gnu_stat_uses_file_formats_without_bsd_fallback_pollution
 test_parent_activity_evidence_is_bounded_and_disclosed
@@ -1921,6 +2038,8 @@ test_main_orphan_counterfactual_meta_clears_inventory_warning
 test_mixed_secondmate_roles_partial_state_and_captain_readiness
 test_main_captain_readiness_matches_secondmate_projection
 test_chat_contract_four_sections
+test_dangling_blocker_surfaces_ready_with_integrity_warning
+test_secondmate_dangling_blocker_surfaces_ready_with_integrity_warning
 test_completed_scout_report_not_pending
 test_open_decision_surfaces_end_to_end
 test_report_pointers_surface

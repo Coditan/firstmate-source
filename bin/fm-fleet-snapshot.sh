@@ -3,8 +3,8 @@
 #
 # Output contract: `--json` prints one object with schema
 # `fm-fleet-snapshot.v1`.
-# `--backlog-json [<path>]` prints only the same parsed backlog object used by
-# that snapshot, without scanning live task or secondmate state.
+# `--backlog-json [<path>]` prints the per-file parsed backlog object used as
+# snapshot input, without scanning live task, archive, or secondmate state.
 # It accepts tasks-axi live backlogs and done archives; `## Archived <date>`
 # sections normalize to Done records.
 # The command is read-only: it does not acquire the session lock, drain wakes,
@@ -21,9 +21,14 @@
 #     those sections are preserved as unstructured records.
 #     Structured rows preserve captain-hold metadata such as hold_kind and
 #     hold_reason when tasks-axi emits it. They also carry normalized current_role,
-#     requires_child_metadata, blocked_by_ids, unresolved_blocker_ids, and
-#     captain_actionable fields. Repeated blocker tokens remain ordered; a blocker
-#     resolves only when its structured record is Done, and missing ids stay open.
+#     requires_child_metadata, blocked_by_ids, unresolved_blocker_ids,
+#     dangling_blocker_ids, and captain_actionable fields. Repeated blocker tokens
+#     remain ordered; a blocker resolves only when its structured record is Done,
+#     and a blocker target absent from both the live backlog and the done archive
+#     is recorded in dangling_blocker_ids instead of remaining a live blocker.
+#     `--backlog-json` is intentionally raw per-file input: it does not read the
+#     paired live/archive file, so missing ids stay in unresolved_blocker_ids there
+#     and dangling_blocker_ids is absent.
 #   tasks[]: one row per state/<id>.meta, sorted by id.
 #     current_state is parsed from bin/fm-crew-state.sh <id> and preserves
 #     state, source, detail, and raw line separately.
@@ -69,6 +74,7 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 BACKLOG="$DATA/backlog.md"
+ARCHIVE="$DATA/done-archive.md"
 SNAPSHOT_NOW=${FM_SNAPSHOT_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
 if [ -n "${FM_SNAPSHOT_NOW_EPOCH:-}" ]; then
   SNAPSHOT_EPOCH=$FM_SNAPSHOT_NOW_EPOCH
@@ -138,6 +144,9 @@ validate_positive_bound FM_SNAPSHOT_REGISTRY_TIMEOUT "$FM_SNAPSHOT_REGISTRY_TIME
 # shellcheck source=bin/fm-ff-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-ff-lib.sh"  # validate_secondmate_home: shared seeded-home boundary checks
+# shellcheck source=bin/fm-blocker-class-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-blocker-class-lib.sh"  # FM_BLOCKER_CLASS_JQ: one owner of "is a blocked-by target real"
 
 usage() {
   cat <<'EOF'
@@ -148,17 +157,21 @@ usage: fm-fleet-snapshot.sh --json
 Print a read-only structured snapshot of the firstmate fleet.
 JSON is the stable machine-readable output contract.
 
---backlog-json exposes the snapshot's own structured Markdown reader without
-scanning fleet state. It defaults to data/backlog.md and accepts a tasks-axi
-done archive path, whose dated Archived sections normalize to Done records.
+--backlog-json exposes the snapshot's own structured Markdown reader for one
+file, without scanning fleet state or the paired live/archive file. It defaults
+to data/backlog.md and accepts a tasks-axi done archive path, whose dated
+Archived sections normalize to Done records. Its unresolved_blocker_ids are raw
+per-file input and can include ids that --json later classifies as dangling.
 
 --secondmate-home-summary emits the bounded structured summary used after a
 validated registered-home handoff. It is local-only, skips nested secondmate
 aggregation, and marks inventory contradictions or unavailable child state invalid.
 Its invalidity object names the normalized failure kind and affected ids.
 Actionable tasks-axi captain holds appear as decisions_open and stay visible in
-queued with hold_reason, hold_kind, and plural blocker fields for downstream
-projections. A captain hold is actionable only when every blocker is Done.
+queued with hold_reason, hold_kind, dangling_blocker_ids, and plural blocker
+fields for downstream projections. A captain hold is actionable only when every
+real blocker is Done; an edge to an id found nowhere in the live backlog or done
+archive is a dangling integrity fault, not a blocker.
 Cross-home reads use FM_SNAPSHOT_SECONDMATES (default 20, 0 lifts the count
 bound), FM_SNAPSHOT_SECONDMATE_TIMEOUT, and FM_SNAPSHOT_SECONDMATE_MAX_BYTES.
 Terminal contradiction evidence uses
@@ -639,15 +652,27 @@ main_inventory_json() {  # <backlog-json> <tasks-json>
 # validated parent read needs.
 # This mode never reads parent events or terminal text and never aggregates
 # nested secondmates.
-secondmate_home_summary_json() {  # <backlog-json> <tasks-json>
-  json_stdin "$1" "$2" | jq -n \
+secondmate_home_summary_json() {  # <backlog-json> <tasks-json> <archive-json>
+  json_stdin "$1" "$2" "$3" | jq -n \
     --arg generated "$SNAPSHOT_NOW" \
     --arg home "$FM_HOME" \
     --argjson child_n "$FM_SNAPSHOT_SECONDMATE_CHILDREN" \
     --argjson queued_n "$FM_SNAPSHOT_SECONDMATE_QUEUED" \
     --argjson decisions_n "$FM_SNAPSHOT_SECONDMATE_DECISIONS" \
-    --argjson landed_n "$FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME" '
-    input as $backlog | input as $tasks
+    --argjson landed_n "$FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME" \
+    "$FM_BLOCKER_CLASS_JQ"'
+    input as $raw_backlog | input as $tasks | input as $archive
+    | ([ $raw_backlog.records[]? | select(.structured and .id != null) | {key:.id, value:true} ]
+        | from_entries) as $live_ids
+    | ([ $archive.records[]? | select(.structured and .id != null) | {key:.id, value:true} ]
+        | from_entries) as $archive_ids
+    | ($raw_backlog | .records |= map(
+        if .structured then
+          fm_dangling_blockers(.blocked_by_ids; $live_ids; $archive_ids) as $dangling
+          | .dangling_blocker_ids = $dangling
+          | .unresolved_blocker_ids =
+              [ (.unresolved_blocker_ids // [])[] | select(. as $b | ($dangling | index($b)) == null) ]
+        else . + {dangling_blocker_ids: []} end)) as $backlog
     | def trunc($n):
       tostring | gsub("\\s+"; " ")
       | if length > $n then .[:$n] + "…" else . end;
@@ -716,6 +741,7 @@ secondmate_home_summary_json() {  # <backlog-json> <tasks-json>
             blocked_by:((.unresolved_blocker_ids | join(",")) | if . == "" then null else trunc(120) end),
             blocked_by_ids:(.blocked_by_ids | map(trunc(120))),
             unresolved_blocker_ids:(.unresolved_blocker_ids | map(trunc(120))),
+            dangling_blocker_ids:((.dangling_blocker_ids // []) | map(trunc(120))),
             reason:((.hold_reason // .blocked_reason // "blocked") | trunc(120)),source:"backlog"} ]
        + [ $owned_in_flight[] as $work
            | $tasks[]
@@ -757,6 +783,7 @@ secondmate_home_summary_json() {  # <backlog-json> <tasks-json>
           blocked_by:((.blocked_by // null) | if . == null then null else trunc(120) end),
           blocked_by_ids:((.blocked_by_ids // []) | map(trunc(120))),
           unresolved_blocker_ids:((.unresolved_blocker_ids // []) | map(trunc(120))),
+          dangling_blocker_ids:((.dangling_blocker_ids // []) | map(trunc(120))),
           blocked_reason:((.blocked_reason // null) | if . == null then null else trunc(160) end),
           hold_reason:((.hold_reason // null) | if . == null then null else trunc(160) end),
           hold_kind:((.hold_kind // null) | if . == null then null else trunc(40) end),
@@ -1351,12 +1378,29 @@ fi
 TASKS_JSON=$(task_json_lines) || { echo "fm-fleet-snapshot: task snapshot failed" >&2; exit 1; }
 
 if [ "$OUTPUT_MODE" = secondmate-home-summary ]; then
-  secondmate_home_summary_json "$BACKLOG_JSON" "$TASKS_JSON" \
+  if [ -f "$ARCHIVE" ]; then
+    ARCHIVE_JSON=$(backlog_json "$ARCHIVE") \
+      || { echo "fm-fleet-snapshot: done archive read failed" >&2; exit 1; }
+  else
+    ARCHIVE_JSON='{"records":[]}'
+  fi
+  secondmate_home_summary_json "$BACKLOG_JSON" "$TASKS_JSON" "$ARCHIVE_JSON" \
     || { echo "fm-fleet-snapshot: secondmate home summary failed" >&2; exit 1; }
   exit 0
 fi
 
 SCOUT_REPORTS_JSON=$(scout_report_lines)
+# The per-file parser resolves a blocked-by target only against the file it read,
+# so a target that lives in neither the live backlog nor the done archive - never
+# created, renamed, or mistyped - is indistinguishable from an unfinished blocker
+# and gates the item forever. Read the archive's structured ids here so blocked-by
+# resolution spans both files, matching fm-backlog-lint's dangling classification.
+if [ -f "$ARCHIVE" ]; then
+  ARCHIVE_JSON=$(backlog_json "$ARCHIVE") \
+    || { echo "fm-fleet-snapshot: done archive read failed" >&2; exit 1; }
+else
+  ARCHIVE_JSON='{"records":[]}'
+fi
 MAIN_INVENTORY_JSON=$(main_inventory_json "$BACKLOG_JSON" "$TASKS_JSON") \
   || { echo "fm-fleet-snapshot: main inventory summary failed" >&2; exit 1; }
 SECONDMATE_CURRENT_JSON=$(secondmate_current_json "$TASKS_JSON") \
@@ -1371,6 +1415,7 @@ json_stdin \
   "$SCOUT_REPORTS_JSON" \
   "$SECONDMATE_CURRENT_JSON" \
   "$SECONDMATE_LANDED_JSON" \
+  "$ARCHIVE_JSON" \
   | jq -n \
   --arg generated "$SNAPSHOT_NOW" \
   --arg fm_home "$FM_HOME" \
@@ -1379,8 +1424,24 @@ json_stdin \
   --arg data "$DATA" \
   --arg config "$CONFIG" \
   --arg projects "$PROJECTS" \
-  'input as $backlog | input as $tasks | input as $main_inventory
+  "$FM_BLOCKER_CLASS_JQ"'input as $raw_backlog | input as $tasks | input as $main_inventory
    | input as $scout_reports | input as $secondmate_current | input as $secondmate_landed
+   | input as $archive
+   | ([ $raw_backlog.records[]? | select(.structured and .id != null) | {key:.id, value:true} ]
+       | from_entries) as $live_ids
+   | ([ $archive.records[]? | select(.structured and .id != null) | {key:.id, value:true} ]
+       | from_entries) as $archive_ids
+   # A blocked-by token whose target is real nowhere is a data-integrity fault, not
+   # a gate: record it as dangling_blocker_ids and drop it from unresolved_blocker_ids
+   # so it never silently holds ready work off the actionable surface. A target still
+   # present as a not-Done record (live or archived) keeps gating exactly as before.
+   | ($raw_backlog | .records |= map(
+       if .structured then
+         fm_dangling_blockers(.blocked_by_ids; $live_ids; $archive_ids) as $dangling
+         | .dangling_blocker_ids = $dangling
+         | .unresolved_blocker_ids =
+             [ (.unresolved_blocker_ids // [])[] | select(. as $b | ($dangling | index($b)) == null) ]
+       else . + {dangling_blocker_ids: []} end)) as $backlog
    | def backlog_by_id($id): ($backlog.records[]? | select(.structured == true and .id == $id) | .) // null;
    def task_by_id($id): ($tasks[]? | select(.id == $id) | .) // null;
    def report_kind($id): (task_by_id($id).kind // backlog_by_id($id).kind // "scout");
