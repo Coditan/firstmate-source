@@ -28,7 +28,7 @@ The fields are `key=value` lines, matching `state/<id>.meta`:
 |---|---|
 | `status` | `ok` or `error`; a reader must refuse on anything but `ok` |
 | `error` | on `status=error` only, the cause: `no-hook-payload`, `no-transcript-path`, `no-session-id`, `unusable-transcript-path`, `unusable-session-id`, `no-jq`, or `no-harness-process` |
-| `harness_pid` | the harness process that owns this session, resolved by `bin/fm-harness-pid-lib.sh`, the same identity `bin/fm-lock.sh` writes to `state/.lock` |
+| `harness_pid` | the harness process that owns this session, resolved by `bin/fm-harness-pid-lib.sh`, the same identity `bin/fm-lock.sh` writes to `state/.lock`; empty when that process could not be identified, so a reader must never probe this value for liveness |
 | `session_id` | the harness session id, which `claude --resume <id>` reopens |
 | `transcript_path` | absolute path to the session's transcript |
 | `recorded_at` | epoch seconds when the record was written |
@@ -45,7 +45,9 @@ A second harness session started in the same home rewrites the record with its o
 A value that cannot be determined is written as an explicit error, never omitted.
 An absent field would be indistinguishable from a reader's own bug, and a leftover `ok` record from the previous session would be worse still, so every primary session start replaces the whole record.
 A value that cannot be written as a single `key=value` line is rejected for the same reason, so no payload can forge a plausible-looking record.
-Codex reports `transcript_path` as `null`, Grok and OpenCode hand the wrapper no payload at all, and each of those records `status=error` with the cause - honest, because the context-reset mechanism is verified on Claude only.
+A session that cannot write its record at all removes the existing one, or empties it when the state directory forbids unlinking, so no reader can mistake the previous session's record for this one's.
+Codex, Grok, OpenCode and Pi all record `status=error` with the cause `no-hook-payload`, because none of their registrations hands the wrapper a payload on stdin - Codex's drains it before executing the wrapper, and the others pass no input at all.
+That is honest rather than a gap, because the context-reset mechanism is verified on Claude only.
 
 Nothing consumes the record yet.
 It is the first step of the stow-then-clear mechanism, built alone so the steps that measure, receipt, and reset have an unambiguous transcript to work from.
@@ -170,6 +172,7 @@ A fresh Grok run was attempted on 2026-07-22 but stopped at `402 Payment Require
 
 `tests/fm-sessionstart-nudge.test.sh` proves wrapper silence for both gate signals, an unmarked linked worktree, a missing state directory, and an already-owned lock.
 It proves the transcript record's ok fields, that the record and `bin/fm-lock.sh` name the same harness process, that a silent post-clear start still replaces a superseded record, that a missing transcript path, an absent payload, and an unidentifiable owning process each record a visible error rather than leaving a stale or absent value, and that a non-primary claims no record.
+It also proves that an unidentifiable owning process leaves `harness_pid` empty rather than a probeable sentinel, and that a session which cannot write its record leaves no previous `status=ok` record behind, whether the state directory refuses the write or the atomic replace fails.
 It proves exact U+2063 `FIRSTMATE_OP:`-prefixed, `session-start`-typed one-line output for a plain primary and a marked linked secondmate primary.
 It also verifies tracked wrapper registration for Claude, Codex, OpenCode, Pi, and Grok.
 `tests/fm-captain-translation-contract.test.sh` proves Ahoy's current marker rule, narrow legacy compatibility exclusions, genuine captain-message near misses, and the shared marker on every supported user-role operational injection.

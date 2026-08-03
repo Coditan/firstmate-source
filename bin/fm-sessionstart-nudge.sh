@@ -22,6 +22,15 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
 RECORD="$STATE/.primary-transcript"
 
+# Leave nothing behind that a reader could still take for a current record when
+# this session cannot publish its own: a previous session's ok record names
+# another session's transcript and owner. Truncation is the fallback for a state
+# directory whose entries cannot be unlinked, because an empty record has no
+# status=ok and a conforming reader refuses it.
+invalidate_transcript_record() {
+  rm -f "$RECORD" 2>/dev/null || : > "$RECORD" 2>/dev/null || true
+}
+
 # Record where this session's transcript lives and which harness process owns
 # it, for the context-reset mechanism that later measures that transcript and
 # binds a receipt to its position. Written on EVERY primary session start,
@@ -33,7 +42,7 @@ RECORD="$STATE/.primary-transcript"
 # docs/sessionstart-nudge.md owns the fields and the consumer contract.
 record_transcript_position() {
   local payload='' pid='' sid='' path='' err='' tmp
-  [ -t 0 ] || IFS= read -r -d '' -t 2 payload
+  [ -t 0 ] || IFS= read -r -d '' -t 2 payload 2>/dev/null
   pid=$(fm_harness_pid) || pid=''
   if [ -z "$pid" ]; then
     err=no-harness-process
@@ -60,12 +69,15 @@ record_transcript_position() {
   tmp="$RECORD.$$"
   if [ -n "$err" ]; then
     printf 'status=error\nerror=%s\nharness_pid=%s\nrecorded_at=%s\n' \
-      "$err" "${pid:-0}" "$(date +%s)" > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 0; }
+      "$err" "$pid" "$(date +%s)" > "$tmp" 2>/dev/null \
+      || { rm -f "$tmp" 2>/dev/null; invalidate_transcript_record; return 0; }
   else
     printf 'status=ok\nharness_pid=%s\nsession_id=%s\ntranscript_path=%s\nrecorded_at=%s\n' \
-      "$pid" "$sid" "$path" "$(date +%s)" > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 0; }
+      "$pid" "$sid" "$path" "$(date +%s)" > "$tmp" 2>/dev/null \
+      || { rm -f "$tmp" 2>/dev/null; invalidate_transcript_record; return 0; }
   fi
-  mv -f "$tmp" "$RECORD" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  mv -f "$tmp" "$RECORD" 2>/dev/null \
+    || { rm -f "$tmp" 2>/dev/null; invalidate_transcript_record; }
   return 0
 }
 

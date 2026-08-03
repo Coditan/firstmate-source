@@ -291,6 +291,60 @@ test_absent_harness_process_is_recorded_as_an_error() {
   pass "fm-sessionstart-nudge: a session whose owning process cannot be identified records a visible error"
 }
 
+test_absent_harness_process_records_an_empty_harness_pid() {
+  local root="$TMP_ROOT/record-empty-pid" fakebin record body
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  make_fake_ps_no_harness "$fakebin"
+  run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD" >/dev/null
+  record="$root/state/.primary-transcript"
+  body=$(cat "$record")
+  grep -qx 'harness_pid=' "$record" \
+    || fail "an unidentified session owner did not leave harness_pid empty: $body"
+  assert_not_contains "$body" "harness_pid=0" \
+    "an unidentified owner was recorded as pid 0, which a liveness check would report as alive"
+  pass "fm-sessionstart-nudge: an unidentified session owner leaves harness_pid empty, not a probeable sentinel"
+}
+
+test_unwritable_state_leaves_no_stale_ok_record() {
+  local root="$TMP_ROOT/record-unwritable" fakebin record body status=0
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  make_fake_ps_holder "$fakebin" 949494
+  record="$root/state/.primary-transcript"
+  printf 'status=ok\nharness_pid=949494\nsession_id=old-session\ntranscript_path=/tmp/old-session.jsonl\nrecorded_at=1\n' \
+    > "$record"
+  chmod 500 "$root/state"
+  run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD" >/dev/null 2>&1 || status=$?
+  chmod 700 "$root/state"
+  expect_code 0 "$status" "session start with an unwritable state directory"
+  body=$(cat "$record" 2>/dev/null || printf '')
+  assert_not_contains "$body" "status=ok" \
+    "a state directory that refused the record kept the previous session's ok record"
+  assert_not_contains "$body" "/tmp/old-session.jsonl" \
+    "a state directory that refused the record kept the previous session's transcript path"
+  pass "fm-sessionstart-nudge: a session start that cannot write its record leaves no stale ok record"
+}
+
+test_failed_record_replace_leaves_no_stale_ok_record() {
+  local root="$TMP_ROOT/record-replace-fails" fakebin record status=0
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  make_fake_ps_holder "$fakebin" 959595
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$fakebin/mv"
+  chmod +x "$fakebin/mv"
+  record="$root/state/.primary-transcript"
+  printf 'status=ok\nharness_pid=959595\nsession_id=old-session\ntranscript_path=/tmp/old-session.jsonl\nrecorded_at=1\n' \
+    > "$record"
+  run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD" >/dev/null 2>&1 || status=$?
+  expect_code 0 "$status" "session start whose record replace fails"
+  [ ! -e "$record" ] \
+    || fail "a failed atomic replace kept the previous session's record: $(cat "$record")"
+  ls "$root"/state/.primary-transcript.* >/dev/null 2>&1 \
+    && fail "a failed atomic replace left its temp file behind"
+  pass "fm-sessionstart-nudge: a record whose atomic replace fails is removed, not left superseded"
+}
+
 test_non_primary_records_nothing() {
   local base="$TMP_ROOT/record-linked-base" root="$TMP_ROOT/record-linked" fakebin
   fm_git_worktree "$base" "$root" fm/sessionstart-record-linked
@@ -393,6 +447,9 @@ test_missing_transcript_path_is_recorded_as_an_error
 test_absent_payload_is_recorded_as_an_error
 test_unwritable_transcript_path_is_recorded_as_an_error
 test_absent_harness_process_is_recorded_as_an_error
+test_absent_harness_process_records_an_empty_harness_pid
+test_unwritable_state_leaves_no_stale_ok_record
+test_failed_record_replace_leaves_no_stale_ok_record
 test_non_primary_records_nothing
 test_opencode_plugin_delivers_exact_nudge_once
 test_tracked_harness_registration
