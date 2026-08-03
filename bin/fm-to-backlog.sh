@@ -228,6 +228,26 @@ while [ "$i" -lt "$UNIT_COUNT" ]; do
   ID[i]="$ORIGIN-${SLUG[i]}"
   [ "${ID[i]}" != "$ORIGIN" ] || fail "units[$i] slug must not be empty"
 
+  # A slug that introduces `-decision-` composes an id bin/fm-decision-hold.sh
+  # already owns, which spells a hold as <origin>-decision-<key>, and
+  # bin/fm-sea-chart.sh reads that marker POSITIONALLY rather than by kind (its
+  # `dkey`, bin/fm-sea-chart.sh lines 291-293). A perfectly ordinary `ship` unit
+  # carrying it is therefore dropped from TAKEABLE (bin/fm-sea-chart.sh:423) and,
+  # once Done, listed under DECIDED (bin/fm-sea-chart.sh:391) as though the
+  # captain had settled it. This is refused rather than written down as an
+  # accepted limit, because a limit that silently swallows units is missed on
+  # reading and a refusal is not - which is the exact defect this script exists
+  # to prevent - and because refusing keeps the header's claim true.
+  # Only `-decision-` is refused. The neighbouring marker("fog") and
+  # marker("oos") parses at bin/fm-sea-chart.sh lines 413 and 416 are gated on
+  # .kind, and both of those kinds are already refused just above, so no slug can
+  # reach them and this refusal must not be widened without a new reason.
+  case "${ID[i]}" in
+    *-decision-*)
+      fail "units[$i] (${SLUG[i]}) may not compose the id ${ID[i]}: it carries the reserved -decision- marker, which bin/fm-decision-hold.sh owns and bin/fm-sea-chart.sh parses positionally rather than by kind, so this unit would be dropped from the chart's takeable work and later read as a settled captain decision"
+      ;;
+  esac
+
   j=0
   while [ "$j" -lt "$i" ]; do
     [ "${SLUG[j]}" != "${SLUG[i]}" ] || fail "duplicate slug in the breakdown: ${SLUG[i]}"
@@ -272,6 +292,16 @@ while [ "$i" -lt "$UNIT_COUNT" ]; do
       [ "$target" != "$i" ] || fail "unit ${SLUG[i]} is blocked by itself"
       DEPS_INT[i]="${DEPS_INT[i]} $target"
     else
+      # The origin is the undertaking every unit here is a slice of, and the
+      # skill forbids ever closing it (.agents/skills/to-backlog/SKILL.md step 6,
+      # "Never close or modify the originating item"), so an edge onto it can
+      # never clear: the unit would sit in `tasks-axi ready` forever and never
+      # reach the frontier. That is the same unsatisfiable-edge class the cycle
+      # refusal below exists to catch, and self-reference through the origin
+      # escapes it only because the origin is not one of this breakdown's own
+      # slugs, which is why the refusal is stated separately here.
+      [ "$dep" != "$ORIGIN" ] \
+        || fail "unit ${SLUG[i]} is blocked by its own origin $ORIGIN, which a breakdown may never close, so that edge could never clear"
       DEPS_EXT[i]="${DEPS_EXT[i]} $dep"
     fi
   done <<EOF

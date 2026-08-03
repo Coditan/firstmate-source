@@ -234,6 +234,18 @@ test_unfileable_breakdowns_are_refused_before_anything_is_written() {
     {"slug":"a","title":"A","delivers":"a","acceptance":["x"],"kind":"captain"}]}' \
     "may not be filed as kind captain" "a unit filed as a captain decision"
 
+  # bin/fm-sea-chart.sh finds `-decision-` positionally, so this id would be read
+  # as a captain decision no matter that its kind is the ordinary ship.
+  refuse "$home" '{"origin":"demo-origin","units":[
+    {"slug":"decision-log-view","title":"A","delivers":"a","acceptance":["x"]}]}' \
+    "reserved -decision- marker" "a slug that composes a captain decision id"
+
+  # The skill may never close the originating undertaking, so this edge could
+  # never clear and the unit would never reach the frontier.
+  refuse "$home" '{"origin":"demo-origin","units":[
+    {"slug":"a","title":"A","delivers":"a","acceptance":["x"],"blocked_by":["demo-origin"]}]}' \
+    "blocked by its own origin" "a unit blocked by the undertaking it is a slice of"
+
   # Read the chart kinds from their owner, so renaming one there cannot quietly
   # reopen the hole this refusal exists to close.
   # shellcheck source=bin/fm-chart-kinds-lib.sh
