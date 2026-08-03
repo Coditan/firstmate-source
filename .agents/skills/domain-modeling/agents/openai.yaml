@@ -1,0 +1,4 @@
+interface:
+  display_name: "Domain Modeling"
+  short_description: "Sharpen terms and record decisions in passing"
+  default_prompt: "Use $domain-modeling to challenge a term that is doing two jobs, check the claim against the thing itself, and record the resolution where the next reader will meet it."
