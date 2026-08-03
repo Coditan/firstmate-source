@@ -569,6 +569,17 @@ The watcher caches each vessel's fetched tree signature and derived priority sep
 The frequency monitor deliberately narrows that compatibility list to its first vessel and fetches it every `FM_FREQUENCY_MONITOR_INTERVAL` seconds.
 Both paths share the same signature and marker implementation, so the slow fallback and fast service cannot drift in their definition of new mail or duplicate one signature during a concurrent check.
 
+## Certsync health check (FM_CERTSYNC_*)
+
+`bin/fm-watch.sh` folds certsync health into the ordinary heartbeat path when a certsync deployment is present under the home.
+The default deployment path is `$FM_HOME/projects/hlr-certsync` with `docker-compose.yml`; `FM_CERTSYNC_PROJECT`, `FM_CERTSYNC_COMPOSE_FILE`, and `FM_CERTSYNC_GRAPH_COMPOSE_FILE` override the project and compose files.
+If the optional graph compose file exists, the watcher adds it to the `docker compose` command; if it is absent, the base compose file is enough.
+The heartbeat runs `docker compose ... exec -T certsync certsync status` with `FM_CERTSYNC_STATE_DB`, `FM_CERTSYNC_HEARTBEAT_FILE`, and `FM_CERTSYNC_DAEMON_STATE` mapped to the status command's `--state-db`, `--heartbeat-file`, and `--daemon-state` arguments.
+Only a confirmed JSON object with `healthy: false` becomes a durable `check` wake keyed as `certsync-health`, with the `reason` field trimmed and bounded in the wake text.
+A `healthy: true` reading clears the unchanged-unhealthy marker and stays quiet.
+Missing project or compose files, missing `docker` or `jq`, empty output, invalid JSON, a missing boolean `healthy` field, and all other unreadable states are unknown and quiet except for the local `state/.watch-triage.log` debug note.
+The command is bounded by `FM_CERTSYNC_HEALTH_TIMEOUT` rather than the general check timeout, and unchanged unhealthy readings re-surface only after `FM_CERTSYNC_HEALTH_RESURFACE`.
+
 ## Environment variables
 
 Runtime tuning via environment variables (defaults shown):
@@ -607,6 +618,14 @@ FM_HEARTBEAT=600        # base seconds between heartbeat scans; no-change heartb
 FM_HEARTBEAT_MAX=7200   # heartbeat backoff cap
 FM_CHECK_INTERVAL=300   # seconds between slow checks (authenticated merge polls, custom checks, or X-mode dispatch)
 FM_CHECK_TIMEOUT=30     # seconds allowed per slow check script
+FM_CERTSYNC_PROJECT=$FM_HOME/projects/hlr-certsync   # certsync deployment directory watched from the heartbeat path when its compose file exists
+FM_CERTSYNC_COMPOSE_FILE=$FM_CERTSYNC_PROJECT/docker-compose.yml   # base Docker Compose file for the certsync status command
+FM_CERTSYNC_GRAPH_COMPOSE_FILE=$FM_CERTSYNC_PROJECT/docker-compose.graph-pem.yml   # optional extra certsync graph compose file; used only when present
+FM_CERTSYNC_STATE_DB=/var/lib/hlr-certsync/certsync-state.sqlite3   # certsync status --state-db argument
+FM_CERTSYNC_HEARTBEAT_FILE=/var/lib/hlr-certsync/certsync-heartbeat.json   # certsync status --heartbeat-file argument
+FM_CERTSYNC_DAEMON_STATE=running   # certsync status --daemon-state argument
+FM_CERTSYNC_HEALTH_TIMEOUT=5   # seconds allowed for the heartbeat's certsync status command
+FM_CERTSYNC_HEALTH_RESURFACE=3600   # seconds before an unchanged unhealthy certsync status is queued again
 FM_CONTEXT_CEILING=300000   # captain-decided token ceiling for the primary session's own context; above it, at a quiet boundary, the watcher queues the stow-then-clear or ask wake (docs/context-reset.md)
 FM_CONTEXT_CAPTAIN_IDLE_SECS=1800   # silence since the last genuine captain prompt below which the captain counts as in live conversation: the watcher asks instead of ordering a reset, and bin/fm-context-reset.sh refuses
 FM_CONTEXT_RECEIPT_MAX_AGE=900   # seconds a state/.stow-receipt stays fresh; the receipt and the reset are meant to happen in one turn

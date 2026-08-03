@@ -50,6 +50,10 @@
 #                          an unenforced one. See docs/context-reset.md.
 #   heartbeat              fleet-scan backstop found an unsurfaced captain-relevant
 #                          status, unless afk is active
+#   check: certsync health: unhealthy: <reason>
+#                          heartbeat found a confirmed unhealthy certsync status
+#                          JSON reading and surfaced it through the ordinary
+#                          durable check wake path
 # For normal supervision, resume the session-start primary-harness protocol
 # after each printed reason. Direct duplicate invocations of this script still
 # no-op through the watcher singleton lock.
@@ -140,6 +144,8 @@ HEARTBEAT=${FM_HEARTBEAT:-600}        # base seconds between heartbeat scans
 HEARTBEAT_MAX=${FM_HEARTBEAT_MAX:-7200}  # heartbeat backoff cap
 CHECK_INTERVAL=${FM_CHECK_INTERVAL:-300}  # seconds between *.check.sh sweeps
 CHECK_TIMEOUT=${FM_CHECK_TIMEOUT:-30}     # seconds allowed per *.check.sh
+CERTSYNC_HEALTH_TIMEOUT=${FM_CERTSYNC_HEALTH_TIMEOUT:-5}  # seconds allowed for certsync heartbeat health
+CERTSYNC_HEALTH_RESURFACE=${FM_CERTSYNC_HEALTH_RESURFACE:-3600}  # seconds before repeating unchanged unhealthy certsync
 CONTEXT_CHECK_INTERVAL=${FM_CONTEXT_CHECK_INTERVAL:-300}  # seconds between context-ceiling reads
 # How long an UNCHANGED context-ceiling report stays quiet before it says so
 # again. Long, because every branch of that check describes a standing condition
@@ -963,6 +969,70 @@ heartbeat_scan_finds_actionable() {
   return 1
 }
 
+FM_CERTSYNC_HEALTH_REASON=
+FM_CERTSYNC_HEALTH_SIGNATURE=
+
+certsync_health_mark_surfaced() {
+  [ -n "$FM_CERTSYNC_HEALTH_SIGNATURE" ] || return 0
+  printf '%s\n' "$FM_CERTSYNC_HEALTH_SIGNATURE" > "$STATE/.certsync-health-surfaced" 2>/dev/null || true
+}
+
+# Read certsync's own monitoring interface and produce one bounded wake reason
+# only for a confirmed unhealthy JSON payload.
+certsync_health_reason() {
+  local project compose graph_compose marker previous timeout_previous out healthy summary
+  FM_CERTSYNC_HEALTH_REASON=
+  FM_CERTSYNC_HEALTH_SIGNATURE=
+  project=${FM_CERTSYNC_PROJECT:-$FM_HOME/projects/hlr-certsync}
+  compose=${FM_CERTSYNC_COMPOSE_FILE:-$project/docker-compose.yml}
+  graph_compose=${FM_CERTSYNC_GRAPH_COMPOSE_FILE:-$project/docker-compose.graph-pem.yml}
+  marker="$STATE/.certsync-health-surfaced"
+
+  [ -d "$project" ] || return 1
+  [ -f "$compose" ] || return 1
+  command -v docker >/dev/null 2>&1 || { triage_log "certsync health unknown (docker missing)"; return 1; }
+  command -v jq >/dev/null 2>&1 || { triage_log "certsync health unknown (jq missing)"; return 1; }
+
+  timeout_previous=$CHECK_TIMEOUT
+  CHECK_TIMEOUT=$CERTSYNC_HEALTH_TIMEOUT
+  if [ -f "$graph_compose" ]; then
+    out=$(run_bounded docker compose -f "$compose" -f "$graph_compose" exec -T certsync certsync status \
+      --state-db "${FM_CERTSYNC_STATE_DB:-/var/lib/hlr-certsync/certsync-state.sqlite3}" \
+      --heartbeat-file "${FM_CERTSYNC_HEARTBEAT_FILE:-/var/lib/hlr-certsync/certsync-heartbeat.json}" \
+      --daemon-state "${FM_CERTSYNC_DAEMON_STATE:-running}")
+  else
+    out=$(run_bounded docker compose -f "$compose" exec -T certsync certsync status \
+      --state-db "${FM_CERTSYNC_STATE_DB:-/var/lib/hlr-certsync/certsync-state.sqlite3}" \
+      --heartbeat-file "${FM_CERTSYNC_HEARTBEAT_FILE:-/var/lib/hlr-certsync/certsync-heartbeat.json}" \
+      --daemon-state "${FM_CERTSYNC_DAEMON_STATE:-running}")
+  fi
+  CHECK_TIMEOUT=$timeout_previous
+
+  [ -n "$out" ] || { triage_log "certsync health unknown (no status output)"; return 1; }
+  healthy=$(printf '%s' "$out" | jq -r 'if (.healthy == true or .healthy == false) then .healthy else empty end' 2>/dev/null) \
+    || { triage_log "certsync health unknown (invalid status JSON)"; return 1; }
+  [ -n "$healthy" ] || { triage_log "certsync health unknown (missing healthy boolean)"; return 1; }
+  if [ "$healthy" = true ]; then
+    rm -f "$marker" 2>/dev/null || true
+    return 1
+  fi
+
+  summary=$(printf '%s' "$out" | jq -r '.reason // "unhealthy"' 2>/dev/null \
+    | tr '\n\t' '  ' \
+    | sed 's/[[:space:]]*$//' \
+    | cut -c1-300)
+  [ -n "$summary" ] || summary=unhealthy
+  FM_CERTSYNC_HEALTH_REASON="check: certsync health: unhealthy: $summary"
+  FM_CERTSYNC_HEALTH_SIGNATURE=$FM_CERTSYNC_HEALTH_REASON
+  previous=$(cat "$marker" 2>/dev/null || true)
+  if [ "$previous" = "$FM_CERTSYNC_HEALTH_SIGNATURE" ] \
+    && [ "$(age_of "$marker")" -lt "$CERTSYNC_HEALTH_RESURFACE" ]; then
+    triage_log "absorbed certsync health (unchanged unhealthy status)"
+    return 1
+  fi
+  return 0
+}
+
 # event_wait_or_sleep: the terminal wait of each supervision cycle. For a home
 # with push-capable windows (herdr), it replaces the blind `sleep POLL` with a
 # bounded wait on the backend's native transition stream, so a crew going
@@ -1588,9 +1658,14 @@ EOF
     # Triage: in always-on mode a heartbeat is benign unless the cheap fleet-scan
     # turns up a captain-relevant status the per-wake path missed. Absorb the
     # no-change case (advance the schedule and back off exactly as wake() would,
-    # without exiting); the away-mode daemon, when present, owns triage and wants
-    # every heartbeat.
-    if afk_present; then
+    # without exiting).
+    if certsync_health_reason; then
+      fm_wake_append check certsync-health "$FM_CERTSYNC_HEALTH_REASON" || exit 1
+      touch "$STATE/.last-heartbeat"
+      certsync_health_mark_surfaced
+      wake "$FM_CERTSYNC_HEALTH_REASON"
+      [ "$WAKE_PENDING" -eq 0 ] || continue
+    elif afk_present; then
       fm_wake_append heartbeat heartbeat heartbeat || exit 1
       touch "$STATE/.last-heartbeat"
       wake "heartbeat"
