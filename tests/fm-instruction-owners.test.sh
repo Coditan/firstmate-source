@@ -60,7 +60,7 @@ test_new_skill_metadata_and_triggers() {
 # domain-modeling is captain-invocable, so it carries its trigger in section 6
 # rather than in section 13, and the enumerating trigger test above cannot check
 # it. It is also adopted third-party material: MIT requires the notice to travel
-# with the work, and the previous adoption from the same upstream shipped without
+# with the work, and the first adoption from the same upstream shipped without
 # one and had to be corrected after the fact. Both obligations are asserted here
 # because both are invisible when broken - the skill still loads and still works.
 test_domain_modeling_owner_is_triggered_and_attributed() {

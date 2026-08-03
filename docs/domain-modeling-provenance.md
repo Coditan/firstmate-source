@@ -5,7 +5,7 @@ It is not an internal invention.
 
 MIT permits exactly what was done here - adapt and ship - and asks one thing in return: the copyright notice and the permission notice travel with the work.
 This page carries them, and it lands in the same commit as the skill, so the notice is never absent from a tree that contains the work.
-That ordering is deliberate: the previous adoption from this same repository shipped without attribution and had to be corrected afterwards (`docs/sea-chart-provenance.md`).
+That ordering is deliberate: the first adoption from this same repository shipped without attribution and had to be corrected afterwards (`docs/sea-chart-provenance.md`).
 
 ## What was inspected
 
@@ -160,7 +160,7 @@ Every item below is a capability the original has and ours does not.
 
 Recorded as findings, not fixed here.
 
-1. **Nothing loads this skill at a fixed step**, so it depends entirely on model invocation and on the two trigger lines in `AGENTS.md`.
+1. **Nothing loads this skill at a fixed step**, so it depends entirely on model invocation and on its two mentions in `AGENTS.md`: the section 6 load trigger, and the section 9 line naming it as owner of the proper-noun boundary, which points at the skill rather than telling anyone when to load it.
    Dropped item 5.
    The most natural fixed points would be a scout report's completion and a brief that is about to publish a claim outward.
 2. **Cross-repository term collisions have no discovery mechanism**, only a manual disambiguation once somebody notices.
