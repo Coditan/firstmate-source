@@ -1924,6 +1924,7 @@ test_dangling_blocker_surfaces_ready_with_integrity_warning() {
   home=$(make_home dangling-gate)
   cat > "$home/data/backlog.md" <<'EOF'
 ## In flight
+- [ ] active-phantom - Active held work with stale token blocked-by: ghost-active - waits (repo: alpha) (kind: ship) (hold: external wait) (hold-kind: external)
 
 ## Queued
 - [ ] phantom-item - Ready work masked as blocked blocked-by: ghost-x - waits (repo: alpha) (kind: ship)
@@ -1931,8 +1932,17 @@ test_dangling_blocker_surfaces_ready_with_integrity_warning() {
 - [ ] real-blocked - Genuinely blocked blocked-by: real-target - waits (repo: alpha) (kind: ship)
 
 ## Done
+- [x] done-phantom - Completed work with stale token blocked-by: ghost-done - waits (repo: alpha) (kind: ship) (done 2026-07-11)
 EOF
   : > "$home/data/done-archive.md"
+  mkdir -p "$home/projects/active-phantom"
+  fm_write_meta "$home/state/active-phantom.meta" \
+    "window=firstmate:fm-active-phantom" \
+    "worktree=$home/projects/active-phantom" \
+    "project=alpha" \
+    "harness=codex" \
+    "kind=ship"
+  printf 'working: active stale token\n' > "$home/state/active-phantom.status"
   fakebin=$(make_fakebin "$home")
   json=$(run "$home" "$fakebin" --json)
   printf '%s' "$json" | jq -e '
@@ -1940,6 +1950,8 @@ EOF
     and (.gates | any(.[]; .id == "real-blocked" and .blocked_by == "real-target"))
     and (.integrity | any(.[]; .id == "phantom-item" and .phantom_blocked_by == "ghost-x"))
     and (.integrity | any(.[]; .id == "real-blocked") | not)
+    and (.integrity | any(.[]; .id == "done-phantom") | not)
+    and (.integrity | any(.[]; .id == "active-phantom") | not)
   ' >/dev/null || fail "a dangling-blocked item was not surfaced as ready-with-integrity-warning: $json"
   pass "Bearings surfaces a phantom-blocked item as ready plus a loud integrity warning, not as blocked"
 }
@@ -1963,6 +1975,7 @@ test_secondmate_dangling_blocker_surfaces_ready_with_integrity_warning() {
 EOF
   cat > "$mate/data/backlog.md" <<'EOF'
 ## In flight
+- [ ] active-phantom - Active secondmate work with stale token blocked-by: ghost-active - waits (repo: alpha) (kind: ship) (hold: external wait) (hold-kind: external)
 
 ## Queued
 - [ ] phantom-item - Ready secondmate work masked as blocked blocked-by: ghost-x - waits (repo: alpha) (kind: ship)
@@ -1970,8 +1983,17 @@ EOF
 - [ ] real-blocked - Genuinely blocked blocked-by: real-target - waits (repo: alpha) (kind: ship)
 
 ## Done
+- [x] done-phantom - Completed secondmate work with stale token blocked-by: ghost-done - waits (repo: alpha) (kind: ship) (done 2026-07-11)
 EOF
   : > "$mate/data/done-archive.md"
+  mkdir -p "$mate/projects/active-phantom"
+  fm_write_meta "$mate/state/active-phantom.meta" \
+    "window=firstmate:fm-active-phantom" \
+    "worktree=$mate/projects/active-phantom" \
+    "project=alpha" \
+    "harness=codex" \
+    "kind=ship"
+  printf 'working: active secondmate stale token\n' > "$mate/state/active-phantom.status"
   fakebin=$(make_fakebin "$home")
   json=$(run "$home" "$fakebin" --json)
   printf '%s' "$json" | jq -e '
@@ -1979,6 +2001,8 @@ EOF
     and (.gates | any(.[]; .id == "real-blocked" and .owner == "mate" and .blocked_by == "real-target"))
     and (.integrity | any(.[]; .id == "phantom-item" and .owner == "mate" and .phantom_blocked_by == "ghost-x"))
     and (.integrity | any(.[]; .id == "real-blocked") | not)
+    and (.integrity | any(.[]; .id == "done-phantom" and .owner == "mate") | not)
+    and (.integrity | any(.[]; .id == "active-phantom" and .owner == "mate") | not)
   ' >/dev/null || fail "a secondmate dangling blocker was not surfaced as ready-with-integrity-warning: $json"
   pass "Bearings surfaces a secondmate phantom blocker as ready plus a loud integrity warning"
 }

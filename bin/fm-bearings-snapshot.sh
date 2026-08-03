@@ -439,7 +439,11 @@ MODEL=$(printf '%s' "$SNAP" | jq \
   # a silent gate to any reader that trusts the token. Surface it loudly here so
   # the edge gets cleared, never bury it under a blocked line.
   | ([ .backlog.records[]
-       | select(.structured and ((.dangling_blocker_ids // []) | length) > 0)
+       | . as $record
+       | select(.structured and
+           (.state == "queued" or
+            (.state == "in_flight" and .current_role == "held" and ($working_ids | index($record.id) | not))))
+       | select(((.dangling_blocker_ids // []) | length) > 0)
        | {id, title:(.title | trunc(60)),
           phantom_blocked_by:((.dangling_blocker_ids // []) | join(",") | trunc(120)),
           owner:"(main)"}
