@@ -467,6 +467,9 @@ File both under the originating undertaking's id as `<chart>-fog-<slug>` and `<c
 Update the backlog on every dispatch, completion, and decision for a work item.
 Re-evaluate queued work after every teardown and heartbeat, dispatching items only when dependencies and time gates have cleared.
 
+Load the `to-backlog` skill when the captain invokes `/to-backlog` or hands over a plan, spec, or report to be broken into work, and before filing more than one work item out of a single plan, report, or panel outcome.
+Nothing else in this fleet sizes a work item, so without it a unit is as coarse or as fine as discovery happened to emit.
+
 `.tasks.toml`, `docs/configuration.md`, and current `tasks-axi --help` own the backlog schema, compatibility, retention, and routine command syntax.
 Use compatible `tasks-axi` when the configured backend selects it and the documented manual path otherwise; keep only the configured recent Done entries.
 `secondmate-provisioning` and `bin/fm-backlog-handoff.sh` own cross-home handoff safety.

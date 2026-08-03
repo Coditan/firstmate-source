@@ -8,6 +8,17 @@ This document is that correction, and it is where the required notice is carried
 MIT permits exactly what was done here - amend, rename, and ship - and asks one thing in return: the copyright notice and the permission notice travel with the work.
 Carrying them was the unmet condition, so this is a licence term being met, not a courtesy being paid.
 
+## The dropped half, since adopted separately
+
+This page's root finding is that Wayfinder is a planning instrument and our amendment kept only the half that shows the result.
+The captain decided that on 2026-08-03 and chose to restore authoring.
+The authoring half now exists in this repository as `/to-backlog` and `bin/fm-to-backlog.sh`, adopted from the **to-tickets** skill in the same repository, by the same author, under the same licence, and read at the same commit.
+[`to-backlog-provenance.md`](to-backlog-provenance.md) is that adoption's own provenance page, and this page's sibling.
+Units authored there are filed under the originating undertaking's id, which is this chart's own membership rule, so they appear on the chart with no further wiring.
+
+The chart itself is unchanged by that adoption and is still read-only.
+Restoring the chart's own authoring acts is separate routed work, so the read-only rule stated in `.agents/skills/sea-chart/SKILL.md` still binds in full until that work lands.
+
 ## What was inspected
 
 | | |
