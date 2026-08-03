@@ -162,6 +162,9 @@ INVENTORY="$SCRIPT_DIR/fm-decision-inventory.sh"
 # shellcheck source=bin/fm-chart-kinds-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-chart-kinds-lib.sh"  # FM_CHART_KINDS: fog and out-of-course
+# shellcheck source=bin/fm-blocker-class-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-blocker-class-lib.sh"  # FM_BLOCKER_CLASS_JQ: one owner of "is a blocked-by target real"
 
 FM_ROOT="${FM_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
@@ -286,7 +289,7 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   --argjson modes "$MODE_MAP" \
   --arg fog_kind "$FM_CHART_KIND_FOG" \
   --arg oos_kind "$FM_CHART_KIND_OUT_OF_COURSE" \
-  --argjson chart_kinds "$(fm_chart_kinds_json)" '
+  --argjson chart_kinds "$(fm_chart_kinds_json)" "$FM_BLOCKER_CLASS_JQ"'
   def member($id): $id == $chart or ($id | startswith($chart + "-"));
   def dkey: . as $id
     | ($id | index("-decision-")) as $at
@@ -304,7 +307,18 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # twin of the same id, because presenting gated work as takeable invites
   # someone to pick up something still held, while holding ready work back only
   # leaves it sitting. See the header for where this and the snapshot diverge.
-  def unresolved($done): [ (.blocked_by_ids // .unresolved_blocker_ids // [])[] | select($done[.] != true) ];
+  # $known holds every id that is a real record in the live backlog or the archive
+  # (built once in the body). A blocker whose target is real nowhere is dangling -
+  # a data-integrity fault, not a leg that can hold this one - so it is excluded
+  # here and named separately, exactly as fm-fleet-snapshot and fm-backlog-lint do.
+  def unresolved($done; $known):
+    [ (.blocked_by_ids // .unresolved_blocker_ids // [])[]
+      | select(fm_blocker_is_real(.; $known; {}) and ($done[.] != true)) ];
+
+  # Blockers this record names that are real in neither the backlog nor the archive.
+  # These are the reason the snapshot fell the record off the actionable surface
+  # while nothing real held it: a mistyped, renamed, or never-created target.
+  def dangling_edges($known): fm_dangling_blockers(.blocked_by_ids; $known; {});
 
   # Blockers this record names that ARE Done, but only somewhere the live backlog
   # alone cannot see - the archive. These are what the snapshot still counts as
@@ -322,8 +336,8 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # The stale-edge clause comes last of the named ones ON PURPOSE: reaching it
   # means every other clause of that predicate already passes, which is what
   # makes the claim that the decision can be answered now true rather than hoped.
-  def withheld_reason($done; $live_done):
-    if (unresolved($done) | length) > 0
+  def withheld_reason($done; $live_done; $known):
+    if (unresolved($done; $known) | length) > 0
     then {cause: "blocked",
           why: "blocked by another record that has not resolved, so it never reaches the actionable surface"}
     elif .state != "queued"
@@ -340,6 +354,9 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
     elif (stale_edges($done; $live_done) | length) > 0
     then {cause: "stale-edge",
           why: "held off by a stale edge only: it names \(stale_edges($done; $live_done) | join(", ")) as blocking, and that lies Done in the archive where a reader of the live backlog alone cannot see it. Nothing is holding this decision - it can be answered now, and the blocked-by edge wants clearing."}
+    elif (dangling_edges($known) | length) > 0
+    then {cause: "dangling-edge",
+          why: "held off by a dangling edge only: it names \(dangling_edges($known) | join(", ")) as blocking, and that is a real record in neither the backlog nor the archive - never created, renamed, or mistyped. Nothing is holding this decision - it can be answered now, and the blocked-by edge wants clearing."}
     else {cause: "not-returned",
           why: "present in the backlog but not returned as actionable"}
     end;
@@ -352,6 +369,9 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
      | map({key: .[0].id, value: all(.[]; .state == "done")}) | from_entries) as $done
   | ([ $live.records[]? | select(.structured and .id != null) ] | group_by(.id)
      | map({key: .[0].id, value: all(.[]; .state == "done")}) | from_entries) as $live_done
+  # Every id that is a real record somewhere the chart can see. A blocked-by target
+  # absent from this map is dangling, not a leg that holds the record.
+  | ([ $all[] | select(.id != null) | {key:.id, value:true} ] | from_entries) as $known
   | ([ $all[] | select(member(.id)) ]) as $mine
 
   # The destination, read from records the fleet already keeps, never invented here.
@@ -383,9 +403,9 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   | ([ $mine[] | select(open_state and .kind == "captain") ]) as $own_decision_records
   | ([ $own_decision_records[]
        | select(.id as $id | ($seen | index($id)) == null)
-       | withheld_reason($done; $live_done) as $reason
+       | withheld_reason($done; $live_done; $known) as $reason
        | {id, key:(.id | dkey), title:(.title // ""),
-          held_by:(unresolved($done) | join(", ")),
+          held_by:(unresolved($done; $known) | join(", ")),
           cause: $reason.cause,
           why: $reason.why} ]) as $withheld
 
@@ -416,16 +436,20 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
        | {id, bound:((.id | marker("oos")) // .id), title:(.title // ""),
           why:((.hold_reason // "-"))} ]) as $out_of_course
 
-  # Takeable: work on this course with nothing unresolved holding it.
+  # Takeable: work on this course with nothing REAL unresolved holding it. A
+  # dangling blocked-by edge - a target real in neither the backlog nor the archive
+  # - never held it, so it stays takeable and the stale edge is named on the row so
+  # it gets cleared rather than silently gating the work off the chart forever.
   | ([ $mine[]
        | select(open_state)
        | select(.id != $chart)          # the undertaking itself is the destination, not a leg of it
        | select((.id | dkey) == null)
        | select(.kind as $k | ($chart_kinds | index($k)) == null)
        | select(.kind != "captain")
-       | select((unresolved($done) | length) == 0)
+       | select((unresolved($done; $known) | length) == 0)
        | select(.hold_reason == null)
        | {id, title:(.title // ""), repo:(.repo // "-"),
+          dangling_blocked_by: (dangling_edges($known)),
           navigation: {
             unsupervised_edit: true,
             landing: {
@@ -521,7 +545,10 @@ if [ "$MODE" = "summary" ]; then
       "DECIDED:", (.decided[] | "  + \(.id)  (\(.closed))"), "" else empty end),
     (if (.takeable | length) > 0 then
       "TAKEABLE NOW:",
-      (.takeable[] | "  > \(.id)\n      unsupervised edit: \(.navigation.unsupervised_edit)   landing: \(.navigation.landing.mode)\n      \(.navigation.landing.requires)"),
+      (.takeable[] | "  > \(.id)\n      unsupervised edit: \(.navigation.unsupervised_edit)   landing: \(.navigation.landing.mode)\n      \(.navigation.landing.requires)" +
+        (if ((.dangling_blocked_by // []) | length) > 0
+         then "\n      ! stale edge to clear: names \((.dangling_blocked_by | join(", "))) as blocking, a real record nowhere - never held this"
+         else "" end)),
       "" else empty end),
     (if (.fog | length) > 0 then
       "FOG:", (.fog[] | "  ~ \(.patch): \(.title)\n      \(.why)"), "" else empty end),

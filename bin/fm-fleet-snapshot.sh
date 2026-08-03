@@ -69,6 +69,7 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 BACKLOG="$DATA/backlog.md"
+ARCHIVE="$DATA/done-archive.md"
 SNAPSHOT_NOW=${FM_SNAPSHOT_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
 if [ -n "${FM_SNAPSHOT_NOW_EPOCH:-}" ]; then
   SNAPSHOT_EPOCH=$FM_SNAPSHOT_NOW_EPOCH
@@ -138,6 +139,9 @@ validate_positive_bound FM_SNAPSHOT_REGISTRY_TIMEOUT "$FM_SNAPSHOT_REGISTRY_TIME
 # shellcheck source=bin/fm-ff-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-ff-lib.sh"  # validate_secondmate_home: shared seeded-home boundary checks
+# shellcheck source=bin/fm-blocker-class-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-blocker-class-lib.sh"  # FM_BLOCKER_CLASS_JQ: one owner of "is a blocked-by target real"
 
 usage() {
   cat <<'EOF'
@@ -1357,6 +1361,17 @@ if [ "$OUTPUT_MODE" = secondmate-home-summary ]; then
 fi
 
 SCOUT_REPORTS_JSON=$(scout_report_lines)
+# The per-file parser resolves a blocked-by target only against the file it read,
+# so a target that lives in neither the live backlog nor the done archive - never
+# created, renamed, or mistyped - is indistinguishable from an unfinished blocker
+# and gates the item forever. Read the archive's structured ids here so blocked-by
+# resolution spans both files, matching fm-backlog-lint's dangling classification.
+if [ -f "$ARCHIVE" ]; then
+  ARCHIVE_JSON=$(backlog_json "$ARCHIVE") \
+    || { echo "fm-fleet-snapshot: done archive read failed" >&2; exit 1; }
+else
+  ARCHIVE_JSON='{"records":[]}'
+fi
 MAIN_INVENTORY_JSON=$(main_inventory_json "$BACKLOG_JSON" "$TASKS_JSON") \
   || { echo "fm-fleet-snapshot: main inventory summary failed" >&2; exit 1; }
 SECONDMATE_CURRENT_JSON=$(secondmate_current_json "$TASKS_JSON") \
@@ -1371,6 +1386,7 @@ json_stdin \
   "$SCOUT_REPORTS_JSON" \
   "$SECONDMATE_CURRENT_JSON" \
   "$SECONDMATE_LANDED_JSON" \
+  "$ARCHIVE_JSON" \
   | jq -n \
   --arg generated "$SNAPSHOT_NOW" \
   --arg fm_home "$FM_HOME" \
@@ -1379,8 +1395,24 @@ json_stdin \
   --arg data "$DATA" \
   --arg config "$CONFIG" \
   --arg projects "$PROJECTS" \
-  'input as $backlog | input as $tasks | input as $main_inventory
+  "$FM_BLOCKER_CLASS_JQ"'input as $raw_backlog | input as $tasks | input as $main_inventory
    | input as $scout_reports | input as $secondmate_current | input as $secondmate_landed
+   | input as $archive
+   | ([ $raw_backlog.records[]? | select(.structured and .id != null) | {key:.id, value:true} ]
+       | from_entries) as $live_ids
+   | ([ $archive.records[]? | select(.structured and .id != null) | {key:.id, value:true} ]
+       | from_entries) as $archive_ids
+   # A blocked-by token whose target is real nowhere is a data-integrity fault, not
+   # a gate: record it as dangling_blocker_ids and drop it from unresolved_blocker_ids
+   # so it never silently holds ready work off the actionable surface. A target still
+   # present as a not-Done record (live or archived) keeps gating exactly as before.
+   | ($raw_backlog | .records |= map(
+       if .structured then
+         fm_dangling_blockers(.blocked_by_ids; $live_ids; $archive_ids) as $dangling
+         | .dangling_blocker_ids = $dangling
+         | .unresolved_blocker_ids =
+             [ (.unresolved_blocker_ids // [])[] | select(. as $b | ($dangling | index($b)) == null) ]
+       else . + {dangling_blocker_ids: []} end)) as $backlog
    | def backlog_by_id($id): ($backlog.records[]? | select(.structured == true and .id == $id) | .) // null;
    def task_by_id($id): ($tasks[]? | select(.id == $id) | .) // null;
    def report_kind($id): (task_by_id($id).kind // backlog_by_id($id).kind // "scout");

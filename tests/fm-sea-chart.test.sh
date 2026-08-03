@@ -504,6 +504,44 @@ EOF
   pass "the unsupervised marking is a pair whose second half is never empty"
 }
 
+test_a_dangling_blocker_stops_hiding_takeable_work_and_is_named() {
+  # A blocked-by target that is a real record in neither the backlog nor the
+  # archive - never created, renamed, or mistyped - never held anything. The
+  # snapshot still counts it as unresolved and would drop the work off the chart
+  # with no footnote; the chart must keep it takeable and name the stale edge, and
+  # must surface a phantom-blocked captain decision as answerable now.
+  local home cap out live
+  home=$(make_home dangling)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-phantom - Ready leg masked as blocked blocked-by: ghost-leg (repo: r) (kind: ship) (since 2026-07-30)
+- [ ] voy-real-target - A real leg (repo: r) (kind: ship) (since 2026-07-30)
+- [ ] voy-real-blocked - Genuinely blocked blocked-by: voy-real-target (repo: r) (kind: ship) (since 2026-07-30)
+- [ ] voy-decision - A captain call held by a phantom blocked-by: ghost-dec (repo: r) (kind: captain) (since 2026-07-28) (hold: Which route) (hold-kind: captain)
+EOF
+  : > "$home/data/done-archive.md"
+  # The reproduction: the per-file reader still counts the phantom as unresolved.
+  live=$("$ROOT/bin/fm-fleet-snapshot.sh" --backlog-json "$home/data/backlog.md")
+  [ "$(printf '%s' "$live" | jq -r '[.records[]|select(.id=="voy-phantom")|.unresolved_blocker_ids[]]|join(",")')" = "ghost-leg" ] \
+    || fail "the reproduction is stale: the per-file reader now drops phantom blockers on its own. Re-derive the chart's blocker resolution before relaxing this."
+
+  cap=$(capture dangling)
+  out=$(chart_json "$home" voy "$cap")
+  # The phantom-blocked leg is takeable and names the stale edge to clear.
+  printf '%s' "$out" | jq -e '
+    (.takeable | any(.[]; .id == "voy-phantom" and (.dangling_blocked_by == ["ghost-leg"])))
+    and (.takeable | any(.[]; .id == "voy-real-blocked") | not)
+  ' >/dev/null || fail "a phantom-blocked leg must be takeable and name its dangling edge, and a real block must still hold: $out"
+  # The phantom-blocked captain decision is recovered as answerable now.
+  printf '%s' "$out" | jq -e '
+    .withheld | any(.[]; .id == "voy-decision" and .cause == "dangling-edge")
+  ' >/dev/null || fail "a phantom-blocked captain decision must surface as a dangling-edge that can be answered now: $out"
+  pass "a dangling blocker stops hiding takeable work, names the stale edge, and recovers a phantom-blocked decision"
+}
+
 test_membership_is_scoped_and_stated() {
   local home cap out
   home=$(make_home member)
@@ -574,6 +612,7 @@ test_both_surfaces_state_the_boundary_between_them() {
 test_the_silent_loss_is_reproduced_then_absent
 test_a_secondmate_decision_reaches_the_merged_surface_then_stays_off_this_chart
 test_a_blocker_that_is_done_in_the_archive_no_longer_hides_takeable_work
+test_a_dangling_blocker_stops_hiding_takeable_work_and_is_named
 test_an_archived_twin_never_cancels_a_live_blocker
 test_a_captain_thread_without_a_decision_key_is_recovered
 test_withheld_records_name_their_own_cause

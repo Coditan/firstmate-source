@@ -1890,6 +1890,35 @@ test_chat_contract_four_sections() {
   pass "the /bearings skill states the four-section chat contract in order, with empty-states and the At Anchor exclusion"
 }
 
+# A queued item whose only blocked-by target is real in neither the backlog nor
+# the archive is READY, not blocked: it must appear under Charted Next with no
+# blocker AND be named in the loud integrity surface, never buried as blocked. A
+# genuinely blocked item still shows its real blocker and stays off integrity.
+test_dangling_blocker_surfaces_ready_with_integrity_warning() {
+  local home fakebin json
+  home=$(make_home dangling-gate)
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] phantom-item - Ready work masked as blocked blocked-by: ghost-x - waits (repo: alpha) (kind: ship)
+- [ ] real-target - A genuine blocker (repo: alpha) (kind: ship)
+- [ ] real-blocked - Genuinely blocked blocked-by: real-target - waits (repo: alpha) (kind: ship)
+
+## Done
+EOF
+  : > "$home/data/done-archive.md"
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    (.gates | any(.[]; .id == "phantom-item" and .blocked_by == "-"))
+    and (.gates | any(.[]; .id == "real-blocked" and .blocked_by == "real-target"))
+    and (.integrity | any(.[]; .id == "phantom-item" and .phantom_blocked_by == "ghost-x"))
+    and (.integrity | any(.[]; .id == "real-blocked") | not)
+  ' >/dev/null || fail "a dangling-blocked item was not surfaced as ready-with-integrity-warning: $json"
+  pass "Bearings surfaces a phantom-blocked item as ready plus a loud integrity warning, not as blocked"
+}
+
 test_domain_alpha_stale_parent_event_does_not_become_current_work
 test_gnu_stat_uses_file_formats_without_bsd_fallback_pollution
 test_parent_activity_evidence_is_bounded_and_disclosed
@@ -1921,6 +1950,7 @@ test_main_orphan_counterfactual_meta_clears_inventory_warning
 test_mixed_secondmate_roles_partial_state_and_captain_readiness
 test_main_captain_readiness_matches_secondmate_projection
 test_chat_contract_four_sections
+test_dangling_blocker_surfaces_ready_with_integrity_warning
 test_completed_scout_report_not_pending
 test_open_decision_surfaces_end_to_end
 test_report_pointers_surface
