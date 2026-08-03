@@ -42,7 +42,7 @@ This format covers only a decision that has already been made.
 Then route by what the decision is about.
 
 - **A decision about how this fleet operates**, already made, goes in the home's dated decision record under `data/decisions/`, named `<YYYY-MM-DD>-<slug>.md`.
-  This is the same durable decision file that `decision-hold-lifecycle` step 7 records and links when a captain hold is resolved, so a resolved hold and a decision recorded in passing land in one place rather than two.
+  That location is a firstmate-home convention for where such a record is kept rather than a constraint any other owner enforces, and pointing a resolved hold's `--decision-file` at the same place keeps one decision in one place rather than two.
 - **A decision about one project** goes wherever that project already keeps its decisions.
   If it keeps none, it goes in that project's committed `AGENTS.md`.
   Do not create a new decision tree beside a store the project already has; a second store is how one decision comes to have two records that disagree.

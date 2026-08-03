@@ -7,6 +7,7 @@ The routing itself is owned by `AGENTS.md` section 6; this file owns only the sh
 
 A term that almost every contributor to one project needs goes in a `## Language` section of that project's committed `AGENTS.md`.
 A term about how this fleet itself operates goes in the home's `data/learnings.md` instead, because it is not project knowledge and does not belong in a project's memory.
+Such an entry follows the learnings contract `AGENTS.md` owns, dated and evidence-backed and curated and written inspect-then-update, not the `**Term**:` and `_Avoid_` shape below, which is for the project-side `## Language` section only.
 
 Create the `## Language` section lazily, when the first term is resolved.
 An empty glossary added in advance is a file nobody reads and nobody maintains.

@@ -23,7 +23,7 @@ The skill ships no code, and neither does ours.
 
 Two characters are normalised in the quotations below, and nothing else in a quotation is altered.
 The source writes em dashes and this repository forbids them, so a quoted em dash becomes a plain dash.
-The source writes the arrow in a relationship as `→` and no file in this repository does, so a quoted arrow becomes `->`.
+The source writes the arrow in a relationship as `→` and no other tracked Markdown file in this repository does, so a quoted arrow becomes `->`.
 `...` marks every elision.
 Bold inside a quotation is the original's own.
 
@@ -118,7 +118,7 @@ Recognisably the original's, and load-bearing in ours.
 - **The boundary against `AGENTS.md` section 9 - ours, and necessary.**
   Section 9 requires translating firstmate's own internal machinery out of captain-facing text, so a rule forbidding translation reads as its contradiction until the categories are separated.
   Ours states the discriminator: section 9 covers a word firstmate invented for its own operation, where plain English is better; the terminology rule covers somebody's name for a thing, where any rendering is worse.
-  The test given is whether the word would appear in a search of the code, the repository list, or the tool's own documentation.
+  The two questions run in order: section 9 alone decides whether a word may reach the captain, and only then does the terminology rule decide that a name which may be written is written as it is rather than translated, so firstmate's own harness and backend names stay banned from captain-facing text despite being names.
 - **The handoff for a decision that is not ours to make - ours, forced by an existing owner.**
   `decision-hold-lifecycle` is this repository's single owner of unresolved captain decisions.
   The original has no such separation, because its author decides and records in one motion.

@@ -58,17 +58,27 @@ test_scout_remains_allowed_house_vocabulary() {
 # looks like a refutation of the other, and firstmate has already resolved the
 # collision the wrong way in captain-facing German. Section 9 therefore carries
 # the boundary inline, because the turn that writes Werkbank is exactly a turn
-# on which no skill was loaded.
+# on which no skill was loaded. The boundary is about RENDERING only: it must
+# never read as licence to name a harness or backend to the captain, so this
+# also pins that section 9's own ban and mapping survive beside it.
 test_section_9_exempts_proper_nouns_from_translation() {
   local contract
   contract=$(section_9)
-  assert_contains "$contract" "This contract covers words firstmate invented for its own operation, never a proper noun" \
+  assert_contains "$contract" "outside firstmate's own machinery is actually called is its name" \
     "section 9 does not separate its own vocabulary from a domain's proper nouns"
-  assert_contains "$contract" "is never translated, in any language, because a translated proper noun is unfindable" \
-    "section 9 does not state why a proper noun survives translation"
+  assert_contains "$contract" "it is written as it is, in any language, because a translated proper noun is unfindable" \
+    "section 9 does not state why a legitimately written proper noun survives translation"
+  assert_contains "$contract" "That governs rendering only and changes nothing about which terms this contract bans" \
+    "section 9's proper-noun sentence must stay scoped to rendering"
+  assert_contains "$contract" "harness, backend, and runtime names are proper nouns too and the ban above still keeps every one of them out of captain-facing text" \
+    "section 9 must not let a proper noun escape its do-not-expose list"
+  assert_contains "$contract" "harness names, runtime backend names" \
+    "section 9 lost its ban on exposing harness and runtime backend names"
+  assert_contains "$contract" "harness, backend, runtime, or adapter -> worker runtime or tool" \
+    "section 9 lost its harness and backend rewrite mapping"
   assert_contains "$contract" '`domain-modeling` owns that boundary' \
     "section 9 does not point at the owner of the proper-noun boundary"
-  pass "section 9 exempts a domain's proper nouns and names their owner"
+  pass "section 9 keeps a proper noun untranslated without exempting it from the ban"
 }
 
 test_compressed_safety_labels_have_plain_renderings() {

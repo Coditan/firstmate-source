@@ -70,7 +70,7 @@ Where it goes is owned by `AGENTS.md` section 6, which this skill applies rather
 
 - A term that almost every contributor to one project needs is knowledge about that project, so it belongs in that project's committed `AGENTS.md`.
   [`GLOSSARY-FORMAT.md`](./GLOSSARY-FORMAT.md) owns how the entry is written.
-- A term or fact about how this fleet itself operates belongs in the home's `data/learnings.md`.
+- A term or fact about how this fleet itself operates belongs in the home's `data/learnings.md`, written to the learnings contract `AGENTS.md` owns rather than to the glossary shape.
 - A decision that clears the bar in [`DECISION-RECORD-FORMAT.md`](./DECISION-RECORD-FORMAT.md) belongs in a durable decision record, which that file locates.
 - A captain's own preference about wording or register belongs in `data/captain.md`.
 
@@ -87,6 +87,9 @@ workbench stays workbench and is never Werkbank.
 Treehouse stays Treehouse and is never Baumhaus.
 The same holds for Wayfinder, no-mistakes, Bridge, Lavish, graphify, and tasks-axi.
 
+This rule governs how a name is written wherever it legitimately appears, never whether it may appear at all.
+Another rule can still keep a name out of a particular audience's text, and `AGENTS.md` section 9 does exactly that for captain-facing text.
+
 Translating a proper noun does not make it clearer, it makes it unfindable.
 Nobody searching for Werkbank finds anything, because nothing anywhere is called that.
 The cost lands on the next reader, who now cannot connect the sentence to the thing.
@@ -99,10 +102,10 @@ These two rules point in opposite directions and are easy to confuse, so hold th
 Section 9 owns that list in full and is unchanged by this rule.
 
 This rule protects the opposite category.
-Section 9 covers a word firstmate invented to describe its own operation, and a plain-English rendering of it is strictly better for the reader.
-This rule covers a word that is somebody's name for a thing, where any rendering is strictly worse.
-When unsure which applies, ask whether the word would appear in a search of the code, the repository list, or the tool's own documentation.
-If it would, it is a name, and it stays.
+Section 9 covers a word firstmate invented to describe its own operation, where a plain-English rendering is strictly better for the reader, and it alone decides which words may reach the captain at all.
+This rule covers a word that is somebody's name for a thing, where any rendering is strictly worse, and it decides only how such a name is written where it is legitimately written.
+Firstmate's own harness, backend, and runtime names are proper nouns too, and section 9 still bans them from captain-facing text; being a name is never a reason a word survives that ban.
+Ask the two questions in that order: section 9 decides whether the word may reach this reader, and only a word that may be written is then written as its owner spells it rather than translated.
 
 ### Register
 

@@ -81,8 +81,10 @@ test_domain_modeling_owner_is_triggered_and_attributed() {
   # keeps it from reading as a contradiction of section 9.
   assert_grep "never Werkbank" "$DOMAIN" "domain-modeling lost the proper-noun example that triggered the rule"
   assert_grep "German is written per DU, never Sie" "$DOMAIN" "domain-modeling lost the register rule"
-  assert_grep "Section 9 covers a word firstmate invented to describe its own operation" "$DOMAIN" \
+  assert_grep "Section 9 covers a word firstmate invented to describe its own operation, where a plain-English rendering is strictly better for the reader, and it alone decides which words may reach the captain at all" "$DOMAIN" \
     "domain-modeling lost the discriminator against section 9"
+  assert_grep "being a name is never a reason a word survives that ban" "$DOMAIN" \
+    "domain-modeling must not exempt firstmate's own harness or backend names from section 9"
 
   # Adopted whole, so the moves and the bar must survive intact.
   for phrase in \
