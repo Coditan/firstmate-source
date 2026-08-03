@@ -130,6 +130,7 @@ state/               volatile runtime signals; gitignored
   .wake-queue        durable queued wakes: epoch<TAB>seq<TAB>kind<TAB>key<TAB>payload
   .afk               durable away-mode flag; present = sub-supervisor may inject escalations (set by /afk, cleared on user return)
   .stow-receipt .context-reset.log  proof that this session's durable knowledge was filed, bound to the transcript position it was filed at, and the durable record of every context-reset refusal or completed reset (docs/context-reset.md)
+  grossreinschiff.last-sweep  epoch and date of this home's last completed weekly cleanup sweep; written only by `bin/fm-grossreinschiff-due.sh --record`, and absent or unparseable means never swept (docs/grossreinschiff.md)
   .parked-<window-key>  firstmate-owned declaration that a relayed terminal task waits only on external human action; created via `bin/fm-mark-parked.sh <window>` (bin/fm-watch.sh's `mark_parked`), never by hand
   .watch.lock .wake-queue.lock watcher singleton and queue serialization locks
   .hash-* .count-* .stale-* .stale-since-* .paused-* .parkedmeta-* .parkedresurfaced-* .wedge-escalations-* .wedgeheld-* .seen-* .hb-surfaced-* .last-* .heartbeat-streak .bridge-* .context-ceiling-surfaced   watcher internals; never touch
@@ -242,6 +243,10 @@ Firstmate never writes a project's `AGENTS.md` directly.
 A crewmate creates or updates it lazily through the project's selected delivery path, using `bin/fm-ensure-agents-md.sh` and preferring pointers to authoritative sources over copied detail.
 Keep fleet delivery posture and captain-private strategy out of project memory.
 When the captain invokes `/stow`, load the `stow` skill for the complete knowledge-routing and unfinished-work sweep.
+
+Records, instructions, branches, tools, and workspaces also stop being true, and nothing re-measures them on its own.
+`Großreinschiff` is the weekly Thursday sweep that finds them; load the `grossreinschiff` skill when the captain invokes `/grossreinschiff` or asks for the weekly cleanup, and when the session-start digest reports the sweep is due.
+It reports and never deletes: removal is a separate captain-authorized step, and inside a project it is a dispatched crewmate's task.
 
 ## 7. Task lifecycle
 
@@ -509,7 +514,7 @@ Bootstrap separately detects when the primary checkout's own default branch has 
 
 These skills are not captain-invocable; load them only at their precise triggers.
 
-- `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `ROLE_INVALID:`, `ROLE_OVERLAY_MISSING:`, `NEEDS_GH_AUTH`, `TANGLE:`, `SELF_DRIFT:`, `CREW_DISPATCH: invalid`, `CURRENCY_BASE:`, `LAVISH_ACCESS:`, `BACKLOG_STALE:`, `BACKLOG_UNREADABLE:`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `NUDGE_SECONDMATES:`, `AXI_SUITE_UPDATED:`, `AXI_SUITE_REVIEW:`, `AXI_SUITE_STUCK:`, `FIRSTMATE_UPDATE_AVAILABLE:`, `FIRSTMATE_UPDATE_STUCK:`, `FORK_SYNC:`, `FORK_SYNC_STUCK:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
+- `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `ROLE_INVALID:`, `ROLE_OVERLAY_MISSING:`, `NEEDS_GH_AUTH`, `TANGLE:`, `SELF_DRIFT:`, `CREW_DISPATCH: invalid`, `CURRENCY_BASE:`, `LAVISH_ACCESS:`, `BACKLOG_STALE:`, `BACKLOG_UNREADABLE:`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `NUDGE_SECONDMATES:`, `AXI_SUITE_UPDATED:`, `AXI_SUITE_REVIEW:`, `AXI_SUITE_STUCK:`, `FIRSTMATE_UPDATE_AVAILABLE:`, `FIRSTMATE_UPDATE_STUCK:`, `FORK_SYNC:`, `FORK_SYNC_STUCK:`, `GROSSREINSCHIFF:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
 - `diagnostic-reasoning` - load before scoping a reported bug and before acting on a diagnostic report.
 - `ask-user-authority` - load before deciding any ask-user finding, regardless of the project's `yolo` posture.
 - `harness-adapters` - load before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.

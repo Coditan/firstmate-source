@@ -44,6 +44,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # re-enables it against its isolated fake npm registry.
 export FM_AXI_SUITE_DISABLE=1
 
+# The weekly Grossreinschiff cadence check runs in bootstrap's detect pass, so
+# every suite that composes fm-bootstrap.sh would otherwise see its due line the
+# moment a fixture home has no sweep record - which is always. Silence the
+# detect line suite-wide; tests/fm-grossreinschiff.test.sh sets it back to 0.
+export FM_GROSSREINSCHIFF_DISABLE=1
+
 # The watcher-service integration has its own dedicated suite with fake
 # systemd and tmux managers.
 # Unrelated behavior suites must not inspect or mutate the developer's live

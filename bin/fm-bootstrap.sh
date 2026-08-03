@@ -26,6 +26,7 @@
 #                 "AXI_SUITE_UPDATED|REVIEW|STUCK: <detail>",
 #                 "FIRSTMATE_UPDATE_AVAILABLE|STUCK: <detail>",
 #                 "FORK_SYNC: <detail>" or "FORK_SYNC_STUCK: <detail>",
+#                 "GROSSREINSCHIFF: weekly fleet cleanup sweep is due (...)",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...",
 #                 "WATCHER_UNIT: <consent, convergence, or fallback detail>",
 #                 "FREQUENCY_MONITOR_UNIT: <consent, convergence, or fallback detail>".
@@ -991,6 +992,10 @@ fi
 crew_dispatch_validate
 currency_base_validate
 lavish_access_check
+# Weekly Grossreinschiff cadence. Detect-only by construction - one file read and
+# one date comparison - so it runs in every session start, locked or not, and
+# needs no scheduler of its own (docs/grossreinschiff.md "The cadence decision").
+"$SCRIPT_DIR/fm-grossreinschiff-due.sh" || true
 if fm_tasks_axi_compatible && command -v jq >/dev/null 2>&1; then
   "$SCRIPT_DIR/fm-backlog-lint.sh" || true
 fi
