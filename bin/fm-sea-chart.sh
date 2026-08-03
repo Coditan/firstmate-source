@@ -3,6 +3,25 @@
 # is decided, what is takeable now, its fog, and its course boundaries.
 # Read-only. It never writes, resolves, closes, or reorders anything.
 #
+# PROVENANCE - THIS AMENDS WAYFINDER, IT DOES NOT INVENT IT
+# The destination, the fog of war, the out-of-scope boundary that never rises,
+# and the four sections this chart is built around come from the Wayfinder skill
+# by Matt Pocock, https://github.com/mattpocock/skills, used under the MIT
+# licence (Copyright (c) 2026 Matt Pocock). No Wayfinder code is vendored here -
+# Wayfinder ships none, and this script is wholly our own - but the design it
+# implements is theirs. What is ours: reading records instead of authoring them,
+# the incompleteness counts, the withheld reconciliation below, and the
+# per-chart prefix membership rule that replaces Wayfinder's parent-child issue
+# edge. What we dropped is the more important half: Wayfinder is a PLANNING
+# instrument that breaks work down and sets a course - two write modes, no
+# viewing mode - and this amendment kept only the half that shows the result,
+# along with dropping its ticket types, its claim, and its two reading
+# resolutions. The read-only property above is sound for recording the captain's
+# answer and was over-applied to everything else.
+# docs/sea-chart-provenance.md carries the licence text, the full comparison,
+# and the defects the comparison exposed - including why the wrong-grain
+# critique is this amendment's doing rather than something inherited.
+#
 # HOW THIS DIFFERS FROM THE DECISION BOARD, AND WHY BOTH EXIST
 # `bin/fm-decision-inventory.sh` feeds the fleet-wide standing inbox: everything
 # waiting on the captain, across every project, with no scope and no end state.
