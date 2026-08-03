@@ -28,6 +28,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-decision-inventory.sh` | Group the open captain decisions by originating investigation and keep the judge's record where a judge ruled, for `/decisionboard` (the fold is assumed, not verified) |
 | `fm-sea-chart.sh`        | Assemble one undertaking's sea chart - destination, decided, takeable, fog, course boundaries - for `/sea-chart`, reconciling its own decision records back against the backlog so a withheld one is counted rather than dropped; amends Wayfinder by Matt Pocock under the MIT licence (docs/sea-chart-provenance.md) |
 | `fm-chart-kinds-lib.sh`  | The `fog` and `out-of-course` backlog kinds, spelled once for every reader of them |
+| `fm-to-backlog.sh`       | File one captain-approved breakdown into the backlog in dependency order under the originating undertaking's id, refusing a cycle, an edge that could never clear, a missing origin or blocker, an unspecified unit, and a kind or reserved id marker owned elsewhere, for `/to-backlog`; adopts to-tickets by Matt Pocock under the MIT licence (docs/to-backlog-provenance.md) |
 | `fm-brief.sh`            | Scaffold ship, scout, secondmate-charter, and Herdr-lab briefs                       |
 | `fm-model-panel.sh`      | Run a model panel: two independent analysts on different models, then a judge that re-verifies both |
 | `fm-grade.sh`            | Grade review quality on git-derived and blind evidence rather than the reviewed tool's own ledger (docs/review-grading.md) |
