@@ -43,7 +43,7 @@ Choosing what durable knowledge to file is judgement, and it is the only step a 
 
 | Piece | Owner |
 | --- | --- |
-| Where this session's transcript is | `bin/fm-sessionstart-nudge.sh` writes `state/.primary-transcript` on every primary session start, including the one a clear creates. That producer is in-flight work on the nudge script and is consumed here as a data contract only; until it lands, no record exists, so a home with a live session reports the ceiling as unenforced and the reset tool refuses |
+| Where this session's transcript is | `bin/fm-sessionstart-nudge.sh` writes `state/.primary-transcript` on every primary session start, including the one a clear creates; [docs/sessionstart-nudge.md](sessionstart-nudge.md) owns that record's own contract, and this mechanism only consumes it |
 | Ceiling, quiet, and captain-present predicates | `bin/fm-context-lib.sh` |
 | The measurement and the reset/ask branch | `bin/fm-watch.sh`'s `context_ceiling_surface` |
 | The receipt | `bin/fm-stow-receipt.sh` |
