@@ -12,7 +12,13 @@
 # home that has never swept is the one most likely to have accumulated
 # something, and it joins the Thursday rhythm after its first sweep. A home
 # that ran no session on Thursday sweeps late at its next session start rather
-# than skipping the week, and the due line says how late.
+# than skipping the week.
+#
+# The due line's window-open count says how far into the CURRENT window this
+# session start falls. It is bounded to 0 through 6 by construction and does
+# not measure how long the home has been dark: a home three weeks behind that
+# wakes on a Thursday reads 0. The "last swept:" date on the same line is what
+# shows how many weeks were missed.
 #
 # There is deliberately no scheduler here. The check is one file read and one
 # date comparison, so bin/fm-bootstrap.sh runs it in the detect pass that

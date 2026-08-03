@@ -65,7 +65,8 @@ When any diagnostic needs captain attention, report the plain consequence and re
   A `config/fork-sync-upstream is unusable` detail is not a network failure: the check refused a configured comparison base, so handle it as `CURRENCY_BASE` below.
 - `GROSSREINSCHIFF: weekly fleet cleanup sweep is due (...)` - this home has not completed its Thursday cleanup sweep for the current week; load the `grossreinschiff` skill and run it.
   Nothing is broken: the line is a cadence reminder, and it repeats each session start until `bin/fm-grossreinschiff-due.sh --record` marks a sweep that actually produced a report.
-  The reported window-open days say how late the sweep is, and a large number is itself worth reporting to the captain because it means this home has been dark or the reminder has been passed over.
+  The reported window-open days say only how far into the current week's window this session start falls; the count is bounded to 0 through 6 and never measures how long the home has been dark.
+  Judge staleness from the `last swept:` date in the same line: a date more than one week before the current Thursday means whole weeks were missed, and that is what is worth reporting to the captain.
   In a session that did not get the fleet lock this line is advisory only: the sweep changes records, so the session holding the lock owns it - note it and leave it.
 - `TANGLE: <remediation>` - the primary checkout is stranded on a feature branch instead of its default branch; `AGENTS.md` section 8 explains why this guard exists and what it protects.
   The work is safe on that branch ref; restore the primary to its default branch with the printed `git -C <root> checkout <default>`, then re-validate that branch in a proper worktree.

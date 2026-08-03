@@ -82,12 +82,32 @@ test_next_thursday_reopens_the_window() {
   pass "the next Thursday reopens the window"
 }
 
-test_a_missed_week_stays_due_and_says_how_late() {
+# The window-open count is a position inside the CURRENT week's window, not a
+# measure of lateness: it is days_back, bounded to 0 through 6. These two cases
+# are the pair that proves it, so neither reads as a lateness check.
+test_a_missed_week_stays_due_and_reports_its_window_position() {
   local out
   out=$(due_run 2026-08-17 08:30:00)
   assert_contains "$out" "GROSSREINSCHIFF:" "a missed Thursday must stay due, not be skipped"
-  assert_contains "$out" "open 4 day(s)" "the due line must say how late the sweep is"
-  pass "a missed week stays due and reports how late it is"
+  assert_contains "$out" "open 4 day(s)" \
+    "the Monday after a missed Thursday is four days into the current window"
+  pass "a missed week stays due and reports its position in the current window"
+}
+
+test_a_home_dark_for_weeks_reports_a_low_window_count() {
+  local out
+  # Last swept 2026-08-06, waking three Thursdays later. Three weeks dark, and
+  # the window count still reads 0, while the four-days-late case above reads 4.
+  out=$(due_run 2026-08-27 09:00:00)
+  assert_contains "$out" "GROSSREINSCHIFF:" "a home dark for weeks must still be told the sweep is due"
+  assert_contains "$out" "open 0 day(s)" \
+    "the window count must NOT grow with staleness - it is a window position, bounded 0..6"
+  assert_contains "$out" "last swept: 2026-08-06" \
+    "the last-swept date is the field that carries how many weeks were missed"
+  out=$(due_run 2026-08-27 09:00:00 --status)
+  assert_contains "$out" "window-open-days=0" "--status must report the same bounded window position"
+  assert_contains "$out" "last-sweep=2026-08-06" "--status must carry the staleness in the date"
+  pass "a home dark for weeks reports a low window count, and its last-swept date carries the staleness"
 }
 
 test_a_corrupt_record_reads_as_never_swept() {
@@ -261,8 +281,11 @@ test_content_test_is_inconclusive_once_the_default_branch_moves_on() {
   pass "the content test goes inconclusive once the default branch edits the same file, so its exit status must be read"
 }
 
-test_empty_branch_is_vacuously_landed() {
-  local repo def base_tree tip_tree
+# E's condition in isolation is trivially true for far more branches than E is
+# meant to catch, which is why these test it through the ORDER of the ladder.
+# Checking the condition alone is what let the unreachable-rung defect through.
+test_empty_branch_is_vacuously_landed_only_because_e_precedes_c() {
+  local repo def base_tree tip_tree merged status
   repo="$TMPROOT/ladder-e"
   fm_git_init_commit "$repo"
   def=$(default_ref "$repo")
@@ -271,7 +294,87 @@ test_empty_branch_is_vacuously_landed() {
   base_tree=$(git -C "$repo" rev-parse "$(git -C "$repo" merge-base "$def" empty)^{tree}")
   tip_tree=$(git -C "$repo" rev-parse 'empty^{tree}')
   [ "$base_tree" = "$tip_tree" ] || fail "an empty commit must leave the tree unchanged"
-  pass "an empty branch is settled as vacuously landed by its tree"
+
+  # A is inconclusive here, so the branch really does reach the later rungs.
+  if git -C "$repo" merge-base --is-ancestor empty "$def" 2>/dev/null; then
+    fail "fixture is wrong: the empty branch must not be an ancestor of the default branch"
+  fi
+
+  # C would absorb it first: a content-free branch cannot make merge-tree
+  # conflict, so C exits 0 with the default branch's own tree and settles it as
+  # plain landed. That is why E has to be consulted before C, or it never fires.
+  merged=$(git -C "$repo" merge-tree --write-tree "$def" empty) && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "a content-free branch must not make merge-tree conflict"
+  [ "$(printf '%s\n' "$merged" | head -1)" = "$(git -C "$repo" rev-parse "$def^{tree}")" ] \
+    || fail "C would otherwise settle the empty branch as plain landed, which is the point of this test"
+  pass "an empty branch is vacuously landed only because E is consulted before C"
+}
+
+test_e_before_ancestry_would_mislabel_a_landed_branch() {
+  local repo def base_tree tip_tree
+  repo="$TMPROOT/ladder-e-order"
+  fm_git_init_commit "$repo"
+  def=$(default_ref "$repo")
+  git -C "$repo" checkout -q -b ancestored
+  printf 'real content, really landed\n' > "$repo/landed.txt"
+  git -C "$repo" add landed.txt
+  git -C "$repo" -c user.name=t -c user.email=t@example.invalid commit -qm 'real work'
+  git -C "$repo" checkout -q "$def"
+  git -C "$repo" merge -q --ff-only ancestored
+
+  git -C "$repo" merge-base --is-ancestor ancestored "$def" \
+    || fail "fixture is wrong: this branch must be an ancestor of the default branch"
+  # The merge base IS the branch, so E's tree equality holds on a branch that
+  # carries real content. Placed before A, E would call every ordinarily landed
+  # branch "landed (vacuous)".
+  base_tree=$(git -C "$repo" rev-parse "$(git -C "$repo" merge-base "$def" ancestored)^{tree}")
+  tip_tree=$(git -C "$repo" rev-parse 'ancestored^{tree}')
+  [ "$base_tree" = "$tip_tree" ] \
+    || fail "an ancestor branch must satisfy E's condition trivially - that is the trap"
+  [ -s "$repo/landed.txt" ] || fail "the branch must carry real content for the mislabel to matter"
+  pass "E placed before A would mislabel an ancestry-landed branch as vacuous, so A comes first"
+}
+
+test_ladder_order_is_a_p_e_c_x() {
+  local order
+  order=$(sed -n 's/^| \*\*\([APECX]\)\*\* |.*/\1/p' "$SKILL" | tr -d '\n')
+  [ "$order" = "APECX" ] \
+    || fail "the ladder must be applied A, P, E, C, X - the order is measured, got: $order"
+  pass "the skill's ladder table states the measured A, P, E, C, X order"
+}
+
+test_x_is_withheld_from_a_branch_that_adds_no_paths() {
+  local repo def added merged status
+  repo="$TMPROOT/ladder-x"
+  ladder_fixture "$repo"
+  def=$(default_ref "$repo")
+  # A modify-only branch: it touches a file the default branch already has and
+  # adds nothing. Reached exactly where the skill says the ladder is routine.
+  git -C "$repo" checkout -q -b modify-only
+  printf 'revised, adding no new path\n' > "$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" -c user.name=t -c user.email=t@example.invalid commit -qm 'modify only'
+  git -C "$repo" checkout -q "$def"
+  printf 'the default branch edits the same file too\n' > "$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" -c user.name=t -c user.email=t@example.invalid commit -qm 'later work on README'
+
+  if git -C "$repo" merge-base --is-ancestor modify-only "$def" 2>/dev/null; then
+    fail "fixture is wrong: A must not settle this branch"
+  fi
+  git -C "$repo" merge-tree --write-tree "$def" modify-only >/dev/null 2>&1 && status=0 || status=$?
+  [ "$status" -ne 0 ] || fail "fixture is wrong: C must go inconclusive on the conflicting edit"
+
+  added=$(git -C "$repo" diff --name-only --diff-filter=A \
+    "$(git -C "$repo" merge-base "$def" modify-only)" modify-only)
+  [ -z "$added" ] || fail "fixture is wrong: a modify-only branch must add no path, got: $added"
+  # With an empty added-path set X's universal is vacuously true, so without the
+  # precondition it would hand out a definitive not-landed verdict on nothing.
+  assert_grep 'Precondition: the branch adds at least one path' "$SKILL" \
+    "rung X must carry its precondition in the row a sweeper reads"
+  assert_grep 'falls through to `undetermined`, never to `not landed`' "$SKILL" \
+    "a branch that adds no path must fall through to undetermined"
+  pass "a modify-only branch adds no path, so the documented precondition withholds X"
 }
 
 # --- instruction-surface contracts ------------------------------------------
@@ -343,10 +446,23 @@ test_doc_owns_the_cadence_decision_and_its_alternatives() {
   pass "the doc owns the cadence decision, its alternatives, and its own limits"
 }
 
+test_doc_records_the_ladder_order_and_its_own_checklist_hits() {
+  assert_grep 'The applied order is A → P → E → C → X' "$DOC" \
+    "the doc must state the applied ladder order"
+  assert_grep 'E must never be placed before A' "$DOC" \
+    "the doc must record why E sits after the ancestry rung"
+  assert_grep 'A(ancestry)=18  P(patch-id)=33  C(content)=1  undetermined=0' "$DOC" \
+    "the published measurement must stay exactly as measured"
+  assert_grep "## The sweep's own checklist, applied to the sweep" "$DOC" \
+    "the doc must record that the checklist was run against this skill's own prose"
+  pass "the doc records the ladder order and the hits the checklist scored on itself"
+}
+
 test_absent_record_is_due
 test_recorded_sweep_silences_the_rest_of_the_week
 test_next_thursday_reopens_the_window
-test_a_missed_week_stays_due_and_says_how_late
+test_a_missed_week_stays_due_and_reports_its_window_position
+test_a_home_dark_for_weeks_reports_a_low_window_count
 test_a_corrupt_record_reads_as_never_swept
 test_bad_input_refuses_instead_of_guessing
 test_help_comes_from_the_header
@@ -356,9 +472,13 @@ test_disable_silences_detect_but_not_the_other_modes
 test_ancestry_calls_landed_work_unmerged
 test_patch_id_settles_the_squash_flow
 test_content_test_is_inconclusive_once_the_default_branch_moves_on
-test_empty_branch_is_vacuously_landed
+test_empty_branch_is_vacuously_landed_only_because_e_precedes_c
+test_e_before_ancestry_would_mislabel_a_landed_branch
+test_ladder_order_is_a_p_e_c_x
+test_x_is_withheld_from_a_branch_that_adds_no_paths
 test_skill_states_the_five_safety_properties
 test_skill_covers_all_nine_checklist_items
 test_skill_never_promises_deletion_authority
 test_cadence_is_reachable_from_the_instruction_surface
 test_doc_owns_the_cadence_decision_and_its_alternatives
+test_doc_records_the_ladder_order_and_its_own_checklist_hits

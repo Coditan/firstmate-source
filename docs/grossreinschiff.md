@@ -116,9 +116,17 @@ A check registration and its trust binding for `graph-freshness`, with no `state
 
 Measured on `Freudator86/firstmate` at `origin/main` = `d126ea61`, 2026-08-03, over the 52 branches of merged pull requests that still exist on `origin`.
 
-The ladder, applied in order A → P → C, stopping at the first test that settles a branch:
+**The applied order is A → P → E → C → X**, stopping at the first test that settles a branch.
+
+The published measurement below ran A → P → C, before E and X were placed in the order.
+Inserting E between P and C does not change it: none of the 34 non-ancestor branches was content-free, so E fires on none of them and these counts stand as measured.
 
     === A(ancestry)=18  P(patch-id)=33  C(content)=1  undetermined=0
+
+E must never be placed before A.
+For a branch that is already an ancestor of the default branch, `merge-base(default, branch)` **is** the branch, so E's tree-equality condition holds trivially for every ordinarily landed branch: placed first, it would have relabelled all 18 ancestry-settled branches above as `landed (vacuous)`.
+Placed after A it sees only the 34 non-ancestor branches, and fires on none of them.
+It must still come before C, because a content-free branch cannot make `merge-tree` conflict, so C would settle it as plain `landed` and E would never fire at all.
 
 **Ancestry alone would have called 34 of 52 landed branches unmerged.** On `coditan-bridge` the same reading was worse: 152 of 154 read as unmerged, because PR #1 is the only pull request in that repository's history merged with a real merge commit - the only merge commit in 7,724 commits on `main`. Everything else was squashed, so branch tips are unreachable from `main` by construction. "152 not merged" is a restatement of "we squash", nothing more.
 
@@ -163,7 +171,9 @@ Three options were considered.
 The rule, owned by the script's header: **due when the last recorded sweep predates the most recent Thursday 00:00 local.**
 
 - An absent record means never swept, which is due. A home that has never swept is the one most likely to have accumulated something, and it joins the Thursday rhythm after its first sweep.
-- A home that ran no session on Thursday sweeps at its next session start rather than skipping the week, and the line says how many days into the window it is.
+- A home that ran no session on Thursday sweeps at its next session start rather than skipping the week, and the line says how many days into the *current* window it is.
+  That count is `days_back`, bounded to 0 through 6, so it is a window position and never a measure of lateness: a home three weeks dark that wakes on a Thursday reads 0.
+  The line's `last swept:` date is the field that carries the staleness, and it is what the reader judges by.
 - A corrupt or unparseable record reads as never swept, so it makes the sweep due rather than silently skipping it.
 - The week boundary is today's local midnight minus whole days, so a daylight-saving change inside the preceding week moves it by an hour twice a year. An hour of drift cannot make a weekly sweep fire twice or skip a week.
 
@@ -172,6 +182,24 @@ The rule, owned by the script's header: **due when the last recorded sweep preda
 Through the pin, like every other instruction-surface change: it lands on the default branch, homes fast-forward, and the loaded surface (`AGENTS.md`, `bin/`, `roles/`, `.agents/skills/`) changes. `AGENTS.md` section 12 owns that path.
 
 One All-Ships notice announces the day and what the sweep covers. That is an announcement, not the mechanism - a vessel that never reads the notice still gets the due line from its own session start, and a vessel that reads the notice but never pins never sweeps.
+
+## The sweep's own checklist, applied to the sweep
+
+Before this skill shipped, its own nine-item checklist was run against its own prose.
+It got three hits, all the same defect class the sweep exists to clean, and all three were fixed before delivery.
+
+- **The due line's window-open count is bounded to 0 through 6 by construction**, so it can never report a home dark for weeks: a home three weeks behind that wakes on a Thursday reads 0, while one merely four days late reads 4.
+  The handling guidance told the reader to escalate on a large number, which is an instrument that never fires - checklist item 3.
+  The `last swept:` date already carried the signal, and the guidance now points there.
+- **Ladder rung X returned a definitive `not landed` for a branch that adds no paths**, because a universal over an empty set is vacuously true.
+  A verdict on zero evidence is a false certainty, and it is exactly what safety property 2 warns about when it bans judging by ancestry - and property 3, which bars promoting an unsettled branch to a definitive verdict.
+  X now carries the precondition in its own row.
+- **Ladder rung E could never be reached** in the A → P → C → X → E order it was first written in, because C absorbs every content-free branch first.
+  An unreachable rung is dead text - item 3 again.
+  E now sits between P and C, and the order caveat is recorded above because moving it either way is measurably wrong.
+
+This is recorded plainly because it is evidence the checklist works, not an embarrassment to soften.
+The night of 2026-08-02/03 produced the checklist from other people's surfaces; the first thing it was pointed at was its own, and it found three.
 
 ## Known limits
 

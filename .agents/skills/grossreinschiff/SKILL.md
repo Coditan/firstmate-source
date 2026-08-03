@@ -22,7 +22,8 @@ None is hypothetical, and `docs/grossreinschiff.md` carries the incident behind 
 
 **Cadence: weekly, on Thursday.**
 `bin/fm-grossreinschiff-due.sh` owns it and nothing else - its header states the rule, the state file, and why there is no separate scheduler.
-The sweep runs at the first session start on or after Thursday; a vessel that was dark on Thursday sweeps late rather than skipping the week, and the due line says how late.
+The sweep runs at the first session start on or after Thursday; a vessel that was dark on Thursday sweeps late rather than skipping the week.
+The due line reports how far into the current window the sweep is, a count bounded to 0 through 6; its `last swept:` date is the field that shows how many weeks were missed.
 
 ## The five safety properties
 
@@ -53,7 +54,8 @@ These bind every item below. They are properties, not preferences: each one is a
 ## The landedness ladder
 
 Item 1 turns entirely on this, and getting it wrong is the one mistake in this skill that destroys work.
-Apply the tests in order and stop at the first that settles the branch.
+Apply the tests in the table's order - **A**, **P**, **E**, **C**, **X** - and stop at the first that settles the branch.
+The order is measured, not a matter of taste: the trap notes below say what moving a rung costs.
 The technique is not this skill's invention: the worktree-scoped form is owned by `bin/fm-teardown.sh`, whose header is the authority on what "landed" means for a task's own work, and the per-branch form below was worked out and validated in `data/bridge-branch-sprawl-classify/report.md` §1.
 That report is captain-private to the vessel that ran it, so a reader on another home cannot open it - `docs/grossreinschiff.md` carries the measurements and the reproduction, and is tracked.
 
@@ -61,12 +63,13 @@ That report is captain-private to the vessel that ran it, so a reader on another
 |:-:|---|---|
 | **A** | `git merge-base --is-ancestor <branch> <default>` | landed. Only ever a *positive* result - a negative one means nothing here. |
 | **P** | Patch-id equality: `git diff $(git merge-base <default> <branch>) <branch> \| git patch-id --stable` against `git diff <merge_sha>^ <merge_sha> \| git patch-id --stable`, where `<merge_sha>` is the forge's recorded merge commit for that branch's PR *and* is itself an ancestor of the default branch. | landed. This is the test that handles the squash flow, and it does most of the work. |
+| **E** | The branch tip's tree equals its merge-base tree. Only meaningful *after* **A** and **P**: for a branch that is already an ancestor of the default branch the merge base **is** the branch, so this holds trivially and would relabel every ordinarily landed branch. | landed vacuously - the branch has commits but changes nothing against its fork point, so there is nothing to land. |
 | **C** | `git merge-tree --write-tree <default> <branch>` exits 0 **and** its first line equals `git rev-parse <default>^{tree}`. | landed - the branch adds nothing the default branch does not already have. |
-| **X** | Every path the branch adds is absent from the default branch's tree **and** `git log <default> -- <path>` is empty, so it never existed there at any point. | not landed. |
-| **E** | The branch tip's tree equals its merge-base tree. | landed vacuously - there is nothing to land. |
+| **X** | **Precondition: the branch adds at least one path.** A branch that adds none - a modify-only or delete-only branch, the ordinary shape of a small fix - falls through to `undetermined`, never to `not landed`. With that precondition met: every path the branch adds is absent from the default branch's tree **and** `git log <default> -- <path>` is empty, so it never existed there at any point. | not landed. |
 | - | none of the above | **undetermined**. Never a deletion candidate. |
 
-Two traps, both hit in practice:
+Four traps.
+The first two were hit in practice; the last two were caught by applying this skill's own checklist to this skill before it shipped, and `docs/grossreinschiff.md` records that.
 
 - **C is inconclusive far more often than it looks.**
   `git merge-tree` exits non-zero on a conflict, and an old branch whose files the default branch has since edited conflicts routinely.
@@ -74,6 +77,13 @@ Two traps, both hit in practice:
   Measured on this repo, 2026-08-03: over 52 merged-PR branches the ladder settled 18 by **A**, 33 by **P**, 1 by **C**, and 0 undetermined. In the same session, **C** applied alone with its exit status dropped reported "adds content" for all six ancestry-unmerged branches it was tried on - and for the three of those six that are branches of merged pull requests, the full ladder settles every one as landed.
 - **P needs the merge commit verified as an ancestor of the default branch**, not merely recorded by the forge.
   A recorded merge commit that is not on the default branch proves nothing about the default branch.
+- **A vacuous universal is a false certainty.**
+  **X** is quantified over the paths the branch adds, so a branch that adds none satisfies both of its conjuncts on zero evidence and would be handed the definitive verdict `not landed`.
+  That state is reachable exactly where this ladder is routine: **A** fails because the fleet squashes, **P** fails when no forge merge commit is recorded or it is not an ancestor of the default branch, and **C** goes inconclusive on the conflict above.
+  Safety property 3 bars promoting an unsettled branch to a definitive verdict, so the precondition in the **X** row is the rule and has no exception.
+- **E's place in the order is load-bearing in both directions.**
+  It must come after **A**, because a branch that is already an ancestor has itself as its merge base and would be relabelled `landed (vacuous)` on a triviality.
+  It must come before **C**, because a content-free branch cannot make `merge-tree` conflict, so **C** would absorb it as plain `landed` and **E** would never fire at all.
 
 Patch-id is safe for rename-only branches - it hashes the `diff --git a/… b/…` header paths, so a pure rename still produces a distinct hash rather than an empty one.
 Before trusting a P result across a large set, check for patch-id collisions across the whole set, as §1 of the sprawl report does; a hash shared by two different pieces of work invalidates every P verdict in the batch.
