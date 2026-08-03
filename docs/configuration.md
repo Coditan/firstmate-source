@@ -96,6 +96,7 @@ It is silent when clean, never blocks or mutates records, and is also available 
 Session-start cost stays bounded regardless of how much rot the backlog carries: a clean backlog runs no `tasks-axi` process at all, and any number of stale edges is resolved against one `tasks-axi list` call.
 It runs in both backend modes; the fix clause prescribes `tasks-axi unblock` only where that command would actually run, and otherwise names the backlog file, the record, the blocker id, and the `blocked-by:` token quoted as that record actually spells it - under `manual`, and on any record `tasks-axi` cannot resolve, where it also says no automated fix is available.
 The classification boundary is what the readers could decide: dangling and already-Done edges are decided from the parsed backlog and archive alone and stay `BACKLOG_STALE` findings even for an unresolvable record, while the reader-disagreement class needs `tasks-axi`'s own answer, so an unresolvable record reports the coded `BACKLOG_UNREADABLE` bootstrap diagnostic naming the record and the row repair that closes it, reports no stale edge for that class, and exits 1 to mark the run undecided without blocking session start.
+The full fleet and bearings snapshots use the same dangling classification to surface ready work with a data-integrity caution instead of treating a target found nowhere as a live blocker; `fm-fleet-snapshot.sh --backlog-json` stays raw per-file input so lint can still compare reader behavior.
 
 ## Runtime backend (config/backend / FM_BACKEND)
 

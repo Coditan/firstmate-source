@@ -42,10 +42,10 @@ A failed intermediate step leaves the hold open.
 ## Structured read surfaces
 
 `bin/fm-fleet-snapshot.sh` parses canonical tasks-axi `(hold: ...)` and `(hold-kind: captain)` metadata alongside existing backlog fields.
-It resolves every repeated `blocked-by:` edge against structured Done records, keeps missing blockers unresolved, and classifies only an unblocked captain hold as actionable.
+It resolves every repeated `blocked-by:` edge against structured Done records, keeps real unfinished blockers unresolved, records blocker ids found nowhere in the live backlog or done archive as dangling, and classifies only an unblocked captain hold as actionable.
 Its secondmate-home summary classifies an actionable captain hold as `captain_decision` and preserves blocked captain holds as queued work in the owning home.
 
-`bin/fm-bearings-snapshot.sh` projects actionable captain holds into `decisions_open` and leaves blocked captain holds in ordinary queued gates.
+`bin/fm-bearings-snapshot.sh` projects actionable captain holds into `decisions_open`, leaves blocked captain holds in ordinary queued gates, and surfaces dangling blocker edges in `integrity[]` as ready work with a data-integrity caution.
 It excludes completed kind `captain` records from Recently Landed.
 The projection remains read-only and does not inspect historical prose.
 

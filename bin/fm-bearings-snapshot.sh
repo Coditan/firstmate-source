@@ -29,6 +29,11 @@
 # gaps in omitted[] and, when invalid, a Charted Next gate line so the four-section
 # chat cannot claim an empty fleet while main current state is broken.
 #
+# Dangling `blocked-by:` tokens are data-integrity warnings, not live blockers.
+# The canonical snapshot removes them from unresolved_blocker_ids and records
+# them in dangling_blocker_ids; this projection exposes those ready-with-caution
+# rows under top-level integrity[] so Charted Next can say the edge wants clearing.
+#
 # The landed section merges this home's Done with the canonical snapshot's
 # secondmate_landed roll-up (fm-fleet-snapshot.sh), so merges a secondmate managed -
 # recorded in ITS OWN backlog, never the main one - are visible. It stays bounded by
@@ -109,7 +114,8 @@ Default fields: schema, home, generated, prs, in_flight{id,kind,state,doing},
   secondmates{id,state,doing,provenance,freshness,age_seconds,contradiction,reason},
   decisions_open{id,key,verb,summary,owner}, landed{id,what,artifact,owner},
   gates{id,title,blocked_by,reason,owner}, reports{id,path}, recorded_prs{id,url},
-  unhealthy_endpoints{...} (only when non-empty), omitted{surface,reveal}.
+  integrity{id,title,phantom_blocked_by,owner}, unhealthy_endpoints{...} (only when non-empty),
+  omitted{surface,reveal}.
 gates excludes the sea-chart kinds (fog, out-of-course), which are held on purpose
   and would otherwise crowd it permanently; the count withheld is disclosed in
   omitted[] and --all-queued puts them back.

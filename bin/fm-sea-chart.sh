@@ -95,11 +95,10 @@
 # exist in its backlog at all.
 #
 # BLOCKER EDGES ARE RE-RESOLVED WIDER, AND IN THE SAFE DIRECTION
-# The snapshot resolves `blocked-by` per FILE, so a live record whose blocker was
-# archived long ago still reads as blocked and would silently never appear under
-# `takeable[]` - the one failure this surface disclaims. The chart already holds
-# the live backlog AND the archive, so it re-resolves the edges over both, and an
-# id counts as resolved only when EVERY record carrying it is Done.
+# The snapshot's `--backlog-json` parser resolves `blocked-by` per FILE, so the
+# chart reads the live backlog AND the archive before deciding whether an edge is
+# real, resolved, stale, or dangling. An id counts as resolved only when EVERY
+# record carrying it is Done.
 # That last part is a choice made here, not a copy of anything: the snapshot
 # reduce READS as an and-fold but is not one, because jq evaluates `false // true`
 # to true, so in practice the last row carrying an id decides it there. Requiring
@@ -109,7 +108,8 @@
 # costs more than a wrong omission. So on a duplicated id the two readings
 # differ, this one takes the answer that holds work back, and the divergence
 # itself is filed as `fm-snapshot-blocker-and-is-not-and` rather than papered
-# over here. Only genuinely unresolved ids are reported where blockers are named.
+# over here. Only genuinely unresolved real ids are reported where blockers are
+# named; an id found nowhere is named as a dangling edge and never holds work.
 #
 # THE MARKING FOR UNSUPERVISED WORK IS A PAIR, NEVER A BADGE
 # `navigation` is deliberately not a boolean. A single flag renders as a badge,
@@ -145,13 +145,15 @@
 #   decisions[]        open decisions, after the board's collapse rule
 #   withheld[]         captain-gated records the actionable surface did not
 #                      return, each with the `cause` that kept it off - blocked,
-#                      in-flight, no-hold, other-hold, stale-edge, not-returned -
-#                      and `why` in words; blocked means a decision the fleet has
-#                      lost, stale-edge means one it can answer right now
+#                      in-flight, no-hold, other-hold, stale-edge, dangling-edge,
+#                      not-returned - and `why` in words; blocked means a decision
+#                      the fleet has lost, stale-edge and dangling-edge mean one it
+#                      can answer right now once the bad edge is cleared
 #   fog[]              named dark patches on this course
 #   out_of_course[]    deliberate scope boundaries; these never rise
-#   takeable[]         work with no unresolved blocker and no hold, each with a
-#                      navigation PAIR: {unsupervised_edit, landing{mode,requires}}
+#   takeable[]         work with no unresolved real blocker and no hold, each with
+#                      dangling_blocked_by[] plus a navigation PAIR:
+#                      {unsupervised_edit, landing{mode,requires}}
 #   counts             the three incompleteness numbers, computed fresh per build
 set -eu
 

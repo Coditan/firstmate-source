@@ -3,8 +3,8 @@
 #
 # Output contract: `--json` prints one object with schema
 # `fm-fleet-snapshot.v1`.
-# `--backlog-json [<path>]` prints only the same parsed backlog object used by
-# that snapshot, without scanning live task or secondmate state.
+# `--backlog-json [<path>]` prints the per-file parsed backlog object used as
+# snapshot input, without scanning live task, archive, or secondmate state.
 # It accepts tasks-axi live backlogs and done archives; `## Archived <date>`
 # sections normalize to Done records.
 # The command is read-only: it does not acquire the session lock, drain wakes,
@@ -21,9 +21,14 @@
 #     those sections are preserved as unstructured records.
 #     Structured rows preserve captain-hold metadata such as hold_kind and
 #     hold_reason when tasks-axi emits it. They also carry normalized current_role,
-#     requires_child_metadata, blocked_by_ids, unresolved_blocker_ids, and
-#     captain_actionable fields. Repeated blocker tokens remain ordered; a blocker
-#     resolves only when its structured record is Done, and missing ids stay open.
+#     requires_child_metadata, blocked_by_ids, unresolved_blocker_ids,
+#     dangling_blocker_ids, and captain_actionable fields. Repeated blocker tokens
+#     remain ordered; a blocker resolves only when its structured record is Done,
+#     and a blocker target absent from both the live backlog and the done archive
+#     is recorded in dangling_blocker_ids instead of remaining a live blocker.
+#     `--backlog-json` is intentionally raw per-file input: it does not read the
+#     paired live/archive file, so missing ids stay in unresolved_blocker_ids there
+#     and dangling_blocker_ids is absent.
 #   tasks[]: one row per state/<id>.meta, sorted by id.
 #     current_state is parsed from bin/fm-crew-state.sh <id> and preserves
 #     state, source, detail, and raw line separately.
@@ -152,17 +157,21 @@ usage: fm-fleet-snapshot.sh --json
 Print a read-only structured snapshot of the firstmate fleet.
 JSON is the stable machine-readable output contract.
 
---backlog-json exposes the snapshot's own structured Markdown reader without
-scanning fleet state. It defaults to data/backlog.md and accepts a tasks-axi
-done archive path, whose dated Archived sections normalize to Done records.
+--backlog-json exposes the snapshot's own structured Markdown reader for one
+file, without scanning fleet state or the paired live/archive file. It defaults
+to data/backlog.md and accepts a tasks-axi done archive path, whose dated
+Archived sections normalize to Done records. Its unresolved_blocker_ids are raw
+per-file input and can include ids that --json later classifies as dangling.
 
 --secondmate-home-summary emits the bounded structured summary used after a
 validated registered-home handoff. It is local-only, skips nested secondmate
 aggregation, and marks inventory contradictions or unavailable child state invalid.
 Its invalidity object names the normalized failure kind and affected ids.
 Actionable tasks-axi captain holds appear as decisions_open and stay visible in
-queued with hold_reason, hold_kind, and plural blocker fields for downstream
-projections. A captain hold is actionable only when every blocker is Done.
+queued with hold_reason, hold_kind, dangling_blocker_ids, and plural blocker
+fields for downstream projections. A captain hold is actionable only when every
+real blocker is Done; an edge to an id found nowhere in the live backlog or done
+archive is a dangling integrity fault, not a blocker.
 Cross-home reads use FM_SNAPSHOT_SECONDMATES (default 20, 0 lifts the count
 bound), FM_SNAPSHOT_SECONDMATE_TIMEOUT, and FM_SNAPSHOT_SECONDMATE_MAX_BYTES.
 Terminal contradiction evidence uses
