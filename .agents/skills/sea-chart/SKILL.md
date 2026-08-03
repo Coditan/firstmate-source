@@ -98,6 +98,11 @@ A `stale-edge` or `dangling-edge` record belongs at the top too, for the opposit
 Print each `why` beside its record so the difference is on the page rather than in the reader's head, and never let the milder causes crowd a `blocked` record down the list or off it.
 The whole point is that a chart which quietly omits an open decision is more harmful than no chart at all.
 
+**Anything in `unplaced[]`, rendered before the sections it is missing from.**
+These are members the chart counted and could not put anywhere, and they are the one report that must never be dropped in rendering, because dropping it restores exactly the fault it exists to catch.
+An empty section is read as a statement about the course - "there is no fog here" - so a member the chart could not recognise turns into a claim nobody made.
+Each entry names its `kind` and `hold_kind` beside the `why`, because those two fields are what get confused, and a `no-kind` cause means the record was filed without the kind that `AGENTS.md` section 10 requires rather than that the course is clear.
+
 **Every folded record stays visible.**
 Use `.fm-variants`, exactly as the decision board does, for the same reason: the fold rests on an assumption nothing verifies, so a question only an analyst raised must be discoverable by eye rather than silently absent.
 
@@ -137,6 +142,7 @@ Whether a piece of work is destructive, irreversible, security-sensitive, or out
 
 The chart reads them; it never files them.
 They are ordinary backlog records, owned by the backlog contract in `AGENTS.md` section 10, which is where their spelling and their meaning live.
+Follow it exactly on the record kind rather than the hold: `hold --kind` refuses both names, and reading that refusal as "these cannot be stored" is what once left every chart's fog and boundaries permanently empty.
 Neither can ever be mistaken for a captain decision, because captain-actionability requires `kind: captain` and neither kind is that - structure, not a rule in prose.
 
 A fog patch that becomes sharp is not promoted in place: close it, then register the real decision through `bin/fm-decision-hold.sh`, which already accepts later keys on a live or torn-down origin.

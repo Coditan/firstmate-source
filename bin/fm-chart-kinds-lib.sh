@@ -10,6 +10,23 @@
 # the chart. AGENTS.md section 10 owns what these kinds MEAN; this file owns how
 # they are SPELLED.
 #
+# WHICH FIELD THESE ARE SPELLED IN, BECAUSE "KIND" NAMES TWO DIFFERENT FIELDS
+# These are RECORD kinds: `tasks-axi add --kind`, rendered `(kind: fog)` in the
+# backlog and read as `.kind` by every consumer below. That vocabulary is open,
+# so both store exactly as written here.
+# A backlog row carries a SECOND field also called a kind - `tasks-axi hold
+# --kind`, rendered `(hold-kind: ...)` and read as `.hold_kind` - and THAT
+# vocabulary is closed: captain, external, load, parked, future, enforced by
+# tasks-axi, which is a third-party AXI-suite package this repo does not own.
+# Neither name below is in that closed set. Because the package updates on its
+# own schedule, that is measured rather than assumed: the storable-field test in
+# tests/fm-sea-chart.test.sh fails if either vocabulary ever moves.
+# This is written down because the two fields were confused once and the cost
+# was total: fog and course boundaries filed with only a hold kind carry no
+# `.kind` at all, so the chart's filter matched nothing, and a chart drew five
+# members while reporting no fog and no boundaries. AGENTS.md section 10 owns
+# the filing commands that keep the two fields apart.
+#
 # WHY THESE KINDS ARE SAFE BY CONSTRUCTION
 # Neither can ever be mistaken for a captain decision. Captain-actionability is
 # one predicate in bin/fm-fleet-snapshot.sh and it requires `kind == "captain"`,

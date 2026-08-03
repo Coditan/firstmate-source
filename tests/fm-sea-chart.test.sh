@@ -350,6 +350,119 @@ EOF
   pass "fog and out-of-course are read onto the chart and can never be a captain decision"
 }
 
+test_the_chart_kinds_are_stored_on_the_field_the_chart_reads() {
+  # THE EXTERNAL FACT THE WHOLE DESIGN RESTS ON, PINNED RATHER THAN ASSUMED.
+  # "kind" names two different fields on a backlog row, and they have opposite
+  # vocabularies: `add --kind` is open and stores these two names, `hold --kind`
+  # is a closed set that rejects both. Assuming the wrong one cost the chart
+  # every fog patch and every boundary it ever had - filed with a hold kind
+  # alone, the records carried no `.kind`, and the filter below matched nothing.
+  # tasks-axi is a third-party AXI-suite package this repo does not own, so if a
+  # release ever moves either vocabulary, this test is what says so.
+  if ! command -v tasks-axi >/dev/null 2>&1; then
+    pass "skipped: tasks-axi not found, so the storage contract cannot be measured"
+    return
+  fi
+  # shellcheck source=bin/fm-chart-kinds-lib.sh
+  # shellcheck disable=SC1091
+  . "$ROOT/bin/fm-chart-kinds-lib.sh"
+  local home
+  home=$(make_home storable)
+  printf '# Backlog\n\n## In flight\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
+  cp "$ROOT/.tasks.toml" "$home/.tasks.toml"
+  local kind
+  for kind in $FM_CHART_KINDS; do
+    ( cd "$home" && tasks-axi add "voy-probe-$kind" "probe" --kind "$kind" ) >/dev/null 2>&1 \
+      || fail "the record kind must store '$kind': AGENTS.md section 10 files fog and course boundaries with 'add --kind', and the chart classifies by that field alone"
+    ( cd "$home" && tasks-axi hold "voy-probe-$kind" --reason "probe" --kind "$kind" ) >/dev/null 2>&1 \
+      && fail "the hold kind unexpectedly accepts '$kind'. It was a closed set (captain, external, load, parked, future) that rejected both chart kinds, which is WHY section 10 sends them to the record kind. Re-derive that instruction before relaxing this."
+  done
+  # And the stored rows really do read back as the kind the chart filters on.
+  local out
+  out=$("$ROOT/bin/fm-fleet-snapshot.sh" --backlog-json "$home/data/backlog.md")
+  for kind in $FM_CHART_KINDS; do
+    [ "$(printf '%s' "$out" | jq -r --arg k "$kind" '[.records[]|select(.structured and .kind==$k)]|length')" = 1 ] \
+      || fail "a record filed with 'add --kind $kind' must read back as .kind '$kind'"
+  done
+  pass "the chart kinds store on the record kind, and the hold kind still refuses them"
+}
+
+test_the_filing_instruction_names_the_field_the_chart_reads() {
+  # The instruction was HALF the defect, not a bystander to it. Section 10 gave
+  # the id markers and the hold, never the record kind, so a firstmate following
+  # it exactly filed records the chart could not classify - and the next agent
+  # follows the instruction, not the code. Fixing one side and leaving the other
+  # would have fixed nothing durable, so the instruction is pinned here beside
+  # the behavior it has to agree with.
+  local agents=$ROOT/AGENTS.md
+  assert_present "$agents" "AGENTS.md is missing"
+  assert_grep 'add <id> "<title>" --kind fog|out-of-course' "$agents" \
+    "section 10 must file the chart kinds on the RECORD kind: it is the only field the chart classifies by, and naming only the hold is what made both sections permanently empty"
+  assert_grep 'hold <id> --reason "<why>" --kind future' "$agents" \
+    "section 10 must still record the hold, because its reason is what the chart prints under each fog patch and boundary"
+  # The two fields are named as different things, so the next reader cannot
+  # repeat the substitution that caused this.
+  assert_grep 'separate closed vocabulary' "$agents" \
+    "section 10 must say WHY the chart kinds do not go on the hold, or the next reader tries the hold again and reads its refusal as the kinds being unstorable"
+  pass "the filing instruction names the record kind, the hold, and the difference"
+}
+
+test_a_member_the_chart_cannot_place_is_named_not_silently_dropped() {
+  # THE SECOND HALF, AND IT STANDS ALONE. Every section places a member by its
+  # KIND, so an unrecognised kind empties a section - and an empty section READS
+  # AS A CLAIM ("no fog on this course") rather than as a failure to look. That
+  # is worse than an error, because nothing about it looks wrong: measured on
+  # the real fleet as five members, four of them chart material, drawn as
+  # `fog: 0  out_of_course: 0` with no footnote (2026-08-03).
+  local home cap chart
+  home=$(make_home unplaced)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-fog-retention - Retention is not sharp yet (repo: r) (since 2026-07-30) (hold: could not name it) (hold-kind: future)
+- [ ] voy-oos-tracker - A second tracker (repo: r) (kind: foggy) (since 2026-07-30) (hold: out of course) (hold-kind: future)
+- [ ] voy-real-work - Ordinary takeable work (repo: r) (kind: ship) (since 2026-07-30)
+EOF
+  cap=$(capture unplaced)
+  chart=$(chart_json "$home" voy "$cap")
+
+  # The first row is the original defect exactly: filed with a hold kind and no
+  # record kind at all. The second is a plausible misspelling of a chart kind.
+  [ "$(printf '%s' "$chart" | jq -r '.fog|length')" = 0 ] || fail "fixture drift: neither row may reach the fog section"
+  [ "$(printf '%s' "$chart" | jq -r '.counts.unplaced')" = 2 ] \
+    || fail "both unplaceable members must be counted, not absorbed into an empty section"
+  [ "$(printf '%s' "$chart" | jq -r '[.unplaced[].id]|sort|join(",")')" = "voy-fog-retention,voy-oos-tracker" ] \
+    || fail "each unplaceable member must be named by id"
+  [ "$(printf '%s' "$chart" | jq -r '.unplaced[]|select(.id=="voy-fog-retention")|.cause')" = "no-kind" ] \
+    || fail "a member carrying only a hold kind must be reported as having no record kind - that is the fault, and the report is what points at it"
+  [ "$(printf '%s' "$chart" | jq -r '.unplaced[]|select(.id=="voy-oos-tracker")|.kind')" = "foggy" ] \
+    || fail "the unrecognised kind itself must be shown, so a misspelling is visible rather than merely absent"
+  # The hold kind is reported too, because it is the field that gets confused for
+  # the record kind, and seeing both side by side is what settles which is which.
+  [ "$(printf '%s' "$chart" | jq -r '.unplaced[]|select(.id=="voy-fog-retention")|.hold_kind')" = "future" ] \
+    || fail "the hold kind must be shown beside the record kind"
+
+  # It must not cry wolf: work the chart CAN place never appears here, and the
+  # undertaking itself is the destination rather than a member drawn on itself.
+  case "$(printf '%s' "$chart" | jq -r '[.unplaced[].id]|join(",")')" in
+    *voy-real-work*) fail "takeable work must never be reported as unplaced" ;;
+  esac
+  [ "$(printf '%s' "$chart" | jq -r '[.takeable[].id]|join(",")')" = "voy-real-work" ] \
+    || fail "fixture drift: the ordinary row must still be takeable"
+
+  # And it must be visible without reading JSON, next to the member count that
+  # is otherwise the only trace these records left.
+  local summary
+  summary=$("$ROOT/bin/fm-sea-chart.sh" voy --summary --from "$cap" \
+    --backlog "$home/data/backlog.md" --archive "$home/data/done-archive.md" --data "$home/data")
+  assert_contains "$summary" "UNPLACED" "the summary must show unplaceable members, not only the JSON"
+  assert_contains "$summary" "could not be placed in any section" \
+    "the member count must say how many of its members reached no section"
+  pass "a member the chart cannot place is named and counted rather than left behind a zero"
+}
+
 test_chart_kinds_stay_off_the_blockage_surface_but_are_disclosed() {
   # They are held forever on purpose, so left in gates they permanently crowd a
   # surface that is already truncated. Hiding them silently would be the same
@@ -617,6 +730,9 @@ test_an_archived_twin_never_cancels_a_live_blocker
 test_a_captain_thread_without_a_decision_key_is_recovered
 test_withheld_records_name_their_own_cause
 test_fog_and_out_of_course_can_never_be_a_captain_decision
+test_the_chart_kinds_are_stored_on_the_field_the_chart_reads
+test_the_filing_instruction_names_the_field_the_chart_reads
+test_a_member_the_chart_cannot_place_is_named_not_silently_dropped
 test_chart_kinds_stay_off_the_blockage_surface_but_are_disclosed
 test_a_chart_without_a_destination_is_refused
 test_the_destination_is_read_and_never_invented

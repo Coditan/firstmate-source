@@ -154,6 +154,12 @@
 #   takeable[]         work with no unresolved real blocker and no hold, each with
 #                      dangling_blocked_by[] plus a navigation PAIR:
 #                      {unsupervised_edit, landing{mode,requires}}
+#   unplaced[]         members this chart counted and could NOT put in any section
+#                      above, each with the `cause` that left it out - no-kind,
+#                      decision-shape, blocked, held, unplaced - and `why` in
+#                      words. An empty section reads as a claim about the course,
+#                      so a member the chart cannot recognise is named rather than
+#                      quietly dropped behind a zero
 #   counts             the three incompleteness numbers, computed fresh per build
 set -eu
 
@@ -363,6 +369,29 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
           why: "present in the backlog but not returned as actionable"}
     end;
 
+  # Why a member reached NO section at all. Every section below places a member
+  # by its KIND, and every one of those filters can simply fail to match, which
+  # leaves the member counted in `membership` and drawn nowhere. The kind is
+  # asked about first because a missing or unplaceable kind hides a whole CLASS
+  # of record rather than one row: it is what drew five members while reporting
+  # no fog and no boundaries.
+  def unplaced_reason($done; $known):
+    if .kind == null
+    then {cause: "no-kind",
+          why: "no kind is recorded on it, and every section of this chart places a member by its kind, so none of them can take it. File a dark patch on the course as kind \($fog_kind), a deliberate boundary as kind \($oos_kind), and anything else as the kind of work it actually is; AGENTS.md section 10 has the commands. A hold kind is a different field and never places a record here."}
+    elif (.id | dkey) != null
+    then {cause: "decision-shape",
+          why: "its id is named as a decision but it is filed as kind \(.kind) rather than captain, so the decision sections do not carry it and the takeable filter excludes every decision-named id. Either file it as a captain decision or rename it."}
+    elif (unresolved($done; $known) | length) > 0
+    then {cause: "blocked",
+          why: "kind \(.kind) is none this chart places as fog, as a boundary, or as a decision, and it is held back by \(unresolved($done; $known) | join(", ")), so it is not takeable either."}
+    elif .hold_reason != null
+    then {cause: "held",
+          why: "kind \(.kind) is none this chart places as fog, as a boundary, or as a decision, and it is held\(if .hold_kind == null then " with no hold kind recorded" else " as \(.hold_kind)" end), so it is not takeable either."}
+    else {cause: "unplaced",
+          why: "kind \(.kind) is none this chart places, and no hold or blocker explains why it is not takeable either. This is a chart defect rather than a record defect - report it."}
+    end;
+
   input as $live
   | input as $arch
   | input as $inv
@@ -460,6 +489,30 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
             }
           }} ]) as $takeable
 
+  # THE SILENT ZERO THIS SECTION EXISTS AGAINST.
+  # A chart that finds members and places none of them reports empty sections,
+  # and an empty section READS AS A CLAIM - "there is no fog on this course" -
+  # when the truth is that the chart could not recognise what it was holding.
+  # That is strictly worse than an error, because nothing about it looks wrong.
+  # Measured: five correctly-named members, four of them chart material, drawn as
+  # `fog: 0  out_of_course: 0` with no footnote anywhere (2026-08-03).
+  # The placed set is collected FROM the sections above rather than re-derived
+  # from copies of their predicates. A second copy would drift from the first the
+  # moment either was edited, and unnoticed drift is the exact fault this reports.
+  # So a section added later that is not folded in here shows up as a false
+  # unplaced row - loud, and in the recoverable direction - rather than as
+  # another silent zero.
+  | ([ $seen[], ($withheld[] | .id), ($fog[] | .id),
+       ($out_of_course[] | .id), ($takeable[] | .id) ] | unique) as $placed
+  | ([ $mine[]
+       | select(open_state)
+       | select(.id != $chart)          # the undertaking is the destination, not a member drawn on its own chart
+       | select(.id as $id | ($placed | index($id)) == null)
+       | unplaced_reason($done; $known) as $reason
+       | {id, title:(.title // ""),
+          kind:(.kind // null), hold_kind:(.hold_kind // null),
+          cause: $reason.cause, why: $reason.why} ]) as $unplaced
+
   | {
       schema: "fm-sea-chart.v1",
       chart: $chart,
@@ -481,6 +534,7 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
       fog: $fog,
       out_of_course: $out_of_course,
       takeable: $takeable,
+      unplaced: $unplaced,
       counts: {
         # Both sides are drawn from the same home, so the first can never be the
         # smaller. The guard is here anyway: printing arithmetic that cannot be
@@ -492,7 +546,8 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
         decisions: ($open_decisions | length),
         folded: (([ $groups[] | .record_count ] | add // 0) - ($open_decisions | length)),
         withheld: ($withheld | length),
-        possibly_answered: ($possibly_answered | length)
+        possibly_answered: ($possibly_answered | length),
+        unplaced: ($unplaced | length)
       },
       possibly_answered: $possibly_answered,
       # Printed ON the chart, not filed in documentation. A chart that names its
@@ -531,7 +586,13 @@ if [ "$MODE" = "summary" ]; then
     "  possibly already answered: \(.counts.possibly_answered)",
     "",
     "members: \(.membership.members)   rule: \(.membership.rule)",
+    (if .counts.unplaced > 0 then
+      "  of those, \(.counts.unplaced) could not be placed in any section below - see UNPLACED" else empty end),
     "",
+    (if (.unplaced | length) > 0 then
+      "UNPLACED - members on this course the chart could not place, so the sections below are missing them:",
+      (.unplaced[] | "  ? \(.id)  [kind: \(.kind // "none")\(if .hold_kind == null then "" else ", hold-kind: \(.hold_kind)" end)]\n      \(.why)"),
+      "" else empty end),
     (if (.withheld | length) > 0 then
       "WITHHELD - open captain-gated records the actionable surface did not return:",
       (.withheld[] | "  ! \(.id)\n      \(.why)" +
