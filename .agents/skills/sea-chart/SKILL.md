@@ -95,6 +95,7 @@ Render those records in full, with the blocker or the closed twin named, near th
 Withheld records do not all carry the same news, and each one says which it is in `cause` with the reason in `why`.
 A `blocked` record is a decision the fleet has lost track of and belongs at the top with its blocker named; an `in-flight` one is simply being worked right now, and `no-hold` or `other-hold` mean the record never asked the captain anything in the first place.
 A `stale-edge` or `dangling-edge` record belongs at the top too, for the opposite reason: nothing is holding it, the blocker it names is either Done in the archive or a real record nowhere, and the captain can answer it now once somebody clears the edge.
+An `unpaired-variant` record is the one the surface did return and the fold then dropped, because no judge ruling in its group carries its decision key - it is a question only an analyst raised, and the rule below about folded records is exactly why it is listed here rather than left between the two surfaces.
 Print each `why` beside its record so the difference is on the page rather than in the reader's head, and never let the milder causes crowd a `blocked` record down the list or off it.
 The whole point is that a chart which quietly omits an open decision is more harmful than no chart at all.
 
@@ -102,6 +103,7 @@ The whole point is that a chart which quietly omits an open decision is more har
 These are members the chart counted and could not put anywhere, and they are the one report that must never be dropped in rendering, because dropping it restores exactly the fault it exists to catch.
 An empty section is read as a statement about the course - "there is no fog here" - so a member the chart could not recognise turns into a claim nobody made.
 Each entry names its `kind` and `hold_kind` beside the `why`, because those two fields are what get confused, and a `no-kind` cause means the record was filed without the kind that `AGENTS.md` section 10 requires rather than that the course is clear.
+The entries arrive `kind_defect` first and must be rendered in that order, under headings that keep the two apart: a kind the chart cannot classify can leave a whole section reading empty, while held or blocked ordinary work is only work this chart has no section for, and letting the second crowd out the first is how the empty sections went unnoticed in the first place.
 
 **Every folded record stays visible.**
 Use `.fm-variants`, exactly as the decision board does, for the same reason: the fold rests on an assumption nothing verifies, so a question only an analyst raised must be discoverable by eye rather than silently absent.

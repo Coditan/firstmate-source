@@ -69,7 +69,11 @@
 # captain-gated records straight from the backlog and RECONCILES: any record
 # under this chart that the actionable surface did not return is reported in
 # `withheld[]`, named, counted, and given the reason it did not reach the
-# surface - blocked, in flight, or held some other way. What makes a record
+# surface - blocked, in flight, or held some other way. A record the surface DID
+# return and the collapse rule then folded away without pairing it to any judge
+# ruling in its group is reported there too, as `unpaired-variant`: the fold
+# rests on an assumption nothing verifies, so a question only an analyst raised
+# must stay on the page rather than fall between the two surfaces. What makes a record
 # captain-gated is its KIND, never its name: `kind: captain` together with
 # `hold-kind: captain` is the only shape captain-actionability can ever admit,
 # and a captain record named without `-decision-` is exactly as lost when it is
@@ -143,12 +147,14 @@
 #   membership         the rule in one line, plus the member count it produced
 #   decided[]          resolved decisions of this chart, newest first
 #   decisions[]        open decisions, after the board's collapse rule
-#   withheld[]         captain-gated records the actionable surface did not
-#                      return, each with the `cause` that kept it off - blocked,
+#   withheld[]         open captain-gated records this chart's decision list does
+#                      not carry, each with the `cause` that kept it off - blocked,
 #                      in-flight, no-hold, other-hold, stale-edge, dangling-edge,
-#                      not-returned - and `why` in words; blocked means a decision
-#                      the fleet has lost, stale-edge and dangling-edge mean one it
-#                      can answer right now once the bad edge is cleared
+#                      unpaired-variant, not-returned - and `why` in words; blocked
+#                      means a decision the fleet has lost, stale-edge and
+#                      dangling-edge mean one it can answer right now once the bad
+#                      edge is cleared, and unpaired-variant means the fold dropped
+#                      a question only an analyst raised
 #   fog[]              named dark patches on this course
 #   out_of_course[]    deliberate scope boundaries; these never rise
 #   takeable[]         work with no unresolved real blocker and no hold, each with
@@ -156,10 +162,12 @@
 #                      {unsupervised_edit, landing{mode,requires}}
 #   unplaced[]         members this chart counted and could NOT put in any section
 #                      above, each with the `cause` that left it out - no-kind,
-#                      decision-shape, blocked, held, unplaced - and `why` in
-#                      words. An empty section reads as a claim about the course,
-#                      so a member the chart cannot recognise is named rather than
-#                      quietly dropped behind a zero
+#                      decision-shape, blocked, held, unplaced - `kind_defect` for
+#                      whether the kind itself is the fault, and `why` in words.
+#                      An empty section reads as a claim about the course, so a
+#                      member the chart cannot recognise is named rather than
+#                      quietly dropped behind a zero. Ordered kind defects first,
+#                      so held or blocked ordinary work cannot push one down
 #   counts             the three incompleteness numbers, computed fresh per build
 set -eu
 
@@ -335,17 +343,23 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   def stale_edges($done; $live_done):
     [ (.blocked_by_ids // [])[] | select($done[.] == true and $live_done[.] != true) ];
 
-  # Why a captain-gated record never reached the actionable surface. These are
+  # Why a captain-gated record is not on the decision list of this chart. These are
   # different pieces of news and must not share one sentence: a blocked record is
   # one the fleet has lost track of, while an in-flight one is being worked right
   # now. Captain-actionability (bin/fm-fleet-snapshot.sh) wants a queued record of
   # kind captain, held with hold-kind captain, and nothing unresolved against it,
   # so each failing clause gets its own name and its own words.
+  # The unpaired-variant clause comes FIRST because it is the one case where the
+  # record did reach the actionable surface, so every sentence below it - each of
+  # which says the surface never carried it - would be false of such a record.
   # The stale-edge clause comes last of the named ones ON PURPOSE: reaching it
   # means every other clause of that predicate already passes, which is what
   # makes the claim that the decision can be answered now true rather than hoped.
-  def withheld_reason($done; $live_done; $known):
-    if (unresolved($done; $known) | length) > 0
+  def withheld_reason($done; $live_done; $known; $unpaired):
+    if (. as $r | ($unpaired | index($r.id)) != null)
+    then {cause: "unpaired-variant",
+          why: "it reached the actionable surface, but no judge ruling in its group carries its decision key, so the collapse rule folded it away and the decision list below does not show it. It is a question only an analyst raised: the fold assumes a judge picked that question up, nothing verifies that assumption, so read this record rather than take the fold at its word."}
+    elif (unresolved($done; $known) | length) > 0
     then {cause: "blocked",
           why: "blocked by another record that has not resolved, so it never reaches the actionable surface"}
     elif .state != "queued"
@@ -375,20 +389,28 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # asked about first because a missing or unplaceable kind hides a whole CLASS
   # of record rather than one row: it is what drew five members while reporting
   # no fog and no boundaries.
+  # These causes are not equal news, and `kind_defect` is what says so. A kind
+  # the chart cannot classify can empty a whole section while the course is not
+  # empty at all; a held or blocked ordinary kind is simply work this chart has
+  # no section for, which is worth stating and is no one to blame. Both are
+  # reported - dropping the second would be the silent gap this section exists
+  # against - but the first is ranked above it, because a real kind defect
+  # pushed down the page by a long tail of routine held rows is how the original
+  # defect went unnoticed.
   def unplaced_reason($done; $known):
     if .kind == null
-    then {cause: "no-kind",
+    then {cause: "no-kind", kind_defect: true,
           why: "no kind is recorded on it, and every section of this chart places a member by its kind, so none of them can take it. File a dark patch on the course as kind \($fog_kind), a deliberate boundary as kind \($oos_kind), and anything else as the kind of work it actually is; AGENTS.md section 10 has the commands. A hold kind is a different field and never places a record here."}
     elif (.id | dkey) != null
-    then {cause: "decision-shape",
+    then {cause: "decision-shape", kind_defect: true,
           why: "its id is named as a decision but it is filed as kind \(.kind) rather than captain, so the decision sections do not carry it and the takeable filter excludes every decision-named id. Either file it as a captain decision or rename it."}
     elif (unresolved($done; $known) | length) > 0
-    then {cause: "blocked",
+    then {cause: "blocked", kind_defect: false,
           why: "kind \(.kind) is none this chart places as fog, as a boundary, or as a decision, and it is held back by \(unresolved($done; $known) | join(", ")), so it is not takeable either."}
     elif .hold_reason != null
-    then {cause: "held",
+    then {cause: "held", kind_defect: false,
           why: "kind \(.kind) is none this chart places as fog, as a boundary, or as a decision, and it is held\(if .hold_kind == null then " with no hold kind recorded" else " as \(.hold_kind)" end), so it is not takeable either."}
-    else {cause: "unplaced",
+    else {cause: "unplaced", kind_defect: true,
           why: "kind \(.kind) is none this chart places, and no hold or blocker explains why it is not takeable either. This is a chart defect rather than a record defect - report it."}
     end;
 
@@ -415,8 +437,17 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # What the actionable surface returned for this chart, after the fold.
   | ([ $inv.groups[]? | select(member(.group)) ]) as $groups
   | ([ $groups[] | .decisions[]? ]) as $open_decisions
+  # What the fold actually KEPT, and therefore what this chart goes on to draw:
+  # the decisions it returns and the variants it paired to them by key. The
+  # `unpaired_variants[]` of the inventory are held apart on purpose and counted as
+  # $unpaired instead. They are records the surface returned and the fold could
+  # not attach to any ruling, and no section of this chart emits them - so
+  # counting them as returned would delete each one from every surface at once,
+  # which is the same silent loss on a fourth flank. They are reconciled below
+  # like any other record the decision list does not carry.
   | ([ $groups[]
-       | (.decisions[]? | .id), (.decisions[]?.variants[]? | .id), (.unpaired_variants[]? | .id) ]) as $seen
+       | (.decisions[]? | .id), (.decisions[]?.variants[]? | .id) ]) as $seen
+  | ([ $groups[] | (.unpaired_variants[]? | .id) ]) as $unpaired
 
   # RECONCILIATION. Every record this chart owns that waits on the captain,
   # straight from the backlog - then whatever the actionable surface did not
@@ -434,7 +465,7 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   | ([ $mine[] | select(open_state and .kind == "captain") ]) as $own_decision_records
   | ([ $own_decision_records[]
        | select(.id as $id | ($seen | index($id)) == null)
-       | withheld_reason($done; $live_done; $known) as $reason
+       | withheld_reason($done; $live_done; $known; $unpaired) as $reason
        | {id, key:(.id | dkey), title:(.title // ""),
           held_by:(unresolved($done; $known) | join(", ")),
           cause: $reason.cause,
@@ -471,10 +502,17 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # dangling blocked-by edge - a target real in neither the backlog nor the archive
   # - never held it, so it stays takeable and the stale edge is named on the row so
   # it gets cleared rather than silently gating the work off the chart forever.
+  # A record with NO kind is never takeable. Nothing on it says what it is, so
+  # nothing rules out its being a dark patch or a boundary somebody filed with
+  # the hold alone - the exact miss this chart was drawing blank on - and this
+  # script refuses the wrong-invitation direction everywhere else for the same
+  # reason: offering held work as takeable costs more than holding ready work
+  # back. Such a record is reported in unplaced[], which names the missing kind.
   | ([ $mine[]
        | select(open_state)
        | select(.id != $chart)          # the undertaking itself is the destination, not a leg of it
        | select((.id | dkey) == null)
+       | select(.kind != null)
        | select(.kind as $k | ($chart_kinds | index($k)) == null)
        | select(.kind != "captain")
        | select((unresolved($done; $known) | length) == 0)
@@ -496,13 +534,16 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # That is strictly worse than an error, because nothing about it looks wrong.
   # Measured: five correctly-named members, four of them chart material, drawn as
   # `fog: 0  out_of_course: 0` with no footnote anywhere (2026-08-03).
-  # The placed set is collected FROM the sections above rather than re-derived
+  # The placed set is read out of the ARRAYS this chart emits, never re-derived
   # from copies of their predicates. A second copy would drift from the first the
   # moment either was edited, and unnoticed drift is the exact fault this reports.
   # So a section added later that is not folded in here shows up as a false
   # unplaced row - loud, and in the recoverable direction - rather than as
-  # another silent zero.
-  | ([ $seen[], ($withheld[] | .id), ($fog[] | .id),
+  # another silent zero. Reading the emitted arrays is also what keeps the claim
+  # honest in the other direction: an id that no section prints can never count
+  # as placed just because some intermediate list happened to mention it.
+  | ([ ($open_decisions[] | .id), ($open_decisions[] | .variants[]? | .id),
+       ($withheld[] | .id), ($fog[] | .id),
        ($out_of_course[] | .id), ($takeable[] | .id) ] | unique) as $placed
   | ([ $mine[]
        | select(open_state)
@@ -511,7 +552,9 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
        | unplaced_reason($done; $known) as $reason
        | {id, title:(.title // ""),
           kind:(.kind // null), hold_kind:(.hold_kind // null),
-          cause: $reason.cause, why: $reason.why} ]) as $unplaced
+          cause: $reason.cause, kind_defect: $reason.kind_defect,
+          why: $reason.why} ]
+     | sort_by(if .kind_defect then 0 else 1 end)) as $unplaced
 
   | {
       schema: "fm-sea-chart.v1",
@@ -547,7 +590,8 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
         folded: (([ $groups[] | .record_count ] | add // 0) - ($open_decisions | length)),
         withheld: ($withheld | length),
         possibly_answered: ($possibly_answered | length),
-        unplaced: ($unplaced | length)
+        unplaced: ($unplaced | length),
+        unplaced_kind_defects: ([ $unplaced[] | select(.kind_defect) ] | length)
       },
       possibly_answered: $possibly_answered,
       # Printed ON the chart, not filed in documentation. A chart that names its
@@ -587,14 +631,30 @@ if [ "$MODE" = "summary" ]; then
     "",
     "members: \(.membership.members)   rule: \(.membership.rule)",
     (if .counts.unplaced > 0 then
-      "  of those, \(.counts.unplaced) could not be placed in any section below - see UNPLACED" else empty end),
+      "  of those, \(.counts.unplaced) could not be placed in any section below - see UNPLACED" +
+      (if .counts.unplaced_kind_defects > 0
+       then " (\(.counts.unplaced_kind_defects) carrying a kind this chart cannot classify)"
+       else "" end) else empty end),
     "",
     (if (.unplaced | length) > 0 then
-      "UNPLACED - members on this course the chart could not place, so the sections below are missing them:",
-      (.unplaced[] | "  ? \(.id)  [kind: \(.kind // "none")\(if .hold_kind == null then "" else ", hold-kind: \(.hold_kind)" end)]\n      \(.why)"),
-      "" else empty end),
+      "UNPLACED - members on this course the chart drew in no section below:" else empty end),
+    # Kind defects first and under their own heading, because they are the ones
+    # that can leave a section reading empty while the course is not. Routine
+    # held or blocked work is reported too - a silent gap is what this exists
+    # against - but it must never be what a reader meets first.
+    (if .counts.unplaced_kind_defects > 0 then
+      "  KIND DEFECTS - the chart cannot classify these, so a section above may read empty while the course is not:",
+      (.unplaced[] | select(.kind_defect)
+        | "  ? \(.id)  [kind: \(.kind // "none")\(if .hold_kind == null then "" else ", hold-kind: \(.hold_kind)" end)]\n      \(.why)")
+      else empty end),
+    (if ((.unplaced | length) - .counts.unplaced_kind_defects) > 0 then
+      "  HELD OR BLOCKED - ordinary work this chart has no section for; the kind is not the fault here:",
+      (.unplaced[] | select(.kind_defect | not)
+        | "  ? \(.id)  [kind: \(.kind // "none")\(if .hold_kind == null then "" else ", hold-kind: \(.hold_kind)" end)]\n      \(.why)")
+      else empty end),
+    (if (.unplaced | length) > 0 then "" else empty end),
     (if (.withheld | length) > 0 then
-      "WITHHELD - open captain-gated records the actionable surface did not return:",
+      "WITHHELD - open captain-gated records no decision section of this chart carries:",
       (.withheld[] | "  ! \(.id)\n      \(.why)" +
         (if .held_by != "" then "\n      held by: \(.held_by)" else "" end)),
       "" else empty end),
