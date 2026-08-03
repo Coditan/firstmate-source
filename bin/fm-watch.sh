@@ -983,7 +983,7 @@ certsync_health_reason() {
   local project compose graph_compose marker previous timeout_previous out healthy summary
   FM_CERTSYNC_HEALTH_REASON=
   FM_CERTSYNC_HEALTH_SIGNATURE=
-  project=${FM_CERTSYNC_PROJECT:-$FM_ROOT/projects/hlr-certsync}
+  project=${FM_CERTSYNC_PROJECT:-$FM_HOME/projects/hlr-certsync}
   compose=${FM_CERTSYNC_COMPOSE_FILE:-$project/docker-compose.yml}
   graph_compose=${FM_CERTSYNC_GRAPH_COMPOSE_FILE:-$project/docker-compose.graph-pem.yml}
   marker="$STATE/.certsync-health-surfaced"

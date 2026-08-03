@@ -1795,7 +1795,8 @@ test_heartbeat_backstop_surfaces_unsurfaced_status() {
 
 setup_certsync_health_case() {  # <dir>
   local dir=$1 project
-  project="$dir/root/projects/hlr-certsync"
+  project="$dir/home/projects/hlr-certsync"
+  mkdir -p "$dir/root"
   mkdir -p "$project"
   : > "$project/docker-compose.yml"
   : > "$project/docker-compose.graph-pem.yml"
@@ -1820,7 +1821,7 @@ test_heartbeat_certsync_healthy_absorbed() {
   payload="$fakebin/certsync-payload.json"
   install_fake_certsync_docker "$fakebin" "$payload"
   printf '{"healthy":true,"reason":"ok"}\n' > "$payload"
-  PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$dir/root" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+  PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$dir/root" FM_HOME="$dir/home" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 FM_FAKE_CERTSYNC_PAYLOAD="$payload" "$WATCH" > "$out" &
   pid=$!
   if ! wait_live "$pid" 30; then
@@ -1840,7 +1841,7 @@ test_heartbeat_certsync_unhealthy_surfaces_check_wake() {
   payload="$fakebin/certsync-payload.json"
   install_fake_certsync_docker "$fakebin" "$payload"
   printf '{"healthy":false,"reason":"state DB missing"}\n' > "$payload"
-  PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$dir/root" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+  PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$dir/root" FM_HOME="$dir/home" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 FM_FAKE_CERTSYNC_PAYLOAD="$payload" "$WATCH" > "$out" &
   pid=$!
   wait_for_exit "$pid" 40 || fail "heartbeat did not surface unhealthy certsync"
@@ -1859,7 +1860,7 @@ test_heartbeat_certsync_unknown_absorbed() {
   payload="$fakebin/certsync-payload.json"
   install_fake_certsync_docker "$fakebin" "$payload"
   printf 'not-json\n' > "$payload"
-  PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$dir/root" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+  PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$dir/root" FM_HOME="$dir/home" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 FM_FAKE_CERTSYNC_PAYLOAD="$payload" "$WATCH" > "$out" &
   pid=$!
   if ! wait_live "$pid" 30; then
