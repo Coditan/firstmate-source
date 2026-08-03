@@ -1,6 +1,6 @@
 ---
 name: stow
-description: Sweep the current session for uncaptured durable knowledge and file it to disk before a context reset. Use when the captain invokes /stow (e.g. "/stow", "stow what you've learned"), before a session or context reset, and on a context-ceiling wake that asks for this sweep before the receipt and reset commands it names.
+description: Sweep the current session for uncaptured durable knowledge and file it to disk before a context reset. Use when the captain invokes /stow (e.g. "/stow", "stow what you've learned"), before a session reset, before a context reset, before a compaction the harness is about to perform anyway (file ahead of one; a compaction is never the instrument that holds the context ceiling), and on a context-ceiling wake that asks for this sweep before the receipt and reset commands it names.
 user-invocable: true
 metadata:
   internal: true
@@ -16,7 +16,7 @@ The goal is a session that is safe to reset or destroy because everything durabl
 ## When the context ceiling calls this sweep
 
 The captain invokes `/stow` whenever they like, and that is still the ordinary case.
-The other caller is the context ceiling: the watcher measures the primary session against it and, when the session is over and the fleet is quiet, queues a wake whose payload says to run this sweep and then, in the same turn, the receipt and reset commands it names.
+The other caller is the context ceiling: the watcher measures the primary session against it and, when the session is over that ceiling and the fleet is quiet, queues a wake whose payload says to run this sweep and then, in the same turn, the receipt and reset commands it names.
 `docs/context-reset.md` owns that mechanism, its refusals, and the evidence behind them; this section owns only what changes about the sweep when it is that caller, because the sweep is the one step the mechanism cannot perform for itself.
 
 - **The receipt attests to this sweep; nothing verifies it.**

@@ -236,16 +236,23 @@ test_pi_snippet_uses_effective_extension_path() {
 # crossed hours later, and a model that believed it could would stop reading the
 # wake that actually measured it.
 test_context_ceiling_is_left_to_the_wake_payload() {
-  local harness out snippet
+  local harness out snippet swept=0
   for harness in claude codex grok opencode pi not-real; do
     out=$("$RENDER" --harness "$harness")
     assert_not_contains "$out" "300k" "$harness block restates a ceiling the watcher measures and the wake carries"
     assert_not_contains "$out" "Context ceiling" "$harness block restates the context-ceiling rule"
   done
 
+  # An absence assertion passes loudest when it checks nothing: an unexpanded
+  # glob leaves the literal pattern, grep exits 2 on the missing file, and the
+  # `!` in assert_no_grep reads that as "the ceiling is absent". Guard both the
+  # empty expansion and the literal one so the invariant cannot go vacuous.
   for snippet in "$ROOT"/docs/supervision-protocols/*.md; do
+    assert_present "$snippet" "supervision-protocols snippet glob did not expand to real files ($snippet)"
     assert_no_grep '300k' "$snippet" "per-harness snippet $snippet carries a copy of the context-ceiling rule"
+    swept=$((swept + 1))
   done
+  [ "$swept" -gt 0 ] || fail "no supervision-protocols snippets were checked for the context-ceiling rule"
   pass "the supervision block leaves the context ceiling to the wake that measures it"
 }
 
