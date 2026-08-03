@@ -13,9 +13,42 @@ It sources `bin/fm-gate-refuse-lib.sh` and stays silent for a no-mistakes gate a
 It shares `bin/fm-primary-scope-lib.sh` with `bin/fm-turnend-guard.sh`, so the two hooks cannot drift on primary detection.
 The Shared Predicate section of `docs/turnend-guard.md` remains authoritative for marker validation, plain-checkout detection, and the required firstmate-shaped paths.
 
-Before printing, the wrapper reads `state/.lock` and walks at most eight parents from its own pid, matching `bin/fm-lock.sh` and Pi's `lockOwnership()` ancestry depth.
+Before printing, the wrapper reads `state/.lock` and walks at most eight parents from its own pid, the ancestry depth Pi's `lockOwnership()` and the shared `bin/fm-harness-pid-lib.sh` also use.
 If the lock names a live pid in that ancestry, session-start already ran in this harness session and the wrapper stays silent.
 Every path exits 0, including malformed state and adapter errors, because Claude SessionStart exit 2 blocks session initialization.
+
+## Primary transcript record
+
+The wrapper also writes `state/.primary-transcript`, the record that tells any later reader where this session's own transcript lives.
+It exists for the context-reset mechanism, which measures that transcript's size and binds a reset receipt to its position; a reader that measured the wrong transcript would pass a check that proves nothing, so the record is written to be either right or visibly wrong.
+
+The fields are `key=value` lines, matching `state/<id>.meta`:
+
+| Field | Meaning |
+|---|---|
+| `status` | `ok` or `error`; a reader must refuse on anything but `ok` |
+| `error` | on `status=error` only, the cause: `no-hook-payload`, `no-transcript-path`, `no-session-id`, `unusable-transcript-path`, `unusable-session-id`, `no-jq`, or `no-harness-process` |
+| `harness_pid` | the harness process that owns this session, resolved by `bin/fm-harness-pid-lib.sh`, the same identity `bin/fm-lock.sh` writes to `state/.lock` |
+| `session_id` | the harness session id, which `claude --resume <id>` reopens |
+| `transcript_path` | absolute path to the session's transcript |
+| `recorded_at` | epoch seconds when the record was written |
+
+Four properties are load-bearing, and `tests/fm-sessionstart-nudge.test.sh` covers each.
+
+The record is written before the already-ran lock-ancestry check, not after it.
+A `/clear` starts a new session id and a new transcript inside the same harness process, so the lock it already holds is still in the new session's ancestry and the wrapper stays silent - but the previous session's transcript path is now stale, and a silent path would have left it in place.
+
+The record names its owner.
+`harness_pid` is resolved through the same shared ancestry walk the session lock uses, so a reader can bind the record to the lock holder rather than assuming the last session to start in this home is the one it cares about.
+A second harness session started in the same home rewrites the record with its own pid; a reader that compares against `state/.lock` sees the mismatch instead of measuring the wrong session.
+
+A value that cannot be determined is written as an explicit error, never omitted.
+An absent field would be indistinguishable from a reader's own bug, and a leftover `ok` record from the previous session would be worse still, so every primary session start replaces the whole record.
+A value that cannot be written as a single `key=value` line is rejected for the same reason, so no payload can forge a plausible-looking record.
+Codex reports `transcript_path` as `null`, Grok and OpenCode hand the wrapper no payload at all, and each of those records `status=error` with the cause - honest, because the context-reset mechanism is verified on Claude only.
+
+Nothing consumes the record yet.
+It is the first step of the stow-then-clear mechanism, built alone so the steps that measure, receipt, and reset have an unambiguous transcript to work from.
 
 ## Harness transports
 
@@ -136,6 +169,7 @@ A fresh Grok run was attempted on 2026-07-22 but stopped at `402 Payment Require
 ## Regression coverage
 
 `tests/fm-sessionstart-nudge.test.sh` proves wrapper silence for both gate signals, an unmarked linked worktree, a missing state directory, and an already-owned lock.
+It proves the transcript record's ok fields, that the record and `bin/fm-lock.sh` name the same harness process, that a silent post-clear start still replaces a superseded record, that a missing transcript path, an absent payload, and an unidentifiable owning process each record a visible error rather than leaving a stale or absent value, and that a non-primary claims no record.
 It proves exact U+2063 `FIRSTMATE_OP:`-prefixed, `session-start`-typed one-line output for a plain primary and a marked linked secondmate primary.
 It also verifies tracked wrapper registration for Claude, Codex, OpenCode, Pi, and Grok.
 `tests/fm-captain-translation-contract.test.sh` proves Ahoy's current marker rule, narrow legacy compatibility exclusions, genuine captain-message near misses, and the shared marker on every supported user-role operational injection.

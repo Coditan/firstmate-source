@@ -108,6 +108,202 @@ test_owned_lock_is_silent() {
   pass "fm-sessionstart-nudge: a lock holder in process ancestry is already run"
 }
 
+# make_fake_ps_holder <fakebin> <holder-pid>: report the given pid as a live
+# `claude` harness and every other pid as a plain shell whose parent is that
+# holder, so the shared ancestry walk in bin/fm-harness-pid-lib.sh resolves to
+# exactly one known pid the test can assert on.
+make_fake_ps_holder() {
+  local fakebin=$1 holder_pid=$2
+  cat > "$fakebin/ps" <<SH
+#!/usr/bin/env bash
+set -u
+pid=""
+prev=""
+for arg in "\$@"; do
+  [ "\$prev" = "-p" ] && pid="\$arg"
+  prev="\$arg"
+done
+case "\$*" in
+  *"comm="*)
+    if [ "\$pid" = "$holder_pid" ]; then printf '/usr/local/bin/claude\n'; else printf '/bin/bash\n'; fi
+    exit 0 ;;
+  *"args="*)
+    if [ "\$pid" = "$holder_pid" ]; then printf 'claude\n'; else printf 'bash\n'; fi
+    exit 0 ;;
+  *"ppid="*) printf '%s\n' "$holder_pid"; exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/ps"
+}
+
+# make_fake_ps_no_harness <fakebin>: no ancestor is ever a harness and the walk
+# terminates at pid 1.
+make_fake_ps_no_harness() {
+  local fakebin=$1
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "$*" in
+  *"comm="*) printf '/bin/bash\n'; exit 0 ;;
+  *"args="*) printf 'bash\n'; exit 0 ;;
+  *"ppid="*) printf '1\n'; exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/ps"
+}
+
+# run_nudge_with_payload <root> <fakebin> <payload>: drive the wrapper the way a
+# harness hook does, with the payload on stdin. An empty payload means the
+# harnesses that hand the wrapper nothing.
+run_nudge_with_payload() {
+  local root=$1 fakebin=$2 payload=$3
+  printf '%s' "$payload" | env PATH="$fakebin:$PATH" FM_GATE_REFUSE_BYPASS=0 \
+    FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$NUDGE"
+}
+
+record_field() {
+  local record=$1 key=$2 line
+  while IFS= read -r line; do
+    case "$line" in "$key="*) printf '%s\n' "${line#"$key"=}"; return 0 ;; esac
+  done < "$record"
+  return 1
+}
+
+CLAUDE_PAYLOAD='{"session_id":"11111111-2222-3333-4444-555555555555","transcript_path":"/home/cap/.claude/projects/-home-cap-fm/11111111-2222-3333-4444-555555555555.jsonl","cwd":"/home/cap/fm","hook_event_name":"SessionStart","source":"startup"}'
+
+test_records_transcript_position() {
+  local root="$TMP_ROOT/record-ok" fakebin record status=0 out
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  make_fake_ps_holder "$fakebin" 424242
+  out=$(run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD") || status=$?
+  expect_code 0 "$status" "record run"
+  [ "$out" = "$NUDGE_LINE" ] || fail "recording changed the nudge output: $out"
+  record="$root/state/.primary-transcript"
+  [ -f "$record" ] || fail "no transcript record was written"
+  [ "$(record_field "$record" status)" = ok ] || fail "record status is not ok: $(cat "$record")"
+  [ "$(record_field "$record" transcript_path)" = \
+    "/home/cap/.claude/projects/-home-cap-fm/11111111-2222-3333-4444-555555555555.jsonl" ] \
+    || fail "record has the wrong transcript path: $(cat "$record")"
+  [ "$(record_field "$record" session_id)" = 11111111-2222-3333-4444-555555555555 ] \
+    || fail "record has the wrong session id: $(cat "$record")"
+  [ "$(record_field "$record" harness_pid)" = 424242 ] \
+    || fail "record is not bound to the owning harness process: $(cat "$record")"
+  case "$(record_field "$record" recorded_at)" in
+    ''|*[!0-9]*) fail "record has no epoch stamp: $(cat "$record")" ;;
+  esac
+  pass "fm-sessionstart-nudge: a primary records its transcript path, session id, and owning harness pid"
+}
+
+test_record_binds_to_the_same_pid_as_the_session_lock() {
+  local root="$TMP_ROOT/record-lock-parity" fakebin out status=0
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  make_fake_ps_holder "$fakebin" 515151
+  run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD" >/dev/null
+  out=$(PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$ROOT/bin/fm-lock.sh") || status=$?
+  expect_code 0 "$status" "lock acquisition next to a transcript record"
+  assert_contains "$out" "lock acquired: harness pid 515151" "fm-lock.sh stopped reporting the shared harness pid"
+  [ "$(record_field "$root/state/.primary-transcript" harness_pid)" = "$(cat "$root/state/.lock")" ] \
+    || fail "the transcript record and the session lock disagree about which session owns this home"
+  pass "fm-sessionstart-nudge: the transcript record and the session lock name the same harness process"
+}
+
+test_record_is_rewritten_after_a_clear() {
+  local root="$TMP_ROOT/record-after-clear" fakebin record
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  # A clear keeps the harness process, so the lock it already holds is still in
+  # this session's ancestry: the wrapper stays silent, and the record must be
+  # rewritten anyway. The holder must be a live pid for that ancestry check.
+  make_fake_ps_holder "$fakebin" "$$"
+  record="$root/state/.primary-transcript"
+  printf 'status=ok\nharness_pid=%s\nsession_id=old-session\ntranscript_path=/tmp/old-session.jsonl\nrecorded_at=1\n' \
+    "$$" > "$record"
+  printf '%s\n' "$$" > "$root/state/.lock"
+  expect_silent_zero "post-clear nudge" run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD"
+  [ "$(record_field "$record" session_id)" = 11111111-2222-3333-4444-555555555555 ] \
+    || fail "a cleared session kept the previous session's transcript record: $(cat "$record")"
+  pass "fm-sessionstart-nudge: a post-clear session start replaces the superseded transcript record"
+}
+
+test_missing_transcript_path_is_recorded_as_an_error() {
+  local root="$TMP_ROOT/record-no-path" fakebin record
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  make_fake_ps_holder "$fakebin" 727272
+  record="$root/state/.primary-transcript"
+  printf 'status=ok\nharness_pid=727272\nsession_id=old-session\ntranscript_path=/tmp/old-session.jsonl\nrecorded_at=1\n' \
+    > "$record"
+  run_nudge_with_payload "$root" "$fakebin" \
+    '{"session_id":"abc","transcript_path":null,"hook_event_name":"SessionStart"}' >/dev/null
+  [ "$(record_field "$record" status)" = error ] \
+    || fail "a payload without a transcript path left a usable-looking record: $(cat "$record")"
+  [ "$(record_field "$record" error)" = no-transcript-path ] \
+    || fail "the recorded failure does not name its cause: $(cat "$record")"
+  assert_not_contains "$(cat "$record")" "/tmp/old-session.jsonl" \
+    "the superseded transcript path survived a failed determination"
+  pass "fm-sessionstart-nudge: a payload without a transcript path records a visible error, not the stale path"
+}
+
+test_absent_payload_is_recorded_as_an_error() {
+  local root="$TMP_ROOT/record-no-payload" fakebin record
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  make_fake_ps_holder "$fakebin" 838383
+  run_nudge_with_payload "$root" "$fakebin" '' >/dev/null
+  record="$root/state/.primary-transcript"
+  [ -f "$record" ] || fail "a harness that hands over no payload left no record at all"
+  [ "$(record_field "$record" error)" = no-hook-payload ] \
+    || fail "an absent payload was not recorded as such: $(cat "$record")"
+  pass "fm-sessionstart-nudge: a harness that delivers no payload records a visible error"
+}
+
+test_unwritable_transcript_path_is_recorded_as_an_error() {
+  local root="$TMP_ROOT/record-forged-path" fakebin record body
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  make_fake_ps_holder "$fakebin" 848484
+  run_nudge_with_payload "$root" "$fakebin" \
+    '{"session_id":"abc","transcript_path":"/tmp/a.jsonl\nstatus=ok\ntranscript_path=/tmp/forged.jsonl"}' >/dev/null
+  record="$root/state/.primary-transcript"
+  body=$(cat "$record")
+  [ "$(record_field "$record" error)" = unusable-transcript-path ] \
+    || fail "a multi-line transcript path was not recorded as unusable: $body"
+  assert_not_contains "$body" "/tmp/forged.jsonl" "a transcript path forged extra record lines"
+  assert_not_contains "$body" "status=ok" "a transcript path forged a usable-looking status"
+  pass "fm-sessionstart-nudge: a value that cannot be written as one record line is an error, not a record"
+}
+
+test_absent_harness_process_is_recorded_as_an_error() {
+  local root="$TMP_ROOT/record-no-harness" fakebin record
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  make_fake_ps_no_harness "$fakebin"
+  run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD" >/dev/null
+  record="$root/state/.primary-transcript"
+  [ "$(record_field "$record" error)" = no-harness-process ] \
+    || fail "an unidentifiable session owner was not recorded as such: $(cat "$record")"
+  assert_not_contains "$(cat "$record")" "transcript_path=" \
+    "an unowned record still published a transcript path"
+  pass "fm-sessionstart-nudge: a session whose owning process cannot be identified records a visible error"
+}
+
+test_non_primary_records_nothing() {
+  local base="$TMP_ROOT/record-linked-base" root="$TMP_ROOT/record-linked" fakebin
+  fm_git_worktree "$base" "$root" fm/sessionstart-record-linked
+  mkdir -p "$root/bin" "$root/state"
+  : > "$root/AGENTS.md"
+  fakebin=$(fm_fakebin "$root")
+  make_fake_ps_holder "$fakebin" 939393
+  expect_silent_zero "linked worktree record" run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD"
+  [ ! -e "$root/state/.primary-transcript" ] \
+    || fail "an unmarked linked task worktree claimed the home's transcript record"
+  pass "fm-sessionstart-nudge: only a genuine primary claims the home's transcript record"
+}
+
 test_opencode_plugin_delivers_exact_nudge_once() {
   local root="$TMP_ROOT/opencode-primary" out status=0
   make_primary "$root"
@@ -190,5 +386,13 @@ test_unmarked_linked_worktree_is_silent
 test_linked_secondmate_primary_nudges
 test_missing_state_is_silent
 test_owned_lock_is_silent
+test_records_transcript_position
+test_record_binds_to_the_same_pid_as_the_session_lock
+test_record_is_rewritten_after_a_clear
+test_missing_transcript_path_is_recorded_as_an_error
+test_absent_payload_is_recorded_as_an_error
+test_unwritable_transcript_path_is_recorded_as_an_error
+test_absent_harness_process_is_recorded_as_an_error
+test_non_primary_records_nothing
 test_opencode_plugin_delivers_exact_nudge_once
 test_tracked_harness_registration
