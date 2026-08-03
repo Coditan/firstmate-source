@@ -55,6 +55,22 @@ test_stow_skill_owns_the_sweep_side_of_the_context_reset() {
   pass "stow skill owns the sweep side of the reset and leaves the mechanism to its doc"
 }
 
+# The frontmatter description is the dispatch trigger: it decides whether the
+# body is read at all, so a section the ceiling wake never reaches is a section
+# that is not there. Asserted on the trigger line alone, because a mention
+# further down the file would satisfy a whole-file grep without firing the skill.
+test_stow_skill_trigger_names_the_context_ceiling_caller() {
+  local trigger
+  trigger=$(sed -n 's/^description: //p' "$ROOT/.agents/skills/stow/SKILL.md")
+
+  [ -n "$trigger" ] || fail "stow skill frontmatter carries no description trigger"
+  assert_contains "$trigger" 'context-ceiling wake' \
+    "stow skill trigger does not name the context-ceiling wake as a second caller"
+  assert_contains "$trigger" 'never the instrument that holds the context ceiling' \
+    "stow skill trigger lets a compaction read as the instrument that holds the ceiling"
+  pass "stow skill trigger fires on the context-ceiling wake and keeps compaction off the ceiling"
+}
+
 # The reset and ask branches carry a next step in their payload; the unenforced
 # and blocked branches carry a diagnosis instead. Without this, section 8 item 3
 # describes every ceiling wake as self-directing and a model meeting the other
@@ -72,4 +88,5 @@ test_agents_covers_ceiling_wakes_that_carry_no_next_step() {
 test_stow_skill_task_note_contract
 test_agents_backlog_task_note_contract
 test_stow_skill_owns_the_sweep_side_of_the_context_reset
+test_stow_skill_trigger_names_the_context_ceiling_caller
 test_agents_covers_ceiling_wakes_that_carry_no_next_step

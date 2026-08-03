@@ -38,6 +38,7 @@ turn ends -> context clears -> SessionStart:clear fires (the nudge itself stays
 One firstmate turn per reset.
 Everything except `/stow` is plain code: measuring, deciding the fleet is quiet, deciding whether the captain is present, writing and verifying the receipt, and typing the reset into the pane.
 Choosing what durable knowledge to file is judgement, and it is the only step a script cannot do honestly.
+What that sweep owes this mechanism when a ceiling wake calls it is owned by the `stow` skill.
 
 ## Who owns what
 
