@@ -40,6 +40,14 @@
 #   check: <script>: <out> authenticated check output, always actionable
 #   check: rejected unauthenticated state checks: <paths>
 #                          unsafe state checks were refused without execution
+#   check: context-ceiling: <what to do>
+#                          this session's own context passed the captain's ceiling
+#                          at a quiet boundary. The payload carries the branch:
+#                          reset (with the exact commands), ask (the captain has
+#                          been active, or away mode owns delivery), or that the
+#                          ceiling cannot be measured at all - which is reported
+#                          rather than skipped, because an unmeasurable ceiling is
+#                          an unenforced one. See docs/context-reset.md.
 #   heartbeat              fleet-scan backstop found an unsurfaced captain-relevant
 #                          status, unless afk is active
 # For normal supervision, resume the session-start primary-harness protocol
@@ -87,6 +95,14 @@ mkdir -p "$STATE"
 # cheap when no records exist and never scrapes secondmate conversation.
 # shellcheck source=bin/fm-pending-reply-lib.sh
 . "$SCRIPT_DIR/fm-pending-reply-lib.sh"
+# Context-ceiling measurement and the reset/ask branch. The watcher OBSERVES the
+# threshold because the alternative - firstmate remembering to check a number -
+# has no failure surface at all: nothing anywhere reports a rule that was never
+# applied, and the measured history is that it drifts. Here the observation lands
+# in the durable wake queue, which firstmate is already structurally obliged to
+# drain, and whose own staleness is already alarmed.
+# shellcheck source=bin/fm-context-lib.sh
+. "$SCRIPT_DIR/fm-context-lib.sh"
 
 WATCH_LOCK="$STATE/.watch.lock"
 WATCH_PATH="$SCRIPT_DIR/fm-watch.sh"
@@ -124,6 +140,12 @@ HEARTBEAT=${FM_HEARTBEAT:-600}        # base seconds between heartbeat scans
 HEARTBEAT_MAX=${FM_HEARTBEAT_MAX:-7200}  # heartbeat backoff cap
 CHECK_INTERVAL=${FM_CHECK_INTERVAL:-300}  # seconds between *.check.sh sweeps
 CHECK_TIMEOUT=${FM_CHECK_TIMEOUT:-30}     # seconds allowed per *.check.sh
+CONTEXT_CHECK_INTERVAL=${FM_CONTEXT_CHECK_INTERVAL:-300}  # seconds between context-ceiling reads
+# How long a "the ceiling cannot be measured at all" report stays quiet before it
+# says so again. Long, because it is a standing defect rather than an event - but
+# finite, because an unmeasurable ceiling is an UNENFORCED ceiling, and letting
+# that state go quiet forever is the exact failure this check exists to end.
+CONTEXT_ERROR_RESURFACE=${FM_CONTEXT_ERROR_RESURFACE:-3600}
 # Shared Bridge detection and enqueue-before-marker deduplication.  The
 # standalone frequency monitor loads this same library, and its own lock keeps
 # the two independent processes from surfacing one signature twice.
@@ -714,6 +736,36 @@ age_of() {  # seconds since file mtime; "due immediately" if missing
   echo $(( $(date +%s) - m ))
 }
 
+# Print the context-ceiling wake reason when there is one, and nothing on an
+# ordinary poll. bin/fm-context-lib.sh owns what "over ceiling", "quiet", and
+# "captain active" mean, so the watcher's branch and the reset tool's refusals
+# cannot drift apart. The "cannot measure" case is the one that must never fall
+# silent - it means the ceiling is not being enforced at all - so it is throttled
+# to CONTEXT_ERROR_RESURFACE rather than suppressed, and the marker is cleared
+# again as soon as a poll can measure.
+context_ceiling_surface() {
+  local reason
+  reason=$(fm_context_ceiling_reason "$STATE" "$FM_HOME" "$FM_ROOT") || return 0
+  if [ -z "$reason" ]; then
+    rm -f "$STATE/.context-measure-error" 2>/dev/null || true
+    return 0
+  fi
+  case "$reason" in
+    *'is unenforced'*)
+      if [ -e "$STATE/.context-measure-error" ] \
+        && [ "$(age_of "$STATE/.context-measure-error")" -lt "$CONTEXT_ERROR_RESURFACE" ]; then
+        triage_log "absorbed context-ceiling measurement failure (already reported)"
+        return 0
+      fi
+      touch "$STATE/.context-measure-error"
+      ;;
+    *)
+      rm -f "$STATE/.context-measure-error" 2>/dev/null || true
+      ;;
+  esac
+  printf '%s' "$reason"
+}
+
 # Layer 2 + 3 signal scan: status files and turn-end markers. Each file is
 # compared against a persisted size:mtime signature (.seen-*) rather than
 # mtime-vs-a-startup-touch, so signals that land while no watcher is running
@@ -1131,6 +1183,22 @@ while :; do
   # repost after grace, and escalate once if the recovery turn is also missed.
   # No conversation scraping; unresolved records are never silently expired.
   fm_pending_reply_tick "$STATE" || true
+
+  # Context ceiling: read this session's own context size and, at a quiet
+  # boundary over the captain's 300k ceiling, enqueue the one wake that says
+  # whether to reset or to ask. Placed before the per-task checks for the same
+  # reason those precede the signal scan - wake() ends the cycle, so a chatty
+  # fleet would otherwise starve a slow poll indefinitely. Cheap on every other
+  # cycle: one mtime read decides whether it runs at all.
+  if [ "$(age_of "$STATE/.last-context-check")" -ge "$CONTEXT_CHECK_INTERVAL" ]; then
+    touch "$STATE/.last-context-check"
+    context_reason=$(context_ceiling_surface)
+    if [ -n "$context_reason" ]; then
+      fm_wake_append check context-ceiling "$context_reason" || exit 1
+      wake "$context_reason"
+      [ "$WAKE_PENDING" -eq 0 ] || continue
+    fi
+  fi
 
   # Slow per-task checks (firstmate writes these, e.g. a merged-PR poll).
   # Time-based via .last-check mtime so the cadence survives watcher restarts.
