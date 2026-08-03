@@ -230,8 +230,27 @@ test_pi_snippet_uses_effective_extension_path() {
   pass "pi supervision snippet renders the effective extension path"
 }
 
+test_context_ceiling_is_stated_once_for_every_harness() {
+  local harness out snippet
+  for harness in claude codex grok opencode pi not-real; do
+    out=$("$RENDER" --harness "$harness")
+    assert_contains "$out" "Context ceiling: once this session passes 300k of context" \
+      "$harness block lost the 300k context ceiling"
+    assert_contains "$out" "clear the session at the next quiet boundary" \
+      "$harness block lost the quiet-boundary condition"
+    assert_contains "$out" "stow-then-clear, rebuilding from the durable records; never compaction" \
+      "$harness block does not name the instrument or rule compaction out"
+  done
+
+  for snippet in "$ROOT"/docs/supervision-protocols/*.md; do
+    assert_no_grep '300k' "$snippet" "per-harness snippet $snippet duplicates the shared context-ceiling rule"
+  done
+  pass "the context ceiling renders for every harness from one shared line, with no per-harness copy"
+}
+
 test_selected_harness_block_only
 test_unknown_fallback
+test_context_ceiling_is_stated_once_for_every_harness
 test_conditional_stanzas
 test_repair_lines
 test_cross_harness_ordinary_continuation_and_repair_matrix

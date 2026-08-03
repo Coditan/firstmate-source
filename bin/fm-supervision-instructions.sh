@@ -189,6 +189,8 @@ else
   printf '%s\n' '- X mode: inactive; use the default watcher cadence.'
 fi
 printf '%s\n' '- The watcher service owns the loop; after every handled wake, re-arm only this harness delivery wait.'
+printf '%s\n' '- Context ceiling: once this session passes 300k of context, run /stow and then clear the session at the next quiet boundary, never mid-gate and never with a live decision unrecorded.'
+printf '%s\n' '  The instrument is stow-then-clear, rebuilding from the durable records; never compaction. The /stow skill owns the rest of the cadence.'
 printf '\n'
 render_snippet
 printf '\n'

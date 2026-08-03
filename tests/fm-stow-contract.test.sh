@@ -33,5 +33,29 @@ test_agents_backlog_task_note_contract() {
   pass "AGENTS.md keeps task-note hygiene inline and points exact mechanics to their owner"
 }
 
+test_stow_skill_owns_the_context_ceiling_cadence() {
+  local stow="$ROOT/.agents/skills/stow/SKILL.md"
+
+  assert_grep 'Cadence: the 300k context ceiling' "$stow" "stow skill does not own the context-ceiling cadence"
+  assert_grep "session's context passes 300k" "$stow" "stow skill does not state the 300k threshold"
+  assert_grep 'quiet boundary' "$stow" "stow skill does not bound the timing to a quiet boundary"
+  assert_grep 'never compaction' "$stow" "stow skill does not rule compaction out as the instrument"
+  assert_grep 'no hook, no daemon' "$stow" "stow skill does not record that the rejected measuring machinery stays out"
+  pass "stow skill owns the 300k ceiling, its quiet-boundary condition, and the not-compaction instrument"
+}
+
+test_agents_heartbeat_checklist_observes_the_ceiling() {
+  local agents="$ROOT/AGENTS.md"
+
+  assert_grep '300k context ceiling' "$agents" "AGENTS.md heartbeat checklist does not state the ceiling"
+  assert_grep 'stow-then-clear from durable records and never compaction' "$agents" \
+    "AGENTS.md heartbeat checklist does not name the instrument or rule compaction out"
+  assert_grep 'at this or the next quiet boundary' "$agents" \
+    "AGENTS.md heartbeat checklist lost the quiet-boundary condition"
+  pass "AGENTS.md heartbeat checklist makes the context ceiling observed rather than remembered"
+}
+
 test_stow_skill_task_note_contract
 test_agents_backlog_task_note_contract
+test_stow_skill_owns_the_context_ceiling_cadence
+test_agents_heartbeat_checklist_observes_the_ceiling
