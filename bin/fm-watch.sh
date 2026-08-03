@@ -1658,18 +1658,17 @@ EOF
     # Triage: in always-on mode a heartbeat is benign unless the cheap fleet-scan
     # turns up a captain-relevant status the per-wake path missed. Absorb the
     # no-change case (advance the schedule and back off exactly as wake() would,
-    # without exiting); the away-mode daemon, when present, owns triage and wants
-    # every heartbeat.
-    if afk_present; then
-      fm_wake_append heartbeat heartbeat heartbeat || exit 1
-      touch "$STATE/.last-heartbeat"
-      wake "heartbeat"
-      [ "$WAKE_PENDING" -eq 0 ] || continue
-    elif certsync_health_reason; then
+    # without exiting).
+    if certsync_health_reason; then
       fm_wake_append check certsync-health "$FM_CERTSYNC_HEALTH_REASON" || exit 1
       touch "$STATE/.last-heartbeat"
       certsync_health_mark_surfaced
       wake "$FM_CERTSYNC_HEALTH_REASON"
+      [ "$WAKE_PENDING" -eq 0 ] || continue
+    elif afk_present; then
+      fm_wake_append heartbeat heartbeat heartbeat || exit 1
+      touch "$STATE/.last-heartbeat"
+      wake "heartbeat"
       [ "$WAKE_PENDING" -eq 0 ] || continue
     elif heartbeat_scan_finds_actionable; then
       # Backstop: a captain-relevant status the per-wake path absorbed by mistake.

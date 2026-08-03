@@ -1853,6 +1853,29 @@ test_heartbeat_certsync_unhealthy_surfaces_check_wake() {
   pass "heartbeat surfaces confirmed unhealthy certsync through the check wake path"
 }
 
+test_afk_heartbeat_certsync_unhealthy_surfaces_check_wake() {
+  local dir state fakebin out drain_out payload pid
+  dir=$(make_case afk-heartbeat-certsync-unhealthy); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"
+  setup_certsync_health_case "$dir"
+  payload="$fakebin/certsync-payload.json"
+  install_fake_certsync_docker "$fakebin" "$payload"
+  printf '{"healthy":false,"reason":"replication stalled"}\n' > "$payload"
+  : > "$state/.afk"
+  PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$dir/root" FM_HOME="$dir/home" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 FM_FAKE_CERTSYNC_PAYLOAD="$payload" "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "afk heartbeat did not surface unhealthy certsync"
+  grep -Fx "check: certsync health: unhealthy: replication stalled" "$out" >/dev/null \
+    || fail "afk certsync wake reason was wrong: $(cat "$out")"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after afk certsync wake failed"
+  grep "$(printf '\tcheck\tcertsync-health\tcheck: certsync health: unhealthy: replication stalled')" "$drain_out" >/dev/null \
+    || fail "afk certsync check wake was not queued: $(cat "$drain_out")"
+  ! grep "$(printf '\theartbeat\theartbeat\theartbeat')" "$drain_out" >/dev/null \
+    || fail "afk certsync unhealthy also queued a generic heartbeat: $(cat "$drain_out")"
+  pass "afk heartbeat surfaces confirmed unhealthy certsync through the check wake path"
+}
+
 test_heartbeat_certsync_unknown_absorbed() {
   local dir state fakebin out payload pid
   dir=$(make_case heartbeat-certsync-unknown); state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"
@@ -2010,6 +2033,7 @@ test_heartbeat_no_change_absorbed
 test_heartbeat_backstop_surfaces_unsurfaced_status
 test_heartbeat_certsync_healthy_absorbed
 test_heartbeat_certsync_unhealthy_surfaces_check_wake
+test_afk_heartbeat_certsync_unhealthy_surfaces_check_wake
 test_heartbeat_certsync_unknown_absorbed
 test_beacon_stays_fresh_while_absorbing
 test_afk_present_reverts_watcher_to_one_shot
