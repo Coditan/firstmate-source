@@ -77,6 +77,14 @@
 # A `blocked_by` entry naming a slug in this same file is an internal edge; any
 # other entry must already exist in the backlog. A slug wins over a backlog id of
 # the same spelling, so a breakdown is always readable on its own terms.
+# No entry may name the origin itself: a breakdown may never close the
+# undertaking it is a slice of, so that edge could never clear.
+#
+# A slug may not compose `-decision-` into the id either. bin/fm-decision-hold.sh
+# owns that spelling for a captain hold and bin/fm-sea-chart.sh reads the marker
+# positionally rather than by kind, so an ordinary unit carrying it would drop
+# out of the chart's takeable work and, once Done, be listed as a settled captain
+# decision.
 #
 # Exit status is 0 on success and 1 on any refusal. Every refusal names the unit
 # and the exact fault, and nothing is filed after one: `check` runs the whole

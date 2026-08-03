@@ -134,10 +134,12 @@ Ours outright, added rather than adapted:
   Ours makes the mechanical part deterministic, because agent memory is unreliable at exactly this step: dependency order, cycles, the id prefix, and whether each unit actually carries a what-it-delivers line and at least one acceptance criterion.
   It enforces what the skill already says and decides nothing.
   It is not a second backlog: every write is a `tasks-axi` call.
-- **Two refusals with no counterpart upstream.**
+- **Refusals with no counterpart upstream.**
   The origin must already exist in the backlog, so a breakdown cannot be filed against a destination nobody named - the same refusal `bin/fm-sea-chart.sh` makes for the same reason.
-  And a unit may never be filed as `kind: captain`, `fog`, or `out-of-course`, because those records belong to `bin/fm-decision-hold.sh` and to the sea chart's own markers.
-  Without that second refusal this skill could manufacture captain-actionable records as a side effect of slicing work, which is the one write the read-only argument was right about.
+  A unit may never be filed as `kind: captain`, `fog`, or `out-of-course`, because those records belong to `bin/fm-decision-hold.sh` and to the sea chart's own markers.
+  Nor may a slug compose the reserved `-decision-` marker into its id, because `bin/fm-sea-chart.sh` reads that marker positionally rather than by kind, so an ordinary unit carrying it would leave the chart's takeable work and later read as a settled captain decision - the same hole as the kind refusal, reached through the id instead of the kind.
+  And no unit may be blocked by its own origin, an edge that could never clear because a breakdown may never close the undertaking it is a slice of.
+  Without the kind and id refusals this skill could manufacture captain-actionable records as a side effect of slicing work, which is the one write the read-only argument was right about.
 
 ## What we dropped
 

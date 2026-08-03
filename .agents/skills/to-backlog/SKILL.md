@@ -83,7 +83,7 @@ Do not build a second store, a scratch issue directory, or a parallel plan file.
 
 6. **File the approved breakdown.**
    Write it as a breakdown file and run `bin/fm-to-backlog.sh` - its header and `--help` own the format, the flags, and every refusal.
-   It files in dependency order so each edge names an item that already exists, composes each id under the originating undertaking, and refuses a cycle, a missing origin, a missing acceptance criterion, or a kind that belongs to another owner.
+   It files in dependency order so each edge names an item that already exists, composes each id under the originating undertaking, and refuses a cycle, a missing origin, a missing acceptance criterion, an edge that could never clear, or a kind or id marker that belongs to another owner.
    Check it first with `check`, which writes nothing.
 
    **Never close or modify the originating item.**

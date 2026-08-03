@@ -19,8 +19,9 @@ Lay one undertaking out as a chart: where it is going, what has been settled, wh
 > Wayfinder's destination, fog of war, out-of-scope boundary, and four of the five sections of its map body are its own.
 > This version keeps them, and then diverges: it reads records rather than authoring them, adds the incompleteness numbers and the withheld-records reconciliation that a lossy source surface forces, and drops Wayfinder's ticket types, its claim, and its low-resolution-then-zoom reading.
 > **The largest divergence is that Wayfinder is a planning instrument that sets a course, with two write modes and no viewing mode, and this version kept only the half that shows the result.**
-> The read-only rule below is sound for recording the captain's answer and was over-applied to the rest; authoring, sizing, and bounding the questions collide with no owner.
-> That is a filed defect, not a licence to write: until it is decided and fixed, the read-only rule below binds in full.
+> The read-only rule below is sound for recording the captain's answer and was over-applied to the rest.
+> Authoring and sizing the units has an owner again in `/to-backlog`, adopted from the same repository's to-tickets skill, and a unit filed there lands on this chart by its id prefix; the chart's own authoring acts, graduating fog and bounding the course, still collide with no owner.
+> That remainder is a filed defect, not a licence to write: until it is decided and fixed, the read-only rule below binds in full.
 > `docs/sea-chart-provenance.md` carries the copyright notice, the full licence text, the comparison, that test, and the defects it exposed.
 
 This skill **presents**.
