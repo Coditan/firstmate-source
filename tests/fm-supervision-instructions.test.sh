@@ -230,27 +230,28 @@ test_pi_snippet_uses_effective_extension_path() {
   pass "pi supervision snippet renders the effective extension path"
 }
 
-test_context_ceiling_is_stated_once_for_every_harness() {
+# The ceiling reaches the model as a watcher-measured check wake carrying its own
+# payload, so the session-start block must not carry a second, staler copy of the
+# rule: a block rendered once at session start cannot know a threshold that is
+# crossed hours later, and a model that believed it could would stop reading the
+# wake that actually measured it.
+test_context_ceiling_is_left_to_the_wake_payload() {
   local harness out snippet
   for harness in claude codex grok opencode pi not-real; do
     out=$("$RENDER" --harness "$harness")
-    assert_contains "$out" "Context ceiling: once this session passes 300k of context" \
-      "$harness block lost the 300k context ceiling"
-    assert_contains "$out" "clear the session at the next quiet boundary" \
-      "$harness block lost the quiet-boundary condition"
-    assert_contains "$out" "stow-then-clear, rebuilding from the durable records; never compaction" \
-      "$harness block does not name the instrument or rule compaction out"
+    assert_not_contains "$out" "300k" "$harness block restates a ceiling the watcher measures and the wake carries"
+    assert_not_contains "$out" "Context ceiling" "$harness block restates the context-ceiling rule"
   done
 
   for snippet in "$ROOT"/docs/supervision-protocols/*.md; do
-    assert_no_grep '300k' "$snippet" "per-harness snippet $snippet duplicates the shared context-ceiling rule"
+    assert_no_grep '300k' "$snippet" "per-harness snippet $snippet carries a copy of the context-ceiling rule"
   done
-  pass "the context ceiling renders for every harness from one shared line, with no per-harness copy"
+  pass "the supervision block leaves the context ceiling to the wake that measures it"
 }
 
 test_selected_harness_block_only
 test_unknown_fallback
-test_context_ceiling_is_stated_once_for_every_harness
+test_context_ceiling_is_left_to_the_wake_payload
 test_conditional_stanzas
 test_repair_lines
 test_cross_harness_ordinary_continuation_and_repair_matrix

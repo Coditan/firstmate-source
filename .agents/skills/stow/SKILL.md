@@ -1,6 +1,6 @@
 ---
 name: stow
-description: Sweep the current session for uncaptured durable knowledge and file it to disk before a context reset. Use when the captain invokes /stow (e.g. "/stow", "stow what you've learned"), before a session or context reset, and whenever this session passes the 300k context ceiling so it can be cleared and rebuilt from the durable records.
+description: Sweep the current session for uncaptured durable knowledge and file it to disk before a context reset. Use when the captain invokes /stow (e.g. "/stow", "stow what you've learned"), before a session or context reset, and on a context-ceiling wake that asks for this sweep before the receipt and reset commands it names.
 user-invocable: true
 metadata:
   internal: true
@@ -13,25 +13,24 @@ metadata:
 Sweep this session for durable knowledge that only exists in conversation right now, and write it to the disk locations firstmate already prints in the next session-start context digest.
 The goal is a session that is safe to reset or destroy because everything durable has already been captured.
 
-## Cadence: the 300k context ceiling
+## When the context ceiling calls this sweep
 
-Run this sweep whenever the session's context passes 300k, then clear the session and let the next session rebuild from what was just written.
-That ceiling is the captain's standing cadence, decided 2026-08-02 to stop sessions from riding to their limit before the first sweep.
-Below the ceiling, `/stow` stays what it already was: an on-demand sweep the captain can invoke at any time.
+The captain invokes `/stow` whenever they like, and that is still the ordinary case.
+The other caller is the context ceiling: the watcher measures the primary session against it and, when the session is over and the fleet is quiet, queues a wake whose payload says to run this sweep and then, in the same turn, the receipt and reset commands it names.
+`docs/context-reset.md` owns that mechanism, its refusals, and the evidence behind them; this section owns only what changes about the sweep when it is that caller, because the sweep is the one step the mechanism cannot perform for itself.
 
-Two conditions bound it.
+- **The receipt attests to this sweep; nothing verifies it.**
+  Whether a semantic sweep caught every durable fact cannot be checked mechanically, which is exactly why this step needs judgement and the rest of the path is plain code.
+  A thin sweep still produces a structurally valid receipt, and the reset that follows is honest only to the degree this sweep was.
+- **Leave no gap between the sweep and its receipt.**
+  Anything the captain says after the receipt is written invalidates it, correctly, because the sweep cannot have covered it.
+  Run the sweep and its receipt in the one turn the wake asks for, rather than pausing to report progress in between and re-earning the refusal.
+- **A clear is not a destruction, and that is the safety net, not the plan.**
+  The cleared conversation stays on disk and remains resumable, so a finding this sweep misses is misplaced rather than lost.
+  Sweep as though it were lost.
 
-- **Act at a quiet boundary, and the model owns when.**
-  A wake that has been handled and re-armed, a task that has just landed, or a heartbeat review are all quiet boundaries.
-  Never stow-and-clear mid-gate, never while a decision, blocker, or finding from this session is still unrecorded, and never in the middle of a validation run this session is driving.
-  Crossing the ceiling is a prompt to take the next quiet boundary, not a reason to interrupt the work in hand.
-- **The instrument is stow-then-clear, never compaction.**
-  Write the durable knowledge to disk with this sweep, then clear the session (`/clear` in Claude Code, the equivalent session reset in another harness) and rebuild from the records `AGENTS.md` section 3's session-start digest prints.
-  `AGENTS.md` section 5 already makes durable state and live backend inventory authoritative over conversation memory, which is why a clear is a non-event and a summarized transcript is not a substitute.
-  Do not enable, configure, or reach for context compaction as the way to hold this ceiling.
-
-Nothing measures this and nothing is meant to: no hook, no daemon, and no transcript-size probe were added for it, and adding one is a separate decision.
-The ceiling reaches the model through the supervision block the session-start digest prints and through the heartbeat item in `AGENTS.md` section 8; both are pointers to this section, which owns the cadence.
+The instrument here is stow-then-clear, never compaction: durable knowledge goes to disk and the next session rebuilds from it, which is what `AGENTS.md` section 5 already makes authoritative over conversation memory.
+Nothing in this skill adds, enables, or recommends compaction as a way to hold the ceiling.
 
 ## What it does
 
