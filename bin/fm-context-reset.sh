@@ -159,7 +159,7 @@ fi
 fm_context_quiet "$STATE" || refuse "the fleet is no longer quiet: $FM_CONTEXT_NOT_QUIET"
 
 # --- 5. the way back in is intact ------------------------------------------
-# Refusal 10 checks that the session-start hook is still WIRED to a clear and
+# Refusal 11 checks that the session-start hook is still WIRED to a clear and
 # that its script is still there. It does not check that anything is injected:
 # the nudge exits silently whenever this home's lock pid is in its ancestry,
 # which is exactly the case on a self-clear, so the fresh session rebuilds from

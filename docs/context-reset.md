@@ -43,7 +43,7 @@ Choosing what durable knowledge to file is judgement, and it is the only step a 
 
 | Piece | Owner |
 | --- | --- |
-| Where this session's transcript is | `bin/fm-sessionstart-nudge.sh` writes `state/.primary-transcript` on every primary session start, including the one a clear creates |
+| Where this session's transcript is | `bin/fm-sessionstart-nudge.sh` writes `state/.primary-transcript` on every primary session start, including the one a clear creates. That producer is in-flight work on the nudge script and is consumed here as a data contract only; until it lands, no record exists, so a home with a live session reports the ceiling as unenforced and the reset tool refuses |
 | Ceiling, quiet, and captain-present predicates | `bin/fm-context-lib.sh` |
 | The measurement and the reset/ask branch | `bin/fm-watch.sh`'s `context_ceiling_surface` |
 | The receipt | `bin/fm-stow-receipt.sh` |
@@ -121,7 +121,7 @@ A silent non-fire is the defect class this whole line of work exists to remove, 
 
 - **It fires and firstmate does not act.** The wake is durable. An enqueued wake that is never drained is already an alarm.
 - **The observation stops running.** The watcher's own death is already alarmed by the liveness guard.
-- **A session is running here and cannot be measured** - no transcript recorded, an unreadable one, a record naming a different session process than the one holding the home lock, or no `jq`. That is reported as its own wake saying the ceiling is unenforced.
+- **A session is running here and cannot be measured** - no transcript recorded, an unreadable one, a record naming a different session process than the one holding the home lock, or a missing `jq` or `perl` (the bounded tail read needs both). That is reported as its own wake saying the ceiling is unenforced.
   The live session lock is what makes this an alarm rather than noise: with no session running, there is genuinely nothing to measure, and a fresh home, a home between sessions, and every non-primary home would otherwise carry a permanent false alarm.
   The record and the lock are keyed on the same session process on purpose, so a disagreement between them means the record describes a session that has finished - measuring it would report the wrong number rather than no number, which is why that case is reported instead of used.
 - **The way back in is broken.** If `clear` ever leaves the `SessionStart` matcher, or the nudge script goes missing, the wake reports the blocker instead of ordering a reset, and the reset tool refuses. That check proves the hook is still wired and its script is still there; what carries the fresh session's rebuild instruction after a self-clear is `AGENTS.md` section 3, for the reason in "the way back in, precisely" below.
@@ -153,11 +153,11 @@ Repairing the nudge so it emits when the hook payload's `source` is `clear` is f
 
 Run `bin/fm-context-reset.sh --check` to evaluate all of them and clear nothing.
 
-1. The recorded transcript is missing, in its error state, or unreadable.
-2. The recorded session is not the session running the command - only a session may reset itself.
+1. This home's `state/` directory is missing, or the recorded transcript is missing, in its error state, or unreadable.
+2. No live session holds this home's lock, that lock belongs to another session, or the recorded session is not the session running the command - only the session operating this home may reset itself.
 3. No receipt, a receipt not in its `ok` state, or one whose session, process, or transcript does not match.
-4. The receipt is older than its freshness bound.
-5. The transcript has moved on past the receipt, or shrunk below it.
+4. The receipt is older than its freshness bound, or its write time is unreadable or in the future.
+5. The transcript has moved on past the receipt, shrunk below it, or the receipt records no readable position at all.
 6. The captain has spoken since the receipt was written.
 7. The captain's last message could not be established at all, from the receipt or from the transcript. Two unknowns must refuse rather than compare equal; see "an absent record is not evidence of absence" above.
 8. Away mode is active.
@@ -166,8 +166,8 @@ Run `bin/fm-context-reset.sh --check` to evaluate all of them and clear nothing.
 11. The re-entry hook is no longer wired: it no longer runs `bin/fm-sessionstart-nudge.sh` on a clear, or that script is gone. This checks the wiring, not that anything is injected; see "the way back in, precisely" above.
 12. Supervision is not running.
 13. Wake delivery is not armed while this home has recorded work or an X-mode relay - with nothing to wake for, an unarmed delivery wait does not block.
-14. The harness is not `claude`, or the terminal backend is not `tmux`.
-15. This session's own pane cannot be identified.
+14. The harness is not `claude`, or the terminal backend is not `tmux` - including a backend that could not be detected at all, because the clear must never be typed on a guess.
+15. This session's own pane cannot be identified, or its target cannot be resolved.
 16. This session's own pane is in a tmux session whose name begins with `fm-`. That prefix is reserved: `bin/fm-send.sh` reads any such target as a recorded worker-task selector and looks for its metadata instead of resolving a live tmux endpoint, so the clear could never be typed. The refusal names that cause so an operator can rename the terminal session; it is a limitation of this mechanism on such homes, not a fault in the send path.
 
 There is no force flag.
@@ -207,17 +207,9 @@ That overshoot, sitting there unremarked, is the drift this mechanism exists to 
 
 ## Tunables
 
-All read from the environment, all with working defaults; `bin/fm-context-lib.sh` owns them.
-
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `FM_CONTEXT_CEILING` | `300000` | the captain's decided ceiling, in tokens |
-| `FM_CONTEXT_CAPTAIN_IDLE_SECS` | `1800` | silence after which the captain is not in live conversation |
-| `FM_CONTEXT_RECEIPT_MAX_AGE` | `900` | how long a receipt stays fresh |
-| `FM_CONTEXT_RECEIPT_MAX_GROWTH_BYTES` | `262144` | how far the transcript may advance under a receipt |
-| `FM_CONTEXT_TAIL_BYTES` | `2097152` | bounded trailing read of the transcript, widened once to the whole file when that tail holds no captain record; a bounded read is never conclusive about the captain on its own |
-| `FM_CONTEXT_CHECK_INTERVAL` | `300` | seconds between watcher ceiling reads |
-| `FM_CONTEXT_ERROR_RESURFACE` | `3600` | quiet period before an unchanged ceiling report is made again; a changed branch is never held |
+All read from the environment, all with working defaults.
+`bin/fm-context-lib.sh` defines the measurement bounds - `FM_CONTEXT_CEILING`, `FM_CONTEXT_CAPTAIN_IDLE_SECS`, `FM_CONTEXT_RECEIPT_MAX_AGE`, `FM_CONTEXT_RECEIPT_MAX_GROWTH_BYTES`, `FM_CONTEXT_TAIL_BYTES` - and `bin/fm-watch.sh` defines the observation cadence, `FM_CONTEXT_CHECK_INTERVAL` and `FM_CONTEXT_ERROR_RESURFACE`.
+[docs/configuration.md](configuration.md) lists all seven with their defaults, alongside every other runtime variable.
 
 ## State this mechanism owns
 
@@ -225,7 +217,6 @@ All under `state/`, all gitignored:
 
 | File | Written by | Meaning |
 | --- | --- | --- |
-| `.primary-transcript` | `bin/fm-sessionstart-nudge.sh` | where this session's transcript is and which session process owns it |
 | `.stow-receipt` | `bin/fm-stow-receipt.sh` | knowledge filed, bound to a transcript position; removed on a completed reset |
 | `.context-reset.log` | `bin/fm-context-reset.sh` | one durable line per refusal, `--check` pass, or completed reset |
 | `.last-context-check` | `bin/fm-watch.sh` | ceiling-read cadence, as an mtime, so it survives a watcher restart |
