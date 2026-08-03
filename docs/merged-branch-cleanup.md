@@ -70,7 +70,7 @@ In the audited fleet these mirror branches were the 73 of the 154 counted rows t
 ### What the pipeline would need
 
 It would need to learn that the pull request merged, and it never does.
-Measured against the installed binary on 2026-08-03:
+Measured on 2026-08-03 against the installed binary, `no-mistakes` v1.41.2:
 
 ```
 $ B=~/.no-mistakes/bin/no-mistakes
@@ -109,11 +109,18 @@ The mirror repository is shared by every lane and every home on the host, and th
 The mirror is therefore a separate piece of work with its own decision behind it, and it stays unbuilt rather than half-built.
 A one-time manual sweep of the mirror repository is a different question again, and does not depend on any of this.
 
-## What else does not delete branches
+## What else deletes a branch
 
-`bin/fm-teardown.sh` prunes remote-tracking refs in a project clone, which is a local operation and deletes nothing on any remote.
-It was built to tolerate a branch the forge deleted at merge, not to perform the deletion.
-Nothing else in `bin/` deletes a remote branch.
+Nothing else in `bin/` deletes a branch on a remote: the merge above is the only path that does, and `bin/` contains no `git push` at all.
+
+Locally is a different question, and this change wakes a path that used to be near-dormant.
+`bin/fm-fleet-sync.sh` deletes a local branch in a project clone once its upstream is gone and no worktree still needs it, reading "upstream gone" as proof its pull request merged.
+While nothing deleted the head branch on the forge, a firstmate task branch practically never reached that state; now every merge firstmate performs puts it there.
+`bin/fm-teardown.sh` refreshes the clone through fleet sync, and separately drops the returned worktree's own task branch.
+Both stay inside the local clone and reach no remote; their guards are owned by those two script headers, not restated here.
+
+Teardown's landed-work proof was already built to tolerate a head branch the forge deleted at merge, falling back to `refs/pull/<n>/head`.
+That fallback used to be the exception. It is now the ordinary path for every task firstmate merges.
 
 ## Recovering a deleted branch
 
