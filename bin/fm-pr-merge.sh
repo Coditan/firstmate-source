@@ -9,9 +9,14 @@
 # must not include --repo or -R because the repository comes only from the URL.
 #
 # The merged head branch is deleted by default: --delete-branch is added unless
-# the caller already chose, with -d, --delete-branch, or --delete-branch=false
-# to keep the branch. The forge performs that deletion as part of the merge, so
-# this path never issues a branch-delete command of its own. Verified against gh
+# the caller already chose, with --delete-branch, or --delete-branch=false to
+# keep the branch. Only those long forms count as a choice, because gh-axi's pr
+# merge rebuilds the gh argv from the flags it recognizes and silently discards
+# leftovers such as -d, so honouring the shorthand as an opt-out deleted nothing
+# at all; an opt-out that silently fails to apply is worse than none. A caller
+# passing -d therefore still gets this path's own --delete-branch. The forge
+# performs that deletion as part of the merge, so this path never issues a
+# branch-delete command of its own. Verified against gh
 # 2.96.0: a failed merge returns before either deletion, only the just-merged
 # PR's own head branch is deleted, a head branch the forge already removed under
 # delete_branch_on_merge is tolerated rather than an error, and no local branch
@@ -66,7 +71,7 @@ caller_has_delete_choice() {
   local arg
   for arg in "$@"; do
     case "$arg" in
-      -d|--delete-branch|--delete-branch=*) return 0 ;;
+      --delete-branch|--delete-branch=*) return 0 ;;
     esac
   done
   return 1

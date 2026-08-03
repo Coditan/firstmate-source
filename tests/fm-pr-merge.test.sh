@@ -15,7 +15,8 @@
 #   (g) explicit merge method is not overridden by the default --squash
 #   (h) repo override args fail fast because the repo comes from the URL
 #   (i) the merged head branch is deleted by the merge itself, by default
-#   (j) a caller's own -d or --delete-branch=false choice is not overridden
+#   (j) only the long-form --delete-branch[=false] counts as the caller's own
+#       choice, so -d never suppresses the default deletion
 #   (k) a failed merge issues no branch deletion of any kind
 set -u
 
@@ -333,8 +334,8 @@ test_caller_delete_choice_not_overridden() {
   run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/33 -- -d \
     > "$case_dir/stdout" 2> "$case_dir/stderr" || fail "delete-branch-shorthand: fm-pr-merge failed"
 
-  grep -qxF 'pr merge 33 --repo example/repo --squash -d' "$case_dir/gh-axi.log" \
-    || fail "delete-branch-shorthand: caller -d was not honored as the delete choice"
+  grep -qxF 'pr merge 33 --repo example/repo --squash --delete-branch -d' "$case_dir/gh-axi.log" \
+    || fail "delete-branch-shorthand: caller -d suppressed the default --delete-branch"
 
   case_dir=$(make_case keep-branch)
   mkdir -p "$case_dir/wt"
@@ -346,7 +347,7 @@ test_caller_delete_choice_not_overridden() {
 
   grep -qxF 'pr merge 34 --repo example/repo --squash --delete-branch=false' "$case_dir/gh-axi.log" \
     || fail "keep-branch: a caller asking to keep the branch had --delete-branch forced back on"
-  pass "fm-pr-merge leaves an explicit caller delete-branch choice, on or off, untouched"
+  pass "fm-pr-merge honors only a long-form caller delete-branch choice, on or off"
 }
 
 test_failed_merge_deletes_nothing() {

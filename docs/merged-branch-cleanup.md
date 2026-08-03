@@ -1,7 +1,9 @@
 # Why a merged branch survives its own pull request
 
 A firstmate fleet that ships every task on its own branch accumulates one branch per task forever unless something prunes them.
-An audit of one fleet repository on 2026-08-03 found 154 remote branches, of which 146 were provably landed in `main` and only 5 carried work that was not.
+An audit of one fleet repository on 2026-08-03 counted 154 branch rows across both places a task branch lives: 81 on the forge and 73 in the local validation-pipeline mirror.
+They split into 146 provably landed in `main`, 2 empty commits with no content to land, 5 rows carrying work that is not in `main` (3 distinct pieces of work, counted twice where a mirror copy also exists), and `main` itself: 146 + 2 + 5 + 1 = 154.
+So only a small minority carried unlanded work.
 Nothing had pruned any of them, because three independent mechanisms would each have had to and none did.
 
 This document names all three, records which one firstmate's own code owns, and states plainly which one is deliberately not built.
@@ -63,7 +65,7 @@ It covers repositories where the setting cannot be changed, and it makes the int
 
 Projects that ship through the `no-mistakes` pipeline get a second copy of every task branch.
 The pipeline pushes each branch into a local bare repository under `~/.no-mistakes/repos/<id>.git`, which never reaches the forge and is invisible to `gh`.
-In the audited fleet these mirror branches were 73 of the 154, roughly half the sprawl and 73 MB of local disk.
+In the audited fleet these mirror branches were the 73 of the 154 counted rows that sit outside the forge, roughly half the sprawl and 73 MB of local disk.
 
 ### What the pipeline would need
 
