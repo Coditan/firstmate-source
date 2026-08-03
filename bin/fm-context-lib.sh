@@ -361,18 +361,55 @@ fm_context_restart_path_ok() {  # <fm-home> <fm-root>
 # is nothing to say. Printed reasons, all on the "check" wake kind:
 #   ... cannot measure ...  the recorded transcript is missing or unreadable, so
 #                           the ceiling is UNENFORCED and an observer must see it
+#   ... cannot run safely   over ceiling and quiet, but the re-entry hook is gone
 #   ... ask the captain     over ceiling and quiet, but the captain is in live
 #                           conversation or away mode owns delivery
 #   ... reset               over ceiling, quiet, and the captain is not present
-# Under the ceiling, or over it while the fleet is busy, it prints nothing: that
-# is an ordinary quiet poll, not a suppressed alarm.
+#
+# Alongside the printed text it publishes three variables, so a caller that needs
+# to throttle can call it directly instead of through a command substitution that
+# would discard them:
+#
+#   FM_CONTEXT_CEILING_REASON  the same text this prints, empty when there is none
+#   FM_CONTEXT_CEILING_CLASS   the branch identity as a stable token - unenforced,
+#                              blocked, ask, reset - empty when there is no
+#                              reason. This is the throttle key: it is never prose
+#                              and does not move when a payload is reworded.
+#   FM_CONTEXT_CEILING_STATE   which of three outcomes this poll had:
+#     surfaced    a reason is being reported
+#     resolved    the condition is genuinely gone: nothing is running here, or
+#                 the session is under the ceiling. ONLY this may clear a caller's
+#                 throttle
+#     suppressed  over the ceiling, but the fleet is not quiet, so this poll has
+#                 nothing to say YET. The condition is unchanged and still true,
+#                 and treating it as resolved would let a ceiling wake erase its
+#                 own throttle - fm_context_quiet's first test is whether
+#                 state/.wake-queue is non-empty, and that queue is exactly where
+#                 the wake this check produces is parked until firstmate drains it
+FM_CONTEXT_CEILING_REASON=
+FM_CONTEXT_CEILING_CLASS=
+FM_CONTEXT_CEILING_STATE=
+
+_fm_context_ceiling_surfaced() {  # <class> <reason>
+  FM_CONTEXT_CEILING_CLASS=$1
+  FM_CONTEXT_CEILING_REASON=$2
+  FM_CONTEXT_CEILING_STATE=surfaced
+  printf '%s' "$2"
+}
+
 fm_context_ceiling_reason() {  # <state-dir> <fm-home> <fm-root>
-  local state=$1 home=$2 root=$3 branch
+  local state=$1 home=$2 root=$3 branch msg
+  # shellcheck disable=SC2034 # Read by callers after fm_context_ceiling_reason returns.
+  FM_CONTEXT_CEILING_REASON=
+  # shellcheck disable=SC2034 # Read by callers after fm_context_ceiling_reason returns.
+  FM_CONTEXT_CEILING_CLASS=
+  FM_CONTEXT_CEILING_STATE=resolved
   # Nothing running here means nothing to measure, and nothing to report.
   fm_context_session_live "$state" || return 0
   if ! fm_context_record_read "$state"; then
-    printf 'check: context-ceiling: a firstmate session is running here but its context cannot be measured (%s); the %s ceiling is unenforced until that is repaired' \
+    printf -v msg 'check: context-ceiling: a firstmate session is running here but its context cannot be measured (%s); the %s ceiling is unenforced until that is repaired' \
       "$FM_CONTEXT_RECORD_ERROR" "$FM_CONTEXT_CEILING"
+    _fm_context_ceiling_surfaced unenforced "$msg"
     return 0
   fi
   # The session lock and the transcript record are keyed on the same session
@@ -380,30 +417,39 @@ fm_context_ceiling_reason() {  # <state-dir> <fm-home> <fm-root>
   # that is no longer the one running - and measuring it would report the wrong
   # number rather than no number.
   if [ "$FM_CONTEXT_RECORD_PID" != "$FM_CONTEXT_LOCK_PID" ]; then
-    printf 'check: context-ceiling: the recorded transcript belongs to session process %s but session process %s is the one running here; the %s ceiling is unenforced until this session records its transcript again' \
+    printf -v msg 'check: context-ceiling: the recorded transcript belongs to session process %s but session process %s is the one running here; the %s ceiling is unenforced until this session records its transcript again' \
       "$FM_CONTEXT_RECORD_PID" "$FM_CONTEXT_LOCK_PID" "$FM_CONTEXT_CEILING"
+    _fm_context_ceiling_surfaced unenforced "$msg"
     return 0
   fi
   if ! fm_context_scan "$FM_CONTEXT_TRANSCRIPT"; then
-    printf 'check: context-ceiling: a firstmate session is running here but its context cannot be measured (%s); the %s ceiling is unenforced until that is repaired' \
+    printf -v msg 'check: context-ceiling: a firstmate session is running here but its context cannot be measured (%s); the %s ceiling is unenforced until that is repaired' \
       "$FM_CONTEXT_SCAN_ERROR" "$FM_CONTEXT_CEILING"
+    _fm_context_ceiling_surfaced unenforced "$msg"
     return 0
   fi
   [ "$FM_CONTEXT_TOKENS" -ge "$FM_CONTEXT_CEILING" ] || return 0
-  fm_context_quiet "$state" || return 0
+  if ! fm_context_quiet "$state"; then
+    # shellcheck disable=SC2034 # Read by callers after fm_context_ceiling_reason returns.
+    FM_CONTEXT_CEILING_STATE=suppressed
+    return 0
+  fi
   branch=reset
   [ -e "$state/.afk" ] && branch=ask
   fm_context_captain_active "$FM_CONTEXT_LAST_HUMAN_TS" && branch=ask
   if ! fm_context_restart_path_ok "$home" "$root"; then
-    printf 'check: context-ceiling: %s tokens is over the %s ceiling, but a reset cannot run safely: %s' \
+    printf -v msg 'check: context-ceiling: %s tokens is over the %s ceiling, but a reset cannot run safely: %s' \
       "$FM_CONTEXT_TOKENS" "$FM_CONTEXT_CEILING" "$FM_CONTEXT_RESTART_ERROR"
+    _fm_context_ceiling_surfaced blocked "$msg"
     return 0
   fi
   if [ "$branch" = ask ]; then
-    printf 'check: context-ceiling: %s tokens is over the %s ceiling and the fleet is quiet, but the captain has been active - ASK the captain before resetting; never reset autonomously during a live conversation' \
+    printf -v msg 'check: context-ceiling: %s tokens is over the %s ceiling and the fleet is quiet, but the captain has been active - ASK the captain before resetting; never reset autonomously during a live conversation' \
       "$FM_CONTEXT_TOKENS" "$FM_CONTEXT_CEILING"
+    _fm_context_ceiling_surfaced ask "$msg"
     return 0
   fi
-  printf 'check: context-ceiling: %s tokens is over the %s ceiling, the fleet is quiet and the captain is not present - run /stow now, then in the SAME turn run: %s/bin/fm-stow-receipt.sh && %s/bin/fm-context-reset.sh' \
+  printf -v msg 'check: context-ceiling: %s tokens is over the %s ceiling, the fleet is quiet and the captain is not present - run /stow now, then in the SAME turn run: %s/bin/fm-stow-receipt.sh && %s/bin/fm-context-reset.sh' \
     "$FM_CONTEXT_TOKENS" "$FM_CONTEXT_CEILING" "$root" "$root"
+  _fm_context_ceiling_surfaced reset "$msg"
 }

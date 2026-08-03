@@ -440,6 +440,27 @@ watch_reason() {  # [extra env assignments...]
     ' fm-context-reset-test "$ROOT/bin/fm-watch.sh"
 }
 
+# The branch identity and the poll's resolution state, straight from the shared
+# predicate. Asserting these rather than payload wording is the point: the class
+# is the throttle key, so a reworded message must never quietly change which
+# condition a wake counts as.
+watch_class() {
+  # shellcheck disable=SC2016 # The inner script's $1 is the child shell's, on purpose.
+  env -u FM_ROOT_OVERRIDE FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$STATE_DIR" \
+    PATH="$FAKEBIN:$PATH" bash -c '
+      set -u
+      . "$1" >/dev/null 2>&1
+      fm_context_ceiling_reason "$STATE" "$FM_HOME" "$FM_ROOT" >/dev/null
+      printf "%s/%s\n" "$FM_CONTEXT_CEILING_CLASS" "$FM_CONTEXT_CEILING_STATE"
+    ' fm-context-reset-test "$ROOT/bin/fm-watch.sh"
+}
+
+assert_class() {  # <expected-class/state> <label>
+  local got
+  got=$(watch_class)
+  [ "$got" = "$1" ] || fail "$2: expected class/state '$1', got '$got'"
+}
+
 test_watcher_is_silent_under_the_ceiling() {
   local out
   make_case
@@ -567,23 +588,77 @@ test_watcher_surfaces_a_changed_branch_immediately() {
   pass "a ceiling branch that changes surfaces on the next poll instead of waiting out the old one"
 }
 
-test_watcher_clears_the_throttle_when_the_poll_goes_quiet() {
+test_watcher_clears_the_throttle_when_the_condition_resolves() {
   local out
   make_case
   out=$(watch_reason)
   assert_contains "$out" "the captain is not present" "the reset branch did not report first"
   assert_present "$STATE_DIR/.context-ceiling-surfaced" "a reported ceiling branch left no throttle marker"
-  # Back under the ceiling: there is nothing to say, and nothing to keep throttled.
+  # Back under the ceiling: the condition is genuinely gone, not merely quiet.
   write_transcript "$TRANSCRIPT" 1000 ""
+  assert_class "/resolved" "a session back under the ceiling"
   out=$(watch_reason)
   [ -z "$out" ] || fail "a session back under the ceiling still reported: $out"
   [ -e "$STATE_DIR/.context-ceiling-surfaced" ] \
-    && fail "a silent poll left the ceiling throttle marker in place"
+    && fail "a resolved condition left the ceiling throttle marker in place"
   write_transcript "$TRANSCRIPT" 900000 "$(iso_ago 86400)"
   out=$(watch_reason)
   assert_contains "$out" "the captain is not present" \
     "the ceiling report did not return immediately after the throttle was cleared"
-  pass "a poll with nothing to say clears the throttle, so the next real condition reports at once"
+  pass "a condition that genuinely resolves clears the throttle, so the next one reports at once"
+}
+
+test_watcher_clears_the_throttle_when_the_session_ends() {
+  make_case
+  watch_reason >/dev/null
+  assert_present "$STATE_DIR/.context-ceiling-surfaced" "a reported ceiling branch left no throttle marker"
+  rm -f "$STATE_DIR/.lock"
+  assert_class "/resolved" "a home with no session running"
+  watch_reason >/dev/null
+  [ -e "$STATE_DIR/.context-ceiling-surfaced" ] \
+    && fail "a home whose session ended kept the previous session's ceiling throttle"
+  pass "a session that ends clears the throttle it left behind"
+}
+
+# The regression this exists for: the ceiling wake is appended to
+# state/.wake-queue, and an undrained queue is the first thing fm_context_quiet
+# tests, so the very next poll after a ceiling wake finds the fleet busy. Reading
+# that as "the condition is gone" let each wake erase its own throttle and come
+# back once per drain cycle - roughly the nagging the throttle was added to end.
+test_watcher_keeps_the_throttle_while_its_own_wake_is_undrained() {
+  local first second third
+  make_case
+  write_transcript "$TRANSCRIPT" 900000 "$(iso_ago 60)"
+  first=$(watch_reason)
+  assert_contains "$first" "ASK the captain" "the first ask was not reported"
+  # T=0 enqueued the wake this poll just produced; firstmate has not drained it.
+  printf '%s\t1\tcheck\tcontext-ceiling\t%s\n' "$(date +%s)" "$first" > "$STATE_DIR/.wake-queue"
+  assert_class "/suppressed" "a poll taken while the ceiling wake is still queued"
+  second=$(watch_reason)
+  [ -z "$second" ] || fail "a busy poll reported a second ceiling wake: $second"
+  assert_present "$STATE_DIR/.context-ceiling-surfaced" \
+    "an undrained wake erased the throttle it had just set"
+  # Firstmate drains, and the captain is still there: nothing has changed.
+  rm -f "$STATE_DIR/.wake-queue"
+  third=$(watch_reason)
+  [ -z "$third" ] || fail "the ask re-fired after its own wake was drained: $third"
+  pass "a ceiling wake sitting undrained does not clear the throttle it set"
+}
+
+test_watcher_publishes_a_stable_class_per_branch() {
+  make_case
+  assert_class "reset/surfaced" "over the ceiling, quiet, captain gone"
+  write_transcript "$TRANSCRIPT" 900000 "$(iso_ago 60)"
+  assert_class "ask/surfaced" "over the ceiling with the captain present"
+  write_settings "$HOME_DIR" 'startup|resume' 'fm-sessionstart-nudge.sh'
+  assert_class "blocked/surfaced" "over the ceiling with the re-entry hook unwired"
+  write_settings "$HOME_DIR" 'startup|resume|clear' 'fm-sessionstart-nudge.sh'
+  rm -f "$STATE_DIR/.primary-transcript"
+  assert_class "unenforced/surfaced" "a live session that cannot be measured"
+  record_ok
+  printf 'needs-decision: which option\n' > "$STATE_DIR/alpha.status"
+  assert_class "/suppressed" "over the ceiling while a worker waits on an answer"
+  pass "every ceiling branch publishes its own stable class token, independent of payload wording"
 }
 
 test_watcher_refuses_to_hand_over_a_reset_with_a_broken_restart_path() {
@@ -669,7 +744,10 @@ test_watcher_is_silent_with_no_session_running
 test_watcher_throttles_but_does_not_silence_the_measurement_failure
 test_watcher_throttles_an_unchanged_ask
 test_watcher_surfaces_a_changed_branch_immediately
-test_watcher_clears_the_throttle_when_the_poll_goes_quiet
+test_watcher_clears_the_throttle_when_the_condition_resolves
+test_watcher_clears_the_throttle_when_the_session_ends
+test_watcher_keeps_the_throttle_while_its_own_wake_is_undrained
+test_watcher_publishes_a_stable_class_per_branch
 test_watcher_refuses_to_hand_over_a_reset_with_a_broken_restart_path
 test_watcher_process_enqueues_the_ceiling_wake
 test_wake_delivery_is_not_mistaken_for_the_captain

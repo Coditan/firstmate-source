@@ -110,10 +110,15 @@ A silent non-fire is the defect class this whole line of work exists to remove, 
 - **The way back in is broken.** If `clear` ever leaves the `SessionStart` matcher, or the nudge script goes missing, the wake reports the blocker instead of ordering a reset, and the reset tool refuses. That check proves the hook is still wired and its script is still there; what carries the fresh session's rebuild instruction after a self-clear is `AGENTS.md` section 3, for the reason in "the way back in, precisely" below.
 - **A reset is attempted and refused.** Every refusal prints its concrete reason and appends one line to `state/.context-reset.log`.
 
-Every wake the watcher raises here - reset, ask, "a reset cannot run safely", and "the ceiling is unenforced" alike - is reported at most once per `FM_CONTEXT_ERROR_RESURFACE` while the condition behind it is unchanged.
+Every wake the watcher raises here - `reset`, `ask`, `blocked`, and `unenforced` alike - is reported at most once per `FM_CONTEXT_ERROR_RESURFACE` while the condition behind it is unchanged.
 Every branch here describes a condition rather than an event - a present captain stays present, a broken hook stays broken, an unmeasurable transcript stays unmeasurable - so repeating any of them on the poll cadence would spend a model turn every five minutes on news that has not changed, which is the opposite of what this mechanism is for.
-The throttle is keyed on the branch, not the wording, so a condition that *changes* surfaces on the very next poll: a captain who goes away does not have to wait out the ask throttle before the reset branch can fire.
-The marker is cleared as soon as a poll produces no reason at all.
+The throttle is keyed on a branch class the predicate publishes as a stable token, never on the payload's wording, so rewording a message can never quietly merge two conditions under one key.
+A condition that *changes* surfaces on the very next poll: a captain who goes away does not have to wait out the ask throttle before the reset branch can fire.
+
+The throttle is cleared only when the condition genuinely resolves - nothing is running in this home, or the session is back under the ceiling.
+A poll that finds the fleet busy is a different thing entirely, and leaves the throttle alone.
+This distinction is load-bearing rather than pedantic: the ceiling wake is appended to `state/.wake-queue`, an undrained queue is the first thing that makes a poll non-quiet, and only firstmate drains it from inside a turn.
+Treating "nothing to say this poll" as "the condition is gone" would let every ceiling wake erase its own throttle and come back once per drain cycle.
 
 ## The way back in, precisely
 
@@ -205,4 +210,4 @@ All under `state/`, all gitignored:
 | `.stow-receipt` | `bin/fm-stow-receipt.sh` | knowledge filed, bound to a transcript position; removed on a completed reset |
 | `.context-reset.log` | `bin/fm-context-reset.sh` | one durable line per refusal, `--check` pass, or completed reset |
 | `.last-context-check` | `bin/fm-watch.sh` | ceiling-read cadence, as an mtime, so it survives a watcher restart |
-| `.context-ceiling-surfaced` | `bin/fm-watch.sh` | the branch class last reported (`reset`, `ask`, `cannot-run-safely`, `unenforced`), as content, and when it was reported, as an mtime; throttles an unchanged condition and is cleared as soon as a poll has nothing to say |
+| `.context-ceiling-surfaced` | `bin/fm-watch.sh` | the branch class last reported (`reset`, `ask`, `blocked`, `unenforced`), as content, and when it was reported, as an mtime; throttles an unchanged condition, and is cleared only when the condition genuinely resolves |

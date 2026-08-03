@@ -737,52 +737,50 @@ age_of() {  # seconds since file mtime; "due immediately" if missing
   echo $(( $(date +%s) - m ))
 }
 
-# Which branch of the ceiling check a reason came from. The wake text is the
-# contract firstmate reads; this is the coarse key the throttle compares, so
-# rewording a payload never silently changes what counts as "the same condition".
-context_ceiling_class() {  # <reason>
-  case "$1" in
-    *'is unenforced'*) printf 'unenforced' ;;
-    *'cannot run safely'*) printf 'cannot-run-safely' ;;
-    *'ASK the captain'*) printf 'ask' ;;
-    *) printf 'reset' ;;
-  esac
-}
-
 # Print the context-ceiling wake reason when there is one, and nothing on an
 # ordinary poll. bin/fm-context-lib.sh owns what "over ceiling", "quiet", and
 # "captain active" mean, so the watcher's branch and the reset tool's refusals
-# cannot drift apart.
+# cannot drift apart. It is called directly rather than through a command
+# substitution because the branch class and the poll's resolution state are
+# published as variables, and a subshell would discard both.
 #
-# EVERY reason is throttled, not just the unmeasurable one. Each branch here
+# EVERY reason is throttled, not just the unmeasurable one. Each branch there
 # describes a condition rather than an event: a captain who is present stays
 # present, a broken re-entry hook stays broken, and an unmeasurable transcript
 # stays unmeasurable, so re-reporting any of them on the poll cadence would spend
 # a model turn every CONTEXT_CHECK_INTERVAL on news that has not changed - the
 # opposite of what this mechanism exists to do. The throttle is keyed on the
-# BRANCH CLASS, so a condition that CHANGES (the captain leaves and the ask
+# published class, so a condition that CHANGES (the captain leaves and the ask
 # branch becomes the reset branch) surfaces on the very next poll instead of
 # waiting out the previous branch's quiet period. Only an unchanged, still-true
 # condition is held quiet, and only to CONTEXT_ERROR_RESURFACE - never forever,
-# because a ceiling nobody hears about is an unenforced ceiling. The marker is
-# cleared as soon as a poll produces no reason at all.
+# because a ceiling nobody hears about is an unenforced ceiling.
+#
+# Only a RESOLVED poll clears the marker. A suppressed one leaves it exactly as
+# it is: the wake this check produces sits in state/.wake-queue until firstmate
+# drains it, and an undrained queue is precisely what makes the next poll
+# non-quiet - so clearing on "no reason this poll" would let every ceiling wake
+# erase its own throttle and re-fire once per drain cycle.
 context_ceiling_surface() {
-  local reason class marker previous
-  reason=$(fm_context_ceiling_reason "$STATE" "$FM_HOME" "$FM_ROOT") || return 0
+  local marker previous
+  fm_context_ceiling_reason "$STATE" "$FM_HOME" "$FM_ROOT" >/dev/null || return 0
   marker="$STATE/.context-ceiling-surfaced"
-  if [ -z "$reason" ]; then
-    rm -f "$marker" 2>/dev/null || true
-    return 0
-  fi
-  class=$(context_ceiling_class "$reason")
+  case "$FM_CONTEXT_CEILING_STATE" in
+    resolved)
+      rm -f "$marker" 2>/dev/null || true
+      return 0
+      ;;
+    surfaced) ;;
+    *) return 0 ;;
+  esac
   previous=$(cat "$marker" 2>/dev/null || true)
-  if [ "$previous" = "$class" ] \
+  if [ "$previous" = "$FM_CONTEXT_CEILING_CLASS" ] \
     && [ "$(age_of "$marker")" -lt "$CONTEXT_ERROR_RESURFACE" ]; then
-    triage_log "absorbed context-ceiling $class (unchanged since it was last reported)"
+    triage_log "absorbed context-ceiling $FM_CONTEXT_CEILING_CLASS (unchanged since it was last reported)"
     return 0
   fi
-  printf '%s\n' "$class" > "$marker" 2>/dev/null || true
-  printf '%s' "$reason"
+  printf '%s\n' "$FM_CONTEXT_CEILING_CLASS" > "$marker" 2>/dev/null || true
+  printf '%s' "$FM_CONTEXT_CEILING_REASON"
 }
 
 # Layer 2 + 3 signal scan: status files and turn-end markers. Each file is
