@@ -7,6 +7,21 @@
 # Merge method defaults to --squash when the caller passes none of --squash,
 # --merge, --rebase, or --method after the optional -- separator. Extra args
 # must not include --repo or -R because the repository comes only from the URL.
+#
+# The merged head branch is deleted by default: --delete-branch is added unless
+# the caller already chose, with --delete-branch, or --delete-branch=false to
+# keep the branch. Only those long forms count as a choice, because gh-axi's pr
+# merge rebuilds the gh argv from the flags it recognizes and silently discards
+# leftovers such as -d, so honouring the shorthand as an opt-out deleted nothing
+# at all; an opt-out that silently fails to apply is worse than none. A caller
+# passing -d therefore still gets this path's own --delete-branch. The forge
+# performs that deletion as part of the merge, so this path never issues a
+# branch-delete command of its own. Verified against gh
+# 2.96.0: a failed merge returns before either deletion, only the just-merged
+# PR's own head branch is deleted, a head branch the forge already removed under
+# delete_branch_on_merge is tolerated rather than an error, and no local branch
+# is touched because this path always passes --repo. Merged branches have two
+# further producers this does not cover; docs/merged-branch-cleanup.md owns them.
 # Usage: fm-pr-merge.sh <task-id> <pr-url> [-- <extra gh-axi pr merge args>]
 set -eu
 
@@ -52,6 +67,16 @@ caller_has_merge_method() {
   return 1
 }
 
+caller_has_delete_choice() {
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      --delete-branch|--delete-branch=*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
 reject_repo_overrides() {
   local arg
   for arg in "$@"; do
@@ -81,7 +106,11 @@ grep -qxF "pr=$URL" "$META" || {
 
 merge_args=()
 if ! caller_has_merge_method "$@"; then
-  merge_args=(--squash)
+  merge_args+=(--squash)
+fi
+# The forge deletes the head branch as part of this merge, and only this merge.
+if ! caller_has_delete_choice "$@"; then
+  merge_args+=(--delete-branch)
 fi
 
 gh-axi pr merge "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" "${merge_args[@]+"${merge_args[@]}"}" "$@"
