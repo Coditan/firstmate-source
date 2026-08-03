@@ -1793,6 +1793,84 @@ test_heartbeat_backstop_surfaces_unsurfaced_status() {
   pass "heartbeat backstop fail-safe surfaces a captain-relevant status the per-wake path missed"
 }
 
+setup_certsync_health_case() {  # <dir>
+  local dir=$1 project
+  project="$dir/root/projects/hlr-certsync"
+  mkdir -p "$project"
+  : > "$project/docker-compose.yml"
+  : > "$project/docker-compose.graph-pem.yml"
+}
+
+install_fake_certsync_docker() {  # <fakebin> <payload-file>
+  local fakebin=$1 payload=$2
+  cat > "$fakebin/docker" <<'SH'
+#!/usr/bin/env bash
+set -u
+[ "$#" -ge 1 ] && [ "$1" = compose ] || exit 1
+cat "$FM_FAKE_CERTSYNC_PAYLOAD"
+SH
+  chmod +x "$fakebin/docker"
+  printf '%s\n' "$payload" > "$fakebin/certsync-payload.json"
+}
+
+test_heartbeat_certsync_healthy_absorbed() {
+  local dir state fakebin out payload pid
+  dir=$(make_case heartbeat-certsync-healthy); state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"
+  setup_certsync_health_case "$dir"
+  payload="$fakebin/certsync-payload.json"
+  install_fake_certsync_docker "$fakebin" "$payload"
+  printf '{"healthy":true,"reason":"ok"}\n' > "$payload"
+  PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$dir/root" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 FM_FAKE_CERTSYNC_PAYLOAD="$payload" "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 30; then
+    reap "$pid"; fail "watcher exited for healthy certsync (should absorb): $(cat "$out")"
+  fi
+  [ ! -s "$out" ] || fail "healthy certsync printed a wake reason: $(cat "$out")"
+  [ ! -s "$state/.wake-queue" ] || fail "healthy certsync enqueued a durable wake record"
+  reap "$pid"
+  pass "heartbeat absorbs healthy certsync status"
+}
+
+test_heartbeat_certsync_unhealthy_surfaces_check_wake() {
+  local dir state fakebin out drain_out payload pid
+  dir=$(make_case heartbeat-certsync-unhealthy); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"
+  setup_certsync_health_case "$dir"
+  payload="$fakebin/certsync-payload.json"
+  install_fake_certsync_docker "$fakebin" "$payload"
+  printf '{"healthy":false,"reason":"state DB missing"}\n' > "$payload"
+  PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$dir/root" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 FM_FAKE_CERTSYNC_PAYLOAD="$payload" "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "heartbeat did not surface unhealthy certsync"
+  grep -Fx "check: certsync health: unhealthy: state DB missing" "$out" >/dev/null \
+    || fail "certsync wake reason was wrong: $(cat "$out")"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after certsync wake failed"
+  grep "$(printf '\tcheck\tcertsync-health\tcheck: certsync health: unhealthy: state DB missing')" "$drain_out" >/dev/null \
+    || fail "certsync check wake was not queued: $(cat "$drain_out")"
+  pass "heartbeat surfaces confirmed unhealthy certsync through the check wake path"
+}
+
+test_heartbeat_certsync_unknown_absorbed() {
+  local dir state fakebin out payload pid
+  dir=$(make_case heartbeat-certsync-unknown); state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"
+  setup_certsync_health_case "$dir"
+  payload="$fakebin/certsync-payload.json"
+  install_fake_certsync_docker "$fakebin" "$payload"
+  printf 'not-json\n' > "$payload"
+  PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$dir/root" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 FM_FAKE_CERTSYNC_PAYLOAD="$payload" "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 30; then
+    reap "$pid"; fail "watcher exited for unknown certsync (should absorb): $(cat "$out")"
+  fi
+  [ ! -s "$out" ] || fail "unknown certsync printed a wake reason: $(cat "$out")"
+  [ ! -s "$state/.wake-queue" ] || fail "unknown certsync enqueued a durable wake record"
+  reap "$pid"
+  pass "heartbeat treats unreadable certsync status as unknown without escalation"
+}
+
 # --- beacon stays fresh while absorbing -------------------------------------
 
 test_beacon_stays_fresh_while_absorbing() {
@@ -1929,6 +2007,9 @@ test_nonterminal_stale_repairs_missing_or_corrupt_timer
 test_triage_log_size_cap_accepts_spaced_wc_counts
 test_heartbeat_no_change_absorbed
 test_heartbeat_backstop_surfaces_unsurfaced_status
+test_heartbeat_certsync_healthy_absorbed
+test_heartbeat_certsync_unhealthy_surfaces_check_wake
+test_heartbeat_certsync_unknown_absorbed
 test_beacon_stays_fresh_while_absorbing
 test_afk_present_reverts_watcher_to_one_shot
 test_afk_paused_changed_pane_hands_off_plain_stale
