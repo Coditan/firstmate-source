@@ -442,7 +442,13 @@ MODEL=$(printf '%s' "$SNAP" | jq \
        | select(.structured and ((.dangling_blocker_ids // []) | length) > 0)
        | {id, title:(.title | trunc(60)),
           phantom_blocked_by:((.dangling_blocker_ids // []) | join(",") | trunc(120)),
-          owner:"(main)"} ]) as $integrity_all
+          owner:"(main)"}
+     ] + [ (.secondmate_current.records // [])[] as $m
+       | select($m.provenance.selected == "structured-home")
+       | (($m.queued[]?, $m.holds[]?) | select(((.dangling_blocker_ids // []) | length) > 0))
+       | {id, title:(.title | trunc(60)),
+          phantom_blocked_by:((.dangling_blocker_ids // []) | join(",") | trunc(120)),
+          owner:$m.id} ] | unique_by([.owner, .id, .phantom_blocked_by])) as $integrity_all
   | ([ .scout_reports[]
        | . as $r
        | select(($all_reports == 1) or (($rel_ids | index($r.id)) != null))

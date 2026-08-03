@@ -643,15 +643,27 @@ main_inventory_json() {  # <backlog-json> <tasks-json>
 # validated parent read needs.
 # This mode never reads parent events or terminal text and never aggregates
 # nested secondmates.
-secondmate_home_summary_json() {  # <backlog-json> <tasks-json>
-  json_stdin "$1" "$2" | jq -n \
+secondmate_home_summary_json() {  # <backlog-json> <tasks-json> <archive-json>
+  json_stdin "$1" "$2" "$3" | jq -n \
     --arg generated "$SNAPSHOT_NOW" \
     --arg home "$FM_HOME" \
     --argjson child_n "$FM_SNAPSHOT_SECONDMATE_CHILDREN" \
     --argjson queued_n "$FM_SNAPSHOT_SECONDMATE_QUEUED" \
     --argjson decisions_n "$FM_SNAPSHOT_SECONDMATE_DECISIONS" \
-    --argjson landed_n "$FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME" '
-    input as $backlog | input as $tasks
+    --argjson landed_n "$FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME" \
+    "$FM_BLOCKER_CLASS_JQ"'
+    input as $raw_backlog | input as $tasks | input as $archive
+    | ([ $raw_backlog.records[]? | select(.structured and .id != null) | {key:.id, value:true} ]
+        | from_entries) as $live_ids
+    | ([ $archive.records[]? | select(.structured and .id != null) | {key:.id, value:true} ]
+        | from_entries) as $archive_ids
+    | ($raw_backlog | .records |= map(
+        if .structured then
+          fm_dangling_blockers(.blocked_by_ids; $live_ids; $archive_ids) as $dangling
+          | .dangling_blocker_ids = $dangling
+          | .unresolved_blocker_ids =
+              [ (.unresolved_blocker_ids // [])[] | select(. as $b | ($dangling | index($b)) == null) ]
+        else . + {dangling_blocker_ids: []} end)) as $backlog
     | def trunc($n):
       tostring | gsub("\\s+"; " ")
       | if length > $n then .[:$n] + "…" else . end;
@@ -720,6 +732,7 @@ secondmate_home_summary_json() {  # <backlog-json> <tasks-json>
             blocked_by:((.unresolved_blocker_ids | join(",")) | if . == "" then null else trunc(120) end),
             blocked_by_ids:(.blocked_by_ids | map(trunc(120))),
             unresolved_blocker_ids:(.unresolved_blocker_ids | map(trunc(120))),
+            dangling_blocker_ids:((.dangling_blocker_ids // []) | map(trunc(120))),
             reason:((.hold_reason // .blocked_reason // "blocked") | trunc(120)),source:"backlog"} ]
        + [ $owned_in_flight[] as $work
            | $tasks[]
@@ -761,6 +774,7 @@ secondmate_home_summary_json() {  # <backlog-json> <tasks-json>
           blocked_by:((.blocked_by // null) | if . == null then null else trunc(120) end),
           blocked_by_ids:((.blocked_by_ids // []) | map(trunc(120))),
           unresolved_blocker_ids:((.unresolved_blocker_ids // []) | map(trunc(120))),
+          dangling_blocker_ids:((.dangling_blocker_ids // []) | map(trunc(120))),
           blocked_reason:((.blocked_reason // null) | if . == null then null else trunc(160) end),
           hold_reason:((.hold_reason // null) | if . == null then null else trunc(160) end),
           hold_kind:((.hold_kind // null) | if . == null then null else trunc(40) end),
@@ -1355,7 +1369,13 @@ fi
 TASKS_JSON=$(task_json_lines) || { echo "fm-fleet-snapshot: task snapshot failed" >&2; exit 1; }
 
 if [ "$OUTPUT_MODE" = secondmate-home-summary ]; then
-  secondmate_home_summary_json "$BACKLOG_JSON" "$TASKS_JSON" \
+  if [ -f "$ARCHIVE" ]; then
+    ARCHIVE_JSON=$(backlog_json "$ARCHIVE") \
+      || { echo "fm-fleet-snapshot: done archive read failed" >&2; exit 1; }
+  else
+    ARCHIVE_JSON='{"records":[]}'
+  fi
+  secondmate_home_summary_json "$BACKLOG_JSON" "$TASKS_JSON" "$ARCHIVE_JSON" \
     || { echo "fm-fleet-snapshot: secondmate home summary failed" >&2; exit 1; }
   exit 0
 fi
