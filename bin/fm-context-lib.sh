@@ -308,15 +308,24 @@ fm_context_quiet() {  # <state-dir>
   return 0
 }
 
-# Return 0 when the post-reset re-entry path is intact: the native session-start
-# hook still fires on a self-issued clear, and the script it names is still there
-# to run. Sets FM_CONTEXT_RESTART_ERROR otherwise.
+# Return 0 when the post-reset re-entry hook is still WIRED: the SessionStart
+# matcher still contains `clear`, it still runs bin/fm-sessionstart-nudge.sh, and
+# that script is still present and executable. Sets FM_CONTEXT_RESTART_ERROR
+# otherwise.
 #
-# This is not defensive decoration. The clear is what makes the fresh session
-# rebuild from durable records; if `clear` ever leaves that matcher, a reset
-# becomes a silent decapitation - context discarded, no rebuild instruction, a
-# live fleet and an idle firstmate. It is one jq read, and it is a hard
-# precondition.
+# WHAT THIS PROVES, AND WHAT IT DOES NOT. It proves the hook is wired and its
+# script is there. It does NOT prove a rebuild instruction is delivered: the
+# nudge exits silently whenever the pid in state/.lock is in its ancestry, and
+# state/.lock holds the harness process pid, which a self-clear does not restart.
+# So on the self-clear this mechanism performs, the hook fires and injects
+# nothing, and the fresh session rebuilds from AGENTS.md section 3 - always
+# loaded, and already instructing it to run bin/fm-session-start.sh. That is the
+# weaker of the two paths; making the nudge emit on a `source=clear` payload is
+# filed as separate work on that script.
+#
+# It stays a hard precondition anyway, because what it catches is the total loss:
+# the hook unwired from `clear`, or the script removed outright. It is one jq
+# read, and the fallback above is the only thing standing behind it.
 FM_CONTEXT_RESTART_ERROR=
 fm_context_restart_path_ok() {  # <fm-home> <fm-root>
   local home=$1 root=$2 settings nudge

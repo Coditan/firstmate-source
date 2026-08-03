@@ -394,6 +394,23 @@ test_errored_transcript_record_refuses() {
   assert_refuses "in error state" "a reset whose session never recorded a usable transcript"
 }
 
+test_undetected_backend_refuses() {
+  local out status=0
+  make_case
+  # Neither TMUX_PANE nor herdr's markers: nothing is detected, and the detector
+  # still prints its tmux default. Falling through to that default would run the
+  # tmux-only clear on a session nobody proved is a tmux session.
+  out=$(env -u FM_ROOT_OVERRIDE -u TMUX_PANE -u HERDR_ENV -u HERDR_PANE_ID \
+    -u FM_SUPERVISOR_BACKEND -u FM_SUPERVISOR_TARGET \
+    PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_DIR" FM_FAKE_TMUX_LOG="$TMUX_LOG" \
+    CLAUDECODE=1 "$RESET" 2>&1) || status=$?
+  expect_code 1 "$status" "a reset on a session with no detectable terminal backend"
+  assert_contains "$out" "terminal backend could not be detected" \
+    "the undetected backend refused for the wrong reason"
+  assert_no_grep 'send-keys' "$TMUX_LOG" "an undetected backend still typed into the pane"
+  pass "a backend that was guessed rather than detected refuses instead of clearing"
+}
+
 test_unverified_harness_refuses() {
   local out
   make_case
@@ -518,6 +535,57 @@ test_watcher_throttles_but_does_not_silence_the_measurement_failure() {
   pass "a standing measurement failure reports periodically instead of once or forever"
 }
 
+# The ask branch is the one a captain who is present would otherwise hear every
+# CONTEXT_CHECK_INTERVAL for as long as they are around, so it is throttled on
+# exactly the same terms as the unmeasurable one.
+test_watcher_throttles_an_unchanged_ask() {
+  local first second third
+  make_case
+  write_transcript "$TRANSCRIPT" 900000 "$(iso_ago 60)"
+  first=$(watch_reason)
+  assert_contains "$first" "ASK the captain" "the first ask was not reported"
+  second=$(watch_reason)
+  [ -z "$second" ] || fail "an unchanged ask repeated on the very next poll: $second"
+  third=$(watch_reason FM_CONTEXT_ERROR_RESURFACE=0)
+  assert_contains "$third" "ASK the captain" "the ask never came back after its quiet period"
+  pass "a still-true ask is held quiet for its resurface period rather than nagging every poll"
+}
+
+test_watcher_surfaces_a_changed_branch_immediately() {
+  local first second
+  make_case
+  write_transcript "$TRANSCRIPT" 900000 "$(iso_ago 60)"
+  first=$(watch_reason)
+  assert_contains "$first" "ASK the captain" "the ask branch did not report first"
+  # The captain leaves. The condition has CHANGED, so waiting out the ask branch's
+  # quiet period would delay the reset it now hands over by up to an hour.
+  write_transcript "$TRANSCRIPT" 900000 "$(iso_ago 86400)"
+  second=$(watch_reason)
+  assert_contains "$second" "the captain is not present" \
+    "a changed ceiling branch was suppressed by the previous branch's throttle"
+  assert_contains "$second" "fm-context-reset.sh" "the reset branch surfaced without its commands"
+  pass "a ceiling branch that changes surfaces on the next poll instead of waiting out the old one"
+}
+
+test_watcher_clears_the_throttle_when_the_poll_goes_quiet() {
+  local out
+  make_case
+  out=$(watch_reason)
+  assert_contains "$out" "the captain is not present" "the reset branch did not report first"
+  assert_present "$STATE_DIR/.context-ceiling-surfaced" "a reported ceiling branch left no throttle marker"
+  # Back under the ceiling: there is nothing to say, and nothing to keep throttled.
+  write_transcript "$TRANSCRIPT" 1000 ""
+  out=$(watch_reason)
+  [ -z "$out" ] || fail "a session back under the ceiling still reported: $out"
+  [ -e "$STATE_DIR/.context-ceiling-surfaced" ] \
+    && fail "a silent poll left the ceiling throttle marker in place"
+  write_transcript "$TRANSCRIPT" 900000 "$(iso_ago 86400)"
+  out=$(watch_reason)
+  assert_contains "$out" "the captain is not present" \
+    "the ceiling report did not return immediately after the throttle was cleared"
+  pass "a poll with nothing to say clears the throttle, so the next real condition reports at once"
+}
+
 test_watcher_refuses_to_hand_over_a_reset_with_a_broken_restart_path() {
   local out
   make_case
@@ -588,6 +656,7 @@ test_read_only_session_refuses
 test_receipt_refuses_from_a_read_only_session
 test_missing_transcript_record_refuses
 test_errored_transcript_record_refuses
+test_undetected_backend_refuses
 test_unverified_harness_refuses
 test_watcher_is_silent_under_the_ceiling
 test_watcher_asks_when_the_captain_is_active
@@ -598,6 +667,9 @@ test_watcher_reports_when_it_cannot_measure
 test_watcher_reports_a_record_from_a_finished_session
 test_watcher_is_silent_with_no_session_running
 test_watcher_throttles_but_does_not_silence_the_measurement_failure
+test_watcher_throttles_an_unchanged_ask
+test_watcher_surfaces_a_changed_branch_immediately
+test_watcher_clears_the_throttle_when_the_poll_goes_quiet
 test_watcher_refuses_to_hand_over_a_reset_with_a_broken_restart_path
 test_watcher_process_enqueues_the_ceiling_wake
 test_wake_delivery_is_not_mistaken_for_the_captain

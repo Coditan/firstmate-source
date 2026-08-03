@@ -28,9 +28,11 @@ firstmate drains the wake (already obligatory)
   bin/fm-context-reset.sh   re-verify everything, then clear
                             -> refuses loudly on any failure, never proceeds
 
-turn ends -> context clears -> SessionStart:clear fires the nudge
+turn ends -> context clears -> SessionStart:clear fires (the nudge itself stays
+                              silent on a self-clear, see below)
           -> the surviving wake-delivery task wakes the fresh session
-          -> bin/fm-session-start.sh rebuilds from durable records
+          -> AGENTS.md section 3 tells the fresh session to run
+             bin/fm-session-start.sh, which rebuilds from durable records
 ```
 
 One firstmate turn per reset.
@@ -102,11 +104,28 @@ A silent non-fire is the defect class this whole line of work exists to remove, 
 
 - **It fires and firstmate does not act.** The wake is durable. An enqueued wake that is never drained is already an alarm.
 - **The observation stops running.** The watcher's own death is already alarmed by the liveness guard.
-- **A session is running here and cannot be measured** - no transcript recorded, an unreadable one, a record naming a different session process than the one holding the home lock, or no `jq`. That is reported as its own wake saying the ceiling is unenforced, throttled to `FM_CONTEXT_ERROR_RESURFACE` so a standing defect reports periodically rather than once or never.
+- **A session is running here and cannot be measured** - no transcript recorded, an unreadable one, a record naming a different session process than the one holding the home lock, or no `jq`. That is reported as its own wake saying the ceiling is unenforced.
   The live session lock is what makes this an alarm rather than noise: with no session running, there is genuinely nothing to measure, and a fresh home, a home between sessions, and every non-primary home would otherwise carry a permanent false alarm.
   The record and the lock are keyed on the same session process on purpose, so a disagreement between them means the record describes a session that has finished - measuring it would report the wrong number rather than no number, which is why that case is reported instead of used.
-- **The way back in is broken.** If `clear` ever leaves the `SessionStart` matcher, or the nudge script goes missing, the wake reports the blocker instead of ordering a reset, and the reset tool refuses. Without that check a reset would be a silent decapitation: context discarded, no rebuild instruction, a live fleet and an idle firstmate.
+- **The way back in is broken.** If `clear` ever leaves the `SessionStart` matcher, or the nudge script goes missing, the wake reports the blocker instead of ordering a reset, and the reset tool refuses. That check proves the hook is still wired and its script is still there; what carries the fresh session's rebuild instruction after a self-clear is `AGENTS.md` section 3, for the reason in "the way back in, precisely" below.
 - **A reset is attempted and refused.** Every refusal prints its concrete reason and appends one line to `state/.context-reset.log`.
+
+Every wake the watcher raises here - reset, ask, "a reset cannot run safely", and "the ceiling is unenforced" alike - is reported at most once per `FM_CONTEXT_ERROR_RESURFACE` while the condition behind it is unchanged.
+Every branch here describes a condition rather than an event - a present captain stays present, a broken hook stays broken, an unmeasurable transcript stays unmeasurable - so repeating any of them on the poll cadence would spend a model turn every five minutes on news that has not changed, which is the opposite of what this mechanism is for.
+The throttle is keyed on the branch, not the wording, so a condition that *changes* surfaces on the very next poll: a captain who goes away does not have to wait out the ask throttle before the reset branch can fire.
+The marker is cleared as soon as a poll produces no reason at all.
+
+## The way back in, precisely
+
+The re-entry check proves one thing: the `SessionStart` hook still matches `clear`, still runs `bin/fm-sessionstart-nudge.sh`, and that script is still present and executable.
+It does not prove a rebuild instruction is delivered, and on the self-clear this mechanism performs, none is.
+`bin/fm-sessionstart-nudge.sh` exits silently whenever the pid in `state/.lock` is an ancestor of the hook process, and `state/.lock` holds the harness process pid, which a self-clear does not restart - the same fact the reset tool relies on when it refuses unless that lock pid is in its own ancestry.
+So the hook fires and injects nothing.
+
+What the fresh session rebuilds from instead is `AGENTS.md` section 3, which is always loaded and already says to run `bin/fm-session-start.sh` before anything else.
+That is the weaker of the two paths: an always-loaded instruction the model must follow, rather than an injected one placed at the top of a fresh context.
+It is why the wiring check stays a hard precondition even though it cannot prove delivery - unwiring the hook or deleting the script would leave that fallback with nothing behind it at all.
+Repairing the nudge so it emits when the hook payload's `source` is `clear` is filed as separate work on that script.
 
 ## Every refusal the reset tool makes
 
@@ -121,7 +140,7 @@ Run `bin/fm-context-reset.sh --check` to evaluate all of them and clear nothing.
 7. Away mode is active.
 8. The captain has been active within `FM_CONTEXT_CAPTAIN_IDLE_SECS`.
 9. The fleet is no longer quiet: an undrained wake, a routed request awaiting its reply, or a worker waiting on an answer.
-10. The re-entry hook no longer runs `bin/fm-sessionstart-nudge.sh` on a clear, or that script is gone.
+10. The re-entry hook is no longer wired: it no longer runs `bin/fm-sessionstart-nudge.sh` on a clear, or that script is gone. This checks the wiring, not that anything is injected; see "the way back in, precisely" above.
 11. Supervision is not running.
 12. Wake delivery is not armed while this home has recorded work or an X-mode relay - with nothing to wake for, an unarmed delivery wait does not block.
 13. The harness is not `claude`, or the terminal backend is not `tmux`.
@@ -148,7 +167,7 @@ Recorded during the design investigation (`data/fm-stow-clear-mechanism-design/r
 | A session can clear itself from inside | 4/4 clears, memory verifiably gone each time |
 | The clear lands at a turn boundary, not mid-turn | The triggering turn completed first; work in progress is never truncated |
 | The old conversation survives and is resumable | `claude --resume <id>` recalled a pre-clear codeword |
-| `SessionStart` fires with `source=clear` and the injected instruction is obeyed | The fresh session ran the injected command before answering anything else |
+| `SessionStart` fires with `source=clear` and the injected instruction is obeyed | The fresh session ran the injected command before answering anything else. Proven in a lab session that held no home lock, which is why it does not carry over to a locked primary: there the nudge sees its own lock pid in its ancestry and exits silently, so nothing is injected and `AGENTS.md` section 3 carries the rebuild instead |
 | Supervision survives the reset | A background task survived the clear, completed, and woke the new session |
 | The session lock survives | Same harness pid before and after; the lock is keyed on the harness process, which a clear does not restart |
 
@@ -174,7 +193,7 @@ All read from the environment, all with working defaults; `bin/fm-context-lib.sh
 | `FM_CONTEXT_RECEIPT_MAX_GROWTH_BYTES` | `262144` | how far the transcript may advance under a receipt |
 | `FM_CONTEXT_TAIL_BYTES` | `2097152` | bounded trailing read of the transcript |
 | `FM_CONTEXT_CHECK_INTERVAL` | `300` | seconds between watcher ceiling reads |
-| `FM_CONTEXT_ERROR_RESURFACE` | `3600` | quiet period before an unmeasurable ceiling reports again |
+| `FM_CONTEXT_ERROR_RESURFACE` | `3600` | quiet period before an unchanged ceiling report is made again; a changed branch is never held |
 
 ## State this mechanism owns
 
@@ -186,4 +205,4 @@ All under `state/`, all gitignored:
 | `.stow-receipt` | `bin/fm-stow-receipt.sh` | knowledge filed, bound to a transcript position; removed on a completed reset |
 | `.context-reset.log` | `bin/fm-context-reset.sh` | one durable line per refusal, `--check` pass, or completed reset |
 | `.last-context-check` | `bin/fm-watch.sh` | ceiling-read cadence, as an mtime, so it survives a watcher restart |
-| `.context-measure-error` | `bin/fm-watch.sh` | throttle for the "cannot measure" report; cleared as soon as a poll can measure |
+| `.context-ceiling-surfaced` | `bin/fm-watch.sh` | the branch class last reported (`reset`, `ask`, `cannot-run-safely`, `unenforced`), as content, and when it was reported, as an mtime; throttles an unchanged condition and is cleared as soon as a poll has nothing to say |

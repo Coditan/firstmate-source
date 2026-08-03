@@ -151,6 +151,13 @@ fi
 fm_context_quiet "$STATE" || refuse "the fleet is no longer quiet: $FM_CONTEXT_NOT_QUIET"
 
 # --- 5. the way back in is intact ------------------------------------------
+# Refusal 10 checks that the session-start hook is still WIRED to a clear and
+# that its script is still there. It does not check that anything is injected:
+# the nudge exits silently whenever this home's lock pid is in its ancestry,
+# which is exactly the case on a self-clear, so the fresh session rebuilds from
+# AGENTS.md section 3 - always loaded, and already telling it to run
+# bin/fm-session-start.sh. This gate catches the hook being unwired or the script
+# removed outright, which would leave even that fallback with nothing behind it.
 fm_context_restart_path_ok "$FM_HOME" "$FM_ROOT" || refuse "$FM_CONTEXT_RESTART_ERROR"
 
 # --- 6. supervision survives the discard ------------------------------------
@@ -179,7 +186,12 @@ HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || true)
 [ "$HARNESS" = claude ] \
   || refuse "self-clear is only verified for claude; this session runs on '${HARNESS:-unknown}', where a reset could leave it unable to restart"
 
-BACKEND=$(discover_supervisor_backend) || true
+# A POSITIVE detection is required. discover_supervisor_backend still prints its
+# tmux default when it detects nothing, and its non-zero status is the only
+# signal that it guessed - so swallowing that status would let the tmux-only gate
+# pass on a session whose terminal backend is unknown.
+BACKEND=$(discover_supervisor_backend) \
+  || refuse "this session's terminal backend could not be detected; self-clear is only verified on tmux and must never be typed on a guess"
 [ "$BACKEND" = tmux ] \
   || refuse "self-clear is only verified on the tmux terminal backend; this session reports '${BACKEND:-unknown}'"
 

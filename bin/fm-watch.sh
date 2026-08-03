@@ -141,10 +141,11 @@ HEARTBEAT_MAX=${FM_HEARTBEAT_MAX:-7200}  # heartbeat backoff cap
 CHECK_INTERVAL=${FM_CHECK_INTERVAL:-300}  # seconds between *.check.sh sweeps
 CHECK_TIMEOUT=${FM_CHECK_TIMEOUT:-30}     # seconds allowed per *.check.sh
 CONTEXT_CHECK_INTERVAL=${FM_CONTEXT_CHECK_INTERVAL:-300}  # seconds between context-ceiling reads
-# How long a "the ceiling cannot be measured at all" report stays quiet before it
-# says so again. Long, because it is a standing defect rather than an event - but
-# finite, because an unmeasurable ceiling is an UNENFORCED ceiling, and letting
-# that state go quiet forever is the exact failure this check exists to end.
+# How long an UNCHANGED context-ceiling report stays quiet before it says so
+# again. Long, because every branch of that check describes a standing condition
+# rather than an event - but finite, because a ceiling nobody hears about is an
+# unenforced ceiling, and letting that state go quiet forever is the exact
+# failure this check exists to end. A change of branch is never throttled.
 CONTEXT_ERROR_RESURFACE=${FM_CONTEXT_ERROR_RESURFACE:-3600}
 # Shared Bridge detection and enqueue-before-marker deduplication.  The
 # standalone frequency monitor loads this same library, and its own lock keeps
@@ -736,33 +737,51 @@ age_of() {  # seconds since file mtime; "due immediately" if missing
   echo $(( $(date +%s) - m ))
 }
 
+# Which branch of the ceiling check a reason came from. The wake text is the
+# contract firstmate reads; this is the coarse key the throttle compares, so
+# rewording a payload never silently changes what counts as "the same condition".
+context_ceiling_class() {  # <reason>
+  case "$1" in
+    *'is unenforced'*) printf 'unenforced' ;;
+    *'cannot run safely'*) printf 'cannot-run-safely' ;;
+    *'ASK the captain'*) printf 'ask' ;;
+    *) printf 'reset' ;;
+  esac
+}
+
 # Print the context-ceiling wake reason when there is one, and nothing on an
 # ordinary poll. bin/fm-context-lib.sh owns what "over ceiling", "quiet", and
 # "captain active" mean, so the watcher's branch and the reset tool's refusals
-# cannot drift apart. The "cannot measure" case is the one that must never fall
-# silent - it means the ceiling is not being enforced at all - so it is throttled
-# to CONTEXT_ERROR_RESURFACE rather than suppressed, and the marker is cleared
-# again as soon as a poll can measure.
+# cannot drift apart.
+#
+# EVERY reason is throttled, not just the unmeasurable one. Each branch here
+# describes a condition rather than an event: a captain who is present stays
+# present, a broken re-entry hook stays broken, and an unmeasurable transcript
+# stays unmeasurable, so re-reporting any of them on the poll cadence would spend
+# a model turn every CONTEXT_CHECK_INTERVAL on news that has not changed - the
+# opposite of what this mechanism exists to do. The throttle is keyed on the
+# BRANCH CLASS, so a condition that CHANGES (the captain leaves and the ask
+# branch becomes the reset branch) surfaces on the very next poll instead of
+# waiting out the previous branch's quiet period. Only an unchanged, still-true
+# condition is held quiet, and only to CONTEXT_ERROR_RESURFACE - never forever,
+# because a ceiling nobody hears about is an unenforced ceiling. The marker is
+# cleared as soon as a poll produces no reason at all.
 context_ceiling_surface() {
-  local reason
+  local reason class marker previous
   reason=$(fm_context_ceiling_reason "$STATE" "$FM_HOME" "$FM_ROOT") || return 0
+  marker="$STATE/.context-ceiling-surfaced"
   if [ -z "$reason" ]; then
-    rm -f "$STATE/.context-measure-error" 2>/dev/null || true
+    rm -f "$marker" 2>/dev/null || true
     return 0
   fi
-  case "$reason" in
-    *'is unenforced'*)
-      if [ -e "$STATE/.context-measure-error" ] \
-        && [ "$(age_of "$STATE/.context-measure-error")" -lt "$CONTEXT_ERROR_RESURFACE" ]; then
-        triage_log "absorbed context-ceiling measurement failure (already reported)"
-        return 0
-      fi
-      touch "$STATE/.context-measure-error"
-      ;;
-    *)
-      rm -f "$STATE/.context-measure-error" 2>/dev/null || true
-      ;;
-  esac
+  class=$(context_ceiling_class "$reason")
+  previous=$(cat "$marker" 2>/dev/null || true)
+  if [ "$previous" = "$class" ] \
+    && [ "$(age_of "$marker")" -lt "$CONTEXT_ERROR_RESURFACE" ]; then
+    triage_log "absorbed context-ceiling $class (unchanged since it was last reported)"
+    return 0
+  fi
+  printf '%s\n' "$class" > "$marker" 2>/dev/null || true
   printf '%s' "$reason"
 }
 
