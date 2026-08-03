@@ -78,7 +78,7 @@ case "${1:-}" in
   display-message)
     case "$*" in
       *cursor_y*) printf '5\n' ;;
-      *session_name*) printf 'fmtest:0.0\n' ;;
+      *session_name*) printf '%s\n' "${FM_FAKE_TMUX_SESSION:-fmtest:0.0}" ;;
       *pane_id*) printf '%%9\n' ;;
       *) printf '\n' ;;
     esac
@@ -695,13 +695,99 @@ test_watcher_process_enqueues_the_ceiling_wake() {
 test_wake_delivery_is_not_mistaken_for_the_captain() {
   local out
   make_case
-  # The transcript carries a background-task wake delivery stamped just now and
-  # no captain prompt at all. Wake deliveries are what keep an unattended session
-  # moving; reading one as captain activity would make the mechanism never fire.
-  write_transcript "$TRANSCRIPT" 900000 ""
+  # The transcript carries a background-task wake delivery stamped just now, and
+  # the captain's own last prompt a day ago. Wake deliveries are what keep an
+  # unattended session moving; reading one as captain activity would make the
+  # mechanism never fire, and would show up here as the ask branch.
+  write_transcript "$TRANSCRIPT" 900000 "$(iso_ago 86400)"
   out=$(watch_reason)
   assert_contains "$out" "the captain is not present" "a wake delivery was mistaken for captain activity"
   pass "a background wake delivery is not captain activity"
+}
+
+# --- an absent captain record is not evidence of an absent captain ----------
+
+# The read is bounded so one poll can never become an unbounded read, and that
+# bound is exactly what can hide a captain prompt behind later tool output. The
+# bound is shrunk here instead of generating megabytes of padding: the shape under
+# test is "the captain's prompt sits further back than the bound", and that shape
+# is the same at 1 KiB as it is at 2 MiB.
+TAIL_BYTES=1024
+
+# scan_facts: "<truncated>/<widened>/<last-human-ts-or-none>/<captain-verdict>",
+# straight from the shared predicates, so a test can see which read path was taken
+# rather than inferring it from a wake payload.
+scan_facts() {
+  # shellcheck disable=SC2016 # The inner script's positional args are the child shell's, on purpose.
+  env -u FM_ROOT_OVERRIDE FM_CONTEXT_TAIL_BYTES="$TAIL_BYTES" bash -c '
+      set -u
+      . "$1"
+      fm_context_scan "$2" || { printf "scan-failed: %s\n" "$FM_CONTEXT_SCAN_ERROR"; exit 0; }
+      if fm_context_captain_active "$FM_CONTEXT_LAST_HUMAN_TS"; then v=present; else v=absent; fi
+      printf "%s/%s/%s/%s\n" "$FM_CONTEXT_SCAN_TRUNCATED" "$FM_CONTEXT_SCAN_WIDENED" \
+        "${FM_CONTEXT_LAST_HUMAN_TS:-none}" "$v"
+    ' fm-context-reset-test "$ROOT/bin/fm-context-lib.sh" "$TRANSCRIPT"
+}
+
+# The reported hole, reproduced exactly: the captain typed 300s ago - well inside
+# FM_CONTEXT_CAPTAIN_IDLE_SECS - and the session then wrote more than one whole
+# bounded tail of tool output answering them, so the bounded read alone finds no
+# captain record at all. Before the widening, that read as "captain gone" and made
+# the reset branch eligible five minutes after the captain spoke.
+test_a_captain_beyond_the_bounded_tail_is_still_the_captain() {
+  local facts out
+  make_case
+  export FM_CONTEXT_TAIL_BYTES=$TAIL_BYTES
+  write_transcript "$TRANSCRIPT" 900000 "$(iso_ago 300)" $(( TAIL_BYTES * 3 ))
+  write_receipt
+  facts=$(scan_facts)
+  assert_contains "$facts" "true/true/" \
+    "a bounded read that covered only part of the file and found no captain record did not widen"
+  assert_contains "$facts" "/present" \
+    "a captain prompt sitting beyond the bounded tail did not read as the captain being present"
+  out=$(watch_reason FM_CONTEXT_TAIL_BYTES="$TAIL_BYTES")
+  assert_contains "$out" "ASK the captain" "the watcher did not take the ask branch for a captain beyond the tail"
+  assert_not_contains "$out" "fm-context-reset.sh" "the watcher handed over a reset while the captain was mid-conversation"
+  assert_refuses "ask before resetting" "a reset while the captain's prompt sits beyond the bounded tail"
+  unset FM_CONTEXT_TAIL_BYTES
+  pass "a captain prompt pushed past the bounded tail is found by widening once, and still counts as the captain"
+}
+
+# The other half of the same rule: once the WHOLE file has been read and there is
+# still no captain record, the answer is not "the captain is gone", it is "this
+# transcript cannot say". That fails closed to captain-present.
+test_a_complete_read_with_no_captain_record_fails_closed() {
+  local facts
+  make_case
+  write_transcript "$TRANSCRIPT" 900000 ""
+  facts=$(scan_facts)
+  assert_contains "$facts" "false/false/none/present" \
+    "a complete read that found no captain record did not fail closed to captain-present"
+  assert_class "ask/surfaced" "a live session whose transcript holds no captain record at all"
+  pass "a transcript that cannot say where the captain last spoke fails closed to the captain being present"
+}
+
+# The receipt's captain check is an EQUALITY, so two unknowns would compare equal
+# and pass it while proving nothing at all.
+test_receipt_refuses_when_the_captain_timestamp_is_unknown() {
+  make_case
+  write_transcript "$TRANSCRIPT" 900000 ""
+  write_receipt
+  assert_grep 'last_human_ts=unknown' "$STATE_DIR/.stow-receipt" \
+    "the receipt recorded an unknown captain timestamp as an empty field that would later match"
+  assert_refuses "captain's last message could not be established" \
+    "a reset whose receipt records an unknown captain timestamp"
+  pass "an unknown captain timestamp refuses instead of matching itself"
+}
+
+# --- the pane the send path will not resolve --------------------------------
+
+test_a_pane_the_send_path_reserves_refuses() {
+  make_case
+  export FM_FAKE_TMUX_SESSION='fm-ctx-home:0.0'
+  assert_refuses "begins with fm-" "a reset whose own tmux session name is one bin/fm-send.sh reserves"
+  unset FM_FAKE_TMUX_SESSION
+  pass "a home whose terminal session begins with fm- is refused by name rather than by an opaque send error"
 }
 
 test_reset_proceeds_when_everything_verifies
@@ -751,3 +837,7 @@ test_watcher_publishes_a_stable_class_per_branch
 test_watcher_refuses_to_hand_over_a_reset_with_a_broken_restart_path
 test_watcher_process_enqueues_the_ceiling_wake
 test_wake_delivery_is_not_mistaken_for_the_captain
+test_a_captain_beyond_the_bounded_tail_is_still_the_captain
+test_a_complete_read_with_no_captain_record_fails_closed
+test_receipt_refuses_when_the_captain_timestamp_is_unknown
+test_a_pane_the_send_path_reserves_refuses

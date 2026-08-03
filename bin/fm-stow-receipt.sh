@@ -97,7 +97,10 @@ TMP="$RECEIPT.$$"
   printf 'transcript_path=%s\n' "$FM_CONTEXT_TRANSCRIPT"
   printf 'transcript_bytes=%s\n' "$BYTES"
   printf 'context_tokens=%s\n' "$FM_CONTEXT_TOKENS"
-  printf 'last_human_ts=%s\n' "$FM_CONTEXT_LAST_HUMAN_TS"
+  # Recorded honestly as `unknown` rather than as an empty field: an empty field
+  # would compare equal to a later empty scan and quietly PASS the reset's
+  # captain check on exactly the state where nothing is known about the captain.
+  printf 'last_human_ts=%s\n' "${FM_CONTEXT_LAST_HUMAN_TS:-unknown}"
   printf 'written_at=%s\n' "$(date +%s)"
 } > "$TMP" 2>/dev/null || { rm -f "$TMP" 2>/dev/null; refuse "could not write $RECEIPT"; }
 mv -f "$TMP" "$RECEIPT" 2>/dev/null || { rm -f "$TMP" 2>/dev/null; refuse "could not publish $RECEIPT"; }

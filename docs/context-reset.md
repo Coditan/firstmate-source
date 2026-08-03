@@ -65,6 +65,7 @@ What is structurally real:
 - A receipt from a different session, bound to a different transcript, or written by a different session process, no reset.
 - A transcript that has advanced more than `FM_CONTEXT_RECEIPT_MAX_GROWTH_BYTES` past the receipt, no reset.
 - Anything the captain said after the receipt was written, no reset - the sweep cannot have covered it.
+- A captain timestamp that could not be established at all, no reset - the receipt records that state as `unknown` rather than as an empty field, so it refuses instead of matching itself.
 
 And the safety net that makes an imperfect sweep survivable: a cleared conversation is not destroyed.
 `/clear` closes the transcript and opens a new session id; the old file stays on disk and `claude --resume <old-session-id>` restores it.
@@ -97,6 +98,22 @@ Claude Code stamps every user record in the transcript with a structural origin,
 The watcher therefore reads exactly three things from the transcript: the last assistant record's token `usage` numbers, the timestamp of the last genuine captain prompt, and the file's byte size.
 Message content is never read and never printed.
 Every ambiguity resolves toward "the captain is here", because a false quiet costs a discarded conversation and a false busy costs one deferred reset.
+
+**An absent record is not evidence of absence.**
+The read is bounded to the last `FM_CONTEXT_TAIL_BYTES` so that one watcher poll can never become an unbounded read of a multi-hundred-megabyte transcript.
+That bound is also the one thing that can hide a captain prompt: the captain types, the session answers them with more than one whole tail of tool output, and the bounded read finds no captain record at all.
+Reading that as silence would put a reset in the middle of a live conversation, which is the single outcome this mechanism forbids, so it is not a cost to trade against a probability.
+
+The rule, in three steps:
+
+1. Read the bounded tail, and publish whether that read covered the whole file (`FM_CONTEXT_SCAN_TRUNCATED`).
+2. If the bounded read found no captain record **and** did not cover the whole file, widen once to the whole file and use whatever that finds (`FM_CONTEXT_SCAN_WIDENED`).
+   Never widen when the bounded read already covered everything, because there is nothing further to find and the cost would be paid on every poll of an idle session.
+3. If a complete read still finds no captain record, fail closed: the captain counts as **present**.
+   The honest reading of that state is not "the captain is gone", it is "this transcript cannot say", and only one of those two is safe to act on.
+
+The receipt carries the same distinction rather than flattening it.
+`bin/fm-stow-receipt.sh` records an unestablished captain timestamp as `unknown`, never as an empty field, because the reset tool's captain check is an equality and two empty fields would compare equal and pass it while proving nothing at all.
 
 ## How it fails visibly
 
@@ -142,14 +159,16 @@ Run `bin/fm-context-reset.sh --check` to evaluate all of them and clear nothing.
 4. The receipt is older than its freshness bound.
 5. The transcript has moved on past the receipt, or shrunk below it.
 6. The captain has spoken since the receipt was written.
-7. Away mode is active.
-8. The captain has been active within `FM_CONTEXT_CAPTAIN_IDLE_SECS`.
-9. The fleet is no longer quiet: an undrained wake, a routed request awaiting its reply, or a worker waiting on an answer.
-10. The re-entry hook is no longer wired: it no longer runs `bin/fm-sessionstart-nudge.sh` on a clear, or that script is gone. This checks the wiring, not that anything is injected; see "the way back in, precisely" above.
-11. Supervision is not running.
-12. Wake delivery is not armed while this home has recorded work or an X-mode relay - with nothing to wake for, an unarmed delivery wait does not block.
-13. The harness is not `claude`, or the terminal backend is not `tmux`.
-14. This session's own pane cannot be identified.
+7. The captain's last message could not be established at all, from the receipt or from the transcript. Two unknowns must refuse rather than compare equal; see "an absent record is not evidence of absence" above.
+8. Away mode is active.
+9. The captain has been active within `FM_CONTEXT_CAPTAIN_IDLE_SECS`.
+10. The fleet is no longer quiet: an undrained wake, a routed request awaiting its reply, or a worker waiting on an answer.
+11. The re-entry hook is no longer wired: it no longer runs `bin/fm-sessionstart-nudge.sh` on a clear, or that script is gone. This checks the wiring, not that anything is injected; see "the way back in, precisely" above.
+12. Supervision is not running.
+13. Wake delivery is not armed while this home has recorded work or an X-mode relay - with nothing to wake for, an unarmed delivery wait does not block.
+14. The harness is not `claude`, or the terminal backend is not `tmux`.
+15. This session's own pane cannot be identified.
+16. This session's own pane is in a tmux session whose name begins with `fm-`. That prefix is reserved: `bin/fm-send.sh` reads any such target as a recorded worker-task selector and looks for its metadata instead of resolving a live tmux endpoint, so the clear could never be typed. The refusal names that cause so an operator can rename the terminal session; it is a limitation of this mechanism on such homes, not a fault in the send path.
 
 There is no force flag.
 
@@ -196,7 +215,7 @@ All read from the environment, all with working defaults; `bin/fm-context-lib.sh
 | `FM_CONTEXT_CAPTAIN_IDLE_SECS` | `1800` | silence after which the captain is not in live conversation |
 | `FM_CONTEXT_RECEIPT_MAX_AGE` | `900` | how long a receipt stays fresh |
 | `FM_CONTEXT_RECEIPT_MAX_GROWTH_BYTES` | `262144` | how far the transcript may advance under a receipt |
-| `FM_CONTEXT_TAIL_BYTES` | `2097152` | bounded trailing read of the transcript |
+| `FM_CONTEXT_TAIL_BYTES` | `2097152` | bounded trailing read of the transcript, widened once to the whole file when that tail holds no captain record; a bounded read is never conclusive about the captain on its own |
 | `FM_CONTEXT_CHECK_INTERVAL` | `300` | seconds between watcher ceiling reads |
 | `FM_CONTEXT_ERROR_RESURFACE` | `3600` | quiet period before an unchanged ceiling report is made again; a changed branch is never held |
 

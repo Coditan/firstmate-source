@@ -201,11 +201,9 @@ fm_context_record_read() {  # <state-dir>
   return 0
 }
 
-# Scan the bounded transcript tail once and publish both measurements:
-#   FM_CONTEXT_TOKENS         last assistant record's input + cache-creation +
-#                             cache-read tokens (what the window actually holds)
-#   FM_CONTEXT_LAST_HUMAN_TS  timestamp of the last genuine captain prompt, or
-#                             empty when the tail holds none
+# One pass of the transcript reader: read the last <bytes> and publish both
+# measurements from what that read covered. fm_context_scan owns how wide the
+# read is and whether one pass is enough.
 #
 # Provenance is structural, never textual. Claude Code marks a typed captain
 # prompt `origin.kind == "human"`; a background-task wake delivery is
@@ -216,23 +214,9 @@ fm_context_record_read() {  # <state-dir>
 # input, so it counts as human. Every ambiguity resolves toward "the captain is
 # here", because the cost of a false quiet is a discarded conversation and the
 # cost of a false busy is one deferred reset.
-FM_CONTEXT_TOKENS=
-FM_CONTEXT_LAST_HUMAN_TS=
-FM_CONTEXT_SCAN_ERROR=
-fm_context_scan() {  # <transcript-path>
-  local transcript=$1 out
-  FM_CONTEXT_TOKENS=
-  FM_CONTEXT_LAST_HUMAN_TS=
-  FM_CONTEXT_SCAN_ERROR=
-  if ! command -v jq >/dev/null 2>&1; then
-    FM_CONTEXT_SCAN_ERROR="jq is not installed; the transcript cannot be measured"
-    return 1
-  fi
-  if ! command -v perl >/dev/null 2>&1; then
-    FM_CONTEXT_SCAN_ERROR="perl is not installed; the transcript cannot be measured"
-    return 1
-  fi
-  out=$(fm_context_tail_lines "$transcript" "$FM_CONTEXT_TAIL_BYTES" | jq -R -n -r '
+_fm_context_scan_pass() {  # <transcript-path> <bytes>
+  local out
+  out=$(fm_context_tail_lines "$1" "$2" | jq -R -n -r '
     [inputs | fromjson? // empty] as $rows
     | ( [ $rows[]
           | select(.type == "assistant" and (.message.usage | type) == "object")
@@ -247,15 +231,79 @@ fm_context_scan() {  # <transcript-path>
           | .timestamp ] | last ) as $human
     | "\($tokens // "")\t\($human // "")"
   ' 2>/dev/null) || {
-    FM_CONTEXT_SCAN_ERROR="could not parse the transcript tail of $transcript"
+    FM_CONTEXT_SCAN_ERROR="could not parse the transcript tail of $1"
     return 1
   }
   FM_CONTEXT_TOKENS=${out%%	*}
   FM_CONTEXT_LAST_HUMAN_TS=${out#*	}
+  return 0
+}
+
+# Scan the transcript and publish both measurements:
+#   FM_CONTEXT_TOKENS           last assistant record's input + cache-creation +
+#                               cache-read tokens (what the window actually holds)
+#   FM_CONTEXT_LAST_HUMAN_TS    timestamp of the last genuine captain prompt, or
+#                               empty when the WHOLE transcript holds none
+#   FM_CONTEXT_SCAN_TRUNCATED   true when the bounded read did not cover the
+#                               whole file, i.e. the file is larger than
+#                               FM_CONTEXT_TAIL_BYTES
+#   FM_CONTEXT_SCAN_WIDENED     true when the bounded read was re-run over the
+#                               whole file because it held no captain record
+#
+# AN ABSENT CAPTAIN RECORD IS NOT EVIDENCE OF AN ABSENT CAPTAIN. The read is
+# bounded so a multi-hundred-megabyte transcript cannot turn one watcher poll
+# into an unbounded read, but that bound is exactly what can hide a captain
+# prompt behind later tool output: the captain types, the session answers with
+# more than one whole tail of transcript, and the bounded read finds nothing.
+# Reading that as silence would let a reset land in the middle of a live
+# conversation, which is the one outcome this mechanism must never have.
+#
+# So: when the bounded read finds NO captain record AND it did not cover the
+# whole file, widen ONCE to the whole file and use whatever that finds. Never
+# widen when the bounded read already covered everything - there is nothing
+# further to find, and the cost would be paid on every poll of an idle session.
+FM_CONTEXT_TOKENS=
+FM_CONTEXT_LAST_HUMAN_TS=
+FM_CONTEXT_SCAN_ERROR=
+FM_CONTEXT_SCAN_TRUNCATED=false
+FM_CONTEXT_SCAN_WIDENED=false
+fm_context_scan() {  # <transcript-path>
+  local transcript=$1 bytes
+  FM_CONTEXT_TOKENS=
+  FM_CONTEXT_LAST_HUMAN_TS=
+  FM_CONTEXT_SCAN_ERROR=
+  FM_CONTEXT_SCAN_TRUNCATED=false
+  # shellcheck disable=SC2034 # Read by callers and tests after fm_context_scan returns.
+  FM_CONTEXT_SCAN_WIDENED=false
+  if ! command -v jq >/dev/null 2>&1; then
+    FM_CONTEXT_SCAN_ERROR="jq is not installed; the transcript cannot be measured"
+    return 1
+  fi
+  if ! command -v perl >/dev/null 2>&1; then
+    FM_CONTEXT_SCAN_ERROR="perl is not installed; the transcript cannot be measured"
+    return 1
+  fi
+  bytes=$(fm_context_file_bytes "$transcript") || bytes=
+  case "$bytes" in
+    ''|*[!0-9]*)
+      FM_CONTEXT_SCAN_ERROR="could not size the transcript $transcript"
+      return 1
+      ;;
+  esac
+  [ "$bytes" -gt "$FM_CONTEXT_TAIL_BYTES" ] && FM_CONTEXT_SCAN_TRUNCATED=true
+  _fm_context_scan_pass "$transcript" "$FM_CONTEXT_TAIL_BYTES" || return 1
+  if [ -z "$FM_CONTEXT_LAST_HUMAN_TS" ] && [ "$FM_CONTEXT_SCAN_TRUNCATED" = true ]; then
+    FM_CONTEXT_SCAN_WIDENED=true
+    _fm_context_scan_pass "$transcript" "$bytes" || return 1
+  fi
   case "$FM_CONTEXT_TOKENS" in
     ''|*[!0-9]*)
       FM_CONTEXT_TOKENS=
-      FM_CONTEXT_SCAN_ERROR="no token usage record in the last ${FM_CONTEXT_TAIL_BYTES} bytes of $transcript"
+      if [ "$FM_CONTEXT_SCAN_WIDENED" = true ]; then
+        FM_CONTEXT_SCAN_ERROR="no token usage record anywhere in $transcript"
+      else
+        FM_CONTEXT_SCAN_ERROR="no token usage record in the last ${FM_CONTEXT_TAIL_BYTES} bytes of $transcript"
+      fi
       return 1
       ;;
   esac
@@ -263,12 +311,16 @@ fm_context_scan() {  # <transcript-path>
 }
 
 # Return 0 when the captain counts as in live conversation.
-# An unreadable or absent timestamp returns 1 (not active): the tail genuinely
-# holds no captain prompt, which is the quiet case. A malformed one returns 0,
-# because a value that cannot be understood must not be read as silence.
+# An ABSENT timestamp returns 0 (PRESENT), and that is the point rather than an
+# accident. fm_context_scan has already widened to the whole file if the bounded
+# tail held no captain record, so an empty value here means the record was looked
+# for everywhere it could be and still is not there - and a transcript that
+# cannot say where the captain last spoke cannot be read as saying the captain is
+# gone. An absent record is not evidence of absence. A malformed one returns 0
+# for the same reason: a value that cannot be understood must not read as silence.
 fm_context_captain_active() {  # <last-human-ts>
   local ts=$1 threshold
-  [ -n "$ts" ] || return 1
+  [ -n "$ts" ] || return 0
   threshold=$(fm_context_iso_utc "$(( $(date +%s) - FM_CONTEXT_CAPTAIN_IDLE_SECS ))") || return 0
   [ -n "$threshold" ] || return 0
   case "$ts" in

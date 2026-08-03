@@ -137,6 +137,14 @@ GROWTH=$(( CURRENT_BYTES - R_BYTES ))
 
 # The single sharpest captain-safety check. If anything the captain said arrived
 # after the receipt, the sweep did not cover it and the discard would swallow it.
+#
+# An UNKNOWN captain timestamp refuses rather than matches. Two unknowns comparing
+# equal would turn this check into a rubber stamp on precisely the state where
+# nothing can be said about the captain at all - the equality would pass while
+# proving nothing, which is worse than not checking.
+if [ -z "$FM_CONTEXT_LAST_HUMAN_TS" ] || [ "$R_HUMAN" = unknown ]; then
+  refuse "the captain's last message could not be established from $FM_CONTEXT_TRANSCRIPT, so nothing can show the captain has stayed silent since the receipt was written"
+fi
 [ "$R_HUMAN" = "$FM_CONTEXT_LAST_HUMAN_TS" ] \
   || refuse "the captain has spoken since the receipt was written; file this session's knowledge again, and reset only once the conversation has settled"
 
@@ -200,6 +208,16 @@ PANE=$(discover_supervisor_target) \
 TARGET=$(tmux display-message -p -t "$PANE" '#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null || true)
 [ -n "$TARGET" ] \
   || refuse "this session's own terminal pane '$PANE' could not be resolved"
+
+# bin/fm-send.sh reads any target beginning with `fm-` as a recorded worker-task
+# selector and looks for its metadata instead of resolving a live tmux endpoint,
+# so a home whose terminal session is named that way would get an opaque "no
+# metadata" error at the very last step. Refuse here instead, naming the cause.
+case "$TARGET" in
+  fm-*)
+    refuse "this session's own pane is in tmux session '${TARGET%%:*}', whose name begins with fm-; bin/fm-send.sh reserves that prefix for a recorded worker task and would look this target up as one instead of typing into the pane, so rename this home's terminal session to something that does not begin with fm-"
+    ;;
+esac
 
 if [ "$CHECK_ONLY" -eq 1 ]; then
   log_line check-passed "$FM_CONTEXT_TOKENS tokens; would clear $TARGET"
