@@ -1,6 +1,6 @@
 ---
 name: stow
-description: Sweep the current session for uncaptured durable knowledge and file it to disk before a context reset. Use when the captain invokes /stow (e.g. "/stow", "stow what you've learned"), before a session reset or context compaction, or periodically to keep operational memory current.
+description: Sweep the current session for uncaptured durable knowledge and file it to disk before a context reset. Use when the captain invokes /stow (e.g. "/stow", "stow what you've learned"), before a session reset, before a context reset, before a compaction the harness is about to perform anyway (file ahead of one; a compaction is never the instrument that holds the context ceiling), and on a context-ceiling wake that asks for this sweep before the receipt and reset commands it names.
 user-invocable: true
 metadata:
   internal: true
@@ -12,6 +12,25 @@ metadata:
 
 Sweep this session for durable knowledge that only exists in conversation right now, and write it to the disk locations firstmate already prints in the next session-start context digest.
 The goal is a session that is safe to reset or destroy because everything durable has already been captured.
+
+## When the context ceiling calls this sweep
+
+The captain invokes `/stow` whenever they like, and that is still the ordinary case.
+The other caller is the context ceiling: the watcher measures the primary session against it and, when the session is over that ceiling and the fleet is quiet, queues a wake whose payload says to run this sweep and then, in the same turn, the receipt and reset commands it names.
+`docs/context-reset.md` owns that mechanism, its refusals, and the evidence behind them; this section owns only what changes about the sweep when it is that caller, because the sweep is the one step the mechanism cannot perform for itself.
+
+- **The receipt attests to this sweep; nothing verifies it.**
+  Whether a semantic sweep caught every durable fact cannot be checked mechanically, which is exactly why this step needs judgement and the rest of the path is plain code.
+  A thin sweep still produces a structurally valid receipt, and the reset that follows is honest only to the degree this sweep was.
+- **Leave no gap between the sweep and its receipt.**
+  Anything the captain says after the receipt is written invalidates it, correctly, because the sweep cannot have covered it.
+  Run the sweep and its receipt in the one turn the wake asks for, rather than pausing to report progress in between and re-earning the refusal.
+- **A clear is not a destruction, and that is the safety net, not the plan.**
+  The cleared conversation stays on disk and remains resumable, so a finding this sweep misses is misplaced rather than lost.
+  Sweep as though it were lost.
+
+The instrument here is stow-then-clear, never compaction: durable knowledge goes to disk and the next session rebuilds from it, which is what `AGENTS.md` section 5 already makes authoritative over conversation memory.
+Nothing in this skill adds, enables, or recommends compaction as a way to hold the ceiling.
 
 ## What it does
 

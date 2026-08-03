@@ -383,6 +383,7 @@ Handle actionable wakes as follows:
 1. For `signal:`, read the listed event lines first, then reconcile current state only where action depends on it.
 2. For `stale:`, inspect the recorded endpoint and load `stuck-crewmate-recovery` for a stopped, looping, confused, or unresponsive worker; a deep-inspection reason also requires current-state and validation-log inspection.
 3. For `check:`, act on the named poll result, including merges, Bridge inbox traffic, X-mode events, certsync health, and a context-ceiling wake whose payload carries its own next step: either run `/stow` and then, in that same turn, the receipt and reset commands it names, or ask the captain first because a reset must never happen during a live conversation.
+   A ceiling wake that instead reports the ceiling unenforced, or a reset blocked, names a condition rather than a next step: repair the named condition, or say plainly that it stands unrepaired, because a ceiling nobody can measure is one nobody is holding.
 4. For `heartbeat:`, review the whole fleet from the structured fleet view, reconcile suspicious tasks and PR state, update the backlog, and never report an unchanged fleet as progress.
 
 When any wake reports a merged PR for a project cloned in this home, refresh that clone through the guarded fleet-sync path.
