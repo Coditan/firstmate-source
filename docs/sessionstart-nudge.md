@@ -29,11 +29,11 @@ The fields are `key=value` lines, matching `state/<id>.meta`:
 | `status` | `ok` or `error`; a reader must refuse on anything but `ok` |
 | `error` | on `status=error` only, the cause: `no-hook-payload`, `no-transcript-path`, `no-session-id`, `unusable-transcript-path`, `unusable-session-id`, `no-jq`, or `no-harness-process` |
 | `harness_pid` | the harness process that owns this session, resolved by `bin/fm-harness-pid-lib.sh`, the same identity `bin/fm-lock.sh` writes to `state/.lock`; empty when that process could not be identified, so a reader must never probe this value for liveness |
-| `session_id` | the harness session id, which `claude --resume <id>` reopens |
-| `transcript_path` | absolute path to the session's transcript |
+| `session_id` | on `status=ok` only, the harness session id, which `claude --resume <id>` reopens |
+| `transcript_path` | on `status=ok` only, the absolute path to the session's transcript |
 | `recorded_at` | epoch seconds when the record was written |
 
-Four properties are load-bearing, and `tests/fm-sessionstart-nudge.test.sh` covers each.
+Every property below is load-bearing, and `tests/fm-sessionstart-nudge.test.sh` covers it.
 
 The record is written before the already-ran lock-ancestry check, not after it.
 A `/clear` starts a new session id and a new transcript inside the same harness process, so the lock it already holds is still in the new session's ancestry and the wrapper stays silent - but the previous session's transcript path is now stale, and a silent path would have left it in place.
@@ -46,6 +46,7 @@ A value that cannot be determined is written as an explicit error, never omitted
 An absent field would be indistinguishable from a reader's own bug, and a leftover `ok` record from the previous session would be worse still, so every primary session start replaces the whole record.
 A value that cannot be written as a single `key=value` line is rejected for the same reason, so no payload can forge a plausible-looking record.
 A session that cannot write its record at all removes the existing one, or empties it when the state directory forbids unlinking, so no reader can mistake the previous session's record for this one's.
+The payload is read from stdin with a bounded wait, so a harness that hands the wrapper an open stream records `no-hook-payload` instead of stalling session initialization.
 Codex, Grok, OpenCode and Pi all record `status=error` with the cause `no-hook-payload`, because none of their registrations hands the wrapper a payload on stdin - Codex's drains it before executing the wrapper, and the others pass no input at all.
 That is honest rather than a gap, because the context-reset mechanism is verified on Claude only.
 
