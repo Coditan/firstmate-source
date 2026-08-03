@@ -18,6 +18,9 @@ SECONDMATE="$ROOT/.agents/skills/secondmate-provisioning/SKILL.md"
 CONFIG="$ROOT/docs/configuration.md"
 AGENTS="$ROOT/AGENTS.md"
 BRIEF="$ROOT/bin/fm-brief.sh"
+DOMAIN="$ROOT/.agents/skills/domain-modeling/SKILL.md"
+DOMAIN_PROVENANCE="$ROOT/docs/domain-modeling-provenance.md"
+README="$ROOT/README.md"
 
 test_new_skill_metadata_and_triggers() {
   local skill name skill_trigger agents_trigger count i
@@ -52,6 +55,60 @@ test_new_skill_metadata_and_triggers() {
     assert_grep "$agents_trigger" "$AGENTS" "AGENTS.md lost the $name trigger"
   done
   pass "new internal skills have one precise AGENTS.md trigger each"
+}
+
+# domain-modeling is captain-invocable, so it carries its trigger in section 6
+# rather than in section 13, and the enumerating trigger test above cannot check
+# it. It is also adopted third-party material: MIT requires the notice to travel
+# with the work, and the previous adoption from the same upstream shipped without
+# one and had to be corrected after the fact. Both obligations are asserted here
+# because both are invisible when broken - the skill still loads and still works.
+test_domain_modeling_owner_is_triggered_and_attributed() {
+  assert_present "$DOMAIN" "domain-modeling skill is missing"
+  assert_grep "name: domain-modeling" "$DOMAIN" "domain-modeling skill metadata has the wrong name"
+  assert_grep "user-invocable: true" "$DOMAIN" "domain-modeling must stay captain-invocable"
+  assert_grep "  internal: true" "$DOMAIN" "domain-modeling skill must be internal"
+  assert_no_grep "- \`domain-modeling\` - " "$AGENTS" \
+    "a captain-invocable skill must not be listed in AGENTS.md section 13"
+  assert_grep 'load the `domain-modeling` skill' "$AGENTS" \
+    "AGENTS.md section 6 lost the domain-modeling load trigger"
+  assert_grep 'a hard-to-reverse decision has just been made, load the `domain-modeling` skill' "$AGENTS" \
+    "AGENTS.md lost the decision-recording arm of the domain-modeling trigger"
+  assert_grep "creates no store of its own" "$AGENTS" \
+    "AGENTS.md lost the rule that domain-modeling adds no third store"
+
+  # The terminology rule the captain set on 2026-08-03, with the boundary that
+  # keeps it from reading as a contradiction of section 9.
+  assert_grep "never Werkbank" "$DOMAIN" "domain-modeling lost the proper-noun example that triggered the rule"
+  assert_grep "German is written per DU, never Sie" "$DOMAIN" "domain-modeling lost the register rule"
+  assert_grep "Section 9 covers a word firstmate invented to describe its own operation" "$DOMAIN" \
+    "domain-modeling lost the discriminator against section 9"
+
+  # Adopted whole, so the moves and the bar must survive intact.
+  for phrase in \
+    "Challenge against the vocabulary already in use" \
+    "Sharpen a fuzzy term" \
+    "Invent scenarios that force the boundary" \
+    "Check the claim against the thing itself" \
+    "Write it down where the next reader will meet it" \
+    "Hard to reverse" \
+    "Surprising without context" \
+    "The result of a real trade-off"; do
+    assert_grep "$phrase" "$DOMAIN" "domain-modeling is missing '$phrase'"
+  done
+  assert_grep "decision-hold-lifecycle" "$DOMAIN" \
+    "domain-modeling does not hand an unresolved captain decision to its owner"
+
+  # MIT: the copyright notice and the permission notice travel with the work.
+  assert_present "$DOMAIN_PROVENANCE" "domain-modeling provenance and third-party notice is missing"
+  assert_grep "Copyright (c) 2026 Matt Pocock" "$DOMAIN_PROVENANCE" \
+    "domain-modeling provenance lost the MIT copyright notice"
+  assert_grep "The above copyright notice and this permission notice shall be included in all" \
+    "$DOMAIN_PROVENANCE" "domain-modeling provenance lost the MIT permission notice"
+  assert_grep "mattpocock/skills" "$DOMAIN" "domain-modeling skill does not name its source"
+  assert_grep "docs/domain-modeling-provenance.md" "$README" \
+    "README does not point at the domain-modeling third-party notice"
+  pass "domain-modeling carries its section 6 trigger, its terminology rule, and its MIT notice"
 }
 
 test_diagnostic_owner_covers_causal_procedure() {
@@ -389,6 +446,7 @@ EOF
 
 test_new_skill_metadata_and_triggers
 test_every_skill_declares_a_load_trigger
+test_domain_modeling_owner_is_triggered_and_attributed
 test_diagnostic_owner_covers_causal_procedure
 test_project_management_owner_covers_guarded_operations
 test_secrets_owner_covers_exposure_response
