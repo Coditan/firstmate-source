@@ -15,6 +15,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-axi-path-lib.sh`     | Resolve and prepend one vessel's home-private AXI npm prefix                     |
 | `fm-firstmate-update-check.sh` | Read-only check for relevant instruction-surface commits on the source this deployment updates from |
 | `fm-fork-sync-check.sh` | Detect unabsorbed real-upstream content in the curated fork and prefilter both sides of its commit review |
+| `fm-grossreinschiff-due.sh` | Report whether this home's weekly Thursday cleanup sweep is due, and record a completed one |
 | `fm-lint.sh`             | Single owner of firstmate's shell-lint definition: file set, config, and pinned ShellCheck version |
 | `fm-install-shellcheck.sh` | Install CI's pinned, checksum-verified ShellCheck build `fm-lint.sh` requires      |
 | `fm-fleet-sync.sh`       | Refresh project clones with safe fast-forwards, self-heals, `STUCK:` reports, branch pruning, and bounded recovery from an orphaned `.git/packed-refs.lock` |
