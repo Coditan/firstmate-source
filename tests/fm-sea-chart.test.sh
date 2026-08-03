@@ -523,7 +523,85 @@ EOF
   # a kind the chart cannot place and would read as nonsense about a captain record.
   [ "$(printf '%s' "$chart" | jq -r '[.unplaced[].id]|join(",")')" = "" ] \
     || fail "a captain record the fold dropped belongs in withheld[], never in unplaced[]"
+
+  # THE COUNT ABOVE THE SECTION MUST NOT CONTRADICT THE SECTION. This record is
+  # counted in `folded` and in `withheld` at once, which is honest only while the
+  # page says why the same record appears in both. A label claiming it never
+  # reached the actionable surface would be refuted three lines further down by
+  # its own why, and arithmetic a reader can catch out is what teaches them to
+  # stop believing every other number on the chart.
+  [ "$(printf '%s' "$chart" | jq -r '.counts.withheld_folded')" = 1 ] \
+    || fail "the chart must count how many withheld records the fold dropped, or nothing reconciles the same record being counted as folded and as withheld"
+  local summary
+  summary=$("$CHART" voy --summary --from "$cap" \
+    --backlog "$home/data/backlog.md" --archive "$home/data/done-archive.md" --data "$home/data")
+  case "$summary" in
+    *"withheld from the actionable surface"*)
+      fail "the incompleteness label must not claim this record never reached the actionable surface: it did, and its own why two lines below says so" ;;
+  esac
+  assert_contains "$summary" "not carried by any decision section: 1" \
+    "the incompleteness count must be labelled by what is true of BOTH classes it now covers - never returned, and returned then folded away"
+  assert_contains "$summary" "folded away above rather than never returned" \
+    "the page must reconcile the record it counts as folded with the one it counts as withheld, or the two numbers read as two records"
   pass "an unpaired analyst variant is reconciled onto the chart instead of counted as drawn"
+}
+
+test_an_id_marker_and_a_record_kind_that_disagree_are_reported_never_offered() {
+  # A kind the chart does not place is USUALLY ordinary work - ship, docs, scout
+  # are all legitimately takeable - so a misspelled chart kind is invisible on
+  # the kind alone. The id marker is the one piece of evidence that says this
+  # record already claims to be chart material: `<chart>-fog-<slug>` and
+  # `<chart>-oos-<slug>` are the filing convention in AGENTS.md section 10. When
+  # the id and the kind disagree, one of them is a typo, and the direction of the
+  # error is the costly one - the record gets advertised under TAKEABLE NOW with
+  # an unsupervised-edit pair at the very moment the section it names reads
+  # empty, which is the original defect with a hold that was never filed.
+  local home cap chart summary
+  home=$(make_home mismatch)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-fog-drift - A dark patch whose kind was misspelled (repo: r) (kind: fogg) (since 2026-07-30)
+- [ ] voy-oos-tracker - A boundary filed as ordinary work (repo: r) (kind: ship) (since 2026-07-30)
+- [ ] voy-real-work - Ordinary work carrying no chart marker at all (repo: r) (kind: ship) (since 2026-07-30)
+EOF
+  cap=$(capture mismatch)
+  chart=$(chart_json "$home" voy "$cap")
+
+  # Neither row carries a hold or a blocker, which is what made both of them
+  # takeable before: nothing on the record held them back at all.
+  [ "$(printf '%s' "$chart" | jq -r '[.takeable[].id]|join(",")')" = "voy-real-work" ] \
+    || fail "a record whose id claims to be chart material while its kind says otherwise must never be offered as takeable, and ordinary unmarked work must still be"
+  [ "$(printf '%s' "$chart" | jq -r '[.unplaced[]|select(.cause=="marker-kind-mismatch")|.id]|sort|join(",")')" = "voy-fog-drift,voy-oos-tracker" ] \
+    || fail "a marker that disagrees with the kind must be reported as its own kind defect, not left to the held or blocked causes that would not fit it"
+  [ "$(printf '%s' "$chart" | jq -r '[.unplaced[]|select(.cause=="marker-kind-mismatch")|.kind_defect]|unique|join(",")')" = "true" ] \
+    || fail "a marker-kind mismatch is a kind defect and must sort with the others, not below routine held work"
+
+  # The why must name BOTH halves, because the chart cannot tell which of the two
+  # is the typo and the reader has to be able to.
+  local fog_why oos_why
+  fog_why=$(printf '%s' "$chart" | jq -r '.unplaced[]|select(.id=="voy-fog-drift")|.why')
+  assert_contains "$fog_why" "-fog- marker" "the why must name the marker found on the id"
+  assert_contains "$fog_why" "record kind is fogg" "the why must name the kind found on the record"
+  oos_why=$(printf '%s' "$chart" | jq -r '.unplaced[]|select(.id=="voy-oos-tracker")|.why')
+  assert_contains "$oos_why" "-oos- marker" "the boundary marker must be named the same way"
+  assert_contains "$oos_why" "record kind is ship" \
+    "an ordinary kind on a marked id must be named as the mismatch it is, not treated as ordinary work"
+
+  # And the sections they name really are the empty ones, which is the whole
+  # reason a silent takeable row is the wrong place for them.
+  [ "$(printf '%s' "$chart" | jq -r '(.fog|length) + (.out_of_course|length)')" = 0 ] \
+    || fail "fixture drift: both misfiled rows must miss the sections their ids name"
+  summary=$("$CHART" voy --summary --from "$cap" \
+    --backlog "$home/data/backlog.md" --archive "$home/data/done-archive.md" --data "$home/data")
+  case "$summary" in
+    *"TAKEABLE NOW"*"voy-fog-drift"*)
+      fail "a misfiled dark patch must not be printed under TAKEABLE NOW with an unsupervised-edit pair" ;;
+  esac
+  assert_contains "$summary" "KIND DEFECTS" "both mismatches must reach the kind-defect block of the unplaced report"
+  pass "an id marker and a record kind that disagree are reported as a kind defect, never offered as takeable"
 }
 
 test_a_kind_defect_is_never_pushed_down_the_page_by_routine_held_work() {
@@ -854,6 +932,7 @@ test_the_chart_kinds_are_stored_on_the_field_the_chart_reads
 test_the_filing_instruction_names_the_field_the_chart_reads
 test_a_member_the_chart_cannot_place_is_named_not_silently_dropped
 test_an_unpaired_analyst_variant_is_reconciled_rather_than_counted_as_drawn
+test_an_id_marker_and_a_record_kind_that_disagree_are_reported_never_offered
 test_a_kind_defect_is_never_pushed_down_the_page_by_routine_held_work
 test_chart_kinds_stay_off_the_blockage_surface_but_are_disclosed
 test_a_chart_without_a_destination_is_refused

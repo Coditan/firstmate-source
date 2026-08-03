@@ -103,6 +103,7 @@ The whole point is that a chart which quietly omits an open decision is more har
 These are members the chart counted and could not put anywhere, and they are the one report that must never be dropped in rendering, because dropping it restores exactly the fault it exists to catch.
 An empty section is read as a statement about the course - "there is no fog here" - so a member the chart could not recognise turns into a claim nobody made.
 Each entry names its `kind` and `hold_kind` beside the `why`, because those two fields are what get confused, and a `no-kind` cause means the record was filed without the kind that `AGENTS.md` section 10 requires rather than that the course is clear.
+A `marker-kind-mismatch` cause means the id and the kind disagree - the id claims a dark patch or a boundary and the kind does not - so one of the two is a typo, and the record is deliberately kept out of `takeable[]` until they agree rather than offered as work to pick up while the section it names reads empty.
 The entries arrive `kind_defect` first and must be rendered in that order, under headings that keep the two apart: a kind the chart cannot classify can leave a whole section reading empty, while held or blocked ordinary work is only work this chart has no section for, and letting the second crowd out the first is how the empty sections went unnoticed in the first place.
 
 **Every folded record stays visible.**

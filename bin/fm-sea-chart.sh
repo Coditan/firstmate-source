@@ -162,13 +162,21 @@
 #                      {unsupervised_edit, landing{mode,requires}}
 #   unplaced[]         members this chart counted and could NOT put in any section
 #                      above, each with the `cause` that left it out - no-kind,
-#                      decision-shape, blocked, held, unplaced - `kind_defect` for
-#                      whether the kind itself is the fault, and `why` in words.
+#                      marker-kind-mismatch, decision-shape, blocked, held,
+#                      unplaced - `kind_defect` for whether the kind itself is the
+#                      fault, and `why` in words.
 #                      An empty section reads as a claim about the course, so a
 #                      member the chart cannot recognise is named rather than
 #                      quietly dropped behind a zero. Ordered kind defects first,
 #                      so held or blocked ordinary work cannot push one down
-#   counts             the three incompleteness numbers, computed fresh per build
+#   counts             the incompleteness numbers, computed fresh per build.
+#                      `withheld` covers BOTH classes the section carries - the
+#                      records the actionable surface never returned and the ones
+#                      it did return before the fold dropped them - so it is
+#                      labelled by what is true of both, and `withheld_folded`
+#                      says how many are the second kind, which is what reconciles
+#                      it against `folded` rather than leaving one record counted
+#                      twice with nothing on the page explaining why
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -343,6 +351,23 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   def stale_edges($done; $live_done):
     [ (.blocked_by_ids // [])[] | select($done[.] == true and $live_done[.] != true) ];
 
+  # A record whose ID says one thing and whose KIND says another. The id markers
+  # and the kind names are two separate spellings, owned by the header above and
+  # by AGENTS.md section 10 - this reads the two together rather than adding a
+  # third. It is the only evidence the chart has that a non-chart kind is a
+  # MISTAKE rather than ordinary work: kind ship, docs, and scout are all
+  # legitimately takeable, and nothing distinguishes a typo from any of them
+  # except an id that already claims to be chart material. Whichever of the two
+  # the filer got wrong, the pair cannot both be right, and the direction of the
+  # error is the costly one - the record is offered as work to pick up while the
+  # section it names reads empty.
+  def marker_kind_mismatch:
+    if (.id | marker("fog")) != null and .kind != $fog_kind
+    then {marker: "fog", expected: $fog_kind, section: "FOG"}
+    elif (.id | marker("oos")) != null and .kind != $oos_kind
+    then {marker: "oos", expected: $oos_kind, section: "OUT OF COURSE"}
+    else null end;
+
   # Why a captain-gated record is not on the decision list of this chart. These are
   # different pieces of news and must not share one sentence: a blocked record is
   # one the fleet has lost track of, while an in-flight one is being worked right
@@ -398,9 +423,13 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # pushed down the page by a long tail of routine held rows is how the original
   # defect went unnoticed.
   def unplaced_reason($done; $known):
-    if .kind == null
+    marker_kind_mismatch as $mis
+    | if .kind == null
     then {cause: "no-kind", kind_defect: true,
           why: "no kind is recorded on it, and every section of this chart places a member by its kind, so none of them can take it. File a dark patch on the course as kind \($fog_kind), a deliberate boundary as kind \($oos_kind), and anything else as the kind of work it actually is; AGENTS.md section 10 has the commands. A hold kind is a different field and never places a record here."}
+    elif $mis != null
+    then {cause: "marker-kind-mismatch", kind_defect: true,
+          why: "its id carries the -\($mis.marker)- marker, which files it under this chart as \($mis.expected), but its record kind is \(.kind). One of the two is wrong and the chart cannot tell which: correct the kind to \($mis.expected), or rename the id if this record is not that. Until they agree the \($mis.section) section reads empty while this record sits on the course, and the record is not offered as takeable either, because a kind nobody can trust is not an invitation to pick work up."}
     elif (.id | dkey) != null
     then {cause: "decision-shape", kind_defect: true,
           why: "its id is named as a decision but it is filed as kind \(.kind) rather than captain, so the decision sections do not carry it and the takeable filter excludes every decision-named id. Either file it as a captain decision or rename it."}
@@ -508,11 +537,19 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # script refuses the wrong-invitation direction everywhere else for the same
   # reason: offering held work as takeable costs more than holding ready work
   # back. Such a record is reported in unplaced[], which names the missing kind.
+  # Nor is a record whose id already claims to be chart material while its kind
+  # says otherwise. That pair cannot both be right, and offering it here is the
+  # same wrong invitation wearing a typo: the FOG or OUT OF COURSE section it
+  # names reads empty at the same moment the chart advertises it as work to pick
+  # up. An ordinary kind carrying no chart marker is untouched by this and stays
+  # takeable, which is the whole reason the marker rather than the kind alone is
+  # what decides.
   | ([ $mine[]
        | select(open_state)
        | select(.id != $chart)          # the undertaking itself is the destination, not a leg of it
        | select((.id | dkey) == null)
        | select(.kind != null)
+       | select(marker_kind_mismatch == null)
        | select(.kind as $k | ($chart_kinds | index($k)) == null)
        | select(.kind != "captain")
        | select((unresolved($done; $known) | length) == 0)
@@ -589,6 +626,11 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
         decisions: ($open_decisions | length),
         folded: (([ $groups[] | .record_count ] | add // 0) - ($open_decisions | length)),
         withheld: ($withheld | length),
+        # How many of those the fold dropped rather than the surface never
+        # returning. Without it a folded variant is counted once above and once
+        # below with nothing saying they are the same record, and arithmetic a
+        # reader cannot reconcile is the same fault as arithmetic that is wrong.
+        withheld_folded: ([ $withheld[] | select(.cause == "unpaired-variant") ] | length),
         possibly_answered: ($possibly_answered | length),
         unplaced: ($unplaced | length),
         unplaced_kind_defects: ([ $unplaced[] | select(.kind_defect) ] | length)
@@ -599,7 +641,7 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
       # in one week. Do not soften these when rendering.
       limits: [
         "Where a judge ruled, this chart shows the formulation the judge gave. That the judge picked up every question the analysts raised is verified by nothing, so every folded record stays listed underneath.",
-        "Withheld decisions are found within the scope of THIS chart, by reading its own records back from the backlog. The fleet-wide decision board still cannot count them, so a number here does not mean the board agrees.",
+        "Withheld decisions are found within the scope of THIS chart, by reading its own records back from the backlog. For every cause but unpaired-variant the fleet-wide decision board cannot count them at all, so a number here does not mean the board agrees; an unpaired variant is the one the board does list, as a variant of its group rather than as a decision.",
         "This chart reads ONE home, the one it was pointed at. A decision recorded in a secondmate home is dropped before anything here is counted, because a secondmate owns its own undertakings and its own backlog. Nothing on this chart says anything about them, in either direction.",
         "Fog is whatever somebody wrote down as fog. Nothing proves this course has no other dark patches.",
         "An unsupervised marking means the work may be EDITED unsupervised. It never means it may LAND unsupervised.",
@@ -626,7 +668,10 @@ if [ "$MODE" = "summary" ]; then
     "INCOMPLETENESS, computed fresh for this build:",
     "  \(.counts.records_in_backlog) captain-gated \(if .counts.records_in_backlog == 1 then "record" else "records" end) in the backlog for this chart",
     "    of those, \(.counts.records) reached the actionable surface -> \(.counts.decisions) shown (\(.counts.folded) folded away)",
-    "    withheld from the actionable surface: \(.counts.withheld)",
+    "    not carried by any decision section: \(.counts.withheld)" +
+      (if .counts.withheld_folded > 0
+       then " (\(.counts.withheld_folded) of them folded away above rather than never returned)"
+       else "" end),
     "  possibly already answered: \(.counts.possibly_answered)",
     "",
     "members: \(.membership.members)   rule: \(.membership.rule)",
