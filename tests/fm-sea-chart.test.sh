@@ -541,7 +541,7 @@ EOF
   esac
   assert_contains "$summary" "not carried by any decision section: 1" \
     "the incompleteness count must be labelled by what is true of BOTH classes it now covers - never returned, and returned then folded away"
-  assert_contains "$summary" "folded away above rather than never returned" \
+  assert_contains "$summary" "folded away rather than never returned" \
     "the page must reconcile the record it counts as folded with the one it counts as withheld, or the two numbers read as two records"
   pass "an unpaired analyst variant is reconciled onto the chart instead of counted as drawn"
 }
@@ -766,6 +766,74 @@ EOF
   assert_contains "$fogwhy" "FOG is drawn without it" \
     "when the named section is not empty the report must say the record is missing FROM it, which is the true and still actionable claim"
   pass "the misfiled report names where each record really is and never points at a surface without it"
+}
+
+test_the_report_headings_assert_nothing_their_own_rows_can_contradict() {
+  # THE CLASS OF DEFECT THIS PINS, WHICH COST FIVE REVIEW ROUNDS.
+  # Every one of those rounds found one more sentence that was true for most
+  # inputs and false for one, always the same shape: a heading standing over a
+  # list and asserting what the reader would find somewhere ELSE on the chart -
+  # "a section below is empty that should not be" - which nothing computed and
+  # the rows underneath then denied in the same breath.
+  # A heading covers rows it cannot inspect, so it may only say what is true by
+  # construction of the list it heads. Anything about the rest of the chart is
+  # computed per record and lives in that record. This test therefore renders two
+  # charts that disagree about everything the old headings claimed, and requires
+  # the headings to come out byte for byte identical.
+  local home_a home_b sum_a sum_b heads_a heads_b
+  # A: every named section IS drawn, just with the wrong record in it, so nothing
+  # anywhere below the reports is empty.
+  home_a=$(make_home headsdrawn)
+  cat > "$home_a/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-oos-tracker - A boundary filed with the fog kind (repo: r) (kind: fog) (since 2026-07-30) (hold: out of course) (hold-kind: future)
+- [ ] voy-fog-retention - A dark patch filed with the boundary kind (repo: r) (kind: out-of-course) (since 2026-07-30) (hold: not sharp) (hold-kind: future)
+- [ ] voy-nokind - Filed with no record kind at all (repo: r) (since 2026-07-30)
+EOF
+  # B: the named sections really are empty, which is the case the old wording was
+  # written for and the only one it was true of.
+  home_b=$(make_home headsempty)
+  cat > "$home_b/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-fog-drift - A dark patch whose kind was misspelled (repo: r) (kind: fogg) (since 2026-07-30)
+- [ ] voy-nokind - Filed with no record kind at all (repo: r) (since 2026-07-30)
+EOF
+  sum_a=$("$CHART" voy --summary --from "$(capture headsdrawn)" \
+    --backlog "$home_a/data/backlog.md" --archive "$home_a/data/none.md" --data "$home_a/data")
+  sum_b=$("$CHART" voy --summary --from "$(capture headsempty)" \
+    --backlog "$home_b/data/backlog.md" --archive "$home_b/data/none.md" --data "$home_b/data")
+
+  # The two charts really are the opposite case of each other.
+  [ "$(printf '%s\n' "$sum_a" | grep -c '^FOG:')" = 1 ] && [ "$(printf '%s\n' "$sum_b" | grep -c '^FOG:')" = 0 ] \
+    || fail "fixture drift: A must draw a fog section and B must leave it empty, or this test compares nothing"
+
+  heads_a=$(printf '%s\n' "$sum_a" | grep -E '^(UNPLACED|MISFILED|WITHHELD)|^  (KIND DEFECTS|HELD OR BLOCKED)')
+  heads_b=$(printf '%s\n' "$sum_b" | grep -E '^(UNPLACED|MISFILED|WITHHELD)|^  (KIND DEFECTS|HELD OR BLOCKED)')
+  [ -n "$heads_a" ] || fail "fixture drift: chart A must render the reports whose headings this pins"
+  [ "$heads_a" = "$heads_b" ] \
+    || fail "a report heading changed meaning with its input, which means it is asserting something about the chart rather than about the list it heads:
+--- drawn ---
+$heads_a
+--- empty ---
+$heads_b"
+
+  # And the specific claim that took five rounds to find: no heading may say
+  # anything about a section being empty, because the heading cannot check it.
+  case "$heads_a" in
+    *empty*) fail "a heading still claims a section is empty, which its own rows can contradict: $heads_a" ;;
+  esac
+  # The rows keep saying it, per record and computed, which is where it belongs.
+  assert_contains "$sum_a" "is drawn without it" \
+    "deleting the heading claim must not delete the per-record one: the row is where that difference can be computed"
+  assert_contains "$sum_b" "renders as if this course had none of them" \
+    "when a named section really is empty the row must still say so"
+  pass "the report headings assert nothing their own rows can contradict"
 }
 
 test_a_kind_defect_is_never_pushed_down_the_page_by_routine_held_work() {
@@ -1100,6 +1168,7 @@ test_an_id_marker_and_a_record_kind_that_disagree_are_reported_never_offered
 test_a_swapped_chart_kind_is_reported_even_though_a_section_drew_it
 test_a_correctly_filed_chart_record_is_never_called_misfiled
 test_the_misfiled_report_never_sends_a_reader_to_a_surface_without_the_record
+test_the_report_headings_assert_nothing_their_own_rows_can_contradict
 test_a_kind_defect_is_never_pushed_down_the_page_by_routine_held_work
 test_chart_kinds_stay_off_the_blockage_surface_but_are_disclosed
 test_a_chart_without_a_destination_is_refused

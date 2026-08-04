@@ -174,8 +174,8 @@
 #                      `kind` found, the section it `belongs_in`, and the one it was
 #                      `drawn_in`. A boundary filed with the fog kind IS drawn, so
 #                      no report about unplaced members can see it, while the
-#                      section its id names renders zero and reads as a claim about
-#                      the course. This states the disagreement and picks no winner
+#                      section its id names is drawn without it. This states the
+#                      disagreement and picks no winner
 #   counts             the incompleteness numbers, computed fresh per build.
 #                      `withheld` covers BOTH classes the section carries - the
 #                      records the actionable surface never returned and the ones
@@ -367,7 +367,7 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # except an id that already claims to be chart material. Whichever of the two
   # the filer got wrong, the pair cannot both be right, and the direction of the
   # error is the costly one - the record is offered as work to pick up while the
-  # section it names reads empty.
+  # section its id names is drawn without it.
   def marker_kind_mismatch:
     if (.id | marker("fog")) != null and .kind != $fog_kind
     then {marker: "fog", expected: $fog_kind, section: "FOG"}
@@ -390,7 +390,7 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   def withheld_reason($done; $live_done; $known; $unpaired):
     if (. as $r | ($unpaired | index($r.id)) != null)
     then {cause: "unpaired-variant",
-          why: "it reached the actionable surface, but no judge ruling in its group carries its decision key, so the collapse rule folded it away and the decision list below does not show it. It is a question only an analyst raised: the fold assumes a judge picked that question up, nothing verifies that assumption, so read this record rather than take the fold at its word."}
+          why: "it reached the actionable surface, but no judge ruling in its group carries its decision key, so the collapse rule folded it away and the decision list does not show it. It is a question only an analyst raised: the fold assumes a judge picked that question up, nothing verifies that assumption, so read this record rather than take the fold at its word."}
     elif (unresolved($done; $known) | length) > 0
     then {cause: "blocked",
           why: "blocked by another record that has not resolved, so it never reaches the actionable surface"}
@@ -436,7 +436,7 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
           why: "no kind is recorded on it, and every section of this chart places a member by its kind, so none of them can take it. File a dark patch on the course as kind \($fog_kind), a deliberate boundary as kind \($oos_kind), and anything else as the kind of work it actually is; AGENTS.md section 10 has the commands. A hold kind is a different field and never places a record here."}
     elif $mis != null
     then {cause: "marker-kind-mismatch", kind_defect: true,
-          why: "its id carries the -\($mis.marker)- marker, which files it under this chart as \($mis.expected), but its record kind is \(.kind), so no section of this chart could take it. It is not offered as takeable either, because a kind nobody can trust is not an invitation to pick work up. The misfiled report carries this record too, with both spellings side by side and the section they leave short."}
+          why: "its id carries the -\($mis.marker)- marker, which files it under this chart as \($mis.expected), but its record kind is \(.kind), so no section of this chart could take it. It is not offered as takeable either, because a kind nobody can trust is not an invitation to pick work up. The misfiled report names this record too, with both spellings side by side."}
     elif (.id | dkey) != null
     then {cause: "decision-shape", kind_defect: true,
           why: "its id is named as a decision but it is filed as kind \(.kind) rather than captain, so the decision sections do not carry it and the takeable filter excludes every decision-named id. Either file it as a captain decision or rename it."}
@@ -546,9 +546,9 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # back. Such a record is reported in unplaced[], which names the missing kind.
   # Nor is a record whose id already claims to be chart material while its kind
   # says otherwise. That pair cannot both be right, and offering it here is the
-  # same wrong invitation wearing a typo: the FOG or OUT OF COURSE section it
-  # names reads empty at the same moment the chart advertises it as work to pick
-  # up. An ordinary kind carrying no chart marker is untouched by this and stays
+  # same wrong invitation wearing a typo: the FOG or OUT OF COURSE section its id
+  # names is drawn without it at the same moment the chart advertises it as work
+  # to pick up. An ordinary kind carrying no chart marker is untouched and stays
   # takeable, which is the whole reason the marker rather than the kind alone is
   # what decides.
   | ([ $mine[]
@@ -736,25 +736,25 @@ if [ "$MODE" = "summary" ]; then
     "    of those, \(.counts.records) reached the actionable surface -> \(.counts.decisions) shown (\(.counts.folded) folded away)",
     "    not carried by any decision section: \(.counts.withheld)" +
       (if .counts.withheld_folded > 0
-       then " (\(.counts.withheld_folded) of them folded away above rather than never returned)"
+       then " (\(.counts.withheld_folded) of them folded away rather than never returned)"
        else "" end),
     "  possibly already answered: \(.counts.possibly_answered)",
     "",
     "members: \(.membership.members)   rule: \(.membership.rule)",
     (if .counts.unplaced > 0 then
-      "  of those, \(.counts.unplaced) could not be placed in any section below - see UNPLACED" +
+      "  of those, \(.counts.unplaced) could not be placed in any section - see UNPLACED" +
       (if .counts.unplaced_kind_defects > 0
        then " (\(.counts.unplaced_kind_defects) carrying a kind this chart cannot classify)"
        else "" end) else empty end),
     "",
     (if (.unplaced | length) > 0 then
-      "UNPLACED - members on this course the chart drew in no section below:" else empty end),
+      "UNPLACED - members this chart counted and drew in no section:" else empty end),
     # Kind defects first and under their own heading, because they are the ones
     # that can leave a section reading empty while the course is not. Routine
     # held or blocked work is reported too - a silent gap is what this exists
     # against - but it must never be what a reader meets first.
     (if .counts.unplaced_kind_defects > 0 then
-      "  KIND DEFECTS - the chart cannot classify these, so a section above may read empty while the course is not:",
+      "  KIND DEFECTS - the kind on these is missing, unrecognised, or at odds with the id:",
       (.unplaced[] | select(.kind_defect)
         | "  ? \(.id)  [kind: \(.kind // "none")\(if .hold_kind == null then "" else ", hold-kind: \(.hold_kind)" end)]\n      \(.why)")
       else empty end),
@@ -767,7 +767,7 @@ if [ "$MODE" = "summary" ]; then
     # Above the sections it calls into question, because it is the one report
     # whose subject is a row the reader would otherwise believe.
     (if (.misfiled | length) > 0 then
-      "MISFILED - the id and the record kind of these members disagree, so a section below is empty that should not be:",
+      "MISFILED - the id marker and the record kind of these members disagree:",
       (.misfiled[] | "  ! \(.id)  [marker: -\(.marker)-, kind: \(.kind)\(if .drawn_in == null then "" else ", drawn under \(.drawn_in)" end)]\n      \(.why)"),
       "" else empty end),
     (if (.withheld | length) > 0 then
