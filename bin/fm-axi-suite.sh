@@ -62,12 +62,17 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-axi-path-lib.sh"
 AXI_PREFIX=$(fm_axi_prefix "$FM_HOME")
 AXI_BIN=$(fm_axi_bin_dir "$FM_HOME")
-# The environment as this process FOUND it, captured before the prepend below.
-# Everything after that line resolves the maintained copy by construction, so
-# this is the only moment at which "which copy actually runs elsewhere" can
-# still be asked. See fm_axi_shadowed for what that question is worth.
-AMBIENT_PATH=${PATH:-}
 fm_axi_prepend_path "$FM_HOME"
+# The environment as the SESSION found it, not merely as this process found it.
+# Capturing $PATH before the prepend above is not enough: the production caller
+# is bin/fm-bootstrap.sh, which prepends and exports at its own line 111, and
+# bin/fm-session-start.sh prepends and exports before spawning it, so this
+# process's inherited $PATH already leads with the maintained prefix and every
+# tool would resolve to itself. fm_axi_prepend_path records the pre-prepend value
+# once, at whichever entrypoint prepends first, which is the only value that
+# still answers "which copy actually runs elsewhere". See fm_axi_shadowed for
+# what that question is worth.
+AMBIENT_PATH=$(fm_axi_ambient_path)
 INTERVAL=${FM_AXI_SUITE_CHECK_INTERVAL:-86400}
 CHECK_ONLY=0
 FORCE=0

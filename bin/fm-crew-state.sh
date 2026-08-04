@@ -107,11 +107,16 @@ emit() {  # <state> <source> [detail]
   exit 0
 }
 
-# The one wording for "the authoritative run-step reader is not installed here".
-# <because> says which weaker answer was therefore refused, so a supervisor can
-# see what was given up rather than only that something was.
-emit_missing_no_mistakes() {  # <because>
-  emit degraded missing-dependency "no-mistakes CLI not on PATH: the run-step state was never read and $1"
+# The tool whose absence stopped the authoritative run-step read, named in the
+# degraded line. Set below, once the kind and the reachable toolchain are known.
+MISSING_DEP=
+
+# The one wording for "the authoritative run-step reader could not be used here,
+# because a tool it needs is not installed". <because> says which weaker answer
+# was therefore refused, so a supervisor can see what was given up rather than
+# only that something was.
+emit_missing_dependency() {  # <because>
+  emit degraded missing-dependency "$MISSING_DEP not on PATH: the run-step state was never read and $1"
 }
 
 # --- meta resolution --------------------------------------------------------
@@ -434,6 +439,16 @@ nm_runs_status_for_branch() {  # <branch>
 
 # CREW_BRANCH is empty at detached HEAD (a just-spawned crew, or a scout's
 # scratch worktree); with no branch there is no run to attribute to this crew.
+#
+# It is ALSO empty when git itself is unreachable, and those two are different
+# facts entirely: one is the crew's shape, the other is this reader's instrument.
+# bin/fm-service-path-lib.sh names git as one of the two tools whose absence from
+# a service's PATH silently degrades supervision, and an empty CREW_BRANCH is
+# exactly how that absence used to disappear - no branch, so no run-step read, so
+# `unknown - none` for a crew nobody looked at. GIT_MISSING keeps them apart, so
+# detached HEAD keeps its answer while an unreachable git earns the degraded one.
+GIT_MISSING=0
+command -v git >/dev/null 2>&1 || GIT_MISSING=1
 CREW_BRANCH=$(git -C "$WT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
 
 # 0 if the run reported by `axi status` is still ACTIVE (no terminal outcome and
@@ -517,18 +532,29 @@ HAVE_RUN=0
 # run-step block below skips the TOON field parsing entirely for this crew.
 RUN_SOURCE=full
 COARSE_STATUS=""
-# 1 when the run-step source was SKIPPED because the no-mistakes CLI is not on
-# PATH, for a crew that would otherwise have been looked up. That is a broken
+# 1 when the run-step source was SKIPPED because a tool it needs is not on PATH,
+# for a crew that would otherwise have been looked up. That is a broken
 # instrument, not evidence about the crew, so it is tracked separately from
 # HAVE_RUN=0 (which also covers "this crew genuinely has no run") and consumed
 # only by the absence branches at the bottom of this script.
-NM_MISSING=0
-if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && ! command -v no-mistakes >/dev/null 2>&1; then
-  NM_MISSING=1
+#
+# Both required tools arm it, because the read fails identically either way: git
+# is what turns this worktree into a branch to attribute a run to, and the
+# no-mistakes CLI is what answers for that branch. Losing the first is checked
+# first precisely because it presents as an empty branch rather than as an error.
+READER_MISSING=0
+if [ "$KIND" = ship ]; then
+  if [ "$GIT_MISSING" = 1 ]; then
+    READER_MISSING=1
+    MISSING_DEP=git
+  elif [ -n "$CREW_BRANCH" ] && ! command -v no-mistakes >/dev/null 2>&1; then
+    READER_MISSING=1
+    MISSING_DEP='no-mistakes CLI'
+  fi
 fi
 # Scouts and secondmates never drive a no-mistakes validation of their own
 # worktree, so skip the lookup for them and read state from pane/log directly.
-if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && [ "$NM_MISSING" = 0 ]; then
+if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && [ "$READER_MISSING" = 0 ]; then
   RUN_OUT=$(nm_run axi status)
   if [ -n "$RUN_OUT" ]; then
     run_branch=$(strip_quotes "$(nm_field branch)")
@@ -710,8 +736,8 @@ if [ -n "$LOG_VERB" ]; then
     # and the bounded recheck it earns is safe either way. Every other verb here
     # is a stale echo of an event log that this script exists to reconcile
     # against the run-step - and reconciliation is exactly what did not happen.
-    if [ "$NM_MISSING" = 1 ] && [ "$LOG_STATE" != paused ]; then
-      emit_missing_no_mistakes "its '$LOG_VERB' event was never reconciled against the run"
+    if [ "$READER_MISSING" = 1 ] && [ "$LOG_STATE" != paused ]; then
+      emit_missing_dependency "its '$LOG_VERB' event was never reconciled against the run"
     fi
     emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")"
   fi
@@ -719,7 +745,7 @@ fi
 
 # Nothing answered. Whether that is a fact about the crew or a fact about this
 # machine depends on whether the authoritative reader was even available.
-if [ "$NM_MISSING" = 1 ]; then
-  emit_missing_no_mistakes "no other source answered either"
+if [ "$READER_MISSING" = 1 ]; then
+  emit_missing_dependency "no other source answered either"
 fi
 emit unknown none "no current-state source available"

@@ -159,6 +159,26 @@ make_stripped_toolbin() {  # <dir> -> echoes toolbin path
   printf '%s\n' "$tb"
 }
 
+# The same idea for the OTHER required tool. git is the second name in
+# bin/fm-service-path-lib.sh's required list, and its absence is the harder one to
+# see: it presents as an empty branch, which is also what a legitimate detached
+# HEAD looks like, so the reader used to fall straight through to `unknown` with
+# no run-step read and no complaint.
+make_gitless_toolbin() {  # <dir> -> echoes toolbin path
+  local dir=$1 tb="$1/gitlessbin" tool real
+  mkdir -p "$tb"
+  for tool in bash grep sed awk head cut tail tr dirname basename date stat cksum mktemp timeout; do
+    real=$(command -v "$tool" || true)
+    [ -n "$real" ] || continue
+    ln -s "$real" "$tb/$tool"
+  done
+  for tool in bash grep sed; do
+    [ -e "$tb/$tool" ] || fail "missing core tool for the gitless path: $tool"
+  done
+  [ ! -e "$tb/git" ] || fail "the gitless toolbin must not contain git"
+  printf '%s\n' "$tb"
+}
+
 # Run the helper for one case dir. FM_FAKE_* env (run output, busy flag) are read
 # from the caller's environment by the fakes above.
 run_crew_state() {  # <case-dir> <id>
@@ -1239,6 +1259,53 @@ test_missing_no_mistakes_still_trusts_a_busy_pane() {
   pass "a working source still answers even while another source's tool is missing"
 }
 
+# The same authorized failure, reachable through the OTHER required tool. A
+# service PATH that resolves no-mistakes but not git (git under /opt, or a keeper
+# launched from a stripped tmux server) leaves the branch lookup empty, which
+# skipped the run-step read exactly as a missing no-mistakes CLI did - only more
+# quietly, because an empty branch is also the legitimate detached-HEAD case and
+# the reader had no way to tell the two apart.
+test_missing_git_is_degraded_not_unknown() {
+  reset_fakes
+  local d toolbin out rc
+  d=$(new_case missing-git)
+  make_repo_on_branch "$d/wt" fm/feat-git-missing
+  make_fakebin "$d" >/dev/null
+  toolbin=$(make_gitless_toolbin "$d")
+  fm_write_meta "$d/state/git-missing.meta" "window=fm:fm-git-missing" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_BUSY=0
+  printf 'resolved: carried on\n' > "$d/state/git-missing.status"
+  out=$(PATH="$d/fakebin:$toolbin" FM_STATE_OVERRIDE="$d/state" "$CREW_STATE" git-missing); rc=$?
+  expect_code 0 "$rc" "a degraded read still exits 0"
+  assert_contains "$out" "state: degraded" "an unreachable git must not answer with a crew state"
+  assert_contains "$out" "source: missing-dependency" "an unreachable git must name the missing dependency as the source"
+  assert_contains "$out" "git not on PATH" "the degraded line did not name git as the tool that is missing"
+  assert_not_contains "$out" "state: unknown" "a broken instrument must not report the crew as unknown"
+  pass "an unreachable git reports degraded, not the same unknown a detached HEAD earns"
+}
+
+# The discrimination has to cut both ways here too: with git installed, an empty
+# branch really is a detached HEAD, and that crew keeps the answer it had. A fix
+# that degraded every empty branch would report every just-spawned crew and every
+# scout's scratch worktree as an unreadable toolchain.
+test_detached_head_with_git_present_is_unchanged() {
+  reset_fakes
+  local d toolbin out
+  d=$(new_case detached-head)
+  make_repo_on_branch "$d/wt" fm/feat-detached
+  git -C "$d/wt" checkout -q --detach HEAD
+  make_fakebin "$d" >/dev/null
+  toolbin=$(make_stripped_toolbin "$d")
+  fm_write_meta "$d/state/detached.meta" "window=fm:fm-detached" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_BUSY=0
+  printf 'resolved: carried on\n' > "$d/state/detached.status"
+  out=$(PATH="$d/fakebin:$toolbin" FM_STATE_OVERRIDE="$d/state" "$CREW_STATE" detached)
+  assert_contains "$out" "state: unknown" "a detached HEAD with git installed changed its answer"
+  assert_contains "$out" "source: none" "a detached HEAD with git installed changed its source"
+  assert_not_contains "$out" "degraded" "a working toolchain must not be reported as a missing dependency"
+  pass "a detached HEAD keeps its unknown answer while git is reachable"
+}
+
 # The classifier must act on the difference, not fold it back into `none`.
 test_degraded_classifies_as_its_own_absorb_class() {
   reset_fakes
@@ -1500,6 +1567,8 @@ test_missing_no_mistakes_is_degraded_not_unknown
 test_missing_backend_cli_is_degraded_not_gone
 test_present_backend_cli_still_reports_a_dead_endpoint
 test_missing_no_mistakes_still_trusts_a_busy_pane
+test_missing_git_is_degraded_not_unknown
+test_detached_head_with_git_present_is_unchanged
 test_degraded_classifies_as_its_own_absorb_class
 
 echo "all fm-crew-state tests passed"

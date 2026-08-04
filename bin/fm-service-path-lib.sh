@@ -54,16 +54,22 @@ FM_SERVICE_TOOLS_DEFAULT='quota-axi gh-axi tasks-axi gnhf lavish-axi chrome-devt
 FM_SERVICE_REQUIRED_TOOLS_DEFAULT='no-mistakes git'
 
 # The tail every composed service PATH ends with, so system tools stay reachable
-# even when the composing session's own PATH is unusual.  Matches systemd's user
-# default minus the games/snap entries firstmate never calls.
-FM_SERVICE_PATH_BASE_DEFAULT='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+# even when the composing session's own PATH is unusual.  It is systemd's user
+# default VERBATIM, entries firstmate never calls included: the whole purpose of
+# composing a PATH here is to ADD reach for a background service, and the tail is
+# what the unit inherited before it, so dropping any entry would take reach away
+# instead.  A registered custom state/<id>.check.sh is an operator-written script
+# that may call anything - a snap-installed binary among it - and losing it would
+# surface only as a failed check.
+FM_SERVICE_PATH_BASE_DEFAULT='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin'
 
 # Print the PATH a background service should run with: the directory of each
 # resolvable tool from the tool list, in list order and de-duplicated, followed
 # by the base tail.  Resolution uses the CALLER's PATH, so the converging
-# session's reach is what gets recorded - that is the point, and
-# fm_service_path_unreachable is how a converging session with poor reach is
-# caught rather than trusted.
+# session's reach is what gets recorded - that is the point, and the pair
+# fm_service_path_unreachable / fm_service_path_unresolvable is how a converging
+# session with poor reach is caught rather than trusted, whichever side of that
+# session's own reach the missing tool falls on.
 fm_service_path() {
   local tools tool dir resolved base out=''
   base=${FM_SERVICE_PATH_BASE:-$FM_SERVICE_PATH_BASE_DEFAULT}
@@ -85,19 +91,48 @@ fm_service_path() {
   printf '%s:%s' "$out" "$base"
 }
 
-# Print, one per line, each required tool that is INSTALLED on this machine but
-# that <path> cannot reach; print nothing when the path reaches them all.
+# Print, one per line, each required tool that THIS SESSION can resolve but that
+# <path> cannot reach; print nothing when the path reaches them all.
 #
-# Deliberately scoped to installed-but-unreachable rather than simply missing: a
-# tool that is not installed at all is already owned and reported by bootstrap's
-# toolchain check, and repeating it here would give one fact two owners. What
-# only this check can see is the specific failure that hid for weeks - the tool
-# is present, the operator can run it, and the background service cannot.
+# This half is the specific failure that hid for weeks - the tool is present, the
+# operator can run it, and the background service cannot - and it is the half the
+# operator can fix by converging the service from a session that already reaches
+# it.  Its counterpart fm_service_path_unresolvable owns the other half, so
+# nothing is silent: the split is about which sentence is true, not about whether
+# to say anything.
 fm_service_path_unreachable() {  # <path>
   local path=$1 tools tool
   tools=${FM_SERVICE_REQUIRED_TOOLS:-$FM_SERVICE_REQUIRED_TOOLS_DEFAULT}
   for tool in $tools; do
     command -v "$tool" >/dev/null 2>&1 || continue
+    PATH="$path" command -v "$tool" >/dev/null 2>&1 || printf '%s\n' "$tool"
+  done
+  return 0
+}
+
+# Print, one per line, each required tool that <path> cannot reach AND that this
+# session cannot resolve either; print nothing when there is no such tool.
+#
+# This is the case fm_service_path_unreachable structurally cannot see, and it is
+# the case its own caller creates.  The recorded service PATH is composed with the
+# CONVERGING SESSION's `command -v`, so a session that cannot reach a required
+# tool records a value that cannot reach it either - and then, asking only about
+# tools it can itself resolve, reports nothing at all about the downgrade it just
+# made.  A converging session with poor reach was precisely what the reachability
+# check existed to catch, and was the one caller it stayed silent for.
+#
+# Kept as its own function rather than merged into the list above because the two
+# need different words.  Getting an uninstalled tool INSTALLED belongs to
+# bootstrap's MISSING: line, and repeating that here would give one fact two
+# owners; what this adds is the part MISSING: cannot say - that the recorded
+# service environment was composed without the tool, so the running service
+# cannot reach it however the installation is eventually repaired, until a
+# session that can reach it converges the service again.
+fm_service_path_unresolvable() {  # <path>
+  local path=$1 tools tool
+  tools=${FM_SERVICE_REQUIRED_TOOLS:-$FM_SERVICE_REQUIRED_TOOLS_DEFAULT}
+  for tool in $tools; do
+    command -v "$tool" >/dev/null 2>&1 && continue
     PATH="$path" command -v "$tool" >/dev/null 2>&1 || printf '%s\n' "$tool"
   done
   return 0

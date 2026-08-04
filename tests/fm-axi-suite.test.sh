@@ -538,15 +538,21 @@ test_unpublished_ahead_version_is_not_a_recurring_alarm() {
   pass "an unpublishable locally-ahead build reports for review instead of alarming forever"
 }
 
-# The currency check maintains the vessel prefix and, before this pair, only ever
-# measured the copy it maintains - it prepends that prefix into its own process
-# and then asks about versions. So it could report a suite current while every
-# other process ran an older copy from somewhere else entirely, which is what a
-# 2026-08-04 hand measurement found on the coditan vessel: six of six suite tools
-# resolving from ~/.npm-global/bin, each behind the maintained copy, under a
-# clean all-clear. Note what this pair does NOT test: that the maintained copy is
-# current. That already passed while the defect was live, which is exactly why it
-# is not the test.
+# The currency check maintains the vessel prefix and, before these cases, only
+# ever measured the copy it maintains - it prepends that prefix into its own
+# process and then asks about versions. So it could report a suite current while
+# every other process ran an older copy from somewhere else entirely, which is
+# what a 2026-08-04 hand measurement found on the coditan vessel: six of six
+# suite tools resolving from ~/.npm-global/bin, each behind the maintained copy,
+# under a clean all-clear. Note what these cases do NOT test: that the maintained
+# copy is current. That already passed while the defect was live, which is
+# exactly why it is not the test.
+#
+# This first one is the NARROW UNIT CASE: it calls the updater directly from a
+# raw shell, so nothing has prepended the maintained prefix yet. That is not the
+# production shape, and on its own it is the hole that let an inert diagnostic
+# ship - see test_shadow_report_survives_an_entrypoint_that_prepended_first for
+# the invocation path bootstrap actually uses.
 test_shadowed_suite_is_reported_even_while_the_maintained_copy_is_current() {
   local w out
   w="$TMP_ROOT/shadowed"
@@ -583,10 +589,62 @@ test_unshadowed_suite_reports_nothing_extra() {
   pass "a suite that resolves from the maintained prefix reports no shadowing"
 }
 
+# The PRODUCTION invocation path, and the one the narrow case above cannot reach.
+# bin/fm-bootstrap.sh prepends the maintained prefix into its own process and
+# exports it (line 111) long before it invokes the suite check, and
+# bin/fm-session-start.sh does the same before spawning bootstrap. A check that
+# reads its own $PATH - even before its own prepend - therefore only ever sees an
+# environment firstmate has already corrected, resolves every tool to the copy it
+# maintains, and reports nothing however badly the session itself resolves. This
+# case drives bootstrap, not the updater, so the report has to survive an
+# entrypoint that prepended first or it is inert exactly where it is needed.
+test_shadow_report_survives_an_entrypoint_that_prepended_first() {
+  local w out
+  w="$TMP_ROOT/shadow-through-bootstrap"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  make_npm "$w/bin" "$w/versions" "$w/install.log"
+  make_tool "$w/home/.local/axi/bin" boot-axi 1.2.4
+  make_tool "$w/bin" boot-axi 1.2.3
+  printf '%s\n' 'boot-axi=1.2.4' > "$w/versions"
+  # FM_ROOT_OVERRIDE points the worktree-tangle check at the non-git home so the
+  # ambient checkout cannot leak an unrelated line into this fixture.
+  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/home" \
+    FM_STATE_OVERRIDE="$w/state" FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="boot-axi" \
+    FM_AXI_SUITE_CHECK_INTERVAL=0 FM_TEST_VERSIONS="$w/versions" \
+    FM_TEST_INSTALL_LOG="$w/install.log" FM_TEST_HOOK_LOG="$w/hook.log" \
+    "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  assert_contains "$out" "AXI_SUITE_SHADOWED: boot-axi runs from $w/bin/boot-axi" \
+    "the shadow report never fired on the invocation path production actually uses"
+  assert_contains "$out" "not the maintained copy in $w/home/.local/axi/bin" \
+    "the report did not name the copy that is being maintained instead"
+  pass "the shadow report describes the session's environment, not the entrypoint's corrected one"
+}
+
+# The inversion of the same baseline error. On an unseeded vessel the maintained
+# bin directory is empty, so every suite tool resolves to an external copy - the
+# ordinary pre-cutover state that the seeding and currency paths own. A check
+# comparing against a copy that does not exist would call all six shadowed and
+# send the agent to the captain with two paths and no defect.
+test_unseeded_vessel_reports_no_shadowing() {
+  local w out
+  w="$TMP_ROOT/unseeded-shadow"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  make_npm "$w/bin" "$w/versions" "$w/install.log"
+  make_tool "$w/bin" fresh-axi 1.2.4
+  printf '%s\n' 'fresh-axi=1.2.4' > "$w/versions"
+  [ -e "$w/home/.local/axi/bin/fresh-axi" ] && fail "the unseeded fixture already owns a maintained copy"
+  out=$(run_case "$w" "fresh-axi")
+  assert_not_contains "$out" 'AXI_SUITE_SHADOWED' \
+    "a tool this home maintains no copy of was reported as shadowing that absent copy"
+  pass "an unseeded vessel reports no shadowing, only the seeding the other paths own"
+}
+
 test_patch_and_minor_auto_update
 test_major_and_missing_wait_for_review
 test_shadowed_suite_is_reported_even_while_the_maintained_copy_is_current
 test_unshadowed_suite_reports_nothing_extra
+test_shadow_report_survives_an_entrypoint_that_prepended_first
+test_unseeded_vessel_reports_no_shadowing
 test_two_homes_update_distinct_prefixes_concurrently
 test_vessel_prefix_wins_over_inherited_path
 test_currency_clock_survives_prefix_cutover

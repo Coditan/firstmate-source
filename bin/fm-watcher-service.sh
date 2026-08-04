@@ -214,8 +214,16 @@ recorded_service_path() {
   printf '%s' "$line"
 }
 
+# The PATH the RUNNING keeper was launched with, as the watcher itself recorded
+# it.  The systemd tier has no equivalent because its PATH lives in the compared
+# service environment file; a keeper receives it as a launch argument, so the
+# record the watcher writes is the only evidence of what it actually got.
+recorded_keeper_path() {
+  cat "$STATE/.watch.lock/service-path" 2>/dev/null || true
+}
+
 watcher_record_matches() {
-  local manager=$1 expected_version expected_x_version actual_manager actual_version actual_x_version
+  local manager=$1 expected_version expected_x_version expected_path actual_manager actual_version actual_x_version
   expected_version=$(watch_source_version) || return 1
   expected_x_version=$(x_mode_version) || return 1
   actual_manager=$(cat "$STATE/.watch.lock/manager" 2>/dev/null || true)
@@ -223,7 +231,17 @@ watcher_record_matches() {
   actual_x_version=$(cat "$STATE/.watch.lock/x-mode-version" 2>/dev/null || true)
   [ "$actual_manager" = "$manager" ] \
     && [ "$actual_version" = "$expected_version" ] \
-    && [ "$actual_x_version" = "$expected_x_version" ]
+    && [ "$actual_x_version" = "$expected_x_version" ] \
+    || return 1
+  # Compared for the keeper only, and for the same reason service_env_matches
+  # compares the systemd tier's recorded PATH: a home whose toolchain moves must
+  # reconverge and restart rather than keep running with a stale environment
+  # until some unrelated source-version change happens to notice.  Without it the
+  # two tiers are only at parity for whichever rollout also changed the watcher's
+  # own bytes.
+  [ "$manager" = keeper ] || return 0
+  expected_path=$(fm_service_path) || return 1
+  [ "$(recorded_keeper_path)" = "$expected_path" ]
 }
 
 healthy_watcher() {
@@ -371,8 +389,33 @@ linger_enabled() {
   [ "$(loginctl show-user "${FM_WATCH_USER_NAME:-$(id -un)}" -p Linger --value 2>/dev/null || true)" = yes ]
 }
 
+# Report what the environment the watcher ACTUALLY runs with cannot reach, asked
+# of the recorded value rather than recomputed - the question "can the running
+# watcher reach its own tools" must not be answered from the asking session's
+# reach.  A watcher that cannot resolve its own tools does not fail; it answers
+# "no state available" for every crew, which is why this has to be stated rather
+# than waited for.
+#
+# Two sentences, because the two conditions have different owners and different
+# repairs: a tool this session CAN reach is fixed by converging the service from
+# here, while one this session cannot reach means the recorded value was composed
+# blind and no convergence from this session can improve it.  Emitted for both
+# tiers, because a keeper-backed home running blind says exactly as little as a
+# systemd-backed one.
+report_recorded_path() {  # <recorded-path>
+  local recorded=$1 unreachable unresolvable
+  unreachable=$(fm_service_path_unreachable "$recorded")
+  if [ -n "$unreachable" ]; then
+    echo "WATCHER_UNIT: the watcher's recorded PATH cannot reach $(printf '%s' "$unreachable" | tr '\n' ' ' | sed 's/ $//') - crew state will read as unavailable until it can"
+  fi
+  unresolvable=$(fm_service_path_unresolvable "$recorded")
+  if [ -n "$unresolvable" ]; then
+    echo "WATCHER_UNIT: the watcher's recorded PATH cannot reach $(printf '%s' "$unresolvable" | tr '\n' ' ' | sed 's/ $//'), and this session cannot resolve it either, so the recorded environment was composed without it - crew state will read as unavailable until a session that can reach it converges the service"
+  fi
+}
+
 bootstrap_check() {
-  local backend unit unreachable changed=0
+  local backend unit changed=0
   backend=$(select_backend)
   case "$backend" in
     systemd)
@@ -389,16 +432,10 @@ bootstrap_check() {
       elif ! ensure_systemd >/dev/null; then
         echo "WATCHER_UNIT: $unit convergence failed - inspect systemctl --user status $unit"
       fi
-      # Asked of the RECORDED environment, after any convergence above, so it
-      # reports what the running service can actually reach. A watcher that
-      # cannot resolve its own tools does not fail - it answers "no state
-      # available" for every crew, which is why this has to be stated rather
-      # than waited for.
+      # Asked after any convergence above, so it reports what the running
+      # service can actually reach.
       if systemd_installed; then
-        unreachable=$(fm_service_path_unreachable "$(recorded_service_path 2>/dev/null || true)")
-        if [ -n "$unreachable" ]; then
-          echo "WATCHER_UNIT: the watcher's recorded PATH cannot reach $(printf '%s' "$unreachable" | tr '\n' ' ' | sed 's/ $//') - crew state will read as unavailable until it can"
-        fi
+        report_recorded_path "$(recorded_service_path 2>/dev/null || true)"
       fi
       if ! linger_enabled; then
         echo "WATCHER_UNIT: user lingering is disabled - approve: bin/fm-bootstrap.sh install watcher-linger"
@@ -410,6 +447,12 @@ bootstrap_check() {
           || echo "WATCHER_UNIT: systemd --user unavailable; the lock-holding session will start the tmux keeper fallback"
       elif ! ensure_keeper; then
         echo "WATCHER_UNIT: systemd --user unavailable and the tmux keeper fallback failed"
+      fi
+      # Same question, same wording, asked of the keeper's own record.  Skipped
+      # when there is no record at all, because "no keeper is running" is the
+      # branch above's sentence to say, not this one's.
+      if [ -n "$(recorded_keeper_path)" ]; then
+        report_recorded_path "$(recorded_keeper_path)"
       fi
       ;;
     *)

@@ -1283,6 +1283,12 @@ fm_pid_identity "$WATCHER_PID" > "$WATCH_LOCK/pid-identity" 2>/dev/null || true
 printf '%s\n' "${FM_WATCH_MANAGER:-session}" > "$WATCH_LOCK/manager" || true
 printf '%s\n' "${FM_WATCH_SOURCE_VERSION:-unknown}" > "$WATCH_LOCK/source-version" || true
 printf '%s\n' "${FM_WATCH_X_MODE_VERSION:-absent}" > "$WATCH_LOCK/x-mode-version" || true
+# The PATH this watcher was HANDED, recorded so a later convergence can compare
+# it. Only the keeper tier sets it: systemd's copy lives in the service
+# environment file the unit loads, which fm-watcher-service.sh already compares,
+# while a keeper receives its PATH as a launch argument that would otherwise
+# leave no trace at all.
+printf '%s\n' "${FM_WATCH_SERVICE_PATH:-}" > "$WATCH_LOCK/service-path" || true
 printf '%s\n' "$WATCH_DAEMON" > "$WATCH_LOCK/daemon" || true
 
 [ -e "$STATE/.last-heartbeat" ] || touch "$STATE/.last-heartbeat"
