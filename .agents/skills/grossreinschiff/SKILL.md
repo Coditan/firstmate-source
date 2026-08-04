@@ -4,7 +4,7 @@ description: >-
   Sweep the fleet for records, instructions, branches, tools, and workspaces that have stopped being true, and report each finding with the test behind its verdict.
   Use when the session-start check reports GROSSREINSCHIFF, when the captain invokes /grossreinschiff or asks for the weekly cleanup, and before any fleet-wide claim that rests on records nobody has re-measured.
   It reports; it never deletes. Deletion is a separate authorised step, and inside a project it is a dispatched worker's task, never firstmate's own write.
-  It never judges landedness by ancestry, because this fleet squashes; it states what it did not cover, because a sweep that implies completeness it does not have is the defect class it exists to clean.
+  It never judges landedness by ancestry, because the fleet's history contains squash merges and callers can still request them; it states what it did not cover, because a sweep that implies completeness it does not have is the defect class it exists to clean.
 user-invocable: true
 metadata:
   internal: true
@@ -35,7 +35,7 @@ These bind every item below. They are properties, not preferences: each one is a
    Inside a project - and a project's remote branches are inside a project - firstmate never performs the deletion itself; it dispatches a worker, per `AGENTS.md` section 1 rule 1.
 
 2. **It never tests landedness by ancestry.**
-   This fleet squashes, so ancestry reports "unmerged" for content that is fully landed.
+   The fleet's history contains squash merges, and callers can still request one, so ancestry reports "unmerged" for content that is fully landed.
    On `coditan-bridge`, 152 of 154 branches read as unmerged and 146 of them were tombstones of landed work; on this repo, ancestry settles 18 of 52 merged-PR branches and calls the other 34 unmerged.
    Use the ladder below. That single mistake would have deleted real work.
 
@@ -79,7 +79,7 @@ The first two were hit in practice; the last two were caught by applying this sk
   A recorded merge commit that is not on the default branch proves nothing about the default branch.
 - **A vacuous universal is a false certainty.**
   **X** is quantified over the paths the branch adds, so a branch that adds none satisfies both of its conjuncts on zero evidence and would be handed the definitive verdict `not landed`.
-  That state is reachable exactly where this ladder is routine: **A** fails because the fleet squashes, **P** fails when no forge merge commit is recorded or it is not an ancestor of the default branch, and **C** goes inconclusive on the conflict above.
+  That state is reachable exactly where this ladder is routine: **A** fails on any squash-merged branch, **P** fails when no forge merge commit is recorded or it is not an ancestor of the default branch, and **C** goes inconclusive on the conflict above.
   Safety property 3 bars promoting an unsettled branch to a definitive verdict, so the precondition in the **X** row is the rule and has no exception.
 - **E's place in the order is load-bearing in both directions.**
   It must come after **A**, because a branch that is already an ancestor has itself as its merge base and would be relabelled `landed (vacuous)` on a triviality.

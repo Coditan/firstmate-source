@@ -208,8 +208,9 @@ test_disable_silences_detect_but_not_the_other_modes() {
 
 # --- the landedness ladder --------------------------------------------------
 #
-# Property 2 of the skill: never judge landedness by ancestry, because this
-# fleet squashes. These build the squash flow and prove each rung.
+# Property 2 of the skill: never judge landedness by ancestry, because the
+# fleet's history contains squash merges and callers can still request them.
+# These build the squash flow and prove each rung.
 
 ladder_fixture() {
   local repo=$1
