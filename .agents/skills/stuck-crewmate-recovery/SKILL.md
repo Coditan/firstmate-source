@@ -23,6 +23,8 @@ Load `secondmate-provisioning` instead for `kind=secondmate` recovery.
 
 Treat the digest's endpoint result as a presence signal, not proof that the task's work or validation run is gone.
 Read the targeted current state with `bin/fm-crew-state.sh <id>` before deciding to relaunch.
+If that read answers `degraded` with a `missing-dependency` source, stop this procedure: a required tool is not on the reading process's `PATH`, so nothing is known about this crew and relaunching would abandon a worker that may be working perfectly.
+Repair the named tool's reachability first, or report that the fleet cannot currently read crew state, and only then reconcile.
 A no-mistakes run matched to the crew's branch and current code remains authoritative when the endpoint is dead: handle a terminal or parked run through the normal lifecycle, and keep supervising an active run instead of creating a duplicate worker.
 
 When no authoritative run accounts for the task, inspect only its recorded backend and worktree inventory.

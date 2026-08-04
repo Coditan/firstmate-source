@@ -361,6 +361,11 @@ signal_reason_is_actionable() {  # <file> ...
 #             (e.g. waiting on CI);
 #   paused  - the crew's authoritative current state is a declared external-wait
 #             pause (paused:), which is EXPECTED to idle;
+#   degraded- the reader could not consult its authoritative source because a
+#             required tool is not installed on this machine (fm-crew-state.sh's
+#             `degraded - missing-dependency` verdict). NOT a statement about the
+#             crew: the supervisor must report the broken instrument rather than
+#             draw either conclusion from it;
 #   none    - neither, so the wake must surface (a stopped/finished/parked/failed/
 #             torn-down/unknown crew, or an unreadable verdict).
 # One fm-crew-state.sh read serves BOTH absorb reasons at once. Reading the state
@@ -377,11 +382,20 @@ crew_absorb_class() {  # <id>
   case "$line" in state:*) ;; *) printf 'none'; return ;; esac
   state=${line#state: }; state=${state%% *}
   if [ "$state" = paused ]; then printf 'paused'; return; fi
+  if [ "$state" = degraded ]; then printf 'degraded'; return; fi
   if [ "$state" = working ]; then
     src=${line#*source: }; src=${src%% *}
     case "$src" in run-step|pane) printf 'working'; return ;; esac
   fi
   printf 'none'
+}
+
+# 0 if crew <id>'s state could not be read because a required tool is missing.
+# Deliberately its own predicate rather than a `none` special case: `none` means
+# "read it, found nothing working", and a caller that treats the two alike is the
+# exact mistake this verdict exists to prevent.
+crew_is_degraded() {  # <id>
+  [ "$(crew_absorb_class "$1")" = degraded ]
 }
 
 # 0 if crew <id> shows POSITIVE evidence it is still working (crew_absorb_class

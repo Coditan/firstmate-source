@@ -138,6 +138,27 @@ make_no_timeout_toolbin() {  # <dir> -> echoes toolbin path
   printf '%s\n' "$tb"
 }
 
+# A toolbin holding everything the helper needs EXCEPT the tools whose absence is
+# under test. Used as the whole PATH so the developer's own rich PATH cannot
+# quietly supply the missing tool - the exact way the 2026-08 watcher blindness
+# passed every existing test while failing in production, where systemd's
+# user-manager PATH reached neither the no-mistakes CLI nor a home-local backend
+# CLI.
+make_stripped_toolbin() {  # <dir> -> echoes toolbin path
+  local dir=$1 tb="$1/strippedbin" tool real
+  mkdir -p "$tb"
+  for tool in bash git grep sed awk head cut tail tr dirname basename date stat cksum mktemp timeout; do
+    real=$(command -v "$tool" || true)
+    [ -n "$real" ] || continue
+    ln -s "$real" "$tb/$tool"
+  done
+  for tool in bash git grep sed; do
+    [ -e "$tb/$tool" ] || fail "missing core tool for the stripped path: $tool"
+  done
+  [ ! -e "$tb/no-mistakes" ] || fail "the stripped toolbin must not contain no-mistakes"
+  printf '%s\n' "$tb"
+}
+
 # Run the helper for one case dir. FM_FAKE_* env (run output, busy flag) are read
 # from the caller's environment by the fakes above.
 run_crew_state() {  # <case-dir> <id>
@@ -1134,6 +1155,113 @@ EOF
   pass "crew_is_provably_working still surfaces a genuinely stopped crew (safety property preserved)"
 }
 
+# (l) A source that could not be consulted BECAUSE A REQUIRED TOOL IS MISSING is
+# reported as `degraded - missing-dependency`, never as an ordinary `unknown`.
+# The 2026-08 watcher blindness lasted weeks because those two answers were the
+# same string: systemd's user-manager PATH reached no no-mistakes CLI, every ship
+# crew read `unknown - none`, and every caller treated a broken instrument as a
+# valid quiet reading. Each case below runs on a STRIPPED PATH holding only the
+# hermetic toolbin, so the test cannot pass merely because the developer's shell
+# is well provisioned.
+test_missing_no_mistakes_is_degraded_not_unknown() {
+  reset_fakes
+  local d toolbin out rc
+  d=$(new_case missing-nm)
+  make_repo_on_branch "$d/wt" fm/feat-nm-missing
+  make_fakebin "$d" >/dev/null
+  rm -f "$d/fakebin/no-mistakes"
+  toolbin=$(make_stripped_toolbin "$d")
+  fm_write_meta "$d/state/nm-missing.meta" "window=fm:fm-nm-missing" "worktree=$d/wt" "kind=ship"
+  # Idle pane and a status log whose last verb maps to no state: the exact shape
+  # that used to answer "no current-state source available".
+  FM_FAKE_BUSY=0
+  printf 'resolved: carried on\n' > "$d/state/nm-missing.status"
+  out=$(PATH="$d/fakebin:$toolbin" FM_STATE_OVERRIDE="$d/state" "$CREW_STATE" nm-missing); rc=$?
+  expect_code 0 "$rc" "a degraded read still exits 0"
+  assert_contains "$out" "state: degraded" "a missing no-mistakes CLI must not answer with a crew state"
+  assert_contains "$out" "source: missing-dependency" "a missing no-mistakes CLI must name the missing dependency as the source"
+  assert_not_contains "$out" "state: unknown" "a broken instrument must not report the crew as unknown"
+  pass "an unreadable run-step from a missing no-mistakes CLI reports degraded, not unknown"
+}
+
+test_missing_backend_cli_is_degraded_not_gone() {
+  reset_fakes
+  local d toolbin out
+  d=$(new_case missing-backend-cli)
+  make_repo_on_branch "$d/wt" fm/feat-backend-missing
+  make_fakebin "$d" >/dev/null
+  rm -f "$d/fakebin/herdr"
+  toolbin=$(make_stripped_toolbin "$d")
+  fm_write_meta "$d/state/backend-missing.meta" "window=default:w1:p2" "worktree=$d/wt" "kind=scout" "backend=herdr"
+  out=$(PATH="$d/fakebin:$toolbin" FM_STATE_OVERRIDE="$d/state" "$CREW_STATE" backend-missing)
+  assert_contains "$out" "state: degraded" "an unreadable endpoint with no backend CLI must not be called gone"
+  assert_contains "$out" "source: missing-dependency" "the missing backend CLI must be named as the source"
+  assert_not_contains "$out" "backend target gone" "a missing backend CLI must not be reported as a dead endpoint"
+  pass "an endpoint that cannot be read for want of its own CLI reports degraded, not gone"
+}
+
+# The discrimination has to cut both ways: with the backend CLI installed, an
+# endpoint that will not answer really is gone, and must keep saying so. A fix
+# that answered `degraded` for every unreadable endpoint would disarm the
+# stopped-crew alarm entirely.
+test_present_backend_cli_still_reports_a_dead_endpoint() {
+  reset_fakes
+  local d toolbin out
+  d=$(new_case present-backend-cli-dead-endpoint)
+  make_repo_on_branch "$d/wt" fm/feat-really-dead
+  make_fakebin "$d" >/dev/null
+  toolbin=$(make_stripped_toolbin "$d")
+  fm_write_meta "$d/state/really-dead.meta" "window=default:w1:p2" "worktree=$d/wt" "kind=scout" "backend=herdr"
+  FM_FAKE_HERDR_MISSING=1
+  out=$(PATH="$d/fakebin:$toolbin" FM_STATE_OVERRIDE="$d/state" "$CREW_STATE" really-dead)
+  assert_contains "$out" "backend target gone" "an installed backend CLI that cannot read the endpoint still means the crew is gone"
+  assert_not_contains "$out" "degraded" "a readable toolchain must not excuse a dead endpoint as degraded"
+  pass "a dead endpoint is still reported as gone when the backend CLI is installed"
+}
+
+# Positive evidence outranks the degradation: a busy pane is a reading from a
+# source that works, so a missing no-mistakes CLI must not downgrade it. Without
+# this, the fix would trade one blind spot for another - every busy crew would
+# read as unreadable on a home that never installed no-mistakes.
+test_missing_no_mistakes_still_trusts_a_busy_pane() {
+  reset_fakes
+  local d toolbin out
+  d=$(new_case missing-nm-busy)
+  make_repo_on_branch "$d/wt" fm/feat-nm-busy
+  make_fakebin "$d" >/dev/null
+  rm -f "$d/fakebin/no-mistakes"
+  toolbin=$(make_stripped_toolbin "$d")
+  fm_write_meta "$d/state/nm-busy.meta" "window=fm:fm-nm-busy" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_BUSY=1
+  out=$(PATH="$d/fakebin:$toolbin" FM_STATE_OVERRIDE="$d/state" "$CREW_STATE" nm-busy)
+  assert_contains "$out" "state: working" "a busy pane is still positive evidence without no-mistakes"
+  assert_contains "$out" "source: pane" "a busy pane must still be attributed to the pane source"
+  pass "a working source still answers even while another source's tool is missing"
+}
+
+# The classifier must act on the difference, not fold it back into `none`.
+test_degraded_classifies_as_its_own_absorb_class() {
+  reset_fakes
+  local d toolbin class
+  d=$(new_case degraded-class)
+  make_repo_on_branch "$d/wt" fm/feat-degraded-class
+  make_fakebin "$d" >/dev/null
+  rm -f "$d/fakebin/no-mistakes"
+  toolbin=$(make_stripped_toolbin "$d")
+  fm_write_meta "$d/state/degraded-class.meta" "window=fm:fm-degraded-class" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_BUSY=0
+  printf 'resolved: carried on\n' > "$d/state/degraded-class.status"
+  class=$(PATH="$d/fakebin:$toolbin" FM_STATE_OVERRIDE="$d/state" crew_absorb_class degraded-class)
+  [ "$class" = degraded ] || fail "crew_absorb_class collapsed a missing-dependency read into '$class'"
+  PATH="$d/fakebin:$toolbin" FM_STATE_OVERRIDE="$d/state" crew_is_degraded degraded-class \
+    || fail "crew_is_degraded did not recognize a missing-dependency read"
+  PATH="$d/fakebin:$toolbin" FM_STATE_OVERRIDE="$d/state" crew_is_provably_working degraded-class \
+    && fail "a degraded read must never be mistaken for proof of work"
+  PATH="$d/fakebin:$toolbin" FM_STATE_OVERRIDE="$d/state" crew_is_paused degraded-class \
+    && fail "a degraded read must never be mistaken for a declared pause"
+  pass "crew_absorb_class gives a missing-dependency read its own verdict"
+}
+
 # Usage error (no id) is the one non-zero exit.
 test_usage_error() {
   reset_fakes
@@ -1368,5 +1496,10 @@ test_terminal_run_unbindable_head_not_attributed
 test_coarse_running_row_with_unpushed_head_attributed
 test_local_advanced_past_run_head_invalidates
 test_missing_run_head_falls_back_to_current_state
+test_missing_no_mistakes_is_degraded_not_unknown
+test_missing_backend_cli_is_degraded_not_gone
+test_present_backend_cli_still_reports_a_dead_endpoint
+test_missing_no_mistakes_still_trusts_a_busy_pane
+test_degraded_classifies_as_its_own_absorb_class
 
 echo "all fm-crew-state tests passed"

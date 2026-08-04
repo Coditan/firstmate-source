@@ -37,6 +37,14 @@ case "$STOP_TIMEOUT" in ''|*[!0-9]*|0) STOP_TIMEOUT=20 ;; esac
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-service-path-lib.sh
+. "$SCRIPT_DIR/fm-service-path-lib.sh"
+# shellcheck source=bin/fm-axi-path-lib.sh
+. "$SCRIPT_DIR/fm-axi-path-lib.sh"
+# Composed values resolve tools through THIS process's PATH, so the home's own
+# AXI prefix has to lead it here or the service would be handed whichever older
+# copy the launching session happened to resolve.
+fm_axi_prepend_path "$FM_HOME"
 
 watch_source_version() {
   local file sum size
@@ -144,10 +152,16 @@ systemd_env_quote() {
   printf '"%s"' "$value"
 }
 
+# The unit template sets no PATH, so without this line the watcher would inherit
+# systemd's user-manager default and silently lose every tool outside it (see
+# bin/fm-service-path-lib.sh for the verified failure).  Recorded here rather
+# than in the unit because the tool locations are per-deployment, and compared by
+# service_env_matches so a home whose toolchain moved reconverges and restarts.
 write_service_env() {
-  local version x_version tmp changed=0
+  local version x_version resolved_path tmp changed=0
   version=$(watch_source_version) || return 1
   x_version=$(x_mode_version) || return 1
+  resolved_path=$(fm_service_path) || return 1
   mkdir -p "$STATE" || return 1
   tmp=$(mktemp "$STATE/.watch-service.env.XXXXXX") || return 1
   {
@@ -156,6 +170,7 @@ write_service_env() {
     printf 'FM_STATE_OVERRIDE=%s\n' "$(systemd_env_quote "$STATE")"
     printf 'FM_WATCH_EXEC=%s\n' "$(systemd_env_quote "$WATCH")"
     printf 'FM_WATCH_MANAGER=systemd\n'
+    printf 'PATH=%s\n' "$(systemd_env_quote "$resolved_path")"
     printf 'FM_WATCH_SOURCE_VERSION=%s\n' "$(systemd_env_quote "$version")"
     printf 'FM_WATCH_X_MODE_VERSION=%s\n' "$(systemd_env_quote "$x_version")"
   } > "$tmp" || { rm -f "$tmp"; return 1; }
@@ -170,17 +185,33 @@ write_service_env() {
 }
 
 service_env_matches() {
-  local version x_version
+  local version x_version resolved_path
   [ -f "$SERVICE_ENV" ] && [ ! -L "$SERVICE_ENV" ] || return 1
   version=$(watch_source_version) || return 1
   x_version=$(x_mode_version) || return 1
+  resolved_path=$(fm_service_path) || return 1
   grep -Fx "FM_HOME=$(systemd_env_quote "$FM_HOME")" "$SERVICE_ENV" >/dev/null 2>&1 \
     && grep -Fx "FM_ROOT_OVERRIDE=$(systemd_env_quote "$FM_ROOT")" "$SERVICE_ENV" >/dev/null 2>&1 \
     && grep -Fx "FM_STATE_OVERRIDE=$(systemd_env_quote "$STATE")" "$SERVICE_ENV" >/dev/null 2>&1 \
     && grep -Fx "FM_WATCH_EXEC=$(systemd_env_quote "$WATCH")" "$SERVICE_ENV" >/dev/null 2>&1 \
     && grep -Fx 'FM_WATCH_MANAGER=systemd' "$SERVICE_ENV" >/dev/null 2>&1 \
+    && grep -Fx "PATH=$(systemd_env_quote "$resolved_path")" "$SERVICE_ENV" >/dev/null 2>&1 \
     && grep -Fx "FM_WATCH_SOURCE_VERSION=$(systemd_env_quote "$version")" "$SERVICE_ENV" >/dev/null 2>&1 \
     && grep -Fx "FM_WATCH_X_MODE_VERSION=$(systemd_env_quote "$x_version")" "$SERVICE_ENV" >/dev/null 2>&1
+}
+
+# The PATH the INSTALLED service will actually run with, read back from the file
+# systemd loads rather than recomputed - the question "can the running watcher
+# reach its own tools" must not be answered from the asking session's reach.
+recorded_service_path() {
+  local line
+  line=$(grep -E '^PATH=' "$SERVICE_ENV" 2>/dev/null | tail -1) || return 1
+  [ -n "$line" ] || return 1
+  line=${line#PATH=}
+  case "$line" in
+    \"*\") line=${line#\"}; line=${line%\"} ;;
+  esac
+  printf '%s' "$line"
 }
 
 watcher_record_matches() {
@@ -297,13 +328,19 @@ stop_keeper() {
   "$TMUX" kill-session -t "$name"
 }
 
+# The resolved PATH is passed as an argument, not exported: `tmux new-session`
+# runs its command under the tmux SERVER's environment, not this caller's, so a
+# server started long ago from a stripped context would hand the keeper exactly
+# the defect the systemd side just fixed.  An argument is the only channel that
+# reaches the keeper regardless of who started the server.
 start_keeper() {
-  local name version x_version
+  local name version x_version resolved_path
   name=$(keeper_name)
   version=$(watch_source_version) || return 1
   x_version=$(x_mode_version) || return 1
+  resolved_path=$(fm_service_path) || return 1
   mkdir -p "$STATE" || return 1
-  "$TMUX" new-session -d -s "$name" "$SCRIPT_DIR/fm-watch-keeper.sh" "$FM_HOME" "$FM_ROOT" "$STATE" "$version" "$x_version"
+  "$TMUX" new-session -d -s "$name" "$SCRIPT_DIR/fm-watch-keeper.sh" "$FM_HOME" "$FM_ROOT" "$STATE" "$version" "$x_version" "$resolved_path"
 }
 
 ensure_keeper() {
@@ -335,7 +372,7 @@ linger_enabled() {
 }
 
 bootstrap_check() {
-  local backend unit changed=0
+  local backend unit unreachable changed=0
   backend=$(select_backend)
   case "$backend" in
     systemd)
@@ -351,6 +388,17 @@ bootstrap_check() {
         fi
       elif ! ensure_systemd >/dev/null; then
         echo "WATCHER_UNIT: $unit convergence failed - inspect systemctl --user status $unit"
+      fi
+      # Asked of the RECORDED environment, after any convergence above, so it
+      # reports what the running service can actually reach. A watcher that
+      # cannot resolve its own tools does not fail - it answers "no state
+      # available" for every crew, which is why this has to be stated rather
+      # than waited for.
+      if systemd_installed; then
+        unreachable=$(fm_service_path_unreachable "$(recorded_service_path 2>/dev/null || true)")
+        if [ -n "$unreachable" ]; then
+          echo "WATCHER_UNIT: the watcher's recorded PATH cannot reach $(printf '%s' "$unreachable" | tr '\n' ' ' | sed 's/ $//') - crew state will read as unavailable until it can"
+        fi
       fi
       if ! linger_enabled; then
         echo "WATCHER_UNIT: user lingering is disabled - approve: bin/fm-bootstrap.sh install watcher-linger"

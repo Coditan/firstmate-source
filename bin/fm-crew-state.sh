@@ -16,7 +16,24 @@
 # fixed mapping logic, no heuristics and no LLM. Output is one stable, parseable,
 # token-tight line firstmate can read every heartbeat:
 #
-#   state: <working|parked|done|blocked|paused|failed|unknown> · source: <run-step|pane|status-log|none> · <detail>
+#   state: <working|parked|done|blocked|paused|failed|unknown|degraded> · source: <run-step|pane|status-log|none|missing-dependency> · <detail>
+#
+# `degraded` is NOT a crew state - it is this reader refusing to answer. It is
+# emitted when a source could not be consulted BECAUSE A REQUIRED TOOL IS NOT ON
+# PATH, and no other source produced a state. The distinction is load-bearing:
+# an absence verdict ("no current-state source available", "backend target
+# gone") is a positive claim about the crew, and a reader whose instrument is
+# missing has no standing to make it. Collapsing the two is how the 2026-08
+# watcher blindness survived for weeks - systemd's user-manager PATH reached no
+# no-mistakes CLI, every ship crew answered `unknown - none`, and every caller
+# treated a broken instrument as a valid quiet reading (bin/fm-service-path-lib.sh
+# owns the PATH fix; bin/fm-classify-lib.sh's crew_absorb_class owns what a
+# supervisor does with `degraded`). Two answers survive a missing run-step
+# reader, because neither depends on it: a busy pane, which is independent
+# positive evidence, and a DECLARED pause, which is the crew's own statement
+# rather than an inference. Every other status-log verb is a stale event this
+# script exists to reconcile against the run-step, so with the run-step unread it
+# is not a reading and must not be passed off as one.
 #
 # Logic, in order:
 #   1. Resolve worktree + backend target + kind from state/<id>.meta.
@@ -47,7 +64,9 @@
 #      `resolved` never become current state or detail.
 #   5. Missing meta or torn-down worktree: report unknown · none. If no run is
 #      attributed to this crew, a dead endpoint also reports unknown · none rather
-#      than trusting a stale status log.
+#      than trusting a stale status log - UNLESS the tool that reads endpoints, or
+#      the one that reads run-steps, is not installed, in which case the answer is
+#      degraded · missing-dependency (see above).
 #
 # Read-only and side-effect free. Always exits 0 on a successful read regardless
 # of state; exit 2 only on a usage error (no id).
@@ -86,6 +105,13 @@ emit() {  # <state> <source> [detail]
   [ -n "${3:-}" ] && line="$line${SEP}$3"
   printf '%s\n' "$line"
   exit 0
+}
+
+# The one wording for "the authoritative run-step reader is not installed here".
+# <because> says which weaker answer was therefore refused, so a supervisor can
+# see what was given up rather than only that something was.
+emit_missing_no_mistakes() {  # <because>
+  emit degraded missing-dependency "no-mistakes CLI not on PATH: the run-step state was never read and $1"
 }
 
 # --- meta resolution --------------------------------------------------------
@@ -491,9 +517,18 @@ HAVE_RUN=0
 # run-step block below skips the TOON field parsing entirely for this crew.
 RUN_SOURCE=full
 COARSE_STATUS=""
+# 1 when the run-step source was SKIPPED because the no-mistakes CLI is not on
+# PATH, for a crew that would otherwise have been looked up. That is a broken
+# instrument, not evidence about the crew, so it is tracked separately from
+# HAVE_RUN=0 (which also covers "this crew genuinely has no run") and consumed
+# only by the absence branches at the bottom of this script.
+NM_MISSING=0
+if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && ! command -v no-mistakes >/dev/null 2>&1; then
+  NM_MISSING=1
+fi
 # Scouts and secondmates never drive a no-mistakes validation of their own
 # worktree, so skip the lookup for them and read state from pane/log directly.
-if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes >/dev/null 2>&1; then
+if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && [ "$NM_MISSING" = 0 ]; then
   RUN_OUT=$(nm_run axi status)
   if [ -n "$RUN_OUT" ]; then
     run_branch=$(strip_quotes "$(nm_field branch)")
@@ -640,7 +675,16 @@ fi
 # is no run to consult, so a dead/unreadable target means the crew is gone: report
 # unknown rather than trusting a possibly-stale status log as the current state.
 [ -n "$BACKEND_TARGET" ] || emit unknown none "no backend target recorded"
-pane_readable "$BACKEND_TARGET" || emit unknown none "backend target gone: $BACKEND_TARGET"
+# An unreadable endpoint means the crew is gone ONLY if the tool that reads
+# endpoints is installed. Without it, `fm_backend_capture` fails identically for
+# a live crew and a dead one, and answering "gone" would send firstmate into
+# stuck-crewmate recovery against a perfectly healthy worker.
+if ! pane_readable "$BACKEND_TARGET"; then
+  if ! fm_backend_session_cli_available "$TASK_BACKEND"; then
+    emit degraded missing-dependency "$TASK_BACKEND CLI not on PATH: endpoint $BACKEND_TARGET cannot be read"
+  fi
+  emit unknown none "backend target gone: $BACKEND_TARGET"
+fi
 
 # Secondmates idle on their own watcher (idle pane = healthy), so the busy
 # signature is not meaningful for them; read their state from the status log only.
@@ -661,8 +705,21 @@ fi
 if [ -n "$LOG_VERB" ]; then
   LOG_STATE=$(map_log_state "$LOG_LINE")
   if [ "$LOG_STATE" != unknown ]; then
+    # A DECLARED pause survives a missing run-step reader: it is the crew's own
+    # statement that it is idle on purpose, not an inference this script drew,
+    # and the bounded recheck it earns is safe either way. Every other verb here
+    # is a stale echo of an event log that this script exists to reconcile
+    # against the run-step - and reconciliation is exactly what did not happen.
+    if [ "$NM_MISSING" = 1 ] && [ "$LOG_STATE" != paused ]; then
+      emit_missing_no_mistakes "its '$LOG_VERB' event was never reconciled against the run"
+    fi
     emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")"
   fi
 fi
 
+# Nothing answered. Whether that is a fact about the crew or a fact about this
+# machine depends on whether the authoritative reader was even available.
+if [ "$NM_MISSING" = 1 ]; then
+  emit_missing_no_mistakes "no other source answered either"
+fi
 emit unknown none "no current-state source available"

@@ -1489,6 +1489,144 @@ test_wedge_escalation_marks_demand_deep_inspection_after_threshold() {
   pass "consecutive wedge escalations on the same pane accumulate and demand deep inspection at the threshold"
 }
 
+# --- the ladder-hold path under a STRIPPED service environment ----------------
+#
+# Every other ladder case in this file stubs the state reader through
+# FM_CREW_STATE_BIN, so they prove the watcher's BRANCHING and say nothing about
+# whether the real reader can answer at all. That gap is how the 2026-08 fleet
+# blindness shipped: the ladder-hold branch was correct, carefully commented,
+# and had never once executed on a real vessel, because systemd's user manager
+# handed the watcher a PATH containing no no-mistakes CLI, bin/fm-crew-state.sh
+# answered `unknown - none` for every crew, and `ladder held` appeared 0 times in
+# 2027 triage entries while long validations woke the supervising session every
+# four minutes. So this case runs the REAL bin/fm-crew-state.sh, and it runs it
+# under the literal systemd user-manager default PATH - a test that passes only
+# because the developer's own PATH is rich proves exactly nothing here.
+FM_TEST_SYSTEMD_DEFAULT_PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin'
+
+test_ladder_holds_under_a_stripped_service_environment() {
+  local dir state fakebin tools out window key pane_hash sig pid head service_path
+  # Named explicitly rather than left to the default: earlier cases in this file
+  # EXPORT a stubbed reader, and the whole point here is the real one.
+  local real_reader="$ROOT/bin/fm-crew-state.sh"
+  if ! PATH="$FM_TEST_SYSTEMD_DEFAULT_PATH" command -v git >/dev/null 2>&1; then
+    pass "stripped-environment ladder regression skipped: this host has no git on the systemd default PATH"
+    return
+  fi
+  dir=$(make_case ladder-stripped); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; tools="$dir/tools"; window="test:fm-stripped"
+
+  # A real worktree on a real branch, so the reader's branch attribution and
+  # head binding run for real rather than being stubbed away.
+  fm_git_identity fmtest fmtest@example.invalid
+  mkdir -p "$dir/wt" "$tools"
+  git -C "$dir/wt" init -q
+  git -C "$dir/wt" commit -q --allow-empty -m init
+  git -C "$dir/wt" checkout -q -b fm/feat-stripped
+  head=$(git -C "$dir/wt" rev-parse HEAD)
+
+  # The no-mistakes CLI lives OUTSIDE the stripped PATH, exactly as
+  # ~/.no-mistakes/bin does on a real vessel. Only a PATH that deliberately
+  # resolves it can reach it.
+  cat > "$tools/no-mistakes" <<SH
+#!/usr/bin/env bash
+set -u
+case "\${1:-} \${2:-}" in
+  "axi status")
+    cat <<'TOON'
+run:
+  id: "01RUN"
+  branch: fm/feat-stripped
+  status: running
+  head: "$head"
+  pr: ""
+  findings: none
+  steps[2]{step,status,findings,duration_ms}:
+    intent,completed,0,0
+    review,running,0,0
+TOON
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$tools/no-mistakes"
+
+  # The shared fake tmux answers only what a stubbed reader needs; the REAL
+  # reader also asks whether the endpoint is readable at all, so this case
+  # supplies a fake that answers that too. Without it the endpoint would read as
+  # gone and the case would never reach the question it exists to ask.
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in
+  list-windows) [ -n "${FM_FAKE_TMUX_WINDOW:-}" ] && printf '%s\n' "$FM_FAKE_TMUX_WINDOW"; exit 0 ;;
+  capture-pane) [ -n "${FM_FAKE_TMUX_CAPTURE:-}" ] && cat "$FM_FAKE_TMUX_CAPTURE"; exit 0 ;;
+  display-message)
+    case "$*" in
+      *pane_current_command*) printf '%s\n' "${FM_FAKE_TMUX_CURRENT_COMMAND:-}"; exit 0 ;;
+      *pane_id*) printf '%%1\n'; exit 0 ;;
+    esac ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/tmux"
+
+  printf 'idle while the review step runs' > "$dir/pane.txt"
+  printf 'window=%s\nkind=ship\nworktree=%s\n' "$window" "$dir/wt" > "$state/stripped.meta"
+  printf 'working: still validating\n' > "$state/stripped.status"
+  sig=$(seen_sig "$state/stripped.status"); printf '%s' "$sig" > "$state/.seen-stripped_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle while the review step runs")
+  # Prime the repeat-sight wedge timer directly: this case is about what happens
+  # at the escalation moment, not about first-sight classification.
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  printf '%s' "$pane_hash" > "$state/.stale-$key"
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+
+  # Phase A - the shipped defect's environment. The reader cannot find the CLI,
+  # so it must say so rather than answer for the crew, and the ladder must not
+  # climb on a reading nobody took.
+  PATH="$fakebin:$FM_TEST_SYSTEMD_DEFAULT_PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$real_reader" FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 60 || { reap "$pid"; fail "an unreadable crew state was silently absorbed instead of reported"; }
+  grep -F "crew state unreadable" "$out" >/dev/null \
+    || fail "a missing-dependency read was not reported as its own condition: $(cat "$out")"
+  grep -F "possible wedge" "$out" >/dev/null \
+    && fail "a broken state reader was reported as a possible wedge: $(cat "$out")"
+  [ ! -e "$state/.wedge-escalations-$key" ] \
+    || fail "a reading that was never taken still climbed the wedge ladder"
+
+  # Phase B - the same crew, the same moment, the same stripped base
+  # environment, differing ONLY in that the service resolves the tools it
+  # depends on. The real reader now attributes the active run, and the ladder
+  # holds.
+  service_path=$(PATH="$tools:$FM_TEST_SYSTEMD_DEFAULT_PATH" bash -c \
+    ". '$ROOT/bin/fm-service-path-lib.sh'; fm_service_path")
+  case "$service_path" in
+    *"$tools"*) ;;
+    *) fail "the composed service PATH did not resolve the tool it exists to reach: $service_path" ;;
+  esac
+  rm -f "$state/.degraded-$key" "$state/.wake-queue" "$state/.watch-triage.log"
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+  : > "$out"
+  PATH="$fakebin:$service_path" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$real_reader" FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 60; then
+    reap "$pid"; fail "an active run climbed the wedge ladder under a resolved service PATH: $(cat "$out")"
+  fi
+  grep -F "ladder held" "$state/.watch-triage.log" >/dev/null \
+    || fail "the ladder-hold branch never executed: $(cat "$state/.watch-triage.log" 2>/dev/null)"
+  [ ! -s "$state/.wake-queue" ] || fail "a held ladder still enqueued a wake: $(cat "$state/.wake-queue")"
+  [ ! -e "$state/.wedge-escalations-$key" ] || fail "a held ladder still incremented the escalation counter"
+  reap "$pid"
+  pass "the ladder holds for a provably-working crew under a stripped environment, and an unreadable read is reported instead"
+}
+
 # --- the follow-on terminal stale for an already-surfaced line -----------------
 # The real doubling: a crew's done: line wakes firstmate through the signal path,
 # then its turn ends, its pane settles to a NEW stable hash seconds later, and
@@ -2015,6 +2153,7 @@ test_codex_backstop_scoped_to_codex
 test_terminal_stale_already_surfaced_absorbed_then_escalates
 test_terminal_stale_changed_line_still_surfaces
 test_wedge_escalation_marks_demand_deep_inspection_after_threshold
+test_ladder_holds_under_a_stripped_service_environment
 test_wedge_hold_bounded_recheck_after_long_freeze
 test_wedge_escalation_resets_when_pane_becomes_active
 test_nonterminal_stale_not_working_surfaced

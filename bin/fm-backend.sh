@@ -332,6 +332,17 @@ fm_backend_required_tool_available() {  # <backend> <tool>
   esac
 }
 
+# fm_backend_session_cli_available: 0 when the session-provider CLI a READ of
+# <backend> needs resolves on the current PATH. Every backend's session CLI is
+# named after the backend itself (fm_backend_required_tools above), so this asks
+# the existing required-tool owner about that one tool instead of keeping a
+# second name list - and inherits its cmux special case for free. Callers use it
+# to tell "this endpoint is gone" apart from "the tool that reads endpoints is
+# not installed here", which look identical in a capture's exit status.
+fm_backend_session_cli_available() {  # <backend>
+  fm_backend_required_tool_available "$1" "$1"
+}
+
 # fm_meta_get: the LAST value of `key=` in <meta-file>, or empty (never
 # errors) if the file or key is absent. Mirrors the ad hoc `grep '^key=' |
 # tail -1 | cut -d= -f2-` snippet every fm-*.sh script used to repeat inline.

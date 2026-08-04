@@ -62,6 +62,11 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-axi-path-lib.sh"
 AXI_PREFIX=$(fm_axi_prefix "$FM_HOME")
 AXI_BIN=$(fm_axi_bin_dir "$FM_HOME")
+# The environment as this process FOUND it, captured before the prepend below.
+# Everything after that line resolves the maintained copy by construction, so
+# this is the only moment at which "which copy actually runs elsewhere" can
+# still be asked. See fm_axi_shadowed for what that question is worth.
+AMBIENT_PATH=${PATH:-}
 fm_axi_prepend_path "$FM_HOME"
 INTERVAL=${FM_AXI_SUITE_CHECK_INTERVAL:-86400}
 CHECK_ONLY=0
@@ -225,6 +230,29 @@ emit_cached() {
   [ -f "$DIAGNOSTICS" ] && cat "$DIAGNOSTICS"
   [ -f "$STUCK" ] && cat "$STUCK"
 }
+
+# Report the suite tools that resolve somewhere other than the copy this home
+# maintains. Deliberately OUTSIDE the cadence gate below and never cached: it
+# costs only a few PATH lookups, it answers a question about the CALLER's
+# environment rather than about the registry, and that environment changes
+# between sessions while a cadence stamp does not. Reported as its own line so
+# the startup report can never merge "the suite is current" with "the current
+# suite is the one that runs" into a single all-clear - merging them is the
+# defect, at this site and at the watcher's.
+report_shadowed() {
+  local shadowed tool resolved
+  # shellcheck disable=SC2086 # SUITE is a space-separated tool list, split on purpose.
+  shadowed=$(fm_axi_shadowed "$AMBIENT_PATH" "$FM_HOME" $SUITE) || return 0
+  [ -n "$shadowed" ] || return 0
+  while IFS=$'\t' read -r tool resolved; do
+    [ -n "$tool" ] || continue
+    printf 'AXI_SUITE_SHADOWED: %s runs from %s, not the maintained copy in %s\n' \
+      "$tool" "$resolved" "$AXI_BIN"
+  done <<EOF
+$shadowed
+EOF
+}
+report_shadowed
 
 now=$(date +%s 2>/dev/null || echo 0)
 if [ "$FORCE" -ne 1 ] && [ -f "$STAMP" ] && [ -f "$PREFIX_CUTOVER" ]; then

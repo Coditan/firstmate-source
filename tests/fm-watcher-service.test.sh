@@ -6,6 +6,8 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 SERVICE="$ROOT/bin/fm-watcher-service.sh"
+# shellcheck source=bin/fm-service-path-lib.sh
+. "$ROOT/bin/fm-service-path-lib.sh"
 unset FM_TEST_SKIP_WATCHER_SERVICE
 fm_test_tmproot TMP_ROOT fm-watcher-service
 
@@ -88,7 +90,11 @@ case "${1:-}" in
     kill -0 "$pid" 2>/dev/null
     ;;
   new-session)
-    "$5" "$6" "$7" "$8" "$9" "${10}" >/dev/null 2>&1 &
+    # A real tmux runs the command under the SERVER's environment, not this
+    # caller's, which is why the keeper takes the PATH it must run with as an
+    # argument. Record that argument so the test can assert it was supplied.
+    printf '%s\n' "${11}" > "${FM_TEST_KEEPER_PATH_FILE:-/dev/null}"
+    "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" >/dev/null 2>&1 &
     printf '%s\n' "$!" > "$FM_TEST_KEEPER_PID_FILE"
     ;;
   kill-session)
@@ -147,8 +153,15 @@ test_keeper_fallback_establishes_real_watcher() {
   : > "$log"
   FM_HOME="$home" FM_WATCH_SERVICE_FORCE_BACKEND=keeper FM_WATCH_TMUX="$fakebin/tmux" \
     FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$TMP_ROOT/keeper.pid" \
+    FM_TEST_KEEPER_PATH_FILE="$TMP_ROOT/keeper.path" \
     FM_POLL=1 FM_WATCH_STOP_TIMEOUT=3 FM_ARM_CONFIRM_TIMEOUT=5 "$SERVICE" ensure \
     || fail "tmux keeper fallback did not establish a healthy watcher"
+  # The keeper tier must resolve its own tools too: a fix that only reached the
+  # systemd unit would leave every keeper-backed home reading crew state blind.
+  [ "$(cat "$TMP_ROOT/keeper.path")" = "$(fm_service_path)" ] \
+    || fail "the keeper was launched without the resolved service PATH: $(cat "$TMP_ROOT/keeper.path")"
+  [ -z "$(fm_service_path_unreachable "$(cat "$TMP_ROOT/keeper.path")")" ] \
+    || fail "the keeper's PATH cannot reach $(fm_service_path_unreachable "$(cat "$TMP_ROOT/keeper.path")" | tr '\n' ' ')"
   manager=$(cat "$home/state/.watch.lock/manager")
   [ "$manager" = keeper ] || fail "fallback watcher recorded manager=$manager instead of keeper"
   assert_contains "$(cat "$log")" "new-session -d -s fm-watch-" "fallback did not start a detached home-scoped keeper"
@@ -228,7 +241,54 @@ test_installed_unit_converges_source_and_x_mode() {
   pass "locked bootstrap restarts stale source and X-mode systemd instances"
 }
 
+# The unit template sets no PATH, so a service that records none inherits
+# systemd's user-manager default - the 2026-08 defect, where the watcher could
+# reach neither the no-mistakes CLI nor gh and answered "no state available" for
+# every crew without ever failing. Two properties are pinned here: the recorded
+# environment carries a PATH that reaches the tools this machine has, and a home
+# whose recorded PATH does NOT reach them says so at startup instead of running
+# blind.
+test_service_env_records_a_reaching_path_and_reports_one_that_does_not() {
+  local fakebin home unitdir log env_text recorded detect_out
+  fakebin="$TMP_ROOT/servicepath-bin"
+  home="$TMP_ROOT/servicepath-home"
+  unitdir="$TMP_ROOT/servicepath-units"
+  log="$TMP_ROOT/systemctl-servicepath.log"
+  mkdir -p "$home/state" "$home/config" "$unitdir"
+  make_fake_systemd "$fakebin"
+  cp "$ROOT/systemd/fm-watch@.service" "$unitdir/fm-watch@.service"
+  : > "$log"
+  : > "$TMP_ROOT/loginctl-servicepath.log"
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_WATCH_SERVICE_FORCE_BACKEND=systemd \
+    FM_WATCH_SYSTEMCTL="$fakebin/systemctl" FM_WATCH_SYSTEMD_UNIT_DIR="$unitdir" \
+    FM_TEST_SYSTEMCTL_LOG="$log" FM_TEST_SYSTEMD_PID_FILE="$TMP_ROOT/systemd-watcher.pid" \
+    FM_TEST_SERVICE_ENV="$home/state/.watch-service.env" \
+    FM_TEST_LOGINCTL_LOG="$TMP_ROOT/loginctl-servicepath.log" FM_ARM_CONFIRM_TIMEOUT=5 \
+    "$SERVICE" ensure || fail "installed unit did not establish a healthy watcher"
+  env_text=$(cat "$home/state/.watch-service.env")
+  assert_contains "$env_text" 'PATH=' "the service environment recorded no PATH, so the unit inherits systemd's default"
+  recorded=$(grep -E '^PATH=' "$home/state/.watch-service.env" | tail -1)
+  recorded=${recorded#PATH=\"}; recorded=${recorded%\"}
+  [ -z "$(fm_service_path_unreachable "$recorded")" ] \
+    || fail "the recorded service PATH cannot reach $(fm_service_path_unreachable "$recorded" | tr '\n' ' ')"
+
+  # A home converged before this fix - or by a session with poor reach - keeps a
+  # PATH that resolves nothing. Detect-only bootstrap must name it.
+  sed 's|^PATH=.*|PATH="/nonexistent-service-path"|' "$home/state/.watch-service.env" > "$home/state/.watch-service.env.tmp"
+  mv -f "$home/state/.watch-service.env.tmp" "$home/state/.watch-service.env"
+  detect_out=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_WATCH_SERVICE_FORCE_BACKEND=systemd \
+    FM_WATCH_SYSTEMCTL="$fakebin/systemctl" FM_WATCH_SYSTEMD_UNIT_DIR="$unitdir" \
+    FM_TEST_SYSTEMCTL_LOG="$log" FM_TEST_SYSTEMD_PID_FILE="$TMP_ROOT/systemd-watcher.pid" \
+    FM_TEST_SERVICE_ENV="$home/state/.watch-service.env" \
+    FM_TEST_LOGINCTL_LOG="$TMP_ROOT/loginctl-servicepath.log" FM_BOOTSTRAP_DETECT_ONLY=1 \
+    "$SERVICE" bootstrap)
+  assert_contains "$detect_out" "cannot reach" "a watcher that cannot resolve its own tools reported nothing at startup"
+  assert_contains "$detect_out" "crew state will read as unavailable" "the report did not say what the unreachable tools cost"
+  pass "the watcher records a PATH that reaches its tools, and reports one that does not"
+}
+
 test_unusable_systemd_selects_tmux_keeper
 test_missing_systemd_unit_requires_separate_consent
 test_keeper_fallback_establishes_real_watcher
 test_installed_unit_converges_source_and_x_mode
+test_service_env_records_a_reaching_path_and_reports_one_that_does_not

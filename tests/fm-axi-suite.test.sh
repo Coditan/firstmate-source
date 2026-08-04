@@ -310,7 +310,15 @@ test_currency_clock_survives_prefix_cutover() {
     FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
     "$ROOT/bin/fm-axi-suite.sh")
   installs_after_second=$(wc -l < "$w/install.log" | tr -d ' ')
-  [ -z "$second" ] || fail "a cached currency check produced unexpected output: $second"
+  # The claim being pinned is that the CURRENCY check is cached, not that the run
+  # is mute: this fixture keeps its tool on the ambient PATH ahead of the vessel
+  # prefix, so it is genuinely shadowed, and that condition is a property of the
+  # caller's environment rather than of the cadence window - it is reported every
+  # run on purpose.
+  case "$(printf '%s\n' "$second" | grep -v '^AXI_SUITE_SHADOWED:' | grep -c '[^[:space:]]')" in
+    0) ;;
+    *) fail "a cached currency check produced unexpected currency output: $second" ;;
+  esac
   [ "$installs_after_second" = "$installs_after_first" ] || fail "the cached currency check installed again"
   forced=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" \
     FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS=clock-axi FM_AXI_SUITE_CHECK_INTERVAL=86400 \
@@ -530,8 +538,55 @@ test_unpublished_ahead_version_is_not_a_recurring_alarm() {
   pass "an unpublishable locally-ahead build reports for review instead of alarming forever"
 }
 
+# The currency check maintains the vessel prefix and, before this pair, only ever
+# measured the copy it maintains - it prepends that prefix into its own process
+# and then asks about versions. So it could report a suite current while every
+# other process ran an older copy from somewhere else entirely, which is what a
+# 2026-08-04 hand measurement found on the coditan vessel: six of six suite tools
+# resolving from ~/.npm-global/bin, each behind the maintained copy, under a
+# clean all-clear. Note what this pair does NOT test: that the maintained copy is
+# current. That already passed while the defect was live, which is exactly why it
+# is not the test.
+test_shadowed_suite_is_reported_even_while_the_maintained_copy_is_current() {
+  local w out
+  w="$TMP_ROOT/shadowed"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  make_npm "$w/bin" "$w/versions" "$w/install.log"
+  # The maintained copy is current, and an older copy earlier on the ambient
+  # PATH is what actually runs.
+  make_tool "$w/home/.local/axi/bin" shadow-axi 1.2.4
+  make_tool "$w/bin" shadow-axi 1.2.3
+  printf '%s\n' 'shadow-axi=1.2.4' > "$w/versions"
+  out=$(run_case "$w" "shadow-axi")
+  assert_contains "$out" "AXI_SUITE_SHADOWED: shadow-axi runs from $w/bin/shadow-axi" \
+    "a suite tool resolving outside the maintained prefix was reported as current with no caveat"
+  assert_contains "$out" "not the maintained copy in $w/home/.local/axi/bin" \
+    "the report did not name the copy that is being maintained instead"
+  assert_not_contains "$out" 'AXI_SUITE_UPDATE' "the maintained copy was current, so no update was due"
+  pass "a maintained copy that is not the resolved copy is reported, not folded into an all-clear"
+}
+
+test_unshadowed_suite_reports_nothing_extra() {
+  local w out
+  w="$TMP_ROOT/unshadowed"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  make_npm "$w/bin" "$w/versions" "$w/install.log"
+  make_tool "$w/home/.local/axi/bin" solo-axi 1.2.4
+  printf '%s\n' 'solo-axi=1.2.4' > "$w/versions"
+  # The maintained bin directory is on the ambient PATH ahead of everything else,
+  # which is what a correctly resolving firstmate-launched process looks like.
+  out=$(PATH="$w/home/.local/axi/bin:$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/state" \
+    FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="solo-axi" FM_AXI_SUITE_CHECK_INTERVAL=0 \
+    FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
+    FM_TEST_HOOK_LOG="$w/hook.log" "$ROOT/bin/fm-axi-suite.sh" --force)
+  assert_not_contains "$out" 'AXI_SUITE_SHADOWED' "a correctly resolving suite was reported as shadowed"
+  pass "a suite that resolves from the maintained prefix reports no shadowing"
+}
+
 test_patch_and_minor_auto_update
 test_major_and_missing_wait_for_review
+test_shadowed_suite_is_reported_even_while_the_maintained_copy_is_current
+test_unshadowed_suite_reports_nothing_extra
 test_two_homes_update_distinct_prefixes_concurrently
 test_vessel_prefix_wins_over_inherited_path
 test_currency_clock_survives_prefix_cutover

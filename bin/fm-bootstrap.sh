@@ -23,7 +23,7 @@
 #                 "NUDGE_SECONDMATES: secondmate <id>: send failed: <reason>",
 #                 "BOOTSTRAP_INFO: nudged fm-<id> with '<message>'",
 #                 "SECONDMATE_LIVENESS: secondmate <id>: skipped: <reason>|respawn failed: <reason>",
-#                 "AXI_SUITE_UPDATED|REVIEW|STUCK: <detail>",
+#                 "AXI_SUITE_UPDATED|REVIEW|STUCK|SHADOWED: <detail>",
 #                 "FIRSTMATE_UPDATE_AVAILABLE|STUCK: <detail>",
 #                 "FORK_SYNC: <detail>" or "FORK_SYNC_STUCK: <detail>",
 #                 "GROSSREINSCHIFF: weekly fleet cleanup sweep is due (...)",
