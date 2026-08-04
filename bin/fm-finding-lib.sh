@@ -374,22 +374,15 @@ FM_FINDING_DEADLINE_HIGH=86400
 FM_FINDING_DEADLINE_MEDIUM=259200
 FM_FINDING_DEADLINE_LOW=604800
 
-# fm_finding_deadline_seconds <severity>: the waiting time, on stdout. Returns 1
-# on a severity that is not one of ours rather than choosing a default, because
-# a default here would give an unrecognised record a plausible place in the
-# queue instead of reporting that it has none.
-fm_finding_deadline_seconds() {
-  case "$1" in
-    high) printf '%s\n' "$FM_FINDING_DEADLINE_HIGH" ;;
-    medium) printf '%s\n' "$FM_FINDING_DEADLINE_MEDIUM" ;;
-    low) printf '%s\n' "$FM_FINDING_DEADLINE_LOW" ;;
-    *) return 1 ;;
-  esac
-}
-
 # fm_finding_deadline_json: the severity-to-seconds table as a JSON object, for
 # the one jq pass that orders the queue. Built from the constants above so the
 # table the queue sorts by and the table this file documents cannot drift.
+#
+# This is the only place the set of severities is spelled a second time, and it
+# is the one the queue actually sorts by. A record whose severity is not one of
+# ours is already refused by fm_finding_validate above and never reaches the
+# ordering; the table's absent entry is the second line behind that, so such a
+# record would get no deadline rather than a plausible place in the order.
 fm_finding_deadline_json() {
   printf '{"high":%s,"medium":%s,"low":%s}\n' \
     "$FM_FINDING_DEADLINE_HIGH" "$FM_FINDING_DEADLINE_MEDIUM" "$FM_FINDING_DEADLINE_LOW"
