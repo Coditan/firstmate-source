@@ -51,9 +51,11 @@
 #   heartbeat              fleet-scan backstop found an unsurfaced captain-relevant
 #                          status, unless afk is active
 #   check: certsync health: unhealthy: <reason>
+#   check: certsync health: cannot run: <reason>
 #                          heartbeat found a confirmed unhealthy certsync status
-#                          JSON reading and surfaced it through the ordinary
-#                          durable check wake path
+#                          JSON reading, or could not read certsync status at
+#                          all, and surfaced it through the ordinary durable
+#                          check wake path
 # For normal supervision, resume the session-start primary-harness protocol
 # after each printed reason. Direct duplicate invocations of this script still
 # no-op through the watcher singleton lock.
@@ -145,7 +147,7 @@ HEARTBEAT_MAX=${FM_HEARTBEAT_MAX:-7200}  # heartbeat backoff cap
 CHECK_INTERVAL=${FM_CHECK_INTERVAL:-300}  # seconds between *.check.sh sweeps
 CHECK_TIMEOUT=${FM_CHECK_TIMEOUT:-30}     # seconds allowed per *.check.sh
 CERTSYNC_HEALTH_TIMEOUT=${FM_CERTSYNC_HEALTH_TIMEOUT:-5}  # seconds allowed for certsync heartbeat health
-CERTSYNC_HEALTH_RESURFACE=${FM_CERTSYNC_HEALTH_RESURFACE:-3600}  # seconds before repeating unchanged unhealthy certsync
+CERTSYNC_HEALTH_RESURFACE=${FM_CERTSYNC_HEALTH_RESURFACE:-3600}  # seconds before repeating unchanged unhealthy or cannot-run certsync
 CONTEXT_CHECK_INTERVAL=${FM_CONTEXT_CHECK_INTERVAL:-300}  # seconds between context-ceiling reads
 # How long an UNCHANGED context-ceiling report stays quiet before it says so
 # again. Long, because every branch of that check describes a standing condition
