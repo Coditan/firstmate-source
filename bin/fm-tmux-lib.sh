@@ -202,8 +202,8 @@ fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle>
 # "working" crew, a stale one as a stalled crew), and a respawn of <id> collides
 # on the duplicate window name. When we are inside tmux and our current window is
 # named like a crew window (fm-*), rename it to the reserved 'firstmate' name.
-# The rename targets the caller's own window (no -t), needs no lock, and is
-# idempotent. It is a no-op outside tmux, and it never touches a window the
+# The rename targets the caller's own window via $TMUX_PANE, needs no lock, and
+# is idempotent. It is a no-op outside tmux, and it never touches a window the
 # operator named anything other than fm-* (a deliberate cockpit name is kept).
 # Echoes the action taken (renamed|kept|not-tmux) so callers and tests can assert.
 fm_tmux_ensure_own_window() {
