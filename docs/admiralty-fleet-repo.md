@@ -73,7 +73,7 @@ Nothing is materialized and nothing is deleted; the run only records a tree that
 That is what makes the genesis commit provably a copy rather than an approximation, and `--bootstrap` refuses once a manifest exists.
 The genesis commit's manifest was produced this way rather than by hand.
 
-## Why there are two CI checks and not one
+## Why the pin-ownership check is not redundant with the drift gate
 
 `Vendored drift gate` compares the tree to the manifest, offline.
 `Pin ownership and disjointness` recomputes ownership from the pin's own `git ls-tree` and asserts that no pin path is fleet-owned, that every exclusion still names something the pin carries, and that the manifest still equals the pin's tree minus the exclusions.
@@ -131,7 +131,7 @@ The genesis commit was pushed directly to `main`, because a branch must exist be
 
 `.claude/settings.local.json` must never be tracked in `admiralty`.
 Claude Code writes to it at runtime, and `dirty_status` in `bin/fm-ff-lib.sh` skips a fast-forward for any dirty checkout, so a tracked copy of a file the harness rewrites would freeze self-update fleet-wide, one vessel at a time.
-`fleet-ci.yml` asserts it is untracked on every pull request, alongside the two symlinks and the private operational directories.
+`fleet-ci.yml` asserts it is untracked on every pull request, alongside the tracked symlinks `.claude/skills` and `CLAUDE.md` and the private operational directories.
 
 A related interaction used to bite even without tracking: `dirty_status` reads `git status --porcelain`, which reports untracked files too, so an untracked `.claude/settings.local.json` in a home blocked that home's fast-forward on its own.
 The fork's tracked root `.gitignore` now ignores it along with the other checkout-local harness runtime artifacts, so it no longer does; [configuration.md](configuration.md) "Operational home layout and state" owns that contract.
