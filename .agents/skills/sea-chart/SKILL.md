@@ -55,7 +55,7 @@ If he names one investigation or undertaking, that is this.
 
 2. **Assemble the chart.**
    `bin/fm-sea-chart.sh <chart-id> --summary` for a read, `--json` for the data to lay out.
-   It owns the membership rule, the reconciliation against the backlog, the ageing probe, and the three incompleteness numbers.
+   It owns the membership rule, the reconciliation against the backlog, the ageing probe, the incompleteness numbers, and the reports of what it could not place or found misfiled.
    Never assemble a chart from report prose, chat, or terminal output - the same rule the bearings header states for itself.
    If it refuses for want of a destination, that refusal is the answer: file the undertaking first, and do not draw a chart with a blank cover.
 
@@ -82,7 +82,7 @@ If he names one investigation or undertaking, that is this.
 It is read, never invented: the undertaking's own title, or the one question a panel gave every member, or its surviving report.
 A chart whose destination came from the panel question or the report says which, because that is weaker than a titled undertaking.
 
-**The three incompleteness numbers, on the chart itself and not in a footnote.**
+**The incompleteness numbers, on the chart itself and not in a footnote.**
 Use `fm-stats`.
 They are the reason this is worth building, and a chart that drops them is worse than no chart:
 
