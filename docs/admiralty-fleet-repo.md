@@ -46,15 +46,15 @@ A vessel sitting at the fork's current `main` and pointed at `admiralty`'s `main
 | `.fleet-excluded` | fleet | pin paths deliberately not materialized; empty on day one |
 | `fleet/bin/` | fleet | ownership library, drift gate, pin check, importer |
 | `fleet/doctrine/` | fleet | the partition, the pin and bump contract, branch protection |
-| `fleet/decisions/`, `fleet/vessels/`, `fleet/roles/` | fleet | placeholders for fleet-wide decisions, per-vessel material, and fleet-authored roles |
+| `fleet/decisions/`, `fleet/vessels/`, `fleet/roles/` | fleet | fleet-wide decisions, per-vessel material, and fleet-authored roles |
 | `.github/workflows/fleet-ci.yml` | fleet | the gates |
-| everything else, 353 paths at the current pin `de0b95b` and 308 at the genesis pin `e52cc76` | vendored | firstmate at the pin, byte for byte |
+| everything else, 308 paths at the genesis pin `e52cc76` | vendored | firstmate at the pin, byte for byte |
 
 Ownership is decided by name, in a fixed order, by `fleet/bin/fmf-ownership.sh`.
 The four control files, anything under `fleet/`, and `.github/workflows/fleet-*.yml` are fleet-owned; then the `.fleet-overlay` registry; then `.fleet-excluded`; then everything else is vendored.
 The last rule is deny-by-default, so a new file at an unregistered path is classified vendored and the drift gate fails it until someone classifies it deliberately.
 
-The initial pin is this fork's `main`, not the upstream template's, and the overlay registry is empty.
+The initial pin is this fork's `main`, not the upstream template's.
 Day one is a change of repository identity with zero behaviour delta, and the move toward upstream happens as reviewed pin bumps rather than a single cutover.
 
 ## The pin and bump contract
@@ -73,7 +73,7 @@ Nothing is materialized and nothing is deleted; the run only records a tree that
 That is what makes the genesis commit provably a copy rather than an approximation, and `--bootstrap` refuses once a manifest exists.
 The genesis commit's manifest was produced this way rather than by hand.
 
-## Why there are two CI checks and not one
+## Why the pin-ownership check is not redundant with the drift gate
 
 `Vendored drift gate` compares the tree to the manifest, offline.
 `Pin ownership and disjointness` recomputes ownership from the pin's own `git ls-tree` and asserts that no pin path is fleet-owned, that every exclusion still names something the pin carries, and that the manifest still equals the pin's tree minus the exclusions.
@@ -119,7 +119,7 @@ Three ways out, none of them the agent's to choose:
 - Make `admiralty` public, which reverses an explicit approval and exposes fleet material.
 - Accept an unprotected `main` until cutover, relying on the fleet's own discipline and on the CI gates, which still run and still fail; they simply are not required to pass before a merge.
 
-The intended ruleset, ready to apply the moment protection is available, is recorded in `fleet/doctrine/branch-protection.md`: pull request required, force pushes and deletion blocked, the five checks required, no bypass actors, and **zero** required approving reviews.
+The intended ruleset, ready to apply the moment protection is available, is recorded in `fleet/doctrine/branch-protection.md`: pull request required, force pushes and deletion blocked, the fleet CI checks required, no bypass actors, and **zero** required approving reviews.
 
 The zero is deliberate and is documented in the repository rather than left a silent omission.
 The fleet pushes under a single identity, so an author cannot approve their own pull request and no second identity exists to clear it; requiring one approval would deadlock every merge.
@@ -131,7 +131,7 @@ The genesis commit was pushed directly to `main`, because a branch must exist be
 
 `.claude/settings.local.json` must never be tracked in `admiralty`.
 Claude Code writes to it at runtime, and `dirty_status` in `bin/fm-ff-lib.sh` skips a fast-forward for any dirty checkout, so a tracked copy of a file the harness rewrites would freeze self-update fleet-wide, one vessel at a time.
-`fleet-ci.yml` asserts it is untracked on every pull request, alongside the two symlinks and the private operational directories.
+`fleet-ci.yml` asserts it is untracked on every pull request, alongside the tracked symlinks `.claude/skills` and `CLAUDE.md` and the private operational directories.
 
 A related interaction used to bite even without tracking: `dirty_status` reads `git status --porcelain`, which reports untracked files too, so an untracked `.claude/settings.local.json` in a home blocked that home's fast-forward on its own.
 The fork's tracked root `.gitignore` now ignores it along with the other checkout-local harness runtime artifacts, so it no longer does; [configuration.md](configuration.md) "Operational home layout and state" owns that contract.
@@ -148,7 +148,8 @@ None of that means the canonical upstream template absorbed those patches: the v
 
 ## What is not built yet
 
-- No vessel is cut over. Origins still point at `Freudator86/firstmate`.
+- Cutover is not finished, and this document does not track where any individual vessel stands.
+  A vessel's own `origin` is the authority on whether that vessel has been cut over; read it there.
 - Restoring the ancestry as this fork's `main` advances past `e52cc76` is an open captain decision, not a solved problem.
   Ancestry is a property of the commit graph and not of tree content, so a pin bump alone does not restore it: a bump commit on `admiralty` copies the fork's newer tree, but it does not add the fork's newer commits to `admiralty`'s ancestor set.
   Absorbing that history so an already-updated vessel stays fast-forwardable needs a true merge of the fork's `main` into `admiralty`'s `main`, which is consistent with the standing rule that upstream-sync pull requests land as true merge commits rather than squashes.
@@ -159,4 +160,3 @@ None of that means the canonical upstream template absorbed those patches: the v
   Name the `admiralty` commit rather than a bare `origin/main`, because in this repository `origin/main` is the fork itself, where `de0b95b` is an ancestor and the same command exits 0.
   That merge bump cannot be raised through no-mistakes, because its rebase would flatten the ancestry the merge exists to create, so it is authorized on the captain's word instead.
 - The Bridge extraction, the fork-maintenance tooling retirement, and the Bucket-A upstreaming are unstarted; the fork-first ratchet prices each as its own reviewed pin bump.
-- `fleet/decisions/`, `fleet/vessels/`, and `fleet/roles/` are empty placeholders.
