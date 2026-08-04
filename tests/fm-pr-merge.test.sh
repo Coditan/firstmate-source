@@ -6,13 +6,15 @@
 # fm-pr-check.sh trigger never fires.
 #
 # Matrix:
-#   (a) merge records pr= and pr_head= before merging, and merges
+#   (a) no-method merge records pr= and pr_head= before merging, then defaults
+#       to a real merge commit
 #   (b) merge is refused when gh-axi pr merge itself fails (no silent success)
 #   (c) extra gh-axi pr merge args are forwarded after number and --repo
 #   (d) merge is refused before gh-axi when task meta is missing
-#   (e) PR URL is parsed to number + --repo for gh-axi (defaults to --squash)
+#   (e) PR URL is parsed to number + --repo for gh-axi (defaults to --merge)
 #   (f) malformed PR URL fails fast without calling gh-axi
-#   (g) explicit merge method is not overridden by the default --squash
+#   (g) explicit merge methods, including --squash, are not overridden by the
+#       default --merge
 #   (h) repo override args fail fast because the repo comes from the URL
 #   (i) the merged head branch is deleted by the merge itself, by default
 #   (j) only the long-form --delete-branch[=false] counts as the caller's own
@@ -103,7 +105,7 @@ run_pr_merge() {
   return "$rc"
 }
 
-test_records_pr_and_head_before_merging() {
+test_no_method_defaults_to_merge_commit_after_recording() {
   local case_dir rc
   case_dir=$(make_case records-before-merge)
   mkdir -p "$case_dir/wt"
@@ -121,9 +123,9 @@ test_records_pr_and_head_before_merging() {
     "records-before-merge: pr= was not recorded"
   assert_grep 'pr_head=deadbeefcafefeed0000000000000000deadbeef' "$case_dir/state/task-x1.meta" \
     "records-before-merge: pr_head= was not recorded"
-  grep -qxF 'pr merge 9 --repo example/repo --squash --delete-branch' "$case_dir/gh-axi.log" \
-    || fail "records-before-merge: gh-axi pr merge was not invoked with number, --repo, and default --squash"
-  pass "fm-pr-merge records pr= and pr_head= before invoking gh-axi pr merge"
+  grep -qxF 'pr merge 9 --repo example/repo --merge --delete-branch' "$case_dir/gh-axi.log" \
+    || fail "records-before-merge: gh-axi pr merge was not invoked with number, --repo, and default --merge"
+  pass "fm-pr-merge records pr= and pr_head= before defaulting to a real merge commit"
 }
 
 test_merge_failure_propagates_after_recording() {
@@ -145,7 +147,7 @@ test_merge_failure_propagates_after_recording() {
   pass "fm-pr-merge propagates a real merge failure without silently succeeding"
 }
 
-test_extra_merge_args_forwarded() {
+test_explicit_squash_and_extra_merge_args_forwarded() {
   local case_dir rc
   case_dir=$(make_case extra-args)
   mkdir -p "$case_dir/wt"
@@ -157,7 +159,7 @@ test_extra_merge_args_forwarded() {
 
   grep -qxF 'pr merge 15 --repo example/repo --squash --delete-branch' "$case_dir/gh-axi.log" \
     || fail "extra-args: extra gh-axi pr merge flags were not forwarded"
-  pass "fm-pr-merge forwards extra flags to gh-axi pr merge after the -- separator"
+  pass "fm-pr-merge honors explicit --squash and forwards extra flags after the -- separator"
 }
 
 test_missing_meta_refuses_before_merge() {
@@ -271,8 +273,8 @@ test_explicit_merge_method_not_overridden() {
     > "$case_dir/stdout" 2> "$case_dir/stderr" || fail "explicit-merge-method: fm-pr-merge failed"
 
   grep -qxF 'pr merge 22 --repo example/repo --delete-branch --merge' "$case_dir/gh-axi.log" \
-    || fail "explicit-merge-method: caller --merge was not forwarded without an extra default --squash"
-  pass "fm-pr-merge does not add default --squash when the caller passes an explicit merge method"
+    || fail "explicit-merge-method: caller --merge was not forwarded without an extra default --merge"
+  pass "fm-pr-merge does not add default --merge when the caller passes an explicit merge method"
 }
 
 test_method_equals_merge_method_not_overridden() {
@@ -286,7 +288,7 @@ test_method_equals_merge_method_not_overridden() {
     > "$case_dir/stdout" 2> "$case_dir/stderr" || fail "method-equals-merge-method: fm-pr-merge failed"
 
   grep -qxF 'pr merge 23 --repo example/repo --delete-branch --method=merge' "$case_dir/gh-axi.log" \
-    || fail "method-equals-merge-method: caller --method=merge was not forwarded without an extra default --squash"
+    || fail "method-equals-merge-method: caller --method=merge was not forwarded without an extra default --merge"
   pass "fm-pr-merge respects --method=<value> as an explicit merge method"
 }
 
@@ -300,8 +302,8 @@ test_parses_pr_url_for_gh_axi() {
   run_pr_merge "$case_dir" task-x1 https://github.com/my-org/my-repo/pull/126 \
     > "$case_dir/stdout" 2> "$case_dir/stderr" || fail "url-parsing: fm-pr-merge failed"
 
-  grep -qxF 'pr merge 126 --repo my-org/my-repo --squash --delete-branch' "$case_dir/gh-axi.log" \
-    || fail "url-parsing: gh-axi pr merge was not invoked as number + --repo + default --squash"
+  grep -qxF 'pr merge 126 --repo my-org/my-repo --merge --delete-branch' "$case_dir/gh-axi.log" \
+    || fail "url-parsing: gh-axi pr merge was not invoked as number + --repo + default --merge"
   pass "fm-pr-merge parses a GitHub PR URL into gh-axi number and --repo arguments"
 }
 
@@ -315,7 +317,7 @@ test_default_deletes_merged_head_branch() {
   run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/31 \
     > "$case_dir/stdout" 2> "$case_dir/stderr" || fail "default-delete-branch: fm-pr-merge failed"
 
-  grep -qxF 'pr merge 31 --repo example/repo --squash --delete-branch' "$case_dir/gh-axi.log" \
+  grep -qxF 'pr merge 31 --repo example/repo --merge --delete-branch' "$case_dir/gh-axi.log" \
     || fail "default-delete-branch: the merged head branch was not deleted by the merge itself"
   # The deletion must ride on the merge, never on a second command that could
   # run when the merge did not land.
@@ -334,7 +336,7 @@ test_caller_delete_choice_not_overridden() {
   run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/33 -- -d \
     > "$case_dir/stdout" 2> "$case_dir/stderr" || fail "delete-branch-shorthand: fm-pr-merge failed"
 
-  grep -qxF 'pr merge 33 --repo example/repo --squash --delete-branch -d' "$case_dir/gh-axi.log" \
+  grep -qxF 'pr merge 33 --repo example/repo --merge --delete-branch -d' "$case_dir/gh-axi.log" \
     || fail "delete-branch-shorthand: caller -d suppressed the default --delete-branch"
 
   case_dir=$(make_case keep-branch)
@@ -345,7 +347,7 @@ test_caller_delete_choice_not_overridden() {
   run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/34 -- --delete-branch=false \
     > "$case_dir/stdout" 2> "$case_dir/stderr" || fail "keep-branch: fm-pr-merge failed"
 
-  grep -qxF 'pr merge 34 --repo example/repo --squash --delete-branch=false' "$case_dir/gh-axi.log" \
+  grep -qxF 'pr merge 34 --repo example/repo --merge --delete-branch=false' "$case_dir/gh-axi.log" \
     || fail "keep-branch: a caller asking to keep the branch had --delete-branch forced back on"
   pass "fm-pr-merge honors only a long-form caller delete-branch choice, on or off"
 }
@@ -369,17 +371,17 @@ test_failed_merge_deletes_nothing() {
   # failed, and nothing else ran afterwards.
   [ "$(wc -l < "$case_dir/gh-axi.log")" -eq 1 ] \
     || fail "merge-fails-no-delete: something ran after the merge failed"
-  grep -qxF 'pr merge 35 --repo example/repo --squash --delete-branch' "$case_dir/gh-axi.log" \
+  grep -qxF 'pr merge 35 --repo example/repo --merge --delete-branch' "$case_dir/gh-axi.log" \
     || fail "merge-fails-no-delete: the failed invocation was not the merge itself"
   pass "fm-pr-merge deletes no branch when the merge itself failed"
 }
 
-test_records_pr_and_head_before_merging
+test_no_method_defaults_to_merge_commit_after_recording
 test_merge_failure_propagates_after_recording
 test_default_deletes_merged_head_branch
 test_caller_delete_choice_not_overridden
 test_failed_merge_deletes_nothing
-test_extra_merge_args_forwarded
+test_explicit_squash_and_extra_merge_args_forwarded
 test_missing_meta_refuses_before_merge
 test_malformed_url_refuses_before_merge
 test_rejects_unsafe_url_segments_before_recording

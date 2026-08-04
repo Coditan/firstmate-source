@@ -27,6 +27,7 @@ Measured 2026-08-03 from a disposable worktree at `origin/main` = `22aac2c0`; fu
 - 146 landed (content proven present in `main`), 2 landed vacuously (empty commits), 5 not landed across 3 distinct pieces of work each with a written decision not to merge, 1 is `main` itself. Zero undetermined.
 - The 154 counts two different things: 81 branches on GitHub, 73 in a local pipeline mirror repository that has never been on the forge.
 - **Three separate producers would each have had to prune, and none does** (report §5): the forge's `delete_branch_on_merge` is `false`, which alone accounts for 77 of the 81 GitHub branches; `bin/fm-pr-merge.sh` never passes `--delete-branch`; and the pipeline binary contains no branch-deletion or merge code path at all, so it cannot prune its own mirror even in principle.
+  - **Superseded 2026-08-04, for the second producer only:** `bin/fm-pr-merge.sh` now passes `--delete-branch`. The measurement above is left as it was taken on 2026-08-03; current producer status is owned by `docs/merged-branch-cleanup.md`.
 
 That last point is why item 1 reports producers and not only tombstones. A sweep that deletes 146 branches and leaves three producers running has bought one week.
 
@@ -128,7 +129,7 @@ For a branch that is already an ancestor of the default branch, `merge-base(defa
 Placed after A it sees only the 34 non-ancestor branches, and fires on none of them.
 It must still come before C, because a content-free branch cannot make `merge-tree` conflict, so C would settle it as plain `landed` and E would never fire at all.
 
-**Ancestry alone would have called 34 of 52 landed branches unmerged.** On `coditan-bridge` the same reading was worse: 152 of 154 read as unmerged, because PR #1 is the only pull request in that repository's history merged with a real merge commit - the only merge commit in 7,724 commits on `main`. Everything else was squashed, so branch tips are unreachable from `main` by construction. "152 not merged" is a restatement of "we squash", nothing more.
+**Ancestry alone would have called 34 of 52 landed branches unmerged.** On `coditan-bridge` the same reading was worse: 152 of 154 read as unmerged, because PR #1 is the only pull request in that repository's history merged with a real merge commit - the only merge commit in 7,724 commits on `main`. Everything else measured there was squashed, so those branch tips are unreachable from `main` by construction. "152 not merged" was a restatement of the fleet's historical squash behavior, nothing more.
 
 ### The content test is inconclusive far more often than it looks
 
