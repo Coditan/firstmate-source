@@ -224,45 +224,6 @@ _fm_decision_key() {  # <status-line> -> key slug, or "default" when no token
     *) printf 'default' ;;
   esac
 }
-# Print every status line carrying a decision key the grammar above cannot read,
-# one TAB-separated "<kind>\t<line>" record each, where <kind> is:
-#   misplaced - the "[key=" token sits AFTER the colon, where the prefix-only
-#     grammar cannot see it, so the line folds under "default" - indistinguishable
-#     from a line that was never keyed at all, which silently merges two
-#     independent decisions into one and surfaces far from its cause.
-#   malformed - the token IS in the prefix but does not resolve to a valid slug
-#     ("[key=two words]", "[key = x]", "[key=]", an unterminated "[key=x"), so
-#     _fm_decision_key either fails or reads straight past it. That is worse than
-#     a misplaced key: the callers below drop such a line from the fold entirely,
-#     so the decision disappears from the watcher and every gate passes clean.
-# The parsers themselves stay permissive on purpose: refusing there is exactly
-# what drops the line and loses the decision it carries. The decision tooling
-# calls this instead, so the refusal can name the cause and the line.
-# Prints nothing when every key is both well placed and well formed.
-status_misplaced_key_lines() {  # <status-file>
-  local f=$1 line prefix note key
-  [ -f "$f" ] || return 0
-  while IFS= read -r line || [ -n "$line" ]; do
-    prefix=${line%%:*}
-    case "$prefix" in
-      *[Kk][Ee][Yy]*)
-        # Well formed only when the grammar resolved a key AND the prefix
-        # literally carries the token it resolved; any other key-ish text in the
-        # prefix is text the grammar skipped rather than a key it read.
-        if key=$(_fm_decision_key "$line"); then
-          case "$prefix" in *"[key=$key]"*) continue ;; esac
-        fi
-        printf 'malformed\t%s\n' "$line"
-        ;;
-      *)
-        case "$line" in *:*) ;; *) continue ;; esac
-        note=${line#*:}
-        case "$note" in *\[[Kk][Ee][Yy]=*) printf 'misplaced\t%s\n' "$line" ;; esac
-        ;;
-    esac
-  done < "$f"
-}
-
 # Drop the record for <key> from a newline-terminated "<key>\t<verb>\t<note>" set.
 # Portable (no associative arrays) so the fold runs on bash 3.2 as well as 4+.
 _fm_decision_drop() {  # <open-set> <key>

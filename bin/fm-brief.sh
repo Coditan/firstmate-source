@@ -174,7 +174,7 @@ This is also how you return the answer to a marked from-firstmate request above.
 Give every routed-work phase a stable key: open it with \`working [key=<work-slug>]: {material phase}\`, and use the same key on its later \`$PAUSED_VERB\`, \`done\`, \`failed\`, \`needs-decision\`, or \`blocked\` event so the earlier working phase is superseded.
 When a keyed phase ends without another reportable state, append \`resolved [key=<work-slug>]: {why it is no longer active}\`.
 When a decision you escalated is answered or a blocker clears and your domain resumes, append \`resolved: {how it was decided or unblocked}\`, or \`resolved [key=<work-slug>]: {how it was decided or unblocked}\` with the same key if you opened it with one, so it is durably closed instead of resurfacing behind later unrelated events.
-Every key goes BEFORE the colon, exactly as shown above: a \`[key=...]\` written anywhere after the colon is not read as a key at all, and the completion check refuses it by name.
+Every key sits in the verb prefix, between the verb and the colon, exactly as shown above: only that position is read as a key, and a \`[key=...]\` before the verb or anywhere after the colon is not read as a key at all.
 Routine internal supervision, heartbeats, retries, and crewmate churn stay inside your own home and must not touch that status file.
 
 # Definition of done
@@ -261,9 +261,9 @@ The report is the only thing that survives, so anything worth keeping must be in
 5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
 6. If a decision belongs to a human (product choices, destructive actions),
    append \`needs-decision: {summary of options}\` and stop. Firstmate will reply with the decision.
-   To keep more than one decision open at once, key it - the key goes BEFORE the colon, exactly here:
+   To keep more than one decision open at once, key it - the key sits in the verb prefix, between the verb and the colon, exactly here:
    \`needs-decision [key=<slug>]: {summary of options}\`
-   A \`[key=...]\` written anywhere after the colon is not read as a key at all, and the completion check refuses it by name.
+   Only that position is read as a key: a \`[key=...]\` before the verb or anywhere after the colon is not read as a key at all.
    When firstmate replies or a blocker clears and you resume, append \`resolved: {how it was decided or unblocked}\`,
    or \`resolved [key=<slug>]: {how it was decided or unblocked}\` with the same key if you opened it with one,
    so the decision or blocker is durably closed and does not keep resurfacing.
@@ -378,9 +378,9 @@ $RULE1
 5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
 6. If a decision belongs to a human (product choices, destructive actions, ask-user findings),
    append \`needs-decision: {summary of options}\` and stop. Firstmate will reply with the decision.
-   To keep more than one decision open at once, key it - the key goes BEFORE the colon, exactly here:
+   To keep more than one decision open at once, key it - the key sits in the verb prefix, between the verb and the colon, exactly here:
    \`needs-decision [key=<slug>]: {summary of options}\`
-   A \`[key=...]\` written anywhere after the colon is not read as a key at all.
+   Only that position is read as a key: a \`[key=...]\` before the verb or anywhere after the colon is not read as a key at all.
    When firstmate replies or a blocker clears and you resume, append \`resolved: {how it was decided or unblocked}\`,
    or \`resolved [key=<slug>]: {how it was decided or unblocked}\` with the same key if you opened it with one,
    so the decision or blocker is durably closed and does not keep resurfacing.

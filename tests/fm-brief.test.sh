@@ -325,8 +325,12 @@ test_scout_and_secondmate_load_decision_hold_policy() {
 # The decision key is read from the status line's verb PREFIX only
 # (bin/fm-classify-lib.sh's _fm_decision_key), so a key written after the colon
 # folds under "default" and the failure surfaces at a completion gate far from
-# the line that caused it. Every scaffold must SHOW the keyed shape rather than
-# describe it, and say where the key goes.
+# the line that caused it, while one written before the verb leaves no verb to
+# match and drops the line from the fold. Every scaffold must SHOW the keyed
+# shape rather than describe it, and name the one position that is read.
+# Nothing enforces this, so no scaffold may promise that anything does: the
+# wording is the whole mechanism, and a brief promising a check nobody runs is
+# worse than one promising nothing.
 test_status_key_position_is_shown_in_every_scaffold() {
   local home ship scout charter
   home="$TMP_ROOT/key-position-home"
@@ -354,20 +358,14 @@ test_status_key_position_is_shown_in_every_scaffold() {
   assert_grep 'resolved [key=<work-slug>]: {how it was decided or unblocked}' "$charter" \
     "charter does not show the keyed resolved shape for an answered decision"
   for brief in "$ship" "$scout" "$charter"; do
-    assert_grep 'BEFORE the colon' "$brief" \
+    assert_grep 'in the verb prefix, between the verb and the colon' "$brief" \
       "$brief does not state where the decision key goes"
+    assert_grep 'before the verb or anywhere after the colon is not read as a key at all' "$brief" \
+      "$brief does not rule out both wrong key positions"
+    assert_no_grep 'refuses it by name' "$brief" \
+      "$brief promises an enforcement check that no longer exists"
   done
-  # bin/fm-decision-hold.sh's completion gate covers investigations and visual
-  # reviews, so only the scout brief and the secondmate charter may promise it.
-  # A plain ship worker's status stream never reaches that gate, and a brief that
-  # promises enforcement nobody runs is worse than one that promises nothing.
-  for brief in "$scout" "$charter"; do
-    assert_grep 'the completion check refuses it by name' "$brief" \
-      "$brief no longer names the completion check that does cover it"
-  done
-  assert_no_grep 'the completion check refuses it by name' "$ship" \
-    "ship scaffold promises a completion check that never runs on a ship status stream"
-  pass "fm-brief.sh: every scaffold shows the keyed status shape and its position"
+  pass "fm-brief.sh: every scaffold shows the keyed status shape and its one read position"
 }
 
 # Scout and secondmate paths still scaffold well-formed briefs.
