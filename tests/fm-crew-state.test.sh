@@ -1500,6 +1500,31 @@ test_cause_run_attribution_rejected() {
   pass "cause run-attribution-rejected"
 }
 
+# The header records log-verb-not-a-state taking precedence over the run-lookup
+# cause as an acceptable collapse, on the express grounds that "the run-lookup
+# reason is then carried in the prose detail rather than in the token". That
+# fallback has to actually exist, or the record justifies a collapse the code does
+# not mitigate. The sequence that proves it: a run WAS found and deliberately
+# refused, and the status log's last line happens to be a decision-only verb, so
+# the token goes to the log - and the refused run must still be visible.
+test_a_rejected_run_survives_a_log_verb_that_is_not_a_state() {
+  reset_fakes
+  local d out
+  d=$(new_case rejected-run-with-log)
+  make_repo_on_branch "$d/wt" fm/feat-mine-too
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/rejected-logged.meta" "window=fm:fm-rejected-logged" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_BUSY=0
+  FM_FAKE_AXI_STATUS=$'run:\n  id: "01OTHER"\n  branch: fm/feat-not-mine\n  status: running\n  head: "deadbee"'
+  printf 'resolved: carried on\n' > "$d/state/rejected-logged.status"
+  out=$(run_crew_state "$d" rejected-logged)
+  assert_contains "$out" "cause: log-verb-not-a-state" "the last source consulted must still own the token"
+  assert_contains "$out" "a run for fm/feat-not-mine was found and not attributed" \
+    "a found-and-refused run vanished because the log's last line was not a state"
+  assert_not_contains "$out" "carried on" "the decision-closing prose must not leak into the detail"
+  pass "a refused run stays visible when the log's last verb takes the cause token"
+}
+
 test_cause_log_verb_not_a_state() {
   reset_fakes
   local d out
@@ -1789,6 +1814,7 @@ test_cause_no_branch
 test_cause_no_run_attributed
 test_cause_run_attribution_rejected
 test_cause_log_verb_not_a_state
+test_a_rejected_run_survives_a_log_verb_that_is_not_a_state
 test_degraded_classifies_as_its_own_absorb_class
 
 echo "all fm-crew-state tests passed"

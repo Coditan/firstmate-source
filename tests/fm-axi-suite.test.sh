@@ -707,10 +707,37 @@ test_an_unattributable_environment_reports_that_it_cannot_tell() {
   pass "an environment this process cannot attribute is reported as unknown, not clear"
 }
 
+# The value and its owner are one record, and a half-set pair is reachable in
+# this very repo: tests/lib.sh clears the marker for hermeticity, and clearing one
+# half while the other is inherited leaves the owner attributable and the value
+# absent. Answering that with an empty ambient PATH resolves nothing, so every
+# tool reads as unshadowed - a confident all-clear in precisely the state where
+# the two halves disagree. The owner here is this test shell, a genuine ancestor
+# of the suite process, so only the missing value can produce the honest refusal.
+test_a_half_recorded_marker_is_not_answered_for() {
+  local w out
+  w="$TMP_ROOT/half-marker"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  make_npm "$w/bin" "$w/versions" "$w/install.log"
+  make_tool "$w/home/.local/axi/bin" half-axi 1.2.4
+  make_tool "$w/bin" half-axi 1.2.3
+  printf '%s\n' 'half-axi=1.2.4' > "$w/versions"
+  [ -z "${FM_AXI_AMBIENT_PATH+set}" ] || fail "the fixture needs the ambient value unset"
+  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/state" \
+    FM_AXI_AMBIENT_PATH_OWNER="$$" \
+    FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="half-axi" FM_AXI_SUITE_CHECK_INTERVAL=0 \
+    FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
+    FM_TEST_HOOK_LOG="$w/hook.log" "$ROOT/bin/fm-axi-suite.sh" --force)
+  assert_contains "$out" 'AXI_SUITE_SHADOW_UNKNOWN' \
+    "a half-recorded marker was answered with an empty ambient PATH instead of an honest refusal"
+  pass "a record whose two halves disagree is refused, not answered as an all-clear"
+}
+
 test_patch_and_minor_auto_update
 test_major_and_missing_wait_for_review
 test_a_marker_from_a_dead_process_tree_is_not_trusted
 test_an_unattributable_environment_reports_that_it_cannot_tell
+test_a_half_recorded_marker_is_not_answered_for
 test_shadowed_suite_is_reported_even_while_the_maintained_copy_is_current
 test_unshadowed_suite_reports_nothing_extra
 test_shadow_report_survives_an_entrypoint_that_prepended_first

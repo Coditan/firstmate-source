@@ -643,13 +643,13 @@ READER_MISSING=0
 # HAVE_RUN=1 names its own reason, so the catch-all at the bottom of this script
 # never has to invent one.
 UNKNOWN_CAUSE=no-run-attributed
-UNKNOWN_DETAIL='no current-state source available'
+UNKNOWN_REASON='the run lookup named no run for this crew'
 if [ "$KIND" != ship ]; then
   # Scouts and secondmates never drive a no-mistakes validation of their own
   # worktree, so the lookup is skipped for them and state comes from pane/log
   # directly. Nothing failed here, and the cause says so.
   UNKNOWN_CAUSE=kind-skips-run-lookup
-  UNKNOWN_DETAIL="no current-state source available: kind=$KIND never drives a run"
+  UNKNOWN_REASON="kind=$KIND never drives a run"
 elif [ "$GIT_MISSING" = 1 ]; then
   READER_MISSING=1
   READER_CAUSE=run-reader-missing
@@ -657,7 +657,7 @@ elif [ "$GIT_MISSING" = 1 ]; then
   READER_WHY='git not on PATH'
 elif [ -z "$CREW_BRANCH" ]; then
   UNKNOWN_CAUSE=no-branch
-  UNKNOWN_DETAIL='no current-state source available: detached HEAD, so no run can be attributed'
+  UNKNOWN_REASON='detached HEAD, so no run can be attributed'
 elif ! command -v no-mistakes >/dev/null 2>&1; then
   READER_MISSING=1
   READER_CAUSE=run-reader-missing
@@ -697,7 +697,7 @@ if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && [ "$READER_MISSING" = 0 ]; the
         # different from finding no run, because it means the evidence exists
         # and something about its identity did not bind to this crew.
         UNKNOWN_CAUSE=run-attribution-rejected
-        UNKNOWN_DETAIL="no current-state source available: a run for $run_branch was found and not attributed to this crew's code identity"
+        UNKNOWN_REASON="a run for $run_branch was found and not attributed to this crew's code identity"
       fi
       coarse_rc=0
       COARSE_STATUS=$(nm_runs_status_for_branch "$CREW_BRANCH") || coarse_rc=$?
@@ -892,8 +892,8 @@ fi
 # must not leak into the detail (see the mapping comment above).
 if [ -n "$LOG_LINE" ]; then
   if [ -n "$LOG_VERB" ]; then
-    emit_unknown log-verb-not-a-state "the status log's last verb '$LOG_VERB' is not a state"
+    emit_unknown log-verb-not-a-state "the status log's last verb '$LOG_VERB' is not a state${SEP}$UNKNOWN_REASON"
   fi
-  emit_unknown log-verb-not-a-state "the status log's last line carries no state verb"
+  emit_unknown log-verb-not-a-state "the status log's last line carries no state verb${SEP}$UNKNOWN_REASON"
 fi
-emit_unknown "$UNKNOWN_CAUSE" "$UNKNOWN_DETAIL"
+emit_unknown "$UNKNOWN_CAUSE" "no current-state source available: $UNKNOWN_REASON"

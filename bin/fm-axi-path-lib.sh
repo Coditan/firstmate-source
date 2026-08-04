@@ -85,6 +85,14 @@ fm_axi_pid_is_self_or_ancestor() {  # <pid>
 # honest ambient one and is recorded afresh. Only when a foreign marker meets an
 # already-prepended PATH is the question unanswerable here, and that is recorded
 # as `unattributable` rather than guessed - see fm_axi_ambient_path.
+#
+# The value and its owner are ONE record, valid only together. A half-set pair -
+# one half inherited or cleared without the other - is not a record this process
+# may act on: an attributable owner means some ancestor prepended, so the missing
+# value cannot be reconstructed from $PATH, and the ancestor may have prepended a
+# DIFFERENT home's prefix, which the leading-entry test below cannot see. Guessing
+# there would be the confident wrong answer this whole guard exists to prevent, so
+# a half-set pair is unattributable outright.
 fm_axi_ambient_claim() {  # <maintained-bin-dir>
   local bin=$1
   if [ -z "${FM_AXI_AMBIENT_PATH_OWNER+set}" ] && [ -z "${FM_AXI_AMBIENT_PATH+set}" ]; then
@@ -93,7 +101,12 @@ fm_axi_ambient_claim() {  # <maintained-bin-dir>
     export FM_AXI_AMBIENT_PATH FM_AXI_AMBIENT_PATH_OWNER
     return 0
   fi
-  fm_axi_pid_is_self_or_ancestor "${FM_AXI_AMBIENT_PATH_OWNER:-}" && return 0
+  if [ -z "${FM_AXI_AMBIENT_PATH+set}" ] || [ -z "${FM_AXI_AMBIENT_PATH_OWNER+set}" ]; then
+    FM_AXI_AMBIENT_PATH_OWNER=unattributable
+    export FM_AXI_AMBIENT_PATH_OWNER
+    return 0
+  fi
+  fm_axi_pid_is_self_or_ancestor "$FM_AXI_AMBIENT_PATH_OWNER" && return 0
   case "${PATH:-}" in
     "$bin"|"$bin":*)
       FM_AXI_AMBIENT_PATH_OWNER=unattributable
@@ -125,12 +138,14 @@ fm_axi_prepend_path() {
 # than the environment. A caller that gets a failure here must report that it
 # cannot tell, never an all-clear.
 fm_axi_ambient_path() {
-  if [ -z "${FM_AXI_AMBIENT_PATH_OWNER+set}" ]; then
-    printf '%s' "${FM_AXI_AMBIENT_PATH-${PATH:-}}"
+  if [ -z "${FM_AXI_AMBIENT_PATH_OWNER+set}" ] && [ -z "${FM_AXI_AMBIENT_PATH+set}" ]; then
+    printf '%s' "${PATH:-}"
     return 0
   fi
+  [ -n "${FM_AXI_AMBIENT_PATH+set}" ] || return 1
+  [ -n "${FM_AXI_AMBIENT_PATH_OWNER+set}" ] || return 1
   fm_axi_pid_is_self_or_ancestor "$FM_AXI_AMBIENT_PATH_OWNER" || return 1
-  printf '%s' "${FM_AXI_AMBIENT_PATH-}"
+  printf '%s' "$FM_AXI_AMBIENT_PATH"
 }
 
 # Print "<tool><TAB><path that actually runs>" for every named tool that <path>
