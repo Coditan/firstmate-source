@@ -710,6 +710,12 @@ families_for_changed_path() {
       printf '%s\n' "__script_required__:fm-sea-chart.test.sh"
       printf '%s\n' "__script_required__:fm-backlog-lint.test.sh"
       ;;
+    bin/fm-finding*.sh)
+      # The findings surface's record contract lives in bin/fm-finding-lib.sh,
+      # which no test names by path, so the bin/* grep fallthrough below cannot
+      # find its reader. Name the suite explicitly.
+      printf '%s\n' "__script_required__:fm-finding-surface.test.sh"
+      ;;
     bin/fm-install-herdr.sh|bin/fm-install-treehouse.sh|bin/fm-herdr-ci-cleanup.sh)
       printf '%s\n' pure-contract-unit
       # Pin or cleanup changes also select the real-Herdr family so the required

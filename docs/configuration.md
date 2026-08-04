@@ -399,6 +399,22 @@ When no third distinct model is available, the judge may share an analyst's mode
 `config/model-panel.json` is deliberately NOT in the inheritable set that `bin/fm-config-inherit-lib.sh` declares, for the same reason as `config/backend`: it names the models a specific home can actually reach, and pushing the primary's list into every secondmate would overwrite exactly the local knowledge that lets each home field a real panel.
 A secondmate home that needs a different lineup writes its own file, and a home that writes none still inherits the primary's `config/crew-dispatch.json` default profile set through the normal inheritance path.
 
+## Findings surface (config/findings-dir / FM_FINDINGS_DIR)
+
+The political officer appends findings to one directory on the host and has no other way out.
+`docs/findings-surface.md` owns what a finding means, `bin/fm-finding-lib.sh` owns what a finding is checked against, and `bin/fm-finding.sh --help` owns the commands and exit codes.
+This section owns only where the directory is.
+
+Resolution order is `FM_FINDINGS_DIR`, then the single path on the first line of `config/findings-dir`, then `FM_HOME/data/findings`.
+The pointer exists because the officer is one container per MACHINE while a home is one vessel: a machine carrying several vessels points every home at the one directory the officer appends to.
+A `config/findings-dir` that exists but names nothing is refused with exit 2 rather than falling back, because a fallback would send findings to a directory nobody collects from and report success while doing it.
+
+`config/findings-dir` names a path that is a property of the machine, not of the vessel, so it is NOT in the inheritable set that `bin/fm-config-inherit-lib.sh` declares - the same reason as `config/backend` and `config/model-panel.json`.
+A secondmate home on the same machine as its primary writes the same pointer; one on a different machine must not inherit a path that machine does not have.
+
+Nothing creates the surface implicitly: `fm-finding.sh init` creates it and says so, and every other command refuses an absent surface with exit 3.
+A reachable surface always reports counted numbers and an unreachable one reports no number at all, so an empty surface and a surface nobody can reach are never the same reading.
+
 ## Toolchain
 
 On session start the first mate detects what its required toolchain is missing or too old and lists each problem with either an exact install command or manual instructions.
@@ -607,6 +623,7 @@ FM_ZELLIJ_SESSION=firstmate  # zellij-only: named session for normal backend ops
 FM_BACKEND_CMUX_COMPOSER_LINES=20  # cmux-only: tail lines scanned to locate the composer row for submit verification
 FM_BACKEND_CMUX_IDLE_RE='^Type a message\.\.\.$'  # cmux-only: empty-composer placeholder regex after border/prompt stripping
 CMUX_SOCKET_PASSWORD=   # cmux-only: socket password fallback when config/cmux-socket-password is absent (docs/cmux-backend.md)
+FM_FINDINGS_DIR=        # political officer's findings surface; overrides config/findings-dir, which overrides FM_HOME/data/findings
 FM_SERVICE_PORT_RANGE=4400-4499   # port window bin/fm-service-port.sh probes; above lavish-axi's 4387 default and below the ephemeral range
 FM_SERVICE_PORT_PROBE_TIMEOUT=4000   # milliseconds allowed per readiness probe in bin/fm-service-port-probe.mjs http
 FM_LAVISH_ALLOW_SHARE=0   # 1 permits `fm-lavish.sh share`, which publishes a review board to third-party hosting (docs/lavish-access.md)
