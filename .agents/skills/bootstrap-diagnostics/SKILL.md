@@ -2,7 +2,7 @@
 name: bootstrap-diagnostics
 description: >-
   Agent-only handling playbook for session-start bootstrap diagnostics.
-  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, ROLE_INVALID, ROLE_OVERLAY_MISSING, NEEDS_GH_AUTH, TANGLE, SELF_DRIFT, CREW_DISPATCH invalid, CURRENCY_BASE, LAVISH_ACCESS, BACKLOG_STALE, BACKLOG_UNREADABLE, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, AXI_SUITE_UPDATED, AXI_SUITE_REVIEW, AXI_SUITE_STUCK, AXI_SUITE_SHADOWED, FIRSTMATE_UPDATE_AVAILABLE, FIRSTMATE_UPDATE_STUCK, FORK_SYNC, FORK_SYNC_STUCK, GROSSREINSCHIFF, WATCHER_UNIT, FREQUENCY_MONITOR_UNIT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
+  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, ROLE_INVALID, ROLE_OVERLAY_MISSING, NEEDS_GH_AUTH, TANGLE, SELF_DRIFT, CREW_DISPATCH invalid, CURRENCY_BASE, LAVISH_ACCESS, BACKLOG_STALE, BACKLOG_UNREADABLE, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, AXI_SUITE_UPDATED, AXI_SUITE_REVIEW, AXI_SUITE_STUCK, AXI_SUITE_SHADOWED, AXI_SUITE_SHADOW_UNKNOWN, FIRSTMATE_UPDATE_AVAILABLE, FIRSTMATE_UPDATE_STUCK, FORK_SYNC, FORK_SYNC_STUCK, GROSSREINSCHIFF, WATCHER_UNIT, FREQUENCY_MONITOR_UNIT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
   A silent bootstrap section, or a BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -63,6 +63,10 @@ When any diagnostic needs captain attention, report the plain consequence and re
   Firstmate-launched processes resolve the maintained copies already; this line means the environment this session inherited does not, which is the captain's own shell configuration.
   Report the concrete tools and the two paths, say plainly that the version the vessel maintains is not the version running here, and offer to have him put the printed maintained bin directory ahead of the other one.
   Never edit his shell configuration to silence it, and never delete the other copy: with the maintained directory absent from that environment, deleting it leaves the tool unrunnable rather than current.
+- `AXI_SUITE_SHADOW_UNKNOWN: cannot tell which copy of the suite this session resolves ...` - this is not a shadowing report and not an all-clear; it is the check declining to answer.
+  The environment it would have measured was recorded by a different process tree, typically a long-lived tmux server that froze one session's environment into every pane opened after it, so answering either way would describe a session that may be gone.
+  Report that the suite's currency is unverified for this session rather than reporting it healthy, and note that a fresh session started outside that server answers the question normally.
+  Do not treat it as a reason to install, delete, or reorder anything.
   The condition is retried on the next currency window rather than on every session, so a line that keeps reappearing means the underlying cause is still present.
   A `vessel-prefix seeding ... was not attempted: the <N>s seeding budget is spent` detail is not a broken install: the vessel ran out of its one-time seeding budget, the external copy is still the working fallback, and the next window seeds the rest, so report it only if it survives a second window.
   While seeding runs, the script names each installing tool and the remaining seeding budget on standard error; that progress output is not a diagnostic and needs no handling.

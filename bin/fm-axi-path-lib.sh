@@ -6,7 +6,7 @@
 #   fm_axi_prefix [<home>]       # prints <home>/.local/axi
 #   fm_axi_bin_dir [<home>]      # prints <home>/.local/axi/bin
 #   fm_axi_prepend_path [<home>] # exports that bin directory first on PATH
-#   fm_axi_ambient_path          # the PATH before ANY firstmate prepend
+#   fm_axi_ambient_path          # the PATH before ANY firstmate prepend, or fail
 #   fm_axi_shadowed <path> <home> <tool>...  # which maintained tools do not run
 #
 # The location is derived only from FM_HOME, so a fresh vessel needs no local
@@ -24,20 +24,93 @@ fm_axi_bin_dir() {
   printf '%s/bin\n' "$prefix"
 }
 
+# The parent pid of <pid>, or failure when this machine will not say. /proc is
+# tried first because a stripped PATH may not reach ps, which is the very kind of
+# environment the callers of this library exist to diagnose. The sed strips
+# through the LAST ")" so a command name containing spaces or parentheses cannot
+# shift the field positions.
+fm_axi_pid_parent() {  # <pid>
+  local pid=$1 ppid=''
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  if [ -r "/proc/$pid/stat" ]; then
+    ppid=$(sed -e 's/^.*) //' "/proc/$pid/stat" 2>/dev/null | awk '{print $2}')
+  fi
+  if [ -z "$ppid" ] && command -v ps >/dev/null 2>&1; then
+    ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')
+  fi
+  case "$ppid" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$ppid"
+}
+
+# 0 when <pid> is this process or one of its ancestors. Anything else - a pid
+# that is gone, one in another tree, one this machine will not resolve, and pid 0
+# or 1, which are never firstmate entrypoints - answers no, because the only
+# question worth asking is whether THIS chain of firstmate processes recorded the
+# value being offered.
+fm_axi_pid_is_self_or_ancestor() {  # <pid>
+  local want=$1 pid=$$ hops=0 parent
+  case "$want" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$want" -gt 1 ] || return 1
+  while [ "$hops" -lt 64 ]; do
+    [ "$pid" = "$want" ] && return 0
+    parent=$(fm_axi_pid_parent "$pid") || return 1
+    [ "$parent" -gt 1 ] || return 1
+    pid=$parent
+    hops=$((hops + 1))
+  done
+  return 1
+}
+
+# Record the environment as the SESSION found it, before the first firstmate
+# entrypoint replaces it. Exported so it survives into every child, because the
+# entrypoints chain: fm-session-start.sh prepends and exports before spawning
+# fm-bootstrap.sh, which prepends and exports before spawning fm-axi-suite.sh. A
+# later prepender in the same chain must not overwrite it, or every downstream
+# check would be handed an environment firstmate had already corrected, which is
+# how the shadow report first shipped inert.
+#
+# But an exported value that is never overwritten has the lifetime of a process
+# TREE, not of the session it describes, and a tree can outlive its session: when
+# `tmux new-session` starts a server it freezes the launching environment into
+# that server, and every pane created there afterwards inherits the snapshot.
+# fm-watcher-service.sh prepends and then starts exactly such a server, so a
+# firstmate session running months later inside that server could be handed a
+# marker describing a session that is long gone - and answer confidently about
+# it. So the marker carries the pid that recorded it, and is honoured only for
+# that process and its descendants.
+#
+# A marker from another tree is not simply discarded, because this process may
+# still know the answer: if its own PATH does not already lead with the
+# maintained prefix, then nothing in ITS chain prepended, so its own PATH is the
+# honest ambient one and is recorded afresh. Only when a foreign marker meets an
+# already-prepended PATH is the question unanswerable here, and that is recorded
+# as `unattributable` rather than guessed - see fm_axi_ambient_path.
+fm_axi_ambient_claim() {  # <maintained-bin-dir>
+  local bin=$1
+  if [ -z "${FM_AXI_AMBIENT_PATH_OWNER+set}" ] && [ -z "${FM_AXI_AMBIENT_PATH+set}" ]; then
+    FM_AXI_AMBIENT_PATH=${PATH:-}
+    FM_AXI_AMBIENT_PATH_OWNER=$$
+    export FM_AXI_AMBIENT_PATH FM_AXI_AMBIENT_PATH_OWNER
+    return 0
+  fi
+  fm_axi_pid_is_self_or_ancestor "${FM_AXI_AMBIENT_PATH_OWNER:-}" && return 0
+  case "${PATH:-}" in
+    "$bin"|"$bin":*)
+      FM_AXI_AMBIENT_PATH_OWNER=unattributable
+      export FM_AXI_AMBIENT_PATH_OWNER
+      ;;
+    *)
+      FM_AXI_AMBIENT_PATH=${PATH:-}
+      FM_AXI_AMBIENT_PATH_OWNER=$$
+      export FM_AXI_AMBIENT_PATH FM_AXI_AMBIENT_PATH_OWNER
+      ;;
+  esac
+}
+
 fm_axi_prepend_path() {
   local bin
   bin=$(fm_axi_bin_dir "${1:-${FM_HOME:-}}") || return 1
-  # Record the environment as the SESSION found it, once, before the first
-  # firstmate entrypoint replaces it - and never again afterwards. Exported so it
-  # survives into every child, because the entrypoints chain: fm-session-start.sh
-  # prepends and exports before spawning fm-bootstrap.sh, which prepends and
-  # exports before spawning fm-axi-suite.sh. A later prepender that overwrote
-  # this would hand every downstream check an environment firstmate had already
-  # corrected, which is exactly the way the shadow report first shipped inert.
-  if [ -z "${FM_AXI_AMBIENT_PATH+set}" ]; then
-    FM_AXI_AMBIENT_PATH=${PATH:-}
-    export FM_AXI_AMBIENT_PATH
-  fi
+  fm_axi_ambient_claim "$bin"
   case "${PATH:-}" in
     "$bin"|"$bin":*) ;;
     *) PATH="$bin${PATH:+:$PATH}" ;;
@@ -46,10 +119,18 @@ fm_axi_prepend_path() {
 }
 
 # The PATH the session had before any firstmate entrypoint prepended a maintained
-# prefix. Falls back to the current PATH when nothing has prepended yet, so a
-# caller invoked straight from a raw shell still asks about its own environment.
+# prefix, or NON-ZERO when this process cannot honestly say. Falling back to the
+# current PATH in that case would be the original defect wearing a new hat: by
+# then a prepend has already happened, so $PATH describes the correction rather
+# than the environment. A caller that gets a failure here must report that it
+# cannot tell, never an all-clear.
 fm_axi_ambient_path() {
-  printf '%s' "${FM_AXI_AMBIENT_PATH-${PATH:-}}"
+  if [ -z "${FM_AXI_AMBIENT_PATH_OWNER+set}" ]; then
+    printf '%s' "${FM_AXI_AMBIENT_PATH-${PATH:-}}"
+    return 0
+  fi
+  fm_axi_pid_is_self_or_ancestor "$FM_AXI_AMBIENT_PATH_OWNER" || return 1
+  printf '%s' "${FM_AXI_AMBIENT_PATH-}"
 }
 
 # Print "<tool><TAB><path that actually runs>" for every named tool that <path>

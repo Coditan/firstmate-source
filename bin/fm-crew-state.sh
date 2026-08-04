@@ -16,11 +16,55 @@
 # fixed mapping logic, no heuristics and no LLM. Output is one stable, parseable,
 # token-tight line firstmate can read every heartbeat:
 #
-#   state: <working|parked|done|blocked|paused|failed|unknown|degraded> · source: <run-step|pane|status-log|none|missing-dependency> · <detail>
+#   state: <working|parked|done|blocked|paused|failed> · source: <run-step|pane|status-log> · <detail>
+#   state: <unknown|degraded> · source: <none|missing-dependency|read-failed> · cause: <token> · <detail>
+#
+# A state-carrying answer is a READING and carries no cause. The two answers that
+# are NOT readings carry one, because "I have no state for this crew" is useless
+# to a supervisor until it says why, and a free-prose sentence cannot be switched
+# on. `unknown` means the reader looked and found nothing; `degraded` means it
+# could not look. The state vocabulary stays two-valued for that class on
+# purpose - callers switch on it - and all the precision lives in `cause`, which
+# is a fixed enumerated token, never prose:
+#
+#   unknown (looked, found nothing)
+#     no-metadata               state/<id>.meta does not exist
+#     no-worktree-recorded      the meta records no worktree= at all
+#     worktree-gone             a worktree IS recorded and the directory is not there
+#     no-endpoint-recorded      the meta records no backend target
+#     endpoint-unreadable       the target did not answer and its CLI is installed
+#     kind-skips-run-lookup     kind=scout/secondmate, which never drive a run
+#     no-branch                 kind=ship at detached HEAD, so no run can be attributed
+#     no-run-attributed         the run lookup answered and named no run for this crew
+#     run-attribution-rejected  a run WAS found and this reader refused it
+#     log-verb-not-a-state      the status log's last line carries no state verb
+#   degraded (could not look)
+#     run-reader-missing        git or the no-mistakes CLI is not on PATH
+#     no-bounding-mechanism     no timeout, gtimeout or perl, so the call was never made
+#     run-lookup-failed         the CLI ran and did not answer
+#     endpoint-reader-missing   the backend's own session CLI is not on PATH
+#
+# WHAT REMAINS COLLAPSED after 2026-08-04, and why each is acceptable (this list
+# is the contract; extend it rather than letting a collapse go unrecorded):
+#   - run-attribution-rejected does not say WHICH rejection rule fired (rewritten
+#     head, diverged history, local work advanced past the run head, terminal run
+#     with an unbindable head, missing head field). All five are one fact for a
+#     supervisor - a run exists and this reader will not treat it as this crew's
+#     evidence - and separating them would publish no-mistakes internals this
+#     reader does not own. The prose detail names the run when there is one.
+#   - run-reader-missing does not say whether git or the no-mistakes CLI is the
+#     absent one; the detail names it, and the repair is the same PATH repair.
+#   - log-verb-not-a-state takes precedence over the run-lookup cause when both
+#     apply, because it names the LAST source consulted. The run-lookup reason is
+#     then carried in the prose detail rather than in the token.
+#   - worktree-gone cannot tell "torn down" from "never created" or a bad path;
+#     nothing on disk distinguishes them, so the reader does not guess.
+#   - no-run-attributed covers both "axi status named no run" and "the coarse runs
+#     list had no row for this branch"; both mean the same thing to a caller.
 #
 # `degraded` is NOT a crew state - it is this reader refusing to answer. It is
-# emitted when a source could not be consulted BECAUSE A REQUIRED TOOL IS NOT ON
-# PATH, and no other source produced a state. The distinction is load-bearing:
+# emitted when a source could not be consulted, and no other source produced a
+# state. The distinction is load-bearing:
 # an absence verdict ("no current-state source available", "backend target
 # gone") is a positive claim about the crew, and a reader whose instrument is
 # missing has no standing to make it. Collapsing the two is how the 2026-08
@@ -62,11 +106,11 @@
 #      recorded backend's pane busy state, then the status log's last line only
 #      when its verb maps to a recognized run-state. Decision-only events such as
 #      `resolved` never become current state or detail.
-#   5. Missing meta or torn-down worktree: report unknown · none. If no run is
-#      attributed to this crew, a dead endpoint also reports unknown · none rather
-#      than trusting a stale status log - UNLESS the tool that reads endpoints, or
-#      the one that reads run-steps, is not installed, in which case the answer is
-#      degraded · missing-dependency (see above).
+#   5. Missing meta or torn-down worktree: report unknown with the cause that
+#      names which. If no run is attributed to this crew, a dead endpoint also
+#      reports unknown rather than trusting a stale status log - UNLESS the tool
+#      that reads endpoints, or the one that reads run-steps, is not installed or
+#      could not be run, in which case the answer is degraded (see above).
 #
 # Read-only and side-effect free. Always exits 0 on a successful read regardless
 # of state; exit 2 only on a usage error (no id).
@@ -99,7 +143,9 @@ FM_CREW_STATE_RUNS_LIMIT=${FM_CREW_STATE_RUNS_LIMIT:-200}
 case "$FM_CREW_STATE_RUNS_LIMIT" in ''|*[!0-9]*) FM_CREW_STATE_RUNS_LIMIT=200 ;; esac
 SEP=' · '
 
-# Emit the one canonical line and exit 0. Detail is optional.
+# Emit the one canonical line and exit 0. Detail is optional. Used only for the
+# state-carrying answers; the two not-a-reading answers go through the pair below
+# so a cause token is structurally impossible to omit.
 emit() {  # <state> <source> [detail]
   local line="state: $1${SEP}source: $2"
   [ -n "${3:-}" ] && line="$line${SEP}$3"
@@ -107,21 +153,36 @@ emit() {  # <state> <source> [detail]
   exit 0
 }
 
-# The tool whose absence stopped the authoritative run-step read, named in the
-# degraded line. Set below, once the kind and the reachable toolchain are known.
-MISSING_DEP=
+# The two answers that are not readings. The cause token is a required argument
+# rather than an optional field, so a future branch cannot add another way to say
+# "no state" without also saying why.
+emit_unknown() {  # <cause> <detail>
+  printf '%s\n' "state: unknown${SEP}source: none${SEP}cause: $1${SEP}$2"
+  exit 0
+}
+emit_degraded() {  # <source> <cause> <detail>
+  printf '%s\n' "state: degraded${SEP}source: $1${SEP}cause: $2${SEP}$3"
+  exit 0
+}
 
-# The one wording for "the authoritative run-step reader could not be used here,
-# because a tool it needs is not installed". <because> says which weaker answer
-# was therefore refused, so a supervisor can see what was given up rather than
-# only that something was.
-emit_missing_dependency() {  # <because>
-  emit degraded missing-dependency "$MISSING_DEP not on PATH: the run-step state was never read and $1"
+# Why the authoritative run-step read never produced a reading, set once below.
+# READER_CAUSE is the enumerated token, READER_SOURCE the source field it belongs
+# under, and READER_WHY the human half naming the specific tool or failure.
+READER_CAUSE=
+READER_SOURCE=missing-dependency
+READER_WHY=
+
+# The one wording for "the authoritative run-step reader could not be used here".
+# <because> says which weaker answer was therefore refused, so a supervisor can
+# see what was given up rather than only that something was.
+emit_reader_degraded() {  # <because>
+  emit_degraded "$READER_SOURCE" "$READER_CAUSE" \
+    "$READER_WHY: the run-step state was never read and $1"
 }
 
 # --- meta resolution --------------------------------------------------------
 
-[ -f "$META" ] || emit unknown none "no metadata for $ID"
+[ -f "$META" ] || emit_unknown no-metadata "no metadata for $ID"
 
 meta_value() {  # <key>
   grep "^$1=" "$META" 2>/dev/null | tail -1 | cut -d= -f2- || true
@@ -131,9 +192,15 @@ WT=$(meta_value worktree)
 KIND=$(meta_value kind)
 [ -n "$KIND" ] || KIND=ship
 
-# A torn-down (or never-created) worktree has no current state to read.
-if [ -z "$WT" ] || [ ! -d "$WT" ]; then
-  emit unknown none "worktree gone (torn down?)"
+# A torn-down (or never-created) worktree has no current state to read. The two
+# ways to get here are different facts about the crew record: a meta that never
+# named a worktree is malformed, while a meta that names one whose directory is
+# gone is an ordinary teardown, and only the second is expected.
+if [ -z "$WT" ]; then
+  emit_unknown no-worktree-recorded "no worktree recorded in $META"
+fi
+if [ ! -d "$WT" ]; then
+  emit_unknown worktree-gone "worktree gone (torn down?): $WT"
 fi
 
 # --- status log ------------------------------------------------------------
@@ -240,19 +307,43 @@ strip_quotes() {
   trim "$s"
 }
 
-# Bounded no-mistakes call in the worktree; stdout only, never fails the script.
+# Bounded no-mistakes call in the worktree; stdout only, and it never aborts the
+# script - but it does REPORT, which is the whole point. Until 2026-08-04 every
+# arm ended in `|| true`, so a missing binary, a binary that exited non-zero, a
+# call the timeout killed, a call that was never made at all, and a genuine "no
+# run for this branch" all returned the same empty string. The caller could not
+# tell a read that did not happen from one that honestly found nothing, which is
+# the same defect this whole script exists to remove one level up.
+#
+# Return codes, distinct from the stdout the caller captures:
+#   0                    the call ran and succeeded
+#   NM_RUN_RC_FAILED     the call ran and did not succeed
+#   NM_RUN_RC_UNBOUNDED  no bounding mechanism exists here, so it was never made
+#
+# A non-zero exit that still produced stdout is deliberately NOT treated by
+# callers as a failed read: the CLI answered. Verified 2026-08-04 against the
+# real CLI - `no-mistakes axi status` in a repo with no gate exits 1 and prints
+# "error: repo not initialized" on STDOUT, which is a definitive "no run here",
+# not a broken instrument. Degrading on the exit code alone would report every
+# pre-init worktree in the fleet as unreadable.
+NM_RUN_RC_FAILED=1
+NM_RUN_RC_UNBOUNDED=3
 HAVE_TIMEOUT=none
 if command -v timeout >/dev/null 2>&1; then HAVE_TIMEOUT=timeout
 elif command -v gtimeout >/dev/null 2>&1; then HAVE_TIMEOUT=gtimeout
 elif command -v perl >/dev/null 2>&1; then HAVE_TIMEOUT=perl
 fi
 nm_run() {  # <args...>
+  local out='' rc=0
   case "$HAVE_TIMEOUT" in
-    timeout)  ( cd "$WT" && timeout "$NM_TIMEOUT" no-mistakes "$@" ) 2>/dev/null || true ;;
-    gtimeout) ( cd "$WT" && gtimeout "$NM_TIMEOUT" no-mistakes "$@" ) 2>/dev/null || true ;;
-    perl)     ( cd "$WT" && perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setpgrp(0, 0); exec @ARGV } local $SIG{ALRM} = sub { kill "TERM", -$pid; select undef, undef, undef, 0.2; kill "KILL", -$pid; exit 124 }; alarm $t; waitpid $pid, 0; exit($? >> 8)' "$NM_TIMEOUT" no-mistakes "$@" ) 2>/dev/null || true ;;
-    *)        true ;;
+    timeout)  out=$( ( cd "$WT" && timeout "$NM_TIMEOUT" no-mistakes "$@" ) 2>/dev/null ) || rc=$? ;;
+    gtimeout) out=$( ( cd "$WT" && gtimeout "$NM_TIMEOUT" no-mistakes "$@" ) 2>/dev/null ) || rc=$? ;;
+    perl)     out=$( ( cd "$WT" && perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setpgrp(0, 0); exec @ARGV } local $SIG{ALRM} = sub { kill "TERM", -$pid; select undef, undef, undef, 0.2; kill "KILL", -$pid; exit 124 }; alarm $t; waitpid $pid, 0; exit($? >> 8)' "$NM_TIMEOUT" no-mistakes "$@" ) 2>/dev/null ) || rc=$? ;;
+    *)        return "$NM_RUN_RC_UNBOUNDED" ;;
   esac
+  [ -n "$out" ] && printf '%s\n' "$out"
+  [ "$rc" -eq 0 ] || return "$NM_RUN_RC_FAILED"
+  return 0
 }
 
 # Scalar value of a TOON key in the captured run output ($RUN_OUT).
@@ -411,8 +502,13 @@ nm_ci_checks_state() {
 # matching row's status word (running/completed/cancelled/failed), or empty
 # when the branch has no run within FM_CREW_STATE_RUNS_LIMIT rows.
 nm_runs_status_for_branch() {  # <branch>
-  local branch=$1 out row st rest br sha
-  out=$(nm_run runs --limit "$FM_CREW_STATE_RUNS_LIMIT")
+  local branch=$1 out row st rest br sha rc=0
+  out=$(nm_run runs --limit "$FM_CREW_STATE_RUNS_LIMIT") || rc=$?
+  # Propagated, not swallowed: a coarse lookup that could not run is not the same
+  # answer as one that ran and listed no row for this branch.
+  if [ "$rc" -ne 0 ] && [ -z "$out" ]; then
+    return "$rc"
+  fi
   [ -n "$out" ] || return 0
   while IFS= read -r row; do
     row=$(trim "$row")
@@ -543,20 +639,48 @@ COARSE_STATUS=""
 # no-mistakes CLI is what answers for that branch. Losing the first is checked
 # first precisely because it presents as an empty branch rather than as an error.
 READER_MISSING=0
-if [ "$KIND" = ship ]; then
-  if [ "$GIT_MISSING" = 1 ]; then
-    READER_MISSING=1
-    MISSING_DEP=git
-  elif [ -n "$CREW_BRANCH" ] && ! command -v no-mistakes >/dev/null 2>&1; then
-    READER_MISSING=1
-    MISSING_DEP='no-mistakes CLI'
-  fi
+# Why no run was attributed, when none was. Every branch below that ends without
+# HAVE_RUN=1 names its own reason, so the catch-all at the bottom of this script
+# never has to invent one.
+UNKNOWN_CAUSE=no-run-attributed
+UNKNOWN_DETAIL='no current-state source available'
+if [ "$KIND" != ship ]; then
+  # Scouts and secondmates never drive a no-mistakes validation of their own
+  # worktree, so the lookup is skipped for them and state comes from pane/log
+  # directly. Nothing failed here, and the cause says so.
+  UNKNOWN_CAUSE=kind-skips-run-lookup
+  UNKNOWN_DETAIL="no current-state source available: kind=$KIND never drives a run"
+elif [ "$GIT_MISSING" = 1 ]; then
+  READER_MISSING=1
+  READER_CAUSE=run-reader-missing
+  READER_SOURCE=missing-dependency
+  READER_WHY='git not on PATH'
+elif [ -z "$CREW_BRANCH" ]; then
+  UNKNOWN_CAUSE=no-branch
+  UNKNOWN_DETAIL='no current-state source available: detached HEAD, so no run can be attributed'
+elif ! command -v no-mistakes >/dev/null 2>&1; then
+  READER_MISSING=1
+  READER_CAUSE=run-reader-missing
+  READER_SOURCE=missing-dependency
+  READER_WHY='no-mistakes CLI not on PATH'
 fi
-# Scouts and secondmates never drive a no-mistakes validation of their own
-# worktree, so skip the lookup for them and read state from pane/log directly.
 if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && [ "$READER_MISSING" = 0 ]; then
-  RUN_OUT=$(nm_run axi status)
-  if [ -n "$RUN_OUT" ]; then
+  nm_rc=0
+  RUN_OUT=$(nm_run axi status) || nm_rc=$?
+  if [ "$nm_rc" = "$NM_RUN_RC_UNBOUNDED" ]; then
+    # The call was never made at all. This passes a `command -v no-mistakes`
+    # pre-check cleanly, which is why the outcome has to come from the call site
+    # rather than from a check standing next to it.
+    READER_MISSING=1
+    READER_CAUSE=no-bounding-mechanism
+    READER_SOURCE=missing-dependency
+    READER_WHY='no timeout, gtimeout or perl on PATH, so the bounded run-step call was never made'
+  elif [ "$nm_rc" != 0 ] && [ -z "$RUN_OUT" ]; then
+    READER_MISSING=1
+    READER_CAUSE=run-lookup-failed
+    READER_SOURCE=read-failed
+    READER_WHY='the no-mistakes run lookup ran and returned nothing'
+  elif [ -n "$RUN_OUT" ]; then
     run_branch=$(strip_quotes "$(nm_field branch)")
     if [ -n "$run_branch" ] && [ "$run_branch" = "$CREW_BRANCH" ] && nm_run_head_matches_worktree; then
       HAVE_RUN=1
@@ -568,8 +692,21 @@ if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && [ "$READER_MISSING" = 0 ]; the
       # primary call means the CLI itself did not respond, so retrying it
       # immediately with a second bounded call would just double the wait
       # for no better answer.
-      COARSE_STATUS=$(nm_runs_status_for_branch "$CREW_BRANCH")
-      if [ -n "$COARSE_STATUS" ]; then
+      if [ -n "$run_branch" ]; then
+        # A run WAS found and this reader refused it. That is materially
+        # different from finding no run, because it means the evidence exists
+        # and something about its identity did not bind to this crew.
+        UNKNOWN_CAUSE=run-attribution-rejected
+        UNKNOWN_DETAIL="no current-state source available: a run for $run_branch was found and not attributed to this crew's code identity"
+      fi
+      coarse_rc=0
+      COARSE_STATUS=$(nm_runs_status_for_branch "$CREW_BRANCH") || coarse_rc=$?
+      if [ "$coarse_rc" != 0 ]; then
+        READER_MISSING=1
+        READER_CAUSE=run-lookup-failed
+        READER_SOURCE=read-failed
+        READER_WHY='the no-mistakes runs lookup ran and returned nothing'
+      elif [ -n "$COARSE_STATUS" ]; then
         HAVE_RUN=1
         RUN_SOURCE=coarse
       fi
@@ -700,16 +837,17 @@ fi
 # liveness, so a finished-but-pane-closed crew never reaches here. Down here there
 # is no run to consult, so a dead/unreadable target means the crew is gone: report
 # unknown rather than trusting a possibly-stale status log as the current state.
-[ -n "$BACKEND_TARGET" ] || emit unknown none "no backend target recorded"
+[ -n "$BACKEND_TARGET" ] || emit_unknown no-endpoint-recorded "no backend target recorded"
 # An unreadable endpoint means the crew is gone ONLY if the tool that reads
 # endpoints is installed. Without it, `fm_backend_capture` fails identically for
 # a live crew and a dead one, and answering "gone" would send firstmate into
 # stuck-crewmate recovery against a perfectly healthy worker.
 if ! pane_readable "$BACKEND_TARGET"; then
   if ! fm_backend_session_cli_available "$TASK_BACKEND"; then
-    emit degraded missing-dependency "$TASK_BACKEND CLI not on PATH: endpoint $BACKEND_TARGET cannot be read"
+    emit_degraded missing-dependency endpoint-reader-missing \
+      "$TASK_BACKEND CLI not on PATH: endpoint $BACKEND_TARGET cannot be read"
   fi
-  emit unknown none "backend target gone: $BACKEND_TARGET"
+  emit_unknown endpoint-unreadable "backend target gone: $BACKEND_TARGET"
 fi
 
 # Secondmates idle on their own watcher (idle pane = healthy), so the busy
@@ -737,7 +875,7 @@ if [ -n "$LOG_VERB" ]; then
     # is a stale echo of an event log that this script exists to reconcile
     # against the run-step - and reconciliation is exactly what did not happen.
     if [ "$READER_MISSING" = 1 ] && [ "$LOG_STATE" != paused ]; then
-      emit_missing_dependency "its '$LOG_VERB' event was never reconciled against the run"
+      emit_reader_degraded "its '$LOG_VERB' event was never reconciled against the run"
     fi
     emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")"
   fi
@@ -746,6 +884,16 @@ fi
 # Nothing answered. Whether that is a fact about the crew or a fact about this
 # machine depends on whether the authoritative reader was even available.
 if [ "$READER_MISSING" = 1 ]; then
-  emit_missing_dependency "no other source answered either"
+  emit_reader_degraded "no other source answered either"
 fi
-emit unknown none "no current-state source available"
+# A log line that exists but carries no state verb is the LAST source consulted,
+# so it names the cause; an absent log leaves the run-lookup reason standing.
+# Only the verb is reported, never the line: a decision-closing event's prose
+# must not leak into the detail (see the mapping comment above).
+if [ -n "$LOG_LINE" ]; then
+  if [ -n "$LOG_VERB" ]; then
+    emit_unknown log-verb-not-a-state "the status log's last verb '$LOG_VERB' is not a state"
+  fi
+  emit_unknown log-verb-not-a-state "the status log's last line carries no state verb"
+fi
+emit_unknown "$UNKNOWN_CAUSE" "$UNKNOWN_DETAIL"

@@ -639,8 +639,78 @@ test_unseeded_vessel_reports_no_shadowing() {
   pass "an unseeded vessel reports no shadowing, only the seeding the other paths own"
 }
 
+# A pid that has certainly exited, so a marker stamped with it is provably from a
+# process tree that is gone rather than merely from somewhere else.
+dead_pid() {
+  local p
+  ( exit 0 ) &
+  p=$!
+  wait "$p" 2>/dev/null || true
+  kill -0 "$p" 2>/dev/null && fail "the fixture pid $p is still alive"
+  printf '%s' "$p"
+}
+
+# The recorded pre-prepend environment is exported and never overwritten by a
+# later prepender, which is what makes it survive the entrypoint chain - and also
+# what lets it outlive the session it describes. `tmux new-session` starts a
+# server with the launching environment frozen into it, every pane opened there
+# afterwards inherits that snapshot, and bin/fm-watcher-service.sh prepends
+# before starting exactly such a server. So a session running inside that server
+# can be handed a marker describing a session that ended months ago, and the
+# check would answer about that one with complete confidence. Here the frozen
+# marker claims a clean environment while this session in fact resolves the
+# external copy.
+test_a_marker_from_a_dead_process_tree_is_not_trusted() {
+  local w out gone frozen
+  w="$TMP_ROOT/stale-marker"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  make_npm "$w/bin" "$w/versions" "$w/install.log"
+  make_tool "$w/home/.local/axi/bin" stale-axi 1.2.4
+  make_tool "$w/bin" stale-axi 1.2.3
+  printf '%s\n' 'stale-axi=1.2.4' > "$w/versions"
+  gone=$(dead_pid)
+  frozen="$w/home/.local/axi/bin:$BASE_PATH"
+  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/state" \
+    FM_AXI_AMBIENT_PATH="$frozen" FM_AXI_AMBIENT_PATH_OWNER="$gone" \
+    FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="stale-axi" FM_AXI_SUITE_CHECK_INTERVAL=0 \
+    FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
+    FM_TEST_HOOK_LOG="$w/hook.log" "$ROOT/bin/fm-axi-suite.sh" --force)
+  assert_contains "$out" "AXI_SUITE_SHADOWED: stale-axi runs from $w/bin/stale-axi" \
+    "a frozen marker from a dead process tree was believed over this session's own environment"
+  pass "a recorded environment from another process tree is not answered for"
+}
+
+# The other half of the same guard: when the foreign marker meets a PATH that
+# ALREADY leads with the maintained prefix, this process has nothing honest left
+# to measure - its own PATH describes the correction, not the environment. The
+# answer must be that it cannot tell, never a clean all-clear, because a
+# confident wrong answer is the whole defect this change exists to remove.
+test_an_unattributable_environment_reports_that_it_cannot_tell() {
+  local w out gone frozen
+  w="$TMP_ROOT/unattributable-marker"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  make_npm "$w/bin" "$w/versions" "$w/install.log"
+  make_tool "$w/home/.local/axi/bin" opaque-axi 1.2.4
+  make_tool "$w/bin" opaque-axi 1.2.3
+  printf '%s\n' 'opaque-axi=1.2.4' > "$w/versions"
+  gone=$(dead_pid)
+  frozen="$w/home/.local/axi/bin:$BASE_PATH"
+  out=$(PATH="$w/home/.local/axi/bin:$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/state" \
+    FM_AXI_AMBIENT_PATH="$frozen" FM_AXI_AMBIENT_PATH_OWNER="$gone" \
+    FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="opaque-axi" FM_AXI_SUITE_CHECK_INTERVAL=0 \
+    FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
+    FM_TEST_HOOK_LOG="$w/hook.log" "$ROOT/bin/fm-axi-suite.sh" --force)
+  assert_contains "$out" 'AXI_SUITE_SHADOW_UNKNOWN' \
+    "an unanswerable environment was reported as a clean all-clear instead of as unknown"
+  assert_not_contains "$out" 'AXI_SUITE_SHADOWED:' \
+    "a check that cannot tell must not also claim a specific shadowing"
+  pass "an environment this process cannot attribute is reported as unknown, not clear"
+}
+
 test_patch_and_minor_auto_update
 test_major_and_missing_wait_for_review
+test_a_marker_from_a_dead_process_tree_is_not_trusted
+test_an_unattributable_environment_reports_that_it_cannot_tell
 test_shadowed_suite_is_reported_even_while_the_maintained_copy_is_current
 test_unshadowed_suite_reports_nothing_extra
 test_shadow_report_survives_an_entrypoint_that_prepended_first

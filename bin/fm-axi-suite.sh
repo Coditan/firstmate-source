@@ -72,7 +72,14 @@ fm_axi_prepend_path "$FM_HOME"
 # once, at whichever entrypoint prepends first, which is the only value that
 # still answers "which copy actually runs elsewhere". See fm_axi_shadowed for
 # what that question is worth.
-AMBIENT_PATH=$(fm_axi_ambient_path)
+#
+# That record is honoured only for the process tree that made it, so it can also
+# report that it does not know - a marker frozen into a tmux server describes a
+# session that may be long gone. AMBIENT_KNOWN carries that outcome, because a
+# check whose thesis is "never pass a broken instrument off as an all-clear" may
+# not quietly substitute its own already-corrected PATH here.
+AMBIENT_KNOWN=1
+AMBIENT_PATH=$(fm_axi_ambient_path) || AMBIENT_KNOWN=0
 INTERVAL=${FM_AXI_SUITE_CHECK_INTERVAL:-86400}
 CHECK_ONLY=0
 FORCE=0
@@ -246,6 +253,11 @@ emit_cached() {
 # defect, at this site and at the watcher's.
 report_shadowed() {
   local shadowed tool resolved
+  if [ "$AMBIENT_KNOWN" -eq 0 ]; then
+    printf 'AXI_SUITE_SHADOW_UNKNOWN: cannot tell which copy of the suite this session resolves: the recorded pre-prepend environment belongs to another process tree (a tmux server freezes one session'"'"'s environment into every pane opened later), and this process already resolves %s first, so its own PATH cannot answer either\n' \
+      "$AXI_BIN"
+    return 0
+  fi
   # shellcheck disable=SC2086 # SUITE is a space-separated tool list, split on purpose.
   shadowed=$(fm_axi_shadowed "$AMBIENT_PATH" "$FM_HOME" $SUITE) || return 0
   [ -n "$shadowed" ] || return 0

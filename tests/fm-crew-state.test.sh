@@ -179,6 +179,26 @@ make_gitless_toolbin() {  # <dir> -> echoes toolbin path
   printf '%s\n' "$tb"
 }
 
+# A toolbin with everything EXCEPT a way to bound a call. nm_run's last arm then
+# never invokes no-mistakes at all, which a `command -v no-mistakes` pre-check
+# cannot see - the binary really is installed, and the read still never happens.
+make_unbounded_toolbin() {  # <dir> -> echoes toolbin path
+  local dir=$1 tb="$1/unboundedbin" tool real
+  mkdir -p "$tb"
+  for tool in bash git grep sed awk head cut tail tr dirname basename date stat cksum mktemp; do
+    real=$(command -v "$tool" || true)
+    [ -n "$real" ] || continue
+    ln -s "$real" "$tb/$tool"
+  done
+  for tool in bash git grep sed; do
+    [ -e "$tb/$tool" ] || fail "missing core tool for the unbounded path: $tool"
+  done
+  for tool in timeout gtimeout perl; do
+    [ ! -e "$tb/$tool" ] || fail "the unbounded toolbin must not contain $tool"
+  done
+  printf '%s\n' "$tb"
+}
+
 # Run the helper for one case dir. FM_FAKE_* env (run output, busy flag) are read
 # from the caller's environment by the fakes above.
 run_crew_state() {  # <case-dir> <id>
@@ -1306,6 +1326,194 @@ test_detached_head_with_git_present_is_unchanged() {
   pass "a detached HEAD keeps its unknown answer while git is reachable"
 }
 
+# (m) The call site must be able to report its own failure. Until 2026-08-04
+# every arm of nm_run ended in `|| true`, so a binary that exited non-zero, a
+# call the timeout killed, a call that was never made at all, and a genuine "no
+# run for this branch" all returned the same empty string, and the caller could
+# not tell a read that did not happen from one that honestly found nothing. A
+# `command -v no-mistakes` pre-check cannot close this: it is a different
+# instrument from the call, and it passes cleanly in both cases below.
+test_a_run_lookup_that_fails_is_degraded_not_unknown() {
+  reset_fakes
+  local d toolbin out
+  d=$(new_case nm-exits-nonzero)
+  make_repo_on_branch "$d/wt" fm/feat-nm-fails
+  make_fakebin "$d" >/dev/null
+  # Installed, runnable, and broken: it answers nothing and exits non-zero, the
+  # shape of a bad install, an unreadable config, or a crash.
+  cat > "$d/fakebin/no-mistakes" <<'SH'
+#!/usr/bin/env bash
+exit 7
+SH
+  chmod +x "$d/fakebin/no-mistakes"
+  toolbin=$(make_stripped_toolbin "$d")
+  fm_write_meta "$d/state/nm-fails.meta" "window=fm:fm-nm-fails" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_BUSY=0
+  out=$(PATH="$d/fakebin:$toolbin" FM_STATE_OVERRIDE="$d/state" "$CREW_STATE" nm-fails)
+  assert_contains "$out" "state: degraded" "a run lookup that ran and answered nothing must not report a crew state"
+  assert_contains "$out" "cause: run-lookup-failed" "a failed run lookup did not name itself as the cause"
+  assert_not_contains "$out" "state: unknown" "a read that did not happen must not read as a quiet crew"
+  pass "a no-mistakes call that ran and failed reports degraded, not unknown"
+}
+
+test_a_run_lookup_that_cannot_be_bounded_is_degraded_not_unknown() {
+  reset_fakes
+  local d toolbin out
+  d=$(new_case nm-unbounded)
+  make_repo_on_branch "$d/wt" fm/feat-nm-unbounded
+  make_fakebin "$d" >/dev/null
+  toolbin=$(make_unbounded_toolbin "$d")
+  fm_write_meta "$d/state/nm-unbounded.meta" "window=fm:fm-nm-unbounded" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_BUSY=0
+  # The CLI is present and would answer; nothing on this PATH can bound the call,
+  # so it is never made at all.
+  FM_FAKE_AXI_STATUS=$'run:\n  branch: fm/feat-nm-unbounded\n  status: running\n  head: "'$FM_FAKE_RUN_HEAD$'"'
+  out=$(PATH="$d/fakebin:$toolbin" FM_STATE_OVERRIDE="$d/state" "$CREW_STATE" nm-unbounded)
+  assert_contains "$out" "state: degraded" "an unmade call must not report a crew state"
+  assert_contains "$out" "cause: no-bounding-mechanism" "a call that was never made did not name itself as the cause"
+  assert_not_contains "$out" "state: unknown" "a call that was never made must not read as a quiet crew"
+  pass "a run-step call with no way to bound it reports degraded, not unknown"
+}
+
+# (n) The causes of "I have no state" must be separately nameable. `unknown -
+# none` was returned for every one of the cases below, so the string stayed an
+# instrument whose failure was indistinguishable from an honest all-clear - the
+# same defect one level up from the one this change fixes. Each case asserts the
+# enumerated TOKEN, never the prose, because prose is what a caller cannot
+# switch on.
+assert_cause() {  # <output> <token> <what-was-collapsed>
+  assert_contains "$1" "cause: $2" "$3"
+}
+
+test_cause_no_metadata() {
+  reset_fakes
+  local d out
+  d=$(new_case cause-no-meta)
+  make_fakebin "$d" >/dev/null
+  out=$(run_crew_state "$d" nothing-here)
+  assert_cause "$out" no-metadata "a crew with no meta file did not name that as the cause"
+  pass "cause no-metadata"
+}
+
+test_cause_no_worktree_recorded() {
+  reset_fakes
+  local d out
+  d=$(new_case cause-no-wt-recorded)
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/no-wt.meta" "window=fm:fm-no-wt" "kind=ship"
+  out=$(run_crew_state "$d" no-wt)
+  assert_cause "$out" no-worktree-recorded "a meta that records no worktree was collapsed into the teardown answer"
+  pass "cause no-worktree-recorded"
+}
+
+test_cause_worktree_gone() {
+  reset_fakes
+  local d out
+  d=$(new_case cause-wt-gone)
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/wt-gone.meta" "window=fm:fm-wt-gone" "worktree=$d/never-existed" "kind=ship"
+  out=$(run_crew_state "$d" wt-gone)
+  assert_cause "$out" worktree-gone "a recorded worktree that is gone was collapsed with one that was never recorded"
+  pass "cause worktree-gone"
+}
+
+test_cause_no_endpoint_recorded() {
+  reset_fakes
+  local d out
+  d=$(new_case cause-no-endpoint)
+  mkdir -p "$d/wt"
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/no-endpoint.meta" "worktree=$d/wt" "kind=scout"
+  out=$(run_crew_state "$d" no-endpoint)
+  assert_cause "$out" no-endpoint-recorded "a meta with no backend target did not name that as the cause"
+  pass "cause no-endpoint-recorded"
+}
+
+test_cause_endpoint_unreadable() {
+  reset_fakes
+  local d out
+  d=$(new_case cause-endpoint-unreadable)
+  mkdir -p "$d/wt"
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/dead-endpoint.meta" "window=default:w1:p2" "worktree=$d/wt" "kind=scout" "backend=herdr"
+  FM_FAKE_HERDR_MISSING=1
+  out=$(run_crew_state "$d" dead-endpoint)
+  assert_cause "$out" endpoint-unreadable "a dead endpoint did not name itself as the cause"
+  assert_contains "$out" "state: unknown" "a dead endpoint whose CLI is installed must still be a reading, not a degradation"
+  pass "cause endpoint-unreadable"
+}
+
+test_cause_kind_skips_run_lookup() {
+  reset_fakes
+  local d out
+  d=$(new_case cause-kind-skips)
+  make_repo_on_branch "$d/wt" fm/feat-scout-skip
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/scout-skip.meta" "window=fm:fm-scout-skip" "worktree=$d/wt" "kind=scout"
+  FM_FAKE_BUSY=0
+  out=$(run_crew_state "$d" scout-skip)
+  assert_cause "$out" kind-skips-run-lookup "a kind that never drives a run was collapsed with a crew whose run lookup found nothing"
+  pass "cause kind-skips-run-lookup"
+}
+
+test_cause_no_branch() {
+  reset_fakes
+  local d out
+  d=$(new_case cause-no-branch)
+  make_repo_on_branch "$d/wt" fm/feat-will-detach
+  git -C "$d/wt" checkout -q --detach HEAD
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/detached-cause.meta" "window=fm:fm-detached-cause" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_BUSY=0
+  out=$(run_crew_state "$d" detached-cause)
+  assert_cause "$out" no-branch "a detached HEAD was collapsed with a crew whose run lookup found nothing"
+  assert_contains "$out" "state: unknown" "a detached HEAD must stay a reading, not a degradation"
+  pass "cause no-branch"
+}
+
+test_cause_no_run_attributed() {
+  reset_fakes
+  local d out
+  d=$(new_case cause-no-run)
+  make_repo_on_branch "$d/wt" fm/feat-no-run
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/no-run.meta" "window=fm:fm-no-run" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_BUSY=0
+  out=$(run_crew_state "$d" no-run)
+  assert_cause "$out" no-run-attributed "a crew whose run lookup named no run did not say so"
+  pass "cause no-run-attributed"
+}
+
+test_cause_run_attribution_rejected() {
+  reset_fakes
+  local d out
+  d=$(new_case cause-run-rejected)
+  make_repo_on_branch "$d/wt" fm/feat-mine
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/run-rejected.meta" "window=fm:fm-run-rejected" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_BUSY=0
+  # A run exists and answered; it simply is not this crew's. "There is a run and
+  # I refused it" is materially different from "there is no run".
+  FM_FAKE_AXI_STATUS=$'run:\n  id: "01OTHER"\n  branch: fm/feat-someone-else\n  status: running\n  head: "deadbee"'
+  out=$(run_crew_state "$d" run-rejected)
+  assert_cause "$out" run-attribution-rejected "a run that was found and refused was collapsed with finding no run at all"
+  pass "cause run-attribution-rejected"
+}
+
+test_cause_log_verb_not_a_state() {
+  reset_fakes
+  local d out
+  d=$(new_case cause-log-not-a-state)
+  mkdir -p "$d/wt"
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/log-noverb.meta" "window=fm:fm-log-noverb" "worktree=$d/wt" "kind=secondmate"
+  printf 'resolved: carried on\n' > "$d/state/log-noverb.status"
+  out=$(run_crew_state "$d" log-noverb)
+  assert_cause "$out" log-verb-not-a-state "a log line that is not a state was collapsed with an empty log"
+  assert_not_contains "$out" "carried on" "the decision-closing prose must not leak into the detail"
+  pass "cause log-verb-not-a-state"
+}
+
 # The classifier must act on the difference, not fold it back into `none`.
 test_degraded_classifies_as_its_own_absorb_class() {
   reset_fakes
@@ -1569,6 +1777,18 @@ test_present_backend_cli_still_reports_a_dead_endpoint
 test_missing_no_mistakes_still_trusts_a_busy_pane
 test_missing_git_is_degraded_not_unknown
 test_detached_head_with_git_present_is_unchanged
+test_a_run_lookup_that_fails_is_degraded_not_unknown
+test_a_run_lookup_that_cannot_be_bounded_is_degraded_not_unknown
+test_cause_no_metadata
+test_cause_no_worktree_recorded
+test_cause_worktree_gone
+test_cause_no_endpoint_recorded
+test_cause_endpoint_unreadable
+test_cause_kind_skips_run_lookup
+test_cause_no_branch
+test_cause_no_run_attributed
+test_cause_run_attribution_rejected
+test_cause_log_verb_not_a_state
 test_degraded_classifies_as_its_own_absorb_class
 
 echo "all fm-crew-state tests passed"

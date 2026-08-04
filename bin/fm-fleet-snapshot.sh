@@ -256,7 +256,7 @@ last_nonempty_line() {  # <file>
 }
 
 crew_state_json() {  # <id>
-  local id=$1 raw rest state source detail sep
+  local id=$1 raw rest state source cause detail sep
   raw=$(
     FM_ROOT_OVERRIDE="$FM_ROOT" \
       FM_HOME="$FM_HOME" \
@@ -270,6 +270,7 @@ crew_state_json() {  # <id>
   sep=' · '
   state=unknown
   source=none
+  cause=
   detail=
   case "$raw" in
     state:\ *"$sep"source:\ *)
@@ -280,10 +281,25 @@ crew_state_json() {  # <id>
         *"$sep"*) source=${rest%%"$sep"*}; detail=${rest#*"$sep"} ;;
         *) source=$rest ;;
       esac
+      # The two answers that are not readings carry an enumerated cause token
+      # between the source and the prose detail (bin/fm-crew-state.sh's header
+      # owns that vocabulary). Lifted into its own field so a consumer can switch
+      # on WHY there is no state instead of matching a sentence, and so the
+      # detail stays the human half it has always been.
+      case "$detail" in
+        cause:\ *)
+          case "$detail" in
+            *"$sep"*) cause=${detail%%"$sep"*}; detail=${detail#*"$sep"} ;;
+            *) cause=$detail; detail= ;;
+          esac
+          cause=${cause#cause: }
+          ;;
+      esac
       ;;
   esac
-  jq -n --arg raw "$raw" --arg state "$state" --arg source "$source" --arg detail "$detail" \
-    '{state:$state,source:$source,detail:$detail,raw:$raw}'
+  jq -n --arg raw "$raw" --arg state "$state" --arg source "$source" \
+    --arg cause "$cause" --arg detail "$detail" \
+    '{state:$state,source:$source,cause:$cause,detail:$detail,raw:$raw}'
 }
 
 status_event_json() {  # <status-log>
