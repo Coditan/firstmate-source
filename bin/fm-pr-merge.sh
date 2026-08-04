@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Merge a task's PR after recording pr= and any available pr_head= through
-# bin/fm-pr-check.sh, so teardown can verify landed work after squash merges.
+# bin/fm-pr-check.sh, so teardown can verify landed work even after historical
+# or explicitly requested squash merges.
 # The full canonical GitHub PR URL is parsed by bin/fm-pr-lib.sh and the derived
 # owner/repository and PR number are passed to gh-axi as separate arguments.
 #
-# Merge method defaults to --squash when the caller passes none of --squash,
-# --merge, --rebase, or --method after the optional -- separator. Extra args
-# must not include --repo or -R because the repository comes only from the URL.
+# Merge method defaults to --merge, producing a real merge commit, when the
+# caller passes none of --squash, --merge, --rebase, or --method after the
+# optional -- separator. Extra args must not include --repo or -R because the
+# repository comes only from the URL.
 #
 # The merged head branch is deleted by default: --delete-branch is added unless
 # the caller already chose, with --delete-branch, or --delete-branch=false to
@@ -106,7 +108,7 @@ grep -qxF "pr=$URL" "$META" || {
 
 merge_args=()
 if ! caller_has_merge_method "$@"; then
-  merge_args+=(--squash)
+  merge_args+=(--merge)
 fi
 # The forge deletes the head branch as part of this merge, and only this merge.
 if ! caller_has_delete_choice "$@"; then

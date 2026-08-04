@@ -128,7 +128,7 @@ For a branch that is already an ancestor of the default branch, `merge-base(defa
 Placed after A it sees only the 34 non-ancestor branches, and fires on none of them.
 It must still come before C, because a content-free branch cannot make `merge-tree` conflict, so C would settle it as plain `landed` and E would never fire at all.
 
-**Ancestry alone would have called 34 of 52 landed branches unmerged.** On `coditan-bridge` the same reading was worse: 152 of 154 read as unmerged, because PR #1 is the only pull request in that repository's history merged with a real merge commit - the only merge commit in 7,724 commits on `main`. Everything else was squashed, so branch tips are unreachable from `main` by construction. "152 not merged" is a restatement of "we squash", nothing more.
+**Ancestry alone would have called 34 of 52 landed branches unmerged.** On `coditan-bridge` the same reading was worse: 152 of 154 read as unmerged, because PR #1 is the only pull request in that repository's history merged with a real merge commit - the only merge commit in 7,724 commits on `main`. Everything else measured there was squashed, so those branch tips are unreachable from `main` by construction. "152 not merged" was a restatement of the fleet's historical squash behavior, nothing more.
 
 ### The content test is inconclusive far more often than it looks
 
