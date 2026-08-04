@@ -32,6 +32,9 @@
 # no unresolved captain decision. Later review passes may add keys; a live task's
 # metadata inventory is unioned idempotently. A post-teardown visual review can
 # complete against the surviving report and holds without recreating task state.
+# Both `complete` and `verify` refuse an origin whose status stream wrote a
+# `[key=...]` token after the colon, where bin/fm-classify-lib.sh's key grammar
+# cannot read it; the refusal names the offending lines.
 # `verify` is read-only and is called by scout teardown so teardown cannot erase a
 # source before this gate has succeeded. A resolved captain hold that retention
 # moved into data/done-archive.md remains a durable completion record, but only
@@ -161,6 +164,20 @@ sorted_key_union() {  # <comma-list> <newline-or-space-separated-new-keys>
 
 meta_value() {  # <meta> <key>
   grep "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2- || true
+}
+
+# Refuse a status stream that wrote a decision key after the colon, where the
+# key grammar cannot read it. Such a line folds under "default" and is
+# indistinguishable from an unkeyed line, so two independent decisions silently
+# collapse into one and the gate would otherwise refuse a "default" key nobody
+# wrote. The offending lines are named, and the fix is to correct them in the
+# status file: an append cannot undo a mis-keyed line already in the stream.
+refuse_misplaced_keys() {  # <origin-id>
+  local status_file="$STATE/$1.status" bad
+  bad=$(status_misplaced_key_lines "$status_file")
+  [ -n "$bad" ] || return 0
+  fail "$1 wrote a decision key after the colon, where the status parser cannot read it (it folds under the key \"default\"). Correct these lines in $status_file to the \"<verb> [key=<slug>]: <summary>\" shape:
+$bad"
 }
 
 origin_open_decisions() {  # <origin-id>
@@ -382,6 +399,7 @@ command_complete() {
   shift
   meta="$STATE/$origin.meta"
   [ -f "$meta" ] && has_meta=1
+  refuse_misplaced_keys "$origin"
   require_tasks_axi
   origin_exists_here "$origin" || fail "origin $origin is not owned by the active home $FM_HOME"
   if [ "$#" -eq 1 ] && [ "$1" = --none ]; then
@@ -444,6 +462,7 @@ command_verify() {
   validate_slug origin-id "$origin"
   meta="$STATE/$origin.meta"
   [ -f "$meta" ] || fail "origin metadata is absent: $meta"
+  refuse_misplaced_keys "$origin"
   require_tasks_axi
   reviewed=$(meta_value "$meta" decisions_reviewed)
   [ "$reviewed" = 1 ] || fail "origin $origin has no completed unresolved-decision inventory"

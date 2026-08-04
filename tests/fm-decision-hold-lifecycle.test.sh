@@ -119,6 +119,50 @@ write_origin_meta() {  # <home> <id> [kind]
     "mode=$kind"
 }
 
+# A key written after the colon is invisible to the verb-prefix grammar, so the
+# decision folds under "default" and the gate used to refuse an unrecognized
+# "default" key with no hint that a real key was written in the wrong place -
+# the cause named nothing, and registering the intended hold never cleared it.
+# The refusal must now name the misplacement and quote the offending line, and
+# the same decision written in the correct shape must still complete.
+test_misplaced_status_key_refuses_by_name() {
+  local home id
+  home=$(make_home misplaced-key)
+  id=sample-shape-review
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate sample shape" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create investigation backlog fixture"
+  write_origin_meta "$home" "$id"
+  printf 'needs-decision: choose route north or route south [key=route]\n' > "$home/state/$id.status"
+  printf '# Sample shape review\n\nThe route choice remains unresolved.\n' > "$home/data/$id/report.md"
+  run_decisions "$home" hold "$id" route \
+    --title "Choose the sample route" --reason "captain route choice pending" --repo sample >/dev/null \
+    || fail "could not register route hold"
+
+  if run_decisions "$home" complete "$id" route > "$home/misplaced.out" 2> "$home/misplaced.err"; then
+    fail "completion accepted a decision key the status parser cannot read"
+  fi
+  assert_grep "after the colon" "$home/misplaced.err" \
+    "refusal did not name the misplaced key as the cause"
+  assert_grep "needs-decision: choose route north or route south [key=route]" "$home/misplaced.err" \
+    "refusal did not quote the offending status line"
+  assert_no_grep "decisions_reviewed=1" "$home/state/$id.meta" \
+    "refused completion recorded a false attestation"
+
+  if run_decisions "$home" verify "$id" > "$home/misplaced-verify.out" 2> "$home/misplaced-verify.err"; then
+    fail "teardown verification accepted a decision key the status parser cannot read"
+  fi
+  assert_grep "after the colon" "$home/misplaced-verify.err" \
+    "verification refusal did not name the misplaced key as the cause"
+
+  printf 'needs-decision [key=route]: choose route north or route south\n' > "$home/state/$id.status"
+  run_decisions "$home" complete "$id" route >/dev/null \
+    || fail "the same decision in the correct shape must still complete"
+  assert_grep "decisions_reviewed=1" "$home/state/$id.meta" \
+    "correctly keyed decision did not record its completion attestation"
+  pass "a decision key written after the colon is refused by name, not folded into default"
+}
+
 test_structured_holds_survive_teardown_and_route_resolution() {
   local home id route_hold access_hold before after json open show
   home=$(make_home durable-lifecycle)
@@ -830,6 +874,7 @@ test_resolve_matches_quoted_blocked_by_edges() {
 
 test_uninventoried_report_decision_refuses_completion
 
+test_misplaced_status_key_refuses_by_name
 test_scout_teardown_always_requires_inventory_verification
 test_archived_resolution_satisfies_gate_but_missing_open_hold_refuses
 test_structured_holds_survive_teardown_and_route_resolution

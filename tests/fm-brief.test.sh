@@ -322,6 +322,44 @@ test_scout_and_secondmate_load_decision_hold_policy() {
   pass "fm-brief.sh: investigation and visual-review completions load the shared decision policy"
 }
 
+# The decision key is read from the status line's verb PREFIX only
+# (bin/fm-classify-lib.sh's _fm_decision_key), so a key written after the colon
+# folds under "default" and the failure surfaces at a completion gate far from
+# the line that caused it. Every scaffold must SHOW the keyed shape rather than
+# describe it, and say where the key goes.
+test_status_key_position_is_shown_in_every_scaffold() {
+  local home ship scout charter
+  home="$TMP_ROOT/key-position-home"
+  write_registry "$home"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" key-ship alpha >/dev/null 2>&1 \
+    || fail "ship scaffold exited non-zero"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" key-scout alpha --scout >/dev/null 2>&1 \
+    || fail "scout scaffold exited non-zero"
+  FM_SECONDMATE_CHARTER='Supervise the alpha domain.' \
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" key-mate --secondmate alpha >/dev/null 2>&1 \
+    || fail "secondmate scaffold exited non-zero"
+  ship="$home/data/key-ship/brief.md"
+  scout="$home/data/key-scout/brief.md"
+  charter="$home/data/key-mate/brief.md"
+
+  for brief in "$ship" "$scout"; do
+    assert_grep 'needs-decision [key=<slug>]: {summary of options}' "$brief" \
+      "$brief does not show the keyed needs-decision shape"
+    assert_grep 'resolved [key=<slug>]: {how it was decided or unblocked}' "$brief" \
+      "$brief does not show the keyed resolved shape"
+  done
+  assert_grep 'working [key=<work-slug>]: {material phase}' "$charter" \
+    "charter does not show the keyed working shape"
+  assert_grep 'resolved [key=<work-slug>]: {how it was decided or unblocked}' "$charter" \
+    "charter does not show the keyed resolved shape for an answered decision"
+  for brief in "$ship" "$scout" "$charter"; do
+    assert_grep 'BEFORE the colon' "$brief" \
+      "$brief does not state where the decision key goes"
+  done
+  pass "fm-brief.sh: every scaffold shows the keyed status shape and its position"
+}
+
 # Scout and secondmate paths still scaffold well-formed briefs.
 test_scout_and_secondmate_scaffold() {
   local brief
@@ -355,4 +393,5 @@ test_herdr_lab_contract_applies_to_scouts_but_not_secondmates
 test_secondmate_no_projects_charter
 test_pause_verb_override_renders_all_brief_scaffolds
 test_scout_and_secondmate_load_decision_hold_policy
+test_status_key_position_is_shown_in_every_scaffold
 test_scout_and_secondmate_scaffold

@@ -224,6 +224,27 @@ _fm_decision_key() {  # <status-line> -> key slug, or "default" when no token
     *) printf 'default' ;;
   esac
 }
+# Print every status line whose "[key=" token sits AFTER the colon, where the
+# grammar above cannot see it. _fm_decision_key reads the prefix only, so such a
+# line folds under "default" - indistinguishable from a line that was never keyed
+# at all, which silently merges two independent decisions into one and surfaces
+# far from its cause (a completion gate refusing an unrecognized "default" key).
+# The parsers themselves stay permissive on purpose: refusing there would drop
+# the line from the fold entirely and lose the decision it carries. The decision
+# tooling calls this instead, so the refusal can name the cause and the line.
+# Prints nothing when every key is well placed.
+status_misplaced_key_lines() {  # <status-file>
+  local f=$1 line prefix note
+  [ -f "$f" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in *:*) ;; *) continue ;; esac
+    prefix=${line%%:*}
+    case "$prefix" in *\[key=*) continue ;; esac
+    note=${line#*:}
+    case "$note" in *\[key=*) printf '%s\n' "$line" ;; esac
+  done < "$f"
+}
+
 # Drop the record for <key> from a newline-terminated "<key>\t<verb>\t<note>" set.
 # Portable (no associative arrays) so the fold runs on bash 3.2 as well as 4+.
 _fm_decision_drop() {  # <open-set> <key>
