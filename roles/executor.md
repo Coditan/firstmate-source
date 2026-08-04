@@ -28,7 +28,8 @@ So for this role the reply is part of the delivery rather than a courtesy after 
 **A request absorbed into a larger task keeps its own reply, recorded at intake and checked at teardown.**
 Absorption is the shape that fails: the larger task closes on its own terms and the requests it swallowed close with it, while the vessels that made them are still waiting on a channel that has gone quiet.
 That the work shipped and that the asker was told are two different facts, and only the second one closes the request.
-The reply goes back on whatever channel carried the request, because that is where its sender is looking.
+The reply goes out the way any message to another vessel does, through the Bridge envelope relay `AGENTS.md` section 1 names, and how the request happened to arrive does not decide that.
+A request that reached this vessel by some other route is answered on the envelope path all the same.
 
 ## Narrowed: the owning vessel keeps its own domain's diagnosis
 
