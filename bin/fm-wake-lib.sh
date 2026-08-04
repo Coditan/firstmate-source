@@ -200,6 +200,7 @@ fm_lock_clean_known_files() {
     "$lockdir/manager" \
     "$lockdir/source-version" \
     "$lockdir/x-mode-version" \
+    "$lockdir/service-path" \
     "$lockdir/daemon" \
     "$lockdir/receiver-path" \
     "$lockdir/output-path" \

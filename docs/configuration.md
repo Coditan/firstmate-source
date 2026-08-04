@@ -35,7 +35,7 @@ Vessel-local service reachability uses `state/service-port.<service>` for the ad
 `bin/fm-service-port.sh` owns the record's fields and the allocation contract, and `docs/lavish-access.md` owns the reasoning; the one rule that binds every reader is that the record is a published fact written after the fact and never a reservation, so nothing may read it to decide whether a port is free.
 Several vessels can share one machine as separate UNIX accounts, so a successful bind is the only proof a port is available.
 
-Watcher coordination uses `state/.watch.lock` for the daemon pid, executable, home, manager, source, and X-mode identities, `state/.last-watcher-beat` for daemon freshness, `state/.wake-queue` for durable delivery, `state/.wake-queue.lock` for atomic append and drain, and `state/.wake-stub.lock` for the current session's delivery-stub pid plus executable, home, and session-lock identities.
+Watcher coordination uses `state/.watch.lock` for the daemon pid, executable, home, manager, source, and X-mode identities plus the keeper tier's handed-down service `PATH`, `state/.last-watcher-beat` for daemon freshness, `state/.wake-queue` for durable delivery, `state/.wake-queue.lock` for atomic append and drain, and `state/.wake-stub.lock` for the current session's delivery-stub pid plus executable, home, and session-lock identities.
 The tmux fallback also records `state/.watch-keeper.pid`, while systemd convergence writes the private mode-`0600` `state/.watch-service.env` environment file.
 
 `bin/fm-session-start.sh`'s header is the single owner of session-start ordering, composed commands, digest contents, and the digest's startup mechanism.
@@ -249,6 +249,17 @@ Bootstrap never installs or enables the unit silently.
 After installation, every locked bootstrap compares the tracked template bytes, the checkout path, a hash of the watcher entry point plus its in-memory shell libraries and backend adapters, the running manager identity, and the X-mode environment hash, then reloads and restarts only a stale instance.
 That convergence restarts a unit whose old process survived a `/updatefirstmate` fast-forward and would otherwise keep executing old watcher bytes.
 `config/x-mode.env` is an optional second `EnvironmentFile` on the template, while `state/.watch-service.env` records its hash so an opt-in, opt-out, or cadence change triggers convergence.
+
+`state/.watch-service.env` also records the `PATH` the service runs with, composed by `bin/fm-service-path-lib.sh` from where this deployment actually keeps its tools.
+Neither unit template sets a `PATH`, so without that line a unit inherits the `systemd --user` manager default, which reaches no tool installed outside the system directories.
+That is not a loud failure: on 2026-08-04 this vessel's watcher could reach neither the `no-mistakes` CLI nor `gh`, so `bin/fm-crew-state.sh` answered `unknown` for every crew and the merge poll read every open pull request as unmerged, with no error anywhere.
+The composed value is deterministic for a given installed tool set, so it does not churn between sessions, and `service_env_matches` compares it, so a home whose toolchain moves reconverges and restarts.
+Locked bootstrap additionally reports `WATCHER_UNIT: the watcher's recorded PATH cannot reach ...` for a required tool that recorded value cannot reach.
+That report has two forms, because the repair differs: a tool this session can resolve is fixed by converging the service from here, while a tool this session cannot resolve either means the recorded value was composed blind and no convergence from this session can improve it.
+Getting an uninstalled tool installed stays owned by the toolchain check's `MISSING:` line; what the second form adds is that the service environment was recorded without the tool, which `MISSING:` does not say.
+The tmux keeper fallback takes the same composed value as its sixth argument, because `tmux new-session` runs its command under the tmux server's environment rather than the launching session's.
+Because an argument leaves no comparable trace, the keeper's watcher records it under `state/.watch.lock/service-path`, and convergence compares that record exactly as it compares the systemd tier's recorded environment, so a toolchain move restarts either tier.
+The Bridge frequency-monitor unit records and compares the same `PATH` for the same reason, so its convergence below covers it too.
 User lingering keeps a user service alive without an interactive login session.
 If `loginctl` reports lingering disabled, bootstrap emits a separate `WATCHER_UNIT:` consent request for `bin/fm-bootstrap.sh install watcher-linger`; it never calls `loginctl enable-linger` without that approval.
 When `systemctl --user` is unusable, the tmux keeper fallback starts automatically and needs no unit or linger installation.
@@ -434,6 +445,19 @@ A vessel copy that answers without reporting a version would shadow the intact e
 A copy that never answers is reported and left alone instead, because a bounded probe cannot distinguish a hung binary from a very slow working one.
 A locally-ahead build that the registry cannot supply is reported as `AXI_SUITE_REVIEW:` rather than a failure, because the external copy remains the working fallback until that build is published or the vessel accepts the registry version.
 Successful changes emit `AXI_SUITE_UPDATED:`, and bounded registry, permission, install, verification, or hook failures emit `AXI_SUITE_STUCK:` and persist under `state/` until a successful check clears them.
+
+The check also reports, separately, whether the maintained copy is the copy that actually runs.
+Every firstmate entrypoint prepends the vessel bin directory into its own process, and the updater does the same before measuring, so until 2026-08-04 the currency report described the copy the vessel maintains and never asked whether anything else resolves it.
+Hand measurement on the coditan vessel that day found a firstmate-home shell resolving all six suite tools from `~/.npm-global/bin`, every one behind the maintained copy, while the check reported the suite current.
+The version gap is not the defect; a true all-clear about a copy nobody runs is, and it is the same shape as a watcher reading crew state through a `PATH` that cannot reach the tool it needs.
+`bin/fm-axi-path-lib.sh`'s `fm_axi_shadowed` therefore answers that question against the environment the SESSION had, and each mismatch emits `AXI_SUITE_SHADOWED:` naming both paths.
+Capturing the updater's own PATH before its own prepend is not enough, because the session entrypoint and bootstrap both prepend and export before the check is ever spawned, so `fm_axi_prepend_path` records the PATH it replaced the first time any entrypoint runs and no later prepend overwrites that record.
+That record carries the pid that made it and is honoured only for that process and its descendants, because an exported value nothing overwrites has the lifetime of a process tree rather than of the session it describes: `tmux new-session` freezes the launching environment into a new server, and every pane opened there afterwards inherits the snapshot.
+A record from another tree is re-taken when this process's own `PATH` does not already lead with the maintained prefix, and otherwise the check reports `AXI_SUITE_SHADOW_UNKNOWN:` rather than answering about a session that may be gone.
+A tool this home maintains no copy of is not reported, because an unseeded vessel resolving every tool externally is the ordinary pre-cutover state that the seeding and currency paths already own.
+That report is outside the cadence gate and is never cached, because it describes the caller's environment rather than the registry and that environment changes between sessions while a cadence stamp does not.
+Firstmate-launched processes are made to resolve the maintained copies rather than merely reported on: the entrypoints and `bin/fm-spawn.sh` already prepend the vessel bin directory, and both background-service environments now compose their recorded `PATH` with it prepended.
+An inherited login environment is not firstmate's to change, so a shadowed tool there is reported for the captain to resolve and never silenced by editing his shell configuration; the older copy is likewise never deleted, because in an environment without the maintained directory that makes the tool unrunnable rather than current.
 The cadence stamp remains under that vessel's `state/`, and `state/axi-suite-prefix-v1.cutover` records that this home already attempted the isolated seeding, so a stamp written before the cutover cannot postpone it.
 The marker records the attempt and not its outcome: a home that could not seed every tool retries on the next cadence window instead of paying a full registry sweep, and a repeated alarm, on every session.
 
@@ -673,6 +697,10 @@ FM_WATCH_DAEMON=1       # internal: external keeper mode; actionable wake append
 FM_WATCH_MANAGER=       # internal: systemd or keeper identity recorded in state/.watch.lock
 FM_WATCH_SOURCE_VERSION= # internal: watcher plus loaded-library content version recorded for bootstrap convergence
 FM_WATCH_X_MODE_VERSION= # internal: X-mode environment version recorded for systemd and keeper convergence
+FM_WATCH_SERVICE_PATH=  # internal: the composed service PATH the tmux keeper hands its watcher, recorded in state/.watch.lock/service-path for keeper convergence
+FM_SERVICE_TOOLS=       # tools bin/fm-service-path-lib.sh resolves when composing a background service's PATH; unset means its own fixed list
+FM_SERVICE_REQUIRED_TOOLS='no-mistakes git'   # tools whose absence from a recorded service PATH bootstrap reports as a WATCHER_UNIT line, because losing them degrades supervision silently
+FM_SERVICE_PATH_BASE=   # tail every composed service PATH ends with; unset means systemd's user-manager default verbatim
 FM_WATCH_STOP_TIMEOUT=20 # seconds the tmux fallback waits for an identity-matched watcher to stop during scoped convergence
 FM_EVENT_CAP_REPROBE_SECS=300 # seconds before a long-lived watcher re-probes a disabled Herdr event-wait capability
 FM_OPENCODE_ARM_READY_TIMEOUT_MS=12000   # milliseconds the OpenCode primary watcher plugin waits for an arm attempt to report started, healthy, wake, or failure

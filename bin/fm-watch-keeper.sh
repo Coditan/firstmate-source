@@ -1,19 +1,31 @@
 #!/usr/bin/env bash
 # Portable tmux-hosted keeper for a home whose systemd user manager is unusable.
-# Usage: fm-watch-keeper.sh <fm-home> <code-root> <state-dir> <source-version> <x-mode-version>
+# Usage: fm-watch-keeper.sh <fm-home> <code-root> <state-dir> <source-version> <x-mode-version> <service-path>
 #
 # fm-watcher-service.sh owns selection and launch of this process.
 # The keeper records its pid in state/.watch-keeper.pid and respawns only its
 # home-scoped FM_WATCH_DAEMON=1 watcher child after an unexpected exit.
+#
+# <service-path> is the PATH the watcher must run with, resolved by
+# bin/fm-service-path-lib.sh in the launching session.  It is passed in rather
+# than computed here because this process starts under the tmux server's
+# environment, which may not reach the tools it would need to resolve them.
+# It is also handed on as FM_WATCH_SERVICE_PATH so the watcher can RECORD what it
+# was given: an argument leaves no trace a later convergence could compare, and
+# without that record a keeper-backed home keeps a stale PATH forever while the
+# systemd tier reconverges on its own recorded one.
 set -u
 
-[ "$#" -eq 5 ] || { echo "usage: $(basename "$0") <fm-home> <code-root> <state-dir> <source-version> <x-mode-version>" >&2; exit 2; }
+[ "$#" -eq 6 ] || { echo "usage: $(basename "$0") <fm-home> <code-root> <state-dir> <source-version> <x-mode-version> <service-path>" >&2; exit 2; }
 FM_HOME=$1
 FM_ROOT_OVERRIDE=$2
 FM_STATE_OVERRIDE=$3
 FM_WATCH_SOURCE_VERSION=$4
 FM_WATCH_X_MODE_VERSION=$5
-export FM_HOME FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_WATCH_SOURCE_VERSION FM_WATCH_X_MODE_VERSION
+FM_WATCH_SERVICE_PATH=$6
+PATH=$6
+export FM_HOME FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_WATCH_SOURCE_VERSION FM_WATCH_X_MODE_VERSION \
+  FM_WATCH_SERVICE_PATH PATH
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WATCH="$SCRIPT_DIR/fm-watch.sh"

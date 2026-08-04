@@ -305,6 +305,19 @@ test_state_startup_and_ordinary_recovery_placement() {
   pass "state, startup, and ordinary recovery have focused owners and triggers"
 }
 
+# bin/fm-crew-state.sh gates its refusal on the STATE token and keeps the source
+# and cause vocabularies open, so a recovery rule keyed on one source token silently
+# stops covering the crew the moment another is added - and the harm is that an
+# agent relaunches a worker nothing is known about. The instruction has to be
+# keyed the way the code is.
+test_recovery_stop_is_keyed_on_the_degraded_state() {
+  assert_grep 'If that read answers `degraded` in its `state:` field, stop this procedure, whatever its `source:` and `cause:` say' "$RECOVERY" \
+    "the recovery stop is not keyed on the degraded state itself"
+  assert_grep 'never a particular source or cause, so a source or cause added later is covered by this rule without amending it' "$RECOVERY" \
+    "the recovery stop does not say it covers sources and causes added later"
+  pass "stuck-crewmate recovery stops on the degraded state, not on one of its sources"
+}
+
 test_compressed_agents_owner_map() {
   assert_grep '`docs/configuration.md` is the single owner of the top-level operational-home layout' "$AGENTS" \
     "AGENTS.md lost the state-layout owner pointer"
@@ -434,5 +447,6 @@ test_generic_effort_fallback_respects_precedence
 test_shared_authoring_requirements_are_owned
 test_secondmate_registry_contract_stays_concise
 test_state_startup_and_ordinary_recovery_placement
+test_recovery_stop_is_keyed_on_the_degraded_state
 test_compressed_agents_owner_map
 test_compressed_agents_retains_authority_and_supervision_safety

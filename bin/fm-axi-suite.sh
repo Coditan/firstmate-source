@@ -63,6 +63,23 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 AXI_PREFIX=$(fm_axi_prefix "$FM_HOME")
 AXI_BIN=$(fm_axi_bin_dir "$FM_HOME")
 fm_axi_prepend_path "$FM_HOME"
+# The environment as the SESSION found it, not merely as this process found it.
+# Capturing $PATH before the prepend above is not enough: the production caller
+# is bin/fm-bootstrap.sh, which prepends and exports at its own line 111, and
+# bin/fm-session-start.sh prepends and exports before spawning it, so this
+# process's inherited $PATH already leads with the maintained prefix and every
+# tool would resolve to itself. fm_axi_prepend_path records the pre-prepend value
+# once, at whichever entrypoint prepends first, which is the only value that
+# still answers "which copy actually runs elsewhere". See fm_axi_shadowed for
+# what that question is worth.
+#
+# That record is honoured only for the process tree that made it, so it can also
+# report that it does not know - a marker frozen into a tmux server describes a
+# session that may be long gone. AMBIENT_KNOWN carries that outcome, because a
+# check whose thesis is "never pass a broken instrument off as an all-clear" may
+# not quietly substitute its own already-corrected PATH here.
+AMBIENT_KNOWN=1
+AMBIENT_PATH=$(fm_axi_ambient_path) || AMBIENT_KNOWN=0
 INTERVAL=${FM_AXI_SUITE_CHECK_INTERVAL:-86400}
 CHECK_ONLY=0
 FORCE=0
@@ -225,6 +242,34 @@ emit_cached() {
   [ -f "$DIAGNOSTICS" ] && cat "$DIAGNOSTICS"
   [ -f "$STUCK" ] && cat "$STUCK"
 }
+
+# Report the suite tools that resolve somewhere other than the copy this home
+# maintains. Deliberately OUTSIDE the cadence gate below and never cached: it
+# costs only a few PATH lookups, it answers a question about the CALLER's
+# environment rather than about the registry, and that environment changes
+# between sessions while a cadence stamp does not. Reported as its own line so
+# the startup report can never merge "the suite is current" with "the current
+# suite is the one that runs" into a single all-clear - merging them is the
+# defect, at this site and at the watcher's.
+report_shadowed() {
+  local shadowed tool resolved
+  if [ "$AMBIENT_KNOWN" -eq 0 ]; then
+    printf 'AXI_SUITE_SHADOW_UNKNOWN: cannot tell which copy of the suite this session resolves: the recorded pre-prepend environment belongs to another process tree (a tmux server freezes one session'"'"'s environment into every pane opened later), and this process already resolves %s first, so its own PATH cannot answer either\n' \
+      "$AXI_BIN"
+    return 0
+  fi
+  # shellcheck disable=SC2086 # SUITE is a space-separated tool list, split on purpose.
+  shadowed=$(fm_axi_shadowed "$AMBIENT_PATH" "$FM_HOME" $SUITE) || return 0
+  [ -n "$shadowed" ] || return 0
+  while IFS=$'\t' read -r tool resolved; do
+    [ -n "$tool" ] || continue
+    printf 'AXI_SUITE_SHADOWED: %s runs from %s, not the maintained copy in %s\n' \
+      "$tool" "$resolved" "$AXI_BIN"
+  done <<EOF
+$shadowed
+EOF
+}
+report_shadowed
 
 now=$(date +%s 2>/dev/null || echo 0)
 if [ "$FORCE" -ne 1 ] && [ -f "$STAMP" ] && [ -f "$PREFIX_CUTOVER" ]; then

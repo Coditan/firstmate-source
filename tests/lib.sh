@@ -44,6 +44,15 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # re-enables it against its isolated fake npm registry.
 export FM_AXI_SUITE_DISABLE=1
 
+# fm_axi_prepend_path records the pre-prepend PATH here and never overwrites it,
+# so a suite launched from inside a firstmate session would otherwise inherit the
+# operator's own ambient environment and ask the shadow check about that instead
+# of about its fixture. Cleared once, the same hermeticity discipline as pinning
+# PATH via BASE_PATH. Both halves go together: the value and its owner are one
+# record, and clearing only one leaves an inherited half the library must then
+# refuse to answer for.
+unset FM_AXI_AMBIENT_PATH FM_AXI_AMBIENT_PATH_OWNER
+
 # The weekly Grossreinschiff cadence check runs in bootstrap's detect pass, so
 # every suite that composes fm-bootstrap.sh would otherwise see its due line the
 # moment a fixture home has no sweep record - which is always. Silence the

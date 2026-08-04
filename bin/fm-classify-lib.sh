@@ -355,12 +355,20 @@ signal_reason_is_actionable() {  # <file> ...
 
 # Classify WHY an idle/stale crew MIGHT be safely absorbed instead of surfaced,
 # from bin/fm-crew-state.sh's one authoritative current-state line
-# ("state: <s> · source: <src> · <detail>"). Prints exactly one token:
+# ("state: <s> · source: <src> · <detail>", with an enumerated "cause: <token>"
+# field between source and detail on the two answers that are not readings).
+# Prints exactly one token:
 #   working - an actively-running no-mistakes step (running/fixing/ci) or a busy
 #             pane; the crew is legitimately mid-work on a static-looking pane
 #             (e.g. waiting on CI);
 #   paused  - the crew's authoritative current state is a declared external-wait
 #             pause (paused:), which is EXPECTED to idle;
+#   degraded- the reader could not consult its authoritative source at all: a
+#             required tool is absent, or the call it makes could not be made or
+#             did not answer (fm-crew-state.sh's `degraded` verdict, whose cause
+#             token says which). NOT a statement about the crew: the supervisor
+#             must report the broken instrument rather than draw either
+#             conclusion from it;
 #   none    - neither, so the wake must surface (a stopped/finished/parked/failed/
 #             torn-down/unknown crew, or an unreadable verdict).
 # One fm-crew-state.sh read serves BOTH absorb reasons at once. Reading the state
@@ -377,11 +385,20 @@ crew_absorb_class() {  # <id>
   case "$line" in state:*) ;; *) printf 'none'; return ;; esac
   state=${line#state: }; state=${state%% *}
   if [ "$state" = paused ]; then printf 'paused'; return; fi
+  if [ "$state" = degraded ]; then printf 'degraded'; return; fi
   if [ "$state" = working ]; then
     src=${line#*source: }; src=${src%% *}
     case "$src" in run-step|pane) printf 'working'; return ;; esac
   fi
   printf 'none'
+}
+
+# 0 if crew <id>'s state could not be read because a required tool is missing.
+# Deliberately its own predicate rather than a `none` special case: `none` means
+# "read it, found nothing working", and a caller that treats the two alike is the
+# exact mistake this verdict exists to prevent.
+crew_is_degraded() {  # <id>
+  [ "$(crew_absorb_class "$1")" = degraded ]
 }
 
 # 0 if crew <id> shows POSITIVE evidence it is still working (crew_absorb_class

@@ -2,7 +2,7 @@
 name: bootstrap-diagnostics
 description: >-
   Agent-only handling playbook for session-start bootstrap diagnostics.
-  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, ROLE_INVALID, ROLE_OVERLAY_MISSING, NEEDS_GH_AUTH, TANGLE, SELF_DRIFT, CREW_DISPATCH invalid, CURRENCY_BASE, LAVISH_ACCESS, BACKLOG_STALE, BACKLOG_UNREADABLE, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, AXI_SUITE_UPDATED, AXI_SUITE_REVIEW, AXI_SUITE_STUCK, FIRSTMATE_UPDATE_AVAILABLE, FIRSTMATE_UPDATE_STUCK, FORK_SYNC, FORK_SYNC_STUCK, GROSSREINSCHIFF, WATCHER_UNIT, FREQUENCY_MONITOR_UNIT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
+  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, ROLE_INVALID, ROLE_OVERLAY_MISSING, NEEDS_GH_AUTH, TANGLE, SELF_DRIFT, CREW_DISPATCH invalid, CURRENCY_BASE, LAVISH_ACCESS, BACKLOG_STALE, BACKLOG_UNREADABLE, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, AXI_SUITE_UPDATED, AXI_SUITE_REVIEW, AXI_SUITE_STUCK, AXI_SUITE_SHADOWED, AXI_SUITE_SHADOW_UNKNOWN, FIRSTMATE_UPDATE_AVAILABLE, FIRSTMATE_UPDATE_STUCK, FORK_SYNC, FORK_SYNC_STUCK, GROSSREINSCHIFF, WATCHER_UNIT, FREQUENCY_MONITOR_UNIT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
   A silent bootstrap section, or a BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -41,6 +41,11 @@ When any diagnostic needs captain attention, report the plain consequence and re
 - `WATCHER_UNIT: systemd --user unavailable ... tmux keeper fallback ...` - the selected fallback is automatic and needs no captain consent.
   A detect-only session leaves startup to the lock holder; a locked session reports only when the fallback could not establish a healthy watcher.
 - `WATCHER_UNIT: systemd --user is unavailable and tmux is not installed ...` - supervision has no restart owner, so do not dispatch until one backend is available.
+- `WATCHER_UNIT: the watcher's recorded PATH cannot reach <tools> - crew state will read as unavailable ...` - the named tools are installed here but unreachable from the environment the monitoring service actually runs with, so it cannot read any crew's real state and reports every crew as unavailable instead of failing.
+  A locked session converges this by rewriting the service environment, which the same bootstrap step already attempts, so a line that survives convergence needs the concrete tools reported to the captain.
+- `WATCHER_UNIT: the watcher's recorded PATH cannot reach <tools>, and this session cannot resolve it either ...` - the recorded service environment was composed by a session that could not reach those tools, so converging again from this session cannot improve it.
+  Report the concrete tools, say that the monitoring service was recorded without them, and treat crew-state readings as unreliable until it clears; do not dispatch work whose supervision depends on them.
+  Installing a genuinely absent tool remains the `MISSING:` line's business, and repairing it does not by itself fix this one: the service still needs converging from a session that can reach the tool.
 - `FREQUENCY_MONITOR_UNIT: missing ...` or `FREQUENCY_MONITOR_UNIT: ... disabled ...` - explain that the configured Bridge inbox remains durable but live-session delivery stays on the slower watcher fallback, ask for explicit consent, then run `bin/fm-bootstrap.sh install frequency-monitor-unit` only after approval.
   The installation copies the tracked template, writes this home's private environment, reloads the user manager, and enables and starts only the instance encoded from this home.
 - `FREQUENCY_MONITOR_UNIT: <instance> needs locked convergence ...` - this read-only session found stale unit bytes, source path or version, environment, or runtime state.
@@ -54,6 +59,14 @@ When any diagnostic needs captain attention, report the plain consequence and re
 - `AXI_SUITE_REVIEW: <detail>` - a major release, a newly required suite command, or a locally-ahead build the registry cannot supply was deliberately not installed; present the printed install command and purpose to the captain, then use `bin/fm-bootstrap.sh install <approved tool...>` only after consent.
   For the locally-ahead case the external copy keeps working, so the decision is whether to publish that build or let the vessel accept the registry version.
 - `AXI_SUITE_STUCK: <detail>` - the vessel could not check or apply an eligible update and persisted the condition in `state/axi-suite-update.stuck`; investigate the local install path first, and if the vessel cannot repair itself, relay the status through the existing Bridge workflow by dispatching a crewmate rather than calling project automation directly.
+- `AXI_SUITE_SHADOWED: <tool> runs from <path>, not the maintained copy in <bin>` - the vessel is keeping one copy current while this session runs a different one, so a clean currency report says nothing about the build actually in use.
+  Firstmate-launched processes resolve the maintained copies already; this line means the environment this session inherited does not, which is the captain's own shell configuration.
+  Report the concrete tools and the two paths, say plainly that the version the vessel maintains is not the version running here, and offer to have him put the printed maintained bin directory ahead of the other one.
+  Never edit his shell configuration to silence it, and never delete the other copy: with the maintained directory absent from that environment, deleting it leaves the tool unrunnable rather than current.
+- `AXI_SUITE_SHADOW_UNKNOWN: cannot tell which copy of the suite this session resolves ...` - this is not a shadowing report and not an all-clear; it is the check declining to answer.
+  The environment it would have measured was recorded by a different process tree, typically a long-lived tmux server that froze one session's environment into every pane opened after it, so answering either way would describe a session that may be gone.
+  Report that the suite's currency is unverified for this session rather than reporting it healthy, and note that a fresh session started outside that server answers the question normally.
+  Do not treat it as a reason to install, delete, or reorder anything.
   The condition is retried on the next currency window rather than on every session, so a line that keeps reappearing means the underlying cause is still present.
   A `vessel-prefix seeding ... was not attempted: the <N>s seeding budget is spent` detail is not a broken install: the vessel ran out of its one-time seeding budget, the external copy is still the working fallback, and the next window seeds the rest, so report it only if it survives a second window.
   While seeding runs, the script names each installing tool and the remaining seeding budget on standard error; that progress output is not a diagnostic and needs no handling.

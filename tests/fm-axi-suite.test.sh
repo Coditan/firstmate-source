@@ -310,7 +310,15 @@ test_currency_clock_survives_prefix_cutover() {
     FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
     "$ROOT/bin/fm-axi-suite.sh")
   installs_after_second=$(wc -l < "$w/install.log" | tr -d ' ')
-  [ -z "$second" ] || fail "a cached currency check produced unexpected output: $second"
+  # The claim being pinned is that the CURRENCY check is cached, not that the run
+  # is mute: this fixture keeps its tool on the ambient PATH ahead of the vessel
+  # prefix, so it is genuinely shadowed, and that condition is a property of the
+  # caller's environment rather than of the cadence window - it is reported every
+  # run on purpose.
+  case "$(printf '%s\n' "$second" | grep -v '^AXI_SUITE_SHADOWED:' | grep -c '[^[:space:]]')" in
+    0) ;;
+    *) fail "a cached currency check produced unexpected currency output: $second" ;;
+  esac
   [ "$installs_after_second" = "$installs_after_first" ] || fail "the cached currency check installed again"
   forced=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" \
     FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS=clock-axi FM_AXI_SUITE_CHECK_INTERVAL=86400 \
@@ -530,8 +538,210 @@ test_unpublished_ahead_version_is_not_a_recurring_alarm() {
   pass "an unpublishable locally-ahead build reports for review instead of alarming forever"
 }
 
+# The currency check maintains the vessel prefix and, before these cases, only
+# ever measured the copy it maintains - it prepends that prefix into its own
+# process and then asks about versions. So it could report a suite current while
+# every other process ran an older copy from somewhere else entirely, which is
+# what a 2026-08-04 hand measurement found on the coditan vessel: six of six
+# suite tools resolving from ~/.npm-global/bin, each behind the maintained copy,
+# under a clean all-clear. Note what these cases do NOT test: that the maintained
+# copy is current. That already passed while the defect was live, which is
+# exactly why it is not the test.
+#
+# This first one is the NARROW UNIT CASE: it calls the updater directly from a
+# raw shell, so nothing has prepended the maintained prefix yet. That is not the
+# production shape, and on its own it is the hole that let an inert diagnostic
+# ship - see test_shadow_report_survives_an_entrypoint_that_prepended_first for
+# the invocation path bootstrap actually uses.
+test_shadowed_suite_is_reported_even_while_the_maintained_copy_is_current() {
+  local w out
+  w="$TMP_ROOT/shadowed"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  make_npm "$w/bin" "$w/versions" "$w/install.log"
+  # The maintained copy is current, and an older copy earlier on the ambient
+  # PATH is what actually runs.
+  make_tool "$w/home/.local/axi/bin" shadow-axi 1.2.4
+  make_tool "$w/bin" shadow-axi 1.2.3
+  printf '%s\n' 'shadow-axi=1.2.4' > "$w/versions"
+  out=$(run_case "$w" "shadow-axi")
+  assert_contains "$out" "AXI_SUITE_SHADOWED: shadow-axi runs from $w/bin/shadow-axi" \
+    "a suite tool resolving outside the maintained prefix was reported as current with no caveat"
+  assert_contains "$out" "not the maintained copy in $w/home/.local/axi/bin" \
+    "the report did not name the copy that is being maintained instead"
+  assert_not_contains "$out" 'AXI_SUITE_UPDATE' "the maintained copy was current, so no update was due"
+  pass "a maintained copy that is not the resolved copy is reported, not folded into an all-clear"
+}
+
+test_unshadowed_suite_reports_nothing_extra() {
+  local w out
+  w="$TMP_ROOT/unshadowed"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  make_npm "$w/bin" "$w/versions" "$w/install.log"
+  make_tool "$w/home/.local/axi/bin" solo-axi 1.2.4
+  printf '%s\n' 'solo-axi=1.2.4' > "$w/versions"
+  # The maintained bin directory is on the ambient PATH ahead of everything else,
+  # which is what a correctly resolving firstmate-launched process looks like.
+  out=$(PATH="$w/home/.local/axi/bin:$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/state" \
+    FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="solo-axi" FM_AXI_SUITE_CHECK_INTERVAL=0 \
+    FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
+    FM_TEST_HOOK_LOG="$w/hook.log" "$ROOT/bin/fm-axi-suite.sh" --force)
+  assert_not_contains "$out" 'AXI_SUITE_SHADOWED' "a correctly resolving suite was reported as shadowed"
+  pass "a suite that resolves from the maintained prefix reports no shadowing"
+}
+
+# The PRODUCTION invocation path, and the one the narrow case above cannot reach.
+# bin/fm-bootstrap.sh prepends the maintained prefix into its own process and
+# exports it (line 111) long before it invokes the suite check, and
+# bin/fm-session-start.sh does the same before spawning bootstrap. A check that
+# reads its own $PATH - even before its own prepend - therefore only ever sees an
+# environment firstmate has already corrected, resolves every tool to the copy it
+# maintains, and reports nothing however badly the session itself resolves. This
+# case drives bootstrap, not the updater, so the report has to survive an
+# entrypoint that prepended first or it is inert exactly where it is needed.
+test_shadow_report_survives_an_entrypoint_that_prepended_first() {
+  local w out
+  w="$TMP_ROOT/shadow-through-bootstrap"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  make_npm "$w/bin" "$w/versions" "$w/install.log"
+  make_tool "$w/home/.local/axi/bin" boot-axi 1.2.4
+  make_tool "$w/bin" boot-axi 1.2.3
+  printf '%s\n' 'boot-axi=1.2.4' > "$w/versions"
+  # FM_ROOT_OVERRIDE points the worktree-tangle check at the non-git home so the
+  # ambient checkout cannot leak an unrelated line into this fixture.
+  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/home" \
+    FM_STATE_OVERRIDE="$w/state" FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="boot-axi" \
+    FM_AXI_SUITE_CHECK_INTERVAL=0 FM_TEST_VERSIONS="$w/versions" \
+    FM_TEST_INSTALL_LOG="$w/install.log" FM_TEST_HOOK_LOG="$w/hook.log" \
+    "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  assert_contains "$out" "AXI_SUITE_SHADOWED: boot-axi runs from $w/bin/boot-axi" \
+    "the shadow report never fired on the invocation path production actually uses"
+  assert_contains "$out" "not the maintained copy in $w/home/.local/axi/bin" \
+    "the report did not name the copy that is being maintained instead"
+  pass "the shadow report describes the session's environment, not the entrypoint's corrected one"
+}
+
+# The inversion of the same baseline error. On an unseeded vessel the maintained
+# bin directory is empty, so every suite tool resolves to an external copy - the
+# ordinary pre-cutover state that the seeding and currency paths own. A check
+# comparing against a copy that does not exist would call all six shadowed and
+# send the agent to the captain with two paths and no defect.
+test_unseeded_vessel_reports_no_shadowing() {
+  local w out
+  w="$TMP_ROOT/unseeded-shadow"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  make_npm "$w/bin" "$w/versions" "$w/install.log"
+  make_tool "$w/bin" fresh-axi 1.2.4
+  printf '%s\n' 'fresh-axi=1.2.4' > "$w/versions"
+  [ -e "$w/home/.local/axi/bin/fresh-axi" ] && fail "the unseeded fixture already owns a maintained copy"
+  out=$(run_case "$w" "fresh-axi")
+  assert_not_contains "$out" 'AXI_SUITE_SHADOWED' \
+    "a tool this home maintains no copy of was reported as shadowing that absent copy"
+  pass "an unseeded vessel reports no shadowing, only the seeding the other paths own"
+}
+
+# A pid that has certainly exited, so a marker stamped with it is provably from a
+# process tree that is gone rather than merely from somewhere else.
+dead_pid() {
+  local p
+  ( exit 0 ) &
+  p=$!
+  wait "$p" 2>/dev/null || true
+  kill -0 "$p" 2>/dev/null && fail "the fixture pid $p is still alive"
+  printf '%s' "$p"
+}
+
+# The recorded pre-prepend environment is exported and never overwritten by a
+# later prepender, which is what makes it survive the entrypoint chain - and also
+# what lets it outlive the session it describes. `tmux new-session` starts a
+# server with the launching environment frozen into it, every pane opened there
+# afterwards inherits that snapshot, and bin/fm-watcher-service.sh prepends
+# before starting exactly such a server. So a session running inside that server
+# can be handed a marker describing a session that ended months ago, and the
+# check would answer about that one with complete confidence. Here the frozen
+# marker claims a clean environment while this session in fact resolves the
+# external copy.
+test_a_marker_from_a_dead_process_tree_is_not_trusted() {
+  local w out gone frozen
+  w="$TMP_ROOT/stale-marker"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  make_npm "$w/bin" "$w/versions" "$w/install.log"
+  make_tool "$w/home/.local/axi/bin" stale-axi 1.2.4
+  make_tool "$w/bin" stale-axi 1.2.3
+  printf '%s\n' 'stale-axi=1.2.4' > "$w/versions"
+  gone=$(dead_pid)
+  frozen="$w/home/.local/axi/bin:$BASE_PATH"
+  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/state" \
+    FM_AXI_AMBIENT_PATH="$frozen" FM_AXI_AMBIENT_PATH_OWNER="$gone" \
+    FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="stale-axi" FM_AXI_SUITE_CHECK_INTERVAL=0 \
+    FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
+    FM_TEST_HOOK_LOG="$w/hook.log" "$ROOT/bin/fm-axi-suite.sh" --force)
+  assert_contains "$out" "AXI_SUITE_SHADOWED: stale-axi runs from $w/bin/stale-axi" \
+    "a frozen marker from a dead process tree was believed over this session's own environment"
+  pass "a recorded environment from another process tree is not answered for"
+}
+
+# The other half of the same guard: when the foreign marker meets a PATH that
+# ALREADY leads with the maintained prefix, this process has nothing honest left
+# to measure - its own PATH describes the correction, not the environment. The
+# answer must be that it cannot tell, never a clean all-clear, because a
+# confident wrong answer is the whole defect this change exists to remove.
+test_an_unattributable_environment_reports_that_it_cannot_tell() {
+  local w out gone frozen
+  w="$TMP_ROOT/unattributable-marker"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  make_npm "$w/bin" "$w/versions" "$w/install.log"
+  make_tool "$w/home/.local/axi/bin" opaque-axi 1.2.4
+  make_tool "$w/bin" opaque-axi 1.2.3
+  printf '%s\n' 'opaque-axi=1.2.4' > "$w/versions"
+  gone=$(dead_pid)
+  frozen="$w/home/.local/axi/bin:$BASE_PATH"
+  out=$(PATH="$w/home/.local/axi/bin:$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/state" \
+    FM_AXI_AMBIENT_PATH="$frozen" FM_AXI_AMBIENT_PATH_OWNER="$gone" \
+    FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="opaque-axi" FM_AXI_SUITE_CHECK_INTERVAL=0 \
+    FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
+    FM_TEST_HOOK_LOG="$w/hook.log" "$ROOT/bin/fm-axi-suite.sh" --force)
+  assert_contains "$out" 'AXI_SUITE_SHADOW_UNKNOWN' \
+    "an unanswerable environment was reported as a clean all-clear instead of as unknown"
+  assert_not_contains "$out" 'AXI_SUITE_SHADOWED:' \
+    "a check that cannot tell must not also claim a specific shadowing"
+  pass "an environment this process cannot attribute is reported as unknown, not clear"
+}
+
+# The value and its owner are one record, and a half-set pair is reachable in
+# this very repo: tests/lib.sh clears the marker for hermeticity, and clearing one
+# half while the other is inherited leaves the owner attributable and the value
+# absent. Answering that with an empty ambient PATH resolves nothing, so every
+# tool reads as unshadowed - a confident all-clear in precisely the state where
+# the two halves disagree. The owner here is this test shell, a genuine ancestor
+# of the suite process, so only the missing value can produce the honest refusal.
+test_a_half_recorded_marker_is_not_answered_for() {
+  local w out
+  w="$TMP_ROOT/half-marker"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  make_npm "$w/bin" "$w/versions" "$w/install.log"
+  make_tool "$w/home/.local/axi/bin" half-axi 1.2.4
+  make_tool "$w/bin" half-axi 1.2.3
+  printf '%s\n' 'half-axi=1.2.4' > "$w/versions"
+  [ -z "${FM_AXI_AMBIENT_PATH+set}" ] || fail "the fixture needs the ambient value unset"
+  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/state" \
+    FM_AXI_AMBIENT_PATH_OWNER="$$" \
+    FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="half-axi" FM_AXI_SUITE_CHECK_INTERVAL=0 \
+    FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
+    FM_TEST_HOOK_LOG="$w/hook.log" "$ROOT/bin/fm-axi-suite.sh" --force)
+  assert_contains "$out" 'AXI_SUITE_SHADOW_UNKNOWN' \
+    "a half-recorded marker was answered with an empty ambient PATH instead of an honest refusal"
+  pass "a record whose two halves disagree is refused, not answered as an all-clear"
+}
+
 test_patch_and_minor_auto_update
 test_major_and_missing_wait_for_review
+test_a_marker_from_a_dead_process_tree_is_not_trusted
+test_an_unattributable_environment_reports_that_it_cannot_tell
+test_a_half_recorded_marker_is_not_answered_for
+test_shadowed_suite_is_reported_even_while_the_maintained_copy_is_current
+test_unshadowed_suite_reports_nothing_extra
+test_shadow_report_survives_an_entrypoint_that_prepended_first
+test_unseeded_vessel_reports_no_shadowing
 test_two_homes_update_distinct_prefixes_concurrently
 test_vessel_prefix_wins_over_inherited_path
 test_currency_clock_survives_prefix_cutover

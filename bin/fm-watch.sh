@@ -375,7 +375,7 @@ FM_WEDGE_DEMAND_INSPECT_COUNT=${FM_WEDGE_DEMAND_INSPECT_COUNT:-3}
 # poll, and the moment a run ends or dies the crew stops reading as working and
 # the next elapse escalates on the unchanged schedule.
 wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-file>
-  local win=$1 since_file=$2 label=$3 escalation_file=$4 since age n reason wkey hold_age rf
+  local win=$1 since_file=$2 label=$3 escalation_file=$4 since age n reason wkey hold_age rf wtask wclass
   since=$(cat "$since_file" 2>/dev/null || true)
   case "$since" in
     ''|*[!0-9]*)
@@ -385,7 +385,19 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
     *)
       age=$(( $(date +%s) - since ))
       if [ "$age" -ge "$STALE_ESCALATE_SECS" ]; then
-        if crew_is_provably_working "$(window_to_task "$win" "$STATE")"; then
+        wtask=$(window_to_task "$win" "$STATE")
+        wclass=$(crew_absorb_class "$wtask")
+        if [ "$wclass" = degraded ]; then
+          # The crew state was never read - a tool the reader needs is missing
+          # from this service's PATH. Climbing the ladder here would escalate a
+          # possible wedge on a reading nobody took, which is exactly what this
+          # home did roughly every four minutes for weeks. Report the broken
+          # instrument on the bounded cadence and leave the ladder alone.
+          date +%s > "$since_file"
+          handle_degraded_stale "$win" "$wtask" "$label"
+          return
+        fi
+        if [ "$wclass" = working ]; then
           date +%s > "$since_file"
           # Bounded insurance against the one way an active run can lie: a run
           # whose agent died mid-step keeps reporting `running` indefinitely, and
@@ -454,6 +466,38 @@ handle_paused_stale() {  # <window> <task> <hash>
     return
   fi
   triage_log "absorbed stale (paused, awaiting external, age ${age}s): $win"
+}
+
+# Report the one condition no other branch here can express: this home cannot
+# read its crews' state at all, because a tool bin/fm-crew-state.sh needs is not
+# on the PATH this service runs with. Every other stale verdict is a claim about
+# the CREW; this one is a claim about the machine, so it must not be dressed as a
+# wedge, must not climb the escalation ladder, and must not be silently absorbed
+# either - a supervisor that cannot see is the most urgent thing to say.
+#
+# Bounded to the PAUSE_RESURFACE_SECS cadence per window, for the same reason the
+# declared-pause path is: the condition persists until someone repairs the
+# toolchain, and repeating it every poll would spend a model turn on unchanged
+# news. The throttle marker is deliberately time-only and is cleared by NO reset
+# path: a broken toolchain is a standing condition, not an episode, so a pane
+# that goes busy and stale again must not earn it a fresh report. The reason
+# names the missing tool, so it costs one extra read of the authoritative
+# helper - affordable precisely because it is throttled.
+handle_degraded_stale() {  # <window> <task> <triage-label>
+  local win=$1 task=$2 label=$3 key rf line detail reason
+  key=$(window_state_key "$win")
+  rf="$STATE/.degraded-$key"
+  if [ "$(age_of "$rf")" -lt "$PAUSE_RESURFACE_SECS" ]; then
+    triage_log "absorbed $label (crew state unreadable, already reported): $win"
+    return 0
+  fi
+  line=$("$FM_CREW_STATE_BIN" "$task" 2>/dev/null) || line=""
+  detail=${line##*· }
+  [ -n "$detail" ] || detail="a required tool is not on this service's PATH"
+  reason="stale: $win (crew state unreadable - $detail; this crew's state has NOT been read, so treat neither progress nor a wedge as established, and repair the monitoring toolchain first)"
+  fm_wake_append stale "$win" "$reason" || exit 1
+  date +%s > "$rf"
+  wake "$reason"
 }
 
 clear_pause_state() {  # <window>
@@ -1239,6 +1283,12 @@ fm_pid_identity "$WATCHER_PID" > "$WATCH_LOCK/pid-identity" 2>/dev/null || true
 printf '%s\n' "${FM_WATCH_MANAGER:-session}" > "$WATCH_LOCK/manager" || true
 printf '%s\n' "${FM_WATCH_SOURCE_VERSION:-unknown}" > "$WATCH_LOCK/source-version" || true
 printf '%s\n' "${FM_WATCH_X_MODE_VERSION:-absent}" > "$WATCH_LOCK/x-mode-version" || true
+# The PATH this watcher was HANDED, recorded so a later convergence can compare
+# it. Only the keeper tier sets it: systemd's copy lives in the service
+# environment file the unit loads, which fm-watcher-service.sh already compares,
+# while a keeper receives its PATH as a launch argument that would otherwise
+# leave no trace at all.
+printf '%s\n' "${FM_WATCH_SERVICE_PATH:-}" > "$WATCH_LOCK/service-path" || true
 printf '%s\n' "$WATCH_DAEMON" > "$WATCH_LOCK/daemon" || true
 
 [ -e "$STATE/.last-heartbeat" ] || touch "$STATE/.last-heartbeat"
@@ -1594,6 +1644,16 @@ EOF
                 ;;
               paused)
                 handle_paused_stale "$w" "$task" "$h"
+                ;;
+              degraded)
+                # Not "the crew stopped" - "nobody read the crew". Advance the
+                # suppressor and start the wedge timer exactly as an absorb
+                # would, so the condition is reported on its own bounded cadence
+                # instead of re-surfacing as a fresh stale on every poll.
+                clear_pause_tracking "$w"
+                printf '%s' "$h" > "$sf"
+                date +%s > "$ssf"
+                handle_degraded_stale "$w" "$task" "non-terminal stale"
                 ;;
               *)
                 surface_nonterminal_stale "$w" "$h"

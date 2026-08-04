@@ -27,6 +27,13 @@ SERVICE_ENV="$STATE/.frequency-monitor-service.env"
 CONFIRM_TIMEOUT=${FM_FREQUENCY_MONITOR_CONFIRM_TIMEOUT:-10}
 case "$CONFIRM_TIMEOUT" in ''|*[!0-9]*|0) CONFIRM_TIMEOUT=10 ;; esac
 
+# shellcheck source=bin/fm-service-path-lib.sh
+. "$SCRIPT_DIR/fm-service-path-lib.sh"
+# shellcheck source=bin/fm-axi-path-lib.sh
+. "$SCRIPT_DIR/fm-axi-path-lib.sh"
+# See fm-watcher-service.sh: the composed PATH resolves through this process.
+fm_axi_prepend_path "$FM_HOME"
+
 frequency_monitor_vessel() {
   local vessel
   if [ -n "${FM_BRIDGE_VESSEL:-}" ]; then
@@ -104,9 +111,14 @@ EOF
   printf 'cksum:%s:%s\n' "$sum" "$size"
 }
 
+# Same defect class as the watcher unit: this template sets no PATH either, so
+# without this the monitor inherits systemd's user-manager default and loses git
+# and jq wherever a deployment keeps them outside it - and its Bridge read would
+# then report an empty inbox rather than a failure (bin/fm-service-path-lib.sh).
 write_service_env() {
-  local version vessel bridge_root interval timeout tmp changed=0
+  local version vessel bridge_root interval timeout resolved_path tmp changed=0
   version=$(monitor_source_version) || return 1
+  resolved_path=$(fm_service_path) || return 1
   vessel=$(frequency_monitor_vessel)
   bridge_root=${FM_BRIDGE_ROOT:-$FM_HOME/projects/coditan-bridge}
   interval=${FM_FREQUENCY_MONITOR_INTERVAL:-5}
@@ -118,6 +130,7 @@ write_service_env() {
     printf 'FM_ROOT_OVERRIDE=%s\n' "$(systemd_env_quote "$FM_ROOT")"
     printf 'FM_STATE_OVERRIDE=%s\n' "$(systemd_env_quote "$STATE")"
     printf 'FM_FREQUENCY_MONITOR_EXEC=%s\n' "$(systemd_env_quote "$MONITOR")"
+    printf 'PATH=%s\n' "$(systemd_env_quote "$resolved_path")"
     printf 'FM_FREQUENCY_MONITOR_SOURCE_VERSION=%s\n' "$(systemd_env_quote "$version")"
     printf 'FM_BRIDGE_VESSEL=%s\n' "$(systemd_env_quote "$vessel")"
     printf 'FM_BRIDGE_ROOT=%s\n' "$(systemd_env_quote "$bridge_root")"
@@ -135,9 +148,10 @@ write_service_env() {
 }
 
 service_env_matches() {
-  local version vessel bridge_root interval timeout
+  local version vessel bridge_root interval timeout resolved_path
   [ -f "$SERVICE_ENV" ] && [ ! -L "$SERVICE_ENV" ] || return 1
   version=$(monitor_source_version) || return 1
+  resolved_path=$(fm_service_path) || return 1
   vessel=$(frequency_monitor_vessel)
   bridge_root=${FM_BRIDGE_ROOT:-$FM_HOME/projects/coditan-bridge}
   interval=${FM_FREQUENCY_MONITOR_INTERVAL:-5}
@@ -146,6 +160,7 @@ service_env_matches() {
     && grep -Fx "FM_ROOT_OVERRIDE=$(systemd_env_quote "$FM_ROOT")" "$SERVICE_ENV" >/dev/null 2>&1 \
     && grep -Fx "FM_STATE_OVERRIDE=$(systemd_env_quote "$STATE")" "$SERVICE_ENV" >/dev/null 2>&1 \
     && grep -Fx "FM_FREQUENCY_MONITOR_EXEC=$(systemd_env_quote "$MONITOR")" "$SERVICE_ENV" >/dev/null 2>&1 \
+    && grep -Fx "PATH=$(systemd_env_quote "$resolved_path")" "$SERVICE_ENV" >/dev/null 2>&1 \
     && grep -Fx "FM_FREQUENCY_MONITOR_SOURCE_VERSION=$(systemd_env_quote "$version")" "$SERVICE_ENV" >/dev/null 2>&1 \
     && grep -Fx "FM_BRIDGE_VESSEL=$(systemd_env_quote "$vessel")" "$SERVICE_ENV" >/dev/null 2>&1 \
     && grep -Fx "FM_BRIDGE_ROOT=$(systemd_env_quote "$bridge_root")" "$SERVICE_ENV" >/dev/null 2>&1 \
