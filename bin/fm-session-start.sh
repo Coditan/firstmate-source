@@ -18,15 +18,20 @@
 # standalone with unchanged default behavior - other flows (fm-bootstrap.sh
 # install <tools> after consent, /updatefirstmate, the afk daemon, existing
 # tests) still call them directly. The one seam this script needed -
-# bootstrap running its detect-only diagnostics without its five mutating
+# bootstrap running its detect-only diagnostics without its six mutating
 # sweeps - is an opt-in FM_BOOTSTRAP_DETECT_ONLY=1 flag on fm-bootstrap.sh
 # itself (default unset/0 = unchanged behavior), not a fork.
 #
-# ORDERING, and why LOCK now runs before BOOTSTRAP (the old AGENTS.md order
-# was bootstrap-then-lock):
+# ORDERING, and why the tmux own-window guard runs before LOCK, while LOCK
+# still runs before BOOTSTRAP (the old AGENTS.md order was bootstrap-then-lock):
 #
+#   0. tmux window   - when firstmate is running inside a crew-shaped tmux
+#                       fm-<id> window, rename the caller's own window to the
+#                       reserved firstmate name before any pane reads can confuse
+#                       firstmate with that crew. This is lock-free, targets only
+#                       the caller's own tmux window, and is a no-op outside tmux.
 #   1. lock          - acquire the per-home session lock FIRST, before any
-#                       mutating step runs.
+#                       shared-state mutating step runs.
 #   2. bootstrap      - detect-only diagnostics always run. The six
 #                       MUTATING sweeps (legacy PR-check migration, the AXI-suite
 #                       currency check that installs into this home's own npm prefix,
@@ -53,13 +58,14 @@
 # tracked primary extensions are loaded and prints a PI_WATCH_EXTENSION
 # reminder line when one is missing.
 #
-# Why lock first: the old documented order (bootstrap, THEN lock) let a
-# SECOND concurrent session run bootstrap's mutating sweeps - fast-forwarding
-# secondmate homes, writing X-mode artifacts, fetching/fast-forwarding every
-# project clone - before ever discovering another session already holds the
-# lock. Two sessions racing those sweeps is exactly the hazard the lock
-# exists to prevent, so locking first closes the hole outright: only the
-# session that actually wins the lock ever touches shared mutable state.
+# Why lock before shared-state mutation: the old documented order (bootstrap,
+# THEN lock) let a SECOND concurrent session run bootstrap's mutating sweeps -
+# fast-forwarding secondmate homes, writing X-mode artifacts, fetching/
+# fast-forwarding every project clone - before ever discovering another session
+# already holds the lock. Two sessions racing those sweeps is exactly the hazard
+# the lock exists to prevent, so locking before bootstrap closes the hole
+# outright: only the session that actually wins the lock ever touches shared
+# mutable state.
 #
 # The tradeoff this ordering accepts: a refused (read-only) session must not
 # go dark. So on refusal, bootstrap still runs (in FM_BOOTSTRAP_DETECT_ONLY=1
@@ -68,7 +74,7 @@
 # tasks-axi and quota-axi tool checks, and tasks-axi availability - none of
 # which mutate shared state and all of which are safe to compute from a second
 # session.
-# Only the five mutating sweeps and the wake-queue drain are skipped.
+# Only the six mutating sweeps and the wake-queue drain are skipped.
 # The context and fleet-state digests
 # below are always read-only, so they run unconditionally in both modes.
 #
@@ -110,6 +116,8 @@ PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # shellcheck source=bin/fm-role-lib.sh
 . "$SCRIPT_DIR/fm-role-lib.sh"
+# shellcheck source=bin/fm-tmux-lib.sh
+. "$SCRIPT_DIR/fm-tmux-lib.sh"
 
 STATUS_TAIL=${FM_SESSION_START_STATUS_TAIL:-5}
 case "$STATUS_TAIL" in ''|*[!0-9]*) STATUS_TAIL=5 ;; esac
@@ -249,6 +257,12 @@ pi_extension_loaded() {
 }
 
 section "SESSION START - $FM_HOME"
+
+# On resume the captain's `tmux new -A` can land firstmate inside a crew's
+# fm-<id> window; move back to our own window before anything reads panes
+# (see fm_tmux_ensure_own_window in fm-tmux-lib.sh). Safe, lock-free, no-op
+# outside tmux.
+fm_tmux_ensure_own_window >/dev/null 2>&1 || true
 
 # --- 1. lock -----------------------------------------------------------
 subsection "LOCK"

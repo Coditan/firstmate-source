@@ -33,6 +33,15 @@ Every crewmate window then lands in that same session, where you can watch the c
 When following the commands below, use that session's actual name.
 Inside tmux, `tmux display-message -p '#S'` prints it.
 
+### Firstmate keeps its own window (`fm_tmux_ensure_own_window`)
+
+Firstmate and its crews share one tmux session, so a resume with `tmux new -A -s <session>` can attach the primary firstmate process INTO a crew's `fm-<id>` window.
+That was observed on 2026-07-06: `fm-crew-state.sh` and the watcher then read firstmate's own pane as that crew's pane (a busy firstmate reads as a "working" crew, an idle one as a stalled crew), and a respawn of `<id>` collides on the duplicate window name.
+To prevent it, `bin/fm-session-start.sh` calls `fm_tmux_ensure_own_window` (in `bin/fm-tmux-lib.sh`) at the top of every session start: when running inside tmux and the current window is named like a crew window (`fm-*`), it renames that window to the reserved name `firstmate`.
+The rename targets the caller's own window, needs no lock, is idempotent, is a no-op outside tmux, and never touches a window the operator named anything other than `fm-*` (a deliberate cockpit name is kept).
+This is why crew spawning is already safe on this backend even though firstmate shares the session: `fm-spawn.sh` always creates crew windows detached and named (`tmux new-window -d -n fm-<id>`), so the only remaining hazard was firstmate's own window identity, which this guard fixes.
+The real-tmux coverage is in `tests/fm-backend-tmux-smoke.test.sh`.
+
 ## Outside tmux: the detached `firstmate` session
 
 If you launch your harness outside of tmux, crewmate windows land in a detached session named `firstmate`, created on first use.

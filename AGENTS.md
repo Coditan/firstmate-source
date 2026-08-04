@@ -158,7 +158,9 @@ An `ABSENT` captain, shared-captain, secondmate, or learnings file means the fir
 If the session lock is refused, tell the captain another active session is managing the fleet and remain read-only.
 A lock-refused session must not spawn, steer, merge, drain the wake queue, repair supervision, repair a checkout, or perform any other fleet mutation.
 
-1. **Lock** - acquires the per-home session lock first, before anything mutates shared state.
+0. **tmux own-window guard** - when the primary firstmate session itself runs inside tmux, `bin/fm-session-start.sh` first calls `fm_tmux_ensure_own_window` so a `tmux new -A` resume cannot leave firstmate executing inside a crew-shaped `fm-<id>` window before later pane reads.
+   The guard targets only the caller's own tmux window, is a no-op outside tmux, and does not touch shared fleet state.
+1. **Lock** - acquires the per-home session lock before anything mutates shared state.
 2. **Bootstrap** - detect-only checks (tool/version problems, GitHub auth, the worktree-tangle check, harness override, dispatch-profile validation, backlog-backend status) always run, but routine confirmations stay silent by default.
    When the lock could not be acquired, the worktree-tangle check uses read-only advisory wording without a checkout repair command.
    The six MUTATING sweeps - non-executing legacy PR-check migration, the AXI-suite currency check that installs into this home's own npm prefix, fleet sync, the local secondmate fast-forward sweep, the secondmate liveness sweep, and X-mode artifact writes - run only when this session actually holds the lock from step 1.
