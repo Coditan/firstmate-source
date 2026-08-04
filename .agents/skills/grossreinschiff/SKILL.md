@@ -101,7 +101,7 @@ Where the incident is dated, it is a past measurement and is written as one - re
 **Test:** the ladder above, per branch. Report `landed` / `landed (vacuous)` / `not landed` / `undetermined` with the code that settled it.
 **Also report the producers**, not only the tombstones: a sweep that deletes 146 branches and leaves the three producers running has bought one week.
 **Who acts:** a scout per project for the inventory (read-only); deletion is a separate authorised task.
-**Evidence:** `coditan-bridge` carried 154 branch entries, 146 of them tombstones of landed work, and three separate producers would each have had to prune - the forge's `delete_branch_on_merge`, the merge helper's flags, and the pipeline's own mirror, none of which does. Measured 2026-08-03; `docs/grossreinschiff.md` item 1 carries it, from the captain-private report's §5.
+**Evidence:** `coditan-bridge` carried 154 branch entries, 146 of them tombstones of landed work, and three separate producers would each have had to prune - the forge's `delete_branch_on_merge`, the merge helper's flags, and the pipeline's own mirror. Measured 2026-08-03; `docs/grossreinschiff.md` item 1 carries it, from the captain-private report's §5. Of the three, the merge helper now prunes: `bin/fm-pr-merge.sh` passes `--delete-branch`. The forge setting and the pipeline mirror still do not. Producer status is owned by `docs/merged-branch-cleanup.md`.
 
 ### 2. Records whose stated facts no longer hold
 

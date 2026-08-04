@@ -27,6 +27,7 @@ Measured 2026-08-03 from a disposable worktree at `origin/main` = `22aac2c0`; fu
 - 146 landed (content proven present in `main`), 2 landed vacuously (empty commits), 5 not landed across 3 distinct pieces of work each with a written decision not to merge, 1 is `main` itself. Zero undetermined.
 - The 154 counts two different things: 81 branches on GitHub, 73 in a local pipeline mirror repository that has never been on the forge.
 - **Three separate producers would each have had to prune, and none does** (report §5): the forge's `delete_branch_on_merge` is `false`, which alone accounts for 77 of the 81 GitHub branches; `bin/fm-pr-merge.sh` never passes `--delete-branch`; and the pipeline binary contains no branch-deletion or merge code path at all, so it cannot prune its own mirror even in principle.
+  - **Superseded 2026-08-04, for the second producer only:** `bin/fm-pr-merge.sh` now passes `--delete-branch`. The measurement above is left as it was taken on 2026-08-03; current producer status is owned by `docs/merged-branch-cleanup.md`.
 
 That last point is why item 1 reports producers and not only tombstones. A sweep that deletes 146 branches and leaves three producers running has bought one week.
 
