@@ -15,24 +15,29 @@ The captain's decision is recorded in `data/decisions/2026-08-02-stow-clear-mech
 ```
 watcher poll (every FM_CONTEXT_CHECK_INTERVAL)
   no live session holding this home's lock -> say nothing, there is nothing to measure
+  a session is running but cannot be measured
+                                    -> queue wake: the ceiling is UNENFORCED
   read this session's recorded transcript -> context size
     over 300k, and the fleet is quiet?
+      re-entry path broken          -> queue wake: BLOCKED
       captain active, or away mode  -> queue wake: ASK
       captain not present           -> queue wake: RESET
-    a session is running but cannot be measured
-                                    -> queue wake: the ceiling is UNENFORCED
 
 firstmate drains the wake (already obligatory)
-  /stow                     the one step that needs judgement
-  bin/fm-stow-receipt.sh    bind a receipt to the transcript position
-  bin/fm-context-reset.sh   re-verify everything, then clear
-                            -> refuses loudly on any failure, never proceeds
+  RESET wake only:
+    /stow                     the one step that needs judgement
+    bin/fm-stow-receipt.sh    bind a receipt to the transcript position
+    bin/fm-context-reset.sh   re-verify everything, then clear
+                              -> refuses loudly on any failure, never proceeds
+  ASK, BLOCKED, or UNENFORCED wake:
+    report or repair the condition named in the wake; never run the reset order
 
-turn ends -> context clears -> SessionStart:clear fires (the nudge itself stays
-                              silent on a self-clear, see below)
-          -> the surviving wake-delivery task wakes the fresh session
-          -> AGENTS.md section 3 tells the fresh session to run
-             bin/fm-session-start.sh, which rebuilds from durable records
+after RESET succeeds:
+  turn ends -> context clears -> SessionStart:clear fires (the nudge itself stays
+                                silent on a self-clear, see below)
+            -> the surviving wake-delivery task wakes the fresh session
+            -> AGENTS.md section 3 tells the fresh session to run
+               bin/fm-session-start.sh, which rebuilds from durable records
 ```
 
 One firstmate turn per reset.
@@ -46,7 +51,7 @@ What that sweep owes this mechanism when a ceiling wake calls it is owned by the
 | --- | --- |
 | Where this session's transcript is | `bin/fm-sessionstart-nudge.sh` writes `state/.primary-transcript` on every primary session start, including the one a clear creates; [docs/sessionstart-nudge.md](sessionstart-nudge.md) owns that record's own contract, and this mechanism only consumes it |
 | Ceiling, quiet, and captain-present predicates | `bin/fm-context-lib.sh` |
-| The measurement and the reset/ask branch | `bin/fm-watch.sh`'s `context_ceiling_surface` |
+| The measurement and the reset, ask, blocked, or unenforced branch | `bin/fm-watch.sh`'s `context_ceiling_surface` |
 | The receipt | `bin/fm-stow-receipt.sh` |
 | The refusals and the clear | `bin/fm-context-reset.sh` |
 | Typing into the pane | `bin/fm-send.sh` and `bin/fm-tmux-lib.sh`'s verified retried-Enter submit |
