@@ -31,7 +31,10 @@
 #     and dangling_blocker_ids is absent.
 #   tasks[]: one row per state/<id>.meta, sorted by id.
 #     current_state is parsed from bin/fm-crew-state.sh <id> and preserves
-#     state, source, detail, and raw line separately.
+#     state, source, cause, detail, and raw line separately. cause is the
+#     enumerated token that reader emits on the two answers that are not
+#     readings (unknown and degraded) and is empty on every state-carrying
+#     answer; bin/fm-crew-state.sh's header owns that vocabulary.
 #     paths.status_log.last_event is historical wake-event data only, never
 #     current state.
 #     hints.open_decisions is the keyed open-decision set returned by

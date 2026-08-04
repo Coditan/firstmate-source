@@ -35,7 +35,7 @@ Vessel-local service reachability uses `state/service-port.<service>` for the ad
 `bin/fm-service-port.sh` owns the record's fields and the allocation contract, and `docs/lavish-access.md` owns the reasoning; the one rule that binds every reader is that the record is a published fact written after the fact and never a reservation, so nothing may read it to decide whether a port is free.
 Several vessels can share one machine as separate UNIX accounts, so a successful bind is the only proof a port is available.
 
-Watcher coordination uses `state/.watch.lock` for the daemon pid, executable, home, manager, source, and X-mode identities, `state/.last-watcher-beat` for daemon freshness, `state/.wake-queue` for durable delivery, `state/.wake-queue.lock` for atomic append and drain, and `state/.wake-stub.lock` for the current session's delivery-stub pid plus executable, home, and session-lock identities.
+Watcher coordination uses `state/.watch.lock` for the daemon pid, executable, home, manager, source, and X-mode identities plus the keeper tier's handed-down service `PATH`, `state/.last-watcher-beat` for daemon freshness, `state/.wake-queue` for durable delivery, `state/.wake-queue.lock` for atomic append and drain, and `state/.wake-stub.lock` for the current session's delivery-stub pid plus executable, home, and session-lock identities.
 The tmux fallback also records `state/.watch-keeper.pid`, while systemd convergence writes the private mode-`0600` `state/.watch-service.env` environment file.
 
 `bin/fm-session-start.sh`'s header is the single owner of session-start ordering, composed commands, digest contents, and the digest's startup mechanism.
@@ -259,7 +259,7 @@ That report has two forms, because the repair differs: a tool this session can r
 Getting an uninstalled tool installed stays owned by the toolchain check's `MISSING:` line; what the second form adds is that the service environment was recorded without the tool, which `MISSING:` does not say.
 The tmux keeper fallback takes the same composed value as its sixth argument, because `tmux new-session` runs its command under the tmux server's environment rather than the launching session's.
 Because an argument leaves no comparable trace, the keeper's watcher records it under `state/.watch.lock/service-path`, and convergence compares that record exactly as it compares the systemd tier's recorded environment, so a toolchain move restarts either tier.
-The Bridge frequency-monitor unit records the same `PATH` for the same reason.
+The Bridge frequency-monitor unit records and compares the same `PATH` for the same reason, so its convergence below covers it too.
 User lingering keeps a user service alive without an interactive login session.
 If `loginctl` reports lingering disabled, bootstrap emits a separate `WATCHER_UNIT:` consent request for `bin/fm-bootstrap.sh install watcher-linger`; it never calls `loginctl enable-linger` without that approval.
 When `systemctl --user` is unusable, the tmux keeper fallback starts automatically and needs no unit or linger installation.
@@ -697,6 +697,10 @@ FM_WATCH_DAEMON=1       # internal: external keeper mode; actionable wake append
 FM_WATCH_MANAGER=       # internal: systemd or keeper identity recorded in state/.watch.lock
 FM_WATCH_SOURCE_VERSION= # internal: watcher plus loaded-library content version recorded for bootstrap convergence
 FM_WATCH_X_MODE_VERSION= # internal: X-mode environment version recorded for systemd and keeper convergence
+FM_WATCH_SERVICE_PATH=  # internal: the composed service PATH the tmux keeper hands its watcher, recorded in state/.watch.lock/service-path for keeper convergence
+FM_SERVICE_TOOLS=       # tools bin/fm-service-path-lib.sh resolves when composing a background service's PATH; unset means its own fixed list
+FM_SERVICE_REQUIRED_TOOLS='no-mistakes git'   # tools whose absence from a recorded service PATH bootstrap reports as a WATCHER_UNIT line, because losing them degrades supervision silently
+FM_SERVICE_PATH_BASE=   # tail every composed service PATH ends with; unset means systemd's user-manager default verbatim
 FM_WATCH_STOP_TIMEOUT=20 # seconds the tmux fallback waits for an identity-matched watcher to stop during scoped convergence
 FM_EVENT_CAP_REPROBE_SECS=300 # seconds before a long-lived watcher re-probes a disabled Herdr event-wait capability
 FM_OPENCODE_ARM_READY_TIMEOUT_MS=12000   # milliseconds the OpenCode primary watcher plugin waits for an arm attempt to report started, healthy, wake, or failure

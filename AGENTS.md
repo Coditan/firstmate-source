@@ -133,7 +133,7 @@ state/               volatile runtime signals; gitignored
   grossreinschiff.last-sweep  epoch and date of this home's last completed weekly cleanup sweep; written only by `bin/fm-grossreinschiff-due.sh --record`, and absent or unparseable means never swept (docs/grossreinschiff.md)
   .parked-<window-key>  firstmate-owned declaration that a relayed terminal task waits only on external human action; created via `bin/fm-mark-parked.sh <window>` (bin/fm-watch.sh's `mark_parked`), never by hand
   .watch.lock .wake-queue.lock watcher singleton and queue serialization locks
-  .hash-* .count-* .stale-* .stale-since-* .paused-* .parkedmeta-* .parkedresurfaced-* .wedge-escalations-* .wedgeheld-* .seen-* .hb-surfaced-* .last-* .heartbeat-streak .bridge-* .context-ceiling-surfaced .certsync-health-surfaced   watcher internals; never touch
+  .hash-* .count-* .stale-* .stale-since-* .paused-* .degraded-* .parkedmeta-* .parkedresurfaced-* .wedge-escalations-* .wedgeheld-* .seen-* .hb-surfaced-* .last-* .heartbeat-streak .bridge-* .context-ceiling-surfaced .certsync-health-surfaced   watcher internals; never touch
   .watch-triage.log  watcher's absorbed-wake debug log (size-capped); never relied on, safe to delete
   .last-watcher-beat watcher liveness beacon, touched every poll (including while absorbing benign wakes); guard scripts read it
   .subsuper-* .supervise-daemon.*   sub-supervisor internals; never touch

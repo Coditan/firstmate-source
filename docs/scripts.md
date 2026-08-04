@@ -11,8 +11,8 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-sessionstart-nudge.sh` | Record the primary session's transcript position, then print the native session-start hook nudge when it has not already run the digest |
 | `fm-operational-input.sh` | Construct and parse the canonical cross-language operational-input protocol |
 | `fm-bootstrap.sh`        | Detect toolchain and fleet problems, run the locked session-start sweeps, and install approved tools |
-| `fm-axi-suite.sh`        | Check and gate patch/minor self-updates of the npm-distributed AXI CLI suite     |
-| `fm-axi-path-lib.sh`     | Resolve and prepend one vessel's home-private AXI npm prefix                     |
+| `fm-axi-suite.sh`        | Check and gate patch/minor self-updates of the npm-distributed AXI CLI suite, and report when the maintained copy is not the copy this session runs |
+| `fm-axi-path-lib.sh`     | Resolve and prepend one vessel's home-private AXI npm prefix, record the pre-prepend session PATH, and name the maintained tools something else shadows |
 | `fm-firstmate-update-check.sh` | Read-only check for relevant instruction-surface commits on the source this deployment updates from |
 | `fm-fork-sync-check.sh` | Detect unabsorbed real-upstream content in the curated fork and prefilter both sides of its commit review |
 | `fm-grossreinschiff-due.sh` | Report whether this home's weekly Thursday cleanup sweep is due, and record a completed one |
