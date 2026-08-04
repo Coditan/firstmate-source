@@ -119,7 +119,7 @@ Three ways out, none of them the agent's to choose:
 - Make `admiralty` public, which reverses an explicit approval and exposes fleet material.
 - Accept an unprotected `main` until cutover, relying on the fleet's own discipline and on the CI gates, which still run and still fail; they simply are not required to pass before a merge.
 
-The intended ruleset, ready to apply the moment protection is available, is recorded in `fleet/doctrine/branch-protection.md`: pull request required, force pushes and deletion blocked, the five checks required, no bypass actors, and **zero** required approving reviews.
+The intended ruleset, ready to apply the moment protection is available, is recorded in `fleet/doctrine/branch-protection.md`: pull request required, force pushes and deletion blocked, the fleet CI checks required, no bypass actors, and **zero** required approving reviews.
 
 The zero is deliberate and is documented in the repository rather than left a silent omission.
 The fleet pushes under a single identity, so an author cannot approve their own pull request and no second identity exists to clear it; requiring one approval would deadlock every merge.
