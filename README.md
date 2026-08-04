@@ -110,14 +110,15 @@ If you would rather resolve it once, append these four lines to the end of your 
 
 ```sh
 fm_axi_dir=$(. /path/to/this/checkout/bin/fm-axi-path-lib.sh && fm_axi_bin_dir)
-case ":$PATH:" in *:"$fm_axi_dir":*) fm_axi_dir= ;; esac
+case "$PATH" in "$fm_axi_dir"|"$fm_axi_dir":*) fm_axi_dir= ;; esac
 [ -n "$fm_axi_dir" ] && PATH="$fm_axi_dir:$PATH" && export PATH
 unset fm_axi_dir
 ```
 
 Put them last so they win over earlier `PATH` edits, and write the checkout's real path rather than a variable.
 Every shell of that home then resolves its own maintained copies, including after a restart.
-Take the form as written: the subshell keeps the library's functions out of your login shell, the `case` keeps a re-read profile from stacking the same entry again, and the emptiness test is what keeps a shell that cannot locate the sourced file from prepending an empty `PATH` entry, which POSIX reads as the current directory.
+Take the form as written: the subshell keeps the library's functions out of your login shell, and the emptiness test is what keeps a shell that cannot locate the sourced file from prepending an empty `PATH` entry, which POSIX reads as the current directory.
+The `case` asks whether the maintained directory is already `PATH`'s FIRST entry, which is the same question `fm_axi_prepend_path` asks: re-reading the profile in a shell that already leads with it stacks no second copy, while a shell where something else has since jumped ahead re-asserts priority instead of leaving the older copy resolving.
 Use `fm_axi_bin_dir` rather than the library's own `fm_axi_prepend_path` here: verified by effect on 2026-08-04, with `fm_axi_prepend_path` in the profile a login ran the maintained copy and the currency check still printed `AXI_SUITE_SHADOWED:` naming the stale path, because that function records the pre-prepend `PATH` as the session's ambient one; with the form above the same login ran the maintained copy and the currency check printed no shadow line at all.
 Each home picks its own prefix from `FM_HOME`, falling back to the sourced file's checkout, so two homes on one machine do not compete.
 Self-location needs `BASH_SOURCE`, so in zsh, dash, or any other shell without it the bare call prints nothing and the lines leave `PATH` untouched; there, name the home explicitly as `fm_axi_bin_dir /path/to/home`.

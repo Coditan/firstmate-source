@@ -28,6 +28,18 @@ SH
   chmod +x "$bin/$tool"
 }
 
+# The documented ~/.profile form (README.md "Install and launch"), written from one
+# place so no case can exercise a paraphrase of the four lines an operator appends,
+# and so a correction to the form cannot be applied to some of its copies.
+write_documented_profile() {  # <path>
+  cat > "$1" <<'PROFILE'
+fm_axi_dir=$(. "$FM_TEST_LIB" && fm_axi_bin_dir)
+case "$PATH" in "$fm_axi_dir"|"$fm_axi_dir":*) fm_axi_dir= ;; esac
+[ -n "$fm_axi_dir" ] && PATH="$fm_axi_dir:$PATH" && export PATH
+unset fm_axi_dir
+PROFILE
+}
+
 make_npm() {
   local bin=$1 versions=$2 log=$3
   cat > "$bin/npm" <<'SH'
@@ -300,18 +312,11 @@ test_path_lib_is_sourceable_and_shadows_only_the_prefix() {
   printf '#!/usr/bin/env bash\nprintf %%s other\n' > "$w/elsewhere/unrelated-tool"
   chmod +x "$w/home/.local/axi/bin/demo-axi" "$w/elsewhere/demo-axi" "$w/elsewhere/unrelated-tool"
 
-  # The documented profile form itself (README.md "Install and launch"), kept in a
-  # file so the test exercises the same four lines an operator appends rather than
-  # a paraphrase of them. The lib path travels in the environment rather than
-  # spliced into the script, so the quoting stays readable.
-  cat > "$w/profile.sh" <<'PROFILE'
-fm_axi_dir=$(. "$FM_TEST_LIB" && fm_axi_bin_dir)
-case ":$PATH:" in *:"$fm_axi_dir":*) fm_axi_dir= ;; esac
-[ -n "$fm_axi_dir" ] && PATH="$fm_axi_dir:$PATH" && export PATH
-unset fm_axi_dir
-PROFILE
+  write_documented_profile "$w/profile.sh"
 
-  # A shell with no FM_HOME at all, exactly as a login profile sources it.
+  # A shell with no FM_HOME at all, exactly as a login profile sources it. The lib
+  # path travels in the environment rather than spliced into the script, so the
+  # quoting stays readable.
   wire() {  # <shell> [<home>]
     # shellcheck disable=SC2016 # The inner shell must expand these, not this one.
     env -u FM_HOME -u FM_AXI_AMBIENT_PATH -u FM_AXI_AMBIENT_PATH_OWNER \
@@ -365,6 +370,23 @@ PROFILE
     . "$FM_TEST_PROFILE"
     printf %s "$PATH" | tr ":" "\n" | grep -cFx "$FM_TEST_BIN"')
   [ "$out" = 1 ] || fail "a re-read profile must not stack duplicate PATH entries, got: $out"
+
+  # And the same profile re-read AFTER something else jumped ahead of the inherited
+  # prefix - `bash -lc`, `su -`, a tmux login pane, any login shell started inside a
+  # session - must re-assert priority. A guard asking only whether the maintained
+  # directory is somewhere on PATH passes here while the older copy is what runs,
+  # which is the resolution defect this whole change exists to close.
+  # shellcheck disable=SC2016 # The inner shell must expand these, not this one.
+  out=$(env -u FM_AXI_AMBIENT_PATH -u FM_AXI_AMBIENT_PATH_OWNER \
+    FM_HOME="$w/home" FM_TEST_LIB="$ROOT/bin/fm-axi-path-lib.sh" \
+    FM_TEST_PROFILE="$w/profile.sh" FM_TEST_ELSEWHERE="$w/elsewhere" \
+    PATH="$w/elsewhere:$BASE_PATH" bash -c '
+    . "$FM_TEST_PROFILE"
+    PATH="$FM_TEST_ELSEWHERE:$PATH"
+    . "$FM_TEST_PROFILE"
+    demo-axi')
+  [ "$out" = maintained ] \
+    || fail "a re-read profile must retake the lead from a later PATH edit, got: $out"
   pass "the AXI path library is sourceable standalone and shadows only its own prefix"
 }
 
@@ -383,17 +405,16 @@ test_documented_profile_form_leaves_no_shadow_alarm() {
   make_tool "$w/home/.local/axi/bin" prof-axi 1.2.4
   make_tool "$w/bin" prof-axi 1.2.3
   printf '%s\n' 'prof-axi=1.2.4' > "$w/versions"
+  write_documented_profile "$w/profile.sh"
   # shellcheck disable=SC2016 # The inner shell must expand these, not this one.
   out=$(env -u FM_AXI_AMBIENT_PATH -u FM_AXI_AMBIENT_PATH_OWNER \
     FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/home" FM_STATE_OVERRIDE="$w/state" \
     FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="prof-axi" FM_AXI_SUITE_CHECK_INTERVAL=0 \
     FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
     FM_TEST_HOOK_LOG="$w/hook.log" FM_TEST_LIB="$ROOT/bin/fm-axi-path-lib.sh" \
+    FM_TEST_PROFILE="$w/profile.sh" \
     FM_TEST_ROOT="$ROOT" PATH="$w/bin:$BASE_PATH" bash -c '
-    fm_axi_dir=$(. "$FM_TEST_LIB" && fm_axi_bin_dir)
-    case ":$PATH:" in *:"$fm_axi_dir":*) fm_axi_dir= ;; esac
-    [ -n "$fm_axi_dir" ] && PATH="$fm_axi_dir:$PATH" && export PATH
-    unset fm_axi_dir
+    . "$FM_TEST_PROFILE"
     command -v prof-axi
     "$FM_TEST_ROOT/bin/fm-bootstrap.sh" 2>/dev/null')
   assert_contains "$out" "$w/home/.local/axi/bin/prof-axi" \
