@@ -392,7 +392,7 @@ test_tracked_executor_overlay_reaches_the_digest() {
   # shipped document actually arrives: the tracked roles/executor.md is copied
   # into the fixture root verbatim, so a mismatch between what is written and
   # what an executor home reads at session start fails here.
-  local rec out labels first
+  local rec out labels first headings after
   rec=$(new_home digest-executor)
   read_home_record "$rec"
   mkdir -p "$ROOT_DIR/roles"
@@ -407,6 +407,24 @@ test_tracked_executor_overlay_reaches_the_digest() {
     "the digest did not carry the executor overlay's one narrowing"
   assert_contains "$out" "This role has no mechanical enforcement" \
     "the digest did not carry the executor overlay's enforcement ceiling"
+  assert_contains "$out" \
+    "A request absorbed into a larger task keeps its own reply, recorded at intake and checked at teardown." \
+    "the digest did not carry the executor overlay's report-back rule"
+  assert_contains "$out" "how the request arrived does not decide that" \
+    "the digest did not carry the rule that the arrival route does not pick the reply's channel"
+  assert_contains "$out" 'Parcels ran on method 7014 instead of 341' \
+    "the digest did not carry the symptom side of the executor's finding boundary"
+  assert_contains "$out" 'Why Sendcloud resolves to 7014' \
+    "the digest did not carry the cause side of the executor's finding boundary"
+
+  # The counterpart section only reads as the other side of the narrowing if it
+  # arrives immediately after it, so the delivered order is the claim, not the
+  # mere presence of both headings.
+  headings=$(context_section "$out" | grep '^## ') \
+    || fail "the delivered overlay carried no section headings at all"
+  after=$(printf '%s\n' "$headings" | grep -A1 '^## Narrowed: ' | tail -1)
+  [ "$after" = "## Not narrowed: what operating shows that developing cannot" ] \
+    || fail "the not-narrowed counterpart must follow the narrowing directly; got: $after"
 
   labels=$(context_labels "$out")
   first=$(printf '%s\n' "$labels" | head -1)

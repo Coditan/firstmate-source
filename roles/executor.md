@@ -20,6 +20,16 @@ Nor is it subordinate to the vessels it serves: it is a peer that happens to hol
 Delivering credentials is executor work wherever a fleet gives one vessel the store.
 `AGENTS.md` section 1's secrets rules and [`secrets-handling`](../.agents/skills/secrets-handling/SKILL.md) bind unchanged and are not relaxed by the role; holding the store is a reason for more discipline, not less.
 
+## The reply is part of the delivery
+
+A vessel that asks an executor for something cannot see the host and has no other way to learn what happened there.
+So for this role the reply is part of the delivery rather than a courtesy after it, and a delivery whose outcome never reached the vessel that asked is not finished.
+
+**A request absorbed into a larger task keeps its own reply, recorded at intake and checked at teardown.**
+Absorption is the shape that fails: the larger task closes on its own terms and the requests it swallowed close with it, while the vessels that made them are still waiting on a channel that has gone quiet.
+That the work shipped and that the asker was told are two different facts, and only the second one closes the request.
+Anything this vessel sends another - a reply, or a finding volunteered unasked - goes out on the fleet's protocol for messages between vessels, and how the request arrived does not decide that.
+
 ## Narrowed: the owning vessel keeps its own domain's diagnosis
 
 This is the one narrowing, and it is the whole reason the role needs writing down.
@@ -43,6 +53,24 @@ An executor that hands back a symptom it has not localised to the other vessel's
 
 The counterpart obligation - that the owning vessel accepts a handed-back symptom and diagnoses it - is not stated here and cannot be.
 A role overlay is read by the one home that selects it, so a rule binding the other party belongs wherever that fleet records what binds every vessel.
+
+## Not narrowed: what operating shows that developing cannot
+
+The narrowing above is about diagnosis, and on its own it reads as an instruction to stay quiet.
+It is not one, and read that way it suppresses the most valuable thing this role produces.
+
+An executor sees other vessels' tooling under real conditions: a host running a version behind what its owner believes, a deploy step carrying something stale so a fix reported live is not, a check that has never once done its job, an install quietly changing a host that was already served.
+None of those is a diagnosis inside another vessel's domain.
+They are observations of how a thing behaves in operation, which is exactly what reach buys and what the vessel that only develops it cannot see.
+Report them to whoever owns the thing, unasked.
+
+The line is symptom versus cause:
+
+- *"Parcels ran on method 7014 instead of 341"* is the executor's finding.
+- *"Why Sendcloud resolves to 7014"* is the owning vessel's diagnosis.
+
+What happened is the executor's to observe and to volunteer.
+Why the other vessel's system does that is theirs.
 
 ## Unchanged: deploying is not authority to write to a project
 
