@@ -356,32 +356,9 @@ test_compressed_agents_retains_authority_and_supervision_safety() {
   pass "compressed AGENTS.md retains authority, supervision, AFK, and X safety"
 }
 
-# fm_skill_frontmatter <skill-dir>: print the YAML frontmatter block only, from
-# the opening `---` on line 1 to the next `---`, so a column-0 key anywhere in
-# the SKILL.md body can never satisfy a frontmatter probe.
-fm_skill_frontmatter() {
-  awk '
-    NR == 1 { if ($0 !~ /^---[[:space:]]*$/) exit; next }
-    /^---[[:space:]]*$/ { exit }
-    { print }
-  ' "$1/SKILL.md"
-}
-
-# fm_skill_description <skill-dir>: print the frontmatter description as one
-# line, flattening the folded-block forms, so an empty or absent description
-# prints nothing.
-fm_skill_description() {
-  fm_skill_frontmatter "$1" | awk '
-    /^description:/ {
-      sub(/^description:[[:space:]]*/, "")
-      if ($0 != ">-" && $0 != ">" && $0 != "|" && $0 != "|-") printf "%s ", $0
-      inblock = 1
-      next
-    }
-    inblock && /^[[:space:]]+[^[:space:]]/ { sub(/^[[:space:]]+/, ""); printf "%s ", $0; next }
-    inblock { exit }
-  '
-}
+# fm_skill_frontmatter and fm_skill_description live in tests/lib.sh, the shared
+# owner of test primitives, so this suite and fm-stow-contract both read a
+# frontmatter-bounded description from one implementation.
 
 # Every skill under .agents/skills/ must carry a load trigger on each surface
 # that can reach it, and every section 13 entry must name a real skill. This

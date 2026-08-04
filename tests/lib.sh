@@ -444,6 +444,35 @@ assert_present() {
   [ -e "$1" ] || fail "$2"
 }
 
+# --- skill frontmatter --------------------------------------------------------
+
+# fm_skill_frontmatter <skill-dir>: print the YAML frontmatter block only, from
+# the opening `---` on line 1 to the next `---`, so a column-0 key anywhere in
+# the SKILL.md body can never satisfy a frontmatter probe.
+fm_skill_frontmatter() {
+  awk '
+    NR == 1 { if ($0 !~ /^---[[:space:]]*$/) exit; next }
+    /^---[[:space:]]*$/ { exit }
+    { print }
+  ' "$1/SKILL.md"
+}
+
+# fm_skill_description <skill-dir>: print the frontmatter description as one
+# line, flattening the folded-block forms, so an empty or absent description
+# prints nothing.
+fm_skill_description() {
+  fm_skill_frontmatter "$1" | awk '
+    /^description:/ {
+      sub(/^description:[[:space:]]*/, "")
+      if ($0 != ">-" && $0 != ">" && $0 != "|" && $0 != "|-") printf "%s ", $0
+      inblock = 1
+      next
+    }
+    inblock && /^[[:space:]]+[^[:space:]]/ { sub(/^[[:space:]]+/, ""); printf "%s ", $0; next }
+    inblock { exit }
+  '
+}
+
 # --- runtime capability probes -----------------------------------------------
 
 # fm_node_supports_ts_import: true if this `node` can import a .ts file

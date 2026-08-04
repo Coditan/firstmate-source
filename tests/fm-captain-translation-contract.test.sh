@@ -113,7 +113,8 @@ test_mapping_list_covers_high_risk_internal_families() {
     "brief -> instructions" \
     "crewmate -> worker" \
     "harness, backend, runtime, or adapter -> worker runtime or tool" \
-    "status file, metadata, state, task id, or raw path -> durable record"; do
+    "status file, metadata, state, task id, or raw path -> durable record" \
+    "context ceiling, ceiling wake, or context budget -> the running conversation has grown too large to keep working well"; do
     assert_contains "$contract" "$phrase" "section 9 mapping list is missing '$phrase'"
   done
   pass "section 9 maps high-risk internal vocabulary families"
