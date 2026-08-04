@@ -9,11 +9,30 @@
 #   fm_axi_ambient_path          # the PATH before ANY firstmate prepend, or fail
 #   fm_axi_shadowed <path> <home> <tool>...  # which maintained tools do not run
 #
-# The location is derived only from FM_HOME, so a fresh vessel needs no local
-# configuration before bootstrap can install its AXI suite.
+# The location is derived only from the home, so a fresh vessel needs no local
+# configuration before bootstrap can install its AXI suite. With no argument the
+# home is FM_HOME, and with neither it is this file's own checkout - the same
+# "${FM_HOME:-$FM_ROOT}" fallback every bin/ script applies.
+#
+# That last fallback is what makes this file sourceable on its own, by anything
+# that has no FM_HOME to offer, naming the checkout exactly once. An operator who
+# wants his own shells to resolve the maintained copies can therefore source it
+# from a login profile instead of remembering a PATH prefix at every launch
+# (README.md "Install and launch"). Firstmate never writes that profile itself;
+# see docs/configuration.md "AXI-suite self-update" for why the inherited login
+# environment stays the operator's to change.
+
+# Self-locate at source time, and only on a positive identity check: a shell that
+# cannot say where this file lives leaves the fallback empty and callers keep their
+# existing "no home" failure, rather than prepending a guessed directory.
+FM_AXI_LIB_ROOT=
+if [ -n "${BASH_SOURCE[0]:-}" ]; then
+  FM_AXI_LIB_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd || true)
+  [ -f "$FM_AXI_LIB_ROOT/bin/fm-axi-path-lib.sh" ] || FM_AXI_LIB_ROOT=
+fi
 
 fm_axi_prefix() {
-  local home=${1:-${FM_HOME:-}}
+  local home=${1:-${FM_HOME:-$FM_AXI_LIB_ROOT}}
   [ -n "$home" ] || return 1
   printf '%s/.local/axi\n' "${home%/}"
 }

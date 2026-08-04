@@ -287,6 +287,57 @@ test_vessel_prefix_wins_over_inherited_path() {
   pass "the vessel AXI bin resolves first even when inherited PATH orders it later"
 }
 
+# The library is sourceable on its own so a login profile can make the maintained
+# copies resolve once instead of per launch. Asserted by what a shell then RUNS,
+# never by reading a variable or a profile back: this whole area exists because a
+# check that confirms the wrong thing reported an all-clear about a copy nobody ran.
+test_path_lib_is_sourceable_and_shadows_only_the_prefix() {
+  local w out
+  w="$TMP_ROOT/sourceable"
+  mkdir -p "$w/home/.local/axi/bin" "$w/elsewhere" "$w/nohome"
+  printf '#!/usr/bin/env bash\nprintf %%s maintained\n' > "$w/home/.local/axi/bin/demo-axi"
+  printf '#!/usr/bin/env bash\nprintf %%s stale\n' > "$w/elsewhere/demo-axi"
+  printf '#!/usr/bin/env bash\nprintf %%s other\n' > "$w/elsewhere/unrelated-tool"
+  chmod +x "$w/home/.local/axi/bin/demo-axi" "$w/elsewhere/demo-axi" "$w/elsewhere/unrelated-tool"
+
+  # A shell with no FM_HOME at all, exactly as a login profile sources it. The lib
+  # path travels in the environment rather than spliced into the script, so the
+  # quoting stays readable and the inner shell resolves it the same way every time.
+  wire() {
+    # shellcheck disable=SC2016 # The inner shell must expand these, not this one.
+    env -u FM_HOME -u FM_AXI_AMBIENT_PATH -u FM_AXI_AMBIENT_PATH_OWNER \
+      ${1:+FM_HOME="$1"} FM_TEST_LIB="$ROOT/bin/fm-axi-path-lib.sh" \
+      PATH="$w/elsewhere:$BASE_PATH" bash -c '
+      . "$FM_TEST_LIB" && fm_axi_prepend_path
+      demo-axi; printf " "; unrelated-tool'
+  }
+
+  out=$(wire "$w/home")
+  [ "$out" = "maintained other" ] \
+    || fail "FM_HOME's maintained copy must win while unrelated tools stay untouched, got: $out"
+
+  out=$(wire "$w/nohome")
+  [ "$out" = "stale other" ] \
+    || fail "a home with no prefix must leave resolution exactly as it was, got: $out"
+
+  # No FM_HOME: the fallback is the sourced file's own checkout, which is what lets
+  # one profile line name the checkout once. It has no prefix of its own here, so
+  # nothing may be shadowed on its behalf.
+  out=$(wire)
+  [ "${out% *}" = "stale" ] \
+    || fail "the checkout fallback must not shadow with a prefix it does not have, got: $out"
+
+  # shellcheck disable=SC2016 # The inner shell must expand these, not this one.
+  out=$(env -u FM_AXI_AMBIENT_PATH -u FM_AXI_AMBIENT_PATH_OWNER \
+    FM_HOME="$w/home" FM_TEST_LIB="$ROOT/bin/fm-axi-path-lib.sh" \
+    FM_TEST_BIN="$w/home/.local/axi/bin" PATH="$w/elsewhere:$BASE_PATH" bash -c '
+    . "$FM_TEST_LIB"
+    fm_axi_prepend_path && fm_axi_prepend_path
+    printf %s "$PATH" | tr ":" "\n" | grep -cFx "$FM_TEST_BIN"')
+  [ "$out" = 1 ] || fail "repeated sourcing must not stack duplicate PATH entries, got: $out"
+  pass "the AXI path library is sourceable standalone and shadows only its own prefix"
+}
+
 test_currency_clock_survives_prefix_cutover() {
   local w first second forced installs_after_first installs_after_second
   w="$TMP_ROOT/currency-clock"
@@ -759,3 +810,4 @@ test_hook_retry_self_clears_stuck_signal
 test_version_gt_without_sort_dash_v
 test_bounded_kills_hung_call_without_timeout_binary
 test_cumulative_timeout_across_tools
+test_path_lib_is_sourceable_and_shadows_only_the_prefix

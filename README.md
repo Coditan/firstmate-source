@@ -104,6 +104,19 @@ PATH="$PWD/.local/axi/bin:$PATH" pi
 The prefix directory may be absent on first launch; keeping it first from process start makes the vessel-owned AXI copies take precedence as soon as bootstrap installs them.
 When `FM_HOME` differs from the checkout root, prepend `$FM_HOME/.local/axi/bin` instead.
 Codex and OpenCode use the same PATH assignment before their `codex` or `opencode` launch command.
+
+That prefix has to be remembered at every launch, and a launch without it leaves the maintained copies installed but never run by your own shells - which `AXI_SUITE_SHADOWED:` reports rather than repairs, because your login environment is yours to change and not firstmate's.
+If you would rather resolve it once, append one line to the end of your login profile (`~/.profile` for a bash login, `~/.zprofile` for zsh):
+
+```sh
+. /path/to/this/checkout/bin/fm-axi-path-lib.sh && fm_axi_prepend_path
+```
+
+Put it last so it wins over earlier `PATH` edits, and write the checkout's real path rather than a variable.
+Every shell of that home then resolves its own maintained copies, including after a restart.
+Each home picks its own prefix from `FM_HOME`, falling back to the sourced file's checkout, so two homes on one machine do not compete; a shell that cannot locate the sourced file prepends nothing rather than guessing, and there you pass the home explicitly with `fm_axi_prepend_path /path/to/home`.
+Only command names that exist inside that prefix are affected, so anything you installed elsewhere resolves exactly as before, and a home whose prefix does not exist yet is unaffected until the currency check creates it.
+This is optional, and nothing in firstmate writes or reads your profile: verify it by effect from a new shell with `command -v gh-axi` and `gh-axi --version`, not by reading the file back.
 For Grok, `--trust` is needed once per clone so project hooks and the turn-end guard load; `/hooks-trust` inside Grok works too.
 For Pi, approve the project trust prompt once per clone on first launch so the tracked `.pi/extensions/*.ts` files auto-load.
 Every Pi session starts with calm mode off; `/calm` is a session-local conversation-focused transcript toggle.
