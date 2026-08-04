@@ -732,15 +732,20 @@ EOF
 
   # THE DEFECT ITSELF: neither why may send a reader to a report that does not
   # carry the record.
-  local why
-  for why in "$(printf '%s' "$chart" | jq -r '.misfiled[].why')"; do
+  # One whole line per row: a why is a sentence and must stay intact, and the
+  # claim being pinned is about EACH row, so the body has to run once per row.
+  local why seen=0
+  while IFS= read -r why; do
+    seen=$((seen + 1))
     case "$why" in
       *"unplaced report names it too"*)
         fail "the misfiled report sent a reader to the unplaced report for a record the unplaced report does not carry: $why" ;;
       *"no section drew it at all"*)
         fail "a record a decision section drew must not be described as drawn nowhere: $why" ;;
     esac
-  done
+  done < <(printf '%s' "$chart" | jq -r '.misfiled[].why')
+  [ "$seen" = 2 ] \
+    || fail "the whys must be checked one row at a time, so this loop must run once per misfiled record; it ran $seen times for 2 records"
 
   # And the clause about the section left short must not claim it is empty when
   # a correctly filed record is sitting in it.
