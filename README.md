@@ -106,15 +106,21 @@ When `FM_HOME` differs from the checkout root, prepend `$FM_HOME/.local/axi/bin`
 Codex and OpenCode use the same PATH assignment before their `codex` or `opencode` launch command.
 
 That prefix has to be remembered at every launch, and a launch without it leaves the maintained copies installed but never run by your own shells - which `AXI_SUITE_SHADOWED:` reports rather than repairs, because your login environment is yours to change and not firstmate's.
-If you would rather resolve it once, append one line to the end of your login profile (`~/.profile` for a bash login, `~/.zprofile` for zsh):
+If you would rather resolve it once, append these four lines to the end of your bash login profile (`~/.profile`):
 
 ```sh
-. /path/to/this/checkout/bin/fm-axi-path-lib.sh && fm_axi_prepend_path
+fm_axi_dir=$(. /path/to/this/checkout/bin/fm-axi-path-lib.sh && fm_axi_bin_dir)
+case ":$PATH:" in *:"$fm_axi_dir":*) fm_axi_dir= ;; esac
+[ -n "$fm_axi_dir" ] && PATH="$fm_axi_dir:$PATH" && export PATH
+unset fm_axi_dir
 ```
 
-Put it last so it wins over earlier `PATH` edits, and write the checkout's real path rather than a variable.
+Put them last so they win over earlier `PATH` edits, and write the checkout's real path rather than a variable.
 Every shell of that home then resolves its own maintained copies, including after a restart.
-Each home picks its own prefix from `FM_HOME`, falling back to the sourced file's checkout, so two homes on one machine do not compete; a shell that cannot locate the sourced file prepends nothing rather than guessing, and there you pass the home explicitly with `fm_axi_prepend_path /path/to/home`.
+Take the form as written: the subshell keeps the library's functions out of your login shell, the `case` keeps a re-read profile from stacking the same entry again, and the emptiness test is what keeps a shell that cannot locate the sourced file from prepending an empty `PATH` entry, which POSIX reads as the current directory.
+Use `fm_axi_bin_dir` rather than the library's own `fm_axi_prepend_path` here: verified by effect on 2026-08-04, with `fm_axi_prepend_path` in the profile a login ran the maintained copy and the currency check still printed `AXI_SUITE_SHADOWED:` naming the stale path, because that function records the pre-prepend `PATH` as the session's ambient one; with the form above the same login ran the maintained copy and the currency check printed no shadow line at all.
+Each home picks its own prefix from `FM_HOME`, falling back to the sourced file's checkout, so two homes on one machine do not compete.
+Self-location needs `BASH_SOURCE`, so in zsh, dash, or any other shell without it the bare call prints nothing and the lines leave `PATH` untouched; there, name the home explicitly as `fm_axi_bin_dir /path/to/home`.
 Only command names that exist inside that prefix are affected, so anything you installed elsewhere resolves exactly as before, and a home whose prefix does not exist yet is unaffected until the currency check creates it.
 This is optional, and nothing in firstmate writes or reads your profile: verify it by effect from a new shell with `command -v gh-axi` and `gh-axi --version`, not by reading the file back.
 For Grok, `--trust` is needed once per clone so project hooks and the turn-end guard load; `/hooks-trust` inside Grok works too.

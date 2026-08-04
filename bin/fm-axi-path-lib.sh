@@ -21,13 +21,25 @@
 # (README.md "Install and launch"). Firstmate never writes that profile itself;
 # see docs/configuration.md "AXI-suite self-update" for why the inherited login
 # environment stays the operator's to change.
+#
+# That profile route prepends the directory printed by fm_axi_bin_dir and does NOT
+# call fm_axi_prepend_path, because the ambient record below belongs to firstmate's
+# own entrypoints: a login shell that claimed it would record its PRE-prepend PATH
+# as the session's ambient one, and every session descending from that shell would
+# then be told the maintained copies are shadowed while it is in fact running them.
 
 # Self-locate at source time, and only on a positive identity check: a shell that
 # cannot say where this file lives leaves the fallback empty and callers keep their
 # existing "no home" failure, rather than prepending a guessed directory.
+#
+# BASH_SOURCE is named WITHOUT a subscript on purpose: bash expands the bare name
+# to element 0, while a POSIX shell reading this file - /bin/sh being dash on
+# Debian, which a login profile may well be - sees an ordinary unset scalar and
+# takes the empty fallback. `${BASH_SOURCE[0]}` is a fatal "Bad substitution"
+# there, which would abort the whole sourcing file rather than prepend nothing.
 FM_AXI_LIB_ROOT=
-if [ -n "${BASH_SOURCE[0]:-}" ]; then
-  FM_AXI_LIB_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd || true)
+if [ -n "${BASH_SOURCE:-}" ]; then
+  FM_AXI_LIB_ROOT=$(cd "$(dirname "${BASH_SOURCE}")/.." 2>/dev/null && pwd || true)
   [ -f "$FM_AXI_LIB_ROOT/bin/fm-axi-path-lib.sh" ] || FM_AXI_LIB_ROOT=
 fi
 
@@ -39,7 +51,7 @@ fm_axi_prefix() {
 
 fm_axi_bin_dir() {
   local prefix
-  prefix=$(fm_axi_prefix "${1:-${FM_HOME:-}}") || return 1
+  prefix=$(fm_axi_prefix "${1:-}") || return 1
   printf '%s/bin\n' "$prefix"
 }
 
@@ -141,7 +153,7 @@ fm_axi_ambient_claim() {  # <maintained-bin-dir>
 
 fm_axi_prepend_path() {
   local bin
-  bin=$(fm_axi_bin_dir "${1:-${FM_HOME:-}}") || return 1
+  bin=$(fm_axi_bin_dir "${1:-}") || return 1
   fm_axi_ambient_claim "$bin"
   case "${PATH:-}" in
     "$bin"|"$bin":*) ;;
