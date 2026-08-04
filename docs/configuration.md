@@ -413,7 +413,8 @@ A secondmate home that needs a different lineup writes its own file, and a home 
 ## Findings surface (config/findings-dir / FM_FINDINGS_DIR)
 
 The political officer appends findings to one directory on the host and has no other way out.
-`docs/findings-surface.md` owns what a finding means, `bin/fm-finding-lib.sh` owns what a finding is checked against, and `bin/fm-finding.sh --help` owns the commands and exit codes.
+`docs/findings-surface.md` owns what a finding means, what the drain rule is and why, and what a written-back outcome carries.
+`bin/fm-finding-lib.sh` owns what a finding and an outcome are checked against, `bin/fm-finding.sh --help` owns the emit and read commands, and `bin/fm-finding-drain.sh --help` owns the drain and write-back commands.
 This section owns only where the directory is.
 
 Resolution order is `FM_FINDINGS_DIR`, then the single path on the first line of `config/findings-dir`, then `FM_HOME/data/findings`.
@@ -654,6 +655,7 @@ FM_BACKEND_CMUX_COMPOSER_LINES=20  # cmux-only: tail lines scanned to locate the
 FM_BACKEND_CMUX_IDLE_RE='^Type a message\.\.\.$'  # cmux-only: empty-composer placeholder regex after border/prompt stripping
 CMUX_SOCKET_PASSWORD=   # cmux-only: socket password fallback when config/cmux-socket-password is absent (docs/cmux-backend.md)
 FM_FINDINGS_DIR=        # political officer's findings surface; overrides config/findings-dir, which overrides FM_HOME/data/findings
+FM_FINDING_NOW=         # ISO-8601 UTC instant the drain rule computes deadlines against; unset means now. An unparseable value is refused, never replaced by the wall clock
 FM_SERVICE_PORT_RANGE=4400-4499   # port window bin/fm-service-port.sh probes; above lavish-axi's 4387 default and below the ephemeral range
 FM_SERVICE_PORT_PROBE_TIMEOUT=4000   # milliseconds allowed per readiness probe in bin/fm-service-port-probe.mjs http
 FM_LAVISH_ALLOW_SHARE=0   # 1 permits `fm-lavish.sh share`, which publishes a review board to third-party hosting (docs/lavish-access.md)
