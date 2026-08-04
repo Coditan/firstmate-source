@@ -7,8 +7,11 @@
 #
 # Merge method defaults to --merge, producing a real merge commit, when the
 # caller passes none of --squash, --merge, --rebase, or --method after the
-# optional -- separator. Extra args must not include --repo or -R because the
-# repository comes only from the URL.
+# optional -- separator. A real merge commit is the default because a squashed
+# branch tip is never an ancestor of the default branch, so squash ancestry
+# cannot prove a branch landed and every later reader has to fall back to the
+# patch-id and content ladder. Extra args must not include --repo or -R because
+# the repository comes only from the URL.
 #
 # The merged head branch is deleted by default: --delete-branch is added unless
 # the caller already chose, with --delete-branch, or --delete-branch=false to
