@@ -323,14 +323,13 @@ test_scout_and_secondmate_load_decision_hold_policy() {
 }
 
 # The decision key is read from the status line's verb PREFIX only
-# (bin/fm-classify-lib.sh's _fm_decision_key), so a key written after the colon
-# folds under "default" and the failure surfaces at a completion gate far from
-# the line that caused it, while one written before the verb leaves no verb to
-# match and drops the line from the fold. Every scaffold must SHOW the keyed
-# shape rather than describe it, and name the one position that is read.
-# Nothing enforces this, so no scaffold may promise that anything does: the
-# wording is the whole mechanism, and a brief promising a check nobody runs is
-# worse than one promising nothing.
+# (bin/fm-classify-lib.sh's _fm_decision_key), so a key written anywhere else
+# does not name the decision the worker meant, and the failure surfaces far from
+# the line that caused it. Every scaffold must SHOW the keyed shape rather than
+# describe it, and state the one position the key sits in.
+# It must promise NOTHING beyond that. Nothing enforces the position, so a brief
+# that names a check or spells out what goes wrong is asserting behaviour with no
+# mechanism behind it, which is worse than the shown shape standing alone.
 test_status_key_position_is_shown_in_every_scaffold() {
   local home ship scout charter
   home="$TMP_ROOT/key-position-home"
@@ -360,12 +359,12 @@ test_status_key_position_is_shown_in_every_scaffold() {
   for brief in "$ship" "$scout" "$charter"; do
     assert_grep 'in the verb prefix, between the verb and the colon' "$brief" \
       "$brief does not state where the decision key goes"
-    assert_grep 'before the verb or anywhere after the colon is not read as a key at all' "$brief" \
-      "$brief does not rule out both wrong key positions"
     assert_no_grep 'refuses it by name' "$brief" \
-      "$brief promises an enforcement check that no longer exists"
+      "$brief promises an enforcement check that nothing performs"
+    assert_no_grep 'not read as a key at all' "$brief" \
+      "$brief describes a failure mode instead of letting the shown shape stand alone"
   done
-  pass "fm-brief.sh: every scaffold shows the keyed status shape and its one read position"
+  pass "fm-brief.sh: every scaffold shows the keyed status shape and states its position"
 }
 
 # Scout and secondmate paths still scaffold well-formed briefs.
