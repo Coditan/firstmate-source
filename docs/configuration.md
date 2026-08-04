@@ -606,10 +606,10 @@ Both paths share the same signature and marker implementation, so the slow fallb
 The default deployment path is `$FM_HOME/projects/hlr-certsync` with `docker-compose.yml`; `FM_CERTSYNC_PROJECT`, `FM_CERTSYNC_COMPOSE_FILE`, and `FM_CERTSYNC_GRAPH_COMPOSE_FILE` override the project and compose files.
 If the optional graph compose file exists, the watcher adds it to the `docker compose` command; if it is absent, the base compose file is enough.
 The heartbeat runs `docker compose ... exec -T certsync certsync status` with `FM_CERTSYNC_STATE_DB`, `FM_CERTSYNC_HEARTBEAT_FILE`, and `FM_CERTSYNC_DAEMON_STATE` mapped to the status command's `--state-db`, `--heartbeat-file`, and `--daemon-state` arguments.
-Only a confirmed JSON object with `healthy: false` becomes a durable `check` wake keyed as `certsync-health`, with the `reason` field trimmed and bounded in the wake text.
-A `healthy: true` reading clears the unchanged-unhealthy marker and stays quiet.
-Missing project or compose files, missing `docker` or `jq`, empty output, invalid JSON, a missing boolean `healthy` field, and all other unreadable states are unknown and quiet except for the local `state/.watch-triage.log` debug note.
-The command is bounded by `FM_CERTSYNC_HEALTH_TIMEOUT` rather than the general check timeout, and unchanged unhealthy readings re-surface only after `FM_CERTSYNC_HEALTH_RESURFACE`.
+A confirmed JSON object with `healthy: false` becomes a durable `check` wake keyed as `certsync-health`, with the `reason` field trimmed and bounded in the wake text.
+A `healthy: true` reading clears the unchanged marker and stays quiet.
+Missing `docker` or `jq`, a failed status command (including a docker permission denial), empty output, invalid JSON, and a missing boolean `healthy` field all produce their own `check` wake carrying a `cannot run: ...` reason, so an inability to read certsync's status can never read the same as a confirmed-healthy status; only a missing project directory or missing compose file (certsync not deployed on this host at all) stays quiet.
+The command is bounded by `FM_CERTSYNC_HEALTH_TIMEOUT` rather than the general check timeout, and an unchanged unhealthy or unchanged cannot-run reading re-surfaces only after `FM_CERTSYNC_HEALTH_RESURFACE`.
 
 ## Environment variables
 
