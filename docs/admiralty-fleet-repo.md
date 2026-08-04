@@ -46,15 +46,15 @@ A vessel sitting at the fork's current `main` and pointed at `admiralty`'s `main
 | `.fleet-excluded` | fleet | pin paths deliberately not materialized; empty on day one |
 | `fleet/bin/` | fleet | ownership library, drift gate, pin check, importer |
 | `fleet/doctrine/` | fleet | the partition, the pin and bump contract, branch protection |
-| `fleet/decisions/`, `fleet/vessels/`, `fleet/roles/` | fleet | placeholders for fleet-wide decisions, per-vessel material, and fleet-authored roles |
+| `fleet/decisions/`, `fleet/vessels/`, `fleet/roles/` | fleet | fleet-wide decisions, per-vessel material, and fleet-authored roles |
 | `.github/workflows/fleet-ci.yml` | fleet | the gates |
-| everything else, 353 paths at the current pin `de0b95b` and 308 at the genesis pin `e52cc76` | vendored | firstmate at the pin, byte for byte |
+| everything else, 308 paths at the genesis pin `e52cc76` | vendored | firstmate at the pin, byte for byte |
 
 Ownership is decided by name, in a fixed order, by `fleet/bin/fmf-ownership.sh`.
 The four control files, anything under `fleet/`, and `.github/workflows/fleet-*.yml` are fleet-owned; then the `.fleet-overlay` registry; then `.fleet-excluded`; then everything else is vendored.
 The last rule is deny-by-default, so a new file at an unregistered path is classified vendored and the drift gate fails it until someone classifies it deliberately.
 
-The initial pin is this fork's `main`, not the upstream template's, and the overlay registry is empty.
+The initial pin is this fork's `main`, not the upstream template's.
 Day one is a change of repository identity with zero behaviour delta, and the move toward upstream happens as reviewed pin bumps rather than a single cutover.
 
 ## The pin and bump contract
@@ -148,7 +148,8 @@ None of that means the canonical upstream template absorbed those patches: the v
 
 ## What is not built yet
 
-- No vessel is cut over. Origins still point at `Freudator86/firstmate`.
+- Cutover is not finished, and this document does not track where any individual vessel stands.
+  A vessel's own `origin` is the authority on whether that vessel has been cut over; read it there.
 - Restoring the ancestry as this fork's `main` advances past `e52cc76` is an open captain decision, not a solved problem.
   Ancestry is a property of the commit graph and not of tree content, so a pin bump alone does not restore it: a bump commit on `admiralty` copies the fork's newer tree, but it does not add the fork's newer commits to `admiralty`'s ancestor set.
   Absorbing that history so an already-updated vessel stays fast-forwardable needs a true merge of the fork's `main` into `admiralty`'s `main`, which is consistent with the standing rule that upstream-sync pull requests land as true merge commits rather than squashes.
@@ -159,4 +160,3 @@ None of that means the canonical upstream template absorbed those patches: the v
   Name the `admiralty` commit rather than a bare `origin/main`, because in this repository `origin/main` is the fork itself, where `de0b95b` is an ancestor and the same command exits 0.
   That merge bump cannot be raised through no-mistakes, because its rebase would flatten the ancestry the merge exists to create, so it is authorized on the captain's word instead.
 - The Bridge extraction, the fork-maintenance tooling retirement, and the Bucket-A upstreaming are unstarted; the fork-first ratchet prices each as its own reviewed pin bump.
-- `fleet/decisions/`, `fleet/vessels/`, and `fleet/roles/` are empty placeholders.
