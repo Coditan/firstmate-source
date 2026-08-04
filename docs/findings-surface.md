@@ -61,19 +61,116 @@ So the surface separates the two readings on purpose:
 - A record whose reader crashes on it counts as malformed, not as valid.
   A validator that reads its own failure as "no violations found" calls every file a finding.
 
+## The drain rule: earliest deadline first
+
+A builder takes findings with `bin/fm-finding-drain.sh`, which the officer cannot run.
+He states what is true; the rule decides what gets worked.
+
+Every finding has a deadline: the moment it was observed plus the waiting time its severity allows.
+
+| Severity | Waiting time | A finding of this consequence is late after |
+|---|---|---|
+| `high` | 24 hours | one day undrained |
+| `medium` | 72 hours | three days undrained |
+| `low` | 168 hours | one week undrained |
+
+The rule takes the finding whose deadline is nearest, past or future.
+One key, one total order, ties to the older observation.
+
+**Why this and not severity-first.**
+Severity-first starves a low finding behind an endless supply of high ones, and a claim nobody ever reaches is the exact shape of the 2027 unread log lines the officer exists to notice.
+Under this rule a newly arrived high finding queues *behind* a low one that has already waited out its week, because a new arrival's deadline is always later than a deadline that has already passed.
+Nothing can be permanently outranked.
+
+**Why this and not oldest-first.**
+Oldest-first parks a high-consequence finding behind a queue of trivia.
+Between two findings observed at the same instant, this rule still takes the high one first.
+
+**Why severity may enter the rule at all.**
+The officer may not express a priority - a priority is an instruction, and he has no authority to give one.
+Severity is a statement about consequence, and the rule converts it into a waiting time, never into a rank.
+That is the whole of the officer's influence on the order, and it decays: after both deadlines pass, the older breach wins regardless of severity.
+
+## The coupling: ignoring a finding is a visible act
+
+A finding is overdue exactly when its deadline has passed.
+`fm-finding-drain.sh queue --overdue` lists the findings that are past their deadline and still undrained - the ones being ignored.
+
+The coupling is the drain rule's own sort key read with its sign, not a second mechanism beside it.
+There is no separate unread-tracker that could keep reporting a healthy queue after the ordering broke, because the number that orders the queue is the number that defines overdue.
+
+## The write-back
+
+When a finding is drained, its outcome is written back **by whoever drained it, never by the officer**.
+
+This exists because of a measured failure.
+On 2026-08-03 another vessel ran three backlog audits that judged 30 entries dead, and not one finding was written back.
+Its morning report therefore showed its captain 16 open decisions of which 11 were no longer alive, and one of the three reports had no backlog entry at all - invisible to every listing, and nearly commissioned a second time.
+A findings surface nobody writes back to rebuilds that failure from scratch.
+
+The outcome lives in a sibling `<id>.outcome.json`, excluded from every finding listing.
+
+| Field | Meaning |
+|---|---|
+| `schema` | `fm-finding-outcome/1`. |
+| `finding` | The id of the finding this answers. |
+| `drained_by` | The seat that took it. Only that seat may write the outcome back. |
+| `drained` | When it was taken. |
+| `state` | `taken` while the work is under way, `closed` once the outcome is written. |
+| `outcome` | `upheld`, `refuted`, or `unresolved`. Only on a `closed` record. |
+| `closed` | When the outcome was written back. |
+| `evidence` | The reading behind the outcome. Only on a `closed` record. |
+
+`unresolved` is a written-back result - someone looked and could not settle it - and is not the same thing as never having looked.
+The evidence field is required of all three: without it, "we could not settle this" is indistinguishable from "we did not look", and an outcome with no reading behind it is an opinion about the officer rather than an answer to his finding.
+
+Two rules are held by which file each seat may create rather than by anyone remembering them.
+The finding file is written once and never rewritten, so the answer cannot corrupt the claim.
+The outcome file is created only by `fm-finding-drain.sh take`, which the emit surface has no option to produce, so the officer answering his own finding is not a discipline - it is a command that does not exist.
+
+Creating the claim is atomic, so two builders reaching for the same finding cannot both get it, and neither needs a lock on a surface a container appends to without one.
+A written-back outcome is the record, not a draft: an identical retry is allowed, a different outcome is refused.
+
 ## What is not built here
 
 The container, the officer's own body, his locked behavioural history, and the access trace are a later change against the fleet repository.
 This is the firstmate-side machinery only.
 
-`*.outcome.json` is already reserved on the surface and excluded from every listing.
-That is where a drained finding's outcome goes, written by whoever drained it and never by the officer.
-The drain rule, the write-back, the unread coupling, and the refuted rate are not implemented yet.
+The refuted rate - the officer's accuracy as a public number computed from written-back outcomes - is not implemented yet.
+The outcomes it needs now exist and are attributable to an officer by the finding's `officer` field.
+Surfacing overdue findings into the captain's own daily view is likewise still open; today the coupling is visible only to whoever runs the queue.
+
+## Empty is not the same reading as unreachable, on the drain side too
+
+The drain answers the same distinction the surface does, because the calm reading it can degrade into is the more dangerous one: a builder that reads "nothing to work on" goes back to sleep.
+
+- `fm-finding-drain.sh next` on a reachable surface prints `open=<n>` and `next=<id or empty>`, both after counting.
+- On an unreachable surface it prints no queue reading at all, names the concrete defect on stderr, and exits 3.
+  There is no path by which "I could not reach the surface" produces `open=0`.
+- A finding whose `observed` is not a real timestamp has no deadline and therefore no place in the order.
+  It is carried through the listing as undatable, named, and the ordering exits 4.
+  It is never dropped: a record the rule cannot handle is exactly the one that must not become the one nobody sees.
+- A finding whose outcome file cannot be read is reported in state `unknown` and is never handed out again.
+  Reading it as open would give a second builder work the first may be doing; dropping it would hide a real claim behind a broken answer.
+- A pinned clock that cannot be parsed refuses rather than falling back to the wall clock, because a queue ordered against a different instant than the caller asked for reports success while answering a different question.
 
 ## Verification
 
-2026-08-04, `bash tests/fm-finding-surface.test.sh` on Linux 6.8.0, jq present.
+2026-08-04, `bash tests/fm-finding-surface.test.sh` and `bash tests/fm-finding-drain.test.sh` on Linux 6.8.0, jq 1.7.
 
-Before `bin/fm-finding.sh` and `bin/fm-finding-lib.sh` existed, the suite's first assertion failed with exit 127 (command not found).
-After, the suite passes.
-`tests/fm-finding-surface.test.sh` is the colocated owner of that evidence and re-proves it on every run.
+Before `bin/fm-finding.sh` and `bin/fm-finding-lib.sh` existed, the surface suite's first assertion failed with exit 127 (command not found).
+Before `bin/fm-finding-drain.sh` existed, the drain suite's first assertion failed the same way.
+After, both suites pass.
+
+Exit 127 is a weak fail-before for a brand-new file, so the drain suite's load-bearing assertions were additionally mutation-tested against the finished tree, and each mutation was caught:
+
+| Mutation | The assertion that caught it |
+|---|---|
+| ordering changed to severity-first | a fresh high finding must not jump a low one that has waited |
+| the `drained_by` check removed from the write-back | a seat that did not drain a finding may not answer it |
+| `resolve` no longer requiring a prior `take` | an outcome for work nobody claimed must be refused |
+| the unreachable-surface refusal removed from the queue read | an unreachable surface must not exit 0 |
+| an unplaceable record dropped from the listing instead of flagged | a queue holding a record it cannot place must not read as complete |
+| a written-back outcome made overwritable | a retry must not write a second outcome |
+
+`tests/fm-finding-surface.test.sh` and `tests/fm-finding-drain.test.sh` are the colocated owners of that evidence and re-prove the behaviour on every run.

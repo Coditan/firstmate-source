@@ -30,6 +30,11 @@
 # --refuted-by is required of every class, not only of judgements. The header of
 # bin/fm-finding-lib.sh owns why.
 #
+# There is deliberately no command here that writes an outcome. A drained
+# finding's outcome is written back by whoever drained it, through
+# bin/fm-finding-drain.sh, so the officer answering his own claim is a command
+# that does not exist rather than a rule he has to keep.
+#
 # Surface location: FM_FINDINGS_DIR, else the FM_HOME/config/findings-dir
 # pointer, else FM_HOME/data/findings.
 #
@@ -71,40 +76,9 @@ require_jq() {
     || die "$FM_FINDING_EXIT_USAGE" "jq is required to read or write findings and is not installed"
 }
 
-# resolve_surface: sets SURFACE, or exits with the resolver's own reason.
-resolve_surface() {
-  local dir status
-  dir=$(fm_finding_surface_dir)
-  status=$?
-  [ "$status" -eq 0 ] || exit "$status"
-  SURFACE=$dir
-}
-
-# require_surface <read|append>: exit with the concrete reason when the surface
-# cannot serve that mode.
-require_surface() {
-  local mode=$1 state
-  state=$(fm_finding_surface_state "$SURFACE")
-  if [ "$state" != "ok" ]; then
-    fm_finding_surface_reason "$SURFACE" "$state" >&2
-    exit "$FM_FINDING_EXIT_UNREACHABLE"
-  fi
-  if [ "$mode" = "append" ] && [ ! -w "$SURFACE" ]; then
-    fm_finding_surface_reason "$SURFACE" unwritable >&2
-    exit "$FM_FINDING_EXIT_UNREACHABLE"
-  fi
-}
-
-# each_record: print every candidate record path on the surface, oldest first.
-# The id's leading timestamp makes a plain byte sort the chronological one.
-each_record() {
-  find "$SURFACE" -maxdepth 1 -type f -name '*.json' ! -name '*.outcome.json' -print \
-    | LC_ALL=C sort
-}
-
 cmd_init() {
   local state
-  resolve_surface
+  fm_finding_resolve_surface
   state=$(fm_finding_surface_state "$SURFACE")
   case "$state" in
     ok)
@@ -159,8 +133,8 @@ cmd_emit() {
 
   [ -n "$observed" ] || observed=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-  resolve_surface
-  require_surface append
+  fm_finding_resolve_surface
+  fm_finding_require_surface append
 
   payload=$(jq -n -S \
     --arg schema "$FM_FINDING_SCHEMA" \
@@ -228,8 +202,8 @@ cmd_list() {
     esac
   done
   require_jq
-  resolve_surface
-  require_surface read
+  fm_finding_resolve_surface
+  fm_finding_require_surface read
 
   [ "$as_json" -eq 1 ] && printf '['
   while IFS= read -r file; do
@@ -249,7 +223,7 @@ cmd_list() {
       jq -r '[.id, .observed, .class, .severity, .officer, .claim] | @tsv' "$file" \
         || die "$FM_FINDING_EXIT_MALFORMED" "could not render $id"
     fi
-  done < <(each_record)
+  done < <(fm_finding_each_record)
   [ "$as_json" -eq 1 ] && printf ']\n'
 
   if [ "$malformed" -gt 0 ]; then
@@ -263,8 +237,8 @@ cmd_show() {
   local id=${1:-} path violations
   [ -n "$id" ] || die "$FM_FINDING_EXIT_USAGE" "show requires a finding id"
   require_jq
-  resolve_surface
-  require_surface read
+  fm_finding_resolve_surface
+  fm_finding_require_surface read
   path=$(fm_finding_path "$SURFACE" "$id")
   [ -f "$path" ] || die "$FM_FINDING_EXIT_USAGE" "no finding $id on $SURFACE"
   if ! violations=$(fm_finding_validate "$path"); then
@@ -282,7 +256,7 @@ cmd_show() {
 # nothing was counted.
 cmd_check() {
   local state file malformed=0 findings=0
-  resolve_surface
+  fm_finding_resolve_surface
   state=$(fm_finding_surface_state "$SURFACE")
   if [ "$state" != "ok" ]; then
     printf 'surface=%s\nstate=%s\nfindings=\nmalformed=\n' "$SURFACE" "$state"
@@ -304,7 +278,7 @@ cmd_check() {
     else
       malformed=$((malformed + 1))
     fi
-  done < <(each_record)
+  done < <(fm_finding_each_record)
   printf 'surface=%s\nstate=%s\nfindings=%d\nmalformed=%d\n' \
     "$SURFACE" "$state" "$findings" "$malformed"
   [ "$state" = "append-blocked" ] && {

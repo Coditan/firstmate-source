@@ -713,8 +713,11 @@ families_for_changed_path() {
     bin/fm-finding*.sh)
       # The findings surface's record contract lives in bin/fm-finding-lib.sh,
       # which no test names by path, so the bin/* grep fallthrough below cannot
-      # find its reader. Name the suite explicitly.
+      # find its reader. Name the suites explicitly. Both are selected for any
+      # of the three scripts, because the drain rule and the emit path share
+      # that one record contract and a change to it can break either side.
       printf '%s\n' "__script_required__:fm-finding-surface.test.sh"
+      printf '%s\n' "__script_required__:fm-finding-drain.test.sh"
       ;;
     bin/fm-install-herdr.sh|bin/fm-install-treehouse.sh|bin/fm-herdr-ci-cleanup.sh)
       printf '%s\n' pure-contract-unit
