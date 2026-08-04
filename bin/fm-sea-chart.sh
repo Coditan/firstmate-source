@@ -169,6 +169,13 @@
 #                      member the chart cannot recognise is named rather than
 #                      quietly dropped behind a zero. Ordered kind defects first,
 #                      so held or blocked ordinary work cannot push one down
+#   misfiled[]         members whose id marker and record kind disagree, whether or
+#                      not a section drew them, each naming the `marker` found, the
+#                      `kind` found, the section it `belongs_in`, and the one it was
+#                      `drawn_in`. A boundary filed with the fog kind IS drawn, so
+#                      no report about unplaced members can see it, while the
+#                      section its id names renders zero and reads as a claim about
+#                      the course. This states the disagreement and picks no winner
 #   counts             the incompleteness numbers, computed fresh per build.
 #                      `withheld` covers BOTH classes the section carries - the
 #                      records the actionable surface never returned and the ones
@@ -368,6 +375,15 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
     then {marker: "oos", expected: $oos_kind, section: "OUT OF COURSE"}
     else null end;
 
+  # Which section a member reaches on its KIND alone, which is the only thing any
+  # of them filter on. Read beside the marker above, it is what turns a swapped
+  # pair from a silent wrong row into a sentence: the record is HERE and the
+  # section it names is empty.
+  def drawn_section:
+    if .kind == $fog_kind then "FOG"
+    elif .kind == $oos_kind then "OUT OF COURSE"
+    else null end;
+
   # Why a captain-gated record is not on the decision list of this chart. These are
   # different pieces of news and must not share one sentence: a blocked record is
   # one the fleet has lost track of, while an in-flight one is being worked right
@@ -527,6 +543,41 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
        | {id, bound:((.id | marker("oos")) // .id), title:(.title // ""),
           why:((.hold_reason // "-"))} ]) as $out_of_course
 
+  # THE SWAP EVERY OTHER REPORT ON THIS CHART IS BLIND TO.
+  # The two filing commands in AGENTS.md section 10 differ in one word, so the
+  # likeliest slip of all is a boundary filed with the fog kind or the reverse.
+  # Such a record is PLACED - the fog filter above takes it - so nothing that
+  # asks "did any section draw this member" can ever see it, and the section its
+  # id names renders 0. That is this whole change in miniature: an empty section
+  # is read as a claim about the course, and here the claim is refuted by a
+  # record already on the same page. So the cross-check runs over EVERY open
+  # member rather than only the leftovers, and reports on its own surface -
+  # unplaced[] means members no section drew, and stretching it to hold records
+  # that ARE drawn would cost that sentence its meaning.
+  # This REPORTS the disagreement and stops there. That the marker and the kind
+  # are two independent spellings able to disagree at all is a separate question,
+  # filed as `fm-seekarte-zwei-kodierungen-widersprechen-sich`; nothing here
+  # unifies them, derives one from the other, or picks a winner.
+  # A record with no kind at all is left to the no-kind cause instead, which
+  # already names the one missing field: it disagrees with nothing, it is simply
+  # not filled in, and reporting it twice would blunt both reports.
+  | ([ $mine[]
+       | select(open_state)
+       | select(.id != $chart)
+       | select(.kind != null)
+       | marker_kind_mismatch as $mis
+       | select($mis != null)
+       | drawn_section as $drawn
+       | {id, title:(.title // ""),
+          marker: $mis.marker, kind: .kind,
+          belongs_as: $mis.expected, belongs_in: $mis.section,
+          drawn_in: $drawn,
+          why: ("its id carries the -\($mis.marker)- marker, which files it under this chart as \($mis.expected), but its record kind is \(.kind). Every section here places a member by its kind, so "
+                + (if $drawn == null
+                   then "no section drew it at all and the unplaced report names it too"
+                   else "this record is drawn under \($drawn)" end)
+                + ", while \($mis.section) renders as if this course had none of them. One of the two spellings is wrong and the chart cannot tell which: correct the kind to \($mis.expected), or rename the id if this record is not that.")} ]) as $misfiled
+
   # Takeable: work on this course with nothing REAL unresolved holding it. A
   # dangling blocked-by edge - a target real in neither the backlog nor the archive
   # - never held it, so it stays takeable and the stale edge is named on the row so
@@ -615,6 +666,7 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
       out_of_course: $out_of_course,
       takeable: $takeable,
       unplaced: $unplaced,
+      misfiled: $misfiled,
       counts: {
         # Both sides are drawn from the same home, so the first can never be the
         # smaller. The guard is here anyway: printing arithmetic that cannot be
@@ -633,7 +685,8 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
         withheld_folded: ([ $withheld[] | select(.cause == "unpaired-variant") ] | length),
         possibly_answered: ($possibly_answered | length),
         unplaced: ($unplaced | length),
-        unplaced_kind_defects: ([ $unplaced[] | select(.kind_defect) ] | length)
+        unplaced_kind_defects: ([ $unplaced[] | select(.kind_defect) ] | length),
+        misfiled: ($misfiled | length)
       },
       possibly_answered: $possibly_answered,
       # Printed ON the chart, not filed in documentation. A chart that names its
@@ -698,6 +751,12 @@ if [ "$MODE" = "summary" ]; then
         | "  ? \(.id)  [kind: \(.kind // "none")\(if .hold_kind == null then "" else ", hold-kind: \(.hold_kind)" end)]\n      \(.why)")
       else empty end),
     (if (.unplaced | length) > 0 then "" else empty end),
+    # Above the sections it calls into question, because it is the one report
+    # whose subject is a row the reader would otherwise believe.
+    (if (.misfiled | length) > 0 then
+      "MISFILED - the id and the record kind of these members disagree, so a section below is empty that should not be:",
+      (.misfiled[] | "  ! \(.id)  [marker: -\(.marker)-, kind: \(.kind)\(if .drawn_in == null then "" else ", drawn under \(.drawn_in)" end)]\n      \(.why)"),
+      "" else empty end),
     (if (.withheld | length) > 0 then
       "WITHHELD - open captain-gated records no decision section of this chart carries:",
       (.withheld[] | "  ! \(.id)\n      \(.why)" +

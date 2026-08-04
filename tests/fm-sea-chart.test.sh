@@ -604,6 +604,93 @@ EOF
   pass "an id marker and a record kind that disagree are reported as a kind defect, never offered as takeable"
 }
 
+test_a_swapped_chart_kind_is_reported_even_though_a_section_drew_it() {
+  # THE SWAP EVERY OTHER REPORT HERE IS BLIND TO. The two filing commands in
+  # AGENTS.md section 10 differ in a single word, so the likeliest slip is a
+  # boundary filed with the fog kind or the reverse. Such a record IS placed -
+  # the fog filter takes it - so every report that asks "did any section draw
+  # this member" answers yes and says nothing, while the section its id names
+  # renders 0. That is this whole change in miniature: an empty section reads as
+  # a claim about the course, and here the claim is refuted by a record already
+  # on the same page.
+  local home cap chart summary
+  home=$(make_home swapped)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-oos-tracker - A boundary filed with the fog kind (repo: r) (kind: fog) (since 2026-07-30) (hold: out of course) (hold-kind: future)
+- [ ] voy-fog-retention - A dark patch filed with the boundary kind (repo: r) (kind: out-of-course) (since 2026-07-30) (hold: not sharp yet) (hold-kind: future)
+EOF
+  cap=$(capture swapped)
+  chart=$(chart_json "$home" voy "$cap")
+
+  # REPRODUCE. Each record really is drawn, and drawn in the wrong section, so
+  # nothing about the placement itself looks wrong.
+  [ "$(printf '%s' "$chart" | jq -r '[.fog[].id]|join(",")')" = "voy-oos-tracker" ] \
+    || fail "fixture drift: the boundary filed with the fog kind must still be DRAWN under fog - that is what makes it invisible to every unplaced report"
+  [ "$(printf '%s' "$chart" | jq -r '[.unplaced[].id]|join(",")')" = "" ] \
+    || fail "a record a section drew must not be forced into unplaced[], whose sentence is about members no section drew"
+
+  # And it is reported anyway, on a surface of its own, naming both halves.
+  [ "$(printf '%s' "$chart" | jq -r '.counts.misfiled')" = 2 ] \
+    || fail "a swapped chart kind must be counted: it is placed, so no other count on this chart can ever see it"
+  [ "$(printf '%s' "$chart" | jq -r '[.misfiled[].id]|sort|join(",")')" = "voy-fog-retention,voy-oos-tracker" ] \
+    || fail "both swap directions must be reported, not only the one the fog filter happens to take first"
+  local swap
+  swap=$(printf '%s' "$chart" | jq -r '.misfiled[]|select(.id=="voy-oos-tracker")')
+  [ "$(printf '%s' "$swap" | jq -r '.marker')" = "oos" ] || fail "the marker found on the id must be named"
+  [ "$(printf '%s' "$swap" | jq -r '.kind')" = "fog" ] || fail "the kind found on the record must be named beside it"
+  [ "$(printf '%s' "$swap" | jq -r '.drawn_in')" = "FOG" ] \
+    || fail "the report must say which section actually drew the record, or the reader cannot find the wrong row"
+  [ "$(printf '%s' "$swap" | jq -r '.belongs_in')" = "OUT OF COURSE" ] \
+    || fail "the report must say which section is empty because of this, since that empty section is the harm"
+
+  # The reverse swap is reported the same way, so the net is not one-directional.
+  [ "$(printf '%s' "$chart" | jq -r '.misfiled[]|select(.id=="voy-fog-retention")|.drawn_in')" = "OUT OF COURSE" ] \
+    || fail "a dark patch filed with the boundary kind must be reported as drawn out of course"
+
+  # Visible without reading JSON, and above the sections it calls into question.
+  summary=$("$CHART" voy --summary --from "$cap" \
+    --backlog "$home/data/backlog.md" --archive "$home/data/done-archive.md" --data "$home/data")
+  assert_contains "$summary" "MISFILED" "the swap must be visible on the rendered page, not only in the JSON"
+  local mis_line fog_line
+  mis_line=$(printf '%s\n' "$summary" | grep -n 'MISFILED' | head -1 | cut -d: -f1)
+  fog_line=$(printf '%s\n' "$summary" | grep -n '^FOG:' | head -1 | cut -d: -f1)
+  [ -n "$mis_line" ] && [ -n "$fog_line" ] && [ "$mis_line" -lt "$fog_line" ] \
+    || fail "the report must be rendered above the section whose row it calls into question: $summary"
+  pass "a swapped chart kind is reported even though a section drew it, naming both halves"
+}
+
+test_a_correctly_filed_chart_record_is_never_called_misfiled() {
+  # The net has to be silent on correct work, or it is worth nothing: a report
+  # that fires on the right filing teaches a reader to skip it, and the next real
+  # swap goes past unread.
+  local home cap chart
+  home=$(make_home nowolf)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-fog-retention - Retention is not sharp yet (repo: r) (kind: fog) (since 2026-07-30) (hold: could not name it) (hold-kind: future)
+- [ ] voy-oos-tracker - A second tracker (repo: r) (kind: out-of-course) (since 2026-07-30) (hold: out of course) (hold-kind: future)
+- [ ] voy-implement - Ordinary work carrying no chart marker (repo: r) (kind: ship) (since 2026-07-30)
+EOF
+  cap=$(capture nowolf)
+  chart=$(chart_json "$home" voy "$cap")
+  [ "$(printf '%s' "$chart" | jq -r '.counts.misfiled')" = 0 ] \
+    || fail "a correctly filed dark patch, a correctly filed boundary, and ordinary unmarked work must all stay silent: $(printf '%s' "$chart" | jq -r '[.misfiled[].id]|join(",")')"
+  [ "$(printf '%s' "$chart" | jq -r '(.fog|length) + (.out_of_course|length)')" = 2 ] \
+    || fail "fixture drift: both correctly filed records must reach their own sections"
+  case "$("$CHART" voy --summary --from "$cap" \
+    --backlog "$home/data/backlog.md" --archive "$home/data/done-archive.md" --data "$home/data")" in
+    *MISFILED*) fail "the rendered page must carry no misfiled block when nothing is misfiled" ;;
+  esac
+  pass "a correctly filed record of either chart kind is never called misfiled"
+}
+
 test_a_kind_defect_is_never_pushed_down_the_page_by_routine_held_work() {
   # Held and blocked ordinary work belongs in unplaced[] - this chart has no
   # section for it, and dropping it would be the silent gap the whole report
@@ -933,6 +1020,8 @@ test_the_filing_instruction_names_the_field_the_chart_reads
 test_a_member_the_chart_cannot_place_is_named_not_silently_dropped
 test_an_unpaired_analyst_variant_is_reconciled_rather_than_counted_as_drawn
 test_an_id_marker_and_a_record_kind_that_disagree_are_reported_never_offered
+test_a_swapped_chart_kind_is_reported_even_though_a_section_drew_it
+test_a_correctly_filed_chart_record_is_never_called_misfiled
 test_a_kind_defect_is_never_pushed_down_the_page_by_routine_held_work
 test_chart_kinds_stay_off_the_blockage_surface_but_are_disclosed
 test_a_chart_without_a_destination_is_refused

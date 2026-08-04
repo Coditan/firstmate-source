@@ -87,9 +87,11 @@ Use `fm-stats`.
 They are the reason this is worth building, and a chart that drops them is worse than no chart:
 
 - how many decision records this chart owns, how many of those reached the actionable surface, and how many were folded away
-- how many were **withheld** from the actionable surface
+- how many are **not carried by any decision section**, and how many of those (`counts.withheld_folded`) the fold dropped rather than the surface never returning them
 - how many are **possibly already answered**
 
+The second number covers two different situations and its wording has to stay true of both: a record the actionable surface never returned at all, and one it did return before the fold dropped it.
+Print `withheld_folded` beside it, or the same record is counted once as folded and once here with nothing on the page saying they are one record.
 A withheld or possibly-answered count above zero is not a footnote.
 Render those records in full, with the blocker or the closed twin named, near the top.
 Withheld records do not all carry the same news, and each one says which it is in `cause` with the reason in `why`.
@@ -105,6 +107,11 @@ An empty section is read as a statement about the course - "there is no fog here
 Each entry names its `kind` and `hold_kind` beside the `why`, because those two fields are what get confused, and a `no-kind` cause means the record was filed without the kind that `AGENTS.md` section 10 requires rather than that the course is clear.
 A `marker-kind-mismatch` cause means the id and the kind disagree - the id claims a dark patch or a boundary and the kind does not - so one of the two is a typo, and the record is deliberately kept out of `takeable[]` until they agree rather than offered as work to pick up while the section it names reads empty.
 The entries arrive `kind_defect` first and must be rendered in that order, under headings that keep the two apart: a kind the chart cannot classify can leave a whole section reading empty, while held or blocked ordinary work is only work this chart has no section for, and letting the second crowd out the first is how the empty sections went unnoticed in the first place.
+
+**Anything in `misfiled[]`, above the sections it calls into question.**
+These members carry an id marker and a record kind that disagree, and unlike an unplaced member most of them ARE drawn - a boundary filed with the fog kind sits under FOG while OUT OF COURSE renders zero, which is the empty section reading as a claim all over again, this time refuted by a record on the same page.
+Render the `marker` found and the `kind` found side by side, because the chart does not know which of the two is the typo and the reader has to decide.
+Never quietly correct one to match the other while rendering; the disagreement is the finding.
 
 **Every folded record stays visible.**
 Use `.fm-variants`, exactly as the decision board does, for the same reason: the fold rests on an assumption nothing verifies, so a question only an analyst raised must be discoverable by eye rather than silently absent.
