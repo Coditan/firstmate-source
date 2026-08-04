@@ -691,6 +691,83 @@ EOF
   pass "a correctly filed record of either chart kind is never called misfiled"
 }
 
+test_the_misfiled_report_never_sends_a_reader_to_a_surface_without_the_record() {
+  # A report that points somewhere is only worth the pointer being right. Where
+  # a misfiled record ended up is therefore LOOKED UP in the arrays this chart
+  # emits rather than decided from a second copy of the section predicates: a
+  # copy answers only for the kinds whoever wrote it thought of, and this one
+  # knew about fog and out-of-course, so every kind captain record carrying a
+  # chart marker in its id was sent to the unplaced report, which by definition
+  # never carries a record that a decision section already placed.
+  local home cap chart
+  home=$(make_home pointer)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-fog-of-war-judge-decision-shape - A ruling whose id carries a chart marker (repo: r) (kind: captain) (since 2026-07-30) (hold: Which shape) (hold-kind: captain)
+- [ ] voy-fog-of-war-a-decision-scope - An analyst question the judge never ruled on (repo: r) (kind: captain) (since 2026-07-30) (hold: Which scope) (hold-kind: captain)
+EOF
+  cap=$(capture pointer "voy-fog-of-war-judge-decision-shape")
+  chart=$(chart_json "$home" voy "$cap")
+
+  # REPRODUCE THE SETUP. One record is drawn on the decision list, the other is
+  # reconciled into withheld, and neither is unplaced - so any sentence sending a
+  # reader to the unplaced report is false for both.
+  [ "$(printf '%s' "$chart" | jq -r '[.decisions[].id]|join(",")')" = "voy-fog-of-war-judge-decision-shape" ] \
+    || fail "fixture drift: the ruling must be drawn on the decision list"
+  [ "$(printf '%s' "$chart" | jq -r '[.withheld[].id]|join(",")')" = "voy-fog-of-war-a-decision-scope" ] \
+    || fail "fixture drift: the analyst question must be reconciled into withheld"
+  [ "$(printf '%s' "$chart" | jq -r '[.unplaced[].id]|join(",")')" = "" ] \
+    || fail "fixture drift: a captain record is always placed, so the unplaced report must be empty here"
+
+  # Both are reported, and each says where it actually is.
+  [ "$(printf '%s' "$chart" | jq -r '.counts.misfiled')" = 2 ] \
+    || fail "a chart marker on a captain record is still a disagreement between the id and the kind, and must be reported"
+  [ "$(printf '%s' "$chart" | jq -r '.misfiled[]|select(.id=="voy-fog-of-war-judge-decision-shape")|.drawn_in')" = "OPEN DECISIONS" ] \
+    || fail "the report must name the section that really drew the record, which is what lets a reader go and find the wrong row"
+  [ "$(printf '%s' "$chart" | jq -r '.misfiled[]|select(.id=="voy-fog-of-war-a-decision-scope")|.drawn_in')" = "WITHHELD" ] \
+    || fail "a record reconciled into withheld must be reported as drawn there, not as drawn nowhere"
+
+  # THE DEFECT ITSELF: neither why may send a reader to a report that does not
+  # carry the record.
+  local why
+  for why in "$(printf '%s' "$chart" | jq -r '.misfiled[].why')"; do
+    case "$why" in
+      *"unplaced report names it too"*)
+        fail "the misfiled report sent a reader to the unplaced report for a record the unplaced report does not carry: $why" ;;
+      *"no section drew it at all"*)
+        fail "a record a decision section drew must not be described as drawn nowhere: $why" ;;
+    esac
+  done
+
+  # And the clause about the section left short must not claim it is empty when
+  # a correctly filed record is sitting in it.
+  local home2 cap2 chart2 fogwhy
+  home2=$(make_home pointer2)
+  cat > "$home2/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-fog-retention - A dark patch filed correctly (repo: r) (kind: fog) (since 2026-07-30) (hold: not sharp) (hold-kind: future)
+- [ ] voy-fog-drift - A second dark patch whose kind was misspelled (repo: r) (kind: fogg) (since 2026-07-30)
+EOF
+  cap2=$(capture pointer2)
+  chart2=$(chart_json "$home2" voy "$cap2")
+  [ "$(printf '%s' "$chart2" | jq -r '.fog|length')" = 1 ] \
+    || fail "fixture drift: the correctly filed dark patch must still be drawn under fog"
+  fogwhy=$(printf '%s' "$chart2" | jq -r '.misfiled[]|select(.id=="voy-fog-drift")|.why')
+  case "$fogwhy" in
+    *"renders as if this course had none of them"*)
+      fail "the report claimed FOG is empty while a correctly filed dark patch is drawn in it: $fogwhy" ;;
+  esac
+  assert_contains "$fogwhy" "FOG is drawn without it" \
+    "when the named section is not empty the report must say the record is missing FROM it, which is the true and still actionable claim"
+  pass "the misfiled report names where each record really is and never points at a surface without it"
+}
+
 test_a_kind_defect_is_never_pushed_down_the_page_by_routine_held_work() {
   # Held and blocked ordinary work belongs in unplaced[] - this chart has no
   # section for it, and dropping it would be the silent gap the whole report
@@ -1022,6 +1099,7 @@ test_an_unpaired_analyst_variant_is_reconciled_rather_than_counted_as_drawn
 test_an_id_marker_and_a_record_kind_that_disagree_are_reported_never_offered
 test_a_swapped_chart_kind_is_reported_even_though_a_section_drew_it
 test_a_correctly_filed_chart_record_is_never_called_misfiled
+test_the_misfiled_report_never_sends_a_reader_to_a_surface_without_the_record
 test_a_kind_defect_is_never_pushed_down_the_page_by_routine_held_work
 test_chart_kinds_stay_off_the_blockage_surface_but_are_disclosed
 test_a_chart_without_a_destination_is_refused
