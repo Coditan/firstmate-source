@@ -19,6 +19,8 @@ It accepts `--none` as an explicit semantic inventory result, not as inferred ab
 It verifies every listed identity against tasks-axi before recording completion.
 For an open keyed status decision, it appends a `captain-held [key=<key>]: ...` transfer event only after the matching backlog hold is durable.
 `bin/fm-classify-lib.sh` recognizes that transfer as closing the live status copy without claiming that the captain has answered it.
+Before any other check, `complete` and `verify` both refuse an origin whose status stream carries a decision key that same grammar cannot read, naming each offending line and which of the two faults it is: a `[key=...]` written after the colon, which folds the decision under `default`, or a malformed token in the verb prefix, which drops the line out of the decision fold entirely.
+The repair is to correct the status file, because the stream is append-only and a later line cannot undo a mis-keyed one already in it.
 
 Scout teardown calls the script's read-only `verify` subcommand after checking for the report and before removing any source state.
 The `--force` path remains the explicit captain-approved discard escape hatch.

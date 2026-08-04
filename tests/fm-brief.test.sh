@@ -357,6 +357,16 @@ test_status_key_position_is_shown_in_every_scaffold() {
     assert_grep 'BEFORE the colon' "$brief" \
       "$brief does not state where the decision key goes"
   done
+  # bin/fm-decision-hold.sh's completion gate covers investigations and visual
+  # reviews, so only the scout brief and the secondmate charter may promise it.
+  # A plain ship worker's status stream never reaches that gate, and a brief that
+  # promises enforcement nobody runs is worse than one that promises nothing.
+  for brief in "$scout" "$charter"; do
+    assert_grep 'the completion check refuses it by name' "$brief" \
+      "$brief no longer names the completion check that does cover it"
+  done
+  assert_no_grep 'the completion check refuses it by name' "$ship" \
+    "ship scaffold promises a completion check that never runs on a ship status stream"
   pass "fm-brief.sh: every scaffold shows the keyed status shape and its position"
 }
 

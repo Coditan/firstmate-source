@@ -380,7 +380,7 @@ $RULE1
    append \`needs-decision: {summary of options}\` and stop. Firstmate will reply with the decision.
    To keep more than one decision open at once, key it - the key goes BEFORE the colon, exactly here:
    \`needs-decision [key=<slug>]: {summary of options}\`
-   A \`[key=...]\` written anywhere after the colon is not read as a key at all, and the completion check refuses it by name.
+   A \`[key=...]\` written anywhere after the colon is not read as a key at all.
    When firstmate replies or a blocker clears and you resume, append \`resolved: {how it was decided or unblocked}\`,
    or \`resolved [key=<slug>]: {how it was decided or unblocked}\` with the same key if you opened it with one,
    so the decision or blocker is durably closed and does not keep resurfacing.

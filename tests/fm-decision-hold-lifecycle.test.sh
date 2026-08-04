@@ -126,7 +126,7 @@ write_origin_meta() {  # <home> <id> [kind]
 # The refusal must now name the misplacement and quote the offending line, and
 # the same decision written in the correct shape must still complete.
 test_misplaced_status_key_refuses_by_name() {
-  local home id
+  local home id shape
   home=$(make_home misplaced-key)
   id=sample-shape-review
   mkdir -p "$home/data/$id"
@@ -155,12 +155,45 @@ test_misplaced_status_key_refuses_by_name() {
   assert_grep "after the colon" "$home/misplaced-verify.err" \
     "verification refusal did not name the misplaced key as the cause"
 
-  printf 'needs-decision [key=route]: choose route north or route south\n' > "$home/state/$id.status"
+  # A key the grammar cannot resolve to a slug fails WORSE than a misplaced one:
+  # _fm_decision_key either refuses it or reads straight past it, and both folds
+  # then drop the line, so the decision vanishes from the watcher while the gates
+  # pass with nothing open. Every one of these shapes must refuse, and the
+  # refusal must say the key is malformed rather than merely misplaced.
+  for shape in \
+    'needs-decision [key=route choice]: choose route north or route south' \
+    'needs-decision [key = route]: choose route north or route south' \
+    'needs-decision [key=]: choose route north or route south' \
+    'needs-decision [key=route: choose route north or route south' \
+    'needs-decision [KEY=route]: choose route north or route south'; do
+    printf '%s\n' "$shape" > "$home/state/$id.status"
+    if run_decisions "$home" complete "$id" route > "$home/malformed.out" 2> "$home/malformed.err"; then
+      fail "completion accepted a malformed decision key: $shape"
+    fi
+    assert_grep "malformed key" "$home/malformed.err" \
+      "refusal did not distinguish the malformed key from a misplaced one: $shape"
+    assert_grep "$shape" "$home/malformed.err" \
+      "refusal did not quote the offending status line: $shape"
+    if run_decisions "$home" verify "$id" > "$home/malformed-verify.out" 2> "$home/malformed-verify.err"; then
+      fail "teardown verification accepted a malformed decision key: $shape"
+    fi
+    assert_grep "malformed key" "$home/malformed-verify.err" \
+      "verification refusal did not distinguish the malformed key: $shape"
+    assert_no_grep "decisions_reviewed=1" "$home/state/$id.meta" \
+      "refused completion recorded a false attestation: $shape"
+  done
+
+  # The literal slug "default" is a well-formed key, not the fallback the grammar
+  # returns for an unkeyed line, so a stream carrying it must still complete.
+  {
+    printf 'needs-decision [key=route]: choose route north or route south\n'
+    printf 'resolved [key=default]: the unkeyed question was answered inline\n'
+  } > "$home/state/$id.status"
   run_decisions "$home" complete "$id" route >/dev/null \
     || fail "the same decision in the correct shape must still complete"
   assert_grep "decisions_reviewed=1" "$home/state/$id.meta" \
     "correctly keyed decision did not record its completion attestation"
-  pass "a decision key written after the colon is refused by name, not folded into default"
+  pass "an unreadable decision key is refused by name, never folded into default or dropped"
 }
 
 test_structured_holds_survive_teardown_and_route_resolution() {

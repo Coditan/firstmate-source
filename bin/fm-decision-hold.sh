@@ -32,9 +32,10 @@
 # no unresolved captain decision. Later review passes may add keys; a live task's
 # metadata inventory is unioned idempotently. A post-teardown visual review can
 # complete against the surviving report and holds without recreating task state.
-# Both `complete` and `verify` refuse an origin whose status stream wrote a
-# `[key=...]` token after the colon, where bin/fm-classify-lib.sh's key grammar
-# cannot read it; the refusal names the offending lines.
+# Both `complete` and `verify` refuse, before any other check, an origin whose
+# status stream carries a decision key bin/fm-classify-lib.sh's grammar cannot
+# read - a `[key=...]` written after the colon, or a malformed token in the verb
+# prefix; the refusal names the offending lines and which fault each one is.
 # `verify` is read-only and is called by scout teardown so teardown cannot erase a
 # source before this gate has succeeded. A resolved captain hold that retention
 # moved into data/done-archive.md remains a durable completion record, but only
@@ -166,18 +167,30 @@ meta_value() {  # <meta> <key>
   grep "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2- || true
 }
 
-# Refuse a status stream that wrote a decision key after the colon, where the
-# key grammar cannot read it. Such a line folds under "default" and is
-# indistinguishable from an unkeyed line, so two independent decisions silently
-# collapse into one and the gate would otherwise refuse a "default" key nobody
-# wrote. The offending lines are named, and the fix is to correct them in the
-# status file: an append cannot undo a mis-keyed line already in the stream.
+# Refuse a status stream carrying a decision key the key grammar cannot read.
+# A key written after the colon folds under "default", indistinguishable from an
+# unkeyed line, so two independent decisions collapse into one and the gate would
+# otherwise refuse a "default" key nobody wrote. A key the grammar cannot resolve
+# to a slug is worse: the line drops out of the fold altogether, so the decision
+# disappears from the watcher and every gate passes with nothing open. Both are
+# named, with the offending line quoted and its correction distinguished, because
+# an append cannot undo a mis-keyed line already in the append-only stream.
 refuse_misplaced_keys() {  # <origin-id>
-  local status_file="$STATE/$1.status" bad
+  local status_file="$STATE/$1.status" bad kind line detail report=''
   bad=$(status_misplaced_key_lines "$status_file")
   [ -n "$bad" ] || return 0
-  fail "$1 wrote a decision key after the colon, where the status parser cannot read it (it folds under the key \"default\"). Correct these lines in $status_file to the \"<verb> [key=<slug>]: <summary>\" shape:
-$bad"
+  while IFS=$'\t' read -r kind line; do
+    [ -n "$kind" ] || continue
+    case "$kind" in
+      malformed) detail='malformed key, so the line is dropped from the decision fold entirely' ;;
+      *) detail='key after the colon, so the line folds under the key "default"' ;;
+    esac
+    report="${report}  ${detail}: ${line}"$'\n'
+  done <<EOF
+$bad
+EOF
+  fail "$1 wrote a decision key the status parser cannot read. Correct these lines in $status_file to the \"<verb> [key=<slug>]: <summary>\" shape, where <slug> is one unbroken word of [A-Za-z0-9._-]:
+${report%$'\n'}"
 }
 
 origin_open_decisions() {  # <origin-id>
@@ -460,9 +473,9 @@ command_verify() {
   local origin=${1:-} meta reviewed keys key open
   [ "$#" -eq 1 ] || { usage >&2; exit 2; }
   validate_slug origin-id "$origin"
+  refuse_misplaced_keys "$origin"
   meta="$STATE/$origin.meta"
   [ -f "$meta" ] || fail "origin metadata is absent: $meta"
-  refuse_misplaced_keys "$origin"
   require_tasks_axi
   reviewed=$(meta_value "$meta" decisions_reviewed)
   [ "$reviewed" = 1 ] || fail "origin $origin has no completed unresolved-decision inventory"
