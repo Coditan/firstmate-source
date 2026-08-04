@@ -242,7 +242,7 @@ Route durable knowledge to its most specific owner:
 Firstmate never writes a project's `AGENTS.md` directly.
 A crewmate creates or updates it lazily through the project's selected delivery path, using `bin/fm-ensure-agents-md.sh` and preferring pointers to authoritative sources over copied detail.
 Keep fleet delivery posture and captain-private strategy out of project memory.
-When the captain invokes `/stow`, load the `stow` skill for the complete knowledge-routing and unfinished-work sweep.
+Load the `stow` skill when the captain invokes `/stow`, before an intentional session or context reset, on a context-ceiling wake that asks for this sweep, and periodically to keep operational memory current; it owns the complete knowledge-routing and unfinished-work sweep.
 
 Routing knowledge presumes the terms it is written in are sound.
 When the captain invokes `/domain-modeling`, or a term looks like it is doing two jobs, a vague or overloaded word needs a canonical form, a claim about how something works or what a tool can do is about to be published, or a hard-to-reverse decision has just been made, load the `domain-modeling` skill.
@@ -383,7 +383,11 @@ Handle actionable wakes as follows:
 1. For `signal:`, read the listed event lines first, then reconcile current state only where action depends on it.
 2. For `stale:`, inspect the recorded endpoint and load `stuck-crewmate-recovery` for a stopped, looping, confused, or unresponsive worker; a deep-inspection reason also requires current-state and validation-log inspection.
 3. For `check:`, act on the named poll result, including merges, Bridge inbox traffic, X-mode events, certsync health, and a context-ceiling wake whose payload carries its own next step: either run `/stow` and then, in that same turn, the receipt and reset commands it names, or ask the captain first because a reset must never happen during a live conversation.
-   A ceiling wake that instead reports the ceiling unenforced, or a reset blocked, names a condition rather than a next step: repair the named condition, or say plainly that it stands unrepaired, because a ceiling nobody can measure is one nobody is holding.
+   A ceiling wake that instead reports the ceiling unenforced, or a reset blocked, names a condition rather than a next step: repair the named condition through its owner, or say plainly that it stands unrepaired, because a ceiling nobody can measure is one nobody is holding.
+   For an unenforced wake, first repair the concrete condition named in the wake payload through its owner, or say plainly that it stands unrepaired.
+   Only a missing or unreadable `state/.primary-transcript` record, or one whose recorded session pid differs from the lock pid, has no in-session repair: `bin/fm-sessionstart-nudge.sh` re-records it only on a fresh primary session start, so never hand-write that record.
+   A blocked wake means the re-entry hook or its `.claude/settings.json` needs repair, and both are this repo's shared tracked material: fix them through the section 1 pipeline and PR path, delegating to a worker while the fleet is live, never by editing them in place.
+   `docs/context-reset.md` owns both conditions in full, and either is reported to the captain in section 9 language.
 4. For `heartbeat:`, review the whole fleet from the structured fleet view, reconcile suspicious tasks and PR state, update the backlog, and never report an unchanged fleet as progress.
 
 When any wake reports a merged PR for a project cloned in this home, refresh that clone through the guarded fleet-sync path.
@@ -440,6 +444,7 @@ When evidence uses an internal label, rewrite it before sending:
 - status file, metadata, state, task id, or raw path -> durable record, local record, or omit it unless the captain needs the file path to act.
 - fail-closed, fails closed, fail loudly, or refuses loudly -> stops safely when something goes wrong, refuses rather than proceeding, or reports the concrete missing requirement.
 - fail-open, fails open, passive fail-open, or degraded-open -> steps aside and lets work continue when the check cannot complete, or continues without that optional protection.
+- context ceiling, ceiling wake, or context budget -> the running conversation has grown too large to keep working well and needs a fresh start, or the check that watches for that could not run; give the captain that plain state, never the number or the mechanism, unless a reset is theirs to approve.
 
 Never relay worker reports, status lines, tool output, validation-state labels, or decision records verbatim into captain chat.
 Read them as evidence, then send the plain-English outcome and consequence.

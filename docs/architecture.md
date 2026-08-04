@@ -275,7 +275,8 @@ Fleet state lives in each task's session-provider backend (tmux by hard default,
 For herdr, respawning after a server-restored layout closes and replaces confirmed no-agent or dead task-tab husks instead of requiring manual tab cleanup.
 At session start, confirmed-dead secondmate agent endpoints are closed and relaunched through the same secondmate spawn path, while ambiguous liveness reads are left untouched to avoid duplicate supervisors.
 Use `/stow` before an intentional reset when the conversation may hold durable knowledge that has not yet been written to disk; after that, the next firstmate session can reconcile and carry on.
-The watcher also measures the primary session's own context against the captain's ceiling and, at a quiet boundary, queues one wake that carries the whole stow-then-clear procedure, asks the captain first because a reset during a live conversation wipes the scrollback and can answer a queued message into a context that is then discarded, or reports the condition that stops it from doing either.
+The watcher also measures the primary session's own context against the captain's ceiling and, when the session is over it at a quiet boundary, either queues one wake that carries the whole stow-then-clear procedure, reports a blocked reset when the re-entry path is broken, or, because a reset during a live conversation wipes the scrollback and can answer a queued message into a context that is then discarded, asks the captain first.
+Separately, and regardless of size or quiet, it reports the ceiling as unenforced whenever a running session cannot be measured at all, because a ceiling nobody can measure is one nobody is holding.
 [docs/context-reset.md](context-reset.md) owns that mechanism, its refusals, and the evidence behind it.
 
 ## Development notes

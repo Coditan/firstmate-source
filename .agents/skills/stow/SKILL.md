@@ -1,6 +1,6 @@
 ---
 name: stow
-description: Sweep the current session for uncaptured durable knowledge and file it to disk before a context reset. Use when the captain invokes /stow (e.g. "/stow", "stow what you've learned"), before a session reset, before a context reset, before a compaction the harness is about to perform anyway (file ahead of one; a compaction is never the instrument that holds the context ceiling), and on a context-ceiling wake that asks for this sweep before the receipt and reset commands it names.
+description: Sweep the current session for uncaptured durable knowledge and file it to disk before a context reset. Use when the captain invokes /stow (e.g. "/stow", "stow what you've learned"), before a session reset, before a context reset, before a compaction the harness is about to perform anyway (file ahead of one; a compaction is never the instrument that holds the context ceiling), on a context-ceiling wake that asks for this sweep before the receipt and reset commands it names, and periodically to keep operational memory current between those events.
 user-invocable: true
 metadata:
   internal: true
@@ -16,21 +16,26 @@ The goal is a session that is safe to reset or destroy because everything durabl
 ## When the context ceiling calls this sweep
 
 The captain invokes `/stow` whenever they like, and that is still the ordinary case.
-The other caller is the context ceiling: the watcher measures the primary session against it and, when the session is over that ceiling and the fleet is quiet, queues a wake whose payload says to run this sweep and then, in the same turn, the receipt and reset commands it names.
-`docs/context-reset.md` owns that mechanism, its refusals, and the evidence behind them; this section owns only what changes about the sweep when it is that caller, because the sweep is the one step the mechanism cannot perform for itself.
+The other caller is the context ceiling.
+`docs/context-reset.md` owns that mechanism in full: how the watcher measures the session, the four branches that measurement can take, the receipt, every refusal, and the evidence behind them.
+This section adds only what the sweep owes the mechanism, because the sweep is the one step it cannot perform for itself.
 
-- **The receipt attests to this sweep; nothing verifies it.**
-  Whether a semantic sweep caught every durable fact cannot be checked mechanically, which is exactly why this step needs judgement and the rest of the path is plain code.
-  A thin sweep still produces a structurally valid receipt, and the reset that follows is honest only to the degree this sweep was.
-- **Leave no gap between the sweep and its receipt.**
-  Anything the captain says after the receipt is written invalidates it, correctly, because the sweep cannot have covered it.
-  Run the sweep and its receipt in the one turn the wake asks for, rather than pausing to report progress in between and re-earning the refusal.
-- **A clear is not a destruction, and that is the safety net, not the plan.**
-  The cleared conversation stays on disk and remains resumable, so a finding this sweep misses is misplaced rather than lost.
-  Sweep as though it were lost.
+Exactly one of those four branches orders this sweep: the reset branch, which fires when the session is over the ceiling, the fleet is quiet, the captain is not present, and the re-entry path is intact.
+Only its wake names `/stow` and then, in the same turn, the receipt and reset commands.
+The other three branches - a captain who is present or in away mode, a broken re-entry path, or a session that cannot be measured at all - carry a diagnosis, never that order, so a wake that does not name those commands is never authority to run them.
 
-The instrument here is stow-then-clear, never compaction: durable knowledge goes to disk and the next session rebuilds from it, which is what `AGENTS.md` section 5 already makes authoritative over conversation memory.
-Nothing in this skill adds, enables, or recommends compaction as a way to hold the ceiling.
+- **The sweep is the only judgement in an otherwise mechanical path, so its thoroughness is what makes the reset honest.**
+  Whether a semantic sweep caught every durable fact cannot be checked mechanically, so the receipt can only attest to this sweep, never verify it, and a thin sweep still produces a structurally valid receipt (`docs/context-reset.md`, "What the receipt is, and what it is not").
+- **Run the sweep and its receipt in the single turn the wake asks for, and do not pause to report progress between them.**
+  Anything the captain says in that gap voids the receipt, correctly, so a pause only re-earns the refusal; `docs/context-reset.md` owns why.
+- **Take no action during the sweep that makes the fleet non-quiet.**
+  Spawning a worker to land project-intrinsic knowledge would do exactly that and void the receipt after it is spent, so file such a finding as a queued backlog item for later routing instead (step 3).
+- **On this caller the turn ends in the reset with no captain-facing message.**
+  Section 8 makes benign wake handling end with tool calls and no message, and any text written here lands in a conversation the clear is about to discard; the next session rebuilding from the records this sweep filed is the report, so step 5's captain summary is for the interactive `/stow` caller only.
+- **Sweep as though the conversation were about to be lost, even though a clear is resumable.**
+  A missed finding is then misplaced rather than lost, but that safety net is not the plan.
+
+The instrument is stow-then-clear, and `docs/context-reset.md` owns why it is never compaction; nothing in this skill adds, enables, or recommends compaction as a way to hold the ceiling.
 
 ## What it does
 
@@ -54,6 +59,7 @@ Nothing in this skill adds, enables, or recommends compaction as a way to hold t
    - Project-intrinsic knowledge: never hand-write a project's `AGENTS.md`.
      Route it through a normal ship task so a crewmate records it via `bin/fm-ensure-agents-md.sh` and commits it through that project's delivery pipeline, exactly as section 6 describes.
      If the fleet is live, delegate this to a crewmate rather than doing it inline.
+     On the context-ceiling caller this routing must not happen during the sweep: spawning a worker makes the fleet non-quiet and voids the receipt the reset depends on, so file the finding as a queued backlog item now and let it be routed on an ordinary turn after the reset.
    - Knowledge generalizable to every firstmate user: this repo's own `AGENTS.md` (or other shared, tracked material), shipped through the normal branch -> no-mistakes -> PR -> captain-merge pipeline for this repo (section 1), never hand-committed straight to `main`.
    - Task-scoped notes: inspect the relevant backlog item with `tasks-axi show <id> --full`, judge whether the new note is new, duplicate, superseding, or obsolete, then write a considered replacement body with `tasks-axi update <id> --body-file <path>`.
      When the replacement intentionally supersedes prior state that should remain recoverable, add `--archive-body` to that update command so the prior body stays recoverable without copying it into the replacement.
@@ -71,8 +77,9 @@ Nothing in this skill adds, enables, or recommends compaction as a way to hold t
    Graduation moves are limited to exactly three: promote a learning to the shared `AGENTS.md` via PR, fold it into the captain-preference destination selected by AGENTS.md, or delete a stale entry.
    Do not invent other graduation paths.
 
-5. **Report to the captain.**
-   Summarize, in plain outcome language (section 9): what was stowed and where, what was filed to the backlog, and whether the session is now safe to reset or destroy - i.e. whether every durable finding from this sweep now lives on disk rather than only in this conversation.
+5. **Report to the captain (interactive caller only).**
+   This step is for a `/stow` the captain invoked; the context-ceiling reset caller ends its turn in the reset with no captain-facing message, as the ceiling section above and section 8 both require.
+   For an interactive `/stow`, summarize in plain outcome language (section 9): what was stowed and where, what was filed to the backlog, and whether the session is now safe to reset or destroy - i.e. whether every durable finding from this sweep now lives on disk rather than only in this conversation.
    If something could not be captured yet (for example, project-intrinsic knowledge waiting on a crewmate to land it), say so explicitly rather than reporting the session fully safe.
 
 ## Scope exclusion: no skill storage
