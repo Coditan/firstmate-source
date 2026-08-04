@@ -350,6 +350,554 @@ EOF
   pass "fog and out-of-course are read onto the chart and can never be a captain decision"
 }
 
+test_the_chart_kinds_are_stored_on_the_field_the_chart_reads() {
+  # THE EXTERNAL FACT THE WHOLE DESIGN RESTS ON, PINNED RATHER THAN ASSUMED.
+  # "kind" names two different fields on a backlog row, and they have opposite
+  # vocabularies: `add --kind` is open and stores these two names, `hold --kind`
+  # is a closed set that rejects both. Assuming the wrong one cost the chart
+  # every fog patch and every boundary it ever had - filed with a hold kind
+  # alone, the records carried no `.kind`, and the filter below matched nothing.
+  # tasks-axi is a third-party AXI-suite package this repo does not own, so if a
+  # release ever moves either vocabulary, this test is what says so.
+  if ! command -v tasks-axi >/dev/null 2>&1; then
+    pass "skipped: tasks-axi not found, so the storage contract cannot be measured"
+    return
+  fi
+  # shellcheck source=bin/fm-chart-kinds-lib.sh
+  # shellcheck disable=SC1091
+  . "$ROOT/bin/fm-chart-kinds-lib.sh"
+  local home
+  home=$(make_home storable)
+  printf '# Backlog\n\n## In flight\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
+  cp "$ROOT/.tasks.toml" "$home/.tasks.toml"
+  local kind
+  for kind in $FM_CHART_KINDS; do
+    ( cd "$home" && tasks-axi add "voy-probe-$kind" "probe" --kind "$kind" ) >/dev/null 2>&1 \
+      || fail "the record kind must store '$kind': AGENTS.md section 10 files fog and course boundaries with 'add --kind', and the chart classifies by that field alone"
+    ( cd "$home" && tasks-axi hold "voy-probe-$kind" --reason "probe" --kind "$kind" ) >/dev/null 2>&1 \
+      && fail "the hold kind unexpectedly accepts '$kind'. It was a closed set (captain, external, load, parked, future) that rejected both chart kinds, which is WHY section 10 sends them to the record kind. Re-derive that instruction before relaxing this."
+  done
+  # And the stored rows really do read back as the kind the chart filters on.
+  local out
+  out=$("$ROOT/bin/fm-fleet-snapshot.sh" --backlog-json "$home/data/backlog.md")
+  for kind in $FM_CHART_KINDS; do
+    [ "$(printf '%s' "$out" | jq -r --arg k "$kind" '[.records[]|select(.structured and .kind==$k)]|length')" = 1 ] \
+      || fail "a record filed with 'add --kind $kind' must read back as .kind '$kind'"
+  done
+  pass "the chart kinds store on the record kind, and the hold kind still refuses them"
+}
+
+test_the_filing_instruction_names_the_field_the_chart_reads() {
+  # The instruction was HALF the defect, not a bystander to it. Section 10 gave
+  # the id markers and the hold, never the record kind, so a firstmate following
+  # it exactly filed records the chart could not classify - and the next agent
+  # follows the instruction, not the code. Fixing one side and leaving the other
+  # would have fixed nothing durable, so the instruction is pinned here beside
+  # the behavior it has to agree with.
+  local agents=$ROOT/AGENTS.md
+  assert_present "$agents" "AGENTS.md is missing"
+  # One command per kind, spelled out. An alternation written `fog|out-of-course`
+  # is a PIPELINE when it is pasted into a shell, which files the boundary as fog
+  # and reports nothing but a "command not found" - and pasting the instruction
+  # literally is how the first half of this defect happened.
+  assert_grep 'add <id> "<title>" --kind fog' "$agents" \
+    "section 10 must file fog on the RECORD kind: it is the only field the chart classifies by, and naming only the hold is what made both sections permanently empty"
+  assert_grep 'add <id> "<title>" --kind out-of-course' "$agents" \
+    "section 10 must give the boundary its own copy-safe command, or the two kinds get written as a shell pipeline and the boundary lands in fog"
+  assert_no_grep 'kind fog|out-of-course' "$agents" \
+    "an alternation in a pasteable command is a pipeline: spell each kind's command out instead"
+  assert_grep 'hold <id> --reason "<why>" --kind future' "$agents" \
+    "section 10 must still record the hold, because its reason is what the chart prints under each fog patch and boundary"
+  # The two fields are named as different things, so the next reader cannot
+  # repeat the substitution that caused this.
+  assert_grep 'separate closed vocabulary' "$agents" \
+    "section 10 must say WHY the chart kinds do not go on the hold, or the next reader tries the hold again and reads its refusal as the kinds being unstorable"
+  pass "the filing instruction names the record kind, the hold, and the difference"
+}
+
+test_a_member_the_chart_cannot_place_is_named_not_silently_dropped() {
+  # THE SECOND HALF, AND IT STANDS ALONE. Every section places a member by its
+  # KIND, so an unrecognised kind empties a section - and an empty section READS
+  # AS A CLAIM ("no fog on this course") rather than as a failure to look. That
+  # is worse than an error, because nothing about it looks wrong: measured on
+  # the real fleet as five members, four of them chart material, drawn as
+  # `fog: 0  out_of_course: 0` with no footnote (2026-08-03).
+  local home cap chart
+  home=$(make_home unplaced)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-fog-retention - Retention is not sharp yet (repo: r) (since 2026-07-30) (hold: could not name it) (hold-kind: future)
+- [ ] voy-oos-tracker - A second tracker (repo: r) (kind: foggy) (since 2026-07-30) (hold: out of course) (hold-kind: future)
+- [ ] voy-fog-unheld - A dark patch whose hold was never filed (repo: r) (since 2026-07-30)
+- [ ] voy-real-work - Ordinary takeable work (repo: r) (kind: ship) (since 2026-07-30)
+EOF
+  cap=$(capture unplaced)
+  chart=$(chart_json "$home" voy "$cap")
+
+  # The first row is the original defect exactly: filed with a hold kind and no
+  # record kind at all. The second is a plausible misspelling of a chart kind.
+  # The third is the same original defect with the follow-up hold ALSO missing,
+  # which is the worse half: nothing at all on the record holds it back, so every
+  # takeable predicate passes and the chart would otherwise advertise a dark
+  # patch as work to pick up, complete with an unsupervised-edit pair.
+  [ "$(printf '%s' "$chart" | jq -r '.fog|length')" = 0 ] || fail "fixture drift: no misfiled row may reach the fog section"
+  [ "$(printf '%s' "$chart" | jq -r '.counts.unplaced')" = 3 ] \
+    || fail "every unplaceable member must be counted, not absorbed into an empty section"
+  [ "$(printf '%s' "$chart" | jq -r '[.unplaced[].id]|sort|join(",")')" = "voy-fog-retention,voy-fog-unheld,voy-oos-tracker" ] \
+    || fail "each unplaceable member must be named by id"
+  [ "$(printf '%s' "$chart" | jq -r '.unplaced[]|select(.id=="voy-fog-retention")|.cause')" = "no-kind" ] \
+    || fail "a member carrying only a hold kind must be reported as having no record kind - that is the fault, and the report is what points at it"
+  # A record with no kind says nothing about what it is, so nothing rules out its
+  # being a dark patch or a boundary filed the wrong way. Offering it as takeable
+  # is the wrong-invitation direction this script refuses everywhere else.
+  [ "$(printf '%s' "$chart" | jq -r '[.takeable[].id]|index("voy-fog-unheld")')" = "null" ] \
+    || fail "a member with no record kind must never be advertised as takeable: a hold that was forgotten is exactly how the original defect reached the chart"
+  [ "$(printf '%s' "$chart" | jq -r '.unplaced[]|select(.id=="voy-fog-unheld")|.cause')" = "no-kind" ] \
+    || fail "a member with no kind and no hold must be reported for the missing kind, which is the fault a reader can act on"
+  [ "$(printf '%s' "$chart" | jq -r '.unplaced[]|select(.id=="voy-oos-tracker")|.kind')" = "foggy" ] \
+    || fail "the unrecognised kind itself must be shown, so a misspelling is visible rather than merely absent"
+  # The hold kind is reported too, because it is the field that gets confused for
+  # the record kind, and seeing both side by side is what settles which is which.
+  [ "$(printf '%s' "$chart" | jq -r '.unplaced[]|select(.id=="voy-fog-retention")|.hold_kind')" = "future" ] \
+    || fail "the hold kind must be shown beside the record kind"
+
+  # It must not cry wolf: work the chart CAN place never appears here, and the
+  # undertaking itself is the destination rather than a member drawn on itself.
+  case "$(printf '%s' "$chart" | jq -r '[.unplaced[].id]|join(",")')" in
+    *voy-real-work*) fail "takeable work must never be reported as unplaced" ;;
+  esac
+  [ "$(printf '%s' "$chart" | jq -r '[.takeable[].id]|join(",")')" = "voy-real-work" ] \
+    || fail "fixture drift: the ordinary row must still be takeable"
+
+  # And it must be visible without reading JSON, next to the member count that
+  # is otherwise the only trace these records left.
+  local summary
+  summary=$("$ROOT/bin/fm-sea-chart.sh" voy --summary --from "$cap" \
+    --backlog "$home/data/backlog.md" --archive "$home/data/done-archive.md" --data "$home/data")
+  assert_contains "$summary" "UNPLACED" "the summary must show unplaceable members, not only the JSON"
+  assert_contains "$summary" "could not be placed in any section" \
+    "the member count must say how many of its members reached no section"
+  pass "a member the chart cannot place is named and counted rather than left behind a zero"
+}
+
+test_an_unpaired_analyst_variant_is_reconciled_rather_than_counted_as_drawn() {
+  # The fold keeps a group's judge ruling and pairs analyst records to it on an
+  # exact decision KEY. An analyst record whose key no judge key matches pairs
+  # with nothing, so the inventory holds it in unpaired_variants[] - and NO
+  # section of this chart emits that list. Treating it as already drawn would
+  # take a question only an analyst raised off the decision list, off the
+  # reconciliation, and off the unplaced report all at once: the same silent
+  # loss this chart exists against, on a fourth flank.
+  local home cap chart grouped
+  home=$(make_home unpaired)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-judge-decision-shape - Choose the shape (repo: r) (kind: captain) (since 2026-07-30) (hold: Which shape) (hold-kind: captain)
+- [ ] voy-a-decision-scope - The analyst asked a question the judge never ruled on (repo: r) (kind: captain) (since 2026-07-30) (hold: Which scope) (hold-kind: captain)
+EOF
+  cap=$(capture unpaired "voy-judge-decision-shape" "voy-a-decision-scope")
+
+  # REPRODUCE. The fold really does hold the analyst record apart, under a key no
+  # judge key matches (bin/fm-decision-inventory.sh split_role: -a, -b, -judge).
+  grouped=$("$INV" --json --from "$cap")
+  [ "$(printf '%s' "$grouped" | jq -r '[.groups[].unpaired_variants[].id]|join(",")')" = "voy-a-decision-scope" ] \
+    || fail "the reproduction is stale: an analyst record whose key no judge key matches is no longer left unpaired. Re-derive the chart's placed set before relaxing this."
+
+  chart=$(chart_json "$home" voy "$cap")
+  [ "$(printf '%s' "$chart" | jq -r '[.decisions[].id]|join(",")')" = "voy-judge-decision-shape" ] \
+    || fail "fixture drift: the fold must keep only the judge ruling on the decision list"
+  # It appears in exactly one section, and that section says something true.
+  [ "$(printf '%s' "$chart" | jq -r '[.withheld[]|select(.id=="voy-a-decision-scope")]|length')" = 1 ] \
+    || fail "an unpaired analyst variant must be reconciled onto the chart: no section draws it, so counting it as returned makes it invisible on every surface at once"
+  [ "$(printf '%s' "$chart" | jq -r '.withheld[]|select(.id=="voy-a-decision-scope")|.cause')" = "unpaired-variant" ] \
+    || fail "an unpaired variant needs its own cause: it DID reach the actionable surface, so every other withheld reason would be a false sentence about it"
+  assert_contains "$(printf '%s' "$chart" | jq -r '.withheld[]|select(.id=="voy-a-decision-scope")|.why')" "reached the actionable surface" \
+    "the reason must not claim the surface never carried this record, because it did"
+  # And it must not land in unplaced[] instead, whose sentences are written about
+  # a kind the chart cannot place and would read as nonsense about a captain record.
+  [ "$(printf '%s' "$chart" | jq -r '[.unplaced[].id]|join(",")')" = "" ] \
+    || fail "a captain record the fold dropped belongs in withheld[], never in unplaced[]"
+
+  # THE COUNT ABOVE THE SECTION MUST NOT CONTRADICT THE SECTION. This record is
+  # counted in `folded` and in `withheld` at once, which is honest only while the
+  # page says why the same record appears in both. A label claiming it never
+  # reached the actionable surface would be refuted three lines further down by
+  # its own why, and arithmetic a reader can catch out is what teaches them to
+  # stop believing every other number on the chart.
+  [ "$(printf '%s' "$chart" | jq -r '.counts.withheld_folded')" = 1 ] \
+    || fail "the chart must count how many withheld records the fold dropped, or nothing reconciles the same record being counted as folded and as withheld"
+  local summary
+  summary=$("$CHART" voy --summary --from "$cap" \
+    --backlog "$home/data/backlog.md" --archive "$home/data/done-archive.md" --data "$home/data")
+  case "$summary" in
+    *"withheld from the actionable surface"*)
+      fail "the incompleteness label must not claim this record never reached the actionable surface: it did, and its own why two lines below says so" ;;
+  esac
+  assert_contains "$summary" "not carried by any decision section: 1" \
+    "the incompleteness count must be labelled by what is true of BOTH classes it now covers - never returned, and returned then folded away"
+  assert_contains "$summary" "folded away rather than never returned" \
+    "the page must reconcile the record it counts as folded with the one it counts as withheld, or the two numbers read as two records"
+  pass "an unpaired analyst variant is reconciled onto the chart instead of counted as drawn"
+}
+
+test_an_id_marker_and_a_record_kind_that_disagree_are_reported_never_offered() {
+  # A kind the chart does not place is USUALLY ordinary work - ship, docs, scout
+  # are all legitimately takeable - so a misspelled chart kind is invisible on
+  # the kind alone. The id marker is the one piece of evidence that says this
+  # record already claims to be chart material: `<chart>-fog-<slug>` and
+  # `<chart>-oos-<slug>` are the filing convention in AGENTS.md section 10. When
+  # the id and the kind disagree, one of them is a typo, and the direction of the
+  # error is the costly one - the record gets advertised under TAKEABLE NOW with
+  # an unsupervised-edit pair at the very moment the section it names reads
+  # empty, which is the original defect with a hold that was never filed.
+  local home cap chart summary
+  home=$(make_home mismatch)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-fog-drift - A dark patch whose kind was misspelled (repo: r) (kind: fogg) (since 2026-07-30)
+- [ ] voy-oos-tracker - A boundary filed as ordinary work (repo: r) (kind: ship) (since 2026-07-30)
+- [ ] voy-real-work - Ordinary work carrying no chart marker at all (repo: r) (kind: ship) (since 2026-07-30)
+EOF
+  cap=$(capture mismatch)
+  chart=$(chart_json "$home" voy "$cap")
+
+  # Neither row carries a hold or a blocker, which is what made both of them
+  # takeable before: nothing on the record held them back at all.
+  [ "$(printf '%s' "$chart" | jq -r '[.takeable[].id]|join(",")')" = "voy-real-work" ] \
+    || fail "a record whose id claims to be chart material while its kind says otherwise must never be offered as takeable, and ordinary unmarked work must still be"
+  [ "$(printf '%s' "$chart" | jq -r '[.unplaced[]|select(.cause=="marker-kind-mismatch")|.id]|sort|join(",")')" = "voy-fog-drift,voy-oos-tracker" ] \
+    || fail "a marker that disagrees with the kind must be reported as its own kind defect, not left to the held or blocked causes that would not fit it"
+  [ "$(printf '%s' "$chart" | jq -r '[.unplaced[]|select(.cause=="marker-kind-mismatch")|.kind_defect]|unique|join(",")')" = "true" ] \
+    || fail "a marker-kind mismatch is a kind defect and must sort with the others, not below routine held work"
+
+  # The why must name BOTH halves, because the chart cannot tell which of the two
+  # is the typo and the reader has to be able to.
+  local fog_why oos_why
+  fog_why=$(printf '%s' "$chart" | jq -r '.unplaced[]|select(.id=="voy-fog-drift")|.why')
+  assert_contains "$fog_why" "-fog- marker" "the why must name the marker found on the id"
+  assert_contains "$fog_why" "record kind is fogg" "the why must name the kind found on the record"
+  oos_why=$(printf '%s' "$chart" | jq -r '.unplaced[]|select(.id=="voy-oos-tracker")|.why')
+  assert_contains "$oos_why" "-oos- marker" "the boundary marker must be named the same way"
+  assert_contains "$oos_why" "record kind is ship" \
+    "an ordinary kind on a marked id must be named as the mismatch it is, not treated as ordinary work"
+
+  # And the sections they name really are the empty ones, which is the whole
+  # reason a silent takeable row is the wrong place for them.
+  [ "$(printf '%s' "$chart" | jq -r '(.fog|length) + (.out_of_course|length)')" = 0 ] \
+    || fail "fixture drift: both misfiled rows must miss the sections their ids name"
+  summary=$("$CHART" voy --summary --from "$cap" \
+    --backlog "$home/data/backlog.md" --archive "$home/data/done-archive.md" --data "$home/data")
+  case "$summary" in
+    *"TAKEABLE NOW"*"voy-fog-drift"*)
+      fail "a misfiled dark patch must not be printed under TAKEABLE NOW with an unsupervised-edit pair" ;;
+  esac
+  assert_contains "$summary" "KIND DEFECTS" "both mismatches must reach the kind-defect block of the unplaced report"
+  pass "an id marker and a record kind that disagree are reported as a kind defect, never offered as takeable"
+}
+
+test_a_swapped_chart_kind_is_reported_even_though_a_section_drew_it() {
+  # THE SWAP EVERY OTHER REPORT HERE IS BLIND TO. The two filing commands in
+  # AGENTS.md section 10 differ in a single word, so the likeliest slip is a
+  # boundary filed with the fog kind or the reverse. Such a record IS placed -
+  # the fog filter takes it - so every report that asks "did any section draw
+  # this member" answers yes and says nothing, while the section its id names
+  # renders 0. That is this whole change in miniature: an empty section reads as
+  # a claim about the course, and here the claim is refuted by a record already
+  # on the same page.
+  local home cap chart summary
+  home=$(make_home swapped)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-oos-tracker - A boundary filed with the fog kind (repo: r) (kind: fog) (since 2026-07-30) (hold: out of course) (hold-kind: future)
+- [ ] voy-fog-retention - A dark patch filed with the boundary kind (repo: r) (kind: out-of-course) (since 2026-07-30) (hold: not sharp yet) (hold-kind: future)
+EOF
+  cap=$(capture swapped)
+  chart=$(chart_json "$home" voy "$cap")
+
+  # REPRODUCE. Each record really is drawn, and drawn in the wrong section, so
+  # nothing about the placement itself looks wrong.
+  [ "$(printf '%s' "$chart" | jq -r '[.fog[].id]|join(",")')" = "voy-oos-tracker" ] \
+    || fail "fixture drift: the boundary filed with the fog kind must still be DRAWN under fog - that is what makes it invisible to every unplaced report"
+  [ "$(printf '%s' "$chart" | jq -r '[.unplaced[].id]|join(",")')" = "" ] \
+    || fail "a record a section drew must not be forced into unplaced[], whose sentence is about members no section drew"
+
+  # And it is reported anyway, on a surface of its own, naming both halves.
+  [ "$(printf '%s' "$chart" | jq -r '.counts.misfiled')" = 2 ] \
+    || fail "a swapped chart kind must be counted: it is placed, so no other count on this chart can ever see it"
+  [ "$(printf '%s' "$chart" | jq -r '[.misfiled[].id]|sort|join(",")')" = "voy-fog-retention,voy-oos-tracker" ] \
+    || fail "both swap directions must be reported, not only the one the fog filter happens to take first"
+  local swap
+  swap=$(printf '%s' "$chart" | jq -r '.misfiled[]|select(.id=="voy-oos-tracker")')
+  [ "$(printf '%s' "$swap" | jq -r '.marker')" = "oos" ] || fail "the marker found on the id must be named"
+  [ "$(printf '%s' "$swap" | jq -r '.kind')" = "fog" ] || fail "the kind found on the record must be named beside it"
+  [ "$(printf '%s' "$swap" | jq -r '.drawn_in')" = "FOG" ] \
+    || fail "the report must say which section actually drew the record, or the reader cannot find the wrong row"
+  [ "$(printf '%s' "$swap" | jq -r '.belongs_in')" = "OUT OF COURSE" ] \
+    || fail "the report must say which section is empty because of this, since that empty section is the harm"
+
+  # The reverse swap is reported the same way, so the net is not one-directional.
+  [ "$(printf '%s' "$chart" | jq -r '.misfiled[]|select(.id=="voy-fog-retention")|.drawn_in')" = "OUT OF COURSE" ] \
+    || fail "a dark patch filed with the boundary kind must be reported as drawn out of course"
+
+  # Visible without reading JSON, and above the sections it calls into question.
+  summary=$("$CHART" voy --summary --from "$cap" \
+    --backlog "$home/data/backlog.md" --archive "$home/data/done-archive.md" --data "$home/data")
+  assert_contains "$summary" "MISFILED" "the swap must be visible on the rendered page, not only in the JSON"
+  local mis_line fog_line
+  mis_line=$(printf '%s\n' "$summary" | grep -n 'MISFILED' | head -1 | cut -d: -f1)
+  fog_line=$(printf '%s\n' "$summary" | grep -n '^FOG:' | head -1 | cut -d: -f1)
+  [ -n "$mis_line" ] && [ -n "$fog_line" ] && [ "$mis_line" -lt "$fog_line" ] \
+    || fail "the report must be rendered above the section whose row it calls into question: $summary"
+  pass "a swapped chart kind is reported even though a section drew it, naming both halves"
+}
+
+test_a_correctly_filed_chart_record_is_never_called_misfiled() {
+  # The net has to be silent on correct work, or it is worth nothing: a report
+  # that fires on the right filing teaches a reader to skip it, and the next real
+  # swap goes past unread.
+  local home cap chart
+  home=$(make_home nowolf)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-fog-retention - Retention is not sharp yet (repo: r) (kind: fog) (since 2026-07-30) (hold: could not name it) (hold-kind: future)
+- [ ] voy-oos-tracker - A second tracker (repo: r) (kind: out-of-course) (since 2026-07-30) (hold: out of course) (hold-kind: future)
+- [ ] voy-implement - Ordinary work carrying no chart marker (repo: r) (kind: ship) (since 2026-07-30)
+EOF
+  cap=$(capture nowolf)
+  chart=$(chart_json "$home" voy "$cap")
+  [ "$(printf '%s' "$chart" | jq -r '.counts.misfiled')" = 0 ] \
+    || fail "a correctly filed dark patch, a correctly filed boundary, and ordinary unmarked work must all stay silent: $(printf '%s' "$chart" | jq -r '[.misfiled[].id]|join(",")')"
+  [ "$(printf '%s' "$chart" | jq -r '(.fog|length) + (.out_of_course|length)')" = 2 ] \
+    || fail "fixture drift: both correctly filed records must reach their own sections"
+  case "$("$CHART" voy --summary --from "$cap" \
+    --backlog "$home/data/backlog.md" --archive "$home/data/done-archive.md" --data "$home/data")" in
+    *MISFILED*) fail "the rendered page must carry no misfiled block when nothing is misfiled" ;;
+  esac
+  pass "a correctly filed record of either chart kind is never called misfiled"
+}
+
+test_the_misfiled_report_never_sends_a_reader_to_a_surface_without_the_record() {
+  # A report that points somewhere is only worth the pointer being right. Where
+  # a misfiled record ended up is therefore LOOKED UP in the arrays this chart
+  # emits rather than decided from a second copy of the section predicates: a
+  # copy answers only for the kinds whoever wrote it thought of, and this one
+  # knew about fog and out-of-course, so every kind captain record carrying a
+  # chart marker in its id was sent to the unplaced report, which by definition
+  # never carries a record that a decision section already placed.
+  local home cap chart
+  home=$(make_home pointer)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-fog-of-war-judge-decision-shape - A ruling whose id carries a chart marker (repo: r) (kind: captain) (since 2026-07-30) (hold: Which shape) (hold-kind: captain)
+- [ ] voy-fog-of-war-a-decision-scope - An analyst question the judge never ruled on (repo: r) (kind: captain) (since 2026-07-30) (hold: Which scope) (hold-kind: captain)
+EOF
+  cap=$(capture pointer "voy-fog-of-war-judge-decision-shape")
+  chart=$(chart_json "$home" voy "$cap")
+
+  # REPRODUCE THE SETUP. One record is drawn on the decision list, the other is
+  # reconciled into withheld, and neither is unplaced - so any sentence sending a
+  # reader to the unplaced report is false for both.
+  [ "$(printf '%s' "$chart" | jq -r '[.decisions[].id]|join(",")')" = "voy-fog-of-war-judge-decision-shape" ] \
+    || fail "fixture drift: the ruling must be drawn on the decision list"
+  [ "$(printf '%s' "$chart" | jq -r '[.withheld[].id]|join(",")')" = "voy-fog-of-war-a-decision-scope" ] \
+    || fail "fixture drift: the analyst question must be reconciled into withheld"
+  [ "$(printf '%s' "$chart" | jq -r '[.unplaced[].id]|join(",")')" = "" ] \
+    || fail "fixture drift: a captain record is always placed, so the unplaced report must be empty here"
+
+  # Both are reported, and each says where it actually is.
+  [ "$(printf '%s' "$chart" | jq -r '.counts.misfiled')" = 2 ] \
+    || fail "a chart marker on a captain record is still a disagreement between the id and the kind, and must be reported"
+  [ "$(printf '%s' "$chart" | jq -r '.misfiled[]|select(.id=="voy-fog-of-war-judge-decision-shape")|.drawn_in')" = "OPEN DECISIONS" ] \
+    || fail "the report must name the section that really drew the record, which is what lets a reader go and find the wrong row"
+  [ "$(printf '%s' "$chart" | jq -r '.misfiled[]|select(.id=="voy-fog-of-war-a-decision-scope")|.drawn_in')" = "WITHHELD" ] \
+    || fail "a record reconciled into withheld must be reported as drawn there, not as drawn nowhere"
+
+  # THE DEFECT ITSELF: neither why may send a reader to a report that does not
+  # carry the record.
+  # One whole line per row: a why is a sentence and must stay intact, and the
+  # claim being pinned is about EACH row, so the body has to run once per row.
+  local why seen=0
+  while IFS= read -r why; do
+    seen=$((seen + 1))
+    case "$why" in
+      *"unplaced report names it too"*)
+        fail "the misfiled report sent a reader to the unplaced report for a record the unplaced report does not carry: $why" ;;
+      *"no section drew it at all"*)
+        fail "a record a decision section drew must not be described as drawn nowhere: $why" ;;
+    esac
+  done < <(printf '%s' "$chart" | jq -r '.misfiled[].why')
+  [ "$seen" = 2 ] \
+    || fail "the whys must be checked one row at a time, so this loop must run once per misfiled record; it ran $seen times for 2 records"
+
+  # And the clause about the section left short must not claim it is empty when
+  # a correctly filed record is sitting in it.
+  local home2 cap2 chart2 fogwhy
+  home2=$(make_home pointer2)
+  cat > "$home2/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-fog-retention - A dark patch filed correctly (repo: r) (kind: fog) (since 2026-07-30) (hold: not sharp) (hold-kind: future)
+- [ ] voy-fog-drift - A second dark patch whose kind was misspelled (repo: r) (kind: fogg) (since 2026-07-30)
+EOF
+  cap2=$(capture pointer2)
+  chart2=$(chart_json "$home2" voy "$cap2")
+  [ "$(printf '%s' "$chart2" | jq -r '.fog|length')" = 1 ] \
+    || fail "fixture drift: the correctly filed dark patch must still be drawn under fog"
+  fogwhy=$(printf '%s' "$chart2" | jq -r '.misfiled[]|select(.id=="voy-fog-drift")|.why')
+  case "$fogwhy" in
+    *"renders as if this course had none of them"*)
+      fail "the report claimed FOG is empty while a correctly filed dark patch is drawn in it: $fogwhy" ;;
+  esac
+  assert_contains "$fogwhy" "FOG is drawn without it" \
+    "when the named section is not empty the report must say the record is missing FROM it, which is the true and still actionable claim"
+  pass "the misfiled report names where each record really is and never points at a surface without it"
+}
+
+test_the_report_headings_assert_nothing_their_own_rows_can_contradict() {
+  # THE CLASS OF DEFECT THIS PINS, WHICH COST FIVE REVIEW ROUNDS.
+  # Every one of those rounds found one more sentence that was true for most
+  # inputs and false for one, always the same shape: a heading standing over a
+  # list and asserting what the reader would find somewhere ELSE on the chart -
+  # "a section below is empty that should not be" - which nothing computed and
+  # the rows underneath then denied in the same breath.
+  # A heading covers rows it cannot inspect, so it may only say what is true by
+  # construction of the list it heads. Anything about the rest of the chart is
+  # computed per record and lives in that record. This test therefore renders two
+  # charts that disagree about everything the old headings claimed, and requires
+  # the headings to come out byte for byte identical.
+  local home_a home_b sum_a sum_b heads_a heads_b
+  # A: every named section IS drawn, just with the wrong record in it, so nothing
+  # anywhere below the reports is empty.
+  home_a=$(make_home headsdrawn)
+  cat > "$home_a/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-oos-tracker - A boundary filed with the fog kind (repo: r) (kind: fog) (since 2026-07-30) (hold: out of course) (hold-kind: future)
+- [ ] voy-fog-retention - A dark patch filed with the boundary kind (repo: r) (kind: out-of-course) (since 2026-07-30) (hold: not sharp) (hold-kind: future)
+- [ ] voy-nokind - Filed with no record kind at all (repo: r) (since 2026-07-30)
+EOF
+  # B: the named sections really are empty, which is the case the old wording was
+  # written for and the only one it was true of.
+  home_b=$(make_home headsempty)
+  cat > "$home_b/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-fog-drift - A dark patch whose kind was misspelled (repo: r) (kind: fogg) (since 2026-07-30)
+- [ ] voy-nokind - Filed with no record kind at all (repo: r) (since 2026-07-30)
+EOF
+  sum_a=$("$CHART" voy --summary --from "$(capture headsdrawn)" \
+    --backlog "$home_a/data/backlog.md" --archive "$home_a/data/none.md" --data "$home_a/data")
+  sum_b=$("$CHART" voy --summary --from "$(capture headsempty)" \
+    --backlog "$home_b/data/backlog.md" --archive "$home_b/data/none.md" --data "$home_b/data")
+
+  # The two charts really are the opposite case of each other.
+  [ "$(printf '%s\n' "$sum_a" | grep -c '^FOG:')" = 1 ] && [ "$(printf '%s\n' "$sum_b" | grep -c '^FOG:')" = 0 ] \
+    || fail "fixture drift: A must draw a fog section and B must leave it empty, or this test compares nothing"
+
+  heads_a=$(printf '%s\n' "$sum_a" | grep -E '^(UNPLACED|MISFILED|WITHHELD)|^  (KIND DEFECTS|HELD OR BLOCKED)')
+  heads_b=$(printf '%s\n' "$sum_b" | grep -E '^(UNPLACED|MISFILED|WITHHELD)|^  (KIND DEFECTS|HELD OR BLOCKED)')
+  [ -n "$heads_a" ] || fail "fixture drift: chart A must render the reports whose headings this pins"
+  [ "$heads_a" = "$heads_b" ] \
+    || fail "a report heading changed meaning with its input, which means it is asserting something about the chart rather than about the list it heads:
+--- drawn ---
+$heads_a
+--- empty ---
+$heads_b"
+
+  # And the specific claim that took five rounds to find: no heading may say
+  # anything about a section being empty, because the heading cannot check it.
+  case "$heads_a" in
+    *empty*) fail "a heading still claims a section is empty, which its own rows can contradict: $heads_a" ;;
+  esac
+  # The rows keep saying it, per record and computed, which is where it belongs.
+  assert_contains "$sum_a" "is drawn without it" \
+    "deleting the heading claim must not delete the per-record one: the row is where that difference can be computed"
+  assert_contains "$sum_b" "renders as if this course had none of them" \
+    "when a named section really is empty the row must still say so"
+  pass "the report headings assert nothing their own rows can contradict"
+}
+
+test_a_kind_defect_is_never_pushed_down_the_page_by_routine_held_work() {
+  # Held and blocked ordinary work belongs in unplaced[] - this chart has no
+  # section for it, and dropping it would be the silent gap the whole report
+  # exists against. But it is nobody's mistake, while a kind the chart cannot
+  # classify can leave a whole section reading empty. So the report ranks the
+  # second above the first, on the page as well as in the JSON: a real kind
+  # defect buried under a page of routine held rows is how the empty sections
+  # went unnoticed for as long as they did. The kind defect is filed LAST in
+  # this backlog on purpose, so passing proves the ranking rather than the order
+  # the rows happened to be written in.
+  local home cap chart summary
+  home=$(make_home ranked)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-parked - Ordinary work, parked until the release (repo: r) (kind: ship) (since 2026-07-29) (hold: waiting on the release) (hold-kind: parked)
+- [ ] voy-waiting - Ordinary work waiting on a leg blocked-by: voy-open (repo: r) (kind: ship) (since 2026-07-29)
+- [ ] voy-open - The leg still holding it (repo: r) (kind: ship) (since 2026-07-29)
+- [ ] voy-fog-unnamed - A dark patch filed with no record kind at all (repo: r) (since 2026-07-30) (hold: could not name it) (hold-kind: future)
+EOF
+  cap=$(capture ranked)
+  chart=$(chart_json "$home" voy "$cap")
+
+  [ "$(printf '%s' "$chart" | jq -r '.counts.unplaced')" = 3 ] \
+    || fail "routine held and blocked work must still be reported: this chart has no section for it, and a silent gap is the defect this report exists against"
+  [ "$(printf '%s' "$chart" | jq -r '.counts.unplaced_kind_defects')" = 1 ] \
+    || fail "the kind defects must be counted apart from the routine rows, or the count cannot say which news it is carrying"
+  [ "$(printf '%s' "$chart" | jq -r '.unplaced[0].id')" = "voy-fog-unnamed" ] \
+    || fail "a kind defect must be ranked ahead of routine held and blocked work, however late it was filed"
+  [ "$(printf '%s' "$chart" | jq -r '[.unplaced[].kind_defect]|join(",")')" = "true,false,false" ] \
+    || fail "each unplaced row must say whether its kind is the fault, or a renderer cannot keep the two apart"
+  [ "$(printf '%s' "$chart" | jq -r '.unplaced[]|select(.id=="voy-parked")|.cause')" = "held" ] \
+    || fail "fixture drift: ordinary held work must reach unplaced[] with the routine cause"
+  [ "$(printf '%s' "$chart" | jq -r '.unplaced[]|select(.id=="voy-waiting")|.cause')" = "blocked" ] \
+    || fail "fixture drift: ordinary blocked work must reach unplaced[] with the routine cause"
+
+  # The ranking has to survive rendering, or it settles nothing for a reader.
+  summary=$("$CHART" voy --summary --from "$cap" \
+    --backlog "$home/data/backlog.md" --archive "$home/data/done-archive.md" --data "$home/data")
+  local defect_head routine_head defect_row routine_row
+  defect_head=$(printf '%s\n' "$summary" | grep -n 'KIND DEFECTS' | head -1 | cut -d: -f1)
+  routine_head=$(printf '%s\n' "$summary" | grep -n 'HELD OR BLOCKED' | head -1 | cut -d: -f1)
+  [ -n "$defect_head" ] && [ -n "$routine_head" ] \
+    || fail "the summary must keep kind defects and routine held work under separate headings: $summary"
+  [ "$defect_head" -lt "$routine_head" ] \
+    || fail "the kind-defect heading must come first on the page, not only first in the JSON"
+  defect_row=$(printf '%s\n' "$summary" | grep -n 'voy-fog-unnamed' | head -1 | cut -d: -f1)
+  routine_row=$(printf '%s\n' "$summary" | grep -n 'voy-parked' | head -1 | cut -d: -f1)
+  [ "$defect_row" -lt "$routine_row" ] \
+    || fail "a routine held row must never be printed above a kind defect"
+  assert_contains "$summary" "carrying a kind this chart cannot classify" \
+    "the member count must say how many of the unplaced members are a kind defect rather than routine held work"
+  pass "a kind defect is ranked and rendered ahead of routine held and blocked work"
+}
+
 test_chart_kinds_stay_off_the_blockage_surface_but_are_disclosed() {
   # They are held forever on purpose, so left in gates they permanently crowd a
   # surface that is already truncated. Hiding them silently would be the same
@@ -617,6 +1165,16 @@ test_an_archived_twin_never_cancels_a_live_blocker
 test_a_captain_thread_without_a_decision_key_is_recovered
 test_withheld_records_name_their_own_cause
 test_fog_and_out_of_course_can_never_be_a_captain_decision
+test_the_chart_kinds_are_stored_on_the_field_the_chart_reads
+test_the_filing_instruction_names_the_field_the_chart_reads
+test_a_member_the_chart_cannot_place_is_named_not_silently_dropped
+test_an_unpaired_analyst_variant_is_reconciled_rather_than_counted_as_drawn
+test_an_id_marker_and_a_record_kind_that_disagree_are_reported_never_offered
+test_a_swapped_chart_kind_is_reported_even_though_a_section_drew_it
+test_a_correctly_filed_chart_record_is_never_called_misfiled
+test_the_misfiled_report_never_sends_a_reader_to_a_surface_without_the_record
+test_the_report_headings_assert_nothing_their_own_rows_can_contradict
+test_a_kind_defect_is_never_pushed_down_the_page_by_routine_held_work
 test_chart_kinds_stay_off_the_blockage_surface_but_are_disclosed
 test_a_chart_without_a_destination_is_refused
 test_the_destination_is_read_and_never_invented
