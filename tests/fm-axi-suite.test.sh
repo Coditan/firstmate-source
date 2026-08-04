@@ -28,6 +28,18 @@ SH
   chmod +x "$bin/$tool"
 }
 
+# The documented ~/.profile form (README.md "Install and launch"), written from one
+# place so no case can exercise a paraphrase of the four lines an operator appends,
+# and so a correction to the form cannot be applied to some of its copies.
+write_documented_profile() {  # <path>
+  cat > "$1" <<'PROFILE'
+fm_axi_dir=$(. "$FM_TEST_LIB" && fm_axi_bin_dir)
+case "$PATH" in "$fm_axi_dir"|"$fm_axi_dir":*) fm_axi_dir= ;; esac
+[ -n "$fm_axi_dir" ] && PATH="$fm_axi_dir:$PATH" && export PATH
+unset fm_axi_dir
+PROFILE
+}
+
 make_npm() {
   local bin=$1 versions=$2 log=$3
   cat > "$bin/npm" <<'SH'
@@ -285,6 +297,131 @@ test_vessel_prefix_wins_over_inherited_path() {
   assert_contains "$out" 'AXI_SUITE_UPDATED: order-axi 1.2.3 -> 1.2.4' \
     "the inherited PATH copy won over the vessel copy"
   pass "the vessel AXI bin resolves first even when inherited PATH orders it later"
+}
+
+# The library is sourceable on its own so a login profile can make the maintained
+# copies resolve once instead of per launch. Asserted by what a shell then RUNS,
+# never by reading a variable or a profile back: this whole area exists because a
+# check that confirms the wrong thing reported an all-clear about a copy nobody ran.
+test_path_lib_is_sourceable_and_shadows_only_the_prefix() {
+  local w out
+  w="$TMP_ROOT/sourceable"
+  mkdir -p "$w/home/.local/axi/bin" "$w/elsewhere" "$w/nohome"
+  printf '#!/usr/bin/env bash\nprintf %%s maintained\n' > "$w/home/.local/axi/bin/demo-axi"
+  printf '#!/usr/bin/env bash\nprintf %%s stale\n' > "$w/elsewhere/demo-axi"
+  printf '#!/usr/bin/env bash\nprintf %%s other\n' > "$w/elsewhere/unrelated-tool"
+  chmod +x "$w/home/.local/axi/bin/demo-axi" "$w/elsewhere/demo-axi" "$w/elsewhere/unrelated-tool"
+
+  write_documented_profile "$w/profile.sh"
+
+  # A shell with no FM_HOME at all, exactly as a login profile sources it. The lib
+  # path travels in the environment rather than spliced into the script, so the
+  # quoting stays readable.
+  wire() {  # <shell> [<home>]
+    # shellcheck disable=SC2016 # The inner shell must expand these, not this one.
+    env -u FM_HOME -u FM_AXI_AMBIENT_PATH -u FM_AXI_AMBIENT_PATH_OWNER \
+      ${2:+FM_HOME="$2"} FM_TEST_LIB="$ROOT/bin/fm-axi-path-lib.sh" \
+      FM_TEST_PROFILE="$w/profile.sh" PATH="$w/elsewhere:$BASE_PATH" "$1" -c '
+      . "$FM_TEST_PROFILE"
+      demo-axi; printf " "; unrelated-tool'
+  }
+
+  out=$(wire bash "$w/home")
+  [ "$out" = "maintained other" ] \
+    || fail "FM_HOME's maintained copy must win while unrelated tools stay untouched, got: $out"
+
+  out=$(wire bash "$w/nohome")
+  [ "$out" = "stale other" ] \
+    || fail "a home with no prefix must leave resolution exactly as it was, got: $out"
+
+  # No FM_HOME: the fallback is the sourced file's own checkout, which is what lets
+  # one profile line name the checkout once. It has no prefix of its own here, so
+  # nothing may be shadowed on its behalf.
+  out=$(wire bash)
+  [ "${out% *}" = "stale" ] \
+    || fail "the checkout fallback must not shadow with a prefix it does not have, got: $out"
+
+  # The same profile is read by POSIX /bin/sh logins, which have no BASH_SOURCE to
+  # self-locate with. Such a shell must prepend NOTHING - not an empty entry, which
+  # POSIX reads as the current directory - and must not fail the sourcing file.
+  local shell
+  for shell in /bin/sh dash; do
+    command -v "$shell" >/dev/null 2>&1 || continue
+    out=$(wire "$shell" 2>"$w/$$.err") || fail "$shell could not read the documented profile form"
+    [ -s "$w/$$.err" ] \
+      && fail "$shell errored on the documented profile form: $(cat "$w/$$.err")"
+    [ "${out% *}" = "stale" ] \
+      || fail "$shell resolved a directory it cannot locate, got: $out"
+    # shellcheck disable=SC2016 # The inner shell must expand this, not this one.
+    out=$(env -u FM_HOME FM_TEST_LIB="$ROOT/bin/fm-axi-path-lib.sh" \
+      FM_TEST_PROFILE="$w/profile.sh" PATH="$w/elsewhere:$BASE_PATH" "$shell" -c '
+      . "$FM_TEST_PROFILE"; printf %s "$PATH"')
+    case ":$out:" in
+      *::*) fail "$shell put an empty entry on PATH from the profile form, got: $out" ;;
+    esac
+  done
+
+  # shellcheck disable=SC2016 # The inner shell must expand these, not this one.
+  out=$(env -u FM_AXI_AMBIENT_PATH -u FM_AXI_AMBIENT_PATH_OWNER \
+    FM_HOME="$w/home" FM_TEST_LIB="$ROOT/bin/fm-axi-path-lib.sh" \
+    FM_TEST_PROFILE="$w/profile.sh" \
+    FM_TEST_BIN="$w/home/.local/axi/bin" PATH="$w/elsewhere:$BASE_PATH" bash -c '
+    . "$FM_TEST_PROFILE"
+    . "$FM_TEST_PROFILE"
+    printf %s "$PATH" | tr ":" "\n" | grep -cFx "$FM_TEST_BIN"')
+  [ "$out" = 1 ] || fail "a re-read profile must not stack duplicate PATH entries, got: $out"
+
+  # And the same profile re-read AFTER something else jumped ahead of the inherited
+  # prefix - `bash -lc`, `su -`, a tmux login pane, any login shell started inside a
+  # session - must re-assert priority. A guard asking only whether the maintained
+  # directory is somewhere on PATH passes here while the older copy is what runs,
+  # which is the resolution defect this whole change exists to close.
+  # shellcheck disable=SC2016 # The inner shell must expand these, not this one.
+  out=$(env -u FM_AXI_AMBIENT_PATH -u FM_AXI_AMBIENT_PATH_OWNER \
+    FM_HOME="$w/home" FM_TEST_LIB="$ROOT/bin/fm-axi-path-lib.sh" \
+    FM_TEST_PROFILE="$w/profile.sh" FM_TEST_ELSEWHERE="$w/elsewhere" \
+    PATH="$w/elsewhere:$BASE_PATH" bash -c '
+    . "$FM_TEST_PROFILE"
+    PATH="$FM_TEST_ELSEWHERE:$PATH"
+    . "$FM_TEST_PROFILE"
+    demo-axi')
+  [ "$out" = maintained ] \
+    || fail "a re-read profile must retake the lead from a later PATH edit, got: $out"
+  pass "the AXI path library is sourceable standalone and shadows only its own prefix"
+}
+
+# The documented profile form must not leave the shadow report alarming about the
+# very copies the captain's shells now run. It resolves through fm_axi_bin_dir and
+# takes NO ambient record, so the entrypoint chain records the already-corrected
+# PATH - which is honestly what that session's environment is. Calling
+# fm_axi_prepend_path there instead would record the pre-prepend PATH under the
+# login shell's pid, and every session descending from it would be told the
+# maintained copies are shadowed while running them.
+test_documented_profile_form_leaves_no_shadow_alarm() {
+  local w out
+  w="$TMP_ROOT/profile-shadow"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  make_npm "$w/bin" "$w/versions" "$w/install.log"
+  make_tool "$w/home/.local/axi/bin" prof-axi 1.2.4
+  make_tool "$w/bin" prof-axi 1.2.3
+  printf '%s\n' 'prof-axi=1.2.4' > "$w/versions"
+  write_documented_profile "$w/profile.sh"
+  # shellcheck disable=SC2016 # The inner shell must expand these, not this one.
+  out=$(env -u FM_AXI_AMBIENT_PATH -u FM_AXI_AMBIENT_PATH_OWNER \
+    FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/home" FM_STATE_OVERRIDE="$w/state" \
+    FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="prof-axi" FM_AXI_SUITE_CHECK_INTERVAL=0 \
+    FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
+    FM_TEST_HOOK_LOG="$w/hook.log" FM_TEST_LIB="$ROOT/bin/fm-axi-path-lib.sh" \
+    FM_TEST_PROFILE="$w/profile.sh" \
+    FM_TEST_ROOT="$ROOT" PATH="$w/bin:$BASE_PATH" bash -c '
+    . "$FM_TEST_PROFILE"
+    command -v prof-axi
+    "$FM_TEST_ROOT/bin/fm-bootstrap.sh" 2>/dev/null')
+  assert_contains "$out" "$w/home/.local/axi/bin/prof-axi" \
+    "the documented profile form did not make the maintained copy the one that runs"
+  assert_not_contains "$out" 'AXI_SUITE_SHADOWED' \
+    "the documented profile form left the shadow report alarming about the copy the shell runs"
+  pass "the documented profile form resolves the maintained copy and clears the shadow report"
 }
 
 test_currency_clock_survives_prefix_cutover() {
@@ -759,3 +896,5 @@ test_hook_retry_self_clears_stuck_signal
 test_version_gt_without_sort_dash_v
 test_bounded_kills_hung_call_without_timeout_binary
 test_cumulative_timeout_across_tools
+test_path_lib_is_sourceable_and_shadows_only_the_prefix
+test_documented_profile_form_leaves_no_shadow_alarm

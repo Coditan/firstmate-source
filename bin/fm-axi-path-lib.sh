@@ -9,18 +9,49 @@
 #   fm_axi_ambient_path          # the PATH before ANY firstmate prepend, or fail
 #   fm_axi_shadowed <path> <home> <tool>...  # which maintained tools do not run
 #
-# The location is derived only from FM_HOME, so a fresh vessel needs no local
-# configuration before bootstrap can install its AXI suite.
+# The location is derived only from the home, so a fresh vessel needs no local
+# configuration before bootstrap can install its AXI suite. With no argument the
+# home is FM_HOME, and with neither it is this file's own checkout - the same
+# "${FM_HOME:-$FM_ROOT}" fallback every bin/ script applies.
+#
+# That last fallback is what makes this file sourceable on its own, by anything
+# that has no FM_HOME to offer, naming the checkout exactly once. An operator who
+# wants his own shells to resolve the maintained copies can therefore source it
+# from a login profile instead of remembering a PATH prefix at every launch
+# (README.md "Install and launch"). Firstmate never writes that profile itself;
+# see docs/configuration.md "AXI-suite self-update" for why the inherited login
+# environment stays the operator's to change.
+#
+# That profile route prepends the directory printed by fm_axi_bin_dir and does NOT
+# call fm_axi_prepend_path, because the ambient record below belongs to firstmate's
+# own entrypoints: a login shell that claimed it would record its PRE-prepend PATH
+# as the session's ambient one, and every session descending from that shell would
+# then be told the maintained copies are shadowed while it is in fact running them.
+
+# Self-locate at source time, and only on a positive identity check: a shell that
+# cannot say where this file lives leaves the fallback empty and callers keep their
+# existing "no home" failure, rather than prepending a guessed directory.
+#
+# BASH_SOURCE is named WITHOUT a subscript on purpose: bash expands the bare name
+# to element 0, while a POSIX shell reading this file - /bin/sh being dash on
+# Debian, which a login profile may well be - sees an ordinary unset scalar and
+# takes the empty fallback. `${BASH_SOURCE[0]}` is a fatal "Bad substitution"
+# there, which would abort the whole sourcing file rather than prepend nothing.
+FM_AXI_LIB_ROOT=
+if [ -n "${BASH_SOURCE:-}" ]; then
+  FM_AXI_LIB_ROOT=$(cd "$(dirname "${BASH_SOURCE}")/.." 2>/dev/null && pwd || true)
+  [ -f "$FM_AXI_LIB_ROOT/bin/fm-axi-path-lib.sh" ] || FM_AXI_LIB_ROOT=
+fi
 
 fm_axi_prefix() {
-  local home=${1:-${FM_HOME:-}}
+  local home=${1:-${FM_HOME:-$FM_AXI_LIB_ROOT}}
   [ -n "$home" ] || return 1
   printf '%s/.local/axi\n' "${home%/}"
 }
 
 fm_axi_bin_dir() {
   local prefix
-  prefix=$(fm_axi_prefix "${1:-${FM_HOME:-}}") || return 1
+  prefix=$(fm_axi_prefix "${1:-}") || return 1
   printf '%s/bin\n' "$prefix"
 }
 
@@ -122,7 +153,7 @@ fm_axi_ambient_claim() {  # <maintained-bin-dir>
 
 fm_axi_prepend_path() {
   local bin
-  bin=$(fm_axi_bin_dir "${1:-${FM_HOME:-}}") || return 1
+  bin=$(fm_axi_bin_dir "${1:-}") || return 1
   fm_axi_ambient_claim "$bin"
   case "${PATH:-}" in
     "$bin"|"$bin":*) ;;

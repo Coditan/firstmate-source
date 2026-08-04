@@ -104,6 +104,26 @@ PATH="$PWD/.local/axi/bin:$PATH" pi
 The prefix directory may be absent on first launch; keeping it first from process start makes the vessel-owned AXI copies take precedence as soon as bootstrap installs them.
 When `FM_HOME` differs from the checkout root, prepend `$FM_HOME/.local/axi/bin` instead.
 Codex and OpenCode use the same PATH assignment before their `codex` or `opencode` launch command.
+
+That prefix has to be remembered at every launch, and a launch without it leaves the maintained copies installed but never run by your own shells - which `AXI_SUITE_SHADOWED:` reports rather than repairs, because your login environment is yours to change and not firstmate's.
+If you would rather resolve it once, append these four lines to the end of your bash login profile (`~/.profile`):
+
+```sh
+fm_axi_dir=$(. /path/to/this/checkout/bin/fm-axi-path-lib.sh && fm_axi_bin_dir)
+case "$PATH" in "$fm_axi_dir"|"$fm_axi_dir":*) fm_axi_dir= ;; esac
+[ -n "$fm_axi_dir" ] && PATH="$fm_axi_dir:$PATH" && export PATH
+unset fm_axi_dir
+```
+
+Put them last so they win over earlier `PATH` edits, and write the checkout's real path rather than a variable.
+Every shell of that home then resolves its own maintained copies, including after a restart.
+Take the form as written: the subshell keeps the library's functions out of your login shell, and the emptiness test is what keeps a shell that cannot locate the sourced file from prepending an empty `PATH` entry, which POSIX reads as the current directory.
+The `case` asks whether the maintained directory is already `PATH`'s FIRST entry, which is the same question `fm_axi_prepend_path` asks: re-reading the profile in a shell that already leads with it stacks no second copy, while a shell where something else has since jumped ahead re-asserts priority instead of leaving the older copy resolving.
+Use `fm_axi_bin_dir` rather than the library's own `fm_axi_prepend_path` here: that function records the pre-prepend `PATH` as the session's ambient one, so a profile calling it makes the currency check report a shadow your shells are not actually running ([docs/configuration.md](docs/configuration.md) "AXI-suite self-update" owns that measurement).
+Each home picks its own prefix from `FM_HOME`, falling back to the sourced file's checkout, so two homes on one machine do not compete.
+Self-location needs `BASH_SOURCE`, so in zsh, dash, or any other shell without it the bare call prints nothing and the lines leave `PATH` untouched; there, name the home explicitly as `fm_axi_bin_dir /path/to/home`.
+Only command names that exist inside that prefix are affected, so anything you installed elsewhere resolves exactly as before, and a home whose prefix does not exist yet is unaffected until the currency check creates it.
+This is optional, and nothing in firstmate writes or reads your profile: verify it by effect from a new shell with `command -v gh-axi` and `gh-axi --version`, not by reading the file back.
 For Grok, `--trust` is needed once per clone so project hooks and the turn-end guard load; `/hooks-trust` inside Grok works too.
 For Pi, approve the project trust prompt once per clone on first launch so the tracked `.pi/extensions/*.ts` files auto-load.
 Every Pi session starts with calm mode off; `/calm` is a session-local conversation-focused transcript toggle.
