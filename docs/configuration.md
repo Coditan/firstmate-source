@@ -606,10 +606,10 @@ Both paths share the same signature and marker implementation, so the slow fallb
 The default deployment path is `$FM_HOME/projects/hlr-certsync` with `docker-compose.yml`; `FM_CERTSYNC_PROJECT`, `FM_CERTSYNC_COMPOSE_FILE`, and `FM_CERTSYNC_GRAPH_COMPOSE_FILE` override the project and compose files.
 If the optional graph compose file exists, the watcher adds it to the `docker compose` command; if it is absent, the base compose file is enough.
 The heartbeat runs `docker compose ... exec -T certsync certsync status` with `FM_CERTSYNC_STATE_DB`, `FM_CERTSYNC_HEARTBEAT_FILE`, and `FM_CERTSYNC_DAEMON_STATE` mapped to the status command's `--state-db`, `--heartbeat-file`, and `--daemon-state` arguments.
-Only a confirmed JSON object with `healthy: false` becomes a durable `check` wake keyed as `certsync-health`, with the `reason` field trimmed and bounded in the wake text.
-A `healthy: true` reading clears the unchanged-unhealthy marker and stays quiet.
-Missing project or compose files, missing `docker` or `jq`, empty output, invalid JSON, a missing boolean `healthy` field, and all other unreadable states are unknown and quiet except for the local `state/.watch-triage.log` debug note.
-The command is bounded by `FM_CERTSYNC_HEALTH_TIMEOUT` rather than the general check timeout, and unchanged unhealthy readings re-surface only after `FM_CERTSYNC_HEALTH_RESURFACE`.
+A confirmed JSON object with `healthy: false` becomes a durable `check` wake keyed as `certsync-health`, with the `reason` field trimmed and bounded in the wake text.
+A `healthy: true` reading clears the unchanged marker and stays quiet.
+Missing `docker` or `jq`, a failed status command (including a docker permission denial), empty output, invalid JSON, and a missing boolean `healthy` field all produce their own `check` wake carrying a `cannot run: ...` reason, so an inability to read certsync's status can never read the same as a confirmed-healthy status; only a missing project directory or missing compose file (certsync not deployed on this host at all) stays quiet.
+The command is bounded by `FM_CERTSYNC_HEALTH_TIMEOUT` rather than the general check timeout, and an unchanged unhealthy or unchanged cannot-run reading re-surfaces only after `FM_CERTSYNC_HEALTH_RESURFACE`.
 
 ## Environment variables
 
@@ -656,7 +656,7 @@ FM_CERTSYNC_STATE_DB=/var/lib/hlr-certsync/certsync-state.sqlite3   # certsync s
 FM_CERTSYNC_HEARTBEAT_FILE=/var/lib/hlr-certsync/certsync-heartbeat.json   # certsync status --heartbeat-file argument
 FM_CERTSYNC_DAEMON_STATE=running   # certsync status --daemon-state argument
 FM_CERTSYNC_HEALTH_TIMEOUT=5   # seconds allowed for the heartbeat's certsync status command
-FM_CERTSYNC_HEALTH_RESURFACE=3600   # seconds before an unchanged unhealthy certsync status is queued again
+FM_CERTSYNC_HEALTH_RESURFACE=3600   # seconds before an unchanged unhealthy or cannot-run certsync status is queued again
 FM_CONTEXT_CEILING=300000   # captain-decided token ceiling for the primary session's own context; above it, at a quiet boundary, the watcher queues a reset, ask, or blocked wake; unmeasurable running sessions surface as unenforced (docs/context-reset.md)
 FM_CONTEXT_CAPTAIN_IDLE_SECS=1800   # silence since the last genuine captain prompt below which the captain counts as in live conversation: the watcher asks instead of ordering a reset, and bin/fm-context-reset.sh refuses
 FM_CONTEXT_RECEIPT_MAX_AGE=900   # seconds a state/.stow-receipt stays fresh; the receipt and the reset are meant to happen in one turn

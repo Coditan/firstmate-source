@@ -51,9 +51,11 @@
 #   heartbeat              fleet-scan backstop found an unsurfaced captain-relevant
 #                          status, unless afk is active
 #   check: certsync health: unhealthy: <reason>
+#   check: certsync health: cannot run: <reason>
 #                          heartbeat found a confirmed unhealthy certsync status
-#                          JSON reading and surfaced it through the ordinary
-#                          durable check wake path
+#                          JSON reading, or could not read certsync status at
+#                          all, and surfaced it through the ordinary durable
+#                          check wake path
 # For normal supervision, resume the session-start primary-harness protocol
 # after each printed reason. Direct duplicate invocations of this script still
 # no-op through the watcher singleton lock.
@@ -145,7 +147,7 @@ HEARTBEAT_MAX=${FM_HEARTBEAT_MAX:-7200}  # heartbeat backoff cap
 CHECK_INTERVAL=${FM_CHECK_INTERVAL:-300}  # seconds between *.check.sh sweeps
 CHECK_TIMEOUT=${FM_CHECK_TIMEOUT:-30}     # seconds allowed per *.check.sh
 CERTSYNC_HEALTH_TIMEOUT=${FM_CERTSYNC_HEALTH_TIMEOUT:-5}  # seconds allowed for certsync heartbeat health
-CERTSYNC_HEALTH_RESURFACE=${FM_CERTSYNC_HEALTH_RESURFACE:-3600}  # seconds before repeating unchanged unhealthy certsync
+CERTSYNC_HEALTH_RESURFACE=${FM_CERTSYNC_HEALTH_RESURFACE:-3600}  # seconds before repeating unchanged unhealthy or cannot-run certsync
 CONTEXT_CHECK_INTERVAL=${FM_CONTEXT_CHECK_INTERVAL:-300}  # seconds between context-ceiling reads
 # How long an UNCHANGED context-ceiling report stays quiet before it says so
 # again. Long, because every branch of that check describes a standing condition
@@ -871,14 +873,21 @@ run_check() {
   ( run_check_process "$@" ) 2>/dev/null || true
 }
 
+# Bounded run of "$@" with stdout captured by the caller and stderr discarded.
+# Unlike run_check (which always reports success to its caller), run_bounded's
+# own exit status IS the underlying command's real exit status - a timeout also
+# returns non-zero - so a caller that needs "the command could not run" to read
+# differently from "the command ran and said healthy" can read $? after a
+# capturing call (certsync_health_reason does). A caller that discards the exit
+# status anyway (e.g. a fire-and-forget git fetch) is unaffected.
 run_bounded() {
   if [ "${FM_CHECK_FORCE_FALLBACK:-0}" != 1 ] && command -v timeout >/dev/null 2>&1; then
-    timeout "$CHECK_TIMEOUT" "$@" 2>/dev/null || true
+    timeout "$CHECK_TIMEOUT" "$@" 2>/dev/null
   elif [ "${FM_CHECK_FORCE_FALLBACK:-0}" != 1 ] && command -v gtimeout >/dev/null 2>&1; then
-    gtimeout "$CHECK_TIMEOUT" "$@" 2>/dev/null || true
+    gtimeout "$CHECK_TIMEOUT" "$@" 2>/dev/null
   else
     # shellcheck disable=SC2016
-    perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setpgrp(0, 0); exec @ARGV } local $SIG{ALRM} = sub { kill "TERM", -$pid; select undef, undef, undef, 0.2; kill "KILL", -$pid; exit 124 }; alarm $t; waitpid $pid, 0; exit($? >> 8)' "$CHECK_TIMEOUT" "$@" 2>/dev/null || true
+    perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setpgrp(0, 0); exec @ARGV } local $SIG{ALRM} = sub { kill "TERM", -$pid; select undef, undef, undef, 0.2; kill "KILL", -$pid; exit 124 }; alarm $t; waitpid $pid, 0; exit($? >> 8)' "$CHECK_TIMEOUT" "$@" 2>/dev/null
   fi
 }
 
@@ -1022,9 +1031,18 @@ certsync_health_mark_surfaced() {
 }
 
 # Read certsync's own monitoring interface and produce one bounded wake reason
-# only for a confirmed unhealthy JSON payload.
+# for either a confirmed unhealthy JSON payload OR a confirmed inability to read
+# that payload at all. The two must never collapse into the same silent "nothing
+# to report" answer: a check that cannot tell its own failure apart from success
+# is not a check. Every "cannot run" branch below therefore sets
+# FM_CERTSYNC_HEALTH_REASON instead of returning early, so it shares the same
+# resurface-dedup and wake path as a confirmed-unhealthy reason - bounded
+# repetition (CERTSYNC_HEALTH_RESURFACE), never silence. Absence of the project
+# or its compose file is the one legitimate "nothing to check here" case: it
+# means certsync is not deployed on this host, not that a deployed check failed.
 certsync_health_reason() {
-  local project compose graph_compose marker previous timeout_previous out healthy summary
+  local project compose graph_compose marker previous timeout_previous
+  local out out_rc healthy summary
   FM_CERTSYNC_HEALTH_REASON=
   FM_CERTSYNC_HEALTH_SIGNATURE=
   project=${FM_CERTSYNC_PROJECT:-$FM_HOME/projects/hlr-certsync}
@@ -1034,44 +1052,55 @@ certsync_health_reason() {
 
   [ -d "$project" ] || return 1
   [ -f "$compose" ] || return 1
-  command -v docker >/dev/null 2>&1 || { triage_log "certsync health unknown (docker missing)"; return 1; }
-  command -v jq >/dev/null 2>&1 || { triage_log "certsync health unknown (jq missing)"; return 1; }
 
-  timeout_previous=$CHECK_TIMEOUT
-  CHECK_TIMEOUT=$CERTSYNC_HEALTH_TIMEOUT
-  if [ -f "$graph_compose" ]; then
-    out=$(run_bounded docker compose -f "$compose" -f "$graph_compose" exec -T certsync certsync status \
-      --state-db "${FM_CERTSYNC_STATE_DB:-/var/lib/hlr-certsync/certsync-state.sqlite3}" \
-      --heartbeat-file "${FM_CERTSYNC_HEARTBEAT_FILE:-/var/lib/hlr-certsync/certsync-heartbeat.json}" \
-      --daemon-state "${FM_CERTSYNC_DAEMON_STATE:-running}")
+  if ! command -v docker >/dev/null 2>&1; then
+    FM_CERTSYNC_HEALTH_REASON="check: certsync health: cannot run: docker missing"
+  elif ! command -v jq >/dev/null 2>&1; then
+    FM_CERTSYNC_HEALTH_REASON="check: certsync health: cannot run: jq missing"
   else
-    out=$(run_bounded docker compose -f "$compose" exec -T certsync certsync status \
-      --state-db "${FM_CERTSYNC_STATE_DB:-/var/lib/hlr-certsync/certsync-state.sqlite3}" \
-      --heartbeat-file "${FM_CERTSYNC_HEARTBEAT_FILE:-/var/lib/hlr-certsync/certsync-heartbeat.json}" \
-      --daemon-state "${FM_CERTSYNC_DAEMON_STATE:-running}")
-  fi
-  CHECK_TIMEOUT=$timeout_previous
+    timeout_previous=$CHECK_TIMEOUT
+    CHECK_TIMEOUT=$CERTSYNC_HEALTH_TIMEOUT
+    if [ -f "$graph_compose" ]; then
+      out=$(run_bounded docker compose -f "$compose" -f "$graph_compose" exec -T certsync certsync status \
+        --state-db "${FM_CERTSYNC_STATE_DB:-/var/lib/hlr-certsync/certsync-state.sqlite3}" \
+        --heartbeat-file "${FM_CERTSYNC_HEARTBEAT_FILE:-/var/lib/hlr-certsync/certsync-heartbeat.json}" \
+        --daemon-state "${FM_CERTSYNC_DAEMON_STATE:-running}")
+    else
+      out=$(run_bounded docker compose -f "$compose" exec -T certsync certsync status \
+        --state-db "${FM_CERTSYNC_STATE_DB:-/var/lib/hlr-certsync/certsync-state.sqlite3}" \
+        --heartbeat-file "${FM_CERTSYNC_HEARTBEAT_FILE:-/var/lib/hlr-certsync/certsync-heartbeat.json}" \
+        --daemon-state "${FM_CERTSYNC_DAEMON_STATE:-running}")
+    fi
+    out_rc=$?
+    CHECK_TIMEOUT=$timeout_previous
 
-  [ -n "$out" ] || { triage_log "certsync health unknown (no status output)"; return 1; }
-  healthy=$(printf '%s' "$out" | jq -r 'if (.healthy == true or .healthy == false) then .healthy else empty end' 2>/dev/null) \
-    || { triage_log "certsync health unknown (invalid status JSON)"; return 1; }
-  [ -n "$healthy" ] || { triage_log "certsync health unknown (missing healthy boolean)"; return 1; }
-  if [ "$healthy" = true ]; then
-    rm -f "$marker" 2>/dev/null || true
-    return 1
+    if [ "$out_rc" -ne 0 ]; then
+      FM_CERTSYNC_HEALTH_REASON="check: certsync health: cannot run: status command failed (exit $out_rc)"
+    elif [ -z "$out" ]; then
+      FM_CERTSYNC_HEALTH_REASON="check: certsync health: cannot run: no status output"
+    else
+      healthy=$(printf '%s' "$out" | jq -r 'if (.healthy == true or .healthy == false) then .healthy else empty end' 2>/dev/null)
+      if [ -z "$healthy" ]; then
+        FM_CERTSYNC_HEALTH_REASON="check: certsync health: cannot run: invalid or missing status JSON"
+      elif [ "$healthy" = true ]; then
+        rm -f "$marker" 2>/dev/null || true
+        return 1
+      else
+        summary=$(printf '%s' "$out" | jq -r '.reason // "unhealthy"' 2>/dev/null \
+          | tr '\n\t' '  ' \
+          | sed 's/[[:space:]]*$//' \
+          | cut -c1-300)
+        [ -n "$summary" ] || summary=unhealthy
+        FM_CERTSYNC_HEALTH_REASON="check: certsync health: unhealthy: $summary"
+      fi
+    fi
   fi
 
-  summary=$(printf '%s' "$out" | jq -r '.reason // "unhealthy"' 2>/dev/null \
-    | tr '\n\t' '  ' \
-    | sed 's/[[:space:]]*$//' \
-    | cut -c1-300)
-  [ -n "$summary" ] || summary=unhealthy
-  FM_CERTSYNC_HEALTH_REASON="check: certsync health: unhealthy: $summary"
   FM_CERTSYNC_HEALTH_SIGNATURE=$FM_CERTSYNC_HEALTH_REASON
   previous=$(cat "$marker" 2>/dev/null || true)
   if [ "$previous" = "$FM_CERTSYNC_HEALTH_SIGNATURE" ] \
     && [ "$(age_of "$marker")" -lt "$CERTSYNC_HEALTH_RESURFACE" ]; then
-    triage_log "absorbed certsync health (unchanged unhealthy status)"
+    triage_log "absorbed certsync health (unchanged: $FM_CERTSYNC_HEALTH_SIGNATURE)"
     return 1
   fi
   return 0
