@@ -73,7 +73,7 @@ Prove a required-check gate by breaking a real invariant and watching the gate r
 Thirteen fleet repositories carry a required-check merge gate: `hlr-certsync`, `hlr-vat-steward`, `hlr-adsbot`, `hlr-einkauf`, `hlr-engineering-vault`, `hlr-knowledge`, `hlr-infra`, `hlr-librechat`, `hlr-tank-cad`, `hlr-reporting`, `hlr-dms`, `hlr-pim`, and `hlr-research`.
 
 The chosen fleet standard for the required-check gate is the repository ruleset with no bypass actors.
-The reasons are that twelve of the thirteen were already there, that rulesets are the newer mechanism, that the admiralty branch-protection doctrine already prescribes a ruleset with no bypass actors (see `admiralty-fleet-repo.md`), and that a no-bypass ruleset closes the administrator walk-through that classic protection leaves open.
+The reasons are that twelve of the thirteen were already there, that rulesets are the newer mechanism, that the admiralty branch-protection doctrine already prescribes a ruleset with no bypass actors (see [admiralty-fleet-repo.md](admiralty-fleet-repo.md)), and that a no-bypass ruleset closes the administrator walk-through that classic protection leaves open.
 
 `hlr-research` was the one repository on the classic path.
 The reason was a rollout artifact, not a property of the repository: during the 2026-08-04 rollout a ruleset could not be activated until its workflow had already run on `main` and produced its check, or the repository would lock (the `hlr-reporting` bootstrap deadlock), and `hlr-research` correctly refused to activate until its `pr-tests.yml` existed on `main`.
