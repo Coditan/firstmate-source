@@ -33,8 +33,8 @@ vessel: updated e52cc76..492361e
 FF_STATUS=updated
 ```
 
-This fork's `main` has since advanced past `e52cc76`, so its tip is no longer an ancestor of `492361e`; it stood at `ce43899` when this document was written.
-A vessel sitting at the fork's current `main` and pointed at `admiralty`'s `main` would therefore hit exactly the refused advance described above, and how that is repaired before cutover is still open; see "What is not built yet".
+This fork's `main` has since advanced past `e52cc76`, so its tip stopped being an ancestor of the original `admiralty` tip.
+Measured again on 2026-08-05 UTC, `admiralty` has absorbed history through the newer pin `b5c0bf6`, but this fork's `origin/main` had already advanced 36 commits past that pin again; see "What is not built yet" for why each later pin bump needs the same ancestry repair.
 
 ## The shape of the repository
 
