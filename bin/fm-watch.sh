@@ -53,9 +53,10 @@
 #   check: certsync health: unhealthy: <reason>
 #   check: certsync health: cannot run: <reason>
 #                          heartbeat found a confirmed unhealthy certsync status
-#                          JSON reading, or could not read certsync status at
-#                          all, and surfaced it through the ordinary durable
-#                          check wake path
+#                          JSON reading, found a healthy reading with a stale
+#                          heartbeat, or could not read certsync status at all,
+#                          and surfaced it through the ordinary durable check
+#                          wake path
 # For normal supervision, resume the session-start primary-harness protocol
 # after each printed reason. Direct duplicate invocations of this script still
 # no-op through the watcher singleton lock.

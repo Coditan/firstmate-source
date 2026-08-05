@@ -56,8 +56,8 @@ Optional X mode integrates with the watcher only after explicit opt-in; [configu
 The optional per-home Bridge inbox check has a separate plain-shell frequency monitor for the first configured vessel and retains the original watcher path as a slower fallback.
 Both paths use one shared, lock-protected implementation to bounded-fetch and read unacknowledged envelopes from the Bridge clone's `origin/main`, durably enqueue one wake per new signature, and never acknowledge mail.
 [configuration.md](configuration.md#bridge-frequency-monitor-service) owns the service and consent mechanics, while [configuration.md](configuration.md#bridge-inbox-check-fm_bridge_) owns inbox detection and cadence.
-The optional certsync heartbeat check reuses the same durable `check` wake path for unhealthy and cannot-run readings instead of adding a separate escalation channel.
-[configuration.md](configuration.md#certsync-health-check-fm_certsync_) owns the deployment discovery, bounded Docker Compose status command, undeployed-host quiet case, cannot-run cases, and re-surface cadence.
+The optional certsync heartbeat check reuses the same durable `check` wake path for unhealthy, stale-heartbeat, and cannot-run readings instead of adding a separate escalation channel.
+[configuration.md](configuration.md#certsync-health-check-fm_certsync_) owns the deployment discovery, bounded host-file status read, heartbeat freshness gate, undeployed-host quiet case, cannot-run cases, and re-surface cadence.
 
 At session start, `bin/fm-session-start.sh` emits exactly one primary-harness delivery block rendered by `bin/fm-supervision-instructions.sh` from `docs/supervision-protocols/`.
 The watcher loop is external to the model harness and runs continuously in an enabled `systemd --user` template instance, or in a detached home-scoped tmux keeper when the user manager is unavailable.
