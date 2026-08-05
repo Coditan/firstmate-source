@@ -18,6 +18,7 @@
 #   (g) no run + idle pane falls to the status-log verb           -> status-log
 #   (h) dead pane: no run -> unknown/none; with a run -> run-step (not the shell)
 #   (i) kind=scout skips the run lookup                           -> pane/status-log
+#   (i2) kind=ship but mode=direct-PR/local-only also skips it    -> pane/status-log
 #   (j) torn-down worktree / missing meta                         -> unknown/none
 #   (k) crew_is_provably_working end-to-end over the REAL helper (not a canned
 #       fake fm-crew-state.sh verdict): cross-branch attribution via the runs
@@ -1124,6 +1125,56 @@ test_scout_skips_run_lookup() {
   pass "scout skips the run lookup"
 }
 
+# (i2) kind=ship but mode=direct-PR/local-only never starts a no-mistakes run
+# either, exactly like kind=scout/secondmate: 2026-08-04/05 incident, confirmed
+# 2 of 2 on two different harnesses. A direct-PR task pushes a branch and opens
+# a PR itself; there is no run to reconcile against, so the lookup must be
+# skipped rather than attempted and reported broken.
+test_direct_pr_mode_skips_run_lookup() {
+  reset_fakes
+  local d out
+  d=$(new_case direct-pr-skip)
+  make_repo_on_branch "$d/wt" fm/feat-direct-pr
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/direct-pr.meta" "window=fm:fm-direct-pr" "worktree=$d/wt" "kind=ship" "mode=direct-PR"
+  # Even if a run happened to exist for this branch, a direct-PR task must not
+  # read it: no-mistakes never ran for it in the first place.
+  FM_FAKE_AXI_STATUS="$(run_running fm/feat-direct-pr)"
+  FM_FAKE_BUSY=1
+  out=$(run_crew_state "$d" direct-pr)
+  assert_not_contains "$out" "source: run-step" "direct-PR mode ignores no-mistakes run-step"
+  assert_contains "$out" "source: pane" "direct-PR mode reads pane busy-signature"
+  pass "mode=direct-PR skips the run lookup"
+}
+
+# Direct regression test for the reported defect: a finished direct-PR task
+# whose worktree was never initialized for no-mistakes (so a run lookup would
+# fail outright, exactly as the incident captured) must read a determinate
+# done state from its own status log, never `degraded`.
+test_direct_pr_finished_task_is_done_not_degraded() {
+  reset_fakes
+  local d out
+  d=$(new_case direct-pr-done)
+  make_repo_on_branch "$d/wt" fm/feat-direct-pr-done
+  make_fakebin "$d" >/dev/null
+  # A no-mistakes CLI that is present but broken: this is the exact shape of the
+  # incident (`the no-mistakes runs lookup ran and returned nothing`) if the
+  # mode check did not skip the call for this task.
+  cat > "$d/fakebin/no-mistakes" <<'SH'
+#!/usr/bin/env bash
+exit 7
+SH
+  chmod +x "$d/fakebin/no-mistakes"
+  fm_write_meta "$d/state/direct-pr-done.meta" "window=fm:fm-direct-pr-done" "worktree=$d/wt" "kind=ship" "mode=direct-PR"
+  FM_FAKE_BUSY=0
+  printf 'done: PR https://github.com/example/repo/pull/1\n' > "$d/state/direct-pr-done.status"
+  out=$(run_crew_state "$d" direct-pr-done)
+  assert_contains "$out" "state: done" "a finished direct-PR task did not read as done"
+  assert_contains "$out" "source: status-log" "a finished direct-PR task's done state did not come from its status log"
+  assert_not_contains "$out" "degraded" "a finished direct-PR task with nothing to reconcile must not read as degraded"
+  pass "a finished direct-PR task reads done, not degraded"
+}
+
 # (j) torn-down worktree and missing meta are graceful (unknown/none, exit 0)
 test_torn_down_worktree() {
   reset_fakes
@@ -1456,6 +1507,19 @@ test_cause_kind_skips_run_lookup() {
   pass "cause kind-skips-run-lookup"
 }
 
+test_cause_delivery_mode_skips_run_lookup() {
+  reset_fakes
+  local d out
+  d=$(new_case cause-mode-skips)
+  make_repo_on_branch "$d/wt" fm/feat-direct-pr-skip
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/direct-pr-skip.meta" "window=fm:fm-direct-pr-skip" "worktree=$d/wt" "kind=ship" "mode=direct-PR"
+  FM_FAKE_BUSY=0
+  out=$(run_crew_state "$d" direct-pr-skip)
+  assert_cause "$out" delivery-mode-skips-run-lookup "a delivery mode that never drives a run was collapsed with a crew whose run lookup found nothing"
+  pass "cause delivery-mode-skips-run-lookup"
+}
+
 test_cause_no_branch() {
   reset_fakes
   local d out
@@ -1784,6 +1848,8 @@ test_dead_window_still_reports_terminal_run_step
 test_dead_window_still_reports_active_run_step
 test_no_timeout_uses_perl_bound
 test_scout_skips_run_lookup
+test_direct_pr_mode_skips_run_lookup
+test_direct_pr_finished_task_is_done_not_degraded
 test_torn_down_worktree
 test_missing_meta
 test_provably_working_via_runs_list_fallback
@@ -1810,6 +1876,7 @@ test_cause_worktree_gone
 test_cause_no_endpoint_recorded
 test_cause_endpoint_unreadable
 test_cause_kind_skips_run_lookup
+test_cause_delivery_mode_skips_run_lookup
 test_cause_no_branch
 test_cause_no_run_attributed
 test_cause_run_attribution_rejected
