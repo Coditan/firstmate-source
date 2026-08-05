@@ -148,6 +148,7 @@ case "$*" in
   *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
 esac
 case "${1:-}" in
+  list-panes) printf '%%1 1\n'; exit 0 ;;
   display-message) printf 'firstmate\n'; exit 0 ;;
   list-windows) exit 0 ;;
   has-session|new-session|new-window|send-keys|set-window-option) exit 0 ;;
@@ -215,6 +216,7 @@ make_send_fakebin() {
 #!/usr/bin/env bash
 set -u
 case "${1:-}" in
+  list-panes) printf '%%1 1\n'; exit 0 ;;
   send-keys)
     shift; literal=0; target=
     while [ $# -gt 0 ]; do

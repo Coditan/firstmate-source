@@ -28,16 +28,25 @@ for arg in "$@"; do
   if [ "$prev" = "-t" ]; then target=$arg; fi
   prev=$arg
 done
+# Each window gets its OWN pane id, because the probes resolve a target to its
+# pane id first and then read that pane (docs/tmux-backend.md "Target
+# resolution"). A stub that answered per window NAME would stop distinguishing
+# its fixtures the moment the read is addressed by pane, exactly as real tmux is.
+case "$target" in
+  *dead-secondmate*|%9) pane='%9' ;;
+  *) pane='%1' ;;
+esac
 case "${1:-}" in
+  list-panes) printf '%s 1\n' "$pane"; exit 0 ;;
   display-message)
     case "$*" in
       *pane_current_command*)
-        case "$target" in
-          *dead-secondmate*) printf 'zsh\n' ;;
+        case "$pane" in
+          '%9') printf 'zsh\n' ;;
           *) printf 'codex\n' ;;
         esac
         ;;
-      *) printf '%%1\n' ;;
+      *) printf '%s\n' "$pane" ;;
     esac
     ;;
   capture-pane)

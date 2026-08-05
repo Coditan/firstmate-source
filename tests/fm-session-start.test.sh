@@ -201,14 +201,20 @@ make_fake_tmux() {
 #!/usr/bin/env bash
 set -u
 case "\${1:-}" in
-  display-message)
+  list-panes|display-message)
     target=""
     prev=""
     for a in "\$@"; do
       [ "\$prev" = "-t" ] && target="\$a"
       prev="\$a"
     done
-    [ "\$target" = "$live" ] && { printf '%%1\n'; exit 0; }
+    # Only the one live target resolves - the exact primitive
+    # fm_backend_target_exists uses for a tmux endpoint liveness read, mirroring
+    # make_fake_herdr below.
+    if [ "\$target" = "$live" ]; then
+      [ "\${1:-}" = list-panes ] && { printf '%%1 1\n'; exit 0; }
+      printf '%%1\n'; exit 0
+    fi
     exit 1
     ;;
 esac

@@ -50,6 +50,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-supervisor-target-lib.sh
 . "$SCRIPT_DIR/fm-supervisor-target-lib.sh"
+# shellcheck source=bin/fm-tmux-lib.sh
+. "$SCRIPT_DIR/fm-tmux-lib.sh"
 
 LOG="$STATE/.context-reset.log"
 CHECK_ONLY=0
@@ -206,7 +208,14 @@ BACKEND=$(discover_supervisor_backend) \
 
 PANE=$(discover_supervisor_target) \
   || refuse "could not identify this session's own terminal pane; a reset must never be typed into a pane it cannot identify"
-TARGET=$(tmux display-message -p -t "$PANE" '#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null || true)
+# Resolve BEFORE reading, or the refusal below cannot fire: `tmux
+# display-message` answers for a different pane instead of refusing an
+# unresolvable target (fm_tmux_resolve_pane, bin/fm-tmux-lib.sh), so a $PANE
+# that no longer names anything would produce a real-looking TARGET belonging to
+# some other window - and this script types a reset into whatever TARGET names.
+RESOLVED_PANE=$(fm_tmux_resolve_pane "$PANE") \
+  || refuse "this session's own terminal pane '$PANE' does not name a live pane"
+TARGET=$(tmux display-message -p -t "$RESOLVED_PANE" '#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null || true)
 [ -n "$TARGET" ] \
   || refuse "this session's own terminal pane '$PANE' could not be resolved"
 

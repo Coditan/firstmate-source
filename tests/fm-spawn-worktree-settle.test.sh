@@ -46,6 +46,7 @@ case "$*" in
     ;;
 esac
 case "${1:-}" in
+  list-panes) printf '%%1 1\n'; exit 0 ;;
   display-message) printf 'firstmate\n'; exit 0 ;;
   list-windows) exit 0 ;;
   has-session|new-session|new-window|kill-window) exit 0 ;;

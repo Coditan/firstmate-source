@@ -21,6 +21,26 @@
 # shellcheck source=bin/fm-tmux-lib.sh
 . "$FM_BACKEND_LIB_DIR/fm-tmux-lib.sh"
 
+# fm_backend_tmux_resolve_pane: re-exported verbatim from bin/fm-tmux-lib.sh
+# under this adapter's naming convention (the same pattern the submit core
+# uses), so the adapter and the shared library cannot drift on what counts as
+# a resolvable target. It is the gate EVERY read of a caller-supplied target in
+# this file goes through; see that function for why `tmux display-message`
+# cannot be trusted to refuse one.
+fm_backend_tmux_resolve_pane() {  # <target> -> prints pane id, or returns 1
+  fm_tmux_resolve_pane "$@"
+}
+
+# fm_backend_tmux_target_exists: pane-PRESENCE of <target>, and the one owner
+# of that question for this backend - fm_backend_target_exists (bin/fm-backend.sh)
+# and fm-crew-state.sh's pane_readable both dispatch here rather than each
+# running their own raw probe, which is how two of the three copies kept using
+# the unguarded display-message form after the hazard was already documented at
+# the third (bin/fm-spawn.sh's worktree-discovery poll).
+fm_backend_tmux_target_exists() {  # <target>
+  fm_backend_tmux_resolve_pane "$1" >/dev/null
+}
+
 # fm_backend_tmux_resolve_bare_selector: the live-window-listing fallback for a
 # selector that is neither an explicit target nor a task selector routed
 # through meta - an ad hoc window name with no recorded task. Mirrors the
@@ -38,11 +58,17 @@ fm_backend_tmux_capture() {  # <target> <lines>
   tmux capture-pane -p -t "$1" -S -"$2"
 }
 
-# fm_backend_tmux_send_key: one named key. Mirrors fm-send.sh's --key path:
-# `tmux display-message -p -t "$T" '#{pane_id}' >/dev/null`, then
-# `tmux send-keys -t "$T" "$2"`.
+# fm_backend_tmux_send_key: one named key. Mirrors fm-send.sh's --key path,
+# whose preflight used to be `tmux display-message -p -t "$T" '#{pane_id}'
+# >/dev/null` - a check that could not fail, because display-message answers
+# for another window instead of refusing (fm_tmux_resolve_pane). The preflight
+# now actually verifies the target before any key is sent. `tmux send-keys`
+# itself was measured to refuse an unresolvable target correctly (rc=1, nothing
+# delivered anywhere - docs/tmux-backend.md), so no keystroke was ever
+# misdelivered by the old form; it simply reported the failure from send-keys
+# rather than from the preflight that claimed to be guarding it.
 fm_backend_tmux_send_key() {  # <target> <key>
-  tmux display-message -p -t "$1" '#{pane_id}' >/dev/null
+  fm_backend_tmux_resolve_pane "$1" >/dev/null || return 1
   tmux send-keys -t "$1" "$2"
 }
 
@@ -95,10 +121,19 @@ fm_backend_tmux_create_task() {  # <session> <window-name> <proj-abs> -> prints 
 }
 
 # fm_backend_tmux_current_path: the live pane's current working directory, or
-# empty on any tmux error. Mirrors fm-spawn.sh's worktree-discovery poll:
-# `tmux display-message -p -t "$T" '#{pane_current_path}'`.
+# empty on any tmux error AND on a target that does not resolve. Mirrors
+# fm-spawn.sh's worktree-discovery poll.
+#
+# The resolve gate is what bin/fm-spawn.sh's own comment at that poll has warned
+# about since it was written: an unresolvable target makes display-message read
+# firstmate's OWN pane path as the crewmate's worktree and tangle a hook into
+# the primary checkout. fm-spawn.sh answered that by passing the stable window
+# id, which is a correct fix for that ONE caller and no protection for any
+# other. The gate lives here instead, so the hazard is closed for every caller.
 fm_backend_tmux_current_path() {  # <target>
-  tmux display-message -p -t "$1" '#{pane_current_path}' 2>/dev/null
+  local pane
+  pane=$(fm_backend_tmux_resolve_pane "$1") || return 1
+  tmux display-message -p -t "$pane" '#{pane_current_path}' 2>/dev/null
 }
 
 # fm_backend_tmux_send_text_line: send one line of TEXT then Enter, with no
@@ -133,8 +168,15 @@ fm_backend_tmux_kill() {  # <target>
 # a persisting parent script running `sleep` as a child reports the PARENT's
 # own name throughout; the value reverts to the shell's own name only once
 # the foreground command actually exits). Empty on any tmux error.
+#
+# Gated on fm_backend_tmux_resolve_pane: an unresolvable target returns 1 with
+# no output rather than the foreground command of some OTHER pane. Without that
+# gate this function - and therefore fm_backend_tmux_agent_alive, its only
+# consumer - answered for the supervising pane and never read the target at all.
 fm_backend_tmux_current_command() {  # <target>
-  tmux display-message -p -t "$1" '#{pane_current_command}' 2>/dev/null
+  local pane
+  pane=$(fm_backend_tmux_resolve_pane "$1") || return 1
+  tmux display-message -p -t "$pane" '#{pane_current_command}' 2>/dev/null
 }
 
 # fm_backend_tmux_agent_alive: CONFIDENT liveness of a live harness-agent
@@ -151,10 +193,21 @@ fm_backend_tmux_current_command() {  # <target>
 #   unknown - anything else, INCLUDING a bare "node"/"python" interpreter
 #             name (pi's own launcher execs into a generic "node" process
 #             with no reliable way to attribute it back to pi from outside
-#             the pane - docs/tmux-backend.md "Known gaps"), or an unreadable
-#             pane. Callers must never treat unknown as a confirmed-dead
-#             signal (bin/fm-bootstrap.sh's secondmate-liveness sweep gates a
-#             respawn on `dead` only).
+#             the pane - docs/tmux-backend.md "Known gaps"), an unreadable
+#             pane, or a TARGET THAT DOES NOT RESOLVE. Callers must never treat
+#             unknown as a confirmed-dead signal (bin/fm-bootstrap.sh's
+#             secondmate-liveness sweep gates a respawn on `dead` only).
+#
+# An unresolvable target reports unknown, not dead, and the distinction is the
+# point of the fix: `dead` here means "this pane exists and confidently holds no
+# agent", which is a reading of the target. Whether the endpoint exists at all
+# is fm_backend_target_exists's question, and a gone endpoint routes to the
+# recovery path (AGENTS.md section 5), so nothing is lost by refusing to answer
+# a liveness question about a pane that is not there. The sweep turns unknown
+# into a REPORTED skip; before the gate, the same target silently produced a
+# confident alive or dead verdict read off the supervising pane, which is how
+# one host would never respawn a dead secondmate while another risked spawning
+# a duplicate over a live one.
 fm_backend_tmux_agent_alive() {  # <target>
   local target=$1 comm
   comm=$(fm_backend_tmux_current_command "$target") || { printf 'unknown'; return 0; }

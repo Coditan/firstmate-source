@@ -49,6 +49,7 @@ make_fakebin() {  # <dir>
 #!/usr/bin/env bash
 set -u
 case "${1:-}" in
+  list-panes) printf '%%1 1\n'; exit 0 ;;
   display-message)
     case "$*" in
       *pane_current_command*) printf 'codex\n' ;;

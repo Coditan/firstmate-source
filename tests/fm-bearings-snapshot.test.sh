@@ -29,6 +29,7 @@ SH
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
 case "${1:-}" in
+  list-panes) case "$*" in *dead-*) exit 1 ;; *) printf '%%1 1\n' ;; esac ;;
   display-message) case "$*" in *dead-*) exit 1 ;; *) printf '%%1\n' ;; esac ;;
   capture-pane)
     case "$*" in

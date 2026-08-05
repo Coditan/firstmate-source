@@ -616,6 +616,7 @@ make_send_fakebin() {  # <dir> -> echoes fakebin dir; logs every tmux call to $F
 set -u
 { printf 'tmux'; for a in "$@"; do printf '\x1f%s' "$a"; done; printf '\n'; } >> "${FM_TMUX_LOG:?}"
 case "${1:-}" in
+  list-panes) printf '%%1 1\n'; exit 0 ;;
   send-keys) exit 0 ;;
   display-message)
     for a in "$@"; do case "$a" in *cursor_y*) printf '0\n'; exit 0 ;; esac; done
@@ -638,10 +639,20 @@ run_send_case() {  # <bin-root> <fakebin> <log> <home> -- <send args...>
     "$bin/bin/fm-send.sh" "$@" >/dev/null 2>&1
 }
 
+# The send preflight is the ONE tmux call that legitimately differs old vs new,
+# so it is stripped from both logs before the conformance diff. It changed shape
+# with incident fm-liveness-probe-target-fallback: the old form asked
+# `display-message` whether the target existed, which cannot fail (it answers for
+# another window and returns 0 either way - docs/tmux-backend.md "Target
+# resolution"), and the new form resolves through `list-panes`, which refuses.
+# Both spellings are stripped so the diff still compares the calls that carry the
+# actual send behavior.
 strip_send_preflight() {  # <log>
-  local preflight
-  preflight=$'tmux\x1fdisplay-message\x1f-p\x1f-t\x1fsess:win\x1f#{pane_id}'
-  awk -v preflight="$preflight" '$0 != preflight { print }' "$1"
+  local old_preflight new_preflight
+  old_preflight=$'tmux\x1fdisplay-message\x1f-p\x1f-t\x1fsess:win\x1f#{pane_id}'
+  new_preflight=$'tmux\x1flist-panes\x1f-t\x1fsess:win\x1f-F\x1f#{pane_id} #{pane_active}'
+  awk -v old="$old_preflight" -v new="$new_preflight" \
+    '$0 != old && $0 != new { print }' "$1"
 }
 
 test_send_conformance_old_vs_new() {
@@ -658,8 +669,13 @@ test_send_conformance_old_vs_new() {
   run_send_case "$ROOT" "$fb" "$log_new" "$home" -- "sess:win" --key Escape
   rc_new=$?
   expect_code "$rc_old" "$rc_new" "fm-send --key: old vs new exit code"
-  assert_contains "$(cat "$log_new")" $'\x1f''display-message'$'\x1f''-p'$'\x1f''-t'$'\x1f''sess:win'$'\x1f''#{pane_id}' \
-    "fm-send --key did not verify the explicit tmux target before sending"
+  # The preflight must RESOLVE the target, not merely ask display-message about
+  # it: display-message answers for another window rather than refusing, so the
+  # old form verified nothing at all.
+  assert_contains "$(cat "$log_new")" $'\x1f''list-panes'$'\x1f''-t'$'\x1f''sess:win' \
+    "fm-send --key did not resolve the explicit tmux target before sending"
+  assert_not_contains "$(cat "$log_new")" $'\x1f''display-message'$'\x1f''-p'$'\x1f''-t'$'\x1f''sess:win'$'\x1f''#{pane_id}' \
+    "fm-send --key still uses the display-message preflight, which cannot refuse an unresolvable target"
   strip_send_preflight "$log_old" > "$filtered_old"
   strip_send_preflight "$log_new" > "$filtered_new"
   diff -u "$filtered_old" "$filtered_new" > "$TMP_ROOT/send-diff-key.txt" 2>&1 \
@@ -754,6 +770,7 @@ make_spawn_fakebin() {  # <dir> <fake-worktree-path> -> echoes fakebin dir
 set -u
 { printf 'tmux'; for a in "\$@"; do printf '\\x1f%s' "\$a"; done; printf '\\n'; } >> "\${FM_TMUX_LOG:?}"
 case "\${1:-}" in
+  list-panes) printf '%%1 1\n'; exit 0 ;;
   display-message)
     for a in "\$@"; do case "\$a" in *pane_current_path*) printf '%s\\n' "$wt"; exit 0 ;; esac; done
     printf 'firstmate\\n'; exit 0 ;;
@@ -816,6 +833,7 @@ make_spawn_symlink_fakebin() {  # <dir> <initial-project-path> <worktree-path> -
 set -u
 { printf 'tmux'; for a in "\$@"; do printf '\\x1f%s' "\$a"; done; printf '\\n'; } >> "\${FM_TMUX_LOG:?}"
 case "\${1:-}" in
+  list-panes) printf '%%1 1\n'; exit 0 ;;
   display-message)
     for a in "\$@"; do case "\$a" in *pane_current_path*)
       printf x >> "$counter"

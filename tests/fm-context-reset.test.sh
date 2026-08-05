@@ -75,6 +75,7 @@ install_fake_tmux() {  # <fakebin>
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${FM_FAKE_TMUX_LOG:-/dev/null}"
 case "${1:-}" in
+  list-panes) printf '%%1 1\n'; exit 0 ;;
   display-message)
     case "$*" in
       *cursor_y*) printf '5\n' ;;

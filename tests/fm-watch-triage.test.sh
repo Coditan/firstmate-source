@@ -1559,6 +1559,7 @@ SH
 #!/usr/bin/env bash
 set -u
 case "${1:-}" in
+  list-panes) printf '%%1 1\n'; exit 0 ;;
   list-windows) [ -n "${FM_FAKE_TMUX_WINDOW:-}" ] && printf '%s\n' "$FM_FAKE_TMUX_WINDOW"; exit 0 ;;
   capture-pane) [ -n "${FM_FAKE_TMUX_CAPTURE:-}" ] && cat "$FM_FAKE_TMUX_CAPTURE"; exit 0 ;;
   display-message)

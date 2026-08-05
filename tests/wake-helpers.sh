@@ -77,6 +77,12 @@ if [ "${1:-}" = "capture-pane" ]; then
   fi
   exit 0
 fi
+# The agent-liveness probe resolves the target to a pane before reading its
+# command, so the endpoint has to resolve here or every verdict reads unknown.
+if [ "${1:-}" = "list-panes" ]; then
+  printf '%s\n' '%1 1'
+  exit 0
+fi
 if [ "${1:-}" = "display-message" ]; then
   case "$*" in
     *pane_current_command*) printf '%s\n' "${FM_FAKE_TMUX_CURRENT_COMMAND:-}"; exit 0 ;;
@@ -123,6 +129,9 @@ make_supercase() {
 #!/usr/bin/env bash
 set -u
 case "${1:-}" in
+  list-panes)
+    [ "${FM_FAKE_TMUX_PANE_ALIVE:-1}" = "1" ] || exit 1
+    printf '%%1 1\n'; exit 0 ;;
   display-message)
     [ "${FM_FAKE_TMUX_PANE_ALIVE:-1}" = "1" ] || exit 1
     _print=0
@@ -204,6 +213,7 @@ make_bordered_case() {
 set -u
 COMPOSER="${FM_FAKE_COMPOSER:?FM_FAKE_COMPOSER unset}"
 case "${1:-}" in
+  list-panes) printf '%%1 1\n'; exit 0 ;;
   display-message)
     print=0
     for a in "$@"; do case "$a" in *cursor_y*) printf '0\n'; exit 0 ;; esac; done

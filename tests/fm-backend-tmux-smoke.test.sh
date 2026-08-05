@@ -30,10 +30,12 @@ command -v tmux >/dev/null 2>&1 || { echo "skip: tmux not found"; exit 0; }
 REAL_TMUX=$(command -v tmux)
 SOCKET="fm-backend-smoke-$$"
 SHIM_DIR=
+AGENT_BIN_DIR=
 trap cleanup_all EXIT
 
 cleanup_all() {
   "$REAL_TMUX" -L "$SOCKET" kill-server >/dev/null 2>&1 || true
+  [ -n "${AGENT_BIN_DIR:-}" ] && rm -rf "$AGENT_BIN_DIR"
   [ -n "${SHIM_DIR:-}" ] && rm -rf "$SHIM_DIR"
 }
 
@@ -155,6 +157,88 @@ if fm_backend_tmux_resolve_bare_selector "no-such-window-xyz" 2>/dev/null; then
   fail "fm_backend_tmux_resolve_bare_selector should fail for a nonexistent window"
 fi
 pass "real tmux: fm_backend_tmux_resolve_bare_selector fails for a window that does not exist"
+
+# --- target resolution: the probes must not answer for another window ---------
+#
+# Incident fm-liveness-probe-target-fallback. `tmux display-message -p -t
+# <target>` never refuses: for an unresolvable target it answers for the
+# session's CURRENT window and still returns 0. Both liveness probes were built
+# on that, so their verdict described the supervising pane instead of the target.
+#
+# The verdict therefore differed by host, which is what made it dangerous: on a
+# host whose fallback window ran claude an invented name read ALIVE (Tugboat's
+# report), and on a host whose fallback window ran bash the SAME name read DEAD
+# (reproduced locally). A fix verified against only the bash shape proves
+# nothing, because that shape already returned "dead" for entirely the wrong
+# reason. Both shapes are therefore driven here, by changing which window is
+# current and asserting the verdict does not move.
+#
+# The agent-running fallback is produced, not simulated away: a real binary
+# copied to the name `claude` runs in the pane, so tmux's own
+# #{pane_current_command} reports `claude` exactly as a real agent pane does.
+# That is the only stand-in - the fallback itself is genuine tmux behavior.
+
+AGENT_BIN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-backend-smoke-agent.XXXXXX")
+cp "$(command -v sleep)" "$AGENT_BIN_DIR/claude" \
+  || fail "could not stage an agent-named binary for the fallback control"
+cleanup_agent_bin() { rm -rf "$AGENT_BIN_DIR"; }
+
+tmux new-window -d -t "$SESSION" -n "agent-fallback" "$AGENT_BIN_DIR/claude 300" \
+  || fail "could not create the agent-running fallback window"
+tmux new-window -d -t "$SESSION" -n "shell-fallback" \
+  || fail "could not create the bare-shell fallback window"
+
+INVENTED="$SESSION:zzz-no-such-window"
+
+assert_probes_refuse_invented_target() {  # <fallback-window> <expected-fallback-command>
+  local fallback_window=$1 expected_cmd=$2 raw verdict
+  tmux select-window -t "$SESSION:$fallback_window" \
+    || fail "could not make $fallback_window the session's current window"
+  sleep 0.3
+
+  # Precondition: this tmux really does exhibit the fallback, and it really is
+  # answering with the fallback window's command. If this ever stops holding the
+  # control below would pass vacuously, so it is asserted, not assumed.
+  raw=$(tmux display-message -p -t "$INVENTED" '#{pane_current_command}' 2>/dev/null || true)
+  [ "$raw" = "$expected_cmd" ] || fail \
+    "precondition: raw display-message on an invented window should have answered '$expected_cmd' (the $fallback_window pane), got '$raw'"
+
+  verdict=$(fm_backend_agent_alive tmux "$INVENTED")
+  [ "$verdict" != alive ] || fail \
+    "fm_backend_agent_alive returned ALIVE for an invented window while the current window ran '$expected_cmd'"
+  [ "$verdict" = unknown ] || fail \
+    "fm_backend_agent_alive must report unknown for an invented window, got '$verdict' (fallback pane ran '$expected_cmd')"
+
+  if fm_backend_target_exists tmux "$INVENTED"; then
+    fail "fm_backend_target_exists reported an invented window as present (fallback pane ran '$expected_cmd')"
+  fi
+
+  [ -z "$(fm_backend_tmux_current_path "$INVENTED" 2>/dev/null)" ] || fail \
+    "fm_backend_tmux_current_path returned the fallback pane's cwd for an invented window"
+}
+
+# The exact case that produced the false ALIVE.
+assert_probes_refuse_invented_target agent-fallback claude
+pass "real tmux: an invented window reads not-alive even when the current window is running an agent"
+
+# The shape this host reproduces naturally, which alone would have proved nothing.
+assert_probes_refuse_invented_target shell-fallback bash
+pass "real tmux: an invented window reads not-alive when the current window is a bare shell, and for the right reason"
+
+# The probes must still read their own target correctly, or "never alive" would
+# be a trivially safe answer rather than a correct one.
+tmux select-window -t "$SESSION:shell-fallback"
+[ "$(fm_backend_agent_alive tmux "$SESSION:agent-fallback")" = alive ] \
+  || fail "fm_backend_agent_alive must still report a real agent pane as alive"
+[ "$(fm_backend_agent_alive tmux "$SESSION:shell-fallback")" = dead ] \
+  || fail "fm_backend_agent_alive must still report a real bare-shell pane as dead"
+fm_backend_target_exists tmux "$SESSION:agent-fallback" \
+  || fail "fm_backend_target_exists must still report a live window as present"
+pass "real tmux: the probes still read a real target's own agent/shell state after the gate"
+
+tmux kill-window -t "$SESSION:agent-fallback" 2>/dev/null || true
+tmux kill-window -t "$SESSION:shell-fallback" 2>/dev/null || true
+cleanup_agent_bin
 
 # --- fm_tmux_ensure_own_window (firstmate must not sit in a crew window) ------
 # The helper reads the CALLER's own window (no -t), so drive it from INSIDE a

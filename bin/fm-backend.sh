@@ -666,11 +666,38 @@ fm_backend_composer_state() {  # <backend> <target> -> empty|pending|unknown
 # Mirrors fm-crew-state.sh's pane_readable check; exists here as one shared
 # primitive so callers that only need a fast alive/dead read (recovery
 # digests, the session-start fleet digest) do not re-derive it inline.
+#
+# Answering-for-the-wrong-target survey (2026-08-05, incident
+# fm-liveness-probe-target-fallback): the hazard is tmux-specific, and the other
+# four adapters were read for the same pattern rather than assumed clean.
+#   tmux   - WAS affected. `display-message` answers for another window instead
+#            of refusing, so this branch reported a non-existent window as
+#            present; it now dispatches through fm_backend_tmux_target_exists,
+#            which resolves first (docs/tmux-backend.md "Target resolution").
+#   herdr  - not affected, and the model to copy: fm_backend_herdr_pane_agent_state
+#            round-trips the echoed pane_id and reports `dead` only on an explicit
+#            pane_not_found error code, so an unknown id can never be answered
+#            for by some other pane.
+#   zellij - not affected: fm_backend_zellij_target_ready parses the target, then
+#            checks the session and the pane by ENUMERATION, which is the same
+#            resolve-then-answer shape the tmux gate now uses.
+#   orca   - not affected: `orca terminal read --terminal <id>` is id-addressed
+#            and its JSON `ok:false` is handled explicitly.
+#   cmux   - not affected: fm_backend_cmux_target_ready parses the target and
+#            looks the workspace/surface up by id.
+# The common property of the four unaffected backends is that they ask an API
+# that errors on an unknown id; tmux was the outlier because its probe command
+# substitutes a different target rather than failing.
 fm_backend_target_exists() {  # <backend> <target> [expected-label]
   local backend=$1 target=$2 expected_label=${3:-} session pane
   case "$backend" in
     tmux)
-      tmux display-message -p -t "$target" '#{pane_id}' >/dev/null 2>&1
+      # Dispatched, not inlined: the raw `tmux display-message -p -t "$target"
+      # '#{pane_id}'` this used to run reported a NON-EXISTENT window as present,
+      # because display-message answers for another window instead of refusing
+      # and so returns 0 either way (fm_tmux_resolve_pane, bin/fm-tmux-lib.sh).
+      fm_backend_source tmux || return 1
+      fm_backend_tmux_target_exists "$target"
       ;;
     herdr)
       fm_backend_source herdr || return 1

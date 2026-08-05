@@ -44,6 +44,7 @@ make_stubs() {  # <dir> -> fakebin
 #!/usr/bin/env bash
 set -u
 case "${1:-}" in
+  list-panes) printf '%%1 1\n'; exit 0 ;;
   send-keys)
     shift
     literal=0
