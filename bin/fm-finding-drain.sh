@@ -85,8 +85,7 @@ NOW=""
 # asked for, which is the whole defect class in miniature.
 resolve_now() {
   NOW=$(fm_finding_now)
-  jq -e -n --arg now "$NOW" \
-    '($now | strptime("%Y-%m-%dT%H:%M:%SZ") | mktime) | type == "number"' >/dev/null 2>&1 \
+  fm_finding_instant_p "$NOW" \
     || die "$FM_FINDING_EXIT_USAGE" \
       "the clock '$NOW' is not an ISO-8601 UTC instant, so no deadline can be computed"
 }

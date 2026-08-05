@@ -284,6 +284,74 @@ test_a_surface_that_cannot_be_appended_to_says_so() {
     "the findings already on it were measured, so they still carry a count"
 }
 
+test_an_observed_that_is_not_an_instant_never_reaches_the_surface() {
+  local dir out status value
+  dir=$(surface refuse-observed)
+
+  # A date with no time, a sentence, an instant with no zone, and a value of
+  # exactly the right shape naming no real moment. The last one is the reason
+  # the shape check alone is not the whole rule.
+  for value in "2026-08-04" "some time last week" "2026-08-04T09:14:00" "2026-13-45T99:99:99Z"; do
+    out=$(emit_into "$dir" --observed "$value" 2>&1) && status=0 || status=$?
+    expect_code 2 "$status" "--observed '$value' is not an instant and must be refused"
+    assert_contains "$out" "not an ISO-8601 UTC instant" \
+      "the refusal must name the concrete defect in '$value'"
+  done
+
+  # The property is the surface's state. A record carrying an unreadable
+  # observation is one the drain rule can never place, and nothing rewrites a
+  # finding file, so a single accepted emit would wedge that claim forever.
+  out=$(FM_FINDINGS_DIR="$dir" "$FINDING" check 2>/dev/null) && status=0 || status=$?
+  expect_code 0 "$status" "no refused emit may leave the surface unhealthy"
+  assert_contains "$out" "findings=0" "no refused emit may leave a record"
+}
+
+test_an_observed_carrying_a_path_never_writes_outside_the_surface() {
+  local dir outside out status count
+  dir=$(surface traversal)
+  # A sibling of the surface, and named without a hyphen, because the id drops
+  # hyphens: this is the value that really would land a record here.
+  outside=$TMP_ROOT/outside
+  mkdir -p "$outside"
+
+  # `observed` becomes the id and the id is the filename stem, so an unchecked
+  # value carrying a path separator is a write outside the surface reported as
+  # an ordinary append.
+  out=$(emit_into "$dir" --observed "../outside/pwned" 2>&1) && status=0 || status=$?
+  expect_code 2 "$status" "an --observed carrying a path must be refused"
+  assert_not_contains "$out" "appended=1" "a refused emit must never report an append"
+
+  count=$(find "$outside" -maxdepth 1 -type f | wc -l | tr -d ' ')
+  [ "$count" = "0" ] || fail "emit wrote $count file(s) outside the surface"
+  out=$(FM_FINDINGS_DIR="$dir" "$FINDING" check 2>/dev/null)
+  assert_contains "$out" "findings=0" "the surface itself must also be untouched"
+}
+
+test_a_surface_with_no_reader_is_its_own_state_and_not_an_unreadable_one() {
+  local dir shim out status
+  dir=$(surface no-reader)
+
+  # A PATH carrying only what the script needs to reach the question, and no
+  # jq. The surface is perfectly readable; the reader is what is missing.
+  shim=$TMP_ROOT/no-reader-path
+  mkdir -p "$shim"
+  ln -s "$(command -v bash)" "$shim/bash"
+  ln -s "$(command -v dirname)" "$shim/dirname"
+
+  out=$(PATH="$shim" FM_FINDINGS_DIR="$dir" "$FINDING" check 2>/dev/null) && status=0 || status=$?
+  expect_code 3 "$status" "a surface nothing can read must not exit 0"
+  assert_contains "$out" "state=reader-missing" \
+    "a missing reader must be its own state, not the word for a surface that cannot be reached"
+  assert_not_contains "$out" "state=unreadable" \
+    "a readable directory must never be reported as one this process cannot read"
+  assert_contains "$out" "findings=" "the key must still be present so nothing looks omitted"
+  assert_not_contains "$out" "findings=0" \
+    "nothing was counted, so no count may be printed"
+
+  out=$(PATH="$shim" FM_FINDINGS_DIR="$dir" "$FINDING" check 2>&1 >/dev/null)
+  assert_contains "$out" "jq is not installed" "the reason must name the missing tool"
+}
+
 test_the_pointer_names_the_machine_surface_and_an_empty_pointer_refuses() {
   local home shared out status
   home=$TMP_ROOT/pointer-home
@@ -321,6 +389,9 @@ test_a_record_the_reader_crashes_on_is_a_violation_and_not_a_pass
 test_a_record_renamed_out_from_under_its_id_is_reported
 test_emit_never_creates_the_surface_it_cannot_find
 test_a_surface_that_cannot_be_appended_to_says_so
+test_an_observed_that_is_not_an_instant_never_reaches_the_surface
+test_an_observed_carrying_a_path_never_writes_outside_the_surface
+test_a_surface_with_no_reader_is_its_own_state_and_not_an_unreadable_one
 test_the_pointer_names_the_machine_surface_and_an_empty_pointer_refuses
 
 pass "findings surface: refutation is a property of the format, and an unreachable surface never reads as an empty one"

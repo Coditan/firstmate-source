@@ -40,8 +40,12 @@
 #
 # Exit codes:
 #   0  done
-#   2  usage error, including a finding that is missing a required field, and a
-#      judgement that does not state what would refute it
+#   2  usage error, including a finding that is missing a required field, a
+#      judgement that does not state what would refute it, and an --observed
+#      that is not an ISO-8601 UTC instant. `observed` becomes the record's id
+#      and its place in the drain order, so a value of any other shape is
+#      refused before anything is written rather than landing as a record no
+#      rule can place.
 #   3  the surface could not be reached: absent, not a directory, or not
 #      readable or writable by this process. Distinct from an empty surface, and
 #      deliberately so - `check` on a reachable empty surface prints findings=0,
@@ -132,6 +136,16 @@ cmd_emit() {
   fm_finding_blank_p "$officer" && die "$FM_FINDING_EXIT_USAGE" "--officer is empty"
 
   [ -n "$observed" ] || observed=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+  # Checked before anything is derived from it, and before the surface is even
+  # resolved, so a refusal writes nothing anywhere. `observed` is the one
+  # emitter-supplied field the write path itself consumes: it becomes the id and
+  # the id is the filename stem, so a value of another shape does not merely
+  # record a time nobody can read - it names a file, possibly outside the
+  # surface, and reports the append as done.
+  fm_finding_instant_p "$observed" \
+    || die "$FM_FINDING_EXIT_USAGE" \
+      "--observed is '$observed', which is not an ISO-8601 UTC instant such as 2026-08-04T09:14:00Z; the record's id and its place in the drain order are both derived from it"
 
   fm_finding_resolve_surface
   fm_finding_require_surface append
@@ -263,9 +277,13 @@ cmd_check() {
     fm_finding_surface_reason "$SURFACE" "$state" >&2
     exit "$FM_FINDING_EXIT_UNREACHABLE"
   fi
+  # Its own state word, because the directory is perfectly readable and only the
+  # reader is absent. `unreadable` here would tell a caller parsing state= that
+  # the surface cannot be reached, which is a different defect with a different
+  # remedy - two readings that must not look alike.
   if ! command -v jq >/dev/null 2>&1; then
-    printf 'surface=%s\nstate=unreadable\nfindings=\nmalformed=\n' "$SURFACE"
-    printf 'fm-finding.sh: jq is not installed, so nothing on %s could be read\n' "$SURFACE" >&2
+    printf 'surface=%s\nstate=reader-missing\nfindings=\nmalformed=\n' "$SURFACE"
+    fm_finding_surface_reason "$SURFACE" reader-missing >&2
     exit "$FM_FINDING_EXIT_UNREACHABLE"
   fi
   if [ ! -w "$SURFACE" ]; then

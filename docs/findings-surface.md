@@ -22,7 +22,7 @@ One JSON file per finding, named `<id>.json`, written once and never rewritten.
 | `claim` | The pattern or the accusation, in one plain statement. |
 | `where` | Where it was found, concretely enough that someone else can go and look. |
 | `measurement` | The reading behind the claim: the count, the log range, the diff, the timestamps. |
-| `observed` | When the reading was taken, ISO-8601 UTC. |
+| `observed` | When the reading was taken, as an ISO-8601 UTC instant: `2026-08-04T09:14:00Z`. |
 | `refuted_by` | The reading that would overturn this finding. |
 | `officer` | Which officer claimed it. The accuracy score is his, so it has to be attributable. |
 | `severity` | `low`, `medium`, or `high`: the consequence, never a priority. |
@@ -30,6 +30,10 @@ One JSON file per finding, named `<id>.json`, written once and never rewritten.
 `class` distinguishes what settles a dispute, not what the format demands.
 An `evidence` finding has a line someone else can look at, a `judgement` is a statement about intent, and a `pattern` is a shape nobody inside the system can see.
 All three carry every field above, `refuted_by` included.
+
+`observed` is the only emitter-supplied field the write path itself consumes, so its form is checked rather than trusted.
+`fm-finding.sh emit` refuses an `--observed` that is not an ISO-8601 UTC instant, with exit 2 and before anything is written anywhere.
+Two things depend on that form: the id is derived from `observed` and is the record's filename stem, so a value carrying a path separator would name a file outside the surface while the append reported success, and the drain rule derives the finding's deadline from it, so a value naming no real moment would land a record the ordering can never place.
 
 The officer never writes a fix, a priority, or an address.
 There is no field for any of them, so a finding cannot become an instruction by someone filling one in.
@@ -60,6 +64,9 @@ So the surface separates the two readings on purpose:
   It is never skipped, because a reader that drops what it cannot parse turns a corrupted surface into a calm one.
 - A record whose reader crashes on it counts as malformed, not as valid.
   A validator that reads its own failure as "no violations found" calls every file a finding.
+- A surface `check` can reach but has no `jq` to read prints `state=reader-missing`, not `state=unreadable`.
+  The directory is readable and only the reader is absent, which is a different defect with a different remedy, so it gets its own word rather than one that would send a caller looking at the surface.
+  It still prints `findings=` and `malformed=` with no value and exits 3, because nothing was counted.
 
 ## The drain rule: earliest deadline first
 
@@ -174,3 +181,11 @@ Exit 127 is a weak fail-before for a brand-new file, so the drain suite's load-b
 | a written-back outcome made overwritable | a retry must not write a second outcome |
 
 `tests/fm-finding-surface.test.sh` and `tests/fm-finding-drain.test.sh` are the colocated owners of that evidence and re-prove the behaviour on every run.
+
+2026-08-05, the surface suite's assertions about `observed` and about the missing reader were mutation-tested the same way, and each mutation was caught:
+
+| Mutation | The assertion that caught it |
+|---|---|
+| the `observed` instant check removed from `emit` | an `--observed` that is not an instant must be refused |
+| the same check removed, with a traversal value | an `--observed` carrying a path must be refused, and nothing may be written outside the surface |
+| the missing-reader state word set back to `unreadable` | a missing reader must be its own state, not the word for a surface that cannot be reached |

@@ -203,6 +203,7 @@ fm_finding_surface_reason() {
     not-a-directory) printf 'the findings surface %s exists but is not a directory\n' "$dir" ;;
     unreadable) printf 'the findings surface %s cannot be read by this process\n' "$dir" ;;
     unwritable) printf 'the findings surface %s cannot be appended to by this process\n' "$dir" ;;
+    reader-missing) printf 'jq is not installed, so nothing on %s could be read\n' "$dir" ;;
     *) printf 'the findings surface %s is in an unrecognised state: %s\n' "$dir" "$state" ;;
   esac
 }
@@ -252,6 +253,29 @@ fm_finding_blank_p() {
   local text=$1
   text="${text#"${text%%[![:space:]]*}"}"
   [ -z "$text" ]
+}
+
+# fm_finding_instant_p <value>: true when the value is an ISO-8601 UTC instant,
+# which is the one time form anything on this surface may carry.
+#
+# Both halves are load-bearing. The shape check refuses everything that is not
+# literally that form, including a value carrying a path separator, which
+# matters because `observed` becomes the id and the id is a filename stem. The
+# parse behind it refuses a value of the right shape that names no real moment,
+# because a record the ordering cannot place is a claim nobody is ever handed.
+#
+# One owner for the form: emit's `observed` and the drain's clock are the same
+# question asked twice, and two spellings of it would eventually disagree about
+# which moments this surface accepts.
+fm_finding_instant_p() {
+  local value=$1
+  case "$value" in
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) : ;;
+    *) return 1 ;;
+  esac
+  command -v jq >/dev/null 2>&1 || return 1
+  jq -e -n --arg value "$value" \
+    '($value | strptime("%Y-%m-%dT%H:%M:%SZ") | mktime) | type == "number"' >/dev/null 2>&1
 }
 
 # fm_finding_path <dir> <id>: the file one finding lives in.
