@@ -1931,53 +1931,65 @@ test_heartbeat_backstop_surfaces_unsurfaced_status() {
   pass "heartbeat backstop fail-safe surfaces a captain-relevant status the per-wake path missed"
 }
 
-setup_certsync_health_case() {  # <dir>
-  local dir=$1 project
+# The certsync health check reads certsync's status directly off the host
+# filesystem (no docker, no `exec`, no docker-group membership) by running
+# certsync's own build_status via python3 against the exposed heartbeat/state
+# files. These fakes stand in for that source tree and the heartbeat file so the
+# firstmate-side wiring is exercised hermetically:
+#   - setup_certsync_health_case installs a fake `hlr_certsync` package under the
+#     project's src/ whose build_status returns the JSON dict named by
+#     FM_FAKE_CERTSYNC_PAYLOAD (or raises on the RAISE sentinel), and seeds a
+#     heartbeat file whose mtime the caller controls.
+#   - certsync_health_env prints the env the watcher needs to find them.
+setup_certsync_health_case() {  # <dir> [heartbeat-age-seconds]
+  local dir=$1 age=${2:-0} project src hb back
   project="$dir/home/projects/hlr-certsync"
-  mkdir -p "$dir/root"
-  mkdir -p "$project"
+  src="$project/src"
+  mkdir -p "$dir/root" "$project" "$src/hlr_certsync"
   : > "$project/docker-compose.yml"
-  : > "$project/docker-compose.graph-pem.yml"
+  : > "$src/hlr_certsync/__init__.py"
+  cat > "$src/hlr_certsync/state.py" <<'PY'
+class StateStore:
+    def __init__(self, path):
+        self.path = path
+PY
+  cat > "$src/hlr_certsync/status.py" <<'PY'
+import json, os
+def build_status(store, heartbeat_path, *, daemon_state="unknown"):
+    with open(os.environ["FM_FAKE_CERTSYNC_PAYLOAD"]) as fh:
+        text = fh.read().strip()
+    if text == "RAISE":
+        raise RuntimeError("state DB unavailable")
+    return json.loads(text)
+PY
+  # Seed the heartbeat file the freshness gate stats; default mtime is now.
+  hb="$dir/certsync-heartbeat.json"
+  printf '{"last_successful_sync":"2026-08-05T12:00:00Z","last_run_state":"success"}\n' > "$hb"
+  if [ "$age" -gt 0 ]; then
+    back=$(( $(date +%s) - age ))
+    if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$hb"
+    else touch -m -d "@$back" "$hb"; fi
+  fi
 }
 
-install_fake_certsync_docker() {  # <fakebin> <payload-file>
-  local fakebin=$1 payload=$2
-  cat > "$fakebin/docker" <<'SH'
-#!/usr/bin/env bash
-set -u
-[ "$#" -ge 1 ] && [ "$1" = compose ] || exit 1
-cat "$FM_FAKE_CERTSYNC_PAYLOAD"
-SH
-  chmod +x "$fakebin/docker"
-  printf '%s\n' "$payload" > "$fakebin/certsync-payload.json"
-}
-
-# A fake `docker` that fails the way the real one does on this fleet's own
-# accounts: no root, no sudo, no docker-group membership, so `docker compose
-# exec` denies the connection before certsync ever gets a chance to answer.
-# Reproduces the 2026-08-04 defect's exact shape (nonzero exit, empty stdout,
-# stderr message) so a regression here is pinned at the same layer it happened.
-install_fake_certsync_docker_permission_denied() {  # <fakebin>
-  local fakebin=$1
-  cat > "$fakebin/docker" <<'SH'
-#!/usr/bin/env bash
-set -u
-[ "$#" -ge 1 ] && [ "$1" = compose ] || exit 1
-echo "permission denied while trying to connect to the docker API at unix:///var/run/docker.sock" >&2
-exit 1
-SH
-  chmod +x "$fakebin/docker"
+# Env the watcher needs to run the file-read check against the fakes above.
+certsync_health_env() {  # <dir>
+  local dir=$1
+  printf '%s\n' \
+    "FM_ROOT_OVERRIDE=$dir/root" \
+    "FM_HOME=$dir/home" \
+    "FM_CERTSYNC_STATE_DB=$dir/certsync-state.sqlite3" \
+    "FM_CERTSYNC_HEARTBEAT_FILE=$dir/certsync-heartbeat.json" \
+    "FM_FAKE_CERTSYNC_PAYLOAD=$dir/certsync-payload.json"
 }
 
 test_heartbeat_certsync_healthy_absorbed() {
-  local dir state fakebin out payload pid
-  dir=$(make_case heartbeat-certsync-healthy); state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"
+  local dir state out pid
+  dir=$(make_case heartbeat-certsync-healthy); state="$dir/state"; out="$dir/watch.out"
   setup_certsync_health_case "$dir"
-  payload="$fakebin/certsync-payload.json"
-  install_fake_certsync_docker "$fakebin" "$payload"
-  printf '{"healthy":true,"reason":"ok"}\n' > "$payload"
-  PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$dir/root" FM_HOME="$dir/home" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
-    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 FM_FAKE_CERTSYNC_PAYLOAD="$payload" "$WATCH" > "$out" &
+  printf '{"healthy":true,"reason":"ok"}\n' > "$dir/certsync-payload.json"
+  env $(certsync_health_env "$dir") FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 "$WATCH" > "$out" &
   pid=$!
   if ! wait_live "$pid" 30; then
     reap "$pid"; fail "watcher exited for healthy certsync (should absorb): $(cat "$out")"
@@ -1985,19 +1997,41 @@ test_heartbeat_certsync_healthy_absorbed() {
   [ ! -s "$out" ] || fail "healthy certsync printed a wake reason: $(cat "$out")"
   [ ! -s "$state/.wake-queue" ] || fail "healthy certsync enqueued a durable wake record"
   reap "$pid"
-  pass "heartbeat absorbs healthy certsync status"
+  pass "heartbeat absorbs healthy certsync status read directly off the host files"
+}
+
+# The liveness signal the docker-exec check got for free (exec failed when the
+# container was down) is reinstated here as a heartbeat-freshness bound: a
+# healthy:true payload whose heartbeat file has gone stale (container stopped, or
+# syncs failing so no fresh success) must read as unhealthy, never quiet, so
+# "cannot confirm well" never collapses into "is well" off frozen files.
+test_heartbeat_certsync_healthy_but_stale_surfaces_check_wake() {
+  local dir state out drain_out pid
+  dir=$(make_case heartbeat-certsync-stale); state="$dir/state"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"
+  setup_certsync_health_case "$dir" 10800  # heartbeat 3h old, past the 7200s bound
+  printf '{"healthy":true,"reason":"ok"}\n' > "$dir/certsync-payload.json"
+  env $(certsync_health_env "$dir") FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "heartbeat did not surface a stale-heartbeat certsync as unhealthy: $(cat "$out")"
+  grep -F "check: certsync health: unhealthy: heartbeat stale (" "$out" >/dev/null \
+    && grep -F "> 7200s); daemon may be stopped or syncs failing" "$out" >/dev/null \
+    || fail "stale-heartbeat certsync wake reason was wrong: $(cat "$out")"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after stale certsync wake failed"
+  grep -F "$(printf '\tcheck\tcertsync-health\tcheck: certsync health: unhealthy: heartbeat stale (')" "$drain_out" >/dev/null \
+    || fail "stale-heartbeat certsync check wake was not queued: $(cat "$drain_out")"
+  pass "a healthy payload with a stale heartbeat surfaces as unhealthy instead of reading as healthy off frozen files"
 }
 
 test_heartbeat_certsync_unhealthy_surfaces_check_wake() {
-  local dir state fakebin out drain_out payload pid
-  dir=$(make_case heartbeat-certsync-unhealthy); state="$dir/state"; fakebin="$dir/fakebin"
+  local dir state out drain_out pid
+  dir=$(make_case heartbeat-certsync-unhealthy); state="$dir/state"
   out="$dir/watch.out"; drain_out="$dir/drain.out"
   setup_certsync_health_case "$dir"
-  payload="$fakebin/certsync-payload.json"
-  install_fake_certsync_docker "$fakebin" "$payload"
-  printf '{"healthy":false,"reason":"state DB missing"}\n' > "$payload"
-  PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$dir/root" FM_HOME="$dir/home" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
-    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 FM_FAKE_CERTSYNC_PAYLOAD="$payload" "$WATCH" > "$out" &
+  printf '{"healthy":false,"reason":"state DB missing"}\n' > "$dir/certsync-payload.json"
+  env $(certsync_health_env "$dir") FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 "$WATCH" > "$out" &
   pid=$!
   wait_for_exit "$pid" 40 || fail "heartbeat did not surface unhealthy certsync"
   grep -Fx "check: certsync health: unhealthy: state DB missing" "$out" >/dev/null \
@@ -2009,16 +2043,14 @@ test_heartbeat_certsync_unhealthy_surfaces_check_wake() {
 }
 
 test_afk_heartbeat_certsync_unhealthy_surfaces_check_wake() {
-  local dir state fakebin out drain_out payload pid
-  dir=$(make_case afk-heartbeat-certsync-unhealthy); state="$dir/state"; fakebin="$dir/fakebin"
+  local dir state out drain_out pid
+  dir=$(make_case afk-heartbeat-certsync-unhealthy); state="$dir/state"
   out="$dir/watch.out"; drain_out="$dir/drain.out"
   setup_certsync_health_case "$dir"
-  payload="$fakebin/certsync-payload.json"
-  install_fake_certsync_docker "$fakebin" "$payload"
-  printf '{"healthy":false,"reason":"replication stalled"}\n' > "$payload"
+  printf '{"healthy":false,"reason":"replication stalled"}\n' > "$dir/certsync-payload.json"
   : > "$state/.afk"
-  PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$dir/root" FM_HOME="$dir/home" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
-    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 FM_FAKE_CERTSYNC_PAYLOAD="$payload" "$WATCH" > "$out" &
+  env $(certsync_health_env "$dir") FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 "$WATCH" > "$out" &
   pid=$!
   wait_for_exit "$pid" 40 || fail "afk heartbeat did not surface unhealthy certsync"
   grep -Fx "check: certsync health: unhealthy: replication stalled" "$out" >/dev/null \
@@ -2031,21 +2063,19 @@ test_afk_heartbeat_certsync_unhealthy_surfaces_check_wake() {
   pass "afk heartbeat surfaces confirmed unhealthy certsync through the check wake path"
 }
 
-# Regression for the 2026-08-04 defect: an unreadable certsync status (invalid
-# JSON, here) used to collapse into the SAME silent no-wake outcome as a
-# confirmed-healthy read (test_heartbeat_certsync_healthy_absorbed above), so a
-# check that could not run reported exactly like a check that ran and passed.
-# It must now surface as its own distinct "cannot run" check wake instead.
+# Regression for the 2026-08-04 defect: an unreadable certsync status (here a
+# payload with no boolean healthy field) used to collapse into the SAME silent
+# no-wake outcome as a confirmed-healthy read, so a check that could not run
+# reported exactly like a check that ran and passed. It must surface as its own
+# distinct "cannot run" check wake instead.
 test_heartbeat_certsync_invalid_json_surfaces_check_wake() {
-  local dir state fakebin out drain_out payload pid
-  dir=$(make_case heartbeat-certsync-invalid-json); state="$dir/state"; fakebin="$dir/fakebin"
+  local dir state out drain_out pid
+  dir=$(make_case heartbeat-certsync-invalid-json); state="$dir/state"
   out="$dir/watch.out"; drain_out="$dir/drain.out"
   setup_certsync_health_case "$dir"
-  payload="$fakebin/certsync-payload.json"
-  install_fake_certsync_docker "$fakebin" "$payload"
-  printf 'not-json\n' > "$payload"
-  PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$dir/root" FM_HOME="$dir/home" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
-    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 FM_FAKE_CERTSYNC_PAYLOAD="$payload" "$WATCH" > "$out" &
+  printf '{"reason":"cannot tell"}\n' > "$dir/certsync-payload.json"
+  env $(certsync_health_env "$dir") FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 "$WATCH" > "$out" &
   pid=$!
   wait_for_exit "$pid" 40 || fail "heartbeat did not surface an unreadable certsync status as cannot-run: $(cat "$out")"
   grep -Fx "check: certsync health: cannot run: invalid or missing status JSON" "$out" >/dev/null \
@@ -2056,27 +2086,47 @@ test_heartbeat_certsync_invalid_json_surfaces_check_wake() {
   pass "heartbeat surfaces an unreadable certsync status as its own cannot-run check wake, distinct from healthy"
 }
 
-# The literal reported defect: this fleet's own accounts have no root, no sudo,
-# and no docker-group membership by design, so `docker compose exec` denies the
-# connection before certsync is ever asked. run_bounded used to swallow that
-# failure's exit code (`|| true`), so "cannot run" and "healthy" were the exact
-# same observable outcome for 6.5 hours before an audit caught it.
-test_heartbeat_certsync_permission_denied_surfaces_check_wake() {
-  local dir state fakebin out drain_out pid
-  dir=$(make_case heartbeat-certsync-permission-denied); state="$dir/state"; fakebin="$dir/fakebin"
+# The status read itself failing (build_status raising - e.g. an unreadable or
+# corrupt state DB) is the file-read analogue of the old docker-exec failure: it
+# must exit nonzero and surface a "cannot run" wake, never collapse into healthy.
+test_heartbeat_certsync_status_read_failure_surfaces_check_wake() {
+  local dir state out drain_out pid
+  dir=$(make_case heartbeat-certsync-read-failure); state="$dir/state"
   out="$dir/watch.out"; drain_out="$dir/drain.out"
   setup_certsync_health_case "$dir"
-  install_fake_certsync_docker_permission_denied "$fakebin"
-  PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$dir/root" FM_HOME="$dir/home" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+  printf 'RAISE\n' > "$dir/certsync-payload.json"
+  env $(certsync_health_env "$dir") FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 "$WATCH" > "$out" &
   pid=$!
-  wait_for_exit "$pid" 40 || fail "heartbeat did not surface a docker-permission-denied certsync status: $(cat "$out")"
+  wait_for_exit "$pid" 40 || fail "heartbeat did not surface a failing certsync status read: $(cat "$out")"
   grep -Fx "check: certsync health: cannot run: status command failed (exit 1)" "$out" >/dev/null \
-    || fail "permission-denied certsync wake reason was wrong: $(cat "$out")"
-  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after permission-denied certsync wake failed"
+    || fail "status-read-failure certsync wake reason was wrong: $(cat "$out")"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after status-read-failure certsync wake failed"
   grep "$(printf '\tcheck\tcertsync-health\tcheck: certsync health: cannot run: status command failed (exit 1)')" "$drain_out" >/dev/null \
-    || fail "permission-denied certsync check wake was not queued: $(cat "$drain_out")"
-  pass "heartbeat surfaces a docker-permission-denied certsync status instead of silently reporting healthy"
+    || fail "status-read-failure certsync check wake was not queued: $(cat "$drain_out")"
+  pass "heartbeat surfaces a failing certsync status read as its own cannot-run check wake, not as healthy"
+}
+
+# certsync deployed (compose present) but its source tree absent means the check
+# genuinely cannot read status: it must say so, never fall silent as healthy.
+test_heartbeat_certsync_source_unavailable_surfaces_check_wake() {
+  local dir state out drain_out pid src
+  dir=$(make_case heartbeat-certsync-no-src); state="$dir/state"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"
+  setup_certsync_health_case "$dir"
+  src="$dir/home/projects/hlr-certsync/src"
+  rm -rf "$src"   # deployed, but no importable certsync source
+  printf '{"healthy":true,"reason":"ok"}\n' > "$dir/certsync-payload.json"
+  env $(certsync_health_env "$dir") FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "heartbeat did not surface missing certsync source as cannot-run: $(cat "$out")"
+  grep -F "check: certsync health: cannot run: certsync source unavailable at " "$out" >/dev/null \
+    || fail "source-unavailable certsync wake reason was wrong: $(cat "$out")"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after source-unavailable certsync wake failed"
+  grep -F "$(printf '\tcheck\tcertsync-health\tcheck: certsync health: cannot run: certsync source unavailable at ')" "$drain_out" >/dev/null \
+    || fail "source-unavailable certsync check wake was not queued: $(cat "$drain_out")"
+  pass "heartbeat surfaces a certsync deployment with no readable source as its own cannot-run check wake"
 }
 
 # --- beacon stays fresh while absorbing -------------------------------------
@@ -2217,10 +2267,12 @@ test_triage_log_size_cap_accepts_spaced_wc_counts
 test_heartbeat_no_change_absorbed
 test_heartbeat_backstop_surfaces_unsurfaced_status
 test_heartbeat_certsync_healthy_absorbed
+test_heartbeat_certsync_healthy_but_stale_surfaces_check_wake
 test_heartbeat_certsync_unhealthy_surfaces_check_wake
 test_afk_heartbeat_certsync_unhealthy_surfaces_check_wake
 test_heartbeat_certsync_invalid_json_surfaces_check_wake
-test_heartbeat_certsync_permission_denied_surfaces_check_wake
+test_heartbeat_certsync_status_read_failure_surfaces_check_wake
+test_heartbeat_certsync_source_unavailable_surfaces_check_wake
 test_beacon_stays_fresh_while_absorbing
 test_afk_present_reverts_watcher_to_one_shot
 test_afk_paused_changed_pane_hands_off_plain_stale
