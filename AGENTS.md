@@ -92,10 +92,12 @@ config/x-mode.env    generated X-mode watcher cadence; LOCAL, gitignored; source
 config/telegram.env  optional direct Telegram receive credentials; LOCAL, gitignored; when present, the locked session-start digest emits the `bin/fm-tg-recv-arm.sh` tracked-background arm step
 config/fm-tg-recv.sh optional local direct Telegram receiver implementation; LOCAL, gitignored; `bin/fm-tg-recv-arm.sh` owns only the tracked arm/attach wrapper
 config/bridge-vessel  Bridge inbox vessel name(s), space-separated; LOCAL, gitignored; used only when FM_BRIDGE_VESSEL is unset, and absent (with FM_BRIDGE_VESSEL also unset) disables Bridge inbox scans (docs/configuration.md "Bridge inbox check (FM_BRIDGE_*)")
+config/findings-dir  path of the machine's political-officer findings surface; LOCAL, gitignored; absent means FM_HOME/data/findings, and FM_FINDINGS_DIR overrides both. NOT inherited by secondmate homes, because it names a directory on one machine (docs/configuration.md "Findings surface")
 data/                personal fleet records; LOCAL, gitignored as a whole
   backlog.md         task queue, dependencies, history
   captain.md         this home's domain-local captain preferences and working style; LOCAL, gitignored, canonical even if harness memory mirrors it, and updated with inspect-then-update
   captain-shared.md  main-authoritative shared captain preferences propagated read-only to secondmate homes; LOCAL, gitignored, owned by secondmate-provisioning
+  findings/          the political officer's findings surface when no config/findings-dir points elsewhere: one append-only JSON record per finding, written by bin/fm-finding.sh and never edited afterwards, plus one <id>.outcome.json per drained finding, written by whoever drained it through bin/fm-finding-drain.sh and never by the officer (docs/findings-surface.md)
   learnings.md       fleet-local operational facts and gotchas; LOCAL, gitignored; dated, evidence-backed, curated, and updated with inspect-then-update - rewrite and prune rather than append forever, the same contract as captain.md; created lazily, absent until this home has a learning to store
   projects.md        thin fleet navigation registry; firstmate-private, parsed by fm-project-mode.sh (section 6)
   secondmates.md      secondmate routing table; firstmate-private, maintained by fm-home-seed.sh (section 6)
