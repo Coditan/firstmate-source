@@ -1985,10 +1985,12 @@ certsync_health_env() {  # <dir>
 
 test_heartbeat_certsync_healthy_absorbed() {
   local dir state out pid
+  local -a health_env
   dir=$(make_case heartbeat-certsync-healthy); state="$dir/state"; out="$dir/watch.out"
   setup_certsync_health_case "$dir"
   printf '{"healthy":true,"reason":"ok"}\n' > "$dir/certsync-payload.json"
-  env $(certsync_health_env "$dir") FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+  mapfile -t health_env < <(certsync_health_env "$dir")
+  env "${health_env[@]}" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 "$WATCH" > "$out" &
   pid=$!
   if ! wait_live "$pid" 30; then
@@ -2007,17 +2009,20 @@ test_heartbeat_certsync_healthy_absorbed() {
 # "cannot confirm well" never collapses into "is well" off frozen files.
 test_heartbeat_certsync_healthy_but_stale_surfaces_check_wake() {
   local dir state out drain_out pid
+  local -a health_env
   dir=$(make_case heartbeat-certsync-stale); state="$dir/state"
   out="$dir/watch.out"; drain_out="$dir/drain.out"
   setup_certsync_health_case "$dir" 10800  # heartbeat 3h old, past the 7200s bound
   printf '{"healthy":true,"reason":"ok"}\n' > "$dir/certsync-payload.json"
-  env $(certsync_health_env "$dir") FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+  mapfile -t health_env < <(certsync_health_env "$dir")
+  env "${health_env[@]}" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 "$WATCH" > "$out" &
   pid=$!
   wait_for_exit "$pid" 40 || fail "heartbeat did not surface a stale-heartbeat certsync as unhealthy: $(cat "$out")"
-  grep -F "check: certsync health: unhealthy: heartbeat stale (" "$out" >/dev/null \
-    && grep -F "> 7200s); daemon may be stopped or syncs failing" "$out" >/dev/null \
-    || fail "stale-heartbeat certsync wake reason was wrong: $(cat "$out")"
+  if ! grep -F "check: certsync health: unhealthy: heartbeat stale (" "$out" >/dev/null \
+    || ! grep -F "> 7200s); daemon may be stopped or syncs failing" "$out" >/dev/null; then
+    fail "stale-heartbeat certsync wake reason was wrong: $(cat "$out")"
+  fi
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after stale certsync wake failed"
   grep -F "$(printf '\tcheck\tcertsync-health\tcheck: certsync health: unhealthy: heartbeat stale (')" "$drain_out" >/dev/null \
     || fail "stale-heartbeat certsync check wake was not queued: $(cat "$drain_out")"
@@ -2026,11 +2031,13 @@ test_heartbeat_certsync_healthy_but_stale_surfaces_check_wake() {
 
 test_heartbeat_certsync_unhealthy_surfaces_check_wake() {
   local dir state out drain_out pid
+  local -a health_env
   dir=$(make_case heartbeat-certsync-unhealthy); state="$dir/state"
   out="$dir/watch.out"; drain_out="$dir/drain.out"
   setup_certsync_health_case "$dir"
   printf '{"healthy":false,"reason":"state DB missing"}\n' > "$dir/certsync-payload.json"
-  env $(certsync_health_env "$dir") FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+  mapfile -t health_env < <(certsync_health_env "$dir")
+  env "${health_env[@]}" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 "$WATCH" > "$out" &
   pid=$!
   wait_for_exit "$pid" 40 || fail "heartbeat did not surface unhealthy certsync"
@@ -2044,12 +2051,14 @@ test_heartbeat_certsync_unhealthy_surfaces_check_wake() {
 
 test_afk_heartbeat_certsync_unhealthy_surfaces_check_wake() {
   local dir state out drain_out pid
+  local -a health_env
   dir=$(make_case afk-heartbeat-certsync-unhealthy); state="$dir/state"
   out="$dir/watch.out"; drain_out="$dir/drain.out"
   setup_certsync_health_case "$dir"
   printf '{"healthy":false,"reason":"replication stalled"}\n' > "$dir/certsync-payload.json"
   : > "$state/.afk"
-  env $(certsync_health_env "$dir") FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+  mapfile -t health_env < <(certsync_health_env "$dir")
+  env "${health_env[@]}" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 "$WATCH" > "$out" &
   pid=$!
   wait_for_exit "$pid" 40 || fail "afk heartbeat did not surface unhealthy certsync"
@@ -2070,11 +2079,13 @@ test_afk_heartbeat_certsync_unhealthy_surfaces_check_wake() {
 # distinct "cannot run" check wake instead.
 test_heartbeat_certsync_invalid_json_surfaces_check_wake() {
   local dir state out drain_out pid
+  local -a health_env
   dir=$(make_case heartbeat-certsync-invalid-json); state="$dir/state"
   out="$dir/watch.out"; drain_out="$dir/drain.out"
   setup_certsync_health_case "$dir"
   printf '{"reason":"cannot tell"}\n' > "$dir/certsync-payload.json"
-  env $(certsync_health_env "$dir") FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+  mapfile -t health_env < <(certsync_health_env "$dir")
+  env "${health_env[@]}" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 "$WATCH" > "$out" &
   pid=$!
   wait_for_exit "$pid" 40 || fail "heartbeat did not surface an unreadable certsync status as cannot-run: $(cat "$out")"
@@ -2091,11 +2102,13 @@ test_heartbeat_certsync_invalid_json_surfaces_check_wake() {
 # must exit nonzero and surface a "cannot run" wake, never collapse into healthy.
 test_heartbeat_certsync_status_read_failure_surfaces_check_wake() {
   local dir state out drain_out pid
+  local -a health_env
   dir=$(make_case heartbeat-certsync-read-failure); state="$dir/state"
   out="$dir/watch.out"; drain_out="$dir/drain.out"
   setup_certsync_health_case "$dir"
   printf 'RAISE\n' > "$dir/certsync-payload.json"
-  env $(certsync_health_env "$dir") FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+  mapfile -t health_env < <(certsync_health_env "$dir")
+  env "${health_env[@]}" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 "$WATCH" > "$out" &
   pid=$!
   wait_for_exit "$pid" 40 || fail "heartbeat did not surface a failing certsync status read: $(cat "$out")"
@@ -2111,13 +2124,15 @@ test_heartbeat_certsync_status_read_failure_surfaces_check_wake() {
 # genuinely cannot read status: it must say so, never fall silent as healthy.
 test_heartbeat_certsync_source_unavailable_surfaces_check_wake() {
   local dir state out drain_out pid src
+  local -a health_env
   dir=$(make_case heartbeat-certsync-no-src); state="$dir/state"
   out="$dir/watch.out"; drain_out="$dir/drain.out"
   setup_certsync_health_case "$dir"
   src="$dir/home/projects/hlr-certsync/src"
   rm -rf "$src"   # deployed, but no importable certsync source
   printf '{"healthy":true,"reason":"ok"}\n' > "$dir/certsync-payload.json"
-  env $(certsync_health_env "$dir") FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+  mapfile -t health_env < <(certsync_health_env "$dir")
+  env "${health_env[@]}" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 "$WATCH" > "$out" &
   pid=$!
   wait_for_exit "$pid" 40 || fail "heartbeat did not surface missing certsync source as cannot-run: $(cat "$out")"
