@@ -103,6 +103,7 @@ A fleet front page, when one is wanted, is a new fleet-owned file rather than an
 This is the one deliverable of the build that did not land, and it is a captain decision rather than something to work around.
 
 GitHub refuses branch protection on a private repository on this account.
+For the general audit rule that checks both APIs before calling a repository gated or ungated, see [merge-gate-audit.md](merge-gate-audit.md).
 Both APIs return the same thing:
 
 ```
