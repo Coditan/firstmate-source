@@ -77,8 +77,15 @@ if [ "${1:-}" = "capture-pane" ]; then
   fi
   exit 0
 fi
+# The agent-liveness probe resolves the target to a pane before reading its
+# command, so the endpoint has to resolve here or every verdict reads unknown.
+if [ "${1:-}" = "list-panes" ]; then
+  printf '%s\n' '%1 1'
+  exit 0
+fi
 if [ "${1:-}" = "display-message" ]; then
   case "$*" in
+    *pane_id*) printf '%s\n' '%1'; exit 0 ;;
     *pane_current_command*) printf '%s\n' "${FM_FAKE_TMUX_CURRENT_COMMAND:-}"; exit 0 ;;
   esac
 fi
@@ -123,12 +130,18 @@ make_supercase() {
 #!/usr/bin/env bash
 set -u
 case "${1:-}" in
+  list-panes)
+    [ "${FM_FAKE_TMUX_PANE_ALIVE:-1}" = "1" ] || exit 1
+    printf '%%1 1\n'; exit 0 ;;
   display-message)
     [ "${FM_FAKE_TMUX_PANE_ALIVE:-1}" = "1" ] || exit 1
     _print=0
     # Return cursor_y when the format asks for it (pane_input_pending).
     for _a in "$@"; do
-      case "$_a" in *cursor_y*) printf '%s\n' "${FM_FAKE_TMUX_CURSOR_Y:-0}"; exit 0 ;; esac
+      case "$_a" in
+        *pane_id*) printf '%%1\n'; exit 0 ;;
+        *cursor_y*) printf '%s\n' "${FM_FAKE_TMUX_CURSOR_Y:-0}"; exit 0 ;;
+      esac
       [ "$_a" = "-p" ] && _print=1
     done
     [ "$_print" = 1 ] && printf 'fakepane\n'
@@ -204,9 +217,10 @@ make_bordered_case() {
 set -u
 COMPOSER="${FM_FAKE_COMPOSER:?FM_FAKE_COMPOSER unset}"
 case "${1:-}" in
+  list-panes) printf '%%1 1\n'; exit 0 ;;
   display-message)
     print=0
-    for a in "$@"; do case "$a" in *cursor_y*) printf '0\n'; exit 0 ;; esac; done
+    for a in "$@"; do case "$a" in *pane_id*) printf '%%1\n'; exit 0 ;; *cursor_y*) printf '0\n'; exit 0 ;; esac; done
     for a in "$@"; do [ "$a" = "-p" ] && print=1; done
     [ "$print" = 1 ] && printf 'fakepane\n'
     exit 0 ;;

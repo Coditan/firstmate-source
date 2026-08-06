@@ -677,7 +677,14 @@ make_routine_bootstrap_fixture() {
   add_real_jq "$fakebin"
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
+# The liveness probe resolves the target to a pane before reading it, so this
+# secondmate endpoint has to resolve or the sweep reports it inconclusive.
+if [ "${1:-}" = list-panes ]; then
+  printf '%s\n' '%1 1'
+  exit 0
+fi
 if [ "${1:-}" = display-message ]; then
+  case "$*" in *pane_id*) printf '%s\n' '%1'; exit 0 ;; esac
   printf '%s\n' codex
   exit 0
 fi

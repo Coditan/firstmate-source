@@ -24,6 +24,7 @@ make_fake_tmux() {
 #!/usr/bin/env bash
 set -u
 case "${1:-}" in
+  list-panes) printf '%%1 1\n'; exit 0 ;;
   has-session|new-session|new-window|send-keys|kill-window)
     printf '%s\n' "$*" >> "$FM_FAKE_TMUX_LOG"
     exit 0
@@ -35,6 +36,7 @@ case "${1:-}" in
     exit 0
     ;;
   display-message)
+    case "$*" in *pane_id*) printf '%%1\n'; exit 0 ;; esac
     printf 'firstmate\n'
     exit 0
     ;;

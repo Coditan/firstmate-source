@@ -25,7 +25,10 @@ case "$*" in
   *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
 esac
 case "${1:-}" in
-  display-message) printf 'firstmate\n'; exit 0 ;;
+  list-panes) printf '%%1 1\n'; exit 0 ;;
+  display-message)
+    for a in "$@"; do case "$a" in *pane_id*) printf '%%1\n'; exit 0 ;; esac; done
+    printf 'firstmate\n'; exit 0 ;;
   list-windows) exit 0 ;;
   has-session|new-session|new-window|kill-window) exit 0 ;;
   send-keys)

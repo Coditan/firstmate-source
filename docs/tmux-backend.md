@@ -75,6 +75,108 @@ tmux list-windows -t <session-name>
 Use the current tmux session name for the run-inside-tmux path, or `firstmate` for the detached outside-tmux path.
 You should see a `fm-<id>` window for the task, live and updating as the crewmate works.
 
+## Target resolution: `display-message` answers for the wrong window
+
+`tmux display-message -p -t <target>` does not refuse a target that does not resolve.
+It answers for a different window and still returns 0, so any check built on its exit status passes for a window that does not exist.
+Reported by Tugboat 2026-07-28 and reproduced here 2026-08-05 on tmux 3.4 (Linux 6.8.0), with three invented window names against a live session:
+
+```sh
+$ for t in firstmate:zzz-nope firstmate:also-not-real coditan:zzz-nope; do
+    tmux display-message -p -t "$t" '#{pane_id} #{session_name}:#{window_name} #{pane_current_command}'; done
+%89 firstmate:bash bash
+%89 firstmate:bash bash
+%0 coditan:claude claude
+```
+
+Every invented shape behaves this way, and the exit status never signals it:
+
+```sh
+$ for t in firstmate:zzz-nope 'firstmate:@9999' 'coditan:claude.99' '%9999' '@9999' nosuchsession:win zzz-bare-nope; do
+    out=$(tmux display-message -p -t "$t" '#{pane_id}' 2>&1); printf '%-22s rc=%s -> %s\n' "$t" "$?" "$out"; done
+firstmate:zzz-nope     rc=0 -> %89
+firstmate:@9999        rc=0 -> %89
+coditan:claude.99      rc=0 -> %0
+%9999                  rc=0 ->
+@9999                  rc=0 ->
+nosuchsession:win      rc=0 ->
+zzz-bare-nope          rc=0 ->
+```
+
+The fallback is the target session's current window, or the active client's, and it falls back to an empty format expansion only when the session itself cannot be resolved.
+
+**Why the symptom differs by host, and why that made it worse.**
+On Tugboat's host the fallback window was running `claude`, so an invented name returned `alive`.
+On this host it was running `bash`, so the same name returned `dead`.
+Neither is a reading of the target.
+A fleet-wide defect whose symptom depends on what the operator's own pane happens to be doing gets diagnosed as a local environment quirk on whichever host reports it second.
+
+**`display-message` is the only offender among the commands this backend uses.**
+Measured the same day, on the same server:
+
+```sh
+$ tmux capture-pane -p -t firstmate:zzz-nope -S -1 >/dev/null 2>&1; echo $?
+1
+$ tmux send-keys -t "$S:zzz-nope-window" 'echo MISDELIVERED_KEYSTROKE' Enter; echo $?
+can't find window: zzz-nope-window
+1
+$ tmux list-panes -t firstmate:zzz-nope >/dev/null 2>&1; echo $?
+1
+$ tmux list-panes -t firstmate:bash -F '#{pane_id} #{pane_active}'
+%89 1
+```
+
+`capture-pane` and `send-keys` refuse correctly, so no pane content was ever misread and no keystroke was ever misdelivered.
+`list-panes` refuses every invented shape above and resolves every real one - window names, window ids (`@N`), pane ids (`%N`), and `session:window.pane` - which makes it the correct primitive and needs no target-shape parsing of firstmate's own.
+
+**`list-panes` refuses correctly but cannot say WHICH pane the target named.**
+It takes a target-*window*, so it lists every pane of the containing window whatever pane the target named.
+Measured on tmux 3.4 in a two-pane window whose active pane is `%1`:
+
+```sh
+$ tmux list-panes -t probe:win -F '#{pane_id} active=#{pane_active} idx=#{pane_index}'
+%0 active=0 idx=0
+%1 active=1 idx=1
+$ tmux list-panes -t %0 -F '#{pane_id} #{pane_active}'      # an INACTIVE pane id
+%0 0
+%1 1
+$ tmux list-panes -t probe:win.0 -F '#{pane_id} #{pane_active}'
+%0 0
+%1 1
+```
+
+So picking the active row out of that listing answers `%1` for a target that named `%0`.
+`display-message` is exact for the identity once the target is known to resolve, on the same server:
+
+```sh
+$ tmux display-message -p -t %0 '#{pane_id}'            # a pane id
+%0
+$ tmux display-message -p -t probe:win.0 '#{pane_id}'   # pane-qualified
+%0
+$ tmux display-message -p -t probe:win '#{pane_id}'     # window-qualified
+%1
+```
+
+The window-qualified answer is the window's active pane, which is the correct answer for a target that names no pane of its own.
+
+**The gate.**
+`fm_tmux_resolve_pane` (`bin/fm-tmux-lib.sh`) is the one sanctioned way to turn a caller-supplied target into something readable: it prints the pane id the target names, or refuses.
+It uses each command for the one thing that command does correctly.
+`list-panes -t <target>` is the REFUSAL: nothing else runs until it has succeeded, so the identity read can never be reached by a target that did not resolve.
+`display-message -p -t <target> '#{pane_id}'` is the IDENTITY, and its exit status is never consulted - the pane id it prints must appear in the listing that just gated the target, or the gate refuses.
+That membership check is also what catches the one remaining window in which `display-message` could still fall back: a pane that dies between the two commands.
+Callers then read the resolved pane id rather than the original target, so the read is exact rather than subject to tmux's own prefix matching, and a pane that disappears between the resolve and the read degrades to an empty format expansion that every caller already treats as unreadable.
+`tests/fm-tmux-target-resolve.test.sh` enforces that no `bin/` script reads `display-message -p -t` against an unresolved caller-supplied target, and self-checks that the rule still detects a known offender - both the `-t "$target"` spelling and a caller-supplied target merely *named* `$pane`, since an exemption keyed on spelling would prove a naming convention rather than that resolution happened.
+The gate's own body is exempt from that rule and is measured behaviorally instead: it must return the pane a pane-qualified target names, and must refuse an identity absent from the listing.
+`tests/fm-backend-tmux-smoke.test.sh` runs the same two-pane control against a real tmux, in a genuine split window with a non-target pane left active, because in a single-pane window "every pane of the window" and "the pane the target names" are indistinguishable - which is why the first round of verification missed this.
+The hazard had been documented in a comment beside `bin/fm-spawn.sh`'s worktree poll since that poll was written, while `fm_backend_target_exists`, `fm_backend_tmux_current_command`, and `fm-crew-state.sh`'s `pane_readable` kept using the unguarded form.
+A comment next to one caller is not enforcement, which is why the rule is now a test.
+
+**Adjacent sites not changed, recorded rather than silently permitted.**
+`fm_backend_tmux_container_ensure` (`bin/backends/tmux.sh`) reads `#{session_name}` with a bare `display-message -p` and no `-t`, which resolves against the caller's own current window rather than an arbitrary target.
+`bin/fm-supervise-daemon.sh`'s away-mode status-line flash calls `display-message` without `-p` to display a message rather than to produce a verdict.
+Neither was measured to answer wrongly during this work, so neither was changed on assumption.
+
 ## Agent liveness probe
 
 `fm_backend_target_exists` (`bin/fm-backend.sh`) only checks that a window's pane still exists.
@@ -83,6 +185,10 @@ A secondmate agent that exits leaves its pane alive as a bare idle shell, which 
 `fm_backend_tmux_agent_alive` (`bin/backends/tmux.sh`) answers a deeper question: is a real harness-agent *process* running in the pane right now, not just whether the pane exists?
 It reads tmux's own `#{pane_current_command}`, which reports the pane's live foreground process name - already resolved by tmux from the pty's controlling process group, not something this adapter derives itself.
 The same probe is also used by the codex-only stale-path backstop in `bin/fm-watch.sh`, because codex-cli 0.145.0 can drop its rendered busy row while the agent process is still alive.
+
+Both probes read through the resolve gate above, so a target that does not resolve is refused rather than answered for.
+A target that does not resolve reports `unknown`, never `dead`: `dead` means "this pane exists and confidently holds no agent", which is a reading of the target, while whether the endpoint exists at all is `fm_backend_target_exists`'s question and a gone endpoint routes to the recovery path instead.
+The secondmate-liveness sweep turns `unknown` into a reported skip and gates a respawn on `dead` only, so under the defect that gate could be satisfied or starved for reasons unrelated to the target: a dead secondmate never respawned on one host, or a live one at risk of duplication on another.
 
 Agent liveness and composer safety are separate checks.
 During away-mode escalation delivery, `fm_tmux_composer_state` sends a bare shell glyph on an unbordered row to the shared composer classifier as `unknown`, and the daemon injects only into an affirmatively `empty` composer; see [Composer-emptiness safety](herdr-backend.md#composer-emptiness-safety-2026-07-10-fleet-wide-across-all-four-backends).

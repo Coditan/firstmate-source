@@ -65,6 +65,79 @@
 # (grok's mid-turn cancel hint, shown iff a turn is running - verified grok 0.2.73).
 FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel'
 
+# fm_tmux_resolve_pane: the ONE sanctioned gate every read of a caller-supplied
+# tmux target must pass. Prints the pane id <target> actually names and returns
+# 0; prints nothing and returns 1 when the target does not resolve.
+#
+# Why this exists (incident fm-liveness-probe-target-fallback, reported by
+# Tugboat 2026-07-28 and reproduced 2026-08-05): `tmux display-message -p -t
+# <target>` does NOT refuse an unresolvable target. It answers for a DIFFERENT
+# window - the target session's current window, or the active client's - or
+# expands the format to empty, and it returns 0 in every one of those cases.
+# Verified on tmux 3.4 (docs/tmux-backend.md "Target resolution: display-message
+# answers for the wrong window"): every invented shape - `sess:no-such-window`,
+# `sess:@9999`, `sess:win.99`, `%9999`, `@9999`, a bare unknown name - returned
+# rc=0, and three of them returned a real pane id belonging to someone else.
+# So a probe built on display-message's exit code never touches its target at
+# all: it describes whatever the supervising pane happens to be running, which
+# is why the same invented name read ALIVE on a host whose fallback pane ran
+# claude and DEAD on a host whose fallback pane ran bash.
+#
+# `tmux list-panes -t <target>` is the correct primitive for the REFUSAL and
+# needs no shape-parsing of our own: it refuses (rc=1, "can't find
+# window/pane/session") for every one of those invented shapes and succeeds for
+# every real one - window names, window ids (@N), pane ids (%N), and
+# session:window.pane. Callers read the RESOLVED pane id rather than the original
+# target, so the read is exact rather than subject to tmux's own prefix matching,
+# and a pane that disappears between the resolve and the read degrades to an
+# empty format expansion, which every caller already treats as unreadable.
+#
+# list-panes alone cannot say WHICH pane the target named, because it takes a
+# target-WINDOW: it lists every pane of the containing window. Measured on tmux
+# 3.4 in a two-pane window whose active pane is %1, both `list-panes -t %0` and
+# `list-panes -t sess:win.0` print `%0 0` and `%1 1`, so picking the active row
+# answers %1 for a target that named %0. The IDENTITY therefore comes from
+# `display-message -p -t <target> '#{pane_id}'`, which is exact for every shape
+# (%0 for %0, the named pane for sess:win.N, the window's active pane for a
+# window-qualified target - the correct answer in each case). That read is only
+# ever reached AFTER list-panes has proven the target resolves, so it can never
+# fall back to another window, and its exit status is never trusted: the id it
+# prints must appear in the listing or this refuses. That membership check is
+# also what catches a pane that dies between the two commands, which is the one
+# window in which display-message could still fall back.
+#
+# Deliberately NOT a presence verdict on its own: it answers "does this target
+# name something", which is what the liveness probes in bin/backends/tmux.sh
+# and bin/fm-backend.sh build their presence and agent-alive verdicts on.
+#
+# Deliberately strict about a BARE window name, and it is the caller's job not to
+# pass one. tmux resolves a bare target only within its own current session
+# (measured: a window named fm-target living in a non-current session is "can't
+# find window" to both list-panes and display-message), so this refuses it. A
+# cross-session bare lookup is firstmate's SELECTOR semantic, owned upstream by
+# fm_backend_tmux_resolve_bare_selector, which turns a bare name into
+# session:window BEFORE any probe runs - and it belongs upstream, because
+# guessing which session a bare name meant is the very thing this gate exists to
+# stop a probe from doing. Every production caller already passes the
+# session-qualified target recorded in state/<id>.meta's window=.
+fm_tmux_resolve_pane() {  # <target> -> prints pane id, or returns 1
+  local target=${1:-} listing named id
+  [ -n "$target" ] || return 1
+  listing=$(tmux list-panes -t "$target" -F '#{pane_id}' 2>/dev/null) || return 1
+  [ -n "$listing" ] || return 1
+  named=$(tmux display-message -p -t "$target" '#{pane_id}' 2>/dev/null) || return 1
+  [ -n "$named" ] || return 1
+  while read -r id _; do
+    if [ "$id" = "$named" ]; then
+      printf '%s\n' "$named"
+      return 0
+    fi
+  done <<EOF
+$listing
+EOF
+  return 1
+}
+
 # fm_tmux_strip_ghost: thin adapter over the shared, fleet-wide ghost extractor
 # fm_composer_strip_ghost (bin/fm-composer-lib.sh). It drops de-emphasised
 # ghost/placeholder runs - dim/faint (SGR 2, claude's/codex's ghost) AND a
@@ -99,11 +172,18 @@ fm_tmux_strip_ghost() { fm_composer_strip_ghost; }
 # (bin/fm-composer-lib.sh). The bordered flag is what lets a bordered `│ > │`
 # (claude's own idle composer) read empty while a bare, unbordered `$ ` dead-shell
 # prompt reads unknown.
+# The cursor-row read is gated on fm_tmux_resolve_pane for the same reason the
+# liveness probes are: display-message would otherwise report ANOTHER pane's
+# cursor row for an unresolvable target. That never produced a wrong verdict
+# here - the capture-pane on the same target refuses correctly, so the state
+# already collapsed to unknown - but the gate makes the refusal come from the
+# target check rather than from a second command happening to be stricter.
 fm_tmux_composer_state() {  # <target> -> empty|pending|unknown
-  local target=$1 cy raw plain stripped bordered=0
-  cy=$(tmux display-message -p -t "$target" '#{cursor_y}' 2>/dev/null) || { printf 'unknown'; return 0; }
+  local target=$1 pane cy raw plain stripped bordered=0
+  pane=$(fm_tmux_resolve_pane "$target") || { printf 'unknown'; return 0; }
+  cy=$(tmux display-message -p -t "$pane" '#{cursor_y}' 2>/dev/null) || { printf 'unknown'; return 0; }
   case "$cy" in ''|*[!0-9]*) printf 'unknown'; return 0 ;; esac
-  raw=$(tmux capture-pane -e -p -t "$target" -S "$cy" -E "$cy" 2>/dev/null) || { printf 'unknown'; return 0; }
+  raw=$(tmux capture-pane -e -p -t "$pane" -S "$cy" -E "$cy" 2>/dev/null) || { printf 'unknown'; return 0; }
   # bordered: from the plain row (borders survive an all-ANSI strip).
   plain=$(printf '%s\n' "$raw" | fm_composer_strip_ansi)
   plain="${plain#"${plain%%[![:space:]]*}"}"

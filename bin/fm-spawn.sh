@@ -1079,10 +1079,13 @@ if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   spawn_send_text_line "$WT_TARGET" 'treehouse get'
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
-  # Target the stable window id, not the name: if the name is ever lost (e.g. an
-  # automatic-rename slips through), display-message -t <bad-name> falls back to the
-  # active client's window, which would misread firstmate's OWN pane path as the
-  # worktree and tangle a hook into the primary checkout. The window id never lies.
+  # Target the stable window id, not the name: an automatic rename can lose the
+  # name, and the window id never lies. The fallback hazard that first motivated
+  # this - a lost name making the path read answer for firstmate's OWN pane and
+  # tangle a hook into the primary checkout - is now closed for every caller by
+  # fm_tmux_resolve_pane (bin/fm-tmux-lib.sh), the gate every tmux read of a
+  # caller-supplied target passes; docs/tmux-backend.md "Target resolution"
+  # owns that fact.
   # Compare against PROJ_ABS_REAL (physical), not PROJ_ABS: a symlinked project
   # prefix would otherwise make the pane's OS-level cwd read differ from
   # PROJ_ABS on the very first poll, before the pane has actually moved.

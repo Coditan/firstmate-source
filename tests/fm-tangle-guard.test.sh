@@ -163,7 +163,10 @@ case "$*" in
   *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
 esac
 case "${1:-}" in
-  display-message) printf 'firstmate\n'; exit 0 ;;
+  list-panes) printf '%%1 1\n'; exit 0 ;;
+  display-message)
+    for a in "$@"; do case "$a" in *pane_id*) printf '%%1\n'; exit 0 ;; esac; done
+    printf 'firstmate\n'; exit 0 ;;
   list-windows) exit 0 ;;
   has-session|new-session|new-window|send-keys) exit 0 ;;
 esac
@@ -241,7 +244,10 @@ case "$*" in
   *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
 esac
 case "${1:-}" in
-  display-message) printf 'firstmate\n'; exit 0 ;;
+  list-panes) printf '%%1 1\n'; exit 0 ;;
+  display-message)
+    for a in "$@"; do case "$a" in *pane_id*) printf '%%1\n'; exit 0 ;; esac; done
+    printf 'firstmate\n'; exit 0 ;;
   new-window) printf '%s\n' "@spawnwid"; exit 0 ;;
   list-windows) exit 0 ;;
   has-session|new-session|send-keys|set-window-option) exit 0 ;;
@@ -296,8 +302,16 @@ test_spawn_tmux_window_construction() {
   # Bug 2 fix (b): treehouse-get and the worktree wait loop target the stable id.
   assert_grep "send-keys -t @spawnwid treehouse get Enter" "$rec" \
     "treehouse get must be sent to the stable window id"
-  assert_grep "display-message -p -t @spawnwid #{pane_current_path}" "$rec" \
-    "the worktree wait loop must query the stable window id, not the name"
+  # The wait loop now RESOLVES the stable window id to its pane and reads that
+  # pane, rather than asking display-message about the id directly - a raw
+  # display-message read answers for another window instead of refusing an
+  # unresolvable target (docs/tmux-backend.md "Target resolution"). The property
+  # under test is unchanged and stronger: the stable id, never the renameable
+  # name, is what identifies the window, and the read is then pane-exact.
+  assert_grep "list-panes -t @spawnwid" "$rec" \
+    "the worktree wait loop must resolve the stable window id, not the name"
+  assert_no_grep "display-message -p -t firstmate:fm-rec-win-gg7 #{pane_current_path}" "$rec" \
+    "the worktree path must never be read against the renameable window name"
 
   pass "fm-spawn: appends windows by session-colon, pins the name, and targets the window id"
 }

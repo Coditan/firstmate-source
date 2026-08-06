@@ -256,7 +256,11 @@ BACKEND_TARGET=$(fm_backend_target_of_meta "$META")
 EXPECTED_LABEL="fm-$ID"
 pane_readable() {  # <target>
   case "$TASK_BACKEND" in
-    tmux) tmux display-message -p -t "$1" '#{pane_id}' >/dev/null 2>&1 ;;
+    # Through fm_backend_target_exists, not a raw probe of its own: the inline
+    # `tmux display-message -p -t "$1" '#{pane_id}'` this replaced returned 0
+    # for a window that does not exist, because display-message answers for
+    # another window rather than refusing (fm_tmux_resolve_pane).
+    tmux) fm_backend_target_exists tmux "$1" ;;
     *) fm_backend_capture "$TASK_BACKEND" "$1" 1 "$EXPECTED_LABEL" >/dev/null 2>&1 ;;
   esac
 }
