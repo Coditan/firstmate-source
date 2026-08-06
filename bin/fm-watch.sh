@@ -53,9 +53,10 @@
 #   check: certsync health: unhealthy: <reason>
 #   check: certsync health: cannot run: <reason>
 #                          heartbeat found a confirmed unhealthy certsync status
-#                          JSON reading, or could not read certsync status at
-#                          all, and surfaced it through the ordinary durable
-#                          check wake path
+#                          JSON reading, found a healthy reading with a stale
+#                          heartbeat, or could not read certsync status at all,
+#                          and surfaced it through the ordinary durable check
+#                          wake path
 # For normal supervision, resume the session-start primary-harness protocol
 # after each printed reason. Direct duplicate invocations of this script still
 # no-op through the watcher singleton lock.
@@ -148,6 +149,7 @@ CHECK_INTERVAL=${FM_CHECK_INTERVAL:-300}  # seconds between *.check.sh sweeps
 CHECK_TIMEOUT=${FM_CHECK_TIMEOUT:-30}     # seconds allowed per *.check.sh
 CERTSYNC_HEALTH_TIMEOUT=${FM_CERTSYNC_HEALTH_TIMEOUT:-5}  # seconds allowed for certsync heartbeat health
 CERTSYNC_HEALTH_RESURFACE=${FM_CERTSYNC_HEALTH_RESURFACE:-3600}  # seconds before repeating unchanged unhealthy or cannot-run certsync
+CERTSYNC_HEARTBEAT_MAX_AGE=${FM_CERTSYNC_HEARTBEAT_MAX_AGE:-7200}  # certsync heartbeat older than this reads as unhealthy (daemon stopped / syncs failing); 2x the 3600s max sync interval; 0 disables
 CONTEXT_CHECK_INTERVAL=${FM_CONTEXT_CHECK_INTERVAL:-300}  # seconds between context-ceiling reads
 # How long an UNCHANGED context-ceiling report stays quiet before it says so
 # again. Long, because every branch of that check describes a standing condition
@@ -1041,36 +1043,42 @@ certsync_health_mark_surfaced() {
 # or its compose file is the one legitimate "nothing to check here" case: it
 # means certsync is not deployed on this host, not that a deployed check failed.
 certsync_health_reason() {
-  local project compose graph_compose marker previous timeout_previous
-  local out out_rc healthy summary
+  local project compose src state_db heartbeat_file daemon_state marker previous timeout_previous
+  local py out out_rc healthy summary hb_age
   FM_CERTSYNC_HEALTH_REASON=
   FM_CERTSYNC_HEALTH_SIGNATURE=
   project=${FM_CERTSYNC_PROJECT:-$FM_HOME/projects/hlr-certsync}
   compose=${FM_CERTSYNC_COMPOSE_FILE:-$project/docker-compose.yml}
-  graph_compose=${FM_CERTSYNC_GRAPH_COMPOSE_FILE:-$project/docker-compose.graph-pem.yml}
+  src=${FM_CERTSYNC_SRC:-$project/src}
+  state_db=${FM_CERTSYNC_STATE_DB:-/var/lib/hlr-certsync/certsync-state.sqlite3}
+  heartbeat_file=${FM_CERTSYNC_HEARTBEAT_FILE:-/var/lib/hlr-certsync/certsync-heartbeat.json}
+  daemon_state=${FM_CERTSYNC_DAEMON_STATE:-running}
   marker="$STATE/.certsync-health-surfaced"
 
   [ -d "$project" ] || return 1
   [ -f "$compose" ] || return 1
 
-  if ! command -v docker >/dev/null 2>&1; then
-    FM_CERTSYNC_HEALTH_REASON="check: certsync health: cannot run: docker missing"
+  if ! command -v python3 >/dev/null 2>&1; then
+    FM_CERTSYNC_HEALTH_REASON="check: certsync health: cannot run: python3 missing"
   elif ! command -v jq >/dev/null 2>&1; then
     FM_CERTSYNC_HEALTH_REASON="check: certsync health: cannot run: jq missing"
+  elif [ ! -f "$src/hlr_certsync/status.py" ]; then
+    FM_CERTSYNC_HEALTH_REASON="check: certsync health: cannot run: certsync source unavailable at $src"
   else
+    # Read certsync's status directly off the heartbeat file and state DB on the
+    # host - no docker socket, no `exec`, no docker-group membership. certsync
+    # exposes both under a readable host bind mount (certsync repo's
+    # docs/deploy.md, "State host path"). build_status computes healthy/reason
+    # purely from those two files plus the daemon-state argument, so invoking it
+    # here reproduces exactly what `docker compose exec certsync certsync status`
+    # produced, byte for byte, but needs no docker access at all.
+    py='import json,sys
+from hlr_certsync.status import build_status
+from hlr_certsync.state import StateStore
+print(json.dumps(build_status(StateStore(sys.argv[1]), sys.argv[2], daemon_state=sys.argv[3]), sort_keys=True))'
     timeout_previous=$CHECK_TIMEOUT
     CHECK_TIMEOUT=$CERTSYNC_HEALTH_TIMEOUT
-    if [ -f "$graph_compose" ]; then
-      out=$(run_bounded docker compose -f "$compose" -f "$graph_compose" exec -T certsync certsync status \
-        --state-db "${FM_CERTSYNC_STATE_DB:-/var/lib/hlr-certsync/certsync-state.sqlite3}" \
-        --heartbeat-file "${FM_CERTSYNC_HEARTBEAT_FILE:-/var/lib/hlr-certsync/certsync-heartbeat.json}" \
-        --daemon-state "${FM_CERTSYNC_DAEMON_STATE:-running}")
-    else
-      out=$(run_bounded docker compose -f "$compose" exec -T certsync certsync status \
-        --state-db "${FM_CERTSYNC_STATE_DB:-/var/lib/hlr-certsync/certsync-state.sqlite3}" \
-        --heartbeat-file "${FM_CERTSYNC_HEARTBEAT_FILE:-/var/lib/hlr-certsync/certsync-heartbeat.json}" \
-        --daemon-state "${FM_CERTSYNC_DAEMON_STATE:-running}")
-    fi
+    out=$(run_bounded env PYTHONPATH="$src" python3 -c "$py" "$state_db" "$heartbeat_file" "$daemon_state")
     out_rc=$?
     CHECK_TIMEOUT=$timeout_previous
 
@@ -1083,8 +1091,21 @@ certsync_health_reason() {
       if [ -z "$healthy" ]; then
         FM_CERTSYNC_HEALTH_REASON="check: certsync health: cannot run: invalid or missing status JSON"
       elif [ "$healthy" = true ]; then
-        rm -f "$marker" 2>/dev/null || true
-        return 1
+        # A running daemon rewrites the heartbeat on every successful sync pass
+        # (<=3600s apart). Reading frozen files off the host cannot, on its own,
+        # tell a live healthy daemon from a stopped container whose last-written
+        # files still say "success" - the old docker-exec check caught that only
+        # because exec itself failed when the container was down. Reinstate that
+        # liveness signal here: a heartbeat older than the bound reads as
+        # unhealthy, never healthy, so "cannot confirm well" never collapses into
+        # "is well". Set FM_CERTSYNC_HEARTBEAT_MAX_AGE=0 to disable.
+        hb_age=$(age_of "$heartbeat_file")
+        if [ "${CERTSYNC_HEARTBEAT_MAX_AGE:-0}" -gt 0 ] 2>/dev/null && [ "$hb_age" -gt "$CERTSYNC_HEARTBEAT_MAX_AGE" ]; then
+          FM_CERTSYNC_HEALTH_REASON="check: certsync health: unhealthy: heartbeat stale (${hb_age}s > ${CERTSYNC_HEARTBEAT_MAX_AGE}s); daemon may be stopped or syncs failing"
+        else
+          rm -f "$marker" 2>/dev/null || true
+          return 1
+        fi
       else
         summary=$(printf '%s' "$out" | jq -r '.reason // "unhealthy"' 2>/dev/null \
           | tr '\n\t' '  ' \

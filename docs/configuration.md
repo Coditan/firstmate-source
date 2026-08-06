@@ -620,12 +620,19 @@ Both paths share the same signature and marker implementation, so the slow fallb
 ## Certsync health check (FM_CERTSYNC_*)
 
 `bin/fm-watch.sh` folds certsync health into the ordinary heartbeat path when a certsync deployment is present under the home.
-The default deployment path is `$FM_HOME/projects/hlr-certsync` with `docker-compose.yml`; `FM_CERTSYNC_PROJECT`, `FM_CERTSYNC_COMPOSE_FILE`, and `FM_CERTSYNC_GRAPH_COMPOSE_FILE` override the project and compose files.
-If the optional graph compose file exists, the watcher adds it to the `docker compose` command; if it is absent, the base compose file is enough.
-The heartbeat runs `docker compose ... exec -T certsync certsync status` with `FM_CERTSYNC_STATE_DB`, `FM_CERTSYNC_HEARTBEAT_FILE`, and `FM_CERTSYNC_DAEMON_STATE` mapped to the status command's `--state-db`, `--heartbeat-file`, and `--daemon-state` arguments.
+The default deployment path is `$FM_HOME/projects/hlr-certsync` with `docker-compose.yml`; `FM_CERTSYNC_PROJECT` and `FM_CERTSYNC_COMPOSE_FILE` override the project directory and compose file that mark certsync as deployed on this host.
+The check reads certsync's status directly off the host filesystem.
+It needs no docker socket, no `docker compose exec`, and no `docker`-group membership.
+certsync exposes its heartbeat JSON and sqlite state DB under a readable host bind mount; see the certsync repo's `docs/deploy.md`, "State host path".
+The watcher runs certsync's own `build_status` against those two files via `python3` with `PYTHONPATH=$FM_CERTSYNC_SRC` (default `$FM_CERTSYNC_PROJECT/src`), passing `FM_CERTSYNC_STATE_DB`, `FM_CERTSYNC_HEARTBEAT_FILE`, and `FM_CERTSYNC_DAEMON_STATE` as the `--state-db`, `--heartbeat-file`, and `--daemon-state` inputs.
+Because `build_status` computes `healthy`/`reason` purely from those two files plus the daemon-state argument, this reproduces exactly the JSON the former `docker compose exec certsync certsync status` produced, with no docker access at all.
 A confirmed JSON object with `healthy: false` becomes a durable `check` wake keyed as `certsync-health`, with the `reason` field trimmed and bounded in the wake text.
-A `healthy: true` reading clears the unchanged marker and stays quiet.
-Missing `docker` or `jq`, a failed status command (including a docker permission denial), empty output, invalid JSON, and a missing boolean `healthy` field all produce their own `check` wake carrying a `cannot run: ...` reason, so an inability to read certsync's status can never read the same as a confirmed-healthy status; only a missing project directory or missing compose file (certsync not deployed on this host at all) stays quiet.
+A `healthy: true` reading clears the unchanged marker and stays quiet when the heartbeat is fresh.
+Because the files are read off the host rather than through a container `exec`, a stopped container or a daemon whose syncs have been failing no longer fails the read the way `exec` did; instead its heartbeat goes stale.
+To keep "cannot confirm well" from collapsing into "is well", a `healthy: true` reading whose heartbeat file is older than `FM_CERTSYNC_HEARTBEAT_MAX_AGE` is reported as `unhealthy: heartbeat stale (...)` rather than staying quiet.
+The daemon rewrites the heartbeat on every successful sync pass, at most 3600s apart, so the 7200s default has margin.
+Set `FM_CERTSYNC_HEARTBEAT_MAX_AGE=0` to restore the raw `build_status` verdict with no freshness gate.
+Missing `python3` or `jq`, an unreadable certsync source tree (`$FM_CERTSYNC_SRC/hlr_certsync/status.py` absent), a failed status computation, empty output, invalid JSON, and a missing boolean `healthy` field all produce their own `check` wake carrying a `cannot run: ...` reason, so an inability to read certsync's status can never read the same as a confirmed-healthy status; only a missing project directory or missing compose file (certsync not deployed on this host at all) stays quiet.
 The command is bounded by `FM_CERTSYNC_HEALTH_TIMEOUT` rather than the general check timeout, and an unchanged unhealthy or unchanged cannot-run reading re-surfaces only after `FM_CERTSYNC_HEALTH_RESURFACE`.
 
 ## Environment variables
@@ -668,14 +675,15 @@ FM_HEARTBEAT=600        # base seconds between heartbeat scans; no-change heartb
 FM_HEARTBEAT_MAX=7200   # heartbeat backoff cap
 FM_CHECK_INTERVAL=300   # seconds between slow checks (authenticated merge polls, custom checks, or X-mode dispatch)
 FM_CHECK_TIMEOUT=30     # seconds allowed per slow check script
-FM_CERTSYNC_PROJECT=$FM_HOME/projects/hlr-certsync   # certsync deployment directory watched from the heartbeat path when its compose file exists
-FM_CERTSYNC_COMPOSE_FILE=$FM_CERTSYNC_PROJECT/docker-compose.yml   # base Docker Compose file for the certsync status command
-FM_CERTSYNC_GRAPH_COMPOSE_FILE=$FM_CERTSYNC_PROJECT/docker-compose.graph-pem.yml   # optional extra certsync graph compose file; used only when present
-FM_CERTSYNC_STATE_DB=/var/lib/hlr-certsync/certsync-state.sqlite3   # certsync status --state-db argument
-FM_CERTSYNC_HEARTBEAT_FILE=/var/lib/hlr-certsync/certsync-heartbeat.json   # certsync status --heartbeat-file argument
-FM_CERTSYNC_DAEMON_STATE=running   # certsync status --daemon-state argument
-FM_CERTSYNC_HEALTH_TIMEOUT=5   # seconds allowed for the heartbeat's certsync status command
+FM_CERTSYNC_PROJECT=$FM_HOME/projects/hlr-certsync   # certsync deployment directory; presence of its compose file marks certsync as deployed on this host
+FM_CERTSYNC_COMPOSE_FILE=$FM_CERTSYNC_PROJECT/docker-compose.yml   # compose file whose presence marks certsync as deployed (not exec'd; the check reads state off the host)
+FM_CERTSYNC_SRC=$FM_CERTSYNC_PROJECT/src   # certsync source tree put on PYTHONPATH to run build_status on the host without docker or an install
+FM_CERTSYNC_STATE_DB=/var/lib/hlr-certsync/certsync-state.sqlite3   # host path to certsync's state DB, read as build_status --state-db
+FM_CERTSYNC_HEARTBEAT_FILE=/var/lib/hlr-certsync/certsync-heartbeat.json   # host path to certsync's heartbeat, read as build_status --heartbeat-file
+FM_CERTSYNC_DAEMON_STATE=running   # build_status --daemon-state argument
+FM_CERTSYNC_HEALTH_TIMEOUT=5   # seconds allowed for the heartbeat's certsync status read
 FM_CERTSYNC_HEALTH_RESURFACE=3600   # seconds before an unchanged unhealthy or cannot-run certsync status is queued again
+FM_CERTSYNC_HEARTBEAT_MAX_AGE=7200   # a healthy reading whose heartbeat is older than this reads as unhealthy (daemon stopped / syncs failing); 2x the 3600s max sync interval; 0 disables the freshness gate
 FM_CONTEXT_CEILING=300000   # captain-decided token ceiling for the primary session's own context; above it, at a quiet boundary, the watcher queues a reset, ask, or blocked wake; unmeasurable running sessions surface as unenforced (docs/context-reset.md)
 FM_CONTEXT_CAPTAIN_IDLE_SECS=1800   # silence since the last genuine captain prompt below which the captain counts as in live conversation: the watcher asks instead of ordering a reset, and bin/fm-context-reset.sh refuses
 FM_CONTEXT_RECEIPT_MAX_AGE=900   # seconds a state/.stow-receipt stays fresh; the receipt and the reset are meant to happen in one turn
