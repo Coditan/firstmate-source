@@ -34,6 +34,7 @@
 #     no-endpoint-recorded      the meta records no backend target
 #     endpoint-unreadable       the target did not answer and its CLI is installed
 #     kind-skips-run-lookup     kind=scout/secondmate, which never drive a run
+#     delivery-mode-skips-run-lookup  kind=ship but mode=direct-PR/local-only, which never drive a run
 #     no-branch                 kind=ship at detached HEAD, so no run can be attributed
 #     no-run-attributed         the run lookup answered and named no run for this crew
 #     run-attribution-rejected  a run WAS found and this reader refused it
@@ -80,7 +81,10 @@
 # is not a reading and must not be passed off as one.
 #
 # Logic, in order:
-#   1. Resolve worktree + backend target + kind from state/<id>.meta.
+#   1. Resolve worktree + backend target + kind + delivery mode from state/<id>.meta.
+#      A kind=ship task whose mode is not no-mistakes (direct-PR, local-only)
+#      never starts a no-mistakes run at all, so the lookup in step 2 is skipped
+#      for it exactly like it is for kind=scout/secondmate.
 #   2. Matching no-mistakes run for this crew's branch AND current code identity,
 #      active or terminal (from `axi status`, or the coarse `no-mistakes runs`
 #      fallback)? Branch name alone is not enough: a historical run on a reused
@@ -191,6 +195,14 @@ meta_value() {  # <key>
 WT=$(meta_value worktree)
 KIND=$(meta_value kind)
 [ -n "$KIND" ] || KIND=ship
+# Delivery mode (bin/fm-project-mode.sh: no-mistakes|direct-PR|local-only, or
+# secondmate for kind=secondmate). Only no-mistakes drives a no-mistakes run;
+# direct-PR and local-only push straight to a branch/PR and never create one.
+# Absent mode= (older meta, or a lookup ahead of fm-spawn recording it) defaults
+# to no-mistakes, matching fm-spawn's own "mode=${MODE:-no-mistakes}" fallback -
+# a missing field must not silently start skipping a real run's lookup.
+DELIVERY_MODE=$(meta_value mode)
+[ -n "$DELIVERY_MODE" ] || DELIVERY_MODE=no-mistakes
 
 # A torn-down (or never-created) worktree has no current state to read. The two
 # ways to get here are different facts about the crew record: a meta that never
@@ -650,6 +662,12 @@ if [ "$KIND" != ship ]; then
   # directly. Nothing failed here, and the cause says so.
   UNKNOWN_CAUSE=kind-skips-run-lookup
   UNKNOWN_REASON="kind=$KIND never drives a run"
+elif [ "$DELIVERY_MODE" != no-mistakes ]; then
+  # A direct-PR or local-only ship task pushes straight to a branch/PR itself and
+  # never starts a no-mistakes run, so there is nothing here to reconcile against -
+  # this is a known, answerable shape, not a failed read.
+  UNKNOWN_CAUSE=delivery-mode-skips-run-lookup
+  UNKNOWN_REASON="mode=$DELIVERY_MODE never drives a run"
 elif [ "$GIT_MISSING" = 1 ]; then
   READER_MISSING=1
   READER_CAUSE=run-reader-missing
@@ -664,7 +682,7 @@ elif ! command -v no-mistakes >/dev/null 2>&1; then
   READER_SOURCE=missing-dependency
   READER_WHY='no-mistakes CLI not on PATH'
 fi
-if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && [ "$READER_MISSING" = 0 ]; then
+if [ "$KIND" = ship ] && [ "$DELIVERY_MODE" = no-mistakes ] && [ -n "$CREW_BRANCH" ] && [ "$READER_MISSING" = 0 ]; then
   nm_rc=0
   RUN_OUT=$(nm_run axi status) || nm_rc=$?
   if [ "$nm_rc" = "$NM_RUN_RC_UNBOUNDED" ]; then
