@@ -83,14 +83,28 @@ FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel'
 # is why the same invented name read ALIVE on a host whose fallback pane ran
 # claude and DEAD on a host whose fallback pane ran bash.
 #
-# `tmux list-panes -t <target>` is the correct primitive and needs no
-# shape-parsing of our own: it refuses (rc=1, "can't find window/pane/session")
-# for every one of those invented shapes and succeeds for every real one -
-# window names, window ids (@N), pane ids (%N), and session:window.pane. Callers
-# read the RESOLVED pane id rather than the original target, so the read is
-# exact rather than subject to tmux's own prefix matching, and a pane that
-# disappears between the resolve and the read degrades to an empty format
-# expansion, which every caller already treats as unreadable.
+# `tmux list-panes -t <target>` is the correct primitive for the REFUSAL and
+# needs no shape-parsing of our own: it refuses (rc=1, "can't find
+# window/pane/session") for every one of those invented shapes and succeeds for
+# every real one - window names, window ids (@N), pane ids (%N), and
+# session:window.pane. Callers read the RESOLVED pane id rather than the original
+# target, so the read is exact rather than subject to tmux's own prefix matching,
+# and a pane that disappears between the resolve and the read degrades to an
+# empty format expansion, which every caller already treats as unreadable.
+#
+# list-panes alone cannot say WHICH pane the target named, because it takes a
+# target-WINDOW: it lists every pane of the containing window. Measured on tmux
+# 3.4 in a two-pane window whose active pane is %1, both `list-panes -t %0` and
+# `list-panes -t sess:win.0` print `%0 0` and `%1 1`, so picking the active row
+# answers %1 for a target that named %0. The IDENTITY therefore comes from
+# `display-message -p -t <target> '#{pane_id}'`, which is exact for every shape
+# (%0 for %0, the named pane for sess:win.N, the window's active pane for a
+# window-qualified target - the correct answer in each case). That read is only
+# ever reached AFTER list-panes has proven the target resolves, so it can never
+# fall back to another window, and its exit status is never trusted: the id it
+# prints must appear in the listing or this refuses. That membership check is
+# also what catches a pane that dies between the two commands, which is the one
+# window in which display-message could still fall back.
 #
 # Deliberately NOT a presence verdict on its own: it answers "does this target
 # name something", which is what the liveness probes in bin/backends/tmux.sh
@@ -107,18 +121,21 @@ FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel'
 # stop a probe from doing. Every production caller already passes the
 # session-qualified target recorded in state/<id>.meta's window=.
 fm_tmux_resolve_pane() {  # <target> -> prints pane id, or returns 1
-  local target=${1:-} listing id active pane=''
+  local target=${1:-} listing named id
   [ -n "$target" ] || return 1
-  listing=$(tmux list-panes -t "$target" -F '#{pane_id} #{pane_active}' 2>/dev/null) || return 1
-  while read -r id active; do
-    [ -n "$id" ] || continue
-    if [ -z "$pane" ]; then pane=$id; fi
-    if [ "${active:-0}" = 1 ]; then pane=$id; break; fi
+  listing=$(tmux list-panes -t "$target" -F '#{pane_id}' 2>/dev/null) || return 1
+  [ -n "$listing" ] || return 1
+  named=$(tmux display-message -p -t "$target" '#{pane_id}' 2>/dev/null) || return 1
+  [ -n "$named" ] || return 1
+  while read -r id _; do
+    if [ "$id" = "$named" ]; then
+      printf '%s\n' "$named"
+      return 0
+    fi
   done <<EOF
 $listing
 EOF
-  [ -n "$pane" ] || return 1
-  printf '%s\n' "$pane"
+  return 1
 }
 
 # fm_tmux_strip_ghost: thin adapter over the shared, fleet-wide ghost extractor

@@ -190,63 +190,222 @@ test_send_key_preflight_actually_verifies() {
 # The hazard was documented in a comment beside ONE caller (bin/fm-spawn.sh's
 # worktree poll) while two other call sites kept using the unguarded form. A
 # comment is not enforcement, so this is the enforcement: every `display-message
-# -p` read in bin/ must target a pane the caller already resolved or owns, which
-# is spelled as a `-t` whose argument is "$pane", "$PANE", "$RESOLVED_PANE", or
-# "$TMUX_PANE". Reading a raw caller-supplied target (`-t "$target"`,
-# `-t "$1"`, `-t "$win"`, ...) fails here.
+# -p` read in bin/ must target a pane the caller already RESOLVED or OWNS.
+#
+# The exemption is tied to evidence, not to spelling. An earlier form of this
+# rule exempted any `-t` whose argument was literally "$pane", "$PANE",
+# "$RESOLVED_PANE" or "$TMUX_PANE", which proved a naming convention rather than
+# that resolution happened: `pane=$1; tmux display-message -p -t "$pane" ...` -
+# an unresolved caller-supplied target, the exact incident shape - passed it. The
+# rule now reads each file for the variables that actually hold a resolved pane
+# (assigned from fm_tmux_resolve_pane / fm_backend_tmux_resolve_pane, or from
+# $TMUX_PANE, which is the caller's OWN pane and needs no resolving) and exempts
+# only a `-t "$VAR"` naming one of those. Every other form - `-t "$target"`,
+# `-t "$1"`, `-t "$win"`, or a `$pane` that was never resolved - offends.
+#
+# fm_tmux_resolve_pane's own body is skipped, because it IS the gate: it is the
+# one place that may read display-message against a raw target, and only after
+# `list-panes` has refused an unresolvable one. That body is not unmeasured -
+# test_resolver_gates_before_it_reads below drives it against a fake tmux that
+# answers with a pane outside the listing and requires it to refuse.
 #
 # Two forms are deliberately NOT covered and are recorded rather than silently
 # permitted (docs/tmux-backend.md "Adjacent sites not changed"): a `-p` read
 # with no -t at all, which reads the caller's own current window rather than an
 # arbitrary target, and bin/fm-supervise-daemon.sh's non-`-p` status-line flash,
 # which displays a message rather than producing a verdict.
-# The '$pane' spellings below are the literal source text being matched, not
+
+# resolved_pane_vars: the variables in <file> that provably hold a pane the
+# script resolved (from the shared gate) or owns ($TMUX_PANE).
+#
+# The sed expressions below are literal source text being matched, not
 # variables to expand.
 # shellcheck disable=SC2016
+resolved_pane_vars() {  # <file> -> one variable name per line
+  sed -n \
+    -e 's/^[[:space:]]*\(local[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)=\$(.*fm_\(backend_\)\{0,1\}tmux_resolve_pane.*/\2/p' \
+    -e 's/^[[:space:]]*\(local[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)="\{0,1\}\${\{0,1\}TMUX_PANE.*/\2/p' \
+    "$1" | sort -u
+}
+
 unguarded_display_message_reads() {  # <dir> -> prints offending file:line matches
-  grep -rn --include='*.sh' 'display-message -p -t' "$1" \
-    | grep -v -- '-t "\$pane"' \
-    | grep -v -- '-t "\$PANE"' \
-    | grep -v -- '-t "\$RESOLVED_PANE"' \
-    | grep -v -- '-t "\$TMUX_PANE"' \
-    | grep -v '^[^:]*:[0-9]*: *#' || true
+  local file vars
+  while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    vars=" $(resolved_pane_vars "$file" | tr '\n' ' ')TMUX_PANE "
+    awk -v vars="$vars" -v file="$file" '
+      /^[[:space:]]*#/ { next }
+      /^fm_tmux_resolve_pane\(\)/ { in_gate = 1; next }
+      in_gate { if ($0 ~ /^}/) in_gate = 0; next }
+      !/display-message -p -t/ { next }
+      {
+        arg = $0
+        sub(/.*display-message -p -t[[:space:]]+/, "", arg)
+        sub(/[[:space:]].*/, "", arg)
+        if (arg ~ /^"\$[A-Za-z_][A-Za-z0-9_]*"$/) {
+          name = substr(arg, 3, length(arg) - 3)
+          if (index(vars, " " name " ") > 0) next
+        }
+        printf "%s:%d:%s\n", file, FNR, $0
+      }
+    ' "$file"
+  done <<EOF
+$(grep -rl --include='*.sh' 'display-message -p -t' "$1" 2>/dev/null | sort)
+EOF
 }
 
 test_no_unguarded_display_message_read_in_bin() {
-  # First prove the detector can fail. A rule that cannot fire is exactly the
-  # defect under repair: bin/fm-spawn.sh's comment named this hazard while two
-  # other call sites kept the unguarded form, and nothing was measuring them.
+  # First prove the detector can fail, on BOTH shapes it must catch. A rule that
+  # cannot fire is exactly the defect under repair: bin/fm-spawn.sh's comment
+  # named this hazard while two other call sites kept the unguarded form, and
+  # nothing was measuring them.
   local probe_dir
   probe_dir="$TMP_ROOT/rule-selfcheck"
-  mkdir -p "$probe_dir"
+  rm -rf "$probe_dir"; mkdir -p "$probe_dir"
   # Literal offending source text, deliberately unexpanded.
   # shellcheck disable=SC2016
   printf '%s\n' 'cmd=$(tmux display-message -p -t "$target" '"'"'#{pane_current_command}'"'"')' \
-    > "$probe_dir/offender.sh"
+    > "$probe_dir/offender-target.sh"
   [ -n "$(unguarded_display_message_reads "$probe_dir")" ] \
-    || fail "the unguarded-display-message rule does not detect a known offender; it is not enforcing anything"
+    || fail "the unguarded-display-message rule does not detect the '\$target' spelling; it is not enforcing anything"
+
+  # The shape the old spelling-based rule let through: a caller-supplied target
+  # that is merely NAMED like a resolved pane.
+  rm -rf "$probe_dir"; mkdir -p "$probe_dir"
+  # shellcheck disable=SC2016
+  printf '%s\n' 'probe() {' 'pane=$1' \
+    'tmux display-message -p -t "$pane" '"'"'#{pane_current_command}'"'"'' '}' \
+    > "$probe_dir/offender-unresolved-pane.sh"
+  [ -n "$(unguarded_display_message_reads "$probe_dir")" ] \
+    || fail "the unguarded-display-message rule exempts an UNRESOLVED target just because it is spelled \"\$pane\"; it proves a naming convention, not resolution"
+
+  # ...and that the same spelling is accepted once it is actually resolved, or
+  # the rule would be unusable and the real call sites would have to be excused.
+  rm -rf "$probe_dir"; mkdir -p "$probe_dir"
+  # shellcheck disable=SC2016
+  printf '%s\n' 'probe() {' 'pane=$(fm_tmux_resolve_pane "$1") || return 1' \
+    'tmux display-message -p -t "$pane" '"'"'#{pane_current_command}'"'"'' '}' \
+    > "$probe_dir/resolved-pane.sh"
+  [ -z "$(unguarded_display_message_reads "$probe_dir")" ] \
+    || fail "the unguarded-display-message rule rejects a properly resolved pane read"
 
   local offenders
   offenders=$(unguarded_display_message_reads "$ROOT/bin")
   [ -z "$offenders" ] || fail \
     "a tmux display-message read targets an unresolved, caller-supplied target; resolve it with fm_tmux_resolve_pane first:"$'\n'"$offenders"
-  pass "no bin/ script reads tmux display-message against an unresolved caller-supplied target (rule self-checked)"
+  pass "no bin/ script reads tmux display-message against an unresolved caller-supplied target (rule self-checked on both offending shapes)"
 }
 
-# The resolver itself must stay built on a command that refuses. If it is ever
-# reimplemented on display-message, every test above would still pass against a
+# The resolver itself must stay built on a command that refuses. If the refusal
+# is ever moved onto display-message, every test above would still pass against a
 # fake that models the real fallback - but the fleet would be broken again.
 test_resolver_is_built_on_a_refusing_command() {
-  local body
+  local body lp dm
   body=$(awk '/^fm_tmux_resolve_pane\(\)/,/^}/' "$ROOT/bin/fm-tmux-lib.sh")
   assert_contains "$body" "list-panes" \
     "fm_tmux_resolve_pane must resolve through tmux list-panes, which refuses an unknown target"
-  assert_not_contains "$body" "display-message" \
-    "fm_tmux_resolve_pane must not be built on display-message, which never refuses"
-  pass "fm_tmux_resolve_pane is built on a tmux command that refuses an unknown target"
+  # display-message may be READ from, but never before list-panes has refused an
+  # unresolvable target, and never for its exit status (see the behavioral test
+  # below). Ordering is asserted here because it is the one property the fakes
+  # cannot observe: a display-message-first resolver would answer for another
+  # window before anything had a chance to refuse.
+  lp=$(printf '%s\n' "$body" | grep -n 'list-panes' | head -1 | cut -d: -f1)
+  dm=$(printf '%s\n' "$body" | grep -n 'display-message' | head -1 | cut -d: -f1)
+  [ -n "$lp" ] || fail "fm_tmux_resolve_pane no longer calls list-panes"
+  if [ -n "$dm" ]; then
+    [ "$lp" -lt "$dm" ] \
+      || fail "fm_tmux_resolve_pane reads display-message before list-panes has gated the target"
+  fi
+  pass "fm_tmux_resolve_pane gates on a tmux command that refuses before it reads any identity"
+}
+
+# --- the gate reads the pane the target NAMES, not the window's active one ----
+#
+# list-panes takes a target-WINDOW: `list-panes -t %0` and `list-panes -t
+# sess:win.0` both list EVERY pane of the containing window (measured on tmux
+# 3.4: `%0 0` and `%1 1`). A resolver that picked the active row from that
+# listing answered %1 for a target that named %0 - the same answer-for-the-wrong-
+# thing defect this branch exists to close, narrowed from window scope to pane
+# scope. It reached bin/fm-context-reset.sh, which types a reset into whatever
+# the resolved pane names, and the away-mode composer-emptiness safety check.
+#
+# The genuine two-pane control runs against real tmux in
+# tests/fm-backend-tmux-smoke.test.sh. This is the hermetic half.
+make_two_pane_tmux() {  # <dir> -> echoes fakebin dir
+  local fb="$1/fakebin"
+  mkdir -p "$fb"
+  cat > "$fb/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+target=
+prev=
+for a in "$@"; do
+  [ "$prev" = -t ] && target=$a
+  prev=$a
+done
+# One window "sess:win" with two panes; %1 is ACTIVE, %0 is not.
+case "$target" in
+  sess:win|sess:win.0|sess:win.1|%0|%1|@1) ;;
+  *) echo "can't find window: $target" >&2; exit 1 ;;
+esac
+case "${1:-}" in
+  list-panes)
+    # Real tmux lists the whole containing WINDOW whatever pane was named.
+    printf '%%0\n%%1\n'; exit 0 ;;
+  display-message)
+    # Real tmux is exact here: the named pane, or the active one for a
+    # window-qualified target.
+    case "$target" in
+      %0|sess:win.0) printf '%%0\n' ;;
+      %1|sess:win.1) printf '%%1\n' ;;
+      *) printf '%s\n' "${FM_FAKE_DM_PANE:-%1}" ;;
+    esac
+    exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$fb/tmux"
+  printf '%s\n' "$fb"
+}
+
+test_resolver_returns_the_pane_the_target_names() {
+  local fb got
+  fb=$(make_two_pane_tmux "$TMP_ROOT/two-pane")
+  got=$(PATH="$fb:$PATH" fm_tmux_resolve_pane 'sess:win.0')
+  [ "$got" = '%0' ] \
+    || fail "fm_tmux_resolve_pane returned '$got' for sess:win.0; it must name pane 0, not the window's active pane"
+  got=$(PATH="$fb:$PATH" fm_tmux_resolve_pane '%0')
+  [ "$got" = '%0' ] \
+    || fail "fm_tmux_resolve_pane returned '$got' for the pane id %0; a pane id must resolve to itself"
+  got=$(PATH="$fb:$PATH" fm_tmux_resolve_pane '%1')
+  [ "$got" = '%1' ] || fail "fm_tmux_resolve_pane returned '$got' for the pane id %1"
+  # A window-qualified target has no pane of its own, so the window's ACTIVE
+  # pane is the correct answer there.
+  got=$(PATH="$fb:$PATH" fm_tmux_resolve_pane 'sess:win')
+  [ "$got" = '%1' ] \
+    || fail "fm_tmux_resolve_pane returned '$got' for the window sess:win; a window-qualified target must resolve to its active pane"
+  pass "fm_tmux_resolve_pane returns the pane the target names, not the containing window's active pane"
+}
+
+# The identity read is never TRUSTED, only used: its answer must appear in the
+# listing that already refused. This is what catches the one window where
+# display-message could still fall back - a pane that dies between the two
+# commands - and it is why the gate cannot be reimplemented as a bare
+# display-message read that happens to be preceded by a list-panes call.
+test_resolver_gates_before_it_reads() {
+  local fb
+  fb=$(make_two_pane_tmux "$TMP_ROOT/two-pane-stale")
+  if PATH="$fb:$PATH" FM_FAKE_DM_PANE='%77' fm_tmux_resolve_pane 'sess:win' >/dev/null 2>&1; then
+    fail "fm_tmux_resolve_pane accepted a pane id that was not in the listing it had just gated on"
+  fi
+  [ -z "$(PATH="$fb:$PATH" FM_FAKE_DM_PANE='%77' fm_tmux_resolve_pane 'sess:win' 2>/dev/null)" ] \
+    || fail "fm_tmux_resolve_pane printed a pane id that was not in the listing"
+  pass "fm_tmux_resolve_pane refuses an identity that is absent from the listing it gated on"
 }
 
 test_resolver_refuses_what_display_message_would_answer
+test_resolver_returns_the_pane_the_target_names
+test_resolver_gates_before_it_reads
 test_agent_alive_never_reads_the_fallback_pane
 test_agent_alive_still_reads_a_real_target
 test_target_exists_refuses_an_invented_window

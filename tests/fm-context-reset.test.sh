@@ -75,7 +75,12 @@ install_fake_tmux() {  # <fakebin>
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${FM_FAKE_TMUX_LOG:-/dev/null}"
 case "${1:-}" in
-  list-panes) printf '%%1 1\n'; exit 0 ;;
+  # list-panes takes a target-WINDOW, so it lists every pane of the window
+  # containing $TMUX_PANE - here a SPLIT window whose active pane (%1) is not
+  # this script's own (%9). That is the shape the resolver has to get right: a
+  # gate that picked the active row would hand fm-context-reset.sh a neighbour's
+  # pane and type the reset into it.
+  list-panes) printf '%%1 1\n%%9 0\n'; exit 0 ;;
   display-message)
     case "$*" in
       *cursor_y*) printf '5\n' ;;
@@ -184,7 +189,18 @@ test_reset_proceeds_when_everything_verifies() {
   assert_grep 'cleared' "$STATE_DIR/.context-reset.log" "a completed reset left no durable record"
   [ -f "$(printf '%s/.stow-receipt' "$STATE_DIR")" ] \
     && fail "the receipt survived a completed reset and could be replayed"
-  pass "a verified reset clears through the shared submit path and records that it did"
+  # The pane the reset was ADDRESSED to must be this script's own ($TMUX_PANE =
+  # %9), never the neighbour that happens to be active in the same split window
+  # (%1). fm_tmux_resolve_pane's whole job here is that identity: it resolves
+  # $TMUX_PANE and this script types into whatever the result names, so a gate
+  # that answered with the window's active pane would send /clear next door -
+  # exactly what "a reset must never be typed into a pane it cannot identify"
+  # exists to prevent.
+  assert_grep 'display-message -p -t %9 ' "$TMUX_LOG" \
+    "the reset did not address its own pane (%9) when reading the target it types into"
+  assert_no_grep 'display-message -p -t %1 ' "$TMUX_LOG" \
+    "the reset addressed the active neighbouring pane (%1) instead of its own (%9)"
+  pass "a verified reset clears through the shared submit path, addressing its own pane, and records that it did"
 }
 
 test_check_mode_verifies_without_clearing() {

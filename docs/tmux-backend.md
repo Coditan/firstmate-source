@@ -129,10 +129,46 @@ $ tmux list-panes -t firstmate:bash -F '#{pane_id} #{pane_active}'
 `capture-pane` and `send-keys` refuse correctly, so no pane content was ever misread and no keystroke was ever misdelivered.
 `list-panes` refuses every invented shape above and resolves every real one - window names, window ids (`@N`), pane ids (`%N`), and `session:window.pane` - which makes it the correct primitive and needs no target-shape parsing of firstmate's own.
 
+**`list-panes` refuses correctly but cannot say WHICH pane the target named.**
+It takes a target-*window*, so it lists every pane of the containing window whatever pane the target named.
+Measured on tmux 3.4 in a two-pane window whose active pane is `%1`:
+
+```sh
+$ tmux list-panes -t probe:win -F '#{pane_id} active=#{pane_active} idx=#{pane_index}'
+%0 active=0 idx=0
+%1 active=1 idx=1
+$ tmux list-panes -t %0 -F '#{pane_id} #{pane_active}'      # an INACTIVE pane id
+%0 0
+%1 1
+$ tmux list-panes -t probe:win.0 -F '#{pane_id} #{pane_active}'
+%0 0
+%1 1
+```
+
+So picking the active row out of that listing answers `%1` for a target that named `%0`.
+`display-message` is exact for the identity once the target is known to resolve, on the same server:
+
+```sh
+$ tmux display-message -p -t %0 '#{pane_id}'            # a pane id
+%0
+$ tmux display-message -p -t probe:win.0 '#{pane_id}'   # pane-qualified
+%0
+$ tmux display-message -p -t probe:win '#{pane_id}'     # window-qualified
+%1
+```
+
+The window-qualified answer is the window's active pane, which is the correct answer for a target that names no pane of its own.
+
 **The gate.**
-`fm_tmux_resolve_pane` (`bin/fm-tmux-lib.sh`) is the one sanctioned way to turn a caller-supplied target into something readable: it resolves through `list-panes` and prints the pane id, or refuses.
+`fm_tmux_resolve_pane` (`bin/fm-tmux-lib.sh`) is the one sanctioned way to turn a caller-supplied target into something readable: it prints the pane id the target names, or refuses.
+It uses each command for the one thing that command does correctly.
+`list-panes -t <target>` is the REFUSAL: nothing else runs until it has succeeded, so the identity read can never be reached by a target that did not resolve.
+`display-message -p -t <target> '#{pane_id}'` is the IDENTITY, and its exit status is never consulted - the pane id it prints must appear in the listing that just gated the target, or the gate refuses.
+That membership check is also what catches the one remaining window in which `display-message` could still fall back: a pane that dies between the two commands.
 Callers then read the resolved pane id rather than the original target, so the read is exact rather than subject to tmux's own prefix matching, and a pane that disappears between the resolve and the read degrades to an empty format expansion that every caller already treats as unreadable.
-`tests/fm-tmux-target-resolve.test.sh` enforces that no `bin/` script reads `display-message -p -t` against an unresolved caller-supplied target, and self-checks that the rule still detects a known offender.
+`tests/fm-tmux-target-resolve.test.sh` enforces that no `bin/` script reads `display-message -p -t` against an unresolved caller-supplied target, and self-checks that the rule still detects a known offender - both the `-t "$target"` spelling and a caller-supplied target merely *named* `$pane`, since an exemption keyed on spelling would prove a naming convention rather than that resolution happened.
+The gate's own body is exempt from that rule and is measured behaviorally instead: it must return the pane a pane-qualified target names, and must refuse an identity absent from the listing.
+`tests/fm-backend-tmux-smoke.test.sh` runs the same two-pane control against a real tmux, in a genuine split window with a non-target pane left active, because in a single-pane window "every pane of the window" and "the pane the target names" are indistinguishable - which is why the first round of verification missed this.
 The hazard had been documented in a comment beside `bin/fm-spawn.sh`'s worktree poll since that poll was written, while `fm_backend_target_exists`, `fm_backend_tmux_current_command`, and `fm-crew-state.sh`'s `pane_readable` kept using the unguarded form.
 A comment next to one caller is not enforcement, which is why the rule is now a test.
 

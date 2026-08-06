@@ -36,6 +36,7 @@ case "${1:-}" in
     exit 0
     ;;
   display-message)
+    case "$*" in *pane_id*) printf '%%1\n'; exit 0 ;; esac
     printf 'firstmate\n'
     exit 0
     ;;

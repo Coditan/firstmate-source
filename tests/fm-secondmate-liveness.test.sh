@@ -58,7 +58,7 @@ set -u
 case "\${1:-}" in
   list-panes) printf '%%1 1\n'; exit 0 ;;
   display-message)
-    for a in "\$@"; do case "\$a" in *pane_current_command*) printf '%s\n' '$comm'; exit 0 ;; esac; done
+    for a in "\$@"; do case "\$a" in *pane_id*) printf '%%1\n'; exit 0 ;; *pane_current_command*) printf '%s\n' '$comm'; exit 0 ;; esac; done
     exit 0 ;;
 esac
 exit 0
@@ -224,7 +224,7 @@ set -u
 case "${1:-}" in
   list-panes) printf '%%1 1\n'; exit 0 ;;
   display-message)
-    for a in "$@"; do case "$a" in *pane_current_command*) printf '%s\n' "${FM_TEST_PANE_CMD:-zsh}"; exit 0 ;; esac; done
+    for a in "$@"; do case "$a" in *pane_id*) printf '%%1\n'; exit 0 ;; *pane_current_command*) printf '%s\n' "${FM_TEST_PANE_CMD:-zsh}"; exit 0 ;; esac; done
     exit 0 ;;
   new-window|kill-window)
     printf '%s\n' "$*" >> "${FM_TMUX_CALL_LOG:?}"

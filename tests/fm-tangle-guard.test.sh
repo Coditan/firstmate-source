@@ -164,7 +164,9 @@ case "$*" in
 esac
 case "${1:-}" in
   list-panes) printf '%%1 1\n'; exit 0 ;;
-  display-message) printf 'firstmate\n'; exit 0 ;;
+  display-message)
+    for a in "$@"; do case "$a" in *pane_id*) printf '%%1\n'; exit 0 ;; esac; done
+    printf 'firstmate\n'; exit 0 ;;
   list-windows) exit 0 ;;
   has-session|new-session|new-window|send-keys) exit 0 ;;
 esac
@@ -243,7 +245,9 @@ case "$*" in
 esac
 case "${1:-}" in
   list-panes) printf '%%1 1\n'; exit 0 ;;
-  display-message) printf 'firstmate\n'; exit 0 ;;
+  display-message)
+    for a in "$@"; do case "$a" in *pane_id*) printf '%%1\n'; exit 0 ;; esac; done
+    printf 'firstmate\n'; exit 0 ;;
   new-window) printf '%s\n' "@spawnwid"; exit 0 ;;
   list-windows) exit 0 ;;
   has-session|new-session|send-keys|set-window-option) exit 0 ;;

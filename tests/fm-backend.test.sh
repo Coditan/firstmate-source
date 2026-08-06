@@ -619,7 +619,7 @@ case "${1:-}" in
   list-panes) printf '%%1 1\n'; exit 0 ;;
   send-keys) exit 0 ;;
   display-message)
-    for a in "$@"; do case "$a" in *cursor_y*) printf '0\n'; exit 0 ;; esac; done
+    for a in "$@"; do case "$a" in *pane_id*) printf '%%1\n'; exit 0 ;; *cursor_y*) printf '0\n'; exit 0 ;; esac; done
     printf 'fakepane\n'; exit 0 ;;
   capture-pane) printf '\xe2\x94\x82 \xe2\x94\x82\n'; exit 0 ;;
   list-windows) exit 0 ;;
@@ -644,19 +644,21 @@ run_send_case() {  # <bin-root> <fakebin> <log> <home> -- <send args...>
 # with incident fm-liveness-probe-target-fallback: the old form asked
 # `display-message` whether the target existed, which cannot fail (it answers for
 # another window and returns 0 either way - docs/tmux-backend.md "Target
-# resolution"), and the new form resolves through `list-panes`, which refuses.
-# Both spellings are stripped so the diff still compares the calls that carry the
-# actual send behavior.
+# resolution"), and the new form gates on `list-panes`, which refuses, before
+# reading the pane id. The new form still ends in the same display-message read
+# the old one used - what changed is that it can no longer be reached by a target
+# that did not resolve - so both spellings are stripped and the diff still
+# compares the calls that carry the actual send behavior.
 strip_send_preflight() {  # <log>
-  local old_preflight new_preflight
-  old_preflight=$'tmux\x1fdisplay-message\x1f-p\x1f-t\x1fsess:win\x1f#{pane_id}'
-  new_preflight=$'tmux\x1flist-panes\x1f-t\x1fsess:win\x1f-F\x1f#{pane_id} #{pane_active}'
-  awk -v old="$old_preflight" -v new="$new_preflight" \
-    '$0 != old && $0 != new { print }' "$1"
+  local dm_read lp_gate
+  dm_read=$'tmux\x1fdisplay-message\x1f-p\x1f-t\x1fsess:win\x1f#{pane_id}'
+  lp_gate=$'tmux\x1flist-panes\x1f-t\x1fsess:win\x1f-F\x1f#{pane_id}'
+  awk -v dm="$dm_read" -v lp="$lp_gate" \
+    '$0 != dm && $0 != lp { print }' "$1"
 }
 
 test_send_conformance_old_vs_new() {
-  local old_bin fb log_old log_new home rc_old rc_new filtered_old filtered_new
+  local old_bin fb log_old log_new home rc_old rc_new filtered_old filtered_new first_probe
   old_bin=$(build_old_bin send-old)
   fb=$(make_send_fakebin "$TMP_ROOT/send-fake")
   home="$TMP_ROOT/send-home"; mkdir -p "$home/state"
@@ -671,11 +673,18 @@ test_send_conformance_old_vs_new() {
   expect_code "$rc_old" "$rc_new" "fm-send --key: old vs new exit code"
   # The preflight must RESOLVE the target, not merely ask display-message about
   # it: display-message answers for another window rather than refusing, so the
-  # old form verified nothing at all.
+  # old form verified nothing at all. It may still READ the pane id afterwards -
+  # that read is what makes the resolved id exact - but list-panes must come
+  # first, because it is the only one of the two that can refuse.
   assert_contains "$(cat "$log_new")" $'\x1f''list-panes'$'\x1f''-t'$'\x1f''sess:win' \
     "fm-send --key did not resolve the explicit tmux target before sending"
-  assert_not_contains "$(cat "$log_new")" $'\x1f''display-message'$'\x1f''-p'$'\x1f''-t'$'\x1f''sess:win'$'\x1f''#{pane_id}' \
-    "fm-send --key still uses the display-message preflight, which cannot refuse an unresolvable target"
+  first_probe=$(grep -n -e $'\x1f''list-panes'$'\x1f''-t'$'\x1f''sess:win' \
+                        -e $'\x1f''display-message'$'\x1f''-p'$'\x1f''-t'$'\x1f''sess:win' \
+                        "$log_new" | head -1)
+  case "$first_probe" in
+    *$'\x1f'list-panes$'\x1f'*) : ;;
+    *) fail "fm-send --key read display-message before list-panes had gated the target: $first_probe" ;;
+  esac
   strip_send_preflight "$log_old" > "$filtered_old"
   strip_send_preflight "$log_new" > "$filtered_new"
   diff -u "$filtered_old" "$filtered_new" > "$TMP_ROOT/send-diff-key.txt" 2>&1 \
@@ -772,7 +781,7 @@ set -u
 case "\${1:-}" in
   list-panes) printf '%%1 1\n'; exit 0 ;;
   display-message)
-    for a in "\$@"; do case "\$a" in *pane_current_path*) printf '%s\\n' "$wt"; exit 0 ;; esac; done
+    for a in "\$@"; do case "\$a" in *pane_id*) printf '%%1\\n'; exit 0 ;; *pane_current_path*) printf '%s\\n' "$wt"; exit 0 ;; esac; done
     printf 'firstmate\\n'; exit 0 ;;
   list-windows) exit 0 ;;
 esac
@@ -835,7 +844,7 @@ set -u
 case "\${1:-}" in
   list-panes) printf '%%1 1\n'; exit 0 ;;
   display-message)
-    for a in "\$@"; do case "\$a" in *pane_current_path*)
+    for a in "\$@"; do case "\$a" in *pane_id*) printf '%%1\\n'; exit 0 ;; *pane_current_path*)
       printf x >> "$counter"
       if [ "\$(wc -c < "$counter")" -le 1 ]; then
         printf '%s\\n' "$initial_path"

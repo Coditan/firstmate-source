@@ -28,7 +28,10 @@ case "${1:-}" in
   list-panes) printf '%%1 1\n'; exit 0 ;;
   display-message)
     for a in "$@"; do
-      case "$a" in *cursor_y*) printf '0\n'; exit 0 ;; esac
+      case "$a" in
+        *pane_id*) printf '%%1\n'; exit 0 ;;
+        *cursor_y*) printf '0\n'; exit 0 ;;
+      esac
     done
     exit 0 ;;
   capture-pane) cat "$COMPOSER" 2>/dev/null; exit 0 ;;

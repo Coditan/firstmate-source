@@ -684,6 +684,7 @@ if [ "${1:-}" = list-panes ]; then
   exit 0
 fi
 if [ "${1:-}" = display-message ]; then
+  case "$*" in *pane_id*) printf '%s\n' '%1'; exit 0 ;; esac
   printf '%s\n' codex
   exit 0
 fi

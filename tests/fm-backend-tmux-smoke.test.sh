@@ -185,8 +185,17 @@ cleanup_agent_bin() { rm -rf "$AGENT_BIN_DIR"; }
 
 tmux new-window -d -t "$SESSION" -n "agent-fallback" "$AGENT_BIN_DIR/claude 300" \
   || fail "could not create the agent-running fallback window"
-tmux new-window -d -t "$SESSION" -n "shell-fallback" \
+# A bare shell, spawned explicitly rather than inheriting the host's login shell:
+# `tmux new-window` with no command starts $SHELL, so a zsh or fish host would
+# drive a different shape than a bash one, and this control must be the same
+# experiment everywhere. What the pane actually reports is still READ rather than
+# assumed below - hardcoding a shell name is exactly what made this half fragile.
+tmux new-window -d -t "$SESSION" -n "shell-fallback" "$(command -v sh)" \
   || fail "could not create the bare-shell fallback window"
+sleep 0.3
+SHELL_FALLBACK_CMD=$(tmux display-message -p -t "$SESSION:shell-fallback" '#{pane_current_command}')
+[ -n "$SHELL_FALLBACK_CMD" ] \
+  || fail "could not read the bare-shell fallback window's own pane_current_command"
 
 INVENTED="$SESSION:zzz-no-such-window"
 
@@ -222,7 +231,7 @@ assert_probes_refuse_invented_target agent-fallback claude
 pass "real tmux: an invented window reads not-alive even when the current window is running an agent"
 
 # The shape this host reproduces naturally, which alone would have proved nothing.
-assert_probes_refuse_invented_target shell-fallback bash
+assert_probes_refuse_invented_target shell-fallback "$SHELL_FALLBACK_CMD"
 pass "real tmux: an invented window reads not-alive when the current window is a bare shell, and for the right reason"
 
 # The probes must still read their own target correctly, or "never alive" would
@@ -239,6 +248,64 @@ pass "real tmux: the probes still read a real target's own agent/shell state aft
 tmux kill-window -t "$SESSION:agent-fallback" 2>/dev/null || true
 tmux kill-window -t "$SESSION:shell-fallback" 2>/dev/null || true
 cleanup_agent_bin
+
+# --- target resolution, pane scope: the gate must name the pane it was asked ---
+#
+# `tmux list-panes` takes a target-WINDOW, so it lists EVERY pane of the
+# containing window whatever pane the target named. Measured here, on this
+# server, in a real two-pane window. A gate that picked the ACTIVE row from that
+# listing therefore answered for a neighbouring pane - which reaches
+# bin/fm-context-reset.sh, whose whole premise is that a reset is never typed
+# into a pane it cannot identify, and the away-mode composer-emptiness check.
+#
+# This needs a genuine SPLIT window: in a single-pane window "every pane of the
+# window" and "the pane the target names" are indistinguishable, which is exactly
+# why the original verification missed it.
+
+tmux new-window -d -t "$SESSION" -n "split-probe" -c "$HOME" \
+  || fail "could not create the split-probe window"
+tmux split-window -d -t "$SESSION:split-probe" -c "$HOME" \
+  || fail "could not split the split-probe window"
+
+# Leave a pane OTHER than the one under test active, or the two answers coincide.
+tmux select-pane -t "$SESSION:split-probe.1" \
+  || fail "could not make pane 1 the active pane of the split-probe window"
+
+SPLIT_PANES=$(tmux list-panes -t "$SESSION:split-probe" -F '#{pane_id} #{pane_active}')
+SPLIT_P0=$(printf '%s\n' "$SPLIT_PANES" | awk 'NR==1 {print $1}')
+SPLIT_P1=$(printf '%s\n' "$SPLIT_PANES" | awk 'NR==2 {print $1}')
+[ -n "$SPLIT_P0" ] && [ -n "$SPLIT_P1" ] && [ "$SPLIT_P0" != "$SPLIT_P1" ] \
+  || fail "the split-probe window did not end up with two distinct panes:"$'\n'"$SPLIT_PANES"
+[ "$(printf '%s\n' "$SPLIT_PANES" | awk 'NR==2 {print $2}')" = 1 ] \
+  || fail "pane 1 of the split-probe window is not the active one, so this control proves nothing:"$'\n'"$SPLIT_PANES"
+
+# The precondition the gate has to work around, asserted rather than assumed:
+# list-panes really does list the whole window for a pane-qualified target.
+[ "$(tmux list-panes -t "$SPLIT_P0" -F '#{pane_id}' | wc -l | tr -d ' ')" = 2 ] \
+  || fail "precondition: tmux list-panes -t $SPLIT_P0 should list both panes of the containing window"
+
+[ "$(fm_backend_tmux_resolve_pane "$SPLIT_P0")" = "$SPLIT_P0" ] \
+  || fail "fm_backend_tmux_resolve_pane resolved the pane id $SPLIT_P0 to '$(fm_backend_tmux_resolve_pane "$SPLIT_P0")', not to itself"
+[ "$(fm_backend_tmux_resolve_pane "$SESSION:split-probe.0")" = "$SPLIT_P0" ] \
+  || fail "fm_backend_tmux_resolve_pane resolved $SESSION:split-probe.0 to the window's ACTIVE pane instead of the pane the target names"
+[ "$(fm_backend_tmux_resolve_pane "$SPLIT_P1")" = "$SPLIT_P1" ] \
+  || fail "fm_backend_tmux_resolve_pane did not resolve the pane id $SPLIT_P1 to itself"
+# A window-qualified target names no pane of its own, so its ACTIVE pane is the
+# correct answer - the property the old form got right and must keep.
+[ "$(fm_backend_tmux_resolve_pane "$SESSION:split-probe")" = "$SPLIT_P1" ] \
+  || fail "fm_backend_tmux_resolve_pane must resolve a window-qualified target to that window's active pane"
+pass "real tmux: fm_backend_tmux_resolve_pane names the pane the target names, in a genuine two-pane window"
+
+# The costly path: bin/fm-context-reset.sh resolves $TMUX_PANE and then types a
+# reset into whatever the result names, so the round trip back to a
+# session:window.pane target must land on the SAME pane it started from.
+SPLIT_TARGET=$(tmux display-message -p -t "$(fm_backend_tmux_resolve_pane "$SPLIT_P0")" \
+  '#{session_name}:#{window_index}.#{pane_index}')
+[ "$(tmux display-message -p -t "$SPLIT_TARGET" '#{pane_id}')" = "$SPLIT_P0" ] \
+  || fail "the resolve-then-address round trip fm-context-reset.sh performs landed on a pane other than $SPLIT_P0 (got target '$SPLIT_TARGET')"
+pass "real tmux: fm-context-reset.sh's resolve-then-address round trip stays on the caller's own pane"
+
+tmux kill-window -t "$SESSION:split-probe" 2>/dev/null || true
 
 # --- fm_tmux_ensure_own_window (firstmate must not sit in a crew window) ------
 # The helper reads the CALLER's own window (no -t), so drive it from INSIDE a
