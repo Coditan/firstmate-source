@@ -108,13 +108,25 @@ fm_backend_tmux_container_ensure() {
 #     treehouse cd's into the worktree, which would break name-based targeting.
 # The returned window id lets callers target the window even if its name is ever
 # lost, so worktree discovery cannot fall back to the active client's window.
-fm_backend_tmux_create_task() {  # <session> <window-name> <proj-abs> -> prints window id
-  local ses=$1 wname=$2 proj_abs=$3 wid
+#
+# The optional <fm-home> seeds FM_HOME into the new window's environment with
+# `new-window -e`, which tmux applies BEFORE the window's shell starts. That
+# ordering is the whole point of passing it here rather than leaving it to the
+# launch command: a login/interactive profile that derives per-vessel values
+# from FM_HOME runs once, at shell start, and nothing re-derives them
+# afterwards, so a home announced later is a home announced too late. Callers
+# that do not care may omit it, and the flag is then not passed at all.
+fm_backend_tmux_create_task() {  # <session> <window-name> <proj-abs> [<fm-home>] -> prints window id
+  local ses=$1 wname=$2 proj_abs=$3 fm_home=${4:-} wid
   if tmux list-windows -t "$ses" -F '#{window_name}' | grep -qx "$wname"; then
     echo "error: window $ses:$wname already exists" >&2
     return 1
   fi
-  wid=$(tmux new-window -dP -F '#{window_id}' -t "$ses:" -n "$wname" -c "$proj_abs") || return 1
+  if [ -n "$fm_home" ]; then
+    wid=$(tmux new-window -dP -F '#{window_id}' -t "$ses:" -n "$wname" -c "$proj_abs" -e "FM_HOME=$fm_home") || return 1
+  else
+    wid=$(tmux new-window -dP -F '#{window_id}' -t "$ses:" -n "$wname" -c "$proj_abs") || return 1
+  fi
   tmux set-window-option -t "$wid" automatic-rename off 2>/dev/null || true
   tmux set-window-option -t "$wid" allow-rename off 2>/dev/null || true
   printf '%s\n' "$wid"

@@ -851,6 +851,18 @@ fi
 # (docs/herdr-backend.md "Known gaps").
 PROJ_ABS_REAL=$(cd "$PROJ_ABS" 2>/dev/null && pwd -P) || PROJ_ABS_REAL="$PROJ_ABS"
 
+# The firstmate home this task belongs to: this process's own for a crewmate or
+# scout, and PROJ_ABS for a --secondmate spawn, which is the primary launching a
+# DIFFERENT home. Resolved here, before the task surface is created, because two
+# later steps need it and one of them cannot wait: an operator shell profile that
+# derives per-vessel values from FM_HOME runs when the task's shell STARTS, so a
+# home named only on the launch command arrives too late to change what that
+# profile computed. Backends that can seed a task's environment before its shell
+# starts are given it here; the launch command carries it as well, which is what
+# every other backend has.
+LAUNCH_HOME=$FM_HOME
+[ "$KIND" != secondmate ] || LAUNCH_HOME=$PROJ_ABS
+
 real_path_or_raw() {  # <path>
   local path=$1 real
   if real=$(cd "$path" 2>/dev/null && pwd -P); then
@@ -897,7 +909,7 @@ case "$BACKEND" in
     # treehouse cd's into the worktree. WT_TARGET carries that stable id for the
     # rename-critical worktree-detection steps below; the persisted window= handle
     # stays $T (the name form), which is safe now that rename is disabled.
-    WID=$(fm_backend_tmux_create_task "$SES" "$W" "$PROJ_ABS") || exit 1
+    WID=$(fm_backend_tmux_create_task "$SES" "$W" "$PROJ_ABS" "$LAUNCH_HOME") || exit 1
     WT_TARGET="$WID"
     ;;
   herdr)
@@ -1332,9 +1344,7 @@ sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
 sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts")
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
 sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
-AXI_LAUNCH_HOME=$FM_HOME
-[ "$KIND" != secondmate ] || AXI_LAUNCH_HOME=$PROJ_ABS
-sq_axi_bin=$(shell_quote "$(fm_axi_bin_dir "$AXI_LAUNCH_HOME")")
+sq_axi_bin=$(shell_quote "$(fm_axi_bin_dir "$LAUNCH_HOME")")
 PIBRIEFENV=
 [ "$HARNESS" != pi ] || PIBRIEFENV="FM_FIRSTMATE_PI_LAUNCH_BRIEF=$sq_brief"
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
@@ -1348,9 +1358,19 @@ LAUNCH=${LAUNCH//__PITURNEND__/$sq_piturnend}
 LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
 LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}
 LAUNCH=${LAUNCH//__PIBRIEFENV__/$PIBRIEFENV}
+# Every firstmate-launched agent names the home that launched it, not only a
+# secondmate, so the agent process and everything it runs resolve this home's
+# state, findings surface, and fm-send targets rather than falling back to some
+# other home. This reaches the agent, not the shell that started before it: a
+# profile-derived value is already fixed by then, which is why LAUNCH_HOME is
+# also seeded into the task's environment before its shell starts wherever the
+# backend can. Only a secondmate additionally clears the operational overrides,
+# because those name the primary's own directories.
+sq_home=$(shell_quote "$LAUNCH_HOME")
 if [ "$KIND" = secondmate ]; then
-  sq_home=$(shell_quote "$PROJ_ABS")
   LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_HOME=$sq_home $LAUNCH"
+else
+  LAUNCH="FM_HOME=$sq_home $LAUNCH"
 fi
 # Export GOTMPDIR into the crewmate's pane shell so the agent and every child
 # process (go build, go test, ...) inherit it. Sent before the launch command so

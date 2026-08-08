@@ -177,6 +177,39 @@ A comment next to one caller is not enforcement, which is why the rule is now a 
 `bin/fm-supervise-daemon.sh`'s away-mode status-line flash calls `display-message` without `-p` to display a message rather than to produce a verdict.
 Neither was measured to answer wrongly during this work, so neither was changed on assumption.
 
+## A task window is created already knowing its home (`new-window -e`)
+
+`fm_backend_tmux_create_task` takes an optional home and, when given one, passes `-e FM_HOME=<home>` to `new-window`, which tmux applies to the new window's process before its shell starts.
+`bin/fm-spawn.sh` passes the home the task belongs to: its own for a crewmate or scout, and the secondmate's home for a `--secondmate` spawn.
+
+The ordering is the entire point, and it is not redundant with the `FM_HOME=` prefix the launch command already carries.
+A shell profile that derives per-vessel values from `FM_HOME` runs once, when the task's shell starts, and nothing re-derives them afterwards.
+Firstmate sends the launch command *after* that shell exists, so a home carried only there reaches the agent process but arrives too late to change anything the profile already computed - and every later non-interactive shell inherits the profile's stale answer rather than recomputing it.
+
+Measured 2026-08-08 on tmux 3.6 (Linux 6.18.33.2-microsoft-standard-WSL2), against a host profile that derives a per-vessel value from `FM_HOME` and defaults to a different home when it is unset:
+
+```
+$ tmux -L fmprobe new-window -d -P -F '#{window_id}' -t p: -n probe \
+    -e FM_HOME=/home/captain/firstmate-upstream
+@1
+$ tmux -L fmprobe send-keys -t p:probe 'printf "PROBE seat=%s fm=%s\n" "$BRIDGE_VESSEL" "$FM_HOME" > /tmp/fmprobe.out' Enter
+$ cat /tmp/fmprobe.out
+PROBE seat=tugboat fm=/home/captain/firstmate-upstream
+```
+
+The same day, the negative control that shows why the launch-command prefix alone cannot do this: a shell that starts without `FM_HOME` and is given it afterwards keeps the value its profile already computed, because the profile does not run again.
+
+```
+$ FM_HOME=/home/captain/firstmate-upstream bash -c 'echo $BRIDGE_VESSEL'
+sc1
+$ env -u BRIDGE_VESSEL FM_HOME=/home/captain/firstmate-upstream bash -c 'echo ${BRIDGE_VESSEL:-<unset>}'
+<unset>
+```
+
+`-e` on `new-window` requires tmux 3.0 or newer.
+This is the only backend with such a seam: herdr, zellij, Orca, and cmux create a task through CLIs that accept a label and a working directory and no environment, so on those a worker learns its home from the launch command only, and a profile-derived value in the task's shell is still computed before firstmate can influence it.
+Firstmate names only `FM_HOME` here, never any variable a profile derives from it.
+
 ## Agent liveness probe
 
 `fm_backend_target_exists` (`bin/fm-backend.sh`) only checks that a window's pane still exists.

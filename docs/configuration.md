@@ -233,6 +233,8 @@ When it is unset, most scripts use the repo root as the home; when it is set, sc
 When `FM_HOME` is unset, it also behaves as the old whole-root override.
 `bin/fm-send.sh` is intentionally stricter than that general fallback: it requires `FM_HOME` to be set before resolving a target, so operator steers cannot silently resolve against the wrong home.
 `FM_STATE_OVERRIDE`, `FM_DATA_OVERRIDE`, `FM_PROJECTS_OVERRIDE`, and `FM_CONFIG_OVERRIDE` override individual operational directories for tests and specialized harness setup.
+Every task `bin/fm-spawn.sh` launches is told its home explicitly: a crewmate or scout inherits the launching process's own `FM_HOME`, and a `--secondmate` spawn is given the secondmate's own home, so the worker's `fm-send.sh` targets, findings surface, and state resolve against the home that launched it rather than falling back to a repo root or to whatever an operator shell profile defaults to when `FM_HOME` is unset.
+That home reaches the agent through the launch command on every backend, and on tmux it is additionally seeded into the task window before its shell starts, which is the only backend offering that seam; [`docs/tmux-backend.md`](tmux-backend.md) owns the measurement, the tmux 3.0 floor it needs, and the limit on the other backends.
 For the herdr backend, `FM_HOME` also determines the workspace label used by the adapter.
 For the zellij backend, `FM_HOME` does not split containers, but it determines the readable home prefix embedded in visible tab titles; use `FM_ZELLIJ_SESSION` when a separate zellij session is needed.
 The full zellij home label also includes a short hash of the resolved `FM_ROOT` path.
