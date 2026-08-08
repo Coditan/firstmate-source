@@ -30,7 +30,13 @@ case "${1:-}" in
     for a in "$@"; do case "$a" in *pane_id*) printf '%%1\n'; exit 0 ;; esac; done
     printf 'firstmate\n'; exit 0 ;;
   list-windows) exit 0 ;;
-  has-session|new-session|new-window|kill-window) exit 0 ;;
+  new-window)
+    if [ -n "${FM_FAKE_LAUNCH_LOG:-}" ]; then
+      printf '%s\n' "$*" >> "$FM_FAKE_LAUNCH_LOG.newwindow"
+    fi
+    exit 0
+    ;;
+  has-session|new-session|kill-window) exit 0 ;;
   send-keys)
     if [ -n "${FM_FAKE_LAUNCH_LOG:-}" ]; then
       prev=
@@ -126,7 +132,7 @@ test_no_profile_keeps_claude_profile_defaults() {
   assert_meta_profile "$HOME_DIR/state/$id.meta" claude default default
 
   launch=$(cat "$LAUNCH_LOG")
-  expected="CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions --settings '$WT_DIR/.claude/settings.fm-task.json' \"\$('${ROOT}/bin/fm-operational-input.sh' encode launch-brief < '$HOME_DIR/data/$id/brief.md')\""
+  expected="FM_HOME='$HOME_DIR' CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions --settings '$WT_DIR/.claude/settings.fm-task.json' \"\$('${ROOT}/bin/fm-operational-input.sh' encode launch-brief < '$HOME_DIR/data/$id/brief.md')\""
   [ "$launch" = "$expected" ] || fail "no-profile claude launch did not use the canonical launch kind"$'\n'"expected: $expected"$'\n'"actual:   $launch"
   assert_grep "export PATH='$HOME_DIR/.local/axi/bin':\$PATH" "$LAUNCH_LOG.path" \
     "ordinary crew did not receive the owning vessel's AXI bin first"
@@ -189,6 +195,64 @@ test_secondmate_claude_launch_omits_the_task_overlay() {
   assert_no_grep "$HOME_DIR/.local/axi/bin" "$LAUNCH_LOG.path" \
     "secondmate launch inherited the primary vessel's AXI bin as its first entry"
   pass "a secondmate claude launch omits --settings because no per-task overlay is written"
+}
+
+# An ordinary crewmate or scout is launched by a home too, and it must be told
+# which one - not only a secondmate. Two distinct places carry it, and the second
+# is not a belt-and-braces copy of the first:
+#
+#   1. the task surface's environment, seeded when the window is CREATED. An
+#      operator shell profile that derives per-vessel values from FM_HOME runs
+#      once, when that shell starts, and nothing re-derives them afterwards. A
+#      home announced after the shell exists is a home announced too late, and
+#      the profile's own fallback - on a machine with two firstmate homes under
+#      one OS account, another vessel entirely - is what the worker then acts as.
+#   2. the launch command, which is what reaches the agent process on every
+#      backend, including those whose task-creation call has no environment seam.
+#
+# The operational overrides stay uncleared: only a secondmate spawn needs that,
+# because only there do they name a different home's directories.
+test_ordinary_crew_launch_names_its_own_home() {
+  local rec id out status launch
+  id=crew-home-z20
+  rec=$(make_spawn_case crew-home claude "$id")
+  read_case_record "$rec"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "ordinary crew spawn should succeed"
+  assert_grep "FM_HOME=$HOME_DIR" "$LAUNCH_LOG.newwindow" \
+    "the crew window was created without its own home in the environment its shell starts with"
+  launch=$(cat "$LAUNCH_LOG")
+  case "$launch" in
+    "FM_HOME='$HOME_DIR' "*) ;;
+    *) fail "ordinary crew launch did not name its own firstmate home"$'\n'"actual: $launch" ;;
+  esac
+  assert_not_contains "$launch" "FM_STATE_OVERRIDE=" \
+    "ordinary crew launch cleared the operational overrides a secondmate spawn owns"
+  pass "an ordinary crew launch names the home that spawned it, before its shell starts and on the launch command"
+}
+
+# The same seeding for a secondmate names the SECONDMATE's home, never the
+# primary's: it is the primary's own fm-spawn process creating a window for a
+# different home, so the process environment it would otherwise pass down is the
+# wrong answer at exactly the moment the new shell reads it.
+test_secondmate_window_is_created_in_its_own_home() {
+  local rec id sm out status
+  id=secondmate-window-home-z21
+  rec=$(make_spawn_case secondmate-window-home claude "$id")
+  read_case_record "$rec"
+  sm="$CASE_DIR/secondmate-home"
+  make_seeded_secondmate_home "$sm" "$id"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
+  status=$?
+  expect_code 0 "$status" "secondmate spawn should succeed"
+  assert_grep "FM_HOME=$sm" "$LAUNCH_LOG.newwindow" \
+    "the secondmate window was not created in the secondmate's own home"
+  assert_no_grep "FM_HOME=$HOME_DIR" "$LAUNCH_LOG.newwindow" \
+    "the secondmate window was created carrying the primary's home"
+  pass "a secondmate window is created in the secondmate's own home, not the primary's"
 }
 
 test_active_dispatch_profile_requires_explicit_harness_for_ship() {
@@ -274,7 +338,8 @@ test_active_dispatch_profile_allows_raw_launch_command() {
   assert_contains "$out" "spawned $id harness=custom-agent" "spawn did not report raw command harness"
   assert_meta_profile "$HOME_DIR/state/$id.meta" custom-agent default default
   launch=$(cat "$LAUNCH_LOG")
-  [ "$launch" = "custom-agent --flag" ] || fail "raw launch command changed"$'\n'"actual: $launch"
+  [ "$launch" = "FM_HOME='$HOME_DIR' custom-agent --flag" ] \
+    || fail "raw launch command changed"$'\n'"actual: $launch"
   pass "active crew-dispatch profile allows the raw launch-command escape hatch"
 }
 
@@ -291,7 +356,7 @@ test_raw_claude_launch_loads_the_task_overlay() {
   expect_code 0 "$status" "raw claude launch command should succeed"
   [ -f "$overlay" ] || fail "raw claude launch did not write the per-task settings overlay"
   launch=$(cat "$LAUNCH_LOG")
-  [ "$launch" = "FOO=1 claude --settings '$overlay' --dangerously-skip-permissions" ] \
+  [ "$launch" = "FM_HOME='$HOME_DIR' FOO=1 claude --settings '$overlay' --dangerously-skip-permissions" ] \
     || fail "raw claude launch did not load the per-task settings overlay"$'\n'"actual: $launch"
   pass "a raw claude launch command loads the per-task hook overlay it is given"
 }
@@ -311,7 +376,7 @@ test_raw_claude_launch_with_own_settings_writes_no_overlay() {
   assert_contains "$out" "turn-end hook was NOT installed" \
     "spawn did not warn that the turn-end hook is unarmed"
   launch=$(cat "$LAUNCH_LOG")
-  [ "$launch" = "claude --settings /tmp/captain-settings.json" ] \
+  [ "$launch" = "FM_HOME='$HOME_DIR' claude --settings /tmp/captain-settings.json" ] \
     || fail "raw launch command changed"$'\n'"actual: $launch"
   pass "a raw claude command carrying its own --settings warns instead of writing a dead hook"
 }
@@ -331,7 +396,7 @@ test_raw_claude_shaped_wrapper_gets_no_settings_flag() {
   assert_contains "$out" "turn-end hook was NOT installed" \
     "spawn did not warn that the wrapper's turn-end hook is unarmed"
   launch=$(cat "$LAUNCH_LOG")
-  [ "$launch" = "claude-yolo --dangerously-skip-permissions" ] \
+  [ "$launch" = "FM_HOME='$HOME_DIR' claude-yolo --dangerously-skip-permissions" ] \
     || fail "spawn spliced flags into a claude-shaped wrapper command"$'\n'"actual: $launch"
   pass "a claude-shaped wrapper keeps its own argv and degrades with a warning"
 }
@@ -556,6 +621,8 @@ test_active_dispatch_profile_does_not_block_secondmate_launch() {
 test_no_profile_keeps_claude_profile_defaults
 test_claude_hook_preserves_repo_local_settings
 test_secondmate_claude_launch_omits_the_task_overlay
+test_ordinary_crew_launch_names_its_own_home
+test_secondmate_window_is_created_in_its_own_home
 test_active_dispatch_profile_requires_explicit_harness_for_ship
 test_active_dispatch_profile_requires_explicit_harness_for_scout
 test_active_dispatch_profile_allows_explicit_harness
