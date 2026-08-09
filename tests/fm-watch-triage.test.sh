@@ -1154,6 +1154,61 @@ test_parked_gate_unknown_liveness_escalates_on_the_ladder() {
   pass "a parked worker whose agent liveness cannot be read keeps today's escalation"
 }
 
+# The other half of the "a stopped alarm is worse than a noisy one" rule: the hold
+# is a HOLD, not silence. A gate nobody ever answers - the crew is alive and will
+# wait forever - must still reach the captain on the long bounded cadence, in the
+# recheck's own words rather than as a wedge, and without ever climbing the ladder.
+# The anchor is the frozen hash's own mtime, which the hold refreshes nowhere, so a
+# permanent hold cannot postpone its own recheck.
+test_parked_gate_hold_gets_bounded_recheck() {
+  local fields dir state fakebin key out window pid back stale_mtime
+  window="test:fm-gaterot"
+  fields=$(_parked_gate_ladder_case parked-gate-hold-recheck "$window")
+  IFS=$'\t' read -r dir state fakebin key <<< "$fields"
+  out="$dir/watch.out"
+  # This pane has been frozen at the gate for a full recheck window.
+  back=$(( $(date +%s) - 500 ))
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$state/.stale-$key"
+  else touch -m -d "@$back" "$state/.stale-$key"; fi
+  stale_mtime=$(file_mtime "$state/.stale-$key")
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=claude FM_FAKE_CREW_STATE="$PARKED_GATE_STATE" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "a gate held all day never got its bounded recheck: $(cat "$out")"
+  grep -F "bounded recheck" "$out" >/dev/null || fail "the recheck did not identify itself as a bounded recheck: $(cat "$out")"
+  grep -F "the run is parked at a decision gate and this worker is still alive" "$out" >/dev/null \
+    || fail "the recheck did not tell the captain WHY the pane was held: $(cat "$out")"
+  grep -F "possible wedge" "$out" >/dev/null && fail "a parked-gate recheck was mislabeled a wedge escalation: $(cat "$out")"
+  [ ! -e "$state/.wedge-escalations-$key" ] || fail "a parked-gate bounded recheck climbed the wedge-escalation ladder"
+  [ -s "$state/.wedgeheld-$key" ] || fail "the parked-gate bounded recheck did not record its throttle marker"
+  [ "$(file_mtime "$state/.stale-$key")" = "$stale_mtime" ] \
+    || fail "the parked hold refreshed the .stale-<key> anchor, which would postpone its own recheck forever"
+  grep "$(printf '\tstale\t')" "$state/.wake-queue" | grep -F "$window" >/dev/null \
+    || fail "the parked-gate bounded recheck was not queued for the captain: $(cat "$state/.wake-queue")"
+
+  # Throttled: the next poll inside the same recheck window holds again silently.
+  echo "$back" > "$state/.stale-since-$key"
+  : > "$out"
+  : > "$state/.wake-queue"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=claude FM_FAKE_CREW_STATE="$PARKED_GATE_STATE" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 30; then
+    reap "$pid"; fail "the parked-gate bounded recheck repeated inside its own cadence: $(cat "$out")"
+  fi
+  [ ! -s "$state/.wake-queue" ] || fail "a throttled parked-gate recheck enqueued another wake"
+  [ ! -e "$state/.wedge-escalations-$key" ] || fail "a throttled parked-gate recheck climbed the wedge-escalation ladder"
+  reap "$pid"
+  pass "a parked gate nobody answers still earns one bounded recheck per window, never a wedge escalation"
+}
+
 # --- non-terminal stale, crew NOT provably working: surfaced immediately ------
 # The key requirement: a crew with no running pipeline that has gone quiet (and is
 # not busy) has stopped - it may be done via interactive menus, waiting, or wedged.
@@ -2489,6 +2544,7 @@ test_parked_gate_dead_surfaces
 test_parked_gate_alive_holds_the_wedge_ladder
 test_parked_gate_dead_escalates_on_the_ladder
 test_parked_gate_unknown_liveness_escalates_on_the_ladder
+test_parked_gate_hold_gets_bounded_recheck
 test_terminal_stale_already_surfaced_absorbed_then_escalates
 test_terminal_stale_changed_line_still_surfaces
 test_wedge_escalation_marks_demand_deep_inspection_after_threshold
