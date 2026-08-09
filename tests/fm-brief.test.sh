@@ -367,6 +367,45 @@ test_status_key_position_is_shown_in_every_scaffold() {
   pass "fm-brief.sh: every scaffold shows the keyed status shape and states its position"
 }
 
+# Rule 1's push ban and Bridge's publish step both target the default branch, and a
+# crewmate has already read the ban as covering the publish: it passed --no-publish,
+# reported two envelope ids, and delivered nothing. Nothing downstream catches that,
+# so every scaffold carrying a rule 1 must state the boundary and the verification.
+test_rule_one_states_its_bridge_boundary() {
+  local home brief
+  home="$TMP_ROOT/bridge-boundary-home"
+  write_registry "$home"
+
+  for id in nm:alpha direct:direct-proj local:local-proj; do
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "bridge-${id%%:*}" "${id#*:}" >/dev/null 2>&1 \
+      || fail "ship scaffold (${id%%:*}) exited non-zero"
+  done
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" bridge-scout alpha --scout >/dev/null 2>&1 \
+    || fail "scout scaffold exited non-zero"
+
+  # shellcheck disable=SC2016  # backticks below are literal brief text, not substitutions.
+  for brief in "$home"/data/bridge-{nm,direct,local,scout}/brief.md; do
+    assert_grep 'Rule 1 is about code pushes.' "$brief" \
+      "$brief does not scope rule 1 to code pushes"
+    assert_grep 'rule 1 does not cover it: never pass `--no-publish` to a Bridge' "$brief" \
+      "$brief does not exclude the Bridge publish step from rule 1"
+    assert_grep 'An envelope id proves composition, never delivery' "$brief" \
+      "$brief lets an envelope id stand as proof of delivery"
+    assert_grep 'out of `inbox/<us>/new/` into `acked/`' "$brief" \
+      "$brief does not name the remote-side delivery check"
+  done
+
+  # Pin each ship brief's delivery mode: if the registry fixture ever stops resolving,
+  # all three collapse to no-mistakes briefs and the assertions above still pass.
+  assert_grep 'Firstmate will then instruct you to run /no-mistakes' \
+    "$home/data/bridge-nm/brief.md" "bridge-nm did not render as a no-mistakes brief"
+  assert_grep 'This project ships **direct-PR**' \
+    "$home/data/bridge-direct/brief.md" "bridge-direct did not render as a direct-PR brief"
+  assert_grep 'This project ships **local-only**' \
+    "$home/data/bridge-local/brief.md" "bridge-local did not render as a local-only brief"
+  pass "fm-brief.sh: every rule 1 states its Bridge-publish boundary and verification"
+}
+
 # Scout and secondmate paths still scaffold well-formed briefs.
 test_scout_and_secondmate_scaffold() {
   local brief
@@ -401,4 +440,5 @@ test_secondmate_no_projects_charter
 test_pause_verb_override_renders_all_brief_scaffolds
 test_scout_and_secondmate_load_decision_hold_policy
 test_status_key_position_is_shown_in_every_scaffold
+test_rule_one_states_its_bridge_boundary
 test_scout_and_secondmate_scaffold
