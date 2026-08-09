@@ -29,9 +29,13 @@
 #
 # WHY THESE KINDS ARE SAFE BY CONSTRUCTION
 # Neither can ever be mistaken for a captain decision. Captain-actionability is
-# one predicate in bin/fm-fleet-snapshot.sh and it requires `kind == "captain"`,
-# so a record of either kind below reads `captain_actionable: false` no matter
-# what anyone writes into it. That is structure, not a rule in prose that drifts.
+# one predicate in bin/fm-fleet-snapshot.sh and it requires `hold_kind ==
+# "captain"`, which is the field that names who is being asked. Both kinds below
+# are filed with `hold --kind future`, so both read `captain_actionable: false`.
+# That is structure, not a rule in prose that drifts - but it is structure in the
+# HOLD kind, so a fog record filed with a captain hold would surface as a captain
+# decision, which is the correct direction: a misfiled question the captain can
+# see is recoverable, one he cannot is not.
 #
 # Sourced, never executed.
 

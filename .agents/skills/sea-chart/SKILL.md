@@ -154,7 +154,7 @@ Whether a piece of work is destructive, irreversible, security-sensitive, or out
 The chart reads them; it never files them.
 They are ordinary backlog records, owned by the backlog contract in `AGENTS.md` section 10, which is where their spelling and their meaning live.
 Follow it exactly on the record kind rather than the hold: `hold --kind` refuses both names, and reading that refusal as "these cannot be stored" is what once left every chart's fog and boundaries permanently empty.
-Neither can ever be mistaken for a captain decision, because captain-actionability requires `kind: captain` and neither kind is that - structure, not a rule in prose.
+Neither can ever be mistaken for a captain decision, because captain-actionability requires `hold-kind: captain` and both are held as `future` - structure, not a rule in prose.
 
 A fog patch that becomes sharp is not promoted in place: close it, then register the real decision through `bin/fm-decision-hold.sh`, which already accepts later keys on a live or torn-down origin.
 A course boundary never rises at all.

@@ -111,7 +111,8 @@ That is the decision, not a working demo.
 ## What this skill does not do
 
 It authors and sizes **questions and work**.
-It never answers a captain decision: `bin/fm-decision-hold.sh` and `.agents/skills/decision-hold-lifecycle` own that, and this skill refuses to file a captain-actionable record so it cannot become a second owner by accident.
+It never answers a captain decision: `bin/fm-decision-hold.sh` and `.agents/skills/decision-hold-lifecycle` own that, and this skill refuses the `captain` kind so it cannot become a second owner by accident.
+That refusal is about ownership rather than the captain-actionable surface, which reads the hold kind: `bin/fm-to-backlog.sh` never calls `tasks-axi hold` at all, so it could not file an actionable record whatever kind it accepted.
 It never files fog or a course boundary either - those are the sea chart's own markers, spelled by `bin/fm-chart-kinds-lib.sh` and filed under `AGENTS.md` section 10.
 It never dispatches a worker, opens a branch, or writes code.
 

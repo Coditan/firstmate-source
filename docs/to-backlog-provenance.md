@@ -139,7 +139,8 @@ Ours outright, added rather than adapted:
   A unit may never be filed as `kind: captain`, `fog`, or `out-of-course`, because those records belong to `bin/fm-decision-hold.sh` and to the sea chart's own markers.
   Nor may a slug compose the reserved `-decision-` marker into its id, because `bin/fm-sea-chart.sh` reads that marker positionally rather than by kind, so an ordinary unit carrying it would leave the chart's takeable work and later read as a settled captain decision - the same hole as the kind refusal, reached through the id instead of the kind.
   And no unit may be blocked by its own origin, an edge that could never clear because a breakdown may never close the undertaking it is a slice of.
-  Without the kind and id refusals this skill could manufacture captain-actionable records as a side effect of slicing work, which is the one write the read-only argument was right about.
+  Without the kind and id refusals this skill could manufacture records that read as captain decisions as a side effect of slicing work, which is the one write the read-only argument was right about.
+  Captain-actionability itself is read off the hold, not the record kind (`bin/fm-fleet-snapshot.sh`), and this script never calls `tasks-axi hold`, so the refusals guard ownership and the chart's reading rather than that surface.
 
 ## What we dropped
 

@@ -326,7 +326,8 @@ EOF
 }
 
 test_fog_and_out_of_course_can_never_be_a_captain_decision() {
-  # Structure, not prose: captain-actionability requires kind captain.
+  # Structure, not prose: captain-actionability requires hold-kind captain, and
+  # AGENTS.md section 10 files both kinds below with a `future` hold.
   local home out
   home=$(make_home kinds)
   cat > "$home/data/backlog.md" <<'EOF'

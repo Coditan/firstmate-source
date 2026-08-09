@@ -74,13 +74,22 @@
 # ruling in its group is reported there too, as `unpaired-variant`: the fold
 # rests on an assumption nothing verifies, so a question only an analyst raised
 # must stay on the page rather than fall between the two surfaces. What makes a record
-# captain-gated is its KIND, never its name: `kind: captain` together with
-# `hold-kind: captain` is the only shape captain-actionability can ever admit,
-# and a captain record named without `-decision-` is exactly as lost when it is
-# blocked. A record of a DIFFERENT kind carrying a captain hold is not this gap
-# and is not recovered here: it never reaches `decisions_open` at all, so the
-# decision board cannot see it either. That belongs to the predicate in
-# bin/fm-fleet-snapshot.sh and is filed as `fm-snapshot-captain-shape-invisible`.
+# captain-gated is its KIND, never its name: what captain-actionability admits is
+# `hold-kind: captain` (bin/fm-fleet-snapshot.sh), and a captain record named
+# without `-decision-` is exactly as lost when it is blocked. This chart draws its
+# own reconciliation baseline narrower, from records of `kind: captain` under this
+# chart, because those are the ones its sections can classify. An UNBLOCKED
+# record of a DIFFERENT kind carrying a captain hold no longer needs that
+# baseline: since 2026-08-09 the predicate admits it on the hold kind alone, so
+# it arrives here through the inventory and is drawn like any other decision.
+# A BLOCKED one reaches NEITHER surface: the predicate fails it on the blocker,
+# and this chart's baseline fails it on the kind, so `withheld[]` never names it
+# either. It falls through to `unplaced[]`, where the reason reads cause
+# `blocked` and names its kind and its blocker but never says the captain is
+# being asked. That class is recovered nowhere as a decision - it lies outside
+# the recovery this header opens with rather than inside it. It behaved
+# identically before 2026-08-09, so this is not a regression, and the narrow
+# baseline is deliberate rather than an oversight.
 # Being per-chart is what makes the recovery possible without the fleet-wide
 # `decisions_blocked[]` surface that the design defers - a chart knows its own
 # scope, so it can ask a bounded question the fleet-wide board cannot.
@@ -378,9 +387,9 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # Why a captain-gated record is not on the decision list of this chart. These are
   # different pieces of news and must not share one sentence: a blocked record is
   # one the fleet has lost track of, while an in-flight one is being worked right
-  # now. Captain-actionability (bin/fm-fleet-snapshot.sh) wants a queued record of
-  # kind captain, held with hold-kind captain, and nothing unresolved against it,
-  # so each failing clause gets its own name and its own words.
+  # now. Captain-actionability (bin/fm-fleet-snapshot.sh) wants a queued record
+  # held with hold-kind captain and nothing unresolved against it, so each failing
+  # clause gets its own name and its own words.
   # The unpaired-variant clause comes FIRST because it is the one case where the
   # record did reach the actionable surface, so every sentence below it - each of
   # which says the surface never carried it - would be false of such a record.
@@ -487,17 +496,21 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
 
   # RECONCILIATION. Every record this chart owns that waits on the captain,
   # straight from the backlog - then whatever the actionable surface did not
-  # return. The test is the KIND, never the identifier: `kind: captain` with
-  # `hold-kind: captain` is the only shape captain-actionability can ever admit,
-  # so the record kind IS the thing while a name is only what it happens to be
-  # called. Keying on `-decision-` in the id would leave a blocked captain record
-  # named any other way not merely undercounted but invisible, every count
-  # reading zero - the same silent loss this chart exists against, on a third
-  # flank. A record of some other kind carrying a captain hold is a different
-  # gap: it never reaches `decisions_open` either, so the decision board cannot
-  # see it in the first place. That one belongs to the captain-actionable
-  # predicate in bin/fm-fleet-snapshot.sh and is filed as
-  # `fm-snapshot-captain-shape-invisible`; this chart cannot close it.
+  # return. The test is the KIND, never the identifier, so the record kind IS the
+  # thing while a name is only what it happens to be called. Keying on
+  # `-decision-` in the id would leave a blocked captain record named any other
+  # way not merely undercounted but invisible, every count reading zero - the same
+  # silent loss this chart exists against, on a third flank.
+  # This baseline stays narrower than the captain-actionable predicate, which
+  # admits any queued record held with `hold-kind: captain`. That is deliberate:
+  # an UNBLOCKED record of some other kind now reaches `decisions_open` on its own
+  # and is drawn from the inventory, so naming it here would only reconcile it
+  # against a surface that already carries it. A BLOCKED one reaches neither: the
+  # predicate fails it on the blocker and this line fails it on the kind, so it is
+  # recovered nowhere as a decision and lands in `unplaced[]` under cause
+  # `blocked`, named by kind and blocker but never as a question put to the
+  # captain. It behaved identically before 2026-08-09, so that is not a loss this
+  # line introduced, and staying narrow here is deliberate.
   | ([ $mine[] | select(open_state and .kind == "captain") ]) as $own_decision_records
   | ([ $own_decision_records[]
        | select(.id as $id | ($seen | index($id)) == null)

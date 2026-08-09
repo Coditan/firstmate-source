@@ -485,7 +485,7 @@ It tracks work items only, never agents; persistent secondmates never appear as 
 Work routed to a secondmate is recorded in that secondmate home's own backlog, not the main backlog.
 When a main-side thread such as a pending captain decision or relay reminder is worth durable tracking, file it as its own work item; use `tasks-axi hold <id> --reason "<reason>" --kind captain` for a captain-gated thread.
 Unresolved decisions discovered by investigations or visual reviews follow `decision-hold-lifecycle`, which owns their mandatory backlog lifecycle.
-Two further kinds carry a sea chart's own material and can never be mistaken for a captain decision, because captain-actionability requires `kind: captain`: `fog` for a question an investigation could not yet make sharp, and `out-of-course` for a deliberate scope boundary.
+Two further kinds carry a sea chart's own material and can never be mistaken for a captain decision, because captain-actionability requires `hold-kind: captain` and both are held as `future`: `fog` for a question an investigation could not yet make sharp, and `out-of-course` for a deliberate scope boundary.
 File both under the originating undertaking's id as `<chart>-fog-<slug>` and `<chart>-oos-<slug>`, so each belongs to exactly one chart.
 Both names go on the record kind, which is the only field the chart classifies by: file a dark patch with `tasks-axi add <id> "<title>" --kind fog` and a scope boundary with `tasks-axi add <id> "<title>" --kind out-of-course`, one command per record.
 Then `tasks-axi hold <id> --reason "<why>" --kind future` records the reason the chart prints, because `hold --kind` is a separate closed vocabulary that rejects both names.
