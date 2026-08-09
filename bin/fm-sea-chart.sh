@@ -78,12 +78,18 @@
 # `hold-kind: captain` (bin/fm-fleet-snapshot.sh), and a captain record named
 # without `-decision-` is exactly as lost when it is blocked. This chart draws its
 # own reconciliation baseline narrower, from records of `kind: captain` under this
-# chart, because those are the ones its sections can classify. A record of a
-# DIFFERENT kind carrying a captain hold no longer needs that baseline: since
-# 2026-08-09 the predicate admits it on the hold kind alone, so it arrives here
-# through the inventory and is drawn like any other decision. Only a BLOCKED one
-# is still lost, and that is the blocked-decision gap this header opens with,
-# not a second flank.
+# chart, because those are the ones its sections can classify. An UNBLOCKED
+# record of a DIFFERENT kind carrying a captain hold no longer needs that
+# baseline: since 2026-08-09 the predicate admits it on the hold kind alone, so
+# it arrives here through the inventory and is drawn like any other decision.
+# A BLOCKED one reaches NEITHER surface: the predicate fails it on the blocker,
+# and this chart's baseline fails it on the kind, so `withheld[]` never names it
+# either. It falls through to `unplaced[]`, where the reason reads cause
+# `blocked` and names its kind and its blocker but never says the captain is
+# being asked. That class is recovered nowhere as a decision - it lies outside
+# the recovery this header opens with rather than inside it. It behaved
+# identically before 2026-08-09, so this is not a regression, and the narrow
+# baseline is deliberate rather than an oversight.
 # Being per-chart is what makes the recovery possible without the fleet-wide
 # `decisions_blocked[]` surface that the design defers - a chart knows its own
 # scope, so it can ask a bounded question the fleet-wide board cannot.
@@ -497,10 +503,14 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # silent loss this chart exists against, on a third flank.
   # This baseline stays narrower than the captain-actionable predicate, which
   # admits any queued record held with `hold-kind: captain`. That is deliberate:
-  # a record of some other kind now reaches `decisions_open` on its own and is
-  # drawn from the inventory, so naming it here would only reconcile it against a
-  # surface that already carries it. What such a record still loses when BLOCKED
-  # it loses to the blocked-decision gap in the header, not to this line.
+  # an UNBLOCKED record of some other kind now reaches `decisions_open` on its own
+  # and is drawn from the inventory, so naming it here would only reconcile it
+  # against a surface that already carries it. A BLOCKED one reaches neither: the
+  # predicate fails it on the blocker and this line fails it on the kind, so it is
+  # recovered nowhere as a decision and lands in `unplaced[]` under cause
+  # `blocked`, named by kind and blocker but never as a question put to the
+  # captain. It behaved identically before 2026-08-09, so that is not a loss this
+  # line introduced, and staying narrow here is deliberate.
   | ([ $mine[] | select(open_state and .kind == "captain") ]) as $own_decision_records
   | ([ $own_decision_records[]
        | select(.id as $id | ($seen | index($id)) == null)
