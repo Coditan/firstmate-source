@@ -10,10 +10,11 @@
 # working signal is never silently swallowed. A declared external-wait pause or
 # a firstmate-declared parked terminal task is the separate idle absorb case and
 # re-surfaces only on its long bounded cadence. A run the authoritative run-step
-# reports stopped at a DECISION GATE is the third: idling there is the correct
-# behavior, so the stale path holds its wedge ladder - but only for as long as
-# the worker's agent PROCESS is confirmed alive, because a crashed worker leaves
-# the run parked identically and forever (parked_gate_liveness_class).
+# reports stopped at a DECISION GATE still surfaces on first sight - nothing has
+# relayed that gate yet - but does not ESCALATE as a wedge afterwards, since
+# idling at a gate is the correct behavior; that hold lasts only as long as the
+# worker's agent PROCESS is confirmed alive, because a crashed worker leaves the
+# run parked identically and forever (parked_gate_liveness_class).
 # A new status write still surfaces immediately in normal mode and clears parked
 # tracking.
 # While state/.afk exists, the away daemon owns triage and this watcher queues
@@ -31,8 +32,9 @@
 #                          firstmate hands it to a no-mistakes validation. A declared
 #                          external-wait pause or firstmate-declared parked terminal
 #                          wait is absorbed instead with its own long re-surface
-#                          cadence, never as a wedge, and a run parked at a decision
-#                          gate whose worker is confirmed alive holds the ladder on
+#                          cadence, never as a wedge. A run parked at a decision gate
+#                          whose worker is confirmed alive surfaces its first sighting
+#                          like any other stopped crew, then holds the wedge ladder on
 #                          the same bounded-recheck terms as an active run. Only when
 #                          no absorb class applies does the log's last line decide:
 #                          terminal (captain-relevant) or non-terminal (no verb),
@@ -772,8 +774,13 @@ codex_static_pane_upgrade() {  # <window> <fallback-class>
 
 # parked_gate_liveness_class: decide what a `parked` absorb class (crew_absorb_class
 # in bin/fm-classify-lib.sh - the authoritative run-step reports the pipeline stopped
-# at a decision gate) is worth on the STALE path, by corroborating it with a signal
-# that does not read interface text: the harness-agent PROCESS.
+# at a decision gate) is worth on the WEDGE-ESCALATION path, by corroborating it with
+# a signal that does not read interface text: the harness-agent PROCESS.
+#
+# Scoped to the ladder on purpose: a gate only ever holds an escalation on a stale
+# pane firstmate has ALREADY been woken for. The first sighting of that pane still
+# surfaces at once, whatever the run-step says, because nothing has told anyone
+# about the gate yet.
 #
 # The gate answers the wedge question outright for the crew that is still there. A
 # worker parked at an ask-user finding is idle because it did exactly what its brief
@@ -789,7 +796,7 @@ codex_static_pane_upgrade() {  # <window> <fallback-class>
 # for a healthy gate and a dead one. Only `alive` - a confirmed agent process, the
 # one piece of evidence that changes when the worker dies - licenses the absorb:
 #   alive   -> parked  (hold the ladder on the long bounded cadence)
-#   dead    -> none    (the caller's ordinary surface path: a run parked with
+#   dead    -> none    (the caller's ordinary escalation path: a run parked with
 #                       nobody left to answer it is a real failure, and it must
 #                       reach firstmate on the unchanged timings, never be
 #                       swallowed by the parked case)
@@ -800,11 +807,11 @@ codex_static_pane_upgrade() {  # <window> <fallback-class>
 # Secondmates are excluded like the codex backstop excludes them: they never drive
 # a run, so a `parked` verdict cannot be theirs to begin with.
 #
-# COST: this adds no crew-state read anywhere. Both call sites already had the
-# fm-crew-state.sh verdict in hand - the first sighting of a stale hash, and the
-# wedge escalation - and the only new work is one liveness probe on the branch
-# where the verdict is `parked`. Nothing here runs per poll per task, which is the
-# budget the watcher's whole absorb design is built around.
+# COST: this adds no crew-state read anywhere. The wedge escalation already had the
+# fm-crew-state.sh verdict in hand, and the only new work is one liveness probe on
+# the branch where that verdict is `parked`, once per escalation window. Nothing
+# here runs per poll per task, which is the budget the watcher's whole absorb design
+# is built around.
 parked_gate_liveness_class() {  # <window>
   local win=$1 alive
   [ "$(window_kind "$win")" != secondmate ] || { printf 'none'; return; }
@@ -813,24 +820,6 @@ parked_gate_liveness_class() {  # <window>
     alive) printf 'parked' ;;
     *)     printf 'none' ;;
   esac
-}
-
-# stale_absorb_class: crew_absorb_class as the FIRST-SIGHT stale path should read
-# it, with the two interface-text-independent corroborations layered on. They are
-# mutually exclusive by construction and each probes agent liveness at most once:
-# `parked` is a positive run-step reading that needs a live worker behind it, while
-# codex_static_pane_upgrade only ever fires on `none` (no run-step at all), so a
-# crew can never be both. Keeping them separate keeps each backstop's coverage its
-# own: the codex upgrade stays confined to a harness whose busy row lies, and the
-# parked gate stays confined to a run that is deliberately stopped.
-stale_absorb_class() {  # <window> <task>
-  local win=$1 task=$2 class
-  class=$(crew_absorb_class "$task")
-  if [ "$class" = parked ]; then
-    parked_gate_liveness_class "$win"
-    return
-  fi
-  codex_static_pane_upgrade "$win" "$class"
 }
 
 pause_state_class() {  # <window> <task>
@@ -842,7 +831,15 @@ pause_state_class() {  # <window> <task>
   recheck_file="$STATE/.paused-rechecked-$key"
   if ! status_is_paused_or_captain_held "$last"; then
     rm -f "$recheck_file"
-    stale_absorb_class "$win" "$task"
+    class=$(crew_absorb_class "$task")
+    # A gate reading never absorbs a FIRST sighting: at first sight nothing has
+    # relayed the gate to firstmate yet (this path is reached precisely when the
+    # crew's last status line is not captain-relevant), so swallowing it would
+    # leave the decision waiting on the long bounded cadence with nobody told.
+    # The gate only ever holds the wedge LADDER, once the pane is a known stale
+    # firstmate has already seen (wedge_timer_check).
+    [ "$class" = parked ] && class=none
+    codex_static_pane_upgrade "$win" "$class"
     return
   fi
   if [ -e "$STATE/.paused-$key" ] && [ "$(age_of "$recheck_file")" -lt "$STALE_ESCALATE_SECS" ]; then
@@ -1791,11 +1788,6 @@ EOF
           #   - paused: the crew declared an external wait, or a declared pause or
           #     captain hold is paired with a confidently dead agent, so absorb on
           #     the long PAUSE_RESURFACE_SECS recheck cadence instead of wedge-escalating;
-          #   - parked: the authoritative run-step reports the pipeline stopped at a
-          #     decision gate AND the worker's agent process is confirmed alive, so
-          #     absorb and start the wedge timer exactly as `working` does - the gate
-          #     is why the pane is idle, and the liveness read is what stops that
-          #     answer from covering for a worker that crashed at the gate;
           #   - none: no running pipeline, idle pane, no busy signature, no declared
           #     pause - the crew has STOPPED. Surface immediately so firstmate peeks
           #     (it may be done via an interactive menu that wrote no done: status,
@@ -1809,16 +1801,6 @@ EOF
                 printf '%s' "$h" > "$sf"
                 date +%s > "$ssf"
                 triage_log "absorbed non-terminal stale (provably working): $w"
-                ;;
-              parked)
-                # The run stopped at a decision gate and the worker is confirmed
-                # alive. Absorbed exactly like an active run - suppressor advanced,
-                # wedge timer armed - so the moment that worker stops being alive
-                # the very next escalation surfaces it on the unchanged schedule.
-                clear_pause_tracking "$w"
-                printf '%s' "$h" > "$sf"
-                date +%s > "$ssf"
-                triage_log "absorbed non-terminal stale (parked at a decision gate, worker alive): $w"
                 ;;
               paused)
                 handle_paused_stale "$w" "$task" "$h"
