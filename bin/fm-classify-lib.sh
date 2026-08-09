@@ -363,15 +363,29 @@ signal_reason_is_actionable() {  # <file> ...
 #             (e.g. waiting on CI);
 #   paused  - the crew's authoritative current state is a declared external-wait
 #             pause (paused:), which is EXPECTED to idle;
+#   parked  - the crew's authoritative RUN-STEP state is a decision gate
+#             (no-mistakes awaiting_approval/fix_review). The pipeline stopped on
+#             purpose and is waiting for an answer, so an idle pane is the
+#             CORRECT behavior rather than a wedge. Deliberately restricted to
+#             source: run-step - a status-log-sourced `parked` is the same
+#             append-only needs-decision EVENT the stale path already reasons
+#             about, is arbitrarily old, and reads identically whether the crew is
+#             at the gate or died an hour ago.
+#             This token says the RUN is parked; it says NOTHING about the worker
+#             still being there, because a crashed worker leaves the run parked
+#             forever. A caller must corroborate with an interface-text-
+#             independent liveness signal before absorbing on it
+#             (bin/fm-watch.sh's parked_gate_liveness_class);
 #   degraded- the reader could not consult its authoritative source at all: a
 #             required tool is absent, or the call it makes could not be made or
 #             did not answer (fm-crew-state.sh's `degraded` verdict, whose cause
 #             token says which). NOT a statement about the crew: the supervisor
 #             must report the broken instrument rather than draw either
 #             conclusion from it;
-#   none    - neither, so the wake must surface (a stopped/finished/parked/failed/
-#             torn-down/unknown crew, or an unreadable verdict).
-# One fm-crew-state.sh read serves BOTH absorb reasons at once. Reading the state
+#   none    - none of the above, so the wake must surface (a stopped/finished/
+#             failed/torn-down/unknown crew, a gate reported only by the status
+#             log, or an unreadable verdict).
+# One fm-crew-state.sh read serves EVERY absorb reason at once. Reading the state
 # authoritatively (not the status log) is what keeps run-step precedence: a crew
 # that appended paused: but then STARTED a run reports working, never paused.
 # NOT a pure read: fm-crew-state.sh may make a bounded no-mistakes call, so callers
@@ -386,9 +400,12 @@ crew_absorb_class() {  # <id>
   state=${line#state: }; state=${state%% *}
   if [ "$state" = paused ]; then printf 'paused'; return; fi
   if [ "$state" = degraded ]; then printf 'degraded'; return; fi
+  src=${line#*source: }; src=${src%% *}
   if [ "$state" = working ]; then
-    src=${line#*source: }; src=${src%% *}
     case "$src" in run-step|pane) printf 'working'; return ;; esac
+  fi
+  if [ "$state" = parked ]; then
+    case "$src" in run-step) printf 'parked'; return ;; esac
   fi
   printf 'none'
 }

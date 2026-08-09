@@ -198,6 +198,7 @@ The false-wedge exposure is real and was reproduced live (docs/codex-busy-detect
 The busy-signature matching in `fm-watch.sh` and `fm-tmux-lib.sh` stays deliberately unchanged - the row still matches whenever it renders - but the absorb path now carries an interface-text-INDEPENDENT backstop scoped to codex.
 `codex_static_pane_upgrade` in `bin/fm-watch.sh` treats an otherwise-stale codex pane as provably working (absorb plus wedge timer) whenever the codex agent PROCESS is confidently alive: `fm_backend_agent_alive` reads `alive` because the pane's foreground command stays `codex` for the entire turn (verified 100/100 samples), a signal that does not depend on the busy row at all.
 A crashed codex reads `dead` (bare shell) and still surfaces at once, and a genuinely wedged codex still escalates past `STALE_ESCALATE_SECS` and on to demand-deep-inspection, so the backstop hides a healthy worker without hiding a stuck one.
+One stale pane never reaches the backstop at all: when `bin/fm-crew-state.sh`'s run-step authoritatively reports the run stopped at a no-mistakes decision gate, that pane surfaces on first sight for every harness alike, so codex gets no first-sight absorb the others lack (docs/architecture.md owns the gate rule).
 This also covers the keymap-remap blind spot below, because it does not read the interrupt-hint text.
 
 The keymap case is the one that requires an operator to have changed something.
