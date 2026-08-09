@@ -102,7 +102,7 @@ Captain-actionability is a single predicate in `bin/fm-fleet-snapshot.sh` and a 
 Measured on a two-decision fixture, adding one `blocked-by` edge takes the reported inventory from "records: 2 decisions kept: 2" to "records: 1 decisions kept: 1", with no footnote anywhere.
 So this is the captain-actionable set, not the open set: say that on the board in the same breath as the unverified fold, and never present it as everything waiting on him.
 For one named undertaking, `.agents/skills/sea-chart` reconciles its own records against the backlog and reports each withheld one by name with its cause - fleet-wide there is no such count yet.
-The same predicate separately hides a captain hold carried on a record of another kind, filed as `fm-snapshot-captain-shape-invisible`; both losses belong to the snapshot and neither can be closed from this board.
+The blocker is the only shape of this loss left, and it belongs to the snapshot rather than to this board: the predicate reads the hold kind alone, so a captain hold carried on a record of any other kind does reach here.
 
 ## Every folded record stays visible
 
