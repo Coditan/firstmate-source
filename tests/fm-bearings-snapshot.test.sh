@@ -943,6 +943,41 @@ test_open_decision_surfaces_end_to_end() {
   pass "an authoritative captain hold surfaces end-to-end"
 }
 
+# AGENTS.md section 10 files a captain-gated thread with `tasks-axi hold <id>
+# --reason "<reason>" --kind captain` and says nothing about the record kind, so a
+# record filed exactly as instructed keeps whatever kind it already had - or none.
+# The captain-actionable predicate used to demand `kind: captain` as well, which
+# made every such hold invisible to this surface, to the decision board, and to
+# every bearings read. Measured on the live home 2026-08-09: 35 records carried a
+# captain hold and 32 reached the surface.
+test_captain_hold_on_a_non_captain_kind_record_surfaces() {
+  local home fakebin json
+  home=$(make_home captain-hold-shape); write_fixture "$home"
+  cat >> "$home/data/backlog.md" <<'EOF'
+
+## Queued
+- [ ] deploy-prod - Deploy the stack (repo: firstmate) (kind: ship) (hold: production action needs his live word) (hold-kind: captain)
+- [ ] allships-notice - Tell the fleet an update exists (repo: firstmate) (hold: captain chose to hold it until close-out) (hold-kind: captain)
+- [ ] blocked-deploy - Clear the residue rows blocked-by: ship-task (repo: firstmate) (kind: ship) (hold: production data change, captain-gated) (hold-kind: captain)
+EOF
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    (.decisions_open | any(.[]; .id == "deploy-prod" and .verb == "captain-hold"))
+      and (.decisions_open | any(.[]; .id == "allships-notice" and .verb == "captain-hold"))
+      and (.gates | any(.[]; .id == "deploy-prod") | not)
+      and (.gates | any(.[]; .id == "allships-notice") | not)
+  ' >/dev/null || fail "a captain hold filed on a record whose own kind is not captain must reach the captain: $json"
+  # The neighbouring loss is left exactly as it was: a captain hold behind an
+  # unresolved blocker still leaves decisions_open and lands in gates carrying no
+  # kind. That gap is separately filed and this change must not quietly move it.
+  printf '%s' "$json" | jq -e '
+    (.decisions_open | any(.[]; .id == "blocked-deploy") | not)
+      and (.gates | any(.[]; .id == "blocked-deploy" and .blocked_by == "ship-task"))
+  ' >/dev/null || fail "a blocked captain hold must stay withheld exactly as before: $json"
+  pass "a captain hold reaches the captain whatever the record kind, and a blocked one still does not"
+}
+
 test_report_pointers_surface() {
   local home fakebin json
   home=$(make_home reports); write_fixture "$home"
@@ -2043,6 +2078,7 @@ test_dangling_blocker_surfaces_ready_with_integrity_warning
 test_secondmate_dangling_blocker_surfaces_ready_with_integrity_warning
 test_completed_scout_report_not_pending
 test_open_decision_surfaces_end_to_end
+test_captain_hold_on_a_non_captain_kind_record_surfaces
 test_report_pointers_surface
 test_superseded_queued_item_dropped_by_default
 test_include_prs_is_the_only_fetch_path

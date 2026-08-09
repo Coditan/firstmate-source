@@ -470,8 +470,21 @@ backlog_json() {  # [<backlog-path>] - defaults to this home's $BACKLOG
                elif .state == "queued" then "queued"
                else "done" end)
           | .requires_child_metadata = (.current_role == "worker")
+          # The audience of a hold is `hold_kind`, never the record kind. A record
+          # kind says what the work IS - ship, scout, fog - and `tasks-axi hold
+          # --kind captain` is what says the captain is the one being asked, which
+          # is why AGENTS.md section 10 files a captain-gated thread with that one
+          # command and says nothing about the record kind. Requiring both
+          # fields made every hold filed exactly as instructed invisible: measured
+          # on this home 2026-08-09, 35 records carried `hold-kind: captain` and the
+          # surface returned 32, the missing ones being a production deploy filed as
+          # kind ship and a thread carrying no record kind at all.
+          # `hold --kind` is a closed vocabulary (captain, external, load, parked,
+          # future), so widening admits only records someone deliberately held for
+          # the captain. A blocked record is still withheld here - that is a
+          # separate, separately filed gap and this predicate does not change it.
           | .captain_actionable =
-              (.state == "queued" and .kind == "captain" and .hold_kind == "captain"
+              (.state == "queued" and .hold_kind == "captain"
                and .hold_reason != null and (.unresolved_blocker_ids | length) == 0)
         else . end)
     | del(.section,.order)

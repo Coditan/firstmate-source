@@ -33,9 +33,11 @@
 # it is cheap to fix, rather than leaving orphan units nobody's chart shows.
 #
 # WHY THREE KINDS ARE REFUSED
-# `captain` is the one predicate that makes a record captain-actionable
-# (bin/fm-fleet-snapshot.sh), and durable captain decisions are owned by
-# bin/fm-decision-hold.sh under .agents/skills/decision-hold-lifecycle. `fog` and
+# `captain` is the kind durable captain decisions carry, and those are owned by
+# bin/fm-decision-hold.sh under .agents/skills/decision-hold-lifecycle. This
+# script never calls `tasks-axi hold`, and a hold is what
+# bin/fm-fleet-snapshot.sh reads for captain-actionability, so the refusal is
+# about ownership rather than the surface. `fog` and
 # `out-of-course` are the sea chart's own kinds, spelled by
 # bin/fm-chart-kinds-lib.sh and carried on `-fog-`/`-oos-` ids this script does
 # not compose. Slicing work must never manufacture a record of any of the three
