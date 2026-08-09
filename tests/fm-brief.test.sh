@@ -394,6 +394,15 @@ test_rule_one_states_its_bridge_boundary() {
     assert_grep 'out of `inbox/<us>/new/` into `acked/`' "$brief" \
       "$brief does not name the remote-side delivery check"
   done
+
+  # Pin each ship brief's delivery mode: if the registry fixture ever stops resolving,
+  # all three collapse to no-mistakes briefs and the assertions above still pass.
+  assert_grep 'Firstmate will then instruct you to run /no-mistakes' \
+    "$home/data/bridge-nm/brief.md" "bridge-nm did not render as a no-mistakes brief"
+  assert_grep 'This project ships **direct-PR**' \
+    "$home/data/bridge-direct/brief.md" "bridge-direct did not render as a direct-PR brief"
+  assert_grep 'This project ships **local-only**' \
+    "$home/data/bridge-local/brief.md" "bridge-local did not render as a local-only brief"
   pass "fm-brief.sh: every rule 1 states its Bridge-publish boundary and verification"
 }
 
