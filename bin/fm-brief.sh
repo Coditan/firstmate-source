@@ -35,6 +35,11 @@
 #                captain approves, firstmate merges to local main
 # Ship briefs begin with a worktree-isolation assertion before the branch step.
 # Scout tasks ignore mode - their deliverable is a report, not a merge.
+# Every scaffold carrying a numbered rule 1 - all three ship modes and scout -
+# scopes that rule to code pushes: publishing a Bridge envelope also targets the
+# default branch but is Bridge's delivery step, so the ban does not cover it, and
+# an envelope id proves composition rather than delivery. The secondmate charter
+# has no rule 1 and so carries no such note.
 # Every scaffold's status protocol distinguishes the configured
 # declared-external-wait verb (FM_CLASSIFY_PAUSED_VERB, default "paused") from
 # "blocked:": pause for a known external wait expected to clear on its own,
