@@ -9,8 +9,13 @@
 # otherwise, so a crew that finishes (or stops and waits) without a current
 # working signal is never silently swallowed. A declared external-wait pause or
 # a firstmate-declared parked terminal task is the separate idle absorb case and
-# re-surfaces only on its long bounded cadence. A new status write still surfaces
-# immediately in normal mode and clears parked tracking.
+# re-surfaces only on its long bounded cadence. A run the authoritative run-step
+# reports stopped at a DECISION GATE is the third: idling there is the correct
+# behavior, so the stale path holds its wedge ladder - but only for as long as
+# the worker's agent PROCESS is confirmed alive, because a crashed worker leaves
+# the run parked identically and forever (parked_gate_liveness_class).
+# A new status write still surfaces immediately in normal mode and clears parked
+# tracking.
 # While state/.afk exists, the away daemon owns triage and this watcher queues
 # every actionable wake without running the more expensive normal-mode
 # classifiers, though signal records are collapsed to one per task in away mode
@@ -26,8 +31,10 @@
 #                          firstmate hands it to a no-mistakes validation. A declared
 #                          external-wait pause or firstmate-declared parked terminal
 #                          wait is absorbed instead with its own long re-surface
-#                          cadence, never as a wedge. Only when neither absorb class
-#                          applies does the log's last line decide:
+#                          cadence, never as a wedge, and a run parked at a decision
+#                          gate whose worker is confirmed alive holds the ladder on
+#                          the same bounded-recheck terms as an active run. Only when
+#                          no absorb class applies does the log's last line decide:
 #                          terminal (captain-relevant) or non-terminal (no verb),
 #                          both surfaced at once. A provably-working stale past the
 #                          wedge threshold also surfaces, with an "escalation N"
@@ -358,6 +365,32 @@ wake() {
 # below).
 FM_WEDGE_DEMAND_INSPECT_COUNT=${FM_WEDGE_DEMAND_INSPECT_COUNT:-3}
 
+# ladder_hold: the one implementation of "this stale pane has a positive reason not
+# to climb the wedge ladder". Refreshes the escalation timer so the reason is
+# RE-READ every window rather than trusted once, and surfaces one bounded recheck
+# whenever the pane has been frozen for a full PAUSE_RESURFACE_SECS - measured on
+# the frozen hash's own age, not on the timer this hold keeps refreshing, so a hold
+# can never postpone its own recheck. It never touches the escalation counter, so a
+# held pane never climbs toward demand-deep-inspection.
+# <situation> names the evidence in the wake text and the triage log; <next-step>
+# is what firstmate should confirm. Both callers pass their own, because "the run
+# is running" and "the run is parked at a gate" need different confirmations.
+ladder_hold() {  # <window> <since-file> <triage-label> <situation> <next-step>
+  local win=$1 since_file=$2 label=$3 situation=$4 next_step=$5 wkey hold_age rf reason
+  date +%s > "$since_file"
+  wkey=$(window_state_key "$win")
+  hold_age=$(age_of "$STATE/.stale-$wkey")
+  rf="$STATE/.wedgeheld-$wkey"
+  if [ "$hold_age" -ge "$PAUSE_RESURFACE_SECS" ] && [ "$(age_of "$rf")" -ge "$PAUSE_RESURFACE_SECS" ]; then
+    reason="stale: $win (pane unchanged ${hold_age}s while $situation - bounded recheck on a long cadence, not a wedge escalation; $next_step)"
+    fm_wake_append stale "$win" "$reason" || exit 1
+    date +%s > "$rf"
+    wake "$reason"
+    return
+  fi
+  triage_log "absorbed $label ($situation, ladder held): $win"
+}
+
 # Repeat-poll wedge-timer bookkeeping for an already-classified stale hash
 # absorbed as provably-working - repairs a missing/corrupt timer (self-heals a
 # watcher restart between recording the hash and recording the timer), or
@@ -378,8 +411,13 @@ FM_WEDGE_DEMAND_INSPECT_COUNT=${FM_WEDGE_DEMAND_INSPECT_COUNT:-3}
 # read is what distinguishes them, it runs once per interval rather than once per
 # poll, and the moment a run ends or dies the crew stops reading as working and
 # the next elapse escalates on the unchanged schedule.
+#
+# A run PARKED at a decision gate holds the ladder on the same terms, with one
+# extra requirement the active-run case does not need: the gate reading is only
+# trusted while agent liveness confirms a worker is still there to answer it
+# (parked_gate_liveness_class). Both holds are one function - ladder_hold above.
 wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-file>
-  local win=$1 since_file=$2 label=$3 escalation_file=$4 since age n reason wkey hold_age rf wtask wclass
+  local win=$1 since_file=$2 label=$3 escalation_file=$4 since age n reason wtask wclass
   since=$(cat "$since_file" 2>/dev/null || true)
   case "$since" in
     ''|*[!0-9]*)
@@ -391,6 +429,15 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
       if [ "$age" -ge "$STALE_ESCALATE_SECS" ]; then
         wtask=$(window_to_task "$win" "$STATE")
         wclass=$(crew_absorb_class "$wtask")
+        # The gate reading is re-corroborated against agent liveness HERE, not
+        # carried over from the classification that started this timer: a worker
+        # can die at any point during the hold, and a stale `alive` from minutes
+        # ago is exactly the evidence that would let it rot. A dead or unreadable
+        # agent falls straight through to the ordinary escalation below, on the
+        # unchanged timings. The codex static-pane upgrade is deliberately NOT
+        # applied here - it absorbs a first sighting only, and a genuinely wedged
+        # codex must still reach demand-deep-inspection.
+        [ "$wclass" = parked ] && wclass=$(parked_gate_liveness_class "$win")
         if [ "$wclass" = degraded ]; then
           # The crew state was never read - a tool the reader needs is missing
           # from this service's PATH. Climbing the ladder here would escalate a
@@ -402,27 +449,24 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
           return
         fi
         if [ "$wclass" = working ]; then
-          date +%s > "$since_file"
           # Bounded insurance against the one way an active run can lie: a run
           # whose agent died mid-step keeps reporting `running` indefinitely, and
           # holding the ladder on that reading alone would let a dead crew rot
-          # invisibly. So a hold that has lasted a full PAUSE_RESURFACE_SECS - the
-          # fleet's existing "recheck a known-idle wait" cadence, measured on the
-          # frozen pane hash's own age, not on the timer this hold keeps
-          # refreshing - surfaces ONE bounded recheck and then waits out another
-          # full window. It never touches the escalation counter, so an active run
-          # still never climbs the wedge ladder toward demand-deep-inspection.
-          wkey=$(window_state_key "$win")
-          hold_age=$(age_of "$STATE/.stale-$wkey")
-          rf="$STATE/.wedgeheld-$wkey"
-          if [ "$hold_age" -ge "$PAUSE_RESURFACE_SECS" ] && [ "$(age_of "$rf")" -ge "$PAUSE_RESURFACE_SECS" ]; then
-            reason="stale: $win (pane unchanged ${hold_age}s while the run still reports active - bounded recheck on a long cadence, not a wedge escalation; confirm the run is really progressing)"
-            fm_wake_append stale "$win" "$reason" || exit 1
-            date +%s > "$rf"
-            wake "$reason"
-            return
-          fi
-          triage_log "absorbed $label (run still active at escalation, ladder held): $win"
+          # invisibly - so the hold earns one bounded recheck per window.
+          ladder_hold "$win" "$since_file" "$label" \
+            "the run still reports active" \
+            "confirm the run is really progressing"
+          return
+        fi
+        if [ "$wclass" = parked ]; then
+          # The run is stopped at a decision gate AND the worker is confirmed
+          # alive: the pane is idle because the crew asked a question and waited,
+          # which is the behavior its brief requires. Hold the ladder on the same
+          # terms as an active run - including the bounded recheck, so a gate
+          # nobody ever answers still cannot rot invisibly.
+          ladder_hold "$win" "$since_file" "$label" \
+            "the run is parked at a decision gate and this worker is still alive" \
+            "answer the gate or confirm the decision is still pending"
           return
         fi
         n=$(( $(cat "$escalation_file" 2>/dev/null || echo 0) + 1 ))
@@ -726,6 +770,69 @@ codex_static_pane_upgrade() {  # <window> <fallback-class>
   printf '%s' "$fallback"
 }
 
+# parked_gate_liveness_class: decide what a `parked` absorb class (crew_absorb_class
+# in bin/fm-classify-lib.sh - the authoritative run-step reports the pipeline stopped
+# at a decision gate) is worth on the STALE path, by corroborating it with a signal
+# that does not read interface text: the harness-agent PROCESS.
+#
+# The gate answers the wedge question outright for the crew that is still there. A
+# worker parked at an ask-user finding is idle because it did exactly what its brief
+# requires - ask, then stop. The 2026-08-08 evidence: two such workers escalated as
+# `idle 254s, possible wedge, escalation 1` while fm-crew-state.sh, run against the
+# same tasks at the same moment, returned `state: parked - source: run-step - parked
+# at review: 3 finding(s) (ask-user: captain decision)`. The fleet already knew.
+#
+# But `parked` alone is NOT that answer, and absorbing on it would be the failure
+# this whole absorb path exists to avoid. A worker that crashed one second after
+# printing its gate prompt leaves the run parked in exactly the same way, forever:
+# no-mistakes has no idea its agent is gone, so the run-step reading is IDENTICAL
+# for a healthy gate and a dead one. Only `alive` - a confirmed agent process, the
+# one piece of evidence that changes when the worker dies - licenses the absorb:
+#   alive   -> parked  (hold the ladder on the long bounded cadence)
+#   dead    -> none    (the caller's ordinary surface path: a run parked with
+#                       nobody left to answer it is a real failure, and it must
+#                       reach firstmate on the unchanged timings, never be
+#                       swallowed by the parked case)
+#   unknown -> none    (fm_backend_agent_alive's contract: never license an action
+#                       from unknown. Today that covers pi, whose launcher execs
+#                       into a generic `node`, and every backend past tmux/herdr -
+#                       those crews keep exactly today's behavior)
+# Secondmates are excluded like the codex backstop excludes them: they never drive
+# a run, so a `parked` verdict cannot be theirs to begin with.
+#
+# COST: this adds no crew-state read anywhere. Both call sites already had the
+# fm-crew-state.sh verdict in hand - the first sighting of a stale hash, and the
+# wedge escalation - and the only new work is one liveness probe on the branch
+# where the verdict is `parked`. Nothing here runs per poll per task, which is the
+# budget the watcher's whole absorb design is built around.
+parked_gate_liveness_class() {  # <window>
+  local win=$1 alive
+  [ "$(window_kind "$win")" != secondmate ] || { printf 'none'; return; }
+  alive=$(fm_backend_agent_alive "$(window_backend "$win")" "$win" 2>/dev/null) || alive=unknown
+  case "$alive" in
+    alive) printf 'parked' ;;
+    *)     printf 'none' ;;
+  esac
+}
+
+# stale_absorb_class: crew_absorb_class as the FIRST-SIGHT stale path should read
+# it, with the two interface-text-independent corroborations layered on. They are
+# mutually exclusive by construction and each probes agent liveness at most once:
+# `parked` is a positive run-step reading that needs a live worker behind it, while
+# codex_static_pane_upgrade only ever fires on `none` (no run-step at all), so a
+# crew can never be both. Keeping them separate keeps each backstop's coverage its
+# own: the codex upgrade stays confined to a harness whose busy row lies, and the
+# parked gate stays confined to a run that is deliberately stopped.
+stale_absorb_class() {  # <window> <task>
+  local win=$1 task=$2 class
+  class=$(crew_absorb_class "$task")
+  if [ "$class" = parked ]; then
+    parked_gate_liveness_class "$win"
+    return
+  fi
+  codex_static_pane_upgrade "$win" "$class"
+}
+
 pause_state_class() {  # <window> <task>
   local win=$1 task=$2 key last recheck_file class agent_alive
   key=${win//:/_}
@@ -735,7 +842,7 @@ pause_state_class() {  # <window> <task>
   recheck_file="$STATE/.paused-rechecked-$key"
   if ! status_is_paused_or_captain_held "$last"; then
     rm -f "$recheck_file"
-    codex_static_pane_upgrade "$win" "$(crew_absorb_class "$task")"
+    stale_absorb_class "$win" "$task"
     return
   fi
   if [ -e "$STATE/.paused-$key" ] && [ "$(age_of "$recheck_file")" -lt "$STALE_ESCALATE_SECS" ]; then
@@ -751,6 +858,12 @@ pause_state_class() {  # <window> <task>
     return
   fi
   class=$(crew_absorb_class "$task")
+  # Below this line the crew has DECLARED a pause or a verified captain hold, and
+  # the branch's own dead-agent rule already owns that idle pane. The run-step gate
+  # reading adds nothing here and its liveness corroboration would collide with the
+  # declaration's, so `parked` keeps the exact `none` handling it had before the
+  # gate class existed; only the undeclared path above consults it.
+  [ "$class" = parked ] && class=none
   if [ "$class" = working ]; then
     rm -f "$recheck_file"
     printf 'working'
@@ -1678,6 +1791,11 @@ EOF
           #   - paused: the crew declared an external wait, or a declared pause or
           #     captain hold is paired with a confidently dead agent, so absorb on
           #     the long PAUSE_RESURFACE_SECS recheck cadence instead of wedge-escalating;
+          #   - parked: the authoritative run-step reports the pipeline stopped at a
+          #     decision gate AND the worker's agent process is confirmed alive, so
+          #     absorb and start the wedge timer exactly as `working` does - the gate
+          #     is why the pane is idle, and the liveness read is what stops that
+          #     answer from covering for a worker that crashed at the gate;
           #   - none: no running pipeline, idle pane, no busy signature, no declared
           #     pause - the crew has STOPPED. Surface immediately so firstmate peeks
           #     (it may be done via an interactive menu that wrote no done: status,
@@ -1691,6 +1809,16 @@ EOF
                 printf '%s' "$h" > "$sf"
                 date +%s > "$ssf"
                 triage_log "absorbed non-terminal stale (provably working): $w"
+                ;;
+              parked)
+                # The run stopped at a decision gate and the worker is confirmed
+                # alive. Absorbed exactly like an active run - suppressor advanced,
+                # wedge timer armed - so the moment that worker stops being alive
+                # the very next escalation surfaces it on the unchanged schedule.
+                clear_pause_tracking "$w"
+                printf '%s' "$h" > "$sf"
+                date +%s > "$ssf"
+                triage_log "absorbed non-terminal stale (parked at a decision gate, worker alive): $w"
                 ;;
               paused)
                 handle_paused_stale "$w" "$task" "$h"

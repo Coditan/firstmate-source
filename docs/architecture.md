@@ -19,6 +19,9 @@ For an ordinary crew that has stopped, the normal-mode watcher first surfaces on
 Live or inconclusive liveness remains fail-open at that initial surface, and the secondmate idle-endpoint exemption is unchanged.
 Its initial normal-mode status signal still surfaces through the no-verb path, while away mode self-handles that routine signal and owns the later recheck.
 A terminal task firstmate marks parked (`bin/fm-mark-parked.sh <window>`) after relaying its outcome and confirming only external human action remains is absorbed the same way and on the same cadence, keyed off the marker instead of a status verb; a later status write or metadata change clears the marker and returns the task to normal classification.
+A mid-pipeline run that `bin/fm-crew-state.sh` reports stopped at a no-mistakes decision gate is a distinct case from that operator-declared marker, and the watcher recognizes it without one: a worker parked at an ask-user finding is idle precisely because it followed its instructions, so its stale pane holds the wedge ladder on the bounded-recheck cadence instead of escalating.
+That hold rests on `fm_backend_agent_alive` confirming the worker's agent process and on nothing else, because a worker that crashed at the gate leaves the run parked identically and forever; a `dead` or unreadable liveness verdict keeps the unchanged escalation, and the reading is re-taken at every escalation window rather than trusted once.
+A gate reported only by the append-only status log earns no hold at all, since that event is arbitrarily old and reads the same either way.
 Fresh stale panes use the same current-state read before trusting the status log, so an active run or busy pane outranks an old captain-relevant status-log line left behind before validation.
 No-change heartbeats are also benign.
 Absorbed wakes advance their suppression markers, log to `state/.watch-triage.log`, and keep the watcher blocking without a queue record or LLM turn.

@@ -268,12 +268,22 @@ test_crew_absorb_class_classifier() {
   ! crew_is_provably_working a || fail "a paused crew was treated as provably working"
   FM_FAKE_CREW_STATE='state: working · source: status-log · working: compiling'
   [ "$(crew_absorb_class a)" = none ] || fail "stale working: status-log classed absorbable"
+  FM_FAKE_CREW_STATE='state: parked · source: run-step · parked at review: 3 finding(s) (ask-user: captain decision)'
+  [ "$(crew_absorb_class a)" = parked ] || fail "an authoritative run-step decision gate not classed parked"
+  ! crew_is_provably_working a || fail "a parked run was treated as provably working"
+  ! crew_is_paused a || fail "a parked run was conflated with a declared external-wait pause"
+  ! crew_is_degraded a || fail "a parked run was conflated with an unread crew state"
+  # A gate known only from the append-only status log is an arbitrarily old EVENT
+  # that reads the same whether the crew is at the gate or died an hour ago, so it
+  # earns no absorb class of its own.
+  FM_FAKE_CREW_STATE='state: parked · source: status-log · needs-decision: pick A or B'
+  [ "$(crew_absorb_class a)" = none ] || fail "a status-log-sourced gate was classed absorbable"
   FM_FAKE_CREW_STATE='state: unknown · source: none · worktree gone'
   [ "$(crew_absorb_class a)" = none ] || fail "unknown crew classed absorbable"
   ! crew_is_paused a || fail "unknown crew classed paused"
   [ "$(crew_absorb_class "")" = none ] || fail "empty id not classed none"
   unset FM_FAKE_CREW_STATE
-  pass "crew_absorb_class: working/paused/none from one read; crew_is_paused and crew_is_provably_working agree"
+  pass "crew_absorb_class: working/paused/parked/none from one read, and the predicates keep their own meanings"
 }
 
 # signal_crew_provably_working: a no-verb "signal:" wake is benign ONLY when EVERY
@@ -931,6 +941,166 @@ test_codex_backstop_scoped_to_codex() {
   [ ! -e "$state/.stale-since-$key" ] || fail "a non-codex worker must not get the codex liveness absorb"
   unset FM_FAKE_CREW_STATE
   pass "the agent-liveness absorb is scoped to codex: a claude worker with an alive process still surfaces immediately"
+}
+
+# --- parked-at-a-decision-gate liveness gate ---------------------------------
+# A worker parked at an ask-user finding is idle because it did exactly what its
+# brief requires: ask, then stop. fm-crew-state.sh answers that outright
+# ("state: parked · source: run-step · parked at review: 3 finding(s) (ask-user:
+# captain decision)") and the watcher escalated it as a possible wedge anyway,
+# every four minutes, because crew_absorb_class collapsed `parked` into `none`.
+# The gate absorb is corroborated by the agent PROCESS and by nothing else: a
+# worker that crashed one second after printing its gate prompt leaves the run
+# parked identically and forever, so `dead` and `unknown` keep today's behavior
+# exactly. harness=claude throughout, so nothing here can be the codex backstop.
+#
+# The authoritative reading the watcher used to ignore. Passed into each watcher
+# launch rather than exported by the fixture, because the fixture runs inside a
+# command substitution and an export there would never reach the watcher.
+PARKED_GATE_STATE='state: parked · source: run-step · parked at review: 3 finding(s) (ask-user: captain decision)'
+
+_parked_gate_case() {  # <dir-name> <window> <status-line> <pane-text>
+  local dir state fakebin capture_file window key pane_hash sig statusf
+  dir=$(make_case "$1"); state="$dir/state"; fakebin="$dir/fakebin"
+  capture_file="$dir/pane.txt"; window=$2; statusf="$state/gate.status"
+  printf '%s' "$4" > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=claude\n' "$window" > "$state/gate.meta"
+  printf '%s\n' "$3" > "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-gate_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "$4")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  printf '%s\t%s\t%s\t%s\n' "$dir" "$state" "$fakebin" "$key"
+}
+
+test_parked_gate_alive_absorbed() {
+  local fields dir state fakebin key out window pid pane_hash
+  window="test:fm-gatealive"
+  fields=$(_parked_gate_case parked-gate-alive "$window" 'working: running the pipeline' 'idle at the review gate')
+  IFS=$'\t' read -r dir state fakebin key <<< "$fields"
+  out="$dir/watch.out"; pane_hash=$(hash_text "idle at the review gate")
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=claude FM_FAKE_CREW_STATE="$PARKED_GATE_STATE" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 30; then
+    reap "$pid"; fail "a worker parked at a decision gate with a live agent still woke firstmate: $(cat "$out")"
+  fi
+  [ ! -s "$state/.wake-queue" ] || fail "the parked-gate absorb enqueued a wake: $(cat "$state/.wake-queue")"
+  [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" = "$pane_hash" ] || fail "stale suppressor not advanced on the parked-gate absorb"
+  [ -s "$state/.stale-since-$key" ] || fail "the parked-gate absorb did not arm the wedge timer, so a dying worker could never escalate"
+  grep -F "parked at a decision gate, worker alive" "$state/.watch-triage.log" >/dev/null \
+    || fail "the absorb did not record WHY it believed the worker was fine: $(cat "$state/.watch-triage.log" 2>/dev/null)"
+  reap "$pid"
+  pass "a worker parked at a decision gate with a live agent is absorbed, and says why, with the wedge timer still armed"
+}
+
+test_parked_gate_dead_surfaces() {
+  local fields dir state fakebin key out drain_out window pid
+  window="test:fm-gatedead"
+  fields=$(_parked_gate_case parked-gate-dead "$window" 'working: running the pipeline' 'idle at the review gate')
+  IFS=$'\t' read -r dir state fakebin key <<< "$fields"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"
+  # Identical run-step reading, agent gone (bare shell). The gate can no longer be
+  # answered by anyone, so the parked case must NOT swallow it.
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=bash FM_FAKE_CREW_STATE="$PARKED_GATE_STATE" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "a run parked at a gate whose worker died was never surfaced"
+  grep -Fx "stale: $window" "$out" >/dev/null || fail "the dead parked worker did not print the immediate stale wake: $(cat "$out")"
+  [ ! -e "$state/.stale-since-$key" ] || fail "a dead parked worker started the wedge timer instead of surfacing at once"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the dead parked-worker surface failed"
+  grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "the dead parked worker's wake was not queued"
+  pass "a run parked at a gate whose worker has died surfaces immediately (the parked case never masks a crash)"
+}
+
+test_parked_gate_unknown_liveness_surfaces() {
+  local fields dir state fakebin key out window pid
+  window="test:fm-gateunknown"
+  # pi's launcher execs into a generic `node`, so its liveness reads unknown
+  # (docs/tmux-backend.md "Known gaps"). Unknown never licenses an absorb: these
+  # crews keep exactly the behavior they have today.
+  fields=$(_parked_gate_case parked-gate-unknown "$window" 'working: running the pipeline' 'idle at the review gate')
+  IFS=$'\t' read -r dir state fakebin key <<< "$fields"
+  out="$dir/watch.out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=node FM_FAKE_CREW_STATE="$PARKED_GATE_STATE" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "an unreadable agent liveness was treated as proof the parked worker was fine"
+  grep -Fx "stale: $window" "$out" >/dev/null || fail "the unknown-liveness parked worker did not surface: $(cat "$out")"
+  [ ! -e "$state/.stale-since-$key" ] || fail "an unknown-liveness parked worker was absorbed onto the wedge timer"
+  pass "a parked worker whose agent liveness cannot be read keeps today's behavior and still surfaces"
+}
+
+# The captain's exact repeat: the crew appended needs-decision:, the signal path
+# already relayed it, and each poll thereafter climbed the wedge ladder against a
+# run that fm-crew-state.sh reported parked at an ask-user gate.
+_parked_gate_ladder_case() {  # <dir-name> <window>
+  local fields dir state fakebin key last pane_hash
+  fields=$(_parked_gate_case "$1" "$2" 'needs-decision: review raised an ask-user finding for the captain' 'idle at the review gate')
+  IFS=$'\t' read -r dir state fakebin key <<< "$fields"
+  last='needs-decision: review raised an ask-user finding for the captain'
+  printf '%s' "$last" > "$state/.hb-surfaced-gate"
+  pane_hash=$(hash_text "idle at the review gate")
+  printf '%s' "$pane_hash" > "$state/.stale-$key"
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+  printf '%s\t%s\t%s\t%s\n' "$dir" "$state" "$fakebin" "$key"
+}
+
+test_parked_gate_alive_holds_the_wedge_ladder() {
+  local fields dir state fakebin key out window pid
+  window="test:fm-ladderalive"
+  fields=$(_parked_gate_ladder_case parked-gate-ladder-alive "$window")
+  IFS=$'\t' read -r dir state fakebin key <<< "$fields"
+  out="$dir/watch.out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=claude FM_FAKE_CREW_STATE="$PARKED_GATE_STATE" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 30; then
+    reap "$pid"; fail "a live worker parked at an ask-user gate still escalated as a possible wedge: $(cat "$out")"
+  fi
+  grep -F "possible wedge" "$out" >/dev/null && { reap "$pid"; fail "the parked gate was reported as a possible wedge: $(cat "$out")"; }
+  [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "the held ladder still enqueued a wake: $(cat "$state/.wake-queue")"; }
+  [ ! -e "$state/.wedge-escalations-$key" ] || { reap "$pid"; fail "a parked-gate hold climbed the wedge-escalation ladder"; }
+  [ -s "$state/.stale-since-$key" ] || { reap "$pid"; fail "the parked-gate hold dropped the wedge timer instead of refreshing it"; }
+  grep -F "ladder held" "$state/.watch-triage.log" >/dev/null \
+    || { reap "$pid"; fail "the parked-gate ladder-hold branch never executed: $(cat "$state/.watch-triage.log" 2>/dev/null)"; }
+  reap "$pid"
+  pass "a live worker parked at an ask-user gate holds the wedge ladder instead of escalating"
+}
+
+# The failure direction that matters. Same frozen pane, same parked run-step, same
+# already-relayed needs-decision line - only the agent is gone. The escalation must
+# fire on the unchanged schedule; a parked case that swallowed this would be silence
+# nobody notices.
+test_parked_gate_dead_escalates_on_the_ladder() {
+  local fields dir state fakebin key out drain_out window pid
+  window="test:fm-ladderdead"
+  fields=$(_parked_gate_ladder_case parked-gate-ladder-dead "$window")
+  IFS=$'\t' read -r dir state fakebin key <<< "$fields"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=bash FM_FAKE_CREW_STATE="$PARKED_GATE_STATE" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "a parked run whose worker died was held by the ladder instead of escalating: $(cat "$out")"
+  grep -F "possible wedge" "$out" >/dev/null || fail "the dead parked worker did not escalate: $(cat "$out")"
+  grep -F "escalation 1" "$out" >/dev/null || fail "the dead parked worker escalated off the normal schedule: $(cat "$out")"
+  [ "$(cat "$state/.wedge-escalations-$key" 2>/dev/null || true)" = 1 ] || fail "the dead parked worker did not climb the wedge ladder"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the dead parked-worker escalation failed"
+  grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "the dead parked worker's escalation was not queued"
+  pass "a run parked at a gate whose worker died escalates on the unchanged wedge schedule"
 }
 
 # --- non-terminal stale, crew NOT provably working: surfaced immediately ------
@@ -2262,6 +2432,11 @@ test_nonterminal_stale_provably_working_absorbed_then_escalated
 test_codex_static_pane_alive_absorbed
 test_codex_static_pane_dead_surfaces
 test_codex_backstop_scoped_to_codex
+test_parked_gate_alive_absorbed
+test_parked_gate_dead_surfaces
+test_parked_gate_unknown_liveness_surfaces
+test_parked_gate_alive_holds_the_wedge_ladder
+test_parked_gate_dead_escalates_on_the_ladder
 test_terminal_stale_already_surfaced_absorbed_then_escalates
 test_terminal_stale_changed_line_still_surfaces
 test_wedge_escalation_marks_demand_deep_inspection_after_threshold
