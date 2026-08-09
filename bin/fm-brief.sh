@@ -227,6 +227,20 @@ EOF
 )
 fi
 
+# Rule 1 forbids pushing to the default branch, and publishing a Bridge envelope
+# targets the default branch - but that push IS Bridge's delivery step, not a code
+# push. A crewmate has already read rule 1 as covering it, passed --no-publish, and
+# reported two envelope ids that never reached the recipient; nothing downstream
+# reports that, because an id proves composition and never delivery. The boundary is
+# stated on rule 1 itself, where the misreading happens, rather than in a Bridge-only
+# block the scaffold has no signal to emit: the task text is unknown at scaffold time.
+# shellcheck disable=SC2016  # single quotes are deliberate: the backticked flag and paths are literal brief text.
+BRIDGE_NOTE='   Rule 1 is about code pushes. Publishing a Bridge envelope to the default branch is how Bridge
+   delivers it, not a code push, and rule 1 does not cover it: never pass `--no-publish` to a Bridge
+   send unless this brief tells you to. An envelope id proves composition, never delivery - after a
+   send, fetch and confirm the envelope is on the remote default branch and that the original moved
+   out of `inbox/<us>/new/` into `acked/`.'
+
 if [ "$KIND" = scout ]; then
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
@@ -244,6 +258,7 @@ The report is the only thing that survives, so anything worth keeping must be in
 
 # Rules
 1. Never push to any remote and never open a PR.
+$BRIDGE_NOTE
 2. Stay inside this worktree; the only files you may write outside it are the report, the status file below, and firstmate's own state under $STATE/, which the tools in rule 3 write for you.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
    To open a Lavish review board, run \`$FM_ROOT/bin/fm-lavish.sh\` instead of bare lavish-axi:
@@ -290,7 +305,8 @@ EOF
 case "$MODE" in
   direct-PR)
     SETUP2=""
-    RULE1='1. Never push to the default branch (push only your `fm/'"$ID"'` branch). Never merge a PR.'
+    RULE1='1. Never push to the default branch (push only your `fm/'"$ID"'` branch). Never merge a PR.
+'"$BRIDGE_NOTE"
     DOD=$(cat <<EOF
 # Definition of done
 This project ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
@@ -302,7 +318,8 @@ EOF
     ;;
   local-only)
     SETUP2=""
-    RULE1="1. Never push to any remote and never open a PR. Work only on your \`fm/$ID\` branch; firstmate handles the merge into local \`main\`."
+    RULE1="1. Never push to any remote and never open a PR. Work only on your \`fm/$ID\` branch; firstmate handles the merge into local \`main\`.
+$BRIDGE_NOTE"
     DOD=$(cat <<EOF
 # Definition of done
 This project ships **local-only**: no remote, no PR, no pipeline.
@@ -316,7 +333,8 @@ EOF
   *)  # no-mistakes (default)
     SETUP2="
 2. Run \`no-mistakes doctor\`; if it reports the repo is not initialized here, run \`no-mistakes init\`."
-    RULE1='1. Never push to the default branch. Never merge a PR.'
+    RULE1='1. Never push to the default branch. Never merge a PR.
+'"$BRIDGE_NOTE"
     DOD=$(cat <<EOF
 # Definition of done
 The task is complete only when committed on your branch.
