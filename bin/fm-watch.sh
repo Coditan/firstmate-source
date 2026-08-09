@@ -832,13 +832,22 @@ pause_state_class() {  # <window> <task>
   if ! status_is_paused_or_captain_held "$last"; then
     rm -f "$recheck_file"
     class=$(crew_absorb_class "$task")
-    # A gate reading never absorbs a FIRST sighting: at first sight nothing has
-    # relayed the gate to firstmate yet (this path is reached precisely when the
-    # crew's last status line is not captain-relevant), so swallowing it would
-    # leave the decision waiting on the long bounded cadence with nobody told.
-    # The gate only ever holds the wedge LADDER, once the pane is a known stale
-    # firstmate has already seen (wedge_timer_check).
-    [ "$class" = parked ] && class=none
+    # A gate reading never absorbs a FIRST sighting, for ANY harness: at first
+    # sight nothing has relayed the gate to firstmate yet (this path is reached
+    # precisely when the crew's last status line is not captain-relevant), so
+    # swallowing it would leave the decision waiting on the long bounded cadence
+    # with nobody told. The gate only ever holds the wedge LADDER, once the pane
+    # is a known stale firstmate has already seen (wedge_timer_check).
+    # It short-circuits BEFORE codex_static_pane_upgrade rather than being folded
+    # into its `none` fallback: that backstop answers "no run-step says anything,
+    # is the process still there?" for a codex worker mid-turn on a static pane,
+    # and a run-step that authoritatively reports the run STOPPED at a gate is not
+    # that question. Routing the gate through it would hand codex alone the
+    # first-sight absorb every other harness just lost.
+    if [ "$class" = parked ]; then
+      printf 'none'
+      return
+    fi
     codex_static_pane_upgrade "$win" "$class"
     return
   fi

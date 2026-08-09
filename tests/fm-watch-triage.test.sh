@@ -953,20 +953,22 @@ test_codex_backstop_scoped_to_codex() {
 # the pane is idle at all - only a hold on the wedge LADDER afterwards, corroborated
 # by the agent PROCESS and by nothing else: a worker that crashed one second after
 # printing its gate prompt leaves the run parked identically and forever, so `dead`
-# and `unknown` keep today's escalation exactly. harness=claude throughout, so
-# nothing here can be the codex backstop.
+# and `unknown` keep today's escalation exactly. The first-sight rule is harness-
+# independent: codex is covered explicitly, because its static-pane liveness
+# backstop answers a different question (no run-step at all) and must not hand
+# codex alone the absorb every other harness gives up here.
 #
 # The authoritative reading the watcher used to ignore. Passed into each watcher
 # launch rather than exported by the fixture, because the fixture runs inside a
 # command substitution and an export there would never reach the watcher.
 PARKED_GATE_STATE='state: parked · source: run-step · parked at review: 3 finding(s) (ask-user: captain decision)'
 
-_parked_gate_case() {  # <dir-name> <window> <status-line> <pane-text>
-  local dir state fakebin capture_file window key pane_hash sig statusf
+_parked_gate_case() {  # <dir-name> <window> <status-line> <pane-text> [harness]
+  local dir state fakebin capture_file window key pane_hash sig statusf harness
   dir=$(make_case "$1"); state="$dir/state"; fakebin="$dir/fakebin"
-  capture_file="$dir/pane.txt"; window=$2; statusf="$state/gate.status"
+  capture_file="$dir/pane.txt"; window=$2; statusf="$state/gate.status"; harness=${5:-claude}
   printf '%s' "$4" > "$capture_file"
-  printf 'window=%s\nkind=ship\nharness=claude\n' "$window" > "$state/gate.meta"
+  printf 'window=%s\nkind=ship\nharness=%s\n' "$window" "$harness" > "$state/gate.meta"
   printf '%s\n' "$3" > "$statusf"
   sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-gate_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
@@ -980,26 +982,28 @@ _parked_gate_case() {  # <dir-name> <window> <status-line> <pane-text>
 # last status line is not captain-relevant, so no needs-decision/blocked line ever
 # reached firstmate, and a first-sight absorb would leave the decision waiting out
 # the long bounded cadence unannounced. The gate only ever holds the wedge LADDER,
-# from the second sighting of that already-surfaced pane onward.
-test_parked_gate_first_sight_surfaces_then_holds_the_ladder() {
-  local fields dir state fakebin key out drain_out window pid pane_hash
-  window="test:fm-gatealive"
-  fields=$(_parked_gate_case parked-gate-alive "$window" 'working: running the pipeline' 'idle at the review gate')
+# from the second sighting of that already-surfaced pane onward. Driven once per
+# harness, since the harness is exactly what decides whether a `none` verdict gets
+# a liveness absorb of its own.
+_assert_parked_gate_surfaces_then_holds() {  # <dir-name> <window> <harness> <agent-command>
+  local fields dir state fakebin key out drain_out window harness agent pid pane_hash
+  window=$2; harness=$3; agent=$4
+  fields=$(_parked_gate_case "$1" "$window" 'working: running the pipeline' 'idle at the review gate' "$harness")
   IFS=$'\t' read -r dir state fakebin key <<< "$fields"
   out="$dir/watch.out"; drain_out="$dir/drain.out"; pane_hash=$(hash_text "idle at the review gate")
 
   # Phase A: first sighting. A live agent at a parked gate changes nothing here.
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
-    FM_FAKE_TMUX_CURRENT_COMMAND=claude FM_FAKE_CREW_STATE="$PARKED_GATE_STATE" \
+    FM_FAKE_TMUX_CURRENT_COMMAND="$agent" FM_FAKE_CREW_STATE="$PARKED_GATE_STATE" \
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
-  wait_for_exit "$pid" 40 || fail "the first sighting of a run parked at an unrelayed gate was swallowed: $(cat "$out")"
-  grep -Fx "stale: $window" "$out" >/dev/null || fail "the first sighting did not print the immediate stale wake: $(cat "$out")"
-  [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" = "$pane_hash" ] || fail "stale suppressor not advanced on the first-sight surface"
-  [ ! -e "$state/.stale-since-$key" ] || fail "the first sighting started a wedge timer instead of surfacing at once"
-  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the parked-gate first surface failed"
-  grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "the first sighting's wake was not queued"
+  wait_for_exit "$pid" 40 || fail "$harness: the first sighting of a run parked at an unrelayed gate was swallowed: $(cat "$out")"
+  grep -Fx "stale: $window" "$out" >/dev/null || fail "$harness: the first sighting did not print the immediate stale wake: $(cat "$out")"
+  [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" = "$pane_hash" ] || fail "$harness: stale suppressor not advanced on the first-sight surface"
+  [ ! -e "$state/.stale-since-$key" ] || fail "$harness: the first sighting started a wedge timer instead of surfacing at once"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "$harness: drain after the parked-gate first surface failed"
+  grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "$harness: the first sighting's wake was not queued"
 
   # Phase B: same pane, already surfaced, now past the escalation threshold. THIS
   # is where the gate earns its hold - the alarm firstmate has already seen must
@@ -1008,22 +1012,38 @@ test_parked_gate_first_sight_surfaces_then_holds_the_ladder() {
   echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
   : > "$out"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
-    FM_FAKE_TMUX_CURRENT_COMMAND=claude FM_FAKE_CREW_STATE="$PARKED_GATE_STATE" \
+    FM_FAKE_TMUX_CURRENT_COMMAND="$agent" FM_FAKE_CREW_STATE="$PARKED_GATE_STATE" \
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 \
     FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
   if ! wait_live "$pid" 30; then
-    reap "$pid"; fail "a live worker parked at a gate still escalated on an already-surfaced pane: $(cat "$out")"
+    reap "$pid"; fail "$harness: a live worker parked at a gate still escalated on an already-surfaced pane: $(cat "$out")"
   fi
-  grep -F "possible wedge" "$out" >/dev/null && { reap "$pid"; fail "the parked gate was reported as a possible wedge: $(cat "$out")"; }
-  [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "the held ladder enqueued a wake: $(cat "$state/.wake-queue")"; }
-  [ ! -e "$state/.wedge-escalations-$key" ] || { reap "$pid"; fail "a parked-gate hold climbed the wedge-escalation ladder"; }
-  [ -s "$state/.stale-since-$key" ] || { reap "$pid"; fail "the parked-gate hold dropped the wedge timer instead of refreshing it"; }
+  grep -F "possible wedge" "$out" >/dev/null && { reap "$pid"; fail "$harness: the parked gate was reported as a possible wedge: $(cat "$out")"; }
+  [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "$harness: the held ladder enqueued a wake: $(cat "$state/.wake-queue")"; }
+  [ ! -e "$state/.wedge-escalations-$key" ] || { reap "$pid"; fail "$harness: a parked-gate hold climbed the wedge-escalation ladder"; }
+  [ -s "$state/.stale-since-$key" ] || { reap "$pid"; fail "$harness: the parked-gate hold dropped the wedge timer instead of refreshing it"; }
   grep -F "the run is parked at a decision gate and this worker is still alive" "$state/.watch-triage.log" >/dev/null \
-    || { reap "$pid"; fail "the hold did not record WHY it believed the worker was fine: $(cat "$state/.watch-triage.log" 2>/dev/null)"; }
+    || { reap "$pid"; fail "$harness: the hold did not record WHY it believed the worker was fine: $(cat "$state/.watch-triage.log" 2>/dev/null)"; }
   reap "$pid"
+}
+
+test_parked_gate_first_sight_surfaces_then_holds_the_ladder() {
+  _assert_parked_gate_surfaces_then_holds parked-gate-alive "test:fm-gatealive" claude claude
   pass "a run parked at an unrelayed gate surfaces its first sighting, then holds the wedge ladder while its worker is alive"
+}
+
+# Same run, same live process, harness=codex. codex is the one harness whose
+# otherwise-`none` static pane earns a liveness absorb of its own
+# (codex_static_pane_upgrade), and an authoritative run-step gate must not be
+# routed into it: that would give codex alone the 3600s bounded recheck where
+# every other harness surfaces at once, on the very decision nobody has been told
+# about. The gate short-circuits first, so codex surfaces like the rest and still
+# holds the ladder afterwards.
+test_parked_gate_codex_first_sight_surfaces_then_holds_the_ladder() {
+  _assert_parked_gate_surfaces_then_holds parked-gate-codex "test:fm-gatecodex" codex codex
+  pass "a codex worker parked at an unrelayed gate surfaces its first sighting too, then holds the wedge ladder"
 }
 
 test_parked_gate_dead_surfaces() {
@@ -2464,6 +2484,7 @@ test_codex_static_pane_alive_absorbed
 test_codex_static_pane_dead_surfaces
 test_codex_backstop_scoped_to_codex
 test_parked_gate_first_sight_surfaces_then_holds_the_ladder
+test_parked_gate_codex_first_sight_surfaces_then_holds_the_ladder
 test_parked_gate_dead_surfaces
 test_parked_gate_alive_holds_the_wedge_ladder
 test_parked_gate_dead_escalates_on_the_ladder
