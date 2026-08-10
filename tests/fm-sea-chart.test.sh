@@ -1462,7 +1462,7 @@ test_a_member_the_fold_hung_under_a_foreign_ruling_is_named_with_a_true_cause() 
   # what happened: the record was dropped and then reconciled as "present in the
   # backlog but not returned as actionable", a sentence the very surface it came
   # from refutes.
-  local home cap grouped out
+  local home cap grouped out summary
   home=$(make_home foldedelsewhere)
   cat > "$home/data/backlog.md" <<'EOF'
 # Backlog
@@ -1508,7 +1508,83 @@ EOF
     *legacy-judge-decision-shape*)
       fail "a ruling of another undertaking must never be drawn here merely because this chart owns the record folded under it" ;;
   esac
-  pass "a member the fold hung under a foreign ruling is named with a cause that is true of it"
+
+  # AND THE NUMBERS ABOVE MUST NOT REFUTE THE ROW BELOW. This record reached the
+  # actionable surface and the fold then dropped it, so it is counted in `records`
+  # and in `folded` and in `withheld` at once - honest only while the page says
+  # they are one record, which is the whole job of `withheld_folded`.
+  [ "$(printf '%s' "$out" | jq -r '.counts.records')" = 1 ] \
+    || fail "a record the surface returned must be counted as having reached it, or the count refutes the row four lines below that says it did"
+  [ "$(printf '%s' "$out" | jq -r '.counts.folded')" = 1 ] \
+    || fail "the fold dropped this record, so the folded-away count must carry it"
+  [ "$(printf '%s' "$out" | jq -r '.counts.withheld_folded')" = 1 ] \
+    || fail "without this the same record is counted as folded and as withheld with nothing on the page saying they are one record"
+
+  # Read end to end on the RENDERED page, which is where a reader meets them.
+  summary=$("$CHART" voy --summary --from "$cap" \
+    --backlog "$home/data/backlog.md" --archive "$home/data/done-archive.md" --data "$home/data")
+  assert_contains "$summary" "of those, 1 reached the actionable surface" \
+    "the page must not say nothing reached the actionable surface a few lines above a row whose reason says this record did"
+  assert_contains "$summary" "folded away rather than never returned" \
+    "the page must reconcile the record it counts as folded with the one it counts as withheld, or the two numbers read as two records"
+  case "$summary" in
+    *"of those, 0 reached the actionable surface"*)
+      fail "arithmetic a reader can catch out is what teaches them to stop believing every other number on the chart" ;;
+  esac
+  pass "a member the fold hung under a foreign ruling is named with a cause that is true of it, and the counts above it agree"
+}
+
+test_a_member_list_line_naming_a_group_id_never_drags_that_group_onto_this_chart() {
+  # The member list assigns a RECORD, never the namespace around it. A record id
+  # that happens to be a collapse-rule GROUP id is still just one record, so the
+  # decisions filed under that group belong to whatever undertaking owns it and
+  # drawing them here would put one record on two charts - the exclusivity this
+  # whole membership rule rests on.
+  # A group may be taken WHOLE only on the PREFIX rule, because only there is
+  # every record inside it a member of this chart by the same construction.
+  local home cap grouped voy grp
+  home=$(make_home listedgroup)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] grp - The other undertaking, and the id the list names (repo: r) (kind: ship) (since 2026-07-02)
+- [ ] grp-judge-decision-shape - The ruling of that other undertaking (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+- [ ] grp-a-decision-shape - The analyst restating the same key (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+EOF
+  mkdir -p "$home/data/voy"
+  printf 'grp\n' > "$home/data/voy/members"
+  cap=$(capture listedgroup "grp-judge-decision-shape" "grp-a-decision-shape")
+
+  # REPRODUCE THE SHAPE. The fold really does file both decisions under one group
+  # whose id is exactly the id the member list names - which is the only reason a
+  # whole-group take could ever reach records this chart does not own.
+  grouped=$("$INV" --json --from "$cap")
+  [ "$(printf '%s' "$grouped" | jq -r '[.groups[].group]|join(",")')" = "grp" ] \
+    || fail "the reproduction is stale: the fold no longer groups these two under the id the member list names"
+
+  voy=$(chart_json "$home" voy "$cap")
+  grp=$(chart_json "$home" grp "$cap")
+
+  # The listed record itself is drawn - that is what the line asked for.
+  [ "$(printf '%s' "$voy" | jq -r '[.takeable[].id]|index("grp")')" != "null" ] \
+    || fail "the record the line actually names must still be drawn, or the retrofit path assigns nothing"
+  # Its group siblings are not, in any section and not as a folded variant either.
+  case "$(printf '%s' "$voy" | jq -r '[.decisions[].id, (.decisions[]|.variants[]?.id), .withheld[].id, .takeable[].id, .unplaced[].id]|join(",")')" in
+    *grp-judge-decision-shape*|*grp-a-decision-shape*)
+      fail "a member list line names ONE record: taking the group around it draws records that are members of neither rule, and that is one record on two charts" ;;
+  esac
+  [ "$(printf '%s' "$voy" | jq -r '.counts.records')" = 0 ] \
+    || fail "no record of that group reached this chart, so the count of what did must not claim otherwise"
+
+  # And the undertaking that owns them by prefix still draws both - nothing
+  # drawing today stops drawing because another chart list named its group id.
+  [ "$(printf '%s' "$grp" | jq -r '[.decisions[].id]|join(",")')" = "grp-judge-decision-shape" ] \
+    || fail "the owning chart must still draw its own ruling"
+  [ "$(printf '%s' "$grp" | jq -r '[.decisions[]|.variants[].id]|join(",")')" = "grp-a-decision-shape" ] \
+    || fail "the owning chart must still draw the variant folded under its ruling"
+  pass "a member list line naming a group id assigns that record only, and its group siblings stay on the chart that owns them"
 }
 
 test_a_foreign_claim_on_a_prefix_owned_record_is_refused_there_and_reported_here() {
@@ -1695,6 +1771,7 @@ test_a_record_two_undertakings_both_claim_is_drawn_on_neither
 test_a_retrofitted_decision_is_drawn_and_its_group_siblings_are_not
 test_a_member_list_line_the_prefix_rule_already_covers_assigns_nothing
 test_a_member_the_fold_hung_under_a_foreign_ruling_is_named_with_a_true_cause
+test_a_member_list_line_naming_a_group_id_never_drags_that_group_onto_this_chart
 test_a_foreign_claim_on_a_prefix_owned_record_is_refused_there_and_reported_here
 test_an_unreadable_member_list_is_fatal_rather_than_silently_empty
 test_the_chart_prints_its_own_limits_and_does_not_soften_them

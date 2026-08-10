@@ -271,9 +271,13 @@
 #                      records the actionable surface never returned and the ones
 #                      it did return before the fold dropped them - so it is
 #                      labelled by what is true of both, and `withheld_folded`
-#                      says how many are the second kind, which is what reconciles
-#                      it against `folded` rather than leaving one record counted
-#                      twice with nothing on the page explaining why
+#                      says how many are the second kind - unpaired-variant and
+#                      folded-elsewhere together - which is what reconciles it
+#                      against `folded` rather than leaving one record counted
+#                      twice with nothing on the page explaining why.
+#                      `records` counts every record of this chart the actionable
+#                      surface returned, folded-elsewhere ones included, so it is
+#                      never smaller than what the withheld rows below claim
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -737,8 +741,16 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # Only the member records are taken from such a group, its folded variants
   # included. The rest belong to whatever undertaking owns that group, and
   # drawing them here would put one record on two charts.
+  # A group is taken WHOLE on the PREFIX rule alone, never on the union, and that
+  # is the whole reason the test differs from `member` here. A prefix member group
+  # id makes every record inside it a prefix member of this chart too, by the same
+  # construction - so taking it whole draws nothing this chart does not own. A
+  # group id the member LIST named carries no such guarantee: the list assigns one
+  # record, never the namespace around it, so its siblings are members of neither
+  # rule and taking them whole is exactly the one record on two charts the
+  # paragraph above refuses.
   | ([ $inv.groups[]?
-       | if member(.group) then .
+       | if prefix_member(.group) then .
          else (.decisions = [ .decisions[]? | select(member(.id))
                               | .variants = [ (.variants // [])[] | select(member(.id)) ] ])
               | (.unpaired_variants = [ (.unpaired_variants // [])[] | select(member(.id)) ])
@@ -767,9 +779,21 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # belongs. So no section carries it, and it is reconciled below with a cause
   # that says the surface DID return it, rather than with `not-returned`, a
   # sentence the very surface it describes refutes.
-  | ([ $inv.groups[]? | select(member(.group) | not)
+  # The test is `prefix_member` for the same reason the scoping above uses it, and
+  # the two have to stay the same test: every group the scoping filters rather
+  # than takes whole is a group that can drop a member variant this way, so a
+  # narrower test here would put the loss straight back for the groups the wider
+  # one no longer takes whole.
+  | ([ $inv.groups[]? | select(prefix_member(.group) | not)
        | .decisions[]? | select(member(.id) | not)
        | .variants[]? | select(member(.id)) | .id ]) as $folded_elsewhere
+  # What the actionable surface returned for the records of this chart. The fold
+  # dropped the folded-elsewhere ones, so no group carries them and no
+  # `record_count` can, but the surface returned them all the same - and a page
+  # that says 0 reached it, four lines above a row whose why says one did, teaches
+  # a reader to stop believing every other number on it.
+  | (([ $groups[] | .record_count ] | add // 0)
+     + ($folded_elsewhere | length)) as $records_returned
 
   # RECONCILIATION. Every record this chart owns that waits on the captain,
   # straight from the backlog - then whatever the actionable surface did not
@@ -987,16 +1011,21 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
         # true teaches a reader to stop believing the numbers, which is worse
         # than any single wrong one.
         records_in_backlog: ([ ($own_decision_records | length),
-                               ([ $groups[] | .record_count ] | add // 0) ] | max),
-        records: ([ $groups[] | .record_count ] | add // 0),
+                               $records_returned ] | max),
+        records: $records_returned,
         decisions: ($open_decisions | length),
-        folded: (([ $groups[] | .record_count ] | add // 0) - ($open_decisions | length)),
+        folded: ($records_returned - ($open_decisions | length)),
         withheld: ($withheld | length),
         # How many of those the fold dropped rather than the surface never
         # returning. Without it a folded variant is counted once above and once
         # below with nothing saying they are the same record, and arithmetic a
         # reader cannot reconcile is the same fault as arithmetic that is wrong.
-        withheld_folded: ([ $withheld[] | select(.cause == "unpaired-variant") ] | length),
+        # BOTH causes that describe a record the surface returned belong here, and
+        # for the same reason: each is counted in `folded` above and in `withheld`
+        # below, and this is the only number that says they are one record.
+        withheld_folded: ([ $withheld[]
+                            | select(.cause == "unpaired-variant"
+                                     or .cause == "folded-elsewhere") ] | length),
         possibly_answered: ($possibly_answered | length),
         unplaced: ($unplaced | length),
         unplaced_kind_defects: ([ $unplaced[] | select(.kind_defect) ] | length),
