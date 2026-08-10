@@ -853,18 +853,35 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # than takes whole is a group that can drop a member variant this way, so a
   # narrower test here would put the loss straight back for the groups the wider
   # one no longer takes whole.
-  # `unique` for the same reason `record_count` above counts distinct ids: one
-  # such record pairs to every non-member ruling sharing its key, and it is still
-  # one record. Without it the same member is added to `$records_returned` once
-  # per ruling it hangs under, while the withheld row it produces stays single.
+  # DEDUPED TWICE, AND BOTH HALVES ARE LOAD-BEARING. `unique` for the same reason
+  # `record_count` above counts distinct ids: such a record pairs to every
+  # non-member ruling sharing its key, and it is still one record. Then the ids
+  # $seen ALREADY holds are dropped, because a group can carry a member ruling and
+  # a non-member ruling at once - the fold hangs one variant under every
+  # authoritative ruling whose key matches, and a group admits several judges - so
+  # one member variant can be kept under the member ruling and hang under the
+  # non-member one in the same breath. It is drawn, so it is not folded away.
+  # (An earlier revision deduped with `unique` alone, on the premise stated one
+  # line further down that the fold DROPPED every folded-elsewhere record so no
+  # group could carry one. False for exactly the overlap above: with two judges in
+  # one non-prefix group and both a ruling and its variant listed, the chart drew
+  # the variant under the kept ruling and counted it a second time as folded away
+  # - 3 records and 2 folded for the 2 records it held, with no withheld row to
+  # account for the third. It is recorded rather than swapped out, because a
+  # premise that reads as obviously true is one the next reader will re-adopt.)
+  # Nothing is lost by the exclusion: a record in `$seen` is filtered out below
+  # before `withheld_reason` is ever reached, so it could produce no withheld row
+  # of any cause either way.
   | ([ $inv.groups[]? | select(prefix_member(.group) | not)
        | .decisions[]? | select(member(.id) | not)
-       | .variants[]? | select(member(.id)) | .id ] | unique) as $folded_elsewhere
-  # What the actionable surface returned for the records of this chart. The fold
-  # dropped the folded-elsewhere ones, so no group carries them and no
-  # `record_count` can, but the surface returned them all the same - and a page
-  # that says 0 reached it, four lines above a row whose why says one did, teaches
-  # a reader to stop believing every other number on it.
+       | .variants[]? | select(member(.id)) | .id ]
+     | unique | map(select(($seen | index(.)) == null))) as $folded_elsewhere
+  # What the actionable surface returned for the records of this chart, counted in
+  # distinct records. No group carries a folded-elsewhere record - that is now
+  # true by construction rather than by premise, since the ids the groups do carry
+  # are the ones just excluded - but the surface returned them all the same, and a
+  # page that says 0 reached it, four lines above a row whose why says one did,
+  # teaches a reader to stop believing every other number on it.
   | (([ $groups[] | .record_count ] | add // 0)
      + ($folded_elsewhere | length)) as $records_returned
 
@@ -1119,13 +1136,19 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
         # The exception clause is extended on the FACT that a folded-elsewhere row
         # is on this page, never on a proxy for it. A limit is a claim about the
         # page it is printed on, so only what that page carries may decide it.
-        # A member list is NOT such a proxy: the collapse group is the origin with
-        # its panel role stripped, so on any chart whose id ends in -a, -b or
-        # -judgeN - the seat convention of this home - the group is the seat above
-        # it rather than the chart, the whole-group branch is not taken, and a
-        # folded-elsewhere row arises with no member list anywhere. Gating on the
-        # list printed the shorter sentence beneath a row it does not cover, which
-        # is the incomplete disclosure this clause exists to close.
+        # (An earlier revision gated it on whether a member list was read, and
+        # said so here: that `folded-elsewhere` could not arise without one, so on
+        # a listless chart the shorter sentence was the whole truth. That premise
+        # is false. The collapse group is the origin with its panel role stripped,
+        # so on any chart whose id ends in -a, -b or -judgeN - the seat convention
+        # this home actually uses - the group is the seat above it rather than the
+        # chart, the whole-group branch is not taken, and a folded-elsewhere row
+        # arises with no member list anywhere. Reproduced on chart voy-a holding
+        # voy-a, voy-a-decision-shape and voy-judge-decision-shape with no members
+        # file: the row printed beneath the shorter sentence, which is the
+        # incomplete disclosure this clause exists to close. It is recorded rather
+        # than quietly swapped, because the list reads as an obviously sufficient
+        # proxy on a second reading and is one the next reader would re-adopt.)
         ("Withheld decisions are found within the scope of THIS chart, by reading its own records back from the backlog. For every cause but unpaired-variant the fleet-wide decision board cannot count them at all, so a number here does not mean the board agrees; an unpaired variant is the one the board does list, as a variant of its group rather than as a decision."
          + (if ([ $withheld[] | select(.cause == "folded-elsewhere") ] | length) == 0 then ""
             else " This chart carries a folded-elsewhere row, and that is a second cause the board does carry, as a variant under the ruling of the undertaking whose id that record bears." end)),

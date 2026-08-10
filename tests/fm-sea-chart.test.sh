@@ -1629,6 +1629,70 @@ EOF
   pass "one member folded under two rulings is counted as the one record it is"
 }
 
+test_a_member_drawn_under_one_ruling_is_never_also_counted_as_folded_away() {
+  # A group can hold a member ruling AND a non-member ruling at once, because the
+  # fold hangs one variant under every authoritative ruling whose key matches and
+  # a group admits several judges. So one member variant is kept under the ruling
+  # this chart owns while hanging under the one it does not - and it is DRAWN,
+  # which means it was never folded away. Counted in both places the page said 3
+  # records and 2 folded for the 2 records it holds, with no withheld row anywhere
+  # to account for the third: arithmetic a reader can catch out on the same page.
+  local home cap grouped out summary
+  home=$(make_home foldoverlap)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] legacy-judge-decision-shape - The ruling this chart took in (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+- [ ] legacy-judge2-decision-shape - The ruling it did not (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+- [ ] legacy-a-decision-shape - The analyst record, folded under both (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+EOF
+  mkdir -p "$home/data/voy"
+  printf 'legacy-judge-decision-shape\nlegacy-a-decision-shape\n' > "$home/data/voy/members"
+  cap=$(capture foldoverlap "legacy-judge-decision-shape" "legacy-judge2-decision-shape" "legacy-a-decision-shape")
+
+  # REPRODUCE THE SHAPE. Both lines are honoured, and the fold really does hang
+  # the one analyst record under both rulings - the overlap this pins.
+  out=$(chart_json "$home" voy "$cap")
+  [ "$(printf '%s' "$out" | jq -r '.membership_defects|length')" = 0 ] \
+    || fail "fixture drift: both member lines must be honoured, or this stops being the overlap case at all"
+  grouped=$("$INV" --json --from "$cap")
+  [ "$(printf '%s' "$grouped" | jq -r '[.groups[]|select(.group=="legacy")|.decisions[]|select([.variants[].id]|index("legacy-a-decision-shape"))]|length')" = 2 ] \
+    || fail "the reproduction is stale: the fold no longer hangs the analyst record under both rulings"
+
+  # IT IS DRAWN, under the ruling this chart owns - so nothing may also call it
+  # folded away.
+  [ "$(printf '%s' "$out" | jq -r '[.decisions[]|select(.id=="legacy-judge-decision-shape")|.variants[].id]|join(",")')" = "legacy-a-decision-shape" ] \
+    || fail "the member variant must still be drawn beneath the member ruling that carries it"
+  [ "$(printf '%s' "$out" | jq -r '[.withheld[]|select(.cause=="folded-elsewhere")]|length')" = 0 ] \
+    || fail "a record this chart draws was not folded away from it, so no folded-elsewhere row may name it"
+  [ "$(printf '%s' "$out" | jq -r '.counts.records')" = 2 ] \
+    || fail "this chart holds two records, and a record drawn once must not be counted as having reached the surface twice"
+  [ "$(printf '%s' "$out" | jq -r '.counts.records_in_backlog')" = 2 ] \
+    || fail "both sides of the reconciliation must count the same two records"
+  [ "$(printf '%s' "$out" | jq -r '.counts.decisions')" = 1 ] \
+    || fail "one ruling is drawn here; the other belongs to no member of this chart"
+  [ "$(printf '%s' "$out" | jq -r '.counts.folded')" = 1 ] \
+    || fail "exactly one record was folded under the ruling, and folded counts records rather than places they appear"
+  [ "$(printf '%s' "$out" | jq -r '.counts.withheld')" = 0 ] \
+    || fail "both records this chart owns are drawn, so nothing is withheld"
+
+  # The rendered page is where the reader meets the arithmetic, and it must
+  # reconcile against itself with no leftover record.
+  summary=$("$CHART" voy --summary --from "$cap" \
+    --backlog "$home/data/backlog.md" --archive "$home/data/done-archive.md" --data "$home/data")
+  assert_contains "$summary" "2 captain-gated records in the backlog for this chart" \
+    "the page must count the two records this chart holds"
+  assert_contains "$summary" "of those, 2 reached the actionable surface -> 1 shown (1 folded away)" \
+    "shown plus folded away must add up to what reached the surface, or the reader has a record they cannot place"
+  case "$summary" in
+    *"3 captain-gated records"*|*"of those, 3 reached"*|*"(2 folded away)"*)
+      fail "a record counted both as drawn and as folded away is the unreconcilable arithmetic this chart is built against" ;;
+  esac
+  pass "a member drawn under a ruling this chart owns is never also counted as folded away"
+}
+
 test_a_chart_with_no_member_list_still_discloses_a_folded_elsewhere_row() {
   # A limit is a claim about the page it is printed on, so it has to be decided
   # by what that page carries. It was decided by whether a member list was read
@@ -1986,6 +2050,7 @@ test_a_retrofitted_decision_is_drawn_and_its_group_siblings_are_not
 test_a_member_list_line_the_prefix_rule_already_covers_assigns_nothing
 test_a_member_the_fold_hung_under_a_foreign_ruling_is_named_with_a_true_cause
 test_one_member_folded_under_two_rulings_is_still_counted_as_one_record
+test_a_member_drawn_under_one_ruling_is_never_also_counted_as_folded_away
 test_a_chart_with_no_member_list_still_discloses_a_folded_elsewhere_row
 test_a_member_list_line_naming_a_group_id_never_drags_that_group_onto_this_chart
 test_a_foreign_claim_on_a_prefix_owned_record_is_refused_there_and_reported_here
