@@ -251,7 +251,8 @@
 #   withheld[]         open captain-gated records this chart's decision list does
 #                      not carry, each with the `cause` that kept it off - blocked,
 #                      in-flight, no-hold, other-hold, stale-edge, dangling-edge,
-#                      unpaired-variant, not-returned - and `why` in words; blocked
+#                      unpaired-variant, folded-elsewhere, non-member-variant,
+#                      not-returned - and `why` in words; blocked
 #                      means a decision the fleet has lost, stale-edge and
 #                      dangling-edge mean one it can answer right now once the bad
 #                      edge is cleared, unpaired-variant means the fold dropped
@@ -686,8 +687,10 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # the page then said contested and sent the reader off to re-cut work over an id
   # that never existed, which is worse than silence because it is confidently
   # wrong. The clauses below are unaffected - `redundant` and `owned-elsewhere`
-  # already require the record to exist, so `contested` is the only cause the
-  # order changes.
+  # both required the record to exist, so `contested` is the only cause the order
+  # changes. Neither states that requirement any longer: an existence test below
+  # this clause can no longer decide anything, and a condition that cannot decide
+  # reads as load-bearing to whoever next reasons about this order.
   # The two clauses that turn on the PREFIX rule are then asked before the ones
   # that turn on a file, because a prefix claim exists by construction and no line
   # in any list can add to it or take it away. `redundant` therefore precedes
@@ -712,10 +715,10 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
       elif $known[$e] != true
       then {id: $e, cause: "unresolvable",
             why: "no record with this id is in the backlog or the archive of this home. It was never created, it was renamed, or it lives in another home this chart deliberately does not read. It is named here rather than dropped, because a member named and missing is invisible while a member named and wrong is visible by eye - the same direction this chart takes everywhere else."}
-      elif prefix_member($e) and $known[$e] == true
+      elif prefix_member($e)
       then {id: $e, cause: "redundant",
             why: "it is already a member by the prefix rule - its id is \"\($chart)\" or begins with \"\($chart)-\" - so this line assigns nothing and the record is drawn either way. The list is the retrofit path for work that already existed when this undertaking was named; anything named under the chart is assigned by its id alone. Two ways to assign one record put a second owner on one contract: delete the line."}
-      elif $owner != null and $known[$e] == true
+      elif $owner != null
       then {id: $e, cause: "owned-elsewhere", claimed_by: [$owner],
             why: ((if $owner == $e
                    then "its id IS the name of an undertaking of this home, and that undertaking carries records of its own beneath it, a member list, or a panel question - so it heads a chart rather than sitting on one. "
@@ -872,18 +875,48 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # Nothing is lost by the exclusion: a record in `$seen` is filtered out below
   # before `withheld_reason` is ever reached, so it could produce no withheld row
   # of any cause either way.
-  | ([ $inv.groups[]? | select(prefix_member(.group) | not)
-       | .decisions[]? | select(member(.id) | not)
-       | .variants[]? | select(member(.id)) | .id ]
-     | unique | map(select(($seen | index(.)) == null))) as $folded_elsewhere
+  # Array subtraction rather than a select on `index`: `$seen | index(.)` binds `.`
+  # to `$seen` itself, so it asks whether the array contains itself, answers 0 for
+  # every non-empty `$seen`, and silently empties the list it was meant to filter.
+  # That is the same jq scoping trap as the false measurement in the header, and
+  # it survived a round here because the fixtures that exercised the exclusion all
+  # had an EMPTY `$seen`, where the wrong expression happens to answer null.
+  | (([ $inv.groups[]? | select(prefix_member(.group) | not)
+        | .decisions[]? | select(member(.id) | not)
+        | .variants[]? | select(member(.id)) | .id ]
+      | unique) - $seen) as $folded_elsewhere
+  # THE MIRROR OF THE ABOVE, AND THE SIDE THAT WAS SILENT. Here the RULING is the
+  # member - a member list retrofitted it out of a group this chart does not own -
+  # and the record the fold hung beneath it is not. The scoping strips it, because
+  # drawing it would put one record on two charts. Stripping it silently is the
+  # other thing that cannot happen: `limits[0]` on this very page promises that
+  # every folded record stays listed underneath the ruling, and a page that keeps
+  # that promise for the groups it owns whole while dropping it for a retrofitted
+  # ruling has printed a limit its own content refutes. Measured before this
+  # existed: one ruling drawn with `variants: []`, `folded` 0, `withheld` 0, and
+  # the promise printed verbatim, while the board held the restatement.
+  # So the record is NAMED in `withheld[]` and drawn nowhere. Exclusivity forbids
+  # COUNTING one record in two what-is-left views; `withheld[]` is a reconciliation
+  # report rather than such a view, so naming is not counting and the rule is
+  # untouched. It stays out of `decisions[]`, out of every `variants[]`, and out of
+  # `takeable[]`.
+  # Only variants PAIRED under a kept ruling qualify. A stripped
+  # `unpaired_variant` was folded under no ruling at all - the board shows it at
+  # group level - so `limits[0]` says nothing about it and naming it here would
+  # widen this page to records nothing on it promised.
+  | (([ $inv.groups[]? | select(prefix_member(.group) | not)
+        | .decisions[]? | select(member(.id))
+        | (.variants // [])[] | select(member(.id) | not) | .id ]
+      | unique) - $seen) as $stripped_variants
   # What the actionable surface returned for the records of this chart, counted in
-  # distinct records. No group carries a folded-elsewhere record - that is now
-  # true by construction rather than by premise, since the ids the groups do carry
-  # are the ones just excluded - but the surface returned them all the same, and a
-  # page that says 0 reached it, four lines above a row whose why says one did,
-  # teaches a reader to stop believing every other number on it.
+  # distinct records. No group carries a folded-elsewhere or a stripped record -
+  # that is true by construction rather than by premise, since the ids the groups
+  # do carry are the ones both lists just excluded - but the surface returned them
+  # all the same, and a page that says 0 reached it, four lines above a row whose
+  # why says one did, teaches a reader to stop believing every other number on it.
   | (([ $groups[] | .record_count ] | add // 0)
-     + ($folded_elsewhere | length)) as $records_returned
+     + ($folded_elsewhere | length)
+     + ($stripped_variants | length)) as $records_returned
 
   # RECONCILIATION. Every record this chart owns that waits on the captain,
   # straight from the backlog - then whatever the actionable surface did not
@@ -903,13 +936,24 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # captain. It behaved identically before 2026-08-09, so that is not a loss this
   # line introduced, and staying narrow here is deliberate.
   | ([ $mine[] | select(open_state and .kind == "captain") ]) as $own_decision_records
-  | ([ $own_decision_records[]
-       | select(.id as $id | ($seen | index($id)) == null)
-       | withheld_reason($done; $live_done; $known; $unpaired; $folded_elsewhere) as $reason
+  # The stripped rows are built apart from the member ones because they are the
+  # one entry here that is NOT a record of this chart, so no reason function that
+  # runs over the members could ever reach them, and their cause is decided by
+  # where the fold put them rather than by anything on the record.
+  | ([ $stripped_variants[] as $sv
+       | ([ $all[] | select(.id == $sv) ] | first)
+       | select(. != null)
        | {id, key:(.id | dkey), title:(.title // ""),
           held_by:(unresolved($done; $known) | join(", ")),
-          cause: $reason.cause,
-          why: $reason.why} ]) as $withheld
+          cause: "non-member-variant",
+          why: "it reached the actionable surface, and the collapse rule paired it as a folded variant under a ruling THIS chart draws - a ruling a member list retrofitted here out of a group this chart does not own. The ruling is a member of this chart; this record is not, and it belongs to the undertaking its own id names, so drawing it beneath that ruling would count one record towards two destinations and neither could then say whether it is finished. It is NAMED here and drawn nowhere, so that the promise above - that every record the fold hung beneath a ruling stays listed under it - is kept on this page rather than quietly qualified. Naming is not counting: read the record itself on the chart of the undertaking it belongs to."} ]) as $stripped_rows
+  | (([ $own_decision_records[]
+        | select(.id as $id | ($seen | index($id)) == null)
+        | withheld_reason($done; $live_done; $known; $unpaired; $folded_elsewhere) as $reason
+        | {id, key:(.id | dkey), title:(.title // ""),
+           held_by:(unresolved($done; $known) | join(", ")),
+           cause: $reason.cause,
+           why: $reason.why} ]) + $stripped_rows) as $withheld
 
   | ([ $mine[] | select(.state == "done" and (.id | dkey) != null)
        | {id, key:(.id | dkey), title:(.title // ""),
@@ -1110,12 +1154,15 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
         # returning. Without it a folded variant is counted once above and once
         # below with nothing saying they are the same record, and arithmetic a
         # reader cannot reconcile is the same fault as arithmetic that is wrong.
-        # BOTH causes that describe a record the surface returned belong here, and
-        # for the same reason: each is counted in `folded` above and in `withheld`
-        # below, and this is the only number that says they are one record.
+        # EVERY cause that describes a record the surface returned belongs here,
+        # and for the same reason: each is counted in `folded` above and in
+        # `withheld` below, and this is the only number that says they are one
+        # record. Adding a returned-record cause without adding it here is what
+        # splits one record into two on the page.
         withheld_folded: ([ $withheld[]
                             | select(.cause == "unpaired-variant"
-                                     or .cause == "folded-elsewhere") ] | length),
+                                     or .cause == "folded-elsewhere"
+                                     or .cause == "non-member-variant") ] | length),
         possibly_answered: ($possibly_answered | length),
         unplaced: ($unplaced | length),
         unplaced_kind_defects: ([ $unplaced[] | select(.kind_defect) ] | length),

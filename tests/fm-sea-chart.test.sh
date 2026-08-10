@@ -1459,16 +1459,101 @@ EOF
   out=$(chart_json "$home" voy "$cap")
   [ "$(printf '%s' "$out" | jq -r '[.decisions[].id]|join(",")')" = "legacy-judge-decision-shape" ] \
     || fail "a retrofitted decision must be DRAWN: it reached the actionable surface, and dropping it here is the loss this chart exists against"
-  [ "$(printf '%s' "$out" | jq -r '.counts.withheld')" = 0 ] \
-    || fail "nothing may be reported as withheld from a surface that returned it - that sentence would be refuted by the record it describes"
-  # And the siblings of that group stay on whatever chart owns them.
-  case "$(printf '%s' "$out" | jq -r '[.decisions[].id, (.decisions[]|.variants[]?.id), .withheld[].id, .unplaced[].id]|join(",")')" in
+  # And the siblings of that group are DRAWN nowhere - the list assigns a record,
+  # never the group around it, and one record on two charts is the exclusivity
+  # this rule rests on. Naming a record in the reconciliation report is a
+  # different act from drawing it, and only drawing is forbidden here.
+  case "$(printf '%s' "$out" | jq -r '[.decisions[].id, (.decisions[]|.variants[]?.id), .takeable[].id, .unplaced[].id]|join(",")')" in
     *legacy-a-decision-shape*|*legacy-a-decision-scope*)
-      fail "a non-member sibling of the group must not be drawn here: the list assigns a record, never the group around it, and one record on two charts is the exclusivity this rule rests on" ;;
+      fail "a non-member sibling of the group must not be drawn here: the list assigns a record, never the group around it" ;;
   esac
-  [ "$(printf '%s' "$out" | jq -r '.counts.records')" = 1 ] \
-    || fail "the count of records that reached the actionable surface must count the member records only, or it asserts more arrived than this chart owns"
+  # The one the fold hung BENEATH the drawn ruling is named, because the
+  # judge-coverage limit on this page promises exactly that and a promise kept
+  # only for groups this chart owns whole is a limit its own page refutes. The
+  # unpaired one is not, because the fold hung it under no ruling at all and no
+  # limit here says anything about it.
+  [ "$(printf '%s' "$out" | jq -r '[.withheld[].id]|join(",")')" = "legacy-a-decision-shape" ] \
+    || fail "the record folded beneath the drawn ruling must be named in withheld, and nothing else may be"
+  [ "$(printf '%s' "$out" | jq -r '.counts.records')" = 2 ] \
+    || fail "the surface returned the ruling and the record folded under it, and both are accounted for on this page"
   pass "a retrofitted decision is drawn from a group this chart does not own, and its siblings are not"
+}
+
+test_a_record_folded_under_a_retrofitted_ruling_is_named_rather_than_silently_stripped() {
+  # THE PROMISE THIS PAGE MAKES ABOUT ITSELF, KEPT ON THE ONE SHAPE THAT BROKE IT.
+  # limits[0] says every record the fold hung beneath a ruling stays listed
+  # underneath, because nothing verifies that the judge picked up what the
+  # analysts raised. On a ruling retrofitted out of a group this chart does not
+  # own, the scoping strips exactly those records - rightly, since drawing them
+  # would put one record on two charts - and the page then printed the promise
+  # verbatim over a ruling with no variants and counts.folded reading 0.
+  # The fix is to NAME the record, never to draw it and never to weaken the limit.
+  local home cap grouped out summary
+  home=$(make_home strippedvariant)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] legacy-judge-decision-shape - The ruling, retrofitted onto this chart (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+- [ ] legacy-a-decision-shape - The analyst restatement, member of nothing here (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+EOF
+  mkdir -p "$home/data/voy"
+  printf 'legacy-judge-decision-shape\n' > "$home/data/voy/members"
+  cap=$(capture strippedvariant "legacy-judge-decision-shape" "legacy-a-decision-shape")
+
+  # REPRODUCE THE SHAPE THAT MAKES THE PROMISE FALSE. The board really does hold
+  # the restatement folded under the ruling this chart draws; without that there
+  # is no promise left to break.
+  grouped=$("$INV" --json --from "$cap")
+  [ "$(printf '%s' "$grouped" | jq -r '.groups[]|select(.group=="legacy")|.decisions[]|select(.id=="legacy-judge-decision-shape")|[.variants[].id]|join(",")')" = "legacy-a-decision-shape" ] \
+    || fail "the reproduction is stale: the fold no longer hangs the analyst record beneath the ruling this chart retrofits"
+
+  out=$(chart_json "$home" voy "$cap")
+  # THE LIMIT IS PRINTED UNWEAKENED - that was the settled trade, and pinning it
+  # here is what stops a later change paying for exclusivity with the promise.
+  assert_contains "$(printf '%s' "$out" | jq -r '.limits[0]')" "every folded record stays listed underneath" \
+    "the judge-coverage promise must not be qualified away on the page where it is hardest to keep"
+
+  # NAMED.
+  [ "$(printf '%s' "$out" | jq -r '[.withheld[]|select(.id=="legacy-a-decision-shape")]|length')" = 1 ] \
+    || fail "a record the fold hung beneath a drawn ruling must be named, or the limit printed above it is false of its own page"
+  [ "$(printf '%s' "$out" | jq -r '.withheld[]|select(.id=="legacy-a-decision-shape")|.cause')" = "non-member-variant" ] \
+    || fail "this needs its own cause: folded-elsewhere is about a MEMBER under a foreign ruling, and this is a NON-member under a ruling this chart took"
+  # The two why strings must not be true of each other, or the causes are one
+  # cause wearing two names.
+  assert_contains "$(printf '%s' "$out" | jq -r '.withheld[]|select(.id=="legacy-a-decision-shape")|.why')" "reached the actionable surface" \
+    "the surface did return this record, and nothing here may say otherwise"
+  case "$(printf '%s' "$out" | jq -r '.withheld[]|select(.id=="legacy-a-decision-shape")|.why')" in
+    *"belongs to a DIFFERENT undertaking, so this chart cannot show it under that ruling"*)
+      fail "that is the folded-elsewhere sentence, and it is false here: this chart DOES draw the ruling" ;;
+  esac
+
+  # NEVER DRAWN. Naming is not counting, and the record stays off every surface
+  # that would make it a member of this chart.
+  case "$(printf '%s' "$out" | jq -r '[.decisions[].id, (.decisions[]|.variants[]?.id), .takeable[].id]|join(",")')" in
+    *legacy-a-decision-shape*)
+      fail "naming a record in the reconciliation report must never promote it to a member: that is the one record on two charts exclusivity forbids" ;;
+  esac
+  [ "$(printf '%s' "$out" | jq -r '[.decisions[]|select(.id=="legacy-judge-decision-shape")|.variants[]]|length')" = 0 ] \
+    || fail "the ruling must still be drawn without the non-member variant beneath it"
+
+  # AND THE COUNTS STOP READING ZERO.
+  [ "$(printf '%s' "$out" | jq -r '.counts.folded')" != 0 ] \
+    || fail "a record the fold dropped from this page must be counted as folded away, or the page says nothing was folded beside a row saying one was"
+  [ "$(printf '%s' "$out" | jq -r '.counts.folded')" = 1 ] \
+    || fail "exactly one record was folded away here"
+  [ "$(printf '%s' "$out" | jq -r '.counts.withheld_folded')" = 1 ] \
+    || fail "without this the same record is counted as folded and as withheld with nothing saying they are one record"
+
+  # Read on the rendered page, where shown plus folded must equal what reached.
+  summary=$("$CHART" voy --summary --from "$cap" \
+    --backlog "$home/data/backlog.md" --archive "$home/data/done-archive.md" --data "$home/data")
+  assert_contains "$summary" "of those, 2 reached the actionable surface -> 1 shown (1 folded away)" \
+    "the arithmetic must close on the page: one ruling shown, one record folded out of it"
+  assert_contains "$summary" "folded away rather than never returned" \
+    "the page must say the folded record and the withheld record are one record"
+  pass "a record folded under a retrofitted ruling is named rather than silently stripped, and the limit above it stays true"
 }
 
 test_a_member_list_line_the_prefix_rule_already_covers_assigns_nothing() {
@@ -1627,6 +1712,45 @@ EOF
       fail "a record counted once per ruling it pairs to is arithmetic the row below it refutes" ;;
   esac
   pass "one member folded under two rulings is counted as the one record it is"
+}
+
+test_a_folded_elsewhere_row_survives_on_a_chart_that_also_draws_a_decision() {
+  # THE FIXTURE GAP THAT HID A REAL DEFECT. The folded-elsewhere set is filtered
+  # against the records the chart already drew, and every fixture exercising that
+  # filter happened to draw NO decision of its own - so the filter ran against an
+  # empty list and could not be wrong. Against a non-empty one the expression then
+  # in place emptied the whole set, deleting the row it exists to produce.
+  # This chart draws a decision of its own AND folds a member elsewhere, which is
+  # the ordinary shape of a retrofit on a live undertaking.
+  local home cap out
+  home=$(make_home foldedplusown)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-judge-decision-own - A decision this chart owns by its id (repo: r) (kind: captain) (since 2026-07-30) (hold: Which own) (hold-kind: captain)
+- [ ] legacy-judge-decision-shape - A ruling of another undertaking (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+- [ ] legacy-a-decision-shape - The member the fold hung under that ruling (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+EOF
+  mkdir -p "$home/data/voy"
+  printf 'legacy-a-decision-shape\n' > "$home/data/voy/members"
+  cap=$(capture foldedplusown "voy-judge-decision-own" "legacy-judge-decision-shape" "legacy-a-decision-shape")
+  out=$(chart_json "$home" voy "$cap")
+
+  # The chart really does draw a decision of its own here - that is what makes the
+  # filter run against a non-empty list rather than a vacuous one.
+  [ "$(printf '%s' "$out" | jq -r '[.decisions[].id]|join(",")')" = "voy-judge-decision-own" ] \
+    || fail "fixture drift: this chart must draw a decision of its own, or the filter under test is never exercised"
+  [ "$(printf '%s' "$out" | jq -r '.withheld[]|select(.id=="legacy-a-decision-shape")|.cause')" = "folded-elsewhere" ] \
+    || fail "a member the fold hung under a foreign ruling must still be named when the chart also draws a decision of its own"
+  [ "$(printf '%s' "$out" | jq -r '.counts.records')" = 2 ] \
+    || fail "both the drawn decision and the member folded elsewhere reached the actionable surface"
+  [ "$(printf '%s' "$out" | jq -r '.counts.folded')" = 1 ] \
+    || fail "the member folded elsewhere is the one record folded away here"
+  [ "$(printf '%s' "$out" | jq -r '.counts.withheld_folded')" = 1 ] \
+    || fail "the folded count and the withheld count must be reconciled to one record"
+  pass "a folded-elsewhere row survives on a chart that also draws a decision of its own"
 }
 
 test_a_member_drawn_under_one_ruling_is_never_also_counted_as_folded_away() {
@@ -2047,9 +2171,11 @@ test_a_member_that_resolves_to_nothing_is_named_rather_than_dropped
 test_a_record_two_undertakings_both_claim_is_drawn_on_neither
 test_a_member_no_record_answers_to_is_unresolvable_however_many_lists_name_it
 test_a_retrofitted_decision_is_drawn_and_its_group_siblings_are_not
+test_a_record_folded_under_a_retrofitted_ruling_is_named_rather_than_silently_stripped
 test_a_member_list_line_the_prefix_rule_already_covers_assigns_nothing
 test_a_member_the_fold_hung_under_a_foreign_ruling_is_named_with_a_true_cause
 test_one_member_folded_under_two_rulings_is_still_counted_as_one_record
+test_a_folded_elsewhere_row_survives_on_a_chart_that_also_draws_a_decision
 test_a_member_drawn_under_one_ruling_is_never_also_counted_as_folded_away
 test_a_chart_with_no_member_list_still_discloses_a_folded_elsewhere_row
 test_a_member_list_line_naming_a_group_id_never_drags_that_group_onto_this_chart
