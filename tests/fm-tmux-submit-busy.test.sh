@@ -36,10 +36,17 @@ case "${1:-}" in
     exit 0 ;;
   capture-pane) cat "$COMPOSER" 2>/dev/null; exit 0 ;;
   send-keys)
-    shift; is_enter=0
+    shift; is_enter=0; is_literal=0; literal=
     while [ "$#" -gt 0 ]; do
-      case "$1" in -t) shift ;; -l) ;; Enter) is_enter=1 ;; esac; shift
+      case "$1" in
+        -t) shift ;;
+        -l) is_literal=1 ;;
+        Enter) is_enter=1 ;;
+        *) literal="$literal$1" ;;
+      esac
+      shift
     done
+    [ "$is_literal" = 0 ] || printf '%s\n' "$literal" >> "${FM_FAKE_SENT:-/dev/null}"
     if [ "$is_enter" = 1 ]; then
       if [ -n "${FM_FAKE_SWALLOW:-}" ] && [ -f "$FM_FAKE_SWALLOW" ]; then
         [ "${FM_FAKE_PERSIST_SWALLOW:-0}" = 1 ] || rm -f "$FM_FAKE_SWALLOW"

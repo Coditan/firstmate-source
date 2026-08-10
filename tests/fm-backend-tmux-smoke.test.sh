@@ -417,11 +417,12 @@ pass "real tmux: a delivered steer reports empty on evidence alone, with the pan
 # Direction 2: the harness swallows Enter. The text stays in the composer and
 # the verdict must still say it did not land - the strictly worse failure this
 # fix must not introduce.
+# The command is handed straight to new-window, as in direction 1, so no
+# interactive shell's line-editor readiness is in play; the swallow flag rides
+# in as a command-prefix assignment.
 tmux new-window -d -t "$SESSION" -n "composer-swallow" \
+  "FM_FAKE_CLAUDE_SWALLOW=1 exec '$COMPOSER_DIR/fake-composer' '$COMPOSER_DIR/swallowed.log'" \
   || fail "could not create the swallowing fake-composer window"
-tmux send-keys -t "$SESSION:composer-swallow" -l \
-  "FM_FAKE_CLAUDE_SWALLOW=1 exec '$COMPOSER_DIR/fake-composer' '$COMPOSER_DIR/swallowed.log'"
-tmux send-keys -t "$SESSION:composer-swallow" Enter
 wait_for_composer_state "$SESSION:composer-swallow" empty \
   || fail "the swallowing fake-composer pane never reached its empty composer row"
 

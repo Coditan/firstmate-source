@@ -265,7 +265,7 @@ pending
 
 The composer verdict therefore carried no information about a claude submit at all, which left the busy fallback above deciding every claude steer on its own.
 That fallback only reads busy once claude has painted `esc to interrupt` in its bottom hint line, and a long steer takes seconds to acknowledge, so the false negative reproduces whenever the retry budget (three Enters, ~1.5s) runs out first.
-Reproduced with a 1417-character single-line steer:
+Pre-fix reproduction, a 1417-character single-line steer:
 
 ```sh
 $ verdict=$(fm_tmux_submit_core fmrepro:crew "$LONG" 3 0.4 0.3)
@@ -276,7 +276,8 @@ VERDICT=pending keycount=1                  # delivered once, reported as swallo
 
 The fix is the shared `fm_composer_trim` in `bin/fm-composer-lib.sh`, the one owner of what counts as blank padding on a composer row; every adapter's content reaches the classifier through it.
 It is a list of whole literal strings rather than a bracket expression, because under `LC_ALL=C` a class holding the bytes of a multibyte blank would also match those bytes inside the multibyte glyphs these rows are full of (`❯`, `›`, `│`, `┃`).
-After the fix the same 1346-character steer returns `empty` with the pane still reading NOT busy, so the verdict comes from the composer evidence rather than from the fallback, and real unsubmitted text still reads `pending`:
+Post-fix verification is a SEPARATE measurement, not a re-run of the input above: a different single-line steer of comparable length (1346 characters) returned verdict `empty` with the pane still reading NOT busy at verdict time and the message again delivered exactly once.
+The verdict therefore comes from the composer evidence rather than from the busy fallback, and real unsubmitted text still reads `pending`:
 
 ```sh
 $ tmux send-keys -t fmrepro2:crew -l 'SWALLOWKEY-A this must not submit \'
