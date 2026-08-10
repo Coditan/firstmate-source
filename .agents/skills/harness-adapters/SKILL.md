@@ -33,7 +33,7 @@ The supervision knowledge lives here: busy signature, exit command, interrupt, d
 Never dispatch a crewmate or secondmate on an unverified adapter.
 If `config/crew-harness` or `config/secondmate-harness` names an unverified adapter, tell the captain under `AGENTS.md` section 9 that the requested worker runtime is not verified yet, use firstmate's own verified runtime for current work, and ask only whether to verify the requested runtime before future use.
 Do not pause current work for that future-verification choice, and never launch an unverified adapter.
-If the captain asks for a new harness, propose verifying it first: spawn a trivial supervised task using `fm-spawn`'s raw-launch-command escape hatch, confirm every fact empirically, then record the mechanics in `fm-spawn`, the busy signature in `fm-watch.sh` and `fm-tmux-lib.sh` defaults, any needed `FM_COMPOSER_IDLE_RE` empty-composer override plus any novel bare agent prompt glyph in `bin/fm-composer-lib.sh`'s shared composer classifier (the one fleet-wide owner of the empty/dead-shell/pending decision, so a new harness's own idle composer is not misread as a dead shell), the tmux agent-process liveness classification in `bin/backends/tmux.sh` when the harness can launch a secondmate, and the verified knowledge here.
+If the captain asks for a new harness, propose verifying it first: spawn a trivial supervised task using `fm-spawn`'s raw-launch-command escape hatch, confirm every fact empirically, then record the mechanics in `fm-spawn`, the busy signature in `fm-watch.sh` and `fm-tmux-lib.sh` defaults, any needed `FM_COMPOSER_IDLE_RE` empty-composer override plus any novel bare agent prompt glyph or non-ASCII blank padding its empty composer draws (`fm_composer_trim` covers only the measured U+00A0) in `bin/fm-composer-lib.sh`'s shared composer classifier (the one fleet-wide owner of the empty/dead-shell/pending decision, so a new harness's own idle composer is not misread as a dead shell), the tmux agent-process liveness classification in `bin/backends/tmux.sh` when the harness can launch a secondmate, and the verified knowledge here.
 
 ## Detection
 
@@ -156,6 +156,12 @@ As defense in depth for any pane that flag cannot reach, including the captain's
 Its broader dark-TRUECOLOR placeholder handling and dark-theme tradeoff are documented in `docs/herdr-backend.md`'s 2026-07-10 incident record.
 That styled capture is internal to the boolean detector only.
 `fm-peek` and every other human or LLM-facing capture path stays plain `tmux capture-pane` with no escape codes.
+
+**No-break composer padding (verified 2026-08-10, Claude Code 2.1.226, tmux 3.4).**
+Claude draws its EMPTY composer as the agent prompt glyph followed by exactly one U+00A0 NO-BREAK SPACE, and uses that same U+00A0 as the separator before typed text.
+`fm_composer_trim` in `bin/fm-composer-lib.sh` owns what counts as blank padding for every adapter; see `docs/tmux-backend.md`, "claude's empty composer is padded with U+00A0", for the measurement, the reproductions, and the stated limits.
+When a steer reaches a claude worker mid-turn, claude queues it, clears the composer, lists the queued text above the input box, and replaces the composer placeholder with a dim `Press up to edit queued messages` - so a queued steer HAS landed and must never be re-sent.
+Claude's only busy signal is `esc to interrupt` in the bottom hint line; the spinner row carries no interrupt hint, and a long steer can take several seconds after delivery before that hint appears, so a not-busy read on a claude pane is never on its own evidence that a steer failed to land.
 
 **Per-task crewmate hook fact (verified 2026-07-25, Claude Code 2.1.220).**
 The crewmate turn-end hook lives in the task's own `.claude/settings.fm-task.json`, never in `.claude/settings.local.json`, which Claude Code rewrites at runtime and a project is free to track.
@@ -298,7 +304,7 @@ While opencode is mid-turn, the composer accepts Enter as a "send when the turn
 ends" keystroke but does not clear the typed text from the composer until the
 turn actually finishes.
 Without a fix, every `fm-send` to a busy opencode pane exits non-zero on a
-false "Enter swallowed", and every daemon escalation that lands while the
+false not-submitted verdict, and every daemon escalation that lands while the
 primary is mid-turn is treated as wedged.
 The shared `fm_tmux_submit_enter_core` (`bin/fm-tmux-lib.sh`) now falls back
 to `fm_pane_is_busy` once the Enter-retry budget is spent: a busy pane means

@@ -884,7 +884,8 @@ The away-mode escalation injector (`bin/fm-supervise-daemon.sh`) reads composer-
 The herdr adapter was already safe here (its bare shape only matches the agent glyphs `❯`/`›`; a bare shell prompt has no composer row and reads `unknown`), which is why its structural classifier is the prior art for the fix.
 
 **Consolidation.** The one glyph/idle/pending decision now lives in a single shared owner, `bin/fm-composer-lib.sh`'s `fm_composer_classify_content`, which every adapter delegates to: `fm_tmux_composer_state` (via `bin/fm-tmux-lib.sh`), `fm_backend_herdr_composer_state`, `fm_backend_orca_composer_state`, and `fm_backend_cmux_composer_state`.
-Each adapter still owns its own capture and structural row-finding (genuinely different primitives), then hands the border-stripped, trimmed candidate content plus a `<bordered>` flag to the shared classifier.
+Each adapter still owns its own capture and structural row-finding (genuinely different primitives), then hands the border-stripped candidate content plus a `<bordered>` flag to the shared classifier.
+What counts as blank padding on that content is the shared owner's decision, not each adapter's: `fm_composer_classify_content` re-trims through `fm_composer_trim`, which strips ASCII/locale whitespace AND the U+00A0 no-break space claude pads its empty composer with, so an adapter whose own trim is ASCII-only still reaches the right verdict (see [claude's empty composer is padded with U+00A0](tmux-backend.md#claudes-empty-composer-is-padded-with-u00a0-verified-2026-08-10-claude-code-21226-tmux-34-on-linux) for the measurement and the two limits of it).
 
 **The safety rule.** A bare shell prompt glyph is a genuine empty agent composer ONLY inside a bordered composer container (where the harness draws its own prompt glyph, e.g. claude's older `| > ... |`).
 On a bare, unstructured row it is a dead-shell prompt and reads `unknown` (not a safe injection target), never `empty`.

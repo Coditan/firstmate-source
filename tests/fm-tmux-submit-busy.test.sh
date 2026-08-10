@@ -36,15 +36,22 @@ case "${1:-}" in
     exit 0 ;;
   capture-pane) cat "$COMPOSER" 2>/dev/null; exit 0 ;;
   send-keys)
-    shift; is_enter=0
+    shift; is_enter=0; is_literal=0; literal=
     while [ "$#" -gt 0 ]; do
-      case "$1" in -t) shift ;; -l) ;; Enter) is_enter=1 ;; esac; shift
+      case "$1" in
+        -t) shift ;;
+        -l) is_literal=1 ;;
+        Enter) is_enter=1 ;;
+        *) literal="$literal$1" ;;
+      esac
+      shift
     done
+    [ "$is_literal" = 0 ] || printf '%s\n' "$literal" >> "${FM_FAKE_SENT:-/dev/null}"
     if [ "$is_enter" = 1 ]; then
       if [ -n "${FM_FAKE_SWALLOW:-}" ] && [ -f "$FM_FAKE_SWALLOW" ]; then
         [ "${FM_FAKE_PERSIST_SWALLOW:-0}" = 1 ] || rm -f "$FM_FAKE_SWALLOW"
       else
-        printf '│ > │\n' > "$COMPOSER"
+        printf '%s\n' "${FM_FAKE_CLEARED:-│ > │}" > "$COMPOSER"
       fi
     fi
     exit 0 ;;
@@ -74,8 +81,6 @@ test_busy_pane_pending_returns_empty() {
     FM_FAKE_SWALLOW="$dir/.swallow" FM_FAKE_PERSIST_SWALLOW=1 FM_FAKE_PANE_BUSY=1 \
     fm_tmux_submit_enter_core "win" 3 0.05 > "$vfile" 2>/dev/null
   [ "$(cat "$vfile")" = empty ] || fail "busy-pane pending should return empty, got '$(cat "$vfile")'"
-  [ "$(grep -c 'fix findings' "$sent" 2>/dev/null || true)" -eq 0 ] \
-    || fail "busy-pane should not retype text"
   pass "fm_tmux_submit_enter_core: busy pane + pending composer returns empty (message queued)"
 }
 
@@ -126,7 +131,67 @@ test_idle_pane_composer_clears_first_try() {
   pass "fm_tmux_submit_enter_core: idle pane clears composer on first Enter - returns empty as before"
 }
 
+# --- claude's no-break composer padding (task fm-send-false-swallowed-enter) -
+#
+# The four scenarios above are opencode's busy-queue exception, where the busy
+# read is the tiebreak. These two are the case that exception could NOT cover:
+# claude clears its composer on submit, so the composer read alone should
+# already say "delivered" - but claude pads the cleared row with U+00A0, which
+# no ASCII trim removes, so the row read `pending` and the verdict fell through
+# to the busy fallback. On a claude worker that has not yet painted its busy
+# footer (a long steer takes seconds to acknowledge; measured 6.5s live, see
+# docs/tmux-backend.md) the fallback reads idle and a DELIVERED steer was
+# reported as a swallowed Enter. Both directions are pinned here, on the real
+# byte shapes, and both are asserted with the pane NOT busy so the fallback can
+# never be what makes them pass.
+FM_TEST_NBSP=$'\302\240'
+
+test_claude_cleared_composer_on_idle_pane_returns_empty() {
+  local dir fakebin composer sent vfile
+  dir="$TMP_ROOT/claude-cleared"
+  fakebin=$(make_submit_mock "$dir")
+  composer="$dir/composer"
+  sent="$dir/sent.log"
+  vfile="$dir/verdict"
+  printf '❯%sapply the reviewer proposal on finding F-12\n' "$FM_TEST_NBSP" > "$composer"
+  : > "$sent"
+  PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$composer" FM_FAKE_SENT="$sent" \
+    FM_FAKE_CLEARED="❯$FM_TEST_NBSP" FM_FAKE_PANE_BUSY=0 \
+    fm_tmux_submit_enter_core "win" 3 0.05 > "$vfile" 2>/dev/null
+  [ "$(cat "$vfile")" = empty ] \
+    || fail "claude's cleared composer (glyph + U+00A0) on a not-yet-busy pane must return empty, got '$(cat "$vfile")'"
+  pass "fm_tmux_submit_enter_core: claude's U+00A0-padded cleared composer returns empty without needing the busy fallback"
+}
+
+# Driven through fm_tmux_submit_core - the function fm-send actually calls, and
+# the one that owns the single literal send - so the "typed once, then Enter
+# only" invariant is observable: the steer must appear in the recorded sends
+# EXACTLY once across all three Enter retries.
+test_claude_swallowed_enter_on_idle_pane_returns_pending() {
+  local dir fakebin composer sent vfile steer
+  dir="$TMP_ROOT/claude-swallow"
+  fakebin=$(make_submit_mock "$dir")
+  composer="$dir/composer"
+  sent="$dir/sent.log"
+  vfile="$dir/verdict"
+  steer='apply the reviewer proposal on finding F-12'
+  printf '❯%s%s\n' "$FM_TEST_NBSP" "$steer" > "$composer"
+  : > "$sent"
+  touch "$dir/.swallow"
+  PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$composer" FM_FAKE_SENT="$sent" \
+    FM_FAKE_CLEARED="❯$FM_TEST_NBSP" FM_FAKE_SWALLOW="$dir/.swallow" \
+    FM_FAKE_PERSIST_SWALLOW=1 FM_FAKE_PANE_BUSY=0 \
+    fm_tmux_submit_core "win" "$steer" 3 0.05 0.05 > "$vfile" 2>/dev/null
+  [ "$(cat "$vfile")" = pending ] \
+    || fail "a genuinely swallowed Enter on a claude pane must stay pending, got '$(cat "$vfile")'"
+  [ "$(grep -c -F "$steer" "$sent" 2>/dev/null || true)" -eq 1 ] \
+    || fail "the steer must be typed exactly once across all Enter retries, got $(grep -c -F "$steer" "$sent" 2>/dev/null || true):"$'\n'"$(cat "$sent")"
+  pass "fm_tmux_submit_core: a genuine swallow on a claude pane still reports pending, with the text typed exactly once"
+}
+
 test_busy_pane_pending_returns_empty
 test_idle_pane_pending_returns_pending
 test_busy_pane_composer_clears_first_try
 test_idle_pane_composer_clears_first_try
+test_claude_cleared_composer_on_idle_pane_returns_empty
+test_claude_swallowed_enter_on_idle_pane_returns_pending

@@ -238,6 +238,60 @@ a busy pane means the harness accepted and queued the Enter (reported as `empty`
 This is the only place that exception lives; the herdr adapter observes the same opencode behavior but needs a separate fix (see the opencode note in [harness-adapters](../.agents/skills/harness-adapters/SKILL.md) and the opencode-busy gap recorded in [herdr-backend.md](herdr-backend.md)).
 Regression coverage: `tests/fm-tmux-submit-busy.test.sh` covers the four scenarios (busy pane + pending composer -> `empty`, idle pane + pending composer -> `pending`, busy pane + cleared composer -> `empty`, idle pane + cleared composer -> `empty`).
 
+### claude's empty composer is padded with U+00A0 (verified 2026-08-10, Claude Code 2.1.226, tmux 3.4 on Linux)
+
+Task `fm-send-false-swallowed-enter`, reported after three live instances in one session: `fm-send` printed `error: text not submitted to <window> (Enter swallowed; ...)` and exited non-zero for steers that had in fact been delivered exactly once.
+The false verdict is worse than cosmetic, because the only sensible reaction to it is to send again, and a second copy of a validation-gate decision reaches a worker already applying the first.
+
+Claude Code 2.1.226 draws its EMPTY composer as the agent prompt glyph followed by exactly one U+00A0 NO-BREAK SPACE, and uses that same U+00A0 as the separator before typed text.
+Captured from a live claude pane with the styled, single-row read the detector itself uses:
+
+```sh
+$ cy=$(tmux display-message -p -t fmrepro:crew '#{cursor_y}')
+$ tmux capture-pane -e -p -t fmrepro:crew -S "$cy" -E "$cy" | cat -A
+^[[38;5;246mM-bM-^]M-/M-BM- ^[[39m$                              # idle: ❯ + U+00A0
+^[[38;5;246mM-bM-^]M-/M-BM- BYTEPROBE typed text$                # typed: ❯ + U+00A0 + text
+^[[38;5;246mM-bM-^]M-/M-BM- ^[[2m^[[39mPress up to edit queued messages^[[0m$
+```
+
+The third row is the state after claude queues a steer sent to a busy worker: the message has LEFT the composer, and the dim (SGR 2) `Press up to edit queued messages` hint is correctly dropped by `fm_composer_strip_ghost`, leaving the same padded glyph.
+
+Neither bash's `[[:space:]]` nor glibc's `iswspace` counts U+00A0 as whitespace in any fleet locale, so the ASCII-only trim left it attached, the bare-`❯` agent-glyph case in `fm_composer_classify_content` never matched, and EVERY claude composer row - idle, or emptied because the harness queued the message - classified as `pending`:
+
+```sh
+$ fm_tmux_composer_state fmrepro:crew   # idle claude, empty composer
+pending
+```
+
+The composer verdict therefore carried no information about a claude submit at all, which left the busy fallback above deciding every claude steer on its own.
+That fallback only reads busy once claude has painted `esc to interrupt` in its bottom hint line, and a long steer takes seconds to acknowledge, so the false negative reproduces whenever the retry budget (three Enters, ~1.5s) runs out first.
+Pre-fix reproduction, a 1417-character single-line steer:
+
+```sh
+$ verdict=$(fm_tmux_submit_core fmrepro:crew "$LONG" 3 0.4 0.3)
+$ echo "VERDICT=$verdict keycount=$(tmux capture-pane -p -t fmrepro:crew -S -400 | grep -c LONGKEY-4410)"
+VERDICT=pending keycount=1                  # delivered once, reported as swallowed
+# the pane first read busy 6.5 seconds AFTER the verdict was already returned
+```
+
+The fix is the shared `fm_composer_trim` in `bin/fm-composer-lib.sh`, the one owner of what counts as blank padding on a composer row; every adapter's content reaches the classifier through it.
+It is a list of whole literal strings rather than a bracket expression, because under `LC_ALL=C` a class holding the bytes of a multibyte blank would also match those bytes inside the multibyte glyphs these rows are full of (`❯`, `›`, `│`, `┃`).
+Post-fix verification is a SEPARATE measurement, not a re-run of the input above: a different single-line steer of comparable length (1346 characters) returned verdict `empty` with the pane still reading NOT busy at verdict time and the message again delivered exactly once.
+The verdict therefore comes from the composer evidence rather than from the busy fallback, and real unsubmitted text still reads `pending`:
+
+```sh
+$ tmux send-keys -t fmrepro2:crew -l 'SWALLOWKEY-A this must not submit \'
+$ fm_tmux_composer_state fmrepro2:crew
+pending
+```
+
+Regression coverage: `tests/fm-composer-lib.test.sh` pins both directions at the shared owner, `tests/fm-tmux-submit-busy.test.sh` pins them through the submit core on claude's real byte shapes with the pane NOT busy, and `tests/fm-backend-tmux-smoke.test.sh` drives both on a real tmux pane whose composer renders the measured row and either submits or swallows Enter on demand.
+
+Two limits of this measurement are worth stating rather than leaving implied.
+The busy footer is the only busy signal claude 2.1.226 renders - the spinner row itself (`✽ Determining… (3s · ↓ 52 tokens)`) carries no interrupt hint - and it survives narrowing to 80 columns, where claude truncates `← for agents` instead.
+Separately, the cursor-row reader sees ONE row, so a multi-line composer whose cursor sits on an empty continuation line reads `empty` while real text sits on the line above; measured here by ending a line with `\`, which makes claude insert a newline rather than submit.
+`fm-send` cannot construct that state (it types one line and never embeds a newline), but a human typing into a pane the away-mode injector reads can, and that is a separate defect with its own reproduction.
+
 Verified empirically with real tmux 3.6a on macOS (Darwin 25.5.0), 2026-07-07:
 
 ```sh
