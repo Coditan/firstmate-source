@@ -159,8 +159,7 @@ That styled capture is internal to the boolean detector only.
 
 **No-break composer padding (verified 2026-08-10, Claude Code 2.1.226, tmux 3.4).**
 Claude draws its EMPTY composer as the agent prompt glyph followed by exactly one U+00A0 NO-BREAK SPACE, and uses that same U+00A0 as the separator before typed text.
-No ASCII trim removes it, so before task `fm-send-false-swallowed-enter` every claude composer row classified as `pending`, `fm-send` reported delivered steers as swallowed Enters, and the away-mode injector read every idle claude pane as holding pending input.
-`fm_composer_trim` in `bin/fm-composer-lib.sh` now owns what counts as blank padding for every adapter; the measurement, both reproductions, and the two stated limits of it are in `docs/tmux-backend.md`, "claude's empty composer is padded with U+00A0".
+`fm_composer_trim` in `bin/fm-composer-lib.sh` owns what counts as blank padding for every adapter; see `docs/tmux-backend.md`, "claude's empty composer is padded with U+00A0", for the measurement, the reproductions, and the stated limits.
 When a steer reaches a claude worker mid-turn, claude queues it, clears the composer, lists the queued text above the input box, and replaces the composer placeholder with a dim `Press up to edit queued messages` - so a queued steer HAS landed and must never be re-sent.
 Claude's only busy signal is `esc to interrupt` in the bottom hint line; the spinner row carries no interrupt hint, and a long steer can take several seconds after delivery before that hint appears, so a not-busy read on a claude pane is never on its own evidence that a steer failed to land.
 
