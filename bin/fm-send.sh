@@ -15,6 +15,14 @@
 # submit or reports an inconclusive send. If a swallowed Enter is positively
 # confirmed, fm-send exits NON-ZERO so the caller knows the steer did not land
 # instead of silently leaving an unsubmitted instruction.
+# That refusal names its evidence rather than asserting a swallow, and tells the
+# operator to read the pane first, because the only sensible reaction to it is to
+# re-send and a duplicate steer to a worker already acting on the first one is
+# worse than a late one - two copies of a validation-gate decision duplicate
+# pipeline ownership. The residual ambiguity is real but narrow: a harness that
+# keeps typed text visible while queueing it is told apart by the busy read in
+# fm_tmux_submit_enter_core (bin/fm-tmux-lib.sh), which is the only exception
+# that path carries.
 # Submission dispatches through the target's recorded backend; the tmux adapter
 # shares its composer/submit core with the away-mode daemon via bin/fm-tmux-lib.sh.
 # Tune with FM_SEND_RETRIES (default 3) / FM_SEND_SLEEP (0.4).
@@ -257,7 +265,8 @@ else
   case "$verdict" in
     pending)
       [ -z "$PENDING_CORR" ] || fm_pending_reply_discard_undelivered "$STATE" "$PENDING_CORR"
-      echo "error: text not submitted to $T (Enter swallowed; text left in composer; tried $RESOLUTION_TRIED)" >&2
+      echo "error: text not submitted to $T (unsubmitted text is still in the composer and the pane shows no work under way; tried $RESOLUTION_TRIED)" >&2
+      echo "hint: read the pane before re-sending - if the composer is clear and the worker is already acting on this text, it landed and a second copy would duplicate the instruction." >&2
       exit 1
       ;;
     send-failed)

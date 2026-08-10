@@ -45,6 +45,20 @@
 # as a known gap in `docs/herdr-backend.md` rather than patched here, so the
 # tmux adapter does not paper over a herdr-specific shape.
 #
+# No-break composer padding (claude 2.1.226; task fm-send-false-swallowed-enter):
+# claude pads its EMPTY composer with a U+00A0 no-break space that no ASCII trim
+# removes, so every claude cursor row - idle, or emptied because the harness
+# queued the message - used to classify as `pending`. The composer verdict then
+# carried no information about a claude submit at all, which left the busy
+# fallback below deciding every claude steer on its own; a long steer that
+# claude had not yet acknowledged with its busy footer therefore reported a
+# DELIVERED message as a swallowed Enter. Blank padding is now trimmed by the
+# shared fm_composer_trim (bin/fm-composer-lib.sh), which owns that decision for
+# every adapter; the evidence is in docs/tmux-backend.md, "claude's empty
+# composer is padded with U+00A0". With the composer read informative again, the
+# busy fallback is back to being the narrow opencode tiebreak it was built as
+# rather than the only thing standing between a true and a false verdict.
+#
 # Per-harness override: FM_COMPOSER_IDLE_RE matches an empty composer after
 # ghost and structural border stripping. FM_BUSY_REGEX overrides the busy
 # footer set (mirrors fm-watch.sh / the daemon).
@@ -186,22 +200,19 @@ fm_tmux_composer_state() {  # <target> -> empty|pending|unknown
   raw=$(tmux capture-pane -e -p -t "$pane" -S "$cy" -E "$cy" 2>/dev/null) || { printf 'unknown'; return 0; }
   # bordered: from the plain row (borders survive an all-ANSI strip).
   plain=$(printf '%s\n' "$raw" | fm_composer_strip_ansi)
-  plain="${plain#"${plain%%[![:space:]]*}"}"
-  plain="${plain%"${plain##*[![:space:]]}"}"
+  fm_composer_trim "$plain" plain
   case "$plain" in
     '│'*'│'|'┃'*'┃'|'|'*'|') bordered=1 ;;
   esac
   # content: from the ghost-stripped row (real typed text only).
   stripped=$(printf '%s\n' "$raw" | fm_composer_strip_ghost)
-  stripped="${stripped#"${stripped%%[![:space:]]*}"}"
-  stripped="${stripped%"${stripped##*[![:space:]]}"}"
+  fm_composer_trim "$stripped" stripped
   case "$stripped" in
     '│'*'│') stripped=${stripped#│}; stripped=${stripped%│} ;;
     '┃'*'┃') stripped=${stripped#┃}; stripped=${stripped%┃} ;;
     '|'*'|') stripped=${stripped#|}; stripped=${stripped%|} ;;
   esac
-  stripped="${stripped#"${stripped%%[![:space:]]*}"}"
-  stripped="${stripped%"${stripped##*[![:space:]]}"}"
+  fm_composer_trim "$stripped" stripped
   # A busy footer landing on the cursor line is not pending input (tmux-specific:
   # only tmux captures the raw cursor row, which may BE the footer).
   if [ -n "$stripped" ] \

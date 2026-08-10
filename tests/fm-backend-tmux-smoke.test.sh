@@ -31,11 +31,13 @@ REAL_TMUX=$(command -v tmux)
 SOCKET="fm-backend-smoke-$$"
 SHIM_DIR=
 AGENT_BIN_DIR=
+COMPOSER_DIR=
 trap cleanup_all EXIT
 
 cleanup_all() {
   "$REAL_TMUX" -L "$SOCKET" kill-server >/dev/null 2>&1 || true
   [ -n "${AGENT_BIN_DIR:-}" ] && rm -rf "$AGENT_BIN_DIR"
+  [ -n "${COMPOSER_DIR:-}" ] && rm -rf "$COMPOSER_DIR"
   [ -n "${SHIM_DIR:-}" ] && rm -rf "$SHIM_DIR"
 }
 
@@ -329,6 +331,115 @@ sleep 0.5
 tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -qx "captain-cockpit" \
   || fail "fm_tmux_ensure_own_window must leave a non-crew window name untouched"
 pass "real tmux: fm_tmux_ensure_own_window leaves a non-crew window name untouched"
+
+# --- submit verdict on a real pane whose composer carries no-break padding ----
+#
+# Task fm-send-false-swallowed-enter. `fm-send` reported DELIVERED steers as
+# swallowed Enters against claude workers. Claude Code 2.1.226 draws its empty
+# composer as `❯` followed by U+00A0 NO-BREAK SPACE, which neither bash's
+# `[[:space:]]` nor glibc's `iswspace` treats as whitespace, so every claude
+# composer row classified as `pending` and the verdict fell through to the coarse
+# busy fallback that exists for opencode's queued Enter. A worker that had not
+# yet painted its busy footer therefore reported a landed steer as lost, and the
+# only sensible reaction to that report - re-send - delivers a second copy of a
+# decision the worker is already applying.
+#
+# Driven on a REAL pane rather than a mocked tmux because the defect was in what
+# tmux actually hands back for a real cursor row: the byte sequence, the cursor
+# position, and the styling all had to be genuine for the misread to appear. The
+# stand-in is only the harness - a composer that renders claude's measured row
+# shape and either submits or swallows Enter on demand, which is the one thing a
+# real claude cannot be told to do. Both assertions run with the pane NOT busy,
+# so the busy fallback can never be what makes them pass.
+
+COMPOSER_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-backend-smoke-composer.XXXXXX")
+cat > "$COMPOSER_DIR/fake-composer" <<'SH'
+#!/usr/bin/env bash
+# Renders claude 2.1.226's measured composer row: the agent prompt glyph, one
+# U+00A0, then whatever has been typed. Submitting appends the line to $2 and
+# clears the row; FM_FAKE_CLAUDE_SWALLOW=1 keeps the text and writes nothing,
+# which is a genuinely swallowed Enter. Nothing here ever prints a busy footer.
+set -u
+LOG=$1
+NBSP=$'\302\240'
+buf=""
+draw() {
+  printf '\033[2J\033[H'
+  printf 'fake claude composer\n\n'
+  printf '\033[38;5;246m❯%s\033[39m%s' "$NBSP" "$buf"
+}
+draw
+while IFS= read -rsn1 c; do
+  if [ -z "$c" ]; then
+    if [ "${FM_FAKE_CLAUDE_SWALLOW:-0}" != 1 ]; then
+      printf '%s\n' "$buf" >> "$LOG"
+      buf=""
+    fi
+  else
+    buf="$buf$c"
+  fi
+  draw
+done
+SH
+chmod +x "$COMPOSER_DIR/fake-composer"
+
+wait_for_composer_state() {  # <target> <expected> [samples]
+  local target=$1 expected=$2 samples=${3:-100} i=0
+  while [ "$i" -lt "$samples" ]; do
+    [ "$(fm_tmux_composer_state "$target")" = "$expected" ] && return 0
+    sleep 0.1
+    i=$((i + 1))
+  done
+  return 1
+}
+
+STEER='apply the reviewer proposal on finding F-12'
+
+# Direction 1: the harness submits. The composer clears to claude's padded row,
+# the pane never goes busy, and the verdict must be that the steer landed.
+tmux new-window -d -t "$SESSION" -n "composer-submit" \
+  "$COMPOSER_DIR/fake-composer '$COMPOSER_DIR/submitted.log'" \
+  || fail "could not create the submitting fake-composer window"
+wait_for_composer_state "$SESSION:composer-submit" empty \
+  || fail "a real pane showing claude's U+00A0-padded empty composer must read empty, got '$(fm_tmux_composer_state "$SESSION:composer-submit")'"
+pass "real tmux: claude's U+00A0-padded empty composer row reads empty on a real pane"
+
+SUBMIT_VERDICT=$(fm_tmux_submit_core "$SESSION:composer-submit" "$STEER" 3 0.2 0.3)
+if fm_pane_is_busy "$SESSION:composer-submit"; then
+  fail "the submitting fake-composer pane must never read busy, or this control proves nothing"
+fi
+[ "$SUBMIT_VERDICT" = empty ] \
+  || fail "a delivered steer on a not-busy claude-shaped pane must return empty, got '$SUBMIT_VERDICT'"
+[ "$(grep -c -F "$STEER" "$COMPOSER_DIR/submitted.log" 2>/dev/null || echo 0)" -eq 1 ] \
+  || fail "the steer should have been submitted exactly once:"$'\n'"$(cat "$COMPOSER_DIR/submitted.log" 2>/dev/null)"
+pass "real tmux: a delivered steer reports empty on evidence alone, with the pane never busy"
+
+# Direction 2: the harness swallows Enter. The text stays in the composer and
+# the verdict must still say it did not land - the strictly worse failure this
+# fix must not introduce.
+tmux new-window -d -t "$SESSION" -n "composer-swallow" \
+  || fail "could not create the swallowing fake-composer window"
+tmux send-keys -t "$SESSION:composer-swallow" -l \
+  "FM_FAKE_CLAUDE_SWALLOW=1 exec '$COMPOSER_DIR/fake-composer' '$COMPOSER_DIR/swallowed.log'"
+tmux send-keys -t "$SESSION:composer-swallow" Enter
+wait_for_composer_state "$SESSION:composer-swallow" empty \
+  || fail "the swallowing fake-composer pane never reached its empty composer row"
+
+SWALLOW_VERDICT=$(fm_tmux_submit_core "$SESSION:composer-swallow" "$STEER" 3 0.2 0.3)
+[ "$SWALLOW_VERDICT" = pending ] \
+  || fail "a genuinely swallowed Enter must still return pending, got '$SWALLOW_VERDICT'"
+[ ! -s "$COMPOSER_DIR/swallowed.log" ] \
+  || fail "the swallowing composer must not have submitted anything:"$'\n'"$(cat "$COMPOSER_DIR/swallowed.log")"
+case "$(fm_backend_tmux_capture "$SESSION:composer-swallow" 10)" in
+  *"$STEER"*) : ;;
+  *) fail "the swallowed steer should still be visible in the composer" ;;
+esac
+pass "real tmux: a genuinely swallowed Enter still reports pending, with the text left in the composer"
+
+tmux kill-window -t "$SESSION:composer-submit" 2>/dev/null || true
+tmux kill-window -t "$SESSION:composer-swallow" 2>/dev/null || true
+rm -rf "$COMPOSER_DIR"
+COMPOSER_DIR=
 
 # --- kill ---------------------------------------------------------------------
 

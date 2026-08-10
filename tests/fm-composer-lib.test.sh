@@ -24,6 +24,84 @@ set -u
 # classify <bordered> <content> [idle_re] -> echoes the verdict.
 classify() { fm_composer_classify_content "$@"; }
 
+# --- No-break composer padding (task fm-send-false-swallowed-enter) ---------
+#
+# Claude Code 2.1.226 draws its EMPTY composer as the agent prompt glyph
+# followed by one U+00A0 NO-BREAK SPACE, and uses that same U+00A0 as the
+# separator before typed text (measured 2026-08-10 under tmux 3.4; raw cursor
+# row `\033[38;5;246m❯\xc2\xa0\033[39m`, see docs/tmux-backend.md). Neither
+# bash's `[[:space:]]` nor glibc's `iswspace` counts it as whitespace, so an
+# ASCII-only trim left it attached, the bare-`❯` case below never matched, and
+# EVERY claude composer classified as `pending`. The direction that must not
+# regress is BOTH of them: a padded empty composer reads empty, and padded real
+# text still reads pending.
+FM_TEST_NBSP=$'\302\240'
+
+test_no_break_padded_agent_glyph_is_empty() {
+  local g out
+  for g in '❯' '›'; do
+    out=$(classify 0 "$g$FM_TEST_NBSP")
+    [ "$out" = empty ] \
+      || fail "agent glyph '$g' padded with U+00A0 is an EMPTY composer, got '$out'"
+    out=$(classify 1 "$g$FM_TEST_NBSP")
+    [ "$out" = empty ] \
+      || fail "bordered agent glyph '$g' padded with U+00A0 is an EMPTY composer, got '$out'"
+  done
+  pass "fm_composer_classify_content: an agent glyph padded with U+00A0 reads empty (claude's real idle composer)"
+}
+
+test_no_break_padded_plain_content_agent_glyph_is_empty() {
+  local out
+  # Ghost stripping removed the whole row; the plain fallback still carries
+  # claude's padded glyph. Before the trim this read `unknown`.
+  out=$(classify 0 '' '' insensitive "❯$FM_TEST_NBSP")
+  [ "$out" = empty ] \
+    || fail "an all-ghost row whose plain content is a padded agent glyph reads empty, got '$out'"
+  # claude's queued-message row: the dim hint strips out, leaving the padded
+  # glyph as real content while the plain row still shows the hint.
+  out=$(classify 0 "❯$FM_TEST_NBSP" '' insensitive "❯${FM_TEST_NBSP}Press up to edit queued messages")
+  [ "$out" = empty ] \
+    || fail "claude's queued-message composer reads empty (the message left the composer), got '$out'"
+  pass "fm_composer_classify_content: U+00A0 padding is trimmed from the plain-content fallback too"
+}
+
+test_no_break_padded_real_text_is_pending() {
+  local out
+  out=$(classify 0 "❯${FM_TEST_NBSP}fix findings 1 and 3")
+  [ "$out" = pending ] \
+    || fail "real typed text behind U+00A0 padding must stay pending (a genuine swallow), got '$out'"
+  out=$(classify 0 "fix findings 1 and 3$FM_TEST_NBSP")
+  [ "$out" = pending ] \
+    || fail "real typed text trailed by U+00A0 must stay pending, got '$out'"
+  pass "fm_composer_classify_content: U+00A0 padding never turns real unsubmitted text into empty"
+}
+
+test_no_break_padded_shell_glyph_is_still_unknown() {
+  local g out
+  for g in '>' '$' '%' '#'; do
+    out=$(classify 0 "$g$FM_TEST_NBSP")
+    [ "$out" = unknown ] \
+      || fail "bare shell glyph '$g' padded with U+00A0 must stay unknown (dead shell, unsafe), got '$out'"
+  done
+  pass "fm_composer_classify_content: trimming U+00A0 does not weaken the dead-shell safety rule"
+}
+
+test_fm_composer_trim_removes_mixed_padding() {
+  local out
+  fm_composer_trim "  $FM_TEST_NBSP ❯$FM_TEST_NBSP  " out
+  [ "$out" = '❯' ] || fail "fm_composer_trim should reduce mixed ASCII/U+00A0 padding to '❯', got '$out'"
+  fm_composer_trim "$FM_TEST_NBSP$FM_TEST_NBSP" out
+  [ -z "$out" ] || fail "fm_composer_trim should reduce an all-U+00A0 row to empty, got '$out'"
+  fm_composer_trim "a${FM_TEST_NBSP}b" out
+  [ "$out" = "a${FM_TEST_NBSP}b" ] \
+    || fail "fm_composer_trim must not touch a U+00A0 INSIDE the content, got '$out'"
+  # Same variable in and out: the input is expanded before the call.
+  out="  ❯$FM_TEST_NBSP"
+  fm_composer_trim "$out" out
+  [ "$out" = '❯' ] || fail "fm_composer_trim should accept the same variable as input and output, got '$out'"
+  pass "fm_composer_trim: strips blank padding from both ends and leaves interior content alone"
+}
+
 # --- Safety fix: bare shell prompt is NOT an empty agent composer -----------
 
 test_bare_shell_glyphs_are_unknown() {
@@ -125,6 +203,11 @@ test_real_text_is_pending() {
   pass "fm_composer_classify_content: real unsubmitted text reads pending (including a popup argument-hint fill)"
 }
 
+test_no_break_padded_agent_glyph_is_empty
+test_no_break_padded_plain_content_agent_glyph_is_empty
+test_no_break_padded_real_text_is_pending
+test_no_break_padded_shell_glyph_is_still_unknown
+test_fm_composer_trim_removes_mixed_padding
 test_bare_shell_glyphs_are_unknown
 test_stripped_unbordered_content_uses_plain_content
 test_bare_shell_prompt_with_command_is_not_empty

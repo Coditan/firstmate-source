@@ -157,6 +157,13 @@ Its broader dark-TRUECOLOR placeholder handling and dark-theme tradeoff are docu
 That styled capture is internal to the boolean detector only.
 `fm-peek` and every other human or LLM-facing capture path stays plain `tmux capture-pane` with no escape codes.
 
+**No-break composer padding (verified 2026-08-10, Claude Code 2.1.226, tmux 3.4).**
+Claude draws its EMPTY composer as the agent prompt glyph followed by exactly one U+00A0 NO-BREAK SPACE, and uses that same U+00A0 as the separator before typed text.
+No ASCII trim removes it, so before task `fm-send-false-swallowed-enter` every claude composer row classified as `pending`, `fm-send` reported delivered steers as swallowed Enters, and the away-mode injector read every idle claude pane as holding pending input.
+`fm_composer_trim` in `bin/fm-composer-lib.sh` now owns what counts as blank padding for every adapter; the measurement, both reproductions, and the two stated limits of it are in `docs/tmux-backend.md`, "claude's empty composer is padded with U+00A0".
+When a steer reaches a claude worker mid-turn, claude queues it, clears the composer, lists the queued text above the input box, and replaces the composer placeholder with a dim `Press up to edit queued messages` - so a queued steer HAS landed and must never be re-sent.
+Claude's only busy signal is `esc to interrupt` in the bottom hint line; the spinner row carries no interrupt hint, and a long steer can take several seconds after delivery before that hint appears, so a not-busy read on a claude pane is never on its own evidence that a steer failed to land.
+
 **Per-task crewmate hook fact (verified 2026-07-25, Claude Code 2.1.220).**
 The crewmate turn-end hook lives in the task's own `.claude/settings.fm-task.json`, never in `.claude/settings.local.json`, which Claude Code rewrites at runtime and a project is free to track.
 Claude Code does not read arbitrary sibling settings files, so that distinct name only works because the launch passes `--settings` for it; dropping the flag silently disarms the turn-end signal without any visible error.
