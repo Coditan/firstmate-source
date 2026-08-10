@@ -81,8 +81,6 @@ test_busy_pane_pending_returns_empty() {
     FM_FAKE_SWALLOW="$dir/.swallow" FM_FAKE_PERSIST_SWALLOW=1 FM_FAKE_PANE_BUSY=1 \
     fm_tmux_submit_enter_core "win" 3 0.05 > "$vfile" 2>/dev/null
   [ "$(cat "$vfile")" = empty ] || fail "busy-pane pending should return empty, got '$(cat "$vfile")'"
-  [ "$(grep -c 'fix findings' "$sent" 2>/dev/null || true)" -eq 0 ] \
-    || fail "busy-pane should not retype text"
   pass "fm_tmux_submit_enter_core: busy pane + pending composer returns empty (message queued)"
 }
 
@@ -165,25 +163,30 @@ test_claude_cleared_composer_on_idle_pane_returns_empty() {
   pass "fm_tmux_submit_enter_core: claude's U+00A0-padded cleared composer returns empty without needing the busy fallback"
 }
 
+# Driven through fm_tmux_submit_core - the function fm-send actually calls, and
+# the one that owns the single literal send - so the "typed once, then Enter
+# only" invariant is observable: the steer must appear in the recorded sends
+# EXACTLY once across all three Enter retries.
 test_claude_swallowed_enter_on_idle_pane_returns_pending() {
-  local dir fakebin composer sent vfile
+  local dir fakebin composer sent vfile steer
   dir="$TMP_ROOT/claude-swallow"
   fakebin=$(make_submit_mock "$dir")
   composer="$dir/composer"
   sent="$dir/sent.log"
   vfile="$dir/verdict"
-  printf '❯%sapply the reviewer proposal on finding F-12\n' "$FM_TEST_NBSP" > "$composer"
+  steer='apply the reviewer proposal on finding F-12'
+  printf '❯%s%s\n' "$FM_TEST_NBSP" "$steer" > "$composer"
   : > "$sent"
   touch "$dir/.swallow"
   PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$composer" FM_FAKE_SENT="$sent" \
     FM_FAKE_CLEARED="❯$FM_TEST_NBSP" FM_FAKE_SWALLOW="$dir/.swallow" \
     FM_FAKE_PERSIST_SWALLOW=1 FM_FAKE_PANE_BUSY=0 \
-    fm_tmux_submit_enter_core "win" 3 0.05 > "$vfile" 2>/dev/null
+    fm_tmux_submit_core "win" "$steer" 3 0.05 0.05 > "$vfile" 2>/dev/null
   [ "$(cat "$vfile")" = pending ] \
     || fail "a genuinely swallowed Enter on a claude pane must stay pending, got '$(cat "$vfile")'"
-  [ "$(grep -c 'finding F-12' "$sent" 2>/dev/null || true)" -eq 0 ] \
-    || fail "a swallowed Enter must never make the submit core retype the text"
-  pass "fm_tmux_submit_enter_core: a genuine swallow on a claude pane still reports pending (text never retyped)"
+  [ "$(grep -c -F "$steer" "$sent" 2>/dev/null || true)" -eq 1 ] \
+    || fail "the steer must be typed exactly once across all Enter retries, got $(grep -c -F "$steer" "$sent" 2>/dev/null || true):"$'\n'"$(cat "$sent")"
+  pass "fm_tmux_submit_core: a genuine swallow on a claude pane still reports pending, with the text typed exactly once"
 }
 
 test_busy_pane_pending_returns_empty

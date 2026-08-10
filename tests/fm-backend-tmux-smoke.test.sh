@@ -383,15 +383,10 @@ done
 SH
 chmod +x "$COMPOSER_DIR/fake-composer"
 
-wait_for_composer_state() {  # <target> <expected> [samples]
-  local target=$1 expected=$2 samples=${3:-100} i=0
-  while [ "$i" -lt "$samples" ]; do
-    [ "$(fm_tmux_composer_state "$target")" = "$expected" ] && return 0
-    sleep 0.1
-    i=$((i + 1))
-  done
-  return 1
-}
+# Readiness waits on the fake composer's own rendered output. A still-blank pane
+# classifies as `empty` as well, so fm_tmux_composer_state cannot serve as the
+# gate for a claim about the padded row.
+COMPOSER_BANNER='fake claude composer'
 
 STEER='apply the reviewer proposal on finding F-12'
 
@@ -400,7 +395,11 @@ STEER='apply the reviewer proposal on finding F-12'
 tmux new-window -d -t "$SESSION" -n "composer-submit" \
   "$COMPOSER_DIR/fake-composer '$COMPOSER_DIR/submitted.log'" \
   || fail "could not create the submitting fake-composer window"
-wait_for_composer_state "$SESSION:composer-submit" empty \
+wait_for_capture_text "$SESSION:composer-submit" "$COMPOSER_BANNER" \
+  || fail "the submitting fake-composer pane never rendered its banner"
+wait_for_capture_text "$SESSION:composer-submit" '❯' \
+  || fail "the submitting fake-composer pane never rendered its prompt-glyph composer row"
+[ "$(fm_tmux_composer_state "$SESSION:composer-submit")" = empty ] \
   || fail "a real pane showing claude's U+00A0-padded empty composer must read empty, got '$(fm_tmux_composer_state "$SESSION:composer-submit")'"
 pass "real tmux: claude's U+00A0-padded empty composer row reads empty on a real pane"
 
@@ -423,8 +422,10 @@ pass "real tmux: a delivered steer reports empty on evidence alone, with the pan
 tmux new-window -d -t "$SESSION" -n "composer-swallow" \
   "FM_FAKE_CLAUDE_SWALLOW=1 exec '$COMPOSER_DIR/fake-composer' '$COMPOSER_DIR/swallowed.log'" \
   || fail "could not create the swallowing fake-composer window"
-wait_for_composer_state "$SESSION:composer-swallow" empty \
-  || fail "the swallowing fake-composer pane never reached its empty composer row"
+wait_for_capture_text "$SESSION:composer-swallow" "$COMPOSER_BANNER" \
+  || fail "the swallowing fake-composer pane never rendered its banner"
+wait_for_capture_text "$SESSION:composer-swallow" '❯' \
+  || fail "the swallowing fake-composer pane never rendered its prompt-glyph composer row"
 
 SWALLOW_VERDICT=$(fm_tmux_submit_core "$SESSION:composer-swallow" "$STEER" 3 0.2 0.3)
 [ "$SWALLOW_VERDICT" = pending ] \
