@@ -20,6 +20,15 @@
 #   (j) only the long-form --delete-branch[=false] counts as the caller's own
 #       choice, so -d never suppresses the default deletion
 #   (k) a failed merge issues no branch deletion of any kind
+#   (l) a PR carrying the validation pipeline's placeholder title is refused
+#       before any state is recorded, with a message naming both the problem
+#       and the remedy
+#   (m) titles that merely resemble the placeholder merge exactly as before,
+#       because an over-eager guard is bypassed rather than heeded
+#   (n) case and surrounding whitespace do not evade the placeholder match
+#   (o) --allow-placeholder-title lands it deliberately, and never leaks into
+#       the forge CLI arguments
+#   (p) a title that cannot be read is refused distinctly, not assumed good
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -49,7 +58,11 @@ make_case() {
 }
 
 # gh-axi mock recording every invocation to a log file, and gh mock answering
-# headRefOid for fm-pr-check.sh's pr_head lookup. Args: case_dir head_sha
+# headRefOid for fm-pr-check.sh's pr_head lookup plus title for the
+# placeholder-title guard. FM_TEST_GH_TITLE overrides the title a case sees;
+# the default is an ordinary descriptive title, so every pre-existing case
+# proves the guard stays out of the way of normal work.
+# Args: case_dir head_sha
 add_gh_mocks() {
   local case_dir=$1 head=$2
   cat > "$case_dir/fakebin/gh-axi" <<'SH'
@@ -63,6 +76,11 @@ case "\${1:-} \${2:-}" in
   "pr view")
     case " \$* " in
       *headRefOid*) printf '%s\n' '$head' ; exit 0 ;;
+      *" title "*)
+        [ "\${FM_TEST_GH_TITLE_FAIL:-0}" = 0 ] || exit 1
+        printf '%s\n' "\${FM_TEST_GH_TITLE-fix(pipeline): tighten the merge guard}"
+        exit 0
+        ;;
     esac
     ;;
 esac
@@ -85,6 +103,9 @@ exit 0
 SH
   cat > "$case_dir/fakebin/gh" <<'SH'
 #!/usr/bin/env bash
+case " $* " in
+  *" title "*) printf '%s\n' "${FM_TEST_GH_TITLE-fix(pipeline): tighten the merge guard}" ;;
+esac
 exit 0
 SH
   chmod +x "$case_dir/fakebin/gh-axi" "$case_dir/fakebin/gh"
@@ -376,8 +397,137 @@ test_failed_merge_deletes_nothing() {
   pass "fm-pr-merge deletes no branch when the merge itself failed"
 }
 
+test_placeholder_title_refuses_before_recording() {
+  local case_dir rc
+  case_dir=$(make_case placeholder-title)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" dddddddddddddddddddddddddddddddddddddddd
+  : > "$case_dir/gh-axi.log"
+
+  export FM_TEST_GH_TITLE='chore: update pull request'
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/41 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  unset FM_TEST_GH_TITLE
+
+  expect_code 1 "$rc" "placeholder-title: fm-pr-merge should refuse the pipeline's placeholder title"
+  # The refusal has to name the problem AND the remedy, or the next operator
+  # learns only that something failed and reaches around this path.
+  assert_grep 'chore: update pull request' "$case_dir/stderr" \
+    "placeholder-title: refusal did not quote the offending title"
+  assert_grep 'merge commit' "$case_dir/stderr" \
+    "placeholder-title: refusal did not say why the title is permanent"
+  assert_grep 'gh pr edit 41 --repo example/repo --title' "$case_dir/stderr" \
+    "placeholder-title: refusal did not name the remedy"
+  assert_grep 'allow-placeholder-title' "$case_dir/stderr" \
+    "placeholder-title: refusal did not name the deliberate override"
+  assert_no_grep 'pr=https://github.com/example/repo/pull/41' "$case_dir/state/task-x1.meta" \
+    "placeholder-title: PR URL was recorded despite the refusal"
+  assert_absent "$case_dir/state/task-x1.check.sh" \
+    "placeholder-title: a refused merge armed a merge poll"
+  [ ! -s "$case_dir/gh-axi.log" ] || fail "placeholder-title: gh-axi pr merge was invoked"
+  pass "fm-pr-merge refuses a placeholder PR title before recording state or merging"
+}
+
+test_placeholder_match_is_exact_not_a_heuristic() {
+  local case_dir title n=0
+  # A guard that cries wolf gets bypassed, so titles that merely resemble the
+  # placeholder must merge exactly as they do today.
+  for title in 'chore: update the vendored pin' 'chore: update pull request handling in the poll' \
+    'fix(pr): stop dropping the pull request title'; do
+    n=$((n + 1))
+    case_dir=$(make_case "near-miss-$n")
+    mkdir -p "$case_dir/wt"
+    add_gh_mocks "$case_dir" eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+    : > "$case_dir/gh-axi.log"
+
+    export FM_TEST_GH_TITLE="$title"
+    run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/42 \
+      > "$case_dir/stdout" 2> "$case_dir/stderr" \
+      || fail "near-miss: fm-pr-merge refused the legitimate title '$title'"
+    unset FM_TEST_GH_TITLE
+
+    grep -qxF 'pr merge 42 --repo example/repo --merge --delete-branch' "$case_dir/gh-axi.log" \
+      || fail "near-miss: '$title' did not merge exactly as an ordinary title does"
+  done
+  pass "fm-pr-merge matches placeholder titles exactly and never fires on a title that only resembles one"
+}
+
+test_placeholder_match_ignores_case_and_surrounding_space() {
+  local case_dir rc
+  case_dir=$(make_case placeholder-title-variant)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" ffffffffffffffffffffffffffffffffffffffff
+  : > "$case_dir/gh-axi.log"
+
+  export FM_TEST_GH_TITLE='  Chore: Update Pull Request  '
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/43 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  unset FM_TEST_GH_TITLE
+
+  expect_code 1 "$rc" "placeholder-title-variant: recasing or padding the placeholder should not evade the guard"
+  [ ! -s "$case_dir/gh-axi.log" ] || fail "placeholder-title-variant: gh-axi pr merge was invoked"
+  pass "fm-pr-merge sees through case and surrounding whitespace on a placeholder title"
+}
+
+test_override_lands_placeholder_title_deliberately() {
+  local case_dir
+  case_dir=$(make_case placeholder-title-override)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" 1010101010101010101010101010101010101010
+  : > "$case_dir/gh-axi.log"
+
+  export FM_TEST_GH_TITLE='chore: update pull request'
+  run_pr_merge "$case_dir" --allow-placeholder-title task-x1 \
+    https://github.com/example/repo/pull/44 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "placeholder-title-override: the deliberate override did not merge"
+  unset FM_TEST_GH_TITLE
+
+  # The override is this path's own option and must never reach the forge CLI.
+  grep -qxF 'pr merge 44 --repo example/repo --merge --delete-branch' "$case_dir/gh-axi.log" \
+    || fail "placeholder-title-override: the override leaked into the gh-axi merge arguments"
+  assert_grep 'pr=https://github.com/example/repo/pull/44' "$case_dir/state/task-x1.meta" \
+    "placeholder-title-override: an overridden merge did not record pr="
+  pass "fm-pr-merge lands a placeholder title only when the caller asks for it explicitly"
+}
+
+test_unreadable_title_refuses_rather_than_guessing() {
+  local case_dir rc
+  case_dir=$(make_case unreadable-title)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" 2020202020202020202020202020202020202020
+  : > "$case_dir/gh-axi.log"
+
+  export FM_TEST_GH_TITLE_FAIL=1
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/45 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  unset FM_TEST_GH_TITLE_FAIL
+
+  expect_code 1 "$rc" "unreadable-title: fm-pr-merge should refuse a title it could not read"
+  assert_grep 'could not read the title' "$case_dir/stderr" \
+    "unreadable-title: refusal did not name the unread title as the distinct problem"
+  assert_grep 'allow-placeholder-title' "$case_dir/stderr" \
+    "unreadable-title: refusal did not name the way through"
+  [ ! -s "$case_dir/gh-axi.log" ] || fail "unreadable-title: gh-axi pr merge was invoked"
+  pass "fm-pr-merge refuses when it cannot read the title instead of assuming one"
+}
+
 test_no_method_defaults_to_merge_commit_after_recording
 test_merge_failure_propagates_after_recording
+test_placeholder_title_refuses_before_recording
+test_placeholder_match_is_exact_not_a_heuristic
+test_placeholder_match_ignores_case_and_surrounding_space
+test_override_lands_placeholder_title_deliberately
+test_unreadable_title_refuses_rather_than_guessing
 test_default_deletes_merged_head_branch
 test_caller_delete_choice_not_overridden
 test_failed_merge_deletes_nothing

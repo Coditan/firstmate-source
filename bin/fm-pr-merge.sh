@@ -27,7 +27,39 @@
 # delete_branch_on_merge is tolerated rather than an error, and no local branch
 # is touched because this path always passes --repo. Merged branches have two
 # further producers this does not cover; docs/merged-branch-cleanup.md owns them.
-# Usage: fm-pr-merge.sh <task-id> <pr-url> [-- <extra gh-axi pr merge args>]
+#
+# A placeholder PR title is refused before anything is recorded or merged. The
+# validation pipeline that opens most task PRs drafts the title with an agent
+# call and, when that call fails, falls back to one fixed literal; the pipeline
+# then opens the PR anyway. Merging that PR writes the literal into the merge
+# commit's subject line, which is the first and often only line every later
+# reader of the history sees, and which no one can edit afterwards. Observed
+# twice on 2026-08-10 in this repository, on PRs 85 and 86, from two different
+# tasks; both were caught and retitled by hand, which is memory rather than a
+# mechanism. That producing tool is not this repository's to change, so this
+# guard does not fix the placeholder; it keeps the result out of the history.
+#
+# Three deliberate choices in that guard:
+#   - The match is an exact, case-insensitive comparison against a list of
+#     literals actually observed, never a pattern. A heuristic such as "any
+#     chore: update ..." would eventually refuse a legitimate title, and a guard
+#     that cries wolf is bypassed rather than heeded, which is worse than none.
+#   - The guard stops; it never rewrites. A subject line invented from the body
+#     is a plausible-looking guess landing permanently in history, which is the
+#     same defect wearing a different coat.
+#   - The refusal is overridable with --allow-placeholder-title before the task
+#     id. Merges here can run unattended under a standing authorization, and a
+#     refusal with no way through invites the next operator to reach for a bare
+#     forge merge instead, which records no pr= and leaves teardown's landed
+#     check nothing to verify against. An escape hatch keeps a deliberate merge
+#     inside this path.
+# The title is read with plain `gh` rather than gh-axi because only `gh` exposes
+# a single field as machine-readable output (-q); bin/fm-pr-check.sh reads
+# pr_head the same way for the same reason. An unreadable title is refused too,
+# and says so distinctly: this path cannot tell a real title from a placeholder
+# without reading it, and `gh` is already required for the merge itself.
+# Usage: fm-pr-merge.sh [--allow-placeholder-title] <task-id> <pr-url>
+#          [-- <extra gh-axi pr merge args>]
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -40,6 +72,19 @@ fm_axi_prepend_path "$FM_HOME"
 
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+
+# This path's own options are read before the positional arguments, so they can
+# never collide with a gh-axi flag forwarded after the -- separator.
+ALLOW_PLACEHOLDER_TITLE=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --allow-placeholder-title)
+      ALLOW_PLACEHOLDER_TITLE=1
+      shift
+      ;;
+    *) break ;;
+  esac
+done
 
 if [ "$#" -lt 2 ]; then
   echo "error: invalid PR merge request" >&2
@@ -96,11 +141,66 @@ reject_repo_overrides() {
 
 reject_repo_overrides "$@" || exit 1
 
+# Exactly the titles seen landing as placeholders, matched whole. Add a literal
+# here only after observing it on a real PR; the narrowness is the point.
+PLACEHOLDER_TITLES=(
+  'chore: update pull request'
+)
+
+title_is_placeholder() {
+  local candidate=$1 known
+  candidate=${candidate//$'\r'/}
+  candidate="${candidate#"${candidate%%[![:space:]]*}"}"
+  candidate="${candidate%"${candidate##*[![:space:]]}"}"
+  candidate=${candidate,,}
+  for known in "${PLACEHOLDER_TITLES[@]}"; do
+    if [ "$candidate" = "${known,,}" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 # Task-derived paths are constructed only after the canonical ID validation.
 META="$STATE/$ID.meta"
 if [ ! -f "$META" ] || [ -L "$META" ]; then
   echo "error: task metadata is unavailable" >&2
   exit 1
+fi
+
+# Refuse a placeholder title before any state is recorded and before the merge,
+# because the subject line it would produce cannot be repaired afterwards.
+if [ "$ALLOW_PLACEHOLDER_TITLE" -eq 0 ]; then
+  PR_TITLE=
+  if command -v gh >/dev/null 2>&1; then
+    PR_TITLE=$(gh pr view "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" \
+      --json title -q .title 2>/dev/null) || PR_TITLE=
+  fi
+  if [ -z "${PR_TITLE//[[:space:]]/}" ]; then
+    cat >&2 <<EOF
+error: could not read the title of PR $PR_NUMBER in $PR_OWNER/$PR_REPO, so this
+       merge cannot tell a real title from the placeholder the validation
+       pipeline falls back to when its title drafting fails.
+remedy: make sure gh is installed and authenticated for that repository, then
+       re-run this merge. To merge without checking the title, re-run with
+       --allow-placeholder-title before the task id.
+EOF
+    exit 1
+  fi
+  if title_is_placeholder "$PR_TITLE"; then
+    cat >&2 <<EOF
+error: PR $PR_NUMBER is titled "$PR_TITLE", which is the validation pipeline's
+       placeholder for a title it could not draft, not a description of the
+       change. Merging writes it into the merge commit's subject line, where it
+       becomes the first line of history every later reader sees and can no
+       longer be edited.
+remedy: give the PR a real title describing the change, then re-run this merge:
+         gh pr edit $PR_NUMBER --repo $PR_OWNER/$PR_REPO --title '<type(scope): what changed>'
+       To land this title deliberately, re-run with --allow-placeholder-title
+       before the task id.
+EOF
+    exit 1
+  fi
 fi
 
 "$SCRIPT_DIR/fm-pr-check.sh" "$ID" "$URL"
