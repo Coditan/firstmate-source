@@ -33,16 +33,25 @@ iso_ago() {  # <seconds>
   fi
 }
 
-# write_transcript <path> <tokens> <human-ts-or-empty> [padding-bytes]
+# The id the fixture's captain record carries. An approved reset has to name the
+# exact record it treated as the approval, so tests assert on this value.
+CAPTAIN_RECORD_ID=cap-record-0001
+
+# write_transcript <path> <tokens> <human-ts-or-empty> [padding-bytes] [human-uuid]
 # Three record shapes matter and all three appear here: a hook/meta injection, a
 # background-task wake delivery, and (optionally) a genuine captain prompt. Only
 # the last must ever read as captain activity.
+# Passing an EMPTY fifth argument writes the captain record with no `uuid` key at
+# all - a transcript an approved reset cannot cite, which must refuse rather than
+# proceed unnamed.
 write_transcript() {
-  local path=$1 tokens=$2 human=$3 pad=${4:-0}
+  local path=$1 tokens=$2 human=$3 pad=${4:-0} uuid=${5-$CAPTAIN_RECORD_ID}
   {
     printf '{"type":"user","isMeta":true,"message":{"role":"user","content":"session-start nudge"},"timestamp":"2020-01-01T00:00:00.000Z"}\n'
     printf '{"type":"user","origin":{"kind":"task-notification"},"promptSource":"system","message":{"role":"user","content":"wake: queued"},"timestamp":"%s"}\n' "$(iso_now)"
-    if [ -n "$human" ]; then
+    if [ -n "$human" ] && [ -n "$uuid" ]; then
+      printf '{"type":"user","origin":{"kind":"human"},"promptSource":"typed","uuid":"%s","message":{"role":"user","content":"captain says something"},"timestamp":"%s"}\n' "$uuid" "$human"
+    elif [ -n "$human" ]; then
       printf '{"type":"user","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"captain says something"},"timestamp":"%s"}\n' "$human"
     fi
     printf '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"out"}]},"timestamp":"%s"}\n' "$(iso_now)"
@@ -161,10 +170,11 @@ run_reset() {
   RESET_OUT=$(run_env "$RESET" "$@" 2>&1) || RESET_CODE=$?
 }
 
-# assert_refuses <reason-fragment> <label>
+# assert_refuses <reason-fragment> <label> [reset-args...]
 assert_refuses() {
   local fragment=$1 label=$2 out
-  run_reset
+  shift 2
+  run_reset "$@"
   out=$RESET_OUT
   expect_code 1 "$RESET_CODE" "$label"
   assert_contains "$out" "REFUSED" "$label did not refuse loudly"
@@ -289,6 +299,181 @@ test_away_mode_refuses() {
   make_case
   touch "$STATE_DIR/.afk"
   assert_refuses "away mode is active" "a reset while away mode owns wake delivery"
+}
+
+# --- the captain-approved path ----------------------------------------------
+#
+# The defect these cover is arithmetic rather than logical, which is why reading
+# the code never found it. On the path where the captain APPROVES a reset, the
+# approval is what starts it, so the idle window is measured from the moment the
+# captain last spoke - and it is twice as long as the receipt is allowed to live.
+# Both could never be open at once, so every reset this mechanism ever completed
+# came through the autonomous branch and none through the asking one.
+#
+# approved_case: the shape of a real approval. The captain spoke INSIDE the idle
+# window (the autonomous path's hard refusal), and the receipt was filed after
+# that message. <seconds-ago> is when the captain spoke.
+approved_case() {  # <seconds-ago>
+  make_case
+  write_transcript "$TRANSCRIPT" 900000 "$(iso_ago "$1")"
+  write_receipt
+}
+
+# The headline: the same session, at the same instant, refuses autonomously and
+# completes on the approved path. Asserting both halves in one test is the point -
+# it is the difference between the two paths that was broken, not either alone.
+test_captain_approved_completes_where_the_idle_window_makes_it_impossible() {
+  local out
+  approved_case 60
+  # First, autonomously. This is the refusal that made the approved path
+  # unreachable: the captain's own approval counts as the captain being active.
+  run_reset
+  expect_code 1 "$RESET_CODE" "the autonomous path must still refuse a captain who just spoke"
+  assert_contains "$RESET_OUT" "ask before resetting" \
+    "the autonomous path refused for the wrong reason"
+  # Now with the approval. Nothing about the session changed between the two runs.
+  run_reset --captain-approved
+  out=$RESET_OUT
+  expect_code 0 "$RESET_CODE" "an approved reset must complete where the idle window alone would refuse"
+  assert_contains "$out" "reset submitted" "an approved reset did not report submitting"
+  assert_grep 'send-keys' "$TMUX_LOG" "an approved reset never typed into the pane"
+  assert_grep '/clear' "$TMUX_LOG" "an approved reset typed something other than the clear"
+  [ -f "$STATE_DIR/.stow-receipt" ] \
+    && fail "the receipt survived a completed approved reset and could be replayed"
+  pass "a captain approval completes a reset the idle window alone can never allow"
+}
+
+# Auditability is the whole substitute for verification here, so the record it
+# relied on has to be nameable afterwards by someone who was not in the room.
+test_an_approved_reset_names_the_record_it_treated_as_the_approval() {
+  local out
+  approved_case 60
+  run_reset --captain-approved
+  out=$RESET_OUT
+  expect_code 0 "$RESET_CODE" "the approved reset under audit did not complete"
+  assert_contains "$out" "$CAPTAIN_RECORD_ID" \
+    "an approved reset did not say on stdout which captain record it relied on"
+  assert_grep "cleared" "$STATE_DIR/.context-reset.log" "the approved reset left no durable outcome"
+  assert_grep "path=captain-approved approval-record=$CAPTAIN_RECORD_ID" \
+    "$STATE_DIR/.context-reset.log" \
+    "the durable log does not name the captain record the approved reset relied on"
+  pass "an approved reset records which captain record it treated as the approval"
+}
+
+# The wording is a requirement, not decoration: the agent invoking this reset is
+# the same party claiming the approval exists, so a line that reads as
+# confirmation would be the tool lending its authority to an unverifiable claim.
+test_the_approved_path_states_what_it_cannot_prove() {
+  local out
+  approved_case 60
+  run_reset --check --captain-approved
+  out=$RESET_OUT
+  expect_code 0 "$RESET_CODE" "--check must pass on an approved session"
+  assert_contains "$out" "whether it meant approval is not something this tool can check" \
+    "the approved path let its output imply the tool confirmed the captain agreed"
+  assert_grep "path=captain-approved approval-record=$CAPTAIN_RECORD_ID" \
+    "$STATE_DIR/.context-reset.log" "an approved --check did not record the record it relied on"
+  assert_no_grep 'send-keys' "$TMUX_LOG" "an approved --check typed into the pane"
+  assert_present "$STATE_DIR/.stow-receipt" "an approved --check consumed the receipt"
+  pass "the approved path says plainly that it verified a record exists, not that it meant yes"
+}
+
+# The AGE window is REPLACED on this path, not stretched: a receipt far past it
+# still completes, provided the ordering below and the growth bound hold. Proving
+# the replacement rather than a bigger constant is what stops the same deadlock
+# reappearing one window-size later.
+test_the_receipt_age_window_does_not_apply_on_the_approved_path() {
+  approved_case 6000
+  sed -i.bak "s/^written_at=.*/written_at=$(( $(date +%s) - 5000 ))/" "$STATE_DIR/.stow-receipt"
+  run_reset
+  expect_code 1 "$RESET_CODE" "the autonomous path must still refuse a receipt past its freshness bound"
+  assert_contains "$RESET_OUT" "is 5" "the autonomous path refused for the wrong reason"
+  run_reset --captain-approved
+  expect_code 0 "$RESET_CODE" "the approved path must not apply the receipt's age window"
+  pass "the age window is replaced on the approved path rather than stretched to a new constant"
+}
+
+# The condition the age window was standing in for, checked directly. A receipt
+# that predates the approval cannot have covered it, whatever its age.
+test_a_receipt_filed_before_the_approval_refuses() {
+  approved_case 10
+  sed -i.bak "s/^written_at=.*/written_at=$(( $(date +%s) - 30 ))/" "$STATE_DIR/.stow-receipt"
+  assert_refuses "the receipt came first" \
+    "an approved reset whose receipt predates the approval" --captain-approved
+}
+
+# The gate that carries the real safety property, and the one thing the approval
+# may never buy: if the session moved on after filing, the sweep did not cover
+# what came since, approval or not.
+test_growth_past_the_receipt_still_refuses_on_the_approved_path() {
+  approved_case 60
+  write_transcript "$TRANSCRIPT" 900000 "$(iso_ago 60)" 400000
+  assert_refuses "moved on by" \
+    "an approved reset after the session advanced materially past its receipt" --captain-approved
+}
+
+# The equality check survives too, so the approval can only ever be the LAST thing
+# the captain said - never an old yes with a newer message sitting behind it.
+test_a_captain_message_after_the_approval_still_refuses_when_approved() {
+  approved_case 60
+  write_transcript "$TRANSCRIPT" 900000 "$(iso_now)"
+  assert_refuses "spoken since the receipt" \
+    "an approved reset after the captain spoke again past the receipt" --captain-approved
+}
+
+# A bare flag asserting approval with nothing behind it is exactly what this path
+# must not become, so with no captain record to point at, it refuses.
+test_an_approved_path_with_no_captain_record_refuses() {
+  make_case
+  write_transcript "$TRANSCRIPT" 900000 ""
+  write_receipt
+  assert_refuses "cannot name what it would be treating as the approval" \
+    "an approved reset with no captain record behind it" --captain-approved
+}
+
+# A record the log cannot cite is a reset nobody can audit afterwards, which on
+# this path is the same thing as a reset nobody can check at all.
+test_an_approved_path_with_an_uncitable_captain_record_refuses() {
+  make_case
+  write_transcript "$TRANSCRIPT" 900000 "$(iso_ago 60)" 0 ""
+  write_receipt
+  assert_refuses "carries no id" \
+    "an approved reset whose captain record cannot be cited" --captain-approved
+}
+
+test_away_mode_refuses_on_the_approved_path_too() {
+  approved_case 60
+  touch "$STATE_DIR/.afk"
+  assert_refuses "away mode is still active" \
+    "an approved reset while away mode still owns wake delivery" --captain-approved
+}
+
+# The autonomous path is the one that has always worked, so the flag must be
+# inert without it. Both windows it relaxes are re-asserted here in one place,
+# against a session that satisfies neither, and the durable log must carry no
+# trace of the approved path.
+test_the_autonomous_path_is_unchanged_by_the_approved_one() {
+  # The idle window, still refusing on a captain who spoke inside it.
+  approved_case 60
+  run_reset
+  expect_code 1 "$RESET_CODE" "the autonomous path stopped refusing a captain inside the idle window"
+  assert_contains "$RESET_OUT" "within the last 1800s" "the idle window's bound moved"
+  assert_no_grep 'path=captain-approved' "$STATE_DIR/.context-reset.log" \
+    "an autonomous run marked itself as the approved path in the durable log"
+  # The receipt's age window, still refusing on a receipt past it.
+  make_case
+  sed -i.bak "s/^written_at=.*/written_at=$(( $(date +%s) - 5000 ))/" "$STATE_DIR/.stow-receipt"
+  run_reset
+  expect_code 1 "$RESET_CODE" "the autonomous path stopped refusing a receipt past its age window"
+  assert_contains "$RESET_OUT" "limit 900s" "the receipt's freshness bound moved"
+  # And it still completes on the session it always completed on.
+  make_case
+  run_reset
+  expect_code 0 "$RESET_CODE" "the autonomous path stopped completing on a session it always cleared"
+  assert_contains "$RESET_OUT" "reset submitted" "the autonomous path stopped reporting its clear"
+  assert_no_grep 'path=captain-approved' "$STATE_DIR/.context-reset.log" \
+    "a completed autonomous reset was logged as an approved one"
+  pass "the approved path leaves the autonomous path's two windows and its log lines exactly as they were"
 }
 
 # --- the quiet boundary, re-checked at the moment of the discard ------------
@@ -819,6 +1004,17 @@ test_receipt_refuses_off_session
 test_receipt_refuses_without_a_transcript_record
 test_captain_active_refuses
 test_away_mode_refuses
+test_captain_approved_completes_where_the_idle_window_makes_it_impossible
+test_an_approved_reset_names_the_record_it_treated_as_the_approval
+test_the_approved_path_states_what_it_cannot_prove
+test_the_receipt_age_window_does_not_apply_on_the_approved_path
+test_a_receipt_filed_before_the_approval_refuses
+test_growth_past_the_receipt_still_refuses_on_the_approved_path
+test_a_captain_message_after_the_approval_still_refuses_when_approved
+test_an_approved_path_with_no_captain_record_refuses
+test_an_approved_path_with_an_uncitable_captain_record_refuses
+test_away_mode_refuses_on_the_approved_path_too
+test_the_autonomous_path_is_unchanged_by_the_approved_one
 test_queued_wake_refuses
 test_worker_waiting_on_an_answer_refuses
 test_resolved_decision_does_not_block

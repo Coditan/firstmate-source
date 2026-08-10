@@ -11,13 +11,13 @@
 # the reverse). One definition, three consumers.
 #
 # WHAT IS READ FROM THE TRANSCRIPT, AND WHAT IS NOT
-# Only three things: the last assistant record's token `usage` numbers, the
-# timestamp of the last genuine captain prompt, and the file's byte size. Message
-# CONTENT is never read and never printed. That is a hard constraint - the
-# watcher runs unattended and its output lands in wake payloads - and it is
-# enforceable here because Claude Code stamps every user record with a structural
-# `origin.kind`, so provenance needs no text inspection at all (see
-# fm_context_scan).
+# Only four things: the last assistant record's token `usage` numbers, the
+# timestamp of the last genuine captain prompt, that prompt's own record id, and
+# the file's byte size. Message CONTENT is never read and never printed. That is
+# a hard constraint - the watcher runs unattended and its output lands in wake
+# payloads - and it is enforceable here because Claude Code stamps every user
+# record with a structural `origin.kind`, so provenance needs no text inspection
+# at all (see fm_context_scan).
 #
 # docs/context-reset.md owns the mechanism narrative, the verified evidence, and
 # the limits. This file owns the predicates; each consumer script's header owns
@@ -214,6 +214,12 @@ fm_context_record_read() {  # <state-dir>
 # input, so it counts as human. Every ambiguity resolves toward "the captain is
 # here", because the cost of a false quiet is a discarded conversation and the
 # cost of a false busy is one deferred reset.
+#
+# The record's own `uuid` is carried alongside its timestamp because a timestamp
+# alone cannot NAME the record it came from, and one consumer -
+# bin/fm-context-reset.sh's captain-approved path - has to write into its durable
+# log exactly which captain record it treated as the approval. An id is not
+# content: it is the same structural metadata as the origin fields above.
 _fm_context_scan_pass() {  # <transcript-path> <bytes>
   local out
   out=$(fm_context_tail_lines "$1" "$2" | jq -R -n -r '
@@ -228,14 +234,14 @@ _fm_context_scan_pass() {  # <transcript-path> <bytes>
           | select(.isMeta != true)
           | select((.message.content | type) == "string")
           | select(.origin.kind == "human" or (.origin == null and .promptSource == null))
-          | .timestamp ] | last ) as $human
-    | "\($tokens // "")\t\($human // "")"
+        ] | last ) as $human
+    | "\($tokens // "")\t\($human.timestamp // "")\t\($human.uuid // "")"
   ' 2>/dev/null) || {
     FM_CONTEXT_SCAN_ERROR="could not parse the transcript tail of $1"
     return 1
   }
-  FM_CONTEXT_TOKENS=${out%%	*}
-  FM_CONTEXT_LAST_HUMAN_TS=${out#*	}
+  IFS=$'\t' read -r FM_CONTEXT_TOKENS FM_CONTEXT_LAST_HUMAN_TS FM_CONTEXT_LAST_HUMAN_UUID \
+    <<< "$out" || true
   return 0
 }
 
@@ -244,6 +250,9 @@ _fm_context_scan_pass() {  # <transcript-path> <bytes>
 #                               cache-read tokens (what the window actually holds)
 #   FM_CONTEXT_LAST_HUMAN_TS    timestamp of the last genuine captain prompt, or
 #                               empty when the WHOLE transcript holds none
+#   FM_CONTEXT_LAST_HUMAN_UUID  that same record's own id, so a consumer can name
+#                               the record rather than only its clock reading, or
+#                               empty when the transcript carries no id for it
 #   FM_CONTEXT_SCAN_TRUNCATED   true when the bounded read did not cover the
 #                               whole file, i.e. the file is larger than
 #                               FM_CONTEXT_TAIL_BYTES
@@ -264,6 +273,7 @@ _fm_context_scan_pass() {  # <transcript-path> <bytes>
 # further to find, and the cost would be paid on every poll of an idle session.
 FM_CONTEXT_TOKENS=
 FM_CONTEXT_LAST_HUMAN_TS=
+FM_CONTEXT_LAST_HUMAN_UUID=
 FM_CONTEXT_SCAN_ERROR=
 FM_CONTEXT_SCAN_TRUNCATED=false
 FM_CONTEXT_SCAN_WIDENED=false
@@ -271,6 +281,8 @@ fm_context_scan() {  # <transcript-path>
   local transcript=$1 bytes
   FM_CONTEXT_TOKENS=
   FM_CONTEXT_LAST_HUMAN_TS=
+  # shellcheck disable=SC2034 # Read by callers and tests after fm_context_scan returns.
+  FM_CONTEXT_LAST_HUMAN_UUID=
   FM_CONTEXT_SCAN_ERROR=
   FM_CONTEXT_SCAN_TRUNCATED=false
   # shellcheck disable=SC2034 # Read by callers and tests after fm_context_scan returns.

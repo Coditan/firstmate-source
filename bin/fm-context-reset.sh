@@ -4,9 +4,13 @@
 # safely still holds.
 #
 # Usage:
-#   fm-context-reset.sh           verify, then clear this session
-#   fm-context-reset.sh --check   run every verification and report, clear nothing
-#   fm-context-reset.sh -h|--help print this header
+#   fm-context-reset.sh                    verify, then clear this session
+#   fm-context-reset.sh --captain-approved the same, on the path for a reset the
+#                                          captain has just approved
+#   fm-context-reset.sh --check            run every verification and report,
+#                                          clear nothing; combines with the flag
+#                                          above
+#   fm-context-reset.sh -h|--help          print this header
 #
 # Run it in the SAME firstmate turn as /stow and bin/fm-stow-receipt.sh:
 #   /stow  ->  bin/fm-stow-receipt.sh && bin/fm-context-reset.sh
@@ -20,13 +24,52 @@
 # this session's working knowledge that has not been written down.
 #
 # The two conditions that are never traded away:
-#   1. Never while the captain is in live conversation. The scrollback is wiped,
-#      and a message queued during the clear is answered into a context that is
-#      then discarded - the captain sees a reply firstmate does not remember
-#      giving. Ask instead; the watcher's own wake says so.
+#   1. Never while the captain is in live conversation, unless the captain is the
+#      one who asked for the reset (--captain-approved). Otherwise the scrollback
+#      is wiped and a message queued during the clear is answered into a context
+#      that is then discarded - the captain sees a reply firstmate does not
+#      remember giving. Ask instead; the watcher's own wake says so.
 #   2. Never before the receipt verifies. The receipt is what says this session's
 #      knowledge was filed, and it is bound to the transcript position it was
 #      filed at, so it cannot be reused after the session has moved on.
+#
+# THE TWO PATHS, AND WHY THERE ARE TWO
+# The default path is autonomous: nobody asked for this reset, so the tool has to
+# INFER that the captain is absent, and it infers it from silence -
+# FM_CONTEXT_CAPTAIN_IDLE_SECS of it - under a receipt no older than
+# FM_CONTEXT_RECEIPT_MAX_AGE. Those two agree by construction there, because that
+# path only ever runs when the captain is already quiet.
+#
+# --captain-approved is the other case: the captain was asked and said yes. That
+# approval REPLACES the silence, because silence was only ever a proxy for absence
+# and an approval is the consent itself. Running both would not make the path
+# strict, it would make it impossible: the idle window is measured from the moment
+# the captain spoke to give the approval, so it demands a silence longer than the
+# receipt is allowed to live, and no ordering of the steps opens both at once.
+#
+# On --captain-approved, therefore:
+#   - the idle window does not apply at all;
+#   - the receipt's AGE window is replaced by the condition it stood in for, that
+#     the receipt was filed AFTER the approval. That needs no constant, cannot
+#     deadlock (filing follows approval by construction here), and says exactly
+#     what the window was groping at;
+#   - EVERYTHING ELSE IS UNCHANGED. In particular the transcript-growth bound is
+#     untouched: if this session moved on past its receipt, the reset refuses,
+#     approval or not.
+#
+# WHAT --captain-approved PROVES, AND WHAT IT CANNOT
+# It proves a real captain record exists in the transcript, when it arrived, and
+# that the knowledge was filed after it. It CANNOT prove that record MEANT
+# approval. Semantic consent is not machine-checkable, and the party claiming the
+# approval exists is the same party asking for the reset, so a flag that implied
+# otherwise would be theatre.
+#
+# So the flag is built for AUDIT where verification is impossible. Every approved
+# run names the exact captain record it relied on, by id and timestamp, on stdout
+# and in state/.context-reset.log, and refuses outright when it cannot name one.
+# Read that line as "this is what was treated as consent", never as "consent was
+# confirmed". Away mode still refuses on this path too: a captain present enough
+# to approve a reset has returned, and away mode should be exited first.
 #
 # Scope: claude on tmux only. Self-clear is proven end to end there and nowhere
 # else - grok's session-start output does not reach model context at all, so a
@@ -55,27 +98,60 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
 LOG="$STATE/.context-reset.log"
 CHECK_ONLY=0
+CAPTAIN_APPROVED=0
 
 usage() {
   awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
 }
 
-case "${1:-}" in
-  -h|--help) usage; exit 0 ;;
-  --check) CHECK_ONLY=1 ;;
-  '') ;;
-  *) usage >&2; exit 2 ;;
-esac
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --check) CHECK_ONLY=1 ;;
+    --captain-approved) CAPTAIN_APPROVED=1 ;;
+    '') ;;
+    *) usage >&2; exit 2 ;;
+  esac
+  shift
+done
+
+# The captain record an approved run is relying on, once it has been established.
+APPROVAL_TS=
+APPROVAL_UUID=
+
+# Prefix on every durable log line, so the log always says which path ran and,
+# from the moment it is known, which captain record an approved run relied on.
+# Empty on the autonomous path, which keeps that path's log lines byte-identical
+# to what they have always been.
+#
+# It is written as `path=` fields rather than prose because a refusal's own text
+# can quote the flag name - the idle refusal below names it, to point at the path
+# from the exact place it becomes relevant - and a marker a message can imitate is
+# not a marker.
+LOG_NOTE=
+if [ "$CAPTAIN_APPROVED" -eq 1 ]; then
+  LOG_NOTE='path=captain-approved; '
+fi
 
 log_line() {  # <outcome> <detail>
   printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" >> "$LOG" 2>/dev/null || true
 }
 
 refuse() {
-  log_line refused "$*"
+  log_line refused "${LOG_NOTE}$*"
   printf 'fm-context-reset: REFUSED: %s\n' "$*" >&2
   printf 'fm-context-reset: nothing was discarded.\n' >&2
   exit 1
+}
+
+# Say on stdout exactly which captain record was treated as the approval, and in
+# the same breath what that does not establish. Both halves are required: the
+# first is the audit trail, and without the second the first reads as a
+# confirmation the tool never made.
+print_approval_note() {
+  printf 'fm-context-reset: the approval was taken to be captain record %s at %s.\n' \
+    "$APPROVAL_UUID" "$APPROVAL_TS"
+  printf 'fm-context-reset: that record exists and this session filed its knowledge after it; whether it meant approval is not something this tool can check.\n'
 }
 
 fm_refuse_if_gate_agent
@@ -125,8 +201,15 @@ case "$R_WRITTEN" in
 esac
 AGE=$(( $(date +%s) - R_WRITTEN ))
 [ "$AGE" -ge 0 ] || refuse "the stow receipt claims to have been written in the future"
-[ "$AGE" -le "$FM_CONTEXT_RECEIPT_MAX_AGE" ] \
-  || refuse "the stow receipt is ${AGE}s old (limit ${FM_CONTEXT_RECEIPT_MAX_AGE}s); file this session's knowledge again before resetting it"
+# The AGE window is the autonomous path's stand-in for "this receipt still
+# describes a session nobody has been talking to". On the approved path the thing
+# it stands in for can be checked directly - the receipt was filed after the
+# approval - so the window is replaced there rather than stretched to a bigger
+# constant that would be wrong for some other session.
+if [ "$CAPTAIN_APPROVED" -eq 0 ]; then
+  [ "$AGE" -le "$FM_CONTEXT_RECEIPT_MAX_AGE" ] \
+    || refuse "the stow receipt is ${AGE}s old (limit ${FM_CONTEXT_RECEIPT_MAX_AGE}s); file this session's knowledge again before resetting it"
+fi
 
 case "$R_BYTES" in
   ''|*[!0-9]*) refuse "the stow receipt has no readable transcript position" ;;
@@ -145,16 +228,55 @@ GROWTH=$(( CURRENT_BYTES - R_BYTES ))
 # nothing can be said about the captain at all - the equality would pass while
 # proving nothing, which is worse than not checking.
 if [ -z "$FM_CONTEXT_LAST_HUMAN_TS" ] || [ "$R_HUMAN" = unknown ]; then
+  if [ "$CAPTAIN_APPROVED" -eq 1 ]; then
+    refuse "no captain record could be established from $FM_CONTEXT_TRANSCRIPT, so this run cannot name what it would be treating as the approval; --captain-approved rests on a real captain record and refuses without one, because a reset that cannot say what it relied on is not auditable by anyone"
+  fi
   refuse "the captain's last message could not be established from $FM_CONTEXT_TRANSCRIPT, so nothing can show the captain has stayed silent since the receipt was written"
 fi
 [ "$R_HUMAN" = "$FM_CONTEXT_LAST_HUMAN_TS" ] \
   || refuse "the captain has spoken since the receipt was written; file this session's knowledge again, and reset only once the conversation has settled"
 
+# --- 2b. the approval, on the captain-approved path -------------------------
+# The equality just above is what makes "the last captain record" the right one to
+# read as the approval: it proves the receipt was bound with this exact record as
+# the latest thing the captain said. Anything the captain said afterwards would
+# already have refused there, so the approval cannot be some older message with a
+# newer one sitting unexamined behind it.
+if [ "$CAPTAIN_APPROVED" -eq 1 ]; then
+  APPROVAL_TS=$FM_CONTEXT_LAST_HUMAN_TS
+  APPROVAL_UUID=$FM_CONTEXT_LAST_HUMAN_UUID
+  [ -n "$APPROVAL_UUID" ] \
+    || refuse "the captain record at $APPROVAL_TS carries no id, so an approved reset could not record WHICH message it treated as the approval; a reset that cannot be audited afterwards must not run"
+  case "$APPROVAL_TS" in
+    [0-9][0-9][0-9][0-9]-*) ;;
+    *) refuse "the captain record $APPROVAL_UUID has no readable timestamp ('$APPROVAL_TS'), so nothing can establish whether the receipt was filed after it" ;;
+  esac
+  RECEIPT_ISO=$(fm_context_iso_utc "$R_WRITTEN") || RECEIPT_ISO=
+  [ -n "$RECEIPT_ISO" ] \
+    || refuse "the stow receipt's write time could not be read as an instant, so nothing can establish whether it was filed after the approval"
+  # Second precision against the transcript's millisecond stamps, compared
+  # lexicographically exactly as fm_context_captain_active does. A receipt filed
+  # in the SAME second as the approval reads as not-after and refuses: that biases
+  # the one ambiguous case toward refusing, and costs at most a second.
+  [ "$RECEIPT_ISO" \> "$APPROVAL_TS" ] \
+    || refuse "the receipt was filed at ${RECEIPT_ISO}Z and the captain record $APPROVAL_UUID is stamped $APPROVAL_TS, so the receipt came first and its filing cannot have covered the approval (a same-second filing reads this way too, and refuses on purpose); file this session's knowledge again after the approval, then re-run"
+  LOG_NOTE="path=captain-approved approval-record=$APPROVAL_UUID approval-ts=$APPROVAL_TS; "
+fi
+
 # --- 3. the captain is not here, and away mode is not in charge -------------
-[ ! -e "$STATE/.afk" ] \
-  || refuse "away mode is active and owns wake delivery; a reset here is the captain's call, not an autonomous one"
-if fm_context_captain_active "$FM_CONTEXT_LAST_HUMAN_TS"; then
-  refuse "the captain has been active within the last ${FM_CONTEXT_CAPTAIN_IDLE_SECS}s; ask before resetting instead of resetting during a live conversation"
+if [ -e "$STATE/.afk" ]; then
+  if [ "$CAPTAIN_APPROVED" -eq 1 ]; then
+    refuse "away mode is still active and owns wake delivery, so this home is recorded as one the captain has stepped away from; a captain present enough to approve a reset has returned, so let away mode exit first and re-run"
+  fi
+  refuse "away mode is active and owns wake delivery; a reset here is the captain's call, not an autonomous one"
+fi
+# This is the INFERENCE that the captain is absent, drawn from silence. An
+# explicit approval is the consent that silence was only ever a proxy for, so on
+# the approved path it replaces this check rather than stacking on top of it - see
+# "the two paths" in the header for why stacking them would make that path
+# unreachable rather than merely careful.
+if [ "$CAPTAIN_APPROVED" -eq 0 ] && fm_context_captain_active "$FM_CONTEXT_LAST_HUMAN_TS"; then
+  refuse "the captain has been active within the last ${FM_CONTEXT_CAPTAIN_IDLE_SECS}s; ask before resetting instead of resetting during a live conversation, and re-run with --captain-approved only once the captain has actually approved"
 fi
 
 # --- 4. the fleet is still quiet, re-checked at the moment of the discard ---
@@ -230,9 +352,12 @@ case "$TARGET" in
 esac
 
 if [ "$CHECK_ONLY" -eq 1 ]; then
-  log_line check-passed "$FM_CONTEXT_TOKENS tokens; would clear $TARGET"
+  log_line check-passed "${LOG_NOTE}$FM_CONTEXT_TOKENS tokens; would clear $TARGET"
   printf 'fm-context-reset: all checks pass. %s tokens filed and bound; a real run would clear %s.\n' \
     "$FM_CONTEXT_TOKENS" "$TARGET"
+  if [ "$CAPTAIN_APPROVED" -eq 1 ]; then
+    print_approval_note
+  fi
   exit 0
 fi
 
@@ -246,5 +371,9 @@ if ! FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-send.sh" "$TARGET" /clear; then
 fi
 
 rm -f "$RECEIPT" 2>/dev/null || true
-log_line cleared "$FM_CONTEXT_TOKENS tokens; submitted to $TARGET"
+log_line cleared "${LOG_NOTE}$FM_CONTEXT_TOKENS tokens; submitted to $TARGET"
 printf 'fm-context-reset: reset submitted at %s tokens; it takes effect when this turn ends.\n' "$FM_CONTEXT_TOKENS"
+if [ "$CAPTAIN_APPROVED" -eq 1 ]; then
+  print_approval_note
+fi
+exit 0

@@ -31,6 +31,9 @@ firstmate drains the wake (already obligatory)
                               -> refuses loudly on any failure, never proceeds
   ASK, BLOCKED, or UNENFORCED wake:
     report or repair the condition named in the wake; never run the reset order
+  ASK wake, and the captain then answers yes:
+    /stow, the receipt, then bin/fm-context-reset.sh --captain-approved
+    the authority is the captain's answer, never the wake
 
 after RESET succeeds:
   turn ends -> context clears -> SessionStart:clear fires (the nudge itself stays
@@ -67,7 +70,8 @@ A design that claimed otherwise would be lying.
 What is structurally real:
 
 - No receipt, no reset.
-- A receipt older than `FM_CONTEXT_RECEIPT_MAX_AGE`, no reset.
+- A receipt older than `FM_CONTEXT_RECEIPT_MAX_AGE`, no reset - on the autonomous path.
+  On the captain-approved path that window is replaced by the condition it stood in for, that the receipt was filed after the approval; see "when the captain approves" below.
 - A receipt from a different session, bound to a different transcript, or written by a different session process, no reset.
 - A transcript that has advanced more than `FM_CONTEXT_RECEIPT_MAX_GROWTH_BYTES` past the receipt, no reset.
 - Anything the captain said after the receipt was written, no reset - the sweep cannot have covered it.
@@ -79,15 +83,66 @@ A missed finding is misplaced, not lost.
 
 ## The two conditions that are never traded away
 
-**Never while the captain is in live conversation.**
+**Never while the captain is in live conversation, unless the captain is the one who asked for it.**
 The cost is proven, not estimated: the pane's scrollback is wiped, and a message queued during the clear is consumed by the old context and then discarded - the captain sees a reply firstmate does not remember giving.
 A silent inconsistency of that kind costs more than the saving.
 So the captain-present branch asks; it never acts.
 Away mode takes the same branch, because a reset there is the captain's call rather than an autonomous one and the away daemon, not firstmate, owns wake delivery.
+What the captain may then answer is the subject of "when the captain approves" below.
 
 **Never before the receipt verifies.**
 The receipt is the only claim that this session's knowledge reached disk.
 Refusing loudly is always the correct failure.
+
+## When the captain approves
+
+The captain-present branch asks, and asking is only worth doing if a yes can be acted on.
+Until 2026-08-10 it could not be, and the reason was arithmetic rather than logical, which is why reading the code never found it.
+
+`bin/fm-context-reset.sh` had two windows that both had to be open at the instant of the reset:
+
+- the receipt had to be younger than `FM_CONTEXT_RECEIPT_MAX_AGE`, 900 seconds; and
+- the captain had to have been silent for `FM_CONTEXT_CAPTAIN_IDLE_SECS`, 1800 seconds.
+
+On the autonomous path those two agree by construction, because that path only ever runs when the captain is already quiet.
+On the asking path the captain's approval is what starts the reset, so the idle window is measured from the moment the captain spoke and demands a silence twice as long as the receipt is allowed to live.
+Both could never be open at once, on that path, ever.
+Every reset this mechanism has ever completed came through the autonomous branch and none through the asking one - a count measured on 2026-08-08, before the cause was known, and explained by this arithmetic rather than by chance.
+
+`--captain-approved` is the path for a reset the captain asked for:
+
+- **The idle window does not apply.**
+  It exists to INFER the captain's absence from silence, and an explicit approval is the consent that silence was only ever a proxy for.
+  Approval is stronger evidence than silence, not weaker, so it replaces the inference rather than sitting beside it; applying both does not make the path strict, it makes it unreachable.
+- **The receipt's age window is replaced by the condition it stood in for**: the receipt was filed AFTER the approval.
+  That needs no constant, cannot deadlock - filing follows approval by construction here - and states the requirement directly.
+  Stretching 900 seconds to a larger number would pick a constant that is wrong for some other session and leave the same class of deadlock waiting.
+- **The transcript-growth bound is untouched.**
+  It carries the real safety property, measured directly from the transcript against the receipt's own `transcript_bytes`, and no approval buys past it: if this session moved on since its knowledge was filed, the reset refuses.
+- **The captain-equality check is untouched**, so the approval can only ever be the LAST thing the captain said.
+  An older yes with a newer message behind it refuses on the ordinary "the captain has spoken since the receipt was written".
+- **Away mode still refuses.**
+  A captain present enough to approve a reset has returned, and away mode should be exited first.
+
+### What this path proves, and what it cannot
+
+It proves a real captain record exists in the transcript, when it arrived, and that this session's knowledge was filed after it.
+It cannot prove that record MEANT approval.
+Semantic consent is not machine-checkable, and the party invoking the reset is the same party claiming the approval exists, so a flag that implied otherwise would be theatre.
+
+The path is therefore built for verification where verification is possible and for AUDIT where it is not:
+
+- The approval is derived from an actual human record in the transcript, never from the flag alone.
+  With no such record the reset refuses rather than proceeding on an unbacked assertion.
+- Every approved run names the exact record it relied on - its `uuid` and its timestamp - on stdout and in `state/.context-reset.log`, as `path=captain-approved approval-record=<uuid> approval-ts=<ts>`.
+  A record the log could not cite refuses too, because a reset nobody can check afterwards is a reset nobody checked.
+- The wording says as much.
+  The tool's help and its stdout state that it verified the record exists and that the filing followed it, never that the captain agreed.
+
+The log marker is written as `path=` fields rather than prose because the autonomous idle refusal names the flag in its own text - pointing at the path from the one place it becomes relevant - and a marker that a message can imitate is not a marker.
+
+The watcher's ask branch still carries no reset command, deliberately.
+The wake is a diagnosis; the authority for this path is the captain's answer, and nothing the watcher writes can stand in for it.
 
 ## How captain presence is decided, without reading a word
 
@@ -162,19 +217,20 @@ Run `bin/fm-context-reset.sh --check` to evaluate all of them and clear nothing.
 1. This home's `state/` directory is missing, or the recorded transcript is missing, in its error state, or unreadable.
 2. No live session holds this home's lock, that lock belongs to another session, or the recorded session is not the session running the command - only the session operating this home may reset itself.
 3. No receipt, a receipt not in its `ok` state, or one whose session, process, or transcript does not match.
-4. The receipt is older than its freshness bound, or its write time is unreadable or in the future.
-5. The transcript has moved on past the receipt, shrunk below it, or the receipt records no readable position at all.
+4. The receipt is older than its freshness bound, or its write time is unreadable or in the future. The freshness bound is not applied on the captain-approved path; refusal 10 replaces it there.
+5. The transcript has moved on past the receipt, shrunk below it, or the receipt records no readable position at all. This one applies identically on both paths.
 6. The captain has spoken since the receipt was written.
-7. The captain's last message could not be established at all, from the receipt or from the transcript. Two unknowns must refuse rather than compare equal; see "an absent record is not evidence of absence" above.
-8. Away mode is active.
-9. The captain has been active within `FM_CONTEXT_CAPTAIN_IDLE_SECS`.
-10. The fleet is no longer quiet: an undrained wake, a routed request awaiting its reply, or a worker waiting on an answer.
-11. The re-entry hook is no longer wired: it no longer runs `bin/fm-sessionstart-nudge.sh` on a clear, or that script is gone. This checks the wiring, not that anything is injected; see "the way back in, precisely" above.
-12. Supervision is not running.
-13. Wake delivery is not armed while this home has recorded work or an X-mode relay - with nothing to wake for, an unarmed delivery wait does not block.
-14. The harness is not `claude`, or the terminal backend is not `tmux` - including a backend that could not be detected at all, because the clear must never be typed on a guess.
-15. This session's own pane cannot be identified, or its target cannot be resolved.
-16. This session's own pane is in a tmux session whose name begins with `fm-`. That prefix is reserved: `bin/fm-send.sh` reads any such target as a recorded worker-task selector and looks for its metadata instead of resolving a live tmux endpoint, so the clear could never be typed. The refusal names that cause so an operator can rename the terminal session; it is a limitation of this mechanism on such homes, not a fault in the send path.
+7. The captain's last message could not be established at all, from the receipt or from the transcript. Two unknowns must refuse rather than compare equal; see "an absent record is not evidence of absence" above. On the captain-approved path this is also the refusal for having no record to cite as the approval.
+8. Away mode is active - on either path.
+9. The captain has been active within `FM_CONTEXT_CAPTAIN_IDLE_SECS`. Not applied on the captain-approved path, where the approval replaces the inference; see "when the captain approves" above.
+10. On the captain-approved path only: the captain record carries no id the log could cite, its timestamp is unreadable, or the receipt was filed before it rather than after. A same-second filing reads as not-after and refuses, which biases the one ambiguous case toward refusing and costs at most a second.
+11. The fleet is no longer quiet: an undrained wake, a routed request awaiting its reply, or a worker waiting on an answer.
+12. The re-entry hook is no longer wired: it no longer runs `bin/fm-sessionstart-nudge.sh` on a clear, or that script is gone. This checks the wiring, not that anything is injected; see "the way back in, precisely" above.
+13. Supervision is not running.
+14. Wake delivery is not armed while this home has recorded work or an X-mode relay - with nothing to wake for, an unarmed delivery wait does not block.
+15. The harness is not `claude`, or the terminal backend is not `tmux` - including a backend that could not be detected at all, because the clear must never be typed on a guess.
+16. This session's own pane cannot be identified, or its target cannot be resolved.
+17. This session's own pane is in a tmux session whose name begins with `fm-`. That prefix is reserved: `bin/fm-send.sh` reads any such target as a recorded worker-task selector and looks for its metadata instead of resolving a live tmux endpoint, so the clear could never be typed. The refusal names that cause so an operator can rename the terminal session; it is a limitation of this mechanism on such homes, not a fault in the send path.
 
 There is no force flag.
 
@@ -210,6 +266,61 @@ tokens=947650   (full-file jq parse: 947650 - identical)
 
 947,650 tokens against a 300,000 ceiling, read in 78 ms from a 7.4 MB transcript.
 That overshoot, sitting there unremarked, is the drift this mechanism exists to end.
+
+### The captain-approved path, demonstrated end to end
+
+Measured on 2026-08-10, Claude Code 2.1.226 on tmux, in a disposable lab and never against a primary.
+A green read of the code is not evidence here: the whole finding is that this path looked correct and had never once worked, so it was run.
+
+The lab was a real `claude` session in its own tmux session (`ctxlab`) and its own scratch project directory, holding a scratch `FM_HOME` with a real `bin/fm-watch.sh` running against it.
+The transcript measured was that session's own real transcript; the captain's messages were real typed input delivered through `bin/fm-send.sh`; the receipt and the reset were run by the lab session itself, which is what makes the ancestry checks meaningful.
+`FM_CONTEXT_CEILING` was lowered to 1000 so a young lab session would register as over the ceiling.
+The only conversation any of this could discard was the lab's own, created seconds earlier for the purpose.
+
+The watcher's branch, off that real transcript:
+
+```
+check: context-ceiling: 36831 tokens is over the 1000 ceiling and the fleet is quiet,
+but the captain has been active - ASK the captain before resetting; never reset
+autonomously during a live conversation
+```
+
+The captain then approved, and the lab session filed its receipt and ran the reset.
+The autonomous path, on exactly that session:
+
+```
+fm-context-reset: REFUSED: the captain has been active within the last 1800s; ask before
+resetting instead of resetting during a live conversation, and re-run with
+--captain-approved only once the captain has actually approved
+```
+
+The same session, seconds later, on the approved path:
+
+```
+fm-context-reset: reset submitted at 37526 tokens; it takes effect when this turn ends.
+fm-context-reset: the approval was taken to be captain record
+27d05873-0cc3-40e8-9d14-01da03f9f05c at 2026-08-10T03:08:12.123Z.
+fm-context-reset: that record exists and this session filed its knowledge after it;
+whether it meant approval is not something this tool can check.
+```
+
+`state/.context-reset.log` for the two clears the lab performed, both through the asking path:
+
+```
+2026-08-10T03:06:32Z	refused	the captain has been active within the last 1800s; ...
+2026-08-10T03:06:56Z	cleared	path=captain-approved approval-record=6f4cb861-decb-43bb-a802-f58220f6b160 approval-ts=2026-08-10T03:06:48.509Z; 37996 tokens; submitted to ctxlab:0.0
+2026-08-10T03:08:24Z	cleared	path=captain-approved approval-record=27d05873-0cc3-40e8-9d14-01da03f9f05c approval-ts=2026-08-10T03:08:12.123Z; 37526 tokens; submitted to ctxlab:0.0
+```
+
+| Link | Result |
+| --- | --- |
+| The captain spoke inside the idle window | Approval stamped `03:06:48.509Z`, reset completed `03:06:56Z` - 8 seconds later, against a 1800-second window |
+| The receipt was filed after the approval | The receipt was written by the same turn the approval started, and the ordering gate passed; a receipt hand-dated before the approval refuses (`tests/fm-context-reset.test.sh`) |
+| The autonomous path still refuses that session | Refused on the idle window, nothing discarded, one durable line |
+| The approved path completes it | Cleared, twice, on two independently approved cycles |
+| The named record is a real captain record | `27d05873-...` is an `origin.kind == "human"` record in that transcript, and its last one |
+| The memory is verifiably gone | Asked for a codeword given before the reset, the lab session answered "I don't have any codeword - this conversation was just cleared" |
+| The harness process survives | Pane pid `1559658` before the clear and after it, as the 2026-08-02 evidence above also found |
 
 ## Tunables
 
