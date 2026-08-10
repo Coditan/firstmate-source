@@ -1381,6 +1381,49 @@ EOF
   pass "a record two undertakings both claim is reported on both and drawn on neither"
 }
 
+test_a_member_no_record_answers_to_is_unresolvable_however_many_lists_name_it() {
+  # EXISTENCE IS A FACT ABOUT THE RECORD; CONTESTED IS A FACT ABOUT TWO FILES.
+  # Nothing can be claimed by anybody when no record answers to the id, so a
+  # second list naming the same typo adds no claim - it adds a second typo. Asked
+  # after contested, the chart told the reader that a record genuinely fitting two
+  # undertakings wants re-cutting, over an id that never existed at all. That is
+  # worse than silence, because it is confidently wrong.
+  local home cap voy other
+  home=$(member_list_home ghostcontest)
+  cat >> "$home/data/backlog.md" <<'EOF'
+- [ ] other - The other undertaking (repo: r) (kind: ship) (since 2026-07-02)
+EOF
+  mkdir -p "$home/data/voy" "$home/data/other"
+  printf 'typo-that-never-existed\n' > "$home/data/voy/members"
+  printf 'typo-that-never-existed\n' > "$home/data/other/members"
+  cap=$(capture ghostcontest)
+
+  voy=$(chart_json "$home" voy "$cap")
+  other=$(chart_json "$home" other "$cap")
+  [ "$(printf '%s' "$voy" | jq -r '.membership_defects[]|select(.id=="typo-that-never-existed")|.cause')" = "unresolvable" ] \
+    || fail "an id nothing answers to must be reported as unresolvable however many lists repeat it"
+  [ "$(printf '%s' "$other" | jq -r '.membership_defects[]|select(.id=="typo-that-never-existed")|.cause')" = "unresolvable" ] \
+    || fail "the second list is the second half of the same typo, and its chart must read the same"
+  assert_contains "$(printf '%s' "$voy" | jq -r '.membership_defects[]|select(.id=="typo-that-never-existed")|.why')" \
+    "no record with this id is in the backlog or the archive" \
+    "the report must say the record does not exist, which is the whole of the news here"
+  case "$(printf '%s' "$voy" | jq -r '.membership_defects[]|select(.id=="typo-that-never-existed")|.why')" in
+    *"cut too coarsely"*)
+      fail "nothing may send a reader off to re-cut work over an id that never existed" ;;
+  esac
+  # And the cause it displaced is untouched where it is genuinely true: a record
+  # that DOES exist and that two lists name is still contested.
+  cat >> "$home/data/backlog.md" <<'EOF'
+- [ ] shared-reader - Both lists name it, and it is real (repo: r) (kind: ship) (since 2026-07-01)
+EOF
+  printf 'shared-reader\n' >> "$home/data/voy/members"
+  printf 'shared-reader\n' >> "$home/data/other/members"
+  voy=$(chart_json "$home" voy "$cap")
+  [ "$(printf '%s' "$voy" | jq -r '.membership_defects[]|select(.id=="shared-reader")|.cause')" = "contested" ] \
+    || fail "asking existence first must not cost contested the case it is true of"
+  pass "a member no record answers to is unresolvable rather than contested"
+}
+
 test_a_retrofitted_decision_is_drawn_and_its_group_siblings_are_not() {
   # The member list assigns a RECORD, while the collapse rule groups by the
   # undertaking the record id names - and a decision that predates this chart
@@ -1532,6 +1575,91 @@ EOF
       fail "arithmetic a reader can catch out is what teaches them to stop believing every other number on the chart" ;;
   esac
   pass "a member the fold hung under a foreign ruling is named with a cause that is true of it, and the counts above it agree"
+}
+
+test_one_member_folded_under_two_rulings_is_still_counted_as_one_record() {
+  # The fold hangs a variant under EVERY authoritative ruling whose key it
+  # matches, and the role convention admits more than one judge per group - so a
+  # single record is reachable from several rulings at once. Counting per
+  # (ruling, variant) pair made that one record read as two on every count the
+  # page prints, while the row underneath named it once. Numbers a reader can
+  # catch out is the same fault as numbers that are wrong.
+  local home cap grouped out summary
+  home=$(make_home twojudges)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] legacy-judge-decision-shape - The first ruling on the shape (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+- [ ] legacy-judge2-decision-shape - The second ruling on the same key (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+- [ ] legacy-a-decision-shape - The one analyst record this chart owns (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+EOF
+  mkdir -p "$home/data/voy"
+  printf 'legacy-a-decision-shape\n' > "$home/data/voy/members"
+  cap=$(capture twojudges "legacy-judge-decision-shape" "legacy-judge2-decision-shape" "legacy-a-decision-shape")
+
+  # REPRODUCE THE SHAPE. Both rulings really do carry the same single record as a
+  # paired variant; without that there is no double count left to prevent.
+  grouped=$("$INV" --json --from "$cap")
+  [ "$(printf '%s' "$grouped" | jq -r '[.groups[]|select(.group=="legacy")|.decisions[]|select([.variants[].id]|index("legacy-a-decision-shape"))]|length')" = 2 ] \
+    || fail "the reproduction is stale: the fold no longer hangs one variant under both rulings, so this fixture pins nothing"
+
+  out=$(chart_json "$home" voy "$cap")
+  [ "$(printf '%s' "$out" | jq -r '[.withheld[]|select(.cause=="folded-elsewhere")]|length')" = 1 ] \
+    || fail "one record folded under two rulings must produce ONE withheld row, not one per ruling"
+  [ "$(printf '%s' "$out" | jq -r '.counts.records')" = 1 ] \
+    || fail "this chart owns exactly one record, so the count of records that reached the surface must be 1"
+  [ "$(printf '%s' "$out" | jq -r '.counts.records_in_backlog')" = 1 ] \
+    || fail "the backlog side of the reconciliation must count records too, or the two sides cannot be compared"
+  [ "$(printf '%s' "$out" | jq -r '.counts.folded')" = 1 ] \
+    || fail "one record was folded away, and folded counts records rather than pairings"
+  [ "$(printf '%s' "$out" | jq -r '.counts.withheld_folded')" = 1 ] \
+    || fail "the number that says the folded record and the withheld record are one record must agree with both of them"
+
+  # Read on the rendered page, where the arithmetic is set beside its own row.
+  summary=$("$CHART" voy --summary --from "$cap" \
+    --backlog "$home/data/backlog.md" --archive "$home/data/done-archive.md" --data "$home/data")
+  assert_contains "$summary" "1 captain-gated record" \
+    "the page must say one record, because one record is what this chart owns"
+  case "$summary" in
+    *"2 captain-gated records"*|*"of those, 2 reached"*)
+      fail "a record counted once per ruling it pairs to is arithmetic the row below it refutes" ;;
+  esac
+  pass "one member folded under two rulings is counted as the one record it is"
+}
+
+test_a_chart_with_no_member_list_still_discloses_a_folded_elsewhere_row() {
+  # A limit is a claim about the page it is printed on, so it has to be decided
+  # by what that page carries. It was decided by whether a member list was read
+  # instead, on the premise that folded-elsewhere cannot arise without one. That
+  # premise is false: the collapse group is the origin with its panel role
+  # stripped, so on a chart whose id ends in -a, -b or -judgeN - the seat
+  # convention of this home - the group is the seat above it rather than the
+  # chart, and a folded-elsewhere row arises with no member list anywhere.
+  local home cap out limits
+  home=$(make_home seatfold)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy-a - The undertaking, named on a panel seat (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-judge-decision-shape - The ruling of the group above this seat (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+- [ ] voy-a-decision-shape - The record of this seat, restating the same key (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+EOF
+  [ ! -e "$home/data/voy-a/members" ] || fail "fixture drift: this case must hold with NO member list anywhere"
+  cap=$(capture seatfold "voy-judge-decision-shape" "voy-a-decision-shape")
+  out=$(chart_json "$home" voy-a "$cap")
+
+  [ "$(printf '%s' "$out" | jq -r '.membership.list')" = "null" ] \
+    || fail "the point of this case is that no member list is in play; a list here proves nothing"
+  [ "$(printf '%s' "$out" | jq -r '[.withheld[]|select(.cause=="folded-elsewhere")]|length')" = 1 ] \
+    || fail "the reproduction is stale: a listless chart on a panel seat must still fold a member under the ruling of the group above it"
+
+  limits=$(printf '%s' "$out" | jq -r '.limits|join(" ")')
+  assert_contains "$limits" "folded-elsewhere" \
+    "the page prints a folded-elsewhere row, so the sentence saying which causes the fleet-wide board can carry must name it - a limit that is false of its own page is the one thing this chart must never print"
+  pass "a listless chart that folds a member elsewhere discloses that cause in its limits"
 }
 
 test_a_member_list_line_naming_a_group_id_never_drags_that_group_onto_this_chart() {
@@ -1853,9 +1981,12 @@ test_a_member_id_qualified_with_another_home_is_refused_rather_than_resolved
 test_a_member_that_lives_in_another_home_is_named_and_never_reached_for
 test_a_member_that_resolves_to_nothing_is_named_rather_than_dropped
 test_a_record_two_undertakings_both_claim_is_drawn_on_neither
+test_a_member_no_record_answers_to_is_unresolvable_however_many_lists_name_it
 test_a_retrofitted_decision_is_drawn_and_its_group_siblings_are_not
 test_a_member_list_line_the_prefix_rule_already_covers_assigns_nothing
 test_a_member_the_fold_hung_under_a_foreign_ruling_is_named_with_a_true_cause
+test_one_member_folded_under_two_rulings_is_still_counted_as_one_record
+test_a_chart_with_no_member_list_still_discloses_a_folded_elsewhere_row
 test_a_member_list_line_naming_a_group_id_never_drags_that_group_onto_this_chart
 test_a_foreign_claim_on_a_prefix_owned_record_is_refused_there_and_reported_here
 test_an_unreadable_member_list_is_fatal_rather_than_silently_empty

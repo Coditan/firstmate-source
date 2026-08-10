@@ -678,10 +678,20 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
         | $p ]
     | sort_by(length) | last;
 
-  # The clause order is the order of the news, and the two clauses that turn on
-  # the PREFIX rule are asked before the ones that turn on a file, because a
-  # prefix claim exists by construction and no line in any list can add to it or
-  # take it away. `redundant` therefore precedes `contested`: a record this chart
+  # The clause order is the order of the news. EXISTENCE is asked first of all,
+  # right after the two checks that read the line itself, because it is a fact
+  # about the record while every clause below is a fact about a claim on it, and
+  # nothing can be claimed by anybody when no record answers to the id. Asked
+  # last, `unresolvable` was masked the moment a second list named the same typo:
+  # the page then said contested and sent the reader off to re-cut work over an id
+  # that never existed, which is worse than silence because it is confidently
+  # wrong. The clauses below are unaffected - `redundant` and `owned-elsewhere`
+  # already require the record to exist, so `contested` is the only cause the
+  # order changes.
+  # The two clauses that turn on the PREFIX rule are then asked before the ones
+  # that turn on a file, because a prefix claim exists by construction and no line
+  # in any list can add to it or take it away. `redundant` therefore precedes
+  # `contested`: a record this chart
   # already owns by its id is not up for contest, and calling it contested printed
   # "drawn on NEITHER chart" beside a record this chart went on drawing.
   # `owned-elsewhere` sits in the same place for the mirror reason. `contested`
@@ -699,6 +709,9 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
       elif ($e | test("^[A-Za-z0-9._-]+$") | not)
       then {id: $e, cause: "malformed",
             why: "it is not a bare record id: a member list carries one id per line and nothing else. Nothing here guesses what was meant, because a guess would assign a record on the authority of this chart rather than on the authority of whoever filed the line. The entry is refused rather than half-read."}
+      elif $known[$e] != true
+      then {id: $e, cause: "unresolvable",
+            why: "no record with this id is in the backlog or the archive of this home. It was never created, it was renamed, or it lives in another home this chart deliberately does not read. It is named here rather than dropped, because a member named and missing is invisible while a member named and wrong is visible by eye - the same direction this chart takes everywhere else."}
       elif prefix_member($e) and $known[$e] == true
       then {id: $e, cause: "redundant",
             why: "it is already a member by the prefix rule - its id is \"\($chart)\" or begins with \"\($chart)-\" - so this line assigns nothing and the record is drawn either way. The list is the retrofit path for work that already existed when this undertaking was named; anything named under the chart is assigned by its id alone. Two ways to assign one record put a second owner on one contract: delete the line."}
@@ -711,9 +724,6 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
       elif $foreign[$e] != null
       then {id: $e, cause: "contested", claimed_by: $foreign[$e],
             why: "the member list of this chart names it, and so does the list of \($foreign[$e] | join(", ")). No record owns it by prefix either, so nothing decides the tie by construction. A record belongs to at most one undertaking: counted in two \"what is left\" views it leaves neither chart able to say whether it is finished for its own purposes. This chart draws it in NEITHER rather than pick a winner. A record that genuinely fits two undertakings is evidence that one of them is cut too coarsely, or that it is really two pieces of work - both fixed by re-cutting the work, never by listing it twice."}
-      elif $known[$e] != true
-      then {id: $e, cause: "unresolvable",
-            why: "no record with this id is in the backlog or the archive of this home. It was never created, it was renamed, or it lives in another home this chart deliberately does not read. It is named here rather than dropped, because a member named and missing is invisible while a member named and wrong is visible by eye - the same direction this chart takes everywhere else."}
       else null end;
 
   input as $live
@@ -807,8 +817,16 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
               | (.unpaired_variants = [ (.unpaired_variants // [])[] | select(member(.id)) ])
               | if ((.decisions | length) + (.unpaired_variants | length)) == 0 then empty
                 else .decision_count = (.decisions | length)
-                     | .record_count = (([ .decisions[] | 1 + (.variants | length) ] | add // 0)
-                                        + (.unpaired_variants | length))
+                     # DISTINCT record ids, never one per (ruling, variant) pair.
+                     # The fold hangs a variant under EVERY authoritative ruling
+                     # whose key it matches, and the role convention admits more
+                     # than one judge per group, so a variant is reachable from
+                     # several rulings at once. Summing per ruling counts that one
+                     # record once per ruling it pairs to, and the sentence this
+                     # number is printed inside says records.
+                     | .record_count = ([ .decisions[].id,
+                                          .decisions[].variants[].id,
+                                          .unpaired_variants[].id ] | unique | length)
                 end
          end ]) as $groups
   | ([ $groups[] | .decisions[]? ]) as $open_decisions
@@ -835,9 +853,13 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # than takes whole is a group that can drop a member variant this way, so a
   # narrower test here would put the loss straight back for the groups the wider
   # one no longer takes whole.
+  # `unique` for the same reason `record_count` above counts distinct ids: one
+  # such record pairs to every non-member ruling sharing its key, and it is still
+  # one record. Without it the same member is added to `$records_returned` once
+  # per ruling it hangs under, while the withheld row it produces stays single.
   | ([ $inv.groups[]? | select(prefix_member(.group) | not)
        | .decisions[]? | select(member(.id) | not)
-       | .variants[]? | select(member(.id)) | .id ]) as $folded_elsewhere
+       | .variants[]? | select(member(.id)) | .id ] | unique) as $folded_elsewhere
   # What the actionable surface returned for the records of this chart. The fold
   # dropped the folded-elsewhere ones, so no group carries them and no
   # `record_count` can, but the surface returned them all the same - and a page
@@ -1094,15 +1116,19 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
       # has to check against nothing.
       limits: ([
         "Where a judge ruled, this chart shows the formulation the judge gave. That the judge picked up every question the analysts raised is verified by nothing, so every folded record stays listed underneath.",
-        # The exception clause is extended only when a member list was read, and
-        # that is not squeamishness about the golden: folded-elsewhere cannot
-        # arise without one. Every member of a listless chart is a prefix member,
-        # its collapse group IS this chart, and the whole-group branch is taken -
-        # so on that page the shorter sentence is not a trimmed truth, it is the
-        # whole of it.
+        # The exception clause is extended on the FACT that a folded-elsewhere row
+        # is on this page, never on a proxy for it. A limit is a claim about the
+        # page it is printed on, so only what that page carries may decide it.
+        # A member list is NOT such a proxy: the collapse group is the origin with
+        # its panel role stripped, so on any chart whose id ends in -a, -b or
+        # -judgeN - the seat convention of this home - the group is the seat above
+        # it rather than the chart, the whole-group branch is not taken, and a
+        # folded-elsewhere row arises with no member list anywhere. Gating on the
+        # list printed the shorter sentence beneath a row it does not cover, which
+        # is the incomplete disclosure this clause exists to close.
         ("Withheld decisions are found within the scope of THIS chart, by reading its own records back from the backlog. For every cause but unpaired-variant the fleet-wide decision board cannot count them at all, so a number here does not mean the board agrees; an unpaired variant is the one the board does list, as a variant of its group rather than as a decision."
-         + (if $member_file == "" then ""
-            else " This chart was drawn from a member list, so folded-elsewhere is a second cause the board does carry, as a variant under the ruling of the undertaking whose id that record bears." end)),
+         + (if ([ $withheld[] | select(.cause == "folded-elsewhere") ] | length) == 0 then ""
+            else " This chart carries a folded-elsewhere row, and that is a second cause the board does carry, as a variant under the ruling of the undertaking whose id that record bears." end)),
         "This chart reads ONE home, the one it was pointed at. A decision recorded in a secondmate home is dropped before anything here is counted, because a secondmate owns its own undertakings and its own backlog. Nothing on this chart says anything about them, in either direction.",
         "Fog is whatever somebody wrote down as fog. Nothing proves this course has no other dark patches.",
         "An unsupervised marking means the work may be EDITED unsupervised. It never means it may LAND unsupervised.",
