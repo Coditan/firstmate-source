@@ -11,6 +11,10 @@
 #   from that harness's launch rather than guessed.
 #   Codex launches also require the tracked .codex/config.toml profile and pass its
 #   sandbox_mode, approval_policy, and approvals_reviewer values as CLI overrides.
+#   A Codex CREWMATE additionally gets sandbox_workspace_write.network_access, which
+#   is what lets it reach the local no-mistakes daemon socket; a Codex secondmate does
+#   not. That grant lives on the launch line rather than in the profile file on
+#   purpose (docs/codex-sandbox-network.md).
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   spawn. Without it, the script resolves FM_BACKEND, then config/backend, then
 #   runtime auto-detection (the runtime firstmate itself is executing inside -
@@ -651,8 +655,28 @@ codex_config_value() {
   printf '%s\n' "$values"
 }
 
+# The sandbox network dimension granted to spawned Codex CREWMATES, and only to them.
+#
+# Codex classes a unix-socket connect as NETWORK access rather than filesystem access,
+# so a Codex crewmate under a plain workspace-write sandbox is refused the local
+# no-mistakes daemon socket with EPERM, and every Codex-dispatched pipeline ship task
+# stalls at the gate. Granting the worktree or the daemon's own directory does not
+# help: the refusal is on the network dimension, not the filesystem one.
+#
+# Codex 0.145.0 exposes no narrower knob than the whole dimension, so this also admits
+# general outbound network from the crewmate, not just the pipeline socket. That is a
+# deliberate captain-authorised trade, measured and recorded in
+# docs/codex-sandbox-network.md rather than assumed.
+#
+# It is emitted as a launch flag instead of being written into the tracked
+# .codex/config.toml, because Codex reads that file as configuration for ANY Codex
+# session running inside this trusted project - a supervising firstmate session
+# included. Keeping the grant on the launch line is what confines it to crewmates;
+# moving it into the profile would widen it no matter how this branch is gated.
+CODEX_CREW_NETWORK_FLAG='sandbox_workspace_write.network_access=true'
+
 codex_config_flags_for_harness() {
-  local harness=$1 key value
+  local harness=$1 kind=$2 key value
   case "$harness" in
     codex*) ;;
     *) return 0 ;;
@@ -661,6 +685,14 @@ codex_config_flags_for_harness() {
     value=$(codex_config_value "$key") || return 1
     printf -- '-c %s ' "$(shell_quote "$key=\"$value\"")"
   done
+  # A secondmate is a supervising firstmate home rather than a pipeline worker: it
+  # routes work, and its own crewmates pick the grant up from its own call into this
+  # same path. The supervising primary never reaches this function at all, because
+  # fm-spawn only ever composes launch commands for direct reports.
+  case "$kind" in
+    secondmate) return 0 ;;
+  esac
+  printf -- '-c %s ' "$(shell_quote "$CODEX_CREW_NETWORK_FLAG")"
 }
 
 json_escape() {
@@ -1284,7 +1316,7 @@ fi
 
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
 EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
-CODEXCONFIG=$(codex_config_flags_for_harness "$HARNESS")
+CODEXCONFIG=$(codex_config_flags_for_harness "$HARNESS" "$KIND")
 META_WINDOW=$T
 [ "$BACKEND" = orca ] && META_WINDOW=$W
 if [ "$KIND" = secondmate ] && [ "$SPAWN_TASK_LOCK_HELD" != 1 ]; then

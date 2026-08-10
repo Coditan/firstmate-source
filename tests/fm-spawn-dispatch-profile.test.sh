@@ -13,7 +13,9 @@ set -u
 SPAWN="$ROOT/bin/fm-spawn.sh"
 fm_test_tmproot TMP_ROOT fm-spawn-dispatch-profile
 
-CODEX_PROFILE_FLAGS='-c '\''sandbox_mode="workspace-write"'\'' -c '\''approval_policy="on-request"'\'' -c '\''approvals_reviewer="auto_review"'\'''
+CODEX_CREW_NETWORK_FLAG='-c '\''sandbox_workspace_write.network_access=true'\'''
+CODEX_SECONDMATE_PROFILE_FLAGS='-c '\''sandbox_mode="workspace-write"'\'' -c '\''approval_policy="on-request"'\'' -c '\''approvals_reviewer="auto_review"'\'''
+CODEX_PROFILE_FLAGS="$CODEX_SECONDMATE_PROFILE_FLAGS $CODEX_CREW_NETWORK_FLAG"
 
 make_spawn_fakebin() {
   local dir=$1 fakebin
@@ -455,6 +457,96 @@ test_codex_omits_out_of_range_max_effort() {
   pass "codex omits max effort because firstmate's validators cap codex at xhigh"
 }
 
+# Codex classes a unix-socket connect as network access, not filesystem access, so a
+# Codex crewmate under a plain workspace-write sandbox is refused the local
+# no-mistakes daemon socket and every Codex-dispatched pipeline ship task stalls at
+# the gate (docs/codex-sandbox-network.md). These three tests pin the grant from all
+# three sides so a later edit can neither silently drop it nor silently widen it:
+# a crewmate must carry it, a secondmate must not, and no other harness may acquire it.
+test_codex_crewmate_carries_the_pipeline_socket_network_grant() {
+  local rec ship scout out status launch
+  ship=profile-codex-net-ship-z20
+  scout=profile-codex-net-scout-z20
+  rec=$(make_spawn_case profile-codex-net codex "$ship" "$scout")
+  read_case_record "$rec"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$ship" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "codex ship spawn should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "$CODEX_CREW_NETWORK_FLAG" \
+    "codex ship launch dropped the sandbox network grant that reaches the no-mistakes daemon socket"
+  assert_contains "$launch" "$CODEX_PROFILE_FLAGS" \
+    "codex ship launch did not compose the network grant alongside the rest of the profile"
+  assert_not_contains "$launch" "danger-full-access" \
+    "the network grant must not be delivered by widening the whole sandbox"
+  assert_not_contains "$launch" "--dangerously-bypass-approvals-and-sandbox" \
+    "the network grant must not be delivered by bypassing the sandbox"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$scout" "$PROJ_DIR" --scout)
+  status=$?
+  expect_code 0 "$status" "codex scout spawn should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "$CODEX_CREW_NETWORK_FLAG" \
+    "codex scout launch dropped the sandbox network grant a crewmate is entitled to"
+  pass "a codex crewmate launch carries the sandbox network grant that reaches the pipeline socket"
+}
+
+# A secondmate is a supervising firstmate home rather than a pipeline worker: it routes
+# work, and its own crewmates pick the grant up from its own call into the same path.
+# Pinning the omission here is what stops the grant from creeping outward to a
+# supervising session the next time this branch is edited.
+test_codex_secondmate_does_not_carry_the_crewmate_network_grant() {
+  local rec id sm out status launch
+  id=secondmate-codex-net-z21
+  rec=$(make_spawn_case secondmate-codex-net codex "$id")
+  read_case_record "$rec"
+  sm="$CASE_DIR/secondmate-home"
+  make_seeded_secondmate_home "$sm" "$id"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
+  status=$?
+  expect_code 0 "$status" "secondmate codex spawn should succeed"
+  assert_contains "$out" "spawned $id harness=codex kind=secondmate" "secondmate launch did not resolve codex"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "$CODEX_SECONDMATE_PROFILE_FLAGS" \
+    "secondmate codex launch lost the sandbox, approval, and reviewer profile overrides"
+  assert_not_contains "$launch" "network_access" \
+    "the crewmate network grant widened to a secondmate, which supervises rather than runs the pipeline"
+  pass "a codex secondmate launch omits the crewmate-only sandbox network grant"
+}
+
+# The grant lives entirely in the codex branch of the launch composition. A claude
+# crewmate's launch line is unchanged by it, which is what keeps this change from
+# altering the behaviour of the harness the fleet runs today.
+test_non_codex_crewmate_acquires_no_sandbox_network_grant() {
+  local rec id out status launch
+  id=profile-claude-net-z22
+  rec=$(make_spawn_case profile-claude-net claude "$id")
+  read_case_record "$rec"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "claude spawn should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_not_contains "$launch" "network_access" \
+    "the codex sandbox network grant leaked into a claude launch"
+  assert_not_contains "$launch" "sandbox_workspace_write" \
+    "codex sandbox profile overrides leaked into a claude launch"
+  pass "a non-codex crewmate launch acquires no codex sandbox network grant"
+}
+
+# The grant has to stay on the launch line. Codex reads this repository's own
+# .codex/config.toml as configuration for any Codex session running inside this
+# trusted project - a supervising firstmate session included - so writing the grant
+# into that file would widen it past crewmates however carefully the launch path
+# above is gated. This is the widening the launch-line tests cannot see.
+test_tracked_codex_profile_leaves_the_network_grant_to_the_launch_line() {
+  assert_no_grep 'network_access' "$ROOT/.codex/config.toml" \
+    "the crewmate network grant was written into the tracked Codex profile, which every Codex session in this repository loads"
+  pass "the tracked Codex profile leaves the crewmate network grant to the launch line"
+}
+
 test_grok_threads_model_and_reasoning_effort() {
   local rec id out status launch
   id=profile-grok-z5
@@ -634,6 +726,10 @@ test_raw_claude_shaped_wrapper_gets_no_settings_flag
 test_claude_threads_model_and_effort
 test_codex_threads_model_and_effort
 test_codex_omits_out_of_range_max_effort
+test_codex_crewmate_carries_the_pipeline_socket_network_grant
+test_codex_secondmate_does_not_carry_the_crewmate_network_grant
+test_non_codex_crewmate_acquires_no_sandbox_network_grant
+test_tracked_codex_profile_leaves_the_network_grant_to_the_launch_line
 test_grok_threads_model_and_reasoning_effort
 test_grok_omits_invalid_max_reasoning_effort
 test_grok_omits_invalid_xhigh_reasoning_effort

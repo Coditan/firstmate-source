@@ -175,8 +175,17 @@ Portable shard evidence and coverage rules are in [fm-test-portable-shards.md](f
 ## Codex profile and Graphify hooks (.codex/)
 
 The tracked `.codex/config.toml` is the authoritative Codex Firstmate profile for firstmate-spawned Codex agents.
-Codex does not auto-load repo-local `.codex/config.toml`, so `bin/fm-spawn.sh` parses that file and passes its `sandbox_mode`, `approval_policy`, and `approvals_reviewer` values as repeatable `codex -c key=value` overrides whenever it launches a Codex crewmate or secondmate.
+A Codex crewmate works in some other project's worktree, which has no such file, so `bin/fm-spawn.sh` parses this repo's copy and passes its `sandbox_mode`, `approval_policy`, and `approvals_reviewer` values as repeatable `codex -c key=value` overrides whenever it launches a Codex crewmate or secondmate.
 Those overrides currently set `sandbox_mode = "workspace-write"`, `approval_policy = "on-request"`, and `approvals_reviewer = "auto_review"` so Codex keeps a workspace sandbox, escalates blocked boundary work, and uses auto review for approval decisions.
+
+Do not treat that file as inert for sessions running inside this repository.
+Codex 0.145.0 reads it as configuration for a Codex session whose working directory is in this repo, which is measured in [`docs/codex-sandbox-network.md`](codex-sandbox-network.md) section 5 and corrects an earlier claim here that repo-local `.codex/config.toml` is never auto-loaded.
+Anything written into it therefore reaches a supervising Codex firstmate session too, not only the crewmates `fm-spawn` launches.
+
+For that reason one Codex sandbox setting deliberately does NOT live in that file.
+A Codex CREWMATE additionally receives `sandbox_workspace_write.network_access=true` on its launch line, which is what lets it reach the local no-mistakes daemon socket; a Codex secondmate does not receive it, and neither does the supervising session.
+Codex classes a unix-socket connect as network access rather than filesystem access, and 0.145.0 offers no narrower knob, so this is a whole-dimension grant that also admits general outbound network from that crewmate.
+[`docs/codex-sandbox-network.md`](codex-sandbox-network.md) owns the measurements behind all of that, including what the grant admits and why the launch line rather than the profile file is the only placement that confines it.
 
 The tracked `.codex/hooks.json` has `SessionStart`, `PreToolUse`, and `Stop` project hooks.
 Its `SessionStart` hook is the Codex integration for `bin/fm-sessionstart-nudge.sh`; see [`docs/sessionstart-nudge.md`](sessionstart-nudge.md) for the full native session-start nudge contract.
