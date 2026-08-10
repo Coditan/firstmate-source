@@ -89,19 +89,28 @@
 # resolves through bin/fm-dispatch-select.sh, so panel profiles get the same
 # validation and quota-aware array selection as crew dispatch profiles.
 #
-# Model identity for the distinctness test is the profile's model name with any
+# Configured model identity for the distinctness test exists only when the
+# resolved profile explicitly pins a model. It is that model name with any
 # provider prefix and any `:suffix` removed (the normalization bin/fm-dispatch-
-# select.sh already uses), or `harness:<name>` when the profile pins no model.
-# Two profiles naming the same model through different harnesses are therefore
-# correctly treated as ONE model, not two.
+# select.sh already uses). A harness name identifies a launcher, not the model
+# its mutable default will run, so an unpinned profile has UNKNOWN model identity
+# rather than a `harness:<name>` placeholder. A full panel refuses an unpinned
+# analyst, while an unpinned judge gets the same visible warning class as a known
+# judge collision and proceeds under the existing judge-independence policy.
 #
-# Degradation is explicit, never silent: when the two analysts would resolve to
-# the same model identity, `start` refuses with exit 4 and names both the
-# configuration fix and the `--reduced` alternative. Two identical analysts are
-# not a panel, and presenting one as a panel is worse than running none. When no
-# third distinct model is available, the judge may share an analyst's model; that
-# is a printed warning rather than a refusal, because the judge's independence
-# comes from re-verifying against live state with both reports in hand.
+# This check establishes distinct configured model names, not distinct endpoints
+# or weights: different names can still be aliases outside Firstmate's view. It
+# never asks a running model to identify itself, because a model self-report is
+# not evidence of the endpoint or weights that served it.
+#
+# Degradation is explicit, never silent: when either analyst has unknown model
+# identity or both analysts resolve to the same identity, `start` refuses with
+# exit 4 and names both the configuration fix and the `--reduced` alternative.
+# Two analysts whose independence cannot be established are not a panel, and
+# presenting them as one is worse than running none. When no third distinct
+# model is available, the judge may share an analyst's model; that is a printed
+# warning rather than a refusal, because the judge's independence comes from
+# re-verifying against live state with both reports in hand.
 #
 # The two-condition judge gate is deliberate. A report file that EXISTS is not a
 # report that is FINISHED, and dispatching the judge against a half-written
@@ -268,34 +277,38 @@ role_spec() {
   printf '%s\n' "$spec"
 }
 
-# The ONE definition of a profile's model identity, interpolated by every jq
-# program below so the exit-4 distinctness check and the exclusion filter cannot
-# disagree about what counts as one model. Keep it in step with
+# The ONE definition of a profile's configured model identity, interpolated by
+# every jq program below so the exit-4 distinctness check and the exclusion
+# filter cannot disagree about what counts as one known model. An unpinned
+# profile returns null because its harness default is runtime state, not identity.
+# Keep this normalization in step with
 # bin/fm-dispatch-select.sh's model_name normalization.
 # shellcheck disable=SC2016  # $m is a jq binding, deliberately not shell-expanded
-PANEL_IDENT_JQ='def ident:
+PANEL_CONFIGURED_IDENT_JQ='def ident:
   (.model // "") as $m
   | if ($m | length) > 0 then ($m | split("/") | last | split(":") | first | ascii_downcase)
-    else "harness:" + (.harness // "")
+    else null
     end;'
 
-profile_identity() {
-  printf '%s\n' "$1" | jq -r "$PANEL_IDENT_JQ"' ident'
+profile_configured_identity() {
+  printf '%s\n' "$1" | jq -r "$PANEL_CONFIGURED_IDENT_JQ"' ident // empty'
 }
 
 profile_field() {
   printf '%s\n' "$1" | jq -r --arg field "$2" '.[$field] // ""'
 }
 
-# Drop every candidate whose identity is in the newline-separated exclusion
-# list, so a role backed by an array picks a model the panel is not already
-# using instead of duplicating one.
+# Keep only candidates with a known configured model identity outside the
+# newline-separated exclusion list, so an array prefers a known unused model
+# over both a duplicate and an unpinned harness default. When none remain,
+# resolve_role falls back to the original spec so the selected concrete profile
+# reaches the caller's role-specific refusal or warning.
 filter_spec() {
   local spec=$1 excluded=$2
-  printf '%s\n' "$spec" | jq -c --arg excluded "$excluded" "$PANEL_IDENT_JQ"'
+  printf '%s\n' "$spec" | jq -c --arg excluded "$excluded" "$PANEL_CONFIGURED_IDENT_JQ"'
     ($excluded | split("\n") | map(select(length > 0))) as $ex
     | (if type == "array" then . else [.] end)
-    | map(select((ident) as $i | ($ex | index($i)) == null))
+    | map(select((ident) as $i | ($i != null) and (($ex | index($i)) == null)))
   '
 }
 
@@ -321,6 +334,15 @@ resolve_role() {
   fi
   rm -f "$errors"
   printf '%s\n' "$profile"
+}
+
+refuse_unpinned_analyst() {
+  local role=$1
+  printf 'error: this would not be a panel: %s resolves to a profile with no explicit model pin.\n' "$role" >&2
+  printf '  A harness name identifies a launcher, not the runtime model selected by its mutable default.\n' >&2
+  printf '  Pin roles.%s.model in %s so the two analyst identities can be compared,\n' "$role" "$PANEL_CONFIG" >&2
+  printf '  or re-run with --reduced for the single-analyst review, which is labelled as such everywhere it appears.\n' >&2
+  exit 4
 }
 
 # --- panel record -----------------------------------------------------------
@@ -700,11 +722,17 @@ cmd_start() {
   local profile_a identity_a profile_judge identity_judge excluded
   local profile_b='' identity_b=''
   profile_a=$(resolve_role analyst_a)
-  identity_a=$(profile_identity "$profile_a")
+  identity_a=$(profile_configured_identity "$profile_a")
+  if [ "$form" = panel ] && [ -z "$identity_a" ]; then
+    refuse_unpinned_analyst analyst_a
+  fi
   excluded=$identity_a
   if [ "$form" = panel ]; then
     profile_b=$(resolve_role analyst_b "$identity_a")
-    identity_b=$(profile_identity "$profile_b")
+    identity_b=$(profile_configured_identity "$profile_b")
+    if [ -z "$identity_b" ]; then
+      refuse_unpinned_analyst analyst_b
+    fi
     if [ "$identity_b" = "$identity_a" ]; then
       printf 'error: this would not be a panel: both analysts resolve to the model %s.\n' "$identity_a" >&2
       printf '  Two identical analysts are not independent, and presenting them as a panel is worse than running none.\n' >&2
@@ -716,12 +744,18 @@ cmd_start() {
 $identity_b"
   fi
   profile_judge=$(resolve_role judge "$excluded")
-  identity_judge=$(profile_identity "$profile_judge")
-  case "$identity_judge" in
-    "$identity_a"|"${identity_b:-$identity_a}")
-      warn "no third distinct model is available, so the judge runs on $identity_judge, the same model as one analyst; it still re-verifies against live state with every report in hand"
-      ;;
-  esac
+  identity_judge=$(profile_configured_identity "$profile_judge")
+  if [ "$form" != panel ] && { [ -z "$identity_a" ] || [ -z "$identity_judge" ]; }; then
+    warn "at least one reduced-form seat has no explicit model pin, so whether the judge shares the analyst's runtime model is unknown; it still re-verifies against live state with the report in hand"
+  elif [ -z "$identity_judge" ]; then
+    warn "the judge has no explicit model pin, so its runtime model identity is unknown and may be the same model as one analyst; it still re-verifies against live state with every report in hand"
+  else
+    case "$identity_judge" in
+      "$identity_a"|"${identity_b:-$identity_a}")
+        warn "no third distinct model is available, so the judge runs on $identity_judge, the same model as one analyst; it still re-verifies against live state with every report in hand"
+        ;;
+    esac
+  fi
 
   local id_a="$panel_id-a" id_b="$panel_id-b" id_judge="$panel_id-judge"
   local report_a="$DATA/$id_a/report.md" report_b="$DATA/$id_b/report.md"

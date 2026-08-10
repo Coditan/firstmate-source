@@ -96,14 +96,41 @@ DISTINCT_ANALYST_ARRAYS='{"roles":{
 ONE_MODEL_ANALYST_ARRAYS='{"roles":{
   "analyst_a":[{"harness":"claude","model":"claude-opus-5"}],
   "analyst_b":[{"harness":"pi","model":"anthropic/claude-opus-5:1m"}],
-  "judge":{"harness":"codex"}}}'
+  "judge":{"harness":"grok","model":"grok-4-fast"}}}'
 
 COLLIDING_JUDGE_ARRAY='{"roles":{
   "analyst_a":{"harness":"claude","model":"claude-opus-5"},
+  "analyst_b":{"harness":"codex","model":"gpt-5.6-sol"},
+  "judge":[
+    {"harness":"codex","model":"gpt-5.6-sol"},
+    {"harness":"claude","model":"claude-opus-5"}]}}'
+
+UNPINNED_ANALYST_COLLISION='{"roles":{
+  "analyst_a":{"harness":"codex"},
+  "analyst_b":{"harness":"codex","model":"gpt-5.6-sol"},
+  "judge":{"harness":"grok","model":"grok-4-fast"}}}'
+
+UNPINNED_ANALYST_B_COLLISION='{"roles":{
+  "analyst_a":{"harness":"codex","model":"gpt-5.6-sol"},
   "analyst_b":{"harness":"codex"},
+  "judge":{"harness":"grok","model":"grok-4-fast"}}}'
+
+UNPINNED_JUDGE_COLLISION='{"roles":{
+  "analyst_a":{"harness":"claude","model":"claude-opus-5"},
+  "analyst_b":{"harness":"codex","model":"gpt-5.6-sol"},
+  "judge":{"harness":"codex"}}}'
+
+UNPINNED_FIRST_JUDGE_ARRAY='{"roles":{
+  "analyst_a":{"harness":"claude","model":"claude-opus-5"},
+  "analyst_b":{"harness":"codex","model":"gpt-5.6-sol"},
   "judge":[
     {"harness":"codex"},
-    {"harness":"claude","model":"claude-opus-5"}]}}'
+    {"harness":"grok","model":"grok-4-fast"}]}}'
+
+REDUCED_UNPINNED_ANALYST='{"roles":{
+  "analyst_a":{"harness":"codex"},
+  "analyst_b":{"harness":"claude","model":"claude-opus-5"},
+  "judge":{"harness":"codex","model":"gpt-5.6-sol"}}}'
 
 SKILL="$ROOT/.agents/skills/panel/SKILL.md"
 CONFIG_DOC="$ROOT/docs/configuration.md"
@@ -122,6 +149,8 @@ test_skill_owns_the_cost_decision_and_one_trigger() {
   assert_grep 'Not worth it:' "$SKILL" "the panel skill does not say when a panel wastes its cost"
   assert_grep 'decision-hold-lifecycle' "$SKILL" "the panel skill does not fold in the completion gate"
   assert_grep 'single-analyst review' "$SKILL" "the panel skill does not name the reduced form"
+  assert_grep 'lacks an explicit model pin' "$SKILL" \
+    "the panel skill does not explain the unpinned-analyst refusal"
   count=$(grep -Fc 'load the `panel` skill' "$AGENTS")
   [ "$count" -eq 1 ] || fail "the panel skill needs exactly one AGENTS.md trigger, found $count"
   pass "the panel skill owns the cost decision and has one AGENTS.md trigger"
@@ -135,6 +164,10 @@ test_configuration_doc_owns_the_schema_and_degradation() {
     "the documented schema does not point at the shared selector"
   assert_grep 'refuses with exit 4' "$CONFIG_DOC" \
     "the documented degradation contract does not state the refusal"
+  assert_grep 'without an explicit model pin refuses with exit 4' "$CONFIG_DOC" \
+    "the documented contract does not refuse an unpinned analyst"
+  assert_grep 'self-report is not evidence' "$CONFIG_DOC" \
+    "the documented identity boundary relies on model self-report"
   assert_grep 'config/model-panel.json` is deliberately NOT in the inheritable set' "$CONFIG_DOC" \
     "the documented contract does not explain why the panel config is not inherited"
   assert_gitignore_ignores 'config/model-panel.json' \
@@ -194,6 +227,74 @@ test_judge_array_collision_warns_after_resolution() {
     "the judge warning did not name the resolved collision"
   assert_contains "$out" "panel: judge" "the warned lineup did not resolve a concrete judge"
   pass "a judge-array collision is caught by the resolved-identity warning"
+}
+
+test_unpinned_analyst_refuses_unknown_runtime_identity() {
+  local home out status config role id
+  for config in "$UNPINNED_ANALYST_COLLISION" "$UNPINNED_ANALYST_B_COLLISION"; do
+    case "$config" in
+      "$UNPINNED_ANALYST_COLLISION") role=analyst_a; id=uaa ;;
+      *) role=analyst_b; id=uab ;;
+    esac
+    status=0
+    home=$(new_home "unpinned-$role" "$config")
+    out=$(run_panel "$home" start --id "$id" --project "$home/subject" --dry-run "Anything?") || status=$?
+    expect_code 4 "$status" "an unpinned $role must not be presented as a distinct model"
+    assert_contains "$out" "$role resolves to a profile with no explicit model pin" \
+      "the unpinned-$role refusal did not name the unknown identity"
+    assert_contains "$out" "A harness name identifies a launcher, not the runtime model" \
+      "the refusal did not explain why a harness placeholder is not identity"
+    [ -z "$(spawn_log "$home")" ] || fail "an unpinned-analyst panel must dispatch nothing"
+  done
+  pass "neither analyst can turn a harness placeholder into a model identity"
+}
+
+test_unpinned_judge_warns_without_model_self_report() {
+  local home out fakebin marker
+  home=$(new_home unpinned-judge "$UNPINNED_JUDGE_COLLISION")
+  fakebin=$(fm_fakebin "$TMP_ROOT/unpinned-judge-self-report")
+  marker="$TMP_ROOT/unpinned-judge-self-report/codex-called"
+  cat > "$fakebin/codex" <<SH
+#!/usr/bin/env bash
+printf called > '$marker'
+printf 'gpt-5.6-sol\n'
+SH
+  chmod +x "$fakebin/codex"
+  out=$(PATH="$fakebin:$PATH" run_panel "$home" start --id uj --project "$home/subject" --dry-run "Anything?") \
+    || fail "an unpinned judge must keep the documented warning behavior: $out"
+  assert_contains "$out" "judge has no explicit model pin" \
+    "the unpinned judge's unknown identity was silent"
+  assert_contains "$out" "may be the same model as one analyst" \
+    "the unpinned judge warning did not name the collision risk"
+  assert_absent "$marker" "the panel asked the model to self-identify"
+  pass "an unpinned judge warns without trusting a model self-report"
+}
+
+test_judge_array_prefers_a_known_unused_identity_over_unpinned_default() {
+  local home out
+  home=$(new_home unpinned-first-judge-array "$UNPINNED_FIRST_JUDGE_ARRAY")
+  out=$(FM_DISPATCH_RANDOM_SOURCE=/dev/zero run_panel "$home" start --id uja \
+    --project "$home/subject" --dry-run "Anything?") \
+    || fail "a known unused judge candidate should remain selectable: $out"
+  assert_contains "$out" 'panel: judge {"harness":"grok","model":"grok-4-fast"}' \
+    "the judge array selected an unpinned default over a known unused identity"
+  assert_not_contains "$out" "runtime model identity is unknown" \
+    "a known unused judge candidate was incorrectly treated as unknown"
+  pass "a judge array prefers a known unused identity over an unpinned default"
+}
+
+test_reduced_unpinned_seat_warns_without_claiming_independence() {
+  local home out
+  home=$(new_home reduced-unpinned "$REDUCED_UNPINNED_ANALYST")
+  out=$(run_panel "$home" start --id rua --project "$home/subject" --reduced --dry-run "Anything?") \
+    || fail "the reduced form should preserve its named degradation: $out"
+  assert_contains "$out" "at least one reduced-form seat has no explicit model pin" \
+    "the reduced form silently treated an unpinned seat as distinct"
+  assert_contains "$out" "whether the judge shares the analyst's runtime model is unknown" \
+    "the reduced warning did not explain its identity uncertainty"
+  assert_contains "$out" "form=single-analyst-review" \
+    "the unpinned reduced form was mislabeled as a panel"
+  pass "the reduced form warns on unknown identity without claiming panel independence"
 }
 
 test_identical_analyst_models_refuse() {
@@ -828,6 +929,10 @@ test_analysts_dispatch_on_different_models
 test_distinct_analyst_arrays_resolve_to_different_models
 test_analyst_array_collision_refuses_after_resolution
 test_judge_array_collision_warns_after_resolution
+test_unpinned_analyst_refuses_unknown_runtime_identity
+test_unpinned_judge_warns_without_model_self_report
+test_judge_array_prefers_a_known_unused_identity_over_unpinned_default
+test_reduced_unpinned_seat_warns_without_claiming_independence
 test_identical_analyst_models_refuse
 test_same_model_through_two_harnesses_refuses
 test_reduced_form_is_named_not_a_panel
