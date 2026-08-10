@@ -449,6 +449,51 @@ test_an_approved_path_with_an_uncitable_captain_record_refuses() {
     "an approved reset whose captain record cannot be cited" --captain-approved
 }
 
+# scan_published_fields: the three values fm_context_scan publishes, read straight
+# out of the shared predicates rather than inferred from a refusal, so a test can
+# see which value landed in which slot.
+scan_published_fields() {  # <transcript>
+  # shellcheck disable=SC2016 # The inner script's positional args are the child shell's, on purpose.
+  env -u FM_ROOT_OVERRIDE bash -c '
+      set -u
+      . "$1"
+      fm_context_scan "$2" >/dev/null 2>&1
+      printf "tokens=[%s] ts=[%s] uuid=[%s]\n" \
+        "$FM_CONTEXT_TOKENS" "$FM_CONTEXT_LAST_HUMAN_TS" "$FM_CONTEXT_LAST_HUMAN_UUID"
+    ' fm-context-reset-test "$ROOT/bin/fm-context-lib.sh" "$1"
+}
+
+# The scan publishes its three values out of ONE tab-separated line, and any of
+# them can legitimately be empty - so the split has to be field-exact rather than
+# whitespace-ish. A captain record carrying an id but no timestamp is the shape
+# that proves it: the two tabs arrive adjacent, and a splitter that treats a run
+# of them as one delimiter slides the id into the TIMESTAMP's slot. Nothing
+# downstream can then tell the difference - the reset compares an id against a
+# clock reading, and the approved path's entire audit claim is that the record it
+# named is the record it relied on. So both halves are asserted here: the fields
+# stay in their own slots, and the reset that follows refuses for the reason that
+# is actually true of this transcript rather than for a shifted one.
+test_a_captain_record_without_a_timestamp_keeps_its_id_out_of_the_timestamp() {
+  local fields
+  make_case
+  {
+    printf '{"type":"user","isMeta":true,"message":{"role":"user","content":"session-start nudge"},"timestamp":"2020-01-01T00:00:00.000Z"}\n'
+    printf '{"type":"user","origin":{"kind":"human"},"promptSource":"typed","uuid":"%s","message":{"role":"user","content":"captain says something"}}\n' \
+      "$CAPTAIN_RECORD_ID"
+    printf '{"type":"assistant","message":{"usage":{"input_tokens":900000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}\n'
+  } > "$TRANSCRIPT"
+  write_receipt
+  fields=$(scan_published_fields "$TRANSCRIPT")
+  assert_contains "$fields" 'tokens=[900000]' \
+    "the token figure did not survive a transcript whose captain record has no timestamp"
+  assert_contains "$fields" 'ts=[]' \
+    "a captain record with no timestamp published something as its timestamp anyway"
+  assert_contains "$fields" "uuid=[$CAPTAIN_RECORD_ID]" \
+    "the captain record's id did not reach the slot that names the record"
+  assert_refuses "cannot name what it would be treating as the approval" \
+    "an approved reset whose captain record carries an id but no timestamp" --captain-approved
+}
+
 # The gap the idle window used to cover. Every gate runs once, and the clear is
 # typed later - after the backend probe, the pane resolution and the
 # display-message round trips. On this path the captain is present by
@@ -1063,6 +1108,7 @@ test_growth_past_the_receipt_still_refuses_on_the_approved_path
 test_a_captain_message_after_the_approval_still_refuses_when_approved
 test_an_approved_path_with_no_captain_record_refuses
 test_an_approved_path_with_an_uncitable_captain_record_refuses
+test_a_captain_record_without_a_timestamp_keeps_its_id_out_of_the_timestamp
 test_a_captain_who_speaks_between_the_checks_and_the_send_refuses
 test_the_pre_send_recheck_does_not_reach_the_autonomous_path
 test_away_mode_refuses_on_the_approved_path_too

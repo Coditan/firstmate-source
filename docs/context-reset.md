@@ -162,8 +162,9 @@ Claude Code stamps every user record in the transcript with a structural origin,
 | array content of `tool_result` | a tool result |
 | string content, no origin, no promptSource | a slash-command expansion, which only ever follows real captain input, so it counts as human |
 
-The watcher therefore reads exactly three things from the transcript: the last assistant record's token `usage` numbers, the timestamp of the last genuine captain prompt, and the file's byte size.
-Message content is never read and never printed.
+The shared scan therefore reads exactly four things from the transcript: the last assistant record's token `usage` numbers, the timestamp of the last genuine captain prompt, that same record's own `uuid`, and the file's byte size.
+The id is there because the captain-approved path has to NAME the record it treated as the approval, and a clock reading cannot name one.
+Message content is never read and never printed; a record id is the same structural metadata as the origin fields above, not content.
 Every ambiguity resolves toward "the captain is here", because a false quiet costs a discarded conversation and a false busy costs one deferred reset.
 
 **An absent record is not evidence of absence.**
