@@ -99,6 +99,7 @@ backend (tmux or herdr; see "Auto-discovered supervisor pane" below):
   The shared `bin/fm-composer-lib.sh` owns the content decision after each backend captures and structurally identifies its own composer row.
   It preserves idle bordered composers such as claude's `│ > … │` and bare agent glyphs as empty, but a bare shell glyph is unknown unless inside a genuine bordered composer box; see `docs/herdr-backend.md` "Composer-emptiness safety" for the complete contract.
   `pane_input_pending` remains the tested predicate for callers that only need to know whether real unsubmitted text is present, but it is insufficient for an injection-safety decision because it cannot distinguish `empty` from `unknown`.
+  Stated limit on tmux: the reader sees the cursor row only, so a human's multi-line composer whose cursor sits on an empty continuation line reads `empty` while their typed text sits on the line above; the reproduction is in `docs/tmux-backend.md`, "claude's empty composer is padded with U+00A0".
 
 Either condition, or any composer verdict other than `empty`, defers the injection; the buffered escalation survives in `state/.subsuper-escalations` and is retried on the next housekeeping tick.
 In afk mode the composer guard is belt-and-suspenders (no human is typing), but it protects against the race window between the captain returning and their message landing, a dead shell, and the daemon's own previous injection sitting unsent.
@@ -126,8 +127,10 @@ border-aware detector as the composer guard.
 For herdr, normal idle-baseline submits are confirmed by native agent-state showing a real turn started; the ANSI-aware composer classifier remains the affirmative-empty pre-injection guard and conservative fallback for non-idle or unreadable baselines.
 A bordered-empty or ghost-only composer is recognized as empty where that backend uses composer confirmation, rather than mistaken for a swallowed Enter.
 `fm-send.sh` uses the same primitive and exits non-zero
-when a steer's Enter is positively swallowed, so firstmate learns an instruction
-did not land instead of leaving it unsubmitted.
+when the backend's own submit check reports the text did not go through, so
+firstmate learns an instruction did not land instead of leaving it unsubmitted.
+That refusal names its evidence rather than asserting a swallow, and tells the
+operator to read the pane before re-sending; `bin/fm-send.sh`'s header owns why.
 
 **Busy-queued Enter exception (tmux backend, opencode 1.18.4).** While opencode
 is mid-turn, Enter is accepted and queued for after the current turn but the
