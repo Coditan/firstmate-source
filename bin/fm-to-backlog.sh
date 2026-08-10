@@ -31,6 +31,11 @@
 # in the backlog has no title, so the chart it feeds would have no destination
 # and refuse to draw. Refusing here reports that at filing time instead, where
 # it is cheap to fix, rather than leaving orphan units nobody's chart shows.
+# A unit filed here is named under its chart at creation and needs nothing else.
+# The chart's other membership path, `data/<chart>/members`, is the retrofit case
+# only - an undertaking named OVER work that already exists - and must never be
+# used for a unit this script files, because two ways to assign one record would
+# put a second owner on one contract.
 #
 # WHY THREE KINDS ARE REFUSED
 # `captain` is the kind durable captain decisions carry, and those are owned by
@@ -241,17 +246,18 @@ while [ "$i" -lt "$UNIT_COUNT" ]; do
   # A slug that introduces `-decision-` composes an id bin/fm-decision-hold.sh
   # already owns, which spells a hold as <origin>-decision-<key>, and
   # bin/fm-sea-chart.sh reads that marker POSITIONALLY rather than by kind (its
-  # `dkey`, bin/fm-sea-chart.sh lines 291-293). A perfectly ordinary `ship` unit
-  # carrying it is therefore dropped from TAKEABLE (bin/fm-sea-chart.sh:423) and,
-  # once Done, listed under DECIDED (bin/fm-sea-chart.sh:391) as though the
-  # captain had settled it. This is refused rather than written down as an
+  # `dkey`). A perfectly ordinary `ship` unit carrying it is therefore dropped
+  # from TAKEABLE, whose filter requires `dkey` to be null, and once Done listed
+  # under DECIDED, whose `$decided` list is selected on the same `dkey`, as though
+  # the captain had settled it. This is refused rather than written down as an
   # accepted limit, because a limit that silently swallows units is missed on
   # reading and a refusal is not - which is the exact defect this script exists
   # to prevent - and because refusing keeps the header's claim true.
   # Only `-decision-` is refused. The neighbouring marker("fog") and
-  # marker("oos") parses at bin/fm-sea-chart.sh lines 413 and 416 are gated on
-  # .kind, and both of those kinds are already refused just above, so no slug can
-  # reach them and this refusal must not be widened without a new reason.
+  # marker("oos") parses that build the chart's `$fog` and `$out_of_course` are
+  # gated on .kind, and both of those kinds are already refused just above, so
+  # no slug can reach them and this refusal must not be widened without a new
+  # reason.
   case "${ID[i]}" in
     *-decision-*)
       fail "units[$i] (${SLUG[i]}) may not compose the id ${ID[i]}: it carries the reserved -decision- marker, which bin/fm-decision-hold.sh owns and bin/fm-sea-chart.sh parses positionally rather than by kind, so this unit would be dropped from the chart's takeable work and later read as a settled captain decision"

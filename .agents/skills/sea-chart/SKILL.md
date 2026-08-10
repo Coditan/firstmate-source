@@ -108,6 +108,14 @@ Each entry names its `kind` and `hold_kind` beside the `why`, because those two 
 A `marker-kind-mismatch` cause means the id and the kind disagree - the id claims a dark patch or a boundary and the kind does not - so one of the two is a typo, and the record is deliberately kept out of `takeable[]` until they agree rather than offered as work to pick up on a kind nobody can trust.
 The entries arrive `kind_defect` first and must be rendered in that order, under headings that keep the two apart: a kind the chart cannot classify can leave a whole section reading empty, while held or blocked ordinary work is only work this chart has no section for, and letting the second crowd out the first is how the empty sections went unnoticed in the first place.
 
+**Anything in `membership_defects[]`, directly under the member count.**
+These are lines of `data/<chart>/members` the assembler could not honour, and the member count is the number they call into question: a refused line is a record somebody wrote down as belonging here that the chart is not drawing.
+Render the `cause` beside the `why`, because the causes are different news and only one of them is about the record.
+A `contested` entry is the loud one and arrives first: two undertakings both claim that record, the chart draws it on neither, and `claimed_by` names the other one so the collision can be found from either chart.
+`qualified` and `malformed` entries were refused at the boundary - one home, bare ids - and `unresolvable` means the record is not in this home at all, which may equally mean it was deleted, renamed, or never lived here.
+A `redundant` entry costs nothing: the prefix rule already draws that record and the line merely says so twice.
+Never render a refused entry as a member, and never drop it: a member named and missing is invisible, while a member named and wrong is visible by eye.
+
 **Anything in `misfiled[]`, above the sections it calls into question.**
 These members carry an id marker and a record kind that disagree, and unlike an unplaced member most of them ARE drawn - a boundary filed with the fog kind sits under FOG, while OUT OF COURSE, which is where its id says to look for it, is drawn without it.
 Render the `marker` found and the `kind` found side by side, because the chart does not know which of the two is the typo and the reader has to decide.
@@ -148,6 +156,29 @@ In the legend, with its source:
 
 The assembler emits `navigation` as a pair for this reason, never as a boolean: there is no scalar for a renderer to turn into a lone badge.
 Whether a piece of work is destructive, irreversible, security-sensitive, or outward-facing is recorded nowhere per record and is not derived - that judgment stays the always-loaded rule in `AGENTS.md` sections 7 and 9.
+
+## When an undertaking is named over work that already exists
+
+A chart draws a record whose id is the chart id or begins with it, so work filed under an undertaking after that undertaking exists needs nothing further.
+Work that existed BEFORE the undertaking was named carries its own historical id and the prefix rule cannot see it - and it must not be renamed to fix that, because the backlog tool has no rename and renaming by hand breaks every reference that has already left this vessel.
+Such a chart draws zero members while its assignment is settled and written down, which is what this path exists for.
+
+Assign it in place instead: one bare record id per line in `data/<chart>/members`, beside the `question.md` and `report.md` the assembler already reads from that directory.
+`#` starts a comment and blank lines are ignored.
+Three rules bind, and the assembler enforces all three:
+
+- **One home, bare ids.**
+  A qualified or cross-home id is refused and named, never resolved.
+  Cross-vessel dependency is a blocker edge or a routed request.
+- **Exclusive.**
+  A record belongs to at most one undertaking.
+  Counted in two "what is left" views it leaves neither chart able to say whether it is finished for its own purposes.
+  A record that genuinely fits two undertakings is evidence that one of them is cut too coarsely, or that it is really two pieces of work - fix it by re-cutting the work, never by listing it twice.
+- **Retrofit only.**
+  Anything created after the undertaking exists is named under the chart at creation, `/to-backlog` included.
+  Adding such a record to the list assigns nothing, and the chart says so.
+
+The list is a hand-maintained second source and it rots, so read `membership_defects[]` on every chart drawn from one.
 
 ## Filing fog and course boundaries
 

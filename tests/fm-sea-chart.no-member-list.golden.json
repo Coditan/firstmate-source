@@ -1,0 +1,125 @@
+{
+  "chart": "voy",
+  "counts": {
+    "decisions": 1,
+    "folded": 0,
+    "misfiled": 1,
+    "possibly_answered": 0,
+    "records": 1,
+    "records_in_backlog": 2,
+    "unplaced": 1,
+    "unplaced_kind_defects": 1,
+    "withheld": 1,
+    "withheld_folded": 0
+  },
+  "decided": [
+    {
+      "closed": "2026-07-25",
+      "id": "voy-judge-decision-base",
+      "key": "base",
+      "title": "The base was settled"
+    }
+  ],
+  "decisions": [
+    {
+      "group": "voy",
+      "id": "voy-judge-decision-shape",
+      "key": "shape",
+      "owner": "(main)",
+      "role": "judge",
+      "summary": "Frage",
+      "variants": []
+    }
+  ],
+  "destination": {
+    "question": null,
+    "report": null,
+    "source": "backlog record",
+    "title": "Make the retrofit path exist"
+  },
+  "fog": [
+    {
+      "id": "voy-fog-retention",
+      "patch": "retention",
+      "title": "Retention is not sharp yet",
+      "why": "could not name it"
+    },
+    {
+      "id": "voy-oos-swapped",
+      "patch": "voy-oos-swapped",
+      "title": "A boundary filed with the fog kind",
+      "why": "never rises"
+    }
+  ],
+  "limits": [
+    "Where a judge ruled, this chart shows the formulation the judge gave. That the judge picked up every question the analysts raised is verified by nothing, so every folded record stays listed underneath.",
+    "Withheld decisions are found within the scope of THIS chart, by reading its own records back from the backlog. For every cause but unpaired-variant the fleet-wide decision board cannot count them at all, so a number here does not mean the board agrees; an unpaired variant is the one the board does list, as a variant of its group rather than as a decision.",
+    "This chart reads ONE home, the one it was pointed at. A decision recorded in a secondmate home is dropped before anything here is counted, because a secondmate owns its own undertakings and its own backlog. Nothing on this chart says anything about them, in either direction.",
+    "Fog is whatever somebody wrote down as fog. Nothing proves this course has no other dark patches.",
+    "An unsupervised marking means the work may be EDITED unsupervised. It never means it may LAND unsupervised.",
+    "Whether a piece of work is destructive, irreversible, security-sensitive, or outward-facing is recorded nowhere per record and is not derived here; that judgment stays the always-loaded rule in AGENTS.md sections 7 and 9.",
+    "A decision the captain rejects outright cannot be filed away today, because the closing path requires follow-up work that a refusal does not create. Such a decision can be shown here but not laid to rest."
+  ],
+  "membership": {
+    "members": 9,
+    "rule": "id is \"voy\" or begins with \"voy-\"; a longer undertaking sharing this prefix is drawn here too, which is the recoverable direction"
+  },
+  "misfiled": [
+    {
+      "belongs_as": "out-of-course",
+      "belongs_in": "OUT OF COURSE",
+      "drawn_in": "FOG",
+      "id": "voy-oos-swapped",
+      "kind": "fog",
+      "marker": "oos",
+      "title": "A boundary filed with the fog kind",
+      "why": "its id carries the -oos- marker, which files it under this chart as out-of-course, but its record kind is fog. Every section here places a member by its kind, so this record is drawn under FOG, and OUT OF COURSE is drawn without it. One of the two spellings is wrong and the chart cannot tell which: correct the kind to out-of-course, or rename the id if this record is not that."
+    }
+  ],
+  "out_of_course": [
+    {
+      "bound": "tracker",
+      "id": "voy-oos-tracker",
+      "title": "A second tracker",
+      "why": "out of course"
+    }
+  ],
+  "possibly_answered": [],
+  "schema": "fm-sea-chart.v1",
+  "takeable": [
+    {
+      "dangling_blocked_by": [],
+      "id": "voy-real-work",
+      "navigation": {
+        "landing": {
+          "mode": "no-mistakes",
+          "requires": "a supervised worker branches from the tip, reviews it as first reader, and drives it commit by commit through the pipeline"
+        },
+        "unsupervised_edit": true
+      },
+      "repo": "r",
+      "title": "Ordinary takeable work"
+    }
+  ],
+  "unplaced": [
+    {
+      "cause": "no-kind",
+      "hold_kind": null,
+      "id": "voy-fog-unheld",
+      "kind": null,
+      "kind_defect": true,
+      "title": "A dark patch filed with no record kind",
+      "why": "no kind is recorded on it, and every section of this chart places a member by its kind, so none of them can take it. File a dark patch on the course as kind fog, a deliberate boundary as kind out-of-course, and anything else as the kind of work it actually is; AGENTS.md section 10 has the commands. A hold kind is a different field and never places a record here."
+    }
+  ],
+  "withheld": [
+    {
+      "cause": "blocked",
+      "held_by": "voy-judge-decision-shape",
+      "id": "voy-judge-decision-detail",
+      "key": "detail",
+      "title": "Choose the detail",
+      "why": "blocked by another record that has not resolved, so it never reaches the actionable surface"
+    }
+  ]
+}

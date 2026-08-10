@@ -105,6 +105,13 @@ Of the five items the comparison was asked about, two came with Wayfinder in con
   Ours has no artefact at all: the chart id is the originating task id, and membership is a prefix rule over the backlog (`id == C` or `C-...`).
   The idea that an effort has one identity fixing its membership is Wayfinder's; the mechanism is ours.
   Ours is weaker in one named way - a prefix collision draws a longer undertaking's records in, which our own header discloses - where Wayfinder's edge cannot collide.
+  It was weaker in a second way the comparison did not catch, and that one was ours to fix.
+  Wayfinder can label an issue into a map at any time, because its edge is a separate artefact from the issue.
+  Ours made membership the identifier itself, so an undertaking named OVER work that already existed could take that work in only by renaming it - and the backlog tool has no rename, while renaming by hand breaks every reference that has already left the vessel.
+  Measured on the seat that raised it, six of seven named undertakings drew zero members while their assignment was settled and written down (2026-08-10).
+  Since then membership is a union: the prefix rule, or an explicit `data/<chart>/members` list of bare record ids.
+  The list is the retrofit path only - anything created after its undertaking exists is still named under the chart at creation - and it is exclusive, so two lists naming one record are reported and the record is drawn on neither chart.
+  `bin/fm-sea-chart.sh` owns the full rule and the reasons; this notes only that the retrofit half is ours as well, and that it recovers the one thing Wayfinder's explicit edge could always do and our prefix rule could not.
 - **Three incompleteness numbers - ours entirely.**
   Wayfinder has no analogue and needs none, because its map is authored and there is no gap between what exists and what the surface returns.
   Ours is derived from a lossy upstream surface, and the numbers exist to measure that loss.
