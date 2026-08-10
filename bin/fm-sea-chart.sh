@@ -97,13 +97,26 @@
 # `claimed-elsewhere`. A prefix claim is not something a third party can edit
 # away, so nothing drawing today stops drawing; the record ends up on exactly one
 # chart, which is what makes the exclusivity above real rather than asserted.
-# One residual overlap is NOT caught, and the chart says so in `limits[]`: a
-# prefix owner that is not itself a record in this home's backlog or archive - an
-# undertaking whose destination comes only from question.md or report.md. Catching
-# that would mean knowing every undertaking there is rather than every record.
-# It has no instance in this fleet either - across 843 live and archived record
-# ids, no id is a name-boundary prefix of another (measured 2026-08-10) - which is
-# why the residue is disclosed rather than guessed at.
+# Prefix nesting is the ORDINARY case here, not a rarity: measured 2026-08-10 on
+# this home, 845 live and archived record ids carry 142 child records under 51
+# distinct parents, overwhelmingly `<origin>-decision-<key>` holds - which is the
+# naming convention the prefix rule was built for in the first place. So the
+# owner of a listed id is nearly always a real record, and nearly always found.
+# (An earlier revision of this comment claimed the opposite, that no id was a
+# name-boundary prefix of another. That was a false measurement: the jq that
+# produced it read `$e | startswith(. + "-")`, where `.` binds to `$e` rather
+# than to the candidate parent, so the test could never be true. It is recorded
+# here rather than quietly deleted, because a measurement is a claim and a wrong
+# one that leaves no trace is how the next reader repeats it.)
+# One residual overlap is still NOT caught, and the chart says so in `limits[]`:
+# an owner that is a bare chart root - no record of its own beneath it, no member
+# list, no panel question - is indistinguishable from ordinary retrofit material
+# from the reaching side, because every record could be somebody's undertaking.
+# What is deliberately NOT used as evidence is the mere existence of
+# `data/<id>/`: 287 of those 845 ids have one and most hold only a brief.md, so
+# it marks a record that was once dispatched as a task, which is exactly what a
+# retrofit target is. Refusing on it would refuse about a third of the work this
+# path exists to assign.
 #
 # THE DESTINATION IS READ, NEVER INVENTED, AND A CHART CANNOT EXIST WITHOUT ONE
 # Three sources, in order: the originating undertaking's own backlog title; the
@@ -391,6 +404,24 @@ CLAIMS_JSON=$(printf '%s' "$MEMBER_CLAIMS" | jq -R -s -c '
 LISTED_RAW=$(printf '%s' "$CLAIMS_JSON" | jq -c --arg chart "$CHART" \
   '[ .[] | select(.chart == $chart) | .id ] | unique')
 
+# FILE EVIDENCE THAT AN ID IS AN UNDERTAKING IN ITS OWN RIGHT.
+# Used by the ownership test below, where a member list reaching for a record
+# another chart owns has to be refused rather than honoured. Only a member list
+# or a panel question counts: a chart has either of those because somebody
+# curated it as a chart. The bare existence of `data/<id>/` is deliberately NOT
+# evidence - the header carries the measurement, but in short it marks a record
+# that was once dispatched as a task, which is precisely what retrofit material
+# is, so refusing on it would refuse the work this path exists to assign.
+CHART_ROOT_FILES=$(
+  for f in "$DATA"/*/members "$DATA"/*/question.md; do
+    [ -f "$f" ] || continue
+    basename "$(dirname "$f")"
+  done
+)
+CHART_ROOTS_JSON=$(printf '%s' "$CHART_ROOT_FILES" | jq -R -s -c \
+  'split("\n") | map(select(length > 0)) | unique | map({key: ., value: true}) | from_entries') \
+  || die "cannot read the chart directories under $DATA"
+
 # The collapse rule stays owned by the board's inventory; this only scopes it.
 CAPTURE_FILE=$(mktemp "${TMPDIR:-/tmp}/fm-sea-chart.XXXXXX") || die "cannot create a temporary capture"
 SCOPED_CAPTURE=$(mktemp "${TMPDIR:-/tmp}/fm-sea-chart.XXXXXX") || die "cannot create a temporary capture"
@@ -470,6 +501,7 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   --arg member_file "$MEMBER_FILE" \
   --argjson listed_raw "$LISTED_RAW" \
   --argjson claims "$CLAIMS_JSON" \
+  --argjson chart_roots "$CHART_ROOTS_JSON" \
   --argjson modes "$MODE_MAP" \
   --arg fog_kind "$FM_CHART_KIND_FOG" \
   --arg oos_kind "$FM_CHART_KIND_OUT_OF_COURSE" \
@@ -626,8 +658,24 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # nobody keeps - so it costs no new contract and rots with nothing. The most
   # specific owner wins: a longer id is the nearer claim, and the shorter one has
   # its own ambiguity stated in the header already.
-  def prefix_owner($known): . as $e
-    | [ ($known | keys_unsorted[]) as $p | select($e | startswith($p + "-")) | $p ]
+  # Structural evidence that an id heads an undertaking of its own, which is what
+  # makes an entry naming it a record another chart owns rather than ordinary
+  # retrofit material. Only hard signals count, never prose: records of its own
+  # beneath it, its own member list, or its own panel question. The mere presence
+  # of a data directory is deliberately excluded and the header says why.
+  # This is the ONLY thing that lets an entry be owned by the id it already is,
+  # and the narrowness is the whole point: any record at all could be made an
+  # undertaking, so treating a bare record as one would refuse every retrofit,
+  # which is the path this exists to open.
+  def heads_an_undertaking($known; $roots): . as $c
+    | ($roots[$c] == true) or any($known | keys_unsorted[]; startswith($c + "-"));
+
+  def prefix_owner($known; $roots): . as $e
+    | [ ($known | keys_unsorted[]) as $p
+        | select($p != $chart)
+        | select(($e | startswith($p + "-"))
+                 or ($p == $e and ($p | heads_an_undertaking($known; $roots))))
+        | $p ]
     | sort_by(length) | last;
 
   # The clause order is the order of the news, and the two clauses that turn on
@@ -643,8 +691,8 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # two destinations at once with nothing to break the tie. `redundant` comes last
   # because it withdraws nothing: the prefix rule has the record either way, and
   # the line merely says so twice.
-  def member_list_defect($foreign; $known): . as $e
-    | ($e | prefix_owner($known)) as $owner
+  def member_list_defect($foreign; $known; $roots): . as $e
+    | ($e | prefix_owner($known; $roots)) as $owner
     | if ($e | index("/")) != null
       then {id: $e, cause: "qualified",
             why: "it names a record with a home qualifier, and this chart reads ONE home - the backlog and the archive it was pointed at. Resolving it would reach into the backlog of another home and put a second owner on that home, which is the same boundary this chart already holds when it drops the records of a secondmate before anything is counted. Cross-vessel dependency is a blocked-by edge or a routed request, both of which already exist. The entry is refused rather than resolved."}
@@ -656,7 +704,10 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
             why: "it is already a member by the prefix rule - its id is \"\($chart)\" or begins with \"\($chart)-\" - so this line assigns nothing and the record is drawn either way. The list is the retrofit path for work that already existed when this undertaking was named; anything named under the chart is assigned by its id alone. Two ways to assign one record put a second owner on one contract: delete the line."}
       elif $owner != null and $known[$e] == true
       then {id: $e, cause: "owned-elsewhere", claimed_by: [$owner],
-            why: "its id places it under \($owner) by construction - it begins with \"\($owner)-\", and \($owner) is a record of this home - so the prefix rule already owns it there. A member list cannot take a record the prefix rule holds: the id is what the fleet and everything that has left this vessel already go by, and a line here cannot edit that. Honouring it would draw one record on two charts, and then neither could say whether it is finished for its own purposes. The entry is refused and the record keeps drawing on \($owner), whose page names this line as a foreign claim. Delete the line, or re-cut the work so it really belongs to one undertaking."}
+            why: ((if $owner == $e
+                   then "its id IS the name of an undertaking of this home, and that undertaking carries records of its own beneath it, a member list, or a panel question - so it heads a chart rather than sitting on one. "
+                   else "its id places it under \($owner) by construction - it begins with \"\($owner)-\", and \($owner) is a record of this home - so the prefix rule already owns it there. " end)
+                  + "A member list cannot take a record the prefix rule holds: the id is what the fleet and everything that has left this vessel already go by, and a line here cannot edit that. Honouring it would draw one record on two charts, and then neither could say whether it is finished for its own purposes. The entry is refused and the record keeps drawing on \($owner). Delete the line, or re-cut the work so it really belongs to one undertaking.")}
       elif $foreign[$e] != null
       then {id: $e, cause: "contested", claimed_by: $foreign[$e],
             why: "the member list of this chart names it, and so does the list of \($foreign[$e] | join(", ")). No record owns it by prefix either, so nothing decides the tie by construction. A record belongs to at most one undertaking: counted in two \"what is left\" views it leaves neither chart able to say whether it is finished for its own purposes. This chart draws it in NEITHER rather than pick a winner. A record that genuinely fits two undertakings is evidence that one of them is cut too coarsely, or that it is really two pieces of work - both fixed by re-cutting the work, never by listing it twice."}
@@ -687,7 +738,7 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   | ([ $claims[] | select(.chart != $chart) ] | group_by(.id)
      | map({key: .[0].id, value: ([ .[].chart ] | unique)}) | from_entries) as $foreign_claims
   | ([ $listed_raw[]
-       | member_list_defect($foreign_claims; $known)
+       | member_list_defect($foreign_claims; $known; $chart_roots)
        | select(. != null)
        | {id, cause, claimed_by: (.claimed_by // []), why} ]) as $own_defects
   # Refused entries assign nothing. `redundant` is the one cause here that does
@@ -710,7 +761,7 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   ([ $foreign_claims | to_entries[]
      | select(prefix_member(.key) and $known[.key] == true)
      | {id: .key, cause: "claimed-elsewhere", claimed_by: .value,
-        why: "the member list of \(.value | join(", ")) names it, and this chart owns it by construction: its id is \"\($chart)\" or begins with \"\($chart)-\". It is STILL DRAWN here. A prefix claim is not something another chart can take away by writing a line, and nothing drawing today may stop drawing because a file elsewhere was edited. The other chart refuses the entry on its own page and does not draw it, so the record stays on one chart rather than two. The foreign line is the one to delete."} ]) as $foreign_defects
+        why: "the member list of \(.value | join(", ")) names it, and this chart owns it by construction: its id is \"\($chart)\" or begins with \"\($chart)-\". It is STILL DRAWN here. A prefix claim is not something another chart can take away by writing a line, and nothing drawing today may stop drawing because a file elsewhere was edited. The foreign line is the one to delete. This row says what THIS chart does and claims nothing about the other page: a chart reaching for a record refuses it only when the owner is visible from that side, and an owner with no records of its own beneath it, no member list and no panel question is not - which is why the report lives here, on the side that can always see it."} ]) as $foreign_defects
   | (($own_defects + $foreign_defects)
      | sort_by(if .cause == "contested" then 0
                elif .cause == "claimed-elsewhere" or .cause == "owned-elsewhere" then 1
@@ -1043,14 +1094,22 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
       # has to check against nothing.
       limits: ([
         "Where a judge ruled, this chart shows the formulation the judge gave. That the judge picked up every question the analysts raised is verified by nothing, so every folded record stays listed underneath.",
-        "Withheld decisions are found within the scope of THIS chart, by reading its own records back from the backlog. For every cause but unpaired-variant the fleet-wide decision board cannot count them at all, so a number here does not mean the board agrees; an unpaired variant is the one the board does list, as a variant of its group rather than as a decision.",
+        # The exception clause is extended only when a member list was read, and
+        # that is not squeamishness about the golden: folded-elsewhere cannot
+        # arise without one. Every member of a listless chart is a prefix member,
+        # its collapse group IS this chart, and the whole-group branch is taken -
+        # so on that page the shorter sentence is not a trimmed truth, it is the
+        # whole of it.
+        ("Withheld decisions are found within the scope of THIS chart, by reading its own records back from the backlog. For every cause but unpaired-variant the fleet-wide decision board cannot count them at all, so a number here does not mean the board agrees; an unpaired variant is the one the board does list, as a variant of its group rather than as a decision."
+         + (if $member_file == "" then ""
+            else " This chart was drawn from a member list, so folded-elsewhere is a second cause the board does carry, as a variant under the ruling of the undertaking whose id that record bears." end)),
         "This chart reads ONE home, the one it was pointed at. A decision recorded in a secondmate home is dropped before anything here is counted, because a secondmate owns its own undertakings and its own backlog. Nothing on this chart says anything about them, in either direction.",
         "Fog is whatever somebody wrote down as fog. Nothing proves this course has no other dark patches.",
         "An unsupervised marking means the work may be EDITED unsupervised. It never means it may LAND unsupervised.",
         "Whether a piece of work is destructive, irreversible, security-sensitive, or outward-facing is recorded nowhere per record and is not derived here; that judgment stays the always-loaded rule in AGENTS.md sections 7 and 9.",
         "A decision the captain rejects outright cannot be filed away today, because the closing path requires follow-up work that a refusal does not create. Such a decision can be shown here but not laid to rest."
       ] + (if $member_file == "" and ($member_defects | length) == 0 then []
-           else ["Membership beyond the prefix rule is whatever a member list in this home names. Two member lists naming one record are caught here and the record is drawn on neither chart. A listed record sitting inside ANOTHER undertaking prefix namespace is caught too, whenever that owner is itself a record of this home: it keeps drawing on its owner, the chart that listed it refuses the entry, and both pages say so. What is NOT caught is a prefix owner that is not itself a record in this backlog or archive - an undertaking whose destination comes only from question.md or report.md - because catching that would mean knowing every undertaking there is rather than every record."]
+           else ["Membership beyond the prefix rule is whatever a member list in this home names. Two member lists naming one record are caught here and the record is drawn on neither chart. A listed record sitting inside ANOTHER undertaking prefix namespace is caught too, whenever that owner is itself a record of this home: it keeps drawing on its owner, the chart that listed it refuses the entry, and both pages say so. What is NOT caught is an owner that is a bare record - nothing of its own filed beneath it, no member list, no panel question - because from the reaching side that is indistinguishable from ordinary work an undertaking was named over, which is exactly what a member list is for. Such a record is still reported on the page of the chart that owns it."]
            end))
     }
 ') || die "chart projection failed"

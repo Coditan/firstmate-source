@@ -1235,8 +1235,8 @@ EOF
     || fail "the chart must name the list it read, or a wrong member cannot be traced to its line"
   # A permanent path, not a migration: the disclosure of what it cannot check is
   # printed with it rather than filed in documentation somebody has to find.
-  assert_contains "$(printf '%s' "$out" | jq -r '.limits|join(" ")')" "not itself a record in this backlog or archive" \
-    "a chart drawn from a member list must print the overlap that list still cannot catch, and that is a prefix owner this home holds no record for"
+  assert_contains "$(printf '%s' "$out" | jq -r '.limits|join(" ")')" "bare record" \
+    "a chart drawn from a member list must print the overlap that list still cannot catch, and that is now an owner with nothing filed beneath it and no chart files of its own - an owner reachable only from its own page"
   pass "an existing record joins an undertaking through the member list, with no id change anywhere"
 }
 
@@ -1567,13 +1567,19 @@ EOF
   voy=$(chart_json "$home" voy "$cap")
   grp=$(chart_json "$home" grp "$cap")
 
-  # The listed record itself is drawn - that is what the line asked for.
-  [ "$(printf '%s' "$voy" | jq -r '[.takeable[].id]|index("grp")')" != "null" ] \
-    || fail "the record the line actually names must still be drawn, or the retrofit path assigns nothing"
-  # Its group siblings are not, in any section and not as a folded variant either.
+  # The listed record itself is REFUSED, and this is the stricter rule that
+  # superseded an earlier one here. `grp` has records filed beneath it, which is
+  # structural evidence that it heads an undertaking of its own - so it is owned
+  # by construction and a member list cannot take it. Drawing it on voy would be
+  # the same record on two charts, one line down from the group take this test
+  # already forbids.
+  [ "$(printf '%s' "$voy" | jq -r '.membership_defects[]|select(.id=="grp")|.cause')" = "owned-elsewhere" ] \
+    || fail "a listed id that heads an undertaking of its own must be refused, not drawn: it is owned by construction and a line cannot take it"
+  # Neither the record nor its group siblings reach this chart, in any section,
+  # and not as a folded variant either.
   case "$(printf '%s' "$voy" | jq -r '[.decisions[].id, (.decisions[]|.variants[]?.id), .withheld[].id, .takeable[].id, .unplaced[].id]|join(",")')" in
-    *grp-judge-decision-shape*|*grp-a-decision-shape*)
-      fail "a member list line names ONE record: taking the group around it draws records that are members of neither rule, and that is one record on two charts" ;;
+    *grp*)
+      fail "a member list line names ONE record: taking the group around it, or the owned record itself, draws records that are members of neither rule, and that is one record on two charts" ;;
   esac
   [ "$(printf '%s' "$voy" | jq -r '.counts.records')" = 0 ] \
     || fail "no record of that group reached this chart, so the count of what did must not claim otherwise"
@@ -1584,7 +1590,7 @@ EOF
     || fail "the owning chart must still draw its own ruling"
   [ "$(printf '%s' "$grp" | jq -r '[.decisions[]|.variants[].id]|join(",")')" = "grp-a-decision-shape" ] \
     || fail "the owning chart must still draw the variant folded under its ruling"
-  pass "a member list line naming a group id assigns that record only, and its group siblings stay on the chart that owns them"
+  pass "a member list line naming a group id assigns nothing, and that group stays whole on the chart that owns it"
 }
 
 test_a_foreign_claim_on_a_prefix_owned_record_is_refused_there_and_reported_here() {
@@ -1645,8 +1651,8 @@ EOF
   esac
   # And the printed disclosure names what is STILL uncaught rather than a case the
   # chart now catches, because a false limit is the fault this script exists on.
-  assert_contains "$(printf '%s' "$voy" | jq -r '.limits|join(" ")')" "not itself a record in this backlog or archive" \
-    "the limit must name the residual case - a prefix owner this home holds no record for - now that the record-owned case is caught"
+  assert_contains "$(printf '%s' "$voy" | jq -r '.limits|join(" ")')" "bare record" \
+    "the limit must name what is STILL uncaught - an owner with nothing filed beneath it and no chart files of its own - now that an owner heading an undertaking is caught"
   pass "a foreign claim on a prefix-owned record is refused there and reported here, so the record is drawn exactly once"
 }
 
@@ -1688,6 +1694,85 @@ test_an_unreadable_member_list_is_fatal_rather_than_silently_empty() {
   assert_contains "$out" "$home/data/other/members" \
     "the refusal must name the foreign list it could not read"
   pass "an unreadable member list is fatal rather than degraded into an empty one"
+}
+
+test_an_owner_that_heads_an_undertaking_is_refused_on_the_chart_that_reached_for_it() {
+  # THE MIRROR, AND THE LINE IT IS DRAWN ON. A record is drawn EXACTLY ONCE: on
+  # the chart whose name its id carries. The chart that reached for it refuses the
+  # entry, so exclusivity is real rather than asserted on one page.
+  # The line is structural evidence and nothing else - records of its own beneath
+  # it, its own member list, or its own panel question. It cannot be "is this a
+  # chart", because ANY record can be made one, and a rule that answered yes to
+  # every record would refuse every retrofit and close the path this exists to
+  # open. That failure is pinned in the sibling test below; the two are a pair
+  # and neither should be relaxed without reading the other.
+  local home cap voy other
+  home=$(make_home ownermirror)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The reaching undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] other - A chart root with work filed under it (repo: r) (kind: ship) (since 2026-07-01)
+- [ ] other-part - Filed under that undertaking (repo: r) (kind: ship) (since 2026-07-01)
+EOF
+  mkdir -p "$home/data/voy"
+  printf 'other\n' > "$home/data/voy/members"
+  cap=$(capture ownermirror)
+
+  voy=$(chart_json "$home" voy "$cap")
+  other=$(chart_json "$home" other "$cap")
+  [ "$(printf '%s' "$voy" | jq -r '.membership_defects[]|select(.id=="other")|.cause')" = "owned-elsewhere" ] \
+    || fail "a listed record that heads an undertaking of its own must be refused on the chart that reached for it"
+  case "$(printf '%s' "$voy" | jq -r '[.takeable[].id]|join(",")')" in
+    *other*) fail "the reaching chart must NOT draw a record another undertaking owns by construction - that is one record on two charts" ;;
+  esac
+  # The owner is unaffected: it keeps drawing, and reports the foreign line.
+  [ "$(printf '%s' "$other" | jq -r '.membership_defects[]|select(.id=="other")|.cause')" = "claimed-elsewhere" ] \
+    || fail "the owning chart must report the foreign line that reached for its record"
+  # THE PROMISE THAT COULD NOT BE KEPT. This row once asserted what the OTHER page
+  # does. No implementation can make that true in general: an owner with nothing
+  # beneath it is invisible from the reaching side, so the sentence would be false
+  # exactly when it mattered. It must speak only for the page it is printed on.
+  case "$(printf '%s' "$other" | jq -r '.membership_defects[]|select(.id=="other")|.why')" in
+    *"The other chart refuses the entry on its own page"*)
+      fail "this row must not promise what another page does: an owner with no records beneath it is undetectable from the reaching side, so the promise is false exactly when it matters" ;;
+  esac
+  pass "a record owned by an undertaking is drawn once, on its owner, and the reaching chart refuses it"
+}
+
+test_a_bare_record_is_still_retrofittable_and_never_reads_as_owning_itself() {
+  # THE SELF-DEFEAT THIS GUARDS. Ownership is decided by asking which record id an
+  # entry sits under. Let an entry count as its OWN owner and every resolvable
+  # entry resolves to itself, every one is refused as owned-elsewhere, and the
+  # retrofit path - the whole feature - refuses itself. Measured while building
+  # this: with self-ownership admitted, `legacy-reader` resolves to owner
+  # `legacy-reader`. Only structural evidence that an id heads an undertaking
+  # lifts a record out of retrofit material, and a bare record has none.
+  local home cap out
+  home=$(make_home bareretrofit)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] legacy-reader - A bare record: nothing filed beneath it, no chart files (repo: r) (kind: ship) (since 2026-07-01)
+EOF
+  mkdir -p "$home/data/voy"
+  printf 'legacy-reader\n' > "$home/data/voy/members"
+  cap=$(capture bareretrofit)
+  out=$(chart_json "$home" voy "$cap")
+
+  [ "$(printf '%s' "$out" | jq -r '[.takeable[].id]|index("legacy-reader")')" != "null" ] \
+    || fail "a bare record must stay retrofittable: if a record can own itself, every entry is refused and the member list assigns nothing at all"
+  [ "$(printf '%s' "$out" | jq -r '.membership_defects|length')" = 0 ] \
+    || fail "a bare record carries no ownership evidence, so reaching for it is not a defect"
+  [ "$(printf '%s' "$out" | jq -r '.membership.from_list')" = 1 ] \
+    || fail "the retrofitted record must be counted as assigned by the list"
+  # And the chart says on its own page which overlap it still cannot see.
+  assert_contains "$(printf '%s' "$out" | jq -r '.limits|join(" ")')" "bare record" \
+    "the chart must disclose that a bare owner is the case it cannot catch from the reaching side"
+  pass "a bare record stays retrofittable and is never read as owning itself"
 }
 
 test_the_chart_prints_its_own_limits_and_does_not_soften_them() {
@@ -1774,6 +1859,8 @@ test_a_member_the_fold_hung_under_a_foreign_ruling_is_named_with_a_true_cause
 test_a_member_list_line_naming_a_group_id_never_drags_that_group_onto_this_chart
 test_a_foreign_claim_on_a_prefix_owned_record_is_refused_there_and_reported_here
 test_an_unreadable_member_list_is_fatal_rather_than_silently_empty
+test_an_owner_that_heads_an_undertaking_is_refused_on_the_chart_that_reached_for_it
+test_a_bare_record_is_still_retrofittable_and_never_reads_as_owning_itself
 test_the_chart_prints_its_own_limits_and_does_not_soften_them
 test_the_chart_is_read_only
 test_both_surfaces_state_the_boundary_between_them

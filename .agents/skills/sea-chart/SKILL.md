@@ -189,6 +189,11 @@ Three rules bind, and the assembler enforces all three:
 The list is a hand-maintained second source and it rots, so read `membership_defects[]` on every chart - including a chart with no list of its own, which is where another chart's wrong line about it shows up.
 An unreadable list is refused outright rather than read as empty, because a list quietly treated as empty shrinks the page and stops the exclusivity check firing at all.
 
+What counts as an undertaking already owning a record is **structural evidence only**, never a judgement about what looks important: records filed beneath it, a member list of its own, or its own panel question.
+It deliberately does not include merely having a `data/<id>/` directory, which most records that were ever dispatched have, and which is exactly what retrofit material looks like.
+So one overlap remains uncatchable from the reaching side and the chart discloses it: an owner that is a bare record, with nothing filed beneath it and no chart files of its own, is indistinguishable from ordinary work an undertaking was named over.
+Such a case still surfaces, as `claimed-elsewhere` on the page of the chart that owns the record - which is why that row speaks only for its own page and never promises what the other one does.
+
 ## Filing fog and course boundaries
 
 The chart reads them; it never files them.
