@@ -12,7 +12,9 @@
 # consumes it. bin/fm-context-reset.sh refuses without a receipt, refuses on a
 # receipt older than FM_CONTEXT_RECEIPT_MAX_AGE, refuses once the transcript has
 # advanced past FM_CONTEXT_RECEIPT_MAX_GROWTH_BYTES beyond it, and refuses if the
-# captain has said anything since it was written.
+# captain has said anything since it was written. That tool owns its own refusals
+# and is where the exceptions live - on its --captain-approved path the age bound
+# is replaced by the requirement that this receipt was filed after the approval.
 #
 # WHAT THIS RECEIPT IS, STATED HONESTLY
 # It is an ATTESTATION, not a proof. Whether a semantic sweep actually caught

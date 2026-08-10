@@ -102,7 +102,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-watch.sh`            | Singleton-safe daemon watcher that absorbs benign wakes and durably queues actionable ones |
 | `fm-context-lib.sh`      | The context-ceiling predicates and branch classification - size, quiet boundary, captain presence, receipt freshness, re-entry path, blocked, ask, reset, and unenforced - shared by the watcher and the reset tool (docs/context-reset.md) |
 | `fm-stow-receipt.sh`     | Record that this session's durable knowledge was filed, bound to the transcript position it was filed at |
-| `fm-context-reset.sh`    | Verify the receipt, the quiet boundary, and the way back in, then clear this session; refuses loudly and discards nothing on any failure |
+| `fm-context-reset.sh`    | Verify the receipt, the quiet boundary, and the way back in, then clear this session; refuses loudly and discards nothing on any failure. `--captain-approved` is the path for a reset the captain asked for, where the approval replaces the idle inference and the receipt must postdate it (docs/context-reset.md) |
 | `fm-tg-recv-arm.sh`      | Verified home-scoped direct Telegram receiver arm wrapper with attach-or-start behavior |
 | `fm-afk-start.sh`        | Run the common sourceable away-mode daemon entry in the foreground                      |
 | `fm-afk-launch.sh`       | Own away-mode entry, exit, rollback, and any backend terminal lifecycle                 |

@@ -24,6 +24,12 @@ Exactly one of those four branches orders this sweep: the reset branch, which fi
 Only its wake names `/stow` and then, in the same turn, the receipt and reset commands.
 The other three branches - a captain who is present or in away mode, a broken re-entry path, or a session that cannot be measured at all - carry a diagnosis, never that order, so a wake that does not name those commands is never authority to run them.
 
+A captain who is asked and answers yes is a second caller, and the only one that is not a wake.
+The ask branch reports a present captain; asking them is what section 8 requires, and their answer, not the wake, is the authority.
+On that answer this sweep runs in the same turn as the receipt and then `bin/fm-context-reset.sh --captain-approved`, which is the only path that can complete a reset the captain asked for - the ordinary path applies an idle window measured from the moment they spoke to approve it, and refuses.
+`docs/context-reset.md` owns that path, including what it can and cannot establish about what the captain meant, and the tool's own help owns its mechanics.
+Nothing here lets the flag stand in for the answer: with no captain approval there is no approved path, only the wake's diagnosis.
+
 - **The sweep is the only judgement in an otherwise mechanical path, so its thoroughness is what makes the reset honest.**
   Whether a semantic sweep caught every durable fact cannot be checked mechanically, so the receipt can only attest to this sweep, never verify it, and a thin sweep still produces a structurally valid receipt (`docs/context-reset.md`, "What the receipt is, and what it is not").
 - **Run the sweep and its receipt in the single turn the wake asks for, and do not pause to report progress between them.**
