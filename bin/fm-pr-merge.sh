@@ -55,11 +55,22 @@
 #     inside this path.
 # The title is read with plain `gh` rather than gh-axi because only `gh` exposes
 # a single field as machine-readable output (-q); bin/fm-pr-check.sh reads
-# pr_head the same way for the same reason. An unreadable title is refused too,
-# and says so distinctly: this path cannot tell a real title from a placeholder
-# without reading it, and `gh` is already required for the merge itself.
-# Usage: fm-pr-merge.sh [--allow-placeholder-title] <task-id> <pr-url>
-#          [-- <extra gh-axi pr merge args>]
+# pr_head the same way for the same reason. The read is retried a small, fixed
+# number of times so a rate limit or a network blip does not become a refusal on
+# the first attempt; the ceiling is explicit because an unbounded retry is a hang
+# rather than a fix.
+#
+# A title that could not be read after those attempts is refused too, and says so
+# distinctly: this path cannot tell a real title from a placeholder without
+# reading it. "This title is a placeholder" and "I could not read this title" are
+# two different facts, so they get two different messages and two different
+# escapes. --allow-unreadable-title says only that the caller is proceeding
+# without having read the title, and never lets a title that was read and does
+# match a placeholder through; --allow-placeholder-title lands a read placeholder
+# deliberately, and never lets an unread title through. Collapsing the two would
+# make an operator assert something they do not know in order to merge.
+# Usage: fm-pr-merge.sh [--allow-placeholder-title] [--allow-unreadable-title]
+#          <task-id> <pr-url> [-- <extra gh-axi pr merge args>]
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -76,10 +87,15 @@ fm_axi_prepend_path "$FM_HOME"
 # This path's own options are read before the positional arguments, so they can
 # never collide with a gh-axi flag forwarded after the -- separator.
 ALLOW_PLACEHOLDER_TITLE=0
+ALLOW_UNREADABLE_TITLE=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --allow-placeholder-title)
       ALLOW_PLACEHOLDER_TITLE=1
+      shift
+      ;;
+    --allow-unreadable-title)
+      ALLOW_UNREADABLE_TITLE=1
       shift
       ;;
     *) break ;;
@@ -147,18 +163,48 @@ PLACEHOLDER_TITLES=(
   'chore: update pull request'
 )
 
+# `tr` rather than ${var,,} so this guard also runs on the bash 3.2 that a stock
+# macOS still ships; a bad substitution here would abort the very merge path this
+# guard exists to make trustworthy.
+lowercase() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
 title_is_placeholder() {
   local candidate=$1 known
   candidate=${candidate//$'\r'/}
   candidate="${candidate#"${candidate%%[![:space:]]*}"}"
   candidate="${candidate%"${candidate##*[![:space:]]}"}"
-  candidate=${candidate,,}
+  candidate=$(lowercase "$candidate")
   for known in "${PLACEHOLDER_TITLES[@]}"; do
-    if [ "$candidate" = "${known,,}" ]; then
+    if [ "$candidate" = "$(lowercase "$known")" ]; then
       return 0
     fi
   done
   return 1
+}
+
+# A transient read failure - a rate limit, a network blip, a token momentarily
+# short of read scope - must not be reported as a title that cannot be read, so
+# the read gets a few attempts. The count is fixed and small: this sits in front
+# of a merge an operator is waiting on.
+TITLE_READ_ATTEMPTS=3
+TITLE_READ_RETRY_DELAY=1
+
+read_pr_title() {
+  local attempt=1 title
+  command -v gh >/dev/null 2>&1 || return 1
+  while :; do
+    if title=$(gh pr view "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" \
+      --json title -q .title 2>/dev/null) \
+      && [ -n "${title//[[:space:]]/}" ]; then
+      printf '%s' "$title"
+      return 0
+    fi
+    [ "$attempt" -lt "$TITLE_READ_ATTEMPTS" ] || return 1
+    attempt=$((attempt + 1))
+    sleep "$TITLE_READ_RETRY_DELAY"
+  done
 }
 
 # Task-derived paths are constructed only after the canonical ID validation.
@@ -169,26 +215,34 @@ if [ ! -f "$META" ] || [ -L "$META" ]; then
 fi
 
 # Refuse a placeholder title before any state is recorded and before the merge,
-# because the subject line it would produce cannot be repaired afterwards.
-if [ "$ALLOW_PLACEHOLDER_TITLE" -eq 0 ]; then
-  PR_TITLE=
-  if command -v gh >/dev/null 2>&1; then
-    PR_TITLE=$(gh pr view "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" \
-      --json title -q .title 2>/dev/null) || PR_TITLE=
-  fi
-  if [ -z "${PR_TITLE//[[:space:]]/}" ]; then
+# because the subject line it would produce cannot be repaired afterwards. The
+# read runs even under --allow-placeholder-title, so that override can never
+# double as a way past a title nobody read.
+PR_TITLE=
+PR_TITLE_READ=0
+if PR_TITLE=$(read_pr_title); then
+  PR_TITLE_READ=1
+fi
+
+if [ "$PR_TITLE_READ" -eq 0 ]; then
+  if [ "$ALLOW_UNREADABLE_TITLE" -eq 0 ]; then
     cat >&2 <<EOF
-error: could not read the title of PR $PR_NUMBER in $PR_OWNER/$PR_REPO, so this
-       merge cannot tell a real title from the placeholder the validation
-       pipeline falls back to when its title drafting fails.
-remedy: make sure gh is installed and authenticated for that repository, then
-       re-run this merge. To merge without checking the title, re-run with
-       --allow-placeholder-title before the task id.
+error: could not read the title of PR $PR_NUMBER in $PR_OWNER/$PR_REPO, after up
+       to $TITLE_READ_ATTEMPTS attempts, so this merge does not know what the
+       title says. That is all this reports: the title was not read, not judged.
+remedy: the cause may be transient - a rate limit, a network failure, or a token
+       momentarily without read scope on that repository - in which case re-running
+       this merge is usually enough. It may also be that gh is not installed, or
+       not authenticated for that repository; check with
+         gh pr view $PR_NUMBER --repo $PR_OWNER/$PR_REPO --json title
+       To merge without having read the title, re-run with
+       --allow-unreadable-title before the task id. That flag asserts only that
+       you are proceeding unread, and nothing at all about what the title says.
 EOF
     exit 1
   fi
-  if title_is_placeholder "$PR_TITLE"; then
-    cat >&2 <<EOF
+elif [ "$ALLOW_PLACEHOLDER_TITLE" -eq 0 ] && title_is_placeholder "$PR_TITLE"; then
+  cat >&2 <<EOF
 error: PR $PR_NUMBER is titled "$PR_TITLE", which is the validation pipeline's
        placeholder for a title it could not draft, not a description of the
        change. Merging writes it into the merge commit's subject line, where it
@@ -199,8 +253,7 @@ remedy: give the PR a real title describing the change, then re-run this merge:
        To land this title deliberately, re-run with --allow-placeholder-title
        before the task id.
 EOF
-    exit 1
-  fi
+  exit 1
 fi
 
 "$SCRIPT_DIR/fm-pr-check.sh" "$ID" "$URL"
