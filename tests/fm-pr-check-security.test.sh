@@ -72,6 +72,10 @@ case " $* " in
     [ "${FM_TEST_GH_SLEEP:-0}" = 0 ] || sleep "$FM_TEST_GH_SLEEP"
     printf '%s\n' "${FM_TEST_GH_STATE:-OPEN}"
     ;;
+  # bin/fm-pr-merge.sh reads the title to refuse the validation pipeline's
+  # placeholder; these cases exercise URL and identifier safety, so they get an
+  # ordinary descriptive title. tests/fm-pr-merge.test.sh owns that guard.
+  *" title "*) printf '%s\n' "${FM_TEST_GH_TITLE:-fix(pipeline): fixture change}" ;;
 esac
 SH
   cat > "$fakebin/gh-axi" <<'SH'
