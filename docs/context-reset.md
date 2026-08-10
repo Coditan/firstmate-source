@@ -123,6 +123,12 @@ Every reset this mechanism has ever completed came through the autonomous branch
   An older yes with a newer message behind it refuses on the ordinary "the captain has spoken since the receipt was written".
 - **Away mode still refuses.**
   A captain present enough to approve a reset has returned, and away mode should be exited first.
+- **The approval is re-read immediately before the clear is typed**, and that check exists only on this path.
+  Every other check runs once, well before the harness probe, the pane resolution, and the `tmux display-message` round trips that follow it; the captain can type in that gap, and here the captain is present by construction, so it is an ordinary occurrence rather than an edge case.
+  The idle window is what covered that gap on the autonomous path, so dropping it is what opened it, and closing it belongs to the same change.
+  As the last act before the send, the last captain record is read again and compared against both the id and the timestamp of the record taken as the approval.
+  Anything else refuses and names both records; a transcript that can no longer be read refuses too, because nothing then shows the captain stayed silent.
+  The message says plainly that the captain spoke after approving and that a fresh approval is needed, so the answer is to go back and ask rather than to guess.
 
 ### What this path proves, and what it cannot
 
@@ -213,17 +219,18 @@ Repairing the nudge so it emits when the hook payload's `source` is `clear` is f
 ## Every refusal the reset tool makes
 
 Run `bin/fm-context-reset.sh --check` to evaluate all of them and clear nothing.
+They are listed in the order they are evaluated, which is the order they fire in when more than one is true.
 
 1. This home's `state/` directory is missing, or the recorded transcript is missing, in its error state, or unreadable.
 2. No live session holds this home's lock, that lock belongs to another session, or the recorded session is not the session running the command - only the session operating this home may reset itself.
 3. No receipt, a receipt not in its `ok` state, or one whose session, process, or transcript does not match.
-4. The receipt is older than its freshness bound, or its write time is unreadable or in the future. The freshness bound is not applied on the captain-approved path; refusal 10 replaces it there.
+4. The receipt is older than its freshness bound, or its write time is unreadable or in the future. The freshness bound is not applied on the captain-approved path; refusal 8 replaces it there.
 5. The transcript has moved on past the receipt, shrunk below it, or the receipt records no readable position at all. This one applies identically on both paths.
-6. The captain has spoken since the receipt was written.
-7. The captain's last message could not be established at all, from the receipt or from the transcript. Two unknowns must refuse rather than compare equal; see "an absent record is not evidence of absence" above. On the captain-approved path this is also the refusal for having no record to cite as the approval.
-8. Away mode is active - on either path.
-9. The captain has been active within `FM_CONTEXT_CAPTAIN_IDLE_SECS`. Not applied on the captain-approved path, where the approval replaces the inference; see "when the captain approves" above.
-10. On the captain-approved path only: the captain record carries no id the log could cite, its timestamp is unreadable, or the receipt was filed before it rather than after. A same-second filing reads as not-after and refuses, which biases the one ambiguous case toward refusing and costs at most a second.
+6. The captain's last message could not be established at all, from the receipt or from the transcript. Two unknowns must refuse rather than compare equal; see "an absent record is not evidence of absence" above. On the captain-approved path this is also the refusal for having no record to cite as the approval.
+7. The captain has spoken since the receipt was written.
+8. On the captain-approved path only: the captain record carries no id the log could cite, its timestamp is unreadable, or the receipt was filed before it rather than after. A same-second filing reads as not-after and refuses, which biases the one ambiguous case toward refusing and costs at most a second.
+9. Away mode is active - on either path.
+10. The captain has been active within `FM_CONTEXT_CAPTAIN_IDLE_SECS`. Not applied on the captain-approved path, where the approval replaces the inference; see "when the captain approves" above.
 11. The fleet is no longer quiet: an undrained wake, a routed request awaiting its reply, or a worker waiting on an answer.
 12. The re-entry hook is no longer wired: it no longer runs `bin/fm-sessionstart-nudge.sh` on a clear, or that script is gone. This checks the wiring, not that anything is injected; see "the way back in, precisely" above.
 13. Supervision is not running.
@@ -231,6 +238,7 @@ Run `bin/fm-context-reset.sh --check` to evaluate all of them and clear nothing.
 15. The harness is not `claude`, or the terminal backend is not `tmux` - including a backend that could not be detected at all, because the clear must never be typed on a guess.
 16. This session's own pane cannot be identified, or its target cannot be resolved.
 17. This session's own pane is in a tmux session whose name begins with `fm-`. That prefix is reserved: `bin/fm-send.sh` reads any such target as a recorded worker-task selector and looks for its metadata instead of resolving a live tmux endpoint, so the clear could never be typed. The refusal names that cause so an operator can rename the terminal session; it is a limitation of this mechanism on such homes, not a fault in the send path.
+18. On the captain-approved path only, and evaluated last, immediately before the clear is typed: the last captain record is no longer the record taken as the approval, or the transcript can no longer be read at all. The captain spoke after approving, so the reset refuses and a fresh approval is needed; see "when the captain approves" above.
 
 There is no force flag.
 

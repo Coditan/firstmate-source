@@ -83,6 +83,14 @@ install_fake_tmux() {  # <fakebin>
   cat > "$1/tmux" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${FM_FAKE_TMUX_LOG:-/dev/null}"
+# A hook for driving the check-to-send race deterministically: append records to a
+# transcript on the FIRST tmux call of a run and no other. fm-context-reset.sh
+# runs every one of its gates before it touches tmux at all, and types the clear
+# after, so that first call lands squarely between the two.
+if [ -n "${FM_FAKE_TMUX_APPEND_ONCE:-}" ] && [ ! -e "${FM_FAKE_TMUX_APPEND_ONCE}.done" ]; then
+  : > "${FM_FAKE_TMUX_APPEND_ONCE}.done"
+  cat "$FM_FAKE_TMUX_APPEND_ONCE" >> "$FM_FAKE_TMUX_APPEND_TO"
+fi
 case "${1:-}" in
   # list-panes takes a target-WINDOW, so it lists every pane of the window
   # containing $TMUX_PANE - here a SPLIT window whose active pane (%1) is not
@@ -236,7 +244,7 @@ test_missing_receipt_refuses() {
 test_stale_receipt_refuses() {
   make_case
   sed -i.bak "s/^written_at=.*/written_at=$(( $(date +%s) - 5000 ))/" "$STATE_DIR/.stow-receipt"
-  assert_refuses "is 5" "a reset on a receipt older than its freshness bound"
+  assert_refuses "limit 900s" "a reset on a receipt older than its freshness bound"
 }
 
 test_receipt_from_another_session_refuses() {
@@ -387,7 +395,7 @@ test_the_receipt_age_window_does_not_apply_on_the_approved_path() {
   sed -i.bak "s/^written_at=.*/written_at=$(( $(date +%s) - 5000 ))/" "$STATE_DIR/.stow-receipt"
   run_reset
   expect_code 1 "$RESET_CODE" "the autonomous path must still refuse a receipt past its freshness bound"
-  assert_contains "$RESET_OUT" "is 5" "the autonomous path refused for the wrong reason"
+  assert_contains "$RESET_OUT" "limit 900s" "the autonomous path refused for the wrong reason"
   run_reset --captain-approved
   expect_code 0 "$RESET_CODE" "the approved path must not apply the receipt's age window"
   pass "the age window is replaced on the approved path rather than stretched to a new constant"
@@ -439,6 +447,48 @@ test_an_approved_path_with_an_uncitable_captain_record_refuses() {
   write_receipt
   assert_refuses "carries no id" \
     "an approved reset whose captain record cannot be cited" --captain-approved
+}
+
+# The gap the idle window used to cover. Every gate runs once, and the clear is
+# typed later - after the backend probe, the pane resolution and the
+# display-message round trips. On this path the captain is present by
+# construction, so a follow-up typed into that gap is ordinary rather than
+# exotic, and it would be answered into the context the clear then discards.
+# The fake tmux stub appends the follow-up on its first call, which is the pane
+# resolution: after the gates, before the send, deterministically.
+test_a_captain_who_speaks_between_the_checks_and_the_send_refuses() {
+  approved_case 60
+  printf '{"type":"user","origin":{"kind":"human"},"promptSource":"typed","uuid":"cap-record-late","message":{"role":"user","content":"one more thing"},"timestamp":"%s"}\n' \
+    "$(iso_now)" > "$HOME_DIR/late-captain.jsonl"
+  export FM_FAKE_TMUX_APPEND_ONCE="$HOME_DIR/late-captain.jsonl"
+  export FM_FAKE_TMUX_APPEND_TO="$TRANSCRIPT"
+  assert_refuses "SPOKE AFTER APPROVING" \
+    "an approved reset whose captain spoke between the checks and the send" --captain-approved
+  unset FM_FAKE_TMUX_APPEND_ONCE FM_FAKE_TMUX_APPEND_TO
+  assert_contains "$RESET_OUT" "FRESH APPROVAL" \
+    "the pre-send refusal did not say a fresh approval is what is needed"
+  assert_contains "$RESET_OUT" "$CAPTAIN_RECORD_ID" \
+    "the pre-send refusal did not name the record it had taken as the approval"
+  assert_contains "$RESET_OUT" "cap-record-late" \
+    "the pre-send refusal did not name the newer captain record"
+  assert_present "$STATE_DIR/.stow-receipt" "the pre-send refusal consumed the receipt"
+  pass "a captain who speaks between the approved path's checks and its send refuses the discard"
+}
+
+# And the re-check is the approved path's alone. The autonomous path meets the
+# same race - it always has - and the idle window is what covers it there, so
+# adding a second gate to it would be a behaviour change the flag must not make.
+test_the_pre_send_recheck_does_not_reach_the_autonomous_path() {
+  make_case
+  printf '{"type":"user","origin":{"kind":"human"},"promptSource":"typed","uuid":"cap-record-late","message":{"role":"user","content":"one more thing"},"timestamp":"%s"}\n' \
+    "$(iso_now)" > "$HOME_DIR/late-captain.jsonl"
+  export FM_FAKE_TMUX_APPEND_ONCE="$HOME_DIR/late-captain.jsonl"
+  export FM_FAKE_TMUX_APPEND_TO="$TRANSCRIPT"
+  run_reset
+  unset FM_FAKE_TMUX_APPEND_ONCE FM_FAKE_TMUX_APPEND_TO
+  expect_code 0 "$RESET_CODE" "the autonomous path gained a gate it never had"
+  assert_contains "$RESET_OUT" "reset submitted" "the autonomous path stopped reporting its clear"
+  pass "the pre-send re-check is the approved path's own and leaves the autonomous path alone"
 }
 
 test_away_mode_refuses_on_the_approved_path_too() {
@@ -1013,6 +1063,8 @@ test_growth_past_the_receipt_still_refuses_on_the_approved_path
 test_a_captain_message_after_the_approval_still_refuses_when_approved
 test_an_approved_path_with_no_captain_record_refuses
 test_an_approved_path_with_an_uncitable_captain_record_refuses
+test_a_captain_who_speaks_between_the_checks_and_the_send_refuses
+test_the_pre_send_recheck_does_not_reach_the_autonomous_path
 test_away_mode_refuses_on_the_approved_path_too
 test_the_autonomous_path_is_unchanged_by_the_approved_one
 test_queued_wake_refuses

@@ -221,7 +221,7 @@ fm_context_record_read() {  # <state-dir>
 # log exactly which captain record it treated as the approval. An id is not
 # content: it is the same structural metadata as the origin fields above.
 _fm_context_scan_pass() {  # <transcript-path> <bytes>
-  local out
+  local out rest
   out=$(fm_context_tail_lines "$1" "$2" | jq -R -n -r '
     [inputs | fromjson? // empty] as $rows
     | ( [ $rows[]
@@ -240,8 +240,15 @@ _fm_context_scan_pass() {  # <transcript-path> <bytes>
     FM_CONTEXT_SCAN_ERROR="could not parse the transcript tail of $1"
     return 1
   }
-  IFS=$'\t' read -r FM_CONTEXT_TOKENS FM_CONTEXT_LAST_HUMAN_TS FM_CONTEXT_LAST_HUMAN_UUID \
-    <<< "$out" || true
+  # Split the three fields by parameter expansion rather than by an IFS read.
+  # Tab is IFS *whitespace*, so `IFS=$'\t' read` strips a leading empty field and
+  # collapses a run of tabs into one delimiter - and any of these three fields can
+  # legitimately be empty, which would then shift the ones behind it. This is
+  # field-exact: each step cuts at exactly one tab.
+  FM_CONTEXT_TOKENS=${out%%$'\t'*}
+  rest=${out#*$'\t'}
+  FM_CONTEXT_LAST_HUMAN_TS=${rest%%$'\t'*}
+  FM_CONTEXT_LAST_HUMAN_UUID=${rest#*$'\t'}
   return 0
 }
 

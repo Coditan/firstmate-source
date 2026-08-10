@@ -55,7 +55,14 @@
 #     what the window was groping at;
 #   - EVERYTHING ELSE IS UNCHANGED. In particular the transcript-growth bound is
 #     untouched: if this session moved on past its receipt, the reset refuses,
-#     approval or not.
+#     approval or not;
+#   - and ONE CHECK IS ADDED, because dropping the idle window is what opened the
+#     gap it used to cover: the approval record is read AGAIN immediately before
+#     the clear is typed. Every other check runs once, well before the terminal
+#     probes, and on this path the captain is present by construction - so a
+#     follow-up typed into that gap is an ordinary occurrence rather than an edge
+#     case. A captain who has spoken since approving refuses the reset, and the
+#     operator has to go back and ask for a fresh approval.
 #
 # WHAT --captain-approved PROVES, AND WHAT IT CANNOT
 # It proves a real captain record exists in the transcript, when it arrived, and
@@ -361,7 +368,31 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
   exit 0
 fi
 
-# --- 8. type the clear through the verified submit path ---------------------
+# --- 8. the approval is still the last thing the captain said, re-checked at
+# --- the moment of the discard ----------------------------------------------
+# Section 2b established the approval; everything since - the backend probe, the
+# pane resolution, the display-message round trips - is time in which the captain
+# can type again, and on this path the captain is present by construction. The
+# idle window covered that gap on the autonomous path and does not apply here, so
+# the record is read again as the last thing before the send.
+#
+# A failed re-scan refuses rather than passes: if the transcript cannot be read
+# at the moment of the discard, nothing can show the captain stayed silent, which
+# is the same fail-closed direction as every other check here.
+#
+# fm_context_scan overwrites FM_CONTEXT_TOKENS, so the figure this run actually
+# verified is captured first and reported from there.
+TOKENS=$FM_CONTEXT_TOKENS
+if [ "$CAPTAIN_APPROVED" -eq 1 ]; then
+  fm_context_scan "$FM_CONTEXT_TRANSCRIPT" \
+    || refuse "the transcript could not be re-read at the moment of the discard ($FM_CONTEXT_SCAN_ERROR), so nothing can show the captain has stayed silent since approving"
+  if [ "$FM_CONTEXT_LAST_HUMAN_UUID" != "$APPROVAL_UUID" ] \
+    || [ "$FM_CONTEXT_LAST_HUMAN_TS" != "$APPROVAL_TS" ]; then
+    refuse "the captain SPOKE AFTER APPROVING: the approval was captain record $APPROVAL_UUID at $APPROVAL_TS, and the last captain record is now ${FM_CONTEXT_LAST_HUMAN_UUID:-unnamed} at ${FM_CONTEXT_LAST_HUMAN_TS:-unknown}; that message arrived after this session filed its knowledge and would be answered into the context this clear discards, so ask again and re-run only with a FRESH APPROVAL"
+  fi
+fi
+
+# --- 9. type the clear through the verified submit path ---------------------
 # Never a hand-rolled send-keys with a fixed sleep: claude opens a completion
 # popup on a slash command, and the shared submit core is the one path that
 # types once, retries only the Enter, and reads the pane back to confirm the
@@ -371,8 +402,8 @@ if ! FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-send.sh" "$TARGET" /clear; then
 fi
 
 rm -f "$RECEIPT" 2>/dev/null || true
-log_line cleared "${LOG_NOTE}$FM_CONTEXT_TOKENS tokens; submitted to $TARGET"
-printf 'fm-context-reset: reset submitted at %s tokens; it takes effect when this turn ends.\n' "$FM_CONTEXT_TOKENS"
+log_line cleared "${LOG_NOTE}$TOKENS tokens; submitted to $TARGET"
+printf 'fm-context-reset: reset submitted at %s tokens; it takes effect when this turn ends.\n' "$TOKENS"
 if [ "$CAPTAIN_APPROVED" -eq 1 ]; then
   print_approval_note
 fi
