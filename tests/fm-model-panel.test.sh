@@ -84,6 +84,27 @@ ONE_MODEL_TWO_HARNESSES='{"roles":{
   "analyst_b":{"harness":"pi","model":"anthropic/claude-opus-5:1m"},
   "judge":{"harness":"claude","model":"claude-opus-5"}}}'
 
+DISTINCT_ANALYST_ARRAYS='{"roles":{
+  "analyst_a":[
+    {"harness":"claude","model":"claude-opus-5"},
+    {"harness":"codex","model":"gpt-5.6-sol"}],
+  "analyst_b":[
+    {"harness":"claude","model":"claude-opus-5"},
+    {"harness":"codex","model":"gpt-5.6-sol"}],
+  "judge":{"harness":"grok","model":"grok-4-fast"}}}'
+
+ONE_MODEL_ANALYST_ARRAYS='{"roles":{
+  "analyst_a":[{"harness":"claude","model":"claude-opus-5"}],
+  "analyst_b":[{"harness":"pi","model":"anthropic/claude-opus-5:1m"}],
+  "judge":{"harness":"codex"}}}'
+
+COLLIDING_JUDGE_ARRAY='{"roles":{
+  "analyst_a":{"harness":"claude","model":"claude-opus-5"},
+  "analyst_b":{"harness":"codex"},
+  "judge":[
+    {"harness":"codex"},
+    {"harness":"claude","model":"claude-opus-5"}]}}'
+
 SKILL="$ROOT/.agents/skills/panel/SKILL.md"
 CONFIG_DOC="$ROOT/docs/configuration.md"
 AGENTS="$ROOT/AGENTS.md"
@@ -135,6 +156,44 @@ test_analysts_dispatch_on_different_models() {
   assert_not_contains "$log" "trio-judge" "the judge must not be dispatched before the reports exist"
   assert_grep 'form=panel' "$home/data/trio/panel.meta" "the panel record does not say it is a panel"
   pass "analysts dispatch concurrently on the two configured models"
+}
+
+test_distinct_analyst_arrays_resolve_to_different_models() {
+  local home out
+  home=$(new_home distinct-analyst-arrays "$DISTINCT_ANALYST_ARRAYS")
+  out=$(run_panel "$home" start --id daa --project "$home/subject" --dry-run "Anything?") \
+    || fail "distinct analyst arrays failed: $out"
+  assert_contains "$out" '"model":"claude-opus-5"' \
+    "the resolved lineup lost the Claude analyst"
+  assert_contains "$out" '"model":"gpt-5.6-sol"' \
+    "the resolved lineup lost the Codex analyst"
+  assert_not_contains "$out" "this would not be a panel" \
+    "distinct analyst arrays were incorrectly refused"
+  pass "distinct analyst arrays still resolve to two different model identities"
+}
+
+test_analyst_array_collision_refuses_after_resolution() {
+  local home out status=0
+  home=$(new_home colliding-analyst-arrays "$ONE_MODEL_ANALYST_ARRAYS")
+  out=$(run_panel "$home" start --id caa --project "$home/subject" --dry-run "Anything?") || status=$?
+  expect_code 4 "$status" "analyst arrays resolving to one identity must refuse"
+  assert_contains "$out" "both analysts resolve to the model claude-opus-5" \
+    "the resolved analyst-array collision was not named"
+  [ -z "$(spawn_log "$home")" ] || fail "a refused analyst-array panel must dispatch nothing"
+  pass "analyst arrays cannot bypass the resolved-identity exit-4 refusal"
+}
+
+test_judge_array_collision_warns_after_resolution() {
+  local home out
+  home=$(new_home colliding-judge-array "$COLLIDING_JUDGE_ARRAY")
+  out=$(run_panel "$home" start --id cja --project "$home/subject" --dry-run "Anything?") \
+    || fail "a judge collision must keep the documented warning behavior: $out"
+  assert_contains "$out" "no third distinct model is available" \
+    "the resolved judge-array collision was silent"
+  assert_contains "$out" "the same model as one analyst" \
+    "the judge warning did not name the resolved collision"
+  assert_contains "$out" "panel: judge" "the warned lineup did not resolve a concrete judge"
+  pass "a judge-array collision is caught by the resolved-identity warning"
 }
 
 test_identical_analyst_models_refuse() {
@@ -766,6 +825,9 @@ test_start_refuses_to_clobber_an_existing_panel() {
 test_skill_owns_the_cost_decision_and_one_trigger
 test_configuration_doc_owns_the_schema_and_degradation
 test_analysts_dispatch_on_different_models
+test_distinct_analyst_arrays_resolve_to_different_models
+test_analyst_array_collision_refuses_after_resolution
+test_judge_array_collision_warns_after_resolution
 test_identical_analyst_models_refuse
 test_same_model_through_two_harnesses_refuses
 test_reduced_form_is_named_not_a_panel

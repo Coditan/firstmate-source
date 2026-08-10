@@ -22,6 +22,12 @@
 #     Grok's aggregate credits window is used only when product windows are not
 #     exposed, so Grok Build and xAI API remain distinct.
 #   - Unscorable candidates never beat candidates with usable quota data.
+#   - Arrays are quota-balanced candidate sets, not ordered fallback chains.
+#     Every candidate is validated before selection, so one invalid candidate
+#     invalidates the whole array instead of being skipped based on quota state.
+#   - Validation covers profile shape and verified harness/effort combinations,
+#     not whether a harness executable is installed on this host. Reachability
+#     is a separate launch concern.
 #   - Stale-but-cached numbers remain usable, but a fresh candidate wins unless
 #     the best stale score is at least the stale-clear margin higher (default
 #     20 points). Equal winning scores use a random tie-break.

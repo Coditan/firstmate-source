@@ -291,7 +291,7 @@ SH
   pass "single objects remain backward compatible and one-element arrays remain quota-aware"
 }
 
-test_malformed_profile_arrays_are_validation_errors() {
+test_invalid_profile_arrays_are_validation_errors() {
   local body expect out status n
   n=0
   while IFS='^' read -r body expect; do
@@ -308,8 +308,9 @@ test_malformed_profile_arrays_are_validation_errors() {
 [{"harness":"claude","model":3}]^model must be a non-empty string
 [{"harness":"spaceship"}]^contains an unverified harness
 [{"harness":"codex","effort":"max"}]^contains an unsupported harness/effort pair
+[{"harness":"grok","effort":"xhigh"},{"harness":"codex","effort":"xhigh"}]^contains an unsupported harness/effort pair
 ROWS
-  pass "malformed arrays stay actionable validation errors and never enter random fallback"
+  pass "every candidate must be valid before an array can enter quota selection or fallback"
 }
 
 test_implicit_array_picks_higher_min_provider
@@ -323,6 +324,6 @@ test_stale_cache_needs_clear_margin_to_beat_fresh
 test_partial_quota_data_prefers_scorable_candidate
 test_operational_quota_failures_use_uniform_random_fallback
 test_single_profile_and_one_element_array
-test_malformed_profile_arrays_are_validation_errors
+test_invalid_profile_arrays_are_validation_errors
 
 echo "# all fm-dispatch-select tests passed"
