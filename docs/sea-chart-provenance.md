@@ -110,7 +110,7 @@ Of the five items the comparison was asked about, two came with Wayfinder in con
   Ours made membership the identifier itself, so an undertaking named OVER work that already existed could take that work in only by renaming it - and the backlog tool has no rename, while renaming by hand breaks every reference that has already left the vessel.
   Measured on the seat that raised it, six of seven named undertakings drew zero members while their assignment was settled and written down (2026-08-10).
   Since then membership is a union: the prefix rule, or an explicit `data/<chart>/members` list of bare record ids.
-  The list is the retrofit path only - anything created after its undertaking exists is still named under the chart at creation - and it is exclusive, so two lists naming one record are reported and the record is drawn on neither chart.
+  The list is the retrofit path only - anything created after its undertaking exists is still named under the chart at creation - and it is exclusive: a list line that reaches for a record the prefix rule already owns is refused there and reported on both pages, so the record is still drawn exactly once, and where nothing owns it by prefix both claims are refused and it is drawn on neither.
   `bin/fm-sea-chart.sh` owns the full rule and the reasons; this notes only that the retrofit half is ours as well, and that it recovers the one thing Wayfinder's explicit edge could always do and our prefix rule could not.
 - **Three incompleteness numbers - ours entirely.**
   Wayfinder has no analogue and needs none, because its map is authored and there is no gap between what exists and what the surface returns.

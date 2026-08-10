@@ -109,12 +109,16 @@ A `marker-kind-mismatch` cause means the id and the kind disagree - the id claim
 The entries arrive `kind_defect` first and must be rendered in that order, under headings that keep the two apart: a kind the chart cannot classify can leave a whole section reading empty, while held or blocked ordinary work is only work this chart has no section for, and letting the second crowd out the first is how the empty sections went unnoticed in the first place.
 
 **Anything in `membership_defects[]`, directly under the member count.**
-These are lines of `data/<chart>/members` the assembler could not honour, and the member count is the number they call into question: a refused line is a record somebody wrote down as belonging here that the chart is not drawing.
+These are member-list lines the assembler could not honour, and the member count is the number they call into question: a refused line is a record somebody wrote down as belonging here that the chart is not drawing.
 Render the `cause` beside the `why`, because the causes are different news and only one of them is about the record.
-A `contested` entry is the loud one and arrives first: two undertakings both claim that record, the chart draws it on neither, and `claimed_by` names the other one so the collision can be found from either chart.
+A `contested` entry is the loud one and arrives first: two undertakings both claim that record, no record owns it by prefix to break the tie, so the chart draws it on neither and `claimed_by` names the other one so the collision can be found from either chart.
+`owned-elsewhere` and `claimed-elsewhere` are the two sides of the same wrong line, and they are the ones to read together.
+`owned-elsewhere` means this chart's own list named a record another undertaking already owns by its id: the entry is refused and the record is NOT drawn here.
+`claimed-elsewhere` is the only cause that is not about a line of this chart's list at all - another chart's list named a record this chart owns by construction - and it withdraws nothing: **the record is still drawn here**, and the foreign line is the one to delete.
+Render it as a wrong line elsewhere rather than as a doubt about the record, and never take it as a reason to leave the record out.
 `qualified` and `malformed` entries were refused at the boundary - one home, bare ids - and `unresolvable` means the record is not in this home at all, which may equally mean it was deleted, renamed, or never lived here.
 A `redundant` entry costs nothing: the prefix rule already draws that record and the line merely says so twice.
-Never render a refused entry as a member, and never drop it: a member named and missing is invisible, while a member named and wrong is visible by eye.
+Never render a refused entry as a member, and never drop any of these: a member named and missing is invisible, while a member named and wrong is visible by eye.
 
 **Anything in `misfiled[]`, above the sections it calls into question.**
 These members carry an id marker and a record kind that disagree, and unlike an unplaced member most of them ARE drawn - a boundary filed with the fog kind sits under FOG, while OUT OF COURSE, which is where its id says to look for it, is drawn without it.
@@ -173,12 +177,15 @@ Three rules bind, and the assembler enforces all three:
 - **Exclusive.**
   A record belongs to at most one undertaking.
   Counted in two "what is left" views it leaves neither chart able to say whether it is finished for its own purposes.
+  Where the prefix rule already owns a record, it wins and keeps drawing there - a claim made by an id cannot be edited away from another file - and the list line that tried to take it is refused, so the record is drawn exactly once.
+  Where nothing owns it by prefix, the chart picks no winner and draws it on neither.
   A record that genuinely fits two undertakings is evidence that one of them is cut too coarsely, or that it is really two pieces of work - fix it by re-cutting the work, never by listing it twice.
 - **Retrofit only.**
   Anything created after the undertaking exists is named under the chart at creation, `/to-backlog` included.
   Adding such a record to the list assigns nothing, and the chart says so.
 
-The list is a hand-maintained second source and it rots, so read `membership_defects[]` on every chart drawn from one.
+The list is a hand-maintained second source and it rots, so read `membership_defects[]` on every chart - including a chart with no list of its own, which is where another chart's wrong line about it shows up.
+An unreadable list is refused outright rather than read as empty, because a list quietly treated as empty shrinks the page and stops the exclusivity check firing at all.
 
 ## Filing fog and course boundaries
 

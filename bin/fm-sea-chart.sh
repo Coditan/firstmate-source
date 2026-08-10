@@ -72,7 +72,10 @@
 #     is left" views it leaves NEITHER chart able to say whether it is finished,
 #     and exclusivity is what makes a deviation from a destination measurable at
 #     all. Two member lists naming one record are caught here - this is the only
-#     place both lists are in hand - and the record is drawn on neither.
+#     place both lists are in hand - and where nothing decides the tie by
+#     construction the record is drawn on neither. Where the prefix rule DOES
+#     decide it, see the paragraph on prefix ownership below: the record stays
+#     with its owner and the foreign line is refused, so it is drawn exactly once.
 #   RETROFIT ONLY. Anything created after its undertaking exists is still named
 #     under the chart by construction, so a line naming an id the prefix rule
 #     already takes is reported as doing nothing. Two ways to assign the same
@@ -84,12 +87,23 @@
 # every line it cannot honour is named in `membership_defects[]` rather than
 # dropped, on the same principle as the paragraph above: a member named and
 # missing is invisible, a member named and wrong is visible by eye.
-# One overlap is NOT caught, and the chart says so in `limits[]`: a listed record
-# that already sits inside another undertaking's prefix namespace. Catching it
-# would mean knowing every undertaking there is rather than every record. It has
-# no instance in this fleet - across 843 live and archived record ids, no id is a
-# name-boundary prefix of another (measured 2026-08-10) - which is why the case
-# is disclosed rather than guessed at.
+# A listed record that already sits inside ANOTHER undertaking's prefix namespace
+# IS caught, whenever that owner is itself a record this home holds - and the
+# owner is decidable from the record set the chart already has, without
+# enumerating undertakings. Both halves are reported, because a collision seen
+# from one side only is a collision nobody fixes: the chart whose list names it
+# refuses the entry as `owned-elsewhere` and does not draw it, while the chart
+# that owns it by prefix keeps drawing it and reports the foreign line as
+# `claimed-elsewhere`. A prefix claim is not something a third party can edit
+# away, so nothing drawing today stops drawing; the record ends up on exactly one
+# chart, which is what makes the exclusivity above real rather than asserted.
+# One residual overlap is NOT caught, and the chart says so in `limits[]`: a
+# prefix owner that is not itself a record in this home's backlog or archive - an
+# undertaking whose destination comes only from question.md or report.md. Catching
+# that would mean knowing every undertaking there is rather than every record.
+# It has no instance in this fleet either - across 843 live and archived record
+# ids, no id is a name-boundary prefix of another (measured 2026-08-10) - which is
+# why the residue is disclosed rather than guessed at.
 #
 # THE DESTINATION IS READ, NEVER INVENTED, AND A CHART CANNOT EXIST WITHOUT ONE
 # Three sources, in order: the originating undertaking's own backlog title; the
@@ -203,12 +217,19 @@
 #                      member count it produced, the member list that was read
 #                      (`list`, null when the chart has none) and how many members
 #                      only that list assigned (`from_list`)
-#   membership_defects[]  lines of this chart's member list it could not honour,
-#                      each with the `cause` - contested, qualified, malformed,
-#                      unresolvable, redundant - the other charts that also claim
-#                      it in `claimed_by`, and `why` in words. Every cause but
-#                      `redundant` refuses the entry, so the record is not drawn
-#                      here. Ordered contested first, then the refused-boundary
+#   membership_defects[]  member-list lines this chart could not honour, each with
+#                      the `cause` - contested, claimed-elsewhere, owned-elsewhere,
+#                      qualified, malformed, unresolvable, redundant - the other
+#                      charts that also claim it in `claimed_by`, and `why` in
+#                      words. Most causes refuse the entry, so the record is not
+#                      drawn here; `redundant` and `claimed-elsewhere` do not,
+#                      because the prefix rule holds that record either way and no
+#                      line in any file can take it off this chart.
+#                      `claimed-elsewhere` is the one row NOT about a line of this
+#                      chart's own list: it reports another chart's list naming a
+#                      record this chart owns by construction, which is invisible
+#                      from anywhere else. Ordered contested first, then the two
+#                      prefix-ownership collisions, then the refused-boundary
 #                      causes, then unresolvable, then the entries that assign
 #                      nothing, so a broken exclusivity is never pushed down the
 #                      page by a list line that is merely superfluous
@@ -220,8 +241,10 @@
 #                      unpaired-variant, not-returned - and `why` in words; blocked
 #                      means a decision the fleet has lost, stale-edge and
 #                      dangling-edge mean one it can answer right now once the bad
-#                      edge is cleared, and unpaired-variant means the fold dropped
-#                      a question only an analyst raised
+#                      edge is cleared, unpaired-variant means the fold dropped
+#                      a question only an analyst raised, and folded-elsewhere
+#                      means the fold hung it under a ruling of a DIFFERENT
+#                      undertaking, so no section here can carry it
 #   fog[]              named dark patches on this course
 #   out_of_course[]    deliberate scope boundaries; these never rise
 #   takeable[]         work with no unresolved real blocker and no hold, each with
@@ -329,6 +352,12 @@ ARCH=$(read_backlog "$ARCHIVE")
 MEMBER_FILE=""
 [ -f "$DATA/$CHART/members" ] && MEMBER_FILE="$DATA/$CHART/members"
 
+# An ABSENT list is genuinely empty - most charts have none, and that is normal.
+# An UNREADABLE one is fatal, exactly as read_backlog above treats an unreadable
+# backlog and for the same reason: degrading it to "this list is empty" would
+# silently shrink the page. For a FOREIGN list it is worse than a shrunken page -
+# the exclusivity check simply stops firing, and a contested record is then drawn
+# on both charts with no defect row anywhere to say so.
 read_member_claims() {  # -> "<chart>\t<entry>" lines, comments and blanks stripped
   local f owner
   for f in "$DATA"/*/members; do
@@ -338,14 +367,21 @@ read_member_claims() {  # -> "<chart>\t<entry>" lines, comments and blanks strip
       { sub(/#.*/, ""); sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, "") }
       $0 == "" { next }
       { printf "%s\t%s\n", ENVIRON["FM_CHART_OWNER"], $0 }
-    ' "$f"
+    ' "$f" || { printf 'fm-sea-chart.sh: cannot read the member list %s\n' "$f" >&2; return 1; }
   done
 }
+
+# Read into a variable rather than straight down a pipe: a pipeline reports only
+# the status of its LAST command, and `jq -R -s` succeeds on every input there is,
+# so a reader failing upstream would have arrived here as an empty list with a
+# zero exit status.
+MEMBER_CLAIMS=$(read_member_claims) \
+  || die "refusing to draw a chart from a partial membership - see the reader error above"
 
 # A tab cannot appear in a bare record id, so an entry carrying one is malformed
 # and must reach the projection intact to be named as such - hence the rejoin
 # rather than taking field 2 and discarding the rest.
-CLAIMS_JSON=$(read_member_claims | jq -R -s -c '
+CLAIMS_JSON=$(printf '%s' "$MEMBER_CLAIMS" | jq -R -s -c '
   split("\n") | map(select(length > 0) | split("\t") | {chart: .[0], id: (.[1:] | join("\t"))})') \
   || die "cannot read the member lists under $DATA"
 LISTED_RAW=$(printf '%s' "$CLAIMS_JSON" | jq -c --arg chart "$CHART" \
@@ -498,16 +534,20 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # now. Captain-actionability (bin/fm-fleet-snapshot.sh) wants a queued record
   # held with hold-kind captain and nothing unresolved against it, so each failing
   # clause gets its own name and its own words.
-  # The unpaired-variant clause comes FIRST because it is the one case where the
-  # record did reach the actionable surface, so every sentence below it - each of
-  # which says the surface never carried it - would be false of such a record.
+  # The unpaired-variant and folded-elsewhere clauses come FIRST, together,
+  # because they are the two cases where the record DID reach the actionable
+  # surface, so every sentence below them - each of which says the surface never
+  # carried it - would be false of such a record.
   # The stale-edge clause comes last of the named ones ON PURPOSE: reaching it
   # means every other clause of that predicate already passes, which is what
   # makes the claim that the decision can be answered now true rather than hoped.
-  def withheld_reason($done; $live_done; $known; $unpaired):
+  def withheld_reason($done; $live_done; $known; $unpaired; $folded):
     if (. as $r | ($unpaired | index($r.id)) != null)
     then {cause: "unpaired-variant",
           why: "it reached the actionable surface, but no judge ruling in its group carries its decision key, so the collapse rule folded it away and the decision list does not show it. It is a question only an analyst raised: the fold assumes a judge picked that question up, nothing verifies that assumption, so read this record rather than take the fold at its word."}
+    elif (. as $r | ($folded | index($r.id)) != null)
+    then {cause: "folded-elsewhere",
+          why: "it reached the actionable surface, but the collapse rule attached it as a folded variant of a ruling that belongs to a DIFFERENT undertaking, so this chart cannot show it under that ruling and does not draw it as a decision of its own. Showing the ruling here would draw a record this chart does not own; showing this record as the decision would put an analyst restatement where the ruling belongs, which is the substitution the fold exists to prevent. Read this record rather than take the fold at its word."}
     elif (unresolved($done; $known) | length) > 0
     then {cause: "blocked",
           why: "blocked by another record that has not resolved, so it never reaches the actionable surface"}
@@ -577,27 +617,48 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # the entry is still named on the chart. Under-drawing in silence is the fault
   # this whole script is built against, and it would be a poor tool that committed
   # it while reporting on it.
-  # The clause order is the order of the news. `contested` comes first because it
-  # is the only one that says a record is being counted towards two destinations
-  # at once, which is what makes a deviation from either measurable. `redundant`
-  # comes last because it withdraws nothing: the prefix rule has the record either
-  # way, and the line merely says so twice.
+  # The record whose id namespace an entry already sits inside. Decided from the
+  # records this chart is holding anyway, never from a roll of undertakings that
+  # nobody keeps - so it costs no new contract and rots with nothing. The most
+  # specific owner wins: a longer id is the nearer claim, and the shorter one has
+  # its own ambiguity stated in the header already.
+  def prefix_owner($known): . as $e
+    | [ ($known | keys_unsorted[]) as $p | select($e | startswith($p + "-")) | $p ]
+    | sort_by(length) | last;
+
+  # The clause order is the order of the news, and the two clauses that turn on
+  # the PREFIX rule are asked before the ones that turn on a file, because a
+  # prefix claim exists by construction and no line in any list can add to it or
+  # take it away. `redundant` therefore precedes `contested`: a record this chart
+  # already owns by its id is not up for contest, and calling it contested printed
+  # "drawn on NEITHER chart" beside a record this chart went on drawing.
+  # `owned-elsewhere` sits in the same place for the mirror reason. `contested`
+  # keeps the case it was written for and the only one it is now true of - two
+  # lists naming a record that NO record owns by prefix - and stays ranked first
+  # on the page, because it is the one that says a record is being counted towards
+  # two destinations at once with nothing to break the tie. `redundant` comes last
+  # because it withdraws nothing: the prefix rule has the record either way, and
+  # the line merely says so twice.
   def member_list_defect($foreign; $known): . as $e
+    | ($e | prefix_owner($known)) as $owner
     | if ($e | index("/")) != null
       then {id: $e, cause: "qualified",
             why: "it names a record with a home qualifier, and this chart reads ONE home - the backlog and the archive it was pointed at. Resolving it would reach into the backlog of another home and put a second owner on that home, which is the same boundary this chart already holds when it drops the records of a secondmate before anything is counted. Cross-vessel dependency is a blocked-by edge or a routed request, both of which already exist. The entry is refused rather than resolved."}
       elif ($e | test("^[A-Za-z0-9._-]+$") | not)
       then {id: $e, cause: "malformed",
             why: "it is not a bare record id: a member list carries one id per line and nothing else. Nothing here guesses what was meant, because a guess would assign a record on the authority of this chart rather than on the authority of whoever filed the line. The entry is refused rather than half-read."}
+      elif prefix_member($e) and $known[$e] == true
+      then {id: $e, cause: "redundant",
+            why: "it is already a member by the prefix rule - its id is \"\($chart)\" or begins with \"\($chart)-\" - so this line assigns nothing and the record is drawn either way. The list is the retrofit path for work that already existed when this undertaking was named; anything named under the chart is assigned by its id alone. Two ways to assign one record put a second owner on one contract: delete the line."}
+      elif $owner != null and $known[$e] == true
+      then {id: $e, cause: "owned-elsewhere", claimed_by: [$owner],
+            why: "its id places it under \($owner) by construction - it begins with \"\($owner)-\", and \($owner) is a record of this home - so the prefix rule already owns it there. A member list cannot take a record the prefix rule holds: the id is what the fleet and everything that has left this vessel already go by, and a line here cannot edit that. Honouring it would draw one record on two charts, and then neither could say whether it is finished for its own purposes. The entry is refused and the record keeps drawing on \($owner), whose page names this line as a foreign claim. Delete the line, or re-cut the work so it really belongs to one undertaking."}
       elif $foreign[$e] != null
       then {id: $e, cause: "contested", claimed_by: $foreign[$e],
-            why: "the member list of this chart names it, and so does the list of \($foreign[$e] | join(", ")). A record belongs to at most one undertaking: counted in two \"what is left\" views it leaves neither chart able to say whether it is finished for its own purposes. This chart draws it in NEITHER rather than pick a winner. A record that genuinely fits two undertakings is evidence that one of them is cut too coarsely, or that it is really two pieces of work - both fixed by re-cutting the work, never by listing it twice."}
+            why: "the member list of this chart names it, and so does the list of \($foreign[$e] | join(", ")). No record owns it by prefix either, so nothing decides the tie by construction. A record belongs to at most one undertaking: counted in two \"what is left\" views it leaves neither chart able to say whether it is finished for its own purposes. This chart draws it in NEITHER rather than pick a winner. A record that genuinely fits two undertakings is evidence that one of them is cut too coarsely, or that it is really two pieces of work - both fixed by re-cutting the work, never by listing it twice."}
       elif $known[$e] != true
       then {id: $e, cause: "unresolvable",
             why: "no record with this id is in the backlog or the archive of this home. It was never created, it was renamed, or it lives in another home this chart deliberately does not read. It is named here rather than dropped, because a member named and missing is invisible while a member named and wrong is visible by eye - the same direction this chart takes everywhere else."}
-      elif prefix_member($e)
-      then {id: $e, cause: "redundant",
-            why: "it is already a member by the prefix rule - its id is \"\($chart)\" or begins with \"\($chart)-\" - so this line assigns nothing and the record is drawn either way. The list is the retrofit path for work that already existed when this undertaking was named; anything named under the chart is assigned by its id alone. Two ways to assign one record put a second owner on one contract: delete the line."}
       else null end;
 
   input as $live
@@ -624,21 +685,36 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   | ([ $listed_raw[]
        | member_list_defect($foreign_claims; $known)
        | select(. != null)
-       | {id, cause, claimed_by: (.claimed_by // []), why} ]
-     | sort_by(if .cause == "contested" then 0
-               elif .cause == "qualified" or .cause == "malformed" then 1
-               elif .cause == "unresolvable" then 2
-               else 3 end)) as $member_defects
-  # Refused entries assign nothing. `redundant` is the one cause that does not
-  # refuse: the prefix rule already holds that record, and withdrawing it here
+       | {id, cause, claimed_by: (.claimed_by // []), why} ]) as $own_defects
+  # Refused entries assign nothing. `redundant` is the one cause here that does
+  # not refuse: the prefix rule already holds that record, and withdrawing it here
   # would remove a member over a line that only restated what was true anyway.
-  | ([ $member_defects[] | select(.cause != "redundant") | .id ]
+  | ([ $own_defects[] | select(.cause != "redundant") | .id ]
      | map({key: ., value: true}) | from_entries) as $refused
   | ([ $listed_raw[] | select($refused[.] != true) ]
      | map({key: ., value: true}) | from_entries) as $listed
   | def member($id): prefix_member($id) or ($listed[$id] == true);
 
-  ([ $all[] | select(member(.id)) ]) as $mine
+  # THE OTHER SIDE OF THE SAME COLLISION, and the only place it can be reported:
+  # the offending line sits in a list this chart does not own, so nothing above
+  # can see it, and a collision visible from one side only is one nobody fixes.
+  # It withdraws NOTHING here. Prefix ownership is by construction, so a record
+  # cannot stop drawing on the chart whose name its id carries because a third
+  # party edited a file - the foreign line is the defect, and it is the line to
+  # delete. That chart refuses the entry on its own page, so the record is drawn
+  # exactly once and the exclusivity above is real rather than asserted.
+  ([ $foreign_claims | to_entries[]
+     | select(prefix_member(.key) and $known[.key] == true)
+     | {id: .key, cause: "claimed-elsewhere", claimed_by: .value,
+        why: "the member list of \(.value | join(", ")) names it, and this chart owns it by construction: its id is \"\($chart)\" or begins with \"\($chart)-\". It is STILL DRAWN here. A prefix claim is not something another chart can take away by writing a line, and nothing drawing today may stop drawing because a file elsewhere was edited. The other chart refuses the entry on its own page and does not draw it, so the record stays on one chart rather than two. The foreign line is the one to delete."} ]) as $foreign_defects
+  | (($own_defects + $foreign_defects)
+     | sort_by(if .cause == "contested" then 0
+               elif .cause == "claimed-elsewhere" or .cause == "owned-elsewhere" then 1
+               elif .cause == "qualified" or .cause == "malformed" then 2
+               elif .cause == "unresolvable" then 3
+               else 4 end)) as $member_defects
+
+  | ([ $all[] | select(member(.id)) ]) as $mine
   # How many members the prefix rule alone would not have drawn. Counted off the
   # member records themselves rather than off the list, so the number the chart
   # prints beside `members` is measured the same way `members` is.
@@ -684,6 +760,16 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   | ([ $groups[]
        | (.decisions[]? | .id), (.decisions[]?.variants[]? | .id) ]) as $seen
   | ([ $groups[] | (.unpaired_variants[]? | .id) ]) as $unpaired
+  # The one member record the scoping above cannot take: the fold hung it as a
+  # variant under a ruling of ANOTHER undertaking. Neither move is open - showing
+  # it under that ruling would draw a record this chart does not own, and lifting
+  # it onto the decision list would put an analyst restatement where the ruling
+  # belongs. So no section carries it, and it is reconciled below with a cause
+  # that says the surface DID return it, rather than with `not-returned`, a
+  # sentence the very surface it describes refutes.
+  | ([ $inv.groups[]? | select(member(.group) | not)
+       | .decisions[]? | select(member(.id) | not)
+       | .variants[]? | select(member(.id)) | .id ]) as $folded_elsewhere
 
   # RECONCILIATION. Every record this chart owns that waits on the captain,
   # straight from the backlog - then whatever the actionable surface did not
@@ -705,7 +791,7 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   | ([ $mine[] | select(open_state and .kind == "captain") ]) as $own_decision_records
   | ([ $own_decision_records[]
        | select(.id as $id | ($seen | index($id)) == null)
-       | withheld_reason($done; $live_done; $known; $unpaired) as $reason
+       | withheld_reason($done; $live_done; $known; $unpaired; $folded_elsewhere) as $reason
        | {id, key:(.id | dkey), title:(.title // ""),
           held_by:(unresolved($done; $known) | join(", ")),
           cause: $reason.cause,
@@ -921,10 +1007,11 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
       # Printed ON the chart, not filed in documentation. A chart that names its
       # own gaps is the counter-design to the flat list that was wrong four times
       # in one week. Do not soften these when rendering.
-      # The last entry is appended only when a member list is in play. A limit is
-      # a claim about the page it is printed on, and a caveat about a list this
-      # chart does not have would be one more sentence a reader has to check
-      # against nothing.
+      # The last entry is appended only when a member list is in play - this
+      # chart having one, or another chart having named a record of this one. A
+      # limit is a claim about the page it is printed on, and a caveat about a
+      # list nothing on this page came from would be one more sentence a reader
+      # has to check against nothing.
       limits: ([
         "Where a judge ruled, this chart shows the formulation the judge gave. That the judge picked up every question the analysts raised is verified by nothing, so every folded record stays listed underneath.",
         "Withheld decisions are found within the scope of THIS chart, by reading its own records back from the backlog. For every cause but unpaired-variant the fleet-wide decision board cannot count them at all, so a number here does not mean the board agrees; an unpaired variant is the one the board does list, as a variant of its group rather than as a decision.",
@@ -933,8 +1020,8 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
         "An unsupervised marking means the work may be EDITED unsupervised. It never means it may LAND unsupervised.",
         "Whether a piece of work is destructive, irreversible, security-sensitive, or outward-facing is recorded nowhere per record and is not derived here; that judgment stays the always-loaded rule in AGENTS.md sections 7 and 9.",
         "A decision the captain rejects outright cannot be filed away today, because the closing path requires follow-up work that a refusal does not create. Such a decision can be shown here but not laid to rest."
-      ] + (if $member_file == "" then []
-           else ["Membership beyond the prefix rule is whatever a member list in this home names. Two member lists naming one record are caught here and the record is drawn on neither chart. A listed record that already sits inside ANOTHER undertaking prefix namespace is NOT caught, because catching it would mean knowing every undertaking there is rather than every record."]
+      ] + (if $member_file == "" and ($member_defects | length) == 0 then []
+           else ["Membership beyond the prefix rule is whatever a member list in this home names. Two member lists naming one record are caught here and the record is drawn on neither chart. A listed record sitting inside ANOTHER undertaking prefix namespace is caught too, whenever that owner is itself a record of this home: it keeps drawing on its owner, the chart that listed it refuses the entry, and both pages say so. What is NOT caught is a prefix owner that is not itself a record in this backlog or archive - an undertaking whose destination comes only from question.md or report.md - because catching that would mean knowing every undertaking there is rather than every record."]
            end))
     }
 ') || die "chart projection failed"
@@ -969,14 +1056,17 @@ if [ "$MODE" = "summary" ]; then
        then " (\(.counts.unplaced_kind_defects) carrying a kind this chart cannot classify)"
        else "" end) else empty end),
     (if .counts.membership_defects > 0 then
-      "  \(.counts.membership_defects) \(if .counts.membership_defects == 1 then "line" else "lines" end) of the member list could not be honoured - see MEMBER LIST"
+      "  \(.counts.membership_defects) \(if .counts.membership_defects == 1 then "line" else "lines" end) of a member list in this home could not be honoured - see MEMBER LIST"
       else empty end),
     "",
     # Directly under the member count, because that is the number these rows call
     # into question: a refused entry is a record the reader was told belongs here
-    # and the chart is not drawing.
+    # and the chart is not drawing, and a foreign claim is a record the reader may
+    # have been told belongs somewhere else while this chart goes on drawing it.
     (if (.membership_defects | length) > 0 then
-      "MEMBER LIST - entries in \(.membership.list) this chart could not honour:",
+      (if .membership.list == null
+       then "MEMBER LIST - entries in the member lists of this home this chart could not honour:"
+       else "MEMBER LIST - entries in \(.membership.list), and in the member lists of other charts, this chart could not honour:" end),
       (.membership_defects[]
         | "  ! \(.id)  [\(.cause)]"
           + (if (.claimed_by | length) > 0 then "  also claimed by: \(.claimed_by | join(", "))" else "" end)
