@@ -38,7 +38,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-model-panel.sh`      | Run a model panel: two independent analysts on different models, then a judge that re-verifies both |
 | `fm-grade.sh`            | Grade review quality on git-derived and blind evidence rather than the reviewed tool's own ledger (docs/review-grading.md) |
 | `fm-supervision-cost.sh` | Measure what supervision costs a session in freshly written tokens, from the provider's own usage records (docs/supervision-cost.md) |
-| `fm-supervision-cost-engine.py` | Measurement engine for supervision spend; counts session starts, deliveries, empty deliveries, and requests per wake |
+| `fm-supervision-cost-engine.py` | Measurement engine for supervision spend; counts session starts, deliveries, empty deliveries, requests per wake, and delivery arms by whether they cost a request of their own |
 | `fm-grade-engine.py`     | Measurement engine for the review-quality scale; every metric carries its evidence class and sample size |
 | `fm-herdr-lab.sh`        | Provision and guardedly operate an isolated, never-default Herdr lab session         |
 | `fm-install-herdr.sh`    | Install CI's exact-version Herdr pin with official asset URL, SHA-256, and protocol checks |

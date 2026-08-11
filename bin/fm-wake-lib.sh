@@ -418,6 +418,9 @@ fm_lock_try_acquire_inner() {
   local lockdir=$1 depth=$2 pid steal cur rc steal_owner max_depth create_rc
   FM_LOCK_HELD_PID=
   FM_LOCK_OWNER_DIR=
+  if [ "$depth" -eq 0 ]; then
+    FM_LOCK_STOLEN_FROM_PID=
+  fi
 
   if fm_lock_try_create "$lockdir"; then
     return 0
@@ -488,6 +491,16 @@ fm_lock_try_acquire_inner() {
   rc=1
   if fm_lock_try_create "$lockdir" "$steal_owner"; then
     rc=0
+    # Acquiring by REPLACING a dead owner is not the same event as acquiring a
+    # lock nobody held, and a caller that reports "armed" has to be able to tell
+    # them apart: one means delivery was already covered, the other means a
+    # record outlived the process it named. Recorded only at depth 0, because
+    # the recursive call that takes the .steal sidecar is an implementation
+    # detail of this acquisition, not a second stolen lock.
+    if [ "$depth" -eq 0 ]; then
+      # shellcheck disable=SC2034 # Read by callers after fm_lock_try_acquire returns.
+      FM_LOCK_STOLEN_FROM_PID=$cur
+    fi
   else
     rc=$?
   fi
@@ -500,6 +513,11 @@ fm_lock_try_acquire_inner() {
   return "$rc"
 }
 
+# Pid whose DEAD lock this acquisition replaced, empty when the lock was simply
+# free or was not acquired at all. See the steal branch in
+# fm_lock_try_acquire_inner for why the distinction is kept.
+# shellcheck disable=SC2034 # Read by callers after fm_lock_try_acquire returns.
+FM_LOCK_STOLEN_FROM_PID=
 fm_lock_try_acquire() {
   local lockdir=$1 rc
   FM_LOCK_ERROR=

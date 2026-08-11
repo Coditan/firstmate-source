@@ -251,3 +251,11 @@ These properties must hold:
 `FM_INJECT_SKIP` (default `heartbeat`) force-self-handles matching kinds,
 overriding classification.
 Use it sparingly.
+
+## A second reason to enter it, measured
+
+Away mode's saving is not only the triage.
+Under Claude Code the session's delivery wait is a background task, and that harness reaps background tasks of the main session under memory pressure once the terminal has been idle for thirty minutes - the same half hour that defines a walk-away stretch.
+Each reap reaches the model as a completion carrying nothing and costs a supervision turn to restore, measured at roughly fifty such turns across one away stretch with away mode off.
+Away mode arms no session delivery wait at all, so there is nothing to reap and the whole class disappears.
+`docs/supervision-cost.md` owns that measurement, including why the reaper is not firstmate's to switch off.

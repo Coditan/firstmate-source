@@ -372,6 +372,33 @@ test_hook_blocks_with_live_daemon_but_no_stub() {
   pass "fm-turnend-guard: healthy daemon without a session delivery stub blocks with the cheap re-arm repair"
 }
 
+# A delivery RECORD is not delivery. A stub lock left behind by a waiter that
+# was killed - by the harness reaping it, by a crash, by a session that ended -
+# still names this home, this stub path, and this session's lock pid, so every
+# condition but one still matches. The one that does not is whether the process
+# is there at all, and if this hook ever stopped asking it, the session would end
+# its turn quietly on the strength of a file while nothing was listening.
+test_hook_blocks_when_the_recorded_delivery_stub_is_dead() {
+  local dir pid identity dead out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-dead-stub-record")
+  : > "$dir/state/task1.meta"
+  sleep 60 &
+  pid=$!
+  identity=$(watcher_identity "$dir" "$pid") || fail "could not identify live watcher holder"
+  record_watcher_lock "$dir" "$pid" "$identity"
+  ( exit 0 ) & dead=$!
+  wait "$dead" 2>/dev/null || true
+  record_stub_lock "$dir" "$dead" "$identity"
+  touch "$dir/state/.last-watcher-beat"
+  out=$(run_hook "$dir" false); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 2 "$status" "hook must block when the recorded delivery stub pid no longer exists"
+  assert_contains "$out" "Wake delivery missing" \
+    "a delivery record naming a dead process was accepted as delivery, so the turn would have ended blind"
+  pass "fm-turnend-guard: a delivery record whose process is gone blocks exactly like no record at all"
+}
+
 test_hook_afk_blocks_with_dead_pusher_and_queued_wakes() {
   local dir watcher_pid watcher_identity dead out status queue_lines
   dir=$(make_primary_dir "$TMP_ROOT/hook-afk-dead-pusher")
@@ -1192,6 +1219,7 @@ test_hook_blocks_when_fresh_beacon_has_no_live_lock
 test_hook_blocks_when_dead_lock_has_fresh_beacon
 test_hook_silent_with_live_lock_and_fresh_beacon
 test_hook_blocks_with_live_daemon_but_no_stub
+test_hook_blocks_when_the_recorded_delivery_stub_is_dead
 test_hook_afk_blocks_with_dead_pusher_and_queued_wakes
 test_hook_afk_blocks_with_queued_wakes_and_no_meta
 test_hook_queued_wakes_repair_names_the_drain

@@ -1,6 +1,6 @@
 # Supervision cost
 
-What supervision costs this fleet, measured rather than argued, and what three repairs to it changed.
+What supervision costs this fleet, measured rather than argued, and what five repairs to it changed.
 
 Every figure here was counted from the provider's own usage records with `bin/fm-supervision-cost.sh`, or produced by running the code on both sides of a change.
 Nothing here is projected from a byte count, a turn count, or a rate card.
@@ -209,7 +209,8 @@ Measured distribution of requests per delivery in the main home from 2026-08-04 
  7+        :  236              <- the long tail, up to 113
 ```
 
-Three is the protocol floor, and 69 deliveries that actually carried a record were handled in exactly three requests, so it is a reached floor rather than a theoretical one.
+Three was believed to be the protocol floor, and 69 deliveries that actually carried a record were handled in exactly three requests, so it is a reached floor rather than a theoretical one.
+Repair 4 below lowers it to two.
 The measurements below three are incomplete retained-record or activity-window segments, not complete wake handling.
 The other 573 three-request deliveries carried no queue record at all: a wake carrying nothing is the cheapest complete wake to handle and still costs three requests, which is why removing the wake beats optimising the handling.
 Each of the three is irreducible under this harness:
@@ -220,14 +221,177 @@ Each of the three is irreducible under this harness:
 2. **The arm.**
    The next delivery only reaches the model if the wait is a harness-TRACKED background task, because a process started any other way completes into nothing.
    Starting it is therefore a tool call the model must make.
+   **Superseded by repair 4 below:** a tool CALL is not a REQUEST.
+   Two sibling tool blocks fit in one assistant message, so this one is not irreducible after all and the floor is two, not three.
 3. **The close.**
    A tool call requires a following assistant message.
    The turn cannot end in the same request that starts the arm.
 
 Bundling the drain and the arm into one shell command does not help and is refused by design: `bin/fm-arm-pretool-check.sh` denies a protected watcher command inside a compound, because a truncating pipe or a bundled failure silently unarms delivery.
+That is a fact about shell commands, and this section mistook it for a fact about tool calls; repair 4 measures the difference.
 
 What this unit actually removes is not requests per wake but wakes: the 633 empty deliveries above were 2,240 requests spent on wakes that carried nothing, and repair 1 removes the mechanism that produced them.
 The long tail above 3 requests is model-chosen inspection - pane reads, crew state, backlog updates - and is not protocol overhead; nothing in this unit touched it, and no claim is made about it.
+
+## Repair 4: the arm that was a request of its own
+
+### What it was
+
+A wake costs three model requests under a background-notify harness, and repair 3 above named each one irreducible.
+That was right about the drain and the close and wrong about the middle one, for a reason repair 3 stated and then did not follow: it tested only whether the two could be fused into one shell command, which the seatbelt correctly denies, and concluded the request was irreducible.
+Two sibling tool blocks in one assistant message are not a shell bundle.
+The seatbelt classifies one command string per tool call, so the paired shape passes it structurally, and the arm then rides along in a request that had to happen anyway.
+
+The measured week contained essentially none of that shape.
+
+### Measured before
+
+The instrument now counts delivery arms by the shape of the request that issued them, so the same command reads the before and the after:
+
+```text
+bin/fm-supervision-cost.sh --session 892f51b7-e828-4d6f-a55c-ffc5793f2f9f
+```
+
+Session `892f51b7`, the main home's supervisor session on 2026-08-11 - the session that produced this unit's incident - measured on 2026-08-11:
+
+```text
+requests: 1120
+fresh tokens: 621,320
+delivery arms: 247
+  issued beside the drain, costing no request of their own: 0
+  issued as a request of their own: 238
+  fresh tokens those own-request arms wrote: 86,815
+```
+
+86,815 of 621,320 is **13.97 percent of everything that session freshly wrote**, spent on requests whose only content was starting the next delivery wait.
+
+The same measurement over every project on this host:
+
+```text
+2026-08-04 to 2026-08-10   1,415 arms   6 paired   1,187 own-request   407,347 fresh tokens
+2026-08-11                   256 arms   0 paired     242 own-request    88,705 fresh tokens
+```
+
+Against that week's 47,455,010 freshly written tokens the 407,347 is 0.86 percent; against 2026-08-11's 3,424,136 the 88,705 is 2.59 percent.
+Both figures are the same measurement against different denominators, and neither corrects the other: the host-wide denominator carries every project's real work, the session denominator carries one seat that does almost nothing but supervise.
+A prediction of "~12-14 percent of supervision calls" was on file before this; the 13.97 percent above is the first measurement of it, and it is a share of freshly written tokens in one session rather than a share of calls.
+
+An arm request that also did other work is counted in neither column.
+Only a request whose sole tool call is the arm is removable, and counting the others would have been a saving nobody could collect.
+
+### What changed
+
+`docs/supervision-protocols/claude.md` now requires the drain and the arm to be issued as two tool blocks of one message, and says in the same breath that this is not the shell bundling the seatbelt denies.
+
+That the seatbelt agrees is measured, not assumed.
+Feeding it each shape exactly as the harness presents it, on 2026-08-11:
+
+```text
+rc=0  bg=false  .../bin/fm-wake-drain.sh                              allowed
+rc=0  bg=true   .../bin/fm-watch-arm.sh                               allowed
+rc=2  bg=true   .../bin/fm-wake-drain.sh && .../bin/fm-watch-arm.sh   deny [watcher-bundled]
+```
+
+The pairing passes and the bundle is refused, which is the whole point: the ban is on one command string containing both, never on one message containing both.
+
+That pairing has one hazard, and it is the one the panel that proposed it named: nothing guarantees the harness runs two sibling blocks in order.
+An arm that starts before its sibling drain sees the queue the drain is about to take, closes at once on it, and hands the harness a completion carrying nothing - spending the exact request the pairing just saved.
+
+`bin/fm-wake-wait.sh` closes that by extending the deferral it already had.
+Content that appears while a stub holds behind another stub was already INHERITED, deferred one `FM_WATCH_CHECKPOINT_REARM_POLL` and reported anyway if still there afterwards.
+Content that is already in the queue when a `--hold` arm takes its first look is now treated identically, for the identical reason: somebody else is about to report it.
+Only `--hold` takes that deferral.
+`bin/fm-watch-checkpoint.sh` and the OpenCode plugin own their own re-attempt cadence, pay nothing for an instant close, and are unchanged.
+
+### Before and after
+
+Measured on 2026-08-11 by running both versions of `bin/fm-wake-wait.sh` against the same fixture state: a healthy fake watcher, a queue holding one record, and a sibling drain that empties it 0.4s after the arm starts.
+
+```text
+BEFORE  arm beside a drain that takes the queue: closed within 10s = yes   output: wake: queued
+BEFORE  arm beside a queue NOBODY drains:        delivered after 103ms     output: wake: queued
+AFTER   arm beside a drain that takes the queue: closed within 10s = no    output: (none)
+AFTER   arm beside a queue NOBODY drains:        delivered after 5,341ms   output: wake: queued
+```
+
+The wasted close is gone and the wake nobody drained still arrives, 5.2 seconds later.
+Latency, never silence - the same trade the inheritance rule already made.
+
+The after figure in fresh tokens is not supplied, because it is not measurable yet: no session has run under the changed protocol.
+When one has, the command above reads it from the `issued beside the drain` line, which is why the instrument counts both shapes rather than counting arms.
+
+`tests/fm-wake-wait.test.sh` pins all three properties: a paired arm must not close on the queue its sibling drain is about to take, that same queue must still be delivered when no drain takes it, and a delivery wait without `--hold` must still report already-queued content at once.
+The first fails on the unchanged code with `a paired arm closed at once on the queue its sibling drain was about to take: wake: queued`.
+
+## Repair 5: the arm that was killed, and what was killing it
+
+### What it was
+
+Through 2026-08-11 the main home's delivery arm was repeatedly stopped within seconds to minutes of starting, carrying nothing.
+Each stop reached the model as a background-task completion, so each one cost a supervision turn: drain an empty queue, re-arm, get stopped again.
+Across one away stretch that was roughly fifty consecutive turns that moved no work.
+
+Three candidates were live and none had been separated: a harness-side lifetime cap, a concurrency cap, and resource pressure.
+
+### The killer, by evidence
+
+It is the Claude Code CLI's **memory-pressure background-shell reaper**, measured on version 2.1.228.
+
+The mechanism is in the shipped binary.
+For every backgrounded local Bash task of the MAIN session (not a subagent) whose kind is not `monitor`, the CLI registers one `process.on("memoryPressure")` listener.
+When the runtime raises memory pressure, that listener kills the task and reports it, unless any of these hold: the task is not running, it was already notified, the main loop is busy, an agent-type task is active, or **less than 1,800,000 ms have passed since the last terminal interaction**.
+It emits telemetry `task_local_shell_pressure_reap`, and the environment variable `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP` disables it.
+
+Five readings of session `892f51b7`'s own record agree with that predicate and rule out the other two candidates:
+
+| Reading | Value | What it rules out |
+|---|---|---|
+| stopped background-task notifications | 101, of which 97 matched a launch and 96 were the delivery arm | - |
+| notification summary | `Background command "<desc>" was stopped` | user and model stops, which the CLI writes as `was stopped by the user` and `was stopped by Claude` |
+| task output files | end in bash's `Terminated` | the OOM killer, which produces `Killed` |
+| task lifetimes | 7s to 1,023s, median 107s | a lifetime cap; the main session gets no cap at all, only subagent background shells do (`CLAUDE_SUBAGENT_BG_SHELL_MAX_MS`, default 3,600,000 ms) |
+| concurrent background tasks at each kill | exactly 1, at all 97 | a concurrency cap |
+| nearest other background launch | never within 5s; the next launch came 10-23s AFTER each kill | eviction when a new task starts |
+| minutes since the last genuine captain message | min 32.5, median 126.1, max 264.8; **0 of 101 below 30** | anything unrelated to the 30-minute idle precondition |
+
+The last row is the one that identifies it rather than merely fitting it.
+The reaper's own condition is 1,800,000 ms since the last terminal interaction; not one of 101 kills happened inside that window, and the distribution starts 2.5 minutes past it.
+
+### What follows, and what does not
+
+**Nothing in this repository can stop it.**
+It is the harness's own valve for its own memory, it fires from outside the model loop, and the only switch is an environment variable that turns that valve off.
+Setting it is an operator's decision with a real cost on the other side, not a worker's, so this document names the switch and does not throw it.
+
+**The precondition is the away stretch.**
+The reaper is armed exactly when nobody has touched the terminal for half an hour, which is exactly the condition `/afk` exists for - and away mode arms no session delivery wait at all, so under away mode there is nothing to reap.
+The fifty-turn stretch happened with away mode off.
+That is the practical mitigation this fleet already owns, and it is worth more than any change to the arm: it removes the cycles rather than making each one cheaper.
+
+**What the repairs above do to the residue.**
+A reaped cycle still costs a turn, but repair 4 takes it from three model requests to two, and repair 1 already removed the self-sustaining half of the loop.
+Nothing here claims the kill can be prevented.
+
+### The fold that was considered and rejected
+
+Moving the drain INTO the background waiter would make drain and arm literally one call: one process that arms, waits, drains, prints and exits, whose completion carries the wake content with it.
+
+It buys nothing under this harness, and the reason is measurable rather than argued.
+A completed background task's notification is this, verbatim from session `892f51b7`:
+
+```text
+<task-notification>
+<task-id>byrct9szk</task-id>
+<tool-use-id>toolu_01JJogd3QJYKJ26wjxtGKGMw</tool-use-id>
+<output-file>/tmp/.../tasks/byrct9szk.output</output-file>
+<status>completed</status>
+<summary>Background command "Arm wake delivery" completed (exit code 0)</summary>
+</task-notification>
+```
+
+It carries a pointer, never the output.
+So the model would still spend one request reading the file, and the fold would trade the drain's request for a read's request at par - while moving the drain's print-before-delete boundary out of a request the model is guaranteed to have read and into a file it might not reach.
+Priced at zero and paid for in the no-loss property, it was not built.
 
 ## Found here, owned elsewhere
 
@@ -263,4 +427,10 @@ bin/fm-supervision-cost.sh --session <session-id>
 bin/fm-supervision-cost.sh --project <substring> --json
 ```
 
-The two before-and-after experiments are a stash and a re-run: both compare the changed scripts with the unchanged ones on identical fixture state, and both are reproduced by the tests named above.
+The delivery-arm shape is on every one of those reports, so repair 4's before and after read from the same three commands.
+
+The before-and-after experiments are a stash and a re-run: each compares the changed scripts with the unchanged ones on identical fixture state, and each is reproduced by the tests named beside it.
+
+Repair 5's identification is reproduced from a transcript and the shipped binary, with no firstmate state involved.
+The transcript readings come from `<task-notification>` records and `tool_use` blocks in the session's own `.jsonl`; the predicate comes from the CLI binary, where `task_local_shell_pressure_reap` and `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP` are both plain strings.
+Nothing in it depends on this host, but the version does: it was measured on 2.1.228, and a later CLI is a different artefact that has to be re-read rather than assumed.

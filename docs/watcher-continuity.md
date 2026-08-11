@@ -107,6 +107,11 @@ A holding attempt that finds delivery already armed stays alive rather than clos
 Every close of the wrapper is therefore a real wake or a real failure, which is the one property that makes a close safe to treat as a delivery.
 It announces the wait on stderr and writes nothing to stdout, because a caller that reads stdout as the close reason must not be handed one before there is one.
 
+Every harness that arms through `bin/fm-watch-arm.sh` therefore takes the start-up deferral too - claude, grok, pi, and OpenCode's full arm - because the wrapper always passes `--hold`.
+For the four of them the effect is bounded and small: each protocol drains before it arms, so the queue is normally empty when the arm opens its eyes, and a queue that is not empty is reported one `FM_WATCH_CHECKPOINT_REARM_POLL` later instead of at once.
+The pairing itself is stated only in `docs/supervision-protocols/claude.md`, because Claude Code is the only harness whose two-tool-blocks-in-one-message behavior has been measured here; codex arms nothing from a model request at all (its checkpoint is foreground), and OpenCode and pi arm from a plugin and an extension rather than from a model request, so none of the three has an arm request to pair away.
+Grok is background-notify and does have one, but no measurement of its message shape is on file, so its protocol is left unchanged rather than changed on an assumption.
+
 The instant close is unchanged for every caller that runs `bin/fm-wake-wait.sh` directly without the flag.
 `bin/fm-watch-checkpoint.sh` and OpenCode's `.opencode/plugins/fm-primary-watch-arm.js` both own a cadence built around that close and both keep it.
 The plugin's full arm goes through the wrapper and now holds instead of returning armed, which its readiness path already tolerates: it settles readiness on the wrapper's `watcher: started|attached` header line, printed before the hold begins, not on the close.
@@ -121,11 +126,21 @@ Nothing is inherited once the queue drains, and the attempt is an ordinary deliv
 A working holder reports well inside that window, so one wake produces one delivery; a killed or wedged holder never reports, and the attempt behind it delivers a few seconds late.
 Latency, never silence.
 
+The same deferral covers a `--hold` arm's very first look at the queue, and that half exists for the paired protocol rather than for holding.
+`docs/supervision-protocols/claude.md` issues the drain and the arm as two tool blocks of one message, which is what takes a wake from three model requests to two, and nothing guarantees the harness runs the two in order.
+An arm that closed at once on the queue its sibling drain is about to take would spend the request the pairing saved, so content already there when it starts is inherited exactly like a holder's, on the same bound.
+`docs/supervision-cost.md` owns that measurement.
+
+An acquisition that REPLACED a dead delivery record announces it: `wake delivery: replaced a dead delivery record (pid=<N> no longer exists); this process is the delivery wait now`.
+Taking a free lock and stealing a lock whose owner is gone are one lock operation and opposite facts - delivery was already covered, against a record that outlived its process while the session was covered by nothing - and the caller cannot tell them apart from silence.
+The harness's own memory-pressure reaper leaves exactly that record behind, so it is not a rare shape (`docs/supervision-cost.md`, repair 5).
+
 While holding, the attempt does not re-run `bin/fm-watcher-service.sh ensure` on any interval, and that is not a loss: the holder never re-converged either, and a dead or wedged watcher still reaches the model as the stub's own `wake delivery: FAILED - watcher beacon stale ...`, which every consumer already classifies as a failure.
 
 `tests/fm-wake-wait.test.sh` covers the five properties that matter: a holding attempt does not close while another stub of this session owns delivery, it still delivers a wake that arrives while it holds, it takes delivery over once the holder releases the lock, it lets the holder report an inherited wake rather than reporting the same wake a second time, and it still reports a wake that a wedged holder never reported.
 The last two are a pair on purpose, because dropping either one turns this fix into a different defect: without the deferral a single wake is delivered twice for as long as the session runs, and without the bound on that deferral a wedged holder swallows the wake entirely.
 It also pins that `bin/fm-watch-arm.sh` execs the stub with `--hold`, because nothing else in the file would notice if that one word were dropped and the loop would come straight back.
+Four further cases pin the two additions above: a paired arm must not close on the queue its sibling drain is about to take, that queue must still be delivered when no drain takes it, a delivery wait without `--hold` must still report already-queued content at once, and a dead delivery record must be replaced by a real waiter and said to be replaced rather than reported as armed.
 
 ## Surviving a host suspend
 

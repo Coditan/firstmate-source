@@ -25,6 +25,17 @@
 # So the process closes only on a real wake or a real failure, which is the one
 # property that makes a close safe to treat as a delivery.
 #
+# `--hold` additionally defers queue content that is already there on its first
+# look, on the same bounded rule.  That is what makes the paired protocol safe:
+# a background-notify harness issues the drain and this arm as two tool blocks
+# of one message, and an arm that closed at once on the queue its sibling drain
+# is about to take would spend the very request the pairing saved.
+#
+# A stub that acquires the lock by REPLACING a dead record says so.  Taking a
+# free lock and replacing a record that outlived its process are the same lock
+# operation and opposite facts: one means delivery was already covered, the
+# other means this session was covered by nothing while that record stood.
+#
 # A holding stub keeps watching the queue rather than only waiting for the lock,
 # and that ordering is deliberate: waiting for the lock alone would be silent if
 # the holder were wedged and nobody were listening to it, and a wake nobody
@@ -87,7 +98,11 @@ Block until this home's durable wake queue is non-empty, then print "wake: queue
 Without --hold, a healthy same-session stub already holding the lock is reported
 as "wake delivery: already armed pid=<N> (same session)" and this exits 0 at once.
 With --hold, that case waits behind the holder instead of closing, so this process
-closes only on a real wake or a real failure.
+closes only on a real wake or a real failure, and queue content already present on
+the first look is deferred one FM_WATCH_CHECKPOINT_REARM_POLL so a sibling drain
+issued in the same message gets to report it first.
+A lock acquired by replacing a DEAD delivery record is announced on stderr as
+"wake delivery: replaced a dead delivery record (pid=<N> no longer exists)".
 EOF
     exit 0
     ;;
@@ -194,6 +209,17 @@ reconcile_stub_lock() {
   return 3
 }
 
+# Announce that this acquisition REPLACED a dead delivery record rather than
+# taking a free lock. The two are the same lock operation and mean opposite
+# things to whoever reads the output: "delivery was already covered" against "a
+# record outlived the process it named, and this session was covered by nothing
+# while that record stood". Silence for the ordinary free-lock case keeps the
+# line meaningful when it does appear.
+announce_replaced_record() {
+  [ -n "${FM_LOCK_STOLEN_FROM_PID:-}" ] || return 0
+  echo "wake delivery: replaced a dead delivery record (pid=$FM_LOCK_STOLEN_FROM_PID no longer exists); this process is the delivery wait now" >&2
+}
+
 HOLDING=0
 lock_rc=0
 reconcile_stub_lock || lock_rc=$?
@@ -235,6 +261,7 @@ if [ "$HOLDING" -eq 0 ]; then
     echo "wake delivery: FAILED - could not record stub identity" >&2
     exit 1
   }
+  announce_replaced_record
 fi
 
 # Deadline of the confirmation window currently in flight, empty when none is.
@@ -266,6 +293,7 @@ try_takeover() {
       fi
       HOLDING=0
       echo "wake delivery: took delivery over from the released holder" >&2
+      announce_replaced_record
       ;;
     2)
       echo "wake delivery: FAILED - lock acquisition failed for $STUB_LOCK" >&2
@@ -283,13 +311,28 @@ prev_iter=$(date +%s)
 next_takeover=$((prev_iter + REARM_POLL))
 # Epoch this process first saw the CURRENT queue content, cleared when it drains.
 queue_since=
-# 1 while the current queue content belongs to a stub this process is holding
-# behind.  Set when content is first seen while still holding - never at
-# start-up, where there is nothing yet to inherit - and cleared when the queue
-# drains.  It deliberately outlives the hold itself: content that appeared while
-# holding is still the holder's to report even after this process has taken the
-# lock over, which is exactly the moment the two would otherwise both report.
+# 1 while the current queue content belongs to somebody else to report.  Set
+# when content is first seen while still holding behind another stub, and -
+# under `--hold` only - when content is already there on this process's very
+# first look.  Cleared when the queue drains.  It deliberately outlives the hold
+# itself: content that appeared while holding is still the holder's to report
+# even after this process has taken the lock over, which is exactly the moment
+# the two would otherwise both report.
+#
+# The start-up half exists for the paired protocol.  A background-notify harness
+# issues the drain and this arm as two tool blocks of one message, which is what
+# makes a wake cost two model requests instead of three, and nothing guarantees
+# the harness runs the two in order.  An arm that starts beside a drain and
+# closes at once on the queue the drain is about to take would spend the request
+# the pairing just saved.  So content that is already there when this process
+# opens its eyes is treated exactly like inherited content: deferred one
+# FM_WATCH_CHECKPOINT_REARM_POLL, and reported anyway if it is still sitting
+# there afterwards.  Deferral may cost latency; it may never cost the wake.
+# Only `--hold` takes that deferral, because only a caller whose completion IS
+# the delivery pays for a wasted close; bin/fm-watch-checkpoint.sh and the
+# OpenCode plugin own their own cadence and keep the instant report.
 INHERITED=0
+FIRST_LOOK=1
 while :; do
   now=$(date +%s)
   gap=$((now - prev_iter))
@@ -320,7 +363,13 @@ while :; do
       # sustains itself rather than settling.  The flag is set when the content
       # is first seen rather than at start-up, because at start-up there is no
       # content to inherit and a flag cleared then would never protect anything.
-      [ "$HOLDING" -eq 1 ] && INHERITED=1
+      # A `--hold` arm's very first look is the one exception, and the block
+      # above the loop owns why.
+      if [ "$HOLDING" -eq 1 ]; then
+        INHERITED=1
+      elif [ "$HOLD" -eq 1 ] && [ "$FIRST_LOOK" -eq 1 ]; then
+        INHERITED=1
+      fi
     fi
     # Inherited content is reported anyway once a takeover cadence has passed
     # with it still sitting there, which means the holder never delivered it: a
@@ -364,5 +413,6 @@ while :; do
       exit 1
     fi
   fi
+  FIRST_LOOK=0
   sleep "$POLL"
 done
