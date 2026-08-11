@@ -213,7 +213,7 @@ Three was believed to be the protocol floor, and 69 deliveries that actually car
 Repair 4 below lowers it to two.
 The measurements below three are incomplete retained-record or activity-window segments, not complete wake handling.
 The other 573 three-request deliveries carried no queue record at all: a wake carrying nothing is the cheapest complete wake to handle and still costs three requests, which is why removing the wake beats optimising the handling.
-Each of the three is irreducible under this harness:
+The original analysis classified each of the three as irreducible under this harness:
 
 1. **The drain.**
    `bin/fm-wake-drain.sh` is the sole model-invoked atomic drain, and its print-before-delete boundary is what makes consumption at-least-once.
@@ -342,7 +342,7 @@ For every backgrounded local Bash task of the MAIN session (not a subagent) whos
 When the runtime raises memory pressure, that listener kills the task and reports it, unless any of these hold: the task is not running, it was already notified, the main loop is busy, an agent-type task is active, or **less than 1,800,000 ms have passed since the last terminal interaction**.
 It emits telemetry `task_local_shell_pressure_reap`, and the environment variable `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP` disables it.
 
-Five readings of session `892f51b7`'s own record agree with that predicate and rule out the other two candidates:
+Seven readings of session `892f51b7`'s own record agree with that predicate and rule out the other candidates:
 
 | Reading | Value | What it rules out |
 |---|---|---|
