@@ -23,15 +23,18 @@ Requests are deduplicated by ``requestId``, so a retried request is counted once
 
 WHAT IS COUNTED
 ---------------
-Sessions       one transcript file, keyed by its session id.  The count per day
-               is the restart rate: how often a session had to start over.
+Activity       requests whose own timestamps fall inside the inclusive date
+               bounds, including activity from sessions that started earlier.
+Sessions       one transcript file with activity in the window, keyed by its
+               session id.
 Session start  the fresh tokens of a session's FIRST request (system prompt,
                instruction surface, tool schemas - paid before any work), and
                the startup block, which extends that through the first request
                that reads the session-start digest.  A session that never runs
                the digest has no startup block beyond its first request, and is
                reported that way rather than having the whole session counted as
-               startup.
+               startup.  It is attributed only when that true first request is
+               inside the date bounds, on the day that request occurred.
 Deliveries     one ``<task-notification>`` message: the harness handing a
                completed background task back to the model.  Under a
                background-notify harness that IS the wake.
@@ -56,6 +59,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import statistics
 import sys
 from collections import defaultdict
@@ -109,6 +113,64 @@ def fresh_tokens(usage):
     )
 
 
+def invoked_script(command, script):
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|")
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return False
+    segments = []
+    segment = []
+    for token in tokens:
+        if token and all(char in ";&|" for char in token):
+            if segment:
+                segments.append(segment)
+                segment = []
+        else:
+            segment.append(token)
+    if segment:
+        segments.append(segment)
+    for words in segments:
+        while words and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
+            words = words[1:]
+        if not words:
+            continue
+        while words:
+            wrapper = os.path.basename(words[0])
+            if wrapper == "env":
+                words = words[1:]
+                while words and (
+                    words[0].startswith("-")
+                    or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0])
+                ):
+                    words = words[1:]
+                continue
+            if wrapper in ("command", "exec"):
+                words = words[1:]
+                while words and words[0].startswith("-"):
+                    words = words[1:]
+                continue
+            if wrapper == "timeout":
+                words = words[1:]
+                while words and words[0].startswith("-"):
+                    words = words[1:]
+                if words:
+                    words = words[1:]
+                continue
+            break
+        if not words:
+            continue
+        executable = os.path.basename(words[0])
+        if executable == script:
+            return True
+        if executable in ("bash", "sh"):
+            args = [word for word in words[1:] if not word.startswith("-")]
+            if args and os.path.basename(args[0]) == script:
+                return True
+    return False
+
+
 class SessionMeasurement:
     """One transcript, measured. Segments are delimited by deliveries."""
 
@@ -125,8 +187,11 @@ class SessionMeasurement:
         self.deliveries = 0
         self.segment_requests = []
         self.segment_fresh = []
+        self.segment_rows = []
         self.drain_calls = 0
         self.drain_calls_empty = 0
+        self.drain_result_bytes = []
+        self.drain_result_rows = []
         self.empty_deliveries = 0
         # An empty delivery is a wake that carried nothing. Its requests and its
         # freshly written tokens are the measured price of the defect, kept apart
@@ -134,6 +199,7 @@ class SessionMeasurement:
         # against a number rather than against a feeling.
         self.empty_delivery_requests = 0
         self.empty_delivery_fresh = 0
+        self.is_session_start = False
 
 
 def measure_file(path, since, until, seen_requests):
@@ -158,11 +224,10 @@ def measure_file(path, since, until, seen_requests):
         break
     if session_day is None:
         return None
-    if since and session_day < since:
-        return None
-    if until and session_day > until:
-        return None
     measurement.day = session_day
+    measurement.is_session_start = (not since or session_day >= since) and (
+        not until or session_day <= until
+    )
 
     # Tool-use id -> True for calls that ran the wake drain, so their results can
     # be classified when they come back a message later.
@@ -185,6 +250,7 @@ def measure_file(path, since, until, seen_requests):
         if segment is not None:
             measurement.segment_requests.append(segment[0])
             measurement.segment_fresh.append(segment[1])
+            measurement.segment_rows.append(segment_rows)
             if segment_drains > 0 and segment_rows == 0:
                 measurement.empty_deliveries += 1
                 measurement.empty_delivery_requests += segment[0]
@@ -195,23 +261,23 @@ def measure_file(path, since, until, seen_requests):
 
     for record in records:
         timestamp = record.get("timestamp") or ""
-        if not timestamp[:10]:
+        day = timestamp[:10]
+        if not day:
             continue
+        in_range = (not since or day >= since) and (not until or day <= until)
 
         kind = record.get("type")
         if kind == "assistant":
             message = record.get("message") or {}
             usage = message.get("usage") or {}
             request_id = record.get("requestId")
-            if usage and request_id and request_id not in seen_requests:
+            if usage and request_id and in_range and request_id not in seen_requests:
                 seen_requests.add(request_id)
                 this_fresh = fresh_tokens(usage)
                 measurement.requests += 1
                 measurement.fresh += this_fresh
                 measurement.cache_read += int(usage.get("cache_read_input_tokens") or 0)
                 measurement.output += int(usage.get("output_tokens") or 0)
-                if measurement.first_request_fresh is None:
-                    measurement.first_request_fresh = this_fresh
                 if startup_open:
                     measurement.startup_fresh += this_fresh
                     startup_requests += 1
@@ -224,28 +290,31 @@ def measure_file(path, since, until, seen_requests):
                 if not isinstance(block, dict) or block.get("type") != "tool_use":
                     continue
                 command = (block.get("input") or {}).get("command") or ""
-                if DRAIN_CALL in command:
+                if in_range and invoked_script(command, DRAIN_CALL):
                     drain_calls[block.get("id")] = True
                     measurement.drain_calls += 1
                     segment_drains += 1
-                if SESSION_START_CALL in command:
+                if invoked_script(command, SESSION_START_CALL):
                     session_start_calls[block.get("id")] = True
         elif kind == "user":
             content = (record.get("message") or {}).get("content")
             if isinstance(content, str):
                 if "<task-notification>" in content:
                     close_segment()
-                    measurement.deliveries += 1
-                    segment = [0, 0]
+                    if in_range:
+                        measurement.deliveries += 1
+                        segment = [0, 0]
                 continue
             for block in content or []:
                 if not isinstance(block, dict) or block.get("type") != "tool_result":
                     continue
                 text = tool_result_text(block)
-                if block.get("tool_use_id") in drain_calls:
+                if in_range and block.get("tool_use_id") in drain_calls:
                     rows = sum(
                         1 for line in text.split("\n") if QUEUE_ROW.match(line)
                     )
+                    measurement.drain_result_bytes.append(len(text.encode("utf-8")))
+                    measurement.drain_result_rows.append(rows)
                     if rows == 0:
                         measurement.drain_calls_empty += 1
                     segment_rows += rows
@@ -253,7 +322,16 @@ def measure_file(path, since, until, seen_requests):
                     startup_digest_seen = True
 
     close_segment()
-    if measurement.requests == 0:
+    measurement.first_request_fresh = fresh_tokens(
+        next(
+            (record.get("message") or {}).get("usage") or {}
+            for record in records
+            if record.get("type") == "assistant"
+            and (record.get("message") or {}).get("usage")
+            and record.get("requestId")
+        )
+    )
+    if measurement.requests == 0 and not measurement.is_session_start:
         return None
     if not startup_digest_seen:
         measurement.startup_fresh = measurement.first_request_fresh or 0
@@ -273,18 +351,29 @@ def summarize(values):
 
 
 def measure(root, since, until, project_filter):
-    seen_requests = set()
-    sessions = []
+    paths = []
+    activity_days = set()
     for path in iter_transcripts(root):
         if project_filter and project_filter not in os.path.dirname(path):
             continue
-        measurement = measure_file(path, since, until, seen_requests)
-        if measurement is not None:
-            sessions.append(measurement)
+        paths.append(path)
+        for record in read_records(path):
+            day = (record.get("timestamp") or "")[:10]
+            if day and (not since or day >= since) and (not until or day <= until):
+                activity_days.add(day)
 
     by_day = defaultdict(list)
-    for measurement in sessions:
-        by_day[measurement.day].append(measurement)
+    active_sessions = set()
+    seen_requests = set()
+    for day in sorted(activity_days):
+        for path in paths:
+            measurement = measure_file(path, day, day, seen_requests)
+            if measurement is None:
+                continue
+            measurement.day = day
+            by_day[day].append(measurement)
+            if measurement.requests:
+                active_sessions.add(measurement.session_id)
 
     days = []
     for day in sorted(by_day):
@@ -294,7 +383,7 @@ def measure(root, since, until, project_filter):
         days.append(
             {
                 "day": day,
-                "session_starts": len(group),
+                "session_starts": sum(m.is_session_start for m in group),
                 "requests": sum(m.requests for m in group),
                 "fresh_tokens": sum(m.fresh for m in group),
                 "cache_read_tokens": sum(m.cache_read for m in group),
@@ -303,10 +392,12 @@ def measure(root, since, until, project_filter):
                     [
                         m.first_request_fresh
                         for m in group
-                        if m.first_request_fresh is not None
+                        if m.is_session_start and m.first_request_fresh is not None
                     ]
                 ),
-                "startup_block_fresh": summarize([m.startup_fresh for m in group]),
+                "startup_block_fresh": summarize(
+                    [m.startup_fresh for m in group if m.is_session_start]
+                ),
                 "deliveries": sum(m.deliveries for m in group),
                 "requests_per_delivery": summarize(segment_requests),
                 "fresh_per_delivery": summarize(segment_fresh),
@@ -317,24 +408,75 @@ def measure(root, since, until, project_filter):
                     m.empty_delivery_requests for m in group
                 ),
                 "empty_delivery_fresh": sum(m.empty_delivery_fresh for m in group),
+                "requests_per_delivery_distribution": {
+                    str(value): {
+                        "deliveries": sum(
+                            1
+                            for m in group
+                            for requests in m.segment_requests
+                            if requests == value
+                        ),
+                        "carried_record": sum(
+                            1
+                            for m in group
+                            for requests, rows in zip(m.segment_requests, m.segment_rows)
+                            if requests == value and rows > 0
+                        ),
+                    }
+                    for value in sorted(set(segment_requests))
+                },
             }
         )
 
+    distribution_measurements = []
+    distribution_seen = set()
+    for path in paths:
+        measurement = measure_file(path, since, until, distribution_seen)
+        if measurement is not None:
+            distribution_measurements.append(measurement)
+    distribution = defaultdict(lambda: {"deliveries": 0, "carried_record": 0})
+    drain_bytes = []
+    drain_rows = []
+    for measurement in distribution_measurements:
+        drain_bytes.extend(measurement.drain_result_bytes)
+        drain_rows.extend(measurement.drain_result_rows)
+        for requests, rows in zip(
+            measurement.segment_requests, measurement.segment_rows
+        ):
+            distribution[str(requests)]["deliveries"] += 1
+            distribution[str(requests)]["carried_record"] += rows > 0
+
+    sorted_drain_bytes = sorted(drain_bytes)
+    p99_index = max(0, (len(sorted_drain_bytes) * 99 + 99) // 100 - 1)
+
     return {
         "unit": "fresh tokens = input_tokens + cache_creation_input_tokens, per unique requestId",
+        "window_semantics": (
+            "activity is bounded by each request timestamp; session starts are "
+            "counted only when the true first request is in the window"
+        ),
         "not_counted": [
             "harnesses other than Claude Code, which keep no equivalent local usage record",
             "days whose transcripts the provider has already rolled off",
             "currency cost, which needs a price list this tool does not pin",
         ],
         "transcripts_root": root,
-        "sessions": len(sessions),
+        "sessions": len(active_sessions),
         "days": days,
+        "requests_per_delivery_distribution": dict(distribution),
+        "drain_results": {
+            "count": len(drain_bytes),
+            "median_bytes": statistics.median(drain_bytes) if drain_bytes else 0,
+            "p99_bytes": sorted_drain_bytes[p99_index] if drain_bytes else 0,
+            "max_bytes": max(drain_bytes) if drain_bytes else 0,
+            "max_rows": max(drain_rows) if drain_rows else 0,
+        },
     }
 
 
 def print_report(report):
     print(f"unit: {report['unit']}")
+    print(f"window: {report['window_semantics']}")
     print(f"transcripts: {report['transcripts_root']}")
     print(f"sessions measured: {report['sessions']}")
     print("")

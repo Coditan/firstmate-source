@@ -23,7 +23,8 @@
 #                          [--project <substring>] [--session <id>]
 #                          [--transcripts <dir>] [--json]
 #
-#   --since / --until   inclusive day bounds; omit for every retained day
+#   --since / --until   inclusive activity-day bounds; session starts count only
+#                       when the true first request is inside the same bounds
 #   --project           keep only transcripts under a matching project directory
 #   --session           report one session in detail instead of the daily table
 #   --transcripts       transcript root (default: $FM_TRANSCRIPTS or
