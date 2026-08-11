@@ -159,6 +159,7 @@ $ no-mistakes status
 ```
 
 The daemon was running throughout, so `stopped` is the refusal, not the daemon's state.
+The socket itself was confirmed the same day from a real `codex exec` worker carrying the full crewmate profile, which reported `PROBE3 socket OK`, so the granted dimension does not rest on the `codex sandbox` reading alone.
 
 That reading is the hazard worth carrying out of this section.
 A Codex crewmate denied the socket is not told it was denied: the client reports the shared daemon as **stopped** rather than surfacing the `EPERM` that section 1 shows at the raw socket layer.
@@ -171,3 +172,27 @@ Anyone diagnosing a Codex worker that reports the daemon stopped should suspect 
 A home running an older vendored or unsynced copy keeps composing the pre-grant launch line and keeps measuring the original refusal, no matter what this repository's default branch holds.
 That is a deployment fact rather than a defect, and it is recorded here because the symptom is indistinguishable from the fix being absent: the worker fails exactly as it did before.
 Check the spawning home's own `bin/fm-spawn.sh` for the grant before concluding the change is missing or ineffective.
+
+## 9. What the grant does not cover, and why that is not a reason to widen it
+
+The grant covers the network dimension and nothing else.
+A pipeline run also writes in two places outside the workspace, and the raw sandbox refuses both.
+Measured 2026-08-11 from a real `codex exec` worker carrying the full crewmate profile, network grant included:
+
+```
+PROBE1 common-dir-write REFUSED   # the git common dir of a linked worktree
+PROBE2 gate-write REFUSED         # /home/coditan/.no-mistakes/repos/<hash>.git
+PROBE3 socket OK                  # the granted dimension
+```
+
+Neither refusal means the grant is insufficient, and neither is an invitation to add a second dimension to it.
+Codex crewmates demonstrably commit in exactly this linked-worktree layout, because the branches carrying their work exist and were authored in those worktrees.
+The mechanism is inferred rather than measured: the approval path, `approval_policy = "on-request"` with `approvals_reviewer = "auto_review"`, is what clears a filesystem refusal, because such a refusal surfaces as a failed command the agent can re-run with elevation.
+
+That is the asymmetry the whole exception rests on.
+A socket refusal cannot be cleared the same way, because it happens inside the `no-mistakes` client's own process rather than as a command the agent can escalate, which is exactly why the network dimension needed a launch-line grant and the filesystem dimensions did not.
+A future reader meeting a filesystem refusal from a Codex crewmate should reach for the approval path, not for another dimension here.
+
+Two limits of this record, stated rather than glossed.
+`codex sandbox` and `codex exec` are both weaker instruments than the interactive `codex` session `bin/fm-spawn.sh` actually launches, so a refusal measured through them can understate what a real crewmate achieves through its approval path.
+An end-to-end pipeline start under Codex was not measured, because the shared daemon had another lane's run active in this repository throughout, and starting a competing run to take the reading would have disrupted that lane.
