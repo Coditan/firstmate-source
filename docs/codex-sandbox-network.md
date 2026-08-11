@@ -71,7 +71,7 @@ exit=6
 ```
 
 A Codex crewmate can therefore reach the public internet, where before it could not.
-It keeps every other boundary: the sandbox stays `workspace-write`, so writes remain confined to its own worktree, and `approval_policy = "on-request"` still escalates blocked boundary work.
+It keeps every other configured boundary: the sandbox stays `workspace-write`, so writes remain confined to its own worktree, and `approval_policy = "on-request"` remains unchanged.
 This is the captain-authorised trade of 2026-08-10, taken because the alternative is that the fleet's heaviest class of work cannot leave the expensive provider.
 
 ## 4. The grant works from a real Codex worker, not just from `codex sandbox`

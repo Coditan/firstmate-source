@@ -176,7 +176,7 @@ Portable shard evidence and coverage rules are in [fm-test-portable-shards.md](f
 
 The tracked `.codex/config.toml` is the authoritative Codex Firstmate profile for firstmate-spawned Codex agents.
 A Codex crewmate works in some other project's worktree, which has no such file, so `bin/fm-spawn.sh` parses this repo's copy and passes its `sandbox_mode`, `approval_policy`, and `approvals_reviewer` values as repeatable `codex -c key=value` overrides whenever it launches a Codex crewmate or secondmate.
-Those overrides currently set `sandbox_mode = "workspace-write"`, `approval_policy = "on-request"`, and `approvals_reviewer = "auto_review"` so Codex keeps a workspace sandbox, escalates blocked boundary work, and uses auto review for approval decisions.
+Those overrides currently set `sandbox_mode = "workspace-write"`, `approval_policy = "on-request"`, and `approvals_reviewer = "auto_review"` so Codex keeps a workspace sandbox and uses auto review for approval decisions.
 
 Do not treat that file as inert for sessions running inside this repository.
 Codex 0.145.0 reads it as configuration for a Codex session whose working directory is in this repo, which is measured in [`docs/codex-sandbox-network.md`](codex-sandbox-network.md) section 5 and corrects an earlier claim here that repo-local `.codex/config.toml` is never auto-loaded.
