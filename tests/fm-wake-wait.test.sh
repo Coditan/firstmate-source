@@ -435,6 +435,166 @@ test_arm_wrapper_waits_with_hold() {
   pass "the arm wrapper stays open until a real wake"
 }
 
+# A RECORD of a delivery wait is not a delivery wait. The two are told apart
+# only by asking whether the recorded process still exists, and an arm that
+# skips that question answers "already armed" about a process that is gone -
+# after which the caller's own contract tells it to end the turn. That is not a
+# cost defect: it makes "no turn ends blind" false in the one situation the rule
+# exists for, and it fails silently, because nothing in the output distinguishes
+# a live waiter from a record of one.
+test_stale_delivery_record_is_replaced_rather_than_reported_armed() {
+  local home state daemon dead identity arm err lockpid armed
+  home="$TMP_ROOT/stub-stale-record"
+  state="$home/state"
+  err="$home/stale.err"
+  mkdir -p "$state"
+  sleep 60 & daemon=$!
+  record_fake_daemon "$home" "$state" "$daemon"
+  printf '4242\n' > "$state/.lock"
+
+  # A pid that existed and is now gone, with the identity it would have
+  # published: exactly the record a killed or reaped delivery wait leaves behind.
+  ( exit 0 ) & dead=$!
+  wait "$dead" 2>/dev/null || true
+  identity="linux-starttime=1 cmdline-hex=00"
+  mkdir -p "$state/.wake-stub.lock"
+  printf '%s\n' "$dead" > "$state/.wake-stub.lock/pid"
+  printf '%s\n' "$home" > "$state/.wake-stub.lock/fm-home"
+  printf '%s\n' "$WAIT" > "$state/.wake-stub.lock/stub-path"
+  printf '4242\n' > "$state/.wake-stub.lock/session-lock-pid"
+  printf '%s\n' "$identity" > "$state/.wake-stub.lock/pid-identity"
+
+  armed=0
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"; fm_wake_stub_armed "$2" "$3" "$4"' _ \
+    "$ROOT/bin/fm-wake-lib.sh" "$state" "$WAIT" "$home" && armed=1
+  [ "$armed" -eq 0 ] \
+    || fail "a delivery record naming a dead pid was judged armed, so a turn could end on it with no live waiter at all"
+
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_WATCH_CHECKPOINT_REARM_POLL=1 \
+    "$WAIT" --hold >/dev/null 2> "$err" & arm=$!
+  lockpid=''
+  for _ in $(seq 1 30); do
+    lockpid=$(cat "$state/.wake-stub.lock/pid" 2>/dev/null || true)
+    [ "$lockpid" = "$arm" ] && break
+    sleep 0.2
+  done
+  [ "$lockpid" = "$arm" ] \
+    || fail "the arm did not replace the dead delivery record (lock pid: ${lockpid:-none}, expected $arm)"
+  kill -0 "$arm" 2>/dev/null || fail "the arm exited instead of becoming the delivery wait"
+  assert_not_contains "$(cat "$err")" "already armed" \
+    "the arm reported an existing delivery as armed against a process that no longer exists"
+  assert_contains "$(cat "$err")" "replaced a dead delivery record (pid=$dead" \
+    "replacing a dead record read exactly like taking a free lock, so the caller cannot tell the two apart"
+
+  kill -TERM "$arm" 2>/dev/null || true
+  wait "$arm" 2>/dev/null || true
+  kill -TERM "$daemon" 2>/dev/null || true
+  wait "$daemon" 2>/dev/null || true
+  pass "a dead delivery record is replaced by a real waiter and said to be replaced, never reported as armed"
+}
+
+# The paired protocol issues the drain and this arm as two tool blocks of one
+# message, which is what makes a wake cost two model requests instead of three.
+# Nothing guarantees the harness runs the two in order, so an arm that closed at
+# once on the queue its sibling drain is about to take would hand the harness a
+# completion carrying nothing and spend the very request the pairing saved.
+test_holding_arm_defers_queue_content_present_at_start_up() {
+  local home state daemon arm out err status
+  home="$TMP_ROOT/stub-startup-defer"
+  state="$home/state"
+  out="$home/defer.out"
+  err="$home/defer.err"
+  mkdir -p "$state"
+  sleep 60 & daemon=$!
+  record_fake_daemon "$home" "$state" "$daemon"
+  printf '4242\n' > "$state/.lock"
+  printf '%s\t%s\t%s\t%s\t%s\n' 1700000000 1 signal demo.status 'signal: demo.status' \
+    >> "$state/.wake-queue"
+
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_WATCH_CHECKPOINT_REARM_POLL=6 \
+    "$WAIT" --hold > "$out" 2> "$err" & arm=$!
+  sleep 2
+  kill -0 "$arm" 2>/dev/null \
+    || fail "a paired arm closed at once on the queue its sibling drain was about to take: $(cat "$out")"
+  [ ! -s "$out" ] || fail "a paired arm reported a wake that belonged to the drain beside it: $(cat "$out")"
+
+  # The sibling drain takes the queue, which is the ordinary outcome. Nothing is
+  # inherited any more and the arm goes on being an ordinary delivery wait.
+  : > "$state/.wake-queue"
+  sleep 2
+  kill -0 "$arm" 2>/dev/null || fail "the arm closed after its sibling drain took the queue"
+
+  printf '%s\t%s\t%s\t%s\t%s\n' 1700000001 2 signal later.status 'signal: later.status' \
+    >> "$state/.wake-queue"
+  status=0
+  wait "$arm" || status=$?
+  [ "$status" -eq 0 ] || fail "the arm exited $status instead of delivering the later wake"
+  assert_contains "$(cat "$out")" "wake: queued" "the arm did not deliver a wake that arrived after the drain"
+
+  kill -TERM "$daemon" 2>/dev/null || true
+  wait "$daemon" 2>/dev/null || true
+  pass "an arm paired with a drain lets the drain report the queue that was already there"
+}
+
+# The deferral is bounded for the same reason every other deferral here is: a
+# drain that never runs - denied, failed, or never issued - must cost latency
+# and never the wake itself.
+test_startup_content_no_drain_takes_is_still_delivered() {
+  local home state daemon arm out status
+  home="$TMP_ROOT/stub-startup-undrained"
+  state="$home/state"
+  out="$home/undrained.out"
+  mkdir -p "$state"
+  sleep 60 & daemon=$!
+  record_fake_daemon "$home" "$state" "$daemon"
+  printf '4242\n' > "$state/.lock"
+  printf '%s\t%s\t%s\t%s\t%s\n' 1700000000 1 signal demo.status 'signal: demo.status' \
+    >> "$state/.wake-queue"
+
+  status=0
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_WATCH_CHECKPOINT_REARM_POLL=1 \
+    "$WAIT" --hold > "$out" 2>/dev/null & arm=$!
+  wait "$arm" || status=$?
+  [ "$status" -eq 0 ] || fail "the arm exited $status instead of delivering a queue nobody drained"
+  assert_contains "$(cat "$out")" "wake: queued" \
+    "a queue nobody drained was deferred into silence instead of being reported late"
+
+  kill -TERM "$daemon" 2>/dev/null || true
+  wait "$daemon" 2>/dev/null || true
+  pass "queue content present at start-up is still delivered when no drain takes it"
+}
+
+# The deferral belongs to `--hold` alone. bin/fm-watch-checkpoint.sh and the
+# OpenCode plugin own their own re-attempt cadence and pay nothing for an
+# instant close, so slowing them down would be cost with no saving behind it.
+test_plain_arm_still_reports_startup_content_at_once() {
+  local home state daemon out status start elapsed
+  home="$TMP_ROOT/stub-startup-plain"
+  state="$home/state"
+  out="$home/plain.out"
+  mkdir -p "$state"
+  sleep 60 & daemon=$!
+  record_fake_daemon "$home" "$state" "$daemon"
+  printf '4242\n' > "$state/.lock"
+  printf '%s\t%s\t%s\t%s\t%s\n' 1700000000 1 signal demo.status 'signal: demo.status' \
+    >> "$state/.wake-queue"
+
+  start=$(date +%s)
+  status=0
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_WATCH_CHECKPOINT_REARM_POLL=30 \
+    "$WAIT" > "$out" 2>/dev/null || status=$?
+  elapsed=$(( $(date +%s) - start ))
+  [ "$status" -eq 0 ] || fail "the plain delivery wait exited $status instead of reporting the queued wake"
+  assert_contains "$(cat "$out")" "wake: queued" "the plain delivery wait did not report the queued wake"
+  [ "$elapsed" -lt 10 ] \
+    || fail "the plain delivery wait took ${elapsed}s to report an already-queued wake, so a caller with its own cadence was slowed for a saving it never gets"
+
+  kill -TERM "$daemon" 2>/dev/null || true
+  wait "$daemon" 2>/dev/null || true
+  pass "a delivery wait without --hold still reports already-queued content at once"
+}
+
 # The other half of the same branch: everything fm_wake_stub_armed rejects is a
 # real conflict and has to stay exactly as loud as it was. A live holder is not
 # enough - the lock has to belong to THIS session and match its recorded
@@ -843,6 +1003,10 @@ test_holding_stub_takes_delivery_over_from_a_released_holder
 test_holding_stub_lets_the_holder_report_an_inherited_wake
 test_holding_stub_reports_a_wake_a_wedged_holder_never_did
 test_arm_wrapper_waits_with_hold
+test_stale_delivery_record_is_replaced_rather_than_reported_armed
+test_holding_arm_defers_queue_content_present_at_start_up
+test_startup_content_no_drain_takes_is_still_delivered
+test_plain_arm_still_reports_startup_content_at_once
 test_foreign_stub_lock_still_fails_loudly
 test_stub_exits_loudly_on_stale_daemon_beacon
 test_wedged_live_watcher_is_reported_after_the_bounded_window
