@@ -619,6 +619,100 @@ fm_wake_print_deduped() {
   ' "$file"
 }
 
+# Bound what the raw half of a drain echoes into the model's context.
+#
+# The annotation half below has been bounded since it was written; the raw half
+# never was, and it is the half that carries the notification. Its size is the
+# product of two things nothing caps: how many distinct (kind,key) pairs the
+# queue accumulated, and how long each payload the watcher composed happens to
+# be. A wake turn pays for that text twice - once to read it, once as freshly
+# written context for every request that follows in the turn - so an unbounded
+# echo is an unbounded price on an event whose importance is unrelated to its
+# length.
+#
+# The bound is a global byte cap rather than a row count, matching the shape the
+# annotation half already uses, because bytes are what is actually being paid
+# for. A per-row cap sits under it so one pathological payload cannot consume
+# the whole budget and hide every other record behind itself.
+#
+# Withheld is NOT discarded. bin/fm-wake-drain.sh keeps the drained queue file
+# whenever this reports anything withheld or shortened, and prints the path, so
+# every record survives in full and one read recovers it. Defaults are set from
+# the measured distribution in docs/supervision-cost.md, well clear of every
+# drain this fleet has actually produced, so the cap is a ceiling rather than a
+# routine truncation.
+# Results are returned in globals rather than on stdout on purpose: the caller
+# needs both the bounded text AND whether anything was held back, and a command
+# substitution would run this in a subshell where the counters die with it.
+# shellcheck disable=SC2034 # Read by callers after fm_wake_bound_echo returns.
+FM_WAKE_ECHO_ROWS=
+FM_WAKE_ECHO_OMITTED=0
+FM_WAKE_ECHO_SHORTENED=0
+fm_wake_bound_echo() {  # <deduped-raw-rows>
+  # Local names here are deliberately unshared with the rest of this library's
+  # callers: it is sourced widely, and a name introduced here changes how a
+  # caller's own variable of the same name is analysed.
+  local rows=$1 line row_marker keep
+  local row_bytes global_bytes used=0 output=''
+  local LC_ALL=C
+
+  FM_WAKE_ECHO_ROWS=
+  FM_WAKE_ECHO_OMITTED=0
+  FM_WAKE_ECHO_SHORTENED=0
+  [ -n "$rows" ] || return 0
+
+  row_bytes=${FM_WAKE_ECHO_ROW_BYTES:-1024}
+  case "$row_bytes" in ''|*[!0-9]*|0) row_bytes=1024 ;; esac
+  global_bytes=${FM_WAKE_ECHO_BYTES:-8192}
+  case "$global_bytes" in ''|*[!0-9]*|0) global_bytes=8192 ;; esac
+
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    if [ "${#line}" -gt "$row_bytes" ]; then
+      row_marker=' [row shortened]'
+      keep=$((row_bytes - ${#row_marker}))
+      [ "$keep" -gt 0 ] || keep=0
+      line="${line:0:$keep}$row_marker"
+      FM_WAKE_ECHO_SHORTENED=$((FM_WAKE_ECHO_SHORTENED + 1))
+    fi
+    if [ $((used + ${#line} + 1)) -gt "$global_bytes" ]; then
+      FM_WAKE_ECHO_OMITTED=$((FM_WAKE_ECHO_OMITTED + 1))
+      continue
+    fi
+    output="$output$line
+"
+    used=$((used + ${#line} + 1))
+  done <<EOF
+$rows
+EOF
+
+  # Strip the single trailing newline the accumulator adds, so the caller keeps
+  # printing rows exactly the way it printed the unbounded ones.
+  # shellcheck disable=SC2034 # Read by callers after fm_wake_bound_echo returns.
+  FM_WAKE_ECHO_ROWS=${output%$'\n'}
+}
+
+# Keep the last FM_WAKE_ECHO_OVERFLOW_KEEP preserved drain files and remove the
+# rest. The path carries a fixed-width epoch, so glob order is chronological and
+# the oldest entries are the leading ones.
+# The array name is deliberately unshared: this library is sourced into
+# bin/fm-watch.sh, which keeps its own plain-string `files`, and a name used as
+# an array here makes every use of that string over there read as an array.
+fm_wake_prune_overflow() {  # <state-dir>
+  local state=$1 keep overflow_files=() f drop
+  keep=${FM_WAKE_ECHO_OVERFLOW_KEEP:-20}
+  case "$keep" in ''|*[!0-9]*) keep=20 ;; esac
+  for f in "$state"/.wake-drain-overflow.*; do
+    [ -f "$f" ] || continue
+    overflow_files+=("$f")
+  done
+  drop=$(( ${#overflow_files[@]} - keep ))
+  [ "$drop" -gt 0 ] || return 0
+  for f in "${overflow_files[@]:0:$drop}"; do
+    rm -f "$f" 2>/dev/null || true
+  done
+}
+
 # Map one structurally valid signal key to its home-local status filename.
 # Queue payload text is intentionally ignored: it is display data, not a path
 # authority. The caller still verifies the resulting regular file immediately

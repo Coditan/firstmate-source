@@ -37,6 +37,8 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-brief.sh`            | Scaffold ship, scout, secondmate-charter, and Herdr-lab briefs                       |
 | `fm-model-panel.sh`      | Run a model panel: two independent analysts on different models, then a judge that re-verifies both |
 | `fm-grade.sh`            | Grade review quality on git-derived and blind evidence rather than the reviewed tool's own ledger (docs/review-grading.md) |
+| `fm-supervision-cost.sh` | Measure what supervision costs a session in freshly written tokens, from the provider's own usage records (docs/supervision-cost.md) |
+| `fm-supervision-cost-engine.py` | Measurement engine for supervision spend; counts session starts, deliveries, empty deliveries, and requests per wake |
 | `fm-grade-engine.py`     | Measurement engine for the review-quality scale; every metric carries its evidence class and sample size |
 | `fm-herdr-lab.sh`        | Provision and guardedly operate an isolated, never-default Herdr lab session         |
 | `fm-install-herdr.sh`    | Install CI's exact-version Herdr pin with official asset URL, SHA-256, and protocol checks |
@@ -97,7 +99,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-bridge-inbox-lib.sh` | Share lock-protected Bridge inbox signatures and durable wake publication             |
 | `fm-watch-keeper.sh`     | Respawn the daemon watcher inside the detached tmux fallback session                  |
 | `fm-watch-arm.sh`        | Verify the external watcher service and await one session delivery stub              |
-| `fm-wake-wait.sh`        | Wait for a durable queued wake without draining it                                    |
+| `fm-wake-wait.sh`        | Wait for a durable queued wake without draining it, optionally holding behind an already-armed same-session stub instead of closing |
 | `fm-watch-checkpoint.sh` | Run one bounded foreground delivery-stub checkpoint for Codex supervision            |
 | `fm-watch.sh`            | Singleton-safe daemon watcher that absorbs benign wakes and durably queues actionable ones |
 | `fm-context-lib.sh`      | The context-ceiling predicates and branch classification - size, quiet boundary, captain presence, receipt freshness, re-entry path, blocked, ask, reset, and unenforced - shared by the watcher and the reset tool (docs/context-reset.md) |
@@ -118,7 +120,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-config-inherit-lib.sh` | Shared primary-to-secondmate inherited local-material propagation and config-reread delivery |
 | `fm-tasks-axi-lib.sh`    | Shared backlog-backend selector and `tasks-axi` compatibility probe                  |
 | `fm-currency-base-lib.sh` | Shared resolution and validation of the two upstream-check comparison bases          |
-| `fm-wake-drain.sh`       | Atomically drain queued watcher wakes, emit bounded best-effort status-event annotations, then assert watcher liveness |
+| `fm-wake-drain.sh`       | Atomically drain queued watcher wakes within a bounded echo that preserves rather than discards what it withholds, emit bounded best-effort status-event annotations, then assert watcher liveness |
 | `fm-wake-lib.sh`         | Shared durable wake queue, portable locks, and watcher/away-daemon identity/health helpers |
 | `fm-classify-lib.sh`     | Shared captain-relevant and declared-external-wait wake classification vocabulary    |
 | `fm-send.sh`             | Send one verified literal line or supported key through the target's recorded backend |

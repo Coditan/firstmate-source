@@ -12,6 +12,9 @@ When this session owns supervision and away mode is not active:
 5. Treat `watcher: started ...` and `watcher: attached ...` as proof that the watcher service is healthy and this session's delivery stub is armed.
 6. Treat `watcher: FAILED ...` as an alarm and follow its daemon or delivery repair before ending the turn.
 7. When the background task completes with `wake: queued`, drain queued wakes, handle them, then start exactly one fresh background task before composing any reply or beginning long work.
+   The arm never completes merely because delivery was already armed: it waits behind a healthy same-session stub and takes delivery over when that stub releases.
+   So a background task that has not completed is delivery working, and a completion is always a real wake or a real failure.
+   Never poll `bin/fm-wake-drain.sh` to check on a live arm; an armed wait is exactly what an absent completion means.
 8. If a forced watcher-loop restart is genuinely needed, run `bin/fm-watch-arm.sh --restart` through the same Claude background task mechanism.
 9. Do not send idle progress while the delivery stub is waiting.
 10. After handling a wake, if nothing reaches `AGENTS.md` section 9's escalation bar, end the turn with tool calls and no chat text; where this harness refuses a turn with no visible output, send exactly one line holding the marker `.` and nothing else.

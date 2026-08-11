@@ -8,6 +8,38 @@
 # Arming is idempotent for one session: when a healthy stub of the same session
 # already holds that lock, this reports the existing arm and succeeds.
 #
+# `--hold` changes only what that idempotent case DOES, never what it means.
+# Without it this returns immediately, which is right for a caller that owns its
+# own re-attempt cadence (bin/fm-watch-checkpoint.sh, the OpenCode plugin) and
+# wrong for a caller whose completion IS the wake delivery.  Under a
+# background-notify harness the harness cannot see why a delivery attempt
+# closed: it only sees that the tracked task finished, and it wakes the model.
+# An instant close therefore reads as a wake that carries nothing, the model
+# drains an empty queue and re-arms, and that re-arm closes instantly for the
+# same reason - a self-sustaining loop of empty deliveries in front of the
+# queue rather than inside it.  It is measured, not hypothetical:
+# docs/supervision-cost.md records 30 such deliveries in nine minutes.
+# With `--hold` a stub that finds delivery already armed stays alive instead,
+# polling the durable queue exactly like the holder does and retrying the lock
+# every FM_WATCH_CHECKPOINT_REARM_POLL seconds until the holder releases it.
+# So the process closes only on a real wake or a real failure, which is the one
+# property that makes a close safe to treat as a delivery.
+#
+# A holding stub keeps watching the queue rather than only waiting for the lock,
+# and that ordering is deliberate: waiting for the lock alone would be silent if
+# the holder were wedged and nobody were listening to it, and a wake nobody
+# hears is the one failure this fleet does not accept.
+#
+# But content that appears while the holder is still the one delivering belongs
+# to the holder to report.  Reporting it here too closes both processes on one
+# wake, and since the model arms once per delivery, that doubling sustains
+# itself rather than settling.  So such content is INHERITED: this stub waits
+# one FM_WATCH_CHECKPOINT_REARM_POLL before it will report it, and it stops
+# counting as inherited the moment the queue drains.  A holder that is working
+# reports well inside that window; a holder that was killed or wedged never
+# does, and then this stub reports it a few seconds late.  Latency, never
+# silence.
+#
 # One beacon reading is not proof of a dead watcher.  A machine suspend freezes
 # the watcher along with everything else, so on resume the beacon is necessarily
 # as old as the sleep and a single-reading exit unarms delivery on every wake
@@ -43,12 +75,40 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 
+HOLD=0
+case "${1:-}" in
+  '') ;;
+  --hold) HOLD=1 ;;
+  -h|--help)
+    cat <<'EOF'
+Usage: fm-wake-wait.sh [--hold]
+
+Block until this home's durable wake queue is non-empty, then print "wake: queued".
+Without --hold, a healthy same-session stub already holding the lock is reported
+as "wake delivery: already armed pid=<N> (same session)" and this exits 0 at once.
+With --hold, that case waits behind the holder instead of closing, so this process
+closes only on a real wake or a real failure.
+EOF
+    exit 0
+    ;;
+  *)
+    echo "usage: $(basename "$0") [--hold]" >&2
+    exit 2
+    ;;
+esac
+
 STUB_PATH="$SCRIPT_DIR/fm-wake-wait.sh"
 STUB_LOCK="$STATE/.wake-stub.lock"
 WATCH="$SCRIPT_DIR/fm-watch.sh"
 BEAT="$STATE/.last-watcher-beat"
 GRACE=${FM_GUARD_GRACE:-300}
 POLL=${FM_WAKE_WAIT_POLL:-1}
+# Seconds between takeover attempts while holding behind a healthy same-session
+# holder.  Shared with bin/fm-watch-checkpoint.sh and the OpenCode plugin on
+# purpose: three components take delivery back from a released holder, and one
+# fleet should have one cadence for that rather than three that can drift.
+REARM_POLL=${FM_WATCH_CHECKPOINT_REARM_POLL:-5}
+case "$REARM_POLL" in ''|*[!0-9]*|0) REARM_POLL=5 ;; esac
 # Awake seconds a live, identity-matched watcher gets to get its beacon back
 # inside the grace before its silence is reported.  bin/fm-watch.sh touches its
 # beacon at the top of every cycle, BEFORE that cycle's work, so the first beat
@@ -83,6 +143,19 @@ trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 trap cleanup EXIT
 
+# Publish this stub's identity into the lock it just won.  Factored out because
+# a holding stub runs it later, at takeover, rather than at start-up, and one
+# copy of the publication order is what keeps the armed predicate from ever
+# reading a half-published lock.
+publish_stub_identity() {
+  local stub_pid=${BASHPID:-$$}
+  printf '%s\n' "$FM_HOME" > "$STUB_LOCK/fm-home" || return 1
+  printf '%s\n' "$STUB_PATH" > "$STUB_LOCK/stub-path" || return 1
+  printf '%s\n' "$(cat "$STATE/.lock" 2>/dev/null || true)" > "$STUB_LOCK/session-lock-pid" || return 1
+  fm_pid_identity "$stub_pid" > "$STUB_LOCK/pid-identity" 2>/dev/null || return 1
+}
+
+HOLDING=0
 lock_rc=0
 fm_lock_try_acquire "$STUB_LOCK" || lock_rc=$?
 if [ "$lock_rc" -ne 0 ]; then
@@ -100,24 +173,30 @@ if [ "$lock_rc" -ne 0 ]; then
   # before the turn ends, this case has no remedy, and the obvious reaction -
   # kill the holder and re-arm - destroys a working delivery path.
   if fm_wake_stub_armed "$STATE" "$STUB_PATH" "$FM_HOME"; then
-    echo "wake delivery: already armed pid=$FM_WAKE_STUB_ARMED_PID (same session)"
-    exit 0
+    if [ "$HOLD" -eq 0 ]; then
+      echo "wake delivery: already armed pid=$FM_WAKE_STUB_ARMED_PID (same session)"
+      exit 0
+    fi
+    # Deliberately stderr, and deliberately not the "already armed" line: this
+    # process has not finished doing its job, and a caller that treats stdout as
+    # the close reason must not be handed a close reason yet.
+    echo "wake delivery: holding behind already-armed pid=$FM_WAKE_STUB_ARMED_PID (same session); retrying every ${REARM_POLL}s and still watching the queue" >&2
+    HOLDING=1
+  else
+    # Anything the predicate rejects is a genuine conflict - another session,
+    # another home, or a lock whose recorded identity no longer matches - and
+    # stays exactly as loud as it was.
+    echo "wake delivery: FAILED - another delivery stub already holds $STUB_LOCK" >&2
+    exit 1
   fi
-  # Anything the predicate rejects is a genuine conflict - another session,
-  # another home, or a lock whose recorded identity no longer matches - and
-  # stays exactly as loud as it was.
-  echo "wake delivery: FAILED - another delivery stub already holds $STUB_LOCK" >&2
-  exit 1
 fi
-LOCK_OWNED=1
-STUB_PID=${BASHPID:-$$}
-printf '%s\n' "$FM_HOME" > "$STUB_LOCK/fm-home" || exit 1
-printf '%s\n' "$STUB_PATH" > "$STUB_LOCK/stub-path" || exit 1
-printf '%s\n' "$(cat "$STATE/.lock" 2>/dev/null || true)" > "$STUB_LOCK/session-lock-pid" || exit 1
-fm_pid_identity "$STUB_PID" > "$STUB_LOCK/pid-identity" 2>/dev/null || {
-  echo "wake delivery: FAILED - could not record stub identity" >&2
-  exit 1
-}
+if [ "$HOLDING" -eq 0 ]; then
+  LOCK_OWNED=1
+  publish_stub_identity || {
+    echo "wake delivery: FAILED - could not record stub identity" >&2
+    exit 1
+  }
+fi
 
 # Deadline of the confirmation window currently in flight, empty when none is.
 # Only a beacon back inside the grace closes it; an mtime that merely advanced
@@ -133,7 +212,49 @@ confirm_close() {
   confirm_deadline=
 }
 
+# Try to take the lock back from a released holder on the shared cadence rather
+# than on every poll: a takeover attempt is a lock operation, the poll is one
+# second, and hammering a healthy holder's lock buys nothing.
+try_takeover() {
+  local rc=0
+  fm_lock_try_acquire "$STUB_LOCK" || rc=$?
+  case "$rc" in
+    0)
+      LOCK_OWNED=1
+      if ! publish_stub_identity; then
+        echo "wake delivery: FAILED - could not record stub identity" >&2
+        exit 1
+      fi
+      HOLDING=0
+      echo "wake delivery: took delivery over from the released holder" >&2
+      ;;
+    2)
+      echo "wake delivery: FAILED - lock acquisition failed for $STUB_LOCK" >&2
+      exit 1
+      ;;
+    *)
+      # Still held. It has to still be held by a HEALTHY stub of this session;
+      # anything else is the genuine conflict the non-holding path reports, and
+      # it must be just as loud from here.
+      if ! fm_wake_stub_armed "$STATE" "$STUB_PATH" "$FM_HOME"; then
+        echo "wake delivery: FAILED - another delivery stub already holds $STUB_LOCK" >&2
+        exit 1
+      fi
+      ;;
+  esac
+}
+
 prev_iter=$(date +%s)
+next_takeover=$((prev_iter + REARM_POLL))
+# Epoch this process first saw the CURRENT queue content, cleared when it drains.
+queue_since=
+# 1 while the current queue content belongs to a stub this process is holding
+# behind.  Set when content is first seen while still holding - never at
+# start-up, where there is nothing yet to inherit - and cleared when the queue
+# drains.  It deliberately outlives the hold itself: content that appeared while
+# holding is still the holder's to report even after this process has taken the
+# lock over, which is exactly the moment the two would otherwise both report.
+INHERITED=0
 while :; do
   now=$(date +%s)
   gap=$((now - prev_iter))
@@ -155,8 +276,36 @@ while :; do
     confirm_deadline=$((confirm_deadline + gap))
   fi
   if [ -s "$FM_WAKE_QUEUE" ]; then
-    echo "wake: queued"
-    exit 0
+    if [ -z "$queue_since" ]; then
+      queue_since=$now
+      # Content that appears while ANOTHER stub of this session owns delivery is
+      # that stub's to report, and this one INHERITS it.  Without that, one wake
+      # closes the holder and this process within the same second and is
+      # delivered twice, and since the model arms once per delivery the doubling
+      # sustains itself rather than settling.  The flag is set when the content
+      # is first seen rather than at start-up, because at start-up there is no
+      # content to inherit and a flag cleared then would never protect anything.
+      [ "$HOLDING" -eq 1 ] && INHERITED=1
+    fi
+    # Inherited content is reported anyway once a takeover cadence has passed
+    # with it still sitting there, which means the holder never delivered it: a
+    # killed holder, or one alive but wedged.  A wrong call here costs
+    # REARM_POLL seconds of latency and never a lost wake, which is the
+    # direction this fleet trades in.
+    if [ "$INHERITED" -eq 0 ] || [ $((now - queue_since)) -ge "$REARM_POLL" ]; then
+      echo "wake: queued"
+      exit 0
+    fi
+  else
+    # The queue drained, so whoever was going to report it did.  Nothing is
+    # inherited any more and this is an ordinary delivery wait from here on,
+    # whether or not it has taken the lock over yet.
+    queue_since=
+    INHERITED=0
+  fi
+  if [ "$HOLDING" -eq 1 ] && [ "$now" -ge "$next_takeover" ]; then
+    next_takeover=$((now + REARM_POLL))
+    try_takeover
   fi
   if fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME"; then
     confirm_close

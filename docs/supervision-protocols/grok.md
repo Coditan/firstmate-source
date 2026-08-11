@@ -8,12 +8,12 @@ When this session owns supervision and away mode is not active:
 2. Arm with Grok's tracked background tool, as its own call: `run_terminal_command` with `background: true` on `exec bin/fm-watch-arm.sh`.
 3. Trust only the arm's one-line status.
 4. `watcher: started ...` or `watcher: attached ...` means the watcher service is healthy and this session's delivery stub is armed.
-5. `wake delivery: already armed pid=<N> (same session)` means a healthy delivery stub of this session already owns delivery, so this arm had nothing left to do; it is an attach, not a wake and not a failure.
-   Arm once more so this session takes delivery back if that stub has released the lock in the meantime, and if that arm reports already armed again, end the turn rather than chaining a third.
-   A second identical answer means the holder is still delivering, and every further arm would only complete instantly the same way.
-   Never kill that holder to clear the line; it is a working delivery path, and `bin/fm-turnend-guard.sh` judges the same state armed.
+5. An arm never completes merely because delivery was already armed.
+   When a healthy delivery stub of this session already owns delivery, `bin/fm-watch-arm.sh` waits behind it and takes delivery over the moment that stub releases, so a background arm that has not completed is delivery working, never delivery stuck.
+   Every completion is therefore a real wake or a real failure; treat it as one and never poll the drain to check.
+   Never kill a holder to make room for a new arm; it is a working delivery path, and `bin/fm-turnend-guard.sh` judges the same state armed.
 6. `watcher: FAILED ...` means either the service or delivery wait is down; follow the typed repair and re-arm.
-7. After a successful start or attach status, end the turn; an already-armed status ends the turn only once step 5's single extra arm has answered.
+7. After a successful start or attach status, end the turn.
 8. Waiting is silent.
 9. Never use shell `&` for firstmate wake delivery.
 10. Never bundle the arm onto another command.
@@ -25,8 +25,7 @@ When you see a background-task-completed system reminder for the arm:
 1. Run `bin/fm-wake-drain.sh` first.
 2. Handle the queued wakes.
 3. Re-arm exactly one delivery wait with the same background `bin/fm-watch-arm.sh` call before composing any reply or beginning long work when work remains in flight or X mode still needs polling.
-   A re-arm that comes straight back with `wake delivery: already armed pid=<N> (same session)` is not a wake and not a failure: another healthy stub of this session owns delivery.
-   Follow step 5 of the arm list above - one more arm, then end the turn if it reports already armed again.
+   That re-arm stays open until a wake or a failure, per step 5 of the arm list above, so start exactly one and end the turn.
 4. Optionally fetch arm output with `get_command_or_subagent_output(<task_id>)`; `wake: queued` is the actionable delivery line.
 5. If nothing reaches `AGENTS.md` section 9's escalation bar, end the turn with tool calls and no chat text; where this harness refuses a turn with no visible output, send exactly one line holding the marker `.` and nothing else.
 
