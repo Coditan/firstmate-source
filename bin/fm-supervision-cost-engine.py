@@ -41,15 +41,14 @@ Deliveries     one ``<task-notification>`` message: the harness handing a
                background-notify harness that IS the wake.
 Segment        every request from one delivery up to the next.  Requests per
                delivery and fresh tokens per delivery are measured over these.
-Delivery arms  calls that started the session's wake-delivery wait, split by the
-               shape of the request that issued them.  An arm issued beside the
-               drain rides along in a request that had to happen anyway; an arm
-               that is a request's ONLY tool call is a whole model request that
-               pairing removes, and its freshly written tokens are counted as
-               the price of not pairing it.  A request that started the arm and
-               also did other work is counted in neither, because it is not
-               removable and a number that pretended otherwise would be the
-               estimate-dressed-as-measurement this tool exists to stop.
+Delivery arms  calls that started the session's wake-delivery wait.  Total arms
+               and arms issued beside a drain count arm tool blocks.  Own-arm
+               requests count requests whose every tool block is an arm, and
+               their freshly written tokens are counted once per request as the
+               price of not pairing them.  Arms issued in a request that also
+               did non-drain work appear only in the total, because that request
+               is not removable and a number that pretended otherwise would be
+               the estimate-dressed-as-measurement this tool exists to stop.
 Empty delivery a segment that ran the wake drain and got no queue record back:
                the model was woken, paid for the wake, and there was nothing in
                it.  This is the signature of the re-entry defect.
@@ -534,8 +533,8 @@ def measure_file(path, since, until, seen_requests):
             if in_range and counted_request and arm_blocks:
                 measurement.arm_calls += arm_blocks
                 if drain_blocks:
-                    measurement.arm_calls_paired_with_drain += 1
-                elif tool_blocks == 1:
+                    measurement.arm_calls_paired_with_drain += arm_blocks
+                elif tool_blocks == arm_blocks:
                     # The whole request exists to start the arm, so pairing it
                     # into the drain's message removes the request outright.
                     # A request that also did other work is not removable and is
@@ -768,10 +767,10 @@ def print_report(report):
     paired = sum(day["arm_calls_paired_with_drain"] for day in report["days"])
     unpaired = sum(day["unpaired_arm_requests"] for day in report["days"])
     unpaired_fresh = sum(day["unpaired_arm_fresh"] for day in report["days"])
-    print(f"delivery arms: {arm_calls}")
-    print(f"  issued beside the drain, costing no request of their own: {paired}")
-    print(f"  issued as a request of their own: {unpaired}")
-    print(f"  fresh tokens those own-request arms wrote: {unpaired_fresh}")
+    print(f"delivery arm calls: {arm_calls}")
+    print(f"  arm calls issued beside the drain: {paired}")
+    print(f"  requests containing only arm calls: {unpaired}")
+    print(f"  fresh tokens those arm-only requests wrote: {unpaired_fresh}")
     print("")
     print("not counted:")
     for item in report["not_counted"]:
@@ -807,13 +806,13 @@ def print_session(report_root, session_id, since, until):
     print(f"  fresh tokens spent on empty deliveries: {measurement.empty_delivery_fresh}")
     print(f"drain calls: {measurement.drain_calls}")
     print(f"  returning no queue record: {measurement.drain_calls_empty}")
-    print(f"delivery arms: {measurement.arm_calls}")
+    print(f"delivery arm calls: {measurement.arm_calls}")
     print(
-        "  issued beside the drain, costing no request of their own: "
+        "  arm calls issued beside the drain: "
         f"{measurement.arm_calls_paired_with_drain}"
     )
-    print(f"  issued as a request of their own: {measurement.unpaired_arm_requests}")
-    print(f"  fresh tokens those own-request arms wrote: {measurement.unpaired_arm_fresh}")
+    print(f"  requests containing only arm calls: {measurement.unpaired_arm_requests}")
+    print(f"  fresh tokens those arm-only requests wrote: {measurement.unpaired_arm_fresh}")
     print(f"unclassified relevant commands: {measurement.unclassified_commands}")
     requests = summarize(measurement.segment_requests)
     fresh = summarize(measurement.segment_fresh)

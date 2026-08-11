@@ -50,6 +50,8 @@ cat > "$arms/session.jsonl" <<'EOF'
 {"timestamp":"2026-08-04T12:00:01Z","type":"assistant","requestId":"arm-alone","message":{"usage":{"input_tokens":50},"content":[{"type":"tool_use","id":"arm-1-retry","input":{"command":"bin/fm-watch-arm.sh --hold"}}]}}
 {"timestamp":"2026-08-04T12:00:02Z","type":"assistant","requestId":"arm-paired","message":{"usage":{"input_tokens":60},"content":[{"type":"tool_use","id":"drain-1","input":{"command":"bin/fm-wake-drain.sh"}},{"type":"tool_use","id":"arm-2","input":{"command":"bin/fm-watch-arm.sh --hold"}}]}}
 {"timestamp":"2026-08-04T12:00:03Z","type":"assistant","requestId":"arm-paired","message":{"usage":{"input_tokens":60},"content":[{"type":"tool_use","id":"drain-1-retry","input":{"command":"bin/fm-wake-drain.sh"}},{"type":"tool_use","id":"arm-2-retry","input":{"command":"bin/fm-watch-arm.sh --hold"}}]}}
+{"timestamp":"2026-08-04T12:00:04Z","type":"assistant","requestId":"arms-alone","message":{"usage":{"input_tokens":70},"content":[{"type":"tool_use","id":"arm-3","input":{"command":"bin/fm-watch-arm.sh --hold"}},{"type":"tool_use","id":"arm-4","input":{"command":"bin/fm-watch-arm.sh --hold"}}]}}
+{"timestamp":"2026-08-04T12:00:05Z","type":"assistant","requestId":"arms-paired","message":{"usage":{"input_tokens":80},"content":[{"type":"tool_use","id":"drain-2","input":{"command":"bin/fm-wake-drain.sh"}},{"type":"tool_use","id":"arm-5","input":{"command":"bin/fm-watch-arm.sh --hold"}},{"type":"tool_use","id":"arm-6","input":{"command":"bin/fm-watch-arm.sh --hold"}}]}}
 EOF
 
 report=$(python3 "$ENGINE" --transcripts "$arms" --since 2026-08-04 --until 2026-08-04 --json) \
@@ -57,12 +59,22 @@ report=$(python3 "$ENGINE" --transcripts "$arms" --since 2026-08-04 --until 2026
 python3 - "$report" <<'PY' || fail "delivery-arm measurements were not deduplicated by request id"
 import json, sys
 day = json.loads(sys.argv[1])["days"][0]
-assert day["arm_calls"] == 2
-assert day["arm_calls_paired_with_drain"] == 1
-assert day["unpaired_arm_requests"] == 1
-assert day["unpaired_arm_fresh"] == 50
+assert day["arm_calls"] == 6
+assert day["arm_calls_paired_with_drain"] == 3
+assert day["unpaired_arm_requests"] == 2
+assert day["unpaired_arm_fresh"] == 120
 PY
 pass "delivery-arm measurements count duplicated request records once"
+
+output=$(python3 "$ENGINE" --transcripts "$arms" --since 2026-08-04 --until 2026-08-04) \
+  || fail "engine could not print the multi-arm report"
+[[ "$output" == *"delivery arm calls: 6"* ]] \
+  || fail "printed total did not identify its unit as arm calls"
+[[ "$output" == *"arm calls issued beside the drain: 3"* ]] \
+  || fail "printed paired count did not identify its unit as arm calls"
+[[ "$output" == *"requests containing only arm calls: 2"* ]] \
+  || fail "printed own-arm count did not identify its unit as requests"
+pass "delivery-arm report distinguishes arm-call and request units"
 
 python3 - "$ENGINE" <<'PY' || fail "classifier outcomes were wrong"
 import importlib.util, sys
