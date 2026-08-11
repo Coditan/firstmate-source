@@ -45,7 +45,11 @@
 #                          also carries a "demand-deep-inspection" marker so the
 #                          wake payload itself, not just repetition, forces a
 #                          closer look instead of another routine supervision
-#                          resume. Unless afk is active.
+#                          resume. Once one possible-wedge alarm for a pane/state
+#                          has surfaced, unchanged later rungs are retained in
+#                          state/.wedge-alarm-history but not delivered again
+#                          until FM_WEDGE_REPEAT_RESURFACE_SECS elapses. A changed
+#                          state re-arms immediate delivery. Unless afk is active.
 #   check: <script>: <out> authenticated check output, always actionable
 #   check: rejected unauthenticated state checks: <paths>
 #                          unsafe state checks were refused without execution
@@ -211,6 +215,19 @@ STALE_ESCALATE_SECS=${FM_STALE_ESCALATE_SECS:-240}  # idle secs before a provabl
 # far longer than the wedge threshold, but finite so a forgotten wait cannot rot
 # invisibly. Status writes and metadata changes clear a parked declaration.
 PAUSE_RESURFACE_SECS=${FM_PAUSE_RESURFACE_SECS:-$FM_PAUSE_RESURFACE_SECS_DEFAULT}
+# Delivery bound for an unchanged possible-wedge finding that has already
+# surfaced once. The watcher still evaluates it every STALE_ESCALATE_SECS and
+# appends every candidate to WEDGE_ALARM_HISTORY; it suppresses delivery only.
+# Default to the existing one-hour pause/hold cadence so all long-idle rechecks
+# share the same operational horizon while keeping an independent override for
+# a fleet that wants wedge repeats sooner. A continuously unchanged real wedge
+# therefore re-surfaces no later than this bound plus one stale interval and poll.
+WEDGE_REPEAT_RESURFACE_SECS=${FM_WEDGE_REPEAT_RESURFACE_SECS:-$PAUSE_RESURFACE_SECS}
+# Append-only delivery history for possible-wedge candidates. Unlike the
+# size-capped triage debug log, this record is never truncated: suppressed
+# candidates must remain inspectable. Suppression fails open to delivery when
+# this append cannot be completed.
+WEDGE_ALARM_HISTORY=${FM_WEDGE_ALARM_HISTORY:-$STATE/.wedge-alarm-history}
 TRIAGE_LOG="$STATE/.watch-triage.log"
 TRIAGE_LOG_MAX_BYTES=${FM_WATCH_TRIAGE_LOG_MAX_BYTES:-262144}
 # Consecutive event-path failures (fm_backend_wait_transition returning 2 -
@@ -247,6 +264,14 @@ triage_log() {
     tail -n 2000 "$TRIAGE_LOG" > "$TRIAGE_LOG.tmp" 2>/dev/null && mv -f "$TRIAGE_LOG.tmp" "$TRIAGE_LOG" 2>/dev/null
     rm -f "$TRIAGE_LOG.tmp" 2>/dev/null || true
   fi
+}
+
+# Retain one possible-wedge candidate exactly as classified.
+# Format: epoch<TAB>surfaced|suppressed<TAB>window<TAB>reason.
+# The watcher singleton is the only writer, so append order is event order.
+wedge_alarm_history_append() {  # <disposition> <window> <reason>
+  local disposition=$1 win=$2 reason=$3
+  printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$disposition" "$win" "$reason" 2>/dev/null >> "$WEDGE_ALARM_HISTORY"
 }
 
 hash_pane() {
@@ -355,16 +380,13 @@ wake() {
   exit 0
 }
 
-# Consecutive wedge-escalation count for a window past FM_WEDGE_DEMAND_INSPECT_COUNT
-# (default 3): a pane that keeps re-wedging on the SAME stale hash - each
-# escalation gets absorbed again as "still validating" one poll later, since the
-# hash never changes - can otherwise repeat forever with no signal that this is
-# no longer a one-off. At the threshold, wedge_timer_check appends a
-# "demand-deep-inspection" marker to the wake payload so the wake reason itself
-# (not just repetition the supervisor has to notice on its own) forces a closer
-# look instead of another routine supervision resume. Reset wherever a window's
-# pane/hash state resets to genuinely active (see the two rm-on-reset call sites
-# below).
+# Consecutive wedge-escalation count for one unchanged pane/current-state class.
+# Every rung is retained in WEDGE_ALARM_HISTORY, while delivery happens on the
+# first rung, a changed class, or the bounded repeat cadence. At
+# FM_WEDGE_DEMAND_INSPECT_COUNT (default 3), wedge_timer_check adds a
+# "demand-deep-inspection" marker so the retained finding and the next bounded
+# delivery say that this is no longer a one-off. Reset wherever pane/hash state
+# becomes genuinely active and whenever the authoritative class changes.
 FM_WEDGE_DEMAND_INSPECT_COUNT=${FM_WEDGE_DEMAND_INSPECT_COUNT:-3}
 
 # ladder_hold: the one implementation of "this stale pane has a positive reason not
@@ -372,21 +394,35 @@ FM_WEDGE_DEMAND_INSPECT_COUNT=${FM_WEDGE_DEMAND_INSPECT_COUNT:-3}
 # RE-READ every window rather than trusted once, and surfaces one bounded recheck
 # whenever the pane has been frozen for a full PAUSE_RESURFACE_SECS - measured on
 # the frozen hash's own age, not on the timer this hold keeps refreshing, so a hold
-# can never postpone its own recheck. It never touches the escalation counter, so a
-# held pane never climbs toward demand-deep-inspection.
+# can never postpone its own recheck. A transition into this positive class resets
+# the escalation counter; an unchanged hold never touches it, so a held pane never
+# climbs toward demand-deep-inspection. The shared .wedgeheld marker records both
+# the current observed class and the last delivery/recheck mtime, so a later class
+# change re-arms an immediate alarm instead of inheriting the old class's throttle.
 # <situation> names the evidence in the wake text and the triage log; <next-step>
 # is what firstmate should confirm. Both callers pass their own, because "the run
 # is running" and "the run is parked at a gate" need different confirmations.
-ladder_hold() {  # <window> <since-file> <triage-label> <situation> <next-step>
-  local win=$1 since_file=$2 label=$3 situation=$4 next_step=$5 wkey hold_age rf reason
+ladder_hold() {  # <window> <since-file> <triage-label> <class> <situation> <next-step>
+  local win=$1 since_file=$2 label=$3 class=$4 situation=$5 next_step=$6
+  local wkey hold_age rf prior reason
   date +%s > "$since_file"
   wkey=$(window_state_key "$win")
   hold_age=$(age_of "$STATE/.stale-$wkey")
   rf="$STATE/.wedgeheld-$wkey"
+  prior=$(cat "$rf" 2>/dev/null || true)
+  if [ "$prior" != "$class" ]; then
+    printf '%s' "$class" > "$rf"
+    # With no prior observation, preserve the frozen pane's existing cadence
+    # rather than starting a fresh full window at this first re-read. A genuine
+    # class transition has a prior value and deliberately re-anchors at now.
+    if [ -z "$prior" ] && [ -e "$STATE/.stale-$wkey" ]; then
+      touch -r "$STATE/.stale-$wkey" "$rf" 2>/dev/null || true
+    fi
+  fi
   if [ "$hold_age" -ge "$PAUSE_RESURFACE_SECS" ] && [ "$(age_of "$rf")" -ge "$PAUSE_RESURFACE_SECS" ]; then
     reason="stale: $win (pane unchanged ${hold_age}s while $situation - bounded recheck on a long cadence, not a wedge escalation; $next_step)"
     fm_wake_append stale "$win" "$reason" || exit 1
-    date +%s > "$rf"
+    printf '%s' "$class" > "$rf"
     wake "$reason"
     return
   fi
@@ -420,6 +456,7 @@ ladder_hold() {  # <window> <since-file> <triage-label> <situation> <next-step>
 # (parked_gate_liveness_class). Both holds are one function - ladder_hold above.
 wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-file>
   local win=$1 since_file=$2 label=$3 escalation_file=$4 since age n reason wtask wclass
+  local wkey state_file prior_class same_class history_failed
   since=$(cat "$since_file" 2>/dev/null || true)
   case "$since" in
     ''|*[!0-9]*)
@@ -440,12 +477,26 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
         # applied here - it absorbs a first sighting only, and a genuinely wedged
         # codex must still reach demand-deep-inspection.
         [ "$wclass" = parked ] && wclass=$(parked_gate_liveness_class "$win")
+        wkey=$(window_state_key "$win")
+        state_file="$STATE/.wedgeheld-$wkey"
+        prior_class=$(cat "$state_file" 2>/dev/null || true)
+        same_class=0
+        if [ "$prior_class" = "$wclass" ]; then
+          same_class=1
+        else
+          # The escalation count describes consecutive observations of one
+          # pane/state, not merely one pane. A changed authoritative class is a
+          # new finding and must start at escalation 1 with no inherited quiet
+          # window from the prior class.
+          rm -f "$escalation_file"
+        fi
         if [ "$wclass" = degraded ]; then
           # The crew state was never read - a tool the reader needs is missing
           # from this service's PATH. Climbing the ladder here would escalate a
           # possible wedge on a reading nobody took, which is exactly what this
           # home did roughly every four minutes for weeks. Report the broken
           # instrument on the bounded cadence and leave the ladder alone.
+          [ "$same_class" -eq 1 ] || printf '%s' degraded > "$state_file"
           date +%s > "$since_file"
           handle_degraded_stale "$win" "$wtask" "$label"
           return
@@ -455,7 +506,7 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
           # whose agent died mid-step keeps reporting `running` indefinitely, and
           # holding the ladder on that reading alone would let a dead crew rot
           # invisibly - so the hold earns one bounded recheck per window.
-          ladder_hold "$win" "$since_file" "$label" \
+          ladder_hold "$win" "$since_file" "$label" working \
             "the run still reports active" \
             "confirm the run is really progressing"
           return
@@ -466,7 +517,7 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
           # which is the behavior its brief requires. Hold the ladder on the same
           # terms as an active run - including the bounded recheck, so a gate
           # nobody ever answers still cannot rot invisibly.
-          ladder_hold "$win" "$since_file" "$label" \
+          ladder_hold "$win" "$since_file" "$label" parked \
             "the run is parked at a decision gate and this worker is still alive" \
             "answer the gate or confirm the decision is still pending"
           return
@@ -477,7 +528,33 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
         if [ "$n" -ge "$FM_WEDGE_DEMAND_INSPECT_COUNT" ]; then
           reason="stale: $win (idle ${age}s, possible wedge, escalation $n, demand-deep-inspection: same pane has wedge-escalated $n times in a row - do not re-absorb on the run-step/pane state alone)"
         fi
+        # The first observation, any changed state, and a repeat past the
+        # configured bound all deliver. An unchanged repeat inside the bound is
+        # retained but absorbed. Record BEFORE suppressing: if the append-only
+        # history cannot be written, suppression fails open and the ordinary
+        # durable queue carries the alarm instead of letting quiet masquerade as
+        # correctness.
+        if [ "$same_class" -eq 1 ] && [ "$(age_of "$state_file")" -lt "$WEDGE_REPEAT_RESURFACE_SECS" ]; then
+          if wedge_alarm_history_append suppressed "$win" "$reason"; then
+            rm -f "$since_file"
+            triage_log "absorbed unchanged possible wedge (delivery suppressed, history retained): $win escalation $n"
+            return
+          fi
+          history_failed=1
+          reason="$reason (repeat suppression disabled: append-only wedge alarm history could not be written)"
+        else
+          history_failed=0
+        fi
         fm_wake_append stale "$win" "$reason" || exit 1
+        if [ "$history_failed" -eq 0 ]; then
+          wedge_alarm_history_append surfaced "$win" "$reason" \
+            || triage_log "wedge alarm history append failed after durable queueing: $win"
+        else
+          # The queue is already the durable fail-open record. A second append
+          # attempt would only repeat the same filesystem error.
+          triage_log "wedge alarm history unavailable; delivered unchanged possible wedge fail-open: $win"
+        fi
+        printf '%s' none > "$state_file"
         rm -f "$since_file"
         wake "$reason"
         return
@@ -1709,7 +1786,7 @@ EOF
     sf="$STATE/.stale-$key"
     ssf="$STATE/.stale-since-$key"
     ewf="$STATE/.wedge-escalations-$key"
-    whf="$STATE/.wedgeheld-$key"   # last bounded recheck of a ladder hold (wedge_timer_check)
+    whf="$STATE/.wedgeheld-$key"   # current wedge class + last delivery/recheck mtime (wedge_timer_check)
     pf="$STATE/.paused-$key"   # flag: this key's current stale is a declared pause
     prev=$(cat "$hf" 2>/dev/null || true)
     if [ "$h" = "$prev" ]; then
