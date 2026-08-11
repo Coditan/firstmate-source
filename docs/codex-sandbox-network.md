@@ -134,3 +134,40 @@ The placement decision does not depend on the missing detail: the behaviour is r
 - The supervising primary session never receives it, because `fm-spawn` only ever composes launch commands for direct reports.
 - No other harness is affected.
   The grant lives entirely in the Codex branch of the composition, and a Claude launch line is byte-identical to what it was before.
+
+## 7. The pipeline client reaches the daemon, measured 2026-08-11
+
+Sections 1 to 4 prove a raw AF_UNIX connect.
+This section proves the thing the grant exists for: the `no-mistakes` client itself completing a daemon round trip from inside the sandbox.
+Measured against `no-mistakes` v1.45.4 and `codex-cli 0.145.0`, in a task worktree, with the same override set `bin/fm-spawn.sh` composes for a Codex crewmate.
+
+```
+# without the grant
+$ codex sandbox -c sandbox_mode='"workspace-write"' -c approval_policy='"on-request"' \
+    -c approvals_reviewer='"auto_review"' -- no-mistakes status
+  daemon:  ○ stopped
+
+# with the grant, same worktree, seconds apart
+$ codex sandbox -c sandbox_mode='"workspace-write"' -c approval_policy='"on-request"' \
+    -c approvals_reviewer='"auto_review"' -c sandbox_workspace_write.network_access=true \
+    -- no-mistakes status
+  daemon:  ● running
+
+# outside the sandbox, as the same user, as the control
+$ no-mistakes status
+  daemon:  ● running
+```
+
+The daemon was running throughout, so `stopped` is the refusal, not the daemon's state.
+
+That reading is the hazard worth carrying out of this section.
+A Codex crewmate denied the socket is not told it was denied: the client reports the shared daemon as **stopped** rather than surfacing the `EPERM` that section 1 shows at the raw socket layer.
+A worker that believes the daemon is down is one step from trying to start or reset it, and that daemon is a single shared instance serving every lane and home, so acting on the misreading would disrupt other lanes' in-flight runs.
+Anyone diagnosing a Codex worker that reports the daemon stopped should suspect this grant before touching the daemon.
+
+## 8. The grant reaches a home only when that home's own copy carries it
+
+`bin/fm-spawn.sh` composes the launch line, so a firstmate home grants the socket only once its own copy of that script includes it.
+A home running an older vendored or unsynced copy keeps composing the pre-grant launch line and keeps measuring the original refusal, no matter what this repository's default branch holds.
+That is a deployment fact rather than a defect, and it is recorded here because the symptom is indistinguishable from the fix being absent: the worker fails exactly as it did before.
+Check the spawning home's own `bin/fm-spawn.sh` for the grant before concluding the change is missing or ineffective.
