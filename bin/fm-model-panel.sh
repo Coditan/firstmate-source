@@ -317,12 +317,10 @@ filter_spec() {
 resolve_role() {
   local role=$1 excluded=${2:-} spec filtered count profile errors status=0
   spec=$(role_spec "$role")
-  if [ -n "$excluded" ]; then
-    filtered=$(filter_spec "$spec" "$excluded")
-    count=$(printf '%s\n' "$filtered" | jq 'length')
-    if [ "$count" -gt 0 ]; then
-      spec=$filtered
-    fi
+  filtered=$(filter_spec "$spec" "$excluded")
+  count=$(printf '%s\n' "$filtered" | jq 'length')
+  if [ "$count" -gt 0 ]; then
+    spec=$filtered
   fi
   errors=$(mktemp "${TMPDIR:-/tmp}/fm-model-panel-select.XXXXXX")
   profile=$("$FM_ROOT/bin/fm-dispatch-select.sh" "$spec" 2>"$errors") || status=$?

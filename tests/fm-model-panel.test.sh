@@ -115,6 +115,20 @@ UNPINNED_ANALYST_B_COLLISION='{"roles":{
   "analyst_b":{"harness":"codex"},
   "judge":{"harness":"grok","model":"grok-4-fast"}}}'
 
+MIXED_ANALYST_A_ARRAY='{"roles":{
+  "analyst_a":[
+    {"harness":"codex"},
+    {"harness":"claude","model":"claude-opus-5"}],
+  "analyst_b":{"harness":"codex","model":"gpt-5.6-sol"},
+  "judge":{"harness":"grok","model":"grok-4-fast"}}}'
+
+ALL_UNPINNED_ANALYST_A_ARRAY='{"roles":{
+  "analyst_a":[
+    {"harness":"codex"},
+    {"harness":"claude"}],
+  "analyst_b":{"harness":"codex","model":"gpt-5.6-sol"},
+  "judge":{"harness":"grok","model":"grok-4-fast"}}}'
+
 UNPINNED_JUDGE_COLLISION='{"roles":{
   "analyst_a":{"harness":"claude","model":"claude-opus-5"},
   "analyst_b":{"harness":"codex","model":"gpt-5.6-sol"},
@@ -149,8 +163,6 @@ test_skill_owns_the_cost_decision_and_one_trigger() {
   assert_grep 'Not worth it:' "$SKILL" "the panel skill does not say when a panel wastes its cost"
   assert_grep 'decision-hold-lifecycle' "$SKILL" "the panel skill does not fold in the completion gate"
   assert_grep 'single-analyst review' "$SKILL" "the panel skill does not name the reduced form"
-  assert_grep 'lacks an explicit model pin' "$SKILL" \
-    "the panel skill does not explain the unpinned-analyst refusal"
   count=$(grep -Fc 'load the `panel` skill' "$AGENTS")
   [ "$count" -eq 1 ] || fail "the panel skill needs exactly one AGENTS.md trigger, found $count"
   pass "the panel skill owns the cost decision and has one AGENTS.md trigger"
@@ -164,10 +176,6 @@ test_configuration_doc_owns_the_schema_and_degradation() {
     "the documented schema does not point at the shared selector"
   assert_grep 'refuses with exit 4' "$CONFIG_DOC" \
     "the documented degradation contract does not state the refusal"
-  assert_grep 'without an explicit model pin refuses with exit 4' "$CONFIG_DOC" \
-    "the documented contract does not refuse an unpinned analyst"
-  assert_grep 'self-report is not evidence' "$CONFIG_DOC" \
-    "the documented identity boundary relies on model self-report"
   assert_grep 'config/model-panel.json` is deliberately NOT in the inheritable set' "$CONFIG_DOC" \
     "the documented contract does not explain why the panel config is not inherited"
   assert_gitignore_ignores 'config/model-panel.json' \
@@ -247,6 +255,28 @@ test_unpinned_analyst_refuses_unknown_runtime_identity() {
     [ -z "$(spawn_log "$home")" ] || fail "an unpinned-analyst panel must dispatch nothing"
   done
   pass "neither analyst can turn a harness placeholder into a model identity"
+}
+
+test_analyst_a_array_prefers_a_pinned_identity() {
+  local home out
+  home=$(new_home mixed-analyst-a-array "$MIXED_ANALYST_A_ARRAY")
+  out=$(FM_DISPATCH_RANDOM_SOURCE=/dev/zero run_panel "$home" start --id maa \
+    --project "$home/subject" --dry-run "Anything?") \
+    || fail "analyst A should prefer its pinned candidate: $out"
+  assert_contains "$out" 'panel: analyst-a {"harness":"claude","model":"claude-opus-5"}' \
+    "analyst A selected an unpinned default over a configured identity"
+  pass "analyst A prefers a pinned candidate from a mixed array"
+}
+
+test_all_unpinned_analyst_a_array_still_refuses() {
+  local home out status=0
+  home=$(new_home all-unpinned-analyst-a-array "$ALL_UNPINNED_ANALYST_A_ARRAY")
+  out=$(FM_DISPATCH_RANDOM_SOURCE=/dev/zero run_panel "$home" start --id aua \
+    --project "$home/subject" --dry-run "Anything?") || status=$?
+  expect_code 4 "$status" "an all-unpinned analyst-A array must still refuse"
+  assert_contains "$out" "analyst_a resolves to a profile with no explicit model pin" \
+    "the all-unpinned analyst-A array bypassed the role-specific refusal"
+  pass "an all-unpinned analyst-A array still refuses"
 }
 
 test_unpinned_judge_warns_without_model_self_report() {
@@ -930,6 +960,8 @@ test_distinct_analyst_arrays_resolve_to_different_models
 test_analyst_array_collision_refuses_after_resolution
 test_judge_array_collision_warns_after_resolution
 test_unpinned_analyst_refuses_unknown_runtime_identity
+test_analyst_a_array_prefers_a_pinned_identity
+test_all_unpinned_analyst_a_array_still_refuses
 test_unpinned_judge_warns_without_model_self_report
 test_judge_array_prefers_a_known_unused_identity_over_unpinned_default
 test_reduced_unpinned_seat_warns_without_claiming_independence
