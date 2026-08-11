@@ -44,6 +44,11 @@ Empty delivery a segment that ran the wake drain and got no queue record back:
                the model was woken, paid for the wake, and there was nothing in
                it.  This is the signature of the re-entry defect.
 
+Executable detection is a bounded heuristic over recorded shell command text,
+not an execution trace.  It recognizes only the wrapper grammars named in this
+engine and rejects ambiguous or unrecognized wrapper forms rather than
+over-counting them.
+
 WHAT IS NOT COUNTED
 -------------------
 Only Claude Code transcripts are read; other harnesses keep no equivalent local
@@ -139,24 +144,34 @@ def invoked_script(command, script):
         while words:
             wrapper = os.path.basename(words[0])
             if wrapper == "env":
-                words = words[1:]
-                while words and (
-                    words[0].startswith("-")
-                    or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0])
-                ):
-                    words = words[1:]
-                continue
-            if wrapper in ("command", "exec"):
-                words = words[1:]
-                while words and words[0].startswith("-"):
-                    words = words[1:]
+                words = unwrap_env(words[1:])
+                if words is None:
+                    break
                 continue
             if wrapper == "timeout":
-                words = words[1:]
-                while words and words[0].startswith("-"):
-                    words = words[1:]
-                if words:
-                    words = words[1:]
+                words = unwrap_timeout(words[1:])
+                if words is None:
+                    break
+                continue
+            if wrapper == "nice":
+                words = unwrap_nice(words[1:])
+                if words is None:
+                    break
+                continue
+            if wrapper == "nohup":
+                words = unwrap_nohup(words[1:])
+                if words is None:
+                    break
+                continue
+            if wrapper == "stdbuf":
+                words = unwrap_stdbuf(words[1:])
+                if words is None:
+                    break
+                continue
+            if wrapper in ("command", "exec"):
+                words = unwrap_command(wrapper, words[1:])
+                if words is None:
+                    break
                 continue
             break
         if not words:
@@ -169,6 +184,139 @@ def invoked_script(command, script):
             if args and os.path.basename(args[0]) == script:
                 return True
     return False
+
+
+def take_option_argument(words, index):
+    if index + 1 >= len(words):
+        return None
+    return index + 2
+
+
+def unwrap_env(words):
+    index = 0
+    while index < len(words):
+        word = words[index]
+        if word == "--":
+            index += 1
+            break
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", word):
+            index += 1
+            continue
+        if word in ("-i", "--ignore-environment", "-0", "--null"):
+            index += 1
+            continue
+        if word in ("-u", "--unset", "-C", "--chdir"):
+            index = take_option_argument(words, index)
+            if index is None:
+                return None
+            continue
+        if word.startswith("--unset=") or word.startswith("--chdir="):
+            index += 1
+            continue
+        if word in ("-S", "--split-string") or word.startswith("--split-string="):
+            return None
+        if word.startswith("-"):
+            return None
+        break
+    return words[index:] or None
+
+
+def unwrap_timeout(words):
+    index = 0
+    while index < len(words):
+        word = words[index]
+        if word == "--":
+            index += 1
+            break
+        if word in ("-s", "--signal", "-k", "--kill-after"):
+            index = take_option_argument(words, index)
+            if index is None:
+                return None
+            continue
+        if word.startswith("--signal=") or word.startswith("--kill-after="):
+            index += 1
+            continue
+        if word in ("--foreground", "--preserve-status", "-v", "--verbose"):
+            index += 1
+            continue
+        if word.startswith("-"):
+            return None
+        break
+    if index >= len(words):
+        return None
+    index += 1
+    return words[index:] or None
+
+
+def unwrap_nice(words):
+    index = 0
+    if index < len(words) and words[index] == "--":
+        index += 1
+    elif index < len(words) and words[index] in ("-n", "--adjustment"):
+        index = take_option_argument(words, index)
+        if index is None:
+            return None
+    elif index < len(words) and words[index].startswith("--adjustment="):
+        index += 1
+    elif index < len(words) and re.match(r"^-\d+$", words[index]):
+        index += 1
+    elif index < len(words) and words[index].startswith("-"):
+        return None
+    return words[index:] or None
+
+
+def unwrap_nohup(words):
+    if words and words[0] == "--":
+        words = words[1:]
+    elif words and words[0].startswith("-"):
+        return None
+    return words or None
+
+
+def unwrap_stdbuf(words):
+    index = 0
+    while index < len(words):
+        word = words[index]
+        if word == "--":
+            index += 1
+            break
+        if word in ("-i", "-o", "-e", "--input", "--output", "--error"):
+            index = take_option_argument(words, index)
+            if index is None:
+                return None
+            continue
+        if re.match(r"^-[ioe].+", word) or re.match(
+            r"^--(input|output|error)=", word
+        ):
+            index += 1
+            continue
+        if word.startswith("-"):
+            return None
+        break
+    return words[index:] or None
+
+
+def unwrap_command(wrapper, words):
+    if wrapper == "command" and words and words[0] in ("-v", "-V"):
+        return None
+    index = 0
+    while index < len(words):
+        word = words[index]
+        if word == "--":
+            index += 1
+            break
+        if wrapper == "exec" and word == "-a":
+            index = take_option_argument(words, index)
+            if index is None:
+                return None
+            continue
+        if wrapper == "exec" and word in ("-c", "-l"):
+            index += 1
+            continue
+        if word.startswith("-"):
+            return None
+        break
+    return words[index:] or None
 
 
 class SessionMeasurement:
@@ -459,6 +607,7 @@ def measure(root, since, until, project_filter):
             "harnesses other than Claude Code, which keep no equivalent local usage record",
             "days whose transcripts the provider has already rolled off",
             "currency cost, which needs a price list this tool does not pin",
+            "executions not recognized by the bounded shell-wrapper heuristic",
         ],
         "transcripts_root": root,
         "sessions": len(active_sessions),

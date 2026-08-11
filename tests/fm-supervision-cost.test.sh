@@ -14,9 +14,9 @@ mkdir -p "$project"
 cat > "$project/old.jsonl" <<'EOF'
 {"timestamp":"2026-08-03T10:00:00Z","type":"assistant","requestId":"old-start","message":{"usage":{"input_tokens":10},"content":[]}}
 {"timestamp":"2026-08-04T10:00:00Z","type":"user","message":{"content":"<task-notification>real wake</task-notification>"}}
-{"timestamp":"2026-08-04T10:00:01Z","type":"assistant","requestId":"old-activity-1","message":{"usage":{"input_tokens":20},"content":[{"type":"tool_use","id":"inspect","input":{"command":"grep -n fm-wake-drain.sh bin/fm-supervision-cost-engine.py"}}]}}
+{"timestamp":"2026-08-04T10:00:01Z","type":"assistant","requestId":"old-activity-1","message":{"usage":{"input_tokens":20},"content":[{"type":"tool_use","id":"inspect","input":{"command":"env -u FM_HOME nice -n 5 nohup stdbuf -o L grep -n fm-wake-drain.sh bin/fm-supervision-cost-engine.py"}}]}}
 {"timestamp":"2026-08-04T10:00:02Z","type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"inspect","content":"bin/fm-wake-drain.sh"}]}}
-{"timestamp":"2026-08-04T10:00:03Z","type":"assistant","requestId":"old-activity-2","message":{"usage":{"input_tokens":5},"content":[{"type":"tool_use","id":"drain","input":{"command":"cd /tmp && timeout 60 bin/fm-wake-drain.sh 2>&1 | head"}}]}}
+{"timestamp":"2026-08-04T10:00:03Z","type":"assistant","requestId":"old-activity-2","message":{"usage":{"input_tokens":5},"content":[{"type":"tool_use","id":"drain","input":{"command":"cd /tmp && env -u FM_HOME MODE=test nice -n 5 nohup stdbuf -o L timeout -s TERM -k 2 60 bin/fm-wake-drain.sh 2>&1 | head"}}]}}
 {"timestamp":"2026-08-04T10:00:04Z","type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"drain","content":""}]}}
 EOF
 cat > "$project/new.jsonl" <<'EOF'

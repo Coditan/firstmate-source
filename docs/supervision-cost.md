@@ -24,6 +24,9 @@ Sessions run under codex, opencode, pi, or grok contribute nothing to any figure
 Retention is the provider's.
 A day whose transcripts have rolled off is absent from the table rather than reported as zero, and no figure here is a complete ledger of any day.
 
+Executed drains and session-start digests are identified by a bounded heuristic over recorded shell command text, not by an execution trace.
+Recognized wrapper grammars are unwrapped conservatively, and ambiguous or unrecognized forms are not counted rather than risk inflating the result.
+
 Currency is not computed.
 That needs a price list this repo has no business pinning, and a subscription window is not the same accounting as an API bill.
 
@@ -198,8 +201,8 @@ Measured distribution of requests per delivery in the main home from 2026-08-04 
  0 requests:   15 deliveries   <- retained-record/deduplication boundary; 11 carried a record
  2 requests:    1              <- an activity-window boundary, not a full protocol cycle
  3 requests:  642              <- the mode; 69 of them carried a record
- 4 requests:   96              <- 75 carried a record
- 5 requests:   33              <- 22 carried a record
+ 4 requests:   97              <- 76 carried a record
+ 5 requests:   34              <- 23 carried a record
  6 requests:   34              <- 26 carried a record
  7+        :  235              <- the long tail, up to 113
 ```
