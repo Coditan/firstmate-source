@@ -71,7 +71,7 @@ exit=6
 ```
 
 A Codex crewmate can therefore reach the public internet, where before it could not.
-It keeps every other boundary: the sandbox stays `workspace-write`, so writes remain confined to its own worktree, and `approval_policy = "on-request"` still escalates blocked boundary work.
+It keeps every other configured boundary: the sandbox stays `workspace-write`, so writes remain confined to its own worktree, and `approval_policy = "on-request"` remains unchanged.
 This is the captain-authorised trade of 2026-08-10, taken because the alternative is that the fleet's heaviest class of work cannot leave the expensive provider.
 
 ## 4. The grant works from a real Codex worker, not just from `codex sandbox`
@@ -134,3 +134,77 @@ The placement decision does not depend on the missing detail: the behaviour is r
 - The supervising primary session never receives it, because `fm-spawn` only ever composes launch commands for direct reports.
 - No other harness is affected.
   The grant lives entirely in the Codex branch of the composition, and a Claude launch line is byte-identical to what it was before.
+
+## 7. The pipeline client reaches the daemon, measured 2026-08-11
+
+Sections 1 to 4 prove a raw AF_UNIX connect.
+This section proves the thing the grant exists for: the `no-mistakes` client itself completing a daemon round trip from inside the sandbox.
+Measured against `no-mistakes` v1.45.4 and `codex-cli 0.145.0`, in a task worktree, with the same override set `bin/fm-spawn.sh` composes for a Codex crewmate.
+
+```
+# without the grant
+$ codex sandbox -c sandbox_mode='"workspace-write"' -c approval_policy='"on-request"' \
+    -c approvals_reviewer='"auto_review"' -- no-mistakes status
+  daemon:  ○ stopped
+
+# with the grant, same worktree, seconds apart
+$ codex sandbox -c sandbox_mode='"workspace-write"' -c approval_policy='"on-request"' \
+    -c approvals_reviewer='"auto_review"' -c sandbox_workspace_write.network_access=true \
+    -- no-mistakes status
+  daemon:  ● running
+
+# outside the sandbox, as the same user, as the control
+$ no-mistakes status
+  daemon:  ● running
+```
+
+The daemon was running throughout, so `stopped` is the refusal, not the daemon's state.
+The socket itself was confirmed the same day from a real `codex exec` worker carrying the full crewmate profile, which reported `PROBE3 socket OK`, so the granted dimension does not rest on the `codex sandbox` reading alone.
+
+That reading is the hazard worth carrying out of this section.
+A Codex crewmate denied the socket is not told it was denied: the client reports the shared daemon as **stopped** rather than surfacing the `EPERM` that section 1 shows at the raw socket layer.
+A worker that believes the daemon is down is one step from trying to start or reset it, and that daemon is a single shared instance serving every lane and home, so acting on the misreading would disrupt other lanes' in-flight runs.
+Anyone diagnosing a Codex worker that reports the daemon stopped should suspect this grant before touching the daemon.
+
+## 8. The grant reaches a home only when that home's own copy carries it
+
+`bin/fm-spawn.sh` composes the launch line, so a firstmate home grants the socket only once its own copy of that script includes it.
+A home running an older vendored or unsynced copy keeps composing the pre-grant launch line and keeps measuring the original refusal, no matter what this repository's default branch holds.
+That is a deployment fact rather than a defect, and it is recorded here because the symptom is indistinguishable from the fix being absent: the worker fails exactly as it did before.
+Check the spawning home's own `bin/fm-spawn.sh` for the grant before concluding the change is missing or ineffective.
+
+## 9. What the grant does not cover
+
+The grant covers the network dimension and nothing else.
+A pipeline run also writes in two places outside the workspace, and the sandbox refuses both.
+Measured 2026-08-11 from a real `codex exec` worker carrying the full crewmate profile, network grant included:
+
+```
+PROBE1 common-dir-write REFUSED   # the git common dir of a linked worktree
+PROBE2 gate-write REFUSED         # /home/coditan/.no-mistakes/repos/<hash>.git
+PROBE3 socket OK                  # the granted dimension
+```
+
+The gate-repository refusal is load-bearing, because it stops a Codex-driven pipeline one step past the socket.
+Starting a run from a Codex worker the same day reached the daemon, cleared intent handling, and then failed:
+
+```
+push "<branch>" to gate: exit status 1: error: remote unpack failed: unable to create temporary object directory
+ ! [remote rejected] HEAD -> <branch> (unpacker error)
+error: failed to push some refs to '/home/coditan/.no-mistakes/repos/<hash>.git'
+```
+
+The gate repository itself was healthy, so this is not a broken gate.
+Another lane's run pushed to that same repository successfully the same day, and the directory is owned and writable by the same user.
+The refusal is the sandbox.
+
+So the grant is necessary but not sufficient for an end-to-end Codex pipeline run.
+Closing that gap would need `writable_roots` extended to cover the no-mistakes data directory, which is a second confinement dimension on the filesystem axis rather than a wider setting of this one.
+That is a separate captain decision, and it is deliberately not taken here.
+
+An earlier draft of this section inferred that the approval path, `approval_policy = "on-request"` with `approvals_reviewer = "auto_review"`, is what clears such a filesystem refusal, reasoning from the fact that Codex crewmates do commit in this linked-worktree layout.
+The run above is evidence against that inference for the gate push: the worker had both settings available, did not escalate, and returned the error.
+How a Codex crewmate nevertheless commits here is therefore unexplained rather than settled, and the next reader should treat it as an open question rather than a mechanism to rely on.
+
+One instrument limit remains.
+`codex sandbox` and `codex exec` are both weaker instruments than the interactive `codex` session `bin/fm-spawn.sh` actually launches, so a refusal measured through them may still understate what a real crewmate achieves.
