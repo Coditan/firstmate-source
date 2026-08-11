@@ -65,6 +65,27 @@ wait_numeric_file() {
   return 1
 }
 
+wait_line_count() {  # <file> <minimum> [0.1s ticks]
+  local file=$1 minimum=$2 limit=${3:-40} i=0 count
+  while [ "$i" -lt "$limit" ]; do
+    count=$(grep -c . "$file" 2>/dev/null || true)
+    [ "$count" -ge "$minimum" ] && return 0
+    sleep 0.1
+    i=$((i + 1))
+  done
+  return 1
+}
+
+wait_file_value() {  # <file> <expected> [0.1s ticks]
+  local file=$1 expected=$2 limit=${3:-40} i=0
+  while [ "$i" -lt "$limit" ]; do
+    [ "$(cat "$file" 2>/dev/null || true)" = "$expected" ] && return 0
+    sleep 0.1
+    i=$((i + 1))
+  done
+  return 1
+}
+
 # Portable mtime in epoch seconds. Platform-detected, never the `stat -f || stat -c`
 # fallback (which writes a partial filesystem dump on Linux; see fm-watch.sh).
 file_mtime() {
@@ -1749,7 +1770,7 @@ test_wedge_escalation_marks_demand_deep_inspection_after_threshold() {
     : > "$out"
     PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
       FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
-      FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+      FM_WEDGE_REPEAT_RESURFACE_SECS=0 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
     pid=$!
     wait_for_exit "$pid" 40 || fail "watcher did not escalate on consecutive wedge round $n: $(cat "$out")"
     grep -F "escalation $n" "$out" >/dev/null || fail "round $n did not report escalation count $n: $(cat "$out")"
@@ -1763,6 +1784,190 @@ test_wedge_escalation_marks_demand_deep_inspection_after_threshold() {
   [ "$(cat "$state/.wedge-escalations-$key" 2>/dev/null || echo 0)" = 3 ] || fail "escalation counter did not persist across consecutive rounds"
   unset FM_FAKE_CREW_STATE
   pass "consecutive wedge escalations on the same pane accumulate and demand deep inspection at the threshold"
+}
+
+# --- unchanged wedge alarms deliver once, then retain bounded history ----------
+#
+# The first case is deliberately the known-bad input for the suppression below.
+# A crew with no active run and a frozen pane must still raise its first possible-
+# wedge alarm, and the same condition must re-surface after the configured bound.
+# Run this before the quiet-path replay so a broken implementation cannot prove
+# itself merely by producing no output.
+test_repeat_wedge_suppression_still_surfaces_a_real_wedge_on_a_bound() {
+  local dir state fakebin out capture_file window key pane_hash sig pid back
+  dir=$(make_case repeat-wedge-bound); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-real-wedge"
+  printf 'frozen worker output' > "$capture_file"
+  printf 'window=%s\nkind=ship\n' "$window" > "$state/real-wedge.meta"
+  printf 'working: last known progress\n' > "$state/real-wedge.status"
+  sig=$(seen_sig "$state/real-wedge.status"); printf '%s' "$sig" > "$state/.seen-real-wedge_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "frozen worker output")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  printf '%s' "$pane_hash" > "$state/.stale-$key"
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · no current-state source available'
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 \
+    FM_WEDGE_REPEAT_RESURFACE_SECS=5 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "a genuinely wedged worker did not raise its first alarm: $(cat "$out")"
+  grep -F "possible wedge" "$out" >/dev/null || fail "known-wedged input did not produce a wedge alarm: $(cat "$out")"
+  grep -F $'\tsurfaced\t' "$state/.wedge-alarm-history" >/dev/null \
+    || fail "the surfaced known-wedge alarm was not retained in durable history"
+
+  # The delivery marker is the cadence anchor. Age it past the deliberately tiny
+  # bound and require the unchanged real wedge to get through again.
+  back=$(( $(date +%s) - 6 ))
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$state/.wedgeheld-$key"
+  else touch -m -d "@$back" "$state/.wedgeheld-$key"; fi
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+  : > "$out"
+  : > "$state/.wake-queue"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 \
+    FM_WEDGE_REPEAT_RESURFACE_SECS=5 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "an unchanged real wedge stayed suppressed beyond the configured bound: $(cat "$out")"
+  grep -F "possible wedge" "$out" >/dev/null || fail "bounded real-wedge re-surface lost its alarm payload: $(cat "$out")"
+  unset FM_FAKE_CREW_STATE
+  pass "a genuinely wedged worker surfaces first and re-surfaces after FM_WEDGE_REPEAT_RESURFACE_SECS"
+}
+
+# Real drain records from fleet-pin-bump-b696c0e on 2026-08-10:
+#   1786366330 escalation 1, idle 249s
+#   1786366581 escalation 2, idle 251s
+#   1786366830 escalation 3, idle 247s
+#   1786367080 escalation 4, idle 250s
+#   1786367333 escalation 5, idle 251s
+# The worker was checked after each delivery and remained healthy. Replaying the
+# exact recorded idle-age sequence against one unchanged pane must deliver one
+# alarm, retain all five candidates in history, and suppress candidates 2-5.
+test_recorded_five_alarm_sequence_delivers_one() {
+  local dir state fakebin out capture_file window key pane_hash sig pid age expected lines dispositions
+  dir=$(make_case recorded-five-wedges); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-fleet-pin-bump-b696c0e"
+  printf 'unchanged validation pane' > "$capture_file"
+  printf 'window=%s\nkind=ship\n' "$window" > "$state/fleet-pin-bump-b696c0e.meta"
+  printf 'working: validation still under way\n' > "$state/fleet-pin-bump-b696c0e.status"
+  sig=$(seen_sig "$state/fleet-pin-bump-b696c0e.status")
+  printf '%s' "$sig" > "$state/.seen-fleet-pin-bump-b696c0e_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "unchanged validation pane")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  printf '%s' "$pane_hash" > "$state/.stale-$key"
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · no current-state source available'
+
+  # The first recorded alarm must still be delivered.
+  echo $(( $(date +%s) - 249 )) > "$state/.stale-since-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 \
+    FM_WEDGE_REPEAT_RESURFACE_SECS=3600 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "the first recorded wedge candidate was suppressed: $(cat "$out")"
+  grep -F "escalation 1" "$out" >/dev/null || fail "the first recorded alarm did not surface as escalation 1: $(cat "$out")"
+
+  # Keep one watcher alive for the four remaining recorded ages. Each candidate
+  # must append history before it is suppressed, so the line count is the test's
+  # synchronization point and no sleep guesses at watcher timing.
+  : > "$out"
+  echo $(( $(date +%s) - 251 )) > "$state/.stale-since-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 \
+    FM_WEDGE_REPEAT_RESURFACE_SECS=3600 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  expected=2
+  for age in 247 250 251; do
+    wait_line_count "$state/.wedge-alarm-history" "$expected" 40 \
+      || { reap "$pid"; fail "recorded candidate $expected was neither retained nor classified"; }
+    kill -0 "$pid" 2>/dev/null || { reap "$pid"; fail "recorded candidate $expected was delivered instead of suppressed: $(cat "$out")"; }
+    echo $(( $(date +%s) - age )) > "$state/.stale-since-$key"
+    expected=$((expected + 1))
+  done
+  wait_line_count "$state/.wedge-alarm-history" 5 40 \
+    || { reap "$pid"; fail "the fifth recorded candidate was not retained"; }
+  kill -0 "$pid" 2>/dev/null || { reap "$pid"; fail "the fifth recorded candidate was delivered instead of suppressed: $(cat "$out")"; }
+  reap "$pid"
+
+  lines=$(grep -c . "$state/.wake-queue" 2>/dev/null || true)
+  [ "$lines" = 1 ] || fail "the recorded five-alarm sequence delivered $lines alarms instead of 1"
+  [ "$(wc -l < "$state/.wedge-alarm-history" | tr -d '[:space:]')" = 5 ] \
+    || fail "the recorded five-alarm sequence did not retain all five candidates"
+  dispositions=$(cut -f2 "$state/.wedge-alarm-history")
+  [ "$dispositions" = "$(printf 'surfaced\nsuppressed\nsuppressed\nsuppressed\nsuppressed')" ] \
+    || fail "the recorded sequence history carried the wrong delivery decisions: $dispositions"
+  unset FM_FAKE_CREW_STATE
+  pass "the real fleet-pin-bump-b696c0e five-alarm sequence delivers 1 and retains all 5"
+}
+
+test_repeat_wedge_state_change_and_history_failure_fail_open() {
+  local dir state fakebin out capture_file window key pane_hash sig pid
+  dir=$(make_case repeat-wedge-fail-open); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-repeat-fail-open"
+  printf 'static pane' > "$capture_file"
+  printf 'window=%s\nkind=ship\n' "$window" > "$state/repeat-fail-open.meta"
+  printf 'working: earlier progress\n' > "$state/repeat-fail-open.status"
+  sig=$(seen_sig "$state/repeat-fail-open.status"); printf '%s' "$sig" > "$state/.seen-repeat-fail-open_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "static pane")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  printf '%s' "$pane_hash" > "$state/.stale-$key"
+  printf '1\n' > "$state/.wedge-escalations-$key"
+  printf 'none' > "$state/.wedgeheld-$key"
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · validation resumed'
+
+  # A changed authoritative class updates the shared wedge state without waking.
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 \
+    FM_WEDGE_REPEAT_RESURFACE_SECS=3600 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_file_value "$state/.wedgeheld-$key" working 40 \
+    || { reap "$pid"; fail "a genuine state change to working did not re-key wedge suppression"; }
+  reap "$pid"
+
+  # When that run then stops, the class change back to none must surface at once
+  # even though the prior alarm's delivery bound has not elapsed.
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · run stopped'
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+  : > "$out"
+  : > "$state/.wake-queue"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 \
+    FM_WEDGE_REPEAT_RESURFACE_SECS=3600 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "a genuine state change from working to stopped was suppressed: $(cat "$out")"
+  grep -F "possible wedge" "$out" >/dev/null || fail "the stopped-state change lost its wedge alarm: $(cat "$out")"
+
+  # Suppression is permitted only after its append-only history write succeeds.
+  # Replacing the history file with a directory makes that assurance fail; the
+  # repeat must fail open to ordinary delivery rather than disappear silently.
+  rm -f "$state/.wedge-alarm-history"
+  mkdir "$state/.wedge-alarm-history"
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+  : > "$out"
+  : > "$state/.wake-queue"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 \
+    FM_WEDGE_REPEAT_RESURFACE_SECS=3600 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "a failed history write silently swallowed an unchanged wedge alarm"
+  grep -F "possible wedge" "$out" >/dev/null || fail "history failure did not fail open to wedge delivery: $(cat "$out")"
+  grep -F "repeat suppression disabled: append-only wedge alarm history could not be written" "$out" >/dev/null \
+    || fail "the fail-open wedge delivery did not explain that suppression was disabled: $(cat "$out")"
+  unset FM_FAKE_CREW_STATE
+  pass "wedge suppression re-keys on state changes and fails open when durable history cannot be written"
 }
 
 # --- the ladder-hold path under a STRIPPED service environment ----------------
@@ -2548,6 +2753,9 @@ test_parked_gate_hold_gets_bounded_recheck
 test_terminal_stale_already_surfaced_absorbed_then_escalates
 test_terminal_stale_changed_line_still_surfaces
 test_wedge_escalation_marks_demand_deep_inspection_after_threshold
+test_repeat_wedge_suppression_still_surfaces_a_real_wedge_on_a_bound
+test_recorded_five_alarm_sequence_delivers_one
+test_repeat_wedge_state_change_and_history_failure_fail_open
 test_ladder_holds_under_a_stripped_service_environment
 test_wedge_hold_bounded_recheck_after_long_freeze
 test_wedge_escalation_resets_when_pane_becomes_active
