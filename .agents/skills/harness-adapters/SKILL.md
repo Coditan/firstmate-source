@@ -35,6 +35,9 @@ If `config/crew-harness` or `config/secondmate-harness` names an unverified adap
 Do not pause current work for that future-verification choice, and never launch an unverified adapter.
 If the captain asks for a new harness, propose verifying it first: spawn a trivial supervised task using `fm-spawn`'s raw-launch-command escape hatch, confirm every fact empirically, then record the mechanics in `fm-spawn`, the busy signature in `fm-watch.sh` and `fm-tmux-lib.sh` defaults, any needed `FM_COMPOSER_IDLE_RE` empty-composer override plus any novel bare agent prompt glyph or non-ASCII blank padding its empty composer draws (`fm_composer_trim` covers only the measured U+00A0) in `bin/fm-composer-lib.sh`'s shared composer classifier (the one fleet-wide owner of the empty/dead-shell/pending decision, so a new harness's own idle composer is not misread as a dead shell), the tmux agent-process liveness classification in `bin/backends/tmux.sh` when the harness can launch a secondmate, and the verified knowledge here.
 
+One of those empirical facts is easy to skip and cannot be answered from the outside: whether the harness refuses a turn that produces no visible output, which decides what `AGENTS.md` section 8 lets it do on a no-change supervision wake.
+Measure it by ending one turn with no visible output and recording the verbatim response in `docs/silent-turn-attempts.md`, never by asking a seat what it believes about its own tool - that file records a vessel whose honest introspective answer about its own harness was wrong, and was corrected only when it tried.
+
 ## Detection
 
 `bin/fm-harness.sh` prints firstmate's own harness, using verified env markers first and then process ancestry.

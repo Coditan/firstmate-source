@@ -161,10 +161,28 @@ test_no_change_wakes_are_explicitly_silent() {
   local harness out
   for harness in claude codex grok opencode pi; do
     out=$("$RENDER" --harness "$harness")
-    assert_contains "$out" "tool calls only and send no chat text" "$harness snippet omitted tool-only no-change turns"
+    assert_contains "$out" "tool calls and no chat text" "$harness snippet omitted tool-only no-change turns"
     assert_contains "$out" "protocol violation, not politeness" "$harness snippet did not make no-change chat a violation"
   done
   pass "every supported harness makes no-change wake turns explicitly silent"
+}
+
+# A harness that refuses a turn with no visible output cannot obey a bare "send no
+# chat text", so each snippet must carry the forced-turn floor as well as the rule
+# it is an escape from. The restatement half has no harness excuse anywhere, so it
+# is asserted on every snippet rather than only on the ones known to refuse.
+test_forced_turns_have_a_prescribed_minimum_and_no_repetition() {
+  local harness out
+  for harness in claude codex grok opencode pi; do
+    out=$("$RENDER" --harness "$harness")
+    assert_contains "$out" "send exactly one line holding the marker \`.\` and nothing else" \
+      "$harness snippet omitted the forced-turn minimum output"
+    assert_contains "$out" "restating an unchanged wait stays a violation even on a turn the harness forced to speak" \
+      "$harness snippet let a forced turn excuse restating an unchanged state"
+    assert_contains "$out" "docs/silent-turn-attempts.md" \
+      "$harness snippet lost the pointer to the measured silent-turn attempts"
+  done
+  pass "every supported harness prescribes a forced-turn minimum and forbids repetition"
 }
 
 test_re_arm_before_reply_ordering() {
@@ -278,6 +296,7 @@ test_repair_lines
 test_cross_harness_ordinary_continuation_and_repair_matrix
 test_grok_is_background_notify
 test_no_change_wakes_are_explicitly_silent
+test_forced_turns_have_a_prescribed_minimum_and_no_repetition
 test_re_arm_before_reply_ordering
 test_agents_md_resume_protocol_ordering
 test_grok_command_leaves_cadence_to_service

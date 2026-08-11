@@ -28,9 +28,10 @@ When you see a background-task-completed system reminder for the arm:
    A re-arm that comes straight back with `wake delivery: already armed pid=<N> (same session)` is not a wake and not a failure: another healthy stub of this session owns delivery.
    Follow step 5 of the arm list above - one more arm, then end the turn if it reports already armed again.
 4. Optionally fetch arm output with `get_command_or_subagent_output(<task_id>)`; `wake: queued` is the actionable delivery line.
-5. If nothing reaches `AGENTS.md` section 9's escalation bar, end the turn with tool calls only and send no chat text.
+5. If nothing reaches `AGENTS.md` section 9's escalation bar, end the turn with tool calls and no chat text; where this harness refuses a turn with no visible output, send exactly one line holding the marker `.` and nothing else.
 
-Any no-change wake turn that sends chat text is a protocol violation, not politeness.
+Any other chat text on a no-change wake turn is a protocol violation, not politeness, and restating an unchanged wait stays a violation even on a turn the harness forced to speak.
+No attempt is on file for this harness in either direction; if you meet a refusal, record it in `docs/silent-turn-attempts.md` rather than leaving the next seat to rediscover it.
 
 The watcher loop runs outside Grok's background-task lifecycle.
 Grok's tracked background process is only the safely killable delivery stub.

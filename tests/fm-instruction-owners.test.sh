@@ -353,6 +353,9 @@ test_compressed_agents_retains_authority_and_supervision_safety() {
     'A status line is a wake event, not current state' \
     'keep exactly one live wake-delivery wait armed' \
     'Never broadly kill watchers' \
+    '**Never restate an unchanged state.**' \
+    'Never announce silence and then speak' \
+    "send exactly one line holding the marker \`.\` and nothing else" \
     'While `state/.afk` exists, the away daemon owns wake delivery' \
     'post the final completion follow-up before teardown'; do
     assert_grep "$phrase" "$AGENTS" "compressed AGENTS.md lost safety phrase '$phrase'"

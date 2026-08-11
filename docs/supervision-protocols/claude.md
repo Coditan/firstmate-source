@@ -14,8 +14,9 @@ When this session owns supervision and away mode is not active:
 7. When the background task completes with `wake: queued`, drain queued wakes, handle them, then start exactly one fresh background task before composing any reply or beginning long work.
 8. If a forced watcher-loop restart is genuinely needed, run `bin/fm-watch-arm.sh --restart` through the same Claude background task mechanism.
 9. Do not send idle progress while the delivery stub is waiting.
-10. After handling a wake, if nothing reaches `AGENTS.md` section 9's escalation bar, end the turn with tool calls only and send no chat text.
-    Any no-change wake turn that sends chat text is a protocol violation, not politeness.
+10. After handling a wake, if nothing reaches `AGENTS.md` section 9's escalation bar, end the turn with tool calls and no chat text; where this harness refuses a turn with no visible output, send exactly one line holding the marker `.` and nothing else.
+    Any other chat text on a no-change wake turn is a protocol violation, not politeness, and restating an unchanged wait stays a violation even on a turn the harness forced to speak.
+    Claude Code refuses an empty turn and accepts the one-character marker; `docs/silent-turn-attempts.md` holds the attempts that measured both.
 
 Claude Code's background task completion delivers the wake to the model.
 The external service owns `bin/fm-watch.sh`; the background task owns only `bin/fm-wake-wait.sh` through the verified `bin/fm-watch-arm.sh` wrapper.
