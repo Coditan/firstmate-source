@@ -46,8 +46,8 @@ Empty delivery a segment that ran the wake drain and got no queue record back:
 
 Executable detection is a bounded heuristic over recorded shell command text,
 not an execution trace.  It recognizes only the wrapper grammars named in this
-engine and rejects ambiguous or unrecognized wrapper forms rather than
-over-counting them.
+engine and returns one of executes, does-not-execute, or unknown.  Unknown forms
+are counted but treated as non-executions rather than over-counted.
 
 WHAT IS NOT COUNTED
 -------------------
@@ -73,6 +73,9 @@ from collections import defaultdict
 QUEUE_ROW = re.compile(r"^\d{9,11}\t\d+\t(signal|stale|check|heartbeat)\t")
 DRAIN_CALL = "fm-wake-drain.sh"
 SESSION_START_CALL = "fm-session-start.sh"
+EXECUTES = "executes"
+DOES_NOT_EXECUTE = "does_not_execute"
+UNKNOWN = "unknown"
 # The digest is meant to be the session's first action, so a session that has
 # not read it within this many requests was not starting up - it was working.
 # Without this bound one such session turns a whole day's work into a startup
@@ -118,13 +121,13 @@ def fresh_tokens(usage):
     )
 
 
-def invoked_script(command, script):
+def classify_script(command, script):
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|")
         lexer.whitespace_split = True
         tokens = list(lexer)
     except ValueError:
-        return False
+        return UNKNOWN if script in command else DOES_NOT_EXECUTE
     segments = []
     segment = []
     for token in tokens:
@@ -136,7 +139,9 @@ def invoked_script(command, script):
             segment.append(token)
     if segment:
         segments.append(segment)
+    outcome = DOES_NOT_EXECUTE
     for words in segments:
+        mentions_script = any(os.path.basename(word) == script for word in words)
         while words and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
             words = words[1:]
         if not words:
@@ -146,31 +151,43 @@ def invoked_script(command, script):
             if wrapper == "env":
                 words = unwrap_env(words[1:])
                 if words is None:
+                    if mentions_script:
+                        outcome = UNKNOWN
                     break
                 continue
             if wrapper == "timeout":
                 words = unwrap_timeout(words[1:])
                 if words is None:
+                    if mentions_script:
+                        outcome = UNKNOWN
                     break
                 continue
             if wrapper == "nice":
                 words = unwrap_nice(words[1:])
                 if words is None:
+                    if mentions_script:
+                        outcome = UNKNOWN
                     break
                 continue
             if wrapper == "nohup":
                 words = unwrap_nohup(words[1:])
                 if words is None:
+                    if mentions_script:
+                        outcome = UNKNOWN
                     break
                 continue
             if wrapper == "stdbuf":
                 words = unwrap_stdbuf(words[1:])
                 if words is None:
+                    if mentions_script:
+                        outcome = UNKNOWN
                     break
                 continue
             if wrapper in ("command", "exec"):
                 words = unwrap_command(wrapper, words[1:])
                 if words is None:
+                    if mentions_script:
+                        outcome = UNKNOWN
                     break
                 continue
             break
@@ -178,12 +195,37 @@ def invoked_script(command, script):
             continue
         executable = os.path.basename(words[0])
         if executable == script:
-            return True
+            return EXECUTES
         if executable in ("bash", "sh"):
-            args = [word for word in words[1:] if not word.startswith("-")]
-            if args and os.path.basename(args[0]) == script:
-                return True
-    return False
+            shell_outcome = classify_shell(words[1:], script)
+            if shell_outcome == EXECUTES:
+                return EXECUTES
+            if shell_outcome == UNKNOWN:
+                outcome = UNKNOWN
+    return outcome
+
+
+def classify_shell(words, script):
+    index = 0
+    no_execute = False
+    while index < len(words):
+        word = words[index]
+        if word == "--":
+            index += 1
+            break
+        if word in ("-n", "--noexec"):
+            no_execute = True
+            index += 1
+            continue
+        if word in ("--norc", "--noprofile", "-r", "--restricted"):
+            index += 1
+            continue
+        if word in ("-c", "-s") or word.startswith("--") or word.startswith("-"):
+            return UNKNOWN if any(script in item for item in words) else DOES_NOT_EXECUTE
+        break
+    if index >= len(words) or os.path.basename(words[index]) != script:
+        return DOES_NOT_EXECUTE
+    return DOES_NOT_EXECUTE if no_execute else EXECUTES
 
 
 def take_option_argument(words, index):
@@ -348,6 +390,7 @@ class SessionMeasurement:
         self.empty_delivery_requests = 0
         self.empty_delivery_fresh = 0
         self.is_session_start = False
+        self.unclassified_commands = 0
 
 
 def measure_file(path, since, until, seen_requests):
@@ -380,7 +423,6 @@ def measure_file(path, since, until, seen_requests):
     # Tool-use id -> True for calls that ran the wake drain, so their results can
     # be classified when they come back a message later.
     drain_calls = {}
-    session_start_calls = {}
     # The startup block stays open only until the digest has actually been read.
     # A session that never runs it must not have its whole run counted as
     # start-up cost: an open-ended accumulator silently turns one session's real
@@ -438,12 +480,17 @@ def measure_file(path, since, until, seen_requests):
                 if not isinstance(block, dict) or block.get("type") != "tool_use":
                     continue
                 command = (block.get("input") or {}).get("command") or ""
-                if in_range and invoked_script(command, DRAIN_CALL):
+                drain_class = classify_script(command, DRAIN_CALL)
+                start_class = classify_script(command, SESSION_START_CALL)
+                if in_range and (drain_class == UNKNOWN or start_class == UNKNOWN):
+                    measurement.unclassified_commands += 1
+                if in_range and drain_class == EXECUTES:
                     drain_calls[block.get("id")] = True
                     measurement.drain_calls += 1
                     segment_drains += 1
-                if invoked_script(command, SESSION_START_CALL):
-                    session_start_calls[block.get("id")] = True
+                if start_class == EXECUTES:
+                    startup_digest_seen = True
+                    startup_open = False
         elif kind == "user":
             content = (record.get("message") or {}).get("content")
             if isinstance(content, str):
@@ -466,8 +513,6 @@ def measure_file(path, since, until, seen_requests):
                     if rows == 0:
                         measurement.drain_calls_empty += 1
                     segment_rows += rows
-                if block.get("tool_use_id") in session_start_calls:
-                    startup_digest_seen = True
 
     close_segment()
     measurement.first_request_fresh = fresh_tokens(
@@ -556,6 +601,9 @@ def measure(root, since, until, project_filter):
                     m.empty_delivery_requests for m in group
                 ),
                 "empty_delivery_fresh": sum(m.empty_delivery_fresh for m in group),
+                "unclassified_commands": sum(
+                    m.unclassified_commands for m in group
+                ),
                 "requests_per_delivery_distribution": {
                     str(value): {
                         "deliveries": sum(
@@ -612,6 +660,9 @@ def measure(root, since, until, project_filter):
         "transcripts_root": root,
         "sessions": len(active_sessions),
         "days": days,
+        "unclassified_commands": sum(
+            day["unclassified_commands"] for day in days
+        ),
         "requests_per_delivery_distribution": dict(distribution),
         "drain_results": {
             "count": len(drain_bytes),
@@ -628,6 +679,7 @@ def print_report(report):
     print(f"window: {report['window_semantics']}")
     print(f"transcripts: {report['transcripts_root']}")
     print(f"sessions measured: {report['sessions']}")
+    print(f"unclassified relevant commands: {report['unclassified_commands']}")
     print("")
     header = (
         f"{'day':<12}{'starts':>7}{'start-fresh':>13}{'startup-blk':>13}"
@@ -687,6 +739,7 @@ def print_session(report_root, session_id, since, until):
     print(f"  fresh tokens spent on empty deliveries: {measurement.empty_delivery_fresh}")
     print(f"drain calls: {measurement.drain_calls}")
     print(f"  returning no queue record: {measurement.drain_calls_empty}")
+    print(f"unclassified relevant commands: {measurement.unclassified_commands}")
     requests = summarize(measurement.segment_requests)
     fresh = summarize(measurement.segment_fresh)
     print(f"requests per delivery: median {requests['median']}, mean {requests['mean']}, max {requests['max']}")
