@@ -38,32 +38,32 @@ Measured on 2026-08-11 on host `hlr-web-1`, over every Claude Code transcript re
 bin/fm-supervision-cost.sh --since 2026-08-04 --until 2026-08-10 --json
 ```
 
-253 sessions were measured across all projects on this host.
+247 sessions were measured across all projects on this host.
 
 ```text
 day          starts   fresh tokens   deliveries   empty   empty fresh   empty requests
-2026-08-04       53     15,553,462          601     412     1,317,589            1,357
+2026-08-04       47     12,616,066          569     410     1,313,258            1,347
 2026-08-05       18      3,177,839          203     164       169,726              516
-2026-08-06       33      3,592,049            9       1         4,026                3
+2026-08-06       33      3,592,049            9       0             0                0
 2026-08-07        6      2,735,671           18       1       272,773              113
 2026-08-08       16      2,240,701           42       0             0                0
 2026-08-09       35      5,989,121           43       0             0                0
-2026-08-10       92     14,166,167          189      55       112,997              227
-TOTAL           253     47,455,010        1,105     633     1,877,111            2,216
+2026-08-10       92     14,597,722          195      55       112,997              227
+TOTAL           247     44,949,169        1,079     630     1,868,754            2,203
 ```
 
 Three things follow directly.
 
-**Session start.** The 253 starts wrote 8,613,367 fresh tokens between them, 18.15 percent of every freshly written token on the host that week, before any work happened.
+**Session start.** The 247 starts wrote 7,738,271 fresh tokens between them, 17.22 percent of every freshly written token on the host that week, before any work happened.
 The per-start median in the main home was 43,284 to 47,675 fresh tokens across 2026-08-04 to 2026-08-11.
 That is roughly double the 25,000 the work was scoped against; the scoping figure is not reproduced by this measurement, and the higher one is what a later change should be judged against.
 
-**Restart rate.** 53 to 92 starts a day on the two busiest days, across every project on this host.
+**Restart rate.** 47 to 92 starts a day on the two busiest days, across every project on this host.
 The figure of 169 starts in a day that motivated this work is NOT reproduced here, and the counting rule behind it is unknown to this document.
 What is reproduced is the shape: start count and start cost multiply, and 92 starts at 45,000 fresh tokens each is 4.1 million tokens of pure re-entry.
 
-**Empty deliveries.** 633 of 1,105 deliveries that week, 57.3 percent, woke the model and carried nothing.
-They cost 2,216 requests and 1,877,111 fresh tokens, 3.96 percent of the week's freshly written tokens.
+**Empty deliveries.** 630 of 1,079 deliveries that week, 58.4 percent, woke the model and carried nothing.
+They cost 2,203 requests and 1,868,754 fresh tokens, 4.16 percent of the week's freshly written tokens.
 
 The incident that named the defect is measurable on its own:
 
@@ -129,7 +129,7 @@ AFTER   a real wake arriving during a hold: delivered in 0s, exit 0, output: wak
 385 closes in 30 seconds is the rate the mechanism can produce; the model turn is what throttled it to roughly one every 12 to 25 seconds in the live incident.
 Either way the class of close is now zero.
 
-The fresh-token figure for this repair is the measured cost of the class it removes, not a re-measured week: 633 empty deliveries, 2,216 requests, and 1,877,111 fresh tokens over 2026-08-04 to 2026-08-10.
+The fresh-token figure for this repair is the measured cost of the class it removes, not a re-measured week: 630 empty deliveries, 2,203 requests, and 1,868,754 fresh tokens over 2026-08-04 to 2026-08-10.
 Not every empty delivery in that window is proven to come from this mechanism, so that figure is an upper bound on what this repair recovers, and the 33,418 fresh tokens in session `20c57a94` are the part traced to it line by line.
 
 `tests/fm-wake-wait.test.sh` covers all five properties: a holding attempt must not close while another stub owns delivery, must still deliver a wake that arrives while it holds, must take delivery over once the holder releases, must let the holder report an inherited wake rather than reporting it a second time, and must still report a wake a wedged holder never reported.
@@ -156,7 +156,7 @@ The defaults are set from the distribution above, well clear of every drain this
 
 Withheld is not discarded.
 `bin/fm-wake-drain.sh` keeps the drained queue file under `state/.wake-drain-overflow.<epoch>.<pid>` whenever anything was withheld or shortened, and prints the count and the path, so one read recovers every record in full.
-`fm_wake_prune_overflow` keeps the last `FM_WAKE_ECHO_OVERFLOW_KEEP` (default 20) of those files.
+The drain never deletes preserved overflow files because no state records that their full contents have been read.
 
 The stated bound: a drain's stdout is at most 8,192 bytes of raw records, plus one marker line under 256 bytes, plus the annotation half's existing 8,192 bytes, so at most roughly 16.6 KiB regardless of how large the queue got.
 
@@ -215,7 +215,7 @@ Each of the three is irreducible under this harness:
 
 Bundling the drain and the arm into one shell command does not help and is refused by design: `bin/fm-arm-pretool-check.sh` denies a protected watcher command inside a compound, because a truncating pipe or a bundled failure silently unarms delivery.
 
-What this unit actually removes is not requests per wake but wakes: the 633 empty deliveries above were 2,216 requests spent on wakes that carried nothing, and repair 1 removes the mechanism that produced them.
+What this unit actually removes is not requests per wake but wakes: the 630 empty deliveries above were 2,203 requests spent on wakes that carried nothing, and repair 1 removes the mechanism that produced them.
 The long tail above 3 requests is model-chosen inspection - pane reads, crew state, backlog updates - and is not protocol overhead; nothing in this unit touched it, and no claim is made about it.
 
 ## Found here, owned elsewhere
@@ -224,16 +224,16 @@ This unit closed measured waste and deliberately built no judging tier, no event
 Five things surfaced while measuring that belong to those units rather than this one, recorded here so they are not rediscovered from scratch.
 
 **Not every empty delivery is the arm loop.**
-633 empty deliveries were counted that week, and only session `20c57a94`'s 36 are traced to the arm mechanism line by line.
-Attributing the rest needs the origin tagging that the event-ledger unit owns, so until then the 1,877,111 fresh tokens is an upper bound on what repair 1 recovers.
+630 empty deliveries were counted that week, and only session `20c57a94`'s 36 are traced to the arm mechanism line by line.
+Attributing the rest needs the origin tagging that the event-ledger unit owns, so until then the 1,868,754 fresh tokens is an upper bound on what repair 1 recovers.
 
 **Session start is the larger number.**
-18.15 percent of the week's freshly written tokens went on session starts, against 3.96 percent on empty deliveries.
+17.22 percent of the week's freshly written tokens went on session starts, against 4.16 percent on empty deliveries.
 Nothing in this unit touched it.
 Reducing it means changing what a session must load before it can work, which is a different decision carrying a different risk.
 
 **The 169-starts-a-day figure is unreproduced.**
-This instrument measures 53 to 92 across all projects on this host on the two busiest days.
+This instrument measures 47 to 92 across all projects on this host on the two busiest days.
 Whoever owns restart-rate work should re-derive that figure rather than inherit it.
 
 **The queue row is still not replay-complete.**

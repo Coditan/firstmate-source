@@ -347,12 +347,49 @@ test_holding_stub_reports_a_wake_a_wedged_holder_never_did() {
 # that must never be handed the instant close. Nothing else in this file would
 # notice if the flag were dropped from that one line.
 test_arm_wrapper_waits_with_hold() {
-  local arm
-  arm="$ROOT/bin/fm-watch-arm.sh"
-  # shellcheck disable=SC2016 # The literal source line is the subject, not an expansion.
-  grep -Eq '^exec "\$WAIT" --hold$' "$arm" \
-    || fail "bin/fm-watch-arm.sh no longer execs the delivery stub with --hold, so a redundant arm closes at once and reads as an empty wake"
-  pass "the arm wrapper runs the delivery stub in holding mode"
+  local home state daemon holder wrapper fixture old_watch out delivered
+  home="$TMP_ROOT/arm-wrapper-hold"
+  state="$home/state"
+  fixture="$home/bin"
+  out="$home/arm.out"
+  mkdir -p "$state" "$fixture"
+  cp "$ROOT/bin/fm-watch-arm.sh" "$fixture/fm-watch-arm.sh"
+  ln -s "$ROOT/bin/fm-wake-lib.sh" "$fixture/fm-wake-lib.sh"
+  ln -s "$ROOT/bin/fm-wake-wait.sh" "$fixture/fm-wake-wait.sh"
+  ln -s "$ROOT/bin/fm-watch.sh" "$fixture/fm-watch.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$fixture/fm-watcher-service.sh"
+  chmod +x "$fixture/fm-watch-arm.sh" "$fixture/fm-watcher-service.sh"
+
+  sleep 60 & daemon=$!
+  old_watch=$WATCH
+  WATCH="$fixture/fm-watch.sh"
+  record_fake_daemon "$home" "$state" "$daemon"
+  WATCH=$old_watch
+  touch "$state/.last-watcher-beat"
+  printf '4242\n' > "$state/.lock"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$fixture/fm-wake-wait.sh" >/dev/null 2>&1 & holder=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -e "$state/.wake-stub.lock/pid-identity" ] && break
+    sleep 0.1
+  done
+  [ -e "$state/.wake-stub.lock/pid-identity" ] || fail "initial delivery stub did not publish its lock"
+
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$fixture/fm-watch-arm.sh" > "$out" 2>&1 & wrapper=$!
+  sleep 1
+  kill -0 "$wrapper" 2>/dev/null || fail "arm wrapper closed merely because delivery was already armed"
+  append_wake "$state" signal demo.status "signal: demo.status"
+  delivered=0
+  for _ in $(seq 1 50); do
+    kill -0 "$wrapper" 2>/dev/null || { delivered=1; break; }
+    sleep 0.2
+  done
+  [ "$delivered" -eq 1 ] || fail "arm wrapper did not close for a real queued wake"
+  wait "$wrapper" || fail "arm wrapper failed instead of delivering the queued wake"
+  assert_contains "$(cat "$out")" "wake: queued" "arm wrapper did not report the queued wake"
+  kill -TERM "$holder" "$daemon" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  wait "$daemon" 2>/dev/null || true
+  pass "the arm wrapper stays open until a real wake"
 }
 
 # The other half of the same branch: everything fm_wake_stub_armed rejects is a

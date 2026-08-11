@@ -146,6 +146,24 @@ def measure_file(path, since, until, seen_requests):
     project = os.path.basename(os.path.dirname(path))
     measurement = SessionMeasurement(session_id, project)
 
+    session_day = None
+    for record in records:
+        if record.get("type") != "assistant":
+            continue
+        message = record.get("message") or {}
+        if not (message.get("usage") or {}) or not record.get("requestId"):
+            continue
+        timestamp = record.get("timestamp") or ""
+        session_day = timestamp[:10] or None
+        break
+    if session_day is None:
+        return None
+    if since and session_day < since:
+        return None
+    if until and session_day > until:
+        return None
+    measurement.day = session_day
+
     # Tool-use id -> True for calls that ran the wake drain, so their results can
     # be classified when they come back a message later.
     drain_calls = {}
@@ -164,29 +182,21 @@ def measure_file(path, since, until, seen_requests):
 
     def close_segment():
         nonlocal segment, segment_drains, segment_rows
-        if segment is None:
-            return
-        measurement.segment_requests.append(segment[0])
-        measurement.segment_fresh.append(segment[1])
-        if segment_drains > 0 and segment_rows == 0:
-            measurement.empty_deliveries += 1
-            measurement.empty_delivery_requests += segment[0]
-            measurement.empty_delivery_fresh += segment[1]
+        if segment is not None:
+            measurement.segment_requests.append(segment[0])
+            measurement.segment_fresh.append(segment[1])
+            if segment_drains > 0 and segment_rows == 0:
+                measurement.empty_deliveries += 1
+                measurement.empty_delivery_requests += segment[0]
+                measurement.empty_delivery_fresh += segment[1]
         segment = None
         segment_drains = 0
         segment_rows = 0
 
     for record in records:
         timestamp = record.get("timestamp") or ""
-        day = timestamp[:10]
-        if not day:
+        if not timestamp[:10]:
             continue
-        if since and day < since:
-            continue
-        if until and day > until:
-            continue
-        if measurement.day is None:
-            measurement.day = day
 
         kind = record.get("type")
         if kind == "assistant":

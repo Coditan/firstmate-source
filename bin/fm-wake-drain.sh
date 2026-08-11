@@ -91,7 +91,6 @@ fi
 if [ -n "$OVERFLOW_PATH" ]; then
   printf 'wake echo: %s record(s) withheld and %s row(s) shortened by the drain echo bound; every drained record in full: %s\n' \
     "$FM_WAKE_ECHO_OMITTED" "$FM_WAKE_ECHO_SHORTENED" "$OVERFLOW_PATH" || exit "$?"
-  fm_wake_prune_overflow "$STATE"
 else
   rm -f "$DRAIN_TMP" || exit "$?"
   DRAIN_TMP=

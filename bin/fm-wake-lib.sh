@@ -692,27 +692,6 @@ EOF
   FM_WAKE_ECHO_ROWS=${output%$'\n'}
 }
 
-# Keep the last FM_WAKE_ECHO_OVERFLOW_KEEP preserved drain files and remove the
-# rest. The path carries a fixed-width epoch, so glob order is chronological and
-# the oldest entries are the leading ones.
-# The array name is deliberately unshared: this library is sourced into
-# bin/fm-watch.sh, which keeps its own plain-string `files`, and a name used as
-# an array here makes every use of that string over there read as an array.
-fm_wake_prune_overflow() {  # <state-dir>
-  local state=$1 keep overflow_files=() f drop
-  keep=${FM_WAKE_ECHO_OVERFLOW_KEEP:-20}
-  case "$keep" in ''|*[!0-9]*) keep=20 ;; esac
-  for f in "$state"/.wake-drain-overflow.*; do
-    [ -f "$f" ] || continue
-    overflow_files+=("$f")
-  done
-  drop=$(( ${#overflow_files[@]} - keep ))
-  [ "$drop" -gt 0 ] || return 0
-  for f in "${overflow_files[@]:0:$drop}"; do
-    rm -f "$f" 2>/dev/null || true
-  done
-}
-
 # Map one structurally valid signal key to its home-local status filename.
 # Queue payload text is intentionally ignored: it is display data, not a path
 # authority. The caller still verifies the resulting regular file immediately
