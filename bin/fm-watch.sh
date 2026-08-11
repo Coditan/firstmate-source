@@ -554,7 +554,7 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
           # attempt would only repeat the same filesystem error.
           triage_log "wedge alarm history unavailable; delivered unchanged possible wedge fail-open: $win"
         fi
-        printf '%s' none > "$state_file"
+        printf '%s' "$wclass" > "$state_file"
         rm -f "$since_file"
         wake "$reason"
         return
