@@ -13,12 +13,22 @@
 #   watcher: attached pid=<N> (beacon <age>s)
 #   watcher: FAILED - no live watcher with a fresh beacon
 #
-# The exec'd stub can then close immediately with:
+# The exec'd stub runs with `--hold`, so this wrapper never closes on the merely
+# redundant case.  A stub of this session already owning delivery used to close
+# this arm at once with
 #   wake delivery: already armed pid=<N> (same session)
-# which is a HEALTHY close, not a wake and not a failure: a stub of this session
-# already owns delivery, so this arm has nothing left to do.  The arm-layer cycle
-# contract in docs/watcher-continuity.md defines how a consumer classifies it,
-# and records which consumers implement that contract today.
+# which is a HEALTHY state but a ruinous close: an arm is normally started as a
+# tracked background task whose COMPLETION is how the harness wakes the model,
+# and completion carries no reason with it.  The instant close therefore read as
+# a wake, the model drained an empty queue, re-armed, and closed instantly
+# again - measured at 30 empty deliveries in nine minutes in
+# docs/supervision-cost.md.  Holding instead means every close of this wrapper
+# is a real wake or a real failure, which is the property a background-notify
+# harness needs and cannot check for itself.
+# A caller that owns its own re-attempt cadence - bin/fm-watch-checkpoint.sh,
+# the OpenCode plugin - still runs bin/fm-wake-wait.sh directly without `--hold`
+# and still gets the instant close, unchanged.  The arm-layer cycle contract in
+# docs/watcher-continuity.md defines how a consumer classifies each close.
 #
 # `--restart` scopes the restart to this FM_HOME's systemd template instance or
 # tmux keeper, verifies the unchanged fm_watcher_healthy predicate, then waits in
@@ -68,4 +78,4 @@ else
   echo "watcher: started pid=$watcher_pid (beacon fresh)"
 fi
 
-exec "$WAIT"
+exec "$WAIT" --hold

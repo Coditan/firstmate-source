@@ -236,6 +236,7 @@ Firstmate's skills live in two separate places with different audiences:
 - [docs/turnend-guard.md](docs/turnend-guard.md) - the primary session's structural "no turn ends blind" backstop: verified per-harness hook mechanisms, scoping, loop safety, and fail-open tradeoffs.
 - [docs/context-reset.md](docs/context-reset.md) - the stow-then-clear context ceiling: what the watcher measures, when it resets, asks, blocks, or reports itself unenforced, and every refusal the reset tool makes.
 - [docs/supervision-protocols/](docs/supervision-protocols/) - rendered primary-harness watcher protocols for Claude, Codex, OpenCode, Pi, Grok, and unknown harness fallback.
+- [docs/supervision-cost.md](docs/supervision-cost.md) - what supervision costs in freshly written tokens, measured from provider usage records with `bin/fm-supervision-cost.sh`, plus the before-and-after for three repairs and what the measurement does not cover.
 - [docs/scripts.md](docs/scripts.md) - the `bin/` toolbelt reference.
 - [`AGENTS.md`](AGENTS.md) - the distro's always-loaded operating contract and routing index for conditional procedures.
 - [CONTRIBUTING.md](CONTRIBUTING.md) - how to contribute, including the dev/test commands.

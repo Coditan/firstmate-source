@@ -221,6 +221,98 @@ test_atomic_double_drain() {
   pass "two atomic drains cannot consume the same records twice"
 }
 
+# The raw half of a drain is what a wake turn reads and then pays to carry as
+# freshly written context for the rest of the turn, and nothing capped it: not
+# the number of distinct (kind,key) pairs the queue accumulated, and not the
+# length of any one payload. Prove the cap at its exact edge - one byte on
+# either side of it - and prove that "withheld" never means "discarded".
+queue_row() {  # <index> [payload-padding]
+  printf '17000000%02d\t%d\tstale\tkey-%d\tstale: worker-%d is quiet%s' "$1" "$1" "$1" "$1" "${2:-}"
+}
+
+count_queue_rows() {  # <file>
+  grep -cE '^[0-9]{10}	[0-9]+	(signal|stale|check|heartbeat)	' "$1" || true
+}
+
+test_drain_echo_is_bounded_at_its_stated_edge() {
+  local dir state out overflow rows=() line i total
+  dir=$(make_case echo-bound)
+  state="$dir/state"
+
+  for i in 1 2 3 4 5; do
+    line=$(queue_row "$i")
+    rows+=("$line")
+  done
+  total=0
+  for line in "${rows[@]}"; do
+    total=$((total + ${#line} + 1))
+  done
+
+  # Exactly at the bound: every record is echoed and nothing is set aside.
+  : > "$state/.wake-queue"
+  for line in "${rows[@]}"; do printf '%s\n' "$line" >> "$state/.wake-queue"; done
+  out="$dir/at-bound.out"
+  FM_STATE_OVERRIDE="$state" FM_WAKE_ECHO_BYTES="$total" "$DRAIN" > "$out" 2>/dev/null \
+    || fail "drain failed with the echo budget set to exactly the rows it had"
+  [ "$(count_queue_rows "$out")" -eq 5 ] \
+    || fail "a drain whose rows exactly fill the echo budget dropped one: $(count_queue_rows "$out") of 5"
+  grep -q '^wake echo:' "$out" && fail "a drain inside the echo bound still printed a withheld marker"
+  for overflow in "$state"/.wake-drain-overflow.*; do
+    [ -e "$overflow" ] && fail "a drain inside the echo bound still preserved a file out of band"
+  done
+
+  # One byte under it: the last record no longer fits, and that is the whole
+  # difference. It must be named, counted, and recoverable in full.
+  : > "$state/.wake-queue"
+  for line in "${rows[@]}"; do printf '%s\n' "$line" >> "$state/.wake-queue"; done
+  out="$dir/over-bound.out"
+  FM_STATE_OVERRIDE="$state" FM_WAKE_ECHO_BYTES="$((total - 1))" "$DRAIN" > "$out" 2>/dev/null \
+    || fail "drain failed with the echo budget one byte under its rows"
+  [ "$(count_queue_rows "$out")" -eq 4 ] \
+    || fail "one byte over the echo bound withheld $((5 - $(count_queue_rows "$out"))) rows instead of exactly one"
+  assert_contains "$(cat "$out")" "wake echo: 1 record(s) withheld" \
+    "the drain withheld a record without saying so"
+  overflow=$(sed -n 's/^wake echo: .*in full: //p' "$out")
+  [ -n "$overflow" ] || fail "the withheld marker named no path to recover the record from"
+  [ -f "$overflow" ] || fail "the withheld marker named a path that does not exist: $overflow"
+  [ "$(count_queue_rows "$overflow")" -eq 5 ] \
+    || fail "the preserved file holds $(count_queue_rows "$overflow") of the 5 drained records, so withheld meant discarded"
+
+  pass "the drain echo is bounded at its exact stated edge and withholds without discarding"
+}
+
+# The second half of the bound: one pathological payload must not be able to
+# consume the whole budget and hide every other record behind itself.
+test_drain_echo_shortens_a_single_oversized_row() {
+  local dir state out overflow padding line shown
+  dir=$(make_case echo-row-bound)
+  state="$dir/state"
+  padding=$(printf '%0.sX' $(seq 1 400))
+  line=$(queue_row 1 "$padding")
+  : > "$state/.wake-queue"
+  printf '%s\n' "$line" >> "$state/.wake-queue"
+  printf '%s\n' "$(queue_row 2)" >> "$state/.wake-queue"
+
+  out="$dir/row-bound.out"
+  FM_STATE_OVERRIDE="$state" FM_WAKE_ECHO_ROW_BYTES=120 "$DRAIN" > "$out" 2>/dev/null \
+    || fail "drain failed with a per-row echo cap set"
+  [ "$(count_queue_rows "$out")" -eq 2 ] \
+    || fail "shortening one oversized row cost a whole record"
+  shown=$(grep -E '^[0-9]{10}	1	stale	' "$out" | head -1)
+  [ "${#shown}" -eq 120 ] \
+    || fail "the shortened row is ${#shown} bytes, not the 120-byte per-row cap it was given"
+  case "$shown" in
+    *' [row shortened]') ;;
+    *) fail "the shortened row did not say it was shortened: $shown" ;;
+  esac
+  assert_contains "$(cat "$out")" "1 row(s) shortened" "the drain shortened a row without saying so"
+  overflow=$(sed -n 's/^wake echo: .*in full: //p' "$out")
+  [ -f "$overflow" ] || fail "the shortened-row marker named no readable path: ${overflow:-none}"
+  grep -Fq "$padding" "$overflow" \
+    || fail "the preserved file lost the payload the echo shortened away"
+  pass "one oversized row is shortened rather than allowed to consume the whole echo budget"
+}
+
 test_drain_dedupes_obvious_duplicates() {
   local dir state out count
   dir=$(make_case dedupe)
@@ -270,5 +362,7 @@ test_stale_enqueue_before_suppressor
 test_not_working_stale_enqueue_before_suppressor
 test_check_output_is_queued
 test_atomic_double_drain
+test_drain_echo_is_bounded_at_its_stated_edge
+test_drain_echo_shortens_a_single_oversized_row
 test_drain_dedupes_obvious_duplicates
 test_drain_asserts_watcher_liveness

@@ -68,7 +68,7 @@ The optional certsync heartbeat check reuses the same durable `check` wake path 
 At session start, `bin/fm-session-start.sh` emits exactly one primary-harness delivery block rendered by `bin/fm-supervision-instructions.sh` from `docs/supervision-protocols/`.
 The watcher loop is external to the model harness and runs continuously in an enabled `systemd --user` template instance, or in a detached home-scoped tmux keeper when the user manager is unavailable.
 The harness block owns only the lightweight `bin/fm-wake-wait.sh` delivery shape: Claude and Grok use background notification, Codex uses bounded foreground checkpoints, Pi uses its tracked extension, and OpenCode uses its TUI plugin.
-`bin/fm-watch-arm.sh` is the verified service-and-delivery wrapper: it converges or restarts only this home's service, verifies the unchanged identity-matched watcher lock plus fresh-beacon predicate, then replaces itself with the delivery stub.
+`bin/fm-watch-arm.sh` is the verified service-and-delivery wrapper: it converges or restarts only this home's service, verifies the unchanged identity-matched watcher lock plus fresh-beacon predicate, then replaces itself with the delivery stub in holding mode, so the wrapper closes only on a real wake or a real failure and never merely because delivery was already armed (docs/watcher-continuity.md "Holding instead of closing").
 It prints one honest `started`, `attached`, or `FAILED` status before the stub blocks.
 The stub publishes `state/.wake-stub.lock`, exits with `wake: queued` when the durable queue becomes non-empty, and never drains that queue.
 Killing the stub loses no wake and costs exactly one delivery re-arm.

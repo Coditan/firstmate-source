@@ -150,6 +150,291 @@ test_healthy_same_session_stub_reports_already_armed() {
   pass "re-arming while a healthy same-session stub holds the lock succeeds and names it"
 }
 
+test_released_lock_during_classification_is_retried() {
+  local home state daemon holder replacement marker out status
+  home="$TMP_ROOT/stub-release-race"
+  state="$home/state"
+  marker="$home/reconcile"
+  out="$home/replacement.out"
+  mkdir -p "$state"
+  sleep 60 & daemon=$!
+  record_fake_daemon "$home" "$state" "$daemon"
+  printf '4242\n' > "$state/.lock"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$WAIT" >/dev/null 2>&1 & holder=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -e "$state/.wake-stub.lock/pid-identity" ] && break
+    sleep 0.1
+  done
+  [ -e "$state/.wake-stub.lock/pid-identity" ] || fail "initial delivery stub did not publish its lock"
+
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" \
+    FM_WAKE_WAIT_TEST_RECONCILE_MARKER="$marker" FM_WAKE_WAIT_TEST_RECONCILE_DELAY=1 \
+    "$WAIT" > "$out" 2>&1 & replacement=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -e "$marker" ] && break
+    sleep 0.1
+  done
+  [ -e "$marker" ] || fail "replacement stub did not reach lock classification"
+  kill -TERM "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  sleep 2
+  kill -0 "$replacement" 2>/dev/null || fail "replacement reported a released lock as a foreign conflict"
+  append_wake "$state" signal demo.status "signal: demo.status"
+  status=0
+  wait "$replacement" || status=$?
+  kill -TERM "$daemon" 2>/dev/null || true
+  wait "$daemon" 2>/dev/null || true
+
+  [ "$status" -eq 0 ] || fail "replacement exited $status after the raced holder released its lock"
+  assert_contains "$(cat "$out")" "wake: queued" "replacement did not take delivery after the raced release"
+  case "$(cat "$out")" in
+    *FAILED*) fail "replacement emitted a false foreign-lock failure after the raced release" ;;
+  esac
+  pass "a lock released during classification is retried instead of reported as foreign"
+}
+
+# The instant close above is right for a caller that owns a re-attempt cadence
+# and ruinous for one whose close IS the wake. Under a background-notify harness
+# the harness sees only that a tracked task finished and wakes the model, so an
+# instant close reads as a wake carrying nothing: the model drains an empty
+# queue, re-arms, and the re-arm closes instantly for the same reason. That loop
+# was measured at 30 empty deliveries in nine minutes (docs/supervision-cost.md).
+# --hold is the fix, and its whole contract is that the process closes only on a
+# real wake or a real failure.
+test_holding_stub_does_not_close_on_an_already_armed_delivery() {
+  local home state daemon first second out err status
+  home="$TMP_ROOT/stub-hold"
+  state="$home/state"
+  out="$home/hold.out"
+  err="$home/hold.err"
+  mkdir -p "$state"
+  sleep 60 & daemon=$!
+  record_fake_daemon "$home" "$state" "$daemon"
+  printf '4242\n' > "$state/.lock"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$WAIT" >/dev/null 2>&1 & first=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -e "$state/.wake-stub.lock/pid-identity" ] && break
+    sleep 0.1
+  done
+  [ -e "$state/.wake-stub.lock/pid-identity" ] || fail "initial delivery stub did not publish its lock"
+
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_WATCH_CHECKPOINT_REARM_POLL=1 \
+    "$WAIT" --hold > "$out" 2> "$err" & second=$!
+  sleep 3
+  kill -0 "$second" 2>/dev/null \
+    || fail "a holding delivery attempt closed while another stub of this session still owned delivery - that close is exactly what a background-notify harness delivers as an empty wake"
+  [ ! -s "$out" ] \
+    || fail "a holding delivery attempt wrote a close reason to stdout before it had one: $(cat "$out")"
+  assert_contains "$(cat "$err")" "holding behind already-armed pid=" \
+    "the holding attempt did not say on stderr what it was waiting behind"
+
+  # Never discard: a wake that arrives while an attempt is holding still has to
+  # reach whoever is listening, so the holder is not the only process watching.
+  printf '%s\t%s\t%s\t%s\t%s\n' 1700000000 1 signal demo.status 'signal: demo.status' >> "$state/.wake-queue"
+  status=0
+  wait "$second" || status=$?
+  [ "$status" -eq 0 ] || fail "a holding delivery attempt exited $status instead of delivering the queued wake"
+  assert_contains "$(cat "$out")" "wake: queued" "a holding delivery attempt did not deliver a wake that arrived while it held"
+
+  kill -TERM "$first" 2>/dev/null || true
+  wait "$first" 2>/dev/null || true
+  kill -TERM "$daemon" 2>/dev/null || true
+  wait "$daemon" 2>/dev/null || true
+  pass "a holding delivery attempt closes only on a real wake, never on finding delivery already armed"
+}
+
+# The other half of holding: it is a takeover, not a queue. When the holder
+# releases the lock, the attempt behind it becomes the delivery wait itself
+# rather than sitting behind a lock nobody owns.
+test_holding_stub_takes_delivery_over_from_a_released_holder() {
+  local home state daemon first second holder out
+  home="$TMP_ROOT/stub-hold-takeover"
+  state="$home/state"
+  out="$home/takeover.out"
+  mkdir -p "$state"
+  sleep 60 & daemon=$!
+  record_fake_daemon "$home" "$state" "$daemon"
+  printf '4242\n' > "$state/.lock"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$WAIT" >/dev/null 2>&1 & first=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -e "$state/.wake-stub.lock/pid-identity" ] && break
+    sleep 0.1
+  done
+  [ -e "$state/.wake-stub.lock/pid-identity" ] || fail "initial delivery stub did not publish its lock"
+
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_WATCH_CHECKPOINT_REARM_POLL=1 \
+    "$WAIT" --hold > "$out" 2>/dev/null & second=$!
+  sleep 2
+  kill -TERM "$first" 2>/dev/null || true
+  wait "$first" 2>/dev/null || true
+
+  holder=''
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    holder=$(cat "$state/.wake-stub.lock/pid" 2>/dev/null || true)
+    [ "$holder" = "$second" ] && break
+    sleep 0.5
+  done
+  [ "$holder" = "$second" ] \
+    || fail "the holding attempt never took delivery over from the released holder (lock pid: ${holder:-none}, expected $second)"
+  kill -0 "$second" 2>/dev/null || fail "the promoted attempt exited instead of becoming the delivery wait"
+
+  kill -TERM "$second" 2>/dev/null || true
+  wait "$second" 2>/dev/null || true
+  kill -TERM "$daemon" 2>/dev/null || true
+  wait "$daemon" 2>/dev/null || true
+  pass "a holding delivery attempt takes delivery over once the holder releases the lock"
+}
+
+# One wake must produce one delivery even when two stubs are watching. The
+# holder reports and exits; the stub behind it must let the queue it INHERITED
+# go rather than reporting the same wake again, because the model arms once per
+# delivery and a doubling would then sustain itself instead of settling.
+test_holding_stub_lets_the_holder_report_an_inherited_wake() {
+  local home state daemon first second out status
+  home="$TMP_ROOT/stub-hold-inherited"
+  state="$home/state"
+  out="$home/inherited.out"
+  mkdir -p "$state"
+  sleep 60 & daemon=$!
+  record_fake_daemon "$home" "$state" "$daemon"
+  printf '4242\n' > "$state/.lock"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$WAIT" > "$home/holder.out" 2>/dev/null & first=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -e "$state/.wake-stub.lock/pid-identity" ] && break
+    sleep 0.1
+  done
+  [ -e "$state/.wake-stub.lock/pid-identity" ] || fail "initial delivery stub did not publish its lock"
+
+  # The inherited grace has to be long enough that draining the queue is not a
+  # race against a loaded machine, and the observation after the drain long
+  # enough that a deferral which was merely a delay would have fired by then.
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_WATCH_CHECKPOINT_REARM_POLL=8 \
+    "$WAIT" --hold > "$out" 2>/dev/null & second=$!
+  sleep 1
+  printf '%s\t%s\t%s\t%s\t%s\n' 1700000000 1 signal demo.status 'signal: demo.status' >> "$state/.wake-queue"
+
+  for _ in $(seq 1 40); do
+    grep -q 'wake: queued' "$home/holder.out" 2>/dev/null && break
+    sleep 0.25
+  done
+  # The model's drain, immediately after the holder reported the wake it owned.
+  : > "$state/.wake-queue"
+  assert_contains "$(cat "$home/holder.out")" "wake: queued" "the holder did not report the wake it owned"
+  status=0
+  wait "$first" || status=$?
+  [ "$status" -eq 0 ] || fail "the holder exited $status instead of reporting the wake it owned"
+
+  sleep 10
+  kill -0 "$second" 2>/dev/null \
+    || fail "the stub behind the holder reported the same wake again: $(cat "$out")"
+  [ ! -s "$out" ] || fail "the stub behind the holder wrote a second delivery for one wake: $(cat "$out")"
+
+  kill -TERM "$second" 2>/dev/null || true
+  wait "$second" 2>/dev/null || true
+  kill -TERM "$daemon" 2>/dev/null || true
+  wait "$daemon" 2>/dev/null || true
+  pass "one wake produces one delivery even with a stub holding behind the holder"
+}
+
+# The other side of that deferral, and the reason it is bounded rather than
+# unconditional: a holder that is alive but wedged never reports and never
+# releases the lock, so a stub that waited on it forever would lose the wake
+# outright. Deferral may cost latency; it may never cost the notification.
+test_holding_stub_reports_a_wake_a_wedged_holder_never_did() {
+  local home state daemon first second out status delivered
+  home="$TMP_ROOT/stub-hold-wedged"
+  state="$home/state"
+  out="$home/wedged.out"
+  mkdir -p "$state"
+  sleep 60 & daemon=$!
+  record_fake_daemon "$home" "$state" "$daemon"
+  printf '4242\n' > "$state/.lock"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$WAIT" >/dev/null 2>&1 & first=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -e "$state/.wake-stub.lock/pid-identity" ] && break
+    sleep 0.1
+  done
+  [ -e "$state/.wake-stub.lock/pid-identity" ] || fail "initial delivery stub did not publish its lock"
+
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_WATCH_CHECKPOINT_REARM_POLL=2 \
+    "$WAIT" --hold > "$out" 2>/dev/null & second=$!
+  sleep 1
+  # Alive to every liveness predicate, and never going to report anything.
+  kill -STOP "$first" 2>/dev/null || fail "could not wedge the holder"
+  printf '%s\t%s\t%s\t%s\t%s\n' 1700000000 1 signal demo.status 'signal: demo.status' >> "$state/.wake-queue"
+
+  delivered=0
+  for _ in $(seq 1 100); do
+    kill -0 "$second" 2>/dev/null || { delivered=1; break; }
+    sleep 0.2
+  done
+  if [ "$delivered" -eq 0 ]; then
+    kill -CONT "$first" 2>/dev/null || true
+    fail "a wake a wedged holder never reported was never delivered by the stub behind it"
+  fi
+  status=0
+  wait "$second" || status=$?
+  kill -CONT "$first" 2>/dev/null || true
+  kill -TERM "$first" 2>/dev/null || true
+  wait "$first" 2>/dev/null || true
+  kill -TERM "$daemon" 2>/dev/null || true
+  wait "$daemon" 2>/dev/null || true
+
+  [ "$status" -eq 0 ] || fail "the stub behind a wedged holder exited $status instead of delivering"
+  assert_contains "$(cat "$out")" "wake: queued" "the stub behind a wedged holder did not deliver the queued wake"
+  pass "a wake a wedged holder never reported is still delivered, late rather than lost"
+}
+
+# The wrapper is where the defect actually reached the model: it is what a
+# background-notify harness runs as its tracked task, so it is the one caller
+# that must never be handed the instant close. Nothing else in this file would
+# notice if the flag were dropped from that one line.
+test_arm_wrapper_waits_with_hold() {
+  local home state daemon holder wrapper fixture old_watch out delivered
+  home="$TMP_ROOT/arm-wrapper-hold"
+  state="$home/state"
+  fixture="$home/bin"
+  out="$home/arm.out"
+  mkdir -p "$state" "$fixture"
+  cp "$ROOT/bin/fm-watch-arm.sh" "$fixture/fm-watch-arm.sh"
+  ln -s "$ROOT/bin/fm-wake-lib.sh" "$fixture/fm-wake-lib.sh"
+  ln -s "$ROOT/bin/fm-wake-wait.sh" "$fixture/fm-wake-wait.sh"
+  ln -s "$ROOT/bin/fm-watch.sh" "$fixture/fm-watch.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$fixture/fm-watcher-service.sh"
+  chmod +x "$fixture/fm-watch-arm.sh" "$fixture/fm-watcher-service.sh"
+
+  sleep 60 & daemon=$!
+  old_watch=$WATCH
+  WATCH="$fixture/fm-watch.sh"
+  record_fake_daemon "$home" "$state" "$daemon"
+  WATCH=$old_watch
+  touch "$state/.last-watcher-beat"
+  printf '4242\n' > "$state/.lock"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$fixture/fm-wake-wait.sh" >/dev/null 2>&1 & holder=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -e "$state/.wake-stub.lock/pid-identity" ] && break
+    sleep 0.1
+  done
+  [ -e "$state/.wake-stub.lock/pid-identity" ] || fail "initial delivery stub did not publish its lock"
+
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$fixture/fm-watch-arm.sh" > "$out" 2>&1 & wrapper=$!
+  sleep 1
+  kill -0 "$wrapper" 2>/dev/null || fail "arm wrapper closed merely because delivery was already armed"
+  append_wake "$state" signal demo.status "signal: demo.status"
+  delivered=0
+  for _ in $(seq 1 50); do
+    kill -0 "$wrapper" 2>/dev/null || { delivered=1; break; }
+    sleep 0.2
+  done
+  [ "$delivered" -eq 1 ] || fail "arm wrapper did not close for a real queued wake"
+  wait "$wrapper" || fail "arm wrapper failed instead of delivering the queued wake"
+  assert_contains "$(cat "$out")" "wake: queued" "arm wrapper did not report the queued wake"
+  kill -TERM "$holder" "$daemon" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  wait "$daemon" 2>/dev/null || true
+  pass "the arm wrapper stays open until a real wake"
+}
+
 # The other half of the same branch: everything fm_wake_stub_armed rejects is a
 # real conflict and has to stay exactly as loud as it was. A live holder is not
 # enough - the lock has to belong to THIS session and match its recorded
@@ -552,6 +837,12 @@ test_default_confirm_window_fits_inside_the_codex_checkpoint() {
 test_daemon_enqueues_and_continues_without_arm_owner
 test_killed_stub_loses_no_wake_and_costs_one_rearm
 test_healthy_same_session_stub_reports_already_armed
+test_released_lock_during_classification_is_retried
+test_holding_stub_does_not_close_on_an_already_armed_delivery
+test_holding_stub_takes_delivery_over_from_a_released_holder
+test_holding_stub_lets_the_holder_report_an_inherited_wake
+test_holding_stub_reports_a_wake_a_wedged_holder_never_did
+test_arm_wrapper_waits_with_hold
 test_foreign_stub_lock_still_fails_loudly
 test_stub_exits_loudly_on_stale_daemon_beacon
 test_wedged_live_watcher_is_reported_after_the_bounded_window
