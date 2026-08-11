@@ -90,8 +90,9 @@ config/herdr-presentation-spaces  optional presence flag for Herdr's default-off
 config/cmux-socket-password  optional cmux control-socket password; LOCAL, gitignored; read fresh on every cmux CLI call and passed through without ever overriding an operator's own ambient CMUX_SOCKET_PASSWORD when absent (docs/cmux-backend.md "Setup")
 config/wedge-alarm  optional away-mode wedge-alarm active-alert directives; LOCAL, gitignored; absent means auto (macOS Notification Center when available); see docs/wedge-alarm.md
 config/x-mode.env    generated X-mode watcher cadence; LOCAL, gitignored; source before arming watcher when present
-config/telegram.env  optional direct Telegram receive credentials; LOCAL, gitignored; when present, the locked session-start digest emits the `bin/fm-tg-recv-arm.sh` tracked-background arm step
+config/telegram.env  optional direct Telegram credentials, used by both directions; LOCAL, gitignored; when present, the locked session-start digest emits the `bin/fm-tg-recv-arm.sh` tracked-background arm step
 config/fm-tg-recv.sh optional local direct Telegram receiver implementation; LOCAL, gitignored; `bin/fm-tg-recv-arm.sh` owns only the tracked arm/attach wrapper
+config/fm-tg-send.sh optional local direct Telegram sender implementation, the receiver's outbound sibling; LOCAL, gitignored; `bin/fm-tg-send.sh` owns only the tracked seam, and a home without this file is refused a send rather than told the channel is off (docs/telegram-outbound.md)
 config/bridge-vessel  Bridge inbox vessel name(s), space-separated; LOCAL, gitignored; used only when FM_BRIDGE_VESSEL is unset, and absent (with FM_BRIDGE_VESSEL also unset) disables Bridge inbox scans (docs/configuration.md "Bridge inbox check (FM_BRIDGE_*)")
 config/findings-dir  path of the machine's political-officer findings surface; LOCAL, gitignored; absent means FM_HOME/data/findings, and FM_FINDINGS_DIR overrides both. NOT inherited by secondmate homes, because it names a directory on one machine (docs/configuration.md "Findings surface")
 data/                personal fleet records; LOCAL, gitignored as a whole
@@ -485,6 +486,8 @@ When the captain invokes `/decisionboard` or asks to see the open decisions laid
 When the captain invokes `/sea-chart` or asks where one named undertaking stands against its own destination, load the `sea-chart` skill.
 The board is the fleet-wide standing inbox with no destination and the chart is one undertaking with one; both skills state that boundary from their own side, so do not merge them.
 Whenever a PR is mentioned, include its full `https://...` URL before any shorthand reference.
+When something on this list must reach the captain while he is not in a session, send it with `bin/fm-tg-send.sh`, which carries one message to him and refuses rather than reporting a delivery nobody got; it is a delivery path and never a second definition of what deserves his attention, so this section remains the only bar (docs/telegram-outbound.md).
+Send on the event, never on a schedule, and never discard that command's exit status, because a notification path that fails quietly gets trusted while it is dead.
 Generate a PDF deliverable only through `bin/fm-pdf-finish.sh`, which refuses to publish a file a real reader cannot read, because a browser-printed document looks correct on screen and fails at the recipient (docs/pdf-output.md).
 Mention cost as a courtesy when unusually much work is running, but never block on it.
 
