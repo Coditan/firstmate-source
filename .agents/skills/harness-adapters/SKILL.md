@@ -266,6 +266,11 @@ The launch surface `fm-spawn` depends on is unchanged in 0.145.0, verified again
 `-c/--config` still takes `key=value` with a dotted path and TOML-parsed value, `-m/--model` still selects the model, and the `.codex/config.toml` profile keys `sandbox_mode`, `approval_policy`, and `approvals_reviewer` are all still recognized, including the `auto_review` reviewer value.
 The turn-end signal still works the way firstmate relies on: `notify` is an argv list that Codex spawns once per completed agent turn, appending a JSON payload as a final argument that firstmate's `bash -c "touch ..."` form ignores.
 
+A Codex CREWMATE additionally receives `-c sandbox_workspace_write.network_access=true`, because Codex classes a unix-socket connect as network access and the crewmate is otherwise refused the local no-mistakes daemon socket, which stalls every Codex-dispatched pipeline ship task at the gate.
+A Codex secondmate does not receive it, and it never reaches the supervising session.
+It is a whole-dimension grant that also admits general outbound network from that crewmate, because 0.145.0 has no narrower knob; `docs/codex-sandbox-network.md` owns the measurements and the reason it rides the launch line rather than the tracked profile.
+Do not diagnose a Codex worker's blocked outbound connection as a missing filesystem permission, and do not reach for `danger-full-access` or `--dangerously-bypass-approvals-and-sandbox` to unblock one.
+
 Reasoning effort is the one fact that moved.
 Codex's effort vocabulary is now per-model rather than fleet-wide, and the newest models accept levels above `xhigh`: as of 0.145.0 the bundled catalog gives `gpt-5.6-sol` and `gpt-5.6-terra` low through `ultra`, `gpt-5.6-luna` low through `max`, and every older model low through `xhigh`.
 Passing a level a model does not support is rejected outright on the `-c model_reasoning_effort=...` launch path firstmate actually uses, and the whole turn dies with it.

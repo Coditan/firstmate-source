@@ -1,0 +1,136 @@
+# Codex sandbox network dimension and the no-mistakes daemon socket
+
+Why a Codex crewmate carries `sandbox_workspace_write.network_access=true` on its launch line, what that grant admits, and why it is not written into the tracked Codex profile.
+
+All measurements below were taken on 2026-08-10 against `codex-cli 0.145.0` (`codex --version`), installed standalone at `/home/coditan/.codex/packages/standalone/releases/0.145.0-x86_64-unknown-linux-musl`.
+This is a verification record: it states what was run and what came back, and it marks the one claim that is inferred rather than measured.
+
+The probe used throughout is a two-line AF_UNIX connect to the local no-mistakes daemon socket at `/home/coditan/.no-mistakes/socket`:
+
+```python
+import socket
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+try:
+    s.connect("/home/coditan/.no-mistakes/socket")
+    print("CONNECT OK")
+except OSError as e:
+    print("CONNECT FAIL", e)
+```
+
+## 1. The refusal is on the network dimension, not the filesystem one
+
+Codex classes a unix-socket connect as NETWORK access.
+A crewmate under a plain workspace-write sandbox is therefore refused the daemon socket, and every Codex-dispatched no-mistakes ship task stalls at the gate.
+
+```
+$ codex sandbox -c sandbox_mode='"workspace-write"' -- python3 probe.py
+CONNECT FAIL [Errno 1] Operation not permitted
+
+$ codex sandbox -c sandbox_mode='"workspace-write"' -c sandbox_workspace_write.network_access=true -- python3 probe.py
+CONNECT OK
+```
+
+That a filesystem-shaped grant does not help - neither `writable_roots` naming the no-mistakes directory nor `danger-full-access` being an acceptable route - was established by the experiment that opened this work and is not re-derived here.
+`danger-full-access` and `--dangerously-bypass-approvals-and-sandbox` are not used by any firstmate launch path, and `tests/fm-spawn-dispatch-profile.test.sh` asserts their absence from the composed Codex launch.
+
+## 2. Codex 0.145.0 cannot scope the grant more narrowly than the whole dimension
+
+This was checked against the installed binary rather than against documentation for another version.
+
+A negative `-c` probe proves nothing on its own, because this version silently ignores an unknown override key:
+
+```
+$ codex sandbox -c sandbox_mode='"workspace-write"' -c sandbox_workspace_write.definitely_bogus_key=true -- python3 probe.py
+CONNECT FAIL [Errno 1] Operation not permitted
+```
+
+So the schema in the binary is the evidence, and it closes every candidate:
+
+- `sandbox_workspace_write` carries exactly `writable_roots`, `network_access`, `exclude_tmpdir_env_var`, and `exclude_slash_tmp`.
+  There is no socket, host, or port field to scope.
+- The permission-profile route reduces to the same boolean: `struct NetworkPermissions with 1 element`, that element being `enabled`.
+- `default_permissions` is a string naming a profile, not an inline table - `-c default_permissions.network.enabled=true` returns `Error: invalid type: map, expected a string in \`default_permissions\``.
+- The only socket- and host-scoping keys in the binary - `allow_unix_sockets`, `dangerously_allow_all_unix_sockets`, `denied_domains`, `managed_allowed_domains_only` - belong to `RawNetworkRequirementsToml`, which is reached through `/etc/codex/managed_config.toml`.
+  That is a machine-wide administrative policy layer constraining what a user may select, not a per-spawn grant, and `/etc/codex` does not exist on this machine.
+
+The conclusion is that the grant available to a launch command is the whole network dimension or nothing.
+
+## 3. What the whole-dimension grant admits
+
+It admits general outbound network from the crewmate, not only the local pipeline socket.
+
+```
+$ codex sandbox -c sandbox_mode='"workspace-write"' -c sandbox_workspace_write.network_access=true \
+    -- bash -c 'curl -s -o /dev/null -w "example.com HTTP %{http_code}\n" --max-time 15 https://example.com'
+example.com HTTP 200
+
+$ codex sandbox -c sandbox_mode='"workspace-write"' \
+    -- bash -c 'curl -s -o /dev/null -w "example.com HTTP %{http_code}\n" --max-time 15 https://example.com; echo "exit=$?"'
+example.com HTTP 000
+exit=6
+```
+
+A Codex crewmate can therefore reach the public internet, where before it could not.
+It keeps every other boundary: the sandbox stays `workspace-write`, so writes remain confined to its own worktree, and `approval_policy = "on-request"` still escalates blocked boundary work.
+This is the captain-authorised trade of 2026-08-10, taken because the alternative is that the fleet's heaviest class of work cannot leave the expensive provider.
+
+## 4. The grant works from a real Codex worker, not just from `codex sandbox`
+
+Run with exactly the override set `bin/fm-spawn.sh` composes for a Codex ship task, with this repository's own `.codex/config.toml` stashed so the grant could only come from the launch line:
+
+```
+$ codex exec --skip-git-repo-check \
+    -c sandbox_mode='"workspace-write"' -c approval_policy='"on-request"' \
+    -c approvals_reviewer='"auto_review"' -c sandbox_workspace_write.network_access=true \
+    "Run the single command: python3 .fm-probe.py . Reply with only the exact line it printed."
+CONNECT OK
+
+$ codex exec --skip-git-repo-check \
+    -c sandbox_mode='"workspace-write"' -c approval_policy='"on-request"' \
+    -c approvals_reviewer='"auto_review"' \
+    "Run the single command: python3 .fm-probe.py . Reply with only the exact line it printed. Do not retry or escalate."
+CONNECT FAIL [Errno 1] Operation not permitted
+```
+
+The agent itself ran the connect through its own shell tool and reported the line back, so this is the reading a spawned crewmate gets rather than an assertion about one.
+
+## 5. Why the grant is not written into the tracked `.codex/config.toml`
+
+Codex reads this repository's own `.codex/config.toml` as configuration for a Codex session running inside it.
+Toggling only the `sandbox_workspace_write.network_access` line in that file, with no CLI grant at all, flips the probe deterministically:
+
+```
+$ cd <the firstmate worktree>
+# .codex/config.toml WITHOUT the line, three consecutive runs
+codex sandbox -c sandbox_mode='"workspace-write"' -- python3 probe.py
+  1 -> CONNECT FAIL [Errno 1] Operation not permitted
+  2 -> CONNECT FAIL [Errno 1] Operation not permitted
+  3 -> CONNECT FAIL [Errno 1] Operation not permitted
+# .codex/config.toml WITH the line, three consecutive runs
+  1 -> CONNECT OK
+  2 -> CONNECT OK
+  3 -> CONNECT OK
+# the same file content, renamed away from config.toml
+$ mv .codex/config.toml .codex/config.toml.bak && codex sandbox -c sandbox_mode='"workspace-write"' -- python3 probe.py
+CONNECT FAIL [Errno 1] Operation not permitted
+```
+
+Twelve alternating runs held perfectly, and the rename is the negative control that identifies the file by name rather than by anything else in `.codex/`.
+So a grant placed in that file would reach every Codex session whose working directory is inside this repository, including a supervising firstmate session and any Codex worker on a firstmate-repo task, no matter how the launch path gates it.
+That is why `bin/fm-spawn.sh` emits the flag on the launch line and `tests/fm-spawn-dispatch-profile.test.sh` asserts the tracked profile does not carry it.
+
+One part of this is inferred rather than measured.
+A freshly created scratch git repository carrying an identical `.codex/config.toml` does NOT reproduce the effect, so some project-registration or trust condition gates it; this worktree's git root resolves to `/home/coditan/coditan-firstmate/projects/firstmate-fork`, which the operator's Codex config records with `trust_level = "trusted"` and whose `.codex/hooks.json` entries Codex has already registered.
+Isolating that condition exactly would have required writing to the operator's own Codex configuration, which is outside the task worktree, so it was not done.
+The placement decision does not depend on the missing detail: the behaviour is reproduced in the repository the decision is about, which is the repository whose profile would have carried the grant.
+
+## 6. Scope of the grant in firstmate
+
+`bin/fm-spawn.sh` owns the composition and is the authority on the exact flags.
+
+- A Codex ship or scout crewmate gets the grant, because it is the one that runs the pipeline and needs the daemon socket.
+- A Codex secondmate does not.
+  A secondmate is a supervising firstmate home: it routes work rather than running the pipeline, and its own crewmates receive the grant from its own call into the same path.
+- The supervising primary session never receives it, because `fm-spawn` only ever composes launch commands for direct reports.
+- No other harness is affected.
+  The grant lives entirely in the Codex branch of the composition, and a Claude launch line is byte-identical to what it was before.
