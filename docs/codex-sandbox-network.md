@@ -173,10 +173,10 @@ A home running an older vendored or unsynced copy keeps composing the pre-grant 
 That is a deployment fact rather than a defect, and it is recorded here because the symptom is indistinguishable from the fix being absent: the worker fails exactly as it did before.
 Check the spawning home's own `bin/fm-spawn.sh` for the grant before concluding the change is missing or ineffective.
 
-## 9. What the grant does not cover, and why that is not a reason to widen it
+## 9. What the grant does not cover
 
 The grant covers the network dimension and nothing else.
-A pipeline run also writes in two places outside the workspace, and the raw sandbox refuses both.
+A pipeline run also writes in two places outside the workspace, and the sandbox refuses both.
 Measured 2026-08-11 from a real `codex exec` worker carrying the full crewmate profile, network grant included:
 
 ```
@@ -185,14 +185,26 @@ PROBE2 gate-write REFUSED         # /home/coditan/.no-mistakes/repos/<hash>.git
 PROBE3 socket OK                  # the granted dimension
 ```
 
-Neither refusal means the grant is insufficient, and neither is an invitation to add a second dimension to it.
-Codex crewmates demonstrably commit in exactly this linked-worktree layout, because the branches carrying their work exist and were authored in those worktrees.
-The mechanism is inferred rather than measured: the approval path, `approval_policy = "on-request"` with `approvals_reviewer = "auto_review"`, is what clears a filesystem refusal, because such a refusal surfaces as a failed command the agent can re-run with elevation.
+The gate-repository refusal is load-bearing, because it stops a Codex-driven pipeline one step past the socket.
+Starting a run from a Codex worker the same day reached the daemon, cleared intent handling, and then failed:
 
-That is the asymmetry the whole exception rests on.
-A socket refusal cannot be cleared the same way, because it happens inside the `no-mistakes` client's own process rather than as a command the agent can escalate, which is exactly why the network dimension needed a launch-line grant and the filesystem dimensions did not.
-A future reader meeting a filesystem refusal from a Codex crewmate should reach for the approval path, not for another dimension here.
+```
+push "<branch>" to gate: exit status 1: error: remote unpack failed: unable to create temporary object directory
+ ! [remote rejected] HEAD -> <branch> (unpacker error)
+error: failed to push some refs to '/home/coditan/.no-mistakes/repos/<hash>.git'
+```
 
-Two limits of this record, stated rather than glossed.
-`codex sandbox` and `codex exec` are both weaker instruments than the interactive `codex` session `bin/fm-spawn.sh` actually launches, so a refusal measured through them can understate what a real crewmate achieves through its approval path.
-An end-to-end pipeline start under Codex was not measured, because the shared daemon had another lane's run active in this repository throughout, and starting a competing run to take the reading would have disrupted that lane.
+The gate repository itself was healthy, so this is not a broken gate.
+Another lane's run pushed to that same repository successfully the same day, and the directory is owned and writable by the same user.
+The refusal is the sandbox.
+
+So the grant is necessary but not sufficient for an end-to-end Codex pipeline run.
+Closing that gap would need `writable_roots` extended to cover the no-mistakes data directory, which is a second confinement dimension on the filesystem axis rather than a wider setting of this one.
+That is a separate captain decision, and it is deliberately not taken here.
+
+An earlier draft of this section inferred that the approval path, `approval_policy = "on-request"` with `approvals_reviewer = "auto_review"`, is what clears such a filesystem refusal, reasoning from the fact that Codex crewmates do commit in this linked-worktree layout.
+The run above is evidence against that inference for the gate push: the worker had both settings available, did not escalate, and returned the error.
+How a Codex crewmate nevertheless commits here is therefore unexplained rather than settled, and the next reader should treat it as an open question rather than a mechanism to rely on.
+
+One instrument limit remains.
+`codex sandbox` and `codex exec` are both weaker instruments than the interactive `codex` session `bin/fm-spawn.sh` actually launches, so a refusal measured through them may still understate what a real crewmate achieves.
