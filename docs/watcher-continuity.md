@@ -75,10 +75,8 @@ OpenCode's `.opencode/plugins/fm-primary-watch-arm.js` matches the line in its c
 Absorbing the close without that cadence would have been a different bug rather than a fix: the holder can only be a stub the adapter does not own, so an adapter that merely fell silent would stop owning delivery for the rest of the session.
 Recognizing the line explicitly matters more than the absorption itself, because OpenCode would have absorbed it anyway through its clean-exit idle default and would then have gone quiet with nothing scheduled behind it.
 
-Pi is deliberately NOT covered by this change, and the false alarm therefore persists there.
-`.pi/extensions/fm-primary-pi-watch.ts` is untouched on this branch: its `classifyClose` still ends in an unconditional failure, so an already-armed close still becomes `watcher: FAILED - Pi extension arm cycle ended without an actionable reason` and still drives the bounded retry up to `watcher: FAILED - Pi extension could not restore watcher continuity after 5 retries`.
-An earlier revision of this branch did change that file, and it was withdrawn rather than shipped: this host runs Node v20.20.2 with no TypeScript toolchain, so the edit could be read but never executed or type-checked, and the mirrored Pi test that would have covered it silently skipped for the same reason.
-A test that skips is not evidence, so the Pi work belongs in its own change on a host that can actually run it.
+Pi's adapter is unchanged, but its full arm runs through `bin/fm-watch-arm.sh` and therefore inherits holding mode.
+An already-armed same-session stub no longer closes that child, so it never reaches Pi's close classifier as a false failure.
 
 `bin/fm-watch-checkpoint.sh` cannot simply absorb the close, because Codex starts the next checkpoint after every one: an instant return would collapse the bounded 180s foreground wait that is Codex's whole delivery mechanism into a busy loop of instant tool calls - the same spin the old typed failure caused, only silent.
 So the checkpoint keeps its own cadence instead of passing the close up: it re-attempts delivery every `FM_WATCH_CHECKPOINT_REARM_POLL` seconds (default 5) across the remaining window, taking delivery over the moment the holder lets go, which is also the moment a wake the holder saw becomes visible again, because the durable queue outlives the stub that reported it.
@@ -88,14 +86,12 @@ Its exit-0 wake path stays gated on the literal `wake: queued` line, so an alrea
 Measured on 2026-08-02 with `bash tests/fm-watch-checkpoint.test.sh`, which reported `ok - an already-armed same-session stub is reported distinctly without collapsing the checkpoint`, `ok - checkpoint takes delivery over from a released holder within its own window`, and `ok - checkpoint rejects a delivery stub belonging to another session`.
 The first of those asserts the checkpoint spent at least 4 of its 5 seconds rather than returning early, which is the property the spin would have broken.
 
-The adapter cadence was measured the same day with `bash tests/fm-pi-watch-extension.test.sh`, which reported `ok - OpenCode watcher plugin re-attempts an already-armed close cheaply and stops once it owns delivery`.
+The OpenCode adapter cadence was measured the same day with `bash tests/fm-pi-watch-extension.test.sh`, which reported `ok - OpenCode watcher plugin re-attempts an already-armed close cheaply and stops once it owns delivery`.
 That test pins the whole shape: the repeats run the stub rather than the full arm, the full arm runs again only at its convergence interval, delivery is taken over on the attempt after the holder releases, the cadence then stops, and nothing reaches the model.
-That run was on Node v20.20.2, where every Pi behavior test in the file prints `skip: node lacks native .ts import support (needs Node 22.6+ --experimental-strip-types or 23.6+)`, which is exactly why Pi carries no adapter change here.
+That run was on Node v20.20.2, where every Pi behavior test in the file prints `skip: node lacks native .ts import support (needs Node 22.6+ --experimental-strip-types or 23.6+)`, so this change makes no claim that Pi's adapter classifier itself changed.
 
-`docs/supervision-protocols/codex.md` and `docs/supervision-protocols/grok.md` state the rule for the two harnesses that consume this result as a model-driven loop rather than through an adapter process.
-Grok is the one harness that cannot hold the cadence itself, and the limit is worth naming rather than papering over: its re-arm step fires on every background-task-completed reminder, it has no timer of its own, and pacing the re-arm in-shell would mean bundling a sleep onto the arm, which the PreToolUse seatbelt denies by design.
-So its protocol re-arms exactly once against an already-armed completion, which is what takes delivery back if the holder released in the meantime, and ends the turn if that re-arm reports already armed again, because a second identical answer means the holder is still delivering and chaining another arm would only produce the same instant completion.
-Under Grok the holder is normally that session's own previous tracked background arm, whose completion still notifies; an untracked orphan is the residual case, and there `bin/fm-turnend-guard.sh` remains the backstop it always was rather than the mechanism.
+`docs/supervision-protocols/codex.md` owns the model-driven rule for the direct, non-holding checkpoint result.
+Grok uses the full arm wrapper as a tracked background task, so holding mode now keeps an already-armed attempt open until a wake or a failure instead of asking the model to pace another attempt.
 
 ## Holding instead of closing, for the harnesses whose close is the wake
 
