@@ -150,6 +150,49 @@ test_healthy_same_session_stub_reports_already_armed() {
   pass "re-arming while a healthy same-session stub holds the lock succeeds and names it"
 }
 
+test_released_lock_during_classification_is_retried() {
+  local home state daemon holder replacement marker out status
+  home="$TMP_ROOT/stub-release-race"
+  state="$home/state"
+  marker="$home/reconcile"
+  out="$home/replacement.out"
+  mkdir -p "$state"
+  sleep 60 & daemon=$!
+  record_fake_daemon "$home" "$state" "$daemon"
+  printf '4242\n' > "$state/.lock"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$WAIT" >/dev/null 2>&1 & holder=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -e "$state/.wake-stub.lock/pid-identity" ] && break
+    sleep 0.1
+  done
+  [ -e "$state/.wake-stub.lock/pid-identity" ] || fail "initial delivery stub did not publish its lock"
+
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" \
+    FM_WAKE_WAIT_TEST_RECONCILE_MARKER="$marker" FM_WAKE_WAIT_TEST_RECONCILE_DELAY=1 \
+    "$WAIT" > "$out" 2>&1 & replacement=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -e "$marker" ] && break
+    sleep 0.1
+  done
+  [ -e "$marker" ] || fail "replacement stub did not reach lock classification"
+  kill -TERM "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  sleep 2
+  kill -0 "$replacement" 2>/dev/null || fail "replacement reported a released lock as a foreign conflict"
+  append_wake "$state" signal demo.status "signal: demo.status"
+  status=0
+  wait "$replacement" || status=$?
+  kill -TERM "$daemon" 2>/dev/null || true
+  wait "$daemon" 2>/dev/null || true
+
+  [ "$status" -eq 0 ] || fail "replacement exited $status after the raced holder released its lock"
+  assert_contains "$(cat "$out")" "wake: queued" "replacement did not take delivery after the raced release"
+  case "$(cat "$out")" in
+    *FAILED*) fail "replacement emitted a false foreign-lock failure after the raced release" ;;
+  esac
+  pass "a lock released during classification is retried instead of reported as foreign"
+}
+
 # The instant close above is right for a caller that owns a re-attempt cadence
 # and ruinous for one whose close IS the wake. Under a background-notify harness
 # the harness sees only that a tracked task finished and wakes the model, so an
@@ -794,6 +837,7 @@ test_default_confirm_window_fits_inside_the_codex_checkpoint() {
 test_daemon_enqueues_and_continues_without_arm_owner
 test_killed_stub_loses_no_wake_and_costs_one_rearm
 test_healthy_same_session_stub_reports_already_armed
+test_released_lock_during_classification_is_retried
 test_holding_stub_does_not_close_on_an_already_armed_delivery
 test_holding_stub_takes_delivery_over_from_a_released_holder
 test_holding_stub_lets_the_holder_report_an_inherited_wake

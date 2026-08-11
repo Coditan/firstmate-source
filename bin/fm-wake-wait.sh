@@ -155,9 +155,48 @@ publish_stub_identity() {
   fm_pid_identity "$stub_pid" > "$STUB_LOCK/pid-identity" 2>/dev/null || return 1
 }
 
+stub_lock_observation() {
+  local file value observation=present
+  [ -d "$STUB_LOCK" ] || { echo missing; return 0; }
+  for file in pid fm-home stub-path session-lock-pid pid-identity; do
+    value=$(cat "$STUB_LOCK/$file" 2>/dev/null || true)
+    observation="$observation|$file=$value"
+  done
+  printf '%s\n' "$observation"
+}
+
+reconcile_stub_lock() {
+  local attempt=0 rc before after
+  while [ "$attempt" -lt 3 ]; do
+    attempt=$((attempt + 1))
+    rc=0
+    fm_lock_try_acquire "$STUB_LOCK" || rc=$?
+    case "$rc" in
+      0) return 0 ;;
+      2) return 2 ;;
+    esac
+    before=$(stub_lock_observation)
+    if [ -n "${FM_WAKE_WAIT_TEST_RECONCILE_MARKER:-}" ]; then
+      : > "$FM_WAKE_WAIT_TEST_RECONCILE_MARKER"
+    fi
+    case "${FM_WAKE_WAIT_TEST_RECONCILE_DELAY:-0}" in
+      0|'') ;;
+      *[!0-9.]*) ;;
+      *) sleep "$FM_WAKE_WAIT_TEST_RECONCILE_DELAY" ;;
+    esac
+    fm_wake_stub_armed "$STATE" "$STUB_PATH" "$FM_HOME" && return 1
+    after=$(stub_lock_observation)
+    if [ "$before" = missing ] || [ "$before" != "$after" ]; then
+      continue
+    fi
+    return 3
+  done
+  return 3
+}
+
 HOLDING=0
 lock_rc=0
-fm_lock_try_acquire "$STUB_LOCK" || lock_rc=$?
+reconcile_stub_lock || lock_rc=$?
 if [ "$lock_rc" -ne 0 ]; then
   if [ "$lock_rc" -eq 2 ]; then
     echo "wake delivery: FAILED - lock acquisition failed for $STUB_LOCK" >&2
@@ -172,7 +211,7 @@ if [ "$lock_rc" -ne 0 ]; then
   # than noise: the operating instructions treat FAILED as an alarm to clear
   # before the turn ends, this case has no remedy, and the obvious reaction -
   # kill the holder and re-arm - destroys a working delivery path.
-  if fm_wake_stub_armed "$STATE" "$STUB_PATH" "$FM_HOME"; then
+  if [ "$lock_rc" -eq 1 ]; then
     if [ "$HOLD" -eq 0 ]; then
       echo "wake delivery: already armed pid=$FM_WAKE_STUB_ARMED_PID (same session)"
       exit 0
@@ -217,7 +256,7 @@ confirm_close() {
 # second, and hammering a healthy holder's lock buys nothing.
 try_takeover() {
   local rc=0
-  fm_lock_try_acquire "$STUB_LOCK" || rc=$?
+  reconcile_stub_lock || rc=$?
   case "$rc" in
     0)
       LOCK_OWNED=1
@@ -232,14 +271,10 @@ try_takeover() {
       echo "wake delivery: FAILED - lock acquisition failed for $STUB_LOCK" >&2
       exit 1
       ;;
+    1) ;;
     *)
-      # Still held. It has to still be held by a HEALTHY stub of this session;
-      # anything else is the genuine conflict the non-holding path reports, and
-      # it must be just as loud from here.
-      if ! fm_wake_stub_armed "$STATE" "$STUB_PATH" "$FM_HOME"; then
-        echo "wake delivery: FAILED - another delivery stub already holds $STUB_LOCK" >&2
-        exit 1
-      fi
+      echo "wake delivery: FAILED - another delivery stub already holds $STUB_LOCK" >&2
+      exit 1
       ;;
   esac
 }
