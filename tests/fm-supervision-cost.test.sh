@@ -43,6 +43,27 @@ assert "request timestamp" in report["window_semantics"]
 PY
 pass "date bounds measure activity while executable classification ignores mentions"
 
+arms="$TMP_ROOT/arms"
+mkdir -p "$arms"
+cat > "$arms/session.jsonl" <<'EOF'
+{"timestamp":"2026-08-04T12:00:00Z","type":"assistant","requestId":"arm-alone","message":{"usage":{"input_tokens":50},"content":[{"type":"tool_use","id":"arm-1","input":{"command":"bin/fm-watch-arm.sh --hold"}}]}}
+{"timestamp":"2026-08-04T12:00:01Z","type":"assistant","requestId":"arm-alone","message":{"usage":{"input_tokens":50},"content":[{"type":"tool_use","id":"arm-1-retry","input":{"command":"bin/fm-watch-arm.sh --hold"}}]}}
+{"timestamp":"2026-08-04T12:00:02Z","type":"assistant","requestId":"arm-paired","message":{"usage":{"input_tokens":60},"content":[{"type":"tool_use","id":"drain-1","input":{"command":"bin/fm-wake-drain.sh"}},{"type":"tool_use","id":"arm-2","input":{"command":"bin/fm-watch-arm.sh --hold"}}]}}
+{"timestamp":"2026-08-04T12:00:03Z","type":"assistant","requestId":"arm-paired","message":{"usage":{"input_tokens":60},"content":[{"type":"tool_use","id":"drain-1-retry","input":{"command":"bin/fm-wake-drain.sh"}},{"type":"tool_use","id":"arm-2-retry","input":{"command":"bin/fm-watch-arm.sh --hold"}}]}}
+EOF
+
+report=$(python3 "$ENGINE" --transcripts "$arms" --since 2026-08-04 --until 2026-08-04 --json) \
+  || fail "engine rejected the duplicate-request fixture"
+python3 - "$report" <<'PY' || fail "delivery-arm measurements were not deduplicated by request id"
+import json, sys
+day = json.loads(sys.argv[1])["days"][0]
+assert day["arm_calls"] == 2
+assert day["arm_calls_paired_with_drain"] == 1
+assert day["unpaired_arm_requests"] == 1
+assert day["unpaired_arm_fresh"] == 50
+PY
+pass "delivery-arm measurements count duplicated request records once"
+
 python3 - "$ENGINE" <<'PY' || fail "classifier outcomes were wrong"
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("engine", sys.argv[1])

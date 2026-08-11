@@ -19,7 +19,8 @@ charged at a different rate, and mixing the two produces a number that describes
 nothing.  A request's freshly written tokens are the only part a change to
 firstmate's own machinery can move, which is exactly why it is the unit here.
 
-Requests are deduplicated by ``requestId``, so a retried request is counted once.
+Requests and delivery-arm measurements are deduplicated by ``requestId``, so a
+retried request is counted once.
 
 WHAT IS COUNTED
 ---------------
@@ -526,12 +527,12 @@ def measure_file(path, since, until, seen_requests):
                     segment_drains += 1
                     drain_blocks += 1
                 if in_range and arm_class == EXECUTES:
-                    measurement.arm_calls += 1
                     arm_blocks += 1
                 if start_class == EXECUTES:
                     startup_digest_seen = True
                     startup_open = False
             if in_range and counted_request and arm_blocks:
+                measurement.arm_calls += arm_blocks
                 if drain_blocks:
                     measurement.arm_calls_paired_with_drain += 1
                 elif tool_blocks == 1:
