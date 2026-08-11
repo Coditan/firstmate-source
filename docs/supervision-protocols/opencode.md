@@ -16,7 +16,7 @@ When this session owns supervision and away mode is not active:
 8. On a plugin wake, drain and handle queued wakes without composing an idle reply.
    The plugin re-arms after the session goes idle again.
 9. If nothing reaches `AGENTS.md` section 9's escalation bar, end the turn with tool calls and no chat text; where this harness refuses a turn with no visible output, send exactly one line holding the marker `.` and nothing else.
-   Chat text on a no-change wake turn is a protocol violation, not politeness, and restating an unchanged wait stays a violation even on a turn the harness forced to speak.
+   Any other chat text on a no-change wake turn is a protocol violation, not politeness, and restating an unchanged wait stays a violation even on a turn the harness forced to speak.
    No attempt is on file for this harness in either direction; if you meet a refusal, record it in `docs/silent-turn-attempts.md` rather than leaving the next seat to rediscover it.
 
 The service owns the long-running watcher loop.

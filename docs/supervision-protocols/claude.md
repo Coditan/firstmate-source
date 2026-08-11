@@ -15,7 +15,7 @@ When this session owns supervision and away mode is not active:
 8. If a forced watcher-loop restart is genuinely needed, run `bin/fm-watch-arm.sh --restart` through the same Claude background task mechanism.
 9. Do not send idle progress while the delivery stub is waiting.
 10. After handling a wake, if nothing reaches `AGENTS.md` section 9's escalation bar, end the turn with tool calls and no chat text; where this harness refuses a turn with no visible output, send exactly one line holding the marker `.` and nothing else.
-    Chat text on a no-change wake turn is a protocol violation, not politeness, and restating an unchanged wait stays a violation even on a turn the harness forced to speak.
+    Any other chat text on a no-change wake turn is a protocol violation, not politeness, and restating an unchanged wait stays a violation even on a turn the harness forced to speak.
     Claude Code refuses an empty turn and accepts the one-character marker; `docs/silent-turn-attempts.md` holds the attempts that measured both.
 
 Claude Code's background task completion delivers the wake to the model.

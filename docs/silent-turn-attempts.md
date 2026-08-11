@@ -1,7 +1,7 @@
 # Silent-turn attempts
 
-`AGENTS.md` section 8 requires a no-change supervision wake to reach the captain with nothing.
-Some harnesses refuse a turn that produces no visible output at all and re-prompt until text is emitted, which makes the plain form of that requirement unmeetable on them.
+`AGENTS.md` section 8 requires a no-change supervision wake to carry no state: no response where the harness permits it, or the prescribed minimum marker where it does not.
+Some harnesses refuse a turn that produces no visible output at all and re-prompt until text is emitted, which makes the no-response form of that requirement unmeetable on them.
 This file holds the evidence behind that statement, and it is the only place a harness joins or leaves the refusing list.
 
 ## Method, and it is binding
