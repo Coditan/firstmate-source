@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Resolve one already-matched crew-dispatch rule or default to a concrete profile.
 # Usage:
-#   fm-dispatch-select.sh [--select <strategy>] [--quota-json <file>] [<rule-or-profile-json>]
+#   fm-dispatch-select.sh [--validate-only] [--select <strategy>] [--quota-json <file>] [<rule-or-profile-json>]
 #
 # Input may be a full rule object with `use` and optional `select`, a single
 # profile object, or a non-empty array of profile objects.
 # Output is one compact JSON profile object on stdout.
 # Selection diagnostics go to stderr and never alter the profile JSON.
+# `--validate-only` checks the full candidate set and exits before quota lookup
+# or selection.
 #
 # This header is the single owner of quota-aware selection mechanics:
 #   - A profile object resolves to itself for backward compatibility.
@@ -52,6 +54,7 @@ fm_axi_prepend_path "$FM_HOME"
 STALE_CLEAR_MARGIN=${FM_DISPATCH_STALE_CLEAR_MARGIN:-20}
 SELECT_OVERRIDE=
 QUOTA_JSON_FILE=
+VALIDATE_ONLY=0
 ARGS=()
 
 usage() {
@@ -84,6 +87,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --quota-json=*)
       QUOTA_JSON_FILE=${1#--quota-json=}
+      shift
+      ;;
+    --validate-only)
+      VALIDATE_ONLY=1
       shift
       ;;
     -h|--help)
@@ -147,6 +154,7 @@ validation_error=$(printf '%s\n' "$profiles_json" | jq -r '
   end
 ')
 [ -z "$validation_error" ] || { echo "error: $validation_error" >&2; exit 2; }
+[ "$VALIDATE_ONLY" -eq 0 ] || exit 0
 
 clean_profile_at() {
   local index=$1

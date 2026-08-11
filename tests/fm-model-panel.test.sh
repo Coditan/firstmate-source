@@ -129,6 +129,27 @@ ALL_UNPINNED_ANALYST_A_ARRAY='{"roles":{
   "analyst_b":{"harness":"codex","model":"gpt-5.6-sol"},
   "judge":{"harness":"grok","model":"grok-4-fast"}}}'
 
+INVALID_ANALYST_A_ARRAY='{"roles":{
+  "analyst_a":[
+    {"harness":"spaceship"},
+    {"harness":"claude","model":"claude-opus-5"}],
+  "analyst_b":{"harness":"codex","model":"gpt-5.6-sol"},
+  "judge":{"harness":"grok","model":"grok-4-fast"}}}'
+
+INVALID_ANALYST_B_ARRAY='{"roles":{
+  "analyst_a":{"harness":"claude","model":"claude-opus-5"},
+  "analyst_b":[
+    {"harness":"spaceship"},
+    {"harness":"codex","model":"gpt-5.6-sol"}],
+  "judge":{"harness":"grok","model":"grok-4-fast"}}}'
+
+INVALID_JUDGE_ARRAY='{"roles":{
+  "analyst_a":{"harness":"claude","model":"claude-opus-5"},
+  "analyst_b":{"harness":"codex","model":"gpt-5.6-sol"},
+  "judge":[
+    {"harness":"spaceship"},
+    {"harness":"grok","model":"grok-4-fast"}]}}'
+
 UNPINNED_JUDGE_COLLISION='{"roles":{
   "analyst_a":{"harness":"claude","model":"claude-opus-5"},
   "analyst_b":{"harness":"codex","model":"gpt-5.6-sol"},
@@ -277,6 +298,27 @@ test_all_unpinned_analyst_a_array_still_refuses() {
   assert_contains "$out" "analyst_a resolves to a profile with no explicit model pin" \
     "the all-unpinned analyst-A array bypassed the role-specific refusal"
   pass "an all-unpinned analyst-A array still refuses"
+}
+
+test_invalid_array_candidate_refuses_in_every_seat() {
+  local config home id out role status
+  for config in "$INVALID_ANALYST_A_ARRAY" "$INVALID_ANALYST_B_ARRAY" "$INVALID_JUDGE_ARRAY"; do
+    case "$config" in
+      "$INVALID_ANALYST_A_ARRAY") role=analyst_a; id=iaa ;;
+      "$INVALID_ANALYST_B_ARRAY") role=analyst_b; id=iab ;;
+      *) role=judge; id=ija ;;
+    esac
+    home=$(new_home "invalid-$role-array" "$config")
+    status=0
+    out=$(FM_DISPATCH_RANDOM_SOURCE=/dev/zero run_panel "$home" start --id "$id" \
+      --project "$home/subject" --dry-run "Anything?") || status=$?
+    [ "$status" -ne 0 ] || fail "an invalid $role array candidate must prevent resolution"
+    assert_contains "$out" "panel role $role could not be resolved" \
+      "the invalid candidate was not attributed to $role"
+    assert_contains "$out" "dispatch profile contains an unverified harness" \
+      "the invalid $role candidate was hidden by identity filtering"
+  done
+  pass "an invalid array candidate invalidates every panel seat"
 }
 
 test_unpinned_judge_warns_without_model_self_report() {
@@ -962,6 +1004,7 @@ test_judge_array_collision_warns_after_resolution
 test_unpinned_analyst_refuses_unknown_runtime_identity
 test_analyst_a_array_prefers_a_pinned_identity
 test_all_unpinned_analyst_a_array_still_refuses
+test_invalid_array_candidate_refuses_in_every_seat
 test_unpinned_judge_warns_without_model_self_report
 test_judge_array_prefers_a_known_unused_identity_over_unpinned_default
 test_reduced_unpinned_seat_warns_without_claiming_independence

@@ -317,12 +317,19 @@ filter_spec() {
 resolve_role() {
   local role=$1 excluded=${2:-} spec filtered count profile errors status=0
   spec=$(role_spec "$role")
+  errors=$(mktemp "${TMPDIR:-/tmp}/fm-model-panel-select.XXXXXX")
+  "$FM_ROOT/bin/fm-dispatch-select.sh" --validate-only "$spec" 2>"$errors" || status=$?
+  if [ "$status" -ne 0 ]; then
+    printf 'error: panel role %s could not be resolved:\n' "$role" >&2
+    cat "$errors" >&2
+    rm -f "$errors"
+    exit 1
+  fi
   filtered=$(filter_spec "$spec" "$excluded")
   count=$(printf '%s\n' "$filtered" | jq 'length')
   if [ "$count" -gt 0 ]; then
     spec=$filtered
   fi
-  errors=$(mktemp "${TMPDIR:-/tmp}/fm-model-panel-select.XXXXXX")
   profile=$("$FM_ROOT/bin/fm-dispatch-select.sh" "$spec" 2>"$errors") || status=$?
   if [ "$status" -ne 0 ]; then
     printf 'error: panel role %s could not be resolved:\n' "$role" >&2
