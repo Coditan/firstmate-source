@@ -53,6 +53,13 @@ export FM_AXI_SUITE_DISABLE=1
 # refuse to answer for.
 unset FM_AXI_AMBIENT_PATH FM_AXI_AMBIENT_PATH_OWNER
 
+# The daily currency round's armed reading runs in bootstrap's detect pass, and
+# every fixture home is by definition unarmed, so each suite that composes
+# fm-bootstrap.sh would otherwise see its diagnostic. Silence the reporting modes
+# suite-wide; tests/fm-currency-round.test.sh sets it back to 0. --arm is
+# deliberately NOT silenced, so the bootstrap suites still exercise arming.
+export FM_CURRENCY_ROUND_DISABLE=1
+
 # The weekly Grossreinschiff cadence check runs in bootstrap's detect pass, so
 # every suite that composes fm-bootstrap.sh would otherwise see its due line the
 # moment a fixture home has no sweep record - which is always. Silence the
