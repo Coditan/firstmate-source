@@ -184,6 +184,29 @@ test_invalid_sequence_recovers_without_reusing_a_retained_number() {
   pass "invalid sequence state stays unknown and allocation recovers above retained records"
 }
 
+test_unlocked_reader_does_not_advance_past_a_rotated_tail() {
+  local dir state order
+  dir=$(make_case unlocked-rotation)
+  state="$dir/state"
+  append_journal_wake "$state" a.status "signal: a" || fail "first append failed"
+  append_journal_wake "$state" b.status "signal: b" || fail "second append failed"
+  order=$(FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_lock_acquire_wait() { return 1; }
+    cat() {
+      command cat "$@"
+      if [ "$1" = "$FM_JOURNAL_ACTIVE" ] && [ ! -f "$STATE/rotated" ]; then
+        mv "$FM_JOURNAL_ACTIVE" "$FM_JOURNAL_PREVIOUS"
+        printf "3\t1\tsignal\tc.status\t3\tsignal: c\t\n" > "$FM_JOURNAL_ACTIVE"
+        : > "$STATE/rotated"
+      fi
+    }
+    fm_journal_cat
+  ' _ "$ROOT/bin/fm-journal-lib.sh" | awk -F '\t' '{ printf "%s ", $1 }')
+  [ "$order" = "1 2 " ] || fail "unlocked rotation read returned '$order' instead of the tail present when reading began"
+  pass "an unlocked read cannot advance past an older tail moved by rotation"
+}
+
 test_a_queued_wake_survives_a_journal_that_cannot_be_written() {
   local dir state err rc queued
   dir=$(make_case journal-unwritable)
@@ -246,6 +269,7 @@ test_reader_tails_from_a_sequence
 test_status_reports_a_gap_rather_than_a_whole_stream
 test_status_reports_allocated_records_missing_from_the_tail
 test_invalid_sequence_recovers_without_reusing_a_retained_number
+test_unlocked_reader_does_not_advance_past_a_rotated_tail
 test_a_queued_wake_survives_a_journal_that_cannot_be_written
 test_an_oversized_field_is_marked_rather_than_silently_shortened
 test_retention_bound_rotates_and_moves_the_horizon

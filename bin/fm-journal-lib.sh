@@ -204,6 +204,16 @@ fm_journal_cat_files() {
   return 0
 }
 
+fm_journal_cat_files_unlocked() {
+  [ -f "$FM_JOURNAL_ACTIVE" ] && cat "$FM_JOURNAL_ACTIVE"
+  [ -f "$FM_JOURNAL_PREVIOUS" ] && cat "$FM_JOURNAL_PREVIOUS"
+  return 0
+}
+
+fm_journal_normalize_records() {
+  LC_ALL=C sort -t "$(printf '\t')" -k1,1n | awk -F '\t' 'NF >= 7 && !seen[$1]++'
+}
+
 fm_journal_snapshot_cleanup() {
   [ -n "${FM_JOURNAL_SNAPSHOT_FILE:-}" ] || return 0
   rm -f "$FM_JOURNAL_SNAPSHOT_FILE" 2>/dev/null || true
@@ -224,7 +234,7 @@ fm_journal_snapshot() {  # [status]
     fm_lock_release "$FM_JOURNAL_LOCK"
   else
     [ "$mode" != status ] || printf 'allocated\tunknown\n' > "$tmp"
-    fm_journal_cat_files >> "$tmp"
+    fm_journal_cat_files_unlocked | fm_journal_normalize_records >> "$tmp"
   fi
   cat "$tmp"
   fm_journal_snapshot_cleanup
