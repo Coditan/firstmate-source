@@ -291,7 +291,7 @@ SH
   pass "single objects remain backward compatible and one-element arrays remain quota-aware"
 }
 
-test_malformed_profile_arrays_are_validation_errors() {
+test_invalid_profile_arrays_are_validation_errors() {
   local body expect out status n
   n=0
   while IFS='^' read -r body expect; do
@@ -308,8 +308,32 @@ test_malformed_profile_arrays_are_validation_errors() {
 [{"harness":"claude","model":3}]^model must be a non-empty string
 [{"harness":"spaceship"}]^contains an unverified harness
 [{"harness":"codex","effort":"max"}]^contains an unsupported harness/effort pair
+[{"harness":"grok","effort":"xhigh"},{"harness":"codex","effort":"xhigh"}]^contains an unsupported harness/effort pair
 ROWS
-  pass "malformed arrays stay actionable validation errors and never enter random fallback"
+  pass "every candidate must be valid before an array can enter quota selection or fallback"
+}
+
+test_validate_only_does_not_require_od() {
+  local bash_bin fakebin out status=0
+  bash_bin=$(command -v bash)
+  fakebin=$(fm_fakebin "$TMP_ROOT/validate-without-od")
+  ln -s "$(command -v dirname)" "$fakebin/dirname"
+  ln -s "$(command -v jq)" "$fakebin/jq"
+
+  out=$(env PATH="$fakebin" "$bash_bin" "$ROOT/bin/fm-dispatch-select.sh" --validate-only \
+    '{"harness":"claude","model":"claude-opus-5"}' 2>&1) || status=$?
+  expect_code 0 "$status" "validate-only should accept valid input without od"
+  [ -z "$out" ] || fail "successful validate-only should produce no output, got: $out"
+
+  status=0
+  out=$(env PATH="$fakebin" "$bash_bin" "$ROOT/bin/fm-dispatch-select.sh" --validate-only \
+    '{"harness":"spaceship"}' 2>&1) || status=$?
+  expect_code 2 "$status" "validate-only should reject invalid input without od"
+  assert_contains "$out" "dispatch profile contains an unverified harness" \
+    "validate-only hid the profile error behind a selection prerequisite"
+  assert_not_contains "$out" "od is required" \
+    "validate-only still required a random-selection tool"
+  pass "validate-only validates profiles without requiring od"
 }
 
 test_implicit_array_picks_higher_min_provider
@@ -323,6 +347,7 @@ test_stale_cache_needs_clear_margin_to_beat_fresh
 test_partial_quota_data_prefers_scorable_candidate
 test_operational_quota_failures_use_uniform_random_fallback
 test_single_profile_and_one_element_array
-test_malformed_profile_arrays_are_validation_errors
+test_invalid_profile_arrays_are_validation_errors
+test_validate_only_does_not_require_od
 
 echo "# all fm-dispatch-select tests passed"

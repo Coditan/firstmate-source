@@ -400,23 +400,31 @@ This section is the single owner of the panel's configuration schema, resolution
 }
 ```
 
-A role's value is one profile object or a non-empty array of them, exactly the shape "Crew dispatch profiles" above defines, and every role resolves through `bin/fm-dispatch-select.sh`.
-Panel profiles therefore get the same validation and the same quota-aware array selection as crew dispatch profiles, with no second selector.
-An omitted `model` or `effort` leaves that axis at the harness's own default; there is deliberately no injected effort default, because a profile carrying an effort its harness does not accept is rejected as an invalid pair.
+A role's value is one profile object or a non-empty array of them, exactly the shape "Crew dispatch profiles" above defines, and every role resolves a concrete profile through `bin/fm-dispatch-select.sh`.
+Panel profiles therefore get the same validation and the same quota-aware array selection as crew dispatch profiles through that shared implementation, with no separate panel selector.
+Role resolution invokes the shared selector twice: first with `--validate-only` to validate every configured candidate and then to select from the identity-preferred subset; the selector's header owns those mechanics.
+An omitted `model` or `effort` leaves that launch axis at the harness's own default, but a harness default is not treated as a model identity.
+In a full panel, either analyst resolving to a profile without an explicit model pin refuses with exit 4 because Firstmate cannot prove that the analysts are different models.
+An unpinned judge prints a warning and proceeds under the existing judge-sharing policy, and an unpinned seat in the reduced form prints the same class of uncertainty warning.
+There is deliberately no injected effort default, because a profile carrying an effort its harness does not accept is rejected as an invalid pair.
 Panels are ambiguous investigation work, so a high effort level is usually the right configured value - see [`docs/examples/model-panel.json`](examples/model-panel.json) for a starting point to copy.
 
 Each role resolves in this order: its entry in `config/model-panel.json`, then the top-level `default` profile set in `config/crew-dispatch.json`.
 That fallback is the documented default, and it is why a home that already declares which runtimes it dispatches on can run a panel with no panel-specific configuration at all.
 When neither file supplies a profile for a role, the panel refuses and names both files rather than guessing a model.
-A role backed by an array prefers a candidate whose model the panel is not already using, so the second analyst picks a second model instead of duplicating the first.
+A role backed by an array prefers a candidate with an explicit model pin that the panel is not already using, so the second analyst picks a known second model instead of either a duplicate or an unpinned default.
 
-Model identity for that comparison is the profile's model name with any provider prefix and any `:suffix` removed - the normalization `bin/fm-dispatch-select.sh` already uses - or `harness:<name>` when the profile pins no model.
+Configured model identity for that comparison exists only when the resolved profile explicitly pins a model, and it is that model name with any provider prefix and any `:suffix` removed - the normalization `bin/fm-dispatch-select.sh` already uses.
+A profile without a model pin has unknown runtime model identity because its harness name identifies the launcher rather than the model chosen by that launcher's mutable default.
 Two profiles naming the same model through different harnesses are therefore correctly one model, not two.
+This guarantee covers normalized configured model names, not endpoint deployments or underlying weights, because different names can still alias something Firstmate cannot observe.
+The panel never asks a running model to identify itself: self-report is not evidence of which endpoint or weights served the answer.
+When weights-level independence matters, establish it before configuring the panel from provider-published identifiers or another non-self-report discriminator, and state plainly when that evidence is unavailable.
 
 Degradation is explicit and never silent.
-When both analysts would resolve to the same model identity, `start` refuses with exit 4 and names both the configuration fix and the reduced form; two identical analysts are not independent, and presenting them as a panel is worse than running none.
+When either analyst has unknown model identity or both analysts resolve to the same configured identity, `start` refuses with exit 4 and names both the configuration fix and the reduced form; analysts whose independence cannot be established are not a panel, and presenting them as one is worse than running none.
 The reduced form is opt-in through `--reduced` and is recorded and labelled everywhere as a single-analyst review rather than a panel, in the briefs, in the panel record, and in the judge's own report.
-When no third distinct model is available, the judge may share an analyst's model; that prints a warning and proceeds, because the judge's independence comes from re-verifying claims against live state with every report in hand.
+When no third distinct configured model is available, the judge may share an analyst's model, and an unpinned judge may do so unknowably; either case prints a warning and proceeds, because the judge's independence comes from re-verifying claims against live state with every report in hand.
 
 `config/model-panel.json` is deliberately NOT in the inheritable set that `bin/fm-config-inherit-lib.sh` declares, for the same reason as `config/backend`: it names the models a specific home can actually reach, and pushing the primary's list into every secondmate would overwrite exactly the local knowledge that lets each home field a real panel.
 A secondmate home that needs a different lineup writes its own file, and a home that writes none still inherits the primary's `config/crew-dispatch.json` default profile set through the normal inheritance path.

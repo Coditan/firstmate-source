@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Resolve one already-matched crew-dispatch rule or default to a concrete profile.
 # Usage:
-#   fm-dispatch-select.sh [--select <strategy>] [--quota-json <file>] [<rule-or-profile-json>]
+#   fm-dispatch-select.sh [--validate-only] [--select <strategy>] [--quota-json <file>] [<rule-or-profile-json>]
 #
 # Input may be a full rule object with `use` and optional `select`, a single
 # profile object, or a non-empty array of profile objects.
 # Output is one compact JSON profile object on stdout.
 # Selection diagnostics go to stderr and never alter the profile JSON.
+# `--validate-only` checks the full candidate set and exits before quota lookup
+# or selection.
 #
 # This header is the single owner of quota-aware selection mechanics:
 #   - A profile object resolves to itself for backward compatibility.
@@ -22,6 +24,12 @@
 #     Grok's aggregate credits window is used only when product windows are not
 #     exposed, so Grok Build and xAI API remain distinct.
 #   - Unscorable candidates never beat candidates with usable quota data.
+#   - Arrays are quota-balanced candidate sets, not ordered fallback chains.
+#     Every candidate is validated before selection, so one invalid candidate
+#     invalidates the whole array instead of being skipped based on quota state.
+#   - Validation covers profile shape and verified harness/effort combinations,
+#     not whether a harness executable is installed on this host. Reachability
+#     is a separate launch concern.
 #   - Stale-but-cached numbers remain usable, but a fresh candidate wins unless
 #     the best stale score is at least the stale-clear margin higher (default
 #     20 points). Equal winning scores use a random tie-break.
@@ -46,6 +54,7 @@ fm_axi_prepend_path "$FM_HOME"
 STALE_CLEAR_MARGIN=${FM_DISPATCH_STALE_CLEAR_MARGIN:-20}
 SELECT_OVERRIDE=
 QUOTA_JSON_FILE=
+VALIDATE_ONLY=0
 ARGS=()
 
 usage() {
@@ -80,6 +89,10 @@ while [ "$#" -gt 0 ]; do
       QUOTA_JSON_FILE=${1#--quota-json=}
       shift
       ;;
+    --validate-only)
+      VALIDATE_ONLY=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -104,7 +117,6 @@ done
 
 [ "${#ARGS[@]}" -le 1 ] || { echo "error: expected at most one JSON argument" >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || { echo "error: jq is required" >&2; exit 2; }
-command -v od >/dev/null 2>&1 || { echo "error: od is required for OS-backed random selection" >&2; exit 2; }
 
 if [ "${#ARGS[@]}" -eq 1 ]; then
   SPEC_JSON=${ARGS[0]}
@@ -141,6 +153,8 @@ validation_error=$(printf '%s\n' "$profiles_json" | jq -r '
   end
 ')
 [ -z "$validation_error" ] || { echo "error: $validation_error" >&2; exit 2; }
+[ "$VALIDATE_ONLY" -eq 0 ] || exit 0
+command -v od >/dev/null 2>&1 || { echo "error: od is required for OS-backed random selection" >&2; exit 2; }
 
 clean_profile_at() {
   local index=$1

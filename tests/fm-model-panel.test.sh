@@ -84,6 +84,89 @@ ONE_MODEL_TWO_HARNESSES='{"roles":{
   "analyst_b":{"harness":"pi","model":"anthropic/claude-opus-5:1m"},
   "judge":{"harness":"claude","model":"claude-opus-5"}}}'
 
+DISTINCT_ANALYST_ARRAYS='{"roles":{
+  "analyst_a":[
+    {"harness":"claude","model":"claude-opus-5"},
+    {"harness":"codex","model":"gpt-5.6-sol"}],
+  "analyst_b":[
+    {"harness":"claude","model":"claude-opus-5"},
+    {"harness":"codex","model":"gpt-5.6-sol"}],
+  "judge":{"harness":"grok","model":"grok-4-fast"}}}'
+
+ONE_MODEL_ANALYST_ARRAYS='{"roles":{
+  "analyst_a":[{"harness":"claude","model":"claude-opus-5"}],
+  "analyst_b":[{"harness":"pi","model":"anthropic/claude-opus-5:1m"}],
+  "judge":{"harness":"grok","model":"grok-4-fast"}}}'
+
+COLLIDING_JUDGE_ARRAY='{"roles":{
+  "analyst_a":{"harness":"claude","model":"claude-opus-5"},
+  "analyst_b":{"harness":"codex","model":"gpt-5.6-sol"},
+  "judge":[
+    {"harness":"codex","model":"gpt-5.6-sol"},
+    {"harness":"claude","model":"claude-opus-5"}]}}'
+
+UNPINNED_ANALYST_COLLISION='{"roles":{
+  "analyst_a":{"harness":"codex"},
+  "analyst_b":{"harness":"codex","model":"gpt-5.6-sol"},
+  "judge":{"harness":"grok","model":"grok-4-fast"}}}'
+
+UNPINNED_ANALYST_B_COLLISION='{"roles":{
+  "analyst_a":{"harness":"codex","model":"gpt-5.6-sol"},
+  "analyst_b":{"harness":"codex"},
+  "judge":{"harness":"grok","model":"grok-4-fast"}}}'
+
+MIXED_ANALYST_A_ARRAY='{"roles":{
+  "analyst_a":[
+    {"harness":"codex"},
+    {"harness":"claude","model":"claude-opus-5"}],
+  "analyst_b":{"harness":"codex","model":"gpt-5.6-sol"},
+  "judge":{"harness":"grok","model":"grok-4-fast"}}}'
+
+ALL_UNPINNED_ANALYST_A_ARRAY='{"roles":{
+  "analyst_a":[
+    {"harness":"codex"},
+    {"harness":"claude"}],
+  "analyst_b":{"harness":"codex","model":"gpt-5.6-sol"},
+  "judge":{"harness":"grok","model":"grok-4-fast"}}}'
+
+INVALID_ANALYST_A_ARRAY='{"roles":{
+  "analyst_a":[
+    {"harness":"spaceship"},
+    {"harness":"claude","model":"claude-opus-5"}],
+  "analyst_b":{"harness":"codex","model":"gpt-5.6-sol"},
+  "judge":{"harness":"grok","model":"grok-4-fast"}}}'
+
+INVALID_ANALYST_B_ARRAY='{"roles":{
+  "analyst_a":{"harness":"claude","model":"claude-opus-5"},
+  "analyst_b":[
+    {"harness":"spaceship"},
+    {"harness":"codex","model":"gpt-5.6-sol"}],
+  "judge":{"harness":"grok","model":"grok-4-fast"}}}'
+
+INVALID_JUDGE_ARRAY='{"roles":{
+  "analyst_a":{"harness":"claude","model":"claude-opus-5"},
+  "analyst_b":{"harness":"codex","model":"gpt-5.6-sol"},
+  "judge":[
+    {"harness":"spaceship"},
+    {"harness":"grok","model":"grok-4-fast"}]}}'
+
+UNPINNED_JUDGE_COLLISION='{"roles":{
+  "analyst_a":{"harness":"claude","model":"claude-opus-5"},
+  "analyst_b":{"harness":"codex","model":"gpt-5.6-sol"},
+  "judge":{"harness":"codex"}}}'
+
+UNPINNED_FIRST_JUDGE_ARRAY='{"roles":{
+  "analyst_a":{"harness":"claude","model":"claude-opus-5"},
+  "analyst_b":{"harness":"codex","model":"gpt-5.6-sol"},
+  "judge":[
+    {"harness":"codex"},
+    {"harness":"grok","model":"grok-4-fast"}]}}'
+
+REDUCED_UNPINNED_ANALYST='{"roles":{
+  "analyst_a":{"harness":"codex"},
+  "analyst_b":{"harness":"claude","model":"claude-opus-5"},
+  "judge":{"harness":"codex","model":"gpt-5.6-sol"}}}'
+
 SKILL="$ROOT/.agents/skills/panel/SKILL.md"
 CONFIG_DOC="$ROOT/docs/configuration.md"
 AGENTS="$ROOT/AGENTS.md"
@@ -135,6 +218,172 @@ test_analysts_dispatch_on_different_models() {
   assert_not_contains "$log" "trio-judge" "the judge must not be dispatched before the reports exist"
   assert_grep 'form=panel' "$home/data/trio/panel.meta" "the panel record does not say it is a panel"
   pass "analysts dispatch concurrently on the two configured models"
+}
+
+test_pinned_object_lineup_needs_no_random_source() {
+  local home out
+  home=$(new_home pinned-objects-no-random "$TWO_MODELS")
+  out=$(FM_DISPATCH_RANDOM_SOURCE="$TMP_ROOT/nonexistent-random-source" \
+    run_panel "$home" start --id pnr --project "$home/subject" --dry-run "Anything?") \
+    || fail "pinned object roles should not enter random selection: $out"
+  assert_contains "$out" 'panel: analyst-a {"harness":"claude","model":"claude-opus-5","effort":"xhigh"}' \
+    "the pinned analyst-A object did not resolve to itself"
+  assert_contains "$out" 'panel: analyst-b {"harness":"codex","model":"gpt-5.6-sol","effort":"xhigh"}' \
+    "the pinned analyst-B object did not resolve to itself"
+  assert_contains "$out" 'panel: judge {"harness":"grok","model":"grok-4-fast","effort":"high"}' \
+    "the pinned judge object did not resolve to itself"
+  assert_not_contains "$out" "OS-backed random source is unavailable" \
+    "a pinned object role incorrectly entered random fallback"
+  pass "pinned object roles resolve without quota or randomness"
+}
+
+test_distinct_analyst_arrays_resolve_to_different_models() {
+  local home out
+  home=$(new_home distinct-analyst-arrays "$DISTINCT_ANALYST_ARRAYS")
+  out=$(run_panel "$home" start --id daa --project "$home/subject" --dry-run "Anything?") \
+    || fail "distinct analyst arrays failed: $out"
+  assert_contains "$out" '"model":"claude-opus-5"' \
+    "the resolved lineup lost the Claude analyst"
+  assert_contains "$out" '"model":"gpt-5.6-sol"' \
+    "the resolved lineup lost the Codex analyst"
+  assert_not_contains "$out" "this would not be a panel" \
+    "distinct analyst arrays were incorrectly refused"
+  pass "distinct analyst arrays still resolve to two different model identities"
+}
+
+test_analyst_array_collision_refuses_after_resolution() {
+  local home out status=0
+  home=$(new_home colliding-analyst-arrays "$ONE_MODEL_ANALYST_ARRAYS")
+  out=$(run_panel "$home" start --id caa --project "$home/subject" --dry-run "Anything?") || status=$?
+  expect_code 4 "$status" "analyst arrays resolving to one identity must refuse"
+  assert_contains "$out" "both analysts resolve to the model claude-opus-5" \
+    "the resolved analyst-array collision was not named"
+  [ -z "$(spawn_log "$home")" ] || fail "a refused analyst-array panel must dispatch nothing"
+  pass "analyst arrays cannot bypass the resolved-identity exit-4 refusal"
+}
+
+test_judge_array_collision_warns_after_resolution() {
+  local home out
+  home=$(new_home colliding-judge-array "$COLLIDING_JUDGE_ARRAY")
+  out=$(run_panel "$home" start --id cja --project "$home/subject" --dry-run "Anything?") \
+    || fail "a judge collision must keep the documented warning behavior: $out"
+  assert_contains "$out" "no third distinct model is available" \
+    "the resolved judge-array collision was silent"
+  assert_contains "$out" "the same model as one analyst" \
+    "the judge warning did not name the resolved collision"
+  assert_contains "$out" "panel: judge" "the warned lineup did not resolve a concrete judge"
+  pass "a judge-array collision is caught by the resolved-identity warning"
+}
+
+test_unpinned_analyst_refuses_unknown_runtime_identity() {
+  local home out status config role id
+  for config in "$UNPINNED_ANALYST_COLLISION" "$UNPINNED_ANALYST_B_COLLISION"; do
+    case "$config" in
+      "$UNPINNED_ANALYST_COLLISION") role=analyst_a; id=uaa ;;
+      *) role=analyst_b; id=uab ;;
+    esac
+    status=0
+    home=$(new_home "unpinned-$role" "$config")
+    out=$(run_panel "$home" start --id "$id" --project "$home/subject" --dry-run "Anything?") || status=$?
+    expect_code 4 "$status" "an unpinned $role must not be presented as a distinct model"
+    assert_contains "$out" "$role resolves to a profile with no explicit model pin" \
+      "the unpinned-$role refusal did not name the unknown identity"
+    assert_contains "$out" "A harness name identifies a launcher, not the runtime model" \
+      "the refusal did not explain why a harness placeholder is not identity"
+    [ -z "$(spawn_log "$home")" ] || fail "an unpinned-analyst panel must dispatch nothing"
+  done
+  pass "neither analyst can turn a harness placeholder into a model identity"
+}
+
+test_analyst_a_array_prefers_a_pinned_identity() {
+  local home out
+  home=$(new_home mixed-analyst-a-array "$MIXED_ANALYST_A_ARRAY")
+  out=$(FM_DISPATCH_RANDOM_SOURCE=/dev/zero run_panel "$home" start --id maa \
+    --project "$home/subject" --dry-run "Anything?") \
+    || fail "analyst A should prefer its pinned candidate: $out"
+  assert_contains "$out" 'panel: analyst-a {"harness":"claude","model":"claude-opus-5"}' \
+    "analyst A selected an unpinned default over a configured identity"
+  pass "analyst A prefers a pinned candidate from a mixed array"
+}
+
+test_all_unpinned_analyst_a_array_still_refuses() {
+  local home out status=0
+  home=$(new_home all-unpinned-analyst-a-array "$ALL_UNPINNED_ANALYST_A_ARRAY")
+  out=$(FM_DISPATCH_RANDOM_SOURCE=/dev/zero run_panel "$home" start --id aua \
+    --project "$home/subject" --dry-run "Anything?") || status=$?
+  expect_code 4 "$status" "an all-unpinned analyst-A array must still refuse"
+  assert_contains "$out" "analyst_a resolves to a profile with no explicit model pin" \
+    "the all-unpinned analyst-A array bypassed the role-specific refusal"
+  pass "an all-unpinned analyst-A array still refuses"
+}
+
+test_invalid_array_candidate_refuses_in_every_seat() {
+  local config home id out role status
+  for config in "$INVALID_ANALYST_A_ARRAY" "$INVALID_ANALYST_B_ARRAY" "$INVALID_JUDGE_ARRAY"; do
+    case "$config" in
+      "$INVALID_ANALYST_A_ARRAY") role=analyst_a; id=iaa ;;
+      "$INVALID_ANALYST_B_ARRAY") role=analyst_b; id=iab ;;
+      *) role=judge; id=ija ;;
+    esac
+    home=$(new_home "invalid-$role-array" "$config")
+    status=0
+    out=$(FM_DISPATCH_RANDOM_SOURCE=/dev/zero run_panel "$home" start --id "$id" \
+      --project "$home/subject" --dry-run "Anything?") || status=$?
+    [ "$status" -ne 0 ] || fail "an invalid $role array candidate must prevent resolution"
+    assert_contains "$out" "panel role $role could not be resolved" \
+      "the invalid candidate was not attributed to $role"
+    assert_contains "$out" "dispatch profile contains an unverified harness" \
+      "the invalid $role candidate was hidden by identity filtering"
+  done
+  pass "an invalid array candidate invalidates every panel seat"
+}
+
+test_unpinned_judge_warns_without_model_self_report() {
+  local home out fakebin marker
+  home=$(new_home unpinned-judge "$UNPINNED_JUDGE_COLLISION")
+  fakebin=$(fm_fakebin "$TMP_ROOT/unpinned-judge-self-report")
+  marker="$TMP_ROOT/unpinned-judge-self-report/codex-called"
+  cat > "$fakebin/codex" <<SH
+#!/usr/bin/env bash
+printf called > '$marker'
+printf 'gpt-5.6-sol\n'
+SH
+  chmod +x "$fakebin/codex"
+  out=$(PATH="$fakebin:$PATH" run_panel "$home" start --id uj --project "$home/subject" --dry-run "Anything?") \
+    || fail "an unpinned judge must keep the documented warning behavior: $out"
+  assert_contains "$out" "judge has no explicit model pin" \
+    "the unpinned judge's unknown identity was silent"
+  assert_contains "$out" "may be the same model as one analyst" \
+    "the unpinned judge warning did not name the collision risk"
+  assert_absent "$marker" "the panel asked the model to self-identify"
+  pass "an unpinned judge warns without trusting a model self-report"
+}
+
+test_judge_array_prefers_a_known_unused_identity_over_unpinned_default() {
+  local home out
+  home=$(new_home unpinned-first-judge-array "$UNPINNED_FIRST_JUDGE_ARRAY")
+  out=$(FM_DISPATCH_RANDOM_SOURCE=/dev/zero run_panel "$home" start --id uja \
+    --project "$home/subject" --dry-run "Anything?") \
+    || fail "a known unused judge candidate should remain selectable: $out"
+  assert_contains "$out" 'panel: judge {"harness":"grok","model":"grok-4-fast"}' \
+    "the judge array selected an unpinned default over a known unused identity"
+  assert_not_contains "$out" "runtime model identity is unknown" \
+    "a known unused judge candidate was incorrectly treated as unknown"
+  pass "a judge array prefers a known unused identity over an unpinned default"
+}
+
+test_reduced_unpinned_seat_warns_without_claiming_independence() {
+  local home out
+  home=$(new_home reduced-unpinned "$REDUCED_UNPINNED_ANALYST")
+  out=$(run_panel "$home" start --id rua --project "$home/subject" --reduced --dry-run "Anything?") \
+    || fail "the reduced form should preserve its named degradation: $out"
+  assert_contains "$out" "at least one reduced-form seat has no explicit model pin" \
+    "the reduced form silently treated an unpinned seat as distinct"
+  assert_contains "$out" "whether the judge shares the analyst's runtime model is unknown" \
+    "the reduced warning did not explain its identity uncertainty"
+  assert_contains "$out" "form=single-analyst-review" \
+    "the unpinned reduced form was mislabeled as a panel"
+  pass "the reduced form warns on unknown identity without claiming panel independence"
 }
 
 test_identical_analyst_models_refuse() {
@@ -766,6 +1015,17 @@ test_start_refuses_to_clobber_an_existing_panel() {
 test_skill_owns_the_cost_decision_and_one_trigger
 test_configuration_doc_owns_the_schema_and_degradation
 test_analysts_dispatch_on_different_models
+test_pinned_object_lineup_needs_no_random_source
+test_distinct_analyst_arrays_resolve_to_different_models
+test_analyst_array_collision_refuses_after_resolution
+test_judge_array_collision_warns_after_resolution
+test_unpinned_analyst_refuses_unknown_runtime_identity
+test_analyst_a_array_prefers_a_pinned_identity
+test_all_unpinned_analyst_a_array_still_refuses
+test_invalid_array_candidate_refuses_in_every_seat
+test_unpinned_judge_warns_without_model_self_report
+test_judge_array_prefers_a_known_unused_identity_over_unpinned_default
+test_reduced_unpinned_seat_warns_without_claiming_independence
 test_identical_analyst_models_refuse
 test_same_model_through_two_harnesses_refuses
 test_reduced_form_is_named_not_a_panel

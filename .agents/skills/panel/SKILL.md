@@ -101,10 +101,10 @@ Mention when relaying that the verdict came from a replacement judge, because th
 
 ## When the panel cannot be a panel
 
-`start` refuses with exit 4 when both analysts would resolve to the same model.
-That refusal is correct and must not be worked around: two identical analysts are not independent, and a panel that quietly is not one is worse than no panel.
+`start` refuses with exit 4 when either analyst lacks an explicit model pin or both analysts resolve to the same configured model identity.
+That refusal is correct and must not be worked around: an unpinned harness default is unknown, two identical analysts are not independent, and a panel that quietly cannot prove its independence is worse than no panel.
 
-Tell the captain plainly that this home can currently reach only one model for the analyst seats, and offer the two real options:
+Tell the captain plainly that this home cannot currently prove two distinct configured model identities for the analyst seats, and offer the two real options:
 
 - Configure a second distinct model for the second analyst seat, then re-run the panel.
 - Run the reduced form with `--reduced`: one analyst plus a judge that re-verifies its claims.
@@ -113,6 +113,7 @@ The reduced form is a **single-analyst review**, not a panel.
 Its briefs, its record, and its judge's own report all say so.
 Never describe its output as a panel result, an independent cross-check, or a second opinion.
 
-When no third distinct model is available the judge shares a model with one analyst.
-That prints a warning and proceeds, because the judge's independence comes from re-verifying against live state with every report in hand rather than from its runtime.
+When no third distinct configured model is available the judge shares a model with one analyst.
+An unpinned judge has unknown runtime model identity and receives the same warning class rather than being treated as distinct.
+Both warnings proceed, because the judge's independence comes from re-verifying against live state with every report in hand rather than from its runtime.
 Mention it when relaying if the verdict is close.
