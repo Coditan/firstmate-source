@@ -302,14 +302,14 @@ fm_bosun_judge() {  # <kind> <key> <event>
     return 0
   fi
 
-  parsed=$(printf '%s' "$raw" | jq -r '
-    if type == "object" then
-      [ (.verdict // ""), (.confidence // ""), (.reason // ""), (.judge // "") ]
+  parsed=$(printf '%s' "$raw" | jq -sr '
+    if length == 1 and (.[0] | type) == "object" then
+      .[0] | [ (.verdict // ""), (.confidence // ""), (.reason // ""), (.judge // "") ]
       | @tsv
-    else empty end' 2>/dev/null | head -1)
+    else empty end' 2>/dev/null)
   if [ -z "$parsed" ]; then
     FM_BOSUN_JUDGE=unparsed
-    FM_BOSUN_REASON="judge returned no JSON object this reader could use"
+    FM_BOSUN_REASON="judge did not return exactly one JSON object"
     return 0
   fi
 
@@ -366,6 +366,16 @@ fm_bosun_judge_horizon() {  # <horizon> -> 0 if a record was written
     horizon 0
 }
 
+fm_bosun_judge_journal_unreadable() {
+  local cursor
+  cursor=$(fm_bosun_cursor)
+  fm_bosun_record "$cursor" journal journal-unreadable \
+    "the retained journal stream could not be read" \
+    escalate high \
+    "the journal stream could not be read, so events may exist that were never judged" \
+    journal 0
+}
+
 # Run one pass: judge every journal record above the cursor, up to the pass
 # bound. Prints one human-readable line per verdict on stdout, so a foreground
 # run is watchable as it happens rather than only in the record afterwards.
@@ -390,8 +400,20 @@ fm_bosun_pass() {  # [<journal-read-command-override>]
   # shell so the cursor it reads back is the one the record just wrote.
   local batch
   batch=$(mktemp "${TMPDIR:-/tmp}/fm-bosun-pass.XXXXXX") || return 1
-  "$FM_BOSUN_LIB_DIR/fm-journal.sh" read --since "$since" --limit "$FM_BOSUN_PASS_MAX" \
-    > "$batch" 2>/dev/null
+  if ! "$FM_BOSUN_LIB_DIR/fm-journal.sh" read --since "$since" --limit "$FM_BOSUN_PASS_MAX" \
+    > "$batch" 2>/dev/null; then
+    rm -f "$batch"
+    if fm_bosun_judge_journal_unreadable; then
+      judged=$((judged + 1))
+      printf '%s  %-8s %-9s %s: %s\n' \
+        "$(date +%H:%M:%S)" escalate high journal-unreadable \
+        "the journal stream could not be read, so events may exist that were never judged"
+    else
+      printf 'fm-bosun: could not record that the journal stream was unreadable\n' >&2
+    fi
+    FM_BOSUN_PASS_JUDGED=$judged
+    return 0
+  fi
 
   while IFS=$'\t' read -r jseq _epoch kind key _origin payload snapshot; do
     [ -n "$jseq" ] || continue

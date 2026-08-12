@@ -13,7 +13,7 @@ A loop that reads `docs/event-journal.md`'s append-only event journal, asks a ju
 ```text
 bin/fm-bosun.sh run                # judge continuously; one line per verdict as it lands
 bin/fm-bosun.sh run --once         # exactly one pass, for a test or a cron
-bin/fm-bosun.sh status             # health, ending in WORKING, QUIET, STALLED, STOPPED, or DEAD
+bin/fm-bosun.sh status             # health, ending in one word from the vocabulary owned by --help
 bin/fm-bosun.sh verdicts           # read the judgements back
 bin/fm-bosun.sh watch              # follow a live run from another terminal
 ```
@@ -43,6 +43,8 @@ The record carries both that the pass happened and whether the cursor moved, plu
 
 `status` resolves those against the clock and against the journal into one word, and `bin/fm-bosun.sh --help` owns that vocabulary and its exit codes.
 Two of its distinctions are the reason this unit is shaped the way it is.
+
+The health vocabulary and exit behavior are owned by `bin/fm-bosun.sh --help`, including the distinct state for a journal the bosun cannot read.
 
 `QUIET` against `STALLED` is the one it exists for: a bosun that judged nothing because nothing arrived is healthy, and one whose cursor has sat still while the journal grew is not, and no process-liveness check can tell those two apart.
 A cursor that is behind and *advancing* is `WORKING`, not stalled - being behind is not a fault, and freezing is.

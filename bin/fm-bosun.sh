@@ -24,13 +24,15 @@
 #           rather than double-judging the same events.
 #
 # status    Print the health of this home's bosun and, on the last line, one of
-#           five states: WORKING, QUIET, STALLED, STOPPED, or DEAD. The
+#           six states: WORKING, QUIET, BLIND, STALLED, STOPPED, or DEAD. BLIND
+#           means the retained journal exists but cannot be read, so events may
+#           exist that the bosun cannot see or judge. The
 #           distinction that matters is QUIET against STALLED: a bosun that
 #           judged nothing because nothing arrived is healthy, and one whose
 #           cursor has sat still while the journal grew is not, and no
 #           process-liveness check can tell those two apart. STOPPED means it
 #           exited cleanly; DEAD means it stopped reporting without doing so.
-#           Exits 0 for WORKING and QUIET, 1 for the three that mean nothing is
+#           Exits 0 for WORKING and QUIET, 1 for the four that mean nothing is
 #           being judged, so a check can act on it without parsing.
 #
 # verdicts  Read judgements back, oldest first, in a human-readable form.
@@ -111,6 +113,11 @@ bosun_state() {
   local now
   now=$(date +%s)
 
+  if ! "$FM_BOSUN_LIB_DIR/fm-journal.sh" status > /dev/null 2>&1; then
+    printf 'BLIND\tthe retained journal exists but cannot be read; events may exist that were never judged\n'
+    return 0
+  fi
+
   if [ ! -f "$FM_BOSUN_HEALTH" ]; then
     printf 'DEAD\tno bosun has ever run in this home, or its health record is gone\n'
     return 0
@@ -185,7 +192,7 @@ print_status() {
 
   printf '%s - %s\n' "$word" "$note"
   case "$word" in
-    STALLED|DEAD|STOPPED) return 1 ;;
+    BLIND|STALLED|DEAD|STOPPED) return 1 ;;
   esac
   return 0
 }

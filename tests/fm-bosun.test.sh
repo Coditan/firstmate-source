@@ -207,7 +207,15 @@ check_escalates judge-prints-garbage \
   '#!/usr/bin/env bash
 cat > /dev/null
 echo "I think this one is probably fine"' \
-  "no JSON object"
+  "exactly one JSON object"
+
+check_escalates judge-prints-two-objects \
+  '#!/usr/bin/env bash
+cat > /dev/null
+printf "%s\n%s\n" \
+  "{\"verdict\":\"routine\",\"confidence\":\"high\",\"reason\":\"first\"}" \
+  "{\"verdict\":\"escalate\",\"confidence\":\"high\",\"reason\":\"second\"}"' \
+  "exactly one JSON object"
 
 check_escalates judge-returns-unknown-verdict \
   '#!/usr/bin/env bash
@@ -233,6 +241,36 @@ row=$(FM_STATE_OVERRIDE="$s" "$BOSUN" verdicts --raw)
 [ "$(printf '%s' "$row" | cut -f7)" = escalate ] || fail "an unreachable judge must escalate"
 [ "$(printf '%s' "$row" | cut -f10)" = unreachable ] || fail "an unreachable judge must be named as such in the record"
 pass "an unreachable judge escalates and is named in the record"
+
+# A retained journal that exists but cannot be read is uncertainty about the
+# stream itself, not quiet. The pass records that uncertainty and status names
+# the distinct health fault, while a genuinely absent journal remains healthy.
+d=$(make_bosun_case journal-unreadable "$JUDGE_SANE")
+s="$d/state"
+emit_event "$s" fm-plain "working: ordinary progress"
+chmod 0000 "$s/journal/events.tsv"
+bosun "$s" "$d/judge" run --once > /dev/null 2>&1
+row=$(FM_STATE_OVERRIDE="$s" "$BOSUN" verdicts --raw)
+[ "$(printf '%s' "$row" | cut -f5)" = journal-unreadable ] \
+  || fail "an unreadable journal must produce a stream-level verdict"
+[ "$(printf '%s' "$row" | cut -f7)" = escalate ] \
+  || fail "an unreadable journal stream must escalate"
+mark_running "$s"
+out=$(bosun "$s" "$d/judge" status); rc=$?
+[ "$rc" -ne 0 ] || fail "BLIND must exit non-zero"
+assert_contains "$out" "BLIND" "an unreadable retained journal reports BLIND"
+assert_not_contains "$out" "QUIET" "an unreadable retained journal must not report QUIET"
+chmod 0644 "$s/journal/events.tsv"
+pass "an unreadable journal escalates and reports unhealthy"
+
+d=$(make_bosun_case journal-absent "$JUDGE_SANE")
+s="$d/state"
+bosun "$s" "$d/judge" run --once > /dev/null 2>&1
+mark_running "$s"
+out=$(bosun "$s" "$d/judge" status); rc=$?
+[ "$rc" -eq 0 ] || fail "an absent journal must remain healthy"
+assert_contains "$out" "QUIET" "a genuinely absent journal reports QUIET"
+pass "a genuinely absent journal is not an access failure"
 
 # A judge that never answers. Bounded by the timeout, recorded as an escalation.
 d=$(make_bosun_case judge-hangs '#!/usr/bin/env bash
