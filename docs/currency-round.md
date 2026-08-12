@@ -11,7 +11,7 @@ The duty had no mechanism.
 Session start is not daily: a session on this vessel has run for two days, so a duty carried at session start is a duty carried by memory, which is the exact defect shape this fleet spent that week removing.
 
 It was worse than unscheduled.
-`bin/fm-firstmate-update-check.sh` was written, and its header says to schedule it externally with cron or a systemd timer.
+`bin/fm-firstmate-update-check.sh` was written with a header that instructed each home to schedule it externally with cron or a systemd timer.
 Measured on this vessel on 2026-08-12: `crontab -l` reported no crontab, `systemctl --user list-timers --all` listed only `launchpadlib-cache-clean.timer` and a stopped `bridge-notify-poll.timer`, and `state/` contained neither `firstmate-update.available` nor `firstmate-update.stuck`.
 The check had therefore never produced a reading on this home.
 `bin/fm-bootstrap.sh` prints those markers when they exist, so their absence printed nothing, and nothing is exactly what a current deployment prints.
@@ -75,7 +75,7 @@ So the round records every reading it took in `state/currency-round.report`, `un
 | Option | Verdict |
 | --- | --- |
 | **Session start**, as the weekly Grossreinschiff cadence uses | Rejected. That check is one file read and one integer comparison, which is what earns it a place in the session-start path. This one makes network calls, and more importantly session start is not daily: a two-day session checks once. `docs/grossreinschiff.md` "The cadence decision" records the mirror-image argument for the sweep that genuinely needs no timer. |
-| **An external cron or systemd timer**, as `bin/fm-firstmate-update-check.sh` asks for | Rejected, with evidence. That is the arrangement measured above, and on this vessel nobody ever installed it. A per-home install step that nothing verifies means a home that never installed it silently never checks - the same no-op-instruction defect, one level up. |
+| **An external cron or systemd timer**, as `bin/fm-firstmate-update-check.sh` formerly asked for | Rejected, with evidence. That is the arrangement measured above, and on this vessel nobody ever installed it. A per-home install step that nothing verifies means a home that never installed it silently never checks - the same no-op-instruction defect, one level up. |
 | **A fleet-wide broadcast when something lands** | Rejected. Tugboat proves a broadcast cannot reach a seat that stopped listening, and a seat that stopped listening is the one that most needs reaching. |
 
 The watcher already sweeps `state/*.check.sh` every `FM_CHECK_INTERVAL` seconds, survives session boundaries, and is kept alive by its own service.

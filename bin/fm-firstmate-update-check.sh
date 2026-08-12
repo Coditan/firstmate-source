@@ -14,11 +14,9 @@
 # AGENTS.md for whichever home selects it. Public skills/ are installer-facing
 # and do not trigger a fleet-wide running-vessel update by themselves.
 #
-# This script is not invoked by bootstrap or any other firstmate flow; it
-# only reads and writes local state. Schedule it externally per firstmate
-# home, at a cadence around twice daily, with cron or a systemd timer - see
-# docs/configuration.md "Upstream firstmate and curated-fork checks" for the
-# scheduling contract.
+# This script is invoked by bin/fm-currency-round.sh, which supplies the daily
+# cadence through the existing watcher. It only reads and writes local state;
+# docs/currency-round.md owns why this is not an external cron or systemd timer.
 #
 # The compared source comes from FM_FIRSTMATE_UPSTREAM_URL, then the local
 # gitignored config/firstmate-update-base file, then the canonical default - see

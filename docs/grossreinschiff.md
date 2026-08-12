@@ -165,8 +165,8 @@ Three options were considered.
 
 | Option | Verdict |
 |---|---|
-| **Scheduled wake** (a watcher `check:` poll) | Rejected. The watcher's check mechanism is per-task: a poll is registered against a task id by `bin/fm-check-register.sh`, bound to that task's bytes, and removed at teardown. A fleet-level weekly sweep has no task to hang off, so this would mean a new registration class and a new trust binding - a second scheduler - for something that needs no sub-minute latency. |
-| **External timer** (cron or systemd, as `bin/fm-firstmate-update-check.sh` and `bin/fm-fork-sync-check.sh` use) | Rejected. Those two make network calls that must not sit in the session-start path, which is what earns them a timer. The due check makes none: it reads one file and compares two integers. A timer would add a per-home install step that nothing verifies, so a home that never installed it would silently never sweep - checklist item 3, built into the thing meant to find item 3. |
+| **Scheduled wake** (a watcher `check:` poll) | Rejected. The watcher can carry a home-scoped check, as the daily currency round now demonstrates, but this weekly due check makes no network calls and already runs cheaply at every session start. Giving it a background cadence would add machinery without catching a due sweep sooner on a home where nobody is present to perform it. |
+| **External timer** (cron or systemd) | Rejected. Networked currency checks run through the existing watcher as [`currency-round.md`](currency-round.md) owns, while this due check makes no network calls: it reads one file and compares two integers. A separate timer would add a per-home install step that nothing verifies, so a home that never installed it would silently never sweep - checklist item 3, built into the thing meant to find item 3. |
 | **Fleet-wide notice** | Not a cadence. A notice is read once and cannot make anything recur. It is the right instrument for the announcement, and it is used for exactly that. |
 
 The rule, owned by the script's header: **due when the last recorded sweep predates the most recent Thursday 00:00 local.**
