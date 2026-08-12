@@ -72,7 +72,7 @@ Nothing is ever skipped:
 `tests/fm-bosun.test.sh` drives the real run loop, and events reach the journal through the real wake library rather than as hand-written journal rows.
 Judges are fakes on purpose: this suite tests the bosun's handling of every judge outcome, and a real model cannot be made to time out on demand.
 
-Five load-bearing assertions were mutation-checked on 2026-08-12 rather than trusted for being green:
+Six load-bearing assertions were mutation-checked on 2026-08-12 rather than trusted for being green:
 
 | Mutation | Caught by |
 |---|---|
