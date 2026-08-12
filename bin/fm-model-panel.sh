@@ -325,10 +325,12 @@ resolve_role() {
     rm -f "$errors"
     exit 1
   fi
-  filtered=$(filter_spec "$spec" "$excluded")
-  count=$(printf '%s\n' "$filtered" | jq 'length')
-  if [ "$count" -gt 0 ]; then
-    spec=$filtered
+  if [ "$(printf '%s\n' "$spec" | jq -r 'type')" = array ]; then
+    filtered=$(filter_spec "$spec" "$excluded")
+    count=$(printf '%s\n' "$filtered" | jq 'length')
+    if [ "$count" -gt 0 ]; then
+      spec=$filtered
+    fi
   fi
   profile=$("$FM_ROOT/bin/fm-dispatch-select.sh" "$spec" 2>"$errors") || status=$?
   if [ "$status" -ne 0 ]; then

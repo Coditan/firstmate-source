@@ -313,6 +313,29 @@ ROWS
   pass "every candidate must be valid before an array can enter quota selection or fallback"
 }
 
+test_validate_only_does_not_require_od() {
+  local bash_bin fakebin out status=0
+  bash_bin=$(command -v bash)
+  fakebin=$(fm_fakebin "$TMP_ROOT/validate-without-od")
+  ln -s "$(command -v dirname)" "$fakebin/dirname"
+  ln -s "$(command -v jq)" "$fakebin/jq"
+
+  out=$(env PATH="$fakebin" "$bash_bin" "$ROOT/bin/fm-dispatch-select.sh" --validate-only \
+    '{"harness":"claude","model":"claude-opus-5"}' 2>&1) || status=$?
+  expect_code 0 "$status" "validate-only should accept valid input without od"
+  [ -z "$out" ] || fail "successful validate-only should produce no output, got: $out"
+
+  status=0
+  out=$(env PATH="$fakebin" "$bash_bin" "$ROOT/bin/fm-dispatch-select.sh" --validate-only \
+    '{"harness":"spaceship"}' 2>&1) || status=$?
+  expect_code 2 "$status" "validate-only should reject invalid input without od"
+  assert_contains "$out" "dispatch profile contains an unverified harness" \
+    "validate-only hid the profile error behind a selection prerequisite"
+  assert_not_contains "$out" "od is required" \
+    "validate-only still required a random-selection tool"
+  pass "validate-only validates profiles without requiring od"
+}
+
 test_implicit_array_picks_higher_min_provider
 test_rule_array_without_select_invokes_quota_axi
 test_legacy_explicit_selector_stays_compatible
@@ -325,5 +348,6 @@ test_partial_quota_data_prefers_scorable_candidate
 test_operational_quota_failures_use_uniform_random_fallback
 test_single_profile_and_one_element_array
 test_invalid_profile_arrays_are_validation_errors
+test_validate_only_does_not_require_od
 
 echo "# all fm-dispatch-select tests passed"

@@ -220,6 +220,23 @@ test_analysts_dispatch_on_different_models() {
   pass "analysts dispatch concurrently on the two configured models"
 }
 
+test_pinned_object_lineup_needs_no_random_source() {
+  local home out
+  home=$(new_home pinned-objects-no-random "$TWO_MODELS")
+  out=$(FM_DISPATCH_RANDOM_SOURCE="$TMP_ROOT/nonexistent-random-source" \
+    run_panel "$home" start --id pnr --project "$home/subject" --dry-run "Anything?") \
+    || fail "pinned object roles should not enter random selection: $out"
+  assert_contains "$out" 'panel: analyst-a {"harness":"claude","model":"claude-opus-5","effort":"xhigh"}' \
+    "the pinned analyst-A object did not resolve to itself"
+  assert_contains "$out" 'panel: analyst-b {"harness":"codex","model":"gpt-5.6-sol","effort":"xhigh"}' \
+    "the pinned analyst-B object did not resolve to itself"
+  assert_contains "$out" 'panel: judge {"harness":"grok","model":"grok-4-fast","effort":"high"}' \
+    "the pinned judge object did not resolve to itself"
+  assert_not_contains "$out" "OS-backed random source is unavailable" \
+    "a pinned object role incorrectly entered random fallback"
+  pass "pinned object roles resolve without quota or randomness"
+}
+
 test_distinct_analyst_arrays_resolve_to_different_models() {
   local home out
   home=$(new_home distinct-analyst-arrays "$DISTINCT_ANALYST_ARRAYS")
@@ -998,6 +1015,7 @@ test_start_refuses_to_clobber_an_existing_panel() {
 test_skill_owns_the_cost_decision_and_one_trigger
 test_configuration_doc_owns_the_schema_and_degradation
 test_analysts_dispatch_on_different_models
+test_pinned_object_lineup_needs_no_random_source
 test_distinct_analyst_arrays_resolve_to_different_models
 test_analyst_array_collision_refuses_after_resolution
 test_judge_array_collision_warns_after_resolution

@@ -117,7 +117,6 @@ done
 
 [ "${#ARGS[@]}" -le 1 ] || { echo "error: expected at most one JSON argument" >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || { echo "error: jq is required" >&2; exit 2; }
-command -v od >/dev/null 2>&1 || { echo "error: od is required for OS-backed random selection" >&2; exit 2; }
 
 if [ "${#ARGS[@]}" -eq 1 ]; then
   SPEC_JSON=${ARGS[0]}
@@ -155,6 +154,7 @@ validation_error=$(printf '%s\n' "$profiles_json" | jq -r '
 ')
 [ -z "$validation_error" ] || { echo "error: $validation_error" >&2; exit 2; }
 [ "$VALIDATE_ONLY" -eq 0 ] || exit 0
+command -v od >/dev/null 2>&1 || { echo "error: od is required for OS-backed random selection" >&2; exit 2; }
 
 clean_profile_at() {
   local index=$1
