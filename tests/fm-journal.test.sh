@@ -202,8 +202,13 @@ test_failures_before_and_after_sequence_publication_stay_visible() {
   FM_STATE_OVERRIDE="$state" bash -c '
     . "$1"
     fm_journal_publish_sequence() { return 1; }
+    eval "$(declare -f fm_lock_release | sed "1s/fm_lock_release/fm_lock_release_original/")"
+    fm_lock_release() {
+      [ "$1" != "$FM_JOURNAL_LOCK" ] || awk "END { exit !(NR == 1) }" "$FM_JOURNAL_UNRECORDED" || exit 8
+      fm_lock_release_original "$@"
+    }
     fm_wake_append signal publish.status "signal: publish"
-  ' _ "$ROOT/bin/fm-wake-lib.sh" 2>/dev/null || fail "sequence publication failure escaped into delivery"
+  ' _ "$ROOT/bin/fm-wake-lib.sh" 2>/dev/null || fail "sequence publication failure was not marked before journal lock release"
   unrecorded=$(FM_STATE_OVERRIDE="$state" "$JOURNAL" status | awk -F ': ' '$1 == "unrecorded" { print $2 }')
   [ "$unrecorded" = "1" ] || fail "failed sequence publication reported '$unrecorded' unrecorded events"
 

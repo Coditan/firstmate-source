@@ -213,8 +213,8 @@ fm_journal_append() {  # <kind> <key> <payload> [<origin>] [<epoch>] [<snapshot>
       >> "$FM_JOURNAL_ACTIVE" 2>/dev/null || status=1
   fi
 
-  fm_lock_release "$FM_JOURNAL_LOCK"
   [ "$status" -eq 0 ] || [ "$burned" = true ] || fm_journal_note_unrecorded "$kind" "$key" sequence-publish-failed
+  fm_lock_release "$FM_JOURNAL_LOCK"
   return "$status"
 }
 
