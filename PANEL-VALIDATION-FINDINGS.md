@@ -104,18 +104,24 @@ error: od is required for OS-backed random selection
 
 That violates I5 exactly as the original defect did, one branch further down.
 
-## What this run changes
+## What this run changed
 
-Two live violations, each pinned by a test that fails before the change and passes after:
+Two live violations, each pinned by a test written to fail before its change and pass after.
 
-- **I4**: a single surviving candidate resolves to itself, so a seat whose identity filter leaves one candidate never enters quota lookup or random selection.
-- **I5**: `od` is required at the point where OS-backed random selection actually runs, so no resolution path that does not randomize depends on it.
+- **I4** is enforced in `resolve_role`: a set narrowed to one candidate is unwrapped to that profile before selection, so a seat with nothing left to choose between never enters quota lookup or random selection.
+  Pinned by `test_single_surviving_candidate_resolves_to_itself` in `tests/fm-model-panel.test.sh`, which drives the mixed analyst-A array with an unreadable random source and a quota command that records being called, and asserts the resolved profile, no random-source failure, and no quota call.
+  Verified failing before the change with `error: OS-backed random source is unavailable`.
+- **I5** is enforced in `bin/fm-dispatch-select.sh`: `od` is checked immediately before each path that randomizes, rather than once globally ahead of the branch that returns a single profile object.
+  Pinned by `test_od_is_required_only_where_selection_randomizes` in `tests/fm-dispatch-select.test.sh`, which asserts that a single profile object resolves with no `od` on `PATH` and that a multi-candidate array still exits 2 naming `od`.
+  Verified failing before the change with `expected exit 0, got 2`.
 
-And one documentation repair:
+And the documentation repair:
 
-- **I6**: `bin/fm-model-panel.sh`'s header states the validate/filter/select order it runs, so the pipeline's owner documents the pipeline.
+- **I6**: `bin/fm-model-panel.sh`'s header now states the validate/filter/select ordering it runs, including the one-candidate rule and that a stage's prerequisites belong to that stage.
+  `docs/configuration.md` states the same ordering and names the script header as its owner, so the two agree and neither is the only place it is written.
 
-I1, I2 and I3 hold at this checkout and are already pinned by existing tests, named above.
+I1, I2 and I3 hold at this checkout and are already pinned by the existing tests named above; this run adds no test for them because a test that passes before and after pins nothing new.
+Both suites pass after these changes, and `bin/fm-lint.sh` is clean.
 
 ## Observations recorded rather than fixed
 
