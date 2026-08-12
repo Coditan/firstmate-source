@@ -83,10 +83,10 @@ test_ci_installs_and_logs_the_pinned_version() {
 }
 
 test_installer_retries_transient_download_failure() {
-  local tmp fakebin destination out
-  fm_test_tmproot tmp fm-shellcheck-download
-  fakebin=$(fm_fakebin "$tmp")
-  destination="$tmp/bin"
+  local installer_tmp fakebin destination out
+  fm_test_tmproot installer_tmp fm-shellcheck-download
+  fakebin=$(fm_fakebin "$installer_tmp")
+  destination="$installer_tmp/bin"
 
   cat > "$fakebin/curl" <<'SH'
 #!/usr/bin/env bash
@@ -130,9 +130,9 @@ exit 0
 SH
   chmod +x "$fakebin/curl" "$fakebin/sha256sum" "$fakebin/tar" "$fakebin/sleep"
 
-  out=$(CURL_COUNT="$tmp/curl-count" PATH="$fakebin:$PATH" "$INSTALLER" "$destination" 2>&1) \
+  out=$(CURL_COUNT="$installer_tmp/curl-count" PATH="$fakebin:$PATH" "$INSTALLER" "$destination" 2>&1) \
     || fail "installer did not recover from a transient download failure"$'\n'"$out"
-  [ "$(cat "$tmp/curl-count")" -eq 2 ] || fail "installer did not retry exactly once after recovery"
+  [ "$(cat "$installer_tmp/curl-count")" -eq 2 ] || fail "installer did not retry exactly once after recovery"
   assert_contains "$out" "download attempt 1 failed; retrying" "installer did not disclose its retry"
   [ -x "$destination/shellcheck" ] || fail "installer did not install ShellCheck after retrying"
   pass "ShellCheck installer retries a transient download failure"
@@ -141,9 +141,9 @@ SH
 test_rejects_wrong_shellcheck_version() {
   # Version-independent: a fake shellcheck reporting a different version must be
   # refused before any lint, proving local and CI cannot silently diverge.
-  local tmp fakebin out rc
-  fm_test_tmproot tmp fm-lint-ver
-  fakebin=$(fm_fakebin "$tmp")
+  local version_tmp fakebin out rc
+  fm_test_tmproot version_tmp fm-lint-ver
+  fakebin=$(fm_fakebin "$version_tmp")
   cat > "$fakebin/shellcheck" <<'SH'
 #!/usr/bin/env bash
 if [ "$1" = "--version" ]; then
@@ -173,10 +173,10 @@ test_catches_a_real_lint_defect() {
   # this test itself version-fragile - the very trap being fixed. SC1007 is a
   # warning present at default severity (and is itself one of the recurring
   # classes that slipped through, PR 474).
-  local tmp bad out rc
-  fm_test_tmproot tmp fm-lint-bad
-  mkdir -p "$tmp"
-  bad="$tmp/bad.sh"
+  local defect_tmp bad out rc
+  fm_test_tmproot defect_tmp fm-lint-bad
+  mkdir -p "$defect_tmp"
+  bad="$defect_tmp/bad.sh"
   cat > "$bad" <<'SH'
 #!/usr/bin/env bash
 foo() {
@@ -197,10 +197,10 @@ test_ignores_ambient_shellcheck_opts() {
     pass "SKIP (ShellCheck $REQUIRED not resolved): ambient options regression check"
     return
   fi
-  local tmp bad out rc
-  fm_test_tmproot tmp fm-lint-opts
-  mkdir -p "$tmp"
-  bad="$tmp/bad.sh"
+  local options_tmp bad out rc
+  fm_test_tmproot options_tmp fm-lint-opts
+  mkdir -p "$options_tmp"
+  bad="$options_tmp/bad.sh"
   cat > "$bad" <<'SH'
 #!/usr/bin/env bash
 foo() {
@@ -221,10 +221,10 @@ test_clean_fixture_passes() {
     pass "SKIP (ShellCheck $REQUIRED not resolved): clean fixture check"
     return
   fi
-  local tmp good rc
-  fm_test_tmproot tmp fm-lint-good
-  mkdir -p "$tmp"
-  good="$tmp/good.sh"
+  local clean_tmp good rc
+  fm_test_tmproot clean_tmp fm-lint-good
+  mkdir -p "$clean_tmp"
+  good="$clean_tmp/good.sh"
   cat > "$good" <<'SH'
 #!/usr/bin/env bash
 set -eu
