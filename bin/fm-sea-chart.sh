@@ -11,8 +11,9 @@
 # Wayfinder ships none, and this script is wholly our own - but the design it
 # implements is theirs. What is ours: reading records instead of authoring them,
 # the incompleteness counts, the withheld reconciliation below, and the
-# per-chart prefix membership rule that replaces Wayfinder's parent-child issue
-# edge. What we dropped is the more important half: Wayfinder is a PLANNING
+# per-chart membership rule - prefix ownership plus the retrofit member list
+# below - that replaces Wayfinder's parent-child issue edge. What we dropped is
+# the more important half: Wayfinder is a PLANNING
 # instrument that breaks work down and sets a course - two write modes, no
 # viewing mode - and this amendment kept only the half that shows the result,
 # along with dropping its ticket types, its claim, and its two reading
