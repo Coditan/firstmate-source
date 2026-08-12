@@ -36,6 +36,10 @@
 #   - If quota-axi is unavailable, fails, returns unusable data, or no candidate
 #     can be scored, selection falls back uniformly across every valid candidate
 #     using rejection sampling over a 32-bit value from /dev/urandom.
+#   - `od` reads that random value, so it is a prerequisite of RANDOMIZING and is
+#     required only on a path that reaches it. A single profile object and
+#     `--validate-only` resolve without it; there is no fallback for a path that
+#     does randomize, which exits 2 naming od.
 #   - Runtime quota trouble never turns malformed profile JSON into a fallback;
 #     invalid input exits 2 with an actionable validation error.
 #
@@ -154,7 +158,15 @@ validation_error=$(printf '%s\n' "$profiles_json" | jq -r '
 ')
 [ -z "$validation_error" ] || { echo "error: $validation_error" >&2; exit 2; }
 [ "$VALIDATE_ONLY" -eq 0 ] || exit 0
-command -v od >/dev/null 2>&1 || { echo "error: od is required for OS-backed random selection" >&2; exit 2; }
+
+# od reads the OS random source, so it is a prerequisite of RANDOMIZING rather
+# than of resolving. Checked here, immediately before each path that randomizes,
+# a resolution with nothing to choose between is never refused for a tool it does
+# not run. Called outside a subshell so the refusal exits the script.
+require_od() {
+  command -v od >/dev/null 2>&1 \
+    || { echo "error: od is required for OS-backed random selection" >&2; exit 2; }
+}
 
 clean_profile_at() {
   local index=$1
@@ -191,6 +203,7 @@ random_index() {
 random_profile() {
   local reason count index
   reason=$1
+  require_od
   count=$(printf '%s\n' "$profiles_json" | jq 'length')
   if ! index=$(random_index "$count"); then
     echo "error: OS-backed random source is unavailable" >&2
@@ -349,6 +362,7 @@ fi
 
 winner_indices=$(printf '%s\n' "$selection" | jq -c '.indices')
 winner_count=$(printf '%s\n' "$winner_indices" | jq 'length')
+require_od
 if ! winner_offset=$(random_index "$winner_count"); then
   echo "error: OS-backed random source is unavailable" >&2
   exit 1
