@@ -402,7 +402,9 @@ This section is the single owner of the panel's configuration schema, resolution
 
 A role's value is one profile object or a non-empty array of them, exactly the shape "Crew dispatch profiles" above defines, and every role resolves a concrete profile through `bin/fm-dispatch-select.sh`.
 Panel profiles therefore get the same validation and the same quota-aware array selection as crew dispatch profiles through that shared implementation, with no separate panel selector.
-Role resolution invokes the shared selector twice: first with `--validate-only` to validate every configured candidate and then to select from the identity-preferred subset; the selector's header owns those mechanics.
+Every seat resolves through the same three stages in the same order - validate, then filter, then select - so no seat can accept a candidate another seat rejects; `bin/fm-model-panel.sh`'s header owns that ordering and the selector's header owns the selection mechanics.
+Role resolution therefore invokes the shared selector twice: first with `--validate-only` to validate every configured candidate, before any panel-local narrowing, and then to select from the identity-preferred subset.
+Whenever exactly one candidate remains for a seat - one configured profile object, or the one survivor of that narrowing - it is the resolution, with no quota lookup and no randomness spent arriving at the only option.
 An omitted `model` or `effort` leaves that launch axis at the harness's own default, but a harness default is not treated as a model identity.
 In a full panel, either analyst resolving to a profile without an explicit model pin refuses with exit 4 because Firstmate cannot prove that the analysts are different models.
 An unpinned judge prints a warning and proceeds under the existing judge-sharing policy, and an unpinned seat in the reduced form prints the same class of uncertainty warning.
