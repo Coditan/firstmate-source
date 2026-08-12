@@ -369,6 +369,52 @@ test_od_is_required_only_where_selection_randomizes() {
   pass "od is required only where OS-backed random selection actually runs"
 }
 
+test_od_is_not_required_where_one_candidate_wins() {
+  local bash_bin fakebin quota out err status=0
+  bash_bin=$(command -v bash)
+  fakebin=$(fm_fakebin "$TMP_ROOT/one-winner-without-od")
+  ln -s "$(command -v dirname)" "$fakebin/dirname"
+  ln -s "$(command -v jq)" "$fakebin/jq"
+  ln -s "$(command -v cat)" "$fakebin/cat"
+
+  # Quota data that names ONE clear winner leaves nothing to draw between, so
+  # the draw's prerequisite must not be demanded on the ordinary array path.
+  quota="$TMP_ROOT/one-winner.json"
+  write_quota "$quota" fresh 10 10 fresh 90 90
+  out=$(env PATH="$fakebin" "$bash_bin" "$ROOT/bin/fm-dispatch-select.sh" \
+    --quota-json "$quota" "$profiles" 2>"$TMP_ROOT/one-winner.err") || status=$?
+  err=$(cat "$TMP_ROOT/one-winner.err")
+  expect_code 0 "$status" "a quota result with one clear winner should resolve without od"
+  assert_profile "$out" '{"harness":"codex","model":"gpt-5.5","effort":"high"}' \
+    "the sole quota winner did not resolve"
+  assert_not_contains "$err" "od is required" \
+    "a quota result with one winner still required a random-selection tool"
+
+  # A fallback across a candidate set of one is not a draw either.
+  status=0
+  out=$(env PATH="$fakebin" "$bash_bin" "$ROOT/bin/fm-dispatch-select.sh" \
+    '[{"harness":"grok","model":"grok-4.5","effort":"high"}]' 2>"$TMP_ROOT/one-candidate.err") || status=$?
+  err=$(cat "$TMP_ROOT/one-candidate.err")
+  expect_code 0 "$status" "a fallback across one candidate should resolve without od"
+  assert_profile "$out" '{"harness":"grok","model":"grok-4.5","effort":"high"}' \
+    "the only candidate did not resolve to itself"
+  assert_not_contains "$err" "od is required" \
+    "a fallback across one candidate still required a random-selection tool"
+  assert_contains "$err" "selection basis: random fallback" \
+    "the one-candidate fallback stopped reporting its selection basis"
+
+  # Control: a genuine draw between tied winners still refuses without od.
+  status=0
+  quota="$TMP_ROOT/tied-winners.json"
+  write_quota "$quota" fresh 80 80 fresh 80 80
+  out=$(env PATH="$fakebin" "$bash_bin" "$ROOT/bin/fm-dispatch-select.sh" \
+    --quota-json "$quota" "$profiles" 2>&1) || status=$?
+  expect_code 2 "$status" "a tie between quota winners must still refuse without od"
+  assert_contains "$out" "od is required" \
+    "the draw between tied quota winners dropped the prerequisite it uses"
+  pass "od is required only where more than one candidate remains to draw between"
+}
+
 test_implicit_array_picks_higher_min_provider
 test_rule_array_without_select_invokes_quota_axi
 test_legacy_explicit_selector_stays_compatible
@@ -383,5 +429,6 @@ test_single_profile_and_one_element_array
 test_invalid_profile_arrays_are_validation_errors
 test_validate_only_does_not_require_od
 test_od_is_required_only_where_selection_randomizes
+test_od_is_not_required_where_one_candidate_wins
 
 echo "# all fm-dispatch-select tests passed"

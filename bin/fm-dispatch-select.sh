@@ -36,10 +36,14 @@
 #   - If quota-axi is unavailable, fails, returns unusable data, or no candidate
 #     can be scored, selection falls back uniformly across every valid candidate
 #     using rejection sampling over a 32-bit value from /dev/urandom.
-#   - `od` reads that random value, so it is a prerequisite of RANDOMIZING and is
-#     required only on a path that reaches it. A single profile object and
-#     `--validate-only` resolve without it; there is no fallback for a path that
-#     does randomize, which exits 2 naming od.
+#   - `od` reads that random value, so it is a prerequisite of DRAWING BETWEEN
+#     candidates rather than of resolving, and it is required only where more
+#     than one candidate is actually left to draw between. `--validate-only`, a
+#     single profile object, quota data that names ONE winner, and a fallback
+#     across a one-candidate set all resolve without it, because none of them
+#     draws. Only a real draw - an operational fallback across two or more
+#     candidates, or a tie between equal quota winners - requires it, and there
+#     is no fallback for a draw that cannot run, which exits 2 naming od.
 #   - Runtime quota trouble never turns malformed profile JSON into a fallback;
 #     invalid input exits 2 with an actionable validation error.
 #
@@ -159,10 +163,11 @@ validation_error=$(printf '%s\n' "$profiles_json" | jq -r '
 [ -z "$validation_error" ] || { echo "error: $validation_error" >&2; exit 2; }
 [ "$VALIDATE_ONLY" -eq 0 ] || exit 0
 
-# od reads the OS random source, so it is a prerequisite of RANDOMIZING rather
-# than of resolving. Checked here, immediately before each path that randomizes,
-# a resolution with nothing to choose between is never refused for a tool it does
-# not run. Called outside a subshell so the refusal exits the script.
+# od reads the OS random source, so it is a prerequisite of DRAWING rather than
+# of resolving. Called immediately before each DRAW - not before each path that
+# may contain one, which is the distinction a set of exactly one candidate turns
+# on - so a resolution with nothing to choose between is never refused for a tool
+# it does not run. Called outside a subshell so the refusal exits the script.
 require_od() {
   command -v od >/dev/null 2>&1 \
     || { echo "error: od is required for OS-backed random selection" >&2; exit 2; }
@@ -203,8 +208,17 @@ random_index() {
 random_profile() {
   local reason count index
   reason=$1
-  require_od
   count=$(printf '%s\n' "$profiles_json" | jq 'length')
+  # A fallback across a set of one is not a draw. Falling back is still the
+  # BASIS - quota data could not decide - so it is still reported as one, but no
+  # random source is opened and no od is demanded to arrive at the only option.
+  if [ "$count" -le 1 ]; then
+    log "$reason"
+    log "selection basis: random fallback (sole candidate, no draw)"
+    clean_profile_at 0
+    return 0
+  fi
+  require_od
   if ! index=$(random_index "$count"); then
     echo "error: OS-backed random source is unavailable" >&2
     exit 1
@@ -362,10 +376,16 @@ fi
 
 winner_indices=$(printf '%s\n' "$selection" | jq -c '.indices')
 winner_count=$(printf '%s\n' "$winner_indices" | jq 'length')
-require_od
-if ! winner_offset=$(random_index "$winner_count"); then
-  echo "error: OS-backed random source is unavailable" >&2
-  exit 1
+# Quota data that names ONE winner has already chosen. Only a TIE is a draw, so
+# only a tie reaches the random tie-break and its prerequisite.
+if [ "$winner_count" -le 1 ]; then
+  winner_offset=0
+else
+  require_od
+  if ! winner_offset=$(random_index "$winner_count"); then
+    echo "error: OS-backed random source is unavailable" >&2
+    exit 1
+  fi
 fi
 winner_index=$(printf '%s\n' "$winner_indices" | jq -r --argjson offset "$winner_offset" '.[$offset]')
 log "selection basis: quota-selected"
