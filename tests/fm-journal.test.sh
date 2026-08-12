@@ -165,8 +165,23 @@ test_status_reports_allocated_records_missing_from_the_tail() {
 
   printf 'not-a-sequence\n' > "$state/journal/.seq"
   gaps=$(FM_STATE_OVERRIDE="$state" "$JOURNAL" status | awk -F ': ' '$1 == "gaps" { print $2 }')
-  [ "$gaps" = "0" ] || fail "status treated an invalid allocation sequence as '$gaps' gaps"
+  [ "$gaps" = "unknown" ] || fail "status reported '$gaps' instead of unknown for an invalid allocation sequence"
   pass "status includes valid trailing allocations without confusing them with the retention horizon"
+}
+
+test_invalid_sequence_recovers_without_reusing_a_retained_number() {
+  local dir state order gaps
+  dir=$(make_case sequence-recovery)
+  state="$dir/state"
+  append_journal_wake "$state" a.status "signal: a" || fail "first append failed"
+  append_journal_wake "$state" b.status "signal: b" || fail "second append failed"
+  : > "$state/journal/.seq"
+  gaps=$(FM_STATE_OVERRIDE="$state" "$JOURNAL" status | awk -F ': ' '$1 == "gaps" { print $2 }')
+  [ "$gaps" = "unknown" ] || fail "empty sequence state was presented as '$gaps' gaps instead of unknown"
+  append_journal_wake "$state" c.status "signal: c" || fail "append after empty sequence state failed"
+  order=$(journal_read "$state" | awk -F '\t' '{ printf "%s ", $1 }')
+  [ "$order" = "1 2 3 " ] || fail "sequence recovery produced '$order' instead of continuing above retained records"
+  pass "invalid sequence state stays unknown and allocation recovers above retained records"
 }
 
 test_a_queued_wake_survives_a_journal_that_cannot_be_written() {
@@ -230,6 +245,7 @@ test_journal_records_the_queue_sequence_it_describes
 test_reader_tails_from_a_sequence
 test_status_reports_a_gap_rather_than_a_whole_stream
 test_status_reports_allocated_records_missing_from_the_tail
+test_invalid_sequence_recovers_without_reusing_a_retained_number
 test_a_queued_wake_survives_a_journal_that_cannot_be_written
 test_an_oversized_field_is_marked_rather_than_silently_shortened
 test_retention_bound_rotates_and_moves_the_horizon

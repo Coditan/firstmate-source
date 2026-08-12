@@ -138,6 +138,19 @@ fm_journal_rotate_if_full() {
   return 0
 }
 
+fm_journal_highest_retained_sequence() {
+  fm_journal_cat_files | LC_ALL=C awk -F '\t' 'NF >= 7 && $1 ~ /^[0-9]+$/ && $1 + 0 > highest { highest = $1 + 0 } END { print highest + 0 }'
+}
+
+fm_journal_publish_sequence() {
+  local seq=$1 tmp
+  tmp=$(umask 077; mktemp "$FM_JOURNAL_DIR/.seq.XXXXXX" 2>/dev/null) || return 1
+  if ! printf '%s\n' "$seq" > "$tmp" 2>/dev/null || ! mv -f "$tmp" "$FM_JOURNAL_SEQ_FILE" 2>/dev/null; then
+    rm -f "$tmp" 2>/dev/null || true
+    return 1
+  fi
+}
+
 # Append one record. Returns 0 on success, 2 on an invalid kind, 1 on any
 # failure to record.
 #
@@ -164,13 +177,13 @@ fm_journal_append() {  # <kind> <key> <payload> [<origin>] [<epoch>] [<snapshot>
 
   fm_journal_rotate_if_full || status=1
   if [ "$status" -eq 0 ]; then
-    seq=$(cat "$FM_JOURNAL_SEQ_FILE" 2>/dev/null || echo 0)
-    case "$seq" in ''|*[!0-9]*) seq=0 ;; esac
+    seq=$(cat "$FM_JOURNAL_SEQ_FILE" 2>/dev/null || true)
+    case "$seq" in ''|*[!0-9]*) seq=$(fm_journal_highest_retained_sequence) ;; esac
     seq=$((seq + 1))
     # Allocate before writing on purpose. A crash between the two leaves a gap
     # in the sequence, which fm-journal.sh reports; reusing the number instead
     # would make a lost record indistinguishable from one that never existed.
-    printf '%s\n' "$seq" > "$FM_JOURNAL_SEQ_FILE" 2>/dev/null || status=1
+    fm_journal_publish_sequence "$seq" || status=1
   fi
   if [ "$status" -eq 0 ]; then
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
@@ -191,12 +204,39 @@ fm_journal_cat_files() {
   return 0
 }
 
-fm_journal_cat() {
+fm_journal_snapshot_cleanup() {
+  [ -n "${FM_JOURNAL_SNAPSHOT_FILE:-}" ] || return 0
+  rm -f "$FM_JOURNAL_SNAPSHOT_FILE" 2>/dev/null || true
+}
+
+fm_journal_snapshot() {  # [status]
+  local mode=${1:-read} allocated tmp
+  tmp=$(umask 077; mktemp "$STATE/.journal-snapshot.XXXXXX" 2>/dev/null) || return 1
+  FM_JOURNAL_SNAPSHOT_FILE=$tmp
+  trap fm_journal_snapshot_cleanup EXIT HUP INT TERM
   if FM_LOCK_WAIT_TIMEOUT="${FM_JOURNAL_READ_LOCK_TIMEOUT:-1}" fm_lock_acquire_wait "$FM_JOURNAL_LOCK"; then
-    fm_journal_cat_files
+    if [ "$mode" = status ]; then
+      allocated=$(cat "$FM_JOURNAL_SEQ_FILE" 2>/dev/null || true)
+      case "$allocated" in ''|*[!0-9]*) allocated=unknown ;; esac
+      printf 'allocated\t%s\n' "$allocated" > "$tmp"
+    fi
+    fm_journal_cat_files >> "$tmp"
     fm_lock_release "$FM_JOURNAL_LOCK"
   else
-    fm_journal_cat_files
+    [ "$mode" != status ] || printf 'allocated\tunknown\n' > "$tmp"
+    fm_journal_cat_files >> "$tmp"
   fi
+  cat "$tmp"
+  fm_journal_snapshot_cleanup
+  trap - EXIT HUP INT TERM
+  return 0
+}
+
+fm_journal_cat() {
+  fm_journal_snapshot read
+}
+
+fm_journal_status_snapshot() {
+  fm_journal_snapshot status
   return 0
 }

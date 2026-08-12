@@ -88,9 +88,8 @@ case "$cmd" in
     '
     ;;
   status)
-    allocated=$(cat "$FM_JOURNAL_SEQ_FILE" 2>/dev/null || true)
-    case "$allocated" in ''|*[!0-9]*) allocated=0 ;; esac
-    fm_journal_cat | LC_ALL=C awk -F '\t' -v maxbytes="$FM_JOURNAL_MAX_BYTES" -v allocated="$allocated" '
+    fm_journal_status_snapshot | LC_ALL=C awk -F '\t' -v maxbytes="$FM_JOURNAL_MAX_BYTES" '
+      NR == 1 && $1 == "allocated" { allocated = $2; next }
       NF >= 7 {
         seq = $1 + 0
         if (!count || seq < horizon) { horizon = seq }
@@ -98,11 +97,15 @@ case "$cmd" in
         count++
       }
       END {
-        if (allocated > last) { last = allocated }
+        allocation_known = allocated ~ /^[0-9]+$/
+        if (allocation_known && allocated > last) { last = allocated }
         printf "records: %d\n", count
         if (!count) {
           print "horizon: none"
-          if (last) {
+          if (!allocation_known) {
+            print "last: unknown"
+            print "gaps: unknown"
+          } else if (last) {
             printf "last: %d\n", last
             printf "gaps: %d\n", last
           } else {
@@ -112,7 +115,11 @@ case "$cmd" in
         } else {
           printf "horizon: %d\n", horizon
           printf "last: %d\n", last
-          printf "gaps: %d\n", (last - horizon + 1) - count
+          if (allocation_known) {
+            printf "gaps: %d\n", (last - horizon + 1) - count
+          } else {
+            print "gaps: unknown"
+          }
         }
         printf "retention: at most two files of %d bytes; records below the horizon are gone\n", maxbytes
       }
