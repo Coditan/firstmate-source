@@ -97,7 +97,16 @@ Render those records in full, with the blocker or the closed twin named, near th
 Withheld records do not all carry the same news, and each one says which it is in `cause` with the reason in `why`.
 A `blocked` record is a decision the fleet has lost track of and belongs at the top with its blocker named; an `in-flight` one is simply being worked right now, and `no-hold` or `other-hold` mean the record never asked the captain anything in the first place.
 A `stale-edge` or `dangling-edge` record belongs at the top too, for the opposite reason: nothing is holding it, the blocker it names is either Done in the archive or a real record nowhere, and the captain can answer it now once somebody clears the edge.
-An `unpaired-variant` record is the one the surface did return and the fold then dropped, because no judge ruling in its group carries its decision key - it is a question only an analyst raised, and the rule below about folded records is exactly why it is listed here rather than left between the two surfaces.
+An `unpaired-variant` record is one the surface did return and the fold then dropped, because no judge ruling in its group carries its decision key - it is a question only an analyst raised, and the rule below about folded records is exactly why it is listed here rather than left between the two surfaces.
+A `folded-elsewhere` record is the other one the surface returned: the fold hung it as a variant under a ruling of a DIFFERENT undertaking, so no section of this chart can carry it without drawing a record this chart does not own.
+A `non-member-variant` record is the mirror of that one and the only row here that is not a member: the ruling is the member, drawn out of a group the chart does not own, and the fold hung this record beneath it.
+A member list is one way that ruling gets here and not the only one - the prefix rule reaches the same shape on any chart whose id is a panel seat, because the collapse rule groups by the origin with the seat stripped off - so do not describe such a row as something a list retrofitted.
+Drawing it would put one record on two charts, so it is named and never drawn - not in `decisions[]`, not in any `variants[]`, not in `takeable[]`.
+It is named rather than dropped because the judge-coverage limit above promises that every folded record stays listed underneath the ruling, and that promise has to hold on a retrofitted ruling too; naming a record in a reconciliation report is not counting it in a second what-is-left view, which is what exclusivity actually forbids.
+Only the first two are what `counts.withheld_folded` counts, because that number reconciles against `folded`, and a `non-member-variant` record never entered `folded` or `records` in the first place - it is not this chart to fold.
+It has its own number, `counts.named_not_owned`, and its own line on the rendered page.
+Render it there rather than inside the "of those" arithmetic: counting it among this chart's records once made the page report more captain-gated records in the backlog than the chart holds, and a count that overstates is as wrong as one that understates.
+`folded-elsewhere` arises wherever the fold groups a member of this chart under an undertaking the chart is not: a record a member list assigned, which keeps the id it carried before this undertaking was named, and equally a chart named on a panel seat - an id ending in `-a`, `-b` or `-judgeN` - whose records collapse into the group above the seat. It is not a member-list-only cause, and `limits[]` names it whenever the page carries such a row.
 Print each `why` beside its record so the difference is on the page rather than in the reader's head, and never let the milder causes crowd a `blocked` record down the list or off it.
 The whole point is that a chart which quietly omits an open decision is more harmful than no chart at all.
 
@@ -107,6 +116,18 @@ An empty section is read as a statement about the course - "there is no fog here
 Each entry names its `kind` and `hold_kind` beside the `why`, because those two fields are what get confused, and a `no-kind` cause means the record was filed without the kind that `AGENTS.md` section 10 requires rather than that the course is clear.
 A `marker-kind-mismatch` cause means the id and the kind disagree - the id claims a dark patch or a boundary and the kind does not - so one of the two is a typo, and the record is deliberately kept out of `takeable[]` until they agree rather than offered as work to pick up on a kind nobody can trust.
 The entries arrive `kind_defect` first and must be rendered in that order, under headings that keep the two apart: a kind the chart cannot classify can leave a whole section reading empty, while held or blocked ordinary work is only work this chart has no section for, and letting the second crowd out the first is how the empty sections went unnoticed in the first place.
+
+**Anything in `membership_defects[]`, directly under the member count.**
+These are member-list lines the assembler could not honour, and the member count is the number they call into question: a refused line is a record somebody wrote down as belonging here that the chart is not drawing.
+Render the `cause` beside the `why`, because the causes are different news and only one of them is about the record.
+A `contested` entry is the loud one and arrives first: two undertakings both claim that record, no record owns it by prefix to break the tie, so the chart draws it on neither and `claimed_by` names the other one so the collision can be found from either chart.
+`owned-elsewhere` and `claimed-elsewhere` are the two sides of the same wrong line, and they are the ones to read together.
+`owned-elsewhere` means this chart's own list named a record another undertaking already owns by its id: the entry is refused and the record is NOT drawn here.
+`claimed-elsewhere` is the only cause that is not about a line of this chart's list at all - another chart's list named a record this chart owns by construction - and it withdraws nothing: **the record is still drawn here**, and the foreign line is the one to delete.
+Render it as a wrong line elsewhere rather than as a doubt about the record, and never take it as a reason to leave the record out.
+`qualified` and `malformed` entries were refused at the boundary - one home, bare ids - and `unresolvable` means the record is not in this home at all, which may equally mean it was deleted, renamed, or never lived here.
+A `redundant` entry costs nothing: the prefix rule already draws that record and the line merely says so twice.
+Never render a refused entry as a member, and never drop any of these: a member named and missing is invisible, while a member named and wrong is visible by eye.
 
 **Anything in `misfiled[]`, above the sections it calls into question.**
 These members carry an id marker and a record kind that disagree, and unlike an unplaced member most of them ARE drawn - a boundary filed with the fog kind sits under FOG, while OUT OF COURSE, which is where its id says to look for it, is drawn without it.
@@ -148,6 +169,37 @@ In the legend, with its source:
 
 The assembler emits `navigation` as a pair for this reason, never as a boolean: there is no scalar for a renderer to turn into a lone badge.
 Whether a piece of work is destructive, irreversible, security-sensitive, or outward-facing is recorded nowhere per record and is not derived - that judgment stays the always-loaded rule in `AGENTS.md` sections 7 and 9.
+
+## When an undertaking is named over work that already exists
+
+A chart draws a record whose id is the chart id or begins with it, so work filed under an undertaking after that undertaking exists needs nothing further.
+Work that existed BEFORE the undertaking was named carries its own historical id and the prefix rule cannot see it - and it must not be renamed to fix that, because the backlog tool has no rename and renaming by hand breaks every reference that has already left this vessel.
+Such a chart draws zero members while its assignment is settled and written down, which is what this path exists for.
+
+Assign it in place instead: one bare record id per line in `data/<chart>/members`, beside the `question.md` and `report.md` the assembler already reads from that directory.
+`#` starts a comment and blank lines are ignored.
+Three rules bind, and the assembler enforces all three:
+
+- **One home, bare ids.**
+  A qualified or cross-home id is refused and named, never resolved.
+  Cross-vessel dependency is a blocker edge or a routed request.
+- **Exclusive.**
+  A record belongs to at most one undertaking.
+  Counted in two "what is left" views it leaves neither chart able to say whether it is finished for its own purposes.
+  Where the prefix rule already owns a record, it wins and keeps drawing there - a claim made by an id cannot be edited away from another file - and the list line that tried to take it is refused, so the record is drawn exactly once.
+  Where nothing owns it by prefix, the chart picks no winner and draws it on neither.
+  A record that genuinely fits two undertakings is evidence that one of them is cut too coarsely, or that it is really two pieces of work - fix it by re-cutting the work, never by listing it twice.
+- **Retrofit only.**
+  Anything created after the undertaking exists is named under the chart at creation, `/to-backlog` included.
+  Adding such a record to the list assigns nothing, and the chart says so.
+
+The list is a hand-maintained second source and it rots, so read `membership_defects[]` on every chart - including a chart with no list of its own, which is where another chart's wrong line about it shows up.
+An unreadable list is refused outright rather than read as empty, because a list quietly treated as empty shrinks the page and stops the exclusivity check firing at all.
+
+What counts as an undertaking already owning a record is **structural evidence only**, never a judgement about what looks important: records filed beneath it, a member list of its own, or its own panel question.
+It deliberately does not include merely having a `data/<id>/` directory, which most records that were ever dispatched have, and which is exactly what retrofit material looks like.
+So one overlap remains uncatchable from the reaching side and the chart discloses it: an owner that is a bare record, with nothing filed beneath it and no chart files of its own, is indistinguishable from ordinary work an undertaking was named over.
+Such a case still surfaces, as `claimed-elsewhere` on the page of the chart that owns the record - which is why that row speaks only for its own page and never promises what the other one does.
 
 ## Filing fog and course boundaries
 

@@ -1111,6 +1111,1004 @@ EOF
   pass "membership is scoped to the undertaking's id namespace and the rule is stated"
 }
 
+# --- MEMBERSHIP BEYOND THE ID -----------------------------------------------
+# The prefix rule is right for records created UNDER a chart and it is not
+# touched by anything below. It fails in one place: an undertaking named OVER
+# work that already exists. Membership IS the identifier there, `tasks-axi` has
+# no rename, and renaming a record breaks every reference to it that has already
+# left this vessel. Measured on the seat that raised it: six of seven named
+# undertakings drew ZERO members while their assignment was settled and written
+# down (2026-08-10). `data/<chart>/members` is the second half of the union.
+
+# The rich fixture the additive claim is proved against. Every section of the
+# chart draws something, so a change that leaked past the member-list code would
+# have somewhere to show up.
+member_list_home() {  # <name> -> home dir on stdout
+  local home
+  home=$(make_home "$1")
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - Make the retrofit path exist (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-judge-decision-shape - Choose the shape (repo: r) (kind: captain) (since 2026-07-30) (hold: Which shape) (hold-kind: captain)
+- [ ] voy-judge-decision-detail - Choose the detail blocked-by: voy-judge-decision-shape (repo: r) (kind: captain) (since 2026-07-30) (hold: Which detail) (hold-kind: captain)
+- [ ] voy-fog-retention - Retention is not sharp yet (repo: r) (kind: fog) (since 2026-07-30) (hold: could not name it) (hold-kind: future)
+- [ ] voy-oos-tracker - A second tracker (repo: r) (kind: out-of-course) (since 2026-07-30) (hold: out of course) (hold-kind: future)
+- [ ] voy-real-work - Ordinary takeable work (repo: r) (kind: ship) (since 2026-07-30)
+- [ ] voy-fog-unheld - A dark patch filed with no record kind (repo: r) (since 2026-07-30)
+- [ ] voy-oos-swapped - A boundary filed with the fog kind (repo: r) (kind: fog) (since 2026-07-30) (hold: never rises) (hold-kind: future)
+EOF
+  cat > "$home/data/done-archive.md" <<'EOF'
+# Done archive
+
+## Done
+- [x] voy-judge-decision-base - The base was settled (repo: r) (kind: captain) (since 2026-07-20) (done 2026-07-25)
+EOF
+  printf '%s\n' "$home"
+}
+
+test_a_chart_with_no_member_list_draws_exactly_what_it_drew_before() {
+  # THE ADDITIVE CLAIM, PROVED RATHER THAN ASSERTED. The whole page a chart with
+  # no member list draws - every section, every count, every reason string, every
+  # limit - is compared byte for byte against a capture taken from the script
+  # BEFORE the member list existed. Only the four fields the list itself adds are
+  # removed before the comparison, because they are the change rather than a
+  # side effect of it.
+  # Re-blessing this golden is a deliberate act. If a later change to the chart
+  # makes it fail, that is the file telling you the change reached further than
+  # the section you edited - read the diff before regenerating it.
+  local home cap out golden=$ROOT/tests/fm-sea-chart.no-member-list.golden.json
+  assert_present "$golden" "the pre-change capture is missing; without it nothing proves the member list is additive"
+  home=$(member_list_home nolist)
+  [ ! -e "$home/data/voy/members" ] || fail "fixture drift: this home must have no member list"
+  cap=$(capture nolist "voy-judge-decision-shape")
+  out=$(chart_json "$home" voy "$cap")
+
+  if ! printf '%s' "$out" \
+    | jq -S 'del(.membership.list, .membership.from_list, .membership_defects, .counts.membership_defects, .counts.named_not_owned)' \
+    | diff -u "$golden" - > "$TMP_ROOT/nolist.diff" 2>&1; then
+    cat "$TMP_ROOT/nolist.diff" >&2
+    fail "a chart with no member list must draw exactly what it drew before the member list existed - the diff above is what changed"
+  fi
+  # And the four added fields say, on such a chart, that nothing was added.
+  [ "$(printf '%s' "$out" | jq -r '.membership.list')" = "null" ] \
+    || fail "a chart with no member list must not name one"
+  [ "$(printf '%s' "$out" | jq -r '.membership.from_list')" = 0 ] \
+    || fail "a chart with no member list can have drawn no member from one"
+  [ "$(printf '%s' "$out" | jq -r '.membership.rule')" = 'id is "voy" or begins with "voy-"; a longer undertaking sharing this prefix is drawn here too, which is the recoverable direction' ] \
+    || fail "the rule line must state what actually determined membership, and here that is the prefix rule alone"
+  pass "a chart with no member list draws exactly the page it drew before"
+}
+
+test_an_existing_record_joins_an_undertaking_without_being_renamed() {
+  # THE DEFECT THIS EXISTS FOR. `tasks-axi` has no rename - `mv` moves a record
+  # between backlog files and preserves the id byte-exact - so assigning existing
+  # work to a newly named undertaking meant renaming it, and renaming it breaks
+  # every reference that has already left this vessel. The list assigns it in
+  # place instead, and the id is not touched by anything here.
+  local home cap out before
+  home=$(member_list_home retrofit)
+  cat >> "$home/data/backlog.md" <<'EOF'
+- [ ] legacy-reader - Existed long before the undertaking was named (repo: r) (kind: ship) (since 2026-07-01)
+- [ ] legacy-fog-shape - A dark patch that predates the chart (repo: r) (kind: fog) (since 2026-07-01) (hold: nobody could name it yet) (hold-kind: future)
+EOF
+  cap=$(capture retrofit "voy-judge-decision-shape")
+
+  # REPRODUCE. Without a list, the prefix rule cannot see either record.
+  before=$(chart_json "$home" voy "$cap")
+  [ "$(printf '%s' "$before" | jq -r '[.takeable[].id]|index("legacy-reader")')" = "null" ] \
+    || fail "the reproduction is stale: the prefix rule now reaches a record that does not carry the prefix"
+
+  mkdir -p "$home/data/voy"
+  cat > "$home/data/voy/members" <<'EOF'
+# work this undertaking was named over
+legacy-reader
+legacy-fog-shape
+EOF
+  out=$(chart_json "$home" voy "$cap")
+
+  [ "$(printf '%s' "$out" | jq -r '[.takeable[].id]|index("legacy-reader")')" != "null" ] \
+    || fail "a record named in the member list must be drawn, or the retrofit path assigns nothing"
+  [ "$(printf '%s' "$out" | jq -r '[.fog[].id]|index("legacy-fog-shape")')" != "null" ] \
+    || fail "a listed member must reach the section its kind names, exactly like a prefix member"
+  # The id is untouched: it is still the id the backlog and every reference off
+  # this vessel already carry.
+  assert_grep 'legacy-reader - Existed long before' "$home/data/backlog.md" \
+    "the record id must not have moved: assigning it is the whole point of not renaming it"
+  assert_no_grep 'voy-legacy-reader' "$home/data/backlog.md" \
+    "nothing may rename a record into the chart namespace"
+  # Everything the prefix rule drew before still draws.
+  [ "$(printf '%s' "$out" | jq -r '[.takeable[].id]|index("voy-real-work")')" != "null" ] \
+    || fail "the union must not cost the prefix rule a single member"
+  [ "$(printf '%s' "$out" | jq -r '.membership.members')" = "$(( $(printf '%s' "$before" | jq -r '.membership.members') + 2 ))" ] \
+    || fail "the listed records must be counted as members, on top of the prefix members"
+
+  # The rule line the chart prints has to stay true of the chart it is on.
+  assert_contains "$(printf '%s' "$out" | jq -r '.membership.rule')" "plus 2 records named in" \
+    "the membership line must say what actually determined membership, including how many members the list added"
+  assert_contains "$(printf '%s' "$out" | jq -r '.membership.rule')" 'begins with "voy-"' \
+    "the prefix rule must still be stated: it is not replaced, only joined"
+  [ "$(printf '%s' "$out" | jq -r '.membership.from_list')" = 2 ] \
+    || fail "the chart must count how many of its members only the list assigned"
+  [ "$(printf '%s' "$out" | jq -r '.membership.list')" = "$home/data/voy/members" ] \
+    || fail "the chart must name the list it read, or a wrong member cannot be traced to its line"
+  # A permanent path, not a migration: the disclosure of what it cannot check is
+  # printed with it rather than filed in documentation somebody has to find.
+  assert_contains "$(printf '%s' "$out" | jq -r '.limits|join(" ")')" "bare record" \
+    "a chart drawn from a member list must print the overlap that list still cannot catch, and that is now an owner with nothing filed beneath it and no chart files of its own - an owner reachable only from its own page"
+  pass "an existing record joins an undertaking through the member list, with no id change anywhere"
+}
+
+test_a_member_id_qualified_with_another_home_is_refused_rather_than_resolved() {
+  # The chart already drops another home's records before the collapse rule
+  # groups anything, because reaching into another home's backlog would put a
+  # second owner on that home. A qualified member id would quietly re-open
+  # exactly that, so it is refused and named instead of resolved.
+  local home cap out
+  home=$(member_list_home qualified)
+  mkdir -p "$home/data/voy"
+  printf 'sc1/legacy-reader\n' > "$home/data/voy/members"
+  cap=$(capture qualified)
+  out=$(chart_json "$home" voy "$cap")
+  [ "$(printf '%s' "$out" | jq -r '.counts.membership_defects')" = 1 ] \
+    || fail "a qualified member id must be counted as a defect, not silently ignored"
+  [ "$(printf '%s' "$out" | jq -r '.membership_defects[0].cause')" = "qualified" ] \
+    || fail "a qualified member id needs its own cause: it is refused for a different reason than an id that resolves to nothing"
+  [ "$(printf '%s' "$out" | jq -r '.membership_defects[0].id')" = "sc1/legacy-reader" ] \
+    || fail "the refused entry must be named exactly as it was written, or nobody can find the line"
+  [ "$(printf '%s' "$out" | jq -r '.membership.from_list')" = 0 ] \
+    || fail "a refused entry must assign no member"
+  assert_contains "$(printf '%s' "$out" | jq -r '.membership_defects[0].why')" "ONE home" \
+    "the refusal must say which boundary it is holding, or it reads as pedantry"
+  assert_contains "$(printf '%s' "$out" | jq -r '.membership_defects[0].why')" "routed request" \
+    "the refusal must name the paths that DO cross vessels, or it leaves the reader stuck"
+  pass "a member id qualified with another home is refused loudly rather than resolved"
+}
+
+test_a_member_that_lives_in_another_home_is_named_and_never_reached_for() {
+  # A BARE id can also name a record that exists - in a home this chart does not
+  # read. Membership must not reach for it. From here it is indistinguishable
+  # from a record that was never created, and saying so plainly is the honest
+  # report: the reason names both possibilities rather than asserting the wrong one.
+  local home other cap out
+  home=$(member_list_home crosshome)
+  other=$(make_home crosshome-secondmate)
+  cat > "$other/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] secondmate-only-work - Real, and owned by another home (repo: r) (kind: ship) (since 2026-07-01)
+EOF
+  mkdir -p "$home/data/voy"
+  printf 'secondmate-only-work\n' > "$home/data/voy/members"
+  cap=$(capture crosshome)
+
+  # The record really does exist where the chart is not looking.
+  assert_grep 'secondmate-only-work' "$other/data/backlog.md" "fixture drift: the other home must really hold this record"
+  out=$(chart_json "$home" voy "$cap")
+  [ "$(printf '%s' "$out" | jq -r '[.membership_defects[]|select(.id=="secondmate-only-work")]|length')" = 1 ] \
+    || fail "a member that resolves nowhere in this home must be named, never dropped behind a member count"
+  [ "$(printf '%s' "$out" | jq -r '.membership_defects[0].cause')" = "unresolvable" ] \
+    || fail "a member this home cannot resolve must say so; reaching into the other home is the boundary this chart holds"
+  assert_contains "$(printf '%s' "$out" | jq -r '.membership_defects[0].why')" "another home this chart deliberately does not read" \
+    "the reason must offer the other home as a possibility rather than claim the record does not exist"
+  case "$(printf '%s' "$out" | jq -r '[.takeable[].id,.fog[].id,.out_of_course[].id]|join(",")')" in
+    *secondmate-only-work*) fail "a record from another home must never be drawn on this chart" ;;
+  esac
+  pass "a bare member id living in another home is named and never reached for"
+}
+
+test_a_member_that_resolves_to_nothing_is_named_rather_than_dropped() {
+  # The list is a SECOND source and it rots: the record it names can be deleted
+  # or moved after the line is written. Dropping the line quietly would shrink
+  # the chart with nothing on the page saying so, which is the exact failure this
+  # tool exists against - prefer the chart accusing itself over under-drawing.
+  local home cap out summary
+  home=$(member_list_home gone)
+  mkdir -p "$home/data/voy"
+  printf 'legacy-reader\n' > "$home/data/voy/members"
+  cap=$(capture gone)
+  out=$(chart_json "$home" voy "$cap")
+  [ "$(printf '%s' "$out" | jq -r '.membership_defects[0].cause')" = "unresolvable" ] \
+    || fail "a member the backlog and the archive do not hold must be reported as unresolvable"
+  [ "$(printf '%s' "$out" | jq -r '.membership_defects[0].id')" = "legacy-reader" ] \
+    || fail "the missing member must be named, or the reader cannot tell which line rotted"
+  [ "$(printf '%s' "$out" | jq -r '.membership.members')" = 9 ] \
+    || fail "an unresolvable entry must not inflate the member count: there is no record to count"
+
+  # And it is visible without reading JSON, directly under the count it questions.
+  summary=$("$CHART" voy --summary --from "$cap" \
+    --backlog "$home/data/backlog.md" --archive "$home/data/done-archive.md" --data "$home/data")
+  assert_contains "$summary" "MEMBER LIST" "the refused entries must reach the human-readable chart, not only the JSON"
+  assert_contains "$summary" "could not be honoured" "the member count must say how many of its list lines failed"
+  assert_contains "$summary" "legacy-reader" "the summary must name the entry, not only count it"
+  pass "a member that resolves to nothing is named on the chart rather than dropped"
+}
+
+test_a_record_two_undertakings_both_claim_is_drawn_on_neither() {
+  # EXCLUSIVITY, AND IT IS THE LOAD-BEARING ONE. A record counted in two "what is
+  # left" views leaves NEITHER chart able to say whether it is finished for its
+  # own purposes, and exclusivity is what makes a deviation from a destination
+  # measurable at all. Two lists in one home is the only form of this the chart
+  # can see, because it is the only one where both claims are in hand.
+  local home cap voy other
+  home=$(member_list_home contested)
+  cat >> "$home/data/backlog.md" <<'EOF'
+- [ ] other - The other undertaking (repo: r) (kind: ship) (since 2026-07-02)
+- [ ] shared-reader - Both lists name it (repo: r) (kind: ship) (since 2026-07-01)
+EOF
+  mkdir -p "$home/data/voy" "$home/data/other"
+  printf 'shared-reader\n' > "$home/data/voy/members"
+  printf 'shared-reader\n' > "$home/data/other/members"
+  cap=$(capture contested)
+
+  voy=$(chart_json "$home" voy "$cap")
+  other=$(chart_json "$home" other "$cap")
+  # NEITHER draws it. The chart picks no winner, exactly as it picks none between
+  # a disagreeing id marker and record kind.
+  case "$(printf '%s' "$voy" | jq -r '[.takeable[].id]|join(",")')" in
+    *shared-reader*) fail "a contested record must not be drawn: counted twice, neither chart can say whether it is finished" ;;
+  esac
+  case "$(printf '%s' "$other" | jq -r '[.takeable[].id]|join(",")')" in
+    *shared-reader*) fail "the second chart must not draw a contested record either - drawing it on one side only would be picking a winner in silence" ;;
+  esac
+  # BOTH say so, and each names the other claimant so the collision can be found
+  # from whichever chart the reader happens to be on.
+  [ "$(printf '%s' "$voy" | jq -r '.membership_defects[0].cause')" = "contested" ] \
+    || fail "the first chart must report the collision loudly"
+  [ "$(printf '%s' "$other" | jq -r '.membership_defects[0].cause')" = "contested" ] \
+    || fail "the second chart must report the collision too, or the defect is invisible from that side"
+  [ "$(printf '%s' "$voy" | jq -r '.membership_defects[0].claimed_by|join(",")')" = "other" ] \
+    || fail "the collision must name the other undertaking claiming the record"
+  [ "$(printf '%s' "$other" | jq -r '.membership_defects[0].claimed_by|join(",")')" = "voy" ] \
+    || fail "the collision must name the other claimant from that side too"
+  assert_contains "$(printf '%s' "$voy" | jq -r '.membership_defects[0].why')" "cut too coarsely" \
+    "the report must name the real fix - re-cutting the work - rather than leave the reader to choose a chart"
+  # And this is the case `contested` is now the only true report of: no record of
+  # this home owns `shared-reader` by prefix, so nothing decides the tie by
+  # construction and refusing both is the honest move. Where a prefix owner DOES
+  # exist the news is different, and a different pair of causes says so.
+  [ "$(printf '%s' "$voy" | jq -r '[.membership_defects[]|select(.cause=="owned-elsewhere" or .cause=="claimed-elsewhere")]|length')" = 0 ] \
+    || fail "fixture drift: no record may own shared-reader by prefix, or this stopped being the contested case at all"
+
+  # It is ranked above the merely superfluous, so a broken exclusivity is never
+  # pushed down the page by a line that assigns nothing.
+  printf 'voy-real-work\n' >> "$home/data/voy/members"
+  voy=$(chart_json "$home" voy "$cap")
+  [ "$(printf '%s' "$voy" | jq -r '.membership_defects[0].cause')" = "contested" ] \
+    || fail "a contested record must be reported first: it is the one that makes two charts unmeasurable"
+  pass "a record two undertakings both claim is reported on both and drawn on neither"
+}
+
+test_a_member_no_record_answers_to_is_unresolvable_however_many_lists_name_it() {
+  # EXISTENCE IS A FACT ABOUT THE RECORD; CONTESTED IS A FACT ABOUT TWO FILES.
+  # Nothing can be claimed by anybody when no record answers to the id, so a
+  # second list naming the same typo adds no claim - it adds a second typo. Asked
+  # after contested, the chart told the reader that a record genuinely fitting two
+  # undertakings wants re-cutting, over an id that never existed at all. That is
+  # worse than silence, because it is confidently wrong.
+  local home cap voy other
+  home=$(member_list_home ghostcontest)
+  cat >> "$home/data/backlog.md" <<'EOF'
+- [ ] other - The other undertaking (repo: r) (kind: ship) (since 2026-07-02)
+EOF
+  mkdir -p "$home/data/voy" "$home/data/other"
+  printf 'typo-that-never-existed\n' > "$home/data/voy/members"
+  printf 'typo-that-never-existed\n' > "$home/data/other/members"
+  cap=$(capture ghostcontest)
+
+  voy=$(chart_json "$home" voy "$cap")
+  other=$(chart_json "$home" other "$cap")
+  [ "$(printf '%s' "$voy" | jq -r '.membership_defects[]|select(.id=="typo-that-never-existed")|.cause')" = "unresolvable" ] \
+    || fail "an id nothing answers to must be reported as unresolvable however many lists repeat it"
+  [ "$(printf '%s' "$other" | jq -r '.membership_defects[]|select(.id=="typo-that-never-existed")|.cause')" = "unresolvable" ] \
+    || fail "the second list is the second half of the same typo, and its chart must read the same"
+  assert_contains "$(printf '%s' "$voy" | jq -r '.membership_defects[]|select(.id=="typo-that-never-existed")|.why')" \
+    "no record with this id is in the backlog or the archive" \
+    "the report must say the record does not exist, which is the whole of the news here"
+  case "$(printf '%s' "$voy" | jq -r '.membership_defects[]|select(.id=="typo-that-never-existed")|.why')" in
+    *"cut too coarsely"*)
+      fail "nothing may send a reader off to re-cut work over an id that never existed" ;;
+  esac
+  # And the cause it displaced is untouched where it is genuinely true: a record
+  # that DOES exist and that two lists name is still contested.
+  cat >> "$home/data/backlog.md" <<'EOF'
+- [ ] shared-reader - Both lists name it, and it is real (repo: r) (kind: ship) (since 2026-07-01)
+EOF
+  printf 'shared-reader\n' >> "$home/data/voy/members"
+  printf 'shared-reader\n' >> "$home/data/other/members"
+  voy=$(chart_json "$home" voy "$cap")
+  [ "$(printf '%s' "$voy" | jq -r '.membership_defects[]|select(.id=="shared-reader")|.cause')" = "contested" ] \
+    || fail "asking existence first must not cost contested the case it is true of"
+  pass "a member no record answers to is unresolvable rather than contested"
+}
+
+test_a_retrofitted_decision_is_drawn_and_its_group_siblings_are_not() {
+  # The member list assigns a RECORD, while the collapse rule groups by the
+  # undertaking the record id names - and a decision that predates this chart
+  # keeps the id it always had, so its group is some other undertaking. Left
+  # alone, such a record reached the actionable surface, was dropped by this
+  # scoping, and was then reconciled as "not returned as actionable": a sentence
+  # refuted by the very surface it describes, which is this chart's own failure
+  # mode rather than an acceptable edge.
+  # The other half matters just as much: taking the group WHOLE would draw its
+  # non-member siblings here, and a record on two charts is the exclusivity this
+  # membership rule is built on.
+  local home cap grouped out
+  home=$(make_home retrogroup)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] legacy-judge-decision-shape - The ruling, and it predates the chart (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+- [ ] legacy-a-decision-shape - The analyst restating the same key (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+- [ ] legacy-a-decision-scope - A question only the analyst raised (repo: r) (kind: captain) (since 2026-07-01) (hold: Which scope) (hold-kind: captain)
+EOF
+  mkdir -p "$home/data/voy"
+  printf 'legacy-judge-decision-shape\n' > "$home/data/voy/members"
+  cap=$(capture retrogroup "legacy-judge-decision-shape" "legacy-a-decision-shape" "legacy-a-decision-scope")
+
+  # REPRODUCE THE SHAPE. The fold really does file all three under one group whose
+  # id is not this chart, with one ruling, one folded variant, one unpaired.
+  grouped=$("$INV" --json --from "$cap")
+  [ "$(printf '%s' "$grouped" | jq -r '[.groups[].group]|join(",")')" = "legacy" ] \
+    || fail "the reproduction is stale: the fold no longer groups these under the undertaking their ids name"
+
+  out=$(chart_json "$home" voy "$cap")
+  [ "$(printf '%s' "$out" | jq -r '[.decisions[].id]|join(",")')" = "legacy-judge-decision-shape" ] \
+    || fail "a retrofitted decision must be DRAWN: it reached the actionable surface, and dropping it here is the loss this chart exists against"
+  # And the siblings of that group are DRAWN nowhere - the list assigns a record,
+  # never the group around it, and one record on two charts is the exclusivity
+  # this rule rests on. Naming a record in the reconciliation report is a
+  # different act from drawing it, and only drawing is forbidden here.
+  case "$(printf '%s' "$out" | jq -r '[.decisions[].id, (.decisions[]|.variants[]?.id), .takeable[].id, .unplaced[].id]|join(",")')" in
+    *legacy-a-decision-shape*|*legacy-a-decision-scope*)
+      fail "a non-member sibling of the group must not be drawn here: the list assigns a record, never the group around it" ;;
+  esac
+  # The one the fold hung BENEATH the drawn ruling is named, because the
+  # judge-coverage limit on this page promises exactly that and a promise kept
+  # only for groups this chart owns whole is a limit its own page refutes. The
+  # unpaired one is not, because the fold hung it under no ruling at all and no
+  # limit here says anything about it.
+  [ "$(printf '%s' "$out" | jq -r '[.withheld[].id]|join(",")')" = "legacy-a-decision-shape" ] \
+    || fail "the record folded beneath the drawn ruling must be named in withheld, and nothing else may be"
+  # Both records are accounted for, and they are counted APART. `records` sits
+  # under a sentence that says records of THIS chart, and the folded one belongs
+  # to the undertaking its own id names - which is the whole reason it is named
+  # rather than drawn. Counting it there once made the page report more
+  # captain-gated records in the backlog than the chart holds, so a count that
+  # overstates is treated exactly like one that understates.
+  [ "$(printf '%s' "$out" | jq -r '.counts.records')" = 1 ] \
+    || fail "counts.records must count only records of THIS chart, or the page claims more captain-gated records in the backlog than the chart holds"
+  [ "$(printf '%s' "$out" | jq -r '.counts.named_not_owned')" = 1 ] \
+    || fail "the record the fold hung beneath the drawn ruling must still be counted, on its own line, or naming it in withheld leaves it out of every number"
+  pass "a retrofitted decision is drawn from a group this chart does not own, and its siblings are not"
+}
+
+test_a_record_folded_under_a_retrofitted_ruling_is_named_rather_than_silently_stripped() {
+  # THE PROMISE THIS PAGE MAKES ABOUT ITSELF, KEPT ON THE ONE SHAPE THAT BROKE IT.
+  # limits[0] says every record the fold hung beneath a ruling stays listed
+  # underneath, because nothing verifies that the judge picked up what the
+  # analysts raised. On a ruling retrofitted out of a group this chart does not
+  # own, the scoping strips exactly those records - rightly, since drawing them
+  # would put one record on two charts - and the page then printed the promise
+  # verbatim over a ruling with no variants and counts.folded reading 0.
+  # The fix is to NAME the record, never to draw it and never to weaken the limit.
+  local home cap grouped out summary
+  home=$(make_home strippedvariant)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] legacy-judge-decision-shape - The ruling, retrofitted onto this chart (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+- [ ] legacy-a-decision-shape - The analyst restatement, member of nothing here (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+EOF
+  mkdir -p "$home/data/voy"
+  printf 'legacy-judge-decision-shape\n' > "$home/data/voy/members"
+  cap=$(capture strippedvariant "legacy-judge-decision-shape" "legacy-a-decision-shape")
+
+  # REPRODUCE THE SHAPE THAT MAKES THE PROMISE FALSE. The board really does hold
+  # the restatement folded under the ruling this chart draws; without that there
+  # is no promise left to break.
+  grouped=$("$INV" --json --from "$cap")
+  [ "$(printf '%s' "$grouped" | jq -r '.groups[]|select(.group=="legacy")|.decisions[]|select(.id=="legacy-judge-decision-shape")|[.variants[].id]|join(",")')" = "legacy-a-decision-shape" ] \
+    || fail "the reproduction is stale: the fold no longer hangs the analyst record beneath the ruling this chart retrofits"
+
+  out=$(chart_json "$home" voy "$cap")
+  # THE LIMIT IS PRINTED UNWEAKENED - that was the settled trade, and pinning it
+  # here is what stops a later change paying for exclusivity with the promise.
+  assert_contains "$(printf '%s' "$out" | jq -r '.limits[0]')" "every folded record stays listed underneath" \
+    "the judge-coverage promise must not be qualified away on the page where it is hardest to keep"
+
+  # NAMED.
+  [ "$(printf '%s' "$out" | jq -r '[.withheld[]|select(.id=="legacy-a-decision-shape")]|length')" = 1 ] \
+    || fail "a record the fold hung beneath a drawn ruling must be named, or the limit printed above it is false of its own page"
+  [ "$(printf '%s' "$out" | jq -r '.withheld[]|select(.id=="legacy-a-decision-shape")|.cause')" = "non-member-variant" ] \
+    || fail "this needs its own cause: folded-elsewhere is about a MEMBER under a foreign ruling, and this is a NON-member under a ruling this chart took"
+  # The two why strings must not be true of each other, or the causes are one
+  # cause wearing two names.
+  assert_contains "$(printf '%s' "$out" | jq -r '.withheld[]|select(.id=="legacy-a-decision-shape")|.why')" "reached the actionable surface" \
+    "the surface did return this record, and nothing here may say otherwise"
+  case "$(printf '%s' "$out" | jq -r '.withheld[]|select(.id=="legacy-a-decision-shape")|.why')" in
+    *"belongs to a DIFFERENT undertaking, so this chart cannot show it under that ruling"*)
+      fail "that is the folded-elsewhere sentence, and it is false here: this chart DOES draw the ruling" ;;
+  esac
+
+  # NEVER DRAWN. Naming is not counting, and the record stays off every surface
+  # that would make it a member of this chart.
+  case "$(printf '%s' "$out" | jq -r '[.decisions[].id, (.decisions[]|.variants[]?.id), .takeable[].id]|join(",")')" in
+    *legacy-a-decision-shape*)
+      fail "naming a record in the reconciliation report must never promote it to a member: that is the one record on two charts exclusivity forbids" ;;
+  esac
+  [ "$(printf '%s' "$out" | jq -r '[.decisions[]|select(.id=="legacy-judge-decision-shape")|.variants[]]|length')" = 0 ] \
+    || fail "the ruling must still be drawn without the non-member variant beneath it"
+
+  # AND IT IS COUNTED - APART FROM THIS CHART OWN RECORDS, NOT AMONG THEM.
+  # An earlier revision counted it in `records` and `folded`, which read as
+  # "2 captain-gated records in the backlog for this chart" on a chart holding
+  # exactly one. A count that overstates what a chart holds is the same fault as
+  # one that understates it, so the record gets its own number rather than a
+  # place inside a sentence that is not about it.
+  [ "$(printf '%s' "$out" | jq -r '.counts.named_not_owned')" = 1 ] \
+    || fail "the stripped record must be counted, or naming it in withheld still leaves it out of every number on the page"
+  [ "$(printf '%s' "$out" | jq -r '.counts.records')" = 1 ] \
+    || fail "counts.records is printed as records of THIS chart, and this record belongs to the undertaking its own id names"
+  [ "$(printf '%s' "$out" | jq -r '.counts.folded')" = 0 ] \
+    || fail "this chart folded none of its OWN records away, and folded is read inside the sentence about them"
+  [ "$(printf '%s' "$out" | jq -r '.counts.withheld_folded')" = 0 ] \
+    || fail "withheld_folded reconciles against folded, so a record that never entered folded must not be claimed here - that pair once printed 0 folded away two lines above 1 of them folded away"
+
+  # Read on the rendered page, where every number must be true of the sentence
+  # printed around it - the standard this page has been held to all along.
+  summary=$("$CHART" voy --summary --from "$cap" \
+    --backlog "$home/data/backlog.md" --archive "$home/data/done-archive.md" --data "$home/data")
+  assert_contains "$summary" "1 captain-gated record in the backlog for this chart" \
+    "the chart holds exactly one captain-gated member, and the page must say so"
+  assert_contains "$summary" "of those, 1 reached the actionable surface -> 1 shown (0 folded away)" \
+    "the arithmetic must close over this chart own records, none of which was folded away"
+  assert_contains "$summary" "named but not owned by this chart: 1" \
+    "the stripped record must appear on the rendered page too, on its own line, or it is counted only where nobody reads"
+  pass "a record folded under a retrofitted ruling is named rather than silently stripped, and the limit above it stays true"
+}
+
+test_a_member_list_line_the_prefix_rule_already_covers_assigns_nothing() {
+  # The list is the RETROFIT path only. Anything created after its undertaking
+  # exists is named under the chart by construction, so a line restating that
+  # puts a second way to assign one record on one contract. The record keeps
+  # drawing - the prefix rule has it either way - and the line is reported as
+  # doing nothing rather than as a reason to withdraw a member.
+  local home cap out
+  home=$(member_list_home redundant)
+  mkdir -p "$home/data/voy"
+  printf 'voy-real-work\n' > "$home/data/voy/members"
+  cap=$(capture redundant)
+  out=$(chart_json "$home" voy "$cap")
+  [ "$(printf '%s' "$out" | jq -r '.membership_defects[0].cause')" = "redundant" ] \
+    || fail "a line the prefix rule already covers must be reported as assigning nothing"
+  [ "$(printf '%s' "$out" | jq -r '[.takeable[].id]|index("voy-real-work")')" != "null" ] \
+    || fail "a redundant line must never cost the chart the member the prefix rule already had"
+  [ "$(printf '%s' "$out" | jq -r '.membership.from_list')" = 0 ] \
+    || fail "a record the prefix rule already draws was not assigned by the list, and the count must not claim it was"
+  assert_contains "$(printf '%s' "$out" | jq -r '.membership_defects[0].why')" "delete the line" \
+    "the report must say what to do about it, since nothing is wrong with the record itself"
+  pass "a member list line the prefix rule already covers is reported as assigning nothing"
+}
+
+test_a_member_the_fold_hung_under_a_foreign_ruling_is_named_with_a_true_cause() {
+  # The mirror of the retrofitted-decision case above, and the harder half. There
+  # the member WAS the ruling of a group this chart does not own. Here the member
+  # is the record the fold attached UNDER a ruling that belongs to another
+  # undertaking, and neither move is open: showing it beneath that ruling would
+  # draw a record this chart does not own, while lifting it onto the decision list
+  # would put an analyst restatement where the ruling belongs - the substitution
+  # the fold exists to prevent. What must not happen is the third thing, and it is
+  # what happened: the record was dropped and then reconciled as "present in the
+  # backlog but not returned as actionable", a sentence the very surface it came
+  # from refutes.
+  local home cap grouped out summary
+  home=$(make_home foldedelsewhere)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] legacy-judge-decision-shape - The ruling, and it belongs to another undertaking (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+- [ ] legacy-a-decision-shape - The analyst restating the same key (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+EOF
+  mkdir -p "$home/data/voy"
+  printf 'legacy-a-decision-shape\n' > "$home/data/voy/members"
+  cap=$(capture foldedelsewhere "legacy-judge-decision-shape" "legacy-a-decision-shape")
+
+  # REPRODUCE THE SHAPE THAT MAKES THE OLD SENTENCE FALSE. The surface really did
+  # return the member, and the fold really did hang it under a ruling whose group
+  # is not this chart - which is exactly the state in which "not returned as
+  # actionable" is refuted by the record it describes.
+  [ "$(jq -r '[.decisions_open[].id]|index("legacy-a-decision-shape")' "$cap")" != "null" ] \
+    || fail "the reproduction is stale: the member must reach the actionable surface, or there is no false sentence left to prevent"
+  grouped=$("$INV" --json --from "$cap")
+  [ "$(printf '%s' "$grouped" | jq -r '.groups[]|select(.group=="legacy")|.decisions[]|select(.id=="legacy-judge-decision-shape")|[.variants[].id]|join(",")')" = "legacy-a-decision-shape" ] \
+    || fail "the reproduction is stale: the fold no longer folds the analyst record under a judge ruling whose group this chart does not own"
+
+  out=$(chart_json "$home" voy "$cap")
+  [ "$(printf '%s' "$out" | jq -r '[.withheld[]|select(.id=="legacy-a-decision-shape")]|length')" = 1 ] \
+    || fail "a member the fold hung under a foreign ruling must still be reconciled onto this chart: no section draws it, so dropping it makes it invisible on every surface at once"
+  [ "$(printf '%s' "$out" | jq -r '.withheld[]|select(.id=="legacy-a-decision-shape")|.cause')" = "folded-elsewhere" ] \
+    || fail "it needs its own cause: the surface DID return it, so every cause below the returned-record ones is a false sentence about this record"
+  assert_contains "$(printf '%s' "$out" | jq -r '.withheld[]|select(.id=="legacy-a-decision-shape")|.why')" "reached the actionable surface" \
+    "the reason must not claim the surface never carried this record, because it did"
+  # THE FALSE SENTENCE, PINNED ABSENT BY ITS OWN WORDS.
+  case "$(printf '%s' "$out" | jq -r '[.withheld[].why]|join(" ")')" in
+    *"not returned as actionable"*)
+      fail "the record reached the actionable surface, so nothing on this chart may say it did not" ;;
+  esac
+
+  # AND THE FOLD IS NOT UNDONE. The restatement is not promoted to the ruling,
+  # and the ruling of the other undertaking is not dragged onto this chart to
+  # carry it.
+  [ "$(printf '%s' "$out" | jq -r '[.decisions[].id]|join(",")')" = "" ] \
+    || fail "no decision may be drawn here: the ruling belongs to another undertaking and this chart owns only the record folded beneath it"
+  case "$(printf '%s' "$out" | jq -r '[.decisions[].id, (.decisions[]|.variants[]?.id), .takeable[].id, .unplaced[].id, .withheld[].id]|join(",")')" in
+    *legacy-judge-decision-shape*)
+      fail "a ruling of another undertaking must never be drawn here merely because this chart owns the record folded under it" ;;
+  esac
+
+  # AND THE NUMBERS ABOVE MUST NOT REFUTE THE ROW BELOW. This record reached the
+  # actionable surface and the fold then dropped it, so it is counted in `records`
+  # and in `folded` and in `withheld` at once - honest only while the page says
+  # they are one record, which is the whole job of `withheld_folded`.
+  [ "$(printf '%s' "$out" | jq -r '.counts.records')" = 1 ] \
+    || fail "a record the surface returned must be counted as having reached it, or the count refutes the row four lines below that says it did"
+  [ "$(printf '%s' "$out" | jq -r '.counts.folded')" = 1 ] \
+    || fail "the fold dropped this record, so the folded-away count must carry it"
+  [ "$(printf '%s' "$out" | jq -r '.counts.withheld_folded')" = 1 ] \
+    || fail "without this the same record is counted as folded and as withheld with nothing on the page saying they are one record"
+
+  # Read end to end on the RENDERED page, which is where a reader meets them.
+  summary=$("$CHART" voy --summary --from "$cap" \
+    --backlog "$home/data/backlog.md" --archive "$home/data/done-archive.md" --data "$home/data")
+  assert_contains "$summary" "of those, 1 reached the actionable surface" \
+    "the page must not say nothing reached the actionable surface a few lines above a row whose reason says this record did"
+  assert_contains "$summary" "folded away rather than never returned" \
+    "the page must reconcile the record it counts as folded with the one it counts as withheld, or the two numbers read as two records"
+  case "$summary" in
+    *"of those, 0 reached the actionable surface"*)
+      fail "arithmetic a reader can catch out is what teaches them to stop believing every other number on the chart" ;;
+  esac
+  pass "a member the fold hung under a foreign ruling is named with a cause that is true of it, and the counts above it agree"
+}
+
+test_one_member_folded_under_two_rulings_is_still_counted_as_one_record() {
+  # The fold hangs a variant under EVERY authoritative ruling whose key it
+  # matches, and the role convention admits more than one judge per group - so a
+  # single record is reachable from several rulings at once. Counting per
+  # (ruling, variant) pair made that one record read as two on every count the
+  # page prints, while the row underneath named it once. Numbers a reader can
+  # catch out is the same fault as numbers that are wrong.
+  local home cap grouped out summary
+  home=$(make_home twojudges)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] legacy-judge-decision-shape - The first ruling on the shape (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+- [ ] legacy-judge2-decision-shape - The second ruling on the same key (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+- [ ] legacy-a-decision-shape - The one analyst record this chart owns (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+EOF
+  mkdir -p "$home/data/voy"
+  printf 'legacy-a-decision-shape\n' > "$home/data/voy/members"
+  cap=$(capture twojudges "legacy-judge-decision-shape" "legacy-judge2-decision-shape" "legacy-a-decision-shape")
+
+  # REPRODUCE THE SHAPE. Both rulings really do carry the same single record as a
+  # paired variant; without that there is no double count left to prevent.
+  grouped=$("$INV" --json --from "$cap")
+  [ "$(printf '%s' "$grouped" | jq -r '[.groups[]|select(.group=="legacy")|.decisions[]|select([.variants[].id]|index("legacy-a-decision-shape"))]|length')" = 2 ] \
+    || fail "the reproduction is stale: the fold no longer hangs one variant under both rulings, so this fixture pins nothing"
+
+  out=$(chart_json "$home" voy "$cap")
+  [ "$(printf '%s' "$out" | jq -r '[.withheld[]|select(.cause=="folded-elsewhere")]|length')" = 1 ] \
+    || fail "one record folded under two rulings must produce ONE withheld row, not one per ruling"
+  [ "$(printf '%s' "$out" | jq -r '.counts.records')" = 1 ] \
+    || fail "this chart owns exactly one record, so the count of records that reached the surface must be 1"
+  [ "$(printf '%s' "$out" | jq -r '.counts.records_in_backlog')" = 1 ] \
+    || fail "the backlog side of the reconciliation must count records too, or the two sides cannot be compared"
+  [ "$(printf '%s' "$out" | jq -r '.counts.folded')" = 1 ] \
+    || fail "one record was folded away, and folded counts records rather than pairings"
+  [ "$(printf '%s' "$out" | jq -r '.counts.withheld_folded')" = 1 ] \
+    || fail "the number that says the folded record and the withheld record are one record must agree with both of them"
+
+  # Read on the rendered page, where the arithmetic is set beside its own row.
+  summary=$("$CHART" voy --summary --from "$cap" \
+    --backlog "$home/data/backlog.md" --archive "$home/data/done-archive.md" --data "$home/data")
+  assert_contains "$summary" "1 captain-gated record" \
+    "the page must say one record, because one record is what this chart owns"
+  case "$summary" in
+    *"2 captain-gated records"*|*"of those, 2 reached"*)
+      fail "a record counted once per ruling it pairs to is arithmetic the row below it refutes" ;;
+  esac
+  pass "one member folded under two rulings is counted as the one record it is"
+}
+
+test_a_folded_elsewhere_row_survives_on_a_chart_that_also_draws_a_decision() {
+  # THE FIXTURE GAP THAT HID A REAL DEFECT. The folded-elsewhere set is filtered
+  # against the records the chart already drew, and every fixture exercising that
+  # filter happened to draw NO decision of its own - so the filter ran against an
+  # empty list and could not be wrong. Against a non-empty one the expression then
+  # in place emptied the whole set, deleting the row it exists to produce.
+  # This chart draws a decision of its own AND folds a member elsewhere, which is
+  # the ordinary shape of a retrofit on a live undertaking.
+  local home cap out
+  home=$(make_home foldedplusown)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-judge-decision-own - A decision this chart owns by its id (repo: r) (kind: captain) (since 2026-07-30) (hold: Which own) (hold-kind: captain)
+- [ ] legacy-judge-decision-shape - A ruling of another undertaking (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+- [ ] legacy-a-decision-shape - The member the fold hung under that ruling (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+EOF
+  mkdir -p "$home/data/voy"
+  printf 'legacy-a-decision-shape\n' > "$home/data/voy/members"
+  cap=$(capture foldedplusown "voy-judge-decision-own" "legacy-judge-decision-shape" "legacy-a-decision-shape")
+  out=$(chart_json "$home" voy "$cap")
+
+  # The chart really does draw a decision of its own here - that is what makes the
+  # filter run against a non-empty list rather than a vacuous one.
+  [ "$(printf '%s' "$out" | jq -r '[.decisions[].id]|join(",")')" = "voy-judge-decision-own" ] \
+    || fail "fixture drift: this chart must draw a decision of its own, or the filter under test is never exercised"
+  [ "$(printf '%s' "$out" | jq -r '.withheld[]|select(.id=="legacy-a-decision-shape")|.cause')" = "folded-elsewhere" ] \
+    || fail "a member the fold hung under a foreign ruling must still be named when the chart also draws a decision of its own"
+  [ "$(printf '%s' "$out" | jq -r '.counts.records')" = 2 ] \
+    || fail "both the drawn decision and the member folded elsewhere reached the actionable surface"
+  [ "$(printf '%s' "$out" | jq -r '.counts.folded')" = 1 ] \
+    || fail "the member folded elsewhere is the one record folded away here"
+  [ "$(printf '%s' "$out" | jq -r '.counts.withheld_folded')" = 1 ] \
+    || fail "the folded count and the withheld count must be reconciled to one record"
+  pass "a folded-elsewhere row survives on a chart that also draws a decision of its own"
+}
+
+test_a_member_drawn_under_one_ruling_is_never_also_counted_as_folded_away() {
+  # A group can hold a member ruling AND a non-member ruling at once, because the
+  # fold hangs one variant under every authoritative ruling whose key matches and
+  # a group admits several judges. So one member variant is kept under the ruling
+  # this chart owns while hanging under the one it does not - and it is DRAWN,
+  # which means it was never folded away. Counted in both places the page said 3
+  # records and 2 folded for the 2 records it holds, with no withheld row anywhere
+  # to account for the third: arithmetic a reader can catch out on the same page.
+  local home cap grouped out summary
+  home=$(make_home foldoverlap)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] legacy-judge-decision-shape - The ruling this chart took in (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+- [ ] legacy-judge2-decision-shape - The ruling it did not (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+- [ ] legacy-a-decision-shape - The analyst record, folded under both (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+EOF
+  mkdir -p "$home/data/voy"
+  printf 'legacy-judge-decision-shape\nlegacy-a-decision-shape\n' > "$home/data/voy/members"
+  cap=$(capture foldoverlap "legacy-judge-decision-shape" "legacy-judge2-decision-shape" "legacy-a-decision-shape")
+
+  # REPRODUCE THE SHAPE. Both lines are honoured, and the fold really does hang
+  # the one analyst record under both rulings - the overlap this pins.
+  out=$(chart_json "$home" voy "$cap")
+  [ "$(printf '%s' "$out" | jq -r '.membership_defects|length')" = 0 ] \
+    || fail "fixture drift: both member lines must be honoured, or this stops being the overlap case at all"
+  grouped=$("$INV" --json --from "$cap")
+  [ "$(printf '%s' "$grouped" | jq -r '[.groups[]|select(.group=="legacy")|.decisions[]|select([.variants[].id]|index("legacy-a-decision-shape"))]|length')" = 2 ] \
+    || fail "the reproduction is stale: the fold no longer hangs the analyst record under both rulings"
+
+  # IT IS DRAWN, under the ruling this chart owns - so nothing may also call it
+  # folded away.
+  [ "$(printf '%s' "$out" | jq -r '[.decisions[]|select(.id=="legacy-judge-decision-shape")|.variants[].id]|join(",")')" = "legacy-a-decision-shape" ] \
+    || fail "the member variant must still be drawn beneath the member ruling that carries it"
+  [ "$(printf '%s' "$out" | jq -r '[.withheld[]|select(.cause=="folded-elsewhere")]|length')" = 0 ] \
+    || fail "a record this chart draws was not folded away from it, so no folded-elsewhere row may name it"
+  [ "$(printf '%s' "$out" | jq -r '.counts.records')" = 2 ] \
+    || fail "this chart holds two records, and a record drawn once must not be counted as having reached the surface twice"
+  [ "$(printf '%s' "$out" | jq -r '.counts.records_in_backlog')" = 2 ] \
+    || fail "both sides of the reconciliation must count the same two records"
+  [ "$(printf '%s' "$out" | jq -r '.counts.decisions')" = 1 ] \
+    || fail "one ruling is drawn here; the other belongs to no member of this chart"
+  [ "$(printf '%s' "$out" | jq -r '.counts.folded')" = 1 ] \
+    || fail "exactly one record was folded under the ruling, and folded counts records rather than places they appear"
+  [ "$(printf '%s' "$out" | jq -r '.counts.withheld')" = 0 ] \
+    || fail "both records this chart owns are drawn, so nothing is withheld"
+
+  # The rendered page is where the reader meets the arithmetic, and it must
+  # reconcile against itself with no leftover record.
+  summary=$("$CHART" voy --summary --from "$cap" \
+    --backlog "$home/data/backlog.md" --archive "$home/data/done-archive.md" --data "$home/data")
+  assert_contains "$summary" "2 captain-gated records in the backlog for this chart" \
+    "the page must count the two records this chart holds"
+  assert_contains "$summary" "of those, 2 reached the actionable surface -> 1 shown (1 folded away)" \
+    "shown plus folded away must add up to what reached the surface, or the reader has a record they cannot place"
+  case "$summary" in
+    *"3 captain-gated records"*|*"of those, 3 reached"*|*"(2 folded away)"*)
+      fail "a record counted both as drawn and as folded away is the unreconcilable arithmetic this chart is built against" ;;
+  esac
+  pass "a member drawn under a ruling this chart owns is never also counted as folded away"
+}
+
+test_a_chart_with_no_member_list_still_discloses_a_folded_elsewhere_row() {
+  # A limit is a claim about the page it is printed on, so it has to be decided
+  # by what that page carries. It was decided by whether a member list was read
+  # instead, on the premise that folded-elsewhere cannot arise without one. That
+  # premise is false: the collapse group is the origin with its panel role
+  # stripped, so on a chart whose id ends in -a, -b or -judgeN - the seat
+  # convention of this home - the group is the seat above it rather than the
+  # chart, and a folded-elsewhere row arises with no member list anywhere.
+  local home cap out limits
+  home=$(make_home seatfold)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy-a - The undertaking, named on a panel seat (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] voy-judge-decision-shape - The ruling of the group above this seat (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+- [ ] voy-a-decision-shape - The record of this seat, restating the same key (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+EOF
+  [ ! -e "$home/data/voy-a/members" ] || fail "fixture drift: this case must hold with NO member list anywhere"
+  cap=$(capture seatfold "voy-judge-decision-shape" "voy-a-decision-shape")
+  out=$(chart_json "$home" voy-a "$cap")
+
+  [ "$(printf '%s' "$out" | jq -r '.membership.list')" = "null" ] \
+    || fail "the point of this case is that no member list is in play; a list here proves nothing"
+  [ "$(printf '%s' "$out" | jq -r '[.withheld[]|select(.cause=="folded-elsewhere")]|length')" = 1 ] \
+    || fail "the reproduction is stale: a listless chart on a panel seat must still fold a member under the ruling of the group above it"
+
+  limits=$(printf '%s' "$out" | jq -r '.limits|join(" ")')
+  assert_contains "$limits" "folded-elsewhere" \
+    "the page prints a folded-elsewhere row, so the sentence saying which causes the fleet-wide board can carry must name it - a limit that is false of its own page is the one thing this chart must never print"
+  pass "a listless chart that folds a member elsewhere discloses that cause in its limits"
+}
+
+test_a_member_list_line_naming_a_group_id_never_drags_that_group_onto_this_chart() {
+  # The member list assigns a RECORD, never the namespace around it. A record id
+  # that happens to be a collapse-rule GROUP id is still just one record, so the
+  # decisions filed under that group belong to whatever undertaking owns it and
+  # drawing them here would put one record on two charts - the exclusivity this
+  # whole membership rule rests on.
+  # A group may be taken WHOLE only on the PREFIX rule, because only there is
+  # every record inside it a member of this chart by the same construction.
+  local home cap grouped voy grp
+  home=$(make_home listedgroup)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] grp - The other undertaking, and the id the list names (repo: r) (kind: ship) (since 2026-07-02)
+- [ ] grp-judge-decision-shape - The ruling of that other undertaking (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+- [ ] grp-a-decision-shape - The analyst restating the same key (repo: r) (kind: captain) (since 2026-07-01) (hold: Which shape) (hold-kind: captain)
+EOF
+  mkdir -p "$home/data/voy"
+  printf 'grp\n' > "$home/data/voy/members"
+  cap=$(capture listedgroup "grp-judge-decision-shape" "grp-a-decision-shape")
+
+  # REPRODUCE THE SHAPE. The fold really does file both decisions under one group
+  # whose id is exactly the id the member list names - which is the only reason a
+  # whole-group take could ever reach records this chart does not own.
+  grouped=$("$INV" --json --from "$cap")
+  [ "$(printf '%s' "$grouped" | jq -r '[.groups[].group]|join(",")')" = "grp" ] \
+    || fail "the reproduction is stale: the fold no longer groups these two under the id the member list names"
+
+  voy=$(chart_json "$home" voy "$cap")
+  grp=$(chart_json "$home" grp "$cap")
+
+  # The listed record itself is REFUSED, and this is the stricter rule that
+  # superseded an earlier one here. `grp` has records filed beneath it, which is
+  # structural evidence that it heads an undertaking of its own - so it is owned
+  # by construction and a member list cannot take it. Drawing it on voy would be
+  # the same record on two charts, one line down from the group take this test
+  # already forbids.
+  [ "$(printf '%s' "$voy" | jq -r '.membership_defects[]|select(.id=="grp")|.cause')" = "owned-elsewhere" ] \
+    || fail "a listed id that heads an undertaking of its own must be refused, not drawn: it is owned by construction and a line cannot take it"
+  # Neither the record nor its group siblings reach this chart, in any section,
+  # and not as a folded variant either.
+  case "$(printf '%s' "$voy" | jq -r '[.decisions[].id, (.decisions[]|.variants[]?.id), .withheld[].id, .takeable[].id, .unplaced[].id]|join(",")')" in
+    *grp*)
+      fail "a member list line names ONE record: taking the group around it, or the owned record itself, draws records that are members of neither rule, and that is one record on two charts" ;;
+  esac
+  [ "$(printf '%s' "$voy" | jq -r '.counts.records')" = 0 ] \
+    || fail "no record of that group reached this chart, so the count of what did must not claim otherwise"
+
+  # And the undertaking that owns them by prefix still draws both - nothing
+  # drawing today stops drawing because another chart list named its group id.
+  [ "$(printf '%s' "$grp" | jq -r '[.decisions[].id]|join(",")')" = "grp-judge-decision-shape" ] \
+    || fail "the owning chart must still draw its own ruling"
+  [ "$(printf '%s' "$grp" | jq -r '[.decisions[]|.variants[].id]|join(",")')" = "grp-a-decision-shape" ] \
+    || fail "the owning chart must still draw the variant folded under its ruling"
+  pass "a member list line naming a group id assigns nothing, and that group stays whole on the chart that owns it"
+}
+
+test_a_foreign_claim_on_a_prefix_owned_record_is_refused_there_and_reported_here() {
+  # PREFIX OWNERSHIP IS BY CONSTRUCTION AND CANNOT BE EDITED AWAY. A record whose
+  # id carries this chart name belongs here whatever any file says, so a foreign
+  # list naming it changes NOTHING about what is drawn - it is simply a wrong
+  # line, and the only chart that can see it is the one it points at. Reported on
+  # both pages, the collision resolves to the record being drawn exactly once,
+  # which is what makes the exclusivity rule real rather than asserted.
+  local home cap voy other summary
+  home=$(member_list_home foreignclaim)
+  cat >> "$home/data/backlog.md" <<'EOF'
+- [ ] other - The other undertaking (repo: r) (kind: ship) (since 2026-07-02)
+EOF
+  mkdir -p "$home/data/other"
+  printf 'voy-real-work\n' > "$home/data/other/members"
+  cap=$(capture foreignclaim)
+  [ ! -e "$home/data/voy/members" ] \
+    || fail "fixture drift: the owning chart must have no list of its own, or this proves nothing about a claim it never made"
+
+  voy=$(chart_json "$home" voy "$cap")
+  other=$(chart_json "$home" other "$cap")
+
+  # THE LOAD-BEARING HALF: the owner goes on drawing it.
+  [ "$(printf '%s' "$voy" | jq -r '[.takeable[].id]|index("voy-real-work")')" != "null" ] \
+    || fail "the chart that owns a record by prefix must keep drawing it: nothing drawing today may stop because a third party edited a file"
+  [ "$(printf '%s' "$voy" | jq -r '.membership_defects[0].cause')" = "claimed-elsewhere" ] \
+    || fail "the owner must report the foreign claim: it is written in a file this chart does not own, so no other page can show it"
+  [ "$(printf '%s' "$voy" | jq -r '.membership_defects[0].claimed_by|join(",")')" = "other" ] \
+    || fail "the report must name the chart whose list made the claim, or the offending line cannot be found"
+  assert_contains "$(printf '%s' "$voy" | jq -r '.membership_defects[0].why')" "STILL DRAWN" \
+    "the report must say the record keeps drawing here, or it contradicts the section further down that draws it"
+  assert_contains "$(printf '%s' "$voy" | jq -r '.membership_defects[0].why')" "foreign line is the one to delete" \
+    "the report must name the line to delete, since nothing is wrong with the record or with this chart"
+
+  # THE OTHER HALF, and together they are the whole point: one record, one chart.
+  [ "$(printf '%s' "$other" | jq -r '.membership_defects[0].cause')" = "owned-elsewhere" ] \
+    || fail "a line naming a record the prefix rule already owns must be refused under its own cause, never called contested"
+  [ "$(printf '%s' "$other" | jq -r '.membership_defects[0].claimed_by|join(",")')" = "voy" ] \
+    || fail "the refusal must name the undertaking that owns the record by construction"
+  case "$(printf '%s' "$other" | jq -r '[.takeable[].id,.fog[].id,.out_of_course[].id,.decisions[].id,.withheld[].id,.unplaced[].id]|join(",")')" in
+    *voy-real-work*)
+      fail "the chart whose list named it must NOT draw it: drawing it on both sides is the one record on two charts this rule rests on refusing" ;;
+  esac
+  [ "$(printf '%s' "$other" | jq -r '.membership.from_list')" = 0 ] \
+    || fail "a refused entry must assign no member"
+
+  # The owner has no list of its own, so its page must read as a report about
+  # somebody else's file rather than name a file this chart does not have.
+  [ "$(printf '%s' "$voy" | jq -r '.membership.list')" = "null" ] \
+    || fail "fixture drift: the owning chart must still have no member list"
+  summary=$("$CHART" voy --summary --from "$cap" \
+    --backlog "$home/data/backlog.md" --archive "$home/data/done-archive.md" --data "$home/data")
+  assert_contains "$summary" "MEMBER LIST" "a foreign claim must reach the human-readable chart too, not only the JSON"
+  assert_contains "$summary" "voy-real-work" "the summary must name the record another list claimed"
+  case "$summary" in
+    *"entries in null"*) fail "a chart with no member list of its own must never name one" ;;
+  esac
+  # And the printed disclosure names what is STILL uncaught rather than a case the
+  # chart now catches, because a false limit is the fault this script exists on.
+  assert_contains "$(printf '%s' "$voy" | jq -r '.limits|join(" ")')" "bare record" \
+    "the limit must name what is STILL uncaught - an owner with nothing filed beneath it and no chart files of its own - now that an owner heading an undertaking is caught"
+  pass "a foreign claim on a prefix-owned record is refused there and reported here, so the record is drawn exactly once"
+}
+
+test_an_unreadable_member_list_is_fatal_rather_than_silently_empty() {
+  # The policy the backlog reader in this same file already holds, for the same
+  # reason. An ABSENT list is genuinely empty and normal; degrading an UNREADABLE
+  # one to "this list is empty" shrinks the page with nothing on it saying so.
+  # For a FOREIGN list it is worse than a shrunken page: the exclusivity check
+  # simply stops firing, and a contested record is drawn on both charts with no
+  # defect row anywhere.
+  local home cap out rc
+  home=$(member_list_home unreadable)
+  mkdir -p "$home/data/voy" "$home/data/other"
+  printf 'legacy-reader\n' > "$home/data/voy/members"
+  cap=$(capture unreadable)
+  chmod 000 "$home/data/voy/members"
+  if [ -r "$home/data/voy/members" ]; then
+    chmod 600 "$home/data/voy/members"
+    pass "skipped: this user can read a mode-000 file, so an unreadable list cannot be staged here"
+    return 0
+  fi
+
+  rc=0
+  out=$(chart_json "$home" voy "$cap" 2>&1) || rc=$?
+  chmod 600 "$home/data/voy/members"
+  [ "$rc" != 0 ] \
+    || fail "an unreadable member list must be fatal: drawing anyway names a list the chart never read and under-draws in silence"
+  assert_contains "$out" "$home/data/voy/members" \
+    "the refusal must name the file it could not read, or nobody can tell which list to fix"
+
+  # The foreign half, which is the one no reader of this chart could have guessed.
+  printf 'voy-real-work\n' > "$home/data/other/members"
+  chmod 000 "$home/data/other/members"
+  rc=0
+  out=$(chart_json "$home" voy "$cap" 2>&1) || rc=$?
+  chmod 600 "$home/data/other/members"
+  [ "$rc" != 0 ] \
+    || fail "an unreadable list belonging to ANOTHER chart must be fatal too: read as empty it silently stops exclusivity being checked at all"
+  assert_contains "$out" "$home/data/other/members" \
+    "the refusal must name the foreign list it could not read"
+  pass "an unreadable member list is fatal rather than degraded into an empty one"
+}
+
+test_an_owner_that_heads_an_undertaking_is_refused_on_the_chart_that_reached_for_it() {
+  # THE MIRROR, AND THE LINE IT IS DRAWN ON. A record is drawn EXACTLY ONCE: on
+  # the chart whose name its id carries. The chart that reached for it refuses the
+  # entry, so exclusivity is real rather than asserted on one page.
+  # The line is structural evidence and nothing else - records of its own beneath
+  # it, its own member list, or its own panel question. It cannot be "is this a
+  # chart", because ANY record can be made one, and a rule that answered yes to
+  # every record would refuse every retrofit and close the path this exists to
+  # open. That failure is pinned in the sibling test below; the two are a pair
+  # and neither should be relaxed without reading the other.
+  local home cap voy other
+  home=$(make_home ownermirror)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The reaching undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] other - A chart root with work filed under it (repo: r) (kind: ship) (since 2026-07-01)
+- [ ] other-part - Filed under that undertaking (repo: r) (kind: ship) (since 2026-07-01)
+EOF
+  mkdir -p "$home/data/voy"
+  printf 'other\n' > "$home/data/voy/members"
+  cap=$(capture ownermirror)
+
+  voy=$(chart_json "$home" voy "$cap")
+  other=$(chart_json "$home" other "$cap")
+  [ "$(printf '%s' "$voy" | jq -r '.membership_defects[]|select(.id=="other")|.cause')" = "owned-elsewhere" ] \
+    || fail "a listed record that heads an undertaking of its own must be refused on the chart that reached for it"
+  case "$(printf '%s' "$voy" | jq -r '[.takeable[].id]|join(",")')" in
+    *other*) fail "the reaching chart must NOT draw a record another undertaking owns by construction - that is one record on two charts" ;;
+  esac
+  # The owner is unaffected: it keeps drawing, and reports the foreign line.
+  [ "$(printf '%s' "$other" | jq -r '.membership_defects[]|select(.id=="other")|.cause')" = "claimed-elsewhere" ] \
+    || fail "the owning chart must report the foreign line that reached for its record"
+  # THE PROMISE THAT COULD NOT BE KEPT. This row once asserted what the OTHER page
+  # does. No implementation can make that true in general: an owner with nothing
+  # beneath it is invisible from the reaching side, so the sentence would be false
+  # exactly when it mattered. It must speak only for the page it is printed on.
+  case "$(printf '%s' "$other" | jq -r '.membership_defects[]|select(.id=="other")|.why')" in
+    *"The other chart refuses the entry on its own page"*)
+      fail "this row must not promise what another page does: an owner with no records beneath it is undetectable from the reaching side, so the promise is false exactly when it matters" ;;
+  esac
+  pass "a record owned by an undertaking is drawn once, on its owner, and the reaching chart refuses it"
+}
+
+test_a_bare_record_is_still_retrofittable_and_never_reads_as_owning_itself() {
+  # THE SELF-DEFEAT THIS GUARDS. Ownership is decided by asking which record id an
+  # entry sits under. Let an entry count as its OWN owner and every resolvable
+  # entry resolves to itself, every one is refused as owned-elsewhere, and the
+  # retrofit path - the whole feature - refuses itself. Measured while building
+  # this: with self-ownership admitted, `legacy-reader` resolves to owner
+  # `legacy-reader`. Only structural evidence that an id heads an undertaking
+  # lifts a record out of retrofit material, and a bare record has none.
+  local home cap out
+  home=$(make_home bareretrofit)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## Queued
+- [ ] voy - The undertaking (repo: r) (kind: ship) (since 2026-07-28)
+- [ ] legacy-reader - A bare record: nothing filed beneath it, no chart files (repo: r) (kind: ship) (since 2026-07-01)
+EOF
+  mkdir -p "$home/data/voy"
+  printf 'legacy-reader\n' > "$home/data/voy/members"
+  cap=$(capture bareretrofit)
+  out=$(chart_json "$home" voy "$cap")
+
+  [ "$(printf '%s' "$out" | jq -r '[.takeable[].id]|index("legacy-reader")')" != "null" ] \
+    || fail "a bare record must stay retrofittable: if a record can own itself, every entry is refused and the member list assigns nothing at all"
+  [ "$(printf '%s' "$out" | jq -r '.membership_defects|length')" = 0 ] \
+    || fail "a bare record carries no ownership evidence, so reaching for it is not a defect"
+  [ "$(printf '%s' "$out" | jq -r '.membership.from_list')" = 1 ] \
+    || fail "the retrofitted record must be counted as assigned by the list"
+  # And the chart says on its own page which overlap it still cannot see.
+  assert_contains "$(printf '%s' "$out" | jq -r '.limits|join(" ")')" "bare record" \
+    "the chart must disclose that a bare owner is the case it cannot catch from the reaching side"
+  pass "a bare record stays retrofittable and is never read as owning itself"
+}
+
 test_the_chart_prints_its_own_limits_and_does_not_soften_them() {
   local home cap out limits
   home=$(make_home limits)
@@ -1183,6 +2181,26 @@ test_the_ageing_probe_finds_a_decision_its_own_twin_already_closed
 test_a_record_is_never_reported_as_its_own_twin
 test_the_unsupervised_marking_is_a_pair_and_never_a_scalar
 test_membership_is_scoped_and_stated
+test_a_chart_with_no_member_list_draws_exactly_what_it_drew_before
+test_an_existing_record_joins_an_undertaking_without_being_renamed
+test_a_member_id_qualified_with_another_home_is_refused_rather_than_resolved
+test_a_member_that_lives_in_another_home_is_named_and_never_reached_for
+test_a_member_that_resolves_to_nothing_is_named_rather_than_dropped
+test_a_record_two_undertakings_both_claim_is_drawn_on_neither
+test_a_member_no_record_answers_to_is_unresolvable_however_many_lists_name_it
+test_a_retrofitted_decision_is_drawn_and_its_group_siblings_are_not
+test_a_record_folded_under_a_retrofitted_ruling_is_named_rather_than_silently_stripped
+test_a_member_list_line_the_prefix_rule_already_covers_assigns_nothing
+test_a_member_the_fold_hung_under_a_foreign_ruling_is_named_with_a_true_cause
+test_one_member_folded_under_two_rulings_is_still_counted_as_one_record
+test_a_folded_elsewhere_row_survives_on_a_chart_that_also_draws_a_decision
+test_a_member_drawn_under_one_ruling_is_never_also_counted_as_folded_away
+test_a_chart_with_no_member_list_still_discloses_a_folded_elsewhere_row
+test_a_member_list_line_naming_a_group_id_never_drags_that_group_onto_this_chart
+test_a_foreign_claim_on_a_prefix_owned_record_is_refused_there_and_reported_here
+test_an_unreadable_member_list_is_fatal_rather_than_silently_empty
+test_an_owner_that_heads_an_undertaking_is_refused_on_the_chart_that_reached_for_it
+test_a_bare_record_is_still_retrofittable_and_never_reads_as_owning_itself
 test_the_chart_prints_its_own_limits_and_does_not_soften_them
 test_the_chart_is_read_only
 test_both_surfaces_state_the_boundary_between_them
