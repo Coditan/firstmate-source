@@ -121,6 +121,8 @@ unit_stop_ordering() {
   ( . "$ROOT/bin/fm-wake-lib.sh"; fm_pid_identity "$daemon_pid" > "$lock/pid-identity" 2>/dev/null ) || true
   printf 'none\t-\tnative\n' > "$st/state/.afk-daemon-terminal"
   FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" stop >/dev/null 2>&1
+  # The daemon intentionally writes the marker file; no shell-variable change is expected afterwards.
+  # shellcheck disable=SC2031
   if [ "$(cat "$term_marker" 2>/dev/null || echo missing)" = present ]; then
     pass "stop-ordering: daemon SIGTERM'd while .afk still present (flush is not a no-op)"
   else
@@ -218,12 +220,16 @@ unit_lock_initialization_grace() {
     if [ -d "$st/state/.afk-launch.lock" ]; then
       printf '%s' "$$" > "$st/state/.afk-launch.lock/pid"
       ( . "$ROOT/bin/fm-wake-lib.sh"; fm_pid_identity "$$" > "$st/state/.afk-launch.lock/pid-identity" 2>/dev/null ) || true
+      # This subshell intentionally writes the marker file; its shell-variable state is not used afterwards.
+      # shellcheck disable=SC2031
       : > "$initialization_marker"
       sleep 0.15
       rm -rf "$st/state/.afk-launch.lock"
     fi
   ) &
   initializer=$!
+  # The initializer communicates through the marker file; no subshell variable value is relied on afterwards.
+  # shellcheck disable=SC2031
   if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" bash -c '
     . "$1"
     fm_afk_launch_lock_acquire
