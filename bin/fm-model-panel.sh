@@ -85,9 +85,29 @@
 #
 # Roles are pinned here; models are not. `config/model-panel.json` maps each
 # role to a dispatch profile, and docs/configuration.md "Model panel roles" owns
-# that schema, the resolution order, and the degradation contract. Every role
-# resolves through bin/fm-dispatch-select.sh, so panel profiles get the same
-# validation and quota-aware array selection as crew dispatch profiles.
+# that schema, the configuration lookup order, and the degradation contract.
+# Every role resolves through bin/fm-dispatch-select.sh, so panel profiles get
+# the same validation and quota-aware array selection as crew dispatch profiles.
+#
+# Every seat - both analysts and the judge - resolves through THE SAME THREE
+# STAGES IN THE SAME ORDER, which is what stops one seat from accepting a
+# candidate another seat rejects:
+#   1. VALIDATE  the shared selector checks every CONFIGURED candidate
+#                (`--validate-only`), before any panel-local narrowing, so an
+#                invalid candidate refuses the seat by name rather than being
+#                filtered out of sight.
+#   2. FILTER    panel-local identity preference narrows that validated set to
+#                candidates whose model the panel is not already using. It
+#                narrows only: it never reshapes the spec and never hands the
+#                next stage an empty set, so when nothing survives the
+#                configured set stands and the seat's own refusal or warning
+#                speaks.
+#   3. SELECT    the shared selector picks one of what remains. Whenever exactly
+#                one candidate remains - one configured profile object, or one
+#                survivor of the filter - it IS the resolution, and no quota
+#                lookup or randomness runs to arrive at the only option.
+# A stage's prerequisites belong to that stage: nothing on a resolution path may
+# require a host utility that path does not run.
 #
 # Configured model identity for the distinctness test exists only when the
 # resolved profile explicitly pins a model. It is that model name with any
@@ -298,11 +318,14 @@ profile_field() {
   printf '%s\n' "$1" | jq -r --arg field "$2" '.[$field] // ""'
 }
 
-# Keep only candidates with a known configured model identity outside the
-# newline-separated exclusion list, so an array prefers a known unused model
-# over both a duplicate and an unpinned harness default. When none remain,
-# resolve_role falls back to the original spec so the selected concrete profile
-# reaches the caller's role-specific refusal or warning.
+# The FILTER stage. Keep only candidates with a known configured model identity
+# outside the newline-separated exclusion list, so an array prefers a known
+# unused model over both a duplicate and an unpinned harness default. When none
+# remain, resolve_role falls back to the original spec so the selected concrete
+# profile reaches the caller's role-specific refusal or warning.
+# resolve_role calls this only with the array form; the coercion below is what
+# is left of a version that reshaped a single profile object into an array and
+# sent it through selection instead of resolving it to itself.
 filter_spec() {
   local spec=$1 excluded=$2
   printf '%s\n' "$spec" | jq -c --arg excluded "$excluded" "$PANEL_CONFIGURED_IDENT_JQ"'
@@ -313,7 +336,15 @@ filter_spec() {
 }
 
 # Resolve one role to a concrete profile through the shared dispatch selector,
-# preferring a candidate whose model the panel is not already using.
+# in three stages that answer three different questions and never do each
+# other's work. VALIDATE asks the shared selector whether every candidate this
+# seat was CONFIGURED with is legal, so one bad candidate refuses the seat by
+# name instead of being quietly filtered out of the set the operator would have
+# been told about. FILTER narrows that validated set to the identities the panel
+# has not already spent, and narrows only: when nothing survives, the configured
+# set stands and the caller's own refusal or warning speaks. SELECT picks one of
+# what remains. The order is the same for every seat, analysts and judge alike,
+# so no seat can accept what another rejects.
 resolve_role() {
   local role=$1 excluded=${2:-} spec filtered count profile errors status=0
   spec=$(role_spec "$role")
@@ -328,9 +359,15 @@ resolve_role() {
   if [ "$(printf '%s\n' "$spec" | jq -r 'type')" = array ]; then
     filtered=$(filter_spec "$spec" "$excluded")
     count=$(printf '%s\n' "$filtered" | jq 'length')
-    if [ "$count" -gt 0 ]; then
-      spec=$filtered
+    if [ "$count" -eq 0 ]; then
+      filtered=$spec
+      count=$(printf '%s\n' "$spec" | jq 'length')
     fi
+    spec=$filtered
+    # One candidate is not a choice. Hand the selector that profile rather than
+    # a one-element array, so a seat with nothing left to choose between never
+    # enters quota lookup or random selection to arrive at its only option.
+    [ "$count" -ne 1 ] || spec=$(printf '%s\n' "$spec" | jq -c '.[0]')
   fi
   profile=$("$FM_ROOT/bin/fm-dispatch-select.sh" "$spec" 2>"$errors") || status=$?
   if [ "$status" -ne 0 ]; then
