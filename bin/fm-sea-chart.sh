@@ -291,7 +291,13 @@
 #                      twice with nothing on the page explaining why.
 #                      `records` counts every record of this chart the actionable
 #                      surface returned, folded-elsewhere ones included, so it is
-#                      never smaller than what the withheld rows below claim
+#                      never smaller than what the withheld rows below claim.
+#                      `named_not_owned` is counted APART from all of those, and
+#                      the separation is the point: those are records of another
+#                      undertaking that the fold hung beneath a ruling drawn here,
+#                      so they are named rather than drawn. Counting them among
+#                      `records` once made this page report more captain-gated
+#                      records in the backlog than the chart holds
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -519,6 +525,22 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
     | ($id | index("-" + $m + "-")) as $at
     | if $at == null then null else $id[($at + 2 + ($m | length)):] end;
   def open_state: .state == "queued" or .state == "in_flight";
+
+  # The withheld causes that describe a record the actionable surface DID return,
+  # kept as two named lists because they answer two different questions and a
+  # cause added later belongs to whichever is true of it - possibly both, possibly
+  # neither. They live here, beside each other, because the failure they exist
+  # against has now happened twice: a cause was added and one of these two places
+  # was not, so a sentence or a number quietly stopped covering it.
+  # `board_carried_causes` is what the fleet-wide decision board also lists, as a
+  # variant of its group rather than as a decision, and it decides what the
+  # withheld limit may claim.
+  # `own_returned_causes` is the narrower set of records THIS chart owns, and it
+  # decides which counts a record may be reconciled against. `non-member-variant`
+  # is in the first and not the second on purpose: the board carries it, and this
+  # chart does not own it.
+  def board_carried_causes: ["unpaired-variant", "folded-elsewhere", "non-member-variant"];
+  def own_returned_causes: ["unpaired-variant", "folded-elsewhere"];
   # An id is resolved only when EVERY record carrying it is Done. The snapshot
   # resolves per FILE, so a live record whose blocker was archived long ago reads
   # as blocked forever and never becomes takeable, with no footnote; the chart
@@ -915,8 +937,15 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # all the same, and a page that says 0 reached it, four lines above a row whose
   # why says one did, teaches a reader to stop believing every other number on it.
   | (([ $groups[] | .record_count ] | add // 0)
-     + ($folded_elsewhere | length)
-     + ($stripped_variants | length)) as $records_returned
+     + ($folded_elsewhere | length)) as $records_returned
+  # The stripped variants are counted APART, and that separation is the whole
+  # point. `records_returned` is printed under a sentence that says records of
+  # THIS chart, and a stripped variant belongs to the undertaking its own id
+  # names - which is the entire reason it is named rather than drawn. Adding it
+  # here once made the page say "2 captain-gated records in the backlog for this
+  # chart" for a chart holding exactly one, and a count that overstates what a
+  # chart holds is the same fault as one that understates it.
+  | ($stripped_variants | length) as $records_named_not_owned
 
   # RECONCILIATION. Every record this chart owns that waits on the captain,
   # straight from the backlog - then whatever the actionable surface did not
@@ -946,7 +975,7 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
        | {id, key:(.id | dkey), title:(.title // ""),
           held_by:(unresolved($done; $known) | join(", ")),
           cause: "non-member-variant",
-          why: "it reached the actionable surface, and the collapse rule paired it as a folded variant under a ruling THIS chart draws - a ruling a member list retrofitted here out of a group this chart does not own. The ruling is a member of this chart; this record is not, and it belongs to the undertaking its own id names, so drawing it beneath that ruling would count one record towards two destinations and neither could then say whether it is finished. It is NAMED here and drawn nowhere, so that the promise above - that every record the fold hung beneath a ruling stays listed under it - is kept on this page rather than quietly qualified. Naming is not counting: read the record itself on the chart of the undertaking it belongs to."} ]) as $stripped_rows
+          why: "it reached the actionable surface, and the collapse rule paired it as a folded variant under a ruling THIS chart draws out of a group this chart does not own. How that ruling came to be a member of this chart does not matter here and is deliberately not claimed: the prefix rule alone reaches this shape whenever a chart id is a panel seat, because the collapse rule groups by the origin with the seat stripped off. The ruling is a member of this chart; this record is not, and it belongs to the undertaking its own id names, so drawing it beneath that ruling would count one record towards two destinations and neither could then say whether it is finished. It is NAMED here and drawn nowhere, so that the promise above - that every record the fold hung beneath a ruling stays listed under it - is kept on this page rather than quietly qualified. Naming is not counting: read the record itself on the chart of the undertaking it belongs to."} ]) as $stripped_rows
   | (([ $own_decision_records[]
         | select(.id as $id | ($seen | index($id)) == null)
         | withheld_reason($done; $live_done; $known; $unpaired; $folded_elsewhere) as $reason
@@ -1154,15 +1183,22 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
         # returning. Without it a folded variant is counted once above and once
         # below with nothing saying they are the same record, and arithmetic a
         # reader cannot reconcile is the same fault as arithmetic that is wrong.
-        # EVERY cause that describes a record the surface returned belongs here,
-        # and for the same reason: each is counted in `folded` above and in
-        # `withheld` below, and this is the only number that says they are one
-        # record. Adding a returned-record cause without adding it here is what
-        # splits one record into two on the page.
+        # Every cause that describes a record OF THIS CHART that the surface
+        # returned belongs here, and for the same reason: each is counted in
+        # `folded` above and in `withheld` below, and this is the only number
+        # that says they are one record.
+        # `non-member-variant` is deliberately NOT one of them, and the reason is
+        # the same line the counts above are drawn on: that record is not this
+        # chart to fold. It never entered `records` or `folded`, so claiming it
+        # here would reconcile it against a number that never held it - and the
+        # page would then read "0 folded away" two lines above "1 of them folded
+        # away". It has its own count below, under a sentence that is true of it.
         withheld_folded: ([ $withheld[]
-                            | select(.cause == "unpaired-variant"
-                                     or .cause == "folded-elsewhere"
-                                     or .cause == "non-member-variant") ] | length),
+                            | select(.cause as $c | (own_returned_causes | index($c)) != null) ] | length),
+        # Records the fold hung beneath a ruling this chart draws, which belong to
+        # another undertaking and are named rather than drawn. Counted so they are
+        # never invisible, and counted apart so no sentence above has to stretch.
+        named_not_owned: $records_named_not_owned,
         possibly_answered: ($possibly_answered | length),
         unplaced: ($unplaced | length),
         unplaced_kind_defects: ([ $unplaced[] | select(.kind_defect) ] | length),
@@ -1197,8 +1233,11 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
         # than quietly swapped, because the list reads as an obviously sufficient
         # proxy on a second reading and is one the next reader would re-adopt.)
         ("Withheld decisions are found within the scope of THIS chart, by reading its own records back from the backlog. For every cause but unpaired-variant the fleet-wide decision board cannot count them at all, so a number here does not mean the board agrees; an unpaired variant is the one the board does list, as a variant of its group rather than as a decision."
-         + (if ([ $withheld[] | select(.cause == "folded-elsewhere") ] | length) == 0 then ""
-            else " This chart carries a folded-elsewhere row, and that is a second cause the board does carry, as a variant under the ruling of the undertaking whose id that record bears." end)),
+         + (([ $withheld[]
+               | select(.cause as $c | (board_carried_causes | index($c)) != null)
+               | select(.cause != "unpaired-variant") | .cause ] | unique) as $also
+            | if ($also | length) == 0 then ""
+              else " This chart also carries \($also | join(" and ")), and the board does count those too, as a variant under the ruling of the undertaking whose id each record bears." end)),
         "This chart reads ONE home, the one it was pointed at. A decision recorded in a secondmate home is dropped before anything here is counted, because a secondmate owns its own undertakings and its own backlog. Nothing on this chart says anything about them, in either direction.",
         "Fog is whatever somebody wrote down as fog. Nothing proves this course has no other dark patches.",
         "An unsupervised marking means the work may be EDITED unsupervised. It never means it may LAND unsupervised.",
@@ -1231,6 +1270,13 @@ if [ "$MODE" = "summary" ]; then
       (if .counts.withheld_folded > 0
        then " (\(.counts.withheld_folded) of them folded away rather than never returned)"
        else "" end),
+    # On its own line, and outside the "of those" arithmetic above, because these
+    # records are not this chart to count. Folding them into that sentence made
+    # the page claim more captain-gated records in the backlog than the chart
+    # holds; leaving them off it entirely would hide them. Named, counted, apart.
+    (if .counts.named_not_owned > 0
+     then "    named but not owned by this chart: \(.counts.named_not_owned) - the fold hung \(if .counts.named_not_owned == 1 then "it" else "them" end) beneath a ruling drawn here, and \(if .counts.named_not_owned == 1 then "it belongs" else "they belong" end) to the undertaking \(if .counts.named_not_owned == 1 then "its" else "their" end) own id names"
+     else empty end),
     "  possibly already answered: \(.counts.possibly_answered)",
     "",
     "members: \(.membership.members)   rule: \(.membership.rule)",

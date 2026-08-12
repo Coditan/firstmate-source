@@ -1166,7 +1166,7 @@ test_a_chart_with_no_member_list_draws_exactly_what_it_drew_before() {
   out=$(chart_json "$home" voy "$cap")
 
   if ! printf '%s' "$out" \
-    | jq -S 'del(.membership.list, .membership.from_list, .membership_defects, .counts.membership_defects)' \
+    | jq -S 'del(.membership.list, .membership.from_list, .membership_defects, .counts.membership_defects, .counts.named_not_owned)' \
     | diff -u "$golden" - > "$TMP_ROOT/nolist.diff" 2>&1; then
     cat "$TMP_ROOT/nolist.diff" >&2
     fail "a chart with no member list must draw exactly what it drew before the member list existed - the diff above is what changed"
@@ -1474,8 +1474,16 @@ EOF
   # limit here says anything about it.
   [ "$(printf '%s' "$out" | jq -r '[.withheld[].id]|join(",")')" = "legacy-a-decision-shape" ] \
     || fail "the record folded beneath the drawn ruling must be named in withheld, and nothing else may be"
-  [ "$(printf '%s' "$out" | jq -r '.counts.records')" = 2 ] \
-    || fail "the surface returned the ruling and the record folded under it, and both are accounted for on this page"
+  # Both records are accounted for, and they are counted APART. `records` sits
+  # under a sentence that says records of THIS chart, and the folded one belongs
+  # to the undertaking its own id names - which is the whole reason it is named
+  # rather than drawn. Counting it there once made the page report more
+  # captain-gated records in the backlog than the chart holds, so a count that
+  # overstates is treated exactly like one that understates.
+  [ "$(printf '%s' "$out" | jq -r '.counts.records')" = 1 ] \
+    || fail "counts.records must count only records of THIS chart, or the page claims more captain-gated records in the backlog than the chart holds"
+  [ "$(printf '%s' "$out" | jq -r '.counts.named_not_owned')" = 1 ] \
+    || fail "the record the fold hung beneath the drawn ruling must still be counted, on its own line, or naming it in withheld leaves it out of every number"
   pass "a retrofitted decision is drawn from a group this chart does not own, and its siblings are not"
 }
 
@@ -1538,21 +1546,31 @@ EOF
   [ "$(printf '%s' "$out" | jq -r '[.decisions[]|select(.id=="legacy-judge-decision-shape")|.variants[]]|length')" = 0 ] \
     || fail "the ruling must still be drawn without the non-member variant beneath it"
 
-  # AND THE COUNTS STOP READING ZERO.
-  [ "$(printf '%s' "$out" | jq -r '.counts.folded')" != 0 ] \
-    || fail "a record the fold dropped from this page must be counted as folded away, or the page says nothing was folded beside a row saying one was"
-  [ "$(printf '%s' "$out" | jq -r '.counts.folded')" = 1 ] \
-    || fail "exactly one record was folded away here"
-  [ "$(printf '%s' "$out" | jq -r '.counts.withheld_folded')" = 1 ] \
-    || fail "without this the same record is counted as folded and as withheld with nothing saying they are one record"
+  # AND IT IS COUNTED - APART FROM THIS CHART OWN RECORDS, NOT AMONG THEM.
+  # An earlier revision counted it in `records` and `folded`, which read as
+  # "2 captain-gated records in the backlog for this chart" on a chart holding
+  # exactly one. A count that overstates what a chart holds is the same fault as
+  # one that understates it, so the record gets its own number rather than a
+  # place inside a sentence that is not about it.
+  [ "$(printf '%s' "$out" | jq -r '.counts.named_not_owned')" = 1 ] \
+    || fail "the stripped record must be counted, or naming it in withheld still leaves it out of every number on the page"
+  [ "$(printf '%s' "$out" | jq -r '.counts.records')" = 1 ] \
+    || fail "counts.records is printed as records of THIS chart, and this record belongs to the undertaking its own id names"
+  [ "$(printf '%s' "$out" | jq -r '.counts.folded')" = 0 ] \
+    || fail "this chart folded none of its OWN records away, and folded is read inside the sentence about them"
+  [ "$(printf '%s' "$out" | jq -r '.counts.withheld_folded')" = 0 ] \
+    || fail "withheld_folded reconciles against folded, so a record that never entered folded must not be claimed here - that pair once printed 0 folded away two lines above 1 of them folded away"
 
-  # Read on the rendered page, where shown plus folded must equal what reached.
+  # Read on the rendered page, where every number must be true of the sentence
+  # printed around it - the standard this page has been held to all along.
   summary=$("$CHART" voy --summary --from "$cap" \
     --backlog "$home/data/backlog.md" --archive "$home/data/done-archive.md" --data "$home/data")
-  assert_contains "$summary" "of those, 2 reached the actionable surface -> 1 shown (1 folded away)" \
-    "the arithmetic must close on the page: one ruling shown, one record folded out of it"
-  assert_contains "$summary" "folded away rather than never returned" \
-    "the page must say the folded record and the withheld record are one record"
+  assert_contains "$summary" "1 captain-gated record in the backlog for this chart" \
+    "the chart holds exactly one captain-gated member, and the page must say so"
+  assert_contains "$summary" "of those, 1 reached the actionable surface -> 1 shown (0 folded away)" \
+    "the arithmetic must close over this chart own records, none of which was folded away"
+  assert_contains "$summary" "named but not owned by this chart: 1" \
+    "the stripped record must appear on the rendered page too, on its own line, or it is counted only where nobody reads"
   pass "a record folded under a retrofitted ruling is named rather than silently stripped, and the limit above it stays true"
 }
 
