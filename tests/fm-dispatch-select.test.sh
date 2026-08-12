@@ -27,6 +27,15 @@ set -u
 BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
 fm_test_tmproot TMP_ROOT fm-dispatch-select-tests
 
+# The script under test prepends ITS HOME's maintained AXI bin directory to PATH,
+# so a suite that inherits a real FM_HOME - which every firstmate-launched shell
+# exports - resolves the operator's installed quota-axi ahead of the fixture
+# stubs below, and the suite silently stops testing its own fixtures. Pin the
+# home to this suite's temp root, which has no maintained bin directory, so the
+# only quota-axi any test can reach is the one that test wrote.
+FM_HOME="$TMP_ROOT"
+export FM_HOME
+
 mkdir -p "$TMP_ROOT"
 RANDOM_ZERO="$TMP_ROOT/random-zero"
 RANDOM_ONE="$TMP_ROOT/random-one"
