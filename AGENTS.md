@@ -132,6 +132,7 @@ state/               volatile runtime signals; gitignored
   x-outbox/          generated X-mode dry-run reply and dismiss previews; inspect it when FMX_DRY_RUN is set (section 14)
   x-poll.error x-poll.claim-error  generated X-mode relay and offer-claim diagnostic dedupe markers
   .wake-queue        durable queued wakes: epoch<TAB>seq<TAB>kind<TAB>key<TAB>payload
+  journal/           append-only event journal: every notification event written once, in arrival order, carrying the state it referred to as that state read at arrival, which the delivery queue above deliberately does not preserve; read-only to consumers through bin/fm-journal.sh (docs/event-journal.md)
   .wake-drain-overflow.<epoch>.<pid>  drained records a bounded drain echo withheld rather than discarded; the drain prints the path whenever it writes one (docs/supervision-cost.md)
   .afk               durable away-mode flag; present = sub-supervisor may inject escalations (set by /afk, cleared on user return)
   .stow-receipt .context-reset.log  proof that this session's durable knowledge was filed, bound to the transcript position it was filed at, and the durable record of every context-reset refusal or completed reset (docs/context-reset.md)

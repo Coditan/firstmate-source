@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+# tests/fm-journal.test.sh - the append-only event journal (bin/fm-journal-lib.sh,
+# bin/fm-journal.sh).
+#
+# The first case is the one that matters, and it is deliberately driven by the
+# REAL watcher and the REAL drain rather than by hand-written queue rows: it
+# records a live sequence, then asserts the two properties the journal exists
+# for by comparing the journal against what that same sequence actually
+# delivered. Both assertions would still pass against a fixture written to
+# match the implementation, which is why neither side of the comparison is
+# written by this file.
+#
+# Queue losslessness and drain behavior itself belong to fm-wake-queue.test.sh.
+set -u
+
+# shellcheck source=tests/wake-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/wake-helpers.sh"
+
+WATCH="$ROOT/bin/fm-watch.sh"
+DRAIN="$ROOT/bin/fm-wake-drain.sh"
+JOURNAL="$ROOT/bin/fm-journal.sh"
+
+fm_test_tmproot TMP_ROOT fm-journal-tests
+
+# Run the real watcher once in session mode, which exits after it enqueues an
+# actionable wake. Same invocation the wake-queue suite uses for a live signal.
+run_watcher_once() {
+  local dir=$1 state=$2 out=$3
+  PATH="$dir/fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  wait_for_exit "$!" 40
+}
+
+journal_read() {
+  FM_STATE_OVERRIDE="$1" "$JOURNAL" read
+}
+
+journal_field() {  # <state> <seq> <1-based field>
+  FM_STATE_OVERRIDE="$1" "$JOURNAL" read | awk -F '\t' -v seq="$2" -v f="$3" '$1 == seq { print $f }'
+}
+
+append_journal_wake() {  # <state> <key> <payload>
+  append_wake "$1" signal "$2" "$3"
+}
+
+test_live_sequence_keeps_both_events_and_the_state_each_arrived_with() {
+  local dir state out drain_out status_file lines first_snapshot second_snapshot
+  local delivered_signals
+  dir=$(make_case live-sequence)
+  state="$dir/state"
+  out="$dir/watch.out"
+  drain_out="$dir/drain.out"
+  status_file="$state/task.status"
+
+  # Two events, one key. Each carries a captain-relevant verb so the watcher
+  # surfaces rather than absorbs it, and the status file MOVES between them -
+  # which is the condition under which a payload resolved later stops being the
+  # payload that arrived.
+  printf 'blocked: first line\n' > "$status_file"
+  run_watcher_once "$dir" "$state" "$out" || fail "watcher did not exit for the first event"
+  grep -F "signal: $status_file" "$out" >/dev/null || fail "watcher did not surface the first event"
+
+  printf 'done: second line\n' >> "$status_file"
+  : > "$out"
+  run_watcher_once "$dir" "$state" "$out" || fail "watcher did not exit for the second event"
+  grep -F "signal: $status_file" "$out" >/dev/null || fail "watcher did not surface the second event"
+
+  # What the fleet actually delivered for that sequence.
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" || fail "drain of the live sequence failed"
+  delivered_signals=$(awk -F '\t' '$3 == "signal" && $4 == "task.status" { count++ } END { print count + 0 }' "$drain_out")
+  [ "$delivered_signals" -eq 1 ] \
+    || fail "expected the delivery view to collapse the pair to 1 record, it carried $delivered_signals"
+
+  # Property one: both events are retained, and readable in arrival order.
+  lines=$(journal_read "$state" | awk -F '\t' '$3 == "signal" && $4 == "task.status"' | wc -l | tr -d ' ')
+  [ "$lines" -eq 2 ] \
+    || fail "journal kept $lines of the 2 events sharing one key that the delivery view collapsed to 1"
+  journal_read "$state" | awk -F '\t' '{ if ($1 + 0 <= prev) { exit 1 } prev = $1 + 0 }' \
+    || fail "journal records are not in ascending arrival order"
+
+  # Property two: each event carries the state as it read AT ARRIVAL, not as it
+  # read once the drain got to it. The drain's own annotation is the control:
+  # it reports the LATER line for the SAME key, from the same file, because it
+  # reads that file at drain time.
+  first_snapshot=$(journal_field "$state" 1 7)
+  second_snapshot=$(journal_field "$state" 2 7)
+  [ "$first_snapshot" = "blocked: first line" ] \
+    || fail "first event's captured state was '$first_snapshot', not the line the file held when it arrived"
+  [ "$second_snapshot" = "done: second line" ] \
+    || fail "second event's captured state was '$second_snapshot', not the line the file held when it arrived"
+  grep -F 'wake annotation:' "$drain_out" | grep -F 'done: second line' >/dev/null \
+    || fail "control failed: the drain annotation did not resolve the later line, so the contrast is unproven"
+  grep -F 'wake annotation:' "$drain_out" | grep -F 'blocked: first line' >/dev/null \
+    && fail "control failed: the drain annotation carried the arrival line, so nothing distinguishes the journal"
+
+  pass "a live watcher sequence keeps both same-key events in arrival order, each with the state it arrived with"
+}
+
+test_journal_records_the_queue_sequence_it_describes() {
+  local dir state queue_seq origin
+  dir=$(make_case queue-coordinates)
+  state="$dir/state"
+  printf 'blocked: only\n' > "$state/task.status"
+  append_journal_wake "$state" task.status "signal: $state/task.status" || fail "append failed"
+  queue_seq=$(awk -F '\t' '{ print $2 }' "$state/.wake-queue")
+  origin=$(journal_field "$state" 1 5)
+  [ -n "$queue_seq" ] || fail "no queue record was written"
+  [ "$origin" = "$queue_seq" ] \
+    || fail "journal recorded queue coordinate '$origin' for queue record '$queue_seq'"
+  pass "a journal record names the queue record it describes, so the two can be matched without guessing"
+}
+
+test_reader_tails_from_a_sequence() {
+  local dir state seen
+  dir=$(make_case tail)
+  state="$dir/state"
+  append_journal_wake "$state" a.status "signal: a" || fail "first append failed"
+  append_journal_wake "$state" b.status "signal: b" || fail "second append failed"
+  append_journal_wake "$state" c.status "signal: c" || fail "third append failed"
+  seen=$(FM_STATE_OVERRIDE="$state" "$JOURNAL" read --since 1 | awk -F '\t' '{ printf "%s ", $4 }')
+  [ "$seen" = "b.status c.status " ] || fail "--since 1 returned '$seen' instead of the records above it"
+  seen=$(FM_STATE_OVERRIDE="$state" "$JOURNAL" read --since 1 --limit 1 | awk -F '\t' '{ printf "%s ", $4 }')
+  [ "$seen" = "b.status " ] || fail "--limit took '$seen' instead of the oldest unseen record"
+  pass "a consumer tails the journal by sequence and advances oldest-first"
+}
+
+test_status_reports_a_gap_rather_than_a_whole_stream() {
+  local dir state gaps
+  dir=$(make_case gap)
+  state="$dir/state"
+  append_journal_wake "$state" a.status "signal: a" || fail "first append failed"
+  append_journal_wake "$state" b.status "signal: b" || fail "second append failed"
+  append_journal_wake "$state" c.status "signal: c" || fail "third append failed"
+  # Stand in for a record that took a sequence number and never reached disk.
+  grep -v "$(printf '^2\t')" "$state/journal/events.tsv" > "$state/journal/events.trim" \
+    || fail "could not build the gapped stream"
+  mv "$state/journal/events.trim" "$state/journal/events.tsv"
+  gaps=$(FM_STATE_OVERRIDE="$state" "$JOURNAL" status | awk -F ': ' '$1 == "gaps" { print $2 }')
+  [ "$gaps" = "1" ] || fail "status reported '$gaps' gaps for a stream missing one record"
+  pass "status reports a missing record as a gap instead of presenting the stream as whole"
+}
+
+test_a_queued_wake_survives_a_journal_that_cannot_be_written() {
+  local dir state err rc queued
+  dir=$(make_case journal-unwritable)
+  state="$dir/state"
+  err="$dir/append.err"
+  # A regular file where the journal directory belongs: mkdir -p refuses it, on
+  # every platform, without needing the suite to run as anyone in particular.
+  mkdir -p "$state"
+  : > "$state/journal"
+  rc=0
+  append_journal_wake "$state" task.status "signal: $state/task.status" 2> "$err" || rc=$?
+  [ "$rc" -eq 0 ] || fail "an unwritable journal failed the wake append (rc=$rc); delivery must outrank the record"
+  queued=$(awk -F '\t' '$3 == "signal" { count++ } END { print count + 0 }' "$state/.wake-queue")
+  [ "$queued" -eq 1 ] || fail "the wake was not queued when the journal could not be written"
+  grep -F 'could not be journalled' "$err" >/dev/null \
+    || fail "the unrecorded wake was not reported: $(cat "$err")"
+  pass "a wake that cannot be journalled is still delivered, and the failure to record it is reported"
+}
+
+test_an_oversized_field_is_marked_rather_than_silently_shortened() {
+  local dir state payload recorded
+  dir=$(make_case oversized)
+  state="$dir/state"
+  payload="signal: $(head -c 400 /dev/zero | tr '\0' 'x')"
+  FM_JOURNAL_FIELD_BYTES=64 FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_wake_append signal task.status "$2"
+  ' _ "$ROOT/bin/fm-wake-lib.sh" "$payload" || fail "append with an oversized payload failed"
+  recorded=$(journal_field "$state" 1 6)
+  [ "${#recorded}" -eq 64 ] || fail "capped payload is ${#recorded} bytes, not the stated 64"
+  case "$recorded" in
+    *' [truncated]') ;;
+    *) fail "a capped payload was shortened without saying so" ;;
+  esac
+  pass "an oversized field is capped at its stated bound and marked as capped"
+}
+
+test_retention_bound_rotates_and_moves_the_horizon() {
+  local dir state horizon records order
+  dir=$(make_case retention)
+  state="$dir/state"
+  FM_JOURNAL_MAX_BYTES=1 FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_wake_append signal a.status "signal: a"
+    fm_wake_append signal b.status "signal: b"
+    fm_wake_append signal c.status "signal: c"
+  ' _ "$ROOT/bin/fm-wake-lib.sh" || fail "appends under the retention bound failed"
+  horizon=$(FM_STATE_OVERRIDE="$state" "$JOURNAL" status | awk -F ': ' '$1 == "horizon" { print $2 }')
+  records=$(FM_STATE_OVERRIDE="$state" "$JOURNAL" status | awk -F ': ' '$1 == "records" { print $2 }')
+  [ "$horizon" = "2" ] || fail "horizon is '$horizon'; the bound did not drop the oldest record"
+  [ "$records" = "2" ] || fail "expected 2 retained records under the bound, got '$records'"
+  order=$(journal_read "$state" | awk -F '\t' '{ printf "%s ", $1 }')
+  [ "$order" = "2 3 " ] || fail "rotated stream read back as '$order' instead of oldest-first across both files"
+  pass "the size bound drops the oldest records, reports the new horizon, and still reads back in arrival order"
+}
+
+test_live_sequence_keeps_both_events_and_the_state_each_arrived_with
+test_journal_records_the_queue_sequence_it_describes
+test_reader_tails_from_a_sequence
+test_status_reports_a_gap_rather_than_a_whole_stream
+test_a_queued_wake_survives_a_journal_that_cannot_be_written
+test_an_oversized_field_is_marked_rather_than_silently_shortened
+test_retention_bound_rotates_and_moves_the_horizon
