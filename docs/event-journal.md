@@ -1,6 +1,6 @@
 # The append-only event journal
 
-The durable record of every notification event, captured at arrival and never collapsed.
+A durable, explicitly accountable record of notification events, captured at arrival and never collapsed.
 
 `bin/fm-journal-lib.sh`'s header is the authoritative owner of the record format, the retention bound, and the privacy contract.
 `bin/fm-journal.sh --help` owns the read commands.
@@ -25,7 +25,7 @@ The captain chose to build that record rather than weaken the guarantee.
 
 ## What the journal is
 
-One line per event, seven tab-separated fields, written once and never rewritten, under `state/journal/`.
+Each successfully retained event occupies one line under `state/journal/` and is never rewritten.
 
 It is bash and files.
 Writing it and reading it cost no model call, and neither requires a supervising session to be awake - which is the whole point of it, because the measured cost of supervision is dominated by the size of the conversation a notification lands in, not by the number of notifications.
@@ -35,7 +35,7 @@ A consumer that can read this file can therefore make and record a judgement wit
 The journal's cost effect on the provider bill is small, and it is not offered as a justification for anything.
 This is a latency-and-attention change.
 
-Every path that queues a wake records one, because `bin/fm-wake-lib.sh` sources the journal itself rather than leaving each of its two dozen producers to remember.
+Every path that queues a wake attempts the journal write, because `bin/fm-wake-lib.sh` sources the journal itself rather than leaving each of its two dozen producers to remember.
 
 ## The two properties, and how they are proven
 
@@ -73,7 +73,9 @@ If a delivered event fails before a sequence can be published, `status` reports 
 Both are reported rather than smoothed over, because a consumer that mistakes a truncated stream for a complete one will judge on it.
 
 A wake that cannot be journalled is still delivered.
-Delivery outranks the record of it, the failure is reported on stderr, and the gap it leaves in the sequence is what tells a later reader the stream is incomplete.
+Delivery outranks the record of it, and the failure is reported on stderr.
+Once a sequence has been published, a failed write leaves a gap that tells a later reader the stream is incomplete; failures before publication are counted as `unrecorded` when the journal directory is available.
+If the journal directory itself cannot be created, only the immediate stderr report survives, so a later reader cannot discover that failure from `status` alone.
 A process killed after the queue append but before journal append begins can still leave no journal trace or burned sequence; closing that window requires a two-phase queue and journal write and is deliberately outside this unit.
 
 ## Deferred, on the captain's 2026-08-12 direction

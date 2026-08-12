@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The fleet's append-only event journal: the durable record of every
-# notification event, captured at arrival and never collapsed.
+# The fleet's append-only event journal: a durable, explicitly accountable
+# record of notification events, captured at arrival and never collapsed.
 #
 # WHY THIS EXISTS
 # The durable wake queue is a DELIVERY structure, and it is deliberately lossy
@@ -13,9 +13,11 @@
 #      event arrived - the annotation says so itself, and saying so does not
 #      make it a record.
 # Neither is a defect in the queue. They are the reason a separate record has to
-# exist. This journal is that record: every event is written once, in arrival
-# order, carrying the mutable state it referred to as that state read AT THE
-# MOMENT THE EVENT ARRIVED, and no record is ever rewritten or collapsed.
+# exist. This journal is that record: every successfully retained event stays
+# distinct and in arrival order, carrying the mutable state it referred to as
+# that state read AT THE MOMENT THE EVENT ARRIVED. Records are never rewritten
+# or collapsed, and the read side reports known gaps rather than claiming the
+# retained stream is complete.
 #
 # It is bash and files. Writing it and reading it cost no model call, and
 # nothing about either requires a supervising session to be awake.
@@ -50,14 +52,13 @@
 # deferred work, recorded as such rather than dressed up as one here.
 #
 # PRIVACY
-# The journal captures only text that was already on its way into a supervising
-# session's context: payloads firstmate's own watcher composed, and the last
-# line of a task's own status file - the very line bin/fm-wake-drain.sh already
-# reads and prints as an annotation. It reads no project file, no environment,
-# and no credential store, and it adds no new exposure surface; it only holds
-# the same text for longer. A crewmate that writes a secret into its status line
-# has already published it to the supervisor, and this journal will keep that
-# copy until the horizon passes it.
+# The journal retains only text already destined for a supervising session's
+# context: watcher-composed payloads and the last line of a task status file,
+# which bin/fm-wake-drain.sh also prints as an annotation. It reads no project
+# file or credential store. Its additional privacy consequence is retention:
+# the journal keeps that text after delivery until the horizon passes it. A
+# crewmate that puts a secret in a status line has already exposed it to the
+# supervisor, and the journal prolongs that exposure.
 
 FM_JOURNAL_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -z "${FM_WAKE_LIB_DIR:-}" ]; then
