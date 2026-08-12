@@ -126,6 +126,9 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-wake-lib.sh`         | Shared durable wake queue, portable locks, and watcher/away-daemon identity/health helpers |
 | `fm-journal.sh`          | Read the append-only event journal in arrival order, and report the horizon and gaps the stream cannot account for (docs/event-journal.md) |
 | `fm-journal-lib.sh`      | Append-only notification journal internals; its header owns the record contract (`docs/event-journal.md` gives rationale) |
+| `fm-bosun.sh`            | Run, watch, and read back the observer-only bosun: it judges journal events and records every judgement, and it changes nothing about what surfaces (docs/bosun-observer.md) |
+| `fm-bosun-lib.sh`        | The bosun's verdict record contract, its escalation bias on every failure to judge, and the health record that separates a quiet bosun from a stalled one |
+| `fm-bosun-judge-codex.sh` | The bosun's default judge: one event in on stdin, one schema-constrained JSON verdict out. A provisional model behind a swappable seam, not the survey's answer |
 | `fm-classify-lib.sh`     | Shared captain-relevant and declared-external-wait wake classification vocabulary    |
 | `fm-send.sh`             | Send one verified literal line or supported key through the target's recorded backend |
 | `fm-tmux-lib.sh`         | Shared tmux pane primitives for target resolution, own-window startup repair, busy detection, composer capture, and verified submit |
