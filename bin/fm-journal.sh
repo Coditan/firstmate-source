@@ -90,6 +90,7 @@ case "$cmd" in
   status)
     fm_journal_status_snapshot | LC_ALL=C awk -F '\t' -v maxbytes="$FM_JOURNAL_MAX_BYTES" '
       NR == 1 && $1 == "allocated" { allocated = $2; next }
+      $1 == "unrecorded" { unrecorded = $2; next }
       NF >= 7 {
         seq = $1 + 0
         if (!count || seq < horizon) { horizon = seq }
@@ -120,6 +121,11 @@ case "$cmd" in
           } else {
             print "gaps: unknown"
           }
+        }
+        if (unrecorded ~ /^[0-9]+$/ && unrecorded > 0) {
+          printf "unrecorded: %d\n", unrecorded
+        } else if (unrecorded == "unknown") {
+          print "unrecorded: unknown"
         }
         printf "retention: at most two files of %d bytes; records below the horizon are gone\n", maxbytes
       }

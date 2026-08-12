@@ -11,6 +11,7 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-${STATE:-$FM_HOME/state}}"
 FM_WAKE_QUEUE="${FM_WAKE_QUEUE:-$STATE/.wake-queue}"
 FM_WAKE_QUEUE_LOCK="${FM_WAKE_QUEUE_LOCK:-$STATE/.wake-queue.lock}"
+FM_WAKE_KINDS="signal stale check heartbeat"
 # Default seconds bin/fm-wake-wait.sh gives a live, identity-matched watcher to
 # get its beacon back inside the grace before reporting it. It lives here rather
 # than in that script because bin/fm-watch-checkpoint.sh has to clamp the child's
@@ -591,10 +592,10 @@ fm_wake_clean_field() {
 fm_wake_append() {
   local kind=$1 key=$2 payload=$3 clean_key clean_payload epoch seq seq_file status
   local journal_snapshot
-  case "$kind" in
-    signal|stale|check|heartbeat) ;;
-    *) printf 'fm_wake_append: invalid wake kind: %s\n' "$kind" >&2; return 2 ;;
-  esac
+  fm_journal_kind_valid "$kind" || {
+    printf 'fm_wake_append: invalid wake kind: %s\n' "$kind" >&2
+    return 2
+  }
 
   clean_key=$(printf '%s' "$key" | fm_wake_clean_field)
   clean_payload=$(printf '%s' "$payload" | fm_wake_clean_field)

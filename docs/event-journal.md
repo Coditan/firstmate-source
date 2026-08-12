@@ -69,10 +69,12 @@ Tailing is `read --since <last seq you handled>`, keeping that number yourself.
 A **horizon** above 1 means older records fell below the retention bound.
 A **gap** means one or more records took a sequence number and never reached disk - a failed write, or a crash between allocation and append - including when the missing record is newer than every retained record or is the only allocation.
 If the allocation sequence is unreadable or invalid, `status` reports gaps as unknown because it cannot honestly account for trailing allocations.
+If a delivered event fails before a sequence can be published, `status` reports it in `unrecorded` rather than presenting a complete stream.
 Both are reported rather than smoothed over, because a consumer that mistakes a truncated stream for a complete one will judge on it.
 
 A wake that cannot be journalled is still delivered.
 Delivery outranks the record of it, the failure is reported on stderr, and the gap it leaves in the sequence is what tells a later reader the stream is incomplete.
+A process killed after the queue append but before journal append begins can still leave no journal trace or burned sequence; closing that window requires a two-phase queue and journal write and is deliberately outside this unit.
 
 ## Deferred, on the captain's 2026-08-12 direction
 

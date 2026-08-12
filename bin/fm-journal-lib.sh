@@ -70,13 +70,14 @@ FM_JOURNAL_ACTIVE="$FM_JOURNAL_DIR/events.tsv"
 FM_JOURNAL_PREVIOUS="$FM_JOURNAL_DIR/events.previous.tsv"
 FM_JOURNAL_LOCK="$FM_JOURNAL_DIR/.lock"
 FM_JOURNAL_SEQ_FILE="$FM_JOURNAL_DIR/.seq"
+FM_JOURNAL_UNRECORDED="$FM_JOURNAL_DIR/.unrecorded"
 # Event kinds this journal accepts. Today it is exactly the wake queue's own
 # vocabulary, spelled the same way, so a journal record needs no translation to
 # be read as the wake it describes. Later units add their own kinds here rather
 # than deriving one event from another: an arm cycle and a queued notification
 # were measured as 391 against 354 in one window, so neither is recoverable
 # from the other.
-FM_JOURNAL_KINDS="signal stale check heartbeat"
+FM_JOURNAL_KINDS="$FM_WAKE_KINDS"
 # One record's variable-length fields are capped so a single pathological
 # payload cannot consume the whole size bound and hide every other record behind
 # itself. Well clear of any payload this fleet's watcher composes.
@@ -151,18 +152,36 @@ fm_journal_publish_sequence() {
   fi
 }
 
+fm_journal_note_unrecorded() {  # <kind> <key> <reason>
+  local kind=$1 key=$2 reason=$3
+  [ -d "$FM_JOURNAL_DIR" ] || return 0
+  kind=$(printf '%s' "$kind" | fm_wake_clean_field)
+  key=$(printf '%s' "$key" | fm_wake_clean_field)
+  reason=$(printf '%s' "$reason" | fm_wake_clean_field)
+  printf '%s\t%s\t%s\n' "$kind" "$key" "$reason" >> "$FM_JOURNAL_UNRECORDED" 2>/dev/null || true
+}
+
+fm_journal_separate_torn_record() {
+  local last
+  [ -s "$FM_JOURNAL_ACTIVE" ] || return 0
+  last=$(tail -c 1 "$FM_JOURNAL_ACTIVE" 2>/dev/null) || return 1
+  [ -z "$last" ] || printf '\n' >> "$FM_JOURNAL_ACTIVE" 2>/dev/null
+}
+
 # Append one record. Returns 0 on success, 2 on an invalid kind, 1 on any
 # failure to record.
 #
 # A failure here must never fail the caller's own work: delivery outranks the
-# record of it. Callers report the failure and carry on, and the hole the failed
-# write leaves in the sequence is what fm-journal.sh reports, so a reader is
-# told the stream is incomplete rather than left to assume it is whole.
+# record of it. A published sequence means this event was offered to the
+# journal; its absence is the gap fm-journal.sh reports. A failure before
+# publication is counted separately so a reader is never told the stream is
+# complete when a delivered event was not recorded.
 fm_journal_append() {  # <kind> <key> <payload> [<origin>] [<epoch>] [<snapshot>]
   local kind=$1 key=$2 payload=$3 origin=${4:-} epoch=${5:-} snapshot=${6:-}
-  local seq status=0
+  local seq status=0 burned=false
 
   fm_journal_kind_valid "$kind" || {
+    fm_journal_note_unrecorded "$kind" "$key" invalid-kind
     printf 'fm_journal_append: invalid event kind: %s\n' "$kind" >&2
     return 2
   }
@@ -173,18 +192,21 @@ fm_journal_append() {  # <kind> <key> <payload> [<origin>] [<epoch>] [<snapshot>
   snapshot=$(fm_journal_cap_field "$(printf '%s' "$snapshot" | fm_wake_clean_field)")
 
   mkdir -p "$FM_JOURNAL_DIR" 2>/dev/null || return 1
-  fm_lock_acquire_wait "$FM_JOURNAL_LOCK" || return 1
-
-  fm_journal_rotate_if_full || status=1
-  if [ "$status" -eq 0 ]; then
-    seq=$(cat "$FM_JOURNAL_SEQ_FILE" 2>/dev/null || true)
-    case "$seq" in ''|*[!0-9]*) seq=$(fm_journal_highest_retained_sequence) ;; esac
-    seq=$((seq + 1))
-    # Allocate before writing on purpose. A crash between the two leaves a gap
-    # in the sequence, which fm-journal.sh reports; reusing the number instead
-    # would make a lost record indistinguishable from one that never existed.
-    fm_journal_publish_sequence "$seq" || status=1
+  if ! fm_lock_acquire_wait "$FM_JOURNAL_LOCK"; then
+    fm_journal_note_unrecorded "$kind" "$key" lock-failed
+    return 1
   fi
+
+  seq=$(cat "$FM_JOURNAL_SEQ_FILE" 2>/dev/null || true)
+  case "$seq" in ''|*[!0-9]*) seq=$(fm_journal_highest_retained_sequence) ;; esac
+  seq=$((seq + 1))
+  if fm_journal_publish_sequence "$seq"; then
+    burned=true
+  else
+    status=1
+  fi
+  [ "$status" -ne 0 ] || fm_journal_rotate_if_full || status=1
+  [ "$status" -ne 0 ] || fm_journal_separate_torn_record || status=1
   if [ "$status" -eq 0 ]; then
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$seq" "$epoch" "$kind" "$key" "$origin" "$payload" "$snapshot" \
@@ -192,6 +214,7 @@ fm_journal_append() {  # <kind> <key> <payload> [<origin>] [<epoch>] [<snapshot>
   fi
 
   fm_lock_release "$FM_JOURNAL_LOCK"
+  [ "$status" -eq 0 ] || [ "$burned" = true ] || fm_journal_note_unrecorded "$kind" "$key" sequence-publish-failed
   return "$status"
 }
 
@@ -220,20 +243,32 @@ fm_journal_snapshot_cleanup() {
 }
 
 fm_journal_snapshot() {  # [status]
-  local mode=${1:-read} allocated tmp
+  local mode=${1:-read} allocated tmp unrecorded
   tmp=$(umask 077; mktemp "$STATE/.journal-snapshot.XXXXXX" 2>/dev/null) || return 1
   FM_JOURNAL_SNAPSHOT_FILE=$tmp
   trap fm_journal_snapshot_cleanup EXIT HUP INT TERM
+  if [ ! -d "$FM_JOURNAL_DIR" ]; then
+    [ "$mode" != status ] || printf 'allocated\tunknown\nunrecorded\tunknown\n' > "$tmp"
+    cat "$tmp"
+    fm_journal_snapshot_cleanup
+    trap - EXIT HUP INT TERM
+    return 0
+  fi
   if FM_LOCK_WAIT_TIMEOUT="${FM_JOURNAL_READ_LOCK_TIMEOUT:-1}" fm_lock_acquire_wait "$FM_JOURNAL_LOCK"; then
     if [ "$mode" = status ]; then
       allocated=$(cat "$FM_JOURNAL_SEQ_FILE" 2>/dev/null || true)
       case "$allocated" in ''|*[!0-9]*) allocated=unknown ;; esac
-      printf 'allocated\t%s\n' "$allocated" > "$tmp"
+      if [ -f "$FM_JOURNAL_UNRECORDED" ]; then
+        unrecorded=$(awk 'END { print NR + 0 }' "$FM_JOURNAL_UNRECORDED" 2>/dev/null || printf unknown)
+      else
+        unrecorded=0
+      fi
+      printf 'allocated\t%s\nunrecorded\t%s\n' "$allocated" "$unrecorded" > "$tmp"
     fi
     fm_journal_cat_files >> "$tmp"
     fm_lock_release "$FM_JOURNAL_LOCK"
   else
-    [ "$mode" != status ] || printf 'allocated\tunknown\n' > "$tmp"
+    [ "$mode" != status ] || printf 'allocated\tunknown\nunrecorded\tunknown\n' > "$tmp"
     fm_journal_cat_files_unlocked | fm_journal_normalize_records >> "$tmp"
   fi
   cat "$tmp"

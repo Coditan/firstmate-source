@@ -184,6 +184,82 @@ test_invalid_sequence_recovers_without_reusing_a_retained_number() {
   pass "invalid sequence state stays unknown and allocation recovers above retained records"
 }
 
+test_failures_before_and_after_sequence_publication_stay_visible() {
+  local dir state gaps unrecorded
+  dir=$(make_case failure-accounting)
+  state="$dir/state"
+  append_journal_wake "$state" a.status "signal: a" || fail "initial append failed"
+
+  FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_journal_rotate_if_full() { return 1; }
+    FM_JOURNAL_MAX_BYTES=0
+    fm_wake_append signal rotation.status "signal: rotation"
+  ' _ "$ROOT/bin/fm-wake-lib.sh" 2>/dev/null || fail "rotation failure escaped into delivery"
+  gaps=$(FM_STATE_OVERRIDE="$state" "$JOURNAL" status | awk -F ': ' '$1 == "gaps" { print $2 }')
+  [ "$gaps" = "1" ] || fail "failed rotation produced '$gaps' gaps instead of one burned sequence"
+
+  FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_journal_publish_sequence() { return 1; }
+    fm_wake_append signal publish.status "signal: publish"
+  ' _ "$ROOT/bin/fm-wake-lib.sh" 2>/dev/null || fail "sequence publication failure escaped into delivery"
+  unrecorded=$(FM_STATE_OVERRIDE="$state" "$JOURNAL" status | awk -F ': ' '$1 == "unrecorded" { print $2 }')
+  [ "$unrecorded" = "1" ] || fail "failed sequence publication reported '$unrecorded' unrecorded events"
+
+  FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    eval "$(declare -f fm_lock_acquire_wait | sed "1s/fm_lock_acquire_wait/fm_lock_acquire_wait_original/")"
+    fm_lock_acquire_wait() {
+      [ "$1" != "$FM_JOURNAL_LOCK" ] || return 1
+      fm_lock_acquire_wait_original "$@"
+    }
+    fm_wake_append signal lock.status "signal: lock"
+  ' _ "$ROOT/bin/fm-wake-lib.sh" 2>/dev/null || fail "journal lock failure escaped into delivery"
+  unrecorded=$(FM_STATE_OVERRIDE="$state" "$JOURNAL" status | awk -F ': ' '$1 == "unrecorded" { print $2 }')
+  [ "$unrecorded" = "2" ] || fail "failed lock acquisition reported '$unrecorded' unrecorded events"
+  pass "journal failures either burn a sequence or increment durable unrecorded accounting"
+}
+
+test_torn_record_does_not_consume_the_next_record() {
+  local dir state order
+  dir=$(make_case torn-record)
+  state="$dir/state"
+  append_journal_wake "$state" a.status "signal: a" || fail "initial append failed"
+  printf '2\t1\tsignal\ttorn.status' >> "$state/journal/events.tsv"
+  printf '2\n' > "$state/journal/.seq"
+  append_journal_wake "$state" c.status "signal: c" || fail "append after torn record failed"
+  order=$(journal_read "$state" | awk -F '\t' '{ printf "%s ", $1 }')
+  [ "$order" = "1 3 " ] || fail "torn record consumed the following record: '$order'"
+  pass "a torn append is isolated before the next complete record"
+}
+
+test_fresh_home_status_is_quiet_and_unknown() {
+  local dir state out err gaps
+  dir=$(make_case fresh-status)
+  state="$dir/state"
+  out="$dir/status.out"
+  err="$dir/status.err"
+  FM_STATE_OVERRIDE="$state" "$JOURNAL" status > "$out" 2> "$err" || fail "fresh-home status failed"
+  [ ! -s "$err" ] || fail "fresh-home status wrote a lock diagnostic: $(cat "$err")"
+  gaps=$(awk -F ': ' '$1 == "gaps" { print $2 }' "$out")
+  [ "$gaps" = "unknown" ] || fail "fresh-home status reported '$gaps' gaps instead of unknown"
+  pass "a fresh home reports unknown quietly without attempting a journal lock"
+}
+
+test_every_accepted_wake_kind_is_journalled() {
+  local dir state kind kinds recorded
+  dir=$(make_case wake-kinds)
+  state="$dir/state"
+  kinds=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; printf "%s" "$FM_WAKE_KINDS"' _ "$ROOT/bin/fm-wake-lib.sh")
+  for kind in $kinds; do
+    append_wake "$state" "$kind" "$kind.key" "$kind payload" || fail "accepted wake kind '$kind' failed"
+  done
+  recorded=$(journal_read "$state" | awk -F '\t' '{ printf "%s ", $3 }')
+  [ "$recorded" = "$kinds " ] || fail "accepted wake kinds journalled as '$recorded'"
+  pass "every wake kind accepted for delivery is accepted by the journal"
+}
+
 test_unlocked_reader_does_not_advance_past_a_rotated_tail() {
   local dir state order
   dir=$(make_case unlocked-rotation)
@@ -269,6 +345,10 @@ test_reader_tails_from_a_sequence
 test_status_reports_a_gap_rather_than_a_whole_stream
 test_status_reports_allocated_records_missing_from_the_tail
 test_invalid_sequence_recovers_without_reusing_a_retained_number
+test_failures_before_and_after_sequence_publication_stay_visible
+test_torn_record_does_not_consume_the_next_record
+test_fresh_home_status_is_quiet_and_unknown
+test_every_accepted_wake_kind_is_journalled
 test_unlocked_reader_does_not_advance_past_a_rotated_tail
 test_a_queued_wake_survives_a_journal_that_cannot_be_written
 test_an_oversized_field_is_marked_rather_than_silently_shortened
