@@ -88,6 +88,11 @@ Two captain-private files, both under `config/` and both gitignored:
 A home that has `config/fm-tg-recv.sh` and no `config/fm-tg-send.sh` is told exactly that: it can hear the captain and cannot answer him.
 That sentence exists because the two halves fail in ways that look identical from a distance, and the distance is where the reader is.
 
+**The sender is installed rather than shipped, and the one manual step that costs is the price of the file being private.**
+`config/` is captain-private and gitignored in its entirety, so nothing under it can travel in this repository even if it were harmless to share - and a sender is not harmless to share, because it names the credential it consumes and the path it speaks on.
+So a fresh home gets the seam by updating firstmate and gets its voice by having a sender installed into it, exactly as it already gets its receiver.
+Stating that here is deliberate: a manual step nobody documented is indistinguishable from a bug, and the person who meets it will be meeting it at the moment they needed the channel to work.
+
 ## What is proved here, and what is not
 
 Written 2026-08-11.
@@ -125,7 +130,12 @@ telegram send: the message was NOT sent to the captain.
 The credential was verified by effect only.
 It was never read, printed, or copied: the run reached it through a second hard link to the same file, so the value stayed in one place at mode `0600`, and that link was removed afterwards.
 
-**Not proved, and it is worth naming rather than leaving to be discovered:**
-the run above supplied the per-home sender from a relocated config directory, because `config/fm-tg-send.sh` is captain-private and this work could not write it into the live home.
-So what is proved is the seam driving a real sender to a real delivery, and what is not is that the live home's own `config/fm-tg-send.sh` exists yet.
-Until that file is installed, `bin/fm-tg-send.sh` on this vessel refuses and says the sender is missing - which is the designed behaviour and not a silent failure, but it is a home that cannot speak until someone puts the sender in place.
+The run above supplied the per-home sender from a relocated config directory, because `config/fm-tg-send.sh` is captain-private and the work that built the seam could not write it into the live home.
+
+**That gap closed on 2026-08-12**, when the sender was installed at `config/fm-tg-send.sh` in this vessel's own home and three further messages reached the captain through the unrelocated path, one of which he replied to.
+So the channel is now proved on the file layout a provisioned home actually has, and not only on a relocated stand-in.
+
+**Not proved, and worth naming rather than leaving to be discovered:**
+nothing here says a *different* home can speak.
+Every measurement above was made on one vessel, and the sender is installed per home rather than shipped, so a fresh home is mute until someone puts one in place.
+It says so when asked to send, which is the designed behaviour and not a silent failure, but a home that has never been provisioned reports nothing at all until the first time something tries to reach the captain through it.
