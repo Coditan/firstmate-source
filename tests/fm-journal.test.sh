@@ -140,6 +140,35 @@ test_status_reports_a_gap_rather_than_a_whole_stream() {
   pass "status reports a missing record as a gap instead of presenting the stream as whole"
 }
 
+test_status_reports_allocated_records_missing_from_the_tail() {
+  local dir state gaps last horizon
+  dir=$(make_case trailing-gap)
+  state="$dir/state"
+  append_journal_wake "$state" a.status "signal: a" || fail "first append failed"
+  append_journal_wake "$state" b.status "signal: b" || fail "second append failed"
+  printf '4\n' > "$state/journal/.seq"
+  gaps=$(FM_STATE_OVERRIDE="$state" "$JOURNAL" status | awk -F ': ' '$1 == "gaps" { print $2 }')
+  last=$(FM_STATE_OVERRIDE="$state" "$JOURNAL" status | awk -F ': ' '$1 == "last" { print $2 }')
+  horizon=$(FM_STATE_OVERRIDE="$state" "$JOURNAL" status | awk -F ': ' '$1 == "horizon" { print $2 }')
+  [ "$gaps" = "2" ] || fail "status reported '$gaps' gaps for two allocated tail records missing from disk"
+  [ "$last" = "4" ] || fail "status reported last '$last' instead of the allocated sequence 4"
+  [ "$horizon" = "1" ] || fail "status changed horizon '$horizon' while accounting for trailing gaps"
+
+  rm -f "$state/journal/events.tsv"
+  printf '1\n' > "$state/journal/.seq"
+  gaps=$(FM_STATE_OVERRIDE="$state" "$JOURNAL" status | awk -F ': ' '$1 == "gaps" { print $2 }')
+  last=$(FM_STATE_OVERRIDE="$state" "$JOURNAL" status | awk -F ': ' '$1 == "last" { print $2 }')
+  horizon=$(FM_STATE_OVERRIDE="$state" "$JOURNAL" status | awk -F ': ' '$1 == "horizon" { print $2 }')
+  [ "$gaps" = "1" ] || fail "status reported '$gaps' gaps when the only allocation never reached disk"
+  [ "$last" = "1" ] || fail "status reported last '$last' when the only allocation never reached disk"
+  [ "$horizon" = "none" ] || fail "status invented horizon '$horizon' for an empty retained stream"
+
+  printf 'not-a-sequence\n' > "$state/journal/.seq"
+  gaps=$(FM_STATE_OVERRIDE="$state" "$JOURNAL" status | awk -F ': ' '$1 == "gaps" { print $2 }')
+  [ "$gaps" = "0" ] || fail "status treated an invalid allocation sequence as '$gaps' gaps"
+  pass "status includes valid trailing allocations without confusing them with the retention horizon"
+}
+
 test_a_queued_wake_survives_a_journal_that_cannot_be_written() {
   local dir state err rc queued
   dir=$(make_case journal-unwritable)
@@ -200,6 +229,7 @@ test_live_sequence_keeps_both_events_and_the_state_each_arrived_with
 test_journal_records_the_queue_sequence_it_describes
 test_reader_tails_from_a_sequence
 test_status_reports_a_gap_rather_than_a_whole_stream
+test_status_reports_allocated_records_missing_from_the_tail
 test_a_queued_wake_survives_a_journal_that_cannot_be_written
 test_an_oversized_field_is_marked_rather_than_silently_shortened
 test_retention_bound_rotates_and_moves_the_horizon

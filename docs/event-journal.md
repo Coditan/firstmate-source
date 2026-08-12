@@ -55,7 +55,7 @@ Making the reader resolve the captured state from the current status file failed
 
 ## Pointing a consumer at it
 
-An observer reads with `bin/fm-journal.sh`, needs no lock, and writes nothing:
+An observer reads with `bin/fm-journal.sh`, manages no lock, and writes nothing:
 
 ```text
 bin/fm-journal.sh status                 # horizon, last sequence, record count, gaps
@@ -67,7 +67,7 @@ Tailing is `read --since <last seq you handled>`, keeping that number yourself.
 
 `status` reports what the stream cannot account for as well as what it holds.
 A **horizon** above 1 means older records fell below the retention bound.
-A **gap** means one or more records took a sequence number and never reached disk - a failed write, or a crash between allocation and append.
+A **gap** means one or more records took a sequence number and never reached disk - a failed write, or a crash between allocation and append - including when the missing record is newer than every retained record or is the only allocation.
 Both are reported rather than smoothed over, because a consumer that mistakes a truncated stream for a complete one will judge on it.
 
 A wake that cannot be journalled is still delivered.

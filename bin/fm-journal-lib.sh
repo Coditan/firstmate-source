@@ -185,8 +185,18 @@ fm_journal_append() {  # <kind> <key> <payload> [<origin>] [<epoch>] [<snapshot>
 # Print every retained record, oldest first. The previous file always precedes
 # the active one, and within each file records are already in ascending seq
 # because the lock serializes allocation and write together.
-fm_journal_cat() {
+fm_journal_cat_files() {
   [ -f "$FM_JOURNAL_PREVIOUS" ] && cat "$FM_JOURNAL_PREVIOUS"
   [ -f "$FM_JOURNAL_ACTIVE" ] && cat "$FM_JOURNAL_ACTIVE"
+  return 0
+}
+
+fm_journal_cat() {
+  if FM_LOCK_WAIT_TIMEOUT="${FM_JOURNAL_READ_LOCK_TIMEOUT:-1}" fm_lock_acquire_wait "$FM_JOURNAL_LOCK"; then
+    fm_journal_cat_files
+    fm_lock_release "$FM_JOURNAL_LOCK"
+  else
+    fm_journal_cat_files
+  fi
   return 0
 }

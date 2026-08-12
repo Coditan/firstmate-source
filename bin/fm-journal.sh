@@ -53,18 +53,21 @@ limit=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --since)
-      since=${2:-}
-      shift 2 || true
+      [ "$#" -ge 2 ] || { echo "fm-journal.sh: --since needs a sequence number" >&2; exit 2; }
+      since=$2
+      shift 2
       case "$since" in ''|*[!0-9]*) echo "fm-journal.sh: --since needs a sequence number" >&2; exit 2 ;; esac
       ;;
     --kind)
-      kind=${2:-}
-      shift 2 || true
+      [ "$#" -ge 2 ] || { echo "fm-journal.sh: --kind needs an event kind" >&2; exit 2; }
+      kind=$2
+      shift 2
       fm_journal_kind_valid "$kind" || { echo "fm-journal.sh: unknown event kind: $kind" >&2; exit 2; }
       ;;
     --limit)
-      limit=${2:-}
-      shift 2 || true
+      [ "$#" -ge 2 ] || { echo "fm-journal.sh: --limit needs a count" >&2; exit 2; }
+      limit=$2
+      shift 2
       case "$limit" in ''|*[!0-9]*) echo "fm-journal.sh: --limit needs a count" >&2; exit 2 ;; esac
       ;;
     *)
@@ -85,7 +88,9 @@ case "$cmd" in
     '
     ;;
   status)
-    fm_journal_cat | LC_ALL=C awk -F '\t' -v maxbytes="$FM_JOURNAL_MAX_BYTES" '
+    allocated=$(cat "$FM_JOURNAL_SEQ_FILE" 2>/dev/null || true)
+    case "$allocated" in ''|*[!0-9]*) allocated=0 ;; esac
+    fm_journal_cat | LC_ALL=C awk -F '\t' -v maxbytes="$FM_JOURNAL_MAX_BYTES" -v allocated="$allocated" '
       NF >= 7 {
         seq = $1 + 0
         if (!count || seq < horizon) { horizon = seq }
@@ -93,11 +98,17 @@ case "$cmd" in
         count++
       }
       END {
+        if (allocated > last) { last = allocated }
         printf "records: %d\n", count
         if (!count) {
           print "horizon: none"
-          print "last: none"
-          print "gaps: 0"
+          if (last) {
+            printf "last: %d\n", last
+            printf "gaps: %d\n", last
+          } else {
+            print "last: none"
+            print "gaps: 0"
+          }
         } else {
           printf "horizon: %d\n", horizon
           printf "last: %d\n", last
