@@ -11,6 +11,7 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-${STATE:-$FM_HOME/state}}"
 FM_WAKE_QUEUE="${FM_WAKE_QUEUE:-$STATE/.wake-queue}"
 FM_WAKE_QUEUE_LOCK="${FM_WAKE_QUEUE_LOCK:-$STATE/.wake-queue.lock}"
+FM_WAKE_KINDS="signal stale check heartbeat"
 # Default seconds bin/fm-wake-wait.sh gives a live, identity-matched watcher to
 # get its beacon back inside the grace before reporting it. It lives here rather
 # than in that script because bin/fm-watch-checkpoint.sh has to clamp the child's
@@ -22,6 +23,16 @@ FM_LOCK_STALE_AFTER="${FM_LOCK_STALE_AFTER:-2}"
 FM_LOCK_STEAL_MAX_DEPTH="${FM_LOCK_STEAL_MAX_DEPTH:-8}"
 FM_LOCK_WAIT_TIMEOUT="${FM_LOCK_WAIT_TIMEOUT:-30}"
 mkdir -p "$STATE"
+
+# The append-only event journal is sourced here rather than by each producer, so
+# that every path which queues a wake also records one, with no call site able to
+# forget. The guard breaks the cycle: bin/fm-journal-lib.sh sources this file
+# back when it is loaded first, and each half sets its own directory variable
+# before sourcing the other.
+if [ -z "${FM_JOURNAL_LIB_DIR:-}" ]; then
+  # shellcheck source=bin/fm-journal-lib.sh
+  . "$FM_WAKE_LIB_DIR/fm-journal-lib.sh"
+fi
 
 fm_current_pid() {
   printf '%s\n' "${BASHPID:-$$}"
@@ -580,16 +591,25 @@ fm_wake_clean_field() {
 
 fm_wake_append() {
   local kind=$1 key=$2 payload=$3 clean_key clean_payload epoch seq seq_file status
-  case "$kind" in
-    signal|stale|check|heartbeat) ;;
-    *) printf 'fm_wake_append: invalid wake kind: %s\n' "$kind" >&2; return 2 ;;
-  esac
+  local journal_snapshot
+  fm_journal_kind_valid "$kind" || {
+    printf 'fm_wake_append: invalid wake kind: %s\n' "$kind" >&2
+    return 2
+  }
 
   clean_key=$(printf '%s' "$key" | fm_wake_clean_field)
   clean_payload=$(printf '%s' "$payload" | fm_wake_clean_field)
   epoch=$(date +%s)
   seq_file="$STATE/.wake-queue.seq"
   status=0
+
+  # Capture the mutable state this event points at BEFORE taking any lock. The
+  # whole difference between the journal and the drain-time annotation is when
+  # that read happens, so it happens as early in the event's life as this code
+  # can reach - and outside the critical section, where a file read would sit in
+  # front of every other producer and the drain.
+  fm_journal_capture "$kind" "$clean_key"
+  journal_snapshot=$FM_JOURNAL_SNAPSHOT
 
   fm_lock_acquire_wait "$FM_WAKE_QUEUE_LOCK" || return "$?"
   seq=$(cat "$seq_file" 2>/dev/null || echo 0)
@@ -600,6 +620,15 @@ fm_wake_append() {
   printf '%s\n' "$seq" > "$seq_file" || status=$?
   if [ "$status" -eq 0 ]; then
     printf '%s\t%s\t%s\t%s\t%s\n' "$epoch" "$seq" "$kind" "$clean_key" "$clean_payload" >> "$FM_WAKE_QUEUE" || status=$?
+  fi
+  # Record inside the queue lock so journal order and queue order are the same
+  # order, and only once the queue record is actually down, so the journal never
+  # claims an event that was not queued. A journal failure is reported and then
+  # dropped: delivery outranks the record of it, and the gap the failure leaves
+  # in the journal's sequence is what tells a reader the stream is incomplete.
+  if [ "$status" -eq 0 ]; then
+    fm_journal_append "$kind" "$clean_key" "$clean_payload" "$seq" "$epoch" "$journal_snapshot" \
+      || printf 'fm_wake_append: wake %s/%s was queued but could not be journalled\n' "$kind" "$clean_key" >&2
   fi
   fm_lock_release "$FM_WAKE_QUEUE_LOCK"
   return "$status"

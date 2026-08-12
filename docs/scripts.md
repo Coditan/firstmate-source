@@ -124,6 +124,8 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-currency-base-lib.sh` | Shared resolution and validation of the two upstream-check comparison bases          |
 | `fm-wake-drain.sh`       | Atomically drain queued watcher wakes within a bounded echo that preserves rather than discards what it withholds, emit bounded best-effort status-event annotations, then assert watcher liveness |
 | `fm-wake-lib.sh`         | Shared durable wake queue, portable locks, and watcher/away-daemon identity/health helpers |
+| `fm-journal.sh`          | Read the append-only event journal in arrival order, and report the horizon and gaps the stream cannot account for (docs/event-journal.md) |
+| `fm-journal-lib.sh`      | Append-only notification journal internals; its header owns the record contract (`docs/event-journal.md` gives rationale) |
 | `fm-classify-lib.sh`     | Shared captain-relevant and declared-external-wait wake classification vocabulary    |
 | `fm-send.sh`             | Send one verified literal line or supported key through the target's recorded backend |
 | `fm-tmux-lib.sh`         | Shared tmux pane primitives for target resolution, own-window startup repair, busy detection, composer capture, and verified submit |
