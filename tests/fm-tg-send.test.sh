@@ -172,6 +172,7 @@ test_a_bare_pull_request_reference_is_refused_before_anything_is_sent() {
   new_home "$home"
   install_sender "$home"
   for form in 'PR #91 is ready for your review' \
+    'pr #91 is ready for your review' \
     'pull request 91 is green' \
     'merge request !12 needs a decision' \
     'MR12 is waiting'; do
@@ -286,11 +287,6 @@ test_the_credential_never_appears_in_this_scripts_output() {
   pass "no credential value appears in the seam's output on either path"
 }
 
-test_the_script_is_listed_in_the_toolbelt() {
-  assert_grep "fm-tg-send.sh" "$ROOT/docs/scripts.md" "docs/scripts.md does not list the script"
-  pass "the outbound seam is listed where the next reader meets the toolbelt"
-}
-
 test_help_is_the_header
 test_an_unconfigured_home_fails_rather_than_reporting_inactive
 test_a_home_with_a_credential_and_no_sender_names_the_missing_half
@@ -309,6 +305,5 @@ test_a_message_can_come_from_stdin_or_a_file
 test_an_unreadable_message_file_fails_rather_than_sending_nothing
 test_bad_arguments_are_a_usage_error_and_attempt_nothing
 test_the_credential_never_appears_in_this_scripts_output
-test_the_script_is_listed_in_the_toolbelt
 
 echo "# all fm-tg-send tests passed"

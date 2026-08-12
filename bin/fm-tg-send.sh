@@ -141,7 +141,7 @@ grep -q '[^[:space:]]' "$body" || die 'refusing to send an empty message'
 # so a composition mistake reads as a composition mistake on every home.
 if ! grep -q 'https://' "$body"; then
   if grep -Eiq '(pull|merge) request[[:space:]]*[#!]?[0-9]+' "$body" \
-    || grep -Eq '(^|[^[:alnum:]])(PR|MR)[[:space:]]*[#!]?[0-9]+' "$body"; then
+    || grep -Eiq '(^|[^[:alnum:]])(PR|MR)[[:space:]]*[#!]?[0-9]+' "$body"; then
     diag 'the message names a pull request by number and carries no https:// URL.'
     die 'AGENTS.md section 9 requires the full URL before any shorthand reference'
   fi
