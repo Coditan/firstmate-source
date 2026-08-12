@@ -551,6 +551,23 @@ The locked bootstrap inheritance pass uses the same per-home changed-set and rer
 That live discovery starts from `state/*.meta` records with `kind=secondmate`; `data/secondmates.md` only backfills `home=` for older or incomplete meta records.
 Skipped items, such as a destination checkout that does not yet gitignore the item, are visible warnings but not hard failures.
 
+### Daily currency round
+
+`bin/fm-currency-round.sh` is the trigger behind firstmate's standing duty to check for updates daily, and the only thing that gives the two checks above a cadence that survives session boundaries.
+Session start is not daily and neither check ran from bootstrap, so before this round a home that never installed an external timer never checked at all, and printed the same nothing a current home prints.
+[currency-round.md](currency-round.md) owns the evidence, the hop vocabulary, the rejected alternatives, and the scope boundary; the script's header owns its flags, state files, and mechanics.
+
+The locked bootstrap step arms the round with `--arm`, which writes and registers this home's `state/currency-round.check.sh` watcher check and is idempotent, so arming converges on every session start instead of depending on a per-home install step nobody verifies.
+A failed arm reports `CURRENCY_ROUND:` rather than leaving the home quietly unwatched.
+The watcher then runs the round on its ordinary `state/*.check.sh` sweep, and the round self-gates to its cadence so all but one sweep a day is a single file read.
+
+Every session start also runs `--armed`, one file read and one comparison, which reports `CURRENCY_ROUND:` when this home is unarmed, has been armed without ever completing a round, or has stopped completing them.
+That reading exists because a broadcast cannot reach a seat that has stopped listening, and a seat that stopped listening is the one most likely to be behind.
+
+Each reading names the hop it speaks for - `released`, `pinned`, or `installed` - and the round measures the released and installed hops for this seat only.
+It never updates anything, never acts on or measures another vessel, and never reports an all-clear for a reading it could not take.
+`FM_CURRENCY_ROUND_DISABLE=1` silences only the reporting modes, for suites that compose `bin/fm-bootstrap.sh`.
+
 ## X mode (.env)
 
 X mode lets a firstmate instance answer public `@myfirstmate` mentions and act on normal reversible mention requests through firstmate's normal lifecycle.

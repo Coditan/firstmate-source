@@ -3,9 +3,9 @@
 # of the commit review with mechanical absorption hints.
 #
 # This script never changes the checkout or merges history. It fetches into a
-# temporary bare repository and writes only FM_HOME/state/fork-sync.*. Run it
-# daily from the curator vessel's external scheduler; fork-sync.last-run gates
-# completed checks to one every three days.
+# temporary bare repository and writes only FM_HOME/state/fork-sync.*. The daily
+# currency round invokes it on a curator home; fork-sync.last-run gates completed
+# checks to one every three days.
 #
 # State contract:
 #   fork-sync.last-run  epoch of the last completed comparison

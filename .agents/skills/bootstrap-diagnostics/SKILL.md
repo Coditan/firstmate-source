@@ -2,7 +2,7 @@
 name: bootstrap-diagnostics
 description: >-
   Agent-only handling playbook for session-start bootstrap diagnostics.
-  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, ROLE_INVALID, ROLE_OVERLAY_MISSING, NEEDS_GH_AUTH, TANGLE, SELF_DRIFT, CREW_DISPATCH invalid, CURRENCY_BASE, LAVISH_ACCESS, BACKLOG_STALE, BACKLOG_UNREADABLE, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, AXI_SUITE_UPDATED, AXI_SUITE_REVIEW, AXI_SUITE_STUCK, AXI_SUITE_SHADOWED, AXI_SUITE_SHADOW_UNKNOWN, FIRSTMATE_UPDATE_AVAILABLE, FIRSTMATE_UPDATE_STUCK, FORK_SYNC, FORK_SYNC_STUCK, GROSSREINSCHIFF, WATCHER_UNIT, FREQUENCY_MONITOR_UNIT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
+  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, ROLE_INVALID, ROLE_OVERLAY_MISSING, NEEDS_GH_AUTH, TANGLE, SELF_DRIFT, CREW_DISPATCH invalid, CURRENCY_BASE, LAVISH_ACCESS, BACKLOG_STALE, BACKLOG_UNREADABLE, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, AXI_SUITE_UPDATED, AXI_SUITE_REVIEW, AXI_SUITE_STUCK, AXI_SUITE_SHADOWED, AXI_SUITE_SHADOW_UNKNOWN, FIRSTMATE_UPDATE_AVAILABLE, FIRSTMATE_UPDATE_STUCK, FORK_SYNC, FORK_SYNC_STUCK, CURRENCY_ROUND, GROSSREINSCHIFF, WATCHER_UNIT, FREQUENCY_MONITOR_UNIT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
   A silent bootstrap section, or a BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -76,6 +76,11 @@ When any diagnostic needs captain attention, report the plain consequence and re
 - `FORK_SYNC: <detail>` - the curated fork has real-upstream content that is not absorbed under either the original or equivalent history; dispatch one ship crewmate on firstmate itself to merge upstream and re-evaluate `docs/fork-patches.md`, then land that PR with `bin/fm-pr-merge.sh <id> <url> -- --merge` because squashing destroys upstream ancestry.
 - `FORK_SYNC_STUCK: <detail>` - the curated-fork comparison failed and persisted the condition in `state/fork-sync.stuck`; investigate the repository, origin, or upstream network failure before dispatching a sync cycle.
   A `config/fork-sync-upstream is unusable` detail is not a network failure: the check refused a configured comparison base, so handle it as `CURRENCY_BASE` below.
+- `CURRENCY_ROUND: <detail>` - this home's daily update check is not running, so nothing is watching for updates between sessions and its silence proves nothing.
+  `not armed` or `could not be armed` means the check was never installed or the arm failed; run `bin/fm-currency-round.sh --arm` and report the reason if it refuses.
+  `armed ... and has never completed a round` or `stopped being checked` means the check exists but the monitoring service is not running it, which is a supervision fault rather than a currency one: repair it through the emitted supervision instructions, exactly as for a lapsed watcher.
+  Never treat this line as a currency verdict - it says the instrument is not reading, not that this home is behind.
+  The findings the round itself raises arrive as a `check:` wake, not here; run `bin/fm-currency-round.sh --status` for the full round when you need every reading.
 - `GROSSREINSCHIFF: weekly fleet cleanup sweep is due (...)` - this home has not completed its Thursday cleanup sweep for the current week; load the `grossreinschiff` skill and run it.
   Nothing is broken: the line is a cadence reminder, and it repeats each session start until `bin/fm-grossreinschiff-due.sh --record` marks a sweep that actually produced a report.
   The reported window-open days say only how far into the current week's window this session start falls; the count is bounded to 0 through 6 and never measures how long the home has been dark.

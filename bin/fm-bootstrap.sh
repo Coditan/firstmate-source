@@ -27,6 +27,7 @@
 #                 "FIRSTMATE_UPDATE_AVAILABLE|STUCK: <detail>",
 #                 "FORK_SYNC: <detail>" or "FORK_SYNC_STUCK: <detail>",
 #                 "GROSSREINSCHIFF: weekly fleet cleanup sweep is due (...)",
+#                 "CURRENCY_ROUND: the daily update check <is not armed|has stopped> (...)",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...",
 #                 "WATCHER_UNIT: <consent, convergence, or fallback detail>",
 #                 "FREQUENCY_MONITOR_UNIT: <consent, convergence, or fallback detail>".
@@ -84,10 +85,10 @@
 #          refresh relays any completed fm-fleet-sync.sh output before the
 #          aggregate timeout skip line with timeout and elapsed seconds.
 #          Set FM_FLEET_PRUNE=0 to skip branch pruning during that refresh.
-#          Set FM_BOOTSTRAP_DETECT_ONLY=1 to skip the six MUTATING sweeps
-#          (PR-check migration, fm-axi-suite.sh, secondmate_sync,
-#          secondmate_liveness_sweep, x_mode_setup, fleet_sync) while still
-#          printing every read-only detect line above; the TANGLE line
+#          Set FM_BOOTSTRAP_DETECT_ONLY=1 to skip the seven MUTATING sweeps
+#          (PR-check migration, fm-currency-round.sh --arm, fm-axi-suite.sh,
+#          secondmate_sync, secondmate_liveness_sweep, x_mode_setup, fleet_sync)
+#          while still printing every read-only detect line above; the TANGLE line
 #          switches to advisory-only wording with no checkout command. Used by
 #          fm-session-start.sh's read-only path when another live session holds
 #          the fleet lock, so a second concurrent session never race-mutates
@@ -1004,6 +1005,13 @@ if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] \
   echo "BOOTSTRAP_INFO: tasks-axi available"
 fi
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
+  # Arm this home's daily currency round. Arming is a bootstrap step rather than
+  # an install instruction because an instruction a home must remember to follow
+  # is the defect the round exists to remove: a home that never armed it would
+  # silently never check. Idempotent, so it converges on every session start.
+  if ! "$SCRIPT_DIR/fm-currency-round.sh" --arm >/dev/null 2>&1; then
+    echo "CURRENCY_ROUND: the daily update check could not be armed on this home, so nothing will watch for updates between sessions; run $SCRIPT_DIR/fm-currency-round.sh --arm to see why"
+  fi
   "$SCRIPT_DIR/fm-axi-suite.sh"
   # The suite may have just seeded this home's own copies into $FM_HOME/.local/axi;
   # drop the cached lookups so the sweeps below resolve the vessel copy, not the
@@ -1023,6 +1031,11 @@ else
     "$SCRIPT_DIR/fm-frequency-monitor-service.sh" bootstrap
   fi
 fi
+# Is the daily currency round still running? One file read and one comparison,
+# so it runs in every session start, locked or not. This is the reading that
+# catches a home whose monitoring has stopped: without it, a home that quietly
+# stopped checking is indistinguishable from a home with nothing to report.
+"$SCRIPT_DIR/fm-currency-round.sh" --armed || true
 [ -f "$STATE/firstmate-update.available" ] && cat "$STATE/firstmate-update.available"
 [ -f "$STATE/firstmate-update.stuck" ] && cat "$STATE/firstmate-update.stuck"
 [ -f "$STATE/fork-sync.pending" ] && cat "$STATE/fork-sync.pending"

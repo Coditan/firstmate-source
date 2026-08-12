@@ -136,6 +136,7 @@ state/               volatile runtime signals; gitignored
   .afk               durable away-mode flag; present = sub-supervisor may inject escalations (set by /afk, cleared on user return)
   .stow-receipt .context-reset.log  proof that this session's durable knowledge was filed, bound to the transcript position it was filed at, and the durable record of every context-reset refusal or completed reset (docs/context-reset.md)
   grossreinschiff.last-sweep  epoch and date of this home's last completed weekly cleanup sweep; written only by `bin/fm-grossreinschiff-due.sh --record`, and absent or unparseable means never swept (docs/grossreinschiff.md)
+  currency-round.check.sh currency-round.last-run currency-round.report currency-round.surfaced currency-round.unmeasured  this home's daily update check and its records: the armed watcher check, the epoch of the last COMPLETED round, every reading of that round, the finding line last surfaced, and the subjects it could not measure; all written only by `bin/fm-currency-round.sh` (docs/currency-round.md)
   .parked-<window-key>  firstmate-owned declaration that a relayed terminal task waits only on external human action; created via `bin/fm-mark-parked.sh <window>` (bin/fm-watch.sh's `mark_parked`), never by hand
   .watch.lock .wake-queue.lock watcher singleton and queue serialization locks
   .hash-* .count-* .stale-* .stale-since-* .paused-* .degraded-* .parkedmeta-* .parkedresurfaced-* .wedge-escalations-* .wedgeheld-* .seen-* .hb-surfaced-* .last-* .heartbeat-streak .bridge-* .context-ceiling-surfaced .certsync-health-surfaced   watcher internals; never touch
@@ -168,7 +169,7 @@ A lock-refused session must not spawn, steer, merge, drain the wake queue, repai
 1. **Lock** - acquires the per-home session lock before anything mutates shared state.
 2. **Bootstrap** - detect-only checks (tool/version problems, GitHub auth, the worktree-tangle check, harness override, dispatch-profile validation, backlog-backend status) always run, but routine confirmations stay silent by default.
    When the lock could not be acquired, the worktree-tangle check uses read-only advisory wording without a checkout repair command.
-   The six MUTATING sweeps - non-executing legacy PR-check migration, the AXI-suite currency check that installs into this home's own npm prefix, fleet sync, the local secondmate fast-forward sweep, the secondmate liveness sweep, and X-mode artifact writes - run only when this session actually holds the lock from step 1.
+   The seven MUTATING sweeps - non-executing legacy PR-check migration, arming this home's daily currency round, the AXI-suite currency check that installs into this home's own npm prefix, fleet sync, the local secondmate fast-forward sweep, the secondmate liveness sweep, and X-mode artifact writes - run only when this session actually holds the lock from step 1.
    The secondmate liveness sweep deterministically guarantees every registered secondmate is actually running: it probes each live secondmate's endpoint for a real agent process (not just pane presence), respawns only on a confident dead reading, and reports only skipped or failed guarantees as `SECONDMATE_LIVENESS:` lines (`bin/fm-bootstrap.sh`; `bin/fm-backend.sh`'s `fm_backend_agent_alive`).
 3. **Wake queue** - when locked, drains the durable wake queue and prints the raw records prominently as this turn's first work queue; a bounded, clearly labeled historical status-event annotation may follow a valid `signal` record but never replaces it or current-state reconciliation, and a lapsed watcher chain still surfaces here via the same guard alarm.
    When the lock could not be acquired, the queue is left untouched because another session owns it, and the guard's tangle/watcher-liveness alarms still print in read-only advisory mode without drain, supervision repair, or checkout repair commands.
@@ -191,6 +192,14 @@ A silent bootstrap section needs no action; for any printed actionable diagnosti
 
 The locked bootstrap step also runs `bin/fm-axi-suite.sh`, the per-vessel AXI-suite currency check described in `docs/configuration.md` "AXI-suite self-update": patch and minor releases self-update, while `AXI_SUITE_REVIEW:` and `AXI_SUITE_STUCK:` require handling through `bootstrap-diagnostics`.
 This check never calls Bridge from the updater; firstmate owns any stuck-status relay and dispatches a crewmate for project writes.
+
+### Daily update checking
+
+Firstmate's daily currency duty has a mechanism, so it is never carried by memory: the locked bootstrap step arms `bin/fm-currency-round.sh` on the watcher, and every session start reports `CURRENCY_ROUND:` when this home's check is unarmed or has stopped running.
+`docs/configuration.md` "Daily currency round" and `docs/currency-round.md` own the cadence, the readings, and the scope; the round's findings arrive as an ordinary `check:` wake under section 8.
+Two facts bind wherever that wake is read.
+Every claim of currency names its hop - `released`, `pinned`, or `installed` - and this round measures only the released and installed hops for this seat, so a clean round never means the fleet is current.
+A reading the round could not take is reported as unmeasured and never as current, because an instrument that cannot read must not be relayed as an all-clear.
 
 ## 4. Harness and runtime dispatch
 
@@ -537,7 +546,7 @@ The scaffold is a safety contract, not a suggestion.
 
 Firstmate's shared instruction surface reaches running homes only after it lands on the default branch and those homes fast-forward.
 Only `AGENTS.md`, `bin/`, `roles/`, and `.agents/skills/` are loaded by a running firstmate; public `skills/` is an installer-facing surface.
-`bin/fm-firstmate-update-check.sh` detects upstream-only changes to that instruction surface, while `bin/fm-fork-sync-check.sh` detects real-upstream content the curated fork has not absorbed; `docs/configuration.md` owns scheduling and `docs/fork-patches.md` owns fork-only patch review.
+`bin/fm-firstmate-update-check.sh` detects upstream-only changes to that instruction surface, while `bin/fm-fork-sync-check.sh` detects real-upstream content the curated fork has not absorbed; the daily currency round of section 3 is what gives both a cadence that survives session boundaries, and `docs/fork-patches.md` owns fork-only patch review.
 When bootstrap prints `FIRSTMATE_UPDATE_AVAILABLE:`, dispatch a crewmate to notify the whole fleet through Bridge All-Ships rather than writing to Bridge directly.
 Fork `main` advances without rewriting history, and every upstream-sync PR must land as a true merge commit rather than a squash.
 When the captain invokes `/updatefirstmate` or asks to update firstmate, load the `/updatefirstmate` skill.
@@ -548,7 +557,7 @@ Bootstrap separately detects when the primary checkout's own default branch has 
 
 These skills are not captain-invocable; load them only at their precise triggers.
 
-- `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `ROLE_INVALID:`, `ROLE_OVERLAY_MISSING:`, `NEEDS_GH_AUTH`, `TANGLE:`, `SELF_DRIFT:`, `CREW_DISPATCH: invalid`, `CURRENCY_BASE:`, `LAVISH_ACCESS:`, `BACKLOG_STALE:`, `BACKLOG_UNREADABLE:`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `NUDGE_SECONDMATES:`, `AXI_SUITE_UPDATED:`, `AXI_SUITE_REVIEW:`, `AXI_SUITE_STUCK:`, `AXI_SUITE_SHADOWED:`, `AXI_SUITE_SHADOW_UNKNOWN:`, `FIRSTMATE_UPDATE_AVAILABLE:`, `FIRSTMATE_UPDATE_STUCK:`, `FORK_SYNC:`, `FORK_SYNC_STUCK:`, `GROSSREINSCHIFF:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
+- `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `ROLE_INVALID:`, `ROLE_OVERLAY_MISSING:`, `NEEDS_GH_AUTH`, `TANGLE:`, `SELF_DRIFT:`, `CREW_DISPATCH: invalid`, `CURRENCY_BASE:`, `LAVISH_ACCESS:`, `BACKLOG_STALE:`, `BACKLOG_UNREADABLE:`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `NUDGE_SECONDMATES:`, `AXI_SUITE_UPDATED:`, `AXI_SUITE_REVIEW:`, `AXI_SUITE_STUCK:`, `AXI_SUITE_SHADOWED:`, `AXI_SUITE_SHADOW_UNKNOWN:`, `FIRSTMATE_UPDATE_AVAILABLE:`, `FIRSTMATE_UPDATE_STUCK:`, `FORK_SYNC:`, `FORK_SYNC_STUCK:`, `CURRENCY_ROUND:`, `GROSSREINSCHIFF:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
 - `diagnostic-reasoning` - load before scoping a reported bug and before acting on a diagnostic report.
 - `ask-user-authority` - load before deciding any ask-user finding, regardless of the project's `yolo` posture.
 - `harness-adapters` - load before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
