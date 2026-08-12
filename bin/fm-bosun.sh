@@ -113,7 +113,7 @@ bosun_state() {
   local now
   now=$(date +%s)
 
-  if ! "$FM_BOSUN_LIB_DIR/fm-journal.sh" status > /dev/null 2>&1; then
+  if fm_bosun_journal_unreadable; then
     printf 'BLIND\tthe retained journal exists but cannot be read; events may exist that were never judged\n'
     return 0
   fi

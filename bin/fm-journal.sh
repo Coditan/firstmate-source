@@ -27,7 +27,7 @@
 #          written - a failed write, a crash between the two - and it is
 #          reported rather than smoothed over, so a reader is never left to
 #          assume a stream is whole. Fields are "name: value", one per line.
-set -uo pipefail
+set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-wake-lib.sh

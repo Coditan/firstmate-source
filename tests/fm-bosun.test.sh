@@ -272,6 +272,17 @@ out=$(bosun "$s" "$d/judge" status); rc=$?
 assert_contains "$out" "QUIET" "a genuinely absent journal reports QUIET"
 pass "a genuinely absent journal is not an access failure"
 
+d=$(make_bosun_case limited-read "$JUDGE_SANE")
+s="$d/state"
+for n in 1 2 3 4 5; do emit_event "$s" fm-limited "working: event $n"; done
+FM_BOSUN_PASS_MAX=2 bosun "$s" "$d/judge" run --once > /dev/null 2>&1
+rows=$(FM_STATE_OVERRIDE="$s" "$BOSUN" verdicts --raw)
+[ "$(printf '%s\n' "$rows" | awk 'NF { count++ } END { print count + 0 }')" = 2 ] \
+  || fail "a limited pass must judge exactly its configured event limit"
+assert_not_contains "$rows" "journal-unreadable" \
+  "a normal limited read must not be recorded as unreadable"
+pass "a normal limited journal read judges its bounded batch"
+
 # A judge that never answers. Bounded by the timeout, recorded as an escalation.
 d=$(make_bosun_case judge-hangs '#!/usr/bin/env bash
 cat > /dev/null

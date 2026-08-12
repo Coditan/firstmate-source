@@ -376,6 +376,15 @@ fm_bosun_judge_journal_unreadable() {
     journal 0
 }
 
+fm_bosun_journal_unreadable() {
+  if [ -d "$FM_JOURNAL_DIR" ] && { [ ! -r "$FM_JOURNAL_DIR" ] || [ ! -x "$FM_JOURNAL_DIR" ]; }; then
+    return 0
+  fi
+  [ -e "$FM_JOURNAL_ACTIVE" ] && [ ! -r "$FM_JOURNAL_ACTIVE" ] && return 0
+  [ -e "$FM_JOURNAL_PREVIOUS" ] && [ ! -r "$FM_JOURNAL_PREVIOUS" ] && return 0
+  return 1
+}
+
 # Run one pass: judge every journal record above the cursor, up to the pass
 # bound. Prints one human-readable line per verdict on stdout, so a foreground
 # run is watchable as it happens rather than only in the record afterwards.
@@ -387,6 +396,19 @@ fm_bosun_pass() {  # [<journal-read-command-override>]
   local judged=0
 
   FM_BOSUN_PASS_JUDGED=0
+
+  if fm_bosun_journal_unreadable; then
+    if fm_bosun_judge_journal_unreadable; then
+      judged=$((judged + 1))
+      printf '%s  %-8s %-9s %s: %s\n' \
+        "$(date +%H:%M:%S)" escalate high journal-unreadable \
+        "the journal stream could not be read, so events may exist that were never judged"
+    else
+      printf 'fm-bosun: could not record that the journal stream was unreadable\n' >&2
+    fi
+    FM_BOSUN_PASS_JUDGED=$judged
+    return 0
+  fi
 
   horizon=$("$FM_BOSUN_LIB_DIR/fm-journal.sh" status 2>/dev/null \
     | awk -F': ' '$1 == "horizon" { print $2 }')
@@ -400,20 +422,8 @@ fm_bosun_pass() {  # [<journal-read-command-override>]
   # shell so the cursor it reads back is the one the record just wrote.
   local batch
   batch=$(mktemp "${TMPDIR:-/tmp}/fm-bosun-pass.XXXXXX") || return 1
-  if ! "$FM_BOSUN_LIB_DIR/fm-journal.sh" read --since "$since" --limit "$FM_BOSUN_PASS_MAX" \
-    > "$batch" 2>/dev/null; then
-    rm -f "$batch"
-    if fm_bosun_judge_journal_unreadable; then
-      judged=$((judged + 1))
-      printf '%s  %-8s %-9s %s: %s\n' \
-        "$(date +%H:%M:%S)" escalate high journal-unreadable \
-        "the journal stream could not be read, so events may exist that were never judged"
-    else
-      printf 'fm-bosun: could not record that the journal stream was unreadable\n' >&2
-    fi
-    FM_BOSUN_PASS_JUDGED=$judged
-    return 0
-  fi
+  "$FM_BOSUN_LIB_DIR/fm-journal.sh" read --since "$since" --limit "$FM_BOSUN_PASS_MAX" \
+    > "$batch" 2>/dev/null
 
   while IFS=$'\t' read -r jseq _epoch kind key _origin payload snapshot; do
     [ -n "$jseq" ] || continue
