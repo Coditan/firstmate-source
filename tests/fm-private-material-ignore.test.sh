@@ -22,6 +22,7 @@ unforeseen_private_paths() {
   cat <<PATHS
 config/telegram.env
 config/fm-tg-recv.sh
+config/fm-tg-send.sh
 config/$UNFORESEEN
 config/$UNFORESEEN.env
 config/$UNFORESEEN-subsystem/credentials.json

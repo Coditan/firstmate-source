@@ -77,6 +77,7 @@ Killing the stub loses no wake and costs exactly one delivery re-arm.
 `bin/fm-watcher-service.sh` owns systemd instance encoding, unit convergence, scoped restarts, explicit-consent installation and lingering, and the tmux fallback keeper.
 Optional direct Telegram receive is armed separately from watcher supervision when `config/telegram.env` and an executable `config/fm-tg-recv.sh` exist.
 `bin/fm-tg-recv-arm.sh` starts or attaches to one home-scoped receiver through `state/.tg-recv.lock`, while the local receiver script owns the Telegram protocol and emitted `CAPTAIN-TELEGRAM` line.
+`bin/fm-tg-send.sh` provides the outbound seam through an installed per-home sender; `docs/telegram-outbound.md` owns its purpose, boundaries, provisioning, and evidence.
 A pull-based guard (`bin/fm-guard.sh`) warns through supervision tool output if the primary checkout is tangled, if tasks are in flight and the daemon lock plus beacon are unhealthy, if the current session's delivery-stub identity is absent, or if queued wakes are waiting to be drained.
 The drain script calls that guard after emptying the queue, which avoids repeating the queued-wakes warning for records it just consumed while still warning on stale watcher liveness.
 It leads with a prominent bordered tangle banner, while `bin/fm-guard.sh` owns the stale-watcher banner/reminder policy so repeated guarded commands stay noisy without reprinting the full watcher-down banner in the same episode.
