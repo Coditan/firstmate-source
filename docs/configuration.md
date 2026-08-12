@@ -422,9 +422,9 @@ The panel never asks a running model to identify itself: self-report is not evid
 When weights-level independence matters, establish it before configuring the panel from provider-published identifiers or another non-self-report discriminator, and state plainly when that evidence is unavailable.
 
 Degradation is explicit and never silent.
-When both analysts would resolve to the same model identity, `start` refuses with exit 4 and names both the configuration fix and the reduced form; two identical analysts are not independent, and presenting them as a panel is worse than running none.
+When either analyst has unknown model identity or both analysts resolve to the same configured identity, `start` refuses with exit 4 and names both the configuration fix and the reduced form; analysts whose independence cannot be established are not a panel, and presenting them as one is worse than running none.
 The reduced form is opt-in through `--reduced` and is recorded and labelled everywhere as a single-analyst review rather than a panel, in the briefs, in the panel record, and in the judge's own report.
-When no third distinct model is available, the judge may share an analyst's model; that prints a warning and proceeds, because the judge's independence comes from re-verifying claims against live state with every report in hand.
+When no third distinct configured model is available, the judge may share an analyst's model, and an unpinned judge may do so unknowably; either case prints a warning and proceeds, because the judge's independence comes from re-verifying claims against live state with every report in hand.
 
 `config/model-panel.json` is deliberately NOT in the inheritable set that `bin/fm-config-inherit-lib.sh` declares, for the same reason as `config/backend`: it names the models a specific home can actually reach, and pushing the primary's list into every secondmate would overwrite exactly the local knowledge that lets each home field a real panel.
 A secondmate home that needs a different lineup writes its own file, and a home that writes none still inherits the primary's `config/crew-dispatch.json` default profile set through the normal inheritance path.
