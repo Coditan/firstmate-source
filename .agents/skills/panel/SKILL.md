@@ -15,7 +15,8 @@ Two analysts answer the same question independently on different models, neither
 The value is not three opinions.
 It is independence plus adversarial verification: the judge re-verifies the load-bearing claims itself instead of refereeing rhetoric, so it can catch the mistake both analysts made for the same reason, which neither could have caught alone.
 
-`bin/fm-model-panel.sh` owns the mechanics; its header and `--help` are authoritative for commands, flags, the configuration resolution order, and exit statuses.
+`bin/fm-model-panel.sh` owns the mechanics; its header and `--help` are authoritative for commands, flags, role-selection stages, and exit statuses.
+[`docs/configuration.md`](../../../docs/configuration.md) owns the panel configuration schema and configuration lookup order.
 This skill owns when to run one and how to carry it through.
 
 ## Is this question worth a panel

@@ -306,6 +306,30 @@ test_analyst_a_array_prefers_a_pinned_identity() {
   pass "analyst A prefers a pinned candidate from a mixed array"
 }
 
+test_single_surviving_candidate_resolves_to_itself() {
+  local home out fakebin marker
+  home=$(new_home single-survivor "$MIXED_ANALYST_A_ARRAY")
+  fakebin=$(fm_fakebin "$TMP_ROOT/single-survivor-quota")
+  marker="$TMP_ROOT/single-survivor-quota/called"
+  # run_panel points the selector's quota command at this name, so an executable
+  # with that name proves whether a resolution consulted quota data at all.
+  cat > "$fakebin/fm-test-absent-quota-axi" <<SH
+#!/usr/bin/env bash
+printf called > '$marker'
+exit 1
+SH
+  chmod +x "$fakebin/fm-test-absent-quota-axi"
+  out=$(PATH="$fakebin:$PATH" FM_DISPATCH_RANDOM_SOURCE="$TMP_ROOT/nonexistent-random-source" \
+    run_panel "$home" start --id ssc --project "$home/subject" --dry-run "Anything?") \
+    || fail "one surviving candidate should resolve without a random source: $out"
+  assert_contains "$out" 'panel: analyst-a {"harness":"claude","model":"claude-opus-5"}' \
+    "the sole surviving analyst-A candidate did not resolve to itself"
+  assert_not_contains "$out" "OS-backed random source is unavailable" \
+    "a seat with one candidate left entered random selection"
+  assert_absent "$marker" "a seat with one candidate left consulted quota data"
+  pass "a seat left with one candidate resolves to it without quota or randomness"
+}
+
 test_all_unpinned_analyst_a_array_still_refuses() {
   local home out status=0
   home=$(new_home all-unpinned-analyst-a-array "$ALL_UNPINNED_ANALYST_A_ARRAY")
@@ -1021,6 +1045,7 @@ test_analyst_array_collision_refuses_after_resolution
 test_judge_array_collision_warns_after_resolution
 test_unpinned_analyst_refuses_unknown_runtime_identity
 test_analyst_a_array_prefers_a_pinned_identity
+test_single_surviving_candidate_resolves_to_itself
 test_all_unpinned_analyst_a_array_still_refuses
 test_invalid_array_candidate_refuses_in_every_seat
 test_unpinned_judge_warns_without_model_self_report
