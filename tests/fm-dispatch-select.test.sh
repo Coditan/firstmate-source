@@ -336,6 +336,30 @@ test_validate_only_does_not_require_od() {
   pass "validate-only validates profiles without requiring od"
 }
 
+test_od_is_required_only_where_selection_randomizes() {
+  local bash_bin fakebin out status=0
+  bash_bin=$(command -v bash)
+  fakebin=$(fm_fakebin "$TMP_ROOT/select-without-od")
+  ln -s "$(command -v dirname)" "$fakebin/dirname"
+  ln -s "$(command -v jq)" "$fakebin/jq"
+
+  out=$(env PATH="$fakebin" "$bash_bin" "$ROOT/bin/fm-dispatch-select.sh" \
+    '{"harness":"claude","model":"claude-opus-5"}' 2>&1) || status=$?
+  expect_code 0 "$status" "a single profile object should resolve without od"
+  assert_contains "$out" '{"harness":"claude","model":"claude-opus-5"}' \
+    "the single profile object did not resolve to itself"
+  assert_not_contains "$out" "od is required" \
+    "a resolution with nothing to choose between still required a random-selection tool"
+
+  status=0
+  out=$(env PATH="$fakebin" "$bash_bin" "$ROOT/bin/fm-dispatch-select.sh" \
+    '[{"harness":"claude"},{"harness":"codex"}]' 2>&1) || status=$?
+  expect_code 2 "$status" "an array that must randomize should still refuse without od"
+  assert_contains "$out" "od is required" \
+    "the random-selection prerequisite was dropped from the path that uses it"
+  pass "od is required only where OS-backed random selection actually runs"
+}
+
 test_implicit_array_picks_higher_min_provider
 test_rule_array_without_select_invokes_quota_axi
 test_legacy_explicit_selector_stays_compatible
@@ -349,5 +373,6 @@ test_operational_quota_failures_use_uniform_random_fallback
 test_single_profile_and_one_element_array
 test_invalid_profile_arrays_are_validation_errors
 test_validate_only_does_not_require_od
+test_od_is_required_only_where_selection_randomizes
 
 echo "# all fm-dispatch-select tests passed"
