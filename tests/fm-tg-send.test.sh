@@ -334,6 +334,25 @@ test_a_declaration_that_does_not_claim_files_is_refused_the_same_way() {
   pass "a declaration that does not list file is refused exactly as an absent one is"
 }
 
+test_internal_whitespace_does_not_declare_file_support() {
+  local home="$TMP_ROOT/malformed-capability" out status=0 payload="$TMP_ROOT/malformed-capability.md"
+  new_home "$home"
+  install_sender "$home"
+  declare_capabilities "$home" 'f i l e'
+  printf 'the quarterly report\n' > "$payload"
+
+  out=$(run_send "$home" --file "$payload") || status=$?
+  expect_code 1 "$status" "a malformed file capability"
+  assert_contains "$out" "does not support sending files" "the refusal did not name missing file support"
+  assert_sender_never_ran "$home" "the sender ran for a malformed file capability"
+
+  declare_capabilities "$home" '  file  '
+  status=0
+  run_send "$home" --file "$payload" >/dev/null 2>&1 || status=$?
+  expect_code 0 "$status" "an indented file capability"
+  pass "internal whitespace is refused while surrounding whitespace is accepted"
+}
+
 test_an_unreadable_declaration_is_refused_rather_than_assumed() {
   local home="$TMP_ROOT/unreadable-capabilities" out status=0 payload="$TMP_ROOT/unreadable-cap.md"
   new_home "$home"
@@ -624,6 +643,7 @@ test_an_unreadable_message_file_fails_rather_than_sending_nothing
 test_bad_arguments_are_a_usage_error_and_attempt_nothing
 test_a_sender_that_cannot_send_files_refuses_and_transmits_nothing
 test_a_declaration_that_does_not_claim_files_is_refused_the_same_way
+test_internal_whitespace_does_not_declare_file_support
 test_an_unreadable_declaration_is_refused_rather_than_assumed
 test_a_declared_sender_is_given_the_file_in_its_environment
 test_the_file_path_handed_over_is_absolute

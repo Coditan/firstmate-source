@@ -323,7 +323,7 @@ sender_declares() {
   local want=$1 line
   while IFS= read -r line || [ -n "$line" ]; do
     line=${line%%#*}
-    line=$(printf '%s' "$line" | tr -d '[:space:]')
+    line=$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
     [ "$line" = "$want" ] && return 0
   done < "$CAPABILITIES"
   return 1
