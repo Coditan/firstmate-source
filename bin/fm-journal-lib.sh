@@ -223,17 +223,15 @@ fm_journal_append() {  # <kind> <key> <payload> [<origin>] [<epoch>] [<snapshot>
 # the active one, and within each file records are already in ascending seq
 # because the lock serializes allocation and write together.
 fm_journal_cat_files() {
-  local status=0
-  [ ! -f "$FM_JOURNAL_PREVIOUS" ] || cat "$FM_JOURNAL_PREVIOUS" || status=1
-  [ ! -f "$FM_JOURNAL_ACTIVE" ] || cat "$FM_JOURNAL_ACTIVE" || status=1
-  return "$status"
+  [ -f "$FM_JOURNAL_PREVIOUS" ] && cat "$FM_JOURNAL_PREVIOUS"
+  [ -f "$FM_JOURNAL_ACTIVE" ] && cat "$FM_JOURNAL_ACTIVE"
+  return 0
 }
 
 fm_journal_cat_files_unlocked() {
-  local status=0
-  [ ! -f "$FM_JOURNAL_ACTIVE" ] || cat "$FM_JOURNAL_ACTIVE" || status=1
-  [ ! -f "$FM_JOURNAL_PREVIOUS" ] || cat "$FM_JOURNAL_PREVIOUS" || status=1
-  return "$status"
+  [ -f "$FM_JOURNAL_ACTIVE" ] && cat "$FM_JOURNAL_ACTIVE"
+  [ -f "$FM_JOURNAL_PREVIOUS" ] && cat "$FM_JOURNAL_PREVIOUS"
+  return 0
 }
 
 fm_journal_normalize_records() {
@@ -246,7 +244,7 @@ fm_journal_snapshot_cleanup() {
 }
 
 fm_journal_snapshot() {  # [status]
-  local mode=${1:-read} allocated status=0 tmp unrecorded
+  local mode=${1:-read} allocated tmp unrecorded
   tmp=$(umask 077; mktemp "$STATE/.journal-snapshot.XXXXXX" 2>/dev/null) || return 1
   FM_JOURNAL_SNAPSHOT_FILE=$tmp
   trap fm_journal_snapshot_cleanup EXIT HUP INT TERM
@@ -268,16 +266,16 @@ fm_journal_snapshot() {  # [status]
       fi
       printf 'allocated\t%s\nunrecorded\t%s\n' "$allocated" "$unrecorded" > "$tmp"
     fi
-    fm_journal_cat_files >> "$tmp" || status=1
+    fm_journal_cat_files >> "$tmp"
     fm_lock_release "$FM_JOURNAL_LOCK"
   else
     [ "$mode" != status ] || printf 'allocated\tunknown\nunrecorded\tunknown\n' > "$tmp"
-    fm_journal_cat_files_unlocked | fm_journal_normalize_records >> "$tmp" || status=1
+    fm_journal_cat_files_unlocked | fm_journal_normalize_records >> "$tmp"
   fi
-  cat "$tmp" || status=1
+  cat "$tmp"
   fm_journal_snapshot_cleanup
   trap - EXIT HUP INT TERM
-  return "$status"
+  return 0
 }
 
 fm_journal_cat() {
