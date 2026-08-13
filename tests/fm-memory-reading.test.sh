@@ -394,6 +394,17 @@ test_growth_with_no_prior_sample_is_unmeasured_never_zero() {
   pass "growth with no prior sample is reported unmeasured, never as zero growth"
 }
 
+test_an_unreadable_prior_sample_is_an_instrument_failure() {
+  local dir="$TMP_ROOT/unreadable-sample" out status=0
+  new_scene "$dir"
+  mkdir "$dir/samples"
+  out=$(run_reading "$dir") || status=$?
+  expect_code 3 "$status" "an existing unreadable stored sample"
+  assert_contains "$out" 'growth-sample' 'the failed growth instrument was not named'
+  assert_contains "$out" 'exists but could not be read' 'the unreadable sample was reported absent'
+  pass "an unreadable stored sample is incomplete, not scoped"
+}
+
 test_a_stale_prior_sample_is_unmeasured_rather_than_meaningless() {
   local dir="$TMP_ROOT/stale" out status=0
   new_scene "$dir"
@@ -640,6 +651,7 @@ test_wake_delivery_is_labelled_protected_however_small
 test_a_worker_that_merely_mentions_the_delivery_script_is_not_labelled
 test_growth_separates_a_large_steady_process_from_a_fast_growing_one
 test_growth_with_no_prior_sample_is_unmeasured_never_zero
+test_an_unreadable_prior_sample_is_an_instrument_failure
 test_a_stale_prior_sample_is_unmeasured_rather_than_meaningless
 test_too_short_an_interval_is_unmeasured_rather_than_divided_by
 test_corrupt_and_future_samples_force_incomplete_readings

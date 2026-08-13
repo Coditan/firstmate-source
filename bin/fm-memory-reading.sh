@@ -633,7 +633,7 @@ select_candidates() {
 }
 
 read_cwds() {
-  local args=() pid
+  local args=() pid unresolved="$TMP/cwd-unresolved"
   : > "$CWD_FILE"
   : > "$GONE_FILE"
   while IFS= read -r pid; do
@@ -645,12 +645,15 @@ read_cwds() {
   # entry with no target is a live process this account may not look into.
   ls -ld "${args[@]}" > "$TMP/ls.out" 2> "$TMP/ls.err"
   sed -n "s|^.*[[:space:]]$PROC/\([0-9][0-9]*\)/cwd -> \(.*\)\$|\1	\2|p" "$TMP/ls.out" > "$CWD_FILE"
+  awk -F'\t' '
+    FILENAME == ARGV[1] { if ($1 != "") resolved[$1] = 1; next }
+    $1 != "" && !($1 in resolved) { print $1 }
+  ' "$CWD_FILE" "$CANDIDATES_FILE" > "$unresolved"
   while IFS= read -r pid; do
     [ -n "$pid" ] || continue
-    grep -q "^${pid}"$'\t' "$CWD_FILE" && continue
     # This records the state at this check; the process can still exit after it.
     [ -d "$PROC/$pid" ] || printf '%s\n' "$pid" >> "$GONE_FILE"
-  done < "$CANDIDATES_FILE"
+  done < "$unresolved"
 }
 
 read_panes() {
@@ -685,8 +688,13 @@ read_prior() {
     GROWTH_INTERVAL=$INTERVAL
     return
   fi
-  if [ ! -r "$SAMPLES" ]; then
+  if [ ! -e "$SAMPLES" ]; then
     GROWTH_REASON="no stored sample yet, so this run has nothing to compare against"
+    return
+  fi
+  if [ ! -f "$SAMPLES" ] || [ ! -r "$SAMPLES" ]; then
+    GROWTH_REASON="the stored sample exists but could not be read"
+    unmeasured growth-sample "$GROWTH_REASON"
     return
   fi
   epoch=$(sed -n 's/^epoch //p' "$SAMPLES" 2>/dev/null | head -1)
