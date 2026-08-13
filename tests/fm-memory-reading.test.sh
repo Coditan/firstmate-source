@@ -388,7 +388,8 @@ test_growth_with_no_prior_sample_is_unmeasured_never_zero() {
   new_scene "$dir"
   out=$(run_reading "$dir") || status=$?
   expect_code 0 "$status" "a first run with no prior sample"
-  assert_contains "$out" 'growth unmeasured for every process above' 'a first run does not say growth was unmeasured'
+  assert_contains "$out" 'growth scoped for every process above' 'a first run does not say growth was scoped'
+  assert_not_contains "$out" 'growth unmeasured for every process above' 'a first run was labelled unmeasured'
   assert_contains "$out" 'nothing to compare against' 'the reason growth could not be measured is missing'
   assert_not_contains "$out" '+0.0 MiB/min' 'a first run reported a growth rate of zero it never measured'
   pass "growth with no prior sample is reported unmeasured, never as zero growth"
@@ -423,6 +424,8 @@ test_too_short_an_interval_is_scoped_rather_than_divided_by() {
   out=$(run_reading "$dir") || status=$?
   expect_code 0 "$status" "a stored sample under the minimum interval"
   assert_contains "$out" 'under the' 'a one-second interval was divided by anyway'
+  assert_contains "$out" 'scoped for this run' 'a short operator interval was not labelled scoped'
+  assert_not_contains "$out" 'UNMEASURED for every tracked process' 'a short operator interval was labelled unmeasured'
   pass "an interval under the floor is scoped rather than divided by"
 }
 
@@ -532,6 +535,8 @@ test_an_account_with_no_readable_slice_still_gets_its_process_total() {
   # bounded by what the process table alone can say.
   assert_contains "$out" 'uid-4242' 'an account with no readable slice was dropped from the reading'
   assert_contains "$out" 'process(es)' 'the per-account process total is missing'
+  assert_contains "$out" 'slice total  no active session slice for this account' 'a missing session slice was not rendered as scope'
+  assert_not_contains "$out" 'UNMEASURED (no active session slice for this account)' 'a scoped session absence was rendered unmeasured'
   pass "an account with no readable slice is still bounded by its process total"
 }
 
@@ -542,6 +547,7 @@ test_a_malformed_account_slice_file_forces_an_incomplete_reading() {
   out=$(run_reading "$dir") || status=$?
   expect_code 3 "$status" "a malformed per-account cgroup file"
   assert_contains "$out" "account-slice[$(id -un)].memory.current" 'the failed account and file were not named'
+  assert_contains "$out" 'slice total  UNMEASURED' 'a genuine slice failure was not rendered unmeasured'
   pass "a malformed account slice file names its instrument and exits 3"
 }
 

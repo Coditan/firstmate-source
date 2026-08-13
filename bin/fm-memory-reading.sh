@@ -465,7 +465,7 @@ read_accounts() {
       max=$current
       pressure=$current
     elif [ ! -d "$slice" ]; then
-      current="UNMEASURED:no active session slice for this account"
+      current="SCOPE:no active session slice for this account"
       max=$current
       pressure=$current
     else
@@ -678,6 +678,7 @@ read_panes() {
 PRIOR_FILE="$TMP/prior.tsv"
 GROWTH_INTERVAL=0
 GROWTH_REASON=
+GROWTH_SCOPE=0
 
 read_prior() {
   local epoch age
@@ -697,6 +698,7 @@ read_prior() {
   fi
   if [ ! -e "$SAMPLES" ]; then
     GROWTH_REASON="no stored sample yet, so this run has nothing to compare against"
+    GROWTH_SCOPE=1
     return
   fi
   if [ ! -f "$SAMPLES" ] || [ ! -r "$SAMPLES" ]; then
@@ -719,6 +721,7 @@ read_prior() {
   fi
   if [ "$age" -lt "$SAMPLE_MIN_AGE" ]; then
     GROWTH_REASON="only ${age}s since the stored sample, under the ${SAMPLE_MIN_AGE}s floor this rate can be divided by"
+    GROWTH_SCOPE=1
     return
   fi
   grep -v '^epoch \|^#' "$SAMPLES" > "$PRIOR_FILE" 2>/dev/null || : > "$PRIOR_FILE"
@@ -954,7 +957,7 @@ render_human() {
     while IFS=$'\t' read -r uid name rsskb procs current max pressure; do
       # Every account is either named here or counted in the roll-up line
       # below. None is dropped.
-      if [ "$shown" -ge "$ACCOUNT_ROWS" ] && [ "${current#UNMEASURED:}" != "$current" ]; then
+      if [ "$shown" -ge "$ACCOUNT_ROWS" ] && [ "${current#SCOPE:}" != "$current" ]; then
         rest_n=$((rest_n + 1))
         rest_kb=$((rest_kb + rsskb))
         continue
@@ -963,15 +966,18 @@ render_human() {
       printf '  %-12s uid %-6s %s process(es), %s MiB resident\n' "$name" "$uid" "$procs" "$(mib "$rsskb")"
       case "$current" in
         UNMEASURED:*) printf '  %-12s   slice total  UNMEASURED (%s)\n' '' "${current#UNMEASURED:}" ;;
+        SCOPE:*) printf '  %-12s   slice total  %s\n' '' "${current#SCOPE:}" ;;
         *) printf '  %-12s   slice total  %s MiB\n' '' "$(mib $((current / 1024)))" ;;
       esac
       case "$max" in
         UNMEASURED:*) printf '  %-12s   slice limit  UNMEASURED (%s)\n' '' "${max#UNMEASURED:}" ;;
+        SCOPE:*) printf '  %-12s   slice limit  %s\n' '' "${max#SCOPE:}" ;;
         max) printf '  %-12s   slice limit  none - this account is unbounded\n' '' ;;
         *) printf '  %-12s   slice limit  %s MiB\n' '' "$(mib $((max / 1024)))" ;;
       esac
       case "$pressure" in
         UNMEASURED:*) printf '  %-12s   slice stall  UNMEASURED (%s)\n' '' "${pressure#UNMEASURED:}" ;;
+        SCOPE:*) printf '  %-12s   slice stall  %s\n' '' "${pressure#SCOPE:}" ;;
         *) printf '  %-12s   slice stall  some avg10=%s\n' '' "$pressure" ;;
       esac
       if grep -qx "$uid" "$SCOPE_FILE" 2>/dev/null; then
@@ -989,7 +995,11 @@ render_human() {
   printf '\nTASK RECORDS READ (only these can put a name to a process)\n'
   if [ -s "$INSTALLATIONS_FILE" ]; then
     while IFS=$'\t' read -r home howner tasks; do
-      printf '  %s   account %s, %s task record(s)\n' "$home" "$(account_for_uid "$howner")" "$tasks"
+      if [ "$howner" = - ]; then
+        printf '  %s   account unknown, %s task record(s)\n' "$home" "$tasks"
+      else
+        printf '  %s   account %s, %s task record(s)\n' "$home" "$(account_for_uid "$howner")" "$tasks"
+      fi
     done < "$INSTALLATIONS_FILE"
     printf '  Anything these records do not cover is reported unattributed below, never given an owner they do not name.\n'
   else
@@ -1004,7 +1014,11 @@ render_human() {
   if [ -n "$line" ]; then
     print_table "$line"
   elif [ -n "$GROWTH_REASON" ]; then
-    printf '  UNMEASURED for every tracked process: %s\n' "$GROWTH_REASON"
+    if [ "$GROWTH_SCOPE" -eq 1 ]; then
+      printf '  scoped for this run: %s\n' "$GROWTH_REASON"
+    else
+      printf '  UNMEASURED for every tracked process: %s\n' "$GROWTH_REASON"
+    fi
   else
     count=$(awk -F'\t' '$7 == "unmeasured"' "$PROCS_FILE" | wc -l | tr -d ' ')
     printf '  none: measured over %ss, no tracked process grew by %s MiB/min or more (%s process(es) had no measurable growth)\n' \
@@ -1063,7 +1077,13 @@ print_table() {  # <tsv lines>
         printf "  %8s %15s  why: %s\n", "", "", $6
     }
   '
-  [ -n "$GROWTH_REASON" ] && printf '  growth unmeasured for every process above: %s\n' "$GROWTH_REASON"
+  if [ -n "$GROWTH_REASON" ]; then
+    if [ "$GROWTH_SCOPE" -eq 1 ]; then
+      printf '  growth scoped for every process above: %s\n' "$GROWTH_REASON"
+    else
+      printf '  growth unmeasured for every process above: %s\n' "$GROWTH_REASON"
+    fi
+  fi
   return 0
 }
 
@@ -1096,6 +1116,7 @@ render_json() {
     --argjson complete "$complete" \
     --arg growth_interval "$GROWTH_INTERVAL" \
     --arg growth_reason "$GROWTH_REASON" \
+    --argjson growth_scoped "$GROWTH_SCOPE" \
     --arg cost "$(reading_cost)" \
     --arg total_kb "${MEM_TOTAL_KB:-}" \
     --arg avail_kb "${MEM_AVAIL_KB:-}" \
@@ -1119,7 +1140,7 @@ render_json() {
       unmeasured: ($unmeasured | lines | map(split("|") | {input: .[0], reason: (.[1:] | join("|"))})),
       task_attribution_scope: ($scope | lines),
       installations_read: ($installations | lines | map(split("\t") | {
-        home: .[0], owner_uid: .[1], task_records: (.[2] | tonumber)
+        home: .[0], owner_uid: (if .[1] == "-" then null else .[1] end), task_records: (.[2] | tonumber)
       })),
       headroom: {
         total_kb: num($total_kb),
@@ -1138,7 +1159,8 @@ render_json() {
         slice_current: $f[4], slice_limit: $f[5], slice_stall_some_avg10: $f[6]
       })),
       growth: { interval_seconds: ($growth_interval | tonumber),
-                unmeasured_reason: (if $growth_reason == "" then null else $growth_reason end) },
+                scope_reason: (if $growth_scoped == 1 then $growth_reason else null end),
+                unmeasured_reason: (if $growth_reason == "" or $growth_scoped == 1 then null else $growth_reason end) },
       processes: ($procs | lines | map(split("\t") | . as $f | {
         pid: ($f[0] | tonumber), account: $f[1], uid: $f[12],
         rss_kb: ($f[2] | tonumber), started_epoch: ($f[3] | tonumber),
