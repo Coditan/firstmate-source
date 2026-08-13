@@ -151,15 +151,26 @@ test_the_scratch_it_cannot_use_is_named_before_any_arm_runs() {
 }
 
 test_the_probe_sets_no_lasting_limit_and_kills_nothing() {
-  local fake="$TMP_ROOT/systemd-run" calls="$TMP_ROOT/systemd-run.calls" pids="$TMP_ROOT/workload.pids"
+  local fake="$TMP_ROOT/systemd-run" calls="$TMP_ROOT/systemd-run.calls" sentinels="$TMP_ROOT/sentinels"
   cat >"$fake" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
   "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" >>"$FM_TEST_SYSTEMD_CALLS"
 shift 9
 sleep 30 >/dev/null 2>&1 &
-printf '%s\n' "$!" >>"$FM_TEST_WORKLOAD_PIDS"
-"$@"
+export FM_TEST_SENTINEL_PID=$!
+printf '%s\t%s\t%s\n' "$FM_TEST_SENTINEL_PID" \
+  "$(ps -o pgid= -p "$FM_TEST_SENTINEL_PID" | tr -d ' ')" \
+  "$(cat "/proc/$FM_TEST_SENTINEL_PID/cgroup")" >>"$FM_TEST_SENTINELS"
+if [ "${FM_TEST_INJECT_KILL:-0}" = 1 ]; then
+  command=$1
+  flag=$2
+  script=$3
+  shift 3
+  "$command" "$flag" 'kill "$FM_TEST_SENTINEL_PID"; '"$script" "$@"
+else
+  "$@"
+fi
 EOF
   chmod +x "$fake"
   local scope="$TMP_ROOT/scope"
@@ -172,7 +183,7 @@ EOF
   write_pressure "$TMP_ROOT/pressure"
   local out status=0
   out=$(env FM_CEILING_PROBE_SYSTEMD_RUN="$fake" FM_TEST_SYSTEMD_CALLS="$calls" \
-    FM_TEST_WORKLOAD_PIDS="$pids" FM_CEILING_PROBE_MEMINFO="$TMP_ROOT/meminfo" \
+    FM_TEST_SENTINELS="$sentinels" FM_CEILING_PROBE_MEMINFO="$TMP_ROOT/meminfo" \
     FM_CEILING_PROBE_PRESSURE="$TMP_ROOT/pressure" FM_CEILING_PROBE_SCOPE_CGROUP="$scope" \
     "$PROBE" --corpus-mib 64 \
     --seconds 5 --scratch "$TMP_ROOT/scratch-live" 2>&1) || status=$?
@@ -194,12 +205,29 @@ EOF
   done <"$calls"
   [ "$control" = yes ] || fail "the control transient scope must remain unlimited"
   [ "$ceiling" = yes ] || fail "the ceiling must apply only to its own transient scope"
-  local pid
-  while read -r pid; do
-    kill -0 "$pid" 2>/dev/null || fail "the probe must leave each workload alive"
+  local pid pgid cgroup current_pgid current_cgroup
+  while IFS=$'\t' read -r pid pgid cgroup; do
+    kill -0 "$pid" 2>/dev/null || fail "the probe must leave each reachable sentinel alive"
+    current_pgid=$(ps -o pgid= -p "$pid" | tr -d ' ')
+    current_cgroup=$(cat "/proc/$pid/cgroup")
+    [ "$current_pgid" = "$pgid" ] || fail "the probe must not move a sentinel out of its payload process group"
+    [ "$current_cgroup" = "$cgroup" ] || fail "the probe must not move a sentinel into a limiting cgroup"
     kill "$pid" 2>/dev/null || true
-  done <"$pids"
+  done <"$sentinels"
   assert_contains "$out" "memory-ceiling-probe: clear" "the recorded arm results must reach the public verdict"
+
+  : >"$calls"
+  : >"$sentinels"
+  status=0
+  out=$(env FM_CEILING_PROBE_SYSTEMD_RUN="$fake" FM_TEST_SYSTEMD_CALLS="$calls" \
+    FM_TEST_SENTINELS="$sentinels" FM_TEST_INJECT_KILL=1 \
+    FM_CEILING_PROBE_MEMINFO="$TMP_ROOT/meminfo" FM_CEILING_PROBE_PRESSURE="$TMP_ROOT/pressure" \
+    FM_CEILING_PROBE_SCOPE_CGROUP="$scope" "$PROBE" --corpus-mib 64 --seconds 5 \
+    --scratch "$TMP_ROOT/scratch-live" 2>&1) || status=$?
+  expect_code 0 "$status" "the kill-injected control run"
+  while IFS=$'\t' read -r pid _; do
+    kill -0 "$pid" 2>/dev/null && fail "the sentinel assertion must detect a kill injected into the executed payload"
+  done <"$sentinels"
   pass "the probe sets no lasting limit and contains no path that could kill"
 }
 
