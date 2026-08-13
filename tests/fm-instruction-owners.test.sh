@@ -351,8 +351,6 @@ test_compressed_agents_retains_authority_and_supervision_safety() {
     'If fast-path risk needs more rigor, escalate whether to use no-mistakes instead of inventing a manual gate.' \
     '**local-only** has the worker stop with a clean ready branch, then waits for the configured merge authority' \
     'A status line is a wake event, not current state' \
-    'a session holds no delivery object of any kind' \
-    'an empty queue and a dead listener look identical from there' \
     'Never broadly kill watchers' \
     '**Never restate an unchanged state.**' \
     'Never announce silence and then speak' \

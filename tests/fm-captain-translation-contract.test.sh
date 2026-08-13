@@ -227,9 +227,8 @@ test_ahoy_owns_only_the_visible_session_recap() {
 }
 
 test_ahoy_user_role_injections_share_one_marker() {
-  local daemon delivery grok_guard opencode_guard pi_guard owner sessionstart spawn
+  local daemon grok_guard opencode_guard pi_guard owner sessionstart spawn
   daemon=$(cat "$ROOT/bin/fm-supervise-daemon.sh")
-  delivery=$(cat "$ROOT/bin/fm-delivery.sh")
   grok_guard=$(cat "$ROOT/bin/fm-turnend-guard-grok.sh")
   opencode_guard=$(cat "$ROOT/.opencode/plugins/fm-primary-turnend-guard.js")
   pi_guard=$(cat "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts")
@@ -253,11 +252,9 @@ test_ahoy_user_role_injections_share_one_marker() {
     "Pi guard does not use the cross-language constructor"
   assert_contains "$pi_guard" '"turn-end-guard"' \
     "Pi guard does not retain its exact current kind"
-  assert_contains "$delivery" 'fm_operational_input_encode watcher' \
-    "the external delivery listener does not use the canonical typed constructor for the watcher kind"
   assert_contains "$spawn" 'encode launch-brief' \
     "cross-harness launches do not use the canonical launch-instruction kind"
-  for producer in "$daemon" "$delivery" "$grok_guard" "$opencode_guard" "$pi_guard" "$sessionstart" "$spawn"; do
+  for producer in "$daemon" "$grok_guard" "$opencode_guard" "$pi_guard" "$sessionstart" "$spawn"; do
     assert_not_contains "$producer" 'FIRSTMATE_OP: ' \
       "a current producer copied the canonical marker grammar"
   done

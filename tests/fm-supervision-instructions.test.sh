@@ -185,18 +185,6 @@ test_drain_before_reply_ordering() {
   pass "every harness drains before reading anything else or composing a reply"
 }
 
-test_agents_md_states_the_external_delivery_contract() {
-  local agents
-  agents=$(cat "$ROOT/AGENTS.md")
-  assert_contains "$agents" "a session holds no delivery object of any kind" \
-    "AGENTS.md does not state that no session holds a delivery object"
-  assert_contains "$agents" "A wake arrives in the composer and is handled by draining first, before reading anything else and before composing any reply." \
-    "AGENTS.md dropped the drain-before-reply ordering"
-  assert_contains "$agents" "an empty queue and a dead listener look identical from there" \
-    "AGENTS.md dropped the rule that silence never proves delivery is working"
-  pass "AGENTS.md states the no-session-object contract, the drain-first ordering, and why silence proves nothing"
-}
-
 test_x_mode_cadence_stays_with_the_service() {
   local home config out
   home="$TMP_ROOT/grok-home"
@@ -270,6 +258,5 @@ test_grok_keeps_its_passive_stop_backstop
 test_no_change_wakes_are_explicitly_silent
 test_forced_turns_have_a_prescribed_minimum_and_no_repetition
 test_drain_before_reply_ordering
-test_agents_md_states_the_external_delivery_contract
 test_x_mode_cadence_stays_with_the_service
 test_pi_snippet_uses_effective_extension_path

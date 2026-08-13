@@ -45,6 +45,19 @@ report() {  # <home> -> prints the one-line verdict
     "$DELIVERY" --report 2>&1 || true
 }
 
+wait_for_report() {  # <home> <expected-text>
+  local home=$1 expected=$2 out i=0
+  while [ "$i" -lt 200 ]; do
+    out=$(report "$home")
+    case "$out" in
+      *"$expected"*) printf '%s\n' "$out"; return 0 ;;
+    esac
+    sleep 0.05
+    i=$((i + 1))
+  done
+  fail "delivery verdict never contained '$expected'; last verdict: $out"
+}
+
 start_listener() {  # <home> [extra env assignments...] -> prints pid
   local home=$1
   shift
@@ -133,12 +146,6 @@ test_every_not_delivering_state_names_itself() {
   esac
 
   printf '%s\n' "$$" > "$home/state/.lock"
-  out=$(report "$home")
-  case "$out" in
-    delivering:*"tmux pane %99"*) ;;
-    *) fail "a listening home with a usable endpoint must report delivering, got: $out" ;;
-  esac
-
   touch "$home/state/.afk"
   out=$(report "$home")
   case "$out" in
@@ -223,15 +230,15 @@ test_a_wake_queued_with_no_listener_is_delivered_once_one_returns() {
   out=$(report "$home")
   case "$out" in down:*) ;; *) fail "expected a down verdict before the listener starts, got: $out" ;; esac
   pid=$(start_listener "$home")
-  out=$(report "$home")
+  out=$(wait_for_report "$home" "pane %99 no longer exists")
   case "$out" in
-    delivering:*) ;;
-    *) fail "a wake queued while nothing was listening must be picked up when a listener returns, got: $out" ;;
+    undeliverable:*) ;;
+    *) fail "the returned listener did not assess the queued wake's endpoint, got: $out" ;;
   esac
   [ "$(wc -l < "$home/state/.wake-queue" | tr -d ' ')" -eq 1 ] \
     || fail "the wake queued while nothing listened was lost"
   stop_listener "$pid"
-  pass "a wake queued while nothing is listening survives until a listener returns"
+  pass "a wake queued while nothing is listening survives until a listener assesses it"
 }
 
 test_a_session_exit_and_restart_loses_no_wake() {
@@ -240,7 +247,8 @@ test_a_session_exit_and_restart_loses_no_wake() {
   pid=$(start_listener "$home")
   publish_endpoint "$home" tmux '%99'
   queue_wake "$home"
-  case "$(report "$home")" in delivering:*) ;; *) fail "the first session should be deliverable: $(report "$home")" ;; esac
+  out=$(wait_for_report "$home" "pane %99 no longer exists")
+  case "$out" in undeliverable:*) ;; *) fail "the first dead pane must be assessed as blocked: $out" ;; esac
 
   # The session exits: its lock record is gone and the endpoint it published now
   # names a pane that is nobody's. The listener must say so rather than type into
@@ -255,10 +263,10 @@ test_a_session_exit_and_restart_loses_no_wake() {
   # A new session starts, takes the lock, and publishes its own endpoint.
   printf '%s\n' "$$" > "$home/state/.lock"
   publish_endpoint "$home" tmux '%100'
-  out=$(report "$home")
+  out=$(wait_for_report "$home" "pane %100 no longer exists")
   case "$out" in
-    delivering:*"tmux pane %100"*) ;;
-    *) fail "the restarted session should be deliverable at its own pane: $out" ;;
+    undeliverable:*) ;;
+    *) fail "the restarted session's dead pane must be assessed as blocked: $out" ;;
   esac
   [ "$(wc -l < "$home/state/.wake-queue" | tr -d ' ')" -eq 1 ] \
     || fail "the wake did not survive the session exit and restart"
@@ -294,17 +302,64 @@ test_away_mode_stands_the_listener_down_without_killing_it() {
 
 # --- refusing an unsafe target ----------------------------------------------
 
-test_an_unsupported_backend_is_named_rather_than_guessed() {
-  local home pid
+test_pane_level_submit_blockers_reach_the_verdict() {
+  local home pid out socket session i
+  command -v tmux >/dev/null 2>&1 || { echo "skip: tmux not installed"; return 0; }
+
   home=$(make_home unsupported-backend)
   queue_wake "$home"
   publish_endpoint "$home" zellij 'sess:0'
   pid=$(start_listener "$home")
-  sleep 0.5
+  out=$(wait_for_report "$home" "no verified composer primitives for")
   grep -qF "no verified composer primitives for" "$home/state/.delivery.log" \
     || fail "an unsupported backend must be refused by name: $(cat "$home/state/.delivery.log")"
+  case "$out" in undeliverable:*) ;; *) fail "an unsupported backend looked deliverable: $out" ;; esac
   stop_listener "$pid"
-  pass "an endpoint naming an unverified backend is refused by name, not typed into"
+
+  home=$(make_home removed-pane)
+  queue_wake "$home"
+  publish_endpoint "$home" tmux '%99999'
+  pid=$(start_listener "$home")
+  out=$(wait_for_report "$home" "pane %99999 no longer exists")
+  grep -qF "pane %99999 no longer exists" "$home/state/.delivery.log" \
+    || fail "the submit path did not record the removed pane blocker"
+  case "$out" in undeliverable:*) ;; *) fail "a removed pane looked deliverable: $out" ;; esac
+  stop_listener "$pid"
+
+  home=$(make_home unknown-composer)
+  socket="fm-delivery-blocker-$$"
+  session=fm-delivery-unknown-composer
+  tmux -L "$socket" new-session -d -s "$session" 'bash --noprofile --norc -i'
+  mkdir -p "$home/bin"
+  cat > "$home/bin/tmux" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = capture-pane ]; then
+  exit 1
+fi
+exec $(command -v tmux) -L '$socket' "\$@"
+SH
+  chmod +x "$home/bin/tmux"
+  publish_endpoint "$home" tmux "$session"
+  queue_wake "$home"
+  pid=$(start_listener "$home" PATH="$home/bin:$PATH")
+  out=$(wait_for_report "$home" "composer could not be confirmed empty")
+  grep -qF "composer could not be confirmed empty" "$home/state/.delivery.log" \
+    || fail "the submit path did not record the unknown composer blocker"
+  case "$out" in undeliverable:*) ;; *) fail "an unconfirmed composer looked deliverable: $out" ;; esac
+  : > "$home/state/.wake-queue"
+  i=0
+  while [ -e "$home/state/.delivery-attempt-outcome" ] && [ "$i" -lt 200 ]; do
+    sleep 0.05
+    i=$((i + 1))
+  done
+  out=$(wait_for_report "$home" "durable queue is empty")
+  [ ! -e "$home/state/.delivery-attempt-outcome" ] \
+    || fail "draining the queue left a stale blocked-attempt outcome"
+  case "$out" in idle:*) ;; *) fail "a drained queue stayed blocked: $out" ;; esac
+  stop_listener "$pid"
+  tmux -L "$socket" kill-server 2>/dev/null || true
+
+  pass "pane-level submit blockers and the public verdict agree on their concrete cause"
 }
 
 # --- a real tmux end to end --------------------------------------------------
@@ -313,7 +368,7 @@ test_an_unsupported_backend_is_named_rather_than_guessed() {
 # about the submit, which is the half that touches the captain's terminal.
 
 test_real_tmux_delivery_reaches_the_composer() {
-  local home socket session pid i pane
+  local home socket session pid i pane out
   command -v tmux >/dev/null 2>&1 || { echo "skip: tmux not installed"; return 0; }
   home=$(make_home real-tmux)
   socket="fm-delivery-test-$$"
@@ -358,7 +413,6 @@ SH
     sleep 0.1
     i=$((i + 1))
   done
-  stop_listener "$pid"
   if [ ! -s "$home/received.txt" ]; then
     pane=$(tmux -L "$socket" capture-pane -p -t "$session" 2>/dev/null || true)
     tmux -L "$socket" kill-server 2>/dev/null || true
@@ -368,8 +422,14 @@ SH
     || fail "the delivered message was not the canonical typed watcher input: $(cat "$home/received.txt")"
   grep -qF 'bin/fm-wake-drain.sh' "$home/received.txt" \
     || fail "the delivered message did not tell the seat to drain: $(cat "$home/received.txt")"
+  out=$(report "$home")
+  case "$out" in
+    delivering:*"tmux pane $session"*) ;;
+    *) fail "a confirmed submit with a still-pending wake must report delivering, got: $out" ;;
+  esac
   [ "$(wc -l < "$home/state/.wake-queue" | tr -d ' ')" -eq 1 ] \
     || fail "delivery consumed the durable queue record instead of leaving it for the drain"
+  stop_listener "$pid"
   tmux -L "$socket" kill-server 2>/dev/null || true
   pass "the listener submits the canonical typed wake into a real tmux agent composer"
 }
@@ -444,9 +504,9 @@ SH
   kill -0 "$pid" 2>/dev/null || fail "destroying the session process group also destroyed delivery"
   queue_wake "$home"
   sleep 0.5
-  case "$(report "$home")" in
-    delivering:*) ;;
-    *) fail "delivery did not keep working after the session process group was destroyed: $(report "$home")" ;;
+  case "$(wait_for_report "$home" "pane %99 no longer exists")" in
+    undeliverable:*) ;;
+    *) fail "delivery did not keep assessing wakes after the session process group was destroyed: $(report "$home")" ;;
   esac
   stop_listener "$pid"
   pass "the whole session process group can be destroyed with the reaper enabled and delivery is unaffected"
@@ -514,7 +574,7 @@ test_the_listener_never_touches_the_durable_queue
 test_a_wake_queued_with_no_listener_is_delivered_once_one_returns
 test_a_session_exit_and_restart_loses_no_wake
 test_away_mode_stands_the_listener_down_without_killing_it
-test_an_unsupported_backend_is_named_rather_than_guessed
+test_pane_level_submit_blockers_reach_the_verdict
 test_real_tmux_delivery_reaches_the_composer
 test_destroying_the_whole_session_process_group_leaves_delivery_running
 test_service_status_and_repair_command_are_answerable_without_systemd

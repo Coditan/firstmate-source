@@ -77,13 +77,17 @@ So the outside view is never a boolean.
 | Verdict | Means |
 | --- | --- |
 | `idle` | listening, nothing pending - the only healthy silence |
-| `delivering` | listening, wakes pending, submitting to the model turn |
-| `undeliverable` | listening, wakes pending, and the line names what blocks the submit |
+| `delivering` | listening, wakes pending, and no last attempt is recorded as blocked |
+| `undeliverable` | listening, wakes pending, and the line names the endpoint or last-attempt cause that blocks the submit |
 | `away` | up and standing down because the away daemon owns delivery |
 | `stalled` | a live, identity-matched listener whose beacon aged out |
 | `down` | no live, identity-matched listener at all |
 
 `undeliverable` always names its own cause: no endpoint published, a malformed record, an endpoint from a session that no longer holds the lock, a pane that no longer exists, a pane mid-turn, a composer holding unsubmitted text, a composer that could not be confirmed empty, or a backend this listener has no verified composer primitives for.
+
+The listener publishes the last resolved submit attempt as one bounded, single-line outcome record.
+A blocked attempt records its concrete cause, a confirmed submit clears it, and an empty durable queue clears it so stale failure cannot mask a healthy home.
+The reporting boundary reads that file after validating the endpoint and performs no pane capture or backend probe of its own.
 
 `stalled` and `down` are deliberately separate.
 A frozen host cannot touch the beacon while the process stays alive, so a suspend leaves exactly the stalled state behind; collapsing the two would report every resume as a death.

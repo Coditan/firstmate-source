@@ -180,6 +180,44 @@ fm_delivery_queue_depth() {  # <state>
   wc -l < "$queue" | tr -d ' '
 }
 
+fm_delivery_attempt_outcome_path() {  # <state>
+  printf '%s/.delivery-attempt-outcome\n' "$1"
+}
+
+fm_delivery_attempt_outcome_clear() {  # <state>
+  rm -f "$(fm_delivery_attempt_outcome_path "$1")"
+}
+
+fm_delivery_attempt_outcome_write_blocked() {  # <state> <reason>
+  local state=$1 reason=$2 record tmp
+  record=$(fm_delivery_attempt_outcome_path "$state")
+  case "$reason" in
+    ''|*$'\n'*|*$'\r'*) return 2 ;;
+  esac
+  [ "${#reason}" -le 1024 ] || reason=${reason:0:1024}
+  mkdir -p "$state" || return 1
+  tmp=$(mktemp "$record.XXXXXX") || return 1
+  printf 'blocked=%s\n' "$reason" > "$tmp" || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$record" || { rm -f "$tmp"; return 1; }
+  chmod 600 "$record" 2>/dev/null || true
+}
+
+FM_DELIVERY_ATTEMPT_REASON=
+fm_delivery_attempt_outcome_read_blocked() {  # <state>
+  local record line extra
+  FM_DELIVERY_ATTEMPT_REASON=
+  record=$(fm_delivery_attempt_outcome_path "$1")
+  [ -f "$record" ] && [ ! -L "$record" ] || return 1
+  IFS= read -r line < "$record" || return 1
+  IFS= read -r extra < <(tail -n +2 "$record") || true
+  [ -z "$extra" ] || return 1
+  case "$line" in
+    blocked=?*) FM_DELIVERY_ATTEMPT_REASON=${line#blocked=} ;;
+    *) return 1 ;;
+  esac
+  [ "${#FM_DELIVERY_ATTEMPT_REASON}" -le 1024 ]
+}
+
 # --- the outside view --------------------------------------------------------
 # One line, one verdict, and never a bare silence.  Print it wherever a human or
 # an agent asks whether wakes are being delivered; the verdict word is stable and
@@ -195,9 +233,6 @@ fm_delivery_queue_depth() {  # <state>
 #   stalled        a live listener whose beacon aged out
 #   down           no live identity-matched listener at all
 #
-# The verdict lives only in the printed line, not also in a global.  Two copies
-# of one answer is two things to keep in step, and the line is what every
-# consumer already reads.
 fm_delivery_report() {  # <state> <delivery-path> [grace] [home]
   local state=$1 delivery_path=$2 grace=${3:-$FM_DELIVERY_GRACE_DEFAULT} home=${4:-$FM_HOME}
   local depth age reason
@@ -231,6 +266,11 @@ fm_delivery_report() {  # <state> <delivery-path> [grace] [home]
     esac
     printf 'undeliverable: listener pid %s is up with %s wake(s) pending, but %s\n' \
       "$FM_DELIVERY_HEALTHY_PID" "$depth" "$reason"
+    return 1
+  fi
+  if fm_delivery_attempt_outcome_read_blocked "$state"; then
+    printf 'undeliverable: listener pid %s is up with %s wake(s) pending, but %s\n' \
+      "$FM_DELIVERY_HEALTHY_PID" "$depth" "$FM_DELIVERY_ATTEMPT_REASON"
     return 1
   fi
   printf 'delivering: listener pid %s is up with %s wake(s) pending for %s pane %s (%s)\n' \

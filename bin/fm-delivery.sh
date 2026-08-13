@@ -181,6 +181,9 @@ cycle() {
   local depth now reason
   touch "$BEAT" 2>/dev/null || true
   depth=$(fm_delivery_queue_depth "$STATE")
+  if [ "$depth" -eq 0 ]; then
+    fm_delivery_attempt_outcome_clear "$STATE"
+  fi
   if [ -e "$STATE/.afk" ]; then
     log_condition away "standing down: away mode owns delivery ($depth pending)"
     return 0
@@ -211,12 +214,14 @@ cycle() {
     return 0
   fi
   if attempt_submit "$FM_DELIVERY_ENDPOINT_BACKEND" "$FM_DELIVERY_ENDPOINT_TARGET" "$depth"; then
+    fm_delivery_attempt_outcome_clear "$STATE"
     LAST_SUBMIT=$now
     LAST_DEFER=0
     LAST_CONDITION=
     log "delivered: submitted $depth wake(s) to $FM_DELIVERY_ENDPOINT_BACKEND pane $FM_DELIVERY_ENDPOINT_TARGET"
     return 0
   fi
+  fm_delivery_attempt_outcome_write_blocked "$STATE" "$SUBMIT_REASON" || true
   LAST_DEFER=$now
   log_condition "blocked:$SUBMIT_REASON" "undeliverable: $depth wake(s) pending but $SUBMIT_REASON"
   return 0
