@@ -49,10 +49,12 @@
 # visible without making the memory reading untrustworthy.
 #
 # THE THREE ATTRIBUTION LAYERS
-#   account       from the process table. Always available, for every process.
+#   account       from the process table, for every process when that table is
+#                 readable; a failed table read is unmeasured.
 #   account slice totals, limit, and stall from that account's own cgroup.
-#                 Readable across accounts, so a foreign account is still
-#                 bounded even when nothing here can name its work.
+#                 Readable across accounts on this host, so a foreign account
+#                 is still bounded even when nothing here can name its work;
+#                 a blind cgroup tree is unmeasured.
 #   task          the task id, kind, and project the process is serving, joined
 #                 from the records of the installations this run read.
 # Only firstmate holds the third layer, which is why this lives here and not in

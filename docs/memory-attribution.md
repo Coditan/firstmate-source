@@ -55,8 +55,8 @@ Their absence on a supported platform is scope, stays visibly unavailable, and d
 
 | Layer | Source | Reach |
 | ----- | ------ | ----- |
-| Account | the process table | every process |
-| Account slice total, limit, and stall | that account's own cgroup | every account, across accounts, since cgroupfs is world-readable |
+| Account | the process table | every process when the table is readable; a failed read is unmeasured |
+| Account slice total, limit, and stall | that account's own cgroup | every account on this host, across accounts; a blind cgroup tree is unmeasured |
 | Task id, kind, and project | task records of the installations this run read | only what those records cover |
 
 Only firstmate holds the third layer, which is why this reading lives here rather than in host configuration.
