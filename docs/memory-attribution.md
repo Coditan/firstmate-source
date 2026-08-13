@@ -19,7 +19,7 @@ Measured on `hlr-web-1` on 2026-08-12:
 
 So the machine is comfortable and completely unbounded, and when that changes nothing on it can say which worker caused it.
 An alarm that cannot name a culprit is not actionable, and a ceiling chosen without knowing who spends the memory is a guess.
-Both later slices read this instrument, so this one is first.
+The delivered alarm reads this instrument, so attribution had to come first.
 
 This predates and is independent of the harness reaper question.
 
@@ -50,7 +50,7 @@ Treating it as unmeasured would make incompleteness the permanent norm and destr
 The remedy is to run the reading from the other installation too, or to point `--home` at records this account can read.
 The captain chose the same scope treatment for an account with no active session slice, an ordinary first run with no stored growth sample, and a stored sample younger than the minimum interval.
 Those are known absences or operator cadence, not failed instruments.
-If they forced exit 3, the next slice's alarm would learn to discount the failure status it must consume.
+If they forced exit 3, the alarm would learn to discount the failure status it must consume.
 The wall-clock and peak-memory cost figures measure the reading itself rather than machine memory.
 Their absence on a supported platform is scope, stays visibly unavailable, and does not make the memory reading incomplete.
 
