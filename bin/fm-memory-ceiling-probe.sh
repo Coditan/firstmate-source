@@ -83,6 +83,7 @@
 #   FM_CEILING_PROBE_MEMINFO        headroom source (tests)
 #   FM_CEILING_PROBE_PRESSURE       host stall source (tests)
 #   FM_CEILING_PROBE_SYSTEMD_RUN     systemd-run command (tests)
+#   FM_CEILING_PROBE_SCOPE_CGROUP    scope cgroup directory (tests)
 set -u
 
 HIGH=2G
@@ -199,8 +200,9 @@ run_arm() {
 
   if ! dd if=/dev/urandom of="$corpus" bs=1M count="$CORPUS_MIB" oflag=direct status=none 2>/dev/null; then
     rm -f "$corpus"
-    unmeasured "arm-$name" "the cold corpus for the $name arm could not be written, so that arm never ran"
-    return 1
+    printf 'ARM_ERROR\tarm-%s\tthe cold corpus for the %s arm could not be written, so that arm never ran\n' \
+      "$name" "$name"
+    return 0
   fi
 
   local avail_before avail_after record
@@ -210,12 +212,13 @@ run_arm() {
   # the shell inside the scope, reading that scope's own cgroup, and must not be
   # resolved out here against this one.
   # shellcheck disable=SC2016
+  local run_status=0
   record=$("$SYSTEMD_RUN" --user --scope --unit="$unit" \
     -p MemoryHigh="$high" -p MemoryMax=infinity --quiet -- \
     bash -c '
       set -u
-      corpus=$1; run_for=$2
-      cg=/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)
+      corpus=$1; run_for=$2; cg=$3
+      [ -n "$cg" ] || cg=/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)
       [ -r "$cg/memory.current" ] || { printf "ARM_FAILED\tthe scope cgroup at %s is unreadable\n" "$cg"; exit 0; }
 
       stat_of() { awk -v k="$1" "\$1 == k { print \$2 }" "$cg/memory.stat"; }
@@ -245,19 +248,35 @@ run_arm() {
       printf "ARM\t%d\t%d\t%s\t%d\t%d\t%s\n" \
         "$peak_current" "$((high1 - high0))" "$peak_stall" \
         "$((steal1 - steal0))" "$((refault1 - refault0))" "$stall_readable"
-    ' _ "$corpus" "$RUN_SECONDS" 2>/dev/null)
+    ' _ "$corpus" "$RUN_SECONDS" "${FM_CEILING_PROBE_SCOPE_CGROUP:-}" 2>/dev/null) || run_status=$?
 
   avail_after=$(host_avail_mib)
   rm -f "$corpus"
 
+  if [ "$run_status" -ne 0 ]; then
+    printf 'ARM_ERROR\tarm-%s\tthe %s arm scope exited with status %s before producing a reading\n' \
+      "$name" "$name" "$run_status"
+    return 0
+  fi
+
   case "$record" in
     ARM$'\t'*) printf '%s\t%s\t%s\n' "$record" "$avail_before" "$avail_after" ;;
     ARM_FAILED*)
-      unmeasured "arm-$name" "${record#ARM_FAILED$'\t'}"
-      return 1 ;;
+      printf 'ARM_ERROR\tarm-%s\t%s\n' "$name" "${record#ARM_FAILED$'\t'}" ;;
     *)
-      unmeasured "arm-$name" "the $name arm produced no reading, so the scope did not run or could not be measured"
-      return 1 ;;
+      printf 'ARM_ERROR\tarm-%s\tthe %s arm produced no reading, so the scope did not run or could not be measured\n' \
+        "$name" "$name" ;;
+  esac
+}
+
+accept_arm_result() {
+  local result=$1 destination=$2 input reason
+  case "$result" in
+    ARM$'\t'*) printf -v "$destination" '%s' "$result" ;;
+    ARM_ERROR$'\t'*)
+      IFS=$'\t' read -r _ input reason <<<"$result"
+      unmeasured "$input" "$reason" ;;
+    *) unmeasured arm-protocol "an arm returned a result the probe could not interpret" ;;
   esac
 }
 
@@ -278,8 +297,12 @@ HOST_STALL_BEFORE=$(host_stall_avg10)
 # The control runs first. A ceiling arm that ran first would leave the host's
 # stall averages decaying from its own reclaim, and the control would inherit
 # that as if it were the machine's own noise.
-CONTROL=$(run_arm control infinity) || true
-CEILING=$(run_arm ceiling "$HIGH") || true
+CONTROL_RESULT=$(run_arm control infinity)
+CEILING_RESULT=$(run_arm ceiling "$HIGH")
+CONTROL=
+CEILING=
+accept_arm_result "$CONTROL_RESULT" CONTROL
+accept_arm_result "$CEILING_RESULT" CEILING
 
 if [ ${#UNMEASURED[@]} -gt 0 ]; then
   printf 'memory-ceiling-probe: INCOMPLETE - an arm did not run, so no verdict is issued\n'

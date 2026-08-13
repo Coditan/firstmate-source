@@ -156,17 +156,25 @@ test_the_probe_sets_no_lasting_limit_and_kills_nothing() {
 #!/usr/bin/env bash
 printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
   "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" >>"$FM_TEST_SYSTEMD_CALLS"
+shift 9
 sleep 30 >/dev/null 2>&1 &
 printf '%s\n' "$!" >>"$FM_TEST_WORKLOAD_PIDS"
-printf 'ARM\t1048576\t0\t0.00\t0\t0\tyes\n'
+"$@"
 EOF
   chmod +x "$fake"
+  local scope="$TMP_ROOT/scope"
+  mkdir -p "$scope"
+  printf '1048576\n' >"$scope/memory.current"
+  printf 'high 0\n' >"$scope/memory.events"
+  printf 'pgsteal 0\nworkingset_refault_file 0\n' >"$scope/memory.stat"
+  write_pressure "$scope/memory.pressure"
   write_meminfo "$TMP_ROOT/meminfo" 16000000
   write_pressure "$TMP_ROOT/pressure"
   local out status=0
   out=$(env FM_CEILING_PROBE_SYSTEMD_RUN="$fake" FM_TEST_SYSTEMD_CALLS="$calls" \
     FM_TEST_WORKLOAD_PIDS="$pids" FM_CEILING_PROBE_MEMINFO="$TMP_ROOT/meminfo" \
-    FM_CEILING_PROBE_PRESSURE="$TMP_ROOT/pressure" "$PROBE" --corpus-mib 64 \
+    FM_CEILING_PROBE_PRESSURE="$TMP_ROOT/pressure" FM_CEILING_PROBE_SCOPE_CGROUP="$scope" \
+    "$PROBE" --corpus-mib 64 \
     --seconds 5 --scratch "$TMP_ROOT/scratch-live" 2>&1) || status=$?
   expect_code 0 "$status" "a probe driven through the transient-scope seam"
   [ "$(wc -l <"$calls")" -eq 2 ] || fail "the probe must create exactly one transient scope per arm"
@@ -193,6 +201,26 @@ EOF
   done <"$pids"
   assert_contains "$out" "memory-ceiling-probe: clear" "the recorded arm results must reach the public verdict"
   pass "the probe sets no lasting limit and contains no path that could kill"
+}
+
+test_an_arm_that_cannot_run_is_incomplete() {
+  local fake="$TMP_ROOT/systemd-run-fails" out status=0
+  cat >"$fake" <<'EOF'
+#!/usr/bin/env bash
+exit 19
+EOF
+  chmod +x "$fake"
+  write_meminfo "$TMP_ROOT/meminfo" 16000000
+  write_pressure "$TMP_ROOT/pressure"
+  out=$(env FM_CEILING_PROBE_SYSTEMD_RUN="$fake" FM_CEILING_PROBE_MEMINFO="$TMP_ROOT/meminfo" \
+    FM_CEILING_PROBE_PRESSURE="$TMP_ROOT/pressure" "$PROBE" --corpus-mib 64 \
+    --seconds 5 --scratch "$TMP_ROOT/scratch-failure" 2>&1) || status=$?
+  expect_code 3 "$status" "an arm scope that could not run"
+  assert_contains "$out" "INCOMPLETE" "a failed arm must not reach a measurement verdict"
+  assert_contains "$out" "arm-control" "the failed arm must be named"
+  assert_contains "$out" "status 19" "the arm failure reason must survive into the parent"
+  assert_not_contains "$out" "memory-ceiling-probe: clear" "a failed arm must never become a clean verdict"
+  pass "an arm execution failure is an incomplete measurement with a named reason"
 }
 
 test_usage_errors_exit_two() {
@@ -223,4 +251,5 @@ test_a_meminfo_without_the_line_it_needs_is_unmeasured_not_zero
 test_the_probe_refuses_to_load_a_host_that_is_already_short
 test_the_scratch_it_cannot_use_is_named_before_any_arm_runs
 test_the_probe_sets_no_lasting_limit_and_kills_nothing
+test_an_arm_that_cannot_run_is_incomplete
 test_usage_errors_exit_two
