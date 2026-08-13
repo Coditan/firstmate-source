@@ -496,9 +496,11 @@ test_sample_body_failures_are_not_first_sightings() {
   mkdir -p "$dir/bin"
   {
     printf '#!/usr/bin/env bash\n'
-    printf 'for arg in "$@"; do\n'
-    printf '  [ "$arg" = "$FAIL_SAMPLE" ] && exit 7\n'
-    printf 'done\n'
+    cat <<'EOF'
+for arg in "$@"; do
+  [ "$arg" = "$FAIL_SAMPLE" ] && exit 7
+done
+EOF
     printf 'exec %q "$@"\n' "$real_awk"
   } > "$dir/bin/awk"
   chmod +x "$dir/bin/awk"
