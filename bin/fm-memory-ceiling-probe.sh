@@ -82,6 +82,7 @@
 #   FM_CEILING_PROBE_CGROUP_ROOT    cgroup root (tests)
 #   FM_CEILING_PROBE_MEMINFO        headroom source (tests)
 #   FM_CEILING_PROBE_PRESSURE       host stall source (tests)
+#   FM_CEILING_PROBE_SYSTEMD_RUN     systemd-run command (tests)
 set -u
 
 HIGH=2G
@@ -133,12 +134,13 @@ unmeasured() { UNMEASURED+=("$1|$2"); }
 CGROUP_ROOT=${FM_CEILING_PROBE_CGROUP_ROOT:-/sys/fs/cgroup}
 MEMINFO=${FM_CEILING_PROBE_MEMINFO:-/proc/meminfo}
 PRESSURE=${FM_CEILING_PROBE_PRESSURE:-/proc/pressure/memory}
+SYSTEMD_RUN=${FM_CEILING_PROBE_SYSTEMD_RUN:-systemd-run}
 
 check_preconditions() {
   [ "$(stat -fc %T "$CGROUP_ROOT" 2>/dev/null)" = cgroup2fs ] ||
     unmeasured cgroup2 "$CGROUP_ROOT is not a cgroup v2 hierarchy, so no cgroup here has a memory ceiling to set"
 
-  command -v systemd-run >/dev/null 2>&1 ||
+  command -v "$SYSTEMD_RUN" >/dev/null 2>&1 ||
     unmeasured systemd-run "systemd-run is not on PATH, so this cannot place a workload in a scope of its own"
 
   [ -r "$PRESSURE" ] ||
@@ -208,7 +210,7 @@ run_arm() {
   # the shell inside the scope, reading that scope's own cgroup, and must not be
   # resolved out here against this one.
   # shellcheck disable=SC2016
-  record=$(systemd-run --user --scope --unit="$unit" \
+  record=$("$SYSTEMD_RUN" --user --scope --unit="$unit" \
     -p MemoryHigh="$high" -p MemoryMax=infinity --quiet -- \
     bash -c '
       set -u

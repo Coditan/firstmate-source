@@ -360,10 +360,10 @@ evaluate() {
 
 record_transition() {
   local from=$1 to=$2 line=$3
-  mkdir -p "$DATA" 2>/dev/null || true
+  mkdir -p "$DATA" 2>/dev/null || return 1
   printf '%s\t%s\t%s -> %s\t%s MiB available\t%s MiB/min growth\t%s minutes left\t%s\t%s\n' \
     "$NOW" "$(iso "$NOW")" "$from" "$to" "$AVAIL_MIB" "$GROWTH_MIB_MIN" "${MINUTES:-NA}" \
-    "${OFFENDER:-no process was growing}" "$line" >>"$LOG" 2>/dev/null || true
+    "${OFFENDER:-no process was growing}" "$line" >>"$LOG" 2>/dev/null
 }
 
 read_state() {
@@ -387,8 +387,8 @@ read_state_since() {
 
 write_state() {
   local to=$1 since=$2
-  mkdir -p "$STATE" 2>/dev/null || true
-  printf '%s %s\n' "$to" "$since" >"$STATE_FILE" 2>/dev/null || true
+  mkdir -p "$STATE" 2>/dev/null || return 1
+  printf '%s %s\n' "$to" "$since" >"$STATE_FILE" 2>/dev/null
 }
 
 human_duration() {
@@ -511,7 +511,9 @@ CURRENT=$VERDICT
 [ "$CURRENT" = elevated ] && CURRENT=$PREVIOUS
 
 if [ "$CURRENT" = "$PREVIOUS" ]; then
-  write_state "$CURRENT" "$SINCE"
+  write_state "$CURRENT" "$SINCE" ||
+    printf 'MEMORY_ALARM: the memory watch could not persist its %s state in %s; this poll was measured but not durably completed.\n' \
+      "$CURRENT" "$STATE_FILE"
   exit 0
 fi
 
@@ -533,7 +535,15 @@ case "$CURRENT" in
     ;;
 esac
 
-record_transition "$PREVIOUS" "$CURRENT" "$LINE"
-write_state "$CURRENT" "$NOW"
+if ! record_transition "$PREVIOUS" "$CURRENT" "$LINE"; then
+  printf 'MEMORY_ALARM: the memory watch could not record the %s to %s transition in %s; the transition was measured but not durably completed.\n' \
+    "$PREVIOUS" "$CURRENT" "$LOG"
+  exit 0
+fi
+if ! write_state "$CURRENT" "$NOW"; then
+  printf 'MEMORY_ALARM: the memory watch recorded the %s to %s transition but could not persist its new state in %s; the transition was not durably completed.\n' \
+    "$PREVIOUS" "$CURRENT" "$STATE_FILE"
+  exit 0
+fi
 printf '%s\n' "$LINE"
 exit 0

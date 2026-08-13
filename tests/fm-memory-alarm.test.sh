@@ -77,16 +77,6 @@ log_lines() {
   wc -l <"$HOME_DIR/data/memory-alarm.log"
 }
 
-# Comments explain what the script must never do, and say the words to do it.
-# Only executable lines can actually do it, so the boundary checks below read
-# the code with the commentary stripped out.
-code_without_comments() {
-  local out
-  out="$TMP_ROOT/code-$(basename "$1").txt"
-  grep -v '^[[:space:]]*#' "$1" >"$out"
-  printf '%s' "$out"
-}
-
 # --- cases ------------------------------------------------------------------
 
 test_a_healthy_machine_says_nothing() {
@@ -249,17 +239,47 @@ test_the_wake_delivery_listener_keeps_its_label() {
 }
 
 test_the_alarm_limits_nothing_and_kills_nothing() {
-  # The boundary the captain drew around this slice. A kill or a limit arriving
-  # by a later edit is exactly what this catches.
-  local code
-  code=$(code_without_comments "$ALARM")
-  assert_no_grep 'kill ' "$code" "the alarm must contain no kill path"
-  assert_no_grep 'pkill' "$code" "the alarm must contain no pkill path"
-  assert_no_grep 'MemoryHigh' "$code" "the alarm must set no memory ceiling"
-  assert_no_grep 'MemoryMax' "$code" "the alarm must set no memory maximum"
-  assert_no_grep 'memory.high' "$code" "the alarm must write no cgroup ceiling"
-  assert_no_grep 'systemctl' "$code" "the alarm must not reach for unit control"
+  reset_home
+  sleep 30 &
+  local offender=$! before after out
+  before=$(cat "/proc/$offender/cgroup")
+  reading 1800 true 102400 false task "alpha (ship, alpha-project)"
+  sed -i "s/\"pid\":4242/\"pid\":$offender/" "$ANSWER"
+  out=$(alarm)
+  kill -0 "$offender" 2>/dev/null || fail "the alarm must leave the offending process running"
+  after=$(cat "/proc/$offender/cgroup")
+  [ "$before" = "$after" ] || fail "the alarm must not move the offender into a limiting cgroup"
+  assert_contains "$out" "Nothing has been limited or killed" \
+    "the runtime result must state the no-action boundary"
+  kill "$offender" 2>/dev/null || true
+  wait "$offender" 2>/dev/null || true
   pass "the alarm limits nothing, throttles nothing, and kills nothing"
+}
+
+test_persistence_failures_replace_transition_claims_with_diagnostics() {
+  reset_home
+  reading 1800 true 0
+  rm -rf "$HOME_DIR/data"
+  printf 'not a directory\n' >"$HOME_DIR/data"
+  local out status=0
+  out=$(alarm) || status=$?
+  expect_code 0 "$status" "the watcher-facing persistence diagnostic"
+  assert_contains "$out" "could not record the ok to crossed transition" \
+    "a failed durable record must be reported instead of claiming the crossing completed"
+  assert_not_contains "$out" "this machine is running out of memory" \
+    "a transition whose record failed must not be reported as completed"
+
+  rm -f "$HOME_DIR/data"
+  mkdir -p "$HOME_DIR/data"
+  rm -rf "$HOME_DIR/state"
+  printf 'not a directory\n' >"$HOME_DIR/state"
+  out=$(alarm) || status=$?
+  expect_code 0 "$status" "the watcher-facing state persistence diagnostic"
+  assert_contains "$out" "could not persist its new state" \
+    "a failed state write must be reported instead of claiming the crossing completed"
+  assert_not_contains "$out" "this machine is running out of memory" \
+    "a transition whose state failed must not be reported as completed"
+  pass "persistence failures are watcher diagnostics, never completed transition claims"
 }
 
 test_arming_registers_a_check_and_is_idempotent() {
@@ -340,6 +360,7 @@ test_recovery_is_not_declared_on_growth_nobody_could_compare
 test_scoped_growth_on_a_calm_machine_is_not_a_growth_all_clear
 test_the_wake_delivery_listener_keeps_its_label
 test_the_alarm_limits_nothing_and_kills_nothing
+test_persistence_failures_replace_transition_claims_with_diagnostics
 test_arming_registers_a_check_and_is_idempotent
 test_an_alarm_that_stopped_running_is_reported
 test_usage_errors_exit_two

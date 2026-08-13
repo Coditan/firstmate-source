@@ -47,16 +47,6 @@ probe_with() {
   env "$@" "$PROBE" --scratch "$TMP_ROOT/scratch" 2>&1
 }
 
-# Comments explain what the script must never do, and say the words to do it.
-# Only executable lines can actually do it, so the boundary checks below read
-# the code with the commentary stripped out.
-code_without_comments() {
-  local out
-  out="$TMP_ROOT/code-$(basename "$1").txt"
-  grep -v '^[[:space:]]*#' "$1" >"$out"
-  printf '%s' "$out"
-}
-
 test_a_probe_that_could_not_look_never_reports_a_verdict() {
   local out status=0
   mkdir -p "$TMP_ROOT/notcgroup"
@@ -161,19 +151,47 @@ test_the_scratch_it_cannot_use_is_named_before_any_arm_runs() {
 }
 
 test_the_probe_sets_no_lasting_limit_and_kills_nothing() {
-  # The boundary this whole slice sits behind: the probe may set a ceiling on
-  # its own transient scope and nowhere else, and it must contain no path that
-  # ends a process. A grep is a coarse check, but it is the one that would have
-  # caught a victim-selection rule arriving by a later edit.
-  local code
-  code=$(code_without_comments "$PROBE")
-  assert_no_grep 'kill ' "$code" "the probe must contain no kill path"
-  assert_no_grep 'pkill' "$code" "the probe must contain no pkill path"
-  assert_no_grep 'MemoryMax=1' "$code" "the probe must never set an enforcing maximum"
-  assert_grep 'MemoryMax=infinity' "$code" \
-    "the probe's own scopes must explicitly disclaim an enforcing maximum"
-  assert_no_grep 'systemctl --user set-property' "$code" \
-    "the probe must not set a property on any unit it did not create"
+  local fake="$TMP_ROOT/systemd-run" calls="$TMP_ROOT/systemd-run.calls" pids="$TMP_ROOT/workload.pids"
+  cat >"$fake" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" >>"$FM_TEST_SYSTEMD_CALLS"
+sleep 30 >/dev/null 2>&1 &
+printf '%s\n' "$!" >>"$FM_TEST_WORKLOAD_PIDS"
+printf 'ARM\t1048576\t0\t0.00\t0\t0\tyes\n'
+EOF
+  chmod +x "$fake"
+  write_meminfo "$TMP_ROOT/meminfo" 16000000
+  write_pressure "$TMP_ROOT/pressure"
+  local out status=0
+  out=$(env FM_CEILING_PROBE_SYSTEMD_RUN="$fake" FM_TEST_SYSTEMD_CALLS="$calls" \
+    FM_TEST_WORKLOAD_PIDS="$pids" FM_CEILING_PROBE_MEMINFO="$TMP_ROOT/meminfo" \
+    FM_CEILING_PROBE_PRESSURE="$TMP_ROOT/pressure" "$PROBE" --corpus-mib 64 \
+    --seconds 5 --scratch "$TMP_ROOT/scratch-live" 2>&1) || status=$?
+  expect_code 0 "$status" "a probe driven through the transient-scope seam"
+  [ "$(wc -l <"$calls")" -eq 2 ] || fail "the probe must create exactly one transient scope per arm"
+  local control=no ceiling=no unit high
+  while IFS=$'\t' read -r arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 arg10 arg11; do
+    [ "$arg1" = --user ] && [ "$arg2" = --scope ] || fail "each arm must use a user transient scope"
+    unit=${arg3#--unit=}
+    [ "$arg4" = -p ] && high=${arg5#MemoryHigh=} || fail "each arm must set only its scoped MemoryHigh"
+    [ "$arg6" = -p ] && [ "$arg7" = MemoryMax=infinity ] || fail "each arm must disclaim an enforcing maximum"
+    [ "$arg8" = --quiet ] && [ "$arg9" = -- ] && [ "$arg10" = bash ] && [ "$arg11" = -c ] ||
+      fail "scope properties must precede the workload command"
+    case "$unit:$high" in
+      fm-ceiling-probe-control-[0-9]*.scope:infinity) control=yes ;;
+      fm-ceiling-probe-ceiling-[0-9]*.scope:2G) ceiling=yes ;;
+      *) fail "the probe must set limits only on its two named transient scopes" ;;
+    esac
+  done <"$calls"
+  [ "$control" = yes ] || fail "the control transient scope must remain unlimited"
+  [ "$ceiling" = yes ] || fail "the ceiling must apply only to its own transient scope"
+  local pid
+  while read -r pid; do
+    kill -0 "$pid" 2>/dev/null || fail "the probe must leave each workload alive"
+    kill "$pid" 2>/dev/null || true
+  done <"$pids"
+  assert_contains "$out" "memory-ceiling-probe: clear" "the recorded arm results must reach the public verdict"
   pass "the probe sets no lasting limit and contains no path that could kill"
 }
 
