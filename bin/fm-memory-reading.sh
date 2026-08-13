@@ -23,6 +23,8 @@
 #   unmeasured  the source was absent, unreadable, empty, or unparseable. No
 #               substitute value is invented, and a zero is never printed in
 #               its place.
+#   scope       the value is legitimately unavailable in this run, known in
+#               advance, and its absence is not an instrument failure.
 # The first line of every reading states which, and the exit status carries it:
 # a reading with any unmeasured input NEVER exits 0.
 #
@@ -38,6 +40,10 @@
 # calling it unmeasured would make incompleteness the permanent norm and
 # destroy the signal. The remedy is to run this reading from the other
 # installation too, or to point --home at records this account can read.
+# No active account slice, no stored growth sample on a first run, and a stored
+# sample younger than the configured floor are also scope. The first two are
+# expected absences and the last is the operator's own cadence. They do not
+# force exit 3, so the next slice's alarm does not learn to discount failure.
 #
 # THE THREE ATTRIBUTION LAYERS
 #   account       from the process table. Always available, for every process.
@@ -52,7 +58,7 @@
 # SIZE AND GROWTH ARE DIFFERENT QUESTIONS
 # A big steady worker is normal; a small one doubling every minute is the
 # problem. Growth is measured against the previous run's sample, so the first
-# run on a home reports growth as unmeasured rather than as zero. Pass
+# run on a home reports growth as scoped rather than as zero. Pass
 # --interval to take both samples inside one run instead.
 #
 # WAKE DELIVERY IS LABELLED, NOT RANKED
@@ -89,7 +95,7 @@
 #   fm-memory-reading.sh --help
 #
 # Exit status:
-#   0  every input within the declared scope was measured
+#   0  every expected instrument worked; scoped absences may still be reported
 #   3  at least one input was unmeasured (the reading is INCOMPLETE, whatever
 #      the numbers it did manage to print say)
 #   2  usage error
@@ -482,6 +488,9 @@ read_accounts() {
           pressure="UNMEASURED:$slice/memory.pressure carries no recognisable averages"
         fi
       fi
+      case "$current" in UNMEASURED:*) unmeasured "account-slice[$(account_for_uid "$uid")].memory.current" "${current#UNMEASURED:}" ;; esac
+      case "$max" in UNMEASURED:*) unmeasured "account-slice[$(account_for_uid "$uid")].memory.max" "${max#UNMEASURED:}" ;; esac
+      case "$pressure" in UNMEASURED:*) unmeasured "account-slice[$(account_for_uid "$uid")].memory.pressure" "${pressure#UNMEASURED:}" ;; esac
     fi
     printf '%s\t-\t%s\t%s\t%s\t%s\t%s\n' \
       "$uid" "$rsskb" "$procs" "$current" "$max" "$pressure" >> "$ACCOUNTS_FILE"
@@ -634,6 +643,7 @@ read_prior() {
     read_processes
     if [ "$PS_OK" -ne 1 ]; then
       GROWTH_REASON="the second process-table read failed"
+      unmeasured growth-sample "$GROWTH_REASON"
       return
     fi
     awk -F'\t' '{ printf "%s\t%s\t%s\n", $1, $5, $4 }' "$TMP/first.tsv" > "$PRIOR_FILE"
@@ -645,14 +655,16 @@ read_prior() {
     return
   fi
   epoch=$(sed -n 's/^epoch //p' "$SAMPLES" 2>/dev/null | head -1)
-  case "$epoch" in ''|*[!0-9]*) GROWTH_REASON="the stored sample carries no usable timestamp"; return ;; esac
+  case "$epoch" in ''|*[!0-9]*) GROWTH_REASON="the stored sample carries no usable timestamp"; unmeasured growth-sample "$GROWTH_REASON"; return ;; esac
   age=$((NOW - epoch))
   if [ "$age" -lt 0 ]; then
     GROWTH_REASON="the stored sample is dated in the future, so the interval cannot be trusted"
+    unmeasured growth-sample "$GROWTH_REASON"
     return
   fi
   if [ "$age" -gt "$SAMPLE_MAX_AGE" ]; then
     GROWTH_REASON="the stored sample is ${age}s old, past the ${SAMPLE_MAX_AGE}s window a growth rate means anything over"
+    unmeasured growth-sample "$GROWTH_REASON"
     return
   fi
   if [ "$age" -lt "$SAMPLE_MIN_AGE" ]; then
@@ -666,7 +678,10 @@ read_prior() {
 store_sample() {
   local tmp
   [ "$STORE" -eq 1 ] || return 0
-  [ -d "$STATE" ] || mkdir -p "$STATE" 2>/dev/null || return 0
+  if [ ! -d "$STATE" ] && ! mkdir -p "$STATE" 2>/dev/null; then
+    unmeasured sample-storage "$STATE could not be created"
+    return 0
+  fi
   tmp="$SAMPLES.$$"
   # Written aside and moved into place, so a reading interrupted mid-write
   # leaves the previous sample intact rather than a truncated one the next run
@@ -677,9 +692,13 @@ store_sample() {
     awk -F'\t' '{ printf "%s\t%s\t%s\n", $1, $4, $3 }' "$PROCS_FILE"
   } > "$tmp" 2>/dev/null; then
     rm -f "$tmp"
+    unmeasured sample-storage "$tmp could not be written"
     return 0
   fi
-  mv -f "$tmp" "$SAMPLES" 2>/dev/null || rm -f "$tmp"
+  if ! mv -f "$tmp" "$SAMPLES" 2>/dev/null; then
+    rm -f "$tmp"
+    unmeasured sample-storage "$SAMPLES could not be replaced"
+  fi
 }
 
 # --- the join ---------------------------------------------------------------

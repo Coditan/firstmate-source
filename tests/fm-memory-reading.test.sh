@@ -308,9 +308,10 @@ test_growth_separates_a_large_steady_process_from_a_fast_growing_one() {
 }
 
 test_growth_with_no_prior_sample_is_unmeasured_never_zero() {
-  local dir="$TMP_ROOT/nosample" out
+  local dir="$TMP_ROOT/nosample" out status=0
   new_scene "$dir"
-  out=$(run_reading "$dir")
+  out=$(run_reading "$dir") || status=$?
+  expect_code 0 "$status" "a first run with no prior sample"
   assert_contains "$out" 'growth unmeasured for every process above' 'a first run does not say growth was unmeasured'
   assert_contains "$out" 'nothing to compare against' 'the reason growth could not be measured is missing'
   assert_not_contains "$out" '+0.0 MiB/min' 'a first run reported a growth rate of zero it never measured'
@@ -318,22 +319,41 @@ test_growth_with_no_prior_sample_is_unmeasured_never_zero() {
 }
 
 test_a_stale_prior_sample_is_unmeasured_rather_than_meaningless() {
-  local dir="$TMP_ROOT/stale" out
+  local dir="$TMP_ROOT/stale" out status=0
   new_scene "$dir"
   write_sample "$dir/samples" $((NOW - 100000)) "1000=$((NOW - 600)):1000"
-  out=$(run_reading "$dir")
+  out=$(run_reading "$dir") || status=$?
+  expect_code 3 "$status" "a stale stored sample"
   assert_contains "$out" 'growth unmeasured for every process above' 'a stale sample was used as if current'
   assert_contains "$out" 'past the' 'the staleness reason is missing'
   pass "a prior sample older than the growth window is reported unmeasured"
 }
 
 test_too_short_an_interval_is_unmeasured_rather_than_divided_by() {
-  local dir="$TMP_ROOT/short" out
+  local dir="$TMP_ROOT/short" out status=0
   new_scene "$dir"
   write_sample "$dir/samples" $((NOW - 1)) "1000=$((NOW - 600)):1000"
-  out=$(run_reading "$dir")
+  out=$(run_reading "$dir") || status=$?
+  expect_code 0 "$status" "a stored sample under the minimum interval"
   assert_contains "$out" 'under the' 'a one-second interval was divided by anyway'
   pass "an interval under the floor is reported unmeasured rather than divided by"
+}
+
+test_corrupt_and_future_samples_force_incomplete_readings() {
+  local dir="$TMP_ROOT/badsample" out status case_name
+  for case_name in corrupt future; do
+    rm -rf "$dir"
+    new_scene "$dir"
+    case "$case_name" in
+      corrupt) printf 'epoch nonsense\n' > "$dir/samples" ;;
+      future) write_sample "$dir/samples" $((NOW + 60)) "1000=$((NOW - 600)):512000" ;;
+    esac
+    status=0
+    out=$(run_reading "$dir") || status=$?
+    expect_code 3 "$status" "a $case_name stored sample"
+    assert_contains "$out" 'growth-sample' "a $case_name sample did not name the failed input"
+  done
+  pass "corrupt and future-dated samples force incomplete readings"
 }
 
 test_a_reused_pid_is_not_reported_as_growth() {
@@ -417,14 +437,39 @@ test_a_cgroup_tree_nobody_read_is_not_reported_as_an_account_with_no_session() {
 }
 
 test_an_account_with_no_readable_slice_still_gets_its_process_total() {
-  local dir="$TMP_ROOT/partial" out
+  local dir="$TMP_ROOT/partial" out status=0
   new_scene "$dir"
-  out=$(run_reading "$dir")
+  out=$(run_reading "$dir") || status=$?
+  expect_code 0 "$status" "an account with no active session slice"
   # The other account has no slice in the fixture tree, and must still be
   # bounded by what the process table alone can say.
   assert_contains "$out" 'uid-4242' 'an account with no readable slice was dropped from the reading'
   assert_contains "$out" 'process(es)' 'the per-account process total is missing'
   pass "an account with no readable slice is still bounded by its process total"
+}
+
+test_a_malformed_account_slice_file_forces_an_incomplete_reading() {
+  local dir="$TMP_ROOT/malformed-slice" out status=0
+  new_scene "$dir"
+  printf 'not-bytes\n' > "$dir/cgroup/user.slice/user-$ME_UID.slice/memory.current"
+  out=$(run_reading "$dir") || status=$?
+  expect_code 3 "$status" "a malformed per-account cgroup file"
+  assert_contains "$out" "account-slice[$(id -un)].memory.current" 'the failed account and file were not named'
+  pass "a malformed account slice file names its instrument and exits 3"
+}
+
+test_sample_storage_failure_is_visible_and_no_store_is_scoped() {
+  local dir="$TMP_ROOT/sample-storage" out status=0
+  new_scene "$dir"
+  printf 'not a directory\n' > "$dir/state-blocker"
+  out=$(run_reading "$dir" "FM_STATE_OVERRIDE=$dir/state-blocker") || status=$?
+  expect_code 3 "$status" "a sample that cannot be stored"
+  assert_contains "$out" 'sample-storage' 'sample persistence failure was not named'
+  status=0
+  out=$(run_reading "$dir" "FM_STATE_OVERRIDE=$dir/state-blocker" --no-store) || status=$?
+  expect_code 0 "$status" "--no-store with unavailable storage"
+  assert_contains "$out" 'UNMEASURED INPUTS (0)' '--no-store registered a persistence failure'
+  pass "sample storage failures exit 3 while --no-store remains successful"
 }
 
 # --- machine-readable form ---------------------------------------------------
@@ -454,21 +499,28 @@ test_the_json_form_carries_the_same_completeness_verdict() {
 
 # --- the slice boundary ------------------------------------------------------
 
-test_the_reading_contains_no_path_that_could_kill_or_limit() {
-  # This slice is the instrument only. The ceiling is the next slice and the
-  # kill is the one after it, both separately decided, so a path that could do
-  # either must not appear here at all.
-  local body
-  body=$(grep -vE '^\s*#' "$READING")
-  case "$body" in
-    *' kill '*|*'kill -'*|*pkill*|*killall*)
-      fail "the reading contains a process-killing path, which belongs to a later slice" ;;
-  esac
-  case "$body" in
-    *MemoryMax*|*MemoryHigh*|*'systemd-run'*|*'ulimit -v'*|*'ulimit -m'*)
-      fail "the reading contains a limit-setting path, which belongs to a later slice" ;;
-  esac
-  pass "the reading sets no limit and kills nothing"
+test_the_reading_does_not_kill_or_limit() {
+  local dir="$TMP_ROOT/safety" out status=0 sentinel max_before pressure_before
+  new_scene "$dir"
+  sleep 60 &
+  sentinel=$!
+  make_ps "$dir/ps" "$sentinel 1 $ME_UID 65536 10 codex sentinel-worker"
+  make_proc "$dir/proc" "$sentinel=$dir/home/work/alpha"
+  max_before=$(od -An -tx1 "$dir/cgroup/user.slice/user-$ME_UID.slice/memory.max")
+  pressure_before=$(od -An -tx1 "$dir/cgroup/user.slice/user-$ME_UID.slice/memory.pressure")
+  out=$(run_reading "$dir") || status=$?
+  expect_code 0 "$status" "the safety-boundary reading"
+  if ! kill -0 "$sentinel" 2>/dev/null; then
+    fail "the reading terminated the sentinel process"
+  fi
+  [ "$max_before" = "$(od -An -tx1 "$dir/cgroup/user.slice/user-$ME_UID.slice/memory.max")" ] \
+    || fail "the reading changed memory.max"
+  [ "$pressure_before" = "$(od -An -tx1 "$dir/cgroup/user.slice/user-$ME_UID.slice/memory.pressure")" ] \
+    || fail "the reading changed a cgroup control fixture"
+  kill "$sentinel" 2>/dev/null || true
+  wait "$sentinel" 2>/dev/null || true
+  assert_contains "$out" "$sentinel" 'the sentinel was not observed through the executable interface'
+  pass "the reading leaves a sentinel alive and cgroup controls unchanged"
 }
 
 test_usage_errors_exit_two() {
@@ -498,11 +550,14 @@ test_growth_separates_a_large_steady_process_from_a_fast_growing_one
 test_growth_with_no_prior_sample_is_unmeasured_never_zero
 test_a_stale_prior_sample_is_unmeasured_rather_than_meaningless
 test_too_short_an_interval_is_unmeasured_rather_than_divided_by
+test_corrupt_and_future_samples_force_incomplete_readings
 test_a_reused_pid_is_not_reported_as_growth
 test_a_genuinely_calm_stall_reading_is_not_confusable_with_a_blind_one
 test_each_unreadable_input_is_named_and_forces_a_non_zero_exit
 test_a_cgroup_tree_nobody_read_is_not_reported_as_an_account_with_no_session
 test_an_account_with_no_readable_slice_still_gets_its_process_total
+test_a_malformed_account_slice_file_forces_an_incomplete_reading
+test_sample_storage_failure_is_visible_and_no_store_is_scoped
 test_the_json_form_carries_the_same_completeness_verdict
-test_the_reading_contains_no_path_that_could_kill_or_limit
+test_the_reading_does_not_kill_or_limit
 test_usage_errors_exit_two

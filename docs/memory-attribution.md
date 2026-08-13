@@ -28,7 +28,7 @@ This predates and is independent of the harness reaper question.
 A reading that found nothing wrong and a reading that failed to look both come back calm.
 Anything downstream that cannot tell those apart will eventually report an all-clear it never measured, which is worse than no reading at all.
 
-Every input is therefore named and reports either a value or `unmeasured` with the concrete reason.
+Every input is therefore named and reports a measured value, `unmeasured` with the concrete reason, or a declared scope reason.
 The first line carries the verdict and so does the exit status: **a reading with any unmeasured input never exits 0**.
 A zero is never substituted for a measurement that did not happen.
 
@@ -45,6 +45,9 @@ Every reading prints the installations it read, and anything they do not cover i
 That boundary is permanent and known in advance, so it is reported as declared scope rather than as an instrument failure.
 Treating it as unmeasured would make incompleteness the permanent norm and destroy the signal the exit status carries.
 The remedy is to run the reading from the other installation too, or to point `--home` at records this account can read.
+The captain chose the same scope treatment for an account with no active session slice, an ordinary first run with no stored growth sample, and a stored sample younger than the minimum interval.
+Those are known absences or operator cadence, not failed instruments.
+If they forced exit 3, the next slice's alarm would learn to discount the failure status it must consume.
 
 ## The three attribution layers
 
@@ -135,10 +138,13 @@ Growth has its own set, because an unmeasurable growth rate is the easiest thing
 
 | Condition | Reported as |
 | --------- | ----------- |
-| no prior sample | `unmeasured`, "nothing to compare against" - never `+0.0 MiB/min` |
-| prior sample older than the growth window | `unmeasured`, with the age and the window |
-| interval shorter than the divide-by floor | `unmeasured`, with the interval and the floor |
-| the pid now belongs to a later process | `unmeasured`, "different, later process" - never counted as growth |
+| no prior sample | scope, "nothing to compare against" - never `+0.0 MiB/min`; exit 0 remains possible |
+| stored sample has no usable epoch | `unmeasured` input `growth-sample`; exit 3 |
+| stored sample is future-dated | `unmeasured` input `growth-sample`; exit 3 |
+| prior sample older than the growth window | `unmeasured` input `growth-sample`, with the age and window; exit 3 |
+| interval shorter than the divide-by floor | scope, with the interval and floor; exit 0 remains possible |
+| second process-table read fails during `--interval` | `unmeasured` input `growth-sample`; exit 3 |
+| the pid now belongs to a later process | per-process `unmeasured`, "different, later process" - never counted as growth |
 | the process exited during the reading | reported as `exited`, never silently dropped |
 
 ### Cost
@@ -184,7 +190,7 @@ Its absence is never a licence, because this reading does not know every process
 The reading sets no limit, ceiling, or throttle; raises no alarm; kills nothing; and contains no path that could.
 The ceiling and its alarm are the next slice, and the escalation to a kill is the last, both separately decided.
 
-`tests/fm-memory-reading.test.sh` enforces that boundary structurally: it fails if a killing or limit-setting path ever appears in the script.
+`tests/fm-memory-reading.test.sh` enforces that boundary through the executable interface: a sentinel process must survive and fixture control files must remain byte-for-byte unchanged.
 
 It is also not a replacement for the disabled background-shell reaper.
 The panel ruled that unjustified at measured load: it only ever killed a 3.8-4.4 MiB helper while real sessions run at hundreds of MiB, and it self-disarms while work is active.
