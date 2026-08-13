@@ -119,6 +119,27 @@ usage_error() {
   exit 2
 }
 
+resolve_file_path() {
+  local candidate=$1 directory name target hops=0
+
+  while [ "$hops" -lt 40 ]; do
+    directory=$(cd -- "$(dirname -- "$candidate")" 2>/dev/null && pwd -P) || return 1
+    name=$(basename -- "$candidate")
+    candidate="$directory/$name"
+    if [ ! -L "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+    target=$(readlink "$candidate" 2>/dev/null) || return 1
+    case "$target" in
+      /*) candidate=$target ;;
+      *) candidate="$directory/$target" ;;
+    esac
+    hops=$((hops + 1))
+  done
+  return 1
+}
+
 text=
 have_text=0
 text_file=
@@ -243,9 +264,8 @@ if [ "$have_file" -eq 1 ]; then
   [ -s "$file_path" ] || die "refusing to send an empty file: $file_path"
 
   file_name=$(basename -- "$file_path")
-  file_dir=$(cd -- "$(dirname -- "$file_path")" 2>/dev/null && pwd -P) \
-    || die "could not resolve the directory holding $file_path"
-  file_abs="$file_dir/$file_name"
+  file_abs=$(resolve_file_path "$file_path") \
+    || die "could not resolve the file at $file_path"
 
   # One named accident, not a secret scanner: config/ is where this channel's
   # own credential lives, so a path inside it is always the wrong thing to send

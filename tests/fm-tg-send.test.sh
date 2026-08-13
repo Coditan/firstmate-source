@@ -500,6 +500,21 @@ test_a_path_inside_the_homes_private_configuration_is_refused() {
   pass "a path inside the home's own private configuration is refused"
 }
 
+test_a_symlink_to_the_homes_private_configuration_is_refused() {
+  local home="$TMP_ROOT/config-symlink" out status=0 link="$TMP_ROOT/channel-settings.env"
+  new_home "$home"
+  install_sender "$home"
+  declare_capabilities "$home" 'file'
+  ln -s "$home/config/telegram.env" "$link" || fail "could not create the credential symlink"
+
+  out=$(run_send "$home" --file "$link") || status=$?
+  expect_code 1 "$status" "a symlink to the channel credential"
+  assert_contains "$out" "private configuration" "the symlink refusal did not name the private configuration"
+  assert_sender_never_ran "$home" "the sender ran for a symlink to the private configuration"
+  assert_not_contains "$out" "$FIXTURE_TOKEN" "the symlink refusal printed the credential it was refusing to send"
+  pass "a symlink outside config cannot carry the channel credential out"
+}
+
 test_a_caption_naming_a_pull_request_without_its_url_is_refused_too() {
   local home="$TMP_ROOT/caption-pr" out status=0 payload="$TMP_ROOT/caption-pr.md"
   new_home "$home"
@@ -616,6 +631,7 @@ test_the_media_type_is_detected_and_a_malformed_one_is_not_believed
 test_a_file_may_go_with_no_caption_at_all
 test_every_way_a_path_can_be_wrong_is_refused_before_anything_is_transmitted
 test_a_path_inside_the_homes_private_configuration_is_refused
+test_a_symlink_to_the_homes_private_configuration_is_refused
 test_a_caption_naming_a_pull_request_without_its_url_is_refused_too
 test_a_failing_sender_on_a_file_send_is_never_reported_as_sent
 test_ambiguous_file_arguments_are_usage_errors_and_attempt_nothing
