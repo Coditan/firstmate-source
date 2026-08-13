@@ -41,6 +41,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-supervision-cost.sh` | Measure what supervision costs a session in freshly written tokens, from the provider's own usage records (docs/supervision-cost.md) |
 | `fm-supervision-cost-engine.py` | Measurement engine for supervision spend; counts session starts, deliveries, empty deliveries, requests per wake, and delivery arms by whether they cost a request of their own |
 | `fm-grade-engine.py`     | Measurement engine for the review-quality scale; every metric carries its evidence class and sample size |
+| `fm-memory-reading.sh`   | Name which process is running away with this machine's memory, by size and by growth, tied to its account and to its task when known, alongside headroom and the kernel's stall reading; it sets no limit and kills nothing, and it never reports an input it could not read as a healthy zero (docs/memory-attribution.md) |
 | `fm-herdr-lab.sh`        | Provision and guardedly operate an isolated, never-default Herdr lab session         |
 | `fm-install-herdr.sh`    | Install CI's exact-version Herdr pin with official asset URL, SHA-256, and protocol checks |
 | `fm-install-treehouse.sh`| Install CI's exact-version Treehouse pin for real-Herdr E2E that needs spawn worktrees |
