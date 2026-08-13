@@ -169,6 +169,8 @@ test_a_complete_reading_says_so_and_exits_zero() {
   expect_code 0 "$status" "a fully measured reading"
   assert_contains "$out" 'memory-reading: complete' 'the reading does not report itself complete'
   assert_contains "$out" 'UNMEASURED INPUTS (0)' 'a complete reading still lists its unmeasured inputs as none'
+  assert_contains "$out" 'peak memory of this reading unavailable in scope' 'unavailable cost was not rendered as scope'
+  assert_not_contains "$out" 'peak memory of this reading 0' 'unavailable cost was fabricated as zero'
   pass "a fully measured reading reports complete and exits 0"
 }
 
@@ -390,6 +392,7 @@ test_growth_with_no_prior_sample_is_unmeasured_never_zero() {
   expect_code 0 "$status" "a first run with no prior sample"
   assert_contains "$out" 'growth scoped for every process above' 'a first run does not say growth was scoped'
   assert_not_contains "$out" 'growth unmeasured for every process above' 'a first run was labelled unmeasured'
+  assert_not_contains "$out" ' unmeasured  unmeasured ' 'a scoped first run encoded per-process growth as unmeasured'
   assert_contains "$out" 'nothing to compare against' 'the reason growth could not be measured is missing'
   assert_not_contains "$out" '+0.0 MiB/min' 'a first run reported a growth rate of zero it never measured'
   pass "growth with no prior sample is reported unmeasured, never as zero growth"
@@ -426,6 +429,7 @@ test_too_short_an_interval_is_scoped_rather_than_divided_by() {
   assert_contains "$out" 'under the' 'a one-second interval was divided by anyway'
   assert_contains "$out" 'scoped for this run' 'a short operator interval was not labelled scoped'
   assert_not_contains "$out" 'UNMEASURED for every tracked process' 'a short operator interval was labelled unmeasured'
+  assert_not_contains "$out" ' unmeasured  unmeasured ' 'a short interval encoded per-process growth as unmeasured'
   pass "an interval under the floor is scoped rather than divided by"
 }
 
@@ -579,6 +583,12 @@ test_the_json_form_carries_the_same_completeness_verdict() {
     || fail "the json form does not carry the protected label"
   [ "$(printf '%s' "$out" | jq -r '.processes[] | select(.pid == 1000) | .attribution.detail')" = "alpha-task (ship, alpha-project)" ] \
     || fail "the json form does not carry the task attribution"
+  [ "$(printf '%s' "$out" | jq -r '.processes[] | select(.pid == 1000) | .growth_state')" = scoped ] \
+    || fail "json encoded globally scoped growth as unmeasured"
+  [ "$(printf '%s' "$out" | jq -r '.processes[] | select(.pid == 1000) | .growth_unmeasured_reason')" = null ] \
+    || fail "json exposed an unmeasured reason for scoped growth"
+  [ "$(printf '%s' "$out" | jq -r '.processes[] | select(.pid == 1000) | .growth_scope_reason')" != null ] \
+    || fail "json omitted the scoped growth reason"
 
   : > "$dir/pressure"
   status=0

@@ -48,6 +48,8 @@ The remedy is to run the reading from the other installation too, or to point `-
 The captain chose the same scope treatment for an account with no active session slice, an ordinary first run with no stored growth sample, and a stored sample younger than the minimum interval.
 Those are known absences or operator cadence, not failed instruments.
 If they forced exit 3, the next slice's alarm would learn to discount the failure status it must consume.
+The wall-clock and peak-memory cost figures measure the reading itself rather than machine memory.
+Their absence on a supported platform is scope, stays visibly unavailable, and does not make the memory reading incomplete.
 
 ## The three attribution layers
 

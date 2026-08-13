@@ -44,6 +44,9 @@
 # sample younger than the configured floor are also scope. The first two are
 # expected absences and the last is the operator's own cadence. They do not
 # force exit 3, so the next slice's alarm does not learn to discount failure.
+# The wall-clock and peak-memory cost figures measure this instrument rather
+# than machine memory. Their platform-dependent absence is scope and stays
+# visible without making the memory reading untrustworthy.
 #
 # THE THREE ATTRIBUTION LAYERS
 #   account       from the process table. Always available, for every process.
@@ -762,6 +765,7 @@ build_records() {
   awk -F'\t' -v OFS='\t' \
     -v interval="$GROWTH_INTERVAL" \
     -v growth_reason="$GROWTH_REASON" \
+    -v growth_scoped="$GROWTH_SCOPE" \
     -v grow_min="$GROWTH_KB_MIN" \
     -v prot="$PROTECTED_NAMES" \
     -v me="$(id -un 2>/dev/null || id -u)" \
@@ -812,6 +816,7 @@ build_records() {
 
         # --- growth ---
         gstate = "unmeasured"; grate = "NA"; greason = growth_reason
+        if (greason != "" && growth_scoped + 0 == 1) gstate = "scoped"
         if (greason == "") {
           if (!(pid in pr_rss)) {
             greason = "first sighting of this process by the reading"
@@ -1067,7 +1072,7 @@ print_table() {  # <tsv lines>
       return account " / UNATTRIBUTED: " detail
     }
     {
-      growth = ($5 == "NA") ? "unmeasured" : sprintf("%+.1f MiB/min", $5 / 1024)
+      growth = ($5 == "NA") ? $7 : sprintf("%+.1f MiB/min", $5 / 1024)
       printf "  %8d %15s  %-10s %-8s %-20s %s\n", \
         $3 / 1024, growth, $7, $1, $12, attribution($8, $9, $11, $2)
       # A per-process reason only. When no pair of samples existed at all the
@@ -1096,10 +1101,10 @@ reading_cost() {
     [ "$INTERVAL" -gt 0 ] && wall="$wall (of which ${INTERVAL}000 was the requested wait)"
     wall="${wall}ms wall"
   else
-    wall="wall time UNMEASURED (no nanosecond clock on this machine)"
+    wall="wall time unavailable in scope (no nanosecond clock on this machine)"
   fi
   peak=$(sed -n 's/^VmHWM:[[:space:]]*//p' "$PROC/self/status" 2>/dev/null | head -1)
-  [ -n "$peak" ] || peak="UNMEASURED"
+  [ -n "$peak" ] || peak="unavailable in scope"
   printf '%s, peak memory of this reading %s' "$wall" "$peak"
 }
 
@@ -1165,7 +1170,8 @@ render_json() {
         pid: ($f[0] | tonumber), account: $f[1], uid: $f[12],
         rss_kb: ($f[2] | tonumber), started_epoch: ($f[3] | tonumber),
         growth_kb_per_min: (if $f[4] == "NA" then null else ($f[4] | tonumber) end),
-        growth_unmeasured_reason: (if $f[5] == "-" then null else $f[5] end),
+        growth_scope_reason: (if $f[6] == "scoped" then $f[5] else null end),
+        growth_unmeasured_reason: (if $f[5] == "-" or $f[6] == "scoped" then null else $f[5] end),
         growth_state: $f[6],
         attribution: {kind: $f[7], detail: $f[8], route: $f[9]},
         protected: ($f[10] == "yes"),
