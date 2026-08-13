@@ -186,7 +186,7 @@ A lock-refused session must not spawn, steer, merge, drain the wake queue, repai
    That liveness line is a fast presence check only, not a full state read - when you need a crew's actual current state (a run-step, not just "is the pane there"), read it with `bin/fm-crew-state.sh <id>` as before; the digest deliberately skips that deeper, slower read for every task so it stays fast and bounded.
 6. **Supervision operating instructions and next step** - after the wake queue and before context, the digest emits exactly one operating block for the detected primary harness plus the optional direct Telegram receiver arm step when `config/telegram.env` exists.
    The closing reminder points back to that emitted block and preserves only the lock, afk, X-mode, and read-once reminders.
-   The script itself never starts long-lived polls; the emitted harness protocol and `bin/fm-tg-recv-arm.sh` own the exact tracked-background wait or wake mechanisms.
+   The script itself never starts long-lived polls; only the optional `bin/fm-tg-recv-arm.sh` step starts a tracked background receiver, and wake delivery stays outside the harness under `docs/wake-delivery.md`.
 
 Bootstrap detects first, asks for consent, and installs only after the captain approves in the current session.
 Do not dispatch until the required tools are present and GitHub authentication is good.

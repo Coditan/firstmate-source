@@ -63,7 +63,7 @@ A wake survives the session exiting and restarting for the same reason.
 ## The endpoint, and why the session publishes it
 
 The listener runs under a service manager with no session context, so unlike the away daemon it cannot discover the captain's pane from its own environment.
-The locked session publishes it once at session start through `bin/fm-delivery-service.sh publish-endpoint`, which records the backend, the target, the harness, and the pid in `state/.lock`.
+The locked session publishes it once at session start through `bin/fm-delivery-service.sh publish-endpoint`, which records the backend, the target, the harness, and the session-lock pid in `state/.primary-endpoint`.
 
 Recording the publishing session is what makes a stale record detectable.
 A record left behind by an exited session names a pane that is now somebody else's or nobody's, and typing into an unverified address is worse than reporting that there is none - so `publish-endpoint` refuses a guessed pane and a session with no recorded lock, rather than writing an address nobody verified.
@@ -141,10 +141,10 @@ The test first asserts the two process groups differ, so it cannot pass vacuousl
 Not by having declined to add one.
 The claim is that none remains, so it was checked against the tree rather than against intent:
 
-1. Every tracked harness integration file was enumerated and read: `.claude/settings.json`, `.codex/config.toml`, `.codex/hooks.json`, the five `.grok/hooks/*.json`, the five `.opencode/plugins/*.js` plus its library, and the three `.pi/extensions/*.ts`.
+1. Every tracked harness integration file was enumerated and read: `.claude/settings.json`, `.codex/config.toml`, `.codex/hooks.json`, the five `.grok/hooks/*.json`, the five top-level `.opencode/plugins/*.js` plus its library, and the two top-level `.pi/extensions/*.ts` plus their libraries.
    Every child process any of them starts is a short synchronous checker that exits within the hook - the turn-end guard, the cd guard, the lavish guard, the session-start nudge, and the operational-input encoder.
    None starts, awaits, or registers a long-lived process.
-2. The five scripts that were the delivery objects are gone from the tree, not merely unreferenced: `bin/fm-watch-arm.sh`, `bin/fm-wake-wait.sh`, `bin/fm-watch-checkpoint.sh`, `.opencode/plugins/fm-primary-watch-arm.js`, and `.pi/extensions/fm-primary-pi-watch.ts` were deleted, along with the suites that tested their lifetimes.
+2. The five entry points that were the delivery objects are gone from the tree, not merely unreferenced: `bin/fm-watch-arm.sh`, `bin/fm-wake-wait.sh`, `bin/fm-watch-checkpoint.sh`, `.opencode/plugins/fm-primary-watch-arm.js`, and `.pi/extensions/fm-primary-pi-watch.ts` were deleted, along with the suites that tested their lifetimes.
 3. `tests/fm-supervision-instructions.test.sh` asserts the property rather than trusting it: for all six rendered blocks, each must state that the session holds no wake-delivery object, must contain the drain instruction, must contain "Do not arm anything", and must not name any of the four removed entry points.
    A snippet that quietly reintroduced an arm step would fail that test.
 4. `state/.wake-stub.lock` - the record a session-held waiter published - has no writer and no reader left; `bin/fm-wake-lib.sh` no longer defines the predicates that judged it.
