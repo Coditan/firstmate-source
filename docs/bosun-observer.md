@@ -60,6 +60,7 @@ In this observer form that is a **recorded verdict of `escalate`**, never a drop
 
 Every failure shape returns escalate with the failure itself as the reason, and each has its own case in the suite: a judge that is not on disk, one that exits non-zero, one that never answers within the timeout, one that prints prose instead of JSON, and one that returns a verdict value nobody defined.
 A judge that answers `routine` with **low confidence** is also recorded as escalate, with its own answer preserved in the reason, because unsure is not the same as safe.
+A retained journal that exists but cannot be read produces a stream-level escalation and the distinct `BLIND` health state rather than being mistaken for an empty stream.
 The `judge` field names which of those produced each verdict, so a verdict a model reached and one the failure path reached are never confused.
 
 Nothing is ever skipped:
@@ -72,12 +73,14 @@ Nothing is ever skipped:
 `tests/fm-bosun.test.sh` drives the real run loop, and events reach the journal through the real wake library rather than as hand-written journal rows.
 Judges are fakes on purpose: this suite tests the bosun's handling of every judge outcome, and a real model cannot be made to time out on demand.
 
-Six load-bearing assertions were mutation-checked on 2026-08-12 rather than trusted for being green:
+Eight load-bearing assertions were mutation-checked on 2026-08-12 rather than trusted for being green:
 
 | Mutation | Caught by |
 |---|---|
 | Never detect a stall | `a bosun that keeps passing but stops judging reports STALLED` |
 | Always report STALLED | `an idle bosun with an empty journal reports QUIET` |
+| Never detect an unreadable retained journal | `an unreadable retained journal reports BLIND` |
+| Always report a journal unreadable | `a genuinely absent journal reports QUIET` |
 | Let an unsure judge's "routine" stand | `judge-is-unsure: expected escalate, got 'routine'` |
 | Let an unparseable answer be routine | `judge-prints-garbage: expected escalate, got 'routine'` |
 | Skip aged-out events silently | `events below the retention horizon were skipped without a record` |

@@ -60,7 +60,9 @@
 # that is not one JSON object, a missing or unknown verdict value - returns
 # escalate with the failure as its reason. A judge that answers "routine" with
 # low confidence is also recorded as escalate, with its own answer preserved in
-# the reason, because unsure is not the same as safe.
+# the reason, because unsure is not the same as safe. A retained journal that
+# exists but cannot be read likewise produces a stream-level escalation rather
+# than being mistaken for an empty stream.
 #
 # NEVER A DROPPED ROW
 # The cursor advances only after a verdict record reaches disk. A pass that dies
