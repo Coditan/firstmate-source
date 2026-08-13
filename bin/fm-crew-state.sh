@@ -40,7 +40,7 @@
 #     run-attribution-rejected  a run WAS found and this reader refused it
 #     log-verb-not-a-state      the status log's last line carries no state verb
 #   degraded (could not look)
-#     run-reader-missing        git or the no-mistakes CLI is not on PATH
+#     run-reader-missing        git is not on PATH or no-mistakes cannot be resolved
 #     no-bounding-mechanism     no timeout, gtimeout or perl, so the call was never made
 #     run-lookup-failed         the CLI ran and did not answer
 #     endpoint-reader-missing   the backend's own session CLI is not on PATH
@@ -57,8 +57,9 @@
 #     absent one; the detail names it, and the repair is the same PATH repair.
 #     Since 2026-08-13 it also means the no-mistakes CLI was not at this seat's
 #     install location either, because bin/fm-nm-path-lib.sh looks there before
-#     this verdict is reached - so the cause now names a genuinely absent tool
-#     rather than an environment that merely failed to carry one
+#     this verdict is reached - so the cause now names a dependency absent from
+#     both supported resolution routes rather than an environment that merely
+#     failed to carry one
 #     (docs/run-reader-reach.md).
 #   - log-verb-not-a-state takes precedence over the run-lookup cause when both
 #     apply, because it names the LAST source consulted. The run-lookup reason is

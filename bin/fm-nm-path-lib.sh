@@ -47,8 +47,8 @@
 # is the answer that made this diagnosable, and resolving harder must never turn
 # it into a quiet wrong reading.
 #
-# Pure and side-effect free apart from fm_nm_prepend_path, which edits PATH in
-# the calling process only.
+# Pure and side-effect free apart from fm_nm_ensure_reachable, which edits PATH
+# in the calling process only.
 
 # The directory the no-mistakes installer puts the binary in.
 #
