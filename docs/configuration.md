@@ -268,6 +268,7 @@ The composed value is deterministic for a given installed tool set, so it does n
 Locked bootstrap additionally reports `WATCHER_UNIT: the watcher's recorded PATH cannot reach ...` for a required tool that recorded value cannot reach.
 That report has two forms, because the repair differs: a tool this session can resolve is fixed by converging the service from here, while a tool this session cannot resolve either means the recorded value was composed blind and no convergence from this session can improve it.
 Getting an uninstalled tool installed stays owned by the toolchain check's `MISSING:` line; what the second form adds is that the service environment was recorded without the tool, which `MISSING:` does not say.
+That pair is about one RECORDED service, and the same question about the seat as a whole - whether any context inheriting no shell setup reaches the run-state reader's own dependency - is the separate `RUN_READER:` line owned by [docs/run-reader-reach.md](run-reader-reach.md), so a repair on one side does not clear the other.
 The tmux keeper fallback takes the same composed value as its sixth argument, because `tmux new-session` runs its command under the tmux server's environment rather than the launching session's.
 Because an argument leaves no comparable trace, the keeper's watcher records it under `state/.watch.lock/service-path`, and convergence compares that record exactly as it compares the systemd tier's recorded environment, so a toolchain move restarts either tier.
 The Bridge frequency-monitor unit records and compares the same `PATH` for the same reason, so its convergence below covers it too.
@@ -741,6 +742,8 @@ FM_WATCH_ARM_CONVERGE_INTERVAL=900   # seconds the OpenCode watcher plugin may r
 FM_CREW_STATE_NM_TIMEOUT=10   # seconds allowed per no-mistakes query inside fm-crew-state.sh
 FM_CREW_STATE_RUNS_LIMIT=200  # recent no-mistakes run rows scanned when axi status cannot be attributed to the current code
 FM_CREW_STATE_BIN=bin/fm-crew-state.sh   # test override for the current-state reader used by working/paused watcher triage
+NO_MISTAKES_INSTALL_DIR=~/.no-mistakes/bin   # the no-mistakes INSTALLER's own variable, not firstmate's; bin/fm-nm-path-lib.sh reads it to resolve the CLI for contexts that inherit no shell setup, and firstmate adds no second name for the same location (docs/run-reader-reach.md)
+FM_RUN_READER_CHECK_DISABLE=0   # test-only: silence bootstrap's RUN_READER assertion, because every fixture's fake CLI is unreachable by construction; tests/lib.sh sets it and tests/fm-run-reader-reach.test.sh sets it back
 FM_PDF_GS=gs            # Ghostscript binary bin/fm-pdf-finish.sh and bin/fm-pdf-verify.sh drive as PDF producer and reader; absent means both refuse with exit 3 (docs/pdf-output.md)
 FM_GRADE_DB=~/.no-mistakes/state.sqlite   # no-mistakes run database bin/fm-grade.sh reads for the review-quality scale; opened read-only and never written (docs/review-grading.md)
 FM_GRADE_CORPUS=bin/fm-grade-corpus   # sealed defect corpus directory bin/fm-grade.sh scores blind replay against (docs/review-grading.md)

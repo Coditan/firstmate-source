@@ -55,6 +55,11 @@
 #     reader does not own. The prose detail names the run when there is one.
 #   - run-reader-missing does not say whether git or the no-mistakes CLI is the
 #     absent one; the detail names it, and the repair is the same PATH repair.
+#     Since 2026-08-13 it also means the no-mistakes CLI was not at this seat's
+#     install location either, because bin/fm-nm-path-lib.sh looks there before
+#     this verdict is reached - so the cause now names a genuinely absent tool
+#     rather than an environment that merely failed to carry one
+#     (docs/run-reader-reach.md).
 #   - log-verb-not-a-state takes precedence over the run-lookup cause when both
 #     apply, because it names the LAST source consulted. The run-lookup reason is
 #     then carried in the prose detail rather than in the token.
@@ -72,8 +77,15 @@
 # watcher blindness survived for weeks - systemd's user-manager PATH reached no
 # no-mistakes CLI, every ship crew answered `unknown - none`, and every caller
 # treated a broken instrument as a valid quiet reading (bin/fm-service-path-lib.sh
-# owns the PATH fix; bin/fm-classify-lib.sh's crew_absorb_class owns what a
-# supervisor does with `degraded`). Two answers survive a missing run-step
+# owns the PATH fix for one recorded service, bin/fm-nm-path-lib.sh owns
+# resolving the run-step reader's own dependency for any context that inherits
+# nothing, and bin/fm-classify-lib.sh's crew_absorb_class owns what a supervisor
+# does with `degraded`). That honest refusal is also what made the SECOND round
+# of this diagnosable nine days later - 2026-08-13, when the reader read true
+# state interactively and refused unattended at the same moment, and an
+# independent reviewer that could not see a decision resolved re-reported it as
+# outstanding after every answer (docs/run-reader-reach.md).
+# Two answers survive a missing run-step
 # reader, because neither depends on it: a busy pane, which is independent
 # positive evidence, and a DECLARED pause, which is the crew's own statement
 # rather than an inference. Every other status-log verb is a stale event this
@@ -131,6 +143,21 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-classify-lib.sh
 . "$SCRIPT_DIR/fm-classify-lib.sh"
+# shellcheck source=bin/fm-nm-path-lib.sh
+. "$SCRIPT_DIR/fm-nm-path-lib.sh"
+
+# Resolve the run-step reader's own dependency instead of trusting the caller's
+# environment for it. Every caller of this script is unattended by nature - the
+# watcher, a hook, a reviewer session - and an inherited PATH is exactly what
+# they do not have. The call is a no-op wherever the CLI already resolves, so an
+# interactive read runs the same binary it always did, and it adds nothing when
+# the seat has no install, so the missing-dependency verdict below still fires
+# for a genuine absence (bin/fm-nm-path-lib.sh owns both halves).
+#
+# This is the one deliberate exception to "read-only and side-effect free" above:
+# the edit is to this process's own PATH, and is what lets the child that reads
+# the run-step exist at all.
+fm_nm_ensure_reachable || true
 
 ID=${1:-}
 [ -n "$ID" ] || { echo "usage: fm-crew-state.sh <id>" >&2; exit 2; }
