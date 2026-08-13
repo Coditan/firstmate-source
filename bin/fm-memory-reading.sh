@@ -442,10 +442,14 @@ read_accounts() {
   # never looked - that is the same confusion this whole reading exists to end.
   if [ ! -d "$CGROUP_ROOT" ]; then
     blind="$CGROUP_ROOT is absent, so no account's total, limit, or stall was read at all"
+  elif [ ! -x "$CGROUP_ROOT" ]; then
+    blind="$CGROUP_ROOT is not searchable by this account"
   elif [ ! -d "$CGROUP_ROOT/user.slice" ]; then
     blind="$CGROUP_ROOT/user.slice is absent, so this machine keeps no per-account slice for any account"
   elif [ ! -r "$CGROUP_ROOT/user.slice" ]; then
     blind="$CGROUP_ROOT/user.slice is not readable by this account"
+  elif [ ! -x "$CGROUP_ROOT/user.slice" ]; then
+    blind="$CGROUP_ROOT/user.slice is not searchable by this account"
   fi
   [ -n "$blind" ] && unmeasured account-slices "$blind"
   : > "$ACCOUNTS_FILE"
@@ -483,6 +487,13 @@ read_accounts() {
       current="SCOPE:no active session slice for this account"
       max=$current
       pressure=$current
+    elif [ ! -x "$slice" ]; then
+      current="UNMEASURED:$slice is not searchable by this account"
+      max=$current
+      pressure=$current
+      unmeasured "account-slice[$(account_for_uid "$uid")].memory.current" "${current#UNMEASURED:}"
+      unmeasured "account-slice[$(account_for_uid "$uid")].memory.max" "${max#UNMEASURED:}"
+      unmeasured "account-slice[$(account_for_uid "$uid")].memory.pressure" "${pressure#UNMEASURED:}"
     else
       current="UNMEASURED:$slice/memory.current is absent or unreadable"
       max="UNMEASURED:$slice/memory.max is absent or unreadable"
@@ -569,8 +580,16 @@ read_tasks() {
 
   while IFS= read -r home; do
     [ -n "$home" ] || continue
-    if [ ! -d "$home/state" ] || [ ! -r "$home/state" ]; then
-      unmeasured_task_source "$home" "$home state directory could not be read"
+    if [ ! -d "$home/state" ]; then
+      unmeasured_task_source "$home" "$home state directory is absent"
+      continue
+    fi
+    if [ ! -r "$home/state" ]; then
+      unmeasured_task_source "$home" "$home state directory is not readable by this account"
+      continue
+    fi
+    if [ ! -x "$home/state" ]; then
+      unmeasured_task_source "$home" "$home state directory is not searchable by this account"
       continue
     fi
     howner=$(owner_uid_of "$home")

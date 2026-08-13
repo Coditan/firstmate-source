@@ -605,6 +605,25 @@ test_a_cgroup_tree_nobody_read_is_not_reported_as_an_account_with_no_session() {
   pass "an unreadable cgroup tree is told apart from an account with no session"
 }
 
+test_a_nonsearchable_cgroup_tree_is_unmeasured() {
+  local dir="$TMP_ROOT/nonsearchable-cgroup" out status=0 user_slice
+  new_scene "$dir"
+  user_slice="$dir/cgroup/user.slice"
+  chmod 644 "$user_slice"
+  if [ -x "$user_slice" ]; then
+    chmod 755 "$user_slice"
+    printf 'ok - SKIP non-searchable cgroup permissions do not restrict this user\n'
+    return
+  fi
+  out=$(run_reading "$dir") || status=$?
+  chmod 755 "$user_slice"
+  expect_code 3 "$status" "a readable but non-searchable user.slice"
+  assert_contains "$out" 'account-slices' 'the non-searchable cgroup tree did not name the failed instrument'
+  assert_contains "$out" 'not searchable' 'the cgroup failure did not distinguish search permission'
+  assert_not_contains "$out" 'no active session slice' 'a blind cgroup traversal was rendered as scoped absence'
+  pass "a non-searchable cgroup tree is unmeasured rather than scoped"
+}
+
 test_an_account_with_no_readable_slice_still_gets_its_process_total() {
   local dir="$TMP_ROOT/partial" out status=0
   new_scene "$dir"
@@ -752,6 +771,7 @@ test_a_reused_pid_is_not_reported_as_growth
 test_a_genuinely_calm_stall_reading_is_not_confusable_with_a_blind_one
 test_each_unreadable_input_is_named_and_forces_a_non_zero_exit
 test_a_cgroup_tree_nobody_read_is_not_reported_as_an_account_with_no_session
+test_a_nonsearchable_cgroup_tree_is_unmeasured
 test_an_account_with_no_readable_slice_still_gets_its_process_total
 test_a_malformed_account_slice_file_forces_an_incomplete_reading
 test_sample_storage_failure_is_visible_and_no_store_is_scoped
