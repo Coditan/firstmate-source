@@ -47,6 +47,16 @@ probe_with() {
   env "$@" "$PROBE" --scratch "$TMP_ROOT/scratch" 2>&1
 }
 
+# Comments explain what the script must never do, and say the words to do it.
+# Only executable lines can actually do it, so the boundary checks below read
+# the code with the commentary stripped out.
+code_without_comments() {
+  local out
+  out="$TMP_ROOT/code-$(basename "$1").txt"
+  grep -v '^[[:space:]]*#' "$1" >"$out"
+  printf '%s' "$out"
+}
+
 test_a_probe_that_could_not_look_never_reports_a_verdict() {
   local out status=0
   mkdir -p "$TMP_ROOT/notcgroup"
@@ -155,12 +165,14 @@ test_the_probe_sets_no_lasting_limit_and_kills_nothing() {
   # its own transient scope and nowhere else, and it must contain no path that
   # ends a process. A grep is a coarse check, but it is the one that would have
   # caught a victim-selection rule arriving by a later edit.
-  assert_no_grep 'kill ' "$PROBE" "the probe must contain no kill path"
-  assert_no_grep 'pkill' "$PROBE" "the probe must contain no pkill path"
-  assert_no_grep 'MemoryMax=1' "$PROBE" "the probe must never set an enforcing maximum"
-  assert_grep 'MemoryMax=infinity' "$PROBE" \
+  local code
+  code=$(code_without_comments "$PROBE")
+  assert_no_grep 'kill ' "$code" "the probe must contain no kill path"
+  assert_no_grep 'pkill' "$code" "the probe must contain no pkill path"
+  assert_no_grep 'MemoryMax=1' "$code" "the probe must never set an enforcing maximum"
+  assert_grep 'MemoryMax=infinity' "$code" \
     "the probe's own scopes must explicitly disclaim an enforcing maximum"
-  assert_no_grep 'systemctl --user set-property' "$PROBE" \
+  assert_no_grep 'systemctl --user set-property' "$code" \
     "the probe must not set a property on any unit it did not create"
   pass "the probe sets no lasting limit and contains no path that could kill"
 }

@@ -172,7 +172,7 @@ A lock-refused session must not spawn, steer, merge, drain the wake queue, repai
 1. **Lock** - acquires the per-home session lock before anything mutates shared state.
 2. **Bootstrap** - detect-only checks (tool/version problems, GitHub auth, the worktree-tangle check, harness override, dispatch-profile validation, backlog-backend status) always run, but routine confirmations stay silent by default.
    When the lock could not be acquired, the worktree-tangle check uses read-only advisory wording without a checkout repair command.
-   The seven MUTATING sweeps - non-executing legacy PR-check migration, arming this home's daily currency round, the AXI-suite currency check that installs into this home's own npm prefix, fleet sync, the local secondmate fast-forward sweep, the secondmate liveness sweep, and X-mode artifact writes - run only when this session actually holds the lock from step 1.
+   The eight MUTATING sweeps - non-executing legacy PR-check migration, arming this home's daily currency round, arming this home's memory alarm, the AXI-suite currency check that installs into this home's own npm prefix, fleet sync, the local secondmate fast-forward sweep, the secondmate liveness sweep, and X-mode artifact writes - run only when this session actually holds the lock from step 1.
    The secondmate liveness sweep deterministically guarantees every registered secondmate is actually running: it probes each live secondmate's endpoint for a real agent process (not just pane presence), respawns only on a confident dead reading, and reports only skipped or failed guarantees as `SECONDMATE_LIVENESS:` lines (`bin/fm-bootstrap.sh`; `bin/fm-backend.sh`'s `fm_backend_agent_alive`).
 3. **Wake queue** - when locked, drains the durable wake queue and prints the raw records prominently as this turn's first work queue; a bounded, clearly labeled historical status-event annotation may follow a valid `signal` record but never replaces it or current-state reconciliation, and a lapsed watcher chain still surfaces here via the same guard alarm.
    When the lock could not be acquired, the queue is left untouched because another session owns it, and the guard's tangle/watcher-liveness alarms still print in read-only advisory mode without drain, supervision repair, or checkout repair commands.
@@ -195,6 +195,15 @@ A silent bootstrap section needs no action; for any printed actionable diagnosti
 
 The locked bootstrap step also runs `bin/fm-axi-suite.sh`, the per-vessel AXI-suite currency check described in `docs/configuration.md` "AXI-suite self-update": patch and minor releases self-update, while `AXI_SUITE_REVIEW:` and `AXI_SUITE_STUCK:` require handling through `bootstrap-diagnostics`.
 This check never calls Bridge from the updater; firstmate owns any stuck-status relay and dispatches a crewmate for project writes.
+
+### Running out of memory
+
+This machine has no swap and no memory limit anywhere, so nothing but this alarm stands between a runaway worker and the kernel choosing a victim.
+The locked bootstrap step arms `bin/fm-memory-alarm.sh` on the watcher, and every session start reports `MEMORY_ALARM:` when this home's alarm is unarmed or has stopped running.
+`docs/memory-alarm.md` owns the thresholds, how they were derived, and what the alarm cannot see; its crossings and recoveries arrive as an ordinary `check:` wake under section 8, naming the process, its account, and the work it was serving.
+Two facts bind wherever that wake is read.
+The alarm limits, throttles, and kills nothing, so it is a call for a decision and never a report of one already taken.
+A reading it could not take is reported as unable to see and never as an all-clear, for the same reason the currency round reports one that way.
 
 ### Daily update checking
 
@@ -560,7 +569,7 @@ Bootstrap separately detects when the primary checkout's own default branch has 
 
 These skills are not captain-invocable; load them only at their precise triggers.
 
-- `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `ROLE_INVALID:`, `ROLE_OVERLAY_MISSING:`, `NEEDS_GH_AUTH`, `TANGLE:`, `SELF_DRIFT:`, `CREW_DISPATCH: invalid`, `CURRENCY_BASE:`, `LAVISH_ACCESS:`, `BACKLOG_STALE:`, `BACKLOG_UNREADABLE:`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `NUDGE_SECONDMATES:`, `AXI_SUITE_UPDATED:`, `AXI_SUITE_REVIEW:`, `AXI_SUITE_STUCK:`, `AXI_SUITE_SHADOWED:`, `AXI_SUITE_SHADOW_UNKNOWN:`, `FIRSTMATE_UPDATE_AVAILABLE:`, `FIRSTMATE_UPDATE_STUCK:`, `FORK_SYNC:`, `FORK_SYNC_STUCK:`, `CURRENCY_ROUND:`, `GROSSREINSCHIFF:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
+- `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `ROLE_INVALID:`, `ROLE_OVERLAY_MISSING:`, `NEEDS_GH_AUTH`, `TANGLE:`, `SELF_DRIFT:`, `CREW_DISPATCH: invalid`, `CURRENCY_BASE:`, `LAVISH_ACCESS:`, `BACKLOG_STALE:`, `BACKLOG_UNREADABLE:`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `NUDGE_SECONDMATES:`, `AXI_SUITE_UPDATED:`, `AXI_SUITE_REVIEW:`, `AXI_SUITE_STUCK:`, `AXI_SUITE_SHADOWED:`, `AXI_SUITE_SHADOW_UNKNOWN:`, `FIRSTMATE_UPDATE_AVAILABLE:`, `FIRSTMATE_UPDATE_STUCK:`, `FORK_SYNC:`, `FORK_SYNC_STUCK:`, `CURRENCY_ROUND:`, `MEMORY_ALARM:`, `GROSSREINSCHIFF:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
 - `diagnostic-reasoning` - load before scoping a reported bug and before acting on a diagnostic report.
 - `ask-user-authority` - load before deciding any ask-user finding, regardless of the project's `yolo` posture.
 - `harness-adapters` - load before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
