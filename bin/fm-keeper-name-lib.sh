@@ -29,11 +29,12 @@ fm_legacy_keeper_name() {  # <service> <home>
 }
 
 fm_legacy_keeper_owned_by_home() {  # <tmux> <name> <keeper-pid-file> <lock> <home>
-  local tmux=$1 name=$2 pid_file=$3 lock=$4 home=$5 recorded_pid pane_pid recorded_home
+  local tmux=$1 name=$2 pid_file=$3 lock=$4 home=$5 recorded_pid pane pane_pid recorded_home
   "$tmux" has-session -t "$name" 2>/dev/null || return 1
   recorded_pid=$(cat "$pid_file" 2>/dev/null || true)
   case "$recorded_pid" in ''|*[!0-9]*) return 1 ;; esac
-  pane_pid=$("$tmux" display-message -p -t "$name" '#{pane_pid}' 2>/dev/null) || return 1
+  pane=$(fm_tmux_resolve_pane "$name" "$tmux") || return 1
+  pane_pid=$("$tmux" display-message -p -t "$pane" '#{pane_pid}' 2>/dev/null) || return 1
   recorded_home=$(cat "$lock/fm-home" 2>/dev/null || true)
   [ "$pane_pid" = "$recorded_pid" ] && [ "$recorded_home" = "$home" ]
 }

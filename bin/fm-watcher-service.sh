@@ -41,6 +41,8 @@ case "$STOP_TIMEOUT" in ''|*[!0-9]*|0) STOP_TIMEOUT=20 ;; esac
 . "$SCRIPT_DIR/fm-service-path-lib.sh"
 # shellcheck source=bin/fm-axi-path-lib.sh
 . "$SCRIPT_DIR/fm-axi-path-lib.sh"
+# shellcheck source=bin/fm-tmux-lib.sh
+. "$SCRIPT_DIR/fm-tmux-lib.sh"
 # shellcheck source=bin/fm-keeper-name-lib.sh
 . "$SCRIPT_DIR/fm-keeper-name-lib.sh"
 # Composed values resolve tools through THIS process's PATH, so the home's own
@@ -60,6 +62,7 @@ watch_source_version() {
     "$SCRIPT_DIR/fm-pr-lib.sh"
     "$SCRIPT_DIR/fm-x-lib.sh"
     "$SCRIPT_DIR/fm-check-lib.sh"
+    "$SCRIPT_DIR/fm-tmux-lib.sh"
     "$SCRIPT_DIR/fm-keeper-name-lib.sh"
     "$SCRIPT_DIR"/backends/*.sh
   )
