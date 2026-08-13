@@ -111,8 +111,8 @@
 #                             growing rather than steady (default 5)
 #   FM_MEMORY_SAMPLE_MAX_AGE  how old the stored sample may be before growth is
 #                             unmeasured rather than meaningless (default 900)
-#   FM_MEMORY_SAMPLE_MIN_AGE  interval below which growth is unmeasured because
-#                             the window is too short to divide by (default 5)
+#   FM_MEMORY_SAMPLE_MIN_AGE  interval below which growth is scoped because the
+#                             operator ran it too soon to divide by (default 5)
 #   FM_MEMORY_SAMPLES         path of the stored sample (tests)
 #   FM_MEMORY_MEMINFO         headroom source (default /proc/meminfo)
 #   FM_MEMORY_PRESSURE        stall source (default /proc/pressure/memory)
@@ -556,10 +556,17 @@ read_tasks() {
     [ -n "$home" ] || continue
     [ -d "$home/state" ] && [ -r "$home/state" ] || continue
     howner=$(owner_uid_of "$home")
+    case "$howner" in
+      ''|*[!0-9]*)
+        howner=-
+        unmeasured task-attribution "$home owner could not be determined, so its account scope is unknown"
+        ;;
+      *) ;;
+    esac
     metas=("$home"/state/*.meta)
     if [ ! -e "${metas[0]}" ]; then
       HOMES_READ=$((HOMES_READ + 1))
-      printf '%s\n' "$howner" >> "$SCOPE_FILE"
+      [ "$howner" = - ] || printf '%s\n' "$howner" >> "$SCOPE_FILE"
       printf 'home\t%s\t-\t-\t-\t%s\n' "$home" "${home##*/}" >> "$TASKS_FILE"
       printf '%s\t%s\t0\n' "$home" "${howner:--}" >> "$INSTALLATIONS_FILE"
       continue
@@ -601,7 +608,7 @@ read_tasks() {
       ''|*[!0-9]*) unmeasured task-attribution "$home task records produced no usable read count"; continue ;;
     esac
     HOMES_READ=$((HOMES_READ + 1))
-    printf '%s\n' "$howner" >> "$SCOPE_FILE"
+    [ "$howner" = - ] || printf '%s\n' "$howner" >> "$SCOPE_FILE"
     printf 'home\t%s\t-\t-\t-\t%s\n' "$home" "${home##*/}" >> "$TASKS_FILE"
     cat "$task_tmp" >> "$TASKS_FILE"
     printf '%s\t%s\t%s\n' "$home" "${howner:--}" "$tasks" >> "$INSTALLATIONS_FILE"

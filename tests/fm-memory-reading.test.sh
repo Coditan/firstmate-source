@@ -416,14 +416,14 @@ test_a_stale_prior_sample_is_unmeasured_rather_than_meaningless() {
   pass "a prior sample older than the growth window is reported unmeasured"
 }
 
-test_too_short_an_interval_is_unmeasured_rather_than_divided_by() {
+test_too_short_an_interval_is_scoped_rather_than_divided_by() {
   local dir="$TMP_ROOT/short" out status=0
   new_scene "$dir"
   write_sample "$dir/samples" $((NOW - 1)) "1000=$((NOW - 600)):1000"
   out=$(run_reading "$dir") || status=$?
   expect_code 0 "$status" "a stored sample under the minimum interval"
   assert_contains "$out" 'under the' 'a one-second interval was divided by anyway'
-  pass "an interval under the floor is reported unmeasured rather than divided by"
+  pass "an interval under the floor is scoped rather than divided by"
 }
 
 test_corrupt_and_future_samples_force_incomplete_readings() {
@@ -653,7 +653,7 @@ test_growth_separates_a_large_steady_process_from_a_fast_growing_one
 test_growth_with_no_prior_sample_is_unmeasured_never_zero
 test_an_unreadable_prior_sample_is_an_instrument_failure
 test_a_stale_prior_sample_is_unmeasured_rather_than_meaningless
-test_too_short_an_interval_is_unmeasured_rather_than_divided_by
+test_too_short_an_interval_is_scoped_rather_than_divided_by
 test_corrupt_and_future_samples_force_incomplete_readings
 test_a_reused_pid_is_not_reported_as_growth
 test_a_genuinely_calm_stall_reading_is_not_confusable_with_a_blind_one
