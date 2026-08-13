@@ -279,10 +279,43 @@ test_the_reading_names_the_installations_it_actually_read() {
   local dir="$TMP_ROOT/installs" out
   new_scene "$dir"
   out=$(run_reading "$dir")
-  assert_contains "$out" 'TASK RECORDS READ' 'the reading does not say whose records it consulted'
+  assert_contains "$out" 'TASK RECORD SOURCES' 'the reading does not say whose records it consulted'
   assert_contains "$out" "$dir/home" 'the installation actually read is not named'
   assert_contains "$out" '2 task record(s)' 'the number of records read is not stated'
   pass "the reading names the installations whose records it read"
+}
+
+test_requested_task_record_sources_fail_visibly() {
+  local dir="$TMP_ROOT/requested-sources" out status=0 missing
+  new_scene "$dir"
+  missing="$dir/operator-requested"
+  out=$(run_reading "$dir" --home "$missing") || status=$?
+  expect_code 3 "$status" "an explicitly requested home with no readable state directory"
+  assert_contains "$out" "$missing" 'the explicitly requested failed home vanished from the report'
+  assert_contains "$out" 'task records UNMEASURED' 'the explicitly requested failed home was not marked unmeasured'
+
+  rm -rf "$dir"
+  new_scene "$dir"
+  missing="$dir/recorded-secondmate"
+  fm_write_meta "$dir/home/state/secondmate.meta" \
+    'kind=secondmate' \
+    "home=$missing" \
+    'window=sess:fm-secondmate'
+  status=0
+  out=$(run_reading "$dir") || status=$?
+  expect_code 3 "$status" "a secondmate home named by task metadata with no readable state directory"
+  assert_contains "$out" "$missing" 'the failed secondmate home vanished from the report'
+  assert_contains "$out" 'task records UNMEASURED' 'the failed secondmate home was not marked unmeasured'
+
+  rm -rf "$dir"
+  new_scene "$dir"
+  rm -f "$dir/home/state"/*.meta
+  status=0
+  out=$(run_reading "$dir") || status=$?
+  expect_code 0 "$status" "a readable requested home with no task records"
+  assert_contains "$out" "$dir/home" 'the readable empty home vanished from the report'
+  assert_contains "$out" '0 task record(s)' 'the readable empty home was not reported with zero records'
+  pass "requested task-record sources fail visibly while readable empty homes remain scoped"
 }
 
 test_empty_and_unreadable_task_record_sets_are_distinct() {
@@ -660,6 +693,7 @@ test_a_process_in_a_recorded_worktree_is_named_with_its_task
 test_an_unmatched_process_is_reported_unattributed_never_dropped
 test_a_foreign_account_process_is_never_given_an_owner
 test_the_reading_names_the_installations_it_actually_read
+test_requested_task_record_sources_fail_visibly
 test_empty_and_unreadable_task_record_sets_are_distinct
 test_a_process_that_vanished_mid_read_is_reported_as_exited
 test_a_live_process_with_unresolved_cwd_is_not_reported_exited

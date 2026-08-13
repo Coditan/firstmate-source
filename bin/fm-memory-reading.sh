@@ -557,7 +557,11 @@ read_tasks() {
 
   while IFS= read -r home; do
     [ -n "$home" ] || continue
-    [ -d "$home/state" ] && [ -r "$home/state" ] || continue
+    if [ ! -d "$home/state" ] || [ ! -r "$home/state" ]; then
+      unmeasured task-attribution "$home state directory could not be read"
+      printf '%s\t-\tUNMEASURED\n' "$home" >> "$INSTALLATIONS_FILE"
+      continue
+    fi
     howner=$(owner_uid_of "$home")
     case "$howner" in
       ''|*[!0-9]*)
@@ -997,10 +1001,12 @@ render_human() {
     printf '  UNMEASURED - no account could be enumerated\n'
   fi
 
-  printf '\nTASK RECORDS READ (only these can put a name to a process)\n'
+  printf '\nTASK RECORD SOURCES (only successfully read records can put a name to a process)\n'
   if [ -s "$INSTALLATIONS_FILE" ]; then
     while IFS=$'\t' read -r home howner tasks; do
-      if [ "$howner" = - ]; then
+      if [ "$tasks" = UNMEASURED ]; then
+        printf '  %s   account unknown, task records UNMEASURED (state directory absent or unreadable)\n' "$home"
+      elif [ "$howner" = - ]; then
         printf '  %s   account unknown, %s task record(s)\n' "$home" "$tasks"
       else
         printf '  %s   account %s, %s task record(s)\n' "$home" "$(account_for_uid "$howner")" "$tasks"
@@ -1144,7 +1150,12 @@ render_json() {
       complete: $complete,
       unmeasured: ($unmeasured | lines | map(split("|") | {input: .[0], reason: (.[1:] | join("|"))})),
       task_attribution_scope: ($scope | lines),
-      installations_read: ($installations | lines | map(split("\t") | {
+      installation_sources: ($installations | lines | map(split("\t") | {
+        home: .[0], owner_uid: (if .[1] == "-" then null else .[1] end),
+        status: (if .[2] == "UNMEASURED" then "unmeasured" else "read" end),
+        task_records: (if .[2] == "UNMEASURED" then null else (.[2] | tonumber) end)
+      })),
+      installations_read: ($installations | lines | map(split("\t")) | map(select(.[2] != "UNMEASURED")) | map({
         home: .[0], owner_uid: (if .[1] == "-" then null else .[1] end), task_records: (.[2] | tonumber)
       })),
       headroom: {
