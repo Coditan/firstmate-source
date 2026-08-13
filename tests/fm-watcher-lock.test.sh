@@ -110,7 +110,7 @@ test_guard_warnings() {
   #       warning follows it, and the guidance is re-arm-after-drain (never the
   #       old conflicting "restart NOW first").
   #   (2) a fresh watcher and an empty queue: total silence.
-  #   (3) a fresh watcher but no identity-matched delivery stub armed: a
+  #   (3) a fresh watcher but no identity-matched delivery listener up: a
   #       targeted wake-delivery warning, without the daemon-down banner.
   local dir state err first banner_line queue_line live identity
   dir=$(make_case guard)
@@ -160,17 +160,16 @@ test_guard_warnings() {
   sleep 60 &
   live=$!
   identity=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$live")
-  mkdir -p "$state/.watch.lock" "$state/.wake-stub.lock"
+  mkdir -p "$state/.watch.lock" "$state/.delivery.lock"
   printf '%s\n' "$live" > "$state/.watch.lock/pid"
   printf '%s\n' "$dir" > "$state/.watch.lock/fm-home"
   printf '%s\n' "$ROOT/bin/fm-watch.sh" > "$state/.watch.lock/watcher-path"
   printf '%s\n' "$identity" > "$state/.watch.lock/pid-identity"
-  printf '%s\n' "$live" > "$state/.wake-stub.lock/pid"
-  printf '%s\n' "$dir" > "$state/.wake-stub.lock/fm-home"
-  printf '%s\n' "$ROOT/bin/fm-wake-wait.sh" > "$state/.wake-stub.lock/stub-path"
-  printf '\n' > "$state/.wake-stub.lock/session-lock-pid"
-  printf '%s\n' "$identity" > "$state/.wake-stub.lock/pid-identity"
-  touch "$state/.last-watcher-beat"
+  printf '%s\n' "$live" > "$state/.delivery.lock/pid"
+  printf '%s\n' "$dir" > "$state/.delivery.lock/fm-home"
+  printf '%s\n' "$ROOT/bin/fm-delivery.sh" > "$state/.delivery.lock/delivery-path"
+  printf '%s\n' "$identity" > "$state/.delivery.lock/pid-identity"
+  touch "$state/.last-watcher-beat" "$state/.last-delivery-beat"
   # Non-git FM_ROOT keeps the worktree-tangle check inert so "fresh watcher ->
   # total silence" stays a pure assertion about watcher state.
   FM_ROOT_OVERRIDE="$dir" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=300 "$ROOT/bin/fm-guard.sh" 2> "$err" >/dev/null || fail "guard failed"
@@ -178,9 +177,9 @@ test_guard_warnings() {
   wait "$live" 2>/dev/null || true
   [ ! -s "$err" ] || fail "guard warned with a fresh watcher and no queued wakes: $(cat "$err")"
 
-  # (3) fresh watcher, in-flight task, but no delivery stub armed -> a targeted
-  # wake-delivery warning, not the daemon-down banner.
-  dir=$(make_case guard-stub-missing)
+  # (3) fresh watcher, in-flight task, but no delivery listener up -> a targeted
+  # wake-delivery warning that names its own cause, not the daemon-down banner.
+  dir=$(make_case guard-delivery-down)
   state="$dir/state"
   err="$dir/guard.err"
   printf 'project=x\n' > "$state/task.meta"
@@ -196,12 +195,12 @@ test_guard_warnings() {
   FM_ROOT_OVERRIDE="$dir" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=300 "$ROOT/bin/fm-guard.sh" 2> "$err" >/dev/null || fail "guard failed"
   kill "$live" 2>/dev/null || true
   wait "$live" 2>/dev/null || true
-  grep -F 'wake delivery stub missing' "$err" >/dev/null \
-    || fail "guard did not warn about a missing delivery stub with a healthy daemon: $(cat "$err")"
+  grep -F 'WARNING: wake delivery listener down: no live identity-matched delivery listener' "$err" >/dev/null \
+    || fail "guard did not name the down delivery listener with a healthy daemon: $(cat "$err")"
   ! grep -F 'WATCHER DAEMON DOWN' "$err" >/dev/null \
     || fail "guard printed the daemon-down banner despite a healthy watcher: $(cat "$err")"
 
-  pass "guard banner leads when down with pending wakes (re-arm-after-drain), stays silent when fresh, and warns on a missing delivery stub with a healthy daemon"
+  pass "guard banner leads when down with pending wakes, stays silent when fresh, and names a down delivery listener with a healthy daemon"
 }
 
 test_lock_create_filesystem_failure_returns_without_steal_recursion() {
@@ -590,7 +589,7 @@ test_watcher_survives_failed_ps_parent_read() {
   # one-shot path (FM_WATCH_DAEMON=0, the default), exercised whenever a caller
   # sets FM_WATCH_ARM_OWNER_PID and forks fm-watch.sh directly rather than going
   # through the daemon-owned systemd/tmux service. Exercise fm-watch.sh directly
-  # here (fm-watch-arm.sh itself no longer forks a watcher child at all).
+  # here (no wrapper forks a watcher child at all any more).
   local dir state fakebin out pid i fail_hits
   dir=$(make_case watcher-ps-fail-guard)
   state="$dir/state"

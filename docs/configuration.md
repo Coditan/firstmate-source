@@ -35,7 +35,8 @@ Vessel-local service reachability uses `state/service-port.<service>` for the ad
 `bin/fm-service-port.sh` owns the record's fields and the allocation contract, and `docs/lavish-access.md` owns the reasoning; the one rule that binds every reader is that the record is a published fact written after the fact and never a reservation, so nothing may read it to decide whether a port is free.
 Several vessels can share one machine as separate UNIX accounts, so a successful bind is the only proof a port is available.
 
-Watcher coordination uses `state/.watch.lock` for the daemon pid, executable, home, manager, source, and X-mode identities plus the keeper tier's handed-down service `PATH`, `state/.last-watcher-beat` for daemon freshness, `state/.wake-queue` for durable delivery, `state/.wake-queue.lock` for atomic append and drain, and `state/.wake-stub.lock` for the current session's delivery-stub pid plus executable, home, and session-lock identities.
+Watcher coordination uses `state/.watch.lock` for the daemon pid, executable, home, manager, source, and X-mode identities plus the keeper tier's handed-down service `PATH`, `state/.last-watcher-beat` for daemon freshness, `state/.wake-queue` for durable delivery, and `state/.wake-queue.lock` for atomic append and drain.
+Delivery coordination is the companion service's, in the same shape: `state/.delivery.lock` for the listener pid, executable, home, manager, and source identities, `state/.last-delivery-beat` for listener freshness, and `state/.primary-endpoint` for the address the locked session published (docs/wake-delivery.md).
 The tmux fallback also records `state/.watch-keeper.pid`, while systemd convergence writes the private mode-`0600` `state/.watch-service.env` environment file.
 
 `bin/fm-session-start.sh`'s header is the single owner of session-start ordering, composed commands, digest contents, and the digest's startup mechanism.
@@ -274,7 +275,15 @@ The Bridge frequency-monitor unit records and compares the same `PATH` for the s
 User lingering keeps a user service alive without an interactive login session.
 If `loginctl` reports lingering disabled, bootstrap emits a separate `WATCHER_UNIT:` consent request for `bin/fm-bootstrap.sh install watcher-linger`; it never calls `loginctl enable-linger` without that approval.
 When `systemctl --user` is unusable, the tmux keeper fallback starts automatically and needs no unit or linger installation.
-Both tiers run `bin/fm-watch.sh` with `FM_WATCH_DAEMON=1`; the queue, stub, guard, and harness contracts do not change with the selected keeper.
+Both tiers run `bin/fm-watch.sh` with `FM_WATCH_DAEMON=1`; the queue, delivery, guard, and harness contracts do not change with the selected keeper.
+
+## Wake-delivery service
+
+`bin/fm-delivery-service.sh` is the watcher service's companion and works the same way: a `systemd --user` template when the user manager is usable, otherwise a detached tmux keeper named from the home basename plus a path checksum.
+The tracked template is `systemd/fm-delivery@.service` and the instance is `fm-delivery@$(systemd-escape --path "$FM_HOME").service`, so each home has an independent restart boundary for delivery as well as for detection.
+The first unit copy and `enable --now` require explicit captain consent through `DELIVERY_UNIT:` and `bin/fm-bootstrap.sh install delivery-unit`.
+Convergence, the recorded `PATH`, and the keeper tier's handed-down `PATH` argument all follow the watcher's rules above; `state/.delivery-service.env` is its environment file and `state/.delivery.lock/service-path` its keeper-tier record.
+`docs/wake-delivery.md` owns what the listener does with that lifetime, including the verdicts `bin/fm-delivery-service.sh status` reports and why silence is never one of them.
 
 ## Bridge frequency monitor service
 
@@ -283,7 +292,7 @@ It does not run an agent or tighten the main watcher's cadence.
 The fast path reads only the first vessel resolved from `FM_BRIDGE_VESSEL` or `config/bridge-vessel`, so one home never becomes a fleet-wide scanner.
 `bin/fm-bridge-inbox-lib.sh` is the single owner of Bridge tree signatures, priority reads, surfaced markers, and durable `fm_wake_append check bridge-inbox` publication for both this monitor and the original watcher.
 Its separate inter-process lock serializes the signature comparison through marker publication, while `fm_wake_append` independently serializes wake sequence allocation and queue append.
-A live delivery stub observes the non-empty queue immediately.
+A live delivery listener observes the non-empty queue immediately.
 When no session is live, the same queue record remains durable until session start drains it, so the monitor needs no second pending-mail store or repeated agent wake.
 
 The tracked template is `systemd/fm-frequency-monitor@.service`.
@@ -732,12 +741,9 @@ FM_BRIDGE_ROOT=$FM_HOME/projects/coditan-bridge   # Bridge clone whose origin/ma
 FM_BRIDGE_URGENT_CHECK_INTERVAL=30   # Bridge-only cadence while highest pending priority is high or immediate
 FM_FREQUENCY_MONITOR_INTERVAL=5   # seconds between plain-shell Bridge fetch/check cycles in the optional fast service
 FM_FREQUENCY_MONITOR_CONFIRM_TIMEOUT=10   # seconds fm-frequency-monitor-service waits to confirm a fresh unit before reporting failure
-FM_CODEX_WATCH_CHECKPOINT=180   # seconds per foreground watcher checkpoint in Codex primary supervision
-FM_WATCH_CHECKPOINT_REARM_POLL=5   # seconds between delivery re-attempts while a healthy same-session stub already owns the lock, read by bin/fm-watch-checkpoint.sh, by the OpenCode watcher plugin, and by bin/fm-wake-wait.sh --hold so all three take delivery back on one cadence; each re-attempt runs only bin/fm-wake-wait.sh, so it trades how quickly delivery is taken over once the holder releases against how often that cheap attempt runs while the holder is healthy, and a non-numeric or zero value falls back to 5 (docs/watcher-continuity.md "Re-arming a session that is already armed")
 FM_WAKE_ECHO_BYTES=8192   # total bytes of drained queue records one bin/fm-wake-drain.sh may echo into a wake turn; anything past it is withheld from the echo, never discarded, and the drained file is preserved under state/.wake-drain-overflow.<epoch>.<pid> with the path printed; a non-numeric or zero value falls back to 8192 (docs/supervision-cost.md "Repair 2")
 FM_WAKE_ECHO_ROW_BYTES=1024   # per-record byte cap under FM_WAKE_ECHO_BYTES, so one pathological payload cannot consume the whole budget and hide every other record behind it; a shortened row is marked and its full text is in the preserved file; a non-numeric or zero value falls back to 1024
 FM_TRANSCRIPTS=~/.claude/projects   # provider transcript root bin/fm-supervision-cost.sh measures; read-only, and the only harness that keeps such a record is Claude Code (docs/supervision-cost.md)
-FM_WATCH_ARM_CONVERGE_INTERVAL=900   # seconds the OpenCode watcher plugin may re-attempt delivery cheaply before one attempt runs the full bin/fm-watch-arm.sh again, so watcher-service convergence still happens during a long already-armed cadence without paying for systemd probes and the tracked-source hash on every FM_WATCH_CHECKPOINT_REARM_POLL tick; lowering it toward the poll interval reintroduces exactly that per-tick cost, and a non-numeric or zero value falls back to 900
 FM_CREW_STATE_NM_TIMEOUT=10   # seconds allowed per no-mistakes query inside fm-crew-state.sh
 FM_CREW_STATE_RUNS_LIMIT=200  # recent no-mistakes run rows scanned when axi status cannot be attributed to the current code
 FM_CREW_STATE_BIN=bin/fm-crew-state.sh   # test override for the current-state reader used by working/paused watcher triage
@@ -758,9 +764,19 @@ FM_LOCK_STALE_AFTER=2   # seconds before dead-pid lock records can be reclaimed;
 FM_LOCK_STEAL_MAX_DEPTH=8   # hard cap on nested stale-lock steal recursion; acquisition fails loudly (rc 2) past this depth instead of recursing unbounded
 FM_LOCK_WAIT_TIMEOUT=30   # seconds a blocking lock acquisition may remain contended before it fails loudly (rc 2)
 FM_GUARD_GRACE=300      # seconds before guard warnings, arm health checks, and the primary turn-end guard treat a watcher beacon as stale
-FM_WAKE_BEAT_CONFIRM=90   # AWAKE seconds the delivery stub gives a live, identity-matched watcher to get its beacon back inside FM_GUARD_GRACE before reporting it; time the host spends frozen is credited back, an advanced-but-still-stale beacon is not recovery, it is never consulted when no live watcher holds the lock, 0 disables it, and bin/fm-watch-checkpoint.sh clamps it below its own checkpoint length (docs/watcher-continuity.md "Surviving a host suspend")
-FM_WAKE_WAIT_POLL=1     # seconds between delivery-stub poll iterations in bin/fm-wake-wait.sh, each of which checks the durable queue and the watcher health; the stub derives its host-freeze threshold from the whole-second part of it as POLL*2+5 seconds, so lowering the poll also lowers the bar for what counts as evidence the host froze and raising it raises that bar, and any sub-second poll floors that threshold at 5s (docs/watcher-continuity.md "Surviving a host suspend")
-FM_ARM_CONFIRM_TIMEOUT=10   # seconds fm-watch-arm waits to confirm a fresh watcher before reporting FAILED
+FM_DELIVERY_POLL=2      # seconds between wake-delivery listener cycles in bin/fm-delivery.sh; each cycle touches the beacon, reads the durable queue, and submits when one is due (docs/wake-delivery.md)
+FM_DELIVERY_RETRY=45    # seconds before the listener resubmits while the same wakes are still pending; a submitted wake becomes a model turn that has to RUN before it can drain, so a shorter interval types a second message into a composer whose first message is still being worked
+FM_DELIVERY_ENDPOINT_BACKEND_OVERRIDE=  # explicit backend for `fm-delivery-service.sh publish-endpoint`, for a session whose pane the discovery order cannot see; must be set together with the target override, and both are trusted as given
+FM_DELIVERY_ENDPOINT_TARGET_OVERRIDE=   # explicit pane target for that same publish; with neither override set, publish REFUSES rather than guessing an address the listener would type into
+FM_DELIVERY_DEFER=10    # seconds before the listener re-reads a pane that said "not now" (busy, unsubmitted text, no endpoint); a deferral delivered nothing, so it is far shorter than the post-submit retry, but re-reading every poll while a captain types costs a capture per second and buys nothing
+FM_DELIVERY_GRACE=      # seconds before a delivery beacon reads as stale; falls back to FM_GUARD_GRACE so one fleet has one staleness bar
+FM_DELIVERY_SUBMIT_RETRIES=3   # Enter-only retries per submit; the text is typed once and never retyped, because a swallowed Enter leaves it in the composer and a second copy would concatenate into one corrupted turn
+FM_DELIVERY_SUBMIT_SLEEP=0.5   # seconds between those Enter retries and the settle read after them
+FM_DELIVERY_CONFIRM_TIMEOUT=10   # seconds fm-delivery-service waits to confirm a healthy listener after a start or restart
+FM_DELIVERY_STOP_TIMEOUT=20   # seconds fm-delivery-service waits for a recorded listener to exit before treating the stop as failed
+FM_DELIVERY_LOG_MAX_BYTES=262144   # size cap on state/.delivery.log before it is trimmed to FM_DELIVERY_LOG_KEEP_LINES
+FM_DELIVERY_LOG_KEEP_LINES=500   # lines kept when that log is trimmed
+FM_ARM_CONFIRM_TIMEOUT=10   # seconds fm-watcher-service waits to confirm a fresh watcher before reporting failure
 FM_TG_RECV_ATTACH_POLL=0.5  # seconds between checks while fm-tg-recv-arm is attached to an existing receiver
 FM_TG_RECV_ATTACH_CONFIRM_TIMEOUT=2  # seconds fm-tg-recv-arm waits for a competing arm to publish receiver metadata
 FM_TG_RECV_TERM_WAIT_CYCLES=30  # termination polling cycles before fm-tg-recv-arm preserves a live receiver lock after wrapper shutdown

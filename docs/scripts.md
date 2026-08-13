@@ -99,9 +99,11 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-frequency-monitor.sh` | Run the fast plain-shell Bridge fetch, deduplication, and durable wake loop           |
 | `fm-bridge-inbox-lib.sh` | Share lock-protected Bridge inbox signatures and durable wake publication             |
 | `fm-watch-keeper.sh`     | Respawn the daemon watcher inside the detached tmux fallback session                  |
-| `fm-watch-arm.sh`        | Verify the external watcher service and await one session delivery stub              |
-| `fm-wake-wait.sh`        | Wait for a durable queued wake without draining it, optionally holding behind an already-armed same-session stub instead of closing |
-| `fm-watch-checkpoint.sh` | Run one bounded foreground delivery-stub checkpoint for Codex supervision            |
+| `fm-delivery.sh`         | This home's external wake-delivery listener: observe the durable queue, submit into the session pane, retry until a turn drains it |
+| `fm-delivery-lib.sh`     | Delivery records, listener health, the primary-endpoint record, and the one-line delivery verdict |
+| `fm-delivery-service.sh` | Install, converge, restart, and report this home's delivery listener; publish the session endpoint |
+| `fm-delivery-keeper.sh`  | tmux keeper tier for the delivery listener where systemd --user is unusable          |
+| `fm-pane-activity-lib.sh` | The shared pre-typing pane reads every process that types into the captain's pane takes |
 | `fm-watch.sh`            | Singleton-safe daemon watcher that absorbs benign wakes and durably queues actionable ones |
 | `fm-context-lib.sh`      | The context-ceiling predicates and branch classification - size, quiet boundary, captain presence, receipt freshness, re-entry path, blocked, ask, reset, and unenforced - shared by the watcher and the reset tool (docs/context-reset.md) |
 | `fm-stow-receipt.sh`     | Record that this session's durable knowledge was filed, bound to the transcript position it was filed at |

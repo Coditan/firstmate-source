@@ -150,7 +150,7 @@ test_missing_systemd_unit_requires_separate_consent() {
 }
 
 test_keeper_fallback_establishes_real_watcher() {
-  local fakebin home log manager arm_pid old_watcher_pid new_watcher_pid i
+  local fakebin home log manager old_watcher_pid new_watcher_pid i
   fakebin="$TMP_ROOT/keeper-bin"
   home="$TMP_ROOT/keeper-home"
   log="$TMP_ROOT/keeper-tmux.log"
@@ -171,22 +171,12 @@ test_keeper_fallback_establishes_real_watcher() {
   manager=$(cat "$home/state/.watch.lock/manager")
   [ "$manager" = keeper ] || fail "fallback watcher recorded manager=$manager instead of keeper"
   assert_contains "$(cat "$log")" "new-session -d -s fm-watch-" "fallback did not start a detached home-scoped keeper"
-  FM_HOME="$home" FM_WATCH_SERVICE_FORCE_BACKEND=keeper FM_WATCH_TMUX="$fakebin/tmux" \
-    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$TMP_ROOT/keeper.pid" \
-    FM_ARM_CONFIRM_TIMEOUT=5 FM_WAKE_WAIT_POLL=0.05 "$ROOT/bin/fm-watch-arm.sh" > "$TMP_ROOT/keeper-arm.out" &
-  arm_pid=$!
-  i=0
-  while [ ! -e "$home/state/.wake-stub.lock/pid" ] && [ "$i" -lt 100 ]; do
-    sleep 0.05
-    i=$((i + 1))
-  done
-  [ -e "$home/state/.wake-stub.lock/pid" ] || fail "public arm did not establish the delivery stub"
+  # A queued wake must survive with no consumer at all: nothing in this session
+  # holds delivery any more, so the only thing that may touch the queue is a
+  # model turn running the drain.
   FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" . "$ROOT/bin/fm-wake-lib.sh"
   fm_wake_append signal keeper "signal: keeper smoke"
-  wait "$arm_pid" || fail "public arm did not exit cleanly after the queued wake"
-  assert_contains "$(cat "$TMP_ROOT/keeper-arm.out")" "watcher: attached" "public arm did not honestly report attachment"
-  assert_contains "$(cat "$TMP_ROOT/keeper-arm.out")" "wake: queued" "public arm did not await the delivery stub"
-  [ "$(wc -l < "$home/state/.wake-queue" | tr -d '[:space:]')" -eq 1 ] || fail "public arm drained or duplicated the fallback wake"
+  [ "$(wc -l < "$home/state/.wake-queue" | tr -d '[:space:]')" -eq 1 ] || fail "the keeper tier drained or duplicated the fallback wake"
   old_watcher_pid=$(cat "$home/state/.watch.lock/pid")
   printf 'FM_CHECK_INTERVAL=7\n' > "$home/config/x-mode.env"
   FM_HOME="$home" FM_WATCH_SERVICE_FORCE_BACKEND=keeper FM_WATCH_TMUX="$fakebin/tmux" \
@@ -196,7 +186,7 @@ test_keeper_fallback_establishes_real_watcher() {
   new_watcher_pid=$(cat "$home/state/.watch.lock/pid")
   [ "$new_watcher_pid" != "$old_watcher_pid" ] || fail "X-mode cadence change did not restart the keeper watcher"
   [ "$(cat "$home/state/.watch.lock/x-mode-version")" != absent ] || fail "keeper watcher did not record the X-mode version"
-  pass "keeper fallback establishes zero-loss delivery and converges X-mode cadence"
+  pass "keeper fallback keeps the durable queue intact and converges X-mode cadence"
 }
 
 test_installed_unit_converges_source_and_x_mode() {

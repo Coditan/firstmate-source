@@ -49,8 +49,8 @@ batched digest rather than per-wake injections.
    The daemon is **presence-gated**: it injects escalations only while
    `state/.afk` exists, and stays quiet otherwise.
 
-3. **Keep the watcher service running, but do not arm a session delivery stub.**
-   The external systemd or tmux keeper continues the watcher loop.
+3. **Keep both services running; the delivery listener stands down for you.**
+   The external systemd or tmux keeper continues the watcher loop, and this home's delivery listener keeps beating while deliberately not submitting, because two processes typing into one composer is a doubling failure.
    The away daemon reads newly appended durable queue records through its own cursor and never drains the queue.
 
 4. **Acknowledge** in `AGENTS.md` section 9 language: "Captain, away mode is active; I will batch routine updates and surface only decisions, failures, credentials, or review-ready work until you return."
@@ -252,10 +252,13 @@ These properties must hold:
 overriding classification.
 Use it sparingly.
 
-## A second reason to enter it, measured
+## A second reason to enter it, now spent
 
-Away mode's saving is not only the triage.
-Under Claude Code the session's delivery wait is a background task, and that harness reaps background tasks of the main session under memory pressure once the terminal has been idle for thirty minutes - the same half hour that defines a walk-away stretch.
-Each reap reaches the model as a completion carrying nothing and costs a supervision turn to restore, measured at roughly fifty such turns across one away stretch with away mode off.
-Away mode arms no session delivery wait at all, so there is nothing to reap and the whole class disappears.
-`docs/supervision-cost.md` owns that measurement, including why the reaper is not firstmate's to switch off.
+Away mode used to carry a saving beyond the triage.
+Under Claude Code the session's delivery wait was a background task, and that harness reaps background tasks of the main session under memory pressure once the terminal has been idle for thirty minutes - the same half hour that defines a walk-away stretch.
+Each reap reached the model as a completion carrying nothing and cost a supervision turn to restore, measured at roughly fifty such turns across one away stretch with away mode off.
+Away mode armed no session delivery wait at all, so that whole class disappeared while it was on.
+
+That reason is spent, and honestly so: on 2026-08-13 wake delivery moved out of the harness entirely, so no session holds a reapable delivery object whether away mode is on or off (`docs/wake-delivery.md`).
+What away mode still buys is the triage itself - the routine majority handled in bash without a model turn - which was always the larger half.
+`docs/supervision-cost.md` owns the measurement, as the record of what the arm layer cost before it was removed.

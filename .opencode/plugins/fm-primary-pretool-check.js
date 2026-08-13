@@ -2,11 +2,11 @@ import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 
-// PreToolUse seatbelt for OpenCode: the arm mechanism itself lives entirely in
-// fm-primary-watch-arm.js (a plugin-owned child process, never a model tool
-// call), so the residual risk here is the AGENT shelling `bin/fm-watch-arm.sh`
-// wrong through its own bash tool - the anti-pattern bin/fm-arm-pretool-check.sh
-// guards against (see that script's header and docs/arm-pretool-check.md).
+// PreToolUse seatbelt for OpenCode: wake delivery is no longer a command any
+// session runs, so what is left to guard is the AGENT shelling one of the two
+// remaining protected commands wrong through its own bash tool - the Telegram
+// receiver arm, and the watcher loop itself, which must never be run by hand
+// (see bin/fm-arm-pretool-check.sh's header and docs/arm-pretool-check.md).
 // tool.execute.before can block by throwing (verified 2026-07-09 against
 // OpenCode 1.17.15: throwing here prevents the bash command from running and
 // surfaces the thrown message as the failed tool result).

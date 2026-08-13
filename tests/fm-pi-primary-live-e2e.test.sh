@@ -248,67 +248,12 @@ mkdir -p "$LAB"
 git clone -q "$ROOT" "$PROJECT"
 run_ahoy_transcript_regressions
 run_native_ahoy_regressions
-mkdir -p "$PROJECT/.pi/extensions/lib"
-cp "$ROOT/.pi/extensions/fm-primary-pi-watch.ts" "$PROJECT/.pi/extensions/fm-primary-pi-watch.ts"
-cp "$ROOT/.pi/extensions/lib/fm-calm-visibility.ts" "$PROJECT/.pi/extensions/lib/fm-calm-visibility.ts"
-cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$PROJECT/.pi/extensions/lib/fm-operational-input.ts"
-cp "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts" "$PROJECT/.pi/extensions/fm-primary-turnend-guard.ts"
-cp "$ROOT/bin/fm-watch-arm.sh" "$PROJECT/bin/fm-watch-arm.sh"
-cp "$ROOT/bin/fm-operational-input.sh" "$PROJECT/bin/fm-operational-input.sh"
-cp "$ROOT/bin/fm-supervision-instructions.sh" "$PROJECT/bin/fm-supervision-instructions.sh"
-chmod +x "$PROJECT/bin/fm-operational-input.sh"
-mkdir -p "$HOME_DIR/state" "$HOME_DIR/config"
+# The extension-owned delivery-arm cycle this section used to regress no longer
+# exists: wake delivery is an external service, and no Pi extension holds a
+# delivery child any more. What replaced it is proven where it can actually be
+# proven - tests/fm-delivery.test.sh drives the listener into a real tmux agent
+# composer, and tests/fm-watcher-systemd-smoke.test.sh proves the systemd unit
+# restarts it. This credentialed regression keeps the part that still has a live
+# subject: Pi's native Ahoy handling above.
 
-"$TMUX" -L "$SOCKET" new-session -d -s "$SESSION" -c "$PROJECT" \
-  "env FM_HOME='$HOME_DIR' FM_ROOT_OVERRIDE='$PROJECT' FM_POLL=1 FM_SIGNAL_GRACE=0 FM_HEARTBEAT=600 bash -lc 'printf \"%s\\n\" \"\$\$\" > \"\$FM_HOME/state/.lock\"; pi --approve --no-session --no-context-files --no-extensions -e .pi/extensions/fm-primary-turnend-guard.ts -e .pi/extensions/fm-primary-pi-watch.ts --model openai-codex/gpt-5.6-sol --thinking low; rc=\$?; printf \"PI_EXIT=%s\\n\" \"\$rc\"; sleep 300'"
-
-i=0
-while [ "$i" -lt 120 ]; do
-  [ -f "$HOME_DIR/state/.pi-turnend-extension-loaded" ] && [ -f "$HOME_DIR/state/.pi-watch-extension-loaded" ] && break
-  sleep 0.5
-  i=$((i + 1))
-done
-[ -f "$HOME_DIR/state/.pi-turnend-extension-loaded" ] || fail "Pi turn-end extension did not load"
-[ -f "$HOME_DIR/state/.pi-watch-extension-loaded" ] || fail "Pi watcher extension did not load"
-wait_for_text "(openai-codex)" 120 || fail "Pi did not reach its ready composer"
-sleep 1
-
-: > "$HOME_DIR/state/pi-e2e.meta"
-send_prompt "Start supervision with fm_watch_arm_pi and never use bash to arm supervision. After the watcher wake arrives, run bin/fm-wake-drain.sh and reply exactly HANDLED."
-wait_for_text "watcher: started Pi extension arm child 1" || fail "Pi did not render the initial watcher tool result"
-
-printf 'done: pi live e2e watcher fire\n' > "$HOME_DIR/state/pi-e2e.status"
-i=0
-while [ "$i" -lt 240 ]; do
-  grep -Eq 'reason=actionable-signal.*successor=started:[0-9]+' "$HOME_DIR/state/.watch-cycle-exits.log" 2>/dev/null && break
-  sleep 0.5
-  i=$((i + 1))
-done
-grep -Eq 'reason=actionable-signal.*successor=started:[0-9]+' "$HOME_DIR/state/.watch-cycle-exits.log" 2>/dev/null \
-  || fail "Pi extension did not start and ledger-link a successor after the actionable close"
-wait_for_exact_line "HANDLED" 120 || fail "Pi did not drain and settle after its extension-owned successor started"
-
-pane=$(capture)
-guard_count=$(printf '%s\n' "$pane" | grep -Fc "TURN WOULD END BLIND - supervision is off." || true)
-[ "$guard_count" -eq 0 ] || fail "successor was not protecting Pi before its next turn end (guard count $guard_count)"
-foreground_arm='$ bin/fm-watch-arm.sh'
-if printf '%s\n' "$pane" | grep -Fq "$foreground_arm"; then
-  fail "Pi used a foreground bash watcher arm"
-fi
-arm_tool_result_count=$(printf '%s\n' "$pane" | grep -Ec 'watcher: (started|unchanged|not armed|read-only)' || true)
-[ "$arm_tool_result_count" -eq 1 ] || fail "Pi model re-armed from memory instead of the extension (tool-result count $arm_tool_result_count)"
-
-pid_file=$(find "$HOME_DIR/state" -maxdepth 3 -type f -name pid | head -1)
-[ -n "$pid_file" ] || fail "re-armed watcher pid was not recorded"
-watcher_pid=$(sed -n '1p' "$pid_file")
-arm_pid=$(ps -p "$watcher_pid" -o ppid= | tr -d ' ')
-[ -n "$arm_pid" ] || fail "re-armed watcher parent was not live"
-
-"$TMUX" -L "$SOCKET" send-keys -t "$SESSION" -l '/quit'
-sleep 1
-"$TMUX" -L "$SOCKET" send-keys -t "$SESSION" Enter
-wait_for_text "PI_EXIT=0" 60 || fail "Pi did not exit cleanly"
-wait_pid_dead "$watcher_pid" || fail "watcher child survived clean Pi exit"
-wait_pid_dead "$arm_pid" || fail "arm child survived clean Pi exit"
-
-printf 'ok - Pi %s live E2E covered native Ahoy first/later messages, legacy transcripts, near misses, and watcher continuity\n' "$PI_VERSION"
+printf 'ok - Pi %s live E2E covered native Ahoy first/later messages, legacy transcripts, and near misses\n' "$PI_VERSION"

@@ -20,7 +20,7 @@ fm_test_tmproot TMP_ROOT fm-turnend-guard
 
 fm_git_identity fmtest fmtest@example.invalid
 
-REQUIRED_REASON='re-arm wake delivery with bin/fm-watch-arm.sh as its own Claude Code background task'
+REQUIRED_REASON='this home wake-delivery listener is not running, so nothing will turn a queued wake into a turn'
 SILENT_REASON='This forced continuation is internal maintenance'
 AWAY_REPAIR_REASON='bin/fm-afk-launch.sh start-native'
 AWAY_NATIVE_ENTRY='FM_AFK_STATE_PREPARED=1 bin/fm-afk-start.sh as its own Claude Code background task'
@@ -128,6 +128,10 @@ install_guard_scripts() {
   cp "$ROOT/bin/fm-primary-scope-lib.sh" "$dir/bin/fm-primary-scope-lib.sh"
   cp "$ROOT/bin/fm-supervision-lib.sh" "$dir/bin/fm-supervision-lib.sh"
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/fm-wake-lib.sh"
+  cp "$ROOT/bin/fm-delivery-lib.sh" "$dir/bin/fm-delivery-lib.sh"
+  cp "$ROOT/bin/fm-delivery-service.sh" "$dir/bin/fm-delivery-service.sh"
+  cp "$ROOT/bin/fm-service-path-lib.sh" "$dir/bin/fm-service-path-lib.sh"
+  cp "$ROOT/bin/fm-axi-path-lib.sh" "$dir/bin/fm-axi-path-lib.sh"
   cp "$ROOT/bin/fm-journal-lib.sh" "$dir/bin/fm-journal-lib.sh"
   mkdir -p "$dir/docs"
   cp -R "$ROOT/docs/supervision-protocols" "$dir/docs/supervision-protocols"
@@ -278,17 +282,16 @@ record_watcher_lock() {
   printf '%s\n' "$identity" > "$dir/state/.watch.lock/pid-identity"
 }
 
-record_stub_lock() {
-  local dir=$1 pid=$2 identity=$3 root bin_dir session_pid
+record_delivery_lock() {
+  local dir=$1 pid=$2 identity=$3 root bin_dir
   root=$(cd "$dir" && pwd)
   bin_dir=$(cd "$dir/bin" && pwd)
-  session_pid=$(cat "$dir/state/.lock" 2>/dev/null || true)
-  mkdir -p "$dir/state/.wake-stub.lock"
-  printf '%s\n' "$pid" > "$dir/state/.wake-stub.lock/pid"
-  printf '%s\n' "$root" > "$dir/state/.wake-stub.lock/fm-home"
-  printf '%s\n' "$bin_dir/fm-wake-wait.sh" > "$dir/state/.wake-stub.lock/stub-path"
-  printf '%s\n' "$session_pid" > "$dir/state/.wake-stub.lock/session-lock-pid"
-  printf '%s\n' "$identity" > "$dir/state/.wake-stub.lock/pid-identity"
+  mkdir -p "$dir/state/.delivery.lock"
+  printf '%s\n' "$pid" > "$dir/state/.delivery.lock/pid"
+  printf '%s\n' "$root" > "$dir/state/.delivery.lock/fm-home"
+  printf '%s\n' "$bin_dir/fm-delivery.sh" > "$dir/state/.delivery.lock/delivery-path"
+  printf '%s\n' "$identity" > "$dir/state/.delivery.lock/pid-identity"
+  touch "$dir/state/.last-delivery-beat"
 }
 
 record_pusher_lock() {
@@ -345,7 +348,7 @@ test_hook_silent_with_live_lock_and_fresh_beacon() {
     fail "could not identify live watcher holder"
   }
   record_watcher_lock "$dir" "$pid" "$identity"
-  record_stub_lock "$dir" "$pid" "$identity"
+  record_delivery_lock "$dir" "$pid" "$identity"
   touch "$dir/state/.last-watcher-beat"
   out=$(run_hook "$dir" false); status=$?
   kill "$pid" 2>/dev/null || true
@@ -389,7 +392,7 @@ test_hook_blocks_when_the_recorded_delivery_stub_is_dead() {
   record_watcher_lock "$dir" "$pid" "$identity"
   ( exit 0 ) & dead=$!
   wait "$dead" 2>/dev/null || true
-  record_stub_lock "$dir" "$dead" "$identity"
+  record_delivery_lock "$dir" "$dead" "$identity"
   touch "$dir/state/.last-watcher-beat"
   out=$(run_hook "$dir" false); status=$?
   kill "$pid" 2>/dev/null || true
@@ -472,7 +475,7 @@ test_hook_queued_wakes_repair_names_the_drain() {
   expect_code 2 "$status" "hook must block on queued wakes with a healthy watcher and no armed stub"
   assert_contains "$out" "Wake delivery missing" "queued-wake block did not identify the missing delivery half"
   assert_contains "$out" "$DRAIN_FIRST_REASON" "delivery repair did not say the queued wakes must be drained before re-arming"
-  assert_contains "$out" "$REQUIRED_REASON" "delivery repair lost the harness re-arm instruction"
+  assert_contains "$out" "$REQUIRED_REASON" "delivery repair lost the listener-repair instruction"
   assert_contains "$out" "$SESSION_CLOSING_REASON" "session banner lost the drain-and-restore closing instruction"
   assert_not_contains "$out" "$AWAY_CLOSING_REASON" "session banner closed with the away-only wording"
   pass "fm-turnend-guard: a queued-wake activation names the drain in the delivery repair line"
@@ -667,7 +670,7 @@ test_hook_secondmate_reinvoke_recovery_loop() {
     fail "could not identify live watcher holder"
   }
   record_watcher_lock "$dir" "$pid" "$identity"
-  record_stub_lock "$dir" "$pid" "$identity"
+  record_delivery_lock "$dir" "$pid" "$identity"
   touch "$dir/state/.last-watcher-beat"
   out=$(run_hook "$dir" false); status=$?
   expect_code 0 "$status" "secondmate turn must end silently while its watcher is live (Stop #1)"
@@ -1034,7 +1037,7 @@ test_pi_extension_forces_followup() {
   assert_contains "$content" 'const command = String((event.input as { command?: unknown })?.command ?? "")' "pi extension changed bash command extraction for the PreToolUse contract"
   assert_contains "$content" 'runPretoolCheck(command)' "pi extension changed the PreToolUse checker invocation"
   assert_contains "$content" 'return { block: true, reason:' "pi extension changed the checker exit-2 block result"
-  assert_not_contains "$content" 'Run bin/fm-watch-arm.sh as a background task' "pi extension must not hardcode the old watcher-arm instruction"
+  assert_not_contains "$content" 'bin/fm-watch-arm.sh' "pi extension must not name a delivery arm that no longer exists"
   pass ".pi primary extension: agent_settled forces one follow-up through the shared guard"
 }
 

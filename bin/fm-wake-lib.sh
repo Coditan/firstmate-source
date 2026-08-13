@@ -12,13 +12,6 @@ STATE="${FM_STATE_OVERRIDE:-${STATE:-$FM_HOME/state}}"
 FM_WAKE_QUEUE="${FM_WAKE_QUEUE:-$STATE/.wake-queue}"
 FM_WAKE_QUEUE_LOCK="${FM_WAKE_QUEUE_LOCK:-$STATE/.wake-queue.lock}"
 FM_WAKE_KINDS="signal stale check heartbeat"
-# Default seconds bin/fm-wake-wait.sh gives a live, identity-matched watcher to
-# get its beacon back inside the grace before reporting it. It lives here rather
-# than in that script because bin/fm-watch-checkpoint.sh has to clamp the child's
-# window below its own bound and therefore needs the very same number; two
-# literals would be two things to keep in step.
-# shellcheck disable=SC2034 # Read by bin/fm-wake-wait.sh and bin/fm-watch-checkpoint.sh.
-FM_WAKE_BEAT_CONFIRM_DEFAULT=90
 FM_LOCK_STALE_AFTER="${FM_LOCK_STALE_AFTER:-2}"
 FM_LOCK_STEAL_MAX_DEPTH="${FM_LOCK_STEAL_MAX_DEPTH:-8}"
 FM_LOCK_WAIT_TIMEOUT="${FM_LOCK_WAIT_TIMEOUT:-30}"
@@ -106,34 +99,9 @@ fm_watcher_lock_matches_pid() {
   [ "$current_identity" = "$lock_identity" ]
 }
 
-fm_wake_stub_lock_matches_pid() {
-  local state=$1 stub_path=$2 pid=$3 home=${4:-$FM_HOME} lockdir lock_home lock_path lock_identity current_identity
-  local lock_session current_session
-  lockdir="$state/.wake-stub.lock"
-  lock_home=$(cat "$lockdir/fm-home" 2>/dev/null || true)
-  lock_path=$(cat "$lockdir/stub-path" 2>/dev/null || true)
-  lock_identity=$(cat "$lockdir/pid-identity" 2>/dev/null || true)
-  lock_session=$(cat "$lockdir/session-lock-pid" 2>/dev/null || true)
-  current_session=$(cat "$state/.lock" 2>/dev/null || true)
-  [ "$lock_home" = "$home" ] || return 1
-  [ "$lock_path" = "$stub_path" ] || return 1
-  [ "$lock_session" = "$current_session" ] || return 1
-  [ -n "$lock_identity" ] || return 1
-  current_identity=$(fm_pid_identity "$pid") || return 1
-  [ "$current_identity" = "$lock_identity" ]
-}
-
-FM_WAKE_STUB_ARMED_PID=
-fm_wake_stub_armed() {
-  local state=$1 stub_path=$2 home=${3:-$FM_HOME} pid
-  FM_WAKE_STUB_ARMED_PID=
-  pid=$(cat "$state/.wake-stub.lock/pid" 2>/dev/null || true)
-  fm_pid_alive "$pid" || return 1
-  fm_wake_stub_lock_matches_pid "$state" "$stub_path" "$pid" "$home" || return 1
-  # shellcheck disable=SC2034 # Read by callers after fm_wake_stub_armed returns.
-  FM_WAKE_STUB_ARMED_PID=$pid
-  return 0
-}
+# Wake delivery no longer has a session-held waiter to judge, so the predicates
+# that judged one are gone.  bin/fm-delivery-lib.sh owns the delivery listener's
+# health, its endpoint record, and the one-line verdict every consumer reads.
 
 # The single owner of the watcher-health predicate. Its return value is
 # unchanged (0 healthy, 1 not), and it additionally classifies WHY an unhealthy
@@ -144,8 +112,8 @@ fm_wake_stub_armed() {
 #                 machine suspend necessarily leaves exactly this state behind
 #   dead          no live, identity-matched watcher process at all
 # The pid and lock-identity conditions hold across a suspend and fail on a real
-# death, so this classification is what lets bin/fm-wake-wait.sh tell a slept
-# watcher from a dead one with no suspend detection of any kind.
+# death, so this classification is what lets a consumer tell a slept watcher
+# from a dead one with no suspend detection of any kind.
 # FM_WATCHER_LIVE_PID carries the live pid for both healthy and beacon-stale, so
 # a caller reporting a beacon-stale watcher can name the process it is waiting
 # on; FM_WATCHER_HEALTHY_PID keeps its narrower healthy-only meaning.
@@ -206,6 +174,7 @@ fm_lock_clean_known_files() {
     "$lockdir/fm-home" \
     "$lockdir/pid-identity" \
     "$lockdir/watcher-path" \
+    "$lockdir/delivery-path" \
     "$lockdir/stub-path" \
     "$lockdir/session-lock-pid" \
     "$lockdir/manager" \

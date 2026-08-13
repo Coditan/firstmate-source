@@ -47,7 +47,7 @@ Launching a supported harness inside it instantiates your first mate - and makes
 - **Two task shapes** - ship tasks deliver a change; scout tasks investigate, plan, reproduce, or audit and leave a report.
 - **Explicit project modes** - each project ships via `no-mistakes`, `direct-PR`, or `local-only`, with an optional `+yolo` autonomy flag.
 - **Optional secondmates** - opt in to persistent second mates that run from isolated firstmate homes with their own `FM_HOME`, state, projects, and session lock, supervising project clones or a project-less firstmate-repo domain, kept on the primary firstmate version by guarded local fast-forwards and checked for live agent processes at session start.
-- **Event-driven, zero-token supervision** - a bash watcher sleeps on the fleet and wakes the first mate only when something needs you; verified primary harnesses also get a turn-end backstop that blocks or follows up on a blind stop when work is under way and supervision is not live.
+- **Event-driven, zero-token supervision** - a bash watcher sleeps on the fleet and a companion service delivers the wake, both outside the agent harness so neither can be killed with a session; verified primary harnesses also get a turn-end backstop that blocks or follows up on a blind stop when work is under way and supervision is not live.
 - **Optional X mode** - opt in with one local `.env` token so firstmate can answer your public `@myfirstmate` mentions, act on normal reversible mention requests through the same lifecycle as chat requests, acknowledge spawned work, and post up to three public-safe completion follow-ups within seven days for genuine milestones and the final outcome without changing non-X behavior; dry-run preview records would-be replies and dismissals locally before go-live.
 - **Guarded by construction** - the first mate is read-only over your projects except for the guarded paths authorized by [hard rule 1](AGENTS.md#1-identity-and-prime-directives), with fleet sync's safe branch pruning remaining part of the fleet-sync exception; crewmates make every project change behind the configured merge authority.
 - **Restart-proof** - all state lives on disk and in the active session backend (tmux by hard default, herdr or cmux when selected or auto-detected, zellij/orca when explicitly selected); kill the session anytime and the next one reconciles, including confirmed-dead secondmate agents, and carries on.
@@ -67,11 +67,11 @@ The first mate detects and offers to install everything else.
 ### Recommended harnesses
 
 **Claude Code, Grok, and Pi are equal co-primary recommendations** for running the primary firstmate session.
-Claude Code and Grok use background-notify wake cycles; Pi uses its tracked primary watcher extension.
 All three have verified turn-end guard paths when launched with their documented setup.
 Pick whichever one matches your subscription and workflow.
 
-Codex and OpenCode are also verified and supported as primary harnesses; Codex uses bounded foreground checkpoints, and OpenCode uses a TUI plugin, so both carry more harness-specific supervision tradeoffs than the three co-primaries.
+Codex and OpenCode are also verified and supported as primary harnesses.
+Wake delivery itself no longer differs between them: it runs as a service outside every harness, so a session holds no delivery object and there is no per-harness wake mechanism to trade off ([docs/wake-delivery.md](docs/wake-delivery.md)).
 
 ### Install and launch
 
@@ -127,7 +127,7 @@ This is optional, and nothing in firstmate writes or reads your profile: verify 
 For Grok, `--trust` is needed once per clone so project hooks and the turn-end guard load; `/hooks-trust` inside Grok works too.
 For Pi, approve the project trust prompt once per clone on first launch so the tracked `.pi/extensions/*.ts` files auto-load.
 Every Pi session starts with calm mode off; `/calm` is a session-local conversation-focused transcript toggle.
-While active, it uses Pi's supported presentation APIs to hide the live working row, collapsed thinking labels, all seven built-in tool shells, the Firstmate watcher tool shell, and canonically typed Firstmate operational inputs.
+While active, it uses Pi's supported presentation APIs to hide the live working row, collapsed thinking labels, all seven built-in tool shells, and canonically typed Firstmate operational inputs.
 Every injected input remains in model context and session storage.
 Inputs that ordinarily render as user rows use a TUI-only custom entry so Calm can hide and restore their presentation without changing delivery; the session-start nudge remains on its existing non-displayed custom-message path.
 Toggling off restores ordinary rendering, and `Ctrl+O` expansion behavior stays unchanged.
@@ -235,7 +235,8 @@ Firstmate's skills live in two separate places with different audiences:
 - [docs/merge-gate-audit.md](docs/merge-gate-audit.md) - how to audit GitHub merge gates across rulesets and classic branch protection, including the current heavyliftrental fleet gate map.
 - [docs/turnend-guard.md](docs/turnend-guard.md) - the primary session's structural "no turn ends blind" backstop: verified per-harness hook mechanisms, scoping, loop safety, and fail-open tradeoffs.
 - [docs/context-reset.md](docs/context-reset.md) - the stow-then-clear context ceiling: what the watcher measures, when it resets, asks, blocks, or reports itself unenforced, and every refusal the reset tool makes.
-- [docs/supervision-protocols/](docs/supervision-protocols/) - rendered primary-harness watcher protocols for Claude, Codex, OpenCode, Pi, Grok, and unknown harness fallback.
+- [docs/wake-delivery.md](docs/wake-delivery.md) - how a queued wake becomes a model turn: the external listener, why no session holds a delivery object, and the verdict that keeps a dead listener from looking like a quiet fleet.
+- [docs/supervision-protocols/](docs/supervision-protocols/) - rendered primary-harness supervision protocols for Claude, Codex, OpenCode, Pi, Grok, and unknown harness fallback.
 - [docs/supervision-cost.md](docs/supervision-cost.md) - what supervision costs in freshly written tokens, measured from provider usage records with `bin/fm-supervision-cost.sh`, plus the before-and-after for three repairs and what the measurement does not cover.
 - [docs/scripts.md](docs/scripts.md) - the `bin/` toolbelt reference.
 - [`AGENTS.md`](AGENTS.md) - the distro's always-loaded operating contract and routing index for conditional procedures.
