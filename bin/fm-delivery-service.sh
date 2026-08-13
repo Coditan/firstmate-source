@@ -56,6 +56,8 @@ case "$STOP_TIMEOUT" in ''|*[!0-9]*|0) STOP_TIMEOUT=20 ;; esac
 . "$SCRIPT_DIR/fm-service-path-lib.sh"
 # shellcheck source=bin/fm-axi-path-lib.sh
 . "$SCRIPT_DIR/fm-axi-path-lib.sh"
+# shellcheck source=bin/fm-keeper-name-lib.sh
+. "$SCRIPT_DIR/fm-keeper-name-lib.sh"
 # See fm-watcher-service.sh: composed values resolve tools through THIS
 # process's PATH, so the home's own AXI prefix has to lead it here.
 fm_axi_prepend_path "$FM_HOME"
@@ -71,6 +73,7 @@ delivery_source_version() {
     "$SCRIPT_DIR/fm-composer-lib.sh"
     "$SCRIPT_DIR/fm-tmux-lib.sh"
     "$SCRIPT_DIR/fm-backend.sh"
+    "$SCRIPT_DIR/fm-keeper-name-lib.sh"
     "$SCRIPT_DIR"/backends/*.sh
   )
   if command -v sha256sum >/dev/null 2>&1; then
@@ -134,10 +137,27 @@ unit_instance() {
 }
 
 keeper_name() {
-  local base sum
-  base=$(basename "$FM_HOME" | tr -c 'A-Za-z0-9_-' '_')
-  sum=$(printf '%s' "$FM_HOME" | cksum | awk '{print $1}')
-  printf 'fm-delivery-%s-%s\n' "$base" "$sum"
+  fm_keeper_name delivery "$FM_HOME"
+}
+
+legacy_keeper_name() {
+  fm_legacy_keeper_name delivery "$FM_HOME"
+}
+
+legacy_keeper_owned() {
+  local name=$1
+  fm_legacy_keeper_owned_by_home "$TMUX" "$name" "$STATE/.delivery-keeper.pid" \
+    "$STATE/.delivery.lock" "$FM_HOME"
+}
+
+stop_legacy_keeper() {
+  local name
+  FM_DELIVERY_LEGACY_STOPPED=0
+  name=$(legacy_keeper_name) || return 1
+  "$TMUX" has-session -t "$name" 2>/dev/null || return 0
+  legacy_keeper_owned "$name" || return 0
+  "$TMUX" kill-session -t "$name" || return 1
+  FM_DELIVERY_LEGACY_STOPPED=1
 }
 
 systemd_env_quote() {
@@ -304,16 +324,18 @@ install_systemd() {
 
 stop_keeper() {
   local name
-  name=$(keeper_name)
-  "$TMUX" has-session -t "$name" 2>/dev/null || return 0
-  "$TMUX" kill-session -t "$name"
+  name=$(keeper_name) || return 1
+  if "$TMUX" has-session -t "$name" 2>/dev/null; then
+    "$TMUX" kill-session -t "$name" || return 1
+  fi
+  stop_legacy_keeper
 }
 
 # The resolved PATH is passed as an argument, not exported: `tmux new-session`
 # runs its command under the tmux SERVER's environment, not this caller's.
 start_keeper() {
   local name version resolved_path
-  name=$(keeper_name)
+  name=$(keeper_name) || return 1
   version=$(delivery_source_version) || return 1
   resolved_path=$(fm_service_path) || return 1
   mkdir -p "$STATE" || return 1
@@ -322,7 +344,11 @@ start_keeper() {
 
 ensure_keeper() {
   local name
-  name=$(keeper_name)
+  name=$(keeper_name) || return 1
+  stop_legacy_keeper || return 1
+  if [ "${FM_DELIVERY_LEGACY_STOPPED:-0}" -eq 1 ]; then
+    stop_recorded_listener || return 1
+  fi
   if healthy_listener && listener_record_matches keeper; then
     return 0
   fi

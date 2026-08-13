@@ -253,7 +253,8 @@ The full cmux home label also includes a short hash of the resolved `FM_ROOT` pa
 
 ## Watcher service
 
-`bin/fm-watcher-service.sh` selects a `systemd --user` template when the user manager is usable and otherwise selects a detached tmux keeper named from the home basename plus a path checksum.
+`bin/fm-watcher-service.sh` selects a `systemd --user` template when the user manager is usable and otherwise selects a detached tmux keeper whose recognizable basename prefix is paired with a truncated SHA-256 digest of the complete home path.
+The collision-resistant digest is the keeper's identity; a one-time migration stops the former checksum-named session only after this home's pid and lock records prove ownership, so upgrades neither orphan a keeper nor touch another home's colliding legacy name.
 The tracked template is `systemd/fm-watch@.service`.
 The instance is `fm-watch@$(systemd-escape --path "$FM_HOME").service`, so each operational home has an independent restart boundary.
 The first unit copy and `enable --now` require explicit captain consent through `WATCHER_UNIT:` and `bin/fm-bootstrap.sh install watcher-unit`.
@@ -279,7 +280,7 @@ Both tiers run `bin/fm-watch.sh` with `FM_WATCH_DAEMON=1`; the queue, delivery, 
 
 ## Wake-delivery service
 
-`bin/fm-delivery-service.sh` is the watcher service's companion and works the same way: a `systemd --user` template when the user manager is usable, otherwise a detached tmux keeper named from the home basename plus a path checksum.
+`bin/fm-delivery-service.sh` is the watcher service's companion and uses the same collision-resistant full-home keeper naming and ownership-proven legacy migration as the watcher: a `systemd --user` template when the user manager is usable, otherwise a detached tmux keeper.
 The tracked template is `systemd/fm-delivery@.service` and the instance is `fm-delivery@$(systemd-escape --path "$FM_HOME").service`, so each home has an independent restart boundary for delivery as well as for detection.
 The first unit copy and `enable --now` require explicit captain consent through `DELIVERY_UNIT:` and `bin/fm-bootstrap.sh install delivery-unit`.
 Convergence, the recorded `PATH`, and the keeper tier's handed-down `PATH` argument all follow the watcher's rules above; `state/.delivery-service.env` is its environment file and `state/.delivery.lock/service-path` its keeper-tier record.

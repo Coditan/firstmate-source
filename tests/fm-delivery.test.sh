@@ -568,6 +568,47 @@ test_publish_endpoint_records_the_session_that_published_it() {
   pass "a published endpoint records its backend, target, and owning session"
 }
 
+test_delivery_keeper_migrates_only_an_owned_legacy_session() {
+  local socket shim home new_name legacy_name keeper_pid foreign_home foreign_legacy
+  command -v tmux >/dev/null 2>&1 || { echo "skip: tmux not installed"; return 0; }
+  socket="fm-delivery-migration-$$"
+  shim="$TMP_ROOT/delivery-migration-tmux"
+  cat > "$shim" <<SH
+#!/usr/bin/env bash
+exec $(command -v tmux) -L '$socket' "\$@"
+SH
+  chmod +x "$shim"
+  home=$(make_home delivery-migration)
+  new_name=$(FM_HOME="$home" bash -c '. "$1/bin/fm-keeper-name-lib.sh"; fm_keeper_name delivery "$FM_HOME"' _ "$ROOT")
+  legacy_name=$(FM_HOME="$home" bash -c '. "$1/bin/fm-keeper-name-lib.sh"; fm_legacy_keeper_name delivery "$FM_HOME"' _ "$ROOT")
+  FM_HOME="$home" FM_DELIVERY_SERVICE_FORCE_BACKEND=keeper FM_DELIVERY_TMUX="$shim" \
+    FM_DELIVERY_POLL=0.1 FM_DELIVERY_STOP_TIMEOUT=3 FM_DELIVERY_CONFIRM_TIMEOUT=5 "$SERVICE" ensure \
+    || fail "could not establish the delivery keeper before migration"
+  tmux -L "$socket" rename-session -t "$new_name" "$legacy_name"
+  FM_HOME="$home" FM_DELIVERY_SERVICE_FORCE_BACKEND=keeper FM_DELIVERY_TMUX="$shim" \
+    FM_DELIVERY_POLL=0.1 FM_DELIVERY_STOP_TIMEOUT=3 FM_DELIVERY_CONFIRM_TIMEOUT=5 "$SERVICE" ensure \
+    || fail "delivery keeper migration did not converge"
+  tmux -L "$socket" has-session -t "$legacy_name" 2>/dev/null \
+    && fail "the proven legacy delivery keeper survived migration"
+  tmux -L "$socket" has-session -t "$new_name" 2>/dev/null \
+    || fail "migration did not establish the collision-resistant delivery keeper"
+  keeper_pid=$(cat "$home/state/.delivery-keeper.pid")
+  [ "$keeper_pid" = "$(tmux -L "$socket" display-message -p -t "$new_name" '#{pane_pid}')" ] \
+    || fail "the delivery keeper record does not point at the migrated session"
+
+  foreign_home="$TMP_ROOT/foreign/delivery-migration"
+  foreign_legacy=$(FM_HOME="$foreign_home" bash -c '. "$1/bin/fm-keeper-name-lib.sh"; fm_legacy_keeper_name delivery "$FM_HOME"' _ "$ROOT")
+  tmux -L "$socket" new-session -d -s "$foreign_legacy" 'sleep 300'
+  FM_HOME="$foreign_home" FM_STATE_OVERRIDE="$foreign_home/state" \
+    FM_DELIVERY_SERVICE_FORCE_BACKEND=keeper FM_DELIVERY_TMUX="$shim" \
+    FM_DELIVERY_POLL=0.1 FM_DELIVERY_STOP_TIMEOUT=3 FM_DELIVERY_CONFIRM_TIMEOUT=5 "$SERVICE" ensure \
+    || fail "delivery ensure failed beside an unowned legacy session"
+  tmux -L "$socket" has-session -t "$foreign_legacy" 2>/dev/null \
+    || fail "delivery migration killed a legacy session it could not prove belonged to the home"
+  tmux -L "$socket" kill-server 2>/dev/null || true
+  pass "delivery keeper migration replaces owned legacy state and preserves unowned sessions"
+}
+
 test_every_not_delivering_state_names_itself
 test_a_live_listener_with_a_dead_beacon_is_stalled_not_down
 test_the_listener_never_touches_the_durable_queue
@@ -580,3 +621,4 @@ test_destroying_the_whole_session_process_group_leaves_delivery_running
 test_service_status_and_repair_command_are_answerable_without_systemd
 test_publish_endpoint_refuses_rather_than_guessing
 test_publish_endpoint_records_the_session_that_published_it
+test_delivery_keeper_migrates_only_an_owned_legacy_session
