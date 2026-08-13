@@ -150,7 +150,7 @@ test_missing_systemd_unit_requires_separate_consent() {
 }
 
 test_keeper_fallback_establishes_real_watcher() {
-  local fakebin home log manager old_watcher_pid new_watcher_pid i
+  local fakebin home log manager old_watcher_pid new_watcher_pid
   fakebin="$TMP_ROOT/keeper-bin"
   home="$TMP_ROOT/keeper-home"
   log="$TMP_ROOT/keeper-tmux.log"
