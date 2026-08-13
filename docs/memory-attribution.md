@@ -131,9 +131,11 @@ Every deliberately bad input constructed, and what the reading said:
 | configured swap with no usable SwapFree | 3 | `headroom`: total shown, free unmeasured |
 | process table command fails | 3 | `processes`: the configured process-table command failed |
 | process table returns nothing | 3 | `processes`: came back empty, which no live machine produces |
+| process table contains a malformed row | 3 | `processes`: the partial table cannot be trusted |
 | cgroup tree absent | 3 | `account-slices`: no account's total, limit, or stall was read at all |
 | account memory.max neither `max` nor bytes | 3 | named account slice and `memory.max` instrument |
 | no installation's records readable | 3 | `task-attribution`: no process can be tied to the work it serves |
+| a requested installation's records cannot be read | 3 | `task-attribution`, with the installation retained as an unmeasured source |
 
 The cgroup case was found by constructing it.
 A bogus cgroup root originally exited 0, because every account then reported "no active session slice" - the identical wording a genuinely logged-out account produces.
@@ -145,6 +147,9 @@ Growth has its own set, because an unmeasurable growth rate is the easiest thing
 | --------- | ----------- |
 | no prior sample | scope, "nothing to compare against" - never `+0.0 MiB/min`; exit 0 remains possible |
 | stored sample has no usable epoch | `unmeasured` input `growth-sample`; exit 3 |
+| stored sample body cannot be read | `unmeasured` input `growth-sample`; never converted into first sightings; exit 3 |
+| stored sample contains a malformed process record | `unmeasured` input `growth-sample`; exit 3 |
+| stored sample has a valid epoch and no process records | measured empty baseline; current processes are first sightings; exit 0 remains possible |
 | stored sample is future-dated | `unmeasured` input `growth-sample`; exit 3 |
 | prior sample older than the growth window | `unmeasured` input `growth-sample`, with the age and window; exit 3 |
 | interval shorter than the divide-by floor | scope, with the interval and floor; exit 0 remains possible |

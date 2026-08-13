@@ -230,6 +230,11 @@ unmeasured() {  # <input> <reason>
   printf '%s|%s\n' "$1" "$2" >> "$UNMEASURED_FILE"
 }
 
+unmeasured_task_source() {  # <home> <reason>
+  unmeasured task-attribution "$2"
+  printf '%s\t-\tUNMEASURED\n' "$1" >> "$INSTALLATIONS_FILE"
+}
+
 unmeasured_count() {
   count_lines "$UNMEASURED_FILE"
 }
@@ -373,12 +378,12 @@ read_processes() {
   # pid ppid uid rss_kb start_epoch exe descriptor. The descriptor is built from
   # at most the first two argv tokens and capped: a full command line can carry
   # a credential or a whole task brief, and neither belongs in a reading.
-  awk -v now="$sample_now" '
+  if ! awk -v now="$sample_now" '
     function base(p,   n, a) { n = split(p, a, "/"); return a[n] }
     {
       pid = $1; ppid = $2; user = $3; rss = $4; et = $5
-      if (pid !~ /^[0-9]+$/ || rss !~ /^[0-9]+$/ || et !~ /^[0-9]+$/) next
-      if (user !~ /^[0-9]+$/) next
+      if (pid !~ /^[0-9]+$/ || ppid !~ /^[0-9]+$/ || user !~ /^[0-9]+$/ ||
+          rss !~ /^[0-9]+$/ || et !~ /^[0-9]+$/ || NF < 6) { bad = 1; next }
       t1 = base($6)
       t2 = ""
       if (NF >= 7 && substr($7, 1, 1) != "-") t2 = base($7)
@@ -389,14 +394,21 @@ read_processes() {
       gsub(/\t/, " ", d)
       printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", pid, ppid, user, rss, now - et, t1, d
     }
-  ' "$raw" > "$parsed"
+    END { if (bad) exit 1 }
+  ' "$raw" > "$parsed"; then
+    unmeasured processes "the process table contained a malformed record and could not be trusted"
+    return
+  fi
   # Moved into place only once it parsed, so a failed second read leaves the
   # first sample readable instead of replacing it with an empty file.
   if [ ! -s "$parsed" ]; then
     unmeasured processes "no line of the process table parsed into a usable record"
     return
   fi
-  mv -f "$parsed" "$PS_FILE" || return
+  if ! mv -f "$parsed" "$PS_FILE"; then
+    unmeasured processes "the parsed process table could not be retained"
+    return
+  fi
   PS_OK=1
 }
 
@@ -558,8 +570,7 @@ read_tasks() {
   while IFS= read -r home; do
     [ -n "$home" ] || continue
     if [ ! -d "$home/state" ] || [ ! -r "$home/state" ]; then
-      unmeasured task-attribution "$home state directory could not be read"
-      printf '%s\t-\tUNMEASURED\n' "$home" >> "$INSTALLATIONS_FILE"
+      unmeasured_task_source "$home" "$home state directory could not be read"
       continue
     fi
     howner=$(owner_uid_of "$home")
@@ -583,7 +594,7 @@ read_tasks() {
       [ -f "$meta" ] && [ -r "$meta" ] || records_ok=0
     done
     if [ "$records_ok" -ne 1 ]; then
-      unmeasured task-attribution "$home has task records that could not be read"
+      unmeasured_task_source "$home" "$home has task records that could not be read"
       continue
     fi
     task_tmp="$TMP/tasks.$HOMES_READ"
@@ -608,11 +619,11 @@ read_tasks() {
       /^window=/   { if (window == "")   { window = $0;   sub(/^window=/, "", window) } }
       END { flush(); print seen + 0 }
     ' "${metas[@]}" 2>/dev/null); then
-      unmeasured task-attribution "$home has task records that could not be read"
+      unmeasured_task_source "$home" "$home has task records that could not be read"
       continue
     fi
     case "$tasks" in
-      ''|*[!0-9]*) unmeasured task-attribution "$home task records produced no usable read count"; continue ;;
+      ''|*[!0-9]*) unmeasured_task_source "$home" "$home task records produced no usable read count"; continue ;;
     esac
     HOMES_READ=$((HOMES_READ + 1))
     [ "$howner" = - ] || printf '%s\n' "$howner" >> "$SCOPE_FILE"
@@ -688,10 +699,14 @@ GROWTH_REASON=
 GROWTH_SCOPE=0
 
 read_prior() {
-  local epoch age
+  local epoch age parse_status="$TMP/prior-status" epoch_file="$TMP/prior-epoch"
   : > "$PRIOR_FILE"
   if [ "$INTERVAL" -gt 0 ]; then
-    cp "$PS_FILE" "$TMP/first.tsv"
+    if ! cp "$PS_FILE" "$TMP/first.tsv"; then
+      GROWTH_REASON="the first process-table read could not be retained for comparison"
+      unmeasured growth-sample "$GROWTH_REASON"
+      return
+    fi
     sleep "$INTERVAL"
     read_processes
     if [ "$PS_OK" -ne 1 ]; then
@@ -699,7 +714,11 @@ read_prior() {
       unmeasured growth-sample "$GROWTH_REASON"
       return
     fi
-    awk -F'\t' '{ printf "%s\t%s\t%s\n", $1, $5, $4 }' "$TMP/first.tsv" > "$PRIOR_FILE"
+    if ! awk -F'\t' '{ printf "%s\t%s\t%s\n", $1, $5, $4 }' "$TMP/first.tsv" > "$PRIOR_FILE"; then
+      GROWTH_REASON="the first process-table read could not be prepared for comparison"
+      unmeasured growth-sample "$GROWTH_REASON"
+      return
+    fi
     GROWTH_INTERVAL=$INTERVAL
     return
   fi
@@ -713,8 +732,36 @@ read_prior() {
     unmeasured growth-sample "$GROWTH_REASON"
     return
   fi
-  epoch=$(sed -n 's/^epoch //p' "$SAMPLES" 2>/dev/null | head -1)
-  case "$epoch" in ''|*[!0-9]*) GROWTH_REASON="the stored sample carries no usable timestamp"; unmeasured growth-sample "$GROWTH_REASON"; return ;; esac
+  : > "$parse_status"
+  : > "$epoch_file"
+  if ! awk -F'\t' -v epoch_file="$epoch_file" -v status_file="$parse_status" '
+    /^#/ || /^[[:space:]]*$/ { next }
+    /^epoch / {
+      if (seen_epoch || $0 !~ /^epoch [0-9]+$/) { bad = 1; next }
+      epoch = $0
+      sub(/^epoch /, "", epoch)
+      print epoch > epoch_file
+      seen_epoch = 1
+      next
+    }
+    NF == 3 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ { print; next }
+    { bad = 1 }
+    END {
+      if (!seen_epoch) print "timestamp" > status_file
+      if (bad) print "malformed" > status_file
+      if (!seen_epoch || bad) exit 1
+    }
+  ' "$SAMPLES" > "$PRIOR_FILE" 2>/dev/null; then
+    case "$(head -1 "$parse_status" 2>/dev/null)" in
+      timestamp) GROWTH_REASON="the stored sample carries no usable timestamp" ;;
+      malformed) GROWTH_REASON="the stored sample carries a malformed process record" ;;
+      *) GROWTH_REASON="the stored sample body could not be read" ;;
+    esac
+    : > "$PRIOR_FILE"
+    unmeasured growth-sample "$GROWTH_REASON"
+    return
+  fi
+  epoch=$(head -1 "$epoch_file" 2>/dev/null)
   age=$((NOW - epoch))
   if [ "$age" -lt 0 ]; then
     GROWTH_REASON="the stored sample is dated in the future, so the interval cannot be trusted"
@@ -731,7 +778,6 @@ read_prior() {
     GROWTH_SCOPE=1
     return
   fi
-  grep -v '^epoch \|^#' "$SAMPLES" > "$PRIOR_FILE" 2>/dev/null || : > "$PRIOR_FILE"
   GROWTH_INTERVAL=$age
 }
 

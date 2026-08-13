@@ -331,7 +331,12 @@ test_empty_and_unreadable_task_record_sets_are_distinct() {
   out=$(run_reading "$dir") || status=$?
   expect_code 3 "$status" "a home with unreadable task records"
   assert_contains "$out" "$dir/home has task records that could not be read" 'the failed installation was not named'
-  assert_not_contains "$out" "$dir/home   account" 'a failed installation was presented as successfully read'
+  assert_contains "$out" "$dir/home   account unknown, task records UNMEASURED" 'the failed installation vanished from the source list'
+  status=0
+  out=$(run_reading "$dir" --json) || status=$?
+  expect_code 3 "$status" "json with a home whose task records could not be read"
+  [ "$(printf '%s' "$out" | jq -r --arg home "$dir/home" '.installation_sources[] | select(.home == $home) | .status')" = unmeasured ] \
+    || fail "json hid the requested installation whose records could not be read"
   pass "empty task records are scoped while failed reads are incomplete"
 }
 
@@ -483,6 +488,42 @@ test_corrupt_and_future_samples_force_incomplete_readings() {
   pass "corrupt and future-dated samples force incomplete readings"
 }
 
+test_sample_body_failures_are_not_first_sightings() {
+  local dir="$TMP_ROOT/sample-body" out status=0 real_awk
+  new_scene "$dir"
+  write_sample "$dir/samples" $((NOW - 60)) "1000=$((NOW - 600)):512000"
+  real_awk=$(command -v awk)
+  mkdir -p "$dir/bin"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'for arg in "$@"; do\n'
+    printf '  [ "$arg" = "$FAIL_SAMPLE" ] && exit 7\n'
+    printf 'done\n'
+    printf 'exec %q "$@"\n' "$real_awk"
+  } > "$dir/bin/awk"
+  chmod +x "$dir/bin/awk"
+  out=$(run_reading "$dir" "PATH=$dir/bin:$PATH" "FAIL_SAMPLE=$dir/samples") || status=$?
+  expect_code 3 "$status" "a sample whose body could not be read"
+  assert_contains "$out" 'stored sample body could not be read' 'the failed sample body was not named'
+  assert_not_contains "$out" 'first sighting of this process' 'the failed sample body became ordinary first sightings'
+
+  rm -rf "$dir"
+  new_scene "$dir"
+  write_sample "$dir/samples" $((NOW - 60))
+  printf 'not-a-pid\t123\t456\n' >> "$dir/samples"
+  status=0
+  out=$(run_reading "$dir") || status=$?
+  expect_code 3 "$status" "a malformed sample process record"
+  assert_contains "$out" 'malformed process record' 'the malformed sample record was silently discarded'
+
+  write_sample "$dir/samples" $((NOW - 60))
+  status=0
+  out=$(run_reading "$dir") || status=$?
+  expect_code 0 "$status" "a well-formed sample with no process records"
+  assert_contains "$out" 'first sighting of this process' 'a well-formed empty sample was treated as a failed read'
+  pass "sample body failures are incomplete while a valid empty body remains usable"
+}
+
 test_a_reused_pid_is_not_reported_as_growth() {
   local dir="$TMP_ROOT/reuse" out line
   new_scene "$dir"
@@ -527,7 +568,7 @@ test_each_unreadable_input_is_named_and_forces_a_non_zero_exit() {
   # Every case is an input constructed to be bad on purpose.
   for case_name in pressure-empty pressure-garbage pressure-missing \
                    meminfo-empty meminfo-garbage meminfo-no-available \
-                   ps-fails ps-empty cgroup-absent home-unreadable; do
+                   ps-fails ps-empty ps-malformed cgroup-absent home-unreadable; do
     rm -rf "$dir"
     new_scene "$dir"
     status=0
@@ -540,6 +581,7 @@ test_each_unreadable_input_is_named_and_forces_a_non_zero_exit() {
       meminfo-no-available) printf 'MemTotal: 24019276 kB\nMemFree: 100 kB\n' > "$dir/meminfo" ;;
       ps-fails)            printf '#!/usr/bin/env bash\nexit 7\n' > "$dir/ps" ;;
       ps-empty)            printf '#!/usr/bin/env bash\nexit 0\n' > "$dir/ps" ;;
+      ps-malformed)        make_ps "$dir/ps" "1000 1 $ME_UID 512000 600 codex worker" 'broken partial row' ;;
       cgroup-absent)       rm -rf "$dir/cgroup" ;;
       home-unreadable)     rm -rf "$dir/home/state" ;;
     esac
@@ -705,6 +747,7 @@ test_an_unreadable_prior_sample_is_an_instrument_failure
 test_a_stale_prior_sample_is_unmeasured_rather_than_meaningless
 test_too_short_an_interval_is_scoped_rather_than_divided_by
 test_corrupt_and_future_samples_force_incomplete_readings
+test_sample_body_failures_are_not_first_sightings
 test_a_reused_pid_is_not_reported_as_growth
 test_a_genuinely_calm_stall_reading_is_not_confusable_with_a_blind_one
 test_each_unreadable_input_is_named_and_forces_a_non_zero_exit
