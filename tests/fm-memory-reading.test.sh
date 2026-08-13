@@ -283,6 +283,23 @@ test_the_reading_names_the_installations_it_actually_read() {
   pass "the reading names the installations whose records it read"
 }
 
+test_empty_and_unreadable_task_record_sets_are_distinct() {
+  local dir="$TMP_ROOT/task-record-boundary" out status=0
+  new_scene "$dir"
+  rm -f "$dir/home/state"/*.meta
+  out=$(run_reading "$dir") || status=$?
+  expect_code 0 "$status" "a home with no task records"
+  assert_contains "$out" '0 task record(s)' 'an idle installation was not listed with zero records'
+
+  mkdir "$dir/home/state/broken.meta"
+  status=0
+  out=$(run_reading "$dir") || status=$?
+  expect_code 3 "$status" "a home with unreadable task records"
+  assert_contains "$out" "$dir/home has task records that could not be read" 'the failed installation was not named'
+  assert_not_contains "$out" "$dir/home   account" 'a failed installation was presented as successfully read'
+  pass "empty task records are scoped while failed reads are incomplete"
+}
+
 test_a_process_that_vanished_mid_read_is_reported_as_exited() {
   local dir="$TMP_ROOT/gone" out
   new_scene "$dir"
@@ -294,6 +311,19 @@ test_a_process_that_vanished_mid_read_is_reported_as_exited() {
   assert_contains "$out" '1009' 'a process that exited mid-read vanished from the reading too'
   assert_contains "$out" 'exited' 'a process that exited mid-read is not reported as such'
   pass "a process that exits mid-read is reported as exited, not silently dropped"
+}
+
+test_a_live_process_with_unresolved_cwd_is_not_reported_exited() {
+  local dir="$TMP_ROOT/unresolved-cwd" out line status=0
+  new_scene "$dir"
+  make_ps "$dir/ps" "1010 1 $ME_UID 65536 60 codex inaccessible-worker"
+  mkdir -p "$dir/proc/1010"
+  out=$(run_reading "$dir") || status=$?
+  expect_code 0 "$status" "a live process whose cwd cannot be resolved"
+  line=$(printf '%s\n' "$out" | grep '1010' | head -1)
+  assert_contains "$line" 'may not resolve' 'the live process did not take the unreadable route'
+  assert_not_contains "$line" 'exited' 'a live process with an unresolved cwd was reported exited'
+  pass "unresolved live process cwd is unreadable, not exited"
 }
 
 # --- the protected delivery path --------------------------------------------
@@ -540,6 +570,18 @@ test_the_json_form_carries_the_same_completeness_verdict() {
   [ "$(printf '%s' "$out" | jq -r .complete)" = false ] || fail "an incomplete reading is marked complete in json"
   [ "$(printf '%s' "$out" | jq -r '.unmeasured | length')" -ge 1 ] || fail "the json form lists no unmeasured input"
   [ "$(printf '%s' "$out" | jq -r '.stall.some_avg10')" = null ] || fail "the json form invented a stall figure it never read"
+
+  new_scene "$dir"
+  sed -i 's/SwapTotal:.*/SwapTotal:       2097152 kB/; s/SwapFree:.*/SwapFree:        1048576 kB/' "$dir/meminfo"
+  status=0
+  out=$(run_reading "$dir" --json) || status=$?
+  expect_code 0 "$status" "json with measured SwapFree"
+  [ "$(printf '%s' "$out" | jq -r '.headroom.swap_free_kb')" = 1048576 ] || fail "json omitted measured SwapFree"
+  sed -i '/SwapFree:/d' "$dir/meminfo"
+  status=0
+  out=$(run_reading "$dir" --json) || status=$?
+  expect_code 3 "$status" "json with unmeasured SwapFree"
+  [ "$(printf '%s' "$out" | jq -r '.headroom.swap_free_kb')" = null ] || fail "json invented unavailable SwapFree"
   pass "the json form carries the same completeness verdict and never invents a figure"
 }
 
@@ -591,7 +633,9 @@ test_a_process_in_a_recorded_worktree_is_named_with_its_task
 test_an_unmatched_process_is_reported_unattributed_never_dropped
 test_a_foreign_account_process_is_never_given_an_owner
 test_the_reading_names_the_installations_it_actually_read
+test_empty_and_unreadable_task_record_sets_are_distinct
 test_a_process_that_vanished_mid_read_is_reported_as_exited
+test_a_live_process_with_unresolved_cwd_is_not_reported_exited
 test_wake_delivery_is_labelled_protected_however_small
 test_a_worker_that_merely_mentions_the_delivery_script_is_not_labelled
 test_growth_separates_a_large_steady_process_from_a_fast_growing_one

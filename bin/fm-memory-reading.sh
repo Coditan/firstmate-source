@@ -532,7 +532,8 @@ owner_uid_of() {  # <path>
 }
 
 read_tasks() {
-  local homes="$TMP/homes" home howner tasks
+  local homes="$TMP/homes" home howner tasks task_tmp meta records_ok
+  local -a metas
   : > "$TASKS_FILE"
   : > "$SCOPE_FILE"
   : > "$INSTALLATIONS_FILE"
@@ -554,15 +555,28 @@ read_tasks() {
   while IFS= read -r home; do
     [ -n "$home" ] || continue
     [ -d "$home/state" ] && [ -r "$home/state" ] || continue
-    HOMES_READ=$((HOMES_READ + 1))
     howner=$(owner_uid_of "$home")
-    printf '%s\n' "$howner" >> "$SCOPE_FILE"
-    # The home directory itself, so a firstmate session in it is named rather
-    # than left unattributed.
-    printf 'home\t%s\t-\t-\t-\t%s\n' "$home" "${home##*/}" >> "$TASKS_FILE"
+    metas=("$home"/state/*.meta)
+    if [ ! -e "${metas[0]}" ]; then
+      HOMES_READ=$((HOMES_READ + 1))
+      printf '%s\n' "$howner" >> "$SCOPE_FILE"
+      printf 'home\t%s\t-\t-\t-\t%s\n' "$home" "${home##*/}" >> "$TASKS_FILE"
+      printf '%s\t%s\t0\n' "$home" "${howner:--}" >> "$INSTALLATIONS_FILE"
+      continue
+    fi
+    records_ok=1
+    for meta in "${metas[@]}"; do
+      [ -f "$meta" ] && [ -r "$meta" ] || records_ok=0
+    done
+    if [ "$records_ok" -ne 1 ]; then
+      unmeasured task-attribution "$home has task records that could not be read"
+      continue
+    fi
+    task_tmp="$TMP/tasks.$HOMES_READ"
+    : > "$task_tmp"
     # One awk over all of a home's task records rather than four sed forks per
     # record; the count of records read is emitted by the same pass.
-    tasks=$(awk -v home="${home##*/}" -v out="$TASKS_FILE" '
+    if ! tasks=$(awk -v home="${home##*/}" -v out="$task_tmp" '
       function base(p,   n, a) { n = split(p, a, "/"); return a[n] }
       function flush(   proj) {
         if (id == "") return
@@ -579,8 +593,17 @@ read_tasks() {
       /^kind=/     { if (kind == "")     { kind = $0;     sub(/^kind=/, "", kind) } }
       /^window=/   { if (window == "")   { window = $0;   sub(/^window=/, "", window) } }
       END { flush(); print seen + 0 }
-    ' "$home"/state/*.meta 2>/dev/null)
-    case "$tasks" in ''|*[!0-9]*) tasks=0 ;; esac
+    ' "${metas[@]}" 2>/dev/null); then
+      unmeasured task-attribution "$home has task records that could not be read"
+      continue
+    fi
+    case "$tasks" in
+      ''|*[!0-9]*) unmeasured task-attribution "$home task records produced no usable read count"; continue ;;
+    esac
+    HOMES_READ=$((HOMES_READ + 1))
+    printf '%s\n' "$howner" >> "$SCOPE_FILE"
+    printf 'home\t%s\t-\t-\t-\t%s\n' "$home" "${home##*/}" >> "$TASKS_FILE"
+    cat "$task_tmp" >> "$TASKS_FILE"
     printf '%s\t%s\t%s\n' "$home" "${howner:--}" "$tasks" >> "$INSTALLATIONS_FILE"
   done < "$homes"
 
@@ -619,12 +642,15 @@ read_cwds() {
   done < "$CANDIDATES_FILE"
   [ "${#args[@]}" -gt 0 ] || return 0
   # One bulk symlink listing rather than one readlink fork per process. An
-  # entry with no target is a live process this account may not look into; an
-  # entry that errors is a process that exited between the table read and now,
-  # and the two must not be reported as the same thing.
+  # entry with no target is a live process this account may not look into.
   ls -ld "${args[@]}" > "$TMP/ls.out" 2> "$TMP/ls.err"
   sed -n "s|^.*[[:space:]]$PROC/\([0-9][0-9]*\)/cwd -> \(.*\)\$|\1	\2|p" "$TMP/ls.out" > "$CWD_FILE"
-  sed -n "s|.*$PROC/\([0-9][0-9]*\)/cwd.*|\1|p" "$TMP/ls.err" | sort -u > "$GONE_FILE"
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    grep -q "^${pid}"$'\t' "$CWD_FILE" && continue
+    # This records the state at this check; the process can still exit after it.
+    [ -d "$PROC/$pid" ] || printf '%s\n' "$pid" >> "$GONE_FILE"
+  done < "$CANDIDATES_FILE"
 }
 
 read_panes() {
@@ -1059,6 +1085,7 @@ render_json() {
     --arg total_kb "${MEM_TOTAL_KB:-}" \
     --arg avail_kb "${MEM_AVAIL_KB:-}" \
     --arg swap_total_kb "${SWAP_TOTAL_KB:-}" \
+    --arg swap_free_kb "${SWAP_FREE_KB:-}" \
     --arg some10 "${STALL_SOME10:-}" --arg some60 "${STALL_SOME60:-}" \
     --arg full10 "${STALL_FULL10:-}" --arg full60 "${STALL_FULL60:-}" \
     --rawfile unmeasured "$UNMEASURED_FILE" \
@@ -1082,7 +1109,8 @@ render_json() {
       headroom: {
         total_kb: num($total_kb),
         available_kb: num($avail_kb),
-        swap_total_kb: num($swap_total_kb)
+        swap_total_kb: num($swap_total_kb),
+        swap_free_kb: num($swap_free_kb)
       },
       stall: {
         some_avg10: num($some10), some_avg60: num($some60),
