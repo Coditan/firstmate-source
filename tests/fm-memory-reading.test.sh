@@ -186,11 +186,57 @@ test_headroom_and_stall_appear_with_the_per_process_attribution() {
 }
 
 test_swap_absent_is_reported_as_a_fact_not_a_blank() {
-  local dir="$TMP_ROOT/swap" out
+  local dir="$TMP_ROOT/swap" out status=0
   new_scene "$dir"
-  out=$(run_reading "$dir")
+  out=$(run_reading "$dir") || status=$?
+  expect_code 0 "$status" "measured zero SwapTotal"
   assert_contains "$out" 'none configured' 'a machine with no swap does not say so'
   pass "no swap at all is stated rather than shown as zero"
+}
+
+test_swap_fields_fail_visibly_without_inventing_zero() {
+  local dir="$TMP_ROOT/swap-fields" out status=0
+  new_scene "$dir"
+  sed -i 's/SwapTotal:.*/SwapTotal:       2097152 kB/; s/SwapFree:.*/SwapFree:        1048576 kB/' "$dir/meminfo"
+  out=$(run_reading "$dir") || status=$?
+  expect_code 0 "$status" "configured swap with valid free space"
+  assert_contains "$out" '2048 MiB total, 1024 MiB free' 'valid swap fields were not rendered'
+
+  sed -i '/SwapFree:/d' "$dir/meminfo"
+  status=0
+  out=$(run_reading "$dir") || status=$?
+  expect_code 3 "$status" "configured swap without SwapFree"
+  assert_contains "$out" '2048 MiB total, free UNMEASURED' 'measured swap total was not preserved'
+  assert_not_contains "$out" '2048 MiB total, 0 MiB free' 'missing SwapFree was replaced with zero'
+
+  sed -i '/SwapTotal:/d' "$dir/meminfo"
+  status=0
+  out=$(run_reading "$dir") || status=$?
+  expect_code 3 "$status" "meminfo without SwapTotal"
+  assert_contains "$out" 'no usable SwapTotal' 'the missing SwapTotal instrument was not named'
+  pass "swap fields fail visibly and never invent free space"
+}
+
+test_memory_max_accepts_only_unbounded_or_byte_counts() {
+  local dir="$TMP_ROOT/memory-max" out status=0 max_file
+  new_scene "$dir"
+  max_file="$dir/cgroup/user.slice/user-$ME_UID.slice/memory.max"
+  out=$(run_reading "$dir") || status=$?
+  expect_code 0 "$status" "memory.max holding max"
+  assert_contains "$out" 'none - this account is unbounded' 'memory.max max was not rendered as unbounded'
+
+  printf '1073741824\n' > "$max_file"
+  status=0
+  out=$(run_reading "$dir") || status=$?
+  expect_code 0 "$status" "memory.max holding a byte count"
+  assert_contains "$out" 'slice limit  1024 MiB' 'numeric memory.max was not rendered in MiB'
+
+  printf 'unlimited-ish\n' > "$max_file"
+  status=0
+  out=$(run_reading "$dir") || status=$?
+  expect_code 3 "$status" "malformed memory.max"
+  assert_contains "$out" "account-slice[$(id -un)].memory.max" 'malformed memory.max did not name its account and file'
+  pass "memory.max accepts only max or a byte count"
 }
 
 # --- attribution ------------------------------------------------------------
@@ -539,6 +585,8 @@ test_usage_errors_exit_two() {
 test_a_complete_reading_says_so_and_exits_zero
 test_headroom_and_stall_appear_with_the_per_process_attribution
 test_swap_absent_is_reported_as_a_fact_not_a_blank
+test_swap_fields_fail_visibly_without_inventing_zero
+test_memory_max_accepts_only_unbounded_or_byte_counts
 test_a_process_in_a_recorded_worktree_is_named_with_its_task
 test_an_unmatched_process_is_reported_unattributed_never_dropped
 test_a_foreign_account_process_is_never_given_an_owner

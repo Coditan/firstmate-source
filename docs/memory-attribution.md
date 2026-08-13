@@ -125,9 +125,12 @@ Every deliberately bad input constructed, and what the reading said:
 | headroom file empty | 3 | `headroom`: no usable MemTotal/MemAvailable pair |
 | headroom file with a non-numeric MemTotal | 3 | `headroom`: no usable MemTotal/MemAvailable pair |
 | headroom file with MemTotal but no MemAvailable | 3 | `headroom`: no usable MemTotal/MemAvailable pair |
+| headroom file with no usable SwapTotal | 3 | `headroom`: no usable SwapTotal |
+| configured swap with no usable SwapFree | 3 | `headroom`: total shown, free unmeasured |
 | process table command fails | 3 | `processes`: the configured process-table command failed |
 | process table returns nothing | 3 | `processes`: came back empty, which no live machine produces |
 | cgroup tree absent | 3 | `account-slices`: no account's total, limit, or stall was read at all |
+| account memory.max neither `max` nor bytes | 3 | named account slice and `memory.max` instrument |
 | no installation's records readable | 3 | `task-attribution`: no process can be tied to the work it serves |
 
 The cgroup case was found by constructing it.

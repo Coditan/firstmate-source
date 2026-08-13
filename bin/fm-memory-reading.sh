@@ -272,6 +272,11 @@ read_headroom() {
     MEM_TOTAL_KB=
     MEM_AVAIL_KB=
   fi
+  if [ -z "$SWAP_TOTAL_KB" ]; then
+    unmeasured headroom "$MEMINFO carries no usable SwapTotal"
+  elif [ "$SWAP_TOTAL_KB" -gt 0 ] && [ -z "$SWAP_FREE_KB" ]; then
+    unmeasured headroom "$MEMINFO carries no usable SwapFree for configured swap"
+  fi
 }
 
 # --- stall ------------------------------------------------------------------
@@ -478,7 +483,11 @@ read_accounts() {
       if [ -r "$slice/memory.max" ]; then
         max=
         read -r max < "$slice/memory.max" 2>/dev/null
-        case "$max" in '') max="UNMEASURED:$slice/memory.max is empty" ;; esac
+        case "$max" in
+          ''|*[!0-9]* )
+            [ "$max" = max ] || max="UNMEASURED:$slice/memory.max is neither max nor a byte count"
+            ;;
+        esac
       fi
       if [ -r "$slice/memory.pressure" ]; then
         pressure=$(parse_pressure_file "$slice/memory.pressure")
@@ -876,7 +885,11 @@ render_human() {
       if [ "$SWAP_TOTAL_KB" -eq 0 ]; then
         swap='none configured - there is no second chance under pressure'
       else
-        swap="$(mib "$SWAP_TOTAL_KB") MiB total, $(mib "${SWAP_FREE_KB:-0}") MiB free"
+        if [ -n "$SWAP_FREE_KB" ]; then
+          swap="$(mib "$SWAP_TOTAL_KB") MiB total, $(mib "$SWAP_FREE_KB") MiB free"
+        else
+          swap="$(mib "$SWAP_TOTAL_KB") MiB total, free UNMEASURED"
+        fi
       fi
       printf '  swap  %s\n' "$swap"
     else
