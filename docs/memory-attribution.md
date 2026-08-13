@@ -23,6 +23,9 @@ Both later slices read this instrument, so this one is first.
 
 This predates and is independent of the harness reaper question.
 
+The ceiling slice that was to follow this one was stopped by measurement rather than delivered.
+`docs/memory-ceiling-caveat.md` owns that finding and the instrument that re-measures it.
+
 ## The defect this reading exists to remove
 
 A reading that found nothing wrong and a reading that failed to look both come back calm.
