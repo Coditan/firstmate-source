@@ -208,11 +208,11 @@ run_arm() {
   local avail_before avail_after record
   avail_before=$(host_avail_mib)
 
+  local run_status=0
   # The arm body is deliberately single-quoted: every expansion in it belongs to
   # the shell inside the scope, reading that scope's own cgroup, and must not be
   # resolved out here against this one.
   # shellcheck disable=SC2016
-  local run_status=0
   record=$("$SYSTEMD_RUN" --user --scope --unit="$unit" \
     -p MemoryHigh="$high" -p MemoryMax=infinity --quiet -- \
     bash -c '

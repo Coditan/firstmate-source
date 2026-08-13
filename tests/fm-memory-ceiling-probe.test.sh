@@ -193,7 +193,11 @@ EOF
   while IFS=$'\t' read -r arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 arg10 arg11; do
     [ "$arg1" = --user ] && [ "$arg2" = --scope ] || fail "each arm must use a user transient scope"
     unit=${arg3#--unit=}
-    [ "$arg4" = -p ] && high=${arg5#MemoryHigh=} || fail "each arm must set only its scoped MemoryHigh"
+    if [ "$arg4" = -p ]; then
+      high=${arg5#MemoryHigh=}
+    else
+      fail "each arm must set only its scoped MemoryHigh"
+    fi
     [ "$arg6" = -p ] && [ "$arg7" = MemoryMax=infinity ] || fail "each arm must disclaim an enforcing maximum"
     [ "$arg8" = --quiet ] && [ "$arg9" = -- ] && [ "$arg10" = bash ] && [ "$arg11" = -c ] ||
       fail "scope properties must precede the workload command"
