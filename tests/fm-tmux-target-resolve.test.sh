@@ -50,6 +50,9 @@ case "$target" in
   sess:real|%1|@1) known=1 ;;
 esac
 case "${1:-}" in
+  has-session)
+    case "$target" in sess:real|sess:ghost) exit 0 ;; esac
+    exit 1 ;;
   list-panes)
     [ "$known" = 1 ] || { echo "can't find window: $target" >&2; exit 1; }
     printf '%%1 1\n'; exit 0 ;;
@@ -66,6 +69,7 @@ case "${1:-}" in
           if [ "$known" = 1 ]; then printf '%s\n' "${FM_FAKE_REAL_PATH:-/real/worktree}"
           else printf '%s\n' "${FM_FAKE_FALLBACK_PATH:-/supervisor/primary-checkout}"; fi
           exit 0 ;;
+        *pane_pid*) printf '%s\n' "${FM_FAKE_REAL_PID:-1234}"; exit 0 ;;
         *pane_id*) printf '%%1\n'; exit 0 ;;
       esac
     done
@@ -89,6 +93,8 @@ export PATH
 # shellcheck source=bin/fm-backend.sh
 . "$ROOT/bin/fm-backend.sh"
 fm_backend_source tmux || fail "fm_backend_source tmux failed"
+# shellcheck source=bin/fm-keeper-name-lib.sh
+. "$ROOT/bin/fm-keeper-name-lib.sh"
 
 # --- fm_tmux_resolve_pane ----------------------------------------------------
 
@@ -183,6 +189,20 @@ test_send_key_preflight_actually_verifies() {
   fm_backend_tmux_send_key 'sess:real' Enter || fail "fm_backend_tmux_send_key must still send to a live target"
   [ -s "$FM_FAKE_SENT_LOG" ] || fail "fm_backend_tmux_send_key did not send to the live target"
   pass "fm_backend_tmux_send_key's preflight refuses an unresolvable target before sending"
+}
+
+test_legacy_keeper_ownership_resolves_before_reading_pid() {
+  local lock="$TMP_ROOT/keeper.lock" pid_file="$TMP_ROOT/keeper.pid"
+  mkdir -p "$lock"
+  printf '%s\n' 1234 > "$pid_file"
+  printf '%s\n' /home/expected > "$lock/fm-home"
+
+  fm_legacy_keeper_owned_by_home "$FAKEBIN/tmux" sess:real "$pid_file" "$lock" /home/expected \
+    || fail "legacy keeper ownership must accept the identity-matched live keeper"
+  if fm_legacy_keeper_owned_by_home "$FAKEBIN/tmux" sess:ghost "$pid_file" "$lock" /home/expected; then
+    fail "legacy keeper ownership accepted a session whose target could not be resolved"
+  fi
+  pass "legacy keeper ownership resolves its session before reading the keeper pid"
 }
 
 # --- the anti-recurrence rule ------------------------------------------------
@@ -412,5 +432,6 @@ test_target_exists_refuses_an_invented_window
 test_crew_state_presence_has_one_owner
 test_current_path_refuses_an_invented_window
 test_send_key_preflight_actually_verifies
+test_legacy_keeper_ownership_resolves_before_reading_pid
 test_no_unguarded_display_message_read_in_bin
 test_resolver_is_built_on_a_refusing_command

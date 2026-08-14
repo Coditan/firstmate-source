@@ -1,6 +1,10 @@
-# Supervision arm PreToolUse seatbelt
+# Protected-command PreToolUse seatbelt
 
-This document is the authoritative human-readable contract for the supervision arm PreToolUse seatbelt.
+This document is the authoritative human-readable contract for the protected-command PreToolUse seatbelt.
+
+It used to guard four commands, three of which were wake-delivery arms.
+Wake delivery moved out of the harness on 2026-08-13 (`docs/wake-delivery.md`), so no session runs a delivery command any more and the three arm entries have no scripts behind them.
+The policy is unchanged in shape and narrower in scope: what a session can still shell wrong is the Telegram receiver arm, which IS still a tracked background task, and the watcher loop itself, which must never be run by hand.
 `bin/fm-arm-command-policy.mjs` is the single semantic owner.
 `bin/fm-arm-pretool-check.sh` is only the stable harness transport and output renderer.
 The tracked harness adapters forward command text without classifying it.
@@ -8,20 +12,20 @@ The tracked harness adapters forward command text without classifying it.
 
 ## Purpose and boundary
 
-A firstmate primary must arm `bin/fm-watch-arm.sh`, run `bin/fm-watch-checkpoint.sh`, await `bin/fm-wake-wait.sh` through a tracked adapter, or arm `bin/fm-tg-recv-arm.sh` through an observable harness call.
+A firstmate primary must arm `bin/fm-tg-recv-arm.sh` through an observable harness call, and must never run `bin/fm-watch.sh` itself.
 A shell background operator, pipeline, redirection, wrapper, or unrelated command list can hide failure or let the supervised child die with the tool call.
 The seatbelt rejects those command shapes before execution.
 
 This policy is not a post-arm liveness guarantee.
-`bin/fm-guard.sh`, `bin/fm-turnend-guard.sh`, the watcher lock and beacon, the delivery-stub lock, and the Telegram receiver lock still prove whether supervision is healthy after an allowed call.
+`bin/fm-guard.sh`, `bin/fm-turnend-guard.sh`, the watcher lock and beacon, the delivery listener's own lock and beacon, and the Telegram receiver lock still prove whether supervision is healthy after an allowed call.
 
 ## Claude continuity gate
 
 Claude also registers `bin/fm-continuity-pretool-check.sh` for Bash PreToolUse events.
 This is a separate, tightly bounded recovery gate rather than another watcher-shape policy.
-It runs only in a primary home, and it denies only an executed `bin/fm-*.sh` command other than `bin/fm-wake-drain.sh`, `bin/fm-watch-arm.sh`, or the ordinary literal `bin/fm-teardown.sh` when task metadata is in flight and no identity-matched live watcher holds that home's lock.
-Ordinary shell commands, fleet-script names used as data, all commands in an idle fleet, child worktrees, wake drain, watcher arm, and ordinary literal teardown remain allowed.
-The denial gives Claude reason-specific recovery guidance — drain, re-arm via a tracked Claude background task, and use fail-closed `bin/fm-teardown.sh` for completed tasks — per the contract in [`watcher-continuity.md`](watcher-continuity.md).
+It runs only in a primary home, and it denies only an executed `bin/fm-*.sh` command other than `bin/fm-wake-drain.sh`, `bin/fm-delivery-service.sh`, or the ordinary literal `bin/fm-teardown.sh` when task metadata is in flight and no identity-matched live watcher holds that home's lock.
+Ordinary shell commands, fleet-script names used as data, all commands in an idle fleet, child worktrees, wake drain, delivery repair, and ordinary literal teardown remain allowed.
+The denial gives Claude reason-specific recovery guidance — drain, repair supervision through the two service scripts, and use fail-closed `bin/fm-teardown.sh` for completed tasks — per the contract in [`watcher-continuity.md`](watcher-continuity.md).
 `bin/fm-continuity-command-policy.mjs` reuses this document's shell lexer and command-position analysis but owns the recovery-versus-other-fleet classification.
 Malformed transport or opaque dynamic syntax fails open so this narrow gate cannot become a blanket Bash block.
 The existing `bin/fm-turnend-guard.sh` Stop integration is unchanged and remains the final backstop.
@@ -72,21 +76,18 @@ Quoted text, comments, heredoc bodies, and later argument words are data positio
 A command word in executed position is a protected execution when its normalized path suffix matches one of the protected scripts:
 
 ```text
-bin/fm-watch-arm.sh          (arm; blessed entry point)
-bin/fm-watch-checkpoint.sh   (checkpoint; blessed entry point)
-bin/fm-wake-wait.sh          (delivery stub; blessed entry point)
-bin/fm-watch.sh              (watch; protected but never blessed)
 bin/fm-tg-recv-arm.sh        (arm; blessed entry point)
+bin/fm-watch.sh              (watch; protected but never blessed)
 ```
 
 The relative form, the `<code-root>`-anchored absolute form, and any word ending in `/bin/<script>` all resolve to that identity.
-Suffix matching recognizes an expanded-path prefix statically, so `$FM_HOME/bin/fm-watch-arm.sh`, `$HOME/firstmate/bin/fm-watch-arm.sh`, and `~/firstmate/bin/fm-watch-arm.sh` are the arm identity.
+Suffix matching recognizes an expanded-path prefix statically, so `$FM_HOME/bin/fm-tg-recv-arm.sh`, `$HOME/firstmate/bin/fm-tg-recv-arm.sh`, and `~/firstmate/bin/fm-tg-recv-arm.sh` are the arm identity.
 The classifier never expands the variable or tilde; it matches the literal bytes only.
-Static quote forms are cooked before the suffix match, so a command word split by ordinary quotes (`fm-"watch"-arm.sh`), ANSI-C quoting (`fm-$'\x77'atch-arm.sh`), or a bash locale string (`fm-$"watch"-arm.sh`) all resolve to the same identity; this reads the fixed literal bytes as the shell would cook them and never runs an expansion or a command.
+Static quote forms are cooked before the suffix match, so a command word split by ordinary quotes (`fm-"tg-recv-arm.sh"`), ANSI-C quoting (`fm-$'\x74'g-recv-arm.sh`), or a bash locale string (`fm-$"tg"-recv-arm.sh`) all resolve to the same identity; this reads the fixed literal bytes as the shell would cook them and never runs an expansion or a command.
 This covers statically-visible literal words in command position; opaque dynamic dataflow such as `bash -lc "$WHOLE_COMMAND"` remains out of scope.
 
 `bin/fm-watch.sh` is protected but is not a blessed entry point.
-A direct `bin/fm-watch.sh` execution - relative, `<code-root>`-anchored, `$VAR`-prefixed, or `~`-prefixed - always denies with `watcher-direct`, whose reason points the caller at `bin/fm-watch-arm.sh` and `bin/fm-watch-checkpoint.sh`.
+A direct `bin/fm-watch.sh` execution - relative, `<code-root>`-anchored, `$VAR`-prefixed, or `~`-prefixed - always denies with `watcher-direct`, whose reason points the caller at `bin/fm-watcher-service.sh`, which owns the loop's lifetime.
 
 The same bytes in an argument, comment, assertion, documentation query, Python string, `printf`, or `tmux send-keys` payload are data and do not make the outer command relevant.
 
@@ -103,7 +104,7 @@ An actual protected command with a heredoc still has a redirection and is denied
 ## Blessed syntax tree
 
 An allowed supervision-arm program is one linear outer command list with zero or more approved setup nodes followed by exactly one direct protected node.
-`bin/fm-watch-arm.sh`, `bin/fm-watch-checkpoint.sh`, `bin/fm-wake-wait.sh`, and `bin/fm-tg-recv-arm.sh` are the blessed final nodes, including their expanded-path forms; a `bin/fm-watch.sh` final node is never blessed and denies with `watcher-direct`.
+`bin/fm-tg-recv-arm.sh` is the blessed final node, including its expanded-path forms; a `bin/fm-watch.sh` final node is never blessed and denies with `watcher-direct`.
 
 Approved setup nodes are:
 
@@ -151,7 +152,7 @@ Every semantic deny includes one stable code in square brackets before its prose
 | `watcher-nested` | A wrapper, group, substitution, nested shell, `eval`, or constructed dynamic payload executes the protected command. |
 | `broad-watcher-kill` | An actual broad process kill targets the watcher. |
 | `unclassifiable-protected-command` | Malformed or unsupported syntax contains a protected command and cannot be safely classified. |
-| `watcher-direct` | A direct `bin/fm-watch.sh` execution; the watcher must be reached through `bin/fm-watch-arm.sh` or `bin/fm-watch-checkpoint.sh`. |
+| `watcher-direct` | A direct `bin/fm-watch.sh` execution; the watcher loop belongs to its service, converged through `bin/fm-watcher-service.sh`. |
 
 Reason codes are the stable contract for tests and adapters.
 Prose may improve without changing adapter behavior.
@@ -219,6 +220,7 @@ pi -p -e .pi/extensions/fm-primary-turnend-guard.ts --no-context-files --no-sess
 ```
 
 Observed output for the four allowed calls was `UNRELATED_EXECUTED`, a successful read-only `pgrep`, `CHECKPOINT_EXECUTED`, and two `TMUX_ARGS:` lines that preserved the watcher text as data.
+Two of those command strings name scripts that no longer exist; they are reproduced verbatim because this is a record of what was run, not a current recipe.
 Each harness blocked the final command with exit 2 mapped through its native adapter behavior.
 The stable reason was `[watcher-background] a protected command cannot run in an asynchronous shell list or through nohup/disown`.
 The dummy arm body would have created `<harness>.sentinel` if the denied command executed.
@@ -239,9 +241,9 @@ The original native supervision paths were also validated in the same scratch pr
 
 Every native-path automatic marker was present and every deny sentinel remained absent.
 
-The daemonized command tree adds direct and immediate-`exec` forms of `bin/fm-wake-wait.sh` as blessed final nodes.
-The same background, pipeline, redirection, wrapper, nested-shell, and bundled-command denials apply to the stub because harness observation and identity cleanup still depend on owning that exact blocking process.
-The current automated matrix pins `bin/fm-wake-wait.sh`, `exec bin/fm-wake-wait.sh`, `bin/fm-wake-wait.sh &`, and `bin/fm-wake-wait.sh | cat` across all five transports.
+That round measured the delivery-arm shapes as well, because they were protected commands then.
+They are not commands at all now: `bin/fm-watch-arm.sh`, `bin/fm-watch-checkpoint.sh`, and `bin/fm-wake-wait.sh` were removed on 2026-08-13 with the session-held delivery object itself.
+The evidence above still stands for what it measured - each harness's transport carries a deny with the stable reason code and the denied command never executes - and the automated matrix now measures the same shapes against `bin/fm-tg-recv-arm.sh`, the protected arm that remains.
 
 ## Automated validation
 

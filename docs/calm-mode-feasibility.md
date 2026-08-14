@@ -3,6 +3,10 @@
 This document owns the version-scoped feasibility evidence, Pi transcript taxonomy, and supported-API boundaries for Firstmate calm mode.
 The README owns the user-facing `/calm` usage and limitation contract.
 
+The reproduction below used the `fm_watch_arm_pi` tool as its custom-tool subject.
+That tool and its extension were removed on 2026-08-13 when wake delivery moved out of the harness (`docs/wake-delivery.md`), so Firstmate registers no Pi tool at all now.
+The taxonomy and the renderer boundaries the reproduction established are unchanged; what is gone is the one custom tool that exercised the custom-tool row, which is why `tests/fm-calm-pi-extension.test.sh` now covers that row with its own throwaway definition instead.
+
 ## Required extension surface
 
 A qualifying implementation must auto-load from the trusted project, keep the toggle session-local, redraw already-rendered controllable rows, restore ordinary rendering, and leave delivery, tool execution, model context, session storage, export and share operation, diagnostics, and expansion state unchanged.
@@ -30,7 +34,7 @@ The observed causal separation was:
 | --- | --- | --- | --- |
 | Collapsed thinking | A model assistant turn contained non-empty `thinking` content. | Pi's thinking setting was collapsed, so `AssistantMessageComponent` rendered its configured hidden-thinking label instead of full reasoning; Calm previously touched only tool definitions. | One italic `Thinking...` row remained for each reasoning-bearing assistant turn. |
 | Firstmate watcher tool | The model called the tracked `fm_watch_arm_pi` custom tool. | Calm overrode only Pi's seven built-ins, while this tool followed Pi's custom-tool fallback renderer. | The full custom call and result shell remained. |
-| Synthetic watcher input | The live watcher closed on an actionable signal and `fm-primary-pi-watch.ts` delivered a structured Firstmate message. | Pi retained hidden model context plus a separately controlled presentation entry. | The wake prefix and stable drain instruction remain hidden only because the trusted extension call site supplies the kind out of band. |
+| Synthetic watcher input | The live watcher closed on an actionable signal and the then-current Pi watch extension delivered a structured Firstmate message; that extension was removed on 2026-08-13 and the external delivery listener now submits the same typed message. | Pi retained hidden model context plus a separately controlled presentation entry. | The wake prefix and stable drain instruction remain hidden only because the trusted extension call site supplies the kind out of band. |
 
 The proven comparison path was a built-in text tool.
 Calm already owned both of that tool's supported renderer slots and switched its shell to `renderShell: "self"`, so returning empty components removed the complete row and `setToolsExpanded` redrew existing tool components.
@@ -147,7 +151,7 @@ They do not claim that a harness can never add the missing renderer API.
 
 ## Regression coverage
 
-`tests/fm-calm-pi-extension.test.sh` compares wrapped and stock renderers, verifies all seven built-ins plus `fm_watch_arm_pi`, exercises redraw of already-rendered tool and structured synthetic rows, checks the gapless mounted custom-entry lifecycle, preserves a transient diagnostic while restoring an entry received under Calm, covers fail-visible live marker fixtures and the one-shot launch binding, covers session reset reasons, asserts the rendered export DOM, and drives a genuine 180 by 44 interactive terminal fixture.
+`tests/fm-calm-pi-extension.test.sh` compares wrapped and stock renderers, verifies all seven built-ins plus a throwaway custom-tool definition standing in for the removed `fm_watch_arm_pi`, exercises redraw of already-rendered tool and structured synthetic rows, checks the gapless mounted custom-entry lifecycle, preserves a transient diagnostic while restoring an entry received under Calm, covers fail-visible live marker fixtures and the one-shot launch binding, covers session reset reasons, asserts the rendered export DOM, and drives a genuine 180 by 44 interactive terminal fixture.
 `tests/fm-pi-primary-types.test.sh` performs strict no-emit TypeScript checking against the installed Pi 0.81.1 declarations.
 
 The relevant commands are:

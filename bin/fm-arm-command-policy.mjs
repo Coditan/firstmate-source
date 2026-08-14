@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Semantic policy for watcher arm and checkpoint shell commands.
+// Semantic policy for the protected background-arm and watcher shell commands.
 //
 // This parser is deliberately narrow.
 // It recognizes executed command positions without evaluating, expanding,
@@ -25,7 +25,7 @@ const REASONS = {
   "watcher-nested": "a protected watcher command must not run through a wrapper, substitution, or compound command",
   "broad-watcher-kill": "a broad process kill targeting the firstmate watcher is forbidden",
   "unclassifiable-protected-command": "unsupported or malformed shell syntax contains a protected watcher command",
-  "watcher-direct": "bin/fm-watch.sh must not be run directly; arm the watcher with bin/fm-watch-arm.sh or run bin/fm-watch-checkpoint.sh instead",
+  "watcher-direct": "bin/fm-watch.sh must not be run directly; the watcher loop belongs to its service, converged through bin/fm-watcher-service.sh",
 };
 
 function parseArguments(argv) {
@@ -44,7 +44,7 @@ function parseArguments(argv) {
 }
 
 function rawMentionsProtected(command) {
-  return /(?:^|[/\s'"`(])(?:fm-watch(?:-(?:arm|checkpoint))?|fm-wake-wait|fm-tg-recv-arm)\.sh\b/.test(normalizeLineContinuations(command));
+  return /(?:^|[/\s'"`(])(?:fm-watch|fm-tg-recv-arm)\.sh\b/.test(normalizeLineContinuations(command));
 }
 
 function rawMentionsBroadKill(command) {
@@ -595,11 +595,13 @@ export function commandPosition(tokens) {
   return { words, index, command, wrappers, prefixAssignments, unresolvedWrapperOption, wrapperPayloads };
 }
 
+// Wake delivery is no longer a session-held command, so the three arm, checkpoint,
+// and stub entries that used to head this list have no scripts behind them any
+// more. What remains protected is what a session can still shell wrong: the
+// Telegram receiver arm, which IS still a tracked background task, and the
+// watcher loop itself, which must never be run by hand.
 const PROTECTED_SCRIPTS = [
-  { relative: "bin/fm-watch-arm.sh", kind: "arm" },
   { relative: "bin/fm-tg-recv-arm.sh", kind: "arm" },
-  { relative: "bin/fm-watch-checkpoint.sh", kind: "checkpoint" },
-  { relative: "bin/fm-wake-wait.sh", kind: "stub" },
   { relative: "bin/fm-watch.sh", kind: "watch" },
 ];
 
@@ -613,7 +615,7 @@ function protectedIdentity(value, root) {
 
 function hasUnclassifiableProtectedExpansion(word, root) {
   if (!word?.unquotedExpansion || protectedIdentity(word.value, root)) return false;
-  return /(?:^|\/)(?:fm-watch|fm-wake-wait|fm-tg-recv-arm)/.test(word.value);
+  return /(?:^|\/)(?:fm-watch|fm-tg-recv-arm)/.test(word.value);
 }
 
 function shellInvocation(position) {

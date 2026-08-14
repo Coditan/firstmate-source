@@ -82,6 +82,13 @@ from collections import defaultdict
 QUEUE_ROW = re.compile(r"^\d{9,11}\t\d+\t(signal|stale|check|heartbeat)\t")
 DRAIN_CALL = "fm-wake-drain.sh"
 SESSION_START_CALL = "fm-session-start.sh"
+# The delivery arm no longer exists: wake delivery moved out of the harness into
+# a service, so no session issues this command any more. The constant stays
+# because this engine measures the PAST, and every transcript recorded before
+# that move is full of these calls. Deleting it would not make the old cost zero,
+# it would make the old cost unmeasurable, and the after-figure only means
+# something next to the before-figure. On current transcripts this now counts
+# zero, which is the result rather than a bug.
 ARM_CALL = "fm-watch-arm.sh"
 EXECUTES = "executes"
 DOES_NOT_EXECUTE = "does_not_execute"

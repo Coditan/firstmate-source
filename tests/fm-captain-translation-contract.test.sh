@@ -227,13 +227,11 @@ test_ahoy_owns_only_the_visible_session_recap() {
 }
 
 test_ahoy_user_role_injections_share_one_marker() {
-  local daemon grok_guard opencode_guard opencode_watch pi_guard pi_watch owner sessionstart spawn
+  local daemon grok_guard opencode_guard pi_guard owner sessionstart spawn
   daemon=$(cat "$ROOT/bin/fm-supervise-daemon.sh")
   grok_guard=$(cat "$ROOT/bin/fm-turnend-guard-grok.sh")
   opencode_guard=$(cat "$ROOT/.opencode/plugins/fm-primary-turnend-guard.js")
-  opencode_watch=$(cat "$ROOT/.opencode/plugins/fm-primary-watch-arm.js")
   pi_guard=$(cat "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts")
-  pi_watch=$(cat "$ROOT/.pi/extensions/fm-primary-pi-watch.ts")
   owner=$(cat "$ROOT/bin/fm-operational-input.sh")
   sessionstart=$(cat "$ROOT/bin/fm-sessionstart-nudge.sh")
   spawn=$(cat "$ROOT/bin/fm-spawn.sh")
@@ -250,17 +248,13 @@ test_ahoy_user_role_injections_share_one_marker() {
     "OpenCode guard does not use the cross-language constructor"
   assert_contains "$opencode_guard" '"turn-end-guard"' \
     "OpenCode guard does not retain its exact current kind"
-  assert_contains "$opencode_watch" 'encodeFirstmateOperationalInput(paths.root, "watcher"' \
-    "OpenCode watcher does not retain its exact current kind"
   assert_contains "$pi_guard" 'encodeFirstmateOperationalInput(' \
     "Pi guard does not use the cross-language constructor"
   assert_contains "$pi_guard" '"turn-end-guard"' \
     "Pi guard does not retain its exact current kind"
-  assert_contains "$pi_watch" '"watcher"' \
-    "Pi watcher does not retain its exact current kind"
   assert_contains "$spawn" 'encode launch-brief' \
     "cross-harness launches do not use the canonical launch-instruction kind"
-  for producer in "$daemon" "$grok_guard" "$opencode_guard" "$opencode_watch" "$pi_guard" "$pi_watch" "$sessionstart" "$spawn"; do
+  for producer in "$daemon" "$grok_guard" "$opencode_guard" "$pi_guard" "$sessionstart" "$spawn"; do
     assert_not_contains "$producer" 'FIRSTMATE_OP: ' \
       "a current producer copied the canonical marker grammar"
   done

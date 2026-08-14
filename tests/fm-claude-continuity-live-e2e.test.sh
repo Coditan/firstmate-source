@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
-# Opt-in credentialed Claude regression for the post-background-completion
-# continuity gate. The project and FM_HOME are isolated; Claude keeps using its
-# existing managed authentication.
+# Opt-in credentialed Claude regression for the watcher-continuity PreToolUse
+# gate: with work in flight and no live watcher, only the recovery commands may
+# execute. The project and FM_HOME are isolated; Claude keeps using its existing
+# managed authentication.
+#
+# There is no delivery arm in this regression any more, because there is no
+# delivery arm: wake delivery is a service outside the harness. What remains
+# under test is the gate itself, which is unchanged apart from which commands
+# count as recovery.
 set -u
 
 if [ "${FM_CLAUDE_LIVE_E2E:-0}" != 1 ]; then
@@ -37,13 +43,6 @@ cp "$ROOT/bin/fm-continuity-command-policy.mjs" "$PROJECT/bin/fm-continuity-comm
 mkdir -p "$HOME_DIR/state" "$HOME_DIR/config"
 printf 'project=fixture\n' > "$HOME_DIR/state/claude-e2e.meta"
 
-cat > "$PROJECT/bin/fm-watch-arm.sh" <<'SH'
-#!/usr/bin/env bash
-printf 'started\n' > "$FM_HOME/state/claude-arm-ran"
-printf 'watcher: started pid=%s (fixture)\n' "$$"
-sleep 0.2
-printf 'signal: fixture background completion\n'
-SH
 cat > "$PROJECT/bin/fm-wake-drain.sh" <<'SH'
 #!/usr/bin/env bash
 printf 'drained\n' > "$FM_HOME/state/claude-drain-ran"
@@ -54,10 +53,10 @@ cat > "$PROJECT/bin/fm-crew-state.sh" <<'SH'
 printf 'forbidden\n' > "$FM_HOME/state/claude-forbidden-ran"
 printf 'crew state should not run\n'
 SH
-chmod +x "$PROJECT/bin/fm-watch-arm.sh" "$PROJECT/bin/fm-wake-drain.sh" "$PROJECT/bin/fm-crew-state.sh"
+chmod +x "$PROJECT/bin/fm-wake-drain.sh" "$PROJECT/bin/fm-crew-state.sh"
 
 # shellcheck disable=SC2016 # The model, not this test shell, expands FM_HOME.
-PROMPT='Use Bash with run_in_background=true to run exactly `bin/fm-watch-arm.sh`. Wait for its background-task completion. Then run exactly `bin/fm-wake-drain.sh`. Without re-arming, next attempt exactly `bin/fm-crew-state.sh claude-e2e`. After that attempt is refused, use an ordinary Bash command to remove `$FM_HOME/state/claude-e2e.meta`, then reply briefly. Do not retry the refused fleet command and do not re-arm.'
+PROMPT='Run exactly `bin/fm-wake-drain.sh`. Then attempt exactly `bin/fm-crew-state.sh claude-e2e`. After that attempt is refused, use an ordinary Bash command to remove `$FM_HOME/state/claude-e2e.meta`, then reply briefly. Do not retry the refused fleet command and do not arm anything.'
 
 (
   cd "$PROJECT" || exit 1
@@ -65,10 +64,9 @@ PROMPT='Use Bash with run_in_background=true to run exactly `bin/fm-watch-arm.sh
     claude -p "$PROMPT" --dangerously-skip-permissions --effort low --output-format stream-json --verbose
 ) > "$TRANSCRIPT" 2>&1 || fail "Claude credentialed continuity turn failed: $(tail -20 "$TRANSCRIPT")"
 
-[ -f "$HOME_DIR/state/claude-arm-ran" ] || fail "Claude did not run the tracked background arm fixture"
 [ -f "$HOME_DIR/state/claude-drain-ran" ] || fail "Claude continuity gate blocked the allowed wake drain"
 [ ! -f "$HOME_DIR/state/claude-forbidden-ran" ] || fail "Claude continuity gate allowed an unrelated fleet command"
-GUIDANCE='[watcher-continuity] tasks are in flight and no live watcher holds this home lock; drain wakes with bin/fm-wake-drain.sh, use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: fm-crew-state.sh)'
+GUIDANCE='[watcher-continuity] tasks are in flight and no live watcher holds this home lock; drain wakes with bin/fm-wake-drain.sh, use fail-closed bin/fm-teardown.sh for completed tasks when needed, and repair supervision through bin/fm-watcher-service.sh and bin/fm-delivery-service.sh before running other fleet commands (blocked: fm-crew-state.sh)'
 grep -F "$GUIDANCE" "$TRANSCRIPT" >/dev/null || fail "Claude transcript omitted the exact continuity recovery guidance"
 
-printf 'ok - Claude %s live E2E refused only the post-completion fleet command with exact re-arm guidance\n' "$CLAUDE_VERSION"
+printf 'ok - Claude %s live E2E refused only the unrelated fleet command, with the exact supervision-repair guidance\n' "$CLAUDE_VERSION"

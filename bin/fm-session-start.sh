@@ -38,6 +38,10 @@
 #                       secondmate fast-forward, secondmate liveness, X-mode artifact
 #                       writes, fleet sync) run only
 #                       when this session actually holds the lock.
+#   2b. wake delivery - publish where this session's model turn lives, so the
+#                       externally supervised delivery listener has an address to
+#                       submit into, then STATE the listener's verdict. Nothing
+#                       is armed here: the listener is not this session's object.
 #   3. wake-drain     - mutates the durable wake queue, so it also only runs
 #                       when locked.
 #   4. context digest - the active role overlay (roles/<name>.md, emitted only
@@ -54,9 +58,9 @@
 #                       to the emitted harness supervision block and deliberately
 #                       never runs long-lived polls itself.
 #
-# On a Pi primary, the supervision-block step also checks whether Pi's two
-# tracked primary extensions are loaded and prints a PI_WATCH_EXTENSION
-# reminder line when one is missing.
+# On a Pi primary, the supervision-block step also checks whether Pi's tracked
+# turn-end guard extension is loaded and prints a PI_TURNEND_EXTENSION reminder
+# line when it is missing.
 #
 # Why lock before shared-state mutation: the old documented order (bootstrap,
 # THEN lock) let a SECOND concurrent session run bootstrap's mutating sweeps -
@@ -299,6 +303,27 @@ else
   printf '(silent - all good)\n'
 fi
 
+# --- 2b. wake delivery ------------------------------------------------------
+# The listener that turns a queued wake into a model turn runs outside this
+# harness, under the same service supervision as the watcher loop, so this
+# session arms nothing. What it DOES owe the listener is an address: only the
+# session can see which pane its own model turn lives in, so it publishes that
+# once, here, under the lock.
+#
+# The verdict line below is printed whether or not anything is wrong, and that
+# is the point. A listener that is down and a listener with nothing to deliver
+# both produce silence, so silence is never allowed to be the report; every
+# session start states which of the two this home is in.
+subsection "WAKE DELIVERY"
+if [ "$READ_ONLY" -eq 1 ]; then
+  printf 'skipped (read-only session) - the session holding the lock owns the delivery endpoint.\n'
+  "$SCRIPT_DIR/fm-delivery-service.sh" status || true
+else
+  PUBLISH_OUT=$("$SCRIPT_DIR/fm-delivery-service.sh" publish-endpoint 2>&1) || true
+  printf '%s\n' "$PUBLISH_OUT"
+  "$SCRIPT_DIR/fm-delivery-service.sh" status || true
+fi
+
 # --- 3. wake-drain -------------------------------------------------------
 # Drained records are this turn's first work queue (AGENTS.md section 8); the
 # drain also runs fm-guard.sh internally on the locked path, so the
@@ -344,17 +369,15 @@ AFK_PRESENT=0
 X_MODE_PRESENT=0
 [ -f "$CONFIG/x-mode.env" ] && X_MODE_PRESENT=1
 
+# Pi has one tracked primary extension left. Wake delivery is no longer one of
+# its jobs, so an unloaded extension now costs the turn-end guard, not delivery.
 if [ "$PRIMARY_HARNESS" = pi ]; then
-  PI_EXT="$FM_ROOT/.pi/extensions/fm-primary-pi-watch.ts"
   PI_TURNEND_EXT="$FM_ROOT/.pi/extensions/fm-primary-turnend-guard.ts"
-  PI_WATCH_MARKER="$STATE/.pi-watch-extension-loaded"
   PI_TURNEND_MARKER="$STATE/.pi-turnend-extension-loaded"
   PI_LOCK="$STATE/.lock"
-  PI_WATCH_VERSION=$(hash_file "$PI_EXT" || printf '')
   PI_TURNEND_VERSION=$(hash_file "$PI_TURNEND_EXT" || printf '')
-  if ! pi_extension_loaded "$PI_WATCH_MARKER" "$PI_WATCH_VERSION" "$PI_LOCK" \
-    || ! pi_extension_loaded "$PI_TURNEND_MARKER" "$PI_TURNEND_VERSION" "$PI_LOCK"; then
-    printf 'PI_WATCH_EXTENSION: not loaded - approve Pi project trust once per clone, then restart plain pi so %s and %s auto-load for turn-end guard and wake-delivery coverage; use -e %s -e %s only if project hooks are not trusted\n' "$PI_TURNEND_EXT" "$PI_EXT" "$PI_TURNEND_EXT" "$PI_EXT"
+  if ! pi_extension_loaded "$PI_TURNEND_MARKER" "$PI_TURNEND_VERSION" "$PI_LOCK"; then
+    printf 'PI_TURNEND_EXTENSION: not loaded - approve Pi project trust once per clone, then restart plain pi so %s auto-loads for turn-end guard coverage; use -e %s only if project hooks are not trusted\n' "$PI_TURNEND_EXT" "$PI_TURNEND_EXT"
   fi
 fi
 "$SCRIPT_DIR/fm-supervision-instructions.sh" \
@@ -433,7 +456,7 @@ done
 
 subsection "AFK"
 if [ -e "$STATE/.afk" ]; then
-  printf 'present - away-mode supervision is active; the daemon owns queue delivery while the watcher service owns the loop.\n'
+  printf 'present - away-mode supervision is active; the daemon owns queue delivery, the watcher service owns the loop, and the delivery listener stands down.\n'
 else
   printf 'absent\n'
 fi
@@ -442,9 +465,9 @@ fi
 section "NEXT STEP"
 if [ "$READ_ONLY" -eq 1 ]; then
   cat <<'EOF'
-This session did not acquire the fleet lock. Stay read-only: do not arm,
-drain, spawn, steer, merge, or repair fleet state from here. The session
-holding the lock owns mutable follow-up.
+This session did not acquire the fleet lock. Stay read-only: do not publish
+an endpoint, drain, spawn, steer, merge, or repair fleet state from here. The
+session holding the lock owns mutable follow-up.
 
 EOF
 elif [ "$AFK_PRESENT" -eq 1 ]; then
@@ -458,14 +481,16 @@ elif [ -f "$CONFIG/x-mode.env" ]; then
   cat <<EOF
 Follow the supervision operating instructions block above for harness '$PRIMARY_HARNESS'.
 X mode is active, so the emitted block's cadence instruction applies.
-If the Telegram receiver section is active, keep that separate background task armed too.
+If the Telegram receiver section is active, keep that separate background task armed too;
+it is the only tracked background job supervision needs, because wake delivery is a service.
 This script never starts long-lived polls itself.
 
 EOF
 else
 cat <<EOF
 Follow the supervision operating instructions block above for harness '$PRIMARY_HARNESS'.
-If the Telegram receiver section is active, keep that separate background task armed too.
+If the Telegram receiver section is active, keep that separate background task armed too;
+it is the only tracked background job supervision needs, because wake delivery is a service.
 This script never starts long-lived polls itself.
 
 EOF

@@ -157,6 +157,11 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # shellcheck source=bin/fm-backend.sh
 . "$FM_DAEMON_DIR/fm-backend.sh"
 
+# Shared pre-typing pane reads (pane_is_busy, pane_input_pending), sourced after
+# the two files whose primitives they dispatch through.
+# shellcheck source=bin/fm-pane-activity-lib.sh
+. "$FM_DAEMON_DIR/fm-pane-activity-lib.sh"
+
 # Canonical construction and parsing for every Firstmate operational input.
 # shellcheck source=bin/fm-operational-input.sh
 . "$FM_DAEMON_DIR/fm-operational-input.sh"
@@ -543,52 +548,10 @@ mark_escalated_seen() {  # <kind> <arg> <state>
   esac
 }
 
-# Busy + composer-empty detection are the shared primitives in fm-tmux-lib.sh
-# (one source of truth with fm-send.sh). These thin wrappers keep the daemon's
-# call sites and the unit tests stable.
-#
-# pane_input_pending returns 0 (pending) when the cursor line holds real
-# unsubmitted text - a human's half-typed line (the return race) or a previous
-# injection whose Enter was swallowed. The detector drops dim/faint ghost text and
-# strips the harness's composer box borders, so a ghost-only or idle bordered
-# claude composer ("│ > … │") is correctly read as empty, not pending (incidents
-# afk-invx-i5 and composer-robust).
-# pane_is_busy / pane_input_pending: BACKEND-AWARE now (previously tmux-only
-# direct calls). <backend> defaults to tmux when omitted, so every existing
-# caller/test that passes only <target> is unaffected. Dispatch goes through
-# bin/fm-backend.sh's generic per-backend primitives (fm_backend_busy_state,
-# fm_backend_capture, fm_backend_composer_state) rather than hand-rolling a
-# case statement here, mirroring the same fallback pattern
-# stale_window_is_busy already uses for per-task panes: try the backend's
-# native busy-state first, and fall back to the shared regex-over-capture
-# reader whenever it does not report "busy" (tmux has no native busy-state
-# primitive, so it always takes this fallback path - byte-identical to the
-# pre-existing fm_pane_is_busy, since fm_backend_capture's tmux arm runs the
-# exact same `tmux capture-pane -p -t <target> -S -40`).
-pane_is_busy() {  # <target> [backend]
-  local target=$1 backend=${2:-tmux} bs tail40
-  bs=$(fm_backend_busy_state "$backend" "$target" 2>/dev/null)
-  case "$bs" in
-    busy) return 0 ;;
-  esac
-  tail40=$(fm_backend_capture "$backend" "$target" 40 2>/dev/null) || return 1
-  printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -6 \
-    | grep -qiE "${FM_BUSY_REGEX:-$FM_TMUX_BUSY_REGEX_DEFAULT}"
-}
-
-# pane_input_pending: the standalone "is there real unsubmitted text" predicate,
-# dispatching through fm_backend_composer_state (byte-identical to a direct
-# fm_tmux_composer_state call for the default/omitted-backend case). inject_msg
-# no longer routes its composer-guard through this boolean: a safe injection
-# target must be affirmatively 'empty', and a boolean pending/not-pending check
-# cannot distinguish an empty agent composer from a bare dead-shell prompt or an
-# unreadable pane (both 'unknown'), so inject_msg reads the full tri-state
-# verdict directly. This predicate is retained as the shared pending check and
-# as the vehicle for the composer-classifier dispatch regression tests.
-pane_input_pending() {  # <target> [backend]
-  local target=$1 backend=${2:-tmux}
-  [ "$(fm_backend_composer_state "$backend" "$target" 2>/dev/null)" = pending ]
-}
+# pane_is_busy and pane_input_pending are owned by bin/fm-pane-activity-lib.sh
+# (sourced above), shared with the external wake listener bin/fm-delivery.sh.
+# Both processes type into the captain's pane, so both must take the identical
+# pre-typing reads; one owner is what keeps the two from drifting apart.
 
 task_window_backend() {  # <window> <state>
   local win=$1 state=$2 task meta

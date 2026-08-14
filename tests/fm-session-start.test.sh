@@ -272,18 +272,6 @@ install_pi_turnend_extension_fixture() {
   cp "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts" "$root/.pi/extensions/fm-primary-turnend-guard.ts"
 }
 
-install_pi_watch_extension_fixture() {
-  local root=$1
-  mkdir -p "$root/.pi/extensions"
-  cp "$ROOT/.pi/extensions/fm-primary-pi-watch.ts" "$root/.pi/extensions/fm-primary-pi-watch.ts"
-}
-
-write_pi_watch_loaded_marker() {
-  local home=$1 root=$2 pid=$3 version
-  version=$(hash_file_for_test "$root/.pi/extensions/fm-primary-pi-watch.ts")
-  printf '%s\n%s\n' "$version" "$pid" > "$home/state/.pi-watch-extension-loaded"
-}
-
 write_pi_turnend_loaded_marker() {
   local home=$1 root=$2 pid=$3 version
   version=$(hash_file_for_test "$root/.pi/extensions/fm-primary-turnend-guard.ts")
@@ -292,7 +280,6 @@ write_pi_turnend_loaded_marker() {
 
 write_pi_loaded_markers() {
   local home=$1 root=$2 pid=$3
-  write_pi_watch_loaded_marker "$home" "$root" "$pid"
   write_pi_turnend_loaded_marker "$home" "$root" "$pid"
 }
 
@@ -374,10 +361,10 @@ EOF
   assert_contains "$out" "queued wakes pending - left untouched for the session holding the fleet lock" "read-only guard did not leave queued wakes to the lock holder"
   assert_contains "$out" "TANGLE: primary checkout on feature branch 'fm/read-only-tangle'" "read-only bootstrap did not surface the tangle diagnostic"
   assert_contains "$out" "read-only session must leave restore work" "read-only tangle diagnostic did not explain restore ownership"
-  assert_contains "$out" "Stay read-only: do not arm" "read-only next step did not block direct watcher repair"
+  assert_contains "$out" "Stay read-only: do not publish" "read-only next step did not block mutating follow-up"
   assert_not_contains "$out" "drain them with bin/fm-wake-drain.sh" "read-only guard printed a mutating drain instruction"
   assert_not_contains "$out" "After draining queued wakes" "read-only guard printed a drain-then-rearm instruction"
-  assert_not_contains "$out" "run bin/fm-watch-arm.sh" "read-only guard printed a mutating watcher-arm instruction"
+  assert_not_contains "$out" "bin/fm-delivery-service.sh restart" "read-only guard printed a mutating delivery-repair instruction"
   assert_not_contains "$out" "git -C $root checkout main" "read-only bootstrap printed a state-changing checkout remediation"
 
   # Detect-only bootstrap diagnostics still ran (the fakebin's PATH excludes
@@ -427,17 +414,24 @@ SH
 
   lock_line=$(printf '%s\n' "$out" | grep -n '^LOCK$' | head -1 | cut -d: -f1)
   boot_line=$(printf '%s\n' "$out" | grep -n '^BOOTSTRAP$' | head -1 | cut -d: -f1)
+  delivery_line=$(printf '%s\n' "$out" | grep -n '^WAKE DELIVERY$' | head -1 | cut -d: -f1)
   wake_line=$(printf '%s\n' "$out" | grep -n '^WAKE QUEUE$' | head -1 | cut -d: -f1)
   context_line=$(printf '%s\n' "$out" | grep -n '^CONTEXT$' | head -1 | cut -d: -f1)
   fleet_line=$(printf '%s\n' "$out" | grep -n '^FLEET STATE$' | head -1 | cut -d: -f1)
   next_line=$(printf '%s\n' "$out" | grep -n '^NEXT STEP$' | head -1 | cut -d: -f1)
 
-  if [ -z "$lock_line" ] || [ -z "$boot_line" ] || [ -z "$wake_line" ] || [ -z "$context_line" ] || [ -z "$fleet_line" ] || [ -z "$next_line" ]; then
+  if [ -z "$lock_line" ] || [ -z "$boot_line" ] || [ -z "$delivery_line" ] || [ -z "$wake_line" ] || [ -z "$context_line" ] || [ -z "$fleet_line" ] || [ -z "$next_line" ]; then
     fail "one or more section headers missing from digest: $out"
   fi
 
   [ "$lock_line" -lt "$boot_line" ] || fail "LOCK did not precede BOOTSTRAP"
-  [ "$boot_line" -lt "$wake_line" ] || fail "BOOTSTRAP did not precede WAKE QUEUE"
+  [ "$boot_line" -lt "$delivery_line" ] || fail "BOOTSTRAP did not precede WAKE DELIVERY"
+  [ "$delivery_line" -lt "$wake_line" ] || fail "WAKE DELIVERY did not precede WAKE QUEUE"
+  # The verdict is stated whether or not anything is wrong: a home whose listener
+  # is down and a home with nothing to deliver must not both look like silence.
+  printf '%s\n' "$out" | sed -n "${delivery_line},\$p" | head -6 \
+    | grep -qE '^(idle|delivering|undeliverable|away|stalled|down):' \
+    || fail "the WAKE DELIVERY section did not state a listener verdict: $out"
   [ "$wake_line" -lt "$context_line" ] || fail "WAKE QUEUE did not precede CONTEXT"
   [ "$context_line" -lt "$fleet_line" ] || fail "CONTEXT did not precede FLEET STATE"
   [ "$fleet_line" -lt "$next_line" ] || fail "FLEET STATE did not precede NEXT STEP"
@@ -799,7 +793,7 @@ SH
 
   assert_contains "$out" "TELEGRAM RECEIVER" "Telegram receiver section missing"
   assert_contains "$out" "TELEGRAM_RECEIVER: active - run bin/fm-tg-recv-arm.sh as its own tracked background task, never shell &"     "session-start did not emit the tracked Telegram background arm step"
-  assert_contains "$out" "If the Telegram receiver section is active, keep that separate background task armed too."     "next step did not preserve Telegram receiver follow-up"
+  assert_contains "$out" "If the Telegram receiver section is active, keep that separate background task armed too"     "next step did not preserve Telegram receiver follow-up"
 
   pass "locked session-start emits the direct Telegram receiver arm step when configured"
 }
@@ -818,10 +812,10 @@ EOF
 
   assert_contains "$out" "away-mode supervision is active" "AFK digest did not report away mode"
   assert_contains "$out" "Away mode is active" "next step did not switch to AFK guidance"
-  assert_contains "$out" "daemon owns queue delivery while the watcher service owns the loop" "AFK digest did not split delivery and watcher ownership"
+  assert_contains "$out" "the daemon owns queue delivery, the watcher service owns the loop, and the delivery listener stands down" "AFK digest did not split delivery, watcher, and listener ownership"
   assert_contains "$out" "away daemon is reading the external watcher's durable" "next step did not delegate queue delivery to the AFK daemon"
   assert_contains "$out" "- Away mode: active" "supervision block did not include active AFK state"
-  assert_not_contains "$out" "  bin/fm-watch-arm.sh" "AFK next step still told the agent to arm the watcher directly"
+  assert_not_contains "$out" "bin/fm-delivery-service.sh restart" "AFK next step pointed at the listener instead of the away daemon"
 
   pass "next step keeps the watcher external and delegates queue delivery to the AFK daemon"
 }
@@ -840,9 +834,9 @@ EOF
   block_count=$(printf '%s\n' "$out" | grep -c '^SUPERVISION OPERATING INSTRUCTIONS - primary harness:')
   [ "$block_count" -eq 1 ] || fail "expected exactly one supervision block, got $block_count"
   assert_contains "$out" "SUPERVISION OPERATING INSTRUCTIONS - primary harness: pi" "pi supervision block missing"
-  assert_contains "$out" "Mode: Pi extension wake delivery." "pi snippet missing from session start"
-  assert_contains "$out" "PI_WATCH_EXTENSION: not loaded" "pi extension load diagnostic missing"
-  assert_contains "$out" "restart plain pi so $root/.pi/extensions/fm-primary-turnend-guard.ts and $root/.pi/extensions/fm-primary-pi-watch.ts auto-load" "pi extension load diagnostic omits the turn-end guard extension"
+  assert_contains "$out" "Mode: external wake delivery, Pi primary." "pi snippet missing from session start"
+  assert_contains "$out" "PI_TURNEND_EXTENSION: not loaded" "pi extension load diagnostic missing"
+  assert_contains "$out" "restart plain pi so $root/.pi/extensions/fm-primary-turnend-guard.ts auto-loads" "pi extension load diagnostic omits the turn-end guard extension"
 
   wake_line=$(printf '%s\n' "$out" | grep -n '^WAKE QUEUE$' | head -1 | cut -d: -f1)
   sup_line=$(printf '%s\n' "$out" | grep -n '^SUPERVISION OPERATING INSTRUCTIONS' | head -1 | cut -d: -f1)
@@ -865,17 +859,15 @@ EOF
   holder_pid=$!
   make_fake_ps_pi_holder "$fakebin" "$holder_pid"
   install_pi_turnend_extension_fixture "$root"
-  install_pi_watch_extension_fixture "$root"
-  marker="$home/state/.pi-watch-extension-loaded"
+  marker="$home/state/.pi-turnend-extension-loaded"
   printf 'stale-extension-version\n%s\n' "$holder_pid" > "$marker"
-  write_pi_turnend_loaded_marker "$home" "$root" "$holder_pid"
   touch -t 203001010000 "$marker" 2>/dev/null || touch "$marker"
 
   out=$(FM_FAKE_HARNESS=pi run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   kill "$holder_pid" 2>/dev/null || true
   wait "$holder_pid" 2>/dev/null || true
 
-  assert_contains "$out" "PI_WATCH_EXTENSION: not loaded" "pi diagnostic trusted a stale loaded marker"
+  assert_contains "$out" "PI_TURNEND_EXTENSION: not loaded" "pi diagnostic trusted a stale loaded marker"
 
   pass "session start rejects stale Pi loaded markers"
 }
@@ -892,20 +884,18 @@ EOF
   holder_pid=$!
   make_fake_ps_pi_holder "$fakebin" "$holder_pid"
   install_pi_turnend_extension_fixture "$root"
-  install_pi_watch_extension_fixture "$root"
-
   write_pi_loaded_markers "$home" "$root" "$holder_pid"
 
   out=$(FM_FAKE_HARNESS=pi run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   kill "$holder_pid" 2>/dev/null || true
   wait "$holder_pid" 2>/dev/null || true
 
-  assert_not_contains "$out" "PI_WATCH_EXTENSION: not loaded" "pi diagnostic rejected a current pre-lock loaded marker"
+  assert_not_contains "$out" "PI_TURNEND_EXTENSION: not loaded" "pi diagnostic rejected a current pre-lock loaded marker"
 
   pass "session start accepts current Pi markers written before lock acquisition"
 }
 
-test_pi_diagnostic_rejects_missing_turnend_guard_marker() {
+test_pi_diagnostic_rejects_absent_turnend_guard_marker() {
   local rec root home fakebin out holder_pid
   rec=$(new_world pi-missing-turnend-marker)
   IFS='|' read -r root home fakebin <<EOF
@@ -917,17 +907,15 @@ EOF
   holder_pid=$!
   make_fake_ps_pi_holder "$fakebin" "$holder_pid"
   install_pi_turnend_extension_fixture "$root"
-  install_pi_watch_extension_fixture "$root"
-
-  write_pi_watch_loaded_marker "$home" "$root" "$holder_pid"
+  rm -f "$home/state/.pi-turnend-extension-loaded"
 
   out=$(FM_FAKE_HARNESS=pi run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   kill "$holder_pid" 2>/dev/null || true
   wait "$holder_pid" 2>/dev/null || true
 
-  assert_contains "$out" "PI_WATCH_EXTENSION: not loaded" "pi diagnostic trusted a session without the turn-end guard extension"
+  assert_contains "$out" "PI_TURNEND_EXTENSION: not loaded" "pi diagnostic trusted a session with no turn-end guard marker at all"
 
-  pass "session start rejects Pi sessions missing the turn-end guard marker"
+  pass "session start rejects a live Pi session that recorded no turn-end guard marker"
 }
 
 test_pi_diagnostic_rejects_previous_session_loaded_marker() {
@@ -942,17 +930,15 @@ EOF
   holder_pid=$!
   make_fake_ps_pi_holder "$fakebin" "$holder_pid"
   install_pi_turnend_extension_fixture "$root"
-  install_pi_watch_extension_fixture "$root"
-  marker="$home/state/.pi-watch-extension-loaded"
-  version=$(hash_file_for_test "$root/.pi/extensions/fm-primary-pi-watch.ts")
+  marker="$home/state/.pi-turnend-extension-loaded"
+  version=$(hash_file_for_test "$root/.pi/extensions/fm-primary-turnend-guard.ts")
   printf '%s\n999999\n' "$version" > "$marker"
-  write_pi_turnend_loaded_marker "$home" "$root" "$holder_pid"
 
   out=$(FM_FAKE_HARNESS=pi run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   kill "$holder_pid" 2>/dev/null || true
   wait "$holder_pid" 2>/dev/null || true
 
-  assert_contains "$out" "PI_WATCH_EXTENSION: not loaded" "pi diagnostic trusted a marker from a previous Pi process"
+  assert_contains "$out" "PI_TURNEND_EXTENSION: not loaded" "pi diagnostic trusted a marker from a previous Pi process"
 
   pass "session start rejects Pi loaded markers from previous sessions"
 }
@@ -976,5 +962,5 @@ test_next_step_afk_delegates_to_daemon
 test_supervision_block_exactly_one_and_pi_diagnostic
 test_pi_diagnostic_rejects_stale_loaded_marker
 test_pi_diagnostic_accepts_prelock_loaded_marker
-test_pi_diagnostic_rejects_missing_turnend_guard_marker
+test_pi_diagnostic_rejects_absent_turnend_guard_marker
 test_pi_diagnostic_rejects_previous_session_loaded_marker

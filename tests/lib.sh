@@ -232,35 +232,33 @@ fm_write_secondmate_meta() {
 }
 
 # fm_test_record_supervision_healthy <home> [state]: record identity-matched
-# daemon and delivery-stub locks owned by the long-lived test shell. This is for
-# fixtures whose subject merely passes through fm-guard.sh; tests of watcher
-# health itself should construct each state explicitly.
+# watcher and delivery-listener locks owned by the long-lived test shell. This is
+# for fixtures whose subject merely passes through fm-guard.sh; tests of watcher
+# or delivery health itself should construct each state explicitly.
 # shellcheck disable=SC2031 # false positive: fm-wake-lib.sh's *sourced-in-a-
 # subshell* locals of the same names (state/pid/home) never touch this scope.
 fm_test_record_supervision_healthy() {
-  local record_home=$1 record_state=${2:-$1/state} record_pid record_identity record_session_lock
+  local record_home=$1 record_state=${2:-$1/state} record_pid record_identity
   record_pid=$$
   # Compute identity through the shared fm_pid_identity (subshell-scoped so its
   # STATE/FM_HOME/FM_ROOT side effects from sourcing fm-wake-lib.sh never leak
   # into this test shell), the same predicate fm_watcher_lock_matches_pid and
-  # fm_wake_stub_lock_matches_pid re-derive from the live pid, so a recorded
+  # fm_delivery_lock_matches_pid re-derive from the live pid, so a recorded
   # lock always compares equal to itself.
   record_identity=$(. "$ROOT/bin/fm-wake-lib.sh" >/dev/null 2>&1; fm_pid_identity "$record_pid") \
     || fail "could not read test-shell identity"
   [ -n "$record_identity" ] || fail "test-shell identity was empty"
-  record_session_lock=$(cat "$record_state/.lock" 2>/dev/null || true)
 
-  mkdir -p "$record_state/.watch.lock" "$record_state/.wake-stub.lock"
+  mkdir -p "$record_state/.watch.lock" "$record_state/.delivery.lock"
   printf '%s\n' "$record_pid" > "$record_state/.watch.lock/pid"
   printf '%s\n' "$record_home" > "$record_state/.watch.lock/fm-home"
   printf '%s\n' "$ROOT/bin/fm-watch.sh" > "$record_state/.watch.lock/watcher-path"
   printf '%s\n' "$record_identity" > "$record_state/.watch.lock/pid-identity"
-  printf '%s\n' "$record_pid" > "$record_state/.wake-stub.lock/pid"
-  printf '%s\n' "$record_home" > "$record_state/.wake-stub.lock/fm-home"
-  printf '%s\n' "$ROOT/bin/fm-wake-wait.sh" > "$record_state/.wake-stub.lock/stub-path"
-  printf '%s\n' "$record_session_lock" > "$record_state/.wake-stub.lock/session-lock-pid"
-  printf '%s\n' "$record_identity" > "$record_state/.wake-stub.lock/pid-identity"
-  touch "$record_state/.last-watcher-beat"
+  printf '%s\n' "$record_pid" > "$record_state/.delivery.lock/pid"
+  printf '%s\n' "$record_home" > "$record_state/.delivery.lock/fm-home"
+  printf '%s\n' "$ROOT/bin/fm-delivery.sh" > "$record_state/.delivery.lock/delivery-path"
+  printf '%s\n' "$record_identity" > "$record_state/.delivery.lock/pid-identity"
+  touch "$record_state/.last-watcher-beat" "$record_state/.last-delivery-beat"
 }
 
 # --- common assertions ------------------------------------------------------
