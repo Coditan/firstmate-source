@@ -215,10 +215,28 @@ _fm_batch_resolve_delay() {  # <priority> <shipped-default> <environment-value>
   printf '%s\t%s' "$value" "$source"
 }
 
+# immediate carries no delay to resolve: it is the class DEFINED as never held,
+# so its zero is a property of the class rather than a default anyone sets.
+# A home that tries to configure one is REFUSED rather than quietly ignored,
+# because accepting a value and then doing nothing with it is the same defect as
+# accepting a mistyped one - the home believes it configured something inert.
+_fm_batch_reject_immediate_override() {
+  local configured
+  [ -z "$FM_BATCH_CONFIG_ERROR" ] || return 0
+  if [ -n "$_FM_BATCH_ENV_IMMEDIATE" ]; then
+    FM_BATCH_CONFIG_ERROR="FM_BATCH_DELAY_IMMEDIATE is set, but immediate is never held and has no delay to configure"
+    return 0
+  fi
+  configured=$(_fm_batch_configured_delay immediate)
+  [ -n "$configured" ] || return 0
+  FM_BATCH_CONFIG_ERROR="$FM_BATCH_DELAY_CONFIG sets an immediate delay, but immediate is never held and has no delay to configure"
+  return 0
+}
+
 _fm_batch_load_delays() {
   local resolved
-  resolved=$(_fm_batch_resolve_delay immediate 0 "$_FM_BATCH_ENV_IMMEDIATE")
-  IFS=$'\t' read -r FM_BATCH_DELAY_IMMEDIATE FM_BATCH_DELAY_SOURCE_IMMEDIATE <<< "$resolved"
+  FM_BATCH_DELAY_IMMEDIATE=0
+  FM_BATCH_DELAY_SOURCE_IMMEDIATE=fixed
   resolved=$(_fm_batch_resolve_delay high 60 "$_FM_BATCH_ENV_HIGH")
   IFS=$'\t' read -r FM_BATCH_DELAY_HIGH FM_BATCH_DELAY_SOURCE_HIGH <<< "$resolved"
   resolved=$(_fm_batch_resolve_delay normal 120 "$_FM_BATCH_ENV_NORMAL")
@@ -271,6 +289,7 @@ FM_BATCH_DELAY_SOURCE_NORMAL=
 FM_BATCH_DELAY_SOURCE_LOW=
 _fm_batch_load_delays
 _fm_batch_note_rejected_delays
+_fm_batch_reject_immediate_override
 
 # --- the clock --------------------------------------------------------------
 

@@ -87,7 +87,7 @@ test_the_shipped_defaults_are_the_captains_numbers() {
   dir=$(make_batch_case shipped-defaults)
   out=$(FM_STATE_OVERRIDE="$dir/state" FM_HOME="$dir" "$BATCH" delays) \
     || fail "delays refused to report on a fresh home"
-  printf '%s\n' "$out" | grep -Eq '^immediate +0s +\(default\)$' \
+  printf '%s\n' "$out" | grep -Eq '^immediate +0s +\(fixed\)$' \
     || fail "immediate does not ship at no delay at all: $out"
   printf '%s\n' "$out" | grep -Eq '^high +60s +\(default\)$' \
     || fail "high does not ship at the captain's one minute: $out"
@@ -435,6 +435,37 @@ test_the_delays_are_configurable_and_a_bad_value_is_refused() {
   pass "delays come from the environment, then the home's config, then the captain's shipped number"
 }
 
+# immediate is the class DEFINED as never held, so it carries no delay to set.
+# Accepting a value for it and then ignoring it is the same defect as accepting a
+# mistyped one: the home believes it configured something that does nothing.
+test_configuring_the_immediate_class_is_refused_rather_than_ignored() {
+  local dir out rc=0
+  dir=$(make_batch_case immediate-not-configurable)
+  mkdir -p "$dir/config"
+
+  printf 'immediate = 30\n' > "$dir/config/batch-delays"
+  out=$(batch "$dir" delays 2>&1) || rc=$?
+  [ "$rc" -eq 2 ] || fail "a configured immediate delay was accepted instead of refused (rc=$rc)"
+  printf '%s\n' "$out" | grep -q 'immediate is never held' \
+    || fail "the refusal did not say why immediate takes no delay: $out"
+
+  rc=0
+  : > "$dir/config/batch-delays"
+  out=$(FM_BATCH_DELAY_IMMEDIATE=30 batch "$dir" delays 2>&1) || rc=$?
+  [ "$rc" -eq 2 ] || fail "an immediate delay from the environment was accepted (rc=$rc)"
+  printf '%s\n' "$out" | grep -q 'immediate is never held' \
+    || fail "the environment refusal did not say why immediate takes no delay: $out"
+
+  # And the three real delays are unaffected by that refusal.
+  rc=0
+  printf 'high = 5\n' > "$dir/config/batch-delays"
+  out=$(batch "$dir" delays) || rc=$?
+  [ "$rc" -eq 0 ] || fail "refusing an immediate delay broke the configurable classes (rc=$rc)"
+  printf '%s\n' "$out" | grep -Eq '^high +5s +\(config\)$' \
+    || fail "a configured high delay stopped working: $out"
+  pass "an attempt to give immediate a delay is refused, and the three real delays still configure"
+}
+
 # A configured delay must actually govern a hold, not merely be reported back.
 test_a_configured_delay_governs_the_hold() {
   local dir arrival bseq hold
@@ -576,6 +607,7 @@ test_a_stale_open_marker_is_reported_and_never_reused
 test_an_event_whose_record_fails_is_not_stepped_over
 test_a_full_batch_closes_early_rather_than_dropping_the_overflow
 test_the_delays_are_configurable_and_a_bad_value_is_refused
+test_configuring_the_immediate_class_is_refused_rather_than_ignored
 test_a_configured_delay_governs_the_hold
 test_batching_changes_no_supervision_state_outside_its_own_directory
 test_an_open_batch_past_its_deadline_is_reported_rather_than_held_silently
