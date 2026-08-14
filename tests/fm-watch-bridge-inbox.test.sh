@@ -412,32 +412,53 @@ EOF
 }
 
 test_discovery_gated_by_urgent_interval() {
-  local home fakebin counter out pid calls
+  local home fakebin scan_log tick_counter out pid ticks cold_calls gated_calls
   home=$(make_home discovery)
   write_envelope "$home" routine normal
   fakebin="$TMP_ROOT/fakebin-discovery"
   mkdir -p "$fakebin"
-  counter="$home/timeout-calls"
-  : > "$counter"
+  scan_log="$home/timeout-calls"
+  tick_counter="$home/poll-ticks"
+  : > "$scan_log"
+  : > "$tick_counter"
   cat > "$fakebin/timeout" <<'EOF'
 #!/usr/bin/env bash
-echo x >> "$COUNTER_FILE"
+tick=$(wc -l < "$TICK_COUNTER_FILE" | tr -d '[:space:]')
+printf '%s\n' "$tick" >> "$SCAN_LOG_FILE"
 exec /usr/bin/timeout "$@"
 EOF
+  cat > "$fakebin/sleep" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = "${WATCH_POLL_SECONDS:-1}" ]; then
+  printf 'x\n' >> "$TICK_COUNTER_FILE"
+  ticks=$(wc -l < "$TICK_COUNTER_FILE" | tr -d '[:space:]')
+  if [ "$ticks" -ge "${STOP_AFTER_TICKS:-5}" ]; then
+    kill "$PPID" 2>/dev/null || true
+  fi
+  exit 0
+fi
+exec /usr/bin/sleep "$@"
+EOF
   chmod +x "$fakebin/timeout"
+  chmod +x "$fakebin/sleep"
   out="$home/watch.out"
-  COUNTER_FILE="$counter" PATH="$fakebin:$PATH" \
+  SCAN_LOG_FILE="$scan_log" TICK_COUNTER_FILE="$tick_counter" WATCH_POLL_SECONDS=1 STOP_AFTER_TICKS=5 PATH="$fakebin:$PATH" \
     FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 \
-    FM_BRIDGE_URGENT_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" 2>&1 &
+    FM_BRIDGE_URGENT_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WATCH_DAEMON=1 "$WATCH" > "$out" 2>&1 &
   pid=$!
-  sleep 4
-  kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
-  calls=$(wc -l < "$counter" | tr -d '[:space:]')
-  # Cold discovery now includes the one envelope scan that computes effective
-  # urgency for delivery; later ticks must still stay behind the cadence gate.
-  [ "$calls" -le 6 ] || \
-    fail "repeated unchanged loop checks kept spawning bounded scans ($calls calls across several ticks)"
+  ticks=$(wc -l < "$tick_counter" | tr -d '[:space:]')
+  cold_calls=$(awk '$1 == "0" { count++ } END { print count + 0 }' "$scan_log")
+  gated_calls=$(awk '$1 != "0" { count++ } END { print count + 0 }' "$scan_log")
+  [ "$ticks" -ge 2 ] || fail "watcher did not complete repeated unchanged ticks; observed $ticks fixed poll ticks"
+  # The fake sleep drives a fixed number of poll ticks, and the timeout shim
+  # tags each bounded scan with the completed tick count.
+  # Tick 0 covers legitimate cold discovery, including the envelope scan that
+  # computes effective urgency for delivery; any scan after tick 0 means the
+  # urgent-interval gate is not holding.
+  [ "$cold_calls" -gt 0 ] || fail "cold-start Bridge discovery scans were not observed"
+  [ "$gated_calls" = 0 ] || \
+    fail "Bridge discovery cadence gate is not holding: $gated_calls bounded scans ran after cold-start tick 0 across $ticks fixed poll ticks"
   [ -e "$home/state/.last-bridge-discovery" ] || fail "Bridge discovery cadence marker was never written"
   pass "repeated unchanged loop checks do not keep spawning Bridge scans within the urgent window"
 }
