@@ -65,7 +65,7 @@ Exact ordered membership is the heredoc lists in `bin/fm-test-run.sh` (`list_por
 
 `portable-serial` is every `tests/*.test.sh` that is neither proven-isolated nor `real-herdr-gated`.
 That keeps watcher, lock, AFK, real tmux, daemon, secondmate lifecycle, bootstrap, live-harness opt-in (default skip), GUI backends, and other stateful or unproven work serial.
-Measured serial remainder wall (from the same Phase 1 artifacts, excluding Herdr) is about **13 minutes**.
+The original Phase 1 artifacts measured the serial remainder at about **13 minutes**; current measurements and the cap derivation are recorded under [Timeouts](#timeouts).
 
 ## Coverage guard
 
