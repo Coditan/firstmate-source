@@ -31,7 +31,9 @@
 #                 "FMX: X mode on ..." or "FMX: X mode off ...",
 #                 "WATCHER_UNIT: <consent, convergence, or fallback detail>",
 #                 "DELIVERY_UNIT: <consent, convergence, or fallback detail>",
-#                 "FREQUENCY_MONITOR_UNIT: <consent, convergence, or fallback detail>".
+#                 "FREQUENCY_MONITOR_UNIT: <consent, convergence, or fallback detail>",
+#                 "RUN_READER: no-mistakes runs in this session (<path>) but a
+#                 context that inherits no shell setup cannot reach it (...)".
 #          When a RUNNING secondmate worktree is fast-forwarded to firstmate's
 #          own current default-branch commit (a purely LOCAL fast-forward, never
 #          an origin fetch) AND its loaded instruction surface (AGENTS.md, bin/,
@@ -127,6 +129,15 @@ fm_axi_prepend_path "$FM_HOME"
 . "$SCRIPT_DIR/fm-currency-base-lib.sh"
 # shellcheck source=bin/fm-role-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-role-lib.sh"
+# shellcheck source=bin/fm-nm-path-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-nm-path-lib.sh"
+# shellcheck source=bin/fm-service-path-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-service-path-lib.sh"
+# Resolve the no-mistakes CLI here too, so bootstrap's version and compatibility
+# reads are about the binary an unattended reader will actually run rather than
+# about whatever the launching shell reached. No-op where the CLI already
+# resolves (bin/fm-nm-path-lib.sh).
+fm_nm_ensure_reachable || true
 
 fleet_sync_origin_backed_project_count() {
   local count proj
@@ -590,6 +601,47 @@ no_mistakes_compatible() {
   [ "$patch" -ge "$NO_MISTAKES_MIN_PATCH" ]
 }
 
+# Startup assertion for the run-state reader's dependency.
+#
+# `command -v no-mistakes` in this session answers a DIFFERENT question - whether
+# the operator can run it - and that answer stayed true through every week of the
+# 2026-08 blindness while the watcher, the hooks and every reviewer session read
+# nothing (bin/fm-nm-path-lib.sh). The question worth asking at startup is
+# whether a context that inherits no shell setup would reach it, so this one is
+# asked against the PATH such a context starts with rather than against ours.
+#
+# FM_SERVICE_PATH_BASE_DEFAULT is that PATH: systemd's user-manager default, and
+# the LEAST reach any unattended shape has, so a line here means every unattended
+# shape is blind, not just the strictest one.
+#
+# Absence is not this check's to report. When nothing anywhere resolves the CLI,
+# the MISSING: line above already owns it and the repair is to install it; what
+# this adds is the sentence MISSING: cannot say - that the CLI runs here and the
+# reader still cannot reach it, which no version or installation check can see.
+#
+# FM_RUN_READER_CHECK_DISABLE exists for the same reason the currency-round and
+# Grossreinschiff ones do: every behavior suite that composes bootstrap runs with
+# a FAKE no-mistakes in a fixture PATH and a real HOME, so the honest answer for
+# a fixture is "unreachable" and would print this line under every unrelated
+# assertion. tests/lib.sh disables it suite-wide and
+# tests/fm-run-reader-reach.test.sh sets it back to 0, which is the only place the
+# check is actually exercised.
+run_reader_reach_check() {
+  local resolved bin repair
+  [ "${FM_RUN_READER_CHECK_DISABLE:-0}" != 1 ] || return 0
+  command -v no-mistakes >/dev/null 2>&1 || return 0
+  fm_nm_reaches "${FM_SERVICE_PATH_BASE:-$FM_SERVICE_PATH_BASE_DEFAULT}" && return 0
+  resolved=$(command -v no-mistakes 2>/dev/null || echo unknown)
+  # The second repair sentence is only reachable with no HOME and no explicit
+  # override, which is an environment that cannot name its own install directory.
+  if bin=$(fm_nm_bin_dir 2>/dev/null); then
+    repair="install or link the CLI at $bin/no-mistakes, or export NO_MISTAKES_INSTALL_DIR to the directory holding it"
+  else
+    repair="this environment has no HOME to derive an install directory from - export NO_MISTAKES_INSTALL_DIR to the directory holding the CLI"
+  fi
+  echo "RUN_READER: no-mistakes runs in this session ($resolved) but a context that inherits no shell setup cannot reach it, so crew run-state reads from the watcher, hooks and reviewer sessions answer 'degraded - run-reader-missing' instead of the real state (repair: $repair)"
+}
+
 x_mode_write_if_changed() {
   local dest=$1 content=$2 mode=$3 parent tmp parent_device current_mode
   parent=${dest%/*}
@@ -973,6 +1025,7 @@ fi
 if command -v no-mistakes >/dev/null 2>&1 && ! no_mistakes_compatible; then
   echo "MISSING: no-mistakes (install: $(install_cmd no-mistakes))"
 fi
+run_reader_reach_check
 if command -v tasks-axi >/dev/null 2>&1 && ! fm_tasks_axi_compatible; then
   echo "MISSING: tasks-axi (install: $(install_cmd tasks-axi))"
 fi
