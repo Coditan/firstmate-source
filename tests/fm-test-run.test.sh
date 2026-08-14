@@ -445,8 +445,16 @@ test_ci_and_docs_call_the_owner() {
     || fail "Herdr CI job must use bounded lab cleanup"
   grep -Fq 'tests-timing-aggregate:' "$CI" \
     || fail "CI must aggregate per-lane timing artifacts"
-  grep -Fq 'timeout-minutes: 20' "$CI" \
-    || fail "portable serial hang tripwire must be timeout-minutes: 20"
+  # Scoped to the serial job: a bare file-wide grep for this value would be
+  # satisfied by the Herdr lane's own 40 and prove nothing about this lane.
+  local serial_timeout
+  serial_timeout=$(awk '
+    $0 == "  tests-portable-serial:" { in_job=1; next }
+    in_job && /^  [a-zA-Z0-9_-]+:/ { exit }
+    in_job && /^    timeout-minutes:/ { print $2; exit }
+  ' "$CI")
+  [ "$serial_timeout" = "40" ] \
+    || fail "portable serial hang tripwire must be timeout-minutes: 40 (got '${serial_timeout:-none}')"
   grep -Fq 'timeout-minutes: 10' "$CI" \
     || fail "portable parallel shards must keep a hang tripwire (10m)"
   # Interim full-suite 25m portable timeout must not remain after sharding.
