@@ -28,18 +28,17 @@ It also requires `AGENTS.md`, `bin/`, and the effective state directory to exist
 For an in-scope primary checkout, it counts supervision-relevant work from `state/*.meta`.
 A `kind=secondmate` record with explicit `state=resting` remains registered but is excluded; every ordinary task, active secondmate, and legacy secondmate with no state still counts.
 An unread record in `state/.wake-queue` is protected work in its own right, because a terminal wake can outlive the `state/*.meta` record it came from: the guard stays active whenever `FM_SUP_IN_FLIGHT` is above zero **or** `FM_SUP_QUEUE_PENDING` is true, and the daemon-down banner then names the queued wakes instead of an in-flight count.
-That queue state is also passed to the repair-line renderer as `--queue-pending`, exactly as `bin/fm-guard.sh` does, so a session-delivery repair says the queued wakes must be drained before re-arming.
+That queue state is also passed to the repair-line renderer as `--queue-pending`, exactly as `bin/fm-guard.sh` does, so a delivery repair says the queued wakes must be drained before the listener is repaired.
 If neither remains, it exits silently.
 If work is protected, the first half requires `fm_watcher_healthy <state-dir> <watch-path> [grace-seconds] [home]` from `bin/fm-wake-lib.sh`.
 That daemon predicate is unchanged: it requires an identity-matched live watcher lock and a fresh beacon.
 A stale beacon blocks even if the watcher pid is still live, and a fresh leftover beacon blocks if the watcher lock is missing, dead, or identity-mismatched.
-The second half requires `fm_wake_stub_armed <state-dir> <stub-path> [home]` from the same library.
-That delivery predicate requires a live pid whose recorded executable identity, home, and current session-lock pid match `state/.wake-stub.lock`.
-The stub needs no beacon because it is a pure blocking wait over the durable queue.
-Daemon failure and delivery failure produce separate repair lines.
-The daemon line names the scoped systemd instance restart or tmux keeper repair and is treated as a real supervision incident.
-The delivery line points to the active harness protocol and costs one cheap re-arm.
-While `state/.afk` is present, the away daemon consumes new durable queue records and intentionally replaces the session stub.
+The second half requires `fm_delivery_healthy <state-dir> <delivery-path> [grace-seconds] [home]` from `bin/fm-delivery-lib.sh`.
+That delivery predicate is shaped exactly like the watcher's: a live pid whose recorded executable identity and home match `state/.delivery.lock`, plus a beacon inside the grace.
+It needs the beacon because the listener is a loop rather than a blocking wait, so a live pid alone would not prove it is still turning.
+Watcher failure and delivery failure produce separate repair lines.
+Each names the scoped systemd instance restart or tmux keeper repair for its own service, and both are real supervision incidents now: neither is a cheap re-arm any more, because neither is a session object.
+While `state/.afk` is present, the away daemon consumes new durable queue records and the listener intentionally stands down for it.
 The away flag alone does not satisfy the delivery half.
 `fm_pusher_healthy <state-dir>` requires `state/.supervise-daemon.pid` to name a live pid that matches the portable lock's pid and recorded process identity.
 Those are exactly the three files `bin/fm-supervise-daemon.sh` publishes at startup, and `tests/fm-daemon.test.sh` pins the predicate against that real publication rather than a fixture.
@@ -92,9 +91,11 @@ All harnesses were validated on 2026-07-08 in scratch repos or throwaway homes, 
 The external-loop predicate was validated on 2026-07-23 against the real systemd 255 user manager on Linux with a disposable `FM_HOME`.
 `SYSTEMD_UNIT_PATH="$PWD/systemd:/usr/lib/systemd/user" systemd-analyze --user verify "fm-watch@$(systemd-escape --path "$PWD").service"` accepted the tracked template with no diagnostics after instantiated `/%I` path expansion.
 `FM_SYSTEMD_LIVE=1 tests/fm-watcher-systemd-smoke.test.sh` created a transient per-home unit with `Restart=always`, never installed or enabled a persistent unit, and established the unchanged identity-matched lock plus fresh-beacon predicate.
-The smoke armed `bin/fm-wake-wait.sh`, verified its pid, executable, home, and session-lock identity, sent the stub `SIGTERM`, and observed an empty durable queue afterward.
-One re-arm then delivered one queued wake while leaving exactly one record in `state/.wake-queue` for the model-owned drain.
-Sending `SIGTERM` to the systemd-owned watcher produced a different healthy watcher pid under the same active unit, proving daemon failure and delivery-stub failure have independent recovery paths.
+Sending `SIGTERM` to the systemd-owned watcher produced a different healthy watcher pid under the same active unit.
+
+The delivery half of that smoke was rewritten on 2026-08-13 when wake delivery moved out of the harness.
+It now starts a second transient per-home unit for `bin/fm-delivery.sh` with `Restart=always`, queues a wake before any listener exists, and requires the `down` verdict while nothing is listening, the `undeliverable` verdict naming the missing endpoint once the listener is up, a different healthy listener pid after `SIGTERM`, and exactly one record left in `state/.wake-queue` throughout.
+`docs/wake-delivery.md` owns that evidence in full.
 The default automated suite leaves this test skipped unless `FM_SYSTEMD_LIVE=1` because it intentionally exercises the host's real user manager.
 
 Claude Code 2.1.204 preserved the existing behavior.
@@ -129,10 +130,10 @@ The next no-tool prompt produced exactly one `TURN WOULD END BLIND` follow-up, a
 The three earlier tool turns produced no guard follow-up because no work was in flight.
 Command used to fire the watcher: `printf 'done: pi e2e watcher fire\n' > "$FM_HOME/state/pi-e2e.status"`.
 Observed output after the wake: Pi ran `bin/fm-wake-drain.sh`, read the terminal status, called `fm_watch_arm_pi`, and rendered `watcher: started Pi extension arm child 2`.
-This 2026-07-09 observation predates the external watcher service; the current Pi child is only the delivery stub, and post-drain re-arming remains model-owned.
-The complete pane contained one guard message and zero foreground `bin/fm-watch-arm.sh` bash calls.
-`/quit` printed `PI_EXIT=0`, and the legacy arm process plus its watcher child were both gone afterward.
-That cleanup observation is historical rather than evidence that the current service should stop with Pi; the 2026-07-23 real-systemd smoke above owns the current service-lifetime evidence.
+This 2026-07-09 observation is historical twice over: it predates the external watcher service, and it predates the removal of session-held wake delivery entirely.
+Pi has no delivery child and no arm tool any more, so the `fm_watch_arm_pi` calls it records describe a mechanism that no longer exists.
+What it still evidences is the guard itself: one forced follow-up per turn, and none on turns with no work in flight.
+`docs/wake-delivery.md` owns the current delivery evidence.
 
 Grok 0.2.91 was validated with a scratch `GROK_HOME` and symlinked auth/config.
 Hook file used for tracked project-hook loading: `<scratch-project>/.grok/hooks/fm-smoke.json`, matching the tracked `.grok/hooks/fm-primary-turnend-guard.json` location.

@@ -98,6 +98,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-context-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-delivery-lib.sh
+. "$SCRIPT_DIR/fm-delivery-lib.sh"
 # shellcheck source=bin/fm-supervisor-target-lib.sh
 . "$SCRIPT_DIR/fm-supervisor-target-lib.sh"
 # shellcheck source=bin/fm-tmux-lib.sh
@@ -301,24 +303,26 @@ fm_context_quiet "$STATE" || refuse "the fleet is no longer quiet: $FM_CONTEXT_N
 fm_context_restart_path_ok "$FM_HOME" "$FM_ROOT" || refuse "$FM_CONTEXT_RESTART_ERROR"
 
 # --- 6. supervision survives the discard ------------------------------------
-# The clear keeps the process, the session lock, and any running background wake
-# delivery alive, but a dead watcher would leave the fresh session with nothing
-# to wake it. That is a hard requirement. The delivery stub is required only when
-# this home actually has work or an X-mode relay to be woken for; with nothing
-# recorded there is nothing a missing stub could strand.
+# The clear keeps the process and the session lock, and the wake listener is not
+# the session's object at all any more, so the reset cannot take it with it. What
+# would still strand the fresh session is a dead watcher or a dead listener: the
+# first would notice nothing, the second would deliver nothing. Both are hard
+# requirements. The listener is required only when this home actually has work or
+# an X-mode relay to be woken for; with nothing recorded there is nothing a down
+# listener could strand.
 fm_watcher_healthy "$STATE" "$FM_ROOT/bin/fm-watch.sh" "${FM_GUARD_GRACE:-300}" "$FM_HOME" \
   || refuse "supervision is not running (${FM_WATCHER_HEALTH:-unknown}); repair it before discarding this session's context"
 
-NEEDS_STUB=0
+NEEDS_DELIVERY=0
 for f in "$STATE"/*.meta; do
   [ -e "$f" ] || continue
-  NEEDS_STUB=1
+  NEEDS_DELIVERY=1
   break
 done
-[ -e "$STATE/x-watch.check.sh" ] && NEEDS_STUB=1
-if [ "$NEEDS_STUB" -eq 1 ]; then
-  fm_wake_stub_armed "$STATE" "$FM_ROOT/bin/fm-wake-wait.sh" "$FM_HOME" \
-    || refuse "wake delivery is not armed, so the session after the reset could not be woken; arm it with bin/fm-watch-arm.sh and re-run"
+[ -e "$STATE/x-watch.check.sh" ] && NEEDS_DELIVERY=1
+if [ "$NEEDS_DELIVERY" -eq 1 ]; then
+  fm_delivery_healthy "$STATE" "$FM_ROOT/bin/fm-delivery.sh" "${FM_GUARD_GRACE:-300}" "$FM_HOME" \
+    || refuse "this home wake-delivery listener is not running (${FM_DELIVERY_HEALTH:-unknown}), so the session after the reset could not be woken; repair it with $("$FM_ROOT/bin/fm-delivery-service.sh" repair-command 2>/dev/null || printf 'bin/fm-delivery-service.sh restart') and re-run"
 fi
 
 # --- 7. the harness and pane this was proven on -----------------------------

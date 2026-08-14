@@ -44,7 +44,7 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 GRACE=${FM_GUARD_GRACE:-300}
 WATCH="$SCRIPT_DIR/fm-watch.sh"
-STUB="$SCRIPT_DIR/fm-wake-wait.sh"
+DELIVERY="$SCRIPT_DIR/fm-delivery.sh"
 
 # shellcheck source=bin/fm-supervision-lib.sh
 . "$SCRIPT_DIR/fm-supervision-lib.sh"
@@ -81,6 +81,8 @@ fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
 # --- the actual predicate ----------------------------------------------------
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-delivery-lib.sh
+. "$SCRIPT_DIR/fm-delivery-lib.sh"
 
 fm_supervision_status "$STATE" "$GRACE"
 # A queued durable wake is protected work in its own right: state/*.meta records
@@ -94,10 +96,14 @@ afk=0
 [ -e "$STATE/.afk" ] && afk=1
 fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME" && daemon_healthy=1
 if [ "$afk" -eq 1 ]; then
-  # Away mode's own daemon consumes new durable queue records; normal session
-  # delivery waits remain intentionally paused under the /afk contract.
+  # Away mode's own daemon consumes new durable queue records, and the external
+  # listener deliberately stands down for it under the /afk contract.
   fm_pusher_healthy "$STATE" && delivery_armed=1
-elif fm_wake_stub_armed "$STATE" "$STUB" "$FM_HOME"; then
+elif fm_delivery_healthy "$STATE" "$DELIVERY" "$GRACE" "$FM_HOME"; then
+  # Delivery is an externally supervised listener, not an object this turn holds,
+  # so ending a turn cannot end delivery. What this guard still has to catch is a
+  # turn ending while that listener is down, because then nothing will wake the
+  # next one.
   delivery_armed=1
 fi
 [ "$daemon_healthy" -eq 1 ] && [ "$delivery_armed" -eq 1 ] && exit 0

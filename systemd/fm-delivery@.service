@@ -1,0 +1,14 @@
+[Unit]
+Description=Firstmate wake-delivery listener for %I
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Environment=FM_DELIVERY_DAEMON=1
+EnvironmentFile=/%I/state/.delivery-service.env
+ExecStart=/usr/bin/env bash ${FM_DELIVERY_EXEC}
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

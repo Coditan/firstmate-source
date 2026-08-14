@@ -632,21 +632,21 @@ test_dead_supervision_refuses() {
   assert_refuses "supervision is not running" "a reset with no live supervision to wake the next session"
 }
 
-test_unarmed_delivery_with_work_recorded_refuses() {
+test_down_delivery_with_work_recorded_refuses() {
   make_case
   fm_write_meta "$STATE_DIR/beta.meta" 'window=fmtest:fm-beta' 'harness=claude' 'kind=ship'
-  rm -rf "$STATE_DIR/.wake-stub.lock"
-  assert_refuses "wake delivery is not armed" "a reset that would strand recorded work with no way to wake"
+  rm -rf "$STATE_DIR/.delivery.lock"
+  assert_refuses "wake-delivery listener is not running" "a reset that would strand recorded work with no way to wake"
 }
 
-test_unarmed_delivery_with_no_work_proceeds() {
+test_down_delivery_with_no_work_proceeds() {
   local out
   make_case
-  rm -rf "$STATE_DIR/.wake-stub.lock"
+  rm -rf "$STATE_DIR/.delivery.lock"
   run_reset --check
   out=$RESET_OUT
-  expect_code 0 "$RESET_CODE" "an idle home must not be blocked by an unarmed delivery wait"
-  pass "with nothing recorded to wake for, an unarmed delivery wait does not block the reset"
+  expect_code 0 "$RESET_CODE" "an idle home must not be blocked by a down delivery listener"
+  pass "with nothing recorded to wake for, a down delivery listener does not block the reset"
 }
 
 # --- identity and harness ---------------------------------------------------
@@ -976,7 +976,7 @@ test_watcher_process_enqueues_the_ceiling_wake() {
   make_case
   # The fixture's recorded supervision locks belong to the test shell, which would
   # make a real watcher stand down as a duplicate.
-  rm -rf "$STATE_DIR/.watch.lock" "$STATE_DIR/.wake-stub.lock"
+  rm -rf "$STATE_DIR/.watch.lock" "$STATE_DIR/.delivery.lock"
   out=$(env -u FM_ROOT_OVERRIDE FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$STATE_DIR" \
     PATH="$FAKEBIN:$PATH" FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
@@ -1121,8 +1121,8 @@ test_missing_clear_in_the_restart_matcher_refuses
 test_restart_hook_pointing_elsewhere_refuses
 test_missing_hook_settings_refuses
 test_dead_supervision_refuses
-test_unarmed_delivery_with_work_recorded_refuses
-test_unarmed_delivery_with_no_work_proceeds
+test_down_delivery_with_work_recorded_refuses
+test_down_delivery_with_no_work_proceeds
 test_foreign_session_record_refuses
 test_read_only_session_refuses
 test_receipt_refuses_from_a_read_only_session

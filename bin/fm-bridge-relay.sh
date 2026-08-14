@@ -248,14 +248,14 @@ is_contended_refresh_failure() {
 # is_guard_banner_line: true for a line bin/fm-guard.sh writes to stderr as one
 # of its supervision alarms - the '●'-prefixed banner lines, the one-line
 # reminder it prints for the rest of a stale episode, and its two independent
-# warnings about a missing wake-delivery stub and pending queued wakes, which the
+# warnings about a down wake-delivery listener and pending queued wakes, which the
 # banner dedup never suppresses. All of them belong to the caller, never to
 # fleet-sync's diagnosis.
 is_guard_banner_line() {
   case "$1" in
     "●"*) return 0 ;;
     "WARNING: watcher still down"*) return 0 ;;
-    "WARNING: wake delivery stub missing"*) return 0 ;;
+    "WARNING: wake delivery listener "*) return 0 ;;
     "WARNING: queued wakes pending"*) return 0 ;;
     *) return 1 ;;
   esac

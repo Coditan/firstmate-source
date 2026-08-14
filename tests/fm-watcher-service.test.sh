@@ -150,7 +150,7 @@ test_missing_systemd_unit_requires_separate_consent() {
 }
 
 test_keeper_fallback_establishes_real_watcher() {
-  local fakebin home log manager arm_pid old_watcher_pid new_watcher_pid i
+  local fakebin home log manager old_watcher_pid new_watcher_pid
   fakebin="$TMP_ROOT/keeper-bin"
   home="$TMP_ROOT/keeper-home"
   log="$TMP_ROOT/keeper-tmux.log"
@@ -171,22 +171,12 @@ test_keeper_fallback_establishes_real_watcher() {
   manager=$(cat "$home/state/.watch.lock/manager")
   [ "$manager" = keeper ] || fail "fallback watcher recorded manager=$manager instead of keeper"
   assert_contains "$(cat "$log")" "new-session -d -s fm-watch-" "fallback did not start a detached home-scoped keeper"
-  FM_HOME="$home" FM_WATCH_SERVICE_FORCE_BACKEND=keeper FM_WATCH_TMUX="$fakebin/tmux" \
-    FM_TEST_TMUX_LOG="$log" FM_TEST_KEEPER_PID_FILE="$TMP_ROOT/keeper.pid" \
-    FM_ARM_CONFIRM_TIMEOUT=5 FM_WAKE_WAIT_POLL=0.05 "$ROOT/bin/fm-watch-arm.sh" > "$TMP_ROOT/keeper-arm.out" &
-  arm_pid=$!
-  i=0
-  while [ ! -e "$home/state/.wake-stub.lock/pid" ] && [ "$i" -lt 100 ]; do
-    sleep 0.05
-    i=$((i + 1))
-  done
-  [ -e "$home/state/.wake-stub.lock/pid" ] || fail "public arm did not establish the delivery stub"
+  # A queued wake must survive with no consumer at all: nothing in this session
+  # holds delivery any more, so the only thing that may touch the queue is a
+  # model turn running the drain.
   FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" . "$ROOT/bin/fm-wake-lib.sh"
   fm_wake_append signal keeper "signal: keeper smoke"
-  wait "$arm_pid" || fail "public arm did not exit cleanly after the queued wake"
-  assert_contains "$(cat "$TMP_ROOT/keeper-arm.out")" "watcher: attached" "public arm did not honestly report attachment"
-  assert_contains "$(cat "$TMP_ROOT/keeper-arm.out")" "wake: queued" "public arm did not await the delivery stub"
-  [ "$(wc -l < "$home/state/.wake-queue" | tr -d '[:space:]')" -eq 1 ] || fail "public arm drained or duplicated the fallback wake"
+  [ "$(wc -l < "$home/state/.wake-queue" | tr -d '[:space:]')" -eq 1 ] || fail "the keeper tier drained or duplicated the fallback wake"
   old_watcher_pid=$(cat "$home/state/.watch.lock/pid")
   printf 'FM_CHECK_INTERVAL=7\n' > "$home/config/x-mode.env"
   FM_HOME="$home" FM_WATCH_SERVICE_FORCE_BACKEND=keeper FM_WATCH_TMUX="$fakebin/tmux" \
@@ -196,7 +186,7 @@ test_keeper_fallback_establishes_real_watcher() {
   new_watcher_pid=$(cat "$home/state/.watch.lock/pid")
   [ "$new_watcher_pid" != "$old_watcher_pid" ] || fail "X-mode cadence change did not restart the keeper watcher"
   [ "$(cat "$home/state/.watch.lock/x-mode-version")" != absent ] || fail "keeper watcher did not record the X-mode version"
-  pass "keeper fallback establishes zero-loss delivery and converges X-mode cadence"
+  pass "keeper fallback keeps the durable queue intact and converges X-mode cadence"
 }
 
 test_installed_unit_converges_source_and_x_mode() {
@@ -436,6 +426,49 @@ test_keeper_reports_a_recorded_path_that_cannot_reach_its_tools() {
   pass "a keeper whose recorded PATH cannot reach its tools reports it, like the systemd tier"
 }
 
+test_keeper_name_migration_and_cross_home_isolation() {
+  local socket shim parent_a parent_b home_a home_b new_a new_b legacy_a pid_a
+  command -v tmux >/dev/null 2>&1 || { echo "skip: tmux not installed"; return 0; }
+  socket="fm-watch-migration-$$"
+  shim="$TMP_ROOT/watch-migration-tmux"
+  cat > "$shim" <<SH
+#!/usr/bin/env bash
+exec $(command -v tmux) -L '$socket' "\$@"
+SH
+  chmod +x "$shim"
+  parent_a="$TMP_ROOT/watch-a"
+  parent_b="$TMP_ROOT/watch-b"
+  home_a="$parent_a/shared-home"
+  home_b="$parent_b/shared-home"
+  mkdir -p "$home_a/state" "$home_a/config" "$home_b/state" "$home_b/config"
+  new_a=$(FM_HOME="$home_a" bash -c '. "$1/bin/fm-keeper-name-lib.sh"; fm_keeper_name watch "$FM_HOME"' _ "$ROOT")
+  new_b=$(FM_HOME="$home_b" bash -c '. "$1/bin/fm-keeper-name-lib.sh"; fm_keeper_name watch "$FM_HOME"' _ "$ROOT")
+  legacy_a=$(FM_HOME="$home_a" bash -c '. "$1/bin/fm-keeper-name-lib.sh"; fm_legacy_keeper_name watch "$FM_HOME"' _ "$ROOT")
+  [ "$new_a" != "$new_b" ] || fail "same-basename homes received the same watcher keeper name"
+  FM_HOME="$home_a" FM_WATCH_SERVICE_FORCE_BACKEND=keeper FM_WATCH_TMUX="$shim" \
+    FM_POLL=1 FM_WATCH_STOP_TIMEOUT=3 FM_ARM_CONFIRM_TIMEOUT=5 "$SERVICE" ensure \
+    || fail "could not establish the watcher keeper before migration"
+  tmux -L "$socket" rename-session -t "$new_a" "$legacy_a"
+  FM_HOME="$home_a" FM_WATCH_SERVICE_FORCE_BACKEND=keeper FM_WATCH_TMUX="$shim" \
+    FM_POLL=1 FM_WATCH_STOP_TIMEOUT=3 FM_ARM_CONFIRM_TIMEOUT=5 "$SERVICE" ensure \
+    || fail "watcher keeper migration did not converge"
+  tmux -L "$socket" has-session -t "$legacy_a" 2>/dev/null \
+    && fail "the proven legacy watcher keeper survived migration"
+  tmux -L "$socket" has-session -t "$new_a" 2>/dev/null \
+    || fail "migration did not establish the collision-resistant watcher keeper"
+  pid_a=$(cat "$home_a/state/.watch-keeper.pid")
+  [ "$pid_a" = "$(tmux -L "$socket" display-message -p -t "$new_a" '#{pane_pid}')" ] \
+    || fail "the watcher keeper record does not point at the migrated session"
+  tmux -L "$socket" new-session -d -s "$new_b" 'sleep 300'
+  FM_HOME="$home_a" FM_WATCH_SERVICE_FORCE_BACKEND=keeper FM_WATCH_TMUX="$shim" \
+    FM_POLL=1 FM_WATCH_STOP_TIMEOUT=3 FM_ARM_CONFIRM_TIMEOUT=5 "$SERVICE" restart \
+    || fail "restarting one watcher home failed"
+  tmux -L "$socket" has-session -t "$new_b" 2>/dev/null \
+    || fail "one home's watcher restart targeted the other home's keeper"
+  tmux -L "$socket" kill-server 2>/dev/null || true
+  pass "watcher keeper migration is ownership-proven and isolated across same-basename homes"
+}
+
 test_unusable_systemd_selects_tmux_keeper
 test_missing_systemd_unit_requires_separate_consent
 test_keeper_fallback_establishes_real_watcher
@@ -445,3 +478,4 @@ test_a_required_tool_this_session_cannot_resolve_is_still_reported
 test_service_path_keeps_every_directory_the_unit_inherited
 test_keeper_reconverges_when_the_resolved_path_moves
 test_keeper_reports_a_recorded_path_that_cannot_reach_its_tools
+test_keeper_name_migration_and_cross_home_isolation

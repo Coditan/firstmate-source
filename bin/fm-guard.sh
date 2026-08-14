@@ -28,7 +28,7 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 GRACE=${FM_GUARD_GRACE:-300}
 WATCH="$SCRIPT_DIR/fm-watch.sh"
-STUB="$SCRIPT_DIR/fm-wake-wait.sh"
+DELIVERY="$SCRIPT_DIR/fm-delivery.sh"
 queue_pending=false
 READ_ONLY=${FM_GUARD_READ_ONLY:-0}
 case "$READ_ONLY" in 1|true|TRUE|yes|YES) READ_ONLY=1 ;; *) READ_ONLY=0 ;; esac
@@ -40,6 +40,8 @@ STALE_BANNER_MARKER="$STATE/.guard-watcher-stale-banner"
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-delivery-lib.sh
+. "$SCRIPT_DIR/fm-delivery-lib.sh"
 # shellcheck source=bin/fm-tangle-lib.sh
 . "$SCRIPT_DIR/fm-tangle-lib.sh"
 # shellcheck source=bin/fm-supervision-lib.sh
@@ -172,11 +174,18 @@ x_mode=0
 
 daemon_healthy=false
 fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME" && daemon_healthy=true
+# Delivery is no longer this session's object to arm, so the question is not
+# "did this session arm a waiter" but "is this home's external listener up".
+# Away mode is the one case where a listener that is deliberately standing down
+# is still correct coverage, because the away daemon is delivering instead.
 delivery_armed=false
+delivery_verdict=
 if [ -e "$STATE/.afk" ]; then
   delivery_armed=true
-elif fm_wake_stub_armed "$STATE" "$STUB" "$FM_HOME"; then
+elif fm_delivery_healthy "$STATE" "$DELIVERY" "$GRACE" "$FM_HOME"; then
   delivery_armed=true
+else
+  delivery_verdict=$(fm_delivery_report "$STATE" "$DELIVERY" "$GRACE" "$FM_HOME" || true)
 fi
 
 # No fresh watcher with tasks in flight is the dangerous state: emit a prominent,
@@ -222,15 +231,22 @@ else
 fi
 
 if [ "$daemon_healthy" = true ] && [ "$delivery_armed" = false ]; then
+  # The stable prefix leads and the verdict follows it, rather than the verdict
+  # leading: bin/fm-bridge-relay.sh classifies this home's guard alarms by line
+  # prefix to relay them unchanged, and a line that started with a varying
+  # verdict word would need the relay to know every verdict this guard can
+  # produce. One owner for the verdict vocabulary, one stable prefix for the
+  # readers that only need to recognise the line.
   if [ "$READ_ONLY" -eq 1 ]; then
-    echo "WARNING: wake delivery stub missing - the session holding the fleet lock must re-arm its harness delivery wait." >&2
+    printf 'WARNING: wake delivery listener %s - the session holding the fleet lock must repair it.\n' \
+      "${delivery_verdict:-down}" >&2
   else
     delivery_fix=$("$SCRIPT_DIR/fm-supervision-instructions.sh" \
       --afk 0 \
       --x-mode "$x_mode" \
       --queue-pending "$queue_arg" \
-      --repair-line 2>/dev/null || printf '%s\n' 'Re-arm wake delivery according to the session-start operating block.')
-    printf 'WARNING: wake delivery stub missing - %s\n' "$delivery_fix" >&2
+      --repair-line 2>/dev/null || printf '%s\n' 'Repair wake delivery according to the session-start operating block.')
+    printf 'WARNING: wake delivery listener %s - %s\n' "${delivery_verdict:-down}" "$delivery_fix" >&2
   fi
 fi
 

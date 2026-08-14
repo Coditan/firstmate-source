@@ -106,7 +106,7 @@ init_changed_fixture_repo() {
     fm-afk-pi-herdr-return-e2e.test.sh \
     fm-backend.test.sh \
     fm-pr-merge.test.sh \
-    fm-pi-watch-extension.test.sh \
+    fm-turnend-guard.test.sh \
     fm-afk-return.test.sh \
     fm-bearings-snapshot.test.sh \
     fm-backend-cmux.test.sh \
@@ -122,11 +122,9 @@ init_changed_fixture_repo() {
   printf '# .agents/skills/example/SKILL.md\n' >>"$repo/tests/fm-captain-translation-contract.test.sh"
   printf '# .claude/settings.json\n# .pi/extensions/fm-primary-turnend-guard.ts\n' \
     >>"$repo/tests/fm-cd-pretool-check.test.sh"
-  printf '# .pi/extensions/fm-primary-pi-watch.ts\n' >>"$repo/tests/fm-pi-watch-extension.test.sh"
   mkdir -p "$repo/.agents/skills/example" "$repo/.claude" "$repo/.pi/extensions" "$repo/src"
   : >"$repo/.agents/skills/example/SKILL.md"
   : >"$repo/.claude/settings.json"
-  : >"$repo/.pi/extensions/fm-primary-pi-watch.ts"
   : >"$repo/.pi/extensions/fm-primary-turnend-guard.ts"
   : >"$repo/src/unmapped.ts"
   git -C "$repo" init -q
@@ -164,12 +162,10 @@ test_changed_dependency_selection_and_unmapped_failure() {
 
   printf '\n' >>"$repo/.agents/skills/example/SKILL.md"
   printf '\n' >>"$repo/.claude/settings.json"
-  printf '\n' >>"$repo/.pi/extensions/fm-primary-pi-watch.ts"
   printf '\n' >>"$repo/.pi/extensions/fm-primary-turnend-guard.ts"
   listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
   assert_contains "$listed" "tests/fm-captain-translation-contract.test.sh" "skill source selects contract coverage"
   assert_contains "$listed" "tests/fm-cd-pretool-check.test.sh" "Claude and Pi source selects hook coverage"
-  assert_contains "$listed" "tests/fm-pi-watch-extension.test.sh" "Pi source selects watcher coverage"
   git -C "$repo" add .agents .claude .pi
   git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm non-bin-source-change
 
@@ -445,8 +441,21 @@ test_ci_and_docs_call_the_owner() {
     || fail "Herdr CI job must use bounded lab cleanup"
   grep -Fq 'tests-timing-aggregate:' "$CI" \
     || fail "CI must aggregate per-lane timing artifacts"
-  grep -Fq 'timeout-minutes: 20' "$CI" \
-    || fail "portable serial hang tripwire must be timeout-minutes: 20"
+  command -v python3 >/dev/null 2>&1 \
+    || fail "python3 is required to validate CI workflow YAML"
+  python3 -c 'import yaml' >/dev/null 2>&1 \
+    || fail "python3 PyYAML is required to validate CI workflow YAML"
+  python3 - "$CI" <<'PY' \
+    || fail "portable serial hang tripwire must be numeric timeout-minutes: 40"
+import sys
+import yaml
+
+with open(sys.argv[1], encoding="utf-8") as workflow_file:
+    workflow = yaml.safe_load(workflow_file)
+timeout = workflow["jobs"]["tests-portable-serial"]["timeout-minutes"]
+if type(timeout) is not int or timeout != 40:
+    raise SystemExit(f"expected numeric 40, got {timeout!r}")
+PY
   grep -Fq 'timeout-minutes: 10' "$CI" \
     || fail "portable parallel shards must keep a hang tripwire (10m)"
   # Interim full-suite 25m portable timeout must not remain after sharding.
