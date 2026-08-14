@@ -98,7 +98,7 @@ Each budget is checked in **both directions** - still open one second before, cl
 
 That seam is not a way around the measurement, and one case proves it: with no clock file at all, a batch is held and released on real elapsed wall time, so the controlled-clock cases are measuring the arithmetic the fleet runs on rather than a fiction.
 
-Fourteen load-bearing assertions were mutation-checked on 2026-08-14 rather than trusted for being green:
+Fifteen load-bearing assertions were mutation-checked on 2026-08-14 rather than trusted for being green:
 
 | Mutation | Caught by |
 |---|---|
@@ -116,6 +116,7 @@ Fourteen load-bearing assertions were mutation-checked on 2026-08-14 rather than
 | Freeze the real clock | `the batch was not released after its real delay elapsed` |
 | Ignore a home's config file | `a configured high delay was not used` |
 | Let a mistyped delay become the shipped default | `an unusable configured delay was accepted` |
+| Accept an immediate delay override that the class cannot honor | `a configured immediate delay was accepted instead of refused` |
 
 The drop test has its own control.
 One case runs a mixed burst of twenty-two events across every class, with immediate events mid-stream so the bypass path runs inside the load rather than beside it, admits it in small passes so the burst crosses pass boundaries, and requires the batched sequences to equal the journal's own sequences exactly.
