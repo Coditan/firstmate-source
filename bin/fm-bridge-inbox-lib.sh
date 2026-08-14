@@ -2,6 +2,14 @@
 # Shared read-only Bridge inbox detection and durable wake publication.
 #
 # Source after bin/fm-wake-lib.sh.
+#
+# A Bridge envelope is the one event in this fleet's notification stream that
+# states its own urgency in so many words, in its .priority field, and it is
+# therefore the surface where an under-declaration can be seen and corrected.
+# bridge_inbox_check delivers the EFFECTIVE priority - bin/fm-urgency-lib.sh's
+# promoted reading of the pending envelopes - while bridge_check_interval below
+# deliberately still reads the DECLARED one, because how long an event of a
+# given urgency waits belongs to the batching unit and not to this file.
 # bridge_inbox_surface [fetch]
 #   Serializes fetch, signature comparison, wake append, and surfaced-marker
 #   publication across the slow watcher and the fast frequency monitor.
@@ -10,6 +18,10 @@
 #   Prints one actionable reason only when it durably appended a new wake.
 
 FM_BRIDGE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if ! command -v fm_urgency_effective >/dev/null 2>&1; then
+  # shellcheck source=bin/fm-urgency-lib.sh
+  . "$FM_BRIDGE_LIB_DIR/fm-urgency-lib.sh"
+fi
 FM_BRIDGE_LIB_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$FM_BRIDGE_LIB_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_BRIDGE_LIB_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-${STATE:-$FM_HOME/state}}"
@@ -60,6 +72,185 @@ bridge_pending_priority_scan() {
 }
 export -f bridge_pending_priority_scan
 
+# Emit "<priority><US><subject><US><kind>" for every pending envelope, one per line.
+#
+# Deliberately does only the git and jq work: the urgency decision is made by
+# bridge_pending_urgency in the calling shell, where it is pure string matching
+# that costs nothing and cannot be cut short by the bounded-run timeout. Subject
+# tabs and newlines are flattened here so one envelope is always one line.
+bridge_pending_envelope_scan() {
+  local inbox="inbox/$BRIDGE_VESSEL/new" f envelope parsed evidence scan_status
+  git -C "$BRIDGE_ROOT" ls-tree -z --name-only "origin/main:$inbox" 2>/dev/null |
+  while IFS= read -r -d '' f; do
+    case "$f" in *.json) ;; *) continue ;; esac
+    evidence=$(printf '%s' "$f" | tr '\037\t\r\n' '    ')
+    if envelope=$(git -C "$BRIDGE_ROOT" show "origin/main:$inbox/$f" 2>/dev/null) && \
+      parsed=$(printf '%s' "$envelope" | jq -er '
+        if ((.priority // "normal") | type) == "string" and ((.subject // "") | type) == "string"
+        then [(.priority // "normal"), ((.subject // "") | gsub("[\u001f\t\r\n]"; " "))] | join("\u001f")
+        else error("non-string envelope field")
+        end
+      ' 2>/dev/null); then
+      printf '%s\037ok\n' "$parsed"
+    else
+      printf 'normal\037unreadable bridge envelope: %s\037unreadable\n' "$evidence"
+    fi
+  done
+  scan_status=("${PIPESTATUS[@]}")
+  [ "${scan_status[0]}" -eq 0 ] && [ "${scan_status[1]}" -eq 0 ] || return 1
+  printf '%s\n' '__FM_BRIDGE_ENVELOPE_SCAN_COMPLETE__'
+}
+export -f bridge_pending_envelope_scan
+
+# The pending inbox's declared and effective highest priority, in one pass.
+#
+# Promotion is decided PER ENVELOPE against that envelope's own subject, then
+# maximised, because an envelope's urgency is a property of its own content: a
+# firewall opened to the internet does not become ordinary by arriving beside
+# nine routine replies. Sets BRIDGE_URGENCY_DECLARED, BRIDGE_URGENCY_EFFECTIVE,
+# BRIDGE_URGENCY_RULE, BRIDGE_URGENCY_MATCH, BRIDGE_URGENCY_SUBJECT, and the
+# winning envelope's BRIDGE_URGENCY_PROMOTED_EFFECTIVE independently from the
+# inbox-wide effective maximum. BRIDGE_URGENCY_COMPLETE says whether every
+# pending envelope was read. Values are "none" or empty when nothing is pending.
+#
+# Cached against the inbox signature exactly as bridge_pending_priority is, so
+# an unchanged inbox costs one rev-parse rather than a read of every envelope.
+BRIDGE_URGENCY_DECLARED=none
+BRIDGE_URGENCY_EFFECTIVE=none
+BRIDGE_URGENCY_RULE=
+BRIDGE_URGENCY_MATCH=
+BRIDGE_URGENCY_SUBJECT=
+BRIDGE_URGENCY_PROMOTED_EFFECTIVE=none
+BRIDGE_URGENCY_COMPLETE=0
+bridge_pending_urgency() {  # [<signature>] [<vessel>]
+  local sig=${1:-} vessel=${2:-$BRIDGE_VESSEL} cache cache_tmp out
+  local cached_sig="" cached_declared="" cached_effective="" cached_rule=""
+  local cached_match="" cached_subject="" cached_promoted_effective="" cache_complete=0 cache_valid=0
+  local cached_declared_rank cached_effective_rank cached_promoted_rank
+  local priority subject scan_kind rank declared_rank=-1 effective_rank=-1
+  local envelope_declared_rank envelope_effective_rank raise=-1 winning_raise=-1 winning_effective_rank=-1
+
+  BRIDGE_URGENCY_DECLARED=none
+  BRIDGE_URGENCY_EFFECTIVE=none
+  BRIDGE_URGENCY_RULE=
+  BRIDGE_URGENCY_MATCH=
+  BRIDGE_URGENCY_SUBJECT=
+  BRIDGE_URGENCY_PROMOTED_EFFECTIVE=none
+  BRIDGE_URGENCY_COMPLETE=0
+
+  [ -n "$vessel" ] || return 0
+  [ -d "$BRIDGE_ROOT/.git" ] || return 0
+  cache="$STATE/.bridge-urgency-cache$(bridge_state_suffix "$vessel")"
+  [ -n "$sig" ] || sig=$(bridge_inbox_signature "$vessel")
+
+  if [ -f "$cache" ]; then
+    if {
+      IFS= read -r cached_sig &&
+        IFS= read -r cached_declared &&
+        IFS= read -r cached_effective &&
+        IFS= read -r cached_rule &&
+        IFS= read -r cached_match &&
+        IFS= read -r cached_subject &&
+        IFS= read -r cached_promoted_effective &&
+        ! IFS= read -r _
+    } < "$cache" 2>/dev/null; then
+      cache_complete=1
+    fi
+    if [ "$cache_complete" -eq 1 ]; then
+      case "$cached_declared" in low|normal|high|immediate) ;; *) cache_complete=0 ;; esac
+      case "$cached_effective" in low|normal|high|immediate) ;; *) cache_complete=0 ;; esac
+    fi
+    if [ "$cache_complete" -eq 1 ]; then
+      cached_declared_rank=$(fm_urgency_rank "$cached_declared")
+      cached_effective_rank=$(fm_urgency_rank "$cached_effective")
+      if [ -z "$cached_rule" ]; then
+        [ "$cached_promoted_effective" = none ] && [ -z "$cached_match$cached_subject" ] && \
+          [ "$cached_effective_rank" -eq "$cached_declared_rank" ] && cache_valid=1
+      else
+        case "$cached_promoted_effective" in
+          low|normal|high|immediate)
+            cached_promoted_rank=$(fm_urgency_rank "$cached_promoted_effective")
+            [ -n "$cached_match" ] && [ -n "$cached_subject" ] && \
+              [ "$cached_promoted_rank" -gt "$cached_declared_rank" ] && \
+              [ "$cached_effective_rank" -ge "$cached_promoted_rank" ] && cache_valid=1
+            ;;
+        esac
+      fi
+    fi
+  fi
+  if [ "$cache_valid" -eq 1 ] && { [ "$sig" = timeout ] || [ "$sig" = "$cached_sig" ]; }; then
+    BRIDGE_URGENCY_DECLARED=$cached_declared
+    BRIDGE_URGENCY_EFFECTIVE=$cached_effective
+    BRIDGE_URGENCY_RULE=$cached_rule
+    BRIDGE_URGENCY_MATCH=$cached_match
+    BRIDGE_URGENCY_SUBJECT=$cached_subject
+    BRIDGE_URGENCY_PROMOTED_EFFECTIVE=$cached_promoted_effective
+    BRIDGE_URGENCY_COMPLETE=1
+    return 0
+  fi
+  [ "$sig" != timeout ] || return 1
+
+  BRIDGE_URGENCY_DECLARED=none
+  BRIDGE_URGENCY_EFFECTIVE=none
+  BRIDGE_URGENCY_RULE=
+  BRIDGE_URGENCY_MATCH=
+  BRIDGE_URGENCY_SUBJECT=
+  BRIDGE_URGENCY_PROMOTED_EFFECTIVE=none
+  out=$(BRIDGE_ROOT="$BRIDGE_ROOT" BRIDGE_VESSEL="$vessel" bridge_run_bounded bash -c 'bridge_pending_envelope_scan')
+  while IFS=$'\037' read -r priority subject scan_kind; do
+    if [ "$priority" = __FM_BRIDGE_ENVELOPE_SCAN_COMPLETE__ ]; then
+      BRIDGE_URGENCY_COMPLETE=1
+      continue
+    fi
+    [ -n "$priority" ] || continue
+    envelope_declared_rank=$(fm_urgency_rank "$priority")
+    [ "$envelope_declared_rank" -le "$declared_rank" ] || declared_rank=$envelope_declared_rank
+    if [ "$scan_kind" = unreadable ]; then
+      FM_URGENCY_EFFECTIVE=immediate
+      FM_URGENCY_RULE=unreadable-envelope
+      FM_URGENCY_MATCH=$subject
+    else
+      fm_urgency_effective "$priority" "$subject" || true
+    fi
+    envelope_effective_rank=$(fm_urgency_rank "$FM_URGENCY_EFFECTIVE")
+    [ "$envelope_effective_rank" -le "$effective_rank" ] || effective_rank=$envelope_effective_rank
+    raise=$((envelope_effective_rank - envelope_declared_rank))
+    if [ "$raise" -gt 0 ] && { [ "$raise" -gt "$winning_raise" ] || \
+      { [ "$raise" -eq "$winning_raise" ] && [ "$envelope_effective_rank" -gt "$winning_effective_rank" ]; }; }; then
+      winning_raise=$raise
+      winning_effective_rank=$envelope_effective_rank
+      BRIDGE_URGENCY_DECLARED=$priority
+      BRIDGE_URGENCY_PROMOTED_EFFECTIVE=$FM_URGENCY_EFFECTIVE
+      BRIDGE_URGENCY_RULE=$FM_URGENCY_RULE
+      BRIDGE_URGENCY_MATCH=$FM_URGENCY_MATCH
+      BRIDGE_URGENCY_SUBJECT=$subject
+    fi
+  done <<EOF
+$out
+EOF
+
+  [ "$BRIDGE_URGENCY_COMPLETE" -eq 1 ] || return 1
+
+  if [ "$winning_raise" -lt 0 ]; then
+    [ "$declared_rank" -lt 0 ] || BRIDGE_URGENCY_DECLARED=$(fm_urgency_level "$declared_rank")
+  fi
+  [ "$effective_rank" -lt 0 ] || BRIDGE_URGENCY_EFFECTIVE=$(fm_urgency_level "$effective_rank")
+  # Empty inboxes need no cache entry; the surfaced marker is cleared instead.
+  if [ "$BRIDGE_URGENCY_DECLARED" != none ]; then
+    cache_tmp=$(mktemp "${cache}.tmp.XXXXXX" 2>/dev/null) || cache_tmp=
+    if [ -n "$cache_tmp" ]; then
+      if printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$sig" "$BRIDGE_URGENCY_DECLARED" \
+        "$BRIDGE_URGENCY_EFFECTIVE" "$BRIDGE_URGENCY_RULE" "$BRIDGE_URGENCY_MATCH" \
+        "$BRIDGE_URGENCY_SUBJECT" "$BRIDGE_URGENCY_PROMOTED_EFFECTIVE" > "$cache_tmp" 2>/dev/null; then
+        mv -f "$cache_tmp" "$cache" 2>/dev/null || rm -f "$cache_tmp" 2>/dev/null || true
+      else
+        rm -f "$cache_tmp" 2>/dev/null || true
+      fi
+    fi
+  fi
+  return 0
+}
+
 bridge_inbox_signature_scan() {
   local inbox="inbox/$BRIDGE_VESSEL/new" sig
   sig=$(git -C "$BRIDGE_ROOT" rev-parse "origin/main:$inbox" 2>/dev/null || true)
@@ -107,13 +298,35 @@ bridge_check_interval() {
   echo "${CHECK_INTERVAL:-300}"
 }
 
+# Compose the wake payload for one vessel's pending inbox.
+#
+# "highest=" carries the EFFECTIVE priority, so an envelope that arrived marked
+# below what its own subject says is delivered at the higher one rather than
+# read as ordinary traffic. When a promotion happened the row also names the
+# declared priority it came from and the rule that raised it, so the supervisor
+# reading the wake can tell a promoted row from a genuinely urgent one without
+# opening anything. The matched text and the subject stay OUT of the payload and
+# go into the promotion record instead: this row is deliberately free of envelope
+# content, and bin/fm-urgency.sh promotions is where the evidence is read back.
 bridge_inbox_check() {
   local vessel=$1 sig=${2:-}
-  local inbox="inbox/$vessel/new" highest count
-  highest=$(bridge_pending_priority "$sig" "$vessel")
-  [ "$highest" != none ] || return 0
+  local inbox="inbox/$vessel/new" count row
+  bridge_pending_urgency "$sig" "$vessel" || return 75
+  [ "$BRIDGE_URGENCY_EFFECTIVE" != none ] || return 0
   count=$(bridge_run_bounded git -C "$BRIDGE_ROOT" ls-tree --name-only "origin/main:$inbox" | awk '/[.]json$/' | wc -l | tr -d '[:space:]')
-  printf 'bridge-inbox %s pending=%s highest=%s\n' "$vessel" "${count:-0}" "$highest"
+  row=$(printf 'bridge-inbox %s pending=%s highest=%s' "$vessel" "${count:-0}" "$BRIDGE_URGENCY_EFFECTIVE")
+  if [ -n "$BRIDGE_URGENCY_RULE" ]; then
+    row="$row declared=$BRIDGE_URGENCY_DECLARED promoted-by=$BRIDGE_URGENCY_RULE"
+    # Recording cannot hold the wake back: a promoted event is delivered at its
+    # promoted priority whether or not the record of why reached disk.
+    fm_urgency_record check "bridge-inbox/$vessel" \
+      "$BRIDGE_URGENCY_DECLARED" "$BRIDGE_URGENCY_PROMOTED_EFFECTIVE" \
+      "$BRIDGE_URGENCY_RULE" "$BRIDGE_URGENCY_MATCH" "$BRIDGE_URGENCY_SUBJECT" \
+      || printf 'fm-bridge-inbox: could not record the promotion of %s from %s to %s (rule %s); it is still delivered at %s\n' \
+        "$vessel" "$BRIDGE_URGENCY_DECLARED" "$BRIDGE_URGENCY_PROMOTED_EFFECTIVE" \
+        "$BRIDGE_URGENCY_RULE" "$BRIDGE_URGENCY_EFFECTIVE" >&2
+  fi
+  printf '%s\n' "$row"
 }
 
 bridge_inbox_fetch() {
@@ -121,7 +334,7 @@ bridge_inbox_fetch() {
 }
 
 bridge_inbox_surface() {
-  local fetch=${1:-0} vessel marker sig surfaced vessel_out out="" reason="" status=0 i
+  local fetch=${1:-0} vessel marker sig surfaced vessel_out vessel_status out="" reason="" status=0 i
   local marker_paths=() marker_sigs=()
 
   [ "${#BRIDGE_VESSELS[@]}" -gt 0 ] || return 0
@@ -136,6 +349,8 @@ bridge_inbox_surface() {
     [ "$sig" != timeout ] || continue
     [ "$sig" != "$surfaced" ] || continue
     vessel_out=$(bridge_inbox_check "$vessel" "$sig")
+    vessel_status=$?
+    [ "$vessel_status" -ne 75 ] || continue
     if [ -n "$vessel_out" ]; then
       out="${out:+$out; }$vessel_out"
       marker_paths[${#marker_paths[@]}]=$marker

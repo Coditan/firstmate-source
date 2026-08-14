@@ -434,7 +434,9 @@ EOF
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
   calls=$(wc -l < "$counter" | tr -d '[:space:]')
-  [ "$calls" -le 5 ] || \
+  # Cold discovery now includes the one envelope scan that computes effective
+  # urgency for delivery; later ticks must still stay behind the cadence gate.
+  [ "$calls" -le 6 ] || \
     fail "repeated unchanged loop checks kept spawning bounded scans ($calls calls across several ticks)"
   [ -e "$home/state/.last-bridge-discovery" ] || fail "Bridge discovery cadence marker was never written"
   pass "repeated unchanged loop checks do not keep spawning Bridge scans within the urgent window"

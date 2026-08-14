@@ -687,7 +687,8 @@ These paths need `jq` to build the JSON payload, but they run before token and n
 `bin/fm-watch.sh` and the optional fast frequency monitor read `inbox/<vessel>/new/` from a Bridge clone's fetched `origin/main`, turning pending envelopes into durable `check:` wakes without acknowledging or otherwise mutating them.
 `FM_BRIDGE_VESSEL` selects one or more space-separated vessels, each watched independently, and falls through to local `config/bridge-vessel`; when neither is set the feature is silent and disabled.
 A pre-existing single-vessel value keeps working unchanged: it is simply a one-element list.
-`FM_BRIDGE_ROOT` selects the shared clone all listed vessels read from, while `FM_BRIDGE_URGENT_CHECK_INTERVAL` tightens the shared fetch-and-check cadence whenever any one vessel's highest pending priority is high or immediate.
+`FM_BRIDGE_ROOT` selects the shared clone all listed vessels read from, while `FM_BRIDGE_URGENT_CHECK_INTERVAL` tightens the shared fetch-and-check cadence whenever any one vessel's highest declared pending priority is high or immediate.
+Urgency promotion changes the priority delivered in the wake without changing this declared-priority cadence; `docs/urgency-promotion.md` owns that boundary.
 The watcher caches each vessel's fetched tree signature and derived priority separately and surfaces each vessel's unchanged pending tree once, so one vessel's wake never suppresses or is suppressed by another's; fetches and reads are bounded with `FM_CHECK_TIMEOUT`.
 The frequency monitor deliberately narrows that compatibility list to its first vessel and fetches it every `FM_FREQUENCY_MONITOR_INTERVAL` seconds.
 Both paths share the same signature and marker implementation, so the slow fallback and fast service cannot drift in their definition of new mail or duplicate one signature during a concurrent check.
@@ -768,7 +769,7 @@ FM_CONTEXT_CHECK_INTERVAL=300   # seconds between the watcher's context-ceiling 
 FM_CONTEXT_ERROR_RESURFACE=3600   # seconds an unchanged context-ceiling report stays quiet before it is made again; a changed branch class is never held
 FM_BRIDGE_VESSEL=         # optional override for config/bridge-vessel; one or more space-separated vessels; absent disables Bridge inbox scanning
 FM_BRIDGE_ROOT=$FM_HOME/projects/coditan-bridge   # Bridge clone whose origin/main ref the watcher reads
-FM_BRIDGE_URGENT_CHECK_INTERVAL=30   # Bridge-only cadence while highest pending priority is high or immediate
+FM_BRIDGE_URGENT_CHECK_INTERVAL=30   # Bridge-only cadence while highest declared pending priority is high or immediate
 FM_FREQUENCY_MONITOR_INTERVAL=5   # seconds between plain-shell Bridge fetch/check cycles in the optional fast service
 FM_FREQUENCY_MONITOR_CONFIRM_TIMEOUT=10   # seconds fm-frequency-monitor-service waits to confirm a fresh unit before reporting failure
 FM_WAKE_ECHO_BYTES=8192   # total bytes of drained queue records one bin/fm-wake-drain.sh may echo into a wake turn; anything past it is withheld from the echo, never discarded, and the drained file is preserved under state/.wake-drain-overflow.<epoch>.<pid> with the path printed; a non-numeric or zero value falls back to 8192 (docs/supervision-cost.md "Repair 2")
