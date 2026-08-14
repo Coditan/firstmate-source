@@ -134,12 +134,12 @@ FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel'
 # guessing which session a bare name meant is the very thing this gate exists to
 # stop a probe from doing. Every production caller already passes the
 # session-qualified target recorded in state/<id>.meta's window=.
-fm_tmux_resolve_pane() {  # <target> -> prints pane id, or returns 1
-  local target=${1:-} listing named id
+fm_tmux_resolve_pane() {  # <target> [tmux-command] -> prints pane id, or returns 1
+  local target=${1:-} tmux_command=${2:-tmux} listing named id
   [ -n "$target" ] || return 1
-  listing=$(tmux list-panes -t "$target" -F '#{pane_id}' 2>/dev/null) || return 1
+  listing=$("$tmux_command" list-panes -t "$target" -F '#{pane_id}' 2>/dev/null) || return 1
   [ -n "$listing" ] || return 1
-  named=$(tmux display-message -p -t "$target" '#{pane_id}' 2>/dev/null) || return 1
+  named=$("$tmux_command" display-message -p -t "$target" '#{pane_id}' 2>/dev/null) || return 1
   [ -n "$named" ] || return 1
   while read -r id _; do
     if [ "$id" = "$named" ]; then

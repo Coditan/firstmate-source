@@ -8,7 +8,6 @@ set -u
 fm_test_tmproot TMP_ROOT fm-calm-pi-extension
 EXT="$ROOT/.pi/extensions/fm-calm.ts"
 VISIBILITY="$ROOT/.pi/extensions/lib/fm-calm-visibility.ts"
-WATCH_EXT="$ROOT/.pi/extensions/fm-primary-pi-watch.ts"
 OPERATIONAL_INPUT="$ROOT/bin/fm-operational-input.sh"
 PI_OPERATIONAL_INPUT="$ROOT/.pi/extensions/lib/fm-operational-input.ts"
 PI_PACKAGE_DIR=${FM_PI_PACKAGE_DIR:-"$(npm root -g 2>/dev/null)/@earendil-works/pi-coding-agent"}
@@ -56,12 +55,11 @@ find_chrome() {
 }
 
 test_static_contract() {
-  local text visibility watch operational
+  local text visibility operational
   assert_present "$EXT" "tracked Pi calm extension is missing"
   assert_present "$VISIBILITY" "tracked Pi calm visibility policy is missing"
   text=$(cat "$EXT")
   visibility=$(cat "$VISIBILITY")
-  watch=$(cat "$WATCH_EXT")
   operational=$(cat "$PI_OPERATIONAL_INPUT")
   assert_contains "$text" 'pi.registerCommand("calm"' "Pi calm extension does not register /calm"
   assert_contains "$text" 'pi.on("session_start"' "Pi calm extension does not reset on every session start"
@@ -88,12 +86,10 @@ test_static_contract() {
   # shellcheck disable=SC2016 # Backticks are literal prompt markup.
   assert_not_contains "$visibility" 'Run `bin/fm-session-start.sh`' "current Calm classification still matches session-start payload prose"
   assert_not_contains "$visibility" 'FIRSTMATE_OP: ' "current Calm classification duplicates the canonical marker grammar"
-  assert_contains "$watch" 'calmHides("assistant-tool-call")' "Firstmate watcher tool does not participate in Calm presentation"
-  assert_contains "$watch" 'renderShell: "self"' "Firstmate watcher tool cannot remove its complete shell"
   for name in Read Bash Edit Write Grep Find Ls; do
     assert_contains "$text" "create${name}ToolDefinition" "Pi calm extension does not wrap the $name built-in"
   done
-  pass "Pi calm extension has one default-off visibility policy, supported redraw controls, and the Firstmate watcher-tool integration"
+  pass "Pi calm extension has one default-off visibility policy and supported redraw controls"
 }
 
 test_rendering_and_session_lifecycle() {
@@ -114,13 +110,12 @@ test_rendering_and_session_lifecycle() {
   cp "$EXT" "$fixture/fm-calm.ts"
   cp "$VISIBILITY" "$fixture/lib/fm-calm-visibility.ts"
   cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$fixture/lib/fm-operational-input.ts"
-  cp "$WATCH_EXT" "$fixture/fm-primary-pi-watch.ts"
   ln -s "$PI_PACKAGE_DIR" "$fixture/node_modules/@earendil-works/pi-coding-agent"
   ln -s "$PI_PACKAGE_DIR/node_modules/@earendil-works/pi-tui" "$fixture/node_modules/@earendil-works/pi-tui"
   ln -s "$PI_PACKAGE_DIR/node_modules/typebox" "$fixture/node_modules/typebox"
   printf '%s\n' '{"type":"module"}' >"$fixture/package.json"
 
-  out=$(cd "$fixture" && EXT="$fixture/fm-calm.ts" WATCH_EXT="$fixture/fm-primary-pi-watch.ts" FM_HOME="$fixture/home" FM_OPERATIONAL_INPUT_SCRIPT="$OPERATIONAL_INPUT" PI_PACKAGE_DIR="$PI_PACKAGE_DIR" node --input-type=module 2>&1 <<'JS'
+  out=$(cd "$fixture" && EXT="$fixture/fm-calm.ts" FM_HOME="$fixture/home" FM_OPERATIONAL_INPUT_SCRIPT="$OPERATIONAL_INPUT" PI_PACKAGE_DIR="$PI_PACKAGE_DIR" node --input-type=module 2>&1 <<'JS'
 import { writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -327,54 +322,6 @@ for (const [name, args, result] of cases) {
     throw new Error(`${name} expanded rendering changed while calm mode was off`);
   }
   rows.push({ name, baseline, actual });
-}
-
-const watchPi = {
-  ...pi,
-  appendEntry() {},
-  sendMessage() {},
-  registerCommand() {},
-  registerEntryRenderer() {},
-};
-const watchExtension = await import(`${pathToFileURL(process.env.WATCH_EXT).href}?test=${Date.now()}`);
-watchExtension.default(watchPi);
-const watchTool = tools.find((tool) => tool.name === "fm_watch_arm_pi");
-if (!watchTool) throw new Error("Firstmate watcher extension did not register fm_watch_arm_pi");
-const stockWatchTool = { ...watchTool };
-delete stockWatchTool.renderCall;
-delete stockWatchTool.renderResult;
-delete stockWatchTool.renderShell;
-const watchArgs = {};
-const watchResult = {
-  content: [{ type: "text", text: "watcher: started Pi extension arm child 1" }],
-  details: { ok: true, message: "watcher: started Pi extension arm child 1" },
-  isError: false,
-};
-const watchBaseline = new ToolExecutionComponent(
-  "fm_watch_arm_pi",
-  "watch-baseline",
-  watchArgs,
-  { showImages: false },
-  stockWatchTool,
-  renderUi,
-  process.cwd(),
-);
-const watchActual = new ToolExecutionComponent(
-  "fm_watch_arm_pi",
-  "watch-actual",
-  watchArgs,
-  { showImages: false },
-  watchTool,
-  renderUi,
-  process.cwd(),
-);
-for (const row of [watchBaseline, watchActual]) {
-  row.markExecutionStarted();
-  row.setArgsComplete();
-  row.updateResult(watchResult);
-}
-if (JSON.stringify(watchActual.render(100)) !== JSON.stringify(watchBaseline.render(100))) {
-  throw new Error("Firstmate watcher tool changed stock rendering while Calm was off");
 }
 
 const customDefinition = {
@@ -823,7 +770,6 @@ test_interactive_terminal_e2e() {
   cp "$EXT" "$project/.pi/extensions/fm-calm.ts"
   cp "$VISIBILITY" "$project/.pi/extensions/lib/fm-calm-visibility.ts"
   cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$project/.pi/extensions/lib/fm-operational-input.ts"
-  cp "$WATCH_EXT" "$project/.pi/extensions/fm-primary-pi-watch.ts"
   cp "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts" "$project/.pi/extensions/fm-primary-turnend-guard.ts"
   cp \
     "$ROOT/bin/fm-sessionstart-nudge.sh" \

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Opt-in real systemd --user smoke for the external watcher and delivery stub.
+# Opt-in real systemd --user smoke for the external watcher and the external
+# wake-delivery listener: both are units, and this proves systemd restarts each.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -19,16 +20,24 @@ STATE="$HOME_DIR/state"
 mkdir -p "$STATE" "$HOME_DIR/config"
 printf 'FM_CHECK_INTERVAL=999999\n' > "$HOME_DIR/config/x-mode.env"
 WATCH="$ROOT/bin/fm-watch.sh"
-STUB="$ROOT/bin/fm-wake-wait.sh"
+DELIVERY="$ROOT/bin/fm-delivery.sh"
 VERSION=$(sha256sum "$WATCH" | awk '{print "sha256:" $1}')
+# Deliberately NOT the tracked template's own instance names. A machine with
+# firstmate installed already has fm-watch@.service and fm-delivery@.service
+# fragments in its user unit directory, and systemd-run refuses a transient unit
+# whose name a fragment already claims - which made this smoke unrunnable on
+# exactly the machines that run firstmate. The unit NAME is incidental here:
+# what is under test is that a systemd user unit with Restart=always keeps these
+# two processes alive, and the health predicates never read a unit name.
 INSTANCE=$(systemd-escape --path "$HOME_DIR")
-UNIT="fm-watch@${INSTANCE}.service"
-STUB_PID=
+UNIT="fm-watch-smoke-${INSTANCE}.service"
+DELIVERY_UNIT="fm-delivery-smoke-${INSTANCE}.service"
 
 cleanup() {
-  [ -z "$STUB_PID" ] || kill -TERM "$STUB_PID" 2>/dev/null || true
   systemctl --user stop "$UNIT" >/dev/null 2>&1 || true
   systemctl --user reset-failed "$UNIT" >/dev/null 2>&1 || true
+  systemctl --user stop "$DELIVERY_UNIT" >/dev/null 2>&1 || true
+  systemctl --user reset-failed "$DELIVERY_UNIT" >/dev/null 2>&1 || true
   fm_test_cleanup
 }
 trap cleanup EXIT
@@ -56,33 +65,74 @@ systemctl --user show "$UNIT" -p EnvironmentFiles --value | grep -F "$HOME_DIR/c
   || fail "real unit did not load the X-mode EnvironmentFile"
 
 printf '%s\n' "$$" > "$STATE/.lock"
-FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$STATE" FM_GUARD_GRACE=5 FM_WAKE_WAIT_POLL=0.05 \
-  "$STUB" > "$TMP_ROOT/stub-first.out" 2> "$TMP_ROOT/stub-first.err" &
-STUB_PID=$!
-i=0
-while ! fm_wake_stub_armed "$STATE" "$STUB" "$HOME_DIR" && [ "$i" -lt 100 ]; do
-  sleep 0.05
-  i=$((i + 1))
-done
-fm_wake_stub_armed "$STATE" "$STUB" "$HOME_DIR" || fail "real-systemd delivery stub did not publish its identity lock"
-kill -TERM "$STUB_PID"
-wait "$STUB_PID" 2>/dev/null || true
-STUB_PID=
-[ ! -s "$STATE/.wake-queue" ] || fail "killing an idle stub created or lost queue data"
 
-FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$STATE" FM_GUARD_GRACE=5 FM_WAKE_WAIT_POLL=0.05 \
-  "$STUB" > "$TMP_ROOT/stub-second.out" 2> "$TMP_ROOT/stub-second.err" &
-STUB_PID=$!
+# --- the external delivery listener ------------------------------------------
+# Queue a wake BEFORE any listener exists. Nothing in this test drains it, so if
+# it is still there when the listener has been up and down again, the durable
+# queue is proven to be the only store: a listener that kept its own copy, or
+# that consumed the record itself, would fail here.
+# shellcheck source=bin/fm-delivery-lib.sh
+FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$STATE" . "$ROOT/bin/fm-delivery-lib.sh"
+fm_wake_append signal smoke "signal: systemd smoke"
+[ "$(wc -l < "$STATE/.wake-queue" | tr -d '[:space:]')" -eq 1 ] || fail "the queued wake was not recorded"
+
+# With no listener running, the verdict must SAY the listener is down rather than
+# report the healthy-looking silence of a home with nothing to deliver.
+verdict=$(FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$STATE" FM_DELIVERY_GRACE=5 \
+  "$DELIVERY" --report || true)
+case "$verdict" in
+  down:*) : ;;
+  *) fail "with no listener running the verdict must be 'down', got: $verdict" ;;
+esac
+
+DELIVERY_VERSION=$(sha256sum "$DELIVERY" | awk '{print "sha256:" $1}')
+systemd-run --user --unit "$DELIVERY_UNIT" --collect \
+  --property=Restart=always --property=RestartSec=1 \
+  --setenv="FM_HOME=$HOME_DIR" --setenv="FM_ROOT_OVERRIDE=$ROOT" \
+  --setenv="FM_STATE_OVERRIDE=$STATE" --setenv=FM_DELIVERY_DAEMON=1 \
+  --setenv=FM_DELIVERY_MANAGER=systemd --setenv="FM_DELIVERY_SOURCE_VERSION=$DELIVERY_VERSION" \
+  --setenv=FM_DELIVERY_POLL=0.2 --setenv=FM_DELIVERY_GRACE=5 \
+  /usr/bin/env bash "$DELIVERY" >/dev/null
+
 i=0
-while ! fm_wake_stub_armed "$STATE" "$STUB" "$HOME_DIR" && [ "$i" -lt 100 ]; do
+while ! fm_delivery_healthy "$STATE" "$DELIVERY" 5 "$HOME_DIR" && [ "$i" -lt 200 ]; do
   sleep 0.05
   i=$((i + 1))
 done
-fm_wake_append signal smoke "signal: systemd smoke"
-wait "$STUB_PID"
-STUB_PID=
-grep -Fx 'wake: queued' "$TMP_ROOT/stub-second.out" >/dev/null || fail "re-armed stub did not deliver the queued wake"
-[ "$(wc -l < "$STATE/.wake-queue" | tr -d '[:space:]')" -eq 1 ] || fail "stub drained or duplicated the queued wake"
+fm_delivery_healthy "$STATE" "$DELIVERY" 5 "$HOME_DIR" \
+  || fail "the real systemd delivery unit did not establish the listener health predicate"
+old_delivery_pid=$FM_DELIVERY_HEALTHY_PID
+[ "$(cat "$STATE/.delivery.lock/manager")" = systemd ] || fail "the listener did not publish manager=systemd"
+
+# The wake queued while nothing was listening is still pending, and the verdict
+# now names the reason it cannot be delivered rather than falling silent: this
+# home published no endpoint.
+verdict=$(FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$STATE" FM_DELIVERY_GRACE=5 \
+  "$DELIVERY" --report || true)
+case "$verdict" in
+  undeliverable:*"no session has published where the model turn lives"*) : ;;
+  *) fail "a listener with no published endpoint must say so, got: $verdict" ;;
+esac
+[ "$(wc -l < "$STATE/.wake-queue" | tr -d '[:space:]')" -eq 1 ] \
+  || fail "the listener touched the durable queue"
+
+# Killing the listener must be recovered by systemd, exactly as for the watcher.
+kill -TERM "$old_delivery_pid"
+i=0
+new_delivery_pid=$old_delivery_pid
+while [ "$new_delivery_pid" = "$old_delivery_pid" ] && [ "$i" -lt 200 ]; do
+  sleep 0.05
+  if fm_delivery_healthy "$STATE" "$DELIVERY" 5 "$HOME_DIR"; then
+    new_delivery_pid=$FM_DELIVERY_HEALTHY_PID
+  fi
+  i=$((i + 1))
+done
+[ "$new_delivery_pid" != "$old_delivery_pid" ] \
+  || fail "systemd Restart=always did not replace the terminated delivery listener"
+systemctl --user is-active --quiet "$DELIVERY_UNIT" \
+  || fail "the transient delivery unit is not active after the listener restart"
+[ "$(wc -l < "$STATE/.wake-queue" | tr -d '[:space:]')" -eq 1 ] \
+  || fail "the wake was lost or duplicated across the listener restart"
 
 kill -TERM "$old_pid"
 i=0
@@ -97,4 +147,4 @@ done
 [ "$new_pid" != "$old_pid" ] || fail "systemd Restart=always did not replace the terminated daemon"
 systemctl --user is-active --quiet "$UNIT" || fail "transient watcher unit is not active after daemon restart"
 
-pass "real systemd user unit keeps the daemon external while stub loss costs one re-arm and zero wakes"
+pass "real systemd user units keep both the watcher and the delivery listener external, restart each after a kill, and lose no queued wake"

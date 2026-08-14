@@ -141,7 +141,9 @@ state/               volatile runtime signals; gitignored
   grossreinschiff.last-sweep  epoch and date of this home's last completed weekly cleanup sweep; written only by `bin/fm-grossreinschiff-due.sh --record`, and absent or unparseable means never swept (docs/grossreinschiff.md)
   currency-round.check.sh currency-round.last-run currency-round.report currency-round.surfaced currency-round.unmeasured  this home's daily update check and its records: the armed watcher check, the epoch of the last COMPLETED round, every reading of that round, the finding line last surfaced, and the subjects it could not measure; all written only by `bin/fm-currency-round.sh` (docs/currency-round.md)
   .parked-<window-key>  firstmate-owned declaration that a relayed terminal task waits only on external human action; created via `bin/fm-mark-parked.sh <window>` (bin/fm-watch.sh's `mark_parked`), never by hand
-  .watch.lock .wake-queue.lock watcher singleton and queue serialization locks
+  .watch.lock .delivery.lock .wake-queue.lock watcher and delivery-listener singleton locks, plus queue serialization
+  .primary-endpoint  where this session's model turn lives, published under the lock at session start so the externally supervised delivery listener has an address to submit into (docs/wake-delivery.md)
+  .last-delivery-beat  delivery-listener liveness beacon, touched at the top of every cycle; a listener with nothing to deliver and a listener that is dead are told apart by this, never by silence
   .hash-* .count-* .stale-* .stale-since-* .paused-* .degraded-* .parkedmeta-* .parkedresurfaced-* .wedge-escalations-* .wedgeheld-* .seen-* .hb-surfaced-* .last-* .heartbeat-streak .bridge-* .context-ceiling-surfaced .certsync-health-surfaced   watcher internals; never touch
   .watch-triage.log  watcher's absorbed-wake debug log (size-capped); never relied on, safe to delete
   .last-watcher-beat watcher liveness beacon, touched every poll (including while absorbing benign wakes); guard scripts read it
@@ -174,6 +176,8 @@ A lock-refused session must not spawn, steer, merge, drain the wake queue, repai
    When the lock could not be acquired, the worktree-tangle check uses read-only advisory wording without a checkout repair command.
    The seven MUTATING sweeps - non-executing legacy PR-check migration, arming this home's daily currency round, the AXI-suite currency check that installs into this home's own npm prefix, fleet sync, the local secondmate fast-forward sweep, the secondmate liveness sweep, and X-mode artifact writes - run only when this session actually holds the lock from step 1.
    The secondmate liveness sweep deterministically guarantees every registered secondmate is actually running: it probes each live secondmate's endpoint for a real agent process (not just pane presence), respawns only on a confident dead reading, and reports only skipped or failed guarantees as `SECONDMATE_LIVENESS:` lines (`bin/fm-bootstrap.sh`; `bin/fm-backend.sh`'s `fm_backend_agent_alive`).
+2b. **Wake delivery** - when locked, publishes where this session's model turn lives so the externally supervised delivery listener has an address to submit into, then states that listener's verdict.
+   Nothing is armed here; a read-only session publishes nothing and only reads the verdict.
 3. **Wake queue** - when locked, drains the durable wake queue and prints the raw records prominently as this turn's first work queue; a bounded, clearly labeled historical status-event annotation may follow a valid `signal` record but never replaces it or current-state reconciliation, and a lapsed watcher chain still surfaces here via the same guard alarm.
    When the lock could not be acquired, the queue is left untouched because another session owns it, and the guard's tangle/watcher-liveness alarms still print in read-only advisory mode without drain, supervision repair, or checkout repair commands.
 4. **Context digest** - the active `roles/<name>.md` overlay when `config/role` selects a role, then the full contents of `data/projects.md`, `data/secondmates.md`, `data/captain.md`, `data/captain-shared.md`, and `data/learnings.md`, each clearly delimited.
@@ -182,7 +186,7 @@ A lock-refused session must not spawn, steer, merge, drain the wake queue, repai
    That liveness line is a fast presence check only, not a full state read - when you need a crew's actual current state (a run-step, not just "is the pane there"), read it with `bin/fm-crew-state.sh <id>` as before; the digest deliberately skips that deeper, slower read for every task so it stays fast and bounded.
 6. **Supervision operating instructions and next step** - after the wake queue and before context, the digest emits exactly one operating block for the detected primary harness plus the optional direct Telegram receiver arm step when `config/telegram.env` exists.
    The closing reminder points back to that emitted block and preserves only the lock, afk, X-mode, and read-once reminders.
-   The script itself never starts long-lived polls; the emitted harness protocol and `bin/fm-tg-recv-arm.sh` own the exact tracked-background wait or wake mechanisms.
+   The script itself never starts long-lived polls; only the optional `bin/fm-tg-recv-arm.sh` step starts a tracked background receiver, and wake delivery stays outside the harness under `docs/wake-delivery.md`.
 
 Bootstrap detects first, asks for consent, and installs only after the captain approves in the current session.
 Do not dispatch until the required tools are present and GitHub authentication is good.
@@ -231,7 +235,7 @@ For an ordinary direct report whose endpoint is dead or metadata has no window, 
 For a dead secondmate direct report, load `secondmate-provisioning` and reconcile only that secondmate, never its whole child tree from the main home.
 Each secondmate reconciles work already in its own home and then idles; recovery never authorizes it to invent work.
 
-If away mode is present, load `/afk` and let its daemon own queue delivery rather than arming a session delivery wait; the watcher service continues to own the loop.
+If away mode is present, load `/afk` and let its daemon own queue delivery; the watcher service continues to own the loop and the delivery listener stands down for the daemon.
 Surface only captain-relevant decisions, review-ready PRs, failures, and credential needs; otherwise resume the emitted supervision protocol silently.
 A restart must be a non-event because durable state and live backend inventory, not conversation memory, are authoritative.
 
@@ -382,14 +386,13 @@ Scratch commits and debug edits never ride along, and a reproduced bug becomes t
 
 Fleet supervision is an always-loaded operational contract; `docs/architecture.md`, `docs/turnend-guard.md`, the emitted session-start block, and script help own mechanisms and harness-specific recipes.
 
-The watcher service owns the long-running supervision loop.
-Whenever work is under way, keep exactly one live wake-delivery wait armed using the emitted protocol for this primary harness.
-X mode may require that same delivery wait with no fleet work.
-Do not substitute another harness's wait shape, use shell `&`, or create a second delivery wait when a healthy one already exists.
-When the session-start digest reports direct Telegram receive as active, keep `bin/fm-tg-recv-arm.sh` armed as its own separate tracked background task; it starts or attaches to the receiver for this home.
-After every actionable wake, resume the emitted protocol at the earliest harness-safe point before composing any reply or beginning unrelated long work.
-Background-notify harnesses re-arm immediately after draining, while a blocking foreground checkpoint follows wake handling as its next tool call.
-No turn ends blind while work is under way, including turns described as holding or waiting.
+The watcher service owns the long-running supervision loop, and a companion service owns wake delivery.
+Both are supervised outside this harness, so a session holds no delivery object of any kind: there is nothing to arm, nothing to re-arm, and nothing a session can lose by ending a turn.
+The one thing a session still owes delivery is its address, published once under the lock at session start; `docs/wake-delivery.md` owns that contract and the verdicts the listener reports.
+When the session-start digest reports direct Telegram receive as active, keep `bin/fm-tg-recv-arm.sh` armed as its own separate tracked background task; it starts or attaches to the receiver for this home, and it is the only remaining tracked background job supervision needs.
+A wake arrives in the composer and is handled by draining first, before reading anything else and before composing any reply.
+Never infer that delivery is working from an empty drain: an empty queue and a dead listener look identical from there, which is why `bin/fm-delivery-service.sh status` states which one it is in one line.
+No turn ends blind while work is under way, including turns described as holding or waiting; what that now means is that a down or stalled listener is repaired rather than left, not that a wait is re-established.
 
 At the start of every wake-handling turn, drain the durable wake queue before peeking, reading beyond the reason line, steering, or starting work.
 Session start is the only exception because its one-shot digest already drained while locked or deliberately left the queue untouched in lock-refused read-only mode.
@@ -437,7 +440,7 @@ Invoke the `/afk` skill when the captain says `/afk`, says they are going afk, `
 The skill owns the daemon procedure; these safety facts remain inline:
 
 - Every current daemon injection uses the `away-supervisor` kind from `bin/fm-operational-input.sh` after `FM_OPERATIONAL_PREFIX` (U+2063 INVISIBLE SEPARATOR followed by `FIRSTMATE_OP: `), while the `/afk` skill owns legacy bare-marker compatibility.
-- While `state/.afk` exists, the away daemon owns wake delivery; do not arm a session delivery wait.
+- While `state/.afk` exists, the away daemon owns wake delivery and the external listener deliberately stands down for it.
 - A marked message while away mode is active is compatibility-classified as internal escalation and does not exit away mode.
 - A message beginning `/afk` refreshes away mode.
 - Any other unmarked message means the captain returned; load `/afk`, run the return owner, and do not process that message as ordinary work until its durable catch-up gate clears.
@@ -560,7 +563,7 @@ Bootstrap separately detects when the primary checkout's own default branch has 
 
 These skills are not captain-invocable; load them only at their precise triggers.
 
-- `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `ROLE_INVALID:`, `ROLE_OVERLAY_MISSING:`, `NEEDS_GH_AUTH`, `TANGLE:`, `SELF_DRIFT:`, `CREW_DISPATCH: invalid`, `CURRENCY_BASE:`, `LAVISH_ACCESS:`, `BACKLOG_STALE:`, `BACKLOG_UNREADABLE:`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `NUDGE_SECONDMATES:`, `AXI_SUITE_UPDATED:`, `AXI_SUITE_REVIEW:`, `AXI_SUITE_STUCK:`, `AXI_SUITE_SHADOWED:`, `AXI_SUITE_SHADOW_UNKNOWN:`, `FIRSTMATE_UPDATE_AVAILABLE:`, `FIRSTMATE_UPDATE_STUCK:`, `FORK_SYNC:`, `FORK_SYNC_STUCK:`, `CURRENCY_ROUND:`, `GROSSREINSCHIFF:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
+- `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `ROLE_INVALID:`, `ROLE_OVERLAY_MISSING:`, `NEEDS_GH_AUTH`, `TANGLE:`, `SELF_DRIFT:`, `CREW_DISPATCH: invalid`, `CURRENCY_BASE:`, `LAVISH_ACCESS:`, `BACKLOG_STALE:`, `BACKLOG_UNREADABLE:`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `NUDGE_SECONDMATES:`, `AXI_SUITE_UPDATED:`, `AXI_SUITE_REVIEW:`, `AXI_SUITE_STUCK:`, `AXI_SUITE_SHADOWED:`, `AXI_SUITE_SHADOW_UNKNOWN:`, `FIRSTMATE_UPDATE_AVAILABLE:`, `FIRSTMATE_UPDATE_STUCK:`, `FORK_SYNC:`, `FORK_SYNC_STUCK:`, `CURRENCY_ROUND:`, `GROSSREINSCHIFF:`, `DELIVERY_UNIT:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
 - `diagnostic-reasoning` - load before scoping a reported bug and before acting on a diagnostic report.
 - `ask-user-authority` - load before deciding any ask-user finding, regardless of the project's `yolo` posture.
 - `harness-adapters` - load before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
@@ -581,7 +584,7 @@ X mode ships inert and causes no behavior change until the home opts in by placi
 That token is consent for public replies and normal reversible lifecycle actions from eligible mentions, not authority for destructive, irreversible, or security-sensitive action; those still require trusted-channel confirmation.
 `docs/configuration.md` owns activation, generated state, cadence, wire protocol, and opt-out mechanics.
 
-An X-only home still requires the live wake-delivery wait so mentions can wake it without fleet work.
+An X-only home still requires a healthy delivery listener so mentions can wake it without fleet work.
 On an `x-mention <request_id>` or `x-mode-error ...` check wake, load `fmx-respond`, which owns classification, public-safety policy, reply or dismissal, task linking, and follow-ups.
 For every X-linked terminal outcome, load that owner and post the final completion follow-up before teardown, regardless of earlier milestone follow-ups.
 

@@ -193,7 +193,7 @@ relay_own_output() {
   printf '%s\n' "$1" | grep -v \
     -e '^●' \
     -e '^WARNING: watcher still down' \
-    -e '^WARNING: wake delivery stub missing' \
+    -e '^WARNING: wake delivery listener ' \
     -e '^WARNING: queued wakes pending' || true
 }
 
@@ -459,13 +459,13 @@ test_guard_alarm_reaches_the_caller() {
   # are meant to be seen on every fleet action, so they must be relayed too, and
   # never re-attributed to fleet-sync.
   fm_test_record_supervision_healthy "$home"
-  rm -rf "$home/state/.wake-stub.lock"
+  rm -rf "$home/state/.delivery.lock"
   printf 'wake\n' > "$home/state/.wake-queue"
   rm -f "$home/capture"
   out=$(run_relay "$home" inbox --vessel tugboat); rc=$?
   expect_code 1 "$rc" "read while the wake stub is missing and wakes are queued"
-  assert_contains "$out" 'WARNING: wake delivery stub missing' \
-    "the guard's missing-delivery-stub alarm was swallowed by the relay's stderr capture"
+  assert_contains "$out" 'WARNING: wake delivery listener down:' \
+    "the guard's down-listener alarm was swallowed by the relay's stderr capture"
   assert_contains "$out" 'WARNING: queued wakes pending' \
     "the guard's queued-wakes alarm was swallowed by the relay's stderr capture"
   assert_not_contains "$out" 'fm-fleet-sync.sh stderr: WARNING: queued wakes pending' \

@@ -41,6 +41,10 @@ case "$STOP_TIMEOUT" in ''|*[!0-9]*|0) STOP_TIMEOUT=20 ;; esac
 . "$SCRIPT_DIR/fm-service-path-lib.sh"
 # shellcheck source=bin/fm-axi-path-lib.sh
 . "$SCRIPT_DIR/fm-axi-path-lib.sh"
+# shellcheck source=bin/fm-tmux-lib.sh
+. "$SCRIPT_DIR/fm-tmux-lib.sh"
+# shellcheck source=bin/fm-keeper-name-lib.sh
+. "$SCRIPT_DIR/fm-keeper-name-lib.sh"
 # Composed values resolve tools through THIS process's PATH, so the home's own
 # AXI prefix has to lead it here or the service would be handed whichever older
 # copy the launching session happened to resolve.
@@ -58,6 +62,8 @@ watch_source_version() {
     "$SCRIPT_DIR/fm-pr-lib.sh"
     "$SCRIPT_DIR/fm-x-lib.sh"
     "$SCRIPT_DIR/fm-check-lib.sh"
+    "$SCRIPT_DIR/fm-tmux-lib.sh"
+    "$SCRIPT_DIR/fm-keeper-name-lib.sh"
     "$SCRIPT_DIR"/backends/*.sh
   )
   if command -v sha256sum >/dev/null 2>&1; then
@@ -136,10 +142,27 @@ unit_instance() {
 }
 
 keeper_name() {
-  local base sum
-  base=$(basename "$FM_HOME" | tr -c 'A-Za-z0-9_-' '_')
-  sum=$(printf '%s' "$FM_HOME" | cksum | awk '{print $1}')
-  printf 'fm-watch-%s-%s\n' "$base" "$sum"
+  fm_keeper_name watch "$FM_HOME"
+}
+
+legacy_keeper_name() {
+  fm_legacy_keeper_name watch "$FM_HOME"
+}
+
+legacy_keeper_owned() {
+  local name=$1
+  fm_legacy_keeper_owned_by_home "$TMUX" "$name" "$STATE/.watch-keeper.pid" \
+    "$STATE/.watch.lock" "$FM_HOME"
+}
+
+stop_legacy_keeper() {
+  local name
+  FM_WATCH_LEGACY_STOPPED=0
+  name=$(legacy_keeper_name) || return 1
+  "$TMUX" has-session -t "$name" 2>/dev/null || return 0
+  legacy_keeper_owned "$name" || return 0
+  "$TMUX" kill-session -t "$name" || return 1
+  FM_WATCH_LEGACY_STOPPED=1
 }
 
 systemd_env_quote() {
@@ -341,9 +364,11 @@ install_systemd() {
 
 stop_keeper() {
   local name
-  name=$(keeper_name)
-  "$TMUX" has-session -t "$name" 2>/dev/null || return 0
-  "$TMUX" kill-session -t "$name"
+  name=$(keeper_name) || return 1
+  if "$TMUX" has-session -t "$name" 2>/dev/null; then
+    "$TMUX" kill-session -t "$name" || return 1
+  fi
+  stop_legacy_keeper
 }
 
 # The resolved PATH is passed as an argument, not exported: `tmux new-session`
@@ -353,7 +378,7 @@ stop_keeper() {
 # reaches the keeper regardless of who started the server.
 start_keeper() {
   local name version x_version resolved_path
-  name=$(keeper_name)
+  name=$(keeper_name) || return 1
   version=$(watch_source_version) || return 1
   x_version=$(x_mode_version) || return 1
   resolved_path=$(fm_service_path) || return 1
@@ -363,7 +388,11 @@ start_keeper() {
 
 ensure_keeper() {
   local name
-  name=$(keeper_name)
+  name=$(keeper_name) || return 1
+  stop_legacy_keeper || return 1
+  if [ "${FM_WATCH_LEGACY_STOPPED:-0}" -eq 1 ]; then
+    stop_recorded_watcher || return 1
+  fi
   if healthy_watcher && watcher_record_matches keeper; then
     return 0
   fi

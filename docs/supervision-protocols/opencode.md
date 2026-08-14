@@ -1,23 +1,20 @@
-Mode: OpenCode TUI plugin wake delivery.
+Mode: external wake delivery, OpenCode primary.
 
-- Ordinary wake: the OpenCode plugin already owns watcher continuity across every routine wake in this session; no manual re-arm is needed until a repair cycle is required.
+This session holds no wake-delivery object of any kind.
+The TUI plugin that used to arm delivery after idle is gone: the listener that turns a queued wake into a turn is a service outside this harness, supervised the way the watcher loop is.
+`docs/wake-delivery.md` owns the contract; what follows is only what this seat does.
 
 When this session owns supervision and away mode is not active:
 
-1. Drain first with `bin/fm-wake-drain.sh`.
-2. Let `.opencode/plugins/fm-primary-watch-arm.js` arm delivery after the OpenCode session goes idle.
-3. The plugin listens for `session.idle`, spawns and awaits `bin/fm-watch-arm.sh`, and calls `client.session.promptAsync` when the delivery stub exits with `wake: queued` or a failure.
-4. `watcher: started ...` or `watcher: attached ...` means the external watcher service is healthy and the plugin's delivery wait is armed.
-   A close carrying `wake delivery: already armed pid=<N> (same session)` is healthy too: a delivery stub of this session already owns the lock, and the plugin quietly re-attempts on a fixed cadence until it takes delivery back, so no manual re-arm is needed and no prompt is due.
-5. If the plugin reports a watcher failure, drain queued wakes, inspect the failure text, and use `bin/fm-watch-arm.sh` manually only as a short recovery probe.
-6. Never use shell `&` for wake delivery.
-   The arm mechanism above is plugin-owned, but a manual recovery probe that backgrounds, pipes, or bundles the arm is denied automatically by the PreToolUse seatbelt (`.opencode/plugins/fm-primary-pretool-check.js`, `bin/fm-arm-pretool-check.sh`).
-7. Do not rely on this plugin in headless `opencode run`; firstmate primary supervision targets persistent OpenCode TUI sessions.
-8. On a plugin wake, drain and handle queued wakes without composing an idle reply.
-   The plugin re-arms after the session goes idle again.
-9. If nothing reaches `AGENTS.md` section 9's escalation bar, end the turn with tool calls and no chat text; where this harness refuses a turn with no visible output, send exactly one line holding the marker `.` and nothing else.
+1. A wake arrives as a message in your composer carrying the firstmate operational marker and saying records are pending.
+   On it, run `bin/fm-wake-drain.sh` first, before reading anything else and before composing any reply, then handle what it returns.
+2. Do not arm anything afterwards, and do not wait for a plugin to arm anything.
+3. Do not poll `bin/fm-wake-drain.sh` to check whether delivery is working.
+   `bin/fm-delivery-service.sh status` answers that in one line and costs no turn.
+4. The session-start WAKE DELIVERY section states this home listener verdict.
+   `idle`, `delivering`, and `away` are healthy.
+   `down`, `stalled`, and `undeliverable` each name their own cause and each need the repair the guard prints before the turn ends.
+5. Firstmate primary supervision targets persistent OpenCode TUI sessions; a headless `opencode run` has no composer for the listener to submit into.
+6. After handling a wake, if nothing reaches `AGENTS.md` section 9's escalation bar, end the turn with tool calls and no chat text; where this harness refuses a turn with no visible output, send exactly one line holding the marker `.` and nothing else.
    Any other chat text on a no-change wake turn is a protocol violation, not politeness, and restating an unchanged wait stays a violation even on a turn the harness forced to speak.
    No attempt is on file for this harness in either direction; if you meet a refusal, record it in `docs/silent-turn-attempts.md` rather than leaving the next seat to rediscover it.
-
-The service owns the long-running watcher loop.
-The plugin owns only one lightweight, safely killable delivery wait.
