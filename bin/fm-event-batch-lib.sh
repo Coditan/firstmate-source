@@ -23,9 +23,10 @@
 #   high       at most 60 seconds
 #   normal     at most 120 seconds
 #   low        at most 600 seconds
-# These are the captain's values, shipped as the defaults. A home overrides them
-# in config/batch-delays and one run overrides them in the environment; see
-# fm_batch_delay below and docs/configuration.md "Event batching delays".
+# These are the captain's values. Immediate is never held; a home overrides the
+# high, normal, and low delays in config/batch-delays and one run overrides those
+# three in the environment; see fm_batch_delay below and docs/configuration.md
+# "Event batching delays".
 #
 # THE BUDGET RUNS FROM ARRIVAL, NOT FROM ADMISSION
 # A batch's deadline is its OLDEST member's journal arrival epoch plus that

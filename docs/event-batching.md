@@ -10,14 +10,14 @@ This document owns why it exists in this shape, what is proven and how, and what
 
 | Class | Held at most | What lands here |
 |---|---|---|
-| `immediate` | no delay at all | a signal whose status verb is `blocked:`, `failed:`, or `needs-decision:` |
+| `immediate` | no delay at all, never held, not tunable | a signal whose status verb is `blocked:`, `failed:`, or `needs-decision:` |
 | `high` | 60 seconds | a signal whose verb is `done:`, a legacy bare line naming finished work, and a `stale` event |
 | `normal` | 120 seconds | a `check` event, and any signal line nobody can classify |
 | `low` | 600 seconds | a `heartbeat`, and a signal whose verb is `working:`, `paused:`, `resolved:`, or `captain-held:` |
 
-These are the captain's values, shipped as the defaults.
-A home overrides them in `config/batch-delays`; one run overrides them in the environment.
-`docs/configuration.md` "Event batching delays" owns the schema, and `fm-event-batch.sh delays` prints the resolved number for each class together with which of the three it came from.
+These are the captain's values: no delay at all is a fixed property of `immediate`, while the high, normal, and low values are shipped defaults.
+A home overrides the high, normal, and low delays in `config/batch-delays`; one run overrides those three in the environment.
+`docs/configuration.md` "Event batching delays" owns the schema, and `fm-event-batch.sh delays` reports the fixed zero hold for `immediate` plus the resolved number and source for each configurable class.
 
 An unrecognised line lands in `normal` rather than `low`, because a line nobody can classify must not be the one held longest.
 The classes are read through `bin/fm-classify-lib.sh`'s own verb reader, so a progress line is never promoted by prose that happens to contain a terminal word: `working: rebased onto merged #76` is progress, not a merge.
@@ -46,9 +46,10 @@ The run loop also never sleeps past a deadline: it waits the poll interval or th
 Two honest consequences follow, and both are stated rather than smoothed over.
 
 **`immediate` means the batch is never held, not that the end-to-end wait is zero.**
+Unlike the high, normal, and low delays, `immediate` is not tunable.
 An immediate event is released by the pass that admits it, and that pass has to happen: with the default 5-second interval, noticing it costs up to 5 seconds.
 That noticing is admission latency shared by every class, and it is the one delay this unit cannot remove.
-`account` therefore checks `immediate` by the close reason rather than by a duration - an immediate batch is closed by the admission that opened it, and only that close records the reason `immediate`.
+`account` therefore always checks `immediate` by the close reason rather than by a duration - an immediate batch is closed by the admission that opened it, and only that close records the reason `immediate`.
 
 **The other three budgets carry the same admission allowance.**
 `account` flags a closed batch when its hold from arrival exceeds the class delay *plus one poll interval*, because the batcher cannot close a batch in a pass it is not running.

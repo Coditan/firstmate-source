@@ -59,9 +59,9 @@
 #           command rather than a claim because a lost notification and a quiet
 #           period look identical from anywhere else.
 #
-# delays    Print the resolved delay for each class and where each came from:
-#           the environment, this home's config/batch-delays, or the shipped
-#           default, which is the captain's own number.
+# delays    Print immediate as the class that is never held, plus the resolved
+#           high, normal, and low delays and whether each came from the
+#           environment, this home's config/batch-delays, or the shipped default.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

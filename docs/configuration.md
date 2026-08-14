@@ -464,10 +464,11 @@ The event batcher groups supervision events by priority and holds each class for
 `docs/event-batching.md` owns why it exists and what is proven, `bin/fm-event-batch-lib.sh`'s header owns the record formats and the classification rule, and `bin/fm-event-batch.sh --help` owns the commands.
 This section owns only where the numbers come from.
 
-The shipped defaults are the captain's own values: `immediate` no delay at all, `high` 60 seconds, `normal` 120 seconds, `low` 600 seconds.
+The captain's own values are `immediate` with no delay at all, plus shipped defaults of 60 seconds for `high`, 120 seconds for `normal`, and 600 seconds for `low`.
+`immediate` is not configurable because it is the class released by the admission that opens it; no delay at all is a property of that class rather than a default anyone sets.
 
-`config/batch-delays` overrides them for one home.
-The schema is one `name = seconds` per line, where `name` is one of `immediate`, `high`, `normal`, `low` and `seconds` is a whole number; blank lines and `#` comments are ignored, and an unnamed class keeps its shipped default.
+`config/batch-delays` overrides the three configurable delays for one home.
+The schema is one `name = seconds` per line, where `name` is one of `high`, `normal`, or `low` and `seconds` is a whole number; blank lines and `#` comments are ignored, and an unnamed class keeps its shipped default.
 
 ```text
 # this home releases finished work sooner
@@ -475,8 +476,8 @@ high = 30
 low = 300
 ```
 
-Resolution order per class is the environment variable (`FM_BATCH_DELAY_IMMEDIATE`, `FM_BATCH_DELAY_HIGH`, `FM_BATCH_DELAY_NORMAL`, `FM_BATCH_DELAY_LOW`), then this file, then the shipped default.
-`fm-event-batch.sh delays` prints the resolved number for each class and which of those three it came from.
+Resolution order for each configurable class is the environment variable (`FM_BATCH_DELAY_HIGH`, `FM_BATCH_DELAY_NORMAL`, `FM_BATCH_DELAY_LOW`), then this file, then the shipped default.
+`fm-event-batch.sh delays` reports the fixed zero hold for `immediate` and the resolved number for each configurable class together with its source.
 A value that is not a whole number of seconds is refused with exit 2 rather than falling back, because a home that mistyped its delay would otherwise be handed the shipped default while believing it had configured one.
 
 `config/batch-delays` is not in the inheritable set that `bin/fm-config-inherit-lib.sh` declares, for the same reason `config/bosun-judge` is not: nothing reads a batch yet, so whether a secondmate home should inherit these numbers belongs to whichever unit first points a consumer at them.
