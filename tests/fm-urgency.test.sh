@@ -332,6 +332,70 @@ test_an_already_urgent_envelope_is_not_reported_as_promoted() {
   pass "an envelope already declared at the top of the ladder is not reported as promoted"
 }
 
+test_multi_envelope_promotion_keeps_its_own_evidence() {
+  local home out record declared effective rule match event
+  home=$(make_bridge_home multi)
+  write_envelope "$home" a-high high 'Routine release completed successfully'
+  write_envelope "$home" b-credential low 'The deploy key was revoked, cannot proceed'
+
+  out=$(surface_bridge "$home")
+  assert_contains "$out" 'highest=high' "the inbox-wide effective maximum was not delivered"
+  assert_contains "$out" 'declared=low' "the wake replaced the promoted envelope's declaration with the inbox maximum"
+  assert_contains "$out" 'promoted-by=credential' "the promotion tying the inbox maximum lost its rule"
+
+  record=$(cat "$home/state/urgency/promotions.tsv")
+  IFS=$'\t' read -r _ _ _ _ declared effective rule match event <<< "$record"
+  [ "$declared" = low ] || fail "the multi-envelope record says the promoted envelope declared '$declared', not low"
+  [ "$effective" = high ] || fail "the multi-envelope record says the envelope promoted to '$effective', not high"
+  [ "$rule" = credential ] || fail "the multi-envelope record names '$rule', not the promoted envelope's credential rule"
+  assert_contains "$match" 'deploy key' "the multi-envelope record lost the promoted envelope's evidence"
+  assert_contains "$event" 'revoked' "the multi-envelope record names the wrong envelope"
+  pass "multi-envelope promotion retains its own declaration and evidence"
+}
+
+test_an_incomplete_scan_is_retried_without_delivery_or_cache() {
+  local home first second
+  home=$(make_bridge_home partial)
+  write_envelope "$home" later normal \
+    '80/443 open to any source: INPUT policy ACCEPT, no Cloudflare rule'
+
+  first=$(FM_HOME="$home" FM_CHECK_TIMEOUT=1 bash -c '
+    . "$1"
+    . "$2"
+    bridge_pending_envelope_scan() {
+      printf "normal\tRoutine prefix\n"
+      sleep 2
+      printf "%s\n" __FM_BRIDGE_ENVELOPE_SCAN_COMPLETE__
+    }
+    export -f bridge_pending_envelope_scan
+    bridge_inbox_surface 0
+  ' _ "$WAKE_LIB" "$BRIDGE_LIB")
+  [ -z "$first" ] || fail "an incomplete scan was delivered as complete: $first"
+  assert_absent "$home/state/.bridge-urgency-cache" "an incomplete scan was cached as complete"
+  assert_absent "$home/state/.bridge-surfaced" "an incomplete scan marked the inbox surfaced"
+  assert_absent "$home/state/.wake-queue" "an incomplete scan reached the durable wake queue"
+
+  second=$(surface_bridge "$home")
+  assert_contains "$second" 'highest=immediate' "the incomplete inbox was not re-examined on the next cycle"
+  assert_present "$home/state/.bridge-urgency-cache" "the later complete scan did not populate the cache"
+  assert_present "$home/state/.bridge-surfaced" "the later complete scan did not mark the inbox surfaced"
+  pass "an incomplete scan is neither delivered nor cached and is retried"
+}
+
+test_unpromoted_cache_reload_preserves_empty_fields() {
+  local home first second
+  home=$(make_bridge_home cacheplain)
+  write_envelope "$home" plain normal 'Ack: firstmate origin repointed to curated fork'
+
+  first=$(surface_bridge "$home")
+  assert_not_contains "$first" 'promoted-by=' "ordinary traffic was promoted before cache reload"
+  rm -f "$home/state/.bridge-surfaced"
+  second=$(surface_bridge "$home")
+  assert_not_contains "$second" 'promoted-by=' "an empty cached rule reloaded as a false promotion"
+  assert_absent "$home/state/urgency/promotions.tsv" "an unpromoted cached subject wrote a promotion record"
+  pass "unpromoted cache reload preserves empty promotion fields"
+}
+
 # The timing boundary, asserted rather than only documented: this unit decides
 # what an event's urgency IS, and how long an event of a given urgency waits
 # belongs to the batching unit. bridge_check_interval must therefore still read
@@ -360,4 +424,7 @@ test_a_promotion_that_cannot_be_recorded_is_still_delivered
 test_nothing_is_recorded_for_an_event_left_alone
 test_a_german_under_declared_event_promotes
 test_an_already_urgent_envelope_is_not_reported_as_promoted
+test_multi_envelope_promotion_keeps_its_own_evidence
+test_an_incomplete_scan_is_retried_without_delivery_or_cache
+test_unpromoted_cache_reload_preserves_empty_fields
 test_promotion_does_not_reach_the_poll_cadence
