@@ -417,8 +417,8 @@ This instrument measures 47 to 92 across all projects on this host on the two bu
 Whoever owns restart-rate work should re-derive that figure rather than inherit it.
 
 **The queue row is still not replay-complete.**
-`fm_wake_print_deduped` keeps the last row per `(kind,key)`, annotations read the latest status line at drain time rather than the triggering one, and Bridge rows carry only `pending=N highest=P`.
-A deferred judgment cannot be replayed from a queue row today, which is the gap the event-ledger unit exists to close.
+`fm_wake_print_deduped` keeps the last row per `(kind,key)`, annotations read the latest status line at drain time rather than the triggering one, and Bridge rows carry `pending=N highest=P` plus `declared=P promoted-by=RULE` when urgency promotion raised the delivered priority.
+The matched evidence stays in the urgency promotion record, so a deferred judgment still cannot be replayed from a queue row alone.
 
 **The Bridge decreasing-count wake is still open.**
 `bin/fm-bridge-inbox-lib.sh` wakes on any tree-signature change with a non-empty inbox, so a count going DOWN still wakes the model.
