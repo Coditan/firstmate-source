@@ -396,6 +396,22 @@ test_unpromoted_cache_reload_preserves_empty_fields() {
   pass "unpromoted cache reload preserves empty promotion fields"
 }
 
+test_a_truncated_cache_is_rejected_and_rescanned() {
+  local home sig out
+  home=$(make_bridge_home cachetruncated)
+  write_envelope "$home" firewall normal \
+    '80/443 open to any source: INPUT policy ACCEPT, no Cloudflare rule'
+  sig=$(git -C "$home/projects/coditan-bridge" rev-parse 'origin/main:inbox/coditan/new')
+  printf '%s\n' "$sig" > "$home/state/.bridge-urgency-cache"
+
+  out=$(surface_bridge "$home")
+  assert_contains "$out" 'highest=immediate' "a truncated cache hid the pending urgent envelope instead of forcing a rescan"
+  assert_contains "$out" 'promoted-by=exposure' "the rescan behind a truncated cache lost the promotion evidence"
+  assert_present "$home/state/.bridge-surfaced" "the rescan did not surface the pending inbox"
+  assert_present "$home/state/urgency/promotions.tsv" "the rescan did not record the promotion"
+  pass "a truncated cache is rejected and the pending inbox is rescanned"
+}
+
 # The timing boundary, asserted rather than only documented: this unit decides
 # what an event's urgency IS, and how long an event of a given urgency waits
 # belongs to the batching unit. bridge_check_interval must therefore still read
@@ -427,4 +443,5 @@ test_an_already_urgent_envelope_is_not_reported_as_promoted
 test_multi_envelope_promotion_keeps_its_own_evidence
 test_an_incomplete_scan_is_retried_without_delivery_or_cache
 test_unpromoted_cache_reload_preserves_empty_fields
+test_a_truncated_cache_is_rejected_and_rescanned
 test_promotion_does_not_reach_the_poll_cadence

@@ -114,7 +114,10 @@ BRIDGE_URGENCY_SUBJECT=
 BRIDGE_URGENCY_PROMOTED_EFFECTIVE=none
 BRIDGE_URGENCY_COMPLETE=0
 bridge_pending_urgency() {  # [<signature>] [<vessel>]
-  local sig=${1:-} vessel=${2:-$BRIDGE_VESSEL} cache cached_sig="" out
+  local sig=${1:-} vessel=${2:-$BRIDGE_VESSEL} cache cache_tmp out
+  local cached_sig="" cached_declared="" cached_effective="" cached_rule=""
+  local cached_match="" cached_subject="" cached_promoted_effective="" cache_complete=0 cache_valid=0
+  local cached_declared_rank cached_effective_rank cached_promoted_rank
   local priority subject rank declared_rank=-1 effective_rank=-1
   local envelope_declared_rank envelope_effective_rank raise=-1 winning_raise=-1 winning_effective_rank=-1
 
@@ -132,26 +135,51 @@ bridge_pending_urgency() {  # [<signature>] [<vessel>]
   [ -n "$sig" ] || sig=$(bridge_inbox_signature "$vessel")
 
   if [ -f "$cache" ]; then
-    {
-      IFS= read -r cached_sig
-      IFS= read -r BRIDGE_URGENCY_DECLARED
-      IFS= read -r BRIDGE_URGENCY_EFFECTIVE
-      IFS= read -r BRIDGE_URGENCY_RULE
-      IFS= read -r BRIDGE_URGENCY_MATCH
-      IFS= read -r BRIDGE_URGENCY_SUBJECT
-      IFS= read -r BRIDGE_URGENCY_PROMOTED_EFFECTIVE
-    } < "$cache" 2>/dev/null || true
-    if [ -n "$BRIDGE_URGENCY_RULE" ] && [ "$BRIDGE_URGENCY_PROMOTED_EFFECTIVE" = none ]; then
-      cached_sig=
+    if {
+      IFS= read -r cached_sig &&
+        IFS= read -r cached_declared &&
+        IFS= read -r cached_effective &&
+        IFS= read -r cached_rule &&
+        IFS= read -r cached_match &&
+        IFS= read -r cached_subject &&
+        IFS= read -r cached_promoted_effective &&
+        ! IFS= read -r _
+    } < "$cache" 2>/dev/null; then
+      cache_complete=1
+    fi
+    if [ "$cache_complete" -eq 1 ]; then
+      case "$cached_declared" in low|normal|high|immediate) ;; *) cache_complete=0 ;; esac
+      case "$cached_effective" in low|normal|high|immediate) ;; *) cache_complete=0 ;; esac
+    fi
+    if [ "$cache_complete" -eq 1 ]; then
+      cached_declared_rank=$(fm_urgency_rank "$cached_declared")
+      cached_effective_rank=$(fm_urgency_rank "$cached_effective")
+      if [ -z "$cached_rule" ]; then
+        [ "$cached_promoted_effective" = none ] && [ -z "$cached_match$cached_subject" ] && \
+          [ "$cached_effective_rank" -eq "$cached_declared_rank" ] && cache_valid=1
+      else
+        case "$cached_promoted_effective" in
+          low|normal|high|immediate)
+            cached_promoted_rank=$(fm_urgency_rank "$cached_promoted_effective")
+            [ -n "$cached_match" ] && [ -n "$cached_subject" ] && \
+              [ "$cached_promoted_rank" -gt "$cached_declared_rank" ] && \
+              [ "$cached_effective_rank" -ge "$cached_promoted_rank" ] && cache_valid=1
+            ;;
+        esac
+      fi
     fi
   fi
-  if [ "$sig" = timeout ] || { [ -n "$cached_sig" ] && [ "$sig" = "$cached_sig" ]; }; then
-    [ -n "${BRIDGE_URGENCY_DECLARED:-}" ] || BRIDGE_URGENCY_DECLARED=none
-    [ -n "${BRIDGE_URGENCY_EFFECTIVE:-}" ] || BRIDGE_URGENCY_EFFECTIVE=none
-    [ -n "${BRIDGE_URGENCY_PROMOTED_EFFECTIVE:-}" ] || BRIDGE_URGENCY_PROMOTED_EFFECTIVE=none
+  if [ "$cache_valid" -eq 1 ] && { [ "$sig" = timeout ] || [ "$sig" = "$cached_sig" ]; }; then
+    BRIDGE_URGENCY_DECLARED=$cached_declared
+    BRIDGE_URGENCY_EFFECTIVE=$cached_effective
+    BRIDGE_URGENCY_RULE=$cached_rule
+    BRIDGE_URGENCY_MATCH=$cached_match
+    BRIDGE_URGENCY_SUBJECT=$cached_subject
+    BRIDGE_URGENCY_PROMOTED_EFFECTIVE=$cached_promoted_effective
     BRIDGE_URGENCY_COMPLETE=1
     return 0
   fi
+  [ "$sig" != timeout ] || return 1
 
   BRIDGE_URGENCY_DECLARED=none
   BRIDGE_URGENCY_EFFECTIVE=none
@@ -194,9 +222,16 @@ EOF
   [ "$effective_rank" -lt 0 ] || BRIDGE_URGENCY_EFFECTIVE=$(fm_urgency_level "$effective_rank")
   # Empty inboxes need no cache entry; the surfaced marker is cleared instead.
   if [ "$BRIDGE_URGENCY_DECLARED" != none ]; then
-    printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$sig" "$BRIDGE_URGENCY_DECLARED" \
-      "$BRIDGE_URGENCY_EFFECTIVE" "$BRIDGE_URGENCY_RULE" "$BRIDGE_URGENCY_MATCH" \
-      "$BRIDGE_URGENCY_SUBJECT" "$BRIDGE_URGENCY_PROMOTED_EFFECTIVE" > "$cache" 2>/dev/null || true
+    cache_tmp=$(mktemp "${cache}.tmp.XXXXXX" 2>/dev/null) || cache_tmp=
+    if [ -n "$cache_tmp" ]; then
+      if printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$sig" "$BRIDGE_URGENCY_DECLARED" \
+        "$BRIDGE_URGENCY_EFFECTIVE" "$BRIDGE_URGENCY_RULE" "$BRIDGE_URGENCY_MATCH" \
+        "$BRIDGE_URGENCY_SUBJECT" "$BRIDGE_URGENCY_PROMOTED_EFFECTIVE" > "$cache_tmp" 2>/dev/null; then
+        mv -f "$cache_tmp" "$cache" 2>/dev/null || rm -f "$cache_tmp" 2>/dev/null || true
+      else
+        rm -f "$cache_tmp" 2>/dev/null || true
+      fi
+    fi
   fi
   return 0
 }

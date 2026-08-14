@@ -101,7 +101,7 @@ Removing the German alternatives from one rule fails the replay case (`replaying
 ## What is proven, and how
 
 `tests/fm-urgency.test.sh` drives the real Bridge surface path, the real wake library, and the real journal reader.
-It also proves that an envelope promoted up to an inbox-wide maximum keeps its own declaration and evidence, that a timed-out partial scan is neither delivered nor cached and is retried, and that empty promotion fields survive an ordinary cache reload without fabricating a promotion.
+It also proves that an envelope promoted up to an inbox-wide maximum keeps its own declaration and evidence, that a timed-out partial scan is neither delivered nor cached and is retried, that empty promotion fields survive an ordinary cache reload without fabricating a promotion, and that a truncated cache forces a rescan instead of hiding a pending envelope.
 Seven load-bearing assertions were mutation-checked on 2026-08-14 rather than trusted for being green:
 
 | Mutation | Caught by |
