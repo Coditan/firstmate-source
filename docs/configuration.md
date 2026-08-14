@@ -458,6 +458,29 @@ A secondmate home on the same machine as its primary writes the same pointer; on
 Nothing creates the surface implicitly: `fm-finding.sh init` creates it and says so, and every other command refuses an absent surface with exit 3.
 A reachable surface always reports counted numbers and an unreachable one reports no number at all, so an empty surface and a surface nobody can reach are never the same reading.
 
+## Event batching delays (config/batch-delays)
+
+The event batcher groups supervision events by priority and holds each class for a bounded time.
+`docs/event-batching.md` owns why it exists and what is proven, `bin/fm-event-batch-lib.sh`'s header owns the record formats and the classification rule, and `bin/fm-event-batch.sh --help` owns the commands.
+This section owns only where the numbers come from.
+
+The shipped defaults are the captain's own values: `immediate` no delay at all, `high` 60 seconds, `normal` 120 seconds, `low` 600 seconds.
+
+`config/batch-delays` overrides them for one home.
+The schema is one `name = seconds` per line, where `name` is one of `immediate`, `high`, `normal`, `low` and `seconds` is a whole number; blank lines and `#` comments are ignored, and an unnamed class keeps its shipped default.
+
+```text
+# this home releases finished work sooner
+high = 30
+low = 300
+```
+
+Resolution order per class is the environment variable (`FM_BATCH_DELAY_IMMEDIATE`, `FM_BATCH_DELAY_HIGH`, `FM_BATCH_DELAY_NORMAL`, `FM_BATCH_DELAY_LOW`), then this file, then the shipped default.
+`fm-event-batch.sh delays` prints the resolved number for each class and which of those three it came from.
+A value that is not a whole number of seconds is refused with exit 2 rather than falling back, because a home that mistyped its delay would otherwise be handed the shipped default while believing it had configured one.
+
+`config/batch-delays` is not in the inheritable set that `bin/fm-config-inherit-lib.sh` declares, for the same reason `config/bosun-judge` is not: nothing reads a batch yet, so whether a secondmate home should inherit these numbers belongs to whichever unit first points a consumer at them.
+
 ## Toolchain
 
 On session start the first mate detects what its required toolchain is missing or too old and lists each problem with either an exact install command or manual instructions.
