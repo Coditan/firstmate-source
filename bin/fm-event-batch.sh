@@ -51,13 +51,13 @@
 #
 # account   Reconcile the journal against the batch records and report anything
 #           the batching cannot account for: a journal event that was passed but
-#           never batched, one batched twice, a batch whose members belong to no
-#           closed or open batch, an event that aged out of the journal before it
-#           could be batched, a closed batch held longer than its class budget,
-#           and an open batch past its deadline. Exits 0 only when every one of
-#           those is empty. This is the drop test, and it is a command rather
-#           than a claim because a lost notification and a quiet period look
-#           identical from anywhere else.
+#           never batched, one batched twice, an event that aged out before it
+#           could be batched, an orphaned or inconsistently closed batch, a
+#           recorded count mismatch, a batch held over budget, an immediate
+#           batch held at all, or an open batch past its deadline. Exits 0 only
+#           when every one of those is empty. This is the drop test, and it is a
+#           command rather than a claim because a lost notification and a quiet
+#           period look identical from anywhere else.
 #
 # delays    Print the resolved delay for each class and where each came from:
 #           the environment, this home's config/batch-delays, or the shipped
