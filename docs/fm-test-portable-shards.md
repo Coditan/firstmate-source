@@ -65,7 +65,7 @@ Exact ordered membership is the heredoc lists in `bin/fm-test-run.sh` (`list_por
 
 `portable-serial` is every `tests/*.test.sh` that is neither proven-isolated nor `real-herdr-gated`.
 That keeps watcher, lock, AFK, real tmux, daemon, secondmate lifecycle, bootstrap, live-harness opt-in (default skip), GUI backends, and other stateful or unproven work serial.
-Measured serial remainder wall (from the same Phase 1 artifacts, excluding Herdr) is about **13 minutes**.
+The original Phase 1 artifacts measured the serial remainder at about **13 minutes**; current measurements and the cap derivation are recorded under [Timeouts](#timeouts).
 
 ## Coverage guard
 
@@ -94,7 +94,7 @@ The workflow in `.github/workflows/ci.yml` owns the exact artifact names and agg
 | Job | timeout-minutes | Rationale |
 |---|---:|---|
 | portable parallel 1/2 | 10 | Measured shard sum ~1 min; hang tripwire with margin |
-| portable serial | 20 | Measured ~13 min remainder; reduced from interim 25m full-portable slack after sharding |
+| portable serial | 40 | Completions measured 17m47s..19m56s over 17 runs on 2026-08-12..14, with every run reaching the old 20m cap cancelled at 20m03s..20m17s and zero failing assertions; 2x that censored >=20m ceiling |
 | Herdr | 40 | Unchanged hang tripwire for the real-Herdr lane |
 
 Timeouts remain hang tripwires, not expected healthy ends of green suites.

@@ -445,8 +445,21 @@ test_ci_and_docs_call_the_owner() {
     || fail "Herdr CI job must use bounded lab cleanup"
   grep -Fq 'tests-timing-aggregate:' "$CI" \
     || fail "CI must aggregate per-lane timing artifacts"
-  grep -Fq 'timeout-minutes: 20' "$CI" \
-    || fail "portable serial hang tripwire must be timeout-minutes: 20"
+  command -v python3 >/dev/null 2>&1 \
+    || fail "python3 is required to validate CI workflow YAML"
+  python3 -c 'import yaml' >/dev/null 2>&1 \
+    || fail "python3 PyYAML is required to validate CI workflow YAML"
+  python3 - "$CI" <<'PY' \
+    || fail "portable serial hang tripwire must be numeric timeout-minutes: 40"
+import sys
+import yaml
+
+with open(sys.argv[1], encoding="utf-8") as workflow_file:
+    workflow = yaml.safe_load(workflow_file)
+timeout = workflow["jobs"]["tests-portable-serial"]["timeout-minutes"]
+if type(timeout) is not int or timeout != 40:
+    raise SystemExit(f"expected numeric 40, got {timeout!r}")
+PY
   grep -Fq 'timeout-minutes: 10' "$CI" \
     || fail "portable parallel shards must keep a hang tripwire (10m)"
   # Interim full-suite 25m portable timeout must not remain after sharding.
