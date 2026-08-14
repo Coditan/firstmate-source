@@ -363,7 +363,7 @@ test_an_incomplete_scan_is_retried_without_delivery_or_cache() {
     . "$1"
     . "$2"
     bridge_pending_envelope_scan() {
-      printf "normal\tRoutine prefix\n"
+      printf "normal\037Routine prefix\037ok\n"
       sleep 2
       printf "%s\n" __FM_BRIDGE_ENVELOPE_SCAN_COMPLETE__
     }
@@ -412,6 +412,34 @@ test_a_truncated_cache_is_rejected_and_rescanned() {
   pass "a truncated cache is rejected and the pending inbox is rescanned"
 }
 
+test_an_unreadable_envelope_escalates_without_blocking_siblings() {
+  local home bridge out again record rule match event
+  home=$(make_bridge_home unreadable)
+  bridge="$home/projects/coditan-bridge"
+  write_envelope "$home" valid high 'Routine release completed successfully'
+  jq -n '{schema:"bridge-envelope.v1", id:"broken", priority:{level:"normal"}, state:"new", subject:42}' \
+    > "$bridge/inbox/coditan/new/broken.json"
+  git -C "$bridge" add inbox/coditan/new/broken.json
+  git -C "$bridge" commit -qm 'add unreadable envelope'
+  git -C "$bridge" push -qu origin main
+
+  out=$(surface_bridge "$home")
+  assert_contains "$out" 'pending=2' "the unreadable envelope prevented its valid sibling from being delivered"
+  assert_contains "$out" 'highest=immediate' "the unreadable envelope passed as ordinary instead of escalating"
+  assert_contains "$out" 'promoted-by=unreadable-envelope' "the unreadable-input escalation was indistinguishable from a content rule"
+  assert_present "$home/state/.bridge-surfaced" "the complete scan containing an unreadable envelope was left for endless retry"
+  assert_present "$home/state/.bridge-urgency-cache" "the complete scan containing an unreadable envelope was not cached"
+
+  record=$(cat "$home/state/urgency/promotions.tsv")
+  IFS=$'\t' read -r _ _ _ _ _ _ rule match event <<< "$record"
+  [ "$rule" = unreadable-envelope ] || fail "the unreadable envelope recorded rule '$rule'"
+  assert_contains "$match" 'broken.json' "the unreadable-envelope record did not name the input that caused escalation"
+  assert_contains "$event" 'unreadable bridge envelope' "the unreadable-envelope record hid why the inbox went urgent"
+  again=$(surface_bridge "$home")
+  [ -z "$again" ] || fail "a completed unreadable-envelope scan was retried after being surfaced: $again"
+  pass "an unreadable envelope escalates while valid siblings still flow"
+}
+
 # The timing boundary, asserted rather than only documented: this unit decides
 # what an event's urgency IS, and how long an event of a given urgency waits
 # belongs to the batching unit. bridge_check_interval must therefore still read
@@ -444,4 +472,5 @@ test_multi_envelope_promotion_keeps_its_own_evidence
 test_an_incomplete_scan_is_retried_without_delivery_or_cache
 test_unpromoted_cache_reload_preserves_empty_fields
 test_a_truncated_cache_is_rejected_and_rescanned
+test_an_unreadable_envelope_escalates_without_blocking_siblings
 test_promotion_does_not_reach_the_poll_cadence

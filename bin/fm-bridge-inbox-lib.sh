@@ -72,20 +72,29 @@ bridge_pending_priority_scan() {
 }
 export -f bridge_pending_priority_scan
 
-# Emit "<priority>\t<subject>" for every pending envelope, one per line.
+# Emit "<priority><US><subject><US><kind>" for every pending envelope, one per line.
 #
 # Deliberately does only the git and jq work: the urgency decision is made by
 # bridge_pending_urgency in the calling shell, where it is pure string matching
 # that costs nothing and cannot be cut short by the bounded-run timeout. Subject
 # tabs and newlines are flattened here so one envelope is always one line.
 bridge_pending_envelope_scan() {
-  local inbox="inbox/$BRIDGE_VESSEL/new" f envelope scan_status
+  local inbox="inbox/$BRIDGE_VESSEL/new" f envelope parsed evidence scan_status
   git -C "$BRIDGE_ROOT" ls-tree -z --name-only "origin/main:$inbox" 2>/dev/null |
   while IFS= read -r -d '' f; do
     case "$f" in *.json) ;; *) continue ;; esac
-    envelope=$(git -C "$BRIDGE_ROOT" show "origin/main:$inbox/$f" 2>/dev/null) || exit 1
-    printf '%s' "$envelope" \
-      | jq -er '[(.priority // "normal"), ((.subject // "") | gsub("[\t\r\n]"; " "))] | @tsv' 2>/dev/null || exit 1
+    evidence=$(printf '%s' "$f" | tr '\037\t\r\n' '    ')
+    if envelope=$(git -C "$BRIDGE_ROOT" show "origin/main:$inbox/$f" 2>/dev/null) && \
+      parsed=$(printf '%s' "$envelope" | jq -er '
+        if ((.priority // "normal") | type) == "string" and ((.subject // "") | type) == "string"
+        then [(.priority // "normal"), ((.subject // "") | gsub("[\u001f\t\r\n]"; " "))] | join("\u001f")
+        else error("non-string envelope field")
+        end
+      ' 2>/dev/null); then
+      printf '%s\037ok\n' "$parsed"
+    else
+      printf 'normal\037unreadable bridge envelope: %s\037unreadable\n' "$evidence"
+    fi
   done
   scan_status=("${PIPESTATUS[@]}")
   [ "${scan_status[0]}" -eq 0 ] && [ "${scan_status[1]}" -eq 0 ] || return 1
@@ -118,7 +127,7 @@ bridge_pending_urgency() {  # [<signature>] [<vessel>]
   local cached_sig="" cached_declared="" cached_effective="" cached_rule=""
   local cached_match="" cached_subject="" cached_promoted_effective="" cache_complete=0 cache_valid=0
   local cached_declared_rank cached_effective_rank cached_promoted_rank
-  local priority subject rank declared_rank=-1 effective_rank=-1
+  local priority subject scan_kind rank declared_rank=-1 effective_rank=-1
   local envelope_declared_rank envelope_effective_rank raise=-1 winning_raise=-1 winning_effective_rank=-1
 
   BRIDGE_URGENCY_DECLARED=none
@@ -188,7 +197,7 @@ bridge_pending_urgency() {  # [<signature>] [<vessel>]
   BRIDGE_URGENCY_SUBJECT=
   BRIDGE_URGENCY_PROMOTED_EFFECTIVE=none
   out=$(BRIDGE_ROOT="$BRIDGE_ROOT" BRIDGE_VESSEL="$vessel" bridge_run_bounded bash -c 'bridge_pending_envelope_scan')
-  while IFS=$'\t' read -r priority subject; do
+  while IFS=$'\037' read -r priority subject scan_kind; do
     if [ "$priority" = __FM_BRIDGE_ENVELOPE_SCAN_COMPLETE__ ]; then
       BRIDGE_URGENCY_COMPLETE=1
       continue
@@ -196,7 +205,13 @@ bridge_pending_urgency() {  # [<signature>] [<vessel>]
     [ -n "$priority" ] || continue
     envelope_declared_rank=$(fm_urgency_rank "$priority")
     [ "$envelope_declared_rank" -le "$declared_rank" ] || declared_rank=$envelope_declared_rank
-    fm_urgency_effective "$priority" "$subject" || true
+    if [ "$scan_kind" = unreadable ]; then
+      FM_URGENCY_EFFECTIVE=immediate
+      FM_URGENCY_RULE=unreadable-envelope
+      FM_URGENCY_MATCH=$subject
+    else
+      fm_urgency_effective "$priority" "$subject" || true
+    fi
     envelope_effective_rank=$(fm_urgency_rank "$FM_URGENCY_EFFECTIVE")
     [ "$envelope_effective_rank" -le "$effective_rank" ] || effective_rank=$envelope_effective_rank
     raise=$((envelope_effective_rank - envelope_declared_rank))
