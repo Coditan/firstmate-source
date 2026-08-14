@@ -86,8 +86,6 @@ case "$HARNESS" in
 esac
 [ -f "$SNIPPET" ] || SNIPPET="$DOC_DIR/unknown.md"
 
-checkpoint_seconds=${FM_CODEX_WATCH_CHECKPOINT:-180}
-pi_ext="$FM_ROOT/.pi/extensions/fm-primary-pi-watch.ts"
 pi_turnend_ext="$FM_ROOT/.pi/extensions/fm-primary-turnend-guard.ts"
 x_mode_env="$CONFIG/x-mode.env"
 
@@ -98,7 +96,6 @@ fi
 render_snippet() {
   local line
   while IFS= read -r line || [ -n "$line" ]; do
-    line=${line//__FM_PI_EXT__/$pi_ext}
     line=${line//__FM_PI_TURNEND_EXT__/$pi_turnend_ext}
     printf '%s\n' "$line"
   done < "$SNIPPET"
@@ -124,7 +121,7 @@ away_repair_line() {
   printf '%s%s%s\n' \
     'Away mode owns wake delivery and no live identity-matched away daemon is reading the durable queue: ' \
     "$relaunch" \
-    '. Then confirm state/.supervise-daemon.pid names a live pid matching the daemon lock identity; do not arm a session delivery wait instead.'
+    '. Then confirm state/.supervise-daemon.pid names a live pid matching the daemon lock identity; the external delivery listener stands down while away mode owns delivery, so repairing it is not the fix here.'
 }
 
 repair_line() {
@@ -137,30 +134,19 @@ repair_line() {
     return 0
   fi
 
+  # The repair is the same sentence on every harness now, because the thing that
+  # needs repairing is not a harness object.  What differs between seats is how a
+  # wake ARRIVES, and that is the snippet's business rather than this line's.
   prefix=
   if [ "$QUEUE_PENDING" -eq 1 ]; then
     prefix='After draining queued wakes, '
   fi
-  case "$HARNESS" in
-    claude)
-      printf '%s%s\n' "$prefix" 're-arm wake delivery with bin/fm-watch-arm.sh as its own Claude Code background task, never shell &, then end this forced continuation silently unless a queued wake reaches AGENTS.md section 9.'
-      ;;
-    codex)
-      printf '%s%s%s%s\n' "$prefix" 're-arm wake delivery with a foreground checkpoint: bin/fm-watch-checkpoint.sh --seconds ' "$checkpoint_seconds" '.'
-      ;;
-    pi)
-      printf '%s%s%s%s%s%s\n' "$prefix" 're-arm wake delivery with the Pi tool fm_watch_arm_pi or restart Pi with -e ' "$pi_turnend_ext" ' -e ' "$pi_ext" ' if the extension is not loaded.'
-      ;;
-    opencode)
-      printf '%s%s\n' "$prefix" 're-arm wake delivery by letting the OpenCode TUI plugin arm after idle; use bin/fm-watch-arm.sh only as a manual recovery probe if the plugin reports failure.'
-      ;;
-    grok)
-      printf '%s%s\n' "$prefix" 're-arm wake delivery with bin/fm-watch-arm.sh as its own Grok tracked background task, never shell &, then end this forced continuation silently unless a queued wake reaches AGENTS.md section 9.'
-      ;;
-    *)
-      printf '%s%s\n' "$prefix" 'resume supervision according to the session-start block for this harness; do not use shell &.'
-      ;;
-  esac
+  repair=$("$SCRIPT_DIR/fm-delivery-service.sh" repair-command 2>/dev/null \
+    || printf '%s\n' 'bin/fm-delivery-service.sh restart')
+  printf '%s%s%s%s\n' "$prefix" \
+    "this home wake-delivery listener is not running, so nothing will turn a queued wake into a turn: repair it with " \
+    "$repair" \
+    ", confirm with bin/fm-delivery-service.sh status, and do not arm a session delivery wait instead - there is no longer such a thing."
 }
 
 if [ "$REPAIR_LINE" -eq 1 ]; then
@@ -179,7 +165,7 @@ else
   printf '%s\n' '- Lock: held by this session; this session owns normal supervision unless away mode says otherwise.'
 fi
 if [ "$AFK" -eq 1 ]; then
-  printf '%s\n' '- Away mode: active; load /afk and keep the session delivery wait paused while the daemon reads the watcher service queue.'
+  printf '%s\n' '- Away mode: active; load /afk. The away daemon owns delivery and the external listener stands down for it.'
 else
   printf '%s\n' '- Away mode: inactive.'
 fi
@@ -188,7 +174,7 @@ if [ "$X_MODE" -eq 1 ]; then
 else
   printf '%s\n' '- X mode: inactive; use the default watcher cadence.'
 fi
-printf '%s\n' '- The watcher service owns the loop; after every handled wake, re-arm only this harness delivery wait.'
+printf '%s\n' '- The watcher service owns the loop and a companion service owns delivery; this session arms nothing and holds no delivery object.'
 printf '\n'
 render_snippet
 printf '\n'

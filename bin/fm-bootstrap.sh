@@ -30,6 +30,7 @@
 #                 "CURRENCY_ROUND: the daily update check <is not armed|has stopped> (...)",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...",
 #                 "WATCHER_UNIT: <consent, convergence, or fallback detail>",
+#                 "DELIVERY_UNIT: <consent, convergence, or fallback detail>",
 #                 "FREQUENCY_MONITOR_UNIT: <consent, convergence, or fallback detail>",
 #                 "RUN_READER: no-mistakes runs in this session (<path>) but a
 #                 context that inherits no shell setup cannot reach it (...)".
@@ -964,6 +965,11 @@ if [ "${1:-}" = "install" ]; then
         "$SCRIPT_DIR/fm-watcher-service.sh" enable-linger || exit 1
         continue
         ;;
+      delivery-unit)
+        echo "installing delivery-unit: systemd user template plus this home's enabled instance"
+        "$SCRIPT_DIR/fm-delivery-service.sh" install-unit || exit 1
+        continue
+        ;;
       frequency-monitor-unit)
         echo "installing frequency-monitor-unit: systemd user template plus this home's enabled instance"
         "$SCRIPT_DIR/fm-frequency-monitor-service.sh" install-unit || exit 1
@@ -1075,12 +1081,14 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   x_mode_setup
   if [ "${FM_TEST_SKIP_WATCHER_SERVICE:-0}" != 1 ]; then
     "$SCRIPT_DIR/fm-watcher-service.sh" bootstrap
+    "$SCRIPT_DIR/fm-delivery-service.sh" bootstrap
     "$SCRIPT_DIR/fm-frequency-monitor-service.sh" bootstrap
   fi
   fleet_sync
 else
   if [ "${FM_TEST_SKIP_WATCHER_SERVICE:-0}" != 1 ]; then
     "$SCRIPT_DIR/fm-watcher-service.sh" bootstrap
+    "$SCRIPT_DIR/fm-delivery-service.sh" bootstrap
     "$SCRIPT_DIR/fm-frequency-monitor-service.sh" bootstrap
   fi
 fi

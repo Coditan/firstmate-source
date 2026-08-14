@@ -92,14 +92,12 @@ Full mechanics, scoping, dated commands, payloads, and fail-open evidence live i
 
 ## Primary watcher supervision
 
-At session start, `bin/fm-session-start.sh` prints exactly one watcher supervision block for the detected primary harness.
-Do not substitute another harness's wait shape when resuming supervision.
-The external systemd or tmux keeper owns the watcher loop for every harness.
-Claude and Grok use tracked background-notify delivery waits around `bin/fm-watch-arm.sh`.
-Codex uses bounded foreground delivery checkpoints through `bin/fm-watch-checkpoint.sh` because Codex cannot reason while a foreground tool call is running.
-OpenCode uses `.opencode/plugins/fm-primary-watch-arm.js`, which coordinates with the turn-end guard plugin and wakes the TUI with `client.session.promptAsync`.
-Pi uses the tracked `.pi/extensions/fm-primary-turnend-guard.ts` plus the tracked `.pi/extensions/fm-primary-pi-watch.ts`, both project-local extensions Pi auto-discovers once trusted.
-When changing any primary watcher adapter, update `docs/supervision-protocols/`, `docs/turnend-guard.md` if a shared idle or turn-end hook changed, and the relevant concise fact below.
+At session start, `bin/fm-session-start.sh` prints exactly one supervision block for the detected primary harness.
+The external systemd or tmux keeper owns the watcher loop for every harness, and a companion service owns wake delivery for every harness.
+No harness has a delivery mechanism of its own any more: there is no per-harness wait shape to substitute, because no session holds a delivery object at all (`docs/wake-delivery.md`).
+A wake arrives as a message the external listener submits into the session's own composer, and every seat handles it the same way, by draining first.
+What still differs per harness is the turn-end guard's shape and whether the harness refuses a turn with no visible output.
+When changing any primary adapter, update `docs/supervision-protocols/`, `docs/turnend-guard.md` if a shared idle or turn-end hook changed, and the relevant concise fact below.
 
 ## Launch profile axes
 
@@ -180,7 +178,7 @@ The firstmate PRIMARY's own `.claude/settings.json` registers `bin/fm-turnend-gu
 Claude Code's stdin payload to a Stop hook carries a `stop_hook_active` boolean that is `true` exactly when the current stop attempt is itself a forced continuation from an earlier block this turn; a hook can and should use that as its own loop-guard (always allow the stop when it is already `true`) rather than tracking state itself.
 A project-level `.claude/settings.json` only takes effect when Claude Code's project root is that exact directory - it does not walk up from a subdirectory looking for one, so firstmate launches the primary from the repo root.
 After those settings are loaded, hook command resolution is still cwd-sensitive because Claude Code runs commands through `/bin/sh` against the session's current cwd; keep the tracked command anchored through `"$CLAUDE_PROJECT_DIR"/bin/fm-turnend-guard.sh` and see `docs/turnend-guard.md` for the verified Stop-hook details.
-Claude Code's primary delivery protocol is the lowest-friction path: run `bin/fm-watch-arm.sh` as its own Claude Code background task and treat delivery-stub completion as the wake.
+Claude Code holds no delivery object: the external listener submits the wake into its composer and the seat drains it. A background task the harness reaper stops is now an ordinary tool event with no supervision consequence.
 
 ## codex (VERIFIED 2026-06-11, codex-cli 0.139.0; re-verified 2026-07-26 against codex-cli 0.145.0, both the source at tag `rust-v0.145.0` and the installed binary; busy-row consequence and agent-liveness backstop verified 2026-08-02 on codex-cli 0.145.0, see docs/codex-busy-detection.md)
 
@@ -291,8 +289,8 @@ Codex Stop hooks block on exit 2 and expose `stop_hook_active` for the same one-
 Codex's Stop payload includes `cwd`, but the tracked primary hook does not use it to choose the guard executable.
 Verified on 2026-07-08: Codex runs the Stop hook command with process PWD set to the hook-loaded project root, and no `CODEX_PROJECT_DIR`, `CODEX_WORKSPACE_ROOT`, or `CODEX_CWD` root variable is set.
 The tracked hook anchors to `pwd -P`, verifies that root is firstmate-shaped and hook-bearing, and then invokes `bin/fm-turnend-guard.sh` with the original payload.
-Codex's primary delivery protocol is `bin/fm-watch-checkpoint.sh --seconds "${FM_CODEX_WATCH_CHECKPOINT:-180}"`, not `bin/fm-watch-arm.sh`.
-The delivery-stub checkpoint is deliberately foreground and bounded so Codex regains control regularly to process user messages and queued wakes.
+Codex holds no delivery object and runs no foreground checkpoint: the external listener submits the wake into its composer and the seat drains it.
+That removes the reason Codex's supervision used to block reasoning at all - the checkpoint existed because Codex cannot reason while a foreground tool call runs, and there is no longer a foreground call to make.
 
 ## opencode (VERIFIED 2026-06-11, v1.15.7-1.17.6; 1.18.4 busy-queue re-verified 2026-07-20)
 
@@ -328,7 +326,7 @@ cleared -> `empty`, idle + cleared -> `empty`).
 **Primary-session guard fact (verified 2026-07-08, OpenCode 1.17.6).**
 The firstmate PRIMARY's own `.opencode/plugins/fm-primary-turnend-guard.js` listens for `session.idle`.
 Throwing from `session.idle` does not block `opencode run`, so the primary adapter treats the event as passive and uses `client.session.promptAsync` to force one follow-up turn when `bin/fm-turnend-guard.sh` returns 2.
-The companion `.opencode/plugins/fm-primary-watch-arm.js` owns normal TUI watcher wake supervision and coordinates with the guard plugin before the guard tries a blind-turn follow-up.
+OpenCode holds no delivery object: the watch-arm plugin that used to own TUI wake supervision was removed with the session-held delivery layer, and the external listener submits into the TUI composer instead.
 The follow-up was verified in the interactive TUI; `opencode run` can exit before displaying a queued follow-up, so the adapter is fail-open in headless mode.
 
 ## pi (VERIFIED 2026-06-11)
@@ -354,10 +352,9 @@ Pi sets `PI_CODING_AGENT=true` for its children; this is its harness-detection e
 **Primary-session guard fact (verified 2026-07-24, Pi 0.81.1).**
 The firstmate PRIMARY's own `.pi/extensions/fm-primary-turnend-guard.ts` listens for logical-run `agent_settled`, not per-tool-loop `turn_end`, and calls the shared structured delivery helper with the explicit `turn-end-guard` kind and `deliverAs: "followUp"` when `bin/fm-turnend-guard.sh` returns 2.
 The helper uses Pi's custom context message API with `triggerTurn: true`; without follow-up delivery, Pi rejects a send while the agent is still processing.
-Pi's primary watcher protocol also requires the tracked `.pi/extensions/fm-primary-pi-watch.ts` extension, same trust-once discovery as the turn-end guard.
-The model arms through `fm_watch_arm_pi`, never a foreground bash arm; the watcher tool result and clean-exit fallback are owned by `docs/supervision-protocols/pi.md`.
-`bin/fm-session-start.sh` reports when the live Pi session has not loaded both the turn-end guard and watcher extensions, and points at plain `pi` after project trust as the fix, with `-e` as a trust-free fallback.
-When a secondmate is launched on Pi, `fm-spawn.sh --secondmate` launches Pi with both `-e .pi/extensions/fm-primary-turnend-guard.ts` and `-e .pi/extensions/fm-primary-pi-watch.ts`, both already present in the secondmate home's git worktree.
+Pi holds no delivery object: the watch extension and its `fm_watch_arm_pi` tool were removed with the session-held delivery layer, and the turn-end guard extension is the only tracked primary extension left.
+`bin/fm-session-start.sh` reports when the live Pi session has not loaded it, and points at plain `pi` after project trust as the fix, with `-e` as a trust-free fallback.
+When a secondmate is launched on Pi, `fm-spawn.sh --secondmate` launches Pi with `-e .pi/extensions/fm-primary-turnend-guard.ts`, already present in the secondmate home's git worktree.
 
 ## grok (VERIFIED 2026-06-29, grok 0.2.73; slash-submit re-verified 2026-07-03 on 0.2.82; reasoning-effort ceiling re-verified 2026-07-13 on 0.2.99; exit paths re-verified 2026-07-19 on grok 0.2.103)
 
@@ -414,4 +411,4 @@ Grok Stop hooks are passive for this purpose: exit 2 does not make the model con
 The adapter therefore runs the shared predicate and, when it returns 2, forces one same-session follow-up with `grok --resume <sessionId> -p <guard-reason>` while setting `GROK_TURNEND_GUARD_ACTIVE=1` so the nested Stop hook does not recurse.
 It does not pass `--permission-mode`, so the passive hook cannot escalate the primary session's tool permissions.
 Project-local Grok hooks require folder trust, verified with launch-time `--trust`; if the primary firstmate checkout is not trusted for Grok hooks, this primary guard fails open and `fm-guard.sh` remains the next-command alarm.
-Grok's primary delivery protocol is Claude-shaped background notification around `bin/fm-watch-arm.sh`; the passive Stop hook is only a backstop for blind turn ends.
+Grok holds no delivery object: the external listener submits the wake into its composer and the seat drains it. The passive Stop hook remains a backstop for blind turn ends.

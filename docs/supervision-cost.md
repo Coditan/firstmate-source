@@ -6,6 +6,11 @@ Every figure here was counted from the provider's own usage records with `bin/fm
 Nothing here is projected from a byte count, a turn count, or a rate card.
 Where a number could not be measured, this document says so instead of supplying one that looks measured.
 
+**Read as a record, not as a description of how supervision works today.**
+Most of what is measured below is the cost of the per-session delivery arm: the empty deliveries in front of the queue, the pairing that made a wake cost two requests instead of three, the harness reaper stopping the arm.
+That whole layer was removed on 2026-08-13 when wake delivery moved into a service outside the harness (`docs/wake-delivery.md`), so the arm cost these figures measure is now zero by construction rather than by tuning.
+The figures are kept because an after-figure only means something next to a before-figure, and this is the before.
+
 ## The unit
 
 FRESH tokens: `input_tokens + cache_creation_input_tokens` for one request, deduplicated by request id.

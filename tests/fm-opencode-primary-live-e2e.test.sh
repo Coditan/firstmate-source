@@ -22,10 +22,7 @@ command -v sqlite3 >/dev/null 2>&1 || fail "sqlite3 not found"
 
 TMUX=$(command -v tmux)
 SOCKET="fm-opencode-live-e2e-$$"
-SESSION=opencode-live-e2e
 LAB="$ROOT/.opencode-live-e2e.$$"
-PROJECT="$LAB/project"
-HOME_DIR="$LAB/fmhome"
 OPENCODE_VERSION=$(opencode --version)
 AHOY_PROJECT="$LAB/ahoy-project"
 # shellcheck source=bin/fm-operational-input.sh
@@ -41,10 +38,6 @@ fm_operational_input_encode watcher "CURRENT_AHOY_WATCHER_BODY" CURRENT_WATCHER 
   || fail "could not construct current Ahoy watcher fixture"
 QUOTED_CURRENT="Captain quote: $CURRENT_WATCHER"
 ASCII_ONLY='FIRSTMATE_OP: v1 watcher: captain-authored text'
-
-capture() {
-  "$TMUX" -L "$SOCKET" capture-pane -p -t "$SESSION" -S -800 2>/dev/null || true
-}
 
 wait_for_text() {
   local expected=$1 attempts=${2:-180} i=0
@@ -74,18 +67,6 @@ dismiss_update_offer() {
   # event, which can obstruct the watcher follow-up under test.
   "$TMUX" -L "$SOCKET" send-keys -t "$SESSION" Left Enter
   wait_for_absent "Update Available" 60
-}
-
-wait_for_handled() {
-  local i=0
-  while [ "$i" -lt 240 ]; do
-    dismiss_update_offer || return 1
-    [ -f "$HOME_DIR/state/opencode-model-handled" ] && return 0
-    sleep 0.5
-    i=$((i + 1))
-  done
-  capture >&2
-  return 1
 }
 
 lab_pid_is_safe() {
@@ -294,64 +275,12 @@ run_native_ahoy_regressions() {
 mkdir -p "$LAB"
 run_ahoy_transcript_regressions
 run_native_ahoy_regressions
-git clone -q "$ROOT" "$PROJECT"
-mkdir -p "$PROJECT/.opencode/plugins/lib"
-cp "$ROOT/.opencode/plugins/fm-primary-watch-arm.js" "$PROJECT/.opencode/plugins/fm-primary-watch-arm.js"
-cp "$ROOT/.opencode/plugins/lib/fm-operational-input.js" "$PROJECT/.opencode/plugins/lib/fm-operational-input.js"
-cp "$ROOT/bin/fm-watch-arm.sh" "$PROJECT/bin/fm-watch-arm.sh"
-cp "$ROOT/bin/fm-operational-input.sh" "$PROJECT/bin/fm-operational-input.sh"
-chmod +x "$PROJECT/bin/fm-operational-input.sh"
-mkdir -p "$HOME_DIR/state" "$HOME_DIR/config"
-printf 'project=fixture\n' > "$HOME_DIR/state/opencode-e2e.meta"
+# The plugin-owned delivery-arm cycle this section used to regress no longer
+# exists: wake delivery is an external service, and no OpenCode plugin holds a
+# delivery child any more. What replaced it is proven where it can actually be
+# proven - tests/fm-delivery.test.sh drives the listener into a real tmux agent
+# composer, and tests/fm-watcher-systemd-smoke.test.sh proves the systemd unit
+# restarts it. This credentialed regression keeps the part that still has a live
+# subject: OpenCode's native Ahoy handling above.
 
-# shellcheck disable=SC2016 # The model, not this test shell, expands FM_HOME.
-PROMPT='Use the terminal to run `printf ready > "$FM_HOME/state/opencode-model-initial"`, then respond briefly. If a later watcher wake arrives, run bin/fm-wake-drain.sh, then run `printf handled > "$FM_HOME/state/opencode-model-handled"`. Never run or request any watcher arm command.'
-"$TMUX" -L "$SOCKET" new-session -d -s "$SESSION" -c "$PROJECT" \
-  "env OPENCODE_CONFIG_CONTENT='{\"permission\":{\"*\":\"allow\"}}' FM_HOME='$HOME_DIR' FM_ROOT_OVERRIDE='$PROJECT' FM_POLL=1 FM_SIGNAL_GRACE=0 FM_HEARTBEAT=600 bash -lc 'printf \"%s\\n\" \"\$\$\" > \"\$FM_HOME/state/.lock\"; opencode --auto; rc=\$?; printf \"OPENCODE_EXIT=%s\\n\" \"\$rc\"; sleep 300'"
-
-# Send the initial prompt through the ready composer so this exercises the same
-# persistent TUI path as a primary session.
-wait_for_text "$OPENCODE_VERSION" 120 || fail "OpenCode did not reach its TUI"
-dismiss_update_offer || fail "OpenCode update offer did not dismiss"
-sleep 1
-"$TMUX" -L "$SOCKET" send-keys -t "$SESSION" -l "$PROMPT"
-"$TMUX" -L "$SOCKET" send-keys -t "$SESSION" Enter
-i=0
-while [ "$i" -lt 240 ]; do
-  dismiss_update_offer || fail "OpenCode update offer obstructed the initial turn"
-  [ -f "$HOME_DIR/state/opencode-model-initial" ] && break
-  sleep 0.5
-  i=$((i + 1))
-done
-[ -f "$HOME_DIR/state/opencode-model-initial" ] || fail "OpenCode credentialed initial turn did not complete"
-
-i=0
-while [ "$i" -lt 120 ]; do
-  watcher_pid=$(cat "$HOME_DIR/state/.watch.lock/pid" 2>/dev/null || true)
-  [ -n "$watcher_pid" ] && kill -0 "$watcher_pid" 2>/dev/null && break
-  sleep 0.5
-  i=$((i + 1))
-done
-if [ -z "${watcher_pid:-}" ] || ! kill -0 "$watcher_pid" 2>/dev/null; then
-  fail "OpenCode idle event did not start the initial watcher"
-fi
-
-printf 'done: opencode live e2e watcher fire\n' > "$HOME_DIR/state/opencode-e2e.status"
-i=0
-while [ "$i" -lt 240 ]; do
-  grep -Eq 'reason=actionable-signal.*successor=started:[0-9]+' "$HOME_DIR/state/.watch-cycle-exits.log" 2>/dev/null && break
-  sleep 0.5
-  i=$((i + 1))
-done
-grep -Eq 'reason=actionable-signal.*successor=started:[0-9]+' "$HOME_DIR/state/.watch-cycle-exits.log" 2>/dev/null \
-  || fail "OpenCode plugin did not start and ledger-link a successor after the actionable close"
-wait_for_handled || fail "OpenCode did not drain and settle after plugin-owned re-arm"
-
-pane=$(capture)
-guard_count=$(printf '%s\n' "$pane" | grep -Fc "TURN WOULD END BLIND - supervision is off." || true)
-[ "$guard_count" -eq 0 ] || fail "OpenCode successor was not protecting the next idle event (guard count $guard_count)"
-if printf '%s\n' "$pane" | grep -Fq '$ bin/fm-watch-arm.sh'; then
-  fail "OpenCode model attempted to re-arm instead of leaving continuity to the plugin"
-fi
-
-printf 'ok - OpenCode %s live E2E covered native Ahoy first/later messages, near misses, and watcher continuity\n' "$OPENCODE_VERSION"
+printf 'ok - OpenCode %s live E2E covered native Ahoy first/later messages and near misses\n' "$OPENCODE_VERSION"

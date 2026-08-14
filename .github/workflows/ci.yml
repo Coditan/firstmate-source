@@ -107,10 +107,26 @@ jobs:
   tests-portable-serial:
     name: Behavior portable serial
     runs-on: ubuntu-latest
-    # Measured serial remainder is ~13 min wall without Herdr. Cap is a hang
-    # tripwire above observed p99 script cost and suite wall, not the expected
-    # healthy end (interim 25m full-suite slack reduced after sharding).
-    timeout-minutes: 20
+    # Hang tripwire, not the expected healthy end. Derivation, measured over
+    # the 17 consecutive runs of this job on 2026-08-12..14:
+    #   - completions ran 17m47s..19m56s (94 scripts, ~19.4 min of script
+    #     time; slowest single script fm-watch-triage at 190s)
+    #   - every run that reached the old 20m cap was cancelled at
+    #     20m03s..20m17s with zero failing assertions, so the healthy ceiling
+    #     is censored at >=20m rather than known to sit below it
+    # 2x that >=20m ceiling gives 40m. The multiple is 2x rather than tighter
+    # because the two errors do not cost the same: clipping a healthy run
+    # destroys the verdict outright (four PRs were left unverified that way),
+    # while an over-generous cap only burns runner minutes on a job that was
+    # never going to finish anyway. A hang here is unbounded and this lane has
+    # no per-script timeout, so this cap is its only tripwire - which means
+    # every cap above the healthy ceiling catches a hang equally well, and
+    # only the false-cancel side of the trade is actually load-bearing.
+    # 2x also re-absorbs suite growth: this lane measured ~13 min when the
+    # previous cap was set and measures ~19.4 min now.
+    # The Herdr lane's 40 below is arrived at independently; the match is a
+    # coincidence, not the reason for this value.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v6
         with:
