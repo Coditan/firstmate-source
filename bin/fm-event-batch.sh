@@ -166,7 +166,7 @@ account_inputs() {
   fm_batch_cat_members \
     | LC_ALL=C awk -F '\t' 'NF >= 8 && $4 ~ /^[0-9]+$/ { print "member\t" $4 "\t" $2 }'
   fm_batch_cat_batches \
-    | LC_ALL=C awk -F '\t' 'NF >= 10 && $1 ~ /^[0-9]+$/ { print "batch\t" $1 "\t" $2 "\t" $4 "\t" $5 "\t" $7 }'
+    | LC_ALL=C awk -F '\t' 'NF >= 10 && $1 ~ /^[0-9]+$/ { print "batch\t" $1 "\t" $2 "\t" $4 "\t" $5 "\t" $7 "\t" $8 }'
 }
 
 run_account() {
@@ -181,10 +181,12 @@ run_account() {
                       open_due[$2 + 0] = $4 + 0; open_count[$2 + 0] = $5 + 0
                       opens++; next }
     $1 == "journal" { jseq[$2 + 0] = 1; if (($2 + 0) > jlast) jlast = $2 + 0; next }
-    $1 == "member"  { members[$2 + 0]++; member_bseq[$3 + 0] = 1; total_members++; next }
-    $1 == "batch"   { closed_bseq[$2 + 0] = 1; bpri[$2 + 0] = $3
+    $1 == "member"  { members[$2 + 0]++; member_bseq[$3 + 0] = 1
+                      member_count[$3 + 0]++; total_members++; next }
+    $1 == "batch"   { closed_bseq[$2 + 0]++; bpri[$2 + 0] = $3
                       boldest[$2 + 0] = $4 + 0; bclosed[$2 + 0] = $5 + 0
-                      breason[$2 + 0] = $6; total_batches++; next }
+                      breason[$2 + 0] = $6; batch_count[$2 + 0] = $7 + 0
+                      total_batches++; next }
     END {
       fault = 0
       printf "journal_horizon: %s\n", (horizon == "" ? "none" : horizon)
@@ -215,6 +217,14 @@ run_account() {
       for (s in members) if (members[s] > 1) { dup = dup " " s; dup_n++ }
       for (b in member_bseq)
         if (!(b in closed_bseq) && !(b in open_bseq)) { orphan = orphan " " b; orphan_n++ }
+      for (b in closed_bseq) {
+        if (closed_bseq[b] > 1) { duplicate_close = duplicate_close " " b; duplicate_close_n++ }
+        if (b in open_bseq) { overlap = overlap " " b; overlap_n++ }
+        if (batch_count[b] != member_count[b]) {
+          mismatch = mismatch sprintf(" #%d(recorded %d, members %d)", b, batch_count[b], member_count[b])
+          mismatch_n++
+        }
+      }
 
       # Two different questions, and conflating them would leave one of them
       # unanswerable. The budget check measures from the oldest member ARRIVED,
@@ -251,6 +261,9 @@ run_account() {
       if (aged) { printf "aged_out: %d event(s) fell below the journal horizon before batching\n", aged; fault = 1 }
       if (dup_n) { printf "duplicated:%s\n", dup; fault = 1 }
       if (orphan_n) { printf "orphaned_batches:%s\n", orphan; fault = 1 }
+      if (duplicate_close_n) { printf "duplicate_closures:%s\n", duplicate_close; fault = 1 }
+      if (overlap_n) { printf "open_closed_overlap:%s\n", overlap; fault = 1 }
+      if (mismatch_n) { printf "count_mismatch:%s\n", mismatch; fault = 1 }
       if (over_n) { printf "over_budget:%s\n", over; fault = 1 }
       if (heldi_n) { printf "immediate_held:%s\n", heldi; fault = 1 }
       if (overdue_n) { printf "overdue_open:%s\n", overdue; fault = 1 }
@@ -258,8 +271,8 @@ run_account() {
         printf "journal_gaps: %s (allocated a sequence and never reached disk; never batched)\n", jgaps
 
       if (fault) {
-        printf "UNACCOUNTED - %d missing, %d aged out, %d duplicated, %d orphaned, %d over budget, %d immediate held, %d overdue\n", \
-          missing_n + 0, aged + 0, dup_n + 0, orphan_n + 0, over_n + 0, heldi_n + 0, overdue_n + 0
+        printf "UNACCOUNTED - %d missing, %d aged out, %d duplicated, %d orphaned, %d duplicate closures, %d open/closed overlaps, %d count mismatches, %d over budget, %d immediate held, %d overdue\n", \
+          missing_n + 0, aged + 0, dup_n + 0, orphan_n + 0, duplicate_close_n + 0, overlap_n + 0, mismatch_n + 0, over_n + 0, heldi_n + 0, overdue_n + 0
         exit 1
       }
       printf "ACCOUNTED - every journal event at or below the cursor is in exactly one batch, within its budget\n"

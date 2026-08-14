@@ -338,6 +338,32 @@ test_a_pass_that_dies_before_the_cursor_moves_duplicates_rather_than_drops() {
   pass "a pass that dies before its cursor moves re-admits the event and says so, rather than losing it"
 }
 
+test_a_stale_open_marker_is_reported_and_never_reused() {
+  local dir marker old_bseq new_bseq out rc=0
+  dir=$(make_batch_case stale-open-marker)
+  emit "$dir" fm-a "working: one"
+  batch "$dir" run --once > /dev/null 2>&1 || fail "the admitting pass failed"
+  marker=$(cat "$dir/state/batches/open/low")
+  old_bseq=${marker%%$'\t'*}
+  batch "$dir" flush > /dev/null 2>&1 || fail "the initial close failed"
+  printf '%s\n' "$marker" > "$dir/state/batches/open/low"
+
+  out=$(batch "$dir" account) || rc=$?
+  [ "$rc" -ne 0 ] || fail "a closed batch still marked open was reported as accountable"
+  printf '%s\n' "$out" | grep -q "^open_closed_overlap: $old_bseq$" \
+    || fail "account did not name the open and closed overlap: $out"
+
+  emit "$dir" fm-b "working: two"
+  batch "$dir" run --once > /dev/null 2>&1 || fail "the recovering pass failed"
+  new_bseq=$(awk -F '\t' '$4 == 2 { print $2 }' "$dir/state/batches/members.tsv")
+  [ -n "$new_bseq" ] || fail "the event after the stale marker was not admitted"
+  [ "$new_bseq" -ne "$old_bseq" ] || fail "the event after the stale marker extended the closed batch"
+  [ "$(member_jseqs "$dir" | tr '\n' ' ')" = "1 2 " ] \
+    || fail "recovering from the stale marker lost a member"
+  batch "$dir" account > /dev/null || fail "discarding the stale marker left the record unaccountable"
+  pass "a stale open marker is reported and admission opens a fresh batch without losing members"
+}
+
 test_an_event_whose_record_fails_is_not_stepped_over() {
   local dir err cursor
   dir=$(make_batch_case record-failure)
@@ -546,6 +572,7 @@ test_an_immediate_event_closes_every_open_batch_early
 test_no_event_is_dropped_by_batching_proven_against_the_journal
 test_account_names_a_lost_event_instead_of_reading_clean
 test_a_pass_that_dies_before_the_cursor_moves_duplicates_rather_than_drops
+test_a_stale_open_marker_is_reported_and_never_reused
 test_an_event_whose_record_fails_is_not_stepped_over
 test_a_full_batch_closes_early_rather_than_dropping_the_overflow
 test_the_delays_are_configurable_and_a_bad_value_is_refused

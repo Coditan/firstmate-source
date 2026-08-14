@@ -419,6 +419,14 @@ fm_batch_open_priorities() {
   done
 }
 
+fm_batch_is_closed() {  # <bseq>
+  local bseq=$1
+  fm_batch_cat_batches | LC_ALL=C awk -F '\t' -v want="$bseq" '
+    NF >= 10 && $1 == want { found = 1; exit }
+    END { exit !found }
+  '
+}
+
 # --- admitting and closing --------------------------------------------------
 #
 # Both mutate. Both require the caller to hold FM_BATCH_LOCK.
@@ -499,7 +507,12 @@ fm_batch_admit() {  # <jseq> <arrived> <kind> <key> <event> <priority>
 
   mkdir -p "$FM_BATCH_DIR" "$FM_BATCH_OPEN_DIR" 2>/dev/null || return 1
 
-  if ! fm_batch_open_read "$priority"; then
+  if fm_batch_open_read "$priority" && fm_batch_is_closed "$FM_BATCH_OPEN_BSEQ"; then
+    rm -f "$FM_BATCH_OPEN_DIR/$priority" 2>/dev/null || return 1
+    FM_BATCH_OPEN_BSEQ=
+  fi
+
+  if [ -z "$FM_BATCH_OPEN_BSEQ" ]; then
     FM_BATCH_OPEN_BSEQ=$(fm_batch_read_number "$FM_BATCH_BSEQ_FILE" 0)
     FM_BATCH_OPEN_BSEQ=$((FM_BATCH_OPEN_BSEQ + 1))
     printf '%s\n' "$FM_BATCH_OPEN_BSEQ" > "$FM_BATCH_BSEQ_FILE" 2>/dev/null || return 1

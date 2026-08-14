@@ -75,6 +75,9 @@ The cursor advances only **after** a member record reaches disk, so a process ki
 - `aged_out` - events that fell below the journal's retention horizon before the batcher reached them.
 - `duplicated` - the honest outcome of the cursor order above.
 - `orphaned_batches` - members whose batch is neither closed nor open.
+- `duplicate_closures` - a batch sequence with more than one close record.
+- `open_closed_overlap` - a batch sequence that is both closed and still marked open.
+- `count_mismatch` - a closed batch whose recorded count differs from its member records.
 - `over_budget` - a closed batch held longer than its class allows.
 - `immediate_held` - an immediate batch that was not released by the pass that opened it.
 - `overdue_open` - a batch past its deadline that nothing has closed, which is what a stopped batcher looks like from outside.
@@ -127,7 +130,7 @@ The no-authority claim is tested the same way the bosun's is: every file under t
 Where speed and completeness conflicted this unit chose speed, so an unlisted shortcut would be a defect.
 
 - **Every consumer.** Nothing reads a closed batch today. The judging tier that will read one, the path from a batch to what actually surfaces, and any arming of this on the watcher are separate units. `fm-event-batch.sh show <bseq>` exists so a consumer has a shape to read; nothing calls it.
-- **Recovery of an orphaned batch.** A process killed between the batch record and the open marker leaves a batch marked open that is already closed. Its members are safe and `account` names it, but nothing rebuilds the marker from `members.tsv`, which is the repair that data would support.
+- **Recovery of a lost open marker.** A stale marker left by a process killed between appending the batch record and removing the marker is detected at admission, discarded, and replaced with a fresh batch. Reconciliation fails on duplicate closures, open and closed overlap, and a mismatch between a closed batch's recorded count and its member records. What remains unbuilt is reconstructing a lost marker's running totals from `members.tsv`.
 - **A real retention policy.** What ships is the same crude size bound the journal and the bosun use - two files of `FM_BATCH_MAX_BYTES` each - so a long-running batcher cannot fill a supervision host. It does not reason about age, event rate, or how far back a reconciliation needs to reach; `account` reports the horizon it can no longer see below rather than presenting a truncated reconciliation as a clean one.
 - **A tuned classification table.** The verb-to-class mapping was written once against this fleet's existing status vocabulary. No variant was compared against another, and nothing measures whether an event a human would have wanted sooner was put in a slower class. The classes are overridable (`FM_BATCH_VERBS_IMMEDIATE`, `FM_BATCH_VERBS_LOW`) so that measurement can be acted on without editing code.
 - **Batching across homes.** One batcher per home, one cursor per home. A fleet-wide batch spanning several homes is not built and is not implied by anything here.
