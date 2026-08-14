@@ -445,16 +445,21 @@ test_ci_and_docs_call_the_owner() {
     || fail "Herdr CI job must use bounded lab cleanup"
   grep -Fq 'tests-timing-aggregate:' "$CI" \
     || fail "CI must aggregate per-lane timing artifacts"
-  # Scoped to the serial job: a bare file-wide grep for this value would be
-  # satisfied by the Herdr lane's own 40 and prove nothing about this lane.
-  local serial_timeout
-  serial_timeout=$(awk '
-    $0 == "  tests-portable-serial:" { in_job=1; next }
-    in_job && /^  [a-zA-Z0-9_-]+:/ { exit }
-    in_job && /^    timeout-minutes:/ { print $2; exit }
-  ' "$CI")
-  [ "$serial_timeout" = "40" ] \
-    || fail "portable serial hang tripwire must be timeout-minutes: 40 (got '${serial_timeout:-none}')"
+  command -v python3 >/dev/null 2>&1 \
+    || fail "python3 is required to validate CI workflow YAML"
+  python3 -c 'import yaml' >/dev/null 2>&1 \
+    || fail "python3 PyYAML is required to validate CI workflow YAML"
+  python3 - "$CI" <<'PY' \
+    || fail "portable serial hang tripwire must be numeric timeout-minutes: 40"
+import sys
+import yaml
+
+with open(sys.argv[1], encoding="utf-8") as workflow_file:
+    workflow = yaml.safe_load(workflow_file)
+timeout = workflow["jobs"]["tests-portable-serial"]["timeout-minutes"]
+if type(timeout) is not int or timeout != 40:
+    raise SystemExit(f"expected numeric 40, got {timeout!r}")
+PY
   grep -Fq 'timeout-minutes: 10' "$CI" \
     || fail "portable parallel shards must keep a hang tripwire (10m)"
   # Interim full-suite 25m portable timeout must not remain after sharding.
