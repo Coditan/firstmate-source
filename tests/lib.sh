@@ -60,6 +60,13 @@ unset FM_AXI_AMBIENT_PATH FM_AXI_AMBIENT_PATH_OWNER
 # deliberately NOT silenced, so the bootstrap suites still exercise arming.
 export FM_CURRENCY_ROUND_DISABLE=1
 
+# The memory alarm is armed by the same locked bootstrap step and has the same
+# property: every fixture home is unarmed, so every suite that composes
+# fm-bootstrap.sh would otherwise see its diagnostic. Silence the reporting
+# modes suite-wide; tests/fm-memory-alarm.test.sh sets it back to 0. --arm is
+# deliberately NOT silenced, so the bootstrap suites still exercise arming.
+export FM_MEMORY_ALARM_DISABLE=1
+
 # bin/fm-nm-path-lib.sh resolves the no-mistakes CLI from the seat's install
 # location as well as from PATH, so a fixture that strips the CLI off PATH is no
 # longer stripped: on a developer machine it would quietly reach the REAL

@@ -28,6 +28,7 @@
 #                 "FORK_SYNC: <detail>" or "FORK_SYNC_STUCK: <detail>",
 #                 "GROSSREINSCHIFF: weekly fleet cleanup sweep is due (...)",
 #                 "CURRENCY_ROUND: the daily update check <is not armed|has stopped> (...)",
+#                 "MEMORY_ALARM: <nothing is watching this machine|the memory watch ... has stopped> (...)",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...",
 #                 "WATCHER_UNIT: <consent, convergence, or fallback detail>",
 #                 "DELIVERY_UNIT: <consent, convergence, or fallback detail>",
@@ -88,8 +89,9 @@
 #          refresh relays any completed fm-fleet-sync.sh output before the
 #          aggregate timeout skip line with timeout and elapsed seconds.
 #          Set FM_FLEET_PRUNE=0 to skip branch pruning during that refresh.
-#          Set FM_BOOTSTRAP_DETECT_ONLY=1 to skip the seven MUTATING sweeps
-#          (PR-check migration, fm-currency-round.sh --arm, fm-axi-suite.sh,
+#          Set FM_BOOTSTRAP_DETECT_ONLY=1 to skip the eight MUTATING sweeps
+#          (PR-check migration, fm-currency-round.sh --arm,
+#          fm-memory-alarm.sh --arm, fm-axi-suite.sh,
 #          secondmate_sync, secondmate_liveness_sweep, x_mode_setup, fleet_sync)
 #          while still printing every read-only detect line above; the TANGLE line
 #          switches to advisory-only wording with no checkout command. Used by
@@ -1071,6 +1073,11 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   if ! "$SCRIPT_DIR/fm-currency-round.sh" --arm >/dev/null 2>&1; then
     echo "CURRENCY_ROUND: the daily update check could not be armed on this home, so nothing will watch for updates between sessions; run $SCRIPT_DIR/fm-currency-round.sh --arm to see why"
   fi
+  # Arm this home's memory alarm, for the same reason and on the same terms: an
+  # alarm a home must remember to arm is one that is not watching.
+  if ! "$SCRIPT_DIR/fm-memory-alarm.sh" --arm >/dev/null 2>&1; then
+    echo "MEMORY_ALARM: the memory watch could not be armed on this home, so nothing will notice this machine running out of memory; run $SCRIPT_DIR/fm-memory-alarm.sh --arm to see why"
+  fi
   "$SCRIPT_DIR/fm-axi-suite.sh"
   # The suite may have just seeded this home's own copies into $FM_HOME/.local/axi;
   # drop the cached lookups so the sweeps below resolve the vessel copy, not the
@@ -1097,6 +1104,8 @@ fi
 # catches a home whose monitoring has stopped: without it, a home that quietly
 # stopped checking is indistinguishable from a home with nothing to report.
 "$SCRIPT_DIR/fm-currency-round.sh" --armed || true
+# And the same question of the memory alarm: armed once is not running now.
+"$SCRIPT_DIR/fm-memory-alarm.sh" --armed || true
 [ -f "$STATE/firstmate-update.available" ] && cat "$STATE/firstmate-update.available"
 [ -f "$STATE/firstmate-update.stuck" ] && cat "$STATE/firstmate-update.stuck"
 [ -f "$STATE/fork-sync.pending" ] && cat "$STATE/fork-sync.pending"

@@ -118,7 +118,14 @@
 #                             unmeasured rather than meaningless (default 900)
 #   FM_MEMORY_SAMPLE_MIN_AGE  interval below which growth is scoped because the
 #                             operator ran it too soon to divide by (default 5)
-#   FM_MEMORY_SAMPLES         path of the stored sample (tests)
+#   FM_MEMORY_SAMPLES         path of the stored sample. Tests use it for
+#                             isolation, and bin/fm-memory-alarm.sh uses it to
+#                             keep a sample of its own: growth is measured
+#                             against the previous run, so an operator running
+#                             this reading by hand would otherwise reset the
+#                             interval the alarm divides by, and the alarm would
+#                             go blind to growth exactly when somebody was
+#                             looking at the machine
 #   FM_MEMORY_MEMINFO         headroom source (default /proc/meminfo)
 #   FM_MEMORY_PRESSURE        stall source (default /proc/pressure/memory)
 #   FM_MEMORY_CGROUP_ROOT     cgroup root (default /sys/fs/cgroup)
