@@ -67,6 +67,25 @@ export FM_CURRENCY_ROUND_DISABLE=1
 # deliberately NOT silenced, so the bootstrap suites still exercise arming.
 export FM_MEMORY_ALARM_DISABLE=1
 
+# bin/fm-nm-path-lib.sh resolves the no-mistakes CLI from the seat's install
+# location as well as from PATH, so a fixture that strips the CLI off PATH is no
+# longer stripped: on a developer machine it would quietly reach the REAL
+# ~/.no-mistakes/bin/no-mistakes and a case pinning the missing-dependency
+# verdict would pass for the wrong reason - or fail. Point the install location
+# at nothing, suite-wide, so "not on PATH" means what the fixtures say it means.
+# tests/fm-run-reader-reach.test.sh sets it per case, because the install-location
+# route is what that suite exists to exercise.
+export NO_MISTAKES_INSTALL_DIR=/nonexistent/fm-test-no-mistakes-install-dir
+
+# The run-state reader's reachability assertion runs in bootstrap's detect pass
+# and asks whether an UNATTENDED context would resolve the no-mistakes CLI. Every
+# fixture answers no, because its CLI is a fake in a throwaway fixture PATH that
+# no unattended context could reach - so the line is true of the fixture and says
+# nothing about the subject under test. Silence it suite-wide;
+# tests/fm-run-reader-reach.test.sh sets it back to 0 and drives the check
+# directly over both a reachable and an unreachable seat.
+export FM_RUN_READER_CHECK_DISABLE=1
+
 # The weekly Grossreinschiff cadence check runs in bootstrap's detect pass, so
 # every suite that composes fm-bootstrap.sh would otherwise see its due line the
 # moment a fixture home has no sweep record - which is always. Silence the

@@ -98,6 +98,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-gate-refuse-lib.sh`  | Shared no-mistakes gate-context refusal for fleet lifecycle entrypoints               |
 | `fm-watcher-service.sh`  | Select, converge, install, or restart the home-scoped systemd or tmux watcher keeper |
 | `fm-service-path-lib.sh` | Compose the `PATH` a background service must run with, and name the installed tools a recorded one cannot reach |
+| `fm-nm-path-lib.sh`      | Resolve the no-mistakes CLI from this seat's own install location, and answer whether a context that inherits nothing would reach it |
 | `fm-frequency-monitor-service.sh` | Detect, converge, or explicitly install the home-scoped Bridge frequency monitor unit |
 | `fm-frequency-monitor.sh` | Run the fast plain-shell Bridge fetch, deduplication, and durable wake loop           |
 | `fm-bridge-inbox-lib.sh` | Share lock-protected Bridge inbox signatures and durable wake publication             |
@@ -112,7 +113,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-stow-receipt.sh`     | Record that this session's durable knowledge was filed, bound to the transcript position it was filed at |
 | `fm-context-reset.sh`    | Verify the receipt, the quiet boundary, and the way back in, then clear this session; refuses loudly and discards nothing on any failure. `--captain-approved` is the path for a reset the captain asked for, where the approval replaces the idle inference and the receipt must postdate it (docs/context-reset.md) |
 | `fm-tg-recv-arm.sh`      | Verified home-scoped direct Telegram receiver arm wrapper with attach-or-start behavior |
-| `fm-tg-send.sh`          | Send the captain one message on the direct Telegram channel, refusing loudly rather than reporting a delivery nobody got |
+| `fm-tg-send.sh`          | Send the captain one message, or one named file, on the direct Telegram channel, refusing loudly rather than reporting a delivery nobody got |
 | `fm-afk-start.sh`        | Run the common sourceable away-mode daemon entry in the foreground                      |
 | `fm-afk-launch.sh`       | Own away-mode entry, exit, rollback, and any backend terminal lifecycle                 |
 | `fm-afk-return.sh`       | Own deterministic return shutdown, catch-up evidence, and the firstmate-actionable blocker gate |
