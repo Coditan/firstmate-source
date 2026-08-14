@@ -479,7 +479,9 @@ low = 300
 Resolution order for each configurable class is the environment variable (`FM_BATCH_DELAY_HIGH`, `FM_BATCH_DELAY_NORMAL`, `FM_BATCH_DELAY_LOW`), then this file, then the shipped default.
 `fm-event-batch.sh delays` reports the fixed zero hold for `immediate` and the resolved number for each configurable class together with its source.
 A value that is not a whole number of seconds is refused with exit 2 rather than falling back, because a home that mistyped its delay would otherwise be handed the shipped default while believing it had configured one.
+An empty value is present and malformed rather than absent, whether it comes from the file or the environment.
 An `immediate` entry, in this file or as `FM_BATCH_DELAY_IMMEDIATE`, is refused with exit 2 for the same reason: that class is never held, so a value set for it could only ever be inert, and accepting one silently is the same defect as accepting a mistyped one.
+Presence alone triggers the `immediate` refusal, including an empty value.
 
 `config/batch-delays` is not in the inheritable set that `bin/fm-config-inherit-lib.sh` declares, for the same reason `config/bosun-judge` is not: nothing reads a batch yet, so whether a secondmate home should inherit these numbers belongs to whichever unit first points a consumer at them.
 

@@ -432,6 +432,26 @@ test_the_delays_are_configurable_and_a_bad_value_is_refused() {
   [ "$rc" -eq 2 ] || fail "an unusable configured delay was accepted (rc=$rc)"
   printf '%s\n' "$out" | grep -q 'not a whole number of seconds' \
     || fail "the refusal did not name the problem: $out"
+
+  rc=0
+  printf 'high =\n' > "$dir/config/batch-delays"
+  out=$(batch "$dir" delays 2>&1) || rc=$?
+  [ "$rc" -eq 2 ] || fail "an empty configured delay was accepted (rc=$rc)"
+  printf '%s\n' "$out" | grep -q 'not a whole number of seconds' \
+    || fail "the empty config refusal did not name the problem: $out"
+
+  rc=0
+  : > "$dir/config/batch-delays"
+  out=$(FM_BATCH_DELAY_HIGH='' batch "$dir" delays 2>&1) || rc=$?
+  [ "$rc" -eq 2 ] || fail "an empty environment delay was accepted (rc=$rc)"
+  printf '%s\n' "$out" | grep -q 'not a whole number of seconds' \
+    || fail "the empty environment refusal did not name the problem: $out"
+
+  rc=0
+  out=$(batch "$dir" delays) || rc=$?
+  [ "$rc" -eq 0 ] || fail "an absent high delay was refused (rc=$rc)"
+  printf '%s\n' "$out" | grep -Eq '^high +60s +\(default\)$' \
+    || fail "an absent high delay did not keep the shipped default: $out"
   pass "delays come from the environment, then the home's config, then the captain's shipped number"
 }
 
@@ -455,6 +475,26 @@ test_configuring_the_immediate_class_is_refused_rather_than_ignored() {
   [ "$rc" -eq 2 ] || fail "an immediate delay from the environment was accepted (rc=$rc)"
   printf '%s\n' "$out" | grep -q 'immediate is never held' \
     || fail "the environment refusal did not say why immediate takes no delay: $out"
+
+  rc=0
+  printf 'immediate =\n' > "$dir/config/batch-delays"
+  out=$(batch "$dir" delays 2>&1) || rc=$?
+  [ "$rc" -eq 2 ] || fail "an empty configured immediate delay was accepted (rc=$rc)"
+  printf '%s\n' "$out" | grep -q 'immediate is never held' \
+    || fail "the empty immediate config refusal did not name the problem: $out"
+
+  rc=0
+  : > "$dir/config/batch-delays"
+  out=$(FM_BATCH_DELAY_IMMEDIATE='' batch "$dir" delays 2>&1) || rc=$?
+  [ "$rc" -eq 2 ] || fail "an empty immediate environment override was accepted (rc=$rc)"
+  printf '%s\n' "$out" | grep -q 'immediate is never held' \
+    || fail "the empty immediate environment refusal did not name the problem: $out"
+
+  rc=0
+  out=$(batch "$dir" delays) || rc=$?
+  [ "$rc" -eq 0 ] || fail "an absent immediate override was refused (rc=$rc)"
+  printf '%s\n' "$out" | grep -Eq '^immediate +0s +\(fixed\)$' \
+    || fail "an absent immediate override lost the fixed zero: $out"
 
   # And the three real delays are unaffected by that refusal.
   rc=0

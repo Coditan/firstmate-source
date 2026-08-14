@@ -47,6 +47,7 @@ Two honest consequences follow, and both are stated rather than smoothed over.
 
 **`immediate` means the batch is never held, not that the end-to-end wait is zero.**
 Unlike the high, normal, and low delays, `immediate` is not tunable, and an attempt to give it a delay is refused rather than accepted and ignored.
+An empty value still counts as an attempt for every class, and presence alone triggers the `immediate` refusal.
 An immediate event is released by the pass that admits it, and that pass has to happen: with the default 5-second interval, noticing it costs up to 5 seconds.
 That noticing is admission latency shared by every class, and it is the one delay this unit cannot remove.
 `account` therefore always checks `immediate` by the close reason rather than by a duration - an immediate batch is closed by the admission that opened it, and only that close records the reason `immediate`.

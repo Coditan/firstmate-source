@@ -171,13 +171,19 @@ FM_BATCH_CONFIG_ERROR=
 # Capture whatever the environment supplied BEFORE any resolution writes to these
 # names, so re-sourcing this library resolves identically instead of reading its
 # own previous answer back as an environment override.
-_FM_BATCH_ENV_IMMEDIATE="${_FM_BATCH_ENV_IMMEDIATE-${FM_BATCH_DELAY_IMMEDIATE:-}}"
-_FM_BATCH_ENV_HIGH="${_FM_BATCH_ENV_HIGH-${FM_BATCH_DELAY_HIGH:-}}"
-_FM_BATCH_ENV_NORMAL="${_FM_BATCH_ENV_NORMAL-${FM_BATCH_DELAY_NORMAL:-}}"
-_FM_BATCH_ENV_LOW="${_FM_BATCH_ENV_LOW-${FM_BATCH_DELAY_LOW:-}}"
+_FM_BATCH_ENV_IMMEDIATE_PRESENT="${_FM_BATCH_ENV_IMMEDIATE_PRESENT-${FM_BATCH_DELAY_IMMEDIATE+1}}"
+_FM_BATCH_ENV_HIGH_PRESENT="${_FM_BATCH_ENV_HIGH_PRESENT-${FM_BATCH_DELAY_HIGH+1}}"
+_FM_BATCH_ENV_NORMAL_PRESENT="${_FM_BATCH_ENV_NORMAL_PRESENT-${FM_BATCH_DELAY_NORMAL+1}}"
+_FM_BATCH_ENV_LOW_PRESENT="${_FM_BATCH_ENV_LOW_PRESENT-${FM_BATCH_DELAY_LOW+1}}"
+_FM_BATCH_ENV_IMMEDIATE="${_FM_BATCH_ENV_IMMEDIATE-${FM_BATCH_DELAY_IMMEDIATE-}}"
+_FM_BATCH_ENV_HIGH="${_FM_BATCH_ENV_HIGH-${FM_BATCH_DELAY_HIGH-}}"
+_FM_BATCH_ENV_NORMAL="${_FM_BATCH_ENV_NORMAL-${FM_BATCH_DELAY_NORMAL-}}"
+_FM_BATCH_ENV_LOW="${_FM_BATCH_ENV_LOW-${FM_BATCH_DELAY_LOW-}}"
 
-_fm_batch_configured_delay() {  # <priority> -> seconds, or empty
+_fm_batch_configured_delay() {  # <priority> -> presence and value globals
   local want=$1 line name value
+  _FM_BATCH_CONFIG_PRESENT=
+  _FM_BATCH_CONFIG_VALUE=
   [ -r "$FM_BATCH_DELAY_CONFIG" ] || return 0
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in ''|'#'*|[[:space:]]*'#'*) continue ;; esac
@@ -187,32 +193,36 @@ _fm_batch_configured_delay() {  # <priority> -> seconds, or empty
     name=${name//[[:space:]]/}
     value=${value//[[:space:]]/}
     [ "$name" = "$want" ] || continue
-    printf '%s' "$value"
+    _FM_BATCH_CONFIG_PRESENT=1
+    _FM_BATCH_CONFIG_VALUE=$value
     return 0
   done < "$FM_BATCH_DELAY_CONFIG"
   return 0
 }
 
 # Resolve one class's delay: the environment wins, then this home's config file,
-# then the captain's shipped number. Prints "<seconds>\t<source>".
-_fm_batch_resolve_delay() {  # <priority> <shipped-default> <environment-value>
-  local priority=$1 shipped=$2 value=$3 source=environment
-  if [ -z "$value" ]; then
-    value=$(_fm_batch_configured_delay "$priority")
+# then the captain's shipped number.
+_fm_batch_resolve_delay() {  # <priority> <shipped-default> <environment-present> <environment-value>
+  local priority=$1 shipped=$2 environment_present=$3 value=$4 source=environment
+  if [ -z "$environment_present" ]; then
+    _fm_batch_configured_delay "$priority"
+    value=$_FM_BATCH_CONFIG_VALUE
     source=config
-  fi
-  if [ -z "$value" ]; then
-    value=$shipped
-    source=default
+    if [ -z "$_FM_BATCH_CONFIG_PRESENT" ]; then
+      value=$shipped
+      source=default
+    fi
   fi
   case "$value" in
     ''|*[!0-9]*)
-      FM_BATCH_CONFIG_ERROR="the $priority delay '$value' from the $source is not a whole number of seconds"
+      if [ -z "$FM_BATCH_CONFIG_ERROR" ]; then
+        FM_BATCH_CONFIG_ERROR="the $priority delay '$value' from the $source is not a whole number of seconds"
+      fi
       value=$shipped
-      source="rejected-$source"
       ;;
   esac
-  printf '%s\t%s' "$value" "$source"
+  _FM_BATCH_RESOLVED_VALUE=$value
+  _FM_BATCH_RESOLVED_SOURCE=$source
 }
 
 # immediate carries no delay to resolve: it is the class DEFINED as never held,
@@ -221,46 +231,29 @@ _fm_batch_resolve_delay() {  # <priority> <shipped-default> <environment-value>
 # because accepting a value and then doing nothing with it is the same defect as
 # accepting a mistyped one - the home believes it configured something inert.
 _fm_batch_reject_immediate_override() {
-  local configured
   [ -z "$FM_BATCH_CONFIG_ERROR" ] || return 0
-  if [ -n "$_FM_BATCH_ENV_IMMEDIATE" ]; then
+  if [ -n "$_FM_BATCH_ENV_IMMEDIATE_PRESENT" ]; then
     FM_BATCH_CONFIG_ERROR="FM_BATCH_DELAY_IMMEDIATE is set, but immediate is never held and has no delay to configure"
     return 0
   fi
-  configured=$(_fm_batch_configured_delay immediate)
-  [ -n "$configured" ] || return 0
+  _fm_batch_configured_delay immediate
+  [ -n "$_FM_BATCH_CONFIG_PRESENT" ] || return 0
   FM_BATCH_CONFIG_ERROR="$FM_BATCH_DELAY_CONFIG sets an immediate delay, but immediate is never held and has no delay to configure"
   return 0
 }
 
 _fm_batch_load_delays() {
-  local resolved
   FM_BATCH_DELAY_IMMEDIATE=0
   FM_BATCH_DELAY_SOURCE_IMMEDIATE=fixed
-  resolved=$(_fm_batch_resolve_delay high 60 "$_FM_BATCH_ENV_HIGH")
-  IFS=$'\t' read -r FM_BATCH_DELAY_HIGH FM_BATCH_DELAY_SOURCE_HIGH <<< "$resolved"
-  resolved=$(_fm_batch_resolve_delay normal 120 "$_FM_BATCH_ENV_NORMAL")
-  IFS=$'\t' read -r FM_BATCH_DELAY_NORMAL FM_BATCH_DELAY_SOURCE_NORMAL <<< "$resolved"
-  resolved=$(_fm_batch_resolve_delay low 600 "$_FM_BATCH_ENV_LOW")
-  IFS=$'\t' read -r FM_BATCH_DELAY_LOW FM_BATCH_DELAY_SOURCE_LOW <<< "$resolved"
-}
-
-# A command substitution runs in a subshell, so FM_BATCH_CONFIG_ERROR set inside
-# _fm_batch_resolve_delay would die with it. Re-derive the rejection here, from
-# the source labels the resolution actually produced, so the refusal survives.
-_fm_batch_note_rejected_delays() {
-  local priority source
-  for priority in $FM_BATCH_PRIORITIES; do
-    source=$(fm_batch_delay_source "$priority")
-    case "$source" in
-      rejected-*)
-        # shellcheck disable=SC2034 # Read by bin/fm-event-batch.sh before it runs.
-        FM_BATCH_CONFIG_ERROR="the $priority delay from the ${source#rejected-} is not a whole number of seconds"
-        return 0
-        ;;
-    esac
-  done
-  return 0
+  _fm_batch_resolve_delay high 60 "$_FM_BATCH_ENV_HIGH_PRESENT" "$_FM_BATCH_ENV_HIGH"
+  FM_BATCH_DELAY_HIGH=$_FM_BATCH_RESOLVED_VALUE
+  FM_BATCH_DELAY_SOURCE_HIGH=$_FM_BATCH_RESOLVED_SOURCE
+  _fm_batch_resolve_delay normal 120 "$_FM_BATCH_ENV_NORMAL_PRESENT" "$_FM_BATCH_ENV_NORMAL"
+  FM_BATCH_DELAY_NORMAL=$_FM_BATCH_RESOLVED_VALUE
+  FM_BATCH_DELAY_SOURCE_NORMAL=$_FM_BATCH_RESOLVED_SOURCE
+  _fm_batch_resolve_delay low 600 "$_FM_BATCH_ENV_LOW_PRESENT" "$_FM_BATCH_ENV_LOW"
+  FM_BATCH_DELAY_LOW=$_FM_BATCH_RESOLVED_VALUE
+  FM_BATCH_DELAY_SOURCE_LOW=$_FM_BATCH_RESOLVED_SOURCE
 }
 
 fm_batch_delay() {  # <priority> -> seconds
@@ -273,7 +266,7 @@ fm_batch_delay() {  # <priority> -> seconds
   esac
 }
 
-fm_batch_delay_source() {  # <priority> -> environment | config | default | rejected-*
+fm_batch_delay_source() {  # <priority> -> environment | config | default | fixed
   case "$1" in
     immediate) printf '%s' "$FM_BATCH_DELAY_SOURCE_IMMEDIATE" ;;
     high)      printf '%s' "$FM_BATCH_DELAY_SOURCE_HIGH" ;;
@@ -288,7 +281,6 @@ FM_BATCH_DELAY_SOURCE_HIGH=
 FM_BATCH_DELAY_SOURCE_NORMAL=
 FM_BATCH_DELAY_SOURCE_LOW=
 _fm_batch_load_delays
-_fm_batch_note_rejected_delays
 _fm_batch_reject_immediate_override
 
 # --- the clock --------------------------------------------------------------
