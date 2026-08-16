@@ -45,16 +45,24 @@ if [ ! -x "$RECV" ]; then
 fi
 
 TG_HEALTHY_PID=
+# The receiver is a process this wrapper forks and then never controls the image
+# of: the kernel walks its shebang chain after the fork, so its cmdline is still
+# changing at the moment the fork returns. The lock therefore records the
+# receiver's incarnation - fixed at fork, unchanged by every exec - and never its
+# image, so that a healthy receiver stays confirmable for its whole life.
+# fm_pid_incarnation_matches_record also accepts a record left by an older
+# wrapper, which recorded the image too.
 tg_receiver_lock_matches_pid() {
-  local pid=$1 lock_home lock_path lock_identity current_identity
+  local pid=$1 lock_home lock_path lock_record current_incarnation
   lock_home=$(cat "$RECV_LOCK/fm-home" 2>/dev/null || true)
   lock_path=$(cat "$RECV_LOCK/receiver-path" 2>/dev/null || true)
-  lock_identity=$(cat "$RECV_LOCK/pid-identity" 2>/dev/null || true)
+  lock_record=$(cat "$RECV_LOCK/pid-incarnation" 2>/dev/null || true)
+  [ -n "$lock_record" ] || lock_record=$(cat "$RECV_LOCK/pid-identity" 2>/dev/null || true)
   [ "$lock_home" = "$FM_HOME" ] || return 1
   [ "$lock_path" = "$RECV" ] || return 1
-  [ -n "$lock_identity" ] || return 1
-  current_identity=$(fm_pid_identity "$pid") || return 1
-  [ "$current_identity" = "$lock_identity" ]
+  [ -n "$lock_record" ] || return 1
+  current_incarnation=$(fm_pid_incarnation "$pid") || return 1
+  fm_pid_incarnation_matches_record "$current_incarnation" "$lock_record"
 }
 
 healthy_receiver() {
@@ -150,15 +158,15 @@ release_lock_if_owned() {
 }
 
 record_child_lock_metadata_if_possible() {
-  local current_identity
+  local current_incarnation
   [ -n "$ownerdir" ] || return 0
   [ -n "$child" ] || return 0
   fm_lock_points_to_owner "$RECV_LOCK" "$ownerdir" || return 0
-  current_identity=$(fm_pid_identity "$child" 2>/dev/null) || return 0
+  current_incarnation=$(fm_pid_incarnation "$child" 2>/dev/null) || return 0
   {
     printf '%s\n' "$child" > "$ownerdir/pid"
     printf '%s\n' "$FM_HOME" > "$ownerdir/fm-home"
-    printf '%s\n' "$current_identity" > "$ownerdir/pid-identity"
+    printf '%s\n' "$current_incarnation" > "$ownerdir/pid-incarnation"
     printf '%s\n' "$RECV" > "$ownerdir/receiver-path"
     [ -n "$child_out" ] && printf '%s\n' "$child_out" > "$ownerdir/output-path"
   } 2>/dev/null || true
@@ -211,8 +219,8 @@ child_out=$(mktemp "$STATE/.tg-recv-output.XXXXXX") || {
 
 FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" FM_STATE_OVERRIDE="$STATE" "$RECV" >"$child_out" &
 child=$!
-identity=$(fm_pid_identity "$child" 2>/dev/null || true)
-if [ -z "$identity" ]; then
+incarnation=$(fm_pid_incarnation "$child" 2>/dev/null || true)
+if [ -z "$incarnation" ]; then
   if [ -s "$child_out" ] || ! fm_pid_alive "$child"; then
     wait "$child"
     rc=$?
@@ -230,7 +238,7 @@ fi
 {
   printf '%s\n' "$child" > "$ownerdir/pid"
   printf '%s\n' "$FM_HOME" > "$ownerdir/fm-home"
-  printf '%s\n' "$identity" > "$ownerdir/pid-identity"
+  printf '%s\n' "$incarnation" > "$ownerdir/pid-incarnation"
   printf '%s\n' "$RECV" > "$ownerdir/receiver-path"
   printf '%s\n' "$child_out" > "$ownerdir/output-path"
 } 2>/dev/null || {

@@ -677,6 +677,57 @@ test_pid_identity_is_locale_invariant() {
   pass "fm_pid_identity is locale-invariant across LC_ALL/LC_TIME"
 }
 
+test_pid_incarnation_survives_exec() {
+  # A caller that fingerprints a process it has just forked catches an image the
+  # process is about to leave behind: the kernel is still walking the shebang
+  # chain, and once the last execve lands that image never exists again. An
+  # identity captured there can never match afterwards, which turns a healthy
+  # process into a permanent false alarm. The incarnation is fixed at fork and
+  # survives every exec, so it stays true across exactly that transition. This
+  # drives a real exec rather than a settled process, because a settled process
+  # is the case that hides the defect.
+  local gate child pre_incarnation pre_identity post_incarnation post_identity i
+  gate="$TMP_ROOT/incarnation-exec-gate"
+  rm -f "$gate"
+  bash -c 'while [ ! -f "$1" ]; do sleep 0.05; done; exec sleep 300' _ "$gate" &
+  child=$!
+  pre_incarnation=$(bash -c '. "$1"; fm_pid_incarnation "$2"' _ "$LIB" "$child") \
+    || fail "could not read a forked child's incarnation before its exec"
+  pre_identity=$(bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$child") \
+    || fail "could not read a forked child's identity before its exec"
+
+  touch "$gate"
+  i=0
+  post_identity=$pre_identity
+  while [ "$i" -lt 100 ] && [ "$post_identity" = "$pre_identity" ]; do
+    sleep 0.05
+    post_identity=$(bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$child" 2>/dev/null || true)
+    i=$((i + 1))
+  done
+  post_incarnation=$(bash -c '. "$1"; fm_pid_incarnation "$2"' _ "$LIB" "$child") \
+    || fail "could not read the child's incarnation after its exec"
+  kill "$child" 2>/dev/null || true
+  wait "$child" 2>/dev/null || true
+
+  [ "$post_identity" != "$pre_identity" ] \
+    || fail "the child never changed image, so the exec transition was not exercised"
+  [ "$post_incarnation" = "$pre_incarnation" ] \
+    || fail "incarnation changed across exec (before '$pre_incarnation', after '$post_incarnation')"
+  pass "process incarnation survives the exec that replaces the process image"
+
+  # A record written as a full identity still carries its incarnation as its
+  # leading fields, so a lock an older writer left behind stays confirmable.
+  bash -c '. "$1"; fm_pid_incarnation_matches_record "$2" "$3"' _ "$LIB" "$post_incarnation" "$pre_identity" \
+    || fail "a full-identity record was not confirmed by the live incarnation it names"
+  bash -c '. "$1"; fm_pid_incarnation_matches_record "$2" "$3"' _ "$LIB" "$post_incarnation" "$post_incarnation" \
+    || fail "an incarnation record was not confirmed by the identical live incarnation"
+  bash -c '. "$1"; fm_pid_incarnation_matches_record "$2" "$3"' _ "$LIB" 'linux-starttime=1' 'linux-starttime=12 cmdline-hex=aa' \
+    && fail "a record naming a different incarnation was confirmed on a shared prefix"
+  bash -c '. "$1"; fm_pid_incarnation_matches_record "$2" "$3"' _ "$LIB" "$post_incarnation" '' \
+    && fail "an empty record was confirmed"
+  pass "incarnation matching accepts a full-identity record without accepting a different process"
+}
+
 write_fake_proc_identity() {
   local proc_root=$1 pid=$2 starttime=$3
   mkdir -p "$proc_root/$pid"
@@ -685,7 +736,7 @@ write_fake_proc_identity() {
 }
 
 test_linux_pid_identity_ignores_wall_clock_and_detects_pid_reuse() {
-  local dir state proc_root pid before after_time_jump after_pid_reuse
+  local dir state proc_root pid before before_incarnation after_time_jump after_pid_reuse
   [ "$(uname)" = Linux ] || {
     pass "Linux process identity clock-step regression skipped on non-Linux host"
     return
@@ -708,6 +759,10 @@ test_linux_pid_identity_ignores_wall_clock_and_detects_pid_reuse() {
     || fail "Linux process identity changed with btime (before '$before', after '$after_time_jump')"
   [ "$before" = 'linux-starttime=987654 cmdline-hex=62617368002f706174682077697468207370616365732f666d2d77617463682e7368002d2d666c616700' ] \
     || fail "Linux process identity did not combine parsed starttime field 22 with the full cmdline ('$before')"
+  before_incarnation=$(FM_PROC_ROOT_OVERRIDE="$proc_root" FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_incarnation "$2"' _ "$LIB" "$pid") \
+    || fail "could not read fake Linux process incarnation"
+  [ "$before_incarnation" = 'linux-starttime=987654' ] \
+    || fail "Linux process incarnation carried more than the exec-invariant starttime ('$before_incarnation')"
   pass "Linux process identity ignores simulated btime changes"
 
   write_fake_proc_identity "$proc_root" "$pid" 987655
@@ -719,6 +774,7 @@ test_linux_pid_identity_ignores_wall_clock_and_detects_pid_reuse() {
 
 test_singleton_start
 test_pid_identity_is_locale_invariant
+test_pid_incarnation_survives_exec
 test_linux_pid_identity_ignores_wall_clock_and_detects_pid_reuse
 test_stale_watch_lock_reclaimed
 test_live_stale_watch_lock_is_actionable

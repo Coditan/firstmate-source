@@ -229,6 +229,131 @@ case "$out" in
 esac
 [ ! -e "$orphan_capture" ] || fail "dead recorded receiver output capture was left after relay"
 
+# The receiver is reached through a shebang chain the wrapper does not control:
+# between the fork and the last execve of that chain the child still carries an
+# image that will never exist again. A wrapper that fingerprints the child's
+# image at fork time therefore records a process that no longer exists, and every
+# later arm reports FAILED against a receiver that is perfectly healthy - the
+# alarm that invites killing it. These tests exercise the exec transition itself
+# by widening it deliberately, rather than asserting on an already settled
+# process, which is exactly the case that hides the defect.
+slow_interp="$TMP_ROOT/slow-interp"
+cat > "$slow_interp" <<'SH'
+#!/usr/bin/env bash
+# Hold the child in a pre-final image long enough for the arm's fingerprint to
+# land inside the exec transition on purpose.
+sleep "${FM_TEST_INTERP_DELAY:-1}"
+exec bash "$@"
+SH
+chmod +x "$slow_interp"
+
+exec_home="$TMP_ROOT/exec-home"
+mkdir -p "$exec_home/config" "$exec_home/state"
+printf 'BOT_TOKEN=x\nCHAT_ID=y\n' > "$exec_home/config/telegram.env"
+cat > "$exec_home/config/fm-tg-recv.sh" <<SH
+#!$slow_interp
+set -u
+printf '%s\n' "\$\$" > "\$FM_HOME/state/receiver.pid"
+printf 'start\n' >> "\$FM_HOME/state/receiver.starts"
+while [ ! -f "\$FM_HOME/state/stop-receiver" ]; do
+  sleep 0.1
+done
+printf 'CAPTAIN-TELEGRAM: settled receiver\n'
+SH
+chmod +x "$exec_home/config/fm-tg-recv.sh"
+
+FM_HOME="$exec_home" "$ARM" > "$exec_home/state/exec-arm1.out" 2>&1 &
+exec_arm1=$!
+for _ in $(seq 60); do
+  [ -s "$exec_home/state/receiver.pid" ] && break
+  sleep 0.1
+done
+[ -s "$exec_home/state/receiver.pid" ] || fail "receiver behind a slow interpreter hop did not start: $(cat "$exec_home/state/exec-arm1.out")"
+
+# The settled image differs from the one the child carried when the arm forked
+# it; without that, this fixture would prove nothing.
+exec_pid=$(cat "$exec_home/state/.tg-recv.lock/pid" 2>/dev/null || true)
+[ -n "$exec_pid" ] || fail "receiver arm recorded no receiver pid behind a slow interpreter hop"
+settled_identity=$(FM_HOME="$exec_home" bash -c '. "$1"; fm_pid_identity "$2"' sh "$ROOT/bin/fm-wake-lib.sh" "$exec_pid")
+interp_hex=$(printf '%s' "$slow_interp" | od -An -v -tx1 | tr -d '[:space:]')
+case "$settled_identity" in
+  *"$interp_hex"*)
+    fail "receiver never left its interpreter image, so the exec transition was not exercised" ;;
+esac
+
+# Re-arm several times: a healthy receiver must be confirmed every time.
+for attempt in 1 2 3; do
+  FM_TG_RECV_ATTACH_CONFIRM_TIMEOUT=3 FM_TG_RECV_ATTACH_POLL=0.1 FM_HOME="$exec_home" \
+    "$ARM" > "$exec_home/state/exec-rearm.$attempt.out" 2>&1 &
+  rearm=$!
+  for _ in $(seq 40); do
+    if grep -q 'telegram receiver: attached pid=' "$exec_home/state/exec-rearm.$attempt.out" 2>/dev/null; then
+      break
+    fi
+    if grep -q 'FAILED' "$exec_home/state/exec-rearm.$attempt.out" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+  case "$(cat "$exec_home/state/exec-rearm.$attempt.out")" in
+    *'telegram receiver: attached pid='*) : ;;
+    *) fail "re-arm $attempt reported a healthy receiver as unconfirmable: $(cat "$exec_home/state/exec-rearm.$attempt.out")" ;;
+  esac
+  rearm_pids="${rearm_pids:-} $rearm"
+done
+[ "$(wc -l < "$exec_home/state/receiver.starts")" -eq 1 ] || fail "re-arming a healthy receiver started a second one"
+
+# A lock already written by the older wrapper - image half and all, captured
+# before the exec transition finished - still names a receiver this one can
+# confirm, so updating over a live receiver cannot raise the false alarm once.
+lock_owner=$(readlink "$exec_home/state/.tg-recv.lock")
+[ -n "$lock_owner" ] || fail "receiver lock is not the expected owner symlink"
+rm -f "$lock_owner/pid-incarnation"
+printf '%s cmdline-hex=%s\n' "${settled_identity%% cmdline-hex=*}" "$interp_hex" > "$lock_owner/pid-identity"
+FM_TG_RECV_ATTACH_CONFIRM_TIMEOUT=3 FM_TG_RECV_ATTACH_POLL=0.1 FM_HOME="$exec_home" \
+  "$ARM" > "$exec_home/state/legacy-rearm.out" 2>&1 &
+legacy_rearm=$!
+for _ in $(seq 40); do
+  grep -q 'telegram receiver: attached pid=' "$exec_home/state/legacy-rearm.out" 2>/dev/null && break
+  grep -q 'FAILED' "$exec_home/state/legacy-rearm.out" 2>/dev/null && break
+  sleep 0.1
+done
+case "$(cat "$exec_home/state/legacy-rearm.out")" in
+  *'telegram receiver: attached pid='*) : ;;
+  *) fail "a lock recorded by an older wrapper was not confirmed: $(cat "$exec_home/state/legacy-rearm.out")" ;;
+esac
+
+touch "$exec_home/state/stop-receiver"
+wait "$exec_arm1"
+wait "$legacy_rearm"
+for rearm in ${rearm_pids:-}; do
+  wait "$rearm"
+done
+
+# When the incarnation genuinely cannot be established, the wrapper must refuse
+# and say so, never record an unusable lock and report a start.
+refuse_home="$TMP_ROOT/refuse-home"
+mkdir -p "$refuse_home/config" "$refuse_home/state"
+printf 'BOT_TOKEN=x\nCHAT_ID=y\n' > "$refuse_home/config/telegram.env"
+cat > "$refuse_home/config/fm-tg-recv.sh" <<'SH'
+#!/usr/bin/env bash
+set -u
+while [ ! -f "$FM_HOME/state/stop-receiver" ]; do
+  sleep 0.1
+done
+SH
+chmod +x "$refuse_home/config/fm-tg-recv.sh"
+out=$(PATH="$fakebin:$PATH" FM_PROC_ROOT_OVERRIDE="$TMP_ROOT/absent-proc" FM_HOME="$refuse_home" "$ARM" 2>&1)
+rc=$?
+case "$out" in
+  *'telegram receiver: FAILED - could not identify receiver process'*) : ;;
+  *) fail "unestablishable receiver identity was not refused: rc=$rc out=$out" ;;
+esac
+[ "$rc" -ne 0 ] || fail "unestablishable receiver identity exited successfully: $out"
+if [ -e "$refuse_home/state/.tg-recv.lock" ] || [ -L "$refuse_home/state/.tg-recv.lock" ]; then
+  fail "refused receiver arm left a lock behind"
+fi
+
 rm -f "$home/state/.tg-recv.lock"
 rm -rf "$home/state"/.tg-recv.lock.owner.*
 partial_owner="$home/state/.tg-recv.lock.owner.partial"

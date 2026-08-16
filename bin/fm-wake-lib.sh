@@ -39,8 +39,18 @@ fm_pid_alive() {
   kill -0 "$pid" 2>/dev/null
 }
 
-fm_pid_identity() {
-  local pid=$1 out proc_root stat_line starttime cmdline_hex
+# A process's INCARNATION: what tells this process apart from a later one that
+# reuses its pid, and nothing about the image it happens to be running.
+# It is fixed at fork and survives every execve, so it is already correct for a
+# child the caller has only just forked.
+# fm_pid_identity below adds the image on top; use that only for a process that
+# has already settled into its final image, never for one still walking a
+# shebang chain (see the warning on fm_pid_identity).
+# fm_pid_identity extends the incarnation rather than replacing it, so a record
+# written as a full identity still carries its incarnation as its leading fields;
+# fm_pid_incarnation_matches_record is what reads it back out of one.
+fm_pid_incarnation() {
+  local pid=$1 out proc_root stat_line starttime
   local -a stat_fields
   case "$pid" in
     ''|*[!0-9]*) return 1 ;;
@@ -48,9 +58,8 @@ fm_pid_identity() {
   proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc}
   # Prefer /proc on Linux: stat field 22 (starttime, clock ticks since boot) is
   # immune to the wall-clock steps that re-render the ps lstart fallback's date
-  # (observed as WSL2 btime drift) and would evict a live watcher; combining the
-  # full NUL-separated cmdline keeps PID reuse a mismatch even on a tick collision.
-  if [ "$(uname)" = Linux ] && [ -r "$proc_root/$pid/stat" ] && [ -r "$proc_root/$pid/cmdline" ]; then
+  # (observed as WSL2 btime drift) and would evict a live watcher.
+  if [ "$(uname)" = Linux ] && [ -r "$proc_root/$pid/stat" ]; then
     stat_line=$(cat "$proc_root/$pid/stat" 2>/dev/null) || return 1
     # After the final comm delimiter, array index 19 is proc stat field 22.
     read -r -a stat_fields <<< "${stat_line##*)}"
@@ -59,17 +68,59 @@ fm_pid_identity() {
     case "$starttime" in
       ''|*[!0-9]*) return 1 ;;
     esac
-    cmdline_hex=$(od -An -v -tx1 "$proc_root/$pid/cmdline" 2>/dev/null | tr -d '[:space:]') || return 1
-    [ -n "$cmdline_hex" ] || return 1
-    printf 'linux-starttime=%s cmdline-hex=%s\n' "$starttime" "$cmdline_hex"
+    printf 'linux-starttime=%s\n' "$starttime"
     return 0
   fi
   # Pin LC_ALL=C so lstart's date format is locale-invariant: the identity is
   # written under one locale but re-read under the machine's ambient locale, which
   # would otherwise mismatch on a non-C locale (e.g. ko_KR) and reject a live watcher.
+  out=$(LC_ALL=C ps -p "$pid" -o lstart= 2>/dev/null) || return 1
+  [ -n "$out" ] || return 1
+  printf '%s\n' "$out" | sed 's/^[[:space:]]*//'
+}
+
+# The incarnation plus the process image, so that PID reuse stays a mismatch even
+# on a starttime tick collision.
+# WARNING: the image half changes at every execve, and a freshly forked child
+# still carries its parent's image until the last hop of its shebang chain
+# completes. Fingerprinting a child at fork time therefore records an image that
+# will never exist again and can never match afterwards. Fingerprint a process
+# this way only once it has settled - typically because it is the caller itself -
+# and use fm_pid_incarnation for anything else.
+fm_pid_identity() {
+  local pid=$1 out proc_root incarnation cmdline_hex
+  incarnation=$(fm_pid_incarnation "$pid") || return 1
+  proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc}
+  case "$incarnation" in
+    linux-starttime=*)
+      if [ -r "$proc_root/$pid/cmdline" ]; then
+        cmdline_hex=$(od -An -v -tx1 "$proc_root/$pid/cmdline" 2>/dev/null | tr -d '[:space:]') || return 1
+        [ -n "$cmdline_hex" ] || return 1
+        printf '%s cmdline-hex=%s\n' "$incarnation" "$cmdline_hex"
+        return 0
+      fi
+      ;;
+  esac
   out=$(LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null) || return 1
   [ -n "$out" ] || return 1
   printf '%s\n' "$out" | sed 's/^[[:space:]]*//'
+}
+
+# Whether a live incarnation is the one a lock recorded.
+# It accepts a record written as a full fm_pid_identity as well as one written as
+# a bare incarnation, because the incarnation is that record's leading fields: a
+# lock written by an older wrapper, whose image half describes a process image
+# that has since exec'd away, still names a process this can confirm rather than
+# a live process it has to report as unconfirmable.
+fm_pid_incarnation_matches_record() {
+  local live=$1 record=$2
+  [ -n "$live" ] || return 1
+  [ -n "$record" ] || return 1
+  [ "$record" = "$live" ] && return 0
+  case "$record" in
+    "$live "*) return 0 ;;
+  esac
+  return 1
 }
 
 fm_path_mtime() {
@@ -173,6 +224,7 @@ fm_lock_clean_known_files() {
     "$lockdir/pid" \
     "$lockdir/fm-home" \
     "$lockdir/pid-identity" \
+    "$lockdir/pid-incarnation" \
     "$lockdir/watcher-path" \
     "$lockdir/delivery-path" \
     "$lockdir/stub-path" \

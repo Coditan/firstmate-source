@@ -327,7 +327,7 @@ The tracked `bin/fm-tg-recv-arm.sh` wrapper owns only the session-start arm shap
 When a locked `bin/fm-session-start.sh` sees both files, its digest emits the separate tracked-background arm step for `bin/fm-tg-recv-arm.sh`; read-only sessions report that the lock holder owns arming.
 When `config/telegram.env` is absent the feature stays silent except for the session-start inactive line.
 When `config/telegram.env` exists but `config/fm-tg-recv.sh` is missing or not executable, session start reports that direct Telegram receive is not armed.
-The wrapper records receiver identity in `state/.tg-recv.lock` with the same portable lock discipline as watcher state and relays any captured receiver output once before cleaning a dead recorded receiver.
+The wrapper records the receiver incarnation in `state/.tg-recv.lock` with the same portable lock discipline as watcher state and relays any captured receiver output once before cleaning a dead recorded receiver.
 Run `bin/fm-tg-recv-arm.sh` as its own harness-tracked background task when the digest says active; never bundle it with another command, pipe it, redirect it, use shell `&`, or replace the session-start watcher protocol with it.
 
 `config/crew-harness` is a local, gitignored file containing one adapter name for crewmate and scout launches.
