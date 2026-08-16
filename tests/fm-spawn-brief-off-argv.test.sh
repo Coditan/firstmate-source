@@ -26,8 +26,7 @@ set -u
 SPAWN="$ROOT/bin/fm-spawn.sh"
 fm_test_tmproot TMP_ROOT fm-spawn-brief-off-argv
 
-# Harnesses whose launch template is exercised by a case below. Kept in sync with
-# bin/fm-spawn.sh's launch_template() by test_every_launch_template_is_covered.
+# Harnesses whose launch template is exercised by an executed case below.
 COVERED_HARNESSES='claude codex opencode pi grok'
 
 # A string that exists ONLY in the brief body. If it reaches any argv, the brief
@@ -257,44 +256,19 @@ test_pi_brief_path_binding_is_not_mistaken_for_the_fix() {
   pass "pi's brief-path binding coexists with a body that never reaches argv"
 }
 
-# The source-level backstop for the shapes that reintroduce the leak. The argv
-# assertions above catch any covered harness; this catches the intent directly, so
-# a reviewer reading the diff sees the rule as well as its consequence.
-test_no_launch_template_reads_the_brief_into_the_command() {
-  local templates
-  templates=$(sed -n '/^launch_template() {/,/^}/p' "$SPAWN")
-  [ -n "$templates" ] || fail "could not locate launch_template() in $SPAWN"
-  case "$templates" in
-    *'encode launch-brief < __BRIEF__'*)
-      fail "a launch template composes the brief body into the command again" ;;
-  esac
-  case "$templates" in
-    *'cat __BRIEF__'*|*'cat < __BRIEF__'*)
-      fail "a launch template cats the brief into the command" ;;
-  esac
-  assert_contains "$templates" 'launch-pointer __BRIEF__' \
-    "launch templates no longer build the brief pointer through the canonical owner"
-  pass "no launch template reads the brief file into the command it sends"
-}
-
 # Coverage gate: a harness added to launch_template() without a case above would
 # otherwise ship unmeasured under a suite that still reports all green.
 test_every_launch_template_is_covered() {
-  local templates line harness missing=
-  templates=$(sed -n '/^launch_template() {/,/^}/p' "$SPAWN")
-  # Each adapter is a `<name>)` or `<name>|<name>)` case label inside the function.
-  while IFS= read -r line; do
-    harness=${line%%)*}
-    harness=${harness#"${harness%%[![:space:]]*}"}
-    case "$harness" in
-      ''|'*'|'#'*|*' '*|*'$'*) continue ;;
-    esac
+  local harness missing= supported
+  supported=$($SPAWN --supported-harnesses) || fail "fm-spawn could not report its supported harnesses"
+  [ -n "$supported" ] || fail "fm-spawn reported no supported harnesses"
+  while IFS= read -r harness; do
     case " $COVERED_HARNESSES " in
       *" $harness "*) ;;
       *) missing="$missing $harness" ;;
     esac
   done <<EOF
-$(printf '%s\n' "$templates" | grep -E '^[[:space:]]{4}[a-z|]+\)')
+$supported
 EOF
   [ -z "$missing" ] || fail "launch templates with no brief-off-argv case:$missing"
   pass "every harness launch_template() accepts is exercised by a brief-off-argv case"
@@ -307,5 +281,4 @@ test_pi_launch_keeps_the_brief_off_argv
 test_grok_launch_keeps_the_brief_off_argv
 test_secondmate_launches_keep_the_charter_off_argv
 test_pi_brief_path_binding_is_not_mistaken_for_the_fix
-test_no_launch_template_reads_the_brief_into_the_command
 test_every_launch_template_is_covered

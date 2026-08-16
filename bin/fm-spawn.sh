@@ -3,6 +3,7 @@
 # secondmate in its isolated firstmate home.
 # Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--scout]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
+#        fm-spawn.sh --supported-harnesses
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
@@ -132,6 +133,7 @@
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SUPPORTED_HARNESSES=(claude codex opencode pi grok)
 
 usage() {
   sed -n '2,86p' "$0" | sed 's/^# \{0,1\}//'
@@ -139,6 +141,7 @@ usage() {
 
 case "${1:-}" in
   -h|--help) usage; exit 0 ;;
+  --supported-harnesses) printf '%s\n' "${SUPPORTED_HARNESSES[@]}"; exit 0 ;;
 esac
 
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -462,7 +465,14 @@ fi
 # __PIBRIEFENV__ already did that while the body still rode the same line, which
 # is exactly the half-converted shape that reads as done and is not.
 launch_template() {
-  local harness=$1 kind=${2:-ship}
+  local harness=$1 kind=${2:-ship} supported=0 candidate
+  for candidate in "${SUPPORTED_HARNESSES[@]}"; do
+    if [ "$candidate" = "$harness" ]; then
+      supported=1
+      break
+    fi
+  done
+  [ "$supported" -eq 1 ] || return 1
   # shellcheck disable=SC2016  # single quotes are deliberate: the $(...) expands in the crewmate pane, not here
   case "$harness" in
     # CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false disables claude's interactive

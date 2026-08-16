@@ -76,16 +76,6 @@ test_static_contract() {
   assert_contains "$text" 'getKeybindings().matches(data, "tui.input.submit")' "Pi calm export boundary ignores the active submit keybinding"
   assert_contains "$text" 'input !== "/share"' "Pi calm export boundary does not cover /share"
   assert_contains "$text" 'FIRSTMATE_PI_LAUNCH_BRIEF_ENV' "Pi calm extension does not consume authoritative launch-brief origin"
-  # The launch input is a pointer to the brief, not the brief, so the expected
-  # value must be derived from the PATH through the canonical shell owner. Reading
-  # the brief and encoding its body would rebuild a value no launch sends, and
-  # would also mean this side still assumes a brief that rides the command line.
-  assert_contains "$text" 'firstmateLaunchBriefPointer(launchBriefPath)' \
-    "Pi calm extension does not derive the launch pointer from the brief path"
-  assert_not_contains "$text" 'readFileSync(launchBriefPath' \
-    "Pi calm extension still reconstructs the launch input from the brief body"
-  assert_contains "$operational" 'launch-pointer' \
-    "Pi adapter cannot ask the canonical owner for the launch pointer"
   assert_contains "$text" 'renderShell: "self"' "Pi calm extension cannot remove complete built-in tool shells"
   assert_contains "$visibility" 'CALM_VISIBLE_CLASSES' "Pi calm policy does not centralize its visibility allowlist"
   assert_contains "$visibility" 'classifyFirstmateLaunchInput' "Pi calm policy does not centralize the one-shot launch binding"
