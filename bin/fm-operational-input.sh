@@ -19,6 +19,11 @@
 #
 # CLI:
 #   fm-operational-input.sh encode <kind>  # body on stdin, encoded input stdout
+#   fm-operational-input.sh launch-pointer <brief-path>  # encoded launch-brief
+#                                          # POINTER stdout; reads the path, never
+#                                          # the file, so no launch command ever
+#                                          # carries a brief body (see
+#                                          # fm_launch_brief_pointer below)
 #   fm-operational-input.sh kind           # current input on stdin, kind stdout
 #   fm-operational-input.sh classify       # current or legacy input on stdin
 #   fm-operational-input.sh body           # current generic input on stdin
@@ -66,6 +71,40 @@ fm_operational_input_construct() {  # <kind> <body> <result-var>
     return
   fi
   fm_operational_input_encode "$kind" "$body" "$result_var"
+}
+
+# The launch-brief POINTER body: fixed prose plus the brief's PATH, and never
+# one byte of the brief itself.
+#
+# A launch command is world-readable in the host process table for as long as
+# the agent runs, so a brief composed INTO that command is continuously readable
+# by every account on the host, and by every same-account sibling worker. The
+# brief's bytes therefore travel filesystem -> agent, and only its address
+# travels argv -> agent; the worker reads the file itself.
+#
+# Composed here rather than at the call site because two producers must emit the
+# same bytes: bin/fm-spawn.sh builds the launch command, and
+# .pi/extensions/fm-calm.ts reconstructs the value it expects to see arrive.
+# Both go through this one function (the TypeScript side shells out to the CLI
+# below), so Pi's calm-mode launch classification cannot drift from what spawn
+# actually sends.
+fm_launch_brief_pointer_body() {  # <brief-path> <result-var>
+  local brief_path=${1-} result_var=${2-}
+  [ -n "$result_var" ] && [ -n "$brief_path" ] || return 2
+  printf -v "$result_var" '%s%s%s' \
+    'You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human. Your launch brief is the file ' \
+    "$brief_path" \
+    ' - read that entire file now, before anything else, and follow it as your instructions for this session. It is deliberately not on this command line, and nothing further will be sent.'
+}
+
+# The full encoded launch-brief input carrying that pointer. Same wire kind as
+# before - only the body changed from the brief to its address - so every
+# consumer that classifies a launch-brief input keeps working unchanged.
+fm_launch_brief_pointer() {  # <brief-path> <result-var>
+  local brief_path=${1-} result_var=${2-} pointer_body
+  [ -n "$result_var" ] && [ -n "$brief_path" ] || return 2
+  fm_launch_brief_pointer_body "$brief_path" pointer_body || return 2
+  fm_operational_input_encode launch-brief "$pointer_body" "$result_var"
 }
 
 fm_operational_generic_kind() {  # <message> <result-var>
@@ -201,12 +240,18 @@ fm_operational_usage() {
   cat <<'EOF'
 Usage:
   bin/fm-operational-input.sh encode <kind>  # body on stdin
+  bin/fm-operational-input.sh launch-pointer <brief-path>
   bin/fm-operational-input.sh kind           # current input on stdin
   bin/fm-operational-input.sh classify       # syntactically parse current or legacy input on stdin
   bin/fm-operational-input.sh body           # current input on stdin
 
 Current construction kinds:
   session-start watcher turn-end-guard away-supervisor from-firstmate launch-brief
+
+launch-pointer builds the launch-brief input a crewmate is started with. It takes
+the brief's PATH and never reads the brief, so the brief body never reaches a
+command line - the worker opens the file itself. It refuses a path that is not a
+readable file rather than launching a worker at a brief that is not there.
 
 The from-firstmate kind uses its established live-charter-compatible carrier.
 Parsing and classification do not authenticate the message or its sender.
@@ -223,6 +268,19 @@ fm_operational_main() {
       [ "$#" -eq 2 ] || return 2
       fm_operational_read_stdin input || return 2
       fm_operational_input_construct "$argument" "$input" output || return 2
+      printf '%s' "$output"
+      ;;
+    launch-pointer)
+      [ "$#" -eq 2 ] || return 2
+      # Fail closed on a brief that is not there: a worker launched at a dangling
+      # pointer reads nothing and idles, and the operator gets no reason why.
+      # This gate fires in the crewmate's own pane, where the message is visible,
+      # and backs up bin/fm-spawn.sh's earlier check at compose time.
+      if [ ! -f "$argument" ] || [ ! -r "$argument" ]; then
+        echo "fm-operational-input.sh: no readable launch brief at $argument" >&2
+        return 2
+      fi
+      fm_launch_brief_pointer "$argument" output || return 2
       printf '%s' "$output"
       ;;
     kind)

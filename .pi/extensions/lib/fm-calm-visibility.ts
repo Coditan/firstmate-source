@@ -3,9 +3,10 @@ import {
   type ExtensionAPI,
   UserMessageComponent,
 } from "@earendil-works/pi-coding-agent";
-import { encodeFirstmateOperationalInput } from "./fm-operational-input.ts";
-
-export { encodeFirstmateOperationalInput } from "./fm-operational-input.ts";
+export {
+  encodeFirstmateOperationalInput,
+  firstmateLaunchBriefPointer,
+} from "./fm-operational-input.ts";
 
 export const CALM_TRANSCRIPT_CLASSES = [
   "genuine-user-prompt",

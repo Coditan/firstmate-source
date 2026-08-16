@@ -76,6 +76,7 @@ A landed untyped `FIRSTMATE_OP` input is retained as `legacy-operational` rather
 Narrow pre-protocol parsing for the exact startup line, watcher and guard shapes, and bare-marker away escalation is isolated from the current parser.
 That parsing remains available for construction, body recovery, transcript migration, diagnostics, and historical export, but no Pi live visibility caller treats parse success as provenance.
 The per-process `FM_FIRSTMATE_PI_LAUNCH_BRIEF` path derives one exact encoded launch envelope and accepts only the matching interactive positional prompt once.
+That envelope is the launch POINTER `bin/fm-spawn.sh` actually sends - the brief's path, never its body, because a launch command is world-readable in the host process table - so the extension asks `bin/fm-operational-input.sh launch-pointer` for it rather than reading the brief and encoding its contents (`docs/brief-off-argv.md`).
 
 Fail-visible fixtures cover current typed markers from interactive and RPC input, the untyped prefix, every legacy prose form, away and routed composer messages, arbitrary U+2063-prefixed text, and a repeated launch brief.
 Direct-delivery fixtures cover session-start, watcher, and turn-end kinds, while the shell-parser suite retains the construction and migration matrix.

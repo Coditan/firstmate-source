@@ -101,7 +101,16 @@
 #   multi-task shell loop (the tool shell is zsh, which does not word-split unquoted
 #   $vars and silently breaks ad-hoc `for ... in $pairs` loops).
 #   Launch templates live in launch_template() below; placeholders replaced before launch:
-#     __BRIEF__    absolute path to data/<task-id>/brief.md
+#     __BRIEF__    absolute path to data/<task-id>/brief.md. Every template passes
+#                  this PATH to `fm-operational-input.sh launch-pointer`, never the
+#                  brief's contents: a launch command is world-readable in the host
+#                  process table for the agent's whole life, so the brief travels
+#                  filesystem -> worker and only its address travels argv -> worker.
+#                  Never reintroduce a template that composes the brief BODY into
+#                  the launch line (an `encode launch-brief < __BRIEF__` shape, a
+#                  `$(cat __BRIEF__)`, or any equivalent);
+#                  tests/fm-spawn-brief-off-argv.test.sh executes every template
+#                  and fails if a brief body reaches any argv.
 #     __TURNEND__  absolute path to state/<task-id>.turn-ended (for harnesses whose
 #                  turn-end signal rides the launch command, e.g. codex -c notify=[...])
 #     __CLAUDESETTINGS__ absolute path to the per-task Claude settings overlay; the
@@ -439,9 +448,22 @@ fi
 
 # The verified launch command per adapter. The knowledge half of each adapter
 # (busy signature, exit command, dialogs, quirks) lives in the harness-adapters skill.
+#
+# BRIEF-OFF-ARGV CONTRACT, binding on every template here and on any adapter added
+# later: the launch command carries the brief's PATH and never its BODY. Each
+# harness's installed CLI was checked for a native prompt-file flag and none has
+# one on its supervised interactive path (docs/brief-off-argv.md records the
+# versions and the exact help output), so the pointer that
+# `fm-operational-input.sh launch-pointer` builds is the one mechanism all five
+# share: the worker opens the file itself. A template that puts the brief body
+# back on the line republishes every crewmate's instructions to every account on
+# the host, and to every same-account sibling worker, for as long as the agent
+# runs. Setting a brief-path variable does NOT satisfy this contract on its own -
+# __PIBRIEFENV__ already did that while the body still rode the same line, which
+# is exactly the half-converted shape that reads as done and is not.
 launch_template() {
   local harness=$1 kind=${2:-ship}
-  # shellcheck disable=SC2016  # single quotes are deliberate: $(cat ...) expands in the crewmate pane, not here
+  # shellcheck disable=SC2016  # single quotes are deliberate: the $(...) expands in the crewmate pane, not here
   case "$harness" in
     # CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false disables claude's interactive
     # predicted-next-prompt ghost text, which renders as dim/faint text inside an
@@ -454,24 +476,24 @@ launch_template() {
     # the defense-in-depth backstop for any pane this flag cannot reach.
     claude)
       if [ "$kind" = secondmate ]; then
-        printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+        printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ launch-pointer __BRIEF__)"'
       else
-        printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions --settings __CLAUDESETTINGS__ __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+        printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions --settings __CLAUDESETTINGS__ __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ launch-pointer __BRIEF__)"'
       fi
       ;;
     codex)
       if [ "$kind" = secondmate ]; then
-        printf '%s' 'codex __MODELFLAG____EFFORTFLAG____CODEXCONFIG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+        printf '%s' 'codex __MODELFLAG____EFFORTFLAG____CODEXCONFIG__"$(__OPINPUT__ launch-pointer __BRIEF__)"'
       else
-        printf '%s' 'codex __MODELFLAG____EFFORTFLAG____CODEXCONFIG__-c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+        printf '%s' 'codex __MODELFLAG____EFFORTFLAG____CODEXCONFIG__-c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(__OPINPUT__ launch-pointer __BRIEF__)"'
       fi
       ;;
-    opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}}'\'' opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}}'\'' opencode __MODELFLAG__--prompt "$(__OPINPUT__ launch-pointer __BRIEF__)"' ;;
     pi)
       if [ "$kind" = secondmate ]; then
-        printf '%s' '__PIBRIEFENV__ pi __MODELFLAG____EFFORTFLAG__-e __PITURNEND__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+        printf '%s' '__PIBRIEFENV__ pi __MODELFLAG____EFFORTFLAG__-e __PITURNEND__ "$(__OPINPUT__ launch-pointer __BRIEF__)"'
       else
-        printf '%s' '__PIBRIEFENV__ pi __MODELFLAG____EFFORTFLAG__-e __PIEXT__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+        printf '%s' '__PIBRIEFENV__ pi __MODELFLAG____EFFORTFLAG__-e __PIEXT__ "$(__OPINPUT__ launch-pointer __BRIEF__)"'
       fi
       ;;
     # grok (Grok Build TUI): a positional prompt starts the supervised interactive
@@ -481,7 +503,7 @@ launch_template() {
     # --dangerously-skip-permissions. grok's turn-end signal does NOT ride the
     # launch command - it is a Stop-event hook installed below (global hook +
     # per-task pointer), so the template is identical for ship/scout/secondmate.
-    grok) printf '%s' 'grok --always-approve __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    grok) printf '%s' 'grok --always-approve __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ launch-pointer __BRIEF__)"' ;;
     *) return 1 ;;
   esac
 }
@@ -519,6 +541,18 @@ case "$ARG3" in
         *) LAUNCH="$launch_head --settings __CLAUDESETTINGS__$launch_tail" ;;
       esac
     fi
+    # A raw command is caller-authored, so the brief-off-argv contract that binds
+    # launch_template() cannot be enforced here without refusing a launch shape
+    # that works today. Warn instead: a raw command that reads the brief into
+    # itself publishes this worker's whole brief to every account on the host, and
+    # to every same-account sibling worker, for as long as the agent runs. Pass
+    # __BRIEF__ to `fm-operational-input.sh launch-pointer` the way every adapter
+    # template does (docs/brief-off-argv.md).
+    case "$LAUNCH" in
+      *'cat __BRIEF__'*|*'cat < __BRIEF__'*|*'< __BRIEF__'*)
+        echo "warn: this raw launch command reads the brief into the command line, where every account on this host can read it; use \"\$(<opinput> launch-pointer __BRIEF__)\" instead (docs/brief-off-argv.md)" >&2
+        ;;
+    esac
     ;;
   '')
     # No explicit harness: resolve from config. A secondmate AGENT launches on the

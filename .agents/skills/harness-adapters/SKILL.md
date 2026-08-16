@@ -26,6 +26,7 @@ Inheritance also copies the literal `config/crew-dispatch.json` file, so secondm
 
 Each adapter splits into mechanics and knowledge.
 The per-task mechanics, including launch command, autonomy flag, and crewmate turn-end hook, live in `bin/fm-spawn.sh`.
+When verifying a new adapter, its launch command carries the brief's path and never the brief's text, because a command line is world-readable in the host process table for as long as the agent runs (`docs/brief-off-argv.md`).
 The primary-session "no turn ends blind" guard contract and harness hook installation paths live in `docs/turnend-guard.md`.
 The primary-session watcher wake protocols are rendered from `docs/supervision-protocols/` by `bin/fm-supervision-instructions.sh`.
 The supervision knowledge lives here: busy signature, exit command, interrupt, dialogs, resume behavior, skill invocation, and quirks.
@@ -359,7 +360,7 @@ When a secondmate is launched on Pi, `fm-spawn.sh --secondmate` launches Pi with
 ## grok (VERIFIED 2026-06-29, grok 0.2.73; slash-submit re-verified 2026-07-03 on 0.2.82; reasoning-effort ceiling re-verified 2026-07-13 on 0.2.99; exit paths re-verified 2026-07-19 on grok 0.2.103)
 
 Grok Build TUI (`grok`), a Claude-Code-compatible CLI from xAI.
-Launch with a positional prompt: `grok --always-approve "$(cat <brief>)"`.
+Launch with a positional prompt, which `bin/fm-spawn.sh` fills with a pointer to the brief file rather than the brief itself: `grok --always-approve "$(fm-operational-input.sh launch-pointer <brief>)"`.
 For Grok's supported reasoning-effort values and omission behavior, see the [launch-profile-axes table](#launch-profile-axes).
 
 | Fact | Value |
