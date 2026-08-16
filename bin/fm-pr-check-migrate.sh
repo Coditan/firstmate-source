@@ -506,7 +506,7 @@ metadata_pr_is_canonical() {
   MIGRATION_HOST=
   MIGRATION_PATH=
   MIGRATION_NUMBER=
-  fm_pr_metadata_identity_parse "$meta" || return 1
+  fm_pr_legacy_metadata_identity_parse "$meta" || return 1
   MIGRATION_PROVIDER=$FM_PR_META_PROVIDER
   MIGRATION_URL=$FM_PR_META_URL
   MIGRATION_HOST=$FM_PR_META_HOST
