@@ -34,6 +34,10 @@ if ! declare -F status_open_decisions >/dev/null 2>&1; then
   # shellcheck source=bin/fm-classify-lib.sh
   . "$_FM_CONTEXT_LIB_DIR/fm-classify-lib.sh"
 fi
+if ! declare -F fm_operational_input_classify >/dev/null 2>&1; then
+  # shellcheck source=bin/fm-operational-input.sh
+  . "$_FM_CONTEXT_LIB_DIR/fm-operational-input.sh"
+fi
 
 # The captain's decided ceiling (data/decisions/2026-08-02-supervision-cost-two-decisions.md).
 FM_CONTEXT_CEILING="${FM_CONTEXT_CEILING:-300000}"
@@ -210,10 +214,14 @@ fm_context_record_read() {  # <state-dir>
 # `origin.kind == "task-notification"` with `promptSource == "system"`; hook and
 # system injections carry `isMeta: true`; tool results carry array content. The
 # one remaining shape - a string-content user record with neither origin nor
-# promptSource - is a slash-command expansion that only ever follows real captain
-# input, so it counts as human. Every ambiguity resolves toward "the captain is
-# here", because the cost of a false quiet is a discarded conversation and the
-# cost of a false busy is one deferred reset.
+# promptSource - counts as human only when it is not one of the syntactic
+# operational inputs owned by bin/fm-operational-input.sh. That keeps slash-command
+# expansions captain-visible while excluding watcher, guard, session-start,
+# away-supervisor, launch-brief, from-firstmate, and legacy operational deliveries
+# that have already lost their producer metadata by the time they reach the
+# transcript. Every ambiguity resolves toward "the captain is here", because the
+# cost of a false quiet is a discarded conversation and the cost of a false busy
+# is one deferred reset.
 #
 # The record's own `uuid` is carried alongside its timestamp because a timestamp
 # alone cannot NAME the record it came from, and one consumer -
@@ -222,7 +230,33 @@ fm_context_record_read() {  # <state-dir>
 # content: it is the same structural metadata as the origin fields above.
 _fm_context_scan_pass() {  # <transcript-path> <bytes>
   local out rest
-  out=$(fm_context_tail_lines "$1" "$2" | jq -R -n -r '
+  out=$(fm_context_tail_lines "$1" "$2" | jq -R -n -r \
+    --arg operational_prefix "$FM_OPERATIONAL_PREFIX" \
+    --arg fromfirst_mark "$FM_FROMFIRST_MARK" \
+    --arg legacy_sessionstart "$FM_LEGACY_SESSIONSTART" \
+    --arg legacy_watcher_prefix "$FM_LEGACY_WATCHER_PREFIX" \
+    --arg legacy_watcher_suffix "$FM_LEGACY_WATCHER_SUFFIX" \
+    --arg legacy_turnend_prefix "$FM_LEGACY_TURNEND_PREFIX" \
+    --arg legacy_away_prefix "$FM_LEGACY_AWAY_PREFIX" '
+    def has_body_after($prefix):
+      startswith($prefix) and (length > ($prefix | length));
+    def legacy_watcher_operational:
+      startswith($legacy_watcher_prefix)
+      and endswith($legacy_watcher_suffix)
+      and (length > (($legacy_watcher_prefix | length) + ($legacy_watcher_suffix | length)));
+    def legacy_turnend_operational:
+      startswith($legacy_turnend_prefix)
+      and (length > ($legacy_turnend_prefix | length));
+    def firstmate_operational_input:
+      type == "string"
+      and (
+        has_body_after($operational_prefix)
+        or has_body_after($fromfirst_mark)
+        or . == $legacy_sessionstart
+        or startswith($legacy_away_prefix)
+        or legacy_watcher_operational
+        or legacy_turnend_operational
+      );
     [inputs | fromjson? // empty] as $rows
     | ( [ $rows[]
           | select(.type == "assistant" and (.message.usage | type) == "object")
@@ -233,7 +267,14 @@ _fm_context_scan_pass() {  # <transcript-path> <bytes>
           | select(.type == "user")
           | select(.isMeta != true)
           | select((.message.content | type) == "string")
-          | select(.origin.kind == "human" or (.origin == null and .promptSource == null))
+          | select(
+              .origin.kind == "human"
+              or (
+                .origin == null
+                and .promptSource == null
+                and ((.message.content | firstmate_operational_input) | not)
+              )
+            )
         ] | last ) as $human
     | "\($tokens // "")\t\($human.timestamp // "")\t\($human.uuid // "")"
   ' 2>/dev/null) || {
