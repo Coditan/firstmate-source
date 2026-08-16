@@ -462,8 +462,9 @@ REPORT=""
 [ -f "$DATA/$CHART/report.md" ] && REPORT="$DATA/$CHART/report.md"
 
 # A panel-originated chart keeps its destination in the one question every member
-# was given. AGENTS.md section 2 guarantees that file outlives teardown exactly
-# like the reports, so a chart can still be drawn after the panel is cleaned up.
+# was given. bin/fm-model-panel.sh's header owns that record and guarantees the
+# question outlives scout teardown exactly like the reports, so a chart can still
+# be drawn after the panel is cleaned up.
 QUESTION=""
 QUESTION_TEXT=""
 if [ -f "$DATA/$CHART/question.md" ]; then

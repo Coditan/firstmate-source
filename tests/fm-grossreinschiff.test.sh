@@ -424,8 +424,7 @@ test_cadence_is_reachable_from_the_instruction_surface() {
   assert_grep 'grossreinschiff' "$AGENTS" "AGENTS.md must name the sweep skill"
   assert_grep 'GROSSREINSCHIFF:' "$AGENTS" \
     "AGENTS.md section 13 must list the due line among the bootstrap diagnostics"
-  assert_grep 'grossreinschiff.last-sweep' "$AGENTS" \
-    "AGENTS.md section 2 must record the cadence state file"
+  # Cadence state behavior is covered by the executable cadence tests above.
   assert_grep 'GROSSREINSCHIFF: weekly fleet cleanup sweep is due' "$BOOTSTRAP_SKILL" \
     "bootstrap-diagnostics must own the response to the due line"
   assert_grep 'advisory only' "$BOOTSTRAP_SKILL" \
