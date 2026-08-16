@@ -259,7 +259,7 @@ test_pi_brief_path_binding_is_not_mistaken_for_the_fix() {
 # Coverage gate: a harness added to launch_template() without a case above would
 # otherwise ship unmeasured under a suite that still reports all green.
 test_every_launch_template_is_covered() {
-  local harness missing= supported
+  local harness missing='' supported
   supported=$($SPAWN --supported-harnesses) || fail "fm-spawn could not report its supported harnesses"
   [ -n "$supported" ] || fail "fm-spawn reported no supported harnesses"
   while IFS= read -r harness; do
