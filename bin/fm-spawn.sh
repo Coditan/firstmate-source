@@ -123,7 +123,7 @@
 #                  written by this script; outside the worktree to avoid pi's trust gate)
 #     __PITURNEND__ absolute path to .pi/extensions/fm-primary-turnend-guard.ts in a pi secondmate home
 #     __OPINPUT__   absolute path to the canonical operational-input encoder
-#     __PIBRIEFENV__ shell assignment identifying the unchanged Pi positional brief
+#     __PIBRIEFENV__ shell assignment identifying the exact Pi positional launch pointer
 # Per-harness turn-end hooks are installed automatically; some live outside the worktree.
 # grok uses a firstmate-owned global hook under ${GROK_HOME:-$HOME/.grok}/hooks
 # plus a gitignored .fm-grok-turnend worktree pointer and a state token.

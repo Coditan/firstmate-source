@@ -339,7 +339,7 @@ The follow-up was verified in the interactive TUI; `opencode run` can exit befor
 | Interrupt | single Escape |
 
 Pi has no permission system, so crewmates are always autonomous.
-Keep the brief as one positional argument.
+Keep the encoded launch pointer as one positional argument; the worker reads the brief file it names.
 Multiple positional args become separate queued messages; `fm-spawn`'s template already does this correctly.
 
 Project trust dialog can appear on the first pi run in any not-yet-trusted directory, observed even on clean worktrees.

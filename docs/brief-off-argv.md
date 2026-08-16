@@ -96,6 +96,47 @@ Each installed CLI was checked for a native prompt-file flag on its supervised i
 - `codex --help` (0.145.0) offers a positional `[PROMPT]`.
   There is no prompt-file flag; `-c`/`--image` do not carry one.
 
+The load-bearing installed-help output was:
+
+```text
+$ claude --version
+2.1.233 (Claude Code)
+$ claude --help
+Usage: claude [options] [command] [prompt]
+
+Claude Code - starts an interactive session by default, use -p/--print for
+non-interactive output
+
+Arguments:
+  prompt                                Your prompt
+
+Options:
+  --input-format <format>               Input format (only works with --print):
+                                        "text" (default), or "stream-json"
+                                        (realtime streaming input) (choices:
+                                        "text", "stream-json")
+$ codex --version
+codex-cli 0.145.0
+$ codex --help
+Codex CLI
+
+If no subcommand is specified, options will be forwarded to the interactive CLI.
+
+Usage: codex [OPTIONS] [PROMPT]
+       codex [OPTIONS] <COMMAND> [ARGS]
+
+Arguments:
+  [PROMPT]
+          Optional user prompt to start the session
+
+Options:
+  -i, --image <FILE>...
+          Optional image(s) to attach to the initial prompt
+```
+
+Those are the relevant verbatim sections rather than a reconstruction from documentation.
+The complete option inventories contained no prompt-file option.
+
 So no harness can be handed a brief file directly, and the one mechanism all five share is the first candidate on the list: a file pointer the worker reads.
 The brief's bytes now travel filesystem to worker, and only its address travels argv to worker.
 
