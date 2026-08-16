@@ -958,7 +958,7 @@ EOF
     || fail "the chart must say where it read the destination, since the sources differ in strength"
 
   # A panel keeps its destination in the question every member was given, and
-  # that file outlives teardown (AGENTS.md section 2).
+  # that file outlives teardown (bin/fm-model-panel.sh's header).
   local home2 out2
   home2=$(make_home dest2)
   printf '# Backlog\n\n## Queued\n' > "$home2/data/backlog.md"

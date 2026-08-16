@@ -32,35 +32,71 @@
 #                       the caller's own tmux window, and is a no-op outside tmux.
 #   1. lock          - acquire the per-home session lock FIRST, before any
 #                       shared-state mutating step runs.
-#   2. bootstrap      - detect-only diagnostics always run. The six
-#                       MUTATING sweeps (legacy PR-check migration, the AXI-suite
-#                       currency check that installs into this home's own npm prefix,
-#                       secondmate fast-forward, secondmate liveness, X-mode artifact
-#                       writes, fleet sync) run only
-#                       when this session actually holds the lock.
+#   2. bootstrap      - detect-only diagnostics always run. The eight
+#                       MUTATING sweeps (legacy PR-check migration, arming this
+#                       home's daily currency round, arming this home's memory
+#                       alarm, the AXI-suite currency check that installs into
+#                       this home's own npm prefix, secondmate fast-forward,
+#                       secondmate liveness, X-mode artifact writes, fleet sync)
+#                       run only when this session actually holds the lock.
+#                       fm-bootstrap.sh's own header owns that list; keep the two
+#                       in step, because a count stated in one place and
+#                       enumerated in another is exactly how this one drifted.
 #   2b. wake delivery - publish where this session's model turn lives, so the
 #                       externally supervised delivery listener has an address to
 #                       submit into, then STATE the listener's verdict. Nothing
 #                       is armed here: the listener is not this session's object.
 #   3. wake-drain     - mutates the durable wake queue, so it also only runs
-#                       when locked.
-#   4. context digest - the active role overlay (roles/<name>.md, emitted only
+#                       when locked. It prints the raw drained records as the
+#                       turn's first work queue; a bounded, clearly labeled
+#                       historical status-event annotation may follow a valid
+#                       `signal` record but never replaces it. On a lock refusal
+#                       the queue is left UNTOUCHED, because the session holding
+#                       the lock owns it - nothing is lost, and the guard's
+#                       tangle and watcher-liveness alarms still print in
+#                       advisory wording with no repair command attached.
+#   4. telegram      - reports whether this home's optional direct Telegram
+#                       receiver is inactive, skipped read-only, misconfigured,
+#                       or active. When active it names bin/fm-tg-recv-arm.sh as
+#                       its own tracked background task; this script never arms
+#                       it, and a read-only session is told the lock holder owns
+#                       arming.
+#   5. supervision    - emits exactly ONE operating block for the DETECTED
+#                       primary harness, rendered by
+#                       bin/fm-supervision-instructions.sh from
+#                       docs/supervision-protocols/ and parameterized by the
+#                       read-only, afk, and X-mode flags. On a Pi primary this
+#                       step also prints PI_TURNEND_EXTENSION when the tracked
+#                       turn-end guard extension is not loaded. It runs AFTER
+#                       the wake queue and BEFORE the context digest, so the
+#                       block is in view while the queue is still the turn's
+#                       first work.
+#   6. context digest - the active role overlay (roles/<name>.md, emitted only
 #                       when config/role selects a recognized non-default role),
 #                       then data/projects.md, data/secondmates.md,
 #                       data/captain.md, data/captain-shared.md,
 #                       data/learnings.md: read-only, always safe, always runs.
-#   5. fleet digest   - a compact data/backlog.md identity/metadata listing,
+#   7. fleet digest   - a compact data/backlog.md identity/metadata listing,
 #                       every state/*.meta, a bounded state/*.status tail,
 #                       state/.afk, and a cheap per-task endpoint-liveness read:
-#                       read-only, always runs.
-#   6. closing reminder - prints the context-specific watcher and optional
-#                       Telegram receiver next steps; this script points back
-#                       to the emitted harness supervision block and deliberately
-#                       never runs long-lived polls itself.
+#                       read-only, always runs. The status tail is labeled as
+#                       wake-EVENT history rather than current state, and prints
+#                       the full log path so a deeper read is one command away.
+#                       The liveness line is a PRESENCE check, not a state read:
+#                       it answers "is the endpoint there", never "what run step
+#                       is this crew on". bin/fm-crew-state.sh answers the
+#                       second, and the digest deliberately skips that slower
+#                       read for every task so startup stays fast and bounded.
+#   8. closing reminder - points back to the step-5 block and keeps only the
+#                       lock, afk, X-mode, and read-once reminders. This script
+#                       deliberately never runs long-lived polls itself; the
+#                       step-4 receiver arm is the one tracked background job it
+#                       names, and wake delivery stays outside the harness
+#                       entirely as a supervised service (docs/wake-delivery.md).
 #
-# On a Pi primary, the supervision-block step also checks whether Pi's tracked
-# turn-end guard extension is loaded and prints a PI_TURNEND_EXTENSION reminder
-# line when it is missing.
+# These numbers are the section markers in the body below, and are kept in step
+# with them on purpose: a header that renumbers independently of the code it
+# describes is a map of a script that no longer exists.
 #
 # Why lock before shared-state mutation: the old documented order (bootstrap,
 # THEN lock) let a SECOND concurrent session run bootstrap's mutating sweeps -
@@ -281,9 +317,11 @@ if [ "$LOCK_RC" -ne 0 ]; then
     printf '%s\n' "$BAR"
     printf '●  READ-ONLY SESSION - ANOTHER LIVE FIRSTMATE SESSION HOLDS THE FLEET LOCK\n'
     printf '●  %s\n' "$LOCK_OUT"
-    printf '●  Skipping every mutating step: PR-check migration, secondmate sync,\n'
-    printf '●  X-mode artifacts, fleet sync, and wake-queue drain. Detect-only bootstrap\n'
-    printf '●  diagnostics and the rest of this read-only-safe digest still ran below.\n'
+    printf '●  Skipping every mutating step: PR-check migration, currency-round arming,\n'
+    printf '●  memory-alarm arming, AXI-suite currency, secondmate sync, secondmate\n'
+    printf '●  liveness, X-mode artifacts, fleet sync, and wake-queue drain. Detect-only\n'
+    printf '●  bootstrap diagnostics and the rest of this read-only-safe digest still ran\n'
+    printf '●  below.\n'
     printf '●  Operate read-only until this resolves - do not spawn, steer, merge, or\n'
     printf '●  otherwise mutate fleet state from this session.\n'
     printf '%s\n' "$BAR"

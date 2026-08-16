@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Regression tests for the captain-private material declared in AGENTS.md
-# section 2. The rule under test is not "these particular files are ignored" but
+# section 1. The rule under test is not "these particular files are ignored" but
 # "a private file nobody has thought of yet is ignored by default": an ignore
 # list that enumerates private config files one at a time fails open for every
 # file added after it was last edited, which is how config/telegram.env came to
@@ -16,7 +16,7 @@ fm_test_tmproot TMP_ROOT fm-private-material-ignore
 # these has to be a directory- or prefix-wide one.
 UNFORESEEN="unforeseen-$$-$(basename "$TMP_ROOT")"
 
-# Every path form AGENTS.md section 2 declares captain-private, each expressed as
+# Every path form AGENTS.md section 1 declares captain-private, each expressed as
 # a file the ignore rules cannot have been written with in mind.
 unforeseen_private_paths() {
   cat <<PATHS

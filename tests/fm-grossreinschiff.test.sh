@@ -424,8 +424,14 @@ test_cadence_is_reachable_from_the_instruction_surface() {
   assert_grep 'grossreinschiff' "$AGENTS" "AGENTS.md must name the sweep skill"
   assert_grep 'GROSSREINSCHIFF:' "$AGENTS" \
     "AGENTS.md section 13 must list the due line among the bootstrap diagnostics"
-  assert_grep 'grossreinschiff.last-sweep' "$AGENTS" \
-    "AGENTS.md section 2 must record the cadence state file"
+  # The cadence state file is a child field of the script that writes it, so its
+  # owner is that script's header, not AGENTS.md - which now points at the owner
+  # instead of restating a state tree. Asserting it here keeps the fact anchored:
+  # the state file must be documented where a reader of the script will meet it.
+  assert_grep 'grossreinschiff.last-sweep' "$DUE" \
+    "bin/fm-grossreinschiff-due.sh's header must record the cadence state file"
+  assert_grep 'never swept' "$DUE" \
+    "the header must say an absent or unparseable marker reads as never swept"
   assert_grep 'GROSSREINSCHIFF: weekly fleet cleanup sweep is due' "$BOOTSTRAP_SKILL" \
     "bootstrap-diagnostics must own the response to the due line"
   assert_grep 'advisory only' "$BOOTSTRAP_SKILL" \
