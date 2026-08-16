@@ -28,7 +28,7 @@ That archive record satisfies the gate only when every archived entry under the 
 An entry that is still open, is not kind `captain`, or lacks either marker refuses, which keeps the gate fail-closed.
 Both the `- [ ]`/`- [x]` checkbox bullets and the older `- **<id>**` in-flight bullet that tasks-axi still parses count as entries, so a legacy-form record is read as unresolved rather than becoming invisible to the scan.
 Both questions are scoped to the one identity, so an unresolved entry for a different decision never affects it.
-The `hold` reopen guard reads the same archive with the opposite question — whether *any* archived entry under the identity already carries a resolution — so a mixed archive still refuses to reopen a decision the captain has answered.
+The `hold` reopen guard reads the same archive with the opposite question - whether *any* archived entry under the identity already carries a resolution - so a mixed archive still refuses to reopen a decision the captain has answered.
 When an archived entry is what refuses, the message names that entry by archive path and line and states the repair, so a permanent refusal explains itself instead of reading as an unexplained gate failure.
 An accepted limitation follows from the all-resolved question: one identity carrying both a resolved and an unresolved archived entry stays refused until an operator repairs the archive.
 Reaching that state needs a manual `tasks-axi prune --state queued` or a hand edit, since ordinary retention rotates only completed work into the archive ([configuration.md](configuration.md) owns the backlog backend's retention and archive settings), and the lockout is preferred over trusting chronological append order in exactly the hand-edited case that produces it.

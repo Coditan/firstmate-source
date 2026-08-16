@@ -250,7 +250,7 @@ Contributions are welcome - see [CONTRIBUTING.md](CONTRIBUTING.md) for the workf
 
 MIT - see [LICENSE](LICENSE).
 
-Third-party material, both from [`mattpocock/skills`](https://github.com/mattpocock/skills) by Matt Pocock and used under the MIT licence:
+Third-party material, all from [`mattpocock/skills`](https://github.com/mattpocock/skills) by Matt Pocock and used under the MIT licence:
 
 - `/sea-chart` and `bin/fm-sea-chart.sh` amend the Wayfinder skill. [`docs/sea-chart-provenance.md`](docs/sea-chart-provenance.md) carries that copyright notice and licence text, along with what was kept, changed, and dropped.
 - `/to-backlog` and `bin/fm-to-backlog.sh` adopt the to-tickets skill. [`docs/to-backlog-provenance.md`](docs/to-backlog-provenance.md) carries the same notice and licence text, along with what was kept, changed, and dropped with the cost of each omission.
