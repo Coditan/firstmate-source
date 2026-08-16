@@ -104,6 +104,16 @@ FM_BOSUN_HEALTH="$FM_BOSUN_DIR/health"
 # is provisional (docs/bosun-observer.md records why, and what it is not).
 FM_BOSUN_JUDGE_CMD="${FM_BOSUN_JUDGE_CMD:-}"
 FM_BOSUN_JUDGE_TIMEOUT="${FM_BOSUN_JUDGE_TIMEOUT:-45}"
+# The journal command is reached through this COMMAND only: the retention
+# horizon, the batch, and both command readings status takes append their own
+# subcommand and flags to this prefix. It is one seam rather than four hard-wired
+# paths so a caller can put a different journal underneath the bosun and have the
+# WHOLE module query it; two halves querying two different journals would report
+# against each other, which is strictly worse than uniform hard-wiring. Like the
+# judge, it is a command line, so a caller may configure one carrying its own
+# arguments. fm_bosun_journal_unreadable separately inspects the retained files'
+# readability and deliberately does not invoke the journal command.
+FM_BOSUN_JOURNAL_CMD="${FM_BOSUN_JOURNAL_CMD:-$FM_BOSUN_LIB_DIR/fm-journal.sh}"
 # Seconds between passes when running continuously.
 FM_BOSUN_INTERVAL="${FM_BOSUN_INTERVAL:-30}"
 # Most events one pass will judge. A bound on the pass, not a batching policy:
@@ -393,7 +403,7 @@ fm_bosun_journal_unreadable() {
 # Sets FM_BOSUN_PASS_JUDGED to how many verdicts it recorded.
 # shellcheck disable=SC2034 # Read by bin/fm-bosun.sh's run loop.
 FM_BOSUN_PASS_JUDGED=0
-fm_bosun_pass() {  # [<journal-read-command-override>]
+fm_bosun_pass() {
   local since jseq kind key event payload snapshot horizon
   local judged=0
 
@@ -412,7 +422,8 @@ fm_bosun_pass() {  # [<journal-read-command-override>]
     return 0
   fi
 
-  horizon=$("$FM_BOSUN_LIB_DIR/fm-journal.sh" status 2>/dev/null \
+  # shellcheck disable=SC2086 # A command PREFIX; see FM_BOSUN_JOURNAL_CMD.
+  horizon=$($FM_BOSUN_JOURNAL_CMD status 2>/dev/null \
     | awk -F': ' '$1 == "horizon" { print $2 }')
   case "$horizon" in
     ''|*[!0-9]*) : ;;
@@ -424,7 +435,8 @@ fm_bosun_pass() {  # [<journal-read-command-override>]
   # shell so the cursor it reads back is the one the record just wrote.
   local batch
   batch=$(mktemp "${TMPDIR:-/tmp}/fm-bosun-pass.XXXXXX") || return 1
-  "$FM_BOSUN_LIB_DIR/fm-journal.sh" read --since "$since" --limit "$FM_BOSUN_PASS_MAX" \
+  # shellcheck disable=SC2086 # A command PREFIX; see FM_BOSUN_JOURNAL_CMD.
+  $FM_BOSUN_JOURNAL_CMD read --since "$since" --limit "$FM_BOSUN_PASS_MAX" \
     > "$batch" 2>/dev/null
 
   while IFS=$'\t' read -r jseq _epoch kind key _origin payload snapshot; do
@@ -459,12 +471,14 @@ fm_bosun_pass() {  # [<journal-read-command-override>]
 # --- health -----------------------------------------------------------------
 
 fm_bosun_journal_last() {
-  "$FM_BOSUN_LIB_DIR/fm-journal.sh" status 2>/dev/null \
+  # shellcheck disable=SC2086 # A command PREFIX; see FM_BOSUN_JOURNAL_CMD.
+  $FM_BOSUN_JOURNAL_CMD status 2>/dev/null \
     | awk -F': ' '$1 == "last" && $2 ~ /^[0-9]+$/ { print $2 }'
 }
 
 fm_bosun_journal_gaps() {
-  "$FM_BOSUN_LIB_DIR/fm-journal.sh" status 2>/dev/null \
+  # shellcheck disable=SC2086 # A command PREFIX; see FM_BOSUN_JOURNAL_CMD.
+  $FM_BOSUN_JOURNAL_CMD status 2>/dev/null \
     | awk -F': ' '$1 == "gaps" && $2 ~ /^[0-9]+$/ { print $2 }'
 }
 

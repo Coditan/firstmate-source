@@ -88,6 +88,17 @@ Eight load-bearing assertions were mutation-checked on 2026-08-12 rather than tr
 
 Both directions of the quiet/stalled discrimination are checked against the same fixture, because a check that only ever reports one of the two proves nothing about its ability to tell them apart.
 
+The journal seam was mutation-checked the same way on 2026-08-16, one reach at a time, by hard-wiring each back to `bin/fm-journal.sh` and rerunning the suite:
+
+| Mutation | Caught by |
+|---|---|
+| Read the retention horizon from the real journal | `the horizon read did not go through the journal seam` |
+| Read the batch from the real journal | `the batch read did not go through the journal seam` |
+| Read the journal head from the real journal | `the health record's journal head came from the real journal, not the seam` |
+| Read the gap count from the real journal | `the reported journal gap count came from the seam` |
+
+Each reach is caught by its own assertion, which is what makes partial adoption impossible to land: a seam honoured by the pass and not by `status` would leave the two halves of the module reporting against different journals, and that is worse than uniform hard-wiring.
+
 Separately, a live run against the real judge and the real journal on 2026-08-12 judged three events correctly: ordinary progress as `routine`, a revoked deploy key as `escalate`, and a PR awaiting review as `escalate`, at 3.5-7.7 seconds each.
 
 ## The model, which is provisional
@@ -110,6 +121,11 @@ A tier with authority cannot, and must not inherit this choice by default.
 The model is a **seam, not a decision**.
 `FM_BOSUN_JUDGE_CMD`, or a home's `config/bosun-judge`, points the bosun at any command that reads one event on stdin and prints one JSON object on stdout.
 Swapping in a ranked endpoint is a few lines of curl and changes no code in the bosun.
+
+The journal command is a seam on the same pattern.
+`FM_BOSUN_JOURNAL_CMD` is the module's only route to the journal command interface, and every command query it makes - the retention horizon, the batch, and both queries `status` makes - goes through that one command prefix, so a caller substituting a stream substitutes it for the whole module rather than for half of it.
+The retained-file readability guard remains a direct filesystem check and runs before the substituted command, because it diagnoses whether the stream files the bosun is responsible for retaining are readable rather than querying the journal interface.
+It carries no configuration file, because unlike the model this is not a live choice a home makes.
 
 **Cost is reported, never claimed as a benefit.**
 The captain settled on 2026-08-12 (`fleet-bosun-vs-fable-verdict`) that this is a latency-and-attention programme, not a cost programme.
