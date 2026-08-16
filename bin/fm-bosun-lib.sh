@@ -104,14 +104,15 @@ FM_BOSUN_HEALTH="$FM_BOSUN_DIR/health"
 # is provisional (docs/bosun-observer.md records why, and what it is not).
 FM_BOSUN_JUDGE_CMD="${FM_BOSUN_JUDGE_CMD:-}"
 FM_BOSUN_JUDGE_TIMEOUT="${FM_BOSUN_JUDGE_TIMEOUT:-45}"
-# The journal is reached through a COMMAND too, and through this one only: every
-# read this module makes of the stream - the retention horizon, the batch, and
-# both readings status takes - appends its own subcommand and flags to this
-# prefix. It is one seam rather than four hard-wired paths so a caller can put a
-# different journal underneath the bosun and have the WHOLE module read it; two
-# halves reading two different journals would report against each other, which is
-# strictly worse than uniform hard-wiring. Like the judge, it is a command line,
-# so a caller may configure one carrying its own arguments.
+# The journal command is reached through this COMMAND only: the retention
+# horizon, the batch, and both command readings status takes append their own
+# subcommand and flags to this prefix. It is one seam rather than four hard-wired
+# paths so a caller can put a different journal underneath the bosun and have the
+# WHOLE module query it; two halves querying two different journals would report
+# against each other, which is strictly worse than uniform hard-wiring. Like the
+# judge, it is a command line, so a caller may configure one carrying its own
+# arguments. fm_bosun_journal_unreadable separately inspects the retained files'
+# readability and deliberately does not invoke the journal command.
 FM_BOSUN_JOURNAL_CMD="${FM_BOSUN_JOURNAL_CMD:-$FM_BOSUN_LIB_DIR/fm-journal.sh}"
 # Seconds between passes when running continuously.
 FM_BOSUN_INTERVAL="${FM_BOSUN_INTERVAL:-30}"

@@ -122,8 +122,9 @@ The model is a **seam, not a decision**.
 `FM_BOSUN_JUDGE_CMD`, or a home's `config/bosun-judge`, points the bosun at any command that reads one event on stdin and prints one JSON object on stdout.
 Swapping in a ranked endpoint is a few lines of curl and changes no code in the bosun.
 
-The stream the bosun reads is a seam on the same pattern.
-`FM_BOSUN_JOURNAL_CMD` is the module's only route to the journal, and every read it makes - the retention horizon, the batch, and both readings `status` takes - goes through that one command prefix, so a caller substituting a stream substitutes it for the whole module rather than for half of it.
+The journal command is a seam on the same pattern.
+`FM_BOSUN_JOURNAL_CMD` is the module's only route to the journal command interface, and every command query it makes - the retention horizon, the batch, and both queries `status` makes - goes through that one command prefix, so a caller substituting a stream substitutes it for the whole module rather than for half of it.
+The retained-file readability guard remains a direct filesystem check and runs before the substituted command, because it diagnoses whether the stream files the bosun is responsible for retaining are readable rather than querying the journal interface.
 It carries no configuration file, because unlike the model this is not a live choice a home makes.
 
 **Cost is reported, never claimed as a benefit.**
