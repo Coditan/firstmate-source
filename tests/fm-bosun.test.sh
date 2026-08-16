@@ -381,4 +381,185 @@ only=$(FM_STATE_OVERRIDE="$s2" "$BOSUN" verdicts --only escalate --raw | wc -l |
 [ "$only" = 1 ] || fail "--only escalate returned $only rows, expected 1"
 pass "the record can be filtered to what the bosun would have escalated"
 
+# --- 7. one journal seam, and every reach honours it -------------------------
+#
+# FM_BOSUN_JOURNAL_CMD is the module's ONLY route to the stream. A seam with one
+# adapter is a guess, so this section drives the module through a SECOND adapter:
+# a deterministic fake that answers "status" and "read" from files a test wrote.
+#
+# Every fixture below deliberately states something the real journal in that home
+# CANNOT say - a retention horizon above an absent stream, a last sequence of 42,
+# a gap count of 39 - so a reach that was still hard-wired to bin/fm-journal.sh
+# would read the empty real journal and fail the assertion rather than passing by
+# coincidence. The two reads that "status" performs are covered on their own,
+# because a case that only exercised one pass would pass while the defect
+# survived in the other half of the module.
+
+# The fake is handed its fixture directory as its own first argument, so these
+# cases also prove the seam takes a command PREFIX rather than a bare path.
+make_fake_journal() {  # <case-dir>
+  cat > "$1/fake-journal" <<'FAKE'
+#!/usr/bin/env bash
+# A deterministic stand-in for bin/fm-journal.sh. It answers only the two
+# subcommands the bosun asks for, and it answers each independently from what a
+# test wrote: "status" states the stream, "read" hands over the batch.
+set -u
+fixture=$1
+shift
+cmd=${1:-}
+[ "$#" -gt 0 ] && shift
+since=0
+limit=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --since) since=${2:-0}; shift 2 ;;
+    --limit) limit=${2:-0}; shift 2 ;;
+    --kind) shift 2 ;;
+    *) shift ;;
+  esac
+done
+case "$cmd" in
+  status)
+    cat "$fixture/status" 2>/dev/null
+    ;;
+  read)
+    [ -f "$fixture/records.tsv" ] || exit 0
+    # Oldest matches first and at most --limit of them, the same way a tailing
+    # consumer must be served if it is to advance rather than skip ahead.
+    awk -F '\t' -v since="$since" -v limit="$limit" '
+      $1 + 0 > since {
+        print
+        n++
+        if (limit > 0 && n >= limit) { exit }
+      }' "$fixture/records.tsv"
+    ;;
+  *)
+    printf 'fake journal: unknown command %s\n' "$cmd" >&2
+    exit 2
+    ;;
+esac
+exit 0
+FAKE
+  chmod +x "$1/fake-journal"
+}
+
+# One journal record in the seven-field form fm-journal.sh emits.
+fake_row() {  # <seq> <kind> <key> <payload>
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t' "$1" 1700000000 "$2" "$3" test "$4"
+}
+
+fake_case() {  # <name> <status-body> [records-body] -> case dir on stdout
+  local name=$1 status_body=$2 records=${3:-} dir
+  dir=$(make_bosun_case "$name" "$JUDGE_SANE")
+  mkdir -p "$dir/journal-fixture"
+  printf '%s\n' "$status_body" > "$dir/journal-fixture/status"
+  [ -z "$records" ] || printf '%s\n' "$records" > "$dir/journal-fixture/records.tsv"
+  make_fake_journal "$dir"
+  printf '%s\n' "$dir"
+}
+
+fake_bosun() {  # <case-dir> <args...>
+  local dir=$1
+  shift
+  FM_STATE_OVERRIDE="$dir/state" FM_BOSUN_JUDGE_CMD="$dir/judge" \
+    FM_BOSUN_JOURNAL_CMD="$dir/fake-journal $dir/journal-fixture" \
+    "$BOSUN" "$@"
+}
+
+# (a) The batch read. The home's real journal is absent, so every verdict here
+#     can only have come from the fake.
+d=$(fake_case seam-batch 'records: 2
+horizon: 1
+last: 2
+gaps: 0' "$(fake_row 1 signal fm-fake-one.status 'working: ordinary progress')
+$(fake_row 2 signal fm-fake-two.status 'blocked: needs a human')")
+fake_bosun "$d" run --once > /dev/null 2>&1
+rows=$(FM_STATE_OVERRIDE="$d/state" "$BOSUN" verdicts --raw)
+[ "$(printf '%s\n' "$rows" | awk 'NF { c++ } END { print c + 0 }')" = 2 ] \
+  || fail "the batch read did not go through the journal seam"
+assert_contains "$rows" "fm-fake-one.status" "the first substituted event was judged"
+assert_contains "$rows" "fm-fake-two.status" "the second substituted event was judged"
+[ "$(printf '%s\n' "$rows" | awk -F '\t' '$5 == "fm-fake-two.status" { print $7 }')" = escalate ] \
+  || fail "the substituted blocker was not escalated"
+pass "the pass reads its batch through the journal seam"
+
+# (b) The horizon read, which is the pass's OTHER status call. The fake reports a
+#     stream that begins at 5, so events 1-4 existed and can never be judged.
+d=$(fake_case seam-horizon 'records: 1
+horizon: 5
+last: 5
+gaps: 0' "$(fake_row 5 signal fm-fake-five.status 'working: the only survivor')")
+fake_bosun "$d" run --once > /dev/null 2>&1
+horizon_row=$(FM_STATE_OVERRIDE="$d/state" "$BOSUN" verdicts --raw | awk -F '\t' '$5 == "journal-horizon"')
+[ -n "$horizon_row" ] || fail "the horizon read did not go through the journal seam"
+[ "$(printf '%s' "$horizon_row" | cut -f7)" = escalate ] \
+  || fail "a substituted retention gap must escalate"
+[ "$(printf '%s' "$horizon_row" | cut -f4)" = journal ] \
+  || fail "a retention gap is a verdict about the stream, not about an event"
+assert_contains "$(printf '%s' "$horizon_row" | cut -f6)" "events 1-4" \
+  "the horizon record names the range the substituted journal lost"
+pass "the retention horizon is read through the journal seam"
+
+# (c) The two reads status performs. These are the halves a fix could plausibly
+#     miss: neither is on the pass's path, and a module whose pass reads one
+#     journal while its health reads another reports against itself.
+d=$(fake_case seam-status 'records: 3
+horizon: 1
+last: 42
+gaps: 39' "$(fake_row 1 signal fm-fake-a.status 'working: one')
+$(fake_row 2 signal fm-fake-b.status 'working: two')
+$(fake_row 3 signal fm-fake-c.status 'working: three')")
+fake_bosun "$d" run --once > /dev/null 2>&1
+journal_last=$(awk -F': ' '$1 == "journal_last" { print $2 }' "$d/state/bosun/health")
+[ "$journal_last" = 42 ] \
+  || fail "the health record's journal head came from the real journal, not the seam (got '$journal_last')"
+out=$(fake_bosun "$d" status 2>&1)
+assert_contains "$out" "journal_gaps: 39" \
+  "the reported journal gap count came from the seam"
+pass "both journal reads status performs honour the seam"
+
+# (d) The no-dropped-row guarantee, driven through the fake: the cursor must not
+#     advance past a verdict that did not reach disk, and the events it could not
+#     record must be judged after the repair.
+d=$(fake_case seam-no-drop 'records: 2
+horizon: 1
+last: 2
+gaps: 0' "$(fake_row 1 signal fm-fake-one.status 'working: ordinary progress')
+$(fake_row 2 signal fm-fake-two.status 'blocked: needs a human')")
+mkdir -p "$d/state/bosun"
+touch "$d/state/bosun/verdicts.tsv"
+chmod 0444 "$d/state/bosun/verdicts.tsv"
+fake_bosun "$d" run --once > /dev/null 2>&1
+cursor=$(cat "$d/state/bosun/.cursor" 2>/dev/null || echo 0)
+[ "$cursor" = 0 ] || fail "the cursor advanced past a verdict that never reached disk (cursor $cursor)"
+chmod 0644 "$d/state/bosun/verdicts.tsv"
+fake_bosun "$d" run --once > /dev/null 2>&1
+cursor=$(cat "$d/state/bosun/.cursor" 2>/dev/null || echo 0)
+[ "$cursor" = 2 ] || fail "the substituted events were not judged after the repair (cursor $cursor)"
+judged_keys=$(FM_STATE_OVERRIDE="$d/state" "$BOSUN" verdicts --raw | cut -f5 | sort -u)
+assert_contains "$judged_keys" "fm-fake-one.status" "the unrecordable substituted event was judged after the repair"
+assert_contains "$judged_keys" "fm-fake-two.status" "the second unrecordable substituted event was judged too"
+pass "no substituted event was dropped while the record was broken"
+
+# (e) An unreadable retained journal is still a stream-level escalation with the
+#     seam in place. The guard reads the retained files themselves, so it fires
+#     ahead of the substituted stream rather than being answered by it - and the
+#     fake's own record must therefore go unjudged.
+d=$(fake_case seam-unreadable 'records: 1
+horizon: 1
+last: 1
+gaps: 0' "$(fake_row 1 signal fm-fake-one.status 'working: ordinary progress')")
+emit_event "$d/state" fm-real "working: a real record, so the retained stream exists"
+chmod 0000 "$d/state/journal/events.tsv"
+fake_bosun "$d" run --once > /dev/null 2>&1
+row=$(FM_STATE_OVERRIDE="$d/state" "$BOSUN" verdicts --raw)
+[ "$(printf '%s\n' "$row" | awk 'NF { c++ } END { print c + 0 }')" = 1 ] \
+  || fail "an unreadable retained journal must stop the pass, not be answered by the substituted stream"
+[ "$(printf '%s' "$row" | cut -f5)" = journal-unreadable ] \
+  || fail "an unreadable retained journal must produce a stream-level verdict with the seam in place"
+[ "$(printf '%s' "$row" | cut -f7)" = escalate ] \
+  || fail "an unreadable retained journal must escalate with the seam in place"
+chmod 0644 "$d/state/journal/events.tsv"
+pass "an unreadable retained journal still escalates with the seam in place"
+
 printf '\nall fm-bosun cases passed\n'
