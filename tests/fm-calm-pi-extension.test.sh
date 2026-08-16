@@ -131,7 +131,8 @@ initTheme("dark");
 setCapabilities({ images: null, trueColor: true, hyperlinks: false });
 const launchBrief = "You are the persistent secondmate.\nRead the charter and wait.";
 writeFileSync("launch-brief.md", `${launchBrief}\n`);
-process.env.FM_FIRSTMATE_PI_LAUNCH_BRIEF = `${process.cwd()}/launch-brief.md`;
+const launchBriefPath = `${process.cwd()}/launch-brief.md`;
+process.env.FM_FIRSTMATE_PI_LAUNCH_BRIEF = launchBriefPath;
 
 const tools = [];
 const handlers = new Map();
@@ -248,10 +249,16 @@ for (const content of legacyFixtures) {
     }
   }
 }
-const expectedEncodedLaunchBrief = visibility.encodeFirstmateOperationalInput(
-  "launch-brief",
-  launchBrief,
-);
+// The launch input is the POINTER bin/fm-spawn.sh sends - the brief's path, never
+// its body - so the expected value is built the same way the extension builds it.
+// Encoding the brief body here instead would pin a shape no launch produces.
+const expectedEncodedLaunchBrief = visibility.firstmateLaunchBriefPointer(launchBriefPath);
+if (expectedEncodedLaunchBrief === undefined) {
+  throw new Error("could not build the expected Pi launch-brief pointer");
+}
+if (expectedEncodedLaunchBrief.includes(launchBrief)) {
+  throw new Error("Pi launch input carries the brief body, which belongs off the command line");
+}
 if (
   visibility.classifyFirstmateLaunchInput(
     expectedEncodedLaunchBrief,

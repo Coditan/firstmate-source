@@ -5,7 +5,6 @@
 // ExtensionUIContext.setToolsExpanded(), setWorkingVisible(), and
 // setHiddenThinkingLabel(). The focused tests pin those assumptions. Pi still
 // exposes no global renderer for built-in message rows or arbitrary custom tools.
-import { readFileSync } from "node:fs";
 import type {
   ExtensionAPI,
   ToolDefinition,
@@ -27,9 +26,9 @@ import {
   calmPresentationIsActive,
   classifyFirstmateLaunchInput,
   deliverFirstmateSyntheticInput,
-  encodeFirstmateOperationalInput,
   FIRSTMATE_CALM_PRESENTATION_EVENT,
   FIRSTMATE_PI_LAUNCH_BRIEF_ENV,
+  firstmateLaunchBriefPointer,
   registerFirstmateSyntheticPresentation,
   setCalmPresentation,
   setCalmStockExportRendering,
@@ -67,17 +66,14 @@ export default function (pi: ExtensionAPI) {
   let expectedEncodedLaunchBrief: string | undefined;
   let removeTerminalInputHandler: (() => void) | undefined;
 
+  // The launch input is a POINTER to the brief, not the brief, so the expected
+  // value is derived from the brief's PATH through the same shell owner that
+  // bin/fm-spawn.sh's launch command calls. Reading the file and encoding its
+  // body - what this did before - would rebuild a value the launch no longer
+  // sends, and the launch input would stop being recognised.
   const launchBriefPath = process.env[FIRSTMATE_PI_LAUNCH_BRIEF_ENV];
   if (launchBriefPath) {
-    try {
-      const launchBriefBody = readFileSync(launchBriefPath, "utf8").replace(/\n+$/, "");
-      expectedEncodedLaunchBrief = encodeFirstmateOperationalInput(
-        "launch-brief",
-        launchBriefBody,
-      );
-    } catch {
-      expectedEncodedLaunchBrief = undefined;
-    }
+    expectedEncodedLaunchBrief = firstmateLaunchBriefPointer(launchBriefPath);
   }
 
   const publishPresentationState = (): void => {

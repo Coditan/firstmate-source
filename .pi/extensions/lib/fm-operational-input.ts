@@ -33,6 +33,21 @@ function runOperationalInputCommand(
   return command === "classify" ? result.stdout.replace(/\n$/, "") : result.stdout;
 }
 
+// The exact launch-brief input bin/fm-spawn.sh starts a crewmate with, derived
+// from the brief's PATH. It routes through the same shell owner rather than
+// re-implementing the pointer here, so this side cannot drift from what spawn
+// actually sends. Reading the brief and encoding its body - what this used to
+// do - is precisely what must not happen any more: the launch no longer carries
+// the body, so a value built that way would never match.
+export function firstmateLaunchBriefPointer(briefPath: string): string | undefined {
+  const result = spawnSync(operationalInputScript, ["launch-pointer", briefPath], {
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+  });
+  if (result.status !== 0) return undefined;
+  return result.stdout;
+}
+
 export function encodeFirstmateOperationalInput(
   kind: FirstmateCurrentOperationalKind,
   content: string,

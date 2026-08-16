@@ -151,7 +151,60 @@ test_invalid_current_encodings_are_rejected() {
   pass "operational input: current construction rejects legacy kinds and empty bodies"
 }
 
+# The launch-brief input a crewmate is started with carries the brief's PATH and
+# never its BODY: a launch command is world-readable in the host process table for
+# as long as the agent runs. The pointer is constructed here so bin/fm-spawn.sh and
+# the Pi calm extension cannot drift on what a launch actually sends.
+test_launch_pointer_carries_the_path_and_never_the_brief() {
+  local dir brief body pointer parsed recovered status output
+  fm_test_tmproot dir fm-launch-pointer
+  brief="$dir/brief.md"
+  body='LAUNCH-BRIEF-BODY-THAT-MUST-NOT-TRAVEL'
+  printf '%s\n%s\n' "$body" "second line of the brief" > "$brief"
+
+  fm_launch_brief_pointer "$brief" pointer \
+    || fail "could not construct a launch pointer for $brief"
+  case "$pointer" in
+    *"$body"*) fail "launch pointer carries the brief body" ;;
+  esac
+  case "$pointer" in
+    *"$brief"*) ;;
+    *) fail "launch pointer does not name the brief, so a worker could not open it" ;;
+  esac
+
+  fm_operational_input_kind "$pointer" parsed \
+    || fail "launch pointer is not a parseable operational input"
+  [ "$parsed" = launch-brief ] \
+    || fail "launch pointer changed wire kind to $parsed"
+  [ "$(kind_cli "$pointer")" = launch-brief ] \
+    || fail "cross-language CLI lost the launch-brief kind for a pointer"
+
+  fm_operational_input_body "$pointer" recovered \
+    || fail "could not recover the launch pointer body"
+  case "$recovered" in
+    *"$brief"*) ;;
+    *) fail "recovered launch pointer body lost the brief path" ;;
+  esac
+
+  # The CLI is what the launch command actually calls, so it is pinned too.
+  output=$("$OWNER" launch-pointer "$brief") || fail "launch-pointer CLI failed"
+  [ "$output" = "$pointer" ] \
+    || fail "launch-pointer CLI and library disagree on the launch input"
+
+  # Fail closed rather than launching a worker at a brief that is not there.
+  status=0
+  output=$("$OWNER" launch-pointer "$dir/absent.md" 2>/dev/null) || status=$?
+  [ "$status" -ne 0 ] || fail "launch-pointer accepted a brief path that does not exist"
+  [ -z "$output" ] || fail "refused launch-pointer still printed protocol data"
+
+  status=0
+  output=$("$OWNER" launch-pointer 2>/dev/null) || status=$?
+  [ "$status" -eq 2 ] || fail "launch-pointer without a path did not report invalid use"
+  pass "operational input: a launch pointer carries the brief path and never the brief"
+}
+
 test_current_generic_matrix
+test_launch_pointer_carries_the_path_and_never_the_brief
 test_current_from_firstmate_carrier
 test_landed_untyped_prefix_is_explicitly_legacy
 test_isolated_legacy_matrix
