@@ -221,9 +221,11 @@ cycle() {
     log "delivered: submitted $depth wake(s) to $FM_DELIVERY_ENDPOINT_BACKEND pane $FM_DELIVERY_ENDPOINT_TARGET"
     return 0
   fi
-  fm_delivery_attempt_outcome_write_blocked "$STATE" "$SUBMIT_REASON" || true
   LAST_DEFER=$now
   log_condition "blocked:$SUBMIT_REASON" "undeliverable: $depth wake(s) pending but $SUBMIT_REASON"
+  # Publish the outside-visible verdict only after its audit record exists.
+  # Report readers may observe the outcome immediately after its atomic rename.
+  fm_delivery_attempt_outcome_write_blocked "$STATE" "$SUBMIT_REASON" || true
   return 0
 }
 
