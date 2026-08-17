@@ -467,6 +467,94 @@ test_unestablishable_identity_refuses_before_comparison() {
   pass "an unestablishable repository identity refuses before comparison"
 }
 
+make_github_identity_fakebin() {
+  local fakebin=$1
+  mkdir -p "$fakebin"
+  cat > "$fakebin/gh-axi" <<'SH'
+#!/bin/sh
+printf '12345\nowner/repo\n'
+SH
+  chmod +x "$fakebin/gh-axi"
+}
+
+run_github_alias_check() {
+  local fork_url=$1 upstream_url=$2 state=$3 fakebin=$4
+  PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$TMP_ROOT" FM_HOME="$TMP_ROOT" \
+    FM_STATE_OVERRIDE="$state" FM_CONFIG_OVERRIDE="$TMP_ROOT/no-config" \
+    FM_FIRSTMATE_FORK_URL="$fork_url" FM_FIRSTMATE_UPSTREAM_URL="$upstream_url" \
+    FM_FORK_SYNC_NOW=5800000 "$ROOT/bin/fm-fork-sync-check.sh"
+}
+
+test_github_ssh_forms_share_numeric_identity() {
+  local fakebin state url out
+  fakebin="$TMP_ROOT/github-ssh-fakebin"
+  make_github_identity_fakebin "$fakebin"
+  for url in \
+    'ssh://github.com/owner/repo.git' \
+    'ssh://git@github.com:22/owner/repo.git' \
+    'git+ssh://github.com/owner/repo.git' \
+    'git+ssh://git@github.com:22/owner/repo.git' \
+    'git@github.com:owner/repo.git'; do
+    state="$TMP_ROOT/github-ssh-$(printf '%s' "$url" | tr '/:@+' '_____')"
+    out=$(run_github_alias_check "$url" 'https://github.com/owner/repo.git' "$state" "$fakebin")
+    assert_contains "$out" 'are the same repository (identity github:12345)' \
+      "supported GitHub SSH URL did not resolve through forge identity: $url"
+  done
+  pass "GitHub SSH URL forms resolve by host to one numeric identity"
+}
+
+make_identity_minimal_path() {
+  local fakebin=$1 tool source
+  make_github_identity_fakebin "$fakebin"
+  for tool in bash dirname mkdir cat sed; do
+    source=$(command -v "$tool")
+    ln -s "$source" "$fakebin/$tool"
+  done
+}
+
+test_github_identity_runs_without_timeout_binary() {
+  local fakebin state out
+  fakebin="$TMP_ROOT/no-timeout-fakebin"
+  state="$TMP_ROOT/no-timeout-state"
+  make_identity_minimal_path "$fakebin"
+
+  out=$(PATH="$fakebin" FM_ROOT_OVERRIDE="$TMP_ROOT" FM_HOME="$TMP_ROOT" \
+    FM_STATE_OVERRIDE="$state" FM_CONFIG_OVERRIDE="$TMP_ROOT/no-config" \
+    FM_FIRSTMATE_FORK_URL='ssh://github.com/owner/repo.git' \
+    FM_FIRSTMATE_UPSTREAM_URL='https://github.com/owner/repo.git' \
+    FM_FORK_SYNC_NOW=5900000 "$ROOT/bin/fm-fork-sync-check.sh")
+  assert_contains "$out" 'are the same repository (identity github:12345)' \
+    "a home without timeout or gtimeout did not establish GitHub identity"
+  pass "GitHub identity lookup runs unbounded when no timeout binary exists"
+}
+
+test_github_identity_uses_gtimeout_fallback() {
+  local fakebin state log out
+  fakebin="$TMP_ROOT/gtimeout-fakebin"
+  state="$TMP_ROOT/gtimeout-state"
+  log="$TMP_ROOT/gtimeout.log"
+  make_identity_minimal_path "$fakebin"
+  cat > "$fakebin/gtimeout" <<'SH'
+#!/bin/sh
+printf '%s\n' "$1" >> "$FM_TEST_GTIMEOUT_LOG"
+shift
+exec "$@"
+SH
+  chmod +x "$fakebin/gtimeout"
+
+  out=$(PATH="$fakebin" FM_TEST_GTIMEOUT_LOG="$log" FM_CHECK_TIMEOUT=17 \
+    FM_ROOT_OVERRIDE="$TMP_ROOT" FM_HOME="$TMP_ROOT" FM_STATE_OVERRIDE="$state" \
+    FM_CONFIG_OVERRIDE="$TMP_ROOT/no-config" \
+    FM_FIRSTMATE_FORK_URL='git+ssh://git@github.com:22/owner/repo.git' \
+    FM_FIRSTMATE_UPSTREAM_URL='https://github.com/owner/repo.git' \
+    FM_FORK_SYNC_NOW=6000000 "$ROOT/bin/fm-fork-sync-check.sh")
+  assert_contains "$out" 'are the same repository (identity github:12345)' \
+    "the gtimeout fallback did not preserve identity lookup"
+  [ "$(wc -l < "$log")" -eq 2 ] || fail "gtimeout did not bound both forge lookups"
+  assert_grep '17' "$log" "gtimeout did not receive the configured bound"
+  pass "GitHub identity lookup uses gtimeout when GNU timeout is absent"
+}
+
 test_pending_lists_and_cadence_gate
 test_content_convergence_prefilters_absorbed_patch
 test_content_convergence_clears_absorbed_upstream_commit
@@ -486,3 +574,6 @@ test_identical_comparison_sides_refuse_instead_of_reporting_absorbed
 test_symlinked_local_alias_refuses_as_the_same_repository
 test_distinct_local_identities_are_compared
 test_unestablishable_identity_refuses_before_comparison
+test_github_ssh_forms_share_numeric_identity
+test_github_identity_runs_without_timeout_binary
+test_github_identity_uses_gtimeout_fallback

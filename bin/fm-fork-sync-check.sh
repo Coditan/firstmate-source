@@ -60,6 +60,52 @@ record_stuck() {
   exit 0
 }
 
+HAVE_TIMEOUT=none
+if command -v timeout >/dev/null 2>&1; then HAVE_TIMEOUT=timeout
+elif command -v gtimeout >/dev/null 2>&1; then HAVE_TIMEOUT=gtimeout
+fi
+
+bounded() {
+  case $HAVE_TIMEOUT in
+    timeout) timeout "${FM_CHECK_TIMEOUT:-30}" "$@" ;;
+    gtimeout) gtimeout "${FM_CHECK_TIMEOUT:-30}" "$@" ;;
+    *) "$@" ;;
+  esac
+}
+
+github_repo_slug() {
+  local url=$1 rest authority host path
+  GITHUB_REPO_SLUG=""
+  case $url in
+    https://*|http://*)
+      rest=${url#*://}
+      authority=${rest%%/*}
+      path=${rest#*/}
+      host=${authority#*@}
+      host=${host%%:*}
+      ;;
+    ssh://*|git+ssh://*)
+      rest=${url#*://}
+      authority=${rest%%/*}
+      path=${rest#*/}
+      host=${authority#*@}
+      host=${host%%:*}
+      ;;
+    *:*)
+      authority=${url%%:*}
+      path=${url#*:}
+      host=${authority#*@}
+      ;;
+    *) return 1 ;;
+  esac
+  [ "$host" = github.com ] || return 1
+  path=${path%/}
+  path=${path%.git}
+  case $path in ''|/*|*/*/*|*'/../'*|../*|*/..) return 1 ;; esac
+  case $path in *[!A-Za-z0-9_.\/-]*) return 1 ;; esac
+  GITHUB_REPO_SLUG=$path
+}
+
 repository_identity() {
   local side=$1 url=$2 path=$2 repo_slug result id name
   REPOSITORY_IDENTITY=""
@@ -67,20 +113,17 @@ repository_identity() {
   REPOSITORY_IDENTITY_REASON=""
   case $url in
     file://*) path=${url#file://} ;;
-    https://github.com/*|http://github.com/*|ssh://git@github.com/*|git+ssh://git@github.com/*|git@github.com:*)
-      repo_slug=$url
-      repo_slug=${repo_slug#https://github.com/}
-      repo_slug=${repo_slug#http://github.com/}
-      repo_slug=${repo_slug#ssh://git@github.com/}
-      repo_slug=${repo_slug#git+ssh://git@github.com/}
-      repo_slug=${repo_slug#git@github.com:}
-      repo_slug=${repo_slug%.git}
-      case $repo_slug in */*) ;; *) REPOSITORY_IDENTITY_REASON="$side URL has no owner/repository path"; return 1 ;; esac
+    *://*|*:*)
+      github_repo_slug "$url" || {
+        REPOSITORY_IDENTITY_REASON="$side URL is not a supported GitHub or local repository address"
+        return 1
+      }
+      repo_slug=$GITHUB_REPO_SLUG
       command -v gh-axi >/dev/null 2>&1 || {
         REPOSITORY_IDENTITY_REASON="gh-axi is unavailable for the $side GitHub repository"
         return 1
       }
-      result=$(timeout "${FM_CHECK_TIMEOUT:-30}" gh-axi api "repos/$repo_slug" --jq '.id, .full_name' 2>&1) || {
+      result=$(bounded gh-axi api "repos/$repo_slug" --jq '.id, .full_name' 2>&1) || {
         REPOSITORY_IDENTITY_REASON="$side GitHub repository lookup failed: $result"
         return 1
       }
@@ -94,10 +137,6 @@ repository_identity() {
       REPOSITORY_IDENTITY="github:$id"
       REPOSITORY_NAME=$name
       return 0
-      ;;
-    *://*|*:*)
-      REPOSITORY_IDENTITY_REASON="$side URL is not a supported GitHub or local repository address"
-      return 1
       ;;
   esac
   path=$(git -C "$path" rev-parse --absolute-git-dir 2>/dev/null) || {
