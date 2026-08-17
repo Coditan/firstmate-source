@@ -615,6 +615,10 @@ That instruction had no mechanism, so it was carried by memory, and on this seat
 
 The locked bootstrap step arms it with `--arm`, which writes and registers this home's `state/curation-nudge.check.sh` watcher check and is idempotent, exactly as the currency round's arming is.
 The watcher then runs it on the ordinary `state/*.check.sh` sweep, and it self-gates to its own schedule, so all but one sweep in 48 hours is a single file read.
+Detect exits zero for ordinary sweeps, ordinary firings, and persisted draw refusals, and exits non-zero when state cannot be persisted.
+The watcher captures and surfaces non-empty check output regardless of the check's exit status, so a printed persistence diagnostic remains an actionable wake.
+A firing can deliberately print two lines: its curation wake followed by the refusal or persistence diagnostic for its successor schedule.
+`--draw` and `--status` write no state and do not create an absent state directory.
 
 The period is 48 hours rather than daily, because the currency round already owns the daily slot and a curation sweep at that rate is noise.
 Each firing draws 180-420 seconds of fresh jitter for the next target, so successive fires drift, and any drawn target whose minute is a multiple of five is discarded and re-drawn: cron defaults, systemd timers, monitoring pollers and the watcher sweep itself all cluster on those boundaries.

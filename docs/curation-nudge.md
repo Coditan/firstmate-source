@@ -63,6 +63,10 @@ So the notice takes two hops, and this script owns only the first:
 2. Firstmate reads that wake and dispatches a crewmate to send the All-Ships notice, exactly as `AGENTS.md` section 12 requires of any fleet notice.
 
 The wording of that notice is firstmate's, not this script's.
+An ordinary detect sweep and ordinary firing exit successfully, while a state-persistence failure exits non-zero after printing its actionable diagnostic.
+The watcher captures a registered check's standard output and surfaces any non-empty result even when that check exits non-zero, so the diagnostic is not discarded or converted into silence.
+A firing whose successor draw refuses prints the firing wake and the refusal diagnostic; a firing whose successor cannot be persisted prints the firing wake and the persistence diagnostic.
+`--draw` and `--status` are read-only and do not create the state directory when it is absent.
 
 The boundary is asserted rather than intended, in three ways.
 No executable line in the script reaches for a Bridge script, a forge client, a network client, or `git`.

@@ -72,14 +72,23 @@
 # target at all is the `Trigger: n/a` shape, and is loud too.
 #
 # Usage:
-#   fm-curation-nudge.sh            detect: fire when due, print at most one
-#                                   CURATION_NUDGE line, always exit 0
+#   fm-curation-nudge.sh            detect: stay silent on an ordinary sweep;
+#                                   print the wake on an ordinary firing; print
+#                                   the wake plus its diagnostic when successor
+#                                   scheduling refuses or cannot be persisted.
+#                                   Exit 0 after ordinary sweeps, firings, and
+#                                   persisted refusals; exit non-zero when state
+#                                   cannot be persisted. The watcher captures
+#                                   printed output regardless of that exit status,
+#                                   so a persistence diagnostic still becomes a wake.
 #   fm-curation-nudge.sh --force    fire now, ignoring the schedule
 #   fm-curation-nudge.sh --status   print the schedule and this seat's own
-#                                   readings; writes no state
+#                                   readings; writes no state and does not create
+#                                   the state directory
 #   fm-curation-nudge.sh --draw [n] print n independently drawn next targets as
 #                                   epoch seconds, one per line (default 1),
-#                                   writing no state. This is the scheduling
+#                                   writing no state or state directory. This is
+#                                   the scheduling
 #                                   function itself, exposed so its refusal can
 #                                   be asserted over many draws.
 #   fm-curation-nudge.sh --arm      write and register this home's watcher check
