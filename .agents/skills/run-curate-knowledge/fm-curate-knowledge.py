@@ -25,8 +25,8 @@ here instead of being left to an agent's care:
   * the archive went dark    -> `check` requires the route back to live INSIDE
                                 the loaded half, requires that route to be a
                                 runnable search command, and then RUNS it
-                                against sampled archived headings and prints
-                                the output. The route is proved, not asserted.
+                                once and checks every archived heading against
+                                its output. The route is proved, not asserted.
 
 WHAT THIS PROGRAM DOES NOT DO
 It never decides hot from cold. There is no keyword heuristic anywhere in this
@@ -107,6 +107,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 
@@ -119,7 +120,7 @@ DIGEST_CALL_RE = re.compile(r'print_file_or_absent\s+"\$DATA/([^"]+)"')
 # A route back is only a route if it can be run. These are the read-only search
 # verbs a loaded half may hand a reader; anything else is prose about the
 # archive rather than a way into it.
-ROUTE_VERBS = ("grep", "rg", "sed", "awk", "less", "fm-curate-knowledge.py")
+ROUTE_VERBS = ("grep", "rg", "sed", "awk")
 
 # Verdict vocabularies. They do not overlap by accident: `cold` and `split`
 # presuppose an archive file, which a shared-tracked file must never grow.
@@ -145,6 +146,16 @@ def read_text(path):
 def norm_heading(text):
     """Identity for set comparison: level-insensitive, case-folded, despaced."""
     return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def occurrence_keys(headings):
+    counts = {}
+    keys = []
+    for heading in headings:
+        norm = norm_heading(heading)
+        counts[norm] = counts.get(norm, 0) + 1
+        keys.append("%s#%d" % (norm, counts[norm]))
+    return keys
 
 
 # --------------------------------------------------------------------------
@@ -211,7 +222,8 @@ def parse_entries(text, level):
 
     boundaries = [s[0] for s in starts]
     entries = []
-    for index, level_at, heading in entry_starts:
+    keys = occurrence_keys([entry[2] for entry in entry_starts])
+    for (index, level_at, heading), key in zip(entry_starts, keys):
         following = [b for b in boundaries if b > index]
         end = following[0] if following else len(lines)
         body = "".join(lines[index:end])
@@ -219,6 +231,7 @@ def parse_entries(text, level):
             {
                 "heading": heading,
                 "norm": norm_heading(heading),
+                "key": key,
                 "level": level_at,
                 "line": index + 1,
                 "bytes": len(body.encode("utf-8")),
@@ -473,12 +486,14 @@ def write_worksheet(path, facts, shape, out):
     for index, entry in enumerate(facts["entries"], start=1):
         body.append(
             "--- entry {n}\n"
+            "key: {key}\n"
             "heading: {heading}\n"
             "bytes: {bytes}\n"
             "share_of_file: {share}\n"
             "verdict: {default}\n"
             "why:\n\n".format(
                 n=index,
+                key=entry["key"],
                 heading=entry["heading"],
                 bytes=entry["bytes"],
                 share=pct(entry["bytes"], facts["bytes"]),
@@ -504,13 +519,14 @@ def read_worksheet(path):
         if raw.startswith("--- entry"):
             if current:
                 rows.append(current)
-            current = {"n": raw.split()[-1], "heading": "", "verdict": "", "why": ""}
+            current = {"n": raw.split()[-1], "key": "", "heading": "", "verdict": "", "why": ""}
             key = None
             continue
         if current is None:
             continue
         match = re.match(r"^([a-z_]+):\s*(.*)$", raw)
         if match and match.group(1) in (
+            "key",
             "heading",
             "bytes",
             "share_of_file",
@@ -524,8 +540,11 @@ def read_worksheet(path):
             current[key] = (current[key] + " " + raw.strip()).strip()
     if current:
         rows.append(current)
-    for row in rows:
+    generated = occurrence_keys([row["heading"] for row in rows])
+    for row, generated_key in zip(rows, generated):
         row["norm"] = norm_heading(row["heading"])
+        if not row["key"]:
+            row["key"] = generated_key
     return meta, rows
 
 
@@ -554,7 +573,8 @@ def cmd_measure(args):
 
     payload = {"denominator": {"label": label, "bytes": total}, "files": {}}
 
-    print("DENOMINATOR: %s = %d bytes" % (label, total))
+    human = sys.stderr if args.json else sys.stdout
+    print("DENOMINATOR: %s = %d bytes" % (label, total), file=human)
     for row_label, path, size, present, source in rows:
         print(
             "  %-28s %10s  %7s  %s"
@@ -564,10 +584,10 @@ def cmd_measure(args):
                 pct(size, total) if present else "-",
                 source,
             )
-        )
+        , file=human)
     for note in notes:
-        print("  note: %s" % note)
-    print("")
+        print("  note: %s" % note, file=human)
+    print("", file=human)
 
     for target in targets:
         if not os.path.isfile(target):
@@ -577,29 +597,29 @@ def cmd_measure(args):
         facts["shape"] = shape
         payload["files"][facts["path"]] = facts
 
-        print("FILE: %s" % target)
-        print("  shape             %s" % shape)
+        print("FILE: %s" % target, file=human)
+        print("  shape             %s" % shape, file=human)
         print(
             "  bytes             %d  (%s of the %s)"
             % (facts["bytes"], pct(facts["bytes"], total), label)
-        )
+        , file=human)
         print(
             "  headings          %d total, %d at level %d (the entry level)"
             % (facts["heading_count_all"], len(facts["entries"]), facts["level"])
-        )
+        , file=human)
         print(
             "  preamble          %d bytes before the first entry"
             % facts["preamble_bytes"]
-        )
+        , file=human)
         if facts["entries"]:
             sizes = sorted(e["bytes"] for e in facts["entries"])
             middle = sizes[len(sizes) // 2]
             print(
                 "  entry bytes       median %d, largest %d, smallest %d"
                 % (middle, sizes[-1], sizes[0])
-            )
+            , file=human)
             top = sorted(facts["entries"], key=lambda e: -e["bytes"])[: args.top]
-            print("  largest %d entries:" % len(top))
+            print("  largest %d entries:" % len(top), file=human)
             for entry in top:
                 print(
                     "    %8d B  %6s of file  %6s of surface  %s"
@@ -609,8 +629,8 @@ def cmd_measure(args):
                         pct(entry["bytes"], total),
                         entry["heading"],
                     )
-                )
-        print("")
+                , file=human)
+        print("", file=human)
 
     if args.save:
         payload["denominator"]["rows"] = [
@@ -618,7 +638,7 @@ def cmd_measure(args):
         ]
         with open(args.save, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2, sort_keys=True)
-        print("SNAPSHOT: wrote %s" % args.save)
+        print("SNAPSHOT: wrote %s" % args.save, file=human)
 
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
@@ -678,39 +698,51 @@ def load_snapshot(path, before_file):
 
 
 def route_commands(loaded_text, archive_path):
-    """Lines in the loaded half that are a runnable search over the archive."""
+    """Backtick-delimited commands that name the archive."""
     base = os.path.basename(archive_path)
     found = []
-    for line in loaded_text.splitlines():
-        if base not in line:
-            continue
-        if any(verb in line for verb in ROUTE_VERBS):
-            found.append(line.strip().lstrip("$").strip().strip("`"))
+    for command in re.findall(r"`([^`]+)`", loaded_text):
+        if base in command and command.strip() != base:
+            found.append(command.strip().lstrip("$").strip())
     return found
 
 
-def prove_route(archive_path, headings, sample):
-    """Actually recover archived facts. Returns (ok, transcript lines)."""
-    lines = []
-    ok = True
-    if not headings:
-        return True, ["  (archive has no entries to recover)"]
-    step = max(1, len(headings) // sample) if sample else 1
-    chosen = headings[::step][:sample]
-    for heading in chosen:
-        command = ["grep", "-n", "-F", "--", heading, archive_path]
-        lines.append("  $ %s" % " ".join(_shell_quote(part) for part in command))
-        result = subprocess.run(
-            command, capture_output=True, text=True, check=False
+def prove_route(command, archive_path, headings, sample):
+    """Run the documented route once and check every archived heading."""
+    forbidden = ("|", ";", ">", "<", "`", "$(", "${")
+    if any(token in command for token in forbidden):
+        return False, [], [], "route contains a forbidden shell construct"
+    try:
+        argv = shlex.split(command)
+    except ValueError as exc:
+        return False, [], [], "route cannot be tokenized: %s" % exc
+    if not argv or argv[0] not in ROUTE_VERBS:
+        return False, [], [], "route command `%s` is not in the read-only allowlist (%s)" % (
+            argv[0] if argv else "", ", ".join(ROUTE_VERBS)
         )
-        out = result.stdout.strip().splitlines()
-        if result.returncode != 0 or not out:
-            ok = False
-            lines.append("    NO HIT - this archived fact is unrecoverable")
-            continue
-        for line in out[:2]:
-            lines.append("    %s" % line[:160])
-    return ok, lines
+    base = os.path.basename(archive_path)
+    archive_args = [index for index, value in enumerate(argv) if os.path.basename(value) == base]
+    if not archive_args:
+        return False, [], [], "route has no archive path argument"
+    for index in archive_args:
+        argv[index] = base
+    cwd = os.path.dirname(os.path.abspath(archive_path))
+    try:
+        result = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, check=False)
+    except OSError as exc:
+        return False, [], [], "route could not run: %s" % exc
+    output = result.stdout.strip()
+    if result.returncode != 0 or not output:
+        return False, [], [], "documented route exited %d or returned no output" % result.returncode
+    missing = [heading for heading in headings if heading not in output]
+    reached = len(headings) - len(missing)
+    lines = ["  $ (cd %s && %s)" % (cwd, " ".join(_shell_quote(part) for part in argv))]
+    output_lines = output.splitlines()
+    for line in output_lines[:sample]:
+        lines.append("    %s" % line[:160])
+    return not missing, lines, missing, "route reaches %d of %d archived headings" % (
+        reached, len(headings)
+    )
 
 
 def _shell_quote(value):
@@ -756,10 +788,14 @@ def cmd_check(args):
         archive = file_facts(args.archive, args.level or before.get("level"))
         archive_text = read_text(args.archive)
 
-    before_norms = {e["norm"] for e in before["entries"]}
-    loaded_norms = {e["norm"] for e in loaded["entries"]}
-    archive_norms = {e["norm"] for e in archive["entries"]} if archive else set()
-    after_norms = loaded_norms | archive_norms
+    fallback_before_keys = occurrence_keys([e["heading"] for e in before["entries"]])
+    before_keys = {
+        entry.get("key", fallback_key)
+        for entry, fallback_key in zip(before["entries"], fallback_before_keys)
+    }
+    loaded_keys = {e["key"] for e in loaded["entries"]}
+    archive_keys = {e["key"] for e in archive["entries"]} if archive else set()
+    after_keys = loaded_keys | archive_keys
     # A rule extracted from a split rarely keeps its own entry heading: it
     # becomes a bullet under a broader heading that already exists. So the
     # "where did the rule land" and "did this heading vanish" questions are
@@ -777,7 +813,7 @@ def cmd_check(args):
     print("")
 
     # --- 1. verdict legality -------------------------------------------------
-    by_norm = {}
+    by_key = {}
     for row in rows:
         verdict = row["verdict"].strip()
         if verdict not in vocab:
@@ -799,9 +835,11 @@ def cmd_check(args):
                     WHY_FLOOR,
                 )
             )
-        by_norm[row["norm"]] = row
+        if row["key"] in by_key:
+            failures.append("worksheet repeats occurrence key `%s`" % row["key"])
+        by_key[row["key"]] = row
 
-    undeclared = sorted(before_norms - set(by_norm))
+    undeclared = sorted(before_keys - set(by_key))
     if undeclared:
         failures.append(
             "%d baseline entries carry no verdict: %s"
@@ -864,9 +902,9 @@ def cmd_check(args):
         )
 
     # --- 3. every deletion is declared --------------------------------------
-    vanished = before_norms - after_norms - after_all_norms
+    vanished = before_keys - after_keys
     declared_gone = {
-        norm for norm, row in by_norm.items() if row["verdict"] in ("delete", "fold")
+        key for key, row in by_key.items() if row["verdict"] in ("delete", "fold")
     }
     undeclared_loss = sorted(vanished - declared_gone)
     if undeclared_loss:
@@ -882,10 +920,10 @@ def cmd_check(args):
         )
 
     # --- 4. per-verdict placement -------------------------------------------
-    for norm, row in sorted(by_norm.items()):
+    for key, row in sorted(by_key.items()):
         verdict = row["verdict"]
-        in_loaded = norm in loaded_norms
-        in_archive = norm in archive_norms
+        in_loaded = key in loaded_keys
+        in_archive = key in archive_keys
         if verdict == "split":
             # A split ran in one of two directions and both are real: either the
             # heading moved to the archive and its rule became a bullet under a
@@ -953,7 +991,7 @@ def cmd_check(args):
 
     # --- 5. no invented archive content -------------------------------------
     if archive:
-        invented = sorted(archive_norms - before_norms)
+        invented = sorted(archive_keys - before_keys)
         if invented:
             warnings.append(
                 "%d archive headings were not in the baseline: %s"
@@ -965,6 +1003,7 @@ def cmd_check(args):
         print("")
         print("ROUTE BACK")
         rel = os.path.basename(archive["path"])
+        commands = []
         if rel not in loaded_text:
             failures.append(
                 "the loaded half never names %s. The route back must live "
@@ -981,18 +1020,24 @@ def cmd_check(args):
                 )
                 print("  MISSING: no runnable search command (%s)" % ", ".join(ROUTE_VERBS))
             else:
-                print("  it hands the reader %d runnable search(es):" % len(commands))
+                print("  it hands the reader %d documented search(es):" % len(commands))
                 for command in commands[:3]:
                     print("    %s" % command[:150])
 
         print("")
-        print("PROOF OF RECOVERY (rule 3: prove the route, do not assert it)")
+        print("COMPLETE ROUTE ASSERTION")
         headings = [e["heading"] for e in archive["entries"]]
-        ok, transcript = prove_route(archive["path"], headings, args.prove_route)
-        for line in transcript:
-            print(line)
-        if not ok:
-            failures.append("at least one sampled archived fact could not be recovered")
+        if commands:
+            ok, transcript, missing, result_message = prove_route(
+                commands[0], archive["path"], headings, args.prove_route
+            )
+            print("  %s" % result_message)
+            print("PRINTED EXAMPLE (%d output lines maximum)" % args.prove_route)
+            for line in transcript:
+                print(line)
+            if not ok:
+                detail = ": %s" % ", ".join(missing[:8]) if missing else ""
+                failures.append("documented route failed%s" % detail)
 
     # --- verdict --------------------------------------------------------------
     print("")

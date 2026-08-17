@@ -86,16 +86,19 @@ write_worksheet() {
 # level: 2
 
 --- entry 1
+key: alpha rule and the incident behind it#1
 heading: Alpha rule and the incident behind it
 verdict: split
 why: rule now a bullet under Store in the loaded half
 
 --- entry 2
+key: alpha rule seen a second time#1
 heading: Alpha rule seen a second time
 verdict: fold
 why: merged under Alpha rule and the incident behind it - one evening, one measurement
 
 --- entry 3
+key: a path that no longer exists#1
 heading: A path that no longer exists
 verdict: delete
 why: bin/gone.sh is absent from the tree; git log -- bin/gone.sh returns nothing
@@ -281,7 +284,84 @@ EOF
   [ "$status" -eq 1 ] || fail "a bare filename with no search exited $status, expected 1"
   printf '%s' "$out" | grep -q 'A filename is a location, not a route' \
     || fail "the check does not distinguish a location from a route"
+
+  sed "s|grep -n '\^## '|grep -n '['|" "$TMP/after-loaded.md" >"$TMP/broken-route-loaded.md"
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/broken-route-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP/home" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "a broken documented route exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'documented route exited' \
+    || fail "the broken documented route was not executed"
   pass "the route back must be named and runnable inside the loaded half"
+}
+
+test_the_documented_route_must_reach_every_archived_heading() {
+  local out status
+  sed "s|grep -n '\^## '|grep -n 'Alpha rule'|" "$TMP/after-loaded.md" >"$TMP/partial-route-loaded.md"
+  cat >>"$TMP/after-archive.md" <<'EOF'
+
+## Unreachable incident
+
+This heading is deliberately outside the documented search.
+EOF
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/partial-route-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP/home" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "a partial route exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'route reaches 1 of 2 archived headings' \
+    || fail "the route assertion does not report its complete reach count"
+  printf '%s' "$out" | grep -q 'Unreachable incident' \
+    || fail "the route failure does not name the unreachable heading"
+  write_after_archive "$TMP/after-archive.md"
+  pass "the documented route must reach every archived heading"
+}
+
+test_duplicate_heading_occurrences_cannot_hide_a_deletion() {
+  local out status
+  cat >"$TMP/duplicate-before.md" <<'EOF'
+# Store
+
+## Repeated fact
+
+First occurrence.
+
+## Repeated fact
+
+Second occurrence.
+EOF
+  "$DRIVER" measure "$TMP/duplicate-before.md" --home "$TMP/home" \
+    --save "$TMP/duplicate-before.json" >/dev/null 2>&1
+  "$DRIVER" inventory "$TMP/duplicate-before.md" --out "$TMP/duplicate-ws.md" \
+    --home "$TMP/home" >/dev/null 2>&1
+  sed -i 's/^verdict: split$/verdict: cold/; s/^why:$/why: the trigger arrives with the problem, so this stays searchable/' \
+    "$TMP/duplicate-ws.md"
+  cat >"$TMP/duplicate-loaded.md" <<'EOF'
+# Store
+
+Use `grep -n '^## ' duplicate-archive.md` to search the archive.
+EOF
+  cat >"$TMP/duplicate-archive.md" <<'EOF'
+# Archive
+
+## Repeated fact
+
+Only one occurrence survived.
+EOF
+  out=$("$DRIVER" check --before "$TMP/duplicate-before.json" \
+    --worksheet "$TMP/duplicate-ws.md" --loaded "$TMP/duplicate-loaded.md" \
+    --archive "$TMP/duplicate-archive.md" --home "$TMP/home" 2>&1) \
+    && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "a silently dropped duplicate exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'repeated fact#2' \
+    || fail "the missing duplicate occurrence was not identified"
+  pass "duplicate heading occurrences cannot hide an undeclared deletion"
+}
+
+test_measure_json_is_one_document() {
+  "$DRIVER" measure "$TMP/before.md" --home "$TMP/home" --json \
+    2>"$TMP/measure-json.stderr" | python3 -c 'import json,sys; json.load(sys.stdin)' \
+    || fail "measure --json stdout is not one JSON document"
+  pass "measure JSON output is one machine-readable document"
 }
 
 # The two shapes must never borrow each other's method. An AGENTS.md archive
@@ -313,9 +393,9 @@ test_a_real_curation_passes_and_the_report_carries_the_ledger() {
     --home "$TMP/home" 2>&1) && status=0 || status=$?
   [ "$status" -eq 0 ] || fail "a real curation exited $status, expected 0: $out"
   printf '%s' "$out" | grep -q 'CHECK PASSED' || fail "a real curation did not pass"
-  printf '%s' "$out" | grep -q 'PROOF OF RECOVERY' \
+  printf '%s' "$out" | grep -q 'COMPLETE ROUTE ASSERTION' \
     || fail "a passing check does not print the executed recovery"
-  printf '%s' "$out" | grep -q '^  \$ grep' \
+  printf '%s' "$out" | grep -q '^  \$ (cd .* && grep' \
     || fail "the recovery proof shows no command it actually ran"
 
   out=$("$DRIVER" report --before "$TMP/before.json" --loaded "$TMP/after-loaded.md" \
@@ -333,8 +413,14 @@ test_a_real_curation_passes_and_the_report_carries_the_ledger() {
 # The skill must be reachable and must not claim a command the driver lacks.
 test_skill_declares_its_trigger_and_only_real_subcommands() {
   assert_present "$SKILL" "run-curate-knowledge SKILL.md is missing"
-  assert_grep 'name: run-curate-knowledge' "$SKILL" "skill name is not the directory name"
-  assert_grep 'user-invocable: true' "$SKILL" "skill must stay captain-invocable"
+  # This is the owned skill-trigger contract enforced fleet-wide by
+  # tests/fm-instruction-owners.test.sh, not a proxy for model behavior.
+  fm_skill_frontmatter "$ROOT/.agents/skills/run-curate-knowledge" \
+    | grep -qx 'name: run-curate-knowledge' \
+    || fail "skill name is not the directory name"
+  fm_skill_frontmatter "$ROOT/.agents/skills/run-curate-knowledge" \
+    | grep -qx 'user-invocable: true' \
+    || fail "skill must stay captain-invocable"
   # shellcheck disable=SC2016 # Literal backticks must remain unexpanded.
   assert_no_grep '- `run-curate-knowledge` - ' "$ROOT/AGENTS.md" \
     "a captain-invocable skill must not be listed in AGENTS.md section 13"
@@ -374,6 +460,9 @@ test_a_flat_heading_count_is_a_failed_prune
 test_an_undeclared_deletion_fails_the_check
 test_a_deletion_without_evidence_fails
 test_the_route_back_must_live_in_the_loaded_half_and_run
+test_the_documented_route_must_reach_every_archived_heading
+test_duplicate_heading_occurrences_cannot_hide_a_deletion
+test_measure_json_is_one_document
 test_the_two_shapes_never_borrow_each_others_method
 test_a_real_curation_passes_and_the_report_carries_the_ledger
 test_skill_declares_its_trigger_and_only_real_subcommands
