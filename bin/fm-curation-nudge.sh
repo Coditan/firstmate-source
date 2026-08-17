@@ -92,6 +92,7 @@
 #
 # State, all under FM_HOME/state:
 #   curation-nudge.next-due   epoch of the next scheduled nudge (the trigger)
+#   curation-nudge.refusal    last failed draw's epoch and effective operands
 #   curation-nudge.last-fire  epoch of the last nudge that actually fired
 #   curation-nudge.report     the last firing's readings and schedule
 #   curation-nudge.check.sh   the armed watcher shim (with .check-trust)
@@ -118,6 +119,7 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 
 NEXT_DUE="$STATE/curation-nudge.next-due"
+REFUSAL="$STATE/curation-nudge.refusal"
 LAST_FIRE="$STATE/curation-nudge.last-fire"
 REPORT="$STATE/curation-nudge.report"
 CHECK="$STATE/curation-nudge.check.sh"
@@ -277,6 +279,42 @@ read_last_fire() {
   printf '%s' "$value"
 }
 
+read_refusal() {
+  local recorded='' jitter_min='' jitter_max='' interval='' attempts='' key value
+  [ -f "$REFUSAL" ] || return 1
+  while IFS='=' read -r key value; do
+    case "$key" in
+      recorded) recorded=$value ;;
+      jitter_min) jitter_min=$value ;;
+      jitter_max) jitter_max=$value ;;
+      interval) interval=$value ;;
+      attempts) attempts=$value ;;
+    esac
+  done < "$REFUSAL"
+  case "$recorded:$jitter_min:$jitter_max:$interval:$attempts" in
+    *[!0-9:]*) return 1 ;;
+  esac
+  [ -n "$recorded" ] && [ -n "$jitter_min" ] && [ -n "$jitter_max" ] \
+    && [ -n "$interval" ] && [ -n "$attempts" ] || return 1
+  printf '%s %s %s %s %s' "$recorded" "$jitter_min" "$jitter_max" "$interval" "$attempts"
+}
+
+record_successful_draw() {
+  printf '%s\n' "$1" > "$NEXT_DUE" || return 1
+  rm -f "$REFUSAL"
+}
+
+record_refused_draw() {
+  rm -f "$NEXT_DUE"
+  {
+    printf 'recorded=%s\n' "$NOW"
+    printf 'jitter_min=%s\n' "$JITTER_MIN"
+    printf 'jitter_max=%s\n' "$JITTER_MAX"
+    printf 'interval=%s\n' "$INTERVAL"
+    printf 'attempts=%s\n' "$DRAW_ATTEMPTS"
+  } > "$REFUSAL"
+}
+
 render_report() {  # <next-due-epoch or empty>
   local next=$1 last
   printf 'nudge: %s\n' "$(epoch_utc "$NOW")"
@@ -368,7 +406,21 @@ SHIM
 # work produced: is there a next target at all, and has anything executed the
 # one there is?
 armed_diagnostic() {
-  local next last shim_mtime shim_age overdue_by
+  local next last shim_mtime shim_age overdue_by refusal recorded jitter_min jitter_max interval attempts age
+  if refusal=$(read_refusal); then
+    read -r recorded jitter_min jitter_max interval attempts <<EOF
+$refusal
+EOF
+    age=$(( NOW - recorded ))
+    [ "$age" -ge 0 ] || age=0
+    printf 'CURATION_NUDGE: the curation scheduler has refused to create a next sweep for %s minute(s) because all %s candidate minutes drawn from the configured jitter window landed on the five-minute grid (FM_CURATION_NUDGE_JITTER_MIN=%s, FM_CURATION_NUDGE_JITTER_MAX=%s, FM_CURATION_NUDGE_INTERVAL=%s); set the jitter window to include an off-grid target minute\n' \
+      "$(( age / 60 ))" "$attempts" "$jitter_min" "$jitter_max" "$interval"
+    return 0
+  fi
+  if [ -f "$REFUSAL" ]; then
+    printf 'CURATION_NUDGE: the curation scheduler recorded a draw refusal, but its state record %s is unreadable; repair the jitter configuration and run the check again\n' "$REFUSAL"
+    return 0
+  fi
   if [ ! -f "$CHECK" ] || [ ! -x "$CHECK" ]; then
     printf 'CURATION_NUDGE: the knowledge-file curation nudge is not armed on this home, so nothing will re-measure this vessel'"'"'s learnings and captain files between sessions (fix: %s/fm-curation-nudge.sh --arm)\n' "$SCRIPT_DIR"
     return 0
@@ -434,8 +486,9 @@ if [ "$MODE" = detect ]; then
     # Arming a home must not wake it, and a home with no schedule is exactly the
     # state --armed reports if nothing ever fixes it.
     if next=$(draw_next_due "$NOW"); then
-      printf '%s\n' "$next" > "$NEXT_DUE"
+      record_successful_draw "$next"
     else
+      record_refused_draw
       schedule_refusal_line
     fi
     exit 0
@@ -447,10 +500,10 @@ fi
 # consumed, so a home that was off for a week schedules one sweep ahead instead
 # of firing on every watcher pass until it has caught up with the calendar.
 if next=$(draw_next_due "$NOW"); then
-  printf '%s\n' "$next" > "$NEXT_DUE"
+  record_successful_draw "$next"
 else
   next=''
-  rm -f "$NEXT_DUE"
+  record_refused_draw
 fi
 printf '%s\n' "$NOW" > "$LAST_FIRE"
 render_report "$next" > "$REPORT"

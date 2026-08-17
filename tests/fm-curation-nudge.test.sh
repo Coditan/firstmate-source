@@ -88,11 +88,12 @@ test_a_window_with_no_off_grid_minute_refuses_rather_than_scheduling_on_it() {
 }
 
 test_initial_detect_loudly_explains_an_exhausted_draw() {
-  local home out
+  local home out refusal now
   home=$(make_home initial-refusal)
   run_nudge "$home" --arm >/dev/null || fail "arming failed"
+  now=$(( $(date +%s) / 300 * 300 ))
 
-  out=$(FM_CURATION_NUDGE_NOW=0 FM_CURATION_NUDGE_JITTER_MIN=0 \
+  out=$(FM_CURATION_NUDGE_NOW="$now" FM_CURATION_NUDGE_JITTER_MIN=0 \
     FM_CURATION_NUDGE_JITTER_MAX=0 run_nudge "$home")
   assert_contains "$out" 'CURATION_NUDGE:' \
     "an initial draw failure must immediately raise a wake"
@@ -110,7 +111,38 @@ test_initial_detect_loudly_explains_an_exhausted_draw() {
     "a draw refusal must not masquerade as a watcher failure"
   [ ! -e "$home/state/curation-nudge.next-due" ] \
     || fail "the refusal must never persist an on-grid target"
-  pass "initial detect reports the cause and operands when every draw is on-grid"
+  refusal="$home/state/curation-nudge.refusal"
+  [ -f "$refusal" ] || fail "the scheduling refusal was not persisted"
+  assert_grep "recorded=$now" "$refusal" \
+    "the refusal record must carry when the failed draw happened"
+  assert_grep 'jitter_min=0' "$refusal" \
+    "the refusal record must carry its effective jitter minimum"
+  assert_grep 'jitter_max=0' "$refusal" \
+    "the refusal record must carry its effective jitter maximum"
+  assert_grep 'interval=172800' "$refusal" \
+    "the refusal record must carry its effective interval"
+  assert_grep 'attempts=64' "$refusal" \
+    "the refusal record must carry the exhausted bound"
+
+  out=$(FM_CURATION_NUDGE_NOW=$(( now + 7200 )) run_nudge "$home" --armed)
+  assert_contains "$out" 'scheduler has refused' \
+    "the later health reading must preserve the scheduling cause"
+  assert_contains "$out" 'for 120 minute(s)' \
+    "the health reading must say how long the refusal has stood"
+  assert_contains "$out" 'all 64 candidate minutes' \
+    "the later health reading must retain the attempt bound"
+  assert_contains "$out" 'FM_CURATION_NUDGE_JITTER_MIN=0' \
+    "the later health reading must retain the effective operands"
+  assert_not_contains "$out" 'nothing is running this home' \
+    "a persisted draw refusal must not masquerade as dead supervision"
+
+  out=$(FM_CURATION_NUDGE_NOW=$(( now + 60 )) FM_CURATION_NUDGE_JITTER_MIN=0 \
+    FM_CURATION_NUDGE_JITTER_MAX=0 run_nudge "$home")
+  [ -z "$out" ] || fail "a successful recovery draw must be silent: $out"
+  [ ! -e "$refusal" ] || fail "a successful draw did not clear the refusal record"
+  out=$(FM_CURATION_NUDGE_NOW=$(( now + 60 )) run_nudge "$home" --armed)
+  [ -z "$out" ] || fail "a recovered scheduler must have a silent health reading: $out"
+  pass "draw refusal remains distinct from supervision failure and clears on recovery"
 }
 
 test_the_period_is_forty_eight_hours() {
