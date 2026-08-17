@@ -120,7 +120,7 @@ A reading it could not take is reported as unable to see and never as an all-cle
 Firstmate's daily currency duty has a mechanism, so it is never carried by memory: the locked bootstrap step arms `bin/fm-currency-round.sh` on the watcher, and every session start reports `CURRENCY_ROUND:` when this home's check is unarmed or has stopped running.
 `docs/configuration.md` "Daily currency round" and `docs/currency-round.md` own the cadence, the readings, and the scope; the round's findings arrive as an ordinary `check:` wake under section 8.
 Two facts bind wherever that wake is read.
-Every claim of currency names its hop - `released`, `pinned`, or `installed` - and this round measures only the released and installed hops for this seat, so a clean round never means the fleet is current.
+Every claim of currency names its hop - `released`, `pinned`, or `installed` - and this round measures all three for this seat only, so a clean round never means the fleet is current.
 A reading the round could not take is reported as unmeasured and never as current, because an instrument that cannot read must not be relayed as an all-clear.
 
 ## 4. Harness and runtime dispatch
