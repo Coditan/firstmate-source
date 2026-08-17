@@ -15,6 +15,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-axi-path-lib.sh`     | Resolve and prepend one vessel's home-private AXI npm prefix, record the pre-prepend session PATH, and name the maintained tools something else shadows |
 | `fm-currency-round.sh` | Run this home's daily currency round, arm it on the watcher, and report a home that has stopped being checked |
 | `fm-nudge.sh` | Raise this home's off-grid fleet nudges - one watcher check with several subjects, each on its own period and its own target whose minute never lands on the five-minute grid - arm that one check, and report a schedule nothing is executing (docs/nudge-cadence.md) |
+| `fm-forge-status.sh` | Read the forge's own status page on a settable cadence, append every new reading to a durable log, wake firstmate only on a new one, arm it on the watcher, and report a watch nothing is executing (docs/forge-status-watch.md) |
 | `fm-firstmate-update-check.sh` | Read-only check for relevant instruction-surface commits on the source this deployment updates from |
 | `fm-fork-sync-check.sh` | Detect unabsorbed real-upstream content in the curated fork and prefilter both sides of its commit review |
 | `fm-grossreinschiff-due.sh` | Report whether this home's weekly Thursday cleanup sweep is due, and record a completed one |
