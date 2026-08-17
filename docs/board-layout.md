@@ -3,6 +3,19 @@
 Reference for the components `bin/fm-board.sh` makes available to a board body.
 The script's header owns the build mechanics and the no-network guard; this file owns the markup each component expects.
 
+## The design language
+
+Boards are set in **Tally**, this vessel's own design language, adopted 2026-08-17.
+The full reference - the two laws, the seven marks, the three hues, the measured contrast figures, and the reasoning behind each component - is the scout report `data/coditan-design-language/report.md` and its specimen, which live in this home's private records rather than in this repository.
+Read them before changing a token or adding a component, and re-measure rather than asserting; `bin/board-assets/layout.css` carries the figures a reader without those records still needs.
+
+Two of its laws bind everything below.
+Ink is the record, and colour is a claim on the captain and nothing else - three hues exist, and under way, landed, and failed get none of them.
+Every sheet declares its own incompleteness, in the same instrument that carries its counts, which is what `.fm-reserve` is for.
+
+Tally is this vessel's language and nobody else's.
+Every other vessel applies the fleet's board rules with its own design and its own name, so nothing here is sent onward as a fleet standard.
+
 ## Why boards are built, not hand-written
 
 Every board used to carry its own layout, written from scratch per board.
@@ -34,7 +47,7 @@ A self-contained board satisfies both without a copying step.
 
 ## Writing a body fragment
 
-The fragment is inserted inside `<div class="fm-wrap">`.
+The fragment is inserted inside `<div class="fm-wrap">`, after the header and the tally strip container.
 It carries no `<style>`, no `<script>`, and no document scaffolding.
 
     bin/fm-board.sh --title "Entscheidungsbrett" --subtitle "31. Juli 2026" \
@@ -42,38 +55,91 @@ It carries no `<style>`, no `<script>`, and no document scaffolding.
 
 Then open it with `bin/fm-lavish.sh <file>` - never bare `lavish-axi`.
 
+Two worked bodies are kept as the things to copy, and they are pinned by `tests/fm-board.test.sh` so neither can silently rot:
+
+    docs/examples/board-body-decision.html   the DECISION shape
+    docs/examples/board-body-report.html     the REPORT shape
+
+Three things the builder writes and a body never does.
+Writing any of them into a body creates a second copy of something that is already recorded, and the copy is the one that goes stale.
+
+- **The vessel name**, in every board's header. `bin/fm-board.sh --help` owns how it is resolved; a board it cannot resolve is refused rather than written unattributed.
+- **The mark set**, the seven symbols referenced as `<use href="#fm-mk-open">` and its siblings: `open`, `pencil`, `struck`, `gate`, `held`, `run`, `void`.
+- **The tally strip**, container and contents both.
+
 ## Layout components
 
 ### Sections and containers
 
 | Class | Use |
 | --- | --- |
-| `fm-wrap` | Added by the builder; do not repeat it. |
-| `fm-sub` | One dim line under the title. |
+| `fm-wrap` | The sheet. Added by the builder; do not repeat it. |
+| `fm-issue` | The header block. Added by the builder; do not repeat it. |
+| `fm-vessel` | The building vessel's name. **Written by the builder only.** |
+| `fm-sub` | One dim line beside the title. |
 | `fm-note` | Dim secondary text anywhere. |
+| `fm-cap` | A tracked uppercase caption, in the form's own smallest voice. |
 | `fm-panel` | A bordered surface around a table or block. |
 | `fm-scroll` | **The only sanctioned way to carry content wider than the viewport.** Wrap a wide table or diagram in it. Never put horizontal scrolling on the body. |
-| `fm-table` | A plain `<table>` styling; it keeps a `min-width`, so put it inside `fm-scroll`. |
+| `fm-table` | A plain `<table>` styling; it keeps a `min-width`, so put it inside `fm-scroll`. Numeric cells take `fm-num-col`. |
 | `fm-mono` | Monospace a span of text without making it `<code>`. |
-| `fm-foot` | Provenance line at the bottom; `--footer` writes one. |
+| `fm-foot` | Provenance stamp at the bottom; `--footer` writes one. |
 
-### Cards
+### The tally strip - `fm-tally`
+
+A live count of the entries that have not been sent back, one square each, above the entries.
+
+**A board body writes nothing here.**
+The builder emits `<div class="fm-tally" hidden></div>` and `bin/board-assets/board.js` fills it from the board's own question forms.
+A count typed by hand is a count that can be wrong, and a wrong count of what reached the captain is the defect this component exists to make visible.
+A board that asks no questions leaves the container hidden and prints nothing.
+
+The semantics are the component, and they are not a preference:
+
+- Choosing an option turns a square to **pencil** and **does not decrement** the count.
+- Only a completed submit turns a square **struck** and decrements it.
+- An empty submit, and a submit on a board opened with no Lavish server, send nothing and therefore move nothing.
+- Changing an answer after sending returns its square to pencil and the count with it, because the answer now showing is one nobody has received.
+
+That distinction is the same one "Decision controls" states below, and it is the captain's own recorded failure: a board where he pressed send and nobody heard.
+`tests/fm-board-behavior.test.mjs` asserts both directions, because the wrong one is what this exists to fix.
+
+### The reservation block - `fm-reserve`
+
+What this sheet does **not** show, **above the entries and never after them**.
+A declaration printed under the entries is one the captain reads after he has already decided.
+
+    <div class="fm-reserve">
+      <span class="fm-cap">Vorbehalt &middot; was dieses Blatt nicht zeigt</span>
+      <ul><li>...</li></ul>
+    </div>
+
+The block is available to any board that has something to declare.
+The one surface that currently **requires** it is the decision board, whose three sentences are owned by `.agents/skills/decisionboard`, in "What the board must not claim".
+
+### The register and its entries
 
     <div class="fm-grid">
-      <div class="fm-card is-gate is-wide">
+      <div class="fm-card is-gate" id="e1">
         <div class="fm-chead">
           <div class="fm-num">1</div>
           <div class="fm-ctitle">The question</div>
-          <div class="fm-tags"><span class="fm-tag is-gate">gate for 2-5</span></div>
+          <div class="fm-tags">
+            <span class="fm-tag is-gate"><svg class="fm-mk" aria-hidden="true"><use href="#fm-mk-gate"></use></svg>gate for 2-5</span>
+          </div>
         </div>
+        <p class="fm-cid">the-record-id</p>
         <p class="fm-stake">What is at stake.</p>
         <p class="fm-ev">The evidence under it.</p>
       </div>
     </div>
 
-`fm-grid` reflows from one column on a phone to as many as fit.
-`is-gate` marks a card as the one that decides others; `is-wide` makes it span the full row.
-Tag variants: `is-gate`, `is-hot`, `is-calm`.
+Entries are rows in a register, not cards on a dashboard: `fm-grid` is one column and the entries alternate ground, which is how a wide row is tracked across with the eye.
+Give each entry an `id` so its tally square can jump to it.
+`is-gate` marks the entry that decides others; `is-void` strikes the title of a record that failed and is asking for nothing.
+`is-wide` is accepted and now redundant, so a body written against the older grid keeps building.
+Tag variants: `is-gate`, `is-hot`, `is-held`, `is-calm`.
+A chip always spells its state out in a word and carries its mark; no chip is ever a bare colour.
 
 ### Folded records
 
@@ -104,21 +170,24 @@ Edge classes: `fm-map-edge`, `fm-map-edge-gate`, and `fm-map-edge-soft` for a re
 Label text is `fm-map-dim` where it should read as secondary.
 Add a `.fm-legend` under it.
 
-**Age bar** - how long something has waited.
+**Standing bar** - how long something has waited.
 
     <div class="fm-age is-hot"><span>seit 29.07.</span>
       <div class="fm-agebar"><i style="width:60%"></i></div><span>3 Tage</span></div>
 
-**Distribution bar** - `.fm-dist` with one `<span>` per segment, labelled and proportional, and a `.fm-dist-legend` under it.
-Segment widths and colours are set inline by the generator.
+**Distribution bar** - `.fm-dist` with one `<span class="fm-d1">` per segment, proportional, and a `.fm-dist-legend` under it.
+Fill classes are `fm-d1`, `fm-d2`, `fm-d3`, and `fm-dn` for the unclaimed remainder; widths are set inline by the generator.
+**No text goes inside a fill**: no single label colour clears AA on every fill, so the counts are direct-labelled in ink above the bar and in the legend.
 
-**Status line** - a run of steps with the reached ones filled.
+**Status line** - a run of steps with the reached ones struck and the current one barred.
 
     <div class="fm-statusline">
-      <div class="fm-step is-done"><b>&check;</b><span>reported</span></div>
+      <div class="fm-step is-done"><svg class="fm-mk" aria-hidden="true"><use href="#fm-mk-struck"></use></svg><span>reported</span></div>
       <div class="fm-step-link"></div>
-      <div class="fm-step is-now"><b>2</b><span>waiting on the captain</span></div>
+      <div class="fm-step is-now"><svg class="fm-mk fm-mk-run" aria-hidden="true"><use href="#fm-mk-run"></use></svg><span>waiting on the captain</span></div>
     </div>
+
+There are no numeric bullets: the marks already say what happened, and a number would say it twice.
 
 **Stat strip** - `fm-stats` with `fm-stat` children (`is-hot`, `is-gate`, `is-calm`).
 
@@ -126,11 +195,12 @@ Segment widths and colours are set inline by the generator.
 
 `bin/board-assets/board.js` implements the Lavish `input` playbook once, so a board declares markup only and never repeats a submit handler.
 
-    <form data-fm-question="upstream-strategie" data-fm-label="Upstream-Strategie">
+    <form class="fm-field" data-fm-question="upstream-strategie" data-fm-label="Upstream-Strategie">
+      <span class="fm-cap">Dein Zeichen</span>
       <div class="fm-opts">
         <label class="fm-opt">
           <input type="radio" name="upstream-strategie" value="selektiv">
-          <span><b>Selektiv</b><span class="fm-rec">nächstliegend</span><br>
+          <span><b>Selektiv</b><span class="fm-rec">nächstliegend</span>
           <em>Only this category has ever merged there.</em></span>
         </label>
       </div>
@@ -139,10 +209,20 @@ Segment widths and colours are set inline by the generator.
       <div class="fm-queued"></div>
     </form>
 
+**A board that asks the captain to decide something offers these controls, always.**
+Stating the options in prose and leaving him to answer in chat puts the answer in the one channel with no memory.
+`.agents/skills/decisionboard` owns that obligation; this file owns the markup that discharges it.
+
+The note field is not optional decoration and it is read.
+Measured on the board of 2026-08-16, two of twenty answers carried a note that contradicted the selected option, and the note held what the captain actually meant both times.
+So every option set carries one, and `board.js` names a form built without one on the console at startup.
+
+`is-void` on an option strikes it through: a settled option is struck, never removed, because a sheet that silently drops an answered option hides that it was ever asked.
+
 The radio `name` must equal `data-fm-question`.
 A board that breaks that rule still submits - `board.js` falls back to the form's own checked radio and warns on the console - but the two are meant to be one declared key.
 Selecting an option only updates local state; the explicit submit queues exactly one prompt, under the question key as `queueKey`, so re-answering replaces the earlier unsent answer instead of appending a second one.
-Queued state is shown separately from selected state, in the same `fm-queued` box.
+Queued state is shown separately from selected state, in the same `fm-queued` box, and it is the same distinction the tally strip counts.
 A submit that carries neither a choice nor a note is never silent: the box says so, in `is-warn` colour.
 
 Add one `<div class="fm-offline"></div>` per board.

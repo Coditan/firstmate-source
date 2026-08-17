@@ -1,0 +1,129 @@
+<!-- A worked board body: the DECISION shape.
+     Build it with:
+       bin/fm-board.sh --title "Titel" --subtitle "Untertitel" \
+         --body docs/examples/board-body-decision.html --out .lavish/beispiel.html
+
+     This is the shape to copy whenever a board asks the captain to decide
+     something. Every question below carries selectable options AND a note
+     field, because a board that states its options in prose and offers no
+     control forces the answer into chat, which is the channel with no memory.
+
+     Three things this body deliberately does NOT contain, because the tooling
+     owns them and a hand-written copy is the copy that goes stale:
+       - the vessel name in the header, written by bin/fm-board.sh,
+       - the tally strip, filled by bin/board-assets/board.js from the forms
+         below,
+       - any submit handler; declaring the markup is the whole contract.
+
+     The reservation block comes FIRST, above the entries. A declaration of what
+     the sheet does not show, printed under the entries, is one the captain
+     reads after he has already decided.
+
+     Content here is generic on purpose - docs/ is shared, tracked material, so
+     no fleet specifics belong in it. docs/board-layout.md lists every component. -->
+
+<div class="fm-reserve">
+  <span class="fm-cap">Vorbehalt &middot; was dieses Blatt nicht zeigt</span>
+  <ul>
+    <li>Dies ist die <b>vom Captain entscheidbare</b> Menge, nicht die offene Menge:
+      eine Entscheidung, die durch einen anderen Eintrag blockiert ist, fällt aus der
+      Aufstellung heraus, und nichts hier vermerkt, dass sie fehlt.</li>
+    <li>Zusammengefasste Aufzeichnungen beruhen auf einer Annahme, die nichts prüft.
+      Die Zahl ist das, was die Zusammenfassung behalten hat, kein belegter Zählwert
+      verschiedener Fragen. Jede eingeklappte Aufzeichnung steht unter ihrem Eintrag.</li>
+    <li>Eine der Beziehungen unten ist <b>meine Lesart</b>, keine aufgezeichnete
+      Abhängigkeit. Sie ist auf der Karte selbst gestrichelt und als solche benannt.</li>
+  </ul>
+</div>
+
+<h2>Was zu entscheiden ist</h2>
+<div class="fm-grid">
+
+  <div class="fm-card is-gate" id="e1">
+    <div class="fm-chead">
+      <div class="fm-num">1</div>
+      <div class="fm-ctitle">Die Frage, in einem Satz</div>
+      <div class="fm-tags">
+        <span class="fm-tag is-gate"><svg class="fm-mk" aria-hidden="true"><use href="#fm-mk-gate"></use></svg>Zuerst beantworten</span>
+        <span class="fm-tag is-hot"><svg class="fm-mk" aria-hidden="true"><use href="#fm-mk-open"></use></svg>Deine Entscheidung</span>
+      </div>
+    </div>
+    <p class="fm-cid">beispiel-decision-erste-frage</p>
+    <p class="fm-stake">Was auf dem Spiel steht, und was von dieser Antwort abhängt.</p>
+    <p class="fm-ev">Worauf sich das stützt: gemessen, wann, womit.</p>
+
+    <!-- Die Radio-Namen sind gleich data-fm-question. Das Notizfeld ist keine
+         Zierde: es wird gelesen, und es hat schon zweimal getragen, was der
+         Captain tatsächlich meinte. -->
+    <form class="fm-field" data-fm-question="erste-frage" data-fm-label="Die erste Frage">
+      <span class="fm-cap">Dein Zeichen</span>
+      <div class="fm-opts">
+        <label class="fm-opt">
+          <input type="radio" name="erste-frage" value="a">
+          <span><b>Möglichkeit A</b><span class="fm-rec">mein Vorschlag</span>
+            <em>Was dafür spricht, und was dagegen.</em></span>
+        </label>
+        <label class="fm-opt">
+          <input type="radio" name="erste-frage" value="b">
+          <span><b>Möglichkeit B</b>
+            <em>Was dafür spricht, und was dagegen.</em></span>
+        </label>
+        <label class="fm-opt is-void">
+          <input type="radio" name="erste-frage" value="c" disabled>
+          <span><b>Möglichkeit C</b>
+            <em>Bereits entschieden und daher ausgeschlossen. Durchgestrichen statt
+            entfernt, weil ein Blatt, das eine beantwortete Möglichkeit still
+            weglässt, verbirgt, dass sie je gestellt wurde.</em></span>
+        </label>
+      </div>
+      <textarea class="fm-free" data-fm-note placeholder="Begründung oder Bedingung (optional)"></textarea>
+      <button type="submit" class="fm-submit">Antwort vormerken</button>
+      <div class="fm-queued"></div>
+    </form>
+
+    <details class="fm-variants">
+      <summary>1 weitere Aufzeichnung zu dieser Untersuchung</summary>
+      <ul><li><code>beispiel-decision-variante</code> &mdash; gleiche Frage, andere Formulierung</li></ul>
+    </details>
+  </div>
+
+  <div class="fm-card" id="e2">
+    <div class="fm-chead">
+      <div class="fm-num">2</div>
+      <div class="fm-ctitle">Die zweite Frage</div>
+      <div class="fm-tags">
+        <span class="fm-tag is-hot"><svg class="fm-mk" aria-hidden="true"><use href="#fm-mk-open"></use></svg>Deine Entscheidung</span>
+      </div>
+    </div>
+    <p class="fm-cid">beispiel-decision-zweite-frage</p>
+    <p class="fm-stake">Was auf dem Spiel steht.</p>
+    <div class="fm-age is-hot"><span>seit 29.07.</span>
+      <div class="fm-agebar"><i style="width:60%"></i></div><span>3 Tage</span></div>
+
+    <form class="fm-field" data-fm-question="zweite-frage" data-fm-label="Die zweite Frage">
+      <span class="fm-cap">Dein Zeichen</span>
+      <div class="fm-opts">
+        <label class="fm-opt">
+          <input type="radio" name="zweite-frage" value="ja">
+          <span><b>Ja</b><em>Was das bedeutet.</em></span>
+        </label>
+        <label class="fm-opt">
+          <input type="radio" name="zweite-frage" value="nein">
+          <span><b>Nein</b><em>Was das bedeutet.</em></span>
+        </label>
+      </div>
+      <textarea class="fm-free" data-fm-note placeholder="Begründung oder Bedingung (optional)"></textarea>
+      <button type="submit" class="fm-submit">Antwort vormerken</button>
+      <div class="fm-queued"></div>
+    </form>
+
+    <details class="fm-variants">
+      <summary>Keine weiteren Aufzeichnungen</summary>
+      <ul><li>Nichts wurde hier eingeklappt. Der leere Block bleibt stehen, weil auch
+        das sehenswert ist.</li></ul>
+    </details>
+  </div>
+
+</div>
+
+<div class="fm-offline">Ohne laufenden Lavish-Server geöffnet: vollständig lesbar, aber es kann nichts zurückgesendet werden.</div>

@@ -6,48 +6,139 @@
  * refused by the builder, which is what keeps the no-network guarantee true
  * rather than merely intended.
  *
+ * THE LANGUAGE
+ * This is Tally, this vessel's own design language, adopted 2026-08-17. Its two
+ * laws are what every rule below answers to:
+ *
+ *   Ink is the record. Colour is a claim on the captain, and nothing else.
+ *   Every sheet declares its own incompleteness, in the same instrument that
+ *   carries its counts.
+ *
+ * A board is not a room. It is a SHEET: struck by a machine at a named moment,
+ * handed to the captain, marked by hand, and read back by a machine. The
+ * register bands, the square that is the unit of account, the chamfered
+ * orientation corner, the live count of blanks, and the reservation block all
+ * follow from that one fact rather than from a mood.
+ *
+ * Three hues exist in the whole system - open, gate, held - plus one veil for
+ * what the sheet is withholding. Under way, landed, and failed get NO hue: they
+ * are ink, differentiated by glyph and by strike. That scarcity is the point.
+ * On a busy sheet red is rare and therefore still means something.
+ *
+ * Colour is never the only cue. Every state carries a distinct glyph, a word,
+ * and only then a colour. `--veil-fold` is never a state of an item; it marks
+ * what the sheet does not show.
+ *
+ * Every colour value appears in exactly two places: the light block below and
+ * the dark media block. No component rule anywhere names a raw colour, except
+ * the @media print ground, because paper is white whatever the reader's theme
+ * is. A built board follows the reader's device and carries no theme toggle, so
+ * there is no third, stamped block to keep in step.
+ *
+ * The contrast figures behind these values were computed rather than eyeballed;
+ * docs/board-layout.md points at where they are recorded. The two tightest
+ * pairings in the system are the open mark on its own tint, at 4.64:1 day and
+ * 4.70:1 night. Both clear AA, and both are worth knowing about before anyone
+ * raises --tint or darkens the day ground.
+ *
  * Class names are prefixed fm- so a board body can add its own classes without
- * colliding with the layout contract. docs/board-layout.md lists the components
- * and the markup each one expects.
+ * colliding with the layout contract. Tally's own report calls the two new
+ * components `.tally` and `.reserve`; here they keep the prefix, as `.fm-tally`
+ * and `.fm-reserve`, because that prefix rule is older than the reground and
+ * exempting two components from it is how a collision gets in.
+ * docs/board-layout.md lists the components and the markup each one expects.
  */
 
 :root {
-  --fm-bg: #f6f7f9;
-  --fm-panel: #ffffff;
-  --fm-panel-2: #f0f2f5;
-  --fm-ink: #12151a;
-  --fm-dim: #5b6470;
-  --fm-line: #dde1e7;
-  --fm-accent: #1f6feb;
-  --fm-accent-soft: #e8f0fe;
-  --fm-hot: #b23c08;
-  --fm-hot-soft: #fff1e7;
-  --fm-calm: #0f766e;
-  --fm-calm-soft: #e6f4f1;
-  --fm-gate: #6d28d9;
-  --fm-gate-soft: #f1eaff;
-  --fm-shadow: 0 1px 2px rgba(16, 20, 26, .06), 0 4px 14px rgba(16, 20, 26, .05);
-  --fm-r: 12px;
+  /* -- stock: what the sheet is printed on --------------------------------- */
+  --stock-desk:   #D2DACF;   /* the desk the sheet lies on. NO text is ever set on it. */
+  --stock-sheet:  #F7F9F4;   /* the sheet */
+  --stock-band:   #E3ECDE;   /* the alternating register band; decorative by design */
+  --stock-inset:  #EDF1E9;   /* a field cut into the sheet: inputs, code, the tally strip */
+
+  /* -- ink: the record ----------------------------------------------------- */
+  --ink-record:   #12191B;   /* what the item is: titles, stakes, values */
+  --ink-note:     #3F4C4C;   /* evidence and supporting prose */
+  --ink-margin:   #556362;   /* record ids, dates, provenance, captions */
+
+  /* -- rules --------------------------------------------------------------- */
+  --rule-feint:   #C6D1C6;   /* divides only; carries NO information, deliberately below 3:1 */
+  --rule-scored:  #78877F;   /* any edge that carries meaning; held at >= 3:1 */
+
+  /* -- marks: colour is a claim on the captain, and nothing else ----------- */
+  --mark-open:    #B3241C;   /* yours, now. The only red in the system. */
+  --mark-gate:    #3A3D9E;   /* answer this one first - it settles others. */
+  --mark-held:    #7E5405;   /* waiting outside the fleet. Nobody here can move it. */
+  --veil-fold:    #525F6D;   /* folded, unverified, withheld. A property of the SHEET. */
+
+  /* -- chart fills: a separate step of the same three hues -----------------
+   * The mark hues are a status palette measured for TEXT contrast and fail a
+   * categorical-series check by construction. These were validated as a series
+   * instead, so a bar and a chip never borrow each other's job. */
+  --fill-1:       #C8452C;
+  --fill-2:       #6068E0;
+  --fill-3:       #B8830C;
+  --fill-neutral: #78877F;   /* the unclaimed remainder in a bar */
+
+  --tint: 0.10;              /* how much of a mark is mixed into a marked surface */
+
+  /* -- type ----------------------------------------------------------------
+   * Two families. A form is set on one press, so a third would be decoration.
+   * The inversion is deliberate: the machine's DATA is the display type and the
+   * form's own captions are the smallest thing on the sheet, which is how a real
+   * form reads. The rule that keeps it from becoming a terminal costume:
+   * THE MONOSPACE FACE NEVER CARRIES A SENTENCE. It carries names, numbers and
+   * labels. It also keeps German compounds out of the widest face. */
+  --face-data: ui-monospace, SFMono-Regular, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --face-text: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  --t-issue:   clamp(1.05rem, 4.2vw, 1.75rem);
+  --t-count:   clamp(1.6rem, 5.5vw, 2.5rem);
+  --t-heading: clamp(1rem, 2.6vw, 1.3rem);
+  --t-entry:   clamp(1rem, 2.2vw, 1.1875rem);
+  --t-body:    0.9375rem;
+  --t-meta:    0.8125rem;
+  --t-data:    0.8125rem;
+  --t-caption: 0.6875rem;
+  --track-caption: 0.14em;
+  --track-issue:   0.06em;
+  --measure: 68ch;           /* the hard cap on any running paragraph */
+
+  /* -- space, edge, motion -------------------------------------------------- */
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 24px; --sp-6: 32px; --sp-7: 48px; --sp-8: 72px;
+  --edge-mark: 2px;          /* the ONLY radius in the system: the answer button */
+  --chamfer: 18px;           /* the sheet's orientation corner, once per sheet */
+  --lift-sheet: 0 1px 0 rgba(18, 25, 27, .10), 0 8px 24px -12px rgba(18, 25, 27, .22);
+  --motion-mark: 140ms;
+  --ease: cubic-bezier(.2, .7, .3, 1);
   color-scheme: light dark;
 }
 
+/* Night is not an inversion of day. It is the same sheet as a DIAZO PRINT: the
+ * ground goes to blue-black and the line work goes pale, which is the honest
+ * dark counterpart of a drawing rather than a slate re-skin. */
 @media (prefers-color-scheme: dark) {
   :root {
-    --fm-bg: #0e1116;
-    --fm-panel: #161b22;
-    --fm-panel-2: #1c232c;
-    --fm-ink: #e6edf3;
-    --fm-dim: #9aa4b2;
-    --fm-line: #2a313b;
-    --fm-accent: #58a6ff;
-    --fm-accent-soft: #122238;
-    --fm-hot: #ff9057;
-    --fm-hot-soft: #2c1810;
-    --fm-calm: #3fd0bd;
-    --fm-calm-soft: #0e2724;
-    --fm-gate: #b48cff;
-    --fm-gate-soft: #221a35;
-    --fm-shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 4px 14px rgba(0, 0, 0, .3);
+    --stock-desk:   #070C10;
+    --stock-sheet:  #111A20;
+    --stock-band:   #192731;
+    --stock-inset:  #1B2830;
+    --ink-record:   #E6EEF0;
+    --ink-note:     #A8B8BC;
+    --ink-margin:   #8496A0;
+    --rule-feint:   #243038;
+    --rule-scored:  #647882;
+    --mark-open:    #FF7C6B;
+    --mark-gate:    #A3AEFF;
+    --mark-held:    #E0A83C;
+    --veil-fold:    #93A3B4;
+    --fill-1:       #D9584A;
+    --fill-2:       #7A82E8;
+    --fill-3:       #BC8524;
+    --fill-neutral: #647882;
+    --tint: 0.16;
+    --lift-sheet: 0 1px 0 rgba(0, 0, 0, .5), 0 8px 24px -12px rgba(0, 0, 0, .7);
   }
 }
 
@@ -65,10 +156,12 @@ html {
 
 body {
   margin: 0;
-  background: var(--fm-bg);
-  color: var(--fm-ink);
-  font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  padding: clamp(14px, 2.5vw, 32px);
+  background: var(--stock-desk);
+  color: var(--ink-record);
+  font-family: var(--face-text);
+  font-size: var(--t-body);
+  line-height: 1.6;
+  padding: clamp(var(--sp-3), 3vw, var(--sp-6)) clamp(0px, 3vw, var(--sp-6)) var(--sp-6);
   /* Body-level horizontal scrolling is prevented by SIZING - min-width:0
    * everywhere, minmax(0,1fr) tracks, and .fm-scroll around anything genuinely
    * wide - deliberately NOT by overflow-x:hidden here. Hiding it would clip
@@ -77,59 +170,121 @@ body {
    * reported; silently cut-off content is not. */
 }
 
+p { margin: 0; }
+
+a {
+  color: var(--mark-gate);
+  overflow-wrap: anywhere;
+}
+
 code, kbd, samp, pre, .fm-mono {
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-family: var(--face-data);
+  font-variant-numeric: tabular-nums;
 }
 
 code {
-  background: var(--fm-panel-2);
-  border-radius: 5px;
+  background: var(--stock-inset);
+  border: 1px solid var(--rule-feint);
   padding: 1px 5px;
-  font-size: .92em;
+  font-size: .9em;
   /* A long identifier must wrap rather than widen its column. */
   overflow-wrap: anywhere;
 }
 
+/* ---- the sheet --------------------------------------------------------
+ * One issued document, lying on a desk. The clipped top-left corner is the
+ * orientation notch a punched form carries so a card inserted backwards is
+ * visible in the stack; it appears once per sheet and on nothing else. */
 .fm-wrap {
-  max-width: 1400px;
+  background: var(--stock-sheet);
+  max-width: 1180px;
   margin: 0 auto;
+  padding: var(--sp-6) clamp(var(--sp-4), 3.5vw, var(--sp-7)) var(--sp-6);
+  box-shadow: var(--lift-sheet);
+  border-top: 3px solid var(--ink-record);
+  clip-path: polygon(var(--chamfer) 0, 100% 0, 100% 100%, 0 100%, 0 var(--chamfer));
+}
+
+/* ---- the issue block: who struck this sheet, and what it is -------------
+ * The vessel name is the FIRST thing on every board, so the captain can tell
+ * whose board he is looking at before he reads a word of it. bin/fm-board.sh
+ * writes it from the one place a vessel's name is recorded; a board body never
+ * types it out. */
+.fm-issue {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--sp-2) var(--sp-5);
+  border-bottom: 1px solid var(--rule-scored);
+  padding-bottom: var(--sp-3);
+  margin-bottom: var(--sp-5);
+}
+
+.fm-issue > div { flex: 1 1 260px; }
+
+.fm-vessel {
+  font-family: var(--face-data);
+  font-size: var(--t-caption);
+  letter-spacing: var(--track-caption);
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--ink-margin);
+  /* letter-spacing adds a trailing space after the final glyph, which is enough
+   * to push a shrink-to-fit box past the viewport and put a scrollbar on the
+   * whole document. Take it back. */
+  margin-inline-end: calc(-1 * var(--track-caption));
 }
 
 h1 {
-  font-size: clamp(20px, 2.6vw, 30px);
-  margin: 0 0 4px;
-  letter-spacing: -.02em;
-  line-height: 1.2;
-}
-
-h2 {
-  font-size: 15px;
-  letter-spacing: .08em;
+  margin: var(--sp-2) 0 0;
+  font-family: var(--face-data);
+  font-size: var(--t-issue);
+  font-weight: 700;
+  letter-spacing: var(--track-issue);
   text-transform: uppercase;
-  color: var(--fm-dim);
-  margin: 34px 0 12px;
-  font-weight: 600;
-}
-
-h3 {
-  font-size: 15px;
-  margin: 0;
-  letter-spacing: -.01em;
-}
-
-p {
-  margin: 0;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .fm-sub {
-  color: var(--fm-dim);
-  margin: 0 0 22px;
-  font-size: 14px;
+  flex: 0 1 auto;
+  margin: 0;
+  font-family: var(--face-data);
+  font-size: var(--t-data);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-margin);
+}
+
+@media (min-width: 620px) {
+  .fm-sub { text-align: right; }
+}
+
+h2 {
+  margin: var(--sp-7) 0 var(--sp-3);
+  font-size: var(--t-heading);
+  font-weight: 700;
+  letter-spacing: -.01em;
+  border-bottom: 1px solid var(--rule-feint);
+  padding-bottom: var(--sp-2);
+  overflow-wrap: anywhere;
+}
+
+h3 {
+  margin: 0;
+  font-size: var(--t-entry);
+  font-weight: 650;
+  line-height: 1.35;
+  /* A German compound is one unbreakable token and will outrun a narrow column.
+   * hyphens:auto breaks it properly wherever a lang is declared; overflow-wrap
+   * is the guarantee for everywhere else. */
+  hyphens: auto;
+  overflow-wrap: anywhere;
 }
 
 .fm-note {
-  color: var(--fm-dim);
-  font-size: 13px;
+  font-size: var(--t-meta);
+  color: var(--ink-margin);
+  max-width: var(--measure);
 }
 
 /* ---- scroll container -------------------------------------------------
@@ -141,404 +296,651 @@ p {
   max-width: 100%;
 }
 
+/* ---- the mark set: one square, seven marks ----------------------------
+ * Every item the sheet accounts for carries exactly one square, and an item is
+ * in exactly one state. The symbols themselves are drawn once per board by
+ * bin/fm-board.sh and referenced with <use href="#fm-mk-...">, so a board body
+ * never redraws them. Two of the seven are ink only, so they are already
+ * colourless before any hue is spent. */
+.fm-mk {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  display: block;
+}
+
+.fm-mk-open   { color: var(--mark-open); }
+.fm-mk-gate   { color: var(--mark-gate); }
+.fm-mk-held   { color: var(--mark-held); }
+.fm-mk-struck { color: var(--ink-record); }
+.fm-mk-run    { color: var(--ink-note); }
+.fm-mk-void   { color: var(--ink-note); }
+
+/* ---- the tally strip - the signature ----------------------------------
+ * A form prints the number of marks it expects, so a lost page is detectable.
+ * Here that count is LIVE: it is the number of decisions that have not been
+ * sent back, one square each, and every square is a jump link to its question.
+ *
+ * The semantics are the whole component, and they are not a preference:
+ * choosing an option turns a square to PENCIL and does NOT decrement the count;
+ * only a completed submit turns it STRUCK and decrements. A mark the captain
+ * chose but never sent reaches nobody, which is the exact failure this strip
+ * exists to make visible.
+ *
+ * The board behavior asset is the single owner of the strip's contents and of
+ * that count. A board body declares nothing here: the builder emits the empty
+ * container, and a count nobody types by hand is a count that cannot go stale.
+ * The container stays hidden on a board that asks no questions. */
+.fm-tally {
+  border: 1.5px solid var(--rule-scored);
+  background: var(--stock-inset);
+  padding: var(--sp-4);
+  display: grid;
+  gap: var(--sp-4);
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  margin-bottom: var(--sp-5);
+}
+
+/* display:grid above beats the UA stylesheet's display:none for [hidden], so
+ * the hidden container has to be hidden again explicitly. Without this line a
+ * board that asks nothing still prints an empty strip. */
+.fm-tally[hidden] { display: none; }
+
+@media (min-width: 720px) {
+  .fm-tally { grid-template-columns: minmax(0, auto) minmax(0, 1fr); }
+}
+
+.fm-tally-count {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  font-family: var(--face-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-tally-count b {
+  font-size: var(--t-count);
+  line-height: 1;
+  font-weight: 700;
+  color: var(--mark-open);
+  flex: 0 0 auto;
+}
+
+/* Nothing is waiting on him: the count stops making a claim and goes to ink. */
+.fm-tally-count.is-clear b { color: var(--ink-record); }
+
+.fm-tally-count > div { min-width: 0; }
+
+.fm-tally-count strong {
+  display: block;
+  font-size: var(--t-meta);
+  color: var(--ink-record);
+  font-weight: 700;
+}
+
+.fm-tally-count span {
+  display: block;
+  font-size: var(--t-caption);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--ink-margin);
+}
+
+.fm-tally-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  align-items: center;
+  justify-content: flex-start;
+}
+
+@media (min-width: 720px) {
+  .fm-tally-row { justify-content: flex-end; }
+}
+
+.fm-tally-sq {
+  appearance: none;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  display: block;
+  padding: 7px;
+  margin: -7px;
+  color: inherit;
+  transition: transform var(--motion-mark) var(--ease);
+}
+
+.fm-tally-sq:hover { transform: translateY(-2px); }
+.fm-tally-sq .fm-mk { width: 28px; height: 28px; }
+
+.fm-tally-legend {
+  grid-column: 1 / -1;
+  font-family: var(--face-data);
+  font-size: var(--t-caption);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--ink-margin);
+  border-top: 1px solid var(--rule-feint);
+  padding-top: var(--sp-2);
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: var(--sp-4);
+  row-gap: var(--sp-1);
+}
+
+/* ---- the reservation block --------------------------------------------
+ * What this sheet does NOT show, ABOVE the entries rather than after them.
+ * The board doctrine already requires a board to declare its own
+ * incompleteness; this is the component that carries those sentences, and it is
+ * deliberately not a footnote. A declaration printed under the entries is one
+ * the captain reads after he has already decided. */
+.fm-reserve {
+  border: 1.5px solid var(--veil-fold);
+  border-left-width: 5px;
+  padding: var(--sp-3) var(--sp-4);
+  margin: var(--sp-5) 0;
+  background-image: repeating-linear-gradient(135deg,
+    color-mix(in srgb, var(--veil-fold) 9%, transparent) 0 2px,
+    transparent 2px 9px);
+}
+
+.fm-reserve .fm-cap {
+  display: block;
+  font-family: var(--face-data);
+  font-size: var(--t-caption);
+  letter-spacing: var(--track-caption);
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--veil-fold);
+  margin-bottom: var(--sp-2);
+  margin-inline-end: calc(-1 * var(--track-caption));
+}
+
+.fm-reserve ul {
+  margin: 0;
+  padding-left: 1.15em;
+  max-width: var(--measure);
+}
+
+.fm-reserve li {
+  margin-bottom: var(--sp-1);
+  font-size: var(--t-meta);
+  color: var(--ink-note);
+}
+
+.fm-reserve li:last-child { margin-bottom: 0; }
+
 /* ---- stat strip ---- */
 .fm-stats {
   display: grid;
-  gap: 10px;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  margin-bottom: 8px;
+  gap: var(--sp-3);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+  margin-bottom: var(--sp-2);
 }
 
 .fm-stat {
-  background: var(--fm-panel);
-  border: 1px solid var(--fm-line);
-  border-radius: var(--fm-r);
-  padding: 12px 14px;
-  box-shadow: var(--fm-shadow);
+  background: var(--stock-band);
+  border: 1px solid var(--rule-feint);
+  padding: var(--sp-3);
 }
 
 .fm-stat b {
   display: block;
-  font-size: 26px;
-  line-height: 1.1;
-  letter-spacing: -.02em;
+  font-family: var(--face-data);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--t-count);
+  line-height: 1.05;
+  font-weight: 700;
 }
 
 .fm-stat span {
   display: block;
-  color: var(--fm-dim);
-  font-size: 12.5px;
-  margin-top: 3px;
+  color: var(--ink-margin);
+  font-size: var(--t-caption);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  margin-top: var(--sp-1);
 }
 
-.fm-stat.is-hot b { color: var(--fm-hot); }
-.fm-stat.is-gate b { color: var(--fm-gate); }
-.fm-stat.is-calm b { color: var(--fm-calm); }
+/* is-calm is landed work, and landed work is ink: it gets no hue at all. */
+.fm-stat.is-hot b { color: var(--mark-open); }
+.fm-stat.is-gate b { color: var(--mark-gate); }
+.fm-stat.is-calm b { color: var(--ink-record); }
 
 /* ---- graphic: gate / dependency map ----------------------------------
  * An inline <svg> inside .fm-map. The svg keeps a min-width so the shapes stay
  * legible on a phone and scroll horizontally inside the panel instead of
- * squashing; width:100% lets it use a wide screen fully. */
+ * squashing; width:100% lets it use a wide screen fully. A map is a diagram,
+ * not a chart, so it keeps hairline edges and labelled nodes and gets no
+ * palette treatment. */
 .fm-map {
-  background: var(--fm-panel);
-  border: 1px solid var(--fm-line);
-  border-radius: var(--fm-r);
-  padding: 14px;
-  box-shadow: var(--fm-shadow);
+  background: var(--stock-inset);
+  border: 1px solid var(--rule-scored);
+  padding: var(--sp-3);
   overflow-x: auto;
 }
 
 .fm-map svg {
   display: block;
-  min-width: 640px;
+  min-width: 600px;
   width: 100%;
   height: auto;
 }
 
 .fm-map text {
-  font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  fill: var(--fm-ink);
+  font-family: var(--face-text);
+  fill: var(--ink-record);
 }
 
-.fm-map .fm-map-dim { fill: var(--fm-dim); }
-.fm-map .fm-map-node { fill: var(--fm-panel-2); stroke: var(--fm-line); }
-.fm-map .fm-map-node-gate { fill: var(--fm-gate-soft); stroke: var(--fm-gate); }
-.fm-map .fm-map-node-open { fill: var(--fm-accent-soft); stroke: var(--fm-accent); }
-.fm-map .fm-map-edge { stroke: var(--fm-line); fill: none; }
-.fm-map .fm-map-edge-gate { stroke: var(--fm-gate); fill: none; }
-.fm-map .fm-map-edge-soft { stroke: var(--fm-dim); fill: none; stroke-dasharray: 4 3; opacity: .65; }
+.fm-map .fm-map-dim { fill: var(--ink-margin); font-family: var(--face-data); }
+.fm-map .fm-map-node { fill: var(--stock-sheet); stroke: var(--rule-scored); stroke-width: 1.5; }
+.fm-map .fm-map-node-gate { fill: color-mix(in srgb, var(--mark-gate) calc(var(--tint) * 100%), var(--stock-sheet)); stroke: var(--mark-gate); stroke-width: 2; }
+.fm-map .fm-map-node-open { fill: color-mix(in srgb, var(--mark-open) calc(var(--tint) * 100%), var(--stock-sheet)); stroke: var(--mark-open); stroke-width: 2; }
+.fm-map .fm-map-edge { stroke: var(--rule-scored); fill: none; stroke-width: 1.5; }
+.fm-map .fm-map-edge-gate { stroke: var(--mark-gate); fill: none; stroke-width: 2; }
+/* Solid means a recorded dependency, dashed means the author's reading. The
+ * distinction belongs on the map itself, not only in the legend. */
+.fm-map .fm-map-edge-soft { stroke: var(--veil-fold); fill: none; stroke-width: 1.5; stroke-dasharray: 5 4; }
 
 .fm-legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 14px;
-  margin-top: 10px;
-  font-size: 12.5px;
-  color: var(--fm-dim);
+  gap: var(--sp-4);
+  margin-top: var(--sp-2);
+  font-family: var(--face-data);
+  font-size: var(--t-caption);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--ink-margin);
 }
 
 .fm-legend i {
   display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 3px;
+  width: 11px;
+  height: 11px;
   margin-right: 5px;
   vertical-align: -1px;
+  border: 1.5px solid currentColor;
 }
 
-/* ---- graphic: age bar ----
+/* ---- graphic: standing bar ----
  * How long something has waited. Width is set inline by the generator. */
 .fm-age {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--fm-dim);
+  gap: var(--sp-2);
+  font-family: var(--face-data);
+  font-size: var(--t-caption);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-margin);
 }
 
 .fm-agebar {
   flex: 1 1 auto;
-  height: 6px;
-  background: var(--fm-panel-2);
-  border-radius: 999px;
-  overflow: hidden;
   min-width: 40px;
+  height: 8px;
+  background: var(--stock-inset);
+  border: 1px solid var(--rule-feint);
 }
 
 .fm-agebar i {
   display: block;
   height: 100%;
-  background: var(--fm-accent);
-  border-radius: 999px;
+  background: var(--ink-note);
 }
 
-.fm-age.is-hot .fm-agebar i { background: var(--fm-hot); }
+.fm-age.is-hot .fm-agebar i { background: var(--mark-open); }
 
 /* ---- graphic: distribution bar ----
- * One horizontal bar split into labelled proportional segments. */
+ * NO text inside any fill. No single label colour clears AA on every fill, so
+ * the counts are direct-labelled in ink above the bar and in the legend, and
+ * the segments are separated by a gap in the sheet colour rather than by a
+ * border. Widths are set inline by the generator. */
 .fm-dist {
   display: flex;
   width: 100%;
-  height: 26px;
-  border-radius: 7px;
-  overflow: hidden;
-  border: 1px solid var(--fm-line);
-  background: var(--fm-panel-2);
+  height: 22px;
+  gap: 2px;
 }
 
-.fm-dist span {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: #fff;
-  overflow: hidden;
-  white-space: nowrap;
-}
+.fm-dist span { display: block; }
+
+.fm-dist .fm-d1 { background: var(--fill-1); }
+.fm-dist .fm-d2 { background: var(--fill-2); }
+.fm-dist .fm-d3 { background: var(--fill-3); }
+.fm-dist .fm-dn { background: var(--fill-neutral); }
 
 .fm-dist-legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 8px;
-  font-size: 12.5px;
-  color: var(--fm-dim);
+  gap: var(--sp-4);
+  margin-top: var(--sp-2);
+  font-family: var(--face-data);
+  font-size: var(--t-caption);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-record);
 }
 
 .fm-dist-legend i {
   display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 3px;
-  margin-right: 5px;
+  width: 11px;
+  height: 11px;
+  margin-right: 6px;
   vertical-align: -1px;
 }
 
+.fm-dist-legend .fm-d1 { background: var(--fill-1); }
+.fm-dist-legend .fm-d2 { background: var(--fill-2); }
+.fm-dist-legend .fm-d3 { background: var(--fill-3); }
+.fm-dist-legend .fm-dn { background: var(--fill-neutral); }
+
 /* ---- graphic: status line ----
- * A left-to-right run of steps with the reached ones filled. */
+ * A left-to-right run of steps, the reached ones struck and the current one
+ * barred, using the same marks as everything else. There are no numeric
+ * bullets: the marks already say what happened, and a number would say it
+ * twice. A step's <b> is kept as an optional glyph slot for a body that has not
+ * been reground yet. */
 .fm-statusline {
   display: flex;
   align-items: center;
-  gap: 0;
   flex-wrap: wrap;
-  row-gap: 8px;
+  row-gap: var(--sp-2);
 }
 
 .fm-step {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
-  color: var(--fm-dim);
+  gap: var(--sp-2);
+  font-family: var(--face-data);
+  font-size: var(--t-caption);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--ink-margin);
 }
+
+.fm-step .fm-mk { width: 16px; height: 16px; }
 
 .fm-step b {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 999px;
-  border: 1.5px solid var(--fm-line);
-  background: var(--fm-panel);
-  font-size: 11px;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid currentColor;
+  font-size: 10px;
   font-weight: 700;
   flex: 0 0 auto;
 }
 
-.fm-step.is-done b {
-  background: var(--fm-calm);
-  border-color: var(--fm-calm);
-  color: #fff;
-}
+.fm-step.is-done,
+.fm-step.is-now { color: var(--ink-record); }
 
-.fm-step.is-done { color: var(--fm-ink); }
-
-.fm-step.is-now b {
-  background: var(--fm-accent);
-  border-color: var(--fm-accent);
-  color: #fff;
-}
-
-.fm-step.is-now {
-  color: var(--fm-ink);
-  font-weight: 600;
-}
+.fm-step.is-now { font-weight: 700; }
 
 .fm-step-link {
-  width: 22px;
-  height: 2px;
-  background: var(--fm-line);
-  margin: 0 7px;
+  width: 26px;
+  height: 1.5px;
+  background: var(--rule-scored);
+  margin: 0 var(--sp-2);
   flex: 0 0 auto;
 }
 
-/* ---- cards ---- */
+/* ---- the register: entries in alternating bands -----------------------
+ * Entries are rows in a register, not cards on a dashboard: the alternating
+ * ground is genuinely how a wide row is tracked across with the eye. The step
+ * between band and sheet encodes nothing, so a reader who cannot see it loses
+ * no information. A gate entry is a boxed instruction rather than an accent
+ * rail, and it is deliberately the only outline on the sheet. */
 .fm-grid {
   display: grid;
-  gap: 14px;
+  gap: 0;
   /* minmax(0,...) on the track, not just min-width:0 on the child: without the
    * 0 minimum a wide child would still force the track open. */
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
+  grid-template-columns: minmax(0, 1fr);
+  border-top: 1px solid var(--rule-scored);
 }
 
 .fm-card {
-  background: var(--fm-panel);
-  border: 1px solid var(--fm-line);
-  border-radius: var(--fm-r);
-  box-shadow: var(--fm-shadow);
-  padding: 16px 17px;
+  background: var(--stock-sheet);
+  border-bottom: 1px solid var(--rule-feint);
+  padding: var(--sp-4) var(--sp-4) var(--sp-4) var(--sp-3);
   display: flex;
   flex-direction: column;
-  gap: 11px;
+  gap: var(--sp-3);
+  scroll-margin-top: var(--sp-4);
 }
+
+.fm-card:nth-child(even) { background: var(--stock-band); }
 
 .fm-card.is-gate {
-  border-color: var(--fm-gate);
-  border-width: 1.5px;
+  outline: 2px solid var(--mark-gate);
+  outline-offset: -2px;
+  padding-left: var(--sp-4);
 }
 
-.fm-card.is-wide {
-  grid-column: 1 / -1;
+/* The register is one column, so is-wide is already true of every entry. It
+ * stays accepted rather than refused, because a body written against the older
+ * grid must keep building. */
+.fm-card.is-wide { grid-column: 1 / -1; }
+
+/* A record of something that FAILED and is not asking for anything: struck in
+ * ink, with no hue of its own. */
+.fm-card.is-void .fm-ctitle {
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+  color: var(--ink-note);
 }
 
 .fm-chead {
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
+  align-items: baseline;
+  gap: var(--sp-2) var(--sp-3);
   flex-wrap: wrap;
 }
 
 .fm-num {
   flex: 0 0 auto;
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
-  background: var(--fm-accent-soft);
-  color: var(--fm-accent);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  font-family: var(--face-data);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--t-caption);
   font-weight: 700;
-  font-size: 13px;
+  letter-spacing: .06em;
+  color: var(--ink-margin);
+  border: 1px solid var(--rule-feint);
+  padding: 1px 6px;
 }
 
 .fm-card.is-gate .fm-num {
-  background: var(--fm-gate-soft);
-  color: var(--fm-gate);
+  color: var(--mark-gate);
+  border-color: var(--mark-gate);
 }
 
 .fm-ctitle {
   flex: 1 1 240px;
-  font-weight: 600;
-  font-size: 15.5px;
-  letter-spacing: -.01em;
+  font-size: var(--t-entry);
+  font-weight: 650;
   line-height: 1.35;
+  hyphens: auto;
+  overflow-wrap: anywhere;
+}
+
+/* The record's own identifier, in the margin voice. */
+.fm-cid {
+  font-family: var(--face-data);
+  font-size: var(--t-caption);
+  color: var(--ink-margin);
+  letter-spacing: .01em;
+  overflow-wrap: anywhere;
 }
 
 .fm-tags {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--sp-2);
   flex: 0 1 auto;
 }
 
+/* A chip spells its state out in a word and carries a hairline box in that
+ * state's own colour. No chip is ever a bare colour. */
 .fm-tag {
-  font-size: 11.5px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--fm-panel-2);
-  color: var(--fm-dim);
-  border: 1px solid var(--fm-line);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--face-data);
+  font-size: var(--t-caption);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  font-weight: 700;
+  padding: 3px 7px;
+  border: 1px solid currentColor;
+  color: var(--ink-note);
   white-space: nowrap;
 }
 
-.fm-tag.is-gate {
-  background: var(--fm-gate-soft);
-  color: var(--fm-gate);
-  border-color: transparent;
-  font-weight: 600;
-}
+.fm-tag .fm-mk { width: 13px; height: 13px; }
 
-.fm-tag.is-hot {
-  background: var(--fm-hot-soft);
-  color: var(--fm-hot);
-  border-color: transparent;
-  font-weight: 600;
-}
-
-.fm-tag.is-calm {
-  background: var(--fm-calm-soft);
-  color: var(--fm-calm);
-  border-color: transparent;
-  font-weight: 600;
-}
+.fm-tag.is-gate { color: var(--mark-gate); }
+.fm-tag.is-hot { color: var(--mark-open); }
+.fm-tag.is-held { color: var(--mark-held); }
+/* Landed work claims nothing, so it is ink. */
+.fm-tag.is-calm { color: var(--ink-record); }
 
 /* What is at stake, and the evidence under it. */
-.fm-stake {
-  font-size: 14.5px;
-}
+.fm-stake { max-width: var(--measure); }
 
 .fm-ev {
-  font-size: 13.5px;
-  color: var(--fm-dim);
-  border-left: 2px solid var(--fm-line);
-  padding-left: 10px;
+  font-size: var(--t-meta);
+  color: var(--ink-note);
+  border-left: 2px solid var(--rule-scored);
+  padding-left: var(--sp-3);
+  max-width: var(--measure);
 }
 
-/* Superseded variants of the same question, folded under the authoritative one. */
+/* ---- the fold: records this entry stands in for -----------------------
+ * The fold rests on an assumption nothing verifies, so no record may vanish.
+ * --veil-fold is what the SHEET is withholding, never a state of an item: a
+ * folded record and a parked task must not look alike. */
 .fm-variants {
-  font-size: 12.5px;
-  color: var(--fm-dim);
+  font-size: var(--t-meta);
+  color: var(--veil-fold);
 }
 
 .fm-variants summary {
   cursor: pointer;
   user-select: none;
+  font-family: var(--face-data);
+  font-size: var(--t-caption);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  font-weight: 700;
 }
 
 .fm-variants ul {
-  margin: 8px 0 0;
-  padding-left: 18px;
+  margin: var(--sp-2) 0 0;
+  padding-left: 1.15em;
 }
 
 .fm-variants li {
-  margin-bottom: 4px;
+  margin-bottom: var(--sp-1);
   overflow-wrap: anywhere;
 }
 
-/* ---- decision controls (Lavish input playbook) ------------------------
+.fm-variants code {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--veil-fold);
+}
+
+/* ---- the mark field (Lavish input playbook) ---------------------------
  * Native controls only. Selection stays local until the explicit submit, which
- * queues exactly one prompt per question under a stable queueKey. */
+ * queues exactly one prompt per question under a stable queueKey.
+ *
+ * The note is not decoration. Measured on the board of 2026-08-16, two of
+ * twenty answers carried a note that CONTRADICTED the selected option, and the
+ * note held what the captain actually meant both times. So every option set
+ * carries one, and it is read. */
 .fm-opts {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: var(--sp-2);
+}
+
+/* The field is a box cut into the sheet, captioned in the form's own voice. */
+.fm-field {
+  border: 1px solid var(--rule-scored);
+  background: var(--stock-sheet);
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.fm-field > .fm-cap {
+  display: block;
+  font-family: var(--face-data);
+  font-size: var(--t-caption);
+  letter-spacing: var(--track-caption);
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--ink-margin);
+  margin-inline-end: calc(-1 * var(--track-caption));
 }
 
 .fm-opt {
   display: flex;
   align-items: flex-start;
-  gap: 9px;
-  padding: 9px 11px;
-  border: 1px solid var(--fm-line);
-  border-radius: 9px;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--rule-feint);
   cursor: pointer;
-  background: var(--fm-panel);
-  font-size: 13.8px;
-  line-height: 1.45;
+  background: var(--stock-sheet);
+  font-size: var(--t-meta);
+  line-height: 1.5;
 }
 
-.fm-opt:hover {
-  border-color: var(--fm-accent);
-}
+.fm-opt:hover { border-color: var(--mark-open); }
 
 .fm-opt input {
   margin: 3px 0 0;
   flex: 0 0 auto;
-  accent-color: var(--fm-accent);
+  accent-color: var(--mark-open);
 }
 
 .fm-opt:has(input:checked) {
-  border-color: var(--fm-accent);
-  background: var(--fm-accent-soft);
+  border-color: var(--mark-open);
+  background: color-mix(in srgb, var(--mark-open) calc(var(--tint) * 100%), var(--stock-sheet));
 }
 
+.fm-opt > span { min-width: 0; overflow-wrap: anywhere; }
+.fm-opt b { font-weight: 700; overflow-wrap: anywhere; }
+
 .fm-opt em {
-  color: var(--fm-dim);
   font-style: normal;
-  font-size: 12.8px;
+  display: block;
+  color: var(--ink-note);
+}
+
+/* A settled option is STRUCK, not removed: a sheet that silently drops an
+ * answered option hides that it was ever asked. */
+.fm-opt.is-void b {
+  text-decoration: line-through;
+  color: var(--ink-note);
 }
 
 .fm-rec {
-  font-size: 11px;
+  font-family: var(--face-data);
+  font-size: var(--t-caption);
+  letter-spacing: .06em;
+  text-transform: uppercase;
   font-weight: 700;
-  padding: 1px 7px;
-  border-radius: 999px;
-  background: var(--fm-calm-soft);
-  color: var(--fm-calm);
-  margin-left: 7px;
+  border: 1px solid currentColor;
+  color: var(--ink-record);
+  padding: 0 5px;
+  margin-left: 6px;
   white-space: nowrap;
 }
 
@@ -546,36 +948,37 @@ p {
   width: 100%;
   min-height: 54px;
   resize: vertical;
-  border: 1px solid var(--fm-line);
-  border-radius: 9px;
-  padding: 8px 10px;
+  border: 1px solid var(--rule-feint);
+  border-radius: 0;
+  padding: var(--sp-2);
   font: inherit;
-  font-size: 13.5px;
-  background: var(--fm-panel);
-  color: var(--fm-ink);
+  font-size: var(--t-meta);
+  background: var(--stock-inset);
+  color: var(--ink-record);
 }
 
-.fm-free:focus-visible,
-.fm-opt input:focus-visible,
-.fm-submit:focus-visible {
-  outline: 2px solid var(--fm-accent);
+/* Keyboard focus is the same claim as the loudest thing on the sheet. */
+:focus-visible {
+  outline: 2px solid var(--mark-open);
   outline-offset: 2px;
 }
 
 .fm-submit {
   align-self: flex-start;
   border: 0;
-  border-radius: 9px;
-  background: var(--fm-accent);
-  color: #fff;
-  font: inherit;
-  font-weight: 600;
-  font-size: 13.5px;
-  padding: 8px 15px;
+  border-radius: var(--edge-mark);
+  background: var(--mark-open);
+  color: var(--stock-sheet);
+  font-family: var(--face-data);
+  font-size: var(--t-caption);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  font-weight: 700;
+  padding: 9px 16px;
   cursor: pointer;
 }
 
-.fm-submit:hover { filter: brightness(1.08); }
+.fm-submit:hover { filter: brightness(1.1); }
 .fm-submit:disabled { opacity: .5; cursor: default; }
 
 /* Queued state is shown separately from selected state, so the reviewer can
@@ -584,23 +987,26 @@ p {
  * rather than a silent no-op. */
 .fm-queued {
   display: none;
-  font-size: 12.5px;
-  color: var(--fm-calm);
-  font-weight: 600;
+  font-family: var(--face-data);
+  font-size: var(--t-caption);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--ink-record);
 }
 
 .fm-queued.is-shown { display: block; }
-.fm-queued.is-warn { color: var(--fm-hot); }
+.fm-queued.is-warn { color: var(--mark-open); }
 
 /* Shown only when the board is opened without a Lavish server, where queueing
  * has nowhere to go. board.js reveals it. */
 .fm-offline {
   display: none;
-  font-size: 12.5px;
-  color: var(--fm-dim);
-  border: 1px dashed var(--fm-line);
-  border-radius: 8px;
-  padding: 8px 10px;
+  font-size: var(--t-meta);
+  color: var(--ink-margin);
+  border: 1px dashed var(--rule-scored);
+  padding: var(--sp-2) var(--sp-3);
+  margin-top: var(--sp-4);
 }
 
 .fm-offline.is-shown { display: block; }
@@ -609,50 +1015,67 @@ p {
 .fm-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13.5px;
+  font-size: var(--t-meta);
   min-width: 480px;
 }
 
 .fm-table th,
 .fm-table td {
   text-align: left;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--fm-line);
+  padding: var(--sp-2) var(--sp-3);
   vertical-align: top;
 }
 
 .fm-table th {
-  font-size: 11.5px;
-  letter-spacing: .06em;
+  font-size: var(--t-caption);
+  letter-spacing: var(--track-caption);
   text-transform: uppercase;
-  color: var(--fm-dim);
+  color: var(--ink-margin);
   font-weight: 600;
+  border-bottom: 1.5px solid var(--rule-scored);
 }
 
-.fm-table tbody tr:last-child td { border-bottom: 0; }
+.fm-table tbody tr:nth-child(even) { background: var(--stock-band); }
+
+.fm-table td.fm-num-col {
+  font-family: var(--face-data);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 
 .fm-panel {
-  background: var(--fm-panel);
-  border: 1px solid var(--fm-line);
-  border-radius: var(--fm-r);
-  box-shadow: var(--fm-shadow);
-  padding: 4px 6px;
+  background: var(--stock-sheet);
+  border: 1px solid var(--rule-scored);
+  padding: var(--sp-2);
 }
 
+/* The foot is a stamp: what the sheet is, and where it came from. */
 .fm-foot {
-  margin-top: 34px;
-  padding-top: 14px;
-  border-top: 1px solid var(--fm-line);
-  color: var(--fm-dim);
-  font-size: 12.5px;
+  margin-top: var(--sp-7);
+  padding-top: var(--sp-3);
+  border-top: 2px solid var(--ink-record);
+  font-family: var(--face-data);
+  font-size: var(--t-caption);
+  letter-spacing: .04em;
+  color: var(--ink-margin);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-5);
+  justify-content: space-between;
 }
 
+/* Paper is white whatever the reader's theme is, which is the one place a raw
+ * colour is named on purpose. */
 @media print {
   body { background: #fff; padding: 0; }
-  .fm-card, .fm-stat, .fm-map, .fm-panel { box-shadow: none; break-inside: avoid; }
-  .fm-submit, .fm-free { display: none; }
+  .fm-wrap { box-shadow: none; clip-path: none; }
+  .fm-card, .fm-stat, .fm-map, .fm-panel { break-inside: avoid; }
+  .fm-submit, .fm-free, .fm-tally-sq { display: none; }
 }
 
+/* There is no entrance animation and no ambient animation anywhere: motion is
+ * spent on a tally square changing state and on its hover lift, and nowhere
+ * else. */
 @media (prefers-reduced-motion: reduce) {
-  * { animation: none !important; transition: none !important; }
+  * { animation-duration: 1ms !important; transition-duration: 1ms !important; }
 }
