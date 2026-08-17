@@ -16,6 +16,12 @@ set -u
 BOARD="$ROOT/bin/fm-board.sh"
 fm_test_tmproot TMP_ROOT fm-board
 
+# Every board carries the building vessel's name, and the builder refuses to
+# write one it cannot resolve. Pin it for the suite so each case exercises the
+# behavior it is actually about; test_board_carries_the_vessel_name owns the
+# resolution order and the refusal.
+export FM_BOARD_VESSEL=testschiff
+
 # build <body-html> -> writes $TMP_ROOT/out.html; records exit and stderr.
 BUILD_STATUS_FILE=$TMP_ROOT/build-status
 BUILD_ERR_FILE=$TMP_ROOT/build-stderr
@@ -176,6 +182,147 @@ test_board_is_self_contained() {
   pass "a built board carries its layout and behavior inline"
 }
 
+test_board_carries_the_vessel_name() {
+  # The captain asked for one thing at a glance: whose board is this. It is a
+  # property of the BUILDER, not of the subject, so it is written here and never
+  # by a board body. The resolution order and the refusal are both pinned,
+  # because a board that quietly came out unattributed is exactly the failure.
+  local status=0 out
+  build '<p>Inhalt</p>'
+  expect_code 0 "$(build_status)" "a clean body must build"
+  assert_grep 'class="fm-vessel">Testschiff<' "$OUT" \
+    "the vessel name is missing from the header"
+
+  # --vessel beats the environment.
+  rm -f "$OUT"
+  "$BOARD" --title T --vessel eigenname --body "$TMP_ROOT/body.html" --out "$OUT" \
+    >/dev/null 2>&1 || status=$?
+  expect_code 0 "$status" "--vessel must be accepted"
+  assert_grep 'class="fm-vessel">Eigenname<' "$OUT" "--vessel did not reach the header"
+
+  # A lowercase recorded slug prints capitalised, and a hyphenated one keeps its
+  # parts. This is a rendering rule, not a second spelling of the name.
+  rm -f "$OUT"
+  "$BOARD" --title T --vessel zweite-wache --body "$TMP_ROOT/body.html" --out "$OUT" \
+    >/dev/null 2>&1 || status=$?
+  assert_grep 'class="fm-vessel">Zweite-Wache<' "$OUT" \
+    "a hyphenated vessel name lost a capital"
+
+  # The Bridge vessel record is the fallback, so there is no second place a
+  # vessel's name is written down.
+  mkdir -p "$TMP_ROOT/home/config"
+  printf 'dritteswache extra-inbox\n' > "$TMP_ROOT/home/config/bridge-vessel"
+  rm -f "$OUT"
+  status=0
+  ( unset FM_BOARD_VESSEL FM_BRIDGE_VESSEL
+    FM_HOME=$TMP_ROOT/home "$BOARD" --title T --body "$TMP_ROOT/body.html" --out "$OUT" \
+      >/dev/null 2>&1 ) || status=$?
+  expect_code 0 "$status" "the recorded Bridge vessel must resolve the header"
+  assert_grep 'class="fm-vessel">Dritteswache<' "$OUT" \
+    "the header did not fall back to the recorded Bridge vessel name"
+  assert_no_grep 'Extra-Inbox' "$OUT" \
+    "a multi-vessel record must yield this seat's own name, not the inboxes it watches"
+
+  # And when nothing resolves it, the board is refused rather than written
+  # unattributed.
+  rm -f "$OUT"
+  status=0
+  out=$( unset FM_BOARD_VESSEL FM_BRIDGE_VESSEL
+    FM_HOME=$TMP_ROOT/empty-home "$BOARD" --title T --body "$TMP_ROOT/body.html" \
+      --out "$OUT" 2>&1 ) || status=$?
+  [ "$status" != 0 ] || fail "the builder wrote a board with no vessel name"
+  assert_absent "$OUT" "the builder refused but still wrote the board"
+  assert_contains "$out" "vessel" "the refusal did not name what is missing"
+  pass "every board carries the building vessel's name, and an unresolvable one is refused"
+}
+
+test_board_emits_the_tally_container_and_the_mark_set() {
+  # Both are the builder's to write. A count typed into a body can be wrong, and
+  # a wrong count of what reached the captain is the whole defect the strip
+  # exists to make visible.
+  build '<p>Inhalt</p>'
+  expect_code 0 "$(build_status)" "a clean body must build"
+  assert_grep '<div class="fm-tally" hidden></div>' "$OUT" \
+    "the tally container is missing, so board.js has nothing to fill"
+  assert_grep 'symbol id="fm-mk-pencil"' "$OUT" \
+    "the pencil mark is missing, so a chosen-but-unsent square cannot be drawn"
+  assert_grep 'symbol id="fm-mk-struck"' "$OUT" \
+    "the struck mark is missing, so a sent square cannot be drawn"
+  pass "the builder writes the tally container and the mark set into every board"
+}
+
+test_the_decision_shape_offers_choices_and_a_note() {
+  # The gap this exists to close: a board that asks the captain to decide and
+  # gives him nothing to click forces the answer into chat, the one channel with
+  # no memory. The worked example is what an agent copies, so it is the thing
+  # that has to keep carrying both controls.
+  local decision=$ROOT/docs/examples/board-body-decision.html status=0 semantic_status=0
+  assert_present "$decision" "the worked decision-shape example is missing"
+  rm -f "$OUT"
+  "$BOARD" --title "Entscheidungen" --body "$decision" --out "$OUT" \
+    >/dev/null 2>"$BUILD_ERR_FILE" || status=$?
+  expect_code 0 "$status" \
+    "the decision-shape example must build"$'\n'"$(build_stderr)"
+  python3 - "$OUT" <<'PY' || semantic_status=$?
+from html.parser import HTMLParser
+import sys
+
+class BoardModel(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.position = 0
+        self.reserve_at = None
+        self.forms = []
+        self.current = None
+
+    def handle_starttag(self, tag, attrs):
+        self.position += 1
+        attrs = dict(attrs)
+        classes = set(attrs.get("class", "").split())
+        if "fm-reserve" in classes and self.reserve_at is None:
+            self.reserve_at = self.position
+        if tag == "form" and "data-fm-question" in attrs:
+            self.current = {
+                "key": attrs["data-fm-question"],
+                "at": self.position,
+                "radio": False,
+                "note": False,
+            }
+            self.forms.append(self.current)
+        if self.current is not None:
+            if tag == "input" and attrs.get("type", "").lower() == "radio":
+                self.current["radio"] = True
+            if "data-fm-note" in attrs:
+                self.current["note"] = True
+
+    def handle_endtag(self, tag):
+        if tag == "form":
+            self.current = None
+
+model = BoardModel()
+with open(sys.argv[1], encoding="utf-8") as board:
+    model.feed(board.read())
+
+errors = []
+if not model.forms:
+    errors.append("the composed board declares no questions")
+if model.reserve_at is None:
+    errors.append("the composed board has no reservation block")
+elif model.forms and model.reserve_at >= model.forms[0]["at"]:
+    errors.append("the reservation block does not precede the first question")
+for form in model.forms:
+    if not form["radio"]:
+        errors.append(f'question {form["key"]} has no selectable option set')
+    if not form["note"]:
+        errors.append(f'question {form["key"]} has no note field')
+if errors:
+    raise SystemExit("; ".join(errors))
+PY
+  [ "$semantic_status" = 0 ] || \
+    fail "the composed decision board has an invalid decision shape"
+  pass "the worked decision shape offers selectable options plus a note per decision"
+}
+
 test_board_escapes_its_title() {
   build '<p>x</p>'
   local status=0
@@ -246,6 +393,10 @@ test_two_different_board_shapes_share_the_layout() {
   assert_grep 'class="fm-dist"' "$OUT" "report shape lost its distribution bar"
   assert_grep 'class="fm-statusline"' "$OUT" "report shape lost its status line"
   assert_grep 'class="fm-scroll"' "$OUT" "a wide table must scroll in its own container"
+  # A report asks nothing, so its strip stays hidden. The container is still
+  # emitted, because the builder does not read the body to decide.
+  assert_grep '<div class="fm-tally" hidden></div>' "$OUT" \
+    "the report shape lost the tally container"
   # Asserted against the BODY, not the composed board: every board inlines
   # board.js, whose header comment shows the decision-control markup, so a
   # composed-board grep can never tell the two apart.
@@ -280,6 +431,12 @@ test_board_behavior_contract() {
   out=$(node "$behavior" 2>&1) || status=$?
   [ "$status" = 0 ] || fail "board behavior checks failed:"$'\n'"$out"
   assert_contains "$out" "queueKey" "the behavior checks no longer cover queueKey"
+  # Both directions of the tally semantics, named here so a future edit that
+  # drops one of them fails at this level too.
+  assert_contains "$out" "choosing an option does NOT decrement" \
+    "the behavior checks no longer prove that selecting leaves the count alone"
+  assert_contains "$out" "a completed submit DOES decrement" \
+    "the behavior checks no longer prove that submitting decrements the count"
   pass "board decision controls behave per the Lavish input playbook (logic, not rendering)"
 }
 
@@ -290,6 +447,9 @@ test_guard_allows_a_navigational_link_split_across_lines
 test_guard_allows_prose_that_names_a_css_construct
 test_guard_allows_the_stylesheet_that_documents_itself
 test_board_is_self_contained
+test_board_carries_the_vessel_name
+test_board_emits_the_tally_container_and_the_mark_set
+test_the_decision_shape_offers_choices_and_a_note
 test_board_escapes_its_title
 test_check_mode_reports_both_verdicts
 test_missing_required_arguments_are_refused

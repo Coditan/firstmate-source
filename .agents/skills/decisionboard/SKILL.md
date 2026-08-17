@@ -59,9 +59,12 @@ When one strategic answer settles five downstream questions, a flat list gives n
 4. **Write the body fragment and build the board.**
    `bin/fm-board.sh --title <t> --subtitle <s> --body <fragment> --out .lavish/<name>-<date>.html`
    The builder owns the standard layout and refuses a board that would reach the network.
-   `docs/board-layout.md` lists the components and the markup each expects.
+   `docs/board-layout.md` lists the components and the markup each expects, and `docs/examples/board-body-decision.html` is the worked body to copy.
+   **Every decision on the board carries selectable options and a note field**, per "A decision the captain cannot click is not on the board" below.
+   Open the sheet with its reservation block, per "What the board must not claim" below.
    Every decision card carries its `.fm-variants` block, per "Every folded record stays visible" below.
    Do not hand-write a board's styling or scripting: that is exactly the drift this layout exists to stop.
+   Do not hand-write the vessel name or the tally strip either: the builder writes the first into every board's header and `bin/board-assets/board.js` fills the second, and a body that types either one has made a second copy that can go stale.
 
 5. **Open it.**
    `bin/fm-lavish.sh <file>`, never bare `lavish-axi`, which emits a link that opens nowhere but this machine.
@@ -86,6 +89,38 @@ Pre-answer gating between decisions is **not** recorded structurally today.
 So a named gate stays a named gate.
 If you find that a gate ought to be durable, raise it with that skill's owner rather than inventing a second place to record it.
 
+## A decision the captain cannot click is not on the board
+
+A board that asks the captain to decide something **must** present selectable options, with a free-text note beside them, for every decision on it.
+Stating the options in the card's prose and leaving him to answer in chat does not count, and it is not a lesser version of the same thing.
+
+This is measured, not a preference.
+The board built on 2026-08-17 was presentation-only: seven decisions, every one with its options written out in the text, and no control anywhere to choose one.
+He answered in chat, which is the one channel with no memory - the fleet has already measured that decisions asked in conversation get lost while ones asked on a board get answered.
+So a board that lays the decisions out beautifully and offers nothing to press has moved the question into the channel this whole surface exists to get it out of.
+
+Three things this obligation includes, each for its own reason.
+
+- **The note field is not optional decoration, and it is read.**
+  Measured on the board of 2026-08-16, two of twenty answers carried a note that contradicted the selected option, and the note held what the captain actually meant both times.
+  Read the note against the selection before routing an answer to `bin/fm-decision-hold.sh resolve`, and when the two disagree, the note is the evidence and the selection is not.
+- **A settled option stays on the sheet, struck.**
+  An option ruled out by an earlier decision is rendered with `is-void` rather than dropped, because a sheet that silently removes an answered option hides that it was ever asked.
+- **What is queued is not what is sent.**
+  The tally strip counts the decisions that have not been sent back, and it counts a chosen-but-unsent answer as still outstanding.
+  `docs/board-layout.md` owns those semantics; nothing on the board may report a chosen answer as delivered.
+
+`lavish-axi playbook input` owns the mechanics, `docs/board-layout.md` owns the markup, and `bin/board-assets/board.js` implements the submit path once so a body never repeats it.
+
+## Every board says whose board it is
+
+Every board carries the building vessel's name in its header.
+It is a property of the **builder**, not of the board's subject: a board this vessel builds about another vessel's work still reads this vessel's name.
+`bin/fm-board.sh` writes it from the name the fleet already records for this seat, and refuses to build a board it cannot resolve one for, so there is nothing to do here except not write it into the body by hand.
+
+Both of these rules are fleet-wide, and each vessel applies them with **its own** design language and **its own** name.
+Do not carry this vessel's design language to another one.
+
 ## What the board must not claim
 
 The collapse keeps the judge's record for a judged group and folds the other members' records away.
@@ -101,6 +136,11 @@ A decision blocked by another record is not on this board at all, and nothing on
 Captain-actionability is a single predicate in `bin/fm-fleet-snapshot.sh` and a record blocked by anything fails it, so that decision leaves `decisions_open` entirely; real blockers land it in `gates`, while a dangling target found nowhere is surfaced separately through bearings `integrity[]`.
 Measured on a two-decision fixture, adding one `blocked-by` edge takes the reported inventory from "records: 2 decisions kept: 2" to "records: 1 decisions kept: 1", with no footnote anywhere.
 So this is the captain-actionable set, not the open set: say that on the board in the same breath as the unverified fold, and never present it as everything waiting on him.
+
+These sentences have a component and a position, and both matter.
+They go in `.fm-reserve`, the reservation block, **above the entries** - a declaration of what the sheet does not show, printed under the entries, is one he reads after he has already decided.
+`docs/board-layout.md` owns its markup.
+
 For one named undertaking, `.agents/skills/sea-chart` reconciles its own records against the backlog and reports each withheld one by name with its cause - fleet-wide there is no such count yet.
 The blocker is the only shape of this loss left, and it belongs to the snapshot rather than to this board: the predicate reads the hold kind alone, so a captain hold carried on a record of any other kind does reach here.
 

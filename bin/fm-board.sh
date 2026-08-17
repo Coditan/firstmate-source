@@ -17,6 +17,27 @@
 # no Lavish server, and `lavish-axi export` must keep producing one portable
 # file. A self-contained board satisfies both without any copying step.
 #
+# WHAT THE BUILDER WRITES THAT A BODY NEVER DOES
+# Three things are emitted here rather than left to a board body, because each
+# one is wrong exactly when nobody notices it is wrong:
+#
+#   - THE VESSEL NAME, in the header of every board. It says whose board this
+#     is, and it is a property of the BUILDER: a board this vessel writes about
+#     another vessel's work still carries this vessel's name. It is read from
+#     the one place a vessel's name is already recorded rather than typed into a
+#     second one, and the build is REFUSED when it cannot be resolved, because a
+#     nameless board is exactly the board the rule exists to prevent.
+#   - THE MARK SET, the seven symbols Tally draws states with, defined once per
+#     board and referenced with <use href="#fm-mk-...">.
+#   - THE TALLY STRIP CONTAINER, emitted empty and hidden. board.js fills it
+#     from the board's own question forms and owns the count of what has not
+#     been sent back. A body that typed that number could type it wrong, and a
+#     wrong count of what reached the captain is the defect the strip exists to
+#     make visible.
+#
+# docs/board-layout.md names the components; the design language behind them is
+# recorded there too.
+#
 # THE GUARD
 # The no-network rule is enforced HERE, at the only choke point every board
 # passes through, because a rule that lives in prose is the rule that regressed.
@@ -61,20 +82,33 @@
 #   --title <t>      board title; used for <title> and the <h1>
 #   --body <f>       HTML fragment for the board body, or - for stdin
 #   --out <p>        file to write; refused if the composed board fails the guard
-#   --subtitle <s>   one dim line under the title (optional)
+#   --subtitle <s>   one dim line beside the title (optional)
 #   --footer <s>     one dim line at the bottom, for provenance (optional)
+#   --vessel <n>     the building vessel's name for the header; see below
 #   --lang <code>    document language (default: de)
 #   --check <f>...   run the no-network guard over existing files and exit
 #   --print-assets   print the paths of the versioned layout assets
 #
-# The body fragment is inserted verbatim inside <div class="fm-wrap">. It gets
-# the components documented in docs/board-layout.md; it must not carry its own
-# <style>, <script>, or <html> scaffolding.
+# THE VESSEL NAME is resolved, in this order:
+#   1. --vessel <n>
+#   2. $FM_BOARD_VESSEL
+#   3. the first word of $FM_BRIDGE_VESSEL
+#   4. the first word of $FM_HOME/config/bridge-vessel
+# The first letter of each word is capitalised for display and nothing else is
+# changed, so `coditan` prints as `Coditan`. When none of the four resolves, the
+# build is REFUSED rather than writing an unattributed board.
+#
+# The body fragment is inserted verbatim inside <div class="fm-wrap">, after the
+# header and the tally strip container. It gets the components documented in
+# docs/board-layout.md; it must not carry its own <style>, <script>, or <html>
+# scaffolding, and it must not write the vessel name or the tally strip itself.
 #
 # Exit status: 0 on success, 1 on a guard refusal or a usage error.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 ASSETS="$SCRIPT_DIR/board-assets"
 CSS="$ASSETS/layout.css"
 JS="$ASSETS/board.js"
@@ -91,6 +125,69 @@ usage() {
 # html_escape - escape text destined for HTML text or a quoted attribute.
 html_escape() {
   printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
+}
+
+# resolve_vessel - print the building vessel's display name, or nothing.
+#
+# The fleet already records a vessel's name for Bridge, and that is the name the
+# captain knows this seat by. Reading it here rather than adding a board-only
+# literal keeps one name in one place: a second copy is a name that can disagree
+# with itself, and a header whose whole job is to say whose board this is must
+# not be the copy that drifted.
+resolve_vessel() {
+  local raw=""
+  if [ -n "${FM_BOARD_VESSEL:-}" ]; then
+    raw=${FM_BOARD_VESSEL}
+  elif [ -n "${FM_BRIDGE_VESSEL:-}" ]; then
+    raw=${FM_BRIDGE_VESSEL}
+  elif [ -r "$FM_HOME/config/bridge-vessel" ]; then
+    IFS= read -r raw < "$FM_HOME/config/bridge-vessel" || raw=""
+  fi
+  # A multi-vessel Bridge configuration is a space-separated list, and the first
+  # entry is this seat's own; the rest are inboxes it also watches.
+  raw=${raw%%[[:space:]]*}
+  [ -n "$raw" ] || return 0
+  vessel_display "$raw"
+}
+
+# vessel_display - capitalise the first letter of each word, change nothing else.
+#
+# The recorded name is a lowercase slug because Bridge paths are, and the header
+# is prose. This is a rendering rule and not a second spelling: an already
+# capitalised name comes back unchanged.
+vessel_display() {  # <raw>
+  printf '%s' "$1" | awk '
+    {
+      n = split($0, parts, /-/)
+      out = ""
+      for (i = 1; i <= n; i++) {
+        w = parts[i]
+        if (w != "") { w = toupper(substr(w, 1, 1)) substr(w, 2) }
+        out = (i == 1) ? w : out "-" w
+      }
+      printf "%s", out
+    }'
+}
+
+# mark_set - the seven marks Tally draws every state with, defined once.
+#
+# Referenced from anywhere on the board as <use href="#fm-mk-open">. Two of the
+# seven - run and void - are drawn in ink and carry no hue at all, which is the
+# language's own rule that under way, landed and failed are never coloured.
+mark_set() {
+  cat <<'SVG'
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+<defs>
+<symbol id="fm-mk-open" viewBox="0 0 20 20"><rect x="2.5" y="2.5" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+<symbol id="fm-mk-pencil" viewBox="0 0 20 20"><rect x="2.5" y="2.5" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4.6 15.4 L15.4 4.6" stroke="currentColor" stroke-width="1.4" stroke-dasharray="2.4 1.8" fill="none"/></symbol>
+<symbol id="fm-mk-struck" viewBox="0 0 20 20"><rect x="2.5" y="2.5" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M4 16 L16 4" stroke="currentColor" stroke-width="2.4" fill="none"/></symbol>
+<symbol id="fm-mk-gate" viewBox="0 0 20 20"><rect x="2.5" y="2.5" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3.5" y="3.5" width="6.5" height="13" fill="currentColor"/></symbol>
+<symbol id="fm-mk-held" viewBox="0 0 20 20"><rect x="2.5" y="2.5" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="10" cy="10" r="3.1" fill="currentColor"/></symbol>
+<symbol id="fm-mk-run" viewBox="0 0 20 20"><rect x="2.5" y="2.5" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="4.5" y="8.8" width="11" height="2.4" fill="currentColor"/></symbol>
+<symbol id="fm-mk-void" viewBox="0 0 20 20"><rect x="2.5" y="2.5" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.4 5.4 L14.6 14.6 M14.6 5.4 L5.4 14.6" stroke="currentColor" stroke-width="2" fill="none"/></symbol>
+</defs>
+</svg>
+SVG
 }
 
 # fold_open_tags - print `<line-number>:<text>` with the newlines inside an
@@ -279,6 +376,7 @@ BODY=""
 OUT=""
 SUBTITLE=""
 FOOTER=""
+VESSEL=""
 LANG_CODE="de"
 MODE="build"
 CHECK_FILES=()
@@ -300,6 +398,7 @@ while [ "$#" -gt 0 ]; do
     --out) [ "$#" -gt 1 ] || die "--out needs a value"; OUT=$2; shift 2 ;;
     --subtitle) [ "$#" -gt 1 ] || die "--subtitle needs a value"; SUBTITLE=$2; shift 2 ;;
     --footer) [ "$#" -gt 1 ] || die "--footer needs a value"; FOOTER=$2; shift 2 ;;
+    --vessel) [ "$#" -gt 1 ] || die "--vessel needs a value"; VESSEL=$(vessel_display "$2"); shift 2 ;;
     --lang) [ "$#" -gt 1 ] || die "--lang needs a value"; LANG_CODE=$2; shift 2 ;;
     *) die "unknown argument '$1' (see --help)" ;;
   esac
@@ -323,6 +422,11 @@ fi
 [ -n "$OUT" ] || die "--out is required"
 [ -f "$CSS" ] || die "missing layout asset: $CSS"
 [ -f "$JS" ] || die "missing behavior asset: $JS"
+
+[ -n "$VESSEL" ] || VESSEL=$(resolve_vessel)
+[ -n "$VESSEL" ] || die "cannot resolve the building vessel's name for the header.
+Every board says whose board it is, so this is refused rather than written unattributed.
+Set one of: --vessel <name>, FM_BOARD_VESSEL, FM_BRIDGE_VESSEL, or $FM_HOME/config/bridge-vessel."
 
 BODY_FILE=$BODY
 TMP_BODY=""
@@ -350,9 +454,18 @@ esc_title=$(html_escape "$TITLE")
   printf '<title>%s</title>\n' "$esc_title"
   printf '<style>\n'
   cat "$CSS"
-  printf '</style>\n</head>\n<body>\n<div class="fm-wrap">\n'
+  printf '</style>\n</head>\n<body>\n'
+  mark_set
+  printf '<div class="fm-wrap">\n'
+  printf '<header class="fm-issue">\n<div>\n'
+  printf '<p class="fm-vessel">%s</p>\n' "$(html_escape "$VESSEL")"
   printf '<h1>%s</h1>\n' "$esc_title"
+  printf '</div>\n'
   [ -z "$SUBTITLE" ] || printf '<p class="fm-sub">%s</p>\n' "$(html_escape "$SUBTITLE")"
+  printf '</header>\n'
+  # Emitted empty and hidden. board.js fills it from the board's own question
+  # forms and owns the count; a board that asks nothing leaves it hidden.
+  printf '<div class="fm-tally" hidden></div>\n'
   cat "$BODY_FILE"
   [ -z "$FOOTER" ] || printf '\n<div class="fm-foot">%s</div>\n' "$(html_escape "$FOOTER")"
   printf '</div>\n<script>\n'

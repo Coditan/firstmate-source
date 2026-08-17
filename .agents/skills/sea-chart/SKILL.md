@@ -69,6 +69,8 @@ If he names one investigation or undertaking, that is this.
    The builder owns the standard layout and refuses a chart that would reach the network.
    `docs/board-layout.md` lists the components and the markup each expects, and owns the German-umlaut rule for any chart written in German.
    Do not hand-write styling or scripting: that is exactly the drift this layout exists to stop.
+   A chart queues answers, so it is a surface that asks the captain to decide: every decision on it carries selectable options and a note field, under `.agents/skills/decisionboard` "A decision the captain cannot click is not on the board".
+   The builder writes the vessel name into the header and `bin/board-assets/board.js` fills the tally strip, so the body writes neither.
 
 5. **Open it.**
    `bin/fm-lavish.sh <file>`, never bare `lavish-axi`, which emits a link that opens nowhere but this machine.
