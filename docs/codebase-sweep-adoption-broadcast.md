@@ -70,9 +70,12 @@ An envelope id proves composition and never delivery: after the send, fetch and 
 
     THE BOUNDARY, IN HIS WORDS
 
-    "low is everything reversible without me". Low findings are done without
-    asking each time, through the project's OWN selected delivery path, to a pull
-    request, and reported afterwards. That standing authority does not cover
+    "low is everything reversible without me". His separate clarification is
+    "containment is the missing half": low is reversible without him and
+    contained inside one module, while middle is reversible but its blast radius
+    leaves the module. Low findings are done without asking each time, through
+    the project's OWN selected delivery path, to a pull request, and reported
+    afterwards. That standing authority does not cover
     skipping the delivery path, anything destructive or irreversible, merging, or
     a finding that turns out to be mis-classified. Read each project's delivery
     mode and approval posture AT THE TIME rather than carrying one in your head;

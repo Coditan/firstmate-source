@@ -58,11 +58,13 @@ So the tiers are recorded as his framing with our definitions written under it.
 If he later names another source, get that source before rewriting the scale rather than back-filling an attribution to it.
 
 His boundary for the lowest tier, verbatim, 2026-08-17 around 01:36Z: **"low is everything reversible without me"**.
+His separate clarification is: **"containment is the missing half"**.
+Together those place a reversible change contained inside one module in low, and a reversible change whose blast radius leaves the module in middle.
 
 ### What this seat wrote before that, and why it is not the boundary
 
 An earlier draft on this seat defined LOW as contained behind an existing interface **and** having a check that would go red if the change were wrong.
-That is stricter than what he asked for: it makes detectability a second gate, where his criterion is reversibility alone.
+That is stricter than what he asked for: it makes detectability a second gate in addition to his reversibility boundary and separate containment clarification.
 Presenting it as his boundary would have been substituting this seat's caution for his instruction, so it does not stand as the boundary.
 
 It survives in the skill as a subordinate confidence aid, labelled as ours, for one reason worth keeping: a change nobody can tell went wrong is one nobody will know to reverse.
