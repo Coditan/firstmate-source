@@ -110,14 +110,37 @@ Usage:
       reads it back.
 
   fm-curate-knowledge.py check --before <snapshot.json> --worksheet <w.md>
-                              --loaded FILE [--archive FILE] [options]
-      The gate. Exits non-zero on a failed prune.
+                              --loaded FILE [--archive FILE]
+                              [--before-loaded FILE --before-archive FILE]
+                              [options]
+      The gate. Exits non-zero on a failed prune. Name the pair with
+      --before-loaded and --before-archive on any run whose archive already
+      exists; see BASELINE MODES below.
 
   fm-curate-knowledge.py report --before <snapshot.json> --loaded FILE
-                              --worksheet <w.md> [--archive FILE] [options]
+                              --worksheet <w.md> [--archive FILE]
+                              [--before-loaded FILE --before-archive FILE]
+                              [options]
       Before/after in bytes and share, plus the deletion ledger with evidence.
       The worksheet is required: the ledger is the only record a deletion ever
       gets, so a report that could omit it is a report of the wrong thing.
+
+BASELINE MODES, and the second one is the one that runs in service
+A FIRST split has one before-state: the single file that is about to divide.
+Name it with --before-file (or leave it implicit when the snapshot holds one
+file) and the whole after-state, loaded plus archive, is compared against it.
+Every run after that is a RE-RUN against an archive that already exists, and
+the before-state is then the PAIR. Snapshot both files and name them with
+--before-loaded and --before-archive: the baseline heading total becomes the sum
+across the pair and the baseline entry occurrences become the combined set, so
+the after-state is compared like for like. Without that, a perfect re-run fails
+on a heading total that was never comparable (measured on this home: a loaded
+half of 10 headings against a pair of 275), and a silently dropped archive entry
+is invisible because the baseline never knew the archive existed. The mode is
+chosen from the arguments, never guessed: pair mode requires both flags.
+Verdicts are still owed only for the entries of the before-LOADED half, because
+a re-run curates what accumulated there while the archive's own entries are
+accounted for by presence rather than by judgement.
 
 Common options:
   --home <dir>     operational home holding data/ and config/ (default $FM_HOME,
@@ -130,11 +153,17 @@ Common options:
   --json           machine-readable output where the subcommand supports it
 
 Exit status: 0 on success, 1 on a failed check or a refused run, 2 on a usage
-error. `measure` and `report` are reporting commands and exit 0 unless a path
-is unreadable; `check` is a gate and its exit status is the verdict.
+error. `check` is a gate and its exit status is the verdict. `report` reports
+AND refuses: it exits 2 without --worksheet, and 1 when that worksheet carries a
+key the baseline never had, when an entry disappeared with nothing accounting
+for it, or when a declared delete or fold is still present. A report is the
+record a deletion gets, so it will not print one it cannot stand behind.
+`measure` is the only pure reporting command, and exits 0 unless a path is
+unreadable or --lines asks it to price a house style as a cost.
 """
 
 import argparse
+import atexit
 from collections import Counter
 import hashlib
 import json
@@ -142,6 +171,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -160,9 +190,13 @@ DIGEST_CALL_RE = re.compile(r'print_file_or_absent\s+"\$DATA/([^"]+)"')
 ROUTE_VERBS = ("grep", "rg")
 TRUSTED_ROUTE_DIRS = ("/usr/bin", "/bin", "/usr/local/bin")
 ROUTE_FLAGS = {
-    "grep": ("-n", "-i", "-F", "-E", "-e", "--"),
-    "rg": ("-n", "-i", "-F", "-e", "--"),
+    "grep": ("-n", "-i", "-F", "-E", "-e", "-m", "--"),
+    "rg": ("-n", "-i", "-F", "-e", "-m", "--"),
 }
+# Flags that consume the next argument. `-m` is also accepted glued to its
+# count, as `grep -m1`, and both spellings are validated against ROUTE_FLAGS
+# above so the enumerated set is the set actually enforced.
+ROUTE_VALUE_FLAGS = ("-e", "-m")
 
 # Verdict vocabularies. They do not overlap by accident: `cold` and `split`
 # presuppose an archive file, which a shared-tracked file must never grow.
@@ -753,6 +787,104 @@ def load_snapshot(path, before_file):
     return snap, list(files.values())[0]
 
 
+def snapshot_record(snap, path, snapshot_path):
+    files = snap.get("files", {})
+    key = os.path.abspath(path)
+    if key not in files:
+        die(
+            "snapshot %s has no entry for %s (has: %s)"
+            % (snapshot_path, key, ", ".join(sorted(files)))
+        )
+    return files[key]
+
+
+def baseline_entries_with_keys(record):
+    """A record's entries, each carrying an occurrence key.
+
+    A snapshot written before keys existed is read by regenerating them the
+    same way the writer would have, so an older baseline still compares.
+    """
+    fallback = occurrence_keys([entry["heading"] for entry in record["entries"]])
+    out = []
+    for entry, fallback_key in zip(record["entries"], fallback):
+        merged = dict(entry)
+        merged["key"] = entry.get("key") or fallback_key
+        merged["norm"] = entry.get("norm") or norm_heading(entry["heading"])
+        out.append(merged)
+    return out
+
+
+def load_baseline(args):
+    """The before-state, as one file or as the pair a re-run starts from.
+
+    Returns a baseline dict shaped like a file record, plus the two fields that
+    only a pair can answer: `loaded_heading_count`, which is what the loaded
+    half must fall below, and `verdict_keys`, the entries a worksheet still owes
+    a judgement for. In single mode both collapse to the one baseline file.
+    """
+    with open(args.before, "r", encoding="utf-8") as handle:
+        snap = json.load(handle)
+    if not snap.get("files"):
+        die("snapshot %s records no files" % args.before)
+
+    pair_flags = (args.before_loaded, args.before_archive)
+    if any(pair_flags) and not all(pair_flags):
+        die(
+            "--before-loaded and --before-archive name the two halves of a "
+            "re-run's before-state; pass both or neither",
+            2,
+        )
+    if any(pair_flags) and args.before_file:
+        die(
+            "--before-file selects a single baseline file; it cannot be combined "
+            "with the pair baseline of --before-loaded and --before-archive",
+            2,
+        )
+
+    if not any(pair_flags):
+        _snap, record = load_snapshot(args.before, args.before_file)
+        baseline = dict(record)
+        baseline["entries"] = baseline_entries_with_keys(record)
+        baseline["loaded_heading_count"] = record["heading_count_all"]
+        baseline["verdict_keys"] = {entry["key"] for entry in baseline["entries"]}
+        baseline["mode"] = "single"
+        return baseline
+
+    loaded_record = snapshot_record(snap, args.before_loaded, args.before)
+    archive_record = snapshot_record(snap, args.before_archive, args.before)
+    if loaded_record["path"] == archive_record["path"]:
+        die("--before-loaded and --before-archive name the same file", 2)
+
+    loaded_entries = baseline_entries_with_keys(loaded_record)
+    # The loaded half comes first so its per-file occurrence keys are unchanged
+    # by the combination, which is what lets a worksheet inventoried from that
+    # file alone still name its own entries.
+    archive_entries = []
+    counts = Counter(entry["norm"] for entry in loaded_entries)
+    for entry in baseline_entries_with_keys(archive_record):
+        merged = dict(entry)
+        counts[merged["norm"]] += 1
+        merged["key"] = "%s#%d" % (merged["norm"], counts[merged["norm"]])
+        archive_entries.append(merged)
+
+    baseline = dict(loaded_record)
+    baseline["path"] = "%s + %s" % (loaded_record["path"], archive_record["path"])
+    # Bytes stay the LOADED half's, because startup cost is what the loaded half
+    # spends. Summing the pair would make "the loaded half got smaller" trivially
+    # true and retire the gate that measures the point of the exercise.
+    baseline["bytes"] = loaded_record["bytes"]
+    baseline["heading_count_all"] = (
+        loaded_record["heading_count_all"] + archive_record["heading_count_all"]
+    )
+    baseline["loaded_heading_count"] = loaded_record["heading_count_all"]
+    baseline["entries"] = loaded_entries + archive_entries
+    baseline["verdict_keys"] = {entry["key"] for entry in loaded_entries}
+    baseline["mode"] = "pair"
+    baseline["loaded_path"] = loaded_record["path"]
+    baseline["archive_path"] = archive_record["path"]
+    return baseline
+
+
 def route_commands(loaded_text, archive_path):
     """Backtick-delimited commands that name the archive.
 
@@ -770,6 +902,71 @@ def route_commands(loaded_text, archive_path):
         if base in command and len(stripped.split()) > 1:
             found.append(stripped)
     return found
+
+
+_PROOF_DIRS = set()
+_PROOF_SIGNALS_INSTALLED = False
+
+
+def _restore_and_remove(path):
+    """Undo the protection bits, then remove the directory.
+
+    A 0555 directory of 0444 files cannot be removed by its owner without this,
+    so a proof that ends any way other than normally must still hand the
+    directory back removable.
+    """
+    if not os.path.isdir(path):
+        return
+    try:
+        os.chmod(path, 0o755)
+        for root, dirs, files in os.walk(path):
+            os.chmod(root, 0o755)
+            for directory in dirs:
+                os.chmod(os.path.join(root, directory), 0o755)
+            for name in files:
+                os.chmod(os.path.join(root, name), 0o644)
+    except OSError:
+        pass
+    shutil.rmtree(path, ignore_errors=True)
+
+
+def _cleanup_proof_dirs():
+    for path in sorted(_PROOF_DIRS):
+        _restore_and_remove(path)
+    _PROOF_DIRS.clear()
+
+
+def _proof_signal_handler(signum, _frame):
+    _cleanup_proof_dirs()
+    raise SystemExit(128 + signum)
+
+
+def _register_proof_dir(path):
+    """Track a protected directory so it is cleaned up however the run ends.
+
+    atexit covers a normal exit and an uncaught exception; the SIGINT and
+    SIGTERM handlers cover an interrupted run. SIGKILL cannot be trapped, so a
+    stale directory remains possible - which is part of why this lives under
+    TMPDIR, where a leftover is harmless.
+    """
+    global _PROOF_SIGNALS_INSTALLED
+    _PROOF_DIRS.add(path)
+    if _PROOF_SIGNALS_INSTALLED:
+        return
+    _PROOF_SIGNALS_INSTALLED = True
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(signum, _proof_signal_handler)
+        except (ValueError, OSError):
+            pass
+
+
+def _release_proof_dir(path):
+    _restore_and_remove(path)
+    _PROOF_DIRS.discard(path)
+
+
+atexit.register(_cleanup_proof_dirs)
 
 
 def prove_route(command, home, archive_path, headings, sample, trusted_dirs=None):
@@ -832,8 +1029,15 @@ def prove_route(command, home, archive_path, headings, sample, trusted_dirs=None
         )
     if not file_args:
         return False, [], [], "route has no archive path argument"
-    route_root = os.path.abspath(os.getcwd())
-    temp_path = tempfile.mkdtemp(prefix=".fm-route-proof-", dir=route_root)
+    # TMPDIR, never the current directory. Run the documented way, `check` is
+    # invoked from the operational home or a repo checkout, and this program
+    # promises to write to neither. A leftover proof directory under TMPDIR is
+    # harmless; one in the operational home is not.
+    try:
+        temp_path = tempfile.mkdtemp(prefix="fm-route-proof-")
+    except OSError as exc:
+        return False, [], [], "route proof directory could not be created: %s" % exc
+    _register_proof_dir(temp_path)
     copied = {}
     try:
         for index in file_args:
@@ -885,11 +1089,7 @@ def prove_route(command, home, archive_path, headings, sample, trusted_dirs=None
         if changed:
             return False, [], [], "route changed protected proof copies: %s" % ", ".join(changed)
     finally:
-        for root, dirs, _files in os.walk(temp_path):
-            os.chmod(root, 0o755)
-            for directory in dirs:
-                os.chmod(os.path.join(root, directory), 0o755)
-        shutil.rmtree(temp_path)
+        _release_proof_dir(temp_path)
     output = result.stdout.strip()
     if result.returncode != 0 or result.stderr.strip() or not output:
         return False, [], [], "documented route exited %d, wrote diagnostics, or returned no output" % result.returncode
@@ -920,56 +1120,45 @@ def prove_route(command, home, archive_path, headings, sample, trusted_dirs=None
 
 
 def _validate_route_argv(argv):
+    """Validate every option against ROUTE_FLAGS and return the path operands.
+
+    One pass does both jobs. Walking the argument list twice, once to judge and
+    once to locate operands, is how the two walks drift apart and a flag ends up
+    accepted by one and unknown to the other.
+    """
     allowed = ROUTE_FLAGS[argv[0]]
-    positional = 0
+    positional_indices = []
+    has_expression = False
     index = 1
     options_done = False
     while index < len(argv):
         value = argv[index]
         if not options_done and value == "--":
             options_done = True
-        elif not options_done and value in ("-e", "-m"):
-            if value not in allowed and value != "-m":
+        elif not options_done and value in ROUTE_VALUE_FLAGS:
+            if value not in allowed:
                 return "route flag `%s` is not in the closed read-only set" % value, []
+            has_expression = has_expression or value == "-e"
             index += 1
             if index >= len(argv):
                 return "route flag `%s` requires a value" % value, []
             if value == "-m" and not argv[index].isdigit():
                 return "route -m value must be a non-negative integer", []
         elif not options_done and re.fullmatch(r"-m\d+", value):
-            pass
+            if "-m" not in allowed:
+                return "route flag `-m` is not in the closed read-only set", []
         elif not options_done and value.startswith("-"):
             if value not in allowed:
                 return "route flag `%s` is not in the closed read-only set" % value, []
         else:
-            positional += 1
+            positional_indices.append(index)
         index += 1
-    if positional < 1:
+    if not positional_indices:
         return "route has no pattern or path operands", []
-    has_expression = any(value == "-e" for value in argv[1:])
-    positional_indices = _route_positional_indices(argv)
     file_indices = positional_indices if has_expression else positional_indices[1:]
     if not file_indices:
         return "route has no path operand", []
     return None, file_indices
-
-
-def _route_positional_indices(argv):
-    indices = []
-    index = 1
-    options_done = False
-    while index < len(argv):
-        value = argv[index]
-        if not options_done and value == "--":
-            options_done = True
-        elif not options_done and value in ("-e", "-m"):
-            index += 1
-        elif not options_done and (value.startswith("-") or re.fullmatch(r"-m\d+", value)):
-            pass
-        else:
-            indices.append(index)
-        index += 1
-    return indices
 
 
 def _trusted_route_binary(verb, trusted_dirs):
@@ -1048,9 +1237,17 @@ def cmd_check(args):
     failures = []
     warnings = []
 
-    _snap, before = load_snapshot(args.before, args.before_file)
+    before = load_baseline(args)
     shape = args.shape or before.get("shape") or detect_shape(args.loaded, args.root)
 
+    if shape == "shared" and before["mode"] == "pair":
+        die(
+            "refused: a pair baseline with --shape shared.\n"
+            "  A shared tracked file has no archive to pair it with. Its detail "
+            "moves to the file that already owns it and an inline stub points "
+            "there, so its before-state is always the one file.",
+            1,
+        )
     if shape == "shared" and args.archive:
         die(
             "refused: --archive with --shape shared.\n"
@@ -1105,7 +1302,7 @@ def cmd_check(args):
 
     print("=== fm-curate-knowledge check ===")
     print("shape          %s" % shape)
-    print("baseline       %s" % before["path"])
+    print("baseline       %s (%s)" % (before["path"], before["mode"]))
     print("loaded half    %s" % loaded["path"])
     print("archive        %s" % (archive["path"] if archive else "(none - shared shape)"))
     print("worksheet      %s (%d verdicts)" % (args.worksheet, len(rows)))
@@ -1138,7 +1335,12 @@ def cmd_check(args):
             failures.append("worksheet repeats occurrence key `%s`" % row["key"])
         by_key[row["key"]] = row
 
-    undeclared = sorted(before_keys - set(by_key))
+    # Verdicts are owed for the before-LOADED half's entries. On a pair baseline
+    # the existing archive's entries are accounted for by presence, not by
+    # judgement: a re-run curates what accumulated in the loaded half, and
+    # demanding a verdict per archive entry would price every re-run at the whole
+    # archive.
+    undeclared = sorted(before["verdict_keys"] - set(by_key))
     if undeclared:
         failures.append(
             "%d baseline entries carry no verdict: %s"
@@ -1152,6 +1354,7 @@ def cmd_check(args):
 
     # --- 2. heading counts must fall ----------------------------------------
     before_all = before["heading_count_all"]
+    before_loaded_all = before["loaded_heading_count"]
     after_all = loaded["heading_count_all"] + (
         archive["heading_count_all"] if archive else 0
     )
@@ -1161,6 +1364,11 @@ def cmd_check(args):
         loaded["heading_count_all"],
         archive["heading_count_all"] if archive else 0,
     ))
+    if before["mode"] == "pair":
+        print(
+            "          the before-state is the pair: loaded %d + archive %d"
+            % (before_loaded_all, before_all - before_loaded_all)
+        )
     # The two shapes fail differently, so they are gated differently.
     #
     # private: the total must FALL. Splitting is heading-neutral - the heading
@@ -1182,16 +1390,16 @@ def cmd_check(args):
                 "the split executing while nothing is curated."
                 % (before_all, after_all)
             )
-        if loaded["heading_count_all"] >= before_all:
+        if loaded["heading_count_all"] >= before_loaded_all:
             failures.append(
                 "loaded-half heading count did not fall: %d -> %d"
-                % (before_all, loaded["heading_count_all"])
+                % (before_loaded_all, loaded["heading_count_all"])
             )
     else:
-        if loaded["heading_count_all"] > before_all:
+        if loaded["heading_count_all"] > before_loaded_all:
             failures.append(
                 "heading count rose: %d -> %d. A prune does not add sections."
-                % (before_all, loaded["heading_count_all"])
+                % (before_loaded_all, loaded["heading_count_all"])
             )
 
     print(
@@ -1348,8 +1556,14 @@ def cmd_check(args):
             for line in transcript:
                 print(line)
             if not ok:
-                detail = ": %s" % ", ".join(missing[:8]) if missing else ""
-                failures.append("documented route failed%s" % detail)
+                # The reason travels with the FAIL line. A refusal here is the
+                # most security-relevant thing this program says, and an
+                # operator reading the failures must not have to go looking for
+                # why it refused.
+                detail = "; unreachable: %s" % ", ".join(missing[:8]) if missing else ""
+                failures.append(
+                    "documented route failed: %s%s" % (result_message, detail)
+                )
 
     # --- verdict --------------------------------------------------------------
     print("")
@@ -1432,7 +1646,7 @@ def _naming_prefix(norm, limit=40):
 
 
 def cmd_report(args):
-    _snap, before = load_snapshot(args.before, args.before_file)
+    before = load_baseline(args)
     label, total, rows, notes = denominator(args)
 
     loaded = file_facts(args.loaded, args.level or before.get("level"))
@@ -1470,6 +1684,7 @@ def cmd_report(args):
     before_total = total - loaded_bytes + before_bytes
 
     print("=== fm-curate-knowledge report ===")
+    print("baseline       %s (%s)" % (before["path"], before["mode"]))
     print("denominator    %s" % label)
     for note in notes:
         print("  note: %s" % note)
@@ -1569,6 +1784,20 @@ def add_common(parser):
     parser.add_argument("--against", default="startup", help="`startup` or a captured digest file")
 
 
+def add_pair_baseline(parser):
+    """The before-state of a re-run, whose archive already exists."""
+    parser.add_argument(
+        "--before-loaded",
+        default=None,
+        help="baseline loaded half, for a re-run against an existing archive",
+    )
+    parser.add_argument(
+        "--before-archive",
+        default=None,
+        help="baseline archive, paired with --before-loaded",
+    )
+
+
 def resolve_paths(args):
     args.home = os.path.abspath(args.home or os.environ.get("FM_HOME") or default_root())
     if args.root:
@@ -1605,6 +1834,7 @@ def main(argv):
     add_common(p_check)
     p_check.add_argument("--before", required=True, help="baseline snapshot JSON")
     p_check.add_argument("--before-file", default=None, help="which snapshot file is the baseline")
+    add_pair_baseline(p_check)
     p_check.add_argument("--worksheet", required=True)
     p_check.add_argument("--loaded", required=True)
     p_check.add_argument("--archive", default=None)
@@ -1615,6 +1845,7 @@ def main(argv):
     add_common(p_report)
     p_report.add_argument("--before", required=True)
     p_report.add_argument("--before-file", default=None)
+    add_pair_baseline(p_report)
     p_report.add_argument("--loaded", required=True)
     p_report.add_argument("--archive", default=None)
     # Required, not optional: the deletion ledger is the only record a deleted

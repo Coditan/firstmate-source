@@ -127,12 +127,37 @@ If you have a captured digest, pass `--against <file>` and the denominator becom
 `check` and `report` both read this.
 Take it before you edit anything; there is no way to reconstruct it afterwards.
 
+On a FIRST split the before-state is the single file that is about to divide:
+
 ```
 .claude/skills/run-curate-knowledge/fm-curate-knowledge.py measure \
   /home/coditan/coditan-firstmate/data/learnings.md \
   --home /home/coditan/coditan-firstmate \
   --save /tmp/before.json --top 8
 ```
+
+If the archive already exists, which is every run after the first, snapshot BOTH halves in one command:
+
+```
+.claude/skills/run-curate-knowledge/fm-curate-knowledge.py measure \
+  /home/coditan/coditan-firstmate/data/learnings.md \
+  /home/coditan/coditan-firstmate/data/learnings-longterm.md \
+  --home /home/coditan/coditan-firstmate \
+  --save /tmp/pair-before.json --top 3
+```
+
+Real output from this home, abridged to the two heading lines:
+
+```
+FILE: /home/coditan/coditan-firstmate/data/learnings.md
+  headings          10 total, 9 at level 2 (the entry level)
+FILE: /home/coditan/coditan-firstmate/data/learnings-longterm.md
+  headings          265 total, 244 at level 2 (the entry level)
+```
+
+Those two numbers are why the pair matters.
+A re-run's after-state is loaded plus archive, so judging it against the loaded half alone compares 275 headings against 10 and fails a perfect curation.
+Step 5 names the pair with `--before-loaded` and `--before-archive`.
 
 ### 3. Inventory, then fill in the verdicts yourself
 
@@ -241,6 +266,50 @@ PRINTED EXAMPLE (3 output lines maximum)
 
 CHECK PASSED: headings 3 -> 2, bytes 2173 -> 345, every entry deletion is declared, and the archive is reachable from the loaded half.
 ```
+
+#### Re-runs, which is every run after the first
+
+A prune gets eaten back, so the archive already exists the next time.
+Name the pair the run started from and the whole after-state is compared like for like:
+
+```
+.claude/skills/run-curate-knowledge/fm-curate-knowledge.py check \
+  --before .curate-proof/rerun-before.json \
+  --before-loaded .curate-proof/home/data/cost-loaded.md \
+  --before-archive .curate-proof/home/data/cost-archive.md \
+  --worksheet .curate-proof/rerun-worksheet.md \
+  --loaded .curate-proof/home/data/cost-loaded-after.md \
+  --archive .curate-proof/home/data/cost-archive-after.md \
+  --home .curate-proof/home
+```
+
+The worked pair above, grown by two more real entries from this home's archive and then curated a second time - one split, one fold.
+
+Real output from that second run, abridged to the part after the header:
+
+```
+HEADINGS  before 4  ->  after 3 (loaded 1 + archive 2)
+          the before-state is the pair: loaded 3 + archive 1
+BYTES     before 2511  ->  loaded 494 (19.7% of the original still loads)
+
+COMPLETE ROUTE ASSERTION
+  route reaches 2 of 2 archived entries
+
+CHECK PASSED: headings 4 -> 3, bytes 2511 -> 494, every entry deletion is declared, and the archive is reachable from the loaded half.
+```
+
+Judging that same curation against the loaded half alone rejects it, because a two-file after-state was never comparable to one half.
+
+Real output from that run, abridged to the two lines that matter:
+
+```
+HEADINGS  before 3  ->  after 3 (loaded 1 + archive 2)
+FAIL  TOTAL heading count did not fall: 3 -> 3. Moving entries whole from one file to another leaves the total flat; that is the split executing while nothing is curated.
+```
+
+Verdicts are still owed only for the entries of the before-LOADED half, so a re-run inventories what accumulated rather than the whole archive.
+The existing archive's entries are accounted for by presence: one that leaves it without a verdict is an undeclared deletion, which a single-half baseline could never see.
+`report` takes the same two flags on a re-run.
 
 ### 6. Report
 

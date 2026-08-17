@@ -516,6 +516,10 @@ test_route_proof_cannot_write_real_files() {
   [ "$status" -eq 1 ] || fail "a sed -i route exited $status, expected 1"
   printf '%s' "$out" | grep -q 'documented route failed' \
     || fail "the sed -i route was not reported as failed"
+  # A refusal is the most security-relevant thing this gate says, so its reason
+  # travels on the FAIL line rather than only in the narration above it.
+  printf '%s' "$out" | grep -q 'FAIL  documented route failed: route command' \
+    || fail "the refused route's FAIL line carries no reason"
   [ "$(sha256sum "$TMP/after-archive.md")" = "$before_hash" ] \
     || fail "the sed -i route changed the real archive"
 
@@ -541,6 +545,8 @@ test_route_proof_cannot_write_real_files() {
   [ "$status" -eq 1 ] || fail "an unknown grep flag exited $status, expected 1"
   printf '%s' "$out" | grep -q 'not in the closed read-only set' \
     || fail "the unknown grep flag was not rejected"
+  printf '%s' "$out" | grep -q 'FAIL  documented route failed: route flag' \
+    || fail "the rejected flag's FAIL line carries no reason"
 
   mkdir -p "$TMP/fake-bin"
   fake_marker="$TMP/fake-grep-ran"
@@ -690,6 +696,22 @@ EOF
   [ "$status" -eq 1 ] || fail "a one-hit duplicate route exited $status, expected 1"
   printf '%s' "$out" | grep -q 'route reaches 1 of 2 archived entries' \
     || fail "duplicate route completeness did not count occurrences"
+
+  # `-m` is in the closed read-only set in both its spellings, so a route using
+  # the separated form is EXECUTED and then judged on coverage, rather than
+  # refused as an unknown flag. A route flag accepted by one spelling and
+  # unknown to the other is how an audited boundary stops describing itself.
+  sed "s|grep -m1 -n|grep -m 1 -n|" \
+    "$TMP/duplicate-route-two.md" >"$TMP/duplicate-route-spaced.md"
+  out=$("$DRIVER" check --before "$TMP/duplicate-before.json" \
+    --worksheet "$TMP/duplicate-ws.md" --loaded "$TMP/duplicate-route-spaced.md" \
+    --archive "$TMP/duplicate-archive-two.md" --home "$TMP" 2>&1) \
+    && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "a separated -m route exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'route reaches 1 of 2 archived entries' \
+    || fail "the separated -m form was not executed like the glued one"
+  printf '%s' "$out" | grep -q 'not in the closed read-only set' \
+    && fail "an enumerated read-only flag was rejected as unknown"
   pass "route completeness counts duplicate heading occurrences"
 }
 
@@ -717,6 +739,211 @@ EOF
   printf '%s' "$out" | grep -q 'not a heading index record' \
     || fail "body prose was not rejected as non-record route output"
   pass "route completeness counts only heading index records"
+}
+
+# The route proof builds a protected copy, and where it builds it matters: run
+# the documented way, `check` is invoked from the operational home, which this
+# program promises never to write to. So the proof lands in TMPDIR, and a
+# read-only working directory must not stop it.
+test_the_route_proof_never_writes_the_working_directory() {
+  local out status probe_dir leftover
+  mkdir -p "$TMP/proof-tmpdir" "$TMP/readonly-cwd"
+  chmod 0555 "$TMP/readonly-cwd"
+  out=$(cd "$TMP/readonly-cwd" && TMPDIR="$TMP/proof-tmpdir" "$DRIVER" check \
+    --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/after-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  chmod 0755 "$TMP/readonly-cwd"
+  [ "$status" -eq 0 ] || fail "check failed from a read-only working directory: $out"
+  [ -z "$(ls -A "$TMP/readonly-cwd")" ] \
+    || fail "the route proof wrote into the working directory"
+  [ -z "$(ls -A "$TMP/proof-tmpdir")" ] \
+    || fail "the route proof left its protected directory behind in TMPDIR"
+
+  # The protected bits are undone before removal, so a proof that ends any way
+  # other than normally still hands back a removable directory.
+  probe_dir=$(python3 - "$DRIVER" <<'PY'
+import importlib.util
+import os
+import sys
+import tempfile
+
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location("fm_curate_knowledge", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+path = tempfile.mkdtemp(prefix="fm-route-proof-probe-")
+with open(os.path.join(path, "archive.md"), "w", encoding="utf-8") as handle:
+    handle.write("## Entry\n")
+os.chmod(os.path.join(path, "archive.md"), 0o444)
+os.chmod(path, 0o555)
+module._register_proof_dir(path)
+print(path)
+PY
+  ) || fail "proof-directory cleanup probe crashed"
+  leftover=$(printf '%s' "$probe_dir" | tail -n1)
+  [ -n "$leftover" ] || fail "the cleanup probe reported no directory"
+  [ ! -e "$leftover" ] || fail "a protected proof directory survived the run"
+  pass "the route proof builds in TMPDIR and leaves nothing behind"
+}
+
+# A prune gets eaten back, which is the whole argument for an instrument rather
+# than a one-off cleanup. So every run after the first is a RE-RUN against an
+# archive that already exists, and the before-state is then the PAIR: comparing
+# a two-file after-state against one half fails a perfect curation on a heading
+# total that was never comparable.
+test_a_rerun_compares_against_the_existing_pair() {
+  local out status
+  cat >"$TMP/repeat-loaded.md" <<'EOF'
+# Store
+
+The incidents are not loaded at session start.
+Reach them with `grep -n '^## ' repeat-archive-after.md`.
+
+- **Alpha rule**: the one sentence that must be in hand first.
+
+## New fact A and the incident behind it
+
+The rule, then the incident that arrives with its own trigger.
+
+## New fact A seen a second time
+
+The same evening, the same measurement, told again.
+EOF
+  cat >"$TMP/repeat-archive.md" <<'EOF'
+# Store archive
+
+## Alpha rule and the incident behind it
+
+The rule, then a long incident narrative that arrives with its own trigger.
+
+## An older incident kept for the record
+
+Told once, in full, where a search will find it.
+EOF
+  "$DRIVER" measure "$TMP/repeat-loaded.md" "$TMP/repeat-archive.md" \
+    --home "$TMP" --save "$TMP/repeat-before.json" >/dev/null \
+    || fail "measure could not snapshot both halves of an existing pair"
+
+  # The worksheet's keys are the ones inventory emits for the loaded half, so a
+  # re-run curator inventories what grew rather than the whole archive.
+  "$DRIVER" inventory "$TMP/repeat-loaded.md" --out "$TMP/repeat-inventory.md" \
+    --home "$TMP" >/dev/null || fail "inventory of a re-run loaded half failed"
+  assert_grep 'key: new fact a and the incident behind it#1' "$TMP/repeat-inventory.md" \
+    "inventory does not emit the occurrence key a re-run worksheet names"
+  assert_grep 'key: new fact a seen a second time#1' "$TMP/repeat-inventory.md" \
+    "inventory does not emit the second occurrence key"
+  [ "$(grep -c '^key: ' "$TMP/repeat-inventory.md")" -eq 2 ] \
+    || fail "inventory of the loaded half asked for verdicts beyond it"
+
+  cat >"$TMP/repeat-ws.md" <<'EOF'
+--- entry 1
+key: new fact a and the incident behind it#1
+heading: New fact A and the incident behind it
+verdict: split
+why: rule now a bullet under Store in the loaded half
+
+--- entry 2
+key: new fact a seen a second time#1
+heading: New fact A seen a second time
+verdict: fold
+why: merged under New fact A and the incident behind it - one evening, one measurement
+EOF
+  cat >"$TMP/repeat-loaded-after.md" <<'EOF'
+# Store
+
+The incidents are not loaded at session start.
+Reach them with `grep -n '^## ' repeat-archive-after.md`.
+
+- **Alpha rule**: the one sentence that must be in hand first.
+- **New fact A**: the one sentence that must be in hand first.
+EOF
+  cat >"$TMP/repeat-archive-after.md" <<'EOF'
+# Store archive
+
+## Alpha rule and the incident behind it
+
+The rule, then a long incident narrative that arrives with its own trigger.
+
+## An older incident kept for the record
+
+Told once, in full, where a search will find it.
+
+## New fact A and the incident behind it
+
+The rule, then the incident that arrives with its own trigger.
+
+**Seen a second time the same evening:** told again.
+EOF
+
+  # The reported failure: the same correct curation judged against one half.
+  out=$("$DRIVER" check --before "$TMP/repeat-before.json" \
+    --before-file "$TMP/repeat-loaded.md" --worksheet "$TMP/repeat-ws.md" \
+    --loaded "$TMP/repeat-loaded-after.md" --archive "$TMP/repeat-archive-after.md" \
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "a single-half baseline accepted a re-run, expected 1"
+  printf '%s' "$out" | grep -q 'TOTAL heading count did not fall: 3 -> 5' \
+    || fail "the single-half baseline did not fail on the incomparable total"
+
+  # The same curation against the pair it actually started from.
+  out=$("$DRIVER" check --before "$TMP/repeat-before.json" \
+    --before-loaded "$TMP/repeat-loaded.md" --before-archive "$TMP/repeat-archive.md" \
+    --worksheet "$TMP/repeat-ws.md" --loaded "$TMP/repeat-loaded-after.md" \
+    --archive "$TMP/repeat-archive-after.md" --home "$TMP" 2>&1) \
+    && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "a re-run against the pair baseline exited $status: $out"
+  printf '%s' "$out" | grep -q 'HEADINGS  before 6  ->  after 5' \
+    || fail "the pair baseline does not sum the before-state across both halves"
+  printf '%s' "$out" | grep -q 'the before-state is the pair: loaded 3 + archive 3' \
+    || fail "the check does not say which baseline mode it used"
+  printf '%s' "$out" | grep -q 'route reaches 3 of 3 archived entries' \
+    || fail "the re-run route proof did not reach every archived entry"
+
+  out=$("$DRIVER" report --before "$TMP/repeat-before.json" \
+    --before-loaded "$TMP/repeat-loaded.md" --before-archive "$TMP/repeat-archive.md" \
+    --worksheet "$TMP/repeat-ws.md" --loaded "$TMP/repeat-loaded-after.md" \
+    --archive "$TMP/repeat-archive-after.md" --home "$TMP" 2>&1) \
+    && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "report refused a re-run against the pair baseline: $out"
+  printf '%s' "$out" | grep -q 'before 6  ->  after 5' \
+    || fail "the report does not carry the pair before-state"
+
+  # The reason the archive belongs in the baseline: an entry that leaves it
+  # silently must fail, and a single-half baseline can never see that.
+  grep -v 'An older incident kept for the record' "$TMP/repeat-archive-after.md" \
+    | grep -v 'Told once, in full' >"$TMP/repeat-archive-dropped.md"
+  sed 's|repeat-archive-after.md|repeat-archive-dropped.md|g' \
+    "$TMP/repeat-loaded-after.md" >"$TMP/repeat-loaded-dropped.md"
+  out=$("$DRIVER" check --before "$TMP/repeat-before.json" \
+    --before-loaded "$TMP/repeat-loaded.md" --before-archive "$TMP/repeat-archive.md" \
+    --worksheet "$TMP/repeat-ws.md" --loaded "$TMP/repeat-loaded-dropped.md" \
+    --archive "$TMP/repeat-archive-dropped.md" --home "$TMP" 2>&1) \
+    && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "a dropped archive entry exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'disappeared with no verdict accounting for them' \
+    || fail "the pair baseline does not account for the existing archive's entries"
+  printf '%s' "$out" | grep -q 'an older incident kept for the record' \
+    || fail "the undeclared archive deletion was not named"
+
+  # The mode is chosen from the arguments, never guessed.
+  out=$("$DRIVER" check --before "$TMP/repeat-before.json" \
+    --before-loaded "$TMP/repeat-loaded.md" --worksheet "$TMP/repeat-ws.md" \
+    --loaded "$TMP/repeat-loaded-after.md" --archive "$TMP/repeat-archive-after.md" \
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 2 ] || fail "half a pair baseline exited $status, expected 2"
+  printf '%s' "$out" | grep -q 'pass both or neither' \
+    || fail "the incomplete pair baseline does not say what is missing"
+
+  out=$("$DRIVER" check --before "$TMP/repeat-before.json" \
+    --before-file "$TMP/repeat-loaded.md" \
+    --before-loaded "$TMP/repeat-loaded.md" --before-archive "$TMP/repeat-archive.md" \
+    --worksheet "$TMP/repeat-ws.md" --loaded "$TMP/repeat-loaded-after.md" \
+    --archive "$TMP/repeat-archive-after.md" --home "$TMP" 2>&1) \
+    && status=0 || status=$?
+  [ "$status" -eq 2 ] || fail "mixed baseline modes exited $status, expected 2"
+  printf '%s' "$out" | grep -q 'cannot be combined' \
+    || fail "mixing a single and a pair baseline was not refused"
+  pass "a re-run is judged against the pair it started from"
 }
 
 test_measure_json_is_one_document() {
@@ -846,6 +1073,8 @@ test_duplicate_heading_occurrences_cannot_hide_a_deletion
 test_duplicate_occurrences_can_split_across_both_halves
 test_duplicate_route_hits_are_counted
 test_route_completeness_rejects_body_substrings
+test_the_route_proof_never_writes_the_working_directory
+test_a_rerun_compares_against_the_existing_pair
 test_measure_json_is_one_document
 test_the_two_shapes_never_borrow_each_others_method
 test_a_real_curation_passes_and_the_report_carries_the_ledger
