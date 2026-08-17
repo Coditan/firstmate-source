@@ -51,6 +51,50 @@
 # It is a guard against the regression that actually happened, not a sandbox.
 # tests/fm-board.test.sh pins both directions.
 #
+# THE VESSEL MARK
+# Every board carries the name of the vessel that BUILT it, so the captain can
+# see at a glance whose board he is reading. It is emitted here rather than
+# written by each board body, so a board cannot be built without it.
+#
+# The name is resolved, never hard-coded, along the same path every other
+# script in this repo uses for it: --vessel, then FM_BOARD_VESSEL, then
+# FM_BRIDGE_VESSEL, then $FM_HOME/config/bridge-vessel (first field of the
+# first line). If none of those yields a name, the mark is omitted and a
+# warning naming the file that was looked for goes to stderr - a missing config
+# file must not stop the captain's decisions from reaching him over a nameplate.
+#
+# It marks WHO BUILT the board, not what it is about: a board this vessel
+# builds concerning another vessel's work still carries this vessel's name.
+#
+# THE DECISION GUARD
+# A board that asks the captain to decide must offer him something to CLICK.
+# The rule exists because it was broken: a board carrying seven decisions put
+# every option in prose with no control anywhere, so the answers had to come
+# back through chat - the one channel this fleet has measured as having no
+# memory. A decision on a board gets answered; a decision in chat gets lost.
+#
+# So the same choke point that refuses a board reaching the network also
+# refuses a malformed decision, and it refuses on STRUCTURE the board itself
+# declares rather than on a reading of its prose:
+#
+#   - every `<form data-fm-question=...>` must carry at least two radio
+#     options, a `data-fm-note` field, and a `.fm-queued` box,
+#   - `--kind decision` must carry at least one such form.
+#
+# Both tests fire only on something the board declared about itself, so
+# neither can misfire on a report that merely DISCUSSES a decision. What is
+# deliberately NOT attempted is detecting a decision posed in prose: no textual
+# test can separate "here is a question for you" from a report describing one,
+# and a guard that misfires would be worked around rather than fixed. That gap
+# is covered by declaration instead - the /decisionboard skill passes
+# --kind decision - and it is stated in docs/board-layout.md rather than
+# papered over.
+#
+# The decision guard reads the BODY FRAGMENT, not the composed board: board.js
+# carries the component's markup in its own header comment, and a scan of the
+# composed file could not tell that documentation from a real form. This is the
+# same distinction css_regions draws for @import, answered the same way.
+#
 # Usage:
 #   fm-board.sh --title <title> --body <file|-> --out <path> [options]
 #   fm-board.sh --check <html-file>...
@@ -64,6 +108,8 @@
 #   --subtitle <s>   one dim line under the title (optional)
 #   --footer <s>     one dim line at the bottom, for provenance (optional)
 #   --lang <code>    document language (default: de)
+#   --kind <k>       report (default) or decision; decision requires a control
+#   --vessel <n>     override the vessel name shown in the header
 #   --check <f>...   run the no-network guard over existing files and exit
 #   --print-assets   print the paths of the versioned layout assets
 #
@@ -78,6 +124,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ASSETS="$SCRIPT_DIR/board-assets"
 CSS="$ASSETS/layout.css"
 JS="$ASSETS/board.js"
+FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}}"
+VESSEL_FILE="$FM_HOME/config/bridge-vessel"
 
 die() {
   printf 'fm-board.sh: %s\n' "$1" >&2
@@ -261,6 +309,106 @@ scan_remote_refs() {  # <file>
   ' || true
 }
 
+# resolve_vessel - print the name of the vessel building this board, or nothing.
+#
+# The name is READ, never written here: config/bridge-vessel is the one place
+# this vessel's name is recorded, and a second copy would be a second thing to
+# keep in step. The env names are the ones the rest of bin/ already honours.
+resolve_vessel() {
+  if [ -n "${FM_BOARD_VESSEL:-}" ]; then
+    printf '%s\n' "${FM_BOARD_VESSEL%% *}"
+    return 0
+  fi
+  if [ -n "${FM_BRIDGE_VESSEL:-}" ]; then
+    printf '%s\n' "${FM_BRIDGE_VESSEL%% *}"
+    return 0
+  fi
+  if [ -f "$VESSEL_FILE" ]; then
+    local line=""
+    IFS= read -r line < "$VESSEL_FILE" || line=""
+    line=${line%%[![:print:]]*}
+    line=${line#"${line%%[![:space:]]*}"}
+    line=${line%% *}
+    [ -z "$line" ] || { printf '%s\n' "$line"; return 0; }
+  fi
+  return 0
+}
+
+# scan_decision_defects - print one line per malformed declared question.
+#
+# Reads the BODY FRAGMENT with its newlines flattened, so a form whose markup is
+# wrapped across lines reads exactly like a one-line one. Every test below fires
+# only on a form the body itself marked with data-fm-question, so a report that
+# merely writes about a decision is never mistaken for one that poses it.
+scan_decision_defects() {  # <body-file> <kind>
+  tr '\n' ' ' < "$1" | awk -v kind="$2" '
+    function unquote(s,   sq) {
+      sq = sprintf("%c", 39)
+      gsub(/"/, "", s)
+      gsub(sq, "", s)
+      return s
+    }
+
+    {
+      doc = $0; low = tolower(doc); pos = 1
+      while (1) {
+        s = index(substr(low, pos), "<form")
+        if (s == 0) { break }
+        fstart = pos + s - 1
+        e = index(substr(low, fstart), "</form")
+        if (e == 0) { seg = substr(doc, fstart); pos = length(doc) + 1 }
+        else { seg = substr(doc, fstart, e - 1); pos = fstart + e }
+
+        lowseg = tolower(seg)
+        if (lowseg !~ /data-fm-question/) { continue }
+        found++
+
+        key = "(unnamed)"
+        if (match(seg, /data-fm-question[[:space:]]*=[[:space:]]*[^[:space:]>]+/)) {
+          key = unquote(substr(seg, RSTART, RLENGTH))
+          sub(/^[^=]*=[[:space:]]*/, "", key)
+        }
+
+        # Quotes are stripped before counting so a double-quoted, a
+        # single-quoted, and a bare attribute all count the same.
+        opts = 0; rest = unquote(lowseg)
+        while (match(rest, /type[[:space:]]*=[[:space:]]*radio/)) {
+          opts++
+          rest = substr(rest, RSTART + RLENGTH)
+        }
+        if (opts < 2) {
+          printf "  the question \"%s\" offers %d selectable option(s): a decision needs at least two, and they have to be real alternatives rather than one recommendation plus filler\n", key, opts
+        }
+        if (lowseg !~ /data-fm-note/) {
+          printf "  the question \"%s\" has no note field: every option set needs a textarea carrying data-fm-note beside it, because a note that contradicts the chosen option is what the captain actually meant\n", key
+        }
+        if (lowseg !~ /fm-queued/) {
+          printf "  the question \"%s\" has no .fm-queued box, so neither a queued answer nor an empty one could be shown\n", key
+        }
+      }
+    }
+
+    END {
+      if (kind == "decision" && found == 0) {
+        print "  --kind decision, but no part of this board carries a form with data-fm-question: it asks the captain to decide and gives him nothing to choose"
+      }
+    }
+  '
+}
+
+# decision_guard - refuse a board that asks for a decision it cannot receive.
+decision_guard() {  # <body-file> <kind>
+  local findings
+  findings=$(scan_decision_defects "$1" "$2")
+  if [ -n "$findings" ]; then
+    printf 'fm-board.sh: REFUSED - this board asks the captain to decide without giving him a control to decide with.\n' >&2
+    printf 'A decision must be selectable, with a note field beside it. See docs/board-layout.md.\n' >&2
+    printf '%s\n' "$findings" >&2
+    return 1
+  fi
+  return 0
+}
+
 # guard - refuse a board that would reach the network on load.
 guard() {  # <file> <label>
   local file=$1 label=$2 findings
@@ -280,6 +428,9 @@ OUT=""
 SUBTITLE=""
 FOOTER=""
 LANG_CODE="de"
+KIND="report"
+VESSEL=""
+VESSEL_SET=0
 MODE="build"
 CHECK_FILES=()
 
@@ -301,6 +452,20 @@ while [ "$#" -gt 0 ]; do
     --subtitle) [ "$#" -gt 1 ] || die "--subtitle needs a value"; SUBTITLE=$2; shift 2 ;;
     --footer) [ "$#" -gt 1 ] || die "--footer needs a value"; FOOTER=$2; shift 2 ;;
     --lang) [ "$#" -gt 1 ] || die "--lang needs a value"; LANG_CODE=$2; shift 2 ;;
+    --kind)
+      [ "$#" -gt 1 ] || die "--kind needs a value"
+      case "$2" in
+        report|decision) KIND=$2 ;;
+        *) die "unknown --kind '$2' (report or decision)" ;;
+      esac
+      shift 2
+      ;;
+    --vessel)
+      [ "$#" -gt 1 ] || die "--vessel needs a value"
+      VESSEL=$2
+      VESSEL_SET=1
+      shift 2
+      ;;
     *) die "unknown argument '$1' (see --help)" ;;
   esac
 done
@@ -340,6 +505,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Refuse an unanswerable decision before anything is composed or written.
+decision_guard "$BODY_FILE" "$KIND" || exit 1
+
+if [ "$VESSEL_SET" = 0 ]; then
+  VESSEL=$(resolve_vessel)
+fi
+if [ -z "$VESSEL" ]; then
+  printf 'fm-board.sh: no vessel name found, so this board carries no mark saying who built it.\n' >&2
+  printf 'Looked for --vessel, FM_BOARD_VESSEL, FM_BRIDGE_VESSEL, and %s.\n' "$VESSEL_FILE" >&2
+fi
+
 esc_title=$(html_escape "$TITLE")
 
 {
@@ -351,6 +527,7 @@ esc_title=$(html_escape "$TITLE")
   printf '<style>\n'
   cat "$CSS"
   printf '</style>\n</head>\n<body>\n<div class="fm-wrap">\n'
+  [ -z "$VESSEL" ] || printf '<div class="fm-mark">%s</div>\n' "$(html_escape "$VESSEL")"
   printf '<h1>%s</h1>\n' "$esc_title"
   [ -z "$SUBTITLE" ] || printf '<p class="fm-sub">%s</p>\n' "$(html_escape "$SUBTITLE")"
   cat "$BODY_FILE"

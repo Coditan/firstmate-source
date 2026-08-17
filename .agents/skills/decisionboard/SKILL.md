@@ -6,6 +6,7 @@ description: >-
   For one named undertaking and where it stands against its own destination, use the sea chart instead.
   Presents only: it groups the per-member panel records by originating investigation and keeps the judge's record where a judge ruled, without verifying that the judge covered every question the analysts raised, shows what each decision gates, and never records an answer.
   Shows only what the captain-actionable surface returns, which is not every open captain decision: one blocked by another record never reaches that surface and so never reaches this board.
+  Also carries the captain's three standing rules for every board this vessel builds: the fleet design system, this vessel's name in the header, and a selectable control with a note field for anything he is asked to decide.
 user-invocable: true
 metadata:
   internal: true
@@ -19,6 +20,30 @@ This skill **presents**.
 It never writes, resolves, reorders, or closes a decision.
 `.agents/skills/decision-hold-lifecycle` owns the decision lifecycle and `bin/fm-decision-hold.sh resolve` owns recording an answer.
 A board that quietly changed a record would put a second owner on that contract.
+
+## Three standing rules for every board and every Lavish surface
+
+Given by the captain on 2026-08-17, and binding on every board this vessel builds, not only decision boards.
+
+1. **The vessel's own design language.** Boards are built on `hlr-design-system`, operations mode, through `bin/fm-board.sh` and its versioned assets. Take that design as it is; never invent a look, and never hand-write a board's styling. `docs/board-layout.md` records what the design source is and which token each value comes from.
+2. **This vessel's name in the header.** The builder emits it from `config/bridge-vessel`, so it needs nothing from you - but if a board reaches the captain with no mark, that is the resolution failing, not a board that opted out. `docs/board-layout.md` owns the resolution order and the fallback.
+3. **A decision must be selectable.** Never options written into the prose for him to answer in free text. This is the one that has cost him answers, so the rest of this section is about it.
+
+### What rule 3 requires of you
+
+`bin/fm-board.sh` refuses a question with fewer than two options, or with no note field, or with no queued box, and `--kind decision` refuses a board that carries no question at all.
+**Pass `--kind decision` on every board this skill builds.**
+`docs/board-layout.md` owns the markup; `lavish-axi playbook input` owns the mechanics the component already implements.
+
+What the builder cannot check is whether the options are worth choosing between, and that is your part of it:
+
+- **Write real alternatives.** An option set that is one recommendation plus filler wastes the control and teaches him to answer in chat again. If a decision genuinely has one live path, it is not a decision - say so and take it off the board.
+- **Every option set carries a free-text note field, and the note is not decoration.** Measured on one board of twenty answers, two came back with a note that CONTRADICTED the selected option, and in both cases the note carried what he actually meant. So when you route answers in step 6, read the note first: where it conflicts with the option, the note is the answer. `board.js` queues it saying exactly that, but the reading is yours.
+- **A recommendation is still welcome** - mark it with `.fm-rec` - as long as the alternatives beside it are real.
+
+The evidence behind the rule: another vessel built him a board with seven decisions and no control anywhere, so every answer had to come back through chat.
+Chat is the channel this fleet has measured as having no memory: decisions raised in conversation get lost, decisions on a board get answered.
+They built the board and then made it a document.
 
 ## This board, or a sea chart
 
@@ -57,8 +82,9 @@ When one strategic answer settles five downstream questions, a flat list gives n
    See "Showing the gate structure" below.
 
 4. **Write the body fragment and build the board.**
-   `bin/fm-board.sh --title <t> --subtitle <s> --body <fragment> --out .lavish/<name>-<date>.html`
-   The builder owns the standard layout and refuses a board that would reach the network.
+   `bin/fm-board.sh --title <t> --subtitle <s> --kind decision --body <fragment> --out .lavish/<name>-<date>.html`
+   Every decision on it gets a real selectable control with a note field, per the three standing rules above.
+   The builder owns the standard layout, emits this vessel's name in the header, refuses a board that would reach the network, and refuses a decision the captain could not answer on the board.
    `docs/board-layout.md` lists the components and the markup each expects.
    Every decision card carries its `.fm-variants` block, per "Every folded record stays visible" below.
    Do not hand-write a board's styling or scripting: that is exactly the drift this layout exists to stop.
@@ -68,6 +94,7 @@ When one strategic answer settles five downstream questions, a flat list gives n
 
 6. **Poll for the captain's answers,** then route each one through `bin/fm-decision-hold.sh resolve` under the `decision-hold-lifecycle` contract.
    The board queues the captain's answers; it does not record them.
+   Read each answer's note before its selected option: where the two conflict, the note is what he meant.
 
 ## Showing the gate structure
 

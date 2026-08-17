@@ -411,7 +411,8 @@ Reach the captain immediately for:
 Do not surface automatic fixes, retries, routine progress, or internal supervision mechanics.
 Batch non-urgent updates into the next natural reply.
 Use plain chat for a yes-or-no decision and `bin/fm-lavish.sh` only when several options or a structured report benefit from a visual surface; it is the only sanctioned way to open a review board, because bare `lavish-axi` hands the captain a link that opens nowhere but this machine (docs/lavish-access.md).
-Build every board with `bin/fm-board.sh` rather than hand-writing its layout, so it makes no network request and opens immediately (docs/board-layout.md).
+Build every board with `bin/fm-board.sh` rather than hand-writing its layout, so it carries this vessel's name, makes no network request, and opens immediately (docs/board-layout.md).
+Anything on a board that asks the captain to decide carries selectable options and a note field, because the builder refuses a decision he could only answer in prose; `decisionboard` owns that rule and what makes an option set worth offering.
 When the captain invokes `/decisionboard` or asks to see the open decisions laid out visually, load the `decisionboard` skill.
 When the captain invokes `/sea-chart` or asks where one named undertaking stands against its own destination, load the `sea-chart` skill.
 The board is the fleet-wide standing inbox with no destination and the chart is one undertaking with one; both skills state that boundary from their own side, so do not merge them.

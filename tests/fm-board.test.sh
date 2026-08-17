@@ -16,6 +16,21 @@ set -u
 BOARD="$ROOT/bin/fm-board.sh"
 fm_test_tmproot TMP_ROOT fm-board
 
+# The vessel mark is resolved from this home's configuration, which is not
+# tracked, so every build below is pinned to a known name. The resolution order
+# itself is exercised by test_the_board_carries_the_building_vessels_name.
+export FM_BOARD_VESSEL=testschiff
+
+# A well-formed decision question, in the shape bin/fm-board.sh now requires:
+# at least two real options, a note field beside them, and a box to report what
+# was queued. Every test that needs a valid decision uses this one.
+DECISION_FORM='<form data-fm-question="f" data-fm-label="Eine Frage"><div class="fm-opts">
+    <label class="fm-opt"><input type="radio" name="f" value="ja"><span>Ja</span></label>
+    <label class="fm-opt"><input type="radio" name="f" value="nein"><span>Nein</span></label></div>
+    <textarea class="fm-free" data-fm-note placeholder="Anmerkung"></textarea>
+    <button type="submit" class="fm-submit">Antwort vormerken</button>
+    <div class="fm-queued"></div></form>'
+
 # build <body-html> -> writes $TMP_ROOT/out.html; records exit and stderr.
 BUILD_STATUS_FILE=$TMP_ROOT/build-status
 BUILD_ERR_FILE=$TMP_ROOT/build-stderr
@@ -227,10 +242,7 @@ test_two_different_board_shapes_share_the_layout() {
   local decision report status=0
   decision='<div class="fm-grid"><div class="fm-card is-gate"><div class="fm-chead">
     <div class="fm-num">1</div><div class="fm-ctitle">Eine Frage</div></div>
-    <form data-fm-question="f" data-fm-label="Eine Frage"><div class="fm-opts">
-    <label class="fm-opt"><input type="radio" name="f" value="ja"><span>Ja</span></label></div>
-    <button type="submit" class="fm-submit">Antwort vormerken</button>
-    <div class="fm-queued"></div></form></div></div>'
+    '$DECISION_FORM'</div></div>'
   build "$decision"
   expect_code 0 "$(build_status)" "the decision shape must build"
   # Match the MARKUP form, not the bare class name: every board inlines the full
@@ -253,6 +265,124 @@ test_two_different_board_shapes_share_the_layout() {
   pass "two structurally different boards build from the one shared layout"
 }
 
+# --- a decision has to be answerable on the board ----------------------------
+
+test_a_decision_must_be_selectable() {
+  # The rule this pins was broken before it was written: a board carrying seven
+  # decisions put every option in prose with no control anywhere, so the answers
+  # had to come back through chat - the channel this fleet has measured as
+  # having no memory. The refusal lives at the same choke point as the network
+  # guard, for the same reason: a rule that lived in prose is the rule that
+  # failed.
+  local case_html label
+  local cases=(
+    "one option is not a choice|<form data-fm-question=\"f\"><input type=\"radio\" name=\"f\" value=\"ja\"><textarea data-fm-note></textarea><div class=\"fm-queued\"></div></form>"
+    "no note field beside the options|<form data-fm-question=\"f\"><input type=\"radio\" name=\"f\" value=\"ja\"><input type=\"radio\" name=\"f\" value=\"nein\"><div class=\"fm-queued\"></div></form>"
+    "no box to report what was queued|<form data-fm-question=\"f\"><input type=\"radio\" name=\"f\" value=\"ja\"><input type=\"radio\" name=\"f\" value=\"nein\"><textarea data-fm-note></textarea></form>"
+    "a question whose markup spans lines is read the same way|<form
+       data-fm-question=\"f\"><input
+       type=\"radio\" name=\"f\" value=\"ja\"><div class=\"fm-queued\"></div></form>"
+  )
+  for case_html in "${cases[@]}"; do
+    label=${case_html%%|*}
+    build "${case_html#*|}"
+    expect_code 1 "$(build_status)" "a decision board must be refused: $label"
+    assert_absent "$OUT" "a refused decision board must not be written: $label"
+    assert_contains "$(build_stderr)" "REFUSED" "the refusal must say so: $label"
+  done
+
+  # A board that DECLARES itself a decision board and carries no control at all
+  # is the exact failure that prompted this rule, and prose cannot be scanned
+  # for it - so the declaration is what catches it.
+  local status=0
+  rm -f "$OUT"
+  printf '%s\n' '<p>Option A oder Option B? Antworte im Chat.</p>' > "$TMP_ROOT/body.html"
+  "$BOARD" --title "T" --kind decision --body "$TMP_ROOT/body.html" --out "$OUT" \
+    >/dev/null 2>"$BUILD_ERR_FILE" || status=$?
+  expect_code 1 "$status" "--kind decision with no control anywhere must be refused"
+  assert_contains "$(build_stderr)" "data-fm-question" \
+    "the refusal must name what is missing"
+
+  # And the well-formed shape still builds, through both kinds.
+  build "$DECISION_FORM"
+  expect_code 0 "$(build_status)" \
+    "a question with two options, a note field and a queued box must build"$'\n'"$(build_stderr)"
+  status=0
+  rm -f "$OUT"
+  "$BOARD" --title "T" --kind decision --body "$TMP_ROOT/body.html" --out "$OUT" \
+    >/dev/null 2>"$BUILD_ERR_FILE" || status=$?
+  expect_code 0 "$status" "--kind decision must accept a board that carries one"
+  pass "a board that asks the captain to decide must give him something to select"
+}
+
+test_a_report_about_decisions_is_not_mistaken_for_one() {
+  # The mirror of the prose test above: the decision guard fires only on
+  # structure a board DECLARED about itself, so a report that discusses
+  # decisions, options, and note fields at length is untouched by it. A guard
+  # that misfired here would be worked around rather than fixed.
+  build '<h2>Entscheidungen</h2><p>Diese Untersuchung nennt zwei Optionen und
+    empfiehlt die erste. Ein data-fm-note-Feld gehoert neben jede Optionsliste,
+    und ein Formular mit data-fm-question traegt sie.</p>
+    <table class="fm-table"><tr><td>Option A</td><td>Option B</td></tr></table>'
+  expect_code 0 "$(build_status)" \
+    "a report that writes about decisions must build"$'\n'"$(build_stderr)"
+
+  # The pinned worked example is a report, and it must keep building untouched.
+  local status=0
+  rm -f "$OUT"
+  "$BOARD" --title "Bericht" --body "$ROOT/docs/examples/board-body-report.html" \
+    --out "$OUT" >/dev/null 2>"$BUILD_ERR_FILE" || status=$?
+  expect_code 0 "$status" "the worked report example must still build"
+  pass "a report that merely writes about a decision is not mistaken for one"
+}
+
+# --- whose board is this -----------------------------------------------------
+
+test_the_board_carries_the_building_vessels_name() {
+  # The captain reads boards from several vessels. The mark says which one built
+  # this board, and the generator writes it so a board body cannot omit it.
+  local home=$TMP_ROOT/vessel-home status
+  mkdir -p "$home/config"
+  printf 'segelschiff\n' > "$home/config/bridge-vessel"
+  printf '%s\n' '<p>Inhalt</p>' > "$TMP_ROOT/body.html"
+
+  # 1. read from this home's configuration, which is where the name already
+  #    lives - never a second copy of it.
+  rm -f "$OUT"
+  ( unset FM_BOARD_VESSEL FM_BRIDGE_VESSEL
+    FM_HOME=$home "$BOARD" --title "T" --body "$TMP_ROOT/body.html" --out "$OUT" \
+      >/dev/null 2>"$BUILD_ERR_FILE" )
+  assert_grep 'class="fm-mark">segelschiff<' "$OUT" \
+    "the vessel name from config/bridge-vessel must appear in the header"
+
+  # 2. an explicit override wins, so a board can be built for another seat.
+  rm -f "$OUT"
+  FM_HOME=$home "$BOARD" --title "T" --vessel dampfer --body "$TMP_ROOT/body.html" \
+    --out "$OUT" >/dev/null 2>"$BUILD_ERR_FILE"
+  assert_grep 'class="fm-mark">dampfer<' "$OUT" "--vessel must override the configured name"
+
+  # 3. the mark is escaped like every other caller-supplied string.
+  rm -f "$OUT"
+  "$BOARD" --title "T" --vessel '<b>x</b>' --body "$TMP_ROOT/body.html" --out "$OUT" \
+    >/dev/null 2>"$BUILD_ERR_FILE"
+  assert_no_grep 'class="fm-mark"><b>' "$OUT" "the vessel name must be escaped, not injected"
+
+  # 4. with no name anywhere the board is still BUILT: a missing config file
+  #    must not hold up the captain's decisions over a nameplate. It says so.
+  rm -f "$OUT"
+  status=0
+  ( unset FM_BOARD_VESSEL FM_BRIDGE_VESSEL
+    FM_HOME=$TMP_ROOT/no-such-home "$BOARD" --title "T" --body "$TMP_ROOT/body.html" \
+      --out "$OUT" >/dev/null 2>"$BUILD_ERR_FILE" ) || status=$?
+  expect_code 0 "$status" "a board with no vessel name must still be built"
+  # Match the MARKUP form: every board inlines the stylesheet, which names the
+  # class itself, so grepping the bare class name would pass on any board.
+  assert_no_grep 'class="fm-mark"' "$OUT" "with no name resolved there is no mark to show"
+  assert_contains "$(build_stderr)" "bridge-vessel" \
+    "the warning must name the file it looked for, so the gap can be closed"
+  pass "every board carries the name of the vessel that built it"
+}
+
 test_layout_lives_in_one_place() {
   # The point of the whole change: the layout is an artifact agents INCLUDE, not
   # one they retype. If the assets stop existing, boards would drift again.
@@ -269,10 +399,10 @@ test_layout_lives_in_one_place() {
 # --- board behavior, exercised as logic rather than rendering ----------------
 
 test_board_behavior_contract() {
-  # This vessel has no working browser (an open captain decision), so the
-  # decision controls are checked as LOGIC against a DOM stand-in. That proves
-  # what the script does on a served board and on one opened straight from disk;
-  # it proves nothing about how a board looks, and does not pretend to.
+  # The decision controls are checked as LOGIC against a DOM stand-in, so they
+  # run anywhere without a browser. That proves what the script does on a served
+  # board and on one opened straight from disk; it proves nothing about how a
+  # board looks, and does not pretend to.
   local behavior=$ROOT/tests/fm-board-behavior.test.mjs
   assert_present "$behavior" "the board behavior checks are missing"
   command -v node >/dev/null 2>&1 || { echo "skip: node not found"; return 0; }
@@ -293,6 +423,9 @@ test_board_is_self_contained
 test_board_escapes_its_title
 test_check_mode_reports_both_verdicts
 test_missing_required_arguments_are_refused
+test_a_decision_must_be_selectable
+test_a_report_about_decisions_is_not_mistaken_for_one
+test_the_board_carries_the_building_vessels_name
 test_layout_lives_in_one_place
 test_two_different_board_shapes_share_the_layout
 test_board_behavior_contract

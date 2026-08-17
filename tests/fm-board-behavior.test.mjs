@@ -1,8 +1,8 @@
 // Runtime checks for bin/board-assets/board.js, driven by tests/fm-board.test.sh.
 //
-// This vessel has no working browser (an open captain decision), so these are
-// LOGIC checks against a minimal DOM stand-in, not rendering checks. They prove
-// what the script does; they say nothing about how a board looks.
+// These are LOGIC checks against a minimal DOM stand-in, not rendering checks,
+// so they run anywhere without a browser. They prove what the script does; they
+// say nothing about how a board looks, and are not meant to.
 //
 // Behaviors worth pinning:
 //   1. A board opened straight from disk has no window.lavish. That is a normal

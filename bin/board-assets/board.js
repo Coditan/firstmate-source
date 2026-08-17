@@ -61,12 +61,18 @@
     return { choice: choice ? String(choice) : '', note: text };
   }
 
+  // The note is not a comment on the choice. Measured on one board of twenty
+  // answers, two came back with a note that CONTRADICTED the selected option,
+  // and in both cases the note carried what the captain actually meant. So a
+  // note that is present is queued as the governing part of the answer, said
+  // in words, rather than trailing the option as an aside an agent may skim.
   function promptFor(label, answer) {
     var parts = [];
     parts.push('Entscheidung "' + label + '": ');
     parts.push(answer.choice ? answer.choice : '(keine Option gewählt)');
     if (answer.note) {
-      parts.push(' - Anmerkung des Captains: ' + answer.note);
+      parts.push('\nAnmerkung des Captains: ' + answer.note);
+      parts.push('\nWiderspricht die Anmerkung der gewählten Option, gilt die Anmerkung.');
     }
     return parts.join('');
   }
@@ -177,12 +183,12 @@
     }, 2000);
   }
 
-  // docs/board-layout.md states two rules a board body has to follow: the radio
-  // name equals data-fm-question, and every question form carries a .fm-queued
-  // box. Neither can be enforced from prose, and a board that breaks either one
-  // builds and renders, so both are named on the console at startup. Breaking
-  // the first costs nothing, because answerOf falls back to the form's own
-  // checked control; breaking the second is what would make a submit silent.
+  // bin/fm-board.sh REFUSES a built board whose question offers fewer than two
+  // options, or carries no note field or no .fm-queued box. These warnings are
+  // the same checks at runtime, for the one case the builder cannot see: a
+  // board file edited by hand after it was built. The radio-name rule is
+  // checked only here, because breaking it costs nothing - answerOf falls back
+  // to the form's own checked control - so it is not worth a refusal.
   function reportFormDefects(form) {
     if (!window.console || !window.console.warn) {
       return;
@@ -192,13 +198,21 @@
       window.console.warn('fm-board: the form for "' + key +
         '" has no .fm-queued box, so nothing on it can report a queued or an empty answer.');
     }
+    if (form.querySelector && !form.querySelector('[data-fm-note]')) {
+      window.console.warn('fm-board: the question "' + key +
+        '" has no note field, so a note that contradicts the chosen option has nowhere to go.');
+    }
     if (!form.querySelectorAll) {
       return;
     }
-    var radios = form.querySelectorAll('input[type="radio"]');
-    for (var i = 0; i < radios.length; i++) {
-      if (radios[i].name && radios[i].name !== key) {
-        window.console.warn('fm-board: radio name "' + radios[i].name +
+    var opts = form.querySelectorAll('input[type="radio"]');
+    if (opts.length < 2) {
+      window.console.warn('fm-board: the question "' + key + '" offers ' + opts.length +
+        ' selectable option(s); a decision needs at least two real alternatives.');
+    }
+    for (var i = 0; i < opts.length; i++) {
+      if (opts[i].name && opts[i].name !== key) {
+        window.console.warn('fm-board: radio name "' + opts[i].name +
           '" does not match data-fm-question "' + key +
           '"; the answer is read from the form instead.');
         return;

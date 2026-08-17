@@ -6,49 +6,162 @@
  * refused by the builder, which is what keeps the no-network guarantee true
  * rather than merely intended.
  *
+ * THE DESIGN SOURCE
+ * The palette, radii, and type stacks below are the OPERATIONS mode of
+ * heavyliftrental/hlr-design-system, read at css/hlr-tokens.css,
+ * css/modes/operations.css, and css/hlr-base.css. Operations is the mode for
+ * internal operator tools; a board is one, so the public brand mode and the
+ * paper mode are both wrong for it.
+ *
+ * Every colour here is a token COPIED from that source, with its
+ * --hlr-* name kept beside it, so a reader can check the value against the
+ * design system rather than take it on trust. No colour on this page was
+ * chosen here. Where a value the board needs is one the tokens do not carry,
+ * that is recorded as a finding, not filled in with a hex code.
+ *
+ * The tokens are copied rather than @imported for one reason: the builder
+ * refuses an @import, because a board must render opened straight from disk
+ * with no sibling files. That makes this file a snapshot of the design system,
+ * and re-checking it against the source is part of maintaining it.
+ *
+ * TYPOGRAPHY, AND WHY NO FONT FILE IS EMBEDDED
+ * Operations mode does not use Montserrat. Montserrat is the PUBLIC brand
+ * mode's face (--hlr-brand-public-font-sans); operations mode's own three
+ * stacks - body, headline, and data - are pure system stacks that ship no font
+ * file at all. Following the mode therefore costs nothing and fetches nothing.
+ * docs/board-layout.md records the measurement behind that.
+ *
  * Class names are prefixed fm- so a board body can add its own classes without
  * colliding with the layout contract. docs/board-layout.md lists the components
- * and the markup each one expects.
+ * and the markup each one expects. The --fm-* custom property names are part of
+ * that contract too: board bodies and the board generators set segment and
+ * legend colours with them, so the names stay stable across a re-skin and only
+ * the values behind them move.
  */
 
 :root {
-  --fm-bg: #f6f7f9;
-  --fm-panel: #ffffff;
-  --fm-panel-2: #f0f2f5;
-  --fm-ink: #12151a;
-  --fm-dim: #5b6470;
-  --fm-line: #dde1e7;
-  --fm-accent: #1f6feb;
-  --fm-accent-soft: #e8f0fe;
-  --fm-hot: #b23c08;
-  --fm-hot-soft: #fff1e7;
-  --fm-calm: #0f766e;
-  --fm-calm-soft: #e6f4f1;
-  --fm-gate: #6d28d9;
-  --fm-gate-soft: #f1eaff;
-  --fm-shadow: 0 1px 2px rgba(16, 20, 26, .06), 0 4px 14px rgba(16, 20, 26, .05);
-  --fm-r: 12px;
+  /* ---- hlr-design-system tokens, operations mode ----------------------
+   * Copied from css/hlr-tokens.css. The source cites VAT-Steward's inline
+   * style as the operational precedent for the --hlr-operation-* values and
+   * VAT-Steward plus HLR public teal-dark for the --hlr-semantic-* ones. */
+  --hlr-operation-gunmetal: #14181c;
+  --hlr-operation-steel: #232a31;
+  --hlr-operation-steel-2: #2f3841;
+  --hlr-operation-paper: #e9edf0;
+  --hlr-operation-plate: #ffffff;
+  --hlr-operation-plate-2: #f5f7f9;
+  --hlr-operation-ink: #161b1f;
+  --hlr-operation-sub: #59646d;
+  --hlr-operation-faint: #c7ced2;
+  --hlr-operation-line: #dde2e5;
+  --hlr-operation-action: #e8590c;
+  --hlr-operation-font-body: Arial, Helvetica, sans-serif;
+  --hlr-operation-font-data: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --hlr-operation-font-headline: "Arial Narrow", "Roboto Condensed", "DIN Condensed", Arial, sans-serif;
+  --hlr-semantic-success: #1f7a4d;
+  --hlr-semantic-warn: #b8860b;
+  --hlr-semantic-error: #b0261e;
+  --hlr-semantic-info: #0F7E80;
+
+  /* Copied from css/modes/operations.css: operations mode is SQUARE. Panels
+   * carry no radius at all and controls carry 4px. That is the mode's own
+   * choice, and it is most of why a board built on it does not look generic. */
+  --hlr-radius-panel: 0;
+  --hlr-radius-control: 4px;
+
+  /* ---- the board contract, mapped onto those tokens ------------------- */
+  --fm-bg: var(--hlr-operation-paper);
+  --fm-panel: var(--hlr-operation-plate);
+  --fm-panel-2: var(--hlr-operation-plate-2);
+  --fm-ink: var(--hlr-operation-ink);
+  --fm-dim: var(--hlr-operation-sub);
+  --fm-line: var(--hlr-operation-line);
+
+  /* Operations mode separates two roles the old palette ran together, and the
+   * separation is worth keeping: --hlr-color-accent is gunmetal (structure,
+   * emphasis, the instrument itself) and --hlr-color-action is orange (the
+   * thing you press). So orange appears ONLY on interactive surfaces here. */
+  --fm-accent: var(--hlr-operation-gunmetal);
+  --fm-action: var(--hlr-operation-action);
+
+  /* The ink that sits ON a filled swatch - a numbered plate, a completed step,
+   * a distribution segment, the submit control. One name, so a filled surface
+   * and its text can never drift apart across the two colour schemes. */
+  --fm-on-fill: var(--hlr-operation-plate);
+
+  --fm-hot: var(--hlr-semantic-error);
+  --fm-warn: var(--hlr-semantic-warn);
+  --fm-calm: var(--hlr-semantic-success);
+  --fm-gate: var(--hlr-semantic-info);
+
+  /* The four state colours again, lightened for use ON a dark surface: the
+   * instrument readout in either scheme, and every state colour in the dark
+   * one. They are computed from the same tokens rather than picked, so there is
+   * still exactly one place a state colour is decided. Without color-mix they
+   * fall back to the token itself, which is dimmer on gunmetal but never
+   * wrong. */
+  --fm-hot-lit: var(--hlr-semantic-error);
+  --fm-warn-lit: var(--hlr-semantic-warn);
+  --fm-calm-lit: var(--hlr-semantic-success);
+  --fm-gate-lit: var(--hlr-semantic-info);
+
+  /* The -soft names stay because board bodies written before this re-skin use
+   * them. They no longer name six separate tints: operations mode carries state
+   * in an outline and a rule, not in a pastel fill, so they all resolve to the
+   * one recessed plate and the meaning is carried by the border beside them. */
+  --fm-accent-soft: var(--hlr-operation-plate-2);
+  --fm-hot-soft: var(--hlr-operation-plate-2);
+  --fm-calm-soft: var(--hlr-operation-plate-2);
+  --fm-gate-soft: var(--hlr-operation-plate-2);
+
+  /* Operations mode's own panel shadow (0 22px 52px rgba(0,0,0,.38)) belongs to
+   * a floating shell, and a board has none - it is a flat instrument face. So
+   * structure is carried by hairline rules, exactly as the mode's own topbar
+   * does. The name stays for bodies that reference it. */
+  --fm-shadow: none;
+
+  --fm-r: var(--hlr-radius-panel);
+  --fm-r-control: var(--hlr-radius-control);
+
+  --fm-font-body: var(--hlr-operation-font-body);
+  --fm-font-head: var(--hlr-operation-font-headline);
+  --fm-font-data: var(--hlr-operation-font-data);
+
   color-scheme: light dark;
 }
 
+@supports (color: color-mix(in srgb, red 35%, blue)) {
+  :root {
+    --fm-hot-lit: color-mix(in srgb, var(--hlr-semantic-error) 35%, var(--hlr-operation-paper));
+    --fm-warn-lit: color-mix(in srgb, var(--hlr-semantic-warn) 35%, var(--hlr-operation-paper));
+    --fm-calm-lit: color-mix(in srgb, var(--hlr-semantic-success) 35%, var(--hlr-operation-paper));
+    --fm-gate-lit: color-mix(in srgb, var(--hlr-semantic-info) 35%, var(--hlr-operation-paper));
+  }
+}
+
+/* Dark scheme. The operations tokens supply their own inversion - the mode
+ * already carries a dark instrument family (gunmetal, steel, steel-2) beside
+ * its light plates - so nothing new is introduced here, only re-pointed. */
 @media (prefers-color-scheme: dark) {
   :root {
-    --fm-bg: #0e1116;
-    --fm-panel: #161b22;
-    --fm-panel-2: #1c232c;
-    --fm-ink: #e6edf3;
-    --fm-dim: #9aa4b2;
-    --fm-line: #2a313b;
-    --fm-accent: #58a6ff;
-    --fm-accent-soft: #122238;
-    --fm-hot: #ff9057;
-    --fm-hot-soft: #2c1810;
-    --fm-calm: #3fd0bd;
-    --fm-calm-soft: #0e2724;
-    --fm-gate: #b48cff;
-    --fm-gate-soft: #221a35;
-    --fm-shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 4px 14px rgba(0, 0, 0, .3);
+    --fm-bg: var(--hlr-operation-gunmetal);
+    --fm-panel: var(--hlr-operation-steel);
+    --fm-panel-2: var(--hlr-operation-steel-2);
+    --fm-ink: var(--hlr-operation-paper);
+    --fm-dim: var(--hlr-operation-faint);
+    --fm-line: var(--hlr-operation-steel-2);
+    --fm-accent: var(--hlr-operation-paper);
+    --fm-on-fill: var(--hlr-operation-gunmetal);
+    --fm-hot: var(--fm-hot-lit);
+    --fm-warn: var(--fm-warn-lit);
+    --fm-calm: var(--fm-calm-lit);
+    --fm-gate: var(--fm-gate-lit);
+    --fm-accent-soft: var(--hlr-operation-steel-2);
+    --fm-hot-soft: var(--hlr-operation-steel-2);
+    --fm-calm-soft: var(--hlr-operation-steel-2);
+    --fm-gate-soft: var(--hlr-operation-steel-2);
   }
+
 }
 
 /* min-width:0 on every element is what stops a long unbreakable token from
@@ -67,7 +180,9 @@ body {
   margin: 0;
   background: var(--fm-bg);
   color: var(--fm-ink);
-  font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--fm-font-body);
+  font-size: 15px;
+  line-height: 1.5;
   padding: clamp(14px, 2.5vw, 32px);
   /* Body-level horizontal scrolling is prevented by SIZING - min-width:0
    * everywhere, minmax(0,1fr) tracks, and .fm-scroll around anything genuinely
@@ -77,13 +192,20 @@ body {
    * reported; silently cut-off content is not. */
 }
 
+/* The operations body face is Arial, which ships 400 and 700 and nothing
+ * between. Every emphasis in this file is therefore 700, never 600: asking for
+ * a weight the face does not have gets a synthesised one that looks wrong next
+ * to a real bold. */
+
 code, kbd, samp, pre, .fm-mono {
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-family: var(--fm-font-data);
+  font-variant-numeric: tabular-nums;
 }
 
 code {
   background: var(--fm-panel-2);
-  border-radius: 5px;
+  border: 1px solid var(--fm-line);
+  border-radius: var(--fm-r-control);
   padding: 1px 5px;
   font-size: .92em;
   /* A long identifier must wrap rather than widen its column. */
@@ -95,26 +217,66 @@ code {
   margin: 0 auto;
 }
 
+/* The nameplate. Operations mode's shell sets a condensed uppercase headline
+ * over a hairline rule, with the provenance line beside it in the data face -
+ * a board's title and subtitle are exactly that pair, so they are set that
+ * way.
+ *
+ * .fm-mark is the vessel that BUILT the board, emitted by bin/fm-board.sh and
+ * never by a board body. It is a stamped plate rather than a line of text
+ * because that is what it is: an identity, not a statement. */
+.fm-mark {
+  display: inline-block;
+  background: var(--hlr-operation-gunmetal);
+  color: var(--hlr-operation-paper);
+  font-family: var(--fm-font-head);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  /* The tracking is applied to the right of each letter, including the last
+   * one, so without this the plate looks padded wrong on its right edge. */
+  padding: 4px 8px 4px 10px;
+  border-radius: var(--fm-r-control);
+  margin: 0 0 10px;
+}
+
 h1 {
-  font-size: clamp(20px, 2.6vw, 30px);
-  margin: 0 0 4px;
-  letter-spacing: -.02em;
-  line-height: 1.2;
+  font-family: var(--fm-font-head);
+  font-size: clamp(26px, 3.6vw, 40px);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .01em;
+  line-height: .98;
+  margin: 0 0 22px;
+  padding-bottom: 14px;
+  border-bottom: 2px solid var(--fm-ink);
+}
+
+/* --subtitle is optional, so the nameplate rule sits under whichever of the
+ * two is last. */
+h1:has(+ .fm-sub) {
+  margin-bottom: 8px;
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 
 h2 {
-  font-size: 15px;
-  letter-spacing: .08em;
+  font-family: var(--fm-font-head);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: .12em;
   text-transform: uppercase;
   color: var(--fm-dim);
-  margin: 34px 0 12px;
-  font-weight: 600;
+  border-top: 1px solid var(--fm-line);
+  padding-top: 11px;
+  margin: 36px 0 12px;
 }
 
 h3 {
   font-size: 15px;
+  font-weight: 700;
   margin: 0;
-  letter-spacing: -.01em;
 }
 
 p {
@@ -122,9 +284,16 @@ p {
 }
 
 .fm-sub {
+  font-family: var(--fm-font-data);
+  font-variant-numeric: tabular-nums;
   color: var(--fm-dim);
+  font-size: 13px;
   margin: 0 0 22px;
-  font-size: 14px;
+  padding-bottom: 14px;
+  /* Heavier than the hairlines below it, and in the ink rather than the line
+   * colour: this rule closes the nameplate, so it is not the same rule that
+   * separates one register of the board from the next. */
+  border-bottom: 2px solid var(--fm-ink);
 }
 
 .fm-note {
@@ -141,7 +310,16 @@ p {
   max-width: 100%;
 }
 
-/* ---- stat strip ---- */
+/* ---- stat strip, as the instrument readout ----------------------------
+ * This is the design system's own readout component (designsync/13): a dark
+ * plate, an uppercase condensed label, and a tabular-mono value. It is the one
+ * loud element on a board, which is why everything around it stays quiet - and
+ * it is loud in the right place, because the stat strip is the line a reader
+ * scans first.
+ *
+ * State is an annunciator rule down the left edge, and the label takes the same
+ * colour in its lightened form. The value itself stays paper-coloured in every
+ * state: a number is for reading, not for signalling. */
 .fm-stats {
   display: grid;
   gap: 10px;
@@ -150,30 +328,41 @@ p {
 }
 
 .fm-stat {
-  background: var(--fm-panel);
-  border: 1px solid var(--fm-line);
-  border-radius: var(--fm-r);
-  padding: 12px 14px;
-  box-shadow: var(--fm-shadow);
+  background: var(--hlr-operation-gunmetal);
+  color: var(--hlr-operation-paper);
+  border: 1px solid var(--hlr-operation-steel-2);
+  border-left: 4px solid var(--hlr-operation-steel-2);
+  border-radius: var(--fm-r-control);
+  padding: 13px 15px;
 }
 
 .fm-stat b {
   display: block;
-  font-size: 26px;
-  line-height: 1.1;
-  letter-spacing: -.02em;
+  font-family: var(--fm-font-data);
+  font-variant-numeric: tabular-nums;
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.05;
+  color: var(--hlr-operation-paper);
 }
 
 .fm-stat span {
   display: block;
-  color: var(--fm-dim);
-  font-size: 12.5px;
-  margin-top: 3px;
+  font-family: var(--fm-font-head);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--hlr-operation-faint);
+  margin-top: 5px;
 }
 
-.fm-stat.is-hot b { color: var(--fm-hot); }
-.fm-stat.is-gate b { color: var(--fm-gate); }
-.fm-stat.is-calm b { color: var(--fm-calm); }
+.fm-stat.is-hot { border-left-color: var(--fm-hot-lit); }
+.fm-stat.is-gate { border-left-color: var(--fm-gate-lit); }
+.fm-stat.is-calm { border-left-color: var(--fm-calm-lit); }
+.fm-stat.is-hot span { color: var(--fm-hot-lit); }
+.fm-stat.is-gate span { color: var(--fm-gate-lit); }
+.fm-stat.is-calm span { color: var(--fm-calm-lit); }
 
 /* ---- graphic: gate / dependency map ----------------------------------
  * An inline <svg> inside .fm-map. The svg keeps a min-width so the shapes stay
@@ -184,7 +373,6 @@ p {
   border: 1px solid var(--fm-line);
   border-radius: var(--fm-r);
   padding: 14px;
-  box-shadow: var(--fm-shadow);
   overflow-x: auto;
 }
 
@@ -196,14 +384,14 @@ p {
 }
 
 .fm-map text {
-  font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--fm-font-body);
   fill: var(--fm-ink);
 }
 
 .fm-map .fm-map-dim { fill: var(--fm-dim); }
 .fm-map .fm-map-node { fill: var(--fm-panel-2); stroke: var(--fm-line); }
-.fm-map .fm-map-node-gate { fill: var(--fm-gate-soft); stroke: var(--fm-gate); }
-.fm-map .fm-map-node-open { fill: var(--fm-accent-soft); stroke: var(--fm-accent); }
+.fm-map .fm-map-node-gate { fill: var(--fm-panel-2); stroke: var(--fm-gate); }
+.fm-map .fm-map-node-open { fill: var(--fm-panel-2); stroke: var(--fm-accent); }
 .fm-map .fm-map-edge { stroke: var(--fm-line); fill: none; }
 .fm-map .fm-map-edge-gate { stroke: var(--fm-gate); fill: none; }
 .fm-map .fm-map-edge-soft { stroke: var(--fm-dim); fill: none; stroke-dasharray: 4 3; opacity: .65; }
@@ -221,7 +409,6 @@ p {
   display: inline-block;
   width: 10px;
   height: 10px;
-  border-radius: 3px;
   margin-right: 5px;
   vertical-align: -1px;
 }
@@ -240,7 +427,7 @@ p {
   flex: 1 1 auto;
   height: 6px;
   background: var(--fm-panel-2);
-  border-radius: 999px;
+  border: 1px solid var(--fm-line);
   overflow: hidden;
   min-width: 40px;
 }
@@ -249,7 +436,6 @@ p {
   display: block;
   height: 100%;
   background: var(--fm-accent);
-  border-radius: 999px;
 }
 
 .fm-age.is-hot .fm-agebar i { background: var(--fm-hot); }
@@ -260,7 +446,6 @@ p {
   display: flex;
   width: 100%;
   height: 26px;
-  border-radius: 7px;
   overflow: hidden;
   border: 1px solid var(--fm-line);
   background: var(--fm-panel-2);
@@ -271,8 +456,8 @@ p {
   align-items: center;
   justify-content: center;
   font-size: 11.5px;
-  font-weight: 600;
-  color: #fff;
+  font-weight: 700;
+  color: var(--fm-on-fill);
   overflow: hidden;
   white-space: nowrap;
 }
@@ -290,7 +475,6 @@ p {
   display: inline-block;
   width: 10px;
   height: 10px;
-  border-radius: 3px;
   margin-right: 5px;
   vertical-align: -1px;
 }
@@ -317,11 +501,11 @@ p {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 999px;
+  width: 19px;
+  height: 19px;
   border: 1.5px solid var(--fm-line);
   background: var(--fm-panel);
+  font-family: var(--fm-font-data);
   font-size: 11px;
   font-weight: 700;
   flex: 0 0 auto;
@@ -330,7 +514,7 @@ p {
 .fm-step.is-done b {
   background: var(--fm-calm);
   border-color: var(--fm-calm);
-  color: #fff;
+  color: var(--fm-on-fill);
 }
 
 .fm-step.is-done { color: var(--fm-ink); }
@@ -338,12 +522,12 @@ p {
 .fm-step.is-now b {
   background: var(--fm-accent);
   border-color: var(--fm-accent);
-  color: #fff;
+  color: var(--fm-on-fill);
 }
 
 .fm-step.is-now {
   color: var(--fm-ink);
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .fm-step-link {
@@ -367,16 +551,17 @@ p {
   background: var(--fm-panel);
   border: 1px solid var(--fm-line);
   border-radius: var(--fm-r);
-  box-shadow: var(--fm-shadow);
   padding: 16px 17px;
   display: flex;
   flex-direction: column;
   gap: 11px;
 }
 
+/* A gate card gets the same annunciator rule as a readout in a state, because
+ * it is the same statement: this one governs the others beside it. */
 .fm-card.is-gate {
   border-color: var(--fm-gate);
-  border-width: 1.5px;
+  border-left-width: 4px;
 }
 
 .fm-card.is-wide {
@@ -390,30 +575,33 @@ p {
   flex-wrap: wrap;
 }
 
+/* A numbered plate, set in the data face: the number is an identifier the
+ * reader cites back, so it is typed like one. */
 .fm-num {
   flex: 0 0 auto;
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
-  background: var(--fm-accent-soft);
-  color: var(--fm-accent);
+  width: 27px;
+  height: 27px;
+  border-radius: var(--fm-r-control);
+  background: var(--fm-accent);
+  color: var(--fm-on-fill);
   display: flex;
   align-items: center;
   justify-content: center;
+  font-family: var(--fm-font-data);
+  font-variant-numeric: tabular-nums;
   font-weight: 700;
   font-size: 13px;
 }
 
 .fm-card.is-gate .fm-num {
-  background: var(--fm-gate-soft);
-  color: var(--fm-gate);
+  background: var(--fm-gate);
+  color: var(--fm-on-fill);
 }
 
 .fm-ctitle {
   flex: 1 1 240px;
-  font-weight: 600;
+  font-weight: 700;
   font-size: 15.5px;
-  letter-spacing: -.01em;
   line-height: 1.35;
 }
 
@@ -424,36 +612,23 @@ p {
   flex: 0 1 auto;
 }
 
+/* The design system's badge: outlined in its own colour, no fill. That is what
+ * replaced the six pastel tints the old palette carried - state reads off the
+ * outline, and no tint has to be invented for it. */
 .fm-tag {
   font-size: 11.5px;
-  padding: 2px 8px;
+  font-weight: 700;
+  padding: 2px 9px;
   border-radius: 999px;
-  background: var(--fm-panel-2);
+  background: transparent;
   color: var(--fm-dim);
-  border: 1px solid var(--fm-line);
+  border: 1px solid currentColor;
   white-space: nowrap;
 }
 
-.fm-tag.is-gate {
-  background: var(--fm-gate-soft);
-  color: var(--fm-gate);
-  border-color: transparent;
-  font-weight: 600;
-}
-
-.fm-tag.is-hot {
-  background: var(--fm-hot-soft);
-  color: var(--fm-hot);
-  border-color: transparent;
-  font-weight: 600;
-}
-
-.fm-tag.is-calm {
-  background: var(--fm-calm-soft);
-  color: var(--fm-calm);
-  border-color: transparent;
-  font-weight: 600;
-}
+.fm-tag.is-gate { color: var(--fm-gate); }
+.fm-tag.is-hot { color: var(--fm-hot); }
+.fm-tag.is-calm { color: var(--fm-calm); }
 
 /* What is at stake, and the evidence under it. */
 .fm-stake {
@@ -490,7 +665,10 @@ p {
 
 /* ---- decision controls (Lavish input playbook) ------------------------
  * Native controls only. Selection stays local until the explicit submit, which
- * queues exactly one prompt per question under a stable queueKey. */
+ * queues exactly one prompt per question under a stable queueKey.
+ *
+ * Orange is the mode's action colour and appears only here and on focus: the
+ * one place on a board where the reader does something. */
 .fm-opts {
   display: flex;
   flex-direction: column;
@@ -503,7 +681,7 @@ p {
   gap: 9px;
   padding: 9px 11px;
   border: 1px solid var(--fm-line);
-  border-radius: 9px;
+  border-radius: var(--fm-r-control);
   cursor: pointer;
   background: var(--fm-panel);
   font-size: 13.8px;
@@ -511,18 +689,20 @@ p {
 }
 
 .fm-opt:hover {
-  border-color: var(--fm-accent);
+  border-color: var(--fm-action);
 }
 
 .fm-opt input {
   margin: 3px 0 0;
   flex: 0 0 auto;
-  accent-color: var(--fm-accent);
+  accent-color: var(--fm-action);
 }
 
 .fm-opt:has(input:checked) {
-  border-color: var(--fm-accent);
-  background: var(--fm-accent-soft);
+  border-color: var(--fm-action);
+  border-left-width: 4px;
+  padding-left: 8px;
+  background: var(--fm-panel-2);
 }
 
 .fm-opt em {
@@ -534,9 +714,10 @@ p {
 .fm-rec {
   font-size: 11px;
   font-weight: 700;
-  padding: 1px 7px;
+  padding: 1px 8px;
   border-radius: 999px;
-  background: var(--fm-calm-soft);
+  background: transparent;
+  border: 1px solid currentColor;
   color: var(--fm-calm);
   margin-left: 7px;
   white-space: nowrap;
@@ -547,9 +728,9 @@ p {
   min-height: 54px;
   resize: vertical;
   border: 1px solid var(--fm-line);
-  border-radius: 9px;
+  border-radius: var(--fm-r-control);
   padding: 8px 10px;
-  font: inherit;
+  font-family: var(--fm-font-body);
   font-size: 13.5px;
   background: var(--fm-panel);
   color: var(--fm-ink);
@@ -558,20 +739,22 @@ p {
 .fm-free:focus-visible,
 .fm-opt input:focus-visible,
 .fm-submit:focus-visible {
-  outline: 2px solid var(--fm-accent);
+  outline: 2px solid var(--fm-action);
   outline-offset: 2px;
 }
 
+/* The mode's own button: action fill, 700, 40px minimum height. */
 .fm-submit {
   align-self: flex-start;
-  border: 0;
-  border-radius: 9px;
-  background: var(--fm-accent);
-  color: #fff;
-  font: inherit;
-  font-weight: 600;
+  border: 1px solid var(--fm-action);
+  border-radius: var(--fm-r-control);
+  background: var(--fm-action);
+  color: var(--fm-on-fill);
+  font-family: var(--fm-font-body);
+  font-weight: 700;
   font-size: 13.5px;
-  padding: 8px 15px;
+  min-height: 40px;
+  padding: 9px 15px;
   cursor: pointer;
 }
 
@@ -586,7 +769,7 @@ p {
   display: none;
   font-size: 12.5px;
   color: var(--fm-calm);
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .fm-queued.is-shown { display: block; }
@@ -599,7 +782,7 @@ p {
   font-size: 12.5px;
   color: var(--fm-dim);
   border: 1px dashed var(--fm-line);
-  border-radius: 8px;
+  border-radius: var(--fm-r-control);
   padding: 8px 10px;
 }
 
@@ -622,12 +805,16 @@ p {
 }
 
 .fm-table th {
-  font-size: 11.5px;
-  letter-spacing: .06em;
+  font-family: var(--fm-font-head);
+  font-size: 12px;
+  letter-spacing: .1em;
   text-transform: uppercase;
   color: var(--fm-dim);
-  font-weight: 600;
+  font-weight: 700;
+  border-bottom-color: var(--fm-ink);
 }
+
+.fm-table td { font-variant-numeric: tabular-nums; }
 
 .fm-table tbody tr:last-child td { border-bottom: 0; }
 
@@ -635,21 +822,61 @@ p {
   background: var(--fm-panel);
   border: 1px solid var(--fm-line);
   border-radius: var(--fm-r);
-  box-shadow: var(--fm-shadow);
   padding: 4px 6px;
 }
 
 .fm-foot {
+  font-family: var(--fm-font-data);
   margin-top: 34px;
   padding-top: 14px;
   border-top: 1px solid var(--fm-line);
   color: var(--fm-dim);
-  font-size: 12.5px;
+  font-size: 12px;
 }
 
+/* The stamped plate and the instrument readout are the two elements that are
+ * dark ON PURPOSE, so on a dark page they have to invert or they stop being
+ * either stamped or an instrument. Both take the light readout face the design
+ * system ships beside the dark one (designsync/13), so the inversion is the
+ * source's own rather than a second design.
+ *
+ * This block sits at the END of the stylesheet, after the components it
+ * overrides. The token remap near the top cannot do this job: these two
+ * elements name the raw operation tokens directly, so a rule of equal
+ * specificity has to come later in the file to win. */
+@media (prefers-color-scheme: dark) {
+  .fm-mark,
+  .fm-stat {
+    background: var(--hlr-operation-plate);
+    color: var(--hlr-operation-ink);
+    border-color: var(--hlr-operation-line);
+  }
+
+  .fm-stat b { color: var(--hlr-operation-ink); }
+  .fm-stat span { color: var(--hlr-operation-sub); }
+
+  /* On the light plate the state colours read at their unlightened strength,
+   * which is the background they were sampled against. */
+  .fm-stat.is-hot { border-left-color: var(--hlr-semantic-error); }
+  .fm-stat.is-gate { border-left-color: var(--hlr-semantic-info); }
+  .fm-stat.is-calm { border-left-color: var(--hlr-semantic-success); }
+  .fm-stat.is-hot span { color: var(--hlr-semantic-error); }
+  .fm-stat.is-gate span { color: var(--hlr-semantic-info); }
+  .fm-stat.is-calm span { color: var(--hlr-semantic-success); }
+}
+
+/* Printed, the instrument readout would lay down a solid dark block per stat.
+ * It inverts to the plate face the design system ships beside it. */
 @media print {
-  body { background: #fff; padding: 0; }
-  .fm-card, .fm-stat, .fm-map, .fm-panel { box-shadow: none; break-inside: avoid; }
+  body { background: var(--hlr-operation-plate); color: var(--hlr-operation-ink); }
+  .fm-card, .fm-stat, .fm-map, .fm-panel { break-inside: avoid; }
+  .fm-stat {
+    background: var(--hlr-operation-plate);
+    color: var(--hlr-operation-ink);
+    border-color: var(--hlr-operation-line);
+  }
+  .fm-stat b { color: var(--hlr-operation-ink); }
+  .fm-stat span { color: var(--hlr-operation-sub); }
   .fm-submit, .fm-free { display: none; }
 }
 

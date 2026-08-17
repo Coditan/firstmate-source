@@ -24,13 +24,57 @@ The layout is therefore one versioned artifact:
 Inlining rather than linking siblings is deliberate: a board must render when opened straight from disk with no Lavish server, and `lavish-axi export` must keep producing one portable file.
 A self-contained board satisfies both without a copying step.
 
+## The design source
+
+The layout is the **operations mode** of `hlr-design-system`, the fleet's design system, read at `css/hlr-tokens.css`, `css/modes/operations.css`, and `css/hlr-base.css`.
+Operations is the mode for internal operator tools; a board is one, so neither the public brand mode nor the paper mode is right for it.
+
+Every colour in `bin/board-assets/layout.css` is a token copied from that source with its `--hlr-*` name kept beside it.
+**No colour on a board was chosen here.**
+Where a board needs a value the tokens do not carry, that is recorded as a finding against the design system rather than filled in with a hex code, and the layout uses what the tokens do carry.
+
+Three consequences are visible enough to be worth naming:
+
+- **Panels are square.** Operations mode sets `--hlr-radius-panel: 0`; controls get its `--hlr-radius-control: 4px`.
+- **Structure is carried by hairline rules, not shadows.** The mode's own panel shadow belongs to a floating shell, and a board is a flat instrument face.
+- **State is carried by an outline and an annunciator rule**, not by a tinted fill. That is why `.fm-tag` is an outlined badge and why the `--fm-*-soft` custom properties all now resolve to the one recessed plate: the tint family they used to name was six values nobody had chosen.
+
+The stat strip is the design system's own instrument readout - a dark plate with a tabular-mono value and a condensed uppercase label.
+It is the one loud element on a board, which is why everything around it stays quiet.
+
+### Typography, and the font that is deliberately not embedded
+
+Operations mode does **not** use Montserrat.
+Montserrat is the public brand mode's face; operations mode ships three pure system stacks and no font file at all: `Arial, Helvetica, sans-serif` for body, `"Arial Narrow", "Roboto Condensed", "DIN Condensed", Arial, sans-serif` for headlines, and `"SFMono-Regular", Consolas, "Liberation Mono", monospace` for data.
+
+So following the mode costs nothing and fetches nothing.
+For the record, embedding Montserrat was measured rather than estimated: the three `.ttf` faces are 1,123,720 bytes on disk and 1,498,296 bytes as base64 data URIs, which every board would carry - against a whole built board of about 41 KB today.
+That trade was never taken, because the mode this board follows does not ask for it.
+
+One consequence to keep in mind when editing: **Arial ships 400 and 700 and nothing between**, so every emphasis in the layout is 700. A `font-weight: 600` gets a synthesised weight that looks wrong beside a real bold.
+
 ## Guarantees
 
 - **No network requests.** No CDN, no remote font, script, image, or stylesheet. Enforced by the builder, not by convention.
 - **System fonts.** No webfont is loaded, so text paints immediately.
-- **Light and dark**, following the reader's device via `prefers-color-scheme`, both directions readable.
+- **Light and dark**, following the reader's device via `prefers-color-scheme`, both directions readable. The operations tokens supply their own inversion, so dark mode re-points the same tokens rather than introducing new ones.
 - **Responsive** from a narrow phone to a wide desktop, with no horizontal scrolling at body level. Wide content scrolls inside its own container.
 - **Navigational links stay allowed.** `<a href="https://...">` is not a network request.
+- **Every board says who built it.** See "The vessel mark" below.
+- **A decision on a board is selectable.** See "Decision controls" below.
+
+## The vessel mark
+
+Every board carries the name of the vessel that **built** it, in the header, so the captain can see at a glance whose board he is reading.
+
+`bin/fm-board.sh` emits it as `<div class="fm-mark">`, so a board body never writes it and cannot omit it.
+The name is resolved, never hard-coded: `--vessel`, then `FM_BOARD_VESSEL`, then `FM_BRIDGE_VESSEL`, then `config/bridge-vessel` in this home.
+That is the same order the rest of `bin/` uses, and `config/bridge-vessel` stays the one place this vessel's name is written down.
+
+If none of those yields a name, the board is still built, with no mark and a warning on stderr naming the file that was looked for.
+A missing configuration file must not hold up the captain's decisions over a nameplate.
+
+The mark says **who built the board, not what it is about**: a board this vessel builds concerning another vessel's work still carries this vessel's name.
 
 ## Writing a body fragment
 
@@ -38,7 +82,7 @@ The fragment is inserted inside `<div class="fm-wrap">`.
 It carries no `<style>`, no `<script>`, and no document scaffolding.
 
     bin/fm-board.sh --title "Entscheidungsbrett" --subtitle "31. Juli 2026" \
-      --body body.html --out .lavish/decisionboard-2026-07-31.html
+      --kind decision --body body.html --out .lavish/decisionboard-2026-07-31.html
 
 Then open it with `bin/fm-lavish.sh <file>` - never bare `lavish-axi`.
 
@@ -49,7 +93,8 @@ Then open it with `bin/fm-lavish.sh <file>` - never bare `lavish-axi`.
 | Class | Use |
 | --- | --- |
 | `fm-wrap` | Added by the builder; do not repeat it. |
-| `fm-sub` | One dim line under the title. |
+| `fm-mark` | Added by the builder: the vessel that built the board. Never write it in a body. |
+| `fm-sub` | One dim line under the title, set in the data face. |
 | `fm-note` | Dim secondary text anywhere. |
 | `fm-panel` | A bordered surface around a table or block. |
 | `fm-scroll` | **The only sanctioned way to carry content wider than the viewport.** Wrap a wide table or diagram in it. Never put horizontal scrolling on the body. |
@@ -124,6 +169,13 @@ Segment widths and colours are set inline by the generator.
 
 ### Decision controls
 
+**A board that asks the captain to decide must offer him something to select.**
+Never options written into the prose for him to answer in free text.
+
+This is a standing captain rule, and it is enforced rather than remembered.
+It was broken before it was written: a board carrying seven decisions put every option in its text with no control anywhere, so the answers had to come back through chat - the one channel this fleet has measured as having no memory.
+A decision on a board gets answered; a decision in chat gets lost.
+
 `bin/board-assets/board.js` implements the Lavish `input` playbook once, so a board declares markup only and never repeats a submit handler.
 
     <form data-fm-question="upstream-strategie" data-fm-label="Upstream-Strategie">
@@ -133,11 +185,31 @@ Segment widths and colours are set inline by the generator.
           <span><b>Selektiv</b><span class="fm-rec">nächstliegend</span><br>
           <em>Only this category has ever merged there.</em></span>
         </label>
+        <label class="fm-opt">
+          <input type="radio" name="upstream-strategie" value="vollständig">
+          <span><b>Vollständig</b><br>
+          <em>What it costs instead, so this is a real alternative.</em></span>
+        </label>
       </div>
-      <textarea class="fm-free" data-fm-note placeholder="Begründung (optional)"></textarea>
+      <textarea class="fm-free" data-fm-note placeholder="Anmerkung - gilt vor der gewählten Option"></textarea>
       <button type="submit" class="fm-submit">Antwort vormerken</button>
       <div class="fm-queued"></div>
     </form>
+
+`bin/fm-board.sh` **refuses** a board whose declared question breaks any of three structural rules:
+
+- **at least two options.** An option set that is really one recommendation plus filler wastes the control.
+- **a note field beside them**, carrying `data-fm-note`. Measured on one board of twenty answers, two came back with a note that *contradicted* the selected option, and in both cases the note carried what the captain actually meant. So the note is captured, queued as the governing part of the answer, and must be read - never treated as a comment on the choice.
+- **a `.fm-queued` box**, so neither a queued answer nor an empty one is silent.
+
+`--kind decision` additionally requires the board to carry at least one such question.
+Pass it whenever the board's job is to collect an answer; the `/decisionboard` skill always does.
+
+Both refusals fire only on structure the board **declared about itself**, so a report that discusses decisions, options, or note fields at length is never mistaken for one that poses them.
+Detecting a decision posed in prose is deliberately **not** attempted: no textual test separates "here is a question for you" from a report describing one, and a guard that misfired would be worked around rather than fixed.
+That gap is covered by declaration - `--kind decision` - and stated here rather than papered over.
+
+The refusal reads the body fragment at build time, so `--check` on an existing file remains the no-network guard alone.
 
 The radio `name` must equal `data-fm-question`.
 A board that breaks that rule still submits - `board.js` falls back to the form's own checked radio and warns on the console - but the two are meant to be one declared key.
@@ -157,8 +229,9 @@ That applies to the board's own text, not to code identifiers, attribute names, 
 
     bin/fm-board.sh --check <file>...
 
-Runs the same guard over existing files.
-`tests/fm-board.test.sh` pins the refusals, including the exact CDN regression above.
+Runs the **no-network** guard over existing files.
+The decision guard is not part of `--check`: it reads the body fragment at build time, because `board.js` carries the decision component's markup in its own header comment and a scan of a composed board could not tell that documentation from a real question.
+`tests/fm-board.test.sh` pins the refusals, including the exact CDN regression above and each decision refusal.
 
 ### What the guard covers
 

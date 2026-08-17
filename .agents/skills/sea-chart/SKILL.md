@@ -66,9 +66,10 @@ If he names one investigation or undertaking, that is this.
 
 4. **Write the body fragment and build it.**
    `bin/fm-board.sh --title <t> --subtitle <s> --body <fragment> --out .lavish/sea-chart-<chart>-<date>.html`
-   The builder owns the standard layout and refuses a chart that would reach the network.
+   The builder owns the standard layout, emits this vessel's name in the header, and refuses a chart that would reach the network.
    `docs/board-layout.md` lists the components and the markup each expects, and owns the German-umlaut rule for any chart written in German.
    Do not hand-write styling or scripting: that is exactly the drift this layout exists to stop.
+   If a chart asks the captain to decide anything, it is subject to the captain's standing rule that a decision must be selectable with a note field beside it - build it with `--kind decision` and follow `.agents/skills/decisionboard`, which owns that rule.
 
 5. **Open it.**
    `bin/fm-lavish.sh <file>`, never bare `lavish-axi`, which emits a link that opens nowhere but this machine.
