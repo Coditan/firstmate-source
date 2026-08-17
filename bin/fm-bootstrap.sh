@@ -793,11 +793,18 @@ EOF
 # learn about a bad base until the next scheduled run wrote its own STUCK file.
 currency_base_validate() {
   local item status
-  for item in "$FM_CURRENCY_BASE_UPDATE_ITEM" "$FM_CURRENCY_BASE_FORK_ITEM"; do
+  for item in "$FM_CURRENCY_BASE_UPDATE_ITEM" "$FM_CURRENCY_BASE_FORK_ITEM" "$FM_CURRENCY_BASE_FORK_REPO_ITEM"; do
     fm_currency_base_file_value "$CONFIG" "$item"
     status=$?
     # 0 is a usable value and 2 is an absent file; only 1 is actionable.
     [ "$status" -eq 1 ] || continue
+    # The fork side has no canonical default to fall back to - removing the file
+    # drops it to this checkout's own remotes - so it does not get the other
+    # two's remediation sentence, which would name the wrong recovery.
+    if [ "$item" = "$FM_CURRENCY_BASE_FORK_REPO_ITEM" ]; then
+      echo "CURRENCY_BASE: config/$item is unusable - $FM_CURRENCY_BASE_REASON; fix it or remove the file to fall back to this checkout's fork remote, then its origin"
+      continue
+    fi
     echo "CURRENCY_BASE: config/$item is unusable - $FM_CURRENCY_BASE_REASON; fix it or remove the file to compare against $FM_CURRENCY_BASE_DEFAULT"
   done
 }

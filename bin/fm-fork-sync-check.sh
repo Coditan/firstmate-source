@@ -12,17 +12,26 @@
 #   fork-sync.pending   FORK_SYNC diagnostic and commit review lists
 #   fork-sync.stuck     FORK_SYNC_STUCK diagnostic for an incomplete check
 #
-# The real upstream this curated fork tracks comes from FM_FIRSTMATE_UPSTREAM_URL,
-# then the local gitignored config/fork-sync-upstream file, then the canonical
-# default - see bin/fm-currency-base-lib.sh for the full precedence and for why
-# this base is deliberately separate from config/firstmate-update-base. A
-# present but unusable config file records FORK_SYNC_STUCK rather than silently
-# comparing against the wrong upstream.
+# BOTH SIDES OF THE COMPARISON ARE RESOLVED EXPLICITLY, and the resolved URLs are
+# named in every diagnostic this script writes. The upstream side comes from
+# FM_FIRSTMATE_UPSTREAM_URL, then config/fork-sync-upstream, then the canonical
+# default; the fork side from FM_FIRSTMATE_FORK_URL, then config/fork-sync-fork,
+# then a "fork" remote, then origin. See bin/fm-currency-base-lib.sh for the full
+# precedence of each and for why these bases are separate from
+# config/firstmate-update-base. A present but unusable config file records
+# FORK_SYNC_STUCK rather than silently comparing against the wrong repository.
+#
+# The fork side used to be taken from origin alone, which is the fork only in the
+# plain topology. A curator vessel deployed from a fleet repository has origin
+# pointing at that fleet repository, so the check compared upstream against it
+# and reported ITS commits as fork-only patches - a confident reading of the
+# wrong repository. The URLs are printed for the same reason: a comparison that
+# does not say what it compared cannot be caught reading the wrong thing.
 #
 # Usage: fm-fork-sync-check.sh
 # Environment:
 #   FM_FIRSTMATE_UPSTREAM_URL overrides the configured upstream URL.
-#   FM_FIRSTMATE_FORK_URL overrides the fork URL (default: origin of FM_ROOT).
+#   FM_FIRSTMATE_FORK_URL overrides the fork URL.
 #   FM_FORK_SYNC_COMPARE_REPO uses an existing repository (tests only).
 #   FM_FORK_SYNC_UPSTREAM_HEAD and FM_FORK_SYNC_FORK_HEAD name commits already
 #     present in that repository (tests only).
@@ -51,11 +60,110 @@ record_stuck() {
   exit 0
 }
 
+HAVE_TIMEOUT=none
+if command -v timeout >/dev/null 2>&1; then HAVE_TIMEOUT=timeout
+elif command -v gtimeout >/dev/null 2>&1; then HAVE_TIMEOUT=gtimeout
+fi
+
+bounded() {
+  case $HAVE_TIMEOUT in
+    timeout) timeout "${FM_CHECK_TIMEOUT:-30}" "$@" ;;
+    gtimeout) gtimeout "${FM_CHECK_TIMEOUT:-30}" "$@" ;;
+    *) "$@" ;;
+  esac
+}
+
+github_repo_slug() {
+  local url=$1 rest authority host path
+  GITHUB_REPO_SLUG=""
+  case $url in
+    https://*|http://*)
+      rest=${url#*://}
+      authority=${rest%%/*}
+      path=${rest#*/}
+      host=${authority#*@}
+      host=${host%%:*}
+      ;;
+    ssh://*|git+ssh://*)
+      rest=${url#*://}
+      authority=${rest%%/*}
+      path=${rest#*/}
+      host=${authority#*@}
+      host=${host%%:*}
+      ;;
+    *:*)
+      authority=${url%%:*}
+      path=${url#*:}
+      host=${authority#*@}
+      ;;
+    *) return 1 ;;
+  esac
+  host=$(printf '%s\n' "$host" | tr '[:upper:]' '[:lower:]')
+  [ "$host" = github.com ] || return 1
+  path=${path%/}
+  path=${path%.git}
+  # Reject empty or absolute paths, parent traversal, and paths deeper than owner/repository.
+  case $path in ''|/*) return 1 ;; esac
+  case $path in ../*) return 1 ;; esac
+  case $path in */../*|*/..) return 1 ;; esac
+  case $path in */*/*) return 1 ;; esac
+  case $path in *[!A-Za-z0-9_./-]*) return 1 ;; esac
+  GITHUB_REPO_SLUG=$path
+}
+
+repository_identity() {
+  local side=$1 url=$2 path=$2 repo_slug result id name
+  REPOSITORY_IDENTITY=""
+  REPOSITORY_NAME=""
+  REPOSITORY_IDENTITY_REASON=""
+  case $url in
+    file://*) path=${url#file://} ;;
+    *://*|*:*)
+      github_repo_slug "$url" || {
+        REPOSITORY_IDENTITY_REASON="$side URL is not a supported GitHub or local repository address"
+        return 1
+      }
+      repo_slug=$GITHUB_REPO_SLUG
+      # Deliberately use raw `gh` output: `gh-axi` wraps even a --jq result in an
+      # envelope, so its first line cannot be parsed as the repository id.
+      command -v gh >/dev/null 2>&1 || {
+        REPOSITORY_IDENTITY_REASON="gh is unavailable for the $side GitHub repository"
+        return 1
+      }
+      result=$(bounded gh api "repos/$repo_slug" --jq '.id, .full_name' 2>&1) || {
+        REPOSITORY_IDENTITY_REASON="$side GitHub repository lookup failed: $result"
+        return 1
+      }
+      id=$(printf '%s\n' "$result" | sed -n '1p')
+      name=$(printf '%s\n' "$result" | sed -n '2p')
+      case $id in *[!0-9]*|'') REPOSITORY_IDENTITY_REASON="$side GitHub repository lookup returned no numeric id"; return 1 ;; esac
+      [ -n "$name" ] || {
+        REPOSITORY_IDENTITY_REASON="$side GitHub repository lookup returned no full name"
+        return 1
+      }
+      REPOSITORY_IDENTITY="github:$id"
+      REPOSITORY_NAME=$name
+      return 0
+      ;;
+  esac
+  path=$(git -C "$path" rev-parse --absolute-git-dir 2>/dev/null) || {
+    REPOSITORY_IDENTITY_REASON="$side local path is not a git repository"
+    return 1
+  }
+  path=$(realpath "$path" 2>/dev/null) || {
+    REPOSITORY_IDENTITY_REASON="$side git directory cannot be canonicalized"
+    return 1
+  }
+  REPOSITORY_IDENTITY="local:$path"
+  REPOSITORY_NAME=$path
+}
+
 # shellcheck source=bin/fm-currency-base-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-currency-base-lib.sh"
 fm_currency_base_resolve "$CONFIG" "$FM_CURRENCY_BASE_FORK_ITEM" ||
   record_stuck "config/$FM_CURRENCY_BASE_FORK_ITEM is unusable - $FM_CURRENCY_BASE_REASON"
 UPSTREAM_URL=$FM_CURRENCY_BASE_VALUE
+upstream_source=$FM_CURRENCY_BASE_SOURCE
 
 case $NOW in *[!0-9]*|'') record_stuck "current epoch is invalid" ;; esac
 if [ -f "$LAST_RUN" ]; then
@@ -69,17 +177,28 @@ fi
 tmp=""
 compare_repo=${FM_FORK_SYNC_COMPARE_REPO:-}
 if [ -z "$compare_repo" ]; then
-  fork_url=${FM_FIRSTMATE_FORK_URL:-$(git -C "$FM_ROOT" remote get-url origin 2>/dev/null)}
-  [ -n "$fork_url" ] || record_stuck "fork origin URL cannot be resolved"
+  fm_currency_base_fork_repo "$CONFIG" "$FM_ROOT" || record_stuck "$FM_CURRENCY_BASE_REASON"
+  fork_url=$FM_CURRENCY_BASE_VALUE
+  fork_source=$FM_CURRENCY_BASE_SOURCE
+  repository_identity fork "$fork_url" || record_stuck "$REPOSITORY_IDENTITY_REASON ($fork_url, from $fork_source)"
+  fork_identity=$REPOSITORY_IDENTITY
+  fork_name=$REPOSITORY_NAME
+  repository_identity upstream "$UPSTREAM_URL" || record_stuck "$REPOSITORY_IDENTITY_REASON ($UPSTREAM_URL, from $upstream_source)"
+  upstream_identity=$REPOSITORY_IDENTITY
+  upstream_name=$REPOSITORY_NAME
+  [ "$fork_identity" != "$upstream_identity" ] ||
+    record_stuck "fork $fork_name (from $fork_source) and upstream $upstream_name (from $upstream_source) are the same repository (identity $fork_identity)"
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-fork-sync.XXXXXX") || record_stuck "temporary comparison repository cannot be created"
   trap 'rm -rf "$tmp"' EXIT
   git -C "$tmp" init --bare -q || record_stuck "temporary comparison repository cannot be initialized"
-  git -C "$tmp" fetch -q --no-tags "$fork_url" HEAD:refs/heads/fork || record_stuck "fork default-branch lookup failed ($fork_url)"
-  git -C "$tmp" fetch -q --no-tags "$UPSTREAM_URL" HEAD:refs/heads/upstream || record_stuck "upstream default-branch lookup failed ($UPSTREAM_URL)"
+  git -C "$tmp" fetch -q --no-tags "$fork_url" HEAD:refs/heads/fork || record_stuck "fork default-branch lookup failed ($fork_url, from $fork_source)"
+  git -C "$tmp" fetch -q --no-tags "$UPSTREAM_URL" HEAD:refs/heads/upstream || record_stuck "upstream default-branch lookup failed ($UPSTREAM_URL, from $upstream_source)"
   compare_repo=$tmp
   fork=$(git -C "$tmp" rev-parse --verify refs/heads/fork)
   upstream=$(git -C "$tmp" rev-parse --verify refs/heads/upstream)
 else
+  fork_url=$compare_repo
+  fork_source="FM_FORK_SYNC_COMPARE_REPO"
   fork=${FM_FORK_SYNC_FORK_HEAD:-}
   upstream=${FM_FORK_SYNC_UPSTREAM_HEAD:-}
   [ -n "$fork" ] && [ -n "$upstream" ] || record_stuck "test comparison repository requires fork and upstream heads"
@@ -176,6 +295,12 @@ EOF
 
 {
   printf 'FORK_SYNC: upstream %.7s not merged into fork (%s upstream-only commits); %s local patches to re-evaluate (%s provably absorbed): dispatch a fork-sync crewmate\n' "$upstream" "$upstream_count" "$fork_count" "$absorbed_count"
+  # Which two repositories produced these numbers. Without this line a reading of
+  # the wrong repository is indistinguishable from a reading of the right one,
+  # which is how a fleet repository's own commits were once listed below as
+  # fork-only patches.
+  printf '  compared: fork %s (from %s) against upstream %s (from %s)\n' "$fork_url" "$fork_source" "$UPSTREAM_URL" "$upstream_source"
+  printf '  note: "provably absorbed" counts only patches this check could prove absorbed by patch-id or by tip-content convergence; the remainder are unproven, not proven unabsorbed.\n'
   printf '  upstream-only commits:\n'
   printf '%s' "$upstream_review_detail"
   printf '  fork-only patches:\n'
