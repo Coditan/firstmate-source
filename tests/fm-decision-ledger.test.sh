@@ -401,6 +401,75 @@ test_fold_retry_accepts_only_a_valid_archived_successor() {
   pass "fold retries cross retention only through strict archived resolutions"
 }
 
+test_live_and_archived_successors_share_one_validity_rule() {
+  local home out shape
+  for shape in folded wrong-kind missing-markers; do
+    home=$(make_home "live-successor-$shape")
+    : > "$home/state/old-pass.meta"
+    run_hold "$home" hold old-pass scope --title "Old live question" --reason "undecided" \
+      --repo widgets --premise "the live scope is unset" >/dev/null 2>&1 || fail "old hold failed for $shape"
+    tasks_in "$home" add "gated-$shape" "Gated $shape work" --kind ship --repo widgets \
+      --blocked-by old-pass-decision-scope >/dev/null || fail "gated work setup failed for $shape"
+    case "$shape" in
+      folded)
+        tasks_in "$home" add invalid-successor "Folded live successor" --kind captain --repo widgets \
+          --body $'Superseded by fm-decision-hold.\nSuccessor: still-open-final-question' >/dev/null
+        tasks_in "$home" done invalid-successor >/dev/null
+        ;;
+      wrong-kind)
+        tasks_in "$home" add invalid-successor "Non-captain live successor" --kind ship --repo widgets >/dev/null
+        ;;
+      missing-markers)
+        tasks_in "$home" add invalid-successor "Incomplete live successor" --kind captain --repo widgets \
+          --body "State: awaiting captain decision." >/dev/null
+        tasks_in "$home" done invalid-successor >/dev/null
+        ;;
+    esac
+    if run_hold "$home" supersede old-pass-decision-scope --by invalid-successor \
+      --reason "invalid live successor must refuse" > "$home/refuse.out" 2> "$home/refuse.err"; then
+      fail "$shape live entry satisfied successor validation"
+    fi
+    out=$(run_ledger "$home" --records)
+    assert_contains "$out" $'open\told-pass-decision-scope' \
+      "$shape live entry must leave the older question open"
+    out=$(tasks_in "$home" list --blocked --fields blocked_by)
+    assert_contains "$out" "gated-$shape,queued,ship,widgets,Gated $shape work,old-pass-decision-scope" \
+      "$shape live entry must leave the older question's gate intact"
+  done
+
+  home=$(make_home live-successor-open)
+  : > "$home/state/old-pass.meta"
+  run_hold "$home" hold old-pass scope --title "Old open question" --reason "undecided" \
+    --repo widgets --premise "the scope is unset" >/dev/null 2>&1 || fail "old open hold failed"
+  tasks_in "$home" add open-successor "Better open question" --kind captain --repo widgets >/dev/null
+  tasks_in "$home" add gated-open "Gated open work" --kind ship --repo widgets \
+    --blocked-by old-pass-decision-scope >/dev/null
+  run_hold "$home" supersede old-pass-decision-scope --by open-successor \
+    --reason "the later open question covers this ground" >/dev/null \
+    || fail "an open captain successor must remain valid"
+  out=$(tasks_in "$home" list --blocked --fields blocked_by)
+  assert_contains "$out" "gated-open,queued,ship,widgets,Gated open work,open-successor" \
+    "an open captain successor must inherit the older gate"
+
+  home=$(make_home live-successor-answered)
+  : > "$home/state/old-pass.meta"
+  run_hold "$home" hold old-pass scope --title "Old answered question" --reason "undecided" \
+    --repo widgets --premise "the scope is unset" >/dev/null 2>&1 || fail "old answered hold failed"
+  tasks_in "$home" add gated-answered "Gated answered work" --kind ship --repo widgets \
+    --blocked-by old-pass-decision-scope >/dev/null
+  printf 'nur beantwortete kunden.\n' > "$home/live-ruling.txt"
+  run_hold "$home" record live-ruling scope --door chat --decision-file "$home/live-ruling.txt" \
+    --title "Answered live successor" --repo widgets --new-ground >/dev/null 2>&1 \
+    || fail "answered live successor setup failed"
+  run_hold "$home" supersede old-pass-decision-scope --by live-ruling-decision-scope \
+    --reason "the captain answer covers this ground" >/dev/null \
+    || fail "an answered live captain successor must remain valid"
+  out=$(tasks_in "$home" list --blocked --fields blocked_by)
+  assert_contains "$out" "0 blocked tasks" \
+    "an answered live successor must release the older gate"
+  pass "live and archived fold successors obey one validity rule"
+}
+
 # Folding a question must take its gated work with it. Leaving the work pointing at
 # a closed record strands it; dropping the edge outright lifts a gate nobody lifted.
 test_a_fold_moves_the_work_the_question_gated() {
@@ -647,6 +716,7 @@ test_a_second_question_cannot_be_filed_without_disposing_of_the_first
 test_an_answer_folds_the_questions_it_settles
 test_retry_completes_folds_after_the_successor_already_exists
 test_fold_retry_accepts_only_a_valid_archived_successor
+test_live_and_archived_successors_share_one_validity_rule
 test_a_fold_moves_the_work_the_question_gated
 test_an_unmeasurable_premise_is_never_treated_as_a_false_one
 test_an_edited_decision_stops_reading_as_verified

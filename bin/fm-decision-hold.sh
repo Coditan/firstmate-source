@@ -83,9 +83,9 @@
 # source before this gate has succeeded. A resolved captain hold that retention
 # moved into data/done-archive.md remains a durable completion record, but only
 # while every archived entry under that identity is itself a resolved captain hold.
-# An interrupted fold retry accepts its resolved successor from that same strict
-# archive record, so retention cannot strand the older question in the open set.
-# A folded archive record remains a valid disposition for completion and reopen
+# One successor rule covers live and archived records: it must be a captain record;
+# an open question is valid, while a completed record must carry an answered
+# resolution. A fold remains a valid disposition for completion and reopen
 # protection, but never a successor to fold into because it carries no answer.
 #
 # `resolve` requires every --routed-to task to exist and to be blocked by the hold.
@@ -393,6 +393,28 @@ archived_hold_resolved() {  # <hold-id>
 
 archived_hold_answered() {  # <hold-id>
   scan_archived_hold "$1" answered
+}
+
+require_fold_successor() {  # <successor-id>
+  local id=$1 show state kind body
+  if show=$(task_show "$id"); then
+    state=$(show_field "$show" state)
+    kind=$(show_field "$show" kind)
+    [ "$kind" = captain ] \
+      || fail "successor $id is a live $kind item, not a captain record"
+    if [ "$state" = done ]; then
+      body=$(show_field "$show" body)
+      case "$body" in
+        *"Resolution recorded by fm-decision-hold."*"Routed work:"*) : ;;
+        *) fail "successor $id is a completed captain record without an answered resolution; a folded question is a disposition, never a successor to fold into" ;;
+      esac
+    fi
+    FOLD_SUCCESSOR_STATE=$state
+    return 0
+  fi
+  archived_hold_answered "$id" \
+    || fail "successor $id is absent from the live backlog and is not an unambiguous archived answered captain record carrying both the recorded resolution and routed work; a folded question is a disposition, never a successor to fold into"
+  FOLD_SUCCESSOR_STATE=done
 }
 
 # The reopen guard asks the opposite question: does any archived entry already
@@ -795,7 +817,7 @@ fold_records() {  # <successor-id> <reason> <fold-id>...
 }
 
 command_supersede() {
-  local id=${1:-} successor='' reason='' show state kind body premise line dep blocked succ_show succ_state
+  local id=${1:-} successor='' reason='' show state kind body premise line dep blocked succ_state
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
   while [ "$#" -gt 0 ]; do
@@ -830,13 +852,8 @@ command_supersede() {
   ! verify_hold_resolved "$id" \
     || fail "captain decision $id already records the captain's answer; it cannot be superseded"
   [ "$state" != "done" ] || fail "captain record $id is already closed"
-  if succ_show=$(task_show "$successor"); then
-    succ_state=$(show_field "$succ_show" state)
-  else
-    archived_hold_answered "$successor" \
-      || fail "successor $successor is archived but is not an unambiguous answered captain record carrying both the recorded resolution and routed work; a folded question is a disposition, never a successor to fold into"
-    succ_state=done
-  fi
+  require_fold_successor "$successor"
+  succ_state=$FOLD_SUCCESSOR_STATE
 
   premise=$(printf '%s\n' "$(raw_body_lines "$id" || true)" | sed -n 's/^Premise: //p' | head -1)
 
