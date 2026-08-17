@@ -98,6 +98,7 @@ github_repo_slug() {
       ;;
     *) return 1 ;;
   esac
+  host=$(printf '%s\n' "$host" | tr '[:upper:]' '[:lower:]')
   [ "$host" = github.com ] || return 1
   path=${path%/}
   path=${path%.git}

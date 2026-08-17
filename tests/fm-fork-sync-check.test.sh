@@ -472,6 +472,7 @@ make_github_identity_fakebin() {
   mkdir -p "$fakebin"
   cat > "$fakebin/gh-axi" <<'SH'
 #!/bin/sh
+[ -z "${FM_TEST_EXPECT_API:-}" ] || [ "$2" = "$FM_TEST_EXPECT_API" ] || exit 1
 printf '12345\nowner/repo\n'
 SH
   chmod +x "$fakebin/gh-axi"
@@ -503,10 +504,24 @@ test_github_ssh_forms_share_numeric_identity() {
   pass "GitHub SSH URL forms resolve by host to one numeric identity"
 }
 
+test_github_host_is_case_insensitive_without_changing_repo_path() {
+  local fakebin state out
+  fakebin="$TMP_ROOT/github-case-fakebin"
+  state="$TMP_ROOT/github-case-state"
+  make_github_identity_fakebin "$fakebin"
+
+  out=$(FM_TEST_EXPECT_API='repos/Owner/Repo' run_github_alias_check \
+    'ssh://git@GitHub.com/Owner/Repo.git' \
+    'https://GITHUB.COM/Owner/Repo.git' "$state" "$fakebin")
+  assert_contains "$out" 'are the same repository (identity github:12345)' \
+    "mixed-case GitHub hosts did not resolve while preserving repository path case"
+  pass "GitHub host matching is case-insensitive without changing repository path case"
+}
+
 make_identity_minimal_path() {
   local fakebin=$1 tool source
   make_github_identity_fakebin "$fakebin"
-  for tool in bash dirname mkdir cat sed; do
+  for tool in bash dirname mkdir cat sed tr; do
     source=$(command -v "$tool")
     ln -s "$source" "$fakebin/$tool"
   done
@@ -575,5 +590,6 @@ test_symlinked_local_alias_refuses_as_the_same_repository
 test_distinct_local_identities_are_compared
 test_unestablishable_identity_refuses_before_comparison
 test_github_ssh_forms_share_numeric_identity
+test_github_host_is_case_insensitive_without_changing_repo_path
 test_github_identity_runs_without_timeout_binary
 test_github_identity_uses_gtimeout_fallback
