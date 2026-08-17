@@ -113,6 +113,7 @@ The `is not leased` case is why this flag cannot simply be passed unconditionall
 It answers from two independent witnesses, because either alone has a blind spot: the pool's own lease, and every `state/<id>.meta` that names the path filtered to tasks whose window is still alive.
 A conflict from either is a real conflict, so the two are unioned rather than required to agree.
 A task whose liveness cannot be read counts as live, because the cost of guessing wrong is destroying a running worker's work while the cost of a false hold is a refusal someone can inspect.
+The same fail-safe asymmetry applies at the treehouse return boundary: a readable pool with no lease permits an otherwise uncontested return, while an unreadable pool refuses because it cannot distinguish that ordinary state from a holder outside the local home's metadata.
 
 **`bin/fm-slot-guard.sh`** is the watcher half, armed at bootstrap like the memory alarm and the currency round.
 It sweeps this home's recorded slots on the ordinary watcher cadence and, when a slot is claimed by a task other than the live one standing in it, writes a durable `state/<id>.slot-disputed` marker and wakes firstmate once.

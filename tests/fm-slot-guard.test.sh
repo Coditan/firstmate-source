@@ -44,6 +44,7 @@
 #   (q) home-return refusal preserves registry and task state
 #   (r) retry refresh refuses a holder and preserves its lock
 #   (s) pool lease refusal is terminal during child cleanup
+#   (t) unreadable pool ownership refuses without mutation
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -71,6 +72,7 @@ make_case() {
   : > "$case_dir/reallocate-on-return"
   : > "$case_dir/lock-return-once"
   : > "$case_dir/change-lease-on-return"
+  : > "$case_dir/status-fails"
   printf '0\n' > "$case_dir/status-count"
   printf '0\n' > "$case_dir/return-count"
   : > "$case_dir/returned"
@@ -88,6 +90,7 @@ case "${1:-}" in
     count=$(cat "${FM_TEST_CASE_DIR:?}/status-count")
     count=$((count + 1))
     printf '%s\n' "$count" > "${FM_TEST_CASE_DIR:?}/status-count"
+    [ ! -s "${FM_TEST_CASE_DIR:?}/status-fails" ] || exit 1
     while IFS=$'\t' read -r at p h; do
       [ "$at" = "$count" ] || continue
       printf '%s\t%s\n' "$p" "$h" >> "$LEASES"
@@ -233,6 +236,10 @@ change_lease_on_return() {  # <case> <holder>
   printf '%s\n' "$2" > "$1/change-lease-on-return"
 }
 
+fail_pool_status() {  # <case>
+  printf 'yes\n' > "$1/status-fails"
+}
+
 run_teardown() {  # <case> <id> [args...]
   local case_dir=$1 id=$2; shift 2
   FM_TEST_CASE_DIR="$case_dir" \
@@ -356,6 +363,7 @@ test_sole_owner_allows() {
   expect_code 0 "$rc" "sole: teardown of an uncontested slot should succeed"
   assert_no_grep "REFUSED" "$case_dir/stderr" "sole: no refusal expected"
   assert_grep "$case_dir/slot" "$case_dir/returned" "sole: the slot should have been returned"
+  [ "$(cat "$case_dir/status-count")" -gt 0 ] || fail "sole: readable unleased pool was not consulted"
   pass "(b) an uncontested slot is still returned normally"
 }
 
@@ -703,6 +711,34 @@ test_child_pool_lease_refusal_is_terminal() {
   pass "(s) child pool lease refusal is terminal and preserves records"
 }
 
+test_unreadable_pool_refuses_without_mutation() {
+  local case_dir rc branch
+  case_dir=$(make_case unreadable-pool)
+  write_task "$case_dir" finished-task dead
+  git -C "$case_dir/slot" switch -q -c unreadable-pool-work
+  mkdir -p "$case_dir/slot/.claude"
+  printf '{"hooks":"unreadable-pool"}\n' > "$case_dir/slot/.claude/settings.fm-task.json"
+  printf 'running\n' > "$case_dir/state/finished-task.status"
+  fail_pool_status "$case_dir"
+
+  set +e
+  run_teardown "$case_dir" finished-task --force > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 4 "$rc" "unreadable-pool: unreadable ownership should retain refusal status"
+  assert_grep "could not be read" "$case_dir/stderr" \
+    "unreadable-pool: refusal should distinguish an unreadable pool"
+  assert_nothing_returned "$case_dir" "unreadable-pool: unreadable ownership must not return the slot"
+  assert_present "$case_dir/slot/.claude/settings.fm-task.json" \
+    "unreadable-pool: refusal must preserve the task hook"
+  branch=$(git -C "$case_dir/slot" branch --show-current)
+  [ "$branch" = unreadable-pool-work ] || fail "unreadable-pool: refusal changed the task branch"
+  assert_present "$case_dir/state/finished-task.meta" "unreadable-pool: refusal must preserve task meta"
+  assert_present "$case_dir/state/finished-task.status" "unreadable-pool: refusal must preserve task status"
+  pass "(t) unreadable pool ownership refuses without mutation"
+}
+
 test_stale_record_live_holder_refuses
 test_sole_owner_allows
 test_force_does_not_override
@@ -721,5 +757,6 @@ test_returned_child_slot_is_not_mutated
 test_secondmate_home_refusal_preserves_records
 test_retry_refreshes_ownership_and_preserves_lock
 test_child_pool_lease_refusal_is_terminal
+test_unreadable_pool_refuses_without_mutation
 
 printf '\nall fm-slot-guard tests passed\n'

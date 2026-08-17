@@ -631,7 +631,11 @@ refresh_teardown_return_ownership() {  # <dir> <cd_dir> <label> <self-id> <state
   local dir=$1 cd_dir=$2 label=$3 self=$4 state_dir=$5 lease holder
   lease_args=()
   require_no_other_slot_holder "$dir" "$cd_dir" "$label" "$self" "$state_dir" || return $?
-  lease=$(fm_slot_lease_holder "$dir" "$cd_dir" 2>/dev/null) || return 0
+  if ! lease=$(fm_slot_lease_holder "$dir" "$cd_dir" 2>/dev/null); then
+    echo "REFUSED: ownership of $label $dir could not be read from the treehouse pool." >&2
+    echo "Retry after the pool status can be read; returning it now could destroy another task's uncommitted work." >&2
+    return "$TEARDOWN_SLOT_HELD_REFUSED"
+  fi
   [ -n "$lease" ] || return 0
   case "$lease" in
     "fm:$self"|"$self") lease_args=(--if-lease-holder "$lease") ;;
