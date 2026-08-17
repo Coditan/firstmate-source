@@ -113,8 +113,10 @@ On this host `bridge-notify-poll.timer` reported loaded, enabled and active for 
 That reading was checked against the failure it exists for on 2026-08-16: with the observer's own process frozen under `SIGSTOP`, `systemctl --user show` reported `ActiveState=active` and `SubState=running` while the reading returned `DEAD - no pass for 105s, past 3 missed passes of a 30s interval` at exit 1.
 Both surfaces were asked the same question at the same moment and only one of them was right.
 
-**A stall is reported and not restarted.**
-`STOPPED` and `DEAD` mean nothing is consuming the journal and are converged automatically; `STALLED` and `BLIND` mean something is running and has stopped consuming, and bouncing the service would clear the symptom while hiding the fault.
+**A stall is never restarted without a durable record.**
+`STOPPED` and `DEAD` mean nothing is consuming the journal and are converged automatically; `STALLED` and `BLIND` without configuration drift are reported and left alone.
+When configuration drift requires a restart, the service first preserves the pre-restart reading and health record on the findings surface, and an unreachable surface blocks that restart.
+That keeps convergence and fault visibility together because the stall evidence survives the repair instead of being destroyed by it.
 
 The rest was proven end to end on this seat the same day, against the real judge and a real journal: the unit started and read `WORKING` at exit 0 with two events outstanding, the cursor advanced 0 to 2 as `codex:gpt-5.6-luna` judged both in about 4.2 seconds each, the reading settled to `QUIET`, `systemctl --user stop` produced `STOPPED` at exit 1, locked convergence brought it back, and a `SIGKILL` of the main process was recovered by the unit on its own - reclaiming the run lock the killed process never released and judging a newly arrived event.
 

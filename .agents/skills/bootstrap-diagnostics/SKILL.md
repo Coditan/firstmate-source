@@ -74,7 +74,8 @@ When any diagnostic needs captain attention, report the plain consequence and re
 - `BOSUN_UNIT: nothing is being judged - <STATE>: <detail>` - this is the reading that matters, and it is taken from the observer's own work rather than from whether the unit says active.
   `STOPPED` and `DEAD` mean no observer process is consuming the event stream; a locked session converges those automatically, so seeing one means the repair did not hold and the concrete failure needs inspecting.
   `STALLED` means one IS running and its cursor has frozen while the stream grew, and `BLIND` means it cannot read the stream at all.
-  Neither of those is restarted on purpose: a restart would clear the symptom and hide the fault, so investigate the named state instead of bouncing the service.
+  Neither is restarted without a record: absent configuration drift it is left alone, while a drift-driven restart first leaves a durable high-severity evidence record on the findings surface for the watcher and supervising session to read with `bin/fm-finding.sh list`.
+  If that record cannot be written, the restart is blocked and the `BOSUN_UNIT:` line names the unreachable surface and its initialization command.
 - `BOSUN_UNIT: the observer's recorded PATH cannot reach its judge <program> ...` - it would keep running and keep reporting healthy while recording every event as an unjudged escalation.
   Either install the named judge where the recorded environment reaches it, or converge the service from a session that already resolves it.
 - `AXI_SUITE_UPDATED: <detail>` - the vessel completed a self-repair of its own npm prefix and needs nothing from you; report it only when it materially affects current work.

@@ -40,9 +40,10 @@
 # STOPPED and DEAD mean no bosun process is judging, which a restart fixes, so
 # locked convergence restarts them. STALLED and BLIND mean a bosun that IS
 # running has stopped consuming the journal, or cannot read it; a restart may
-# clear the symptom and would hide the fault behind a fresh cursor, so those are
-# reported and left alone. Quietly restarting a stall is the same defect as
-# trusting an active unit, one layer up.
+# clear the symptom and hide the fault behind a fresh cursor, so those are never
+# restarted without a durable findings-surface record. With no configuration
+# drift they are reported and left alone; with drift, the pre-restart evidence
+# is recorded before convergence proceeds.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -50,6 +51,7 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 BOSUN="$SCRIPT_DIR/fm-bosun.sh"
+FINDING="$SCRIPT_DIR/fm-finding.sh"
 UNIT_SOURCE="$FM_ROOT/systemd/fm-bosun@.service"
 SYSTEMCTL=${FM_BOSUN_SYSTEMCTL:-systemctl}
 SYSTEMD_ESCAPE=${FM_BOSUN_SYSTEMD_ESCAPE:-systemd-escape}
@@ -296,8 +298,29 @@ recorded_service_path() {
   sed -n 's/^PATH="\(.*\)"$/\1/p' "$SERVICE_ENV" | head -1
 }
 
+record_drifted_fault() {  # <drift description>
+  local drift=$1 health_record measurement emitted
+  health_record=$(cat "$STATE/bosun/health" 2>&1 || true)
+  [ -n "$health_record" ] || health_record="health record absent or empty"
+  measurement=$(printf 'drift: %s\nhealth: %s - %s\nhealth record:\n%s\nrestart consequence: convergence is about to erase this live fault evidence' \
+    "$drift" "$FM_BOSUN_HEALTH_WORD" "$FM_BOSUN_HEALTH_NOTE" "$health_record")
+  if emitted=$(bosun_env "$FINDING" emit \
+    --class evidence \
+    --severity high \
+    --claim "A drifted $FM_BOSUN_HEALTH_WORD bosun will be restarted after its fault evidence is preserved" \
+    --where "$FM_HOME bosun observer service" \
+    --measurement "$measurement" \
+    --refuted-by "the pre-restart health reading was neither STALLED nor BLIND, or convergence changed neither unit bytes nor the recorded environment" \
+    --officer fm-bosun-service 2>&1); then
+    return 0
+  fi
+  printf 'BOSUN_UNIT: cannot restart the drifted %s observer without a durable incident record - %s\n' \
+    "$FM_BOSUN_HEALTH_WORD" "$emitted" >&2
+  return 1
+}
+
 ensure_systemd() {
-  local unit changed=0
+  local unit unit_changed=0 env_changed=0 drift=''
   bosun_opted_in || return 0
   systemd_usable || {
     echo "BOSUN_UNIT: systemd --user is unavailable; the observer stops with whoever starts it and judges nothing between sessions" >&2
@@ -313,14 +336,28 @@ ensure_systemd() {
     return 2
   fi
   if ! cmp -s "$UNIT_SOURCE" "$UNIT_DEST"; then
-    install_unit_bytes || return 1
-    "$SYSTEMCTL" --user daemon-reload || return 1
-    changed=1
+    unit_changed=1
   fi
-  FM_BOSUN_ENV_CHANGED=0
-  write_service_env || return 1
-  [ "$FM_BOSUN_ENV_CHANGED" -eq 0 ] || changed=1
-  if [ "$changed" -eq 1 ]; then
+  service_env_matches || env_changed=1
+  if [ "$unit_changed" -eq 1 ] || [ "$env_changed" -eq 1 ]; then
+    if [ "$unit_changed" -eq 1 ] && [ "$env_changed" -eq 1 ]; then
+      drift='unit bytes and recorded environment'
+    elif [ "$unit_changed" -eq 1 ]; then
+      drift='unit bytes'
+    else
+      drift='recorded environment'
+    fi
+    bosun_health || true
+    case "$FM_BOSUN_HEALTH_WORD" in
+      STALLED|BLIND) record_drifted_fault "$drift" || return 4 ;;
+    esac
+    if [ "$unit_changed" -eq 1 ]; then
+      install_unit_bytes || return 1
+      "$SYSTEMCTL" --user daemon-reload || return 1
+    fi
+    if [ "$env_changed" -eq 1 ]; then
+      write_service_env || return 1
+    fi
     "$SYSTEMCTL" --user restart "$unit" || return 1
     wait_for_running_bosun || return 3
     return 0
@@ -399,11 +436,11 @@ bootstrap_check() {
       echo "BOSUN_UNIT: $unit needs locked convergence from the session holding the fleet lock"
     fi
   else
-    ensure_systemd >/dev/null 2>&1 && rc=0 || rc=$?
+    ensure_systemd 2>&1 >/dev/null && rc=0 || rc=$?
     # 3 is "converged, restarted, and still nothing is judging". That is a real
     # fault, but naming it a convergence failure would send the reader to
     # systemctl, and the reading below already names the concrete state.
-    if [ "$rc" -ne 0 ] && [ "$rc" -ne 3 ]; then
+    if [ "$rc" -ne 0 ] && [ "$rc" -ne 3 ] && [ "$rc" -ne 4 ]; then
       echo "BOSUN_UNIT: $unit convergence failed - inspect systemctl --user status $unit"
     fi
   fi

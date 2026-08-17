@@ -18,6 +18,7 @@ set -u
 
 SERVICE="$ROOT/bin/fm-bosun-service.sh"
 BOSUN="$ROOT/bin/fm-bosun.sh"
+FINDING="$ROOT/bin/fm-finding.sh"
 fm_test_tmproot TMP_ROOT fm-bosun-service
 
 # A fake user manager. Starting an active unit is a no-op, while restart always
@@ -240,6 +241,25 @@ mark_running() {  # <state>
   rm -f "$health.bak"
 }
 
+mark_stalled() {  # <state> <marker>
+  local state=$1 marker=$2 now
+  now=$(date +%s)
+  mkdir -p "$state/bosun"
+  {
+    printf 'state: running\n'
+    printf 'pid: %s\n' "$marker"
+    printf 'started: %s\n' "$now"
+    printf 'last_pass: %s\n' "$now"
+    printf 'passes_this_run: 2\n'
+    printf 'verdicts_this_run: 0\n'
+    printf 'last_judged: 0\n'
+    printf 'cursor: 0\n'
+    printf 'journal_last: 2\n'
+    printf 'backlog_since: %s\n' "$((now - 2))"
+    printf 'interval: 30\n'
+  } > "$state/bosun/health"
+}
+
 # Single-quoted on purpose: this is the SOURCE of a judge script.
 # shellcheck disable=SC2016
 JUDGE_SANE='#!/usr/bin/env bash
@@ -361,9 +381,80 @@ test_ambient_judge_override_does_not_change_service_resolution() {
   pass "bosun service resolution ignores ambient judge overrides"
 }
 
+test_drifted_stall_is_recorded_before_restart() {
+  local fakebin home unitdir findings out records
+  fakebin="$TMP_ROOT/fakebin"
+  home="$TMP_ROOT/drifted-stall"
+  unitdir="$TMP_ROOT/units-drifted-stall"
+  findings="$home/data/findings"
+  mkdir -p "$home/state" "$home/config" "$unitdir"
+  : > "$home/config/bosun"
+  rm -f "$TMP_ROOT/systemd.enabled" "$TMP_ROOT/systemd.active"
+  : > "$TMP_ROOT/systemctl.log"
+
+  service_env "$fakebin" "$home" "$unitdir" \
+    "$ROOT/bin/fm-bootstrap.sh" install bosun-unit > /dev/null
+  FM_FINDINGS_DIR="$findings" "$FINDING" init > /dev/null
+  mark_stalled "$home/state" pre-restart-stalled
+  printf '%s\n' stale > "$unitdir/fm-bosun@.service"
+  : > "$TMP_ROOT/systemctl.log"
+
+  out=$(FM_BOSUN_STALL_AFTER=1 FM_FINDINGS_DIR="$findings" \
+    service_env "$fakebin" "$home" "$unitdir" "$SERVICE" bootstrap)
+  assert_contains "$(cat "$TMP_ROOT/systemctl.log")" "--user restart fm-bosun@" \
+    "drifted stalled observer was not converged after its evidence was recorded"
+  records=$(FM_FINDINGS_DIR="$findings" "$FINDING" list --json) \
+    || fail "findings reader could not read the preserved stall evidence"
+  [ "$(printf '%s' "$records" | jq 'length')" -eq 1 ] \
+    || fail "drifted stall did not leave exactly one readable finding"
+  printf '%s' "$records" | jq -e '.[0].class == "evidence" and
+    .[0].severity == "high" and
+    (.[0].measurement | contains("drift: unit bytes")) and
+    (.[0].measurement | contains("health: STALLED")) and
+    (.[0].measurement | contains("pid: pre-restart-stalled"))' > /dev/null \
+    || fail "preserved finding did not carry the pre-restart stalled measurement"
+  assert_not_contains "$out" "cannot restart" \
+    "recorded drifted stall was reported as blocked"
+  pass "drifted stall evidence survives convergence restart"
+}
+
+test_drifted_stall_without_findings_surface_is_not_restarted() {
+  local fakebin home unitdir findings out detect_out
+  fakebin="$TMP_ROOT/fakebin"
+  home="$TMP_ROOT/blocked-drifted-stall"
+  unitdir="$TMP_ROOT/units-blocked-drifted-stall"
+  findings="$home/uninitialised-findings"
+  mkdir -p "$home/state" "$home/config" "$unitdir"
+  : > "$home/config/bosun"
+  rm -f "$TMP_ROOT/systemd.enabled" "$TMP_ROOT/systemd.active"
+  : > "$TMP_ROOT/systemctl.log"
+
+  service_env "$fakebin" "$home" "$unitdir" \
+    "$ROOT/bin/fm-bootstrap.sh" install bosun-unit > /dev/null
+  mark_stalled "$home/state" blocked-pre-restart-stalled
+  printf '%s\n' stale > "$unitdir/fm-bosun@.service"
+  : > "$TMP_ROOT/systemctl.log"
+
+  out=$(FM_BOSUN_STALL_AFTER=1 FM_FINDINGS_DIR="$findings" \
+    service_env "$fakebin" "$home" "$unitdir" "$SERVICE" bootstrap 2>&1)
+  assert_contains "$out" "BOSUN_UNIT: cannot restart the drifted STALLED observer" \
+    "blocked drifted stall did not report why convergence stopped"
+  assert_contains "$out" "does not exist; create it with fm-finding.sh init" \
+    "blocked drifted stall did not name the surface initialization command"
+  assert_not_contains "$(cat "$TMP_ROOT/systemctl.log")" "--user restart fm-bosun@" \
+    "drifted stalled observer restarted without a durable incident record"
+  detect_out=$(FM_BOOTSTRAP_DETECT_ONLY=1 FM_FINDINGS_DIR="$findings" \
+    service_env "$fakebin" "$home" "$unitdir" "$SERVICE" bootstrap)
+  assert_contains "$detect_out" "needs locked convergence" \
+    "blocked drifted stall lost its pending configuration convergence"
+  pass "unrecordable drifted stall blocks convergence restart"
+}
+
 test_unopted_home_is_silent
 test_unit_clears_manager_judge_override
 test_install_requires_consent_and_converges
 test_health_reading_is_not_the_units_own_state
 test_unreachable_judge_is_reported
 test_ambient_judge_override_does_not_change_service_resolution
+test_drifted_stall_is_recorded_before_restart
+test_drifted_stall_without_findings_surface_is_not_restarted

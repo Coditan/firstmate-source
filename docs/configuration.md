@@ -334,7 +334,10 @@ It reads `bin/fm-bosun.sh status`, which resolves the bosun's own health record 
 
 What that reading causes is split deliberately.
 `STOPPED` and `DEAD` mean no bosun process is consuming the stream, which a restart fixes, so locked convergence restarts them.
-`STALLED` and `BLIND` mean one is running and has stopped consuming, or cannot read the stream at all; those are reported and left alone, because a restart would clear the symptom and hide the fault, which is the same defect as trusting an active unit one layer up.
+`STALLED` and `BLIND` mean one is running and has stopped consuming, or cannot read the stream at all; without configuration drift those are reported and left alone.
+When unit bytes or the recorded environment drift, convergence restarts one only after `bin/fm-finding.sh` preserves a high-severity evidence record on the findings surface with the drift, the pre-restart reading, and the health record contents.
+If that record cannot be written, convergence does not restart the observer and reports the unreachable surface.
+The rule is never restart a stalled or blind observer without a record, so the stall evidence survives the repair and convergence and fault visibility are both kept rather than traded.
 The reading is taken in read-only sessions too, since it is a read and a session that can see a stalled observer should say so rather than defer it.
 
 The unit declares no sandboxing directives.
