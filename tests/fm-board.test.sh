@@ -223,13 +223,57 @@ test_board_carries_the_vessel_name() {
   assert_no_grep 'Extra-Inbox' "$OUT" \
     "a multi-vessel record must yield this seat's own name, not the inboxes it watches"
 
+  # A board built from a TASK WORKTREE runs the worktree's own copy of this
+  # script, and config/ is home-private and gitignored, so the script root
+  # carries no name there - only FM_HOME does. Reading one resolved path would
+  # leave this case unresolvable, and an unresolvable name is refused, so it is
+  # not a missing header but a build that stops. Measured on this seat.
+  rm -f "$OUT"
+  status=0
+  ( unset FM_BOARD_VESSEL FM_BRIDGE_VESSEL
+    FM_ROOT_OVERRIDE=$TMP_ROOT/empty-home FM_HOME=$TMP_ROOT/home \
+      "$BOARD" --title T --body "$TMP_ROOT/body.html" --out "$OUT" >/dev/null 2>&1 ) || status=$?
+  expect_code 0 "$status" \
+    "a board built where only FM_HOME carries the record must still resolve the name"
+  assert_grep 'class="fm-vessel">Dritteswache<' "$OUT" \
+    "the name did not resolve through FM_HOME when the script root had no record"
+
+  # The mirror case: no FM_HOME in the environment, the record beside the
+  # script. Both are tried, so neither placement is the one that fails.
+  rm -f "$OUT"
+  status=0
+  ( unset FM_BOARD_VESSEL FM_BRIDGE_VESSEL FM_HOME
+    FM_ROOT_OVERRIDE=$TMP_ROOT/home "$BOARD" --title T --body "$TMP_ROOT/body.html" \
+      --out "$OUT" >/dev/null 2>&1 ) || status=$?
+  expect_code 0 "$status" "a board built beside the record must resolve the name"
+  assert_grep 'class="fm-vessel">Dritteswache<' "$OUT" \
+    "the name did not resolve from the script root when FM_HOME was unset"
+
+  # The actual fallback edge: FM_HOME exists but carries no record, while the
+  # script root does. This is where reading only the already-collapsed FM_HOME
+  # path silently misses the second candidate.
+  mkdir -p "$TMP_ROOT/script-root/config"
+  printf 'viertewache\n' > "$TMP_ROOT/script-root/config/bridge-vessel"
+  rm -f "$OUT"
+  status=0
+  ( unset FM_BOARD_VESSEL FM_BRIDGE_VESSEL
+    FM_ROOT_OVERRIDE=$TMP_ROOT/script-root FM_HOME=$TMP_ROOT/empty-home \
+      "$BOARD" --title T --body "$TMP_ROOT/body.html" --out "$OUT" >/dev/null 2>&1 ) || status=$?
+  expect_code 0 "$status" \
+    "a board built with an empty FM_HOME and recorded script root must still resolve the name"
+  assert_grep 'class="fm-vessel">Viertewache<' "$OUT" \
+    "the name did not fall back to the script root when FM_HOME had no record"
+
   # And when nothing resolves it, the board is refused rather than written
-  # unattributed.
+  # unattributed. Both candidate roots are isolated here: this repository's own
+  # config/ is gitignored and so absent from a worktree but present in a real
+  # home, and a test whose verdict depends on which one it runs in is a test
+  # that reports the checkout rather than the behavior.
   rm -f "$OUT"
   status=0
   out=$( unset FM_BOARD_VESSEL FM_BRIDGE_VESSEL
-    FM_HOME=$TMP_ROOT/empty-home "$BOARD" --title T --body "$TMP_ROOT/body.html" \
-      --out "$OUT" 2>&1 ) || status=$?
+    FM_ROOT_OVERRIDE=$TMP_ROOT/empty-home FM_HOME=$TMP_ROOT/empty-home \
+      "$BOARD" --title T --body "$TMP_ROOT/body.html" --out "$OUT" 2>&1 ) || status=$?
   [ "$status" != 0 ] || fail "the builder wrote a board with no vessel name"
   assert_absent "$OUT" "the builder refused but still wrote the board"
   assert_contains "$out" "vessel" "the refusal did not name what is missing"
