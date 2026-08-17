@@ -150,9 +150,9 @@ The log marker is written as `path=` fields rather than prose because the autono
 The watcher's ask branch still carries no reset command, deliberately.
 The wake is a diagnosis; the authority for this path is the captain's answer, and nothing the watcher writes can stand in for it.
 
-## How captain presence is decided, without reading a word
+## How captain presence is decided
 
-Claude Code stamps every user record in the transcript with a structural origin, so provenance needs no text inspection:
+Claude Code usually stamps every user record in the transcript with a structural origin, so the scan starts from provenance fields and uses message text only to classify syntactic Firstmate operational inputs whose producer metadata was lost:
 
 | Record shape | Meaning |
 | --- | --- |
@@ -160,11 +160,12 @@ Claude Code stamps every user record in the transcript with a structural origin,
 | `origin.kind == "task-notification"`, `promptSource == "system"` | a background-task wake delivery - this is how an unattended session keeps moving, and it must never read as the captain |
 | `isMeta: true` | a hook or system injection |
 | array content of `tool_result` | a tool result |
-| string content, no origin, no promptSource | a slash-command expansion, which only ever follows real captain input, so it counts as human |
+| string content, no origin, no promptSource, classified by `bin/fm-operational-input.sh` | a Firstmate operational input whose producer metadata was lost; current `FIRSTMATE_OP` kinds, `from-firstmate`, and legacy operational forms are excluded from captain activity |
+| string content, no origin, no promptSource, not classified by `bin/fm-operational-input.sh` | an unattributed but unmarked user message, including slash-command expansion output; it still counts as human so ambiguity blocks autonomous reset |
 
-The shared scan therefore reads exactly four things from the transcript: the last assistant record's token `usage` numbers, the timestamp of the last genuine captain prompt, that same record's own `uuid`, and the file's byte size.
+The shared scan therefore publishes exactly four things from the transcript: the last assistant record's token `usage` numbers, the timestamp of the last genuine captain prompt, that same record's own `uuid`, and the file's byte size.
 The id is there because the captain-approved path has to NAME the record it treated as the approval, and a clock reading cannot name one.
-Message content is never read and never printed; a record id is the same structural metadata as the origin fields above, not content.
+Message content is inspected only for `bin/fm-operational-input.sh`'s syntactic operational-input classification and is never printed; a record id is the same structural metadata as the origin fields above, not content.
 Every ambiguity resolves toward "the captain is here", because a false quiet costs a discarded conversation and a false busy costs one deferred reset.
 
 **An absent record is not evidence of absence.**
