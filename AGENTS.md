@@ -27,8 +27,9 @@ Hard rules, in priority order:
 
 1. **Never write to a project.**
    Do not edit, commit, or run state-changing commands under `projects/` or in any project worktree; firstmate reads projects and crewmates change them.
-   The only exceptions are the guarded project initialization, fleet sync, Bridge envelope relay owned by `bin/fm-bridge-relay.sh`, secondmate sync and inherited local-material propagation, self-update, and approved `local-only` merge paths owned by their referenced skills and scripts.
+   The only exceptions are the guarded project initialization, the guarded project-removal exception in the next sentence, fleet sync, Bridge envelope relay owned by `bin/fm-bridge-relay.sh`, secondmate sync and inherited local-material propagation, self-update, and approved `local-only` merge paths owned by their referenced skills and scripts.
    Those paths never authorize forcing, stashing, discarding unlanded work, or hand-writing a project's `AGENTS.md`.
+   The only project-removal exception is that `bin/fm-project-remove.sh` may remove a project clone only after its complete safety test passes, never forcing, never discarding unlanded work, and never without the captain's explicit removal decision for that specific project.
 2. **Never merge a PR without the captain's explicit word.**
    A project's captain-approved `yolo` posture is the only standing relaxation for routine decisions; destructive, irreversible, and security-sensitive choices still escalate.
 3. **Never tear down unlanded work.**
@@ -63,7 +64,7 @@ Read a `bin/` script's header before first use rather than inferring what it wri
 Each secondmate has a persistent isolated `FM_HOME`, including its own state, backlog, projects, and session lock.
 `bin/fm-send.sh` fails closed unless `FM_HOME` is explicit, so a steer cannot silently resolve against another home.
 
-Tracked files hold shared instructions and tooling; `data/` holds durable private fleet records; `state/` holds volatile runtime records and append-only status events; `config/` holds local operating choices; and `projects/` contains clones that are read-only to firstmate.
+Tracked files hold shared instructions and tooling; `data/` holds durable private fleet records; `state/` holds volatile runtime records and append-only status events; `config/` holds local operating choices; and `projects/` contains clones that firstmate changes only through section 1's guarded exceptions.
 Section 1's two lists - shared tracked material, and the captain-private gitignored directories - are the boundary the project-write prohibition rests on; for any path not on either list, read the owner above rather than inferring its status.
 
 These are the paths a session reaches for before it has loaded anything else; any other path this file names is introduced by the section that uses it:
@@ -166,7 +167,7 @@ A restart must be a non-event because durable state and live backend inventory, 
 
 Load `project-management` before adding, creating, removing, or initializing a project.
 That skill owns registry syntax, delivery-mode selection, outward-facing consent, clone and initialization procedure, safe rollback, and removal refusal.
-Project creation never authorizes an unmentioned remote, and project removal never bypasses the project-write boundary or unlanded-work checks.
+Project creation never authorizes an unmentioned remote, and project removal is only through that skill's guarded path.
 
 Load `secondmate-provisioning` before creating, seeding, validating, launching, handing backlog to, recovering, pushing inherited local material into, or retiring a secondmate home, and before editing `data/secondmates.md`.
 Its scope field drives routing and its project list is non-exclusive provisioning data, not ownership.
