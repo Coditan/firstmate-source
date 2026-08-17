@@ -19,12 +19,14 @@
 #              deployment updates from.
 #   pinned     the fleet pin names a commit that contains it.
 #   installed  this seat's own checkout has advanced to that pin.
-# This round measures the released and installed hops FOR THIS SEAT ONLY. It
-# does not measure the pin hop and it never speaks for another vessel: the pin
-# is the fleet repository's own measurement, and per-vessel install status is
-# the fleet dashboard's install view (fleet-install-status.v1). A silent round
-# here therefore means "this seat has nothing to decide", never "the fleet is
-# current", and every report states that in the file it writes.
+# This round measures all three hops FOR THIS SEAT ONLY, and it never speaks for
+# another vessel: per-vessel install status is the fleet dashboard's install
+# view (fleet-install-status.v1), and pin FIDELITY - whether the vendored tree
+# still matches the pin - is the fleet repository's own drift gate. The pin-age
+# reading below measures only how far this seat's OWN recorded pin lags its own
+# recorded source, which nothing else measured. A silent round here therefore
+# means "this seat has nothing to decide", never "the fleet is current", and
+# every report states that in the file it writes.
 #
 # READINGS
 # Each reading names its subject, its hop, its state, and the reference it was
@@ -66,6 +68,17 @@
 #                                   reading states only the consequence for
 #                                   delivery, and states it between sessions,
 #                                   where nothing else was watching.
+#   pin-age              pinned     bin/fm-fleet-update-check.sh --pin-age, how
+#                                   far this home's own firstmate.lock pin lags
+#                                   the head of the ref that lock names on the
+#                                   source it names. Earned on 2026-08-17, when
+#                                   this seat's update tool reported "already
+#                                   current" while its pin was 72 commits and 15
+#                                   merged pull requests behind. Pin fidelity was
+#                                   checked and pin age was not, so a vessel days
+#                                   stale passed its own currency check. A home
+#                                   with no firstmate.lock is not pin-delivered
+#                                   and is skipped by name rather than faulted.
 #   tool:<name>          installed  the runtime tools nothing else updates. Each
 #                                   declares its own reference: a latest upstream
 #                                   release, or a version this repo pins. A tool
@@ -403,6 +416,29 @@ read_fork_absorption() {
 # from the primary's local commit, with no origin involved. ff_target is called
 # for it with allow_detached and ignore_seed_marker set, so applying the primary
 # home's rules here would report every secondmate as unable to update forever.
+# How far this home's own pin lags its own recorded source. The driver owns the
+# whole measurement and answers in one "<state>|<detail>" line, so this reading
+# is the seam and never a second implementation that could disagree with the
+# three-hop report a captain runs by hand.
+read_pin_age() {
+  local out status=0 state detail
+  # The driver's own network bound is handed the round's step ceiling so the two
+  # cannot disagree about how long a reading may take.
+  out=$(FM_FLEET_UPDATE_TIMEOUT="$STEP_TIMEOUT" bounded \
+    "$SCRIPT_DIR/fm-fleet-update-check.sh" --pin-age 2>/dev/null) || status=$?
+  if [ "$status" -ne 0 ] || [ -z "$out" ]; then
+    reading pin-age pinned unmeasured \
+      "the pin-age check could not complete (exit $status; it may have exceeded ${STEP_TIMEOUT}s)"
+    return 0
+  fi
+  state=${out%%|*}
+  detail=${out#*|}
+  case "$state" in
+    ok|behind|unmeasured|skipped) reading pin-age pinned "$state" "$detail" ;;
+    *) reading pin-age pinned unmeasured "the pin-age check answered in a shape this round does not know: $out" ;;
+  esac
+}
+
 read_seat_can_update() {
   local default current dirty linked=no ignore_marker=no
   if ! git -C "$FM_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
@@ -505,6 +541,7 @@ run_round() {
   READINGS=()
   read_instruction_surface
   read_fork_absorption
+  read_pin_age
   read_seat_can_update
   read_tools
 }
@@ -518,8 +555,8 @@ render_report() {
     IFS='|' read -r subject hop state _ detail <<< "$record"
     printf 'reading: %s hop=%s state=%s detail=%s\n' "$subject" "$hop" "$state" "$detail"
   done
-  printf 'note: this round measures the released and installed hops FOR THIS SEAT ONLY.\n'
-  printf 'note: the pin hop is the fleet repository'"'"'s measurement and per-vessel install status is the fleet dashboard'"'"'s install view, so a clean round here never means the fleet is current.\n'
+  printf 'note: this round measures the released, pinned, and installed hops FOR THIS SEAT ONLY.\n'
+  printf 'note: on the pin hop it measures pin AGE only, against this seat'"'"'s own recorded source; pin FIDELITY is the fleet repository'"'"'s drift gate and per-vessel install status is the fleet dashboard'"'"'s install view, so a clean round here never means the fleet is current.\n'
 }
 
 # Subjects that were unmeasured in the previous round, one per line. An

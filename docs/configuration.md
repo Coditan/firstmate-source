@@ -611,7 +611,8 @@ The watcher then runs the round on its ordinary `state/*.check.sh` sweep, and th
 Every session start also runs `--armed`, one file read and one comparison, which reports `CURRENCY_ROUND:` when this home is unarmed, has been armed without ever completing a round, or has stopped completing them.
 That reading exists because a broadcast cannot reach a seat that has stopped listening, and a seat that stopped listening is the one most likely to be behind.
 
-Each reading names the hop it speaks for - `released`, `pinned`, or `installed` - and the round measures the released and installed hops for this seat only.
+Each reading names the hop it speaks for - `released`, `pinned`, or `installed` - and the round measures all three for this seat only.
+On the pin hop it measures pin age and not pin fidelity, through `bin/fm-fleet-update-check.sh --pin-age`; [pin-age-check.md](pin-age-check.md) owns why that reading exists and what it deliberately leaves to the fleet repository's own drift gate.
 It never updates anything, never acts on or measures another vessel, and never reports an all-clear for a reading it could not take.
 `FM_CURRENCY_ROUND_DISABLE=1` silences only the reporting modes, for suites that compose `bin/fm-bootstrap.sh`.
 

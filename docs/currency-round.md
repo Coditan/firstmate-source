@@ -38,17 +38,22 @@ A change reaching a running vessel is three separate acts, and a report that doe
 | `pinned` | The fleet pin names a commit that contains it. |
 | `installed` | This seat's own checkout has advanced to that pin. |
 
-The round measures the `released` and `installed` hops **for this seat only**.
-It does not measure the pin hop and it never speaks for another vessel.
-That is not an omission to fix later; it is the boundary that keeps the round from becoming a second measurement that can disagree with the first.
-The pin is the fleet repository's own measurement, and per-vessel install status is the fleet dashboard's install view (`fleet-install-status.v1`, landed the same day in `Coditan/fleet-mobile-command` PR 31, which carries installed version, pin commit, how and when each vessel last updated, and behind-ness against the live reference).
+The round measures all three hops **for this seat only**, and it never speaks for another vessel.
+That boundary is what keeps the round from becoming a second measurement that can disagree with the first.
+Per-vessel install status is the fleet dashboard's install view (`fleet-install-status.v1`, landed the same day in `Coditan/fleet-mobile-command` PR 31, which carries installed version, pin commit, how and when each vessel last updated, and behind-ness against the live reference).
 Every report the round writes states this in the file itself, so a clean round can never be read as "the fleet is current".
+
+On the pin hop the round measures pin **age** and not pin **fidelity**.
+Fidelity - whether the vendored tree still matches the commit the pin names - is the fleet repository's own drift gate, and duplicating it here would produce exactly the second answer this boundary exists to prevent.
+Age had no owner at all until 2026-08-17, when a vessel's update tool reported "already current" while its pin was 72 commits and 15 merged pull requests behind the pin source.
+[pin-age-check.md](pin-age-check.md) owns that incident and the `bin/fm-fleet-update-check.sh` reading that closed it; this round's `pin-age` subject is its daily cadence, and the round's own header owns what that reading records.
 
 ## The four properties, and the failure each was earned by
 
 **Merged is not delivered.**
 Landing in the pin source, bumping the fleet pin, and each seat fast-forwarding are three separate acts.
-Every reading therefore carries its hop, and the report names the hop it cannot speak for.
+Every reading therefore carries its hop, and the report names what it cannot claim on each of them.
+The 2026-08-17 incident is the same property one level down: `bin/fm-update.sh` answered the `installed` hop with one word, that word was read as an answer about all three, and the pin turned out to be 72 commits old.
 
 **Telling is not a mechanism.**
 Tugboat's wake delivery had been switched off since 2026-08-11 by its own captain, so a fleet-wide message reached its queue and nothing surfaced it.
@@ -108,7 +113,8 @@ An `unmeasured` reading must repeat in two consecutive rounds before it surfaces
 - It never acts on, or measures, another vessel.
   Every seat measures itself.
   That avoids both the consent question and a second fleet-wide measurement that could disagree with the dashboard's.
-- It does not measure the pin hop.
+- It does not measure pin fidelity, only pin age.
+  The fleet repository's drift gate owns whether the vendored tree still matches the commit the pin names.
 - It does not re-measure the commit-graph distance between this checkout and its own origin.
   `bin/fm-bootstrap.sh`'s `SELF_DRIFT` check owns that.
   The `seat-can-update` reading answers a different question - whether an arriving update could be taken at all - and reports the consequence for delivery rather than restating `TANGLE`'s remediation.

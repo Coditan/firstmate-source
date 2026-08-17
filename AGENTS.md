@@ -120,7 +120,7 @@ A reading it could not take is reported as unable to see and never as an all-cle
 Firstmate's daily currency duty has a mechanism, so it is never carried by memory: the locked bootstrap step arms `bin/fm-currency-round.sh` on the watcher, and every session start reports `CURRENCY_ROUND:` when this home's check is unarmed or has stopped running.
 `docs/configuration.md` "Daily currency round" and `docs/currency-round.md` own the cadence, the readings, and the scope; the round's findings arrive as an ordinary `check:` wake under section 8.
 Two facts bind wherever that wake is read.
-Every claim of currency names its hop - `released`, `pinned`, or `installed` - and this round measures only the released and installed hops for this seat, so a clean round never means the fleet is current.
+Every claim of currency names its hop - `released`, `pinned`, or `installed` - and this round measures all three for this seat only, so a clean round never means the fleet is current.
 A reading the round could not take is reported as unmeasured and never as current, because an instrument that cannot read must not be relayed as an all-clear.
 
 ## 4. Harness and runtime dispatch
@@ -473,6 +473,10 @@ Fork `main` advances without rewriting history, and every upstream-sync PR must 
 When the captain invokes `/updatefirstmate` or asks to update firstmate, load the `/updatefirstmate` skill.
 It performs guarded fast-forward updates of firstmate and registered secondmate homes, refreshes instructions, and never touches anything under `projects/`.
 Bootstrap separately detects when the primary checkout's own default branch has drifted from its own origin and reports `SELF_DRIFT:`; `/updatefirstmate` resolves only the clean fast-forward (behind-only) case, while an ahead or diverged primary needs a manual preserve-and-merge crewmate task instead - `bootstrap-diagnostics` owns the exact remediation text.
+
+Being level with your own origin is one hop of three, and answering it alone is what let a vessel 72 commits behind pass its own currency check on 2026-08-17.
+Load the `run-fleet-update` skill when the captain invokes `/run-fleet-update`, says "update yourself" or asks whether this vessel is current, when the daily round reports a `pin-age` finding, and before ever telling the captain that this vessel is running current shared code.
+It owns the three-hop reading, and the rule that a hop it could not measure is reported as unable to read rather than as current.
 
 ## 13. Agent-only reference skills
 
