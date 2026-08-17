@@ -147,7 +147,7 @@
 #                                 kept well inside the watcher's per-check
 #                                 timeout so supervision is never starved
 #   FM_FORGE_STATUS_MAX_BYTES     largest accepted response body in bytes
-#                                 (default 1000000)
+#                                 (default 1000000, clamped maximum 5000000)
 #   FM_FORGE_STATUS_OVERDUE       how far past a relaxed target the watch may
 #                                 sit before --armed calls the cadence stopped
 #                                 (default 7200)
@@ -157,9 +157,9 @@
 #                                 (default 60); the effective bound is never
 #                                 below the bounded fetch timeout plus 60s or
 #                                 60s total and is recorded in
-#                                 forge-status.report. The body-size bound keeps
-#                                 parsing, hashing, appending, and publication
-#                                 well inside that recovery margin.
+#                                 forge-status.report. The clamped body-size
+#                                 bound keeps parsing, hashing, appending, and
+#                                 publication well inside that recovery margin.
 #   FM_FORGE_STATUS_NOW           override the current epoch (tests)
 #   FM_FORGE_STATUS_DISABLE=1     silence detect and --armed only, so suites that
 #                                 compose bin/fm-bootstrap.sh neither reach the
@@ -184,7 +184,9 @@ RAISED_INTERVAL=${FM_FORGE_STATUS_RAISED_INTERVAL:-300}
 JITTER_MIN=${FM_FORGE_STATUS_JITTER_MIN:-180}
 JITTER_MAX=${FM_FORGE_STATUS_JITTER_MAX:-420}
 TIMEOUT=${FM_FORGE_STATUS_TIMEOUT:-10}
-MAX_BYTES=${FM_FORGE_STATUS_MAX_BYTES:-1000000}
+MAX_BYTES_DEFAULT=1000000
+MAX_BYTES_CEILING=5000000
+MAX_BYTES_CONFIGURED=${FM_FORGE_STATUS_MAX_BYTES:-}
 OVERDUE=${FM_FORGE_STATUS_OVERDUE:-7200}
 OVERDUE_RAISED=${FM_FORGE_STATUS_OVERDUE_RAISED:-1800}
 LOCK_STALE_CONFIGURED=${FM_FORGE_STATUS_LOCK_STALE_AFTER:-60}
@@ -193,7 +195,13 @@ case "$RAISED_INTERVAL" in ''|*[!0-9]*|0) RAISED_INTERVAL=300 ;; esac
 case "$JITTER_MIN" in ''|*[!0-9]*) JITTER_MIN=180 ;; esac
 case "$JITTER_MAX" in ''|*[!0-9]*) JITTER_MAX=420 ;; esac
 case "$TIMEOUT" in ''|*[!0-9]*|0) TIMEOUT=10 ;; esac
-case "$MAX_BYTES" in ''|*[!0-9]*|0) MAX_BYTES=1000000 ;; esac
+case "$MAX_BYTES_CONFIGURED" in
+  ''|*[!0-9]*|0|????????*) MAX_BYTES=$MAX_BYTES_DEFAULT ;;
+  *)
+    MAX_BYTES=$MAX_BYTES_CONFIGURED
+    [ "$MAX_BYTES" -le "$MAX_BYTES_CEILING" ] || MAX_BYTES=$MAX_BYTES_CEILING
+    ;;
+esac
 case "$OVERDUE" in ''|*[!0-9]*) OVERDUE=7200 ;; esac
 case "$OVERDUE_RAISED" in ''|*[!0-9]*) OVERDUE_RAISED=1800 ;; esac
 case "$LOCK_STALE_CONFIGURED" in ''|*[!0-9]*) LOCK_STALE_CONFIGURED=60 ;; esac
@@ -409,7 +417,7 @@ observe() {
   if [ "$status" -ne 0 ]; then
     rm -f -- "$body"
     if [ "$status" -eq 63 ]; then
-      set_unmeasurable '-' "the status page at $URL exceeded the configured ${MAX_BYTES}-byte response limit"
+      set_unmeasurable '-' "the status page at $URL exceeded the effective ${MAX_BYTES}-byte response limit"
       return 0
     fi
     set_unmeasurable '-' "the status page at $URL could not be read (fetch exit $status, bounded at ${TIMEOUT}s)"
@@ -425,7 +433,7 @@ observe() {
   esac
   if [ "$body_bytes" -gt "$MAX_BYTES" ]; then
     rm -f -- "$body"
-    set_unmeasurable "$code" "the status page at $URL returned ${body_bytes} bytes, exceeding the configured ${MAX_BYTES}-byte response limit"
+    set_unmeasurable "$code" "the status page at $URL returned ${body_bytes} bytes, exceeding the effective ${MAX_BYTES}-byte response limit"
     return 0
   fi
   scheme=${URL%%:*}
@@ -631,6 +639,7 @@ render_record() {  # <state> <cadence> <next> <observed> <entry> <recorded> <sur
   printf 'jitter-min-seconds: %s\n' "$JITTER_MIN"
   printf 'jitter-max-seconds: %s\n' "$JITTER_MAX"
   printf 'draw-attempts: %s\n' "$DRAW_ATTEMPTS"
+  printf 'status-max-response-bytes: %s\n' "$MAX_BYTES"
   printf 'transaction-lock-stale-after-seconds: %s\n' "$LOCK_STALE_AFTER"
   printf 'source: %s\n' "$URL"
   printf 'written: %s\n' "$(epoch_utc "$NOW")"
@@ -724,6 +733,7 @@ render_absent_report() {
   printf 'next-observation: none scheduled\n'
   printf 'last-observation: never\n'
   printf 'last-new-reading: never\n'
+  printf 'status-max-response-bytes: %s\n' "$MAX_BYTES"
   printf 'transaction-lock-stale-after-seconds: %s\n' "$LOCK_STALE_AFTER"
   printf 'source: %s\n' "$URL"
   printf 'log: %s\n' "$LOG"

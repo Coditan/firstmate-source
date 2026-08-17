@@ -93,9 +93,11 @@ A watch that tightened itself would be classifying severity by another route.
 Cadence changes and the complete observation read, append, and schedule transaction share one home-scoped lock.
 A detect or force observation exits quietly when another writer holds it, so overlapping sweeps neither wait on the fetch timeout nor append the same reading twice.
 Read-only modes do not acquire the lock or create state.
-The fetch accepts at most `FM_FORGE_STATUS_MAX_BYTES` bytes, defaulting to 1000000, and the script verifies that bound again before parsing.
+The fetch accepts at most the effective `FM_FORGE_STATUS_MAX_BYTES` cap and verifies that bound again before parsing.
+The default is 1000000 bytes, malformed or integer-risking settings fall back to that default, and valid settings are clamped to a hard ceiling of 5000000 bytes.
+The effective cap is recorded in `forge-status.report` as `status-max-response-bytes`.
 The effective stale-lock recovery bound is at least the configured fetch timeout plus 60 seconds and is recorded in `forge-status.report`.
-Bounding both fetch duration and body size keeps the complete fetch, parse, hash, append, and publication transaction well inside that recovery margin.
+Bounding both fetch duration and the clamped body size keeps the complete fetch, parse, hash, append, and publication transaction well inside that recovery margin.
 
 The cadence is the target, not the observation instant.
 The watcher sees a due target on its next `state/*.check.sh` sweep, so an observation lands at the target plus however far that sweep has to travel, and that sweep's period belongs to `bin/fm-watch.sh`.

@@ -354,7 +354,7 @@ test_an_oversized_status_document_is_unmeasurable_and_never_parsed() {
 
   out=$(FM_FORGE_STATUS_MAX_BYTES=100 run_watch "$home" --force)
   assert_contains "$out" 'UNMEASURABLE' "an oversized body must be unmeasurable"
-  assert_contains "$out" '100-byte response limit' "the wake must name the configured size limit"
+  assert_contains "$out" '100-byte response limit' "the wake must name the effective size limit"
   assert_contains "$out" 'NOT a clear reading' "an oversized body must refuse to be read as healthy"
   assert_not_contains "$out" 'All Systems Operational' "an oversized body must not be parsed as a reading"
   [ "$(entry_count "$home")" -eq 1 ] || fail "the oversized refusal was not recorded once"
@@ -371,13 +371,41 @@ test_an_oversized_status_document_is_unmeasurable_and_never_parsed() {
   export FM_TEST_CURL_MODE
   out=$(FM_FORGE_STATUS_MAX_BYTES=100 run_watch "$fallback_home" --force)
   assert_contains "$out" 'UNMEASURABLE' "the parser boundary must reject a body the transport allowed"
-  assert_contains "$out" 'exceeding the configured 100-byte response limit' \
-    "the fallback refusal must name the measured body and configured limit"
+  assert_contains "$out" 'exceeding the effective 100-byte response limit' \
+    "the fallback refusal must name the measured body and effective limit"
   assert_not_contains "$out" 'All Systems Operational' \
     "the fallback refusal must happen before status parsing"
   [ "$(entry_count "$fallback_home")" -eq 1 ] \
     || fail "the parser-boundary oversized refusal was not recorded once"
   pass "an oversized status body is recorded once as unmeasurable and never parsed"
+}
+
+test_the_status_body_cap_is_range_safe_and_clamped() {
+  local configured home malformed_home out
+  home=$(make_home capped-override)
+  dd if=/dev/zero of="$home/oversized.json" bs=1000000 count=5 2>/dev/null
+  printf 'x' >> "$home/oversized.json"
+  serve "$home" oversized
+
+  out=$(FM_FORGE_STATUS_MAX_BYTES=9999999 run_watch "$home" --force)
+  assert_contains "$out" 'UNMEASURABLE' "a cap above the hard ceiling must not admit an oversized body"
+  assert_contains "$out" 'effective 5000000-byte response limit' \
+    "the refusal must expose the clamped effective cap"
+  assert_not_contains "$out" 'All Systems Operational' \
+    "a body above the hard ceiling must never become a measured reading"
+  out=$(run_watch "$home" --status)
+  assert_contains "$out" 'status-max-response-bytes: 5000000' \
+    "the persisted record must expose the effective ceiling"
+
+  malformed_home=$(make_home malformed-cap)
+  rmdir "$malformed_home/state" || fail "could not prepare a cap test without state"
+  for configured in '' 0 -1 nope 999999999999999999999999; do
+    out=$(FM_FORGE_STATUS_MAX_BYTES=$configured run_watch "$malformed_home" --status)
+    assert_contains "$out" 'status-max-response-bytes: 1000000' \
+      "an invalid cap '$configured' must fall back to the default"
+  done
+  [ ! -e "$malformed_home/state" ] || fail "reading a malformed effective cap created state"
+  pass "the response cap is range safe, clamped, and visible"
 }
 
 test_http_000_is_unmeasurable_but_non_http_000_can_be_read() {
@@ -916,6 +944,7 @@ test_a_new_reading_is_recorded_once_and_never_repeated_while_it_holds
 test_the_wake_says_what_a_vessel_should_not_conclude
 test_an_unreachable_status_page_is_unmeasurable_and_never_clear
 test_an_oversized_status_document_is_unmeasurable_and_never_parsed
+test_the_status_body_cap_is_range_safe_and_clamped
 test_http_000_is_unmeasurable_but_non_http_000_can_be_read
 test_a_status_document_cannot_forge_a_record_field
 test_the_cadence_is_settable_and_the_setting_in_force_is_readable
