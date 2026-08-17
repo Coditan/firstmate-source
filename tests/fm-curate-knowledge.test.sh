@@ -514,12 +514,14 @@ test_route_proof_cannot_write_real_files() {
     --loaded "$TMP/sed-route-loaded.md" --archive "$TMP/after-archive.md" \
     --home "$TMP" 2>&1) && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "a sed -i route exited $status, expected 1"
-  printf '%s' "$out" | grep -q 'documented route failed' \
-    || fail "the sed -i route was not reported as failed"
+  printf '%s' "$out" | grep -q 'NOT PROVABLE BY THIS GUARD' \
+    || fail "the sed -i route was not reported as outside the provable interface"
+  printf '%s' "$out" | grep -q 'cannot be proven non-writing; document the route with grep or rg' \
+    || fail "the sed -i route was reported with no reason"
   # A refusal is the most security-relevant thing this gate says, so its reason
   # travels on the FAIL line rather than only in the narration above it.
-  printf '%s' "$out" | grep -q 'FAIL  documented route failed: route command' \
-    || fail "the refused route's FAIL line carries no reason"
+  printf '%s' "$out" | grep -q 'FAIL  no documented search is inside the provable interface' \
+    || fail "a loaded half with nothing provable did not fail saying so"
   [ "$(sha256sum "$TMP/after-archive.md")" = "$before_hash" ] \
     || fail "the sed -i route changed the real archive"
 
@@ -1142,7 +1144,7 @@ EOF
     --archive "$TMP/level-archive-after.md" --level 2 --home "$TMP" 2>&1) \
     && status=0 || status=$?
   [ "$status" -eq 2 ] || fail "--level with a pair baseline exited $status, expected 2"
-  printf '%s' "$out" | grep -q 'ambiguous with a pair baseline' \
+  printf '%s' "$out" | grep -q 'cannot be set on a run that reads a baseline' \
     || fail "an ambiguous --level was silently applied to one half"
   pass "each half of a pair baseline is parsed at its own entry level"
 }
@@ -1214,6 +1216,158 @@ test_a_report_cannot_omit_the_deletion_ledger() {
   pass "a report cannot be produced without the worksheet that carries the ledger"
 }
 
+# The key encodes the norm every later comparison runs on, so a row whose
+# heading has drifted from its key would be validated by one and counted by the
+# other. That is how a deletion ledger entry becomes fiction without a single
+# fabricated key: the contradicting norm is simply never checked.
+test_a_worksheet_heading_cannot_contradict_its_key() {
+  local out status
+  sed 's|^heading: A path that no longer exists$|heading: A path that no longer exists at all|' \
+    "$TMP/ws-filled.md" >"$TMP/ws-drifted.md"
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-drifted.md" \
+    --loaded "$TMP/after-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "a drifted worksheet heading exited $status, expected 1"
+  # shellcheck disable=SC2016 # The driver's message contains literal backticks.
+  printf '%s' "$out" | grep -q 'but heading `A path that no longer exists at all`' \
+    || fail "the check does not name the row whose heading contradicts its key"
+
+  out=$("$DRIVER" report --before "$TMP/before.json" --worksheet "$TMP/ws-drifted.md" \
+    --loaded "$TMP/after-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "report accepted a drifted worksheet heading"
+  printf '%s' "$out" | grep -q 'DELETION LEDGER' \
+    && fail "report printed a ledger built from a heading its key contradicts"
+  pass "a worksheet heading that contradicts its own key is refused"
+}
+
+# A baseline's entries are fixed at snapshot time, so an override that lands on
+# the after-state alone compares unlike things. In single mode that used to fail
+# silently, inventing undeclared deletions and emptying the archive of entries
+# to prove reachable.
+test_a_level_override_is_refused_against_any_baseline() {
+  local out status
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/after-loaded.md" --archive "$TMP/after-archive.md" \
+    --level 3 --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 2 ] || fail "--level on a single baseline exited $status, expected 2"
+  printf '%s' "$out" | grep -q 'cannot be set on a run that reads a baseline' \
+    || fail "the single-baseline --level refusal does not say why"
+  printf '%s' "$out" | grep -q 'disappeared with no verdict' \
+    && fail "--level produced invented deletions instead of refusing"
+
+  out=$("$DRIVER" report --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/after-loaded.md" --archive "$TMP/after-archive.md" \
+    --level 3 --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 2 ] || fail "report --level exited $status, expected 2"
+
+  # It still belongs where there is no baseline to contradict.
+  "$DRIVER" measure "$TMP/before.md" --level 3 --home "$TMP" >/dev/null 2>&1 \
+    || fail "measure --level was refused, but it has no baseline to contradict"
+  "$DRIVER" inventory "$TMP/before.md" --level 2 --out "$TMP/ws-level.md" \
+    --home "$TMP" >/dev/null 2>&1 \
+    || fail "inventory --level was refused, but it has no baseline to contradict"
+  pass "a level override is refused wherever a baseline would contradict it"
+}
+
+# A diagnostic that contradicts itself is worse than none: an absolute path used
+# to fall through to the mismatch branch and be told it resolves to itself and
+# is therefore not itself.
+test_an_absolute_route_path_is_refused_for_the_real_reason() {
+  local out status
+  # shellcheck disable=SC2016 # The loaded half's route is written in backticks.
+  printf '# Store\n\nReach it with `grep -n %s %s/after-archive.md`.\n' \
+    "'^## '" "$TMP" >"$TMP/absolute-route-loaded.md"
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/absolute-route-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "an absolute documented path exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'is absolute and cannot be mirrored into the protected proof directory' \
+    || fail "the absolute path was not refused for the reason that applies"
+  printf '%s' "$out" | grep -q 'not archive' \
+    && fail "an absolute path still produces the self-contradictory diagnostic"
+  pass "an absolute documented route path is refused for the real reason"
+}
+
+# Proving only the first documented search enforces whatever order the curator
+# wrote, and this project's own workflow pairs a grep index with a sed read step.
+test_every_provable_documented_search_is_proved() {
+  local out status
+  cat >"$TMP/pair-route-loaded.md" <<'EOF'
+# Store
+
+Read a section with `sed -n '3,20p' after-archive.md` once you know its bounds.
+Get those bounds from `grep -n '^## ' after-archive.md`.
+
+- **Alpha rule**: the one sentence that must be in hand first.
+EOF
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/pair-route-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "a sed read step before the grep index exited $status: $out"
+  printf '%s' "$out" | grep -q 'NOT PROVABLE BY THIS GUARD' \
+    || fail "the unprovable search was dropped silently instead of reported"
+  printf '%s' "$out" | grep -q 'route reaches 1 of 1 archived entries' \
+    || fail "the grep index was not proved when a sed step preceded it"
+
+  cat >"$TMP/broken-second-route-loaded.md" <<'EOF'
+# Store
+
+Reach them with `grep -n '^## ' after-archive.md`.
+Or with `grep -n '[' after-archive.md`, which does not work.
+
+- **Alpha rule**: the one sentence that must be in hand first.
+EOF
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/broken-second-route-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "a broken second search exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'documented route exited' \
+    || fail "the broken second search was never executed"
+
+  cat >"$TMP/sed-only-route-loaded.md" <<'EOF'
+# Store
+
+Read a section with `sed -n '3,20p' after-archive.md` once you know its bounds.
+
+- **Alpha rule**: the one sentence that must be in hand first.
+EOF
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/sed-only-route-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "a sed-only route exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'no documented search is inside the provable interface' \
+    || fail "a loaded half with nothing provable did not say nothing was proven"
+  pass "every documented search the guard can run is proved, and the rest reported"
+}
+
+# The workflow stages the pair outside the home, so the file named by --loaded is
+# usually in no surface. A share against a surface that does not exist yet is
+# priced honestly or not at all.
+test_a_staged_share_is_labelled_a_projection() {
+  local out status
+  out=$("$DRIVER" report --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/after-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "report on a staged pair exited $status: $out"
+  printf '%s' "$out" | grep -q 'PROJECTION, not yet in place' \
+    || fail "a staged loaded half printed an unlabelled share"
+  printf '%s' "$out" | grep -q 'the loaded half is STAGED' \
+    || fail "the report does not say the loaded half is staged"
+
+  # The same curation with the loaded half where the digest actually reads it.
+  cp "$TMP/after-loaded.md" "$TMP/data/learnings.md"
+  cp "$TMP/after-archive.md" "$TMP/data/learnings-longterm.md"
+  out=$("$DRIVER" report --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/data/learnings.md" --archive "$TMP/data/learnings-longterm.md" \
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "report on an in-place loaded half exited $status: $out"
+  printf '%s' "$out" | grep -q 'PROJECTION' \
+    && fail "an in-place loaded half was priced as a projection"
+  rm -f "$TMP/data/learnings.md" "$TMP/data/learnings-longterm.md"
+  pass "a staged share is labelled a projection and an in-place one is not"
+}
+
 # The skill must be reachable and must not claim a command the driver lacks.
 test_skill_declares_its_trigger_and_only_real_subcommands() {
   assert_present "$SKILL" "run-curate-knowledge SKILL.md is missing"
@@ -1282,4 +1436,9 @@ test_measure_json_is_one_document
 test_the_two_shapes_never_borrow_each_others_method
 test_a_real_curation_passes_and_the_report_carries_the_ledger
 test_a_report_cannot_omit_the_deletion_ledger
+test_a_worksheet_heading_cannot_contradict_its_key
+test_a_level_override_is_refused_against_any_baseline
+test_an_absolute_route_path_is_refused_for_the_real_reason
+test_every_provable_documented_search_is_proved
+test_a_staged_share_is_labelled_a_projection
 test_skill_declares_its_trigger_and_only_real_subcommands

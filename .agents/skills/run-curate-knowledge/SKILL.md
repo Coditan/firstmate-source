@@ -238,11 +238,16 @@ It asserts, and exits non-zero on any of:
 - a `stub` names no owner path that exists, or the file never points at it;
 - the loaded half does not name the archive, or names it with no runnable search;
 - the documented path does not resolve, from the home, to the archive under check;
-- the documented route command fails to recover every archived entry occurrence;
-- a nested archive heading lies outside every entry span.
+- a documented search the guard can run fails, or none of them reaches every archived entry occurrence;
+- no documented search is inside the provable interface at all, so nothing was proven;
+- a nested archive heading lies outside every entry span;
+- a worksheet row's `heading:` contradicts the norm inside its own `key:`.
 
-Then it executes the documented command once against a protected copy and asserts that its output reaches every archived entry.
+Then it executes EVERY documented search whose verb the guard can run - `grep` and `rg`, the two tools with no write operation anywhere in their interface - against a protected copy, in whatever order they were written.
+All of them must run clean and at least one must reach every archived entry.
+A documented search the guard cannot run, a `sed` read step for instance, is reported as documented-but-unprovable rather than dropped, because a report that quietly omits something is the defect this driver exists to catch.
 The `--prove-route` value limits only the printed example, never the assertion.
+`--level` is refused here: the baseline's entries were measured at the level the snapshot recorded, so set it with `measure --level <n>` instead.
 
 The passing output below came from a current run over a copy of the first two real entries under `Cost and quota` in `/home/coditan/coditan-firstmate/data/learnings-longterm.md`.
 The source home was read only; the baseline, loaded half, archive, worksheet, and snapshot were worktree-local copies under `.curate-proof/`.
@@ -259,7 +264,8 @@ ROUTE BACK
     grep -n '^## ' data/cost-archive.md
 
 COMPLETE ROUTE ASSERTION
-  route reaches 1 of 1 archived entries
+  grep -n '^## ' data/cost-archive.md
+    route reaches 1 of 1 archived entries
 PRINTED EXAMPLE (3 output lines maximum)
   $ (protected copy && /usr/bin/grep -n '^## ' data/cost-archive.md)
     1:## Das Abrechnungsmass der Flotte zaehlt frische Token, nicht gelesenen Kontext (2026-08-10, gemessen)
@@ -294,14 +300,15 @@ HEADINGS  before 4  ->  after 3 (loaded 1 + archive 2)
 BYTES     before 2511  ->  loaded 494 (19.7% of the original still loads)
 
 COMPLETE ROUTE ASSERTION
-  route reaches 2 of 2 archived entries
+  grep -n '^## ' data/cost-archive-after.md
+    route reaches 2 of 2 archived entries
 
 CHECK PASSED: headings 4 -> 3, bytes 2511 -> 494, every entry deletion is declared, and the archive is reachable from the loaded half.
 ```
 
 Each half keeps the entry level it was measured at, which the run prints.
 The two often differ - a pruned loaded half of a title and one section resolves to level 1 while its archive of many sections resolves to 2 - and parsing either after-file at the other's level would read as though the whole archive had been deleted.
-For that reason `--level` is refused in pair mode as ambiguous: set it per file at snapshot time with `measure --level <n>` instead.
+For that reason `--level` is refused on `check` and `report` in both modes: a baseline's entries are fixed at snapshot time, so set the level per file with `measure --level <n>` instead.
 
 Judging that same curation against the loaded half alone rejects it, because a two-file after-state was never comparable to one half.
 
@@ -333,12 +340,20 @@ The ledger is the only record a deleted entry ever gets, so a report that could 
 
 It prints before and after in bytes and share, the verdict counts, the fold list, and the deletion ledger with each entry's evidence verbatim.
 
-Real output from that worked copy, abridged to the part after the denominator notes:
+A share is only printed against a surface that exists.
+`report` resolves `--loaded` and asks whether that exact file is in the measured surface.
+While the pair is staged, as it is here and as the Safety section requires, the before share is measured against today's real surface and the after share is labelled a PROJECTION of the surface once the pair is moved into place.
+Both notes below are the driver saying so.
+
+Real output from that worked copy, abridged to the two staging notes and the part after them, with the worktree path shortened to `...`:
 
 ```
+  note: the loaded half is STAGED - .../.curate-proof/home/data/cost-loaded.md is in no measured surface, so its share below is a PROJECTION of the surface after the pair is moved into place, not a state that exists yet
+  note: the baseline file .../.curate-proof/cost-before.md is not part of the measured surface either, so this run is a rehearsal against copies
+
 STARTUP COST
-  before       2173 B      0.8% of a 264474 B surface
-  after         345 B      0.1% of a 262646 B surface
+  before       2173 B      0.8% of a 262646 B surface
+  after         345 B      0.1% of a 262991 B surface   (PROJECTION, not yet in place)
   change      -1828 B   15.9% of the original still loads
   archived     1694 B   not loaded at session start
   retained     2039 B   loaded + archived, against 2173 B before (93.8%)

@@ -24,9 +24,14 @@ here instead of being left to an agent's care:
                                 unlisted entry deletion cannot survive a run.
   * the archive went dark    -> `check` requires the route back to live INSIDE
                                 the loaded half, requires that route to be a
-                                runnable search command, and then RUNS it
-                                once and checks every archived entry against
-                                its output. The route is proved, not asserted.
+                                runnable search command, and then RUNS every
+                                documented search this guard can execute,
+                                checking each archived entry against the output.
+                                Every one of them must run clean and at least
+                                one must reach every entry; a documented search
+                                outside the provable interface, a `sed` read
+                                step for instance, is reported as such rather
+                                than dropped. The route is proved, not asserted.
 
 PROOF AND LEDGER UNIT
 Both guarantees operate on entries at the selected heading level. Deeper
@@ -102,6 +107,15 @@ denominator cannot drift away from what actually loads. Every run prints the
 denominator's composition and what it excludes. Pass --against <file> to
 measure against a captured real digest instead.
 
+A share is only printed against a surface that exists. The workflow this skill
+teaches stages the new pair outside the home and moves it in after the check
+passes, so `report` resolves --loaded and asks whether that exact file is in the
+measured surface. In place, the arithmetic is the surface as it stands. Staged,
+the before share is measured against today's real surface and the after share is
+labelled a PROJECTION of the surface once the pair is moved, because an
+unlabelled share for a state that never existed is the same offence as pricing a
+prune in lines.
+
 Usage:
   fm-curate-knowledge.py measure [FILE...] [options]
       Per file: bytes, heading count, per-entry byte sizes, share of the
@@ -144,7 +158,10 @@ is invisible because the baseline never knew the archive existed. The mode is
 chosen from the arguments, never guessed: pair mode requires both flags. Each
 half keeps the entry level it was measured at, because the two routinely differ
 and parsing either after-file at the other's level reports the whole archive as
-deleted; --level is refused in pair mode as ambiguous, and belongs on `measure`.
+deleted. A baseline's entries are fixed at snapshot time, so `check` and
+`report` refuse --level outright in both modes rather than reparsing the
+after-state at a level the baseline never used; --level belongs on `measure`
+and `inventory`, which parse a file with no baseline to contradict.
 Verdicts are still owed only for the entries of the before-LOADED half, because
 a re-run curates what accumulated there while the archive's own entries are
 accounted for by presence rather than by judgement.
@@ -239,6 +256,14 @@ def occurrence_keys(headings):
         counts[norm] = counts.get(norm, 0) + 1
         keys.append("%s#%d" % (norm, counts[norm]))
     return keys
+
+
+def split_occurrence_key(key):
+    """The (norm, ordinal) an occurrence key encodes, or (None, None)."""
+    match = re.fullmatch(r"(.*)#(\d+)", key.strip())
+    if not match:
+        return None, None
+    return match.group(1), int(match.group(2))
 
 
 # --------------------------------------------------------------------------
@@ -639,10 +664,34 @@ def read_worksheet(path):
         rows.append(current)
     generated = occurrence_keys([row["heading"] for row in rows])
     for row, generated_key in zip(rows, generated):
-        row["norm"] = norm_heading(row["heading"])
         if not row["key"]:
             row["key"] = generated_key
+        heading_norm = norm_heading(row["heading"])
+        # The key already encodes the norm, so the norm every later comparison
+        # runs on is taken FROM the key rather than re-derived from the heading
+        # text. A row whose heading has drifted from its key would otherwise be
+        # validated by the key and then counted by a norm the baseline never
+        # had, which is a deletion ledger entry nothing checks.
+        key_norm, _ordinal = split_occurrence_key(row["key"])
+        row["norm"] = heading_norm if key_norm is None else key_norm
+        row["key_conflict"] = key_norm is not None and key_norm != heading_norm
     return meta, rows
+
+
+def key_conflicts(rows):
+    """Rows whose `heading:` contradicts the norm inside their own `key:`."""
+    return [row for row in rows if row.get("key_conflict")]
+
+
+def key_conflict_message(row):
+    key_norm, _ordinal = split_occurrence_key(row["key"])
+    return (
+        "entry %s carries key `%s` but heading `%s`, which normalises to `%s`; "
+        "one of the two is wrong and the driver will not guess which"
+        % (row["n"], row["key"], row["heading"][:60], norm_heading(row["heading"]))
+        if key_norm is not None
+        else "entry %s carries an unreadable key `%s`" % (row["n"], row["key"])
+    )
 
 
 # --------------------------------------------------------------------------
@@ -852,6 +901,22 @@ def load_baseline(args):
             2,
         )
 
+    # A baseline's entry set is fixed at snapshot time, so an override that
+    # lands on the after-state alone compares unlike things. That is true of one
+    # baseline file exactly as it is of a pair, and in single mode it used to
+    # fail silently: a wrong --level turned a correct curation into invented
+    # undeclared deletions and quietly emptied the archive of entries to prove
+    # reachable. --level belongs on `measure` and `inventory`, which parse a
+    # file with no baseline to contradict.
+    if args.level:
+        die(
+            "--level cannot be set on a run that reads a baseline: the "
+            "snapshot's entries were measured at the level it recorded. "
+            "Snapshot with `measure --level <n>` and let this command follow "
+            "what the snapshot recorded",
+            2,
+        )
+
     if not any(pair_flags):
         _snap, record = load_snapshot(args.before, args.before_file)
         baseline = dict(record)
@@ -862,18 +927,6 @@ def load_baseline(args):
         baseline["archive_level"] = record["level"]
         baseline["mode"] = "single"
         return baseline
-
-    # One --level cannot mean two things. Each half of a pair carries the level
-    # it was measured at, and an override that silently landed on one of them is
-    # the defect this pair baseline exists to remove. Set the level per file at
-    # snapshot time instead, with `measure --level`.
-    if args.level:
-        die(
-            "--level is ambiguous with a pair baseline: each half carries the "
-            "level it was measured at. Snapshot the halves with `measure "
-            "--level <n>` and let check follow what the snapshot recorded",
-            2,
-        )
 
     loaded_record = snapshot_record(snap, args.before_loaded, args.before)
     archive_record = snapshot_record(snap, args.before_archive, args.before)
@@ -912,10 +965,8 @@ def load_baseline(args):
     return baseline
 
 
-def baseline_levels(args, before):
+def baseline_levels(before):
     """The entry level to parse each after-file at, one per half."""
-    if args.level:
-        return args.level, args.level
     loaded_level = before.get("loaded_level") or before.get("level")
     archive_level = before.get("archive_level") or before.get("level")
     return loaded_level, archive_level
@@ -1017,29 +1068,39 @@ def prove_route(command, home, archive_path, entries, sample, trusted_dirs=None)
     try:
         argv = shlex.split(command)
     except ValueError as exc:
-        return False, [], [], "route cannot be tokenized: %s" % exc
+        return "refused", [], [], "route cannot be tokenized: %s" % exc
     if not argv or argv[0] not in ROUTE_VERBS:
-        return False, [], [], (
+        return "refused", [], [], (
             "route command `%s` cannot be proven non-writing; document the "
             "route with grep or rg"
         ) % (argv[0] if argv else "")
     forbidden = ("|", ";", ">", "<", "`", "$(", "${")
     if any(token in command for token in forbidden):
-        return False, [], [], "route contains a forbidden shell construct"
+        return "refused", [], [], "route contains a forbidden shell construct"
     option_error, file_args = _validate_route_argv(argv)
     if option_error:
-        return False, [], [], option_error
+        return "refused", [], [], option_error
     executable, executable_error = _trusted_route_binary(
         argv[0], TRUSTED_ROUTE_DIRS if trusted_dirs is None else trusted_dirs
     )
     if executable_error:
-        return False, [], [], executable_error
+        return "refused", [], [], executable_error
     home_dir = os.path.realpath(home)
     archive_real = os.path.realpath(archive_path)
+    # An absolute path is refused for what it actually is - a path this proof
+    # cannot mirror into its protected directory - rather than being left to
+    # fall through to the mismatch branch, which would tell an operator that a
+    # path resolves to itself and is therefore not itself.
+    absolute_args = [index for index in file_args if os.path.isabs(argv[index])]
+    if absolute_args:
+        return "refused", [], [], (
+            "documented path `%s` is absolute and cannot be mirrored into the "
+            "protected proof directory; document the route relative to the "
+            "home, as `data/<name>.md`" % argv[absolute_args[0]]
+        )
     resolved_args = {
         index: os.path.realpath(os.path.join(home_dir, argv[index]))
         for index in file_args
-        if not os.path.isabs(argv[index])
     }
     archive_args = [
         index for index, resolved in resolved_args.items() if resolved == archive_real
@@ -1048,25 +1109,26 @@ def prove_route(command, home, archive_path, entries, sample, trusted_dirs=None)
         documented = argv[file_args[-1]] if file_args else "(none)"
         documented_real = (
             os.path.realpath(os.path.join(home_dir, documented))
-            if documented != "(none)" and not os.path.isabs(documented)
-            else os.path.realpath(documented) if documented != "(none)" else documented
+            if documented != "(none)"
+            else documented
         )
-        return False, [], [], (
+        return "refused", [], [], (
             "documented archive path `%s` resolves to `%s`, not archive `%s`; "
             "the documented route is broken from a normal shell"
             % (documented, documented_real, archive_real)
         )
     if len(archive_args) != 1:
-        return False, [], [], "route must name the archive exactly once"
+        return "refused", [], [], "route must name the archive exactly once"
     archive_index = archive_args[0]
     documented_archive = argv[archive_index]
-    if os.path.isabs(documented_archive) or ".." in documented_archive.split(os.sep):
-        return False, [], [], (
-            "documented archive path `%s` cannot be mapped to a protected copy; "
-            "use a relative path without `..`" % documented_archive
+    if ".." in documented_archive.split(os.sep):
+        return "refused", [], [], (
+            "documented archive path `%s` cannot be mirrored into the protected "
+            "proof directory; document it relative to the home without `..`"
+            % documented_archive
         )
     if not file_args:
-        return False, [], [], "route has no archive path argument"
+        return "refused", [], [], "route has no archive path argument"
     # TMPDIR, never the current directory. Run the documented way, `check` is
     # invoked from the operational home or a repo checkout, and this program
     # promises to write to neither. A leftover proof directory under TMPDIR is
@@ -1074,21 +1136,21 @@ def prove_route(command, home, archive_path, entries, sample, trusted_dirs=None)
     try:
         temp_path = tempfile.mkdtemp(prefix="fm-route-proof-")
     except OSError as exc:
-        return False, [], [], "route proof directory could not be created: %s" % exc
+        return "refused", [], [], "route proof directory could not be created: %s" % exc
     _register_proof_dir(temp_path)
     copied = {}
     try:
         for index in file_args:
             value = argv[index]
-            if os.path.isabs(value) or ".." in value.split(os.sep):
-                return False, [], [], "route file path `%s` cannot be mapped safely" % value
+            if ".." in value.split(os.sep):
+                return "refused", [], [], "route file path `%s` cannot be mapped safely" % value
             candidate = os.path.realpath(os.path.join(home_dir, value))
             if not os.path.isfile(candidate):
                 continue
             destination = os.path.join(temp_path, value)
             name = os.path.relpath(destination, temp_path)
             if name in copied and copied[name] != candidate:
-                return False, [], [], "route maps two different files to %s" % name
+                return "refused", [], [], "route maps two different files to %s" % name
             if name not in copied:
                 os.makedirs(os.path.dirname(destination), exist_ok=True)
                 shutil.copyfile(candidate, destination)
@@ -1096,7 +1158,7 @@ def prove_route(command, home, archive_path, entries, sample, trusted_dirs=None)
                 copied[name] = candidate
         archive_copy = os.path.join(temp_path, documented_archive)
         if not os.path.isfile(archive_copy):
-            return False, [], [], "documented archive path was not copied for proof"
+            return "refused", [], [], "documented archive path was not copied for proof"
         hashes_before = {
             name: _file_hash(os.path.join(temp_path, name)) for name in copied
         }
@@ -1115,7 +1177,7 @@ def prove_route(command, home, archive_path, entries, sample, trusted_dirs=None)
                 env={"PATH": os.pathsep.join(TRUSTED_ROUTE_DIRS), "LC_ALL": "C.UTF-8"},
             )
         except OSError as exc:
-            return False, [], [], "route could not run: %s" % exc
+            return "refused", [], [], "route could not run: %s" % exc
         finally:
             os.chmod(temp_path, 0o755)
         hashes_after = {
@@ -1125,12 +1187,12 @@ def prove_route(command, home, archive_path, entries, sample, trusted_dirs=None)
         }
         changed = sorted(name for name in copied if hashes_before[name] != hashes_after[name])
         if changed:
-            return False, [], [], "route changed protected proof copies: %s" % ", ".join(changed)
+            return "refused", [], [], "route changed protected proof copies: %s" % ", ".join(changed)
     finally:
         _release_proof_dir(temp_path)
     output = result.stdout.strip()
     if result.returncode != 0 or result.stderr.strip() or not output:
-        return False, [], [], "documented route exited %d, wrote diagnostics, or returned no output" % result.returncode
+        return "refused", [], [], "documented route exited %d, wrote diagnostics, or returned no output" % result.returncode
     # Two parsers disagree here, and the reconciliation is the point. This
     # driver's own parse is fence-aware and deliberately excludes headings
     # inside fenced code blocks; the documented route is an operator's ordinary
@@ -1144,7 +1206,7 @@ def prove_route(command, home, archive_path, entries, sample, trusted_dirs=None)
     for output_line in output.splitlines():
         match = re.fullmatch(r"(\d+):(#{1,6})[ \t]+(.*?)[ \t]*", output_line)
         if not match:
-            return False, [], [], (
+            return "refused", [], [], (
                 "route output is not a heading index record: %s" % output_line[:120]
             )
         line_number = int(match.group(1))
@@ -1157,8 +1219,11 @@ def prove_route(command, home, archive_path, entries, sample, trusted_dirs=None)
     output_lines = output.splitlines()
     for line in output_lines[:sample]:
         lines.append("    %s" % line[:160])
-    return not missing, lines, missing, "route reaches %d of %d archived entries" % (
-        len(reached_lines), len(entries)
+    return (
+        "complete" if not missing else "incomplete",
+        lines,
+        missing,
+        "route reaches %d of %d archived entries" % (len(reached_lines), len(entries)),
     )
 
 
@@ -1313,7 +1378,7 @@ def cmd_check(args):
         die("worksheet %s has no entry blocks" % args.worksheet, 1)
 
     vocab = PRIVATE_VERDICTS if shape == "private" else SHARED_VERDICTS
-    loaded_level, archive_level = baseline_levels(args, before)
+    loaded_level, archive_level = baseline_levels(before)
     loaded = file_facts(args.loaded, loaded_level)
     loaded_text = read_text(args.loaded)
     archive = None
@@ -1353,6 +1418,8 @@ def cmd_check(args):
     print("")
 
     # --- 1. verdict legality -------------------------------------------------
+    for row in key_conflicts(rows):
+        failures.append(key_conflict_message(row))
     by_key = {}
     for row in rows:
         verdict = row["verdict"].strip()
@@ -1594,23 +1661,70 @@ def cmd_check(args):
 
         print("")
         print("COMPLETE ROUTE ASSERTION")
-        if commands:
-            ok, transcript, missing, result_message = prove_route(
-                commands[0],
+        if not archive["entries"]:
+            failures.append(
+                "the archive holds no entries at level %d, so the route has "
+                "nothing to reach and a proof over it would assert nothing"
+                % archive["level"]
+            )
+            print("  the archive holds no level-%d entries to reach" % archive["level"])
+        # Every documented search this guard can execute is proved, in whatever
+        # order the curator wrote them: proving only the first enforces an order
+        # nobody agreed to and refuses the index route this project itself pairs
+        # with a `sed` read step. A search the guard cannot execute is not
+        # dropped silently either - it is reported as documented-but-unprovable,
+        # because a report that quietly omits something is the defect this
+        # driver exists to catch. Every provable search must run clean, and at
+        # least one must reach every archived entry.
+        provable = []
+        for command in commands:
+            try:
+                argv = shlex.split(command)
+            except ValueError:
+                argv = []
+            if argv and argv[0] in ROUTE_VERBS:
+                provable.append(command)
+            else:
+                print("  NOT PROVABLE BY THIS GUARD: %s" % command[:150])
+                print(
+                    "    route command `%s` cannot be proven non-writing; "
+                    "document the route with grep or rg. Read as supplementary "
+                    "reader guidance, never executed here."
+                    % (argv[0] if argv else "")
+                )
+        if commands and not provable:
+            failures.append(
+                "no documented search is inside the provable interface (%s), so "
+                "nothing about the archive's reachability was proven"
+                % ", ".join(ROUTE_VERBS)
+            )
+        complete_routes = 0
+        incomplete_routes = []
+        for command in provable:
+            status, transcript, missing, result_message = prove_route(
+                command,
                 args.home,
                 archive["path"],
                 archive["entries"],
                 args.prove_route,
             )
-            print("  %s" % result_message)
+            print("  %s" % command[:150])
+            print("    %s" % result_message)
             print("PRINTED EXAMPLE (%d output lines maximum)" % args.prove_route)
             for line in transcript:
                 print(line)
-            if not ok:
+            if status == "complete":
+                complete_routes += 1
+            elif status == "incomplete":
+                incomplete_routes.append((result_message, missing))
+            else:
                 # The reason travels with the FAIL line. A refusal here is the
                 # most security-relevant thing this program says, and an
                 # operator reading the failures must not have to go looking for
                 # why it refused.
+                failures.append("documented route failed: %s" % result_message)
+        if provable and not complete_routes:
+            for result_message, missing in incomplete_routes:
                 detail = "; unreachable: %s" % ", ".join(missing[:8]) if missing else ""
                 failures.append(
                     "documented route failed: %s%s" % (result_message, detail)
@@ -1700,11 +1814,17 @@ def cmd_report(args):
     before = load_baseline(args)
     label, total, rows, notes = denominator(args)
 
-    loaded_level, archive_level = baseline_levels(args, before)
+    loaded_level, archive_level = baseline_levels(before)
     loaded = file_facts(args.loaded, loaded_level)
     archive = file_facts(args.archive, archive_level) if args.archive else None
 
     _meta, wrows = read_worksheet(args.worksheet)
+    conflicts = key_conflicts(wrows)
+    if conflicts:
+        die(
+            "report refused: %s" % "; ".join(key_conflict_message(row) for row in conflicts),
+            1,
+        )
     _keys, _known, unknown, undeclared, ghosts = deletion_accounting(
         before, loaded, archive, wrows
     )
@@ -1731,15 +1851,43 @@ def cmd_report(args):
     loaded_bytes = loaded["bytes"]
     archive_bytes = archive["bytes"] if archive else 0
 
-    # The denominator moved when the file did. Report the share the loaded half
-    # WOULD have had at the old surface size, and the share it has now.
-    before_total = total - loaded_bytes + before_bytes
+    # Which surface a share is against depends on where the loaded half IS. The
+    # workflow this skill teaches stages the new pair outside the home and moves
+    # it in only after the check passes, so a run's --loaded is usually a file
+    # no surface contains. Reporting its share against the measured surface
+    # would price a state that does not exist, which is the same offence as
+    # printing a line count.
+    surface_paths = {os.path.realpath(row[1]) for row in rows if row[3]}
+    loaded_in_place = os.path.realpath(args.loaded) in surface_paths
+    baseline_path = before.get("loaded_path") or before["path"]
+    baseline_in_place = os.path.realpath(baseline_path) in surface_paths
+    if loaded_in_place:
+        before_total = total - loaded_bytes + before_bytes
+        after_total = total
+    else:
+        before_total = total
+        after_total = (
+            total - before_bytes + loaded_bytes if baseline_in_place
+            else total + loaded_bytes
+        )
 
     print("=== fm-curate-knowledge report ===")
     print("baseline       %s (%s)" % (before["path"], before["mode"]))
     print("denominator    %s" % label)
     for note in notes:
         print("  note: %s" % note)
+    if not loaded_in_place:
+        print(
+            "  note: the loaded half is STAGED - %s is in no measured surface, "
+            "so its share below is a PROJECTION of the surface after the pair "
+            "is moved into place, not a state that exists yet"
+            % os.path.realpath(args.loaded)
+        )
+    if not baseline_in_place:
+        print(
+            "  note: the baseline file %s is not part of the measured surface "
+            "either, so this run is a rehearsal against copies" % baseline_path
+        )
     print("")
     print("STARTUP COST")
     print(
@@ -1747,8 +1895,13 @@ def cmd_report(args):
         % (before_bytes, pct(before_bytes, before_total), before_total)
     )
     print(
-        "  after    %8d B   %7s of a %d B surface"
-        % (loaded_bytes, pct(loaded_bytes, total), total)
+        "  after    %8d B   %7s of a %d B surface%s"
+        % (
+            loaded_bytes,
+            pct(loaded_bytes, after_total),
+            after_total,
+            "" if loaded_in_place else "   (PROJECTION, not yet in place)",
+        )
     )
     delta = loaded_bytes - before_bytes
     print(
