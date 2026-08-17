@@ -663,7 +663,8 @@ EOF
     FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$dir/home/data" \
     FM_CONFIG_OVERRIDE="$dir/home/config" PATH="$dir/fakebin:$PATH" \
     "$DECISION_HOLD" hold "$id" route --title "Choose the sample route" \
-      --reason "captain route choice pending" --repo sample) \
+      --reason "captain route choice pending" \
+      --premise "The sample route has not been chosen." --repo sample) \
     || fail "could not record a decision hold"
   [ "$hold" = "$id-decision-route" ] || fail "decision hold identity was not deterministic: $hold"
   FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$dir/home" \
