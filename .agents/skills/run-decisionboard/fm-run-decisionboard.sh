@@ -383,6 +383,10 @@ form_subtree() {  # <decision-number>
   snapshot | parse_forms subtree "$1"
 }
 
+queued_confirmation() {
+  sed -n 's/.*"\(Vorgemerkt: [^"]*\)".*/\1/p' | head -1
+}
+
 parse_forms() {  # <inventory|subtree> [decision-number]
   local mode=$1 target=${2:-}
   awk -v mode="$mode" -v target="$target" '
@@ -594,7 +598,7 @@ cmd_answer() {
   # explanatory line reads as "Option eins Die Option, die der Treiber wählt."
   # Match the given text exactly first, then as a substring, and refuse an
   # ambiguous one rather than answering a decision nobody asked about.
-  local match target_decision resolved_name uid
+  local match target_decision resolved_name uid before_confirmation
   match=$(resolve_radio "$option" "$decision")
   target_decision=$(printf '%s\n' "$match" | cut -f1)
   resolved_name=$(printf '%s\n' "$match" | cut -f3-)
@@ -614,6 +618,7 @@ cmd_answer() {
       || die "answer: could not write the note"
   fi
 
+  before_confirmation=$(form_subtree "$target_decision" | queued_confirmation)
   uid=$(form_inventory | awk -F'\t' -v d="$target_decision" \
     '$2 == "button" && $1 == d { print $3; exit }')
   [ -n "$uid" ] || die "answer: decision $target_decision has no submit button, so the selection has nowhere to go"
@@ -623,16 +628,19 @@ cmd_answer() {
   # board.js reports what it queued in the form's own .fm-queued box, and says so
   # in is-warn colour when it queued nothing. Read that back rather than assuming
   # the click landed.
-  local subtree queued_value
+  local subtree after_confirmation queued_choice_value
   subtree=$(form_subtree "$target_decision")
   case "$subtree" in
     *"Nichts vorgemerkt"*)
       die "answer: the board reports it queued nothing for decision $target_decision" ;;
   esac
-  queued_value=$(printf '%s\n' "$subtree" | sed -n 's/.*"Vorgemerkt: \([^"]*\)".*/\1/p' | head -1)
-  [ -n "$queued_value" ] \
+  after_confirmation=$(printf '%s\n' "$subtree" | queued_confirmation)
+  queued_choice_value=${after_confirmation#Vorgemerkt: }
+  [ -n "$after_confirmation" ] && [ -n "$queued_choice_value" ] \
     || die "answer: the board shows no queued option value for decision $target_decision"
-  good "decision $target_decision queued '$queued_value'${note_text:+ with a note}"
+  [ "$before_confirmation" != "$after_confirmation" ] \
+    || die "answer: the confirmation already named this option before the click, so this run did not prove the answer was queued"
+  good "decision $target_decision queued '$queued_choice_value'${note_text:+ with a note}"
 }
 
 # --- send -------------------------------------------------------------------

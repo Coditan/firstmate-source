@@ -489,6 +489,47 @@ SNAP
   pass "answer ignores queued confirmation from another decision"
 }
 
+answer_with_stale_confirmation() {  # <queued-value>
+  local queued_value=$1 answer_tmp fakebin snap
+  fm_test_tmproot answer_tmp fm-run-db-stale-answer
+  fakebin=$(fm_fakebin "$answer_tmp")
+  cat > "$fakebin/chrome-devtools-axi" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$fakebin/chrome-devtools-axi"
+  snap="$answer_tmp/stale.txt"
+  cat > "$snap" <<SNAP
+uid=g7:1_0 RootWebArea "Editor" url="http://example.invalid/session/x"
+  uid=g7:1_1 Iframe
+    uid=g7:1_2 RootWebArea "Board" url="http://example.invalid/artifact/x/index.html"
+      uid=g7:1_3 form
+        uid=g7:1_4 radio "Yes"
+        uid=g7:1_5 button "Hilfe"
+        uid=g7:1_6 StaticText "Vorgemerkt: $queued_value"
+SNAP
+  ANSWER_STATUS=0
+  ANSWER_OUT=$(PATH="$fakebin:$PATH" FM_RUN_DECISIONBOARD_SNAPSHOT="$snap" \
+    "$DRIVER" answer --option "Yes" 2>&1) || ANSWER_STATUS=$?
+}
+
+test_answer_refuses_a_stale_different_option_confirmation() {
+  answer_with_stale_confirmation other-value
+  [ "$ANSWER_STATUS" -ne 0 ] \
+    || fail "answer accepted a stale confirmation for another option"$'\n'"$ANSWER_OUT"
+  pass "answer refuses a stale confirmation for another option"
+}
+
+test_answer_refuses_a_stale_same_option_confirmation() {
+  answer_with_stale_confirmation yes-value
+  [ "$ANSWER_STATUS" -ne 0 ] \
+    || fail "answer accepted a stale confirmation for the same option"$'\n'"$ANSWER_OUT"
+  assert_contains "$ANSWER_OUT" \
+    "the confirmation already named this option before the click, so this run did not prove the answer was queued" \
+    "answer did not explain why an unchanged same-option confirmation proves nothing"
+  pass "answer refuses an unchanged same-option confirmation"
+}
+
 test_driver_ships_beside_the_skill
 test_help_lists_the_whole_loop
 test_fixture_declares_the_documented_controls
@@ -510,3 +551,5 @@ test_shot_accepts_a_same_size_refresh
 test_doctor_accepts_a_same_size_refresh
 test_answer_reresolves_the_exact_option_name
 test_answer_ignores_a_neighbours_queued_confirmation
+test_answer_refuses_a_stale_different_option_confirmation
+test_answer_refuses_a_stale_same_option_confirmation
