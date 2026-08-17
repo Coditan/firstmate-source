@@ -688,7 +688,7 @@ fm_backend_composer_state() {  # <backend> <target> -> empty|pending|unknown
 # that errors on an unknown id; tmux was the outlier because its probe command
 # substitutes a different target rather than failing.
 fm_backend_target_exists() {  # <backend> <target> [expected-label]
-  local backend=$1 target=$2 expected_label=${3:-} session pane state out
+  local backend=$1 target=$2 expected_label=${3:-} session pane state out tab_id scoped title wsid sfid
   case "$backend" in
     tmux)
       # Dispatched, not inlined: the raw `tmux display-message -p -t "$target"
@@ -697,8 +697,9 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
       # and so returns 0 either way (fm_tmux_resolve_pane, bin/fm-tmux-lib.sh).
       fm_backend_source tmux || return 2
       fm_backend_tmux_target_exists "$target" && return 0
-      tmux list-panes -a -F '#{pane_id}' >/dev/null 2>&1 && return 1
-      return 2
+      out=$(tmux list-panes -a -F '#{session_name}:#{window_name}\t#{session_name}:#{window_index}\t#{session_name}:#{window_name}.#{pane_index}\t#{session_name}:#{window_index}.#{pane_index}\t#{window_name}\t#{window_id}\t#{pane_id}' 2>/dev/null) || return 2
+      printf '%s\n' "$out" | awk -F '\t' -v target="$target" '{ for (i = 1; i <= NF; i++) if ($i == target) found = 1 } END { exit !found }' && return 2
+      return 1
       ;;
     herdr)
       fm_backend_source herdr || return 2
@@ -730,9 +731,18 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
       printf '%s' "$out" | jq -e --argjson p "$FM_BACKEND_ZELLIJ_PANE" \
         '[.[]? | select(.id == $p and .is_plugin == false)] | length > 0' >/dev/null 2>&1 || return 1
       [ -n "$expected_label" ] || return 0
+      tab_id=$(printf '%s' "$out" | jq -r --argjson p "$FM_BACKEND_ZELLIJ_PANE" \
+        '.[]? | select(.id == $p and .is_plugin == false) | .tab_id' 2>/dev/null | head -1)
+      [ -n "$tab_id" ] || return 2
       out=$(fm_backend_zellij_cli "$FM_BACKEND_ZELLIJ_SESSION" action list-tabs --json 2>/dev/null) || return 2
       printf '%s' "$out" | jq -e 'type == "array"' >/dev/null 2>&1 || return 2
-      fm_backend_zellij_target_ready "$target" "$expected_label" && return 0
+      out=$(fm_backend_zellij_cli "$FM_BACKEND_ZELLIJ_SESSION" action list-tabs --json 2>/dev/null) || return 2
+      printf '%s' "$out" | jq -e 'type == "array"' >/dev/null 2>&1 || return 2
+      scoped=$(fm_backend_zellij_scoped_title "$expected_label")
+      printf '%s' "$out" | jq -e --argjson t "$tab_id" --arg want "$scoped" \
+        'any(.[]?; .tab_id == $t and .name == $want)' >/dev/null 2>&1 && return 0
+      printf '%s' "$out" | jq -e --argjson t "$tab_id" --arg want "$expected_label" \
+        '([.[]? | select(.name == $want)] | length) == 1 and any(.[]?; .tab_id == $t and .name == $want)' >/dev/null 2>&1 && return 0
       return 1
       ;;
     orca)
@@ -751,9 +761,31 @@ process.exit(data.ok === false ? 1 : data.ok === true ? 0 : 2);
       fm_backend_cmux_parse_target "$target" || return 1
       out=$(fm_backend_cmux_cli workspace list --json --id-format uuids 2>/dev/null) || return 2
       printf '%s' "$out" | jq -e '.workspaces | type == "array"' >/dev/null 2>&1 || return 2
-      fm_backend_cmux_target_ready "$target" "$expected_label" && return 0
-      out=$(fm_backend_cmux_cli list-panes --workspace "$FM_BACKEND_CMUX_WORKSPACE" --json --id-format uuids 2>/dev/null) || return 2
+      wsid=$FM_BACKEND_CMUX_WORKSPACE
+      sfid=$FM_BACKEND_CMUX_SURFACE
+      if [ -n "$expected_label" ]; then
+        out=$(fm_backend_cmux_cli workspace list --json --id-format uuids 2>/dev/null) || return 2
+        printf '%s' "$out" | jq -e '.workspaces | type == "array"' >/dev/null 2>&1 || return 2
+        scoped=$(fm_backend_cmux_scoped_title "$expected_label")
+        title=$(printf '%s' "$out" | jq -r --arg id "$wsid" '.workspaces[]? | select(.id == $id) | .title' 2>/dev/null)
+        if [ -n "$title" ] && [ "$title" != "$scoped" ]; then
+          return 1
+        fi
+        if [ -z "$title" ]; then
+          wsid=$(printf '%s' "$out" | jq -r --arg want "$scoped" '.workspaces[]? | select(.title == $want) | .id' 2>/dev/null | head -1)
+          [ -n "$wsid" ] || return 1
+          sfid=
+        fi
+      else
+        printf '%s' "$out" | jq -e --arg id "$wsid" 'any(.workspaces[]?; .id == $id)' >/dev/null 2>&1 || return 1
+      fi
+      out=$(fm_backend_cmux_cli list-panes --workspace "$wsid" --json --id-format uuids 2>/dev/null) || return 2
       printf '%s' "$out" | jq -e '.panes | type == "array"' >/dev/null 2>&1 || return 2
+      if [ -n "$sfid" ]; then
+        printf '%s' "$out" | jq -e --arg s "$sfid" 'any(.panes[]?; (.surface_ids // []) | index($s))' >/dev/null 2>&1 && return 0
+        return 1
+      fi
+      printf '%s' "$out" | jq -e 'any(.panes[]?; ((.selected_surface_id // (.surface_ids[0] // "")) | length) > 0)' >/dev/null 2>&1 && return 0
       return 1
       ;;
     *)

@@ -150,6 +150,7 @@ Verified three ways against the real binary:
 - `dump-screen --pane-id 999 --full` against a live session but dead pane returned **empty output** (a single newline) with exit **0** - a soft, not hard, signal (a genuinely blank pane could also read this way).
 
 This means the exit code can **never** be trusted to detect a bad target on this backend - a meaningful difference from tmux, which does return a nonzero exit and a clear error for a truly nonexistent target.
+The shared target-existence probe reports absence only from completed session, pane, and label inventories, and reports unreadable when any inventory command or JSON parse fails.
 
 **Mitigation, in two layers:**
 

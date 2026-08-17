@@ -213,6 +213,7 @@ Firstmate names only `FM_HOME` here, never any variable a profile derives from i
 ## Agent liveness probe
 
 `fm_backend_target_exists` (`bin/fm-backend.sh`) checks only whether a window's pane still exists and returns a distinct unreadable status when tmux itself cannot be queried.
+If target-specific resolution fails while a global enumeration still contains that exact target, it returns unreadable rather than absent because the two observations conflict.
 A secondmate agent that exits leaves its pane alive as a bare idle shell, which passes that check as "alive" - the gap `bin/fm-bootstrap.sh`'s session-start secondmate-liveness sweep exists to close (evidence 2026-07-07: every secondmate in one fleet was found sitting at a dead `zsh` shell, invisible to that check).
 
 `fm_backend_tmux_agent_alive` (`bin/backends/tmux.sh`) answers a deeper question: is a real harness-agent *process* running in the pane right now, not just whether the pane exists?

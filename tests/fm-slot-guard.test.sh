@@ -489,6 +489,106 @@ test_unreadable_claimant_refuses() {
   pass "(f) an unqueryable co-claimant counts as a live holder"
 }
 
+test_target_probe_failure_refuses() {
+  local case_dir rc
+  case_dir=$(make_case target-probe-unreadable)
+  write_task "$case_dir" finished-task dead
+  write_task "$case_dir" unreadable-task alive
+  printf '%s\n' "fmtest:unreadable-task" >> "$case_dir/unreadable-windows"
+
+  set +e
+  run_teardown "$case_dir" finished-task > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  [ "$rc" -ne 0 ] || fail "target-probe: teardown ignored a target-specific query failure"
+  assert_grep "unreadable-task" "$case_dir/stderr" \
+    "target-probe: refusal must name the conservatively live holder"
+  assert_nothing_returned "$case_dir" \
+    "target-probe: a target-specific query failure must prevent return"
+  pass "(g) a target-specific query failure counts as a live holder"
+}
+
+test_label_probe_failures_are_unreadable() {
+  local case_dir rc zellij_rc cmux_rc
+  case_dir=$(make_case label-probe-unreadable)
+  printf '0\n' > "$case_dir/zellij-tabs-count"
+  cat > "$case_dir/fakebin/zellij" <<'SH'
+#!/usr/bin/env bash
+case " $* " in
+  *" list-sessions "*) printf '%s\n' zsess ;;
+  *" list-panes "*) printf '[{"id":1,"is_plugin":false,"tab_id":7}]\n' ;;
+  *" list-tabs "*)
+    count=$(cat "${FM_TEST_CASE_DIR:?}/zellij-tabs-count")
+    count=$((count + 1))
+    printf '%s\n' "$count" > "${FM_TEST_CASE_DIR:?}/zellij-tabs-count"
+    [ "$count" -eq 1 ] || exit 2
+    printf '[{"tab_id":7,"name":"fm-firstmate-unreadable-task"}]\n'
+    ;;
+esac
+SH
+  printf '0\n' > "$case_dir/cmux-workspaces-count"
+  cat > "$case_dir/fakebin/cmux" <<'SH'
+#!/usr/bin/env bash
+case " $* " in
+  *" workspace list "*)
+    count=$(cat "${FM_TEST_CASE_DIR:?}/cmux-workspaces-count")
+    count=$((count + 1))
+    printf '%s\n' "$count" > "${FM_TEST_CASE_DIR:?}/cmux-workspaces-count"
+    [ "$count" -eq 1 ] || exit 2
+    printf '{"workspaces":[{"id":"ws1","title":"fm-firstmate-unreadable-task"}]}\n'
+    ;;
+  *" list-panes "*) printf '{"panes":[{"surface_ids":["sf1"],"selected_surface_id":"sf1"}]}\n' ;;
+esac
+SH
+  chmod +x "$case_dir/fakebin/zellij" "$case_dir/fakebin/cmux"
+
+  set +e
+  FM_TEST_CASE_DIR="$case_dir" FM_ROOT_OVERRIDE="$ROOT" PATH="$case_dir/fakebin:$PATH" \
+    bash -c '. "$1/bin/fm-backend.sh"; fm_backend_target_exists zellij zsess:1 fm-unreadable-task' _ "$ROOT"
+  rc=$?
+  set -e
+  zellij_rc=$rc
+
+  set +e
+  FM_TEST_CASE_DIR="$case_dir" FM_ROOT_OVERRIDE="$ROOT" PATH="$case_dir/fakebin:$PATH" \
+    bash -c '. "$1/bin/fm-backend.sh"; fm_backend_target_exists cmux ws1:sf1 fm-unreadable-task' _ "$ROOT"
+  rc=$?
+  set -e
+  cmux_rc=$rc
+  expect_code 2 "$zellij_rc" "zellij-label-probe: a failed label query must be unreadable"
+  expect_code 2 "$cmux_rc" "cmux-label-probe: a failed label query must be unreadable"
+
+  write_task "$case_dir" finished-task dead
+  write_task "$case_dir" unreadable-task dead
+  sed -i 's/^backend=.*/backend=zellij/; s/^window=.*/window=zsess:1/' \
+    "$case_dir/state/unreadable-task.meta"
+  printf '0\n' > "$case_dir/zellij-tabs-count"
+  set +e
+  run_teardown "$case_dir" finished-task > "$case_dir/zellij-stdout" 2> "$case_dir/zellij-stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "zellij-label-probe: teardown ignored an unreadable claimant"
+  assert_grep "unreadable-task" "$case_dir/zellij-stderr" \
+    "zellij-label-probe: refusal must name the conservatively live holder"
+  assert_nothing_returned "$case_dir" \
+    "zellij-label-probe: an unreadable label query must prevent return"
+
+  sed -i 's/^backend=.*/backend=cmux/; s/^window=.*/window=ws1:sf1/' \
+    "$case_dir/state/unreadable-task.meta"
+  printf '0\n' > "$case_dir/cmux-workspaces-count"
+  set +e
+  run_teardown "$case_dir" finished-task > "$case_dir/cmux-stdout" 2> "$case_dir/cmux-stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "cmux-label-probe: teardown ignored an unreadable claimant"
+  assert_grep "unreadable-task" "$case_dir/cmux-stderr" \
+    "cmux-label-probe: refusal must name the conservatively live holder"
+  assert_nothing_returned "$case_dir" \
+    "cmux-label-probe: an unreadable label query must prevent return"
+  pass "(h) label-verification transport failures are unreadable"
+}
+
 # --- (f) the watcher's durable marker refuses on its own --------------------
 test_dispute_marker_refuses() {
   local case_dir rc
@@ -882,6 +982,8 @@ test_force_does_not_override
 test_named_override_allows
 test_dead_claimant_allows
 test_unreadable_claimant_refuses
+test_label_probe_failures_are_unreadable
+test_target_probe_failure_refuses
 test_dispute_marker_refuses
 test_lease_holder_refuses
 test_own_lease_allows
