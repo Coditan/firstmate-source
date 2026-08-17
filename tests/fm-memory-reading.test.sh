@@ -406,6 +406,19 @@ write_sample() {  # <file> <epoch> <pid=start:rss> ...
   } > "$file"
 }
 
+process_line_from_section() {  # <output> <section-prefix> <pid>
+  local output=$1 section=$2 pid=$3
+  printf '%s\n' "$output" | awk -v section="$section" -v pid="$pid" '
+    index($0, section) == 1 { in_section = 1; next }
+    in_section && $0 == "" { exit }
+    in_section {
+      for (i = 1; i <= NF; i++) {
+        if ($i == pid) { print; exit }
+      }
+    }
+  '
+}
+
 test_growth_separates_a_large_steady_process_from_a_fast_growing_one() {
   local dir="$TMP_ROOT/growth" out big_line grow_line
   new_scene "$dir"
@@ -415,8 +428,10 @@ test_growth_separates_a_large_steady_process_from_a_fast_growing_one() {
     "1000=$((NOW - 600)):512000" \
     "1006=$((NOW - 600)):17500"
   out=$(run_reading "$dir")
-  big_line=$(printf '%s\n' "$out" | grep ' 1000 ' | head -1)
-  grow_line=$(printf '%s\n' "$out" | grep ' 1006 ' | head -1)
+  big_line=$(process_line_from_section "$out" 'LARGEST TRACKED PROCESSES' 1000)
+  grow_line=$(process_line_from_section "$out" 'FASTEST GROWING' 1006)
+  [ -n "$big_line" ] || fail "the largest process row was not found"
+  [ -n "$grow_line" ] || fail "the fastest-growing process row was not found"
   assert_contains "$big_line" 'steady' 'the largest process was not reported as steady'
   assert_contains "$grow_line" 'growing' 'the fast-growing process was not reported as growing'
   assert_contains "$out" 'FASTEST GROWING' 'the growth ranking is missing'
@@ -533,7 +548,8 @@ test_a_reused_pid_is_not_reported_as_growth() {
   # process now, and the difference in size is not growth.
   write_sample "$dir/samples" $((NOW - 60)) "1000=$((NOW - 90000)):1000"
   out=$(run_reading "$dir")
-  line=$(printf '%s\n' "$out" | grep -A1 ' 1000 ' | head -2)
+  line=$(process_line_from_section "$out" 'LARGEST TRACKED PROCESSES' 1000)
+  [ -n "$line" ] || fail "the reused-pid process row was not found"
   assert_contains "$line" 'unmeasured' 'a reused pid was reported as enormous growth'
   assert_contains "$out" 'different, later process' 'the pid-reuse reason is missing'
   pass "a pid that now belongs to a different process reports unmeasured, not growth"

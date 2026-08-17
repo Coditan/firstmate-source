@@ -204,7 +204,7 @@ test_fixture_declares_the_documented_controls() {
 test_build_writes_a_board_that_passes_the_guard() {
   local out board
   board="$TMP_ROOT/built.html"
-  out=$("$DRIVER" build --out "$board" --title "Testbrett" 2>&1) \
+  out=$(FM_BOARD_VESSEL=testschiff "$DRIVER" build --out "$board" --title "Testbrett" 2>&1) \
     || fail "build failed: $out"
   [ -s "$board" ] || fail "build reported success but wrote no board"
   "$ROOT/bin/fm-board.sh" --check "$board" >/dev/null 2>&1 \
