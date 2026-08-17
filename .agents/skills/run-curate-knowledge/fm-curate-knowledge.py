@@ -97,10 +97,10 @@ TWO SHAPES, NEVER INTERCHANGEABLE
                      second file full of AGENTS.md prose would be a second
                      owner, which is the defect, not the fix. See the
                      `firstmate-coding-guidelines` skill's inline-stub pattern.
-Shape is auto-detected from git tracking and can be forced with --shape. The
-verdict vocabularies do not overlap: `cold` and `split` are refused on a shared
-file, `stub` is the shared file's default, and passing --archive with
---shape shared is refused outright.
+Shape is taken from a recorded baseline or Git tracking. --shape is accepted
+only for a staged file neither source can classify. The verdict vocabularies
+do not overlap: `cold` and `split` are refused on a shared file, `stub` is the
+shared file's default, and passing --archive for a shared shape is refused.
 
 MEASUREMENT UNITS
 Bytes and share of the startup surface. Never lines. Bytes per line is a house
@@ -533,28 +533,97 @@ def pct(part, whole):
 
 
 def detect_shape(path, root):
-    """git-tracked under the code root -> shared; otherwise private.
+    """Return a Git-derived shape, or None when Git cannot classify the path.
 
     Tracking is the real signal: shared tracked material is exactly the
     material other homes receive, and it is exactly the material under the
     one-owner contract that forbids an archive.
     """
     try:
+        top_result = subprocess.run(
+            ["git", "-C", root, "rev-parse", "--show-toplevel"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+        if top_result.returncode != 0:
+            return None
+        top = os.path.realpath(top_result.stdout.strip())
+        target = os.path.realpath(os.path.abspath(path))
+        if os.path.commonpath((top, target)) != top:
+            return None
         result = subprocess.run(
-            ["git", "-C", root, "ls-files", "--error-unmatch", os.path.abspath(path)],
+            ["git", "-C", top, "ls-files", "--error-unmatch", target],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
         )
-    except OSError:
-        return "private"
+    except (OSError, ValueError):
+        return None
     return "shared" if result.returncode == 0 else "private"
 
 
 def resolve_shape(args, path):
+    detected = detect_shape(path, args.root)
+    if args.shape and detected is not None:
+        if args.shape != detected:
+            die(
+                "refused: --shape %s contradicts git tracking, which classifies "
+                "%s as %s. Remove --shape to use the Git classification, or "
+                "change which file or --root is being operated on"
+                % (args.shape, path, detected),
+                1,
+            )
+        die(
+            "refused: --shape is only for a file Git cannot classify; git "
+            "tracking already classifies %s as %s. Remove --shape to proceed"
+            % (path, detected),
+            1,
+        )
     if args.shape:
         return args.shape
-    return detect_shape(path, args.root)
+    return detected or "private"
+
+
+def resolve_baseline_shape(args, before):
+    recorded = before.get("shape")
+    if args.shape and recorded is not None:
+        if args.shape != recorded:
+            die(
+                "refused: --shape %s contradicts the recorded baseline shape, "
+                "which says %s. Remove --shape to use the baseline, or create "
+                "a new baseline from the intended file"
+                % (args.shape, recorded),
+                1,
+            )
+        die(
+            "refused: --shape is only for an unclassifiable baseline; the "
+            "recorded baseline shape already says %s. Remove --shape to proceed"
+            % recorded,
+            1,
+        )
+
+    baseline_path = before.get("loaded_path") or before.get("path")
+    detected = detect_shape(baseline_path, args.root)
+    if args.shape and detected is not None:
+        if args.shape != detected:
+            die(
+                "refused: --shape %s contradicts git tracking, which classifies "
+                "%s as %s. Remove --shape to use the Git classification, or "
+                "create a baseline from the intended file"
+                % (args.shape, baseline_path, detected),
+                1,
+            )
+        die(
+            "refused: --shape is only for an unclassifiable baseline; git "
+            "tracking already classifies %s as %s. Remove --shape to proceed"
+            % (baseline_path, detected),
+            1,
+        )
+    if args.shape:
+        return args.shape
+    return recorded or detected or "private"
 
 
 # --------------------------------------------------------------------------
@@ -1577,7 +1646,7 @@ def cmd_check(args):
     warnings = []
 
     before = load_baseline(args)
-    shape = args.shape or before.get("shape") or detect_shape(args.loaded, args.root)
+    shape = resolve_baseline_shape(args, before)
 
     if shape == "shared" and before["mode"] == "pair":
         die(
@@ -2263,7 +2332,12 @@ def add_common(parser):
     parser.add_argument("--home", default=None, help="operational home holding data/ and config/")
     parser.add_argument("--root", default=None, help="code root holding bin/, AGENTS.md, roles/")
     parser.add_argument("--level", type=int, default=None, help="entry heading level")
-    parser.add_argument("--shape", choices=("private", "shared"), default=None)
+    parser.add_argument(
+        "--shape",
+        choices=("private", "shared"),
+        default=None,
+        help="shape for a file with no baseline or Git classification",
+    )
     parser.add_argument("--against", default="startup", help="`startup` or a captured digest file")
 
 

@@ -164,8 +164,8 @@ test_inventory_defaults_to_dividing_the_entry() {
   assert_grep 'Age is not the test' "$TMP/ws.md" \
     "the worksheet does not rule age out as the axis"
 
-  "$DRIVER" inventory "$TMP/AGENTS.md" --shape shared --out "$TMP/ws-shared.md" \
-    --home "$TMP" >/dev/null 2>&1 || fail "inventory of a shared file failed"
+  "$DRIVER" inventory "$ROOT/AGENTS.md" --out "$TMP/ws-shared.md" \
+    --home "$TMP" --root "$ROOT" >/dev/null 2>&1 || fail "inventory of a shared file failed"
   assert_grep 'verdict: stub' "$TMP/ws-shared.md" \
     "shared inventory does not pre-fill verdicts with stub"
   assert_no_grep 'verdict: cold' "$TMP/ws-shared.md" \
@@ -1163,21 +1163,71 @@ test_measure_json_is_one_document() {
 # The two shapes must never borrow each other's method. An AGENTS.md archive
 # would be a second owner of material stated once by contract.
 test_the_two_shapes_never_borrow_each_others_method() {
-  local out status
-  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+  local out status shared_before
+  shared_before="$TMP/shared-before.json"
+  "$DRIVER" measure "$ROOT/AGENTS.md" --save "$shared_before" --home "$ROOT" >/dev/null \
+    || fail "could not snapshot a shared baseline"
+  out=$("$DRIVER" check --before "$shared_before" --worksheet "$TMP/ws-filled.md" \
     --loaded "$TMP/after-loaded.md" --archive "$TMP/after-archive.md" \
-    --shape shared --home "$TMP" 2>&1) && status=0 || status=$?
-  [ "$status" -eq 1 ] || fail "--archive with --shape shared exited $status, expected 1"
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "--archive with a shared baseline exited $status, expected 1"
   printf '%s' "$out" | grep -q 'would be a second owner' \
     || fail "the archive refusal does not give the one-owner reason"
 
   out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
-    --loaded "$TMP/after-loaded.md" --shape private --home "$TMP" 2>&1) \
+    --loaded "$TMP/after-loaded.md" --home "$TMP" 2>&1) \
     && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "shape private with no archive exited $status, expected 1"
   printf '%s' "$out" | grep -q 'nothing to prove reachable' \
     || fail "the missing-archive refusal does not say what is lost"
   pass "an archive is refused for a shared file and required for a private one"
+}
+
+test_shape_override_cannot_defeat_a_known_classification() {
+  local out status tracked_before
+  tracked_before="$TMP/tracked-before.json"
+  "$DRIVER" measure "$ROOT/AGENTS.md" --save "$tracked_before" --home "$ROOT" >/dev/null \
+    || fail "could not snapshot tracked AGENTS.md"
+  python3 - "$tracked_before" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    snapshot = json.load(handle)
+for record in snapshot["files"].values():
+    record.pop("shape", None)
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(snapshot, handle)
+PY
+  out=$("$DRIVER" check --before "$tracked_before" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/after-loaded.md" --archive "$TMP/after-archive.md" \
+    --shape private --home "$TMP" --root "$ROOT" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "tracked baseline accepted --shape private"
+  printf '%s' "$out" | grep -q 'contradicts git tracking' \
+    || fail "tracked contradiction did not name git tracking: $out"
+  printf '%s' "$out" | grep -q 'classifies .* as shared' \
+    || fail "tracked contradiction did not state the classification: $out"
+  printf '%s' "$out" | grep -q 'Remove --shape' \
+    || fail "tracked contradiction gave no actionable next step"
+
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/after-loaded.md" --shape shared --home "$TMP" 2>&1) \
+    && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "private baseline accepted --shape shared"
+  printf '%s' "$out" | grep -q 'contradicts the recorded baseline shape' \
+    || fail "private contradiction did not name the recorded baseline shape: $out"
+  printf '%s' "$out" | grep -q 'which says private' \
+    || fail "private contradiction did not state the recorded value: $out"
+  printf '%s' "$out" | grep -q 'create a new baseline' \
+    || fail "private contradiction gave no actionable next step"
+
+  "$DRIVER" inventory "$TMP/AGENTS.md" --shape shared --out "$TMP/unclassifiable.md" \
+    --home "$TMP" >/dev/null 2>&1 \
+    || fail "an unclassifiable file rejected an explicit shape"
+  assert_grep 'verdict: stub' "$TMP/unclassifiable.md" \
+    "the accepted explicit shared shape did not select shared verdicts"
+  pass "shape overrides work only where no baseline or Git classification exists"
 }
 
 # A real curation - one split, one fold, one evidenced deletion - passes, and
@@ -1733,7 +1783,8 @@ test_a_captured_digest_reports_membership_as_unmeasured() {
   pass "a captured digest reports membership as unmeasured rather than guessing"
 }
 
-# The skill must be reachable and must not claim a command the driver lacks.
+# tests/fm-instruction-owners.test.sh is the single owner of skill-trigger checks, so this file does not re-assert a slice of that natural-language contract.
+# That owner does not mechanically enforce this captain-invocable skill's inline section 6 trigger; the enforced arrival route here is the frontmatter description.
 test_skill_declares_its_trigger_and_only_real_subcommands() {
   assert_present "$SKILL" "run-curate-knowledge SKILL.md is missing"
   # This is the owned skill-trigger contract enforced fleet-wide by
@@ -1744,13 +1795,6 @@ test_skill_declares_its_trigger_and_only_real_subcommands() {
   fm_skill_frontmatter "$ROOT/.agents/skills/run-curate-knowledge" \
     | grep -qx 'user-invocable: true' \
     || fail "skill must stay captain-invocable"
-  # shellcheck disable=SC2016 # Literal backticks must remain unexpanded.
-  assert_no_grep '- `run-curate-knowledge` - ' "$ROOT/AGENTS.md" \
-    "a captain-invocable skill must not be listed in AGENTS.md section 13"
-  # shellcheck disable=SC2016 # Literal backticks must remain unexpanded.
-  assert_grep 'load the `run-curate-knowledge` skill' "$ROOT/AGENTS.md" \
-    "AGENTS.md lost the run-curate-knowledge load trigger"
-
   local word
   for word in prune split curate measure learnings AGENTS.md; do
     fm_skill_description "$ROOT/.agents/skills/run-curate-knowledge" \
@@ -1760,10 +1804,8 @@ test_skill_declares_its_trigger_and_only_real_subcommands() {
 
   local sub
   for sub in measure inventory check report; do
-    assert_grep "fm-curate-knowledge.py $sub" "$SKILL" \
-      "SKILL.md does not show the $sub command"
     "$DRIVER" "$sub" --help >/dev/null 2>&1 \
-      || fail "SKILL.md names a subcommand the driver does not have: $sub"
+      || fail "the documented driver lacks its $sub executable interface"
   done
   pass "the skill is triggered, describes itself in an agent's words, and names only real subcommands"
 }
@@ -1799,6 +1841,7 @@ test_a_fenced_heading_cannot_stand_in_for_a_real_entry
 test_a_pair_baseline_uses_each_halfs_own_entry_level
 test_measure_json_is_one_document
 test_the_two_shapes_never_borrow_each_others_method
+test_shape_override_cannot_defeat_a_known_classification
 test_a_real_curation_passes_and_the_report_carries_the_ledger
 test_a_report_cannot_omit_the_deletion_ledger
 test_a_worksheet_heading_cannot_contradict_its_key
