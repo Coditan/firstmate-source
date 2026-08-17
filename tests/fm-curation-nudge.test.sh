@@ -55,6 +55,21 @@ run_nudge() {
     "$home/bin/fm-curation-nudge.sh" "$@"
 }
 
+make_failing_mv() {
+  local home=$1 target=$2 fakebin real_mv
+  fakebin=$(fm_fakebin "$home")
+  real_mv=$(command -v mv)
+  cat > "$fakebin/mv" <<SH
+#!/usr/bin/env bash
+if [ "\${!#}" = "$target" ]; then
+  exit 1
+fi
+exec "$real_mv" "\$@"
+SH
+  chmod +x "$fakebin/mv"
+  printf '%s\n' "$fakebin"
+}
+
 # --- the five-minute refusal ------------------------------------------------
 
 test_the_scheduler_never_lands_on_the_five_minute_grid() {
@@ -220,6 +235,101 @@ test_next_due_persistence_failure_is_distinct_and_fails() {
   assert_not_contains "$out" 'nothing is running this home' \
     "persistence failure must not masquerade as supervision failure"
   pass "next-target persistence failure is actionable and non-successful"
+}
+
+test_failed_next_due_commit_preserves_the_refusal() {
+  local home now out status=0 fakebin refusal next_due
+  home=$(make_home next-commit-failure)
+  run_nudge "$home" --arm >/dev/null || fail "arming failed"
+  now=$(( $(date +%s) / 300 * 300 ))
+  FM_CURATION_NUDGE_NOW="$now" FM_CURATION_NUDGE_JITTER_MIN=0 \
+    FM_CURATION_NUDGE_JITTER_MAX=0 run_nudge "$home" >/dev/null
+  refusal="$home/state/curation-nudge.refusal"
+  next_due="$home/state/curation-nudge.next-due"
+  fakebin=$(make_failing_mv "$home" "$next_due")
+
+  out=$(PATH="$fakebin:$PATH" FM_CURATION_NUDGE_NOW=$(( now + 60 )) \
+    FM_CURATION_NUDGE_JITTER_MIN=0 FM_CURATION_NUDGE_JITTER_MAX=0 \
+    run_nudge "$home") || status=$?
+  [ "$status" -ne 0 ] || fail "a failed next-target commit reported success: $out"
+  assert_contains "$out" 'state persistence failure' \
+    "the failed commit must report persistence rather than success"
+  [ -f "$refusal" ] || fail "the failed next-target commit deleted the prior refusal"
+  [ ! -e "$next_due" ] || fail "the failed next-target commit left a target"
+  out=$(FM_CURATION_NUDGE_NOW=$(( now + 7200 )) run_nudge "$home" --armed)
+  assert_contains "$out" 'scheduler has refused' \
+    "health must retain the durable cause after a failed next-target commit"
+  assert_not_contains "$out" 'nothing is running this home' \
+    "a failed next-target commit must not become a supervision diagnosis"
+  pass "failed next-target commit preserves the prior refusal"
+}
+
+test_failed_refusal_commit_preserves_the_next_due() {
+  local home now out status=0 fakebin refusal next_due
+  home=$(make_home refusal-commit-failure)
+  run_nudge "$home" --arm >/dev/null || fail "arming failed"
+  now=$(( $(date +%s) / 300 * 300 ))
+  next_due="$home/state/curation-nudge.next-due"
+  refusal="$home/state/curation-nudge.refusal"
+  printf '%s\n' "$now" > "$next_due"
+  fakebin=$(make_failing_mv "$home" "$refusal")
+
+  out=$(PATH="$fakebin:$PATH" FM_CURATION_NUDGE_NOW="$now" \
+    FM_CURATION_NUDGE_JITTER_MIN=0 FM_CURATION_NUDGE_JITTER_MAX=0 \
+    run_nudge "$home") || status=$?
+  [ "$status" -ne 0 ] || fail "a failed refusal commit reported success: $out"
+  assert_contains "$out" 'state persistence failure' \
+    "the failed refusal commit must report persistence rather than success"
+  [ "$(cat "$next_due")" = "$now" ] \
+    || fail "the failed refusal commit deleted or changed the prior target"
+  [ ! -e "$refusal" ] || fail "the failed refusal commit left a refusal record"
+  out=$(FM_CURATION_NUDGE_NOW=$(( now + 7200 )) run_nudge "$home" --armed)
+  assert_contains "$out" 'nothing is executing it' \
+    "health must retain the prior scheduled cause after a failed refusal commit"
+  assert_not_contains "$out" 'nothing is running this home' \
+    "a failed refusal commit must not become a missing-schedule diagnosis"
+  pass "failed refusal commit preserves the prior next target"
+}
+
+test_report_commit_failure_prevents_the_successful_wake() {
+  local home due out status=0 fakebin report
+  home=$(make_home report-commit-failure)
+  run_nudge "$home" >/dev/null
+  due=$(cat "$home/state/curation-nudge.next-due")
+  report="$home/state/curation-nudge.report"
+  fakebin=$(make_failing_mv "$home" "$report")
+
+  out=$(PATH="$fakebin:$PATH" FM_CURATION_NUDGE_NOW="$due" run_nudge "$home") || status=$?
+  [ "$status" -ne 0 ] || fail "a failed report commit reported success: $out"
+  assert_contains "$out" 'state persistence failure' \
+    "the failed report commit must be actionable"
+  assert_contains "$out" "$report" \
+    "the failed report commit must name its path"
+  assert_not_contains "$out" 'curation sweep is due' \
+    "a firing without its report must not emit the successful wake"
+  [ ! -e "$home/state/curation-nudge.last-fire" ] \
+    || fail "a firing without its report recorded last-fire"
+  pass "report commit failure prevents a fully recorded success"
+}
+
+test_last_fire_commit_failure_reports_after_the_wake() {
+  local home due out status=0 fakebin last_fire
+  home=$(make_home last-fire-commit-failure)
+  run_nudge "$home" >/dev/null
+  due=$(cat "$home/state/curation-nudge.next-due")
+  last_fire="$home/state/curation-nudge.last-fire"
+  fakebin=$(make_failing_mv "$home" "$last_fire")
+
+  out=$(PATH="$fakebin:$PATH" FM_CURATION_NUDGE_NOW="$due" run_nudge "$home") || status=$?
+  [ "$status" -ne 0 ] || fail "a failed last-fire commit exited as success: $out"
+  assert_contains "$out" 'curation sweep is due' \
+    "the case must prove the wake was emitted before last-fire failed"
+  assert_contains "$out" 'state persistence failure' \
+    "the emitted wake must be followed by the recording failure"
+  assert_contains "$out" "$last_fire" \
+    "the failed last-fire commit must name its path"
+  [ ! -e "$last_fire" ] || fail "the failed last-fire commit left a false record"
+  pass "last-fire commit failure is reported after the emitted wake"
 }
 
 test_the_period_is_forty_eight_hours() {
@@ -532,6 +642,10 @@ test_initial_detect_loudly_explains_an_exhausted_draw
 test_a_refused_successor_does_not_claim_the_nudge_fired
 test_refusal_persistence_failure_is_distinct_and_fails
 test_next_due_persistence_failure_is_distinct_and_fails
+test_failed_next_due_commit_preserves_the_refusal
+test_failed_refusal_commit_preserves_the_next_due
+test_report_commit_failure_prevents_the_successful_wake
+test_last_fire_commit_failure_reports_after_the_wake
 test_the_period_is_forty_eight_hours
 test_successive_firings_drift_rather_than_repeating_one_time
 test_arming_schedules_the_first_sweep_without_waking_anyone

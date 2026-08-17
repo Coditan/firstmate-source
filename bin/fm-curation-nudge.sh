@@ -324,16 +324,15 @@ schedule_transition() {
       PERSISTENCE_CONDITION='the drawn next target could not be written to temporary state'
       return 2
     }
-    if ! rm -f -- "$REFUSAL"; then
-      rm -f -- "$tmp"
-      PERSISTENCE_PATH=$REFUSAL
-      PERSISTENCE_CONDITION='the prior draw-refusal record could not be cleared'
-      return 2
-    fi
     if ! mv -f -- "$tmp" "$NEXT_DUE"; then
       rm -f -- "$tmp"
       PERSISTENCE_PATH=$NEXT_DUE
       PERSISTENCE_CONDITION='the drawn next target could not be persisted'
+      return 2
+    fi
+    if ! rm -f -- "$REFUSAL"; then
+      PERSISTENCE_PATH=$REFUSAL
+      PERSISTENCE_CONDITION='the prior draw-refusal record could not be cleared after the next target was committed'
       return 2
     fi
     SCHEDULED_TARGET=$target
@@ -362,19 +361,70 @@ schedule_transition() {
     PERSISTENCE_CONDITION='the draw refusal could not be written to temporary state'
     return 2
   }
-  if ! rm -f -- "$NEXT_DUE"; then
-    rm -f -- "$tmp"
-    PERSISTENCE_PATH=$NEXT_DUE
-    PERSISTENCE_CONDITION='the prior next target could not be cleared for the draw refusal'
-    return 2
-  fi
   if ! mv -f -- "$tmp" "$REFUSAL"; then
     rm -f -- "$tmp"
     PERSISTENCE_PATH=$REFUSAL
     PERSISTENCE_CONDITION='the draw refusal could not be persisted'
     return 2
   fi
+  if ! rm -f -- "$NEXT_DUE"; then
+    PERSISTENCE_PATH=$NEXT_DUE
+    PERSISTENCE_CONDITION='the prior next target could not be cleared after the draw refusal was committed'
+    return 2
+  fi
   return 1
+}
+
+persist_report() {
+  local tmp
+  [ ! -d "$REPORT" ] || {
+    PERSISTENCE_PATH=$REPORT
+    PERSISTENCE_CONDITION='the firing report could not replace a directory at its state path'
+    return 1
+  }
+  tmp=$(mktemp "$STATE/.curation-nudge-report.XXXXXX") || {
+    PERSISTENCE_PATH=$STATE
+    PERSISTENCE_CONDITION='temporary state for the firing report could not be created'
+    return 1
+  }
+  render_report "$1" > "$tmp" || {
+    rm -f -- "$tmp"
+    PERSISTENCE_PATH=$tmp
+    PERSISTENCE_CONDITION='the firing report could not be written to temporary state'
+    return 1
+  }
+  if ! mv -f -- "$tmp" "$REPORT"; then
+    rm -f -- "$tmp"
+    PERSISTENCE_PATH=$REPORT
+    PERSISTENCE_CONDITION='the firing report could not be persisted'
+    return 1
+  fi
+}
+
+persist_last_fire() {
+  local tmp
+  [ ! -d "$LAST_FIRE" ] || {
+    PERSISTENCE_PATH=$LAST_FIRE
+    PERSISTENCE_CONDITION='the actual firing time could not replace a directory at the last-fire path'
+    return 1
+  }
+  tmp=$(mktemp "$STATE/.curation-nudge-last-fire.XXXXXX") || {
+    PERSISTENCE_PATH=$STATE
+    PERSISTENCE_CONDITION='temporary state for the actual firing time could not be created'
+    return 1
+  }
+  printf '%s\n' "$NOW" > "$tmp" || {
+    rm -f -- "$tmp"
+    PERSISTENCE_PATH=$tmp
+    PERSISTENCE_CONDITION='the actual firing time could not be written to temporary state'
+    return 1
+  }
+  if ! mv -f -- "$tmp" "$LAST_FIRE"; then
+    rm -f -- "$tmp"
+    PERSISTENCE_PATH=$LAST_FIRE
+    PERSISTENCE_CONDITION='the actual firing time could not be persisted'
+    return 1
+  fi
 }
 
 render_report() {  # <next-due-epoch or empty>
@@ -474,6 +524,10 @@ SHIM
 # one there is?
 armed_diagnostic() {
   local next last shim_mtime shim_age overdue_by refusal recorded jitter_min jitter_max interval attempts age
+  if [ -e "$NEXT_DUE" ] && [ -e "$REFUSAL" ]; then
+    printf 'CURATION_NUDGE: state persistence failure left both the next target and draw-refusal records at %s and %s; repair the superseded record and run the check again\n' "$NEXT_DUE" "$REFUSAL"
+    return 0
+  fi
   if refusal=$(read_refusal); then
     read -r recorded jitter_min jitter_max interval attempts <<EOF
 $refusal
@@ -581,7 +635,13 @@ case "$transition_status" in
   1) schedule_refusal_line; exit 0 ;;
   *) state_persistence_line; exit 1 ;;
 esac
-render_report "$next" > "$REPORT"
-printf '%s\n' "$NOW" > "$LAST_FIRE"
+if ! persist_report "$next"; then
+  state_persistence_line
+  exit 1
+fi
 nudge_line
+if ! persist_last_fire; then
+  state_persistence_line
+  exit 1
+fi
 exit 0
