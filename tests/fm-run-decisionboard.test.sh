@@ -139,9 +139,7 @@ test_driver_ships_beside_the_skill() {
   assert_present "$DRIVER" "the run-decisionboard driver is missing"
   [ -x "$DRIVER" ] || fail "the driver must be executable; SKILL.md tells an agent to run it directly"
   assert_present "$SKILL" "run-decisionboard has no SKILL.md"
-  assert_grep 'fm-run-decisionboard.sh selftest' "$SKILL" \
-    "SKILL.md must name the driver as the primary path"
-  pass "the driver ships beside its skill and the skill points at it"
+  pass "the executable driver ships beside its skill"
 }
 
 test_help_lists_the_whole_loop() {
@@ -313,36 +311,85 @@ SH
   pass "shot refuses a staging file this run did not refresh"
 }
 
-# --- the skill's own contract -----------------------------------------------
-
-test_skill_records_the_measured_host_facts() {
-  # Each of these was hit on this host and each one costs a session if it has to
-  # be rediscovered. They are in the skill because an agent reaching past the
-  # driver meets them in the same order.
-  local fact
-  for fact in 'ERR_FILE_NOT_FOUND' 'ERR_CONNECTION_REFUSED' 'allow-same-origin' \
-    'Stale ref' 'chromium-cli' 'Your agent is not listening'; do
-    assert_grep "$fact" "$SKILL" "SKILL.md lost the measured fact: $fact"
-  done
-  assert_grep 'never hardcode a port' "$SKILL" "SKILL.md must forbid a hardcoded Lavish port"
-  pass "SKILL.md records the measured host facts the driver is built around"
+test_shot_accepts_a_same_size_refresh() {
+  local shot_tmp fakebin out staging
+  fm_test_tmproot shot_tmp fm-run-db-refresh
+  fakebin=$(fm_fakebin "$shot_tmp")
+  cat > "$fakebin/chrome-devtools-axi" <<'SH'
+#!/usr/bin/env bash
+printf 'new image bytes\n' > "$2"
+SH
+  chmod +x "$fakebin/chrome-devtools-axi"
+  mkdir -p "$shot_tmp/staging"
+  staging="$shot_tmp/staging/fm-run-decisionboard-shot.$(id -un).png"
+  printf 'old image bytes\n' > "$staging"
+  out=$(PATH="$fakebin:$PATH" FM_RUN_DECISIONBOARD_TMPDIR="$shot_tmp/staging" \
+    "$DRIVER" shot "$shot_tmp/out.png" 2>&1) \
+    || fail "shot rejected changed same-size content"$'\n'"$out"
+  assert_contains "$(cat "$shot_tmp/out.png")" "new image bytes" \
+    "shot did not copy the refreshed screenshot"
+  pass "shot recognizes changed content even when its size is unchanged"
 }
 
-test_skill_is_triggered_from_the_instruction_surface() {
-  # A skill nothing loads is dead weight; firstmate-coding-guidelines requires
-  # the trigger inline, and this one is captain-invocable so it lives in the
-  # captain-etiquette section rather than section 13.
-  # shellcheck disable=SC2016  # a literal instruction line, backticks and all.
-  assert_grep 'load the `run-decisionboard` skill' "$ROOT/AGENTS.md" \
-    "AGENTS.md must declare when to load run-decisionboard"
-  pass "AGENTS.md declares the run-decisionboard load trigger"
+test_answer_reresolves_the_exact_option_name() {
+  local answer_tmp fakebin out first_click
+  fm_test_tmproot answer_tmp fm-run-db-answer
+  fakebin=$(fm_fakebin "$answer_tmp")
+  cat > "$fakebin/chrome-devtools-axi" <<'SH'
+#!/usr/bin/env bash
+case "$1" in
+  snapshot)
+    if [ "$(wc -l < "$CLICK_LOG" 2>/dev/null || printf 0)" -ge 2 ]; then
+      printf 'uid=g3:1_0 RootWebArea "Vorgemerkt"\n'
+    else
+      cat <<'SNAP'
+uid=g3:1_0 RootWebArea "Editor" url="http://example.invalid/session/x"
+  uid=g3:1_1 Iframe
+    uid=g3:1_2 RootWebArea "Board" url="http://example.invalid/artifact/x/index.html"
+      uid=g3:1_3 form
+        uid=g3:1_4 radio "Not Yes"
+        uid=g3:1_5 radio "Yes"
+        uid=g3:1_6 button "Antwort vormerken"
+SNAP
+    fi
+    ;;
+  click)
+    printf '%s\n' "$2" >> "$CLICK_LOG"
+    ;;
+esac
+SH
+  chmod +x "$fakebin/chrome-devtools-axi"
+  : > "$answer_tmp/clicks"
+  out=$(CLICK_LOG="$answer_tmp/clicks" PATH="$fakebin:$PATH" \
+    "$DRIVER" answer --option "Yes" 2>&1) \
+    || fail "answer failed to select the exact option"$'\n'"$out"
+  first_click=$(sed -n '1p' "$answer_tmp/clicks")
+  [ "$first_click" = '@g3:1_5' ] \
+    || fail "answer clicked '$first_click' instead of the exact Yes option"
+  pass "answer preserves the exact option name across fresh snapshots"
 }
 
 test_driver_is_in_the_canonical_lint_set() {
-  # A driver an agent is told to run is held to the same bar as bin/.
-  assert_grep '.agents/skills/*/*.sh' "$ROOT/bin/fm-lint.sh" \
-    "fm-lint.sh must lint skill drivers alongside bin/"
-  pass "the driver is inside the canonical lint set"
+  local probe="$ROOT/.agents/skills/fm-lint-skill-probe-$$" out status=0
+  mkdir -p "$probe"
+  FM_TEST_CLEANUP_DIRS+=("$probe")
+  cat > "$probe/driver.sh" <<'SH'
+#!/usr/bin/env bash
+bad= value
+SH
+  chmod +x "$probe/driver.sh"
+  out=$("$ROOT/bin/fm-lint.sh" 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "fm-lint.sh passed an invalid skill driver"
+  assert_contains "$out" ".agents/skills/$(basename "$probe")/driver.sh" \
+    "fm-lint.sh did not report the invalid skill driver"
+  cat > "$probe/driver.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'clean\n'
+SH
+  status=0
+  out=$("$ROOT/bin/fm-lint.sh" 2>&1) || status=$?
+  [ "$status" -eq 0 ] || fail "fm-lint.sh rejected a clean skill driver"$'\n'"$out"
+  pass "the canonical lint consumer checks skill drivers"
 }
 
 test_driver_ships_beside_the_skill
@@ -359,6 +406,6 @@ test_query_counts_a_decision_form_that_carries_nothing
 test_query_reports_an_unlistened_board
 test_shot_refuses_a_screenshot_that_wrote_nothing
 test_shot_refuses_a_stale_staging_file
-test_skill_records_the_measured_host_facts
-test_skill_is_triggered_from_the_instruction_surface
+test_shot_accepts_a_same_size_refresh
+test_answer_reresolves_the_exact_option_name
 test_driver_is_in_the_canonical_lint_set

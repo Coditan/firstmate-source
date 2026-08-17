@@ -481,17 +481,17 @@ shot_staging_path() {
 }
 
 cmd_shot() {
-  local dest=${1:-} staging status=0 before=0 after=0
+  local dest=${1:-} staging status=0 before='' after
   [ -n "$dest" ] || die "shot: needs a destination path"
   need_bridge
   staging=$(shot_staging_path)
-  [ ! -e "$staging" ] || before=$(stat -c '%Y:%s' "$staging" 2>/dev/null || echo 0)
+  [ ! -e "$staging" ] || before=$(sha256sum "$staging" 2>/dev/null | awk '{print $1}')
   chrome-devtools-axi screenshot "$staging" >/dev/null 2>&1 || status=$?
-  [ ! -e "$staging" ] || after=$(stat -c '%Y:%s' "$staging" 2>/dev/null || echo 0)
   if [ ! -s "$staging" ]; then
     die "shot: chrome-devtools-axi exited $status but wrote no screenshot at $staging (a screenshot's exit status is not evidence; the file is)"
   fi
-  if [ "$before" = "$after" ]; then
+  after=$(sha256sum "$staging" | awk '{print $1}')
+  if [ -n "$before" ] && [ "$before" = "$after" ]; then
     die "shot: chrome-devtools-axi exited $status and left $staging unchanged, so this run captured nothing (the file there is from an earlier run)"
   fi
   mkdir -p "$(dirname "$dest")"
@@ -524,7 +524,7 @@ resolve_radio() {  # <option> [decision]
     printf '%s\n' "$hits" | awk -F'\t' '{ printf "  decision %s: %s\n", $1, $3 }' >&2
     exit 1
   fi
-  printf '%s\n' "$hits" | cut -f1,2
+  printf '%s\n' "$hits"
 }
 
 # --- answer -----------------------------------------------------------------
@@ -549,13 +549,14 @@ cmd_answer() {
   # explanatory line reads as "Option eins Die Option, die der Treiber wählt."
   # Match the given text exactly first, then as a substring, and refuse an
   # ambiguous one rather than answering a decision nobody asked about.
-  local match target_decision uid
+  local match target_decision resolved_name uid
   match=$(resolve_radio "$option" "$decision")
   target_decision=$(printf '%s\n' "$match" | cut -f1)
+  resolved_name=$(printf '%s\n' "$match" | cut -f3-)
   # That inventory is now one generation stale (gotcha 4), so resolve the uid
   # again immediately before the click that uses it.
-  uid=$(form_inventory | awk -F'\t' -v want="$option" -v d="$target_decision" \
-    '$1 == d && $2 == "radio" && ($4 == want || index($4, want)) { print $3; exit }')
+  uid=$(form_inventory | awk -F'\t' -v want="$resolved_name" -v d="$target_decision" \
+    '$1 == d && $2 == "radio" && $4 == want { print $3; exit }')
   [ -n "$uid" ] || die "answer: the option '$option' vanished between snapshots"
   chrome-devtools-axi click "@$uid" >/dev/null 2>&1 \
     || die "answer: could not select the option '$option'"
