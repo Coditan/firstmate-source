@@ -25,13 +25,16 @@ here instead of being left to an agent's care:
   * the archive went dark    -> `check` requires the route back to live INSIDE
                                 the loaded half, requires that route to be a
                                 runnable search command, and then RUNS every
-                                documented search this guard can execute,
-                                checking each archived entry against the output.
-                                Every one of them must run clean and at least
-                                one must reach every entry; a documented search
-                                outside the provable interface, a `sed` read
-                                step for instance, is reported as such rather
-                                than dropped. The route is proved, not asserted.
+                                documented search this guard can execute. Each
+                                must run and return results; at least one must
+                                be a heading index reaching every archived
+                                entry, because only an index can carry
+                                completeness. A worked content search is proved
+                                by returning results and is not asked to be an
+                                index. A documented search outside the provable
+                                interface is reported rather than dropped, and
+                                fails outright when its FORM is recognisably
+                                destructive. The route is proved, not asserted.
 
 PROOF AND LEDGER UNIT
 Both guarantees operate on entries at the selected heading level. Deeper
@@ -114,7 +117,11 @@ measured surface. In place, the arithmetic is the surface as it stands. Staged,
 the before share is measured against today's real surface and the after share is
 labelled a PROJECTION of the surface once the pair is moved, because an
 unlabelled share for a state that never existed is the same offence as pricing a
-prune in lines.
+prune in lines. Under --against <captured digest> that question cannot be
+answered at all - a digest is a byte size with no file list - so membership is
+printed as UNMEASURED, both shares are against the digest as captured, and no
+projection is offered. A reading this program could not take is reported as
+unmeasured, never as a result.
 
 Usage:
   fm-curate-knowledge.py measure [FILE...] [options]
@@ -1056,6 +1063,38 @@ def _release_proof_dir(path):
 atexit.register(_cleanup_proof_dirs)
 
 
+def mutating_form(command):
+    """A recognisably destructive form in a command this guard will not run.
+
+    This is NOT the allowlist pattern rejected earlier in this work, and the
+    direction is the whole difference. That pattern used a list of commands
+    BELIEVED not to write in order to AUTHORISE execution, which fails open: a
+    writer nobody listed got run. Nothing with an unsupported verb is ever
+    executed here, so this recognition only chooses between failing loudly and
+    reporting, and a destructive form it misses degrades to a report rather
+    than to an execution. That is fail-safe.
+
+    Be plain about the limit: this program cannot PROVE an unexecuted command
+    is read-only. A command it reports as supplementary guidance is read-only
+    in FORM only, judged by what it looks like rather than by what it does.
+    """
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        argv = command.split()
+    if re.search(r"(?<!\S)-(?:i|-in-place)(?:[.=]\S*)?(?!\S)", command):
+        return "an in-place edit flag"
+    if re.search(r">{1,2}\|?", command):
+        return "a shell redirection"
+    if "$(" in command or "`" in command:
+        return "a command substitution"
+    if re.search(r"(?<!\w)system\s*\(", command):
+        return "an awk system() call"
+    if argv and os.path.basename(argv[0]) in ("tee", "dd"):
+        return "a writing tool, `%s`" % os.path.basename(argv[0])
+    return None
+
+
 def prove_route(command, home, archive_path, entries, sample, trusted_dirs=None):
     """Run the documented route once and check every archived entry.
 
@@ -1203,22 +1242,35 @@ def prove_route(command, home, archive_path, entries, sample, trusted_dirs=None)
     # truncating route would otherwise read as full reach.
     expected = {entry["line"]: norm_heading(entry["heading"]) for entry in entries}
     reached_lines = set()
-    for output_line in output.splitlines():
+    output_lines = output.splitlines()
+    is_index = bool(output_lines)
+    for output_line in output_lines:
         match = re.fullmatch(r"(\d+):(#{1,6})[ \t]+(.*?)[ \t]*", output_line)
         if not match:
-            return "refused", [], [], (
-                "route output is not a heading index record: %s" % output_line[:120]
-            )
+            # Not an index, which is not a fault. A worked CONTENT search is
+            # exactly what rule 3 asks a loaded half to document, and it is
+            # proven by running and returning results. Only an index can carry
+            # the completeness assertion, so this command simply does not carry
+            # it; at least one that does is required elsewhere.
+            is_index = False
+            break
         line_number = int(match.group(1))
         if expected.get(line_number) == norm_heading(match.group(3)):
             reached_lines.add(line_number)
+    lines = ["  $ (protected copy && %s)" % " ".join(_shell_quote(part) for part in run_argv)]
+    for line in output_lines[:sample]:
+        lines.append("    %s" % line[:160])
+    if not is_index:
+        return (
+            "results",
+            lines,
+            [],
+            "search returned %d line(s); not a heading index, so it carries no "
+            "completeness claim" % len(output_lines),
+        )
     missing = [
         entry["heading"] for entry in entries if entry["line"] not in reached_lines
     ]
-    lines = ["  $ (protected copy && %s)" % " ".join(_shell_quote(part) for part in run_argv)]
-    output_lines = output.splitlines()
-    for line in output_lines[:sample]:
-        lines.append("    %s" % line[:160])
     return (
         "complete" if not missing else "incomplete",
         lines,
@@ -1671,11 +1723,13 @@ def cmd_check(args):
         # Every documented search this guard can execute is proved, in whatever
         # order the curator wrote them: proving only the first enforces an order
         # nobody agreed to and refuses the index route this project itself pairs
-        # with a `sed` read step. A search the guard cannot execute is not
-        # dropped silently either - it is reported as documented-but-unprovable,
-        # because a report that quietly omits something is the defect this
-        # driver exists to catch. Every provable search must run clean, and at
-        # least one must reach every archived entry.
+        # with a `sed` read step. A search the guard cannot execute lands in one
+        # of two places rather than being dropped, because a report that quietly
+        # omits something is the defect this driver exists to catch: a
+        # recognisably destructive form FAILS, and anything else is reported as
+        # supplementary guidance. Every provable search must run and return
+        # results, and at least one must be a heading index reaching every
+        # archived entry.
         provable = []
         for command in commands:
             try:
@@ -1684,14 +1738,25 @@ def cmd_check(args):
                 argv = []
             if argv and argv[0] in ROUTE_VERBS:
                 provable.append(command)
-            else:
-                print("  NOT PROVABLE BY THIS GUARD: %s" % command[:150])
-                print(
-                    "    route command `%s` cannot be proven non-writing; "
-                    "document the route with grep or rg. Read as supplementary "
-                    "reader guidance, never executed here."
-                    % (argv[0] if argv else "")
+                continue
+            destructive = mutating_form(command)
+            if destructive:
+                print("  DESTRUCTIVE COMMAND DOCUMENTED: %s" % command[:150])
+                failures.append(
+                    "the loaded half teaches a reader to run a destructive "
+                    "command against the archive: `%s` carries %s. data/ is not "
+                    "version-controlled, so a reader who follows it destroys a "
+                    "body that cannot be recovered"
+                    % (command[:120], destructive)
                 )
+                continue
+            print("  NOT PROVABLE BY THIS GUARD: %s" % command[:150])
+            print(
+                "    route command `%s` cannot be proven non-writing; "
+                "document the route with grep or rg. Read as supplementary "
+                "reader guidance, never executed here."
+                % (argv[0] if argv else "")
+            )
         if commands and not provable:
             failures.append(
                 "no documented search is inside the provable interface (%s), so "
@@ -1699,6 +1764,7 @@ def cmd_check(args):
                 % ", ".join(ROUTE_VERBS)
             )
         complete_routes = 0
+        index_routes = 0
         incomplete_routes = []
         for command in provable:
             status, transcript, missing, result_message = prove_route(
@@ -1715,8 +1781,12 @@ def cmd_check(args):
                 print(line)
             if status == "complete":
                 complete_routes += 1
+                index_routes += 1
             elif status == "incomplete":
+                index_routes += 1
                 incomplete_routes.append((result_message, missing))
+            elif status == "results":
+                pass
             else:
                 # The reason travels with the FAIL line. A refusal here is the
                 # most security-relevant thing this program says, and an
@@ -1728,6 +1798,13 @@ def cmd_check(args):
                 detail = "; unreachable: %s" % ", ".join(missing[:8]) if missing else ""
                 failures.append(
                     "documented route failed: %s%s" % (result_message, detail)
+                )
+            if not index_routes:
+                failures.append(
+                    "no documented search is a heading index over the archive, "
+                    "so completeness was never established: %d search(es) ran "
+                    "and returned results, none of them an index"
+                    % len(provable)
                 )
 
     # --- verdict --------------------------------------------------------------
@@ -1857,11 +1934,19 @@ def cmd_report(args):
     # no surface contains. Reporting its share against the measured surface
     # would price a state that does not exist, which is the same offence as
     # printing a line count.
+    # A captured digest is a byte size with no file list, so membership in it
+    # cannot be measured. Concluding STAGED from an empty row list would state a
+    # result the program never took a reading for, which is the offence this
+    # driver exists to refuse. Unknown is reported as unknown.
+    membership_measurable = bool(rows)
     surface_paths = {os.path.realpath(row[1]) for row in rows if row[3]}
     loaded_in_place = os.path.realpath(args.loaded) in surface_paths
     baseline_path = before.get("loaded_path") or before["path"]
     baseline_in_place = os.path.realpath(baseline_path) in surface_paths
-    if loaded_in_place:
+    if not membership_measurable:
+        before_total = total
+        after_total = total
+    elif loaded_in_place:
         before_total = total - loaded_bytes + before_bytes
         after_total = total
     else:
@@ -1876,14 +1961,21 @@ def cmd_report(args):
     print("denominator    %s" % label)
     for note in notes:
         print("  note: %s" % note)
-    if not loaded_in_place:
+    if not membership_measurable:
+        print(
+            "  note: whether the loaded half is part of this denominator is "
+            "UNMEASURED - a captured digest carries no file list, so both "
+            "shares below are against the digest as captured, and neither is "
+            "a projection of any other state"
+        )
+    elif not loaded_in_place:
         print(
             "  note: the loaded half is STAGED - %s is in no measured surface, "
             "so its share below is a PROJECTION of the surface after the pair "
             "is moved into place, not a state that exists yet"
             % os.path.realpath(args.loaded)
         )
-    if not baseline_in_place:
+    if membership_measurable and not baseline_in_place:
         print(
             "  note: the baseline file %s is not part of the measured surface "
             "either, so this run is a rehearsal against copies" % baseline_path
@@ -1900,7 +1992,9 @@ def cmd_report(args):
             loaded_bytes,
             pct(loaded_bytes, after_total),
             after_total,
-            "" if loaded_in_place else "   (PROJECTION, not yet in place)",
+            ""
+            if loaded_in_place or not membership_measurable
+            else "   (PROJECTION, not yet in place)",
         )
     )
     delta = loaded_bytes - before_bytes

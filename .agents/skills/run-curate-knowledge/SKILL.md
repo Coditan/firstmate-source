@@ -121,6 +121,7 @@ Expect your own numbers to be larger than the ones printed here: `data/learnings
 The share is a floor against a stated denominator, not a share of the whole session start: bootstrap diagnostics, the supervision block and the fleet-state digest are excluded because measuring them means running the locked session start.
 Every run prints that exclusion.
 If you have a captured digest, pass `--against <file>` and the denominator becomes its real byte size.
+A digest carries no file list, so `report` cannot tell whether the loaded half is part of it: in that mode it prints membership as UNMEASURED, prices both shares against the digest as captured, and offers no projection.
 
 ### 2. Snapshot the baseline
 
@@ -238,14 +239,20 @@ It asserts, and exits non-zero on any of:
 - a `stub` names no owner path that exists, or the file never points at it;
 - the loaded half does not name the archive, or names it with no runnable search;
 - the documented path does not resolve, from the home, to the archive under check;
-- a documented search the guard can run fails, or none of them reaches every archived entry occurrence;
+- a documented search the guard can run fails or returns nothing;
+- no documented search is a heading index reaching every archived entry occurrence, so completeness was never established;
 - no documented search is inside the provable interface at all, so nothing was proven;
+- a documented command is recognisably destructive, such as a `sed -i` or a redirection over the archive;
 - a nested archive heading lies outside every entry span;
 - a worksheet row's `heading:` contradicts the norm inside its own `key:`.
 
 Then it executes EVERY documented search whose verb the guard can run - `grep` and `rg`, the two tools with no write operation anywhere in their interface - against a protected copy, in whatever order they were written.
-All of them must run clean and at least one must reach every archived entry.
-A documented search the guard cannot run, a `sed` read step for instance, is reported as documented-but-unprovable rather than dropped, because a report that quietly omits something is the defect this driver exists to catch.
+Each must run and return results, and at least one must be a heading index that reaches every archived entry.
+A worked content search is proved by returning results and is not asked to be an index, because recovering a fact is what rule 3 asks the loaded half to show.
+A documented command the guard cannot run lands in one of two places, never dropped.
+A `sed -n` read step is reported as documented-but-unprovable supplementary guidance.
+A recognisably destructive form fails the check, because `check` is the last gate before the pair moves into a home whose `data/` is not version-controlled, and prose telling a reader to rewrite the archive in place is the harm itself.
+The driver cannot prove an unexecuted command is read-only, so a reported one is read-only in FORM only; a destructive form it fails to recognise is reported rather than run, which is the safe direction.
 The `--prove-route` value limits only the printed example, never the assertion.
 `--level` is refused here: the baseline's entries were measured at the level the snapshot recorded, so set it with `measure --level <n>` instead.
 
@@ -352,8 +359,8 @@ Real output from that worked copy, abridged to the two staging notes and the par
   note: the baseline file .../.curate-proof/cost-before.md is not part of the measured surface either, so this run is a rehearsal against copies
 
 STARTUP COST
-  before       2173 B      0.8% of a 262646 B surface
-  after         345 B      0.1% of a 262991 B surface   (PROJECTION, not yet in place)
+  before       2173 B      0.8% of a 276614 B surface
+  after         345 B      0.1% of a 276959 B surface   (PROJECTION, not yet in place)
   change      -1828 B   15.9% of the original still loads
   archived     1694 B   not loaded at session start
   retained     2039 B   loaded + archived, against 2173 B before (93.8%)

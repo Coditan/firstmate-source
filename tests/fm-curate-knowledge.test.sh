@@ -514,12 +514,12 @@ test_route_proof_cannot_write_real_files() {
     --loaded "$TMP/sed-route-loaded.md" --archive "$TMP/after-archive.md" \
     --home "$TMP" 2>&1) && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "a sed -i route exited $status, expected 1"
-  printf '%s' "$out" | grep -q 'NOT PROVABLE BY THIS GUARD' \
-    || fail "the sed -i route was not reported as outside the provable interface"
-  printf '%s' "$out" | grep -q 'cannot be proven non-writing; document the route with grep or rg' \
-    || fail "the sed -i route was reported with no reason"
+  printf '%s' "$out" | grep -q 'DESTRUCTIVE COMMAND DOCUMENTED' \
+    || fail "the sed -i route was not reported as destructive"
   # A refusal is the most security-relevant thing this gate says, so its reason
   # travels on the FAIL line rather than only in the narration above it.
+  printf '%s' "$out" | grep -q 'FAIL  the loaded half teaches a reader to run a destructive command' \
+    || fail "the destructive documented command did not fail saying what the harm is"
   printf '%s' "$out" | grep -q 'FAIL  no documented search is inside the provable interface' \
     || fail "a loaded half with nothing provable did not fail saying so"
   [ "$(sha256sum "$TMP/after-archive.md")" = "$before_hash" ] \
@@ -533,8 +533,10 @@ test_route_proof_cannot_write_real_files() {
     --loaded "$TMP/awk-route-loaded.md" --archive "$TMP/after-archive.md" \
     --home "$TMP" 2>&1) && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "an awk system route exited $status, expected 1"
-  printf '%s' "$out" | grep -q 'cannot be proven non-writing; document the route with grep or rg' \
-    || fail "the awk system route was not refused by the closed interface"
+  printf '%s' "$out" | grep -q 'awk system() call' \
+    || fail "the awk system route was not recognised as destructive"
+  printf '%s' "$out" | grep -q 'FAIL  the loaded half teaches a reader to run a destructive command' \
+    || fail "the awk system route did not fail saying what the harm is"
   [ ! -e "$escape_target" ] || fail "the refused awk route wrote to an absolute path"
   [ "$(sha256sum "$TMP/after-archive.md")" = "$before_hash" ] \
     || fail "the awk system route changed the real archive"
@@ -738,8 +740,10 @@ EOF
     --archive "$TMP/body-substring-archive.md" --home "$TMP" 2>&1) \
     && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "body substrings passed route completeness"
-  printf '%s' "$out" | grep -q 'not a heading index record' \
-    || fail "body prose was not rejected as non-record route output"
+  printf '%s' "$out" | grep -q 'not a heading index, so it carries no completeness claim' \
+    || fail "body prose was allowed to carry a completeness claim"
+  printf '%s' "$out" | grep -q 'no documented search is a heading index over the archive' \
+    || fail "a run whose only search is not an index did not say so"
   pass "route completeness counts only heading index records"
 }
 
@@ -1341,6 +1345,122 @@ EOF
   pass "every documented search the guard can run is proved, and the rest reported"
 }
 
+# Rule 3 asks the loaded half to show the command and output that RECOVERS a
+# fact, which is a content search rather than an index. Only an index can carry
+# the completeness assertion, so a content search is proved by running and
+# returning results and must not be required to be an index.
+test_a_worked_content_search_is_proved_by_returning_results() {
+  local out status
+  cat >"$TMP/content-route-loaded.md" <<'EOF'
+# Store
+
+List the entries with `grep -n '^## ' after-archive.md`.
+Recover the retelling itself with `grep -n 'second time' after-archive.md`.
+
+- **Alpha rule**: the one sentence that must be in hand first.
+EOF
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/content-route-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "an index plus a content search exited $status: $out"
+  printf '%s' "$out" | grep -q 'not a heading index, so it carries no completeness claim' \
+    || fail "the content search was not reported as carrying no completeness claim"
+  printf '%s' "$out" | grep -q 'route reaches 1 of 1 archived entries' \
+    || fail "the index route stopped carrying the completeness assertion"
+
+  # A supported command that returns nothing has not been proved to work.
+  cat >"$TMP/empty-route-loaded.md" <<'EOF'
+# Store
+
+List the entries with `grep -n '^## ' after-archive.md`.
+Recover it with `grep -n 'a phrase that is absent' after-archive.md`.
+
+- **Alpha rule**: the one sentence that must be in hand first.
+EOF
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/empty-route-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "a search returning nothing exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'returned no output' \
+    || fail "a documented search that returns nothing was treated as proved"
+
+  # Content searches alone never establish that every entry is reachable.
+  cat >"$TMP/content-only-loaded.md" <<'EOF'
+# Store
+
+Recover the retelling with `grep -n 'second time' after-archive.md`.
+
+- **Alpha rule**: the one sentence that must be in hand first.
+EOF
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/content-only-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "content searches with no index exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'no documented search is a heading index over the archive' \
+    || fail "a loaded half with no index did not say completeness was unestablished"
+  pass "a content search is proved by returning results, an index carries completeness"
+}
+
+# `check` is the last gate before the pair moves into a home whose data/ is not
+# version-controlled, so prose that teaches a reader to rewrite the archive in
+# place must not pass it, even though the driver never runs that command itself.
+test_a_documented_destructive_command_fails_the_check() {
+  local before_hash out status
+  before_hash=$(sha256sum "$TMP/after-archive.md")
+  cat >"$TMP/destructive-route-loaded.md" <<'EOF'
+# Store
+
+List the entries with `grep -n '^## ' after-archive.md`.
+Rename one with `sed -i 's/Alpha/Beta/' after-archive.md` when it drifts.
+
+- **Alpha rule**: the one sentence that must be in hand first.
+EOF
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/destructive-route-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "a documented sed -i exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'teaches a reader to run a destructive command' \
+    || fail "the destructive documented command was not named as the harm"
+  printf '%s' "$out" | grep -q 'in-place edit flag' \
+    || fail "the destructive form was not identified"
+  [ "$(sha256sum "$TMP/after-archive.md")" = "$before_hash" ] \
+    || fail "the check itself executed the destructive command"
+
+  cat >"$TMP/redirect-route-loaded.md" <<'EOF'
+# Store
+
+List the entries with `grep -n '^## ' after-archive.md`.
+Trim it with `cat trimmed.md > after-archive.md` when it grows.
+
+- **Alpha rule**: the one sentence that must be in hand first.
+EOF
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/redirect-route-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "a documented redirection exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'shell redirection' \
+    || fail "the documented redirection was not identified as destructive"
+  [ "$(sha256sum "$TMP/after-archive.md")" = "$before_hash" ] \
+    || fail "the check itself executed the redirection"
+
+  # A read-only form the guard cannot execute is still only reported.
+  cat >"$TMP/read-step-route-loaded.md" <<'EOF'
+# Store
+
+List the entries with `grep -n '^## ' after-archive.md`.
+Read one with `sed -n '3,20p' after-archive.md` once you know its bounds.
+
+- **Alpha rule**: the one sentence that must be in hand first.
+EOF
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/read-step-route-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "a sed -n read step exited $status, expected 0: $out"
+  printf '%s' "$out" | grep -q 'NOT PROVABLE BY THIS GUARD' \
+    || fail "the read-only sed step was not reported as supplementary guidance"
+  pass "a documented destructive command fails while a read-only one is reported"
+}
+
 # The workflow stages the pair outside the home, so the file named by --loaded is
 # usually in no surface. A share against a surface that does not exist yet is
 # priced honestly or not at all.
@@ -1366,6 +1486,31 @@ test_a_staged_share_is_labelled_a_projection() {
     && fail "an in-place loaded half was priced as a projection"
   rm -f "$TMP/data/learnings.md" "$TMP/data/learnings-longterm.md"
   pass "a staged share is labelled a projection and an in-place one is not"
+}
+
+# A captured digest is a byte size with no file list, so membership in it cannot
+# be measured. Concluding STAGED from that silence states a reading the program
+# never took, which is exactly what it refuses to do everywhere else.
+test_a_captured_digest_reports_membership_as_unmeasured() {
+  local out status
+  printf 'a captured session-start digest, whose composition this program cannot see\n' \
+    >"$TMP/captured-digest.txt"
+  cp "$TMP/after-loaded.md" "$TMP/data/learnings.md"
+  cp "$TMP/after-archive.md" "$TMP/data/learnings-longterm.md"
+  out=$("$DRIVER" report --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/data/learnings.md" --archive "$TMP/data/learnings-longterm.md" \
+    --against "$TMP/captured-digest.txt" --home "$TMP" 2>&1) && status=0 || status=$?
+  rm -f "$TMP/data/learnings.md" "$TMP/data/learnings-longterm.md"
+  [ "$status" -eq 0 ] || fail "report against a captured digest exited $status: $out"
+  printf '%s' "$out" | grep -q 'UNMEASURED' \
+    || fail "digest mode does not report membership as unmeasured"
+  printf '%s' "$out" | grep -q 'STAGED' \
+    && fail "digest mode claimed the loaded half is staged, which it never measured"
+  printf '%s' "$out" | grep -q 'PROJECTION' \
+    && fail "digest mode printed a projection of a surface it cannot compose"
+  [ "$(printf '%s' "$out" | grep -c "of a $(wc -c <"$TMP/captured-digest.txt") B surface")" -eq 2 ] \
+    || fail "digest mode did not price both shares against the digest as captured"
+  pass "a captured digest reports membership as unmeasured rather than guessing"
 }
 
 # The skill must be reachable and must not claim a command the driver lacks.
@@ -1440,5 +1585,8 @@ test_a_worksheet_heading_cannot_contradict_its_key
 test_a_level_override_is_refused_against_any_baseline
 test_an_absolute_route_path_is_refused_for_the_real_reason
 test_every_provable_documented_search_is_proved
+test_a_worked_content_search_is_proved_by_returning_results
+test_a_documented_destructive_command_fails_the_check
 test_a_staged_share_is_labelled_a_projection
+test_a_captured_digest_reports_membership_as_unmeasured
 test_skill_declares_its_trigger_and_only_real_subcommands
