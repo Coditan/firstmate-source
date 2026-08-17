@@ -101,6 +101,26 @@ Each reach is caught by its own assertion, which is what makes partial adoption 
 
 Separately, a live run against the real judge and the real journal on 2026-08-12 judged three events correctly: ordinary progress as `routine`, a revoked deploy key as `escalate`, and a PR awaiting review as `escalate`, at 3.5-7.7 seconds each.
 
+## Keeping it running
+
+A judging tier that stops when whoever started it walks away is not a tier.
+`bin/fm-bosun-service.sh` and `systemd/fm-bosun@.service` give it a per-home lifetime; [`docs/configuration.md`](configuration.md) "Bosun observer service" owns the opt-in, the consent gate, the recorded environment, and the convergence rules.
+Two things about it belong here, because they follow from what this unit is.
+
+**Its health is read from its own work, never from the unit's state.**
+On this host `bridge-notify-poll.timer` reported loaded, enabled and active for nine days after it last fired.
+"The process is up" was already the evidence this unit was built not to accept, and "the unit says active" is the same evidence one layer out, so the service reads `bin/fm-bosun.sh status` and never `systemctl is-active`.
+That reading was checked against the failure it exists for on 2026-08-16: with the observer's own process frozen under `SIGSTOP`, `systemctl --user show` reported `ActiveState=active` and `SubState=running` while the reading returned `DEAD - no pass for 105s, past 3 missed passes of a 30s interval` at exit 1.
+Both surfaces were asked the same question at the same moment and only one of them was right.
+
+**A stall is reported and not restarted.**
+`STOPPED` and `DEAD` mean nothing is consuming the journal and are converged automatically; `STALLED` and `BLIND` mean something is running and has stopped consuming, and bouncing the service would clear the symptom while hiding the fault.
+
+The rest was proven end to end on this seat the same day, against the real judge and a real journal: the unit started and read `WORKING` at exit 0 with two events outstanding, the cursor advanced 0 to 2 as `codex:gpt-5.6-luna` judged both in about 4.2 seconds each, the reading settled to `QUIET`, `systemctl --user stop` produced `STOPPED` at exit 1, locked convergence brought it back, and a `SIGKILL` of the main process was recovered by the unit on its own - reclaiming the run lock the killed process never released and judging a newly arrived event.
+
+The stall clock deliberately survives a restart, which is why a crash loop cannot hide inside it: a run that restarts, writes its start beacon, judges nothing and dies would otherwise reset the clock every time and never reach `STALLED`.
+The beacon itself is written before the first pass, because without it a bosun working through a long backlog reads from outside as whatever the previous run left on disk for as long as that pass takes.
+
 ## The model, which is provisional
 
 `data/fm-bosun-model-survey/report.md` recommends **NVIDIA Nemotron 3 Nano on DeepInfra** as the pilot, on latency, enforced schemas, and reversible open weights.
@@ -143,10 +163,12 @@ These are recorded as unbuilt rather than described as built:
 - **Accuracy against a labelled set.** Nothing here measures whether the judge is *right*. The survey's recommended false-deferral test against a captain-labelled fleet notification set is exactly what this record now makes possible, and it is not run. Until it is, the verdicts are worth reading and not worth trusting.
 - **Prompt and schema tuning.** The judging prompt is one short paragraph, written once. No variant was compared against another.
 - **A duplicate-judgement guard.** A pass that dies after judging but before recording re-judges that event, on purpose. Nothing dedupes the two verdicts if both eventually land; the record simply carries both, which is the honest outcome and the cheap one.
+- **A crash loop against an empty journal.** A bosun that starts, writes its beacon, dies, and is restarted reads as `STALLED` once events are waiting, because the stall clock survives the restart and the cursor never moves. With nothing waiting it reads `QUIET`, which is the same word a healthy idle bosun gets. The window closes on its own the moment an event arrives and the stall bound elapses, and nothing narrower is built.
 - **Restart-safety of a long backlog.** A bosun restarted against a large unjudged backlog will work through it `FM_BOSUN_PASS_MAX` at a time. That is bounded but not prioritised: the oldest events are judged first, and a fresh escalation waits behind them.
 
 ## Related
 
+- `docs/configuration.md` "Bosun observer service" - how a home opts in, and how the unit is installed and converged.
 - `docs/event-journal.md` - the stream this reads, and what it does and does not guarantee.
 - `docs/supervision-cost.md` - what supervision actually costs, measured from the provider's own usage records.
 - `data/fm-bosun-model-survey/report.md` - the model survey, its ranked field, and its unanswered data-residency question.
