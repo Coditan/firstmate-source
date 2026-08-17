@@ -514,12 +514,12 @@ test_route_proof_cannot_write_real_files() {
     --loaded "$TMP/sed-route-loaded.md" --archive "$TMP/after-archive.md" \
     --home "$TMP" 2>&1) && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "a sed -i route exited $status, expected 1"
-  printf '%s' "$out" | grep -q 'DESTRUCTIVE COMMAND DOCUMENTED' \
-    || fail "the sed -i route was not reported as destructive"
+  printf '%s' "$out" | grep -q 'UNRECOGNISED COMMAND DOCUMENTED' \
+    || fail "the sed -i route was not reported as unrecognised"
   # A refusal is the most security-relevant thing this gate says, so its reason
   # travels on the FAIL line rather than only in the narration above it.
-  printf '%s' "$out" | grep -q 'FAIL  the loaded half teaches a reader to run a destructive command' \
-    || fail "the destructive documented command did not fail saying what the harm is"
+  printf '%s' "$out" | grep -q 'FAIL  the loaded half documents a command this guard cannot recognise as read-only' \
+    || fail "the unrecognised documented command did not fail saying what the harm is"
   printf '%s' "$out" | grep -q 'FAIL  no documented search is inside the provable interface' \
     || fail "a loaded half with nothing provable did not fail saying so"
   [ "$(sha256sum "$TMP/after-archive.md")" = "$before_hash" ] \
@@ -533,9 +533,9 @@ test_route_proof_cannot_write_real_files() {
     --loaded "$TMP/awk-route-loaded.md" --archive "$TMP/after-archive.md" \
     --home "$TMP" 2>&1) && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "an awk system route exited $status, expected 1"
-  printf '%s' "$out" | grep -q 'awk system() call' \
-    || fail "the awk system route was not recognised as destructive"
-  printf '%s' "$out" | grep -q 'FAIL  the loaded half teaches a reader to run a destructive command' \
+  printf '%s' "$out" | grep -q 'is not one of the read-only forms this guard recognises' \
+    || fail "the awk system route was not refused as an unrecognised form"
+  printf '%s' "$out" | grep -q 'FAIL  the loaded half documents a command this guard cannot recognise as read-only' \
     || fail "the awk system route did not fail saying what the harm is"
   [ ! -e "$escape_target" ] || fail "the refused awk route wrote to an absolute path"
   [ "$(sha256sum "$TMP/after-archive.md")" = "$before_hash" ] \
@@ -1419,12 +1419,38 @@ EOF
     --loaded "$TMP/destructive-route-loaded.md" --archive "$TMP/after-archive.md" \
     --home "$TMP" 2>&1) && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "a documented sed -i exited $status, expected 1"
-  printf '%s' "$out" | grep -q 'teaches a reader to run a destructive command' \
-    || fail "the destructive documented command was not named as the harm"
-  printf '%s' "$out" | grep -q 'in-place edit flag' \
-    || fail "the destructive form was not identified"
+  printf '%s' "$out" | grep -q 'documents a command this guard cannot recognise as read-only' \
+    || fail "the unrecognised documented command was not named as the harm"
+  # shellcheck disable=SC2016 # The driver's message contains literal backticks.
+  printf '%s' "$out" | grep -q 'flag `-i` is outside its read-only form' \
+    || fail "the sed -i form was not identified"
   [ "$(sha256sum "$TMP/after-archive.md")" = "$before_hash" ] \
     || fail "the check itself executed the destructive command"
+
+  # The list of forms believed destructive was abandoned because it was silent
+  # about the maximal form of the harm it names. Every verb outside the closed
+  # read-only set now fails, whether or not anyone thought of it.
+  local verb
+  for verb in 'rm after-archive.md' 'mv after-archive.md old.md' \
+    'truncate -s 0 after-archive.md' 'cp fresh.md after-archive.md' \
+    'scrub --deep after-archive.md'; do
+    cat >"$TMP/unknown-verb-loaded.md" <<EOF
+# Store
+
+List the entries with \`grep -n '^## ' after-archive.md\`.
+When it is stale, run \`$verb\` and start over.
+
+- **Alpha rule**: the one sentence that must be in hand first.
+EOF
+    out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+      --loaded "$TMP/unknown-verb-loaded.md" --archive "$TMP/after-archive.md" \
+      --home "$TMP" 2>&1) && status=0 || status=$?
+    [ "$status" -eq 1 ] || fail "documented \`$verb\` exited $status, expected 1"
+    printf '%s' "$out" | grep -q 'documents a command this guard cannot recognise as read-only' \
+      || fail "documented \`$verb\` was not refused as unrecognised"
+    [ "$(sha256sum "$TMP/after-archive.md")" = "$before_hash" ] \
+      || fail "the check itself executed \`$verb\`"
+  done
 
   cat >"$TMP/redirect-route-loaded.md" <<'EOF'
 # Store
@@ -1438,27 +1464,91 @@ EOF
     --loaded "$TMP/redirect-route-loaded.md" --archive "$TMP/after-archive.md" \
     --home "$TMP" 2>&1) && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "a documented redirection exited $status, expected 1"
-  printf '%s' "$out" | grep -q 'shell redirection' \
-    || fail "the documented redirection was not identified as destructive"
+  printf '%s' "$out" | grep -q 'it redirects output over a file' \
+    || fail "the documented redirection was not identified"
   [ "$(sha256sum "$TMP/after-archive.md")" = "$before_hash" ] \
     || fail "the check itself executed the redirection"
 
-  # A read-only form the guard cannot execute is still only reported.
-  cat >"$TMP/read-step-route-loaded.md" <<'EOF'
+  # The read-only forms the guard recognises are still only reported.
+  local form
+  for form in "sed -n '3,20p' after-archive.md" 'less after-archive.md' \
+    'cat after-archive.md' 'head -n 40 after-archive.md' \
+    'tail -n 40 after-archive.md'; do
+    cat >"$TMP/read-step-route-loaded.md" <<EOF
 # Store
 
+List the entries with \`grep -n '^## ' after-archive.md\`.
+Read one with \`$form\` once you know its bounds.
+
+- **Alpha rule**: the one sentence that must be in hand first.
+EOF
+    out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+      --loaded "$TMP/read-step-route-loaded.md" --archive "$TMP/after-archive.md" \
+      --home "$TMP" 2>&1) && status=0 || status=$?
+    [ "$status" -eq 0 ] || fail "documented \`$form\` exited $status, expected 0: $out"
+    printf '%s' "$out" | grep -q 'NOT PROVABLE BY THIS GUARD' \
+      || fail "documented \`$form\` was not reported as supplementary guidance"
+  done
+  pass "an unrecognised documented command fails while a read-only form is reported"
+}
+
+# A loaded half is prose with commands in it. A sentence that happens to sit in
+# backticks and names the archive is not a route, and reading it as one both
+# fails a correct curation and accuses the curator of writing something they
+# did not - this repo's own house arrow was enough to trip it.
+test_prose_is_not_read_as_a_documented_command() {
+  local out status
+  cat >"$TMP/prose-arrow-loaded.md" <<'EOF'
+# Store
+
+The 2026-08-16 split was `before.md -> after-archive.md`, and nothing was curated.
 List the entries with `grep -n '^## ' after-archive.md`.
-Read one with `sed -n '3,20p' after-archive.md` once you know its bounds.
 
 - **Alpha rule**: the one sentence that must be in hand first.
 EOF
   out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
-    --loaded "$TMP/read-step-route-loaded.md" --archive "$TMP/after-archive.md" \
+    --loaded "$TMP/prose-arrow-loaded.md" --archive "$TMP/after-archive.md" \
     --home "$TMP" 2>&1) && status=0 || status=$?
-  [ "$status" -eq 0 ] || fail "a sed -n read step exited $status, expected 0: $out"
-  printf '%s' "$out" | grep -q 'NOT PROVABLE BY THIS GUARD' \
-    || fail "the read-only sed step was not reported as supplementary guidance"
-  pass "a documented destructive command fails while a read-only one is reported"
+  [ "$status" -eq 0 ] || fail "prose containing an arrow exited $status, expected 0: $out"
+  printf '%s' "$out" | grep -q 'before.md -> after-archive.md' \
+    && fail "a prose sentence was classified as a documented command"
+  printf '%s' "$out" | grep -q 'route reaches 1 of 1 archived entries' \
+    || fail "the real index route was not proved alongside the prose"
+
+  # A genuine redirection still fails, so the narrowing did not blunt the guard.
+  cat >"$TMP/real-redirect-loaded.md" <<'EOF'
+# Store
+
+List the entries with `grep -n '^## ' after-archive.md`.
+Rebuild it with `cat fresh.md >> after-archive.md` when it drifts.
+
+- **Alpha rule**: the one sentence that must be in hand first.
+EOF
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/real-redirect-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "a genuine redirection exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'it redirects output over a file' \
+    || fail "a genuine appending redirection was not identified"
+  pass "prose is not read as a command, and a real redirection still fails"
+}
+
+# A refused route never ran, so a failure saying no search was an index would
+# contradict the refusal printed directly above it.
+test_a_refused_route_does_not_also_claim_no_index_ran() {
+  local out status
+  mkdir -p "$TMP/wrong/dir"
+  sed "s|grep -n '\^## ' after-archive.md|grep -n '^## ' wrong/dir/after-archive.md|" \
+    "$TMP/after-loaded.md" >"$TMP/wrong-dir-route-loaded.md"
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/wrong-dir-route-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "a wrong-directory route exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'documented route is broken from a normal shell' \
+    || fail "the refused route did not report the path as the reason"
+  printf '%s' "$out" | grep -q 'search(es) ran and returned results' \
+    && fail "a refused route was reported as having run and returned results"
+  pass "a refused route is not also reported as a search that ran"
 }
 
 # The workflow stages the pair outside the home, so the file named by --loaded is
@@ -1587,6 +1677,8 @@ test_an_absolute_route_path_is_refused_for_the_real_reason
 test_every_provable_documented_search_is_proved
 test_a_worked_content_search_is_proved_by_returning_results
 test_a_documented_destructive_command_fails_the_check
+test_prose_is_not_read_as_a_documented_command
+test_a_refused_route_does_not_also_claim_no_index_ran
 test_a_staged_share_is_labelled_a_projection
 test_a_captured_digest_reports_membership_as_unmeasured
 test_skill_declares_its_trigger_and_only_real_subcommands

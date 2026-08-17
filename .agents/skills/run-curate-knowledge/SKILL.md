@@ -242,7 +242,7 @@ It asserts, and exits non-zero on any of:
 - a documented search the guard can run fails or returns nothing;
 - no documented search is a heading index reaching every archived entry occurrence, so completeness was never established;
 - no documented search is inside the provable interface at all, so nothing was proven;
-- a documented command is recognisably destructive, such as a `sed -i` or a redirection over the archive;
+- a documented command the guard cannot run is not one of the read-only forms it recognises;
 - a nested archive heading lies outside every entry span;
 - a worksheet row's `heading:` contradicts the norm inside its own `key:`.
 
@@ -250,9 +250,12 @@ Then it executes EVERY documented search whose verb the guard can run - `grep` a
 Each must run and return results, and at least one must be a heading index that reaches every archived entry.
 A worked content search is proved by returning results and is not asked to be an index, because recovering a fact is what rule 3 asks the loaded half to show.
 A documented command the guard cannot run lands in one of two places, never dropped.
-A `sed -n` read step is reported as documented-but-unprovable supplementary guidance.
-A recognisably destructive form fails the check, because `check` is the last gate before the pair moves into a home whose `data/` is not version-controlled, and prose telling a reader to rewrite the archive in place is the harm itself.
-The driver cannot prove an unexecuted command is read-only, so a reported one is read-only in FORM only; a destructive form it fails to recognise is reported rather than run, which is the safe direction.
+It is reported as documented-but-unprovable supplementary guidance only if it matches a closed set of read-only forms: a `sed -n` range read, `less`, `cat`, `head`, `tail`, with their arguments validated, since `sed -i` writes and `less -o` logs.
+EVERYTHING ELSE FAILS, including a verb nobody has thought of yet.
+That direction is deliberate and was reached the hard way: a list of forms believed destructive was tried first, and it caught `sed -i` while blessing `rm` over the archive.
+`check` is the last gate before the pair moves into a home whose `data/` is not version-controlled, and the harm is a reader following the document, so an unrecognised form must fail rather than pass.
+The driver cannot prove an unexecuted command is read-only, so a reported one is read-only in FORM only.
+Prose that does not parse as a command is neither reported nor failed: a sentence such as `before.md -> after-archive.md` is not a documented route.
 The `--prove-route` value limits only the printed example, never the assertion.
 `--level` is refused here: the baseline's entries were measured at the level the snapshot recorded, so set it with `measure --level <n>` instead.
 

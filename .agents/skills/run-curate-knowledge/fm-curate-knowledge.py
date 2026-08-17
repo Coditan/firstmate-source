@@ -31,10 +31,13 @@ here instead of being left to an agent's care:
                                 entry, because only an index can carry
                                 completeness. A worked content search is proved
                                 by returning results and is not asked to be an
-                                index. A documented search outside the provable
-                                interface is reported rather than dropped, and
-                                fails outright when its FORM is recognisably
-                                destructive. The route is proved, not asserted.
+                                index. A documented command outside the provable
+                                interface is reported rather than dropped only
+                                when its FORM is one this guard recognises as
+                                read-only; every other form FAILS, because the
+                                harm is a reader following the document. Prose
+                                that does not parse as a command is neither.
+                                The route is proved, not asserted.
 
 PROOF AND LEDGER UNIT
 Both guarantees operate on entries at the selected heading level. Deeper
@@ -228,6 +231,22 @@ ROUTE_FLAGS = {
 # count, as `grep -m1`, and both spellings are validated against ROUTE_FLAGS
 # above so the enumerated set is the set actually enforced.
 ROUTE_VALUE_FLAGS = ("-e", "-m")
+
+# The closed set of read-only forms a documented command may take when this
+# guard cannot execute it. A documented command outside this set FAILS the
+# check: see guidance_form_error for why recognising destructive forms instead
+# was tried, and abandoned.
+GUIDANCE_FORMS = {
+    "sed": ("-n",),
+    "less": ("-N", "-S", "-R", "-F", "-X"),
+    "cat": ("-n", "-b", "-s"),
+    "head": ("-n", "-c"),
+    "tail": ("-n", "-c"),
+}
+GUIDANCE_VALUE_FLAGS = {
+    "head": ("-n", "-c"),
+    "tail": ("-n", "-c"),
+}
 
 # Verdict vocabularies. They do not overlap by accident: `cold` and `split`
 # presuppose an archive file, which a shared-tracked file must never grow.
@@ -979,6 +998,30 @@ def baseline_levels(before):
     return loaded_level, archive_level
 
 
+def command_argv(command):
+    """Tokenize a backticked run, or None when it is not a command at all.
+
+    A loaded half is prose with commands inside it, so the two must be told
+    apart before either is judged. A run whose first token is a filename or an
+    ordinary word - `before.md -> after-archive.md`, this repo's own house arrow
+    between two paths - is a sentence, and treating it as a documented route
+    both accuses the curator of something they did not write and fails a
+    correct curation.
+    """
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return None
+    if len(argv) < 2:
+        return None
+    word = argv[0]
+    if "." in os.path.basename(word):
+        return None
+    if not re.fullmatch(r"(?:[A-Za-z0-9_./-]*/)?[A-Za-z][A-Za-z0-9_+-]*", word):
+        return None
+    return argv
+
+
 def route_commands(loaded_text, archive_path):
     """Backtick-delimited commands that name the archive.
 
@@ -987,13 +1030,15 @@ def route_commands(loaded_text, archive_path):
     path the route itself uses. Taking one for the route would reject a loaded
     half that names the file and then hands over a working search, which is how
     this home's real data/learnings.md is written. A location with no command
-    still fails, one line further down, as the location it is.
+    still fails, one line further down, as the location it is. Prose that does
+    not parse as a command is not a route either, and is passed over in silence
+    rather than reported or failed.
     """
     base = os.path.basename(archive_path)
     found = []
     for command in re.findall(r"`([^`]+)`", loaded_text):
         stripped = command.strip().lstrip("$").strip()
-        if base in command and len(stripped.split()) > 1:
+        if base in command and command_argv(stripped):
             found.append(stripped)
     return found
 
@@ -1063,35 +1108,62 @@ def _release_proof_dir(path):
 atexit.register(_cleanup_proof_dirs)
 
 
-def mutating_form(command):
-    """A recognisably destructive form in a command this guard will not run.
+def guidance_form_error(command):
+    """Why a documented command is not a RECOGNISED read-only guidance form.
 
-    This is NOT the allowlist pattern rejected earlier in this work, and the
-    direction is the whole difference. That pattern used a list of commands
-    BELIEVED not to write in order to AUTHORISE execution, which fails open: a
-    writer nobody listed got run. Nothing with an unsupported verb is ever
-    executed here, so this recognition only chooses between failing loudly and
-    reporting, and a destructive form it misses degrades to a report rather
-    than to an execution. That is fail-safe.
+    Returns None when the command matches the closed set below, and the reason
+    it does not otherwise. Read the direction carefully, because this is the
+    second attempt and the first one was wrong in a way worth recording.
 
-    Be plain about the limit: this program cannot PROVE an unexecuted command
-    is read-only. A command it reports as supplementary guidance is read-only
-    in FORM only, judged by what it looks like rather than by what it does.
+    The first attempt enumerated destructive FORMS - in-place flags, awk
+    system(), tee, dd - and reported everything else as harmless. It was told
+    about `sed -i` and stayed silent about `rm`, `mv`, `truncate` and `cp` over
+    the archive, which is the maximal form of the very harm the failure names.
+    Recognition-of-bad cannot work here. Fail-safe about EXECUTION is not
+    fail-safe about the HARM: nothing with an unsupported verb is ever executed,
+    so the danger is not this program running a writer, it is a HUMAN reading
+    the loaded half and following it. An unrecognised form must therefore FAIL
+    rather than pass, which is the same property the execution guard has.
+
+    So the set is positive and closed: `sed` in its `-n` range-read form,
+    `less`, `cat`, `head`, `tail`, with their arguments validated because the
+    verb alone does not settle it - `sed -i` writes and `less -o` logs. Anything
+    else fails, including verbs nobody has thought of yet.
+
+    The honest limit: this program cannot PROVE an unexecuted command is
+    read-only. A command it accepts here is read-only in FORM only.
     """
-    try:
-        argv = shlex.split(command)
-    except ValueError:
-        argv = command.split()
-    if re.search(r"(?<!\S)-(?:i|-in-place)(?:[.=]\S*)?(?!\S)", command):
-        return "an in-place edit flag"
-    if re.search(r">{1,2}\|?", command):
-        return "a shell redirection"
-    if "$(" in command or "`" in command:
-        return "a command substitution"
-    if re.search(r"(?<!\w)system\s*\(", command):
-        return "an awk system() call"
-    if argv and os.path.basename(argv[0]) in ("tee", "dd"):
-        return "a writing tool, `%s`" % os.path.basename(argv[0])
+    argv = command_argv(command)
+    if argv is None:
+        return "it does not parse as a command"
+    verb = os.path.basename(argv[0])
+    if verb not in GUIDANCE_FORMS:
+        return (
+            "`%s` is not one of the read-only forms this guard recognises (%s)"
+            % (verb, ", ".join(sorted(GUIDANCE_FORMS)))
+        )
+    for token in argv[1:]:
+        if token in (">", ">>", ">|"):
+            return "it redirects output over a file"
+    allowed = GUIDANCE_FORMS[verb]
+    index = 1
+    while index < len(argv):
+        token = argv[index]
+        if not token.startswith("-") or token == "-":
+            index += 1
+            continue
+        if verb in ("head", "tail") and re.fullmatch(r"[-+]\d+", token):
+            index += 1
+            continue
+        name = token.split("=", 1)[0]
+        base_flag = re.sub(r"\d+$", "", name)
+        if name not in allowed and base_flag not in allowed:
+            return "flag `%s` is outside its read-only form" % token
+        if name in GUIDANCE_VALUE_FLAGS.get(verb, ()) and name == token:
+            index += 1
+        index += 1
+    if verb == "sed" and "-n" not in argv:
+        return "`sed` is read-only guidance only in its `-n` range-read form"
     return None
 
 
@@ -1723,39 +1795,36 @@ def cmd_check(args):
         # Every documented search this guard can execute is proved, in whatever
         # order the curator wrote them: proving only the first enforces an order
         # nobody agreed to and refuses the index route this project itself pairs
-        # with a `sed` read step. A search the guard cannot execute lands in one
-        # of two places rather than being dropped, because a report that quietly
-        # omits something is the defect this driver exists to catch: a
-        # recognisably destructive form FAILS, and anything else is reported as
-        # supplementary guidance. Every provable search must run and return
+        # with a `sed` read step. A command the guard cannot execute lands in
+        # one of two places rather than being dropped, because a report that
+        # quietly omits something is the defect this driver exists to catch: a
+        # recognised read-only form is reported as supplementary guidance, and
+        # every other form FAILS. Every provable search must run and return
         # results, and at least one must be a heading index reaching every
         # archived entry.
         provable = []
         for command in commands:
-            try:
-                argv = shlex.split(command)
-            except ValueError:
-                argv = []
+            argv = command_argv(command) or []
             if argv and argv[0] in ROUTE_VERBS:
                 provable.append(command)
                 continue
-            destructive = mutating_form(command)
-            if destructive:
-                print("  DESTRUCTIVE COMMAND DOCUMENTED: %s" % command[:150])
+            unrecognised = guidance_form_error(command)
+            if unrecognised:
+                print("  UNRECOGNISED COMMAND DOCUMENTED: %s" % command[:150])
                 failures.append(
-                    "the loaded half teaches a reader to run a destructive "
-                    "command against the archive: `%s` carries %s. data/ is not "
-                    "version-controlled, so a reader who follows it destroys a "
-                    "body that cannot be recovered"
-                    % (command[:120], destructive)
+                    "the loaded half documents a command this guard cannot "
+                    "recognise as read-only: `%s` - %s. data/ is not "
+                    "version-controlled, so a reader who follows it could "
+                    "destroy a body that cannot be recovered"
+                    % (command[:120], unrecognised)
                 )
                 continue
             print("  NOT PROVABLE BY THIS GUARD: %s" % command[:150])
             print(
                 "    route command `%s` cannot be proven non-writing; "
-                "document the route with grep or rg. Read as supplementary "
-                "reader guidance, never executed here."
-                % (argv[0] if argv else "")
+                "document the route with grep or rg. Recognised as a read-only "
+                "form and read as supplementary guidance, never executed here."
+                % argv[0]
             )
         if commands and not provable:
             failures.append(
@@ -1765,6 +1834,7 @@ def cmd_check(args):
             )
         complete_routes = 0
         index_routes = 0
+        executed_routes = 0
         incomplete_routes = []
         for command in provable:
             status, transcript, missing, result_message = prove_route(
@@ -1782,11 +1852,13 @@ def cmd_check(args):
             if status == "complete":
                 complete_routes += 1
                 index_routes += 1
+                executed_routes += 1
             elif status == "incomplete":
                 index_routes += 1
+                executed_routes += 1
                 incomplete_routes.append((result_message, missing))
             elif status == "results":
-                pass
+                executed_routes += 1
             else:
                 # The reason travels with the FAIL line. A refusal here is the
                 # most security-relevant thing this program says, and an
@@ -1799,12 +1871,16 @@ def cmd_check(args):
                 failures.append(
                     "documented route failed: %s%s" % (result_message, detail)
                 )
-            if not index_routes:
+            # Counted from what actually RAN, never from what was documented. A
+            # refused route never ran, and saying none of the searches was an
+            # index directly beneath the refusal that rejected one for a
+            # different reason is a diagnostic contradicting the line above it.
+            if executed_routes and not index_routes:
                 failures.append(
                     "no documented search is a heading index over the archive, "
                     "so completeness was never established: %d search(es) ran "
                     "and returned results, none of them an index"
-                    % len(provable)
+                    % executed_routes
                 )
 
     # --- verdict --------------------------------------------------------------
