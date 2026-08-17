@@ -406,17 +406,14 @@ publish_record() {
   fi
 }
 
-SCHEDULED_TARGET=''
 schedule_transition() {
   local firing_epoch=${1:-0} target last=0
-  SCHEDULED_TARGET=''
   if read_record; then
     last=$RECORD_LAST
   fi
   [ "$firing_epoch" -eq 0 ] || last=$firing_epoch
   if target=$(draw_next_due "$NOW"); then
     publish_record scheduled "$target" "$last" 0 0 '' '' || return 2
-    SCHEDULED_TARGET=$target
     return 0
   fi
   if [ "$firing_epoch" -eq 0 ] && [ "$RECORD_STATE" = refused ] \
