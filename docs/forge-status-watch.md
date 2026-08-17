@@ -91,7 +91,7 @@ The script never changes its own cadence.
 A watch that tightened itself would be classifying severity by another route.
 
 Cadence changes and the complete observation read, append, and schedule transaction share one home-scoped lock.
-A watcher check exits quietly when another writer holds it, so overlapping sweeps neither wait on the fetch timeout nor append the same reading twice.
+A detect or force observation exits quietly when another writer holds it, so overlapping sweeps neither wait on the fetch timeout nor append the same reading twice.
 Read-only modes do not acquire the lock or create state.
 
 The cadence is the target, not the observation instant.

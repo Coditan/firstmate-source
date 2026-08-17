@@ -64,8 +64,9 @@
 # --status and --cadence both print which cadence is in force, so a reader can
 # always tell.
 # The observation read/append/schedule transaction and cadence changes share a
-# home-scoped non-blocking lock. A watcher check that finds another writer exits
-# quietly, while read-only modes neither acquire the lock nor create its state.
+# home-scoped non-blocking lock. A detect or force observation that finds
+# another writer exits quietly, while read-only modes neither acquire the lock
+# nor create its state.
 #
 # The cadence is the target, not the observation instant. The watcher sees a due
 # target on its next state/*.check.sh sweep, so an observation lands at the
@@ -149,6 +150,8 @@
 #                                 (default 7200)
 #   FM_FORGE_STATUS_OVERDUE_RAISED the same slack for the raised cadence
 #                                 (default 1800)
+#   FM_FORGE_STATUS_LOCK_STALE_AFTER age in seconds after which a dead writer's
+#                                 transaction lock may be reclaimed (default 60)
 #   FM_FORGE_STATUS_NOW           override the current epoch (tests)
 #   FM_FORGE_STATUS_DISABLE=1     silence detect and --armed only, so suites that
 #                                 compose bin/fm-bootstrap.sh neither reach the
@@ -165,7 +168,7 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 LOG="$STATE/forge-status.log"
 REPORT="$STATE/forge-status.report"
 CHECK="$STATE/forge-status.check.sh"
-TRANSACTION_LOCK="$STATE/forge-status.transaction.lock"
+TRANSACTION_LOCK="$STATE/forge-status.transaction.lock.d"
 
 URL=${FM_FORGE_STATUS_URL:-https://www.githubstatus.com/api/v2/summary.json}
 INTERVAL=${FM_FORGE_STATUS_INTERVAL:-7200}
@@ -175,6 +178,7 @@ JITTER_MAX=${FM_FORGE_STATUS_JITTER_MAX:-420}
 TIMEOUT=${FM_FORGE_STATUS_TIMEOUT:-10}
 OVERDUE=${FM_FORGE_STATUS_OVERDUE:-7200}
 OVERDUE_RAISED=${FM_FORGE_STATUS_OVERDUE_RAISED:-1800}
+LOCK_STALE_AFTER=${FM_FORGE_STATUS_LOCK_STALE_AFTER:-60}
 case "$INTERVAL" in ''|*[!0-9]*) INTERVAL=7200 ;; esac
 case "$RAISED_INTERVAL" in ''|*[!0-9]*|0) RAISED_INTERVAL=300 ;; esac
 case "$JITTER_MIN" in ''|*[!0-9]*) JITTER_MIN=180 ;; esac
@@ -182,6 +186,7 @@ case "$JITTER_MAX" in ''|*[!0-9]*) JITTER_MAX=420 ;; esac
 case "$TIMEOUT" in ''|*[!0-9]*|0) TIMEOUT=10 ;; esac
 case "$OVERDUE" in ''|*[!0-9]*) OVERDUE=7200 ;; esac
 case "$OVERDUE_RAISED" in ''|*[!0-9]*) OVERDUE_RAISED=1800 ;; esac
+case "$LOCK_STALE_AFTER" in ''|*[!0-9]*) LOCK_STALE_AFTER=60 ;; esac
 [ "$JITTER_MAX" -ge "$JITTER_MIN" ] || { JITTER_MIN=180; JITTER_MAX=420; }
 
 # The bound on re-draws, and the reason for it, are bin/fm-curation-nudge.sh's:
@@ -375,7 +380,7 @@ set_unmeasurable() {  # <http> <condition>
 # happy path lands on set_unmeasurable with the concrete condition, and none of
 # them lands on "operational".
 observe() {
-  local body code status canonical jq_indicator
+  local body code status canonical jq_indicator scheme
   READING_UPDATE=''
   command -v curl >/dev/null 2>&1 \
     || { set_unmeasurable '-' 'curl is not installed on this seat, so the status page cannot be read at all'; return 0; }
@@ -392,9 +397,11 @@ observe() {
     set_unmeasurable '-' "the status page at $URL could not be read (fetch exit $status, bounded at ${TIMEOUT}s)"
     return 0
   fi
-  case "$code:$URL" in
+  scheme=${URL%%:*}
+  scheme=$(printf '%s' "$scheme" | LC_ALL=C tr '[:upper:]' '[:lower:]')
+  case "$code:$scheme" in
     2[0-9][0-9]:*) ;;
-    000:http://*|000:https://*)
+    000:http|000:https)
       rm -f -- "$body"
       set_unmeasurable "$code" "the status page at $URL answered HTTP $code instead of a status document"
       return 0
@@ -753,10 +760,62 @@ if [ "$MODE" = cadence ] && [ -n "$CADENCE_ARG" ] && ! mkdir -p "$STATE" 2>/dev/
   exit 1
 fi
 
+TRANSACTION_LOCK_HELD=0
+
+transaction_lock_age() {
+  local modified now
+  modified=$(path_mtime "$TRANSACTION_LOCK") || return 1
+  now=$(date +%s) || return 1
+  case "$modified:$now" in *[!0-9:]*) return 1 ;; esac
+  printf '%s\n' "$(( now - modified ))"
+}
+
+claim_transaction_lock() {
+  mkdir "$TRANSACTION_LOCK" 2>/dev/null || return 1
+  if ! printf '%s\n' "${BASHPID:-$$}" > "$TRANSACTION_LOCK/pid"; then
+    rmdir "$TRANSACTION_LOCK" 2>/dev/null || true
+    return 2
+  fi
+  TRANSACTION_LOCK_HELD=1
+  trap release_transaction_lock EXIT
+  trap 'exit 1' HUP INT TERM
+}
+
+# shellcheck disable=SC2329
+release_transaction_lock() {
+  local owner
+  [ "$TRANSACTION_LOCK_HELD" -eq 1 ] || return 0
+  owner=$(cat "$TRANSACTION_LOCK/pid" 2>/dev/null || true)
+  if [ "$owner" = "${BASHPID:-$$}" ]; then
+    rm -f -- "$TRANSACTION_LOCK/pid" 2>/dev/null || true
+    rmdir "$TRANSACTION_LOCK" 2>/dev/null || true
+  fi
+  TRANSACTION_LOCK_HELD=0
+}
+
 acquire_transaction_lock() {
-  command -v flock >/dev/null 2>&1 || return 2
-  exec 9>"$TRANSACTION_LOCK" || return 2
-  flock -n 9 || return 1
+  local owner age reclaim="$TRANSACTION_LOCK.reclaim"
+  claim_transaction_lock && return 0
+  [ -d "$TRANSACTION_LOCK" ] || return 2
+  owner=$(cat "$TRANSACTION_LOCK/pid" 2>/dev/null || true)
+  case "$owner" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$owner" 2>/dev/null && return 1
+  age=$(transaction_lock_age) || return 1
+  [ "$age" -ge "$LOCK_STALE_AFTER" ] || return 1
+  mkdir "$reclaim" 2>/dev/null || return 1
+  owner=$(cat "$TRANSACTION_LOCK/pid" 2>/dev/null || true)
+  age=$(transaction_lock_age 2>/dev/null || true)
+  if { case "$owner" in ''|*[!0-9]*) false ;; *) ! kill -0 "$owner" 2>/dev/null ;; esac; } \
+    && { case "$age" in ''|*[!0-9]*) false ;; *) [ "$age" -ge "$LOCK_STALE_AFTER" ] ;; esac; }; then
+    rm -f -- "$TRANSACTION_LOCK/pid" 2>/dev/null || true
+    rmdir "$TRANSACTION_LOCK" 2>/dev/null || true
+  fi
+  if claim_transaction_lock; then
+    rmdir "$reclaim" 2>/dev/null || true
+    return 0
+  fi
+  rmdir "$reclaim" 2>/dev/null || true
+  return 1
 }
 
 # Write this home's watcher shim and bind it to its own bytes. Every location is
@@ -1012,9 +1071,7 @@ esac
 lock_status=0
 acquire_transaction_lock || lock_status=$?
 if [ "$lock_status" -ne 0 ]; then
-  if [ "$lock_status" -eq 1 ] && [ "$MODE" = detect ]; then
-    exit 0
-  fi
+  if [ "$lock_status" -eq 1 ] && { [ "$MODE" = detect ] || [ "$MODE" = force ]; }; then exit 0; fi
   if [ "$lock_status" -eq 1 ]; then
     printf 'fm-forge-status: another forge-status update is already in progress\n' >&2
   else

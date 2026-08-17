@@ -303,6 +303,11 @@ test_http_000_is_unmeasurable_but_non_http_000_can_be_read() {
   entry=$(run_watch "$home" --log 1)
   assert_contains "$entry" 'HTTP 000' "the HTTPS failure must retain its concrete status"
 
+  out=$(FM_FORGE_STATUS_URL=HtTpS://status.example.test/summary.json run_watch "$home" --force)
+  assert_contains "$out" 'UNMEASURABLE' "mixed-case HTTPS status 000 must not be accepted"
+  entry=$(run_watch "$home" --log 1)
+  assert_contains "$entry" 'reading: unmeasurable' "mixed-case HTTPS must remain unmeasurable"
+
   out=$(FM_FORGE_STATUS_URL="file://$home/clear.json" run_watch "$home" --force)
   assert_contains "$out" 'All Systems Operational' "a successful non-HTTP status document must be read"
   entry=$(run_watch "$home" --log 1)
@@ -388,6 +393,11 @@ test_state_changes_are_serialized_without_blocking_a_check() {
   [ -z "$second_out" ] || fail "a contending watcher check must print nothing: $second_out"
 
   status=0
+  second_out=$(FM_FORGE_STATUS_NOW="$due" run_watch "$home" --force) || status=$?
+  [ "$status" -eq 0 ] || fail "a contending force observation must exit quietly: $second_out"
+  [ -z "$second_out" ] || fail "a contending force observation must print nothing: $second_out"
+
+  status=0
   second_out=$(FM_FORGE_STATUS_NOW="$due" run_watch "$home" --cadence raised 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "a concurrent cadence change must not report success"
   assert_contains "$second_out" 'already in progress' "a rejected cadence change must explain the contention"
@@ -399,6 +409,26 @@ test_state_changes_are_serialized_without_blocking_a_check() {
   [ "$(entry_count "$home")" -eq 1 ] || fail "concurrent checks appended duplicate readings"
   [ "$(record_value "$home" cadence)" = relaxed ] || fail "a rejected cadence change altered persisted cadence"
   pass "state changes serialize and a contending check exits quietly"
+}
+
+test_the_transaction_lock_needs_no_flock_and_reclaims_a_dead_owner() {
+  local home out
+  home=$(make_home portable-lock)
+  serve "$home" clear
+  printf '#!/usr/bin/env bash\nexit 99\n' > "$home/fakebin/flock"
+  chmod +x "$home/fakebin/flock"
+
+  out=$(run_watch "$home" --force)
+  assert_contains "$out" 'FORGE_STATUS:' "an observation must not depend on flock"
+  [ "$(entry_count "$home")" -eq 1 ] || fail "the flock-free observation did not append"
+
+  mkdir "$home/state/forge-status.transaction.lock.d"
+  printf '99999999\n' > "$home/state/forge-status.transaction.lock.d/pid"
+  serve "$home" incident
+  out=$(FM_FORGE_STATUS_LOCK_STALE_AFTER=0 run_watch "$home" --force)
+  assert_contains "$out" 'Partial System Outage' "a dead transaction owner must not wedge the watch"
+  [ "$(entry_count "$home")" -eq 2 ] || fail "the recovered transaction did not append"
+  pass "the portable transaction lock reclaims a dead owner"
 }
 
 test_a_sweep_that_is_not_due_takes_no_reading_and_a_due_one_does() {
@@ -761,6 +791,7 @@ test_http_000_is_unmeasurable_but_non_http_000_can_be_read
 test_a_status_document_cannot_forge_a_record_field
 test_the_cadence_is_settable_and_the_setting_in_force_is_readable
 test_state_changes_are_serialized_without_blocking_a_check
+test_the_transaction_lock_needs_no_flock_and_reclaims_a_dead_owner
 test_a_sweep_that_is_not_due_takes_no_reading_and_a_due_one_does
 test_the_relaxed_scheduler_never_lands_on_the_five_minute_grid
 test_a_window_with_no_off_grid_minute_refuses_rather_than_scheduling_on_it
