@@ -211,6 +211,10 @@ case "\${1:-}" in
     # Only the one live target resolves - the exact primitive
     # fm_backend_target_exists uses for a tmux endpoint liveness read, mirroring
     # make_fake_herdr below.
+    if [ "\${1:-}" = list-panes ] && [ -z "\$target" ]; then
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$live" "$live" "$live.0" "$live.0" "${live#*:}" '@1' '%1'
+      exit 0
+    fi
     if [ "\$target" = "$live" ]; then
       [ "\${1:-}" = list-panes ] && { printf '%%1 1\n'; exit 0; }
       printf '%%1\n'; exit 0
@@ -223,18 +227,24 @@ SH
   chmod +x "$fakebin/tmux"
 }
 
-# make_fake_herdr <fakebin> <live-pane>: `herdr pane get <pane>` succeeds only
-# for the given pane id - the exact primitive fm_backend_target_exists uses
-# for a herdr endpoint liveness read. No version/server-start calls: a
-# liveness check must never auto-start a server (fm-backend.sh's contract).
+# make_fake_herdr <fakebin> <live-pane>: the pane and agent reads return the
+# normalized JSON that the passive Herdr liveness classifier consumes.
 make_fake_herdr() {
   local fakebin=$1 live=$2
   cat > "$fakebin/herdr" <<SH
 #!/usr/bin/env bash
 set -u
 if [ "\${1:-}" = pane ] && [ "\${2:-}" = get ]; then
-  [ "\${3:-}" = "$live" ] && exit 0
-  exit 1
+  if [ "\${3:-}" = "$live" ]; then
+    printf '{"result":{"pane":{"pane_id":"%s"}}}\n' "$live"
+  else
+    printf '{"error":{"code":"pane_not_found"}}\n'
+  fi
+  exit 0
+fi
+if [ "\${1:-}" = agent ] && [ "\${2:-}" = get ] && [ "\${3:-}" = "$live" ]; then
+  printf '{"result":{"agent":{"agent_status":"working"}}}\n'
+  exit 0
 fi
 exit 1
 SH

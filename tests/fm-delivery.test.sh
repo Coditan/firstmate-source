@@ -230,7 +230,7 @@ test_a_wake_queued_with_no_listener_is_delivered_once_one_returns() {
   out=$(report "$home")
   case "$out" in down:*) ;; *) fail "expected a down verdict before the listener starts, got: $out" ;; esac
   pid=$(start_listener "$home")
-  out=$(wait_for_report "$home" "pane %99 no longer exists")
+  out=$(wait_for_report "$home" "published pane %99")
   case "$out" in
     undeliverable:*) ;;
     *) fail "the returned listener did not assess the queued wake's endpoint, got: $out" ;;
@@ -247,7 +247,7 @@ test_a_session_exit_and_restart_loses_no_wake() {
   pid=$(start_listener "$home")
   publish_endpoint "$home" tmux '%99'
   queue_wake "$home"
-  out=$(wait_for_report "$home" "pane %99 no longer exists")
+  out=$(wait_for_report "$home" "published pane %99")
   case "$out" in undeliverable:*) ;; *) fail "the first dead pane must be assessed as blocked: $out" ;; esac
 
   # The session exits: its lock record is gone and the endpoint it published now
@@ -263,7 +263,7 @@ test_a_session_exit_and_restart_loses_no_wake() {
   # A new session starts, takes the lock, and publishes its own endpoint.
   printf '%s\n' "$$" > "$home/state/.lock"
   publish_endpoint "$home" tmux '%100'
-  out=$(wait_for_report "$home" "pane %100 no longer exists")
+  out=$(wait_for_report "$home" "published pane %100")
   case "$out" in
     undeliverable:*) ;;
     *) fail "the restarted session's dead pane must be assessed as blocked: $out" ;;
@@ -320,9 +320,9 @@ test_pane_level_submit_blockers_reach_the_verdict() {
   queue_wake "$home"
   publish_endpoint "$home" tmux '%99999'
   pid=$(start_listener "$home")
-  out=$(wait_for_report "$home" "pane %99999 no longer exists")
-  grep -qF "pane %99999 no longer exists" "$home/state/.delivery.log" \
-    || fail "the submit path did not record the removed pane blocker"
+  out=$(wait_for_report "$home" "published pane %99999")
+  grep -qF "published pane %99999" "$home/state/.delivery.log" \
+    || fail "the submit path did not record the unreadable pane blocker"
   case "$out" in undeliverable:*) ;; *) fail "a removed pane looked deliverable: $out" ;; esac
   stop_listener "$pid"
 
@@ -504,7 +504,7 @@ SH
   kill -0 "$pid" 2>/dev/null || fail "destroying the session process group also destroyed delivery"
   queue_wake "$home"
   sleep 0.5
-  case "$(wait_for_report "$home" "pane %99 no longer exists")" in
+  case "$(wait_for_report "$home" "published pane %99")" in
     undeliverable:*) ;;
     *) fail "delivery did not keep assessing wakes after the session process group was destroyed: $(report "$home")" ;;
   esac
