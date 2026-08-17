@@ -109,6 +109,8 @@ fm_axi_prepend_path "$FM_HOME"
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-slot-lib.sh
+. "$SCRIPT_DIR/fm-slot-lib.sh"  # fm_slot_conflicting_holders: who else is standing in this worktree
 if [ "$#" -lt 1 ] || ! fm_task_id_path_safe "$1"; then
   echo "error: invalid teardown request" >&2
   exit 2
@@ -570,15 +572,82 @@ cleanup_stale_lock_for_safety_check() {
   return "$TEARDOWN_TREEHOUSE_LOCK_REFUSED"
 }
 
+# THE OWNERSHIP QUESTION - refuse to return a worktree someone else is standing in.
+#
+# Every other check in this script is scoped to the task it was told about. This
+# one is scoped to the RESOURCE, which is the check that was missing when a
+# teardown returned a pooled slot a different live task had since been given and
+# killed that worker mid-work (bin/fm-slot-guard.sh header records the incident).
+#
+# It holds under --force on purpose. The captain's authority to discard work is
+# authority over THIS task's work; it is never authority to destroy a third
+# party's work he was never told was there. An operator who really must return a
+# contested slot sets FM_TEARDOWN_SLOT_OVERRIDE to the holder this refusal named,
+# which is deliberately harder than typing --force and, unlike --force, cannot be
+# given without first learning who is being displaced.
+require_no_other_slot_holder() {  # <dir> <cd_dir> <label> <self-id>
+  local dir=$1 cd_dir=$2 label=$3 self=$4 holders marker
+
+  marker="$STATE/$self.slot-disputed"
+  if [ -f "$marker" ]; then
+    holders=$(sed -n 's/^holder=//p' "$marker" | head -1)
+    if [ -n "$holders" ] && [ "${FM_TEARDOWN_SLOT_OVERRIDE:-}" != "$holders" ]; then
+      echo "REFUSED: $label $dir is recorded by $self but is held by $holders, which is still live." >&2
+      echo "Returning it would terminate every process in that worktree and reset it, destroying $holders's uncommitted work." >&2
+      echo "Resolve the holder first (let $holders finish, or tear $holders down), or set FM_TEARDOWN_SLOT_OVERRIDE=$holders to displace it deliberately." >&2
+      return 1
+    fi
+  fi
+
+  holders=$(fm_slot_conflicting_holders "$dir" "$self" "$STATE" "$cd_dir" 2>/dev/null) || return 0
+  [ -n "$holders" ] || return 0
+  holders=$(printf '%s' "$holders" | tr '\n' ' ')
+  holders=${holders% }
+  if [ "${FM_TEARDOWN_SLOT_OVERRIDE:-}" = "$holders" ]; then
+    echo "teardown: displacing $holders from $label $dir on an explicit FM_TEARDOWN_SLOT_OVERRIDE" >&2
+    return 0
+  fi
+  echo "REFUSED: $label $dir is recorded by $self but is held by $holders, which is still live." >&2
+  echo "Returning it would terminate every process in that worktree and reset it, destroying $holders's uncommitted work." >&2
+  echo "Resolve the holder first (let $holders finish, or tear $holders down), or set FM_TEARDOWN_SLOT_OVERRIDE=$holders to displace it deliberately." >&2
+  return 1
+}
+
+# The lease-conditional form of the return, when the pool can enforce ownership
+# itself. Measured 2026-08-17: `treehouse return --if-lease-holder <h>` exits 1
+# and changes nothing both when the lease belongs to someone else ("lease holder
+# does not match") and when the slot is not leased at all ("is not leased"), so
+# it fails closed in both directions. It is therefore only safe to add when this
+# task is the recorded lease holder; on an unleased slot it would refuse every
+# ordinary teardown, and the refusal above is what covers that case instead.
+teardown_return_lease_args() {  # <dir> <cd_dir> <self-id>
+  local dir=$1 cd_dir=$2 self=$3 lease
+  lease=$(fm_slot_lease_holder "$dir" "$cd_dir" 2>/dev/null) || return 0
+  [ -n "$lease" ] || return 0
+  case "$lease" in
+    "fm:$self"|"$self") printf -- '--if-lease-holder\n%s\n' "$lease" ;;
+  esac
+}
+
 # Return a worktree/home via `treehouse return --force`, tolerating a transient or
 # stale git index.lock left by a killed crew process. See the script header.
 teardown_treehouse_return() {
-  local dir=$1 cd_dir=$2 label=$3 post_cleanup_check=${4:-}
-  local out lock attempt=0 max_retries lock_desc
+  local dir=$1 cd_dir=$2 label=$3 post_cleanup_check=${4:-} self=${5:-$ID}
+  local out lock attempt=0 max_retries lock_desc line
+  local -a lease_args=()
+
+  require_no_other_slot_holder "$dir" "$cd_dir" "$label" "$self" || return 1
+
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    lease_args+=("$line")
+  done <<EOF
+$(teardown_return_lease_args "$dir" "$cd_dir" "$self")
+EOF
 
   # Capture stdout+stderr so non-lock failures stay visible and lock failures can
   # be matched by signature even when the lock file is already gone mid-check.
-  if out=$( ( cd "$cd_dir" && treehouse return --force "$dir" ) 2>&1 ); then
+  if out=$( ( cd "$cd_dir" && treehouse return --force ${lease_args[@]+"${lease_args[@]}"} "$dir" ) 2>&1 ); then
     [ -n "$out" ] && printf '%s\n' "$out"
     return 0
   fi
@@ -603,7 +672,7 @@ teardown_treehouse_return() {
     echo "teardown: $label return failed with transient git lock ($lock_desc); waiting ${TREEHOUSE_RETURN_LOCK_RETRY_WAIT_SECS}s and retrying ($attempt/${max_retries})" >&2
     sleep "$TREEHOUSE_RETURN_LOCK_RETRY_WAIT_SECS"
 
-    if out=$( ( cd "$cd_dir" && treehouse return --force "$dir" ) 2>&1 ); then
+    if out=$( ( cd "$cd_dir" && treehouse return --force ${lease_args[@]+"${lease_args[@]}"} "$dir" ) 2>&1 ); then
       [ -n "$out" ] && printf '%s\n' "$out"
       echo "teardown: $label return succeeded on retry; lock cleared on its own" >&2
       return 0
@@ -630,7 +699,7 @@ teardown_treehouse_return() {
           return 1
         fi
       fi
-      if out=$( ( cd "$cd_dir" && treehouse return --force "$dir" ) 2>&1 ); then
+      if out=$( ( cd "$cd_dir" && treehouse return --force ${lease_args[@]+"${lease_args[@]}"} "$dir" ) 2>&1 ); then
         [ -n "$out" ] && printf '%s\n' "$out"
         echo "teardown: $label return succeeded after stale-lock cleanup" >&2
         return 0
@@ -919,7 +988,7 @@ remove_firstmate_home() {
       echo "error: treehouse command not found; cannot return $label $abs_home_path" >&2
       return 1
     }
-    teardown_treehouse_return "$abs_home_path" "$FM_ROOT" "$label" || {
+    teardown_treehouse_return "$abs_home_path" "$FM_ROOT" "$label" "" "${expected_id:-$ID}" || {
       echo "error: treehouse return failed for $label $abs_home_path; lease may still be held" >&2
       return 1
     }
@@ -1031,7 +1100,7 @@ cleanup_firstmate_home_children() {
       validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
       remove_task_turnend_hooks "$child_wt"
       if [ -n "$child_proj" ] && [ -d "$child_proj" ] && command -v treehouse >/dev/null 2>&1; then
-        if teardown_treehouse_return "$child_wt" "$child_proj" "child worktree"; then
+        if teardown_treehouse_return "$child_wt" "$child_proj" "child worktree" "" "$child_id"; then
           :
         else
           child_return_rc=$?

@@ -1,0 +1,405 @@
+#!/usr/bin/env bash
+# Tests for the pooled-worktree ownership guard: bin/fm-slot-lib.sh,
+# bin/fm-slot-guard.sh, and the refusal they give bin/fm-teardown.sh.
+#
+# THE FAILURE THESE REPRODUCE, measured 2026-08-17
+#
+# A pooled treehouse slot has two owners that disagree in one direction. The
+# pool's owner is a PROCESS: `treehouse status` calls a slot in-use only while
+# something is alive inside it, and frees it the moment that dies. firstmate's
+# owner is a TASK: state/<id>.meta records worktree=<path> until teardown, which
+# can be much later. So a task's window dies, the pool hands its slot to the next
+# spawn, and the first task's meta still names it. Tearing the first task down
+# then returns a slot the second task is standing in - and `treehouse return`
+# terminates every process in the worktree and resets it.
+#
+# That is what happened: a merged task's teardown returned slot 4, which had been
+# re-handed to a live mid-task worker. The worker's window died and its
+# uncommitted work was destroyed. One commit survived only because it was already
+# in the shared object store, which is timing, not a guarantee.
+#
+# Teardown was not missing a refusal - it refuses on unlanded work, and had done
+# so for that same task minutes earlier. It was missing a QUESTION: every check
+# it runs is scoped to the task it was told about, never to the RESOURCE it is
+# about to touch. Case (a) is that exact sequence, and it must REFUSE.
+#
+# Matrix:
+#   (a) stale record + a different LIVE task in the slot   -> REFUSE, naming it
+#   (b) sole owner, nobody else in the slot                -> ALLOW (no regression)
+#   (c) stale record + live holder + --force               -> REFUSE (force is not
+#       authority over a third party's work)
+#   (d) stale record + FM_TEARDOWN_SLOT_OVERRIDE=<holder>  -> ALLOW (deliberate)
+#   (e) stale record + a DEAD other claimant               -> ALLOW (nobody to lose)
+#   (f) a dispute marker the watcher left earlier          -> REFUSE without re-deriving
+#   (g) lease witness: slot leased to another task         -> REFUSE, naming it
+#   (h) a task's own lease is not a conflict               -> ALLOW
+#   (i) fm-slot-guard --status                             -> reports the dispute
+#   (j) fm-slot-guard detect                               -> writes marker + wakes once
+#   (k) dispute resolves                                   -> marker cleared, wake once
+set -u
+
+# shellcheck source=tests/lib.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+fm_git_identity fmtest fmtest@example.invalid
+
+TEARDOWN="$ROOT/bin/fm-teardown.sh"
+GUARD="$ROOT/bin/fm-slot-guard.sh"
+fm_test_tmproot TMP_ROOT fm-slot-guard-tests
+
+# A case dir with: a project clone with an origin, a pooled "slot" worktree, a
+# firstmate state dir, and mocks for treehouse and tmux.
+#
+# LIVE_WINDOWS (a file of window targets, one per line) is what the tmux mock
+# treats as alive, so a test can make one task's window live and another's dead -
+# which is the whole distinction the guard turns on.
+make_case() {
+  local name=$1 case_dir fakebin
+  case_dir="$TMP_ROOT/$name"
+  fakebin="$case_dir/fakebin"
+  mkdir -p "$case_dir/state" "$case_dir/config" "$fakebin"
+  : > "$case_dir/live-windows"
+  : > "$case_dir/leases"
+  : > "$case_dir/returned"
+
+  # treehouse mock. `status` reports leases from $CASE/leases (one
+  # "<path>\t<holder>" per line). `return` records the path it was asked to
+  # return, and honours --if-lease-holder exactly as the real tool was measured
+  # to: exit 1 and change nothing when the lease does not match, or is absent.
+  cat > "$fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+LEASES="${FM_TEST_CASE_DIR:?}/leases"
+RETURNED="${FM_TEST_CASE_DIR:?}/returned"
+case "${1:-}" in
+  status)
+    n=0
+    while IFS=$'\t' read -r p h; do
+      [ -n "$p" ] || continue
+      n=$((n + 1))
+      printf '%-5s %-12s %s  (held by %s)\n' "$n" leased "$p" "$h"
+    done < "$LEASES"
+    exit 0 ;;
+  return)
+    shift
+    want= ; path=
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --force) ;;
+        --if-lease-holder) want=${2:-}; shift ;;
+        *) path=$1 ;;
+      esac
+      shift
+    done
+    if [ -n "$want" ]; then
+      have=$(awk -F'\t' -v p="$path" '$1 == p {print $2}' "$LEASES" | head -1)
+      if [ -z "$have" ]; then
+        echo "failed to return worktree: lease precondition failed: worktree $path is not leased" >&2
+        exit 1
+      fi
+      if [ "$have" != "$want" ]; then
+        echo "failed to return worktree: lease precondition failed: lease holder does not match worktree $path" >&2
+        exit 1
+      fi
+    fi
+    printf '%s\n' "$path" >> "$RETURNED"
+    exit 0 ;;
+esac
+exit 0
+SH
+
+  # tmux mock: a window is alive only if listed in $CASE/live-windows.
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+LIVE="${FM_TEST_CASE_DIR:?}/live-windows"
+target=
+prev=
+for a in "$@"; do
+  [ "$prev" = "-t" ] && target=$a
+  prev=$a
+done
+case "${1:-}" in
+  list-panes|display-message)
+    [ -n "$target" ] || exit 1
+    grep -qxF "$target" "$LIVE" || exit 1
+    printf '%%0\n'
+    exit 0 ;;
+esac
+exit 0
+SH
+
+  cat > "$fakebin/gh-axi" <<'SH'
+#!/usr/bin/env bash
+case "${1:-} ${2:-}" in
+  "pr list") printf '%s\n' "count: 0 (showing first 0)" "pull_requests[]: []" ; exit 0 ;;
+  "pr view") echo "error: pull request not found" >&2 ; exit 1 ;;
+esac
+exit 0
+SH
+  cp "$fakebin/gh-axi" "$fakebin/gh"
+  chmod +x "$fakebin/treehouse" "$fakebin/tmux" "$fakebin/gh-axi" "$fakebin/gh"
+
+  git init -q --bare "$case_dir/origin.git"
+  git -C "$case_dir/origin.git" symbolic-ref HEAD refs/heads/main
+  git clone -q "$case_dir/origin.git" "$case_dir/_seed" 2>/dev/null
+  git -C "$case_dir/_seed" -c user.email=t@t -c user.name=t \
+    commit -q --allow-empty -m "origin baseline"
+  git -C "$case_dir/_seed" push -q origin main
+  rm -rf "$case_dir/_seed"
+  git clone -q "$case_dir/origin.git" "$case_dir/project"
+  git -C "$case_dir/project" remote set-head origin main 2>/dev/null || true
+  # The pooled slot. Both tasks in these tests record THIS path.
+  git -C "$case_dir/project" worktree add -q --detach "$case_dir/slot" main
+
+  touch "$case_dir/state/.last-watcher-beat"
+  printf '%s\n' "$case_dir"
+}
+
+# Record a task: its meta (window + worktree + project) and whether it is alive.
+write_task() {  # <case> <id> <alive|dead> [worktree]
+  local case_dir=$1 id=$2 alive=$3 wt=${4:-$1/slot}
+  cat > "$case_dir/state/$id.meta" <<EOF
+window=fmtest:$id
+worktree=$wt
+project=$case_dir/project
+harness=claude
+kind=ship
+mode=no-mistakes
+yolo=off
+backend=tmux
+EOF
+  [ "$alive" = alive ] && printf '%s\n' "fmtest:$id" >> "$case_dir/live-windows"
+  return 0
+}
+
+lease_slot() {  # <case> <path> <holder>
+  printf '%s\t%s\n' "$2" "$3" >> "$1/leases"
+}
+
+run_teardown() {  # <case> <id> [args...]
+  local case_dir=$1 id=$2; shift 2
+  FM_TEST_CASE_DIR="$case_dir" \
+  FM_ROOT_OVERRIDE="$ROOT" \
+  FM_STATE_OVERRIDE="$case_dir/state" \
+  FM_CONFIG_OVERRIDE="$case_dir/config" \
+  PATH="$case_dir/fakebin:$PATH" \
+    "$TEARDOWN" "$id" "$@"
+}
+
+# The mock appends every path it actually returned; empty means nothing was.
+assert_nothing_returned() {  # <case> <msg>
+  [ -s "$1/returned" ] && fail "$2 (returned: $(cat "$1/returned"))"
+  return 0
+}
+
+run_guard() {  # <case> [args...]
+  local case_dir=$1; shift
+  FM_TEST_CASE_DIR="$case_dir" \
+  FM_ROOT_OVERRIDE="$ROOT" \
+  FM_HOME="$case_dir" \
+  FM_STATE_OVERRIDE="$case_dir/state" \
+  FM_CONFIG_OVERRIDE="$case_dir/config" \
+  FM_DATA_OVERRIDE="$case_dir/data" \
+  PATH="$case_dir/fakebin:$PATH" \
+    "$GUARD" "$@"
+}
+
+# --- (a) THE REPRODUCTION --------------------------------------------------
+test_stale_record_live_holder_refuses() {
+  local case_dir rc
+  case_dir=$(make_case repro)
+  # finished-task: window already dead, meta still names the slot.
+  write_task "$case_dir" finished-task dead
+  # live-task: was handed the same slot and is working in it right now.
+  write_task "$case_dir" live-task alive
+
+  set +e
+  run_teardown "$case_dir" finished-task > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  [ "$rc" -ne 0 ] || fail "repro: teardown returned a slot a live task was standing in"
+  assert_grep "REFUSED" "$case_dir/stderr" "repro: teardown should refuse"
+  assert_grep "live-task" "$case_dir/stderr" "repro: the refusal must NAME the holder"
+  assert_nothing_returned "$case_dir" "repro: nothing should have been returned"
+  pass "(a) a slot held by a different live task is refused, naming the holder"
+}
+
+# --- (b) no regression: the ordinary teardown still works -------------------
+test_sole_owner_allows() {
+  local case_dir rc
+  case_dir=$(make_case sole)
+  write_task "$case_dir" finished-task dead
+
+  set +e
+  run_teardown "$case_dir" finished-task > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "sole: teardown of an uncontested slot should succeed"
+  assert_no_grep "REFUSED" "$case_dir/stderr" "sole: no refusal expected"
+  assert_grep "$case_dir/slot" "$case_dir/returned" "sole: the slot should have been returned"
+  pass "(b) an uncontested slot is still returned normally"
+}
+
+# --- (c) --force is not authority over someone else's work ------------------
+test_force_does_not_override() {
+  local case_dir rc
+  case_dir=$(make_case forced)
+  write_task "$case_dir" finished-task dead
+  write_task "$case_dir" live-task alive
+
+  set +e
+  run_teardown "$case_dir" finished-task --force > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  [ "$rc" -ne 0 ] || fail "forced: --force destroyed a third party's worktree"
+  assert_grep "REFUSED" "$case_dir/stderr" "forced: refusal must hold under --force"
+  assert_nothing_returned "$case_dir" "forced: nothing should have been returned"
+  pass "(c) --force does not authorise displacing a live third party"
+}
+
+# --- (d) the deliberate escape hatch names who is displaced -----------------
+test_named_override_allows() {
+  local case_dir rc
+  case_dir=$(make_case override)
+  write_task "$case_dir" finished-task dead
+  write_task "$case_dir" live-task alive
+
+  set +e
+  FM_TEARDOWN_SLOT_OVERRIDE=live-task \
+    run_teardown "$case_dir" finished-task > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "override: naming the holder should permit the return"
+  assert_grep "displacing live-task" "$case_dir/stderr" "override: displacement must be stated"
+  pass "(d) an override naming the holder displaces it deliberately"
+}
+
+# --- (e) a dead co-claimant is not a holder --------------------------------
+test_dead_claimant_allows() {
+  local case_dir rc
+  case_dir=$(make_case deadclaim)
+  write_task "$case_dir" finished-task dead
+  write_task "$case_dir" other-dead-task dead
+
+  set +e
+  run_teardown "$case_dir" finished-task > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "deadclaim: a dead co-claimant should not block teardown"
+  assert_no_grep "REFUSED" "$case_dir/stderr" "deadclaim: no refusal expected"
+  pass "(e) a co-claimant whose window is dead does not block cleanup"
+}
+
+# --- (f) the watcher's durable marker refuses on its own --------------------
+test_dispute_marker_refuses() {
+  local case_dir rc
+  case_dir=$(make_case marker)
+  write_task "$case_dir" finished-task dead
+  printf 'holder=someone-else\nrecorded=%s/slot\n' "$case_dir" \
+    > "$case_dir/state/finished-task.slot-disputed"
+
+  set +e
+  run_teardown "$case_dir" finished-task > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  [ "$rc" -ne 0 ] || fail "marker: a recorded dispute did not stop the return"
+  assert_grep "someone-else" "$case_dir/stderr" "marker: the refusal must name the recorded holder"
+  assert_nothing_returned "$case_dir" "marker: nothing should have been returned"
+  pass "(f) a dispute the watcher recorded earlier refuses on its own"
+}
+
+# --- (g) the lease witness sees a holder with no meta here ------------------
+test_lease_holder_refuses() {
+  local case_dir rc
+  case_dir=$(make_case lease)
+  write_task "$case_dir" finished-task dead
+  lease_slot "$case_dir" "$case_dir/slot" "fm:someone-elses-task"
+
+  set +e
+  run_teardown "$case_dir" finished-task > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  [ "$rc" -ne 0 ] || fail "lease: a slot leased to another task was returned"
+  assert_grep "someone-elses-task" "$case_dir/stderr" "lease: the refusal must name the lease holder"
+  pass "(g) a slot leased to another task is refused, naming the lease holder"
+}
+
+# --- (h) a task's own lease is not a conflict ------------------------------
+test_own_lease_allows() {
+  local case_dir rc
+  case_dir=$(make_case ownlease)
+  write_task "$case_dir" finished-task dead
+  lease_slot "$case_dir" "$case_dir/slot" "fm:finished-task"
+
+  set +e
+  run_teardown "$case_dir" finished-task > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "ownlease: a task's own lease must not block its own teardown"
+  assert_grep "$case_dir/slot" "$case_dir/returned" "ownlease: the slot should have been returned"
+  pass "(h) a task's own lease permits its own cleanup"
+}
+
+# --- (i) the watcher's human reading ---------------------------------------
+test_guard_status_reports() {
+  local case_dir rc out
+  case_dir=$(make_case status)
+  write_task "$case_dir" finished-task dead
+  write_task "$case_dir" live-task alive
+
+  set +e
+  out=$(run_guard "$case_dir" --status 2>&1)
+  rc=$?
+  set -e
+
+  expect_code 2 "$rc" "status: a dispute should report a non-clear status"
+  assert_contains "$out" "DISPUTED" "status: should name the condition"
+  assert_contains "$out" "live-task" "status: should name the holder"
+  pass "(i) the guard's status reading names the disputed slot and its holder"
+}
+
+# --- (j) and (k) the watcher tick: mark, wake once, then clear --------------
+test_guard_detect_marks_and_clears() {
+  local case_dir first second
+  case_dir=$(make_case detect)
+  write_task "$case_dir" finished-task dead
+  write_task "$case_dir" live-task alive
+
+  first=$(run_guard "$case_dir" 2>&1)
+  assert_contains "$first" "SLOT_GUARD:" "detect: the first sweep should wake firstmate"
+  assert_contains "$first" "live-task" "detect: the wake should name the holder"
+  assert_present "$case_dir/state/finished-task.slot-disputed" \
+    "detect: a durable dispute marker should exist"
+
+  second=$(run_guard "$case_dir" 2>&1)
+  [ -z "$second" ] || fail "detect: an unchanged dispute should not wake again (got: $second)"
+  pass "(j) the watcher marks the dispute and wakes once, not every tick"
+
+  # The holder finishes: its window goes away, so the dispute is over.
+  : > "$case_dir/live-windows"
+  local cleared
+  cleared=$(run_guard "$case_dir" 2>&1)
+  assert_contains "$cleared" "resolved" "clear: the watcher should report the dispute over"
+  assert_absent "$case_dir/state/finished-task.slot-disputed" \
+    "clear: the marker should be removed once the holder is gone"
+  pass "(k) the watcher clears the marker and reports once when the dispute ends"
+}
+
+test_stale_record_live_holder_refuses
+test_sole_owner_allows
+test_force_does_not_override
+test_named_override_allows
+test_dead_claimant_allows
+test_dispute_marker_refuses
+test_lease_holder_refuses
+test_own_lease_allows
+test_guard_status_reports
+test_guard_detect_marks_and_clears
+
+printf '\nall fm-slot-guard tests passed\n'
