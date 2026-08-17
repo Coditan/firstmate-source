@@ -101,6 +101,11 @@ Fold every line that does not start with `uid=` onto the node above it.
 **Stop the bridge before pointing it anywhere.**
 `chrome-devtools-axi stop` first, or a process from an earlier attempt is reused with its old environment.
 
+**The bridge is shared with the other vessels on this machine**, which is the same fact as the different UNIX account, seen from the other side.
+The viewport arrives at whatever size somebody else left it: one run here screenshotted a 320px phone layout, which reads as a rendering fault and is not one.
+`drive` therefore sets the size explicitly rather than inheriting it.
+The `stop` above is the other half of this - it can knock over a neighbour's browser session, and that is a cost this driver accepts rather than one it avoids.
+
 **`chromium-cli` is not on this host.**
 `google-chrome` and `chrome-devtools-axi` are.
 

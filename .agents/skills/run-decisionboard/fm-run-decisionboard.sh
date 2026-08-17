@@ -76,6 +76,14 @@
 #      a poll dies with the session that armed it and a board listening to nobody
 #      looks exactly like a healthy one in a screenshot.
 #
+#   8. The bridge is SHARED across the vessels on this machine - which is the
+#      same fact as gotcha 1, seen from the other side. Two consequences:
+#      the viewport arrives at whatever size another vessel left it (one run here
+#      screenshotted a 320px phone layout and looked like a rendering fault), so
+#      `drive` sets it explicitly; and the `stop` in gotcha 5 can knock over a
+#      neighbour's browser session, which is a cost this accepts rather than one
+#      it avoids.
+#
 # Usage:
 #   fm-run-decisionboard.sh selftest [--keep]      the whole loop on a fixture board
 #   fm-run-decisionboard.sh doctor                 re-measure this host's facts
@@ -99,6 +107,8 @@
 #                                  a machine with no browser bridge.
 #   FM_RUN_DECISIONBOARD_TMPDIR    the world-writable directory screenshots are
 #                                  staged through (default /tmp). See `shot`.
+#   FM_RUN_DECISIONBOARD_WIDTH     viewport `drive` sets, so evidence is
+#   FM_RUN_DECISIONBOARD_HEIGHT    comparable across runs (default 1400x1600).
 #   FM_HOME                        fallback root when this skill was installed
 #                                  outside the firstmate repo it ships in.
 #
@@ -285,6 +295,13 @@ cmd_drive() {
   chrome-devtools-axi stop >/dev/null 2>&1 || true
   chrome-devtools-axi open "$url" >/dev/null 2>&1 \
     || die "drive: chrome-devtools-axi could not open $url"
+  # Gotcha 8: the bridge is shared across the vessels on this machine, so the
+  # viewport arrives at whatever size somebody else left it. A board screenshotted
+  # at 320px is a phone-layout board, and reading one as the desktop layout is a
+  # wrong conclusion drawn from real evidence. Fix the size rather than inherit it.
+  chrome-devtools-axi resize "${FM_RUN_DECISIONBOARD_WIDTH:-1400}" \
+    "${FM_RUN_DECISIONBOARD_HEIGHT:-1600}" >/dev/null 2>&1 \
+    || note "could not set the viewport size; the screenshot will be at whatever size the shared browser was left"
   local title
   title=$(snapshot | grep -m1 'RootWebArea' | sed -n 's/.*RootWebArea "\([^"]*\)".*/\1/p')
   printf 'driving: %s\n' "${title:-<untitled>}"
