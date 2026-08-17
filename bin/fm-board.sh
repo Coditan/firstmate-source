@@ -403,8 +403,8 @@ scan_decision_defects() {  # <body-file> <kind>
         if (opts < 2) {
           printf "  the question \"%s\" offers %d selectable option(s): a decision needs at least two, and they have to be real alternatives rather than one recommendation plus filler\n", key, opts
         }
-        if (lowseg !~ /data-fm-note/) {
-          printf "  the question \"%s\" has no note field: every option set needs a textarea carrying data-fm-note beside it, because a note that contradicts the chosen option is what the captain actually meant\n", key
+        if (lowseg !~ /<textarea([[:space:]][^>]*)?[[:space:]]data-fm-note([[:space:]=\/>]|$)/) {
+          printf "  the question \"%s\" has no note control: every option set needs a textarea carrying data-fm-note beside it, because a note that contradicts the chosen option is what the captain actually meant\n", key
         }
         if (lowseg !~ /fm-queued/) {
           printf "  the question \"%s\" has no .fm-queued box, so neither a queued answer nor an empty one could be shown\n", key

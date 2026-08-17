@@ -204,7 +204,7 @@ A decision on a board gets answered; a decision in chat gets lost.
 `bin/fm-board.sh` **refuses** a board whose declared question breaks any of three structural rules:
 
 - **at least two options.** An option set that is really one recommendation plus filler wastes the control.
-- **a note field beside them**, carrying `data-fm-note`. Measured on one board of twenty answers, two came back with a note that *contradicted* the selected option, and in both cases the note carried what the captain actually meant. So the note is captured, queued as the governing part of the answer, and must be read - never treated as a comment on the choice.
+- **a real `<textarea>` note field beside them**, carrying `data-fm-note`. Measured on one board of twenty answers, two came back with a note that *contradicted* the selected option, and in both cases the note carried what the captain actually meant. So the note is captured, queued as the governing part of the answer, and must be read - never treated as a comment on the choice.
 - **a `.fm-queued` box**, so neither a queued answer nor an empty one is silent.
 
 `--kind decision` additionally requires the board to carry at least one such question.

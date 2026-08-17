@@ -64,7 +64,7 @@ function buildForm(key, { choice, note, radio }) {
   const queued = makeElement('div');
   queued._sel = '.fm-queued';
   const noteEl = makeElement('textarea');
-  noteEl._sel = '[data-fm-note]';
+  noteEl._sel = ['textarea[data-fm-note]', '[data-fm-note]'];
   noteEl.value = note || '';
   form.children.push(queued, noteEl);
   if (radio) {

@@ -278,6 +278,7 @@ test_a_decision_must_be_selectable() {
   local cases=(
     "one option is not a choice|<form data-fm-question=\"f\"><input type=\"radio\" name=\"f\" value=\"ja\"><textarea data-fm-note></textarea><div class=\"fm-queued\"></div></form>"
     "no note field beside the options|<form data-fm-question=\"f\"><input type=\"radio\" name=\"f\" value=\"ja\"><input type=\"radio\" name=\"f\" value=\"nein\"><div class=\"fm-queued\"></div></form>"
+    "note attribute on a div is not a note control|<form data-fm-question=\"f\"><input type=\"radio\" name=\"f\" value=\"ja\"><input type=\"radio\" name=\"f\" value=\"nein\"><div data-fm-note></div><div class=\"fm-queued\"></div></form>"
     "no box to report what was queued|<form data-fm-question=\"f\"><input type=\"radio\" name=\"f\" value=\"ja\"><input type=\"radio\" name=\"f\" value=\"nein\"><textarea data-fm-note></textarea></form>"
     "a question whose markup spans lines is read the same way|<form
        data-fm-question=\"f\"><input
@@ -289,6 +290,10 @@ test_a_decision_must_be_selectable() {
     expect_code 1 "$(build_status)" "a decision board must be refused: $label"
     assert_absent "$OUT" "a refused decision board must not be written: $label"
     assert_contains "$(build_stderr)" "REFUSED" "the refusal must say so: $label"
+    if [ "$label" = "note attribute on a div is not a note control" ]; then
+      assert_contains "$(build_stderr)" "no note control" \
+        "the refusal must name the missing textarea note control"
+    fi
   done
 
   # A board that DECLARES itself a decision board and carries no control at all

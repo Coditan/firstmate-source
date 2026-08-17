@@ -105,7 +105,7 @@
       var checked = form.querySelector('input[type="radio"]:checked');
       choice = checked ? checked.value : '';
     }
-    var note = form.querySelector('[data-fm-note]');
+    var note = form.querySelector('textarea[data-fm-note]');
     var text = note && note.value ? note.value.trim() : '';
     if (!choice && !text) {
       return null;
@@ -250,7 +250,7 @@
       window.console.warn('fm-board: the form for "' + key +
         '" has no .fm-queued box, so nothing on it can report a queued or an empty answer.');
     }
-    if (form.querySelector && !form.querySelector('[data-fm-note]')) {
+    if (form.querySelector && !form.querySelector('textarea[data-fm-note]')) {
       window.console.warn('fm-board: the question "' + key +
         '" has no note field, so a note that contradicts the chosen option has nowhere to go.');
     }
