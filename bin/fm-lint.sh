@@ -79,8 +79,15 @@ fi
 
 # Canonical file set: the ONE authoritative definition. Callers reference this
 # script; they never re-spell these globs.
+#
+# .agents/skills/*/*.sh is in the set because a skill may ship an executable
+# driver beside its SKILL.md, and a driver an agent is told to run is held to the
+# same bar as anything under bin/. A glob that matches nothing stays literal in
+# Bash, so each path is checked before it is linted rather than reported as a
+# missing file.
 status=0
-for script in bin/*.sh bin/backends/*.sh tests/*.sh; do
+for script in bin/*.sh bin/backends/*.sh tests/*.sh .agents/skills/*/*.sh; do
+  [ -f "$script" ] || continue
   run_shellcheck "$script" || status=$?
 done
 exit "$status"

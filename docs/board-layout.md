@@ -160,6 +160,10 @@ That applies to the board's own text, not to code identifiers, attribute names, 
 Runs the same guard over existing files.
 `tests/fm-board.test.sh` pins the refusals, including the exact CDN regression above.
 
+That checks what a board is made of, not whether it can be used.
+To open a board in a real browser, read what its decisions actually carry, answer one, and see the answer arrive, load the `run-decisionboard` skill and run the driver beside it.
+A board that was only built and looked at has never been shown to be answerable, which is how seven decisions once reached the captain with nothing on the page to click.
+
 ### What the guard covers
 
 `bin/fm-board.sh --help` states the exact patterns and the limits it does not cover; read it there rather than here.
