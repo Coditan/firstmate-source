@@ -160,12 +160,15 @@ pr_number_from_branch() {
 }
 
 merged_pr_proves_branch() {
-  local branch=$1 number out
+  local branch=$1 number out state pr_head tip
   number=$(pr_number_from_branch "$branch") || return 1
   command -v gh-axi >/dev/null 2>&1 || return 1
-  out=$(cd "$PROJECT_ABS" && gh-axi pr view "$number" 2>/dev/null) || return 1
-  printf '%s\n' "$out" | grep -Eq '^[[:space:]]*state: merged$' || return 1
-  printf '%s\n' "$out" | grep -Eq '^[[:space:]]*merged: "?[0-9]' || return 1
+  tip=$(git -C "$PROJECT_ABS" rev-parse --verify "$branch^{commit}" 2>/dev/null) || return 1
+  out=$(cd "$PROJECT_ABS" && gh-axi pr view "$number" --json state,headRefOid -q '.state + "\t" + .headRefOid' 2>/dev/null) || return 1
+  state=${out%%	*}
+  pr_head=${out#*	}
+  [ "$state" = MERGED ] || [ "$state" = merged ] || return 1
+  [ "$pr_head" = "$tip" ] || return 1
 }
 
 branch_is_safe() {
@@ -189,7 +192,7 @@ branch_is_safe() {
     return 0
   fi
   if merged_pr_proves_branch "$branch"; then
-    printf 'merged PR %s recorded by GitHub\n' "$(pr_number_from_branch "$branch")"
+    printf 'merged PR %s records this branch tip\n' "$(pr_number_from_branch "$branch")"
     return 0
   fi
   return 1
@@ -202,15 +205,92 @@ branch_refusal_detail() {
 }
 
 check_primary_clean() {
-  local dirty_raw dirty
+  local dirty_raw dirty line
   dirty=$(git -C "$PROJECT_ABS" status --porcelain=v1 --untracked-files=all 2>/dev/null) \
     || refuse "cannot inspect $PROJECT_ABS for uncommitted changes."
   dirty_raw=$dirty
-  dirty=$(printf '%s\n' "$dirty_raw" | grep -vE '^\?\? \.claude/worktrees/' | head -1 || true)
+  dirty=''
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ -n "$line" ] || continue
+    if primary_dirty_line_is_registered_claude_worktree "$line"; then
+      continue
+    fi
+    dirty=$line
+    break
+  done <<EOF
+$dirty_raw
+EOF
   [ -z "$dirty" ] || {
     printf '%s\n' "$dirty_raw" | sed -n '1,10p' >&2
     refuse "project clone $PROJECT_ABS has uncommitted changes."
   }
+}
+
+registered_claude_worktree_paths() {
+  local path head branch prunable abs_path
+  while IFS=$'\t' read -r path head branch prunable; do
+    [ -n "$path" ] || continue
+    if [ -d "$path" ]; then
+      abs_path=$(canonical_existing_dir "$path" 2>/dev/null || printf '%s' "$path")
+    else
+      abs_path=$path
+    fi
+    path_is_child_of "$PROJECT_ABS/.claude/worktrees" "$abs_path" || continue
+    printf '%s\n' "$abs_path"
+  done <<EOF
+$(worktree_records)
+EOF
+}
+
+path_is_registered_claude_worktree() {
+  local abs_path=$1 rec
+  while IFS= read -r rec; do
+    [ -n "$rec" ] || continue
+    [ "$abs_path" = "$rec" ] && return 0
+    path_is_child_of "$rec" "$abs_path" && return 0
+  done <<EOF
+$(registered_claude_worktree_paths)
+EOF
+  return 1
+}
+
+claude_worktree_directory_only_has_registered_entries() {
+  local dir="$PROJECT_ABS/.claude/worktrees" entry abs_entry seen=0
+  [ -d "$dir" ] || return 1
+  for entry in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
+    [ -e "$entry" ] || continue
+    seen=1
+    if [ -d "$entry" ]; then
+      abs_entry=$(canonical_existing_dir "$entry" 2>/dev/null || printf '%s' "$entry")
+    else
+      abs_entry=$entry
+    fi
+    path_is_registered_claude_worktree "$abs_entry" || return 1
+  done
+  [ "$seen" -eq 1 ]
+}
+
+primary_dirty_line_is_registered_claude_worktree() {
+  local line=$1 rel abs_path
+  case "$line" in '?? '*)
+    rel=${line#'?? '}
+    rel=${rel%/}
+    ;;
+    *) return 1 ;;
+  esac
+  case "$rel" in
+    .claude/worktrees)
+      claude_worktree_directory_only_has_registered_entries
+      return
+      ;;
+    .claude/worktrees/*) ;;
+    *) return 1 ;;
+  esac
+  abs_path="$PROJECT_ABS/$rel"
+  if [ -d "$abs_path" ]; then
+    abs_path=$(canonical_existing_dir "$abs_path" 2>/dev/null || printf '%s' "$abs_path")
+  fi
+  path_is_registered_claude_worktree "$abs_path"
 }
 
 check_local_branches() {

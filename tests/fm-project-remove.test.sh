@@ -46,6 +46,20 @@ commit_branch() {
   git -C "$repo" switch -q main
 }
 
+fake_gh_axi_with_pr_head() {
+  local fakebin=$1 number=$2 state=$3 head=$4
+  cat > "$fakebin/gh-axi" <<SH
+#!/usr/bin/env bash
+if [ "\$1 \$2 \$3" = "pr view $number" ]; then
+  printf '%s\t%s\n' '$state' '$head'
+  exit 0
+fi
+printf 'unexpected gh-axi call: %s\n' "\$*" >&2
+exit 1
+SH
+  chmod +x "$fakebin/gh-axi"
+}
+
 test_requires_captain_approval() {
   local home rc=0
   home=$(make_home requires-captain-approval)
@@ -80,6 +94,47 @@ test_unlanded_branch_refuses() {
     "unlanded branch refusal did not name the branch"
   [ -d "$home/projects/alpha" ] || fail "unlanded-branch refusal removed the clone"
   pass "project removal refuses local branches without landed-content or remote preservation proof"
+}
+
+test_pr_named_branch_refuses_unrelated_merged_pr() {
+  local home repo fakebin unrelated_head rc=0
+  home=$(make_home pr-name-only)
+  repo="$home/projects/alpha"
+  fakebin=$(fm_fakebin "$home")
+  unrelated_head=$(git -C "$repo" rev-parse HEAD)
+  fake_gh_axi_with_pr_head "$fakebin" 123 MERGED "$unrelated_head"
+  commit_branch "$repo" pr123 pr123.txt unlanded
+  PATH="$fakebin:$PATH" run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 1 "$rc" "pr name only"
+  assert_grep "local branch pr123 has no preservation" "$home/err" \
+    "PR-name-only refusal did not name the unproved branch"
+  [ -d "$home/projects/alpha" ] || fail "pr-name-only refusal removed the clone"
+  pass "project removal refuses branches named after unrelated merged PRs"
+}
+
+test_pr_named_squash_equivalent_branch_passes_by_content() {
+  local home repo rc=0
+  home=$(make_home pr-squash-equivalent)
+  repo="$home/projects/alpha"
+  git -C "$repo" switch -q -c pr33
+  printf 'one\n' > "$repo/squashed.txt"
+  git -C "$repo" add squashed.txt
+  git -C "$repo" commit -qm "add first squash part"
+  printf 'two\n' >> "$repo/squashed.txt"
+  git -C "$repo" add squashed.txt
+  git -C "$repo" commit -qm "add second squash part"
+  git -C "$repo" switch -q main
+  printf 'one\ntwo\n' > "$repo/squashed.txt"
+  git -C "$repo" add squashed.txt
+  git -C "$repo" commit -qm "squash pr33 content"
+  git -C "$repo" push -q origin main
+  git -C "$repo" fetch -q origin
+  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 0 "$rc" "pr squash equivalent"
+  assert_grep "PASS: project alpha removal safety checks passed." "$home/out" \
+    "squash-equivalent branch did not pass by landed content"
+  [ -d "$home/projects/alpha" ] || fail "squash-equivalent dry-run removed the clone"
+  pass "project removal accepts PR-named branches whose content landed by squash"
 }
 
 test_treehouse_worktree_refuses_unpreserved_head() {
@@ -151,6 +206,20 @@ test_claude_worktree_refuses_dirty_slot() {
     "claude worktree refusal did not explain dirty work"
   [ -d "$home/projects/alpha" ] || fail "claude-worktree refusal removed the clone"
   pass "project removal refuses dirty .claude/worktrees agent slots"
+}
+
+test_unregistered_claude_worktree_content_refuses_as_primary_dirty() {
+  local home repo rc=0
+  home=$(make_home unregistered-claude-worktree-content)
+  repo="$home/projects/alpha"
+  mkdir -p "$repo/.claude/worktrees/orphan"
+  printf 'orphan\n' > "$repo/.claude/worktrees/orphan/note.txt"
+  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 1 "$rc" "unregistered claude worktree content"
+  assert_grep "has uncommitted changes" "$home/err" \
+    "unregistered .claude/worktrees content was not treated as dirty primary state"
+  [ -d "$home/projects/alpha" ] || fail "unregistered-claude refusal removed the clone"
+  pass "project removal refuses unregistered .claude/worktrees contents as dirty"
 }
 
 test_secondmate_clone_refuses() {
@@ -260,10 +329,13 @@ test_dry_run_pass_keeps_clone_and_registry() {
 test_requires_captain_approval
 test_dirty_primary_refuses
 test_unlanded_branch_refuses
+test_pr_named_branch_refuses_unrelated_merged_pr
+test_pr_named_squash_equivalent_branch_passes_by_content
 test_treehouse_worktree_refuses_unpreserved_head
 test_treehouse_worktree_refuses_preserved_head
 test_treehouse_worktree_refuses_dirty_preserved_head
 test_claude_worktree_refuses_dirty_slot
+test_unregistered_claude_worktree_content_refuses_as_primary_dirty
 test_secondmate_clone_refuses
 test_backlog_reference_refuses
 test_backlog_reference_with_repo_metadata_refuses
