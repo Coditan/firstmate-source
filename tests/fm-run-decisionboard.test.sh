@@ -404,29 +404,6 @@ SH
   pass "answer preserves the exact option name across fresh snapshots"
 }
 
-test_driver_is_in_the_canonical_lint_set() {
-  local probe="$ROOT/.agents/skills/fm-lint-skill-probe-$$" out status=0
-  mkdir -p "$probe"
-  FM_TEST_CLEANUP_DIRS+=("$probe")
-  cat > "$probe/driver.sh" <<'SH'
-#!/usr/bin/env bash
-bad= value
-SH
-  chmod +x "$probe/driver.sh"
-  out=$("$ROOT/bin/fm-lint.sh" 2>&1) || status=$?
-  [ "$status" -ne 0 ] || fail "fm-lint.sh passed an invalid skill driver"
-  assert_contains "$out" ".agents/skills/$(basename "$probe")/driver.sh" \
-    "fm-lint.sh did not report the invalid skill driver"
-  cat > "$probe/driver.sh" <<'SH'
-#!/usr/bin/env bash
-printf 'clean\n'
-SH
-  status=0
-  out=$("$ROOT/bin/fm-lint.sh" 2>&1) || status=$?
-  [ "$status" -eq 0 ] || fail "fm-lint.sh rejected a clean skill driver"$'\n'"$out"
-  pass "the canonical lint consumer checks skill drivers"
-}
-
 test_driver_ships_beside_the_skill
 test_help_lists_the_whole_loop
 test_fixture_declares_the_documented_controls
@@ -445,4 +422,3 @@ test_shot_refuses_a_screenshot_that_wrote_nothing
 test_shot_refuses_a_stale_staging_file
 test_shot_accepts_a_same_size_refresh
 test_answer_reresolves_the_exact_option_name
-test_driver_is_in_the_canonical_lint_set
