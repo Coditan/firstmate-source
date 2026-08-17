@@ -6,7 +6,7 @@
 # commands.lint) invoke, so the local lint can never diverge from CI again.
 # Regression origin: with no commands.lint configured, the local no-mistakes
 # lint step never ran the deterministic
-# `shellcheck -x -P "$ROOT" bin/*.sh bin/backends/*.sh tests/*.sh`, so PRs passed local
+# `shellcheck -x -P "$ROOT" bin/*.sh bin/backends/*.sh tests/*.sh .agents/skills/*/*.sh`, so PRs passed local
 # validation yet failed that exact check in CI on info/warning findings such as
 # SC2015, SC1007, and SC2034. A second axis was tool-version skew: CI's
 # ShellCheck floated with the runner image and still emitted SC2015, which
@@ -21,8 +21,6 @@ LINT="$ROOT/bin/fm-lint.sh"
 CI="$ROOT/.github/workflows/ci.yml"
 NM="$ROOT/.no-mistakes.yaml"
 INSTALLER="$ROOT/bin/fm-install-shellcheck.sh"
-# The authoritative file set the one owner must run.
-CANON='for script in bin/*.sh bin/backends/*.sh tests/*.sh; do'
 LINT_CMD="shellcheck --norc -x -P \"\$ROOT\" \"\$@\""
 # The pinned version, read from the single source (the one owner itself).
 REQUIRED=$("$LINT" --required-version)
@@ -41,14 +39,51 @@ test_owner_exists_and_executable() {
 }
 
 test_owner_defines_canonical_set() {
-  assert_grep "$CANON" "$LINT" "fm-lint.sh must run the canonical shellcheck file set"
+  if ! pinned_ready; then
+    pass "SKIP (ShellCheck $REQUIRED not resolved): canonical file-set check"
+    return
+  fi
+  local canon_tmp fixture_lint out path rc=0
+  local -a paths=(
+    bin/probe.sh
+    bin/backends/probe.sh
+    tests/probe.sh
+    .agents/skills/probe/probe.sh
+  )
+  fm_test_tmproot canon_tmp fm-lint-canon
+  mkdir -p "$canon_tmp/bin/backends" "$canon_tmp/tests" "$canon_tmp/.agents/skills/probe"
+  fixture_lint="$canon_tmp/bin/fm-lint.sh"
+  cp "$LINT" "$fixture_lint"
+  for path in "${paths[@]}"; do
+    cat > "$canon_tmp/$path" <<'SH'
+#!/usr/bin/env bash
+bad= value
+SH
+    chmod +x "$canon_tmp/$path"
+  done
+  out=$(cd "$canon_tmp" && bin/fm-lint.sh 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "fm-lint.sh passed defects in its canonical locations"
+  for path in "${paths[@]}"; do
+    assert_contains "$out" "$path" "fm-lint.sh did not report canonical file $path"
+    cat > "$canon_tmp/$path" <<'SH'
+#!/usr/bin/env bash
+printf 'clean\n'
+SH
+  done
+  rc=0
+  out=$(cd "$canon_tmp" && bin/fm-lint.sh 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] || fail "fm-lint.sh rejected a clean canonical fixture"$'\n'"$out"
+  pass "fm-lint.sh checks every canonical location and passes clean fixtures"
+}
+
+test_owner_uses_ci_default_shellcheck() {
   assert_grep "$LINT_CMD" "$LINT" "fm-lint.sh must follow repo-local sourced files"
   # It must not weaken CI: no severity downgrade and no blanket disable/exclude
   # that would hide findings CI fails on.
   assert_no_grep '--severity' "$LINT" "fm-lint.sh must not lower severity below the CI default"
   assert_no_grep '--exclude' "$LINT" "fm-lint.sh must not blanket-exclude checks CI enforces"
   [ "$(grep -Fc 'run_shellcheck' "$LINT")" -ge 3 ] || fail "both lint modes must use the one ShellCheck invocation"
-  pass "fm-lint.sh is the sole authoritative definition at CI-default severity"
+  pass "fm-lint.sh uses the sole CI-default ShellCheck invocation"
 }
 
 test_ci_invokes_the_owner() {
@@ -240,6 +275,7 @@ SH
 
 test_owner_exists_and_executable
 test_owner_defines_canonical_set
+test_owner_uses_ci_default_shellcheck
 test_ci_invokes_the_owner
 test_nomistakes_invokes_the_owner
 test_pins_an_explicit_version
