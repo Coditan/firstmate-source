@@ -74,7 +74,7 @@ These are the paths a session reaches for before it has loaded anything else; an
 - `data/<id>/brief.md` holds a task's instructions, and `data/<id>/report.md` holds a scout's deliverable, which survives cleanup.
 - `data/findings/` is this home's findings surface unless `config/findings-dir` or `FM_FINDINGS_DIR` points elsewhere (`docs/findings-surface.md`).
 - `state/<id>.meta` is a task's durable record, `state/<id>.status` its appended wake events, `state/.wake-queue` the durable wake queue, and `state/.afk` the away-mode flag.
-- `config/bosun` is the gitignored presence flag opting this home into a standing observer-only bosun; absent means no unit, no diagnostic, and nothing running (docs/configuration.md "Bosun observer service").
+- `config/bosun` is the gitignored presence flag opting this home into a standing observer-only bosun; absent means no installation, diagnostic, start, or convergence, but removing it does not stop an installed unit (docs/configuration.md "Bosun observer service").
 - `config/role` selects this home's vessel role.
 
 A `state/<id>.status` line is a wake event, not current-state truth; `bin/fm-crew-state.sh` owns current-state reconciliation.

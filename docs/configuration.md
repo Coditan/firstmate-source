@@ -314,7 +314,10 @@ Without it the bosun judges only while whoever started it is still there, which 
 [`docs/bosun-observer.md`](bosun-observer.md) owns what the bosun is, what it deliberately has no authority over, and why its model is provisional; this section owns how it is kept running.
 
 The component is **opt-in per home**.
-A home opts into it by creating gitignored `config/bosun`; the file's contents are unread, and its absence means no unit, no diagnostic, and no standing process.
+A home opts into it by creating gitignored `config/bosun`; the file's contents are unread, and without it the component is not considered, so no unit is installed, no diagnostic is printed, and no process is started.
+Removing the flag after installation stops future convergence and does not stop or disable an already-running instance.
+Turning an installed observer off is the separate explicit step `systemctl --user disable --now fm-bosun@$(systemd-escape --path "$FM_HOME").service`.
+This two-step off switch deliberately matches the frequency monitor because two near-identical units behaving differently would be a worse trap.
 That gate exists because one judgement costs an agent turn, so a standing process that spends it is a decision each home makes rather than one an instruction-surface update delivers.
 The first unit copy and `enable --now` then require explicit captain consent through `BOSUN_UNIT:` and `bin/fm-bootstrap.sh install bosun-unit`, the same as the other units above.
 

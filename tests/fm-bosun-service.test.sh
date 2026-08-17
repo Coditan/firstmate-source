@@ -98,7 +98,7 @@ service_env() {
 #
 # The bosun spends an agent turn per judgement, so a standing process that
 # spends it is a decision a home makes rather than one an instruction-surface
-# update delivers. Absent opt-in, this component does not exist.
+# update delivers. A home that never opted in is left entirely alone.
 
 test_unopted_home_is_silent() {
   local fakebin home unitdir out
@@ -159,6 +159,15 @@ test_install_requires_consent_and_converges() {
     fail "locked bootstrap did not converge tracked bosun unit bytes"
   assert_contains "$(cat "$TMP_ROOT/systemctl.log")" "--user restart fm-bosun@" \
     "locked bootstrap did not restart the stale bosun instance"
+
+  rm -f "$home/config/bosun"
+  : > "$TMP_ROOT/systemctl.log"
+  out=$(service_env "$fakebin" "$home" "$unitdir" "$SERVICE" bootstrap)
+  [ -z "$out" ] || fail "removing opt-in produced a bosun diagnostic: $out"
+  assert_not_contains "$(cat "$TMP_ROOT/systemctl.log")" "--user stop" \
+    "removing opt-in stopped the installed bosun instance"
+  assert_not_contains "$(cat "$TMP_ROOT/systemctl.log")" "--user disable" \
+    "removing opt-in disabled the installed bosun instance"
   pass "bosun unit installation is consent-gated and later convergence is scoped"
 }
 
@@ -265,7 +274,41 @@ test_unreachable_judge_is_reported() {
   pass "an observer whose recorded environment cannot reach its judge is named"
 }
 
+test_ambient_judge_override_does_not_change_service_resolution() {
+  local fakebin home unitdir out durable_bin recorded_env
+  fakebin="$TMP_ROOT/fakebin"
+  home="$TMP_ROOT/durable-judge"
+  unitdir="$TMP_ROOT/units-durable-judge"
+  durable_bin="$home/durable-bin"
+  mkdir -p "$home/state" "$home/config" "$unitdir" "$durable_bin"
+  : > "$home/config/bosun"
+  printf '%s\n' durable-bosun-judge > "$home/config/bosun-judge"
+  printf '%s\n' "$JUDGE_SANE" > "$durable_bin/durable-bosun-judge"
+  chmod +x "$durable_bin/durable-bosun-judge"
+  rm -f "$TMP_ROOT/systemd.enabled" "$TMP_ROOT/systemd.active"
+  : > "$TMP_ROOT/systemctl.log"
+
+  PATH="$durable_bin:$PATH" FM_BOSUN_JUDGE_CMD=ambient-bosun-judge \
+    service_env "$fakebin" "$home" "$unitdir" \
+    "$ROOT/bin/fm-bootstrap.sh" install bosun-unit > /dev/null
+  recorded_env=$(cat "$home/state/.bosun-service.env")
+  assert_contains "$recorded_env" "$durable_bin" \
+    "service PATH did not resolve the durable per-home judge"
+  assert_not_contains "$recorded_env" "FM_BOSUN_JUDGE_CMD" \
+    "service environment persisted the converging session's ambient judge"
+
+  mark_running "$home/state"
+  out=$(PATH="$durable_bin:$PATH" FM_BOSUN_JUDGE_CMD=ambient-bosun-judge \
+    service_env "$fakebin" "$home" "$unitdir" "$SERVICE" bootstrap)
+  assert_not_contains "$out" "ambient-bosun-judge" \
+    "reachability check used the converging session's ambient judge"
+  assert_not_contains "$out" "cannot reach its judge" \
+    "reachability check rejected the reachable durable per-home judge"
+  pass "bosun service resolution ignores ambient judge overrides"
+}
+
 test_unopted_home_is_silent
 test_install_requires_consent_and_converges
 test_health_reading_is_not_the_units_own_state
 test_unreachable_judge_is_reported
+test_ambient_judge_override_does_not_change_service_resolution

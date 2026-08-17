@@ -20,7 +20,9 @@
 # an instruction-surface update. First installation and enablement then happen
 # only through install-unit, after the captain approves the BOSUN_UNIT
 # diagnostic; an already-installed unit converges at locked bootstrap
-# boundaries.
+# boundaries. The flag gates whether this component is considered at all;
+# removing it after installation stops future convergence rather than stopping
+# the unit, deliberately matching the frequency monitor's two-step off switch.
 #
 # THE LIVENESS READING IS NOT THE UNIT'S OWN STATE
 # This script never asks systemd whether the bosun is active, and that absence is
@@ -82,8 +84,11 @@ bosun_env() {
 # here, so the seam keeps one implementation. Run in a child shell because
 # fm-bosun-lib.sh sets FM_ROOT, FM_HOME and STATE of its own.
 bosun_judge_command() {
+  # Ignore a converging session's ambient override so resolution matches the
+  # durable per-home configuration the unit will see when systemd starts it.
   # shellcheck disable=SC2016 # $1 is the child shell's own positional parameter.
-  bosun_env bash -c '. "$1/fm-bosun-lib.sh"; fm_bosun_judge_command' _ "$SCRIPT_DIR" 2>/dev/null
+  bosun_env env -u FM_BOSUN_JUDGE_CMD \
+    bash -c '. "$1/fm-bosun-lib.sh"; fm_bosun_judge_command' _ "$SCRIPT_DIR" 2>/dev/null
 }
 
 # The program the judge command actually runs. A judge given as an absolute path
