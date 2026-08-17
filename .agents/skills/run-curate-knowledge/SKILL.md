@@ -177,15 +177,15 @@ The check rejects it, because a reader who has to invent the search has no route
 
 ### 5. Check - the part that would have caught us
 
-Steps 5 and 6 below are shown against a **completed worked example**: a real curation of the "Cost and quota" section of this home's archive, four splits and two folds, done while authoring this skill.
+Steps 5 and 6 below are shown against a completed worked example copied from the real "Cost and quota" section of this home's archive, with one split and one fold.
 Substitute your own baseline, worksheet and pair.
 
 ```
 .claude/skills/run-curate-knowledge/fm-curate-knowledge.py check \
-  --before /tmp/cost-before.json \
-  --worksheet /tmp/cost-worksheet.md \
-  --loaded /tmp/cost-and-quota.md \
-  --archive /tmp/cost-and-quota-longterm.md \
+  --before .curate-proof/cost-before.json \
+  --worksheet .curate-proof/cost-worksheet.md \
+  --loaded .curate-proof/cost-loaded.md \
+  --archive .curate-proof/cost-archive.md \
   --home /home/coditan/coditan-firstmate
 ```
 
@@ -200,59 +200,38 @@ It asserts, and exits non-zero on any of:
 - the loaded half does not name the archive, or names it with no runnable search;
 - a sampled archived fact could not actually be recovered.
 
-Then it runs the recovery for three sampled archived entries and prints the transcript.
-Write the realistic situation needing each beside it - that half is rule 3 and the driver cannot do it for you.
+Then it executes the documented command once against a protected copy and asserts that its output reaches every archived heading.
+The `--prove-route` value limits only the printed example, never the assertion.
 
-A failing run looks like this.
-It is the real 2026-08-16 split of this home's `data/learnings.md`, checked against a baseline reconstructed by concatenating the two halves as they stand:
-
-```
-HEADINGS  before 274  ->  after 274 (loaded 9 + archive 265)
-BYTES     before 428469  ->  loaded 21413 (5.0% of the original still loads)
-FAIL  TOTAL heading count did not fall: 274 -> 274. Moving entries whole from one
-      file to another leaves the total flat; that is the split executing while
-      nothing is curated.
-CHECK FAILED: 1 finding(s). This is a failed prune.
-```
-
-Both halves of the audit's verdict, in two lines: the 95 percent that was real, and the curation that never happened.
-
-A falling heading count is necessary and not sufficient.
-A run that folded correctly but dropped one entry silently still fails, and says so:
+The passing output below came from a current run over a copy of the first two real entries under `Cost and quota` in `/home/coditan/coditan-firstmate/data/learnings-longterm.md`.
+The source home was read only; the baseline, loaded half, archive, worksheet, and snapshot were worktree-local copies under `.curate-proof/`.
 
 ```
-HEADINGS  before 7  ->  after 5 (loaded 1 + archive 4)
-FAIL  1 entries disappeared with no verdict accounting for them: ak hat an einem
-      tag 169 sitzungen geoeffnet - und ein sitzungsanfang kostet rund 25k
-```
-
-The passing run of the worked example:
-
-```
-HEADINGS  before 7  ->  after 6 (loaded 1 + archive 5)
-BYTES     before 6323  ->  loaded 1320 (20.9% of the original still loads)
+HEADINGS  before 3  ->  after 2 (loaded 1 + archive 1)
+BYTES     before 2174  ->  loaded 196 (9.0% of the original still loads)
 
 ROUTE BACK
-  the loaded half names cost-and-quota-longterm.md
-  it hands the reader 1 runnable search(es):
-    Reach it with `grep -n '^## ' cost-and-quota-longterm.md` and read the one
+  the loaded half names cost-archive.md
+  it hands the reader 1 documented search(es):
+    grep -n '^## ' cost-archive.md
 
-PROOF OF RECOVERY (rule 3: prove the route, do not assert it)
-  $ grep -n -F -- 'Das Abrechnungsmass der Flotte zaehlt frische Token, nicht gelesenen Kontext (2026-08-10, gemessen)' /tmp/cost-and-quota-longterm.md
-    6:## Das Abrechnungsmass der Flotte zaehlt frische Token, nicht gelesenen Kontext (2026-08-10, gemessen)
+COMPLETE ROUTE ASSERTION
+  route reaches 1 of 1 archived headings
+PRINTED EXAMPLE (3 output lines maximum)
+  $ (protected copy && grep -n '^## ' cost-archive.md)
+    1:## Das Abrechnungsmass der Flotte zaehlt frische Token, nicht gelesenen Kontext (2026-08-10, gemessen)
 
-CHECK PASSED: headings 7 -> 6, bytes 6323 -> 1320, every deletion is declared,
-and the archive is reachable from the loaded half.
+CHECK PASSED: headings 3 -> 2, bytes 2174 -> 196, every deletion is declared, and the archive is reachable from the loaded half.
 ```
 
 ### 6. Report
 
 ```
 .claude/skills/run-curate-knowledge/fm-curate-knowledge.py report \
-  --before /tmp/cost-before.json \
-  --loaded /tmp/cost-and-quota.md \
-  --archive /tmp/cost-and-quota-longterm.md \
-  --worksheet /tmp/cost-worksheet.md \
+  --before .curate-proof/cost-before.json \
+  --loaded .curate-proof/cost-loaded.md \
+  --archive .curate-proof/cost-archive.md \
+  --worksheet .curate-proof/cost-worksheet.md \
   --home /home/coditan/coditan-firstmate
 ```
 
@@ -260,22 +239,26 @@ It prints before and after in bytes and share, the verdict counts, the fold list
 
 ```
 STARTUP COST
-  before       6323 B      2.5% of a 257434 B surface
-  after        1320 B      0.5% of a 252431 B surface
-  change      -5003 B   20.9% of the original still loads
-  archived     6368 B   not loaded at session start
-  retained     7688 B   loaded + archived, against 6323 B before (121.6%)
+  before       2174 B      0.8% of a 256483 B surface
+  after         196 B      0.1% of a 254505 B surface
+  change      -1978 B   9.0% of the original still loads
+  archived     2049 B   not loaded at session start
+  retained     2245 B   loaded + archived, against 2174 B before (103.3%)
 
 HEADINGS
-  before 7  ->  after 6  (loaded 1 + archive 5)
-  entries at level 2: 6 -> 0 loaded, 4 archived
+  before 3  ->  after 2  (loaded 1 + archive 1)
+  entries at level 2: 2 -> 0 loaded, 1 archived
 
 VERDICTS
-  split    4
-  fold     2
+  split    1
+  fold     1
 
 DELETION LEDGER (0)
   none
+
+FOLDED INTO ANOTHER ENTRY (1)
+  - Fable wiegt am gemeinsamen Sitzungsmass ungefaehr 9 bis 20 Opus (2026-08-10, kontrolliertes Experiment)
+    into: merged under Das Abrechnungsmass der Flotte zaehlt frische Token, nicht gelesenen Kontext
 ```
 
 `retained` above 100 percent is not a bug and not a claim that more survived than existed: it is `loaded + archived` against the original, and a curation that writes a fresh rules summary over a fully retained archive lands there.

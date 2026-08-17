@@ -316,6 +316,33 @@ EOF
   pass "the documented route must reach every archived heading"
 }
 
+test_route_proof_cannot_write_real_files() {
+  local before_hash out status
+  before_hash=$(sha256sum "$TMP/after-archive.md")
+  sed "s|grep -n '\^## '|sed -i 's/Alpha/Changed/'|" \
+    "$TMP/after-loaded.md" >"$TMP/sed-route-loaded.md"
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/sed-route-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP/home" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "a sed -i route exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'documented route failed' \
+    || fail "the sed -i route was not reported as failed"
+  [ "$(sha256sum "$TMP/after-archive.md")" = "$before_hash" ] \
+    || fail "the sed -i route changed the real archive"
+
+  sed "s|grep -n '\^## '|awk 'BEGIN { system(\"touch created\") } { print }'|" \
+    "$TMP/after-loaded.md" >"$TMP/awk-route-loaded.md"
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/awk-route-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP/home" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "an awk system route exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'documented route failed' \
+    || fail "the awk system route was not reported as failed"
+  [ "$(sha256sum "$TMP/after-archive.md")" = "$before_hash" ] \
+    || fail "the awk system route changed the real archive"
+  pass "route proof cannot write the real archive"
+}
+
 test_duplicate_heading_occurrences_cannot_hide_a_deletion() {
   local out status
   cat >"$TMP/duplicate-before.md" <<'EOF'
@@ -357,6 +384,74 @@ EOF
   pass "duplicate heading occurrences cannot hide an undeclared deletion"
 }
 
+test_duplicate_occurrences_can_split_across_both_halves() {
+  local out status
+  cat >"$TMP/duplicate-loaded-valid.md" <<'EOF'
+# Store
+
+Search with `grep -n '^## ' duplicate-archive-valid.md`.
+
+## Repeated fact
+
+The hot occurrence.
+EOF
+  cat >"$TMP/duplicate-archive-valid.md" <<'EOF'
+# Archive
+
+## Repeated fact
+
+The cold occurrence.
+EOF
+  cat >"$TMP/duplicate-valid-ws.md" <<'EOF'
+--- entry 1
+key: repeated fact#1
+heading: Repeated fact
+verdict: hot
+why: needed before the problem appears
+
+--- entry 2
+key: repeated fact#2
+heading: Repeated fact
+verdict: cold
+why: searchable when the problem arrives
+EOF
+  out=$("$DRIVER" check --before "$TMP/duplicate-before.json" \
+    --worksheet "$TMP/duplicate-valid-ws.md" --loaded "$TMP/duplicate-loaded-valid.md" \
+    --archive "$TMP/duplicate-archive-valid.md" --home "$TMP/home" 2>&1) \
+    && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "duplicate split fixture should fail only the required flat heading gate: $out"
+  printf '%s' "$out" | grep -q 'disappeared with no verdict' \
+    && fail "one duplicate in each half was falsely treated as a deletion"
+  pass "duplicate occurrences remain accounted for across both halves"
+}
+
+test_duplicate_route_hits_are_counted() {
+  local out status
+  sed "s|grep -n '\^## '|grep -m1 -n '\^## '|" \
+    "$TMP/duplicate-loaded.md" >"$TMP/duplicate-route-partial.md"
+  cat >"$TMP/duplicate-archive-two.md" <<'EOF'
+# Archive
+
+## Repeated fact
+
+First.
+
+## Repeated fact
+
+Second.
+EOF
+  sed 's/duplicate-archive.md/duplicate-archive-two.md/' \
+    "$TMP/duplicate-route-partial.md" >"$TMP/duplicate-route-two.md"
+  out=$("$DRIVER" check --before "$TMP/duplicate-before.json" \
+    --worksheet "$TMP/duplicate-ws.md" --loaded "$TMP/duplicate-route-two.md" \
+    --archive "$TMP/duplicate-archive-two.md" --home "$TMP/home" 2>&1) \
+    && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "a one-hit duplicate route exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'route reaches 1 of 2 archived headings' \
+    || fail "duplicate route completeness did not count occurrences"
+  pass "route completeness counts duplicate heading occurrences"
+}
+
 test_measure_json_is_one_document() {
   "$DRIVER" measure "$TMP/before.md" --home "$TMP/home" --json \
     2>"$TMP/measure-json.stderr" | python3 -c 'import json,sys; json.load(sys.stdin)' \
@@ -395,7 +490,7 @@ test_a_real_curation_passes_and_the_report_carries_the_ledger() {
   printf '%s' "$out" | grep -q 'CHECK PASSED' || fail "a real curation did not pass"
   printf '%s' "$out" | grep -q 'COMPLETE ROUTE ASSERTION' \
     || fail "a passing check does not print the executed recovery"
-  printf '%s' "$out" | grep -q '^  \$ (cd .* && grep' \
+  printf '%s' "$out" | grep -q '^  \$ (protected copy && grep' \
     || fail "the recovery proof shows no command it actually ran"
 
   out=$("$DRIVER" report --before "$TMP/before.json" --loaded "$TMP/after-loaded.md" \
@@ -461,7 +556,10 @@ test_an_undeclared_deletion_fails_the_check
 test_a_deletion_without_evidence_fails
 test_the_route_back_must_live_in_the_loaded_half_and_run
 test_the_documented_route_must_reach_every_archived_heading
+test_route_proof_cannot_write_real_files
 test_duplicate_heading_occurrences_cannot_hide_a_deletion
+test_duplicate_occurrences_can_split_across_both_halves
+test_duplicate_route_hits_are_counted
 test_measure_json_is_one_document
 test_the_two_shapes_never_borrow_each_others_method
 test_a_real_curation_passes_and_the_report_carries_the_ledger

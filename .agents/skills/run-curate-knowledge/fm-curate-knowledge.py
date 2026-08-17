@@ -104,12 +104,16 @@ is unreadable; `check` is a gate and its exit status is the verdict.
 """
 
 import argparse
+from collections import Counter
+import hashlib
 import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 
 HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.*?)[ \t]*$")
 
@@ -717,7 +721,7 @@ def prove_route(command, archive_path, headings, sample):
     except ValueError as exc:
         return False, [], [], "route cannot be tokenized: %s" % exc
     if not argv or argv[0] not in ROUTE_VERBS:
-        return False, [], [], "route command `%s` is not in the read-only allowlist (%s)" % (
+        return False, [], [], "route command `%s` is not supported (%s)" % (
             argv[0] if argv else "", ", ".join(ROUTE_VERBS)
         )
     base = os.path.basename(archive_path)
@@ -726,23 +730,78 @@ def prove_route(command, archive_path, headings, sample):
         return False, [], [], "route has no archive path argument"
     for index in archive_args:
         argv[index] = base
-    cwd = os.path.dirname(os.path.abspath(archive_path))
+    source_dir = os.path.dirname(os.path.abspath(archive_path))
+    route_root = os.path.abspath(os.getcwd())
+    temp_path = tempfile.mkdtemp(prefix=".fm-route-proof-", dir=route_root)
+    copied = {}
     try:
-        result = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, check=False)
-    except OSError as exc:
-        return False, [], [], "route could not run: %s" % exc
+        for index, value in enumerate(argv):
+            candidate = value if os.path.isabs(value) else os.path.join(source_dir, value)
+            if not os.path.isfile(candidate):
+                continue
+            name = os.path.basename(candidate)
+            destination = os.path.join(temp_path, name)
+            if name in copied and copied[name] != os.path.abspath(candidate):
+                return False, [], [], "route names two different files called %s" % name
+            if name not in copied:
+                shutil.copyfile(candidate, destination)
+                os.chmod(destination, 0o444)
+                copied[name] = os.path.abspath(candidate)
+            argv[index] = name
+        if base not in copied:
+            shutil.copyfile(archive_path, os.path.join(temp_path, base))
+            os.chmod(os.path.join(temp_path, base), 0o444)
+            copied[base] = os.path.abspath(archive_path)
+        hashes_before = {
+            name: _file_hash(os.path.join(temp_path, name)) for name in copied
+        }
+        # The real archive is never an execution target. The filesystem modes
+        # plus post-run hashes establish read-only behavior; the command name
+        # does not. This matters because data/ is captain-private and untracked,
+        # and this fleet has already lost one body there permanently.
+        os.chmod(temp_path, 0o555)
+        try:
+            result = subprocess.run(
+                argv, cwd=temp_path, capture_output=True, text=True, check=False
+            )
+        except OSError as exc:
+            return False, [], [], "route could not run: %s" % exc
+        finally:
+            os.chmod(temp_path, 0o755)
+        hashes_after = {
+            name: _file_hash(os.path.join(temp_path, name))
+            if os.path.isfile(os.path.join(temp_path, name)) else None
+            for name in copied
+        }
+        changed = sorted(name for name in copied if hashes_before[name] != hashes_after[name])
+        if changed:
+            return False, [], [], "route changed protected proof copies: %s" % ", ".join(changed)
+    finally:
+        shutil.rmtree(temp_path)
     output = result.stdout.strip()
-    if result.returncode != 0 or not output:
-        return False, [], [], "documented route exited %d or returned no output" % result.returncode
-    missing = [heading for heading in headings if heading not in output]
+    if result.returncode != 0 or result.stderr.strip() or not output:
+        return False, [], [], "documented route exited %d, wrote diagnostics, or returned no output" % result.returncode
+    required = Counter(headings)
+    found = {heading: output.count(heading) for heading in required}
+    missing = []
+    for heading, count in required.items():
+        missing.extend([heading] * max(0, count - found[heading]))
     reached = len(headings) - len(missing)
-    lines = ["  $ (cd %s && %s)" % (cwd, " ".join(_shell_quote(part) for part in argv))]
+    lines = ["  $ (protected copy && %s)" % " ".join(_shell_quote(part) for part in argv)]
     output_lines = output.splitlines()
     for line in output_lines[:sample]:
         lines.append("    %s" % line[:160])
     return not missing, lines, missing, "route reaches %d of %d archived headings" % (
         reached, len(headings)
     )
+
+
+def _file_hash(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(65536), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def _shell_quote(value):
@@ -793,9 +852,10 @@ def cmd_check(args):
         entry.get("key", fallback_key)
         for entry, fallback_key in zip(before["entries"], fallback_before_keys)
     }
-    loaded_keys = {e["key"] for e in loaded["entries"]}
-    archive_keys = {e["key"] for e in archive["entries"]} if archive else set()
-    after_keys = loaded_keys | archive_keys
+    before_counts = Counter(e["norm"] for e in before["entries"])
+    loaded_counts = Counter(e["norm"] for e in loaded["entries"])
+    archive_counts = Counter(e["norm"] for e in archive["entries"]) if archive else Counter()
+    after_counts = loaded_counts + archive_counts
     # A rule extracted from a split rarely keeps its own entry heading: it
     # becomes a bullet under a broader heading that already exists. So the
     # "where did the rule land" and "did this heading vanish" questions are
@@ -902,17 +962,27 @@ def cmd_check(args):
         )
 
     # --- 3. every deletion is declared --------------------------------------
-    vanished = before_keys - after_keys
-    declared_gone = {
-        key for key, row in by_key.items() if row["verdict"] in ("delete", "fold")
-    }
-    undeclared_loss = sorted(vanished - declared_gone)
+    declared_gone = Counter(
+        row["norm"] for row in by_key.values() if row["verdict"] in ("delete", "fold")
+    )
+    observed_drop = Counter({
+        norm: max(0, count - after_counts[norm]) for norm, count in before_counts.items()
+    })
+    undeclared_loss = []
+    ghosts = []
+    for norm, count in before_counts.items():
+        missing_count = max(0, observed_drop[norm] - declared_gone[norm])
+        extra_count = max(0, declared_gone[norm] - observed_drop[norm])
+        undeclared_loss.extend(
+            "%s#%d" % (norm, ordinal)
+            for ordinal in range(after_counts[norm] + declared_gone[norm] + 1, count + 1)
+        )
+        ghosts.extend([norm] * extra_count)
     if undeclared_loss:
         failures.append(
             "%d entries disappeared with no verdict accounting for them: %s"
             % (len(undeclared_loss), ", ".join(undeclared_loss[:8]))
         )
-    ghosts = sorted(declared_gone - vanished)
     if ghosts:
         warnings.append(
             "%d entries were declared deleted or folded but are still present: %s"
@@ -920,10 +990,22 @@ def cmd_check(args):
         )
 
     # --- 4. per-verdict placement -------------------------------------------
+    verdict_counts = Counter((row["norm"], row["verdict"]) for row in by_key.values())
+    for norm in before_counts:
+        if verdict_counts[(norm, "hot")] > loaded_counts[norm]:
+            failures.append(
+                "`%s` has %d hot verdicts but only %d loaded occurrences"
+                % (norm, verdict_counts[(norm, "hot")], loaded_counts[norm])
+            )
+        if verdict_counts[(norm, "cold")] > archive_counts[norm]:
+            failures.append(
+                "`%s` has %d cold verdicts but only %d archive occurrences"
+                % (norm, verdict_counts[(norm, "cold")], archive_counts[norm])
+            )
     for key, row in sorted(by_key.items()):
         verdict = row["verdict"]
-        in_loaded = key in loaded_keys
-        in_archive = key in archive_keys
+        in_loaded = loaded_counts[row["norm"]] > 0
+        in_archive = archive_counts[row["norm"]] > 0
         if verdict == "split":
             # A split ran in one of two directions and both are real: either the
             # heading moved to the archive and its rule became a bullet under a
@@ -949,15 +1031,9 @@ def cmd_check(args):
                     % row["heading"][:60]
                 )
         elif verdict == "hot":
-            if not in_loaded:
-                failures.append("`%s` is verdict hot but is not in the loaded half" % row["heading"][:60])
-            if in_archive:
-                failures.append("`%s` is verdict hot but also appears in the archive" % row["heading"][:60])
+            pass
         elif verdict == "cold":
-            if not in_archive:
-                failures.append("`%s` is verdict cold but is not in the archive" % row["heading"][:60])
-            if in_loaded:
-                failures.append("`%s` is verdict cold but is still in the loaded half" % row["heading"][:60])
+            pass
         elif verdict == "stub":
             if not in_loaded:
                 failures.append(
@@ -991,7 +1067,7 @@ def cmd_check(args):
 
     # --- 5. no invented archive content -------------------------------------
     if archive:
-        invented = sorted(archive_keys - before_keys)
+        invented = sorted((archive_counts - before_counts).elements())
         if invented:
             warnings.append(
                 "%d archive headings were not in the baseline: %s"
