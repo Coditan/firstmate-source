@@ -1,7 +1,7 @@
 ---
 name: codebase-sweep
 description: >-
-  Sweep one repository for codebase-design findings, classify each by what a wrong fix would cost and whether anyone would find out, sort them, and go ahead with the ones that are reversible without the captain.
+  Sweep one repository for codebase-design findings, classify each by what a wrong fix would cost and whether anyone would find out, sort them, and go ahead with the ones that are both reversible without the captain and contained inside one module.
   Use when the captain invokes /codebase-sweep, when a fleet notice tells this vessel to sweep its own repositories, before a repository is about to take a large amount of agent work, and before proposing that a module be restructured.
   It sweeps one repository at a time and never the fleet, because a sweep that reaches into homes this seat does not own is unauditable and spends quota nobody approved.
   The three risk tiers are the captain's own framing and never the talk's: the talk this sweep is grounded in defines no risk scale of any kind, measured against its full transcript.
@@ -81,14 +81,17 @@ Reversibility and detectability are properties you can point at, and they are wh
 ### LOW - reversible without the captain
 
 His words, verbatim, 2026-08-17: **"low is everything reversible without me"**.
+His separate clarification, given the same day: **"containment is the missing half"**.
 
-That is the definition, and this skill does not narrow it.
-The captain's separate clarification is: **"containment is the missing half"**.
-Reversibility is necessary for both low and middle and therefore does not distinguish them: low is reversible without him and contained inside one module, while middle is reversible, but the blast radius leaves the module.
-An earlier draft on this seat required a finding to be contained behind an existing interface *and* to have a check that would go red.
-That test was this seat's invention and it was stricter than what he asked for; presenting it as his boundary would have been substituting our caution for his instruction.
-It survives below as a confidence aid, clearly labelled as ours, and never as the tier boundary.
-Do not quietly re-narrow the tier back to it.
+**Both halves of the boundary are his, and this skill narrows neither.**
+Reversibility is necessary for low and middle alike, so it cannot tell them apart; containment is what does.
+Low is reversible without him and contained inside one module, while middle is reversible but its blast radius leaves the module.
+
+Only one thing here is ours, and it is neither half.
+An earlier draft on this seat paired containment with a second requirement of its own invention: that a check would go red if the change were wrong.
+He has since supplied containment himself, so containment is his; what was this seat's invention is the detectability requirement alone, and that was stricter than what he asked for.
+Presenting it as his boundary would have been substituting our caution for his instruction, so it survives below as a confidence aid, clearly labelled as ours, and never as a third gate.
+Do not quietly re-narrow the tier back to it, and do not drop containment in the belief that it is ours.
 
 **Entry test: can this change be undone without him, and is it contained inside one module?**
 Undone means undone in practice, not undone in principle: a revert that anyone on the crew can raise, land, and be finished with.

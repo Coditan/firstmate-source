@@ -203,7 +203,7 @@ It reports and never deletes: removal is a separate captain-authorized step, and
 
 A project's own code also stops being navigable, and an agent arrives at it with no memory of it at all.
 Load the `codebase-sweep` skill when the captain invokes `/codebase-sweep`, when a fleet notice tells this vessel to sweep its own repositories, before a project is about to take a large amount of agent work, and before proposing that one of its modules be restructured.
-It runs on one named repository at a time and never fleet-wide, its three risk tiers are the captain's own framing rather than any source's, and its standing authority covers only the findings that are reversible without him.
+It runs on one named repository at a time and never fleet-wide, its three risk tiers are the captain's own framing rather than any source's, and its standing authority covers only the findings that are both reversible without him and contained inside one module.
 
 ## 7. Task lifecycle
 

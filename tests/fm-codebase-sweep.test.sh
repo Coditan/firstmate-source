@@ -60,13 +60,40 @@ test_the_only_ordering_the_talk_gives_is_kept_as_a_target() {
 test_low_is_his_reversibility_boundary_and_is_not_re_narrowed() {
   assert_grep 'low is everything reversible without me' "$SKILL" \
     "the skill must carry his verbatim definition of the low tier"
-  assert_grep 'That is the definition, and this skill does not narrow it' "$SKILL" \
+  assert_grep 'this skill narrows neither' "$SKILL" \
     "the skill must state that it does not narrow his definition"
   assert_grep 'containment is the missing half' "$SKILL" \
     "the skill must carry his separate containment clarification"
   assert_grep 'Do not quietly re-narrow the tier' "$SKILL" \
     "the skill must forbid re-narrowing the tier to the stricter test"
   pass "the low tier keeps his reversibility boundary unnarrowed"
+}
+
+# Both halves of the boundary are his; only the detectability aid is ours. The
+# skill said for one revision that the earlier draft containing containment "was
+# this seat's invention", which reads as though containment could be dropped as
+# ours. This pins the split so the next reader cannot make that trade.
+test_both_halves_of_the_boundary_are_attributed_to_him() {
+  assert_grep '**Both halves of the boundary are his, and this skill narrows neither.**' "$SKILL" \
+    "the skill must attribute reversibility and containment alike to him"
+  assert_grep "what was this seat's invention is the detectability requirement alone" "$SKILL" \
+    "the skill must confine this seat's invention to the detectability requirement"
+  assert_grep 'do not drop containment in the belief that it is ours' "$SKILL" \
+    "the skill must bar dropping containment as though it were ours"
+  pass "both halves of the boundary are attributed to him, only detectability to us"
+}
+
+# The loaded summaries are what an agent classifies from, so a summary still
+# carrying the pre-clarification boundary would have agents sorting by the
+# superseded rule however correct the body is. Both surfaces are checked.
+test_every_loaded_summary_carries_containment() {
+  assert_grep 'both reversible without him and contained inside one module' "$AGENTS" \
+    "the AGENTS.md trigger must state containment alongside reversibility"
+  local desc
+  desc=$(fm_skill_description "$ROOT/.agents/skills/codebase-sweep")
+  printf '%s' "$desc" | grep -q 'contained inside one module' \
+    || fail "the skill description must state containment alongside reversibility"
+  pass "every loaded summary carries containment, not just the body"
 }
 
 test_detectability_is_a_flag_of_ours_and_never_a_demotion() {
@@ -266,6 +293,8 @@ test_the_skill_is_reachable_from_the_instruction_surface() {
 test_tiers_are_attributed_to_the_captain_and_never_to_the_talk
 test_the_only_ordering_the_talk_gives_is_kept_as_a_target
 test_low_is_his_reversibility_boundary_and_is_not_re_narrowed
+test_both_halves_of_the_boundary_are_attributed_to_him
+test_every_loaded_summary_carries_containment
 test_detectability_is_a_flag_of_ours_and_never_a_demotion
 test_each_tier_carries_a_falsifiable_entry_test
 test_a_fix_that_outgrows_its_tier_stops_and_reclassifies
