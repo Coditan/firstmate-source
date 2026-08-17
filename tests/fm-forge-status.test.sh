@@ -411,9 +411,11 @@ test_state_changes_are_serialized_without_blocking_a_check() {
   pass "state changes serialize and a contending check exits quietly"
 }
 
-test_the_transaction_lock_needs_no_flock_and_reclaims_a_dead_owner() {
-  local home out
+test_the_transaction_lock_needs_no_flock_and_recovers_abandoned_states() {
+  local home out lock reclaim
   home=$(make_home portable-lock)
+  lock="$home/state/forge-status.transaction.lock.d"
+  reclaim="$lock.reclaim"
   serve "$home" clear
   printf '#!/usr/bin/env bash\nexit 99\n' > "$home/fakebin/flock"
   chmod +x "$home/fakebin/flock"
@@ -422,13 +424,27 @@ test_the_transaction_lock_needs_no_flock_and_reclaims_a_dead_owner() {
   assert_contains "$out" 'FORGE_STATUS:' "an observation must not depend on flock"
   [ "$(entry_count "$home")" -eq 1 ] || fail "the flock-free observation did not append"
 
-  mkdir "$home/state/forge-status.transaction.lock.d"
-  printf '99999999\n' > "$home/state/forge-status.transaction.lock.d/pid"
+  mkdir "$lock"
+  printf '99999999\n' > "$lock/pid"
   serve "$home" incident
   out=$(FM_FORGE_STATUS_LOCK_STALE_AFTER=0 run_watch "$home" --force)
   assert_contains "$out" 'Partial System Outage' "a dead transaction owner must not wedge the watch"
   [ "$(entry_count "$home")" -eq 2 ] || fail "the recovered transaction did not append"
-  pass "the portable transaction lock reclaims a dead owner"
+
+  mkdir "$lock"
+  touch -t 202001010000 "$lock"
+  serve "$home" clear
+  out=$(FM_FORGE_STATUS_LOCK_STALE_AFTER=0 run_watch "$home" --force)
+  assert_contains "$out" 'All Systems Operational' "an aged incomplete lock must be reclaimed"
+
+  mkdir "$lock" "$reclaim"
+  printf '99999999\n' > "$lock/pid"
+  touch -t 202001010000 "$reclaim"
+  serve "$home" incident
+  out=$(FM_FORGE_STATUS_LOCK_STALE_AFTER=0 run_watch "$home" --force)
+  assert_contains "$out" 'Partial System Outage' "an aged abandoned reclaim mutex must be recovered"
+  [ "$(entry_count "$home")" -eq 4 ] || fail "abandoned lock recovery lost an observation"
+  pass "the portable transaction lock recovers every abandoned state"
 }
 
 test_a_sweep_that_is_not_due_takes_no_reading_and_a_due_one_does() {
@@ -791,7 +807,7 @@ test_http_000_is_unmeasurable_but_non_http_000_can_be_read
 test_a_status_document_cannot_forge_a_record_field
 test_the_cadence_is_settable_and_the_setting_in_force_is_readable
 test_state_changes_are_serialized_without_blocking_a_check
-test_the_transaction_lock_needs_no_flock_and_reclaims_a_dead_owner
+test_the_transaction_lock_needs_no_flock_and_recovers_abandoned_states
 test_a_sweep_that_is_not_due_takes_no_reading_and_a_due_one_does
 test_the_relaxed_scheduler_never_lands_on_the_five_minute_grid
 test_a_window_with_no_off_grid_minute_refuses_rather_than_scheduling_on_it

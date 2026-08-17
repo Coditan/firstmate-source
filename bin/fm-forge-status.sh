@@ -762,12 +762,23 @@ fi
 
 TRANSACTION_LOCK_HELD=0
 
-transaction_lock_age() {
-  local modified now
-  modified=$(path_mtime "$TRANSACTION_LOCK") || return 1
+transaction_path_age() {
+  local path=$1 modified now
+  modified=$(path_mtime "$path") || return 1
   now=$(date +%s) || return 1
   case "$modified:$now" in *[!0-9:]*) return 1 ;; esac
   printf '%s\n' "$(( now - modified ))"
+}
+
+transaction_path_reclaimable() {
+  local path=$1 owner age threshold=$LOCK_STALE_AFTER
+  owner=$(cat "$path/pid" 2>/dev/null || true)
+  age=$(transaction_path_age "$path") || return 1
+  case "$owner" in
+    ''|*[!0-9]*) [ "$threshold" -ge 2 ] || threshold=2 ;;
+    *) kill -0 "$owner" 2>/dev/null && return 1 ;;
+  esac
+  [ "$age" -ge "$threshold" ]
 }
 
 claim_transaction_lock() {
@@ -793,28 +804,49 @@ release_transaction_lock() {
   TRANSACTION_LOCK_HELD=0
 }
 
+claim_reclaim_lock() {
+  local reclaim=$1
+  mkdir "$reclaim" 2>/dev/null || return 1
+  if ! printf '%s\n' "${BASHPID:-$$}" > "$reclaim/pid"; then
+    rmdir "$reclaim" 2>/dev/null || true
+    return 2
+  fi
+}
+
+release_reclaim_lock() {
+  local reclaim=$1 owner
+  owner=$(cat "$reclaim/pid" 2>/dev/null || true)
+  [ "$owner" = "${BASHPID:-$$}" ] || return 0
+  rm -f -- "$reclaim/pid" 2>/dev/null || true
+  rmdir "$reclaim" 2>/dev/null || true
+}
+
+acquire_reclaim_lock() {
+  local reclaim=$1
+  claim_reclaim_lock "$reclaim" && return 0
+  [ -d "$reclaim" ] || return 2
+  transaction_path_reclaimable "$reclaim" || return 1
+  transaction_path_reclaimable "$reclaim" || return 1
+  rm -f -- "$reclaim/pid" 2>/dev/null || true
+  rmdir "$reclaim" 2>/dev/null || return 1
+  claim_reclaim_lock "$reclaim"
+}
+
 acquire_transaction_lock() {
-  local owner age reclaim="$TRANSACTION_LOCK.reclaim"
+  local reclaim="$TRANSACTION_LOCK.reclaim"
   claim_transaction_lock && return 0
   [ -d "$TRANSACTION_LOCK" ] || return 2
-  owner=$(cat "$TRANSACTION_LOCK/pid" 2>/dev/null || true)
-  case "$owner" in ''|*[!0-9]*) return 1 ;; esac
-  kill -0 "$owner" 2>/dev/null && return 1
-  age=$(transaction_lock_age) || return 1
-  [ "$age" -ge "$LOCK_STALE_AFTER" ] || return 1
-  mkdir "$reclaim" 2>/dev/null || return 1
-  owner=$(cat "$TRANSACTION_LOCK/pid" 2>/dev/null || true)
-  age=$(transaction_lock_age 2>/dev/null || true)
-  if { case "$owner" in ''|*[!0-9]*) false ;; *) ! kill -0 "$owner" 2>/dev/null ;; esac; } \
-    && { case "$age" in ''|*[!0-9]*) false ;; *) [ "$age" -ge "$LOCK_STALE_AFTER" ] ;; esac; }; then
+  transaction_path_reclaimable "$TRANSACTION_LOCK" || return 1
+  acquire_reclaim_lock "$reclaim" || return $?
+  if transaction_path_reclaimable "$TRANSACTION_LOCK"; then
     rm -f -- "$TRANSACTION_LOCK/pid" 2>/dev/null || true
     rmdir "$TRANSACTION_LOCK" 2>/dev/null || true
   fi
   if claim_transaction_lock; then
-    rmdir "$reclaim" 2>/dev/null || true
+    release_reclaim_lock "$reclaim"
     return 0
   fi
-  rmdir "$reclaim" 2>/dev/null || true
+  release_reclaim_lock "$reclaim"
   return 1
 }
 
