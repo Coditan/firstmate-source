@@ -85,6 +85,8 @@
 # while every archived entry under that identity is itself a resolved captain hold.
 # An interrupted fold retry accepts its resolved successor from that same strict
 # archive record, so retention cannot strand the older question in the open set.
+# A folded archive record remains a valid disposition for completion and reopen
+# protection, but never a successor to fold into because it carries no answer.
 #
 # `resolve` requires every --routed-to task to exist and to be blocked by the hold.
 # It writes the captain decision and routed identities into the hold body, clears
@@ -321,13 +323,15 @@ verify_hold_resolved() {  # <hold-id>
   return 1
 }
 
-scan_archived_hold() {  # <hold-id> <all|any|unresolved>
+scan_archived_hold() {  # <hold-id> <all|any|unresolved|answered>
   local id=$1 mode=$2
   [ -f "$ARCHIVE" ] || return 1
   awk -v target="$id" -v mode="$mode" '
     function finish_entry() {
       if (active) {
-        if (checked && captain && ((resolution && routed) || (superseded && successor))) resolved_seen = 1
+        valid = checked && captain && resolution && routed
+        if (mode != "answered") valid = valid || (checked && captain && superseded && successor)
+        if (valid) resolved_seen = 1
         else {
           unresolved_seen = 1
           if (first_unresolved == "") first_unresolved = entry_line ": " entry_header
@@ -360,8 +364,9 @@ scan_archived_hold() {  # <hold-id> <all|any|unresolved>
       }
       if (active && line == "  Resolution recorded by fm-decision-hold.") resolution = 1
       if (active && index(line, "  Routed work:") == 1) routed = 1
-      # A folded record is durable in the same way an answered one is, so the
-      # archive scan accepts either shape rather than reopening a closed question.
+      # A fold is a durable disposition for completion and reopen checks, but the
+      # answered mode deliberately excludes it because a fold successor must carry
+      # a captain answer before gated work can be released.
       if (active && line == "  Superseded by fm-decision-hold.") superseded = 1
       if (active && index(line, "  Successor: ") == 1) successor = 1
       if (active && line != "" && index(line, "  ") != 1) finish_entry()
@@ -384,6 +389,10 @@ scan_archived_hold() {  # <hold-id> <all|any|unresolved>
 # that reused the same key.
 archived_hold_resolved() {  # <hold-id>
   scan_archived_hold "$1" all
+}
+
+archived_hold_answered() {  # <hold-id>
+  scan_archived_hold "$1" answered
 }
 
 # The reopen guard asks the opposite question: does any archived entry already
@@ -824,8 +833,8 @@ command_supersede() {
   if succ_show=$(task_show "$successor"); then
     succ_state=$(show_field "$succ_show" state)
   else
-    archived_hold_resolved "$successor" \
-      || fail "successor $successor is absent from the live backlog and has no unambiguous resolved captain record in $ARCHIVE"
+    archived_hold_answered "$successor" \
+      || fail "successor $successor is archived but is not an unambiguous answered captain record carrying both the recorded resolution and routed work; a folded question is a disposition, never a successor to fold into"
     succ_state=done
   fi
 

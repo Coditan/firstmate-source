@@ -39,6 +39,7 @@ Never scrape chat, a report, or terminal output to guess that a decision occurre
 
 A record can end three ways, and all three are dispositions of the one store: it is **answered** (`record`, `resolve`) with the captain's words, **folded** (`supersede`) into a later record that covers its ground, or it is still open.
 A fold never claims he answered anything; it says a later record asks this better and points at it.
+A folded record is therefore a valid disposition of its own question, but never a successor to fold into when that would release gated work without an answer.
 
 `hold` and `record` refuse to add a captain record while this home holds others for the same repository that you have not disposed of.
 The refusal lists them - the open questions and the recorded answers both - and you re-run with `--supersedes <id>` for each one this record folds, or `--new-ground` when none of them asks this question.

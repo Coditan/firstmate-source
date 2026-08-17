@@ -352,12 +352,25 @@ test_fold_retry_accepts_only_a_valid_archived_successor() {
   out=$(tasks_in "$home" list --blocked --fields blocked_by)
   assert_contains "$out" "0 blocked tasks" \
     "folding into an archived resolved successor must release the older gate"
+  run_hold "$home" complete old-pass scope >/dev/null \
+    || fail "completion must accept the folded question as durably disposed"
+  tasks_in "$home" prune --state done --keep 0 >/dev/null \
+    || fail "folded-question retention failed"
+  run_hold "$home" verify old-pass >/dev/null \
+    || fail "verification must accept the archived fold as a valid disposition"
+  if run_hold "$home" hold old-pass scope --title "Old archived scope question" \
+    --reason "undecided" --repo widgets --premise "the archived scope is unset" \
+    --new-ground >/dev/null 2>&1; then
+    fail "reopen guard accepted an identity already disposed by an archived fold"
+  fi
 
-  for shape in open wrong-kind missing-markers; do
+  for shape in open wrong-kind missing-markers superseded; do
     home=$(make_home "archived-successor-$shape")
     : > "$home/state/old-pass.meta"
     run_hold "$home" hold old-pass scope --title "Old question" --reason "undecided" \
       --repo widgets --premise "the scope is unset" >/dev/null 2>&1 || fail "old hold failed for $shape"
+    tasks_in "$home" add "gated-$shape" "Gated $shape work" --kind ship --repo widgets \
+      --blocked-by old-pass-decision-scope >/dev/null || fail "gated work setup failed for $shape"
     case "$shape" in
       open) printf '%s\n' '- [ ] invalid-successor - Open archived successor (repo: widgets) (kind: captain)' \
         '  Resolution recorded by fm-decision-hold.' '  Routed work:' > "$home/data/done-archive.md" ;;
@@ -365,14 +378,25 @@ test_fold_retry_accepts_only_a_valid_archived_successor() {
         '  Resolution recorded by fm-decision-hold.' '  Routed work:' > "$home/data/done-archive.md" ;;
       missing-markers) printf '%s\n' '- [x] invalid-successor - Incomplete archived successor (repo: widgets) (kind: captain)' \
         '  State: awaiting captain decision.' > "$home/data/done-archive.md" ;;
+      superseded) printf '%s\n' '- [x] invalid-successor - Folded archived successor (repo: widgets) (kind: captain)' \
+        '  Superseded by fm-decision-hold.' '  Successor: still-open-final-question' \
+        '  The captain did not answer this record; the successor covers its ground.' \
+        > "$home/data/done-archive.md" ;;
     esac
     if run_hold "$home" supersede old-pass-decision-scope --by invalid-successor \
-      --reason "invalid archived successor must refuse" >/dev/null 2>&1; then
+      --reason "invalid archived successor must refuse" > "$home/refuse.out" 2> "$home/refuse.err"; then
       fail "$shape archived entry satisfied successor validation"
     fi
     out=$(run_ledger "$home" --records)
     assert_contains "$out" $'open\told-pass-decision-scope' \
       "$shape archived entry must leave the older question open"
+    out=$(tasks_in "$home" list --blocked --fields blocked_by)
+    assert_contains "$out" "gated-$shape,queued,ship,widgets,Gated $shape work,old-pass-decision-scope" \
+      "$shape archived entry must leave the older question's gate intact"
+    if [ "$shape" = superseded ]; then
+      assert_grep "folded question is a disposition, never a successor to fold into" \
+        "$home/refuse.err" "a folded archived successor must explain the semantic refusal"
+    fi
   done
   pass "fold retries cross retention only through strict archived resolutions"
 }
