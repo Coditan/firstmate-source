@@ -104,7 +104,7 @@ This script owns its target, states it in its own record, and claims nothing abo
 
 This is not a new scheduler.
 `--arm` writes `state/forge-status.check.sh`, the locked bootstrap step arms it, and the watcher runs it on its ordinary `state/*.check.sh` sweep while the script self-gates to its own schedule from the persisted record - the same mechanism `bin/fm-curation-nudge.sh` established.
-All but one sweep in a period is a single file read, and no sweep that is not due reaches the network at all.
+All but one sweep in a period only checks the persisted schedule, and no sweep that is not due reaches the network at all.
 
 Two near-identical units on one host is a measured trap here: `bridge-notify-poll.timer` on this machine reported loaded, enabled and active on 2026-08-17 while it had last fired on 2026-08-07.
 Sharing the seam means there is one thing to keep alive, and one health reading that can tell whether it is.
