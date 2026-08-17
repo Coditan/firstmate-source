@@ -880,6 +880,16 @@ firstmate_home_has_treehouse_slot() {
   worktree_registered_for_project "$FM_ROOT" "$home"
 }
 
+refresh_firstmate_home_ownership_if_pooled() {  # <home> <label> <self-id> <state-dir>
+  local home=$1 label=$2 self=$3 state_dir=$4
+  firstmate_home_has_treehouse_slot "$home" || return 0
+  command -v treehouse >/dev/null 2>&1 || {
+    echo "error: treehouse command not found; cannot verify $label $home ownership" >&2
+    return 1
+  }
+  refresh_teardown_return_ownership "$home" "$FM_ROOT" "$label" "$self" "$state_dir"
+}
+
 validate_removal_target() {
   local target=$1 label=$2 abs_target abs_home abs_root
   [ -n "$target" ] || return 0
@@ -1124,6 +1134,13 @@ cleanup_firstmate_home_children() {
     child_kind=$(meta_value "$child_meta" kind)
     [ -n "$child_kind" ] || child_kind=ship
     child_backend=$(fm_backend_of_meta "$child_meta")
+    if [ "$child_kind" = secondmate ]; then
+      child_home=$(meta_value "$child_meta" home)
+      [ -n "$child_home" ] || child_home=$child_wt
+      if [ -n "$child_home" ] && [ -d "$child_home" ]; then
+        refresh_firstmate_home_ownership_if_pooled "$child_home" "child firstmate home" "$child_id" "$sub_state" || return $?
+      fi
+    fi
     if [ "$child_backend" = orca ]; then
       child_t=$(meta_value "$child_meta" terminal)
     else
@@ -1145,9 +1162,8 @@ cleanup_firstmate_home_children() {
       fi
     fi
     if [ "$child_kind" = secondmate ]; then
-      child_home=$(meta_value "$child_meta" home)
-      [ -n "$child_home" ] || child_home=$child_wt
       if [ -n "$child_home" ] && [ -d "$child_home" ]; then
+        refresh_firstmate_home_ownership_if_pooled "$child_home" "child firstmate home" "$child_id" "$sub_state" || return $?
         cleanup_firstmate_home_children "$child_home" || return $?
         remove_firstmate_home "$child_home" "child firstmate home" "$child_id" "$sub_state" || return $?
       fi
@@ -1188,11 +1204,21 @@ remove_secondmate_registry_entry() {
   mv "$tmp" "$SECONDMATE_REG"
 }
 
-validate_pr_poll_cleanup "$STATE" "$ID" || exit 1
-
 if [ "$KIND" = secondmate ]; then
   [ -n "$HOME_PATH" ] || HOME_PATH=$WT
   validate_firstmate_home_for_removal "$HOME_PATH" "secondmate home" "$ID" >/dev/null || exit 1
+fi
+
+# Every pool-backed target is ownership-gated as soon as it is known, before any path can mutate or descend into it, and each later mutation rechecks immediately before acting.
+if [ "$KIND" = secondmate ]; then
+  refresh_firstmate_home_ownership_if_pooled "$HOME_PATH" "secondmate home" "$ID" "$STATE" || exit $?
+elif [ -d "$WT" ] && current_worktree_uses_treehouse; then
+  refresh_teardown_return_ownership "$WT" "$PROJ" "worktree" "$ID" "$STATE" || exit $?
+fi
+
+validate_pr_poll_cleanup "$STATE" "$ID" || exit 1
+
+if [ "$KIND" = secondmate ]; then
   if [ "$FORCE" = "--force" ]; then
     validate_firstmate_home_children_removal "$HOME_PATH" || exit 1
   fi
@@ -1211,6 +1237,7 @@ if [ "$KIND" = secondmate ] && [ "$FORCE" != "--force" ]; then
 fi
 
 if [ "$KIND" = secondmate ] && [ "$FORCE" = "--force" ]; then
+  refresh_firstmate_home_ownership_if_pooled "$HOME_PATH" "secondmate home" "$ID" "$STATE" || exit $?
   cleanup_firstmate_home_children "$HOME_PATH" || exit $?
 fi
 
@@ -1255,10 +1282,6 @@ if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
       exit 1
     fi
   fi
-fi
-
-if [ -d "$WT" ] && current_worktree_uses_treehouse; then
-  require_no_other_slot_holder "$WT" "$PROJ" "worktree" "$ID" "$STATE" || exit $?
 fi
 
 # Best-effort: drop the local task branch so the shared repo does not accumulate refs.

@@ -46,6 +46,7 @@
 #   (s) pool lease refusal is terminal during child cleanup
 #   (t) unreadable pool ownership refuses without mutation
 #   (u) Orca stale-lock cleanup never consults treehouse
+#   (v) a held secondmate home refuses before child cleanup
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -68,6 +69,7 @@ make_case() {
   fakebin="$case_dir/fakebin"
   mkdir -p "$case_dir/state" "$case_dir/data" "$case_dir/config" "$fakebin"
   : > "$case_dir/live-windows"
+  : > "$case_dir/killed-windows"
   : > "$case_dir/leases"
   : > "$case_dir/lease-on-status"
   : > "$case_dir/reallocate-on-return"
@@ -157,6 +159,7 @@ SH
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 LIVE="${FM_TEST_CASE_DIR:?}/live-windows"
+KILLED="${FM_TEST_CASE_DIR:?}/killed-windows"
 target=
 prev=
 for a in "$@"; do
@@ -168,6 +171,12 @@ case "${1:-}" in
     [ -n "$target" ] || exit 1
     grep -qxF "$target" "$LIVE" || exit 1
     printf '%%0\n'
+    exit 0 ;;
+  kill-window)
+    [ -n "$target" ] || exit 1
+    printf '%s\n' "$target" >> "$KILLED"
+    grep -vxF "$target" "$LIVE" > "$LIVE.next" || true
+    mv "$LIVE.next" "$LIVE"
     exit 0 ;;
 esac
 exit 0
@@ -701,7 +710,7 @@ test_retry_refreshes_ownership_and_preserves_lock() {
   case_dir=$(make_case retry-holder)
   write_task "$case_dir" finished-task dead
   fail_first_return_with_lock "$case_dir"
-  lease_slot_on_status "$case_dir" 4 "$case_dir/slot" "fm:retry-holder"
+  lease_slot_on_status "$case_dir" 5 "$case_dir/slot" "fm:retry-holder"
 
   set +e
   FM_TREEHOUSE_RETURN_LOCK_RETRY_WAIT_SECS=0 \
@@ -802,6 +811,42 @@ EOF
   pass "(u) Orca stale-lock cleanup never consults treehouse"
 }
 
+test_held_secondmate_home_refuses_before_child_cleanup() {
+  local case_dir home rc
+  case_dir=$(make_case held-secondmate-home)
+  home=$(make_secondmate_case "$case_dir" parent-task)
+  register_mock_home_worktree "$case_dir" "$home"
+  write_child_task "$case_dir" "$home" live-child alive
+  printf 'running\n' > "$home/state/live-child.status"
+  mkdir -p "$case_dir/slot/.claude"
+  printf '{"hooks":"live-child"}\n' > "$case_dir/slot/.claude/settings.fm-task.json"
+  lease_slot "$case_dir" "$home" "fm:new-home-holder"
+
+  set +e
+  run_teardown "$case_dir" parent-task --force > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 4 "$rc" "held-secondmate-home: ownership refusal should retain its status"
+  assert_grep "new-home-holder" "$case_dir/stderr" \
+    "held-secondmate-home: refusal must name the new home holder"
+  assert_present "$home/state/live-child.meta" \
+    "held-secondmate-home: refusal must preserve child meta"
+  assert_present "$home/state/live-child.status" \
+    "held-secondmate-home: refusal must preserve child status"
+  assert_present "$case_dir/slot/.claude/settings.fm-task.json" \
+    "held-secondmate-home: refusal must preserve child worktree content"
+  assert_grep "fmtest:live-child" "$case_dir/live-windows" \
+    "held-secondmate-home: refusal must preserve the child process"
+  assert_no_grep "fmtest:live-child" "$case_dir/killed-windows" \
+    "held-secondmate-home: refusal killed the child process"
+  assert_nothing_returned "$case_dir" \
+    "held-secondmate-home: refusal must not return a child worktree"
+  assert_present "$case_dir/state/parent-task.meta" \
+    "held-secondmate-home: refusal must preserve parent meta"
+  pass "(v) held secondmate home refuses before child cleanup"
+}
+
 test_stale_record_live_holder_refuses
 test_sole_owner_allows
 test_force_does_not_override
@@ -822,5 +867,6 @@ test_retry_refreshes_ownership_and_preserves_lock
 test_child_pool_lease_refusal_is_terminal
 test_unreadable_pool_refuses_without_mutation
 test_orca_stale_lock_does_not_consult_treehouse
+test_held_secondmate_home_refuses_before_child_cleanup
 
 printf '\nall fm-slot-guard tests passed\n'

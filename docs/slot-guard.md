@@ -119,7 +119,8 @@ The same fail-safe asymmetry applies at the treehouse return boundary: a readabl
 It sweeps this home's recorded slots on the ordinary watcher cadence and, when a slot is claimed by a task other than the live one standing in it, writes a durable `state/<id>.slot-disputed` marker and wakes firstmate once.
 The marker is the point: the protection exists before any teardown runs and survives a caller that never asks.
 
-**`bin/fm-teardown.sh`** freshly asks the complete ownership question and rebuilds lease preconditions before every return attempt and lock mutation, using the owning home's state directory for nested secondmate cleanup, translating the pool's own lease-precondition failures into terminal ownership refusals, propagating refusal through every parent cleanup without deleting its records, relying on the return's reset to remove hooks, and performing best-effort branch-ref cleanup through the project repository without touching the released worktree path.
+**`bin/fm-teardown.sh`** asks the complete ownership question at one early gate as soon as each recorded pool-backed target is known, before any cleanup path can mutate or descend into it.
+Every later return, lock mutation, or child cleanup rechecks ownership immediately before acting, using the owning home's state directory for nested secondmate cleanup, translating the pool's own lease-precondition failures into terminal ownership refusals, propagating refusal through every parent cleanup without deleting its records, relying on the return's reset to remove hooks, and performing best-effort branch-ref cleanup through the project repository without touching the released worktree path.
 The pool question binds only to treehouse-backed paths; Orca and other non-pool cleanup retain their backend-specific safety checks and never refuse because treehouse status is unavailable.
 When the slot is leased to the task being torn down it also passes `--if-lease-holder`, so for those slots the refusal is enforced by the pool itself rather than by firstmate's memory.
 
@@ -153,5 +154,5 @@ It does not make a killed worker's uncommitted work recoverable, and nothing her
 
 ## Tests
 
-`tests/fm-slot-guard.test.sh` holds the reproduction and the fix, eleven cases.
+`tests/fm-slot-guard.test.sh` holds the reproduction and the fix, including the original stale-slot sequence and the teardown paths that can mutate pooled worktrees and homes.
 Case (a) is the incident sequence - a stale record plus a different live task in the slot - and it fails against the pre-fix behaviour and passes with the guard in place, which is the check that the test is testing the fix rather than agreeing with it.
