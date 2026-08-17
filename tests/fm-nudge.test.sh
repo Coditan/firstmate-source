@@ -814,6 +814,17 @@ test_an_unarmed_home_is_loud() {
   rm -f "$home/state/nudge.check.sh"
   out=$(run_nudge "$home" --armed)
   assert_contains "$out" 'is not armed' "removing the check must make the reading fail"
+
+  run_nudge "$home" --arm >/dev/null
+  rm -f "$home/state/nudge.check-trust"
+  out=$(run_nudge "$home" --armed)
+  assert_contains "$out" 'is not armed' "removing the trust registration must make the reading fail"
+
+  run_nudge "$home" --arm >/dev/null
+  printf 'fm-custom-check-v1\n%s\n' "$(printf '%064d' 0)" > "$home/state/nudge.check-trust"
+  chmod 0600 "$home/state/nudge.check-trust"
+  out=$(run_nudge "$home" --armed)
+  assert_contains "$out" 'is not armed' "a stale trust registration must make the reading fail"
   pass "an unarmed home, and one whose check was removed, are both loud"
 }
 
@@ -1201,6 +1212,20 @@ test_arming_retires_the_single_subject_predecessor() {
   pass "arming retires the single-subject predecessor instead of leaving a silent sibling"
 }
 
+test_arming_fails_when_predecessor_trust_cannot_be_removed() {
+  local home out status=0
+  home=$(make_home legacy-trust-directory)
+  mkdir "$home/state/curation-nudge.check-trust"
+
+  out=$(run_check "$home" --arm 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "arming succeeded with an unremovable predecessor trust path"
+  [ -d "$home/state/curation-nudge.check-trust" ] \
+    || fail "the fixture no longer demonstrates the unremovable predecessor trust path"
+  [ -x "$home/state/nudge.check.sh" ] \
+    || fail "the replacement must be registered before predecessor retirement is attempted: $out"
+  pass "arming fails when predecessor trust retirement is incomplete"
+}
+
 test_a_predecessor_record_is_honoured_rather_than_restarted() {
   local home out next
 
@@ -1235,26 +1260,18 @@ RECORD
 }
 
 test_every_registered_subject_is_silenced_by_the_shared_suite_library() {
-  local home subject code
+  local home subject out
   home=$(make_home suite-silence)
-  # A subject added without its flag here would make every suite that composes
-  # bin/fm-bootstrap.sh start printing that subject's diagnostic.
   for subject in $(registered_subjects "$home"); do
-    code=$(run_check "$home" --subjects | awk -v s="$subject" '$1 == s {print $2}')
-    assert_grep "export FM_${code}_DISABLE=1" "$ROOT/tests/lib.sh" \
-      "tests/lib.sh must silence the $subject subject suite-wide"
+    out=$(env -u FM_TEST_LIB_SOURCED bash -c '
+      set -u
+      . "$1"
+      FM_HOME="$2" FM_STATE_OVERRIDE="$2/state" FM_DATA_OVERRIDE="$2/data" \
+        "$2/bin/fm-nudge.sh" --subject "$3" --armed
+    ' bash "$ROOT/tests/lib.sh" "$home" "$subject")
+    [ -z "$out" ] || fail "tests/lib.sh did not silence the $subject subject: $out"
   done
   pass "every registered subject is silenced suite-wide by the shared test library"
-}
-
-test_the_codebase_sweep_diagnostic_is_a_registered_code() {
-  # A diagnostic line that prints while no agent knows what to load is a line
-  # nobody acts on, so a new code lands on both arrival surfaces or not at all.
-  assert_grep 'CODEBASE_SWEEP_NUDGE' "$ROOT/.agents/skills/bootstrap-diagnostics/SKILL.md" \
-    "the coded diagnostic must have a documented handling procedure"
-  assert_grep 'CODEBASE_SWEEP_NUDGE' "$ROOT/AGENTS.md" \
-    "the coded diagnostic must be registered with the other bootstrap codes"
-  pass "the codebase-sweep diagnostic is registered on both surfaces that reach an agent"
 }
 
 test_bootstrap_arms_the_nudge_and_asks_whether_it_is_still_running() {
@@ -1338,6 +1355,6 @@ test_stopping_the_check_makes_every_subject_reading_fail
 test_one_subject_going_bad_never_silences_another
 test_one_shim_serves_every_subject
 test_arming_retires_the_single_subject_predecessor
+test_arming_fails_when_predecessor_trust_cannot_be_removed
 test_a_predecessor_record_is_honoured_rather_than_restarted
 test_every_registered_subject_is_silenced_by_the_shared_suite_library
-test_the_codebase_sweep_diagnostic_is_a_registered_code

@@ -188,6 +188,11 @@ CHECK_ID=nudge
 LEGACY_CHECK="$STATE/curation-nudge.check.sh"
 LEGACY_TRUST="$STATE/curation-nudge.check-trust"
 
+# shellcheck source=bin/fm-pr-lib.sh
+. "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-check-lib.sh
+. "$SCRIPT_DIR/fm-check-lib.sh"
+
 # The registered subjects, in the order they are evaluated and reported.
 SUBJECTS='curation codebase-sweep'
 
@@ -708,8 +713,8 @@ SHIM
   "$SCRIPT_DIR/fm-check-register.sh" "$CHECK_ID" >/dev/null || return 1
   # Retire the single-subject predecessor only once its replacement is armed and
   # registered, so a failure here never leaves a home with neither.
-  rm -f -- "$LEGACY_CHECK" "$LEGACY_TRUST" 2>/dev/null || true
-  [ ! -e "$LEGACY_CHECK" ] || return 1
+  rm -f -- "$LEGACY_CHECK" "$LEGACY_TRUST" 2>/dev/null || return 1
+  [ ! -e "$LEGACY_CHECK" ] && [ ! -e "$LEGACY_TRUST" ]
 }
 
 STATE_PROBE_CONDITION=''
@@ -827,7 +832,7 @@ armed_diagnostic() {
   # a surface reporting health while nothing executes, which is the exact shape
   # this reading exists to refuse. It stays silent for at most one period, and
   # that silence is the whole defect.
-  if [ ! -f "$CHECK" ] || [ ! -x "$CHECK" ]; then
+  if ! fm_custom_check_registered "$STATE" "$CHECK_ID"; then
     printf '%s: the %s is not armed on this home, so %s (fix: %s/fm-nudge.sh --arm)\n' \
       "$CODE" "$SUBJECT_NUDGE_NAME" "$SUBJECT_UNARMED_CONSEQUENCE" "$SCRIPT_DIR"
     return 0
