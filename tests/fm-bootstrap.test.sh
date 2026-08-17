@@ -780,6 +780,9 @@ usable update base is silent^firstmate-update-base^https://example.invalid/fleet
 usable fork base is silent^fork-sync-upstream^git@example.invalid:fleet.git^empty^
 unusable update base is flagged^firstmate-update-base^relative/path^grep^CURRENCY_BASE: config/firstmate-update-base is unusable - the value is a relative path
 unusable fork base is flagged^fork-sync-upstream^not a url^grep^CURRENCY_BASE: config/fork-sync-upstream is unusable - the value contains whitespace
+usable fork repository is silent^fork-sync-fork^https://example.invalid/curated-fork.git^empty^
+unusable fork repository is flagged^fork-sync-fork^not a url^grep^CURRENCY_BASE: config/fork-sync-fork is unusable - the value contains whitespace
+unusable fork repository names its own recovery^fork-sync-fork^not a url^grep^remove the file to fall back to this checkout's fork remote, then its origin
 empty update base is flagged^firstmate-update-base^^grep^CURRENCY_BASE: config/firstmate-update-base is unusable - the file is empty
 option-shaped update base is flagged^firstmate-update-base^--upload-pack=evil^grep^CURRENCY_BASE: config/firstmate-update-base is unusable - the value starts with '-'
 ROWS

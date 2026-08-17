@@ -70,6 +70,14 @@ Applying the primary's rules there would report every secondmate home as permane
 The only reason AK and SC1 were known to have moved is that they were asked to report the version they ended on, and did.
 So the round records every reading it took in `state/currency-round.report`, `unmeasured` is a first-class state, and a reading that could not be taken never reports an all-clear.
 
+**An instrument that stays quiet is not the same as one that found nothing.**
+`bin/fm-fork-sync-check.sh` carries its own three-day cadence and prints nothing when that gate suppresses a run, which is exactly what it prints when it ran and found nothing.
+Reading the two as one made this round record `fork-absorption ... state=ok` on 2026-08-17 while an open `FORK_SYNC` finding sat on disk - the defect this whole round exists to prevent, inside the round itself.
+The two are now separated mechanically, by whether the check stamped a newly completed run in `state/fork-sync.last-run`, and only a run that actually compared can read `ok`.
+A suppressed round reports what the last completed comparison recorded: an open finding still on disk reads `behind` and reaches the supervisor, a recorded refusal reads `unmeasured`, and a comparison that has never completed reads `unmeasured` rather than clean.
+A suppressed round with a clean recent record is still recorded as `unmeasured`, because no reading was taken in it, but it does not surface: a slower instrument's own declared cadence is a scheduled interval rather than blindness, and waking on every one of them would spend a wake on a healthy home every three days, which is how a check earns being ignored.
+Once the gap outlives twice that instrument's own cadence (`FM_CURRENCY_ROUND_FORK_STALE`, six days) the reading says the comparison has stopped looking and surfaces normally, so nothing stopped can hide behind the interval.
+
 ## Why the watcher, and not the three alternatives
 
 | Option | Verdict |

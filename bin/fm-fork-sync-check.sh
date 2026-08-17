@@ -12,17 +12,26 @@
 #   fork-sync.pending   FORK_SYNC diagnostic and commit review lists
 #   fork-sync.stuck     FORK_SYNC_STUCK diagnostic for an incomplete check
 #
-# The real upstream this curated fork tracks comes from FM_FIRSTMATE_UPSTREAM_URL,
-# then the local gitignored config/fork-sync-upstream file, then the canonical
-# default - see bin/fm-currency-base-lib.sh for the full precedence and for why
-# this base is deliberately separate from config/firstmate-update-base. A
-# present but unusable config file records FORK_SYNC_STUCK rather than silently
-# comparing against the wrong upstream.
+# BOTH SIDES OF THE COMPARISON ARE RESOLVED EXPLICITLY, and the resolved URLs are
+# named in every diagnostic this script writes. The upstream side comes from
+# FM_FIRSTMATE_UPSTREAM_URL, then config/fork-sync-upstream, then the canonical
+# default; the fork side from FM_FIRSTMATE_FORK_URL, then config/fork-sync-fork,
+# then a "fork" remote, then origin. See bin/fm-currency-base-lib.sh for the full
+# precedence of each and for why these bases are separate from
+# config/firstmate-update-base. A present but unusable config file records
+# FORK_SYNC_STUCK rather than silently comparing against the wrong repository.
+#
+# The fork side used to be taken from origin alone, which is the fork only in the
+# plain topology. A curator vessel deployed from a fleet repository has origin
+# pointing at that fleet repository, so the check compared upstream against it
+# and reported ITS commits as fork-only patches - a confident reading of the
+# wrong repository. The URLs are printed for the same reason: a comparison that
+# does not say what it compared cannot be caught reading the wrong thing.
 #
 # Usage: fm-fork-sync-check.sh
 # Environment:
 #   FM_FIRSTMATE_UPSTREAM_URL overrides the configured upstream URL.
-#   FM_FIRSTMATE_FORK_URL overrides the fork URL (default: origin of FM_ROOT).
+#   FM_FIRSTMATE_FORK_URL overrides the fork URL.
 #   FM_FORK_SYNC_COMPARE_REPO uses an existing repository (tests only).
 #   FM_FORK_SYNC_UPSTREAM_HEAD and FM_FORK_SYNC_FORK_HEAD name commits already
 #     present in that repository (tests only).
@@ -69,17 +78,24 @@ fi
 tmp=""
 compare_repo=${FM_FORK_SYNC_COMPARE_REPO:-}
 if [ -z "$compare_repo" ]; then
-  fork_url=${FM_FIRSTMATE_FORK_URL:-$(git -C "$FM_ROOT" remote get-url origin 2>/dev/null)}
-  [ -n "$fork_url" ] || record_stuck "fork origin URL cannot be resolved"
+  fm_currency_base_fork_repo "$CONFIG" "$FM_ROOT" || record_stuck "$FM_CURRENCY_BASE_REASON"
+  fork_url=$FM_CURRENCY_BASE_VALUE
+  fork_source=$FM_CURRENCY_BASE_SOURCE
+  # Comparing a repository with itself always reports everything absorbed, which
+  # is the quietest possible wrong answer, so it is refused by name.
+  [ "$fork_url" != "$UPSTREAM_URL" ] ||
+    record_stuck "the fork side ($fork_source) and the upstream side resolve to the same repository $fork_url"
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-fork-sync.XXXXXX") || record_stuck "temporary comparison repository cannot be created"
   trap 'rm -rf "$tmp"' EXIT
   git -C "$tmp" init --bare -q || record_stuck "temporary comparison repository cannot be initialized"
-  git -C "$tmp" fetch -q --no-tags "$fork_url" HEAD:refs/heads/fork || record_stuck "fork default-branch lookup failed ($fork_url)"
+  git -C "$tmp" fetch -q --no-tags "$fork_url" HEAD:refs/heads/fork || record_stuck "fork default-branch lookup failed ($fork_url, from $fork_source)"
   git -C "$tmp" fetch -q --no-tags "$UPSTREAM_URL" HEAD:refs/heads/upstream || record_stuck "upstream default-branch lookup failed ($UPSTREAM_URL)"
   compare_repo=$tmp
   fork=$(git -C "$tmp" rev-parse --verify refs/heads/fork)
   upstream=$(git -C "$tmp" rev-parse --verify refs/heads/upstream)
 else
+  fork_url=$compare_repo
+  fork_source="FM_FORK_SYNC_COMPARE_REPO"
   fork=${FM_FORK_SYNC_FORK_HEAD:-}
   upstream=${FM_FORK_SYNC_UPSTREAM_HEAD:-}
   [ -n "$fork" ] && [ -n "$upstream" ] || record_stuck "test comparison repository requires fork and upstream heads"
@@ -176,6 +192,12 @@ EOF
 
 {
   printf 'FORK_SYNC: upstream %.7s not merged into fork (%s upstream-only commits); %s local patches to re-evaluate (%s provably absorbed): dispatch a fork-sync crewmate\n' "$upstream" "$upstream_count" "$fork_count" "$absorbed_count"
+  # Which two repositories produced these numbers. Without this line a reading of
+  # the wrong repository is indistinguishable from a reading of the right one,
+  # which is how a fleet repository's own commits were once listed below as
+  # fork-only patches.
+  printf '  compared: fork %s (from %s) against upstream %s\n' "$fork_url" "$fork_source" "$UPSTREAM_URL"
+  printf '  note: "provably absorbed" counts only patches this check could prove absorbed by patch-id or by tip-content convergence; the remainder are unproven, not proven unabsorbed.\n'
   printf '  upstream-only commits:\n'
   printf '%s' "$upstream_review_detail"
   printf '  fork-only patches:\n'

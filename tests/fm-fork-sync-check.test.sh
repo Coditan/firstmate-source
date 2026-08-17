@@ -304,6 +304,125 @@ test_unusable_configured_base_refuses_loudly() {
   pass "an unusable configured fork-sync base refuses instead of comparing against the default"
 }
 
+# The same real fetch path, but with the fork side left to the script's own
+# resolution instead of handed in. These are the tests that can see WHICH
+# repository the fork side actually resolved to.
+run_resolving_check() {
+  local repo=$1 state=$2 config=$3 now=$4
+  FM_ROOT_OVERRIDE="$repo" FM_HOME="$repo" FM_STATE_OVERRIDE="$state" \
+    FM_CONFIG_OVERRIDE="$config" FM_FORK_SYNC_NOW="$now" \
+    "$ROOT/bin/fm-fork-sync-check.sh"
+}
+
+# A curator seat as this fleet actually deploys one: upstream, the curated fork
+# that tracks it, a fleet repository carrying the fork plus its own commits, and
+# a vessel checkout whose ORIGIN is that fleet repository rather than the fork.
+# Reading the fork side from origin here is exactly the defect - the fleet
+# repository's own commits get reported as fork-only patches.
+make_curator_seat() {
+  local name=$1 upstream fork fleet seat config
+  upstream="$TMP_ROOT/$name-upstream"
+  fork="$TMP_ROOT/$name-fork"
+  fleet="$TMP_ROOT/$name-fleet"
+  seat="$TMP_ROOT/$name-seat"
+  config="$TMP_ROOT/$name-config"
+  fm_git_init_commit "$upstream"
+  git clone -q "$upstream" "$fork"
+  commit_file "$fork" fork.txt fork-only-patch >/dev/null
+  commit_file "$upstream" upstream.txt upstream-only >/dev/null
+  git clone -q "$fork" "$fleet"
+  commit_file "$fleet" fleet.txt fleet-only-patch >/dev/null
+  git clone -q "$fleet" "$seat"
+  mkdir -p "$config"
+  printf '%s\n' "$upstream" > "$config/fork-sync-upstream"
+}
+
+test_configured_fork_side_beats_this_homes_origin() {
+  local seat state config out
+  make_curator_seat curator
+  seat="$TMP_ROOT/curator-seat"
+  state="$TMP_ROOT/curator-state"
+  config="$TMP_ROOT/curator-config"
+  printf '%s\n' "$TMP_ROOT/curator-fork" > "$config/fork-sync-fork"
+
+  out=$(run_resolving_check "$seat" "$state" "$config" 5000000)
+  assert_contains "$out" 'FORK_SYNC:' "the configured fork side was not compared at all"
+  assert_contains "$out" "  compared: fork $TMP_ROOT/curator-fork (from config/fork-sync-fork)" \
+    "the finding must name which repository it measured as the fork"
+  assert_contains "$out" '  needs-review ' "the fork patch list was not produced"
+  assert_contains "$out" 'fork-only-patch' "the configured fork's own patch was not listed"
+  assert_not_contains "$out" 'fleet-only-patch' \
+    "a commit that exists only in this home's origin was listed as a fork-only patch"
+  pass "the configured fork side is measured instead of this home's origin"
+}
+
+test_fork_remote_outranks_origin_when_nothing_is_configured() {
+  local seat state config out
+  make_curator_seat remote
+  seat="$TMP_ROOT/remote-seat"
+  state="$TMP_ROOT/remote-state"
+  config="$TMP_ROOT/remote-config"
+  git -C "$seat" remote add fork "$TMP_ROOT/remote-fork"
+
+  out=$(run_resolving_check "$seat" "$state" "$config" 5100000)
+  assert_contains "$out" "  compared: fork $TMP_ROOT/remote-fork (from the fork remote)" \
+    "a remote named fork must outrank origin as the fork side"
+  assert_not_contains "$out" 'fleet-only-patch' \
+    "origin was measured even though this checkout names its fork explicitly"
+  pass "a remote named fork is preferred over origin as the fork side"
+}
+
+test_origin_remains_the_last_resort_fork_side() {
+  local seat state config out
+  make_curator_seat plain
+  seat="$TMP_ROOT/plain-seat"
+  state="$TMP_ROOT/plain-state"
+  config="$TMP_ROOT/plain-config"
+
+  out=$(run_resolving_check "$seat" "$state" "$config" 5200000)
+  assert_contains "$out" "  compared: fork $TMP_ROOT/plain-fleet (from the origin remote)" \
+    "an unconfigured home with no fork remote must still fall back to origin"
+  # The defect itself, pinned: with the fork side left to origin on a curator
+  # seat, the origin repository's own commit IS reported as a fork-only patch.
+  # The two tests above are what stop that happening on a seat that names its
+  # fork; this one records what the fallback still does when nothing names it.
+  assert_contains "$out" 'fleet-only-patch' \
+    "the origin fallback must be visible in the finding, not silent"
+  pass "origin remains the last-resort fork side for the plain topology"
+}
+
+test_unusable_configured_fork_side_refuses_loudly() {
+  local seat state config out
+  make_curator_seat badfork
+  seat="$TMP_ROOT/badfork-seat"
+  state="$TMP_ROOT/badfork-state"
+  config="$TMP_ROOT/badfork-config"
+  printf 'not a url\n' > "$config/fork-sync-fork"
+
+  out=$(run_resolving_check "$seat" "$state" "$config" 5300000)
+  assert_contains "$out" 'FORK_SYNC_STUCK: config/fork-sync-fork is unusable' \
+    "an unusable configured fork side did not refuse loudly"
+  assert_grep 'is unusable' "$state/fork-sync.stuck" "the refusal was not persisted"
+  [ ! -f "$state/fork-sync.last-run" ] || fail "a refused check stamped a completed run"
+  pass "an unusable configured fork side refuses instead of falling back to origin"
+}
+
+test_identical_comparison_sides_refuse_instead_of_reporting_absorbed() {
+  local seat state config out
+  make_curator_seat samesides
+  seat="$TMP_ROOT/samesides-seat"
+  state="$TMP_ROOT/samesides-state"
+  config="$TMP_ROOT/samesides-config"
+  printf '%s\n' "$TMP_ROOT/samesides-upstream" > "$config/fork-sync-fork"
+
+  out=$(run_resolving_check "$seat" "$state" "$config" 5400000)
+  assert_contains "$out" 'FORK_SYNC_STUCK:' \
+    "comparing a repository with itself must refuse, not report everything absorbed"
+  assert_contains "$out" 'resolve to the same repository' "the refusal did not name the cause"
+  [ ! -f "$state/fork-sync.last-run" ] || fail "a refused check stamped a completed run"
+  pass "a fork side that resolves to the upstream refuses instead of reporting a quiet all-clear"
+}
+
 test_pending_lists_and_cadence_gate
 test_content_convergence_prefilters_absorbed_patch
 test_content_convergence_clears_absorbed_upstream_commit
@@ -315,3 +434,8 @@ test_up_to_date_clears_diagnostics
 test_configured_upstream_base_is_the_repository_compared
 test_environment_override_beats_the_configured_base
 test_unusable_configured_base_refuses_loudly
+test_configured_fork_side_beats_this_homes_origin
+test_fork_remote_outranks_origin_when_nothing_is_configured
+test_origin_remains_the_last_resort_fork_side
+test_unusable_configured_fork_side_refuses_loudly
+test_identical_comparison_sides_refuse_instead_of_reporting_absorbed
