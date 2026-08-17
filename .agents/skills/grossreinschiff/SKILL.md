@@ -106,10 +106,13 @@ Where the incident is dated, it is a past measurement and is written as one - re
 ### 2. Records whose stated facts no longer hold
 
 **Surface:** the fleet's own records - backlog items, hold reasons, learnings, briefs, reports.
+**Start with the captain decisions:** `bin/fm-decision-ledger.sh --premises` lists every open one with the premise it was filed on and when that premise was last re-measured, oldest first. That list never claims a premise still holds, only when it was last looked at, so it is a work list rather than an answer.
 **Look for:** a record that *asserts* something about the world, where the assertion can be re-run.
 **Test:** re-run the assertion. Not "does this record look current" but "is the thing it claims still true, checked now."
 Prioritise records that gate something: a hold reason blocks a decision, so a hold resting on a disproven fact blocks it for nothing.
 **Verdict:** `holds` / `no longer holds` / `not checkable` - and `not checkable` is itself a finding, because an assertion nothing can re-run will never be corrected.
+Record each captain-decision reading with `bin/fm-decision-hold.sh recheck --outcome holds|broken|unmeasurable`, so the next sweep can tell a re-measured record from an untouched one.
+**`unmeasurable` is never a quiet `broken`.** A seat re-measured a record saying a validation gate pushed to the wrong public repository, found the registry empty, and would have folded it - but that seat had moved, and the wrong registration may still stand on the machine where it was found, which the seat cannot see. Folding it there would have closed a live finding with nobody left who could see it. A premise you cannot reach is reported unmeasurable and left open; only a premise you actually measured false is a `no longer holds`, and even then folding it is a separate act.
 **Who acts:** firstmate maintains its own private records directly; a claim inside shared tracked material goes through the pipeline.
 **Evidence:** a hold reason still asserted that firstmate cannot clear its own context after that had been disproven end to end, and a backlog item claimed an account and a repository exist that do not. Both 2026-08-02/03.
 
@@ -125,8 +128,11 @@ Prioritise records that gate something: a hold reason blocks a decision, so a ho
 ### 4. Duplicate records for one defect
 
 **Surface:** the backlog and the decision records.
+**Start with** `bin/fm-decision-ledger.sh --audit`, whose `duplicate-suspect` and `open-but-settled` classes name what structure can prove: several open records under one investigation, one decision key open under several, and an open record whose question is already answered by a settled one.
+**That list is a floor, not a count.** It is blind to one question re-asked in different words, and that is measured: a seat held two open records asking whether a named company counts as a customer and which parties count as intra-group - one question, no shared wording, no shared key, no shared origin. Reading only the audit and reporting the duplicate count as complete is the error this section exists against.
 **Look for:** several open records describing one defect, filed by different sightings.
 **Test:** group open records by **the defect they describe**, never by id, title, or filing date. Two records naming the same file and the same wrong behaviour are one record.
+**Fold what you confirm** with `bin/fm-decision-hold.sh supersede <id> --by <successor> --reason <line>`, which closes the folded record as superseded, moves its gated work to the successor, and never claims the captain answered it.
 **Care:** consolidating does not lower the open count and is not meant to - a consolidated record stays open and captain-owned until its canonical record is actually answered (`data/learnings.md`, 2026-08-01). Consolidation buys readability, never closure.
 **Never consolidate an analyst question that has no judge counterpart.** That is exactly how a question only one analyst raised disappears. `bin/fm-decision-inventory.sh` owns the panel-duplicate collapse rule and states this limit itself.
 **Who acts:** firstmate, on its own backlog.

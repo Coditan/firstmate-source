@@ -39,6 +39,138 @@ It records the decision digest and routed task identities as a retry identity in
 An exact retry can finish a partial routing operation, while a changed decision or routed-task set is rejected.
 A failed intermediate step leaves the hold open.
 
+## The store had one entrance, and the measurement that showed it
+
+The measurement was taken on 2026-08-17, after the captain said the fleet was making him decide the same things again after every reset.
+Four decisions he gave that day, every one acted on and every one landed, were counted against the backlog:
+
+```text
+bosun-drift-stall    backlog mentions: 0
+captain-exception    backlog mentions: 0
+curate-route         backlog mentions: 0
+tier-overlap         backlog mentions: 0
+```
+
+Each existed in three places and every one is temporary: a worker's `state/<id>.status` log, which cleanup deletes; a pull-request body, which lives on the forge rather than in this fleet's records; and one session's context, which a reset ends.
+
+The cause was not a missing store.
+`hold` and `resolve` already worked, and the backlog already held decisions durably.
+They covered exactly one door - a decision an investigation or visual review discovered and registered ahead of the answer - and most of that day's decisions came through the two doors that had no durable home at all: an ask-user finding returned by a validation gate, and a sentence the captain said in chat.
+
+A second, separate failure was measured on the same day.
+`bridge-forgejo-standup-decision-metadata-rpo` had been answered, the answer was written into a task body, and the hold still read `held: yes` because the close was started and never finished, with nothing detecting it.
+
+## The `record` entrance
+
+`record` writes the same resolution record into the same store, for a decision that arrived through any door.
+It differs from `resolve` in exactly the two ways those doors require: it creates the kind `captain` item when none exists, so no prior registration is needed, and it accepts zero `--routed-to` tasks, because a decision the captain gave and a worker acted on immediately gated no future work.
+It is one store with several entrances rather than a second store beside the holds, so `verify_hold_durable`, the completion gate, and the archive scan all recognise a recorded decision without change.
+
+`--door` is required and closed-vocabulary (`hold`, `ask-user`, `chat`), so the store can be asked which entrances it is actually covering rather than answering that question with free text.
+An origin that names no task in this home is accepted when `--repo` is given, because a decision the captain states in chat belongs to the home he stated it in even when it names no local work; `hold` keeps its stricter origin-ownership check, which is correct for a question *about* a piece of local work.
+
+The captain's words are stored byte for byte.
+The one boundary normalization is that trailing newlines are stripped from the decision file, on the grounds that a text file's terminating newline is not part of what was said.
+Everything else is refused rather than repaired: a carriage return is rejected before the write, a decision containing one of the three envelope marker lines at the start of a line is rejected before the write, and after the write the stored text is read back out of the raw markdown and compared byte for byte with what was handed in.
+A sha256 of the decision text is recorded beside it, and `bin/fm-decision-ledger.sh` recomputes it on every read, so a later hand-edit of a settled decision shows up as `altered-record` instead of being read as the captain's word.
+
+Measured round-trip fidelity, 2026-08-17, against `tasks-axi` 0.2.5: a body containing double quotes, a literal backslash-`n`, tab indentation, four-space indentation, trailing spaces, interior blank lines, non-ASCII text, a line reading `## Done`, and a line shaped exactly like a task row (`- [ ] evil-id - looks like a task (kind: captain)`) round-tripped unchanged, and the task-row-shaped line did not create a phantom record in `tasks-axi list`.
+
+## An unfinished close is detectable by construction
+
+Both `resolve` and `record` write the resolution body first, then clear dependency edges, then close the item.
+That ordering is the detection mechanism, not an implementation detail: a close interrupted anywhere leaves a captain item carrying a resolution record while still open, which is a state nothing else produces.
+Re-running the identical command finishes it.
+
+`bin/fm-decision-ledger.sh --audit` reports four structural classes, none of which reads prose to infer that a decision happened:
+
+| class | shape in the records | what it means |
+| --- | --- | --- |
+| `unfinished-close` | captain item carries a resolution record, is not Done | the close was interrupted; the identical `record` call completes it |
+| `closed-without-record` | captain item is Done, carries no resolution record | the question left the open surfaces and the answer was never stored |
+| `acted-but-open` | captain hold still held, blocks at least one task, every task it blocks is Done | the work went ahead, so the answer was given; nothing closed the hold |
+| `altered-record` | stored decision text does not match its recorded digest | the stored words are no longer the words that were recorded |
+
+`acted-but-open` is the class that catches the recovery-point shape above, which nothing detected at the time.
+
+## The store had an intake step and no supersession step
+
+A second measurement on 2026-08-17 canvassed three seats and found the same shape at every scale.
+
+| seat | open captain records | duplicates | already answered | genuinely open |
+| --- | --- | --- | --- | --- |
+| first | 99 | 18 | 14 | 67 |
+| second | 5 | 2 | 2 | 3 |
+| third | 2 | 0 | 0 | 2, with 225 already folded into its archive |
+
+Two-thirds noise on the first seat, 40 percent on the second, at a twentyfold difference in scale.
+The third seat shows that folding does happen and the count does not only rise.
+
+The cause is not carelessness: every one of those records was filed correctly.
+An investigation must register its unresolved decisions before it may complete, and each of them did.
+Nothing required it to ask whether the question already existed, and nothing re-measured a premise after filing.
+The rule was not being broken; it had an intake step and no supersession step.
+
+### Why the fold is the filer's act and not a detector
+
+The second seat's two duplicates asked one question in entirely different vocabulary: one asked whether a named company counts as a customer, the other asked which parties count as intra-group.
+No shared wording, no shared decision key, no shared origin group.
+No matcher pairs those, and a text-similarity matcher would not either.
+The filer knew it was re-asking; nothing asked it.
+
+So `hold` and `record` refuse to add a captain record while this home holds others for the same repository the caller has not disposed of, and the refusal prints them - the open questions and the recorded answers both - before any attestation is possible.
+`--supersedes <id>` folds one; `--new-ground` attests that none of them asks this question.
+The gate is on the answer as well as the question, because an answer that cannot fold what it settles leaves it standing: that is exactly how the second seat kept two records open on a question the captain had ruled on hours earlier with the fix already in an open pull request.
+
+`bin/fm-decision-ledger.sh --audit` also reports `duplicate-suspect` and `open-but-settled`, which are structural and provable.
+They are a backstop for records filed before this gate existed, not the mechanism, and the header of that script states the limit in the same words.
+
+### A fold is a third disposition, not a second kind of answer
+
+`supersede` closes a record with a `Superseded by fm-decision-hold.` envelope naming the successor and the reason, moves any work the folded record gated onto the successor, and states in the record itself that the captain did not answer it.
+`verify_hold_durable` and the archive scan accept a folded record as durable, so a completion gate never demands an answer to a question a later record already covers.
+An answered record can never be folded: its body carries the captain's words, and a fold would replace them with a pointer.
+
+## Premise re-measurement, and the outcome that must never be folded
+
+The proposal was a premise re-check that folds a decision whose stated premise no longer measures true.
+That rule is dangerous as stated, and the third canvass seat measured why.
+
+One of its records said a validation gate registered that home against the wrong public repository, so a push from there would land in the wrong place.
+Re-measured, the registry was empty and the premise did not measure true.
+But the record had been measured on a path that seat no longer occupied: the seat had moved and the validation state had not come with it, so the wrong registration may still stand on the original machine, which that seat cannot see.
+A premise re-check that folded on that reading would have closed a live finding, and nobody would have been left who could see it.
+
+**`unmeasurable` is therefore a first-class third outcome, never a synonym for false.**
+`bin/fm-decision-hold.sh recheck --outcome holds|broken|unmeasurable --measured-at <locator>` records the reading together with the seat it was taken on (`<hostname>:<home>`), because a record whose premise cannot be located is the case that matters.
+`recheck` closes nothing under any outcome; even a premise measured genuinely false is folded, or answered, as a separate deliberate act.
+`bin/fm-decision-ledger.sh --audit` reports `premise-unmeasurable` and says in the finding itself that it is not grounds to fold.
+
+This is the same reason no facility was built to execute stored premise-check commands.
+Most premises are not computable predicates, such a facility would add an execution surface to the weekly sweep, and the honest alternative is available: `bin/fm-decision-ledger.sh --premises` lists every open decision with its premise and the date and seat of the last reading, oldest first, and states in its own header that it never claims a premise still holds.
+The `grossreinschiff` skill's sections 2 and 4 are where that list is worked, which is what the weekly sweep already is.
+
+### The exit problem in its second form
+
+The same seat found three of four holds closed that day still carrying `State: awaiting captain decision` in their own body text.
+A reader who trusts the body reaches the opposite conclusion from one who trusts the record state, and neither can tell which is stale.
+`bin/fm-decision-ledger.sh --audit` reports that as `stale-body-state`.
+Every close this mechanism performs overwrites the body, so it cannot produce the state itself; the class exists for records closed outside it.
+
+## Reading the record before presenting anything as open
+
+A store nobody consults is the same failure wearing different clothes, so the read side is wired into three places rather than left to a session's memory.
+
+`bin/fm-session-start.sh` prints the settled decisions, in the captain's own words, in its fleet digest, and its closing reminder states that they are decided.
+That is the reset case: a decision given in an earlier session is not in this session's context, and this is where a fresh session meets it.
+
+`bin/fm-bootstrap.sh` runs the audit detect-only at every session start and prefixes each finding as `DECISION_LEDGER:`.
+It is silent when there is nothing to report, consistent with the rest of that section.
+
+`bin/fm-fleet-snapshot.sh` sets `answered_pending_close` on any non-Done record whose first body line is the resolution marker, and withholds such a record from `captain_actionable`.
+Both `decisions_open` in the canonical snapshot and the decision board that reads it therefore stop presenting an answered decision as an open question.
+The record is not dropped silently: it still appears in the queued gates surface, and both `bin/fm-fleet-snapshot.sh` and `bin/fm-bearings-snapshot.sh` replace its stale hold reason with one saying the decision is answered and the close unfinished.
+
 ## Structured read surfaces
 
 `bin/fm-fleet-snapshot.sh` parses canonical tasks-axi `(hold: ...)` and `(hold-kind: captain)` metadata alongside existing backlog fields.
@@ -55,6 +187,11 @@ Verification date: 2026-07-14.
 Additional quoted `blocked_by` regression verification date: 2026-07-17.
 Plural blocker-readiness and mixed-home projection verification date: 2026-07-22.
 Archived-resolution fallback verification date: 2026-07-27.
+Every-door recording, supersession, intake gate, and premise re-measurement verification date: 2026-08-17.
+
+Two defects were found by these regressions rather than by reading, and both are recorded because each is a shape the next change could reproduce.
+The first: `record` wrote its resolution body with the routed-work list run onto the `Routed work:` line, because a command substitution ate the terminating newline; the write-then-close ordering meant the failing verification left exactly the visibly unfinished record it is designed to leave, which is how it was noticed.
+The second: `supersede` moved no dependency edges at all, because the environment-variable prefix carrying the hold id attached to the `tasks_axi` shell function rather than to the `awk` in the pipeline behind it, so the lookup silently matched nothing. It reads as working - the fold completes, the record closes - and only a test that asserted where the gated work ended up caught it. That is now `test_a_fold_moves_the_work_the_question_gated`.
 
 The focused end-to-end regression uses only synthetic `sample` identities and decision text.
 It begins with a completed investigation and visual review whose genuine unresolved choice exists only in the report.
@@ -68,8 +205,22 @@ One scenario pairs an older resolved entry with a newer unresolved legacy-form b
 The final verification commands and their exact summarized outputs follow.
 
 ```text
+$ bash tests/fm-decision-ledger.test.sh
+ok - a settled decision survives retention into the archive and still reads verbatim
+ok - a second question cannot be filed without disposing of the one already there
+ok - an answer folds the open questions it settles and keeps the trail to them
+ok - a fold carries the work the question gated, and the answer lifts that gate
+ok - a premise that could not be measured is surfaced, never folded as a false one
+ok - an edited decision stops reading as verified instead of passing as his word
+ok - the audit finds every way a captain decision record can be left unfinished
+ok - a home with no unfinished decision record reports no findings and exits clean
+ok - an answered decision leaves the open-decision surface and says why
+
 $ bash tests/fm-decision-hold-lifecycle.test.sh
 ok - report-only unresolved decision is reproduced and completion refuses before loss
+ok - ask-user and chat decisions become durable records with the captain's exact words
+ok - recording is idempotent on replay and refuses a conflicting answer under one key
+ok - recording refuses text it could not store verbatim, before writing anything
 ok - non-forced scout teardown always requires durable inventory verification
 ok - resolved archived holds satisfy cleanup while reused, unresolved, and missing holds still refuse
 ok - captain holds are idempotent, distinct, teardown-safe, Bearings-visible, and durably routed before close

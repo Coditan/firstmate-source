@@ -15,6 +15,7 @@
 #                 "LAVISH_ACCESS: <N> open review board link(s) still point at this machine only ...",
 #                 "BACKLOG_STALE: task <id> has <fault>; fix: <command>",
 #                 "BACKLOG_UNREADABLE: task <id> in <backlog file> is parsed by <reader> but not <reader>; fix: <row repair>",
+#                 "DECISION_LEDGER: <class> <id> - <what is unfinished about that captain decision record>",
 #                 "FLEET_SYNC: <repo>: skipped|recovered|STUCK: <detail>",
 #                 "PR_CHECK_MIGRATION: <private remediation>",
 #                 "TANGLE: <remediation>",
@@ -1074,6 +1075,22 @@ lavish_access_check
 "$SCRIPT_DIR/fm-grossreinschiff-due.sh" || true
 if fm_tasks_axi_compatible && command -v jq >/dev/null 2>&1; then
   "$SCRIPT_DIR/fm-backlog-lint.sh" || true
+fi
+# A captain decision record that was started and never finished is invisible by
+# nature: the question leaves the open surfaces while the answer never lands. The
+# recovery-point case on 2026-08-17 sat in exactly that state with nothing detecting
+# it, which is why this is a detect-only bootstrap step rather than something a
+# session is expected to remember to run. Read-only, no network, one pass over two
+# local files.
+if command -v jq >/dev/null 2>&1; then
+  # Exit 1 means findings; 0 is clean and stays silent, and anything else is an
+  # environment fault this step declines to turn into a false alarm.
+  decision_rc=0
+  decision_audit=$("$SCRIPT_DIR/fm-decision-ledger.sh" --audit 2>/dev/null) || decision_rc=$?
+  if [ "$decision_rc" -eq 1 ] && [ -n "$decision_audit" ]; then
+    printf '%s\n' "$decision_audit" | sed 's/^/DECISION_LEDGER: /'
+  fi
+  unset decision_audit decision_rc
 fi
 if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] \
   && ! fm_backlog_backend_manual "$CONFIG" && fm_tasks_axi_compatible; then
