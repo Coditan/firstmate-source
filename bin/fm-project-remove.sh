@@ -201,16 +201,52 @@ pr_number_from_branch() {
   esac
 }
 
+github_repo_slug() {
+  local url slug
+  url=$(git -C "$PROJECT_ABS" remote get-url origin 2>/dev/null) || return 1
+  case "$url" in
+    git@github.com:*) slug=${url#git@github.com:} ;;
+    https://github.com/*) slug=${url#https://github.com/} ;;
+    ssh://git@github.com/*) slug=${url#ssh://git@github.com/} ;;
+    *) return 1 ;;
+  esac
+  slug=${slug%.git}
+  case "$slug" in
+    */*) printf '%s\n' "$slug" ;;
+    *) return 1 ;;
+  esac
+}
+
+gh_pr_state_and_head() {
+  local number=$1 repo=$2
+  command -v gh >/dev/null 2>&1 || return 1
+  (cd "$PROJECT_ABS" && gh pr view "$number" --repo "$repo" --json state,headRefOid -q '.state + "\t" + .headRefOid' 2>/dev/null)
+}
+
+github_has_commit() {
+  local repo=$1 commit=$2
+  command -v gh >/dev/null 2>&1 || return 1
+  (cd "$PROJECT_ABS" && gh api "repos/$repo/commits/$commit" --jq .sha >/dev/null 2>&1)
+}
+
 merged_pr_proves_branch() {
-  local branch=$1 number out state pr_head tip
+  local branch=$1 number out state pr_head tip repo
   number=$(pr_number_from_branch "$branch") || return 1
-  command -v gh-axi >/dev/null 2>&1 || return 1
   tip=$(git -C "$PROJECT_ABS" rev-parse --verify "$branch^{commit}" 2>/dev/null) || return 1
-  out=$(cd "$PROJECT_ABS" && gh-axi pr view "$number" --json state,headRefOid -q '.state + "\t" + .headRefOid' 2>/dev/null) || return 1
+  if command -v gh-axi >/dev/null 2>&1; then
+    out=$(cd "$PROJECT_ABS" && gh-axi pr view "$number" --json state,headRefOid -q '.state + "\t" + .headRefOid' 2>/dev/null) || out=''
+    state=${out%%	*}
+    pr_head=${out#*	}
+    if [ "$state" = MERGED ] || [ "$state" = merged ]; then
+      [ "$pr_head" = "$tip" ] && return 0
+    fi
+  fi
+  repo=$(github_repo_slug) || return 1
+  out=$(gh_pr_state_and_head "$number" "$repo") || return 1
   state=${out%%	*}
   pr_head=${out#*	}
   [ "$state" = MERGED ] || [ "$state" = merged ] || return 1
-  [ "$pr_head" = "$tip" ] || return 1
+  [ "$pr_head" = "$tip" ] || github_has_commit "$repo" "$tip"
 }
 
 branch_is_safe() {

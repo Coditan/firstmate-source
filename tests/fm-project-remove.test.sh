@@ -60,6 +60,42 @@ SH
   chmod +x "$fakebin/gh-axi"
 }
 
+fake_gh_axi_human_pr_view() {
+  local fakebin=$1 number=$2 state=$3
+  cat > "$fakebin/gh-axi" <<SH
+#!/usr/bin/env bash
+if [ "\$1 \$2 \$3" = "pr view $number" ]; then
+  cat <<'EOF'
+pull_request:
+  number: $number
+  state: $state
+EOF
+  exit 0
+fi
+printf 'unexpected gh-axi call: %s\n' "\$*" >&2
+exit 1
+SH
+  chmod +x "$fakebin/gh-axi"
+}
+
+fake_gh_with_pr_state_and_commit() {
+  local fakebin=$1 number=$2 state=$3 head=$4 repo=$5 commit=$6
+  cat > "$fakebin/gh" <<SH
+#!/usr/bin/env bash
+if [ "\$1 \$2 \$3" = "pr view $number" ]; then
+  printf '%s\t%s\n' '$state' '$head'
+  exit 0
+fi
+if [ "\$1" = "api" ] && [ "\$2" = "repos/$repo/commits/$commit" ]; then
+  printf '%s\n' '$commit'
+  exit 0
+fi
+printf 'unexpected gh call: %s\n' "\$*" >&2
+exit 1
+SH
+  chmod +x "$fakebin/gh"
+}
+
 fake_tasks_axi_listing() {
   local fakebin=$1 body=$2
   cat > "$fakebin/tasks-axi" <<SH
@@ -126,6 +162,24 @@ test_pr_named_branch_refuses_unrelated_merged_pr() {
     "PR-name-only refusal did not name the unproved branch"
   [ -d "$home/projects/alpha" ] || fail "pr-name-only refusal removed the clone"
   pass "project removal refuses branches named after unrelated merged PRs"
+}
+
+test_pr_named_branch_passes_when_human_gh_axi_and_github_has_tip() {
+  local home repo fakebin tip rc=0
+  home=$(make_home pr-human-view)
+  repo="$home/projects/alpha"
+  git -C "$repo" remote set-url origin git@github.com:owner/alpha.git
+  fakebin=$(fm_fakebin "$home")
+  commit_branch "$repo" pr123 pr123.txt preserved-remotely
+  tip=$(git -C "$repo" rev-parse pr123)
+  fake_gh_axi_human_pr_view "$fakebin" 123 merged
+  fake_gh_with_pr_state_and_commit "$fakebin" 123 MERGED unrelated owner/alpha "$tip"
+  PATH="$fakebin:$PATH" run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 0 "$rc" "human gh-axi PR view"
+  assert_grep "merged PR 123 records this branch tip" "$home/out" \
+    "human gh-axi PR proof did not fall back to exact GitHub commit preservation"
+  [ -d "$home/projects/alpha" ] || fail "human-gh-axi dry-run removed the clone"
+  pass "project removal accepts PR-named branches proved by supported gh output and exact remote commit preservation"
 }
 
 test_pr_named_squash_equivalent_branch_passes_by_content() {
@@ -406,6 +460,7 @@ test_requires_captain_approval
 test_dirty_primary_refuses
 test_unlanded_branch_refuses
 test_pr_named_branch_refuses_unrelated_merged_pr
+test_pr_named_branch_passes_when_human_gh_axi_and_github_has_tip
 test_pr_named_squash_equivalent_branch_passes_by_content
 test_patch_equivalent_branch_names_landed_as_commit
 test_treehouse_worktree_refuses_unpreserved_head
