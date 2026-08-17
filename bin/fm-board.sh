@@ -135,13 +135,26 @@ html_escape() {
 # with itself, and a header whose whole job is to say whose board this is must
 # not be the copy that drifted.
 resolve_vessel() {
-  local raw=""
+  local raw="" candidate
   if [ -n "${FM_BOARD_VESSEL:-}" ]; then
     raw=${FM_BOARD_VESSEL}
   elif [ -n "${FM_BRIDGE_VESSEL:-}" ]; then
     raw=${FM_BRIDGE_VESSEL}
-  elif [ -r "$FM_HOME/config/bridge-vessel" ]; then
-    IFS= read -r raw < "$FM_HOME/config/bridge-vessel" || raw=""
+  else
+    # TWO candidate files, not one, because the two are different places and
+    # each covers the other's blind spot. A board built from a task worktree
+    # runs the WORKTREE's copy of this script, and config/ is home-private and
+    # gitignored, so FM_ROOT has no name there - only FM_HOME does. A board
+    # built from the primary checkout with no FM_HOME in the environment has
+    # the opposite problem. Resolving one path and reading only that one leaves
+    # whichever case it did not pick unresolvable, and since an unresolvable
+    # name is REFUSED below, that is not a missing header - it is a build that
+    # stops. Measured on this seat: a board built from a task worktree.
+    for candidate in "$FM_HOME/config/bridge-vessel" "$FM_ROOT/config/bridge-vessel"; do
+      [ -r "$candidate" ] || continue
+      IFS= read -r raw < "$candidate" || raw=""
+      [ -z "${raw%%[[:space:]]*}" ] || break
+    done
   fi
   # A multi-vessel Bridge configuration is a space-separated list, and the first
   # entry is this seat's own; the rest are inboxes it also watches.
