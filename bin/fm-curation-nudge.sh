@@ -73,7 +73,8 @@
 #
 # An overdue target can also be the durable remainder of a failed publish: the
 # failure cannot record itself because publication is the operation that failed.
-# So --armed probes the state path without changing the authoritative record.
+# So --armed never concludes a supervision outage without first probing the
+# state path, whether a target is overdue or the first record is still missing.
 # A usable path identifies a supervision outage, an unusable path identifies a
 # persistence failure, and an indeterminate probe names both possible causes
 # without asserting either one.
@@ -545,11 +546,42 @@ probe_state_publishability() {
   return 0
 }
 
+diagnose_unexecuted_work() {
+  local kind=$1 elapsed=$2 last=${3:-0} probe_status
+  probe_state_publishability
+  probe_status=$?
+  if [ "$probe_status" -eq 1 ]; then
+    if [ "$kind" = overdue ]; then
+      printf 'CURATION_NUDGE: state persistence failure at %s because %s; the check ran but cannot persist its state, and the prior overdue target remains queued for retry\n' \
+        "$STATE" "$STATE_PROBE_CONDITION"
+    else
+      printf 'CURATION_NUDGE: state persistence failure at %s because %s; the check ran but cannot persist its first authoritative schedule\n' \
+        "$STATE" "$STATE_PROBE_CONDITION"
+    fi
+    return 0
+  fi
+  if [ "$probe_status" -eq 2 ]; then
+    printf 'CURATION_NUDGE: state health indeterminate at %s because %s; the missing work could mean either a state publication failure or a supervision outage, and this reading asserts neither cause\n' \
+      "$STATE" "$STATE_PROBE_CONDITION"
+    return 0
+  fi
+  if [ "$kind" = missing ]; then
+    printf 'CURATION_NUDGE: the curation nudge has been armed for %s minute(s) and has never published its authoritative schedule, so nothing is running this home'"'"'s checks (inspect the monitoring service for this home)\n' \
+      "$(( elapsed / 60 ))"
+  elif [ "$last" -gt 0 ]; then
+    printf 'CURATION_NUDGE: the curation sweep was due %s minute(s) ago and has not fired (it last fired %s); the schedule stands but nothing is executing it (inspect the monitoring service for this home)\n' \
+      "$(( elapsed / 60 ))" "$(epoch_utc "$last")"
+  else
+    printf 'CURATION_NUDGE: the curation sweep was due %s minute(s) ago and has never fired; the schedule stands but nothing is executing it (inspect the monitoring service for this home)\n' \
+      "$(( elapsed / 60 ))"
+  fi
+}
+
 # The reading that is NOT this check's own claim about itself. It asks what the
 # work produced: is there a next target at all, and has anything executed the
 # one there is?
 armed_diagnostic() {
-  local shim_mtime shim_age overdue_by age probe_status
+  local shim_mtime shim_age overdue_by age
   if read_record; then
     if [ "$RECORD_STATE" = refused ]; then
       age=$(( NOW - RECORD_RECORDED ))
@@ -565,25 +597,7 @@ armed_diagnostic() {
     fi
     overdue_by=$(( NOW - RECORD_NEXT ))
     [ "$overdue_by" -ge "$OVERDUE" ] || return 0
-    probe_state_publishability
-    probe_status=$?
-    if [ "$probe_status" -eq 1 ]; then
-      printf 'CURATION_NUDGE: state persistence failure at %s because %s; the check ran but cannot persist its state, and the prior overdue target remains queued for retry\n' \
-        "$STATE" "$STATE_PROBE_CONDITION"
-      return 0
-    fi
-    if [ "$probe_status" -eq 2 ]; then
-      printf 'CURATION_NUDGE: state health indeterminate at %s because %s; the overdue target could mean either a state publication failure or a supervision outage, and this reading asserts neither cause\n' \
-        "$STATE" "$STATE_PROBE_CONDITION"
-      return 0
-    fi
-    if [ "$RECORD_LAST" -gt 0 ]; then
-      printf 'CURATION_NUDGE: the curation sweep was due %s minute(s) ago and has not fired (it last fired %s); the schedule stands but nothing is executing it (inspect the monitoring service for this home)\n' \
-        "$(( overdue_by / 60 ))" "$(epoch_utc "$RECORD_LAST")"
-    else
-      printf 'CURATION_NUDGE: the curation sweep was due %s minute(s) ago and has never fired; the schedule stands but nothing is executing it (inspect the monitoring service for this home)\n' \
-        "$(( overdue_by / 60 ))"
-    fi
+    diagnose_unexecuted_work overdue "$overdue_by" "$RECORD_LAST"
     return 0
   fi
   if [ -e "$REPORT" ]; then
@@ -598,8 +612,7 @@ armed_diagnostic() {
   case "${shim_mtime:-}" in ''|*[!0-9]*) shim_mtime=$NOW ;; esac
   shim_age=$(( NOW - shim_mtime ))
   [ "$shim_age" -ge "$OVERDUE" ] || return 0
-  printf 'CURATION_NUDGE: the curation nudge has been armed for %s minute(s) and has never published its authoritative schedule, so nothing is running this home'"'"'s checks (inspect the monitoring service for this home)\n' \
-    "$(( shim_age / 60 ))"
+  diagnose_unexecuted_work missing "$shim_age"
 }
 
 case "$MODE" in

@@ -628,8 +628,8 @@ Each firing draws 180-420 seconds of fresh jitter for the next target, so succes
 Every session start also runs `--armed`, which reports `CURATION_NUDGE:` when this home is unarmed, has never scheduled a sweep, or has a scheduled sweep nothing is executing.
 That reading is taken from the last-firing epoch and scheduling outcome in the single human-readable, parseable `state/curation-nudge.report` record - what the work produced - and never from the check's own claim to be armed, because a timer's own surfaces keep reporting health long after it stopped firing.
 The report is atomically replaced as one file, so its human account and the schedule the script acts on are always the same bytes.
-Because a failed publication cannot record itself durably, `--armed` probes the state path without changing the record whenever a target is overdue.
-An unusable path reports a persistence failure, a usable path reports the remaining supervision outage, and an indeterminate probe names both candidates while asserting neither; all three leave the prior due event intact.
+Because a failed publication cannot record itself durably, `--armed` probes the state path without changing the record before every conclusion that supervision has stopped, including both an overdue target and a missing first record.
+An unusable path reports a persistence failure, a usable path reports the remaining supervision outage, and an indeterminate probe names both candidates while asserting neither; all three leave any prior due event intact.
 
 The nudge raises a wake and nothing else: it never writes to Bridge, never opens a network connection, and never touches a git repository.
 Firstmate reads the wake and dispatches a crewmate to send the All-Ships notice, per `AGENTS.md` section 12.

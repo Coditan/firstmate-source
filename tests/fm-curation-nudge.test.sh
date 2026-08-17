@@ -342,6 +342,75 @@ test_indeterminate_state_probe_names_both_possible_causes() {
   pass "indeterminate state probe names both causes and asserts neither"
 }
 
+test_missing_record_with_unusable_state_reports_persistence() {
+  local home now out status=0 fakebin probe_bin armed
+  home=$(make_home missing-record-persistence)
+  run_nudge "$home" --arm >/dev/null
+  now=$(date +%s)
+  fakebin=$(make_failing_mv "$home" "$home/state/curation-nudge.report")
+  out=$(PATH="$fakebin:$PATH" FM_CURATION_NUDGE_NOW="$now" run_nudge "$home") || status=$?
+  [ "$status" -ne 0 ] || fail "the first failed publish reported success: $out"
+  [ ! -e "$home/state/curation-nudge.report" ] || fail "the failed first publish left a record"
+
+  probe_bin=$(make_failing_mktemp "$home" 1)
+  armed=$(PATH="$probe_bin:$PATH" FM_CURATION_NUDGE_NOW=$(( now + 7200 )) run_nudge "$home" --armed)
+  assert_contains "$armed" 'state persistence failure' \
+    "a missing record with unusable state must report persistence"
+  assert_contains "$armed" 'cannot persist its first authoritative schedule' \
+    "the missing-record diagnosis must name the failed work"
+  assert_not_contains "$armed" 'nothing is running this home' \
+    "unusable state must not be called a missing watcher"
+  [ ! -e "$home/state/curation-nudge.report" ] || fail "health created a missing record"
+  pass "missing record with unusable state stays a persistence diagnosis"
+}
+
+test_missing_record_with_usable_state_reports_supervision() {
+  local home now out status=0 fakebin armed
+  home=$(make_home missing-record-supervision)
+  run_nudge "$home" --arm >/dev/null
+  now=$(date +%s)
+  fakebin=$(make_failing_mv "$home" "$home/state/curation-nudge.report")
+  out=$(PATH="$fakebin:$PATH" FM_CURATION_NUDGE_NOW="$now" run_nudge "$home") || status=$?
+  [ "$status" -ne 0 ] || fail "the first failed publish reported success: $out"
+
+  armed=$(FM_CURATION_NUDGE_NOW=$(( now + 7200 )) run_nudge "$home" --armed)
+  assert_contains "$armed" 'nothing is running this home' \
+    "a missing record with recovered state must report supervision"
+  assert_not_contains "$armed" 'state persistence failure' \
+    "usable state must not retain a transient persistence diagnosis"
+  assert_not_contains "$armed" 'state health indeterminate' \
+    "usable state must not report an indeterminate diagnosis"
+  [ ! -e "$home/state/curation-nudge.report" ] || fail "health created a missing record"
+  pass "missing record with usable state becomes a supervision diagnosis"
+}
+
+test_missing_record_with_indeterminate_state_names_both_causes() {
+  local home now out status=0 fakebin probe_bin armed
+  home=$(make_home missing-record-indeterminate)
+  run_nudge "$home" --arm >/dev/null
+  now=$(date +%s)
+  fakebin=$(make_failing_mv "$home" "$home/state/curation-nudge.report")
+  out=$(PATH="$fakebin:$PATH" FM_CURATION_NUDGE_NOW="$now" run_nudge "$home") || status=$?
+  [ "$status" -ne 0 ] || fail "the first failed publish reported success: $out"
+
+  probe_bin=$(make_failing_mktemp "$home" 126)
+  armed=$(PATH="$probe_bin:$PATH" FM_CURATION_NUDGE_NOW=$(( now + 7200 )) run_nudge "$home" --armed)
+  assert_contains "$armed" 'state health indeterminate' \
+    "an unavailable missing-record probe must report indeterminate health"
+  assert_contains "$armed" 'state publication failure' \
+    "the indeterminate reading must name the persistence candidate"
+  assert_contains "$armed" 'supervision outage' \
+    "the indeterminate reading must name the supervision candidate"
+  assert_contains "$armed" 'asserts neither cause' \
+    "the indeterminate reading must refuse to choose a cause"
+  assert_not_contains "$armed" 'state persistence failure at' \
+    "the indeterminate reading must not assert persistence"
+  assert_not_contains "$armed" 'nothing is running this home' \
+    "the indeterminate reading must not assert supervision"
+  [ ! -e "$home/state/curation-nudge.report" ] || fail "health created a missing record"
+  pass "missing record with indeterminate state names both causes"
+}
+
 test_the_period_is_forty_eight_hours() {
   local home draws min max
   home=$(make_home period)
@@ -743,6 +812,9 @@ test_unavailable_state_path_is_loud
 test_transient_publish_failure_becomes_a_supervision_diagnosis
 test_unusable_state_path_preserves_the_publish_failure_diagnosis
 test_indeterminate_state_probe_names_both_possible_causes
+test_missing_record_with_unusable_state_reports_persistence
+test_missing_record_with_usable_state_reports_supervision
+test_missing_record_with_indeterminate_state_names_both_causes
 test_the_period_is_forty_eight_hours
 test_successive_firings_drift_rather_than_repeating_one_time
 test_arming_schedules_the_first_sweep_without_waking_anyone

@@ -105,8 +105,8 @@ It reads what the *work* produced:
 
 `state/curation-nudge.report` is both the human-readable report named by the wake and the only authoritative scheduling record.
 It carries the last firing epoch, the current next-target or refusal outcome, the effective cadence parameters, and this vessel's readings, and every transition replaces all of those bytes with one atomic rename.
-A failed publication cannot durably record its own failure because publication is the operation that failed, so `--armed` takes a fresh state-path reading when a target is overdue.
-An unusable path reports persistence, a usable path leaves the overdue target as a supervision outage, and a probe whose result cannot be determined names both candidate causes while asserting neither.
+A failed publication cannot durably record its own failure because publication is the operation that failed, so `--armed` takes a fresh state-path reading before every conclusion that supervision has stopped, whether a target is overdue or the first authoritative record is still missing.
+An unusable path reports persistence, a usable path leaves the missing work as a supervision outage, and a probe whose result cannot be determined names both candidate causes while asserting neither.
 The probe removes its temporary file and never advances or consumes the authoritative due event.
 
 A freshly armed home has not yet scheduled anything, and that is not a fault; the missing-target reading only speaks once the shim has been sitting there longer than a sweep could plausibly take.
