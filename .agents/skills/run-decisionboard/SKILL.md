@@ -23,6 +23,7 @@ This skill is that missing check.
 
     .claude/skills/run-decisionboard/fm-run-decisionboard.sh selftest
 
+Every command here is run from the firstmate repo root, which is where firstmate already sits; from anywhere else, give the driver its absolute path.
 That is the whole loop on a built-in fixture board, with every hop asserted: build, guard, open, drive, query, screenshot, answer, send, poll.
 It ends with `all eight hops held` or it stops on the first hop that did not.
 Run it before trusting a board on this host, and read its header for the measured host facts it is built around.
@@ -111,7 +112,7 @@ The `stop` above is the other half of this - it can knock over a neighbour's bro
 
 **The poll reports the board's own health, and a fatal report there outranks a successful answer.**
 `artifact_failures[1]{kind,detail,severity}: artifact-unavailable,the artifact document responded with HTTP 500,fatal` came back once here alongside an answer that had arrived perfectly.
-It did not reproduce in three further runs, so it is transient rather than understood - but the captain would have met a broken page, and an answer arriving anyway does not make the surface sound.
+It did not reproduce in any later run here, including two that deliberately reused a board path across sessions, so it is transient rather than understood - but the captain would have met a broken page, and an answer arriving anyway does not make the surface sound.
 `selftest` fails on it deliberately; read the poll's own output, never only the answer you were hoping for.
 
 **A board with no armed poll says so on screen.**
