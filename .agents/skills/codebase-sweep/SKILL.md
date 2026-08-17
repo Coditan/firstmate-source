@@ -83,16 +83,18 @@ Reversibility and detectability are properties you can point at, and they are wh
 His words, verbatim, 2026-08-17: **"low is everything reversible without me"**.
 
 That is the definition, and this skill does not narrow it.
+The captain's separate clarification is: **"containment is the missing half"**.
+Reversibility is necessary for both low and middle and therefore does not distinguish them: low is reversible without him and contained inside one module, while middle is reversible, but the blast radius leaves the module.
 An earlier draft on this seat required a finding to be contained behind an existing interface *and* to have a check that would go red.
 That test was this seat's invention and it was stricter than what he asked for; presenting it as his boundary would have been substituting our caution for his instruction.
 It survives below as a confidence aid, clearly labelled as ours, and never as the tier boundary.
 Do not quietly re-narrow the tier back to it.
 
-**Entry test: can this change be undone without him?**
+**Entry test: can this change be undone without him, and is it contained inside one module?**
 Undone means undone in practice, not undone in principle: a revert that anyone on the crew can raise, land, and be finished with.
 A change is not reversible without him if undoing it needs his decision, needs another project to move, or leaves something behind that a revert does not take back.
 
-Typical: extracting an implementation detail, naming, moving a file into the folder its module already implies, adding a test that pins behaviour that already exists, deleting genuinely dead code.
+Typical: extracting an implementation detail, naming, moving a file into the folder its module already implies, adding a test that pins behaviour that already exists because the new test is the check that would go red, deleting genuinely dead code.
 
 Go ahead with these, through the project's selected delivery path, and report them afterwards rather than asking first.
 
@@ -120,7 +122,7 @@ These are sorted and brought to the captain with the proposed shape, not only th
 
 ### HIGH - not provable by tests, or not cheaply undone
 
-Typical: restructuring a web of shallow modules, which is the talk's own thing to restructure and therefore also the largest and least reversible thing it recommends; anything touching identity, credentials, or stored data; anything where the tests themselves are what is being changed, since the instrument and the subject are then the same; anything where nobody can state what correct looks like without him.
+Typical: restructuring a web of shallow modules, which is the talk's own thing to restructure and therefore also the largest and least reversible thing it recommends; anything touching identity, credentials, or stored data; modifying or deleting an existing test, since the instrument and the subject are then the same and you can no longer state what would prove the change wrong; anything where nobody can state what correct looks like without him.
 
 **Entry test: can you state the observation that would prove this change wrong?**
 If you cannot, it is high.

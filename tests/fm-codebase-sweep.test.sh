@@ -52,7 +52,8 @@ test_the_only_ordering_the_talk_gives_is_kept_as_a_target() {
 
 # --- the boundary, which is his and not ours --------------------------------
 
-# His criterion is reversibility alone. An earlier draft on this seat also
+# His criterion combines reversibility with his separate containment
+# clarification. An earlier draft on this seat also
 # required a nameable check, which is stricter than what he asked for; this test
 # exists because re-narrowing it back would look like caution rather than like
 # the override it is.
@@ -61,6 +62,8 @@ test_low_is_his_reversibility_boundary_and_is_not_re_narrowed() {
     "the skill must carry his verbatim definition of the low tier"
   assert_grep 'That is the definition, and this skill does not narrow it' "$SKILL" \
     "the skill must state that it does not narrow his definition"
+  assert_grep 'containment is the missing half' "$SKILL" \
+    "the skill must carry his separate containment clarification"
   assert_grep 'Do not quietly re-narrow the tier' "$SKILL" \
     "the skill must forbid re-narrowing the tier to the stricter test"
   pass "the low tier keeps his reversibility boundary unnarrowed"
@@ -81,7 +84,7 @@ test_detectability_is_a_flag_of_ours_and_never_a_demotion() {
 test_each_tier_carries_a_falsifiable_entry_test() {
   local phrase
   for phrase in \
-    '**Entry test: can this change be undone without him?**' \
+    '**Entry test: can this change be undone without him, and is it contained inside one module?**' \
     '**Entry test: would a caller outside this module change, or would a person have a view on the shape?**' \
     '**Entry test: can you state the observation that would prove this change wrong?**'; do
     assert_grep "$phrase" "$SKILL" "the skill lost an entry test: $phrase"
