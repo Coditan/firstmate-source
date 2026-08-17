@@ -130,11 +130,14 @@ install_fake_curl() {
   cat > "$fakebin/curl" <<'SH'
 #!/usr/bin/env bash
 # Modes: file:<path> serve it as HTTP 200; file000:<path> serve it with status
-# 000; http:<code> answer that code with an empty body; exit:<n> fail the fetch;
-# garbage answer 200 with a non-document.
+# 000; file-unbounded:<path> ignores the requested size limit; http:<code>
+# answers that code with an empty body; exit:<n> fails the fetch; garbage answers
+# 200 with a non-document.
 out=
+max_bytes=
 for (( i = 1; i <= $#; i++ )); do
   if [ "${!i}" = -o ]; then j=$(( i + 1 )); out=${!j}; fi
+  if [ "${!i}" = --max-filesize ]; then j=$(( i + 1 )); max_bytes=${!j}; fi
 done
 url=${!#}
 [ -z "${FM_TEST_CURL_CALLS:-}" ] || printf '%s %s\n' "$url" "${FM_TEST_CURL_MODE:-unset}" >> "$FM_TEST_CURL_CALLS"
@@ -148,8 +151,15 @@ if [ -n "${FM_TEST_CURL_BLOCK_READY:-}" ]; then
   fi
 fi
 case "${FM_TEST_CURL_MODE:-}" in
-  file:*) cat "${FM_TEST_CURL_MODE#file:}" > "$out" 2>/dev/null || exit 7; printf '200'; exit 0 ;;
-  file000:*) cat "${FM_TEST_CURL_MODE#file000:}" > "$out" 2>/dev/null || exit 7; printf '000'; exit 0 ;;
+  file:*|file000:*)
+    source=${FM_TEST_CURL_MODE#*:}
+    cat "$source" > "$out" 2>/dev/null || exit 7
+    bytes=$(wc -c < "$out" | tr -d '[:space:]')
+    [ -z "$max_bytes" ] || [ "$bytes" -le "$max_bytes" ] || exit 63
+    case "$FM_TEST_CURL_MODE" in file000:*) printf '000' ;; *) printf '200' ;; esac
+    exit 0
+    ;;
+  file-unbounded:*) cat "${FM_TEST_CURL_MODE#file-unbounded:}" > "$out" 2>/dev/null || exit 7; printf '200'; exit 0 ;;
   http:*) : > "$out"; printf '%s' "${FM_TEST_CURL_MODE#http:}"; exit 0 ;;
   exit:*) : > "$out"; exit "${FM_TEST_CURL_MODE#exit:}" ;;
   garbage) printf 'not a status document\n' > "$out"; printf '200'; exit 0 ;;
@@ -334,6 +344,40 @@ test_an_unreachable_status_page_is_unmeasurable_and_never_clear() {
   out=$(run_watch "$home" --force)
   assert_contains "$out" 'All Systems Operational' "recovery must reach a session"
   pass "an unreadable status page reports unmeasurable, once, and never as clear"
+}
+
+test_an_oversized_status_document_is_unmeasurable_and_never_parsed() {
+  local home fallback_home out entry
+  home=$(make_home oversized)
+  run_watch "$home" --arm >/dev/null
+  serve "$home" clear
+
+  out=$(FM_FORGE_STATUS_MAX_BYTES=100 run_watch "$home" --force)
+  assert_contains "$out" 'UNMEASURABLE' "an oversized body must be unmeasurable"
+  assert_contains "$out" '100-byte response limit' "the wake must name the configured size limit"
+  assert_contains "$out" 'NOT a clear reading' "an oversized body must refuse to be read as healthy"
+  assert_not_contains "$out" 'All Systems Operational' "an oversized body must not be parsed as a reading"
+  [ "$(entry_count "$home")" -eq 1 ] || fail "the oversized refusal was not recorded once"
+  entry=$(run_watch "$home" --log 1)
+  assert_contains "$entry" 'reading: unmeasurable' "the oversized entry must remain unmeasurable"
+  assert_contains "$entry" '100-byte response limit' "the entry must retain the concrete size condition"
+
+  out=$(FM_FORGE_STATUS_MAX_BYTES=100 run_watch "$home" --force)
+  [ -z "$out" ] || fail "an unchanged oversized refusal repeated: $out"
+  [ "$(entry_count "$home")" -eq 1 ] || fail "the oversized refusal was appended twice"
+
+  fallback_home=$(make_home oversized-fallback)
+  FM_TEST_CURL_MODE="file-unbounded:$fallback_home/clear.json"
+  export FM_TEST_CURL_MODE
+  out=$(FM_FORGE_STATUS_MAX_BYTES=100 run_watch "$fallback_home" --force)
+  assert_contains "$out" 'UNMEASURABLE' "the parser boundary must reject a body the transport allowed"
+  assert_contains "$out" 'exceeding the configured 100-byte response limit' \
+    "the fallback refusal must name the measured body and configured limit"
+  assert_not_contains "$out" 'All Systems Operational' \
+    "the fallback refusal must happen before status parsing"
+  [ "$(entry_count "$fallback_home")" -eq 1 ] \
+    || fail "the parser-boundary oversized refusal was not recorded once"
+  pass "an oversized status body is recorded once as unmeasurable and never parsed"
 }
 
 test_http_000_is_unmeasurable_but_non_http_000_can_be_read() {
@@ -871,6 +915,7 @@ test_bootstrap_arms_the_watch_and_asks_whether_it_is_still_running() {
 test_a_new_reading_is_recorded_once_and_never_repeated_while_it_holds
 test_the_wake_says_what_a_vessel_should_not_conclude
 test_an_unreachable_status_page_is_unmeasurable_and_never_clear
+test_an_oversized_status_document_is_unmeasurable_and_never_parsed
 test_http_000_is_unmeasurable_but_non_http_000_can_be_read
 test_a_status_document_cannot_forge_a_record_field
 test_the_cadence_is_settable_and_the_setting_in_force_is_readable

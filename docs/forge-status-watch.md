@@ -57,7 +57,7 @@ The wake line carries it, along with the reading itself, the cadence in force, b
 ## Cannot reach is not all clear
 
 A watch that goes quiet when the network fails is worse than no watch, because silence reads as good news exactly when it is not.
-A reading that cannot be taken - no `curl`, no `jq`, no answer, a non-2xx answer, an empty or unparseable body - is recorded as an `unmeasurable` entry naming the concrete condition, and its wake says `UNMEASURABLE` and states in plain words that it is not a clear reading.
+A reading that cannot be taken - no `curl`, no `jq`, no answer, a non-2xx answer, a body larger than `FM_FORGE_STATUS_MAX_BYTES`, or an empty or unparseable body - is recorded as an `unmeasurable` entry naming the concrete condition, and its wake says `UNMEASURABLE` and states in plain words that it is not a clear reading.
 
 There is one narrow status-code exception for an address whose scheme is neither HTTP nor HTTPS, such as a local `file://` status document configured through `FM_FORGE_STATUS_URL`.
 Because such a transport cannot carry an HTTP status, curl may report `000` after a successful fetch, and the document may be read.
@@ -93,7 +93,9 @@ A watch that tightened itself would be classifying severity by another route.
 Cadence changes and the complete observation read, append, and schedule transaction share one home-scoped lock.
 A detect or force observation exits quietly when another writer holds it, so overlapping sweeps neither wait on the fetch timeout nor append the same reading twice.
 Read-only modes do not acquire the lock or create state.
+The fetch accepts at most `FM_FORGE_STATUS_MAX_BYTES` bytes, defaulting to 1000000, and the script verifies that bound again before parsing.
 The effective stale-lock recovery bound is at least the configured fetch timeout plus 60 seconds and is recorded in `forge-status.report`.
+Bounding both fetch duration and body size keeps the complete fetch, parse, hash, append, and publication transaction well inside that recovery margin.
 
 The cadence is the target, not the observation instant.
 The watcher sees a due target on its next `state/*.check.sh` sweep, so an observation lands at the target plus however far that sweep has to travel, and that sweep's period belongs to `bin/fm-watch.sh`.

@@ -38,12 +38,13 @@
 # CANNOT REACH IS NOT ALL CLEAR
 # A watch that goes quiet when the network fails is worse than no watch,
 # because silence reads as good news exactly when it is not. A reading that
-# cannot be taken - no curl, no jq, no answer, a non-2xx answer, an
-# unparseable body - is recorded as an UNMEASURABLE entry naming the condition,
-# and its wake says so in those words. Unmeasurable is never rendered as clear
-# and never omitted. It is fingerprinted like any other reading, so a network
-# that stays down appends once rather than every sweep, and the last entry in
-# the log keeps saying unmeasurable for as long as it is true.
+# cannot be taken - no curl, no jq, no answer, a non-2xx answer, a body larger
+# than the configured bound, or an unparseable body - is recorded as an
+# UNMEASURABLE entry naming the condition, and its wake says so in those words.
+# Unmeasurable is never rendered as clear and never omitted. It is fingerprinted
+# like any other reading, so a network that stays down appends once rather than
+# every sweep, and the last entry in the log keeps saying unmeasurable for as
+# long as it is true.
 # The deliberate narrow exception is a non-HTTP URL such as a local file://
 # status document configured through FM_FORGE_STATUS_URL: curl reports status
 # 000 because that transport cannot carry an HTTP status, so a successful fetch
@@ -145,6 +146,8 @@
 #   FM_FORGE_STATUS_TIMEOUT       seconds allowed for the fetch (default 10),
 #                                 kept well inside the watcher's per-check
 #                                 timeout so supervision is never starved
+#   FM_FORGE_STATUS_MAX_BYTES     largest accepted response body in bytes
+#                                 (default 1000000)
 #   FM_FORGE_STATUS_OVERDUE       how far past a relaxed target the watch may
 #                                 sit before --armed calls the cadence stopped
 #                                 (default 7200)
@@ -152,8 +155,11 @@
 #                                 (default 1800)
 #   FM_FORGE_STATUS_LOCK_STALE_AFTER requested minimum lock recovery age
 #                                 (default 60); the effective bound is never
-#                                 below the fetch timeout plus 60s or 60s total
-#                                 and is recorded in forge-status.report
+#                                 below the bounded fetch timeout plus 60s or
+#                                 60s total and is recorded in
+#                                 forge-status.report. The body-size bound keeps
+#                                 parsing, hashing, appending, and publication
+#                                 well inside that recovery margin.
 #   FM_FORGE_STATUS_NOW           override the current epoch (tests)
 #   FM_FORGE_STATUS_DISABLE=1     silence detect and --armed only, so suites that
 #                                 compose bin/fm-bootstrap.sh neither reach the
@@ -178,6 +184,7 @@ RAISED_INTERVAL=${FM_FORGE_STATUS_RAISED_INTERVAL:-300}
 JITTER_MIN=${FM_FORGE_STATUS_JITTER_MIN:-180}
 JITTER_MAX=${FM_FORGE_STATUS_JITTER_MAX:-420}
 TIMEOUT=${FM_FORGE_STATUS_TIMEOUT:-10}
+MAX_BYTES=${FM_FORGE_STATUS_MAX_BYTES:-1000000}
 OVERDUE=${FM_FORGE_STATUS_OVERDUE:-7200}
 OVERDUE_RAISED=${FM_FORGE_STATUS_OVERDUE_RAISED:-1800}
 LOCK_STALE_CONFIGURED=${FM_FORGE_STATUS_LOCK_STALE_AFTER:-60}
@@ -186,6 +193,7 @@ case "$RAISED_INTERVAL" in ''|*[!0-9]*|0) RAISED_INTERVAL=300 ;; esac
 case "$JITTER_MIN" in ''|*[!0-9]*) JITTER_MIN=180 ;; esac
 case "$JITTER_MAX" in ''|*[!0-9]*) JITTER_MAX=420 ;; esac
 case "$TIMEOUT" in ''|*[!0-9]*|0) TIMEOUT=10 ;; esac
+case "$MAX_BYTES" in ''|*[!0-9]*|0) MAX_BYTES=1000000 ;; esac
 case "$OVERDUE" in ''|*[!0-9]*) OVERDUE=7200 ;; esac
 case "$OVERDUE_RAISED" in ''|*[!0-9]*) OVERDUE_RAISED=1800 ;; esac
 case "$LOCK_STALE_CONFIGURED" in ''|*[!0-9]*) LOCK_STALE_CONFIGURED=60 ;; esac
@@ -386,7 +394,7 @@ set_unmeasurable() {  # <http> <condition>
 # happy path lands on set_unmeasurable with the concrete condition, and none of
 # them lands on "operational".
 observe() {
-  local body code status canonical jq_indicator scheme
+  local body body_bytes code status canonical jq_indicator scheme
   READING_UPDATE=''
   command -v curl >/dev/null 2>&1 \
     || { set_unmeasurable '-' 'curl is not installed on this seat, so the status page cannot be read at all'; return 0; }
@@ -395,12 +403,29 @@ observe() {
 
   body=$(mktemp "${TMPDIR:-/tmp}/fm-forge-status.XXXXXX" 2>/dev/null) \
     || { set_unmeasurable '-' 'temporary space for the fetched status document could not be created'; return 0; }
-  code=$(curl -m "$TIMEOUT" -s -o "$body" -w '%{http_code}' \
+  code=$(curl -m "$TIMEOUT" -s --max-filesize "$MAX_BYTES" -o "$body" -w '%{http_code}' \
     -H 'Accept: application/json' "$URL" 2>/dev/null)
   status=$?
   if [ "$status" -ne 0 ]; then
     rm -f -- "$body"
+    if [ "$status" -eq 63 ]; then
+      set_unmeasurable '-' "the status page at $URL exceeded the configured ${MAX_BYTES}-byte response limit"
+      return 0
+    fi
     set_unmeasurable '-' "the status page at $URL could not be read (fetch exit $status, bounded at ${TIMEOUT}s)"
+    return 0
+  fi
+  body_bytes=$(wc -c < "$body" 2>/dev/null | tr -d '[:space:]')
+  case "$body_bytes" in
+    ''|*[!0-9]*)
+      rm -f -- "$body"
+      set_unmeasurable "$code" "the response size from $URL could not be measured before parsing"
+      return 0
+      ;;
+  esac
+  if [ "$body_bytes" -gt "$MAX_BYTES" ]; then
+    rm -f -- "$body"
+    set_unmeasurable "$code" "the status page at $URL returned ${body_bytes} bytes, exceeding the configured ${MAX_BYTES}-byte response limit"
     return 0
   fi
   scheme=${URL%%:*}
