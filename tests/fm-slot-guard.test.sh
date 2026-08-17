@@ -45,6 +45,7 @@
 #   (r) retry refresh refuses a holder and preserves its lock
 #   (s) pool lease refusal is terminal during child cleanup
 #   (t) unreadable pool ownership refuses without mutation
+#   (u) Orca stale-lock cleanup never consults treehouse
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -238,6 +239,36 @@ change_lease_on_return() {  # <case> <holder>
 
 fail_pool_status() {  # <case>
   printf 'yes\n' > "$1/status-fails"
+}
+
+configure_orca_stale_lock_case() {  # <case>
+  local case_dir=$1 lock
+  lock=$(git -C "$case_dir/slot" rev-parse --git-path index.lock)
+  mkdir -p "$(dirname "$lock")"
+  : > "$lock"
+  printf '%s\n' "$lock" > "$case_dir/orca-lock"
+  cat > "$case_dir/fakebin/git" <<'SH'
+#!/usr/bin/env bash
+lock=$(cat "${FM_TEST_CASE_DIR:?}/orca-lock")
+case " $* " in
+  *" status --porcelain "*) [ ! -e "$lock" ] || exit 128 ;;
+esac
+exec /usr/bin/git "$@"
+SH
+  cat > "$case_dir/fakebin/lsof" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+  cat > "$case_dir/fakebin/orca" <<'SH'
+#!/usr/bin/env bash
+case " $* " in
+  *" worktree show "*) printf '{"ok":true,"result":{"worktree":{"id":"wt-orca","path":"%s"}}}\n' "${FM_TEST_CASE_DIR:?}/slot" ;;
+  *" worktree rm "*) printf 'removed\n' > "${FM_TEST_CASE_DIR:?}/orca-removed"; printf '{"ok":true,"result":{}}\n' ;;
+  *" terminal close "*) printf '{"ok":true,"result":{}}\n' ;;
+  *) printf '{"ok":true,"result":{}}\n' ;;
+esac
+SH
+  chmod +x "$case_dir/fakebin/git" "$case_dir/fakebin/lsof" "$case_dir/fakebin/orca"
 }
 
 run_teardown() {  # <case> <id> [args...]
@@ -739,6 +770,38 @@ test_unreadable_pool_refuses_without_mutation() {
   pass "(t) unreadable pool ownership refuses without mutation"
 }
 
+test_orca_stale_lock_does_not_consult_treehouse() {
+  local case_dir rc
+  case_dir=$(make_case orca-stale-lock)
+  cat > "$case_dir/state/orca-task.meta" <<EOF
+window=term-orca
+terminal=term-orca
+worktree=$case_dir/slot
+project=$case_dir/project
+harness=claude
+kind=ship
+mode=no-mistakes
+yolo=off
+backend=orca
+orca_worktree_id=wt-orca
+EOF
+  configure_orca_stale_lock_case "$case_dir"
+  fail_pool_status "$case_dir"
+
+  set +e
+  FM_STALE_WORKTREE_LOCK_AGE_SECS=0 FM_STALE_WORKTREE_LOCK_RETRY_WAIT_SECS=0 \
+    run_teardown "$case_dir" orca-task > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "orca-stale-lock: Orca cleanup should ignore unavailable treehouse status"
+  assert_present "$case_dir/orca-removed" "orca-stale-lock: Orca worktree removal was not reached"
+  assert_absent "$case_dir/state/orca-task.meta" "orca-stale-lock: successful cleanup should remove task meta"
+  assert_no_grep "ownership" "$case_dir/stderr" "orca-stale-lock: Orca cleanup produced a pool refusal"
+  expect_code 0 "$(cat "$case_dir/status-count")" "orca-stale-lock: Orca cleanup consulted treehouse status"
+  pass "(u) Orca stale-lock cleanup never consults treehouse"
+}
+
 test_stale_record_live_holder_refuses
 test_sole_owner_allows
 test_force_does_not_override
@@ -758,5 +821,6 @@ test_secondmate_home_refusal_preserves_records
 test_retry_refreshes_ownership_and_preserves_lock
 test_child_pool_lease_refusal_is_terminal
 test_unreadable_pool_refuses_without_mutation
+test_orca_stale_lock_does_not_consult_treehouse
 
 printf '\nall fm-slot-guard tests passed\n'

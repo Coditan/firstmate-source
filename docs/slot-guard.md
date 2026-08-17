@@ -120,6 +120,7 @@ It sweeps this home's recorded slots on the ordinary watcher cadence and, when a
 The marker is the point: the protection exists before any teardown runs and survives a caller that never asks.
 
 **`bin/fm-teardown.sh`** freshly asks the complete ownership question and rebuilds lease preconditions before every return attempt and lock mutation, using the owning home's state directory for nested secondmate cleanup, translating the pool's own lease-precondition failures into terminal ownership refusals, propagating refusal through every parent cleanup without deleting its records, relying on the return's reset to remove hooks, and performing best-effort branch-ref cleanup through the project repository without touching the released worktree path.
+The pool question binds only to treehouse-backed paths; Orca and other non-pool cleanup retain their backend-specific safety checks and never refuse because treehouse status is unavailable.
 When the slot is leased to the task being torn down it also passes `--if-lease-holder`, so for those slots the refusal is enforced by the pool itself rather than by firstmate's memory.
 
 The refusal holds under `--force` deliberately.

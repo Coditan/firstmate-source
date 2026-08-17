@@ -556,7 +556,7 @@ worktree_safety_blocked_by_lock() {
 }
 
 cleanup_stale_lock_for_safety_check() {
-  local dir=$1 lock
+  local dir=$1 ownership_refresh=${2:-} lock
   lock=$(worktree_git_lock_path "$dir") || lock=""
   [ -n "$lock" ] && [ -e "$lock" ] || return 0
 
@@ -569,7 +569,7 @@ cleanup_stale_lock_for_safety_check() {
   fi
 
   if fm_lock_is_provably_stale "$lock" "$dir" "$STALE_WORKTREE_LOCK_AGE_SECS"; then
-    refresh_teardown_return_ownership "$dir" "$PROJ" "worktree" "$ID" "$STATE" || return $?
+    [ -z "$ownership_refresh" ] || "$ownership_refresh" || return $?
     rm -f "$lock"
     echo "teardown: removed provably-stale git lock $lock (age >= ${STALE_WORKTREE_LOCK_AGE_SECS}s, no live holder) and retrying worktree safety checks" >&2
     return 0
@@ -651,6 +651,14 @@ refresh_teardown_return_ownership() {  # <dir> <cd_dir> <label> <self-id> <state
       return "$TEARDOWN_SLOT_HELD_REFUSED"
       ;;
   esac
+}
+
+refresh_current_treehouse_ownership() {
+  refresh_teardown_return_ownership "$WT" "$PROJ" "worktree" "$ID" "$STATE"
+}
+
+current_worktree_uses_treehouse() {
+  [ "$BACKEND" != orca ] && [ "$KIND" != secondmate ]
 }
 
 # Return a worktree/home via `treehouse return --force`, tolerating a transient or
@@ -1146,7 +1154,6 @@ cleanup_firstmate_home_children() {
     elif [ "$child_backend" = orca ]; then
       if [ -n "$child_wt" ] && [ -d "$child_wt" ]; then
         validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
-        require_no_other_slot_holder "$child_wt" "$child_proj" "child worktree" "$child_id" "$sub_state" || return $?
       fi
       fm_backend_remove_worktree "$child_backend" "$child_orca_worktree_id" || return 1
     elif [ -n "$child_wt" ] && [ -d "$child_wt" ]; then
@@ -1238,7 +1245,11 @@ if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
   else
     safety_rc=$?
     if [ "$safety_rc" -eq "$TEARDOWN_WORKTREE_SAFETY_LOCK_BLOCKED" ]; then
-      cleanup_stale_lock_for_safety_check "$WT" || exit 1
+      stale_lock_ownership_refresh=
+      if current_worktree_uses_treehouse; then
+        stale_lock_ownership_refresh=refresh_current_treehouse_ownership
+      fi
+      cleanup_stale_lock_for_safety_check "$WT" "$stale_lock_ownership_refresh" || exit $?
       validate_worktree_teardown_safety || exit 1
     else
       exit 1
@@ -1246,7 +1257,7 @@ if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
   fi
 fi
 
-if [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
+if [ -d "$WT" ] && current_worktree_uses_treehouse; then
   require_no_other_slot_holder "$WT" "$PROJ" "worktree" "$ID" "$STATE" || exit $?
 fi
 
