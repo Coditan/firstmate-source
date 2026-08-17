@@ -59,6 +59,10 @@ The wake line carries it, along with the reading itself, the cadence in force, b
 A watch that goes quiet when the network fails is worse than no watch, because silence reads as good news exactly when it is not.
 A reading that cannot be taken - no `curl`, no `jq`, no answer, a non-2xx answer, an empty or unparseable body - is recorded as an `unmeasurable` entry naming the concrete condition, and its wake says `UNMEASURABLE` and states in plain words that it is not a clear reading.
 
+There is one narrow non-HTTP exception for a local `file://` status document configured through `FM_FORGE_STATUS_URL`.
+Because that transport cannot carry an HTTP status, curl reports `000` after a successful fetch, and the document may be read.
+For `http://` and `https://` addresses, `000` remains a non-2xx answer and is recorded as unmeasurable.
+
 Unmeasurable readings are fingerprinted like any other, so a network that stays down appends once rather than every sweep, while the last entry in the log keeps saying unmeasurable for as long as that is true.
 A *different* failure mode - a timeout becoming a 503, a 503 becoming an unreadable body - is a different reading and is recorded as one.
 
@@ -85,6 +89,10 @@ bin/fm-forge-status.sh --log 3              # the last three readings
 
 The script never changes its own cadence.
 A watch that tightened itself would be classifying severity by another route.
+
+Cadence changes and the complete observation read, append, and schedule transaction share one home-scoped lock.
+A watcher check exits quietly when another writer holds it, so overlapping sweeps neither wait on the fetch timeout nor append the same reading twice.
+Read-only modes do not acquire the lock or create state.
 
 The cadence is the target, not the observation instant.
 The watcher sees a due target on its next `state/*.check.sh` sweep, so an observation lands at the target plus however far that sweep has to travel, and that sweep's period belongs to `bin/fm-watch.sh`.

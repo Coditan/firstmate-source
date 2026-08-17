@@ -44,6 +44,11 @@
 # and never omitted. It is fingerprinted like any other reading, so a network
 # that stays down appends once rather than every sweep, and the last entry in
 # the log keeps saying unmeasurable for as long as it is true.
+# The deliberate narrow exception is a non-HTTP URL such as a local file://
+# status document configured through FM_FORGE_STATUS_URL: curl reports status
+# 000 because that transport cannot carry an HTTP status, so a successful fetch
+# may still be read. For http:// and https:// URLs, 000 is non-2xx and therefore
+# unmeasurable like every other non-2xx answer.
 #
 # THE CADENCE IS SETTABLE, AND ITS CURRENT SETTING IS READABLE
 #   raised   every 300s, for while something is being watched.
@@ -58,6 +63,9 @@
 # trade the thing being watched for the tidiness of the schedule.
 # --status and --cadence both print which cadence is in force, so a reader can
 # always tell.
+# The observation read/append/schedule transaction and cadence changes share a
+# home-scoped non-blocking lock. A watcher check that finds another writer exits
+# quietly, while read-only modes neither acquire the lock nor create its state.
 #
 # The cadence is the target, not the observation instant. The watcher sees a due
 # target on its next state/*.check.sh sweep, so an observation lands at the
@@ -157,6 +165,7 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 LOG="$STATE/forge-status.log"
 REPORT="$STATE/forge-status.report"
 CHECK="$STATE/forge-status.check.sh"
+TRANSACTION_LOCK="$STATE/forge-status.transaction.lock"
 
 URL=${FM_FORGE_STATUS_URL:-https://www.githubstatus.com/api/v2/summary.json}
 INTERVAL=${FM_FORGE_STATUS_INTERVAL:-7200}
@@ -383,8 +392,14 @@ observe() {
     set_unmeasurable '-' "the status page at $URL could not be read (fetch exit $status, bounded at ${TIMEOUT}s)"
     return 0
   fi
-  case "$code" in
-    2[0-9][0-9]|000) ;;
+  case "$code:$URL" in
+    2[0-9][0-9]:*) ;;
+    000:http://*|000:https://*)
+      rm -f -- "$body"
+      set_unmeasurable "$code" "the status page at $URL answered HTTP $code instead of a status document"
+      return 0
+      ;;
+    000:*) ;;
     *)
       rm -f -- "$body"
       set_unmeasurable "$code" "the status page at $URL answered HTTP $code instead of a status document"
@@ -738,6 +753,12 @@ if [ "$MODE" = cadence ] && [ -n "$CADENCE_ARG" ] && ! mkdir -p "$STATE" 2>/dev/
   exit 1
 fi
 
+acquire_transaction_lock() {
+  command -v flock >/dev/null 2>&1 || return 2
+  exec 9>"$TRANSACTION_LOCK" || return 2
+  flock -n 9 || return 1
+}
+
 # Write this home's watcher shim and bind it to its own bytes. Every location is
 # baked in rather than inherited, because the watcher runs a check from a private
 # snapshot with its own environment: a shim that guessed its home would observe
@@ -961,6 +982,16 @@ case "$MODE" in
       fi
       exit 0
     fi
+    lock_status=0
+    acquire_transaction_lock || lock_status=$?
+    if [ "$lock_status" -ne 0 ]; then
+      if [ "$lock_status" -eq 1 ]; then
+        printf 'fm-forge-status: another forge-status update is already in progress\n' >&2
+      else
+        printf 'fm-forge-status: cannot lock forge-status state in %s\n' "$STATE" >&2
+      fi
+      exit 1
+    fi
     read_record || true
     schedule_next "$CADENCE_ARG" "$RECORD_OBSERVED" "$RECORD_ENTRY"
     transition_status=$?
@@ -977,6 +1008,20 @@ case "$MODE" in
 esac
 
 [ "$MODE" = detect ] && [ "${FM_FORGE_STATUS_DISABLE:-0}" = 1 ] && exit 0
+
+lock_status=0
+acquire_transaction_lock || lock_status=$?
+if [ "$lock_status" -ne 0 ]; then
+  if [ "$lock_status" -eq 1 ] && [ "$MODE" = detect ]; then
+    exit 0
+  fi
+  if [ "$lock_status" -eq 1 ]; then
+    printf 'fm-forge-status: another forge-status update is already in progress\n' >&2
+  else
+    printf 'fm-forge-status: cannot lock forge-status state in %s\n' "$STATE" >&2
+  fi
+  exit 1
+fi
 
 if [ "$MODE" = detect ]; then
   if ! read_record; then

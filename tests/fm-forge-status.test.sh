@@ -90,16 +90,22 @@ install_fake_curl() {
   fakebin=$(fm_fakebin "$home")
   cat > "$fakebin/curl" <<'SH'
 #!/usr/bin/env bash
-# Modes: file:<path> serve it as HTTP 200; http:<code> answer that code with an
-# empty body; exit:<n> fail the fetch; garbage answer 200 with a non-document.
+# Modes: file:<path> serve it as HTTP 200; file000:<path> serve it with status
+# 000; http:<code> answer that code with an empty body; exit:<n> fail the fetch;
+# garbage answer 200 with a non-document.
 out=
 for (( i = 1; i <= $#; i++ )); do
   if [ "${!i}" = -o ]; then j=$(( i + 1 )); out=${!j}; fi
 done
 url=${!#}
 [ -z "${FM_TEST_CURL_CALLS:-}" ] || printf '%s %s\n' "$url" "${FM_TEST_CURL_MODE:-unset}" >> "$FM_TEST_CURL_CALLS"
+if [ -n "${FM_TEST_CURL_BLOCK_READY:-}" ]; then
+  : > "$FM_TEST_CURL_BLOCK_READY"
+  while [ ! -e "${FM_TEST_CURL_BLOCK_RELEASE:?}" ]; do sleep 0.05; done
+fi
 case "${FM_TEST_CURL_MODE:-}" in
   file:*) cat "${FM_TEST_CURL_MODE#file:}" > "$out" 2>/dev/null || exit 7; printf '200'; exit 0 ;;
+  file000:*) cat "${FM_TEST_CURL_MODE#file000:}" > "$out" 2>/dev/null || exit 7; printf '000'; exit 0 ;;
   http:*) : > "$out"; printf '%s' "${FM_TEST_CURL_MODE#http:}"; exit 0 ;;
   exit:*) : > "$out"; exit "${FM_TEST_CURL_MODE#exit:}" ;;
   garbage) printf 'not a status document\n' > "$out"; printf '200'; exit 0 ;;
@@ -286,6 +292,24 @@ test_an_unreachable_status_page_is_unmeasurable_and_never_clear() {
   pass "an unreadable status page reports unmeasurable, once, and never as clear"
 }
 
+test_http_000_is_unmeasurable_but_non_http_000_can_be_read() {
+  local home out entry
+  home=$(make_home status000)
+
+  FM_TEST_CURL_MODE="file000:$home/clear.json"
+  export FM_TEST_CURL_MODE
+  out=$(FM_FORGE_STATUS_URL=https://status.example.test/summary.json run_watch "$home" --force)
+  assert_contains "$out" 'UNMEASURABLE' "HTTP status 000 must not be accepted for HTTPS"
+  entry=$(run_watch "$home" --log 1)
+  assert_contains "$entry" 'HTTP 000' "the HTTPS failure must retain its concrete status"
+
+  out=$(FM_FORGE_STATUS_URL="file://$home/clear.json" run_watch "$home" --force)
+  assert_contains "$out" 'All Systems Operational' "a successful non-HTTP status document must be read"
+  entry=$(run_watch "$home" --log 1)
+  assert_contains "$entry" 'reading: measured' "the non-HTTP document must be recorded as measured"
+  pass "HTTP 000 is unmeasurable while non-HTTP 000 can carry a reading"
+}
+
 test_a_status_document_cannot_forge_a_record_field() {
   local home out entry fields
   home=$(make_home injection)
@@ -343,6 +367,38 @@ test_the_cadence_is_settable_and_the_setting_in_force_is_readable() {
   [ "$(( ( next / 60 ) % 60 % 5 ))" -ne 0 ] \
     || fail "the relaxed target landed on the five-minute grid"
   pass "the cadence can be raised and lowered, and the setting in force is readable"
+}
+
+test_state_changes_are_serialized_without_blocking_a_check() {
+  local home now due first_out second_out status=0
+  home=$(make_home serialized)
+  now=1786968000
+  serve "$home" clear
+  FM_FORGE_STATUS_NOW="$now" run_watch "$home" >/dev/null
+  due=$(record_value "$home" next-observation-epoch)
+
+  FM_TEST_CURL_BLOCK_READY="$home/fetch-ready" \
+    FM_TEST_CURL_BLOCK_RELEASE="$home/fetch-release" \
+    FM_FORGE_STATUS_NOW="$due" run_watch "$home" > "$home/first-out" &
+  first_pid=$!
+  while [ ! -e "$home/fetch-ready" ]; do sleep 0.05; done
+
+  second_out=$(FM_FORGE_STATUS_NOW="$due" run_watch "$home") || status=$?
+  [ "$status" -eq 0 ] || fail "a contending watcher check must exit quietly: $second_out"
+  [ -z "$second_out" ] || fail "a contending watcher check must print nothing: $second_out"
+
+  status=0
+  second_out=$(FM_FORGE_STATUS_NOW="$due" run_watch "$home" --cadence raised 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "a concurrent cadence change must not report success"
+  assert_contains "$second_out" 'already in progress' "a rejected cadence change must explain the contention"
+
+  : > "$home/fetch-release"
+  wait "$first_pid" || fail "the lock-holding observation failed"
+  first_out=$(cat "$home/first-out")
+  assert_contains "$first_out" 'FORGE_STATUS:' "the lock-holding observation must complete"
+  [ "$(entry_count "$home")" -eq 1 ] || fail "concurrent checks appended duplicate readings"
+  [ "$(record_value "$home" cadence)" = relaxed ] || fail "a rejected cadence change altered persisted cadence"
+  pass "state changes serialize and a contending check exits quietly"
 }
 
 test_a_sweep_that_is_not_due_takes_no_reading_and_a_due_one_does() {
@@ -701,8 +757,10 @@ test_bootstrap_arms_the_watch_and_asks_whether_it_is_still_running() {
 test_a_new_reading_is_recorded_once_and_never_repeated_while_it_holds
 test_the_wake_says_what_a_vessel_should_not_conclude
 test_an_unreachable_status_page_is_unmeasurable_and_never_clear
+test_http_000_is_unmeasurable_but_non_http_000_can_be_read
 test_a_status_document_cannot_forge_a_record_field
 test_the_cadence_is_settable_and_the_setting_in_force_is_readable
+test_state_changes_are_serialized_without_blocking_a_check
 test_a_sweep_that_is_not_due_takes_no_reading_and_a_due_one_does
 test_the_relaxed_scheduler_never_lands_on_the_five_minute_grid
 test_a_window_with_no_off_grid_minute_refuses_rather_than_scheduling_on_it
