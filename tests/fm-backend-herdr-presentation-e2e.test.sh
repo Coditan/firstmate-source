@@ -1127,7 +1127,8 @@ lab pane get "$OLD_RESTART_PANE" >/dev/null 2>&1 \
   || fail "restart fallback closed the old projected pane"
 pass "real Herdr lab: restart preserves the token label as an agent-free husk that is left untouched while the task respawns flat"
 
-teardown_task restart1 "$HOME_DIR" > "$TMP_ROOT/restart-teardown.out" 2> "$TMP_ROOT/restart-teardown.err" \
+# The long-lived anchor deliberately still claims the one-slot pool fixture, so this end-of-case cleanup names the holder it displaces.
+FM_TEARDOWN_SLOT_OVERRIDE=anchor teardown_task restart1 "$HOME_DIR" > "$TMP_ROOT/restart-teardown.out" 2> "$TMP_ROOT/restart-teardown.err" \
   || fail "flat restart teardown failed: $(cat "$TMP_ROOT/restart-teardown.err")"
 [ -e "$HOME_DIR/state/restart1.herdr-presentation" ] \
   || fail "flat fallback teardown should retain the quarantined projection journal for manual cleanup"

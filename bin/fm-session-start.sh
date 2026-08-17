@@ -471,7 +471,11 @@ for meta in "$STATE"/*.meta; do
     if fm_backend_target_exists "$backend" "${target:-$window}" "fm-$id"; then
       printf 'endpoint: alive (backend=%s window=%s)\n' "$backend" "$window"
     else
-      printf 'endpoint: dead (backend=%s window=%s)\n' "$backend" "$window"
+      if [ "$?" -eq 1 ]; then
+        printf 'endpoint: dead (backend=%s window=%s)\n' "$backend" "$window"
+      else
+        printf 'endpoint: unknown (backend=%s window=%s unreadable)\n' "$backend" "$window"
+      fi
     fi
   else
     printf 'endpoint: unknown (no window recorded)\n'

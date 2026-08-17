@@ -213,8 +213,8 @@ PR-based task merges go through `bin/fm-pr-merge.sh`, which records `pr=` and an
 The helper requires a full `https://github.com/<owner>/<repo>/pull/<n>` URL, invokes `gh-axi pr merge <n> --repo <owner>/<repo>`, defaults to `--merge` for a real merge commit, preserves explicit merge-method flags, and rejects malformed URLs or repo override flags before recording merge state; a well-formed GitLab merge request URL (see [docs/gitlab-merge-watch.md](gitlab-merge-watch.md)) is refused too, explicitly, rather than sent to the wrong forge.
 Before any of that state is recorded it reads the pull request's title, refuses a known placeholder title because the merge commit's subject line it would write can never be edited afterwards, and refuses distinctly a title it could not read at all; the helper's header owns the observed-placeholder list, the two overrides, and why the guard stops rather than rewrites a title.
 It also has the forge delete the merged head branch as part of that merge, which is one of three independent reasons merged branches accumulate; [docs/merged-branch-cleanup.md](merged-branch-cleanup.md) owns the other two and the pipeline-mirror gap it deliberately leaves unbuilt.
-Teardown is fail-closed for ship worktrees: dirty worktrees refuse, and committed work must be landed before the worktree is returned.
-[`bin/fm-teardown.sh`](../bin/fm-teardown.sh)'s header owns the landed-work proofs, PR-discovery fallback, and stale-lock recovery procedure.
+Teardown is fail-closed for ship worktrees: dirty worktrees refuse, committed work must be landed, and a conflicting holder visible through a lease or live task record refuses a pooled-worktree return.
+[`bin/fm-teardown.sh`](../bin/fm-teardown.sh)'s header owns the landed-work proofs, PR-discovery fallback, and stale-lock recovery procedure; [slot-guard.md](slot-guard.md) owns the pooled-worktree ownership guard and its limits.
 
 ## Optional X mode
 

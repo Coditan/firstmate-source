@@ -29,7 +29,19 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
-  fm_fake_exit0 "$fakebin" treehouse gh-axi gh
+  cat > "$fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+set -u
+if [ "${1:-}" = return ]; then
+  target=${@: -1}
+  rm -f "$target/.claude/settings.fm-task.json" \
+    "$target/.opencode/plugins/fm-turn-end.js" \
+    "$target/.fm-grok-turnend"
+fi
+exit 0
+SH
+  chmod +x "$fakebin/treehouse"
+  fm_fake_exit0 "$fakebin" gh-axi gh
   printf '%s\n' "$fakebin"
 }
 

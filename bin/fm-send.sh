@@ -176,8 +176,14 @@ fm_send_resolve_target() {  # <raw-target>
       else
         assumed=tmux
       fi
-      if ! fm_backend_target_exists "$assumed" "$raw"; then
-        echo "error: explicit target '$raw' is not a live $assumed endpoint (tried meta=$STATE/$raw.meta; metadata window/terminal lookup; backend=$assumed). Use fm-<id> for a recorded task/lane, or pass a target whose backend endpoint can be verified." >&2
+      if fm_backend_target_exists "$assumed" "$raw"; then
+        :
+      else
+        if [ "$?" -eq 2 ]; then
+          echo "error: explicit target '$raw' could not be verified because the $assumed backend is unreadable." >&2
+        else
+          echo "error: explicit target '$raw' is not a live $assumed endpoint (tried meta=$STATE/$raw.meta; metadata window/terminal lookup; backend=$assumed). Use fm-<id> for a recorded task/lane, or pass a target whose backend endpoint can be verified." >&2
+        fi
         return 1
       fi
       RESOLVED_TARGET=$raw

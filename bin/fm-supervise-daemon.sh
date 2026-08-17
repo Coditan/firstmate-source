@@ -1075,7 +1075,9 @@ inject_msg() {  # <message> [state]
   # when unset (sourced/test contexts that never ran fm_super_main's startup
   # discovery), matching this function's pre-existing default assumption.
   backend="${FM_SUPERVISOR_BACKEND:-tmux}"
-  fm_backend_target_exists "$backend" "$target" || return 1
+  if ! fm_backend_target_exists "$backend" "$target"; then
+    return 1
+  fi
   # (3) Busy-guard: never inject into an in-use pane.
   #   a) pane_is_busy: the harness shows a busy footer (agent mid-turn).
   if pane_is_busy "$target" "$backend"; then
@@ -1344,9 +1346,16 @@ fm_super_main() {
   # tmux arm resolves the target before answering rather than accepting
   # display-message's answer for some other window (docs/tmux-backend.md
   # "Target resolution").
-  if ! fm_backend_target_exists "$BACKEND" "$TARGET"; then
-    echo "error: supervisor target '$TARGET' does not resolve to a $BACKEND pane; set FM_SUPERVISOR_TARGET" >&2
-    log "startup failed: target '$TARGET' not found (backend=$BACKEND)"
+  if fm_backend_target_exists "$BACKEND" "$TARGET"; then
+    :
+  else
+    if [ "$?" -eq 2 ]; then
+      echo "error: supervisor target '$TARGET' could not be verified because the $BACKEND backend is unreadable" >&2
+      log "startup failed: target '$TARGET' unreadable (backend=$BACKEND)"
+    else
+      echo "error: supervisor target '$TARGET' does not resolve to a $BACKEND pane; set FM_SUPERVISOR_TARGET" >&2
+      log "startup failed: target '$TARGET' not found (backend=$BACKEND)"
+    fi
     fm_lock_release "$LOCK" 2>/dev/null || true
     rm -f "$PIDFILE" 2>/dev/null || true
     exit 1
@@ -1385,8 +1394,14 @@ fm_super_main() {
     # has nowhere to go, and firstmate itself is the consumer of escalations.
     # Catch-up signals persist in state/*.status and flow on the next run, so
     # this delays rather than loses work.
-    if ! fm_backend_target_exists "$BACKEND" "$TARGET"; then
-      log "warn: supervisor target '$TARGET' gone; backing off ${INJECT_FAIL_SLEEP}s, will retry"
+    if fm_backend_target_exists "$BACKEND" "$TARGET"; then
+      :
+    else
+      if [ "$?" -eq 2 ]; then
+        log "warn: supervisor target '$TARGET' unreadable; backing off ${INJECT_FAIL_SLEEP}s, will retry"
+      else
+        log "warn: supervisor target '$TARGET' gone; backing off ${INJECT_FAIL_SLEEP}s, will retry"
+      fi
       # Flush is pointless with no pane; preserve any buffered escalations.
       sleep "$INJECT_FAIL_SLEEP"
       continue

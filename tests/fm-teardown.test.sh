@@ -84,7 +84,17 @@ make_case() {
   # run; the ALLOW cases need them so the script can complete cleanly.
   cat > "$fakebin/treehouse" <<'SH'
 #!/usr/bin/env bash
-# `treehouse return --force <wt>`: succeed silently.
+# `treehouse return --force <wt>`: reset and clean the returned worktree.
+# The real command is destructive; modeling that observable behavior matters now
+# that teardown deliberately avoids mutating a slot before its ownership check.
+if [ "${1:-}" = status ]; then
+  exit 0
+fi
+wt=${*: -1}
+if git -C "$wt" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  git -C "$wt" reset --hard -q || exit 1
+  git -C "$wt" clean -fdq || exit 1
+fi
 exit 0
 SH
   cat > "$fakebin/tmux" <<'SH'

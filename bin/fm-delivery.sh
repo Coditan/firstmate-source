@@ -138,8 +138,13 @@ attempt_submit() {  # <backend> <target> <queue-depth>
     SUBMIT_REASON="the published endpoint names backend '$backend', which this listener has no verified composer primitives for"
     return 1
   fi
-  if ! fm_backend_target_exists "$backend" "$target"; then
-    SUBMIT_REASON="the published pane $target no longer exists"
+  if fm_backend_target_exists "$backend" "$target"; then
+    :
+  else
+    case $? in
+      1) SUBMIT_REASON="the published pane $target no longer exists" ;;
+      *) SUBMIT_REASON="the published pane $target could not be verified" ;;
+    esac
     return 1
   fi
   if pane_is_busy "$target" "$backend"; then

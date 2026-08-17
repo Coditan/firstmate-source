@@ -1142,6 +1142,12 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   if ! "$SCRIPT_DIR/fm-forge-status.sh" --arm >/dev/null 2>&1; then
     echo "FORGE_STATUS: the forge status watch could not be armed on this home, so nothing will notice a forge outage between sessions; run $SCRIPT_DIR/fm-forge-status.sh --arm to see why"
   fi
+  # Arm this home's pooled-worktree ownership watch. Same reason again, and the
+  # sharpest case for it: a pooled slot whose task record has gone stale is
+  # invisible until a cleanup returns it and kills whoever was handed it since.
+  if ! "$SCRIPT_DIR/fm-slot-guard.sh" --arm >/dev/null 2>&1; then
+    echo "SLOT_GUARD: the worktree-ownership watch could not be armed on this home, so nothing will notice a pooled worktree two tasks both claim; run $SCRIPT_DIR/fm-slot-guard.sh --arm to see why"
+  fi
   "$SCRIPT_DIR/fm-axi-suite.sh"
   # The suite may have just seeded this home's own copies into $FM_HOME/.local/axi;
   # drop the cached lookups so the sweeps below resolve the vessel copy, not the
@@ -1180,6 +1186,10 @@ fi
 # And of the forge status watch, on the same terms: an armed watch that nothing
 # executes leaves the forge unwatched while every surface still looks fine.
 "$SCRIPT_DIR/fm-forge-status.sh" --armed || true
+# And of the worktree-ownership watch: a slot two tasks both claim is silent
+# until the cleanup that destroys someone's work, so a watch that stopped is a
+# fact this home needs stated rather than inferred from an absence of findings.
+"$SCRIPT_DIR/fm-slot-guard.sh" --armed || true
 [ -f "$STATE/firstmate-update.available" ] && cat "$STATE/firstmate-update.available"
 [ -f "$STATE/firstmate-update.stuck" ] && cat "$STATE/firstmate-update.stuck"
 [ -f "$STATE/fork-sync.pending" ] && cat "$STATE/fork-sync.pending"
