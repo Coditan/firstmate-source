@@ -166,6 +166,7 @@ armed: state/e6.check.sh
 
 The stored record gained the provider tag, so its version moved to `fm-pr-poll-registration-v2` and a record written by the previous release no longer parses.
 The existing non-executing migration handles that: it never runs the old artifact, and rebuilds the poll from the task's recorded pull request URL.
+Because those old check files were runnable shell, the migration rebuilds only when the metadata is safe to classify; ambiguous bytes after the recorded pull request leave the legacy artifact quarantined and unarmed.
 Starting from a poll armed exactly as the previous release wrote it:
 
 ```
