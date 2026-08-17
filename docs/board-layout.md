@@ -33,6 +33,9 @@ Every colour in `bin/board-assets/layout.css` is a token copied from that source
 **No colour on a board was chosen here.**
 Where a board needs a value the tokens do not carry, that is recorded as a finding against the design system rather than filled in with a hex code, and the layout uses what the tokens do carry.
 
+Two measured contrast defects stay visible as design-system findings rather than being corrected locally: `--hlr-operation-action` with white text is 3.56:1, and `--hlr-semantic-warn` on white is 3.28:1.
+The submit button still follows `css/hlr-base.css`'s action button contract - action fill with white text - because this layout is checking fidelity to operations mode, not inventing a corrected fork of it.
+
 Three consequences are visible enough to be worth naming:
 
 - **Panels are square.** Operations mode sets `--hlr-radius-panel: 0`; controls get its `--hlr-radius-control: 4px`.
