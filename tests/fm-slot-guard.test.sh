@@ -38,6 +38,7 @@
 #   (k) dispute resolves                                   -> marker cleared, wake once
 #   (l) forced child cleanup reads the child home's state
 #   (m) child ownership refusal never falls back to deletion
+#   (n) late top-level refusal leaves hooks and branch untouched
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -467,10 +468,13 @@ test_child_home_state_refuses() {
 }
 
 test_child_refusal_does_not_delete() {
-  local case_dir home rc
+  local case_dir home rc branch
   case_dir=$(make_case child-refusal)
   home=$(make_secondmate_case "$case_dir" parent-task)
   write_child_task "$case_dir" "$home" finished-child dead
+  git -C "$case_dir/slot" switch -q -c live-child-work
+  mkdir -p "$case_dir/slot/.claude"
+  printf '{"hooks":"live-child"}\n' > "$case_dir/slot/.claude/settings.fm-task.json"
   lease_slot_on_status "$case_dir" 2 "$case_dir/slot" "fm:live-child"
 
   set +e
@@ -482,9 +486,37 @@ test_child_refusal_does_not_delete() {
   assert_grep "live-child" "$case_dir/stderr" "child-refusal: refusal must name the lease holder"
   assert_nothing_returned "$case_dir" "child-refusal: child slot must not be returned"
   assert_present "$case_dir/slot" "child-refusal: refused child slot must not be deleted"
+  assert_present "$case_dir/slot/.claude/settings.fm-task.json" \
+    "child-refusal: late refusal must preserve the holder's hook"
+  branch=$(git -C "$case_dir/slot" branch --show-current)
+  [ "$branch" = live-child-work ] || fail "child-refusal: late refusal changed the holder's branch"
   assert_present "$home/state/finished-child.meta" \
     "child-refusal: refused cleanup must preserve the child record"
   pass "(m) child ownership refusal never falls back to worktree deletion"
+}
+
+test_late_top_level_refusal_is_mutation_free() {
+  local case_dir rc branch
+  case_dir=$(make_case late-top-level)
+  write_task "$case_dir" finished-task dead
+  git -C "$case_dir/slot" switch -q -c live-top-level-work
+  mkdir -p "$case_dir/slot/.claude"
+  printf '{"hooks":"live-top-level"}\n' > "$case_dir/slot/.claude/settings.fm-task.json"
+  lease_slot_on_status "$case_dir" 2 "$case_dir/slot" "fm:live-task"
+
+  set +e
+  run_teardown "$case_dir" finished-task --force > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  [ "$rc" -ne 0 ] || fail "late-top-level: late ownership conflict did not refuse"
+  assert_grep "live-task" "$case_dir/stderr" "late-top-level: refusal must name the late holder"
+  assert_nothing_returned "$case_dir" "late-top-level: slot must not be returned"
+  assert_present "$case_dir/slot/.claude/settings.fm-task.json" \
+    "late-top-level: refusal must preserve the holder's hook"
+  branch=$(git -C "$case_dir/slot" branch --show-current)
+  [ "$branch" = live-top-level-work ] || fail "late-top-level: refusal changed the holder's branch"
+  pass "(n) late top-level refusal leaves hooks and branch untouched"
 }
 
 test_stale_record_live_holder_refuses
@@ -499,5 +531,6 @@ test_guard_status_reports
 test_guard_detect_marks_and_clears
 test_child_home_state_refuses
 test_child_refusal_does_not_delete
+test_late_top_level_refusal_is_mutation_free
 
 printf '\nall fm-slot-guard tests passed\n'
