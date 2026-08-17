@@ -77,12 +77,39 @@
 # collapsed into one outcome. It is this fleet's own rule - never convert cannot
 # measure into does not exist - applied to the decision mechanism itself.
 #
+# THE ADOPTION BASELINE, AND WHY THE AUDIT NEEDED ONE
+# Measured on the main home the day after this check was written: 58 findings, of
+# which 57 were on captain records closed long before any of this existed - 48
+# `closed-without-record` and 9 `stale-body-state`, the latter nine being nine of
+# the same records counted a second time. Exactly one finding was on a live record.
+# bin/fm-bootstrap.sh prints one line per finding at every session start, so this
+# check would have opened at 57 irreparable demands and could never have reached
+# zero. An alarm whose only available response is to stop reading it is the same
+# failure this whole mechanism exists against, one layer up: a check nobody reads
+# and a store nobody consults fail in exactly the same way.
+#
+# `--record-baseline` writes the findings that sit on ALREADY-CLOSED records into
+# data/decision-baseline.md, once, as a deliberate statement that those particular
+# answers are lost rather than pending. `--audit` then withholds exactly those
+# (class, id) pairs and says in one line how many it withheld and where they are
+# listed. It is a disclosure, never a deletion: the file is the list, `--audit
+# --json` still carries every withheld finding under `baseline_excluded`, and
+# re-taking a baseline means removing that file by hand.
+#
+# ONLY A CLOSED RECORD MAY BE BASELINED. A closed record's answer is either stored
+# or it is lost, and nothing a later session does can recover a lost one. Every
+# other class sits on a LIVE record, which is repairable by definition, so no
+# baseline may ever silence one. A record closed AFTER the baseline was taken is a
+# genuine new failure and is reported in full. Those two rules together are what
+# stop a baseline being used to launder today's mistake into yesterday's history.
+#
 # It reports; it never repairs. Repair is bin/fm-decision-hold.sh's, and closing a
 # captain decision is never a script's call to make unprompted.
 #
 # Usage:
 #   fm-decision-ledger.sh [--limit <n>] [--all]
 #   fm-decision-ledger.sh --audit [--json]
+#   fm-decision-ledger.sh --record-baseline
 #   fm-decision-ledger.sh --premises [--json]
 #   fm-decision-ledger.sh --records [--repo <name>]
 #   fm-decision-ledger.sh --json [--limit <n>] [--all]
@@ -91,7 +118,11 @@
 # Options:
 #   --limit <n>  settled decisions to show, newest first (default 5)
 #   --all        every settled decision, no limit
-#   --audit      only the unfinished records; exit 1 when any are found
+#   --audit      only the unfinished records; exit 1 when any are found that the
+#                adoption baseline does not already cover
+#   --record-baseline
+#                record, once, that today's findings on already-closed records are
+#                lost rather than pending; refuses if a baseline already exists
 #   --premises   every open decision with the premise it was filed on and when that
 #                premise was last re-measured; the weekly sweep's input
 #   --records    flat `class<TAB>id<TAB>repo<TAB>title` list of every captain record,
@@ -99,9 +130,10 @@
 #   --repo <n>   with --records, restrict to one repository
 #   --json       machine-readable form of whichever view was selected
 #
-# Exit status is 0 for a clean read, 1 under --audit when any finding exists, and 2
-# for a usage or environment error. The nonzero --audit status is what lets a caller
-# treat "nothing is half-closed" as a checkable condition.
+# Exit status is 0 for a clean read, 1 under --audit when any finding exists that
+# the adoption baseline does not cover, and 2 for a usage or environment error. The
+# nonzero --audit status is what lets a caller treat "nothing is half-closed" as a
+# checkable condition.
 #
 # Output contract: `fm-decision-ledger.v1`.
 #   settled[]  id, origin, key, title, repo, door, closed, source, routed[],
@@ -109,6 +141,8 @@
 #   open[]     id, title, repo, held, blocks[] - captain questions still unanswered
 #   folded[]   id, title, successor, fold_reason - questions a later record covers
 #   audit[]    class, id, detail
+#   baseline_excluded[]  the same shape, for findings the adoption baseline covers
+#   baseline   path, recorded, count - null when this home has taken no baseline
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -117,6 +151,13 @@ FM_HOME="${FM_HOME:-$FM_ROOT}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 BACKLOG="$DATA/backlog.md"
 ARCHIVE="$DATA/done-archive.md"
+BASELINE="$DATA/decision-baseline.md"
+
+# The only two classes a baseline may cover, and the reason is the same for both:
+# each sits on a record that is already CLOSED, so its answer is either stored or
+# lost and no later act recovers a lost one. Every other class sits on a live
+# record and stays repairable, so none of them is ever silenceable here.
+BASELINE_CLASSES='["closed-without-record","stale-body-state"]'
 
 die() { printf 'fm-decision-ledger.sh: %s\n' "$1" >&2; exit 2; }
 
@@ -138,6 +179,7 @@ while [ "$#" -gt 0 ]; do
              LIMIT=$2; shift 2 ;;
     --all) ALL=1; shift ;;
     --audit) MODE=audit; shift ;;
+    --record-baseline) MODE=record-baseline; shift ;;
     --records) MODE=records; shift ;;
     --premises) MODE=premises; shift ;;
     --repo) [ "$#" -gt 1 ] || die "--repo needs a name"; RECORDS_REPO=$2; shift 2 ;;
@@ -147,6 +189,28 @@ while [ "$#" -gt 0 ]; do
 done
 
 command -v jq >/dev/null 2>&1 || die "jq is required"
+
+# The baseline as JSON [{class, id}], and empty when this home has never taken one.
+# Anything it cannot parse as `<class> <id>` is skipped rather than guessed at, on
+# the same rule the rest of this script follows: a misread line here would silence a
+# real finding, which is the one failure a baseline must never be able to cause.
+read_baseline() {
+  [ -f "$BASELINE" ] || { printf '[]'; return 0; }
+  awk '
+    BEGIN { printf "[" }
+    /^[[:space:]]*#/ { next }
+    NF != 2 { next }
+    { printf "%s{\"class\":\"%s\",\"id\":\"%s\"}", (n++ ? "," : ""), $1, $2 }
+    END { printf "]" }
+  ' "$BASELINE"
+}
+
+# The date the baseline was taken, read from its own header. Empty when unknown,
+# and an unknown date is printed as unknown rather than as today.
+baseline_recorded() {
+  [ -f "$BASELINE" ] || return 0
+  awk '/^# recorded: / { sub(/^# recorded: /, ""); print; exit }' "$BASELINE"
+}
 
 sha256_text() {  # <text>
   if command -v shasum >/dev/null 2>&1; then
@@ -473,7 +537,64 @@ while [ "$i" -lt "$COUNT" ]; do
   i=$((i + 1))
 done
 
-AUDIT=$(printf '%s' "$CLASSIFIED" | jq -c --argjson altered "$ALTERED" '.audit + $altered')
+AUDIT_ALL=$(printf '%s' "$CLASSIFIED" | jq -c --argjson altered "$ALTERED" '.audit + $altered')
+
+# THE BASELINE SPLIT. A (class, id) pair the baseline names is withheld from the
+# findings that demand action and carried instead under baseline_excluded, where a
+# reader and `--json` can both still see it. Nothing is dropped, and the withheld
+# count is stated on every direct --audit run.
+BASELINE_JSON=$(read_baseline)
+BASELINE_DATE=$(baseline_recorded)
+# THE CLASS RULE IS ENFORCED HERE, NOT TRUSTED FROM THE FILE. The baseline is an
+# ordinary text file a hand could add any line to, so a line naming a class that
+# sits on a LIVE record is ignored rather than honoured. Without this the file would
+# be a general mute switch, and the one thing a baseline must never be able to do is
+# silence a finding that is still repairable.
+BASELINE_HONOURED=$(printf '%s' "$BASELINE_JSON" | jq -c --argjson classes "$BASELINE_CLASSES" \
+  'map(. as $b | select($classes | index($b.class)))')
+BASELINE_REJECTED=$(printf '%s' "$BASELINE_JSON" | jq -c --argjson classes "$BASELINE_CLASSES" \
+  'map(. as $b | select(($classes | index($b.class)) == null))')
+# The finding is bound to $f before the lookup because `index(f)` evaluates f
+# against its own input - the covered list - and not against the finding tested.
+AUDIT=$(printf '%s' "$AUDIT_ALL" | jq -c --argjson base "$BASELINE_HONOURED" '
+  ($base | map(.class + " " + .id)) as $covered
+  | map(. as $f | select(($covered | index($f.class + " " + $f.id)) == null))')
+BASELINE_EXCLUDED=$(printf '%s' "$AUDIT_ALL" | jq -c --argjson base "$BASELINE_HONOURED" '
+  ($base | map(.class + " " + .id)) as $covered
+  | map(. as $f | select(($covered | index($f.class + " " + $f.id)) != null))')
+# What a baseline WOULD cover if one were taken now. Used to tell a home with no
+# baseline that one is available, and to build the file under --record-baseline.
+BASELINEABLE=$(printf '%s' "$AUDIT_ALL" | jq -c --argjson classes "$BASELINE_CLASSES" \
+  'map(select(.class as $c | $classes | index($c)))')
+
+if [ "$MODE" = record-baseline ]; then
+  [ -e "$BASELINE" ] && die "a baseline already exists at $BASELINE (recorded ${BASELINE_DATE:-unknown}); remove it by hand to take a new one, so a baseline can never be re-taken as a side effect of a routine run"
+  n=$(printf '%s' "$BASELINEABLE" | jq 'length')
+  [ "$n" -gt 0 ] || die "there is nothing to baseline: no finding in $DATA sits on an already-closed captain record"
+  today=$(date -u +%Y-%m-%d)
+  {
+    printf '# Captain decision adoption baseline for %s\n' "$FM_HOME"
+    printf '# recorded: %s\n' "$today"
+    printf '#\n'
+    printf '# Each line below is one finding that bin/fm-decision-ledger.sh --audit reported\n'
+    printf '# on a captain record that was ALREADY CLOSED when this baseline was taken. Their\n'
+    printf '# answers are lost, not pending: the records were closed before this mechanism\n'
+    printf '# existed, so nothing a later session does can recover them. --audit withholds\n'
+    printf '# exactly these pairs and states how many it withheld, so the check can converge\n'
+    printf '# on the records that can still be repaired.\n'
+    printf '#\n'
+    printf '# This file silences nothing else. A finding on a LIVE record is never covered\n'
+    printf '# here, and a record closed after %s is a genuine new failure and is\n' "$today"
+    printf '# reported in full. To re-take the baseline, delete this file by hand.\n'
+    printf '#\n'
+    printf '# <audit class> <record id>\n'
+    printf '%s' "$BASELINEABLE" | jq -r 'sort_by(.class, .id)[] | "\(.class) \(.id)"'
+  } > "$BASELINE" || die "could not write $BASELINE"
+  printf 'recorded %s finding(s) on already-closed captain records as lost rather than pending\n' "$n"
+  printf 'baseline: %s\n' "$BASELINE"
+  printf 'these are withheld from --audit from now on; every finding on a live record still reports\n'
+  exit 0
+fi
 OPEN=$(printf '%s' "$CLASSIFIED" | jq -c \
   '[.captain[] | select(.live) | select(.envelope | not)
     | {id, title, repo, held, blocks, premise, premise_measured, premise_outcome}]')
@@ -485,9 +606,13 @@ SHOWN=$LIMIT
 
 LEDGER=$(jq -n \
   --arg home "$FM_HOME" \
+  --arg basepath "$BASELINE" \
+  --arg basedate "$BASELINE_DATE" \
   --argjson settled "$VERIFIED" \
   --argjson open "$OPEN" \
   --argjson audit "$AUDIT" \
+  --argjson excluded "$BASELINE_EXCLUDED" \
+  --argjson baseline "$BASELINE_JSON" \
   --argjson folded "$FOLDED" \
   --argjson shown "$SHOWN" \
   '{schema: "fm-decision-ledger.v1", home: $home,
@@ -496,11 +621,37 @@ LEDGER=$(jq -n \
     open: $open,
     folded: $folded,
     audit: $audit,
+    baseline_excluded: $excluded,
+    baseline: (if ($baseline | length) > 0
+               then {path: $basepath, recorded: (if $basedate == "" then null else $basedate end),
+                     count: ($baseline | length)}
+               else null end),
     omitted: (if ($settled | length) > $shown
               then [{surface: "settled", count: (($settled | length) - $shown), reveal: "--all"}]
               else [] end)}')
 
 AUDIT_COUNT=$(printf '%s' "$AUDIT" | jq 'length')
+EXCLUDED_COUNT=$(printf '%s' "$BASELINE_EXCLUDED" | jq 'length')
+BASELINEABLE_COUNT=$(printf '%s' "$BASELINEABLE" | jq 'length')
+REJECTED_COUNT=$(printf '%s' "$BASELINE_REJECTED" | jq 'length')
+
+# The one line that keeps a withheld finding from becoming a hidden one, and the one
+# that tells a home still drowning in pre-mechanism history that it can converge.
+# Both are emitted in the `<class> <id> - <detail>` shape bin/fm-bootstrap.sh feeds
+# straight into its diagnostic stream.
+baseline_note() {
+  if [ "$REJECTED_COUNT" -gt 0 ]; then
+    printf 'baseline rejected - %s line(s) in %s name a finding class that sits on a live record; a baseline may only cover an already-closed record, so those lines are ignored and every finding they name still reports\n' \
+      "$REJECTED_COUNT" "$BASELINE"
+  fi
+  if [ "$EXCLUDED_COUNT" -gt 0 ]; then
+    printf 'baseline recorded - %s finding(s) on captain records already closed when this home adopted the mechanism are withheld; their answers are lost, not pending (listed in %s, recorded %s)\n' \
+      "$EXCLUDED_COUNT" "$BASELINE" "${BASELINE_DATE:-unknown}"
+  elif [ ! -f "$BASELINE" ] && [ "$BASELINEABLE_COUNT" -gt 0 ]; then
+    printf 'baseline absent - %s of the findings above sit on captain records that are already closed, so nothing can recover their answers; if they are lost rather than pending, run fm-decision-ledger.sh --record-baseline once and this check converges on the records still worth repairing\n' \
+      "$BASELINEABLE_COUNT"
+  fi
+}
 
 # THE PREMISE VIEW, and the candidate rule it deliberately does not implement.
 #
@@ -543,13 +694,18 @@ fi
 
 if [ "$MODE" = audit ]; then
   if [ "$JSON" -eq 1 ]; then
-    printf '%s' "$LEDGER" | jq '{schema, home, audit}'
-  elif [ "$AUDIT_COUNT" -eq 0 ]; then
-    printf 'no unfinished captain decision records in %s\n' "$DATA"
+    printf '%s' "$LEDGER" | jq '{schema, home, audit, baseline_excluded, baseline}'
   else
-    # One line per finding, because bin/fm-bootstrap.sh prefixes this output
-    # straight into its one-line-per-problem diagnostic stream.
-    printf '%s' "$AUDIT" | jq -r '.[] | "\(.class) \(.id) - \(.detail)"'
+    if [ "$AUDIT_COUNT" -eq 0 ]; then
+      printf 'no unfinished captain decision records in %s\n' "$DATA"
+    else
+      # One line per finding, because bin/fm-bootstrap.sh prefixes this output
+      # straight into its one-line-per-problem diagnostic stream.
+      printf '%s' "$AUDIT" | jq -r '.[] | "\(.class) \(.id) - \(.detail)"'
+    fi
+    # Always, including on a clean read: a withheld finding that is never mentioned
+    # is a hidden one, and hiding is the thing this baseline was built not to do.
+    baseline_note
   fi
   [ "$AUDIT_COUNT" -eq 0 ] || exit 1
   exit 0
@@ -567,6 +723,11 @@ printf '%s' "$LEDGER" | jq -r '
   (if (.audit | length) > 0 then
      "", "UNFINISHED DECISION RECORDS - these need repair, not a new question:",
      (.audit[] | "  \(.class)  \(.id)\n      \(.detail)")
+   else empty end),
+  (if (.baseline_excluded | length) > 0 then
+     "", "(\(.baseline_excluded | length) further finding(s) sit on records already closed when this",
+     " home adopted the mechanism; their answers are lost, not pending. Listed in",
+     " \(.baseline.path), recorded \(.baseline.recorded // "unknown").)"
    else empty end),
   "",
   (.settled[] |

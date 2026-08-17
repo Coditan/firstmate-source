@@ -91,7 +91,50 @@ Re-running the identical command finishes it.
 | `acted-but-open` | captain hold still held, blocks at least one task, every task it blocks is Done | the work went ahead, so the answer was given; nothing closed the hold |
 | `altered-record` | stored decision text does not match its recorded digest | the stored words are no longer the words that were recorded |
 
-`acted-but-open` is the class that catches the recovery-point shape above, which nothing detected at the time.
+`acted-but-open` is the class that catches an answered-and-acted-on hold once the work it gated has finished.
+
+### What this does not detect, stated plainly
+
+An interrupted close is detectable because the mechanism wrote something before it stopped.
+A close that never entered the mechanism at all leaves nothing to detect, and that is the honest limit of this half.
+
+Measured on the recovery-point record `bridge-forgejo-standup-decision-metadata-rpo` on 2026-08-17: the captain answered it, the answer was written by hand into the body of the ship task the question gated, and the hold still reads held.
+`acted-but-open` does not fire on it, because the one task it blocks is queued rather than Done.
+Nothing else fires either, and nothing structural could: a hold whose gated work is filed but not yet started is indistinguishable, in the records, from a hold that was answered by hand and whose gated work is filed but not yet started.
+The only signal separating them is the decision text sitting in that task's body, and reading prose to infer that a decision happened is exactly what this lifecycle forbids.
+
+So this record converges by two routes that already exist, neither of them a detector:
+
+- The intake gate lists it the next time any captain record is filed for the same repository, and refuses to add one until the filer disposes of it.
+- `bin/fm-decision-ledger.sh --premises` carries it into the weekly sweep with its premise and the fact that nothing has re-measured it.
+
+Both put it in front of a reader who can see the answer.
+Neither claims to have found it, and no class here should be widened until it can fire on this shape without guessing.
+
+## The audit had to converge before it could be read
+
+Run against the main home on 2026-08-17, `--audit` reported 58 findings.
+57 of them were on captain records closed long before any of this existed: 48 `closed-without-record`, and 9 `stale-body-state` that were nine of those same records counted a second time.
+Exactly one finding, a `duplicate-suspect`, sat on a live record.
+
+`bin/fm-bootstrap.sh` prints one line per finding at every session start, and `bootstrap-diagnostics` directs a reader to handle each one.
+So as first written the check opened at 57 irreparable demands and could never reach zero, and the only available response to it was to stop reading it.
+That is the same failure this whole mechanism exists against, one layer up: a check nobody reads and a store nobody consults fail in exactly the same way.
+
+`--record-baseline` writes the findings that sit on already-closed records into `data/decision-baseline.md`, once, as a deliberate statement that those particular answers are lost rather than pending.
+`--audit` then withholds exactly those `(class, id)` pairs and states in one line how many it withheld and where they are listed.
+The same home reads as two findings afterwards, both real.
+
+Three rules keep the baseline from becoming a mute switch, and each is a regression rather than an intention.
+
+- **Only an already-closed record may be covered.**
+  A closed record's answer is either stored or lost, and no later act recovers a lost one; every other class sits on a live record and stays repairable.
+  The permitted classes are enforced when the file is read, not trusted from it, so a hand-added line naming a live-record class is ignored and reported as `baseline rejected`.
+- **A record closed after the baseline was taken is a new failure** and is reported in full.
+  The baseline covers the records it named, never the shape of the finding.
+- **Nothing is dropped.** The file is the list, `--audit --json` still carries every withheld finding under `baseline_excluded`, the withheld count is stated on every direct run, and re-taking a baseline means deleting the file by hand.
+
+`bin/fm-bootstrap.sh` separately caps how many finding lines reach a startup digest and states the remainder rather than truncating in silence, so a home that has not taken a baseline still gets a readable startup.
 
 ## The store had an intake step and no supersession step
 
@@ -169,6 +212,7 @@ It is silent when there is nothing to report, consistent with the rest of that s
 
 `bin/fm-fleet-snapshot.sh` sets `answered_pending_close` on any non-Done record whose first body line is the resolution marker, and withholds such a record from `captain_actionable`.
 Both `decisions_open` in the canonical snapshot and the decision board that reads it therefore stop presenting an answered decision as an open question.
+The board reaches that state through two layers rather than reading the store itself - `bin/fm-decision-inventory.sh` reads `bin/fm-bearings-snapshot.sh`, which reads the canonical snapshot - so it is covered by its own regression at the board's own input rather than inferred from the layer beneath it.
 The record is not dropped silently: it still appears in the queued gates surface, and both `bin/fm-fleet-snapshot.sh` and `bin/fm-bearings-snapshot.sh` replace its stale hold reason with one saying the decision is answered and the close unfinished.
 
 ## Structured read surfaces
@@ -188,6 +232,13 @@ Additional quoted `blocked_by` regression verification date: 2026-07-17.
 Plural blocker-readiness and mixed-home projection verification date: 2026-07-22.
 Archived-resolution fallback verification date: 2026-07-27.
 Every-door recording, supersession, intake gate, and premise re-measurement verification date: 2026-08-17.
+Adoption-baseline, board-input, and startup-cap verification date: 2026-08-17.
+
+The baseline measurement was taken against a copy of the main home's `data/backlog.md` and `data/done-archive.md`, read-only, with `FM_HOME` pointed at the copy.
+Before: `--audit` printed 58 findings and exited 1 - 48 `closed-without-record`, 9 `stale-body-state`, 1 `duplicate-suspect`.
+After `--record-baseline`: 2 findings, being the `duplicate-suspect` and a `closed-without-record` deliberately appended after the baseline to prove a later loss still reports, plus one line naming the 57 withheld.
+A `duplicate-suspect` line hand-added to the baseline file silenced its finding on the first attempt, which is the defect the permitted-class filter now prevents and `test_a_baseline_cannot_silence_a_repairable_record` holds.
+With no baseline recorded, `bin/fm-bootstrap.sh` printed 13 `DECISION_LEDGER:` lines rather than 59: twelve findings and one stating the 48 not shown.
 
 Two defects were found by these regressions rather than by reading, and both are recorded because each is a shape the next change could reproduce.
 The first: `record` wrote its resolution body with the routed-work list run onto the `Routed work:` line, because a command substitution ate the terminating newline; the write-then-close ordering meant the failing verification left exactly the visibly unfinished record it is designed to leave, which is how it was noticed.

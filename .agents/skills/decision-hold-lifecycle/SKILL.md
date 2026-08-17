@@ -72,6 +72,21 @@ None of that helps if the answer was never recorded in the first place, which is
 `bin/fm-decision-ledger.sh --audit` reports the decision records that are structurally unfinished, and bootstrap surfaces its findings at every session start as `DECISION_LEDGER:`.
 Treat a finding as a repair, never as a fresh question for the captain: the answer is either already stored or already lost, and asking him again is the failure, not the fix.
 
+A home adopting this mechanism starts with the losses that happened before it existed, and those are not repairs.
+The first run on the main home reported 58 findings of which 57 were pre-mechanism and irreparable, which would have made the check unreadable from the first day.
+Run `bin/fm-decision-ledger.sh --record-baseline` once per home, after reading what it will cover, to record that those particular answers are lost rather than pending.
+It covers only records that are already closed, refuses to run twice, states its count on every later run, and never silences a record that can still be repaired.
+
+### What the audit cannot see
+
+An interrupted close is detectable because the mechanism wrote something before it stopped.
+**A close done entirely by hand leaves nothing to detect**, and no class should be widened to guess at one.
+The recovery-point record measured on 2026-08-17 is the standing example: he answered it, the answer was written by hand into the body of the task the question gated, the hold still reads held, and nothing fires - because a hold whose gated work is filed but unstarted looks identical, in the records, to one answered by hand whose gated work is filed but unstarted.
+Only the prose in that task body separates them, and reading prose to infer a decision is the one inference these commands refuse.
+
+That record still converges, by the two routes above rather than by a detector: the intake gate puts it in front of the next filer for its repository, and `--premises` carries it into the weekly sweep.
+Which is the practical rule for you: **when the gate or the sweep lists an open question you can see an answer for, record his words then, in that turn.** That is the moment the mechanism is waiting for, and skipping it is how this one survived.
+
 ## Policy for unresolved decisions
 
 Every unresolved decision that belongs to the captain and is discovered while producing, reading, presenting, or ending an investigation or visual review must become a structured captain-held work item in the authoritative backlog of the home that owns the originating work before that work or review may be treated as complete.

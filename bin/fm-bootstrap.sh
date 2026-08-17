@@ -16,6 +16,8 @@
 #                 "BACKLOG_STALE: task <id> has <fault>; fix: <command>",
 #                 "BACKLOG_UNREADABLE: task <id> in <backlog file> is parsed by <reader> but not <reader>; fix: <row repair>",
 #                 "DECISION_LEDGER: <class> <id> - <what is unfinished about that captain decision record>",
+#                 "DECISION_LEDGER: baseline recorded|absent|rejected - <what the adoption baseline covers or refuses>",
+#                 "DECISION_LEDGER: and <n> more not shown here; run bin/fm-decision-ledger.sh --audit for the full list",
 #                 "FLEET_SYNC: <repo>: skipped|recovered|STUCK: <detail>",
 #                 "PR_CHECK_MIGRATION: <private remediation>",
 #                 "TANGLE: <remediation>",
@@ -1088,7 +1090,20 @@ if command -v jq >/dev/null 2>&1; then
   decision_rc=0
   decision_audit=$("$SCRIPT_DIR/fm-decision-ledger.sh" --audit 2>/dev/null) || decision_rc=$?
   if [ "$decision_rc" -eq 1 ] && [ -n "$decision_audit" ]; then
-    printf '%s\n' "$decision_audit" | sed 's/^/DECISION_LEDGER: /'
+    # BOUNDED, AND THE REMAINDER IS STATED. This home's audit stood at 58 findings
+    # the day the check was written, and a startup digest that opens with dozens of
+    # identical demands is one nobody finishes reading - which would cost exactly the
+    # attention this whole mechanism is trying to buy. The adoption baseline in
+    # bin/fm-decision-ledger.sh is what makes that number small; this cap is the
+    # backstop for a home that has not taken one yet, and it never hides the count.
+    decision_max=${FM_DECISION_LEDGER_MAX:-12}
+    decision_total=$(printf '%s\n' "$decision_audit" | wc -l | tr -d ' ')
+    printf '%s\n' "$decision_audit" | head -n "$decision_max" | sed 's/^/DECISION_LEDGER: /'
+    if [ "$decision_total" -gt "$decision_max" ]; then
+      printf 'DECISION_LEDGER: and %s more not shown here; run bin/fm-decision-ledger.sh --audit for the full list\n' \
+        "$((decision_total - decision_max))"
+    fi
+    unset decision_max decision_total
   fi
   unset decision_audit decision_rc
 fi

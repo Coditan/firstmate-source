@@ -129,6 +129,7 @@ Record each captain-decision reading with `bin/fm-decision-hold.sh recheck --out
 
 **Surface:** the backlog and the decision records.
 **Start with** `bin/fm-decision-ledger.sh --audit`, whose `duplicate-suspect` and `open-but-settled` classes name what structure can prove: several open records under one investigation, one decision key open under several, and an open record whose question is already answered by a settled one.
+If that audit answers `baseline absent`, this home is still re-reporting losses that predate the mechanism and can never be repaired - read them once, and if they are genuinely lost, record that with `bin/fm-decision-ledger.sh --record-baseline` so later sweeps read the records that can still be fixed rather than the same wall every week.
 **That list is a floor, not a count.** It is blind to one question re-asked in different words, and that is measured: a seat held two open records asking whether a named company counts as a customer and which parties count as intra-group - one question, no shared wording, no shared key, no shared origin. Reading only the audit and reporting the duplicate count as complete is the error this section exists against.
 **Look for:** several open records describing one defect, filed by different sightings.
 **Test:** group open records by **the defect they describe**, never by id, title, or filing date. Two records naming the same file and the same wrong behaviour are one record.

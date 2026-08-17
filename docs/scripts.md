@@ -29,7 +29,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-backlog-lint.sh`     | Detect-only report of mechanically stale `blocked-by:` edges in the durable backlog  |
 | `fm-blocker-class-lib.sh` | Shared jq predicate for whether a `blocked-by:` target is real in the live backlog or done archive |
 | `fm-decision-hold.sh`    | File, answer, fold, re-measure, verify, and complete durable captain decision records - the store's only writer |
-| `fm-decision-ledger.sh`  | Read that store: the captain's settled decisions verbatim, the open ones with their premises, and the records left structurally unfinished |
+| `fm-decision-ledger.sh`  | Read that store: the captain's settled decisions verbatim, the open ones with their premises, the records left structurally unfinished, and the adoption baseline that keeps pre-mechanism losses from burying them |
 | `fm-decision-inventory.sh` | Group the open captain decisions by originating investigation and keep the judge's record where a judge ruled, for `/decisionboard` (the fold is assumed, not verified) |
 | `fm-sea-chart.sh`        | Assemble one undertaking's sea chart - destination, decided, takeable, fog, course boundaries - for `/sea-chart`, reconciling its own decision records back against the backlog so a withheld one is counted rather than dropped; amends Wayfinder by Matt Pocock under the MIT licence (docs/sea-chart-provenance.md) |
 | `fm-chart-kinds-lib.sh`  | The `fog` and `out-of-course` backlog kinds, spelled once for every reader of them |

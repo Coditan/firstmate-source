@@ -364,6 +364,143 @@ test_an_unmeasurable_premise_is_never_treated_as_a_false_one() {
   pass "a premise that could not be measured is surfaced, never folded as a false one"
 }
 
+# THE CHECK HAD TO BE SURVIVABLE BEFORE IT COULD BE USEFUL. Run against the main
+# home the day after it was written, --audit reported 58 findings and 57 of them
+# were on captain records closed long before any of this existed. Bootstrap prints
+# one line per finding at every session start, so the check would have opened at 57
+# irreparable demands and never reached zero - and an alarm whose only available
+# response is to stop reading it costs exactly the attention this mechanism buys.
+# The baseline is what makes it converge; these two tests are what stop it becoming
+# a mute switch.
+seed_pre_mechanism_home() {  # <name> - a home whose captain records predate the mechanism
+  local home=$1
+  home=$(make_home "$home")
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] live-decision-still-open - A question still genuinely waiting on him (repo: firstmate) (kind: captain) (since 2026-08-17) (hold: captain decision pending) (hold-kind: captain)
+  Origin: live
+  Decision key: still-open
+
+## Done
+- [x] old-a-decision-lost - He answered this one and nobody stored it (repo: firstmate) (kind: captain) (done 2026-08-01)
+- [x] old-b-decision-lost - And this one, whose own text still says it is waiting (repo: firstmate) (kind: captain) (done 2026-08-02)
+  State: awaiting captain decision
+EOF
+  printf '%s\n' "$home"
+}
+
+test_the_baseline_converges_the_audit_without_hiding_what_it_covers() {
+  local home audit rc=0
+  home=$(seed_pre_mechanism_home baseline-converges)
+
+  audit=$(run_ledger "$home" --audit) || rc=$?
+  [ "$rc" -eq 1 ] || fail "pre-mechanism losses must be findings before a baseline is taken"
+  assert_contains "$audit" "closed-without-record old-a-decision-lost" \
+    "an unbaselined home must still report every lost answer"
+  assert_contains "$audit" "baseline absent - 3 of the findings above" \
+    "an unbaselined home must be told how many findings a baseline would cover, and how to take one"
+
+  run_ledger "$home" --record-baseline >/dev/null 2>&1 \
+    || fail "recording the adoption baseline must succeed on a home that has losses"
+
+  rc=0
+  audit=$(run_ledger "$home" --audit) || rc=$?
+  [ "$rc" -eq 0 ] || fail "with every finding baselined and nothing live, the audit must read clean"
+  if printf '%s' "$audit" | command grep -q "closed-without-record"; then
+    fail "a baselined loss must stop demanding action at every session start"
+  fi
+  assert_contains "$audit" "baseline recorded - 3 finding(s)" \
+    "a withheld finding that is never mentioned is a hidden one; the count must always be stated"
+  assert_contains "$audit" "lost, not pending" \
+    "the note must say what the withheld findings actually are"
+
+  # Withheld is not the same as gone: --json still carries every one of them.
+  audit=$(run_ledger "$home" --audit --json)
+  [ "$(printf '%s' "$audit" | jq '.baseline_excluded | length')" -eq 3 ] \
+    || fail "the structured view must still carry every withheld finding"
+  [ "$(printf '%s' "$audit" | jq -r '.baseline.count')" -eq 3 ] \
+    || fail "the structured view must state how large the baseline is"
+
+  if run_ledger "$home" --record-baseline >/dev/null 2>&1; then
+    fail "a baseline must never be re-taken as a side effect of a routine run"
+  fi
+  pass "the adoption baseline converges the audit and still names everything it covers"
+}
+
+# THE ONE THING A BASELINE MUST NEVER BE ABLE TO DO. If it could cover a record that
+# is still repairable, it would be a general mute switch for this check, and today's
+# mistake could be filed away as yesterday's history.
+test_a_baseline_cannot_silence_a_repairable_record() {
+  local home audit rc=0
+  home=$(seed_pre_mechanism_home baseline-not-a-mute)
+  run_ledger "$home" --record-baseline >/dev/null 2>&1 || fail "baseline failed"
+
+  # A captain record closed AFTER the baseline, with no answer stored anywhere.
+  printf -- '- [x] after-baseline-decision-lost - Closed today with the answer nowhere (repo: firstmate) (kind: captain) (done 2026-08-18)\n' \
+    >> "$home/data/backlog.md"
+  rc=0
+  audit=$(run_ledger "$home" --audit) || rc=$?
+  [ "$rc" -eq 1 ] || fail "a loss that happened after the baseline is a new failure and must report"
+  assert_contains "$audit" "closed-without-record after-baseline-decision-lost" \
+    "the baseline covers the records it named, never the shape of the finding"
+
+  # And a hand-written line naming a class that sits on a LIVE record is refused.
+  printf 'premise-unmeasurable live-decision-still-open\n' >> "$home/data/decision-baseline.md"
+  printf 'unfinished-close live-decision-still-open\n' >> "$home/data/decision-baseline.md"
+  rc=0
+  audit=$(run_ledger "$home" --audit) || rc=$?
+  [ "$rc" -eq 1 ] || fail "a rejected baseline line must not make the audit read clean"
+  assert_contains "$audit" "baseline rejected - 2 line(s)" \
+    "a baseline line that reaches for a live record must be reported, not silently dropped"
+  assert_contains "$audit" "only cover an already-closed record" \
+    "the rejection must say why those lines carry no authority"
+  pass "a baseline covers only what was already closed and can never mute a repairable record"
+}
+
+# THE BOARD IS THE THIRD SURFACE THE BRIEF NAMES, and it does not read the store
+# directly - it reads the canonical inventory. That indirection is exactly where a
+# settled question could quietly reappear as an open one, so it is checked here
+# rather than assumed from the layer below it.
+test_the_decision_board_input_never_carries_an_answered_question() {
+  local home out
+  home=$(make_home board-input)
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] board-decision-open - A question still genuinely waiting on him (repo: firstmate) (kind: captain) (since 2026-08-17) (hold: captain decision pending) (hold-kind: captain)
+  Origin: board
+  Decision key: open
+- [ ] board-decision-answered - One he already settled, whose close did not finish (repo: firstmate) (kind: captain) (since 2026-08-17) (hold: captain decision pending) (hold-kind: captain)
+  Resolution recorded by fm-decision-hold.
+  Decision digest: abc
+  Routed identities: none
+  Door: chat
+
+  Captain decision:
+  6 stunden
+
+  Routed work:
+  - (none)
+
+## Done
+EOF
+  run_bearings "$home" --all-decisions --all-queued > "$home/bearings.json" \
+    || fail "bearings failed"
+  out=$(PATH="$home/fakebin:$PATH" FM_HOME="$home" \
+    "$ROOT/bin/fm-decision-inventory.sh" --json --from "$home/bearings.json") \
+    || fail "the board's inventory must read a bearings capture"
+
+  assert_contains "$out" '"board-decision-open"' \
+    "a genuinely open question must still reach the board"
+  if printf '%s' "$out" | command grep -q "board-decision-answered"; then
+    fail "the board must never put a question back to him that he has already answered"
+  fi
+  pass "the decision board's input drops a question whose answer is already recorded"
+}
+
 test_settled_decision_survives_retention_into_the_archive
 test_a_second_question_cannot_be_filed_without_disposing_of_the_first
 test_an_answer_folds_the_questions_it_settles
@@ -374,3 +511,6 @@ test_audit_finds_every_way_a_close_can_be_unfinished
 test_the_duplicate_backstop_separates_distinct_questions_from_repeated_ones
 test_a_clean_home_reports_no_findings
 test_an_answered_decision_is_no_longer_presented_as_open
+test_the_baseline_converges_the_audit_without_hiding_what_it_covers
+test_a_baseline_cannot_silence_a_repairable_record
+test_the_decision_board_input_never_carries_an_answered_question

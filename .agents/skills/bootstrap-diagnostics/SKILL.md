@@ -157,6 +157,16 @@ When any diagnostic needs captain attention, report the plain consequence and re
   `duplicate-suspect` and `open-but-settled` mean several records may be asking one question, or a question already has a recorded answer; read them and fold what you confirm with `bin/fm-decision-hold.sh supersede`, and never report the count of these findings as the number of duplicates, because this check cannot see one question re-asked in different words.
   `premise-unmeasurable` means a record's premise could not be measured from the seat that tried; **do not fold it on that reading** - the finding may still be live on the machine where it was made, and a fold would close it with nobody left who could see it.
   The check is detect-only, repeats every session start until the record is repaired, and never closes a captain decision on its own.
+- `DECISION_LEDGER: baseline absent - <n> of the findings above sit on captain records that are already closed ...` - this home has never taken an adoption baseline, so the audit is still reporting losses that predate the mechanism and can never be repaired.
+  Read the listed findings once and decide whether those answers are genuinely lost rather than pending; if they are, run `bin/fm-decision-ledger.sh --record-baseline` once, which records that fact and lets the check converge on the records still worth repairing.
+  On the main home this was the difference between 58 findings every session and 2, so leaving it untaken is what makes the whole check unreadable.
+- `DECISION_LEDGER: baseline recorded - <n> finding(s) ... are withheld` - a disclosure, not a problem: the audit is withholding that many findings on records that were already closed when the baseline was taken, and it says so every run rather than hiding them.
+  No action.
+  The withheld findings are listed in the named file and still carried under `baseline_excluded` by `--audit --json`.
+- `DECISION_LEDGER: baseline rejected - <n> line(s) ... name a finding class that sits on a live record` - the baseline file has lines that reach for a record that is still repairable, and they carry no authority: a baseline may only ever cover an already-closed record.
+  Every finding those lines name is still being reported.
+  Remove the offending lines and repair the records they point at.
+- `DECISION_LEDGER: and <n> more not shown here ...` - the startup digest caps how many findings it prints and states the remainder rather than truncating silently; run `bin/fm-decision-ledger.sh --audit` for the full list.
 - `FLEET_SYNC: <repo>: skipped: <reason>` - a benign one-off skip (offline, no origin, local-only); bootstrap continued, investigate only if it blocks work.
   A skip can also report the bounded fleet-refresh timeout (`FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT`, or a fleet-size-aware default with a 20 second floor); a timeout never blocks startup.
 - `FLEET_SYNC: <repo>: recovered: <detail>` - the clone had drifted onto a clean detached HEAD holding no unique commits and the sync self-healed it (re-attached the default branch and fast-forwarded); no action needed, it is reported only so the self-heal is visible.
