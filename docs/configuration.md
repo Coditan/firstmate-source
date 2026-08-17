@@ -307,6 +307,48 @@ The original 300-second Bridge check remains in `bin/fm-watch.sh` as a slower fa
 If `systemd --user` is unavailable, bootstrap reports that fast delivery is unavailable and does not invent or auto-start another standing process.
 The watcher service's separately consented lingering setting applies to the same user manager.
 
+## Bosun observer service
+
+`bin/fm-bosun-service.sh` gives the observer-only bosun a lifetime of its own.
+Without it the bosun judges only while whoever started it is still there, which is not a tier at all.
+[`docs/bosun-observer.md`](bosun-observer.md) owns what the bosun is, what it deliberately has no authority over, and why its model is provisional; this section owns how it is kept running.
+
+The component is **opt-in per home**.
+A home opts into it by creating gitignored `config/bosun`; the file's contents are unread, and without it the component is not considered, so no unit is installed, no diagnostic is printed, and no process is started.
+Removing the flag after installation stops future convergence and does not stop or disable an already-running instance.
+Turning an installed observer off is the separate explicit step `systemctl --user disable --now fm-bosun@$(systemd-escape --path "$FM_HOME").service`.
+This two-step off switch deliberately matches the frequency monitor because two near-identical units behaving differently would be a worse trap.
+That gate exists because one judgement costs an agent turn, so a standing process that spends it is a decision each home makes rather than one an instruction-surface update delivers.
+The first unit copy, enablement, and unconditional restart require explicit captain consent through `BOSUN_UNIT:` and `bin/fm-bootstrap.sh install bosun-unit`.
+The restart is load-bearing because starting an already-active instance is a no-op: `enable --now` alone could leave the old executable, `PATH`, judge resolution, and unit directives running while later convergence sees matching recorded files and never restarts it.
+The installation boundary follows the same never-restart-without-a-record rule as convergence, so reinstalling over a running observer that reads `STALLED` or `BLIND` preserves its evidence on the findings surface before restarting it.
+
+The tracked template is `systemd/fm-bosun@.service` and the instance is `fm-bosun@$(systemd-escape --path "$FM_HOME").service`, with private per-home values in mode-`0600` `state/.bosun-service.env`.
+That environment records the resolved `PATH` for the reason [`bin/fm-service-path-lib.sh`](../bin/fm-service-path-lib.sh) documents, plus the home's judge: the judge is a per-home command rather than a fixed tool, so it is resolved into the composed value and separately reported when the recorded value cannot reach it.
+An observer that cannot reach its judge keeps running and records every event as a failure-path escalation, which no liveness reading would notice.
+After installation, locked bootstrap converges stale template bytes, checkout paths, loaded script versions, and the recorded environment.
+
+**The liveness reading is not the unit's own state**, and that is the whole shape of the component rather than a detail of it.
+On the vessel this was built against, `bridge-notify-poll.timer` reported loaded, enabled and active for nine days after it last did any work.
+A unit's own state answers whether something was started, never whether it is doing what it was started for, so this script never asks `systemctl` whether the instance is active.
+It reads `bin/fm-bosun.sh status`, which resolves the bosun's own health record against the clock and against the journal it is supposed to be consuming.
+`is-enabled` is still read, because installation and consent are a different question from liveness.
+
+What that reading causes is split deliberately.
+`STOPPED` and `DEAD` mean no bosun process is consuming the stream, which a restart fixes, so locked convergence restarts them.
+`STALLED` and `BLIND` mean one is running and has stopped consuming, or cannot read the stream at all; without configuration drift those are reported and left alone.
+When unit bytes or the recorded environment drift, convergence restarts one only after `bin/fm-finding.sh` preserves a high-severity evidence record on the findings surface with the drift, the pre-restart reading, and the health record contents.
+If that record cannot be written, convergence does not restart the observer and reports the unreachable surface.
+The rule is never restart a stalled or blind observer without a record, so the stall evidence survives the repair and convergence and fault visibility are both kept rather than traded.
+The reading is taken in read-only sessions too, since it is a read and a session that can see a stalled observer should say so rather than defer it.
+
+The captain's 2026-08-17 ruling superseded an earlier unconditional never-auto-restart rule: refusing every restart left drift permanently unconverged, while restarting without a record erased the evidence that explained the fault.
+Writing the finding first keeps both properties, and deliberately leaves it for the watcher or supervising session rather than the bosun, which cannot be the reader when it is the component that stalled.
+
+The unit declares no sandboxing directives.
+On this host `kernel.apparmor_restrict_unprivileged_userns=1` blocks the user namespace `ProtectHome`, `InaccessiblePaths`, `ReadOnlyPaths` and the `Bind*` family need: systemd applies none of them, exits 0, and reports every one as set.
+A directive that reads as applied and is not is worse than an absent one.
+
 ## Harness support
 
 claude, codex, opencode, pi, and grok are all empirically verified; new harnesses get verified through a supervised trial task before joining the set.

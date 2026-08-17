@@ -137,6 +137,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-bosun.sh`            | Run, watch, and read back the observer-only bosun: it judges journal events and records every judgement, and it changes nothing about what surfaces (docs/bosun-observer.md) |
 | `fm-bosun-lib.sh`        | The bosun's verdict record contract, its escalation bias on every failure to judge, and the health record that separates a quiet bosun from a stalled one |
 | `fm-bosun-judge-codex.sh` | The bosun's default judge: one event in on stdin, one schema-constrained JSON verdict out. A provisional model behind a swappable seam, not the survey's answer |
+| `fm-bosun-service.sh`    | Detect, converge, or explicitly install the opted-in home's bosun unit, reading liveness from the observer's own work rather than from whether the unit says active (docs/configuration.md "Bosun observer service") |
 | `fm-event-batch.sh`      | Group journal events into priority batches, hold each for a bounded time, and reconcile every event against the journal with `account`; it decides timing and grouping only (docs/event-batching.md) |
 | `fm-event-batch-lib.sh`  | The batcher's member and batch record contracts, the never-dropped cursor order, and the verb-to-timing-class mapping |
 | `fm-classify-lib.sh`     | Shared captain-relevant and declared-external-wait wake classification vocabulary    |

@@ -257,6 +257,15 @@ case "$cmd" in
     printf 'fm-bosun: observing (judge: %s, interval: %ss). It records; it decides nothing.\n' \
       "$(fm_bosun_judge_command)" "$FM_BOSUN_INTERVAL"
 
+    # A start beacon, written BEFORE the first pass. Without it, a bosun that has
+    # just started reads from outside as whatever the previous run left on disk -
+    # STOPPED after a clean exit, DEAD after a wedge - for as long as its first
+    # pass takes, and against a long backlog that is minutes. Anything supervising
+    # this run would then read a running bosun as a dead one and restart it, on
+    # every check, forever. It deliberately does NOT clear the stall clock; see
+    # fm_bosun_health_write's note on why a crash loop has to stay visible.
+    fm_bosun_health_write "$run_state" "$started" 0 0 0 "$(fm_bosun_cursor)" || true
+
     while :; do
       cursor_before=$(fm_bosun_cursor)
       fm_bosun_pass

@@ -1,0 +1,23 @@
+# No sandboxing directives are declared here on purpose. On the host this was
+# built against, kernel.apparmor_restrict_unprivileged_userns=1 blocks the user
+# namespace ProtectHome, InaccessiblePaths, ReadOnlyPaths and the Bind* family
+# need, and systemd applies none of them while still exiting 0 and reporting
+# every one as set. A directive that reads as applied and is not is worse than
+# an absent one, so this unit declares no containment it has not demonstrated.
+[Unit]
+Description=Firstmate bosun observer for %I
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+EnvironmentFile=/%I/state/.bosun-service.env
+# Resolve the judge only from durable per-home sources, because a manager
+# override absent from the recorded environment would make diagnostics describe
+# a different judge from the one the service runs.
+UnsetEnvironment=FM_BOSUN_JUDGE_CMD
+ExecStart=/usr/bin/env bash ${FM_BOSUN_EXEC} run
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
