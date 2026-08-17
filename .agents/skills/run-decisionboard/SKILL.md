@@ -19,6 +19,11 @@ A board that is built and looked at proves it renders; only a board that is driv
 This skill is that missing check.
 `.agents/skills/decisionboard` composes a real board and `docs/board-layout.md` owns its markup; this one exercises whatever board you hand it.
 
+It was validated against that board.
+Pointed at a copy of the real `decisions-2026-08-17.html`, `query` reported `decision cards: 0` and refused it, from the rendered page alone and knowing nothing about the file.
+The file agrees: seven `fm-card` decision cards, and its only `<form` and `<input type="radio"` are inside the doc comment of the `board.js` that every board inlines.
+Had this existed that morning, the board would not have gone out.
+
 ## The driver is the primary path
 
     .claude/skills/run-decisionboard/fm-run-decisionboard.sh selftest
