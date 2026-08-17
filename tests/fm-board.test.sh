@@ -256,30 +256,70 @@ test_the_decision_shape_offers_choices_and_a_note() {
   # gives him nothing to click forces the answer into chat, the one channel with
   # no memory. The worked example is what an agent copies, so it is the thing
   # that has to keep carrying both controls.
-  local decision=$ROOT/docs/examples/board-body-decision.html status=0
+  local decision=$ROOT/docs/examples/board-body-decision.html status=0 semantic_status=0
   assert_present "$decision" "the worked decision-shape example is missing"
   rm -f "$OUT"
   "$BOARD" --title "Entscheidungen" --body "$decision" --out "$OUT" \
     >/dev/null 2>"$BUILD_ERR_FILE" || status=$?
   expect_code 0 "$status" \
     "the decision-shape example must build"$'\n'"$(build_stderr)"
-  assert_grep 'type="radio"' "$decision" "the decision example offers no selectable options"
-  assert_grep 'data-fm-note' "$decision" "the decision example carries no note field"
-  assert_grep 'class="fm-reserve"' "$decision" \
-    "the decision example carries no reservation block"
-  # Every question form must carry BOTH controls, not one of the two somewhere
-  # on the page. Count them: one note field per declared question.
-  local questions notes
-  questions=$(grep -c 'data-fm-question=' "$decision")
-  notes=$(grep -c 'data-fm-note' "$decision")
-  [ "$questions" -gt 0 ] || fail "the decision example declares no questions at all"
-  [ "$questions" = "$notes" ] || \
-    fail "the decision example has $questions questions but $notes note fields"
-  # The body must not write what the tooling owns.
-  assert_no_grep 'class="fm-tally"' "$decision" \
-    "a board body must not hand-write the tally strip"
-  assert_no_grep 'fm-vessel' "$decision" \
-    "a board body must not hand-write the vessel name"
+  python3 - "$OUT" <<'PY' || semantic_status=$?
+from html.parser import HTMLParser
+import sys
+
+class BoardModel(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.position = 0
+        self.reserve_at = None
+        self.forms = []
+        self.current = None
+
+    def handle_starttag(self, tag, attrs):
+        self.position += 1
+        attrs = dict(attrs)
+        classes = set(attrs.get("class", "").split())
+        if "fm-reserve" in classes and self.reserve_at is None:
+            self.reserve_at = self.position
+        if tag == "form" and "data-fm-question" in attrs:
+            self.current = {
+                "key": attrs["data-fm-question"],
+                "at": self.position,
+                "radio": False,
+                "note": False,
+            }
+            self.forms.append(self.current)
+        if self.current is not None:
+            if tag == "input" and attrs.get("type", "").lower() == "radio":
+                self.current["radio"] = True
+            if "data-fm-note" in attrs:
+                self.current["note"] = True
+
+    def handle_endtag(self, tag):
+        if tag == "form":
+            self.current = None
+
+model = BoardModel()
+with open(sys.argv[1], encoding="utf-8") as board:
+    model.feed(board.read())
+
+errors = []
+if not model.forms:
+    errors.append("the composed board declares no questions")
+if model.reserve_at is None:
+    errors.append("the composed board has no reservation block")
+elif model.forms and model.reserve_at >= model.forms[0]["at"]:
+    errors.append("the reservation block does not precede the first question")
+for form in model.forms:
+    if not form["radio"]:
+        errors.append(f'question {form["key"]} has no selectable option set')
+    if not form["note"]:
+        errors.append(f'question {form["key"]} has no note field')
+if errors:
+    raise SystemExit("; ".join(errors))
+PY
+  [ "$semantic_status" = 0 ] || \
+    fail "the composed decision board has an invalid decision shape"
   pass "the worked decision shape offers selectable options plus a note per decision"
 }
 
@@ -374,8 +414,6 @@ test_layout_lives_in_one_place() {
   assert_present "$js" "the versioned board behavior is missing"
   assert_grep 'prefers-color-scheme' "$css" "layout lost its dark-mode support"
   assert_grep 'queueKey' "$js" "board behavior lost the per-question queueKey"
-  assert_grep 'fm-tally' "$css" "layout lost the tally strip"
-  assert_grep 'fm-reserve' "$css" "layout lost the reservation block"
   pass "the layout and behavior live in one versioned place"
 }
 

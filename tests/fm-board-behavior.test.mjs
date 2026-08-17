@@ -183,6 +183,10 @@ function change(doc, el) {
   doc._handlers.change({ target: el });
 }
 
+function input(doc, el) {
+  doc._handlers.input({ target: el });
+}
+
 // --- 1. opened from disk, no Lavish server ---------------------------------
 
 {
@@ -378,19 +382,20 @@ function change(doc, el) {
     'and it leaves the square unstruck, because it genuinely was not sent');
 }
 
-// --- 12. changing an answer after sending puts it back in the count --------
+// --- 12. editing a sent note immediately puts it back in the count ----------
 
 {
   // The count is of answers that have not been sent back. An answer edited
   // after it was sent is, in its current form, an answer nobody has received.
   const { doc, tally } = install({ withLavish: true });
-  const a = buildForm('q1', { choice: 'A', entryId: 'e1' });
+  const a = buildForm('q1', { choice: 'A', note: 'first', entryId: 'e1' });
   reinit(doc, [a.form]);
   submit(doc, a.form);
   check(tallyCount(tally) === 0, 'sent, so out of the count');
 
-  change(doc, a.form.children.find((el) => el.tagName === 'TEXTAREA'));
-  check(tallyCount(tally) === 1, 'changing the answer afterwards puts it back in the count');
+  a.note.value = 'revised';
+  input(doc, a.note);
+  check(tallyCount(tally) === 1, 'editing the sent note immediately puts it back in the count');
   check(stripParts(tally).row.innerHTML.includes('#fm-mk-pencil'),
     'and returns its square to pencil');
 }

@@ -502,6 +502,7 @@
 
   document.addEventListener('submit', onSubmit);
   document.addEventListener('change', onChange);
+  document.addEventListener('input', onChange);
   document.addEventListener('click', onStripClick);
 
   if (document.readyState === 'loading') {
