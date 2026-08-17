@@ -1314,6 +1314,9 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   else
     return_rc=$?
     echo "error: treehouse return failed for worktree $WT; teardown aborted" >&2
+    if [ "$return_rc" -eq "$TEARDOWN_TREEHOUSE_LOCK_REFUSED" ]; then
+      return_rc=1
+    fi
     exit "$return_rc"
   fi
 fi
