@@ -340,7 +340,8 @@ exit 0
 SH
   chmod +x "$fakebin/chrome-devtools-axi"
   mkdir -p "$shot_tmp/staging"
-  out=$(PATH="$fakebin:$PATH" FM_RUN_DECISIONBOARD_TMPDIR="$shot_tmp/staging" \
+  mkdir -m 700 "$shot_tmp/runtime"
+  out=$(PATH="$fakebin:$PATH" XDG_RUNTIME_DIR="$shot_tmp/runtime" FM_RUN_DECISIONBOARD_TMPDIR="$shot_tmp/staging" \
     "$DRIVER" shot "$shot_tmp/out.png" 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "shot reported success for a screenshot that was never written"$'\n'"$out"
   [ ! -e "$shot_tmp/out.png" ] || fail "shot wrote a destination file with no screenshot behind it"
@@ -363,9 +364,10 @@ exit 0
 SH
   chmod +x "$fakebin/chrome-devtools-axi"
   mkdir -p "$shot_tmp/staging"
+  mkdir -m 700 "$shot_tmp/runtime"
   printf 'the previous run left this behind\n' \
     > "$shot_tmp/staging/fm-run-decisionboard-shot.$(id -un).png"
-  out=$(PATH="$fakebin:$PATH" FM_RUN_DECISIONBOARD_TMPDIR="$shot_tmp/staging" \
+  out=$(PATH="$fakebin:$PATH" XDG_RUNTIME_DIR="$shot_tmp/runtime" FM_RUN_DECISIONBOARD_TMPDIR="$shot_tmp/staging" \
     "$DRIVER" shot "$shot_tmp/out.png" 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "shot passed on a staging file this run never touched"$'\n'"$out"
   [ ! -e "$shot_tmp/out.png" ] || fail "shot copied a stale staging file to the destination"
@@ -383,9 +385,10 @@ printf 'new image bytes\n' > "$2"
 SH
   chmod +x "$fakebin/chrome-devtools-axi"
   mkdir -p "$shot_tmp/staging"
+  mkdir -m 700 "$shot_tmp/runtime"
   staging="$shot_tmp/staging/fm-run-decisionboard-shot.$(id -un).png"
   printf 'old image bytes\n' > "$staging"
-  out=$(PATH="$fakebin:$PATH" FM_RUN_DECISIONBOARD_TMPDIR="$shot_tmp/staging" \
+  out=$(PATH="$fakebin:$PATH" XDG_RUNTIME_DIR="$shot_tmp/runtime" FM_RUN_DECISIONBOARD_TMPDIR="$shot_tmp/staging" \
     "$DRIVER" shot "$shot_tmp/out.png" 2>&1) \
     || fail "shot rejected changed same-size content"$'\n'"$out"
   assert_contains "$(cat "$shot_tmp/out.png")" "new image bytes" \
@@ -407,13 +410,34 @@ exit 1
 SH
   chmod +x "$fakebin/chrome-devtools-axi" "$fakebin/flock"
   mkdir -p "$shot_tmp/staging"
-  out=$(PATH="$fakebin:$PATH" FM_RUN_DECISIONBOARD_TMPDIR="$shot_tmp/staging" \
+  mkdir -m 700 "$shot_tmp/runtime"
+  out=$(PATH="$fakebin:$PATH" XDG_RUNTIME_DIR="$shot_tmp/runtime" FM_RUN_DECISIONBOARD_TMPDIR="$shot_tmp/staging" \
     FM_RUN_DECISIONBOARD_LOCK_TIMEOUT=0 "$DRIVER" shot "$shot_tmp/out.png" 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "shot proceeded without acquiring its capture lock"$'\n'"$out"
   [ ! -e "$shot_tmp/out.png" ] || fail "shot produced evidence after its capture lock was refused"
   assert_contains "$out" "could not serialise the screenshot capture" \
     "shot did not identify the unacquirable capture lock"
   pass "shot refuses evidence it cannot serialise against other runs"
+}
+
+test_shot_refuses_an_unsafe_lock_directory() {
+  local shot_tmp fakebin out status=0
+  fm_test_tmproot shot_tmp fm-run-db-unsafe-lock
+  fakebin=$(fm_fakebin "$shot_tmp")
+  cat > "$fakebin/chrome-devtools-axi" <<'SH'
+#!/usr/bin/env bash
+printf 'fresh image bytes\n' > "$2"
+SH
+  chmod +x "$fakebin/chrome-devtools-axi"
+  mkdir -p "$shot_tmp/staging" "$shot_tmp/runtime"
+  chmod 770 "$shot_tmp/runtime"
+  out=$(PATH="$fakebin:$PATH" XDG_RUNTIME_DIR="$shot_tmp/runtime" \
+    FM_RUN_DECISIONBOARD_TMPDIR="$shot_tmp/staging" "$DRIVER" shot "$shot_tmp/out.png" 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "shot used a group-writable lock directory"$'\n'"$out"
+  [ ! -e "$shot_tmp/out.png" ] || fail "shot produced evidence with an unsafe lock directory"
+  assert_contains "$out" "lock base is group- or world-writable" \
+    "shot did not identify the unsafe lock directory"
+  pass "shot refuses a lock directory other accounts can write"
 }
 
 test_doctor_accepts_a_same_size_refresh() {
@@ -426,9 +450,10 @@ printf 'new image bytes\n' > "$2"
 SH
   chmod +x "$fakebin/chrome-devtools-axi"
   mkdir -p "$doctor_tmp/staging"
+  mkdir -m 700 "$doctor_tmp/runtime"
   staging="$doctor_tmp/staging/fm-run-decisionboard-shot.$(id -un).png"
   printf 'old image bytes\n' > "$staging"
-  out=$(PATH="$fakebin:$PATH" FM_RUN_DECISIONBOARD_TMPDIR="$doctor_tmp/staging" \
+  out=$(PATH="$fakebin:$PATH" XDG_RUNTIME_DIR="$doctor_tmp/runtime" FM_RUN_DECISIONBOARD_TMPDIR="$doctor_tmp/staging" \
     "$DRIVER" doctor 2>&1) || fail "doctor failed to re-measure the bridge"$'\n'"$out"
   assert_not_contains "$out" "bridge account: unmeasured" \
     "doctor treated a changed same-size screenshot as stale"
@@ -634,6 +659,7 @@ test_shot_refuses_a_screenshot_that_wrote_nothing
 test_shot_refuses_a_stale_staging_file
 test_shot_accepts_a_same_size_refresh
 test_shot_refuses_an_unacquirable_capture_lock
+test_shot_refuses_an_unsafe_lock_directory
 test_doctor_accepts_a_same_size_refresh
 test_answer_reresolves_the_exact_option_name
 test_answer_refuses_a_changed_confirmation_for_a_different_checked_option

@@ -526,12 +526,58 @@ shot_staging_path() {
 }
 
 SCREENSHOT_EXIT_STATUS=0
+SCREENSHOT_LOCK_ERROR=''
+SCREENSHOT_LOCK_PATH=''
+screenshot_lock_path() {
+  local staging=$1 base lock_dir owner mode digest
+  base=${XDG_RUNTIME_DIR:-$HOME}
+  SCREENSHOT_LOCK_ERROR=''
+  SCREENSHOT_LOCK_PATH=''
+  if [ ! -d "$base" ]; then
+    SCREENSHOT_LOCK_ERROR="could not serialise the screenshot capture because the lock base is not a directory: $base"
+    return 1
+  fi
+  owner=$(stat -c '%u' "$base" 2>/dev/null) || owner=''
+  mode=$(stat -c '%a' "$base" 2>/dev/null) || mode=''
+  if [ "$owner" != "$(id -u)" ]; then
+    SCREENSHOT_LOCK_ERROR="could not serialise the screenshot capture because this account does not own the lock base: $base"
+    return 1
+  fi
+  if [ -z "$mode" ] || (( (8#$mode & 0022) != 0 )); then
+    SCREENSHOT_LOCK_ERROR="could not serialise the screenshot capture because the lock base is group- or world-writable: $base"
+    return 1
+  fi
+  lock_dir="$base/fm-run-decisionboard-locks"
+  mkdir -p -m 700 "$lock_dir" 2>/dev/null || {
+    SCREENSHOT_LOCK_ERROR="could not serialise the screenshot capture because the lock directory could not be created: $lock_dir"
+    return 1
+  }
+  owner=$(stat -c '%u' "$lock_dir" 2>/dev/null) || owner=''
+  mode=$(stat -c '%a' "$lock_dir" 2>/dev/null) || mode=''
+  if [ -L "$lock_dir" ] || [ "$owner" != "$(id -u)" ]; then
+    SCREENSHOT_LOCK_ERROR="could not serialise the screenshot capture because this account does not exclusively own the lock directory: $lock_dir"
+    return 1
+  fi
+  if [ -z "$mode" ] || (( (8#$mode & 0022) != 0 )); then
+    SCREENSHOT_LOCK_ERROR="could not serialise the screenshot capture because the lock directory is group- or world-writable: $lock_dir"
+    return 1
+  fi
+  digest=$(printf '%s' "$staging" | sha256sum | awk '{print $1}')
+  SCREENSHOT_LOCK_PATH="$lock_dir/screenshot-$digest.lock"
+}
+
 capture_staged_screenshot() {
-  local staging=$1 dest=${2:-} lock="${1}.lock" lock_fd before='' after result=0
+  local staging=$1 dest=${2:-} lock lock_fd before='' after result=0
   SCREENSHOT_EXIT_STATUS=0
-  exec {lock_fd}> "$lock" || return 3
+  screenshot_lock_path "$staging" || return 3
+  lock=$SCREENSHOT_LOCK_PATH
+  exec {lock_fd}>> "$lock" || {
+    SCREENSHOT_LOCK_ERROR="could not serialise the screenshot capture because the lock file could not be opened: $lock"
+    return 3
+  }
   # This lock serialises runs sharing this account's staging path; it cannot serialise other UNIX accounts driving the shared browser bridge.
   if ! flock -w "${FM_RUN_DECISIONBOARD_LOCK_TIMEOUT:-5}" "$lock_fd"; then
+    SCREENSHOT_LOCK_ERROR="could not serialise the screenshot capture against other runs on this host within ${FM_RUN_DECISIONBOARD_LOCK_TIMEOUT:-5} seconds"
     exec {lock_fd}>&-
     return 3
   fi
@@ -561,7 +607,7 @@ cmd_shot() {
   case "$capture_result" in
     1) die "shot: chrome-devtools-axi exited $SCREENSHOT_EXIT_STATUS but wrote no screenshot at $staging (a screenshot's exit status is not evidence; the file is)" ;;
     2) die "shot: chrome-devtools-axi exited $SCREENSHOT_EXIT_STATUS and left $staging unchanged, so this run captured nothing (the file there is from an earlier run)" ;;
-    3) die "shot: could not serialise the screenshot capture against other runs on this host within ${FM_RUN_DECISIONBOARD_LOCK_TIMEOUT:-5} seconds" ;;
+    3) die "shot: $SCREENSHOT_LOCK_ERROR" ;;
     4) die "shot: could not copy $staging to $dest" ;;
   esac
   [ -s "$dest" ] || die "shot: $dest is empty after the copy"
@@ -720,7 +766,7 @@ cmd_doctor() {
     if [ "$capture_result" -eq 0 ]; then
       printf 'bridge account: %s (from the owner of a screenshot it just wrote)\n' "$(stat -c '%U' "$probe")"
     elif [ "$capture_result" -eq 3 ]; then
-      printf 'bridge account: unmeasured (capture could not be serialised against other runs on this host)\n'
+      printf 'bridge account: unmeasured (%s)\n' "$SCREENSHOT_LOCK_ERROR"
     else
       printf 'bridge account: unmeasured (screenshot exited %s and wrote nothing; open a page first)\n' "$SCREENSHOT_EXIT_STATUS"
     fi
