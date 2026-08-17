@@ -133,16 +133,58 @@ commit_in_default_history() {
 }
 
 branch_patch_content_in_default() {
-  local branch=$1 cherry
+  local branch=$1 cherry line commit patch_id default_commit matches='' seen=0
   cherry=$(git -C "$PROJECT_ABS" cherry "$DEFAULT_REF" "$branch" 2>/dev/null) || return 1
   [ -n "$cherry" ] || return 0
-  ! printf '%s\n' "$cherry" | grep -q '^+'
+  ! printf '%s\n' "$cherry" | grep -q '^+' || return 1
+  while IFS= read -r line; do
+    case "$line" in '- '*)
+      commit=${line#'- '}
+      patch_id=$(git -C "$PROJECT_ABS" show --pretty=medium --no-ext-diff "$commit" 2>/dev/null \
+        | git patch-id --stable 2>/dev/null \
+        | awk 'NR == 1 { print $1 }') || return 1
+      [ -n "$patch_id" ] || continue
+      default_commit=$(
+        git -C "$PROJECT_ABS" log --format=%H "$DEFAULT_REF" 2>/dev/null |
+          while IFS= read -r candidate; do
+            [ -n "$candidate" ] || continue
+            candidate_patch=$(git -C "$PROJECT_ABS" show --pretty=medium --no-ext-diff "$candidate" 2>/dev/null \
+              | git patch-id --stable 2>/dev/null \
+              | awk 'NR == 1 { print $1 }') || exit 1
+            [ "$candidate_patch" = "$patch_id" ] || continue
+            printf '%s\n' "$candidate"
+            exit 0
+          done
+      ) || return 1
+      [ -n "$default_commit" ] || return 1
+      default_commit=$(git -C "$PROJECT_ABS" rev-parse --short "$default_commit" 2>/dev/null || printf '%s' "$default_commit")
+      case "
+$matches
+" in *"
+$default_commit
+"*) ;;
+        *)
+          matches="${matches}${default_commit}
+"
+          ;;
+      esac
+      seen=1
+      ;;
+    esac
+  done <<EOF
+$cherry
+EOF
+  [ "$seen" -eq 1 ] || return 1
+  printf '%s' "$matches" | paste -sd, -
 }
 
 branch_tree_in_default_history() {
-  local branch=$1 tree
+  local branch=$1 tree commit
   tree=$(git -C "$PROJECT_ABS" rev-parse --verify "$branch^{tree}" 2>/dev/null) || return 1
-  git -C "$PROJECT_ABS" log --format=%T "$DEFAULT_REF" 2>/dev/null | grep -Fx "$tree" >/dev/null
+  commit=$(git -C "$PROJECT_ABS" log --format='%H %T' "$DEFAULT_REF" 2>/dev/null \
+    | awk -v t="$tree" '$2 == t { print $1; exit }') || return 1
+  [ -n "$commit" ] || return 1
+  git -C "$PROJECT_ABS" rev-parse --short "$commit" 2>/dev/null || printf '%s\n' "$commit"
 }
 
 pr_number_from_branch() {
@@ -182,13 +224,12 @@ branch_is_safe() {
     printf 'default branch contains %s by ancestry\n' "$tip"
     return 0
   fi
-  if branch_patch_content_in_default "$branch"; then
-    proof=$(git -C "$PROJECT_ABS" rev-parse --short "$tip" 2>/dev/null || printf '%s' "$tip")
-    printf 'default branch contains %s by patch-id\n' "$proof"
+  if proof=$(branch_patch_content_in_default "$branch"); then
+    printf 'default branch history contains patch content landed as %s\n' "$proof"
     return 0
   fi
-  if branch_tree_in_default_history "$branch"; then
-    printf 'default branch history contains the branch tip tree\n'
+  if proof=$(branch_tree_in_default_history "$branch"); then
+    printf 'default branch history contains branch tip tree landed as %s\n' "$proof"
     return 0
   fi
   if merged_pr_proves_branch "$branch"; then

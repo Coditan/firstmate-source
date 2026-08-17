@@ -129,7 +129,7 @@ test_pr_named_branch_refuses_unrelated_merged_pr() {
 }
 
 test_pr_named_squash_equivalent_branch_passes_by_content() {
-  local home repo rc=0
+  local home repo squash_commit rc=0
   home=$(make_home pr-squash-equivalent)
   repo="$home/projects/alpha"
   git -C "$repo" switch -q -c pr33
@@ -143,14 +143,40 @@ test_pr_named_squash_equivalent_branch_passes_by_content() {
   printf 'one\ntwo\n' > "$repo/squashed.txt"
   git -C "$repo" add squashed.txt
   git -C "$repo" commit -qm "squash pr33 content"
+  squash_commit=$(git -C "$repo" rev-parse --short HEAD)
   git -C "$repo" push -q origin main
   git -C "$repo" fetch -q origin
   run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
   expect_code 0 "$rc" "pr squash equivalent"
   assert_grep "PASS: project alpha removal safety checks passed." "$home/out" \
     "squash-equivalent branch did not pass by landed content"
+  assert_grep "landed as $squash_commit" "$home/out" \
+    "squash-equivalent branch did not name the default-history landed-as commit"
   [ -d "$home/projects/alpha" ] || fail "squash-equivalent dry-run removed the clone"
   pass "project removal accepts PR-named branches whose content landed by squash"
+}
+
+test_patch_equivalent_branch_names_landed_as_commit() {
+  local home repo landed_commit rc=0
+  home=$(make_home patch-equivalent-audit)
+  repo="$home/projects/alpha"
+  git -C "$repo" switch -q -c feature/replayed
+  printf 'replayed\n' > "$repo/replayed.txt"
+  git -C "$repo" add replayed.txt
+  git -C "$repo" commit -qm "add replayed content"
+  git -C "$repo" switch -q main
+  printf 'replayed\n' > "$repo/replayed.txt"
+  git -C "$repo" add replayed.txt
+  git -C "$repo" commit -qm "land replayed content independently"
+  landed_commit=$(git -C "$repo" rev-parse --short HEAD)
+  git -C "$repo" push -q origin main
+  git -C "$repo" fetch -q origin
+  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 0 "$rc" "patch equivalent audit"
+  assert_grep "landed as $landed_commit" "$home/out" \
+    "patch-equivalent branch did not name the default-history landed-as commit"
+  [ -d "$home/projects/alpha" ] || fail "patch-equivalent dry-run removed the clone"
+  pass "project removal names the default-history commit for patch-equivalent work"
 }
 
 test_treehouse_worktree_refuses_unpreserved_head() {
@@ -381,6 +407,7 @@ test_dirty_primary_refuses
 test_unlanded_branch_refuses
 test_pr_named_branch_refuses_unrelated_merged_pr
 test_pr_named_squash_equivalent_branch_passes_by_content
+test_patch_equivalent_branch_names_landed_as_commit
 test_treehouse_worktree_refuses_unpreserved_head
 test_treehouse_worktree_refuses_preserved_head
 test_treehouse_worktree_refuses_dirty_preserved_head
