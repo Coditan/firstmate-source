@@ -860,6 +860,42 @@ def _shell_quote(value):
     return "'%s'" % value.replace("'", "'\\''")
 
 
+def deletion_accounting(before, loaded, archive, rows):
+    fallback_keys = occurrence_keys([entry["heading"] for entry in before["entries"]])
+    before_keys = {
+        entry.get("key", fallback_key)
+        for entry, fallback_key in zip(before["entries"], fallback_keys)
+    }
+    unknown = [row for row in rows if row["key"] not in before_keys]
+    known = [row for row in rows if row["key"] in before_keys]
+    before_counts = Counter(entry["norm"] for entry in before["entries"])
+    after_counts = Counter(entry["norm"] for entry in loaded["entries"])
+    if archive:
+        after_counts.update(entry["norm"] for entry in archive["entries"])
+    declared = Counter(
+        row["norm"] for row in known if row["verdict"] in ("delete", "fold")
+    )
+    observed = Counter({
+        norm: max(0, count - after_counts[norm])
+        for norm, count in before_counts.items()
+    })
+    undeclared = []
+    ghosts = []
+    for norm, count in before_counts.items():
+        missing = max(0, observed[norm] - declared[norm])
+        undeclared.extend(
+            "%s#%d" % (norm, ordinal)
+            for ordinal in range(count - missing + 1, count + 1)
+        )
+        extra = max(0, declared[norm] - observed[norm])
+        declarations = [
+            row for row in known
+            if row["norm"] == norm and row["verdict"] in ("delete", "fold")
+        ]
+        ghosts.extend(declarations[-extra:] if extra else [])
+    return before_keys, known, unknown, undeclared, ghosts
+
+
 def cmd_check(args):
     failures = []
     warnings = []
@@ -897,11 +933,9 @@ def cmd_check(args):
         archive = file_facts(args.archive, args.level or before.get("level"))
         archive_text = read_text(args.archive)
 
-    fallback_before_keys = occurrence_keys([e["heading"] for e in before["entries"]])
-    before_keys = {
-        entry.get("key", fallback_key)
-        for entry, fallback_key in zip(before["entries"], fallback_before_keys)
-    }
+    before_keys, known_rows, unknown_rows, undeclared_loss, ghost_rows = (
+        deletion_accounting(before, loaded, archive, rows)
+    )
     before_counts = Counter(e["norm"] for e in before["entries"])
     loaded_counts = Counter(e["norm"] for e in loaded["entries"])
     archive_counts = Counter(e["norm"] for e in archive["entries"]) if archive else Counter()
@@ -954,6 +988,11 @@ def cmd_check(args):
         failures.append(
             "%d baseline entries carry no verdict: %s"
             % (len(undeclared), ", ".join(undeclared[:5]))
+        )
+    for row in unknown_rows:
+        failures.append(
+            "worksheet occurrence key `%s` is absent from the baseline snapshot"
+            % row["key"]
         )
 
     # --- 2. heading counts must fall ----------------------------------------
@@ -1012,35 +1051,15 @@ def cmd_check(args):
         )
 
     # --- 3. every deletion is declared --------------------------------------
-    declared_gone = Counter(
-        row["norm"] for row in by_key.values() if row["verdict"] in ("delete", "fold")
-    )
-    observed_drop = Counter({
-        norm: max(0, count - after_counts[norm]) for norm, count in before_counts.items()
-    })
-    undeclared_loss = []
-    ghosts = []
-    for norm, count in before_counts.items():
-        missing_count = max(0, observed_drop[norm] - declared_gone[norm])
-        extra_count = max(0, declared_gone[norm] - observed_drop[norm])
-        undeclared_loss.extend(
-            "%s#%d" % (norm, ordinal)
-            for ordinal in range(after_counts[norm] + declared_gone[norm] + 1, count + 1)
-        )
-        ghosts.extend([norm] * extra_count)
     if undeclared_loss:
         failures.append(
             "%d entries disappeared with no verdict accounting for them: %s"
             % (len(undeclared_loss), ", ".join(undeclared_loss[:8]))
         )
-    if ghosts:
-        warnings.append(
-            "%d entries were declared deleted or folded but are still present: %s"
-            % (len(ghosts), ", ".join(ghosts[:8]))
-        )
+    ghost_keys = {row["key"] for row in ghost_rows}
 
     # --- 4. per-verdict placement -------------------------------------------
-    verdict_counts = Counter((row["norm"], row["verdict"]) for row in by_key.values())
+    verdict_counts = Counter((row["norm"], row["verdict"]) for row in known_rows)
     for norm in before_counts:
         if verdict_counts[(norm, "hot")] > loaded_counts[norm]:
             failures.append(
@@ -1053,6 +1072,8 @@ def cmd_check(args):
                 % (norm, verdict_counts[(norm, "cold")], archive_counts[norm])
             )
     for key, row in sorted(by_key.items()):
+        if key not in before_keys:
+            continue
         verdict = row["verdict"]
         in_loaded = loaded_counts[row["norm"]] > 0
         in_archive = archive_counts[row["norm"]] > 0
@@ -1102,12 +1123,22 @@ def cmd_check(args):
                     "points at it" % (row["heading"][:60], owner)
                 )
         elif verdict == "fold":
+            if key in ghost_keys:
+                failures.append(
+                    "phantom fold: `%s` is still present in the loaded half or archive"
+                    % row["heading"][:60]
+                )
             if not _fold_target_found(row["why"], after_all_norms):
                 failures.append(
                     "`%s` is verdict fold but its why names no surviving "
                     "heading it merged into" % row["heading"][:60]
                 )
         elif verdict == "delete":
+            if key in ghost_keys:
+                failures.append(
+                    "phantom deletion: `%s` is still present in the loaded half or archive"
+                    % row["heading"][:60]
+                )
             if len(row["why"]) < WHY_FLOOR:
                 failures.append(
                     "`%s` is verdict delete with a why of %d characters; "
@@ -1252,6 +1283,31 @@ def cmd_report(args):
     loaded = file_facts(args.loaded, args.level or before.get("level"))
     archive = file_facts(args.archive, args.level or before.get("level")) if args.archive else None
 
+    wrows = []
+    if args.worksheet:
+        _meta, wrows = read_worksheet(args.worksheet)
+        _keys, _known, unknown, undeclared, ghosts = deletion_accounting(
+            before, loaded, archive, wrows
+        )
+        if unknown:
+            die(
+                "report refused: worksheet occurrence key absent from baseline: %s"
+                % ", ".join(row["key"] for row in unknown),
+                1,
+            )
+        if undeclared:
+            die(
+                "report refused: undeclared disappearance: %s"
+                % ", ".join(undeclared),
+                1,
+            )
+        if ghosts:
+            die(
+                "report refused: phantom delete or fold still present: %s"
+                % ", ".join(row["heading"] for row in ghosts),
+                1,
+            )
+
     before_bytes = before["bytes"]
     loaded_bytes = loaded["bytes"]
     archive_bytes = archive["bytes"] if archive else 0
@@ -1316,7 +1372,6 @@ def cmd_report(args):
     )
 
     if args.worksheet:
-        meta, wrows = read_worksheet(args.worksheet)
         counts = {}
         for row in wrows:
             counts[row["verdict"]] = counts.get(row["verdict"], 0) + 1

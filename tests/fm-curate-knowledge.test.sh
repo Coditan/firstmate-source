@@ -254,6 +254,63 @@ test_a_deletion_without_evidence_fails() {
   pass "a deletion carrying a label instead of evidence fails the check"
 }
 
+test_phantom_delete_and_fold_declarations_fail() {
+  local out status
+  sed \
+    -e '0,/verdict: split/s//verdict: delete/' \
+    -e '0,/why: rule now/s//why: verified evidence claims this entry was removed/' \
+    "$TMP/ws-filled.md" >"$TMP/ws-phantom-delete.md"
+  out=$("$DRIVER" check --before "$TMP/before.json" \
+    --worksheet "$TMP/ws-phantom-delete.md" --loaded "$TMP/after-loaded.md" \
+    --archive "$TMP/after-archive.md" --home "$TMP/home" 2>&1) \
+    && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "a phantom deletion exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'phantom deletion: `Alpha rule and the incident behind it`' \
+    || fail "the phantom deletion failure does not name the still-present entry"
+
+  out=$("$DRIVER" report --before "$TMP/before.json" \
+    --worksheet "$TMP/ws-phantom-delete.md" --loaded "$TMP/after-loaded.md" \
+    --archive "$TMP/after-archive.md" --home "$TMP/home" 2>&1) \
+    && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "report accepted a phantom deletion"
+  printf '%s' "$out" | grep -q 'DELETION LEDGER' \
+    && fail "report printed a deletion ledger containing a still-present entry"
+
+  sed \
+    -e '0,/verdict: split/s//verdict: fold/' \
+    -e '0,/why: rule now/s//why: merged under Alpha rule and the incident behind it/' \
+    "$TMP/ws-filled.md" >"$TMP/ws-phantom-fold.md"
+  out=$("$DRIVER" check --before "$TMP/before.json" \
+    --worksheet "$TMP/ws-phantom-fold.md" --loaded "$TMP/after-loaded.md" \
+    --archive "$TMP/after-archive.md" --home "$TMP/home" 2>&1) \
+    && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "a phantom fold exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'phantom fold: `Alpha rule and the incident behind it`' \
+    || fail "the phantom fold failure does not name the still-present entry"
+  pass "phantom delete and fold declarations fail before reporting"
+}
+
+test_unknown_worksheet_occurrence_keys_fail() {
+  local out status
+  cp "$TMP/ws-filled.md" "$TMP/ws-fabricated.md"
+  cat >>"$TMP/ws-fabricated.md" <<'EOF'
+
+--- entry 4
+key: fabricated entry#1
+heading: Fabricated entry
+verdict: hot
+why: this row was never present in the baseline snapshot
+EOF
+  out=$("$DRIVER" check --before "$TMP/before.json" \
+    --worksheet "$TMP/ws-fabricated.md" --loaded "$TMP/after-loaded.md" \
+    --archive "$TMP/after-archive.md" --home "$TMP/home" 2>&1) \
+    && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "a fabricated worksheet row exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'worksheet occurrence key `fabricated entry#1` is absent' \
+    || fail "the fabricated worksheet key was not named"
+  pass "worksheet occurrence keys must belong to the baseline"
+}
+
 # Rules 2 and 3: the route back lives inside the loaded half, and it is proved
 # by running it rather than asserted.
 test_the_route_back_must_live_in_the_loaded_half_and_run() {
@@ -592,6 +649,8 @@ test_inventory_defaults_to_dividing_the_entry
 test_a_flat_heading_count_is_a_failed_prune
 test_an_undeclared_deletion_fails_the_check
 test_a_deletion_without_evidence_fails
+test_phantom_delete_and_fold_declarations_fail
+test_unknown_worksheet_occurrence_keys_fail
 test_the_route_back_must_live_in_the_loaded_half_and_run
 test_the_documented_route_must_reach_every_archived_heading
 test_route_proof_cannot_write_real_files
