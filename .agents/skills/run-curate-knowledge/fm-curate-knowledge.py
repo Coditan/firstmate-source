@@ -41,11 +41,21 @@ The guarantee is a closed interface of grep and rg, tools with no write
 capability, resolved only from /usr/bin, /bin, or /usr/local/bin to an absolute
 regular file that the current user cannot write. Every argument is restricted
 to the closed read-only grammar, the documented relative path must resolve from
-the loaded half's directory to the archive under check, no shell is involved,
-and execution receives a sanitised environment. Defence in depth then maps the
-documented relative path to a 0444 copy inside a 0555 directory and compares
+the operational home to the archive under check, no shell is involved, and
+execution receives a sanitised environment. Defence in depth then mirrors the
+documented relative path under a 0444 copy inside a 0555 directory and compares
 the copy's hash before and after execution. The real archive is never executed
 against, and a boundary that cannot establish every item in this list refuses.
+
+ROUTE WORKING DIRECTORY
+A documented route is written to be run from the operational home, because that
+is where an operator reading the loaded half would run it: `data/learnings.md`
+sends its reader to `grep -n '^## ' data/learnings-longterm.md`. So --home is
+the route's working directory, the path argument resolves from there, and the
+proof mirrors that same relative path under its protected directory so the
+command runs verbatim. A staged pair that is not yet in place is checked by
+pointing --home at the mirror the pair is staged in; `check` uses --home for
+nothing else, while `report` uses it only for the share denominator.
 
 WHAT THIS PROGRAM DOES NOT DO
 It never decides hot from cold. There is no keyword heuristic anywhere in this
@@ -104,8 +114,10 @@ Usage:
       The gate. Exits non-zero on a failed prune.
 
   fm-curate-knowledge.py report --before <snapshot.json> --loaded FILE
-                              [--archive FILE] [--worksheet <w.md>] [options]
+                              --worksheet <w.md> [--archive FILE] [options]
       Before/after in bytes and share, plus the deletion ledger with evidence.
+      The worksheet is required: the ledger is the only record a deletion ever
+      gets, so a report that could omit it is a report of the wrong thing.
 
 Common options:
   --home <dir>     operational home holding data/ and config/ (default $FM_HOME,
@@ -742,17 +754,31 @@ def load_snapshot(path, before_file):
 
 
 def route_commands(loaded_text, archive_path):
-    """Backtick-delimited commands that name the archive."""
+    """Backtick-delimited commands that name the archive.
+
+    A backticked run of text with no whitespace is the archive's ADDRESS, not a
+    route to it, whether it is written as the bare name or as the home-relative
+    path the route itself uses. Taking one for the route would reject a loaded
+    half that names the file and then hands over a working search, which is how
+    this home's real data/learnings.md is written. A location with no command
+    still fails, one line further down, as the location it is.
+    """
     base = os.path.basename(archive_path)
     found = []
     for command in re.findall(r"`([^`]+)`", loaded_text):
-        if base in command and command.strip() != base:
-            found.append(command.strip().lstrip("$").strip())
+        stripped = command.strip().lstrip("$").strip()
+        if base in command and len(stripped.split()) > 1:
+            found.append(stripped)
     return found
 
 
-def prove_route(command, loaded_path, archive_path, headings, sample, trusted_dirs=None):
-    """Run the documented route once and check every archived entry."""
+def prove_route(command, home, archive_path, headings, sample, trusted_dirs=None):
+    """Run the documented route once and check every archived entry.
+
+    `home` is the working directory the documented route is written to run
+    from, so every relative path in it resolves from there and the proof
+    mirrors that relative path under its protected directory.
+    """
     try:
         argv = shlex.split(command)
     except ValueError as exc:
@@ -773,10 +799,10 @@ def prove_route(command, loaded_path, archive_path, headings, sample, trusted_di
     )
     if executable_error:
         return False, [], [], executable_error
-    loaded_dir = os.path.dirname(os.path.realpath(loaded_path))
+    home_dir = os.path.realpath(home)
     archive_real = os.path.realpath(archive_path)
     resolved_args = {
-        index: os.path.realpath(os.path.join(loaded_dir, argv[index]))
+        index: os.path.realpath(os.path.join(home_dir, argv[index]))
         for index in file_args
         if not os.path.isabs(argv[index])
     }
@@ -786,7 +812,7 @@ def prove_route(command, loaded_path, archive_path, headings, sample, trusted_di
     if not archive_args:
         documented = argv[file_args[-1]] if file_args else "(none)"
         documented_real = (
-            os.path.realpath(os.path.join(loaded_dir, documented))
+            os.path.realpath(os.path.join(home_dir, documented))
             if documented != "(none)" and not os.path.isabs(documented)
             else os.path.realpath(documented) if documented != "(none)" else documented
         )
@@ -814,7 +840,7 @@ def prove_route(command, loaded_path, archive_path, headings, sample, trusted_di
             value = argv[index]
             if os.path.isabs(value) or ".." in value.split(os.sep):
                 return False, [], [], "route file path `%s` cannot be mapped safely" % value
-            candidate = os.path.realpath(os.path.join(loaded_dir, value))
+            candidate = os.path.realpath(os.path.join(home_dir, value))
             if not os.path.isfile(candidate):
                 continue
             destination = os.path.join(temp_path, value)
@@ -1315,7 +1341,7 @@ def cmd_check(args):
         headings = [e["heading"] for e in archive["entries"]]
         if commands:
             ok, transcript, missing, result_message = prove_route(
-                commands[0], args.loaded, archive["path"], headings, args.prove_route
+                commands[0], args.home, archive["path"], headings, args.prove_route
             )
             print("  %s" % result_message)
             print("PRINTED EXAMPLE (%d output lines maximum)" % args.prove_route)
@@ -1412,30 +1438,28 @@ def cmd_report(args):
     loaded = file_facts(args.loaded, args.level or before.get("level"))
     archive = file_facts(args.archive, args.level or before.get("level")) if args.archive else None
 
-    wrows = []
-    if args.worksheet:
-        _meta, wrows = read_worksheet(args.worksheet)
-        _keys, _known, unknown, undeclared, ghosts = deletion_accounting(
-            before, loaded, archive, wrows
+    _meta, wrows = read_worksheet(args.worksheet)
+    _keys, _known, unknown, undeclared, ghosts = deletion_accounting(
+        before, loaded, archive, wrows
+    )
+    if unknown:
+        die(
+            "report refused: worksheet occurrence key absent from baseline: %s"
+            % ", ".join(row["key"] for row in unknown),
+            1,
         )
-        if unknown:
-            die(
-                "report refused: worksheet occurrence key absent from baseline: %s"
-                % ", ".join(row["key"] for row in unknown),
-                1,
-            )
-        if undeclared:
-            die(
-                "report refused: undeclared disappearance: %s"
-                % ", ".join(undeclared),
-                1,
-            )
-        if ghosts:
-            die(
-                "report refused: phantom delete or fold still present: %s"
-                % ", ".join(row["heading"] for row in ghosts),
-                1,
-            )
+    if undeclared:
+        die(
+            "report refused: undeclared disappearance: %s"
+            % ", ".join(undeclared),
+            1,
+        )
+    if ghosts:
+        die(
+            "report refused: phantom delete or fold still present: %s"
+            % ", ".join(row["heading"] for row in ghosts),
+            1,
+        )
 
     before_bytes = before["bytes"]
     loaded_bytes = loaded["bytes"]
@@ -1500,32 +1524,31 @@ def cmd_report(args):
         )
     )
 
-    if args.worksheet:
-        counts = {}
-        for row in wrows:
-            counts[row["verdict"]] = counts.get(row["verdict"], 0) + 1
-        print("")
-        print("VERDICTS")
-        for verdict in sorted(counts, key=lambda v: -counts[v]):
-            print("  %-8s %d" % (verdict, counts[verdict]))
+    counts = {}
+    for row in wrows:
+        counts[row["verdict"]] = counts.get(row["verdict"], 0) + 1
+    print("")
+    print("VERDICTS")
+    for verdict in sorted(counts, key=lambda v: -counts[v]):
+        print("  %-8s %d" % (verdict, counts[verdict]))
 
-        deletions = [r for r in wrows if r["verdict"] == "delete"]
-        print("")
-        print("DELETION LEDGER (%d)" % len(deletions))
-        if not deletions:
-            print("  none")
-        for row in deletions:
-            print("  - %s" % row["heading"])
-            print("    evidence: %s" % row["why"])
+    deletions = [r for r in wrows if r["verdict"] == "delete"]
+    print("")
+    print("DELETION LEDGER (%d)" % len(deletions))
+    if not deletions:
+        print("  none")
+    for row in deletions:
+        print("  - %s" % row["heading"])
+        print("    evidence: %s" % row["why"])
 
-        folds = [r for r in wrows if r["verdict"] == "fold"]
-        print("")
-        print("FOLDED INTO ANOTHER ENTRY (%d)" % len(folds))
-        if not folds:
-            print("  none")
-        for row in folds:
-            print("  - %s" % row["heading"])
-            print("    into: %s" % row["why"])
+    folds = [r for r in wrows if r["verdict"] == "fold"]
+    print("")
+    print("FOLDED INTO ANOTHER ENTRY (%d)" % len(folds))
+    if not folds:
+        print("  none")
+    for row in folds:
+        print("  - %s" % row["heading"])
+        print("    into: %s" % row["why"])
     return 0
 
 
@@ -1594,7 +1617,10 @@ def main(argv):
     p_report.add_argument("--before-file", default=None)
     p_report.add_argument("--loaded", required=True)
     p_report.add_argument("--archive", default=None)
-    p_report.add_argument("--worksheet", default=None)
+    # Required, not optional: the deletion ledger is the only record a deleted
+    # entry ever gets, and a report that could be produced without one reports
+    # everything except the part the captain is entitled to audit.
+    p_report.add_argument("--worksheet", required=True)
     p_report.set_defaults(func=cmd_report)
 
     args = parser.parse_args(argv)

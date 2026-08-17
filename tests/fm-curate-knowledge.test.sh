@@ -22,6 +22,8 @@ fm_test_tmproot TMP fm-curate-knowledge
 
 # A miniature home whose bin/fm-session-start.sh names its context files the
 # same way production does, so the extractor is exercised rather than mocked.
+# The curation fixtures live inside this home because a documented route back is
+# written to be run from the home, and the driver resolves and runs it there.
 setup_home() {
   local home=$1
   mkdir -p "$home/bin" "$home/data"
@@ -111,14 +113,14 @@ EOF
 # refuses to print one rather than printing it with a caveat nobody reads.
 test_line_counts_are_refused_as_a_headline_figure() {
   local out status
-  out=$("$DRIVER" measure "$TMP/before.md" --lines --home "$TMP/home" 2>&1) && status=0 || status=$?
+  out=$("$DRIVER" measure "$TMP/before.md" --lines --home "$TMP" 2>&1) && status=0 || status=$?
   [ "$status" -eq 2 ] || fail "--lines exited $status, expected a refusal"
   printf '%s' "$out" | grep -q 'does not report line counts' \
     || fail "--lines refusal does not say what it refuses"
   printf '%s' "$out" | grep -q 'house style' \
     || fail "--lines refusal does not give the reason a line count misleads"
 
-  out=$("$DRIVER" measure "$TMP/before.md" --home "$TMP/home" 2>&1)
+  out=$("$DRIVER" measure "$TMP/before.md" --home "$TMP" 2>&1)
   printf '%s' "$out" | grep -Eq '^[[:space:]]*lines' \
     && fail "measure printed a line count as a headline figure"
   printf '%s' "$out" | grep -q 'bytes' || fail "measure does not report bytes"
@@ -130,7 +132,7 @@ test_line_counts_are_refused_as_a_headline_figure() {
 # share cannot drift away from reality when the digest changes.
 test_the_denominator_is_extracted_from_the_session_start_owner() {
   local out
-  out=$("$DRIVER" measure --home "$TMP/home" 2>&1)
+  out=$("$DRIVER" measure --home "$TMP" 2>&1)
   printf '%s' "$out" | grep -q 'data/captain.md' \
     || fail "the surface does not include a file the digest prints"
   printf '%s' "$out" | grep -q 'bin/fm-session-start.sh context digest' \
@@ -140,8 +142,8 @@ test_the_denominator_is_extracted_from_the_session_start_owner() {
 
   # Removing a file from the digest must remove it from the denominator.
   local alt="$TMP/home-noc"
-  cp -r "$TMP/home" "$alt"
-  grep -v 'captain.md' "$TMP/home/bin/fm-session-start.sh" >"$alt/bin/fm-session-start.sh"
+  setup_home "$alt"
+  grep -v 'captain.md' "$TMP/bin/fm-session-start.sh" >"$alt/bin/fm-session-start.sh"
   out=$("$DRIVER" measure --home "$alt" 2>&1)
   printf '%s' "$out" | grep -q 'data/captain.md' \
     && fail "the denominator kept a file the digest no longer prints"
@@ -153,7 +155,7 @@ test_the_denominator_is_extracted_from_the_session_start_owner() {
 # entries move whole.
 test_inventory_defaults_to_dividing_the_entry() {
   local out
-  "$DRIVER" inventory "$TMP/before.md" --out "$TMP/ws.md" --home "$TMP/home" >/dev/null 2>&1 \
+  "$DRIVER" inventory "$TMP/before.md" --out "$TMP/ws.md" --home "$TMP" >/dev/null 2>&1 \
     || fail "inventory of a private file failed"
   [ "$(grep -c '^verdict: split' "$TMP/ws.md")" -eq 3 ] \
     || fail "private inventory does not pre-fill every verdict with split"
@@ -162,8 +164,8 @@ test_inventory_defaults_to_dividing_the_entry() {
   assert_grep 'Age is not the test' "$TMP/ws.md" \
     "the worksheet does not rule age out as the axis"
 
-  "$DRIVER" inventory "$TMP/home/AGENTS.md" --shape shared --out "$TMP/ws-shared.md" \
-    --home "$TMP/home" >/dev/null 2>&1 || fail "inventory of a shared file failed"
+  "$DRIVER" inventory "$TMP/AGENTS.md" --shape shared --out "$TMP/ws-shared.md" \
+    --home "$TMP" >/dev/null 2>&1 || fail "inventory of a shared file failed"
   assert_grep 'verdict: stub' "$TMP/ws-shared.md" \
     "shared inventory does not pre-fill verdicts with stub"
   assert_no_grep 'verdict: cold' "$TMP/ws-shared.md" \
@@ -211,7 +213,7 @@ why: the trigger arrives with the problem, so an agent will go looking
 EOF
   out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/flat-ws.md" \
     --loaded "$TMP/flat-loaded.md" --archive "$TMP/flat-archive.md" \
-    --home "$TMP/home" 2>&1) && status=0 || status=$?
+    --home "$TMP" 2>&1) && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "a flat heading count exited $status, expected 1"
   printf '%s' "$out" | grep -q 'TOTAL heading count did not fall' \
     || fail "the flat-heading failure does not name the total heading count"
@@ -232,7 +234,7 @@ test_an_undeclared_deletion_fails_the_check() {
 Nothing survived here, and the worksheet still claims a split.
 EOF
   out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
-    --loaded "$TMP/after-loaded.md" --archive "$silent" --home "$TMP/home" 2>&1) \
+    --loaded "$TMP/after-loaded.md" --archive "$silent" --home "$TMP" 2>&1) \
     && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "an undeclared deletion exited $status, expected 1"
   printf '%s' "$out" | grep -q 'disappeared with no verdict accounting for them' \
@@ -247,7 +249,7 @@ test_a_deletion_without_evidence_fails() {
   sed 's|^why: bin/gone.sh is absent.*|why: old|' "$TMP/ws-filled.md" >"$TMP/ws-thin.md"
   out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-thin.md" \
     --loaded "$TMP/after-loaded.md" --archive "$TMP/after-archive.md" \
-    --home "$TMP/home" 2>&1) && status=0 || status=$?
+    --home "$TMP" 2>&1) && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "a deletion with no evidence exited $status, expected 1"
   printf '%s' "$out" | grep -q 'only proof deletes' \
     || fail "the check does not state the bar a deletion must clear"
@@ -262,15 +264,16 @@ test_phantom_delete_and_fold_declarations_fail() {
     "$TMP/ws-filled.md" >"$TMP/ws-phantom-delete.md"
   out=$("$DRIVER" check --before "$TMP/before.json" \
     --worksheet "$TMP/ws-phantom-delete.md" --loaded "$TMP/after-loaded.md" \
-    --archive "$TMP/after-archive.md" --home "$TMP/home" 2>&1) \
+    --archive "$TMP/after-archive.md" --home "$TMP" 2>&1) \
     && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "a phantom deletion exited $status, expected 1"
+  # shellcheck disable=SC2016 # The driver's message contains literal backticks.
   printf '%s' "$out" | grep -q 'phantom deletion: `Alpha rule and the incident behind it`' \
     || fail "the phantom deletion failure does not name the still-present entry"
 
   out=$("$DRIVER" report --before "$TMP/before.json" \
     --worksheet "$TMP/ws-phantom-delete.md" --loaded "$TMP/after-loaded.md" \
-    --archive "$TMP/after-archive.md" --home "$TMP/home" 2>&1) \
+    --archive "$TMP/after-archive.md" --home "$TMP" 2>&1) \
     && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "report accepted a phantom deletion"
   printf '%s' "$out" | grep -q 'DELETION LEDGER' \
@@ -282,9 +285,10 @@ test_phantom_delete_and_fold_declarations_fail() {
     "$TMP/ws-filled.md" >"$TMP/ws-phantom-fold.md"
   out=$("$DRIVER" check --before "$TMP/before.json" \
     --worksheet "$TMP/ws-phantom-fold.md" --loaded "$TMP/after-loaded.md" \
-    --archive "$TMP/after-archive.md" --home "$TMP/home" 2>&1) \
+    --archive "$TMP/after-archive.md" --home "$TMP" 2>&1) \
     && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "a phantom fold exited $status, expected 1"
+  # shellcheck disable=SC2016 # The driver's message contains literal backticks.
   printf '%s' "$out" | grep -q 'phantom fold: `Alpha rule and the incident behind it`' \
     || fail "the phantom fold failure does not name the still-present entry"
   pass "phantom delete and fold declarations fail before reporting"
@@ -303,9 +307,10 @@ why: this row was never present in the baseline snapshot
 EOF
   out=$("$DRIVER" check --before "$TMP/before.json" \
     --worksheet "$TMP/ws-fabricated.md" --loaded "$TMP/after-loaded.md" \
-    --archive "$TMP/after-archive.md" --home "$TMP/home" 2>&1) \
+    --archive "$TMP/after-archive.md" --home "$TMP" 2>&1) \
     && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "a fabricated worksheet row exited $status, expected 1"
+  # shellcheck disable=SC2016 # The driver's message contains literal backticks.
   printf '%s' "$out" | grep -q 'worksheet occurrence key `fabricated entry#1` is absent' \
     || fail "the fabricated worksheet key was not named"
   pass "worksheet occurrence keys must belong to the baseline"
@@ -322,7 +327,7 @@ test_the_route_back_must_live_in_the_loaded_half_and_run() {
 EOF
   out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
     --loaded "$TMP/mute-loaded.md" --archive "$TMP/after-archive.md" \
-    --home "$TMP/home" 2>&1) && status=0 || status=$?
+    --home "$TMP" 2>&1) && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "a loaded half naming no archive exited $status, expected 1"
   printf '%s' "$out" | grep -q 'never names' \
     || fail "the check does not report a missing route back"
@@ -337,7 +342,7 @@ The incidents live in `after-archive.md`.
 EOF
   out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
     --loaded "$TMP/named-loaded.md" --archive "$TMP/after-archive.md" \
-    --home "$TMP/home" 2>&1) && status=0 || status=$?
+    --home "$TMP" 2>&1) && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "a bare filename with no search exited $status, expected 1"
   printf '%s' "$out" | grep -q 'A filename is a location, not a route' \
     || fail "the check does not distinguish a location from a route"
@@ -345,7 +350,7 @@ EOF
   sed "s|grep -n '\^## '|grep -n '['|" "$TMP/after-loaded.md" >"$TMP/broken-route-loaded.md"
   out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
     --loaded "$TMP/broken-route-loaded.md" --archive "$TMP/after-archive.md" \
-    --home "$TMP/home" 2>&1) && status=0 || status=$?
+    --home "$TMP" 2>&1) && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "a broken documented route exited $status, expected 1"
   printf '%s' "$out" | grep -q 'documented route exited' \
     || fail "the broken documented route was not executed"
@@ -355,7 +360,7 @@ EOF
     "$TMP/after-loaded.md" >"$TMP/wrong-path-loaded.md"
   out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
     --loaded "$TMP/wrong-path-loaded.md" --archive "$TMP/after-archive.md" \
-    --home "$TMP/home" 2>&1) && status=0 || status=$?
+    --home "$TMP" 2>&1) && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "a wrong documented path exited $status, expected 1"
   printf '%s' "$out" | grep -q 'documented route is broken from a normal shell' \
     || fail "a basename match silently repaired the wrong documented path"
@@ -375,7 +380,7 @@ This heading is deliberately outside the documented search.
 EOF
   out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
     --loaded "$TMP/partial-route-loaded.md" --archive "$TMP/after-archive.md" \
-    --home "$TMP/home" 2>&1) && status=0 || status=$?
+    --home "$TMP" 2>&1) && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "a partial route exited $status, expected 1"
   printf '%s' "$out" | grep -q 'route reaches 1 of 2 archived entries' \
     || fail "the route assertion does not report its complete reach count"
@@ -383,6 +388,50 @@ EOF
     || fail "the route failure does not name the unreachable heading"
   write_after_archive "$TMP/after-archive.md"
   pass "the documented route must reach every archived entry"
+}
+
+# A documented route is written to be run from the operational home: this home's
+# real loaded half sends its reader to `grep -n '^## ' data/learnings-longterm.md`.
+# Resolving that from anywhere else - the loaded file's own directory, say -
+# turns a working route into a rejected one, so the home is the working
+# directory and the command is executed exactly as documented.
+test_a_home_relative_route_runs_from_the_home() {
+  local out status
+  write_before "$TMP/data/curated-before.md"
+  # Written the way this home's real data/learnings.md is: the archive's
+  # home-relative address in backticks, and then the search that reaches it.
+  cat >"$TMP/data/curated-loaded.md" <<'EOF'
+# Store
+
+The incidents live in `data/curated-archive.md`, which is not loaded at session start.
+Reach them with `grep -n '^## ' data/curated-archive.md`.
+
+- **Alpha rule**: the one sentence that must be in hand first.
+EOF
+  write_after_archive "$TMP/data/curated-archive.md"
+  "$DRIVER" measure "$TMP/data/curated-before.md" --home "$TMP" \
+    --save "$TMP/curated-before.json" >/dev/null \
+    || fail "measure could not snapshot the home-relative baseline"
+  out=$("$DRIVER" check --before "$TMP/curated-before.json" \
+    --worksheet "$TMP/ws-filled.md" --loaded "$TMP/data/curated-loaded.md" \
+    --archive "$TMP/data/curated-archive.md" --home "$TMP" 2>&1) \
+    && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "a home-relative route exited $status, expected 0: $out"
+  printf '%s' "$out" | grep -Fq "grep -n '^## ' data/curated-archive.md" \
+    || fail "the home-relative route was not executed as documented"
+  printf '%s' "$out" | grep -q 'route reaches 1 of 1 archived entries' \
+    || fail "the home-relative route did not reach every archived entry"
+
+  # The same path with no command is still only an address.
+  grep -v '^Reach them with' "$TMP/data/curated-loaded.md" >"$TMP/data/curated-address.md"
+  out=$("$DRIVER" check --before "$TMP/curated-before.json" \
+    --worksheet "$TMP/ws-filled.md" --loaded "$TMP/data/curated-address.md" \
+    --archive "$TMP/data/curated-archive.md" --home "$TMP" 2>&1) \
+    && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "a home-relative address with no search exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'A filename is a location, not a route' \
+    || fail "a backticked home-relative path was accepted as the route itself"
+  pass "a route written relative to the home is executed verbatim from the home"
 }
 
 test_nested_archive_headings_must_belong_to_an_entry() {
@@ -402,7 +451,7 @@ EOF
     "$TMP/after-loaded.md" >"$TMP/orphan-loaded.md"
   out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
     --loaded "$TMP/orphan-loaded.md" --archive "$TMP/orphan-archive.md" \
-    --home "$TMP/home" 2>&1) && status=0 || status=$?
+    --home "$TMP" 2>&1) && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "an orphaned nested heading exited $status, expected 1"
   printf '%s' "$out" | grep -q 'nested archive headings are orphaned' \
     || fail "the structural failure does not identify an orphaned nested heading"
@@ -428,7 +477,7 @@ The same evening, the same measurement, told again.
 
 Everything here concerns bin/gone.sh.
 EOF
-  "$DRIVER" measure "$TMP/nested-before.md" --home "$TMP/home" \
+  "$DRIVER" measure "$TMP/nested-before.md" --home "$TMP" \
     --save "$TMP/nested-before.json" >/dev/null \
     || fail "measure could not snapshot the nested baseline"
   cat >"$TMP/nested-archive.md" <<'EOF'
@@ -448,7 +497,7 @@ EOF
     "$TMP/after-loaded.md" >"$TMP/nested-loaded.md"
   out=$("$DRIVER" check --before "$TMP/nested-before.json" \
     --worksheet "$TMP/ws-filled.md" --loaded "$TMP/nested-loaded.md" \
-    --archive "$TMP/nested-archive.md" --home "$TMP/home" 2>&1) \
+    --archive "$TMP/nested-archive.md" --home "$TMP" 2>&1) \
     && status=0 || status=$?
   [ "$status" -eq 0 ] || fail "a nested heading inside its entry failed: $out"
   printf '%s' "$out" | grep -q 'route reaches 1 of 1 archived entries' \
@@ -463,7 +512,7 @@ test_route_proof_cannot_write_real_files() {
     "$TMP/after-loaded.md" >"$TMP/sed-route-loaded.md"
   out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
     --loaded "$TMP/sed-route-loaded.md" --archive "$TMP/after-archive.md" \
-    --home "$TMP/home" 2>&1) && status=0 || status=$?
+    --home "$TMP" 2>&1) && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "a sed -i route exited $status, expected 1"
   printf '%s' "$out" | grep -q 'documented route failed' \
     || fail "the sed -i route was not reported as failed"
@@ -476,7 +525,7 @@ test_route_proof_cannot_write_real_files() {
     "$escape_target" >"$TMP/awk-route-loaded.md"
   out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
     --loaded "$TMP/awk-route-loaded.md" --archive "$TMP/after-archive.md" \
-    --home "$TMP/home" 2>&1) && status=0 || status=$?
+    --home "$TMP" 2>&1) && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "an awk system route exited $status, expected 1"
   printf '%s' "$out" | grep -q 'cannot be proven non-writing; document the route with grep or rg' \
     || fail "the awk system route was not refused by the closed interface"
@@ -488,7 +537,7 @@ test_route_proof_cannot_write_real_files() {
     "$TMP/after-loaded.md" >"$TMP/unknown-grep-flag-loaded.md"
   out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
     --loaded "$TMP/unknown-grep-flag-loaded.md" --archive "$TMP/after-archive.md" \
-    --home "$TMP/home" 2>&1) && status=0 || status=$?
+    --home "$TMP" 2>&1) && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "an unknown grep flag exited $status, expected 1"
   printf '%s' "$out" | grep -q 'not in the closed read-only set' \
     || fail "the unknown grep flag was not rejected"
@@ -503,14 +552,14 @@ EOF
   chmod +x "$TMP/fake-bin/grep"
   out=$(PATH="$TMP/fake-bin:$PATH" "$DRIVER" check --before "$TMP/before.json" \
     --worksheet "$TMP/ws-filled.md" --loaded "$TMP/after-loaded.md" \
-    --archive "$TMP/after-archive.md" --home "$TMP/home" 2>&1) \
+    --archive "$TMP/after-archive.md" --home "$TMP" 2>&1) \
     && status=0 || status=$?
   [ "$status" -eq 0 ] || fail "trusted grep resolution failed: $out"
   [ ! -e "$fake_marker" ] || fail "route proof invoked a PATH-hijacked grep"
   printf '%s' "$out" | grep -Eq 'protected copy && /(usr/)?bin/grep ' \
     || fail "route transcript does not identify the trusted absolute binary"
 
-  out=$(python3 - "$DRIVER" "$TMP/after-loaded.md" "$TMP/after-archive.md" <<'PY'
+  out=$(python3 - "$DRIVER" "$TMP" "$TMP/after-archive.md" <<'PY'
 import importlib.util
 import sys
 
@@ -529,6 +578,7 @@ result = module.prove_route(
 print(result[3])
 PY
   ) || fail "missing-trusted-binary probe crashed"
+  # shellcheck disable=SC2016 # The driver's message contains literal backticks.
   printf '%s' "$out" | grep -q 'no trusted non-writable `grep` binary' \
     || fail "route proof degraded when no trusted binary resolved"
   pass "route proof cannot write the real archive"
@@ -547,10 +597,10 @@ First occurrence.
 
 Second occurrence.
 EOF
-  "$DRIVER" measure "$TMP/duplicate-before.md" --home "$TMP/home" \
+  "$DRIVER" measure "$TMP/duplicate-before.md" --home "$TMP" \
     --save "$TMP/duplicate-before.json" >/dev/null 2>&1
   "$DRIVER" inventory "$TMP/duplicate-before.md" --out "$TMP/duplicate-ws.md" \
-    --home "$TMP/home" >/dev/null 2>&1
+    --home "$TMP" >/dev/null 2>&1
   sed -i 's/^verdict: split$/verdict: cold/; s/^why:$/why: the trigger arrives with the problem, so this stays searchable/' \
     "$TMP/duplicate-ws.md"
   cat >"$TMP/duplicate-loaded.md" <<'EOF'
@@ -567,7 +617,7 @@ Only one occurrence survived.
 EOF
   out=$("$DRIVER" check --before "$TMP/duplicate-before.json" \
     --worksheet "$TMP/duplicate-ws.md" --loaded "$TMP/duplicate-loaded.md" \
-    --archive "$TMP/duplicate-archive.md" --home "$TMP/home" 2>&1) \
+    --archive "$TMP/duplicate-archive.md" --home "$TMP" 2>&1) \
     && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "a silently dropped duplicate exited $status, expected 1"
   printf '%s' "$out" | grep -q 'repeated fact#2' \
@@ -608,7 +658,7 @@ why: searchable when the problem arrives
 EOF
   out=$("$DRIVER" check --before "$TMP/duplicate-before.json" \
     --worksheet "$TMP/duplicate-valid-ws.md" --loaded "$TMP/duplicate-loaded-valid.md" \
-    --archive "$TMP/duplicate-archive-valid.md" --home "$TMP/home" 2>&1) \
+    --archive "$TMP/duplicate-archive-valid.md" --home "$TMP" 2>&1) \
     && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "duplicate split fixture should fail only the required flat heading gate: $out"
   printf '%s' "$out" | grep -q 'disappeared with no verdict' \
@@ -635,7 +685,7 @@ EOF
     "$TMP/duplicate-route-partial.md" >"$TMP/duplicate-route-two.md"
   out=$("$DRIVER" check --before "$TMP/duplicate-before.json" \
     --worksheet "$TMP/duplicate-ws.md" --loaded "$TMP/duplicate-route-two.md" \
-    --archive "$TMP/duplicate-archive-two.md" --home "$TMP/home" 2>&1) \
+    --archive "$TMP/duplicate-archive-two.md" --home "$TMP" 2>&1) \
     && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "a one-hit duplicate route exited $status, expected 1"
   printf '%s' "$out" | grep -q 'route reaches 1 of 2 archived entries' \
@@ -661,7 +711,7 @@ Search with `grep -m2 -n -e '^## Repeated fact' -e '^Repeated fact$' body-substr
 EOF
   out=$("$DRIVER" check --before "$TMP/duplicate-before.json" \
     --worksheet "$TMP/duplicate-ws.md" --loaded "$TMP/body-substring-loaded.md" \
-    --archive "$TMP/body-substring-archive.md" --home "$TMP/home" 2>&1) \
+    --archive "$TMP/body-substring-archive.md" --home "$TMP" 2>&1) \
     && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "body substrings passed route completeness"
   printf '%s' "$out" | grep -q 'not a heading index record' \
@@ -670,7 +720,7 @@ EOF
 }
 
 test_measure_json_is_one_document() {
-  "$DRIVER" measure "$TMP/before.md" --home "$TMP/home" --json \
+  "$DRIVER" measure "$TMP/before.md" --home "$TMP" --json \
     2>"$TMP/measure-json.stderr" | python3 -c 'import json,sys; json.load(sys.stdin)' \
     || fail "measure --json stdout is not one JSON document"
   pass "measure JSON output is one machine-readable document"
@@ -682,13 +732,13 @@ test_the_two_shapes_never_borrow_each_others_method() {
   local out status
   out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
     --loaded "$TMP/after-loaded.md" --archive "$TMP/after-archive.md" \
-    --shape shared --home "$TMP/home" 2>&1) && status=0 || status=$?
+    --shape shared --home "$TMP" 2>&1) && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "--archive with --shape shared exited $status, expected 1"
   printf '%s' "$out" | grep -q 'would be a second owner' \
     || fail "the archive refusal does not give the one-owner reason"
 
   out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
-    --loaded "$TMP/after-loaded.md" --shape private --home "$TMP/home" 2>&1) \
+    --loaded "$TMP/after-loaded.md" --shape private --home "$TMP" 2>&1) \
     && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "shape private with no archive exited $status, expected 1"
   printf '%s' "$out" | grep -q 'nothing to prove reachable' \
@@ -702,7 +752,7 @@ test_a_real_curation_passes_and_the_report_carries_the_ledger() {
   local out status
   out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
     --loaded "$TMP/after-loaded.md" --archive "$TMP/after-archive.md" \
-    --home "$TMP/home" 2>&1) && status=0 || status=$?
+    --home "$TMP" 2>&1) && status=0 || status=$?
   [ "$status" -eq 0 ] || fail "a real curation exited $status, expected 0: $out"
   printf '%s' "$out" | grep -q 'CHECK PASSED' || fail "a real curation did not pass"
   printf '%s' "$out" | grep -q 'COMPLETE ROUTE ASSERTION' \
@@ -712,7 +762,7 @@ test_a_real_curation_passes_and_the_report_carries_the_ledger() {
 
   out=$("$DRIVER" report --before "$TMP/before.json" --loaded "$TMP/after-loaded.md" \
     --archive "$TMP/after-archive.md" --worksheet "$TMP/ws-filled.md" \
-    --home "$TMP/home" 2>&1) || fail "report failed on a passing curation"
+    --home "$TMP" 2>&1) || fail "report failed on a passing curation"
   printf '%s' "$out" | grep -q 'DELETION LEDGER (1)' \
     || fail "the report does not count the deletions"
   printf '%s' "$out" | grep -q 'git log -- bin/gone.sh' \
@@ -720,6 +770,20 @@ test_a_real_curation_passes_and_the_report_carries_the_ledger() {
   printf '%s' "$out" | grep -q 'of the original still loads' \
     || fail "the report does not state the change in startup cost"
   pass "a real curation passes and its report carries the deletion ledger"
+}
+
+# The ledger is the only record a deleted entry ever gets, so a report that can
+# be produced without one reports everything except the auditable part.
+test_a_report_cannot_omit_the_deletion_ledger() {
+  local out status
+  out=$("$DRIVER" report --before "$TMP/before.json" --loaded "$TMP/after-loaded.md" \
+    --archive "$TMP/after-archive.md" --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 2 ] || fail "report with no worksheet exited $status, expected 2"
+  printf '%s' "$out" | grep -q -- '--worksheet' \
+    || fail "the report usage error does not name the required worksheet"
+  printf '%s' "$out" | grep -q 'DELETION LEDGER' \
+    && fail "report printed a ledger-less report instead of refusing"
+  pass "a report cannot be produced without the worksheet that carries the ledger"
 }
 
 # The skill must be reachable and must not claim a command the driver lacks.
@@ -757,12 +821,12 @@ test_skill_declares_its_trigger_and_only_real_subcommands() {
   pass "the skill is triggered, describes itself in an agent's words, and names only real subcommands"
 }
 
-setup_home "$TMP/home"
+setup_home "$TMP"
 write_before "$TMP/before.md"
 write_after_loaded "$TMP/after-loaded.md"
 write_after_archive "$TMP/after-archive.md"
 write_worksheet "$TMP/ws-filled.md"
-"$DRIVER" measure "$TMP/before.md" --home "$TMP/home" --save "$TMP/before.json" >/dev/null \
+"$DRIVER" measure "$TMP/before.md" --home "$TMP" --save "$TMP/before.json" >/dev/null \
   || fail "measure could not snapshot the baseline"
 
 test_line_counts_are_refused_as_a_headline_figure
@@ -775,6 +839,7 @@ test_phantom_delete_and_fold_declarations_fail
 test_unknown_worksheet_occurrence_keys_fail
 test_the_route_back_must_live_in_the_loaded_half_and_run
 test_the_documented_route_must_reach_every_archived_entry
+test_a_home_relative_route_runs_from_the_home
 test_nested_archive_headings_must_belong_to_an_entry
 test_route_proof_cannot_write_real_files
 test_duplicate_heading_occurrences_cannot_hide_a_deletion
@@ -784,4 +849,5 @@ test_route_completeness_rejects_body_substrings
 test_measure_json_is_one_document
 test_the_two_shapes_never_borrow_each_others_method
 test_a_real_curation_passes_and_the_report_carries_the_ledger
+test_a_report_cannot_omit_the_deletion_ledger
 test_skill_declares_its_trigger_and_only_real_subcommands

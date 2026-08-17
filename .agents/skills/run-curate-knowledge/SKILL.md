@@ -183,18 +183,24 @@ Reach it with `grep -n '^## ' data/learnings-longterm.md` and read the one secti
 A filename alone is a location.
 The check rejects it, because a reader who has to invent the search has no route.
 
+Write that command relative to the **home**, because that is where a reader of the loaded half runs it, and it is the working directory `check` gives it.
+The driver resolves the documented path from `--home`, requires it to resolve to the archive it was handed, and then runs the command exactly as written.
+So while the pair is still staged outside the home, stage it in a directory that mirrors the home's layout - `<staging>/data/<name>.md` for a route that says `data/<name>.md` - and point `check --home` at that mirror.
+`check` uses `--home` for nothing else; `report --home` sets only the share denominator, so that one stays the real home.
+
 ### 5. Check - the part that would have caught us
 
 Steps 5 and 6 below are shown against a completed worked example copied from the real "Cost and quota" section of this home's archive, with one split and one fold.
+The pair is staged under `.curate-proof/home/data/`, which mirrors the layout the documented route names, so `--home` here is that staging mirror.
 Substitute your own baseline, worksheet and pair.
 
 ```
 .claude/skills/run-curate-knowledge/fm-curate-knowledge.py check \
   --before .curate-proof/cost-before.json \
   --worksheet .curate-proof/cost-worksheet.md \
-  --loaded .curate-proof/cost-loaded.md \
-  --archive .curate-proof/cost-archive.md \
-  --home /home/coditan/coditan-firstmate
+  --loaded .curate-proof/home/data/cost-loaded.md \
+  --archive .curate-proof/home/data/cost-archive.md \
+  --home .curate-proof/home
 ```
 
 It asserts, and exits non-zero on any of:
@@ -206,6 +212,7 @@ It asserts, and exits non-zero on any of:
 - a `split` left its rule nowhere, or a `fold` names no surviving heading;
 - a `stub` names no owner path that exists, or the file never points at it;
 - the loaded half does not name the archive, or names it with no runnable search;
+- the documented path does not resolve, from the home, to the archive under check;
 - the documented route command fails to recover every archived entry occurrence;
 - a nested archive heading lies outside every entry span.
 
@@ -215,48 +222,52 @@ The `--prove-route` value limits only the printed example, never the assertion.
 The passing output below came from a current run over a copy of the first two real entries under `Cost and quota` in `/home/coditan/coditan-firstmate/data/learnings-longterm.md`.
 The source home was read only; the baseline, loaded half, archive, worksheet, and snapshot were worktree-local copies under `.curate-proof/`.
 
-Real output from that worked copy:
+Real output from that worked copy, abridged to the part after the header:
 
 ```
 HEADINGS  before 3  ->  after 2 (loaded 1 + archive 1)
-BYTES     before 2174  ->  loaded 196 (9.0% of the original still loads)
+BYTES     before 2173  ->  loaded 345 (15.9% of the original still loads)
 
 ROUTE BACK
   the loaded half names cost-archive.md
   it hands the reader 1 documented search(es):
-    grep -n '^## ' cost-archive.md
+    grep -n '^## ' data/cost-archive.md
 
 COMPLETE ROUTE ASSERTION
   route reaches 1 of 1 archived entries
 PRINTED EXAMPLE (3 output lines maximum)
-  $ (protected copy && /usr/bin/grep -n '^## ' cost-archive.md)
+  $ (protected copy && /usr/bin/grep -n '^## ' data/cost-archive.md)
     1:## Das Abrechnungsmass der Flotte zaehlt frische Token, nicht gelesenen Kontext (2026-08-10, gemessen)
 
-CHECK PASSED: headings 3 -> 2, bytes 2174 -> 196, every entry deletion is declared, and the archive is reachable from the loaded half.
+CHECK PASSED: headings 3 -> 2, bytes 2173 -> 345, every entry deletion is declared, and the archive is reachable from the loaded half.
 ```
 
 ### 6. Report
 
+`--worksheet` is required here.
+The ledger is the only record a deleted entry ever gets, so a report that could be produced without one would report everything except the part the captain is entitled to audit.
+`--home` is the real home, because for `report` it sets only the share denominator.
+
 ```
 .claude/skills/run-curate-knowledge/fm-curate-knowledge.py report \
   --before .curate-proof/cost-before.json \
-  --loaded .curate-proof/cost-loaded.md \
-  --archive .curate-proof/cost-archive.md \
+  --loaded .curate-proof/home/data/cost-loaded.md \
+  --archive .curate-proof/home/data/cost-archive.md \
   --worksheet .curate-proof/cost-worksheet.md \
   --home /home/coditan/coditan-firstmate
 ```
 
 It prints before and after in bytes and share, the verdict counts, the fold list, and the deletion ledger with each entry's evidence verbatim.
 
-Real output from that worked copy:
+Real output from that worked copy, abridged to the part after the denominator notes:
 
 ```
 STARTUP COST
-  before       2174 B      0.8% of a 256483 B surface
-  after         196 B      0.1% of a 254505 B surface
-  change      -1978 B   9.0% of the original still loads
-  archived     2049 B   not loaded at session start
-  retained     2245 B   loaded + archived, against 2174 B before (103.3%)
+  before       2173 B      0.8% of a 264474 B surface
+  after         345 B      0.1% of a 262646 B surface
+  change      -1828 B   15.9% of the original still loads
+  archived     1694 B   not loaded at session start
+  retained     2039 B   loaded + archived, against 2173 B before (93.8%)
 
 HEADINGS
   before 3  ->  after 2  (loaded 1 + archive 1)
@@ -271,10 +282,10 @@ DELETION LEDGER (0)
 
 FOLDED INTO ANOTHER ENTRY (1)
   - Fable wiegt am gemeinsamen Sitzungsmass ungefaehr 9 bis 20 Opus (2026-08-10, kontrolliertes Experiment)
-    into: merged under Das Abrechnungsmass der Flotte zaehlt frische Token, nicht gelesenen Kontext
+    into: unter Das Abrechnungsmass der Flotte zaehlt frische Token zusammengefasst, ein Abend und ein Mass
 ```
 
-`retained` above 100 percent is not a bug and not a claim that more survived than existed: it is `loaded + archived` against the original, and a curation that writes a fresh rules summary over a fully retained archive lands there.
+A `retained` figure above 100 percent is not a bug and not a claim that more survived than existed: it is `loaded + archived` against the original, and a curation that writes a fresh rules summary over a fully retained archive lands there.
 
 Relay the ledger to the captain in full.
 A prune that deleted things is a prune he is entitled to audit, and the ledger is the only place that record exists.
@@ -323,7 +334,7 @@ fm-curate-knowledge: refused: --archive with --shape shared.
 
 `data/` is not version-controlled.
 A body destroyed there is gone, and this has permanently destroyed considered records on this seat before.
-Write the new loaded half and the new archive to fresh paths, run `check` against them, and only then move them into place.
+Write the new loaded half and the new archive to fresh paths that mirror the home's layout, run `check --home <that mirror>` against them, and only then move them into place.
 Never edit a knowledge file in place and check afterwards - the baseline you need is the file you just overwrote.
 
 When curating another home's files, or when the run is a rehearsal, work on copies and say plainly in the report which you did.
