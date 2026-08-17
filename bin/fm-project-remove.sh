@@ -429,40 +429,80 @@ check_secondmates() {
 }
 
 check_backlog() {
-  local conflicts
+  local conflicts listing
   [ -e "$BACKLOG" ] || return 0
   [ -f "$BACKLOG" ] && [ ! -L "$BACKLOG" ] \
     || refuse "cannot safely inspect backlog at $BACKLOG."
-  conflicts=$(awk -v n="$PROJECT_NAME" '
-    function repo_names_project(meta, n, value, parts, names, repo_count, repos, i) {
-      value = substr(meta, 8, length(meta) - 8)
-      split(value, parts, ",")
-      names = parts[1]
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", names)
-      repo_count = split(names, repos, /[[:space:]]+/)
-      for (i = 1; i <= repo_count; i++) {
-        if (repos[i] == n) {
-          return 1
+  command -v tasks-axi >/dev/null 2>&1 \
+    || refuse "cannot safely inspect backlog at $BACKLOG because tasks-axi is unavailable."
+  listing=$(tasks-axi list --file "$BACKLOG" </dev/null 2>/dev/null) \
+    || refuse "cannot inspect backlog at $BACKLOG with tasks-axi."
+  conflicts=$(
+    printf '%s\n' "$listing" |
+      awk -v n="$PROJECT_NAME" '
+        function trim(s) {
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+          return s
         }
-      }
-      return 0
-    }
-    /^## / {
-      active = ($0 == "## In flight" || $0 == "## Queued")
-      next
-    }
-    active && $0 ~ /^- \[ \]/ {
-      line = $0
-      while (match(line, /\(repo: [^)]*\)/)) {
-        meta = substr(line, RSTART, RLENGTH)
-        if (repo_names_project(meta, n)) {
-          print
-          next
+        function unquote(s) {
+          s = trim(s)
+          if (substr(s, 1, 1) == "\"" && substr(s, length(s), 1) == "\"") {
+            s = substr(s, 2, length(s) - 2)
+            gsub(/""/, "\"", s)
+          }
+          return s
         }
-        line = substr(line, RSTART + RLENGTH)
-      }
-    }
-  ' "$BACKLOG") || refuse "cannot inspect backlog at $BACKLOG."
+        function csv_field(line, wanted,    i, ch, field, quoted, count) {
+          count = 1
+          field = ""
+          quoted = 0
+          for (i = 1; i <= length(line); i++) {
+            ch = substr(line, i, 1)
+            if (ch == "\"") {
+              if (quoted && substr(line, i + 1, 1) == "\"") {
+                field = field ch substr(line, i + 1, 1)
+                i++
+              } else {
+                quoted = !quoted
+                field = field ch
+              }
+            } else if (ch == "," && !quoted) {
+              if (count == wanted) {
+                return unquote(field)
+              }
+              count++
+              field = ""
+            } else {
+              field = field ch
+            }
+          }
+          return count == wanted ? unquote(field) : ""
+        }
+        function repo_names_project(repo, n,    parts, names, repos, repo_count, i) {
+          split(repo, parts, ",")
+          names = trim(parts[1])
+          repo_count = split(names, repos, /[[:space:]]+/)
+          for (i = 1; i <= repo_count; i++) {
+            if (repos[i] == n) {
+              return 1
+            }
+          }
+          return 0
+        }
+        /^tasks\[/ { rows = 1; next }
+        rows && $0 !~ /^  / { rows = 0 }
+        !rows { next }
+        {
+          row = substr($0, 3)
+          id = csv_field(row, 1)
+          state = csv_field(row, 2)
+          repo = csv_field(row, 4)
+          if ((state == "in_flight" || state == "queued") && repo_names_project(repo, n)) {
+            print id "," state "," repo
+          }
+        }
+      '
+  ) || refuse "cannot inspect backlog at $BACKLOG with tasks-axi."
   [ -z "$conflicts" ] || {
     printf '%s\n' "$conflicts" >&2
     refuse "in-flight or queued backlog work still names $PROJECT_NAME as its repo."

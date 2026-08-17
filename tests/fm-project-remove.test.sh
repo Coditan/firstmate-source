@@ -60,6 +60,22 @@ SH
   chmod +x "$fakebin/gh-axi"
 }
 
+fake_tasks_axi_listing() {
+  local fakebin=$1 body=$2
+  cat > "$fakebin/tasks-axi" <<SH
+#!/usr/bin/env bash
+if [ "\$1" = "list" ] && [ "\$2" = "--file" ]; then
+cat <<'EOF'
+$body
+EOF
+  exit 0
+fi
+printf 'unexpected tasks-axi call: %s\n' "\$*" >&2
+exit 1
+SH
+  chmod +x "$fakebin/tasks-axi"
+}
+
 test_requires_captain_approval() {
   local home rc=0
   home=$(make_home requires-captain-approval)
@@ -239,8 +255,9 @@ test_secondmate_clone_refuses() {
 }
 
 test_backlog_reference_refuses() {
-  local home rc=0
+  local home fakebin rc=0
   home=$(make_home backlog-reference)
+  fakebin=$(fm_fakebin "$home")
   cat > "$home/data/backlog.md" <<'EOF'
 # Backlog
 
@@ -251,7 +268,10 @@ test_backlog_reference_refuses() {
 
 ## Done
 EOF
-  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  fake_tasks_axi_listing "$fakebin" 'count: 1
+tasks[1]{id,state,kind,repo,title}:
+  alpha-live,in_flight,ship,alpha,active work'
+  PATH="$fakebin:$PATH" run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
   expect_code 1 "$rc" "backlog reference"
   assert_grep "alpha-live" "$home/err" \
     "backlog refusal did not name the conflicting work"
@@ -260,8 +280,9 @@ EOF
 }
 
 test_backlog_reference_with_repo_metadata_refuses() {
-  local home rc=0
+  local home fakebin rc=0
   home=$(make_home backlog-reference-metadata)
+  fakebin=$(fm_fakebin "$home")
   cat > "$home/data/backlog.md" <<'EOF'
 # Backlog
 
@@ -273,7 +294,11 @@ test_backlog_reference_with_repo_metadata_refuses() {
 
 ## Done
 EOF
-  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  fake_tasks_axi_listing "$fakebin" 'count: 2
+tasks[2]{id,state,kind,repo,title}:
+  alpha-live,in_flight,ship,"alpha, since 2026-08-17",active work
+  beta-live,queued,ship,"beta, since 2026-08-17",unrelated work'
+  PATH="$fakebin:$PATH" run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
   expect_code 1 "$rc" "backlog reference metadata"
   assert_grep "alpha-live" "$home/err" \
     "backlog metadata refusal did not name the conflicting work"
@@ -281,6 +306,31 @@ EOF
     "backlog metadata refusal matched an unrelated repo"
   [ -d "$home/projects/alpha" ] || fail "backlog-reference-metadata refusal removed the clone"
   pass "project removal refuses backlog repo metadata that names the project"
+}
+
+test_backlog_reference_uses_tasks_axi_for_bold_rows() {
+  local home fakebin rc=0
+  home=$(make_home backlog-reference-bold)
+  fakebin=$(fm_fakebin "$home")
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## In flight
+- **bold-task** - active work (repo: alpha, since 2026-08-17) (kind: ship)
+
+## Queued
+
+## Done
+EOF
+  fake_tasks_axi_listing "$fakebin" 'count: 1
+tasks[1]{id,state,kind,repo,title}:
+  bold-task,in_flight,ship,"alpha, since 2026-08-17",active work'
+  PATH="$fakebin:$PATH" run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 1 "$rc" "backlog reference bold"
+  assert_grep "bold-task" "$home/err" \
+    "tasks-axi-backed backlog refusal did not name the bold-row work"
+  [ -d "$home/projects/alpha" ] || fail "backlog-reference-bold refusal removed the clone"
+  pass "project removal asks tasks-axi for active backlog rows"
 }
 
 test_registry_must_have_one_entry() {
@@ -339,6 +389,7 @@ test_unregistered_claude_worktree_content_refuses_as_primary_dirty
 test_secondmate_clone_refuses
 test_backlog_reference_refuses
 test_backlog_reference_with_repo_metadata_refuses
+test_backlog_reference_uses_tasks_axi_for_bold_rows
 test_registry_must_have_one_entry
 test_pass_removes_clone_and_registry_entry_together
 test_dry_run_pass_keeps_clone_and_registry
