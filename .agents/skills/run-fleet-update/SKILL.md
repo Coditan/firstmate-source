@@ -54,8 +54,9 @@ Note: 'level with your own origin' answers hop 3 ONLY. It says nothing about hop
 Note: UNMEASURABLE is not an all-clear. A reading that could not be taken is reported as unmeasurable and never as current.
 ```
 
-Exit status is 0 only when every hop is measured and current, and 1 otherwise.
-The whole run takes one network call per measurable hop; the pin-source fetch was measured at 728K and under a second.
+Exit status is 0 when every applicable, measurable hop is current; a home with no `firstmate.lock` is not pin-delivered, so that skipped pin path is not a failure.
+The full run has one bounded fetch step for each source it must measure; a server that refuses the filtered pin-source fetch can cause that step to retry once without the filter.
+The successful filtered pin-source fetch was measured at 728K and under a second.
 
 To measure a home other than this code root, set `FM_HOME`:
 

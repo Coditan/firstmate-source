@@ -85,7 +85,8 @@ A check nobody runs is worth nothing, and the defect being repaired here is prec
 So `pin-age` is a subject in the daily currency round, at hop `pinned`, not only a skill a captain can invoke.
 
 The round already owns the cadence, the noise control, the two-round rule for unmeasured readings, and a supervisor that survives session boundaries.
-It consumes `bin/fm-fleet-update-check.sh --pin-age`, which takes exactly one network call and answers in one `<state>|<detail>` line, so it stays inside the round's per-step ceiling and can never become a second implementation that disagrees with the three-hop report a captain runs by hand.
+It consumes `bin/fm-fleet-update-check.sh --pin-age`, which performs one bounded source-fetch step and answers in one `<state>|<detail>` line, so it stays inside the round's per-step ceiling and can never become a second implementation that disagrees with the three-hop report a captain runs by hand.
+That step normally makes one filtered fetch and retries once without the filter only when the server refuses the filter.
 
 This changes one boundary [currency-round.md](currency-round.md) previously drew.
 That document said the round does not measure the pin hop, on the reasoning that the pin is the fleet repository's own measurement.

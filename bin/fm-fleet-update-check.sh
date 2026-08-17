@@ -53,15 +53,17 @@
 # that figure is a floor and the commit count is the authority.
 #
 # Usage:
-#   fm-fleet-update-check.sh            print all three hops; exit 0 only when
-#                                       every hop is measured and current
+#   fm-fleet-update-check.sh            print all three hops; exit 0 when every
+#                                       applicable, measurable hop is current.
+#                                       A home with no firstmate.lock is not
+#                                       pin-delivered, so that skipped pin path
+#                                       is not a failure.
 #   fm-fleet-update-check.sh --pin-age  print one "<state>|<detail>" line for the
 #                                       pin-age reading only (ok, behind,
 #                                       unmeasured, or skipped) and always exit
 #                                       0. This is the seam bin/fm-currency-round.sh
-#                                       consumes; it takes one network call, so
-#                                       it stays inside that round's per-step
-#                                       ceiling.
+#                                       consumes; its source fetch stays inside
+#                                       that round's per-step ceiling.
 #   fm-fleet-update-check.sh --help
 #
 # Environment:
