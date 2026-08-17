@@ -699,6 +699,29 @@ The nudges raise wakes and nothing else: the check never writes to Bridge, never
 Firstmate reads the wake and dispatches a crewmate to send the All-Ships notice, per `AGENTS.md` section 12.
 `FM_<CODE>_DISABLE=1` silences only the reporting modes for one subject, for suites that compose `bin/fm-bootstrap.sh`.
 
+### Forge status watch
+
+`bin/fm-forge-status.sh` reads the forge's own status page, records every new reading, and wakes firstmate only when the reading is new.
+Until it existed, an outage at the forge reached this fleet only when a supervisor walked into one, and live workers had to be warned by hand that a red check was not their own defect.
+[forge-status-watch.md](forge-status-watch.md) owns the evidence, the design decision behind the shape, and what the wake carries; the script's header owns its flags, state files, and mechanics.
+
+It runs on the same seam as the curation nudge rather than on a second timer: the locked bootstrap step arms it with `--arm`, which writes and registers this home's `state/forge-status.check.sh` and is idempotent, and the watcher runs it on the ordinary `state/*.check.sh` sweep while it self-gates to its own schedule.
+A sweep that is not due is a single file read and reaches no network at all.
+A due sweep takes one bounded fetch (`FM_FORGE_STATUS_TIMEOUT`, default 10 seconds, well inside the watcher's per-check timeout), renders the reading, and compares it to the last entry in the append-only `state/forge-status.log`.
+An unchanged reading appends nothing and wakes nobody; a new one is appended and printed as one wake line.
+The last log entry, not the schedule record, is what deduplication reads, so a record publish that fails after an append can neither duplicate nor lose a reading.
+
+The cadence is settable and its setting in force is readable, because raising and lowering it is firstmate's decision and never the script's: `--cadence raised` observes every `FM_FORGE_STATUS_RAISED_INTERVAL` seconds (default 300), `--cadence relaxed` every `FM_FORGE_STATUS_INTERVAL` seconds (default 7200) plus `FM_FORGE_STATUS_JITTER_MIN` to `FM_FORGE_STATUS_JITTER_MAX` seconds of fresh jitter, with any target minute that is a multiple of five discarded and re-drawn.
+The off-grid refusal governs the relaxed cadence only, for the reason the curation nudge carries it; a 300-second period is on the grid by definition, and skipping observations to dodge it during an incident would trade the thing being watched for a tidy schedule.
+`--cadence` alone, `--status`, and `--log [n]` are read-only and write no state.
+
+Every session start also runs `--armed`, which reports `FORGE_STATUS:` as `is not armed`, `state persistence failure`, `state health indeterminate`, or `supervision outage` when this home's watch needs attention, taken from what the work produced rather than from the check's own claim to be armed, and confirmed against a scratch publishability probe before any conclusion that supervision stopped.
+Its patience follows the cadence in force: `FM_FORGE_STATUS_OVERDUE` (default 7200) for relaxed, `FM_FORGE_STATUS_OVERDUE_RAISED` (default 1800) for raised.
+
+A reading that cannot be taken is recorded as `unmeasurable` with its concrete condition and is never rendered as clear, because a watch that goes quiet when the network fails is worse than none.
+The watch never writes to Bridge and never decides what a reading means to this fleet: firstmate reads the wake, judges it, and dispatches a crewmate for any fleet notice, per `AGENTS.md` section 12.
+`FM_FORGE_STATUS_URL` moves the status document, and `FM_FORGE_STATUS_DISABLE=1` silences detect and `--armed` - and with them the fetch - for suites that compose `bin/fm-bootstrap.sh`.
+
 ## X mode (.env)
 
 X mode lets a firstmate instance answer public `@myfirstmate` mentions and act on normal reversible mention requests through firstmate's normal lifecycle.

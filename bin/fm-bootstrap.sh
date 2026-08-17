@@ -1135,6 +1135,13 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
     echo "CURATION_NUDGE: the fleet nudges could not be armed on this home, so nothing will re-measure this vessel's learnings and captain files between sessions; run $SCRIPT_DIR/fm-nudge.sh --arm to see why"
     echo "CODEBASE_SWEEP_NUDGE: the fleet nudges could not be armed on this home, so nothing will ask this vessel to re-measure its own repositories between sessions; run $SCRIPT_DIR/fm-nudge.sh --arm to see why"
   fi
+  # Arm this home's forge status watch on the same seam. Until it existed, an
+  # outage at the forge reached this fleet only when a supervisor walked into
+  # it, and live workers had to be warned by hand that a red check was not
+  # their own defect.
+  if ! "$SCRIPT_DIR/fm-forge-status.sh" --arm >/dev/null 2>&1; then
+    echo "FORGE_STATUS: the forge status watch could not be armed on this home, so nothing will notice a forge outage between sessions; run $SCRIPT_DIR/fm-forge-status.sh --arm to see why"
+  fi
   "$SCRIPT_DIR/fm-axi-suite.sh"
   # The suite may have just seeded this home's own copies into $FM_HOME/.local/axi;
   # drop the cached lookups so the sweeps below resolve the vessel copy, not the
@@ -1170,6 +1177,9 @@ fi
 # check's own claim to be armed, because a timer's own surfaces report health
 # long after it died.
 "$SCRIPT_DIR/fm-nudge.sh" --armed || true
+# And of the forge status watch, on the same terms: an armed watch that nothing
+# executes leaves the forge unwatched while every surface still looks fine.
+"$SCRIPT_DIR/fm-forge-status.sh" --armed || true
 [ -f "$STATE/firstmate-update.available" ] && cat "$STATE/firstmate-update.available"
 [ -f "$STATE/firstmate-update.stuck" ] && cat "$STATE/firstmate-update.stuck"
 [ -f "$STATE/fork-sync.pending" ] && cat "$STATE/fork-sync.pending"

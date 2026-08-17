@@ -2,7 +2,7 @@
 name: bootstrap-diagnostics
 description: >-
   Agent-only handling playbook for session-start bootstrap diagnostics.
-  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, ROLE_INVALID, ROLE_OVERLAY_MISSING, NEEDS_GH_AUTH, TANGLE, SELF_DRIFT, CREW_DISPATCH invalid, CURRENCY_BASE, LAVISH_ACCESS, BACKLOG_STALE, BACKLOG_UNREADABLE, DECISION_LEDGER, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, AXI_SUITE_UPDATED, AXI_SUITE_REVIEW, AXI_SUITE_STUCK, AXI_SUITE_SHADOWED, AXI_SUITE_SHADOW_UNKNOWN, FIRSTMATE_UPDATE_AVAILABLE, FIRSTMATE_UPDATE_STUCK, FORK_SYNC, FORK_SYNC_STUCK, CURRENCY_ROUND, MEMORY_ALARM, CURATION_NUDGE, CODEBASE_SWEEP_NUDGE, GROSSREINSCHIFF, RUN_READER, WATCHER_UNIT, DELIVERY_UNIT, FREQUENCY_MONITOR_UNIT, BOSUN_UNIT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
+  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, ROLE_INVALID, ROLE_OVERLAY_MISSING, NEEDS_GH_AUTH, TANGLE, SELF_DRIFT, CREW_DISPATCH invalid, CURRENCY_BASE, LAVISH_ACCESS, BACKLOG_STALE, BACKLOG_UNREADABLE, DECISION_LEDGER, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, AXI_SUITE_UPDATED, AXI_SUITE_REVIEW, AXI_SUITE_STUCK, AXI_SUITE_SHADOWED, AXI_SUITE_SHADOW_UNKNOWN, FIRSTMATE_UPDATE_AVAILABLE, FIRSTMATE_UPDATE_STUCK, FORK_SYNC, FORK_SYNC_STUCK, CURRENCY_ROUND, MEMORY_ALARM, CURATION_NUDGE, CODEBASE_SWEEP_NUDGE, FORGE_STATUS, GROSSREINSCHIFF, RUN_READER, WATCHER_UNIT, DELIVERY_UNIT, FREQUENCY_MONITOR_UNIT, BOSUN_UNIT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
   A silent bootstrap section, or a BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -123,6 +123,15 @@ When any diagnostic needs captain attention, report the plain consequence and re
   The nudge itself arrives as a `check:` wake instead, and that one asks firstmate to dispatch a crewmate to send the All-Ships notice per `AGENTS.md` section 12; the wording of that notice is firstmate's, and the nudge never writes to Bridge itself.
   For `CURATION_NUDGE` each vessel then measures its own `data/learnings.md` and `data/captain.md` and decides its own split, because the files are per-home and gitignored and no seat can see another's.
   For `CODEBASE_SWEEP_NUDGE` each vessel loads the `codebase-sweep` skill and runs it on its own repositories, one named repository at a time; the cadence sweeps nothing and reads no repository, here or anywhere.
+- `FORGE_STATUS: <detail>` - this home's forge status watch is unavailable, or its scheduler cannot place a next observation.
+  `is not armed` or `could not be armed` means the watch was never installed or the arm failed; run `bin/fm-forge-status.sh --arm` and report the reason if it refuses.
+  `state persistence failure` means the state path cannot publish the record or append the reading log; repair its permissions, disk space, quota, or mount, not monitoring.
+  `supervision outage` means the state path is usable but the observation is still missing or overdue, so the forge is unwatched; repair it through the emitted supervision instructions, exactly as for a lapsed watcher.
+  `state health indeterminate` names state publication failure and supervision outage as candidates while asserting neither; check both, starting with the cheaper state-path reading.
+  `landed on the five-minute grid` is a scheduling refusal, not dead monitoring: the configured jitter window contains no off-grid target minute, so widen it.
+  Never read any of these lines as a reading of the forge itself - they say the instrument is not reading, never that the forge is healthy; `bin/fm-forge-status.sh --status` and `--log` print what was actually recorded.
+  A reading arrives as a `check:` wake instead, and that one is firstmate's to judge: decide whether it touches this fleet's work, whether the fleet needs telling through a dispatched crewmate per `AGENTS.md` section 12, and whether to raise or lower the watch with `bin/fm-forge-status.sh --cadence raised|relaxed`.
+  A wake that says `UNMEASURABLE` means this seat could not read the status page; it is never relayed as an all-clear (docs/forge-status-watch.md).
 - `GROSSREINSCHIFF: weekly fleet cleanup sweep is due (...)` - this home has not completed its Thursday cleanup sweep for the current week; load the `grossreinschiff` skill and run it.
   Nothing is broken: the line is a cadence reminder, and it repeats each session start until `bin/fm-grossreinschiff-due.sh --record` marks a sweep that actually produced a report.
   The reported window-open days say only how far into the current week's window this session start falls; the count is bounded to 0 through 6 and never measures how long the home has been dark.
