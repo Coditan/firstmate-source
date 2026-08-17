@@ -298,24 +298,23 @@ recorded_service_path() {
   sed -n 's/^PATH="\(.*\)"$/\1/p' "$SERVICE_ENV" | head -1
 }
 
-record_drifted_fault() {  # <drift description>
-  local drift=$1 health_record measurement emitted
+record_restart_fault() {  # <restart trigger> <drift description>
+  local trigger=$1 drift=$2 health_record measurement emitted
   health_record=$(cat "$STATE/bosun/health" 2>&1 || true)
   [ -n "$health_record" ] || health_record="health record absent or empty"
-  measurement=$(printf 'drift: %s\nhealth: %s - %s\nhealth record:\n%s\nrestart consequence: convergence is about to erase this live fault evidence' \
-    "$drift" "$FM_BOSUN_HEALTH_WORD" "$FM_BOSUN_HEALTH_NOTE" "$health_record")
+  measurement=$(printf 'trigger: %s\ndrift: %s\nhealth: %s - %s\nhealth record:\n%s\nrestart consequence: this restart is about to erase the live fault evidence' \
+    "$trigger" "$drift" "$FM_BOSUN_HEALTH_WORD" "$FM_BOSUN_HEALTH_NOTE" "$health_record")
   if emitted=$(bosun_env "$FINDING" emit \
     --class evidence \
     --severity high \
-    --claim "A drifted $FM_BOSUN_HEALTH_WORD bosun will be restarted after its fault evidence is preserved" \
+    --claim "A $FM_BOSUN_HEALTH_WORD bosun will be restarted by $trigger after its fault evidence is preserved" \
     --where "$FM_HOME bosun observer service" \
     --measurement "$measurement" \
-    --refuted-by "the pre-restart health reading was neither STALLED nor BLIND, or convergence changed neither unit bytes nor the recorded environment" \
+    --refuted-by "the pre-restart health reading was neither STALLED nor BLIND, or the named restart was not attempted" \
     --officer fm-bosun-service 2>&1); then
     return 0
   fi
-  printf 'BOSUN_UNIT: cannot restart the drifted %s observer without a durable incident record - %s\n' \
-    "$FM_BOSUN_HEALTH_WORD" "$emitted" >&2
+  FM_BOSUN_FINDING_ERROR=$emitted
   return 1
 }
 
@@ -349,7 +348,13 @@ ensure_systemd() {
     fi
     bosun_health || true
     case "$FM_BOSUN_HEALTH_WORD" in
-      STALLED|BLIND) record_drifted_fault "$drift" || return 4 ;;
+      STALLED|BLIND)
+        if ! record_restart_fault "locked bootstrap convergence" "$drift"; then
+          printf 'BOSUN_UNIT: cannot restart the drifted %s observer without a durable incident record - %s\n' \
+            "$FM_BOSUN_HEALTH_WORD" "$FM_BOSUN_FINDING_ERROR" >&2
+          return 4
+        fi
+        ;;
     esac
     if [ "$unit_changed" -eq 1 ]; then
       install_unit_bytes || return 1
@@ -377,17 +382,38 @@ ensure_systemd() {
 }
 
 install_systemd() {
-  local unit
+  local unit unit_changed=0 env_changed=0 drift=''
   bosun_opted_in || {
     echo "error: this home has not opted into the bosun; create $OPT_IN first" >&2
     return 1
   }
   systemd_usable || { echo "error: systemd --user is unavailable" >&2; return 1; }
   unit=$(unit_instance) || return 1
+  cmp -s "$UNIT_SOURCE" "$UNIT_DEST" || unit_changed=1
+  service_env_matches || env_changed=1
+  if [ "$unit_changed" -eq 1 ] && [ "$env_changed" -eq 1 ]; then
+    drift='unit bytes and recorded environment'
+  elif [ "$unit_changed" -eq 1 ]; then
+    drift='unit bytes'
+  elif [ "$env_changed" -eq 1 ]; then
+    drift='recorded environment'
+  else
+    drift='no configuration bytes changed during approved installation'
+  fi
   install_unit_bytes || return 1
   write_service_env || return 1
   "$SYSTEMCTL" --user daemon-reload || return 1
   "$SYSTEMCTL" --user enable "$unit" || return 1
+  bosun_health || true
+  case "$FM_BOSUN_HEALTH_WORD" in
+    STALLED|BLIND)
+      if ! record_restart_fault "approved bosun-unit installation" "$drift"; then
+        printf 'error: the unit and recorded environment are in place, but restart was deliberately withheld because the running observer reads %s and its evidence could not be recorded - %s; make that surface writable, then rerun bin/fm-bootstrap.sh install bosun-unit\n' \
+          "$FM_BOSUN_HEALTH_WORD" "$FM_BOSUN_FINDING_ERROR" >&2
+        return 1
+      fi
+      ;;
+  esac
   # Installation must make the recorded configuration the running one;
   # enable --now does not restart an instance that is already active.
   "$SYSTEMCTL" --user restart "$unit" || return 1

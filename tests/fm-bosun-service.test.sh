@@ -450,6 +450,73 @@ test_drifted_stall_without_findings_surface_is_not_restarted() {
   pass "unrecordable drifted stall blocks convergence restart"
 }
 
+test_installer_records_running_stall_before_restart() {
+  local fakebin home unitdir findings records
+  fakebin="$TMP_ROOT/fakebin"
+  home="$TMP_ROOT/install-stalled"
+  unitdir="$TMP_ROOT/units-install-stalled"
+  findings="$home/data/findings"
+  mkdir -p "$home/state" "$home/config" "$unitdir"
+  : > "$home/config/bosun"
+  rm -f "$TMP_ROOT/systemd.enabled" "$TMP_ROOT/systemd.active"
+  : > "$TMP_ROOT/systemctl.log"
+
+  service_env "$fakebin" "$home" "$unitdir" \
+    "$ROOT/bin/fm-bootstrap.sh" install bosun-unit > /dev/null
+  FM_FINDINGS_DIR="$findings" "$FINDING" init > /dev/null
+  mark_stalled "$home/state" installer-pre-restart-stalled
+  printf '%s\n' stale > "$unitdir/fm-bosun@.service"
+  : > "$TMP_ROOT/systemctl.log"
+
+  FM_BOSUN_STALL_AFTER=1 FM_FINDINGS_DIR="$findings" \
+    service_env "$fakebin" "$home" "$unitdir" \
+    "$ROOT/bin/fm-bootstrap.sh" install bosun-unit > /dev/null \
+    || fail "installer refused a stalled instance after recording its evidence"
+  assert_contains "$(cat "$TMP_ROOT/systemctl.log")" "--user restart fm-bosun@" \
+    "installer did not restart the stalled instance after recording evidence"
+  records=$(FM_FINDINGS_DIR="$findings" "$FINDING" list --json) \
+    || fail "findings reader could not read the installer stall evidence"
+  printf '%s' "$records" | jq -e 'length == 1 and
+    (.[0].measurement | contains("trigger: approved bosun-unit installation")) and
+    (.[0].measurement | contains("drift: unit bytes")) and
+    (.[0].measurement | contains("health: STALLED")) and
+    (.[0].measurement | contains("pid: installer-pre-restart-stalled"))' > /dev/null \
+    || fail "installer finding did not preserve the pre-restart stalled measurement"
+  pass "installer preserves stalled evidence before restart"
+}
+
+test_installer_blocks_stall_restart_without_findings_surface() {
+  local fakebin home unitdir findings out status
+  fakebin="$TMP_ROOT/fakebin"
+  home="$TMP_ROOT/install-stalled-blocked"
+  unitdir="$TMP_ROOT/units-install-stalled-blocked"
+  findings="$home/uninitialised-findings"
+  mkdir -p "$home/state" "$home/config" "$unitdir"
+  : > "$home/config/bosun"
+  rm -f "$TMP_ROOT/systemd.enabled" "$TMP_ROOT/systemd.active"
+  : > "$TMP_ROOT/systemctl.log"
+
+  service_env "$fakebin" "$home" "$unitdir" \
+    "$ROOT/bin/fm-bootstrap.sh" install bosun-unit > /dev/null
+  mark_stalled "$home/state" installer-blocked-stalled
+  printf '%s\n' stale > "$unitdir/fm-bosun@.service"
+  : > "$TMP_ROOT/systemctl.log"
+
+  out=$(FM_BOSUN_STALL_AFTER=1 FM_FINDINGS_DIR="$findings" \
+    service_env "$fakebin" "$home" "$unitdir" \
+    "$ROOT/bin/fm-bootstrap.sh" install bosun-unit 2>&1) && status=0 || status=$?
+  [ "$status" -ne 0 ] || fail "installer reported success after withholding the required restart"
+  assert_not_contains "$(cat "$TMP_ROOT/systemctl.log")" "--user restart fm-bosun@" \
+    "installer restarted a stalled instance without a durable incident record"
+  assert_contains "$out" "unit and recorded environment are in place" \
+    "blocked installer did not describe its half-completed state"
+  assert_contains "$out" "$findings" \
+    "blocked installer did not name the unreachable findings surface"
+  assert_contains "$out" "fm-finding.sh init" \
+    "blocked installer did not give the findings-surface initialization command"
+  pass "installer withholds stalled restart when evidence cannot be recorded"
+}
+
 test_unopted_home_is_silent
 test_unit_clears_manager_judge_override
 test_install_requires_consent_and_converges
@@ -458,3 +525,5 @@ test_unreachable_judge_is_reported
 test_ambient_judge_override_does_not_change_service_resolution
 test_drifted_stall_is_recorded_before_restart
 test_drifted_stall_without_findings_surface_is_not_restarted
+test_installer_records_running_stall_before_restart
+test_installer_blocks_stall_restart_without_findings_surface
