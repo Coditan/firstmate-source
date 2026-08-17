@@ -14,7 +14,7 @@ metadata:
 # /codebase-sweep
 
 A repository that is hard for a stranger to navigate is hard for every agent that will ever be pointed at it, because an agent arrives with no memory of it at all.
-This sweep looks for that, one repository at a time, and it ends with three things: findings the captain can read in order, work already under way on the ones that are reversible without him, and the questions that are his named as questions rather than dressed up as proposals.
+This sweep looks for that, one repository at a time, and it ends with three things: findings the captain can read in order, work already under way on the ones that are reversible without him and contained inside one module, and the questions that are his named as questions rather than dressed up as proposals.
 
 ## The obligation is here, and a cadence only fires
 

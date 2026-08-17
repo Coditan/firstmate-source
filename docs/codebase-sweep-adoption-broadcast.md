@@ -42,7 +42,8 @@ An envelope id proves composition and never delivery: after the send, fetch and 
 
     It sweeps ONE named repository for codebase-design findings, classifies each
     one, sorts them, and does the work on the ones that are reversible without
-    the Commodore. Its subjects are the ones a talk on designing codebases for
+    the Commodore and contained inside one module. Its subjects are the ones a
+    talk on designing codebases for
     agents actually names: could a stranger find the right module from folder
     names and public interface types alone; are the modules deep with small
     interfaces or a web of shallow ones; is the interface where a person applies
