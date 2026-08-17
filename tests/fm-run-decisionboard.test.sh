@@ -420,6 +420,43 @@ SH
   pass "shot refuses evidence it cannot serialise against other runs"
 }
 
+test_staging_aliases_share_one_capture_lock() {
+  local shot_tmp fakebin real_dir alias_dir first_lock second_lock status=0
+  fm_test_tmproot shot_tmp fm-run-db-alias-lock
+  fakebin=$(fm_fakebin "$shot_tmp")
+  real_dir="$shot_tmp/staging"
+  alias_dir="$shot_tmp/staging-alias"
+  mkdir -p "$real_dir"
+  ln -s "$real_dir" "$alias_dir"
+  mkdir -m 700 "$shot_tmp/runtime"
+  cat > "$fakebin/chrome-devtools-axi" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  cat > "$fakebin/flock" <<'SH'
+#!/usr/bin/env bash
+fd=${!#}
+readlink "/proc/$$/fd/$fd" >> "$LOCK_LOG"
+exit 1
+SH
+  chmod +x "$fakebin/chrome-devtools-axi" "$fakebin/flock"
+  : > "$shot_tmp/locks"
+  PATH="$fakebin:$PATH" LOCK_LOG="$shot_tmp/locks" XDG_RUNTIME_DIR="$shot_tmp/runtime" \
+    FM_RUN_DECISIONBOARD_TMPDIR="$real_dir/" FM_RUN_DECISIONBOARD_LOCK_TIMEOUT=0 \
+    "$DRIVER" shot "$shot_tmp/first.png" >/dev/null 2>&1 || status=$?
+  [ "$status" -ne 0 ] || fail "first aliased staging capture unexpectedly acquired the fake lock"
+  status=0
+  PATH="$fakebin:$PATH" LOCK_LOG="$shot_tmp/locks" XDG_RUNTIME_DIR="$shot_tmp/runtime" \
+    FM_RUN_DECISIONBOARD_TMPDIR="$alias_dir" FM_RUN_DECISIONBOARD_LOCK_TIMEOUT=0 \
+    "$DRIVER" shot "$shot_tmp/second.png" >/dev/null 2>&1 || status=$?
+  [ "$status" -ne 0 ] || fail "second aliased staging capture unexpectedly acquired the fake lock"
+  first_lock=$(sed -n '1p' "$shot_tmp/locks")
+  second_lock=$(sed -n '2p' "$shot_tmp/locks")
+  [ -n "$first_lock" ] && [ "$first_lock" = "$second_lock" ] \
+    || fail "equivalent staging paths used different locks: '$first_lock' and '$second_lock'"
+  pass "equivalent staging paths share one capture lock"
+}
+
 test_shot_refuses_an_unsafe_lock_directory() {
   local shot_tmp fakebin out status=0
   fm_test_tmproot shot_tmp fm-run-db-unsafe-lock
@@ -659,6 +696,7 @@ test_shot_refuses_a_screenshot_that_wrote_nothing
 test_shot_refuses_a_stale_staging_file
 test_shot_accepts_a_same_size_refresh
 test_shot_refuses_an_unacquirable_capture_lock
+test_staging_aliases_share_one_capture_lock
 test_shot_refuses_an_unsafe_lock_directory
 test_doctor_accepts_a_same_size_refresh
 test_answer_reresolves_the_exact_option_name

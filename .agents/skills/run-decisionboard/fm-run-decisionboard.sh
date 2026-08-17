@@ -485,7 +485,7 @@ cmd_query() {
     return 1
   fi
   if [ "$with_note" -lt "$decisions" ]; then
-    printf 'FINDING: %s of %s decision cards carry no note field; a choice alone can record a decision the captain did not make. On the 2026-08-16 board, two of twenty answers carried a note that contradicted the selected option, and both notes carried what the captain actually meant.\n' \
+    printf 'FINDING: %s of %s decision cards carry no note field; board.js accepts a choice alone, so those decisions can record an option with no way to qualify it.\n' \
       "$((decisions - with_note))" "$decisions"
     if [ "$note_policy" = refuse ]; then
       printf 'FINDING: FM_RUN_DECISIONBOARD_NOTE_REQUIRED=refuse, so missing note fields are refused.\n'
@@ -522,7 +522,10 @@ cmd_query() {
 # tests set it to reach both refusal branches without depending on what an
 # earlier run left in /tmp.
 shot_staging_path() {
-  printf '%s/fm-run-decisionboard-shot.%s.png' "${FM_RUN_DECISIONBOARD_TMPDIR:-/tmp}" "$(id -un)"
+  local staging_dir
+  staging_dir=$(cd "${FM_RUN_DECISIONBOARD_TMPDIR:-/tmp}" 2>/dev/null && pwd -P) \
+    || die "screenshot staging directory does not exist: ${FM_RUN_DECISIONBOARD_TMPDIR:-/tmp}"
+  printf '%s/fm-run-decisionboard-shot.%s.png' "$staging_dir" "$(id -un)"
 }
 
 SCREENSHOT_EXIT_STATUS=0
