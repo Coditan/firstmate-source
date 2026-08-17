@@ -37,10 +37,13 @@ here instead of being left to an agent's care:
                                 read-only; every other form FAILS, because the
                                 harm is a reader following the document. Shell
                                 syntax is refused before any of that: a run
-                                carrying an operator is more than one command
-                                and so is not one this guard can classify.
-                                Prose that does not parse as a command is
-                                neither. The route is proved, not asserted.
+                                whose lexer yields an unquoted operator is more
+                                than one command and so is not one this guard
+                                can classify. A run whose first word carries a
+                                document suffix is prose naming a file, and is
+                                passed over; every other first word is a command
+                                word and is judged, so nothing is dropped in
+                                silence. The route is proved, not asserted.
 
 PROOF AND LEDGER UNIT
 Both guarantees operate on entries at the selected heading level. Deeper
@@ -250,6 +253,16 @@ GUIDANCE_VALUE_FLAGS = {
     "head": ("-n", "-c"),
     "tail": ("-n", "-c"),
 }
+
+# Suffixes that make the first word of a backticked run a FILENAME rather than
+# a command word, which is the one thing separating prose from a documented
+# command. Every other first word is a command and is judged; see command_argv
+# for why the unlisted case fails loudly instead of being dropped.
+DOCUMENT_SUFFIXES = (
+    ".md", ".markdown", ".rst", ".org", ".txt", ".text", ".log",
+    ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".env",
+    ".csv", ".tsv", ".html", ".htm", ".xml", ".pdf", ".diff", ".patch",
+)
 
 # Verdict vocabularies. They do not overlap by accident: `cold` and `split`
 # presuppose an archive file, which a shared-tracked file must never grow.
@@ -1013,12 +1026,39 @@ def shell_syntax_error(command):
     same way. Shell syntax is refused BEFORE classification: this guard judges
     one command, so anything that is more than one is something it cannot judge
     and must say so.
+
+    The lexer does that judging, and searching the raw string does not. An
+    operator inside a QUOTED operand is not an operator - no shell treats the
+    `|` in `grep -n -E 'a|b' <archive>` as one - so a raw-string search refuses
+    the worked content search the loaded half is asked to show, while still
+    missing a glued `>file`. `shlex.shlex(command, punctuation_chars=True)`
+    settles both: unquoted `;`, `|`, `&&`, `<`, `>` and the parens of a command
+    substitution come back as their own tokens, and a quoted operand comes back
+    whole.
     """
-    for token in ("|", ";", "&", "<", ">", "`", "$(", "${", "\n"):
-        if token in command:
+    if "\n" in command:
+        return (
+            "it spans more than one line, so it is not a single command this "
+            "guard can classify"
+        )
+    lexer = shlex.shlex(command, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return None
+    punctuation = lexer.punctuation_chars
+    for token in tokens:
+        if token and all(char in punctuation for char in token):
             return (
                 "it carries shell syntax (`%s`), so it is not a single command "
-                "this guard can classify" % token.replace("\n", "newline")
+                "this guard can classify" % token
+            )
+        quoted = token[:1] in ("'", '"')
+        if not quoted and ("${" in token or "`" in token):
+            return (
+                "it carries a shell expansion (`%s`), so what it would run is "
+                "not fixed and this guard cannot classify it" % token
             )
     return None
 
@@ -1027,17 +1067,28 @@ def command_argv(command):
     """Tokenize a backticked run, or None when it is not a command at all.
 
     A loaded half is prose with commands inside it, so the two must be told
-    apart before either is judged. A run whose first token is a filename -
+    apart before either is judged. A run whose first word is a filename -
     `before.md -> after-archive.md`, this repo's own house arrow between two
     paths - is a sentence, and treating it as a documented route both accuses
     the curator of something they did not write and fails a correct curation.
 
-    The discriminator is the shape of the first token. A path spelling - `/x`,
-    `./x`, `../x` - is a command, and so is a bare word with no dot in it. A
-    bare word carrying a dot and no slash is a filename, which is what prose
-    naming two markdown files looks like. A script invocation therefore reaches
-    the classifier and fails there as unrecognised, rather than being dropped in
-    a silence that hides an instruction to a reader.
+    ONE rule decides it, because the pile of prefix rules this replaced was
+    wrong in both directions at once: it dropped `bin/rebuild-archive.sh
+    <archive>` in silence for having a slash without a leading dot, and it
+    judged `/tmp/x/before.md -> /tmp/x/after.md` as a command for having a
+    leading slash. The rule is the SUFFIX of the first word's basename. A
+    document or data suffix means a filename, so the run is prose and is passed
+    over; anything else is a command word and is judged, which is how a script
+    invocation reaches the closed read-only set and fails there as unrecognised.
+
+    The residual, stated rather than hidden: a first word carrying a suffix
+    nobody listed is treated as a command and FAILS loudly as unrecognised,
+    never dropped. That direction is deliberate - a loud false failure is
+    visible to the operator and correctable in one edit, while a silent drop is
+    neither, and never-drop is the invariant this guard exists to hold. Scraping
+    prose for commands is ambiguous at the root; whether the loaded half should
+    MARK its route explicitly instead is a separate question for the owner and
+    is not implemented here.
     """
     try:
         argv = shlex.split(command)
@@ -1045,12 +1096,8 @@ def command_argv(command):
         return None
     if len(argv) < 2:
         return None
-    word = argv[0]
-    if word.startswith("/") or word.startswith("./") or word.startswith("../"):
-        return argv
-    if "/" in word or "." in word:
-        return None
-    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_+-]*", word):
+    suffix = os.path.splitext(os.path.basename(argv[0]))[1].lower()
+    if suffix in DOCUMENT_SUFFIXES:
         return None
     return argv
 

@@ -1498,23 +1498,29 @@ EOF
   done
 
   # A script invocation is a command, not prose, so it reaches the closed set
-  # and fails there. Dropping it in silence hid an instruction to a reader.
-  cat >"$TMP/script-route-loaded.md" <<'EOF'
+  # and fails there. Dropping it in silence hid an instruction to a reader, and
+  # the spelling this repo uses everywhere - bin/<name>.sh, no leading dot - was
+  # the one the earlier prefix rules dropped.
+  local script
+  for script in './tools/rebuild.sh' 'bin/rebuild-archive.sh' \
+    '/opt/fixture/wipe.sh' 'tools/rebuild.py'; do
+    cat >"$TMP/script-route-loaded.md" <<EOF
 # Store
 
-List the entries with `grep -n '^## ' after-archive.md`.
-Rebuild it with `./tools/rebuild.sh after-archive.md` when it drifts.
+List the entries with \`grep -n '^## ' after-archive.md\`.
+Rebuild it with \`$script after-archive.md\` when it drifts.
 
 - **Alpha rule**: the one sentence that must be in hand first.
 EOF
-  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
-    --loaded "$TMP/script-route-loaded.md" --archive "$TMP/after-archive.md" \
-    --home "$TMP" 2>&1) && status=0 || status=$?
-  [ "$status" -eq 1 ] || fail "a documented script invocation exited $status, expected 1"
-  printf '%s' "$out" | grep -q 'documents a command this guard cannot recognise as read-only' \
-    || fail "the script invocation was dropped instead of refused"
-  printf '%s' "$out" | grep -q 'rebuild.sh' \
-    || fail "the refused script invocation was not named"
+    out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+      --loaded "$TMP/script-route-loaded.md" --archive "$TMP/after-archive.md" \
+      --home "$TMP" 2>&1) && status=0 || status=$?
+    [ "$status" -eq 1 ] || fail "documented \`$script\` exited $status, expected 1"
+    printf '%s' "$out" | grep -q 'documents a command this guard cannot recognise as read-only' \
+      || fail "documented \`$script\` was dropped instead of refused"
+    printf '%s' "$out" | grep -qF "$script" \
+      || fail "the refused invocation \`$script\` was not named"
+  done
 
   # The read-only forms the guard recognises are still only reported.
   local form
@@ -1561,6 +1567,42 @@ EOF
     && fail "a prose sentence was classified as a documented command"
   printf '%s' "$out" | grep -q 'route reaches 1 of 1 archived entries' \
     || fail "the real index route was not proved alongside the prose"
+
+  # The same sentence written with absolute paths is the same sentence.
+  cat >"$TMP/prose-abs-arrow-loaded.md" <<'EOF'
+# Store
+
+The split was `/tmp/x/before.md -> /tmp/x/after-archive.md`, nothing was curated.
+List the entries with `grep -n '^## ' after-archive.md`.
+
+- **Alpha rule**: the one sentence that must be in hand first.
+EOF
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/prose-abs-arrow-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "prose naming two absolute paths exited $status, expected 0: $out"
+  printf '%s' "$out" | grep -q 'cannot recognise as read-only' \
+    && fail "an absolute-path prose sentence was accused of being a command"
+
+  # An operator inside a QUOTED operand is an operand. No shell would treat the
+  # pipe in this alternation as syntax, and refusing it refused exactly the
+  # worked content search rule 3 asks the loaded half to show.
+  cat >"$TMP/quoted-regex-loaded.md" <<'EOF'
+# Store
+
+List the entries with `grep -n '^## ' after-archive.md`.
+Recover the retelling with `grep -n -E 'second time|evening' after-archive.md`.
+
+- **Alpha rule**: the one sentence that must be in hand first.
+EOF
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/quoted-regex-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "a quoted alternation pattern exited $status, expected 0: $out"
+  printf '%s' "$out" | grep -q 'it carries shell syntax' \
+    && fail "a pipe inside a quoted pattern was read as shell syntax"
+  printf '%s' "$out" | grep -q 'search returned 1 line(s)' \
+    || fail "the quoted content search was not executed alongside the index"
 
   # A genuine redirection still fails, so the narrowing did not blunt the guard.
   cat >"$TMP/real-redirect-loaded.md" <<'EOF'

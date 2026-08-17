@@ -250,15 +250,17 @@ It asserts, and exits non-zero on any of:
 Then it executes EVERY documented search whose verb the guard can run - `grep` and `rg`, the two tools with no write operation anywhere in their interface - against a protected copy, in whatever order they were written.
 Each must run and return results, and at least one must be a heading index that reaches every archived entry.
 A worked content search is proved by returning results and is not asked to be an index, because recovering a fact is what rule 3 asks the loaded half to show.
-Anything carrying shell syntax - a semicolon, pipe, ampersand, angle bracket, backtick or command substitution - is refused before it is classified at all, because it is more than one command and this guard judges one.
+Anything carrying shell syntax - an UNQUOTED semicolon, pipe, ampersand, angle bracket or command substitution - is refused before it is classified at all, because it is more than one command and this guard judges one.
+The lexer decides that, not a search over the text, so the `|` inside a quoted pattern such as `grep -n -E 'first|second' <archive>` is an operand and the route runs.
 Splitting on the operators and judging each part would rebuild a shell parser here, and the next operator nobody thought of would walk straight through it.
 A documented command the guard cannot run lands in one of two places, never dropped.
 It is reported as documented-but-unprovable supplementary guidance only if it matches a closed set of read-only forms: a `sed -n` range read, `less`, `cat`, `head`, `tail`, with their arguments validated, since `sed -i` writes and `less -o` logs.
-EVERYTHING ELSE FAILS, including a verb nobody has thought of yet, and including a script invocation such as `./tools/rebuild.sh <archive>`.
+EVERYTHING ELSE FAILS, including a verb nobody has thought of yet, and including a script invocation such as `bin/rebuild-archive.sh <archive>` however its path is spelled.
 That direction is deliberate and was reached the hard way: a list of forms believed destructive was tried first, and it caught `sed -i` while blessing `rm` over the archive.
 `check` is the last gate before the pair moves into a home whose `data/` is not version-controlled, and the harm is a reader following the document, so an unrecognised form must fail rather than pass.
 The driver cannot prove an unexecuted command is read-only, so a reported one is read-only in FORM only.
-Prose that does not parse as a command is neither reported nor failed: a sentence such as `before.md -> after-archive.md` is not a documented route.
+Prose naming a file is neither reported nor failed: a first word carrying a document suffix, as in `before.md -> after-archive.md`, is a filename rather than a command, whether it is written relative or absolute.
+Every other first word is a command word, so a run this guard cannot place fails loudly rather than being dropped in a silence that would hide an instruction to a reader.
 The `--prove-route` value limits only the printed example, never the assertion.
 `--level` is refused here: the baseline's entries were measured at the level the snapshot recorded, so set it with `measure --level <n>` instead.
 
