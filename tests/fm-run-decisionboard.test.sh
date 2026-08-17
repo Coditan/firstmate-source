@@ -104,6 +104,21 @@ uid=g1:1_0 RootWebArea "Halbbrett · Lavish" url="http://example.invalid/session
 SNAP
 }
 
+choice_only_snapshot() {
+  cat <<'SNAP'
+page:
+  title: Auswahlbrett · Lavish
+snapshot:
+uid=g4:1_0 RootWebArea "Auswahlbrett · Lavish" url="http://example.invalid/session/x"
+  uid=g4:1_5 Iframe
+    uid=g4:1_6 RootWebArea "Auswahlbrett" url="http://example.invalid/artifact/x/index.html?artifact_revision=1"
+      uid=g4:1_7 form
+        uid=g4:1_8 radio "Ja"
+        uid=g4:1_9 radio "Nein"
+        uid=g4:1_10 button "Antwort vormerken"
+SNAP
+}
+
 # A decision form carrying nothing at all. The parser must still count the form,
 # or a decision whose options are prose is invisible rather than reported - and
 # invisible is what let the original board ship.
@@ -240,6 +255,26 @@ test_query_refuses_a_board_with_no_way_to_submit() {
     || fail "query passed a board whose selection has nowhere to go"$'\n'"$QUERY_OUT"
   assert_contains "$QUERY_OUT" "no submit button" "query must name the missing submit button"
   pass "query refuses a board whose selection has nowhere to go"
+}
+
+test_query_reports_missing_notes_without_refusing_them() {
+  query_with choice_only_snapshot
+  [ "$QUERY_STATUS" -eq 0 ] || fail "query rejected a valid choice-only answer"$'\n'"$QUERY_OUT"
+  assert_contains "$QUERY_OUT" "FINDING:" "query must identify missing note fields as a defect"
+  assert_contains "$QUERY_OUT" "does not fail today" \
+    "query must explain why the missing note field remains report-only"
+  pass "query reports missing note fields without rejecting choice-only answers"
+}
+
+test_query_can_refuse_missing_notes_when_the_contract_flips() {
+  local snap="$TMP_ROOT/choice-only.txt" out status=0
+  choice_only_snapshot > "$snap"
+  out=$(FM_RUN_DECISIONBOARD_SNAPSHOT="$snap" FM_RUN_DECISIONBOARD_NOTE_REQUIRED=refuse \
+    "$DRIVER" query 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "strict note mode accepted a decision without a note field"$'\n'"$out"
+  assert_contains "$out" "FM_RUN_DECISIONBOARD_NOTE_REQUIRED=refuse" \
+    "strict note mode did not explain its refusal"
+  pass "strict note mode refuses decisions without note fields"
 }
 
 test_query_counts_a_decision_form_that_carries_nothing() {
@@ -402,6 +437,8 @@ test_parser_ignores_the_editor_chrome
 test_query_accepts_an_answerable_board
 test_query_refuses_a_board_with_options_in_prose
 test_query_refuses_a_board_with_no_way_to_submit
+test_query_reports_missing_notes_without_refusing_them
+test_query_can_refuse_missing_notes_when_the_contract_flips
 test_query_counts_a_decision_form_that_carries_nothing
 test_query_reports_an_unlistened_board
 test_shot_refuses_a_screenshot_that_wrote_nothing

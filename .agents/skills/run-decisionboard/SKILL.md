@@ -65,6 +65,12 @@ Every line below was run in the session that wrote this file.
     prompts[1]{uid,prompt,selector,tag,text}:
       "1","Entscheidung \"Probe-Entscheidung B\": ja - Anmerkung des Captains: ...",...,decision,"Probe-Entscheidung B: ja"
 
+## Follow-up when PR 117 merges
+
+Missing note fields are report-only today because the current board contract permits choice-only answers.
+When PR 117 merges, change the `FM_RUN_DECISIONBOARD_NOTE_REQUIRED` default from `report` to `refuse`.
+The driver cannot track that requirement automatically because no machine-readable owner exists for it.
+
 ## Gotchas, each one measured here
 
 Every item below was hit on this host, not inferred.

@@ -105,6 +105,12 @@
 #                                  instead of asking a live browser. The test
 #                                  seam that lets the readers below be pinned on
 #                                  a machine with no browser bridge.
+#   FM_RUN_DECISIONBOARD_NOTE_REQUIRED
+#                                  report (default) names missing note fields but
+#                                  does not refuse them; refuse makes query fail.
+#                                  Change the default when PR 117 merges. No
+#                                  machine-readable note requirement exists for
+#                                  this driver to follow automatically.
 #   FM_RUN_DECISIONBOARD_TMPDIR    the world-writable directory screenshots are
 #                                  staged through (default /tmp). See `shot`.
 #   FM_RUN_DECISIONBOARD_WIDTH     viewport `drive` sets, so evidence is
@@ -411,7 +417,12 @@ parse_inventory() {
 # --- query ------------------------------------------------------------------
 
 cmd_query() {
-  local inv snap decisions with_options with_note with_submit listening
+  local inv snap decisions with_options with_note with_submit listening note_policy
+  note_policy=${FM_RUN_DECISIONBOARD_NOTE_REQUIRED:-report}
+  case "$note_policy" in
+    report|refuse) ;;
+    *) die "query: FM_RUN_DECISIONBOARD_NOTE_REQUIRED must be 'report' or 'refuse', not '$note_policy'" ;;
+  esac
   inv=$(form_inventory)
   snap=$(snapshot)
   decisions=$(printf '%s\n' "$inv" | awk -F'\t' '$2 == "form" {print $1}' | sort -un | wc -l | tr -d ' ')
@@ -447,6 +458,15 @@ cmd_query() {
     printf 'FINDING: %s of %s decision cards carry no selectable options; those can only be answered in chat.\n' \
       "$((decisions - with_options))" "$decisions"
     return 1
+  fi
+  if [ "$with_note" -lt "$decisions" ]; then
+    printf 'FINDING: %s of %s decision cards carry no note field; a choice alone can record a decision the captain did not make. On the 2026-08-16 board, two of twenty answers carried a note that contradicted the selected option, and both notes carried what the captain actually meant.\n' \
+      "$((decisions - with_note))" "$decisions"
+    if [ "$note_policy" = refuse ]; then
+      printf 'FINDING: FM_RUN_DECISIONBOARD_NOTE_REQUIRED=refuse, so missing note fields are refused.\n'
+      return 1
+    fi
+    printf 'FINDING: this does not fail today because the current board tooling permits choice-only answers; set FM_RUN_DECISIONBOARD_NOTE_REQUIRED=refuse when that contract changes.\n'
   fi
   if [ "$with_submit" -lt "$decisions" ]; then
     printf 'FINDING: %s of %s decision cards have no submit button, so a selection has nowhere to go.\n' \
@@ -700,11 +720,11 @@ cmd_selftest() {
   step "8/8 prove the answer comes back"
   poll_out=$(cmd_poll "$board" 2>&1) || true
   case "$poll_out" in
-    *option-eins*)
-      good "the poll returned the answer" ;;
+    *"Probe-Entscheidung A"*option-eins*"Vom run-decisionboard-Treiber gesetzt"*)
+      good "the poll returned the decision, option, and note" ;;
     *)
       printf '%s\n' "$poll_out" >&2
-      die "selftest: the poll did not return the answer that was sent" ;;
+      die "selftest: the poll did not return the decision, option, and note that were sent" ;;
   esac
   printf '%s\n' "$poll_out" | sed -n 's/^  "[0-9]*",/   answer: /p' | head -3
 
