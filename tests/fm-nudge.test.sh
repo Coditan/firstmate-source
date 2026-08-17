@@ -1263,6 +1263,8 @@ test_every_registered_subject_is_silenced_by_the_shared_suite_library() {
   local home subject out
   home=$(make_home suite-silence)
   for subject in $(registered_subjects "$home"); do
+    # The single quotes are intentional because these parameters belong to the inner shell.
+    # shellcheck disable=SC2016
     out=$(env -u FM_TEST_LIB_SOURCED bash -c '
       set -u
       . "$1"
