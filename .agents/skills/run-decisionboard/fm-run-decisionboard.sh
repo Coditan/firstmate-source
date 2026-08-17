@@ -502,20 +502,28 @@ shot_staging_path() {
   printf '%s/fm-run-decisionboard-shot.%s.png' "${FM_RUN_DECISIONBOARD_TMPDIR:-/tmp}" "$(id -un)"
 }
 
+SCREENSHOT_EXIT_STATUS=0
+capture_staged_screenshot() {
+  local staging=$1 before='' after
+  SCREENSHOT_EXIT_STATUS=0
+  [ ! -e "$staging" ] || before=$(sha256sum "$staging" 2>/dev/null | awk '{print $1}')
+  chrome-devtools-axi screenshot "$staging" >/dev/null 2>&1 || SCREENSHOT_EXIT_STATUS=$?
+  [ -s "$staging" ] || return 1
+  after=$(sha256sum "$staging" 2>/dev/null | awk '{print $1}') || return 1
+  [ -z "$before" ] || [ "$before" != "$after" ] || return 2
+  return 0
+}
+
 cmd_shot() {
-  local dest=${1:-} staging status=0 before='' after
+  local dest=${1:-} staging capture_result=0
   [ -n "$dest" ] || die "shot: needs a destination path"
   need_bridge
   staging=$(shot_staging_path)
-  [ ! -e "$staging" ] || before=$(sha256sum "$staging" 2>/dev/null | awk '{print $1}')
-  chrome-devtools-axi screenshot "$staging" >/dev/null 2>&1 || status=$?
-  if [ ! -s "$staging" ]; then
-    die "shot: chrome-devtools-axi exited $status but wrote no screenshot at $staging (a screenshot's exit status is not evidence; the file is)"
-  fi
-  after=$(sha256sum "$staging" | awk '{print $1}')
-  if [ -n "$before" ] && [ "$before" = "$after" ]; then
-    die "shot: chrome-devtools-axi exited $status and left $staging unchanged, so this run captured nothing (the file there is from an earlier run)"
-  fi
+  capture_staged_screenshot "$staging" || capture_result=$?
+  case "$capture_result" in
+    1) die "shot: chrome-devtools-axi exited $SCREENSHOT_EXIT_STATUS but wrote no screenshot at $staging (a screenshot's exit status is not evidence; the file is)" ;;
+    2) die "shot: chrome-devtools-axi exited $SCREENSHOT_EXIT_STATUS and left $staging unchanged, so this run captured nothing (the file there is from an earlier run)" ;;
+  esac
   mkdir -p "$(dirname "$dest")"
   cp "$staging" "$dest" || die "shot: could not copy $staging to $dest"
   [ -s "$dest" ] || die "shot: $dest is empty after the copy"
@@ -656,16 +664,14 @@ cmd_doctor() {
   # It shares cmd_shot's staging path for cmd_shot's reason - a file this account
   # cannot delete must not multiply - so it reports the owner only of a file this
   # run actually refreshed.
-  local probe status=0 before=0 after=0
+  local probe capture_result=0
   probe=$(shot_staging_path)
   if command -v chrome-devtools-axi >/dev/null 2>&1; then
-    [ ! -e "$probe" ] || before=$(stat -c '%Y:%s' "$probe" 2>/dev/null || echo 0)
-    chrome-devtools-axi screenshot "$probe" >/dev/null 2>&1 || status=$?
-    [ ! -e "$probe" ] || after=$(stat -c '%Y:%s' "$probe" 2>/dev/null || echo 0)
-    if [ -s "$probe" ] && [ "$before" != "$after" ]; then
+    capture_staged_screenshot "$probe" || capture_result=$?
+    if [ "$capture_result" -eq 0 ]; then
       printf 'bridge account: %s (from the owner of a screenshot it just wrote)\n' "$(stat -c '%U' "$probe")"
     else
-      printf 'bridge account: unmeasured (screenshot exited %s and wrote nothing; open a page first)\n' "$status"
+      printf 'bridge account: unmeasured (screenshot exited %s and wrote nothing; open a page first)\n' "$SCREENSHOT_EXIT_STATUS"
     fi
   fi
   printf 'home traversable by others: %s\n' \

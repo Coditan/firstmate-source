@@ -393,6 +393,26 @@ SH
   pass "shot recognizes changed content even when its size is unchanged"
 }
 
+test_doctor_accepts_a_same_size_refresh() {
+  local doctor_tmp fakebin out staging
+  fm_test_tmproot doctor_tmp fm-run-db-doctor
+  fakebin=$(fm_fakebin "$doctor_tmp")
+  cat > "$fakebin/chrome-devtools-axi" <<'SH'
+#!/usr/bin/env bash
+printf 'new image bytes\n' > "$2"
+SH
+  chmod +x "$fakebin/chrome-devtools-axi"
+  mkdir -p "$doctor_tmp/staging"
+  staging="$doctor_tmp/staging/fm-run-decisionboard-shot.$(id -un).png"
+  printf 'old image bytes\n' > "$staging"
+  out=$(PATH="$fakebin:$PATH" FM_RUN_DECISIONBOARD_TMPDIR="$doctor_tmp/staging" \
+    "$DRIVER" doctor 2>&1) || fail "doctor failed to re-measure the bridge"$'\n'"$out"
+  assert_not_contains "$out" "bridge account: unmeasured" \
+    "doctor treated a changed same-size screenshot as stale"
+  assert_contains "$out" "bridge account:" "doctor did not report the measured bridge account"
+  pass "doctor recognizes changed content even when its size is unchanged"
+}
+
 test_answer_reresolves_the_exact_option_name() {
   local answer_tmp fakebin out first_click
   fm_test_tmproot answer_tmp fm-run-db-answer
@@ -449,4 +469,5 @@ test_query_reports_an_unlistened_board
 test_shot_refuses_a_screenshot_that_wrote_nothing
 test_shot_refuses_a_stale_staging_file
 test_shot_accepts_a_same_size_refresh
+test_doctor_accepts_a_same_size_refresh
 test_answer_reresolves_the_exact_option_name
