@@ -298,6 +298,28 @@ recorded_service_path() {
   sed -n 's/^PATH="\(.*\)"$/\1/p' "$SERVICE_ENV" | head -1
 }
 
+capture_prior_observer_evidence() {
+  local pid=''
+  FM_BOSUN_PRIOR_HEALTH=0
+  FM_BOSUN_PRIOR_PROCESS=0
+  if [ -f "$STATE/bosun/health" ]; then
+    FM_BOSUN_PRIOR_HEALTH=1
+    pid=$(sed -n 's/^pid: //p' "$STATE/bosun/health" | head -1)
+  fi
+  case "$pid" in
+    ''|*[!0-9]*) ;;
+    *) kill -0 "$pid" 2>/dev/null && FM_BOSUN_PRIOR_PROCESS=1 ;;
+  esac
+}
+
+restart_fault_requires_record() {
+  [ "$FM_BOSUN_PRIOR_HEALTH" -eq 1 ] || [ "$FM_BOSUN_PRIOR_PROCESS" -eq 1 ] || return 1
+  case "$FM_BOSUN_HEALTH_WORD" in
+    STALLED|BLIND) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 record_restart_fault() {  # <restart trigger> <drift description>
   local trigger=$1 drift=$2 health_record measurement emitted
   health_record=$(cat "$STATE/bosun/health" 2>&1 || true)
@@ -334,6 +356,7 @@ ensure_systemd() {
     echo "BOSUN_UNIT: disabled - approve: bin/fm-bootstrap.sh install bosun-unit" >&2
     return 2
   fi
+  capture_prior_observer_evidence
   if ! cmp -s "$UNIT_SOURCE" "$UNIT_DEST"; then
     unit_changed=1
   fi
@@ -347,15 +370,12 @@ ensure_systemd() {
       drift='recorded environment'
     fi
     bosun_health || true
-    case "$FM_BOSUN_HEALTH_WORD" in
-      STALLED|BLIND)
-        if ! record_restart_fault "locked bootstrap convergence" "$drift"; then
-          printf 'BOSUN_UNIT: cannot restart the drifted %s observer without a durable incident record - %s\n' \
-            "$FM_BOSUN_HEALTH_WORD" "$FM_BOSUN_FINDING_ERROR" >&2
-          return 4
-        fi
-        ;;
-    esac
+    if restart_fault_requires_record && \
+      ! record_restart_fault "locked bootstrap convergence" "$drift"; then
+      printf 'BOSUN_UNIT: cannot restart the drifted %s observer without a durable incident record - %s\n' \
+        "$FM_BOSUN_HEALTH_WORD" "$FM_BOSUN_FINDING_ERROR" >&2
+      return 4
+    fi
     if [ "$unit_changed" -eq 1 ]; then
       install_unit_bytes || return 1
       "$SYSTEMCTL" --user daemon-reload || return 1
@@ -389,6 +409,7 @@ install_systemd() {
   }
   systemd_usable || { echo "error: systemd --user is unavailable" >&2; return 1; }
   unit=$(unit_instance) || return 1
+  capture_prior_observer_evidence
   cmp -s "$UNIT_SOURCE" "$UNIT_DEST" || unit_changed=1
   service_env_matches || env_changed=1
   if [ "$unit_changed" -eq 1 ] && [ "$env_changed" -eq 1 ]; then
@@ -405,22 +426,23 @@ install_systemd() {
   "$SYSTEMCTL" --user daemon-reload || return 1
   "$SYSTEMCTL" --user enable "$unit" || return 1
   bosun_health || true
-  case "$FM_BOSUN_HEALTH_WORD" in
-    STALLED|BLIND)
-      if ! record_restart_fault "approved bosun-unit installation" "$drift"; then
-        printf 'error: the unit and recorded environment are in place, but restart was deliberately withheld because the running observer reads %s and its evidence could not be recorded - %s; make that surface writable, then rerun bin/fm-bootstrap.sh install bosun-unit\n' \
-          "$FM_BOSUN_HEALTH_WORD" "$FM_BOSUN_FINDING_ERROR" >&2
-        return 1
-      fi
-      ;;
-  esac
+  if restart_fault_requires_record && \
+    ! record_restart_fault "approved bosun-unit installation" "$drift"; then
+    printf 'error: the unit and recorded environment are in place, but restart was deliberately withheld because the running observer reads %s and its evidence could not be recorded - %s; make that surface writable, then rerun bin/fm-bootstrap.sh install bosun-unit\n' \
+      "$FM_BOSUN_HEALTH_WORD" "$FM_BOSUN_FINDING_ERROR" >&2
+    return 1
+  fi
   # Installation must make the recorded configuration the running one;
   # enable --now does not restart an instance that is already active.
   "$SYSTEMCTL" --user restart "$unit" || return 1
-  wait_for_running_bosun || {
+  if ! wait_for_running_bosun; then
+    if [ "$FM_BOSUN_PRIOR_HEALTH" -eq 0 ] && [ "$FM_BOSUN_PRIOR_PROCESS" -eq 0 ] && \
+      [ "$FM_BOSUN_HEALTH_WORD" = BLIND ] && [ -f "$STATE/bosun/health" ]; then
+      return 0
+    fi
     echo "error: $unit was started but nothing is being judged: $FM_BOSUN_HEALTH_WORD - $FM_BOSUN_HEALTH_NOTE" >&2
     return 1
-  }
+  fi
 }
 
 report_health() {

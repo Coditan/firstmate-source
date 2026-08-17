@@ -517,6 +517,67 @@ test_installer_blocks_stall_restart_without_findings_surface() {
   pass "installer withholds stalled restart when evidence cannot be recorded"
 }
 
+test_first_install_blind_without_prior_evidence_starts() {
+  local fakebin home unitdir findings
+  fakebin="$TMP_ROOT/fakebin"
+  home="$TMP_ROOT/install-blind-virgin"
+  unitdir="$TMP_ROOT/units-install-blind-virgin"
+  findings="$home/uninitialised-findings"
+  mkdir -p "$home/state/journal" "$home/config" "$unitdir"
+  : > "$home/config/bosun"
+  : > "$home/state/journal/events.tsv"
+  chmod 000 "$home/state/journal/events.tsv"
+  rm -rf "$home/state/bosun" "$findings"
+  rm -f "$TMP_ROOT/systemd.enabled" "$TMP_ROOT/systemd.active"
+  : > "$TMP_ROOT/systemctl.log"
+
+  FM_FINDINGS_DIR="$findings" service_env "$fakebin" "$home" "$unitdir" \
+    "$ROOT/bin/fm-bootstrap.sh" install bosun-unit > /dev/null \
+    || fail "first installation treated a virgin BLIND reading as erasable observer evidence"
+  assert_contains "$(cat "$TMP_ROOT/systemctl.log")" "--user restart fm-bosun@" \
+    "first installation did not start the virgin home with an unreadable journal"
+  assert_absent "$findings" \
+    "first installation created or required a findings surface without prior observer evidence"
+  pass "virgin BLIND home installs without an incident surface"
+}
+
+test_installer_records_blind_prior_observer_before_restart() {
+  local fakebin home unitdir findings records status
+  fakebin="$TMP_ROOT/fakebin"
+  home="$TMP_ROOT/install-blind-established"
+  unitdir="$TMP_ROOT/units-install-blind-established"
+  findings="$home/data/findings"
+  mkdir -p "$home/state" "$home/config" "$unitdir"
+  : > "$home/config/bosun"
+  rm -f "$TMP_ROOT/systemd.enabled" "$TMP_ROOT/systemd.active"
+  : > "$TMP_ROOT/systemctl.log"
+
+  service_env "$fakebin" "$home" "$unitdir" \
+    "$ROOT/bin/fm-bootstrap.sh" install bosun-unit > /dev/null
+  FM_FINDINGS_DIR="$findings" "$FINDING" init > /dev/null
+  mkdir -p "$home/state/journal"
+  : > "$home/state/journal/events.tsv"
+  chmod 000 "$home/state/journal/events.tsv"
+  sed -i.bak 's/^pid: .*/pid: installer-pre-restart-blind/' "$home/state/bosun/health"
+  rm -f "$home/state/bosun/health.bak"
+  printf '%s\n' stale > "$unitdir/fm-bosun@.service"
+  : > "$TMP_ROOT/systemctl.log"
+
+  FM_FINDINGS_DIR="$findings" service_env "$fakebin" "$home" "$unitdir" \
+    "$ROOT/bin/fm-bootstrap.sh" install bosun-unit > /dev/null 2>&1 && status=0 || status=$?
+  [ "$status" -ne 0 ] \
+    || fail "installer reported a still-BLIND observer as healthy after restart"
+  assert_contains "$(cat "$TMP_ROOT/systemctl.log")" "--user restart fm-bosun@" \
+    "installer did not restart the established BLIND observer after recording evidence"
+  records=$(FM_FINDINGS_DIR="$findings" "$FINDING" list --json) \
+    || fail "findings reader could not read the installer BLIND evidence"
+  printf '%s' "$records" | jq -e 'length == 1 and
+    (.[0].measurement | contains("health: BLIND")) and
+    (.[0].measurement | contains("pid: installer-pre-restart-blind"))' > /dev/null \
+    || fail "installer finding did not preserve the established BLIND reading"
+  pass "installer preserves established BLIND evidence before restart"
+}
+
 test_unopted_home_is_silent
 test_unit_clears_manager_judge_override
 test_install_requires_consent_and_converges
@@ -527,3 +588,5 @@ test_drifted_stall_is_recorded_before_restart
 test_drifted_stall_without_findings_surface_is_not_restarted
 test_installer_records_running_stall_before_restart
 test_installer_blocks_stall_restart_without_findings_surface
+test_first_install_blind_without_prior_evidence_starts
+test_installer_records_blind_prior_observer_before_restart
