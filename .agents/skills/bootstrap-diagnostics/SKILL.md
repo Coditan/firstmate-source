@@ -98,10 +98,12 @@ When any diagnostic needs captain attention, report the plain consequence and re
   `has never completed a reading` or `has stopped running` means the alarm exists but the monitoring service is not running it, which is a supervision fault rather than a memory one: repair it through the emitted supervision instructions, exactly as for a lapsed watcher.
   Never read this line as a verdict on memory - it says the instrument is not reading, not that this machine is fine; `bin/fm-memory-alarm.sh --status` gives the current reading when you need it.
   An actual crossing or recovery arrives as a `check:` wake instead, and that one is captain-facing: it names a process, an account, and the work it was serving, and nothing has been limited or killed, so the decision is still open.
-- `CURATION_NUDGE: <detail>` - this home's 48-hour knowledge-file curation nudge is not running, so nothing is re-measuring `data/learnings.md` and `data/captain.md` between sessions and their silence proves nothing.
+- `CURATION_NUDGE: <detail>` - this home's 48-hour knowledge-file curation cadence is unavailable or has raised its measurement wake.
   `is not armed` or `could not be armed` means the nudge was never installed or the arm failed; run `bin/fm-curation-nudge.sh --arm` and report the reason if it refuses.
-  `never scheduled a next sweep` or `nothing is executing it` means the nudge exists but the monitoring service is not running it, which is a supervision fault rather than a curation one: repair it through the emitted supervision instructions, exactly as for a lapsed watcher.
-  That second reading is the one worth trusting, because it is taken from what the work produced - the last firing and the next scheduled sweep - and not from the check's own claim to be armed; `bin/fm-curation-nudge.sh --status` prints both when you need them.
+  `state persistence failure` means the state path cannot publish the authoritative record; repair its permissions, disk space, quota, or mount, not monitoring.
+  `supervision outage` means the state path is usable but the schedule is still missing or overdue; repair it through the emitted supervision instructions, exactly as for a lapsed watcher.
+  `state health indeterminate` names state publication failure and supervision outage as candidates while asserting neither; check both, starting with the cheaper state-path reading, and do not route it as either verdict.
+  These readings are worth trusting because they come from what the work produced plus an observation-time publishability probe, not from the check's own claim to be armed; `bin/fm-curation-nudge.sh --status` prints the authoritative record when you need it.
   Never read this line as a verdict on any vessel's files, including this one.
   The nudge itself arrives as a `check:` wake instead, and that one asks firstmate to dispatch a crewmate to send the All-Ships notice per `AGENTS.md` section 12; the wording of that notice is firstmate's, and the nudge never writes to Bridge itself.
   Each vessel then measures its own two files and decides its own split, because the files are per-home and gitignored and no seat can see another's.

@@ -316,6 +316,8 @@ test_transient_publish_failure_becomes_a_supervision_diagnosis() {
   [ "$(cat "$report")" = "$before" ] || fail "a failed publish changed the authoritative record"
   [ "$(record_value "$home" next-epoch)" = "$due" ] || fail "a failed publish consumed the due event"
   armed=$(FM_CURATION_NUDGE_NOW=$(( due + 7200 )) run_nudge "$home" --armed)
+  assert_contains "$armed" 'supervision outage' \
+    "a usable overdue state must name the supervision cause"
   assert_contains "$armed" 'nothing is executing it' \
     "a usable state path must identify the remaining overdue target as supervision"
   assert_not_contains "$armed" 'state persistence failure' \
@@ -460,6 +462,8 @@ test_missing_record_with_usable_state_reports_supervision() {
   [ "$status" -ne 0 ] || fail "the first failed publish reported success: $out"
 
   armed=$(FM_CURATION_NUDGE_NOW=$(( now + 7200 )) run_nudge "$home" --armed)
+  assert_contains "$armed" 'supervision outage' \
+    "a usable missing-record state must name the supervision cause"
   assert_contains "$armed" 'nothing is running this home' \
     "a missing record with recovered state must report supervision"
   assert_not_contains "$armed" 'state persistence failure' \

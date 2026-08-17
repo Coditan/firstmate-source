@@ -125,7 +125,7 @@ A reading the round could not take is reported as unmeasured and never as curren
 
 ### Re-measuring the knowledge files
 
-Section 10's instruction to prune rather than append also has a mechanism now, for the same reason: the locked bootstrap step arms `bin/fm-curation-nudge.sh` on the watcher, and every session start reports `CURATION_NUDGE:` when this home's nudge is unarmed, has never scheduled a sweep, or has a sweep nothing is running.
+Section 10's instruction to prune rather than append also has a mechanism now, for the same reason: the locked bootstrap step arms `bin/fm-curation-nudge.sh` on the watcher, and every session start reports `CURATION_NUDGE:` as not armed, state persistence failure, state health indeterminate, or supervision outage when the cadence needs attention.
 `docs/configuration.md` "Knowledge-file curation nudge" and `docs/curation-nudge.md` own the 48-hour cadence, the off-grid jitter, and the scope; the nudge arrives as an ordinary `check:` wake under section 8.
 Two facts bind wherever that wake is read.
 It is a prompt to measure and never a claim about any vessel's files, because these files are per-home and gitignored and no seat can see another's, so each vessel measures its own pair and decides its own split.

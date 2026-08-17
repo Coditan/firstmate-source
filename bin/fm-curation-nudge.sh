@@ -611,13 +611,13 @@ diagnose_unexecuted_work() {
     return 0
   fi
   if [ "$kind" = missing ]; then
-    printf 'CURATION_NUDGE: the curation nudge has been armed for %s minute(s) and has never published its authoritative schedule, so nothing is running this home'"'"'s checks (inspect the monitoring service for this home)\n' \
+    printf 'CURATION_NUDGE: supervision outage: the curation nudge has been armed for %s minute(s) and has never published its authoritative schedule, so nothing is running this home'"'"'s checks (inspect the monitoring service for this home)\n' \
       "$(( elapsed / 60 ))"
   elif [ "$last" -gt 0 ]; then
-    printf 'CURATION_NUDGE: the curation sweep was due %s minute(s) ago and has not fired (it last fired %s); the schedule stands but nothing is executing it (inspect the monitoring service for this home)\n' \
+    printf 'CURATION_NUDGE: supervision outage: the curation sweep was due %s minute(s) ago and has not fired (it last fired %s); the schedule stands but nothing is executing it (inspect the monitoring service for this home)\n' \
       "$(( elapsed / 60 ))" "$(epoch_utc "$last")"
   else
-    printf 'CURATION_NUDGE: the curation sweep was due %s minute(s) ago and has never fired; the schedule stands but nothing is executing it (inspect the monitoring service for this home)\n' \
+    printf 'CURATION_NUDGE: supervision outage: the curation sweep was due %s minute(s) ago and has never fired; the schedule stands but nothing is executing it (inspect the monitoring service for this home)\n' \
       "$(( elapsed / 60 ))"
   fi
 }

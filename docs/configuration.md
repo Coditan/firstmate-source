@@ -625,11 +625,11 @@ The period is 48 hours rather than daily, because the currency round already own
 Each firing draws 180-420 seconds of fresh jitter for the next target, so successive fires drift, and any drawn target whose minute is a multiple of five is discarded and re-drawn: cron defaults, systemd timers, monitoring pollers and the watcher sweep itself all cluster on those boundaries.
 `FM_CURATION_NUDGE_INTERVAL`, `FM_CURATION_NUDGE_JITTER_MIN`, and `FM_CURATION_NUDGE_JITTER_MAX` move that window; `FM_CURATION_NUDGE_OVERDUE` sets how far past its target a sweep may sit before `--armed` calls the cadence stopped.
 
-Every session start also runs `--armed`, which reports `CURATION_NUDGE:` when this home is unarmed, has never scheduled a sweep, or has a scheduled sweep nothing is executing.
+Every session start also runs `--armed`, which reports `CURATION_NUDGE:` as `not armed`, `state persistence failure`, `state health indeterminate`, or `supervision outage` when this home's cadence needs attention.
 That reading is taken from the last-firing epoch and scheduling outcome in the single human-readable, parseable `state/curation-nudge.report` record - what the work produced - and never from the check's own claim to be armed, because a timer's own surfaces keep reporting health long after it stopped firing.
 The report is atomically replaced as one file, so its human account and the schedule the script acts on are always the same bytes.
 Because a failed publication cannot record itself durably, `--armed` writes representative report content and atomically renames it between distinct scratch paths in the state directory before every conclusion that supervision has stopped, including both an overdue target and a missing first record.
-The probe never targets the authoritative record and removes its scratch paths; an unusable path reports a persistence failure, a usable path reports the remaining supervision outage, and a probe that cannot run, complete, or clean up non-destructively names both candidates while asserting neither.
+The probe never targets the authoritative record and removes its scratch paths; an unusable path reports `state persistence failure`, a usable path with missing work reports `supervision outage`, and a probe that cannot run, complete, or clean up non-destructively reports `state health indeterminate`, names both candidates, and asserts neither.
 All three outcomes leave any prior due event intact.
 
 The nudge raises a wake and nothing else: it never writes to Bridge, never opens a network connection, and never touches a git repository.
