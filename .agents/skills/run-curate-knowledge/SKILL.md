@@ -62,11 +62,17 @@ It refuses an archive for a shared file, and it refuses a private run with no ar
    The driver makes this the default verdict on every entry, so keeping one whole is the deviation and costs a written reason.
 2. **The route back lives inside the loaded half.** It is the only part read.
 3. **Prove the route, do not assert it.**
-   The driver executes the documented route once and requires its output to recover every archived heading occurrence using only what stays loaded.
+   The driver executes the documented route once and requires its output to recover every archived entry occurrence using only what stays loaded.
    It prints a bounded worked transcript; describe the realistic situation needing each printed example.
-4. **Every deletion is listed with the evidence that killed it.**
+4. **Every deleted entry is listed with the evidence that killed it.**
    The bar for archiving is judgement; the bar for deleting is proof.
-   An unlisted deletion is the defect this exercise exists to prevent.
+   An unlisted entry deletion is the defect this exercise exists to prevent.
+
+The proof and ledger unit is the entry at the selected heading level.
+Nested headings travel inside their parent entry, and the structural check rejects any deeper archive heading outside every entry span.
+On the real archive, all eight level-3 headings were inside returned parent entries, with zero orphans; spot checks recovered the injected-TUI, repair-family, and Bridge company-scope facts by reading their parent bounds.
+The ledger accounts for entries appearing and disappearing, while edits inside a retained entry - including a nested heading, bullet, sentence, or paragraph - remain curator judgement recorded by the split verdict rather than something the driver mechanically polices.
+A smaller promise that is actually kept beats a larger one the accounting cannot honour, and verdicts at every heading level would multiply the operator's work at every prune.
 
 ## Never report lines
 
@@ -200,9 +206,10 @@ It asserts, and exits non-zero on any of:
 - a `split` left its rule nowhere, or a `fold` names no surviving heading;
 - a `stub` names no owner path that exists, or the file never points at it;
 - the loaded half does not name the archive, or names it with no runnable search;
-- the documented route command fails to recover every archived heading occurrence.
+- the documented route command fails to recover every archived entry occurrence;
+- a nested archive heading lies outside every entry span.
 
-Then it executes the documented command once against a protected copy and asserts that its output reaches every archived heading.
+Then it executes the documented command once against a protected copy and asserts that its output reaches every archived entry.
 The `--prove-route` value limits only the printed example, never the assertion.
 
 The passing output below came from a current run over a copy of the first two real entries under `Cost and quota` in `/home/coditan/coditan-firstmate/data/learnings-longterm.md`.
@@ -220,12 +227,12 @@ ROUTE BACK
     grep -n '^## ' cost-archive.md
 
 COMPLETE ROUTE ASSERTION
-  route reaches 1 of 1 archived headings
+  route reaches 1 of 1 archived entries
 PRINTED EXAMPLE (3 output lines maximum)
   $ (protected copy && grep -n '^## ' cost-archive.md)
     1:## Das Abrechnungsmass der Flotte zaehlt frische Token, nicht gelesenen Kontext (2026-08-10, gemessen)
 
-CHECK PASSED: headings 3 -> 2, bytes 2174 -> 196, every deletion is declared, and the archive is reachable from the loaded half.
+CHECK PASSED: headings 3 -> 2, bytes 2174 -> 196, every entry deletion is declared, and the archive is reachable from the loaded half.
 ```
 
 ### 6. Report

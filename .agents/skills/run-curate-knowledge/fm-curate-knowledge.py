@@ -20,13 +20,21 @@ here instead of being left to an agent's care:
                                 and keeping it whole is what costs a sentence.
   * silent deletions         -> `check` recomputes what actually disappeared and
                                 fails unless that set is exactly the set the
-                                worksheet declared. An unlisted deletion cannot
-                                survive a run.
+                                worksheet declared at the entry level. An
+                                unlisted entry deletion cannot survive a run.
   * the archive went dark    -> `check` requires the route back to live INSIDE
                                 the loaded half, requires that route to be a
                                 runnable search command, and then RUNS it
-                                once and checks every archived heading against
+                                once and checks every archived entry against
                                 its output. The route is proved, not asserted.
+
+PROOF AND LEDGER UNIT
+Both guarantees operate on entries at the selected heading level. Deeper
+headings travel inside their parent entry, and `check` rejects any deeper
+archive heading that lies outside every entry span. The ledger accounts for
+entries appearing and disappearing. Changes inside a retained entry, whether
+a nested heading, bullet, sentence, or paragraph, remain the curator's
+judgement recorded by the split verdict rather than a mechanical ledger event.
 
 WHAT THIS PROGRAM DOES NOT DO
 It never decides hot from cold. There is no keyword heuristic anywhere in this
@@ -248,6 +256,20 @@ def parse_entries(text, level):
         )
     preamble = sum(len(line.encode("utf-8")) for line in lines[: entry_starts[0][0]])
     return preamble, entries
+
+
+def orphan_nested_headings(text, level):
+    """Deeper headings that lie outside every entry at `level`."""
+    inside_entry = False
+    orphans = []
+    for heading_level, heading in all_headings(text):
+        if heading_level < level:
+            inside_entry = False
+        elif heading_level == level:
+            inside_entry = True
+        elif not inside_entry:
+            orphans.append(heading)
+    return orphans
 
 
 def file_facts(path, level=None):
@@ -717,7 +739,7 @@ def route_commands(loaded_text, archive_path):
 
 
 def prove_route(command, archive_path, headings, sample):
-    """Run the documented route once and check every archived heading."""
+    """Run the documented route once and check every archived entry."""
     try:
         argv = shlex.split(command)
     except ValueError as exc:
@@ -811,7 +833,7 @@ def prove_route(command, archive_path, headings, sample):
     output_lines = output.splitlines()
     for line in output_lines[:sample]:
         lines.append("    %s" % line[:160])
-    return not missing, lines, missing, "route reaches %d of %d archived headings" % (
+    return not missing, lines, missing, "route reaches %d of %d archived entries" % (
         reached, len(headings)
     )
 
@@ -932,6 +954,13 @@ def cmd_check(args):
     if args.archive:
         archive = file_facts(args.archive, args.level or before.get("level"))
         archive_text = read_text(args.archive)
+        orphaned = orphan_nested_headings(archive_text, archive["level"])
+        if orphaned:
+            failures.append(
+                "%d nested archive headings are orphaned outside every level-%d "
+                "entry: %s"
+                % (len(orphaned), archive["level"], ", ".join(orphaned[:8]))
+            )
 
     before_keys, known_rows, unknown_rows, undeclared_loss, ghost_rows = (
         deletion_accounting(before, loaded, archive, rows)
@@ -1050,7 +1079,7 @@ def cmd_check(args):
             % (before["bytes"], loaded["bytes"])
         )
 
-    # --- 3. every deletion is declared --------------------------------------
+    # --- 3. every entry deletion is declared --------------------------------
     if undeclared_loss:
         failures.append(
             "%d entries disappeared with no verdict accounting for them: %s"
@@ -1208,7 +1237,7 @@ def cmd_check(args):
         print("CHECK FAILED: %d finding(s). This is a failed prune." % len(failures))
         return 1
     print(
-        "CHECK PASSED: headings %d -> %d, bytes %d -> %d, every deletion is "
+        "CHECK PASSED: headings %d -> %d, bytes %d -> %d, every entry deletion is "
         "declared%s."
         % (
             before_all,

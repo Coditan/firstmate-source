@@ -352,7 +352,7 @@ EOF
   pass "the route back must be named and runnable inside the loaded half"
 }
 
-test_the_documented_route_must_reach_every_archived_heading() {
+test_the_documented_route_must_reach_every_archived_entry() {
   local out status
   sed "s|grep -n '\^## '|grep -n 'Alpha rule'|" "$TMP/after-loaded.md" >"$TMP/partial-route-loaded.md"
   cat >>"$TMP/after-archive.md" <<'EOF'
@@ -365,12 +365,83 @@ EOF
     --loaded "$TMP/partial-route-loaded.md" --archive "$TMP/after-archive.md" \
     --home "$TMP/home" 2>&1) && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "a partial route exited $status, expected 1"
-  printf '%s' "$out" | grep -q 'route reaches 1 of 2 archived headings' \
+  printf '%s' "$out" | grep -q 'route reaches 1 of 2 archived entries' \
     || fail "the route assertion does not report its complete reach count"
   printf '%s' "$out" | grep -q 'Unreachable incident' \
     || fail "the route failure does not name the unreachable heading"
   write_after_archive "$TMP/after-archive.md"
-  pass "the documented route must reach every archived heading"
+  pass "the documented route must reach every archived entry"
+}
+
+test_nested_archive_headings_must_belong_to_an_entry() {
+  local out status
+  cat >"$TMP/orphan-archive.md" <<'EOF'
+# Store archive
+
+### Orphaned safety fact
+
+This appears before any entry.
+
+## Alpha rule and the incident behind it
+
+The incident remains reachable through its entry.
+EOF
+  sed 's/after-archive.md/orphan-archive.md/g' \
+    "$TMP/after-loaded.md" >"$TMP/orphan-loaded.md"
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/orphan-loaded.md" --archive "$TMP/orphan-archive.md" \
+    --home "$TMP/home" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "an orphaned nested heading exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'nested archive headings are orphaned' \
+    || fail "the structural failure does not identify an orphaned nested heading"
+  printf '%s' "$out" | grep -q 'Orphaned safety fact' \
+    || fail "the structural failure does not name the orphaned nested heading"
+
+  cat >"$TMP/nested-before.md" <<'EOF'
+# Store
+
+## Alpha rule and the incident behind it
+
+The rule, then a long incident narrative that arrives with its own trigger.
+
+### Nested incident detail
+
+This remains inside its parent entry.
+
+## Alpha rule seen a second time
+
+The same evening, the same measurement, told again.
+
+## A path that no longer exists
+
+Everything here concerns bin/gone.sh.
+EOF
+  "$DRIVER" measure "$TMP/nested-before.md" --home "$TMP/home" \
+    --save "$TMP/nested-before.json" >/dev/null \
+    || fail "measure could not snapshot the nested baseline"
+  cat >"$TMP/nested-archive.md" <<'EOF'
+# Store archive
+
+## Alpha rule and the incident behind it
+
+The rule, then a long incident narrative that arrives with its own trigger.
+
+### Nested incident detail
+
+This remains inside its parent entry.
+
+**Seen a second time the same evening:** told again.
+EOF
+  sed 's/after-archive.md/nested-archive.md/g' \
+    "$TMP/after-loaded.md" >"$TMP/nested-loaded.md"
+  out=$("$DRIVER" check --before "$TMP/nested-before.json" \
+    --worksheet "$TMP/ws-filled.md" --loaded "$TMP/nested-loaded.md" \
+    --archive "$TMP/nested-archive.md" --home "$TMP/home" 2>&1) \
+    && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "a nested heading inside its entry failed: $out"
+  printf '%s' "$out" | grep -q 'route reaches 1 of 1 archived entries' \
+    || fail "nested content incorrectly required a separate route record"
+  pass "nested archive headings travel inside a structurally valid parent entry"
 }
 
 test_route_proof_cannot_write_real_files() {
@@ -516,7 +587,7 @@ EOF
     --archive "$TMP/duplicate-archive-two.md" --home "$TMP/home" 2>&1) \
     && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "a one-hit duplicate route exited $status, expected 1"
-  printf '%s' "$out" | grep -q 'route reaches 1 of 2 archived headings' \
+  printf '%s' "$out" | grep -q 'route reaches 1 of 2 archived entries' \
     || fail "duplicate route completeness did not count occurrences"
   pass "route completeness counts duplicate heading occurrences"
 }
@@ -652,7 +723,8 @@ test_a_deletion_without_evidence_fails
 test_phantom_delete_and_fold_declarations_fail
 test_unknown_worksheet_occurrence_keys_fail
 test_the_route_back_must_live_in_the_loaded_half_and_run
-test_the_documented_route_must_reach_every_archived_heading
+test_the_documented_route_must_reach_every_archived_entry
+test_nested_archive_headings_must_belong_to_an_entry
 test_route_proof_cannot_write_real_files
 test_duplicate_heading_occurrences_cannot_hide_a_deletion
 test_duplicate_occurrences_can_split_across_both_halves
