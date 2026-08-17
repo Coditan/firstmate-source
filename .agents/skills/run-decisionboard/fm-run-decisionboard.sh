@@ -690,11 +690,30 @@ cmd_selftest() {
   esac
   printf '%s\n' "$poll_out" | sed -n 's/^  "[0-9]*",/   answer: /p' | head -3
 
+  # The poll reports the board's own health alongside the answer. A fatal
+  # artifact failure means the reviewer's page could not be used at some point in
+  # this run - seen once here as `artifact-unavailable ... HTTP 500`, not
+  # reproduced in three further runs, so it is transient rather than understood.
+  # Reporting it is the point: the captain would have met a broken page, and an
+  # answer arriving anyway does not make the surface sound.
+  local failed=0
+  case "$poll_out" in
+    *artifact_failures*)
+      failed=1
+      printf 'FINDING: the board reported a fatal problem with its own surface during this run:\n'
+      printf '%s\n' "$poll_out" | sed -n 's/^  \(.*fatal\)$/   \1/p' | head -3
+      ;;
+  esac
+
   cmd_end "$board"
   if [ "$keep" -eq 1 ]; then
     printf '\nkept: %s\n' "$workdir"
   else
     rm -rf "$workdir"
+  fi
+  if [ "$failed" -eq 1 ]; then
+    printf '\nthe answer came back, but the board reported its own surface as broken during the run - do not hand this board over on that evidence.\n'
+    return 1
   fi
   printf '\nall eight hops held: a decision board built here can be answered, and the answer comes back.\n'
 }

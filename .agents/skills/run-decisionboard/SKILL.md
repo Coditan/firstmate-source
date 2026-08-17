@@ -104,6 +104,11 @@ Fold every line that does not start with `uid=` onto the node above it.
 **`chromium-cli` is not on this host.**
 `google-chrome` and `chrome-devtools-axi` are.
 
+**The poll reports the board's own health, and a fatal report there outranks a successful answer.**
+`artifact_failures[1]{kind,detail,severity}: artifact-unavailable,the artifact document responded with HTTP 500,fatal` came back once here alongside an answer that had arrived perfectly.
+It did not reproduce in three further runs, so it is transient rather than understood - but the captain would have met a broken page, and an answer arriving anyway does not make the surface sound.
+`selftest` fails on it deliberately; read the poll's own output, never only the answer you were hoping for.
+
 **A board with no armed poll says so on screen.**
 "Your agent is not listening. If this persists, ask your agent to poll for updates from Lavish." appears in the conversation panel, and `query` reports it as `poll listening: no`.
 It is worth asserting because a poll dies with the session that armed it, and a board listening to nobody is indistinguishable from a healthy one in a screenshot.
