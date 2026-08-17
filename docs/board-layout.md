@@ -68,11 +68,16 @@ One consequence to keep in mind when editing: **Arial ships 400 and 700 and noth
 Every board carries the name of the vessel that **built** it, in the header, so the captain can see at a glance whose board he is reading.
 
 `bin/fm-board.sh` emits it as `<div class="fm-mark">`, so a board body never writes it and cannot omit it.
-The name is resolved, never hard-coded: `--vessel`, then `FM_BOARD_VESSEL`, then `FM_BRIDGE_VESSEL`, then `config/bridge-vessel` in this home.
-That is the same order the rest of `bin/` uses, and `config/bridge-vessel` stays the one place this vessel's name is written down.
+The name is resolved, never hard-coded: `--vessel`, then `FM_BOARD_VESSEL`, then `FM_BRIDGE_VESSEL`, then `config/bridge-vessel` under `FM_HOME`, `FM_ROOT_OVERRIDE`, and the script's own root, in that order.
+That keeps `config/bridge-vessel` the one place this vessel's name is written down.
 
-If none of those yields a name, the board is still built, with no mark and a warning on stderr naming the file that was looked for.
-A missing configuration file must not hold up the captain's decisions over a nameplate.
+**All three file locations are tried, not one resolved location**, because they cover each other's blind spots.
+A board built from a task worktree runs the worktree's own copy of the script, and `config/` is home-private and gitignored, so only `FM_HOME` carries the name there.
+A board built from the primary checkout with no `FM_HOME` in the environment has the opposite problem.
+The first real board built on this layout shipped unmarked for exactly that reason.
+
+If none of them yields a name, the board is still built, with no mark and a warning on stderr naming every file that was looked for.
+A missing configuration file must not hold up the captain's decisions over a nameplate, and the warning is loud so the gap gets closed rather than lived with.
 
 The mark says **who built the board, not what it is about**: a board this vessel builds concerning another vessel's work still carries this vessel's name.
 
@@ -224,6 +229,11 @@ That poll gives up after about 122 seconds, so a runtime landing later leaves th
 
 German boards are written with real umlauts - ä, ö, ü, and ß - never ae, oe, ue, or ss.
 That applies to the board's own text, not to code identifiers, attribute names, or CSS values.
+
+**The strings `board.js` itself puts on a board follow `--lang`**, read off `<html lang>`: the queued-state line, the empty-answer line, and the wording of the prompt it queues back.
+It carries `de` and `en`.
+An unknown language falls back to English and says so on the console, rather than silently answering in a language the board is not written in; to add one, add an entry to `STRINGS` in `board.js`.
+This is not cosmetic: the first real board built on this layout was generated with `--lang en` and answered in German, on the one surface the captain is asked to trust.
 
 ## Verifying a board
 

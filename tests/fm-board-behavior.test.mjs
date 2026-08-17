@@ -80,12 +80,14 @@ function buildForm(key, { choice, note, radio }) {
   return { form, queued };
 }
 
-function install({ withLavish }) {
+function install({ withLavish, lang }) {
   const queued = [];
   const warnings = [];
   const offline = makeElement('div');
+  const html = makeElement('html', lang === undefined ? { lang: 'de' } : { lang });
   const doc = {
     readyState: 'complete',
+    documentElement: html,
     _handlers: {},
     addEventListener: (t, fn) => { doc._handlers[t] = fn; },
     querySelectorAll: (sel) => (sel === '.fm-offline' ? [offline] : []),
@@ -215,6 +217,52 @@ function reinit(doc, forms, offline) {
   doc._handlers.submit({ target: form, preventDefault() {} });
   check(!offline._classes.has('is-shown'),
     'a queue that succeeds takes the offline notice back down');
+}
+
+// --- 7. every string follows the board's own --lang ------------------------
+
+{
+  // Measured on the first real board built on this layout: a board generated
+  // with --lang en answered in German - "Vorgemerkt:" in the queued box, and
+  // "Entscheidung"/"Anmerkung des Captains" in the returned prompt. A board
+  // that mixes two languages is not a cosmetic defect on the one surface the
+  // captain is asked to trust.
+  const de = install({ withLavish: true, lang: 'de' });
+  const dForm = buildForm('frage-g', { choice: 'Ja', note: 'weil' });
+  de.doc._handlers.submit({ target: dForm.form, preventDefault() {} });
+  check(de.queued[0].text.startsWith('Entscheidung "'),
+    'a German board queues its prompt in German');
+  check(de.queued[0].text.includes('Anmerkung des Captains'),
+    'a German board labels the note in German');
+  check(dForm.queued.textContent.startsWith('Vorgemerkt'),
+    'a German board reports the queued state in German');
+
+  const en = install({ withLavish: true, lang: 'en' });
+  const eForm = buildForm('question-g', { choice: 'Yes', note: 'because' });
+  en.doc._handlers.submit({ target: eForm.form, preventDefault() {} });
+  check(en.queued[0].text.startsWith('Decision "'),
+    'an English board queues its prompt in English');
+  check(!/Entscheidung|Anmerkung|Vorgemerkt/.test(en.queued[0].text),
+    'an English board carries no German in the queued prompt');
+  check(!/Vorgemerkt/.test(eForm.queued.textContent) && eForm.queued.textContent.startsWith('Queued'),
+    'an English board reports the queued state in English');
+
+  // An empty submit is the other visible string, and it follows the same rule.
+  const en2 = install({ withLavish: true, lang: 'en-GB' });
+  const emptyForm = buildForm('question-h', { choice: undefined });
+  en2.doc._handlers.submit({ target: emptyForm.form, preventDefault() {} });
+  check(/^Nothing queued/.test(emptyForm.queued.textContent),
+    'a regional English tag resolves to English rather than falling through');
+
+  // An unknown language is not silently answered in a language the board is not
+  // written in: it falls back to English and says so.
+  const fr = install({ withLavish: true, lang: 'fr' });
+  const fForm = buildForm('question-i', { choice: 'Oui' });
+  fr.doc._handlers.submit({ target: fForm.form, preventDefault() {} });
+  check(fr.queued[0].text.startsWith('Decision "'),
+    'an unsupported language falls back to English');
+  check(fr.warnings.some((w) => w.includes('fr')),
+    'the fallback is reported rather than silent');
 }
 
 process.exit(failures === 0 ? 0 : 1);

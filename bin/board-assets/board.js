@@ -33,9 +33,61 @@
  * so in the form's own .fm-queued box rather than doing nothing at all, and a
  * form built without that box is named on the console at startup, so the one
  * position where nothing could be shown is still not a quiet one.
+ *
+ * Every string this file shows or queues follows the board's own --lang, read
+ * off <html lang>. See STRINGS below.
  */
 (function () {
   'use strict';
+
+  // ---- the strings this file puts on a board, per language -----------------
+  //
+  // Every visible string here follows the board's own --lang, read off
+  // <html lang>, which bin/fm-board.sh already writes from that flag. An
+  // English board that answered in German is not a cosmetic defect: it tells
+  // the captain the board was assembled by something that did not know what
+  // language it was speaking, on the one surface he is asked to trust.
+  //
+  // To add a language, add an entry. An unknown one falls back to English and
+  // SAYS SO on the console, rather than silently substituting a language the
+  // board is not written in.
+  var STRINGS = {
+    de: {
+      decision: 'Entscheidung',
+      noChoice: '(keine Option gewählt)',
+      note: 'Anmerkung des Captains',
+      noteGoverns: 'Widerspricht die Anmerkung der gewählten Option, gilt die Anmerkung.',
+      freeNote: 'freie Anmerkung',
+      queued: 'Vorgemerkt',
+      unanswered: 'Nichts vorgemerkt: bitte eine Option wählen oder eine Anmerkung schreiben.'
+    },
+    en: {
+      decision: 'Decision',
+      noChoice: '(no option selected)',
+      note: 'Note from the captain',
+      noteGoverns: 'Where the note contradicts the selected option, the note is the answer.',
+      freeNote: 'a note only',
+      queued: 'Queued',
+      unanswered: 'Nothing queued: choose an option or write a note.'
+    }
+  };
+
+  var langWarned = false;
+
+  function t() {
+    var el = document.documentElement;
+    var raw = el && el.getAttribute ? (el.getAttribute('lang') || '') : '';
+    var tag = String(raw).toLowerCase().split('-')[0];
+    if (STRINGS[tag]) {
+      return STRINGS[tag];
+    }
+    if (!langWarned && window.console && window.console.warn) {
+      langWarned = true;
+      window.console.warn('fm-board: no board strings for lang "' + raw +
+        '"; using English. Add the language to board.js rather than letting a board mix two.');
+    }
+    return STRINGS.en;
+  }
 
   function bridge() {
     var l = window.lavish;
@@ -67,12 +119,13 @@
   // note that is present is queued as the governing part of the answer, said
   // in words, rather than trailing the option as an aside an agent may skim.
   function promptFor(label, answer) {
+    var s = t();
     var parts = [];
-    parts.push('Entscheidung "' + label + '": ');
-    parts.push(answer.choice ? answer.choice : '(keine Option gewählt)');
+    parts.push(s.decision + ' "' + label + '": ');
+    parts.push(answer.choice ? answer.choice : s.noChoice);
     if (answer.note) {
-      parts.push('\nAnmerkung des Captains: ' + answer.note);
-      parts.push('\nWiderspricht die Anmerkung der gewählten Option, gilt die Anmerkung.');
+      parts.push('\n' + s.note + ': ' + answer.note);
+      parts.push('\n' + s.noteGoverns);
     }
     return parts.join('');
   }
@@ -92,13 +145,12 @@
   }
 
   function markQueued(form, answer) {
-    say(form, answer.choice
-      ? 'Vorgemerkt: ' + answer.choice
-      : 'Vorgemerkt: freie Anmerkung', false);
+    var s = t();
+    say(form, s.queued + ': ' + (answer.choice ? answer.choice : s.freeNote), false);
   }
 
   function markUnanswered(form) {
-    say(form, 'Nichts vorgemerkt: bitte eine Option wählen oder eine Anmerkung schreiben.', true);
+    say(form, t().unanswered, true);
   }
 
   function onSubmit(event) {
@@ -126,7 +178,7 @@
 
     lavish.queuePrompt(promptFor(label, answer), {
       tag: 'decision',
-      text: label + ': ' + (answer.choice || 'freie Anmerkung'),
+      text: label + ': ' + (answer.choice || t().freeNote),
       // queueKey is what makes a changed answer REPLACE the previous unsent one.
       queueKey: key,
       element: form,

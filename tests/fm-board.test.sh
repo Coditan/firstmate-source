@@ -367,7 +367,23 @@ test_the_board_carries_the_building_vessels_name() {
     >/dev/null 2>"$BUILD_ERR_FILE"
   assert_no_grep 'class="fm-mark"><b>' "$OUT" "the vessel name must be escaped, not injected"
 
-  # 4. with no name anywhere the board is still BUILT: a missing config file
+  # 4. THE CASE THAT SHIPPED UNMARKED. A board built from a task worktree runs
+  #    the worktree's own copy of this script, and config/ is home-private and
+  #    gitignored, so the script's own root carries no name there. FM_HOME does,
+  #    and it has to be tried even though the script root exists and is a
+  #    perfectly good directory - it is just the wrong one.
+  local worktree=$TMP_ROOT/worktree/bin
+  mkdir -p "$worktree"
+  cp "$BOARD" "$worktree/fm-board.sh"
+  cp -R "$ROOT/bin/board-assets" "$worktree/board-assets"
+  rm -f "$OUT"
+  ( unset FM_BOARD_VESSEL FM_BRIDGE_VESSEL
+    FM_HOME=$home "$worktree/fm-board.sh" --title "T" --body "$TMP_ROOT/body.html" \
+      --out "$OUT" >/dev/null 2>"$BUILD_ERR_FILE" )
+  assert_grep 'class="fm-mark">segelschiff<' "$OUT" \
+    "a board built from a worktree must still resolve the name through FM_HOME"
+
+  # 5. with no name anywhere the board is still BUILT: a missing config file
   #    must not hold up the captain's decisions over a nameplate. It says so.
   rm -f "$OUT"
   status=0

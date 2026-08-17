@@ -58,10 +58,20 @@
 #
 # The name is resolved, never hard-coded, along the same path every other
 # script in this repo uses for it: --vessel, then FM_BOARD_VESSEL, then
-# FM_BRIDGE_VESSEL, then $FM_HOME/config/bridge-vessel (first field of the
-# first line). If none of those yields a name, the mark is omitted and a
-# warning naming the file that was looked for goes to stderr - a missing config
-# file must not stop the captain's decisions from reaching him over a nameplate.
+# FM_BRIDGE_VESSEL, then config/bridge-vessel (first field of the first line)
+# under FM_HOME, FM_ROOT_OVERRIDE, and this script's own root, in that order.
+#
+# All three file locations are tried rather than one resolved location, because
+# they cover each other's blind spots: a board built from a task worktree runs
+# the worktree's copy of this script and config/ is home-private and gitignored,
+# so only FM_HOME carries the name there; a board built from the primary
+# checkout with no FM_HOME set has only the script root. The first real board on
+# this layout shipped unmarked for exactly that reason.
+#
+# If none of those yields a name, the mark is omitted and a warning naming every
+# file that was looked for goes to stderr - a missing config file must not stop
+# the captain's decisions from reaching him over a nameplate, and the warning is
+# loud so the gap gets closed rather than lived with.
 #
 # It marks WHO BUILT the board, not what it is about: a board this vessel
 # builds concerning another vessel's work still carries this vessel's name.
@@ -124,8 +134,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ASSETS="$SCRIPT_DIR/board-assets"
 CSS="$ASSETS/layout.css"
 JS="$ASSETS/board.js"
-FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}}"
-VESSEL_FILE="$FM_HOME/config/bridge-vessel"
+SCRIPT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Where the vessel name may be recorded, in order. TWO candidates, not one,
+# because the two are genuinely different places and each covers the other's
+# blind spot. A board built from a task worktree runs the worktree's own copy of
+# this script, and config/ is home-private and gitignored, so the script root
+# has no name there - only FM_HOME does. A board built from the primary checkout
+# with no FM_HOME in the environment has the opposite problem. Collapsing them
+# into one candidate leaves whichever case the fallback did not pick unmarked,
+# which is how the first real board on this layout shipped without its mark.
+VESSEL_FILES=()
+[ -z "${FM_HOME:-}" ] || VESSEL_FILES+=("$FM_HOME/config/bridge-vessel")
+[ -z "${FM_ROOT_OVERRIDE:-}" ] || VESSEL_FILES+=("$FM_ROOT_OVERRIDE/config/bridge-vessel")
+VESSEL_FILES+=("$SCRIPT_ROOT/config/bridge-vessel")
 
 die() {
   printf 'fm-board.sh: %s\n' "$1" >&2
@@ -323,14 +345,16 @@ resolve_vessel() {
     printf '%s\n' "${FM_BRIDGE_VESSEL%% *}"
     return 0
   fi
-  if [ -f "$VESSEL_FILE" ]; then
-    local line=""
-    IFS= read -r line < "$VESSEL_FILE" || line=""
+  local file line
+  for file in "${VESSEL_FILES[@]}"; do
+    [ -f "$file" ] || continue
+    line=""
+    IFS= read -r line < "$file" || line=""
     line=${line%%[![:print:]]*}
     line=${line#"${line%%[![:space:]]*}"}
     line=${line%% *}
     [ -z "$line" ] || { printf '%s\n' "$line"; return 0; }
-  fi
+  done
   return 0
 }
 
@@ -513,7 +537,8 @@ if [ "$VESSEL_SET" = 0 ]; then
 fi
 if [ -z "$VESSEL" ]; then
   printf 'fm-board.sh: no vessel name found, so this board carries no mark saying who built it.\n' >&2
-  printf 'Looked for --vessel, FM_BOARD_VESSEL, FM_BRIDGE_VESSEL, and %s.\n' "$VESSEL_FILE" >&2
+  printf 'Looked for --vessel, FM_BOARD_VESSEL, FM_BRIDGE_VESSEL, and:\n' >&2
+  printf '  %s\n' "${VESSEL_FILES[@]}" >&2
 fi
 
 esc_title=$(html_escape "$TITLE")
