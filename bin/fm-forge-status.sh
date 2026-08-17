@@ -38,9 +38,10 @@
 # CANNOT REACH IS NOT ALL CLEAR
 # A watch that goes quiet when the network fails is worse than no watch,
 # because silence reads as good news exactly when it is not. A reading that
-# cannot be taken - no curl, no jq, no answer, a non-2xx answer, a body larger
-# than the configured bound, or an unparseable body - is recorded as an
-# UNMEASURABLE entry naming the condition, and its wake says so in those words.
+# cannot be taken - no curl, no jq, no working bounded sink (`head` or `dd`), no
+# answer, a non-2xx answer, a body that reaches the configured bound, or an
+# unparseable body - is recorded as an UNMEASURABLE entry naming the condition,
+# and its wake says so in those words.
 # Unmeasurable is never rendered as clear and never omitted. It is fingerprinted
 # like any other reading, so a network that stays down appends once rather than
 # every sweep, and the last entry in the log keeps saying unmeasurable for as
@@ -407,45 +408,40 @@ set_unmeasurable() {  # <http> <condition>
   READING_FINGERPRINT=$(printf 'unmeasurable\n%s\n%s\n' "$1" "$2" | digest_of_stdin)
 }
 
+bounded_sink() {
+  case "$1" in
+    head) head -c "$MAX_BYTES" ;;
+    dd) dd bs=1 count="$MAX_BYTES" 2>/dev/null ;;
+    *) return 1 ;;
+  esac
+}
+
 # One bounded fetch, then a strict read of the document. Every route out of the
 # happy path lands on set_unmeasurable with the concrete condition, and none of
 # them lands on "operational".
 observe() {
-  local body body_bytes code headers overflow pipeline_status sink_status status canonical jq_indicator scheme
+  local body body_bytes code headers pipeline_status sink sink_status status canonical jq_indicator scheme
   READING_UPDATE=''
   command -v curl >/dev/null 2>&1 \
     || { set_unmeasurable '-' 'curl is not installed on this seat, so the status page cannot be read at all'; return 0; }
   command -v jq >/dev/null 2>&1 \
     || { set_unmeasurable '-' 'jq is not installed on this seat, so a fetched status document cannot be read'; return 0; }
+  if command -v head >/dev/null 2>&1 && head -c 0 </dev/null >/dev/null 2>&1; then
+    sink='head'
+  elif command -v dd >/dev/null 2>&1 && dd if=/dev/null of=/dev/null bs=1 count=0 2>/dev/null; then
+    sink='dd'
+  else
+    set_unmeasurable '-' 'neither a working head nor dd is available on this seat, so the status response cannot be written through a bounded sink'
+    return 0
+  fi
 
   body=$(mktemp "${TMPDIR:-/tmp}/fm-forge-status.XXXXXX" 2>/dev/null) \
     || { set_unmeasurable '-' 'temporary space for the fetched status document could not be created'; return 0; }
   headers=$(mktemp "${TMPDIR:-/tmp}/fm-forge-status-headers.XXXXXX" 2>/dev/null) \
     || { rm -f -- "$body"; set_unmeasurable '-' 'temporary space for the status response headers could not be created'; return 0; }
-  overflow=$headers.overflow
   curl -m "$TIMEOUT" -s --max-filesize "$MAX_BYTES" -D "$headers" -o - \
     -H 'Accept: application/json' "$URL" 2>/dev/null \
-    | perl -e '
-        my ($limit, $marker) = @ARGV;
-        my $written = 0;
-        while (1) {
-          my $want = $limit - $written + 1;
-          $want = 65536 if $want > 65536;
-          my $got = read(STDIN, my $chunk, $want);
-          exit 2 unless defined $got;
-          last if $got == 0;
-          my $keep = $got;
-          if ($written + $got > $limit) {
-            $keep = $limit - $written;
-            open(my $flag, ">", $marker) or exit 3;
-            print {$flag} "oversize\n" or exit 3;
-            close($flag) or exit 3;
-          }
-          print STDOUT substr($chunk, 0, $keep) or exit 4 if $keep > 0;
-          $written += $keep;
-          last if $keep < $got;
-        }
-      ' "$MAX_BYTES" "$overflow" > "$body"
+    | bounded_sink "$sink" > "$body"
   pipeline_status=("${PIPESTATUS[@]}")
   status=${pipeline_status[0]}
   sink_status=${pipeline_status[1]}
@@ -457,18 +453,18 @@ observe() {
       return 0
       ;;
   esac
-  if [ -s "$overflow" ]; then
-    rm -f -- "$body" "$headers" "$overflow"
-    set_unmeasurable '-' "the status page at $URL exceeded the effective ${MAX_BYTES}-byte response limit"
+  if [ "$body_bytes" -ge "$MAX_BYTES" ]; then
+    rm -f -- "$body" "$headers"
+    set_unmeasurable '-' "the status page at $URL reached the effective ${MAX_BYTES}-byte response limit"
     return 0
   fi
   if [ "$sink_status" -ne 0 ]; then
-    rm -f -- "$body" "$headers" "$overflow"
-    set_unmeasurable '-' "temporary space for the response from $URL could not accept the bounded fetch"
+    rm -f -- "$body" "$headers"
+    set_unmeasurable '-' "the $sink bounded sink could not write the response from $URL"
     return 0
   fi
   if [ "$status" -ne 0 ]; then
-    rm -f -- "$body" "$headers" "$overflow"
+    rm -f -- "$body" "$headers"
     if [ "$status" -eq 63 ]; then
       set_unmeasurable '-' "the status page at $URL exceeded the effective ${MAX_BYTES}-byte response limit"
       return 0

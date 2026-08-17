@@ -371,13 +371,41 @@ test_an_oversized_status_document_is_unmeasurable_and_never_parsed() {
   export FM_TEST_CURL_MODE
   out=$(FM_FORGE_STATUS_MAX_BYTES=100 run_watch "$fallback_home" --force)
   assert_contains "$out" 'UNMEASURABLE' "the parser boundary must reject a body the transport allowed"
-  assert_contains "$out" 'exceeded the effective 100-byte response limit' \
+  assert_contains "$out" 'reached the effective 100-byte response limit' \
     "the fallback refusal must name the effective limit"
   assert_not_contains "$out" 'All Systems Operational' \
     "the fallback refusal must happen before status parsing"
   [ "$(entry_count "$fallback_home")" -eq 1 ] \
     || fail "the parser-boundary oversized refusal was not recorded once"
   pass "an oversized status body is recorded once as unmeasurable and never parsed"
+}
+
+test_the_bounded_sink_falls_back_and_names_missing_tools() {
+  local fallback_home missing_home out tool
+  fallback_home=$(make_home sink-fallback)
+  printf '#!/usr/bin/env bash\nexit 127\n' > "$fallback_home/fakebin/head"
+  chmod +x "$fallback_home/fakebin/head"
+  serve "$fallback_home" clear
+  out=$(run_watch "$fallback_home" --force)
+  assert_contains "$out" 'All Systems Operational' \
+    "dd must preserve a valid small document when head is unavailable"
+
+  missing_home=$(make_home sink-missing)
+  for tool in head dd; do
+    printf '#!/usr/bin/env bash\nexit 127\n' > "$missing_home/fakebin/$tool"
+    chmod +x "$missing_home/fakebin/$tool"
+  done
+  serve "$missing_home" clear
+  out=$(run_watch "$missing_home" --force)
+  assert_contains "$out" 'UNMEASURABLE' "missing bounded sink tools must refuse the reading"
+  assert_contains "$out" 'neither a working head nor dd is available' \
+    "the refusal must name the concrete missing dependencies"
+  assert_contains "$out" 'NOT a clear reading' "a missing bounded sink must never read as healthy"
+  [ "$(fetch_count "$missing_home")" -eq 0 ] \
+    || fail "a check without a bounded sink fetched the status document"
+  [ "$(entry_count "$missing_home")" -eq 1 ] \
+    || fail "the missing-sink refusal was not recorded once"
+  pass "the bounded sink falls back to dd and names missing tools"
 }
 
 test_the_status_body_cap_is_range_safe_and_clamped() {
@@ -968,6 +996,7 @@ test_a_new_reading_is_recorded_once_and_never_repeated_while_it_holds
 test_the_wake_says_what_a_vessel_should_not_conclude
 test_an_unreachable_status_page_is_unmeasurable_and_never_clear
 test_an_oversized_status_document_is_unmeasurable_and_never_parsed
+test_the_bounded_sink_falls_back_and_names_missing_tools
 test_the_status_body_cap_is_range_safe_and_clamped
 test_the_fetch_timeout_is_range_safe_and_clamped
 test_http_000_is_unmeasurable_but_non_http_000_can_be_read

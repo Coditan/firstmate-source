@@ -57,7 +57,7 @@ The wake line carries it, along with the reading itself, the cadence in force, b
 ## Cannot reach is not all clear
 
 A watch that goes quiet when the network fails is worse than no watch, because silence reads as good news exactly when it is not.
-A reading that cannot be taken - no `curl`, no `jq`, no answer, a non-2xx answer, a body larger than `FM_FORGE_STATUS_MAX_BYTES`, or an empty or unparseable body - is recorded as an `unmeasurable` entry naming the concrete condition, and its wake says `UNMEASURABLE` and states in plain words that it is not a clear reading.
+A reading that cannot be taken - no `curl`, no `jq`, no bounded sink, no answer, a non-2xx answer, a body that reaches `FM_FORGE_STATUS_MAX_BYTES`, or an empty or unparseable body - is recorded as an `unmeasurable` entry naming the concrete condition, and its wake says `UNMEASURABLE` and states in plain words that it is not a clear reading.
 
 There is one narrow status-code exception for an address whose scheme is neither HTTP nor HTTPS, such as a local `file://` status document configured through `FM_FORGE_STATUS_URL`.
 Because such a transport cannot carry an HTTP status, curl may report `000` after a successful fetch, and the document may be read.
@@ -93,7 +93,8 @@ A watch that tightened itself would be classifying severity by another route.
 Cadence changes and the complete observation read, append, and schedule transaction share one home-scoped lock.
 A detect or force observation exits quietly when another writer holds it, so overlapping sweeps neither wait on the fetch timeout nor append the same reading twice.
 Read-only modes do not acquire the lock or create state.
-The fetch streams through a portable byte-limited sink, keeps curl's `--max-filesize` as an early refusal, and verifies the effective `FM_FORGE_STATUS_MAX_BYTES` cap again before parsing.
+The fetch streams through `head -c`, falls back to the repository's existing `dd` dependency when `head` is unavailable, keeps curl's `--max-filesize` as an early refusal, and verifies the effective `FM_FORGE_STATUS_MAX_BYTES` cap again before parsing.
+A seat with neither working sink tool records an unmeasurable reading that names both missing dependencies.
 The default is 1000000 bytes, malformed or integer-risking settings fall back to that default, and valid settings are clamped to a hard ceiling of 5000000 bytes.
 The effective cap is recorded in `forge-status.report` as `status-max-response-bytes`.
 The fetch timeout defaults to 10 seconds, malformed or integer-risking settings fall back to that default, and valid settings are clamped to 15 seconds so the fetch stays inside the watcher's 30-second per-check budget.
