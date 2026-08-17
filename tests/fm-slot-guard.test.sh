@@ -69,6 +69,8 @@ make_case() {
   fakebin="$case_dir/fakebin"
   mkdir -p "$case_dir/state" "$case_dir/data" "$case_dir/config" "$fakebin"
   : > "$case_dir/live-windows"
+  : > "$case_dir/unreadable-windows"
+  : > "$case_dir/backend-unreadable"
   : > "$case_dir/killed-windows"
   : > "$case_dir/leases"
   : > "$case_dir/lease-on-status"
@@ -159,6 +161,7 @@ SH
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 LIVE="${FM_TEST_CASE_DIR:?}/live-windows"
+UNREADABLE="${FM_TEST_CASE_DIR:?}/unreadable-windows"
 KILLED="${FM_TEST_CASE_DIR:?}/killed-windows"
 target=
 prev=
@@ -168,7 +171,13 @@ for a in "$@"; do
 done
 case "${1:-}" in
   list-panes|display-message)
+    [ ! -s "${FM_TEST_CASE_DIR:?}/backend-unreadable" ] || exit 2
+    if [ "${1:-}" = list-panes ] && [ -z "$target" ]; then
+      cat "$LIVE"
+      exit 0
+    fi
     [ -n "$target" ] || exit 1
+    grep -qxF "$target" "$UNREADABLE" && exit 2
     grep -qxF "$target" "$LIVE" || exit 1
     printf '%%0\n'
     exit 0 ;;
@@ -458,6 +467,26 @@ test_dead_claimant_allows() {
   expect_code 0 "$rc" "deadclaim: a dead co-claimant should not block teardown"
   assert_no_grep "REFUSED" "$case_dir/stderr" "deadclaim: no refusal expected"
   pass "(e) a co-claimant whose window is dead does not block cleanup"
+}
+
+test_unreadable_claimant_refuses() {
+  local case_dir rc
+  case_dir=$(make_case unreadable-claimant)
+  write_task "$case_dir" finished-task dead
+  write_task "$case_dir" unreadable-task dead
+  printf '%s\n' yes > "$case_dir/backend-unreadable"
+
+  set +e
+  run_teardown "$case_dir" finished-task > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  [ "$rc" -ne 0 ] || fail "unreadable-claimant: teardown ignored an unqueryable claimant"
+  assert_grep "unreadable-task" "$case_dir/stderr" \
+    "unreadable-claimant: refusal must name the conservatively live holder"
+  assert_nothing_returned "$case_dir" \
+    "unreadable-claimant: an unqueryable claimant must prevent return"
+  pass "(f) an unqueryable co-claimant counts as a live holder"
 }
 
 # --- (f) the watcher's durable marker refuses on its own --------------------
@@ -852,6 +881,7 @@ test_sole_owner_allows
 test_force_does_not_override
 test_named_override_allows
 test_dead_claimant_allows
+test_unreadable_claimant_refuses
 test_dispute_marker_refuses
 test_lease_holder_refuses
 test_own_lease_allows

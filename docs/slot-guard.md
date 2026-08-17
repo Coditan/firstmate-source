@@ -119,6 +119,18 @@ A conflict from either is a real conflict, so the two are unioned rather than re
 A task whose liveness cannot be read counts as live, because the cost of guessing wrong is destroying a running worker's work while the cost of a false hold is a refusal someone can inspect.
 The same fail-safe asymmetry applies at the treehouse return boundary: a readable pool with no lease permits an otherwise uncontested return, while an unreadable pool refuses because it cannot distinguish that ordinary state from a holder outside the local home's metadata.
 
+### Backend target-existence caller audit
+
+The shared target-existence probe returns 0 for present, 1 for confidently absent, and 2 when the backend could not be asked; an unknown backend returns 2 because no adapter can establish absence.
+
+- `bin/fm-delivery.sh` defers delivery on unreadable just as it does on absent, but records that verification failed rather than claiming the pane is gone.
+- `bin/fm-send.sh` refuses an explicit target on unreadable and reports that the backend could not verify it, because sending without a verified endpoint is unsafe.
+- `bin/fm-slot-lib.sh` treats unreadable as live, because a false absence can destroy another task's worktree.
+- `bin/fm-supervise-daemon.sh` injection defers on unreadable, startup reports unreadable distinctly, and the run loop preserves queued work while retrying an unreadable target.
+- `bin/fm-fleet-snapshot.sh` leaves `endpoint_exists` null on unreadable, because false is reserved for confident absence.
+- `bin/fm-crew-state.sh` preserves its existing unreadable-pane presentation by treating unreadable as not readable without claiming confident absence.
+- `bin/fm-session-start.sh` reports an unreadable endpoint as unknown rather than dead, because recovery decisions must not be based on a transport failure.
+
 **`bin/fm-slot-guard.sh`** is the watcher half, armed at bootstrap like the memory alarm and the currency round.
 It sweeps this home's recorded slots on the ordinary watcher cadence and, when a slot is claimed by a task other than the live one standing in it, writes a durable `state/<id>.slot-disputed` marker and wakes firstmate once.
 Once written, the marker preserves that measured dispute before teardown runs and survives a caller that never asks.

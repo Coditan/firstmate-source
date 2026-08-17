@@ -152,8 +152,9 @@ fm_slot_task_window_live() {  # <task-id> <state-dir>
   fm_backend_source "$backend" >/dev/null 2>&1 || return 0
   if fm_backend_target_exists "$backend" "$target" 2>/dev/null; then
     return 0
+  else
+    [ "$?" -ne 1 ]
   fi
-  return 1
 }
 
 # Task ids that record <path> AND still have a live window.
