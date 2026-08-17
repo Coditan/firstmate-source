@@ -457,7 +457,69 @@ SH
   first_click=$(sed -n '1p' "$answer_tmp/clicks")
   [ "$first_click" = '@g3:1_5' ] \
     || fail "answer clicked '$first_click' instead of the exact Yes option"
+  assert_contains "$out" "queued 'yes-value'" \
+    "answer assumed the accessible label and queued HTML value must match"
   pass "answer preserves the exact option name across fresh snapshots"
+}
+
+test_answer_refuses_a_changed_confirmation_for_a_different_checked_option() {
+  local answer_tmp fakebin snap selected submitted out status=0
+  fm_test_tmproot answer_tmp fm-run-db-wrong-checked
+  fakebin=$(fm_fakebin "$answer_tmp")
+  snap="$answer_tmp/current.txt"
+  selected="$answer_tmp/selected.txt"
+  submitted="$answer_tmp/submitted.txt"
+  cat > "$snap" <<'SNAP'
+uid=g8:1_0 RootWebArea "Editor" url="http://example.invalid/session/x"
+  uid=g8:1_1 Iframe
+    uid=g8:1_2 RootWebArea "Board" url="http://example.invalid/artifact/x/index.html"
+      uid=g8:1_3 form
+        uid=g8:1_4 radio "No"
+        uid=g8:1_5 radio "Yes"
+        uid=g8:1_6 button "Antwort vormerken"
+SNAP
+  cat > "$selected" <<'SNAP'
+uid=g8:2_0 RootWebArea "Editor" url="http://example.invalid/session/x"
+  uid=g8:2_1 Iframe
+    uid=g8:2_2 RootWebArea "Board" url="http://example.invalid/artifact/x/index.html"
+      uid=g8:2_3 form
+        uid=g8:2_4 radio "No"
+        uid=g8:2_5 radio "Yes" checked
+        uid=g8:2_6 button "Antwort vormerken"
+SNAP
+  cat > "$submitted" <<'SNAP'
+uid=g8:3_0 RootWebArea "Editor" url="http://example.invalid/session/x"
+  uid=g8:3_1 Iframe
+    uid=g8:3_2 RootWebArea "Board" url="http://example.invalid/artifact/x/index.html"
+      uid=g8:3_3 form
+        uid=g8:3_4 radio "No" checked
+        uid=g8:3_5 radio "Yes"
+        uid=g8:3_6 button "Antwort vormerken"
+        uid=g8:3_7 StaticText "Vorgemerkt: changed-value"
+SNAP
+  cat > "$fakebin/chrome-devtools-axi" <<'SH'
+#!/usr/bin/env bash
+if [ "$1" = click ]; then
+  clicks=$(wc -l < "$CLICK_LOG" 2>/dev/null || printf 0)
+  printf '%s\n' "$2" >> "$CLICK_LOG"
+  if [ "$clicks" -eq 0 ]; then
+    cp "$SELECTED_SNAPSHOT" "$SNAPSHOT_FILE"
+  else
+    cp "$SUBMITTED_SNAPSHOT" "$SNAPSHOT_FILE"
+  fi
+fi
+exit 0
+SH
+  chmod +x "$fakebin/chrome-devtools-axi"
+  : > "$answer_tmp/clicks"
+  out=$(PATH="$fakebin:$PATH" CLICK_LOG="$answer_tmp/clicks" \
+    SNAPSHOT_FILE="$snap" SELECTED_SNAPSHOT="$selected" SUBMITTED_SNAPSHOT="$submitted" \
+    FM_RUN_DECISIONBOARD_SNAPSHOT="$snap" "$DRIVER" answer --option "Yes" 2>&1) || status=$?
+  [ "$status" -ne 0 ] \
+    || fail "answer accepted a changed confirmation for a different checked option"$'\n'"$out"
+  assert_contains "$out" "checked 'No' instead of the selected option 'Yes'" \
+    "answer did not identify the checked-state mismatch"
+  pass "answer requires the selected radio to remain checked after submission"
 }
 
 test_answer_ignores_a_neighbours_queued_confirmation() {
@@ -550,6 +612,7 @@ test_shot_refuses_a_stale_staging_file
 test_shot_accepts_a_same_size_refresh
 test_doctor_accepts_a_same_size_refresh
 test_answer_reresolves_the_exact_option_name
+test_answer_refuses_a_changed_confirmation_for_a_different_checked_option
 test_answer_ignores_a_neighbours_queued_confirmation
 test_answer_refuses_a_stale_different_option_confirmation
 test_answer_refuses_a_stale_same_option_confirmation

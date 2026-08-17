@@ -424,7 +424,11 @@ parse_forms() {  # <inventory|subtree> [decision-number]
       next
     }
     form_indent >= 0 && mode == "inventory" && (role == "radio" || role == "textbox" || role == "button" || role == "checkbox") {
-      properties = (body ~ /(^| )multiline( |$)/ ? "multiline" : "")
+      properties = ""
+      if (body ~ /(^| )multiline( |$)/) { properties = "multiline" }
+      if (body ~ /(^| )checked( |$)/) {
+        properties = properties (properties == "" ? "" : " ") "checked"
+      }
       printf "%d\t%s\t%s\t%s\t%s\n", forms, role, uid, name, properties
     }
   '
@@ -448,7 +452,7 @@ cmd_query() {
   decisions=$(printf '%s\n' "$inv" | awk -F'\t' '$2 == "form" {print $1}' | sort -un | wc -l | tr -d ' ')
   [ -n "$inv" ] || decisions=0
   with_options=$(printf '%s\n' "$inv" | awk -F'\t' '$2 == "radio" {print $1}' | sort -un | wc -l | tr -d ' ')
-  with_note=$(printf '%s\n' "$inv" | awk -F'\t' '$2 == "textbox" && $5 == "multiline" {print $1}' | sort -un | wc -l | tr -d ' ')
+  with_note=$(printf '%s\n' "$inv" | awk -F'\t' '$2 == "textbox" && $5 ~ /(^| )multiline( |$)/ {print $1}' | sort -un | wc -l | tr -d ' ')
   with_button=$(printf '%s\n' "$inv" | awk -F'\t' '$2 == "button" {print $1}' | sort -un | wc -l | tr -d ' ')
   listening=yes
   case "$snap" in
@@ -612,7 +616,7 @@ cmd_answer() {
 
   if [ -n "$note_text" ]; then
     uid=$(form_inventory | awk -F'\t' -v d="$target_decision" \
-      '$2 == "textbox" && $5 == "multiline" && $1 == d { print $3; exit }')
+      '$2 == "textbox" && $5 ~ /(^| )multiline( |$)/ && $1 == d { print $3; exit }')
     [ -n "$uid" ] || die "answer: decision $target_decision carries no note field"
     chrome-devtools-axi fill "@$uid" "$note_text" >/dev/null 2>&1 \
       || die "answer: could not write the note"
@@ -628,8 +632,9 @@ cmd_answer() {
   # board.js reports what it queued in the form's own .fm-queued box, and says so
   # in is-warn colour when it queued nothing. Read that back rather than assuming
   # the click landed.
-  local subtree after_confirmation queued_choice_value
-  subtree=$(form_subtree "$target_decision")
+  local after_snapshot subtree after_confirmation queued_choice_value checked_name
+  after_snapshot=$(snapshot)
+  subtree=$(printf '%s\n' "$after_snapshot" | parse_forms subtree "$target_decision")
   case "$subtree" in
     *"Nichts vorgemerkt"*)
       die "answer: the board reports it queued nothing for decision $target_decision" ;;
@@ -640,6 +645,12 @@ cmd_answer() {
     || die "answer: the board shows no queued option value for decision $target_decision"
   [ "$before_confirmation" != "$after_confirmation" ] \
     || die "answer: the confirmation already named this option before the click, so this run did not prove the answer was queued"
+  checked_name=$(printf '%s\n' "$after_snapshot" | parse_forms inventory \
+    | awk -F'\t' -v d="$target_decision" \
+      '$1 == d && $2 == "radio" && $5 ~ /(^| )checked( |$)/ { print $4 }')
+  # The accessibility tree exposes a radio's name and checked state, not its HTML value; report the confirmation value, and prove the choice with checked state plus a changed confirmation.
+  [ "$checked_name" = "$resolved_name" ] \
+    || die "answer: decision $target_decision checked '${checked_name:-no option}' instead of the selected option '$resolved_name', so this run did not prove the requested answer was queued"
   good "decision $target_decision queued '$queued_choice_value'${note_text:+ with a note}"
 }
 
