@@ -116,6 +116,7 @@ A check registration and its trust binding for `graph-freshness`, with no `state
 ## The landedness ladder, and why ancestry is banned
 
 Measured on `Freudator86/firstmate` at `origin/main` = `d126ea61`, 2026-08-03, over the 52 branches of merged pull requests that still exist on `origin`.
+(Historical record: at measurement time that address was this repository's home. Since the 2026-08 move this repository lives at `Coditan/firstmate-source`, and the old address hosts a **different, unrelated repository** — do not resolve it when re-running this measurement; use `origin`.)
 
 **The applied order is A → P → E → C → X**, stopping at the first test that settles a branch.
 
