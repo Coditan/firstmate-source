@@ -20,9 +20,8 @@ SERVICE="$ROOT/bin/fm-bosun-service.sh"
 BOSUN="$ROOT/bin/fm-bosun.sh"
 fm_test_tmproot TMP_ROOT fm-bosun-service
 
-# A fake user manager. `enable --now` and `restart` write the start beacon a
-# real bosun writes before its first pass, because that is what those commands
-# actually cause and the confirmation this script performs depends on it.
+# A fake user manager. Starting an active unit is a no-op, while restart always
+# writes the beacon a real bosun writes before its first pass.
 make_fake_systemd() {
   local fakebin=$1
   mkdir -p "$fakebin"
@@ -55,8 +54,14 @@ case "$*" in
     [ -e "${FM_TEST_SYSTEMD_ACTIVE:?}" ]
     ;;
   '--user enable --now '*)
-    touch "$FM_TEST_SYSTEMD_ENABLED" "$FM_TEST_SYSTEMD_ACTIVE"
-    beacon
+    touch "$FM_TEST_SYSTEMD_ENABLED"
+    if [ ! -e "$FM_TEST_SYSTEMD_ACTIVE" ]; then
+      touch "$FM_TEST_SYSTEMD_ACTIVE"
+      beacon
+    fi
+    ;;
+  '--user enable '*)
+    touch "$FM_TEST_SYSTEMD_ENABLED"
     ;;
   '--user restart '*)
     touch "$FM_TEST_SYSTEMD_ACTIVE"
@@ -173,13 +178,28 @@ test_install_requires_consent_and_converges() {
   assert_contains "$(cat "$home/install.out")" "installing bosun-unit" \
     "bootstrap install did not announce the approved bosun action"
   [ -f "$unitdir/fm-bosun@.service" ] || fail "approved installer did not copy the tracked unit"
-  assert_contains "$(cat "$TMP_ROOT/systemctl.log")" "enable --now fm-bosun@" \
-    "approved installer did not enable and start the home-scoped instance"
+  assert_contains "$(cat "$TMP_ROOT/systemctl.log")" "--user enable fm-bosun@" \
+    "approved installer did not enable the home-scoped instance"
+  assert_contains "$(cat "$TMP_ROOT/systemctl.log")" "--user restart fm-bosun@" \
+    "approved installer did not start the home-scoped instance"
   env_mode=$(stat -c %a "$home/state/.bosun-service.env")
   [ "$env_mode" = 600 ] || fail "private service environment mode was $env_mode instead of 600"
   assert_contains "$(cat "$home/state/.bosun-service.env")" "FM_BOSUN_EXEC=\"$BOSUN\"" \
     "service environment did not record the bosun this checkout runs"
 
+  sed -i.bak 's/^pid: .*/pid: stale-active-instance/' "$home/state/bosun/health"
+  rm -f "$home/state/bosun/health.bak"
+  : > "$TMP_ROOT/systemctl.log"
+  service_env "$fakebin" "$home" "$unitdir" \
+    "$ROOT/bin/fm-bootstrap.sh" install bosun-unit > /dev/null
+  assert_contains "$(cat "$TMP_ROOT/systemctl.log")" "--user enable fm-bosun@" \
+    "reinstall did not preserve enablement for the active instance"
+  assert_contains "$(cat "$TMP_ROOT/systemctl.log")" "--user restart fm-bosun@" \
+    "reinstall did not restart the active instance onto recorded configuration"
+  assert_not_contains "$(cat "$home/state/bosun/health")" "pid: stale-active-instance" \
+    "reinstall left the active instance's stale health beacon in place"
+
+  : > "$TMP_ROOT/systemctl.log"
   printf '%s\n' stale > "$unitdir/fm-bosun@.service"
   detect_out=$(FM_BOOTSTRAP_DETECT_ONLY=1 \
     service_env "$fakebin" "$home" "$unitdir" "$SERVICE" bootstrap)

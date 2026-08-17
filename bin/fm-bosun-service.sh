@@ -350,7 +350,10 @@ install_systemd() {
   install_unit_bytes || return 1
   write_service_env || return 1
   "$SYSTEMCTL" --user daemon-reload || return 1
-  "$SYSTEMCTL" --user enable --now "$unit" || return 1
+  "$SYSTEMCTL" --user enable "$unit" || return 1
+  # Installation must make the recorded configuration the running one;
+  # enable --now does not restart an instance that is already active.
+  "$SYSTEMCTL" --user restart "$unit" || return 1
   wait_for_running_bosun || {
     echo "error: $unit was started but nothing is being judged: $FM_BOSUN_HEALTH_WORD - $FM_BOSUN_HEALTH_NOTE" >&2
     return 1
