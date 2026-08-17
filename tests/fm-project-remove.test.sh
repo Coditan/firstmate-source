@@ -100,6 +100,41 @@ test_treehouse_worktree_refuses_unpreserved_head() {
   pass "project removal refuses attached treehouse worktrees with unpreserved work"
 }
 
+test_treehouse_worktree_refuses_preserved_head() {
+  local home repo wt rc=0
+  home=$(make_home treehouse-worktree-preserved)
+  repo="$home/projects/alpha"
+  wt="$home/.treehouse/alpha-test/1/alpha"
+  mkdir -p "$(dirname "$wt")"
+  git -C "$repo" worktree add -q --detach "$wt" main
+  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 1 "$rc" "treehouse worktree preserved"
+  assert_grep "attached treehouse worktree" "$home/err" \
+    "treehouse preserved-head refusal did not identify the attached worktree"
+  assert_grep "detach or prune" "$home/err" \
+    "treehouse preserved-head refusal did not require detaching the worktree"
+  [ -d "$home/projects/alpha" ] || fail "treehouse-worktree-preserved refusal removed the clone"
+  pass "project removal refuses live treehouse worktrees even when HEAD is preserved"
+}
+
+test_treehouse_worktree_refuses_dirty_preserved_head() {
+  local home repo wt rc=0
+  home=$(make_home treehouse-worktree-dirty-preserved)
+  repo="$home/projects/alpha"
+  wt="$home/.treehouse/alpha-test/1/alpha"
+  mkdir -p "$(dirname "$wt")"
+  git -C "$repo" worktree add -q --detach "$wt" main
+  printf 'dirty\n' > "$wt/dirty.txt"
+  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 1 "$rc" "treehouse worktree dirty preserved"
+  assert_grep "attached treehouse worktree" "$home/err" \
+    "treehouse dirty refusal did not identify the attached worktree"
+  assert_grep "has uncommitted changes" "$home/err" \
+    "treehouse dirty refusal did not explain dirty work"
+  [ -d "$home/projects/alpha" ] || fail "treehouse-worktree-dirty refusal removed the clone"
+  pass "project removal inspects dirty external treehouse worktrees before refusing"
+}
+
 test_claude_worktree_refuses_dirty_slot() {
   local home repo wt rc=0
   home=$(make_home claude-worktree-dirty)
@@ -155,6 +190,30 @@ EOF
   pass "project removal refuses in-flight or queued backlog work naming the project"
 }
 
+test_backlog_reference_with_repo_metadata_refuses() {
+  local home rc=0
+  home=$(make_home backlog-reference-metadata)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## In flight
+- [ ] alpha-live - active work (repo: alpha, since 2026-08-17) (kind: ship)
+
+## Queued
+- [ ] beta-live - unrelated work (repo: beta, since 2026-08-17) (kind: ship)
+
+## Done
+EOF
+  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 1 "$rc" "backlog reference metadata"
+  assert_grep "alpha-live" "$home/err" \
+    "backlog metadata refusal did not name the conflicting work"
+  assert_no_grep "beta-live" "$home/err" \
+    "backlog metadata refusal matched an unrelated repo"
+  [ -d "$home/projects/alpha" ] || fail "backlog-reference-metadata refusal removed the clone"
+  pass "project removal refuses backlog repo metadata that names the project"
+}
+
 test_registry_must_have_one_entry() {
   local home rc=0
   home=$(make_home registry-duplicate)
@@ -202,9 +261,12 @@ test_requires_captain_approval
 test_dirty_primary_refuses
 test_unlanded_branch_refuses
 test_treehouse_worktree_refuses_unpreserved_head
+test_treehouse_worktree_refuses_preserved_head
+test_treehouse_worktree_refuses_dirty_preserved_head
 test_claude_worktree_refuses_dirty_slot
 test_secondmate_clone_refuses
 test_backlog_reference_refuses
+test_backlog_reference_with_repo_metadata_refuses
 test_registry_must_have_one_entry
 test_pass_removes_clone_and_registry_entry_together
 test_dry_run_pass_keeps_clone_and_registry

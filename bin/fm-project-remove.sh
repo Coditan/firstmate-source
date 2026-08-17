@@ -9,8 +9,8 @@
 #   - the primary clone has no uncommitted changes;
 #   - every local branch tip is either preserved on a remote-tracking ref, has
 #     content already represented on the default branch, or names a merged PR;
-#   - every attached worktree is either the primary clone, a prunable stale entry,
-#     or a known treehouse/.claude attachment whose committed head is preserved;
+#   - every attached worktree is either the primary clone or a prunable stale
+#     entry;
 #   - no registered secondmate home still carries this project;
 #   - no in-flight or queued backlog item names this project as its repo.
 #
@@ -275,7 +275,7 @@ attachment_kind() {
 }
 
 check_attached_worktrees() {
-  local path head branch prunable abs_path kind proof dirty bad=0
+  local path head branch prunable abs_path kind dirty bad=0
   while IFS=$'\t' read -r path head branch prunable; do
     [ -n "$path" ] || continue
     if [ -d "$path" ]; then
@@ -294,7 +294,7 @@ check_attached_worktrees() {
       printf 'attached worktree %s is not a known treehouse or .claude worktree\n' "$path" >&2
       continue
     }
-    if path_is_child_of "$PROJECT_ABS" "$abs_path"; then
+    if [ -d "$abs_path" ]; then
       dirty=$(git -C "$abs_path" status --porcelain=v1 --untracked-files=all 2>/dev/null) || {
         bad=1
         printf 'attached %s worktree %s cannot be inspected for uncommitted changes\n' "$kind" "$path" >&2
@@ -307,27 +307,12 @@ check_attached_worktrees() {
         continue
       fi
     fi
-    [ -n "$head" ] || {
-      bad=1
-      printf 'attached %s worktree %s has no inspectable HEAD\n' "$kind" "$path" >&2
-      continue
-    }
-    if commit_on_any_remote "$head" || commit_in_default_history "$head"; then
-      ATTACHED_PROOFS="${ATTACHED_PROOFS}${path}: ${kind} HEAD ${head} is preserved
-"
-      continue
-    fi
-    if [ -n "$branch" ] && [ "$branch" != DETACHED ] && proof=$(branch_is_safe "$branch"); then
-      ATTACHED_PROOFS="${ATTACHED_PROOFS}${path}: ${kind} branch ${branch} is safe (${proof})
-"
-      continue
-    fi
     bad=1
-    printf 'attached %s worktree %s has HEAD %s with no preservation proof\n' "$kind" "$path" "$head" >&2
+    printf 'attached %s worktree %s is live; detach or prune it before removing %s\n' "$kind" "$path" "$PROJECT_NAME" >&2
   done <<EOF
 $(worktree_records)
 EOF
-  [ "$bad" -eq 0 ] || refuse "attached worktrees are not all safe to remove or prune."
+  [ "$bad" -eq 0 ] || refuse "attached worktrees must be detached or pruned before removal."
 }
 
 field_contains_project() {
@@ -369,11 +354,34 @@ check_backlog() {
   [ -f "$BACKLOG" ] && [ ! -L "$BACKLOG" ] \
     || refuse "cannot safely inspect backlog at $BACKLOG."
   conflicts=$(awk -v n="$PROJECT_NAME" '
+    function repo_names_project(meta, n, value, parts, names, repo_count, repos, i) {
+      value = substr(meta, 8, length(meta) - 8)
+      split(value, parts, ",")
+      names = parts[1]
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", names)
+      repo_count = split(names, repos, /[[:space:]]+/)
+      for (i = 1; i <= repo_count; i++) {
+        if (repos[i] == n) {
+          return 1
+        }
+      }
+      return 0
+    }
     /^## / {
       active = ($0 == "## In flight" || $0 == "## Queued")
       next
     }
-    active && $0 ~ /^- \[ \]/ && index($0, "(repo: " n ")") { print }
+    active && $0 ~ /^- \[ \]/ {
+      line = $0
+      while (match(line, /\(repo: [^)]*\)/)) {
+        meta = substr(line, RSTART, RLENGTH)
+        if (repo_names_project(meta, n)) {
+          print
+          next
+        }
+        line = substr(line, RSTART + RLENGTH)
+      }
+    }
   ' "$BACKLOG") || refuse "cannot inspect backlog at $BACKLOG."
   [ -z "$conflicts" ] || {
     printf '%s\n' "$conflicts" >&2
@@ -457,7 +465,7 @@ remove_attached_worktrees() {
     if [ "$prunable" = 1 ]; then
       continue
     fi
-    git -C "$PROJECT_ABS" worktree remove "$path"
+    refuse "attached worktree appeared after safety checks: $path."
   done <<EOF
 $(worktree_records)
 EOF
