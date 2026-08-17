@@ -586,44 +586,93 @@ def resolve_shape(args, path):
     return detected or "private"
 
 
-def resolve_baseline_shape(args, before):
-    recorded = before.get("shape")
-    if args.shape and recorded is not None:
-        if args.shape != recorded:
-            die(
-                "refused: --shape %s contradicts the recorded baseline shape, "
-                "which says %s. Remove --shape to use the baseline, or create "
-                "a new baseline from the intended file"
-                % (args.shape, recorded),
-                1,
-            )
-        die(
-            "refused: --shape is only for an unclassifiable baseline; the "
-            "recorded baseline shape already says %s. Remove --shape to proceed"
-            % recorded,
-            1,
-        )
+def shape_disagreement(first_source, first_value, second_source, second_value):
+    die(
+        "refused: shape disagreement: %s says %s, but %s says %s. "
+        "Regenerate the baseline and worksheet from the file in its current "
+        "Git state, or restore the file's prior tracking state before proceeding"
+        % (first_source, first_value, second_source, second_value),
+        1,
+    )
 
+
+def resolve_baseline_shape(args, before, worksheet_shape=None):
+    """Reconcile baseline, current Git, worksheet, then an explicit fallback.
+
+    The baseline records what was measured, Git owns whether material is shared,
+    and the worksheet records which verdict vocabulary the operator filled in.
+    --shape is accepted only when the baseline and Git cannot classify a staged
+    file; it may then agree with the worksheet generated through that fallback.
+    """
+    recorded = before.get("shape")
     baseline_path = before.get("loaded_path") or before.get("path")
     detected = detect_shape(baseline_path, args.root)
-    if args.shape and detected is not None:
-        if args.shape != detected:
+    sources = [
+        ("recorded baseline shape", recorded),
+        ("current Git tracking", detected),
+        ("inventory worksheet header", worksheet_shape),
+    ]
+    for source, value in sources:
+        if value is not None and value not in ("private", "shared"):
             die(
-                "refused: --shape %s contradicts git tracking, which classifies "
-                "%s as %s. Remove --shape to use the Git classification, or "
-                "create a baseline from the intended file"
-                % (args.shape, baseline_path, detected),
+                "refused: %s records unknown shape %s. Regenerate that artifact "
+                "from the intended file before proceeding" % (source, value),
                 1,
             )
+    known = [(source, value) for source, value in sources if value is not None]
+    for index, (first_source, first_value) in enumerate(known):
+        for second_source, second_value in known[index + 1:]:
+            if first_value != second_value:
+                shape_disagreement(
+                    first_source, first_value, second_source, second_value
+                )
+
+    if args.shape and (recorded is not None or detected is not None):
+        authority_source, authority_value = next(
+            (source, value) for source, value in sources[:2] if value is not None
+        )
+        if args.shape != authority_value:
+            shape_disagreement("--shape", args.shape, authority_source, authority_value)
         die(
-            "refused: --shape is only for an unclassifiable baseline; git "
-            "tracking already classifies %s as %s. Remove --shape to proceed"
-            % (baseline_path, detected),
+            "refused: --shape is only for an unclassifiable baseline; %s "
+            "already says %s. Remove --shape to proceed"
+            % (authority_source, authority_value),
             1,
+        )
+    if args.shape and worksheet_shape is not None and args.shape != worksheet_shape:
+        shape_disagreement(
+            "--shape", args.shape, "inventory worksheet header", worksheet_shape
         )
     if args.shape:
         return args.shape
-    return recorded or detected or "private"
+    return recorded or detected or worksheet_shape or "private"
+
+
+def validate_shape_files(args, before, shape):
+    if shape == "shared" and before["mode"] == "pair":
+        die(
+            "refused: a pair baseline with --shape shared.\n"
+            "  A shared tracked file has no archive to pair it with. Its detail "
+            "moves to the file that already owns it and an inline stub points "
+            "there, so its before-state is always the one file.",
+            1,
+        )
+    if shape == "shared" and args.archive:
+        die(
+            "refused: --archive with --shape shared.\n"
+            "  A shared tracked file is under a one-owner contract. Its detail "
+            "moves to the file that already owns it and an inline stub points "
+            "there. An archive of its prose would be a second owner, which is "
+            "the defect this exercise exists to prevent.",
+            1,
+        )
+    if shape == "private" and not args.archive:
+        die(
+            "refused: shape private with no --archive.\n"
+            "  A private knowledge file splits into a loaded half and a real "
+            "archive file. Without one there is nothing to prove reachable.",
+            1,
+        )
 
 
 # --------------------------------------------------------------------------
@@ -1646,34 +1695,9 @@ def cmd_check(args):
     warnings = []
 
     before = load_baseline(args)
-    shape = resolve_baseline_shape(args, before)
-
-    if shape == "shared" and before["mode"] == "pair":
-        die(
-            "refused: a pair baseline with --shape shared.\n"
-            "  A shared tracked file has no archive to pair it with. Its detail "
-            "moves to the file that already owns it and an inline stub points "
-            "there, so its before-state is always the one file.",
-            1,
-        )
-    if shape == "shared" and args.archive:
-        die(
-            "refused: --archive with --shape shared.\n"
-            "  A shared tracked file is under a one-owner contract. Its detail "
-            "moves to the file that already owns it and an inline stub points "
-            "there. An archive of its prose would be a second owner, which is "
-            "the defect this exercise exists to prevent.",
-            1,
-        )
-    if shape == "private" and not args.archive:
-        die(
-            "refused: shape private with no --archive.\n"
-            "  A private knowledge file splits into a loaded half and a real "
-            "archive file. Without one there is nothing to prove reachable.",
-            1,
-        )
-
     meta, rows = read_worksheet(args.worksheet)
+    shape = resolve_baseline_shape(args, before, meta.get("shape"))
+    validate_shape_files(args, before, shape)
     if not rows:
         die("worksheet %s has no entry blocks" % args.worksheet, 1)
 
@@ -2141,13 +2165,15 @@ def _naming_prefix(norm, limit=40):
 
 def cmd_report(args):
     before = load_baseline(args)
+    meta, wrows = read_worksheet(args.worksheet)
+    shape = resolve_baseline_shape(args, before, meta.get("shape"))
+    validate_shape_files(args, before, shape)
     label, total, rows, notes = denominator(args)
 
     loaded_level, archive_level = baseline_levels(before)
     loaded = file_facts(args.loaded, loaded_level)
     archive = file_facts(args.archive, archive_level) if args.archive else None
 
-    _meta, wrows = read_worksheet(args.worksheet)
     conflicts = key_conflicts(wrows)
     if conflicts:
         die(

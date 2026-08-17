@@ -410,12 +410,12 @@ That is the right call before adding to a startup file, when a session-start cos
 
 ## Shape `shared`, in practice
 
-The same four steps, with `--shape shared` and no `--archive`.
+The same four steps, with Git detecting shape `shared` and no `--archive`.
 
 ```
 .claude/skills/run-curate-knowledge/fm-curate-knowledge.py inventory \
   /home/coditan/coditan-firstmate/AGENTS.md \
-  --shape shared --out /tmp/agents-worksheet.md \
+  --out /tmp/agents-worksheet.md \
   --home /home/coditan/coditan-firstmate
 ```
 

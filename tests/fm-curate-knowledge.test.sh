@@ -1163,11 +1163,14 @@ test_measure_json_is_one_document() {
 # The two shapes must never borrow each other's method. An AGENTS.md archive
 # would be a second owner of material stated once by contract.
 test_the_two_shapes_never_borrow_each_others_method() {
-  local out status shared_before
+  local out status shared_before shared_worksheet
   shared_before="$TMP/shared-before.json"
+  shared_worksheet="$TMP/shared-worksheet.md"
   "$DRIVER" measure "$ROOT/AGENTS.md" --save "$shared_before" --home "$ROOT" >/dev/null \
     || fail "could not snapshot a shared baseline"
-  out=$("$DRIVER" check --before "$shared_before" --worksheet "$TMP/ws-filled.md" \
+  "$DRIVER" inventory "$ROOT/AGENTS.md" --out "$shared_worksheet" --home "$ROOT" >/dev/null \
+    || fail "could not inventory a shared baseline"
+  out=$("$DRIVER" check --before "$shared_before" --worksheet "$shared_worksheet" \
     --loaded "$TMP/after-loaded.md" --archive "$TMP/after-archive.md" \
     --home "$TMP" 2>&1) && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "--archive with a shared baseline exited $status, expected 1"
@@ -1184,10 +1187,13 @@ test_the_two_shapes_never_borrow_each_others_method() {
 }
 
 test_shape_override_cannot_defeat_a_known_classification() {
-  local out status tracked_before
+  local out status tracked_before tracked_worksheet
   tracked_before="$TMP/tracked-before.json"
+  tracked_worksheet="$TMP/tracked-worksheet.md"
   "$DRIVER" measure "$ROOT/AGENTS.md" --save "$tracked_before" --home "$ROOT" >/dev/null \
     || fail "could not snapshot tracked AGENTS.md"
+  "$DRIVER" inventory "$ROOT/AGENTS.md" --out "$tracked_worksheet" --home "$ROOT" >/dev/null \
+    || fail "could not inventory tracked AGENTS.md"
   python3 - "$tracked_before" <<'PY'
 import json
 import sys
@@ -1200,26 +1206,26 @@ for record in snapshot["files"].values():
 with open(path, "w", encoding="utf-8") as handle:
     json.dump(snapshot, handle)
 PY
-  out=$("$DRIVER" check --before "$tracked_before" --worksheet "$TMP/ws-filled.md" \
+  out=$("$DRIVER" check --before "$tracked_before" --worksheet "$tracked_worksheet" \
     --loaded "$TMP/after-loaded.md" --archive "$TMP/after-archive.md" \
     --shape private --home "$TMP" --root "$ROOT" 2>&1) && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "tracked baseline accepted --shape private"
-  printf '%s' "$out" | grep -q 'contradicts git tracking' \
-    || fail "tracked contradiction did not name git tracking: $out"
-  printf '%s' "$out" | grep -q 'classifies .* as shared' \
+  printf '%s' "$out" | grep -q -- '--shape says private' \
+    || fail "tracked contradiction did not name the explicit value: $out"
+  printf '%s' "$out" | grep -q 'current Git tracking says shared' \
     || fail "tracked contradiction did not state the classification: $out"
-  printf '%s' "$out" | grep -q 'Remove --shape' \
+  printf '%s' "$out" | grep -q 'Regenerate the baseline and worksheet' \
     || fail "tracked contradiction gave no actionable next step"
 
   out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
     --loaded "$TMP/after-loaded.md" --shape shared --home "$TMP" 2>&1) \
     && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "private baseline accepted --shape shared"
-  printf '%s' "$out" | grep -q 'contradicts the recorded baseline shape' \
-    || fail "private contradiction did not name the recorded baseline shape: $out"
-  printf '%s' "$out" | grep -q 'which says private' \
+  printf '%s' "$out" | grep -q -- '--shape says shared' \
+    || fail "private contradiction did not name the explicit value: $out"
+  printf '%s' "$out" | grep -q 'recorded baseline shape says private' \
     || fail "private contradiction did not state the recorded value: $out"
-  printf '%s' "$out" | grep -q 'create a new baseline' \
+  printf '%s' "$out" | grep -q 'Regenerate the baseline and worksheet' \
     || fail "private contradiction gave no actionable next step"
 
   "$DRIVER" inventory "$TMP/AGENTS.md" --shape shared --out "$TMP/unclassifiable.md" \
@@ -1228,6 +1234,68 @@ PY
   assert_grep 'verdict: stub' "$TMP/unclassifiable.md" \
     "the accepted explicit shared shape did not select shared verdicts"
   pass "shape overrides work only where no baseline or Git classification exists"
+}
+
+test_every_carried_shape_is_reconciled() {
+  local out status shape_root transitioned_before stable_before wrong_worksheet
+  shape_root="$TMP/shape-root"
+  transitioned_before="$TMP/transitioned-before.json"
+  stable_before="$TMP/stable-before.json"
+  wrong_worksheet="$TMP/wrong-shape-worksheet.md"
+  mkdir -p "$shape_root"
+  git -C "$shape_root" init -q
+  write_before "$shape_root/transitioned.md"
+  "$DRIVER" measure "$shape_root/transitioned.md" --save "$transitioned_before" \
+    --home "$TMP" --root "$shape_root" >/dev/null \
+    || fail "could not snapshot an untracked private file"
+  git -C "$shape_root" add transitioned.md
+
+  out=$("$DRIVER" check --before "$transitioned_before" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/after-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP" --root "$shape_root" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "a newly tracked private baseline passed check"
+  printf '%s' "$out" | grep -q 'recorded baseline shape says private' \
+    || fail "tracking transition did not name the recorded value: $out"
+  printf '%s' "$out" | grep -q 'current Git tracking says shared' \
+    || fail "tracking transition did not name the current Git value: $out"
+  printf '%s' "$out" | grep -q 'restore the file.*prior tracking state' \
+    || fail "tracking transition gave no actionable recovery: $out"
+
+  out=$("$DRIVER" report --before "$transitioned_before" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/after-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP" --root "$shape_root" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "report ignored a baseline and Git shape disagreement"
+  printf '%s' "$out" | grep -q 'recorded baseline shape says private' \
+    || fail "report did not use the reconciled shape path: $out"
+
+  sed 's/^# shape: private/# shape: shared/' "$TMP/ws-filled.md" >"$wrong_worksheet"
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$wrong_worksheet" \
+    --loaded "$TMP/after-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "a contradictory worksheet shape passed check"
+  printf '%s' "$out" | grep -q 'recorded baseline shape says private' \
+    || fail "worksheet contradiction did not name the baseline value: $out"
+  printf '%s' "$out" | grep -q 'inventory worksheet header says shared' \
+    || fail "worksheet contradiction did not name its own value: $out"
+
+  out=$("$DRIVER" report --before "$TMP/before.json" --worksheet "$wrong_worksheet" \
+    --loaded "$TMP/after-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "report ignored a contradictory worksheet shape"
+  printf '%s' "$out" | grep -q 'inventory worksheet header says shared' \
+    || fail "report did not reconcile the worksheet shape: $out"
+
+  write_before "$shape_root/stable.md"
+  "$DRIVER" measure "$shape_root/stable.md" --save "$stable_before" \
+    --home "$TMP" --root "$shape_root" >/dev/null \
+    || fail "could not snapshot a stable untracked file"
+  out=$("$DRIVER" check --before "$stable_before" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/after-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP" --root "$shape_root" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "agreeing baseline and Git classifications failed: $out"
+  printf '%s' "$out" | grep -q 'CHECK PASSED' \
+    || fail "agreeing classifications did not complete the check"
+  pass "baseline, Git, worksheet, and explicit shapes are reconciled"
 }
 
 # A real curation - one split, one fold, one evidenced deletion - passes, and
@@ -1842,6 +1910,7 @@ test_a_pair_baseline_uses_each_halfs_own_entry_level
 test_measure_json_is_one_document
 test_the_two_shapes_never_borrow_each_others_method
 test_shape_override_cannot_defeat_a_known_classification
+test_every_carried_shape_is_reconciled
 test_a_real_curation_passes_and_the_report_carries_the_ledger
 test_a_report_cannot_omit_the_deletion_ledger
 test_a_worksheet_heading_cannot_contradict_its_key
