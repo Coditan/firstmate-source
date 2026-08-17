@@ -467,15 +467,27 @@ test_unestablishable_identity_refuses_before_comparison() {
   pass "an unestablishable repository identity refuses before comparison"
 }
 
+# Both GitHub tools, each behaving the way the real one does. This fixture is
+# the regression itself: gh returns the raw value, gh-axi wraps every answer in
+# its own envelope, and identity resolution only succeeds if the check reads the
+# raw-producing tool. The earlier fixture stubbed gh-axi with raw output, so it
+# agreed with the parser no matter which tool was called - CI stayed green while
+# the check refused on the first real repository it met.
 make_github_identity_fakebin() {
   local fakebin=$1
   mkdir -p "$fakebin"
-  cat > "$fakebin/gh-axi" <<'SH'
+  cat > "$fakebin/gh" <<'SH'
 #!/bin/sh
 [ -z "${FM_TEST_EXPECT_API:-}" ] || [ "$2" = "$FM_TEST_EXPECT_API" ] || exit 1
 printf '12345\nowner/repo\n'
 SH
-  chmod +x "$fakebin/gh-axi"
+  # Verbatim gh-axi shape, including under --jq: the value is inside the
+  # envelope, so its FIRST line is never the value a raw parser wants.
+  cat > "$fakebin/gh-axi" <<'SH'
+#!/bin/sh
+printf 'api_response:\n  body: "12345\\nowner/repo"\n  truncated: false\n'
+SH
+  chmod +x "$fakebin/gh" "$fakebin/gh-axi"
 }
 
 run_github_alias_check() {
@@ -516,6 +528,32 @@ test_github_host_is_case_insensitive_without_changing_repo_path() {
   assert_contains "$out" 'are the same repository (identity github:12345)' \
     "mixed-case GitHub hosts did not resolve while preserving repository path case"
   pass "GitHub host matching is case-insensitive without changing repository path case"
+}
+
+# The other half of the same defect: if a wrapper-producing command is ever
+# wired into the identity lookup again, its envelope must be REFUSED rather than
+# misread. "api_response:" is not a numeric id, and accepting it would hand the
+# comparison an identity that no repository ever produced.
+test_wrapped_api_output_is_never_read_as_an_identity() {
+  local fakebin state out
+  fakebin="$TMP_ROOT/github-wrapped-fakebin"
+  state="$TMP_ROOT/github-wrapped-state"
+  mkdir -p "$fakebin"
+  cat > "$fakebin/gh" <<'SH'
+#!/bin/sh
+printf 'api_response:\n  body: "12345\\nowner/repo"\n  truncated: false\n'
+SH
+  chmod +x "$fakebin/gh"
+
+  out=$(run_github_alias_check 'https://github.com/owner/repo.git' \
+    'https://github.com/owner/other.git' "$state" "$fakebin")
+  assert_contains "$out" 'FORK_SYNC_STUCK:' "a wrapped API answer did not refuse"
+  assert_contains "$out" 'returned no numeric id' \
+    "the refusal did not name the unusable identity answer"
+  assert_not_contains "$out" 'are the same repository' \
+    "an envelope line was accepted as a repository identity"
+  [ ! -f "$state/fork-sync.last-run" ] || fail "a refused identity stamped a completed comparison"
+  pass "a wrapped API answer refuses instead of being read as an identity"
 }
 
 make_identity_minimal_path() {
@@ -591,5 +629,6 @@ test_distinct_local_identities_are_compared
 test_unestablishable_identity_refuses_before_comparison
 test_github_ssh_forms_share_numeric_identity
 test_github_host_is_case_insensitive_without_changing_repo_path
+test_wrapped_api_output_is_never_read_as_an_identity
 test_github_identity_runs_without_timeout_binary
 test_github_identity_uses_gtimeout_fallback

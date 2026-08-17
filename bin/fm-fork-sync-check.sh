@@ -124,11 +124,19 @@ repository_identity() {
         return 1
       }
       repo_slug=$GITHUB_REPO_SLUG
-      command -v gh-axi >/dev/null 2>&1 || {
-        REPOSITORY_IDENTITY_REASON="gh-axi is unavailable for the $side GitHub repository"
+      # Deliberately `gh`, not `gh-axi`. gh-axi is the agent-ergonomic surface
+      # and wraps every answer in its own envelope - `gh-axi api ... --jq .id`
+      # returns "api_response:" / "  body: ..." / "  truncated: false", not the
+      # value - so a caller parsing it as raw output reads the envelope's first
+      # line instead of the id. That is not hypothetical: it shipped, passed CI
+      # against fixtures that agreed with the parser, and refused on the first
+      # real repository it met. bin/fm-currency-round.sh's latest_release makes
+      # the same machine-read the same way, and this follows it.
+      command -v gh >/dev/null 2>&1 || {
+        REPOSITORY_IDENTITY_REASON="gh is unavailable for the $side GitHub repository"
         return 1
       }
-      result=$(bounded gh-axi api "repos/$repo_slug" --jq '.id, .full_name' 2>&1) || {
+      result=$(bounded gh api "repos/$repo_slug" --jq '.id, .full_name' 2>&1) || {
         REPOSITORY_IDENTITY_REASON="$side GitHub repository lookup failed: $result"
         return 1
       }
