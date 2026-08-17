@@ -776,7 +776,11 @@ transaction_path_reclaimable() {
   age=$(transaction_path_age "$path") || return 1
   case "$owner" in
     ''|*[!0-9]*) [ "$threshold" -ge 2 ] || threshold=2 ;;
-    *) kill -0 "$owner" 2>/dev/null && return 1 ;;
+    *)
+      [ "$age" -ge "$threshold" ] && return 0
+      kill -0 "$owner" 2>/dev/null && return 1
+      return 0
+      ;;
   esac
   [ "$age" -ge "$threshold" ]
 }

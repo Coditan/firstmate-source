@@ -444,6 +444,14 @@ test_the_transaction_lock_needs_no_flock_and_recovers_abandoned_states() {
   out=$(FM_FORGE_STATUS_LOCK_STALE_AFTER=0 run_watch "$home" --force)
   assert_contains "$out" 'Partial System Outage' "an aged abandoned reclaim mutex must be recovered"
   [ "$(entry_count "$home")" -eq 4 ] || fail "abandoned lock recovery lost an observation"
+
+  mkdir "$lock"
+  printf '%s\n' "$$" > "$lock/pid"
+  touch -t 202001010000 "$lock"
+  serve "$home" clear
+  out=$(run_watch "$home" --force)
+  assert_contains "$out" 'All Systems Operational' "an aged lock must be reclaimed despite PID reuse"
+  [ "$(entry_count "$home")" -eq 5 ] || fail "PID reuse recovery lost an observation"
   pass "the portable transaction lock recovers every abandoned state"
 }
 
