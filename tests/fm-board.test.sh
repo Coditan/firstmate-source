@@ -277,9 +277,11 @@ test_a_decision_must_be_selectable() {
   local case_html label
   local cases=(
     "one option is not a choice|<form data-fm-question=\"f\"><input type=\"radio\" name=\"f\" value=\"ja\"><textarea data-fm-note></textarea><div class=\"fm-queued\"></div></form>"
+    "divs with radio types are not selectable options|<form data-fm-question=\"f\"><div type=\"radio\"></div><div type=\"radio\"></div><textarea data-fm-note></textarea><div class=\"fm-queued\"></div></form>"
     "no note field beside the options|<form data-fm-question=\"f\"><input type=\"radio\" name=\"f\" value=\"ja\"><input type=\"radio\" name=\"f\" value=\"nein\"><div class=\"fm-queued\"></div></form>"
     "note attribute on a div is not a note control|<form data-fm-question=\"f\"><input type=\"radio\" name=\"f\" value=\"ja\"><input type=\"radio\" name=\"f\" value=\"nein\"><div data-fm-note></div><div class=\"fm-queued\"></div></form>"
     "no box to report what was queued|<form data-fm-question=\"f\"><input type=\"radio\" name=\"f\" value=\"ja\"><input type=\"radio\" name=\"f\" value=\"nein\"><textarea data-fm-note></textarea></form>"
+    "fm-queued has to be a whole class token|<form data-fm-question=\"f\"><input type=\"radio\" name=\"f\" value=\"ja\"><input type=\"radio\" name=\"f\" value=\"nein\"><textarea data-fm-note></textarea><div class=\"not-fm-queued\"></div></form>"
     "a question whose markup spans lines is read the same way|<form
        data-fm-question=\"f\"><input
        type=\"radio\" name=\"f\" value=\"ja\"><div class=\"fm-queued\"></div></form>"
@@ -290,9 +292,17 @@ test_a_decision_must_be_selectable() {
     expect_code 1 "$(build_status)" "a decision board must be refused: $label"
     assert_absent "$OUT" "a refused decision board must not be written: $label"
     assert_contains "$(build_stderr)" "REFUSED" "the refusal must say so: $label"
+    if [ "$label" = "divs with radio types are not selectable options" ]; then
+      assert_contains "$(build_stderr)" "selectable option" \
+        "the refusal must name the missing real radio inputs"
+    fi
     if [ "$label" = "note attribute on a div is not a note control" ]; then
       assert_contains "$(build_stderr)" "no note control" \
         "the refusal must name the missing textarea note control"
+    fi
+    if [ "$label" = "fm-queued has to be a whole class token" ]; then
+      assert_contains "$(build_stderr)" "no .fm-queued box" \
+        "the refusal must name the missing queued-state box"
     fi
   done
 
@@ -300,6 +310,16 @@ test_a_decision_must_be_selectable() {
   # is the exact failure that prompted this rule, and prose cannot be scanned
   # for it - so the declaration is what catches it.
   local status=0
+  rm -f "$OUT"
+  printf '%s\n' '<form data-fm-questionable="f"><input type="radio" name="f" value="ja"><input type="radio" name="f" value="nein"><textarea data-fm-note></textarea><div class="fm-queued"></div></form>' > "$TMP_ROOT/body.html"
+  "$BOARD" --title "T" --kind decision --body "$TMP_ROOT/body.html" --out "$OUT" \
+    >/dev/null 2>"$BUILD_ERR_FILE" || status=$?
+  expect_code 1 "$status" "--kind decision with data-fm-questionable must be refused"
+  assert_absent "$OUT" "a form with only data-fm-questionable must not be written"
+  assert_contains "$(build_stderr)" "data-fm-question" \
+    "the refusal must name the missing question attribute"
+
+  status=0
   rm -f "$OUT"
   printf '%s\n' '<p>Option A oder Option B? Antworte im Chat.</p>' > "$TMP_ROOT/body.html"
   "$BOARD" --title "T" --kind decision --body "$TMP_ROOT/body.html" --out "$OUT" \

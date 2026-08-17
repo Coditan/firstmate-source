@@ -362,8 +362,9 @@ resolve_vessel() {
 #
 # Reads the BODY FRAGMENT with its newlines flattened, so a form whose markup is
 # wrapped across lines reads exactly like a one-line one. Every test below fires
-# only on a form the body itself marked with data-fm-question, so a report that
-# merely writes about a decision is never mistaken for one that poses it.
+# only on a form the body itself marked with a data-fm-question attribute, so a
+# report that merely writes about a decision is never mistaken for one that
+# poses it.
 scan_decision_defects() {  # <body-file> <kind>
   tr '\n' ' ' < "$1" | awk -v kind="$2" '
     function unquote(s,   sq) {
@@ -373,40 +374,127 @@ scan_decision_defects() {  # <body-file> <kind>
       return s
     }
 
+    function tag_end(s, start,   end) {
+      end = index(substr(s, start), ">")
+      return end == 0 ? length(s) - start + 1 : end
+    }
+
+    function has_attr(tag, name,   clean) {
+      clean = unquote(tolower(tag))
+      return match(clean, "[[:space:]]" name "([[:space:]=/>]|$)")
+    }
+
+    function attr_value(tag, name,   clean, value) {
+      clean = unquote(tolower(tag))
+      if (!match(clean, "[[:space:]]" name "[[:space:]]*=[[:space:]]*[^[:space:]>]+")) {
+        return ""
+      }
+      value = substr(clean, RSTART, RLENGTH)
+      sub("^[^=]*=[[:space:]]*", "", value)
+      return value
+    }
+
+    function attr_eq(tag, name, value,   clean) {
+      clean = unquote(tolower(tag))
+      return match(clean, "[[:space:]]" name "[[:space:]]*=[[:space:]]*" value "([[:space:]/>]|$)")
+    }
+
+    function has_tag_attr(markup, tagname, attr,   rest, s, start, tlen, tag) {
+      rest = markup
+      while (match(rest, "<" tagname "([[:space:]>]|$)")) {
+        start = RSTART
+        tlen = tag_end(rest, start)
+        tag = substr(rest, start, tlen)
+        if (has_attr(tag, attr)) {
+          return 1
+        }
+        rest = substr(rest, start + tlen)
+      }
+      return 0
+    }
+
+    function count_radio_inputs(markup,   rest, start, tlen, tag, opts) {
+      rest = markup; opts = 0
+      while (match(rest, /<input([[:space:]>]|$)/)) {
+        start = RSTART
+        tlen = tag_end(rest, start)
+        tag = substr(rest, start, tlen)
+        if (attr_eq(tag, "type", "radio")) {
+          opts++
+        }
+        rest = substr(rest, start + tlen)
+      }
+      return opts
+    }
+
+    function class_value(tag,   pos, rest, q, value, i, ch) {
+      if (!match(tag, /[[:space:]]class[[:space:]]*=/)) {
+        return ""
+      }
+      pos = RSTART + RLENGTH
+      rest = substr(tag, pos)
+      sub(/^[[:space:]]*/, "", rest)
+      q = substr(rest, 1, 1)
+      if (q == "\"" || q == sprintf("%c", 39)) {
+        value = substr(rest, 2)
+        i = index(value, q)
+        return i == 0 ? value : substr(value, 1, i - 1)
+      }
+      value = ""
+      for (i = 1; i <= length(rest); i++) {
+        ch = substr(rest, i, 1)
+        if (ch ~ /[[:space:]>]/) {
+          break
+        }
+        value = value ch
+      }
+      return value
+    }
+
+    function has_class_token(markup, token,   rest, start, tlen, tag, classes) {
+      rest = markup
+      while (match(rest, /<[^>]*[[:space:]]class[[:space:]]*=/)) {
+        start = RSTART
+        tlen = tag_end(rest, start)
+        tag = substr(rest, start, tlen)
+        classes = " " class_value(tag) " "
+        gsub(/[[:space:]]+/, " ", classes)
+        if (index(classes, " " token " ")) {
+          return 1
+        }
+        rest = substr(rest, start + tlen)
+      }
+      return 0
+    }
+
     {
       doc = $0; low = tolower(doc); pos = 1
       while (1) {
-        s = index(substr(low, pos), "<form")
-        if (s == 0) { break }
-        fstart = pos + s - 1
+        if (!match(substr(low, pos), /<form([[:space:]>]|$)/)) { break }
+        fstart = pos + RSTART - 1
         e = index(substr(low, fstart), "</form")
         if (e == 0) { seg = substr(doc, fstart); pos = length(doc) + 1 }
         else { seg = substr(doc, fstart, e - 1); pos = fstart + e }
 
         lowseg = tolower(seg)
-        if (lowseg !~ /data-fm-question/) { continue }
+        formtag = substr(seg, 1, tag_end(seg, 1))
+        if (!has_attr(formtag, "data-fm-question")) { continue }
         found++
 
         key = "(unnamed)"
-        if (match(seg, /data-fm-question[[:space:]]*=[[:space:]]*[^[:space:]>]+/)) {
-          key = unquote(substr(seg, RSTART, RLENGTH))
-          sub(/^[^=]*=[[:space:]]*/, "", key)
+        value = attr_value(formtag, "data-fm-question")
+        if (value != "") {
+          key = value
         }
 
-        # Quotes are stripped before counting so a double-quoted, a
-        # single-quoted, and a bare attribute all count the same.
-        opts = 0; rest = unquote(lowseg)
-        while (match(rest, /type[[:space:]]*=[[:space:]]*radio/)) {
-          opts++
-          rest = substr(rest, RSTART + RLENGTH)
-        }
+        opts = count_radio_inputs(lowseg)
         if (opts < 2) {
           printf "  the question \"%s\" offers %d selectable option(s): a decision needs at least two, and they have to be real alternatives rather than one recommendation plus filler\n", key, opts
         }
-        if (lowseg !~ /<textarea([[:space:]][^>]*)?[[:space:]]data-fm-note([[:space:]=\/>]|$)/) {
+        if (!has_tag_attr(lowseg, "textarea", "data-fm-note")) {
           printf "  the question \"%s\" has no note control: every option set needs a textarea carrying data-fm-note beside it, because a note that contradicts the chosen option is what the captain actually meant\n", key
         }
-        if (lowseg !~ /fm-queued/) {
+        if (!has_class_token(lowseg, "fm-queued")) {
           printf "  the question \"%s\" has no .fm-queued box, so neither a queued answer nor an empty one could be shown\n", key
         }
       }
