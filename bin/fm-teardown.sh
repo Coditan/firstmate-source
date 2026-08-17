@@ -512,6 +512,7 @@ fi
 STALE_WORKTREE_LOCK_RETRY_WAIT_SECS=$TREEHOUSE_RETURN_LOCK_RETRY_WAIT_SECS
 TEARDOWN_TREEHOUSE_LOCK_REFUSED=2
 TEARDOWN_WORKTREE_SAFETY_LOCK_BLOCKED=3
+TEARDOWN_SLOT_HELD_REFUSED=4
 
 # True when treehouse/git stderr shows the transient index.lock "File exists" race.
 # Other return failures must not enter the retry path.
@@ -585,21 +586,21 @@ cleanup_stale_lock_for_safety_check() {
 # contested slot sets FM_TEARDOWN_SLOT_OVERRIDE to the holder this refusal named,
 # which is deliberately harder than typing --force and, unlike --force, cannot be
 # given without first learning who is being displaced.
-require_no_other_slot_holder() {  # <dir> <cd_dir> <label> <self-id>
-  local dir=$1 cd_dir=$2 label=$3 self=$4 holders marker
+require_no_other_slot_holder() {  # <dir> <cd_dir> <label> <self-id> <state-dir>
+  local dir=$1 cd_dir=$2 label=$3 self=$4 state_dir=$5 holders marker
 
-  marker="$STATE/$self.slot-disputed"
+  marker="$state_dir/$self.slot-disputed"
   if [ -f "$marker" ]; then
     holders=$(sed -n 's/^holder=//p' "$marker" | head -1)
     if [ -n "$holders" ] && [ "${FM_TEARDOWN_SLOT_OVERRIDE:-}" != "$holders" ]; then
       echo "REFUSED: $label $dir is recorded by $self but is held by $holders, which is still live." >&2
       echo "Returning it would terminate every process in that worktree and reset it, destroying $holders's uncommitted work." >&2
       echo "Resolve the holder first (let $holders finish, or tear $holders down), or set FM_TEARDOWN_SLOT_OVERRIDE=$holders to displace it deliberately." >&2
-      return 1
+      return "$TEARDOWN_SLOT_HELD_REFUSED"
     fi
   fi
 
-  holders=$(fm_slot_conflicting_holders "$dir" "$self" "$STATE" "$cd_dir" 2>/dev/null) || return 0
+  holders=$(fm_slot_conflicting_holders "$dir" "$self" "$state_dir" "$cd_dir" 2>/dev/null) || return 0
   [ -n "$holders" ] || return 0
   holders=$(printf '%s' "$holders" | tr '\n' ' ')
   holders=${holders% }
@@ -610,7 +611,7 @@ require_no_other_slot_holder() {  # <dir> <cd_dir> <label> <self-id>
   echo "REFUSED: $label $dir is recorded by $self but is held by $holders, which is still live." >&2
   echo "Returning it would terminate every process in that worktree and reset it, destroying $holders's uncommitted work." >&2
   echo "Resolve the holder first (let $holders finish, or tear $holders down), or set FM_TEARDOWN_SLOT_OVERRIDE=$holders to displace it deliberately." >&2
-  return 1
+  return "$TEARDOWN_SLOT_HELD_REFUSED"
 }
 
 # The lease-conditional form of the return, when the pool can enforce ownership
@@ -632,11 +633,16 @@ teardown_return_lease_args() {  # <dir> <cd_dir> <self-id>
 # Return a worktree/home via `treehouse return --force`, tolerating a transient or
 # stale git index.lock left by a killed crew process. See the script header.
 teardown_treehouse_return() {
-  local dir=$1 cd_dir=$2 label=$3 post_cleanup_check=${4:-} self=${5:-$ID}
-  local out lock attempt=0 max_retries lock_desc line
+  local dir=$1 cd_dir=$2 label=$3 post_cleanup_check=${4:-} self=${5:-$ID} state_dir=${6:-$STATE}
+  local out lock attempt=0 max_retries lock_desc line holder_rc
   local -a lease_args=()
 
-  require_no_other_slot_holder "$dir" "$cd_dir" "$label" "$self" || return 1
+  if require_no_other_slot_holder "$dir" "$cd_dir" "$label" "$self" "$state_dir"; then
+    :
+  else
+    holder_rc=$?
+    return "$holder_rc"
+  fi
 
   while IFS= read -r line; do
     [ -n "$line" ] || continue
@@ -978,7 +984,7 @@ EOF
 }
 
 remove_firstmate_home() {
-  local home=$1 label=$2 expected_id=${3:-} abs_home_path
+  local home=$1 label=$2 expected_id=${3:-} state_dir=${4:-$STATE} abs_home_path return_rc
   [ -n "$home" ] || return 0
   [ -e "$home" ] || return 0
   abs_home_path=$(validate_firstmate_home_for_removal "$home" "$label" "$expected_id") || return 1
@@ -988,10 +994,13 @@ remove_firstmate_home() {
       echo "error: treehouse command not found; cannot return $label $abs_home_path" >&2
       return 1
     }
-    teardown_treehouse_return "$abs_home_path" "$FM_ROOT" "$label" "" "${expected_id:-$ID}" || {
+    if teardown_treehouse_return "$abs_home_path" "$FM_ROOT" "$label" "" "${expected_id:-$ID}" "$state_dir"; then
+      :
+    else
+      return_rc=$?
       echo "error: treehouse return failed for $label $abs_home_path; lease may still be held" >&2
-      return 1
-    }
+      return "$return_rc"
+    fi
     return 0
   fi
   safe_rm_rf "$abs_home_path" "$label"
@@ -1087,24 +1096,27 @@ cleanup_firstmate_home_children() {
       child_home=$(meta_value "$child_meta" home)
       [ -n "$child_home" ] || child_home=$child_wt
       if [ -n "$child_home" ] && [ -d "$child_home" ]; then
-        cleanup_firstmate_home_children "$child_home"
-        remove_firstmate_home "$child_home" "child firstmate home" "$child_id"
+        cleanup_firstmate_home_children "$child_home" || return $?
+        remove_firstmate_home "$child_home" "child firstmate home" "$child_id" "$sub_state" || return $?
       fi
     elif [ "$child_backend" = orca ]; then
       if [ -n "$child_wt" ] && [ -d "$child_wt" ]; then
         validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
+        require_no_other_slot_holder "$child_wt" "$child_proj" "child worktree" "$child_id" "$sub_state" || return $?
         remove_task_turnend_hooks "$child_wt"
       fi
       fm_backend_remove_worktree "$child_backend" "$child_orca_worktree_id" || return 1
     elif [ -n "$child_wt" ] && [ -d "$child_wt" ]; then
       validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
+      require_no_other_slot_holder "$child_wt" "$child_proj" "child worktree" "$child_id" "$sub_state" || return $?
       remove_task_turnend_hooks "$child_wt"
       if [ -n "$child_proj" ] && [ -d "$child_proj" ] && command -v treehouse >/dev/null 2>&1; then
-        if teardown_treehouse_return "$child_wt" "$child_proj" "child worktree" "" "$child_id"; then
+        if teardown_treehouse_return "$child_wt" "$child_proj" "child worktree" "" "$child_id" "$sub_state"; then
           :
         else
           child_return_rc=$?
-          if [ "$child_return_rc" -eq "$TEARDOWN_TREEHOUSE_LOCK_REFUSED" ]; then
+          if [ "$child_return_rc" -eq "$TEARDOWN_TREEHOUSE_LOCK_REFUSED" ] \
+             || [ "$child_return_rc" -eq "$TEARDOWN_SLOT_HELD_REFUSED" ]; then
             return "$child_return_rc"
           fi
           safe_rm_rf_child_worktree "$child_wt" "$child_proj"
@@ -1192,6 +1204,10 @@ if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
   fi
 fi
 
+if [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
+  require_no_other_slot_holder "$WT" "$PROJ" "worktree" "$ID" "$STATE" || exit $?
+fi
+
 # Best-effort: drop the local task branch so the shared repo does not accumulate refs.
 if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
   if [ "$ORCA_PATH_MATCH_VERIFIED" != 1 ]; then
@@ -1226,10 +1242,13 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   if [ "$FORCE" != "--force" ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ]; then
     post_lock_cleanup_check=validate_worktree_teardown_safety
   fi
-  teardown_treehouse_return "$WT" "$PROJ" "worktree" "$post_lock_cleanup_check" || {
+  if teardown_treehouse_return "$WT" "$PROJ" "worktree" "$post_lock_cleanup_check"; then
+    :
+  else
+    return_rc=$?
     echo "error: treehouse return failed for worktree $WT; teardown aborted" >&2
-    exit 1
-  }
+    exit "$return_rc"
+  fi
 fi
 
 HERDR_PRESENTATION_JOURNAL="$STATE/$ID.herdr-presentation"

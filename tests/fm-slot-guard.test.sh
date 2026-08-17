@@ -36,6 +36,8 @@
 #   (i) fm-slot-guard --status                             -> reports the dispute
 #   (j) fm-slot-guard detect                               -> writes marker + wakes once
 #   (k) dispute resolves                                   -> marker cleared, wake once
+#   (l) forced child cleanup reads the child home's state
+#   (m) child ownership refusal never falls back to deletion
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -59,6 +61,8 @@ make_case() {
   mkdir -p "$case_dir/state" "$case_dir/config" "$fakebin"
   : > "$case_dir/live-windows"
   : > "$case_dir/leases"
+  : > "$case_dir/lease-on-status"
+  printf '0\n' > "$case_dir/status-count"
   : > "$case_dir/returned"
 
   # treehouse mock. `status` reports leases from $CASE/leases (one
@@ -71,6 +75,13 @@ LEASES="${FM_TEST_CASE_DIR:?}/leases"
 RETURNED="${FM_TEST_CASE_DIR:?}/returned"
 case "${1:-}" in
   status)
+    count=$(cat "${FM_TEST_CASE_DIR:?}/status-count")
+    count=$((count + 1))
+    printf '%s\n' "$count" > "${FM_TEST_CASE_DIR:?}/status-count"
+    while IFS=$'\t' read -r at p h; do
+      [ "$at" = "$count" ] || continue
+      printf '%s\t%s\n' "$p" "$h" >> "$LEASES"
+    done < "${FM_TEST_CASE_DIR:?}/lease-on-status"
     n=0
     while IFS=$'\t' read -r p h; do
       [ -n "$p" ] || continue
@@ -174,6 +185,10 @@ lease_slot() {  # <case> <path> <holder>
   printf '%s\t%s\n' "$2" "$3" >> "$1/leases"
 }
 
+lease_slot_on_status() {  # <case> <status-count> <path> <holder>
+  printf '%s\t%s\t%s\n' "$2" "$3" "$4" >> "$1/lease-on-status"
+}
+
 run_teardown() {  # <case> <id> [args...]
   local case_dir=$1 id=$2; shift 2
   FM_TEST_CASE_DIR="$case_dir" \
@@ -182,6 +197,40 @@ run_teardown() {  # <case> <id> [args...]
   FM_CONFIG_OVERRIDE="$case_dir/config" \
   PATH="$case_dir/fakebin:$PATH" \
     "$TEARDOWN" "$id" "$@"
+}
+
+make_secondmate_case() {  # <case> <parent-id>
+  local case_dir=$1 parent_id=$2 home="$1/secondmate-home"
+  mkdir -p "$home/data" "$home/state" "$home/config" "$home/projects"
+  printf '%s\n' "$parent_id" > "$home/.fm-secondmate-home"
+  cat > "$case_dir/state/$parent_id.meta" <<EOF
+window=fmtest:$parent_id
+worktree=$home
+home=$home
+project=$case_dir/project
+harness=claude
+kind=secondmate
+mode=no-mistakes
+yolo=off
+backend=tmux
+EOF
+  printf '%s\n' "$home"
+}
+
+write_child_task() {  # <case> <home> <id> <alive|dead>
+  local case_dir=$1 home=$2 id=$3 alive=$4
+  cat > "$home/state/$id.meta" <<EOF
+window=fmtest:$id
+worktree=$case_dir/slot
+project=$case_dir/project
+harness=claude
+kind=ship
+mode=no-mistakes
+yolo=off
+backend=tmux
+EOF
+  [ "$alive" = alive ] && printf '%s\n' "fmtest:$id" >> "$case_dir/live-windows"
+  return 0
 }
 
 # The mock appends every path it actually returned; empty means nothing was.
@@ -204,12 +253,15 @@ run_guard() {  # <case> [args...]
 
 # --- (a) THE REPRODUCTION --------------------------------------------------
 test_stale_record_live_holder_refuses() {
-  local case_dir rc
+  local case_dir rc branch
   case_dir=$(make_case repro)
   # finished-task: window already dead, meta still names the slot.
   write_task "$case_dir" finished-task dead
   # live-task: was handed the same slot and is working in it right now.
   write_task "$case_dir" live-task alive
+  git -C "$case_dir/slot" switch -q -c live-holder-work
+  mkdir -p "$case_dir/slot/.claude"
+  printf '{"hooks":"live-holder"}\n' > "$case_dir/slot/.claude/settings.fm-task.json"
 
   set +e
   run_teardown "$case_dir" finished-task > "$case_dir/stdout" 2> "$case_dir/stderr"
@@ -220,6 +272,10 @@ test_stale_record_live_holder_refuses() {
   assert_grep "REFUSED" "$case_dir/stderr" "repro: teardown should refuse"
   assert_grep "live-task" "$case_dir/stderr" "repro: the refusal must NAME the holder"
   assert_nothing_returned "$case_dir" "repro: nothing should have been returned"
+  assert_present "$case_dir/slot/.claude/settings.fm-task.json" \
+    "repro: refusal must not remove the live holder's hook"
+  branch=$(git -C "$case_dir/slot" branch --show-current)
+  [ "$branch" = live-holder-work ] || fail "repro: refusal changed the live holder's branch"
   pass "(a) a slot held by a different live task is refused, naming the holder"
 }
 
@@ -391,6 +447,46 @@ test_guard_detect_marks_and_clears() {
   pass "(k) the watcher clears the marker and reports once when the dispute ends"
 }
 
+test_child_home_state_refuses() {
+  local case_dir home rc
+  case_dir=$(make_case child-state)
+  home=$(make_secondmate_case "$case_dir" parent-task)
+  write_child_task "$case_dir" "$home" finished-child dead
+  write_child_task "$case_dir" "$home" live-child alive
+
+  set +e
+  run_teardown "$case_dir" parent-task --force > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  [ "$rc" -ne 0 ] || fail "child-state: forced cleanup ignored the child home's live holder"
+  assert_grep "live-child" "$case_dir/stderr" "child-state: refusal must name the child holder"
+  assert_nothing_returned "$case_dir" "child-state: child slot must not be returned"
+  assert_present "$case_dir/slot" "child-state: child slot must remain present"
+  pass "(l) forced child cleanup checks ownership in the child home's state"
+}
+
+test_child_refusal_does_not_delete() {
+  local case_dir home rc
+  case_dir=$(make_case child-refusal)
+  home=$(make_secondmate_case "$case_dir" parent-task)
+  write_child_task "$case_dir" "$home" finished-child dead
+  lease_slot_on_status "$case_dir" 2 "$case_dir/slot" "fm:live-child"
+
+  set +e
+  run_teardown "$case_dir" parent-task --force > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  [ "$rc" -ne 0 ] || fail "child-refusal: ownership refusal did not abort forced cleanup"
+  assert_grep "live-child" "$case_dir/stderr" "child-refusal: refusal must name the lease holder"
+  assert_nothing_returned "$case_dir" "child-refusal: child slot must not be returned"
+  assert_present "$case_dir/slot" "child-refusal: refused child slot must not be deleted"
+  assert_present "$home/state/finished-child.meta" \
+    "child-refusal: refused cleanup must preserve the child record"
+  pass "(m) child ownership refusal never falls back to worktree deletion"
+}
+
 test_stale_record_live_holder_refuses
 test_sole_owner_allows
 test_force_does_not_override
@@ -401,5 +497,7 @@ test_lease_holder_refuses
 test_own_lease_allows
 test_guard_status_reports
 test_guard_detect_marks_and_clears
+test_child_home_state_refuses
+test_child_refusal_does_not_delete
 
 printf '\nall fm-slot-guard tests passed\n'
