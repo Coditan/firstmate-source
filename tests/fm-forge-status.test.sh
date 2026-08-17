@@ -426,22 +426,23 @@ test_the_transaction_lock_needs_no_flock_and_recovers_abandoned_states() {
 
   mkdir "$lock"
   printf '99999999\n' > "$lock/pid"
+  touch -t 202001010000 "$lock"
   serve "$home" incident
-  out=$(FM_FORGE_STATUS_LOCK_STALE_AFTER=0 run_watch "$home" --force)
+  out=$(run_watch "$home" --force)
   assert_contains "$out" 'Partial System Outage' "a dead transaction owner must not wedge the watch"
   [ "$(entry_count "$home")" -eq 2 ] || fail "the recovered transaction did not append"
 
   mkdir "$lock"
   touch -t 202001010000 "$lock"
   serve "$home" clear
-  out=$(FM_FORGE_STATUS_LOCK_STALE_AFTER=0 run_watch "$home" --force)
+  out=$(run_watch "$home" --force)
   assert_contains "$out" 'All Systems Operational' "an aged incomplete lock must be reclaimed"
 
   mkdir "$lock" "$reclaim"
   printf '99999999\n' > "$lock/pid"
-  touch -t 202001010000 "$reclaim"
+  touch -t 202001010000 "$lock" "$reclaim"
   serve "$home" incident
-  out=$(FM_FORGE_STATUS_LOCK_STALE_AFTER=0 run_watch "$home" --force)
+  out=$(run_watch "$home" --force)
   assert_contains "$out" 'Partial System Outage' "an aged abandoned reclaim mutex must be recovered"
   [ "$(entry_count "$home")" -eq 4 ] || fail "abandoned lock recovery lost an observation"
 
@@ -452,6 +453,12 @@ test_the_transaction_lock_needs_no_flock_and_recovers_abandoned_states() {
   out=$(run_watch "$home" --force)
   assert_contains "$out" 'All Systems Operational' "an aged lock must be reclaimed despite PID reuse"
   [ "$(entry_count "$home")" -eq 5 ] || fail "PID reuse recovery lost an observation"
+
+  FM_FORGE_STATUS_TIMEOUT=120 FM_FORGE_STATUS_LOCK_STALE_AFTER=1 \
+    run_watch "$home" --cadence raised >/dev/null
+  out=$(run_watch "$home" --status)
+  assert_contains "$out" 'transaction-lock-stale-after-seconds: 180' \
+    "the recorded effective lock bound must exceed the configured fetch timeout"
   pass "the portable transaction lock recovers every abandoned state"
 }
 

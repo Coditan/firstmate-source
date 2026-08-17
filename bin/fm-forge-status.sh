@@ -150,8 +150,10 @@
 #                                 (default 7200)
 #   FM_FORGE_STATUS_OVERDUE_RAISED the same slack for the raised cadence
 #                                 (default 1800)
-#   FM_FORGE_STATUS_LOCK_STALE_AFTER age in seconds after which a dead writer's
-#                                 transaction lock may be reclaimed (default 60)
+#   FM_FORGE_STATUS_LOCK_STALE_AFTER requested minimum lock recovery age
+#                                 (default 60); the effective bound is never
+#                                 below the fetch timeout plus 60s or 60s total
+#                                 and is recorded in forge-status.report
 #   FM_FORGE_STATUS_NOW           override the current epoch (tests)
 #   FM_FORGE_STATUS_DISABLE=1     silence detect and --armed only, so suites that
 #                                 compose bin/fm-bootstrap.sh neither reach the
@@ -178,7 +180,7 @@ JITTER_MAX=${FM_FORGE_STATUS_JITTER_MAX:-420}
 TIMEOUT=${FM_FORGE_STATUS_TIMEOUT:-10}
 OVERDUE=${FM_FORGE_STATUS_OVERDUE:-7200}
 OVERDUE_RAISED=${FM_FORGE_STATUS_OVERDUE_RAISED:-1800}
-LOCK_STALE_AFTER=${FM_FORGE_STATUS_LOCK_STALE_AFTER:-60}
+LOCK_STALE_CONFIGURED=${FM_FORGE_STATUS_LOCK_STALE_AFTER:-60}
 case "$INTERVAL" in ''|*[!0-9]*) INTERVAL=7200 ;; esac
 case "$RAISED_INTERVAL" in ''|*[!0-9]*|0) RAISED_INTERVAL=300 ;; esac
 case "$JITTER_MIN" in ''|*[!0-9]*) JITTER_MIN=180 ;; esac
@@ -186,8 +188,12 @@ case "$JITTER_MAX" in ''|*[!0-9]*) JITTER_MAX=420 ;; esac
 case "$TIMEOUT" in ''|*[!0-9]*|0) TIMEOUT=10 ;; esac
 case "$OVERDUE" in ''|*[!0-9]*) OVERDUE=7200 ;; esac
 case "$OVERDUE_RAISED" in ''|*[!0-9]*) OVERDUE_RAISED=1800 ;; esac
-case "$LOCK_STALE_AFTER" in ''|*[!0-9]*) LOCK_STALE_AFTER=60 ;; esac
+case "$LOCK_STALE_CONFIGURED" in ''|*[!0-9]*) LOCK_STALE_CONFIGURED=60 ;; esac
 [ "$JITTER_MAX" -ge "$JITTER_MIN" ] || { JITTER_MIN=180; JITTER_MAX=420; }
+LOCK_STALE_FLOOR=$(( TIMEOUT + 60 ))
+[ "$LOCK_STALE_FLOOR" -ge 60 ] || LOCK_STALE_FLOOR=60
+LOCK_STALE_AFTER=$LOCK_STALE_CONFIGURED
+[ "$LOCK_STALE_AFTER" -ge "$LOCK_STALE_FLOOR" ] || LOCK_STALE_AFTER=$LOCK_STALE_FLOOR
 
 # The bound on re-draws, and the reason for it, are bin/fm-curation-nudge.sh's:
 # the jitter window spans five consecutive minutes, so at most one candidate
@@ -600,6 +606,7 @@ render_record() {  # <state> <cadence> <next> <observed> <entry> <recorded> <sur
   printf 'jitter-min-seconds: %s\n' "$JITTER_MIN"
   printf 'jitter-max-seconds: %s\n' "$JITTER_MAX"
   printf 'draw-attempts: %s\n' "$DRAW_ATTEMPTS"
+  printf 'transaction-lock-stale-after-seconds: %s\n' "$LOCK_STALE_AFTER"
   printf 'source: %s\n' "$URL"
   printf 'written: %s\n' "$(epoch_utc "$NOW")"
   printf 'cadence-in-force: %s\n' "$(cadence_line "$cadence")"
@@ -692,6 +699,7 @@ render_absent_report() {
   printf 'next-observation: none scheduled\n'
   printf 'last-observation: never\n'
   printf 'last-new-reading: never\n'
+  printf 'transaction-lock-stale-after-seconds: %s\n' "$LOCK_STALE_AFTER"
   printf 'source: %s\n' "$URL"
   printf 'log: %s\n' "$LOG"
 }

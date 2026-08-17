@@ -93,6 +93,7 @@ A watch that tightened itself would be classifying severity by another route.
 Cadence changes and the complete observation read, append, and schedule transaction share one home-scoped lock.
 A detect or force observation exits quietly when another writer holds it, so overlapping sweeps neither wait on the fetch timeout nor append the same reading twice.
 Read-only modes do not acquire the lock or create state.
+The effective stale-lock recovery bound is at least the configured fetch timeout plus 60 seconds and is recorded in `forge-status.report`.
 
 The cadence is the target, not the observation instant.
 The watcher sees a due target on its next `state/*.check.sh` sweep, so an observation lands at the target plus however far that sweep has to travel, and that sweep's period belongs to `bin/fm-watch.sh`.
