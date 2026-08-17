@@ -37,10 +37,11 @@
 #   (j) fm-slot-guard detect                               -> writes marker + wakes once
 #   (k) dispute resolves                                   -> marker cleared, wake once
 #   (l) forced child cleanup reads the child home's state
-#   (m) child ownership refusal never falls back to deletion
+#   (m) child refusal preserves its worktree and parent records
 #   (n) late top-level refusal leaves hooks and branch untouched
 #   (o) returned top-level slot is never mutated after release
 #   (p) returned child slot is never mutated after release
+#   (q) home-return refusal preserves registry and task state
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -61,7 +62,7 @@ make_case() {
   local name=$1 case_dir fakebin
   case_dir="$TMP_ROOT/$name"
   fakebin="$case_dir/fakebin"
-  mkdir -p "$case_dir/state" "$case_dir/config" "$fakebin"
+  mkdir -p "$case_dir/state" "$case_dir/data" "$case_dir/config" "$fakebin"
   : > "$case_dir/live-windows"
   : > "$case_dir/leases"
   : > "$case_dir/lease-on-status"
@@ -208,6 +209,7 @@ run_teardown() {  # <case> <id> [args...]
   FM_TEST_CASE_DIR="$case_dir" \
   FM_ROOT_OVERRIDE="$ROOT" \
   FM_STATE_OVERRIDE="$case_dir/state" \
+  FM_DATA_OVERRIDE="$case_dir/data" \
   FM_CONFIG_OVERRIDE="$case_dir/config" \
   PATH="$case_dir/fakebin:$PATH" \
     "$TEARDOWN" "$id" "$@"
@@ -216,6 +218,7 @@ run_teardown() {  # <case> <id> [args...]
 make_secondmate_case() {  # <case> <parent-id>
   local case_dir=$1 parent_id=$2 home="$1/secondmate-home"
   mkdir -p "$home/data" "$home/state" "$home/config" "$home/projects"
+  mkdir -p "$case_dir/tasktmp"
   printf '%s\n' "$parent_id" > "$home/.fm-secondmate-home"
   cat > "$case_dir/state/$parent_id.meta" <<EOF
 window=fmtest:$parent_id
@@ -227,8 +230,25 @@ kind=secondmate
 mode=no-mistakes
 yolo=off
 backend=tmux
+tasktmp=$case_dir/tasktmp
 EOF
+  printf 'running\n' > "$case_dir/state/$parent_id.status"
+  printf '%s\n' "- $parent_id home=$home" > "$case_dir/data/secondmates.md"
   printf '%s\n' "$home"
+}
+
+register_mock_home_worktree() {  # <case> <home>
+  printf '%s\n' "$2" > "$1/home-worktree"
+  cat > "$1/fakebin/git" <<'SH'
+#!/usr/bin/env bash
+if [ "${*: -3}" = "worktree list --porcelain" ]; then
+  /usr/bin/git "$@"
+  printf 'worktree %s\n\n' "$(cat "${FM_TEST_CASE_DIR:?}/home-worktree")"
+  exit 0
+fi
+exec /usr/bin/git "$@"
+SH
+  chmod +x "$1/fakebin/git"
 }
 
 write_child_task() {  # <case> <home> <id> <alive|dead>
@@ -505,7 +525,15 @@ test_child_refusal_does_not_delete() {
   [ "$branch" = live-child-work ] || fail "child-refusal: late refusal changed the holder's branch"
   assert_present "$home/state/finished-child.meta" \
     "child-refusal: refused cleanup must preserve the child record"
-  pass "(m) child ownership refusal never falls back to worktree deletion"
+  assert_present "$home" "child-refusal: refused cleanup must preserve the parent home"
+  assert_present "$case_dir/state/parent-task.meta" \
+    "child-refusal: refused cleanup must preserve the parent meta"
+  assert_present "$case_dir/state/parent-task.status" \
+    "child-refusal: refused cleanup must preserve the parent status"
+  assert_grep "- parent-task " "$case_dir/data/secondmates.md" \
+    "child-refusal: refused cleanup must preserve the registry entry"
+  assert_present "$case_dir/tasktmp" "child-refusal: refused cleanup must preserve task temp"
+  pass "(m) child refusal preserves its worktree and parent records"
 }
 
 test_late_top_level_refusal_is_mutation_free() {
@@ -572,6 +600,34 @@ test_returned_child_slot_is_not_mutated() {
   pass "(p) returned child slot is not mutated after reallocation"
 }
 
+test_secondmate_home_refusal_preserves_records() {
+  local case_dir home rc
+  case_dir=$(make_case refused-home)
+  home=$(make_secondmate_case "$case_dir" parent-task)
+  register_mock_home_worktree "$case_dir" "$home"
+  printf 'holder=live-home-holder\nrecorded=%s\n' "$home" \
+    > "$case_dir/state/parent-task.slot-disputed"
+
+  set +e
+  run_teardown "$case_dir" parent-task > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  [ "$rc" -ne 0 ] || fail "refused-home: home ownership refusal reported success"
+  assert_grep "live-home-holder" "$case_dir/stderr" "refused-home: refusal must name the holder"
+  assert_present "$home" "refused-home: refusal must preserve the secondmate home"
+  assert_present "$case_dir/state/parent-task.meta" "refused-home: refusal must preserve task meta"
+  assert_present "$case_dir/state/parent-task.status" "refused-home: refusal must preserve task status"
+  assert_present "$case_dir/state/parent-task.slot-disputed" \
+    "refused-home: refusal must preserve the dispute marker"
+  assert_grep "- parent-task " "$case_dir/data/secondmates.md" \
+    "refused-home: refusal must preserve the registry entry"
+  assert_present "$case_dir/tasktmp" "refused-home: refusal must preserve task temp"
+  assert_no_grep "teardown parent-task complete" "$case_dir/stdout" \
+    "refused-home: refusal must not print success"
+  pass "(q) secondmate home refusal preserves registry and task state"
+}
+
 test_stale_record_live_holder_refuses
 test_sole_owner_allows
 test_force_does_not_override
@@ -587,5 +643,6 @@ test_child_refusal_does_not_delete
 test_late_top_level_refusal_is_mutation_free
 test_returned_top_level_slot_is_not_mutated
 test_returned_child_slot_is_not_mutated
+test_secondmate_home_refusal_preserves_records
 
 printf '\nall fm-slot-guard tests passed\n'
