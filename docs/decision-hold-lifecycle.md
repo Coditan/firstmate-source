@@ -124,7 +124,7 @@ So as first written the check opened at 57 irreparable demands and could never r
 That is the same failure this whole mechanism exists against, one layer up: a check nobody reads and a store nobody consults fail in exactly the same way.
 
 `--record-baseline` writes the findings that sit on already-closed records into `data/decision-baseline.md`, once, as a deliberate statement that those particular answers are lost rather than pending.
-`--audit` then withholds exactly those `(class, id)` pairs and states in one line how many it withheld and where they are listed.
+`--audit` then withholds exactly those `(class, id, observed closed date)` entries and states in one line how many it withheld and where they are listed.
 The same home reads as two findings afterwards, both real.
 
 Three rules keep the baseline from becoming a mute switch, and each is a regression rather than an intention.
@@ -242,7 +242,8 @@ Adoption-baseline, board-input, and startup-cap verification date: 2026-08-17.
 The baseline measurement was taken against a copy of the main home's `data/backlog.md` and `data/done-archive.md`, read-only, with `FM_HOME` pointed at the copy.
 Before: `--audit` printed 58 findings and exited 1 - 48 `closed-without-record`, 9 `stale-body-state`, 1 `duplicate-suspect`.
 After `--record-baseline`: 2 findings, being the `duplicate-suspect` and a `closed-without-record` deliberately appended after the baseline to prove a later loss still reports, plus one line naming the 57 withheld.
-A `duplicate-suspect` line hand-added to the baseline file silenced its finding on the first attempt, which is the defect the permitted-class filter now prevents and `test_a_baseline_cannot_silence_a_repairable_record` holds.
+A `duplicate-suspect` line hand-added to the baseline file silenced its finding on the first attempt.
+The generated entry-set digest now makes any added or removed entry reject the whole baseline, while the permitted-class and observed-closure checks reject an intact entry that no longer names an allowed historical loss; `test_a_baseline_cannot_silence_a_repairable_record` and `test_removing_a_baseline_entry_invalidates_every_entry` hold those boundaries.
 With no baseline recorded, `bin/fm-bootstrap.sh` printed 13 `DECISION_LEDGER:` lines rather than 59: twelve findings and one stating the 48 not shown.
 
 Two defects were found by these regressions rather than by reading, and both are recorded because each is a shape the next change could reproduce.
@@ -265,12 +266,20 @@ $ bash tests/fm-decision-ledger.test.sh
 ok - a settled decision survives retention into the archive and still reads verbatim
 ok - a second question cannot be filed without disposing of the one already there
 ok - an answer folds the open questions it settles and keeps the trail to them
+ok - retries complete interrupted folds for holds and recorded answers
+ok - fold retries cross retention only through strict archived resolutions
+ok - live and archived fold successors obey one validity rule
 ok - a fold carries the work the question gated, and the answer lifts that gate
 ok - a premise that could not be measured is surfaced, never folded as a false one
 ok - an edited decision stops reading as verified instead of passing as his word
 ok - the audit finds every way a captain decision record can be left unfinished
+ok - the duplicate backstop separates distinct questions from one question repeated
 ok - a home with no unfinished decision record reports no findings and exits clean
 ok - an answered decision leaves the open-decision surface and says why
+ok - the adoption baseline converges the audit and still names everything it covers
+ok - a baseline covers only what was already closed and can never mute a repairable record
+ok - removing one baseline entry invalidates the whole attestation
+ok - the decision board's input drops a question whose answer is already recorded
 
 $ bash tests/fm-decision-hold-lifecycle.test.sh
 ok - report-only unresolved decision is reproduced and completion refuses before loss
