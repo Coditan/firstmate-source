@@ -299,20 +299,82 @@ read_refusal() {
   printf '%s %s %s %s %s' "$recorded" "$jitter_min" "$jitter_max" "$interval" "$attempts"
 }
 
-record_successful_draw() {
-  printf '%s\n' "$1" > "$NEXT_DUE" || return 1
-  rm -f "$REFUSAL"
-}
+SCHEDULED_TARGET=''
+PERSISTENCE_PATH=''
+PERSISTENCE_CONDITION=''
+schedule_transition() {
+  local target tmp
+  SCHEDULED_TARGET=''
+  PERSISTENCE_PATH=''
+  PERSISTENCE_CONDITION=''
+  if target=$(draw_next_due "$NOW"); then
+    [ ! -d "$NEXT_DUE" ] || {
+      PERSISTENCE_PATH=$NEXT_DUE
+      PERSISTENCE_CONDITION='the drawn next target could not replace a directory at the next-due path'
+      return 2
+    }
+    tmp=$(mktemp "$STATE/.curation-nudge-next.XXXXXX") || {
+      PERSISTENCE_PATH=$STATE
+      PERSISTENCE_CONDITION='temporary state for the drawn next target could not be created'
+      return 2
+    }
+    printf '%s\n' "$target" > "$tmp" || {
+      rm -f -- "$tmp"
+      PERSISTENCE_PATH=$tmp
+      PERSISTENCE_CONDITION='the drawn next target could not be written to temporary state'
+      return 2
+    }
+    if ! rm -f -- "$REFUSAL"; then
+      rm -f -- "$tmp"
+      PERSISTENCE_PATH=$REFUSAL
+      PERSISTENCE_CONDITION='the prior draw-refusal record could not be cleared'
+      return 2
+    fi
+    if ! mv -f -- "$tmp" "$NEXT_DUE"; then
+      rm -f -- "$tmp"
+      PERSISTENCE_PATH=$NEXT_DUE
+      PERSISTENCE_CONDITION='the drawn next target could not be persisted'
+      return 2
+    fi
+    SCHEDULED_TARGET=$target
+    return 0
+  fi
 
-record_refused_draw() {
-  rm -f "$NEXT_DUE"
+  [ ! -d "$REFUSAL" ] || {
+    PERSISTENCE_PATH=$REFUSAL
+    PERSISTENCE_CONDITION='the draw refusal could not replace a directory at the refusal-record path'
+    return 2
+  }
+  tmp=$(mktemp "$STATE/.curation-nudge-refusal.XXXXXX") || {
+    PERSISTENCE_PATH=$STATE
+    PERSISTENCE_CONDITION='temporary state for the draw refusal could not be created'
+    return 2
+  }
   {
     printf 'recorded=%s\n' "$NOW"
     printf 'jitter_min=%s\n' "$JITTER_MIN"
     printf 'jitter_max=%s\n' "$JITTER_MAX"
     printf 'interval=%s\n' "$INTERVAL"
     printf 'attempts=%s\n' "$DRAW_ATTEMPTS"
-  } > "$REFUSAL"
+  } > "$tmp" || {
+    rm -f -- "$tmp"
+    PERSISTENCE_PATH=$tmp
+    PERSISTENCE_CONDITION='the draw refusal could not be written to temporary state'
+    return 2
+  }
+  if ! rm -f -- "$NEXT_DUE"; then
+    rm -f -- "$tmp"
+    PERSISTENCE_PATH=$NEXT_DUE
+    PERSISTENCE_CONDITION='the prior next target could not be cleared for the draw refusal'
+    return 2
+  fi
+  if ! mv -f -- "$tmp" "$REFUSAL"; then
+    rm -f -- "$tmp"
+    PERSISTENCE_PATH=$REFUSAL
+    PERSISTENCE_CONDITION='the draw refusal could not be persisted'
+    return 2
+  fi
+  return 1
 }
 
 render_report() {  # <next-due-epoch or empty>
@@ -350,6 +412,11 @@ nudge_line() {
 schedule_refusal_line() {
   printf 'CURATION_NUDGE: no next curation sweep was scheduled because all %s candidate minutes drawn from the configured jitter window landed on the five-minute grid (FM_CURATION_NUDGE_JITTER_MIN=%s, FM_CURATION_NUDGE_JITTER_MAX=%s, FM_CURATION_NUDGE_INTERVAL=%s); the draw attempt bound was exhausted, so set the jitter window to include an off-grid target minute\n' \
     "$DRAW_ATTEMPTS" "$JITTER_MIN" "$JITTER_MAX" "$INTERVAL"
+}
+
+state_persistence_line() {
+  printf 'CURATION_NUDGE: state persistence failure at %s because %s; repair that state path and run the check again\n' \
+    "$PERSISTENCE_PATH" "$PERSISTENCE_CONDITION"
 }
 
 # --- modes ------------------------------------------------------------------
@@ -421,11 +488,19 @@ EOF
     printf 'CURATION_NUDGE: the curation scheduler recorded a draw refusal, but its state record %s is unreadable; repair the jitter configuration and run the check again\n' "$REFUSAL"
     return 0
   fi
+  if [ -e "$REFUSAL" ]; then
+    printf 'CURATION_NUDGE: state persistence failure at %s because it is not a readable refusal record; repair that state path and run the check again\n' "$REFUSAL"
+    return 0
+  fi
   if [ ! -f "$CHECK" ] || [ ! -x "$CHECK" ]; then
     printf 'CURATION_NUDGE: the knowledge-file curation nudge is not armed on this home, so nothing will re-measure this vessel'"'"'s learnings and captain files between sessions (fix: %s/fm-curation-nudge.sh --arm)\n' "$SCRIPT_DIR"
     return 0
   fi
   if ! next=$(read_next_due); then
+    if [ -e "$NEXT_DUE" ]; then
+      printf 'CURATION_NUDGE: state persistence failure at %s because it is not a readable next target; repair that state path and run the check again\n' "$NEXT_DUE"
+      return 0
+    fi
     # No target at all is the shape a dead timer hides behind: every surface
     # reports healthy and only the missing next trigger gives it away. Freshly
     # armed is not a fault; armed long ago with nothing scheduled is.
@@ -485,13 +560,13 @@ if [ "$MODE" = detect ]; then
     # First sweep after arming: schedule the first target and say nothing.
     # Arming a home must not wake it, and a home with no schedule is exactly the
     # state --armed reports if nothing ever fixes it.
-    if next=$(draw_next_due "$NOW"); then
-      record_successful_draw "$next"
-    else
-      record_refused_draw
-      schedule_refusal_line
-    fi
-    exit 0
+    schedule_transition
+    transition_status=$?
+    case "$transition_status" in
+      0) exit 0 ;;
+      1) schedule_refusal_line; exit 0 ;;
+      *) state_persistence_line; exit 1 ;;
+    esac
   fi
   [ "$NOW" -ge "$due" ] || exit 0
 fi
@@ -499,18 +574,14 @@ fi
 # Fire. The next target is drawn from NOW rather than from the target just
 # consumed, so a home that was off for a week schedules one sweep ahead instead
 # of firing on every watcher pass until it has caught up with the calendar.
-if next=$(draw_next_due "$NOW"); then
-  record_successful_draw "$next"
-else
-  next=''
-  record_refused_draw
-fi
-printf '%s\n' "$NOW" > "$LAST_FIRE"
+schedule_transition
+transition_status=$?
+case "$transition_status" in
+  0) next=$SCHEDULED_TARGET ;;
+  1) schedule_refusal_line; exit 0 ;;
+  *) state_persistence_line; exit 1 ;;
+esac
 render_report "$next" > "$REPORT"
-
-if [ -z "$next" ]; then
-  schedule_refusal_line
-  exit 0
-fi
+printf '%s\n' "$NOW" > "$LAST_FIRE"
 nudge_line
 exit 0

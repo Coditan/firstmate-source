@@ -145,6 +145,83 @@ test_initial_detect_loudly_explains_an_exhausted_draw() {
   pass "draw refusal remains distinct from supervision failure and clears on recovery"
 }
 
+test_a_refused_successor_does_not_claim_the_nudge_fired() {
+  local home due out
+  home=$(make_home refused-successor)
+  due=$(( $(date +%s) / 300 * 300 ))
+  printf '%s\n' "$due" > "$home/state/curation-nudge.next-due"
+
+  out=$(FM_CURATION_NUDGE_NOW="$due" FM_CURATION_NUDGE_JITTER_MIN=0 \
+    FM_CURATION_NUDGE_JITTER_MAX=0 run_nudge "$home")
+  assert_contains "$out" 'no next curation sweep was scheduled' \
+    "a refused successor must report the scheduling refusal"
+  [ ! -e "$home/state/curation-nudge.last-fire" ] \
+    || fail "a refused successor falsely advanced last-fire"
+  out=$(FM_CURATION_NUDGE_NOW="$due" run_nudge "$home" --status)
+  assert_contains "$out" 'last-fire: never' \
+    "status must not claim a refused nudge actually fired"
+  out=$(FM_CURATION_NUDGE_NOW=$(( due + 7200 )) run_nudge "$home" --armed)
+  assert_contains "$out" 'scheduler has refused' \
+    "health must retain the refusal rather than inventing a firing"
+  assert_not_contains "$out" 'last fired' \
+    "health must not claim the refused nudge fired"
+  pass "a refused successor records no false firing"
+}
+
+test_refusal_persistence_failure_is_distinct_and_fails() {
+  local home out status=0 now refusal
+  home=$(make_home refusal-persist-failure)
+  run_nudge "$home" --arm >/dev/null || fail "arming failed"
+  refusal="$home/state/curation-nudge.refusal"
+  mkdir "$refusal"
+  now=$(( $(date +%s) / 300 * 300 ))
+
+  out=$(FM_CURATION_NUDGE_NOW="$now" FM_CURATION_NUDGE_JITTER_MIN=0 \
+    FM_CURATION_NUDGE_JITTER_MAX=0 run_nudge "$home") || status=$?
+  [ "$status" -ne 0 ] || fail "an unpersisted refusal reported success: $out"
+  assert_contains "$out" 'CURATION_NUDGE: state persistence failure' \
+    "an unpersisted refusal needs a distinct state diagnostic"
+  assert_contains "$out" "$refusal" \
+    "the persistence diagnostic must name the failed path"
+  assert_contains "$out" 'draw refusal' \
+    "the persistence diagnostic must name the failed condition"
+  assert_not_contains "$out" 'no next curation sweep was scheduled because' \
+    "an unpersisted refusal must not report the persisted-refusal outcome"
+  out=$(FM_CURATION_NUDGE_NOW=$(( now + 7200 )) run_nudge "$home" --armed)
+  assert_contains "$out" 'CURATION_NUDGE: state persistence failure' \
+    "later health must preserve the persistence cause"
+  assert_not_contains "$out" 'nothing is running this home' \
+    "persistence failure must not masquerade as supervision failure"
+  pass "refusal persistence failure is actionable and non-successful"
+}
+
+test_next_due_persistence_failure_is_distinct_and_fails() {
+  local home out status=0 now next_due
+  home=$(make_home next-persist-failure)
+  run_nudge "$home" --arm >/dev/null || fail "arming failed"
+  next_due="$home/state/curation-nudge.next-due"
+  mkdir "$next_due"
+  now=$(( $(date +%s) / 300 * 300 + 60 ))
+
+  out=$(FM_CURATION_NUDGE_NOW="$now" FM_CURATION_NUDGE_JITTER_MIN=0 \
+    FM_CURATION_NUDGE_JITTER_MAX=0 run_nudge "$home") || status=$?
+  [ "$status" -ne 0 ] || fail "an unpersisted next target reported success: $out"
+  assert_contains "$out" 'CURATION_NUDGE: state persistence failure' \
+    "an unpersisted next target needs a distinct state diagnostic"
+  assert_contains "$out" "$next_due" \
+    "the persistence diagnostic must name the failed path"
+  assert_contains "$out" 'drawn next target' \
+    "the persistence diagnostic must name the failed condition"
+  assert_not_contains "$out" 'curation sweep is due' \
+    "an unpersisted target must not emit the successful nudge"
+  out=$(FM_CURATION_NUDGE_NOW=$(( now + 7200 )) run_nudge "$home" --armed)
+  assert_contains "$out" 'CURATION_NUDGE: state persistence failure' \
+    "later health must preserve the persistence cause"
+  assert_not_contains "$out" 'nothing is running this home' \
+    "persistence failure must not masquerade as supervision failure"
+  pass "next-target persistence failure is actionable and non-successful"
+}
+
 test_the_period_is_forty_eight_hours() {
   local home draws min max
   home=$(make_home period)
@@ -452,6 +529,9 @@ test_bootstrap_arms_the_nudge_and_asks_whether_it_is_still_running() {
 test_the_scheduler_never_lands_on_the_five_minute_grid
 test_a_window_with_no_off_grid_minute_refuses_rather_than_scheduling_on_it
 test_initial_detect_loudly_explains_an_exhausted_draw
+test_a_refused_successor_does_not_claim_the_nudge_fired
+test_refusal_persistence_failure_is_distinct_and_fails
+test_next_due_persistence_failure_is_distinct_and_fails
 test_the_period_is_forty_eight_hours
 test_successive_firings_drift_rather_than_repeating_one_time
 test_arming_schedules_the_first_sweep_without_waking_anyone
