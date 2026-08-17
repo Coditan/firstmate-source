@@ -98,6 +98,43 @@ test_an_unknown_sender_is_still_silently_dropped() {
   pass "an unregistered Telegram sender remains silently dropped"
 }
 
+test_an_unknown_sender_stays_silent_when_correspondent_config_is_malformed() {
+  local home="$TMP_ROOT/unknown-malformed" event="$TMP_ROOT/unknown-malformed.json" out status=0
+  new_home "$home"
+  {
+    printf '%s\n' 'name=bad name'
+    printf '%s\n' 'chat_id=2002'
+  } > "$home/config/fm-tg-correspondent"
+  event_json "$event" 3003 46 TEXT 'unknown sender'
+
+  out=$(run_route "$home" "$event") || status=$?
+  expect_code 0 "$status" "an unknown Telegram event with malformed correspondent config"
+  [ -z "$out" ] || fail "an unknown sender saw correspondent config diagnostics: $out"
+  [ ! -e "$home/state/tg-recv.inbox.jsonl" ] \
+    || fail "an unknown sender wrote the captain inbox"
+  [ ! -e "$home/state/tg-correspondents" ] \
+    || fail "an unknown sender wrote a correspondent inbox"
+  pass "an unknown sender stays silent when correspondent config is malformed"
+}
+
+test_a_registered_correspondent_gets_a_visible_diagnostic_when_config_is_malformed() {
+  local home="$TMP_ROOT/correspondent-malformed" event="$TMP_ROOT/correspondent-malformed.json" out status=0
+  new_home "$home"
+  {
+    printf '%s\n' 'name=bad name'
+    printf '%s\n' 'chat_id=2002'
+  } > "$home/config/fm-tg-correspondent"
+  event_json "$event" 2002 47 TEXT 'requirements note'
+
+  out=$(run_route "$home" "$event") || status=$?
+  [ "$status" -ne 0 ] || fail "a registered correspondent with malformed config was silently dropped"
+  assert_contains "$out" "telegram receiver route: FAILED - config/fm-tg-correspondent has an invalid name" \
+    "the registered correspondent lane did not produce a visible malformed-config diagnostic"
+  [ ! -e "$home/state/tg-correspondents" ] \
+    || fail "a malformed correspondent config wrote a correspondent inbox"
+  pass "a registered correspondent gets a visible malformed-config diagnostic"
+}
+
 test_a_correspondent_media_event_uses_the_same_inbox_boundary() {
   local home="$TMP_ROOT/media" event="$TMP_ROOT/media.json" out status=0 inbox
   new_home "$home"
@@ -131,6 +168,8 @@ test_a_captain_media_event_keeps_the_legacy_media_prefix() {
 test_a_captain_message_keeps_the_legacy_output_and_inbox
 test_a_registered_correspondent_message_is_tagged_and_spooled
 test_an_unknown_sender_is_still_silently_dropped
+test_an_unknown_sender_stays_silent_when_correspondent_config_is_malformed
+test_a_registered_correspondent_gets_a_visible_diagnostic_when_config_is_malformed
 test_a_correspondent_media_event_uses_the_same_inbox_boundary
 test_a_captain_media_event_keeps_the_legacy_media_prefix
 

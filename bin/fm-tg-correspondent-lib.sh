@@ -123,6 +123,41 @@ fm_tg_correspondent_load() {  # <config-dir>
   return 0
 }
 
+fm_tg_correspondent_probe_chat_id() {  # <config-dir>
+  local config_dir=$1 path line clean key value chat_id='' seen_chat_id=0
+
+  # shellcheck disable=SC2034 # Public source-library result read by callers.
+  FM_TG_CORRESPONDENT_CHAT_ID=
+
+  path=$(fm_tg_correspondent_config_path "$config_dir")
+  [ -f "$path" ] || return 1
+  [ -r "$path" ] || return 1
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    clean=${line%%#*}
+    fm_tg_correspondent_trim "$clean" clean
+    [ -n "$clean" ] || continue
+    case "$clean" in
+      *=*) ;;
+      *) continue ;;
+    esac
+    key=${clean%%=*}
+    value=${clean#*=}
+    fm_tg_correspondent_trim "$key" key
+    fm_tg_correspondent_trim "$value" value
+    [ "$key" = chat_id ] || continue
+    [ "$seen_chat_id" -eq 0 ] || return 1
+    fm_tg_correspondent_validate_chat_id "$value" || return 1
+    seen_chat_id=1
+    chat_id=$value
+  done < "$path"
+
+  [ "$seen_chat_id" -eq 1 ] || return 1
+  # shellcheck disable=SC2034 # Public source-library result read by callers.
+  FM_TG_CORRESPONDENT_CHAT_ID=$chat_id
+  return 0
+}
+
 fm_tg_correspondent_inbox_dir() {  # <state-dir> <name>
   printf '%s/tg-correspondents/%s\n' "$1" "$2"
 }

@@ -174,18 +174,10 @@ if [ "$chat_id" = "$CHAT_ID" ]; then
   exit 10
 fi
 
-correspondent_loaded=0
-if fm_tg_correspondent_load "$CONFIG"; then
-  correspondent_loaded=1
-else
-  load_rc=$?
-  if [ "$load_rc" -ne 1 ]; then
-    die "$FM_TG_CORRESPONDENT_CONFIG_ERROR"
-  fi
-fi
-
-if [ "$correspondent_loaded" -eq 1 ] \
+if fm_tg_correspondent_probe_chat_id "$CONFIG" \
   && [ "$chat_id" = "$FM_TG_CORRESPONDENT_CHAT_ID" ]; then
+  fm_tg_correspondent_load "$CONFIG" \
+    || die "$FM_TG_CORRESPONDENT_CONFIG_ERROR"
   inbox=$(fm_tg_correspondent_inbox_path "$STATE" "$FM_TG_CORRESPONDENT_NAME")
   append_event_json "$inbox" third-party "$FM_TG_CORRESPONDENT_NAME"
   body="third-party Telegram message from $FM_TG_CORRESPONDENT_NAME recorded at $inbox; this correspondent has no captain decision authority"
