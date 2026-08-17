@@ -75,7 +75,8 @@ Treat a finding as a repair, never as a fresh question for the captain: the answ
 A home adopting this mechanism starts with the losses that happened before it existed, and those are not repairs.
 The first run on the main home reported 58 findings of which 57 were pre-mechanism and irreparable, which would have made the check unreadable from the first day.
 Run `bin/fm-decision-ledger.sh --record-baseline` once per home, after reading what it will cover, to record that those particular answers are lost rather than pending.
-It covers only records that are already closed, refuses to run twice, states its count on every later run, and never silences a record that can still be repaired.
+It covers only records that are already closed with an observed closed date, refuses to run twice, states its count on every later run, and never silences a record that can still be repaired.
+A dateless closed record remains reported because the baseline cannot bind it to a closure observed when the baseline was taken.
 
 ### What the audit cannot see
 

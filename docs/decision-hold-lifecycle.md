@@ -129,7 +129,8 @@ Three rules keep the baseline from becoming a mute switch, and each is a regress
 
 - **Only an already-closed record may be covered.**
   A closed record's answer is either stored or lost, and no later act recovers a lost one; every other class sits on a live record and stays repairable.
-  The permitted classes are enforced when the file is read, not trusted from it, so a hand-added line naming a live-record class is ignored and reported as `baseline rejected`.
+  The permitted classes and the record's closed date observed at baseline time are enforced when the file is read, not trusted from it, so a hand-added or stale line is ignored and reported as `baseline rejected`.
+  A closed record without a closed date is skipped and remains reported because it cannot be bound to an observed closure.
 - **A record closed after the baseline was taken is a new failure** and is reported in full.
   The baseline covers the records it named, never the shape of the finding.
 - **Nothing is dropped.** The file is the list, `--audit --json` still carries every withheld finding under `baseline_excluded`, the withheld count is stated on every direct run, and re-taking a baseline means deleting the file by hand.

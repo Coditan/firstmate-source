@@ -289,6 +289,43 @@ test_an_answer_folds_the_questions_it_settles() {
   pass "an answer folds the open questions it settles and keeps the trail to them"
 }
 
+test_retry_completes_folds_after_the_successor_already_exists() {
+  local home out
+  home=$(make_home fold-retry)
+  : > "$home/state/old-pass.meta"
+  : > "$home/state/new-pass.meta"
+  run_hold "$home" hold old-pass scope --title "Old scope question" --reason "undecided" \
+    --repo widgets --premise "the scope is unset" >/dev/null 2>&1 || fail "old hold failed"
+
+  run_hold "$home" hold new-pass scope --title "Better scope question" --reason "undecided" \
+    --repo widgets --premise "the scope is still unset" --new-ground >/dev/null 2>&1 \
+    || fail "successor hold setup failed"
+  run_hold "$home" hold new-pass scope --title "Better scope question" --reason "undecided" \
+    --repo widgets --premise "the scope is still unset" \
+    --supersedes old-pass-decision-scope >/dev/null 2>&1 \
+    || fail "hold retry did not complete its interrupted fold"
+
+  printf 'nur direkte kunden.\n' > "$home/ruling.txt"
+  run_hold "$home" record widgets-ruling scope --door chat --decision-file "$home/ruling.txt" \
+    --title "Final scope answer" --repo widgets --new-ground >/dev/null 2>&1 \
+    || fail "resolved successor setup failed"
+  run_hold "$home" record widgets-ruling scope --door chat --decision-file "$home/ruling.txt" \
+    --title "Final scope answer" --repo widgets \
+    --supersedes new-pass-decision-scope >/dev/null 2>&1 \
+    || fail "record retry did not complete its interrupted fold"
+
+  out=$(run_ledger "$home" --records)
+  assert_contains "$out" $'superseded\told-pass-decision-scope' \
+    "hold retry must fold the question left open after successor creation"
+  assert_contains "$out" $'superseded\tnew-pass-decision-scope' \
+    "record retry must fold the question left open after successor resolution"
+  run_hold "$home" record widgets-ruling scope --door chat --decision-file "$home/ruling.txt" \
+    --title "Final scope answer" --repo widgets \
+    --supersedes new-pass-decision-scope >/dev/null 2>&1 \
+    || fail "completed disposal replay must remain idempotent"
+  pass "retries complete interrupted folds for holds and recorded answers"
+}
+
 # Folding a question must take its gated work with it. Leaving the work pointing at
 # a closed record strands it; dropping the edge outright lifts a gate nobody lifted.
 test_a_fold_moves_the_work_the_question_gated() {
@@ -387,12 +424,13 @@ seed_pre_mechanism_home() {  # <name> - a home whose captain records predate the
 - [x] old-a-decision-lost - He answered this one and nobody stored it (repo: firstmate) (kind: captain) (done 2026-08-01)
 - [x] old-b-decision-lost - And this one, whose own text still says it is waiting (repo: firstmate) (kind: captain) (done 2026-08-02)
   State: awaiting captain decision
+- [x] old-dateless-decision-lost - This closed record has no observable closure date (repo: firstmate) (kind: captain)
 EOF
   printf '%s\n' "$home"
 }
 
 test_the_baseline_converges_the_audit_without_hiding_what_it_covers() {
-  local home audit rc=0
+  local home audit baseline_out rc=0
   home=$(seed_pre_mechanism_home baseline-converges)
 
   audit=$(run_ledger "$home" --audit) || rc=$?
@@ -402,15 +440,16 @@ test_the_baseline_converges_the_audit_without_hiding_what_it_covers() {
   assert_contains "$audit" "baseline absent - 3 of the findings above" \
     "an unbaselined home must be told how many findings a baseline would cover, and how to take one"
 
-  run_ledger "$home" --record-baseline >/dev/null 2>&1 \
+  baseline_out=$(run_ledger "$home" --record-baseline 2>&1) \
     || fail "recording the adoption baseline must succeed on a home that has losses"
+  assert_contains "$baseline_out" "skipped 1 finding(s) whose closed record has no closed date" \
+    "a dateless closed record must remain visible rather than becoming forgeable baseline state"
 
   rc=0
   audit=$(run_ledger "$home" --audit) || rc=$?
-  [ "$rc" -eq 0 ] || fail "with every finding baselined and nothing live, the audit must read clean"
-  if printf '%s' "$audit" | command grep -q "closed-without-record"; then
-    fail "a baselined loss must stop demanding action at every session start"
-  fi
+  [ "$rc" -eq 1 ] || fail "the dateless closed record must remain as the honest audit residue"
+  assert_contains "$audit" "closed-without-record old-dateless-decision-lost" \
+    "a dateless closed record cannot be bound to the closure observed at baseline time"
   assert_contains "$audit" "baseline recorded - 3 finding(s)" \
     "a withheld finding that is never mentioned is a hidden one; the count must always be stated"
   assert_contains "$audit" "lost, not pending" \
@@ -446,16 +485,23 @@ test_a_baseline_cannot_silence_a_repairable_record() {
   assert_contains "$audit" "closed-without-record after-baseline-decision-lost" \
     "the baseline covers the records it named, never the shape of the finding"
 
-  # And a hand-written line naming a class that sits on a LIVE record is refused.
+  # A permitted-class line forged while a record is live must not pre-silence its later close.
+  printf 'closed-without-record live-decision-still-open 2026-08-18\n' >> "$home/data/decision-baseline.md"
+  sed -i 's/^- \[ \] live-decision-still-open /- [x] live-decision-still-open /; s/ (since 2026-08-17) (hold:/ (done 2026-08-18) (hold:/' \
+    "$home/data/backlog.md"
+
+  # Hand-written legacy and live-class lines are refused too.
   printf 'premise-unmeasurable live-decision-still-open\n' >> "$home/data/decision-baseline.md"
   printf 'unfinished-close live-decision-still-open\n' >> "$home/data/decision-baseline.md"
   rc=0
   audit=$(run_ledger "$home" --audit) || rc=$?
   [ "$rc" -eq 1 ] || fail "a rejected baseline line must not make the audit read clean"
-  assert_contains "$audit" "baseline rejected - 2 line(s)" \
-    "a baseline line that reaches for a live record must be reported, not silently dropped"
-  assert_contains "$audit" "only cover an already-closed record" \
-    "the rejection must say why those lines carry no authority"
+  assert_contains "$audit" "closed-without-record live-decision-still-open" \
+    "a line added while the record was live must not suppress its later closure"
+  assert_contains "$audit" "baseline rejected - 3 line(s)" \
+    "every stale or dateless baseline line must be reported, not silently dropped"
+  assert_contains "$audit" "closure observed when the baseline was recorded" \
+    "the rejection must say which missing authority makes those lines invalid"
   pass "a baseline covers only what was already closed and can never mute a repairable record"
 }
 
@@ -504,6 +550,7 @@ EOF
 test_settled_decision_survives_retention_into_the_archive
 test_a_second_question_cannot_be_filed_without_disposing_of_the_first
 test_an_answer_folds_the_questions_it_settles
+test_retry_completes_folds_after_the_successor_already_exists
 test_a_fold_moves_the_work_the_question_gated
 test_an_unmeasurable_premise_is_never_treated_as_a_false_one
 test_an_edited_decision_stops_reading_as_verified

@@ -935,11 +935,11 @@ command_hold() {
     body=$(build_open_body "$origin" "$key" "$premise" never)
     tasks_axi add "$id" "$title" --kind captain --repo "$repo" --body "$body" >/dev/null \
       || fail "could not create captain decision item $id"
-    # Folded only after the successor exists, so an interruption leaves the earlier
-    # records open rather than folded into a record that was never created.
-    # shellcheck disable=SC2086  # $folds is a deliberate space-separated id list
-    [ -z "$folds" ] || fold_records "$id" "superseded by $id at intake" $folds
   fi
+  # Folded after the successor exists and replayed at the shared existing-record
+  # boundary, so a retry completes an interrupted disposal without duplicating it.
+  # shellcheck disable=SC2086  # $folds is a deliberate space-separated id list
+  [ -z "$folds" ] || fold_records "$id" "superseded by $id at intake" $folds
   tasks_axi hold "$id" --reason "$reason" --kind captain >/dev/null \
     || fail "could not activate captain hold $id"
   verify_hold_active "$id"
@@ -1166,6 +1166,8 @@ command_record() {
     verify_resolution_identity "$id" "$(show_field "$(task_show "$id")" body)" \
       "$decision_digest" "$routed_csv"
     verify_stored_decision "$id" "$decision" "$decision_digest"
+    # shellcheck disable=SC2086  # $folds is a deliberate space-separated id list
+    [ -z "$folds" ] || fold_records "$id" "answered by the captain decision recorded in $id" $folds
     printf 'recorded: %s (already durable)\n' "$id"
     return 0
   fi

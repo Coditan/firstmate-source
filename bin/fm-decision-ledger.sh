@@ -91,15 +91,16 @@
 # `--record-baseline` writes the findings that sit on ALREADY-CLOSED records into
 # data/decision-baseline.md, once, as a deliberate statement that those particular
 # answers are lost rather than pending. `--audit` then withholds exactly those
-# (class, id) pairs and says in one line how many it withheld and where they are
+# (class, id, observed closed date) entries and says in one line how many it withheld and where they are
 # listed. It is a disclosure, never a deletion: the file is the list, `--audit
 # --json` still carries every withheld finding under `baseline_excluded`, and
 # re-taking a baseline means removing that file by hand.
 #
-# ONLY A CLOSED RECORD MAY BE BASELINED. A closed record's answer is either stored
+# ONLY A DATED CLOSED RECORD MAY BE BASELINED. A closed record's answer is either stored
 # or it is lost, and nothing a later session does can recover a lost one. Every
 # other class sits on a LIVE record, which is repairable by definition, so no
-# baseline may ever silence one. A record closed AFTER the baseline was taken is a
+# baseline may ever silence one. A dateless closed record cannot be bound to the
+# closure observed at baseline time, so it remains reported. A record closed AFTER the baseline was taken is a
 # genuine new failure and is reported in full. Those two rules together are what
 # stop a baseline being used to launder today's mistake into yesterday's history.
 #
@@ -190,8 +191,8 @@ done
 
 command -v jq >/dev/null 2>&1 || die "jq is required"
 
-# The baseline as JSON [{class, id}], and empty when this home has never taken one.
-# Anything it cannot parse as `<class> <id>` is skipped rather than guessed at, on
+# The baseline as JSON [{class, id, closed}], and empty when this home has never taken one.
+# Anything it cannot parse with at least `<class> <id>` is skipped rather than guessed at, on
 # the same rule the rest of this script follows: a misread line here would silence a
 # real finding, which is the one failure a baseline must never be able to cause.
 read_baseline() {
@@ -199,8 +200,8 @@ read_baseline() {
   awk '
     BEGIN { printf "[" }
     /^[[:space:]]*#/ { next }
-    NF != 2 { next }
-    { printf "%s{\"class\":\"%s\",\"id\":\"%s\"}", (n++ ? "," : ""), $1, $2 }
+    NF < 2 { next }
+    { printf "%s{\"class\":\"%s\",\"id\":\"%s\",\"closed\":\"%s\"}", (n++ ? "," : ""), $1, $2, (NF == 3 ? $3 : "") }
     END { printf "]" }
   ' "$BASELINE"
 }
@@ -539,21 +540,24 @@ done
 
 AUDIT_ALL=$(printf '%s' "$CLASSIFIED" | jq -c --argjson altered "$ALTERED" '.audit + $altered')
 
-# THE BASELINE SPLIT. A (class, id) pair the baseline names is withheld from the
+# THE BASELINE SPLIT. A (class, id, observed closed date) entry is withheld from the
 # findings that demand action and carried instead under baseline_excluded, where a
 # reader and `--json` can both still see it. Nothing is dropped, and the withheld
 # count is stated on every direct --audit run.
 BASELINE_JSON=$(read_baseline)
 BASELINE_DATE=$(baseline_recorded)
-# THE CLASS RULE IS ENFORCED HERE, NOT TRUSTED FROM THE FILE. The baseline is an
-# ordinary text file a hand could add any line to, so a line naming a class that
-# sits on a LIVE record is ignored rather than honoured. Without this the file would
-# be a general mute switch, and the one thing a baseline must never be able to do is
-# silence a finding that is still repairable.
-BASELINE_HONOURED=$(printf '%s' "$BASELINE_JSON" | jq -c --argjson classes "$BASELINE_CLASSES" \
-  'map(. as $b | select($classes | index($b.class)))')
-BASELINE_REJECTED=$(printf '%s' "$BASELINE_JSON" | jq -c --argjson classes "$BASELINE_CLASSES" \
-  'map(. as $b | select(($classes | index($b.class)) == null))')
+# Class, current closure, observed closure and baseline date are all enforced here,
+# not trusted from the hand-editable file.
+BASELINE_HONOURED=$(printf '%s' "$BASELINE_JSON" | jq -c \
+  --argjson classes "$BASELINE_CLASSES" --argjson records "$CLASSIFIED" --arg date "$BASELINE_DATE" '
+  map(. as $b
+      | ($records.captain | map(select(.id == $b.id)) | first // null) as $r
+      | select(($classes | index($b.class)) != null
+               and $r != null and $r.closed != ""
+               and $b.closed != "" and $b.closed == $r.closed
+               and $date != "" and $b.closed <= $date))')
+BASELINE_REJECTED=$(printf '%s' "$BASELINE_JSON" | jq -c --argjson honoured "$BASELINE_HONOURED" '
+  map(. as $b | select($honoured | index($b) == null))')
 # The finding is bound to $f before the lookup because `index(f)` evaluates f
 # against its own input - the covered list - and not against the finding tested.
 AUDIT=$(printf '%s' "$AUDIT_ALL" | jq -c --argjson base "$BASELINE_HONOURED" '
@@ -564,12 +568,19 @@ BASELINE_EXCLUDED=$(printf '%s' "$AUDIT_ALL" | jq -c --argjson base "$BASELINE_H
   | map(. as $f | select(($covered | index($f.class + " " + $f.id)) != null))')
 # What a baseline WOULD cover if one were taken now. Used to tell a home with no
 # baseline that one is available, and to build the file under --record-baseline.
-BASELINEABLE=$(printf '%s' "$AUDIT_ALL" | jq -c --argjson classes "$BASELINE_CLASSES" \
-  'map(select(.class as $c | $classes | index($c)))')
+BASELINE_CANDIDATES=$(printf '%s' "$AUDIT_ALL" | jq -c --argjson classes "$BASELINE_CLASSES" \
+  --argjson records "$CLASSIFIED" '
+  map(select(.class as $c | $classes | index($c))
+      | . as $f
+      | ($records.captain | map(select(.id == $f.id)) | first // null) as $r
+      | . + {closed: ($r.closed // "")})')
+BASELINEABLE=$(printf '%s' "$BASELINE_CANDIDATES" | jq -c 'map(select(.closed != ""))')
+BASELINE_SKIPPED=$(printf '%s' "$BASELINE_CANDIDATES" | jq -c 'map(select(.closed == ""))')
 
 if [ "$MODE" = record-baseline ]; then
   [ -e "$BASELINE" ] && die "a baseline already exists at $BASELINE (recorded ${BASELINE_DATE:-unknown}); remove it by hand to take a new one, so a baseline can never be re-taken as a side effect of a routine run"
   n=$(printf '%s' "$BASELINEABLE" | jq 'length')
+  skipped=$(printf '%s' "$BASELINE_SKIPPED" | jq 'length')
   [ "$n" -gt 0 ] || die "there is nothing to baseline: no finding in $DATA sits on an already-closed captain record"
   today=$(date -u +%Y-%m-%d)
   {
@@ -587,10 +598,11 @@ if [ "$MODE" = record-baseline ]; then
     printf '# here, and a record closed after %s is a genuine new failure and is\n' "$today"
     printf '# reported in full. To re-take the baseline, delete this file by hand.\n'
     printf '#\n'
-    printf '# <audit class> <record id>\n'
-    printf '%s' "$BASELINEABLE" | jq -r 'sort_by(.class, .id)[] | "\(.class) \(.id)"'
+    printf '# <audit class> <record id> <closed date observed at baseline>\n'
+    printf '%s' "$BASELINEABLE" | jq -r 'sort_by(.class, .id)[] | "\(.class) \(.id) \(.closed)"'
   } > "$BASELINE" || die "could not write $BASELINE"
   printf 'recorded %s finding(s) on already-closed captain records as lost rather than pending\n' "$n"
+  printf 'skipped %s finding(s) whose closed record has no closed date; they remain reported\n' "$skipped"
   printf 'baseline: %s\n' "$BASELINE"
   printf 'these are withheld from --audit from now on; every finding on a live record still reports\n'
   exit 0
@@ -641,7 +653,7 @@ REJECTED_COUNT=$(printf '%s' "$BASELINE_REJECTED" | jq 'length')
 # straight into its diagnostic stream.
 baseline_note() {
   if [ "$REJECTED_COUNT" -gt 0 ]; then
-    printf 'baseline rejected - %s line(s) in %s name a finding class that sits on a live record; a baseline may only cover an already-closed record, so those lines are ignored and every finding they name still reports\n' \
+    printf 'baseline rejected - %s line(s) in %s do not match an allowed finding and the closure observed when the baseline was recorded; those lines are ignored and every finding they name still reports\n' \
       "$REJECTED_COUNT" "$BASELINE"
   fi
   if [ "$EXCLUDED_COUNT" -gt 0 ]; then
