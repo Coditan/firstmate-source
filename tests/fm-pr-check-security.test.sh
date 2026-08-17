@@ -14,6 +14,7 @@ set -u
 
 PR_CHECK="$ROOT/bin/fm-pr-check.sh"
 PR_MERGE="$ROOT/bin/fm-pr-merge.sh"
+DECISION_HOLD="$ROOT/bin/fm-decision-hold.sh"
 MIGRATE="$ROOT/bin/fm-pr-check-migrate.sh"
 POLL="$ROOT/bin/fm-pr-poll.sh"
 WATCH="$ROOT/bin/fm-watch.sh"
@@ -632,6 +633,48 @@ SH
       || fail "legacy task teardown changed the reserved migration namespace"
   done
   pass "valid direct and merge flows record exact metadata and reject multiline head metadata"
+}
+
+test_decision_completion_preserves_poll_validation() {
+  local dir state id hold
+  command -v tasks-axi >/dev/null 2>&1 || {
+    pass "skipped: tasks-axi not found for decision completion PR poll regression"
+    return
+  }
+  id=task-a
+  dir=$(make_case decision-completion-poll)
+  state="$dir/home/state"
+  cp "$ROOT/.tasks.toml" "$dir/home/.tasks.toml"
+  cat > "$dir/home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+
+## Done
+EOF
+  write_task_meta "$dir" "$id"
+
+  run_check_entry "$dir" "$id" https://github.com/o/r/pull/10 >/dev/null 2> "$dir/pr-check.err" \
+    || fail "could not arm a PR poll before recording a decision: $(cat "$dir/pr-check.err")"
+  fm_pr_poll_artifacts_valid "$state" "$id" "$POLL" \
+    || fail "PR poll did not validate immediately after arming"
+
+  hold=$(FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$dir/home" \
+    FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$dir/home/data" \
+    FM_CONFIG_OVERRIDE="$dir/home/config" PATH="$dir/fakebin:$PATH" \
+    "$DECISION_HOLD" hold "$id" route --title "Choose the sample route" \
+      --reason "captain route choice pending" --repo sample) \
+    || fail "could not record a decision hold"
+  [ "$hold" = "$id-decision-route" ] || fail "decision hold identity was not deterministic: $hold"
+  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$dir/home" \
+    FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$dir/home/data" \
+    FM_CONFIG_OVERRIDE="$dir/home/config" PATH="$dir/fakebin:$PATH" \
+    "$DECISION_HOLD" complete "$id" route >/dev/null \
+    || fail "could not complete the decision inventory"
+
+  fm_pr_poll_artifacts_valid "$state" "$id" "$POLL" \
+    || fail "decision completion invalidated an authenticated PR poll"
+  pass "decision completion leaves an authenticated PR poll armed"
 }
 
 run_watcher_bounded() {
@@ -2848,6 +2891,7 @@ test_parser_matrix
 test_gitlab_merge_watch
 test_invalid_entrypoints_have_zero_side_effects
 test_valid_recording_and_merge_derivation
+test_decision_completion_preserves_poll_validation
 test_rejected_metacharacter_bytes_are_inert
 test_static_poll_contract
 test_atomic_interruption_leaves_no_partial_artifact

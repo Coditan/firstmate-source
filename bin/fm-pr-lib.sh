@@ -11,6 +11,15 @@
 # instances, so the host is part of that identity rather than a constant. Every
 # consumer re-derives the identity from the stored URL and refuses any record
 # whose parts do not reconstruct that exact URL.
+#
+# state/<id>.meta is shared append-only key=value metadata, and this library
+# owns only the PR-specific identity contract for that file. A current
+# authenticated poll requires exactly one canonical pr= line, validates every
+# pr_head= value it sees, and otherwise accepts well-formed metadata keys before
+# or after pr=. No script may rely on pr= reserving the file tail. The
+# non-executing legacy migration uses the stricter legacy predicate below because
+# pre-authentication check files were runnable shell and must stay quarantined
+# when their post-pr bytes are ambiguous.
 
 FM_PR_PROVIDER=
 FM_PR_URL=
@@ -253,8 +262,20 @@ fm_pr_regular_destination_on_device_or_absent() {
   [ ! -e "$path" ] || [ "$(fm_pr_file_device "$path")" = "$device" ]
 }
 
+fm_pr_metadata_line_key_valid() {
+  local line=${1-} key
+  case "$line" in
+    *$'\r'*) return 1 ;;
+    *=*) key=${line%%=*} ;;
+    *) return 1 ;;
+  esac
+  case "$key" in
+    ''|*[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+}
+
 fm_pr_metadata_identity_parse() {
-  local file=$1 line value pr_count=0 seen_pr=0 post_pr_invalid=0
+  local file=$1 line value pr_count=0 invalid=0
   FM_PR_META_PROVIDER=
   FM_PR_META_URL=
   FM_PR_META_HOST=
@@ -263,6 +284,10 @@ fm_pr_metadata_identity_parse() {
   [ -f "$file" ] && [ ! -L "$file" ] || return 1
   [ "$(fm_pr_file_link_count "$file")" = 1 ] || return 1
   while IFS= read -r line || [ -n "$line" ]; do
+    fm_pr_metadata_line_key_valid "$line" || {
+      invalid=1
+      continue
+    }
     case "$line" in
       pr=*)
         pr_count=$((pr_count + 1))
@@ -275,24 +300,31 @@ fm_pr_metadata_identity_parse() {
           FM_PR_META_PATH=$FM_PR_PATH
           FM_PR_META_NUMBER=$FM_PR_NUMBER
         fi
-        seen_pr=1
         ;;
       pr_head=*)
-        if [ "$seen_pr" -eq 1 ]; then
-          value=${line#pr_head=}
-          fm_pr_head_valid "$value" || post_pr_invalid=1
-        fi
+        value=${line#pr_head=}
+        fm_pr_head_valid "$value" || invalid=1
         ;;
-      x_request=*|x_request_ts=*|x_followups=*|x_platform=*|x_reply_max_chars=*)
-        ;;
+    esac
+  done < "$file"
+  [ "$pr_count" -eq 1 ] || return 1
+  [ "$invalid" -eq 0 ] || return 1
+  [ -n "$FM_PR_META_URL" ]
+}
+
+fm_pr_legacy_metadata_identity_parse() {
+  local file=$1 line seen_pr=0 post_pr_invalid=0
+  fm_pr_metadata_identity_parse "$file" || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      pr=*) seen_pr=1 ;;
+      pr_head=*|x_request=*|x_request_ts=*|x_followups=*|x_platform=*|x_reply_max_chars=*) ;;
       *)
         [ "$seen_pr" -eq 0 ] || post_pr_invalid=1
         ;;
     esac
   done < "$file"
-  [ "$pr_count" -eq 1 ] || return 1
-  [ "$post_pr_invalid" -eq 0 ] || return 1
-  [ -n "$FM_PR_META_URL" ]
+  [ "$post_pr_invalid" -eq 0 ]
 }
 
 # Sidecar layout: provider, url, host, path, number, one per line. A sidecar

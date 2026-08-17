@@ -32,6 +32,8 @@
 # no unresolved captain decision. Later review passes may add keys; a live task's
 # metadata inventory is unioned idempotently. A post-teardown visual review can
 # complete against the surviving report and holds without recreating task state.
+# `complete` may append its metadata keys after a task's PR fields; bin/fm-pr-lib.sh
+# owns the PR parser contract and does not reserve a state/<id>.meta tail.
 # `verify` is read-only and is called by scout teardown so teardown cannot erase a
 # source before this gate has succeeded. A resolved captain hold that retention
 # moved into data/done-archive.md remains a durable completion record, but only
