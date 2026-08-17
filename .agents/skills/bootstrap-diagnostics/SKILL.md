@@ -68,7 +68,8 @@ When any diagnostic needs captain attention, report the plain consequence and re
   Do not invent or auto-start an unapproved background-process fallback.
 - `BOSUN_UNIT: missing ...` or `BOSUN_UNIT: ... is disabled ...` - the home opted into the observer tier but nothing keeps it running between sessions, so it judges only while someone is watching it.
   Explain that it observes and records and changes nothing about what reaches the captain, that it spends an agent turn per judgement, ask for explicit consent, then run `bin/fm-bootstrap.sh install bosun-unit` only after approval.
-  The installation copies the tracked template, writes this home's private environment, reloads the user manager, and enables and starts only the instance encoded from this home.
+  The installation copies the tracked template, writes this home's private environment, reloads the user manager, enables only the instance encoded from this home, and unconditionally restarts it so an already-running instance loads the recorded configuration.
+  A running observer that reads `STALLED` or `BLIND` is restarted only after its evidence is recorded on the findings surface.
 - `BOSUN_UNIT: <instance> needs locked convergence ...` - this read-only session found stale unit bytes or a stale recorded environment; leave repair to the lock-holding session and rerun session start after it converges.
 - `BOSUN_UNIT: <instance> convergence failed ...` - inspect the named `systemctl --user status` result and this home's recorded service environment, then report the concrete failure.
 - `BOSUN_UNIT: nothing is being judged - <STATE>: <detail>` - this is the reading that matters, and it is taken from the observer's own work rather than from whether the unit says active.

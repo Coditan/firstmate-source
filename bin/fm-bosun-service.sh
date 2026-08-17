@@ -17,10 +17,11 @@
 # script is silent and installs nothing: the bosun spends an agent turn per
 # judgement (docs/bosun-observer.md records the cost), so a standing process
 # that spends it is a decision each home makes rather than one that arrives with
-# an instruction-surface update. First installation and enablement then happen
-# only through install-unit, after the captain approves the BOSUN_UNIT
-# diagnostic; an already-installed unit converges at locked bootstrap
-# boundaries. The flag gates whether this component is considered at all;
+# an instruction-surface update. First installation, enablement, and an
+# unconditional restart then happen only through install-unit, after the
+# captain approves the BOSUN_UNIT diagnostic; an already-installed unit
+# converges at locked bootstrap boundaries. The flag gates whether this
+# component is considered at all;
 # removing it after installation stops future convergence rather than stopping
 # the unit, deliberately matching the frequency monitor's two-step off switch.
 #

@@ -319,7 +319,9 @@ Removing the flag after installation stops future convergence and does not stop 
 Turning an installed observer off is the separate explicit step `systemctl --user disable --now fm-bosun@$(systemd-escape --path "$FM_HOME").service`.
 This two-step off switch deliberately matches the frequency monitor because two near-identical units behaving differently would be a worse trap.
 That gate exists because one judgement costs an agent turn, so a standing process that spends it is a decision each home makes rather than one an instruction-surface update delivers.
-The first unit copy and `enable --now` then require explicit captain consent through `BOSUN_UNIT:` and `bin/fm-bootstrap.sh install bosun-unit`, the same as the other units above.
+The first unit copy, enablement, and unconditional restart require explicit captain consent through `BOSUN_UNIT:` and `bin/fm-bootstrap.sh install bosun-unit`.
+The restart is load-bearing because starting an already-active instance is a no-op: `enable --now` alone could leave the old executable, `PATH`, judge resolution, and unit directives running while later convergence sees matching recorded files and never restarts it.
+The installation boundary follows the same never-restart-without-a-record rule as convergence, so reinstalling over a running observer that reads `STALLED` or `BLIND` preserves its evidence on the findings surface before restarting it.
 
 The tracked template is `systemd/fm-bosun@.service` and the instance is `fm-bosun@$(systemd-escape --path "$FM_HOME").service`, with private per-home values in mode-`0600` `state/.bosun-service.env`.
 That environment records the resolved `PATH` for the reason [`bin/fm-service-path-lib.sh`](../bin/fm-service-path-lib.sh) documents, plus the home's judge: the judge is a per-home command rather than a fixed tool, so it is resolved into the composed value and separately reported when the recorded value cannot reach it.
