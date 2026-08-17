@@ -853,6 +853,7 @@ FM_WATCH_TRIAGE_LOG_MAX_BYTES=262144   # size cap for the watcher's absorbed-wak
 FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT=     # optional seconds allowed for bootstrap's best-effort clone refresh; unset/blank defaults to max(20, 5 + 3 * origin-backed-project-count)
 FM_SELF_DRIFT_BOOTSTRAP_TIMEOUT=10   # seconds allowed for bootstrap's best-effort origin fetch when checking the primary checkout's default branch for self-drift
 FM_FIRSTMATE_UPSTREAM_URL=      # highest-precedence currency comparison base for BOTH upstream checks, above config/firstmate-update-base and config/fork-sync-upstream; passed through unvalidated
+FM_FIRSTMATE_FORK_URL=          # highest-precedence curated-fork side of the fork-sync comparison, above config/fork-sync-fork and this checkout's fork and origin remotes; passed through unvalidated
 FM_FLEET_PRUNE=1        # set to 0 to skip pruning local branches whose upstream is gone
 FM_STALE_WORKTREE_LOCK_AGE_SECS=30       # min mtime age before fm-teardown.sh treats a leftover worktree git index.lock as provably stale
 FM_TREEHOUSE_RETURN_LOCK_RETRIES=3        # retries after a treehouse return fails on the transient git index.lock signature
