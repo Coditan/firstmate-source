@@ -62,8 +62,8 @@ It refuses an archive for a shared file, and it refuses a private run with no ar
    The driver makes this the default verdict on every entry, so keeping one whole is the deviation and costs a written reason.
 2. **The route back lives inside the loaded half.** It is the only part read.
 3. **Prove the route, do not assert it.**
-   Take archived facts, describe the realistic situation needing each, and show the actual command and output that recovers it using only what stays loaded.
-   The driver runs the recovery and prints the transcript; you write the situation.
+   The driver executes the documented route once and requires its output to recover every archived heading occurrence using only what stays loaded.
+   It prints a bounded worked transcript; describe the realistic situation needing each printed example.
 4. **Every deletion is listed with the evidence that killed it.**
    The bar for archiving is judgement; the bar for deleting is proof.
    An unlisted deletion is the defect this exercise exists to prevent.
@@ -137,6 +137,8 @@ Take it before you edit anything; there is no way to reconstruct it afterwards.
   --home /home/coditan/coditan-firstmate
 ```
 
+Real inventory output from this home, abridged:
+
 ```
 INVENTORY: 8 entries from .../data/learnings.md (shape private, level 2) -> /tmp/worksheet.md
   every verdict is pre-filled `split`. Change one only with a `why:` of at least 16 characters.
@@ -166,7 +168,7 @@ The driver does not rewrite knowledge files, and should not: prose surgery is ju
 
 Write the loaded half and the archive yourself, following the worksheet.
 Put the route back **inside the loaded half**, and make it a command rather than a filename.
-This is the shape that passes, from this home's real `data/learnings.md`:
+This is loaded-half content from this home's real `data/learnings.md`, not a shell command:
 
 ```
 Reach it with `grep -n '^## ' data/learnings-longterm.md` and read the one section.
@@ -198,13 +200,15 @@ It asserts, and exits non-zero on any of:
 - a `split` left its rule nowhere, or a `fold` names no surviving heading;
 - a `stub` names no owner path that exists, or the file never points at it;
 - the loaded half does not name the archive, or names it with no runnable search;
-- a sampled archived fact could not actually be recovered.
+- the documented route command fails to recover every archived heading occurrence.
 
 Then it executes the documented command once against a protected copy and asserts that its output reaches every archived heading.
 The `--prove-route` value limits only the printed example, never the assertion.
 
 The passing output below came from a current run over a copy of the first two real entries under `Cost and quota` in `/home/coditan/coditan-firstmate/data/learnings-longterm.md`.
 The source home was read only; the baseline, loaded half, archive, worksheet, and snapshot were worktree-local copies under `.curate-proof/`.
+
+Real output from that worked copy:
 
 ```
 HEADINGS  before 3  ->  after 2 (loaded 1 + archive 1)
@@ -235,7 +239,9 @@ CHECK PASSED: headings 3 -> 2, bytes 2174 -> 196, every deletion is declared, an
   --home /home/coditan/coditan-firstmate
 ```
 
-It prints before and after in bytes and share, the verdict counts, the fold list, and the deletion ledger with each entry's evidence verbatim:
+It prints before and after in bytes and share, the verdict counts, the fold list, and the deletion ledger with each entry's evidence verbatim.
+
+Real output from that worked copy:
 
 ```
 STARTUP COST
@@ -295,6 +301,8 @@ Each `stub` verdict's `why` must name the owner path the detail moved to.
 The check requires that path to exist and requires the pruned file to actually point at it, so a stub that quietly drops its detail cannot pass.
 
 Passing a `--archive` here is refused outright:
+
+Real refusal output from this home, abridged:
 
 ```
 fm-curate-knowledge: refused: --archive with --shape shared.
