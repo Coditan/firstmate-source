@@ -133,7 +133,8 @@ It also removes the check and asserts the unarmed reading, and holds a live, sch
 
 ## Cost
 
-The wake is one line, at most once per 48 hours.
+An ordinary firing emits one wake line, at most once per 48 hours.
+A firing whose successor draw refuses emits that wake plus a refusal diagnostic because the second line names a scheduling condition the wake cannot carry; if the successor cannot be persisted, its persistence diagnostic replaces the withheld wake so the due event remains queued for retry.
 Every other watcher sweep is one file read and one integer comparison, which is the same discipline `docs/currency-round.md` "Cost, and why the model is woken so rarely" records: on this fleet a surfaced notification costs a median of roughly 171,000 fresh tokens while the mechanical poll that decides whether to raise one costs about 207.
 
 The nudge fires on cadence rather than on a change, because the thing being asked for is the periodic re-measure itself; `AGENTS.md` section 8's "never restate an unchanged state" governs reports of state, and this is a prompt to take a reading, not a report of one.
