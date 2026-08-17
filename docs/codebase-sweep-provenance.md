@@ -71,7 +71,7 @@ That leaves the conflict visible to him, which is where the decision to tighten 
 
 ## The architecture, which is also his
 
-> "add that to the skill and have the dameno tell the fleet to use the skill"
+> "add that to the skill and have the daemon tell the fleet to use the skill"
 
 The obligation lives in the skill and the cadence only fires.
 A timer that swept eleven repositories itself would be unauditable, would spend quota nobody approved, and would reach into homes this seat does not own.
