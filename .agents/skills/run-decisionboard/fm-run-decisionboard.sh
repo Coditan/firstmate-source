@@ -551,8 +551,12 @@ screenshot_lock_path() {
     return 1
   fi
   lock_dir="$base/fm-run-decisionboard-locks"
-  mkdir -p -m 700 "$lock_dir" 2>/dev/null || {
+  mkdir -p "$lock_dir" 2>/dev/null || {
     SCREENSHOT_LOCK_ERROR="could not serialise the screenshot capture because the lock directory could not be created: $lock_dir"
+    return 1
+  }
+  chmod 700 "$lock_dir" 2>/dev/null || {
+    SCREENSHOT_LOCK_ERROR="could not serialise the screenshot capture because the lock directory permissions could not be set: $lock_dir"
     return 1
   }
   owner=$(stat -c '%u' "$lock_dir" 2>/dev/null) || owner=''
