@@ -30,6 +30,45 @@ command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required to read a 
 fm_test_tmproot TMP_ROOT fm-forge-status-tests
 
 WATCH="$ROOT/bin/fm-forge-status.sh"
+TEST_BG_PID=
+TEST_BG_HOME=
+
+cleanup_background_watch() {
+  if [ -n "$TEST_BG_PID" ] && kill -0 "$TEST_BG_PID" 2>/dev/null; then
+    kill "$TEST_BG_PID" 2>/dev/null || true
+    wait "$TEST_BG_PID" 2>/dev/null || true
+  fi
+  if [ -n "$TEST_BG_HOME" ]; then
+    rm -f "$TEST_BG_HOME/fetch-ready" "$TEST_BG_HOME/fetch-release" \
+      "$TEST_BG_HOME/first-out" "$TEST_BG_HOME/first-exit" \
+      "$TEST_BG_HOME/report-before-contention"
+  fi
+  TEST_BG_PID=
+  TEST_BG_HOME=
+}
+
+cleanup_forge_status_test() {
+  cleanup_background_watch
+  fm_test_cleanup
+}
+
+trap cleanup_forge_status_test EXIT
+
+wait_for_file() {
+  local path=$1 description=$2 deadline=$(( SECONDS + 5 ))
+  while [ ! -e "$path" ] && [ "$SECONDS" -lt "$deadline" ]; do
+    sleep 0.05
+  done
+  [ -e "$path" ] || fail "timed out waiting for $description"
+}
+
+wait_for_process() {
+  local pid=$1 result=$2 description=$3 status
+  wait_for_file "$result" "$description"
+  wait "$pid" || fail "$description wrapper failed"
+  status=$(cat "$result")
+  [ "$status" -eq 0 ] || fail "$description failed with status $status"
+}
 
 fm_mode_of() {
   if [ "$(uname)" = Darwin ]; then
@@ -101,7 +140,12 @@ url=${!#}
 [ -z "${FM_TEST_CURL_CALLS:-}" ] || printf '%s %s\n' "$url" "${FM_TEST_CURL_MODE:-unset}" >> "$FM_TEST_CURL_CALLS"
 if [ -n "${FM_TEST_CURL_BLOCK_READY:-}" ]; then
   : > "$FM_TEST_CURL_BLOCK_READY"
-  while [ ! -e "${FM_TEST_CURL_BLOCK_RELEASE:?}" ]; do sleep 0.05; done
+  deadline=$(( SECONDS + 5 ))
+  while [ ! -e "${FM_TEST_CURL_BLOCK_RELEASE:?}" ] && [ "$SECONDS" -lt "$deadline" ]; do sleep 0.05; done
+  if [ ! -e "$FM_TEST_CURL_BLOCK_RELEASE" ]; then
+    printf 'timed out waiting for blocked fake fetch release\n' >&2
+    exit 124
+  fi
 fi
 case "${FM_TEST_CURL_MODE:-}" in
   file:*) cat "${FM_TEST_CURL_MODE#file:}" > "$out" 2>/dev/null || exit 7; printf '200'; exit 0 ;;
@@ -380,13 +424,17 @@ test_state_changes_are_serialized_without_blocking_a_check() {
   now=1786968000
   serve "$home" clear
   FM_FORGE_STATUS_NOW="$now" run_watch "$home" >/dev/null
-  due=$(record_value "$home" next-observation-epoch)
+  due=$(record_value "$home" next-epoch)
+  cp "$home/state/forge-status.report" "$home/report-before-contention"
 
-  FM_TEST_CURL_BLOCK_READY="$home/fetch-ready" \
-    FM_TEST_CURL_BLOCK_RELEASE="$home/fetch-release" \
-    FM_FORGE_STATUS_NOW="$due" run_watch "$home" > "$home/first-out" &
-  first_pid=$!
-  while [ ! -e "$home/fetch-ready" ]; do sleep 0.05; done
+  TEST_BG_HOME=$home
+  ( FM_TEST_CURL_BLOCK_READY="$home/fetch-ready" \
+      FM_TEST_CURL_BLOCK_RELEASE="$home/fetch-release" \
+      FM_FORGE_STATUS_NOW="$due" run_watch "$home" > "$home/first-out"
+    printf '%s\n' "$?" > "$home/first-exit"
+  ) &
+  TEST_BG_PID=$!
+  wait_for_file "$home/fetch-ready" "the first observation to enter the blocked fake fetch"
 
   second_out=$(FM_FORGE_STATUS_NOW="$due" run_watch "$home") || status=$?
   [ "$status" -eq 0 ] || fail "a contending watcher check must exit quietly: $second_out"
@@ -401,13 +449,18 @@ test_state_changes_are_serialized_without_blocking_a_check() {
   second_out=$(FM_FORGE_STATUS_NOW="$due" run_watch "$home" --cadence raised 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "a concurrent cadence change must not report success"
   assert_contains "$second_out" 'already in progress' "a rejected cadence change must explain the contention"
+  [ "$(entry_count "$home")" -eq 0 ] || fail "a contending operation appended an entry"
+  cmp -s "$home/report-before-contention" "$home/state/forge-status.report" \
+    || fail "a contending operation changed persisted state"
 
   : > "$home/fetch-release"
-  wait "$first_pid" || fail "the lock-holding observation failed"
+  wait_for_process "$TEST_BG_PID" "$home/first-exit" "the lock-holding observation to complete"
+  TEST_BG_PID=
   first_out=$(cat "$home/first-out")
   assert_contains "$first_out" 'FORGE_STATUS:' "the lock-holding observation must complete"
   [ "$(entry_count "$home")" -eq 1 ] || fail "concurrent checks appended duplicate readings"
   [ "$(record_value "$home" cadence)" = relaxed ] || fail "a rejected cadence change altered persisted cadence"
+  cleanup_background_watch
   pass "state changes serialize and a contending check exits quietly"
 }
 
