@@ -736,8 +736,6 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
       [ -n "$tab_id" ] || return 2
       out=$(fm_backend_zellij_cli "$FM_BACKEND_ZELLIJ_SESSION" action list-tabs --json 2>/dev/null) || return 2
       printf '%s' "$out" | jq -e 'type == "array"' >/dev/null 2>&1 || return 2
-      out=$(fm_backend_zellij_cli "$FM_BACKEND_ZELLIJ_SESSION" action list-tabs --json 2>/dev/null) || return 2
-      printf '%s' "$out" | jq -e 'type == "array"' >/dev/null 2>&1 || return 2
       scoped=$(fm_backend_zellij_scoped_title "$expected_label")
       printf '%s' "$out" | jq -e --argjson t "$tab_id" --arg want "$scoped" \
         'any(.[]?; .tab_id == $t and .name == $want)' >/dev/null 2>&1 && return 0
@@ -764,8 +762,6 @@ process.exit(data.ok === false ? 1 : data.ok === true ? 0 : 2);
       wsid=$FM_BACKEND_CMUX_WORKSPACE
       sfid=$FM_BACKEND_CMUX_SURFACE
       if [ -n "$expected_label" ]; then
-        out=$(fm_backend_cmux_cli workspace list --json --id-format uuids 2>/dev/null) || return 2
-        printf '%s' "$out" | jq -e '.workspaces | type == "array"' >/dev/null 2>&1 || return 2
         scoped=$(fm_backend_cmux_scoped_title "$expected_label")
         title=$(printf '%s' "$out" | jq -r --arg id "$wsid" '.workspaces[]? | select(.id == $id) | .title' 2>/dev/null)
         if [ -n "$title" ] && [ "$title" != "$scoped" ]; then
@@ -783,6 +779,9 @@ process.exit(data.ok === false ? 1 : data.ok === true ? 0 : 2);
       printf '%s' "$out" | jq -e '.panes | type == "array"' >/dev/null 2>&1 || return 2
       if [ -n "$sfid" ]; then
         printf '%s' "$out" | jq -e --arg s "$sfid" 'any(.panes[]?; (.surface_ids // []) | index($s))' >/dev/null 2>&1 && return 0
+        if [ -n "$expected_label" ] && [ "$title" = "$scoped" ]; then
+          printf '%s' "$out" | jq -e 'any(.panes[]?; ((.selected_surface_id // (.surface_ids[0] // "")) | length) > 0)' >/dev/null 2>&1 && return 0
+        fi
         return 1
       fi
       printf '%s' "$out" | jq -e 'any(.panes[]?; ((.selected_surface_id // (.surface_ids[0] // "")) | length) > 0)' >/dev/null 2>&1 && return 0

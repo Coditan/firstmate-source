@@ -512,32 +512,18 @@ test_target_probe_failure_refuses() {
 test_label_probe_failures_are_unreadable() {
   local case_dir rc zellij_rc cmux_rc
   case_dir=$(make_case label-probe-unreadable)
-  printf '0\n' > "$case_dir/zellij-tabs-count"
   cat > "$case_dir/fakebin/zellij" <<'SH'
 #!/usr/bin/env bash
 case " $* " in
   *" list-sessions "*) printf '%s\n' zsess ;;
   *" list-panes "*) printf '[{"id":1,"is_plugin":false,"tab_id":7}]\n' ;;
-  *" list-tabs "*)
-    count=$(cat "${FM_TEST_CASE_DIR:?}/zellij-tabs-count")
-    count=$((count + 1))
-    printf '%s\n' "$count" > "${FM_TEST_CASE_DIR:?}/zellij-tabs-count"
-    [ "$count" -eq 1 ] || exit 2
-    printf '[{"tab_id":7,"name":"fm-firstmate-unreadable-task"}]\n'
-    ;;
+  *" list-tabs "*) exit 2 ;;
 esac
 SH
-  printf '0\n' > "$case_dir/cmux-workspaces-count"
   cat > "$case_dir/fakebin/cmux" <<'SH'
 #!/usr/bin/env bash
 case " $* " in
-  *" workspace list "*)
-    count=$(cat "${FM_TEST_CASE_DIR:?}/cmux-workspaces-count")
-    count=$((count + 1))
-    printf '%s\n' "$count" > "${FM_TEST_CASE_DIR:?}/cmux-workspaces-count"
-    [ "$count" -eq 1 ] || exit 2
-    printf '{"workspaces":[{"id":"ws1","title":"fm-firstmate-unreadable-task"}]}\n'
-    ;;
+  *" workspace list "*) exit 2 ;;
   *" list-panes "*) printf '{"panes":[{"surface_ids":["sf1"],"selected_surface_id":"sf1"}]}\n' ;;
 esac
 SH
@@ -563,7 +549,6 @@ SH
   write_task "$case_dir" unreadable-task dead
   sed -i 's/^backend=.*/backend=zellij/; s/^window=.*/window=zsess:1/' \
     "$case_dir/state/unreadable-task.meta"
-  printf '0\n' > "$case_dir/zellij-tabs-count"
   set +e
   run_teardown "$case_dir" finished-task > "$case_dir/zellij-stdout" 2> "$case_dir/zellij-stderr"
   rc=$?
@@ -576,7 +561,6 @@ SH
 
   sed -i 's/^backend=.*/backend=cmux/; s/^window=.*/window=ws1:sf1/' \
     "$case_dir/state/unreadable-task.meta"
-  printf '0\n' > "$case_dir/cmux-workspaces-count"
   set +e
   run_teardown "$case_dir" finished-task > "$case_dir/cmux-stdout" 2> "$case_dir/cmux-stderr"
   rc=$?
@@ -587,6 +571,43 @@ SH
   assert_nothing_returned "$case_dir" \
     "cmux-label-probe: an unreadable label query must prevent return"
   pass "(h) label-verification transport failures are unreadable"
+}
+
+test_cmux_replaced_surface_refuses() {
+  local case_dir rc scoped
+  case_dir=$(make_case cmux-replaced-surface)
+  write_task "$case_dir" finished-task dead
+  write_task "$case_dir" live-task dead
+  sed -i 's/^backend=.*/backend=cmux/; s/^window=.*/window=ws1:sf-old/' \
+    "$case_dir/state/live-task.meta"
+  scoped=$(FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$case_dir" bash -c \
+    '. "$1/bin/fm-backend.sh"; fm_backend_source cmux; fm_backend_cmux_scoped_title fm-live-task' _ "$ROOT")
+  printf '%s\n' "$scoped" > "$case_dir/cmux-title"
+  cat > "$case_dir/fakebin/cmux" <<'SH'
+#!/usr/bin/env bash
+case " $* " in
+  *" workspace list "*)
+    printf '{"workspaces":[{"id":"ws1","title":"%s"}]}\n' \
+      "$(cat "${FM_TEST_CASE_DIR:?}/cmux-title")"
+    ;;
+  *" list-panes "*)
+    printf '{"panes":[{"surface_ids":["sf-new"],"selected_surface_id":"sf-new"}]}\n'
+    ;;
+esac
+SH
+  chmod +x "$case_dir/fakebin/cmux"
+
+  set +e
+  run_teardown "$case_dir" finished-task > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  [ "$rc" -ne 0 ] || fail "cmux-replaced-surface: teardown ignored the task's replacement surface"
+  assert_grep "live-task" "$case_dir/stderr" \
+    "cmux-replaced-surface: refusal must name the live holder"
+  assert_nothing_returned "$case_dir" \
+    "cmux-replaced-surface: a replacement live surface must prevent return"
+  pass "(i) a cmux replacement surface still counts as a live holder"
 }
 
 # --- (f) the watcher's durable marker refuses on its own --------------------
@@ -984,6 +1005,7 @@ test_dead_claimant_allows
 test_unreadable_claimant_refuses
 test_label_probe_failures_are_unreadable
 test_target_probe_failure_refuses
+test_cmux_replaced_surface_refuses
 test_dispute_marker_refuses
 test_lease_holder_refuses
 test_own_lease_allows
