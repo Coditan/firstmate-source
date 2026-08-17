@@ -326,6 +326,57 @@ test_retry_completes_folds_after_the_successor_already_exists() {
   pass "retries complete interrupted folds for holds and recorded answers"
 }
 
+test_fold_retry_accepts_only_a_valid_archived_successor() {
+  local home out shape
+  home=$(make_home archived-fold-retry)
+  : > "$home/state/old-pass.meta"
+  run_hold "$home" hold old-pass scope --title "Old archived scope question" --reason "undecided" \
+    --repo widgets --premise "the archived scope is unset" >/dev/null 2>&1 || fail "old hold failed"
+  tasks_in "$home" add archived-gated-work "Archived gated work" --kind ship --repo widgets \
+    --blocked-by old-pass-decision-scope >/dev/null || fail "gated work setup failed"
+  printf 'nur archivierte direkte kunden.\n' > "$home/archived-ruling.txt"
+  run_hold "$home" record archived-ruling scope --door chat --decision-file "$home/archived-ruling.txt" \
+    --title "Archived scope answer" --repo widgets --new-ground >/dev/null 2>&1 \
+    || fail "archived successor setup failed"
+  tasks_in "$home" prune --state done --keep 0 >/dev/null || fail "successor retention failed"
+  assert_no_grep "archived-ruling-decision-scope" "$home/data/backlog.md" \
+    "resolved successor remained live instead of crossing retention"
+
+  run_hold "$home" record archived-ruling scope --door chat --decision-file "$home/archived-ruling.txt" \
+    --title "Archived scope answer" --repo widgets \
+    --supersedes old-pass-decision-scope >/dev/null 2>&1 \
+    || fail "identical retry did not accept the strictly resolved archived successor"
+  out=$(run_ledger "$home" --records)
+  assert_contains "$out" $'superseded\told-pass-decision-scope' \
+    "retention must not prevent retry from folding the older question"
+  out=$(tasks_in "$home" list --blocked --fields blocked_by)
+  assert_contains "$out" "0 blocked tasks" \
+    "folding into an archived resolved successor must release the older gate"
+
+  for shape in open wrong-kind missing-markers; do
+    home=$(make_home "archived-successor-$shape")
+    : > "$home/state/old-pass.meta"
+    run_hold "$home" hold old-pass scope --title "Old question" --reason "undecided" \
+      --repo widgets --premise "the scope is unset" >/dev/null 2>&1 || fail "old hold failed for $shape"
+    case "$shape" in
+      open) printf '%s\n' '- [ ] invalid-successor - Open archived successor (repo: widgets) (kind: captain)' \
+        '  Resolution recorded by fm-decision-hold.' '  Routed work:' > "$home/data/done-archive.md" ;;
+      wrong-kind) printf '%s\n' '- [x] invalid-successor - Wrong-kind archived successor (repo: widgets) (kind: ship)' \
+        '  Resolution recorded by fm-decision-hold.' '  Routed work:' > "$home/data/done-archive.md" ;;
+      missing-markers) printf '%s\n' '- [x] invalid-successor - Incomplete archived successor (repo: widgets) (kind: captain)' \
+        '  State: awaiting captain decision.' > "$home/data/done-archive.md" ;;
+    esac
+    if run_hold "$home" supersede old-pass-decision-scope --by invalid-successor \
+      --reason "invalid archived successor must refuse" >/dev/null 2>&1; then
+      fail "$shape archived entry satisfied successor validation"
+    fi
+    out=$(run_ledger "$home" --records)
+    assert_contains "$out" $'open\told-pass-decision-scope' \
+      "$shape archived entry must leave the older question open"
+  done
+  pass "fold retries cross retention only through strict archived resolutions"
+}
+
 # Folding a question must take its gated work with it. Leaving the work pointing at
 # a closed record strands it; dropping the edge outright lifts a gate nobody lifted.
 test_a_fold_moves_the_work_the_question_gated() {
@@ -571,6 +622,7 @@ test_settled_decision_survives_retention_into_the_archive
 test_a_second_question_cannot_be_filed_without_disposing_of_the_first
 test_an_answer_folds_the_questions_it_settles
 test_retry_completes_folds_after_the_successor_already_exists
+test_fold_retry_accepts_only_a_valid_archived_successor
 test_a_fold_moves_the_work_the_question_gated
 test_an_unmeasurable_premise_is_never_treated_as_a_false_one
 test_an_edited_decision_stops_reading_as_verified

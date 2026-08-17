@@ -83,6 +83,8 @@
 # source before this gate has succeeded. A resolved captain hold that retention
 # moved into data/done-archive.md remains a durable completion record, but only
 # while every archived entry under that identity is itself a resolved captain hold.
+# An interrupted fold retry accepts its resolved successor from that same strict
+# archive record, so retention cannot strand the older question in the open set.
 #
 # `resolve` requires every --routed-to task to exist and to be blocked by the hold.
 # It writes the captain decision and routed identities into the hold body, clears
@@ -304,7 +306,10 @@ verify_hold_active() {  # <hold-id>
 
 verify_hold_resolved() {  # <hold-id>
   local id=$1 show state kind body
-  show=$(task_show "$id") || return 1
+  if ! show=$(task_show "$id"); then
+    archived_hold_resolved "$id"
+    return
+  fi
   state=$(show_field "$show" state)
   kind=$(show_field "$show" kind)
   body=$(show_field "$show" body)
@@ -479,6 +484,23 @@ verify_resolution_identity() {
   esac
   recorded_digest=$(envelope_field "$header" 'Decision digest')
   recorded_routes=$(envelope_field "$header" 'Routed identities')
+  [ -n "$recorded_digest" ] || fail "captain hold $id has an invalid retry identity record"
+  [ "$recorded_digest" = "$decision_digest" ] \
+    || fail "captain hold $id records a different captain decision"
+  [ "$recorded_routes" = "$routed_csv" ] \
+    || fail "captain hold $id records different routed work"
+}
+
+verify_resolution_retry_identity() {
+  local id=$1 decision_digest=$2 routed_csv=$3 show body recorded_digest recorded_routes
+  if show=$(task_show "$id"); then
+    verify_resolution_identity "$id" "$(show_field "$show" body)" "$decision_digest" "$routed_csv"
+    return
+  fi
+  archived_hold_resolved "$id" || fail "captain decision $id has no unambiguous durable resolution in $ARCHIVE"
+  body=$(raw_body_lines "$id") || fail "captain decision $id has no readable archived resolution"
+  recorded_digest=$(printf '%s\n' "$body" | sed -n 's/^Decision digest: //p' | head -1)
+  recorded_routes=$(printf '%s\n' "$body" | sed -n 's/^Routed identities: //p' | head -1)
   [ -n "$recorded_digest" ] || fail "captain hold $id has an invalid retry identity record"
   [ "$recorded_digest" = "$decision_digest" ] \
     || fail "captain hold $id records a different captain decision"
@@ -799,8 +821,13 @@ command_supersede() {
   ! verify_hold_resolved "$id" \
     || fail "captain decision $id already records the captain's answer; it cannot be superseded"
   [ "$state" != "done" ] || fail "captain record $id is already closed"
-  succ_show=$(task_show "$successor") || fail "successor $successor does not exist in this home"
-  succ_state=$(show_field "$succ_show" state)
+  if succ_show=$(task_show "$successor"); then
+    succ_state=$(show_field "$succ_show" state)
+  else
+    archived_hold_resolved "$successor" \
+      || fail "successor $successor is absent from the live backlog and has no unambiguous resolved captain record in $ARCHIVE"
+    succ_state=done
+  fi
 
   premise=$(printf '%s\n' "$(raw_body_lines "$id" || true)" | sed -n 's/^Premise: //p' | head -1)
 
@@ -1061,9 +1088,8 @@ command_resolve() {
   require_tasks_axi
   id=$(hold_id "$origin" "$key")
   if verify_hold_resolved "$id"; then
-    hold_show=$(task_show "$id")
-    hold_body=$(show_field "$hold_show" body)
-    verify_resolution_identity "$id" "$hold_body" "$decision_digest" "$routed_csv"
+    verify_resolution_retry_identity "$id" "$decision_digest" "$routed_csv"
+    verify_stored_decision "$id" "$decision" "$decision_digest"
     printf 'resolved: %s\n' "$id"
     return 0
   fi
@@ -1163,8 +1189,7 @@ command_record() {
   # Re-running after a partial close is the same call, which is what makes an
   # interrupted close safe to simply repeat.
   if verify_hold_resolved "$id"; then
-    verify_resolution_identity "$id" "$(show_field "$(task_show "$id")" body)" \
-      "$decision_digest" "$routed_csv"
+    verify_resolution_retry_identity "$id" "$decision_digest" "$routed_csv"
     verify_stored_decision "$id" "$decision" "$decision_digest"
     # shellcheck disable=SC2086  # $folds is a deliberate space-separated id list
     [ -z "$folds" ] || fold_records "$id" "answered by the captain decision recorded in $id" $folds

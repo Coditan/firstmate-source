@@ -24,6 +24,7 @@ Scout teardown calls the script's read-only `verify` subcommand after checking f
 The `--force` path remains the explicit captain-approved discard escape hatch.
 
 When an identity is no longer in the live backlog, `complete` and `verify` fall back to `data/done-archive.md`, where retention moves Done work.
+An interrupted `record --supersedes` retry and the fold's successor validation use the same fallback, so retention cannot leave the earlier question open after its answer is archived.
 That archive record satisfies the gate only when every archived entry under the identity is a completed kind `captain` item carrying both the recorded resolution and its routed work, so a stale resolution can never vouch for a later decision that reused the same key.
 An entry that is still open, is not kind `captain`, or lacks either marker refuses, which keeps the gate fail-closed.
 Both the `- [ ]`/`- [x]` checkbox bullets and the older `- **<id>**` in-flight bullet that tasks-axi still parses count as entries, so a legacy-form record is read as unresolved rather than becoming invisible to the scan.
