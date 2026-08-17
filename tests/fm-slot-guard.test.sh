@@ -39,6 +39,8 @@
 #   (l) forced child cleanup reads the child home's state
 #   (m) child ownership refusal never falls back to deletion
 #   (n) late top-level refusal leaves hooks and branch untouched
+#   (o) returned top-level slot is never mutated after release
+#   (p) returned child slot is never mutated after release
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -63,6 +65,7 @@ make_case() {
   : > "$case_dir/live-windows"
   : > "$case_dir/leases"
   : > "$case_dir/lease-on-status"
+  : > "$case_dir/reallocate-on-return"
   printf '0\n' > "$case_dir/status-count"
   : > "$case_dir/returned"
 
@@ -113,6 +116,12 @@ case "${1:-}" in
       fi
     fi
     printf '%s\n' "$path" >> "$RETURNED"
+    if [ -s "${FM_TEST_CASE_DIR:?}/reallocate-on-return" ]; then
+      branch=$(cat "${FM_TEST_CASE_DIR:?}/reallocate-on-return")
+      git -C "$path" switch -q -c "$branch"
+      mkdir -p "$path/.claude"
+      printf '{"hooks":"reallocated-worker"}\n' > "$path/.claude/settings.fm-task.json"
+    fi
     exit 0 ;;
 esac
 exit 0
@@ -188,6 +197,10 @@ lease_slot() {  # <case> <path> <holder>
 
 lease_slot_on_status() {  # <case> <status-count> <path> <holder>
   printf '%s\t%s\t%s\n' "$2" "$3" "$4" >> "$1/lease-on-status"
+}
+
+reallocate_slot_on_return() {  # <case> <branch>
+  printf '%s\n' "$2" > "$1/reallocate-on-return"
 }
 
 run_teardown() {  # <case> <id> [args...]
@@ -519,6 +532,46 @@ test_late_top_level_refusal_is_mutation_free() {
   pass "(n) late top-level refusal leaves hooks and branch untouched"
 }
 
+test_returned_top_level_slot_is_not_mutated() {
+  local case_dir rc branch
+  case_dir=$(make_case returned-top-level)
+  write_task "$case_dir" finished-task dead
+  git -C "$case_dir/slot" switch -q -c finished-task-work
+  reallocate_slot_on_return "$case_dir" reallocated-top-level-work
+
+  set +e
+  run_teardown "$case_dir" finished-task --force > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "returned-top-level: uncontested teardown should succeed"
+  assert_present "$case_dir/slot/.claude/settings.fm-task.json" \
+    "returned-top-level: teardown must not delete the new occupant's hook"
+  branch=$(git -C "$case_dir/slot" branch --show-current)
+  [ "$branch" = reallocated-top-level-work ] || fail "returned-top-level: teardown changed the new occupant's branch"
+  pass "(o) returned top-level slot is not mutated after reallocation"
+}
+
+test_returned_child_slot_is_not_mutated() {
+  local case_dir home rc branch
+  case_dir=$(make_case returned-child)
+  home=$(make_secondmate_case "$case_dir" parent-task)
+  write_child_task "$case_dir" "$home" finished-child dead
+  reallocate_slot_on_return "$case_dir" reallocated-child-work
+
+  set +e
+  run_teardown "$case_dir" parent-task --force > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "returned-child: uncontested forced cleanup should succeed"
+  assert_present "$case_dir/slot/.claude/settings.fm-task.json" \
+    "returned-child: teardown must not delete the new occupant's hook"
+  branch=$(git -C "$case_dir/slot" branch --show-current)
+  [ "$branch" = reallocated-child-work ] || fail "returned-child: teardown changed the new occupant's branch"
+  pass "(p) returned child slot is not mutated after reallocation"
+}
+
 test_stale_record_live_holder_refuses
 test_sole_owner_allows
 test_force_does_not_override
@@ -532,5 +585,7 @@ test_guard_detect_marks_and_clears
 test_child_home_state_refuses
 test_child_refusal_does_not_delete
 test_late_top_level_refusal_is_mutation_free
+test_returned_top_level_slot_is_not_mutated
+test_returned_child_slot_is_not_mutated
 
 printf '\nall fm-slot-guard tests passed\n'
