@@ -70,6 +70,21 @@ SH
   printf '%s\n' "$fakebin"
 }
 
+make_failing_mktemp() {
+  local home=$1 status=$2 fakebin real_mktemp
+  fakebin=$(fm_fakebin "$home")
+  real_mktemp=$(command -v mktemp)
+  cat > "$fakebin/mktemp" <<SH
+#!/usr/bin/env bash
+case "\${1:-}" in
+  */.curation-nudge-health.*) exit $status ;;
+esac
+exec "$real_mktemp" "\$@"
+SH
+  chmod +x "$fakebin/mktemp"
+  printf '%s\n' "$fakebin"
+}
+
 record_value() {
   local home=$1 key=$2
   sed -n "s/^$key: //p" "$home/state/curation-nudge.report"
@@ -247,8 +262,8 @@ test_unavailable_state_path_is_loud() {
   pass "unavailable state path is loud in detect and health modes"
 }
 
-test_failed_record_publish_preserves_the_prior_state() {
-  local home due out status=0 fakebin report before retry
+test_transient_publish_failure_becomes_a_supervision_diagnosis() {
+  local home due out status=0 fakebin report before retry armed
   home=$(make_home record-publish-failure)
   run_nudge "$home" >/dev/null
   report="$home/state/curation-nudge.report"
@@ -262,9 +277,69 @@ test_failed_record_publish_preserves_the_prior_state() {
   assert_not_contains "$out" 'curation sweep is due' "a failed publish must not emit the wake"
   [ "$(cat "$report")" = "$before" ] || fail "a failed publish changed the authoritative record"
   [ "$(record_value "$home" next-epoch)" = "$due" ] || fail "a failed publish consumed the due event"
+  armed=$(FM_CURATION_NUDGE_NOW=$(( due + 7200 )) run_nudge "$home" --armed)
+  assert_contains "$armed" 'nothing is executing it' \
+    "a usable state path must identify the remaining overdue target as supervision"
+  assert_not_contains "$armed" 'state persistence failure' \
+    "a recovered state path must not retain a transient persistence diagnosis"
+  [ "$(record_value "$home" next-epoch)" = "$due" ] || fail "health consumed the preserved due event"
   retry=$(FM_CURATION_NUDGE_NOW="$due" run_nudge "$home")
   assert_contains "$retry" 'curation sweep is due' "the next sweep must retry the same due event"
-  pass "one failed atomic publish leaves the prior state coherent"
+  pass "transient publish failure leaves a truthful supervision diagnosis"
+}
+
+test_unusable_state_path_preserves_the_publish_failure_diagnosis() {
+  local home due out status=0 fakebin probe_bin report before armed
+  home=$(make_home persistent-publish-failure)
+  run_nudge "$home" >/dev/null
+  report="$home/state/curation-nudge.report"
+  due=$(record_value "$home" next-epoch)
+  before=$(cat "$report")
+  fakebin=$(make_failing_mv "$home" "$report")
+
+  out=$(PATH="$fakebin:$PATH" FM_CURATION_NUDGE_NOW="$due" run_nudge "$home") || status=$?
+  [ "$status" -ne 0 ] || fail "a failed authoritative publish reported success: $out"
+  probe_bin=$(make_failing_mktemp "$home" 1)
+  armed=$(PATH="$probe_bin:$PATH" FM_CURATION_NUDGE_NOW=$(( due + 7200 )) run_nudge "$home" --armed)
+  assert_contains "$armed" 'state persistence failure' \
+    "an unusable state path must retain the persistence diagnosis"
+  assert_contains "$armed" 'temporary state cannot be created' \
+    "the persistence diagnosis must name the observed condition"
+  assert_not_contains "$armed" 'nothing is executing it' \
+    "an unusable state path must not be called a supervision outage"
+  [ "$(cat "$report")" = "$before" ] || fail "health changed the authoritative record"
+  [ "$(record_value "$home" next-epoch)" = "$due" ] || fail "health consumed the preserved due event"
+  pass "unusable state path keeps publish failure distinct from supervision"
+}
+
+test_indeterminate_state_probe_names_both_possible_causes() {
+  local home due out status=0 fakebin probe_bin report before armed
+  home=$(make_home indeterminate-publish-failure)
+  run_nudge "$home" >/dev/null
+  report="$home/state/curation-nudge.report"
+  due=$(record_value "$home" next-epoch)
+  before=$(cat "$report")
+  fakebin=$(make_failing_mv "$home" "$report")
+
+  out=$(PATH="$fakebin:$PATH" FM_CURATION_NUDGE_NOW="$due" run_nudge "$home") || status=$?
+  [ "$status" -ne 0 ] || fail "a failed authoritative publish reported success: $out"
+  probe_bin=$(make_failing_mktemp "$home" 126)
+  armed=$(PATH="$probe_bin:$PATH" FM_CURATION_NUDGE_NOW=$(( due + 7200 )) run_nudge "$home" --armed)
+  assert_contains "$armed" 'state health indeterminate' \
+    "an unavailable instrument must report an indeterminate reading"
+  assert_contains "$armed" 'state publication failure' \
+    "the indeterminate reading must name the persistence candidate"
+  assert_contains "$armed" 'supervision outage' \
+    "the indeterminate reading must name the supervision candidate"
+  assert_contains "$armed" 'asserts neither cause' \
+    "the indeterminate reading must refuse to choose a cause"
+  assert_not_contains "$armed" 'state persistence failure at' \
+    "the indeterminate reading must not assert persistence"
+  assert_not_contains "$armed" 'nothing is executing it' \
+    "the indeterminate reading must not assert supervision"
+  [ "$(cat "$report")" = "$before" ] || fail "health changed the authoritative record"
+  [ "$(record_value "$home" next-epoch)" = "$due" ] || fail "health consumed the preserved due event"
+  pass "indeterminate state probe names both causes and asserts neither"
 }
 
 test_the_period_is_forty_eight_hours() {
@@ -665,7 +740,9 @@ test_initial_detect_loudly_explains_an_exhausted_draw
 test_a_refused_successor_records_the_firing_and_the_refusal
 test_unchanged_refusal_is_surfaced_once_and_resets
 test_unavailable_state_path_is_loud
-test_failed_record_publish_preserves_the_prior_state
+test_transient_publish_failure_becomes_a_supervision_diagnosis
+test_unusable_state_path_preserves_the_publish_failure_diagnosis
+test_indeterminate_state_probe_names_both_possible_causes
 test_the_period_is_forty_eight_hours
 test_successive_firings_drift_rather_than_repeating_one_time
 test_arming_schedules_the_first_sweep_without_waking_anyone

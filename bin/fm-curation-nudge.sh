@@ -71,6 +71,13 @@
 # further and further past due, which is loud; a home that never produced a
 # target at all is the `Trigger: n/a` shape, and is loud too.
 #
+# An overdue target can also be the durable remainder of a failed publish: the
+# failure cannot record itself because publication is the operation that failed.
+# So --armed probes the state path without changing the authoritative record.
+# A usable path identifies a supervision outage, an unusable path identifies a
+# persistence failure, and an indeterminate probe names both possible causes
+# without asserting either one.
+#
 # Usage:
 #   fm-curation-nudge.sh            detect: stay silent on an ordinary sweep;
 #                                   print the wake on an ordinary firing; print
@@ -97,8 +104,10 @@
 #                                   shim (idempotent)
 #   fm-curation-nudge.sh --armed    print one CURATION_NUDGE line when the nudge
 #                                   is not armed, has never scheduled a target,
-#                                   or has a target nothing is executing; silent
-#                                   otherwise
+#                                   or has an overdue target. For an overdue
+#                                   target it distinguishes state persistence,
+#                                   supervision, and an indeterminate reading;
+#                                   silent otherwise
 #   fm-curation-nudge.sh --help
 #
 # State, all under FM_HOME/state:
@@ -507,11 +516,40 @@ SHIM
   "$SCRIPT_DIR/fm-check-register.sh" curation-nudge >/dev/null || return 1
 }
 
+STATE_PROBE_CONDITION=''
+probe_state_publishability() {
+  local probe status
+  STATE_PROBE_CONDITION=''
+  if [ ! -d "$STATE" ]; then
+    STATE_PROBE_CONDITION='the state path is not a directory'
+    return 1
+  fi
+  if [ -d "$REPORT" ]; then
+    STATE_PROBE_CONDITION='the authoritative record path is a directory and cannot be atomically replaced'
+    return 1
+  fi
+  probe=$(mktemp "$STATE/.curation-nudge-health.XXXXXX" 2>/dev/null)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    if [ "$status" -eq 126 ] || [ "$status" -eq 127 ]; then
+      STATE_PROBE_CONDITION='the temporary-state probe could not be executed'
+      return 2
+    fi
+    STATE_PROBE_CONDITION='temporary state cannot be created in the state directory'
+    return 1
+  fi
+  if ! rm -f -- "$probe"; then
+    STATE_PROBE_CONDITION='the temporary-state probe could not be cleaned up, so publishability cannot be determined'
+    return 2
+  fi
+  return 0
+}
+
 # The reading that is NOT this check's own claim about itself. It asks what the
 # work produced: is there a next target at all, and has anything executed the
 # one there is?
 armed_diagnostic() {
-  local shim_mtime shim_age overdue_by age
+  local shim_mtime shim_age overdue_by age probe_status
   if read_record; then
     if [ "$RECORD_STATE" = refused ]; then
       age=$(( NOW - RECORD_RECORDED ))
@@ -527,6 +565,18 @@ armed_diagnostic() {
     fi
     overdue_by=$(( NOW - RECORD_NEXT ))
     [ "$overdue_by" -ge "$OVERDUE" ] || return 0
+    probe_state_publishability
+    probe_status=$?
+    if [ "$probe_status" -eq 1 ]; then
+      printf 'CURATION_NUDGE: state persistence failure at %s because %s; the check ran but cannot persist its state, and the prior overdue target remains queued for retry\n' \
+        "$STATE" "$STATE_PROBE_CONDITION"
+      return 0
+    fi
+    if [ "$probe_status" -eq 2 ]; then
+      printf 'CURATION_NUDGE: state health indeterminate at %s because %s; the overdue target could mean either a state publication failure or a supervision outage, and this reading asserts neither cause\n' \
+        "$STATE" "$STATE_PROBE_CONDITION"
+      return 0
+    fi
     if [ "$RECORD_LAST" -gt 0 ]; then
       printf 'CURATION_NUDGE: the curation sweep was due %s minute(s) ago and has not fired (it last fired %s); the schedule stands but nothing is executing it (inspect the monitoring service for this home)\n' \
         "$(( overdue_by / 60 ))" "$(epoch_utc "$RECORD_LAST")"
