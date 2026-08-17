@@ -699,6 +699,20 @@ test_a_disabled_nudge_stays_out_of_composing_suites() {
 test_every_public_mode_has_an_executable_contract() {
   local home out status
   home=$(make_home public-modes)
+  rmdir "$home/state" || fail "could not prepare a home without state"
+
+  status=0
+  out=$(run_nudge "$home" --draw 1) || status=$?
+  [ "$status" -eq 0 ] || fail "--draw exited $status without state: $out"
+  case "$out" in ''|*[!0-9]*) fail "--draw must emit one epoch: $out" ;; esac
+  [ ! -e "$home/state" ] || fail "--draw created state on a fresh home"
+
+  status=0
+  out=$(run_nudge "$home" --status) || status=$?
+  [ "$status" -eq 0 ] || fail "--status exited $status without state: $out"
+  assert_contains "$out" 'next: none' "--status must report an absent schedule"
+  assert_contains "$out" 'last-fire: never' "--status must report an absent firing"
+  [ ! -e "$home/state" ] || fail "--status created state on a fresh home"
 
   status=0
   out=$(run_nudge "$home" --arm) || status=$?

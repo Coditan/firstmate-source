@@ -511,21 +511,26 @@ state_persistence_line() {
 
 # --- modes ------------------------------------------------------------------
 
-if ! mkdir -p "$STATE" 2>/dev/null; then
-  # The reporting modes stay quiet about their own plumbing rather than waking a
-  # supervisor with it; the modes a human or bootstrap invoked say so and fail.
-  case "$MODE" in
-    detect|armed)
+case "$MODE" in
+  draw|status) ;;
+  armed)
+    if { [ -e "$STATE" ] && [ ! -d "$STATE" ]; } \
+      || { [ ! -e "$STATE" ] && [ ! -d "${STATE%/*}" ]; }; then
       printf 'CURATION_NUDGE: state persistence failure at %s because the state directory is unavailable; repair that state path and run the check again\n' "$STATE"
       exit 1
-      ;;
-    draw) ;;
-    *)
+    fi
+    ;;
+  *)
+    if ! mkdir -p "$STATE" 2>/dev/null; then
+      if [ "$MODE" = detect ]; then
+        printf 'CURATION_NUDGE: state persistence failure at %s because the state directory is unavailable; repair that state path and run the check again\n' "$STATE"
+        exit 1
+      fi
       printf 'fm-curation-nudge: cannot create state directory %s\n' "$STATE" >&2
       exit 1
-      ;;
-  esac
-fi
+    fi
+    ;;
+esac
 
 # Write this home's watcher shim and bind it to its own bytes. Every location is
 # baked in rather than inherited: the watcher runs a check from a private
