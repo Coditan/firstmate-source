@@ -483,9 +483,22 @@ backlog_json() {  # [<backlog-path>] - defaults to this home's $BACKLOG
           # future), so widening admits only records someone deliberately held for
           # the captain. A blocked record is still withheld here - that is a
           # separate, separately filed gap and this predicate does not change it.
+          # A captain item whose body already carries a recorded decision has been
+          # ANSWERED; only its close is unfinished. Presenting it as an open
+          # question is how the captain gets asked something he has already
+          # settled, which is the failure bin/fm-decision-hold.sh `record` and
+          # bin/fm-decision-ledger.sh exist to end. It is withheld from
+          # captain_actionable and surfaced under its own flag instead, because
+          # withholding it silently would trade one invisible record for another.
+          # The marker line is written by bin/fm-decision-hold.sh and is the first
+          # body line of every resolution record it has ever written.
+          | .answered_pending_close =
+              (.state != "done"
+               and ((.body_lines // [])[0] == "Resolution recorded by fm-decision-hold."))
           | .captain_actionable =
               (.state == "queued" and .hold_kind == "captain"
-               and .hold_reason != null and (.unresolved_blocker_ids | length) == 0)
+               and .hold_reason != null and (.unresolved_blocker_ids | length) == 0
+               and (.answered_pending_close | not))
         else . end)
     | del(.section,.order)
   ' < "$backlog"
@@ -774,7 +787,13 @@ secondmate_home_summary_json() {  # <backlog-json> <tasks-json> <archive-json>
             blocked_by_ids:(.blocked_by_ids | map(trunc(120))),
             unresolved_blocker_ids:(.unresolved_blocker_ids | map(trunc(120))),
             dangling_blocker_ids:((.dangling_blocker_ids // []) | map(trunc(120))),
-            reason:((.hold_reason // .blocked_reason // "blocked") | trunc(120)),source:"backlog"} ]
+            answered_pending_close:(.answered_pending_close // false),
+            # Such a row is withheld from decisions_open above, so it must not keep
+            # claiming here that the captain still owes an answer he has given.
+            reason:(if (.answered_pending_close // false)
+                    then "captain decision recorded; the close did not finish"
+                    else ((.hold_reason // .blocked_reason // "blocked") | trunc(120)) end),
+            source:"backlog"} ]
        + [ $owned_in_flight[] as $work
            | $tasks[]
            | select(.id == $work.id and (.current_state.state == "parked" or .current_state.state == "paused" or .current_state.state == "blocked"))
@@ -820,6 +839,7 @@ secondmate_home_summary_json() {  # <backlog-json> <tasks-json> <archive-json>
           hold_reason:((.hold_reason // null) | if . == null then null else trunc(160) end),
           hold_kind:((.hold_kind // null) | if . == null then null else trunc(40) end),
           captain_actionable:(.captain_actionable // false),
+          answered_pending_close:(.answered_pending_close // false),
           repo:((.repo // null) | if . == null then null else trunc(120) end),
           kind:((.kind // null) | if . == null then null else trunc(40) end)}][:$queued_n]),
         landed:(if $landed_n == 0 then $landed_all else $landed_all[:$landed_n] end),
