@@ -402,7 +402,7 @@ require_fold_successor() {  # <successor-id>
     kind=$(show_field "$show" kind)
     [ "$kind" = captain ] \
       || fail "successor $id is a live $kind item, not a captain record"
-    if [ "$state" = done ]; then
+    if [ "$state" = "done" ]; then
       body=$(show_field "$show" body)
       case "$body" in
         *"Resolution recorded by fm-decision-hold."*"Routed work:"*) : ;;
@@ -414,7 +414,7 @@ require_fold_successor() {  # <successor-id>
   fi
   archived_hold_answered "$id" \
     || fail "successor $id is absent from the live backlog and is not an unambiguous archived answered captain record carrying both the recorded resolution and routed work; a folded question is a disposition, never a successor to fold into"
-  FOLD_SUCCESSOR_STATE=done
+  FOLD_SUCCESSOR_STATE="done"
 }
 
 # The reopen guard asks the opposite question: does any archived entry already

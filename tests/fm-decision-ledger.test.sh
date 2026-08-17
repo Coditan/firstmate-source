@@ -338,7 +338,7 @@ test_fold_retry_accepts_only_a_valid_archived_successor() {
   run_hold "$home" record archived-ruling scope --door chat --decision-file "$home/archived-ruling.txt" \
     --title "Archived scope answer" --repo widgets --new-ground >/dev/null 2>&1 \
     || fail "archived successor setup failed"
-  tasks_in "$home" prune --state done --keep 0 >/dev/null || fail "successor retention failed"
+  tasks_in "$home" prune --state "done" --keep 0 >/dev/null || fail "successor retention failed"
   assert_no_grep "archived-ruling-decision-scope" "$home/data/backlog.md" \
     "resolved successor remained live instead of crossing retention"
 
@@ -354,7 +354,7 @@ test_fold_retry_accepts_only_a_valid_archived_successor() {
     "folding into an archived resolved successor must release the older gate"
   run_hold "$home" complete old-pass scope >/dev/null \
     || fail "completion must accept the folded question as durably disposed"
-  tasks_in "$home" prune --state done --keep 0 >/dev/null \
+  tasks_in "$home" prune --state "done" --keep 0 >/dev/null \
     || fail "folded-question retention failed"
   run_hold "$home" verify old-pass >/dev/null \
     || fail "verification must accept the archived fold as a valid disposition"
@@ -414,7 +414,7 @@ test_live_and_archived_successors_share_one_validity_rule() {
       folded)
         tasks_in "$home" add invalid-successor "Folded live successor" --kind captain --repo widgets \
           --body $'Superseded by fm-decision-hold.\nSuccessor: still-open-final-question' >/dev/null
-        tasks_in "$home" done invalid-successor >/dev/null
+        tasks_in "$home" "done" invalid-successor >/dev/null
         ;;
       wrong-kind)
         tasks_in "$home" add invalid-successor "Non-captain live successor" --kind ship --repo widgets >/dev/null
@@ -422,7 +422,7 @@ test_live_and_archived_successors_share_one_validity_rule() {
       missing-markers)
         tasks_in "$home" add invalid-successor "Incomplete live successor" --kind captain --repo widgets \
           --body "State: awaiting captain decision." >/dev/null
-        tasks_in "$home" done invalid-successor >/dev/null
+        tasks_in "$home" "done" invalid-successor >/dev/null
         ;;
     esac
     if run_hold "$home" supersede old-pass-decision-scope --by invalid-successor \
