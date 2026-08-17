@@ -103,7 +103,7 @@ test_a_window_with_no_off_grid_minute_refuses_rather_than_scheduling_on_it() {
 }
 
 test_initial_detect_loudly_explains_an_exhausted_draw() {
-  local home out refusal now
+  local home out refusal now report report_next status_next
   home=$(make_home initial-refusal)
   run_nudge "$home" --arm >/dev/null || fail "arming failed"
   now=$(( $(date +%s) / 300 * 300 ))
@@ -155,6 +155,15 @@ test_initial_detect_loudly_explains_an_exhausted_draw() {
     FM_CURATION_NUDGE_JITTER_MAX=0 run_nudge "$home")
   [ -z "$out" ] || fail "a successful recovery draw must be silent: $out"
   [ ! -e "$refusal" ] || fail "a successful draw did not clear the refusal record"
+  report="$home/state/curation-nudge.report"
+  report_next=$(grep '^next:' "$report")
+  status_next=$(FM_CURATION_NUDGE_NOW=$(( now + 60 )) run_nudge "$home" --status | grep '^next:')
+  [ "$report_next" = "$status_next" ] \
+    || fail "recovery from refusal left the report inconsistent: $report_next != $status_next"
+  assert_not_contains "$(cat "$report")" 'refused' \
+    "recovery from refusal must replace the stale report outcome"
+  assert_not_contains "$(cat "$report")" 'successor scheduling follows' \
+    "recovery from refusal must clear any pending report outcome"
   out=$(FM_CURATION_NUDGE_NOW=$(( now + 60 )) run_nudge "$home" --armed)
   [ -z "$out" ] || fail "a recovered scheduler must have a silent health reading: $out"
   pass "draw refusal remains distinct from supervision failure and clears on recovery"
@@ -267,7 +276,7 @@ test_refusal_persistence_failure_is_distinct_and_fails() {
 }
 
 test_next_due_persistence_failure_is_distinct_and_fails() {
-  local home out status=0 now next_due
+  local home out status=0 now next_due report_next status_next
   home=$(make_home next-persist-failure)
   run_nudge "$home" --arm >/dev/null || fail "arming failed"
   next_due="$home/state/curation-nudge.next-due"
@@ -290,6 +299,15 @@ test_next_due_persistence_failure_is_distinct_and_fails() {
     "later health must preserve the persistence cause"
   assert_not_contains "$out" 'nothing is running this home' \
     "persistence failure must not masquerade as supervision failure"
+  rmdir "$next_due" || fail "could not clear the injected next-target failure"
+  out=$(FM_CURATION_NUDGE_NOW=$(( now + 60 )) run_nudge "$home")
+  [ -z "$out" ] || fail "recovery from persistence failure emitted a wake: $out"
+  report_next=$(grep '^next:' "$home/state/curation-nudge.report")
+  status_next=$(FM_CURATION_NUDGE_NOW=$(( now + 60 )) run_nudge "$home" --status | grep '^next:')
+  [ "$report_next" = "$status_next" ] \
+    || fail "recovery from persistence failure left the report inconsistent: $report_next != $status_next"
+  assert_not_contains "$(cat "$home/state/curation-nudge.report")" 'persistence failed' \
+    "recovery from persistence failure must replace the stale report outcome"
   pass "next-target persistence failure is actionable and non-successful"
 }
 
@@ -374,10 +392,11 @@ test_report_commit_failure_prevents_the_successful_wake() {
 }
 
 test_last_fire_commit_failure_prevents_the_wake_and_rolls_back() {
-  local home due out status=0 fakebin last_fire status_out
+  local home due out status=0 fakebin last_fire status_out prior_report
   home=$(make_home last-fire-commit-failure)
   run_nudge "$home" >/dev/null
   due=$(cat "$home/state/curation-nudge.next-due")
+  prior_report=$(cat "$home/state/curation-nudge.report")
   last_fire="$home/state/curation-nudge.last-fire"
   fakebin=$(make_failing_mv "$home" "$last_fire")
 
@@ -390,8 +409,8 @@ test_last_fire_commit_failure_prevents_the_wake_and_rolls_back() {
   assert_contains "$out" "$last_fire" \
     "the failed last-fire commit must name its path"
   [ ! -e "$last_fire" ] || fail "the failed last-fire commit left a false record"
-  [ ! -e "$home/state/curation-nudge.report" ] \
-    || fail "the failed last-fire commit left the new report behind"
+  [ "$(cat "$home/state/curation-nudge.report")" = "$prior_report" ] \
+    || fail "the failed last-fire commit did not restore the prior report"
   status_out=$(run_nudge "$home" --status)
   assert_contains "$status_out" 'last-fire: never' \
     "status must not claim the incomplete firing"
@@ -442,7 +461,7 @@ test_successive_firings_drift_rather_than_repeating_one_time() {
 # --- the cadence and the wake -----------------------------------------------
 
 test_arming_schedules_the_first_sweep_without_waking_anyone() {
-  local home out due
+  local home out due report_next status_next
   home=$(make_home first)
   run_nudge "$home" --arm >/dev/null || fail "arming failed"
 
@@ -452,6 +471,10 @@ test_arming_schedules_the_first_sweep_without_waking_anyone() {
   case "${due:-}" in ''|*[!0-9]*) fail "the first sweep was not scheduled" ;; esac
   [ ! -f "$home/state/curation-nudge.last-fire" ] \
     || fail "scheduling the first sweep must not record a firing"
+  report_next=$(grep '^next:' "$home/state/curation-nudge.report")
+  status_next=$(run_nudge "$home" --status | grep '^next:')
+  [ "$report_next" = "$status_next" ] \
+    || fail "the initial schedule and report disagree: $report_next != $status_next"
   pass "arming schedules the first sweep and stays silent"
 }
 

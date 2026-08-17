@@ -489,6 +489,23 @@ persist_final_report() {
   fi
 }
 
+finalize_schedule_transition() {
+  local firing_epoch=${1:-} transition_status transition_path transition_condition report_next
+  schedule_transition
+  transition_status=$?
+  transition_path=$PERSISTENCE_PATH
+  transition_condition=$PERSISTENCE_CONDITION
+  case "$transition_status" in
+    0) report_next=$SCHEDULED_TARGET ;;
+    1|3) report_next=refused ;;
+    *) report_next=persistence ;;
+  esac
+  persist_final_report "$report_next" "$firing_epoch" || return 4
+  PERSISTENCE_PATH=$transition_path
+  PERSISTENCE_CONDITION=$transition_condition
+  return "$transition_status"
+}
+
 render_report() {  # <next-due-epoch, pending, refused, persistence, or empty> [this-firing-epoch]
   local next=$1 firing_epoch=${2:-} last
   printf 'nudge: %s\n' "$(epoch_utc "$NOW")"
@@ -694,7 +711,7 @@ if [ "$MODE" = detect ]; then
     # First sweep after arming: schedule the first target and say nothing.
     # Arming a home must not wake it, and a home with no schedule is exactly the
     # state --armed reports if nothing ever fixes it.
-    schedule_transition
+    finalize_schedule_transition
     transition_status=$?
     case "$transition_status" in
       0) exit 0 ;;
@@ -708,7 +725,7 @@ fi
 
 if [ "$MODE" = detect ] && last_completed=$(read_last_fire) \
   && [ "$last_completed" -ge "$due" ]; then
-  schedule_transition
+  finalize_schedule_transition "$last_completed"
   transition_status=$?
   case "$transition_status" in
     0|3) exit 0 ;;
@@ -722,22 +739,13 @@ if ! persist_firing_records pending "$firing_epoch"; then
   state_persistence_line
   exit 1
 fi
-schedule_transition
+finalize_schedule_transition "$firing_epoch"
 transition_status=$?
-transition_path=$PERSISTENCE_PATH
-transition_condition=$PERSISTENCE_CONDITION
-case "$transition_status" in
-  0) report_next=$SCHEDULED_TARGET ;;
-  1|3) report_next=refused ;;
-  *) report_next=persistence ;;
-esac
-if ! persist_final_report "$report_next" "$firing_epoch"; then
+if [ "$transition_status" -eq 4 ]; then
   nudge_line
   state_persistence_line
   exit 1
 fi
-PERSISTENCE_PATH=$transition_path
-PERSISTENCE_CONDITION=$transition_condition
 case "$transition_status" in
   0) nudge_line; exit 0 ;;
   1) nudge_line; schedule_refusal_line; exit 0 ;;
