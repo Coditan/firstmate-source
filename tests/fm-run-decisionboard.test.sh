@@ -119,6 +119,22 @@ uid=g4:1_0 RootWebArea "Auswahlbrett · Lavish" url="http://example.invalid/sess
 SNAP
 }
 
+generic_controls_snapshot() {
+  cat <<'SNAP'
+page:
+  title: Generisches Brett · Lavish
+snapshot:
+uid=g5:1_0 RootWebArea "Generisches Brett · Lavish" url="http://example.invalid/session/x"
+  uid=g5:1_5 Iframe
+    uid=g5:1_6 RootWebArea "Generisches Brett" url="http://example.invalid/artifact/x/index.html?artifact_revision=1"
+      uid=g5:1_7 form
+        uid=g5:1_8 radio "Ja"
+        uid=g5:1_9 radio "Nein"
+        uid=g5:1_10 textbox "Suche"
+        uid=g5:1_11 button "Hilfe"
+SNAP
+}
+
 # A decision form carrying nothing at all. The parser must still count the form,
 # or a decision whose options are prose is invisible rather than reported - and
 # invisible is what let the original board ship.
@@ -235,7 +251,7 @@ test_query_accepts_an_answerable_board() {
   query_with answerable_snapshot
   [ "$QUERY_STATUS" -eq 0 ] || fail "query rejected an answerable board"$'\n'"$QUERY_OUT"
   assert_contains "$QUERY_OUT" "decision cards: 2" "query must count both decisions"
-  assert_contains "$QUERY_OUT" "with a submit button: 2" "query must see both submit buttons"
+  assert_contains "$QUERY_OUT" "with a button (role only): 2" "query must see both button roles"
   pass "query accepts a board whose decisions can be answered"
 }
 
@@ -253,8 +269,19 @@ test_query_refuses_a_board_with_no_way_to_submit() {
   query_with optionless_send_snapshot
   [ "$QUERY_STATUS" -ne 0 ] \
     || fail "query passed a board whose selection has nowhere to go"$'\n'"$QUERY_OUT"
-  assert_contains "$QUERY_OUT" "no submit button" "query must name the missing submit button"
+  assert_contains "$QUERY_OUT" "no button at all" "query must name the missing button"
   pass "query refuses a board whose selection has nowhere to go"
+}
+
+test_query_distinguishes_note_evidence_from_button_shape() {
+  query_with generic_controls_snapshot
+  assert_contains "$QUERY_OUT" "with a note field: 0" \
+    "query counted a single-line textbox as a note field"
+  assert_contains "$QUERY_OUT" "FINDING:" \
+    "query presented a board without a real note field as fully answerable"
+  assert_contains "$QUERY_OUT" "role=button cannot distinguish submit from help or reset" \
+    "query did not disclose the limit of button-role evidence"
+  pass "query proves multiline notes and discloses button-role limits"
 }
 
 test_query_reports_missing_notes_without_refusing_them() {
@@ -414,6 +441,7 @@ test_parser_ignores_the_editor_chrome
 test_query_accepts_an_answerable_board
 test_query_refuses_a_board_with_options_in_prose
 test_query_refuses_a_board_with_no_way_to_submit
+test_query_distinguishes_note_evidence_from_button_shape
 test_query_reports_missing_notes_without_refusing_them
 test_query_can_refuse_missing_notes_when_the_contract_flips
 test_query_counts_a_decision_form_that_carries_nothing

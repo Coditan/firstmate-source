@@ -365,7 +365,7 @@ uid_in_chrome() {  # <needle>
 
 # form_inventory - one line per decision form and per control inside the artifact
 # frame:
-#   <decision-number>\t<role>\t<uid>\t<accessible name>
+#   <decision-number>\t<role>\t<uid>\t<accessible name>\t<properties>
 #
 # The form itself gets a row so a form carrying NO controls is still counted.
 # Without it a decision whose options are prose would be invisible rather than
@@ -409,7 +409,8 @@ parse_inventory() {
     }
     form_indent >= 0 && indent <= form_indent { form_indent = -1 }
     form_indent >= 0 && (role == "radio" || role == "textbox" || role == "button" || role == "checkbox") {
-      printf "%d\t%s\t%s\t%s\n", forms, role, uid, name
+      properties = (body ~ /(^| )multiline( |$)/ ? "multiline" : "")
+      printf "%d\t%s\t%s\t%s\t%s\n", forms, role, uid, name, properties
     }
   '
 }
@@ -417,7 +418,7 @@ parse_inventory() {
 # --- query ------------------------------------------------------------------
 
 cmd_query() {
-  local inv snap decisions with_options with_note with_submit listening note_policy
+  local inv snap decisions with_options with_note with_button listening note_policy
   note_policy=${FM_RUN_DECISIONBOARD_NOTE_REQUIRED:-report}
   case "$note_policy" in
     report|refuse) ;;
@@ -428,8 +429,8 @@ cmd_query() {
   decisions=$(printf '%s\n' "$inv" | awk -F'\t' '$2 == "form" {print $1}' | sort -un | wc -l | tr -d ' ')
   [ -n "$inv" ] || decisions=0
   with_options=$(printf '%s\n' "$inv" | awk -F'\t' '$2 == "radio" {print $1}' | sort -un | wc -l | tr -d ' ')
-  with_note=$(printf '%s\n' "$inv" | awk -F'\t' '$2 == "textbox" {print $1}' | sort -un | wc -l | tr -d ' ')
-  with_submit=$(printf '%s\n' "$inv" | awk -F'\t' '$2 == "button" {print $1}' | sort -un | wc -l | tr -d ' ')
+  with_note=$(printf '%s\n' "$inv" | awk -F'\t' '$2 == "textbox" && $5 == "multiline" {print $1}' | sort -un | wc -l | tr -d ' ')
+  with_button=$(printf '%s\n' "$inv" | awk -F'\t' '$2 == "button" {print $1}' | sort -un | wc -l | tr -d ' ')
   listening=yes
   case "$snap" in
     *"agent is not listening"*) listening=no ;;
@@ -439,7 +440,8 @@ cmd_query() {
   printf '  decision cards: %s\n' "$decisions"
   printf '  with selectable options: %s\n' "$with_options"
   printf '  with a note field: %s\n' "$with_note"
-  printf '  with a submit button: %s\n' "$with_submit"
+  printf '  with a button (role only): %s\n' "$with_button"
+  printf '  button evidence: necessary shape only; role=button cannot distinguish submit from help or reset. Only answer proves submission by clicking it and reading the queued confirmation.\n'
   printf '  poll listening: %s\n' "$listening"
   if [ -n "$inv" ]; then
     printf 'options:\n'
@@ -468,9 +470,9 @@ cmd_query() {
     fi
     printf 'FINDING: this does not fail today because the current board tooling permits choice-only answers; set FM_RUN_DECISIONBOARD_NOTE_REQUIRED=refuse when that contract changes.\n'
   fi
-  if [ "$with_submit" -lt "$decisions" ]; then
-    printf 'FINDING: %s of %s decision cards have no submit button, so a selection has nowhere to go.\n' \
-      "$((decisions - with_submit))" "$decisions"
+  if [ "$with_button" -lt "$decisions" ]; then
+    printf 'FINDING: %s of %s decision cards have no button at all, so a selection has nowhere to go.\n' \
+      "$((decisions - with_button))" "$decisions"
     return 1
   fi
 }
@@ -583,7 +585,7 @@ cmd_answer() {
 
   if [ -n "$note_text" ]; then
     uid=$(form_inventory | awk -F'\t' -v d="$target_decision" \
-      '$2 == "textbox" && $1 == d { print $3; exit }')
+      '$2 == "textbox" && $5 == "multiline" && $1 == d { print $3; exit }')
     [ -n "$uid" ] || die "answer: decision $target_decision carries no note field"
     chrome-devtools-axi fill "@$uid" "$note_text" >/dev/null 2>&1 \
       || die "answer: could not write the note"
