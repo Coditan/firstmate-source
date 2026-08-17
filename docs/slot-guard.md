@@ -109,6 +109,10 @@ The `is not leased` case is why this flag cannot simply be passed unconditionall
 
 ## What was built, and where each part binds
 
+This change is containment for the measured stale-holder incident, not an unconditional ownership invariant.
+It detects and refuses a different holder that is already represented by a lease or a live task record when an ownership decision is taken.
+On an unleased slot, a holder that arrives after the final decision but before the return is not detected because those are separate operations and the return is unconditional.
+
 **`bin/fm-slot-lib.sh`** states the missing question once, so every caller asks it the same way.
 It answers from two independent witnesses, because either alone has a blind spot: the pool's own lease, and every `state/<id>.meta` that names the path filtered to tasks whose window is still alive.
 A conflict from either is a real conflict, so the two are unioned rather than required to agree.
@@ -117,7 +121,7 @@ The same fail-safe asymmetry applies at the treehouse return boundary: a readabl
 
 **`bin/fm-slot-guard.sh`** is the watcher half, armed at bootstrap like the memory alarm and the currency round.
 It sweeps this home's recorded slots on the ordinary watcher cadence and, when a slot is claimed by a task other than the live one standing in it, writes a durable `state/<id>.slot-disputed` marker and wakes firstmate once.
-The marker is the point: the protection exists before any teardown runs and survives a caller that never asks.
+Once written, the marker preserves that measured dispute before teardown runs and survives a caller that never asks.
 
 **`bin/fm-teardown.sh`** asks the complete ownership question at one early gate as soon as each recorded pool-backed target is known, before any cleanup path can mutate or descend into it.
 Every later return, lock mutation, or child cleanup rechecks ownership immediately before acting, using the owning home's state directory for nested secondmate cleanup, translating the pool's own lease-precondition failures into terminal ownership refusals, propagating refusal through every parent cleanup without deleting its records, relying on the return's reset to remove hooks, and performing best-effort branch-ref cleanup through the project repository without touching the released worktree path.
@@ -132,12 +136,24 @@ The captain's authority to discard work is authority over *this* task's work; it
 
 Stated plainly rather than papered over, because a guard whose limits are not written down gets trusted past them.
 
-- **A return issued outside firstmate cannot be stopped.** `treehouse return` honours no lease by default and is unconditionally destructive, so a human or another tool can still destroy any slot by path. Nothing in this design changes that.
-- **Slots acquired before this change are unleased**, so the pool cannot enforce on them and the refusal rests on the record witness alone. That witness cannot see a holder that has no meta in this home.
-- **There is a window the watcher does not cover.** A slot is protected by its occupant's live process, or by this guard's marker once a sweep has seen the dispute. Between a window dying and the next sweep, a teardown still depends on the live check in `teardown_treehouse_return` rather than on a durable marker.
+- **A return issued outside firstmate cannot be stopped.**
+  `treehouse return` honours no lease by default and is unconditionally destructive, so a human or another tool can still destroy any slot by path.
+  Nothing in this design changes that.
+- **An unleased slot has a check-to-return race.**
+  After the fresh lease and record witnesses report no holder, another task can acquire the slot before `treehouse return` runs, and empty `lease_args` makes that return unconditional.
+  No watcher can close this race because the ownership decision and return are two operations and treehouse offers no atomic check-and-return.
+  Leasing at acquisition makes `lease_args` non-empty and moves the final refusal into the pool itself.
+- **Live processes can be invisible to both witnesses.**
+  Measured on 2026-08-17, pool slot `firstmate-fork-c22c88/1` still held four processes aged 2h20m to 2h55m, one idle Claude agent and three orphaned shells, with working directories inside that worktree after its tmux window was gone and the owning task's record had moved to slot 2.
+  This change judges recorded-task liveness by whether its window exists, so those processes had neither a live recorded window nor a task record naming their slot.
+  The lease witness was also blind because the slot was unleased.
+  Refusing on treehouse's in-use process reading would not solve this safely because that reading cannot distinguish the torn-down task's own lingering processes, which teardown legitimately terminates and normally encounters, from a third party's processes, so it would refuse ordinary teardown.
+- **There is a window the watcher does not cover.**
+  A dispute marker exists only after a watcher sweep has observed the conflicting records.
+  Between a window dying and the next sweep, a teardown still depends on the live check in `teardown_treehouse_return` rather than on a durable marker.
 
-The change that would close the first two is **leasing every task worktree at acquisition**, with `--lease-holder fm:<id>`, exactly as `bin/fm-home-seed.sh` has always done for secondmate homes.
-That would make `--if-lease-holder` usable on every teardown and make the collision impossible rather than merely detected, because a live task's slot would stay reserved for its whole lifecycle instead of only while its process happens to be alive.
+The single follow-up that closes both the check-to-return race and the unrecorded-process blind spot is **leasing every task worktree at acquisition**, with `--lease-holder fm:<id>`, exactly as `bin/fm-home-seed.sh` has always done for secondmate homes.
+A lease is durable, is not tied to a window or task record, reserves the slot for the task lifecycle, and makes `--if-lease-holder` hand the final refusal to the pool itself.
 It is deliberately not in this change: `bin/fm-spawn.sh` acquires by sending `treehouse get` into the worker's pane across four backends and then reading the pane's cwd back, so moving to a firstmate-side lease changes the spawn path for every backend and adds a durable lease that must be released on every spawn failure path.
 That is a spawn-safety change and deserves its own reproduction and its own tests, rather than riding along with a teardown fix.
 
@@ -149,7 +165,8 @@ If a worker is killed between edits, everything not committed is gone, silently.
 `treehouse return` resets the worktree, so uncommitted work leaves no trace; the task's own record would read `unknown`, which is indistinguishable from a window that died on its own.
 Committed work survives because it is in the repository's shared object store, which is why `0788c06` was recoverable - that was the worker's commit timing, not a property of the system.
 
-What this guard changes is that firstmate no longer *causes* that loss during a cleanup, and that the condition which would cause it is now named and refused instead of being discovered afterwards, or never.
+What this guard changes is that the measured stale-holder condition is named and refused when its holder is visible at the ownership decision, instead of being discovered afterwards, or never.
+That is containment of the incident sequence, not a guarantee against a holder arriving during the unleased check-to-return race or processes invisible to both witnesses.
 It does not make a killed worker's uncommitted work recoverable, and nothing here should be read as if it did.
 
 ## Tests

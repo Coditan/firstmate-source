@@ -579,7 +579,7 @@ cleanup_stale_lock_for_safety_check() {
   return "$TEARDOWN_TREEHOUSE_LOCK_REFUSED"
 }
 
-# THE OWNERSHIP QUESTION - refuse to return a worktree someone else is standing in.
+# THE OWNERSHIP QUESTION - refuse a holder visible when this decision is taken.
 #
 # Every other check in this script is scoped to the task it was told about. This
 # one is scoped to the RESOURCE, which is the check that was missing when a
@@ -626,7 +626,8 @@ require_no_other_slot_holder() {  # <dir> <cd_dir> <label> <self-id> <state-dir>
 # does not match") and when the slot is not leased at all ("is not leased"), so
 # it fails closed in both directions. It is therefore only safe to add when this
 # task is the recorded lease holder; on an unleased slot it would refuse every
-# ordinary teardown, and the refusal above is what covers that case instead.
+# ordinary teardown, so the refusal above contains visible holders on that path
+# but cannot make its later unconditional return atomic.
 refresh_teardown_return_ownership() {  # <dir> <cd_dir> <label> <self-id> <state-dir>
   local dir=$1 cd_dir=$2 label=$3 self=$4 state_dir=$5 lease holder
   lease_args=()
@@ -1209,7 +1210,7 @@ if [ "$KIND" = secondmate ]; then
   validate_firstmate_home_for_removal "$HOME_PATH" "secondmate home" "$ID" >/dev/null || exit 1
 fi
 
-# Every pool-backed target is ownership-gated as soon as it is known, before any path can mutate or descend into it, and each later mutation rechecks immediately before acting.
+# Every pool-backed target is checked as soon as it is known, before any path can mutate or descend into it, and each later mutation rechecks immediately before acting, but an unleased check and return are not atomic.
 if [ "$KIND" = secondmate ]; then
   refresh_firstmate_home_ownership_if_pooled "$HOME_PATH" "secondmate home" "$ID" "$STATE" || exit $?
 elif [ -d "$WT" ] && current_worktree_uses_treehouse; then

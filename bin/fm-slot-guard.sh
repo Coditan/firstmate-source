@@ -22,14 +22,14 @@
 # asks continuously and independently: it sweeps this home's recorded slots on
 # the ordinary watcher cadence and, the moment a slot is claimed by a task other
 # than the live one standing in it, writes a durable dispute marker for the stale
-# task and wakes firstmate. The protection therefore already exists before any
-# teardown runs, and it survives a caller that never asks.
+# task and wakes firstmate. Once written, that measured dispute exists before
+# teardown runs and survives a caller that never asks.
 #
 # WHAT A WATCHER CANNOT HOLD HERE, AND WHY - measured, not assumed
 #
-# Asked to hold "a worktree is never returned while a live task holds it"
-# entirely from outside the caller, this watcher cannot, for two reasons that are
-# properties of the pool tool rather than of this design:
+# This watcher contains the measured stale-holder incident by recording a holder
+# already visible when it sweeps. It cannot establish the stronger invariant
+# "a worktree is never returned while a live task holds it" for four reasons:
 #
 #   1. `treehouse return` is unconditionally destructive and honours no lease by
 #      default. Measured: `treehouse return --force <path>` released a lease held
@@ -42,6 +42,12 @@
 #      an existing occupied one. So this watcher cannot convert the pool's
 #      process-based hold into a durable lifecycle-based hold for work already
 #      running.
+#   3. On an unleased slot, a task can arrive after the final ownership decision
+#      and before the unconditional return. The pool offers no atomic
+#      check-and-return operation, so no watcher can close that race.
+#   4. Live processes can outlive both their recorded window and the task record
+#      naming their slot. The measured instance and the reason pool in-use cannot
+#      safely serve as a refusal witness are recorded in docs/slot-guard.md.
 #
 # What the tool does offer is `treehouse return --if-lease-holder <holder>`,
 # which refuses at the resource rather than in the caller. Measured: against a
@@ -56,10 +62,11 @@
 # separate change and what it would cost.
 #
 # Until then this watcher's dispute markers, plus the ownership question in
-# bin/fm-slot-lib.sh that bin/fm-teardown.sh asks before every return, are what
-# hold the property for slots the pool cannot enforce on. That split is stated
-# here rather than papered over, because a guard whose limits are not written
-# down gets trusted past them.
+# bin/fm-slot-lib.sh that bin/fm-teardown.sh asks before every return, contain a
+# holder already visible when the decision is taken. They do not cover a holder
+# arriving during the unleased check-to-return race or processes invisible to
+# both witnesses. That limit is stated here because a guard whose limits are not
+# written down gets trusted past them.
 #
 # MODES
 #   fm-slot-guard.sh                default: the watcher check. Sweeps this home's

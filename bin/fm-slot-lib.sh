@@ -27,14 +27,15 @@
 # So the loss is not a missing refusal - teardown already refuses on unlanded
 # work. It is a missing QUESTION: the checks are scoped to the task teardown was
 # told about, never to the RESOURCE it is about to touch. This library is that
-# question, stated once, so every caller asks it the same way.
+# question, stated once, so every caller asks it the same way. It detects holders
+# already represented when asked; on an unleased slot it cannot detect a holder
+# that arrives before the later return or processes with no window or task record.
 #
 # TWO INDEPENDENT WITNESSES, because either alone has a blind spot
 #
-#   The lease witness (fm_slot_lease_holder) reads the pool's own durable lease.
-#   bin/fm-slot-guard.sh maintains one lease per live task, so this is the
-#   authoritative answer whenever the guard has reached the slot. Its blind spot
-#   is any slot the guard has not leased yet.
+#   The lease witness (fm_slot_lease_holder) reads the pool's own durable lease
+#   when one exists. It is authoritative for a leased slot, but ordinary task
+#   slots are unleased today and therefore have no lease witness.
 #
 #   The record witness (fm_slot_live_meta_claimants) reads every state/<id>.meta
 #   that names the path and keeps only the tasks whose window is still alive. Its
@@ -50,8 +51,8 @@
 # process ("Terminated lingering processes: bash (903999)"). There is no
 # non-destructive return mode and no lease the tool itself honours at return
 # time. So nothing here can stop a return issued outside firstmate; these
-# predicates bind the callers that ask them, and bin/fm-slot-guard.sh removes the
-# collision that makes the question dangerous in the first place.
+# predicates bind the callers that ask them and contain the measured stale-holder
+# incident, but they do not establish an unconditional ownership invariant.
 
 # Absolute path with symlinks resolved, so two spellings of one slot compare
 # equal. Falls back to the input when the path is gone: a vanished worktree still
