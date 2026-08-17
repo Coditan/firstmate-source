@@ -144,8 +144,8 @@
 #   FM_FORGE_STATUS_JITTER_MIN    low end of the relaxed jitter (default 180)
 #   FM_FORGE_STATUS_JITTER_MAX    high end of the relaxed jitter (default 420)
 #   FM_FORGE_STATUS_TIMEOUT       seconds allowed for the fetch (default 10),
-#                                 kept well inside the watcher's per-check
-#                                 timeout so supervision is never starved
+#                                 clamped to 15 so it stays inside the watcher's
+#                                 30-second per-check budget
 #   FM_FORGE_STATUS_MAX_BYTES     largest accepted response body in bytes
 #                                 (default 1000000, clamped maximum 5000000)
 #   FM_FORGE_STATUS_OVERDUE       how far past a relaxed target the watch may
@@ -158,8 +158,9 @@
 #                                 below the bounded fetch timeout plus 60s or
 #                                 60s total and is recorded in
 #                                 forge-status.report. The clamped body-size
-#                                 bound keeps parsing, hashing, appending, and
-#                                 publication well inside that recovery margin.
+#                                 bound, bounded sink, and clamped timeout keep
+#                                 fetching, parsing, hashing, appending, and
+#                                 publication inside that recovery margin.
 #   FM_FORGE_STATUS_NOW           override the current epoch (tests)
 #   FM_FORGE_STATUS_DISABLE=1     silence detect and --armed only, so suites that
 #                                 compose bin/fm-bootstrap.sh neither reach the
@@ -183,7 +184,9 @@ INTERVAL=${FM_FORGE_STATUS_INTERVAL:-7200}
 RAISED_INTERVAL=${FM_FORGE_STATUS_RAISED_INTERVAL:-300}
 JITTER_MIN=${FM_FORGE_STATUS_JITTER_MIN:-180}
 JITTER_MAX=${FM_FORGE_STATUS_JITTER_MAX:-420}
-TIMEOUT=${FM_FORGE_STATUS_TIMEOUT:-10}
+TIMEOUT_DEFAULT=10
+TIMEOUT_CEILING=15
+TIMEOUT_CONFIGURED=${FM_FORGE_STATUS_TIMEOUT:-}
 MAX_BYTES_DEFAULT=1000000
 MAX_BYTES_CEILING=5000000
 MAX_BYTES_CONFIGURED=${FM_FORGE_STATUS_MAX_BYTES:-}
@@ -194,7 +197,13 @@ case "$INTERVAL" in ''|*[!0-9]*) INTERVAL=7200 ;; esac
 case "$RAISED_INTERVAL" in ''|*[!0-9]*|0) RAISED_INTERVAL=300 ;; esac
 case "$JITTER_MIN" in ''|*[!0-9]*) JITTER_MIN=180 ;; esac
 case "$JITTER_MAX" in ''|*[!0-9]*) JITTER_MAX=420 ;; esac
-case "$TIMEOUT" in ''|*[!0-9]*|0) TIMEOUT=10 ;; esac
+case "$TIMEOUT_CONFIGURED" in
+  ''|*[!0-9]*|0|????????*) TIMEOUT=$TIMEOUT_DEFAULT ;;
+  *)
+    TIMEOUT=$TIMEOUT_CONFIGURED
+    [ "$TIMEOUT" -le "$TIMEOUT_CEILING" ] || TIMEOUT=$TIMEOUT_CEILING
+    ;;
+esac
 case "$MAX_BYTES_CONFIGURED" in
   ''|*[!0-9]*|0|????????*) MAX_BYTES=$MAX_BYTES_DEFAULT ;;
   *)
@@ -402,7 +411,7 @@ set_unmeasurable() {  # <http> <condition>
 # happy path lands on set_unmeasurable with the concrete condition, and none of
 # them lands on "operational".
 observe() {
-  local body body_bytes code status canonical jq_indicator scheme
+  local body body_bytes code headers overflow pipeline_status sink_status status canonical jq_indicator scheme
   READING_UPDATE=''
   command -v curl >/dev/null 2>&1 \
     || { set_unmeasurable '-' 'curl is not installed on this seat, so the status page cannot be read at all'; return 0; }
@@ -411,11 +420,55 @@ observe() {
 
   body=$(mktemp "${TMPDIR:-/tmp}/fm-forge-status.XXXXXX" 2>/dev/null) \
     || { set_unmeasurable '-' 'temporary space for the fetched status document could not be created'; return 0; }
-  code=$(curl -m "$TIMEOUT" -s --max-filesize "$MAX_BYTES" -o "$body" -w '%{http_code}' \
-    -H 'Accept: application/json' "$URL" 2>/dev/null)
-  status=$?
+  headers=$(mktemp "${TMPDIR:-/tmp}/fm-forge-status-headers.XXXXXX" 2>/dev/null) \
+    || { rm -f -- "$body"; set_unmeasurable '-' 'temporary space for the status response headers could not be created'; return 0; }
+  overflow=$headers.overflow
+  curl -m "$TIMEOUT" -s --max-filesize "$MAX_BYTES" -D "$headers" -o - \
+    -H 'Accept: application/json' "$URL" 2>/dev/null \
+    | perl -e '
+        my ($limit, $marker) = @ARGV;
+        my $written = 0;
+        while (1) {
+          my $want = $limit - $written + 1;
+          $want = 65536 if $want > 65536;
+          my $got = read(STDIN, my $chunk, $want);
+          exit 2 unless defined $got;
+          last if $got == 0;
+          my $keep = $got;
+          if ($written + $got > $limit) {
+            $keep = $limit - $written;
+            open(my $flag, ">", $marker) or exit 3;
+            print {$flag} "oversize\n" or exit 3;
+            close($flag) or exit 3;
+          }
+          print STDOUT substr($chunk, 0, $keep) or exit 4 if $keep > 0;
+          $written += $keep;
+          last if $keep < $got;
+        }
+      ' "$MAX_BYTES" "$overflow" > "$body"
+  pipeline_status=("${PIPESTATUS[@]}")
+  status=${pipeline_status[0]}
+  sink_status=${pipeline_status[1]}
+  body_bytes=$(wc -c < "$body" 2>/dev/null | tr -d '[:space:]')
+  case "$body_bytes" in
+    ''|*[!0-9]*)
+      rm -f -- "$body" "$headers"
+      set_unmeasurable '-' "the response size from $URL could not be measured before parsing"
+      return 0
+      ;;
+  esac
+  if [ -s "$overflow" ]; then
+    rm -f -- "$body" "$headers" "$overflow"
+    set_unmeasurable '-' "the status page at $URL exceeded the effective ${MAX_BYTES}-byte response limit"
+    return 0
+  fi
+  if [ "$sink_status" -ne 0 ]; then
+    rm -f -- "$body" "$headers" "$overflow"
+    set_unmeasurable '-' "temporary space for the response from $URL could not accept the bounded fetch"
+    return 0
+  fi
   if [ "$status" -ne 0 ]; then
-    rm -f -- "$body"
+    rm -f -- "$body" "$headers" "$overflow"
     if [ "$status" -eq 63 ]; then
       set_unmeasurable '-' "the status page at $URL exceeded the effective ${MAX_BYTES}-byte response limit"
       return 0
@@ -423,16 +476,10 @@ observe() {
     set_unmeasurable '-' "the status page at $URL could not be read (fetch exit $status, bounded at ${TIMEOUT}s)"
     return 0
   fi
-  body_bytes=$(wc -c < "$body" 2>/dev/null | tr -d '[:space:]')
-  case "$body_bytes" in
-    ''|*[!0-9]*)
-      rm -f -- "$body"
-      set_unmeasurable "$code" "the response size from $URL could not be measured before parsing"
-      return 0
-      ;;
-  esac
+  code=$(awk '/^HTTP\/[0-9.]+ [0-9][0-9][0-9]/ { code=$2 } END { print code }' "$headers" 2>/dev/null)
+  [ -n "$code" ] || code=000
   if [ "$body_bytes" -gt "$MAX_BYTES" ]; then
-    rm -f -- "$body"
+    rm -f -- "$body" "$headers"
     set_unmeasurable "$code" "the status page at $URL returned ${body_bytes} bytes, exceeding the effective ${MAX_BYTES}-byte response limit"
     return 0
   fi
@@ -441,25 +488,25 @@ observe() {
   case "$code:$scheme" in
     2[0-9][0-9]:*) ;;
     000:http|000:https)
-      rm -f -- "$body"
+      rm -f -- "$body" "$headers"
       set_unmeasurable "$code" "the status page at $URL answered HTTP $code instead of a status document"
       return 0
       ;;
     000:*) ;;
     *)
-      rm -f -- "$body"
+      rm -f -- "$body" "$headers"
       set_unmeasurable "$code" "the status page at $URL answered HTTP $code instead of a status document"
       return 0
       ;;
   esac
   if [ ! -s "$body" ]; then
-    rm -f -- "$body"
+    rm -f -- "$body" "$headers"
     set_unmeasurable "$code" "the status page at $URL answered with an empty body"
     return 0
   fi
   jq_indicator=$(jq -r '.status.indicator // empty' "$body" 2>/dev/null)
   if [ -z "$jq_indicator" ]; then
-    rm -f -- "$body"
+    rm -f -- "$body" "$headers"
     set_unmeasurable "$code" "the answer from $URL is not a readable status document (no overall status indicator in it)"
     return 0
   fi
@@ -482,7 +529,7 @@ observe() {
             | "maintenance " + ((.id // "?") | flat) + "=" + ((.status // "?") | flat) ] | sort )
       | .[]' "$body" 2>/dev/null)
   if [ -z "$canonical" ]; then
-    rm -f -- "$body"
+    rm -f -- "$body" "$headers"
     set_unmeasurable "$code" "the answer from $URL could not be reduced to a comparable reading"
     return 0
   fi
@@ -515,7 +562,7 @@ observe() {
       [ .incidents[]? | .incident_updates[0]?.body // empty ] as $u
       | if ($u | length) == 0 then ""
         else ($u[0] | gsub("[[:space:]]+"; " ") | .[0:$max]) end' "$body" 2>/dev/null)
-  rm -f -- "$body"
+  rm -f -- "$body" "$headers"
   [ -n "$READING_COMPONENTS" ] || READING_COMPONENTS='unreadable component list'
   [ -n "$READING_INCIDENTS" ] || READING_INCIDENTS='unreadable incident list'
 }
@@ -639,6 +686,7 @@ render_record() {  # <state> <cadence> <next> <observed> <entry> <recorded> <sur
   printf 'jitter-min-seconds: %s\n' "$JITTER_MIN"
   printf 'jitter-max-seconds: %s\n' "$JITTER_MAX"
   printf 'draw-attempts: %s\n' "$DRAW_ATTEMPTS"
+  printf 'status-fetch-timeout-seconds: %s\n' "$TIMEOUT"
   printf 'status-max-response-bytes: %s\n' "$MAX_BYTES"
   printf 'transaction-lock-stale-after-seconds: %s\n' "$LOCK_STALE_AFTER"
   printf 'source: %s\n' "$URL"
@@ -733,6 +781,7 @@ render_absent_report() {
   printf 'next-observation: none scheduled\n'
   printf 'last-observation: never\n'
   printf 'last-new-reading: never\n'
+  printf 'status-fetch-timeout-seconds: %s\n' "$TIMEOUT"
   printf 'status-max-response-bytes: %s\n' "$MAX_BYTES"
   printf 'transaction-lock-stale-after-seconds: %s\n' "$LOCK_STALE_AFTER"
   printf 'source: %s\n' "$URL"

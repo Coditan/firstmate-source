@@ -133,10 +133,10 @@ install_fake_curl() {
 # 000; file-unbounded:<path> ignores the requested size limit; http:<code>
 # answers that code with an empty body; exit:<n> fails the fetch; garbage answers
 # 200 with a non-document.
-out=
+headers=
 max_bytes=
 for (( i = 1; i <= $#; i++ )); do
-  if [ "${!i}" = -o ]; then j=$(( i + 1 )); out=${!j}; fi
+  if [ "${!i}" = -D ]; then j=$(( i + 1 )); headers=${!j}; fi
   if [ "${!i}" = --max-filesize ]; then j=$(( i + 1 )); max_bytes=${!j}; fi
 done
 url=${!#}
@@ -153,16 +153,16 @@ fi
 case "${FM_TEST_CURL_MODE:-}" in
   file:*|file000:*)
     source=${FM_TEST_CURL_MODE#*:}
-    cat "$source" > "$out" 2>/dev/null || exit 7
-    bytes=$(wc -c < "$out" | tr -d '[:space:]')
+    bytes=$(wc -c < "$source" | tr -d '[:space:]')
     [ -z "$max_bytes" ] || [ "$bytes" -le "$max_bytes" ] || exit 63
-    case "$FM_TEST_CURL_MODE" in file000:*) printf '000' ;; *) printf '200' ;; esac
+    case "$FM_TEST_CURL_MODE" in file000:*) ;; *) printf 'HTTP/1.1 200 OK\r\n\r\n' > "$headers" ;; esac
+    cat "$source" 2>/dev/null || exit 7
     exit 0
     ;;
-  file-unbounded:*) cat "${FM_TEST_CURL_MODE#file-unbounded:}" > "$out" 2>/dev/null || exit 7; printf '200'; exit 0 ;;
-  http:*) : > "$out"; printf '%s' "${FM_TEST_CURL_MODE#http:}"; exit 0 ;;
-  exit:*) : > "$out"; exit "${FM_TEST_CURL_MODE#exit:}" ;;
-  garbage) printf 'not a status document\n' > "$out"; printf '200'; exit 0 ;;
+  file-unbounded:*) printf 'HTTP/1.1 200 OK\r\n\r\n' > "$headers"; cat "${FM_TEST_CURL_MODE#file-unbounded:}" 2>/dev/null || exit 23; exit 0 ;;
+  http:*) printf 'HTTP/1.1 %s Test\r\n\r\n' "${FM_TEST_CURL_MODE#http:}" > "$headers"; exit 0 ;;
+  exit:*) exit "${FM_TEST_CURL_MODE#exit:}" ;;
+  garbage) printf 'HTTP/1.1 200 OK\r\n\r\n' > "$headers"; printf 'not a status document\n'; exit 0 ;;
 esac
 exit 9
 SH
@@ -371,8 +371,8 @@ test_an_oversized_status_document_is_unmeasurable_and_never_parsed() {
   export FM_TEST_CURL_MODE
   out=$(FM_FORGE_STATUS_MAX_BYTES=100 run_watch "$fallback_home" --force)
   assert_contains "$out" 'UNMEASURABLE' "the parser boundary must reject a body the transport allowed"
-  assert_contains "$out" 'exceeding the effective 100-byte response limit' \
-    "the fallback refusal must name the measured body and effective limit"
+  assert_contains "$out" 'exceeded the effective 100-byte response limit' \
+    "the fallback refusal must name the effective limit"
   assert_not_contains "$out" 'All Systems Operational' \
     "the fallback refusal must happen before status parsing"
   [ "$(entry_count "$fallback_home")" -eq 1 ] \
@@ -406,6 +406,28 @@ test_the_status_body_cap_is_range_safe_and_clamped() {
   done
   [ ! -e "$malformed_home/state" ] || fail "reading a malformed effective cap created state"
   pass "the response cap is range safe, clamped, and visible"
+}
+
+test_the_fetch_timeout_is_range_safe_and_clamped() {
+  local configured home out
+  home=$(make_home timeout-boundary)
+  rmdir "$home/state" || fail "could not prepare a timeout test without state"
+
+  out=$(FM_FORGE_STATUS_TIMEOUT=120 run_watch "$home" --status)
+  assert_contains "$out" 'status-fetch-timeout-seconds: 15' \
+    "an excessive timeout must be clamped inside the watcher budget"
+  assert_contains "$out" 'transaction-lock-stale-after-seconds: 75' \
+    "the stale floor must derive from the clamped timeout"
+
+  for configured in '' 0 -1 nope 999999999999999999999999; do
+    out=$(FM_FORGE_STATUS_TIMEOUT=$configured run_watch "$home" --status)
+    assert_contains "$out" 'status-fetch-timeout-seconds: 10' \
+      "an invalid timeout '$configured' must fall back to the default"
+    assert_contains "$out" 'transaction-lock-stale-after-seconds: 70' \
+      "an invalid timeout '$configured' must not weaken the derived stale floor"
+  done
+  [ ! -e "$home/state" ] || fail "reading an effective timeout created state"
+  pass "the fetch timeout is range safe, clamped, and visible"
 }
 
 test_http_000_is_unmeasurable_but_non_http_000_can_be_read() {
@@ -582,8 +604,10 @@ test_the_transaction_lock_needs_no_flock_and_recovers_abandoned_states() {
   FM_FORGE_STATUS_TIMEOUT=120 FM_FORGE_STATUS_LOCK_STALE_AFTER=1 \
     run_watch "$home" --cadence raised >/dev/null
   out=$(run_watch "$home" --status)
-  assert_contains "$out" 'transaction-lock-stale-after-seconds: 180' \
-    "the recorded effective lock bound must exceed the configured fetch timeout"
+  assert_contains "$out" 'status-fetch-timeout-seconds: 15' \
+    "the recorded effective timeout must stay inside the watcher budget"
+  assert_contains "$out" 'transaction-lock-stale-after-seconds: 75' \
+    "the recorded lock bound must derive from the effective fetch timeout"
   pass "the portable transaction lock recovers every abandoned state"
 }
 
@@ -945,6 +969,7 @@ test_the_wake_says_what_a_vessel_should_not_conclude
 test_an_unreachable_status_page_is_unmeasurable_and_never_clear
 test_an_oversized_status_document_is_unmeasurable_and_never_parsed
 test_the_status_body_cap_is_range_safe_and_clamped
+test_the_fetch_timeout_is_range_safe_and_clamped
 test_http_000_is_unmeasurable_but_non_http_000_can_be_read
 test_a_status_document_cannot_forge_a_record_field
 test_the_cadence_is_settable_and_the_setting_in_force_is_readable

@@ -707,7 +707,7 @@ Until it existed, an outage at the forge reached this fleet only when a supervis
 
 It runs on the same seam as the curation nudge rather than on a second timer: the locked bootstrap step arms it with `--arm`, which writes and registers this home's `state/forge-status.check.sh` and is idempotent, and the watcher runs it on the ordinary `state/*.check.sh` sweep while it self-gates to its own schedule.
 A sweep that is not due reads the persisted schedule and reaches no network at all.
-A due sweep takes one bounded fetch (`FM_FORGE_STATUS_TIMEOUT`, default 10 seconds, and `FM_FORGE_STATUS_MAX_BYTES`, default 1000000 bytes and clamped to 5000000), renders the reading, and compares it to the last entry in the append-only `state/forge-status.log`.
+A due sweep takes one bounded fetch (`FM_FORGE_STATUS_TIMEOUT`, default 10 seconds and clamped to 15, and `FM_FORGE_STATUS_MAX_BYTES`, default 1000000 bytes and clamped to 5000000 through a byte-limited sink), renders the reading, and compares it to the last entry in the append-only `state/forge-status.log`.
 An unchanged reading appends nothing and wakes nobody; a new one is appended and printed as one wake line.
 The last log entry, not the schedule record, is what deduplication reads, so a record publish that fails after an append can neither duplicate nor lose a reading.
 
