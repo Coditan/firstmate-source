@@ -94,6 +94,40 @@ service_env() {
     "$@"
 }
 
+service_unset_environment() {
+  awk '
+    /^[[:space:]]*\[/ {
+      section=$0
+      sub(/^[[:space:]]*\[/, "", section)
+      sub(/\][[:space:]]*$/, "", section)
+      next
+    }
+    section == "Service" && /^[[:space:]]*UnsetEnvironment[[:space:]]*=/ {
+      value=$0
+      sub(/^[^=]*=/, "", value)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      if (value == "") {
+        normalized=""
+      } else if (normalized == "") {
+        normalized=value
+      } else {
+        normalized=normalized " " value
+      }
+    }
+    END { print normalized }
+  ' "$ROOT/systemd/fm-bosun@.service"
+}
+
+test_unit_clears_manager_judge_override() {
+  local entry found=0
+  for entry in $(service_unset_environment); do
+    [ "$entry" = FM_BOSUN_JUDGE_CMD ] && found=1
+  done
+  [ "$found" -eq 1 ] || \
+    fail "bosun unit does not clear FM_BOSUN_JUDGE_CMD at the service boundary"
+  pass "bosun unit clears the manager's ambient judge override"
+}
+
 # --- 1. a home that never opted in is left entirely alone --------------------
 #
 # The bosun spends an agent turn per judgement, so a standing process that
@@ -308,6 +342,7 @@ test_ambient_judge_override_does_not_change_service_resolution() {
 }
 
 test_unopted_home_is_silent
+test_unit_clears_manager_judge_override
 test_install_requires_consent_and_converges
 test_health_reading_is_not_the_units_own_state
 test_unreachable_judge_is_reported

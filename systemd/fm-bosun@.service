@@ -11,6 +11,10 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 EnvironmentFile=/%I/state/.bosun-service.env
+# Resolve the judge only from durable per-home sources, because a manager
+# override absent from the recorded environment would make diagnostics describe
+# a different judge from the one the service runs.
+UnsetEnvironment=FM_BOSUN_JUDGE_CMD
 ExecStart=/usr/bin/env bash ${FM_BOSUN_EXEC} run
 Restart=always
 RestartSec=5
