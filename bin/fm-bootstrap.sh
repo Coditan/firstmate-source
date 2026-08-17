@@ -32,7 +32,7 @@
 #                 "GROSSREINSCHIFF: weekly fleet cleanup sweep is due (...)",
 #                 "CURRENCY_ROUND: the daily update check <is not armed|has stopped> (...)",
 #                 "MEMORY_ALARM: <nothing is watching this machine|the memory watch ... has stopped> (...)",
-#                 "CURATION_NUDGE: <not armed|could not be armed|scheduler refusal|state persistence failure|state health indeterminate|supervision outage> (...)",
+#                 "CURATION_NUDGE|CODEBASE_SWEEP_NUDGE: <not armed|could not be armed|scheduler refusal|state persistence failure|state health indeterminate|supervision outage> (...)",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...",
 #                 "WATCHER_UNIT: <consent, convergence, or fallback detail>",
 #                 "DELIVERY_UNIT: <consent, convergence, or fallback detail>",
