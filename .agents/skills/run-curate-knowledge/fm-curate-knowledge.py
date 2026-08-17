@@ -121,10 +121,15 @@ HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.*?)[ \t]*$")
 # Extracting the calls keeps that script the single owner of what loads.
 DIGEST_CALL_RE = re.compile(r'print_file_or_absent\s+"\$DATA/([^"]+)"')
 
-# A route back is only a route if it can be run. These are the read-only search
-# verbs a loaded half may hand a reader; anything else is prose about the
-# archive rather than a way into it.
-ROUTE_VERBS = ("grep", "rg", "sed", "awk")
+# This is a closed positive interface, not a list of commands believed to be
+# harmless. grep and rg have no write operation, and every accepted option is
+# enumerated below so an unknown flag cannot add capability. Every other tool
+# is refused because it is outside this provably non-writing interface.
+ROUTE_VERBS = ("grep", "rg")
+ROUTE_FLAGS = {
+    "grep": ("-n", "-i", "-F", "-E", "-e", "--"),
+    "rg": ("-n", "-i", "-F", "-e", "--"),
+}
 
 # Verdict vocabularies. They do not overlap by accident: `cold` and `split`
 # presuppose an archive file, which a shared-tracked file must never grow.
@@ -713,17 +718,21 @@ def route_commands(loaded_text, archive_path):
 
 def prove_route(command, archive_path, headings, sample):
     """Run the documented route once and check every archived heading."""
-    forbidden = ("|", ";", ">", "<", "`", "$(", "${")
-    if any(token in command for token in forbidden):
-        return False, [], [], "route contains a forbidden shell construct"
     try:
         argv = shlex.split(command)
     except ValueError as exc:
         return False, [], [], "route cannot be tokenized: %s" % exc
     if not argv or argv[0] not in ROUTE_VERBS:
-        return False, [], [], "route command `%s` is not supported (%s)" % (
-            argv[0] if argv else "", ", ".join(ROUTE_VERBS)
-        )
+        return False, [], [], (
+            "route command `%s` cannot be proven non-writing; document the "
+            "route with grep or rg"
+        ) % (argv[0] if argv else "")
+    forbidden = ("|", ";", ">", "<", "`", "$(", "${")
+    if any(token in command for token in forbidden):
+        return False, [], [], "route contains a forbidden shell construct"
+    option_error = _validate_route_argv(argv)
+    if option_error:
+        return False, [], [], option_error
     base = os.path.basename(archive_path)
     archive_args = [index for index, value in enumerate(argv) if os.path.basename(value) == base]
     if not archive_args:
@@ -755,10 +764,10 @@ def prove_route(command, archive_path, headings, sample):
         hashes_before = {
             name: _file_hash(os.path.join(temp_path, name)) for name in copied
         }
-        # The real archive is never an execution target. The filesystem modes
-        # plus post-run hashes establish read-only behavior; the command name
-        # does not. This matters because data/ is captain-private and untracked,
-        # and this fleet has already lost one body there permanently.
+        # The real archive is never an execution target. The closed grep/rg
+        # interface is the non-writing guarantee; protected copies and hashes
+        # are defence in depth. This matters because data/ is captain-private
+        # and untracked, and this fleet has already lost one body permanently.
         os.chmod(temp_path, 0o555)
         try:
             result = subprocess.run(
@@ -781,11 +790,22 @@ def prove_route(command, archive_path, headings, sample):
     output = result.stdout.strip()
     if result.returncode != 0 or result.stderr.strip() or not output:
         return False, [], [], "documented route exited %d, wrote diagnostics, or returned no output" % result.returncode
-    required = Counter(headings)
-    found = {heading: output.count(heading) for heading in required}
+    records = []
+    for output_line in output.splitlines():
+        match = re.fullmatch(r"\d+:(#{1,6})[ \t]+(.*?)[ \t]*", output_line)
+        if not match:
+            return False, [], [], (
+                "route output is not a heading index record: %s" % output_line[:120]
+            )
+        records.append(norm_heading(match.group(2)))
+    heading_names = {}
+    for heading in headings:
+        heading_names.setdefault(norm_heading(heading), heading)
+    required = Counter(norm_heading(heading) for heading in headings)
+    found = Counter(records)
     missing = []
     for heading, count in required.items():
-        missing.extend([heading] * max(0, count - found[heading]))
+        missing.extend([heading_names[heading]] * max(0, count - found[heading]))
     reached = len(headings) - len(missing)
     lines = ["  $ (protected copy && %s)" % " ".join(_shell_quote(part) for part in argv)]
     output_lines = output.splitlines()
@@ -794,6 +814,36 @@ def prove_route(command, archive_path, headings, sample):
     return not missing, lines, missing, "route reaches %d of %d archived headings" % (
         reached, len(headings)
     )
+
+
+def _validate_route_argv(argv):
+    allowed = ROUTE_FLAGS[argv[0]]
+    positional = 0
+    index = 1
+    options_done = False
+    while index < len(argv):
+        value = argv[index]
+        if not options_done and value == "--":
+            options_done = True
+        elif not options_done and value in ("-e", "-m"):
+            if value not in allowed and value != "-m":
+                return "route flag `%s` is not in the closed read-only set" % value
+            index += 1
+            if index >= len(argv):
+                return "route flag `%s` requires a value" % value
+            if value == "-m" and not argv[index].isdigit():
+                return "route -m value must be a non-negative integer"
+        elif not options_done and re.fullmatch(r"-m\d+", value):
+            pass
+        elif not options_done and value.startswith("-"):
+            if value not in allowed:
+                return "route flag `%s` is not in the closed read-only set" % value
+        else:
+            positional += 1
+        index += 1
+    if positional < 1:
+        return "route has no pattern or path operands"
+    return None
 
 
 def _file_hash(path):

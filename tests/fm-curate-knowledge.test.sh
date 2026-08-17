@@ -317,7 +317,7 @@ EOF
 }
 
 test_route_proof_cannot_write_real_files() {
-  local before_hash out status
+  local before_hash escape_target out status
   before_hash=$(sha256sum "$TMP/after-archive.md")
   sed "s|grep -n '\^## '|sed -i 's/Alpha/Changed/'|" \
     "$TMP/after-loaded.md" >"$TMP/sed-route-loaded.md"
@@ -330,16 +330,28 @@ test_route_proof_cannot_write_real_files() {
   [ "$(sha256sum "$TMP/after-archive.md")" = "$before_hash" ] \
     || fail "the sed -i route changed the real archive"
 
-  sed "s|grep -n '\^## '|awk 'BEGIN { system(\"touch created\") } { print }'|" \
-    "$TMP/after-loaded.md" >"$TMP/awk-route-loaded.md"
+  escape_target="/tmp/fm-curate-route-escape-$$"
+  [ ! -e "$escape_target" ] || fail "the absolute escape target already exists"
+  printf '# Store\n\nUse `awk '\''BEGIN { system("touch %s") } { print }'\'' after-archive.md`.\n' \
+    "$escape_target" >"$TMP/awk-route-loaded.md"
   out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
     --loaded "$TMP/awk-route-loaded.md" --archive "$TMP/after-archive.md" \
     --home "$TMP/home" 2>&1) && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "an awk system route exited $status, expected 1"
-  printf '%s' "$out" | grep -q 'documented route failed' \
-    || fail "the awk system route was not reported as failed"
+  printf '%s' "$out" | grep -q 'cannot be proven non-writing; document the route with grep or rg' \
+    || fail "the awk system route was not refused by the closed interface"
+  [ ! -e "$escape_target" ] || fail "the refused awk route wrote to an absolute path"
   [ "$(sha256sum "$TMP/after-archive.md")" = "$before_hash" ] \
     || fail "the awk system route changed the real archive"
+
+  sed "s|grep -n '\^## '|grep --include='*' -n '\^## '|" \
+    "$TMP/after-loaded.md" >"$TMP/unknown-grep-flag-loaded.md"
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/unknown-grep-flag-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP/home" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "an unknown grep flag exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'not in the closed read-only set' \
+    || fail "the unknown grep flag was not rejected"
   pass "route proof cannot write the real archive"
 }
 
@@ -452,6 +464,32 @@ EOF
   pass "route completeness counts duplicate heading occurrences"
 }
 
+test_route_completeness_rejects_body_substrings() {
+  local out status
+  cat >"$TMP/body-substring-archive.md" <<'EOF'
+## Repeated fact
+
+Repeated fact
+
+## Repeated fact
+
+Second occurrence.
+EOF
+  cat >"$TMP/body-substring-loaded.md" <<'EOF'
+# Store
+
+Search with `grep -m2 -n -e '^## Repeated fact' -e '^Repeated fact$' body-substring-archive.md`.
+EOF
+  out=$("$DRIVER" check --before "$TMP/duplicate-before.json" \
+    --worksheet "$TMP/duplicate-ws.md" --loaded "$TMP/body-substring-loaded.md" \
+    --archive "$TMP/body-substring-archive.md" --home "$TMP/home" 2>&1) \
+    && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "body substrings passed route completeness"
+  printf '%s' "$out" | grep -q 'not a heading index record' \
+    || fail "body prose was not rejected as non-record route output"
+  pass "route completeness counts only heading index records"
+}
+
 test_measure_json_is_one_document() {
   "$DRIVER" measure "$TMP/before.md" --home "$TMP/home" --json \
     2>"$TMP/measure-json.stderr" | python3 -c 'import json,sys; json.load(sys.stdin)' \
@@ -560,6 +598,7 @@ test_route_proof_cannot_write_real_files
 test_duplicate_heading_occurrences_cannot_hide_a_deletion
 test_duplicate_occurrences_can_split_across_both_halves
 test_duplicate_route_hits_are_counted
+test_route_completeness_rejects_body_substrings
 test_measure_json_is_one_document
 test_the_two_shapes_never_borrow_each_others_method
 test_a_real_curation_passes_and_the_report_carries_the_ledger
