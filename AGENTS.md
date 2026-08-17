@@ -474,6 +474,10 @@ When the captain invokes `/updatefirstmate` or asks to update firstmate, load th
 It performs guarded fast-forward updates of firstmate and registered secondmate homes, refreshes instructions, and never touches anything under `projects/`.
 Bootstrap separately detects when the primary checkout's own default branch has drifted from its own origin and reports `SELF_DRIFT:`; `/updatefirstmate` resolves only the clean fast-forward (behind-only) case, while an ahead or diverged primary needs a manual preserve-and-merge crewmate task instead - `bootstrap-diagnostics` owns the exact remediation text.
 
+Being level with your own origin is one hop of three, and answering it alone is what let a vessel 72 commits behind pass its own currency check on 2026-08-17.
+Load the `run-fleet-update` skill when the captain invokes `/run-fleet-update`, says "update yourself" or asks whether this vessel is current, when the daily round reports a `pin-age` finding, and before ever telling the captain that this vessel is running current shared code.
+It owns the three-hop reading, and the rule that a hop it could not measure is reported as unable to read rather than as current.
+
 ## 13. Agent-only reference skills
 
 These skills are not captain-invocable; load them only at their precise triggers.

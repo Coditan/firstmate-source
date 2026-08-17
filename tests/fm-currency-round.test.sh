@@ -44,6 +44,11 @@ SH
 [ -n "${STUB_FORK_OUT:-}" ] && printf '%s\n' "$STUB_FORK_OUT"
 exit 0
 SH
+  cat > "$home/stub/fm-fleet-update-check.sh" <<'SH'
+#!/usr/bin/env bash
+[ "${STUB_PIN_AGE_RC:-0}" = 0 ] || exit "$STUB_PIN_AGE_RC"
+printf '%s\n' "${STUB_PIN_AGE_OUT:-skipped|this home carries no firstmate.lock, so it is not pin-delivered and has no pin to age}"
+SH
   cat > "$home/stub/pin" <<'SH'
 #!/usr/bin/env bash
 [ "${STUB_PIN_RC:-0}" = 0 ] || exit "$STUB_PIN_RC"
@@ -97,8 +102,58 @@ test_clean_seat_is_silent_and_says_which_hops_it_measured() {
   assert_grep 'FOR THIS SEAT ONLY' "$report" \
     "the report must say which hops it can speak for"
   assert_grep 'pin hop' "$report" \
-    "the report must name the hop it does not measure"
+    "the report must say what it can and cannot claim on the pin hop"
+  assert_grep 'reading: pin-age hop=pinned state=skipped' "$report" \
+    "a home that is not pin-delivered must be skipped by name, not faulted"
   pass "a clean round is silent and still records which hops it measured"
+}
+
+# The reading earned on 2026-08-17, when this seat's update tool reported
+# "already current" while its pin was 72 commits and 15 merged pull requests
+# behind. Nothing measured pin AGE, so the vessel passed its own currency check.
+test_a_stale_pin_is_reported_against_the_pinned_hop() {
+  local home out
+  home=$(make_home stale-pin)
+  install_round "$home"
+
+  out=$(STUB_PIN_AGE_OUT='behind|the pin 6ef0e3e is 72 commit(s) and 15 merged PR(s) behind main on https://example.invalid/source.git (source head 49a7688)' \
+    run_round "$home" --force)
+  assert_contains "$out" 'pin-age (pinned) behind' \
+    "a stale pin must be reported against the pinned hop"
+  assert_contains "$out" '72 commit(s)' \
+    "the finding must carry the measured distance, not a bare verdict"
+  assert_grep 'reading: pin-age hop=pinned state=behind' "$home/state/currency-round.report" \
+    "the behind reading must be recorded"
+  pass "a pin that lags its own source is reported rather than passing as current"
+}
+
+test_an_unreadable_pin_age_never_reports_all_clear() {
+  local home out report
+  home=$(make_home pin-age-blind)
+  install_round "$home"
+
+  out=$(STUB_PIN_AGE_RC=1 run_round "$home" --force)
+  [ -z "$out" ] || fail "a single unmeasured pin-age reading must not surface yet: $out"
+  report="$home/state/currency-round.report"
+  assert_grep 'reading: pin-age hop=pinned state=unmeasured' "$report" \
+    "a pin-age check that could not complete must record as unmeasured, never as ok"
+
+  out=$(STUB_PIN_AGE_RC=1 run_round "$home" --force)
+  assert_contains "$out" 'pin-age (pinned) unmeasured' \
+    "a pin-age reading unmeasured in two consecutive rounds must surface"
+  pass "a pin age that could not be read is never relayed as an all-clear"
+}
+
+test_an_unknown_pin_age_answer_is_unmeasured_not_ok() {
+  local home report
+  home=$(make_home pin-age-garbled)
+  install_round "$home"
+
+  STUB_PIN_AGE_OUT='current and fine' run_round "$home" --force >/dev/null
+  report="$home/state/currency-round.report"
+  assert_grep 'reading: pin-age hop=pinned state=unmeasured' "$report" \
+    "an answer in an unknown shape must not be read as a state the round trusts"
+  pass "an answer the round cannot parse is unmeasured rather than ok"
 }
 
 test_dirty_checkout_is_reported_as_unable_to_update() {
@@ -293,6 +348,9 @@ test_status_reports_without_writing_the_cadence() {
 }
 
 test_clean_seat_is_silent_and_says_which_hops_it_measured
+test_a_stale_pin_is_reported_against_the_pinned_hop
+test_an_unreadable_pin_age_never_reports_all_clear
+test_an_unknown_pin_age_answer_is_unmeasured_not_ok
 test_dirty_checkout_is_reported_as_unable_to_update
 test_a_linked_secondmate_home_is_not_reported_as_unable
 test_behind_instruction_surface_names_the_released_hop
