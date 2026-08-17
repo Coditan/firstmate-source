@@ -1,0 +1,210 @@
+#!/usr/bin/env bash
+# Tests for bin/fm-project-remove.sh's guarded project-clone removal path.
+set -u
+
+# shellcheck source=tests/lib.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+fm_git_identity fmtest fmtest@example.invalid
+
+REMOVE="$ROOT/bin/fm-project-remove.sh"
+fm_test_tmproot TMP_ROOT fm-project-remove-tests
+
+make_home() {
+  local name=$1 home seed
+  home="$TMP_ROOT/$name"
+  mkdir -p "$home/data" "$home/state" "$home/projects"
+  git init -q --bare "$home/origin.git"
+  git -C "$home/origin.git" symbolic-ref HEAD refs/heads/main
+  git clone -q "$home/origin.git" "$home/seed"
+  printf 'base\n' > "$home/seed/README.md"
+  git -C "$home/seed" add README.md
+  git -C "$home/seed" commit -qm "initial"
+  git -C "$home/seed" push -q origin main
+  rm -rf "$home/seed"
+  git clone -q "$home/origin.git" "$home/projects/alpha"
+  git -C "$home/projects/alpha" remote set-head origin main
+  printf '%s\n' '- alpha [direct-PR] - alpha fixture (added 2026-08-17)' > "$home/data/projects.md"
+  printf '# Backlog\n\n## In flight\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
+  seed="$home/projects/alpha"
+  git -C "$seed" fetch -q origin
+  printf '%s\n' "$home"
+}
+
+run_remove() {
+  local home=$1
+  shift
+  FM_HOME="$home" FM_DATA_OVERRIDE="$home/data" FM_STATE_OVERRIDE="$home/state" \
+    FM_PROJECTS_OVERRIDE="$home/projects" "$REMOVE" "$@"
+}
+
+commit_branch() {
+  local repo=$1 branch=$2 file=$3 content=$4
+  git -C "$repo" switch -q -c "$branch"
+  printf '%s\n' "$content" > "$repo/$file"
+  git -C "$repo" add "$file"
+  git -C "$repo" commit -qm "add $file"
+  git -C "$repo" switch -q main
+}
+
+test_requires_captain_approval() {
+  local home rc=0
+  home=$(make_home requires-captain-approval)
+  run_remove "$home" alpha --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 1 "$rc" "missing captain approval"
+  assert_grep "missing --captain-approved" "$home/err" \
+    "project removal did not require explicit captain approval"
+  [ -d "$home/projects/alpha" ] || fail "missing-approval refusal removed the clone"
+  pass "project removal refuses without explicit captain approval"
+}
+
+test_dirty_primary_refuses() {
+  local home rc=0
+  home=$(make_home dirty-primary)
+  printf 'dirty\n' > "$home/projects/alpha/dirty.txt"
+  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 1 "$rc" "dirty primary"
+  assert_grep "has uncommitted changes" "$home/err" \
+    "dirty primary refusal did not explain uncommitted changes"
+  [ -d "$home/projects/alpha" ] || fail "dirty-primary refusal removed the clone"
+  pass "project removal refuses uncommitted changes in the primary clone"
+}
+
+test_unlanded_branch_refuses() {
+  local home repo rc=0
+  home=$(make_home unlanded-branch)
+  repo="$home/projects/alpha"
+  commit_branch "$repo" feature/not-landed feature.txt feature
+  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 1 "$rc" "unlanded branch"
+  assert_grep "local branch feature/not-landed has no preservation" "$home/err" \
+    "unlanded branch refusal did not name the branch"
+  [ -d "$home/projects/alpha" ] || fail "unlanded-branch refusal removed the clone"
+  pass "project removal refuses local branches without landed-content or remote preservation proof"
+}
+
+test_treehouse_worktree_refuses_unpreserved_head() {
+  local home repo wt rc=0
+  home=$(make_home treehouse-worktree)
+  repo="$home/projects/alpha"
+  wt="$home/.treehouse/alpha-test/1/alpha"
+  mkdir -p "$(dirname "$wt")"
+  git -C "$repo" worktree add -q --detach "$wt" main
+  printf 'wip\n' > "$wt/wip.txt"
+  git -C "$wt" add wip.txt
+  git -C "$wt" commit -qm "treehouse wip"
+  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 1 "$rc" "treehouse worktree"
+  assert_grep "attached treehouse worktree" "$home/err" \
+    "treehouse worktree refusal did not identify the attached worktree"
+  [ -d "$home/projects/alpha" ] || fail "treehouse-worktree refusal removed the clone"
+  pass "project removal refuses attached treehouse worktrees with unpreserved work"
+}
+
+test_claude_worktree_refuses_dirty_slot() {
+  local home repo wt rc=0
+  home=$(make_home claude-worktree-dirty)
+  repo="$home/projects/alpha"
+  wt="$repo/.claude/worktrees/agent-1"
+  mkdir -p "$(dirname "$wt")"
+  git -C "$repo" worktree add -q --detach "$wt" main
+  printf 'dirty\n' > "$wt/dirty.txt"
+  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 1 "$rc" "claude worktree dirty"
+  assert_grep "attached claude worktree" "$home/err" \
+    "claude worktree refusal did not identify the attached slot"
+  assert_grep "has uncommitted changes" "$home/err" \
+    "claude worktree refusal did not explain dirty work"
+  [ -d "$home/projects/alpha" ] || fail "claude-worktree refusal removed the clone"
+  pass "project removal refuses dirty .claude/worktrees agent slots"
+}
+
+test_secondmate_clone_refuses() {
+  local home sub rc=0
+  home=$(make_home secondmate-clone)
+  sub="$home/secondmate"
+  mkdir -p "$sub/projects"
+  git clone -q "$home/origin.git" "$sub/projects/alpha"
+  printf '%s\n' "- mate - fixture secondmate (home: $sub; scope: fixture; projects: alpha; added 2026-08-17)" \
+    > "$home/data/secondmates.md"
+  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 1 "$rc" "secondmate clone"
+  assert_grep "secondmate mate" "$home/err" \
+    "secondmate refusal did not name the registered secondmate"
+  [ -d "$home/projects/alpha" ] || fail "secondmate-clone refusal removed the clone"
+  pass "project removal refuses registered secondmate clones of the same project"
+}
+
+test_backlog_reference_refuses() {
+  local home rc=0
+  home=$(make_home backlog-reference)
+  cat > "$home/data/backlog.md" <<'EOF'
+# Backlog
+
+## In flight
+- [ ] alpha-live - active work (repo: alpha) (kind: ship)
+
+## Queued
+
+## Done
+EOF
+  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 1 "$rc" "backlog reference"
+  assert_grep "alpha-live" "$home/err" \
+    "backlog refusal did not name the conflicting work"
+  [ -d "$home/projects/alpha" ] || fail "backlog-reference refusal removed the clone"
+  pass "project removal refuses in-flight or queued backlog work naming the project"
+}
+
+test_registry_must_have_one_entry() {
+  local home rc=0
+  home=$(make_home registry-duplicate)
+  printf '%s\n' '- alpha [direct-PR] - duplicate fixture (added 2026-08-17)' \
+    >> "$home/data/projects.md"
+  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 1 "$rc" "registry duplicate"
+  assert_grep "expected exactly one data/projects.md entry" "$home/err" \
+    "registry refusal did not explain duplicate entry"
+  [ -d "$home/projects/alpha" ] || fail "registry-duplicate refusal removed the clone"
+  pass "project removal refuses when the registry entry is not exactly one line"
+}
+
+test_pass_removes_clone_and_registry_entry_together() {
+  local home repo rc=0
+  home=$(make_home pass-removal)
+  repo="$home/projects/alpha"
+  commit_branch "$repo" feature/preserved preserved.txt preserved
+  git -C "$repo" push -q origin feature/preserved
+  git -C "$repo" fetch -q origin
+  run_remove "$home" alpha --captain-approved > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 0 "$rc" "passing removal"
+  [ ! -e "$home/projects/alpha" ] || fail "passing removal left the clone on disk"
+  assert_no_grep "- alpha " "$home/data/projects.md" \
+    "passing removal did not remove the registry entry"
+  assert_grep "removed project alpha" "$home/out" \
+    "passing removal did not print the removal outcome"
+  pass "project removal removes the clone and registry entry in the same guarded operation"
+}
+
+test_dry_run_pass_keeps_clone_and_registry() {
+  local home rc=0
+  home=$(make_home dry-run-pass)
+  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 0 "$rc" "dry-run pass"
+  [ -d "$home/projects/alpha" ] || fail "dry-run removed the clone"
+  assert_grep "- alpha " "$home/data/projects.md" \
+    "dry-run removed the registry entry"
+  assert_grep "PASS: project alpha removal safety checks passed." "$home/out" \
+    "dry-run pass verdict was not printed"
+  pass "project removal dry-run prints a pass verdict without removing the clone or registry entry"
+}
+
+test_requires_captain_approval
+test_dirty_primary_refuses
+test_unlanded_branch_refuses
+test_treehouse_worktree_refuses_unpreserved_head
+test_claude_worktree_refuses_dirty_slot
+test_secondmate_clone_refuses
+test_backlog_reference_refuses
+test_registry_must_have_one_entry
+test_pass_removes_clone_and_registry_entry_together
+test_dry_run_pass_keeps_clone_and_registry
