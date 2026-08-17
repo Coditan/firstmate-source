@@ -601,17 +601,43 @@ def resolve_baseline_shape(args, before, worksheet_shape=None):
 
     The baseline records what was measured, Git owns whether material is shared,
     and the worksheet records which verdict vocabulary the operator filled in.
+    A pair contributes both its loaded and archive records and current Git states.
+    The archive half is the fourth carrier found for this invariant, after the
+    explicit flag, snapshot, and worksheet; that does not prove no fifth exists.
     --shape is accepted only when the baseline and Git cannot classify a staged
     file; it may then agree with the worksheet generated through that fallback.
     """
     recorded = before.get("shape")
     baseline_path = before.get("loaded_path") or before.get("path")
     detected = detect_shape(baseline_path, args.root)
-    sources = [
-        ("recorded baseline shape", recorded),
-        ("current Git tracking", detected),
-        ("inventory worksheet header", worksheet_shape),
-    ]
+    if before.get("mode") == "pair":
+        loaded_sources = [
+            ("loaded half recorded baseline shape", recorded),
+            ("loaded half current Git tracking", detected),
+        ]
+        archive_sources = [
+            ("archive half recorded baseline shape", before.get("archive_shape")),
+            (
+                "archive half current Git tracking",
+                detect_shape(before["archive_path"], args.root),
+            ),
+        ]
+        for half_sources in (loaded_sources, archive_sources):
+            known_half = [item for item in half_sources if item[1] is not None]
+            if len(known_half) == 2 and known_half[0][1] != known_half[1][1]:
+                shape_disagreement(
+                    known_half[0][0],
+                    known_half[0][1],
+                    known_half[1][0],
+                    known_half[1][1],
+                )
+        sources = loaded_sources + archive_sources
+    else:
+        sources = [
+            ("recorded baseline shape", recorded),
+            ("current Git tracking", detected),
+        ]
+    sources.append(("inventory worksheet header", worksheet_shape))
     for source, value in sources:
         if value is not None and value not in ("private", "shared"):
             die(
@@ -627,9 +653,10 @@ def resolve_baseline_shape(args, before, worksheet_shape=None):
                     first_source, first_value, second_source, second_value
                 )
 
-    if args.shape and (recorded is not None or detected is not None):
+    authoritative = [item for item in sources[:-1] if item[1] is not None]
+    if args.shape and authoritative:
         authority_source, authority_value = next(
-            (source, value) for source, value in sources[:2] if value is not None
+            (source, value) for source, value in authoritative
         )
         if args.shape != authority_value:
             shape_disagreement("--shape", args.shape, authority_source, authority_value)
@@ -1122,6 +1149,7 @@ def load_baseline(args):
     baseline["mode"] = "pair"
     baseline["loaded_path"] = loaded_record["path"]
     baseline["archive_path"] = archive_record["path"]
+    baseline["archive_shape"] = archive_record.get("shape")
     return baseline
 
 

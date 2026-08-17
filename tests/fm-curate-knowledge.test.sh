@@ -1237,10 +1237,11 @@ PY
 }
 
 test_every_carried_shape_is_reconciled() {
-  local out status shape_root transitioned_before stable_before wrong_worksheet
+  local out status shape_root transitioned_before stable_before pair_before wrong_worksheet
   shape_root="$TMP/shape-root"
   transitioned_before="$TMP/transitioned-before.json"
   stable_before="$TMP/stable-before.json"
+  pair_before="$TMP/mismatched-pair-before.json"
   wrong_worksheet="$TMP/wrong-shape-worksheet.md"
   mkdir -p "$shape_root"
   git -C "$shape_root" init -q
@@ -1295,6 +1296,45 @@ test_every_carried_shape_is_reconciled() {
   [ "$status" -eq 0 ] || fail "agreeing baseline and Git classifications failed: $out"
   printf '%s' "$out" | grep -q 'CHECK PASSED' \
     || fail "agreeing classifications did not complete the check"
+
+  "$DRIVER" measure "$shape_root/stable.md" "$shape_root/transitioned.md" \
+    --save "$pair_before" --home "$TMP" --root "$shape_root" >/dev/null \
+    || fail "could not snapshot a pair with a tracked archive half"
+  python3 - "$pair_before" "$shape_root/transitioned.md" <<'PY'
+import json
+import os
+import sys
+
+snapshot_path, archive_path = sys.argv[1:]
+with open(snapshot_path, encoding="utf-8") as handle:
+    snapshot = json.load(handle)
+snapshot["files"][os.path.abspath(archive_path)].pop("shape", None)
+with open(snapshot_path, "w", encoding="utf-8") as handle:
+    json.dump(snapshot, handle)
+PY
+  out=$("$DRIVER" check --before "$pair_before" \
+    --before-loaded "$shape_root/stable.md" \
+    --before-archive "$shape_root/transitioned.md" \
+    --worksheet "$TMP/ws-filled.md" --loaded "$TMP/after-loaded.md" \
+    --archive "$TMP/after-archive.md" --home "$TMP" --root "$shape_root" 2>&1) \
+    && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "check accepted a tracked shared archive half"
+  printf '%s' "$out" | grep -q 'loaded half recorded baseline shape says private' \
+    || fail "pair refusal did not name the loaded half baseline source: $out"
+  printf '%s' "$out" | grep -q 'archive half current Git tracking says shared' \
+    || fail "pair refusal did not name the archive half tracking source: $out"
+  printf '%s' "$out" | grep -q 'restore the file.*prior tracking state' \
+    || fail "pair refusal gave no actionable recovery: $out"
+
+  out=$("$DRIVER" report --before "$pair_before" \
+    --before-loaded "$shape_root/stable.md" \
+    --before-archive "$shape_root/transitioned.md" \
+    --worksheet "$TMP/ws-filled.md" --loaded "$TMP/after-loaded.md" \
+    --archive "$TMP/after-archive.md" --home "$TMP" --root "$shape_root" 2>&1) \
+    && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "report accepted a tracked shared archive half"
+  printf '%s' "$out" | grep -q 'archive half current Git tracking says shared' \
+    || fail "report did not reconcile the archive half: $out"
   pass "baseline, Git, worksheet, and explicit shapes are reconciled"
 }
 
