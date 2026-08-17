@@ -304,8 +304,8 @@ EOF
 }
 
 registered_claude_worktree_paths() {
-  local path head branch prunable abs_path
-  while IFS=$'\t' read -r path head branch prunable; do
+  local path _head branch prunable abs_path
+  while IFS=$'\t' read -r path _head branch prunable; do
     [ -n "$path" ] || continue
     if [ -d "$path" ]; then
       abs_path=$(canonical_existing_dir "$path" 2>/dev/null || printf '%s' "$path")
@@ -432,8 +432,8 @@ attachment_kind() {
 }
 
 check_attached_worktrees() {
-  local path head branch prunable abs_path kind dirty bad=0
-  while IFS=$'\t' read -r path head branch prunable; do
+  local path _head branch prunable abs_path kind dirty bad=0
+  while IFS=$'\t' read -r path _head branch prunable; do
     [ -n "$path" ] || continue
     if [ -d "$path" ]; then
       abs_path=$(canonical_existing_dir "$path" 2>/dev/null || printf '%s' "$path")
@@ -650,8 +650,8 @@ fetch_before_removal() {
 }
 
 remove_attached_worktrees() {
-  local path head branch prunable abs_path
-  while IFS=$'\t' read -r path head branch prunable; do
+  local path _head branch prunable abs_path
+  while IFS=$'\t' read -r path _head branch prunable; do
     [ -n "$path" ] || continue
     if [ -d "$path" ]; then
       abs_path=$(canonical_existing_dir "$path" 2>/dev/null || printf '%s' "$path")
