@@ -33,7 +33,7 @@
 # Bridge: the boundary rules there are content-sensitive, an unattended
 # publisher is unauditable, and AGENTS.md section 1 forbids a timer standing in
 # for firstmate. The wake is durable, so an absent firstmate does not lose a
-# transition.
+# new reading.
 #
 # CANNOT REACH IS NOT ALL CLEAR
 # A watch that goes quiet when the network fails is worse than no watch,
