@@ -103,11 +103,6 @@ A silent bootstrap section needs no action; for any printed actionable diagnosti
 `BOOTSTRAP_INFO:` lines are completed no-action facts and do not require loading a skill.
 `secondmate-provisioning` owns startup secondmate sync, liveness, and inherited local-material convergence.
 
-### AXI-suite currency
-
-The locked bootstrap step also runs `bin/fm-axi-suite.sh`, the per-vessel AXI-suite currency check described in `docs/configuration.md` "AXI-suite self-update": patch and minor releases self-update, while `AXI_SUITE_REVIEW:` and `AXI_SUITE_STUCK:` require handling through `bootstrap-diagnostics`.
-This check never calls Bridge from the updater; firstmate owns any stuck-status relay and dispatches a crewmate for project writes.
-
 ### Running out of memory
 
 This machine has no swap and no memory limit anywhere, so nothing but this alarm stands between a runaway worker and the kernel choosing a victim.
@@ -124,14 +119,6 @@ Firstmate's daily currency duty has a mechanism, so it is never carried by memor
 Two facts bind wherever that wake is read.
 Every claim of currency names its hop - `released`, `pinned`, or `installed` - and this round measures all three for this seat only, so a clean round never means the fleet is current.
 A reading the round could not take is reported as unmeasured and never as current, because an instrument that cannot read must not be relayed as an all-clear.
-
-### Re-measuring the knowledge files
-
-Section 10's instruction to prune rather than append also has a mechanism now, for the same reason: the locked bootstrap step arms `bin/fm-curation-nudge.sh` on the watcher, and every session start reports `CURATION_NUDGE:` when the cadence needs attention.
-`docs/configuration.md` "Knowledge-file curation nudge" and `docs/curation-nudge.md` own the 48-hour cadence, the off-grid jitter, and the scope; the nudge arrives as an ordinary `check:` wake under section 8.
-Two facts bind wherever that wake is read.
-It is a prompt to measure and never a claim about any vessel's files, because these files are per-home and gitignored and no seat can see another's, so each vessel measures its own pair and decides its own split.
-The nudge itself never writes to Bridge: firstmate reads the wake and dispatches a crewmate to send the All-Ships notice, exactly as section 12 requires of every fleet notice.
 
 ## 4. Harness and runtime dispatch
 
