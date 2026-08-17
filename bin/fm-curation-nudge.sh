@@ -280,7 +280,7 @@ read_last_fire() {
 }
 
 read_refusal() {
-  local recorded='' jitter_min='' jitter_max='' interval='' attempts='' key value
+  local recorded='' jitter_min='' jitter_max='' interval='' attempts='' surfaced=0 key value
   [ -f "$REFUSAL" ] || return 1
   while IFS='=' read -r key value; do
     case "$key" in
@@ -289,21 +289,22 @@ read_refusal() {
       jitter_max) jitter_max=$value ;;
       interval) interval=$value ;;
       attempts) attempts=$value ;;
+      surfaced) surfaced=$value ;;
     esac
   done < "$REFUSAL"
-  case "$recorded:$jitter_min:$jitter_max:$interval:$attempts" in
+  case "$recorded:$jitter_min:$jitter_max:$interval:$attempts:$surfaced" in
     *[!0-9:]*) return 1 ;;
   esac
   [ -n "$recorded" ] && [ -n "$jitter_min" ] && [ -n "$jitter_max" ] \
     && [ -n "$interval" ] && [ -n "$attempts" ] || return 1
-  printf '%s %s %s %s %s' "$recorded" "$jitter_min" "$jitter_max" "$interval" "$attempts"
+  printf '%s %s %s %s %s %s' "$recorded" "$jitter_min" "$jitter_max" "$interval" "$attempts" "$surfaced"
 }
 
 SCHEDULED_TARGET=''
 PERSISTENCE_PATH=''
 PERSISTENCE_CONDITION=''
 schedule_transition() {
-  local target tmp
+  local target tmp existing recorded jitter_min jitter_max interval attempts surfaced
   SCHEDULED_TARGET=''
   PERSISTENCE_PATH=''
   PERSISTENCE_CONDITION=''
@@ -339,6 +340,16 @@ schedule_transition() {
     return 0
   fi
 
+  if existing=$(read_refusal); then
+    read -r recorded jitter_min jitter_max interval attempts surfaced <<EOF
+$existing
+EOF
+    if [ "$jitter_min" = "$JITTER_MIN" ] && [ "$jitter_max" = "$JITTER_MAX" ] \
+      && [ "$interval" = "$INTERVAL" ] && [ "$attempts" = "$DRAW_ATTEMPTS" ] \
+      && [ "$surfaced" -eq 1 ]; then
+      return 3
+    fi
+  fi
   [ ! -d "$REFUSAL" ] || {
     PERSISTENCE_PATH=$REFUSAL
     PERSISTENCE_CONDITION='the draw refusal could not replace a directory at the refusal-record path'
@@ -355,6 +366,7 @@ schedule_transition() {
     printf 'jitter_max=%s\n' "$JITTER_MAX"
     printf 'interval=%s\n' "$INTERVAL"
     printf 'attempts=%s\n' "$DRAW_ATTEMPTS"
+    printf 'surfaced=1\n'
   } > "$tmp" || {
     rm -f -- "$tmp"
     PERSISTENCE_PATH=$tmp
@@ -451,10 +463,12 @@ persist_firing_records() {
   rm -f -- "$report_backup"
 }
 
-render_report() {  # <next-due-epoch or empty> [this-firing-epoch]
+render_report() {  # <next-due-epoch, pending, or empty> [this-firing-epoch]
   local next=$1 firing_epoch=${2:-} last
   printf 'nudge: %s\n' "$(epoch_utc "$NOW")"
-  if [ -n "$next" ]; then
+  if [ "$next" = pending ]; then
+    printf 'next: successor scheduling follows this firing record\n'
+  elif [ -n "$next" ]; then
     printf 'next: %s (minute %s, off the five-minute grid)\n' "$(epoch_utc "$next")" "$(minute_of "$next")"
   else
     printf 'next: none scheduled\n'
@@ -501,7 +515,10 @@ if ! mkdir -p "$STATE" 2>/dev/null; then
   # The reporting modes stay quiet about their own plumbing rather than waking a
   # supervisor with it; the modes a human or bootstrap invoked say so and fail.
   case "$MODE" in
-    detect|armed) exit 0 ;;
+    detect|armed)
+      printf 'CURATION_NUDGE: state persistence failure at %s because the state directory is unavailable; repair that state path and run the check again\n' "$STATE"
+      exit 1
+      ;;
     draw) ;;
     *)
       printf 'fm-curation-nudge: cannot create state directory %s\n' "$STATE" >&2
@@ -549,13 +566,13 @@ SHIM
 # work produced: is there a next target at all, and has anything executed the
 # one there is?
 armed_diagnostic() {
-  local next last shim_mtime shim_age overdue_by refusal recorded jitter_min jitter_max interval attempts age
+  local next last shim_mtime shim_age overdue_by refusal recorded jitter_min jitter_max interval attempts surfaced age
   if [ -e "$NEXT_DUE" ] && [ -e "$REFUSAL" ]; then
     printf 'CURATION_NUDGE: state persistence failure left both the next target and draw-refusal records at %s and %s; repair the superseded record and run the check again\n' "$NEXT_DUE" "$REFUSAL"
     return 0
   fi
   if refusal=$(read_refusal); then
-    read -r recorded jitter_min jitter_max interval attempts <<EOF
+    read -r recorded jitter_min jitter_max interval attempts surfaced <<EOF
 $refusal
 EOF
     age=$(( NOW - recorded ))
@@ -645,26 +662,33 @@ if [ "$MODE" = detect ]; then
     case "$transition_status" in
       0) exit 0 ;;
       1) schedule_refusal_line; exit 0 ;;
+      3) exit 0 ;;
       *) state_persistence_line; exit 1 ;;
     esac
   fi
   [ "$NOW" -ge "$due" ] || exit 0
 fi
 
-# Fire. The next target is drawn from NOW rather than from the target just
-# consumed, so a home that was off for a week schedules one sweep ahead instead
-# of firing on every watcher pass until it has caught up with the calendar.
-schedule_transition
-transition_status=$?
-case "$transition_status" in
-  0) next=$SCHEDULED_TARGET ;;
-  1) schedule_refusal_line; exit 0 ;;
-  *) state_persistence_line; exit 1 ;;
-esac
+if last_completed=$(read_last_fire) && [ "$last_completed" -ge "$due" ]; then
+  schedule_transition
+  transition_status=$?
+  case "$transition_status" in
+    0|3) exit 0 ;;
+    1) schedule_refusal_line; exit 0 ;;
+    *) state_persistence_line; exit 1 ;;
+  esac
+fi
+
 firing_epoch=$NOW
-if ! persist_firing_records "$next" "$firing_epoch"; then
+if ! persist_firing_records pending "$firing_epoch"; then
   state_persistence_line
   exit 1
 fi
-nudge_line
-exit 0
+schedule_transition
+transition_status=$?
+case "$transition_status" in
+  0) nudge_line; exit 0 ;;
+  1) nudge_line; schedule_refusal_line; exit 0 ;;
+  3) nudge_line; exit 0 ;;
+  *) nudge_line; state_persistence_line; exit 1 ;;
+esac

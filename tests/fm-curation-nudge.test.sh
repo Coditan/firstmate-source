@@ -160,7 +160,7 @@ test_initial_detect_loudly_explains_an_exhausted_draw() {
   pass "draw refusal remains distinct from supervision failure and clears on recovery"
 }
 
-test_a_refused_successor_does_not_claim_the_nudge_fired() {
+test_a_refused_successor_records_the_firing_and_the_refusal() {
   local home due out
   home=$(make_home refused-successor)
   due=$(( $(date +%s) / 300 * 300 ))
@@ -170,17 +170,68 @@ test_a_refused_successor_does_not_claim_the_nudge_fired() {
     FM_CURATION_NUDGE_JITTER_MAX=0 run_nudge "$home")
   assert_contains "$out" 'no next curation sweep was scheduled' \
     "a refused successor must report the scheduling refusal"
-  [ ! -e "$home/state/curation-nudge.last-fire" ] \
-    || fail "a refused successor falsely advanced last-fire"
+  assert_contains "$out" 'curation sweep is due' \
+    "the completed firing must still emit its wake"
+  [ "$(cat "$home/state/curation-nudge.last-fire")" = "$due" ] \
+    || fail "the completed firing did not advance last-fire"
   out=$(FM_CURATION_NUDGE_NOW="$due" run_nudge "$home" --status)
-  assert_contains "$out" 'last-fire: never' \
-    "status must not claim a refused nudge actually fired"
+  assert_not_contains "$out" 'last-fire: never' \
+    "status must retain the firing despite successor refusal"
   out=$(FM_CURATION_NUDGE_NOW=$(( due + 7200 )) run_nudge "$home" --armed)
   assert_contains "$out" 'scheduler has refused' \
     "health must retain the refusal rather than inventing a firing"
-  assert_not_contains "$out" 'last fired' \
-    "health must not claim the refused nudge fired"
-  pass "a refused successor records no false firing"
+  pass "a refused successor records both the firing and refusal"
+}
+
+test_unchanged_refusal_is_surfaced_once_and_resets() {
+  local home now first second third
+  home=$(make_home refusal-dedup)
+  run_nudge "$home" --arm >/dev/null
+  now=$(( $(date +%s) / 300 * 300 ))
+
+  first=$(FM_CURATION_NUDGE_NOW="$now" FM_CURATION_NUDGE_JITTER_MIN=0 \
+    FM_CURATION_NUDGE_JITTER_MAX=0 run_nudge "$home")
+  assert_contains "$first" 'no next curation sweep was scheduled' \
+    "the first refusal must be immediate"
+  second=$(FM_CURATION_NUDGE_NOW=$(( now + 300 )) FM_CURATION_NUDGE_JITTER_MIN=0 \
+    FM_CURATION_NUDGE_JITTER_MAX=0 run_nudge "$home")
+  [ -z "$second" ] || fail "an unchanged refusal repeated: $second"
+
+  FM_CURATION_NUDGE_NOW=$(( now + 60 )) FM_CURATION_NUDGE_JITTER_MIN=0 \
+    FM_CURATION_NUDGE_JITTER_MAX=0 run_nudge "$home" >/dev/null
+  rm -f "$home/state/curation-nudge.next-due"
+  third=$(FM_CURATION_NUDGE_NOW=$(( now + 600 )) FM_CURATION_NUDGE_JITTER_MIN=0 \
+    FM_CURATION_NUDGE_JITTER_MAX=0 run_nudge "$home")
+  assert_contains "$third" 'no next curation sweep was scheduled' \
+    "the refusal must surface again after clearing"
+  pass "unchanged refusal is surfaced once and resets after clearing"
+}
+
+test_unavailable_state_path_is_loud() {
+  local home blocked state_path out status
+  home=$(make_home unavailable-state)
+  blocked="$home/blocked"
+  state_path="$blocked/state"
+  printf 'not a directory\n' > "$blocked"
+
+  status=0
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$state_path" FM_DATA_OVERRIDE="$home/data" \
+    "$home/bin/fm-curation-nudge.sh") || status=$?
+  [ "$status" -ne 0 ] || fail "detect accepted an unavailable state path: $out"
+  assert_contains "$out" 'state persistence failure' \
+    "detect must report unavailable state"
+  assert_contains "$out" "$state_path" \
+    "detect must name the unavailable state path"
+
+  status=0
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$state_path" FM_DATA_OVERRIDE="$home/data" \
+    "$home/bin/fm-curation-nudge.sh" --armed) || status=$?
+  [ "$status" -ne 0 ] || fail "--armed accepted an unavailable state path: $out"
+  assert_contains "$out" 'state persistence failure' \
+    "--armed must report unavailable state"
+  assert_contains "$out" "$state_path" \
+    "--armed must name the unavailable state path"
+  pass "unavailable state path is loud in detect and health modes"
 }
 
 test_refusal_persistence_failure_is_distinct_and_fails() {
@@ -292,7 +343,7 @@ test_failed_refusal_commit_preserves_the_next_due() {
 }
 
 test_report_commit_failure_prevents_the_successful_wake() {
-  local home due out status=0 fakebin report
+  local home due out status=0 fakebin report retry
   home=$(make_home report-commit-failure)
   run_nudge "$home" >/dev/null
   due=$(cat "$home/state/curation-nudge.next-due")
@@ -309,7 +360,12 @@ test_report_commit_failure_prevents_the_successful_wake() {
     "a firing without its report must not emit the successful wake"
   [ ! -e "$home/state/curation-nudge.last-fire" ] \
     || fail "a firing without its report recorded last-fire"
-  pass "report commit failure prevents a fully recorded success"
+  [ "$(cat "$home/state/curation-nudge.next-due")" = "$due" ] \
+    || fail "the failed firing consumed its due event"
+  retry=$(FM_CURATION_NUDGE_NOW="$due" run_nudge "$home")
+  assert_contains "$retry" 'curation sweep is due' \
+    "the next sweep must retry the same due event"
+  pass "report commit failure preserves and retries the due event"
 }
 
 test_last_fire_commit_failure_prevents_the_wake_and_rolls_back() {
@@ -422,8 +478,8 @@ test_a_firing_reaches_a_session_as_a_wake_that_names_what_is_due() {
   report="$home/state/curation-nudge.report"
   assert_grep 'reading: this vessel data/learnings.md 2 lines' "$report" \
     "the record must carry this vessel's own measurement"
-  assert_grep "off the five-minute grid" "$report" \
-    "the record must state the scheduled target and its off-grid minute"
+  assert_grep 'successor scheduling follows this firing record' "$report" \
+    "the firing record must precede successor scheduling"
   report_last=$(grep '^last-fire:' "$report")
   status_last=$(run_nudge "$home" --status | grep '^last-fire:')
   [ "$report_last" = "$status_last" ] \
@@ -669,7 +725,9 @@ test_bootstrap_arms_the_nudge_and_asks_whether_it_is_still_running() {
 test_the_scheduler_never_lands_on_the_five_minute_grid
 test_a_window_with_no_off_grid_minute_refuses_rather_than_scheduling_on_it
 test_initial_detect_loudly_explains_an_exhausted_draw
-test_a_refused_successor_does_not_claim_the_nudge_fired
+test_a_refused_successor_records_the_firing_and_the_refusal
+test_unchanged_refusal_is_surfaced_once_and_resets
+test_unavailable_state_path_is_loud
 test_refusal_persistence_failure_is_distinct_and_fails
 test_next_due_persistence_failure_is_distinct_and_fails
 test_failed_next_due_commit_preserves_the_refusal
