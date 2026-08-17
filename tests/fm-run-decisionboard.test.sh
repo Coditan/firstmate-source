@@ -393,6 +393,29 @@ SH
   pass "shot recognizes changed content even when its size is unchanged"
 }
 
+test_shot_refuses_an_unacquirable_capture_lock() {
+  local shot_tmp fakebin out status=0
+  fm_test_tmproot shot_tmp fm-run-db-locked
+  fakebin=$(fm_fakebin "$shot_tmp")
+  cat > "$fakebin/chrome-devtools-axi" <<'SH'
+#!/usr/bin/env bash
+printf 'fresh image bytes\n' > "$2"
+SH
+  cat > "$fakebin/flock" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+  chmod +x "$fakebin/chrome-devtools-axi" "$fakebin/flock"
+  mkdir -p "$shot_tmp/staging"
+  out=$(PATH="$fakebin:$PATH" FM_RUN_DECISIONBOARD_TMPDIR="$shot_tmp/staging" \
+    FM_RUN_DECISIONBOARD_LOCK_TIMEOUT=0 "$DRIVER" shot "$shot_tmp/out.png" 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "shot proceeded without acquiring its capture lock"$'\n'"$out"
+  [ ! -e "$shot_tmp/out.png" ] || fail "shot produced evidence after its capture lock was refused"
+  assert_contains "$out" "could not serialise the screenshot capture" \
+    "shot did not identify the unacquirable capture lock"
+  pass "shot refuses evidence it cannot serialise against other runs"
+}
+
 test_doctor_accepts_a_same_size_refresh() {
   local doctor_tmp fakebin out staging
   fm_test_tmproot doctor_tmp fm-run-db-doctor
@@ -610,6 +633,7 @@ test_query_reports_an_unlistened_board
 test_shot_refuses_a_screenshot_that_wrote_nothing
 test_shot_refuses_a_stale_staging_file
 test_shot_accepts_a_same_size_refresh
+test_shot_refuses_an_unacquirable_capture_lock
 test_doctor_accepts_a_same_size_refresh
 test_answer_reresolves_the_exact_option_name
 test_answer_refuses_a_changed_confirmation_for_a_different_checked_option

@@ -527,14 +527,28 @@ shot_staging_path() {
 
 SCREENSHOT_EXIT_STATUS=0
 capture_staged_screenshot() {
-  local staging=$1 before='' after
+  local staging=$1 dest=${2:-} lock="${1}.lock" lock_fd before='' after result=0
   SCREENSHOT_EXIT_STATUS=0
+  exec {lock_fd}> "$lock" || return 3
+  # This lock serialises runs sharing this account's staging path; it cannot serialise other UNIX accounts driving the shared browser bridge.
+  if ! flock -w "${FM_RUN_DECISIONBOARD_LOCK_TIMEOUT:-5}" "$lock_fd"; then
+    exec {lock_fd}>&-
+    return 3
+  fi
   [ ! -e "$staging" ] || before=$(sha256sum "$staging" 2>/dev/null | awk '{print $1}')
   chrome-devtools-axi screenshot "$staging" >/dev/null 2>&1 || SCREENSHOT_EXIT_STATUS=$?
-  [ -s "$staging" ] || return 1
-  after=$(sha256sum "$staging" 2>/dev/null | awk '{print $1}') || return 1
-  [ -z "$before" ] || [ "$before" != "$after" ] || return 2
-  return 0
+  if [ ! -s "$staging" ]; then
+    result=1
+  else
+    after=$(sha256sum "$staging" 2>/dev/null | awk '{print $1}') || result=1
+    if [ "$result" -eq 0 ] && [ -n "$before" ] && [ "$before" = "$after" ]; then
+      result=2
+    elif [ "$result" -eq 0 ] && [ -n "$dest" ] && ! cp "$staging" "$dest"; then
+      result=4
+    fi
+  fi
+  exec {lock_fd}>&-
+  return "$result"
 }
 
 cmd_shot() {
@@ -542,13 +556,14 @@ cmd_shot() {
   [ -n "$dest" ] || die "shot: needs a destination path"
   need_bridge
   staging=$(shot_staging_path)
-  capture_staged_screenshot "$staging" || capture_result=$?
+  mkdir -p "$(dirname "$dest")"
+  capture_staged_screenshot "$staging" "$dest" || capture_result=$?
   case "$capture_result" in
     1) die "shot: chrome-devtools-axi exited $SCREENSHOT_EXIT_STATUS but wrote no screenshot at $staging (a screenshot's exit status is not evidence; the file is)" ;;
     2) die "shot: chrome-devtools-axi exited $SCREENSHOT_EXIT_STATUS and left $staging unchanged, so this run captured nothing (the file there is from an earlier run)" ;;
+    3) die "shot: could not serialise the screenshot capture against other runs on this host within ${FM_RUN_DECISIONBOARD_LOCK_TIMEOUT:-5} seconds" ;;
+    4) die "shot: could not copy $staging to $dest" ;;
   esac
-  mkdir -p "$(dirname "$dest")"
-  cp "$staging" "$dest" || die "shot: could not copy $staging to $dest"
   [ -s "$dest" ] || die "shot: $dest is empty after the copy"
   printf 'screenshot: %s (%s bytes)\n' "$dest" "$(wc -c < "$dest" | tr -d ' ')"
 }
@@ -704,6 +719,8 @@ cmd_doctor() {
     capture_staged_screenshot "$probe" || capture_result=$?
     if [ "$capture_result" -eq 0 ]; then
       printf 'bridge account: %s (from the owner of a screenshot it just wrote)\n' "$(stat -c '%U' "$probe")"
+    elif [ "$capture_result" -eq 3 ]; then
+      printf 'bridge account: unmeasured (capture could not be serialised against other runs on this host)\n'
     else
       printf 'bridge account: unmeasured (screenshot exited %s and wrote nothing; open a page first)\n' "$SCREENSHOT_EXIT_STATUS"
     fi
