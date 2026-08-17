@@ -161,7 +161,7 @@ test_initial_detect_loudly_explains_an_exhausted_draw() {
 }
 
 test_a_refused_successor_records_the_firing_and_the_refusal() {
-  local home due out
+  local home due out report
   home=$(make_home refused-successor)
   due=$(( $(date +%s) / 300 * 300 ))
   printf '%s\n' "$due" > "$home/state/curation-nudge.next-due"
@@ -174,6 +174,11 @@ test_a_refused_successor_records_the_firing_and_the_refusal() {
     "the completed firing must still emit its wake"
   [ "$(cat "$home/state/curation-nudge.last-fire")" = "$due" ] \
     || fail "the completed firing did not advance last-fire"
+  report="$home/state/curation-nudge.report"
+  assert_grep 'next: refused because all 64 candidate minutes' "$report" \
+    "the firing report must record the final refusal and its cause"
+  assert_not_contains "$(cat "$report")" 'successor scheduling follows' \
+    "a refused successor must not leave a pending report"
   out=$(FM_CURATION_NUDGE_NOW="$due" run_nudge "$home" --status)
   assert_not_contains "$out" 'last-fire: never' \
     "status must retain the firing despite successor refusal"
@@ -451,7 +456,7 @@ test_arming_schedules_the_first_sweep_without_waking_anyone() {
 }
 
 test_a_firing_reaches_a_session_as_a_wake_that_names_what_is_due() {
-  local home out due later report report_last status_last
+  local home out due later report report_last report_next status_last status_next
   home=$(make_home fire)
   run_nudge "$home" >/dev/null
   due=$(cat "$home/state/curation-nudge.next-due")
@@ -478,8 +483,14 @@ test_a_firing_reaches_a_session_as_a_wake_that_names_what_is_due() {
   report="$home/state/curation-nudge.report"
   assert_grep 'reading: this vessel data/learnings.md 2 lines' "$report" \
     "the record must carry this vessel's own measurement"
-  assert_grep 'successor scheduling follows this firing record' "$report" \
-    "the firing record must precede successor scheduling"
+  report_next=$(grep '^next:' "$report")
+  status_next=$(run_nudge "$home" --status | grep '^next:')
+  [ "$report_next" = "$status_next" ] \
+    || fail "the firing report does not match the committed successor: $report_next != $status_next"
+  assert_contains "$report_next" "minute $(( later / 60 % 60 )), off the five-minute grid" \
+    "the firing report must name the committed successor minute"
+  assert_not_contains "$(cat "$report")" 'successor scheduling follows' \
+    "the finalized firing report must not retain a pending placeholder"
   report_last=$(grep '^last-fire:' "$report")
   status_last=$(run_nudge "$home" --status | grep '^last-fire:')
   [ "$report_last" = "$status_last" ] \

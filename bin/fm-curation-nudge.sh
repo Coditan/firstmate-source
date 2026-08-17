@@ -463,11 +463,43 @@ persist_firing_records() {
   rm -f -- "$report_backup"
 }
 
-render_report() {  # <next-due-epoch, pending, or empty> [this-firing-epoch]
+persist_final_report() {
+  local next=$1 firing_epoch=$2 report_tmp
+  [ ! -d "$REPORT" ] || {
+    PERSISTENCE_PATH=$REPORT
+    PERSISTENCE_CONDITION='the finalized firing report could not replace a directory at its state path'
+    return 1
+  }
+  report_tmp=$(mktemp "$STATE/.curation-nudge-report.XXXXXX") || {
+    PERSISTENCE_PATH=$STATE
+    PERSISTENCE_CONDITION='temporary state for the finalized firing report could not be created'
+    return 1
+  }
+  render_report "$next" "$firing_epoch" > "$report_tmp" || {
+    rm -f -- "$report_tmp"
+    PERSISTENCE_PATH=$report_tmp
+    PERSISTENCE_CONDITION='the finalized firing report could not be written to temporary state'
+    return 1
+  }
+  if ! mv -f -- "$report_tmp" "$REPORT"; then
+    rm -f -- "$report_tmp"
+    PERSISTENCE_PATH=$REPORT
+    PERSISTENCE_CONDITION='the finalized firing report could not be persisted'
+    return 1
+  fi
+}
+
+render_report() {  # <next-due-epoch, pending, refused, persistence, or empty> [this-firing-epoch]
   local next=$1 firing_epoch=${2:-} last
   printf 'nudge: %s\n' "$(epoch_utc "$NOW")"
   if [ "$next" = pending ]; then
     printf 'next: successor scheduling follows this firing record\n'
+  elif [ "$next" = refused ]; then
+    printf 'next: refused because all %s candidate minutes from FM_CURATION_NUDGE_JITTER_MIN=%s through FM_CURATION_NUDGE_JITTER_MAX=%s with FM_CURATION_NUDGE_INTERVAL=%s landed on the five-minute grid\n' \
+      "$DRAW_ATTEMPTS" "$JITTER_MIN" "$JITTER_MAX" "$INTERVAL"
+  elif [ "$next" = persistence ]; then
+    printf 'next: scheduling state persistence failed at %s because %s\n' \
+      "$PERSISTENCE_PATH" "$PERSISTENCE_CONDITION"
   elif [ -n "$next" ]; then
     printf 'next: %s (minute %s, off the five-minute grid)\n' "$(epoch_utc "$next")" "$(minute_of "$next")"
   else
@@ -692,6 +724,20 @@ if ! persist_firing_records pending "$firing_epoch"; then
 fi
 schedule_transition
 transition_status=$?
+transition_path=$PERSISTENCE_PATH
+transition_condition=$PERSISTENCE_CONDITION
+case "$transition_status" in
+  0) report_next=$SCHEDULED_TARGET ;;
+  1|3) report_next=refused ;;
+  *) report_next=persistence ;;
+esac
+if ! persist_final_report "$report_next" "$firing_epoch"; then
+  nudge_line
+  state_persistence_line
+  exit 1
+fi
+PERSISTENCE_PATH=$transition_path
+PERSISTENCE_CONDITION=$transition_condition
 case "$transition_status" in
   0) nudge_line; exit 0 ;;
   1) nudge_line; schedule_refusal_line; exit 0 ;;
