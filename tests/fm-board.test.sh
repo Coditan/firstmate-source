@@ -249,6 +249,21 @@ test_board_carries_the_vessel_name() {
   assert_grep 'class="fm-vessel">Dritteswache<' "$OUT" \
     "the name did not resolve from the script root when FM_HOME was unset"
 
+  # The actual fallback edge: FM_HOME exists but carries no record, while the
+  # script root does. This is where reading only the already-collapsed FM_HOME
+  # path silently misses the second candidate.
+  mkdir -p "$TMP_ROOT/script-root/config"
+  printf 'viertewache\n' > "$TMP_ROOT/script-root/config/bridge-vessel"
+  rm -f "$OUT"
+  status=0
+  ( unset FM_BOARD_VESSEL FM_BRIDGE_VESSEL
+    FM_ROOT_OVERRIDE=$TMP_ROOT/script-root FM_HOME=$TMP_ROOT/empty-home \
+      "$BOARD" --title T --body "$TMP_ROOT/body.html" --out "$OUT" >/dev/null 2>&1 ) || status=$?
+  expect_code 0 "$status" \
+    "a board built with an empty FM_HOME and recorded script root must still resolve the name"
+  assert_grep 'class="fm-vessel">Viertewache<' "$OUT" \
+    "the name did not fall back to the script root when FM_HOME had no record"
+
   # And when nothing resolves it, the board is refused rather than written
   # unattributed. Both candidate roots are isolated here: this repository's own
   # config/ is gitignored and so absent from a worktree but present in a real

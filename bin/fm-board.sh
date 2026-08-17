@@ -93,7 +93,8 @@
 #   1. --vessel <n>
 #   2. $FM_BOARD_VESSEL
 #   3. the first word of $FM_BRIDGE_VESSEL
-#   4. the first word of $FM_HOME/config/bridge-vessel
+#   4. the first word of the first readable bridge-vessel record, trying
+#      $FM_HOME/config/bridge-vessel and then $FM_ROOT/config/bridge-vessel
 # The first letter of each word is capitalised for display and nothing else is
 # changed, so `coditan` prints as `Coditan`. When none of the four resolves, the
 # build is REFUSED rather than writing an unattributed board.
@@ -439,7 +440,7 @@ fi
 [ -n "$VESSEL" ] || VESSEL=$(resolve_vessel)
 [ -n "$VESSEL" ] || die "cannot resolve the building vessel's name for the header.
 Every board says whose board it is, so this is refused rather than written unattributed.
-Set one of: --vessel <name>, FM_BOARD_VESSEL, FM_BRIDGE_VESSEL, or $FM_HOME/config/bridge-vessel."
+Set one of: --vessel <name>, FM_BOARD_VESSEL, FM_BRIDGE_VESSEL, $FM_HOME/config/bridge-vessel, or $FM_ROOT/config/bridge-vessel."
 
 BODY_FILE=$BODY
 TMP_BODY=""
