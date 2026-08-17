@@ -342,6 +342,9 @@ If that record cannot be written, convergence does not restart the observer and 
 The rule is never restart a stalled or blind observer without a record, so the stall evidence survives the repair and convergence and fault visibility are both kept rather than traded.
 The reading is taken in read-only sessions too, since it is a read and a session that can see a stalled observer should say so rather than defer it.
 
+The captain's 2026-08-17 ruling superseded an earlier unconditional never-auto-restart rule: refusing every restart left drift permanently unconverged, while restarting without a record erased the evidence that explained the fault.
+Writing the finding first keeps both properties, and deliberately leaves it for the watcher or supervising session rather than the bosun, which cannot be the reader when it is the component that stalled.
+
 The unit declares no sandboxing directives.
 On this host `kernel.apparmor_restrict_unprivileged_userns=1` blocks the user namespace `ProtectHome`, `InaccessiblePaths`, `ReadOnlyPaths` and the `Bind*` family need: systemd applies none of them, exits 0, and reports every one as set.
 A directive that reads as applied and is not is worse than an absent one.

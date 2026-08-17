@@ -118,6 +118,9 @@ Both surfaces were asked the same question at the same moment and only one of th
 When configuration drift requires a restart, the service first preserves the pre-restart reading and health record on the findings surface, and an unreachable surface blocks that restart.
 That keeps convergence and fault visibility together because the stall evidence survives the repair instead of being destroyed by it.
 
+An earlier unconditional never-auto-restart form of this rule was superseded by the captain's 2026-08-17 ruling because it left a stalled observer's configuration permanently unconverged, while restarting without a record destroyed the only fault evidence.
+Recording first is the stronger rule: the finding lands in `data/findings/` or its configured findings surface for the watcher or supervising session to read, never the bosun, because the bosun cannot reliably judge a record about its own stall.
+
 The rest was proven end to end on this seat the same day, against the real judge and a real journal: the unit started and read `WORKING` at exit 0 with two events outstanding, the cursor advanced 0 to 2 as `codex:gpt-5.6-luna` judged both in about 4.2 seconds each, the reading settled to `QUIET`, `systemctl --user stop` produced `STOPPED` at exit 1, locked convergence brought it back, and a `SIGKILL` of the main process was recovered by the unit on its own - reclaiming the run lock the killed process never released and judging a newly arrived event.
 
 The stall clock deliberately survives a restart, which is why a crash loop cannot hide inside it: a run that restarts, writes its start beacon, judges nothing and dies would otherwise reset the clock every time and never reach `STALLED`.
