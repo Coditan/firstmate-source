@@ -91,8 +91,10 @@
 # `--record-baseline` writes the findings that sit on ALREADY-CLOSED records into
 # data/decision-baseline.md, once, as a deliberate statement that those particular
 # answers are lost rather than pending. `--audit` then withholds exactly those
-# (class, id, observed closed date) entries and says in one line how many it withheld and where they are
-# listed. It is a disclosure, never a deletion: the file is the list, `--audit
+# (class, id, observed closed date) entries and says in one line how many it
+# withheld and where they are listed. The generated entry set carries a digest;
+# editing any entry invalidates the whole baseline and leaves every finding visible.
+# It is a disclosure, never a deletion: the file is the list, `--audit
 # --json` still carries every withheld finding under `baseline_excluded`, and
 # re-taking a baseline means removing that file by hand.
 #
@@ -100,9 +102,9 @@
 # or it is lost, and nothing a later session does can recover a lost one. Every
 # other class sits on a LIVE record, which is repairable by definition, so no
 # baseline may ever silence one. A dateless closed record cannot be bound to the
-# closure observed at baseline time, so it remains reported. A record closed AFTER the baseline was taken is a
-# genuine new failure and is reported in full. Those two rules together are what
-# stop a baseline being used to launder today's mistake into yesterday's history.
+# closure observed at baseline time, so it remains reported. A record closed AFTER
+# the baseline was taken is a genuine new failure and is reported in full. These
+# rules stop a baseline being used to launder today's mistake into yesterday's history.
 #
 # It reports; it never repairs. Repair is bin/fm-decision-hold.sh's, and closing a
 # captain decision is never a script's call to make unprompted.
@@ -211,6 +213,11 @@ read_baseline() {
 baseline_recorded() {
   [ -f "$BASELINE" ] || return 0
   awk '/^# recorded: / { sub(/^# recorded: /, ""); print; exit }' "$BASELINE"
+}
+
+baseline_entries_digest() {
+  [ -f "$BASELINE" ] || return 0
+  awk '/^# entries-digest: / { sub(/^# entries-digest: /, ""); print; exit }' "$BASELINE"
 }
 
 sha256_text() {  # <text>
@@ -546,16 +553,27 @@ AUDIT_ALL=$(printf '%s' "$CLASSIFIED" | jq -c --argjson altered "$ALTERED" '.aud
 # count is stated on every direct --audit run.
 BASELINE_JSON=$(read_baseline)
 BASELINE_DATE=$(baseline_recorded)
-# Class, current closure, observed closure and baseline date are all enforced here,
-# not trusted from the hand-editable file.
-BASELINE_HONOURED=$(printf '%s' "$BASELINE_JSON" | jq -c \
-  --argjson classes "$BASELINE_CLASSES" --argjson records "$CLASSIFIED" --arg date "$BASELINE_DATE" '
-  map(. as $b
-      | ($records.captain | map(select(.id == $b.id)) | first // null) as $r
-      | select(($classes | index($b.class)) != null
-               and $r != null and $r.closed != ""
-               and $b.closed != "" and $b.closed == $r.closed
-               and $date != "" and $b.closed <= $date))')
+BASELINE_EXPECTED_DIGEST=$(baseline_entries_digest)
+BASELINE_ENTRY_LINES=$(printf '%s' "$BASELINE_JSON" | jq -r '.[] | "\(.class) \(.id) \(.closed)"')
+BASELINE_ACTUAL_DIGEST=$(sha256_text "$BASELINE_ENTRY_LINES")
+BASELINE_INTACT=0
+if [ -n "$BASELINE_EXPECTED_DIGEST" ] && [ "$BASELINE_ACTUAL_DIGEST" = "$BASELINE_EXPECTED_DIGEST" ]; then
+  BASELINE_INTACT=1
+fi
+# Membership integrity, class, current closure, observed closure and baseline date
+# are all enforced here, not trusted from the hand-editable file.
+if [ "$BASELINE_INTACT" -eq 1 ]; then
+  BASELINE_HONOURED=$(printf '%s' "$BASELINE_JSON" | jq -c \
+    --argjson classes "$BASELINE_CLASSES" --argjson records "$CLASSIFIED" --arg date "$BASELINE_DATE" '
+    map(. as $b
+        | ($records.captain | map(select(.id == $b.id)) | first // null) as $r
+        | select(($classes | index($b.class)) != null
+                 and $r != null and $r.closed != ""
+                 and $b.closed != "" and $b.closed == $r.closed
+                 and $date != "" and $b.closed <= $date))')
+else
+  BASELINE_HONOURED='[]'
+fi
 BASELINE_REJECTED=$(printf '%s' "$BASELINE_JSON" | jq -c --argjson honoured "$BASELINE_HONOURED" '
   map(. as $b | select($honoured | index($b) == null))')
 # The finding is bound to $f before the lookup because `index(f)` evaluates f
@@ -583,9 +601,12 @@ if [ "$MODE" = record-baseline ]; then
   skipped=$(printf '%s' "$BASELINE_SKIPPED" | jq 'length')
   [ "$n" -gt 0 ] || die "there is nothing to baseline: no finding in $DATA sits on an already-closed captain record"
   today=$(date -u +%Y-%m-%d)
+  entries=$(printf '%s' "$BASELINEABLE" | jq -r 'sort_by(.class, .id)[] | "\(.class) \(.id) \(.closed)"')
+  entries_digest=$(sha256_text "$entries")
   {
     printf '# Captain decision adoption baseline for %s\n' "$FM_HOME"
     printf '# recorded: %s\n' "$today"
+    printf '# entries-digest: %s\n' "$entries_digest"
     printf '#\n'
     printf '# Each line below is one finding that bin/fm-decision-ledger.sh --audit reported\n'
     printf '# on a captain record that was ALREADY CLOSED when this baseline was taken. Their\n'
@@ -596,10 +617,11 @@ if [ "$MODE" = record-baseline ]; then
     printf '#\n'
     printf '# This file silences nothing else. A finding on a LIVE record is never covered\n'
     printf '# here, and a record closed after %s is a genuine new failure and is\n' "$today"
-    printf '# reported in full. To re-take the baseline, delete this file by hand.\n'
+    printf '# reported in full. Editing any entry invalidates the whole baseline. To re-take\n'
+    printf '# the baseline, delete this file by hand and run --record-baseline again.\n'
     printf '#\n'
     printf '# <audit class> <record id> <closed date observed at baseline>\n'
-    printf '%s' "$BASELINEABLE" | jq -r 'sort_by(.class, .id)[] | "\(.class) \(.id) \(.closed)"'
+    printf '%s\n' "$entries"
   } > "$BASELINE" || die "could not write $BASELINE"
   printf 'recorded %s finding(s) on already-closed captain records as lost rather than pending\n' "$n"
   printf 'skipped %s finding(s) whose closed record has no closed date; they remain reported\n' "$skipped"
@@ -652,7 +674,10 @@ REJECTED_COUNT=$(printf '%s' "$BASELINE_REJECTED" | jq 'length')
 # Both are emitted in the `<class> <id> - <detail>` shape bin/fm-bootstrap.sh feeds
 # straight into its diagnostic stream.
 baseline_note() {
-  if [ "$REJECTED_COUNT" -gt 0 ]; then
+  if [ -f "$BASELINE" ] && [ "$BASELINE_INTACT" -ne 1 ]; then
+    printf 'baseline rejected - %s has been edited since it was generated, so no entry is honoured and every finding reports; delete it and re-take it with fm-decision-ledger.sh --record-baseline\n' \
+      "$BASELINE"
+  elif [ "$REJECTED_COUNT" -gt 0 ]; then
     printf 'baseline rejected - %s line(s) in %s do not match an allowed finding and the closure observed when the baseline was recorded; those lines are ignored and every finding they name still reports\n' \
       "$REJECTED_COUNT" "$BASELINE"
   fi

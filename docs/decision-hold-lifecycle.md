@@ -129,7 +129,9 @@ Three rules keep the baseline from becoming a mute switch, and each is a regress
 
 - **Only an already-closed record may be covered.**
   A closed record's answer is either stored or lost, and no later act recovers a lost one; every other class sits on a live record and stays repairable.
-  The permitted classes and the record's closed date observed at baseline time are enforced when the file is read, not trusted from it, so a hand-added or stale line is ignored and reported as `baseline rejected`.
+  The generated entry membership is bound by a digest, and the permitted classes and the record's closed date observed at baseline time are enforced when the file is read rather than trusted from it.
+  Any added or removed entry invalidates the whole baseline, reports `baseline rejected`, and leaves every finding visible until the file is deleted and re-taken.
+  An intact entry whose class or closure no longer matches is likewise ignored and reported as `baseline rejected`.
   A closed record without a closed date is skipped and remains reported because it cannot be bound to an observed closure.
 - **A record closed after the baseline was taken is a new failure** and is reported in full.
   The baseline covers the records it named, never the shape of the finding.

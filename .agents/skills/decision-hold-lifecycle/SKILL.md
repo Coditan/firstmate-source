@@ -77,6 +77,7 @@ The first run on the main home reported 58 findings of which 57 were pre-mechani
 Run `bin/fm-decision-ledger.sh --record-baseline` once per home, after reading what it will cover, to record that those particular answers are lost rather than pending.
 It covers only records that are already closed with an observed closed date, refuses to run twice, states its count on every later run, and never silences a record that can still be repaired.
 A dateless closed record remains reported because the baseline cannot bind it to a closure observed when the baseline was taken.
+Its generated entry set carries an integrity digest, so editing any entry invalidates the whole baseline and leaves every finding visible until the file is deleted and re-taken.
 
 ### What the audit cannot see
 

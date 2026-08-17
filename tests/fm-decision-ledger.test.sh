@@ -472,7 +472,7 @@ test_the_baseline_converges_the_audit_without_hiding_what_it_covers() {
 # is still repairable, it would be a general mute switch for this check, and today's
 # mistake could be filed away as yesterday's history.
 test_a_baseline_cannot_silence_a_repairable_record() {
-  local home audit rc=0
+  local home audit baseline_date rc=0
   home=$(seed_pre_mechanism_home baseline-not-a-mute)
   run_ledger "$home" --record-baseline >/dev/null 2>&1 || fail "baseline failed"
 
@@ -485,24 +485,44 @@ test_a_baseline_cannot_silence_a_repairable_record() {
   assert_contains "$audit" "closed-without-record after-baseline-decision-lost" \
     "the baseline covers the records it named, never the shape of the finding"
 
-  # A permitted-class line forged while a record is live must not pre-silence its later close.
-  printf 'closed-without-record live-decision-still-open 2026-08-18\n' >> "$home/data/decision-baseline.md"
-  sed -i 's/^- \[ \] live-decision-still-open /- [x] live-decision-still-open /; s/ (since 2026-08-17) (hold:/ (done 2026-08-18) (hold:/' \
+  # A permitted-class line forged while a record is live must not pre-silence a same-day close.
+  baseline_date=$(sed -n 's/^# recorded: //p' "$home/data/decision-baseline.md")
+  printf 'closed-without-record live-decision-still-open %s\n' "$baseline_date" >> "$home/data/decision-baseline.md"
+  sed -i "s/^- \[ \] live-decision-still-open /- [x] live-decision-still-open /; s/ (since 2026-08-17) (hold:/ (done $baseline_date) (hold:/" \
     "$home/data/backlog.md"
-
-  # Hand-written legacy and live-class lines are refused too.
-  printf 'premise-unmeasurable live-decision-still-open\n' >> "$home/data/decision-baseline.md"
-  printf 'unfinished-close live-decision-still-open\n' >> "$home/data/decision-baseline.md"
   rc=0
   audit=$(run_ledger "$home" --audit) || rc=$?
   [ "$rc" -eq 1 ] || fail "a rejected baseline line must not make the audit read clean"
   assert_contains "$audit" "closed-without-record live-decision-still-open" \
-    "a line added while the record was live must not suppress its later closure"
-  assert_contains "$audit" "baseline rejected - 3 line(s)" \
-    "every stale or dateless baseline line must be reported, not silently dropped"
-  assert_contains "$audit" "closure observed when the baseline was recorded" \
-    "the rejection must say which missing authority makes those lines invalid"
+    "a forged entry carrying the baseline's own date must not suppress a same-day close"
+  assert_contains "$audit" "closed-without-record old-a-decision-lost" \
+    "an added entry must invalidate every previously honoured baseline entry"
+  assert_contains "$audit" "stale-body-state old-b-decision-lost" \
+    "an edited baseline must expose every finding, not salvage unchanged lines"
+  assert_contains "$audit" "has been edited since it was generated" \
+    "the rejection must identify the failed membership attestation"
+  assert_contains "$audit" "delete it and re-take it" \
+    "the rejection must name the explicit repair"
   pass "a baseline covers only what was already closed and can never mute a repairable record"
+}
+
+test_removing_a_baseline_entry_invalidates_every_entry() {
+  local home audit rc=0
+  home=$(seed_pre_mechanism_home baseline-entry-removed)
+  run_ledger "$home" --record-baseline >/dev/null 2>&1 || fail "baseline failed"
+  sed -i '/^closed-without-record old-a-decision-lost /d' "$home/data/decision-baseline.md"
+
+  audit=$(run_ledger "$home" --audit) || rc=$?
+  [ "$rc" -eq 1 ] || fail "a baseline with a removed entry must not read clean"
+  assert_contains "$audit" "closed-without-record old-a-decision-lost" \
+    "the removed entry's finding must report"
+  assert_contains "$audit" "closed-without-record old-b-decision-lost" \
+    "removing one entry must invalidate the entries left behind"
+  assert_contains "$audit" "stale-body-state old-b-decision-lost" \
+    "no unchanged entry may be salvaged after membership changes"
+  assert_contains "$audit" "has been edited since it was generated" \
+    "a removed entry must use the baseline rejected disclosure"
+  pass "removing one baseline entry invalidates the whole attestation"
 }
 
 # THE BOARD IS THE THIRD SURFACE THE BRIEF NAMES, and it does not read the store
@@ -560,4 +580,5 @@ test_a_clean_home_reports_no_findings
 test_an_answered_decision_is_no_longer_presented_as_open
 test_the_baseline_converges_the_audit_without_hiding_what_it_covers
 test_a_baseline_cannot_silence_a_repairable_record
+test_removing_a_baseline_entry_invalidates_every_entry
 test_the_decision_board_input_never_carries_an_answered_question
