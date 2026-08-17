@@ -65,7 +65,8 @@ So the notice takes two hops, and this script owns only the first:
 The wording of that notice is firstmate's, not this script's.
 An ordinary detect sweep and ordinary firing exit successfully, while a state-persistence failure exits non-zero after printing its actionable diagnostic.
 The watcher captures a registered check's standard output and surfaces any non-empty result even when that check exits non-zero, so the diagnostic is not discarded or converted into silence.
-A firing whose successor draw refuses prints the firing wake and the refusal diagnostic; a firing whose successor cannot be persisted prints the firing wake and the persistence diagnostic.
+A firing whose successor draw refuses atomically publishes that outcome, then prints the firing wake and refusal diagnostic.
+If the single authoritative record cannot be published, the prior state remains byte-for-byte intact, the wake is withheld, and the persistence diagnostic makes the retry visible.
 `--draw` and `--status` are read-only and do not create the state directory when it is absent.
 
 The boundary is asserted rather than intended, in three ways.
@@ -98,8 +99,11 @@ It reads what the *work* produced:
 | Reading | What it is taken from | What it catches |
 | --- | --- | --- |
 | Is a check armed and registered at all? | `state/curation-nudge.check.sh` and its trust record | a home where the nudge was never installed, or the arm failed |
-| Does a next sweep exist? | `state/curation-nudge.next-due` | the `Trigger: n/a` shape - armed, loaded, and scheduling nothing |
-| Is anything executing the one there is? | `next-due` against now, plus `state/curation-nudge.last-fire` | a home whose checks stopped running while every surface still reports armed |
+| Does a next sweep exist? | the scheduling outcome in `state/curation-nudge.report` | the `Trigger: n/a` shape - armed, loaded, and scheduling nothing |
+| Is anything executing the one there is? | the next-target and last-firing epochs in that same record | a home whose checks stopped running while every surface still reports armed |
+
+`state/curation-nudge.report` is both the human-readable report named by the wake and the only authoritative scheduling record.
+It carries the last firing epoch, the current next-target or refusal outcome, the effective cadence parameters, and this vessel's readings, and every transition replaces all of those bytes with one atomic rename.
 
 A freshly armed home has not yet scheduled anything, and that is not a fault; the missing-target reading only speaks once the shim has been sitting there longer than a sweep could plausibly take.
 

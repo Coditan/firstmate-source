@@ -617,7 +617,8 @@ The locked bootstrap step arms it with `--arm`, which writes and registers this 
 The watcher then runs it on the ordinary `state/*.check.sh` sweep, and it self-gates to its own schedule, so all but one sweep in 48 hours is a single file read.
 Detect exits zero for ordinary sweeps, ordinary firings, and persisted draw refusals, and exits non-zero when state cannot be persisted.
 The watcher captures and surfaces non-empty check output regardless of the check's exit status, so a printed persistence diagnostic remains an actionable wake.
-A firing can deliberately print two lines: its curation wake followed by the refusal or persistence diagnostic for its successor schedule.
+A firing whose successor draw refuses deliberately prints two lines: its curation wake followed by the refusal diagnostic.
+If the single authoritative record cannot be published, the prior state stays intact and the script prints the persistence diagnostic instead of a wake so the same due event is retried.
 `--draw` and `--status` write no state and do not create an absent state directory.
 
 The period is 48 hours rather than daily, because the currency round already owns the daily slot and a curation sweep at that rate is noise.
@@ -625,7 +626,8 @@ Each firing draws 180-420 seconds of fresh jitter for the next target, so succes
 `FM_CURATION_NUDGE_INTERVAL`, `FM_CURATION_NUDGE_JITTER_MIN`, and `FM_CURATION_NUDGE_JITTER_MAX` move that window; `FM_CURATION_NUDGE_OVERDUE` sets how far past its target a sweep may sit before `--armed` calls the cadence stopped.
 
 Every session start also runs `--armed`, which reports `CURATION_NUDGE:` when this home is unarmed, has never scheduled a sweep, or has a scheduled sweep nothing is executing.
-That reading is taken from `state/curation-nudge.last-fire` and `state/curation-nudge.next-due` - what the work produced - and never from the check's own claim to be armed, because a timer's own surfaces keep reporting health long after it stopped firing.
+That reading is taken from the last-firing epoch and scheduling outcome in the single human-readable, parseable `state/curation-nudge.report` record - what the work produced - and never from the check's own claim to be armed, because a timer's own surfaces keep reporting health long after it stopped firing.
+The report is atomically replaced as one file, so its human account and the schedule the script acts on are always the same bytes.
 
 The nudge raises a wake and nothing else: it never writes to Bridge, never opens a network connection, and never touches a git repository.
 Firstmate reads the wake and dispatches a crewmate to send the All-Ships notice, per `AGENTS.md` section 12.
