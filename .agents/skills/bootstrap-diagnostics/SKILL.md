@@ -2,7 +2,7 @@
 name: bootstrap-diagnostics
 description: >-
   Agent-only handling playbook for session-start bootstrap diagnostics.
-  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, ROLE_INVALID, ROLE_OVERLAY_MISSING, NEEDS_GH_AUTH, TANGLE, SELF_DRIFT, CREW_DISPATCH invalid, CURRENCY_BASE, LAVISH_ACCESS, BACKLOG_STALE, BACKLOG_UNREADABLE, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, AXI_SUITE_UPDATED, AXI_SUITE_REVIEW, AXI_SUITE_STUCK, AXI_SUITE_SHADOWED, AXI_SUITE_SHADOW_UNKNOWN, FIRSTMATE_UPDATE_AVAILABLE, FIRSTMATE_UPDATE_STUCK, FORK_SYNC, FORK_SYNC_STUCK, CURRENCY_ROUND, MEMORY_ALARM, CURATION_NUDGE, GROSSREINSCHIFF, RUN_READER, WATCHER_UNIT, DELIVERY_UNIT, FREQUENCY_MONITOR_UNIT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
+  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, ROLE_INVALID, ROLE_OVERLAY_MISSING, NEEDS_GH_AUTH, TANGLE, SELF_DRIFT, CREW_DISPATCH invalid, CURRENCY_BASE, LAVISH_ACCESS, BACKLOG_STALE, BACKLOG_UNREADABLE, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, AXI_SUITE_UPDATED, AXI_SUITE_REVIEW, AXI_SUITE_STUCK, AXI_SUITE_SHADOWED, AXI_SUITE_SHADOW_UNKNOWN, FIRSTMATE_UPDATE_AVAILABLE, FIRSTMATE_UPDATE_STUCK, FORK_SYNC, FORK_SYNC_STUCK, CURRENCY_ROUND, MEMORY_ALARM, CURATION_NUDGE, GROSSREINSCHIFF, RUN_READER, WATCHER_UNIT, DELIVERY_UNIT, FREQUENCY_MONITOR_UNIT, BOSUN_UNIT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
   A silent bootstrap section, or a BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -66,6 +66,17 @@ When any diagnostic needs captain attention, report the plain consequence and re
   The original watcher remains the slow delivery backstop.
 - `FREQUENCY_MONITOR_UNIT: systemd --user is unavailable ...` - fast Bridge delivery cannot run on this host through the tracked unit, but the original watcher still provides slow durable delivery.
   Do not invent or auto-start an unapproved background-process fallback.
+- `BOSUN_UNIT: missing ...` or `BOSUN_UNIT: ... is disabled ...` - the home opted into the observer tier but nothing keeps it running between sessions, so it judges only while someone is watching it.
+  Explain that it observes and records and changes nothing about what reaches the captain, that it spends an agent turn per judgement, ask for explicit consent, then run `bin/fm-bootstrap.sh install bosun-unit` only after approval.
+  The installation copies the tracked template, writes this home's private environment, reloads the user manager, and enables and starts only the instance encoded from this home.
+- `BOSUN_UNIT: <instance> needs locked convergence ...` - this read-only session found stale unit bytes or a stale recorded environment; leave repair to the lock-holding session and rerun session start after it converges.
+- `BOSUN_UNIT: <instance> convergence failed ...` - inspect the named `systemctl --user status` result and this home's recorded service environment, then report the concrete failure.
+- `BOSUN_UNIT: nothing is being judged - <STATE>: <detail>` - this is the reading that matters, and it is taken from the observer's own work rather than from whether the unit says active.
+  `STOPPED` and `DEAD` mean no observer process is consuming the event stream; a locked session converges those automatically, so seeing one means the repair did not hold and the concrete failure needs inspecting.
+  `STALLED` means one IS running and its cursor has frozen while the stream grew, and `BLIND` means it cannot read the stream at all.
+  Neither of those is restarted on purpose: a restart would clear the symptom and hide the fault, so investigate the named state instead of bouncing the service.
+- `BOSUN_UNIT: the observer's recorded PATH cannot reach its judge <program> ...` - it would keep running and keep reporting healthy while recording every event as an unjudged escalation.
+  Either install the named judge where the recorded environment reaches it, or converge the service from a session that already resolves it.
 - `AXI_SUITE_UPDATED: <detail>` - the vessel completed a self-repair of its own npm prefix and needs nothing from you; report it only when it materially affects current work.
   `<tool> <old> -> <new>` is a gated patch or minor self-update, `<tool> <version> installed in vessel prefix` is the home's own copy being seeded from the version already on `PATH`, and `<tool> unreadable vessel copy removed from <prefix>` means a copy that could not report its version was dropped so the intact external copy stops being shadowed and a readable version can be reinstalled.
 - `AXI_SUITE_REVIEW: <detail>` - a major release, a newly required suite command, or a locally-ahead build the registry cannot supply was deliberately not installed; present the printed install command and purpose to the captain, then use `bin/fm-bootstrap.sh install <approved tool...>` only after consent.

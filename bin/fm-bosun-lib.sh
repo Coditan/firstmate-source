@@ -496,6 +496,12 @@ fm_bosun_health_field() {  # <name>
 # and cleared the moment it moves. A cursor that is behind and advancing is
 # working; a cursor that is behind and frozen while the journal grows is the
 # seventeen-hour failure, and it is visible here with no process inspection.
+# The stall clock deliberately survives a restart. A fresh run inherits the
+# backlog_since a dead one left, because the events it names have genuinely gone
+# unjudged for that long and clearing it on every start would make a bosun that
+# crash-loops - restarting, writing a fresh beacon, judging nothing, dying -
+# unable to ever report STALLED. It clears the moment the cursor moves, which is
+# the evidence that actually settles it.
 fm_bosun_health_write() {  # <state> <started> <passes> <verdicts> <last_judged> <cursor_before>
   local run_state=$1 started=$2 passes=$3 verdicts=$4 last_judged=$5 cursor_before=$6
   local now cursor journal_last backlog_since tmp

@@ -34,6 +34,7 @@
 #                 "WATCHER_UNIT: <consent, convergence, or fallback detail>",
 #                 "DELIVERY_UNIT: <consent, convergence, or fallback detail>",
 #                 "FREQUENCY_MONITOR_UNIT: <consent, convergence, or fallback detail>",
+#                 "BOSUN_UNIT: <consent, convergence, judge-reach, or health detail>",
 #                 "RUN_READER: no-mistakes runs in this session (<path>) but a
 #                 context that inherits no shell setup cannot reach it (...)".
 #          When a RUNNING secondmate worktree is fast-forwarded to firstmate's
@@ -985,6 +986,11 @@ if [ "${1:-}" = "install" ]; then
         "$SCRIPT_DIR/fm-frequency-monitor-service.sh" install-unit || exit 1
         continue
         ;;
+      bosun-unit)
+        echo "installing bosun-unit: systemd user template plus this home's enabled instance"
+        "$SCRIPT_DIR/fm-bosun-service.sh" install-unit || exit 1
+        continue
+        ;;
     esac
     if ! cmd=$(install_cmd "$t"); then
       instructions=$(manual_install_url "$t") || { echo "error: unknown tool $t" >&2; exit 1; }
@@ -1105,6 +1111,7 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
     "$SCRIPT_DIR/fm-watcher-service.sh" bootstrap
     "$SCRIPT_DIR/fm-delivery-service.sh" bootstrap
     "$SCRIPT_DIR/fm-frequency-monitor-service.sh" bootstrap
+    "$SCRIPT_DIR/fm-bosun-service.sh" bootstrap
   fi
   fleet_sync
 else
@@ -1112,6 +1119,7 @@ else
     "$SCRIPT_DIR/fm-watcher-service.sh" bootstrap
     "$SCRIPT_DIR/fm-delivery-service.sh" bootstrap
     "$SCRIPT_DIR/fm-frequency-monitor-service.sh" bootstrap
+    "$SCRIPT_DIR/fm-bosun-service.sh" bootstrap
   fi
 fi
 # Is the daily currency round still running? One file read and one comparison,
