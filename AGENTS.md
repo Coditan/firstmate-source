@@ -185,6 +185,10 @@ When the captain invokes `/domain-modeling`, or a term looks like it is doing tw
 It owns challenging a term at the moment it wobbles, checking a claim against the artifact rather than against memory, the rule that a domain's proper nouns are never translated, and the bar a decision must clear to earn a record.
 It routes what it resolves into the owners above and creates no store of its own; an unresolved captain decision still belongs to `decision-hold-lifecycle`.
 
+Routing knowledge into a startup file adds to it, and nothing subtracts, so those files grow monotonically until a session cannot carry them.
+When the captain invokes `/run-curate-knowledge` or asks to prune, split or curate a startup knowledge file, and before declaring any such prune finished, load the `run-curate-knowledge` skill.
+It owns the criterion that splits a file by what must be in hand before the problem appears, the boundary between a private file's archive and a shared tracked file's owner stub, and the driver that refuses a prune whose headings did not fall or whose deletions went unlisted.
+
 Records, instructions, branches, tools, and workspaces also stop being true, and nothing re-measures them on its own.
 `Großreinschiff` is the weekly Thursday sweep that finds them; load the `grossreinschiff` skill when the captain invokes `/grossreinschiff` or asks for the weekly cleanup, and when the session-start digest reports the sweep is due.
 It reports and never deletes: removal is a separate captain-authorized step, and inside a project it is a dispatched crewmate's task.
