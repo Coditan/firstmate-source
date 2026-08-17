@@ -578,6 +578,65 @@ test_installer_records_blind_prior_observer_before_restart() {
   pass "installer preserves established BLIND evidence before restart"
 }
 
+test_installer_records_blind_live_lock_without_health_record() {
+  local fakebin home unitdir findings records observer_job lock_wait=0
+  fakebin="$TMP_ROOT/fakebin"
+  home="$TMP_ROOT/install-blind-live-lock"
+  unitdir="$TMP_ROOT/units-install-blind-live-lock"
+  findings="$home/data/findings"
+  mkdir -p "$home/state" "$home/config" "$unitdir"
+  : > "$home/config/bosun"
+  rm -f "$TMP_ROOT/systemd.enabled" "$TMP_ROOT/systemd.active"
+  : > "$TMP_ROOT/systemctl.log"
+
+  service_env "$fakebin" "$home" "$unitdir" \
+    "$ROOT/bin/fm-bootstrap.sh" install bosun-unit > /dev/null
+  FM_FINDINGS_DIR="$findings" "$FINDING" init > /dev/null
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    timeout 20 "$BOSUN" run --interval 60 > "$home/observer.out" 2>&1 &
+  observer_job=$!
+  while { [ ! -e "$home/state/bosun/.run.lock/pid" ] || [ ! -f "$home/state/bosun/health" ]; } && \
+    [ "$lock_wait" -lt 40 ]; do
+    sleep 0.05
+    lock_wait=$((lock_wait + 1))
+  done
+  [ -e "$home/state/bosun/.run.lock/pid" ] && [ -f "$home/state/bosun/health" ] || {
+    kill "$observer_job" 2>/dev/null || true
+    wait "$observer_job" 2>/dev/null || true
+    fail "real bosun run did not acquire its run lock"
+  }
+  lock_wait=0
+  while [ "$(sed -n 's/^passes_this_run: //p' "$home/state/bosun/health" 2>/dev/null)" != 1 ]; do
+    [ "$lock_wait" -lt 40 ] || {
+      kill "$observer_job" 2>/dev/null || true
+      wait "$observer_job" 2>/dev/null || true
+      fail "real bosun run did not complete its first pass"
+    }
+    sleep 0.05
+    lock_wait=$((lock_wait + 1))
+  done
+  rm -f "$home/state/bosun/health"
+  mkdir -p "$home/state/journal"
+  : > "$home/state/journal/events.tsv"
+  chmod 000 "$home/state/journal/events.tsv"
+  printf '%s\n' stale > "$unitdir/fm-bosun@.service"
+  : > "$TMP_ROOT/systemctl.log"
+
+  FM_FINDINGS_DIR="$findings" service_env "$fakebin" "$home" "$unitdir" \
+    "$ROOT/bin/fm-bootstrap.sh" install bosun-unit > /dev/null 2>&1 || true
+  kill "$observer_job" 2>/dev/null || true
+  wait "$observer_job" 2>/dev/null || true
+  assert_contains "$(cat "$TMP_ROOT/systemctl.log")" "--user restart fm-bosun@" \
+    "installer treated a live run-lock owner without health as a virgin home"
+  records=$(FM_FINDINGS_DIR="$findings" "$FINDING" list --json) \
+    || fail "findings reader could not read the live-lock BLIND evidence"
+  printf '%s' "$records" | jq -e 'length == 1 and
+    (.[0].measurement | contains("health: BLIND")) and
+    (.[0].measurement | contains("health record absent or empty"))' > /dev/null \
+    || fail "live-lock BLIND finding did not preserve the missing-health reading"
+  pass "live run lock distinguishes BLIND observer from virgin home"
+}
+
 test_unopted_home_is_silent
 test_unit_clears_manager_judge_override
 test_install_requires_consent_and_converges
@@ -590,3 +649,4 @@ test_installer_records_running_stall_before_restart
 test_installer_blocks_stall_restart_without_findings_surface
 test_first_install_blind_without_prior_evidence_starts
 test_installer_records_blind_prior_observer_before_restart
+test_installer_records_blind_live_lock_without_health_record

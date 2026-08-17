@@ -66,6 +66,8 @@ case "$CONFIRM_TIMEOUT" in ''|*[!0-9]*|0) CONFIRM_TIMEOUT=20 ;; esac
 . "$SCRIPT_DIR/fm-service-path-lib.sh"
 # shellcheck source=bin/fm-axi-path-lib.sh
 . "$SCRIPT_DIR/fm-axi-path-lib.sh"
+# shellcheck source=bin/fm-wake-lib.sh
+. "$SCRIPT_DIR/fm-wake-lib.sh"
 # See fm-watcher-service.sh: the composed PATH resolves through this process.
 fm_axi_prepend_path "$FM_HOME"
 
@@ -299,17 +301,14 @@ recorded_service_path() {
 }
 
 capture_prior_observer_evidence() {
-  local pid=''
+  local lock pid=''
   FM_BOSUN_PRIOR_HEALTH=0
   FM_BOSUN_PRIOR_PROCESS=0
-  if [ -f "$STATE/bosun/health" ]; then
-    FM_BOSUN_PRIOR_HEALTH=1
-    pid=$(sed -n 's/^pid: //p' "$STATE/bosun/health" | head -1)
-  fi
-  case "$pid" in
-    ''|*[!0-9]*) ;;
-    *) kill -0 "$pid" 2>/dev/null && FM_BOSUN_PRIOR_PROCESS=1 ;;
-  esac
+  [ -f "$STATE/bosun/health" ] && FM_BOSUN_PRIOR_HEALTH=1
+  lock=$(bosun_env bash -c '. "$1/fm-bosun-lib.sh"; printf "%s\n" "$FM_BOSUN_RUN_LOCK"' \
+    _ "$SCRIPT_DIR" 2>/dev/null) || return 0
+  pid=$(cat "$lock/pid" 2>/dev/null || true)
+  fm_pid_alive "$pid" && FM_BOSUN_PRIOR_PROCESS=1
 }
 
 restart_fault_requires_record() {
@@ -322,7 +321,11 @@ restart_fault_requires_record() {
 
 record_restart_fault() {  # <restart trigger> <drift description>
   local trigger=$1 drift=$2 health_record measurement emitted
-  health_record=$(cat "$STATE/bosun/health" 2>&1 || true)
+  if [ -f "$STATE/bosun/health" ]; then
+    health_record=$(cat "$STATE/bosun/health" 2>/dev/null || true)
+  else
+    health_record=''
+  fi
   [ -n "$health_record" ] || health_record="health record absent or empty"
   measurement=$(printf 'trigger: %s\ndrift: %s\nhealth: %s - %s\nhealth record:\n%s\nrestart consequence: this restart is about to erase the live fault evidence' \
     "$trigger" "$drift" "$FM_BOSUN_HEALTH_WORD" "$FM_BOSUN_HEALTH_NOTE" "$health_record")
