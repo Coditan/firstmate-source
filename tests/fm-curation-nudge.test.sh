@@ -85,6 +85,44 @@ SH
   printf '%s\n' "$fakebin"
 }
 
+make_failing_probe_write() {
+  local home=$1 fakebin real_dd
+  fakebin=$(fm_fakebin "$home")
+  real_dd=$(command -v dd)
+  cat > "$fakebin/dd" <<SH
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  case "\$arg" in
+    of=*/.curation-nudge-health.*) : > "\${arg#of=}"; exit 1 ;;
+  esac
+done
+exec "$real_dd" "\$@"
+SH
+  chmod +x "$fakebin/dd"
+  printf '%s\n' "$fakebin"
+}
+
+make_failing_probe_rename() {
+  local home=$1 fakebin real_mv
+  fakebin=$(fm_fakebin "$home")
+  real_mv=$(command -v mv)
+  cat > "$fakebin/mv" <<SH
+#!/usr/bin/env bash
+case "\${!#}" in
+  */.curation-nudge-health.*.published) exit 1 ;;
+esac
+exec "$real_mv" "\$@"
+SH
+  chmod +x "$fakebin/mv"
+  printf '%s\n' "$fakebin"
+}
+
+assert_no_probe_artifacts() {
+  local home=$1 artifacts
+  artifacts=$(find "$home/state" -maxdepth 1 -name '.curation-nudge-health.*' -print)
+  [ -z "$artifacts" ] || fail "the health probe left scratch artifacts: $artifacts"
+}
+
 record_value() {
   local home=$1 key=$2
   sed -n "s/^$key: //p" "$home/state/curation-nudge.report"
@@ -282,6 +320,8 @@ test_transient_publish_failure_becomes_a_supervision_diagnosis() {
     "a usable state path must identify the remaining overdue target as supervision"
   assert_not_contains "$armed" 'state persistence failure' \
     "a recovered state path must not retain a transient persistence diagnosis"
+  [ "$(cat "$report")" = "$before" ] || fail "successful health probing changed the authoritative record"
+  assert_no_probe_artifacts "$home"
   [ "$(record_value "$home" next-epoch)" = "$due" ] || fail "health consumed the preserved due event"
   retry=$(FM_CURATION_NUDGE_NOW="$due" run_nudge "$home")
   assert_contains "$retry" 'curation sweep is due' "the next sweep must retry the same due event"
@@ -309,6 +349,7 @@ test_unusable_state_path_preserves_the_publish_failure_diagnosis() {
     "an unusable state path must not be called a supervision outage"
   [ "$(cat "$report")" = "$before" ] || fail "health changed the authoritative record"
   [ "$(record_value "$home" next-epoch)" = "$due" ] || fail "health consumed the preserved due event"
+  assert_no_probe_artifacts "$home"
   pass "unusable state path keeps publish failure distinct from supervision"
 }
 
@@ -339,7 +380,52 @@ test_indeterminate_state_probe_names_both_possible_causes() {
     "the indeterminate reading must not assert supervision"
   [ "$(cat "$report")" = "$before" ] || fail "health changed the authoritative record"
   [ "$(record_value "$home" next-epoch)" = "$due" ] || fail "health consumed the preserved due event"
+  assert_no_probe_artifacts "$home"
   pass "indeterminate state probe names both causes and asserts neither"
+}
+
+test_representative_write_failure_reports_persistence_without_side_effects() {
+  local home due report before fakebin armed
+  home=$(make_home probe-write-failure)
+  run_nudge "$home" >/dev/null
+  report="$home/state/curation-nudge.report"
+  due=$(record_value "$home" next-epoch)
+  before=$(cat "$report")
+  fakebin=$(make_failing_probe_write "$home")
+
+  armed=$(PATH="$fakebin:$PATH" FM_CURATION_NUDGE_NOW=$(( due + 7200 )) run_nudge "$home" --armed)
+  assert_contains "$armed" 'state persistence failure' \
+    "a rejected representative write must be diagnosed as persistence"
+  assert_contains "$armed" 'representative authoritative-record content cannot be written' \
+    "the write diagnosis must name the operation that failed"
+  assert_not_contains "$armed" 'nothing is executing it' \
+    "a rejected representative write must not be called a supervision outage"
+  [ "$(cat "$report")" = "$before" ] || fail "the write probe changed the authoritative record"
+  [ "$(record_value "$home" next-epoch)" = "$due" ] || fail "the write probe consumed the due event"
+  assert_no_probe_artifacts "$home"
+  pass "representative write failures stay distinct and non-destructive"
+}
+
+test_probe_rename_failure_reports_persistence_without_side_effects() {
+  local home due report before fakebin armed
+  home=$(make_home probe-rename-failure)
+  run_nudge "$home" >/dev/null
+  report="$home/state/curation-nudge.report"
+  due=$(record_value "$home" next-epoch)
+  before=$(cat "$report")
+  fakebin=$(make_failing_probe_rename "$home")
+
+  armed=$(PATH="$fakebin:$PATH" FM_CURATION_NUDGE_NOW=$(( due + 7200 )) run_nudge "$home" --armed)
+  assert_contains "$armed" 'state persistence failure' \
+    "a rejected scratch rename must be diagnosed as persistence"
+  assert_contains "$armed" 'same-directory atomic rename cannot complete' \
+    "the rename diagnosis must name the operation that failed"
+  assert_not_contains "$armed" 'nothing is executing it' \
+    "a rejected scratch rename must not be called a supervision outage"
+  [ "$(cat "$report")" = "$before" ] || fail "the rename probe changed the authoritative record"
+  [ "$(record_value "$home" next-epoch)" = "$due" ] || fail "the rename probe consumed the due event"
+  assert_no_probe_artifacts "$home"
+  pass "same-directory rename failures stay distinct and non-destructive"
 }
 
 test_missing_record_with_unusable_state_reports_persistence() {
@@ -812,6 +898,8 @@ test_unavailable_state_path_is_loud
 test_transient_publish_failure_becomes_a_supervision_diagnosis
 test_unusable_state_path_preserves_the_publish_failure_diagnosis
 test_indeterminate_state_probe_names_both_possible_causes
+test_representative_write_failure_reports_persistence_without_side_effects
+test_probe_rename_failure_reports_persistence_without_side_effects
 test_missing_record_with_unusable_state_reports_persistence
 test_missing_record_with_usable_state_reports_supervision
 test_missing_record_with_indeterminate_state_names_both_causes

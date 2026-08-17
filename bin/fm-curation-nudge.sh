@@ -73,11 +73,12 @@
 #
 # An overdue target can also be the durable remainder of a failed publish: the
 # failure cannot record itself because publication is the operation that failed.
-# So --armed never concludes a supervision outage without first probing the
-# state path, whether a target is overdue or the first record is still missing.
-# A usable path identifies a supervision outage, an unusable path identifies a
-# persistence failure, and an indeterminate probe names both possible causes
-# without asserting either one.
+# So --armed never concludes a supervision outage without first publishing a
+# representative report to distinct scratch paths in the state directory,
+# whether a target is overdue or the first record is still missing. A usable
+# path identifies a supervision outage, an unusable path identifies a
+# persistence failure, and an indeterminate or unclean probe names both possible
+# causes without asserting either one.
 #
 # Usage:
 #   fm-curation-nudge.sh            detect: stay silent on an ordinary sweep;
@@ -518,8 +519,13 @@ SHIM
 }
 
 STATE_PROBE_CONDITION=''
+cleanup_state_probe() {
+  rm -f -- "$1" "$2" 2>/dev/null || return 1
+  [ ! -e "$1" ] && [ ! -e "$2" ]
+}
+
 probe_state_publishability() {
-  local probe status
+  local probe published status representative
   STATE_PROBE_CONDITION=''
   if [ ! -d "$STATE" ]; then
     STATE_PROBE_CONDITION='the state path is not a directory'
@@ -539,8 +545,47 @@ probe_state_publishability() {
     STATE_PROBE_CONDITION='temporary state cannot be created in the state directory'
     return 1
   fi
-  if ! rm -f -- "$probe"; then
-    STATE_PROBE_CONDITION='the temporary-state probe could not be cleaned up, so publishability cannot be determined'
+  published="$probe.published"
+  representative=$(render_record scheduled "$(( NOW + INTERVAL + JITTER_MIN ))" 0 0 0 '' '')
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    if ! cleanup_state_probe "$probe" "$published"; then
+      STATE_PROBE_CONDITION='the representative content could not be rendered and its scratch state could not be cleaned up, so publishability cannot be determined'
+      return 2
+    fi
+    STATE_PROBE_CONDITION='the representative content could not be rendered, so publishability cannot be determined'
+    return 2
+  fi
+  printf '%s\n' "$representative" | dd of="$probe" bs=4096 2>/dev/null
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    if ! cleanup_state_probe "$probe" "$published"; then
+      STATE_PROBE_CONDITION='the representative write failed and its scratch state could not be cleaned up, so publishability cannot be determined'
+      return 2
+    fi
+    if [ "$status" -eq 126 ] || [ "$status" -eq 127 ]; then
+      STATE_PROBE_CONDITION='the representative-write probe could not be executed, so publishability cannot be determined'
+      return 2
+    fi
+    STATE_PROBE_CONDITION='representative authoritative-record content cannot be written in the state directory'
+    return 1
+  fi
+  mv -f -- "$probe" "$published"
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    if ! cleanup_state_probe "$probe" "$published"; then
+      STATE_PROBE_CONDITION='the same-directory atomic rename failed and its scratch state could not be cleaned up, so publishability cannot be determined'
+      return 2
+    fi
+    if [ "$status" -eq 126 ] || [ "$status" -eq 127 ]; then
+      STATE_PROBE_CONDITION='the same-directory rename probe could not be executed, so publishability cannot be determined'
+      return 2
+    fi
+    STATE_PROBE_CONDITION='a same-directory atomic rename cannot complete in the state directory'
+    return 1
+  fi
+  if ! cleanup_state_probe "$probe" "$published"; then
+    STATE_PROBE_CONDITION='the representative publish completed but its scratch state could not be cleaned up, so publishability cannot be determined'
     return 2
   fi
   return 0
