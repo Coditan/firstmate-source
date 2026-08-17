@@ -229,7 +229,7 @@ ROUTE BACK
 COMPLETE ROUTE ASSERTION
   route reaches 1 of 1 archived entries
 PRINTED EXAMPLE (3 output lines maximum)
-  $ (protected copy && grep -n '^## ' cost-archive.md)
+  $ (protected copy && /usr/bin/grep -n '^## ' cost-archive.md)
     1:## Das Abrechnungsmass der Flotte zaehlt frische Token, nicht gelesenen Kontext (2026-08-10, gemessen)
 
 CHECK PASSED: headings 3 -> 2, bytes 2174 -> 196, every entry deletion is declared, and the archive is reachable from the loaded half.

@@ -349,6 +349,18 @@ EOF
   [ "$status" -eq 1 ] || fail "a broken documented route exited $status, expected 1"
   printf '%s' "$out" | grep -q 'documented route exited' \
     || fail "the broken documented route was not executed"
+
+  mkdir -p "$TMP/wrong/directory"
+  sed "s|grep -n '\^## ' after-archive.md|grep -n '^## ' wrong/directory/after-archive.md|" \
+    "$TMP/after-loaded.md" >"$TMP/wrong-path-loaded.md"
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/wrong-path-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP/home" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "a wrong documented path exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'documented route is broken from a normal shell' \
+    || fail "a basename match silently repaired the wrong documented path"
+  printf '%s' "$out" | grep -q 'wrong/directory/after-archive.md' \
+    || fail "the route-path failure does not name the documented path"
   pass "the route back must be named and runnable inside the loaded half"
 }
 
@@ -445,7 +457,7 @@ EOF
 }
 
 test_route_proof_cannot_write_real_files() {
-  local before_hash escape_target out status
+  local before_hash escape_target fake_marker out status
   before_hash=$(sha256sum "$TMP/after-archive.md")
   sed "s|grep -n '\^## '|sed -i 's/Alpha/Changed/'|" \
     "$TMP/after-loaded.md" >"$TMP/sed-route-loaded.md"
@@ -480,6 +492,45 @@ test_route_proof_cannot_write_real_files() {
   [ "$status" -eq 1 ] || fail "an unknown grep flag exited $status, expected 1"
   printf '%s' "$out" | grep -q 'not in the closed read-only set' \
     || fail "the unknown grep flag was not rejected"
+
+  mkdir -p "$TMP/fake-bin"
+  fake_marker="$TMP/fake-grep-ran"
+  cat >"$TMP/fake-bin/grep" <<EOF
+#!/usr/bin/env bash
+touch "$fake_marker"
+exit 0
+EOF
+  chmod +x "$TMP/fake-bin/grep"
+  out=$(PATH="$TMP/fake-bin:$PATH" "$DRIVER" check --before "$TMP/before.json" \
+    --worksheet "$TMP/ws-filled.md" --loaded "$TMP/after-loaded.md" \
+    --archive "$TMP/after-archive.md" --home "$TMP/home" 2>&1) \
+    && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "trusted grep resolution failed: $out"
+  [ ! -e "$fake_marker" ] || fail "route proof invoked a PATH-hijacked grep"
+  printf '%s' "$out" | grep -Eq 'protected copy && /(usr/)?bin/grep ' \
+    || fail "route transcript does not identify the trusted absolute binary"
+
+  out=$(python3 - "$DRIVER" "$TMP/after-loaded.md" "$TMP/after-archive.md" <<'PY'
+import importlib.util
+import sys
+
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location("fm_curate_knowledge", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+result = module.prove_route(
+    "grep -n '^## ' after-archive.md",
+    sys.argv[2],
+    sys.argv[3],
+    ["Alpha rule and the incident behind it"],
+    3,
+    trusted_dirs=(),
+)
+print(result[3])
+PY
+  ) || fail "missing-trusted-binary probe crashed"
+  printf '%s' "$out" | grep -q 'no trusted non-writable `grep` binary' \
+    || fail "route proof degraded when no trusted binary resolved"
   pass "route proof cannot write the real archive"
 }
 
@@ -656,7 +707,7 @@ test_a_real_curation_passes_and_the_report_carries_the_ledger() {
   printf '%s' "$out" | grep -q 'CHECK PASSED' || fail "a real curation did not pass"
   printf '%s' "$out" | grep -q 'COMPLETE ROUTE ASSERTION' \
     || fail "a passing check does not print the executed recovery"
-  printf '%s' "$out" | grep -q '^  \$ (protected copy && grep' \
+  printf '%s' "$out" | grep -Eq '^  \$ \(protected copy && /(usr/)?bin/grep' \
     || fail "the recovery proof shows no command it actually ran"
 
   out=$("$DRIVER" report --before "$TMP/before.json" --loaded "$TMP/after-loaded.md" \

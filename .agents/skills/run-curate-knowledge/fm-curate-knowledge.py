@@ -36,6 +36,17 @@ entries appearing and disappearing. Changes inside a retained entry, whether
 a nested heading, bullet, sentence, or paragraph, remain the curator's
 judgement recorded by the split verdict rather than a mechanical ledger event.
 
+NON-WRITING ROUTE BOUNDARY
+The guarantee is a closed interface of grep and rg, tools with no write
+capability, resolved only from /usr/bin, /bin, or /usr/local/bin to an absolute
+regular file that the current user cannot write. Every argument is restricted
+to the closed read-only grammar, the documented relative path must resolve from
+the loaded half's directory to the archive under check, no shell is involved,
+and execution receives a sanitised environment. Defence in depth then maps the
+documented relative path to a 0444 copy inside a 0555 directory and compares
+the copy's hash before and after execution. The real archive is never executed
+against, and a boundary that cannot establish every item in this list refuses.
+
 WHAT THIS PROGRAM DOES NOT DO
 It never decides hot from cold. There is no keyword heuristic anywhere in this
 file, deliberately: the split criterion is "must this be in hand BEFORE the
@@ -119,6 +130,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -134,6 +146,7 @@ DIGEST_CALL_RE = re.compile(r'print_file_or_absent\s+"\$DATA/([^"]+)"')
 # enumerated below so an unknown flag cannot add capability. Every other tool
 # is refused because it is outside this provably non-writing interface.
 ROUTE_VERBS = ("grep", "rg")
+TRUSTED_ROUTE_DIRS = ("/usr/bin", "/bin", "/usr/local/bin")
 ROUTE_FLAGS = {
     "grep": ("-n", "-i", "-F", "-E", "-e", "--"),
     "rg": ("-n", "-i", "-F", "-e", "--"),
@@ -738,7 +751,7 @@ def route_commands(loaded_text, archive_path):
     return found
 
 
-def prove_route(command, archive_path, headings, sample):
+def prove_route(command, loaded_path, archive_path, headings, sample, trusted_dirs=None):
     """Run the documented route once and check every archived entry."""
     try:
         argv = shlex.split(command)
@@ -752,48 +765,86 @@ def prove_route(command, archive_path, headings, sample):
     forbidden = ("|", ";", ">", "<", "`", "$(", "${")
     if any(token in command for token in forbidden):
         return False, [], [], "route contains a forbidden shell construct"
-    option_error = _validate_route_argv(argv)
+    option_error, file_args = _validate_route_argv(argv)
     if option_error:
         return False, [], [], option_error
-    base = os.path.basename(archive_path)
-    archive_args = [index for index, value in enumerate(argv) if os.path.basename(value) == base]
+    executable, executable_error = _trusted_route_binary(
+        argv[0], TRUSTED_ROUTE_DIRS if trusted_dirs is None else trusted_dirs
+    )
+    if executable_error:
+        return False, [], [], executable_error
+    loaded_dir = os.path.dirname(os.path.realpath(loaded_path))
+    archive_real = os.path.realpath(archive_path)
+    resolved_args = {
+        index: os.path.realpath(os.path.join(loaded_dir, argv[index]))
+        for index in file_args
+        if not os.path.isabs(argv[index])
+    }
+    archive_args = [
+        index for index, resolved in resolved_args.items() if resolved == archive_real
+    ]
     if not archive_args:
+        documented = argv[file_args[-1]] if file_args else "(none)"
+        documented_real = (
+            os.path.realpath(os.path.join(loaded_dir, documented))
+            if documented != "(none)" and not os.path.isabs(documented)
+            else os.path.realpath(documented) if documented != "(none)" else documented
+        )
+        return False, [], [], (
+            "documented archive path `%s` resolves to `%s`, not archive `%s`; "
+            "the documented route is broken from a normal shell"
+            % (documented, documented_real, archive_real)
+        )
+    if len(archive_args) != 1:
+        return False, [], [], "route must name the archive exactly once"
+    archive_index = archive_args[0]
+    documented_archive = argv[archive_index]
+    if os.path.isabs(documented_archive) or ".." in documented_archive.split(os.sep):
+        return False, [], [], (
+            "documented archive path `%s` cannot be mapped to a protected copy; "
+            "use a relative path without `..`" % documented_archive
+        )
+    if not file_args:
         return False, [], [], "route has no archive path argument"
-    for index in archive_args:
-        argv[index] = base
-    source_dir = os.path.dirname(os.path.abspath(archive_path))
     route_root = os.path.abspath(os.getcwd())
     temp_path = tempfile.mkdtemp(prefix=".fm-route-proof-", dir=route_root)
     copied = {}
     try:
-        for index, value in enumerate(argv):
-            candidate = value if os.path.isabs(value) else os.path.join(source_dir, value)
+        for index in file_args:
+            value = argv[index]
+            if os.path.isabs(value) or ".." in value.split(os.sep):
+                return False, [], [], "route file path `%s` cannot be mapped safely" % value
+            candidate = os.path.realpath(os.path.join(loaded_dir, value))
             if not os.path.isfile(candidate):
                 continue
-            name = os.path.basename(candidate)
-            destination = os.path.join(temp_path, name)
-            if name in copied and copied[name] != os.path.abspath(candidate):
-                return False, [], [], "route names two different files called %s" % name
+            destination = os.path.join(temp_path, value)
+            name = os.path.relpath(destination, temp_path)
+            if name in copied and copied[name] != candidate:
+                return False, [], [], "route maps two different files to %s" % name
             if name not in copied:
+                os.makedirs(os.path.dirname(destination), exist_ok=True)
                 shutil.copyfile(candidate, destination)
                 os.chmod(destination, 0o444)
-                copied[name] = os.path.abspath(candidate)
-            argv[index] = name
-        if base not in copied:
-            shutil.copyfile(archive_path, os.path.join(temp_path, base))
-            os.chmod(os.path.join(temp_path, base), 0o444)
-            copied[base] = os.path.abspath(archive_path)
+                copied[name] = candidate
+        archive_copy = os.path.join(temp_path, documented_archive)
+        if not os.path.isfile(archive_copy):
+            return False, [], [], "documented archive path was not copied for proof"
         hashes_before = {
             name: _file_hash(os.path.join(temp_path, name)) for name in copied
         }
-        # The real archive is never an execution target. The closed grep/rg
-        # interface is the non-writing guarantee; protected copies and hashes
-        # are defence in depth. This matters because data/ is captain-private
-        # and untracked, and this fleet has already lost one body permanently.
+        for root, dirs, _files in os.walk(temp_path, topdown=False):
+            for directory in dirs:
+                os.chmod(os.path.join(root, directory), 0o555)
         os.chmod(temp_path, 0o555)
+        run_argv = [executable] + argv[1:]
         try:
             result = subprocess.run(
-                argv, cwd=temp_path, capture_output=True, text=True, check=False
+                run_argv,
+                cwd=temp_path,
+                capture_output=True,
+                text=True,
+                check=False,
+                env={"PATH": os.pathsep.join(TRUSTED_ROUTE_DIRS), "LC_ALL": "C.UTF-8"},
             )
         except OSError as exc:
             return False, [], [], "route could not run: %s" % exc
@@ -808,6 +859,10 @@ def prove_route(command, archive_path, headings, sample):
         if changed:
             return False, [], [], "route changed protected proof copies: %s" % ", ".join(changed)
     finally:
+        for root, dirs, _files in os.walk(temp_path):
+            os.chmod(root, 0o755)
+            for directory in dirs:
+                os.chmod(os.path.join(root, directory), 0o755)
         shutil.rmtree(temp_path)
     output = result.stdout.strip()
     if result.returncode != 0 or result.stderr.strip() or not output:
@@ -829,7 +884,7 @@ def prove_route(command, archive_path, headings, sample):
     for heading, count in required.items():
         missing.extend([heading_names[heading]] * max(0, count - found[heading]))
     reached = len(headings) - len(missing)
-    lines = ["  $ (protected copy && %s)" % " ".join(_shell_quote(part) for part in argv)]
+    lines = ["  $ (protected copy && %s)" % " ".join(_shell_quote(part) for part in run_argv)]
     output_lines = output.splitlines()
     for line in output_lines[:sample]:
         lines.append("    %s" % line[:160])
@@ -849,23 +904,68 @@ def _validate_route_argv(argv):
             options_done = True
         elif not options_done and value in ("-e", "-m"):
             if value not in allowed and value != "-m":
-                return "route flag `%s` is not in the closed read-only set" % value
+                return "route flag `%s` is not in the closed read-only set" % value, []
             index += 1
             if index >= len(argv):
-                return "route flag `%s` requires a value" % value
+                return "route flag `%s` requires a value" % value, []
             if value == "-m" and not argv[index].isdigit():
-                return "route -m value must be a non-negative integer"
+                return "route -m value must be a non-negative integer", []
         elif not options_done and re.fullmatch(r"-m\d+", value):
             pass
         elif not options_done and value.startswith("-"):
             if value not in allowed:
-                return "route flag `%s` is not in the closed read-only set" % value
+                return "route flag `%s` is not in the closed read-only set" % value, []
         else:
             positional += 1
         index += 1
     if positional < 1:
-        return "route has no pattern or path operands"
-    return None
+        return "route has no pattern or path operands", []
+    has_expression = any(value == "-e" for value in argv[1:])
+    positional_indices = _route_positional_indices(argv)
+    file_indices = positional_indices if has_expression else positional_indices[1:]
+    if not file_indices:
+        return "route has no path operand", []
+    return None, file_indices
+
+
+def _route_positional_indices(argv):
+    indices = []
+    index = 1
+    options_done = False
+    while index < len(argv):
+        value = argv[index]
+        if not options_done and value == "--":
+            options_done = True
+        elif not options_done and value in ("-e", "-m"):
+            index += 1
+        elif not options_done and (value.startswith("-") or re.fullmatch(r"-m\d+", value)):
+            pass
+        else:
+            indices.append(index)
+        index += 1
+    return indices
+
+
+def _trusted_route_binary(verb, trusted_dirs):
+    trusted_real_dirs = {os.path.realpath(directory) for directory in trusted_dirs}
+    for directory in trusted_dirs:
+        candidate = os.path.join(directory, verb)
+        resolved = os.path.realpath(candidate)
+        if os.path.dirname(resolved) not in trusted_real_dirs:
+            continue
+        try:
+            mode = os.stat(resolved).st_mode
+        except OSError:
+            continue
+        if not stat.S_ISREG(mode):
+            continue
+        if os.access(resolved, os.W_OK):
+            return None, "trusted route binary `%s` is writable by the current user" % resolved
+        return resolved, None
+    return None, (
+        "no trusted non-writable `%s` binary exists in %s; route proof refused"
+        % (verb, ", ".join(trusted_dirs))
+    )
 
 
 def _file_hash(path):
@@ -1215,7 +1315,7 @@ def cmd_check(args):
         headings = [e["heading"] for e in archive["entries"]]
         if commands:
             ok, transcript, missing, result_message = prove_route(
-                commands[0], archive["path"], headings, args.prove_route
+                commands[0], args.loaded, archive["path"], headings, args.prove_route
             )
             print("  %s" % result_message)
             print("PRINTED EXAMPLE (%d output lines maximum)" % args.prove_route)
