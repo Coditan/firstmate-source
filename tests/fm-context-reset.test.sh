@@ -18,6 +18,10 @@ set -u
 
 RESET="$ROOT/bin/fm-context-reset.sh"
 RECEIPT_BIN="$ROOT/bin/fm-stow-receipt.sh"
+OPERATIONAL_INPUT="$ROOT/bin/fm-operational-input.sh"
+
+# shellcheck source=bin/fm-operational-input.sh
+. "$OPERATIONAL_INPUT"
 
 fm_test_tmproot TMP_ROOT fm-context-reset-tests
 
@@ -59,6 +63,19 @@ write_transcript() {
       printf '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"%s"}]},"timestamp":"%s"}\n' \
         "$(head -c "$pad" /dev/zero | tr '\0' 'x')" "$(iso_now)"
     fi
+    printf '{"type":"assistant","message":{"usage":{"input_tokens":%s,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}\n' "$tokens"
+  } > "$path"
+}
+
+write_transcript_with_unattributed_string_user() {
+  local path=$1 tokens=$2 human=$3 content=$4 content_ts=$5 uuid=${6:-unattributed-record-0001}
+  {
+    printf '{"type":"user","isMeta":true,"message":{"role":"user","content":"session-start nudge"},"timestamp":"2020-01-01T00:00:00.000Z"}\n'
+    if [ -n "$human" ]; then
+      printf '{"type":"user","origin":{"kind":"human"},"promptSource":"typed","uuid":"%s","message":{"role":"user","content":"captain says something"},"timestamp":"%s"}\n' "$CAPTAIN_RECORD_ID" "$human"
+    fi
+    jq -cn --arg uuid "$uuid" --arg content "$content" --arg ts "$content_ts" \
+      '{type:"user", uuid:$uuid, message:{role:"user", content:$content}, timestamp:$ts}'
     printf '{"type":"assistant","message":{"usage":{"input_tokens":%s,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}\n' "$tokens"
   } > "$path"
 }
@@ -276,7 +293,7 @@ test_captain_spoke_after_the_receipt_refuses() {
 test_receipt_refuses_off_session() {
   local out status=0
   make_case
-  sed -i.bak 's/^harness_pid=.*/harness_pid=2/' "$STATE_DIR/.primary-transcript"
+  sed -i.bak 's/^harness_pid=.*/harness_pid=999999999/' "$STATE_DIR/.primary-transcript"
   out=$(run_env "$RECEIPT_BIN" 2>&1) || status=$?
   expect_code 1 "$status" "a receipt written from outside the recorded session"
   assert_contains "$out" "refusing" "the receipt writer did not refuse loudly"
@@ -653,7 +670,7 @@ test_down_delivery_with_no_work_proceeds() {
 
 test_foreign_session_record_refuses() {
   make_case
-  sed -i.bak 's/^harness_pid=.*/harness_pid=2/' "$STATE_DIR/.primary-transcript"
+  sed -i.bak 's/^harness_pid=.*/harness_pid=999999999/' "$STATE_DIR/.primary-transcript"
   assert_refuses "only a session may reset itself" "a reset driven from outside the recorded session"
 }
 
@@ -1002,6 +1019,38 @@ test_wake_delivery_is_not_mistaken_for_the_captain() {
   pass "a background wake delivery is not captain activity"
 }
 
+test_unattributed_operational_wake_delivery_is_not_mistaken_for_the_captain() {
+  local fields old_ts operational out
+  make_case
+  old_ts=$(iso_ago 86400)
+  fm_operational_input_encode watcher "wake: context ceiling" operational \
+    || fail "fixture could not compose a watcher operational input"
+  write_transcript_with_unattributed_string_user "$TRANSCRIPT" 900000 "$old_ts" "$operational" "$(iso_now)"
+  fields=$(scan_published_fields "$TRANSCRIPT")
+  assert_contains "$fields" "ts=[$old_ts]" \
+    "an unattributed operational wake displaced the last real captain timestamp"
+  assert_contains "$fields" "uuid=[$CAPTAIN_RECORD_ID]" \
+    "an unattributed operational wake displaced the last real captain record id"
+  out=$(watch_reason)
+  assert_contains "$out" "the captain is not present" \
+    "an unattributed operational wake was mistaken for captain activity"
+  pass "an unattributed operational wake delivery is not captain activity"
+}
+
+test_unattributed_unmarked_recent_user_message_still_counts_as_the_captain() {
+  local out
+  make_case
+  write_transcript_with_unattributed_string_user \
+    "$TRANSCRIPT" 900000 "" "captain says something from a slash expansion" "$(iso_ago 60)"
+  write_receipt
+  out=$(watch_reason)
+  assert_contains "$out" "ASK the captain" \
+    "an unattributed but unmarked recent user message did not count as the captain"
+  assert_refuses "ask before resetting" \
+    "a reset while an unattributed but unmarked recent user message is active"
+  pass "an unattributed unmarked recent user message still blocks autonomous reset"
+}
+
 # --- an absent captain record is not evidence of an absent captain ----------
 
 # The read is bounded so one poll can never become an unbounded read, and that
@@ -1148,6 +1197,8 @@ test_watcher_publishes_a_stable_class_per_branch
 test_watcher_refuses_to_hand_over_a_reset_with_a_broken_restart_path
 test_watcher_process_enqueues_the_ceiling_wake
 test_wake_delivery_is_not_mistaken_for_the_captain
+test_unattributed_operational_wake_delivery_is_not_mistaken_for_the_captain
+test_unattributed_unmarked_recent_user_message_still_counts_as_the_captain
 test_a_captain_beyond_the_bounded_tail_is_still_the_captain
 test_a_complete_read_with_no_captain_record_fails_closed
 test_receipt_refuses_when_the_captain_timestamp_is_unknown
