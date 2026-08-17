@@ -102,8 +102,12 @@ github_repo_slug() {
   [ "$host" = github.com ] || return 1
   path=${path%/}
   path=${path%.git}
-  case $path in ''|/*|*/*/*|*'/../'*|../*|*/..) return 1 ;; esac
-  case $path in *[!A-Za-z0-9_.\/-]*) return 1 ;; esac
+  # Reject empty or absolute paths, parent traversal, and paths deeper than owner/repository.
+  case $path in ''|/*) return 1 ;; esac
+  case $path in ../*) return 1 ;; esac
+  case $path in */../*|*/..) return 1 ;; esac
+  case $path in */*/*) return 1 ;; esac
+  case $path in *[!A-Za-z0-9_./-]*) return 1 ;; esac
   GITHUB_REPO_SLUG=$path
 }
 
