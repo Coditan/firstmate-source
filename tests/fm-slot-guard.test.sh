@@ -42,6 +42,8 @@
 #   (o) returned top-level slot is never mutated after release
 #   (p) returned child slot is never mutated after release
 #   (q) home-return refusal preserves registry and task state
+#   (r) retry refresh refuses a holder and preserves its lock
+#   (s) pool lease refusal is terminal during child cleanup
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -67,7 +69,10 @@ make_case() {
   : > "$case_dir/leases"
   : > "$case_dir/lease-on-status"
   : > "$case_dir/reallocate-on-return"
+  : > "$case_dir/lock-return-once"
+  : > "$case_dir/change-lease-on-return"
   printf '0\n' > "$case_dir/status-count"
+  printf '0\n' > "$case_dir/return-count"
   : > "$case_dir/returned"
 
   # treehouse mock. `status` reports leases from $CASE/leases (one
@@ -96,6 +101,9 @@ case "${1:-}" in
     exit 0 ;;
   return)
     shift
+    count=$(cat "${FM_TEST_CASE_DIR:?}/return-count")
+    count=$((count + 1))
+    printf '%s\n' "$count" > "${FM_TEST_CASE_DIR:?}/return-count"
     want= ; path=
     while [ $# -gt 0 ]; do
       case "$1" in
@@ -105,6 +113,19 @@ case "${1:-}" in
       esac
       shift
     done
+    if [ "$count" = 1 ] && [ -s "${FM_TEST_CASE_DIR:?}/lock-return-once" ]; then
+      lock=$(/usr/bin/git -C "$path" rev-parse --git-path index.lock)
+      mkdir -p "$(dirname "$lock")"
+      : > "$lock"
+      echo "fatal: Unable to create '$lock': File exists" >&2
+      exit 1
+    fi
+    if [ -s "${FM_TEST_CASE_DIR:?}/change-lease-on-return" ]; then
+      holder=$(cat "${FM_TEST_CASE_DIR:?}/change-lease-on-return")
+      awk -F'\t' -v p="$path" '$1 != p' "$LEASES" > "$LEASES.next"
+      printf '%s\t%s\n' "$path" "$holder" >> "$LEASES.next"
+      mv "$LEASES.next" "$LEASES"
+    fi
     if [ -n "$want" ]; then
       have=$(awk -F'\t' -v p="$path" '$1 == p {print $2}' "$LEASES" | head -1)
       if [ -z "$have" ]; then
@@ -202,6 +223,14 @@ lease_slot_on_status() {  # <case> <status-count> <path> <holder>
 
 reallocate_slot_on_return() {  # <case> <branch>
   printf '%s\n' "$2" > "$1/reallocate-on-return"
+}
+
+fail_first_return_with_lock() {  # <case>
+  printf 'yes\n' > "$1/lock-return-once"
+}
+
+change_lease_on_return() {  # <case> <holder>
+  printf '%s\n' "$2" > "$1/change-lease-on-return"
 }
 
 run_teardown() {  # <case> <id> [args...]
@@ -628,6 +657,52 @@ test_secondmate_home_refusal_preserves_records() {
   pass "(q) secondmate home refusal preserves registry and task state"
 }
 
+test_retry_refreshes_ownership_and_preserves_lock() {
+  local case_dir rc lock
+  case_dir=$(make_case retry-holder)
+  write_task "$case_dir" finished-task dead
+  fail_first_return_with_lock "$case_dir"
+  lease_slot_on_status "$case_dir" 4 "$case_dir/slot" "fm:retry-holder"
+
+  set +e
+  FM_TREEHOUSE_RETURN_LOCK_RETRY_WAIT_SECS=0 \
+    run_teardown "$case_dir" finished-task --force > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 4 "$rc" "retry-holder: refreshed ownership refusal should retain its status"
+  assert_grep "retry-holder" "$case_dir/stderr" "retry-holder: refusal must name the new holder"
+  assert_nothing_returned "$case_dir" "retry-holder: retry must not return the reallocated slot"
+  lock=$(git -C "$case_dir/slot" rev-parse --git-path index.lock)
+  assert_present "$lock" "retry-holder: refreshed refusal must preserve the occupant's lock"
+  pass "(r) retry refresh refuses the new holder and preserves its lock"
+}
+
+test_child_pool_lease_refusal_is_terminal() {
+  local case_dir home rc
+  case_dir=$(make_case child-pool-refusal)
+  home=$(make_secondmate_case "$case_dir" parent-task)
+  write_child_task "$case_dir" "$home" finished-child dead
+  lease_slot "$case_dir" "$case_dir/slot" "fm:finished-child"
+  change_lease_on_return "$case_dir" "fm:live-child"
+
+  set +e
+  run_teardown "$case_dir" parent-task --force > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 4 "$rc" "child-pool-refusal: pool ownership refusal should retain its status"
+  assert_grep "lease holder does not match" "$case_dir/stderr" \
+    "child-pool-refusal: pool refusal reason should remain visible"
+  assert_nothing_returned "$case_dir" "child-pool-refusal: pool-refused slot must not be returned"
+  assert_present "$case_dir/slot" "child-pool-refusal: pool-refused slot must not be deleted"
+  assert_present "$home/state/finished-child.meta" \
+    "child-pool-refusal: pool refusal must preserve the child record"
+  assert_present "$case_dir/state/parent-task.meta" \
+    "child-pool-refusal: pool refusal must preserve the parent record"
+  pass "(s) child pool lease refusal is terminal and preserves records"
+}
+
 test_stale_record_live_holder_refuses
 test_sole_owner_allows
 test_force_does_not_override
@@ -644,5 +719,7 @@ test_late_top_level_refusal_is_mutation_free
 test_returned_top_level_slot_is_not_mutated
 test_returned_child_slot_is_not_mutated
 test_secondmate_home_refusal_preserves_records
+test_retry_refreshes_ownership_and_preserves_lock
+test_child_pool_lease_refusal_is_terminal
 
 printf '\nall fm-slot-guard tests passed\n'

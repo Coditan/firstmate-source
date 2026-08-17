@@ -118,7 +118,7 @@ A task whose liveness cannot be read counts as live, because the cost of guessin
 It sweeps this home's recorded slots on the ordinary watcher cadence and, when a slot is claimed by a task other than the live one standing in it, writes a durable `state/<id>.slot-disputed` marker and wakes firstmate once.
 The marker is the point: the protection exists before any teardown runs and survives a caller that never asks.
 
-**`bin/fm-teardown.sh`** asks the question before cleanup and again at `teardown_treehouse_return`, using the owning home's state directory for nested secondmate cleanup, propagates ownership refusal through every parent cleanup without deleting its records, relies on the return's reset to remove hooks, and performs best-effort branch-ref cleanup through the project repository without touching the released worktree path.
+**`bin/fm-teardown.sh`** freshly asks the complete ownership question and rebuilds lease preconditions before every return attempt and lock mutation, using the owning home's state directory for nested secondmate cleanup, translating the pool's own lease-precondition failures into terminal ownership refusals, propagating refusal through every parent cleanup without deleting its records, relying on the return's reset to remove hooks, and performing best-effort branch-ref cleanup through the project repository without touching the released worktree path.
 When the slot is leased to the task being torn down it also passes `--if-lease-holder`, so for those slots the refusal is enforced by the pool itself rather than by firstmate's memory.
 
 The refusal holds under `--force` deliberately.

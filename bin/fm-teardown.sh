@@ -521,6 +521,11 @@ treehouse_return_is_index_lock_error() {
   printf '%s\n' "$text" | grep -Eq "Unable to create ['\"].*index\\.lock['\"]: File exists"
 }
 
+treehouse_return_is_lease_precondition_error() {
+  local text=$1
+  printf '%s\n' "$text" | grep -Eq "lease precondition failed: .*([Ll]ease holder does not match|is not leased)"
+}
+
 # Absolute path to the git index lock for a worktree/repo dir, or empty when it
 # cannot be resolved (dir missing or not a git worktree at all).
 worktree_git_lock_path() {
@@ -564,6 +569,7 @@ cleanup_stale_lock_for_safety_check() {
   fi
 
   if fm_lock_is_provably_stale "$lock" "$dir" "$STALE_WORKTREE_LOCK_AGE_SECS"; then
+    refresh_teardown_return_ownership "$dir" "$PROJ" "worktree" "$ID" "$STATE" || return $?
     rm -f "$lock"
     echo "teardown: removed provably-stale git lock $lock (age >= ${STALE_WORKTREE_LOCK_AGE_SECS}s, no live holder) and retrying worktree safety checks" >&2
     return 0
@@ -621,12 +627,25 @@ require_no_other_slot_holder() {  # <dir> <cd_dir> <label> <self-id> <state-dir>
 # it fails closed in both directions. It is therefore only safe to add when this
 # task is the recorded lease holder; on an unleased slot it would refuse every
 # ordinary teardown, and the refusal above is what covers that case instead.
-teardown_return_lease_args() {  # <dir> <cd_dir> <self-id>
-  local dir=$1 cd_dir=$2 self=$3 lease
+refresh_teardown_return_ownership() {  # <dir> <cd_dir> <label> <self-id> <state-dir>
+  local dir=$1 cd_dir=$2 label=$3 self=$4 state_dir=$5 lease holder
+  lease_args=()
+  require_no_other_slot_holder "$dir" "$cd_dir" "$label" "$self" "$state_dir" || return $?
   lease=$(fm_slot_lease_holder "$dir" "$cd_dir" 2>/dev/null) || return 0
   [ -n "$lease" ] || return 0
   case "$lease" in
-    "fm:$self"|"$self") printf -- '--if-lease-holder\n%s\n' "$lease" ;;
+    "fm:$self"|"$self") lease_args=(--if-lease-holder "$lease") ;;
+    *)
+      holder=$(fm_slot_task_of_lease_label "$lease" 2>/dev/null) || holder=$lease
+      if [ "${FM_TEARDOWN_SLOT_OVERRIDE:-}" = "$holder" ]; then
+        echo "teardown: displacing $holder from $label $dir on an explicit FM_TEARDOWN_SLOT_OVERRIDE" >&2
+        return 0
+      fi
+      echo "REFUSED: $label $dir is recorded by $self but is held by $holder, which is still live." >&2
+      echo "Returning it would terminate every process in that worktree and reset it, destroying $holder's uncommitted work." >&2
+      echo "Resolve the holder first (let $holder finish, or tear $holder down), or set FM_TEARDOWN_SLOT_OVERRIDE=$holder to displace it deliberately." >&2
+      return "$TEARDOWN_SLOT_HELD_REFUSED"
+      ;;
   esac
 }
 
@@ -634,22 +653,15 @@ teardown_return_lease_args() {  # <dir> <cd_dir> <self-id>
 # stale git index.lock left by a killed crew process. See the script header.
 teardown_treehouse_return() {
   local dir=$1 cd_dir=$2 label=$3 post_cleanup_check=${4:-} self=${5:-$ID} state_dir=${6:-$STATE}
-  local out lock attempt=0 max_retries lock_desc line holder_rc
+  local out lock attempt=0 max_retries lock_desc holder_rc
   local -a lease_args=()
 
-  if require_no_other_slot_holder "$dir" "$cd_dir" "$label" "$self" "$state_dir"; then
+  if refresh_teardown_return_ownership "$dir" "$cd_dir" "$label" "$self" "$state_dir"; then
     :
   else
     holder_rc=$?
     return "$holder_rc"
   fi
-
-  while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    lease_args+=("$line")
-  done <<EOF
-$(teardown_return_lease_args "$dir" "$cd_dir" "$self")
-EOF
 
   # Capture stdout+stderr so non-lock failures stay visible and lock failures can
   # be matched by signature even when the lock file is already gone mid-check.
@@ -659,6 +671,9 @@ EOF
   fi
   [ -n "$out" ] && printf '%s\n' "$out" >&2
 
+  if treehouse_return_is_lease_precondition_error "$out"; then
+    return "$TEARDOWN_SLOT_HELD_REFUSED"
+  fi
   if ! treehouse_return_is_index_lock_error "$out"; then
     return 1
   fi
@@ -678,6 +693,13 @@ EOF
     echo "teardown: $label return failed with transient git lock ($lock_desc); waiting ${TREEHOUSE_RETURN_LOCK_RETRY_WAIT_SECS}s and retrying ($attempt/${max_retries})" >&2
     sleep "$TREEHOUSE_RETURN_LOCK_RETRY_WAIT_SECS"
 
+    if refresh_teardown_return_ownership "$dir" "$cd_dir" "$label" "$self" "$state_dir"; then
+      :
+    else
+      holder_rc=$?
+      return "$holder_rc"
+    fi
+
     if out=$( ( cd "$cd_dir" && treehouse return --force ${lease_args[@]+"${lease_args[@]}"} "$dir" ) 2>&1 ); then
       [ -n "$out" ] && printf '%s\n' "$out"
       echo "teardown: $label return succeeded on retry; lock cleared on its own" >&2
@@ -685,6 +707,9 @@ EOF
     fi
     [ -n "$out" ] && printf '%s\n' "$out" >&2
 
+    if treehouse_return_is_lease_precondition_error "$out"; then
+      return "$TEARDOWN_SLOT_HELD_REFUSED"
+    fi
     if ! treehouse_return_is_index_lock_error "$out"; then
       echo "teardown: $label return failed with a non-lock error after retry; aborting" >&2
       return 1
@@ -697,6 +722,12 @@ EOF
   if [ -n "$lock" ] && [ -e "$lock" ]; then
     lock_desc=$lock
     if fm_lock_is_provably_stale "$lock" "$dir" "$STALE_WORKTREE_LOCK_AGE_SECS"; then
+      if refresh_teardown_return_ownership "$dir" "$cd_dir" "$label" "$self" "$state_dir"; then
+        :
+      else
+        holder_rc=$?
+        return "$holder_rc"
+      fi
       rm -f "$lock"
       echo "teardown: removed provably-stale git lock $lock (age >= ${STALE_WORKTREE_LOCK_AGE_SECS}s, no live holder) and retrying $label return" >&2
       if [ -n "$post_cleanup_check" ]; then
@@ -705,12 +736,21 @@ EOF
           return 1
         fi
       fi
+      if refresh_teardown_return_ownership "$dir" "$cd_dir" "$label" "$self" "$state_dir"; then
+        :
+      else
+        holder_rc=$?
+        return "$holder_rc"
+      fi
       if out=$( ( cd "$cd_dir" && treehouse return --force ${lease_args[@]+"${lease_args[@]}"} "$dir" ) 2>&1 ); then
         [ -n "$out" ] && printf '%s\n' "$out"
         echo "teardown: $label return succeeded after stale-lock cleanup" >&2
         return 0
       fi
       [ -n "$out" ] && printf '%s\n' "$out" >&2
+      if treehouse_return_is_lease_precondition_error "$out"; then
+        return "$TEARDOWN_SLOT_HELD_REFUSED"
+      fi
       echo "teardown: $label return still failing after stale-lock cleanup" >&2
       return 1
     fi
