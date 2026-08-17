@@ -2,7 +2,7 @@
 name: bootstrap-diagnostics
 description: >-
   Agent-only handling playbook for session-start bootstrap diagnostics.
-  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, ROLE_INVALID, ROLE_OVERLAY_MISSING, NEEDS_GH_AUTH, TANGLE, SELF_DRIFT, CREW_DISPATCH invalid, CURRENCY_BASE, LAVISH_ACCESS, BACKLOG_STALE, BACKLOG_UNREADABLE, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, AXI_SUITE_UPDATED, AXI_SUITE_REVIEW, AXI_SUITE_STUCK, AXI_SUITE_SHADOWED, AXI_SUITE_SHADOW_UNKNOWN, FIRSTMATE_UPDATE_AVAILABLE, FIRSTMATE_UPDATE_STUCK, FORK_SYNC, FORK_SYNC_STUCK, CURRENCY_ROUND, MEMORY_ALARM, GROSSREINSCHIFF, RUN_READER, WATCHER_UNIT, DELIVERY_UNIT, FREQUENCY_MONITOR_UNIT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
+  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, ROLE_INVALID, ROLE_OVERLAY_MISSING, NEEDS_GH_AUTH, TANGLE, SELF_DRIFT, CREW_DISPATCH invalid, CURRENCY_BASE, LAVISH_ACCESS, BACKLOG_STALE, BACKLOG_UNREADABLE, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, AXI_SUITE_UPDATED, AXI_SUITE_REVIEW, AXI_SUITE_STUCK, AXI_SUITE_SHADOWED, AXI_SUITE_SHADOW_UNKNOWN, FIRSTMATE_UPDATE_AVAILABLE, FIRSTMATE_UPDATE_STUCK, FORK_SYNC, FORK_SYNC_STUCK, CURRENCY_ROUND, MEMORY_ALARM, CURATION_NUDGE, GROSSREINSCHIFF, RUN_READER, WATCHER_UNIT, DELIVERY_UNIT, FREQUENCY_MONITOR_UNIT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
   A silent bootstrap section, or a BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -98,6 +98,15 @@ When any diagnostic needs captain attention, report the plain consequence and re
   `has never completed a reading` or `has stopped running` means the alarm exists but the monitoring service is not running it, which is a supervision fault rather than a memory one: repair it through the emitted supervision instructions, exactly as for a lapsed watcher.
   Never read this line as a verdict on memory - it says the instrument is not reading, not that this machine is fine; `bin/fm-memory-alarm.sh --status` gives the current reading when you need it.
   An actual crossing or recovery arrives as a `check:` wake instead, and that one is captain-facing: it names a process, an account, and the work it was serving, and nothing has been limited or killed, so the decision is still open.
+- `CURATION_NUDGE: <detail>` - this home's 48-hour knowledge-file curation cadence is unavailable or has raised its measurement wake.
+  `is not armed` or `could not be armed` means the nudge was never installed or the arm failed; run `bin/fm-curation-nudge.sh --arm` and report the reason if it refuses.
+  `state persistence failure` means the state path cannot publish the authoritative record; repair its permissions, disk space, quota, or mount, not monitoring.
+  `supervision outage` means the state path is usable but the schedule is still missing or overdue; repair it through the emitted supervision instructions, exactly as for a lapsed watcher.
+  `state health indeterminate` names state publication failure and supervision outage as candidates while asserting neither; check both, starting with the cheaper state-path reading, and do not route it as either verdict.
+  These readings are worth trusting because they come from what the work produced plus an observation-time publishability probe, not from the check's own claim to be armed; `bin/fm-curation-nudge.sh --status` prints the authoritative record when you need it.
+  Never read this line as a verdict on any vessel's files, including this one.
+  The nudge itself arrives as a `check:` wake instead, and that one asks firstmate to dispatch a crewmate to send the All-Ships notice per `AGENTS.md` section 12; the wording of that notice is firstmate's, and the nudge never writes to Bridge itself.
+  Each vessel then measures its own two files and decides its own split, because the files are per-home and gitignored and no seat can see another's.
 - `GROSSREINSCHIFF: weekly fleet cleanup sweep is due (...)` - this home has not completed its Thursday cleanup sweep for the current week; load the `grossreinschiff` skill and run it.
   Nothing is broken: the line is a cadence reminder, and it repeats each session start until `bin/fm-grossreinschiff-due.sh --record` marks a sweep that actually produced a report.
   The reported window-open days say only how far into the current week's window this session start falls; the count is bounded to 0 through 6 and never measures how long the home has been dark.

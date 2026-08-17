@@ -29,6 +29,7 @@
 #                 "GROSSREINSCHIFF: weekly fleet cleanup sweep is due (...)",
 #                 "CURRENCY_ROUND: the daily update check <is not armed|has stopped> (...)",
 #                 "MEMORY_ALARM: <nothing is watching this machine|the memory watch ... has stopped> (...)",
+#                 "CURATION_NUDGE: <not armed|could not be armed|scheduler refusal|state persistence failure|state health indeterminate|supervision outage> (...)",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...",
 #                 "WATCHER_UNIT: <consent, convergence, or fallback detail>",
 #                 "DELIVERY_UNIT: <consent, convergence, or fallback detail>",
@@ -1085,6 +1086,13 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   if ! "$SCRIPT_DIR/fm-memory-alarm.sh" --arm >/dev/null 2>&1; then
     echo "MEMORY_ALARM: the memory watch could not be armed on this home, so nothing will notice this machine running out of memory; run $SCRIPT_DIR/fm-memory-alarm.sh --arm to see why"
   fi
+  # Arm this home's 48-hour knowledge-file curation nudge, for the same reason
+  # and on the same terms: AGENTS.md already said to prune data/learnings.md and
+  # data/captain.md rather than append, and a rule with no mechanism is carried
+  # by memory. This is that mechanism.
+  if ! "$SCRIPT_DIR/fm-curation-nudge.sh" --arm >/dev/null 2>&1; then
+    echo "CURATION_NUDGE: the knowledge-file curation nudge could not be armed on this home, so nothing will re-measure this vessel's learnings and captain files between sessions; run $SCRIPT_DIR/fm-curation-nudge.sh --arm to see why"
+  fi
   "$SCRIPT_DIR/fm-axi-suite.sh"
   # The suite may have just seeded this home's own copies into $FM_HOME/.local/axi;
   # drop the cached lookups so the sweeps below resolve the vessel copy, not the
@@ -1113,6 +1121,10 @@ fi
 "$SCRIPT_DIR/fm-currency-round.sh" --armed || true
 # And the same question of the memory alarm: armed once is not running now.
 "$SCRIPT_DIR/fm-memory-alarm.sh" --armed || true
+# And of the curation nudge, which answers it from what the work produced - the
+# last firing and the next scheduled sweep - rather than from its own claim to
+# be armed, because a timer's own surfaces report health long after it died.
+"$SCRIPT_DIR/fm-curation-nudge.sh" --armed || true
 [ -f "$STATE/firstmate-update.available" ] && cat "$STATE/firstmate-update.available"
 [ -f "$STATE/firstmate-update.stuck" ] && cat "$STATE/firstmate-update.stuck"
 [ -f "$STATE/fork-sync.pending" ] && cat "$STATE/fork-sync.pending"
