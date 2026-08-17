@@ -306,6 +306,8 @@ capture_prior_observer_evidence() {
   FM_BOSUN_PRIOR_HEALTH=0
   FM_BOSUN_PRIOR_PROCESS=0
   [ -f "$STATE/bosun/health" ] && FM_BOSUN_PRIOR_HEALTH=1
+  # Expand the run-lock variable in the child shell that sourced its owner.
+  # shellcheck disable=SC2016
   lock=$(bosun_env bash -c '. "$1/fm-bosun-lib.sh"; printf "%s\n" "$FM_BOSUN_RUN_LOCK"' \
     _ "$SCRIPT_DIR" 2>/dev/null) || return 0
   pid=$(cat "$lock/pid" 2>/dev/null || true)
@@ -386,10 +388,13 @@ ensure_systemd() {
     fi
     if [ "$env_changed" -eq 1 ]; then
       write_service_env || return 1
+      env_changed=$FM_BOSUN_ENV_CHANGED
     fi
-    "$SYSTEMCTL" --user restart "$unit" || return 1
-    wait_for_running_bosun || return 3
-    return 0
+    if [ "$unit_changed" -eq 1 ] || [ "$env_changed" -eq 1 ]; then
+      "$SYSTEMCTL" --user restart "$unit" || return 1
+      wait_for_running_bosun || return 3
+      return 0
+    fi
   fi
   bosun_health && return 0
   case "$FM_BOSUN_HEALTH_WORD" in
@@ -488,7 +493,7 @@ bootstrap_check() {
       echo "BOSUN_UNIT: $unit needs locked convergence from the session holding the fleet lock"
     fi
   else
-    ensure_systemd 2>&1 >/dev/null && rc=0 || rc=$?
+    ensure_systemd >/dev/null 2>&1 && rc=0 || rc=$?
     # 3 is "converged, restarted, and still nothing is judging". That is a real
     # fault, but naming it a convergence failure would send the reader to
     # systemctl, and the reading below already names the concrete state.
