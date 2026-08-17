@@ -60,11 +60,64 @@ record_stuck() {
   exit 0
 }
 
+repository_identity() {
+  local side=$1 url=$2 path=$2 repo_slug result id name
+  REPOSITORY_IDENTITY=""
+  REPOSITORY_NAME=""
+  REPOSITORY_IDENTITY_REASON=""
+  case $url in
+    file://*) path=${url#file://} ;;
+    https://github.com/*|http://github.com/*|ssh://git@github.com/*|git+ssh://git@github.com/*|git@github.com:*)
+      repo_slug=$url
+      repo_slug=${repo_slug#https://github.com/}
+      repo_slug=${repo_slug#http://github.com/}
+      repo_slug=${repo_slug#ssh://git@github.com/}
+      repo_slug=${repo_slug#git+ssh://git@github.com/}
+      repo_slug=${repo_slug#git@github.com:}
+      repo_slug=${repo_slug%.git}
+      case $repo_slug in */*) ;; *) REPOSITORY_IDENTITY_REASON="$side URL has no owner/repository path"; return 1 ;; esac
+      command -v gh-axi >/dev/null 2>&1 || {
+        REPOSITORY_IDENTITY_REASON="gh-axi is unavailable for the $side GitHub repository"
+        return 1
+      }
+      result=$(timeout "${FM_CHECK_TIMEOUT:-30}" gh-axi api "repos/$repo_slug" --jq '.id, .full_name' 2>&1) || {
+        REPOSITORY_IDENTITY_REASON="$side GitHub repository lookup failed: $result"
+        return 1
+      }
+      id=$(printf '%s\n' "$result" | sed -n '1p')
+      name=$(printf '%s\n' "$result" | sed -n '2p')
+      case $id in *[!0-9]*|'') REPOSITORY_IDENTITY_REASON="$side GitHub repository lookup returned no numeric id"; return 1 ;; esac
+      [ -n "$name" ] || {
+        REPOSITORY_IDENTITY_REASON="$side GitHub repository lookup returned no full name"
+        return 1
+      }
+      REPOSITORY_IDENTITY="github:$id"
+      REPOSITORY_NAME=$name
+      return 0
+      ;;
+    *://*|*:*)
+      REPOSITORY_IDENTITY_REASON="$side URL is not a supported GitHub or local repository address"
+      return 1
+      ;;
+  esac
+  path=$(git -C "$path" rev-parse --absolute-git-dir 2>/dev/null) || {
+    REPOSITORY_IDENTITY_REASON="$side local path is not a git repository"
+    return 1
+  }
+  path=$(realpath "$path" 2>/dev/null) || {
+    REPOSITORY_IDENTITY_REASON="$side git directory cannot be canonicalized"
+    return 1
+  }
+  REPOSITORY_IDENTITY="local:$path"
+  REPOSITORY_NAME=$path
+}
+
 # shellcheck source=bin/fm-currency-base-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-currency-base-lib.sh"
 fm_currency_base_resolve "$CONFIG" "$FM_CURRENCY_BASE_FORK_ITEM" ||
   record_stuck "config/$FM_CURRENCY_BASE_FORK_ITEM is unusable - $FM_CURRENCY_BASE_REASON"
 UPSTREAM_URL=$FM_CURRENCY_BASE_VALUE
+upstream_source=$FM_CURRENCY_BASE_SOURCE
 
 case $NOW in *[!0-9]*|'') record_stuck "current epoch is invalid" ;; esac
 if [ -f "$LAST_RUN" ]; then
@@ -81,15 +134,19 @@ if [ -z "$compare_repo" ]; then
   fm_currency_base_fork_repo "$CONFIG" "$FM_ROOT" || record_stuck "$FM_CURRENCY_BASE_REASON"
   fork_url=$FM_CURRENCY_BASE_VALUE
   fork_source=$FM_CURRENCY_BASE_SOURCE
-  # Comparing a repository with itself always reports everything absorbed, which
-  # is the quietest possible wrong answer, so it is refused by name.
-  [ "$fork_url" != "$UPSTREAM_URL" ] ||
-    record_stuck "the fork side ($fork_source) and the upstream side resolve to the same repository $fork_url"
+  repository_identity fork "$fork_url" || record_stuck "$REPOSITORY_IDENTITY_REASON ($fork_url, from $fork_source)"
+  fork_identity=$REPOSITORY_IDENTITY
+  fork_name=$REPOSITORY_NAME
+  repository_identity upstream "$UPSTREAM_URL" || record_stuck "$REPOSITORY_IDENTITY_REASON ($UPSTREAM_URL, from $upstream_source)"
+  upstream_identity=$REPOSITORY_IDENTITY
+  upstream_name=$REPOSITORY_NAME
+  [ "$fork_identity" != "$upstream_identity" ] ||
+    record_stuck "fork $fork_name (from $fork_source) and upstream $upstream_name (from $upstream_source) are the same repository (identity $fork_identity)"
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-fork-sync.XXXXXX") || record_stuck "temporary comparison repository cannot be created"
   trap 'rm -rf "$tmp"' EXIT
   git -C "$tmp" init --bare -q || record_stuck "temporary comparison repository cannot be initialized"
   git -C "$tmp" fetch -q --no-tags "$fork_url" HEAD:refs/heads/fork || record_stuck "fork default-branch lookup failed ($fork_url, from $fork_source)"
-  git -C "$tmp" fetch -q --no-tags "$UPSTREAM_URL" HEAD:refs/heads/upstream || record_stuck "upstream default-branch lookup failed ($UPSTREAM_URL)"
+  git -C "$tmp" fetch -q --no-tags "$UPSTREAM_URL" HEAD:refs/heads/upstream || record_stuck "upstream default-branch lookup failed ($UPSTREAM_URL, from $upstream_source)"
   compare_repo=$tmp
   fork=$(git -C "$tmp" rev-parse --verify refs/heads/fork)
   upstream=$(git -C "$tmp" rev-parse --verify refs/heads/upstream)
@@ -196,7 +253,7 @@ EOF
   # the wrong repository is indistinguishable from a reading of the right one,
   # which is how a fleet repository's own commits were once listed below as
   # fork-only patches.
-  printf '  compared: fork %s (from %s) against upstream %s\n' "$fork_url" "$fork_source" "$UPSTREAM_URL"
+  printf '  compared: fork %s (from %s) against upstream %s (from %s)\n' "$fork_url" "$fork_source" "$UPSTREAM_URL" "$upstream_source"
   printf '  note: "provably absorbed" counts only patches this check could prove absorbed by patch-id or by tip-content convergence; the remainder are unproven, not proven unabsorbed.\n'
   printf '  upstream-only commits:\n'
   printf '%s' "$upstream_review_detail"

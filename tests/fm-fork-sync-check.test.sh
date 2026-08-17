@@ -418,9 +418,53 @@ test_identical_comparison_sides_refuse_instead_of_reporting_absorbed() {
   out=$(run_resolving_check "$seat" "$state" "$config" 5400000)
   assert_contains "$out" 'FORK_SYNC_STUCK:' \
     "comparing a repository with itself must refuse, not report everything absorbed"
-  assert_contains "$out" 'resolve to the same repository' "the refusal did not name the cause"
+  assert_contains "$out" 'are the same repository (identity local:' "the refusal did not name the shared identity"
   [ ! -f "$state/fork-sync.last-run" ] || fail "a refused check stamped a completed run"
   pass "a fork side that resolves to the upstream refuses instead of reporting a quiet all-clear"
+}
+
+test_symlinked_local_alias_refuses_as_the_same_repository() {
+  local seat state config alias out
+  make_curator_seat aliased
+  seat="$TMP_ROOT/aliased-seat"
+  state="$TMP_ROOT/aliased-state"
+  config="$TMP_ROOT/aliased-config"
+  alias="$TMP_ROOT/aliased-upstream-link"
+  ln -s "$TMP_ROOT/aliased-upstream" "$alias"
+  printf '%s\n' "$alias" > "$config/fork-sync-fork"
+
+  out=$(run_resolving_check "$seat" "$state" "$config" 5500000)
+  assert_contains "$out" 'FORK_SYNC_STUCK:' "two local spellings of one repository were compared"
+  assert_contains "$out" 'are the same repository (identity local:' "the canonical local identity was not reported"
+  pass "symlinked local aliases resolve to one repository identity"
+}
+
+test_distinct_local_identities_are_compared() {
+  local seat state config out
+  make_curator_seat distinct
+  seat="$TMP_ROOT/distinct-seat"
+  state="$TMP_ROOT/distinct-state"
+  config="$TMP_ROOT/distinct-config"
+  printf '%s\n' "$TMP_ROOT/distinct-fork" > "$config/fork-sync-fork"
+
+  out=$(run_resolving_check "$seat" "$state" "$config" 5600000)
+  assert_contains "$out" 'FORK_SYNC:' "two different repository identities did not proceed to comparison"
+  assert_not_contains "$out" 'FORK_SYNC_STUCK:' "two different repository identities were refused"
+  pass "different local repository identities proceed to comparison"
+}
+
+test_unestablishable_identity_refuses_before_comparison() {
+  local seat state config out
+  make_curator_seat unknown
+  seat="$TMP_ROOT/unknown-seat"
+  state="$TMP_ROOT/unknown-state"
+  config="$TMP_ROOT/unknown-config"
+
+  out=$(FM_FIRSTMATE_FORK_URL='https://example.invalid/owner/repo.git' run_resolving_check "$seat" "$state" "$config" 5700000)
+  assert_contains "$out" 'FORK_SYNC_STUCK:' "an unestablishable identity did not refuse"
+  assert_contains "$out" 'not a supported GitHub or local repository address' "the refusal did not explain the identity failure"
+  [ ! -f "$state/fork-sync.last-run" ] || fail "an identity refusal stamped a completed comparison"
+  pass "an unestablishable repository identity refuses before comparison"
 }
 
 test_pending_lists_and_cadence_gate
@@ -439,3 +483,6 @@ test_fork_remote_outranks_origin_when_nothing_is_configured
 test_origin_remains_the_last_resort_fork_side
 test_unusable_configured_fork_side_refuses_loudly
 test_identical_comparison_sides_refuse_instead_of_reporting_absorbed
+test_symlinked_local_alias_refuses_as_the_same_repository
+test_distinct_local_identities_are_compared
+test_unestablishable_identity_refuses_before_comparison

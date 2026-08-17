@@ -153,21 +153,27 @@ fm_currency_base_file_value() {
 # fm_currency_base_resolve <config_dir> <item>: set FM_CURRENCY_BASE_VALUE to
 # the base to compare against, applying the documented precedence. Returns 1
 # with FM_CURRENCY_BASE_REASON set only when a present config file is unusable.
-# shellcheck disable=SC2034  # both globals are read by sourcing callers.
+# shellcheck disable=SC2034  # all three globals are read by sourcing callers.
 fm_currency_base_resolve() {
   local config_dir=$1 item=$2 status
   FM_CURRENCY_BASE_REASON=""
   FM_CURRENCY_BASE_VALUE=""
+  FM_CURRENCY_BASE_SOURCE=""
   if [ -n "${FM_FIRSTMATE_UPSTREAM_URL:-}" ]; then
     FM_CURRENCY_BASE_VALUE=$FM_FIRSTMATE_UPSTREAM_URL
+    FM_CURRENCY_BASE_SOURCE="FM_FIRSTMATE_UPSTREAM_URL"
     return 0
   fi
   fm_currency_base_file_value "$config_dir" "$item"
   status=$?
   case $status in
-    0) return 0 ;;
+    0)
+      FM_CURRENCY_BASE_SOURCE="config/$item"
+      return 0
+      ;;
     2)
       FM_CURRENCY_BASE_VALUE=$FM_CURRENCY_BASE_DEFAULT
+      FM_CURRENCY_BASE_SOURCE="the built-in default"
       return 0
       ;;
   esac
