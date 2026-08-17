@@ -669,7 +669,8 @@ if [ "$MODE" = detect ]; then
   [ "$NOW" -ge "$due" ] || exit 0
 fi
 
-if last_completed=$(read_last_fire) && [ "$last_completed" -ge "$due" ]; then
+if [ "$MODE" = detect ] && last_completed=$(read_last_fire) \
+  && [ "$last_completed" -ge "$due" ]; then
   schedule_transition
   transition_status=$?
   case "$transition_status" in

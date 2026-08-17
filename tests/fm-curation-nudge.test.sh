@@ -696,6 +696,45 @@ test_a_disabled_nudge_stays_out_of_composing_suites() {
   pass "the disable switch silences only the reporting modes"
 }
 
+test_every_public_mode_has_an_executable_contract() {
+  local home out status
+  home=$(make_home public-modes)
+
+  status=0
+  out=$(run_nudge "$home" --arm) || status=$?
+  [ "$status" -eq 0 ] || fail "--arm exited $status: $out"
+  assert_contains "$out" 'armed: ' "--arm must report the registered check"
+
+  status=0
+  out=$(run_nudge "$home") || status=$?
+  [ "$status" -eq 0 ] || fail "bare detect exited $status: $out"
+  [ -z "$out" ] || fail "a healthy bare detect must be silent: $out"
+  [ -f "$home/state/curation-nudge.next-due" ] \
+    || fail "bare detect must establish the initial schedule"
+
+  status=0
+  out=$(run_nudge "$home" --armed) || status=$?
+  [ "$status" -eq 0 ] || fail "--armed exited $status: $out"
+  [ -z "$out" ] || fail "a healthy --armed reading must be silent: $out"
+
+  status=0
+  out=$(run_nudge "$home" --status) || status=$?
+  [ "$status" -eq 0 ] || fail "--status exited $status: $out"
+  assert_contains "$out" 'cadence: ' "--status must render the cadence"
+
+  status=0
+  out=$(run_nudge "$home" --draw 1) || status=$?
+  [ "$status" -eq 0 ] || fail "--draw exited $status: $out"
+  case "$out" in ''|*[!0-9]*) fail "--draw must emit one epoch: $out" ;; esac
+
+  status=0
+  out=$(run_nudge "$home" --force) || status=$?
+  [ "$status" -eq 0 ] || fail "--force exited $status: $out"
+  assert_contains "$out" 'curation sweep is due' \
+    "--force must unconditionally emit the curation wake"
+  pass "every public mode executes with its observable contract"
+}
+
 test_bootstrap_arms_the_nudge_and_asks_whether_it_is_still_running() {
   local home out shim
   home=$(make_home bootstrap)
@@ -749,4 +788,5 @@ test_a_nudge_that_never_scheduled_a_target_is_loud
 test_an_unarmed_home_is_loud
 test_status_reports_the_schedule_without_advancing_it
 test_a_disabled_nudge_stays_out_of_composing_suites
+test_every_public_mode_has_an_executable_contract
 test_bootstrap_arms_the_nudge_and_asks_whether_it_is_still_running
