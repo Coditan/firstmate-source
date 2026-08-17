@@ -375,67 +375,93 @@ schedule_transition() {
   return 1
 }
 
-persist_report() {
-  local tmp
+persist_firing_records() {
+  local next=$1 firing_epoch=$2 report_tmp last_tmp report_backup='' had_report=0
   [ ! -d "$REPORT" ] || {
     PERSISTENCE_PATH=$REPORT
     PERSISTENCE_CONDITION='the firing report could not replace a directory at its state path'
     return 1
   }
-  tmp=$(mktemp "$STATE/.curation-nudge-report.XXXXXX") || {
-    PERSISTENCE_PATH=$STATE
-    PERSISTENCE_CONDITION='temporary state for the firing report could not be created'
-    return 1
-  }
-  render_report "$1" > "$tmp" || {
-    rm -f -- "$tmp"
-    PERSISTENCE_PATH=$tmp
-    PERSISTENCE_CONDITION='the firing report could not be written to temporary state'
-    return 1
-  }
-  if ! mv -f -- "$tmp" "$REPORT"; then
-    rm -f -- "$tmp"
-    PERSISTENCE_PATH=$REPORT
-    PERSISTENCE_CONDITION='the firing report could not be persisted'
-    return 1
-  fi
-}
-
-persist_last_fire() {
-  local tmp
   [ ! -d "$LAST_FIRE" ] || {
     PERSISTENCE_PATH=$LAST_FIRE
     PERSISTENCE_CONDITION='the actual firing time could not replace a directory at the last-fire path'
     return 1
   }
-  tmp=$(mktemp "$STATE/.curation-nudge-last-fire.XXXXXX") || {
+  report_tmp=$(mktemp "$STATE/.curation-nudge-report.XXXXXX") || {
+    PERSISTENCE_PATH=$STATE
+    PERSISTENCE_CONDITION='temporary state for the firing report could not be created'
+    return 1
+  }
+  last_tmp=$(mktemp "$STATE/.curation-nudge-last-fire.XXXXXX") || {
+    rm -f -- "$report_tmp"
     PERSISTENCE_PATH=$STATE
     PERSISTENCE_CONDITION='temporary state for the actual firing time could not be created'
     return 1
   }
-  printf '%s\n' "$NOW" > "$tmp" || {
-    rm -f -- "$tmp"
-    PERSISTENCE_PATH=$tmp
+  render_report "$next" "$firing_epoch" > "$report_tmp" || {
+    rm -f -- "$report_tmp" "$last_tmp"
+    PERSISTENCE_PATH=$report_tmp
+    PERSISTENCE_CONDITION='the firing report could not be written to temporary state'
+    return 1
+  }
+  printf '%s\n' "$firing_epoch" > "$last_tmp" || {
+    rm -f -- "$report_tmp" "$last_tmp"
+    PERSISTENCE_PATH=$last_tmp
     PERSISTENCE_CONDITION='the actual firing time could not be written to temporary state'
     return 1
   }
-  if ! mv -f -- "$tmp" "$LAST_FIRE"; then
-    rm -f -- "$tmp"
+  if [ -f "$REPORT" ]; then
+    report_backup=$(mktemp "$STATE/.curation-nudge-report-backup.XXXXXX") || {
+      rm -f -- "$report_tmp" "$last_tmp"
+      PERSISTENCE_PATH=$STATE
+      PERSISTENCE_CONDITION='temporary rollback state for the prior firing report could not be created'
+      return 1
+    }
+    cat "$REPORT" > "$report_backup" || {
+      rm -f -- "$report_tmp" "$last_tmp" "$report_backup"
+      PERSISTENCE_PATH=$REPORT
+      PERSISTENCE_CONDITION='the prior firing report could not be preserved for rollback'
+      return 1
+    }
+    had_report=1
+  fi
+  if ! mv -f -- "$report_tmp" "$REPORT"; then
+    rm -f -- "$report_tmp" "$last_tmp" "$report_backup"
+    PERSISTENCE_PATH=$REPORT
+    PERSISTENCE_CONDITION='the firing report could not be persisted'
+    return 1
+  fi
+  if ! mv -f -- "$last_tmp" "$LAST_FIRE"; then
+    rm -f -- "$last_tmp"
+    if [ "$had_report" -eq 1 ]; then
+      if ! mv -f -- "$report_backup" "$REPORT"; then
+        PERSISTENCE_PATH=$REPORT
+        PERSISTENCE_CONDITION='the actual firing time failed and the prior firing report could not be restored'
+        return 1
+      fi
+    elif ! rm -f -- "$REPORT"; then
+      PERSISTENCE_PATH=$REPORT
+      PERSISTENCE_CONDITION='the actual firing time failed and the new firing report could not be rolled back'
+      return 1
+    fi
     PERSISTENCE_PATH=$LAST_FIRE
     PERSISTENCE_CONDITION='the actual firing time could not be persisted'
     return 1
   fi
+  rm -f -- "$report_backup"
 }
 
-render_report() {  # <next-due-epoch or empty>
-  local next=$1 last
+render_report() {  # <next-due-epoch or empty> [this-firing-epoch]
+  local next=$1 firing_epoch=${2:-} last
   printf 'nudge: %s\n' "$(epoch_utc "$NOW")"
   if [ -n "$next" ]; then
     printf 'next: %s (minute %s, off the five-minute grid)\n' "$(epoch_utc "$next")" "$(minute_of "$next")"
   else
     printf 'next: none scheduled\n'
   fi
-  if last=$(read_last_fire); then
+  if [ -n "$firing_epoch" ]; then
+    printf 'last-fire: %s\n' "$(epoch_utc "$firing_epoch")"
+  elif last=$(read_last_fire); then
     printf 'last-fire: %s\n' "$(epoch_utc "$last")"
   else
     printf 'last-fire: never\n'
@@ -635,13 +661,10 @@ case "$transition_status" in
   1) schedule_refusal_line; exit 0 ;;
   *) state_persistence_line; exit 1 ;;
 esac
-if ! persist_report "$next"; then
+firing_epoch=$NOW
+if ! persist_firing_records "$next" "$firing_epoch"; then
   state_persistence_line
   exit 1
 fi
 nudge_line
-if ! persist_last_fire; then
-  state_persistence_line
-  exit 1
-fi
 exit 0

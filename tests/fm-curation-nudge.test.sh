@@ -312,8 +312,8 @@ test_report_commit_failure_prevents_the_successful_wake() {
   pass "report commit failure prevents a fully recorded success"
 }
 
-test_last_fire_commit_failure_reports_after_the_wake() {
-  local home due out status=0 fakebin last_fire
+test_last_fire_commit_failure_prevents_the_wake_and_rolls_back() {
+  local home due out status=0 fakebin last_fire status_out
   home=$(make_home last-fire-commit-failure)
   run_nudge "$home" >/dev/null
   due=$(cat "$home/state/curation-nudge.next-due")
@@ -322,14 +322,19 @@ test_last_fire_commit_failure_reports_after_the_wake() {
 
   out=$(PATH="$fakebin:$PATH" FM_CURATION_NUDGE_NOW="$due" run_nudge "$home") || status=$?
   [ "$status" -ne 0 ] || fail "a failed last-fire commit exited as success: $out"
-  assert_contains "$out" 'curation sweep is due' \
-    "the case must prove the wake was emitted before last-fire failed"
+  assert_not_contains "$out" 'curation sweep is due' \
+    "a firing with incoherent records must not emit the wake"
   assert_contains "$out" 'state persistence failure' \
-    "the emitted wake must be followed by the recording failure"
+    "the failed coherent commit must emit the persistence diagnostic"
   assert_contains "$out" "$last_fire" \
     "the failed last-fire commit must name its path"
   [ ! -e "$last_fire" ] || fail "the failed last-fire commit left a false record"
-  pass "last-fire commit failure is reported after the emitted wake"
+  [ ! -e "$home/state/curation-nudge.report" ] \
+    || fail "the failed last-fire commit left the new report behind"
+  status_out=$(run_nudge "$home" --status)
+  assert_contains "$status_out" 'last-fire: never' \
+    "status must not claim the incomplete firing"
+  pass "last-fire commit failure prevents the wake and rolls back the report"
 }
 
 test_the_period_is_forty_eight_hours() {
@@ -390,7 +395,7 @@ test_arming_schedules_the_first_sweep_without_waking_anyone() {
 }
 
 test_a_firing_reaches_a_session_as_a_wake_that_names_what_is_due() {
-  local home out due later report
+  local home out due later report report_last status_last
   home=$(make_home fire)
   run_nudge "$home" >/dev/null
   due=$(cat "$home/state/curation-nudge.next-due")
@@ -419,7 +424,32 @@ test_a_firing_reaches_a_session_as_a_wake_that_names_what_is_due() {
     "the record must carry this vessel's own measurement"
   assert_grep "off the five-minute grid" "$report" \
     "the record must state the scheduled target and its off-grid minute"
+  report_last=$(grep '^last-fire:' "$report")
+  status_last=$(run_nudge "$home" --status | grep '^last-fire:')
+  [ "$report_last" = "$status_last" ] \
+    || fail "the first report describes a different firing than last-fire"
+  assert_not_contains "$report_last" 'never' \
+    "the first report must name the firing it records"
   pass "a firing wakes a session with one line naming what is due"
+}
+
+test_the_second_report_describes_the_second_firing() {
+  local home first_due second_due first_last second_last status_last
+  home=$(make_home second-report)
+  run_nudge "$home" >/dev/null
+  first_due=$(cat "$home/state/curation-nudge.next-due")
+  FM_CURATION_NUDGE_NOW="$first_due" run_nudge "$home" >/dev/null
+  first_last=$(grep '^last-fire:' "$home/state/curation-nudge.report")
+  second_due=$(cat "$home/state/curation-nudge.next-due")
+
+  FM_CURATION_NUDGE_NOW="$second_due" run_nudge "$home" >/dev/null
+  second_last=$(grep '^last-fire:' "$home/state/curation-nudge.report")
+  status_last=$(run_nudge "$home" --status | grep '^last-fire:')
+  [ "$second_last" != "$first_last" ] \
+    || fail "the second report still describes the first firing"
+  [ "$second_last" = "$status_last" ] \
+    || fail "the second report and last-fire describe different events"
+  pass "the second report describes the second firing"
 }
 
 test_the_wake_prompts_measurement_and_claims_nothing_about_another_vessel() {
@@ -645,11 +675,12 @@ test_next_due_persistence_failure_is_distinct_and_fails
 test_failed_next_due_commit_preserves_the_refusal
 test_failed_refusal_commit_preserves_the_next_due
 test_report_commit_failure_prevents_the_successful_wake
-test_last_fire_commit_failure_reports_after_the_wake
+test_last_fire_commit_failure_prevents_the_wake_and_rolls_back
 test_the_period_is_forty_eight_hours
 test_successive_firings_drift_rather_than_repeating_one_time
 test_arming_schedules_the_first_sweep_without_waking_anyone
 test_a_firing_reaches_a_session_as_a_wake_that_names_what_is_due
+test_the_second_report_describes_the_second_firing
 test_the_wake_prompts_measurement_and_claims_nothing_about_another_vessel
 test_a_home_that_was_off_schedules_one_sweep_ahead_rather_than_catching_up
 test_no_bridge_or_network_binary_is_ever_invoked
