@@ -577,7 +577,7 @@ result = module.prove_route(
     "grep -n '^## ' after-archive.md",
     sys.argv[2],
     sys.argv[3],
-    ["Alpha rule and the incident behind it"],
+    module.file_facts(sys.argv[3])["entries"],
     3,
     trusted_dirs=(),
 )
@@ -946,6 +946,207 @@ EOF
   pass "a re-run is judged against the pair it started from"
 }
 
+# This driver's parse is fence-aware; the operator's `grep -n '^## '` is not and
+# cannot be asked to be. So route records are matched by the line number grep
+# already returned: a fenced example of a heading must not be able to stand in
+# for the real entry it quotes, which a truncating route would read as full reach.
+test_a_fenced_heading_cannot_stand_in_for_a_real_entry() {
+  local out status
+  cat >"$TMP/fence-before.md" <<'EOF'
+# Store
+
+## Alpha rule
+
+The rule, and the incident that arrived with its own trigger attached.
+
+## Beta rule
+
+The second rule, with an incident narrative of its own to keep somewhere.
+
+## Beta rule seen again
+
+The same evening, the same measurement, told again at length.
+EOF
+  cat >"$TMP/fence-archive.md" <<'EOF'
+```text
+## Beta rule
+```
+
+## Alpha rule
+
+The rule, and the incident that arrived with its own trigger attached.
+
+## Beta rule
+
+The second rule, with its incident narrative and the folded retelling.
+EOF
+  cat >"$TMP/fence-ws.md" <<'EOF'
+--- entry 1
+key: alpha rule#1
+heading: Alpha rule
+verdict: cold
+why: the trigger arrives with the problem, so an agent will go looking
+
+--- entry 2
+key: beta rule#1
+heading: Beta rule
+verdict: cold
+why: the trigger arrives with the problem, so an agent will go looking
+
+--- entry 3
+key: beta rule seen again#1
+heading: Beta rule seen again
+verdict: fold
+why: merged under Beta rule in the archive, one evening and one measurement
+EOF
+  "$DRIVER" measure "$TMP/fence-before.md" --home "$TMP" \
+    --save "$TMP/fence-before.json" >/dev/null \
+    || fail "measure could not snapshot the fenced-example baseline"
+
+  # The fenced `## Beta rule` sits above the real entries, so a truncating route
+  # returns it plus one real entry and never reaches the real Beta rule.
+  cat >"$TMP/fence-loaded-partial.md" <<'EOF'
+# Store
+
+- **Alpha rule**: the sentence that must be in hand first.
+- **Beta rule**: the other sentence that must be in hand first.
+
+Reach the incidents with `grep -m2 -n '^## ' fence-archive.md`.
+EOF
+  out=$("$DRIVER" check --before "$TMP/fence-before.json" \
+    --worksheet "$TMP/fence-ws.md" --loaded "$TMP/fence-loaded-partial.md" \
+    --archive "$TMP/fence-archive.md" --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "a fenced look-alike route exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'route reaches 1 of 2 archived entries' \
+    || fail "a fenced heading was counted as reaching the entry it quotes"
+  printf '%s' "$out" | grep -q 'unreachable: Beta rule' \
+    || fail "the unreached real entry was not named"
+
+  cat >"$TMP/fence-loaded-full.md" <<'EOF'
+# Store
+
+- **Alpha rule**: the sentence that must be in hand first.
+- **Beta rule**: the other sentence that must be in hand first.
+
+Reach the incidents with `grep -n '^## ' fence-archive.md`.
+EOF
+  out=$("$DRIVER" check --before "$TMP/fence-before.json" \
+    --worksheet "$TMP/fence-ws.md" --loaded "$TMP/fence-loaded-full.md" \
+    --archive "$TMP/fence-archive.md" --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "a complete route over a fenced archive exited $status: $out"
+  printf '%s' "$out" | grep -q 'route reaches 2 of 2 archived entries' \
+    || fail "a fence-unaware route was not reconciled with the real entries"
+  pass "route records are matched by line number, so a fenced example proves nothing"
+}
+
+# The two halves of a pair routinely settle at different entry levels: a pruned
+# loaded half of headings at one level, an archive of sections at another. Each
+# half must be parsed at the level it was measured at, or a correct re-run reads
+# as though the whole archive had been deleted.
+test_a_pair_baseline_uses_each_halfs_own_entry_level() {
+  local out status
+  cat >"$TMP/level-loaded.md" <<'EOF'
+# Store
+
+Reach the incidents with `grep -n '^## ' level-archive-after.md`.
+
+# New fact to curate
+
+Body, learned since the last prune, whose trigger arrives with the problem.
+
+# New fact seen a second time
+
+The same evening, the same measurement, told again at length.
+EOF
+  cat >"$TMP/level-archive.md" <<'EOF'
+## Existing archived entry
+
+Told once, in full, where a search will find it again.
+
+## Another archived entry
+
+Also told once, and it must still be here when this is over.
+EOF
+  "$DRIVER" measure "$TMP/level-loaded.md" "$TMP/level-archive.md" \
+    --home "$TMP" --save "$TMP/level-before.json" >/dev/null \
+    || fail "measure could not snapshot a pair with two entry levels"
+  cat >"$TMP/level-ws.md" <<'EOF'
+--- entry 1
+key: store#1
+heading: Store
+verdict: hot
+why: the pointer and the rules are what must be in hand first
+
+--- entry 2
+key: new fact to curate#1
+heading: New fact to curate
+verdict: cold
+why: the trigger arrives with the problem, so an agent will go looking
+
+--- entry 3
+key: new fact seen a second time#1
+heading: New fact seen a second time
+verdict: fold
+why: merged under New fact to curate in the archive, one evening and one measurement
+EOF
+  cat >"$TMP/level-loaded-after.md" <<'EOF'
+# Store
+
+Reach the incidents with `grep -n '^## ' level-archive-after.md`.
+EOF
+  cat >"$TMP/level-archive-after.md" <<'EOF'
+## Existing archived entry
+
+Told once, in full, where a search will find it again.
+
+## Another archived entry
+
+Also told once, and it must still be here when this is over.
+
+## New fact to curate
+
+Body, learned since the last prune, whose trigger arrives with the problem.
+
+**Seen a second time the same evening:** told again at length.
+EOF
+  out=$("$DRIVER" check --before "$TMP/level-before.json" \
+    --before-loaded "$TMP/level-loaded.md" --before-archive "$TMP/level-archive.md" \
+    --worksheet "$TMP/level-ws.md" --loaded "$TMP/level-loaded-after.md" \
+    --archive "$TMP/level-archive-after.md" --home "$TMP" 2>&1) \
+    && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "a pair with two entry levels exited $status: $out"
+  printf '%s' "$out" | grep -q 'entry level per half: loaded 1, archive 2' \
+    || fail "the check does not carry each half's own entry level"
+  printf '%s' "$out" | grep -q 'route reaches 3 of 3 archived entries' \
+    || fail "the after-archive was not parsed at its own entry level"
+
+  # The same pair, with an existing archive entry quietly dropped.
+  grep -v 'Another archived entry' "$TMP/level-archive-after.md" \
+    | grep -v 'Also told once' >"$TMP/level-archive-dropped.md"
+  sed 's|level-archive-after.md|level-archive-dropped.md|g' \
+    "$TMP/level-loaded-after.md" >"$TMP/level-loaded-dropped.md"
+  out=$("$DRIVER" check --before "$TMP/level-before.json" \
+    --before-loaded "$TMP/level-loaded.md" --before-archive "$TMP/level-archive.md" \
+    --worksheet "$TMP/level-ws.md" --loaded "$TMP/level-loaded-dropped.md" \
+    --archive "$TMP/level-archive-dropped.md" --home "$TMP" 2>&1) \
+    && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "a dropped entry exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'another archived entry' \
+    || fail "the dropped archive entry was not named"
+
+  # One --level cannot mean two things, so it is refused rather than applied to
+  # whichever half happens to be read first.
+  out=$("$DRIVER" check --before "$TMP/level-before.json" \
+    --before-loaded "$TMP/level-loaded.md" --before-archive "$TMP/level-archive.md" \
+    --worksheet "$TMP/level-ws.md" --loaded "$TMP/level-loaded-after.md" \
+    --archive "$TMP/level-archive-after.md" --level 2 --home "$TMP" 2>&1) \
+    && status=0 || status=$?
+  [ "$status" -eq 2 ] || fail "--level with a pair baseline exited $status, expected 2"
+  printf '%s' "$out" | grep -q 'ambiguous with a pair baseline' \
+    || fail "an ambiguous --level was silently applied to one half"
+  pass "each half of a pair baseline is parsed at its own entry level"
+}
+
 test_measure_json_is_one_document() {
   "$DRIVER" measure "$TMP/before.md" --home "$TMP" --json \
     2>"$TMP/measure-json.stderr" | python3 -c 'import json,sys; json.load(sys.stdin)' \
@@ -1075,6 +1276,8 @@ test_duplicate_route_hits_are_counted
 test_route_completeness_rejects_body_substrings
 test_the_route_proof_never_writes_the_working_directory
 test_a_rerun_compares_against_the_existing_pair
+test_a_fenced_heading_cannot_stand_in_for_a_real_entry
+test_a_pair_baseline_uses_each_halfs_own_entry_level
 test_measure_json_is_one_document
 test_the_two_shapes_never_borrow_each_others_method
 test_a_real_curation_passes_and_the_report_carries_the_ledger

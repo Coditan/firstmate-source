@@ -290,6 +290,7 @@ Real output from that second run, abridged to the part after the header:
 ```
 HEADINGS  before 4  ->  after 3 (loaded 1 + archive 2)
           the before-state is the pair: loaded 3 + archive 1
+          entry level per half: loaded 2, archive 2
 BYTES     before 2511  ->  loaded 494 (19.7% of the original still loads)
 
 COMPLETE ROUTE ASSERTION
@@ -297,6 +298,10 @@ COMPLETE ROUTE ASSERTION
 
 CHECK PASSED: headings 4 -> 3, bytes 2511 -> 494, every entry deletion is declared, and the archive is reachable from the loaded half.
 ```
+
+Each half keeps the entry level it was measured at, which the run prints.
+The two often differ - a pruned loaded half of a title and one section resolves to level 1 while its archive of many sections resolves to 2 - and parsing either after-file at the other's level would read as though the whole archive had been deleted.
+For that reason `--level` is refused in pair mode as ambiguous: set it per file at snapshot time with `measure --level <n>` instead.
 
 Judging that same curation against the loaded half alone rejects it, because a two-file after-state was never comparable to one half.
 
@@ -340,7 +345,7 @@ STARTUP COST
 
 HEADINGS
   before 3  ->  after 2  (loaded 1 + archive 1)
-  entries at level 2: 2 -> 0 loaded, 1 archived
+  entries: 2 -> 0 loaded at level 2, 1 archived at level 2
 
 VERDICTS
   split    1

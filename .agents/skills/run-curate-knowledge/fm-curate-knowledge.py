@@ -35,6 +35,10 @@ archive heading that lies outside every entry span. The ledger accounts for
 entries appearing and disappearing. Changes inside a retained entry, whether
 a nested heading, bullet, sentence, or paragraph, remain the curator's
 judgement recorded by the split verdict rather than a mechanical ledger event.
+Reachability is settled by LINE NUMBER: this program's parse is fence-aware and
+the operator's `grep` is not, so a route record counts only when the line it
+returned is a real entry's heading line and the text agrees. A fenced example
+cannot stand in for the entry it quotes.
 
 NON-WRITING ROUTE BOUNDARY
 The guarantee is a closed interface of grep and rg, tools with no write
@@ -137,7 +141,10 @@ the after-state is compared like for like. Without that, a perfect re-run fails
 on a heading total that was never comparable (measured on this home: a loaded
 half of 10 headings against a pair of 275), and a silently dropped archive entry
 is invisible because the baseline never knew the archive existed. The mode is
-chosen from the arguments, never guessed: pair mode requires both flags.
+chosen from the arguments, never guessed: pair mode requires both flags. Each
+half keeps the entry level it was measured at, because the two routinely differ
+and parsing either after-file at the other's level reports the whole archive as
+deleted; --level is refused in pair mode as ambiguous, and belongs on `measure`.
 Verdicts are still owed only for the entries of the before-LOADED half, because
 a re-run curates what accumulated there while the archive's own entries are
 accounted for by presence rather than by judgement.
@@ -817,10 +824,14 @@ def baseline_entries_with_keys(record):
 def load_baseline(args):
     """The before-state, as one file or as the pair a re-run starts from.
 
-    Returns a baseline dict shaped like a file record, plus the two fields that
-    only a pair can answer: `loaded_heading_count`, which is what the loaded
-    half must fall below, and `verdict_keys`, the entries a worksheet still owes
-    a judgement for. In single mode both collapse to the one baseline file.
+    Returns a baseline dict shaped like a file record, plus the fields only a
+    pair can answer: `loaded_heading_count`, which is what the loaded half must
+    fall below, `verdict_keys`, the entries a worksheet still owes a judgement
+    for, and one entry level PER HALF. The two halves routinely settle at
+    different levels - a pruned loaded half of a title and one section resolves
+    to level 1 while its archive of many sections resolves to 2 - so parsing
+    either after-file at the other's level reports the whole archive as deleted.
+    In single mode all of these collapse to the one baseline file.
     """
     with open(args.before, "r", encoding="utf-8") as handle:
         snap = json.load(handle)
@@ -847,8 +858,22 @@ def load_baseline(args):
         baseline["entries"] = baseline_entries_with_keys(record)
         baseline["loaded_heading_count"] = record["heading_count_all"]
         baseline["verdict_keys"] = {entry["key"] for entry in baseline["entries"]}
+        baseline["loaded_level"] = record["level"]
+        baseline["archive_level"] = record["level"]
         baseline["mode"] = "single"
         return baseline
+
+    # One --level cannot mean two things. Each half of a pair carries the level
+    # it was measured at, and an override that silently landed on one of them is
+    # the defect this pair baseline exists to remove. Set the level per file at
+    # snapshot time instead, with `measure --level`.
+    if args.level:
+        die(
+            "--level is ambiguous with a pair baseline: each half carries the "
+            "level it was measured at. Snapshot the halves with `measure "
+            "--level <n>` and let check follow what the snapshot recorded",
+            2,
+        )
 
     loaded_record = snapshot_record(snap, args.before_loaded, args.before)
     archive_record = snapshot_record(snap, args.before_archive, args.before)
@@ -879,10 +904,21 @@ def load_baseline(args):
     baseline["loaded_heading_count"] = loaded_record["heading_count_all"]
     baseline["entries"] = loaded_entries + archive_entries
     baseline["verdict_keys"] = {entry["key"] for entry in loaded_entries}
+    baseline["loaded_level"] = loaded_record["level"]
+    baseline["archive_level"] = archive_record["level"]
     baseline["mode"] = "pair"
     baseline["loaded_path"] = loaded_record["path"]
     baseline["archive_path"] = archive_record["path"]
     return baseline
+
+
+def baseline_levels(args, before):
+    """The entry level to parse each after-file at, one per half."""
+    if args.level:
+        return args.level, args.level
+    loaded_level = before.get("loaded_level") or before.get("level")
+    archive_level = before.get("archive_level") or before.get("level")
+    return loaded_level, archive_level
 
 
 def route_commands(loaded_text, archive_path):
@@ -969,12 +1005,14 @@ def _release_proof_dir(path):
 atexit.register(_cleanup_proof_dirs)
 
 
-def prove_route(command, home, archive_path, headings, sample, trusted_dirs=None):
+def prove_route(command, home, archive_path, entries, sample, trusted_dirs=None):
     """Run the documented route once and check every archived entry.
 
     `home` is the working directory the documented route is written to run
     from, so every relative path in it resolves from there and the proof
-    mirrors that relative path under its protected directory.
+    mirrors that relative path under its protected directory. `entries` are the
+    archive's parsed entries, each with the line its heading sits on, which is
+    what the route's own output is matched against.
     """
     try:
         argv = shlex.split(command)
@@ -1093,29 +1131,34 @@ def prove_route(command, home, archive_path, headings, sample, trusted_dirs=None
     output = result.stdout.strip()
     if result.returncode != 0 or result.stderr.strip() or not output:
         return False, [], [], "documented route exited %d, wrote diagnostics, or returned no output" % result.returncode
-    records = []
+    # Two parsers disagree here, and the reconciliation is the point. This
+    # driver's own parse is fence-aware and deliberately excludes headings
+    # inside fenced code blocks; the documented route is an operator's ordinary
+    # `grep -n '^## '`, which is not, and cannot be asked to be. So a record is
+    # counted only when the LINE NUMBER grep already returned is the line of a
+    # real entry, and its text agrees with that entry. A fenced `## Example`
+    # then cannot stand in for the real entry of the same name, which with a
+    # truncating route would otherwise read as full reach.
+    expected = {entry["line"]: norm_heading(entry["heading"]) for entry in entries}
+    reached_lines = set()
     for output_line in output.splitlines():
-        match = re.fullmatch(r"\d+:(#{1,6})[ \t]+(.*?)[ \t]*", output_line)
+        match = re.fullmatch(r"(\d+):(#{1,6})[ \t]+(.*?)[ \t]*", output_line)
         if not match:
             return False, [], [], (
                 "route output is not a heading index record: %s" % output_line[:120]
             )
-        records.append(norm_heading(match.group(2)))
-    heading_names = {}
-    for heading in headings:
-        heading_names.setdefault(norm_heading(heading), heading)
-    required = Counter(norm_heading(heading) for heading in headings)
-    found = Counter(records)
-    missing = []
-    for heading, count in required.items():
-        missing.extend([heading_names[heading]] * max(0, count - found[heading]))
-    reached = len(headings) - len(missing)
+        line_number = int(match.group(1))
+        if expected.get(line_number) == norm_heading(match.group(3)):
+            reached_lines.add(line_number)
+    missing = [
+        entry["heading"] for entry in entries if entry["line"] not in reached_lines
+    ]
     lines = ["  $ (protected copy && %s)" % " ".join(_shell_quote(part) for part in run_argv)]
     output_lines = output.splitlines()
     for line in output_lines[:sample]:
         lines.append("    %s" % line[:160])
     return not missing, lines, missing, "route reaches %d of %d archived entries" % (
-        reached, len(headings)
+        len(reached_lines), len(entries)
     )
 
 
@@ -1270,12 +1313,13 @@ def cmd_check(args):
         die("worksheet %s has no entry blocks" % args.worksheet, 1)
 
     vocab = PRIVATE_VERDICTS if shape == "private" else SHARED_VERDICTS
-    loaded = file_facts(args.loaded, args.level or before.get("level"))
+    loaded_level, archive_level = baseline_levels(args, before)
+    loaded = file_facts(args.loaded, loaded_level)
     loaded_text = read_text(args.loaded)
     archive = None
     archive_text = ""
     if args.archive:
-        archive = file_facts(args.archive, args.level or before.get("level"))
+        archive = file_facts(args.archive, archive_level)
         archive_text = read_text(args.archive)
         orphaned = orphan_nested_headings(archive_text, archive["level"])
         if orphaned:
@@ -1368,6 +1412,10 @@ def cmd_check(args):
         print(
             "          the before-state is the pair: loaded %d + archive %d"
             % (before_loaded_all, before_all - before_loaded_all)
+        )
+        print(
+            "          entry level per half: loaded %d, archive %d"
+            % (loaded_level, archive_level)
         )
     # The two shapes fail differently, so they are gated differently.
     #
@@ -1546,10 +1594,13 @@ def cmd_check(args):
 
         print("")
         print("COMPLETE ROUTE ASSERTION")
-        headings = [e["heading"] for e in archive["entries"]]
         if commands:
             ok, transcript, missing, result_message = prove_route(
-                commands[0], args.home, archive["path"], headings, args.prove_route
+                commands[0],
+                args.home,
+                archive["path"],
+                archive["entries"],
+                args.prove_route,
             )
             print("  %s" % result_message)
             print("PRINTED EXAMPLE (%d output lines maximum)" % args.prove_route)
@@ -1649,8 +1700,9 @@ def cmd_report(args):
     before = load_baseline(args)
     label, total, rows, notes = denominator(args)
 
-    loaded = file_facts(args.loaded, args.level or before.get("level"))
-    archive = file_facts(args.archive, args.level or before.get("level")) if args.archive else None
+    loaded_level, archive_level = baseline_levels(args, before)
+    loaded = file_facts(args.loaded, loaded_level)
+    archive = file_facts(args.archive, archive_level) if args.archive else None
 
     _meta, wrows = read_worksheet(args.worksheet)
     _keys, _known, unknown, undeclared, ghosts = deletion_accounting(
@@ -1730,12 +1782,13 @@ def cmd_report(args):
         )
     )
     print(
-        "  entries at level %d: %d -> %d loaded, %d archived"
+        "  entries: %d -> %d loaded at level %d, %d archived at level %d"
         % (
-            before["level"],
             len(before["entries"]),
             len(loaded["entries"]),
+            loaded["level"],
             len(archive["entries"]) if archive else 0,
+            archive["level"] if archive else loaded["level"],
         )
     )
 
