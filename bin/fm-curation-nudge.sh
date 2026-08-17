@@ -30,8 +30,8 @@
 #   2. Firstmate reads that wake and dispatches a crewmate to send the All-Ships
 #      notice, exactly as AGENTS.md section 12 requires of any fleet notice.
 # Nothing here writes to Bridge, opens a network connection, or touches a git
-# repository. tests/fm-curation-nudge.test.sh asserts that by absence of any
-# such call path, both statically and by tripwire, rather than by intention.
+# repository. tests/fm-curation-nudge.test.sh asserts that boundary by executing
+# every mode with tripwires on every route off-machine.
 #
 # THE CADENCE, AND THE FIVE-MINUTE REFUSAL
 # The period is 48 hours. Not daily: bin/fm-currency-round.sh already owns the
@@ -309,6 +309,11 @@ nudge_line() {
     "$REPORT"
 }
 
+schedule_refusal_line() {
+  printf 'CURATION_NUDGE: no next curation sweep was scheduled because all %s candidate minutes drawn from the configured jitter window landed on the five-minute grid (FM_CURATION_NUDGE_JITTER_MIN=%s, FM_CURATION_NUDGE_JITTER_MAX=%s, FM_CURATION_NUDGE_INTERVAL=%s); the draw attempt bound was exhausted, so set the jitter window to include an off-grid target minute\n' \
+    "$DRAW_ATTEMPTS" "$JITTER_MIN" "$JITTER_MAX" "$INTERVAL"
+}
+
 # --- modes ------------------------------------------------------------------
 
 if ! mkdir -p "$STATE" 2>/dev/null; then
@@ -430,6 +435,8 @@ if [ "$MODE" = detect ]; then
     # state --armed reports if nothing ever fixes it.
     if next=$(draw_next_due "$NOW"); then
       printf '%s\n' "$next" > "$NEXT_DUE"
+    else
+      schedule_refusal_line
     fi
     exit 0
   fi
@@ -449,7 +456,7 @@ printf '%s\n' "$NOW" > "$LAST_FIRE"
 render_report "$next" > "$REPORT"
 
 if [ -z "$next" ]; then
-  printf 'CURATION_NUDGE: the curation sweep fired, but no next target off the five-minute grid could be drawn, so this home has no schedule left; check FM_CURATION_NUDGE_JITTER_MIN and FM_CURATION_NUDGE_JITTER_MAX on this home\n'
+  schedule_refusal_line
   exit 0
 fi
 nudge_line

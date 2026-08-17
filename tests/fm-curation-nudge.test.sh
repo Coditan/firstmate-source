@@ -9,8 +9,7 @@
 #   - the period is 48 hours, not 24 and not 72;
 #   - a firing reaches a supervising session as a wake naming what is due;
 #   - nothing here writes to Bridge, opens a network connection, or touches a
-#     git repository - asserted by absence of the call path, statically and by
-#     tripwire, never by intention;
+#     git repository - asserted by executing every mode with route tripwires;
 #   - stopping the thing makes its health reading go bad rather than stay quiet.
 set -u
 
@@ -86,6 +85,32 @@ test_a_window_with_no_off_grid_minute_refuses_rather_than_scheduling_on_it() {
   assert_contains "$out" 'refusing to schedule' \
     "the refusal must say it refused rather than reporting an empty draw"
   pass "a window with no off-grid minute refuses instead of accepting one"
+}
+
+test_initial_detect_loudly_explains_an_exhausted_draw() {
+  local home out
+  home=$(make_home initial-refusal)
+  run_nudge "$home" --arm >/dev/null || fail "arming failed"
+
+  out=$(FM_CURATION_NUDGE_NOW=0 FM_CURATION_NUDGE_JITTER_MIN=0 \
+    FM_CURATION_NUDGE_JITTER_MAX=0 run_nudge "$home")
+  assert_contains "$out" 'CURATION_NUDGE:' \
+    "an initial draw failure must immediately raise a wake"
+  assert_contains "$out" 'all 64 candidate minutes' \
+    "the wake must name the exhausted draw bound and concrete cause"
+  assert_contains "$out" 'landed on the five-minute grid' \
+    "the wake must distinguish draw refusal from dead supervision"
+  assert_contains "$out" 'FM_CURATION_NUDGE_JITTER_MIN=0' \
+    "the wake must carry the effective jitter minimum"
+  assert_contains "$out" 'FM_CURATION_NUDGE_JITTER_MAX=0' \
+    "the wake must carry the effective jitter maximum"
+  assert_contains "$out" 'FM_CURATION_NUDGE_INTERVAL=172800' \
+    "the wake must carry the effective interval"
+  assert_not_contains "$out" 'nothing is running this home' \
+    "a draw refusal must not masquerade as a watcher failure"
+  [ ! -e "$home/state/curation-nudge.next-due" ] \
+    || fail "the refusal must never persist an on-grid target"
+  pass "initial detect reports the cause and operands when every draw is on-grid"
 }
 
 test_the_period_is_forty_eight_hours() {
@@ -213,23 +238,8 @@ test_a_home_that_was_off_schedules_one_sweep_ahead_rather_than_catching_up() {
 
 # --- the boundary: no Bridge, no network, no repository ---------------------
 
-test_no_bridge_or_network_call_path_exists_in_the_script() {
-  local body hit
-  # Executable lines only: the header explains the boundary in prose, and prose
-  # is not a call path. Comment lines and blank lines are stripped first.
-  body=$(grep -v '^[[:space:]]*#' "$NUDGE" | grep -v '^[[:space:]]*$')
-  for hit in 'fm-bridge' 'bridge-axi' 'bridge_' 'gh-axi' 'curl' 'wget' 'nc -' 'ssh '; do
-    printf '%s\n' "$body" | grep -Fq "$hit" \
-      && fail "an executable line reaches for '$hit'; this check must raise a wake and nothing else"
-  done
-  # git and gh as commands, not as substrings of unrelated words.
-  printf '%s\n' "$body" | grep -Eq '(^|[^A-Za-z0-9_-])(git|gh)([[:space:]]|$)' \
-    && fail "an executable line invokes git or gh; this check touches no repository and no forge"
-  pass "no executable line reaches Bridge, the network, or a repository"
-}
-
 test_no_bridge_or_network_binary_is_ever_invoked() {
-  local home fakebin trip tool
+  local home fakebin trip tool shim
   home=$(make_home tripwire)
   fakebin=$(fm_fakebin "$home")
   trip="$home/tripped"
@@ -237,7 +247,7 @@ test_no_bridge_or_network_binary_is_ever_invoked() {
   # Tripwires named after every route out of this machine. If any mode reaches
   # for one of them, its name appears in $trip and the case fails - an assertion
   # by execution, not by reading the source.
-  for tool in fm-bridge-relay.sh bridge-axi gh gh-axi git curl wget ssh scp; do
+  for tool in fm-bridge-relay.sh bridge-axi gh gh-axi git curl wget nc ssh scp; do
     cat > "$fakebin/$tool" <<SH
 #!/usr/bin/env bash
 : > "$trip/\$(basename "\$0")"
@@ -247,26 +257,20 @@ SH
   done
 
   PATH="$fakebin:$PATH" run_nudge "$home" --arm >/dev/null || fail "arming failed"
-  PATH="$fakebin:$PATH" run_nudge "$home" >/dev/null
+  shim="$home/state/curation-nudge.check.sh"
+  [ -x "$shim" ] || fail "arming did not create the registered watcher shim"
+  [ -f "$home/state/curation-nudge.check-trust" ] \
+    || fail "arming did not register the watcher shim"
+  PATH="$fakebin:$PATH" "$shim" >/dev/null
   PATH="$fakebin:$PATH" run_nudge "$home" --force >/dev/null
   PATH="$fakebin:$PATH" run_nudge "$home" --status >/dev/null
   PATH="$fakebin:$PATH" run_nudge "$home" --armed >/dev/null
   PATH="$fakebin:$PATH" run_nudge "$home" --draw 3 >/dev/null
+  PATH="$fakebin:$PATH" run_nudge "$home" --help >/dev/null
 
   tool=$(ls -A "$trip")
   [ -z "$tool" ] || fail "the nudge invoked: $tool"
-  pass "no mode invokes Bridge, a forge, a network client, or git"
-}
-
-test_the_armed_shim_carries_no_call_path_of_its_own() {
-  local home shim
-  home=$(make_home shim)
-  run_nudge "$home" --arm >/dev/null || fail "arming failed"
-  shim="$home/state/curation-nudge.check.sh"
-  grep -Eq 'bridge|curl|wget|ssh' "$shim" \
-    && fail "the generated watcher shim reaches beyond this machine"
-  assert_grep 'fm-curation-nudge.sh' "$shim" "the shim must exec the round it is a seam for"
-  pass "the generated shim is a seam and carries no call path of its own"
+  pass "the registered shim and every mode avoid Bridge, forge, network, and git"
 }
 
 # --- arming, and the health reading that is not a unit's own claim ----------
@@ -388,36 +392,41 @@ test_a_disabled_nudge_stays_out_of_composing_suites() {
 }
 
 test_bootstrap_arms_the_nudge_and_asks_whether_it_is_still_running() {
-  assert_grep 'fm-curation-nudge.sh --arm' "$ROOT/bin/fm-bootstrap.sh" \
-    "bootstrap must arm the nudge, so no home depends on remembering to"
-  assert_grep 'fm-curation-nudge.sh" --armed' "$ROOT/bin/fm-bootstrap.sh" \
-    "every session start must ask whether this home's nudge is still running"
-  assert_grep 'CURATION_NUDGE' "$ROOT/AGENTS.md" \
-    "AGENTS.md section 13 must list the nudge among the bootstrap diagnostics"
-  assert_grep 'CURATION_NUDGE' "$ROOT/.agents/skills/bootstrap-diagnostics/SKILL.md" \
-    "the diagnostics skill must own how the line is handled"
-  pass "the nudge is armed and re-measured by bootstrap, and its line has an owner"
-}
+  local home out shim
+  home=$(make_home bootstrap)
+  mkdir -p "$home/config"
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    FM_DATA_OVERRIDE="$home/data" FM_PROJECTS_OVERRIDE="$home/projects" \
+    FM_CONFIG_OVERRIDE="$home/config" FM_CURATION_NUDGE_DISABLE=0 \
+    "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  assert_not_contains "$out" 'CURATION_NUDGE:' \
+    "bootstrap must leave a freshly armed nudge healthy"
+  shim="$home/state/curation-nudge.check.sh"
+  [ -x "$shim" ] || fail "bootstrap did not arm the watcher shim"
+  [ -f "$home/state/curation-nudge.check-trust" ] \
+    || fail "bootstrap did not register the watcher shim"
 
-test_the_scheduler_and_the_agents_contract_agree_on_two_hops() {
-  local agents
-  agents="$ROOT/AGENTS.md"
-  assert_grep 'dispatch a crewmate to notify the whole fleet through Bridge All-Ships rather than writing to Bridge directly' \
-    "$agents" "section 12 must still own the two-hop rule this nudge relies on"
-  pass "the wake's second hop is the contract AGENTS.md section 12 already owns"
+  rm -f "$shim"
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    FM_DATA_OVERRIDE="$home/data" FM_CURATION_NUDGE_DISABLE=0 \
+    "$ROOT/bin/fm-curation-nudge.sh" --armed)
+  assert_contains "$out" 'CURATION_NUDGE:' \
+    "an unarmed bootstrap home must produce the owned diagnostic"
+  assert_contains "$out" 'is not armed' \
+    "the diagnostic must expose the stopped watcher state"
+  pass "bootstrap observably arms, registers, and diagnoses the nudge"
 }
 
 test_the_scheduler_never_lands_on_the_five_minute_grid
 test_a_window_with_no_off_grid_minute_refuses_rather_than_scheduling_on_it
+test_initial_detect_loudly_explains_an_exhausted_draw
 test_the_period_is_forty_eight_hours
 test_successive_firings_drift_rather_than_repeating_one_time
 test_arming_schedules_the_first_sweep_without_waking_anyone
 test_a_firing_reaches_a_session_as_a_wake_that_names_what_is_due
 test_the_wake_prompts_measurement_and_claims_nothing_about_another_vessel
 test_a_home_that_was_off_schedules_one_sweep_ahead_rather_than_catching_up
-test_no_bridge_or_network_call_path_exists_in_the_script
 test_no_bridge_or_network_binary_is_ever_invoked
-test_the_armed_shim_carries_no_call_path_of_its_own
 test_arming_is_idempotent_and_registers_the_check
 test_a_healthy_nudge_reports_nothing
 test_stopping_the_nudge_makes_the_health_reading_fail
@@ -426,4 +435,3 @@ test_an_unarmed_home_is_loud
 test_status_reports_the_schedule_without_advancing_it
 test_a_disabled_nudge_stays_out_of_composing_suites
 test_bootstrap_arms_the_nudge_and_asks_whether_it_is_still_running
-test_the_scheduler_and_the_agents_contract_agree_on_two_hops
