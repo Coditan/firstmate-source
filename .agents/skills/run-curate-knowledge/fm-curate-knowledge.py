@@ -35,9 +35,12 @@ here instead of being left to an agent's care:
                                 interface is reported rather than dropped only
                                 when its FORM is one this guard recognises as
                                 read-only; every other form FAILS, because the
-                                harm is a reader following the document. Prose
-                                that does not parse as a command is neither.
-                                The route is proved, not asserted.
+                                harm is a reader following the document. Shell
+                                syntax is refused before any of that: a run
+                                carrying an operator is more than one command
+                                and so is not one this guard can classify.
+                                Prose that does not parse as a command is
+                                neither. The route is proved, not asserted.
 
 PROOF AND LEDGER UNIT
 Both guarantees operate on entries at the selected heading level. Deeper
@@ -998,15 +1001,43 @@ def baseline_levels(before):
     return loaded_level, archive_level
 
 
+def shell_syntax_error(command):
+    """Why a documented run is shell SYNTAX rather than one command.
+
+    `shlex.split` tokenizes; it does not parse a shell. It does not treat `;`,
+    `|`, `&&` or a glued `>file` as operators, so a classifier reading argv[0]
+    sees only the first word and everything after the operator is invisible:
+    `cat fresh.md; rm <archive>` reads as the read-only form `cat`. The answer
+    is not to split on operators and classify each part, which rebuilds a shell
+    parser here and lets the next operator nobody thought of walk through the
+    same way. Shell syntax is refused BEFORE classification: this guard judges
+    one command, so anything that is more than one is something it cannot judge
+    and must say so.
+    """
+    for token in ("|", ";", "&", "<", ">", "`", "$(", "${", "\n"):
+        if token in command:
+            return (
+                "it carries shell syntax (`%s`), so it is not a single command "
+                "this guard can classify" % token.replace("\n", "newline")
+            )
+    return None
+
+
 def command_argv(command):
     """Tokenize a backticked run, or None when it is not a command at all.
 
     A loaded half is prose with commands inside it, so the two must be told
-    apart before either is judged. A run whose first token is a filename or an
-    ordinary word - `before.md -> after-archive.md`, this repo's own house arrow
-    between two paths - is a sentence, and treating it as a documented route
-    both accuses the curator of something they did not write and fails a
-    correct curation.
+    apart before either is judged. A run whose first token is a filename -
+    `before.md -> after-archive.md`, this repo's own house arrow between two
+    paths - is a sentence, and treating it as a documented route both accuses
+    the curator of something they did not write and fails a correct curation.
+
+    The discriminator is the shape of the first token. A path spelling - `/x`,
+    `./x`, `../x` - is a command, and so is a bare word with no dot in it. A
+    bare word carrying a dot and no slash is a filename, which is what prose
+    naming two markdown files looks like. A script invocation therefore reaches
+    the classifier and fails there as unrecognised, rather than being dropped in
+    a silence that hides an instruction to a reader.
     """
     try:
         argv = shlex.split(command)
@@ -1015,9 +1046,11 @@ def command_argv(command):
     if len(argv) < 2:
         return None
     word = argv[0]
-    if "." in os.path.basename(word):
+    if word.startswith("/") or word.startswith("./") or word.startswith("../"):
+        return argv
+    if "/" in word or "." in word:
         return None
-    if not re.fullmatch(r"(?:[A-Za-z0-9_./-]*/)?[A-Za-z][A-Za-z0-9_+-]*", word):
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_+-]*", word):
         return None
     return argv
 
@@ -1133,6 +1166,9 @@ def guidance_form_error(command):
     The honest limit: this program cannot PROVE an unexecuted command is
     read-only. A command it accepts here is read-only in FORM only.
     """
+    syntax = shell_syntax_error(command)
+    if syntax:
+        return syntax
     argv = command_argv(command)
     if argv is None:
         return "it does not parse as a command"
@@ -1142,9 +1178,6 @@ def guidance_form_error(command):
             "`%s` is not one of the read-only forms this guard recognises (%s)"
             % (verb, ", ".join(sorted(GUIDANCE_FORMS)))
         )
-    for token in argv[1:]:
-        if token in (">", ">>", ">|"):
-            return "it redirects output over a file"
     allowed = GUIDANCE_FORMS[verb]
     index = 1
     while index < len(argv):
@@ -1180,14 +1213,14 @@ def prove_route(command, home, archive_path, entries, sample, trusted_dirs=None)
         argv = shlex.split(command)
     except ValueError as exc:
         return "refused", [], [], "route cannot be tokenized: %s" % exc
-    if not argv or argv[0] not in ROUTE_VERBS:
+    if not argv or os.path.basename(argv[0]) not in ROUTE_VERBS:
         return "refused", [], [], (
             "route command `%s` cannot be proven non-writing; document the "
             "route with grep or rg"
         ) % (argv[0] if argv else "")
-    forbidden = ("|", ";", ">", "<", "`", "$(", "${")
-    if any(token in command for token in forbidden):
-        return "refused", [], [], "route contains a forbidden shell construct"
+    syntax = shell_syntax_error(command)
+    if syntax:
+        return "refused", [], [], "route is not a single command: %s" % syntax
     option_error, file_args = _validate_route_argv(argv)
     if option_error:
         return "refused", [], [], option_error
@@ -1358,7 +1391,7 @@ def _validate_route_argv(argv):
     once to locate operands, is how the two walks drift apart and a flag ends up
     accepted by one and unknown to the other.
     """
-    allowed = ROUTE_FLAGS[argv[0]]
+    allowed = ROUTE_FLAGS[os.path.basename(argv[0])]
     positional_indices = []
     has_expression = False
     index = 1
@@ -1393,8 +1426,35 @@ def _validate_route_argv(argv):
     return None, file_indices
 
 
-def _trusted_route_binary(verb, trusted_dirs):
+def _trusted_route_binary(word, trusted_dirs):
+    """The absolute binary to run for a documented verb, or the refusal.
+
+    A documented route may spell its tool as a bare name or as a path. Either
+    way the binary that runs is decided here and nowhere else: it must resolve
+    into a trusted system directory, be a regular file, and not be writable by
+    the current user. A path spelling buys no trust of its own.
+    """
     trusted_real_dirs = {os.path.realpath(directory) for directory in trusted_dirs}
+    if "/" in word:
+        resolved = os.path.realpath(word)
+        if os.path.dirname(resolved) not in trusted_real_dirs:
+            return None, (
+                "documented route binary `%s` resolves to `%s`, which is "
+                "outside the trusted system directories (%s); route proof "
+                "refused" % (word, resolved, ", ".join(trusted_dirs))
+            )
+        try:
+            mode = os.stat(resolved).st_mode
+        except OSError as exc:
+            return None, "documented route binary `%s` cannot be read: %s" % (word, exc)
+        if not stat.S_ISREG(mode):
+            return None, "documented route binary `%s` is not a regular file" % word
+        if os.access(resolved, os.W_OK):
+            return None, (
+                "trusted route binary `%s` is writable by the current user" % resolved
+            )
+        return resolved, None
+    verb = word
     for directory in trusted_dirs:
         candidate = os.path.join(directory, verb)
         resolved = os.path.realpath(candidate)
@@ -1805,7 +1865,7 @@ def cmd_check(args):
         provable = []
         for command in commands:
             argv = command_argv(command) or []
-            if argv and argv[0] in ROUTE_VERBS:
+            if argv and os.path.basename(argv[0]) in ROUTE_VERBS:
                 provable.append(command)
                 continue
             unrecognised = guidance_form_error(command)

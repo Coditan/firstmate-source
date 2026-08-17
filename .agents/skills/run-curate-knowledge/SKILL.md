@@ -242,6 +242,7 @@ It asserts, and exits non-zero on any of:
 - a documented search the guard can run fails or returns nothing;
 - no documented search is a heading index reaching every archived entry occurrence, so completeness was never established;
 - no documented search is inside the provable interface at all, so nothing was proven;
+- a documented command carries shell syntax, so it is more than one command and cannot be classified;
 - a documented command the guard cannot run is not one of the read-only forms it recognises;
 - a nested archive heading lies outside every entry span;
 - a worksheet row's `heading:` contradicts the norm inside its own `key:`.
@@ -249,9 +250,11 @@ It asserts, and exits non-zero on any of:
 Then it executes EVERY documented search whose verb the guard can run - `grep` and `rg`, the two tools with no write operation anywhere in their interface - against a protected copy, in whatever order they were written.
 Each must run and return results, and at least one must be a heading index that reaches every archived entry.
 A worked content search is proved by returning results and is not asked to be an index, because recovering a fact is what rule 3 asks the loaded half to show.
+Anything carrying shell syntax - a semicolon, pipe, ampersand, angle bracket, backtick or command substitution - is refused before it is classified at all, because it is more than one command and this guard judges one.
+Splitting on the operators and judging each part would rebuild a shell parser here, and the next operator nobody thought of would walk straight through it.
 A documented command the guard cannot run lands in one of two places, never dropped.
 It is reported as documented-but-unprovable supplementary guidance only if it matches a closed set of read-only forms: a `sed -n` range read, `less`, `cat`, `head`, `tail`, with their arguments validated, since `sed -i` writes and `less -o` logs.
-EVERYTHING ELSE FAILS, including a verb nobody has thought of yet.
+EVERYTHING ELSE FAILS, including a verb nobody has thought of yet, and including a script invocation such as `./tools/rebuild.sh <archive>`.
 That direction is deliberate and was reached the hard way: a list of forms believed destructive was tried first, and it caught `sed -i` while blessing `rm` over the archive.
 `check` is the last gate before the pair moves into a home whose `data/` is not version-controlled, and the harm is a reader following the document, so an unrecognised form must fail rather than pass.
 The driver cannot prove an unexecuted command is read-only, so a reported one is read-only in FORM only.

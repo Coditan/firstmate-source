@@ -1464,10 +1464,57 @@ EOF
     --loaded "$TMP/redirect-route-loaded.md" --archive "$TMP/after-archive.md" \
     --home "$TMP" 2>&1) && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "a documented redirection exited $status, expected 1"
-  printf '%s' "$out" | grep -q 'it redirects output over a file' \
+  printf '%s' "$out" | grep -q 'it carries shell syntax' \
     || fail "the documented redirection was not identified"
   [ "$(sha256sum "$TMP/after-archive.md")" = "$before_hash" ] \
     || fail "the check itself executed the redirection"
+
+  # shlex tokenizes but does not parse a shell, so a classifier reading argv[0]
+  # sees only the first word: every one of these hid a destroying second command
+  # behind an operator and was accepted as the read-only form `cat`.
+  local chained
+  # shellcheck disable=SC2016 # The fixture documents shell syntax verbatim.
+  for chained in 'cat fresh.md; rm after-archive.md' \
+    'cat fresh.md >after-archive.md' \
+    'cat fresh.md | tee after-archive.md' \
+    'cat fresh.md && rm after-archive.md' \
+    'cat $(printf %s after-archive.md)'; do
+    cat >"$TMP/chained-route-loaded.md" <<EOF
+# Store
+
+List the entries with \`grep -n '^## ' after-archive.md\`.
+Refresh it with \`$chained\` when it drifts.
+
+- **Alpha rule**: the one sentence that must be in hand first.
+EOF
+    out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+      --loaded "$TMP/chained-route-loaded.md" --archive "$TMP/after-archive.md" \
+      --home "$TMP" 2>&1) && status=0 || status=$?
+    [ "$status" -eq 1 ] || fail "documented \`$chained\` exited $status, expected 1"
+    printf '%s' "$out" | grep -q 'it carries shell syntax' \
+      || fail "documented \`$chained\` was not refused as shell syntax"
+    [ "$(sha256sum "$TMP/after-archive.md")" = "$before_hash" ] \
+      || fail "the check itself executed \`$chained\`"
+  done
+
+  # A script invocation is a command, not prose, so it reaches the closed set
+  # and fails there. Dropping it in silence hid an instruction to a reader.
+  cat >"$TMP/script-route-loaded.md" <<'EOF'
+# Store
+
+List the entries with `grep -n '^## ' after-archive.md`.
+Rebuild it with `./tools/rebuild.sh after-archive.md` when it drifts.
+
+- **Alpha rule**: the one sentence that must be in hand first.
+EOF
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/script-route-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "a documented script invocation exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'documents a command this guard cannot recognise as read-only' \
+    || fail "the script invocation was dropped instead of refused"
+  printf '%s' "$out" | grep -q 'rebuild.sh' \
+    || fail "the refused script invocation was not named"
 
   # The read-only forms the guard recognises are still only reported.
   local form
@@ -1528,9 +1575,50 @@ EOF
     --loaded "$TMP/real-redirect-loaded.md" --archive "$TMP/after-archive.md" \
     --home "$TMP" 2>&1) && status=0 || status=$?
   [ "$status" -eq 1 ] || fail "a genuine redirection exited $status, expected 1"
-  printf '%s' "$out" | grep -q 'it redirects output over a file' \
+  printf '%s' "$out" | grep -q 'it carries shell syntax' \
     || fail "a genuine appending redirection was not identified"
   pass "prose is not read as a command, and a real redirection still fails"
+}
+
+# The binary that runs is decided by trusted-directory resolution, so a route
+# spelled with a path is the same route. Calling `grep` unrecognised in a run
+# whose other lines tell the operator to document the route with grep is the
+# self-contradictory diagnostic this driver has already ruled worse than none.
+test_a_route_spelled_as_a_path_is_proved_or_refused_for_the_real_reason() {
+  local out status system_grep fake_bin
+  system_grep=$(command -v grep)
+  case "$system_grep" in
+    /usr/bin/*|/bin/*|/usr/local/bin/*) ;;
+    *) printf 'skip: grep is not in a trusted system directory\n'; return 0 ;;
+  esac
+  sed "s|grep -n '\^## '|$system_grep -n '^## '|" \
+    "$TMP/after-loaded.md" >"$TMP/abs-grep-route-loaded.md"
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/abs-grep-route-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "an absolute path to the system grep exited $status: $out"
+  printf '%s' "$out" | grep -q 'route reaches 1 of 1 archived entries' \
+    || fail "a route spelled with a trusted absolute path was not proved"
+  printf '%s' "$out" | grep -q 'cannot recognise as read-only' \
+    && fail "the system grep was misdiagnosed as an unrecognised command"
+
+  # A grep-named binary somewhere the operator can write is still refused, and
+  # refused for being untrusted rather than for being an unknown verb.
+  fake_bin="$TMP/fake-bin"
+  mkdir -p "$fake_bin"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$fake_bin/grep"
+  chmod +x "$fake_bin/grep"
+  sed "s|grep -n '\^## '|$fake_bin/grep -n '^## '|" \
+    "$TMP/after-loaded.md" >"$TMP/untrusted-grep-route-loaded.md"
+  out=$("$DRIVER" check --before "$TMP/before.json" --worksheet "$TMP/ws-filled.md" \
+    --loaded "$TMP/untrusted-grep-route-loaded.md" --archive "$TMP/after-archive.md" \
+    --home "$TMP" 2>&1) && status=0 || status=$?
+  [ "$status" -eq 1 ] || fail "an untrusted grep path exited $status, expected 1"
+  printf '%s' "$out" | grep -q 'outside the trusted system directories' \
+    || fail "the untrusted grep path was not refused for being untrusted"
+  printf '%s' "$out" | grep -q 'cannot recognise as read-only' \
+    && fail "the untrusted grep path was misdiagnosed as an unknown verb"
+  pass "a route spelled as a path is proved when trusted and refused when not"
 }
 
 # A refused route never ran, so a failure saying no search was an index would
@@ -1678,6 +1766,7 @@ test_every_provable_documented_search_is_proved
 test_a_worked_content_search_is_proved_by_returning_results
 test_a_documented_destructive_command_fails_the_check
 test_prose_is_not_read_as_a_documented_command
+test_a_route_spelled_as_a_path_is_proved_or_refused_for_the_real_reason
 test_a_refused_route_does_not_also_claim_no_index_ran
 test_a_staged_share_is_labelled_a_projection
 test_a_captured_digest_reports_membership_as_unmeasured
