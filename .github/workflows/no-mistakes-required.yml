@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 # GitHub concurrency groups retain at most one pending run, replacing older
 # pending runs even when cancel-in-progress is false. Give body-bearing events
@@ -31,11 +32,58 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_COMMITS_URL: ${{ github.event.pull_request.commits_url }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -eu
           marker='Updates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)'
           if printf '%s' "${PR_BODY:-}" | grep -qF -- "$marker"; then
             echo "Found no-mistakes signature in PR #${PR_NUMBER} body."
+            exit 0
+          fi
+
+          commits_json=${PR_COMMITS_JSON:-}
+          if [ -z "$commits_json" ] && [ -n "${PR_COMMITS_URL:-}" ] && [ -n "${GITHUB_TOKEN:-}" ]; then
+            if ! commits_json=$(
+              curl -fsSL \
+                -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "${PR_COMMITS_URL}?per_page=100"
+            ); then
+              commits_json=
+            fi
+          fi
+          if [ -n "$commits_json" ] && PR_COMMITS_JSON="$commits_json" python3 - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+
+          try:
+              commits = json.loads(os.environ["PR_COMMITS_JSON"])
+          except (KeyError, json.JSONDecodeError):
+              sys.exit(1)
+
+          if not isinstance(commits, list):
+              sys.exit(1)
+
+          subject_re = re.compile(r"^no-mistakes\((review|test|document|lint)\):\s+\S")
+          for commit in commits:
+              metadata = commit.get("commit") if isinstance(commit, dict) else None
+              if not isinstance(metadata, dict):
+                  continue
+              message = metadata.get("message", "")
+              subject = message.splitlines()[0] if isinstance(message, str) else ""
+              author = metadata.get("author") or {}
+              email = author.get("email", "") if isinstance(author, dict) else ""
+              if subject_re.match(subject) and email.endswith("-vessel@heavyliftrental.ai"):
+                  sys.exit(0)
+
+          sys.exit(1)
+          PY
+          then
+            echo "Found no-mistakes committed-fix evidence in PR #${PR_NUMBER}."
             exit 0
           fi
           {
@@ -46,6 +94,9 @@ jobs:
             echo "deterministic '## Pipeline' section into the PR body containing:"
             echo
             echo "    $marker"
+            echo
+            echo "The check also accepts no-mistakes committed-fix evidence from"
+            echo "the PR commit list when a legacy or repaired body is missing the marker."
             echo
             echo "See CONTRIBUTING.md for setup and the full workflow."
             echo

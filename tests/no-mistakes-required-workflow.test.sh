@@ -13,14 +13,16 @@ extract_signature_script() {
   awk '
     /^        run: \|$/ { capture=1; next }
     capture && /^          / { sub(/^          /, ""); print; next }
+    capture && /^$/ { print; next }
     capture { exit }
   ' "$WORKFLOW"
 }
 
 signature_result() {
-  local body=$1 script
+  local body=$1 commits_json=${2:-} script
   script=$(extract_signature_script)
-  PR_NUMBER=418 PR_AUTHOR=synthetic-fork-contributor PR_BODY="$body" bash -c "$script" >/dev/null 2>&1
+  PR_NUMBER=418 PR_AUTHOR=synthetic-fork-contributor PR_BODY="$body" \
+    PR_COMMITS_JSON="$commits_json" bash -c "$script" >/dev/null 2>&1
 }
 
 render_group() {
@@ -43,6 +45,43 @@ test_signature_sequence_at_fixed_head() {
   fi
   signature_result "Synthetic signed edit\n$MARKER" || fail "signed edited event must succeed"
   pass "fixed-head signed opened, unsigned edited, signed edited yields 0/1/0"
+}
+
+test_no_mistakes_fix_commit_is_accepted_when_body_marker_is_missing() {
+  local commits_json
+  commits_json='[
+    {
+      "commit": {
+        "message": "no-mistakes(review): Align decision guard selectors\n\nbody",
+        "author": {"email": "hlr-vessel@heavyliftrental.ai"}
+      }
+    }
+  ]'
+  signature_result 'Synthetic unsigned body repaired by the pipeline' "$commits_json" \
+    || fail "unsigned body with no-mistakes committed-fix evidence must succeed"
+  pass "no-mistakes committed-fix evidence is accepted when the body marker is missing"
+}
+
+test_arbitrary_commit_subject_does_not_replace_the_signature() {
+  local commits_json
+  commits_json='[
+    {
+      "commit": {
+        "message": "no-mistakes(review): Looks similar but is not from a vessel",
+        "author": {"email": "contributor@example.com"}
+      }
+    },
+    {
+      "commit": {
+        "message": "Handwritten change",
+        "author": {"email": "hlr-vessel@heavyliftrental.ai"}
+      }
+    }
+  ]'
+  if signature_result 'Synthetic unsigned body' "$commits_json"; then
+    fail "unsigned body must not pass on arbitrary commit evidence"
+  fi
+  pass "arbitrary commits do not replace the no-mistakes signature"
 }
 
 test_event_identity_contract() {
@@ -91,6 +130,8 @@ test_security_and_signature_contract_is_preserved() {
 }
 
 test_signature_sequence_at_fixed_head
+test_no_mistakes_fix_commit_is_accepted_when_body_marker_is_missing
+test_arbitrary_commit_subject_does_not_replace_the_signature
 test_event_identity_contract
 test_run_names_are_ordered_and_unique
 test_security_and_signature_contract_is_preserved
