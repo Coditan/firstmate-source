@@ -463,9 +463,12 @@ An unpinned judge prints a warning and proceeds under the existing judge-sharing
 There is deliberately no injected effort default, because a profile carrying an effort its harness does not accept is rejected as an invalid pair.
 Panels are ambiguous investigation work, so a high effort level is usually the right configured value - see [`docs/examples/model-panel.json`](examples/model-panel.json) for a starting point to copy.
 
-Each role resolves in this order: its entry in `config/model-panel.json`, then the top-level `default` profile set in `config/crew-dispatch.json`.
-That fallback is the documented default, and it is why a home that already declares which runtimes it dispatches on can run a panel with no panel-specific configuration at all.
-When neither file supplies a profile for a role, the panel refuses and names both files rather than guessing a model.
+Each role resolves in this order: its entry in `config/model-panel.json`, then the top-level `default` profile set in `config/crew-dispatch.json`, then the static crewmate harness `bin/fm-harness.sh crew` resolves.
+That is the crew dispatch precedence `AGENTS.md` section 4 states and `bin/fm-spawn.sh` walks, carried to its end rather than stopped after the profile files.
+The crew-dispatch hop is why a home that already declares which runtimes it dispatches on can run a panel with no panel-specific configuration at all.
+The static-harness hop is what every home has by construction, because both profile files are optional, so a panel that stopped short of it could not start at all on a home that dispatches crew perfectly well.
+That last hop supplies a harness and no model, so it can never invent a model identity: in a full panel it lands on the exit 4 unpinned-analyst refusal, and what it actually lets run is the reduced form and the judge seat.
+When no source supplies a profile for a role, the panel refuses and names all three rather than guessing a model.
 A role backed by an array prefers a candidate with an explicit model pin that the panel is not already using, so the second analyst picks a known second model instead of either a duplicate or an unpinned default.
 
 Configured model identity for that comparison exists only when the resolved profile explicitly pins a model, and it is that model name with any provider prefix and any `:suffix` removed - the normalization `bin/fm-dispatch-select.sh` already uses.

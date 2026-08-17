@@ -10,6 +10,9 @@
 # or a harness. Quota data is deliberately unavailable, so an array-backed role
 # falls back to the selector's uniform random choice and no test reaches a live
 # quota service.
+# A stub can only prove what the panel asks for, never that the fleet still
+# accepts it, so test_panel_start_dispatches_through_the_real_spawn deliberately
+# leaves the stub behind and drives the REAL fm-spawn.sh behind a fake tmux.
 # shellcheck disable=SC2016
 set -u
 
@@ -218,6 +221,77 @@ test_analysts_dispatch_on_different_models() {
   assert_not_contains "$log" "trio-judge" "the judge must not be dispatched before the reports exist"
   assert_grep 'form=panel' "$home/data/trio/panel.meta" "the panel record does not say it is a panel"
   pass "analysts dispatch concurrently on the two configured models"
+}
+
+# Every other test in this file replaces fm-spawn.sh with a stub, so nothing here
+# ever proved that what the panel ASKS the fleet to dispatch is what the fleet
+# still ACCEPTS. This one drives the REAL fm-spawn.sh through the recipe
+# tests/fm-spawn-dispatch-profile.test.sh uses - a fake tmux that captures the
+# literal launch command, a faked treehouse, and a real isolated git worktree -
+# so one command answers whether a panel can start on current source, without
+# starting a backend or a harness.
+test_panel_start_dispatches_through_the_real_spawn() {
+  local case_dir home proj wt fakebin launchlog out status=0 meta
+  case_dir="$TMP_ROOT/real-spawn"
+  home="$case_dir/home"
+  proj="$case_dir/project"
+  wt="$case_dir/wt"
+  launchlog="$case_dir/launch.log"
+  mkdir -p "$home/data" "$home/state" "$home/config" "$home/projects"
+  printf '%s\n' "$TWO_MODELS" > "$home/config/model-panel.json"
+  fm_git_worktree "$proj" "$wt" wt-real-spawn
+  touch "$home/state/.last-watcher-beat"
+  fakebin=$(fm_fakebin "$case_dir/fake")
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "$*" in
+  *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
+esac
+case "${1:-}" in
+  list-panes) printf '%%1 1\n'; exit 0 ;;
+  display-message)
+    for a in "$@"; do case "$a" in *pane_id*) printf '%%1\n'; exit 0 ;; esac; done
+    printf 'firstmate\n'; exit 0 ;;
+  send-keys)
+    prev=
+    for a in "$@"; do
+      [ "$prev" != "-l" ] || printf '%s\n' "$a" >> "$FM_FAKE_LAUNCH_LOG"
+      prev=$a
+    done
+    exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/tmux"
+  fm_fake_exit0 "$fakebin" treehouse
+  : > "$launchlog"
+  out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" \
+    FM_DATA_OVERRIDE="$home/data" FM_STATE_OVERRIDE="$home/state" \
+    FM_CONFIG_OVERRIDE="$home/config" FM_PROJECTS_OVERRIDE="$home/projects" \
+    FM_DISPATCH_QUOTA_AXI=fm-test-absent-quota-axi \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
+    FM_FAKE_LAUNCH_LOG="$launchlog" PATH="$fakebin:$PATH" \
+    "$ROOT/bin/fm-model-panel.sh" start --id realspawn --project "$proj" "Does a panel start?" 2>&1) \
+    || status=$?
+  expect_code 0 "$status" "a configured panel must start against the real dispatch mechanism: $out"
+  assert_contains "$out" "dispatched: realspawn-a harness=claude model=claude-opus-5 effort=xhigh" \
+    "the real spawn did not accept analyst A's resolved profile"
+  assert_contains "$out" "dispatched: realspawn-b harness=codex model=gpt-5.6-sol effort=xhigh" \
+    "the real spawn did not accept analyst B's resolved profile"
+  meta="$home/state/realspawn-a.meta"
+  assert_present "$meta" "the real spawn recorded no runtime record for analyst A"
+  assert_grep 'harness=claude' "$meta" "analyst A's record does not carry its resolved harness"
+  assert_grep 'model=claude-opus-5' "$meta" "analyst A's record does not carry its resolved model"
+  assert_grep 'effort=xhigh' "$meta" "analyst A's record does not carry its resolved effort"
+  assert_grep 'kind=scout' "$meta" "a panel member must be recorded as a scout"
+  assert_grep "--model 'claude-opus-5' --effort 'xhigh'" "$launchlog" \
+    "the launched command did not carry analyst A's resolved profile axes"
+  assert_grep "data/realspawn-a/brief.md" "$launchlog" \
+    "the launched command did not point analyst A at its brief"
+  assert_absent "$home/state/realspawn-judge.meta" \
+    "the judge must not be dispatched before the analyst reports exist"
+  pass "a configured panel starts end to end against the real spawn"
 }
 
 test_pinned_object_lineup_needs_no_random_source() {
@@ -954,14 +1028,56 @@ test_crew_dispatch_default_is_the_documented_fallback() {
   pass "an unconfigured home falls back to the crew-dispatch default profile set"
 }
 
-test_no_configuration_refuses_with_both_paths_named() {
+test_no_configuration_refuses_with_every_source_named() {
   local home status=0 out
   home=$(new_home unconfigured)
+  # `unknown` is fm-harness.sh's sentinel for a harness it could not detect, so
+  # this home genuinely has no dispatch source at any of the three hops.
+  printf 'unknown\n' > "$home/config/crew-harness"
   out=$(run_panel "$home" start --id nc --project "$home/subject" "Anything?") || status=$?
-  [ "$status" -ne 0 ] || fail "an unconfigured home must not silently invent a lineup"
+  [ "$status" -ne 0 ] || fail "a home with no dispatch source must not silently invent a lineup"
   assert_contains "$out" "model-panel.json" "the refusal does not name the panel configuration file"
   assert_contains "$out" "crew-dispatch.json" "the refusal does not name the fallback configuration file"
-  pass "a home with no configuration refuses and names both configuration files"
+  assert_contains "$out" "crew-harness" "the refusal does not name the static crewmate harness"
+  assert_not_contains "$out" "dispatch input must be" \
+    "a missing profile leaked the selector's internal parse error over the actionable refusal"
+  pass "a home with no dispatch source at all refuses and names every source"
+}
+
+# The defect this file could not see: fm-spawn.sh's own last resort when neither
+# profile file exists is the static crewmate harness, and the panel used to stop
+# one hop short of it, so a home that dispatched crew perfectly well could not
+# start a panel at all - and failed mechanically rather than honestly.
+test_static_crew_harness_backs_the_panel_and_still_refuses_honestly() {
+  local home status=0 out
+  home=$(new_home static-harness)
+  printf 'claude\n' > "$home/config/crew-harness"
+  out=$(run_panel "$home" start --id sh --project "$home/subject" "Anything?") || status=$?
+  expect_code 4 "$status" "an unpinned static-harness lineup must refuse as not-a-panel"
+  assert_contains "$out" "would not be a panel" \
+    "the static-harness fallback did not reach the honest unpinned-analyst refusal"
+  assert_not_contains "$out" "no profile for panel role" \
+    "the static crewmate harness did not fill the seat"
+  assert_not_contains "$out" "dispatch input must be" \
+    "the refusal leaked the selector's internal parse error"
+  [ -z "$(spawn_log "$home")" ] || fail "a refused panel must dispatch nothing"
+  pass "a home configured only with a crewmate harness refuses as not-a-panel, not mechanically"
+}
+
+test_static_crew_harness_runs_the_reduced_form() {
+  local home out log
+  home=$(new_home static-harness-reduced)
+  printf 'claude\n' > "$home/config/crew-harness"
+  out=$(run_panel "$home" start --id shr --project "$home/subject" --reduced "Anything?") \
+    || fail "the reduced form must run on a home whose dispatch is the static crewmate harness: $out"
+  assert_contains "$out" "no explicit model pin" \
+    "the reduced form did not warn that the seat's runtime identity is unknown"
+  log=$(spawn_log "$home")
+  assert_contains "$log" "shr-a $home/subject --harness claude --scout" \
+    "the analyst was not dispatched on the static crewmate harness"
+  assert_not_contains "$log" "--model" \
+    "a harness with no model pin must not be dispatched with an invented model"
+  pass "the reduced form runs on a home whose only dispatch source is the crewmate harness"
 }
 
 test_dry_run_shows_the_lineup_without_spending_anything() {
@@ -1039,6 +1155,7 @@ test_start_refuses_to_clobber_an_existing_panel() {
 test_skill_owns_the_cost_decision_and_one_trigger
 test_configuration_doc_owns_the_schema_and_degradation
 test_analysts_dispatch_on_different_models
+test_panel_start_dispatches_through_the_real_spawn
 test_pinned_object_lineup_needs_no_random_source
 test_distinct_analyst_arrays_resolve_to_different_models
 test_analyst_array_collision_refuses_after_resolution
@@ -1069,7 +1186,9 @@ test_wedged_member_names_its_override_and_the_override_is_per_member
 test_accept_unfinished_refuses_a_nonmember_and_a_missing_report
 test_failed_analyst_with_a_report_still_reaches_the_judge
 test_crew_dispatch_default_is_the_documented_fallback
-test_no_configuration_refuses_with_both_paths_named
+test_no_configuration_refuses_with_every_source_named
+test_static_crew_harness_backs_the_panel_and_still_refuses_honestly
+test_static_crew_harness_runs_the_reduced_form
 test_dry_run_shows_the_lineup_without_spending_anything
 test_failed_second_dispatch_is_reported_and_blocks_advance
 test_failed_first_dispatch_records_incomplete

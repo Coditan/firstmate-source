@@ -279,12 +279,20 @@ command -v jq >/dev/null 2>&1 || die "jq is required to resolve panel roles"
 
 # --- role resolution --------------------------------------------------------
 
-# Print the raw spec (profile object or profile array) for one role: the panel
-# config's entry first, then config/crew-dispatch.json's default profile set.
-# The crew-dispatch fallback is what lets a home that already declares which
-# runtimes it dispatches on run a panel with no extra configuration.
+# Print the raw spec (profile object or profile array) for one role, walking the
+# SAME dispatch precedence bin/fm-spawn.sh walks, all the way to its end: the
+# panel config's entry, then config/crew-dispatch.json's default profile set,
+# then the static crewmate harness bin/fm-harness.sh resolves. The crew-dispatch
+# fallback is what lets a home that already declares which runtimes it dispatches
+# on run a panel with no extra configuration; the static-harness hop is what
+# every home has BY CONSTRUCTION, because both profile files are optional, and
+# stopping before it left a home that dispatches crew perfectly well unable to
+# start a panel at all.
+# That last hop carries a harness and no model, so it can never invent an
+# identity: a full panel still lands on the honest exit-4 unpinned-analyst
+# refusal, and what it actually lets run is the reduced form and the judge seat.
 role_spec() {
-  local role=$1 spec=''
+  local role=$1 spec='' harness=''
   if [ -f "$PANEL_CONFIG" ]; then
     jq . "$PANEL_CONFIG" >/dev/null 2>&1 || die "$PANEL_CONFIG is not valid JSON"
     spec=$(jq -c --arg role "$role" '.roles[$role] // empty' "$PANEL_CONFIG")
@@ -293,7 +301,16 @@ role_spec() {
     jq . "$CREW_DISPATCH" >/dev/null 2>&1 || die "$CREW_DISPATCH is not valid JSON"
     spec=$(jq -c '.default // empty' "$CREW_DISPATCH")
   fi
-  [ -n "$spec" ] || die "no profile for panel role '$role': add roles.$role to $PANEL_CONFIG (see docs/examples/model-panel.json) or a default profile set in $CREW_DISPATCH"
+  if [ -z "$spec" ]; then
+    harness=$("$FM_ROOT/bin/fm-harness.sh" crew 2>/dev/null || true)
+    # `unknown` is fm-harness.sh's own sentinel for a harness it could not
+    # detect, so it names no runtime and fills no seat. Anything else it prints
+    # goes to the shared selector, which owns which harnesses are verified and
+    # refuses an unverified one by name.
+    [ -z "$harness" ] || [ "$harness" = unknown ] \
+      || spec=$(jq -cn --arg harness "$harness" '{harness: $harness}')
+  fi
+  [ -n "$spec" ] || die "no profile for panel role '$role': add roles.$role to $PANEL_CONFIG (see docs/examples/model-panel.json), a default profile set in $CREW_DISPATCH, or a crewmate harness in $CONFIG/crew-harness"
   printf '%s\n' "$spec"
 }
 
@@ -347,7 +364,11 @@ filter_spec() {
 # so no seat can accept what another rejects.
 resolve_role() {
   local role=$1 excluded=${2:-} spec filtered count profile errors status=0
-  spec=$(role_spec "$role")
+  # role_spec runs in a command substitution, so its refusal exits THAT subshell
+  # and not this function: without this check an empty spec walked on into the
+  # shared selector, which printed its own internal parse error over the
+  # actionable one and turned a missing configuration into a mechanical failure.
+  spec=$(role_spec "$role") || exit 1
   errors=$(mktemp "${TMPDIR:-/tmp}/fm-model-panel-select.XXXXXX")
   "$FM_ROOT/bin/fm-dispatch-select.sh" --validate-only "$spec" 2>"$errors" || status=$?
   if [ "$status" -ne 0 ]; then
