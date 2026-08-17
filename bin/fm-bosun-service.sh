@@ -470,7 +470,7 @@ report_judge_reach() {
 }
 
 bootstrap_check() {
-  local unit rc
+  local unit rc convergence_out
   bosun_opted_in || return 0
   if ! systemd_usable; then
     echo "BOSUN_UNIT: systemd --user is unavailable; the observer stops with whoever starts it and judges nothing between sessions"
@@ -493,11 +493,13 @@ bootstrap_check() {
       echo "BOSUN_UNIT: $unit needs locked convergence from the session holding the fleet lock"
     fi
   else
-    ensure_systemd >/dev/null 2>&1 && rc=0 || rc=$?
+    convergence_out=$(ensure_systemd 2>&1) && rc=0 || rc=$?
     # 3 is "converged, restarted, and still nothing is judging". That is a real
     # fault, but naming it a convergence failure would send the reader to
     # systemctl, and the reading below already names the concrete state.
-    if [ "$rc" -ne 0 ] && [ "$rc" -ne 3 ] && [ "$rc" -ne 4 ]; then
+    if [ "$rc" -eq 4 ]; then
+      printf '%s\n' "$convergence_out"
+    elif [ "$rc" -ne 0 ] && [ "$rc" -ne 3 ]; then
       echo "BOSUN_UNIT: $unit convergence failed - inspect systemctl --user status $unit"
     fi
   fi
