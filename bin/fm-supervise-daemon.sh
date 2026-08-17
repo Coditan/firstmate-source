@@ -262,7 +262,7 @@ afk_exit() {  # <state>
 
 # should_exit_afk: encodes firstmate's afk-exit contract as a testable function.
 #   afk inactive            -> 1 (nothing to exit)
-#   message has marker      -> 1 (internal escalation; stay afk)
+#   message has marker      -> 1 (operational input; stay afk)
 #   message is /afk command -> 1 (re-entering/extending afk; stay afk)
 #   anything else           -> 0 (captain is back; exit afk)
 # Bias toward exit: only the marker and an explicit /afk invocation keep afk
@@ -278,7 +278,7 @@ should_exit_afk() {  # <state> <message-text>
 }
 
 # message_is_injection: 0 if the given message text starts with the sentinel
-# marker (a daemon escalation), 1 otherwise (a real user message). Firstmate's
+# marker (operational input), 1 otherwise (a real user message). Firstmate's
 # afk-exit contract uses this: marker present -> stay afk; absent -> captain is
 # back. Bias ambiguous cases toward exit (a false exit is self-correcting).
 message_is_injection() {  # <message-text>

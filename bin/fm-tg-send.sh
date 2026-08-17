@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Send the captain one short message, or one named file, on this home's direct
 # Telegram channel.
+# Sending to the registered non-captain correspondent is a separate explicit
+# target, never the default.
 #
 # This is the outbound half of the seam whose inbound half is
 # bin/fm-tg-recv-arm.sh. It owns the delivery path and nothing else: what
@@ -16,6 +18,9 @@
 #   fm-tg-send.sh --file <path>             send that one file
 #   fm-tg-send.sh --file <path> --caption <text>
 #                                           send that one file with a caption
+#   fm-tg-send.sh --target correspondent --text <message>
+#                                           send explicitly to the registered
+#                                           non-captain correspondent
 #   fm-tg-send.sh --text <m> -- <args...>   pass everything after -- to the
 #                                           per-home sender, unread
 #   fm-tg-send.sh --help
@@ -23,9 +28,9 @@
 # Exit status:
 #   0  the sender reported the message or the file delivered
 #   2  the arguments were wrong and nothing was attempted
-#   *  anything else means it did NOT reach the captain; a sender's own non-zero
-#      status is passed through unchanged, so read the diagnostic rather than
-#      the number alone
+#   *  anything else means it did NOT reach the selected target; a sender's own
+#      non-zero status is passed through unchanged, so read the diagnostic
+#      rather than the number alone
 #
 # NEVER discard this exit status. A notification path that can fail quietly
 # gets trusted while it is dead, which is the defect this channel exists to
@@ -45,7 +50,7 @@
 # "file" in config/fm-tg-send.capabilities, the sender's own gitignored
 # declaration. A home whose sender has not declared it is REFUSED here and
 # nothing goes out. In particular the caption is never sent as a message
-# instead: a caller told "sent" would have no way to learn the captain received
+# instead: a caller told "sent" would have no way to learn the recipient received
 # words rather than the document, which is the one failure this whole channel
 # exists to not have.
 #
@@ -67,7 +72,7 @@
 # It refuses rather than sends when the message names a specific pull request
 # and carries no https:// URL, because AGENTS.md section 9 requires the full
 # URL before any shorthand reference, and a bare #number is least useful on the
-# phone this channel reaches. A caption is captain-facing text too, so the same
+# phone this channel reaches. A caption is recipient-facing text too, so the same
 # rule holds for it.
 #
 # An unconfigured home FAILS here rather than reporting itself inactive, and
@@ -92,6 +97,9 @@ SENDER="$CONFIG/fm-tg-send.sh"
 CAPABILITIES="$CONFIG/fm-tg-send.capabilities"
 RECEIVER="$CONFIG/fm-tg-recv.sh"
 
+# shellcheck source=bin/fm-tg-correspondent-lib.sh
+. "$SCRIPT_DIR/fm-tg-correspondent-lib.sh"
+
 usage() {
   # The header comment block IS the help text, so the two cannot drift apart.
   awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
@@ -106,10 +114,12 @@ diag() {
 # refused file must not report a message as unsent, or the caller reads it as
 # the wrong kind of problem.
 subject='message'
+target=captain
+recipient=captain
 
 die() {
   diag "FAILED - $*"
-  diag "the $subject was NOT sent to the captain."
+  diag "the $subject was NOT sent to the $recipient."
   exit 1
 }
 
@@ -180,6 +190,14 @@ while [ $# -gt 0 ]; do
       caption=$1
       have_caption=1
       ;;
+    --target)
+      shift
+      [ $# -gt 0 ] || usage_error "--target needs captain or correspondent"
+      case "$1" in
+        captain|correspondent) target=$1 ;;
+        *) usage_error "--target needs captain or correspondent" ;;
+      esac
+      ;;
     --)
       shift
       sender_args=("$@")
@@ -189,6 +207,11 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+case "$target" in
+  captain) recipient=captain ;;
+  correspondent) recipient=correspondent ;;
+esac
 
 [ "$have_text" -eq 1 ] && [ -n "$text_file" ] \
   && usage_error "--text and --text-file are two ways to say the same thing; pass one"
@@ -227,13 +250,13 @@ else
 fi
 
 # Whitespace rather than emptiness, because --text '' and a file of blank lines
-# both frame into a message the captain receives and cannot read.
+# both frame into a message the recipient receives and cannot read.
 [ "$have_file" -eq 1 ] || grep -q '[^[:space:]]' "$body" \
   || die 'refusing to send an empty message'
 
 # The message the caller wrote is checked before this home's configuration is,
 # so a composition mistake reads as a composition mistake on every home. A
-# caption is captain-facing text on the same phone, so it is held to this too.
+# caption is recipient-facing text on the same phone, so it is held to this too.
 if ! grep -q 'https://' "$body"; then
   if grep -Eiq '(pull|merge) request[[:space:]]*[#!]?[0-9]+' "$body" \
     || grep -Eiq '(^|[^[:alnum:]])(PR|MR)[[:space:]]*[#!]?[0-9]+' "$body"; then
@@ -296,13 +319,25 @@ if [ "$have_file" -eq 1 ]; then
   fi
 fi
 
+if [ "$target" = correspondent ]; then
+  if fm_tg_correspondent_load "$CONFIG"; then
+    :
+  else
+    load_rc=$?
+    if [ "$load_rc" -eq 1 ]; then
+      die 'config/fm-tg-correspondent is absent, so no correspondent lane is registered'
+    fi
+    die "$FM_TG_CORRESPONDENT_CONFIG_ERROR"
+  fi
+fi
+
 env_present=0
 sender_present=0
 [ -f "$ENV_FILE" ] && env_present=1
 [ -f "$SENDER" ] && [ -x "$SENDER" ] && sender_present=1
 
 if [ "$env_present" -eq 0 ] && [ "$sender_present" -eq 0 ]; then
-  die 'this home has no way to reach the captain: config/telegram.env and config/fm-tg-send.sh are both absent'
+  die "this home has no way to reach the $recipient: config/telegram.env and config/fm-tg-send.sh are both absent"
 fi
 if [ "$env_present" -eq 0 ]; then
   die 'config/telegram.env is absent, so the channel has no credential'
@@ -329,9 +364,23 @@ sender_declares() {
   return 1
 }
 
+if [ "$target" = correspondent ]; then
+  if [ ! -f "$CAPABILITIES" ]; then
+    diag 'a sender declares it can target the registered correspondent by listing "correspondent" in config/fm-tg-send.capabilities.'
+    die "this home's sender does not support the correspondent target"
+  fi
+  if [ ! -r "$CAPABILITIES" ]; then
+    die "config/fm-tg-send.capabilities cannot be read, so this home's correspondent target support is undeclared"
+  fi
+  if ! sender_declares correspondent; then
+    diag 'config/fm-tg-send.capabilities does not list "correspondent", so this sender has declared only the captain target.'
+    die "this home's sender does not support the correspondent target"
+  fi
+fi
+
 # There is deliberately NO fallback to sending the caption as a message here.
 # That fallback is the tempting one and it is the wrong one: the caller believes
-# a file arrived, the captain got a line of text or nothing, and nothing
+# a file arrived, the recipient got a line of text or nothing, and nothing
 # anywhere says so. Refusing is the only outcome that leaves someone able to act
 # on it.
 if [ "$have_file" -eq 1 ]; then
@@ -354,6 +403,12 @@ fi
 # this script must not be able to turn a message into a file, or point a file
 # send at bytes nobody named on this command line.
 unset FM_TG_SEND_KIND FM_TG_SEND_PATH FM_TG_SEND_ORIGINAL_NAME FM_TG_SEND_MIME FM_TG_SEND_BYTES
+unset FM_TG_SEND_TARGET FM_TG_SEND_CORRESPONDENT_NAME FM_TG_SEND_CORRESPONDENT_CHAT_ID
+export FM_TG_SEND_TARGET="$target"
+if [ "$target" = correspondent ]; then
+  export FM_TG_SEND_CORRESPONDENT_NAME="$FM_TG_CORRESPONDENT_NAME"
+  export FM_TG_SEND_CORRESPONDENT_CHAT_ID="$FM_TG_CORRESPONDENT_CHAT_ID"
+fi
 if [ "$have_file" -eq 1 ]; then
   export FM_TG_SEND_KIND=document
   export FM_TG_SEND_PATH="$file_abs"
@@ -371,7 +426,7 @@ rc=$?
 
 if [ "$rc" -ne 0 ]; then
   diag "FAILED - the sender exited $rc without delivering the $subject."
-  diag "the $subject was NOT sent to the captain."
+  diag "the $subject was NOT sent to the $recipient."
   exit "$rc"
 fi
 

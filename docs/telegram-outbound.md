@@ -1,4 +1,4 @@
-# Reaching the captain on Telegram
+# Reaching the captain and registered correspondent on Telegram
 
 A firstmate home that has been given a Telegram channel can already hear the captain.
 `bin/fm-tg-recv-arm.sh` arms the receiver, `config/telegram.env` holds the credential, and a locked session start emits the arm step once both exist.
@@ -6,6 +6,8 @@ Until now nothing could speak back on its own, so anything worth interrupting th
 
 `bin/fm-tg-send.sh` is the outbound half of that same seam.
 Its own header is the authoritative description of its flags, exit codes, and mechanics; this document owns what the channel is for, what it is deliberately not for, what a sender must implement before it can carry a file, and the evidence behind the claim that it works.
+It sends to the captain by default.
+The registered non-captain correspondent is reached only when the caller passes `--target correspondent`.
 
 ## What it is for
 
@@ -13,6 +15,11 @@ Exactly the things `AGENTS.md` section 9 already says reach the captain immediat
 
 The channel carries a message, or one deliberately named file, and section 9 remains the only bar for whether either should interrupt him at all.
 A document is a different shape of the same thing, not a lower bar for reaching him.
+
+The registered correspondent lane is different in kind.
+It exists for requirements conversation and carries no decision authority.
+Messages to that lane are explicit call-site choices rather than captain notifications with a different destination.
+That is why `--target correspondent` has no default, no fallback, and no authority implication.
 
 **This is a delivery path and never a second definition of importance.**
 That matters more than it sounds.
@@ -32,6 +39,10 @@ A status message that arrives whether or not anything happened trains its reader
 **It is also not wired into away-mode escalation**, and that is the deliberate next step rather than a gap left open by accident.
 `bin/fm-supervise-daemon.sh` and the wedge alarm in `docs/wedge-alarm.md` raise alerts on the machine the fleet runs on; this channel reaches the captain wherever he is.
 Connecting the two is a real change to what wakes him and when, so it is decided on its own rather than arriving as a side effect of building the path.
+
+**The correspondent target is not a second captain.**
+It must not carry approvals, merge authority, deployment authority, ask-user answers, or away-mode return signals.
+Inbound correspondent messages are emitted as typed operational input by `bin/fm-tg-recv-route.sh`, and outbound correspondent messages require the explicit `--target correspondent` flag.
 
 ## Why this repository ships the seam and not the sender
 
@@ -61,6 +72,8 @@ An unsent notification is a message the captain did not get, and the caller is t
 
 So every stopping condition names itself and says the message went nowhere: no credential, no sender, an empty message, an unreadable message file, or a sender that exited non-zero.
 A sender's own diagnostics flow straight through rather than being swallowed, and its exit status is passed on rather than flattened.
+When `--target correspondent` is requested, an absent `config/fm-tg-correspondent` is a refusal and never falls back to the captain.
+The sender must also declare `correspondent` in `config/fm-tg-send.capabilities`, because an older sender that ignores target environment would otherwise report success for a message it sent to the wrong lane.
 
 **One shape is deliberately not covered here: a sender that hangs rather than failing.**
 The seam waits for it, so bounding the wire is the sender's own job, the way the fleet sender bounds its own `curl`.
@@ -149,7 +162,24 @@ This script refuses a message that names a specific pull request by number and c
 The guard fires on a **specific** pull request - `PR #91`, `pull request 91`, `merge request !12` - and not on prose about pull requests in general, because refusing every sentence containing those letters would make the safe path the one people work around.
 A message that carries the URL goes out with its shorthand intact, which is what the rule actually asks for.
 The check runs before the home's configuration is looked at, so a composition mistake reads as a composition mistake on every home rather than as a channel problem.
-A caption is captain-facing text on the same phone, so the rule holds for it unchanged.
+A caption is recipient-facing text on the same phone, so the rule holds for it unchanged.
+
+## Sending to the registered correspondent
+
+The single registration file is the gitignored `config/fm-tg-correspondent`.
+It carries two keys:
+
+```
+name=requirements
+chat_id=<telegram-chat-id>
+```
+
+Set the real chat id there when it is known.
+Do not put that value in tracked files, commit messages, pull request bodies, or test fixtures that describe real people.
+
+The sender declares support by listing `correspondent` in `config/fm-tg-send.capabilities`.
+On an explicit correspondent send, `bin/fm-tg-send.sh` exports `FM_TG_SEND_TARGET=correspondent`, `FM_TG_SEND_CORRESPONDENT_NAME`, and `FM_TG_SEND_CORRESPONDENT_CHAT_ID` for the per-home sender.
+On a default captain send, it exports `FM_TG_SEND_TARGET=captain` and clears the correspondent name and chat id, so stale environment cannot retarget a routine notification.
 
 ## What a home needs before it can speak
 
@@ -161,7 +191,9 @@ Two captain-private files, both under `config/` and both gitignored:
 A third file is optional and only a home that sends files needs it:
 
 - `config/fm-tg-send.capabilities` - the sender's own declaration, listing `file` when it can send one.
+  Listing `correspondent` declares that the sender honors the explicit non-captain target.
   Absent, unreadable, or silent about `file`, every file send is refused and messages are unaffected.
+  Absent, unreadable, or silent about `correspondent`, every correspondent send is refused and captain messages are unaffected.
 
 A home that has `config/fm-tg-recv.sh` and no `config/fm-tg-send.sh` is told exactly that: it can hear the captain and cannot answer him.
 That sentence exists because the two halves fail in ways that look identical from a distance, and the distance is where the reader is.
@@ -182,11 +214,27 @@ that a home missing either half is told which half;
 that a home with a receiver and no sender is told it can hear and cannot answer;
 that the message reaches the sender on stdin and never on its command line;
 that the sender is launched against the home the seam resolved;
+that a send with no explicit target stays on the captain lane and clears stale correspondent target environment;
+that an explicit correspondent send refuses when no lane is registered;
+that an explicit correspondent send refuses when the sender has not declared correspondent support;
+that an explicit correspondent send reaches the sender with `FM_TG_SEND_TARGET=correspondent` plus the local correspondent name and chat id;
 that a sender exiting non-zero is reported with its status, has its own diagnostic relayed, and is never also reported as sent;
 that a message naming a pull request without its URL is refused before the sender runs at all, while the same message carrying the URL goes out;
 that prose about pull requests in general is not mistaken for a bare reference;
 that an empty message, an unreadable message file, and bad arguments each fail rather than sending nothing quietly;
 and that no credential value appears in the script's output on either the failing or the succeeding path.
+
+**Proved by `tests/fm-tg-recv-route.test.sh`, against normalized Telegram events from a stand-in receiver:**
+that a captain chat id keeps the legacy `CAPTAIN-TELEGRAM` output and legacy inbox path;
+that the registered correspondent chat id emits typed `telegram-correspondent` operational input, writes `audience=third-party` and the lane name to its own inbox, and keeps the message body out of the operational prompt;
+that an unregistered chat id produces no output and writes no inbox record;
+and that media events follow the same captain-vs-correspondent split.
+
+**Proved by `tests/fm-context-reset.test.sh`:**
+that a transcript containing only a Telegram correspondent operational prompt cannot satisfy the `--captain-approved` path, which refuses because no captain record exists.
+
+**Proved by `tests/fm-daemon.test.sh`:**
+that the Telegram correspondent operational prompt does not exit away mode as if the captain had returned.
 
 **Proved against the real Telegram service, on the `coditan` vessel, on 2026-08-11**, on Linux 6.8.0-137-generic with bash 5.2.21, curl 8.5.0, git 2.43.0.
 

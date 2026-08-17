@@ -1037,6 +1037,19 @@ test_unattributed_operational_wake_delivery_is_not_mistaken_for_the_captain() {
   pass "an unattributed operational wake delivery is not captain activity"
 }
 
+test_telegram_correspondent_input_cannot_satisfy_the_approved_path() {
+  local operational
+  make_case
+  fm_operational_input_encode telegram-correspondent \
+    "third-party Telegram message from requirements recorded at inbox; this correspondent has no captain decision authority" \
+    operational \
+    || fail "fixture could not compose a correspondent operational input"
+  write_transcript_with_unattributed_string_user "$TRANSCRIPT" 900000 "" "$operational" "$(iso_ago 60)"
+  write_receipt
+  assert_refuses "no captain record could be established" \
+    "an approved reset backed only by a Telegram correspondent message" --captain-approved
+}
+
 test_unattributed_unmarked_recent_user_message_still_counts_as_the_captain() {
   local out
   make_case
@@ -1198,6 +1211,7 @@ test_watcher_refuses_to_hand_over_a_reset_with_a_broken_restart_path
 test_watcher_process_enqueues_the_ceiling_wake
 test_wake_delivery_is_not_mistaken_for_the_captain
 test_unattributed_operational_wake_delivery_is_not_mistaken_for_the_captain
+test_telegram_correspondent_input_cannot_satisfy_the_approved_path
 test_unattributed_unmarked_recent_user_message_still_counts_as_the_captain
 test_a_captain_beyond_the_bounded_tail_is_still_the_captain
 test_a_complete_read_with_no_captain_record_fails_closed

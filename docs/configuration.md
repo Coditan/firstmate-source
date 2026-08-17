@@ -360,11 +360,17 @@ The Codex repo-local profile and Graphify PreToolUse hook are documented above b
 Primary-session watcher wake protocols are rendered at session start by [`bin/fm-supervision-instructions.sh`](../bin/fm-supervision-instructions.sh) from [`docs/supervision-protocols/`](supervision-protocols/).
 Claude and Grok use background-notify delivery waits, Codex uses bounded foreground delivery checkpoints, Pi uses its two tracked primary extensions, and OpenCode uses its TUI plugin.
 
-## Direct Telegram receiver (config/telegram.env / config/fm-tg-recv.sh)
+## Direct Telegram receiver (config/telegram.env / config/fm-tg-recv.sh / config/fm-tg-correspondent)
 
 Direct Telegram receive is an optional per-home local integration.
 Enable it by creating gitignored `config/telegram.env` and an executable gitignored `config/fm-tg-recv.sh` under the effective config directory.
-The local receiver script owns Telegram credentials, polling, parsing, send behavior, and the exact `CAPTAIN-TELEGRAM` payload it prints.
+The local receiver script owns Telegram credentials, polling, Telegram API parsing, send behavior, and media download.
+The legacy captain path still prints `CAPTAIN-TELEGRAM` or `CAPTAIN-TELEGRAM-BILD` so existing captain messages keep their standing.
+The optional gitignored `config/fm-tg-correspondent` file registers exactly one non-captain correspondent lane with `name=<slug>` and `chat_id=<telegram-chat-id>`.
+That file is the single place to set the second correspondent's chat id when it is known, and it stays local because the chat id is contact data.
+`bin/fm-tg-recv-route.sh` lets the local receiver route one normalized event through that registration without learning the bot token.
+A correspondent event is recorded under `state/tg-correspondents/<name>/inbox.jsonl` and emitted as typed `telegram-correspondent` operational input, so transcript, away-mode, and approval readers do not treat it as a captain message.
+Unknown senders still produce no output and no inbox record.
 The tracked `bin/fm-tg-recv-arm.sh` wrapper owns only the session-start arm shape: it starts one receiver for the effective `FM_HOME` or attaches to an already running matching receiver.
 When a locked `bin/fm-session-start.sh` sees both files, its digest emits the separate tracked-background arm step for `bin/fm-tg-recv-arm.sh`; read-only sessions report that the lock holder owns arming.
 When `config/telegram.env` is absent the feature stays silent except for the session-start inactive line.

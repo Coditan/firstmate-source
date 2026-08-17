@@ -697,6 +697,16 @@ families_for_changed_path() {
     bin/fm-x-*|bin/fm-check*)
       printf '%s\n' pr-forge
       ;;
+    bin/fm-tg-correspondent-lib.sh)
+      printf '%s\n' "__script_required__:fm-tg-recv-route.test.sh"
+      printf '%s\n' "__script_required__:fm-tg-send.test.sh"
+      ;;
+    bin/fm-tg-recv-route.sh)
+      printf '%s\n' "__script_required__:fm-tg-recv-route.test.sh"
+      ;;
+    bin/fm-tg-send.sh)
+      printf '%s\n' "__script_required__:fm-tg-send.test.sh"
+      ;;
     bin/fm-spawn.sh|bin/fm-send.sh|bin/fm-dispatch-select.sh|bin/fm-harness.sh|\
     bin/fm-peek.sh|bin/fm-composer*)
       printf '%s\n' backend-dispatch

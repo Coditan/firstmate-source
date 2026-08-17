@@ -24,6 +24,7 @@ config/telegram.env
 config/fm-tg-recv.sh
 config/fm-tg-send.sh
 config/fm-tg-send.capabilities
+config/fm-tg-correspondent
 config/$UNFORESEEN
 config/$UNFORESEEN.env
 config/$UNFORESEEN-subsystem/credentials.json

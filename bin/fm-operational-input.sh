@@ -36,7 +36,7 @@ FM_OPERATIONAL_MARK=$'\xE2\x81\xA3'
 FM_OPERATIONAL_PREFIX="${FM_OPERATIONAL_MARK}FIRSTMATE_OP: "
 FM_OPERATIONAL_VERSION=v1
 FM_OPERATIONAL_HEADER_PREFIX="${FM_OPERATIONAL_PREFIX}${FM_OPERATIONAL_VERSION} "
-FM_OPERATIONAL_KINDS='session-start watcher turn-end-guard away-supervisor launch-brief'
+FM_OPERATIONAL_KINDS='session-start watcher turn-end-guard away-supervisor launch-brief telegram-correspondent'
 
 # Compatibility name retained for the away-mode owner and its tests.
 # shellcheck disable=SC2034 # Public source-library variable used by callers.
@@ -246,7 +246,7 @@ Usage:
   bin/fm-operational-input.sh body           # current input on stdin
 
 Current construction kinds:
-  session-start watcher turn-end-guard away-supervisor from-firstmate launch-brief
+  session-start watcher turn-end-guard away-supervisor from-firstmate launch-brief telegram-correspondent
 
 launch-pointer builds the launch-brief input a crewmate is started with. It takes
 the brief's PATH and never reads the brief, so the brief body never reaches a
