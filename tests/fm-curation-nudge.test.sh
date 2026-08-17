@@ -1,0 +1,429 @@
+#!/usr/bin/env bash
+# Behavior tests for the 48-hour fleet knowledge-file curation nudge.
+#
+# Every property this suite pins was named as a proof obligation when the nudge
+# was commissioned, and each is asserted against what the script actually does
+# rather than against what its header says it does:
+#   - the scheduling function never returns a minute that is a multiple of five,
+#     over many draws;
+#   - the period is 48 hours, not 24 and not 72;
+#   - a firing reaches a supervising session as a wake naming what is due;
+#   - nothing here writes to Bridge, opens a network connection, or touches a
+#     git repository - asserted by absence of the call path, statically and by
+#     tripwire, never by intention;
+#   - stopping the thing makes its health reading go bad rather than stay quiet.
+set -u
+
+# shellcheck source=tests/lib.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+# This suite is the one that must see the reporting modes speak.
+export FM_CURATION_NUDGE_DISABLE=0
+
+fm_test_tmproot TMP_ROOT fm-curation-nudge-tests
+
+NUDGE="$ROOT/bin/fm-curation-nudge.sh"
+
+fm_mode_of() {
+  if [ "$(uname)" = Darwin ]; then
+    stat -f %Lp "$1" 2>/dev/null
+  else
+    stat -c %a "$1" 2>/dev/null
+  fi
+}
+
+# A home with its own state and data. The script is run from a COPY in the
+# home's own bin so --arm resolves fm-check-register.sh beside it and no test
+# reaches this checkout's state.
+make_home() {
+  local name=$1 home
+  home="$TMP_ROOT/$name"
+  mkdir -p "$home/state" "$home/data" "$home/bin"
+  cp "$NUDGE" "$home/bin/fm-curation-nudge.sh"
+  cp "$ROOT/bin/fm-check-register.sh" "$home/bin/fm-check-register.sh"
+  cp "$ROOT/bin/fm-pr-lib.sh" "$home/bin/fm-pr-lib.sh"
+  cp "$ROOT/bin/fm-check-lib.sh" "$home/bin/fm-check-lib.sh"
+  chmod +x "$home/bin/fm-curation-nudge.sh" "$home/bin/fm-check-register.sh"
+  printf 'learned one\nlearned two\n' > "$home/data/learnings.md"
+  printf 'preference one\n' > "$home/data/captain.md"
+  printf '%s\n' "$home"
+}
+
+run_nudge() {
+  local home=$1
+  shift
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    "$home/bin/fm-curation-nudge.sh" "$@"
+}
+
+# --- the five-minute refusal ------------------------------------------------
+
+test_the_scheduler_never_lands_on_the_five_minute_grid() {
+  local home draws on_grid count
+  home=$(make_home grid)
+
+  # 2000 independent draws. The refusal is the property under test, so a merely
+  # unlikely hit must fail this case rather than pass it.
+  draws=$(run_nudge "$home" --draw 2000) || fail "the scheduler refused to draw at all"
+  count=$(printf '%s\n' "$draws" | grep -c .)
+  [ "$count" -eq 2000 ] || fail "expected 2000 draws, got $count"
+  on_grid=$(printf '%s\n' "$draws" | awk '{ if (int($1 / 60) % 60 % 5 == 0) n++ } END { print n + 0 }')
+  [ "$on_grid" -eq 0 ] \
+    || fail "$on_grid of $count drawn targets landed on a five-minute boundary"
+  pass "2000 drawn targets, none on a multiple-of-five minute"
+}
+
+test_a_window_with_no_off_grid_minute_refuses_rather_than_scheduling_on_it() {
+  local home out status=0
+  home=$(make_home refuse)
+
+  # Pin the jitter to a single second whose target minute IS on the grid: 48h is
+  # a whole number of hours, so base 0 plus 172800 plus 0 lands on minute 0. The
+  # refusal must exhaust and report, never fall back to the on-grid target.
+  out=$(FM_CURATION_NUDGE_NOW=0 FM_CURATION_NUDGE_JITTER_MIN=0 FM_CURATION_NUDGE_JITTER_MAX=0 \
+    run_nudge "$home" --draw 1 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "a window containing only an on-grid minute must refuse: $out"
+  assert_contains "$out" 'refusing to schedule' \
+    "the refusal must say it refused rather than reporting an empty draw"
+  pass "a window with no off-grid minute refuses instead of accepting one"
+}
+
+test_the_period_is_forty_eight_hours() {
+  local home draws min max
+  home=$(make_home period)
+
+  draws=$(FM_CURATION_NUDGE_NOW=1000000 run_nudge "$home" --draw 400) \
+    || fail "the scheduler refused to draw"
+  min=$(printf '%s\n' "$draws" | sort -n | head -1)
+  max=$(printf '%s\n' "$draws" | sort -n | tail -1)
+
+  # 48h = 172800s. Every target sits inside 172800 + [180, 420] from the base,
+  # which excludes 24h and 72h by construction rather than by a nominal check.
+  [ "$((min - 1000000))" -ge 172980 ] \
+    || fail "a target fell short of 48 hours plus the minimum jitter: $((min - 1000000))s"
+  [ "$((max - 1000000))" -le 173220 ] \
+    || fail "a target exceeded 48 hours plus the maximum jitter: $((max - 1000000))s"
+  [ "$((min - 1000000))" -gt 86400 ] || fail "the period collapsed to a day or less"
+  [ "$((max - 1000000))" -lt 259200 ] || fail "the period stretched to three days or more"
+  pass "every target is 48 hours plus 3-7 minutes from its base, never 24 or 72"
+}
+
+test_successive_firings_drift_rather_than_repeating_one_time() {
+  local home i first target distinct
+  home=$(make_home drift)
+  first=''
+  distinct=0
+  for i in 1 2 3 4 5 6 7 8; do
+    target=$(FM_CURATION_NUDGE_NOW=$(( 1000000 + i )) run_nudge "$home" --draw 1) \
+      || fail "the scheduler refused to draw"
+    # Strip the identical base so only the jitter is compared.
+    target=$(( target - 1000000 - i ))
+    if [ -z "$first" ]; then
+      first=$target
+    elif [ "$target" != "$first" ]; then
+      distinct=1
+    fi
+  done
+  [ "$distinct" -eq 1 ] \
+    || fail "eight draws from the same base all produced the same jitter, so nothing drifts"
+  pass "jitter is drawn fresh per firing, so successive fires drift"
+}
+
+# --- the cadence and the wake -----------------------------------------------
+
+test_arming_schedules_the_first_sweep_without_waking_anyone() {
+  local home out due
+  home=$(make_home first)
+  run_nudge "$home" --arm >/dev/null || fail "arming failed"
+
+  out=$(run_nudge "$home")
+  [ -z "$out" ] || fail "arming a home must not immediately wake it: $out"
+  due=$(cat "$home/state/curation-nudge.next-due" 2>/dev/null || true)
+  case "${due:-}" in ''|*[!0-9]*) fail "the first sweep was not scheduled" ;; esac
+  [ ! -f "$home/state/curation-nudge.last-fire" ] \
+    || fail "scheduling the first sweep must not record a firing"
+  pass "arming schedules the first sweep and stays silent"
+}
+
+test_a_firing_reaches_a_session_as_a_wake_that_names_what_is_due() {
+  local home out due later report
+  home=$(make_home fire)
+  run_nudge "$home" >/dev/null
+  due=$(cat "$home/state/curation-nudge.next-due")
+
+  # One second before the target the sweep is silent; at the target it speaks.
+  out=$(FM_CURATION_NUDGE_NOW=$(( due - 1 )) run_nudge "$home")
+  [ -z "$out" ] || fail "a sweep before the target must not fire: $out"
+
+  out=$(FM_CURATION_NUDGE_NOW="$due" run_nudge "$home")
+  assert_contains "$out" 'CURATION_NUDGE:' "the firing must print a wake line"
+  assert_contains "$out" 'curation sweep is due' "the wake must name what is due"
+  assert_contains "$out" 'data/learnings.md' "the wake must name the files to measure"
+  assert_contains "$out" 'data/captain.md' "the wake must name both files to measure"
+  assert_contains "$out" 'session-start digest' "the wake must ask for the digest share"
+  assert_contains "$out" 'All-Ships' "the wake must name the notice firstmate then dispatches"
+  [ "$(printf '%s\n' "$out" | grep -c .)" -eq 1 ] \
+    || fail "the wake must be one line, so a watcher sweep surfaces it whole"
+
+  later=$(cat "$home/state/curation-nudge.next-due")
+  [ "$later" -gt "$due" ] || fail "firing must schedule the next sweep"
+  [ "$(cat "$home/state/curation-nudge.last-fire")" = "$due" ] \
+    || fail "firing must record when it actually fired"
+
+  report="$home/state/curation-nudge.report"
+  assert_grep 'reading: this vessel data/learnings.md 2 lines' "$report" \
+    "the record must carry this vessel's own measurement"
+  assert_grep "off the five-minute grid" "$report" \
+    "the record must state the scheduled target and its off-grid minute"
+  pass "a firing wakes a session with one line naming what is due"
+}
+
+test_the_wake_prompts_measurement_and_claims_nothing_about_another_vessel() {
+  local home out
+  home=$(make_home claims)
+  out=$(run_nudge "$home" --force)
+  assert_contains "$out" 'measure its OWN' "the payload must be a prompt to measure"
+  assert_contains "$out" 'Nothing is claimed about any other vessel.' \
+    "the payload must disclaim any reading of another vessel"
+  assert_contains "$out" "This vessel's own reading" \
+    "this seat's own numbers must be marked as its own"
+  assert_contains "$out" 'decide for itself' \
+    "each vessel decides its own split, so the payload must not decide one"
+  assert_not_contains "$out" 'prune' \
+    "the nudge asks for a measurement; it must not prescribe the curation itself"
+  pass "the payload prompts each vessel to measure and decide for itself"
+}
+
+test_a_home_that_was_off_schedules_one_sweep_ahead_rather_than_catching_up() {
+  local home due first second
+  home=$(make_home away)
+  run_nudge "$home" >/dev/null
+  due=$(cat "$home/state/curation-nudge.next-due")
+
+  # A week past the target: it fires once and re-bases on now, so the next sweep
+  # is a fresh 48 hours away instead of a backlog of missed windows.
+  first=$(FM_CURATION_NUDGE_NOW=$(( due + 604800 )) run_nudge "$home")
+  assert_contains "$first" 'CURATION_NUDGE:' "a long-overdue sweep must fire"
+  second=$(FM_CURATION_NUDGE_NOW=$(( due + 604801 )) run_nudge "$home")
+  [ -z "$second" ] || fail "the sweep must not fire again immediately: $second"
+  [ "$(cat "$home/state/curation-nudge.next-due")" -ge $(( due + 604800 + 172980 )) ] \
+    || fail "the next sweep must be a full period from the firing, not from the missed target"
+  pass "a home that was off fires once and re-bases instead of catching up"
+}
+
+# --- the boundary: no Bridge, no network, no repository ---------------------
+
+test_no_bridge_or_network_call_path_exists_in_the_script() {
+  local body hit
+  # Executable lines only: the header explains the boundary in prose, and prose
+  # is not a call path. Comment lines and blank lines are stripped first.
+  body=$(grep -v '^[[:space:]]*#' "$NUDGE" | grep -v '^[[:space:]]*$')
+  for hit in 'fm-bridge' 'bridge-axi' 'bridge_' 'gh-axi' 'curl' 'wget' 'nc -' 'ssh '; do
+    printf '%s\n' "$body" | grep -Fq "$hit" \
+      && fail "an executable line reaches for '$hit'; this check must raise a wake and nothing else"
+  done
+  # git and gh as commands, not as substrings of unrelated words.
+  printf '%s\n' "$body" | grep -Eq '(^|[^A-Za-z0-9_-])(git|gh)([[:space:]]|$)' \
+    && fail "an executable line invokes git or gh; this check touches no repository and no forge"
+  pass "no executable line reaches Bridge, the network, or a repository"
+}
+
+test_no_bridge_or_network_binary_is_ever_invoked() {
+  local home fakebin trip tool
+  home=$(make_home tripwire)
+  fakebin=$(fm_fakebin "$home")
+  trip="$home/tripped"
+  mkdir -p "$trip"
+  # Tripwires named after every route out of this machine. If any mode reaches
+  # for one of them, its name appears in $trip and the case fails - an assertion
+  # by execution, not by reading the source.
+  for tool in fm-bridge-relay.sh bridge-axi gh gh-axi git curl wget ssh scp; do
+    cat > "$fakebin/$tool" <<SH
+#!/usr/bin/env bash
+: > "$trip/\$(basename "\$0")"
+exit 0
+SH
+    chmod +x "$fakebin/$tool"
+  done
+
+  PATH="$fakebin:$PATH" run_nudge "$home" --arm >/dev/null || fail "arming failed"
+  PATH="$fakebin:$PATH" run_nudge "$home" >/dev/null
+  PATH="$fakebin:$PATH" run_nudge "$home" --force >/dev/null
+  PATH="$fakebin:$PATH" run_nudge "$home" --status >/dev/null
+  PATH="$fakebin:$PATH" run_nudge "$home" --armed >/dev/null
+  PATH="$fakebin:$PATH" run_nudge "$home" --draw 3 >/dev/null
+
+  tool=$(ls -A "$trip")
+  [ -z "$tool" ] || fail "the nudge invoked: $tool"
+  pass "no mode invokes Bridge, a forge, a network client, or git"
+}
+
+test_the_armed_shim_carries_no_call_path_of_its_own() {
+  local home shim
+  home=$(make_home shim)
+  run_nudge "$home" --arm >/dev/null || fail "arming failed"
+  shim="$home/state/curation-nudge.check.sh"
+  grep -Eq 'bridge|curl|wget|ssh' "$shim" \
+    && fail "the generated watcher shim reaches beyond this machine"
+  assert_grep 'fm-curation-nudge.sh' "$shim" "the shim must exec the round it is a seam for"
+  pass "the generated shim is a seam and carries no call path of its own"
+}
+
+# --- arming, and the health reading that is not a unit's own claim ----------
+
+test_arming_is_idempotent_and_registers_the_check() {
+  local home first second
+  home=$(make_home arm)
+
+  run_nudge "$home" --arm >/dev/null || fail "arming failed"
+  [ -x "$home/state/curation-nudge.check.sh" ] || fail "the watcher check was not written"
+  [ -f "$home/state/curation-nudge.check-trust" ] || fail "the watcher check was not registered"
+  [ "$(fm_mode_of "$home/state/curation-nudge.check.sh")" = 700 ] \
+    || fail "the watcher check must be private and executable"
+  first=$(cat "$home/state/curation-nudge.check.sh")
+
+  run_nudge "$home" --arm >/dev/null || fail "re-arming failed"
+  second=$(cat "$home/state/curation-nudge.check.sh")
+  [ "$first" = "$second" ] || fail "re-arming rewrote an already-correct check"
+  pass "arming writes a private registered check and converges on re-run"
+}
+
+test_a_healthy_nudge_reports_nothing() {
+  local home out
+  home=$(make_home healthy)
+  run_nudge "$home" --arm >/dev/null
+  run_nudge "$home" >/dev/null
+  out=$(run_nudge "$home" --armed)
+  [ -z "$out" ] || fail "a scheduled, armed nudge must be silent: $out"
+  pass "an armed nudge with a live target says nothing"
+}
+
+test_stopping_the_nudge_makes_the_health_reading_fail() {
+  local home out due
+  home=$(make_home stopped)
+  run_nudge "$home" --arm >/dev/null
+  run_nudge "$home" >/dev/null
+  out=$(run_nudge "$home" --force)
+  assert_contains "$out" 'CURATION_NUDGE:' "the nudge must fire before it is stopped"
+  due=$(cat "$home/state/curation-nudge.next-due")
+
+  # Stop it the way a dead timer stops: the schedule stays, the shim stays, and
+  # nothing executes it. Every surface still looks armed; only the target going
+  # further and further past due gives it away.
+  out=$(FM_CURATION_NUDGE_NOW=$(( due + 7200 )) run_nudge "$home" --armed)
+  assert_contains "$out" 'CURATION_NUDGE:' "a target nothing executes must be loud"
+  assert_contains "$out" 'nothing is executing it' \
+    "the reading must say the schedule stands and nothing is running it"
+  assert_contains "$out" 'it last fired' \
+    "the reading must report when the nudge last actually fired"
+  pass "a nudge that stopped firing reports a bad reading rather than staying quiet"
+}
+
+test_a_nudge_that_never_scheduled_a_target_is_loud() {
+  local home out shim
+  home=$(make_home notrigger)
+  run_nudge "$home" --arm >/dev/null
+  shim="$home/state/curation-nudge.check.sh"
+
+  # The bridge-notify-poll.timer shape: armed, loaded, enabled - and no next
+  # trigger at all. Fresh arming is not a fault, so this only speaks once the
+  # shim has been sitting there longer than a sweep could plausibly take.
+  out=$(run_nudge "$home" --armed)
+  [ -z "$out" ] || fail "a freshly armed home must not be called stopped: $out"
+
+  out=$(FM_CURATION_NUDGE_NOW=$(( $(date +%s) + 7200 )) run_nudge "$home" --armed)
+  assert_contains "$out" 'never scheduled a next sweep' \
+    "an armed home with no next trigger must say so"
+  [ -f "$shim" ] || fail "the case must not have removed the shim"
+  pass "an armed home with no next trigger is loud, exactly where a unit state would lie"
+}
+
+test_an_unarmed_home_is_loud() {
+  local home out
+  home=$(make_home unarmed)
+  out=$(run_nudge "$home" --armed)
+  assert_contains "$out" 'is not armed' "an unarmed home must say nothing is watching"
+
+  run_nudge "$home" --arm >/dev/null
+  rm -f "$home/state/curation-nudge.check.sh"
+  out=$(run_nudge "$home" --armed)
+  assert_contains "$out" 'is not armed' "removing the check must make the reading fail"
+  pass "an unarmed home, and one whose check was removed, are both loud"
+}
+
+test_status_reports_the_schedule_without_advancing_it() {
+  local home out before
+  home=$(make_home status)
+  run_nudge "$home" >/dev/null
+  before=$(cat "$home/state/curation-nudge.next-due")
+
+  out=$(run_nudge "$home" --status)
+  assert_contains "$out" 'next: ' "--status must print the next scheduled sweep"
+  assert_contains "$out" 'last-fire: never' "--status must say when it last actually fired"
+  assert_contains "$out" 'reading: this vessel data/learnings.md 2 lines' \
+    "--status must print this vessel's own readings"
+  assert_contains "$out" 'each vessel measures its own' \
+    "--status must state the share it deliberately does not measure"
+  [ "$(cat "$home/state/curation-nudge.next-due")" = "$before" ] \
+    || fail "--status must not advance the schedule"
+  [ ! -f "$home/state/curation-nudge.last-fire" ] \
+    || fail "--status must not record a firing"
+  pass "--status reports the schedule and readings without advancing anything"
+}
+
+test_a_disabled_nudge_stays_out_of_composing_suites() {
+  local home out
+  home=$(make_home disabled)
+  run_nudge "$home" --arm >/dev/null
+
+  out=$(FM_CURATION_NUDGE_DISABLE=1 run_nudge "$home")
+  [ -z "$out" ] || fail "the detect mode must be silent when disabled: $out"
+  out=$(FM_CURATION_NUDGE_DISABLE=1 run_nudge "$home" --armed)
+  [ -z "$out" ] || fail "the armed reading must be silent when disabled: $out"
+  out=$(FM_CURATION_NUDGE_DISABLE=1 run_nudge "$home" --status)
+  assert_contains "$out" 'cadence: ' "--status must ignore the disable switch"
+  out=$(FM_CURATION_NUDGE_DISABLE=1 run_nudge "$home" --draw 1)
+  case "$out" in ''|*[!0-9]*) fail "--draw must ignore the disable switch" ;; esac
+  pass "the disable switch silences only the reporting modes"
+}
+
+test_bootstrap_arms_the_nudge_and_asks_whether_it_is_still_running() {
+  assert_grep 'fm-curation-nudge.sh --arm' "$ROOT/bin/fm-bootstrap.sh" \
+    "bootstrap must arm the nudge, so no home depends on remembering to"
+  assert_grep 'fm-curation-nudge.sh" --armed' "$ROOT/bin/fm-bootstrap.sh" \
+    "every session start must ask whether this home's nudge is still running"
+  assert_grep 'CURATION_NUDGE' "$ROOT/AGENTS.md" \
+    "AGENTS.md section 13 must list the nudge among the bootstrap diagnostics"
+  assert_grep 'CURATION_NUDGE' "$ROOT/.agents/skills/bootstrap-diagnostics/SKILL.md" \
+    "the diagnostics skill must own how the line is handled"
+  pass "the nudge is armed and re-measured by bootstrap, and its line has an owner"
+}
+
+test_the_scheduler_and_the_agents_contract_agree_on_two_hops() {
+  local agents
+  agents="$ROOT/AGENTS.md"
+  assert_grep 'dispatch a crewmate to notify the whole fleet through Bridge All-Ships rather than writing to Bridge directly' \
+    "$agents" "section 12 must still own the two-hop rule this nudge relies on"
+  pass "the wake's second hop is the contract AGENTS.md section 12 already owns"
+}
+
+test_the_scheduler_never_lands_on_the_five_minute_grid
+test_a_window_with_no_off_grid_minute_refuses_rather_than_scheduling_on_it
+test_the_period_is_forty_eight_hours
+test_successive_firings_drift_rather_than_repeating_one_time
+test_arming_schedules_the_first_sweep_without_waking_anyone
+test_a_firing_reaches_a_session_as_a_wake_that_names_what_is_due
+test_the_wake_prompts_measurement_and_claims_nothing_about_another_vessel
+test_a_home_that_was_off_schedules_one_sweep_ahead_rather_than_catching_up
+test_no_bridge_or_network_call_path_exists_in_the_script
+test_no_bridge_or_network_binary_is_ever_invoked
+test_the_armed_shim_carries_no_call_path_of_its_own
+test_arming_is_idempotent_and_registers_the_check
+test_a_healthy_nudge_reports_nothing
+test_stopping_the_nudge_makes_the_health_reading_fail
+test_a_nudge_that_never_scheduled_a_target_is_loud
+test_an_unarmed_home_is_loud
+test_status_reports_the_schedule_without_advancing_it
+test_a_disabled_nudge_stays_out_of_composing_suites
+test_bootstrap_arms_the_nudge_and_asks_whether_it_is_still_running
+test_the_scheduler_and_the_agents_contract_agree_on_two_hops

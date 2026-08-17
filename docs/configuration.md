@@ -607,6 +607,26 @@ Each reading names the hop it speaks for - `released`, `pinned`, or `installed` 
 It never updates anything, never acts on or measures another vessel, and never reports an all-clear for a reading it could not take.
 `FM_CURRENCY_ROUND_DISABLE=1` silences only the reporting modes, for suites that compose `bin/fm-bootstrap.sh`.
 
+### Knowledge-file curation nudge
+
+`bin/fm-curation-nudge.sh` is the cadence behind the instruction to prune `data/learnings.md` and `data/captain.md` rather than append to them.
+That instruction had no mechanism, so it was carried by memory, and on this seat the pair grew to 86% of the whole session-start digest before anything re-measured it.
+[curation-nudge.md](curation-nudge.md) owns the evidence, the timing contract, the health property, and the scope boundary; the script's header owns its flags, state files, and mechanics.
+
+The locked bootstrap step arms it with `--arm`, which writes and registers this home's `state/curation-nudge.check.sh` watcher check and is idempotent, exactly as the currency round's arming is.
+The watcher then runs it on the ordinary `state/*.check.sh` sweep, and it self-gates to its own schedule, so all but one sweep in 48 hours is a single file read.
+
+The period is 48 hours rather than daily, because the currency round already owns the daily slot and a curation sweep at that rate is noise.
+Each firing draws 180-420 seconds of fresh jitter for the next target, so successive fires drift, and any drawn target whose minute is a multiple of five is discarded and re-drawn: cron defaults, systemd timers, monitoring pollers and the watcher sweep itself all cluster on those boundaries.
+`FM_CURATION_NUDGE_INTERVAL`, `FM_CURATION_NUDGE_JITTER_MIN`, and `FM_CURATION_NUDGE_JITTER_MAX` move that window; `FM_CURATION_NUDGE_OVERDUE` sets how far past its target a sweep may sit before `--armed` calls the cadence stopped.
+
+Every session start also runs `--armed`, which reports `CURATION_NUDGE:` when this home is unarmed, has never scheduled a sweep, or has a scheduled sweep nothing is executing.
+That reading is taken from `state/curation-nudge.last-fire` and `state/curation-nudge.next-due` - what the work produced - and never from the check's own claim to be armed, because a timer's own surfaces keep reporting health long after it stopped firing.
+
+The nudge raises a wake and nothing else: it never writes to Bridge, never opens a network connection, and never touches a git repository.
+Firstmate reads the wake and dispatches a crewmate to send the All-Ships notice, per `AGENTS.md` section 12.
+`FM_CURATION_NUDGE_DISABLE=1` silences only the reporting modes, for suites that compose `bin/fm-bootstrap.sh`.
+
 ## X mode (.env)
 
 X mode lets a firstmate instance answer public `@myfirstmate` mentions and act on normal reversible mention requests through firstmate's normal lifecycle.

@@ -67,6 +67,13 @@ export FM_CURRENCY_ROUND_DISABLE=1
 # deliberately NOT silenced, so the bootstrap suites still exercise arming.
 export FM_MEMORY_ALARM_DISABLE=1
 
+# The 48-hour curation nudge is armed by that same locked bootstrap step and has
+# the same property: every fixture home is unarmed, so every suite that composes
+# fm-bootstrap.sh would otherwise see its diagnostic. Silence the reporting
+# modes suite-wide; tests/fm-curation-nudge.test.sh sets it back to 0. --arm is
+# deliberately NOT silenced, so the bootstrap suites still exercise arming.
+export FM_CURATION_NUDGE_DISABLE=1
+
 # bin/fm-nm-path-lib.sh resolves the no-mistakes CLI from the seat's install
 # location as well as from PATH, so a fixture that strips the CLI off PATH is no
 # longer stripped: on a developer machine it would quietly reach the REAL

@@ -123,6 +123,14 @@ Two facts bind wherever that wake is read.
 Every claim of currency names its hop - `released`, `pinned`, or `installed` - and this round measures only the released and installed hops for this seat, so a clean round never means the fleet is current.
 A reading the round could not take is reported as unmeasured and never as current, because an instrument that cannot read must not be relayed as an all-clear.
 
+### Re-measuring the knowledge files
+
+Section 10's instruction to prune rather than append also has a mechanism now, for the same reason: the locked bootstrap step arms `bin/fm-curation-nudge.sh` on the watcher, and every session start reports `CURATION_NUDGE:` when this home's nudge is unarmed, has never scheduled a sweep, or has a sweep nothing is running.
+`docs/configuration.md` "Knowledge-file curation nudge" and `docs/curation-nudge.md` own the 48-hour cadence, the off-grid jitter, and the scope; the nudge arrives as an ordinary `check:` wake under section 8.
+Two facts bind wherever that wake is read.
+It is a prompt to measure and never a claim about any vessel's files, because these files are per-home and gitignored and no seat can see another's, so each vessel measures its own pair and decides its own split.
+The nudge itself never writes to Bridge: firstmate reads the wake and dispatches a crewmate to send the All-Ships notice, exactly as section 12 requires of every fleet notice.
+
 ## 4. Harness and runtime dispatch
 
 Load `harness-adapters` before every spawn or recovery and before trust handling, skill invocation, interrupt, exit, resume, or adapter verification.
@@ -478,7 +486,7 @@ Bootstrap separately detects when the primary checkout's own default branch has 
 
 These skills are not captain-invocable; load them only at their precise triggers.
 
-- `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `ROLE_INVALID:`, `ROLE_OVERLAY_MISSING:`, `NEEDS_GH_AUTH`, `TANGLE:`, `SELF_DRIFT:`, `CREW_DISPATCH: invalid`, `CURRENCY_BASE:`, `LAVISH_ACCESS:`, `BACKLOG_STALE:`, `BACKLOG_UNREADABLE:`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `NUDGE_SECONDMATES:`, `AXI_SUITE_UPDATED:`, `AXI_SUITE_REVIEW:`, `AXI_SUITE_STUCK:`, `AXI_SUITE_SHADOWED:`, `AXI_SUITE_SHADOW_UNKNOWN:`, `FIRSTMATE_UPDATE_AVAILABLE:`, `FIRSTMATE_UPDATE_STUCK:`, `FORK_SYNC:`, `FORK_SYNC_STUCK:`, `CURRENCY_ROUND:`, `MEMORY_ALARM:`, `GROSSREINSCHIFF:`, `RUN_READER:`, `DELIVERY_UNIT:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
+- `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `ROLE_INVALID:`, `ROLE_OVERLAY_MISSING:`, `NEEDS_GH_AUTH`, `TANGLE:`, `SELF_DRIFT:`, `CREW_DISPATCH: invalid`, `CURRENCY_BASE:`, `LAVISH_ACCESS:`, `BACKLOG_STALE:`, `BACKLOG_UNREADABLE:`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `NUDGE_SECONDMATES:`, `AXI_SUITE_UPDATED:`, `AXI_SUITE_REVIEW:`, `AXI_SUITE_STUCK:`, `AXI_SUITE_SHADOWED:`, `AXI_SUITE_SHADOW_UNKNOWN:`, `FIRSTMATE_UPDATE_AVAILABLE:`, `FIRSTMATE_UPDATE_STUCK:`, `FORK_SYNC:`, `FORK_SYNC_STUCK:`, `CURRENCY_ROUND:`, `MEMORY_ALARM:`, `CURATION_NUDGE:`, `GROSSREINSCHIFF:`, `RUN_READER:`, `DELIVERY_UNIT:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
 - `diagnostic-reasoning` - load before scoping a reported bug and before acting on a diagnostic report.
 - `ask-user-authority` - load before deciding any ask-user finding, regardless of the project's `yolo` posture.
 - `harness-adapters` - load before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
