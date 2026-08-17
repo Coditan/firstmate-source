@@ -213,6 +213,23 @@ test_provenance_records_the_measurement_and_its_source() {
   pass "the provenance records the measurement, its source, and his words"
 }
 
+# A quotation is either verbatim or it is not. An automated documentation step
+# silently smoothed the captain's own spelling on this page on 2026-08-17, on the
+# one page whose entire purpose is attribution fidelity, and firstmate ruled it
+# restored. This is the guard against the next well-meaning correction: it pins
+# the misspelling he actually wrote, and bars the tidied form from the quotation.
+test_his_quoted_spelling_survives_correction() {
+  assert_grep 'have the dameno tell the fleet to use the skill' "$PROV" \
+    "the captain's quoted spelling must stay exactly as he wrote it"
+  assert_no_grep 'have the daemon tell the fleet to use the skill' "$PROV" \
+    "the quotation must not carry the tidied spelling"
+  # The note explaining the spelling has to sit outside the quotation, or the
+  # explanation becomes another edit of his words.
+  assert_grep 'The spelling in that quotation is his and is reproduced as he wrote it' "$PROV" \
+    "the odd spelling must be explained beside the quotation rather than inside it"
+  pass "the captain's quoted spelling survives an automated correction"
+}
+
 test_the_adoption_notice_is_a_draft_with_a_delivery_condition() {
   assert_grep 'NOT SENT' "$NOTICE" \
     "the adoption notice must be marked unsent"
@@ -258,5 +275,6 @@ test_the_sort_is_by_tier_then_by_unblocked_findings
 test_middle_and_high_findings_are_routed_as_durable_decisions
 test_the_skill_states_what_it_does_not_cover
 test_provenance_records_the_measurement_and_its_source
+test_his_quoted_spelling_survives_correction
 test_the_adoption_notice_is_a_draft_with_a_delivery_condition
 test_the_skill_is_reachable_from_the_instruction_surface

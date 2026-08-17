@@ -71,7 +71,12 @@ That leaves the conflict visible to him, which is where the decision to tighten 
 
 ## The architecture, which is also his
 
-> "add that to the skill and have the daemon tell the fleet to use the skill"
+> "add that to the skill and have the dameno tell the fleet to use the skill"
+
+The spelling in that quotation is his and is reproduced as he wrote it; he meant the daemon that fires the cadence.
+It is noted here rather than corrected in place, because a quotation is either verbatim or it is not.
+This one was silently normalised once already, by an automated documentation step on 2026-08-17, and restored on firstmate's ruling: a reader who cannot trust the spelling of a quotation on this page cannot trust its attributions either, and attribution is the only thing this page is for.
+`tests/fm-codebase-sweep.test.sh` now fails if the spelling is smoothed again.
 
 The obligation lives in the skill and the cadence only fires.
 A timer that swept eleven repositories itself would be unauditable, would spend quota nobody approved, and would reach into homes this seat does not own.
