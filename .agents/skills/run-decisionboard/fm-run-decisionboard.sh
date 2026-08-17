@@ -376,13 +376,16 @@ uid_in_chrome() {  # <needle>
 # chrome (the Send buttons, the message box) are outside the artifact frame and
 # are deliberately excluded.
 form_inventory() {
-  snapshot | parse_inventory
+  snapshot | parse_forms inventory
 }
 
-# parse_inventory - the parser itself, over a folded snapshot on stdin. Split
-# from form_inventory so `parse` can run it against a recorded snapshot.
-parse_inventory() {
-  awk '
+form_subtree() {  # <decision-number>
+  snapshot | parse_forms subtree "$1"
+}
+
+parse_forms() {  # <inventory|subtree> [decision-number]
+  local mode=$1 target=${2:-}
+  awk -v mode="$mode" -v target="$target" '
     {
       line = $0
       indent = match(line, /[^ ]/) - 1
@@ -404,15 +407,27 @@ parse_inventory() {
     }
     role == "form" {
       forms++; form_indent = indent
-      printf "%d\t%s\t%s\t%s\n", forms, role, uid, name
+      if (mode == "inventory") {
+        printf "%d\t%s\t%s\t%s\n", forms, role, uid, name
+      } else if (forms == target) {
+        print line
+      }
       next
     }
     form_indent >= 0 && indent <= form_indent { form_indent = -1 }
-    form_indent >= 0 && (role == "radio" || role == "textbox" || role == "button" || role == "checkbox") {
+    form_indent >= 0 && mode == "subtree" && forms == target {
+      print line
+      next
+    }
+    form_indent >= 0 && mode == "inventory" && (role == "radio" || role == "textbox" || role == "button" || role == "checkbox") {
       properties = (body ~ /(^| )multiline( |$)/ ? "multiline" : "")
       printf "%d\t%s\t%s\t%s\t%s\n", forms, role, uid, name, properties
     }
   '
+}
+
+parse_inventory() {
+  parse_forms inventory
 }
 
 # --- query ------------------------------------------------------------------
@@ -608,16 +623,16 @@ cmd_answer() {
   # board.js reports what it queued in the form's own .fm-queued box, and says so
   # in is-warn colour when it queued nothing. Read that back rather than assuming
   # the click landed.
-  local snap
-  snap=$(snapshot)
-  case "$snap" in
+  local subtree queued_value
+  subtree=$(form_subtree "$target_decision")
+  case "$subtree" in
     *"Nichts vorgemerkt"*)
       die "answer: the board reports it queued nothing for decision $target_decision" ;;
-    *"Vorgemerkt"*)
-      good "decision $target_decision queued '$option'${note_text:+ with a note}" ;;
-    *)
-      die "answer: the board shows no queued answer for decision $target_decision" ;;
   esac
+  queued_value=$(printf '%s\n' "$subtree" | sed -n 's/.*"Vorgemerkt: \([^"]*\)".*/\1/p' | head -1)
+  [ -n "$queued_value" ] \
+    || die "answer: the board shows no queued option value for decision $target_decision"
+  good "decision $target_decision queued '$queued_value'${note_text:+ with a note}"
 }
 
 # --- send -------------------------------------------------------------------

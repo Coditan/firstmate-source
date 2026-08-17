@@ -422,7 +422,16 @@ test_answer_reresolves_the_exact_option_name() {
 case "$1" in
   snapshot)
     if [ "$(wc -l < "$CLICK_LOG" 2>/dev/null || printf 0)" -ge 2 ]; then
-      printf 'uid=g3:1_0 RootWebArea "Vorgemerkt"\n'
+      cat <<'SNAP'
+uid=g3:2_0 RootWebArea "Editor" url="http://example.invalid/session/x"
+  uid=g3:2_1 Iframe
+    uid=g3:2_2 RootWebArea "Board" url="http://example.invalid/artifact/x/index.html"
+      uid=g3:2_3 form
+        uid=g3:2_4 radio "Not Yes"
+        uid=g3:2_5 radio "Yes" checked
+        uid=g3:2_6 button "Antwort vormerken"
+        uid=g3:2_7 StaticText "Vorgemerkt: yes-value"
+SNAP
     else
       cat <<'SNAP'
 uid=g3:1_0 RootWebArea "Editor" url="http://example.invalid/session/x"
@@ -451,6 +460,35 @@ SH
   pass "answer preserves the exact option name across fresh snapshots"
 }
 
+test_answer_ignores_a_neighbours_queued_confirmation() {
+  local answer_tmp fakebin snap out status=0
+  fm_test_tmproot answer_tmp fm-run-db-neighbour
+  fakebin=$(fm_fakebin "$answer_tmp")
+  cat > "$fakebin/chrome-devtools-axi" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$fakebin/chrome-devtools-axi"
+  snap="$answer_tmp/neighbour.txt"
+  cat > "$snap" <<'SNAP'
+uid=g6:1_0 RootWebArea "Editor" url="http://example.invalid/session/x"
+  uid=g6:1_1 Iframe
+    uid=g6:1_2 RootWebArea "Board" url="http://example.invalid/artifact/x/index.html"
+      uid=g6:1_3 form
+        uid=g6:1_4 radio "Yes"
+        uid=g6:1_5 button "Hilfe"
+      uid=g6:1_6 form
+        uid=g6:1_7 radio "No"
+        uid=g6:1_8 button "Antwort vormerken"
+        uid=g6:1_9 StaticText "Vorgemerkt: neighbour-value"
+SNAP
+  out=$(PATH="$fakebin:$PATH" FM_RUN_DECISIONBOARD_SNAPSHOT="$snap" \
+    "$DRIVER" answer --option "Yes" 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "answer accepted another decision's queued confirmation"$'\n'"$out"
+  assert_contains "$out" "decision 1" "answer did not scope its failure to the target decision"
+  pass "answer ignores queued confirmation from another decision"
+}
+
 test_driver_ships_beside_the_skill
 test_help_lists_the_whole_loop
 test_fixture_declares_the_documented_controls
@@ -471,3 +509,4 @@ test_shot_refuses_a_stale_staging_file
 test_shot_accepts_a_same_size_refresh
 test_doctor_accepts_a_same_size_refresh
 test_answer_reresolves_the_exact_option_name
+test_answer_ignores_a_neighbours_queued_confirmation
