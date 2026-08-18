@@ -829,26 +829,42 @@ test_interrupted_removal_restores_clone_and_registry() {
 # --- documented invocations ---------------------------------------------------
 
 test_documented_dry_run_invocation_is_accepted() {
-  local skill home line rc=0
+  local skill invocation args_text home rc found=0 index=0
+  local -a args
   skill="$ROOT/.agents/skills/project-management/SKILL.md"
   [ -f "$skill" ] || fail "the project-management skill is no longer at $skill"
-  assert_grep "fm-project-remove.sh <project-name> --captain-approved --dry-run" "$skill" \
-    "the skill's dry-run invocation does not show --captain-approved, which the helper requires"
-  while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    case "$line" in
-      *--captain-approved*) ;;
-      *) fail "the skill shows a fm-project-remove.sh --dry-run invocation the helper refuses: $line" ;;
+  while IFS= read -r invocation; do
+    [ -n "$invocation" ] || continue
+    found=1
+    index=$((index + 1))
+    args_text=${invocation#bin/fm-project-remove.sh }
+    args_text=${args_text//<project-name>/alpha}
+    read -r -a args <<< "$args_text"
+    home=$(make_home "documented-invocation-$index")
+    rc=0
+    run_remove "$home" "${args[@]}" > "$home/out" 2> "$home/err" \
+      || rc=$?
+    [ "$rc" = 0 ] \
+      || fail "documented invocation refused: $invocation"
+    case " ${args[*]} " in
+      *" --dry-run "*)
+        assert_grep "PASS: project alpha removal safety checks passed." "$home/out" \
+          "documented dry-run invocation did not produce a verdict: $invocation"
+        [ -d "$home/projects/alpha" ] \
+          || fail "documented dry-run invocation removed the clone: $invocation"
+        assert_grep "- alpha " "$home/data/projects.md" \
+          "documented dry-run invocation removed the registry entry: $invocation"
+        ;;
+      *)
+        [ ! -d "$home/projects/alpha" ] \
+          || fail "documented removal invocation left the clone in place: $invocation"
+        assert_no_grep "- alpha " "$home/data/projects.md" \
+          "documented removal invocation left the registry entry in place: $invocation"
+        ;;
     esac
-  done <<EOF
-$(grep -n -- '--dry-run' "$skill" | grep -- 'fm-project-remove' || true)
-EOF
-  home=$(make_home documented-dry-run)
-  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
-  expect_code 0 "$rc" "documented dry-run invocation"
-  assert_grep "PASS: project alpha removal safety checks passed." "$home/out" \
-    "the documented dry-run invocation did not produce a verdict"
-  pass "the documented dry-run invocation is one the helper accepts"
+  done < <(awk 'match($0, /`bin\/fm-project-remove\.sh [^`]+`/) { print substr($0, RSTART + 1, RLENGTH - 2) }' "$skill")
+  [ "$found" = 1 ] || fail "project-management skill documents no fm-project-remove.sh invocation"
+  pass "documented project-removal invocations are accepted by the helper"
 }
 
 test_requires_captain_approval
