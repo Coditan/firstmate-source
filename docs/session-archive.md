@@ -48,6 +48,10 @@ bin/fm-transcript-refresh.sh
 
 It rebuilds both stores from the raw transcripts and then re-runs the detector against its own output, requiring zero hits.
 There is no incremental path and no build state, because a full rebuild of a two-thousand-session store costs about 95 s and a build state is one more thing that can be quietly wrong.
+The archive retains sessions the raw store no longer has: a rebuild rewrites every session it can still read and removes nothing, so a session deleted, rotated away, or renamed under `~/.claude` or `~/.codex` keeps its reduced copy in the archive.
+This is intended rather than a defect, because the archive exists precisely so that what was said survives the clearing of the session that said it, and outliving the raw store is the point.
+The archive therefore does not mirror a deletion, so removing material from the archive is a deliberate separate act and never a side effect of a rebuild.
+`_index.tsv` is regenerated from the sessions the rebuild could still read, so a retained session whose raw source is gone stays findable by a plain unfiltered search but is not listed in the index, and a search narrowed by `--since` or `--cwd` will therefore not reach it.
 The raw stores are read-only inputs; nothing under `~/.claude` or `~/.codex` is written, moved, or removed.
 A raw store that does not exist on this vessel is reported and skipped, never treated as a store that happened to be empty.
 

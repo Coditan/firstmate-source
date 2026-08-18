@@ -104,6 +104,10 @@ must return zero hits. **That statement covers the derivative and nothing else.
 What the reduction discarded was never examined for credentials at all.** The
 raw stores remain unredacted where they are.
 
+The archive keeps sessions the raw store no longer has, and that retention is intended.
+A rebuild rewrites every session it can still read and removes nothing.
+The archive does not mirror a deletion.
+
 A second bound, equally binding: **the redaction is exactly as good as
 `bin/fm-transcript-patterns/patterns.txt` and not one bit better.** What the
 detector never knew, it never removed.
