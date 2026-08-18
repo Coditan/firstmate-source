@@ -1,0 +1,43 @@
+# fm-transcript patterns - read by the tool, NEVER typed on a command line.
+#
+# Format:  <class><TAB><flags><TAB><regex>
+#   flags: "whole"  -> redact the entire match
+#          "g<N>"   -> redact only capture group N, keep the rest as context
+#
+# SELF-SAFETY RULE (this file's own text must not match its own patterns):
+# every literal trigger substring is broken with a one-character class, e.g.
+# "sk[-]ant[-]" matches the real prefix but the text "sk[-]ant[-]" does not
+# match it back. That keeps this file, and any transcript that recorded its
+# authoring, from registering as a hit forever after. sc1's trap #6, closed at
+# the authoring step rather than only at the running step.
+
+# ---------- prefix-anchored: a known vendor prefix introduces the value ----------
+anthropic-key	whole	sk[-]ant[-](?:api03|admin01|oat01)[-][A-Za-z0-9_\-]{20,}
+openai-key	whole	sk[-](?:proj|svcacct|admin)[-][A-Za-z0-9_\-]{20,}
+openai-key-legacy	whole	sk[-][A-Za-z0-9]{40,}
+github-token	whole	gh[pousr]_[A-Za-z0-9]{36,}
+github-pat	whole	github[_]pat[_][A-Za-z0-9_]{50,}
+gitlab-token	whole	glpat[-][A-Za-z0-9_\-]{20,}
+slack-token	whole	xox[baprs][-][A-Za-z0-9\-]{10,}
+slack-webhook	whole	https://hooks\.slack\.com/services/[A-Za-z0-9/]{20,}
+aws-access-key-id	whole	(?:AKI[A]|ASI[A])[0-9A-Z]{16}
+google-api-key	whole	AIz[a][0-9A-Za-z_\-]{35}
+stripe-key	whole	[sr]k[_](?:live|test)[_][A-Za-z0-9]{16,}
+telegram-bot-token	whole	[0-9]{8,10}:A[A][A-Za-z0-9_\-]{30,}
+npm-token	whole	npm[_][A-Za-z0-9]{36}
+pypi-token	whole	pypi[-]AgE[A-Za-z0-9_\-]{40,}
+huggingface-token	whole	hf[_][A-Za-z0-9]{34,}
+tailscale-key	whole	tskey[-](?:auth|api|client)[-][A-Za-z0-9_\-]{10,}
+openrouter-key	whole	sk[-]or[-]v1[-][A-Za-z0-9]{40,}
+private-key-block	whole	[-]{5}BEGIN(?: [A-Z0-9]+)* PRIVATE KEY[-]{5}[\s\S]*?[-]{5}END(?: [A-Z0-9]+)* PRIVATE KEY[-]{5}
+private-key-header	whole	[-]{5}BEGIN(?: [A-Z0-9]+)* PRIVATE KEY[-]{5}
+ssh-key-body	whole	(?:ssh-rsa|ssh-ed25519)\s+[A-Za-z0-9+/]{80,}={0,3}
+jwt	whole	ey[J][A-Za-z0-9_\-]{10,}\.ey[J][A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{20,}
+
+# ---------- context-anchored: the surrounding text names the value ----------
+# group 1 is the value; everything around it survives so the archive still
+# records THAT a credential was there, of what kind, in which session.
+assigned-secret	g1	(?i)(?:pass(?:word|wd)|secret|api[_\-]?key|access[_\-]?key|client[_\-]?secret|auth[_\-]?token|[_\-]token|^token)["']?\s*[:=]\s*["']?([^\s"',;)}\]]{10,})
+authorization-header	g1	(?i)authorization["']?\s*[:=]\s*["']?(?:bearer|basic|token)\s+([A-Za-z0-9._\-+/=]{10,})
+credential-cli-flag	g1	--(?:password|token|api-key|apikey|secret|auth-token|access-key)(?:[= ])["']?([^\s"']{10,})
+basic-auth-url	g1	[a-z][a-z0-9+.\-]*://[^\s/:@]{1,64}:([^\s/@]{8,})@
