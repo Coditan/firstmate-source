@@ -175,7 +175,9 @@ If that audit answers `baseline absent`, this home is still re-reporting losses 
 **Test:** for each adopted artefact, name the source, the licence, and the condition. **Never infer provenance from the delivery path** - arriving through our own pin, in our own commit, proves authorship of the file and not of the idea (`data/learnings.md`, 2026-08-03, where the same error appeared three times in one day). If the source cannot be named, the honest verdict is `provenance not recorded`, never `ours`.
 **Care:** a source with no licence file, no versions, and no history - a gist, say - is adopted as an undated text snapshot, and that belongs written down beside it.
 **Who acts:** firstmate reports; carrying a notice into shared tracked material is a dispatched task.
-**Evidence:** the sea chart amended [Wayfinder](https://github.com/mattpocock/skills) for weeks with the MIT licence condition unmet, and the captain had to correct the claim. `docs/sea-chart-provenance.md` carries the resolution. Whether anything else came from that repository is **still open** - carry it forward as an open item until somebody measures it.
+**Evidence:** the sea chart amended [Wayfinder](https://github.com/mattpocock/skills) for weeks with the MIT licence condition unmet, and the captain had to correct the claim.
+`docs/sea-chart-provenance.md` carries the resolution.
+The broader 2026-08-17 provenance sweep found no other tracked firstmate artefact with evidence of direct derivation from that repository, and confirmed the installed `mattpocock-skills` plugin at commit `2ab958093e83e0ec752e6c1c5932da465bf23e0c` carries its own MIT `LICENSE`.
 
 ### 9. Leftover workspaces and state
 

@@ -13,7 +13,9 @@ All real-herdr verification in this document uses isolated sessions and guarded 
 
 Pick herdr when you want native per-pane agent-state detection (busy/idle/blocked) instead of tmux's regex-based guessing, and you are comfortable running an experimental backend.
 
-Herdr is dual-licensed AGPL-3.0-or-later / commercial - see its LICENSE file (github.com/ogulcancelik/herdr) or https://herdr.dev.
+For Firstmate's pinned Herdr install, `bin/fm-install-herdr.sh` verifies Herdr `v0.7.4`.
+The licence evidence measured for that pinned release is AGPL-3.0-or-later / commercial; do not generalize this statement to current upstream `master`, whose licence text differed when measured on 2026-08-17.
+See the Herdr `v0.7.4` `LICENSE` file at `github.com/ogulcancelik/herdr`, or https://herdr.dev for Herdr's own published terms.
 Firstmate only drives the `herdr` CLI as a separate process, which carries no AGPL obligations for firstmate users.
 
 Prerequisites:
