@@ -98,13 +98,15 @@ BASE_REF=$(resolve_base_ref) \
 # --- shared: a pre-refactor bin/ shim --------------------------------------
 #
 # build_old_bin echoes a directory whose bin/ subdir holds the PRE-REFACTOR
-# fm-send.sh, fm-peek.sh, fm-watch.sh, fm-spawn.sh, fm-teardown.sh, and any
-# changed source-library dependency (all extracted from BASE_REF), plus copies
-# of every OTHER sibling script those five entrypoints source, so those copies are exactly
-# what BASE_REF would have used too. Copies keep BASH_SOURCE-based sibling
-# resolution inside the synthetic tree on both macOS and Linux; symlinks make
-# that resolution shell/platform-dependent. FM_ROOT_OVERRIDE pointed at this dir's
-# root makes "$FM_ROOT/bin/fm-project-mode.sh" (etc.) resolve correctly.
+# fm-send.sh, fm-peek.sh, fm-watch.sh, fm-spawn.sh, fm-teardown.sh, and
+# fm-marker-lib.sh extracted from BASE_REF.
+# It then copies command-style and compatibility siblings from the current tree
+# and derives direct bin/*.sh source-library siblings from the extracted scripts'
+# shellcheck annotations, without overwriting any BASE_REF extraction.
+# Copies keep BASH_SOURCE-based sibling resolution inside the synthetic tree on
+# both macOS and Linux; symlinks make that resolution shell/platform-dependent.
+# FM_ROOT_OVERRIDE pointed at this dir's root makes
+# "$FM_ROOT/bin/fm-project-mode.sh" (etc.) resolve correctly.
 # fm-backend.sh (and its bin/backends/ adapters) is the dispatcher every one
 # of the five REFACTORED scripts sources; it must be a real, reachable file in
 # the old bin/ too or `. "$SCRIPT_DIR/fm-backend.sh"` aborts under set -eu -
