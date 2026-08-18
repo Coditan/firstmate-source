@@ -12,8 +12,9 @@ Two stores, one per source, under `$FM_HOME/data/transcripts/`:
 
 ```
 claude-redacted/    one .txt per session, mirroring ~/.claude/projects
+  _index.tsv        path, time span, working directory, entry count, first user message
 codex-redacted/     one .txt per session, mirroring ~/.codex/sessions
-_index.tsv          per store: path, time span, working directory, entry count, first user message
+  _index.tsv        path, time span, working directory, entry count, first user message
 ```
 
 Per session, one plain-text file holding a header, then:
@@ -46,7 +47,7 @@ Plain `grep -r` over the archive works identically for anyone who does not want 
 bin/fm-transcript-refresh.sh
 ```
 
-It rebuilds both stores from the raw transcripts and then re-runs the detector against its own output, requiring zero hits.
+It rebuilds each raw transcript store present on the vessel and then re-runs the detector against each resulting derivative, requiring zero hits.
 There is no incremental path and no build state, because a full rebuild of a two-thousand-session store costs about 95 s and a build state is one more thing that can be quietly wrong.
 The archive retains sessions the raw store no longer has: a rebuild rewrites every session it can still read and removes nothing, so a session deleted, rotated away, or renamed under `~/.claude` or `~/.codex` keeps its reduced copy in the archive.
 This is intended rather than a defect, because the archive exists precisely so that what was said survives the clearing of the session that said it, and outliving the raw store is the point.
@@ -70,11 +71,12 @@ The bound is carried in three places on purpose - in the header of every session
 
 The two source shapes share no key.
 A Claude-shaped reader reads a Codex rollout as zero entries and raises nothing at all, which looks exactly like a session that had nothing in it; measured on 2026-08-18, 32.9 MB of real Codex material through a Claude reader produced an empty file with no error and no warning.
-So `--source` is explicit, and a wrong one is made loud rather than silent in three places:
+So `--source` is explicit, and four fail-closed refusal paths prevent missing input or unreadable material from looking like a clean archive:
 
-- the run pre-flights every input file for its record shape and refuses, naming the paths, before writing anything
-- a run that finds no input files at all refuses rather than writing an archive that looks built
-- a run that reads files but recovers zero entries from all of them exits non-zero and says so
+- The run pre-flights every input file for its record shape and refuses, naming the paths, before writing anything when the shape disagrees with `--source`.
+- A run that finds no input files at all refuses rather than writing an archive that looks built.
+- A run that reads files but recovers zero entries from all of them exits non-zero and says so.
+- A `--verify-only` run that finds no derivative files refuses rather than reporting a zero-hit all-clear.
 
 ## The pattern file must not match itself
 
