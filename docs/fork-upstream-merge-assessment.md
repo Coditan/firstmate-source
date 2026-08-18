@@ -126,8 +126,27 @@ Whether to add a fourth verdict for a fork patch superseded inside the fork, or 
 
 ## Suite result
 
-The merge was not landed, so there is no merged tree to run the suite against, and the categorised merged-tree result the task requires cannot be produced in this session.
-A pre-merge baseline of `bin/fm-test-run.sh --all` was started on the fork tip so the next session can answer "does this fail identically before the merge" without re-deriving it; its result is recorded in the task's status rather than here, because a baseline is a measurement of a moment and not durable repository knowledge.
+The merge was not landed, so there is no merged tree to run the suite against, and the categorised merged-tree result cannot be produced until a resolution exists.
+What was produced instead is the pre-merge baseline that any later merged-tree result has to be read against, so that "was this caused by the merge" is answerable without re-deriving it.
+
+`bin/fm-test-run.sh --all`, run 2026-08-18 15:44Z to 16:21Z on fork `c1c10a8` in this worktree, reports `total=146 failed=16 skipped_gate=9 duration_ms=2198424`.
+Every one of the 16 is pre-existing on the unmerged fork and none can be attributed to upstream.
+They categorise as follows.
+
+- **Unrunnable on this host, 9 scripts, all of family `real-herdr-gated`.**
+  `tests/fm-afk-inject-herdr-e2e.test.sh`, `tests/fm-backend-autodetect-smoke.test.sh`, `tests/fm-backend-herdr-eventwait-smoke.test.sh`, `tests/fm-backend-herdr-presentation-e2e.test.sh`, `tests/fm-backend-herdr-prune-safety-e2e.test.sh`, `tests/fm-backend-herdr-respawn-idem-e2e.test.sh`, `tests/fm-backend-herdr-smoke.test.sh`, `tests/fm-backend-herdr-workspace-per-home-e2e.test.sh`, and `tests/fm-afk-launch.test.sh` all fail on some spelling of `could not prepare isolated Herdr lab session`.
+  No isolated Herdr lab can be provisioned here, so these measure the host and not the code.
+- **Watcher and wake timing, 4 scripts.**
+  `tests/fm-wake-daemon-lifecycle-e2e.test.sh`, `tests/fm-wake-queue.test.sh`, `tests/fm-watch-triage.test.sh`, and `tests/fm-watcher-lock.test.sh` fail on `watcher did not surface the first event`, `watcher did not report the routine signal`, `watcher did not print first signal`, and a guard warning raised with a fresh watcher and no queued wakes.
+  One of them absorbs a live Bridge inbox signal (`check: bridge-inbox: bridge-inbox coditan pending=1 highest=normal`), which points at ambient fleet state leaking into the fixture rather than at a code defect, but that is a hypothesis and not a verdict.
+  These are the scripts most likely to move under a merge that touches `bin/fm-watch.sh` and `bin/fm-wake-lib.sh`, so they need re-reading against this baseline rather than being dismissed.
+- **Pre-existing contract failures, 3 scripts.**
+  `tests/fm-arm-pretool-check.test.sh` fails `A13 via codex must allow, got exit 2` with `[watcher-bundled] a protected watcher command must be the sole final command after approved setup nodes`.
+  `tests/fm-pr-merge.test.sh` fails `records-before-merge: fm-pr-merge should succeed: expected exit 0, got 1`.
+  `tests/fm-journal.test.sh` fails without a Herdr or watcher explanation.
+  These three are real and unrelated to upstream; they are already failing on what the fleet runs today.
+
+Nine further scripts reported a declared gate skip and did not run.
 
 ## Why this did not land, and the split it needs
 
