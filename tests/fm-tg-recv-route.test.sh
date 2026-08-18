@@ -38,6 +38,13 @@ run_route() {  # <home> <event-path>
   CHAT_ID=1001 FM_HOME="$home" "$ROUTE" < "$event" 2>&1
 }
 
+assert_inbox_record() {  # <jsonl-path> <jq-filter> <failure-message>
+  local inbox=$1 filter=$2 message=$3
+  [ -f "$inbox" ] || fail "$message: inbox missing at $inbox"
+  jq -e "$filter" "$inbox" >/dev/null \
+    || fail "$message: $(cat "$inbox")"
+}
+
 test_a_captain_message_keeps_the_legacy_output_and_inbox() {
   local home="$TMP_ROOT/captain" event="$TMP_ROOT/captain.json" out status=0
   new_home "$home"
@@ -49,7 +56,8 @@ test_a_captain_message_keeps_the_legacy_output_and_inbox() {
     "the captain text output changed"
   assert_not_contains "$out" "telegram-correspondent" \
     "a captain event was tagged as a correspondent event"
-  assert_grep '"audience":"captain"' "$home/state/tg-recv.inbox.jsonl" \
+  assert_inbox_record "$home/state/tg-recv.inbox.jsonl" \
+    '.audience == "captain" and .lane == null and .kind == "TEXT" and .text == "approve the safe path"' \
     "the captain event was not recorded in the legacy inbox"
   pass "a captain Telegram message keeps the legacy full-standing path"
 }
@@ -73,11 +81,8 @@ test_a_registered_correspondent_message_is_tagged_and_spooled() {
   assert_not_contains "$out" "Umsatzsteuer" \
     "the correspondent's message body leaked into the operational prompt instead of the inbox"
   inbox="$home/state/tg-correspondents/requirements/inbox.jsonl"
-  assert_grep '"audience":"third-party"' "$inbox" \
-    "the correspondent inbox did not tag the audience"
-  assert_grep '"lane":"requirements"' "$inbox" \
-    "the correspondent inbox did not name the lane"
-  assert_grep 'ja, bitte mit Umsatzsteuer' "$inbox" \
+  assert_inbox_record "$inbox" \
+    '.audience == "third-party" and .lane == "requirements" and .kind == "TEXT" and .text == "ja, bitte mit Umsatzsteuer"' \
     "the correspondent message body did not land in the lane inbox"
   pass "a registered correspondent message is operationally tagged and lands in its own inbox"
 }
@@ -146,10 +151,9 @@ test_a_correspondent_media_event_uses_the_same_inbox_boundary() {
   assert_contains "$out" "telegram-correspondent" \
     "the correspondent media event was not operationally tagged"
   inbox="$home/state/tg-correspondents/requirements/inbox.jsonl"
-  assert_grep '"kind":"DOC"' "$inbox" \
-    "the correspondent media kind did not land in the lane inbox"
-  assert_grep "$home/state/tg-recv-media/brief.pdf" "$inbox" \
-    "the correspondent media path did not land in the lane inbox"
+  assert_inbox_record "$inbox" \
+    ".audience == \"third-party\" and .lane == \"requirements\" and .kind == \"DOC\" and .media_path == \"$home/state/tg-recv-media/brief.pdf\"" \
+    "the correspondent media event did not land in the lane inbox"
   pass "a registered correspondent media event lands in the same third-party inbox"
 }
 
