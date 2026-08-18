@@ -35,18 +35,33 @@ record shape and refuses before writing anything when the shape disagrees with
 --source, and it refuses again afterwards if a whole run produced no entries or
 found no input files. An empty archive is never a silent success here.
 
+THE STORE IS COMPRESSED, AND A FULL CONTENT SCAN IS STILL THE INDEX. Each
+session is written as one zstd-compressed file, `<session>.txt.zst`, because
+ripgrep reads zstd directly with `-z`: the whole store is scanned by content on
+every search and no second artefact exists that could disagree with it. An
+inverted index is still forbidden here, for the reason it always was - it can go
+stale silently.
+Compression cannot, because a wrong decompression is an error and not a wrong
+answer.
+
+The compressor is the `zstd` binary (FM_ZSTD overrides it). It is a hard
+requirement rather than a preference: a run that cannot compress refuses instead
+of leaving a store that is half compressed and half plain, which is exactly the
+kind of quiet disagreement this archive exists to avoid.
+
 Usage:
   fm-transcript-reduce.py --source claude|codex --in DIR --out DIR
                           [--patterns FILE] [--truncate 400] [--limit N]
-                          [--fold-injected] [--quiet]
+                          [--level 3] [--fold-injected] [--quiet]
   fm-transcript-reduce.py --verify-only --out DIR [--patterns FILE]
 
 Exit status:
   0  built (or verified with zero residual hits)
   2  verification found residual hits, or the input shape disagrees with --source
   3  nothing was read: no input files, or every file yielded zero entries
+  4  the compressor is missing, or it failed on a file
 """
-import argparse, json, os, re, sys, time
+import argparse, json, os, re, shutil, subprocess, sys, time
 from collections import Counter
 
 # ---------------------------------------------------------------- patterns
@@ -125,6 +140,100 @@ def scan(text, pats):
                     continue
             hits[cls] += 1
     return hits
+
+
+# ---------------------------------------------------------------- storage
+
+# One session, one compressed file. The extension is what makes the store
+# searchable without a wrapper: ripgrep decides how to read a file from it, so
+# `.txt.zst` is read as text and a plain `.txt` still left in the store is too.
+SUFFIX = '.txt.zst'
+PLAIN_SUFFIX = '.txt'
+DEFAULT_LEVEL = 3
+ZSTD = os.environ.get('FM_ZSTD', 'zstd')
+
+
+def compressor_path():
+    """The zstd binary, or None. Named so the refusal can say what to install."""
+    return shutil.which(ZSTD)
+
+
+def require_compressor():
+    if compressor_path():
+        return
+    print('ERROR: the compressor %r is not on PATH, so this run cannot write the archive.'
+          % ZSTD, file=sys.stderr)
+    print('       Install zstd (apt install zstd), or point FM_ZSTD at the binary.',
+          file=sys.stderr)
+    print('       Refusing rather than writing a store that is half compressed and half plain.',
+          file=sys.stderr)
+    raise SystemExit(4)
+
+
+def write_session(path, text, level):
+    """Write one session file, compressed, atomically.
+
+    Through a temporary file and a rename, because the alternative - a half
+    written session that still has a plausible name - is unreadable material
+    that looks like readable material.
+    """
+    tmp = path + '.tmp'
+    r = subprocess.run([ZSTD, '-q', '-f', '-%d' % level, '-o', tmp, '-'],
+                       input=text.encode('utf-8'))
+    if r.returncode != 0:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        print('ERROR: %s failed with status %d writing %s'
+              % (ZSTD, r.returncode, path), file=sys.stderr)
+        raise SystemExit(4)
+    os.replace(tmp, path)
+
+
+def read_session(path):
+    """Read one session file back, compressed or plain."""
+    if path.endswith('.zst'):
+        r = subprocess.run([ZSTD, '-dcq', '--', path], capture_output=True)
+        if r.returncode != 0:
+            raise OSError('%s could not decompress %s' % (ZSTD, path))
+        return r.stdout.decode('utf-8', errors='replace')
+    with open(path, encoding='utf-8', errors='replace') as fh:
+        return fh.read()
+
+
+def intact(path):
+    """True when zstd can decompress the whole file. A truncated store file is
+    not evidence of anything, so it is never the copy that survives."""
+    return subprocess.run([ZSTD, '-t', '-q', '--', path],
+                          stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL).returncode == 0
+
+
+def converge_store(outdir, level):
+    """Leave every session in the store as exactly one compressed file.
+
+    Run after a build, so a store never ends up half one thing and half the
+    other: sessions just rewritten drop their superseded plain copy, and
+    sessions the raw store no longer has - which a rebuild cannot reach and must
+    not remove - are compressed where they lie. Returns (compressed, dropped).
+    """
+    compressed = dropped = 0
+    for root, _, names in os.walk(outdir):
+        for n in sorted(names):
+            if not n.endswith(PLAIN_SUFFIX):
+                continue
+            plain = os.path.join(root, n)
+            zst = plain + '.zst'
+            if os.path.exists(zst) and intact(zst):
+                os.remove(plain)
+                dropped += 1
+                continue
+            with open(plain, encoding='utf-8', errors='replace') as fh:
+                write_session(zst, fh.read(), level)
+            os.remove(plain)
+            compressed += 1
+    return compressed, dropped
 
 
 # ---------------------------------------------------------------- shape
@@ -476,6 +585,9 @@ def main():
     ap.add_argument('--patterns', default=DEFAULT_PATTERNS)
     ap.add_argument('--truncate', type=int, default=400)
     ap.add_argument('--limit', type=int, default=0)
+    ap.add_argument('--level', type=int, default=DEFAULT_LEVEL,
+                    help='zstd compression level (default %d); measured on this '
+                         'fleet in docs/session-archive.md' % DEFAULT_LEVEL)
     ap.add_argument('--fold-injected', action='store_true',
                     help='codex only: fold machine-injected user messages listed in '
                          'injected-prefixes.txt down to their marker and their tail')
@@ -496,17 +608,31 @@ def main():
     if a.verify_only:
         total = Counter()
         files = 0
+        unreadable = []
         for root, _, names in os.walk(a.outdir):
             for n in sorted(names):
-                if not n.endswith('.txt'):
+                if not (n.endswith(SUFFIX) or n.endswith(PLAIN_SUFFIX)):
+                    continue
+                p = os.path.join(root, n)
+                # Verification reads the store the way a search reads it, through
+                # the decompressor. A file it cannot read is named as unread and
+                # never counted as a file that came back clean.
+                try:
+                    body = read_session(p)
+                except OSError as e:
+                    unreadable.append('%s: %s' % (p, e))
                     continue
                 files += 1
-                p = os.path.join(root, n)
-                with open(p, encoding='utf-8', errors='replace') as fh:
-                    h = scan(fh.read(), pats)
+                h = scan(body, pats)
                 if h:
                     print('HIT %s %s' % (p, dict(h)))
                 total.update(h)
+        if unreadable:
+            print('ERROR: %d file(s) under %s could not be read, so they were not '
+                  'verified:' % (len(unreadable), a.outdir), file=sys.stderr)
+            for u in unreadable[:5]:
+                print('       %s' % u, file=sys.stderr)
+            return 2
         if not files:
             # Zero hits over zero files is not an all-clear, it is a reading the
             # detector could not take. Reporting it as clean is the same silent
@@ -530,6 +656,8 @@ def main():
             for n in names:
                 if n.startswith('rollout-') and n.endswith('.jsonl'):
                     files.append(os.path.join(root, n))
+    require_compressor()
+
     files.sort()
     if a.limit:
         files = files[:a.limit]
@@ -544,7 +672,7 @@ def main():
 
     os.makedirs(a.outdir, exist_ok=True)
     counter = Counter()
-    bytes_in = bytes_out = 0
+    bytes_in = bytes_out = bytes_disk = 0
     total_entries = 0
     index = []
     t0 = time.time()
@@ -561,12 +689,12 @@ def main():
             continue
         total_entries += len(entries)
         text = emit(meta, entries, pats, counter, a.source, rel)
-        outrel = rel[:-len('.jsonl')] + '.txt'
+        outrel = rel[:-len('.jsonl')] + SUFFIX
         outp = os.path.join(a.outdir, outrel)
         os.makedirs(os.path.dirname(outp), exist_ok=True)
-        with open(outp, 'w', encoding='utf-8') as fh:
-            fh.write(text)
+        write_session(outp, text, a.level)
         bytes_out += len(text.encode('utf-8'))
+        bytes_disk += os.path.getsize(outp)
         first_user = ''
         for k, _, lab, b in entries:
             if k == 'msg' and lab.startswith('user') and str(b).strip():
@@ -579,6 +707,11 @@ def main():
         if not a.quiet and i % 100 == 0:
             print('  %d/%d  %.0fs' % (i, len(files), time.time() - t0), file=sys.stderr)
 
+    conv, dropped = converge_store(a.outdir, a.level)
+    if conv or dropped:
+        print('converged       %d retained session(s) compressed, %d superseded plain '
+              'copy(ies) dropped' % (conv, dropped))
+
     with open(os.path.join(a.outdir, '_index.tsv'), 'w', encoding='utf-8') as fh:
         fh.write('# path\tfirst\tlast\tcwd\tentries\tfirst_user_message\n')
         fh.write('\n'.join(sorted(index)) + '\n')
@@ -590,9 +723,13 @@ def main():
         print('shape undecided %d  (files whose first records identify neither shape)'
               % undecided)
     print('raw bytes       %d  (%.1f MB)' % (bytes_in, bytes_in / 1048576))
-    print('derivative      %d  (%.1f MB)' % (bytes_out, bytes_out / 1048576))
+    print('derivative      %d  (%.1f MB)  text as searched' % (bytes_out, bytes_out / 1048576))
+    print('on disk         %d  (%.1f MB)  zstd -%d' % (bytes_disk, bytes_disk / 1048576, a.level))
     if bytes_out:
         print('reduction       %.1f:1' % (bytes_in / bytes_out))
+    if bytes_disk:
+        print('compression     %.1f:1  (%.1f:1 against the raw store)'
+              % (bytes_out / bytes_disk, bytes_in / bytes_disk))
     print('redactions      %d' % sum(counter.values()))
     for k, v in counter.most_common():
         print('   %-24s %d' % (k, v))

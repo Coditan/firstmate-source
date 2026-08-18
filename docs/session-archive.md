@@ -11,13 +11,16 @@ The archive it builds is not shared and never becomes shared: it is a private de
 Two stores, one per source, under `$FM_HOME/data/transcripts/`:
 
 ```
-claude-redacted/    one .txt per session, mirroring ~/.claude/projects
+claude-redacted/    one .txt.zst per session, mirroring ~/.claude/projects
   _index.tsv        path, time span, working directory, entry count, first user message
-codex-redacted/     one .txt per session, mirroring ~/.codex/sessions
+codex-redacted/     one .txt.zst per session, mirroring ~/.codex/sessions
   _index.tsv        path, time span, working directory, entry count, first user message
 ```
 
-Per session, one plain-text file holding a header, then:
+Each session file is one zstd-compressed plain-text document.
+`_index.tsv` is the one uncompressed file in a store, because it is read by an `awk` narrowing pass rather than by the content scan.
+
+Per session, one plain-text document - compressed on disk, and read back in full by every search - holding a header, then:
 
 - every user and assistant message, verbatim
 - every command issued, verbatim
@@ -35,11 +38,23 @@ bin/fm-transcript-search.sh 'pattern' --since 2026-08-15 --cwd myproject
 bin/fm-transcript-search.sh 'pattern' --files-only
 ```
 
-**Grep is the index.**
-The archive is UTF-8 text laid out one file per session, and a full-content scan of the whole store was measured at 0.22 s over 258 MB on 2026-08-18, so no inverted index exists and none should be added.
+**A full content scan is the index.**
+The archive is UTF-8 text laid out one file per session, and a scan of the whole store was measured at 0.63 to 0.92 s over the compressed 48.9 MB on 2026-08-18, so no inverted index exists and none should be added.
 An index is a component that can be silently out of date, which is exactly the failure this archive was built against.
-`_index.tsv` is not a search index: it narrows the file set before grep runs, and only when `--since` or `--cwd` asks it to.
-Plain `grep -r` over the archive works identically for anyone who does not want the wrapper.
+Compression does not reintroduce that failure and is why it was worth doing: the compressed file is the content, not a summary of it, and a decompression that goes wrong is an error rather than a wrong answer.
+`_index.tsv` is not a search index: it narrows the file set before the scan runs, and only when `--since` or `--cwd` asks it to.
+
+**Plain `grep -r` no longer reads this archive.**
+It matches nothing in a compressed session and exits reporting no matches, over an archive that is full - the same silent emptiness the whole design refuses, arriving through the documentation instead of through the reader.
+It is worse than wholly blind: `_index.tsv` is the one plain file left, so a phrase that happens to sit in its first-user-message column still matches, and the blindness looks selective rather than total.
+Anyone who wants the raw tool rather than the wrapper uses ripgrep's own decompressing scan, which reads exactly what the wrapper reads:
+
+```sh
+rg -z 'pattern' "$FM_HOME/data/transcripts"
+```
+
+`rg` and `zstd` are therefore hard requirements of a search here, and the wrapper reports a missing one as a missing tool rather than as a search that found nothing.
+`FM_RG` and `FM_ZSTD` name the binaries on a vessel where they sit elsewhere.
 
 ## Rebuild
 
@@ -47,14 +62,24 @@ Plain `grep -r` over the archive works identically for anyone who does not want 
 bin/fm-transcript-refresh.sh
 ```
 
-It rebuilds each raw transcript store present on the vessel and then re-runs the detector against each resulting derivative, requiring zero hits.
-There is no incremental path and no build state, because a full rebuild of a two-thousand-session store costs about 95 s and a build state is one more thing that can be quietly wrong.
+It rebuilds each raw transcript store present on the vessel and then re-runs the detector against each resulting derivative - reading it back through the decompressor, as a search does - and requires zero hits.
+There is no incremental path and no build state, because a full rebuild of a two-thousand-session store costs about two minutes and a build state is one more thing that can be quietly wrong.
 The archive retains sessions the raw store no longer has: a rebuild rewrites every session it can still read and removes nothing, so a session deleted, rotated away, or renamed under `~/.claude` or `~/.codex` keeps its reduced copy in the archive.
 This is intended rather than a defect, because the archive exists precisely so that what was said survives the clearing of the session that said it, and outliving the raw store is the point.
 The archive therefore does not mirror a deletion, so removing material from the archive is a deliberate separate act and never a side effect of a rebuild.
 `_index.tsv` is regenerated from the sessions the rebuild could still read, so a retained session whose raw source is gone stays findable by a plain unfiltered search but is not listed in the index, and a search narrowed by `--since` or `--cwd` will therefore not reach it.
 The raw stores are read-only inputs; nothing under `~/.claude` or `~/.codex` is written, moved, or removed.
 A raw store that does not exist on this vessel is reported and skipped, never treated as a store that happened to be empty.
+
+## Compression, and why it does not cost the property above
+
+Each session is written as one zstd file at level 3, which took this seat's store from 271.2 MB to 52.1 MB on 2026-08-18.
+`zstd` is a hard requirement of a rebuild rather than a preference: a run that cannot compress refuses before writing anything, because a store that is half compressed and half plain is a store whose answers depend on which half a question lands in.
+A rebuild also compresses whatever plain session files it finds already in the store and drops the plain copies it has just superseded, so an archive built before compression converges on the first refresh instead of being stranded, and a retained session the rebuild cannot reach is compressed where it lies rather than left behind.
+The level is a knob, `--level`, and the measurement behind the default is below.
+
+The store stays honest under compression for one reason: the compressed file is the content rather than a summary of it, so nothing exists that could disagree with it, and a decompression that goes wrong is an error rather than a wrong answer.
+A verification that cannot read a store file says so and fails, instead of counting a file nobody read as a file that came back clean.
 
 ## The honest bound, which travels with every claim made from this archive
 
@@ -104,15 +129,33 @@ Two consequences bind anyone who touches this tool:
 Recorded with their date because they are readings, not properties.
 
 ```
-                       raw          derivative      ratio    redactions
-Claude              1001.5 MB        115.6 MB       8.7:1        73
-Codex                413.5 MB        142.2 MB       2.9:1        37
-combined            1415.0 MB        257.8 MB       5.5:1       110
-sessions                                2236
-full rebuild + verification              ~95 s
-full-content search over the store       0.22 s
-verification residual hits                  0
+                       raw          derivative      on disk    ratio    redactions
+Claude              1007.6 MB        116.6 MB        27.2 MB    8.6:1        73
+Codex                418.7 MB        143.6 MB        21.7 MB    2.9:1        37
+combined            1426.3 MB        260.2 MB        48.9 MB    5.5:1       110
+sessions                                2273
+full rebuild + verification                          ~129 s
+full-content search over the store, three queries    0.63 - 0.92 s
+verification residual hits                              0
 ```
+
+`derivative` is the text a search reads; `on disk` is what the store costs after compression.
+The whole archive directory, including the two indexes, went from 271.2 MB to 52.1 MB in the migration of 2026-08-18, and no session was lost to it: of the 2236 sessions present beforehand, 2144 came back byte-identical and 92 came back longer because the session had continued since the previous build.
+
+### Choosing the compression level
+
+Measured the same day, on the same seat's real store rather than on a sample, each a full rebuild with verification:
+
+```
+                    rebuild + verify      store on disk      against plain
+plain (before)              89.8 s            273.6 MB               1.0x
+zstd -3                    119.4 s             52.1 MB               5.25x
+zstd -9                    159.6 s             48.7 MB               5.62x
+```
+
+Level 3 is the default because level 9 spends 40 more seconds of every rebuild to save 3.4 MB, which is 1.2 percent of what was already saved.
+The ratio is material-dependent in the same way the reduction is: these are readings from one seat's transcripts, not properties of zstd.
+Search cost is not part of this tradeoff - zstd decompresses at roughly the same speed whatever level wrote the file - so the level buys rebuild time against disk and nothing else.
 
 The ratio is material-dependent and is not a property of the tool: the same design measured 56:1 on a seat whose sessions averaged 17 MB, against 0.63 MB here.
 `--fold-injected` folds Codex's machine-injected user messages down to their marker and their tail, taking the Codex store from 142.2 MB to 44.1 MB.
