@@ -230,6 +230,13 @@ sha256_text() {  # <text>
   fi
 }
 
+# Feed JSON values that can grow with a home's backlog to jq on stdin instead of
+# argv. Linux caps one argv string at MAX_ARGSTRLEN independently of ARG_MAX, so a
+# large captain-record set must never travel through jq --argjson.
+json_stdin() {  # <json>...
+  printf '%s\n' "$@" 2>/dev/null
+}
+
 # One awk over both files. It emits JSON itself rather than a delimited stream,
 # because a captain decision may legally contain tabs, quotes, and blank lines, and
 # every delimiter cheap enough to be worth using is a delimiter the captain could
@@ -535,17 +542,21 @@ while [ "$i" -lt "$COUNT" ]; do
   want=$(printf '%s' "$rec" | jq -r '.digest')
   got=$(sha256_text "$text")
   if [ "$got" = "$want" ]; then
-    VERIFIED=$(printf '%s' "$VERIFIED" | jq -c --argjson r "$rec" '. + [$r + {verbatim: true}]')
+    VERIFIED=$(json_stdin "$VERIFIED" "$rec" \
+      | jq -cn 'input as $verified | input as $r | $verified + [$r + {verbatim: true}]')
   else
-    VERIFIED=$(printf '%s' "$VERIFIED" | jq -c --argjson r "$rec" '. + [$r + {verbatim: false}]')
-    ALTERED=$(printf '%s' "$ALTERED" | jq -c --argjson r "$rec" \
-      '. + [{class: "altered-record", id: $r.id,
-             detail: "the stored decision text no longer matches its recorded digest"}]')
+    VERIFIED=$(json_stdin "$VERIFIED" "$rec" \
+      | jq -cn 'input as $verified | input as $r | $verified + [$r + {verbatim: false}]')
+    ALTERED=$(json_stdin "$ALTERED" "$rec" \
+      | jq -cn 'input as $altered | input as $r
+        | $altered + [{class: "altered-record", id: $r.id,
+                       detail: "the stored decision text no longer matches its recorded digest"}]')
   fi
   i=$((i + 1))
 done
 
-AUDIT_ALL=$(printf '%s' "$CLASSIFIED" | jq -c --argjson altered "$ALTERED" '.audit + $altered')
+AUDIT_ALL=$(json_stdin "$CLASSIFIED" "$ALTERED" \
+  | jq -cn 'input as $classified | input as $altered | $classified.audit + $altered')
 
 # THE BASELINE SPLIT. A (class, id, observed closed date) entry is withheld from the
 # findings that demand action and carried instead under baseline_excluded, where a
@@ -563,8 +574,12 @@ fi
 # Membership integrity, class, current closure, observed closure and baseline date
 # are all enforced here, not trusted from the hand-editable file.
 if [ "$BASELINE_INTACT" -eq 1 ]; then
-  BASELINE_HONOURED=$(printf '%s' "$BASELINE_JSON" | jq -c \
-    --argjson classes "$BASELINE_CLASSES" --argjson records "$CLASSIFIED" --arg date "$BASELINE_DATE" '
+  BASELINE_HONOURED=$(json_stdin "$BASELINE_JSON" "$CLASSIFIED" | jq -cn \
+    --argjson classes "$BASELINE_CLASSES" --arg date "$BASELINE_DATE" '
+    input as $baseline
+    | input as $records
+    | $baseline
+    |
     map(. as $b
         | ($records.captain | map(select(.id == $b.id)) | first // null) as $r
         | select(($classes | index($b.class)) != null
@@ -574,20 +589,33 @@ if [ "$BASELINE_INTACT" -eq 1 ]; then
 else
   BASELINE_HONOURED='[]'
 fi
-BASELINE_REJECTED=$(printf '%s' "$BASELINE_JSON" | jq -c --argjson honoured "$BASELINE_HONOURED" '
-  map(. as $b | select($honoured | index($b) == null))')
+BASELINE_REJECTED=$(json_stdin "$BASELINE_JSON" "$BASELINE_HONOURED" \
+  | jq -cn 'input as $baseline | input as $honoured
+    | $baseline | map(. as $b | select($honoured | index($b) == null))')
 # The finding is bound to $f before the lookup because `index(f)` evaluates f
 # against its own input - the covered list - and not against the finding tested.
-AUDIT=$(printf '%s' "$AUDIT_ALL" | jq -c --argjson base "$BASELINE_HONOURED" '
+AUDIT=$(json_stdin "$AUDIT_ALL" "$BASELINE_HONOURED" | jq -cn '
+  input as $audit_all
+  | input as $base
+  | $audit_all
+  |
   ($base | map(.class + " " + .id)) as $covered
   | map(. as $f | select(($covered | index($f.class + " " + $f.id)) == null))')
-BASELINE_EXCLUDED=$(printf '%s' "$AUDIT_ALL" | jq -c --argjson base "$BASELINE_HONOURED" '
+BASELINE_EXCLUDED=$(json_stdin "$AUDIT_ALL" "$BASELINE_HONOURED" | jq -cn '
+  input as $audit_all
+  | input as $base
+  | $audit_all
+  |
   ($base | map(.class + " " + .id)) as $covered
   | map(. as $f | select(($covered | index($f.class + " " + $f.id)) != null))')
 # What a baseline WOULD cover if one were taken now. Used to tell a home with no
 # baseline that one is available, and to build the file under --record-baseline.
-BASELINE_CANDIDATES=$(printf '%s' "$AUDIT_ALL" | jq -c --argjson classes "$BASELINE_CLASSES" \
-  --argjson records "$CLASSIFIED" '
+BASELINE_CANDIDATES=$(json_stdin "$AUDIT_ALL" "$CLASSIFIED" | jq -cn \
+  --argjson classes "$BASELINE_CLASSES" '
+  input as $audit_all
+  | input as $records
+  | $audit_all
+  |
   map(select(.class as $c | $classes | index($c))
       | . as $f
       | ($records.captain | map(select(.id == $f.id)) | first // null) as $r
@@ -638,18 +666,19 @@ FOLDED=$(printf '%s' "$CLASSIFIED" | jq -c \
 SHOWN=$LIMIT
 [ "$ALL" -eq 1 ] && SHOWN=$COUNT
 
-LEDGER=$(jq -n \
+LEDGER=$(json_stdin "$VERIFIED" "$OPEN" "$AUDIT" "$BASELINE_EXCLUDED" "$BASELINE_JSON" "$FOLDED" \
+  | jq -cn \
   --arg home "$FM_HOME" \
   --arg basepath "$BASELINE" \
   --arg basedate "$BASELINE_DATE" \
-  --argjson settled "$VERIFIED" \
-  --argjson open "$OPEN" \
-  --argjson audit "$AUDIT" \
-  --argjson excluded "$BASELINE_EXCLUDED" \
-  --argjson baseline "$BASELINE_JSON" \
-  --argjson folded "$FOLDED" \
   --argjson shown "$SHOWN" \
-  '{schema: "fm-decision-ledger.v1", home: $home,
+  'input as $settled
+   | input as $open
+   | input as $audit
+   | input as $excluded
+   | input as $baseline
+   | input as $folded
+   | {schema: "fm-decision-ledger.v1", home: $home,
     settled_total: ($settled | length),
     settled: $settled[0:$shown],
     open: $open,
@@ -712,8 +741,9 @@ if [ "$MODE" = premises ]; then
          has_premise: ((.premise // "") != "")}]
      | sort_by(.premise_measured)')
   if [ "$JSON" -eq 1 ]; then
-    jq -n --argjson p "$PREMISES" --argjson a "$AUDIT" \
-      '{schema: "fm-decision-ledger.v1", open_premises: $p, audit: $a}'
+    json_stdin "$PREMISES" "$AUDIT" \
+      | jq -cn 'input as $p | input as $a
+        | {schema: "fm-decision-ledger.v1", open_premises: $p, audit: $a}'
     exit 0
   fi
   printf '%s' "$PREMISES" | jq -r '
