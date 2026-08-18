@@ -1,5 +1,9 @@
 # Auditing merge gates: query both mechanisms, then prove the gate
 
+`AGENTS.md` is the merge-authority owner.
+Since the captain chose an ungated fleet on 2026-08-17, required checks in this organisation are reports rather than controls while the current plan does not permit enforcement, and the reversal condition is recorded beside the authority there.
+Use this document only when auditing GitHub's enforcement mechanisms or when that plan changes.
+
 A GitHub required-status-check gate that blocks merges can live in either of two independent mechanisms.
 An audit that queries one mechanism gets a confidently wrong answer about the other, and that wrong answer looks exactly like a clean result.
 This doc records where a fleet's gates live, which endpoints an audit must query, and how to prove a gate actually blocks.
@@ -68,27 +72,27 @@ Prove a required-check gate by breaking a real invariant and watching the gate r
 5. Close the pull request without merging, then delete its remote branch explicitly.
    `gh pr close --delete-branch` (and the `gh-axi` wrapper) accepts the flag but does not delete the remote branch, so run `git push origin --delete <branch>` and confirm `GET /repos/<owner>/<repo>/branches/<branch>` returns `404`.
 
-## Current heavyliftrental fleet state (2026-08-05)
+## Historical heavyliftrental fleet state (2026-08-05)
 
-Thirteen fleet repositories carry a required-check merge gate: `hlr-certsync`, `hlr-vat-steward`, `hlr-adsbot`, `hlr-einkauf`, `hlr-engineering-vault`, `hlr-knowledge`, `hlr-infra`, `hlr-librechat`, `hlr-tank-cad`, `hlr-reporting`, `hlr-dms`, `hlr-pim`, and `hlr-research`.
+On 2026-08-05, thirteen fleet repositories carried a required-check merge gate: `hlr-certsync`, `hlr-vat-steward`, `hlr-adsbot`, `hlr-einkauf`, `hlr-engineering-vault`, `hlr-knowledge`, `hlr-infra`, `hlr-librechat`, `hlr-tank-cad`, `hlr-reporting`, `hlr-dms`, `hlr-pim`, and `hlr-research`.
 
-The chosen fleet standard for the required-check gate is the repository ruleset with no bypass actors.
+The chosen fleet standard for the required-check gate was the repository ruleset with no bypass actors.
 The reasons are that twelve of the thirteen were already there, that rulesets are the newer mechanism, that the admiralty branch-protection doctrine already prescribes a ruleset with no bypass actors (see [admiralty-fleet-repo.md](admiralty-fleet-repo.md)), and that a no-bypass ruleset closes the administrator walk-through that classic protection leaves open.
 
 `hlr-research` was the one repository on the classic path.
 The reason was a rollout artifact, not a property of the repository: during the 2026-08-04 rollout a ruleset could not be activated until its workflow had already run on `main` and produced its check, or the repository would lock (the `hlr-reporting` bootstrap deadlock), and `hlr-research` correctly refused to activate until its `pr-tests.yml` existed on `main`.
-That workflow now exists on `main` and produces the `Research regression tests` check on every pull request, so the blocker is gone and the classic path was no longer required.
+By 2026-08-05 that workflow existed on `main` and produced the `Research regression tests` check on every pull request, so the blocker was gone and the classic path was no longer required.
 
 On 2026-08-05 `hlr-research` was converted:
-its required-check gate now lives in ruleset `Research required PR tests` (id `20456354`), with `strict_required_status_checks_policy: true`, context `Research regression tests`, `bypass_actors: []`, `current_user_can_bypass: never`, matching the other twelve.
+its required-check gate then lived in ruleset `Research required PR tests` (id `20456354`), with `strict_required_status_checks_policy: true`, context `Research regression tests`, `bypass_actors: []`, `current_user_can_bypass: never`, matching the other twelve.
 Its classic branch protection was reduced to the push restriction only (`restrictions.users: [Freudator86]`, no required check), matching the ten peers that keep a push restriction.
 The gate was re-proven after conversion: a broken WLL-classification invariant drove `Research regression tests` to `conclusion: failure` and the pull request to `mergeable_state: blocked`; restoring the invariant drove the check to `conclusion: success` and the pull request to `mergeable_state: clean`; the throwaway pull request was closed unmerged and its branch deleted and confirmed `404`.
 
-After this change, the required-check gate is uniformly on rulesets for all thirteen, so a required-check-only audit has a single home today.
+After that 2026-08-05 change, the required-check gate was uniformly on rulesets for all thirteen, so a required-check-only audit had a single home in that snapshot.
 The both-endpoints rule still stands, for two durable reasons:
 a push restriction lives only in classic branch protection and exists on ten of the thirteen repositories (`hlr-certsync`, `hlr-engineering-vault`, and `hlr-knowledge` have no classic protection at all), and a repository added before its ruleset is safe to activate will sit on classic protection exactly as `hlr-research` and `hlr-reporting` did during rollout.
 
-### Where each control lives, and which endpoint answers for it
+### Where each control lived, and which endpoint answered for it
 
 | Control | Mechanism | Endpoint to query |
 | --- | --- | --- |
@@ -98,11 +102,11 @@ a push restriction lives only in classic branch protection and exists on ten of 
 
 ### Bypass picture
 
-- All thirteen required-check ruleset gates: `bypass_actors: []`, `current_user_can_bypass: never`.
-  No one, including the administrator, can merge past a red required check.
+- At the time, all thirteen required-check ruleset gates: `bypass_actors: []`, `current_user_can_bypass: never`.
+  No one, including the administrator, could merge past a red required check.
 - The ten classic push restrictions: `enforce_admins.enabled: false`.
   An administrator can push directly to `main`, stepping around the push restriction.
-  In this single-maintainer fleet the sole administrator (`Freudator86`) is also the sole user the push restriction allows, so the bypass grants that user nothing extra today; it would matter if another administrator were added.
+  In that single-maintainer snapshot the sole administrator (`Freudator86`) was also the sole user the push restriction allowed, so the bypass granted that user nothing extra; it would matter if another administrator were added.
 - Before conversion, `hlr-research`'s required check sat in classic protection with `enforce_admins: false`, so it was administrator-bypassable, unlike the other twelve.
   The conversion to a no-bypass ruleset closed that one hole and is the only bypass state this task changed.
 
@@ -110,5 +114,5 @@ Whether to set `enforce_admins: true` on the ten push restrictions is a separate
 
 ## Maintaining this file
 
-Keep this file to the durable method (query both mechanisms, read `check-runs`, prove the gate) plus a dated snapshot of the fleet's current gate map.
+Keep this file to the durable method (query both mechanisms, read `check-runs`, prove the gate) plus a dated snapshot of any fleet gate map it records.
 When the fleet's gate configuration changes, update the dated snapshot rather than appending a second one, and re-run the both-endpoints survey before trusting any claim that a repository is or is not gated.
