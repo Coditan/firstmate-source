@@ -3,12 +3,12 @@
 # that memory is tight.
 #
 # WHAT THIS IS FOR
-# This host has no swap, no memory limit on any user slice or session, no
-# out-of-memory daemon, and no cap on concurrent sessions. One out-of-memory
-# kill is already recorded against the user slice. It is comfortable today and
-# completely unbounded, and when that changes nothing on the box can say which
-# worker caused it. An alarm that cannot name a culprit is not actionable, so
-# the attributable reading comes before the ceiling and before the alarm.
+# This host now has swap as a shock absorber, but this seat still has no memory
+# limit, no out-of-memory daemon, and no cap on concurrent sessions. Recent
+# out-of-memory kills are why this instrument exists: even after a limit is
+# fitted, nothing on the box names which worker caused the pressure. An alarm
+# that cannot name a culprit is not actionable, so the attributable reading
+# comes before any ceiling and before the alarm.
 #
 # WHAT THIS DELIBERATELY IS NOT
 # It sets no limit, ceiling, or throttle. It raises no alarm. It kills nothing
@@ -256,6 +256,10 @@ count_lines() {  # <file>
 }
 
 # --- headroom ---------------------------------------------------------------
+#
+# MemAvailable is the kernel's RAM-headroom estimate for starting new work
+# without swapping. SwapTotal and SwapFree are measured separately below and are
+# never merged into that available-memory number.
 
 MEM_TOTAL_KB=
 MEM_AVAIL_KB=

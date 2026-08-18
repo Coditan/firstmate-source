@@ -1,4 +1,4 @@
-# A memory ceiling on this host manufactures the pressure it would detect
+# A memory ceiling on this host can manufacture the pressure it would detect
 
 This slice was to fit a throttling memory ceiling on `hlr-web-1` and alarm on crossing it, naming the offender through `bin/fm-memory-reading.sh`.
 It was stopped before any ceiling was fitted, because the hazard the task named up front turned out to be real and measurable rather than theoretical.
@@ -9,8 +9,10 @@ The instruction that governs this document was written into the task before the 
 ## The hazard, stated before it was measured
 
 A cgroup's memory charge includes its page cache.
-Page cache is reclaimable, and on a host with no swap it is the *only* thing a memory ceiling has to reclaim.
-So if page cache alone can reach the ceiling, the kernel holds the cgroup at that ceiling by reclaiming continuously, and that reclaim registers as memory-stall time on `/proc/pressure/memory` - the same reading the alarm above the ceiling would consume.
+Page cache is reclaimable and is still charged to the cgroup.
+If page cache alone can reach the ceiling, the kernel holds the cgroup at that ceiling by reclaiming continuously, and that reclaim registers as memory-stall time on `/proc/pressure/memory` - the same reading the alarm above the ceiling would consume.
+The first measurement was taken before swap was fitted, but swap changes anonymous-memory pressure more than this file-cache hazard.
+Swap gives anonymous memory somewhere to go; it does not move page cache out of the cgroup charge.
 
 The question is therefore not whether a ceiling can be set.
 It is whether a ceiling, once set, becomes a permanent generator of the signal the alarm exists to read.
@@ -18,7 +20,8 @@ It is whether a ceiling, once set, becomes a permanent generator of the signal t
 ## What was measured
 
 All of the following was run on `hlr-web-1` on 2026-08-13.
-The host had no swap configured throughout, and never fell below 13 GB of available memory during any arm.
+The host had no swap configured throughout, and never fell below 13 GB of RAM headroom during any arm.
+That no-swap sentence is historical evidence about the run, not a current statement about the host.
 
 ### The paired probe
 
@@ -28,7 +31,7 @@ memory-ceiling-probe: MANUFACTURED - a 2G ceiling generated memory pressure on a
 taken 2026-08-13T19:14:43Z on hlr-web-1, no swap configured: correct, there is none
 
 Both arms read a 2048 MiB cold corpus for 30 seconds and allocated almost nothing of their own.
-The host never fell below 13053 MiB available while they ran.
+The host never fell below 13053 MiB RAM headroom while they ran.
 
 ARM        CEILING          PEAK_MiB  CROSSINGS   PEAK_STALL     REFAULTS
 control    none                 2053          0         0.00            0
@@ -61,7 +64,7 @@ host after: MemAvailable=16425872 kB  psi some avg10=2.32
 ```
 
 Pages stolen and pages refaulted run at the same rate, which is the definition of thrashing: every page reclaimed to stay under the ceiling is immediately needed again.
-The host's own memory-stall reading went from `0.00` to `3.42` while more than 16 GB stayed available.
+The host's own memory-stall reading went from `0.00` to `3.42` while more than 16 GB RAM headroom stayed available.
 
 The identical workload with no ceiling, run minutes earlier on an equally cold corpus:
 
@@ -94,11 +97,11 @@ STALL (share of the last 10s/60s spent waiting on memory)
 ```
 
 That is the finding in one pair of readings.
-The machine is 69% free in both, and the stall exists only in the second.
+The machine has the same 69% RAM headroom in both, and the stall exists only in the second.
 
 ### Ordinary file reading crosses the limit thousands of times
 
-A single pass over a 4 GiB corpus inside a 2 GiB ceiling, with 16.4 GB free on the host:
+A single pass over a 4 GiB corpus inside a 2 GiB ceiling, with 16.4 GB RAM headroom on the host:
 
 | Point | `memory.events` `high` |
 | ----- | ---------------------- |
@@ -133,17 +136,30 @@ Both ends of the range are closed on this host, and they are closed by the same 
 This is not a number that was chosen badly; it is a quantity that cannot be bounded usefully here.
 
 The premise holds on this machine rather than being assumed.
-At a routine moment `app.slice` held 9629 MiB, of which 5051 MiB was page cache against 2780 MiB of anonymous memory, with 16 GB still available.
+At a routine moment `app.slice` held 9629 MiB, of which 5051 MiB was page cache against 2780 MiB of anonymous memory, with 16 GB RAM headroom still available.
 More than half the charge a ceiling would bind against is already cache, and nothing but the ceiling itself would stop it growing further.
 
 Swap does not resolve this.
 Swap gives anonymous memory somewhere to go under pressure, which this host badly lacks for other reasons, but it does not stop page cache expanding into a ceiling.
 
+## What changed since the measurement
+
+On 2026-08-17, 32 GiB of swap was added to `hlr-web-1` and `vm.swappiness` was deliberately left at 60.
+On 2026-08-18 from this seat, `swapon --show --bytes` reported `/swapfile` at 34359734272 bytes, used 0, priority -2, and `/proc/meminfo` reported `SwapTotal: 33554428 kB` and `SwapFree: 33554428 kB`.
+The proposed next step is a 12 GB container ceiling for this seat, with its kill order below production services.
+
+That proposal makes this finding current again.
+The old probe does not prove the exact 12 GB container ceiling will manufacture pressure after swap was added, because that exact configuration has not been measured.
+It does prove the page-cache failure mode is real on this host and that raising the number is not evidence by itself.
+This correction did not re-run the probe: a meaningful 12 GB run would need a corpus large enough to exercise that ceiling and would deliberately create reclaim pressure on the live host.
+Before the container ceiling is fitted, re-run `bin/fm-memory-ceiling-probe.sh` with a workload size that can actually reach the proposed ceiling, or treat the ceiling's pressure signal as unproven.
+
 ## What this does not say
 
 It does not say the reading was wrong or wasted: `bin/fm-memory-reading.sh` is untouched by this and remains correct.
-It does not say an alarm is impossible - only that a *cgroup ceiling* cannot be the thing it fires on here.
-It does not say anything about hosts with swap, or about a host whose bounded work does little file I/O; the probe exists so those can be measured rather than argued.
+It does not say an alarm is impossible - only that a *cgroup ceiling* cannot be assumed to be the thing it fires on here.
+It does not prove the proposed 12 GB container ceiling is bad without another run, because that exact ceiling was not measured after swap was added.
+It does say the old page-cache failure mode is still a live risk and must be measured rather than inferred away from swap.
 
 ## What the next slice needs from the layout, whatever is decided
 
@@ -159,7 +175,7 @@ Measured while establishing where a ceiling could go, and worth keeping because 
 ## Re-measuring
 
 `bin/fm-memory-ceiling-probe.sh` runs both arms and issues one verdict, and its header owns its flags, its exit statuses, and its refusals.
-It sets no lasting limit, kills nothing, and declines to run at all on a host that is already short of memory.
+It sets no lasting limit, kills nothing, and declines to run at all on a host that is already short of RAM headroom.
 
 It reports `clear` and exits 0 when a ceiling genuinely is not reached, which was confirmed against an 8 GiB ceiling and a 512 MiB corpus on the same host in the same session.
 That matters: an instrument that only ever returns the answer this page reports would be no evidence for it.

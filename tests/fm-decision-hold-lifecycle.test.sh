@@ -108,6 +108,13 @@ run_decisions() {  # <home> <command args...>
     FM_CONFIG_OVERRIDE="$home/config" "$ROOT/bin/fm-decision-hold.sh" "$@"
 }
 
+run_ledger() {  # <home> <args...>
+  local home=$1
+  shift
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" FM_DATA_OVERRIDE="$home/data" \
+    "$ROOT/bin/fm-decision-ledger.sh" "$@"
+}
+
 write_origin_meta() {  # <home> <id> [kind]
   local home=$1 id=$2 kind=${3:-scout}
   fm_write_meta "$home/state/$id.meta" \
@@ -146,17 +153,20 @@ EOF
     "failed completion recorded a false completion attestation"
 
   route_hold=$(run_decisions "$home" hold "$id" route \
-    --title "Choose the sample route" --reason "captain route choice pending" --repo sample) \
+    --title "Choose the sample route" --reason "captain route choice pending" --repo sample \
+    --premise "the sample route is unset in config" --new-ground) \
     || fail "could not register route hold"
   [ "$route_hold" = "$id-decision-route" ] || fail "route hold identity was not deterministic: $route_hold"
   run_decisions "$home" hold "$id" route \
-    --title "Choose the sample route" --reason "captain route choice pending" --repo sample >/dev/null \
+    --title "Choose the sample route" --reason "captain route choice pending" --repo sample \
+    --premise "the sample route is unset in config" --new-ground >/dev/null \
     || fail "idempotent hold retry failed"
   if run_decisions "$home" complete "$id" route access > "$home/partial-complete.out" 2> "$home/partial-complete.err"; then
     fail "completion succeeded while one of two distinct decisions lacked a hold"
   fi
   access_hold=$(run_decisions "$home" hold "$id" access \
-    --title "Choose the sample access level" --reason "captain access choice pending" --repo sample) \
+    --title "Choose the sample access level" --reason "captain access choice pending" --repo sample \
+    --premise "the sample access level is unset in config" --new-ground) \
     || fail "could not register access hold"
   [ "$access_hold" = "$id-decision-access" ] || fail "access hold identity was not distinct: $access_hold"
   [ "$(grep -cE "^- \[ \] $route_hold -" "$home/data/backlog.md")" = 1 ] \
@@ -320,7 +330,9 @@ test_archived_resolution_satisfies_gate_but_missing_open_hold_refuses() {
   printf '# Archived sample review\n\nThe route needs a captain decision.\n' \
     > "$home/data/$origin/report.md"
   hold=$(run_decisions "$home" hold "$origin" route \
-    --title "Choose archived sample route" --reason "captain route choice pending" --repo sample) \
+    --title "Choose archived sample route" --reason "captain route choice pending" --repo sample \
+    --premise "the archived sample route is unset" --new-ground \
+    --premise "the archived sample route is unset" --new-ground) \
     || fail "could not register archived-resolution hold"
   run_decisions "$home" complete "$origin" route >/dev/null \
     || fail "could not record archived-resolution inventory"
@@ -343,6 +355,7 @@ test_archived_resolution_satisfies_gate_but_missing_open_hold_refuses() {
     || fail "verification did not accept a resolved archived hold"
   if run_decisions "$home" hold "$origin" route \
     --title "Choose archived sample route" --reason "captain route choice pending" --repo sample \
+    --premise "the archived sample route is unset" --new-ground \
     > "$home/archived-hold.out" 2> "$home/archived-hold.err"; then
     fail "hold reopened an identity already resolved in the archive"
   fi
@@ -398,6 +411,7 @@ EOF
     "refusal did not state how to repair the permanent lockout"
   if run_decisions "$home" hold "$origin" route \
     --title "Choose the stale sample route again" --reason "captain route choice pending" --repo sample \
+    --premise "the stale sample route is unset" --new-ground \
     > "$home/stale-reuse-hold.out" 2> "$home/stale-reuse-hold.err"; then
     fail "hold reopened an identity whose archive already carries a durable resolution"
   fi
@@ -619,7 +633,8 @@ test_visual_review_uses_shared_completion_owner() {
   mkdir -p "$home/.lavish"
   printf '<html><body>Synthetic sample board</body></html>\n' > "$home/.lavish/sample-board.html"
   hold=$(run_decisions "$home" hold "$id" layout \
-    --title "Choose the sample layout" --reason "captain layout choice pending" --repo sample) \
+    --title "Choose the sample layout" --reason "captain layout choice pending" --repo sample \
+    --premise "the sample layout is unset" --new-ground) \
     || fail "post-teardown visual review could not use the shared hold owner"
   run_decisions "$home" complete "$id" layout >/dev/null \
     || fail "post-teardown visual review could not use the shared completion owner"
@@ -712,7 +727,8 @@ EOF
   printf 'done: report and visual review complete\n' > "$mate/state/$origin.status"
   printf '# Sample secondmate review\n\nOne captain choice remains.\n' > "$mate/data/$origin/report.md"
   hold=$(run_decisions "$mate" hold "$origin" release \
-    --title "Choose the sample release" --reason "captain release choice pending" --repo sample) \
+    --title "Choose the sample release" --reason "captain release choice pending" --repo sample \
+    --premise "the sample release channel is unset" --new-ground) \
     || fail "secondmate-owned hold creation failed"
   run_decisions "$mate" complete "$origin" release >/dev/null \
     || fail "secondmate-owned completion failed"
@@ -748,16 +764,20 @@ test_resolve_matches_quoted_blocked_by_edges() {
   printf '# Quote edge review\n\nThree edge decisions and one absent control.\n' > "$home/data/$origin/report.md"
 
   hold_first=$(run_decisions "$home" hold "$origin" edge-first \
-    --title "First edge decision" --reason "captain first pending" --repo sample) \
+    --title "First edge decision" --reason "captain first pending" --repo sample \
+    --premise "the first edge is unset" --new-ground) \
     || fail "could not register first-edge hold"
   hold_mid=$(run_decisions "$home" hold "$origin" edge-mid \
-    --title "Middle edge decision" --reason "captain mid pending" --repo sample) \
+    --title "Middle edge decision" --reason "captain mid pending" --repo sample \
+    --premise "the middle edge is unset" --new-ground) \
     || fail "could not register mid-edge hold"
   hold_last=$(run_decisions "$home" hold "$origin" edge-last \
-    --title "Last edge decision" --reason "captain last pending" --repo sample) \
+    --title "Last edge decision" --reason "captain last pending" --repo sample \
+    --premise "the last edge is unset" --new-ground) \
     || fail "could not register last-edge hold"
   hold_absent=$(run_decisions "$home" hold "$origin" edge-absent \
-    --title "Absent edge decision" --reason "captain absent pending" --repo sample) \
+    --title "Absent edge decision" --reason "captain absent pending" --repo sample \
+    --premise "the absent edge is unset" --new-ground) \
     || fail "could not register absent-edge hold"
 
   tasks_in "$home" add pad-a "Pad A" --kind ship --repo sample >/dev/null \
@@ -828,7 +848,105 @@ test_resolve_matches_quoted_blocked_by_edges() {
   pass "resolve matches first/middle/last in quoted blocked_by and rejects a genuinely absent id"
 }
 
+# The 2026-08-17 loss, reproduced from the doors that had no durable home: a
+# decision arriving as an ask-user finding and one arriving as a sentence in chat,
+# neither preceded by a registered hold, neither gating any future work. Before
+# `record` existed there was nowhere for either to go.
+test_undoored_decisions_become_durable_records() {
+  local home show settled
+  home=$(make_home undoored-decisions)
+
+  printf '6 stunden\n' > "$home/rpo.txt"
+  run_decisions "$home" record bridge-standup rpo --door ask-user \
+    --decision-file "$home/rpo.txt" --title "Recovery point objective" --repo bridge \
+    > "$home/rpo.out" 2> "$home/rpo.err" \
+    || fail "recording an ask-user decision failed: $(cat "$home/rpo.err")"
+  assert_grep "recorded: bridge-standup-decision-rpo" "$home/rpo.out" \
+    "an ask-user decision must be recorded under its own durable identity"
+
+  # His words, with the interior blank line, the quoting and the indentation he
+  # used. A store that tidies any of it is not storing what he said.
+  printf 'containment is the missing half\n\n  keine "korrektur" bitte\n' > "$home/tier.txt"
+  run_decisions "$home" record tier-review tier-overlap --door chat \
+    --decision-file "$home/tier.txt" --title "Where does the tier boundary sit" --repo firstmate \
+    > "$home/tier.out" 2> "$home/tier.err" \
+    || fail "recording a chat decision failed: $(cat "$home/tier.err")"
+
+  show=$(tasks_in "$home" show tier-review-decision-tier-overlap --full)
+  assert_contains "$show" "state: done" "a recorded decision must be closed, not left open"
+  assert_contains "$show" "kind: captain" "a recorded decision must live in the captain store"
+  assert_contains "$show" 'containment is the missing half\n\n  keine \"korrektur\" bitte' \
+    "the captain's exact words must be stored, blank line and quoting intact"
+  assert_contains "$show" "Door: chat" "the door a decision arrived through must be recorded"
+
+  # The whole point: a reader that never saw the session can still recover them.
+  settled=$(run_ledger "$home" --all)
+  assert_contains "$settled" "settled captain decisions: 2" \
+    "both undoored decisions must be readable after the session that took them"
+  assert_contains "$settled" "verbatim verified" \
+    "the stored words must verify against their recorded digest"
+
+  pass "ask-user and chat decisions become durable records with the captain's exact words"
+}
+
+# Recording is the operation firstmate will retry after a crash, a wake, or a
+# reset, so a second identical call must be safe and a DIFFERENT answer under the
+# same key must never quietly overwrite the first.
+test_record_is_idempotent_and_refuses_a_conflicting_answer() {
+  local home out
+  home=$(make_home record-retry)
+  printf 'ja, sechs stunden\n' > "$home/a.txt"
+  run_decisions "$home" record origin-x window --door chat --decision-file "$home/a.txt" \
+    --title "How much may we lose" --repo sample >/dev/null 2>&1 \
+    || fail "initial record failed"
+
+  out=$(run_decisions "$home" record origin-x window --door chat --decision-file "$home/a.txt" \
+    --title "How much may we lose" --repo sample 2>&1) \
+    || fail "replaying an identical record must succeed: $out"
+  assert_contains "$out" "already durable" "an identical replay must be a no-op, not a second record"
+
+  printf 'nein, zwoelf stunden\n' > "$home/b.txt"
+  if run_decisions "$home" record origin-x window --door chat --decision-file "$home/b.txt" \
+    --title "How much may we lose" --repo sample > "$home/b.out" 2> "$home/b.err"; then
+    fail "a different answer under the same key must be refused, not silently written over"
+  fi
+  assert_grep "records a different captain decision" "$home/b.err" \
+    "the refusal must name the conflict"
+
+  pass "recording is idempotent on replay and refuses a conflicting answer under one key"
+}
+
+# The three envelope marker lines delimit the captain's text inside the record. A
+# decision containing one would make the stored text ambiguous, so it is refused
+# BEFORE the write - a refusal afterwards would leave the half-finished record this
+# mechanism exists to prevent.
+test_record_refuses_text_it_could_not_store_faithfully() {
+  local home
+  home=$(make_home record-fidelity)
+  printf 'do it, but\nRouted work:\nnot that one\n' > "$home/clash.txt"
+  if run_decisions "$home" record origin-y clash --door chat --decision-file "$home/clash.txt" \
+    --title "Which one" --repo sample > "$home/clash.out" 2> "$home/clash.err"; then
+    fail "a decision containing a reserved envelope line must be refused"
+  fi
+  assert_grep "reserved envelope line" "$home/clash.err" "the refusal must say why"
+  if tasks_in "$home" show origin-y-decision-clash --full >/dev/null 2>&1; then
+    fail "a pre-write refusal must not leave a partial record behind"
+  fi
+
+  printf 'ja\r\n' > "$home/cr.txt"
+  if run_decisions "$home" record origin-y cr --door chat --decision-file "$home/cr.txt" \
+    --title "Yes or no" --repo sample > "$home/cr.out" 2> "$home/cr.err"; then
+    fail "text the backlog would not round-trip verbatim must be refused"
+  fi
+  assert_grep "carriage return" "$home/cr.err" "the refusal must name the concrete problem"
+
+  pass "recording refuses text it could not store verbatim, before writing anything"
+}
+
 test_uninventoried_report_decision_refuses_completion
+test_undoored_decisions_become_durable_records
+test_record_is_idempotent_and_refuses_a_conflicting_answer
+test_record_refuses_text_it_could_not_store_faithfully
 
 test_scout_teardown_always_requires_inventory_verification
 test_archived_resolution_satisfies_gate_but_missing_open_hold_refuses

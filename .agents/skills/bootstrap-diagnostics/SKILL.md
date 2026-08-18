@@ -2,7 +2,7 @@
 name: bootstrap-diagnostics
 description: >-
   Agent-only handling playbook for session-start bootstrap diagnostics.
-  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, ROLE_INVALID, ROLE_OVERLAY_MISSING, NEEDS_GH_AUTH, TANGLE, SELF_DRIFT, CREW_DISPATCH invalid, CURRENCY_BASE, LAVISH_ACCESS, BACKLOG_STALE, BACKLOG_UNREADABLE, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, AXI_SUITE_UPDATED, AXI_SUITE_REVIEW, AXI_SUITE_STUCK, AXI_SUITE_SHADOWED, AXI_SUITE_SHADOW_UNKNOWN, FIRSTMATE_UPDATE_AVAILABLE, FIRSTMATE_UPDATE_STUCK, FORK_SYNC, FORK_SYNC_STUCK, CURRENCY_ROUND, MEMORY_ALARM, CURATION_NUDGE, GROSSREINSCHIFF, RUN_READER, WATCHER_UNIT, DELIVERY_UNIT, FREQUENCY_MONITOR_UNIT, BOSUN_UNIT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
+  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, ROLE_INVALID, ROLE_OVERLAY_MISSING, NEEDS_GH_AUTH, TANGLE, SELF_DRIFT, CREW_DISPATCH invalid, CURRENCY_BASE, LAVISH_ACCESS, BACKLOG_STALE, BACKLOG_UNREADABLE, DECISION_LEDGER, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, AXI_SUITE_UPDATED, AXI_SUITE_REVIEW, AXI_SUITE_STUCK, AXI_SUITE_SHADOWED, AXI_SUITE_SHADOW_UNKNOWN, FIRSTMATE_UPDATE_AVAILABLE, FIRSTMATE_UPDATE_STUCK, FORK_SYNC, FORK_SYNC_STUCK, CURRENCY_ROUND, MEMORY_ALARM, CURATION_NUDGE, CODEBASE_SWEEP_NUDGE, FORGE_STATUS, SLOT_GUARD, GROSSREINSCHIFF, RUN_READER, WATCHER_UNIT, DELIVERY_UNIT, FREQUENCY_MONITOR_UNIT, BOSUN_UNIT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
   A silent bootstrap section, or a BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -106,20 +106,39 @@ When any diagnostic needs captain attention, report the plain consequence and re
   `armed ... and has never completed a round` or `stopped being checked` means the check exists but the monitoring service is not running it, which is a supervision fault rather than a currency one: repair it through the emitted supervision instructions, exactly as for a lapsed watcher.
   Never treat this line as a currency verdict - it says the instrument is not reading, not that this home is behind.
   The findings the round itself raises arrive as a `check:` wake, not here; run `bin/fm-currency-round.sh --status` for the full round when you need every reading.
-- `MEMORY_ALARM: <detail>` - nothing is watching this machine for memory exhaustion, which on a host with no swap and no limit anywhere means the first sign of trouble would be the kernel killing something.
+- `MEMORY_ALARM: <detail>` - nothing is watching this machine for RAM-headroom loss and runaway growth; swap is a shock absorber rather than an all-clear, and any future memory limit is outside this alarm.
   `nothing is watching` or `could not be armed` means the alarm was never installed or the arm failed; run `bin/fm-memory-alarm.sh --arm` and report the reason if it refuses.
   `has never completed a reading` or `has stopped running` means the alarm exists but the monitoring service is not running it, which is a supervision fault rather than a memory one: repair it through the emitted supervision instructions, exactly as for a lapsed watcher.
   Never read this line as a verdict on memory - it says the instrument is not reading, not that this machine is fine; `bin/fm-memory-alarm.sh --status` gives the current reading when you need it.
   An actual crossing or recovery arrives as a `check:` wake instead, and that one is captain-facing: it names a process, an account, and the work it was serving, and nothing has been limited or killed, so the decision is still open.
-- `CURATION_NUDGE: <detail>` - this home's 48-hour knowledge-file curation cadence is unavailable or has raised its measurement wake.
-  `is not armed` or `could not be armed` means the nudge was never installed or the arm failed; run `bin/fm-curation-nudge.sh --arm` and report the reason if it refuses.
-  `state persistence failure` means the state path cannot publish the authoritative record; repair its permissions, disk space, quota, or mount, not monitoring.
+- `CURATION_NUDGE: <detail>` and `CODEBASE_SWEEP_NUDGE: <detail>` - one of this home's off-grid fleet nudge subjects is unavailable or has raised its wake.
+  Both codes come from the one check `bin/fm-nudge.sh`, which carries the curation subject on a 48-hour period and the codebase-design sweep subject on a 52-hour one, so the detail vocabulary below is the same for both and only the subject differs.
+  Two codes arriving together therefore usually name one fault of the shared check rather than two independent ones; fix the shared condition once and re-read.
+  `is not armed` or `could not be armed` means the check was never installed or the arm failed; run `bin/fm-nudge.sh --arm` and report the reason if it refuses.
+  `state persistence failure` means the state path cannot publish that subject's authoritative record; repair its permissions, disk space, quota, or mount, not monitoring.
   `supervision outage` means the state path is usable but the schedule is still missing or overdue; repair it through the emitted supervision instructions, exactly as for a lapsed watcher.
   `state health indeterminate` names state publication failure and supervision outage as candidates while asserting neither; check both, starting with the cheaper state-path reading, and do not route it as either verdict.
-  These readings are worth trusting because they come from what the work produced plus an observation-time publishability probe, not from the check's own claim to be armed; `bin/fm-curation-nudge.sh --status` prints the authoritative record when you need it.
-  Never read this line as a verdict on any vessel's files, including this one.
+  These readings are worth trusting because they come from what the work produced plus an observation-time publishability probe, not from the check's own claim to be armed; `bin/fm-nudge.sh --status` prints every subject's authoritative record when you need it.
+  Never read either line as a verdict on any vessel's files or repositories, including this one.
   The nudge itself arrives as a `check:` wake instead, and that one asks firstmate to dispatch a crewmate to send the All-Ships notice per `AGENTS.md` section 12; the wording of that notice is firstmate's, and the nudge never writes to Bridge itself.
-  Each vessel then measures its own two files and decides its own split, because the files are per-home and gitignored and no seat can see another's.
+  For `CURATION_NUDGE` each vessel then measures its own `data/learnings.md` and `data/captain.md` and decides its own split, because the files are per-home and gitignored and no seat can see another's.
+  For `CODEBASE_SWEEP_NUDGE` each vessel loads the `codebase-sweep` skill and runs it on its own repositories, one named repository at a time; the cadence sweeps nothing and reads no repository, here or anywhere.
+- `FORGE_STATUS: <detail>` - this home's forge status watch is unavailable, or its scheduler cannot place a next observation.
+  `is not armed` or `could not be armed` means the watch was never installed or the arm failed; run `bin/fm-forge-status.sh --arm` and report the reason if it refuses.
+  `state persistence failure` means the state path cannot publish the record or append the reading log; repair its permissions, disk space, quota, or mount, not monitoring.
+  `supervision outage` means the state path is usable but the observation is still missing or overdue, so the forge is unwatched; repair it through the emitted supervision instructions, exactly as for a lapsed watcher.
+  `state health indeterminate` names state publication failure and supervision outage as candidates while asserting neither; check both, starting with the cheaper state-path reading.
+  `landed on the five-minute grid` is a scheduling refusal, not dead monitoring: the configured jitter window contains no off-grid target minute, so widen it.
+  Never read any of these lines as a reading of the forge itself - they say the instrument is not reading, never that the forge is healthy; `bin/fm-forge-status.sh --status` and `--log` print what was actually recorded.
+  A reading arrives as a `check:` wake instead, and that one is firstmate's to judge: decide whether it touches this fleet's work, whether the fleet needs telling through a dispatched crewmate per `AGENTS.md` section 12, and whether to raise or lower the watch with `bin/fm-forge-status.sh --cadence raised|relaxed`.
+  A wake that says `UNMEASURABLE` means this seat could not read the status page; it is never relayed as an all-clear (docs/forge-status-watch.md).
+- `SLOT_GUARD: <detail>` - nothing is watching for a pooled worktree that two tasks both claim, which is the condition that lets a cleanup return a copy a running worker is standing in and destroy its unsaved work.
+  `nothing is watching` or `could not be armed` means the watch was never installed or the arm failed; run `bin/fm-slot-guard.sh --arm` and report the reason if it refuses.
+  `has never completed a sweep` or `has stopped running` means the watch exists but the monitoring service is not running it, which is a supervision fault rather than an ownership one: repair it through the emitted supervision instructions, exactly as for a lapsed watcher.
+  Never read this line as a verdict on whether any slot is currently contested - it says the instrument is not reading, not that the fleet is clear; `bin/fm-slot-guard.sh --status` gives the current reading of every recorded copy when you need it.
+  An actual contested copy arrives as a `check:` wake instead, and it names both the finished task and the live worker standing in its copy.
+  That wake is captain-facing only when it blocks a cleanup he is waiting on: cleanup of the named task is already refused, and the work of the live worker is not at risk while the refusal stands, so the ordinary handling is to let the live worker finish and then retry the cleanup.
+  Never resolve one by forcing the cleanup through: `--force` deliberately does not override this refusal, because authority to discard one task's work is not authority to destroy another's.
 - `GROSSREINSCHIFF: weekly fleet cleanup sweep is due (...)` - this home has not completed its Thursday cleanup sweep for the current week; load the `grossreinschiff` skill and run it.
   Nothing is broken: the line is a cadence reminder, and it repeats each session start until `bin/fm-grossreinschiff-due.sh --record` marks a sweep that actually produced a report.
   The reported window-open days say only how far into the current week's window this session start falls; the count is bounded to 0 through 6 and never measures how long the home has been dark.
@@ -147,6 +166,26 @@ When any diagnostic needs captain attention, report the plain consequence and re
   Open the named row in the named backlog file and check the id token first, because `tasks-axi` resolves only a slug-shaped id (letters, digits, `.`, `_`, `-`, no spaces and no Markdown emphasis) inside a `- [ ] <id> - <title>` row, while `fm-fleet-snapshot` also accepts a `- **<id>** - <title>` row.
   Rewrite the id or the row shape, then confirm the repair with `tasks-axi list --file <backlog file>` showing that id.
   It repeats every session start until the row is fixed, it never blocks startup, and the check must not rewrite the row itself.
+- `DECISION_LEDGER: <class> <id> - <detail>` - a captain decision record in this home is structurally unfinished, found by `bin/fm-decision-ledger.sh --audit`.
+  Every class is a repair, never a fresh question for the captain: he has already answered, or the answer is already lost, and asking him again is precisely the failure this check exists against.
+  Load `decision-hold-lifecycle` before touching any of them.
+  `unfinished-close` means the decision is stored but the close did not finish; re-run the identical `bin/fm-decision-hold.sh record` call, which is idempotent and completes it.
+  `acted-but-open` means a held decision blocks only tasks that are all done, so the answer was given and acted on but never recorded; find his actual words and record them, and do not invent them if you cannot.
+  `closed-without-record` and `altered-record` mean the stored answer is missing or no longer matches what was recorded; say so plainly to the captain rather than acting on text that cannot be trusted, because a wrong answer presented as settled is worse than an open question.
+  `stale-body-state` means a closed record still says in its own text that it awaits a decision; correct the text, and do not read the text as evidence the question is open.
+  `duplicate-suspect` and `open-but-settled` mean several records may be asking one question, or a question already has a recorded answer; read them and fold what you confirm with `bin/fm-decision-hold.sh supersede`, and never report the count of these findings as the number of duplicates, because this check cannot see one question re-asked in different words.
+  `premise-unmeasurable` means a record's premise could not be measured from the seat that tried; **do not fold it on that reading** - the finding may still be live on the machine where it was made, and a fold would close it with nobody left who could see it.
+  The check is detect-only, repeats every session start until the record is repaired, and never closes a captain decision on its own.
+- `DECISION_LEDGER: baseline absent - <n> of the findings above sit on captain records that are already closed ...` - this home has never taken an adoption baseline, so the audit is still reporting losses that predate the mechanism and can never be repaired.
+  Read the listed findings once and decide whether those answers are genuinely lost rather than pending; if they are, run `bin/fm-decision-ledger.sh --record-baseline` once, which records that fact and lets the check converge on the records still worth repairing.
+  On the main home this was the difference between 58 findings every session and 2, so leaving it untaken is what makes the whole check unreadable.
+- `DECISION_LEDGER: baseline recorded - <n> finding(s) ... are withheld` - a disclosure, not a problem: the audit is withholding that many findings on records that were already closed when the baseline was taken, and it says so every run rather than hiding them.
+  No action.
+  The withheld findings are listed in the named file and still carried under `baseline_excluded` by `--audit --json`.
+- `DECISION_LEDGER: baseline rejected - <n> line(s) ... name a finding class that sits on a live record` - the baseline file has lines that reach for a record that is still repairable, and they carry no authority: a baseline may only ever cover an already-closed record.
+  Every finding those lines name is still being reported.
+  Remove the offending lines and repair the records they point at.
+- `DECISION_LEDGER: and <n> more not shown here ...` - the startup digest caps how many findings it prints and states the remainder rather than truncating silently; run `bin/fm-decision-ledger.sh --audit` for the full list.
 - `FLEET_SYNC: <repo>: skipped: <reason>` - a benign one-off skip (offline, no origin, local-only); bootstrap continued, investigate only if it blocks work.
   A skip can also report the bounded fleet-refresh timeout (`FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT`, or a fleet-size-aware default with a 20 second floor); a timeout never blocks startup.
 - `FLEET_SYNC: <repo>: recovered: <detail>` - the clone had drifted onto a clean detached HEAD holding no unique commits and the sync self-healed it (re-attached the default branch and fast-forwarded); no action needed, it is reported only so the self-heal is visible.

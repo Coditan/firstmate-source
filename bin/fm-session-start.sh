@@ -87,6 +87,12 @@
 #                       is this crew on". bin/fm-crew-state.sh answers the
 #                       second, and the digest deliberately skips that slower
 #                       read for every task so startup stays fast and bounded.
+#                       It ALSO prints the captain decisions this home has already
+#                       settled, in his own words, from bin/fm-decision-ledger.sh.
+#                       That read is what makes a reset survivable: a decision he
+#                       gave in an earlier session is not in this session's
+#                       context, and the record only helps a session that consults
+#                       it before asking again.
 #   8. closing reminder - points back to the step-5 block and keeps only the
 #                       lock, afk, X-mode, and read-once reminders. This script
 #                       deliberately never runs long-lived polls itself; the
@@ -465,7 +471,11 @@ for meta in "$STATE"/*.meta; do
     if fm_backend_target_exists "$backend" "${target:-$window}" "fm-$id"; then
       printf 'endpoint: alive (backend=%s window=%s)\n' "$backend" "$window"
     else
-      printf 'endpoint: dead (backend=%s window=%s)\n' "$backend" "$window"
+      if [ "$?" -eq 1 ]; then
+        printf 'endpoint: dead (backend=%s window=%s)\n' "$backend" "$window"
+      else
+        printf 'endpoint: unknown (backend=%s window=%s unreadable)\n' "$backend" "$window"
+      fi
     fi
   else
     printf 'endpoint: unknown (no window recorded)\n'
@@ -491,6 +501,20 @@ for status in "$STATE"/*.status; do
   print_status_tail "$status"
 done
 [ "$ORPHAN_STATUS_FOUND" -eq 1 ] || printf '(none)\n'
+
+subsection "Captain decisions already settled (bin/fm-decision-ledger.sh)"
+# THE POINT OF THIS SECTION: a decision the captain gave in an earlier session is
+# not in this session's context, and on 2026-08-17 that is exactly how he was asked
+# three settled questions again in one day. The answers are printed here, in his own
+# words, before anything below or above invites a fresh question - a store nobody
+# consults is the same failure wearing different clothes.
+# Read-only, local-only, bounded to the most recent few; --all for the rest.
+if command -v jq >/dev/null 2>&1; then
+  FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" "$SCRIPT_DIR/fm-decision-ledger.sh" --limit 5 \
+    || printf '(the settled-decision record could not be read; run bin/fm-decision-ledger.sh directly)\n'
+else
+  printf '(jq is absent, so the settled-decision record was not read - treat every decision below as unverified)\n'
+fi
 
 subsection "AFK"
 if [ -e "$STATE/.afk" ]; then
@@ -543,7 +567,12 @@ listing was just printed with a pointer for targeted full-body follow-up.
 Do NOT bulk-read state/*.status now either: their bounded tails were just
 printed with full log paths for targeted follow-up when older wake-event
 history is actually needed. Re-reading everything defeats the entire point
-of this command. Re-read a file only if this digest flagged it ABSENT (then
+of this command.
+The settled captain decisions printed above are answers he has ALREADY given.
+Treat them as decided. Do not re-ask a question they answer, and do not
+paraphrase one back to him as though it were still open; if one of them needs
+revisiting, say which answer you are reopening and why.
+Re-read a file only if this digest flagged it ABSENT (then
 rebuild or create it per AGENTS.md), its contents looked unparseable/corrupt,
 or an individual full status log is needed for older wake-event history.
 EOF

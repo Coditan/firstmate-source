@@ -197,3 +197,4 @@ If `treehouse return` fails for a leased home, teardown stops with state intact 
 With `--force`, teardown is the explicit discard path.
 It kills child windows, discards child work and state inside the secondmate home, removes the route, releases the lease, and removes the retired secondmate home.
 Never use `--force` unless the captain explicitly said to discard the work.
+Even then, teardown still refuses when the pooled-worktree guard identifies another live task as its holder; [docs/slot-guard.md](../../../docs/slot-guard.md) owns that guard, its limits, and its deliberate named-holder override.

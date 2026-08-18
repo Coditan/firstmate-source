@@ -17,7 +17,8 @@ Measured on `hlr-web-1` on 2026-08-12:
 | Out-of-memory kills already recorded against the user slice | 1 |
 | Headroom at the time of reading | 23.4 GB total, 8.5 GB used, 14.9 GB available |
 
-So the machine is comfortable and completely unbounded, and when that changes nothing on it can say which worker caused it.
+That measurement predates the 32 GiB swapfile added on 2026-08-17 and the proposed 12 GB container ceiling for this seat.
+Swap is a shock absorber for anonymous memory, and a ceiling may bound this seat later, but neither names which worker caused memory pressure.
 An alarm that cannot name a culprit is not actionable, and a ceiling chosen without knowing who spends the memory is a guess.
 The delivered alarm reads this instrument, so attribution had to come first.
 
@@ -72,7 +73,7 @@ All of the following was run on `hlr-web-1` on 2026-08-13 against the reading as
 ### Proven against a deliberately runaway process
 
 A self-capping balloon grew to a hard 600 MiB ceiling at roughly 20 MiB/s inside this task's own worktree, held flat, and exited.
-The host had ~15.9 GiB available throughout, and the balloon's own shell carried a `ulimit -v` guard, so the runaway was scoped rather than a load test.
+The host had ~15.9 GiB RAM headroom throughout, and the balloon's own shell carried a `ulimit -v` guard, so the runaway was scoped rather than a load test.
 
 During the growth phase:
 

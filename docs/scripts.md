@@ -14,7 +14,8 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-axi-suite.sh`        | Check and gate patch/minor self-updates of the npm-distributed AXI CLI suite, and report when the maintained copy is not the copy this session runs |
 | `fm-axi-path-lib.sh`     | Resolve and prepend one vessel's home-private AXI npm prefix, record the pre-prepend session PATH, and name the maintained tools something else shadows |
 | `fm-currency-round.sh` | Run this home's daily currency round, arm it on the watcher, and report a home that has stopped being checked |
-| `fm-curation-nudge.sh` | Raise this home's 48-hour knowledge-file curation nudge on a target whose minute never lands on the five-minute grid, arm it on the watcher, and report a schedule nothing is executing (docs/curation-nudge.md) |
+| `fm-nudge.sh` | Raise this home's off-grid fleet nudges - one watcher check with several subjects, each on its own period and its own target whose minute never lands on the five-minute grid - arm that one check, and report a schedule nothing is executing (docs/nudge-cadence.md) |
+| `fm-forge-status.sh` | Read the forge's own status page on a settable cadence, append every new reading to a durable log, wake firstmate only on a new one, arm it on the watcher, and report a watch nothing is executing (docs/forge-status-watch.md) |
 | `fm-firstmate-update-check.sh` | Read-only check for relevant instruction-surface commits on the source this deployment updates from |
 | `fm-fork-sync-check.sh` | Detect unabsorbed real-upstream content in the curated fork and prefilter both sides of its commit review |
 | `fm-grossreinschiff-due.sh` | Report whether this home's weekly Thursday cleanup sweep is due, and record a completed one |
@@ -28,7 +29,8 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-backlog-handoff.sh`  | Validate and delegate queued backlog-item moves into a secondmate home               |
 | `fm-backlog-lint.sh`     | Detect-only report of mechanically stale `blocked-by:` edges in the durable backlog  |
 | `fm-blocker-class-lib.sh` | Shared jq predicate for whether a `blocked-by:` target is real in the live backlog or done archive |
-| `fm-decision-hold.sh`    | Create, verify, complete, and resolve durable captain-held decisions                 |
+| `fm-decision-hold.sh`    | File, answer, fold, re-measure, verify, and complete durable captain decision records - the store's only writer |
+| `fm-decision-ledger.sh`  | Read that store: the captain's settled decisions verbatim, the open ones with their premises, the records left structurally unfinished, and the adoption baseline that keeps pre-mechanism losses from burying them |
 | `fm-decision-inventory.sh` | Group the open captain decisions by originating investigation and keep the judge's record where a judge ruled, for `/decisionboard` (the fold is assumed, not verified) |
 | `fm-sea-chart.sh`        | Assemble one undertaking's sea chart - destination, decided, takeable, fog, course boundaries - for `/sea-chart`, reconciling its own decision records back against the backlog so a withheld one is counted rather than dropped; amends Wayfinder by Matt Pocock under the MIT licence (docs/sea-chart-provenance.md) |
 | `fm-chart-kinds-lib.sh`  | The `fog` and `out-of-course` backlog kinds, spelled once for every reader of them |
@@ -43,7 +45,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-supervision-cost-engine.py` | Measurement engine for supervision spend; counts session starts, deliveries, empty deliveries, requests per wake, and delivery arms by whether they cost a request of their own |
 | `fm-grade-engine.py`     | Measurement engine for the review-quality scale; every metric carries its evidence class and sample size |
 | `fm-memory-reading.sh`   | Name which process is running away with this machine's memory, by size and by growth, tied to its account and to its task when known, alongside headroom and the kernel's stall reading; it sets no limit and kills nothing, and it never reports an input it could not read as a healthy zero (docs/memory-attribution.md) |
-| `fm-memory-alarm.sh`     | Wake the fleet when this machine is running out of memory, on headroom and on growth, naming the process responsible with its account and the work it serves; it reads the attribution reading and nothing else, sets no limit and kills nothing, and reports an instrument it could not read as blindness rather than an all-clear (docs/memory-alarm.md) |
+| `fm-memory-alarm.sh`     | Wake the fleet when this machine is running out of RAM headroom, on headroom and on growth, naming the process responsible with its account and the work it serves; it reads the attribution reading and nothing else, sets no limit and kills nothing, and reports an instrument it could not read as blindness rather than an all-clear (docs/memory-alarm.md) |
 | `fm-memory-ceiling-probe.sh` | Measure whether a memory ceiling on this host would manufacture the very pressure an alarm above it exists to detect, by running the same file-reading workload with and without one; it sets no lasting limit and kills nothing (docs/memory-ceiling-caveat.md) |
 | `fm-herdr-lab.sh`        | Provision and guardedly operate an isolated, never-default Herdr lab session         |
 | `fm-install-herdr.sh`    | Install CI's exact-version Herdr pin with official asset URL, SHA-256, and protocol checks |
@@ -128,6 +130,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-supervision-lib.sh`  | Shared in-flight-work and watcher-beacon status                                       |
 | `fm-ff-lib.sh`           | Shared guarded fast-forward helper for origin pulls and local secondmate syncs       |
 | `fm-lock-lib.sh`         | Shared "is this git lock provably abandoned?" proof used by teardown and fleet-sync   |
+| `fm-slot-lib.sh`         | Shared fail-safe proof of which live tasks hold a pooled worktree                    |
 | `fm-transition-lib.sh`   | Shared backend-neutral agent-state transition record and supervision policy          |
 | `fm-config-inherit-lib.sh` | Shared primary-to-secondmate inherited local-material propagation and config-reread delivery |
 | `fm-tasks-axi-lib.sh`    | Shared backlog-backend selector and `tasks-axi` compatibility probe                  |
@@ -154,7 +157,8 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-pr-check.sh`         | Record validated `pr=` and `pr_head=` values, then atomically arm a static merge poll |
 | `fm-pr-merge.sh`         | Refuse a placeholder PR title, and separately a title it could not read, record PR metadata, then merge a task's canonical full GitHub URL and have the forge delete the merged head branch |
 | `fm-promote.sh`          | Promote a scout task in place to a protected ship task                               |
-| `fm-teardown.sh`         | Fail-closed teardown: return landed ship worktrees, require completed scout deliverables, retire secondmate homes |
+| `fm-slot-guard.sh`       | Watch recorded pooled worktrees for conflicting live task holders                    |
+| `fm-teardown.sh`         | Fail-closed teardown: refuse another task's pooled worktree, return landed ship worktrees, require completed scout deliverables, retire secondmate homes |
 | `fm-harness.sh`          | Detect the running harness and resolve crew or secondmate harness, model, and effort |
 | `fm-lock.sh`             | Per-home firstmate session lock                                                      |
 | `fm-harness-pid-lib.sh`  | Shared harness-process identity for every per-session record, from a tool call's ancestry |

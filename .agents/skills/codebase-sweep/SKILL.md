@@ -23,6 +23,9 @@ So the fleet notice tells each vessel to run this skill, and each vessel runs it
 This skill is that obligation.
 It is not a scheduler, it registers no timer, and it never sweeps another vessel's repositories.
 
+What fires that notice is the `codebase-sweep` subject of `bin/fm-nudge.sh`, on a 52-hour period; `AGENTS.md` section 3 and `docs/nudge-cadence.md` own it.
+It raises a wake and nothing else, so a `CODEBASE_SWEEP_NUDGE` line means the notice is due, never that any sweep has run.
+
 Firstmate does not read a whole repository itself and never writes to one.
 Dispatch the sweep as an investigation, one per repository, under `AGENTS.md` section 7, and dispatch whatever comes out of it as ordinary work through that project's own delivery path.
 Name the repository before the sweep starts; a sweep with no named repository has no scope and no report to write.

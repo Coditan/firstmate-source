@@ -1101,7 +1101,7 @@ test_presentation_session_lock_path_is_shared_across_homes() {
   [ "$path_a" = "$path_b" ] || fail "same session/socket must resolve one shared lock path"
   case "$path_a" in
     /tmp/firstmate-herdr-presentation-"$uid"/order-*.lock) ;;
-    *) fail "session lock path must use the shared machine namespace: $path_a" ;;
+    *) fail "session lock path must use the per-user machine namespace: $path_a" ;;
   esac
   case "$path_a" in
     */state/*) fail "session lock path must not live under a home state directory: $path_a" ;;

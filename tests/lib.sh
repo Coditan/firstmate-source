@@ -67,12 +67,24 @@ export FM_CURRENCY_ROUND_DISABLE=1
 # deliberately NOT silenced, so the bootstrap suites still exercise arming.
 export FM_MEMORY_ALARM_DISABLE=1
 
-# The 48-hour curation nudge is armed by that same locked bootstrap step and has
+# The off-grid fleet nudges are armed by that same locked bootstrap step and have
 # the same property: every fixture home is unarmed, so every suite that composes
-# fm-bootstrap.sh would otherwise see its diagnostic. Silence the reporting
-# modes suite-wide; tests/fm-curation-nudge.test.sh sets it back to 0. --arm is
-# deliberately NOT silenced, so the bootstrap suites still exercise arming.
+# fm-bootstrap.sh would otherwise see their diagnostics. Silence the reporting
+# modes suite-wide, one flag per registered subject; tests/fm-nudge.test.sh sets
+# them back to 0. --arm is deliberately NOT silenced, so the bootstrap suites
+# still exercise arming. A subject added to bin/fm-nudge.sh needs its flag here
+# too, and tests/fm-nudge.test.sh asserts that this list still covers every one.
 export FM_CURATION_NUDGE_DISABLE=1
+export FM_CODEBASE_SWEEP_NUDGE_DISABLE=1
+
+# The forge status watch is armed by that same locked bootstrap step, and it is
+# the one subject on the seam that would otherwise REACH THE NETWORK from a
+# behavior suite. Silencing detect keeps every composing suite hermetic and
+# keeps each fixture home's unarmed diagnostic out of unrelated cases;
+# tests/fm-forge-status.test.sh sets it back to 0 and drives the check against
+# a local status document. --arm is deliberately NOT silenced, so the bootstrap
+# suites still exercise arming.
+export FM_FORGE_STATUS_DISABLE=1
 
 # bin/fm-nm-path-lib.sh resolves the no-mistakes CLI from the seat's install
 # location as well as from PATH, so a fixture that strips the CLI off PATH is no

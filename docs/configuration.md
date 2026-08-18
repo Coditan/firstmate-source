@@ -667,34 +667,66 @@ On the pin hop it measures pin age and not pin fidelity, through `bin/fm-fleet-u
 It never updates anything, never acts on or measures another vessel, and never reports an all-clear for a reading it could not take.
 `FM_CURRENCY_ROUND_DISABLE=1` silences only the reporting modes, for suites that compose `bin/fm-bootstrap.sh`.
 
-### Knowledge-file curation nudge
+### Off-grid fleet nudges
 
-`bin/fm-curation-nudge.sh` is the cadence behind the instruction to prune `data/learnings.md` and `data/captain.md` rather than append to them.
-That instruction had no mechanism, so it was carried by memory, and on this seat the pair grew to 86% of the whole session-start digest before anything re-measured it.
-[curation-nudge.md](curation-nudge.md) owns the evidence, the timing contract, the health property, and the scope boundary; the script's header owns its flags, state files, and mechanics.
+`bin/fm-nudge.sh` is the cadence behind the standing duties that are periodic re-measures rather than reactions to a change.
+It carries several subjects on one watcher check: the 48-hour `curation` subject behind the instruction to prune `data/learnings.md` and `data/captain.md` rather than append to them, and the 52-hour `codebase-sweep` subject behind the instruction to sweep a repository's design before it takes a large amount of agent work.
+Those instructions had no mechanism, so they were carried by memory, and on this seat the knowledge-file pair grew to 86% of the whole session-start digest before anything re-measured it.
+[nudge-cadence.md](nudge-cadence.md) owns the evidence, the timing contract, the health property, the two-subject boundary, and the scope boundary; the script's header owns its flags, subjects, state files, and mechanics.
 
-The locked bootstrap step arms it with `--arm`, which writes and registers this home's `state/curation-nudge.check.sh` watcher check and is idempotent, exactly as the currency round's arming is.
-The watcher then runs it on the ordinary `state/*.check.sh` sweep, and it self-gates to its own schedule, so all but one sweep in 48 hours is a single file read.
-Detect exits zero for ordinary sweeps, ordinary firings, and persisted draw refusals, and exits non-zero when state cannot be persisted.
+A second subject is registered on this check rather than given a check of its own.
+Two near-identical units on one host is a measured trap: on 2026-08-17 `bridge-notify-poll.timer` reported loaded, enabled and active on this machine while last having fired ten days earlier, and sibling units that behave differently are worse than one unit with several subjects because the difference is invisible until one of them is the one that stopped.
+So there is one shim, one arming path, and one health-reading shape; a subject brings only its own period, its own record, and its own payload.
+
+The locked bootstrap step arms it with `--arm`, which writes and registers this home's single `state/nudge.check.sh` watcher check and is idempotent, exactly as the currency round's arming is.
+That arm also retires the predecessor `state/curation-nudge.check.sh` and its registration, because a shim left pointing at a script that moved fails silently: the watcher discards a check's standard error.
+The shim passes no subject, so a subject added upstream starts being scheduled on the next session start with no second arming path to keep in step.
+The watcher then runs the check on the ordinary `state/*.check.sh` sweep, and each subject self-gates to its own schedule, so all but one sweep per period per subject is a single file read.
+Detect exits zero for ordinary sweeps, ordinary firings, and persisted draw refusals, and exits non-zero when a subject's state cannot be persisted; one subject's outcome never suppresses another's evaluation.
 The watcher captures and surfaces non-empty check output regardless of the check's exit status, so a printed persistence diagnostic remains an actionable wake.
-A firing whose successor draw refuses deliberately prints two lines: its curation wake followed by the refusal diagnostic.
-If the single authoritative record cannot be published, the prior state stays intact and the script prints the persistence diagnostic instead of a wake so the same due event is retried.
-`--draw` and `--status` write no state and do not create an absent state directory.
+A firing whose successor draw refuses deliberately prints two lines: its wake followed by the refusal diagnostic.
+If a subject's single authoritative record cannot be published, the prior state stays intact and the script prints the persistence diagnostic instead of a wake so the same due event is retried.
+`--draw` and `--status` write no state and do not create an absent state directory, and `--draw` requires `--subject` because a count spread over several periods names no one schedule.
+`--subjects` prints each registered subject, its diagnostic code, and its period.
 
-The period is 48 hours rather than daily, because the currency round already owns the daily slot and a curation sweep at that rate is noise.
-Each firing draws 180-420 seconds of fresh jitter for the next target, so successive fires drift, and any drawn target whose minute is a multiple of five is discarded and re-drawn: cron defaults, systemd timers, monitoring pollers and the watcher sweep itself all cluster on those boundaries.
-`FM_CURATION_NUDGE_INTERVAL`, `FM_CURATION_NUDGE_JITTER_MIN`, and `FM_CURATION_NUDGE_JITTER_MAX` move that window; `FM_CURATION_NUDGE_OVERDUE` sets how far past its target a sweep may sit before `--armed` calls the cadence stopped.
+No two subjects share a period, so no two lock to one wall-clock rhythm; 48 and 52 hours re-approach only at their 624-hour common multiple, and [nudge-cadence.md](nudge-cadence.md) records the measured separation and why that re-approach is harmless.
+Each firing draws 180-420 seconds of fresh jitter for that subject's next target, so successive fires drift, and any drawn target whose minute is a multiple of five is discarded and re-drawn: cron defaults, systemd timers, monitoring pollers and the watcher sweep itself all cluster on those boundaries.
+Each subject's window is moved by environment variables named after its diagnostic code - `FM_CURATION_NUDGE_INTERVAL`, `FM_CODEBASE_SWEEP_NUDGE_INTERVAL`, and the matching `_JITTER_MIN` and `_JITTER_MAX` - while `FM_<CODE>_OVERDUE` sets how far past its target that subject may sit before `--armed` calls the cadence stopped.
 
-Every session start also runs `--armed`, which reports `CURATION_NUDGE:` as `not armed`, `state persistence failure`, `state health indeterminate`, or `supervision outage` when this home's cadence needs attention.
-That reading is taken from the last-firing epoch and scheduling outcome in the single human-readable, parseable `state/curation-nudge.report` record - what the work produced - and never from the check's own claim to be armed, because a timer's own surfaces keep reporting health long after it stopped firing.
-The report is atomically replaced as one file, so its human account and the schedule the script acts on are always the same bytes.
+Every session start also runs `--armed`, which reports one `CURATION_NUDGE:` or `CODEBASE_SWEEP_NUDGE:` line per subject that is `not armed`, has hit a `state persistence failure`, is in a `state health indeterminate` reading, or is in a `supervision outage`.
+The unarmed reading is taken first and for every subject, because one shim serves them all and a still-plausible schedule must never speak for a check that is not there.
+The rest is taken from the last-firing epoch and scheduling outcome in that subject's single human-readable, parseable `state/<subject>-nudge.report` record - what the work produced - and never from the check's own claim to be armed, because a timer's own surfaces keep reporting health long after it stopped firing.
+Each report is atomically replaced as one file, so its human account and the schedule the script acts on are always the same bytes.
 Because a failed publication cannot record itself durably, `--armed` writes representative report content and atomically renames it between distinct scratch paths in the state directory before every conclusion that supervision has stopped, including both an overdue target and a missing first record.
 The probe never targets the authoritative record and removes its scratch paths; an unusable path reports `state persistence failure`, a usable path with missing work reports `supervision outage`, and a probe that cannot run, complete, or clean up non-destructively reports `state health indeterminate`, names both candidates, and asserts neither.
 All three outcomes leave any prior due event intact.
 
-The nudge raises a wake and nothing else: it never writes to Bridge, never opens a network connection, and never touches a git repository.
+The nudges raise wakes and nothing else: the check never writes to Bridge, never opens a network connection, and never touches a git repository, and it sweeps no repository and prunes no file.
 Firstmate reads the wake and dispatches a crewmate to send the All-Ships notice, per `AGENTS.md` section 12.
-`FM_CURATION_NUDGE_DISABLE=1` silences only the reporting modes, for suites that compose `bin/fm-bootstrap.sh`.
+`FM_<CODE>_DISABLE=1` silences only the reporting modes for one subject, for suites that compose `bin/fm-bootstrap.sh`.
+
+### Forge status watch
+
+`bin/fm-forge-status.sh` reads the forge's own status page, records every new reading, and wakes firstmate only when the reading is new.
+Until it existed, an outage at the forge reached this fleet only when a supervisor walked into one, and live workers had to be warned by hand that a red check was not their own defect.
+[forge-status-watch.md](forge-status-watch.md) owns the evidence, the design decision behind the shape, and what the wake carries; the script's header owns its flags, state files, and mechanics.
+
+It runs on the same seam as the curation nudge rather than on a second timer: the locked bootstrap step arms it with `--arm`, which writes and registers this home's `state/forge-status.check.sh` and is idempotent, and the watcher runs it on the ordinary `state/*.check.sh` sweep while it self-gates to its own schedule.
+A sweep that is not due reads the persisted schedule and reaches no network at all.
+A due sweep takes one bounded fetch (`FM_FORGE_STATUS_TIMEOUT`, default 10 seconds and clamped to 15, and `FM_FORGE_STATUS_MAX_BYTES`, default 1000000 bytes and clamped to 5000000 through a byte-limited sink), renders the reading, and compares it to the last entry in the append-only `state/forge-status.log`.
+An unchanged reading appends nothing and wakes nobody; a new one is appended and printed as one wake line.
+The last log entry, not the schedule record, is what deduplication reads, so a record publish that fails after an append can neither duplicate nor lose a reading.
+
+The cadence is settable and its setting in force is readable, because raising and lowering it is firstmate's decision and never the script's: `--cadence raised` observes every `FM_FORGE_STATUS_RAISED_INTERVAL` seconds (default 300), `--cadence relaxed` every `FM_FORGE_STATUS_INTERVAL` seconds (default 7200) plus `FM_FORGE_STATUS_JITTER_MIN` to `FM_FORGE_STATUS_JITTER_MAX` seconds of fresh jitter, with any target minute that is a multiple of five discarded and re-drawn.
+The off-grid refusal governs the relaxed cadence only, for the reason the curation nudge carries it; a 300-second period is on the grid by definition, and skipping observations to dodge it during an incident would trade the thing being watched for a tidy schedule.
+`--cadence` alone, `--status`, and `--log [n]` are read-only and write no state.
+
+Every session start also runs `--armed`, which reports `FORGE_STATUS:` as `is not armed`, `state persistence failure`, `state health indeterminate`, or `supervision outage` when this home's watch needs attention, taken from what the work produced rather than from the check's own claim to be armed, and confirmed against a scratch publishability probe before any conclusion that supervision stopped.
+Its patience follows the cadence in force: `FM_FORGE_STATUS_OVERDUE` (default 7200) for relaxed, `FM_FORGE_STATUS_OVERDUE_RAISED` (default 1800) for raised.
+
+A reading that cannot be taken is recorded as `unmeasurable` with its concrete condition and is never rendered as clear, because a watch that goes quiet when the network fails is worse than none.
+The watch never writes to Bridge and never decides what a reading means to this fleet: firstmate reads the wake, judges it, and dispatches a crewmate for any fleet notice, per `AGENTS.md` section 12.
+`FM_FORGE_STATUS_URL` moves the status document, and `FM_FORGE_STATUS_DISABLE=1` silences detect and `--armed` - and with them the fetch - for suites that compose `bin/fm-bootstrap.sh`.
 
 ## X mode (.env)
 

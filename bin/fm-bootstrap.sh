@@ -15,6 +15,9 @@
 #                 "LAVISH_ACCESS: <N> open review board link(s) still point at this machine only ...",
 #                 "BACKLOG_STALE: task <id> has <fault>; fix: <command>",
 #                 "BACKLOG_UNREADABLE: task <id> in <backlog file> is parsed by <reader> but not <reader>; fix: <row repair>",
+#                 "DECISION_LEDGER: <class> <id> - <what is unfinished about that captain decision record>",
+#                 "DECISION_LEDGER: baseline recorded|absent|rejected - <what the adoption baseline covers or refuses>",
+#                 "DECISION_LEDGER: and <n> more not shown here; run bin/fm-decision-ledger.sh --audit for the full list",
 #                 "FLEET_SYNC: <repo>: skipped|recovered|STUCK: <detail>",
 #                 "PR_CHECK_MIGRATION: <private remediation>",
 #                 "TANGLE: <remediation>",
@@ -29,7 +32,7 @@
 #                 "GROSSREINSCHIFF: weekly fleet cleanup sweep is due (...)",
 #                 "CURRENCY_ROUND: the daily update check <is not armed|has stopped> (...)",
 #                 "MEMORY_ALARM: <nothing is watching this machine|the memory watch ... has stopped> (...)",
-#                 "CURATION_NUDGE: <not armed|could not be armed|scheduler refusal|state persistence failure|state health indeterminate|supervision outage> (...)",
+#                 "CURATION_NUDGE|CODEBASE_SWEEP_NUDGE: <not armed|could not be armed|scheduler refusal|state persistence failure|state health indeterminate|supervision outage> (...)",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...",
 #                 "WATCHER_UNIT: <consent, convergence, or fallback detail>",
 #                 "DELIVERY_UNIT: <consent, convergence, or fallback detail>",
@@ -1075,6 +1078,35 @@ lavish_access_check
 if fm_tasks_axi_compatible && command -v jq >/dev/null 2>&1; then
   "$SCRIPT_DIR/fm-backlog-lint.sh" || true
 fi
+# A captain decision record that was started and never finished is invisible by
+# nature: the question leaves the open surfaces while the answer never lands. The
+# recovery-point case on 2026-08-17 sat in exactly that state with nothing detecting
+# it, which is why this is a detect-only bootstrap step rather than something a
+# session is expected to remember to run. Read-only, no network, one pass over two
+# local files.
+if command -v jq >/dev/null 2>&1; then
+  # Exit 1 means findings; 0 is clean and stays silent, and anything else is an
+  # environment fault this step declines to turn into a false alarm.
+  decision_rc=0
+  decision_audit=$("$SCRIPT_DIR/fm-decision-ledger.sh" --audit 2>/dev/null) || decision_rc=$?
+  if [ "$decision_rc" -eq 1 ] && [ -n "$decision_audit" ]; then
+    # BOUNDED, AND THE REMAINDER IS STATED. This home's audit stood at 58 findings
+    # the day the check was written, and a startup digest that opens with dozens of
+    # identical demands is one nobody finishes reading - which would cost exactly the
+    # attention this whole mechanism is trying to buy. The adoption baseline in
+    # bin/fm-decision-ledger.sh is what makes that number small; this cap is the
+    # backstop for a home that has not taken one yet, and it never hides the count.
+    decision_max=${FM_DECISION_LEDGER_MAX:-12}
+    decision_total=$(printf '%s\n' "$decision_audit" | wc -l | tr -d ' ')
+    printf '%s\n' "$decision_audit" | head -n "$decision_max" | sed 's/^/DECISION_LEDGER: /'
+    if [ "$decision_total" -gt "$decision_max" ]; then
+      printf 'DECISION_LEDGER: and %s more not shown here; run bin/fm-decision-ledger.sh --audit for the full list\n' \
+        "$((decision_total - decision_max))"
+    fi
+    unset decision_max decision_total
+  fi
+  unset decision_audit decision_rc
+fi
 if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] \
   && ! fm_backlog_backend_manual "$CONFIG" && fm_tasks_axi_compatible; then
   echo "BOOTSTRAP_INFO: tasks-axi available"
@@ -1090,14 +1122,31 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   # Arm this home's memory alarm, for the same reason and on the same terms: an
   # alarm a home must remember to arm is one that is not watching.
   if ! "$SCRIPT_DIR/fm-memory-alarm.sh" --arm >/dev/null 2>&1; then
-    echo "MEMORY_ALARM: the memory watch could not be armed on this home, so nothing will notice this machine running out of memory; run $SCRIPT_DIR/fm-memory-alarm.sh --arm to see why"
+    echo "MEMORY_ALARM: the memory watch could not be armed on this home, so nothing will notice RAM-headroom loss or runaway growth; run $SCRIPT_DIR/fm-memory-alarm.sh --arm to see why"
   fi
-  # Arm this home's 48-hour knowledge-file curation nudge, for the same reason
-  # and on the same terms: AGENTS.md already said to prune data/learnings.md and
-  # data/captain.md rather than append, and a rule with no mechanism is carried
-  # by memory. This is that mechanism.
-  if ! "$SCRIPT_DIR/fm-curation-nudge.sh" --arm >/dev/null 2>&1; then
-    echo "CURATION_NUDGE: the knowledge-file curation nudge could not be armed on this home, so nothing will re-measure this vessel's learnings and captain files between sessions; run $SCRIPT_DIR/fm-curation-nudge.sh --arm to see why"
+  # Arm this home's off-grid fleet nudges, for the same reason and on the same
+  # terms: AGENTS.md already said to prune data/learnings.md and data/captain.md
+  # rather than append, and to sweep a repository before it takes a large amount
+  # of agent work, and a rule with no mechanism is carried by memory. This is
+  # that mechanism. One shim serves every registered subject, so a subject added
+  # upstream starts being scheduled on the next session start with no second
+  # arming path to keep in step.
+  if ! "$SCRIPT_DIR/fm-nudge.sh" --arm >/dev/null 2>&1; then
+    echo "CURATION_NUDGE: the fleet nudges could not be armed on this home, so nothing will re-measure this vessel's learnings and captain files between sessions; run $SCRIPT_DIR/fm-nudge.sh --arm to see why"
+    echo "CODEBASE_SWEEP_NUDGE: the fleet nudges could not be armed on this home, so nothing will ask this vessel to re-measure its own repositories between sessions; run $SCRIPT_DIR/fm-nudge.sh --arm to see why"
+  fi
+  # Arm this home's forge status watch on the same seam. Until it existed, an
+  # outage at the forge reached this fleet only when a supervisor walked into
+  # it, and live workers had to be warned by hand that a red check was not
+  # their own defect.
+  if ! "$SCRIPT_DIR/fm-forge-status.sh" --arm >/dev/null 2>&1; then
+    echo "FORGE_STATUS: the forge status watch could not be armed on this home, so nothing will notice a forge outage between sessions; run $SCRIPT_DIR/fm-forge-status.sh --arm to see why"
+  fi
+  # Arm this home's pooled-worktree ownership watch. Same reason again, and the
+  # sharpest case for it: a pooled slot whose task record has gone stale is
+  # invisible until a cleanup returns it and kills whoever was handed it since.
+  if ! "$SCRIPT_DIR/fm-slot-guard.sh" --arm >/dev/null 2>&1; then
+    echo "SLOT_GUARD: the worktree-ownership watch could not be armed on this home, so nothing will notice a pooled worktree two tasks both claim; run $SCRIPT_DIR/fm-slot-guard.sh --arm to see why"
   fi
   "$SCRIPT_DIR/fm-axi-suite.sh"
   # The suite may have just seeded this home's own copies into $FM_HOME/.local/axi;
@@ -1129,10 +1178,18 @@ fi
 "$SCRIPT_DIR/fm-currency-round.sh" --armed || true
 # And the same question of the memory alarm: armed once is not running now.
 "$SCRIPT_DIR/fm-memory-alarm.sh" --armed || true
-# And of the curation nudge, which answers it from what the work produced - the
-# last firing and the next scheduled sweep - rather than from its own claim to
-# be armed, because a timer's own surfaces report health long after it died.
-"$SCRIPT_DIR/fm-curation-nudge.sh" --armed || true
+# And of each fleet nudge subject, which answers it from what the work produced
+# - that subject's last firing and next scheduled sweep - rather than from the
+# check's own claim to be armed, because a timer's own surfaces report health
+# long after it died.
+"$SCRIPT_DIR/fm-nudge.sh" --armed || true
+# And of the forge status watch, on the same terms: an armed watch that nothing
+# executes leaves the forge unwatched while every surface still looks fine.
+"$SCRIPT_DIR/fm-forge-status.sh" --armed || true
+# And of the worktree-ownership watch: a slot two tasks both claim is silent
+# until the cleanup that destroys someone's work, so a watch that stopped is a
+# fact this home needs stated rather than inferred from an absence of findings.
+"$SCRIPT_DIR/fm-slot-guard.sh" --armed || true
 [ -f "$STATE/firstmate-update.available" ] && cat "$STATE/firstmate-update.available"
 [ -f "$STATE/firstmate-update.stuck" ] && cat "$STATE/firstmate-update.stuck"
 [ -f "$STATE/fork-sync.pending" ] && cat "$STATE/fork-sync.pending"

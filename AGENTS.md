@@ -35,6 +35,7 @@ Hard rules, in priority order:
 3. **Never tear down unlanded work.**
    Uncommitted changes are never landed, and `bin/fm-teardown.sh` owns the complete landed-work test.
    Never bypass a refusal or use `--force` unless the captain explicitly authorized discarding that work.
+   That authorization covers only the work of the task being torn down, so when cleanup is refused because a different live task is standing in the same local copy, `--force` deliberately does not lift it and displacing that task is a separate decision that has to name who is displaced.
    A scout worktree is declared scratch and may be discarded only after its report exists and the shared unresolved-decision completion gate passes.
 4. **Crewmates never address the captain.**
    All crewmate communication flows through firstmate.
@@ -103,14 +104,10 @@ A silent bootstrap section needs no action; for any printed actionable diagnosti
 `BOOTSTRAP_INFO:` lines are completed no-action facts and do not require loading a skill.
 `secondmate-provisioning` owns startup secondmate sync, liveness, and inherited local-material convergence.
 
-### AXI-suite currency
-
-The locked bootstrap step also runs `bin/fm-axi-suite.sh`, the per-vessel AXI-suite currency check described in `docs/configuration.md` "AXI-suite self-update": patch and minor releases self-update, while `AXI_SUITE_REVIEW:` and `AXI_SUITE_STUCK:` require handling through `bootstrap-diagnostics`.
-This check never calls Bridge from the updater; firstmate owns any stuck-status relay and dispatches a crewmate for project writes.
-
 ### Running out of memory
 
-This machine has no swap and no memory limit anywhere, so nothing but this alarm stands between a runaway worker and the kernel choosing a victim.
+This machine now has swap as a shock absorber, and a 12 GB container memory limit is proposed for this seat, so the alarm is no longer the only boundary between runaway growth and a kernel kill.
+It remains the fleet's early warning for RAM-headroom loss and runaway growth before the host degrades into reclaim or swap pressure.
 The locked bootstrap step arms `bin/fm-memory-alarm.sh` on the watcher, and every session start reports `MEMORY_ALARM:` when this home's alarm is unarmed or has stopped running.
 `docs/memory-alarm.md` owns the thresholds, how they were derived, and what the alarm cannot see; its crossings and recoveries arrive as an ordinary `check:` wake under section 8, naming the process, its account, and the work it was serving.
 Two facts bind wherever that wake is read.
@@ -124,14 +121,6 @@ Firstmate's daily currency duty has a mechanism, so it is never carried by memor
 Two facts bind wherever that wake is read.
 Every claim of currency names its hop - `released`, `pinned`, or `installed` - and this round measures all three for this seat only, so a clean round never means the fleet is current.
 A reading the round could not take is reported as unmeasured and never as current, because an instrument that cannot read must not be relayed as an all-clear.
-
-### Re-measuring the knowledge files
-
-Section 10's instruction to prune rather than append also has a mechanism now, for the same reason: the locked bootstrap step arms `bin/fm-curation-nudge.sh` on the watcher, and every session start reports `CURATION_NUDGE:` when the cadence needs attention.
-`docs/configuration.md` "Knowledge-file curation nudge" and `docs/curation-nudge.md` own the 48-hour cadence, the off-grid jitter, and the scope; the nudge arrives as an ordinary `check:` wake under section 8.
-Two facts bind wherever that wake is read.
-It is a prompt to measure and never a claim about any vessel's files, because these files are per-home and gitignored and no seat can see another's, so each vessel measures its own pair and decides its own split.
-The nudge itself never writes to Bridge: firstmate reads the wake and dispatches a crewmate to send the All-Ships notice, exactly as section 12 requires of every fleet notice.
 
 ## 4. Harness and runtime dispatch
 
@@ -396,6 +385,7 @@ When evidence uses an internal label, rewrite it before sending:
 - teardown -> cleanup.
 - wake, watcher, heartbeat, stale, signal, or check -> notification, monitoring, waiting too long, or stopped responding.
 - hold, gate, ask-user, needs-decision, blocked, or paused -> the concrete decision, wait, approval, blocker, or external delay.
+- decision record, decision ledger, door, premise, superseded, or folded -> what he decided and when, what is still open, or that a question he already answered was closed against his answer.
 - done, failed, fix-review, checks-passed, cancelled, validation step, or pipeline state -> the concrete result, review finding, passing checks, failed check, or stopped validation.
 - brief -> instructions.
 - crewmate -> worker, only when naming the helper matters.
@@ -497,7 +487,7 @@ It owns the three-hop reading, and the rule that a hop it could not measure is r
 
 These skills are not captain-invocable; load them only at their precise triggers.
 
-- `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `ROLE_INVALID:`, `ROLE_OVERLAY_MISSING:`, `NEEDS_GH_AUTH`, `TANGLE:`, `SELF_DRIFT:`, `CREW_DISPATCH: invalid`, `CURRENCY_BASE:`, `LAVISH_ACCESS:`, `BACKLOG_STALE:`, `BACKLOG_UNREADABLE:`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `NUDGE_SECONDMATES:`, `AXI_SUITE_UPDATED:`, `AXI_SUITE_REVIEW:`, `AXI_SUITE_STUCK:`, `AXI_SUITE_SHADOWED:`, `AXI_SUITE_SHADOW_UNKNOWN:`, `FIRSTMATE_UPDATE_AVAILABLE:`, `FIRSTMATE_UPDATE_STUCK:`, `FORK_SYNC:`, `FORK_SYNC_STUCK:`, `CURRENCY_ROUND:`, `MEMORY_ALARM:`, `CURATION_NUDGE:`, `GROSSREINSCHIFF:`, `RUN_READER:`, `DELIVERY_UNIT:`, `BOSUN_UNIT:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
+- `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `ROLE_INVALID:`, `ROLE_OVERLAY_MISSING:`, `NEEDS_GH_AUTH`, `TANGLE:`, `SELF_DRIFT:`, `CREW_DISPATCH: invalid`, `CURRENCY_BASE:`, `LAVISH_ACCESS:`, `BACKLOG_STALE:`, `BACKLOG_UNREADABLE:`, `DECISION_LEDGER:`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `NUDGE_SECONDMATES:`, `AXI_SUITE_UPDATED:`, `AXI_SUITE_REVIEW:`, `AXI_SUITE_STUCK:`, `AXI_SUITE_SHADOWED:`, `AXI_SUITE_SHADOW_UNKNOWN:`, `FIRSTMATE_UPDATE_AVAILABLE:`, `FIRSTMATE_UPDATE_STUCK:`, `FORK_SYNC:`, `FORK_SYNC_STUCK:`, `CURRENCY_ROUND:`, `MEMORY_ALARM:`, `CURATION_NUDGE:`, `CODEBASE_SWEEP_NUDGE:`, `FORGE_STATUS:`, `SLOT_GUARD:`, `GROSSREINSCHIFF:`, `RUN_READER:`, `DELIVERY_UNIT:`, `BOSUN_UNIT:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
 - `diagnostic-reasoning` - load before scoping a reported bug and before acting on a diagnostic report.
 - `ask-user-authority` - load before deciding any ask-user finding, regardless of the project's `yolo` posture.
 - `harness-adapters` - load before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
@@ -507,7 +497,8 @@ These skills are not captain-invocable; load them only at their precise triggers
 - `secrets-handling` - load before reading, sourcing, injecting, inspecting, or transporting secrets or credentials, and whenever one is exposed in agent or tool output.
 - `stuck-crewmate-recovery` - load when the session-start digest reports an ordinary direct report's endpoint dead or its metadata has no window, or after a stale wake, looping pane, repeated confusion, an answered-by-brief question, an unresponsive crewmate, or a failed steer.
 - `secondmate-provisioning` - load before creating, seeding, validating, launching, handing backlog to, recovering, pushing inherited local material into, or retiring a secondmate home, and before editing `data/secondmates.md`.
-- `decision-hold-lifecycle` - load before treating an investigation or visual review as complete, before ending a visual review that exposed a decision, and when recording or routing the captain's answer.
+- `decision-hold-lifecycle` - load the moment the captain decides anything, whichever door it arrived through - a registered hold, an ask-user finding, or a sentence in chat - and before filing, folding, re-measuring, completing, or routing any captain decision record.
+  A decision he gives is recorded when it is GIVEN or it is lost, and a question is filed only after disposing of the ones already there: on 2026-08-17 four decisions he gave appeared zero times in the backlog, while across three seats two-thirds, 40 percent, and none of the open records were duplicates or already answered.
 - `fmx-respond` - load on an `x-mention <request_id>` `check:` wake to handle the mention, on an `x-mode-error ...` `check:` wake to report the X-mode configuration blocker, and on any milestone or terminal wake for an X-mode-linked task before posting its completion follow-up; relevant only when X mode is on.
 - `firstmate-codexapp` - load before coordinating a visible Codex Desktop thread, evaluating a Codex App backend request, or reconciling Codex Desktop host-tool smoke evidence for Firstmate work.
 - `firstmate-coding-guidelines` - load before changing firstmate's shared, tracked material, as defined by section 1's list, whether editing directly or briefing a crewmate for a firstmate-repo task.

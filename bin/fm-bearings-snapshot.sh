@@ -420,14 +420,23 @@ MODEL=$(printf '%s' "$SNAP" | jq \
                   or (((.body_excerpt // "") | test("SUPERSEDED|NOT REQUIRED|NOT-REQUIRED|DEFERRED"; "i")) | not))
          | {id, title:(.title | trunc(60)), kind:(.kind // ""),
             blocked_by:((.unresolved_blocker_ids // []) | if length > 0 then join(",") else "-" end | trunc(120)),
-            reason:((.hold_reason // .blocked_reason // "-") | trunc(40)),owner:"(main)"} ]
+            # The canonical snapshot withholds an answered-but-unclosed captain
+            # item from decisions_open, so it arrives here instead. Its recorded
+            # hold reason still says the captain owes an answer he has already
+            # given; say what is actually true of it. bin/fm-decision-ledger.sh
+            # --audit is where the repair is named.
+            reason:(if (.answered_pending_close // false) then "answered; close unfinished"
+                    else ((.hold_reason // .blocked_reason // "-") | trunc(40)) end),
+            owner:"(main)"} ]
      + [ (.secondmate_current.records // [])[] as $m
          | select($m.provenance.selected == "structured-home")
          | $m.queued[]?
          | select(.captain_actionable != true)
          | {id,title:(.title | trunc(60)), kind:(.kind // ""),
             blocked_by:((.unresolved_blocker_ids // []) | if length > 0 then join(",") else "-" end | trunc(120)),
-            reason:((.hold_reason // .blocked_reason // "-") | trunc(40)),owner:$m.id} ]) as $gates_typed
+            reason:(if (.answered_pending_close // false) then "answered; close unfinished"
+                    else ((.hold_reason // .blocked_reason // "-") | trunc(40)) end),
+            owner:$m.id} ]) as $gates_typed
   # fog and out-of-course are sea-chart material, not blockages. They are held on
   # purpose and never clear, so left here they permanently crowd a surface that is
   # already truncated. Withholding them is DISCLOSED in omitted[] and reversed by
