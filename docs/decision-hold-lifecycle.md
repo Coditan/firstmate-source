@@ -84,7 +84,8 @@ Both `resolve` and `record` write the resolution body first, then clear dependen
 That ordering is the detection mechanism, not an implementation detail: a close interrupted anywhere leaves a captain item carrying a resolution record while still open, which is a state nothing else produces.
 Re-running the identical command finishes it.
 
-`bin/fm-decision-ledger.sh --audit` reports four structural classes, none of which reads prose to infer that a decision happened:
+`bin/fm-decision-ledger.sh --audit` reports structural classes, none of which reads prose to infer that a decision happened.
+The script header owns the full current class list; the close-integrity classes below are the ones created by interrupted or bypassed answer recording:
 
 | class | shape in the records | what it means |
 | --- | --- | --- |
@@ -238,6 +239,7 @@ Plural blocker-readiness and mixed-home projection verification date: 2026-07-22
 Archived-resolution fallback verification date: 2026-07-27.
 Every-door recording, supersession, intake gate, and premise re-measurement verification date: 2026-08-17.
 Adoption-baseline, board-input, and startup-cap verification date: 2026-08-17.
+Oversized decision-ledger argv-boundary verification date: 2026-08-18.
 
 The baseline measurement was taken against a copy of the main home's `data/backlog.md` and `data/done-archive.md`, read-only, with `FM_HOME` pointed at the copy.
 Before: `--audit` printed 58 findings and exited 1 - 48 `closed-without-record`, 9 `stale-body-state`, 1 `duplicate-suspect`.
@@ -245,6 +247,10 @@ After `--record-baseline`: 2 findings, being the `duplicate-suspect` and a `clos
 A `duplicate-suspect` line hand-added to the baseline file silenced its finding on the first attempt.
 The generated entry-set digest now makes any added or removed entry reject the whole baseline, while the permitted-class and observed-closure checks reject an intact entry that no longer names an allowed historical loss; `test_a_baseline_cannot_silence_a_repairable_record` and `test_removing_a_baseline_entry_invalidates_every_entry` hold those boundaries.
 With no baseline recorded, `bin/fm-bootstrap.sh` printed 13 `DECISION_LEDGER:` lines rather than 59: twelve findings and one stating the 48 not shown.
+
+The 2026-08-18 argv-boundary fix keeps growable decision-ledger JSON records off `jq --argjson` so Linux's one-string `MAX_ARGSTRLEN` limit cannot make a large home unreadable.
+Independent verification on the real firstmate home showed the pre-fix failure was loud rather than lossy: both the broken and fixed versions reported 13 open questions and 31 audit findings.
+The oversized synthetic backlog regression crosses the 131072-byte argv ceiling with 350 already-closed captain records, proves `--records` returns all 350 records, proves pre-baseline `--audit --json` reports all 350 findings with none excluded, then proves `--record-baseline` and the post-baseline audit carry all 350 as withheld rather than dropping any.
 
 Two defects were found by these regressions rather than by reading, and both are recorded because each is a shape the next change could reproduce.
 The first: `record` wrote its resolution body with the routed-work list run onto the `Routed work:` line, because a command substitution ate the terminating newline; the write-then-close ordering meant the failing verification left exactly the visibly unfinished record it is designed to leave, which is how it was noticed.
@@ -279,6 +285,7 @@ ok - an answered decision leaves the open-decision surface and says why
 ok - the adoption baseline converges the audit and still names everything it covers
 ok - a baseline covers only what was already closed and can never mute a repairable record
 ok - removing one baseline entry invalidates the whole attestation
+ok - oversized decision payloads keep audit and baseline output complete
 ok - the decision board's input drops a question whose answer is already recorded
 
 $ bash tests/fm-decision-hold-lifecycle.test.sh
