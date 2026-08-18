@@ -1,22 +1,26 @@
 #!/usr/bin/env bash
-# Wake the fleet when this machine is running out of memory, and name the
+# Wake the fleet when this machine is running out of RAM headroom, and name the
 # process responsible.
 #
 # WHAT THIS IS FOR
-# hlr-web-1 has no swap, no memory limit anywhere, no out-of-memory daemon, and
-# one out-of-memory kill already recorded against the user slice. It is
-# comfortable and completely unbounded, and until this existed, nothing would
-# have said so until the kernel picked a victim.
+# hlr-web-1 now has swap as a shock absorber, no memory limit on this seat yet,
+# no out-of-memory daemon, and recent global out-of-memory kills are why this
+# alarm exists. Swap can turn an immediate kill into reclaim and swap pressure,
+# but it does not name the worker causing that pressure. Until this existed,
+# nothing would have said so before the host degraded or the kernel picked a
+# victim.
 #
 # WHY THERE IS NO CEILING UNDER THIS ALARM
 # The obvious design was a cgroup ceiling with an alarm on crossing it. That was
 # built as far as measuring it and then abandoned on the measurement: a ceiling
-# here is crossed thousands of times by ordinary file reading with 16 GB free,
-# because a cgroup's charge includes page cache and page cache expands into
-# whatever ceiling exists. Worse, holding a cgroup at a ceiling generates
+# here is crossed thousands of times by ordinary file reading with 16 GB RAM
+# headroom, because a cgroup's charge includes page cache and page cache expands
+# into whatever ceiling exists. Worse, holding a cgroup at a ceiling generates
 # memory-stall time on the same reading this alarm consumes, so the ceiling
 # would have manufactured its own alarm condition. docs/memory-ceiling-caveat.md
-# owns that finding and bin/fm-memory-ceiling-probe.sh re-measures it.
+# owns that finding and bin/fm-memory-ceiling-probe.sh re-measures it; a
+# proposed container ceiling must be checked against that caveat rather than
+# assumed safe because swap now exists.
 # So this alarm fires on headroom and on growth, and nothing here limits,
 # throttles, or kills anything. Nothing is ever throttled, so the wake-delivery
 # stub and the supervision watcher cannot be: there is no mechanism in this file
@@ -35,13 +39,13 @@
 # the failure this whole programme was built to remove.
 #
 # THE TWO CONDITIONS, AND WHY THEY ARE BOTH NEEDED
-#   headroom   available memory below the floor. A backstop: it catches memory
-#              going somewhere no single tracked process is visibly growing
-#              into, such as many small processes or one that arrives and grows
-#              entirely between two samples.
-#   horizon    total growth across the tracked processes would consume all
-#              remaining memory within the horizon. This is the primary
-#              trigger and the one that gives warning rather than confirmation.
+#   headroom   RAM headroom from MemAvailable below the floor. A backstop: it
+#              catches memory going somewhere no single tracked process is
+#              visibly growing into, such as many small processes or one that
+#              arrives and grows entirely between two samples.
+#   horizon    total growth across the tracked processes would consume that RAM
+#              headroom within the horizon. This is the primary trigger and the
+#              one that gives warning rather than confirmation.
 #              It is deliberately measured on the SUM of positive growth, not on
 #              the fastest single process, because five workers growing at
 #              500 MiB/min exhaust this machine exactly as fast as one at
@@ -50,17 +54,17 @@
 # and the task the reading attributes it to. The condition is about the machine;
 # the name is about who to talk to.
 #
-# It self-tightens as memory goes, which is the property that makes one horizon
-# work across the whole range: at 16 GB free it takes more than 1 GiB/min to
-# trip, and at 2 GB free it takes 136 MiB/min.
+# It self-tightens as RAM headroom goes, which is the property that makes one
+# horizon work across the whole range: at 16 GB RAM headroom it takes more than
+# 1 GiB/min to trip, and at 2 GB RAM headroom it takes 136 MiB/min.
 #
 # HOW THE THRESHOLDS WERE CHOSEN, AND WHAT WOULD HAVE TO HAPPEN TO CROSS THEM
 # Both are derived from measurements recorded in docs/memory-alarm.md, not
 # picked. In short:
 #   horizon    3x the watcher's 300s check sweep, so a crossing is seen at
-#              least twice before the memory it predicts is gone. A horizon
-#              shorter than that cadence could go from silent to out-of-memory
-#              between two polls without ever firing.
+#              least twice before the RAM headroom it predicts is gone. A
+#              horizon shorter than that cadence could go from silent to
+#              reclaim or swap pressure between two polls without ever firing.
 #   floor      well below the lowest headroom measured across a real busy
 #              period on this fleet, so ordinary work does not reach it. From
 #              that busy low, something would have to consume roughly ten
@@ -124,7 +128,7 @@
 #
 # Environment:
 #   FM_MEMORY_ALARM_FLOOR_MIB    headroom floor in MiB (default 2400)
-#   FM_MEMORY_ALARM_HORIZON_MIN  exhaustion horizon in minutes (default 15)
+#   FM_MEMORY_ALARM_HORIZON_MIN  RAM-headroom horizon in minutes (default 15)
 #   FM_MEMORY_ALARM_RECOVERY     multiplier a reading must clear both
 #                                thresholds by before recovery is declared
 #                                (default 1.25)
@@ -321,9 +325,9 @@ evaluate() {
   if [ "$crossed" = yes ]; then
     VERDICT=crossed
     if [ "$AVAIL_MIB" -lt "$FLOOR_MIB" ]; then
-      REASON="only $AVAIL_MIB MiB of memory is available, below the $FLOOR_MIB MiB floor"
+      REASON="only $AVAIL_MIB MiB of RAM headroom is available, below the $FLOOR_MIB MiB floor"
     else
-      REASON="growth across the running work totals $GROWTH_MIB_MIN MiB/min, which would use up the $AVAIL_MIB MiB still available in about $MINUTES minutes"
+      REASON="growth across the running work totals $GROWTH_MIB_MIN MiB/min, which would use up the $AVAIL_MIB MiB RAM headroom still available without swapping in about $MINUTES minutes"
     fi
     return
   fi
@@ -339,20 +343,20 @@ evaluate() {
   if [ "$floor_clear" = yes ] && [ "$horizon_clear" = yes ]; then
     VERDICT=ok
     if [ -n "$GROWTH_BLIND" ]; then
-      REASON="$AVAIL_MIB MiB available; growth was not comparable this run ($GROWTH_BLIND), so only headroom was judged"
+      REASON="$AVAIL_MIB MiB RAM headroom available; growth was not comparable this run ($GROWTH_BLIND), so only headroom was judged"
     else
-      REASON="$AVAIL_MIB MiB available, growth $GROWTH_MIB_MIN MiB/min"
+      REASON="$AVAIL_MIB MiB RAM headroom available, growth $GROWTH_MIB_MIN MiB/min"
       # Beyond a few hours the projection says nothing anyone would act on, and
       # printing four significant figures of it invites belief it has not earned.
       if [ "$MINUTES" != NA ] &&
          awk -v m="$MINUTES" 'BEGIN { exit !(m + 0 < 240) }'; then
-        REASON="$REASON, about $MINUTES minutes of memory left at that rate"
+        REASON="$REASON, about $MINUTES minutes of RAM headroom left at that rate"
       fi
     fi
   else
     VERDICT=elevated
-    REASON="$AVAIL_MIB MiB available, growth $GROWTH_MIB_MIN MiB/min - past neither threshold, but not yet clear of them by the recovery margin"
-    [ -z "$GROWTH_BLIND" ] || REASON="$AVAIL_MIB MiB available, and growth was not comparable this run ($GROWTH_BLIND)"
+    REASON="$AVAIL_MIB MiB RAM headroom available, growth $GROWTH_MIB_MIN MiB/min - past neither threshold, but not yet clear of them by the recovery margin"
+    [ -z "$GROWTH_BLIND" ] || REASON="$AVAIL_MIB MiB RAM headroom available, and growth was not comparable this run ($GROWTH_BLIND)"
   fi
 }
 
@@ -361,7 +365,7 @@ evaluate() {
 record_transition() {
   local from=$1 to=$2 line=$3
   mkdir -p "$DATA" 2>/dev/null || return 1
-  printf '%s\t%s\t%s -> %s\t%s MiB available\t%s MiB/min growth\t%s minutes left\t%s\t%s\n' \
+  printf '%s\t%s\t%s -> %s\t%s MiB RAM headroom available\t%s MiB/min growth\t%s minutes left\t%s\t%s\n' \
     "$NOW" "$(iso "$NOW")" "$from" "$to" "$AVAIL_MIB" "$GROWTH_MIB_MIN" "${MINUTES:-NA}" \
     "${OFFENDER:-no process was growing}" "$line" >>"$LOG" 2>/dev/null
 }
@@ -432,7 +436,7 @@ SHIM
 armed_diagnostic() {
   local mtime age
   if [ ! -f "$CHECK" ] || [ ! -x "$CHECK" ]; then
-    printf 'MEMORY_ALARM: nothing is watching this machine for memory exhaustion (fix: %s/fm-memory-alarm.sh --arm)\n' \
+    printf 'MEMORY_ALARM: nothing is watching this machine for RAM-headroom loss and runaway growth (fix: %s/fm-memory-alarm.sh --arm)\n' \
       "$SCRIPT_DIR"
     return 0
   fi
@@ -520,7 +524,7 @@ fi
 LINE=
 case "$CURRENT" in
   crossed)
-    LINE="MEMORY_ALARM: this machine is running out of memory - $REASON. Largest grower: ${OFFENDER:-no tracked process was growing, so the memory is going somewhere this reading does not attribute}. Nothing has been limited or killed."
+    LINE="MEMORY_ALARM: this machine is running out of RAM headroom - $REASON. Largest grower: ${OFFENDER:-no tracked process was growing, so the headroom is going somewhere this reading does not attribute}. Nothing has been limited or killed."
     ;;
   ok)
     if [ "$PREVIOUS" = crossed ]; then

@@ -106,7 +106,8 @@ A silent bootstrap section needs no action; for any printed actionable diagnosti
 
 ### Running out of memory
 
-This machine has no swap and no memory limit anywhere, so nothing but this alarm stands between a runaway worker and the kernel choosing a victim.
+This machine now has swap as a shock absorber, and a 12 GB container memory limit is proposed for this seat, so the alarm is no longer the only boundary between runaway growth and a kernel kill.
+It remains the fleet's early warning for RAM-headroom loss and runaway growth before the host degrades into reclaim or swap pressure.
 The locked bootstrap step arms `bin/fm-memory-alarm.sh` on the watcher, and every session start reports `MEMORY_ALARM:` when this home's alarm is unarmed or has stopped running.
 `docs/memory-alarm.md` owns the thresholds, how they were derived, and what the alarm cannot see; its crossings and recoveries arrive as an ordinary `check:` wake under section 8, naming the process, its account, and the work it was serving.
 Two facts bind wherever that wake is read.

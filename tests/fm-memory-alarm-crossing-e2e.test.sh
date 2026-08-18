@@ -12,7 +12,7 @@
 # WHAT IT DRIVES
 # One process that allocates anonymous memory fast enough to trip the horizon
 # condition against the headroom this host actually has, then releases it. The
-# growth rate is computed from the machine's own available memory rather than
+# growth rate is computed from the machine's own RAM headroom rather than
 # fixed, so the test drives the REAL threshold rather than a number that
 # happened to work on the day it was written.
 #
@@ -68,7 +68,7 @@ command -v python3 >/dev/null 2>&1 || skip "python3 is not installed, so no runa
 START_AVAIL=$(avail_mib)
 [ -n "$START_AVAIL" ] || skip "MemAvailable could not be read from /proc/meminfo"
 [ "$START_AVAIL" -ge "$MIN_AVAIL_MIB" ] ||
-  skip "only $START_AVAIL MiB available, below the $MIN_AVAIL_MIB MiB floor this test refuses to run under"
+  skip "only $START_AVAIL MiB RAM headroom available, below the $MIN_AVAIL_MIB MiB floor this test refuses to run under"
 
 # The reading needs a live process table to see the balloon at all. It is asked
 # against THIS test's own state directory, not the ambient home: a reading given
@@ -114,7 +114,7 @@ alarm() {
       "$ALARM"
 }
 
-printf '# driving a runaway at %s MiB/s to a %s MiB cap, against %s MiB available\n' \
+printf '# driving a runaway at %s MiB/s to a %s MiB cap, against %s MiB RAM headroom\n' \
   "$RATE_MIB_S" "$CAP_MIB" "$START_AVAIL"
 
 alarm >/dev/null                                    # baseline sample
@@ -145,7 +145,7 @@ test_a_brand_new_runaway_is_not_yet_visible_as_growth() {
 
 test_a_real_runaway_makes_the_alarm_fire() {
   assert_contains "$CROSSING" "MEMORY_ALARM:" "a real runaway must make the alarm fire"
-  assert_contains "$CROSSING" "running out of memory" "the crossing must say what is happening"
+  assert_contains "$CROSSING" "running out of RAM headroom" "the crossing must say what is happening"
   assert_contains "$CROSSING" "balloon" "the crossing must name the process that caused it"
   assert_contains "$CROSSING" "account $(id -un)" "the crossing must name the account it runs under"
   pass "a real runaway makes the alarm fire and names the process and its account"

@@ -148,7 +148,7 @@ test_crossing_and_recovery_both_leave_a_durable_record() {
   [ "$(log_lines)" -eq 2 ] || fail "crossing and recovery must each leave a record"
   assert_grep 'ok -> crossed' "$HOME_DIR/data/memory-alarm.log" "the crossing must be recorded as a transition"
   assert_grep 'crossed -> ok' "$HOME_DIR/data/memory-alarm.log" "the recovery must be recorded as a transition"
-  assert_grep '1800 MiB available' "$HOME_DIR/data/memory-alarm.log" \
+  assert_grep '1800 MiB RAM headroom available' "$HOME_DIR/data/memory-alarm.log" \
     "the record must carry the evidence the decision was made on"
   pass "crossing and recovery both leave a durable record carrying their evidence"
 }
@@ -226,6 +226,20 @@ test_scoped_growth_on_a_calm_machine_is_not_a_growth_all_clear() {
   pass "growth that could not be compared is stated, never rendered as a measured zero"
 }
 
+test_status_labels_horizon_as_ram_headroom_not_swap_exhaustion() {
+  reset_home
+  reading 16000 true $((100 * 1024))
+  local out
+  out=$(alarm --status)
+  assert_contains "$out" "RAM headroom available" \
+    "the alarm must name the quantity its horizon divides by"
+  assert_contains "$out" "minutes of RAM headroom left" \
+    "the status projection must not read like a RAM-plus-swap kill countdown"
+  assert_not_contains "$out" "minutes of memory left" \
+    "the old projection label hid that MemAvailable excludes free swap"
+  pass "the status horizon is labelled as RAM headroom rather than swap exhaustion"
+}
+
 test_the_wake_delivery_listener_keeps_its_label() {
   reset_home
   reading 16000 true 0
@@ -266,7 +280,7 @@ test_persistence_failures_replace_transition_claims_with_diagnostics() {
   expect_code 0 "$status" "the watcher-facing persistence diagnostic"
   assert_contains "$out" "could not record the ok to crossed transition" \
     "a failed durable record must be reported instead of claiming the crossing completed"
-  assert_not_contains "$out" "this machine is running out of memory" \
+  assert_not_contains "$out" "this machine is running out of RAM headroom" \
     "a transition whose record failed must not be reported as completed"
 
   rm -f "$HOME_DIR/data"
@@ -277,7 +291,7 @@ test_persistence_failures_replace_transition_claims_with_diagnostics() {
   expect_code 0 "$status" "the watcher-facing state persistence diagnostic"
   assert_contains "$out" "could not persist its new state" \
     "a failed state write must be reported instead of claiming the crossing completed"
-  assert_not_contains "$out" "this machine is running out of memory" \
+  assert_not_contains "$out" "this machine is running out of RAM headroom" \
     "a transition whose state failed must not be reported as completed"
   pass "persistence failures are watcher diagnostics, never completed transition claims"
 }
@@ -358,6 +372,7 @@ test_an_instrument_that_could_not_read_is_never_an_all_clear
 test_a_reading_that_produced_nothing_is_blindness_not_health
 test_recovery_is_not_declared_on_growth_nobody_could_compare
 test_scoped_growth_on_a_calm_machine_is_not_a_growth_all_clear
+test_status_labels_horizon_as_ram_headroom_not_swap_exhaustion
 test_the_wake_delivery_listener_keeps_its_label
 test_the_alarm_limits_nothing_and_kills_nothing
 test_persistence_failures_replace_transition_claims_with_diagnostics
