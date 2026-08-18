@@ -102,7 +102,7 @@ BASE_REF=$(resolve_base_ref) \
 # fm-marker-lib.sh extracted from BASE_REF.
 # It then copies command-style and compatibility siblings from the current tree
 # and derives direct bin/*.sh source-library siblings from the extracted scripts'
-# shellcheck annotations, without overwriting any BASE_REF extraction.
+# ShellCheck source annotations, without overwriting any BASE_REF extraction.
 # Copies keep BASH_SOURCE-based sibling resolution inside the synthetic tree on
 # both macOS and Linux; symlinks make that resolution shell/platform-dependent.
 # FM_ROOT_OVERRIDE pointed at this dir's root makes
