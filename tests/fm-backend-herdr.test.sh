@@ -83,13 +83,6 @@ wait_for_log_line() {
   return 1
 }
 
-link_tool_except_id() {  # <fakebin> <tool>
-  local fakebin=$1 tool=$2 resolved
-  [ "$tool" != id ] || return 0
-  resolved=$(command -v "$tool" 2>/dev/null) || fail "test requires $tool"
-  ln -s "$resolved" "$fakebin/$tool" || fail "could not link $tool into reduced PATH"
-}
-
 # make_herdr_statefake: a STATEFUL `herdr` stub that models the parts of herdr's
 # real container behavior the workspace-leak fix (and the default-tab-prune
 # safety fix) depend on, so a full spawn->teardown cycle can be replayed
@@ -1136,24 +1129,25 @@ test_presentation_session_lock_path_is_shared_across_homes() {
 }
 
 test_presentation_session_lock_path_survives_path_without_id() {
-  local dir log resp fb reduced path status uid
-  dir="$TMP_ROOT/presentation-lock-no-id"; mkdir -p "$dir/responses" "$dir/sockdir" "$dir/reduced-path"
-  log="$dir/log"; resp="$dir/responses"; reduced="$dir/reduced-path"; : > "$log"
+  local dir log resp fb no_id path status uid
+  dir="$TMP_ROOT/presentation-lock-no-id"; mkdir -p "$dir/responses" "$dir/sockdir" "$dir/no-id"
+  log="$dir/log"; resp="$dir/responses"; no_id="$dir/no-id"; : > "$log"
   uid=$(id -u 2>/dev/null) || fail "could not resolve current uid"
   : > "$dir/sockdir/fmtest.sock"
   printf '%s\n' "{\"sessions\":[{\"name\":\"fmtest\",\"running\":true,\"socket_path\":\"$dir/sockdir/fmtest.sock\"}]}" > "$resp/1.out"
   fb=$(make_herdr_fakebin "$dir")
-  cp "$fb/herdr" "$reduced/herdr" || fail "could not install reduced-PATH herdr fake"
-  for tool in bash jq shasum sha256sum awk dirname basename mkdir stat uname cat; do
-    link_tool_except_id "$reduced" "$tool"
-  done
-  path=$(PATH="$reduced" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+  cat > "$no_id/id" <<'SH'
+#!/usr/bin/env bash
+exit 127
+SH
+  chmod +x "$no_id/id" || fail "could not install failing id stub"
+  path=$(PATH="$no_id:$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     /bin/bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_presentation_session_lock_path fmtest' "$ROOT" 2>&1)
   status=$?
   [ "$status" -eq 0 ] || fail "session lock path must not require id on PATH: $path"
   case "$path" in
     /tmp/firstmate-herdr-presentation-"$uid"/order-*.lock) ;;
-    *) fail "session lock path under reduced PATH used the wrong namespace: $path" ;;
+    *) fail "session lock path without id used the wrong namespace: $path" ;;
   esac
   pass "herdr presentation lock: reduced PATH without id still resolves the user-private namespace"
 }
