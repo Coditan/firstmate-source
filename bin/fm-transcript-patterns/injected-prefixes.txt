@@ -1,0 +1,11 @@
+# First lines that identify a machine-injected user message on Codex.
+# Read from this file, never passed on a command line.
+# Measured 2026-08-18 over 987 rollouts: these account for 108 of the 109 MB
+# that user messages over 4000 characters contribute to the derivative.
+Workspace boundary (important):
+The following is the Codex agent history
+# AGENTS.md instructions for
+<recommended_plugins>
+<skill>
+You are a crewmate: an autonomous worker agent
+You are working autonomously towards an

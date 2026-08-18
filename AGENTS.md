@@ -176,6 +176,8 @@ Route durable knowledge to its most specific owner:
 - Knowledge useful to almost every contributor to one project belongs in that project's committed `AGENTS.md`.
 - Knowledge general to every firstmate user belongs in this repo's shared tracked surface.
 
+What was said in a past session is recoverable rather than only paraphrasable, when this home has built the searchable session archive: `bin/fm-transcript-search.sh` reads this home's own reduced derivative and never another vessel's, and `docs/session-archive.md` owns what it holds, how to rebuild it, and the bound every claim made from it must carry.
+
 Firstmate never writes a project's `AGENTS.md` directly.
 A crewmate creates or updates it lazily through the project's selected delivery path, using `bin/fm-ensure-agents-md.sh` and preferring pointers to authoritative sources over copied detail.
 Keep fleet delivery posture and captain-private strategy out of project memory.
