@@ -12,10 +12,12 @@
 #   from that harness's launch rather than guessed.
 #   Codex launches also require the tracked .codex/config.toml profile and pass its
 #   sandbox_mode, approval_policy, and approvals_reviewer values as CLI overrides.
+#   A Codex direct report gets one per-task state/.crew-signal/<id>/ writable root,
+#   with public state/<id>.status and state/<id>.turn-ended paths symlinked into it.
 #   A Codex CREWMATE additionally gets sandbox_workspace_write.network_access, which
 #   is what lets it reach the local no-mistakes daemon socket; a Codex secondmate does
-#   not. That grant lives on the launch line rather than in the profile file on
-#   purpose (docs/codex-sandbox-network.md).
+#   not. Those grants live on the launch line rather than in the profile file on
+#   purpose (docs/codex-sandbox-network.md, docs/codex-status-signalling.md).
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   spawn. Without it, the script resolves FM_BACKEND, then config/backend, then
 #   runtime auto-detection (the runtime firstmate itself is executing inside -
@@ -719,8 +721,12 @@ codex_config_value() {
 # moving it into the profile would widen it no matter how this branch is gated.
 CODEX_CREW_NETWORK_FLAG='sandbox_workspace_write.network_access=true'
 
+toml_double_quoted_value() {  # <value>
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
 codex_config_flags_for_harness() {
-  local harness=$1 kind=$2 key value
+  local harness=$1 kind=$2 signal_dir=${3:-} key value escaped_signal_dir
   case "$harness" in
     codex*) ;;
     *) return 0 ;;
@@ -729,6 +735,10 @@ codex_config_flags_for_harness() {
     value=$(codex_config_value "$key") || return 1
     printf -- '-c %s ' "$(shell_quote "$key=\"$value\"")"
   done
+  if [ -n "$signal_dir" ]; then
+    escaped_signal_dir=$(toml_double_quoted_value "$signal_dir")
+    printf -- '-c %s ' "$(shell_quote "sandbox_workspace_write.writable_roots=[\"$escaped_signal_dir\"]")"
+  fi
   # A secondmate is a supervising firstmate home rather than a pipeline worker: it
   # routes work, and its own crewmates pick the grant up from its own call into this
   # same path. The supervising primary never reaches this function at all, because
@@ -946,6 +956,40 @@ real_path_or_raw() {  # <path>
   else
     printf '%s\n' "$path"
   fi
+}
+
+TASK_SIGNAL_DIR_REAL=
+prepare_task_signal_link() {  # <public-path> <signal-dir> <leaf>
+  local public=$1 dir=$2 leaf=$3 rel target link
+  rel=".crew-signal/$ID/$leaf"
+  target="$dir/$leaf"
+  if [ -L "$public" ]; then
+    link=$(readlink "$public" 2>/dev/null || true)
+    case "$link" in
+      "$rel"|"$target"|"$TASK_SIGNAL_DIR_REAL/$leaf") return 0 ;;
+    esac
+    echo "error: $public points to $link; expected $rel" >&2
+    return 1
+  fi
+  if [ -e "$public" ]; then
+    [ -f "$public" ] || { echo "error: $public exists and is not a regular file" >&2; return 1; }
+    if [ -e "$target" ] || [ -L "$target" ]; then
+      echo "error: both $public and $target exist; refusing to merge task signal state" >&2
+      return 1
+    fi
+    mv "$public" "$target" || return 1
+  fi
+  ln -s "$rel" "$public"
+}
+
+prepare_task_signal_paths() {
+  local dir
+  dir="$STATE_REAL/.crew-signal/$ID"
+  mkdir -p "$dir" || return 1
+  chmod 700 "$STATE_REAL/.crew-signal" "$dir" 2>/dev/null || true
+  TASK_SIGNAL_DIR_REAL=$(cd "$dir" && pwd -P) || return 1
+  prepare_task_signal_link "$STATE_REAL/$ID.status" "$TASK_SIGNAL_DIR_REAL" status || return 1
+  prepare_task_signal_link "$STATE_REAL/$ID.turn-ended" "$TASK_SIGNAL_DIR_REAL" turn-ended || return 1
 }
 
 # Session-provider container-ensure + task creation. tmux stays exactly as P1
@@ -1230,6 +1274,9 @@ mkdir -p "$TASK_TMP/gotmp"
 mkdir -p "$STATE"
 STATE_REAL=$(cd "$STATE" && pwd -P)
 TURNEND="$STATE_REAL/$ID.turn-ended"
+case "$HARNESS" in
+  codex*) prepare_task_signal_paths || exit 1 ;;
+esac
 exclude_path() {
   local rel=$1 EXCL
   EXCL=$(git -C "$WT" rev-parse --git-path info/exclude 2>/dev/null || true)
@@ -1360,7 +1407,7 @@ fi
 
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
 EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
-CODEXCONFIG=$(codex_config_flags_for_harness "$HARNESS" "$KIND")
+CODEXCONFIG=$(codex_config_flags_for_harness "$HARNESS" "$KIND" "${TASK_SIGNAL_DIR_REAL:-}")
 META_WINDOW=$T
 [ "$BACKEND" = orca ] && META_WINDOW=$W
 if [ "$KIND" = secondmate ] && [ "$SPAWN_TASK_LOCK_HELD" != 1 ]; then
@@ -1377,6 +1424,7 @@ fi
   echo "mode=$MODE"
   echo "yolo=$YOLO"
   echo "tasktmp=$TASK_TMP"
+  [ -z "${TASK_SIGNAL_DIR_REAL:-}" ] || echo "signal_dir=$TASK_SIGNAL_DIR_REAL"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
   # backend= is written only for a non-default (non-tmux) backend, so the

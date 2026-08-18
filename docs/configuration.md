@@ -184,6 +184,8 @@ Codex 0.145.0 reads it as configuration for a Codex session whose working direct
 Anything written into it therefore reaches a supervising Codex firstmate session too, not only the crewmates `fm-spawn` launches.
 
 For that reason one Codex sandbox setting deliberately does NOT live in that file.
+A Codex direct report receives a per-task `sandbox_workspace_write.writable_roots` entry for `state/.crew-signal/<id>`, with public `state/<id>.status` and `state/<id>.turn-ended` paths symlinked into it.
+[`docs/codex-status-signalling.md`](codex-status-signalling.md) owns the worker-signalling incident evidence and the watcher change that follows those symlinks.
 A Codex CREWMATE additionally receives `sandbox_workspace_write.network_access=true` on its launch line, which is what lets it reach the local no-mistakes daemon socket; a Codex secondmate does not receive it, and neither does the supervising session.
 Codex classes a unix-socket connect as network access rather than filesystem access, and 0.145.0 offers no narrower knob, so this is a whole-dimension grant that also admits general outbound network from that crewmate.
 [`docs/codex-sandbox-network.md`](codex-sandbox-network.md) owns the measurements behind all of that, including what the grant admits and why the launch line rather than the profile file is the only placement that confines it.

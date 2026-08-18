@@ -39,6 +39,7 @@
 #     no-run-attributed         the run lookup answered and named no run for this crew
 #     run-attribution-rejected  a run WAS found and this reader refused it
 #     log-verb-not-a-state      the status log's last line carries no state verb
+#     no-status-after-turn-end  a turn-end marker exists but no status event landed
 #   degraded (could not look)
 #     run-reader-missing        git is not on PATH or no-mistakes cannot be resolved
 #     no-bounding-mechanism     no timeout, gtimeout or perl, so the call was never made
@@ -165,6 +166,7 @@ ID=${1:-}
 
 META="$STATE/$ID.meta"
 LOG="$STATE/$ID.status"
+TURNEND="$STATE/$ID.turn-ended"
 NM_TIMEOUT=${FM_CREW_STATE_NM_TIMEOUT:-10}
 case "$NM_TIMEOUT" in ''|*[!0-9]*) NM_TIMEOUT=10 ;; esac
 # How many of the most recent `no-mistakes runs` rows the cross-branch fallback
@@ -950,5 +952,8 @@ if [ -n "$LOG_LINE" ]; then
     emit_unknown log-verb-not-a-state "the status log's last verb '$LOG_VERB' is not a state${SEP}$UNKNOWN_REASON"
   fi
   emit_unknown log-verb-not-a-state "the status log's last line carries no state verb${SEP}$UNKNOWN_REASON"
+fi
+if [ -e "$TURNEND" ]; then
+  emit_unknown no-status-after-turn-end "turn-end marker exists but no status event landed: $TURNEND${SEP}$UNKNOWN_REASON"
 fi
 emit_unknown "$UNKNOWN_CAUSE" "no current-state source available: $UNKNOWN_REASON"

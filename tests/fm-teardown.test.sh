@@ -54,6 +54,7 @@
 #   (bb) untracked legacy .claude/settings.local.json hook      -> REMOVED
 #   (cc) repository-tracked .claude/settings.local.json         -> KEPT
 #   (dd) legacy hook whose tracked-ness git cannot answer       -> KEPT
+#   (ee) Codex per-task signal directory                         -> REMOVED
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -1378,6 +1379,32 @@ test_local_only_force_overrides_unpushed() {
   pass "local-only worktree with unpushed work is torn down under --force (escape hatch)"
 }
 
+test_teardown_removes_codex_signal_directory() {
+  local case_dir rc
+  case_dir=$(make_case codex-signal-cleanup)
+  write_meta "$case_dir" local-only ship
+  mkdir -p "$case_dir/state/.crew-signal/task-x1"
+  printf 'done: ready\n' > "$case_dir/state/.crew-signal/task-x1/status"
+  : > "$case_dir/state/.crew-signal/task-x1/turn-ended"
+  ln -s ".crew-signal/task-x1/status" "$case_dir/state/task-x1.status"
+  ln -s ".crew-signal/task-x1/turn-ended" "$case_dir/state/task-x1.turn-ended"
+  wt_commit "$case_dir" "unpushed work"
+
+  set +e
+  run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "codex-signal-cleanup: forced teardown should succeed"
+  [ ! -e "$case_dir/state/task-x1.status" ] && [ ! -L "$case_dir/state/task-x1.status" ] \
+    || fail "codex-signal-cleanup: teardown left the public status symlink"
+  [ ! -e "$case_dir/state/task-x1.turn-ended" ] && [ ! -L "$case_dir/state/task-x1.turn-ended" ] \
+    || fail "codex-signal-cleanup: teardown left the public turn-ended symlink"
+  [ ! -e "$case_dir/state/.crew-signal/task-x1" ] \
+    || fail "codex-signal-cleanup: teardown left the private signal directory"
+  pass "teardown removes a Codex task's private signal directory and public signal symlinks"
+}
+
 test_herdr_teardown_clears_escalation_marker() {
   local case_dir marker
   case_dir=$(make_case herdr-marker-cleanup)
@@ -1515,6 +1542,7 @@ test_local_only_merged_to_local_main_allows
 test_no_mistakes_origin_remote_allows
 test_no_mistakes_truly_unpushed_refuses
 test_local_only_force_overrides_unpushed
+test_teardown_removes_codex_signal_directory
 test_herdr_teardown_clears_escalation_marker
 test_herdr_projection_teardown_retires_journal_only_after_confirmed_close
 test_herdr_projection_teardown_retains_journal_when_close_unconfirmed

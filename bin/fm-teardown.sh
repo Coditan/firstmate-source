@@ -1178,6 +1178,7 @@ cleanup_firstmate_home_children() {
       require_no_other_slot_holder "$child_wt" "$child_proj" "child worktree" "$child_id" "$sub_state" || return $?
       if [ -n "$child_proj" ] && [ -d "$child_proj" ] && command -v treehouse >/dev/null 2>&1; then
         if teardown_treehouse_return "$child_wt" "$child_proj" "child worktree" "" "$child_id" "$sub_state"; then
+          remove_task_turnend_hooks "$child_wt"
           :
         else
           child_return_rc=$?
@@ -1194,6 +1195,7 @@ cleanup_firstmate_home_children() {
     remove_grok_turnend_auth "$sub_state" "$child_id"
     remove_pr_poll_artifacts "$sub_state" "$child_id" || return 1
     rm -f "$sub_state/$child_id.status" "$sub_state/$child_id.turn-ended" "$sub_state/$child_id.meta" "$sub_state/$child_id.pi-ext.ts" "$sub_state/$child_id.grok-turnend-token"
+    rm -rf "$sub_state/.crew-signal/$child_id"
   done
 }
 
@@ -1308,6 +1310,7 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
     post_lock_cleanup_check=validate_worktree_teardown_safety
   fi
   if teardown_treehouse_return "$WT" "$PROJ" "worktree" "$post_lock_cleanup_check"; then
+    remove_task_turnend_hooks "$WT"
     if [ "$branch" != "HEAD" ]; then
       git -C "$PROJ" branch -D "$branch" >/dev/null 2>&1 || true
     fi
@@ -1391,6 +1394,7 @@ fm_backend_clear_transition "$BACKEND" "$STATE" "$T" || true
 [ -n "$TASK_TMP" ] && rm -rf "$TASK_TMP"
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" "$STATE/$ID.pi-ext.ts" "$STATE/$ID.grok-turnend-token"
+rm -rf "$STATE/.crew-signal/$ID"
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
   "$FM_ROOT/bin/fm-fleet-sync.sh" "$PROJ" || true
 fi

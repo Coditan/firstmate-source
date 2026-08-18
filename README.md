@@ -232,6 +232,7 @@ Firstmate's skills live in two separate places with different audiences:
 - [docs/cmux-backend.md](docs/cmux-backend.md) - setup guide for the experimental cmux backend, plus its verification notes and known gaps.
 - [docs/codex-app-backend.md](docs/codex-app-backend.md) - Codex App backend boundary, evidence, and rollout contract.
 - [docs/codex-busy-detection.md](docs/codex-busy-detection.md) - Codex 0.145.0 busy-row evidence behind the watcher liveness backstop.
+- [docs/codex-status-signalling.md](docs/codex-status-signalling.md) - why Codex direct reports get a per-task writable status-signal directory, how the public status paths stay stable, and what live evidence led to the split.
 - [docs/codex-sandbox-network.md](docs/codex-sandbox-network.md) - why a Codex crewmate carries a sandbox network grant to reach the local no-mistakes daemon socket, what that whole-dimension grant admits, and why it rides the launch line rather than the tracked Codex profile.
 - [docs/gitlab-merge-watch.md](docs/gitlab-merge-watch.md) - how the merge watch follows a GitLab merge request on any instance, and the evidence behind it.
 - [docs/merge-gate-audit.md](docs/merge-gate-audit.md) - how to audit GitHub merge gates across rulesets and classic branch protection, including the current heavyliftrental fleet gate map.

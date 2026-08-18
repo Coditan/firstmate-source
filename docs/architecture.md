@@ -164,6 +164,7 @@ Secondmate launches are exempt because they resolve the secondmate harness and a
 Unsupported effort values are still recorded in task meta when passed to `fm-spawn.sh`, but the launch template omits any effort flag that the selected harness does not accept.
 That keeps spawn launch compatible across claude, codex, grok, pi, and opencode while preserving the requested profile for later audit.
 Codex launches additionally thread the tracked `.codex/config.toml` profile as CLI `-c` overrides, so Codex crewmates and secondmates use the repository's sandbox, approval, and approval-reviewer posture instead of the previous bypass launch.
+A Codex direct report's launch line also carries a per-task status-signal writable root, with public `state/<id>.status` and `state/<id>.turn-ended` paths symlinked into it; [codex-status-signalling.md](codex-status-signalling.md) owns the incident evidence and the symlink watcher implication.
 A Codex crewmate's launch line carries one further sandbox override that the profile does not hold and a Codex secondmate does not receive, without which it cannot reach the local no-mistakes daemon socket; [codex-sandbox-network.md](codex-sandbox-network.md) owns what that grant admits and why the launch line is the only placement that confines it.
 
 ## Optional secondmates

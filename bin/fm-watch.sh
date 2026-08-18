@@ -150,9 +150,11 @@ WATCH_ARM_OWNER_PID=${FM_WATCH_ARM_OWNER_PID:-}
 if [ "$(uname)" = Darwin ]; then
   stat_mtime() { stat -f %m "$1" 2>/dev/null; }        # epoch seconds of mtime
   stat_sig()   { stat -f '%z:%Fm' "$1" 2>/dev/null; }   # size:mtime signature
+  signal_stat_sig() { stat -L -f '%z:%Fm' "$1" 2>/dev/null; }
 else
   stat_mtime() { stat -c %Y "$1" 2>/dev/null; }
   stat_sig()   { stat -c '%s:%Y' "$1" 2>/dev/null; }
+  signal_stat_sig() { stat -L -c '%s:%Y' "$1" 2>/dev/null; }
 fi
 
 POLL=${FM_POLL:-15}                   # seconds between cycles
@@ -1041,11 +1043,14 @@ context_ceiling_surface() {
 # line per changed file. .seen-* is updated only after the wake is either
 # surfaced or intentionally absorbed, so a watcher killed mid-cycle never
 # swallows a signal.
+# Signal signatures follow symlinks so public state/<id>.status and
+# state/<id>.turn-ended links into a Codex task's private .crew-signal directory
+# wake on target changes, not only on link creation.
 scan_signals() {
   local f sig sf
   for f in "$STATE"/*.status "$STATE"/*.turn-ended; do
     [ -e "$f" ] || continue
-    sig=$(stat_sig "$f") || continue
+    sig=$(signal_stat_sig "$f") || continue
     sf="$STATE/.seen-$(basename "$f" | tr '.' '_')"
     if [ "$sig" != "$(cat "$sf" 2>/dev/null)" ]; then
       printf '%s\t%s\t%s\n' "$sf" "$sig" "$f"
