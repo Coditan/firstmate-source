@@ -975,7 +975,7 @@ test_tracked_legacy_claude_settings_survive_teardown() {
   printf '%s\n' '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"touch '"'"'/tmp/state/old.turn-ended'"'"'"}]}]}}' \
     > "$legacy"
   before=$(cat "$legacy")
-  git -C "$case_dir/wt" add .claude/settings.local.json
+  git -C "$case_dir/wt" add -f .claude/settings.local.json
   git -C "$case_dir/wt" -c user.email=t@t -c user.name=t \
     commit -q -m "track repository-local Claude settings"
   git -C "$case_dir/wt" push -q origin fm/task-x1

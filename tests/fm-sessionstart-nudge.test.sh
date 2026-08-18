@@ -25,7 +25,8 @@ make_primary() {
 
 run_nudge() {
   local root=$1
-  FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$NUDGE"
+  env -u NO_MISTAKES_GATE FM_GATE_REFUSE_BYPASS=0 \
+    FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$NUDGE"
 }
 
 expect_silent_zero() {
@@ -66,7 +67,7 @@ test_gate_common_dir_is_silent() {
   mkdir -p "$root/bin" "$root/state"
   : > "$root/AGENTS.md"
   printf 'gate-test\n' > "$root/.fm-secondmate-home"
-  expect_silent_zero "gate common-dir nudge" env FM_GATE_REFUSE_BYPASS=0 \
+  expect_silent_zero "gate common-dir nudge" env -u NO_MISTAKES_GATE FM_GATE_REFUSE_BYPASS=0 \
     FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$NUDGE"
   pass "fm-sessionstart-nudge: .no-mistakes gate common-dir is silent"
 }
@@ -159,7 +160,7 @@ SH
 # harnesses that hand the wrapper nothing.
 run_nudge_with_payload() {
   local root=$1 fakebin=$2 payload=$3
-  printf '%s' "$payload" | env PATH="$fakebin:$PATH" FM_GATE_REFUSE_BYPASS=0 \
+  printf '%s' "$payload" | env -u NO_MISTAKES_GATE PATH="$fakebin:$PATH" FM_GATE_REFUSE_BYPASS=0 \
     FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$NUDGE"
 }
 
