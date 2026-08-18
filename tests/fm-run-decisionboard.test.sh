@@ -324,6 +324,24 @@ test_query_reports_an_unlistened_board() {
   pass "query reports a board that is listening to nobody"
 }
 
+test_selftest_arms_the_poll_before_answering() {
+  local selftest_body poll_line answer_line send_line wait_line
+  selftest_body=$(sed -n '/^cmd_selftest()/,/^}/p' "$DRIVER")
+  poll_line=$(printf '%s\n' "$selftest_body" | grep -n 'cmd_poll_background' | head -1 | cut -d: -f1)
+  answer_line=$(printf '%s\n' "$selftest_body" | grep -n 'cmd_answer' | head -1 | cut -d: -f1)
+  send_line=$(printf '%s\n' "$selftest_body" | grep -n 'cmd_send' | head -1 | cut -d: -f1)
+  wait_line=$(printf '%s\n' "$selftest_body" | grep -n 'wait_poll_background' | head -1 | cut -d: -f1)
+  [ -n "$poll_line" ] && [ -n "$answer_line" ] && [ "$poll_line" -lt "$answer_line" ] \
+    || fail "selftest must arm the poll before it answers a decision"
+  [ "$answer_line" -lt "$send_line" ] && [ "$send_line" -lt "$wait_line" ] \
+    || fail "selftest must answer, send, then wait for the already-armed poll"
+  assert_not_contains "$selftest_body" "poll_pid=\$(cmd_poll_background" \
+    "selftest must not start the poll through command substitution, which waits for the poll instead of continuing"
+  assert_contains "$selftest_body" "poll listening: yes" \
+    "selftest must assert the listener precondition before trusting the answer path"
+  pass "selftest proves the answer path only after arming the poll"
+}
+
 # --- the screenshot, which is the one that lies -----------------------------
 
 test_shot_refuses_a_screenshot_that_wrote_nothing() {
@@ -350,11 +368,9 @@ SH
 }
 
 test_shot_refuses_a_stale_staging_file() {
-  # The staging path is stable, because a file owned by the bridge account in a
-  # sticky /tmp cannot be deleted from here and a unique name would leave one
-  # orphan per run. The cost of a stable name is that "the file is there" stops
-  # being proof, so a run that captured nothing must not pass on the last run's
-  # file.
+  # The staging path is unique by default, but a collision or a caller-provided
+  # shot id can still present an old file. The freshness refusal must stay in
+  # place for that case instead of trusting the screenshot command's exit status.
   local shot_tmp fakebin out status=0
   fm_test_tmproot shot_tmp fm-run-db-stale
   fakebin=$(fm_fakebin "$shot_tmp")
@@ -366,8 +382,9 @@ SH
   mkdir -p "$shot_tmp/staging"
   mkdir -m 700 "$shot_tmp/runtime"
   printf 'the previous run left this behind\n' \
-    > "$shot_tmp/staging/fm-run-decisionboard-shot.$(id -un).png"
+    > "$shot_tmp/staging/fm-run-decisionboard-shot.$(id -un).stale.png"
   out=$(PATH="$fakebin:$PATH" XDG_RUNTIME_DIR="$shot_tmp/runtime" FM_RUN_DECISIONBOARD_TMPDIR="$shot_tmp/staging" \
+    FM_RUN_DECISIONBOARD_SHOT_ID=stale \
     "$DRIVER" shot "$shot_tmp/out.png" 2>&1) || status=$?
   [ "$status" -ne 0 ] || fail "shot passed on a staging file this run never touched"$'\n'"$out"
   [ ! -e "$shot_tmp/out.png" ] || fail "shot copied a stale staging file to the destination"
@@ -386,9 +403,10 @@ SH
   chmod +x "$fakebin/chrome-devtools-axi"
   mkdir -p "$shot_tmp/staging"
   mkdir -m 700 "$shot_tmp/runtime"
-  staging="$shot_tmp/staging/fm-run-decisionboard-shot.$(id -un).png"
+  staging="$shot_tmp/staging/fm-run-decisionboard-shot.$(id -un).refresh.png"
   printf 'old image bytes\n' > "$staging"
   out=$(PATH="$fakebin:$PATH" XDG_RUNTIME_DIR="$shot_tmp/runtime" FM_RUN_DECISIONBOARD_TMPDIR="$shot_tmp/staging" \
+    FM_RUN_DECISIONBOARD_SHOT_ID=refresh \
     "$DRIVER" shot "$shot_tmp/out.png" 2>&1) \
     || fail "shot rejected changed same-size content"$'\n'"$out"
   assert_contains "$(cat "$shot_tmp/out.png")" "new image bytes" \
@@ -443,11 +461,13 @@ SH
   : > "$shot_tmp/locks"
   PATH="$fakebin:$PATH" LOCK_LOG="$shot_tmp/locks" XDG_RUNTIME_DIR="$shot_tmp/runtime" \
     FM_RUN_DECISIONBOARD_TMPDIR="$real_dir/" FM_RUN_DECISIONBOARD_LOCK_TIMEOUT=0 \
+    FM_RUN_DECISIONBOARD_SHOT_ID=alias-lock \
     "$DRIVER" shot "$shot_tmp/first.png" >/dev/null 2>&1 || status=$?
   [ "$status" -ne 0 ] || fail "first aliased staging capture unexpectedly acquired the fake lock"
   status=0
   PATH="$fakebin:$PATH" LOCK_LOG="$shot_tmp/locks" XDG_RUNTIME_DIR="$shot_tmp/runtime" \
     FM_RUN_DECISIONBOARD_TMPDIR="$alias_dir" FM_RUN_DECISIONBOARD_LOCK_TIMEOUT=0 \
+    FM_RUN_DECISIONBOARD_SHOT_ID=alias-lock \
     "$DRIVER" shot "$shot_tmp/second.png" >/dev/null 2>&1 || status=$?
   [ "$status" -ne 0 ] || fail "second aliased staging capture unexpectedly acquired the fake lock"
   first_lock=$(sed -n '1p' "$shot_tmp/locks")
@@ -488,9 +508,10 @@ SH
   chmod +x "$fakebin/chrome-devtools-axi"
   mkdir -p "$doctor_tmp/staging"
   mkdir -m 700 "$doctor_tmp/runtime"
-  staging="$doctor_tmp/staging/fm-run-decisionboard-shot.$(id -un).png"
+  staging="$doctor_tmp/staging/fm-run-decisionboard-shot.$(id -un).doctor.png"
   printf 'old image bytes\n' > "$staging"
   out=$(PATH="$fakebin:$PATH" XDG_RUNTIME_DIR="$doctor_tmp/runtime" FM_RUN_DECISIONBOARD_TMPDIR="$doctor_tmp/staging" \
+    FM_RUN_DECISIONBOARD_SHOT_ID=doctor \
     "$DRIVER" doctor 2>&1) || fail "doctor failed to re-measure the bridge"$'\n'"$out"
   assert_not_contains "$out" "bridge account: unmeasured" \
     "doctor treated a changed same-size screenshot as stale"
@@ -515,7 +536,7 @@ uid=g3:2_0 RootWebArea "Editor" url="http://example.invalid/session/x"
         uid=g3:2_4 radio "Not Yes"
         uid=g3:2_5 radio "Yes" checked
         uid=g3:2_6 button "Antwort vormerken"
-        uid=g3:2_7 StaticText "Vorgemerkt: yes-value"
+        uid=g3:2_7 StaticText "VORGEMERKT: yes-value"
 SNAP
     else
       cat <<'SNAP'
@@ -692,6 +713,7 @@ test_query_reports_missing_notes_without_refusing_them
 test_query_can_refuse_missing_notes_when_the_contract_flips
 test_query_counts_a_decision_form_that_carries_nothing
 test_query_reports_an_unlistened_board
+test_selftest_arms_the_poll_before_answering
 test_shot_refuses_a_screenshot_that_wrote_nothing
 test_shot_refuses_a_stale_staging_file
 test_shot_accepts_a_same_size_refresh
