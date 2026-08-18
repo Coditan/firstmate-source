@@ -146,7 +146,8 @@ Swap gives anonymous memory somewhere to go under pressure, which this host badl
 
 On 2026-08-17, 32 GiB of swap was added to `hlr-web-1` and `vm.swappiness` was deliberately left at 60.
 On 2026-08-18 from this seat, `swapon --show --bytes` reported `/swapfile` at 34359734272 bytes, used 0, priority -2, and `/proc/meminfo` reported `SwapTotal: 33554428 kB` and `SwapFree: 33554428 kB`.
-The proposed next step is a 12 GB container ceiling for this seat, with its kill order below production services.
+A proposed next step is a 12 GB container ceiling for this seat, with its kill order below production services.
+A second figure has since been named from another seat, and neither figure rests on a measurement.
 
 That proposal makes this finding current again.
 The old probe does not prove the exact 12 GB container ceiling will manufacture pressure after swap was added, because that exact configuration has not been measured.
