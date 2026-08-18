@@ -17,6 +17,9 @@ fm_test_tmproot TMP_ROOT fm-decision-ledger
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found"; exit 0; }
 
+# The Linux ceiling this suite defends where jq --argjson used to fail.
+ARGV_STRING_LIMIT=131072
+
 make_home() {  # <name>
   local home="$TMP_ROOT/$1" fakebin
   mkdir -p "$home/data" "$home/state" "$home/config" "$home/projects"
@@ -47,6 +50,23 @@ run_bearings() {  # <home> <args...>
   local home=$1; shift
   PATH="$home/fakebin:$PATH" FM_HOME="$home" FM_BEARINGS_NOW=2026-08-17T12:00:00Z \
     "$BEARINGS" --json "$@"
+}
+
+assert_over_argv_ceiling() {  # <bytes> <what>
+  [ "$1" -gt "$ARGV_STRING_LIMIT" ] \
+    || fail "$2 is $1 bytes, no longer over the $ARGV_STRING_LIMIT-byte argv ceiling this test defends"
+}
+
+write_oversized_decision_backlog() {  # <home> <count>
+  local home=$1 count=$2 i pad
+  pad=$(printf 'padding%.0s' $(seq 1 70))
+  {
+    printf '## In flight\n\n## Queued\n\n## Done\n'
+    for i in $(seq 1 "$count"); do
+      printf -- '- [x] large-%04d-decision-lost - Synthetic already closed decision %04d %s (repo: synth) (kind: captain) (done 2026-08-01)\n' \
+        "$i" "$i" "$pad"
+    done
+  } > "$home/data/backlog.md"
 }
 
 # A decision must outlive the session that took it AND the retention that rotates
@@ -669,6 +689,42 @@ test_removing_a_baseline_entry_invalidates_every_entry() {
   pass "removing one baseline entry invalidates the whole attestation"
 }
 
+test_oversized_decision_payloads_do_not_travel_on_argv() {
+  local home bytes headers records audit baseline_out rc=0
+  home=$(make_home oversized-decision-payloads)
+  write_oversized_decision_backlog "$home" 350
+
+  bytes=$(LC_ALL=C wc -c < "$home/data/backlog.md" | tr -d '[:space:]')
+  assert_over_argv_ceiling "$bytes" "the oversized captain backlog fixture"
+  headers=$(command grep -c '(kind: captain)' "$home/data/backlog.md")
+  records=$(run_ledger "$home" --records | wc -l | tr -d '[:space:]')
+  [ "$records" -eq "$headers" ] \
+    || fail "oversized --records dropped captain records: got $records, want $headers"
+
+  audit=$(run_ledger "$home" --audit --json) || rc=$?
+  [ "$rc" -eq 1 ] || fail "oversized audit should exit 1 while findings are present"
+  [ "$(printf '%s' "$audit" | jq '.audit | length')" -eq "$headers" ] \
+    || fail "oversized audit did not report every closed captain record"
+  [ "$(printf '%s' "$audit" | jq '.baseline_excluded | length')" -eq 0 ] \
+    || fail "an unbaselined oversized home must not exclude findings"
+
+  baseline_out=$(run_ledger "$home" --record-baseline 2>&1) \
+    || fail "recording an oversized adoption baseline failed: $baseline_out"
+  assert_contains "$baseline_out" "recorded $headers finding(s)" \
+    "the oversized baseline must name every finding it recorded"
+
+  rc=0
+  audit=$(run_ledger "$home" --audit --json) || rc=$?
+  [ "$rc" -eq 0 ] || fail "the oversized audit should converge after the baseline"
+  [ "$(printf '%s' "$audit" | jq '.audit | length')" -eq 0 ] \
+    || fail "the oversized baseline left active findings behind"
+  [ "$(printf '%s' "$audit" | jq '.baseline_excluded | length')" -eq "$headers" ] \
+    || fail "the oversized baseline did not carry every withheld finding"
+  [ "$(printf '%s' "$audit" | jq -r '.baseline.count')" -eq "$headers" ] \
+    || fail "the oversized structured baseline count is incomplete"
+  pass "oversized decision payloads keep audit and baseline output complete"
+}
+
 # THE BOARD IS THE THIRD SURFACE THE BRIEF NAMES, and it does not read the store
 # directly - it reads the canonical inventory. That indirection is exactly where a
 # settled question could quietly reappear as an open one, so it is checked here
@@ -727,4 +783,5 @@ test_an_answered_decision_is_no_longer_presented_as_open
 test_the_baseline_converges_the_audit_without_hiding_what_it_covers
 test_a_baseline_cannot_silence_a_repairable_record
 test_removing_a_baseline_entry_invalidates_every_entry
+test_oversized_decision_payloads_do_not_travel_on_argv
 test_the_decision_board_input_never_carries_an_answered_question
