@@ -117,6 +117,9 @@
 #                                  In a sandboxed worker, set TMPDIR and
 #                                  XDG_RUNTIME_DIR inside the worktree or the
 #                                  Lavish open step can 500 on an unreadable board.
+#   FM_RUN_DECISIONBOARD_SHOT_ID   optional screenshot staging suffix; unset is
+#                                  unique per driver invocation, set only to
+#                                  reproduce or test a known staging target.
 #   FM_RUN_DECISIONBOARD_WIDTH     viewport `drive` sets, so evidence is
 #   FM_RUN_DECISIONBOARD_HEIGHT    comparable across runs (default 1400x1600).
 #   FM_HOME                        fallback root when this skill was installed
