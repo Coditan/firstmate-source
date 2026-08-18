@@ -325,21 +325,204 @@ test_query_reports_an_unlistened_board() {
 }
 
 test_selftest_arms_the_poll_before_answering() {
-  local selftest_body poll_line answer_line send_line wait_line
-  selftest_body=$(sed -n '/^cmd_selftest()/,/^}/p' "$DRIVER")
-  poll_line=$(printf '%s\n' "$selftest_body" | grep -n 'cmd_poll_background' | head -1 | cut -d: -f1)
-  answer_line=$(printf '%s\n' "$selftest_body" | grep -n 'cmd_answer' | head -1 | cut -d: -f1)
-  send_line=$(printf '%s\n' "$selftest_body" | grep -n 'cmd_send' | head -1 | cut -d: -f1)
-  wait_line=$(printf '%s\n' "$selftest_body" | grep -n 'wait_poll_background' | head -1 | cut -d: -f1)
-  [ -n "$poll_line" ] && [ -n "$answer_line" ] && [ "$poll_line" -lt "$answer_line" ] \
-    || fail "selftest must arm the poll before it answers a decision"
-  [ "$answer_line" -lt "$send_line" ] && [ "$send_line" -lt "$wait_line" ] \
-    || fail "selftest must answer, send, then wait for the already-armed poll"
-  assert_not_contains "$selftest_body" "poll_pid=\$(cmd_poll_background" \
-    "selftest must not start the poll through command substitution, which waits for the poll instead of continuing"
-  assert_contains "$selftest_body" "poll listening: yes" \
-    "selftest must assert the listener precondition before trusting the answer path"
+  local selftest_tmp fakebin fake_root fake_driver out first_event second_event third_event
+  fm_test_tmproot selftest_tmp fm-run-db-selftest
+  fakebin=$(fm_fakebin "$selftest_tmp")
+  fake_root="$selftest_tmp/root"
+  fake_driver="$fake_root/.agents/skills/run-decisionboard/fm-run-decisionboard.sh"
+  mkdir -p "$fake_root/bin" "$(dirname "$fake_driver")"
+  cp "$DRIVER" "$fake_driver"
+  chmod +x "$fake_driver"
+  cat > "$fake_root/bin/fm-board.sh" <<'SH'
+#!/usr/bin/env bash
+out=''
+body=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --out) out=$2; shift 2 ;;
+    --body) body=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [ "$body" != - ] && [ -n "$body" ] && grep -q '@tailwindcss/browser' "$body"; then
+  exit 7
+fi
+mkdir -p "$(dirname "$out")"
+if [ "$body" = - ]; then
+  cat > "$out"
+else
+  printf '<html><body>probe</body></html>\n' > "$out"
+fi
+SH
+  cat > "$fake_root/bin/fm-lavish.sh" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  poll)
+    printf 'poll\n' >> "$EVENT_LOG"
+    if [ "${FM_FAKE_LAVISH_LISTEN:-yes}" = yes ]; then
+      : > "$STATE_DIR/listening"
+    fi
+    while [ ! -e "$STATE_DIR/sent" ]; do
+      sleep 0.05
+    done
+    printf 'Probe-Entscheidung A option-eins Vom run-decisionboard-Treiber gesetzt\n'
+    ;;
+  end)
+    printf 'end\n' >> "$EVENT_LOG"
+    ;;
+  *)
+    printf 'url: "http://example.invalid/session/fake"\n'
+    ;;
+esac
+SH
+  cat > "$fakebin/chrome-devtools-axi" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  snapshot)
+    checked=''
+    queued=''
+    listening='      uid=g:14 StaticText "Your agent is not listening. If this persists, ask your agent to poll for updates from Lavish."'
+    [ ! -e "$STATE_DIR/listening" ] || listening=''
+    [ ! -e "$STATE_DIR/selected" ] || checked=' checked'
+    if [ -e "$STATE_DIR/submitted" ]; then
+      queued='        uid=g:13 StaticText "Vorgemerkt: option-eins"'
+    fi
+    cat <<SNAP
+uid=g:0 RootWebArea "Probebrett · Lavish" url="http://example.invalid/session/fake"
+  uid=g:1 Iframe
+    uid=g:2 RootWebArea "Probebrett" url="http://example.invalid/artifact/fake/index.html"
+      uid=g:3 StaticText "Probe-Entscheidung A"
+      uid=g:4 form
+        uid=g:5 radio "Option eins Die Option, die der Treiber wählt."$checked
+        uid=g:6 textbox "Begründung (optional)" multiline
+        uid=g:7 button "Antwort vormerken"
+$queued
+  uid=g:8 complementary
+$listening
+    uid=g:15 button "Send to Agent"
+SNAP
+    ;;
+  click)
+    case "${2:-}" in
+      @g:5)
+        printf 'answer\n' >> "$EVENT_LOG"
+        : > "$STATE_DIR/selected"
+        ;;
+      @g:7)
+        : > "$STATE_DIR/submitted"
+        ;;
+      @g:15)
+        printf 'send\n' >> "$EVENT_LOG"
+        : > "$STATE_DIR/sent"
+        ;;
+    esac
+    ;;
+  fill)
+    printf '%s\n' "${3:-}" > "$STATE_DIR/note"
+    ;;
+  screenshot)
+    printf 'fake screenshot\n' > "$2"
+    ;;
+esac
+SH
+  chmod +x "$fake_root/bin/fm-board.sh" "$fake_root/bin/fm-lavish.sh" "$fakebin/chrome-devtools-axi"
+  mkdir -p "$selftest_tmp/state" "$selftest_tmp/staging"
+  mkdir -m 700 "$selftest_tmp/runtime"
+  : > "$selftest_tmp/events"
+  out=$(PATH="$fakebin:$PATH" EVENT_LOG="$selftest_tmp/events" STATE_DIR="$selftest_tmp/state" \
+    XDG_RUNTIME_DIR="$selftest_tmp/runtime" FM_RUN_DECISIONBOARD_TMPDIR="$selftest_tmp/staging" \
+    "$fake_driver" selftest 2>&1) \
+    || fail "selftest failed with faked dependencies"$'\n'"$out"
+  assert_contains "$out" "poll listening: yes" \
+    "selftest did not assert the listener precondition through query output"
+  first_event=$(sed -n '1p' "$selftest_tmp/events")
+  second_event=$(sed -n '2p' "$selftest_tmp/events")
+  third_event=$(sed -n '3p' "$selftest_tmp/events")
+  [ "$first_event" = poll ] && [ "$second_event" = answer ] && [ "$third_event" = send ] \
+    || fail "selftest did not arm poll before answer/send; events were:"$'\n'"$(cat "$selftest_tmp/events")"
   pass "selftest proves the answer path only after arming the poll"
+}
+
+test_selftest_refuses_to_answer_without_a_listening_poll() {
+  local selftest_tmp fakebin fake_root fake_driver out status=0
+  fm_test_tmproot selftest_tmp fm-run-db-selftest-no-listener
+  fakebin=$(fm_fakebin "$selftest_tmp")
+  fake_root="$selftest_tmp/root"
+  fake_driver="$fake_root/.agents/skills/run-decisionboard/fm-run-decisionboard.sh"
+  mkdir -p "$fake_root/bin" "$(dirname "$fake_driver")"
+  cp "$DRIVER" "$fake_driver"
+  chmod +x "$fake_driver"
+  cat > "$fake_root/bin/fm-board.sh" <<'SH'
+#!/usr/bin/env bash
+out=''
+body=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --out) out=$2; shift 2 ;;
+    --body) body=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [ "$body" != - ] && [ -n "$body" ] && grep -q '@tailwindcss/browser' "$body"; then
+  exit 7
+fi
+mkdir -p "$(dirname "$out")"
+printf '<html><body>probe</body></html>\n' > "$out"
+SH
+  cat > "$fake_root/bin/fm-lavish.sh" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  poll)
+    printf 'poll\n' >> "$EVENT_LOG"
+    while [ ! -e "$STATE_DIR/sent" ]; do
+      sleep 0.05
+    done
+    ;;
+  end) ;;
+  *) printf 'url: "http://example.invalid/session/fake"\n' ;;
+esac
+SH
+  cat > "$fakebin/chrome-devtools-axi" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  snapshot)
+    cat <<'SNAP'
+uid=g:0 RootWebArea "Probebrett · Lavish" url="http://example.invalid/session/fake"
+  uid=g:1 Iframe
+    uid=g:2 RootWebArea "Probebrett" url="http://example.invalid/artifact/fake/index.html"
+      uid=g:3 StaticText "Probe-Entscheidung A"
+      uid=g:4 form
+        uid=g:5 radio "Option eins Die Option, die der Treiber wählt."
+        uid=g:6 textbox "Begründung (optional)" multiline
+        uid=g:7 button "Antwort vormerken"
+  uid=g:8 complementary
+      uid=g:14 StaticText "Your agent is not listening. If this persists, ask your agent to poll for updates from Lavish."
+    uid=g:15 button "Send to Agent"
+SNAP
+    ;;
+  click)
+    printf '%s\n' "${2:-}" >> "$EVENT_LOG"
+    ;;
+  screenshot)
+    printf 'fake screenshot\n' > "$2"
+    ;;
+esac
+SH
+  chmod +x "$fake_root/bin/fm-board.sh" "$fake_root/bin/fm-lavish.sh" "$fakebin/chrome-devtools-axi"
+  mkdir -p "$selftest_tmp/state" "$selftest_tmp/staging"
+  mkdir -m 700 "$selftest_tmp/runtime"
+  : > "$selftest_tmp/events"
+  out=$(PATH="$fakebin:$PATH" EVENT_LOG="$selftest_tmp/events" STATE_DIR="$selftest_tmp/state" \
+    XDG_RUNTIME_DIR="$selftest_tmp/runtime" FM_RUN_DECISIONBOARD_TMPDIR="$selftest_tmp/staging" \
+    FM_RUN_DECISIONBOARD_LISTEN_TIMEOUT=0 "$fake_driver" selftest 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "selftest answered even though query never observed a listening poll"$'\n'"$out"
+  assert_contains "$out" "poll listening: no" \
+    "selftest did not show the failed listener precondition"
+  [ "$(sed -n '1p' "$selftest_tmp/events")" = poll ] \
+    || fail "selftest did not start the poll before checking the listener precondition"
+  [ "$(wc -l < "$selftest_tmp/events" | tr -d ' ')" -eq 1 ] \
+    || fail "selftest clicked answer/send despite the missing listener:"$'\n'"$(cat "$selftest_tmp/events")"
+  pass "selftest refuses to answer before query observes a listening poll"
 }
 
 # --- the screenshot, which is the one that lies -----------------------------
@@ -390,6 +573,34 @@ SH
   [ ! -e "$shot_tmp/out.png" ] || fail "shot copied a stale staging file to the destination"
   assert_contains "$out" "unchanged" "shot must say the staging file is from an earlier run"
   pass "shot refuses a staging file this run did not refresh"
+}
+
+test_shot_uses_a_unique_default_staging_target() {
+  local shot_tmp fakebin first_path second_path out
+  fm_test_tmproot shot_tmp fm-run-db-unique-shot
+  fakebin=$(fm_fakebin "$shot_tmp")
+  cat > "$fakebin/chrome-devtools-axi" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$2" >> "$SHOT_PATH_LOG"
+printf 'fresh image bytes\n' > "$2"
+SH
+  chmod +x "$fakebin/chrome-devtools-axi"
+  mkdir -p "$shot_tmp/staging"
+  mkdir -m 700 "$shot_tmp/runtime"
+  : > "$shot_tmp/paths"
+  out=$(PATH="$fakebin:$PATH" SHOT_PATH_LOG="$shot_tmp/paths" \
+    XDG_RUNTIME_DIR="$shot_tmp/runtime" FM_RUN_DECISIONBOARD_TMPDIR="$shot_tmp/staging" \
+    "$DRIVER" shot "$shot_tmp/first.png" 2>&1) \
+    || fail "first default staging shot failed"$'\n'"$out"
+  out=$(PATH="$fakebin:$PATH" SHOT_PATH_LOG="$shot_tmp/paths" \
+    XDG_RUNTIME_DIR="$shot_tmp/runtime" FM_RUN_DECISIONBOARD_TMPDIR="$shot_tmp/staging" \
+    "$DRIVER" shot "$shot_tmp/second.png" 2>&1) \
+    || fail "second default staging shot failed"$'\n'"$out"
+  first_path=$(sed -n '1p' "$shot_tmp/paths")
+  second_path=$(sed -n '2p' "$shot_tmp/paths")
+  [ -n "$first_path" ] && [ -n "$second_path" ] && [ "$first_path" != "$second_path" ] \
+    || fail "default staging targets were not unique: '$first_path' and '$second_path'"
+  pass "shot uses a unique default staging target per driver invocation"
 }
 
 test_shot_accepts_a_same_size_refresh() {
@@ -714,8 +925,10 @@ test_query_can_refuse_missing_notes_when_the_contract_flips
 test_query_counts_a_decision_form_that_carries_nothing
 test_query_reports_an_unlistened_board
 test_selftest_arms_the_poll_before_answering
+test_selftest_refuses_to_answer_without_a_listening_poll
 test_shot_refuses_a_screenshot_that_wrote_nothing
 test_shot_refuses_a_stale_staging_file
+test_shot_uses_a_unique_default_staging_target
 test_shot_accepts_a_same_size_refresh
 test_shot_refuses_an_unacquirable_capture_lock
 test_staging_aliases_share_one_capture_lock

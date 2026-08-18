@@ -527,11 +527,19 @@ cmd_query() {
 # tests set it to reach both refusal branches without depending on what an
 # earlier run left in /tmp.
 shot_staging_path() {
-  local staging_dir
+  local staging_dir suffix
   staging_dir=$(cd "${FM_RUN_DECISIONBOARD_TMPDIR:-/tmp}" 2>/dev/null && pwd -P) \
     || die "screenshot staging directory does not exist: ${FM_RUN_DECISIONBOARD_TMPDIR:-/tmp}"
+  if [ -n "${FM_RUN_DECISIONBOARD_SHOT_ID:-}" ]; then
+    suffix=$FM_RUN_DECISIONBOARD_SHOT_ID
+  else
+    if [ -z "${FM_RUN_DECISIONBOARD_DEFAULT_SHOT_ID:-}" ]; then
+      FM_RUN_DECISIONBOARD_DEFAULT_SHOT_ID="$(date +%s%N 2>/dev/null || date +%s).$$.$RANDOM$RANDOM$RANDOM"
+    fi
+    suffix=$FM_RUN_DECISIONBOARD_DEFAULT_SHOT_ID
+  fi
   printf '%s/fm-run-decisionboard-shot.%s.%s.png' \
-    "$staging_dir" "$(id -un)" "${FM_RUN_DECISIONBOARD_SHOT_ID:-$$}"
+    "$staging_dir" "$(id -un)" "$suffix"
 }
 
 SCREENSHOT_EXIT_STATUS=0
