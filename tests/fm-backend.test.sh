@@ -117,23 +117,47 @@ OLD_BIN_UNCHANGED_SIBLINGS="fm-gate-refuse-lib.sh fm-guard.sh fm-lock-lib.sh fm-
 OLD_BIN_OPTIONAL_SIBLINGS="fm-pending-reply-lib.sh fm-operational-input.sh"
 OLD_BIN_REFACTORED="fm-send.sh fm-peek.sh fm-watch.sh fm-spawn.sh fm-teardown.sh fm-marker-lib.sh"
 
+old_bin_required_sources() {  # <script>... -> direct bin/*.sh dependencies declared for shellcheck
+  awk '
+    match($0, /source=bin\/[A-Za-z0-9._-]+\.sh/) {
+      dep = substr($0, RSTART + length("source=bin/"), RLENGTH - length("source=bin/"))
+      print dep
+    }
+  ' "$@"
+}
+
+copy_old_bin_sibling() {  # <bin-dir> <script> <required|optional>
+  local bin=$1 f=$2 mode=${3:-required}
+  [ -e "$bin/$f" ] && return 0
+  if [ ! -f "$ROOT/bin/$f" ]; then
+    [ "$mode" = optional ] && return 0
+    fail "old bin fixture requires sourced sibling $f, but $ROOT/bin/$f is missing"
+  fi
+  cp "$ROOT/bin/$f" "$bin/$f"
+}
+
 build_old_bin() {  # <name> -> echoes root dir (root/bin/<script> is the entry point)
   local name=$1 root bin f
+  local -a refactored_paths=()
   root="$TMP_ROOT/$name"
   bin="$root/bin"
   mkdir -p "$bin"
-  for f in $OLD_BIN_UNCHANGED_SIBLINGS; do
-    cp "$ROOT/bin/$f" "$bin/$f"
-  done
-  for f in $OLD_BIN_OPTIONAL_SIBLINGS; do
-    [ -f "$ROOT/bin/$f" ] || continue
-    cp "$ROOT/bin/$f" "$bin/$f"
-  done
-  cp -R "$ROOT/bin/backends" "$bin/backends"
   for f in $OLD_BIN_REFACTORED; do
     git -C "$ROOT" show "$BASE_REF:bin/$f" > "$bin/$f"
     chmod +x "$bin/$f"
+    refactored_paths+=("$bin/$f")
   done
+  for f in $OLD_BIN_UNCHANGED_SIBLINGS; do
+    copy_old_bin_sibling "$bin" "$f" required
+  done
+  for f in $OLD_BIN_OPTIONAL_SIBLINGS; do
+    copy_old_bin_sibling "$bin" "$f" optional
+  done
+  cp -R "$ROOT/bin/backends" "$bin/backends"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    copy_old_bin_sibling "$bin" "$f" required
+  done < <(old_bin_required_sources "${refactored_paths[@]}" | sort -u)
   printf '%s\n' "$root"
 }
 
