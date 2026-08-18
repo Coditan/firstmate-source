@@ -96,6 +96,41 @@ SH
   chmod +x "$fakebin/gh"
 }
 
+# A `git` shim that records every invocation before handing off to the real git,
+# so a test can assert HOW MANY times the default history was enumerated rather
+# than timing it.
+fake_git_call_logger() {
+  local fakebin=$1 log=$2 real_git
+  real_git=$(command -v git) || fail "no git on PATH to wrap"
+  cat > "$fakebin/git" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$log"
+exec "$real_git" "\$@"
+SH
+  chmod +x "$fakebin/git"
+}
+
+# An `awk` shim that signals the removal helper the instant it reaches the
+# registry rewrite - the one command between moving the clone aside and putting
+# the registry back in agreement with it. Keyed on the rewrite program's own
+# text so the earlier registry-count and backlog awk calls run untouched, which
+# makes the interrupt land inside that window deterministically instead of by
+# timing.
+fake_awk_signals_registry_rewrite() {
+  local fakebin=$1 signal=$2 real_awk
+  real_awk=$(command -v awk) || fail "no awk on PATH to wrap"
+  cat > "$fakebin/awk" <<SH
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  case "\$arg" in
+    *'!(\$1=="-"'*) kill -$signal "\$PPID" 2>/dev/null ;;
+  esac
+done
+exec "$real_awk" "\$@"
+SH
+  chmod +x "$fakebin/awk"
+}
+
 fake_tasks_axi_listing() {
   local fakebin=$1 body=$2
   cat > "$fakebin/tasks-axi" <<SH
@@ -456,6 +491,366 @@ test_dry_run_pass_keeps_clone_and_registry() {
   pass "project removal dry-run prints a pass verdict without removing the clone or registry entry"
 }
 
+# --- work-bearing refs beyond refs/heads -------------------------------------
+#
+# Only refs/heads used to be enumerated, so each fixture below passed with PASS
+# and would have been deleted. They are one bug with one fix, so they are kept
+# together: any of them passing again means the enumeration narrowed.
+
+test_stashed_work_refuses() {
+  local home repo rc=0
+  home=$(make_home stashed-work)
+  repo="$home/projects/alpha"
+  printf 'stashed\n' > "$repo/stashed.txt"
+  git -C "$repo" add stashed.txt
+  git -C "$repo" stash push -q -m wip
+  [ -n "$(git -C "$repo" stash list)" ] || fail "stash fixture did not create a stash entry"
+  [ -z "$(git -C "$repo" status --porcelain)" ] \
+    || fail "stash fixture left the working tree dirty, so it would not test the stash"
+  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 1 "$rc" "stashed work"
+  assert_grep "stashed change stash@{0} has no preservation" "$home/err" \
+    "stashed work was not reported as unproved"
+  assert_no_grep "PASS:" "$home/out" "a clone holding a stash still printed a pass verdict"
+  [ -d "$home/projects/alpha" ] || fail "stashed-work refusal removed the clone"
+  pass "project removal refuses a clone whose only unlanded work is stashed"
+}
+
+test_older_stash_entry_refuses() {
+  local home repo rc=0
+  home=$(make_home older-stash-entry)
+  repo="$home/projects/alpha"
+  printf 'older\n' > "$repo/older.txt"
+  git -C "$repo" add older.txt
+  git -C "$repo" stash push -q -m older
+  printf 'newer\n' > "$repo/newer.txt"
+  git -C "$repo" add newer.txt
+  git -C "$repo" stash push -q -m newer
+  [ "$(git -C "$repo" stash list | wc -l)" -eq 2 ] \
+    || fail "older-stash fixture did not create two stash entries"
+  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 1 "$rc" "older stash entry"
+  assert_grep "stashed change stash@{1} has no preservation" "$home/err" \
+    "the older stash entry, which refs/stash does not point at, was not inspected"
+  [ -d "$home/projects/alpha" ] || fail "older-stash refusal removed the clone"
+  pass "project removal inspects every stash entry, not only the one refs/stash names"
+}
+
+test_reflogless_stash_ref_refuses() {
+  local home repo rc=0
+  home=$(make_home reflogless-stash)
+  repo="$home/projects/alpha"
+  printf 'stashed\n' > "$repo/stashed.txt"
+  git -C "$repo" add stashed.txt
+  git -C "$repo" stash push -q -m wip
+  rm -f "$repo/.git/logs/refs/stash"
+  git -C "$repo" rev-parse --verify --quiet refs/stash >/dev/null \
+    || fail "reflogless-stash fixture lost refs/stash itself"
+  [ -z "$(git -C "$repo" stash list)" ] \
+    || fail "reflogless-stash fixture still lists stashes, so it would not test the reflog-less tip"
+  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 1 "$rc" "reflogless stash ref"
+  assert_grep "stashed change refs/stash has no preservation" "$home/err" \
+    "a refs/stash with no reflog behind it was enumerated nowhere"
+  [ -d "$home/projects/alpha" ] || fail "reflogless-stash refusal removed the clone"
+  pass "project removal inspects a refs/stash tip even when its reflog is gone"
+}
+
+test_detached_head_commit_refuses() {
+  local home repo tip rc=0
+  home=$(make_home detached-head-commit)
+  repo="$home/projects/alpha"
+  git -C "$repo" checkout -q --detach main
+  printf 'detached\n' > "$repo/detached.txt"
+  git -C "$repo" add detached.txt
+  git -C "$repo" commit -qm "detached commit"
+  tip=$(git -C "$repo" rev-parse --short HEAD)
+  [ -z "$(git -C "$repo" for-each-ref --contains HEAD --format='%(refname)' refs/heads)" ] \
+    || fail "detached fixture left the commit on a branch, so refs/heads would already see it"
+  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 1 "$rc" "detached head commit"
+  assert_grep "detached HEAD HEAD has no preservation" "$home/err" \
+    "a commit no branch points at was not reported as unproved"
+  assert_grep "$tip" "$home/err" "the refusal did not name the commit that would be lost"
+  [ -d "$home/projects/alpha" ] || fail "detached-head refusal removed the clone"
+  pass "project removal refuses a detached-HEAD commit no branch points at"
+}
+
+test_local_only_tag_refuses() {
+  local home repo rc=0
+  home=$(make_home local-only-tag)
+  repo="$home/projects/alpha"
+  git -C "$repo" checkout -q --detach main
+  printf 'tagged\n' > "$repo/tagged.txt"
+  git -C "$repo" add tagged.txt
+  git -C "$repo" commit -qm "tagged commit"
+  git -C "$repo" tag keepsake
+  git -C "$repo" checkout -q main
+  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 1 "$rc" "local only tag"
+  assert_grep "local tag keepsake has no preservation" "$home/err" \
+    "a local-only tag holding the only copy of a commit was not reported as unproved"
+  [ -d "$home/projects/alpha" ] || fail "local-only-tag refusal removed the clone"
+  pass "project removal refuses commits held only by a local-only tag"
+}
+
+test_paused_rebase_replay_refuses() {
+  local home repo rc=0
+  home=$(make_home paused-rebase)
+  repo="$home/projects/alpha"
+  git -C "$repo" switch -q -c feature/rebasing
+  printf 'first\n' > "$repo/first.txt"
+  git -C "$repo" add first.txt
+  git -C "$repo" commit -qm "first replayed commit"
+  printf 'second\n' > "$repo/second.txt"
+  git -C "$repo" add second.txt
+  git -C "$repo" commit -qm "second replayed commit"
+  git -C "$repo" push -q origin feature/rebasing
+  git -C "$repo" switch -q main
+  printf 'moved on\n' > "$repo/moved.txt"
+  git -C "$repo" add moved.txt
+  git -C "$repo" commit -qm "main moved on"
+  git -C "$repo" push -q origin main
+  git -C "$repo" fetch -q origin
+  GIT_SEQUENCE_EDITOR='sed -i 2i\break' git -C "$repo" rebase -i main feature/rebasing >/dev/null 2>&1
+  [ -d "$repo/.git/rebase-merge" ] || {
+    pass "SKIP: this git could not park a rebase at a break, so the paused-rebase case is untested here"
+    return 0
+  }
+  [ -z "$(git -C "$repo" status --porcelain)" ] \
+    || fail "paused-rebase fixture left the tree dirty, so the dirty check would refuse first"
+  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 1 "$rc" "paused rebase"
+  assert_grep "detached HEAD HEAD has no preservation" "$home/err" \
+    "a rebase's already-replayed commits were not reported as unproved"
+  [ -d "$home/projects/alpha" ] || fail "paused-rebase refusal removed the clone"
+  pass "project removal refuses a clone parked mid-rebase over its replayed commits"
+}
+
+test_prunable_worktree_head_refuses() {
+  local home repo wt lost rc=0
+  home=$(make_home prunable-worktree-head)
+  repo="$home/projects/alpha"
+  wt="$home/.treehouse/alpha-test/1/alpha"
+  mkdir -p "$(dirname "$wt")"
+  git -C "$repo" worktree add -q --detach "$wt" main
+  printf 'wip\n' > "$wt/wip.txt"
+  git -C "$wt" add wip.txt
+  git -C "$wt" commit -qm "worktree wip"
+  lost=$(git -C "$wt" rev-parse --short HEAD)
+  rm -rf "$wt"
+  git -C "$repo" worktree list --porcelain | grep -q '^prunable' \
+    || fail "prunable fixture did not leave a prunable worktree entry"
+  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 1 "$rc" "prunable worktree head"
+  assert_grep "worktree HEAD $wt has no preservation" "$home/err" \
+    "a pruned worktree's recorded HEAD was accepted without inspecting its commits"
+  assert_grep "$lost" "$home/err" "the refusal did not name the commit the pruned worktree still holds"
+  assert_no_grep "PASS:" "$home/out" "a pruned worktree holding an unpushed commit still printed a pass verdict"
+  [ -d "$home/projects/alpha" ] || fail "prunable-worktree refusal removed the clone"
+  pass "project removal proves a prunable worktree entry's commits instead of treating the entry as proof"
+}
+
+test_remote_tags_do_not_block_removal() {
+  local home repo rc=0
+  home=$(make_home remote-tags)
+  repo="$home/projects/alpha"
+  printf 'second\n' > "$repo/second.txt"
+  git -C "$repo" add second.txt
+  git -C "$repo" commit -qm "second landed commit"
+  git -C "$repo" push -q origin main
+  git -C "$repo" tag v1.0 main
+  git -C "$repo" tag -a v1.1 -m "annotated release" main~
+  git -C "$repo" push -q origin v1.0 v1.1
+  git -C "$repo" fetch -q origin --tags
+  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 0 "$rc" "remote tags"
+  assert_grep "PASS: project alpha removal safety checks passed." "$home/out" \
+    "widening the enumeration to tags refuses ordinary clones whose tags sit on the default branch"
+  assert_grep "local tag v1.1: remote-tracking ref contains" "$home/out" \
+    "the annotated tag was not peeled to its commit and proved"
+  assert_no_grep "local tag v1.1 has no preservation" "$home/err" \
+    "the annotated tag object was treated as unproved instead of being peeled to its commit"
+  pass "project removal still passes a clone whose tags, annotated included, sit on preserved history"
+}
+
+test_prefetch_refs_do_not_block_removal() {
+  local home repo ahead rc=0
+  home=$(make_home prefetch-refs)
+  repo="$home/projects/alpha"
+  printf 'prefetched\n' > "$repo/prefetched.txt"
+  git -C "$repo" add prefetched.txt
+  git -C "$repo" commit -qm "commit only the prefetch ref has seen"
+  ahead=$(git -C "$repo" rev-parse HEAD)
+  git -C "$repo" update-ref refs/prefetch/origin/main "$ahead"
+  git -C "$repo" reset -q --hard origin/main
+  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 0 "$rc" "prefetch refs"
+  assert_grep "PASS: project alpha removal safety checks passed." "$home/out" \
+    "a git-maintenance prefetch ref, which only ever holds remote content, refused the removal"
+  pass "project removal ignores git-maintenance prefetch refs, which carry no local work"
+}
+
+# --- remote refresh ----------------------------------------------------------
+
+test_unreachable_remote_still_removes() {
+  local home rc=0
+  home=$(make_home unreachable-remote-removes)
+  rm -rf "$home/origin.git"
+  run_remove "$home" alpha --captain-approved > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 0 "$rc" "unreachable remote removal"
+  [ ! -e "$home/projects/alpha" ] || fail "removal with an unreachable remote left the clone on disk"
+  assert_no_grep "- alpha " "$home/data/projects.md" \
+    "removal with an unreachable remote did not remove the registry entry"
+  assert_grep "could not refresh remotes" "$home/err" \
+    "removal with an unreachable remote did not say the proofs rest on unrefreshed state"
+  pass "project removal still removes a clone whose remote no longer answers"
+}
+
+test_unreachable_remote_still_refuses_unlanded_work() {
+  local home repo rc=0
+  home=$(make_home unreachable-remote-refuses)
+  repo="$home/projects/alpha"
+  commit_branch "$repo" feature/not-landed feature.txt feature
+  rm -rf "$home/origin.git"
+  run_remove "$home" alpha --captain-approved > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 1 "$rc" "unreachable remote with unlanded work"
+  assert_grep "local branch feature/not-landed has no preservation" "$home/err" \
+    "an unreachable remote refused on the fetch instead of on the unlanded work"
+  [ -d "$home/projects/alpha" ] || fail "unreachable-remote refusal removed the clone"
+  pass "project removal with an unreachable remote refuses on the landed-work evidence, not on the fetch"
+}
+
+test_refused_run_does_not_prune_remote_tracking_refs() {
+  local home repo rc=0
+  home=$(make_home refused-run-no-prune)
+  repo="$home/projects/alpha"
+  commit_branch "$repo" feature/short-lived short.txt short
+  git -C "$repo" push -q origin feature/short-lived
+  git -C "$repo" fetch -q origin
+  git -C "$repo" branch -q -D feature/short-lived
+  git -C "$home/origin.git" branch -q -D feature/short-lived
+  git -C "$repo" rev-parse --verify --quiet refs/remotes/origin/feature/short-lived >/dev/null \
+    || fail "fixture did not leave a remote-tracking ref for a branch the remote no longer has"
+  printf '%s\n' '- alpha [direct-PR] - duplicate fixture (added 2026-08-17)' \
+    >> "$home/data/projects.md"
+  run_remove "$home" alpha --captain-approved > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 1 "$rc" "refused run must not prune"
+  assert_grep "expected exactly one data/projects.md entry" "$home/err" \
+    "the refused run did not refuse on the registry"
+  git -C "$repo" rev-parse --verify --quiet refs/remotes/origin/feature/short-lived >/dev/null \
+    || fail "a run refused by a read-only check still pruned the clone's remote-tracking refs"
+  pass "project removal runs its read-only checks before touching the clone's remote-tracking refs"
+}
+
+# --- landed-content proof cost ------------------------------------------------
+
+test_landed_content_naming_scans_default_history_once() {
+  local home repo fakebin call_log scans rc=0
+  home=$(make_home landed-naming-once)
+  repo="$home/projects/alpha"
+  fakebin=$(fm_fakebin "$home")
+  call_log="$home/git-calls.log"
+  : > "$call_log"
+  git -C "$repo" switch -q -c feature/replayed-one
+  printf 'one\n' > "$repo/one.txt"
+  git -C "$repo" add one.txt
+  git -C "$repo" commit -qm "replay one"
+  git -C "$repo" switch -q main
+  git -C "$repo" switch -q -c feature/replayed-two
+  printf 'two\n' > "$repo/two.txt"
+  git -C "$repo" add two.txt
+  git -C "$repo" commit -qm "replay two"
+  git -C "$repo" switch -q main
+  printf 'one\n' > "$repo/one.txt"
+  printf 'two\n' > "$repo/two.txt"
+  git -C "$repo" add one.txt
+  git -C "$repo" commit -qm "land one independently"
+  git -C "$repo" add two.txt
+  git -C "$repo" commit -qm "land two independently"
+  git -C "$repo" push -q origin main
+  git -C "$repo" fetch -q origin
+  fake_git_call_logger "$fakebin" "$call_log"
+  PATH="$fakebin:$PATH" \
+    run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 0 "$rc" "landed naming scan count"
+  scans=$(grep -c -E ' log .* origin/main$' "$call_log" || true)
+  [ "$scans" -le 1 ] \
+    || fail "naming landed content walked the whole default history $scans times; it must be indexed once per run"
+  assert_grep "landed as " "$home/out" "the landed-content proofs stopped naming the commit that landed them"
+  pass "project removal indexes the default history once per run instead of rescanning it per commit"
+}
+
+# --- refusal evidence ---------------------------------------------------------
+
+test_refusal_evidence_excludes_default_branch_commits() {
+  local home repo i rc=0
+  home=$(make_home refusal-evidence)
+  repo="$home/projects/alpha"
+  git -C "$repo" remote remove origin
+  for i in 1 2 3 4 5; do
+    printf 'landed %s\n' "$i" > "$repo/landed$i.txt"
+    git -C "$repo" add "landed$i.txt"
+    git -C "$repo" commit -qm "landed commit $i"
+  done
+  commit_branch "$repo" feature/unlanded unlanded.txt unlanded
+  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 1 "$rc" "refusal evidence"
+  assert_grep "add unlanded.txt" "$home/err" \
+    "the refusal evidence did not list the one commit actually at risk"
+  assert_no_grep "landed commit 5" "$home/err" \
+    "the refusal evidence listed the default branch's own landed commits and overstated the risk"
+  [ -d "$home/projects/alpha" ] || fail "refusal-evidence refusal removed the clone"
+  pass "project removal's refusal evidence excludes the default branch instead of listing it as at risk"
+}
+
+# --- interrupted removal window -----------------------------------------------
+
+test_interrupted_removal_restores_clone_and_registry() {
+  local home repo fakebin leftovers rc=0
+  home=$(make_home interrupted-removal)
+  repo="$home/projects/alpha"
+  fakebin=$(fm_fakebin "$home")
+  fake_awk_signals_registry_rewrite "$fakebin" TERM
+  PATH="$fakebin:$PATH" run_remove "$home" alpha --captain-approved > "$home/out" 2> "$home/err" || rc=$?
+  [ "$rc" != 0 ] || fail "an interrupted removal reported success"
+  [ -d "$repo" ] \
+    || fail "a removal interrupted between moving the clone and rewriting the registry did not restore the clone"
+  git -C "$repo" rev-parse --show-toplevel >/dev/null 2>&1 \
+    || fail "the restored clone is not an inspectable git worktree"
+  assert_grep "- alpha " "$home/data/projects.md" \
+    "an interrupted removal left the registry disagreeing with the restored clone"
+  leftovers=$(find "$home/projects" -maxdepth 1 -name '.fm-removing-*' 2>/dev/null | wc -l)
+  [ "$leftovers" -eq 0 ] \
+    || fail "an interrupted removal left the clone at a hidden removal path"
+  pass "an interrupted removal restores the clone and its registry entry instead of hiding the clone"
+}
+
+# --- documented invocations ---------------------------------------------------
+
+test_documented_dry_run_invocation_is_accepted() {
+  local skill home line rc=0
+  skill="$ROOT/.agents/skills/project-management/SKILL.md"
+  [ -f "$skill" ] || fail "the project-management skill is no longer at $skill"
+  assert_grep "fm-project-remove.sh <project-name> --captain-approved --dry-run" "$skill" \
+    "the skill's dry-run invocation does not show --captain-approved, which the helper requires"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in
+      *--captain-approved*) ;;
+      *) fail "the skill shows a fm-project-remove.sh --dry-run invocation the helper refuses: $line" ;;
+    esac
+  done <<EOF
+$(grep -n -- '--dry-run' "$skill" | grep -- 'fm-project-remove' || true)
+EOF
+  home=$(make_home documented-dry-run)
+  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 0 "$rc" "documented dry-run invocation"
+  assert_grep "PASS: project alpha removal safety checks passed." "$home/out" \
+    "the documented dry-run invocation did not produce a verdict"
+  pass "the documented dry-run invocation is one the helper accepts"
+}
+
 test_requires_captain_approval
 test_dirty_primary_refuses
 test_unlanded_branch_refuses
@@ -475,3 +870,19 @@ test_backlog_reference_uses_tasks_axi_for_bold_rows
 test_registry_must_have_one_entry
 test_pass_removes_clone_and_registry_entry_together
 test_dry_run_pass_keeps_clone_and_registry
+test_stashed_work_refuses
+test_older_stash_entry_refuses
+test_reflogless_stash_ref_refuses
+test_detached_head_commit_refuses
+test_local_only_tag_refuses
+test_paused_rebase_replay_refuses
+test_prunable_worktree_head_refuses
+test_remote_tags_do_not_block_removal
+test_prefetch_refs_do_not_block_removal
+test_unreachable_remote_still_removes
+test_unreachable_remote_still_refuses_unlanded_work
+test_refused_run_does_not_prune_remote_tracking_refs
+test_landed_content_naming_scans_default_history_once
+test_refusal_evidence_excludes_default_branch_commits
+test_interrupted_removal_restores_clone_and_registry
+test_documented_dry_run_invocation_is_accepted
