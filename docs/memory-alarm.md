@@ -15,7 +15,9 @@ That was built as far as measuring it and then abandoned on the measurement, bec
 The captain's decision after that measurement was to build the alarm on RAM headroom and growth with no cgroup limit at all.
 That remains true after the 32 GiB swapfile added on 2026-08-17.
 Swap is a shock absorber: it gives anonymous memory somewhere to go and can turn an immediate kill into a slower host, but it does not stop page cache from expanding into a cgroup ceiling and it does not identify the worker that caused the pressure.
-A 12 GB container ceiling is now proposed for this seat, so `docs/memory-ceiling-caveat.md` is active evidence again rather than only history.
+A container ceiling is now proposed for this seat, so `docs/memory-ceiling-caveat.md` is active evidence again rather than only history.
+The figure in that proposal is 12 GB, which is hlr's proposal from one night's observation on their host and is **unmeasured here**; this seat has since named a different figure, and neither rests on a measurement, so no number in this document is evidence for a ceiling.
+The measurement that would settle it is recorded per-pane peaks - what a pane actually reached, rather than what one happened to be watched reaching.
 The ceiling must be re-measured before it is fitted, not inferred safe from the presence of swap.
 
 Because nothing is limited, nothing can be throttled - so the requirement that the wake-delivery listener and the supervision watcher are never throttled is met by there being no mechanism here that could reach them, or anything else.
