@@ -43,6 +43,9 @@ printf '%s\n' "\$*" > "\$FM_HOME/state/sender-argv"
   printf 'FM_HOME=%s\n' "\${FM_HOME-}"
   printf 'FM_CONFIG_OVERRIDE=%s\n' "\${FM_CONFIG_OVERRIDE-}"
   printf 'FM_STATE_OVERRIDE=%s\n' "\${FM_STATE_OVERRIDE-}"
+  printf 'FM_TG_SEND_TARGET=%s\n' "\${FM_TG_SEND_TARGET-}"
+  printf 'FM_TG_SEND_CORRESPONDENT_NAME=%s\n' "\${FM_TG_SEND_CORRESPONDENT_NAME-}"
+  printf 'FM_TG_SEND_CORRESPONDENT_CHAT_ID=%s\n' "\${FM_TG_SEND_CORRESPONDENT_CHAT_ID-}"
   printf 'FM_TG_SEND_KIND=%s\n' "\${FM_TG_SEND_KIND-}"
   printf 'FM_TG_SEND_PATH=%s\n' "\${FM_TG_SEND_PATH-}"
   printf 'FM_TG_SEND_ORIGINAL_NAME=%s\n' "\${FM_TG_SEND_ORIGINAL_NAME-}"
@@ -65,6 +68,14 @@ declare_capabilities() {
   local home=$1
   shift
   printf '%s\n' "$@" > "$home/config/fm-tg-send.capabilities"
+}
+
+register_correspondent() {
+  local home=$1 name=$2 chat_id=$3
+  {
+    printf 'name=%s\n' "$name"
+    printf 'chat_id=%s\n' "$chat_id"
+  } > "$home/config/fm-tg-correspondent"
 }
 
 run_send() {
@@ -169,6 +180,76 @@ test_the_sender_is_told_which_home_it_is_speaking_for() {
   assert_grep "FM_CONFIG_OVERRIDE=$home/config" "$home/state/sender-env" "the sender was not told its config directory"
   assert_grep "FM_STATE_OVERRIDE=$home/state" "$home/state/sender-env" "the sender was not told its state directory"
   pass "the sender is launched against the same home the seam resolved"
+}
+
+test_a_send_with_no_explicit_target_stays_on_the_captain_lane() {
+  local home="$TMP_ROOT/default-target" status=0
+  new_home "$home"
+  install_sender "$home"
+  register_correspondent "$home" requirements 5678
+  declare_capabilities "$home" correspondent
+
+  FM_TG_SEND_TARGET=correspondent \
+  FM_TG_SEND_CORRESPONDENT_NAME=stale \
+  FM_TG_SEND_CORRESPONDENT_CHAT_ID=9999 \
+    FM_HOME="$home" "$SEND" --text 'the build is green' >/dev/null 2>&1 || status=$?
+  expect_code 0 "$status" "a default-target send"
+  assert_grep "FM_TG_SEND_TARGET=captain" "$home/state/sender-env" \
+    "a send with no --target did not stay on the captain lane"
+  grep -Fqx "FM_TG_SEND_CORRESPONDENT_NAME=" "$home/state/sender-env" \
+    || fail "an inherited correspondent name reached a default captain send"
+  grep -Fqx "FM_TG_SEND_CORRESPONDENT_CHAT_ID=" "$home/state/sender-env" \
+    || fail "an inherited correspondent chat id reached a default captain send"
+  pass "a send with no explicit target stays captain-only and clears stale correspondent state"
+}
+
+test_an_explicit_correspondent_send_refuses_without_a_registered_lane() {
+  local home="$TMP_ROOT/no-correspondent" out status=0
+  new_home "$home"
+  install_sender "$home"
+  declare_capabilities "$home" correspondent
+
+  out=$(run_send "$home" --target correspondent --text 'requirements reply') || status=$?
+  [ "$status" -ne 0 ] || fail "a correspondent send with no registered lane reported success"
+  assert_contains "$out" "no correspondent lane is registered" "the refusal did not name the absent lane"
+  assert_contains "$out" "the message was NOT sent to the correspondent" \
+    "the refusal did not say the correspondent message went nowhere"
+  assert_sender_never_ran "$home" "the sender ran after the correspondent lane was refused"
+  pass "an explicit correspondent send refuses rather than falling back to the captain"
+}
+
+test_an_explicit_correspondent_send_requires_sender_support() {
+  local home="$TMP_ROOT/no-correspondent-support" out status=0
+  new_home "$home"
+  install_sender "$home"
+  register_correspondent "$home" requirements 5678
+
+  out=$(run_send "$home" --target correspondent --text 'requirements reply') || status=$?
+  [ "$status" -ne 0 ] || fail "a sender with no correspondent support was used"
+  assert_contains "$out" "does not support the correspondent target" \
+    "the refusal did not name missing correspondent sender support"
+  assert_sender_never_ran "$home" "the sender ran without declaring correspondent support"
+  pass "a correspondent target requires a sender capability before anything is transmitted"
+}
+
+test_an_explicit_correspondent_send_marks_the_sender_request() {
+  local home="$TMP_ROOT/correspondent-target" status=0
+  new_home "$home"
+  install_sender "$home"
+  register_correspondent "$home" requirements 5678
+  declare_capabilities "$home" correspondent
+
+  run_send "$home" --target correspondent --text 'requirements answer' >/dev/null || status=$?
+  expect_code 0 "$status" "a declared correspondent target"
+  assert_grep "requirements answer" "$home/state/sender-body" \
+    "the correspondent message did not reach the sender on stdin"
+  assert_grep "FM_TG_SEND_TARGET=correspondent" "$home/state/sender-env" \
+    "the sender was not told this was the correspondent target"
+  assert_grep "FM_TG_SEND_CORRESPONDENT_NAME=requirements" "$home/state/sender-env" \
+    "the sender was not told which correspondent was targeted"
+  assert_grep "FM_TG_SEND_CORRESPONDENT_CHAT_ID=5678" "$home/state/sender-env" \
+    "the sender was not handed the registered correspondent chat id"
+  pass "an explicit correspondent send reaches the sender as an explicit target"
 }
 
 test_a_failing_sender_is_reported_and_never_reported_as_sent() {
@@ -545,7 +626,7 @@ test_a_caption_naming_a_pull_request_without_its_url_is_refused_too() {
   [ "$status" -ne 0 ] || fail "a caption naming a pull request with no URL was sent"
   assert_contains "$out" "requires the full URL" "the refusal did not name the rule"
   assert_sender_never_ran "$home" "the sender ran for a caption the seam had already refused"
-  pass "a caption is captain-facing text, so the pull request URL rule holds for it too"
+  pass "a caption is recipient-facing text, so the pull request URL rule holds for it too"
 }
 
 test_a_failing_sender_on_a_file_send_is_never_reported_as_sent() {
@@ -632,6 +713,10 @@ test_a_sender_without_a_credential_still_fails
 test_a_message_reaches_the_sender_on_stdin
 test_the_message_never_reaches_the_senders_command_line
 test_the_sender_is_told_which_home_it_is_speaking_for
+test_a_send_with_no_explicit_target_stays_on_the_captain_lane
+test_an_explicit_correspondent_send_refuses_without_a_registered_lane
+test_an_explicit_correspondent_send_requires_sender_support
+test_an_explicit_correspondent_send_marks_the_sender_request
 test_a_failing_sender_is_reported_and_never_reported_as_sent
 test_arguments_after_a_double_dash_reach_the_sender
 test_a_bare_pull_request_reference_is_refused_before_anything_is_sent

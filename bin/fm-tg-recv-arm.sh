@@ -7,8 +7,8 @@
 # with shell `&`.
 # It starts one receiver for this FM_HOME or attaches to an already running one.
 # The receiver remains this wrapper's child when started here, so the harness
-# gets notified when a Telegram message makes the receiver print its one
-# CAPTAIN-TELEGRAM line and exit.
+# gets notified when a Telegram message makes the receiver print one routed
+# captain or operational-input line and exit.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

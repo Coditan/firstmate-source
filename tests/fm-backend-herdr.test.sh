@@ -1082,9 +1082,10 @@ SH
 }
 
 test_presentation_session_lock_path_is_shared_across_homes() {
-  local dir log resp fb path_a path_b path_other path_tmp path_private
+  local dir log resp fb path_a path_b path_other path_tmp path_private uid
   dir="$TMP_ROOT/presentation-session-lock"; mkdir -p "$dir/responses" "$dir/sockdir"
   log="$dir/log"; resp="$dir/responses"; : > "$log"
+  uid=$(id -u 2>/dev/null) || fail "could not resolve current uid"
   : > "$dir/sockdir/fmtest.sock"
   printf '%s\n' "{\"sessions\":[{\"name\":\"fmtest\",\"running\":true,\"socket_path\":\"$dir/sockdir/fmtest.sock\"}]}" > "$resp/1.out"
   printf '%s\n' "{\"sessions\":[{\"name\":\"fmtest\",\"running\":true,\"socket_path\":\"$dir/sockdir/fmtest.sock\"}]}" > "$resp/2.out"
@@ -1099,7 +1100,7 @@ test_presentation_session_lock_path_is_shared_across_homes() {
     || fail "session lock path resolution failed for home B"
   [ "$path_a" = "$path_b" ] || fail "same session/socket must resolve one shared lock path"
   case "$path_a" in
-    /tmp/firstmate-herdr-presentation-"$(id -u)"/order-*.lock) ;;
+    /tmp/firstmate-herdr-presentation-"$uid"/order-*.lock) ;;
     *) fail "session lock path must use the per-user machine namespace: $path_a" ;;
   esac
   case "$path_a" in
@@ -1125,6 +1126,30 @@ test_presentation_session_lock_path_is_shared_across_homes() {
       || fail "symlink parent socket paths must resolve one lock: $path_tmp vs $path_private"
   fi
   pass "herdr presentation lock: one path per session/socket across homes"
+}
+
+test_presentation_session_lock_path_survives_path_without_id() {
+  local dir log resp fb no_id path status uid
+  dir="$TMP_ROOT/presentation-lock-no-id"; mkdir -p "$dir/responses" "$dir/sockdir" "$dir/no-id"
+  log="$dir/log"; resp="$dir/responses"; no_id="$dir/no-id"; : > "$log"
+  uid=$(id -u 2>/dev/null) || fail "could not resolve current uid"
+  : > "$dir/sockdir/fmtest.sock"
+  printf '%s\n' "{\"sessions\":[{\"name\":\"fmtest\",\"running\":true,\"socket_path\":\"$dir/sockdir/fmtest.sock\"}]}" > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  cat > "$no_id/id" <<'SH'
+#!/usr/bin/env bash
+exit 127
+SH
+  chmod +x "$no_id/id" || fail "could not install failing id stub"
+  path=$(PATH="$no_id:$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    /bin/bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_presentation_session_lock_path fmtest' "$ROOT" 2>&1)
+  status=$?
+  [ "$status" -eq 0 ] || fail "session lock path must not require id on PATH: $path"
+  case "$path" in
+    /tmp/firstmate-herdr-presentation-"$uid"/order-*.lock) ;;
+    *) fail "session lock path without id used the wrong namespace: $path" ;;
+  esac
+  pass "herdr presentation lock: reduced PATH without id still resolves the user-private namespace"
 }
 
 test_presentation_session_lock_path_rejects_malformed_socket() {
@@ -2819,6 +2844,7 @@ test_projection_order_ambiguous_existing_block_is_read_only
 test_projection_order_foreign_new_child_before_parent_is_read_only
 test_projection_order_missing_parent_is_read_only
 test_presentation_session_lock_path_is_shared_across_homes
+test_presentation_session_lock_path_survives_path_without_id
 test_presentation_session_lock_path_rejects_malformed_socket
 test_presentation_lock_malformed_socket_falls_back
 test_projection_order_rejects_malformed_socket

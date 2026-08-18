@@ -116,8 +116,10 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-context-lib.sh`      | The context-ceiling predicates and branch classification - size, quiet boundary, captain presence, receipt freshness, re-entry path, blocked, ask, reset, and unenforced - shared by the watcher and the reset tool (docs/context-reset.md) |
 | `fm-stow-receipt.sh`     | Record that this session's durable knowledge was filed, bound to the transcript position it was filed at |
 | `fm-context-reset.sh`    | Verify the receipt, the quiet boundary, and the way back in, then clear this session; refuses loudly and discards nothing on any failure. `--captain-approved` is the path for a reset the captain asked for, where the approval replaces the idle inference and the receipt must postdate it (docs/context-reset.md) |
+| `fm-tg-correspondent-lib.sh` | Parse the local non-captain Telegram correspondent registration and derive its private inbox path |
+| `fm-tg-recv-route.sh`    | Route one normalized Telegram receiver event to the captain lane, the registered correspondent lane, or silent drop |
 | `fm-tg-recv-arm.sh`      | Verified home-scoped direct Telegram receiver arm wrapper with attach-or-start behavior |
-| `fm-tg-send.sh`          | Send the captain one message, or one named file, on the direct Telegram channel, refusing loudly rather than reporting a delivery nobody got |
+| `fm-tg-send.sh`          | Send the captain by default, or the registered correspondent only with an explicit target, refusing loudly rather than reporting a delivery nobody got |
 | `fm-afk-start.sh`        | Run the common sourceable away-mode daemon entry in the foreground                      |
 | `fm-afk-launch.sh`       | Own away-mode entry, exit, rollback, and any backend terminal lifecycle                 |
 | `fm-afk-return.sh`       | Own deterministic return shutdown, catch-up evidence, and the firstmate-actionable blocker gate |

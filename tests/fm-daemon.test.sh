@@ -745,15 +745,21 @@ test_busy_guard_defers_when_supervisor_busy() {
 }
 
 test_marker_detection() {
-  local marker_hex
+  local marker_hex correspondent_input
   marker_hex=$(printf '%s' "$FM_INJECT_MARK" | od -An -tx1 | tr -d ' \n')
   [ "$marker_hex" = e281a3 ] \
     || fail "FM_INJECT_MARK must use terminal-safe U+2063 bytes, got $marker_hex"
   [ "$FM_OPERATIONAL_PREFIX" = "${FM_INJECT_MARK}FIRSTMATE_OP: " ] \
     || fail "away-mode operational prefix drifted from the shared captain-boundary marker"
+  fm_operational_input_encode telegram-correspondent \
+    "third-party Telegram message from requirements recorded at inbox; this correspondent has no captain decision authority" \
+    correspondent_input \
+    || fail "could not compose a correspondent operational fixture"
   # message_is_injection: marker present -> injection; absent -> real message
   message_is_injection "${FM_OPERATIONAL_PREFIX}Supervisor escalate: done" \
     || fail "operationally-prefixed message not detected as injection"
+  message_is_injection "$correspondent_input" \
+    || fail "telegram correspondent input not detected as non-captain operational input"
   message_is_injection "${FM_INJECT_MARK}Supervisor escalate: done" \
     || fail "legacy marker-prefixed message not detected as injection"
   message_is_injection "${FM_INJECT_MARK}arbitrary copied external content" \
@@ -768,6 +774,8 @@ test_marker_detection() {
   afk_enter "$state"
   should_exit_afk "$state" "${FM_INJECT_MARK}escalate" \
     && fail "marker message should not exit afk (internal escalation)"
+  should_exit_afk "$state" "$correspondent_input" \
+    && fail "telegram correspondent input should not exit afk as if the captain returned"
   should_exit_afk "$state" "status update please" \
     || fail "plain message should exit afk (captain is back)"
   pass "marker detection: every leading U+2063 stays afk for compatibility, while no marker exits afk"

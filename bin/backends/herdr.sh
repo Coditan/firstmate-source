@@ -292,6 +292,20 @@ fm_backend_herdr_projection_workspace_label() {  # <task-id> <projection-id>
   printf '└ %s · p:%s' "$(fm_backend_herdr_projection_concise_task_label "$1")" "$2"
 }
 
+fm_backend_herdr_current_uid() {
+  local uid
+  uid=${EUID:-${UID:-}}
+  case "$uid" in
+    ''|*[!0-9]*)
+      uid=$(id -u 2>/dev/null) || return 1
+      ;;
+  esac
+  case "$uid" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  printf '%s' "$uid"
+}
+
 # fm_backend_herdr_presentation_session_lock_path: one machine-private lock
 # path per live named Herdr session/socket, shared across every Firstmate home
 # that uses that session.
@@ -300,8 +314,7 @@ fm_backend_herdr_projection_workspace_label() {  # <task-id> <projection-id>
 # resolved unambiguously.
 fm_backend_herdr_presentation_lock_namespace() {
   local uid
-  uid=$(id -u 2>/dev/null) || return 1
-  [ -n "$uid" ] || return 1
+  uid=$(fm_backend_herdr_current_uid) || return 1
   printf '/tmp/firstmate-herdr-presentation-%s' "$uid"
 }
 
@@ -324,7 +337,7 @@ fm_backend_herdr_presentation_lock_namespace_uid() {
 fm_backend_herdr_presentation_lock_namespace_valid() {
   local dir=$1 expected_uid owner mode
   [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
-  expected_uid=$(id -u 2>/dev/null) || return 1
+  expected_uid=$(fm_backend_herdr_current_uid) || return 1
   owner=$(fm_backend_herdr_presentation_lock_namespace_uid "$dir") || return 1
   mode=$(fm_backend_herdr_presentation_lock_namespace_mode "$dir") || return 1
   [ "$owner" = "$expected_uid" ] && [ "$mode" = 700 ]

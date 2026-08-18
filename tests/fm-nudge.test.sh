@@ -1246,8 +1246,8 @@ interval-seconds: 172800
 jitter-min-seconds: 180
 jitter-max-seconds: 420
 draw-attempts: 64
-persistence-path: 
-persistence-condition: 
+persistence-path:
+persistence-condition:
 RECORD
 
   out=$(run_nudge "$home")
