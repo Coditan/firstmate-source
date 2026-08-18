@@ -154,7 +154,7 @@ Landing this honestly means resolving 821 conflict hunks across 148 files, of wh
 It also means re-evaluating 523 fork patches against the merged tree at content level, against a registry that currently holds 94 rows.
 Both the conflict resolution and the patch re-evaluation are individually larger than one worker session, and the task's own instruction is that a partial merge presented as done is the worst available outcome.
 
-The split that fits the material, in dependency order:
+The proposed split that fits the material is below in dependency order, but whether to approve it remains an open decision for the captain.
 
 1. **Retire or reconcile the arm architecture first, as its own change, before any merge.**
    Decide whether this fork keeps hosted delivery, and record that decision where the merge can be resolved against it.
