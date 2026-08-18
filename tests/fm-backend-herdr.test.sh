@@ -83,6 +83,13 @@ wait_for_log_line() {
   return 1
 }
 
+link_tool_except_id() {  # <fakebin> <tool>
+  local fakebin=$1 tool=$2 resolved
+  [ "$tool" != id ] || return 0
+  resolved=$(command -v "$tool" 2>/dev/null) || fail "test requires $tool"
+  ln -s "$resolved" "$fakebin/$tool" || fail "could not link $tool into reduced PATH"
+}
+
 # make_herdr_statefake: a STATEFUL `herdr` stub that models the parts of herdr's
 # real container behavior the workspace-leak fix (and the default-tab-prune
 # safety fix) depend on, so a full spawn->teardown cycle can be replayed
@@ -1126,6 +1133,29 @@ test_presentation_session_lock_path_is_shared_across_homes() {
       || fail "symlink parent socket paths must resolve one lock: $path_tmp vs $path_private"
   fi
   pass "herdr presentation lock: one path per session/socket across homes"
+}
+
+test_presentation_session_lock_path_survives_path_without_id() {
+  local dir log resp fb reduced path status uid
+  dir="$TMP_ROOT/presentation-lock-no-id"; mkdir -p "$dir/responses" "$dir/sockdir" "$dir/reduced-path"
+  log="$dir/log"; resp="$dir/responses"; reduced="$dir/reduced-path"; : > "$log"
+  uid=$(id -u 2>/dev/null) || fail "could not resolve current uid"
+  : > "$dir/sockdir/fmtest.sock"
+  printf '%s\n' "{\"sessions\":[{\"name\":\"fmtest\",\"running\":true,\"socket_path\":\"$dir/sockdir/fmtest.sock\"}]}" > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  cp "$fb/herdr" "$reduced/herdr" || fail "could not install reduced-PATH herdr fake"
+  for tool in bash jq shasum sha256sum awk dirname basename mkdir stat uname cat; do
+    link_tool_except_id "$reduced" "$tool"
+  done
+  path=$(PATH="$reduced" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    /bin/bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_presentation_session_lock_path fmtest' "$ROOT" 2>&1)
+  status=$?
+  [ "$status" -eq 0 ] || fail "session lock path must not require id on PATH: $path"
+  case "$path" in
+    /tmp/firstmate-herdr-presentation-"$uid"/order-*.lock) ;;
+    *) fail "session lock path under reduced PATH used the wrong namespace: $path" ;;
+  esac
+  pass "herdr presentation lock: reduced PATH without id still resolves the user-private namespace"
 }
 
 test_presentation_session_lock_path_rejects_malformed_socket() {
@@ -2820,6 +2850,7 @@ test_projection_order_ambiguous_existing_block_is_read_only
 test_projection_order_foreign_new_child_before_parent_is_read_only
 test_projection_order_missing_parent_is_read_only
 test_presentation_session_lock_path_is_shared_across_homes
+test_presentation_session_lock_path_survives_path_without_id
 test_presentation_session_lock_path_rejects_malformed_socket
 test_presentation_lock_malformed_socket_falls_back
 test_projection_order_rejects_malformed_socket
