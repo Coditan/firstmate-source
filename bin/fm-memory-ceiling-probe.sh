@@ -4,14 +4,13 @@
 #
 # WHY THIS EXISTS
 # The obvious next step after bin/fm-memory-reading.sh is a throttling ceiling
-# plus an alarm on crossing it. On a host with no swap that step carries a
-# specific hazard: a cgroup's charge includes its page cache, page cache is
-# reclaimable, and so a ceiling with no swap beneath it has nothing to reclaim
-# BUT page cache. If page cache alone can reach the ceiling, the kernel holds
-# the cgroup there by reclaiming continuously, and that reclaim registers as
-# memory-stall time on /proc/pressure/memory - the same reading the alarm
-# consumes. The ceiling would then generate its own alarm condition on a
-# machine with gigabytes to spare.
+# plus an alarm on crossing it. The first measurement was taken before swap was
+# fitted, but the specific hazard survives that change: a cgroup's charge
+# includes its page cache, and swap does not move page cache out of that charge.
+# If page cache alone can reach the ceiling, the kernel holds the cgroup there
+# by reclaiming continuously, and that reclaim registers as memory-stall time on
+# /proc/pressure/memory - the same reading the alarm consumes. The ceiling would
+# then generate its own alarm condition on a machine with gigabytes to spare.
 #
 # That hazard is a property of the host, not of the idea, so it is measured per
 # host rather than assumed once. Run this before fitting any ceiling here, and
@@ -153,9 +152,9 @@ check_preconditions() {
   local avail
   avail=$(awk '/^MemAvailable:/{print int($2/1024)}' "$MEMINFO" 2>/dev/null)
   if [ -z "$avail" ]; then
-    unmeasured headroom "$MEMINFO has no MemAvailable line, so available memory could not be read"
+    unmeasured headroom "$MEMINFO has no MemAvailable line, so RAM headroom could not be read"
   elif [ "$avail" -lt "$MIN_AVAIL_MIB" ]; then
-    unmeasured headroom "only $avail MiB available, below the $MIN_AVAIL_MIB MiB floor: this probe will not add load to a host that is already short"
+    unmeasured headroom "only $avail MiB RAM headroom available, below the $MIN_AVAIL_MIB MiB floor: this probe will not add load to a host that is already short"
   fi
 
   mkdir -p "$SCRATCH" 2>/dev/null || true
@@ -357,13 +356,22 @@ render_human() {
     inconclusive)
       printf 'memory-ceiling-probe: INCONCLUSIVE - the control arm was not quiet, so nothing the ceiling arm shows can be blamed on the ceiling\n' ;;
   esac
-  printf 'taken %s on %s, no swap configured: %s\n\n' \
+  printf 'taken %s on %s, swap: %s\n\n' \
     "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(hostname 2>/dev/null || echo '?')" \
-    "$(awk '/^SwapTotal:/{ print ($2 == 0) ? "correct, there is none" : "no, " int($2/1024) " MiB is configured" }' "$MEMINFO")"
+    "$(awk '
+      /^SwapTotal:/ { total = $2; seen_total = 1 }
+      /^SwapFree:/ { free = $2; seen_free = 1 }
+      END {
+        if (!seen_total || total !~ /^[0-9]+$/) print "UNMEASURED (no usable SwapTotal)"
+        else if (total == 0) print "none configured"
+        else if (!seen_free || free !~ /^[0-9]+$/) print int(total / 1024) " MiB configured, free UNMEASURED"
+        else print int(total / 1024) " MiB configured, " int(free / 1024) " MiB free"
+      }
+    ' "$MEMINFO")"
 
   printf 'Both arms read a %d MiB cold corpus for %d seconds and allocated almost nothing of their own.\n' \
     "$CORPUS_MIB" "$RUN_SECONDS"
-  printf 'The host never fell below %d MiB available while they ran.\n\n' "$LOWEST_AVAIL"
+  printf 'The host never fell below %d MiB RAM headroom while they ran.\n\n' "$LOWEST_AVAIL"
 
   printf '%-10s %-12s %12s %10s %12s %12s\n' ARM CEILING PEAK_MiB CROSSINGS PEAK_STALL REFAULTS
   printf '%-10s %-12s %12d %10d %12s %12d\n' control none "$((C_CUR / 1048576))" "$C_HIGH" "$C_STALL" "$C_REFAULT"

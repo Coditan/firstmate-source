@@ -108,8 +108,8 @@ test_a_meminfo_without_the_line_it_needs_is_unmeasured_not_zero() {
 
   expect_code 3 "$status" "a meminfo with no MemAvailable line"
   assert_contains "$out" "no MemAvailable line" \
-    "a missing MemAvailable must be reported as unread rather than as zero available memory"
-  assert_not_contains "$out" "0 MiB available, below" \
+    "a missing MemAvailable must be reported as unread rather than as zero RAM headroom"
+  assert_not_contains "$out" "0 MiB RAM headroom available, below" \
     "an unreadable headroom must never be reported as a host that is out of memory"
   pass "a meminfo missing its line is unmeasured rather than silently read as zero"
 }
@@ -118,7 +118,7 @@ test_the_probe_refuses_to_load_a_host_that_is_already_short() {
   local out status=0
   mkdir -p "$TMP_ROOT/notcgroup"
   write_pressure "$TMP_ROOT/pressure"
-  write_meminfo "$TMP_ROOT/meminfo-tight" 262144   # 256 MiB available
+  write_meminfo "$TMP_ROOT/meminfo-tight" 262144   # 256 MiB RAM headroom
 
   out=$(probe_with \
     FM_CEILING_PROBE_CGROUP_ROOT="$TMP_ROOT/notcgroup" \
@@ -126,7 +126,7 @@ test_the_probe_refuses_to_load_a_host_that_is_already_short() {
     FM_CEILING_PROBE_PRESSURE="$TMP_ROOT/pressure") || status=$?
 
   expect_code 3 "$status" "a host below the available-memory floor"
-  assert_contains "$out" "256 MiB available" "the refusal must state the headroom it measured"
+  assert_contains "$out" "256 MiB RAM headroom available" "the refusal must state the headroom it measured"
   assert_contains "$out" "will not add load" "the refusal must say why it declined"
   pass "the probe refuses to add its own load to a host that is already short"
 }
@@ -188,6 +188,7 @@ EOF
     "$PROBE" --corpus-mib 64 \
     --seconds 5 --scratch "$TMP_ROOT/scratch-live" 2>&1) || status=$?
   expect_code 0 "$status" "a probe driven through the transient-scope seam"
+  assert_contains "$out" "swap: none configured" "the probe must report zero swap without the stale no-swap premise label"
   [ "$(wc -l <"$calls")" -eq 2 ] || fail "the probe must create exactly one transient scope per arm"
   local control=no ceiling=no unit high
   while IFS=$'\t' read -r arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 arg10 arg11; do
@@ -222,6 +223,7 @@ EOF
 
   : >"$calls"
   : >"$sentinels"
+  sed -i 's/SwapTotal:.*/SwapTotal:       2097152 kB/; s/SwapFree:.*/SwapFree:        1048576 kB/' "$TMP_ROOT/meminfo"
   status=0
   out=$(env FM_CEILING_PROBE_SYSTEMD_RUN="$fake" FM_TEST_SYSTEMD_CALLS="$calls" \
     FM_TEST_SENTINELS="$sentinels" FM_TEST_INJECT_KILL=1 \
@@ -229,6 +231,8 @@ EOF
     FM_CEILING_PROBE_SCOPE_CGROUP="$scope" "$PROBE" --corpus-mib 64 --seconds 5 \
     --scratch "$TMP_ROOT/scratch-live" 2>&1) || status=$?
   expect_code 0 "$status" "the kill-injected control run"
+  assert_contains "$out" "swap: 2048 MiB configured, 1024 MiB free" \
+    "configured swap must be reported as present rather than folded into the old no-swap premise"
   while IFS=$'\t' read -r pid _; do
     kill -0 "$pid" 2>/dev/null && fail "the sentinel assertion must detect a kill injected into the executed payload"
   done <"$sentinels"
