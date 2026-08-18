@@ -64,7 +64,7 @@ host after: MemAvailable=16425872 kB  psi some avg10=2.32
 ```
 
 Pages stolen and pages refaulted run at the same rate, which is the definition of thrashing: every page reclaimed to stay under the ceiling is immediately needed again.
-The host's own memory-stall reading went from `0.00` to `3.42` while more than 16 GB stayed available.
+The host's own memory-stall reading went from `0.00` to `3.42` while more than 16 GB RAM headroom stayed available.
 
 The identical workload with no ceiling, run minutes earlier on an equally cold corpus:
 
@@ -97,11 +97,11 @@ STALL (share of the last 10s/60s spent waiting on memory)
 ```
 
 That is the finding in one pair of readings.
-The machine is 69% free in both, and the stall exists only in the second.
+The machine has the same 69% RAM headroom in both, and the stall exists only in the second.
 
 ### Ordinary file reading crosses the limit thousands of times
 
-A single pass over a 4 GiB corpus inside a 2 GiB ceiling, with 16.4 GB free on the host:
+A single pass over a 4 GiB corpus inside a 2 GiB ceiling, with 16.4 GB RAM headroom on the host:
 
 | Point | `memory.events` `high` |
 | ----- | ---------------------- |
@@ -136,7 +136,7 @@ Both ends of the range are closed on this host, and they are closed by the same 
 This is not a number that was chosen badly; it is a quantity that cannot be bounded usefully here.
 
 The premise holds on this machine rather than being assumed.
-At a routine moment `app.slice` held 9629 MiB, of which 5051 MiB was page cache against 2780 MiB of anonymous memory, with 16 GB still available.
+At a routine moment `app.slice` held 9629 MiB, of which 5051 MiB was page cache against 2780 MiB of anonymous memory, with 16 GB RAM headroom still available.
 More than half the charge a ceiling would bind against is already cache, and nothing but the ceiling itself would stop it growing further.
 
 Swap does not resolve this.
@@ -175,7 +175,7 @@ Measured while establishing where a ceiling could go, and worth keeping because 
 ## Re-measuring
 
 `bin/fm-memory-ceiling-probe.sh` runs both arms and issues one verdict, and its header owns its flags, its exit statuses, and its refusals.
-It sets no lasting limit, kills nothing, and declines to run at all on a host that is already short of memory.
+It sets no lasting limit, kills nothing, and declines to run at all on a host that is already short of RAM headroom.
 
 It reports `clear` and exits 0 when a ceiling genuinely is not reached, which was confirmed against an 8 GiB ceiling and a 512 MiB corpus on the same host in the same session.
 That matters: an instrument that only ever returns the answer this page reports would be no evidence for it.

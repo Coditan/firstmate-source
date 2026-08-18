@@ -9,7 +9,7 @@ The script's own header owns its flags, its states, and its records; nothing her
 ## Why there is no ceiling under it
 
 The design this replaced was a cgroup ceiling with an alarm on crossing it.
-That was built as far as measuring it and then abandoned on the measurement, because a ceiling on this host is crossed thousands of times by ordinary file reading with 16 GB free, and holding a cgroup at one generates memory-stall time on the very reading the alarm consumes.
+That was built as far as measuring it and then abandoned on the measurement, because a ceiling on this host is crossed thousands of times by ordinary file reading with 16 GB RAM headroom, and holding a cgroup at one generates memory-stall time on the very reading the alarm consumes.
 `docs/memory-ceiling-caveat.md` owns that finding and `bin/fm-memory-ceiling-probe.sh` re-measures it.
 
 The captain's decision after that measurement was to build the alarm on RAM headroom and growth with no cgroup limit at all.
@@ -39,7 +39,7 @@ Five workers growing at 500 MiB/min exhaust this machine exactly as fast as one 
 The process the alarm **names** is the largest contributor to that sum: the condition is about the machine, the name is about who to talk to.
 
 The horizon self-tightens as RAM headroom goes, which is what lets one number work across the whole range.
-At 16 GB free it takes more than 1 GiB/min to trip; at 2 GB free it takes 136 MiB/min.
+At 16 GB RAM headroom it takes more than 1 GiB/min to trip; at 2 GB RAM headroom it takes 136 MiB/min.
 
 ## How the thresholds were chosen
 

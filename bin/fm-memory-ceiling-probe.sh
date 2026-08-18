@@ -74,8 +74,8 @@
 #   2  usage error
 #
 # Environment:
-#   FM_CEILING_PROBE_MIN_AVAIL_MIB  refuse to run below this much available
-#                                   host memory (default 4096)
+#   FM_CEILING_PROBE_MIN_AVAIL_MIB  refuse to run below this much RAM headroom
+#                                   (default 4096)
 #   FM_CEILING_PROBE_QUIET_STALL    control-arm stall at or below which the
 #                                   control counts as quiet (default 0.20)
 #   FM_CEILING_PROBE_CGROUP_ROOT    cgroup root (tests)

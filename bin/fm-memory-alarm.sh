@@ -13,9 +13,9 @@
 # WHY THERE IS NO CEILING UNDER THIS ALARM
 # The obvious design was a cgroup ceiling with an alarm on crossing it. That was
 # built as far as measuring it and then abandoned on the measurement: a ceiling
-# here is crossed thousands of times by ordinary file reading with 16 GB free,
-# because a cgroup's charge includes page cache and page cache expands into
-# whatever ceiling exists. Worse, holding a cgroup at a ceiling generates
+# here is crossed thousands of times by ordinary file reading with 16 GB RAM
+# headroom, because a cgroup's charge includes page cache and page cache expands
+# into whatever ceiling exists. Worse, holding a cgroup at a ceiling generates
 # memory-stall time on the same reading this alarm consumes, so the ceiling
 # would have manufactured its own alarm condition. docs/memory-ceiling-caveat.md
 # owns that finding and bin/fm-memory-ceiling-probe.sh re-measures it; a
@@ -55,8 +55,8 @@
 # the name is about who to talk to.
 #
 # It self-tightens as RAM headroom goes, which is the property that makes one
-# horizon work across the whole range: at 16 GB free it takes more than
-# 1 GiB/min to trip, and at 2 GB free it takes 136 MiB/min.
+# horizon work across the whole range: at 16 GB RAM headroom it takes more than
+# 1 GiB/min to trip, and at 2 GB RAM headroom it takes 136 MiB/min.
 #
 # HOW THE THRESHOLDS WERE CHOSEN, AND WHAT WOULD HAVE TO HAPPEN TO CROSS THEM
 # Both are derived from measurements recorded in docs/memory-alarm.md, not
@@ -128,7 +128,7 @@
 #
 # Environment:
 #   FM_MEMORY_ALARM_FLOOR_MIB    headroom floor in MiB (default 2400)
-#   FM_MEMORY_ALARM_HORIZON_MIN  exhaustion horizon in minutes (default 15)
+#   FM_MEMORY_ALARM_HORIZON_MIN  RAM-headroom horizon in minutes (default 15)
 #   FM_MEMORY_ALARM_RECOVERY     multiplier a reading must clear both
 #                                thresholds by before recovery is declared
 #                                (default 1.25)
