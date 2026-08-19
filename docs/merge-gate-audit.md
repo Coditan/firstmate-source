@@ -1,8 +1,8 @@
 # Auditing merge gates: query both mechanisms, then prove the gate
 
 `AGENTS.md` is the merge-authority owner.
-Since the captain chose an ungated fleet on 2026-08-17, required checks in this organisation are reports rather than controls while the current plan does not permit enforcement, and the reversal condition is recorded beside the authority there.
-Use this document only when auditing GitHub's enforcement mechanisms or when that plan changes.
+Use its "Selected delivery path and approval authority" section for the current fleet merge contract, including the temporary ungated-fleet rule and its reversal condition.
+Use this document only when auditing GitHub's enforcement mechanisms or updating a dated gate snapshot after that authority changes.
 
 A GitHub required-status-check gate that blocks merges can live in either of two independent mechanisms.
 An audit that queries one mechanism gets a confidently wrong answer about the other, and that wrong answer looks exactly like a clean result.
