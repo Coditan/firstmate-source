@@ -570,9 +570,10 @@ test_search_without_its_tool_refuses_rather_than_finding_nothing() {
 # grep. The rebuild must not overwrite what someone wrote there, and must not
 # leave the stale command standing unremarked either.
 test_refresh_names_a_readme_that_still_promises_plain_grep() {
-  local home out
+  local home out tick='`'
   home=$(setup_fixture_home)
-  printf 'captain notes\n\nPlain `grep -r` works too - grep is the index.\n' \
+  printf 'captain notes\n\nPlain %sgrep -r%s works too - grep is the index.\n' \
+    "$tick" "$tick" \
     >"$home/data/transcripts/README.md"
   out=$(FM_HOME="$home" FM_CLAUDE_SESSIONS="$TMP/home-src/claude" \
         FM_CODEX_SESSIONS="$TMP/home-src/codex" "$REFRESH" 2>&1 >/dev/null) \
