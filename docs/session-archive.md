@@ -65,9 +65,11 @@ Ripgrep behaved differently on this seat and on the CI runner - which flags the 
 A search tool that answers differently depending on the machine it runs on is the same silent disagreement this archive exists to refuse, so the dependency was removed rather than pinned to a version.
 `zstd` is already required to build the store, and `grep` and `xargs` are on any machine that can run this repository's tests at all.
 
-**A scan that stops reading early is ordinary and must never be read as a failure.**
-`grep` stops as soon as it can answer, the decompressor feeding it then dies of a broken pipe, and an implementation that counts that as a scanner error returns nothing over a full archive: measured on 2026-08-19 at 0 matching sessions where 75 were expected, with every test still passing, because a one-session fixture is too small to make anything stop early.
-`tests/fm-transcript-archive.test.sh` now plants that case - a dozen sessions with the match at the top and a long tail behind it - and requires all twelve back.
+**Both search paths read every session through to the end.**
+The decompressor's exit status is therefore always meaningful, and any non-zero status is a genuine failure to read the store.
+Requiring the reader to exit 0 while the scan stopped at the first match returned 0 matching sessions where 75 were expected over a full archive, while accepting only signal 141 made a search that matched every session exit 2 on a machine whose zstd reports a closed pipe differently.
+Reading every session through is what makes a corrupt store file detectable on both paths, including one whose valid prefix contains the match.
+`tests/fm-transcript-archive.test.sh` proves that invariant with a compressed session whose matching valid prefix is followed by a truncated frame.
 
 ## Rebuild
 
