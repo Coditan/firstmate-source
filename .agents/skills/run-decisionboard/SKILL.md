@@ -19,16 +19,17 @@ The file agrees: seven `fm-card` decision cards, and its only `<form` and `<inpu
 
 ## The driver is the primary path
 
-    .claude/skills/run-decisionboard/fm-run-decisionboard.sh selftest
+    .agents/skills/run-decisionboard/fm-run-decisionboard.sh selftest
 
 Run it before trusting a board on this host.
+In a sandboxed worker, set `TMPDIR` to a writable scratch directory and `XDG_RUNTIME_DIR` to an owned mode-700 directory inside that worker's worktree before running it; an unreadable temp board makes the Lavish open step return HTTP 500.
 Re-measure the host with:
 
-    .claude/skills/run-decisionboard/fm-run-decisionboard.sh doctor
+    .agents/skills/run-decisionboard/fm-run-decisionboard.sh doctor
 
 ## Driving a real board
 
-    D=.claude/skills/run-decisionboard/fm-run-decisionboard.sh
+    D=.agents/skills/run-decisionboard/fm-run-decisionboard.sh
 
     "$D" build --out /tmp/fm-manual-board.html --title "Probebrett" --subtitle "manueller Durchlauf"
     url=$("$D" open /tmp/fm-manual-board.html)

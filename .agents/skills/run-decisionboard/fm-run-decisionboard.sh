@@ -18,11 +18,12 @@
 #           reaches out (proved by building one that must fail)
 #   open    bin/fm-lavish.sh emitted a URL, and it is the reachable one
 #   drive   Chrome is pointed at that URL through a bridge that was restarted
+#   poll    bin/fm-lavish.sh is listening before any answer is made
 #   query   the rendered board carries answerable controls, inside its iframe
 #   shot    a screenshot exists on disk, in this home, non-empty
 #   answer  a choice and a note were entered and queued on the board
 #   send    the queued answer left the board
-#   poll    bin/fm-lavish.sh poll returned that answer - the acceptance criterion
+#   return  bin/fm-lavish.sh poll returned that answer - the acceptance criterion
 #
 # MEASURED HOST FACTS this script is built around. Each was hit on crew-hlr and
 # each is re-measurable with `doctor`; none is inferred.
@@ -113,6 +114,12 @@
 #                                  this driver to follow automatically.
 #   FM_RUN_DECISIONBOARD_TMPDIR    the world-writable directory screenshots are
 #                                  staged through (default /tmp). See `shot`.
+#                                  In a sandboxed worker, set TMPDIR and
+#                                  XDG_RUNTIME_DIR inside the worktree or the
+#                                  Lavish open step can 500 on an unreadable board.
+#   FM_RUN_DECISIONBOARD_SHOT_ID   optional screenshot staging suffix; unset is
+#                                  unique per driver invocation, set only to
+#                                  reproduce or test a known staging target.
 #   FM_RUN_DECISIONBOARD_WIDTH     viewport `drive` sets, so evidence is
 #   FM_RUN_DECISIONBOARD_HEIGHT    comparable across runs (default 1400x1600).
 #   FM_HOME                        fallback root when this skill was installed
@@ -384,7 +391,10 @@ form_subtree() {  # <decision-number>
 }
 
 queued_confirmation() {
-  sed -n 's/.*"\(Vorgemerkt: [^"]*\)".*/\1/p' | head -1
+  sed -n \
+    -e 's/.*"\(Vorgemerkt: [^"]*\)".*/\1/p' \
+    -e 's/.*"\(VORGEMERKT: [^"]*\)".*/\1/p' \
+    | head -1
 }
 
 parse_forms() {  # <inventory|subtree> [decision-number]
@@ -507,14 +517,12 @@ cmd_query() {
 # home, and BOTH ends are verified, because the exit status of a screenshot
 # means nothing here.
 #
-# The staging path is STABLE rather than unique per run, which is deliberate.
-# The file lands owned by the bridge account in a sticky directory, so this
-# account cannot delete it and a unique name would leave one orphan per run
-# forever. A stable name is one the bridge overwrites itself, so /tmp carries at
-# most one. What a stable name costs is the ability to treat "the file is there"
-# as proof, so freshness is checked instead: a screenshot that wrote nothing
-# leaves the previous run's file behind, and that is exactly the stale pass this
-# whole script exists to refuse.
+# The staging path is unique per run.
+# A stable name caught stale screenshots, but it also made a clean second run
+# fail when the browser produced identical bytes and chrome-devtools-axi exited
+# 0 without refreshing the file.
+# A unique target removes that precondition while the freshness check below
+# still refuses any pre-existing target this run did not update.
 #
 # FM_RUN_DECISIONBOARD_TMPDIR overrides the staging DIRECTORY. It defaults to
 # /tmp because that is the world-writable directory the bridge account is known
@@ -522,10 +530,19 @@ cmd_query() {
 # tests set it to reach both refusal branches without depending on what an
 # earlier run left in /tmp.
 shot_staging_path() {
-  local staging_dir
+  local staging_dir suffix
   staging_dir=$(cd "${FM_RUN_DECISIONBOARD_TMPDIR:-/tmp}" 2>/dev/null && pwd -P) \
     || die "screenshot staging directory does not exist: ${FM_RUN_DECISIONBOARD_TMPDIR:-/tmp}"
-  printf '%s/fm-run-decisionboard-shot.%s.png' "$staging_dir" "$(id -un)"
+  if [ -n "${FM_RUN_DECISIONBOARD_SHOT_ID:-}" ]; then
+    suffix=$FM_RUN_DECISIONBOARD_SHOT_ID
+  else
+    if [ -z "${FM_RUN_DECISIONBOARD_DEFAULT_SHOT_ID:-}" ]; then
+      FM_RUN_DECISIONBOARD_DEFAULT_SHOT_ID="$(date +%s%N 2>/dev/null || date +%s).$$.$RANDOM$RANDOM$RANDOM"
+    fi
+    suffix=$FM_RUN_DECISIONBOARD_DEFAULT_SHOT_ID
+  fi
+  printf '%s/fm-run-decisionboard-shot.%s.%s.png' \
+    "$staging_dir" "$(id -un)" "$suffix"
 }
 
 SCREENSHOT_EXIT_STATUS=0
@@ -618,6 +635,7 @@ cmd_shot() {
     4) die "shot: could not copy $staging to $dest" ;;
   esac
   [ -s "$dest" ] || die "shot: $dest is empty after the copy"
+  rm -f "$staging" 2>/dev/null || true
   printf 'screenshot: %s (%s bytes)\n' "$dest" "$(wc -c < "$dest" | tr -d ' ')"
 }
 
@@ -708,7 +726,11 @@ cmd_answer() {
       die "answer: the board reports it queued nothing for decision $target_decision" ;;
   esac
   after_confirmation=$(printf '%s\n' "$subtree" | queued_confirmation)
-  queued_choice_value=${after_confirmation#Vorgemerkt: }
+  case "$after_confirmation" in
+    "Vorgemerkt: "*) queued_choice_value=${after_confirmation#Vorgemerkt: } ;;
+    "VORGEMERKT: "*) queued_choice_value=${after_confirmation#VORGEMERKT: } ;;
+    *) queued_choice_value='' ;;
+  esac
   [ -n "$after_confirmation" ] && [ -n "$queued_choice_value" ] \
     || die "answer: the board shows no queued option value for decision $target_decision"
   [ "$before_confirmation" != "$after_confirmation" ] \
@@ -742,6 +764,75 @@ cmd_poll() {
   local board=${1:-}
   [ -n "$board" ] || die "poll: needs the board html file"
   "$LAVISH_SH" poll "$board"
+}
+
+POLL_PID=''
+cmd_poll_background() {  # <board> <out-file> <status-file>
+  local board=$1 out_file=$2 status_file=$3
+  (
+    set +e
+    cmd_poll "$board" >"$out_file" 2>&1
+    printf '%s\n' "$?" >"$status_file"
+  ) &
+  POLL_PID=$!
+}
+
+wait_poll_background() {  # <pid> <out-file> <status-file>
+  local pid=$1 out_file=$2 status_file=$3 waited=0 rc
+  while [ ! -s "$status_file" ]; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      wait "$pid" 2>/dev/null || true
+      break
+    fi
+    [ "$waited" -lt "${FM_RUN_DECISIONBOARD_POLL_TIMEOUT:-60}" ] \
+      || {
+        kill "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+        die "selftest: poll did not return within ${FM_RUN_DECISIONBOARD_POLL_TIMEOUT:-60} seconds after the answer was sent"
+      }
+    sleep 1
+    waited=$((waited + 1))
+  done
+  wait "$pid" 2>/dev/null || true
+  rc=$(cat "$status_file" 2>/dev/null || printf '1')
+  cat "$out_file"
+  return "$rc"
+}
+
+poll_is_alive() {  # <pid> <status-file>
+  local pid=$1 status_file=$2
+  [ ! -s "$status_file" ] && kill -0 "$pid" 2>/dev/null
+}
+
+stop_poll_background() {  # <pid>
+  local pid=${1:-}
+  [ -n "$pid" ] || return 0
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+
+wait_for_poll_listening() {  # <pid> <out-file> <status-file>
+  local pid=$1 out_file=$2 status_file=$3 waited=0 out
+  while poll_is_alive "$pid" "$status_file"; do
+    out=$(cmd_query) || {
+      printf '%s\n' "$out"
+      return 1
+    }
+    case "$out" in
+      *"poll listening: yes"*)
+        printf '%s\n' "$out"
+        return 0
+        ;;
+    esac
+    [ "$waited" -lt "${FM_RUN_DECISIONBOARD_LISTEN_TIMEOUT:-10}" ] || {
+      printf '%s\n' "$out"
+      return 2
+    }
+    sleep 1
+    waited=$((waited + 1))
+  done
+  cat "$out_file"
+  return 3
 }
 
 cmd_end() {
@@ -794,19 +885,23 @@ cmd_selftest() {
   done
   need_bridge
 
-  local workdir board shot url poll_out
+  local workdir board shot url poll_out poll_file poll_status poll_pid query_out
   workdir=$(mktemp -d "${TMPDIR:-/tmp}/fm-run-decisionboard.XXXXXX")
   board="$workdir/probe-board.html"
   shot="$workdir/probe-board.png"
+  poll_file="$workdir/poll.out"
+  poll_status="$workdir/poll.status"
+  poll_pid=''
+  trap 'stop_poll_background "${poll_pid:-}"; [ -z "${board:-}" ] || cmd_end "$board" >/dev/null 2>&1 || true; [ "${keep:-0}" -eq 1 ] || [ -z "${workdir:-}" ] || rm -rf "$workdir"' EXIT
 
-  step "1/8 build the fixture board"
+  step "1/9 build the fixture board"
   cmd_build --out "$board" --title "Probebrett" --subtitle "run-decisionboard selftest"
   good "board built"
 
-  step "2/8 the no-network guard still bites"
+  step "2/9 the no-network guard still bites"
   cmd_guard_check
 
-  step "3/8 open it"
+  step "3/9 open it"
   url=$(cmd_open "$board")
   note "$url"
   case "$url" in
@@ -815,22 +910,36 @@ cmd_selftest() {
   esac
   good "the board is served on a reachable address"
 
-  step "4/8 drive a browser to it"
+  step "4/9 drive a browser to it"
   cmd_drive "$url"
 
-  step "5/8 what the rendered board carries"
-  note "'poll listening: no' is expected here - nothing is polling yet; step 8 is what arms it"
-  cmd_query || die "selftest: the board cannot be answered - see the finding above"
+  step "5/9 arm the poll before answering"
+  cmd_poll_background "$board" "$poll_file" "$poll_status"
+  poll_pid=$POLL_PID
 
-  step "6/8 screenshot it"
+  step "6/9 what the rendered board carries"
+  query_out=$(wait_for_poll_listening "$poll_pid" "$poll_file" "$poll_status") || {
+    printf '%s\n' "$query_out"
+    stop_poll_background "$poll_pid"
+    die "selftest: the board cannot be answered - see the finding above"
+  }
+  printf '%s\n' "$query_out"
+  case "$query_out" in
+    *"poll listening: yes"*) ;;
+    *)
+      stop_poll_background "$poll_pid"
+      die "selftest: the poll is not armed, so answering now would prove only the no-listener precondition" ;;
+  esac
+
+  step "7/9 screenshot it"
   cmd_shot "$shot"
 
-  step "7/8 answer one decision"
+  step "8/9 answer one decision"
   cmd_answer --option "Option eins" --note "Vom run-decisionboard-Treiber gesetzt"
   cmd_send
 
-  step "8/8 prove the answer comes back"
-  poll_out=$(cmd_poll "$board" 2>&1) || true
+  step "9/9 prove the answer comes back"
+  poll_out=$(wait_poll_background "$poll_pid" "$poll_file" "$poll_status" 2>&1) || true
   case "$poll_out" in
     *"Probe-Entscheidung A"*option-eins*"Vom run-decisionboard-Treiber gesetzt"*)
       good "the poll returned the decision, option, and note" ;;
@@ -861,11 +970,12 @@ cmd_selftest() {
   else
     rm -rf "$workdir"
   fi
+  trap - EXIT
   if [ "$failed" -eq 1 ]; then
     printf '\nthe answer came back, but the board reported its own surface as broken during the run - do not hand this board over on that evidence.\n'
     return 1
   fi
-  printf '\nall eight hops held: a decision board built here can be answered, and the answer comes back.\n'
+  printf '\nall nine hops held: a decision board built here can be answered, and the answer comes back.\n'
 }
 
 # --- dispatch ---------------------------------------------------------------
