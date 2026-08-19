@@ -145,9 +145,17 @@ for r in "${roots[@]}"; do
       elif [ "${f%.zst}" != "$f" ] && [ -f "${f%.zst}" ]; then printf '%s\n' "${f%.zst}"
       fi
     done >> "$filelist"
+    statuses=("${PIPESTATUS[@]}")
+    if [ "${statuses[0]}" -ne 0 ] || [ "${statuses[1]}" -ne 0 ]; then
+      echo "could not gather searchable sessions from $idx" >&2
+      exit 2
+    fi
   else
     # Both shapes are listed: a store mid-migration must not go half unsearched.
-    find "$r" \( -name '*.txt.zst' -o -name '*.txt' \) -type f >> "$filelist" 2>/dev/null
+    if ! find "$r" \( -name '*.txt.zst' -o -name '*.txt' \) -type f >> "$filelist" 2>/dev/null; then
+      echo "could not gather searchable sessions under $r" >&2
+      exit 2
+    fi
   fi
 done
 

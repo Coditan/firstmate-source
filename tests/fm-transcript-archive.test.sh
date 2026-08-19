@@ -729,6 +729,23 @@ test_search_reports_output_pipeline_failures_as_errors() {
   pass "output pipeline failures are scanner errors on both search paths"
 }
 
+test_search_reports_file_gathering_failures_as_errors() {
+  local home bindir tool rc=0
+  home=$(setup_fixture_home)
+  bindir="$TMP/failing-find-path"
+  rm -rf "$bindir"
+  mkdir -p "$bindir"
+  for tool in bash sh zstd grep xargs awk sed sort wc mktemp nproc rm cat dirname tr head; do
+    if type -P "$tool" >/dev/null 2>&1; then
+      ln -sf "$(type -P "$tool")" "$bindir/$tool"
+    fi
+  done
+  ln -sf "$(type -P false)" "$bindir/find"
+  PATH="$bindir" FM_HOME="$home" "$SEARCH" 'tugboat host' --files-only >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] || fail "a file gathering failure must exit 2, got $rc"
+  pass "file gathering failures refuse before scanning a partial file set"
+}
+
 # The other half of the reader-status rule, and the half that is easy to lose:
 # once a search stops treating a closed pipe as a failure, it must still fail on
 # a session file it genuinely could not read. A store file that is not valid
@@ -844,6 +861,7 @@ test_plain_grep_does_not_read_the_sessions
 test_search_status_says_matched_or_not_matched
 test_search_reports_scanner_failures_as_errors
 test_search_reports_output_pipeline_failures_as_errors
+test_search_reports_file_gathering_failures_as_errors
 test_search_fails_on_a_store_file_it_cannot_read
 test_search_without_its_tool_refuses_rather_than_finding_nothing
 test_refresh_names_a_readme_that_still_promises_plain_grep
