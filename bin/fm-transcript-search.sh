@@ -193,7 +193,11 @@ if [ "$files_only" = 1 ]; then
   find "$partdir" -type f -exec cat {} + 2>/dev/null |
   sort |
   awk 'NF { print; found=1 } END { exit(found ? 0 : 1) }'
-  exit "${PIPESTATUS[2]}"
+  statuses=("${PIPESTATUS[@]}")
+  if [ "${statuses[0]}" -ne 0 ] || [ "${statuses[1]}" -ne 0 ]; then
+    exit 2
+  fi
+  exit "${statuses[2]}"
 fi
 
 # The scan reads every session as text (-a). A reduced session is UTF-8 by
@@ -260,4 +264,8 @@ awk -v arch="$ARCHIVE" -v zstd="$ZSTD" '
     else print "  " rest
   }
   END { exit(found ? 0 : 1) }'
-exit "${PIPESTATUS[2]}"
+statuses=("${PIPESTATUS[@]}")
+if [ "${statuses[0]}" -ne 0 ] || [ "${statuses[1]}" -ne 0 ]; then
+  exit 2
+fi
+exit "${statuses[2]}"
