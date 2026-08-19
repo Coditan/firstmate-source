@@ -149,9 +149,9 @@ fm_pr_configured_forgejo_host() {
 # A Forgejo host must additionally BE this home's configured instance. A shape
 # test alone is not enough: an address that merely looks like a Forgejo pull
 # request would otherwise arm fleet work against someone else's server, and
-# every later step reads this identity back without re-deriving it. A home that
-# has configured no instance therefore refuses every Forgejo address rather than
-# guessing one.
+# later Forgejo slices rely on this parser's answer instead of repeating the
+# host check. A home that has configured no instance therefore refuses every
+# Forgejo address rather than guessing one.
 #
 # The configured value is deliberately not validated separately. The address
 # host has already passed the shape rules above and must then equal the

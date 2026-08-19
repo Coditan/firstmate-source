@@ -83,7 +83,7 @@ $ fm_pr_url_parse https://gitlab.com/g/p/-/merge_requests/1 && printf 'provider=
 provider=gitlab host=gitlab.com
 ```
 
-Three properties of that refusal are load-bearing for every later slice, because each of them reads this identity back without re-deriving it.
+Three properties of that refusal are load-bearing for every later Forgejo slice, because each relies on this parser's answer instead of repeating the host check.
 
 The refusal is a refusal, not a warning and not a pass-through.
 `https://codeberg.org.evil/...` has the exact shape of a Forgejo pull request, and a shape test alone is how a tool ends up acting on someone else's server.

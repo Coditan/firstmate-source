@@ -523,7 +523,7 @@ A home that sets neither has no Forgejo provider at all: every address of that s
 That is deliberate, because the alternative to refusing is guessing an instance nobody chose.
 
 An address whose host is not the resolved instance is refused rather than warned about or passed through, even when its shape is a perfect Forgejo pull request.
-A host that merely resembles the fleet's own is how a tool ends up acting on someone else's server, and every later step in the migration reads this identity back without re-deriving it.
+A host that merely resembles the fleet's own is how a tool ends up acting on someone else's server, and later Forgejo slices rely on this parser's answer instead of repeating the host check.
 The resolved value is never validated on its own: an address host has to pass the shape rules and then equal the configured value byte for byte, so a mistyped instance can only ever refuse.
 
 `tests/fm-pr-check-security.test.sh` proves that the same project path and pull request number resolve under both `forge.example` and `code.internal`, while a home with neither setting refuses every address of that shape, which a hardcoded host could not produce.
