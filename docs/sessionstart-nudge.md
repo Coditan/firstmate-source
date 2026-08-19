@@ -27,7 +27,7 @@ The fields are `key=value` lines, matching `state/<id>.meta`:
 | Field | Meaning |
 |---|---|
 | `status` | `ok` or `error`; a reader must refuse on anything but `ok` |
-| `error` | on `status=error` only, the cause: `no-hook-payload`, `no-transcript-path`, `no-session-id`, `unusable-transcript-path`, `unusable-session-id`, `no-jq`, or `no-harness-process` |
+| `error` | on `status=error` only, the cause: `no-hook-payload`, `no-transcript-path`, `no-session-id`, `unusable-transcript-path`, `unusable-session-id`, `no-jq`, `no-harness-process`, or `harness-lookup-failed` |
 | `harness_pid` | the harness process that owns this session, resolved by `bin/fm-harness-pid-lib.sh`, the same identity `bin/fm-lock.sh` writes to `state/.lock`; empty when that process could not be identified, so a reader must never probe this value for liveness |
 | `session_id` | on `status=ok` only, the harness session id, which `claude --resume <id>` reopens |
 | `transcript_path` | on `status=ok` only, the absolute path to the session's transcript |
@@ -40,18 +40,70 @@ A `/clear` starts a new session id and a new transcript inside the same harness 
 
 The record names its owner.
 `harness_pid` is resolved through the same shared ancestry walk the session lock uses, so a reader can bind the record to the lock holder rather than assuming the last session to start in this home is the one it cares about.
-A second harness session started in the same home rewrites the record with its own pid; a reader that compares against `state/.lock` sees the mismatch instead of measuring the wrong session.
+Which sessions may write it at all is the subject of the two sections below.
 
 A value that cannot be determined is written as an explicit error, never omitted.
-An absent field would be indistinguishable from a reader's own bug, and a leftover `ok` record from the previous session would be worse still, so every primary session start replaces the whole record.
+An absent field would be indistinguishable from a reader's own bug, and a leftover `ok` record from the previous session would be worse still, so a session start that writes the record replaces the whole of it.
 A value that cannot be written as a single `key=value` line is rejected for the same reason, so no payload can forge a plausible-looking record.
 A session that cannot write its record at all removes the existing one, or empties it when the state directory forbids unlinking, so no reader can mistake the previous session's record for this one's.
 The payload is read from stdin with a bounded wait, so a harness that hands the wrapper an open stream records `no-hook-payload` instead of stalling session initialization.
 Codex, Grok, OpenCode and Pi all record `status=error` with the cause `no-hook-payload`, because none of their registrations hands the wrapper a payload on stdin - Codex's drains it before executing the wrapper, and the others pass no input at all.
 That is honest rather than a gap, because the context-reset mechanism is verified on Claude only.
 
-Nothing consumes the record yet.
-It is the first step of the stow-then-clear mechanism, built alone so the steps that measure, receipt, and reset have an unambiguous transcript to work from.
+The record's consumer is the stow-then-clear mechanism.
+`bin/fm-context-lib.sh` reads it to find the transcript the context ceiling measures, and refuses on anything but `status=ok`; [docs/context-reset.md](context-reset.md) owns what that mechanism then does with the number.
+
+## Only the session that can hold the lock writes the record
+
+Recording is gated on the home's session lock, and `fm_session_lock_held_by_other` in `bin/fm-harness-pid-lib.sh` is the single owner of the live-other-session test that `bin/fm-lock.sh` also uses, so the record gate and lock acquisition cannot drift on which existing holder they refuse.
+A session start that finds another live harness holding `state/.lock` writes nothing, removes nothing, and still prints the nudge, because a lock-refused session must still run session start to discover that it is read-only.
+
+Until 2026-08-19 the record was written unconditionally, and that produced the same failure through two different doors.
+A SECOND primary session in a home that already had one rewrote the record with its own transcript even though the lock refused it and it stayed read-only, so the ceiling measured the new, nearly empty session while the session running the fleet was measured not at all.
+And a session that could not resolve its own harness process wrote `status=error` over a working record, which is how this seat's record came to read `status=error, error=no-harness-process` for a whole day.
+Both leave the session most likely to be over the ceiling as the one nothing is watching, which is the protection being absent exactly where it was meant to apply.
+
+Two independent proofs that the lock is this session's own are accepted, and either is enough: the holder is this session's resolved harness pid, or the holder sits in this process's own ancestry.
+The second exists because the first can fail: an ancestry walk answers even when no ancestor matches a known harness name, and a `/clear` inside the lock holder must still replace its own record.
+When neither can be shown - a session that cannot say who it is, next to a lock that names a live harness - the record is left alone.
+That is the conservative reading rather than an accident: leaving another session's true record in place costs nothing, and overwriting it costs the measurement.
+
+A lock left behind by a session that has ended is not another session.
+`fm_harness_alive` is what separates the two, so a stale lock does not block a fresh session's record - refusing there would be the same silent non-measurement from the other side.
+
+One simultaneous-start race is an accepted limitation of this gate.
+Two primary sessions starting in the same home at the same instant can both observe no live holder and both publish a record before either acquires the lock, so the loser of the later lock acquisition may have written last.
+The outcome is a reported unenforced ceiling, not a wrong number: `fm_context_ceiling_reason` compares the record's harness pid against the lock's and reports the mismatch instead of measuring it, so this is not the silent non-measurement this change was made to prevent, and that report now escalates on repeat.
+Moving publication to a boundary owned by lock acquisition would break replacement on a fresh start, because only the SessionStart hook payload carries `session_id` and `transcript_path`, while `bin/fm-lock.sh` runs later in a different process with neither.
+
+## What a lock holder does when it cannot resolve its own harness process
+
+Gating alone does not close the second door: a session that WILL hold the lock and cannot name its own harness process still records an error, and the ceiling is still unenforced for the life of that session.
+
+**It retries, bounded, and then records the failure with its cause.**
+`fm_harness_pid_settled` re-attempts the walk with the waits in `FM_HARNESS_PID_RETRY_DELAYS` (0.1, 0.2, 0.4, 0.8 seconds), which is 1.5 seconds spent only on the path that is already failing.
+That is the right shape because the answer is not always a settled one: `fm_harness_pid` now distinguishes `no-harness-process` - the walk COMPLETED and no ancestor was a harness - from `harness-lookup-failed`, where a `ps` probe failed so the walk could not be completed and the answer is unknown rather than negative.
+On 2026-08-19 this seat's hook recorded the failure at session start and the same walk resolved correctly by hand later the same day, which is the signature of an unknown answer rather than a settled one.
+The record now carries which of the two it was, so the next occurrence is diagnosable instead of being re-argued.
+
+The alternatives were rejected for concrete reasons, not by preference:
+
+- **Refuse to proceed - block session initialization until the session can identify itself.**
+  Claude's `SessionStart` exit 2 blocks session initialization, so this is reachable, and it is the worst available outcome: it trades a home whose ceiling is unmeasured for a home with no session at all.
+  The ceiling exists to keep a long session healthy, not to prevent one existing.
+- **Let something repair the record after the fact - a later hook, a watcher, or the agent itself.**
+  `AGENTS.md` forbids hand-writing this record and is right to: a hand-written record is a watchman that lies, and an agent-written one asserts a transcript position nobody observed.
+  Rejected in the same breath: having the watcher find the transcript itself by taking the newest file under the harness's project directory, because "newest" is a guess, and a wrong guess measures the wrong session - which is the defect, not the repair.
+- **Retry until it succeeds.**
+  A process table that stays unreadable would then hang session initialization behind it, turning a missing measurement into a missing session by a slower route.
+- **Omit the field and stay quiet.**
+  An absent field is indistinguishable from a reader's own bug, which is the property the whole record is built against.
+
+`bin/fm-lock.sh` deliberately does NOT take the retry.
+A lock it cannot acquire stops session start with a message on the spot, which is already the loudest failure available; the retry exists for the answer that becomes a durable record nobody looks at again.
+
+A second harness session started after another live session holds the same home no longer rewrites the record.
+A reader that compares against `state/.lock` still sees and reports any mismatch instead of measuring the wrong transcript.
 
 ## Harness transports
 
@@ -169,10 +221,49 @@ Codex 0.144.6 was inspected as not affected for the same hook-context reason; `c
 Grok 0.2.106 remains not applicable because its project `SessionStart` stdout still does not enter model context, as the 2026-07-17 validation above proves.
 A fresh Grok run was attempted on 2026-07-22 but stopped at `402 Payment Required: Grok Build usage balance exhausted`, so no stronger live claim is made.
 
+## The lock gate, proven live on 2026-08-19
+
+A fixture cannot prove this: the whole claim is about what a real second harness session does to a real home, so it was run rather than reasoned about.
+Claude Code in `tmux`, in a disposable primary-shaped home under a scratchpad directory holding copies of the wrapper and its libraries, never against a live fleet home.
+
+Session 1 was an interactive `claude --permission-mode bypassPermissions` in tmux session `ctxlab1`.
+Its own `SessionStart` hook wrote the record, and it then acquired the lock by running `./bin/fm-lock.sh` from inside itself, so the lock was taken by a process whose ancestry genuinely reaches that session:
+
+```
+state/.lock              3588061
+state/.primary-transcript
+  status=ok
+  harness_pid=3588061
+  session_id=b4e8bf1f-67c4-4bb0-9341-26df66114add
+```
+
+**Before the fix.**
+With `bin/fm-sessionstart-nudge.sh` and `bin/fm-harness-pid-lib.sh` restored from `HEAD`, a second interactive session was started in the same home.
+The record after it:
+
+```
+state/.lock              3588061
+state/.primary-transcript
+  status=ok
+  harness_pid=3631947
+  session_id=b1aee4c4-1990-4240-935a-dc1db42df318
+```
+
+The lock still named session 1 and the record named session 2 - ak's case exactly, on this seat, with two real sessions.
+
+**After the fix.** The current wrapper was reinstalled, session 1's record restored, and a fresh second interactive session started the same way.
+Its harness process was `3640603`; the record was byte-identical to the one session 1 wrote, still naming `harness_pid=3588061`.
+Asked whether its context carried the session-start instruction, that second session answered `NUDGE_PRESENT`: the gate stops it writing the record, and does not stop it being told to run session start and discover it is read-only.
+
+One measured limitation worth recording rather than leaving to be rediscovered: a headless `claude -p` run in the same home did not fire the `SessionStart` hook at all, so neither the defect nor its repair is reproducible that way.
+The interactive session is the door both vessels came through, and it is the one this was proven on.
+
 ## Regression coverage
 
 `tests/fm-sessionstart-nudge.test.sh` proves wrapper silence for both gate signals, an unmarked linked worktree, a missing state directory, and an already-owned lock.
 It proves the transcript record's ok fields, that the record and `bin/fm-lock.sh` name the same harness process, that a silent post-clear start still replaces a superseded record, that a missing transcript path, an absent payload, and an unidentifiable owning process each record a visible error rather than leaving a stale or absent value, and that a non-primary claims no record.
+It proves the lock gate in both directions: a second session in a home that already has one leaves the record alone, a session that cannot name itself does not claim a live session's record, a lock left by a finished session does not block a fresh one, and the lock holder still replaces its own record after a clear.
+It proves the retry is spent rather than declared - a single unreadable probe resolves and records `status=ok`, while a process table that stays unreadable records `harness-lookup-failed` rather than the settled negative `no-harness-process`.
 It also proves that an unidentifiable owning process leaves `harness_pid` empty rather than a probeable sentinel, and that a session which cannot write its record leaves no previous `status=ok` record behind, whether the state directory refuses the write or the atomic replace fails.
 It proves exact U+2063 `FIRSTMATE_OP:`-prefixed, `session-start`-typed one-line output for a plain primary and a marked linked secondmate primary.
 It also verifies tracked wrapper registration for Claude, Codex, OpenCode, Pi, and Grok.

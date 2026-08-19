@@ -916,6 +916,7 @@ FMX_DISCORD_REPLY_MAX_CHARS=1900   # Discord reply per-message split budget; val
 FMX_X_THREAD_MAX=25     # maximum messages in one auto-split reply thread
 FMX_FOLLOWUP_MAX_AGE_SECS=604800   # local window for posting X-mode completion follow-ups (7 days)
 FMX_FOLLOWUP_MAX_COUNT=3   # local cap on X-mode completion follow-ups per linked mention
+FM_HARNESS_PID_RETRY_DELAYS=0.1 0.2 0.4 0.8   # waits before each extra attempt bin/fm-harness-pid-lib.sh's fm_harness_pid_settled makes to name this session's own harness process; empty disables the retry, and only bin/fm-sessionstart-nudge.sh takes it, because there a wrong answer becomes a durable record that leaves the ceiling unenforced for the life of the session (docs/sessionstart-nudge.md)
 FM_LOCK_STALE_AFTER=2   # seconds before dead-pid lock records can be reclaimed; mid-acquire locks keep at least 2s grace
 FM_LOCK_STEAL_MAX_DEPTH=8   # hard cap on nested stale-lock steal recursion; acquisition fails loudly (rc 2) past this depth instead of recursing unbounded
 FM_LOCK_WAIT_TIMEOUT=30   # seconds a blocking lock acquisition may remain contended before it fails loudly (rc 2)

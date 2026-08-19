@@ -989,6 +989,49 @@ age_of() {  # seconds since file mtime; "due immediately" if missing
   echo $(( $(date +%s) - m ))
 }
 
+# The clause appended to an absent-protection ceiling wake, and nothing at all on
+# the first report of one. state/.context-ceiling-absent-since carries
+# "<class> <first-report-epoch> <reports>" as content rather than as an mtime,
+# because the mtime moves on every rewrite and the whole point of the record is
+# the moment that did NOT move. A change of class restarts it: a ceiling that
+# stopped being unmeasurable and started being unresettable is a different
+# absence, and dating the new one from the old one would overstate it.
+context_absence_clause() {  # <class>
+  local class=$1 file="$STATE/.context-ceiling-absent-since" prev_class since reports now age
+  now=$(date +%s)
+  # The redirect is opened before the 2>/dev/null would take effect, so an absent
+  # file is checked for rather than left to print a shell error on every poll.
+  [ -f "$file" ] && { read -r prev_class since reports < "$file" 2>/dev/null || true; }
+  case "${since:-}${reports:-}" in
+    *[!0-9]*|'') prev_class=; since=; reports= ;;
+  esac
+  if [ "${prev_class:-}" != "$class" ] || [ -z "${since:-}" ] || [ -z "${reports:-}" ]; then
+    since=$now
+    reports=0
+  fi
+  reports=$((reports + 1))
+  printf '%s %s %s\n' "$class" "$since" "$reports" > "$file" 2>/dev/null || true
+  [ "$reports" -gt 1 ] || return 0
+  age=$((now - since))
+  [ "$age" -ge 0 ] || age=0
+  printf ' - the context ceiling has had no working protection since %sZ, %s ago, and this is report %s with nothing repaired; an absent protection is not routine traffic, so repair the condition named above through its owner or tell the captain plainly that it stands unrepaired' \
+    "$(fm_context_iso_utc "$since")" "$(context_absence_duration "$age")" "$reports"
+}
+
+# Whole hours and minutes, because the reader has to weigh how long a protection
+# has been missing and a raw second count makes that arithmetic rather than a
+# reading.
+context_absence_duration() {  # <seconds>
+  local secs=$1 hours minutes
+  hours=$((secs / 3600))
+  minutes=$(((secs % 3600) / 60))
+  if [ "$hours" -gt 0 ]; then
+    printf '%sh %sm' "$hours" "$minutes"
+  else
+    printf '%sm' "$minutes"
+  fi
+}
+
 # Print the context-ceiling wake reason when there is one, and nothing on an
 # ordinary poll. bin/fm-context-lib.sh owns what "over ceiling", "quiet", and
 # "captain active" mean, so the watcher's branch and the reset tool's refusals
@@ -1013,13 +1056,25 @@ age_of() {  # seconds since file mtime; "due immediately" if missing
 # drains it, and an undrained queue is precisely what makes the next poll
 # non-quiet - so clearing on "no reason this poll" would let every ceiling wake
 # erase its own throttle and re-fire once per drain cycle.
+#
+# A class whose protection is ABSENT is reported differently on every repeat, and
+# that is the one thing here that is not throttling. The unenforced wake was
+# delivered once an hour for a whole day on 2026-08-19 and changed nothing: every
+# report was word-for-word the one before it, so each read as a line that had
+# already been read. The repeat is the news. A first report states the condition;
+# every later one adds how long the protection has been gone and how many reports
+# it has survived, which is a fact about this occurrence that the first report
+# could not have carried and that no amount of re-reading the first one supplies.
+# The diagnosis itself is never touched - both vessels found this defect BECAUSE
+# the wake said precisely what was wrong - and the cadence is never raised, so a
+# class that is merely idle is not made louder to carry a class that is absent.
 context_ceiling_surface() {
-  local marker previous
+  local marker previous reason
   fm_context_ceiling_reason "$STATE" "$FM_HOME" "$FM_ROOT" >/dev/null || return 0
   marker="$STATE/.context-ceiling-surfaced"
   case "$FM_CONTEXT_CEILING_STATE" in
     resolved)
-      rm -f "$marker" 2>/dev/null || true
+      rm -f "$marker" "$STATE/.context-ceiling-absent-since" 2>/dev/null || true
       return 0
       ;;
     surfaced) ;;
@@ -1031,8 +1086,14 @@ context_ceiling_surface() {
     triage_log "absorbed context-ceiling $FM_CONTEXT_CEILING_CLASS (unchanged since it was last reported)"
     return 0
   fi
+  reason=$FM_CONTEXT_CEILING_REASON
+  if [ "$FM_CONTEXT_CEILING_PROTECTION" = absent ]; then
+    reason=$reason$(context_absence_clause "$FM_CONTEXT_CEILING_CLASS")
+  else
+    rm -f "$STATE/.context-ceiling-absent-since" 2>/dev/null || true
+  fi
   printf '%s\n' "$FM_CONTEXT_CEILING_CLASS" > "$marker" 2>/dev/null || true
-  printf '%s' "$FM_CONTEXT_CEILING_REASON"
+  printf '%s' "$reason"
 }
 
 # Layer 2 + 3 signal scan: status files and turn-end markers. Each file is

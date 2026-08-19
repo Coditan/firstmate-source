@@ -27,12 +27,12 @@ if [ "${1:-}" = "status" ]; then
 fi
 
 me=$(fm_harness_pid) || { echo "error: cannot locate harness process in ancestry" >&2; exit 1; }
-if [ -f "$LOCK" ]; then
-  old=$(cat "$LOCK")
-  if [ "$old" != "$me" ] && fm_harness_alive "$old"; then
-    echo "error: another live firstmate session holds the lock (pid $old); operate read-only until resolved" >&2
-    exit 1
-  fi
+# The refusal test itself lives in fm-harness-pid-lib.sh so that the primary
+# transcript record is gated on exactly the condition this lock refuses on,
+# rather than on a second, drifting copy of it.
+if fm_session_lock_held_by_other "$LOCK" "$me"; then
+  echo "error: another live firstmate session holds the lock (pid $(cat "$LOCK")); operate read-only until resolved" >&2
+  exit 1
 fi
 echo "$me" > "$LOCK"
 echo "lock acquired: harness pid $me"

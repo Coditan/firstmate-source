@@ -498,14 +498,32 @@ fm_context_restart_path_ok() {  # <fm-home> <fm-root>
 #                 own throttle - fm_context_quiet's first test is whether
 #                 state/.wake-queue is non-empty, and that queue is exactly where
 #                 the wake this check produces is parked until firstmate drains it
+#
+#   FM_CONTEXT_CEILING_PROTECTION  whether the ceiling is being applied at all:
+#     absent      unenforced and blocked - nothing is protecting this session.
+#                 Either no number can be read from it, or a number can but the
+#                 reset that number would trigger cannot run
+#     present     ask and reset - the ceiling is working and this is it working;
+#                 a captain who is present is a reason to wait, not a defect
+#   The distinction exists because the two classes have to be REPORTED
+#   differently. An unenforced ceiling was reported once an hour for a whole day
+#   on 2026-08-19 and changed nothing, because each report was word-for-word the
+#   previous one and read as routine. A protection that is merely idle may repeat
+#   unchanged; a protection that is absent may not, and bin/fm-watch.sh is where
+#   that difference is spent.
 FM_CONTEXT_CEILING_REASON=
 FM_CONTEXT_CEILING_CLASS=
 FM_CONTEXT_CEILING_STATE=
+FM_CONTEXT_CEILING_PROTECTION=
 
 _fm_context_ceiling_surfaced() {  # <class> <reason>
   FM_CONTEXT_CEILING_CLASS=$1
   FM_CONTEXT_CEILING_REASON=$2
   FM_CONTEXT_CEILING_STATE=surfaced
+  case "$1" in
+    unenforced|blocked) FM_CONTEXT_CEILING_PROTECTION=absent ;;
+    *) FM_CONTEXT_CEILING_PROTECTION=present ;;
+  esac
   printf '%s' "$2"
 }
 
@@ -515,6 +533,8 @@ fm_context_ceiling_reason() {  # <state-dir> <fm-home> <fm-root>
   FM_CONTEXT_CEILING_REASON=
   # shellcheck disable=SC2034 # Read by callers after fm_context_ceiling_reason returns.
   FM_CONTEXT_CEILING_CLASS=
+  # shellcheck disable=SC2034 # Read by callers after fm_context_ceiling_reason returns.
+  FM_CONTEXT_CEILING_PROTECTION=
   FM_CONTEXT_CEILING_STATE=resolved
   # Nothing running here means nothing to measure, and nothing to report.
   fm_context_session_live "$state" || return 0
