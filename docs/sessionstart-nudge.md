@@ -55,7 +55,7 @@ The record's consumer is the stow-then-clear mechanism.
 
 ## Only the session that can hold the lock writes the record
 
-Recording is gated on the home's session lock, and `fm_session_lock_held_by_other` in `bin/fm-harness-pid-lib.sh` is the single owner of that test - the same predicate `bin/fm-lock.sh` refuses acquisition on, so the record and the lock cannot disagree about who this home's session is.
+Recording is gated on the home's session lock, and `fm_session_lock_held_by_other` in `bin/fm-harness-pid-lib.sh` is the single owner of the live-other-session test that `bin/fm-lock.sh` also uses, so the record gate and lock acquisition cannot drift on which existing holder they refuse.
 A session start that finds another live harness holding `state/.lock` writes nothing, removes nothing, and still prints the nudge, because a lock-refused session must still run session start to discover that it is read-only.
 
 Until 2026-08-19 the record was written unconditionally, and that produced the same failure through two different doors.
@@ -102,7 +102,8 @@ The alternatives were rejected for concrete reasons, not by preference:
 `bin/fm-lock.sh` deliberately does NOT take the retry.
 A lock it cannot acquire stops session start with a message on the spot, which is already the loudest failure available; the retry exists for the answer that becomes a durable record nobody looks at again.
 
-A second harness session started in the same home no longer rewrites the record; a reader that compares against `state/.lock` still sees a mismatch when the record describes a session that has since finished, and reports it instead of measuring the wrong one.
+A second harness session started after another live session holds the same home no longer rewrites the record.
+A reader that compares against `state/.lock` still sees and reports any mismatch instead of measuring the wrong transcript.
 
 ## Harness transports
 
