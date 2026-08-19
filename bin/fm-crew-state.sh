@@ -895,15 +895,18 @@ fi
 # is no run to consult, so a dead/unreadable target means the crew is gone: report
 # unknown rather than trusting a possibly-stale status log as the current state.
 [ -n "$BACKEND_TARGET" ] || emit_unknown no-endpoint-recorded "no backend target recorded"
+if ! fm_backend_session_cli_available "$TASK_BACKEND"; then
+  emit_degraded missing-dependency endpoint-reader-missing \
+    "$TASK_BACKEND CLI not on PATH: endpoint $BACKEND_TARGET cannot be read"
+fi
+if [ -e "$TURNEND" ]; then
+  emit_unknown no-status-after-turn-end "turn-end marker exists but no status event landed: $TURNEND${SEP}$UNKNOWN_REASON"
+fi
 # An unreadable endpoint means the crew is gone ONLY if the tool that reads
 # endpoints is installed. Without it, `fm_backend_capture` fails identically for
 # a live crew and a dead one, and answering "gone" would send firstmate into
 # stuck-crewmate recovery against a perfectly healthy worker.
 if ! pane_readable "$BACKEND_TARGET"; then
-  if ! fm_backend_session_cli_available "$TASK_BACKEND"; then
-    emit_degraded missing-dependency endpoint-reader-missing \
-      "$TASK_BACKEND CLI not on PATH: endpoint $BACKEND_TARGET cannot be read"
-  fi
   emit_unknown endpoint-unreadable "backend target gone: $BACKEND_TARGET"
 fi
 
@@ -952,8 +955,5 @@ if [ -n "$LOG_LINE" ]; then
     emit_unknown log-verb-not-a-state "the status log's last verb '$LOG_VERB' is not a state${SEP}$UNKNOWN_REASON"
   fi
   emit_unknown log-verb-not-a-state "the status log's last line carries no state verb${SEP}$UNKNOWN_REASON"
-fi
-if [ -e "$TURNEND" ]; then
-  emit_unknown no-status-after-turn-end "turn-end marker exists but no status event landed: $TURNEND${SEP}$UNKNOWN_REASON"
 fi
 emit_unknown "$UNKNOWN_CAUSE" "no current-state source available: $UNKNOWN_REASON"

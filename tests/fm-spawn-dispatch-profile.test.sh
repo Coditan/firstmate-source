@@ -148,6 +148,37 @@ assert_meta_profile() {
   assert_grep "effort=$effort" "$meta" "meta missing effort=$effort"
 }
 
+assert_tracked_codex_profile_omits_dynamic_launch_grants() {
+  local file=$1 rc
+  command -v python3 >/dev/null 2>&1 \
+    || fail "python3 is required to parse the tracked Codex profile"
+  python3 - "$file" <<'PY'
+import sys
+try:
+    import tomllib
+except ModuleNotFoundError:
+    sys.exit(2)
+
+with open(sys.argv[1], "rb") as handle:
+    config = tomllib.load(handle)
+
+workspace = config.get("sandbox_workspace_write")
+if isinstance(workspace, dict):
+    if workspace.get("network_access") is not None:
+        sys.exit(1)
+    if workspace.get("writable_roots") is not None:
+        sys.exit(1)
+sys.exit(0)
+PY
+  rc=$?
+  case "$rc" in
+    0) ;;
+    1) fail "tracked Codex profile carries dynamic crewmate launch grants" ;;
+    2) fail "python3 tomllib is required to parse the tracked Codex profile" ;;
+    *) fail "tracked Codex profile did not parse as TOML" ;;
+  esac
+}
+
 test_no_profile_keeps_claude_profile_defaults() {
   local rec id out status expected launch
   id=profile-off-z1
@@ -592,10 +623,7 @@ test_non_codex_crewmate_acquires_no_sandbox_network_grant() {
 # into that file would widen it past crewmates however carefully the launch path
 # above is gated. This is the widening the launch-line tests cannot see.
 test_tracked_codex_profile_leaves_launch_grants_to_the_launch_line() {
-  assert_no_grep 'network_access' "$ROOT/.codex/config.toml" \
-    "the crewmate network grant was written into the tracked Codex profile, which every Codex session in this repository loads"
-  assert_no_grep 'writable_roots' "$ROOT/.codex/config.toml" \
-    "the task signal writable root was written into the tracked Codex profile, which cannot carry a task id"
+  assert_tracked_codex_profile_omits_dynamic_launch_grants "$ROOT/.codex/config.toml"
   pass "the tracked Codex profile leaves dynamic grants to the launch line"
 }
 

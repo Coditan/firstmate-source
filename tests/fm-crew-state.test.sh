@@ -1515,6 +1515,21 @@ test_cause_endpoint_unreadable() {
   pass "cause endpoint-unreadable"
 }
 
+test_turn_ended_without_status_beats_dead_endpoint() {
+  reset_fakes
+  local d out
+  d=$(new_case turn-ended-dead-endpoint)
+  mkdir -p "$d/wt"
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/dead-after-turn.meta" "window=default:w1:p2" "worktree=$d/wt" "kind=scout" "backend=herdr"
+  : > "$d/state/dead-after-turn.turn-ended"
+  FM_FAKE_HERDR_MISSING=1
+  out=$(run_crew_state "$d" dead-after-turn)
+  assert_cause "$out" no-status-after-turn-end "a dead endpoint masked a turn-ended marker with no status event"
+  assert_not_contains "$out" "endpoint-unreadable" "endpoint liveness must not override the missing status event"
+  pass "turn-ended without status beats a dead endpoint"
+}
+
 test_cause_kind_skips_run_lookup() {
   reset_fakes
   local d out
@@ -1911,6 +1926,7 @@ test_cause_no_worktree_recorded
 test_cause_worktree_gone
 test_cause_no_endpoint_recorded
 test_cause_endpoint_unreadable
+test_turn_ended_without_status_beats_dead_endpoint
 test_cause_kind_skips_run_lookup
 test_cause_delivery_mode_skips_run_lookup
 test_cause_no_branch
