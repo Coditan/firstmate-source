@@ -513,11 +513,43 @@ assert_present() {
 # from the installer's own manifest. Derived from skills-lock.json on purpose:
 # a hand-maintained list of installed skills goes stale the moment someone runs
 # the installer again, which is the same silent-staleness failure the checks
-# that use it exist to catch. Prints nothing when no manifest exists.
+# that use it exist to catch. Prints nothing when no manifest exists, but an
+# unreadable or invalid manifest is an error rather than an empty installed set.
 fm_installed_skill_dirs() {
   local lock="$ROOT/skills-lock.json"
   [ -f "$lock" ] || return 0
-  sed -n 's|.*"skillPath"[[:space:]]*:[[:space:]]*"\.agents/skills/\([^/"]*\)/SKILL\.md".*|\1|p' "$lock"
+  if command -v jq >/dev/null 2>&1; then
+    jq -r '
+      .skills |
+      if type != "object" then error("skills must be an object") else . end |
+      to_entries[] |
+      if (.value | type) != "object" then
+        error("skills." + .key + " must be an object")
+      elif .value.skillPath == (".agents/skills/" + .key + "/SKILL.md") then
+        .key
+      else
+        empty
+      end
+    ' "$lock" || fail "could not decode installed skills from $lock"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 - "$lock" <<'PY' || fail "could not decode installed skills from $lock"
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    manifest = json.load(handle)
+skills = manifest.get("skills")
+if not isinstance(skills, dict):
+    raise ValueError("skills must be an object")
+for name, record in skills.items():
+    if not isinstance(record, dict):
+        raise ValueError(f"skills.{name} must be an object")
+    if record.get("skillPath") == f".agents/skills/{name}/SKILL.md":
+        print(name)
+PY
+  else
+    fail "fm_installed_skill_dirs requires jq or python3 to decode $lock"
+  fi
 }
 
 fm_skill_frontmatter() {
