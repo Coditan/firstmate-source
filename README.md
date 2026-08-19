@@ -214,7 +214,9 @@ Agent-only reference skills live under `.agents/skills/` and are loaded by first
 
 Firstmate's skills live in two separate places with different audiences:
 
-- `.agents/skills/` - agent-loaded skills (this section's table, plus firstmate's agent-only reference skills). Every one of these assumes a live firstmate home and is meaningless, or actively misleading, installed anywhere else, so each carries `metadata.internal: true` in its frontmatter. That flag hides them from installer discovery (tools like the [skills.sh](https://skills.sh) `npx skills add` installer) without affecting how firstmate itself loads them - frontmatter metadata is inert to the agent's own skill loader.
+- `.agents/skills/` - agent-loaded skills (this section's table, plus firstmate's agent-only reference skills). Every skill written here assumes a live firstmate home and is meaningless, or actively misleading, installed anywhere else, so each carries `metadata.internal: true` in its frontmatter. That flag hides them from installer discovery (tools like the [skills.sh](https://skills.sh) `npx skills add` installer) without affecting how firstmate itself loads them - frontmatter metadata is inert to the agent's own skill loader.
+  The exception is a skill *installed* here from upstream rather than written here, which carries upstream's frontmatter unchanged and is generally useful outside a firstmate home.
+  `skills-lock.json` records which ones those are, and they are never edited to match the local convention - see [`docs/axi-skill-provenance.md`](docs/axi-skill-provenance.md).
 - `skills/` - public, installer-facing skills meant to be installed standalone into any project, independent of firstmate.
   Each one is a self-contained skill with no dependency on firstmate's paths, tools, or vocabulary.
   Today that is `skills/stow`, a generic session-knowledge-sweep skill that routes findings by explicit instruction first, then existing local conventions, then a private `.stow-notes.md` fallback in the current directory, and closes with a resume pointer for the next session.
@@ -259,6 +261,13 @@ Third-party material, all from [`mattpocock/skills`](https://github.com/mattpoco
 - `/sea-chart` and `bin/fm-sea-chart.sh` amend the Wayfinder skill. [`docs/sea-chart-provenance.md`](docs/sea-chart-provenance.md) carries that copyright notice and licence text, along with what was kept, changed, and dropped.
 - `/to-backlog` and `bin/fm-to-backlog.sh` adopt the to-tickets skill. [`docs/to-backlog-provenance.md`](docs/to-backlog-provenance.md) carries the same notice and licence text, along with what was kept, changed, and dropped with the cost of each omission.
 - `/domain-modeling` adopts the domain-modeling skill. [`docs/domain-modeling-provenance.md`](docs/domain-modeling-provenance.md) carries the same notice and licence text, along with what was kept, changed, and dropped with the cost of each omission.
+
+Third-party material from a different upstream, on different terms:
+
+- `.agents/skills/axi/` is the official AXI skill by Kun Chen, from [`kunchenguid/axi`](https://github.com/kunchenguid/axi), used under the MIT licence.
+  It is installed verbatim through `npx skills add` rather than adapted, so it is never edited here and this repository's own Markdown conventions do not apply to it.
+  [`docs/axi-skill-provenance.md`](docs/axi-skill-provenance.md) carries that copyright notice and licence text, records the installed commit and content hash, and states why the file stays untouched; `.agents/skills/axi/LICENSE` carries the notice beside the copy itself.
+  This fleet's own additions, which the AXI specification does not cover, live separately in `.agents/skills/axi-tool-intake/` and restate none of it.
 
 `/codebase-sweep` is not on that list: it loads the `codebase-design` plugin skill and copies nothing from it, and its sweep subjects are traced to a talk by the same author rather than derived from his code. [`docs/codebase-sweep-provenance.md`](docs/codebase-sweep-provenance.md) records what came from that talk, what did not, and the measurement behind the difference.
 

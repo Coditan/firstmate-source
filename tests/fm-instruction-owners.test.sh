@@ -386,17 +386,36 @@ test_compressed_agents_retains_authority_and_supervision_safety() {
 # firstmate reading its own instruction surface. The SKILL.md description is the
 # route for the harness skill listing, and it is the ONLY route where no
 # instruction-surface trigger line is possible, so it is required of every skill
-# rather than only the harness-listed ones.
+# this repository AUTHORS.
+#
+# A skill INSTALLED from upstream is exempt from the frontmatter half and held
+# to the AGENTS.md half alone: its file is verbatim and editing it to satisfy a
+# convention this repository invented would diverge it from the installer's
+# recorded hash. The installed set is read from skills-lock.json rather than
+# listed here, for the same staleness reason the loop enumerates the directory.
 test_every_skill_declares_a_load_trigger() {
-  local dir name invocable count section desc
+  local dir name invocable count section desc installed
   local missing="" toneless="" dangling=""
   section=$(awk '/^## 13\. /{f=1} f && /^## 14\. /{exit} f' "$AGENTS")
   [ -n "$section" ] || fail "AGENTS.md section 13 is missing or unparseable"
+  installed=" $(fm_installed_skill_dirs | tr '\n' ' ')"
   for dir in "$ROOT"/.agents/skills/*/; do
     name=$(basename "$dir")
     [ -f "$dir/SKILL.md" ] || fail "skill $name has no SKILL.md"
     fm_skill_frontmatter "$dir" | grep -qx "name: $name" \
       || fail "skill $name declares a metadata name that is not its directory"
+    # A skill installed from upstream is held to reachability only. It cannot
+    # declare frontmatter fields this repository invented, and editing it to add
+    # them would diverge it from the hash the installer recorded, turning every
+    # future update into a conflict (docs/axi-skill-provenance.md). Its
+    # description is upstream's wording and is not ours to shape either.
+    case "$installed" in
+      *" $name "*)
+        count=$(printf '%s\n' "$section" | grep -Fc -- "- \`$name\` - ")
+        [ "$count" -eq 1 ] || missing="$missing $name(section-13-entries=$count)"
+        continue
+        ;;
+    esac
     invocable=$(fm_skill_frontmatter "$dir" | grep -m1 '^user-invocable:' | awk '{print $2}')
     case "$invocable" in
       false)
