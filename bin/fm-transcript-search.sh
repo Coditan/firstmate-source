@@ -29,7 +29,7 @@
 # and no vessel reads another's. FM_TRANSCRIPT_ARCHIVE overrides the location.
 #
 # Exit status: 0 when something matched, 1 when nothing did, 2 on a usage error,
-# a missing archive, or a missing decompressing search tool.
+# a missing archive, a missing decompressing search tool, or a scanner failure.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -130,17 +130,26 @@ n=$(wc -l < "$filelist")
 echo "# searching $n session files under: ${roots[*]}" >&2
 [ "$n" -gt 0 ] || exit 1
 
-# The file set is handed over in batches, so a batch with no hit exits non-zero
-# while another batch matched. What the caller is told is whether the SEARCH
-# matched, decided by what came out of it, not by the status of one batch.
+# The file set is handed over in batches. Each batch normalises a genuine
+# no-match to success so xargs can keep scanning, while preserving scanner
+# failures. The final output then decides whether the completed search matched.
 if [ "$files_only" = 1 ]; then
-  xargs -a "$filelist" -d '\n' "$RG" -lz --no-messages -e "$q" -- 2>/dev/null |
+  xargs -a "$filelist" -d '\n' bash -c '
+    rg=$1; pattern=$2; shift 2
+    "$rg" -lz -e "$pattern" -- "$@"
+    case $? in 0|1) exit 0;; *) exit 255;; esac
+  ' _ "$RG" "$q" |
   awk 'NF { print; found=1 } END { exit(found ? 0 : 1) }'
-  exit "${PIPESTATUS[1]}"
+  statuses=("${PIPESTATUS[@]}")
+  [ "${statuses[0]}" -eq 0 ] || exit 2
+  exit "${statuses[1]}"
 fi
 
-xargs -a "$filelist" -d '\n' "$RG" -z -n -H --null --no-heading --color never \
-      --no-messages -C "$ctx" -e "$q" -- 2>/dev/null |
+xargs -a "$filelist" -d '\n' bash -c '
+  rg=$1; context=$2; pattern=$3; shift 3
+  "$rg" -z -n -H --null --no-heading --color never -C "$context" -e "$pattern" -- "$@"
+  case $? in 0|1) exit 0;; *) exit 255;; esac
+' _ "$RG" "$ctx" "$q" |
 awk -F'\0' -v arch="$ARCHIVE" -v zstd="$ZSTD" '
   /^--$/ { print "  --"; next }
   NF < 2 { next }
@@ -163,4 +172,6 @@ awk -F'\0' -v arch="$ARCHIVE" -v zstd="$ZSTD" '
     print "  " rest
   }
   END { exit(found ? 0 : 1) }'
-exit "${PIPESTATUS[1]}"
+statuses=("${PIPESTATUS[@]}")
+[ "${statuses[0]}" -eq 0 ] || exit 2
+exit "${statuses[1]}"

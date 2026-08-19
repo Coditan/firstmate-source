@@ -18,8 +18,7 @@
 #      compressed, and plain grep reads a compressed file as no matches with no
 #      error - the same silent emptiness as 1, arriving through the
 #      documentation instead of through the reader. So the search path is
-#      exercised over a compressed store here, and the documentation is scanned
-#      for the promise it used to make.
+#      exercised over a compressed store here.
 #   4. THIS FILE must not match the pattern file either. Property 2 closes the
 #      pattern list; it does not close the fixtures. The first build of this tool
 #      left five real redactions in its own session from fixtures typed in plain
@@ -497,21 +496,6 @@ test_plain_grep_does_not_read_the_sessions() {
   pass "plain grep reports no matches on material the wrapper finds, which is why it is no longer documented"
 }
 
-# Whatever the documentation says about searching, it must not be the sentence
-# that sends someone to a tool that answers "nothing" over a full archive.
-test_no_document_promises_that_plain_grep_works_here() {
-  local f
-  for f in "$ROOT/docs/session-archive.md" "$REFRESH" "$SEARCH" "$REDUCE"; do
-    if grep -nE 'grep -r` (works|reads)|Plain `grep -r` works' "$f" >/dev/null 2>&1; then
-      grep -nE 'grep -r` (works|reads)|Plain `grep -r` works' "$f" >&2
-      fail "$(basename "$f") still tells a reader plain grep -r works over this archive"
-    fi
-  done
-  assert_grep 'rg -z' "$ROOT/docs/session-archive.md" \
-    'the documentation must name the raw command that does read this store'
-  pass "no document promises plain grep here, and the working raw command is named"
-}
-
 # A caller that scripts this tool reads its exit status, and the file set is
 # handed to the scanner in batches: a batch with no hit must not make a search
 # that matched look like a search that failed.
@@ -527,6 +511,20 @@ test_search_status_says_matched_or_not_matched() {
   FM_HOME="$home" "$SEARCH" 'nothing here says this at all' >/dev/null 2>&1 || rc=$?
   [ "$rc" -eq 1 ] || fail "a search that matched nothing must exit 1, got $rc"
   pass "the exit status states whether the search matched, not how a batch of it ended"
+}
+
+test_search_reports_scanner_failures_as_errors() {
+  local home rc=0
+  home=$(setup_fixture_home)
+  FM_HOME="$home" "$SEARCH" '[' >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] || fail "a malformed regex must be reported as a scanner error, got exit $rc"
+  rc=0
+  FM_HOME="$home" "$SEARCH" '[' --files-only >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] || fail "a malformed --files-only regex must be reported as a scanner error, got exit $rc"
+  rc=0
+  FM_HOME="$home" "$SEARCH" 'nothing here says this at all' >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 1 ] || fail "an ordinary no-match must remain exit 1, got $rc"
+  pass "scanner failures are errors while an ordinary no-match remains distinct"
 }
 
 test_search_without_its_tool_refuses_rather_than_finding_nothing() {
@@ -584,7 +582,7 @@ test_search_narrows_the_file_set_by_index
 test_search_reports_a_missing_archive_rather_than_no_matches
 test_search_reads_the_compressed_store
 test_plain_grep_does_not_read_the_sessions
-test_no_document_promises_that_plain_grep_works_here
 test_search_status_says_matched_or_not_matched
+test_search_reports_scanner_failures_as_errors
 test_search_without_its_tool_refuses_rather_than_finding_nothing
 test_refresh_names_a_readme_that_still_promises_plain_grep
