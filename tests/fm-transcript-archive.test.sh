@@ -35,6 +35,7 @@ set -u
 REDUCE="$ROOT/bin/fm-transcript-reduce.py"
 SEARCH="$ROOT/bin/fm-transcript-search.sh"
 REFRESH="$ROOT/bin/fm-transcript-refresh.sh"
+ZCAT="$ROOT/bin/fm-transcript-zcat.sh"
 PATTERNS="$ROOT/bin/fm-transcript-patterns/patterns.txt"
 INJECTED="$ROOT/bin/fm-transcript-patterns/injected-prefixes.txt"
 
@@ -120,7 +121,7 @@ PY
 
 test_tool_is_tracked_and_runnable() {
   local f
-  for f in "$REDUCE" "$SEARCH" "$REFRESH"; do
+  for f in "$REDUCE" "$SEARCH" "$REFRESH" "$ZCAT"; do
     assert_present "$f" "missing tool file: $f"
     [ -x "$f" ] || fail "$f must be executable"
   done
@@ -493,6 +494,29 @@ test_search_reads_the_compressed_store() {
   pass "search reads the compressed store and still reports the session header with the hit"
 }
 
+test_search_does_not_depend_on_ripgrep_implicit_decompression() {
+  local home out wrapper real_rg
+  home=$(setup_fixture_home)
+  wrapper="$TMP/rg-without-z"
+  real_rg=$(command -v rg)
+  cat >"$wrapper" <<'EOF'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  case "$arg" in
+    -z|-*z*) exit 1 ;;
+  esac
+done
+exec "$FM_TEST_REAL_RG" "$@"
+EOF
+  chmod +x "$wrapper"
+  out=$(FM_HOME="$home" FM_RG="$wrapper" FM_TEST_REAL_RG="$real_rg" \
+        "$SEARCH" 'tugboat host' 2>/dev/null) \
+    || fail 'search depended on ripgrep implicit decompression instead of the required zstd tool'
+  assert_contains "$out" 'tugboat host' \
+    'explicit zstd preprocessing must return the compressed hit'
+  pass "search uses its required zstd tool rather than ripgrep's version-dependent implicit decompressor"
+}
+
 test_search_reads_plain_sessions_during_migration() {
   local home out plain
   home=$(setup_fixture_home)
@@ -610,6 +634,7 @@ test_search_resolves_the_archive_from_fm_home
 test_search_narrows_the_file_set_by_index
 test_search_reports_a_missing_archive_rather_than_no_matches
 test_search_reads_the_compressed_store
+test_search_does_not_depend_on_ripgrep_implicit_decompression
 test_search_reads_plain_sessions_during_migration
 test_plain_grep_does_not_read_the_sessions
 test_search_status_says_matched_or_not_matched

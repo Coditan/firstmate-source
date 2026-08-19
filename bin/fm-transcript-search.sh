@@ -17,9 +17,10 @@
 #
 # THE STORE IS COMPRESSED, SO PLAIN `grep -r` NO LONGER READS IT. It matches
 # nothing here and exits as though the archive were empty, which is the one
-# answer this archive must never give. The scan therefore runs through ripgrep's
-# `-z`, and `rg` and `zstd` on PATH are hard requirements: a missing one is
-# reported as a missing tool, never as a search that found nothing. Anyone who
+# answer this archive must never give. The scan therefore runs through ripgrep
+# with zstd as its explicit preprocessor. `rg` and `zstd` on PATH are hard
+# requirements: a missing one is reported as a missing tool, never as a search
+# that found nothing. Anyone who
 # would rather not use this wrapper runs `rg -z <pattern>` over the archive
 # directory directly and gets the same content scan. FM_RG may name ripgrep
 # elsewhere. Search deliberately has no FM_ZSTD override: one compressor knob
@@ -91,6 +92,7 @@ fi
 # caller and only one of them is true.
 RG="${FM_RG:-rg}"
 ZSTD=zstd
+PREPROCESSOR="$SCRIPT_DIR/fm-transcript-zcat.sh"
 for tool in "$RG" "$ZSTD"; do
   command -v "$tool" >/dev/null 2>&1 && continue
   echo "$tool is not installed, and the session store is compressed: this search cannot run." >&2
@@ -138,10 +140,10 @@ echo "# searching $n session files under: ${roots[*]}" >&2
 if [ "$files_only" = 1 ]; then
   # shellcheck disable=SC2016
   xargs -a "$filelist" -d '\n' bash -c '
-    rg=$1; pattern=$2; shift 2
-    "$rg" -lz -e "$pattern" -- "$@"
+    rg=$1; preprocessor=$2; pattern=$3; shift 3
+    "$rg" -l --pre "$preprocessor" --pre-glob "*.zst" -e "$pattern" -- "$@"
     case $? in 0|1) exit 0;; *) exit 255;; esac
-  ' _ "$RG" "$q" |
+  ' _ "$RG" "$PREPROCESSOR" "$q" |
   awk 'NF { print; found=1 } END { exit(found ? 0 : 1) }'
   statuses=("${PIPESTATUS[@]}")
   [ "${statuses[0]}" -eq 0 ] || exit 2
@@ -150,10 +152,11 @@ fi
 
 # shellcheck disable=SC2016
 xargs -a "$filelist" -d '\n' bash -c '
-  rg=$1; context=$2; pattern=$3; shift 3
-  "$rg" -z -n -H --null --no-heading --color never -C "$context" -e "$pattern" -- "$@"
+  rg=$1; preprocessor=$2; context=$3; pattern=$4; shift 4
+  "$rg" --pre "$preprocessor" --pre-glob "*.zst" -n -H --null --no-heading \
+    --color never -C "$context" -e "$pattern" -- "$@"
   case $? in 0|1) exit 0;; *) exit 255;; esac
-' _ "$RG" "$ctx" "$q" |
+' _ "$RG" "$PREPROCESSOR" "$ctx" "$q" |
 awk -F'\0' -v arch="$ARCHIVE" -v zstd="$ZSTD" '
   function shell_quote(s, out, i, c) {
     out="\""
