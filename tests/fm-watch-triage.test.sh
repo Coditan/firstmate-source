@@ -93,7 +93,7 @@ file_mtime() {
 }
 
 # Signature a primed .seen-* marker must hold so the per-poll signal scan does not
-# fire on a pre-existing status (mirrors fm-watch.sh's stat_sig exactly).
+# fire on a pre-existing ordinary status file.
 seen_sig() {
   if [ "$(uname)" = Darwin ]; then stat -f '%z:%Fm' "$1" 2>/dev/null; else stat -c '%s:%Y' "$1" 2>/dev/null; fi
 }
@@ -534,6 +534,30 @@ test_lone_turn_end_keeps_its_own_key() {
   unset FM_FAKE_CREW_STATE
   reap "$pid"
   pass "a turn-end marker moving alone still keys its own wake"
+}
+
+test_signal_symlink_target_append_surfaces() {
+  local dir state fakebin out pid signal_dir status_file
+  dir=$(make_case signal-symlink-target); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"
+  signal_dir="$state/.crew-signal/task"
+  status_file="$state/task.status"
+  mkdir -p "$signal_dir"
+  : > "$signal_dir/status"
+  ln -s ".crew-signal/task/status" "$status_file"
+  # This is the signature the old watcher would have remembered: the symlink
+  # object, not the target file.
+  printf '%s' "$(seen_sig "$status_file")" > "$state/.seen-task_status"
+  printf 'done: symlink status reached watcher\n' >> "$status_file"
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "watcher did not surface a status append through a public symlink"
+  grep -F "signal: $status_file" "$out" >/dev/null \
+    || fail "watcher did not print the public symlink status path: $(cat "$out")"
+  grep "$(printf '\tsignal\ttask.status\t')" "$state/.wake-queue" >/dev/null \
+    || fail "symlink status append did not enqueue the public status key: $(cat "$state/.wake-queue")"
+  reap "$pid"
+  pass "a status append through the public symlink wakes on the target file change"
 }
 
 test_terminal_stale_surfaced() {
@@ -2379,7 +2403,7 @@ test_heartbeat_no_change_absorbed() {
   dir=$(make_case heartbeat-absorb); state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"
   # A truly quiet fleet (no windows, no statuses) with a fast heartbeat cadence.
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
-    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 "$WATCH" > "$out" &
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 FM_CERTSYNC_PROJECT="$dir/no-certsync" "$WATCH" > "$out" &
   pid=$!
   if ! wait_live "$pid" 30; then
     reap "$pid"; fail "watcher exited for a no-change heartbeat (should absorb): $(cat "$out")"
@@ -2402,7 +2426,7 @@ test_heartbeat_backstop_surfaces_unsurfaced_status() {
   printf 'done: PR https://example.test/pr/5\n' > "$state/miss.status"
   sig=$(seen_sig "$state/miss.status"); printf '%s' "$sig" > "$state/.seen-miss_status"
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
-    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 "$WATCH" > "$out" &
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 FM_CERTSYNC_PROJECT="$dir/no-certsync" "$WATCH" > "$out" &
   pid=$!
   wait_for_exit "$pid" 40 || fail "heartbeat backstop did not surface an unsurfaced captain-relevant status"
   grep -Fx "heartbeat" "$out" >/dev/null || fail "backstop did not exit with a heartbeat wake"
@@ -2732,6 +2756,7 @@ test_single_turn_two_files_enqueue_one_wake
 test_afk_single_turn_two_files_enqueue_one_wake
 test_two_crewmates_signal_once_each
 test_lone_turn_end_keeps_its_own_key
+test_signal_symlink_target_append_surfaces
 test_terminal_stale_surfaced
 test_terminal_stale_parked_absorbed_then_resurfaced
 test_parked_marker_clears_on_status_write

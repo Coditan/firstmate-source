@@ -79,6 +79,7 @@ These are the paths a session reaches for before it has loaded anything else; an
 - `config/role` selects this home's vessel role.
 
 A `state/<id>.status` line is a wake event, not current-state truth; `bin/fm-crew-state.sh` owns current-state reconciliation.
+A worker appending its own sparse line to the status file named in its brief is the authorized status protocol, not a hand edit of state machinery.
 Treat `data/captain.md` as the domain-local record of captain preferences, optional `data/captain-shared.md` as the main-authoritative shared captain-preference file for secondmate inheritance, and `data/learnings.md` as curated home-local knowledge, regardless of harness memory.
 Everything else under `state/` is machinery belonging to the script that writes it - watcher, delivery-listener, sub-supervisor, wake-batching, journal, merge-poll, and X-mode internals among them - and is never created, edited, or deleted by hand; the owning script is the only correct way to change one.
 
@@ -468,6 +469,7 @@ The generated Herdr contract must use a named non-`default` isolated lab and its
 
 Load `secondmate-provisioning` before creating or using a charter brief and preserve its idle-by-default and marked-return-channel contracts.
 Status appends are sparse supervisor-actionable events, not routine progress; `bin/fm-classify-lib.sh` owns keyed open and resolved semantics.
+A brief's status append command is the sanctioned write path for that task's own status file.
 The scaffold is a safety contract, not a suggestion.
 
 ## 12. Self-update

@@ -1,6 +1,7 @@
 # Codex sandbox network dimension and the no-mistakes daemon socket
 
 Why a Codex crewmate carries `sandbox_workspace_write.network_access=true` on its launch line, what that grant admits, and why it is not written into the tracked Codex profile.
+Codex status-file filesystem signalling is a separate launch-line grant documented in [`docs/codex-status-signalling.md`](codex-status-signalling.md).
 
 All measurements below were taken on 2026-08-10 against `codex-cli 0.145.0` (`codex --version`), installed standalone at `/home/coditan/.codex/packages/standalone/releases/0.145.0-x86_64-unknown-linux-musl`.
 This is a verification record: it states what was run and what came back, and it marks the one claim that is inferred rather than measured.
@@ -175,7 +176,8 @@ Check the spawning home's own `bin/fm-spawn.sh` for the grant before concluding 
 
 ## 9. What the grant does not cover
 
-The grant covers the network dimension and nothing else.
+The network grant covers the network dimension and nothing else.
+A separate per-task status-signal writable root is documented in [`docs/codex-status-signalling.md`](codex-status-signalling.md).
 A pipeline run also writes in two places outside the workspace, and the sandbox refuses both.
 Measured 2026-08-11 from a real `codex exec` worker carrying the full crewmate profile, network grant included:
 

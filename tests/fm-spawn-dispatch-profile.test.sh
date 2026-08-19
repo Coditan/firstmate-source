@@ -15,7 +15,42 @@ fm_test_tmproot TMP_ROOT fm-spawn-dispatch-profile
 
 CODEX_CREW_NETWORK_FLAG='-c '\''sandbox_workspace_write.network_access=true'\'''
 CODEX_SECONDMATE_PROFILE_FLAGS='-c '\''sandbox_mode="workspace-write"'\'' -c '\''approval_policy="on-request"'\'' -c '\''approvals_reviewer="auto_review"'\'''
-CODEX_PROFILE_FLAGS="$CODEX_SECONDMATE_PROFILE_FLAGS $CODEX_CREW_NETWORK_FLAG"
+
+codex_signal_root_flag() {  # <task-id>
+  printf -- "-c 'sandbox_workspace_write.writable_roots=[\"%s/state/.crew-signal/%s\"]'" "$HOME_DIR" "$1"
+}
+
+codex_secondmate_profile_flags_for_id() {  # <task-id>
+  printf '%s %s' "$CODEX_SECONDMATE_PROFILE_FLAGS" "$(codex_signal_root_flag "$1")"
+}
+
+codex_crewmate_profile_flags_for_id() {  # <task-id>
+  printf '%s %s' "$(codex_secondmate_profile_flags_for_id "$1")" "$CODEX_CREW_NETWORK_FLAG"
+}
+
+assert_codex_signal_paths() {  # <task-id>
+  local id=$1 status_link turn_link probe
+  [ -d "$HOME_DIR/state/.crew-signal/$id" ] \
+    || fail "codex spawn did not create the per-task signal directory for $id"
+  [ -L "$HOME_DIR/state/$id.status" ] \
+    || fail "codex spawn did not make state/$id.status a public signal symlink"
+  [ -L "$HOME_DIR/state/$id.turn-ended" ] \
+    || fail "codex spawn did not make state/$id.turn-ended a public signal symlink"
+  status_link=$(readlink "$HOME_DIR/state/$id.status")
+  turn_link=$(readlink "$HOME_DIR/state/$id.turn-ended")
+  [ "$status_link" = ".crew-signal/$id/status" ] \
+    || fail "state/$id.status points to $status_link, not .crew-signal/$id/status"
+  [ "$turn_link" = ".crew-signal/$id/turn-ended" ] \
+    || fail "state/$id.turn-ended points to $turn_link, not .crew-signal/$id/turn-ended"
+  [ -f "$HOME_DIR/state/$id.status" ] \
+    || fail "state/$id.status does not have a live private signal target"
+  [ -f "$HOME_DIR/state/$id.turn-ended" ] \
+    || fail "state/$id.turn-ended does not have a live private signal target"
+  probe="done: public append reached private signal target for $id"
+  printf '%s\n' "$probe" >> "$HOME_DIR/state/$id.status"
+  [ "$(tail -n 1 "$HOME_DIR/state/.crew-signal/$id/status")" = "$probe" ] \
+    || fail "append through state/$id.status did not land in state/.crew-signal/$id/status"
+}
 
 make_spawn_fakebin() {
   local dir=$1 fakebin
@@ -119,6 +154,37 @@ assert_meta_profile() {
   assert_grep "harness=$harness" "$meta" "meta missing harness=$harness"
   assert_grep "model=$model" "$meta" "meta missing model=$model"
   assert_grep "effort=$effort" "$meta" "meta missing effort=$effort"
+}
+
+assert_tracked_codex_profile_omits_dynamic_launch_grants() {
+  local file=$1 rc
+  command -v python3 >/dev/null 2>&1 \
+    || fail "python3 is required to parse the tracked Codex profile"
+  python3 - "$file" <<'PY'
+import sys
+try:
+    import tomllib
+except ModuleNotFoundError:
+    sys.exit(2)
+
+with open(sys.argv[1], "rb") as handle:
+    config = tomllib.load(handle)
+
+workspace = config.get("sandbox_workspace_write")
+if isinstance(workspace, dict):
+    if workspace.get("network_access") is not None:
+        sys.exit(1)
+    if workspace.get("writable_roots") is not None:
+        sys.exit(1)
+sys.exit(0)
+PY
+  rc=$?
+  case "$rc" in
+    0) ;;
+    1) fail "tracked Codex profile carries dynamic crewmate launch grants" ;;
+    2) fail "python3 tomllib is required to parse the tracked Codex profile" ;;
+    *) fail "tracked Codex profile did not parse as TOML" ;;
+  esac
 }
 
 test_no_profile_keeps_claude_profile_defaults() {
@@ -290,7 +356,7 @@ test_active_dispatch_profile_requires_explicit_harness_for_scout() {
 }
 
 test_active_dispatch_profile_allows_explicit_harness() {
-  local rec id out status launch
+  local rec id out status launch expected_flags
   id=profile-explicit-z13
   rec=$(make_spawn_case profile-explicit claude "$id")
   read_case_record "$rec"
@@ -303,8 +369,10 @@ test_active_dispatch_profile_allows_explicit_harness() {
   assert_contains "$out" "spawned $id harness=codex" "spawn did not report explicit codex harness"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 high
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' $CODEX_PROFILE_FLAGS" \
+  expected_flags=$(codex_crewmate_profile_flags_for_id "$id")
+  assert_contains "$launch" "codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' $expected_flags" \
     "explicit harness launch did not thread model and effort"
+  assert_codex_signal_paths "$id"
   assert_not_contains "$launch" "--dangerously-bypass-approvals-and-sandbox" \
     "codex profile overrides would be inert under the dangerous bypass flag"
   pass "active crew-dispatch profile allows an explicit resolved harness"
@@ -323,6 +391,7 @@ test_active_dispatch_profile_allows_positional_harness() {
   expect_code 0 "$status" "positional harness should satisfy active dispatch-profile requirement"
   assert_contains "$out" "spawned $id harness=codex" "spawn did not report positional codex harness"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 high
+  assert_codex_signal_paths "$id"
   pass "active crew-dispatch profile allows the legacy positional harness form"
 }
 
@@ -420,7 +489,7 @@ test_claude_threads_model_and_effort() {
 }
 
 test_codex_threads_model_and_effort() {
-  local rec id out status launch
+  local rec id out status launch expected_flags
   id=profile-codex-z3
   rec=$(make_spawn_case profile-codex codex "$id")
   read_case_record "$rec"
@@ -430,15 +499,37 @@ test_codex_threads_model_and_effort() {
   expect_code 0 "$status" "codex spawn with profile flags should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 high
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' $CODEX_PROFILE_FLAGS" \
+  expected_flags=$(codex_crewmate_profile_flags_for_id "$id")
+  assert_contains "$launch" "codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' $expected_flags" \
     "codex launch did not thread model, reasoning effort, and profile config"
+  assert_codex_signal_paths "$id"
   assert_not_contains "$launch" "--dangerously-bypass-approvals-and-sandbox" \
     "codex launch must not bypass the profile-driven sandbox and approval policy"
   pass "codex receives --model and model_reasoning_effort profile flags"
 }
 
+test_codex_signal_setup_migrates_existing_status_log() {
+  local rec id out status expected
+  id=profile-codex-migrate-z3
+  rec=$(make_spawn_case profile-codex-migrate codex "$id")
+  read_case_record "$rec"
+  expected="working: existing event before codex respawn"
+  printf '%s\n' "$expected" > "$HOME_DIR/state/$id.status"
+
+  set +e
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" 2>&1); status=$?
+  set -e
+
+  expect_code 0 "$status" "codex spawn should migrate an existing public status log"
+  assert_codex_signal_paths "$id"
+  [ "$(head -n 1 "$HOME_DIR/state/.crew-signal/$id/status")" = "$expected" ] \
+    || fail "existing public status log was not preserved in the private signal target"
+  assert_contains "$out" "spawned $id harness=codex" "codex migration spawn did not report success"
+  pass "codex signal setup migrates an existing public status log without truncating it"
+}
+
 test_codex_omits_out_of_range_max_effort() {
-  local rec id out status launch
+  local rec id out status launch expected_flags
   id=profile-codex-max-z4
   rec=$(make_spawn_case profile-codex-max codex "$id")
   read_case_record "$rec"
@@ -448,8 +539,10 @@ test_codex_omits_out_of_range_max_effort() {
   expect_code 0 "$status" "codex spawn with out-of-range max effort should omit the effort flag"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 max
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "codex --model 'gpt-5' $CODEX_PROFILE_FLAGS" \
+  expected_flags=$(codex_crewmate_profile_flags_for_id "$id")
+  assert_contains "$launch" "codex --model 'gpt-5' $expected_flags" \
     "codex launch did not preserve the model flag and profile config when max effort was omitted"
+  assert_codex_signal_paths "$id"
   assert_not_contains "$launch" "model_reasoning_effort" \
     "codex launch must omit max reasoning effort, which is above firstmate's codex ceiling of xhigh"
   assert_not_contains "$launch" "--dangerously-bypass-approvals-and-sandbox" \
@@ -464,7 +557,7 @@ test_codex_omits_out_of_range_max_effort() {
 # three sides so a later edit can neither silently drop it nor silently widen it:
 # a crewmate must carry it, a secondmate must not, and no other harness may acquire it.
 test_codex_crewmate_carries_the_pipeline_socket_network_grant() {
-  local rec ship scout out status launch
+  local rec ship scout out status launch expected_flags
   ship=profile-codex-net-ship-z20
   scout=profile-codex-net-scout-z20
   rec=$(make_spawn_case profile-codex-net codex "$ship" "$scout")
@@ -476,8 +569,12 @@ test_codex_crewmate_carries_the_pipeline_socket_network_grant() {
   launch=$(cat "$LAUNCH_LOG")
   assert_contains "$launch" "$CODEX_CREW_NETWORK_FLAG" \
     "codex ship launch dropped the sandbox network grant that reaches the no-mistakes daemon socket"
-  assert_contains "$launch" "$CODEX_PROFILE_FLAGS" \
+  expected_flags=$(codex_crewmate_profile_flags_for_id "$ship")
+  assert_contains "$launch" "$expected_flags" \
     "codex ship launch did not compose the network grant alongside the rest of the profile"
+  assert_codex_signal_paths "$ship"
+  assert_not_contains "$launch" "writable_roots=[\"$HOME_DIR/state\"]" \
+    "codex ship launch widened the filesystem grant to the whole state directory"
   assert_not_contains "$launch" "danger-full-access" \
     "the network grant must not be delivered by widening the whole sandbox"
   assert_not_contains "$launch" "--dangerously-bypass-approvals-and-sandbox" \
@@ -489,6 +586,12 @@ test_codex_crewmate_carries_the_pipeline_socket_network_grant() {
   launch=$(cat "$LAUNCH_LOG")
   assert_contains "$launch" "$CODEX_CREW_NETWORK_FLAG" \
     "codex scout launch dropped the sandbox network grant a crewmate is entitled to"
+  expected_flags=$(codex_crewmate_profile_flags_for_id "$scout")
+  assert_contains "$launch" "$expected_flags" \
+    "codex scout launch did not compose the per-task signal root alongside the rest of the profile"
+  assert_codex_signal_paths "$scout"
+  assert_not_contains "$launch" "writable_roots=[\"$HOME_DIR/state\"]" \
+    "codex scout launch widened the filesystem grant to the whole state directory"
   pass "a codex crewmate launch carries the sandbox network grant that reaches the pipeline socket"
 }
 
@@ -497,7 +600,7 @@ test_codex_crewmate_carries_the_pipeline_socket_network_grant() {
 # Pinning the omission here is what stops the grant from creeping outward to a
 # supervising session the next time this branch is edited.
 test_codex_secondmate_does_not_carry_the_crewmate_network_grant() {
-  local rec id sm out status launch
+  local rec id sm out status launch expected_flags
   id=secondmate-codex-net-z21
   rec=$(make_spawn_case secondmate-codex-net codex "$id")
   read_case_record "$rec"
@@ -509,8 +612,12 @@ test_codex_secondmate_does_not_carry_the_crewmate_network_grant() {
   expect_code 0 "$status" "secondmate codex spawn should succeed"
   assert_contains "$out" "spawned $id harness=codex kind=secondmate" "secondmate launch did not resolve codex"
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "$CODEX_SECONDMATE_PROFILE_FLAGS" \
+  expected_flags=$(codex_secondmate_profile_flags_for_id "$id")
+  assert_contains "$launch" "$expected_flags" \
     "secondmate codex launch lost the sandbox, approval, and reviewer profile overrides"
+  assert_codex_signal_paths "$id"
+  assert_not_contains "$launch" "writable_roots=[\"$HOME_DIR/state\"]" \
+    "secondmate codex launch widened the filesystem grant to the whole state directory"
   assert_not_contains "$launch" "network_access" \
     "the crewmate network grant widened to a secondmate, which supervises rather than runs the pipeline"
   pass "a codex secondmate launch omits the crewmate-only sandbox network grant"
@@ -533,18 +640,19 @@ test_non_codex_crewmate_acquires_no_sandbox_network_grant() {
     "the codex sandbox network grant leaked into a claude launch"
   assert_not_contains "$launch" "sandbox_workspace_write" \
     "codex sandbox profile overrides leaked into a claude launch"
+  assert_absent "$HOME_DIR/state/.crew-signal/$id" \
+    "non-codex spawn created a Codex signal directory"
   pass "a non-codex crewmate launch acquires no codex sandbox network grant"
 }
 
-# The grant has to stay on the launch line. Codex reads this repository's own
+# The grants have to stay on the launch line. Codex reads this repository's own
 # .codex/config.toml as configuration for any Codex session running inside this
-# trusted project - a supervising firstmate session included - so writing the grant
+# trusted project - a supervising firstmate session included - so writing a grant
 # into that file would widen it past crewmates however carefully the launch path
 # above is gated. This is the widening the launch-line tests cannot see.
-test_tracked_codex_profile_leaves_the_network_grant_to_the_launch_line() {
-  assert_no_grep 'network_access' "$ROOT/.codex/config.toml" \
-    "the crewmate network grant was written into the tracked Codex profile, which every Codex session in this repository loads"
-  pass "the tracked Codex profile leaves the crewmate network grant to the launch line"
+test_tracked_codex_profile_leaves_launch_grants_to_the_launch_line() {
+  assert_tracked_codex_profile_omits_dynamic_launch_grants "$ROOT/.codex/config.toml"
+  pass "the tracked Codex profile leaves dynamic grants to the launch line"
 }
 
 test_grok_threads_model_and_reasoning_effort() {
@@ -640,7 +748,7 @@ test_pi_threads_model_and_max_effort() {
 }
 
 test_quota_selected_default_array_reaches_spawn() {
-  local rec id quota random selected diagnostic harness model effort out status launch
+  local rec id quota random selected diagnostic harness model effort out status launch expected_flags
   id=profile-selected-default-z17
   rec=$(make_spawn_case profile-selected-default claude "$id")
   read_case_record "$rec"
@@ -668,8 +776,10 @@ JSON
   assert_contains "$diagnostic" "selection basis: quota-selected" "selection did not expose its quota basis"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5.5 high
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "codex --model 'gpt-5.5' -c 'model_reasoning_effort=\"high\"'" \
+  expected_flags=$(codex_crewmate_profile_flags_for_id "$id")
+  assert_contains "$launch" "codex --model 'gpt-5.5' -c 'model_reasoning_effort=\"high\"' $expected_flags" \
     "quota-selected default profile did not reach the concrete launch"
+  assert_codex_signal_paths "$id"
   pass "top-level default array resolves through quota selection into the real spawn path"
 }
 
@@ -689,11 +799,13 @@ test_batch_forwards_shared_profile_flags() {
   assert_contains "$out" "spawned $id2 harness=codex" "second batch task did not use shared harness"
   assert_meta_profile "$HOME_DIR/state/$id1.meta" codex gpt-5 high
   assert_meta_profile "$HOME_DIR/state/$id2.meta" codex gpt-5 high
+  assert_codex_signal_paths "$id1"
+  assert_codex_signal_paths "$id2"
   pass "batch dispatch forwards shared --harness, --model, and --effort to every pair"
 }
 
 test_active_dispatch_profile_does_not_block_secondmate_launch() {
-  local rec id sm out status
+  local rec id sm out status launch expected_flags
   id=profile-secondmate-z16
   rec=$(make_spawn_case profile-secondmate codex "$id")
   read_case_record "$rec"
@@ -707,6 +819,13 @@ test_active_dispatch_profile_does_not_block_secondmate_launch() {
   assert_contains "$out" "spawned $id harness=codex kind=secondmate" "secondmate launch did not use secondmate harness resolution"
   assert_grep "kind=secondmate" "$HOME_DIR/state/$id.meta" "secondmate meta missing kind=secondmate"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex default default
+  launch=$(cat "$LAUNCH_LOG")
+  expected_flags=$(codex_secondmate_profile_flags_for_id "$id")
+  assert_contains "$launch" "$expected_flags" \
+    "profile-exempt secondmate codex launch did not carry the per-task signal root"
+  assert_not_contains "$launch" "network_access" \
+    "profile-exempt secondmate codex launch picked up the crewmate-only network grant"
+  assert_codex_signal_paths "$id"
   pass "active crew-dispatch profile does not block secondmate launches"
 }
 
@@ -725,11 +844,12 @@ test_raw_claude_launch_with_own_settings_writes_no_overlay
 test_raw_claude_shaped_wrapper_gets_no_settings_flag
 test_claude_threads_model_and_effort
 test_codex_threads_model_and_effort
+test_codex_signal_setup_migrates_existing_status_log
 test_codex_omits_out_of_range_max_effort
 test_codex_crewmate_carries_the_pipeline_socket_network_grant
 test_codex_secondmate_does_not_carry_the_crewmate_network_grant
 test_non_codex_crewmate_acquires_no_sandbox_network_grant
-test_tracked_codex_profile_leaves_the_network_grant_to_the_launch_line
+test_tracked_codex_profile_leaves_launch_grants_to_the_launch_line
 test_grok_threads_model_and_reasoning_effort
 test_grok_omits_invalid_max_reasoning_effort
 test_grok_omits_invalid_xhigh_reasoning_effort

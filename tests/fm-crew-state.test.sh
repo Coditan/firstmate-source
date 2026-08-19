@@ -1030,6 +1030,24 @@ test_no_run_idle_secondmate_resolved_event_not_state() {
   pass "a trailing resolved: event does not corrupt state render (idle stays idle)"
 }
 
+test_turn_ended_without_status_is_distinct_unknown() {
+  reset_fakes
+  local d out
+  d=$(new_case turn-ended-no-status)
+  make_repo_on_branch "$d/wt" fm/feat-silent
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-silent.meta" "window=fm:fm-feat-silent" "worktree=$d/wt" "kind=ship"
+  : > "$d/state/feat-silent.turn-ended"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_RUNS_LIST=""
+  FM_FAKE_BUSY=0
+  out=$(run_crew_state "$d" feat-silent)
+  assert_contains "$out" "state: unknown" "turn-ended without status should remain an unknown reading"
+  assert_contains "$out" "cause: no-status-after-turn-end" "turn-ended without status did not get its own cause"
+  assert_contains "$out" "turn-end marker exists but no status event landed" "turn-ended without status detail did not explain the missing status"
+  pass "a turn-end marker without any status line has a distinct unknown cause"
+}
+
 test_dead_window_ignores_stale_status_log() {
   reset_fakes
   local d; d=$(new_case dead-window)
@@ -1497,6 +1515,21 @@ test_cause_endpoint_unreadable() {
   pass "cause endpoint-unreadable"
 }
 
+test_turn_ended_without_status_beats_dead_endpoint() {
+  reset_fakes
+  local d out
+  d=$(new_case turn-ended-dead-endpoint)
+  mkdir -p "$d/wt"
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/dead-after-turn.meta" "window=default:w1:p2" "worktree=$d/wt" "kind=scout" "backend=herdr"
+  : > "$d/state/dead-after-turn.turn-ended"
+  FM_FAKE_HERDR_MISSING=1
+  out=$(run_crew_state "$d" dead-after-turn)
+  assert_cause "$out" no-status-after-turn-end "a dead endpoint masked a turn-ended marker with no status event"
+  assert_not_contains "$out" "endpoint-unreadable" "endpoint liveness must not override the missing status event"
+  pass "turn-ended without status beats a dead endpoint"
+}
+
 test_cause_kind_skips_run_lookup() {
   reset_fakes
   local d out
@@ -1565,6 +1598,20 @@ test_cause_run_attribution_rejected() {
   out=$(run_crew_state "$d" run-rejected)
   assert_cause "$out" run-attribution-rejected "a run that was found and refused was collapsed with finding no run at all"
   pass "cause run-attribution-rejected"
+}
+
+test_cause_no_status_after_turn_end() {
+  reset_fakes
+  local d out
+  d=$(new_case cause-turn-no-status)
+  make_repo_on_branch "$d/wt" fm/feat-turn-no-status
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/turn-no-status.meta" "window=fm:fm-turn-no-status" "worktree=$d/wt" "kind=ship"
+  : > "$d/state/turn-no-status.turn-ended"
+  FM_FAKE_BUSY=0
+  out=$(run_crew_state "$d" turn-no-status)
+  assert_cause "$out" no-status-after-turn-end "a turn-end marker without a status line was collapsed with a crew whose run lookup found nothing"
+  pass "cause no-status-after-turn-end"
 }
 
 # The header records log-verb-not-a-state taking precedence over the run-lookup
@@ -1846,6 +1893,7 @@ test_no_run_idle_pane_uses_keyed_log
 test_no_run_idle_pane_paused
 test_no_run_idle_pane_custom_paused_verb
 test_no_run_idle_secondmate_resolved_event_not_state
+test_turn_ended_without_status_is_distinct_unknown
 test_dead_window_ignores_stale_status_log
 test_dead_window_still_reports_terminal_run_step
 test_dead_window_still_reports_active_run_step
@@ -1878,11 +1926,13 @@ test_cause_no_worktree_recorded
 test_cause_worktree_gone
 test_cause_no_endpoint_recorded
 test_cause_endpoint_unreadable
+test_turn_ended_without_status_beats_dead_endpoint
 test_cause_kind_skips_run_lookup
 test_cause_delivery_mode_skips_run_lookup
 test_cause_no_branch
 test_cause_no_run_attributed
 test_cause_run_attribution_rejected
+test_cause_no_status_after_turn_end
 test_cause_log_verb_not_a_state
 test_a_rejected_run_survives_a_log_verb_that_is_not_a_state
 test_degraded_classifies_as_its_own_absorb_class

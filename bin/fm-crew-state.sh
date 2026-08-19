@@ -39,6 +39,7 @@
 #     no-run-attributed         the run lookup answered and named no run for this crew
 #     run-attribution-rejected  a run WAS found and this reader refused it
 #     log-verb-not-a-state      the status log's last line carries no state verb
+#     no-status-after-turn-end  a turn-end marker exists but no status event landed
 #   degraded (could not look)
 #     run-reader-missing        git is not on PATH or no-mistakes cannot be resolved
 #     no-bounding-mechanism     no timeout, gtimeout or perl, so the call was never made
@@ -165,6 +166,7 @@ ID=${1:-}
 
 META="$STATE/$ID.meta"
 LOG="$STATE/$ID.status"
+TURNEND="$STATE/$ID.turn-ended"
 NM_TIMEOUT=${FM_CREW_STATE_NM_TIMEOUT:-10}
 case "$NM_TIMEOUT" in ''|*[!0-9]*) NM_TIMEOUT=10 ;; esac
 # How many of the most recent `no-mistakes runs` rows the cross-branch fallback
@@ -893,15 +895,18 @@ fi
 # is no run to consult, so a dead/unreadable target means the crew is gone: report
 # unknown rather than trusting a possibly-stale status log as the current state.
 [ -n "$BACKEND_TARGET" ] || emit_unknown no-endpoint-recorded "no backend target recorded"
+if ! fm_backend_session_cli_available "$TASK_BACKEND"; then
+  emit_degraded missing-dependency endpoint-reader-missing \
+    "$TASK_BACKEND CLI not on PATH: endpoint $BACKEND_TARGET cannot be read"
+fi
+if [ -e "$TURNEND" ]; then
+  emit_unknown no-status-after-turn-end "turn-end marker exists but no status event landed: $TURNEND${SEP}$UNKNOWN_REASON"
+fi
 # An unreadable endpoint means the crew is gone ONLY if the tool that reads
 # endpoints is installed. Without it, `fm_backend_capture` fails identically for
 # a live crew and a dead one, and answering "gone" would send firstmate into
 # stuck-crewmate recovery against a perfectly healthy worker.
 if ! pane_readable "$BACKEND_TARGET"; then
-  if ! fm_backend_session_cli_available "$TASK_BACKEND"; then
-    emit_degraded missing-dependency endpoint-reader-missing \
-      "$TASK_BACKEND CLI not on PATH: endpoint $BACKEND_TARGET cannot be read"
-  fi
   emit_unknown endpoint-unreadable "backend target gone: $BACKEND_TARGET"
 fi
 
