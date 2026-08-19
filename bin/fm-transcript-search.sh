@@ -17,12 +17,12 @@
 #
 # THE STORE IS COMPRESSED, SO PLAIN `grep -r` NO LONGER READS IT. It matches
 # nothing here and exits as though the archive were empty, which is the one
-# answer this archive must never give. The scan therefore runs through ripgrep's
-# `-z`, and `rg` is a hard requirement: a missing one is reported as a missing
-# tool, never as a search that found nothing. Anyone who would rather not use
-# this wrapper runs `rg -z <pattern>` over the archive directory directly and
-# gets the same content scan. FM_RG and FM_ZSTD name the two binaries on a
-# vessel where they sit elsewhere.
+# answer this archive must never give. The scan therefore runs through ripgrep
+# with a zstd preprocessor, and `rg` is a hard requirement: a missing one is
+# reported as a missing tool, never as a search that found nothing. Anyone who
+# would rather not use this wrapper runs `rg -z <pattern>` over the archive
+# directory directly and gets the same content scan. FM_RG names ripgrep and
+# FM_ZSTD names the compressor used for both the scan and session headers.
 #
 # The archive is this home's private material and never travels: it resolves
 # under $FM_HOME/data/transcripts, so a secondmate home searches its own store
@@ -89,6 +89,7 @@ fi
 # caller and only one of them is true.
 RG="${FM_RG:-rg}"
 ZSTD="${FM_ZSTD:-zstd}"
+PREPROCESSOR="$SCRIPT_DIR/fm-transcript-zcat.sh"
 for tool in "$RG" "$ZSTD"; do
   command -v "$tool" >/dev/null 2>&1 && continue
   echo "$tool is not installed, and the session store is compressed: this search cannot run." >&2
@@ -96,6 +97,7 @@ for tool in "$RG" "$ZSTD"; do
   echo "Refusing rather than reporting no matches over an archive that was never read." >&2
   exit 2
 done
+export FM_ZSTD="$ZSTD"
 # A user ripgrep config can change what a search means - case folding, column
 # limits, skipped files - and this store's answers must not depend on it.
 export RIPGREP_CONFIG_PATH=
@@ -134,22 +136,25 @@ echo "# searching $n session files under: ${roots[*]}" >&2
 # no-match to success so xargs can keep scanning, while preserving scanner
 # failures. The final output then decides whether the completed search matched.
 if [ "$files_only" = 1 ]; then
+  # shellcheck disable=SC2016
   xargs -a "$filelist" -d '\n' bash -c '
-    rg=$1; pattern=$2; shift 2
-    "$rg" -lz -e "$pattern" -- "$@"
+    rg=$1; preprocessor=$2; pattern=$3; shift 3
+    "$rg" -l --pre "$preprocessor" --pre-glob "*.zst" -e "$pattern" -- "$@"
     case $? in 0|1) exit 0;; *) exit 255;; esac
-  ' _ "$RG" "$q" |
+  ' _ "$RG" "$PREPROCESSOR" "$q" |
   awk 'NF { print; found=1 } END { exit(found ? 0 : 1) }'
   statuses=("${PIPESTATUS[@]}")
   [ "${statuses[0]}" -eq 0 ] || exit 2
   exit "${statuses[1]}"
 fi
 
+# shellcheck disable=SC2016
 xargs -a "$filelist" -d '\n' bash -c '
-  rg=$1; context=$2; pattern=$3; shift 3
-  "$rg" -z -n -H --null --no-heading --color never -C "$context" -e "$pattern" -- "$@"
+  rg=$1; preprocessor=$2; context=$3; pattern=$4; shift 4
+  "$rg" --pre "$preprocessor" --pre-glob "*.zst" -n -H --null --no-heading \
+    --color never -C "$context" -e "$pattern" -- "$@"
   case $? in 0|1) exit 0;; *) exit 255;; esac
-' _ "$RG" "$ctx" "$q" |
+' _ "$RG" "$PREPROCESSOR" "$ctx" "$q" |
 awk -F'\0' -v arch="$ARCHIVE" -v zstd="$ZSTD" '
   /^--$/ { print "  --"; next }
   NF < 2 { next }

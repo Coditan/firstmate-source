@@ -478,6 +478,34 @@ test_search_reads_the_compressed_store() {
   pass "search reads the compressed store and still reports the session header with the hit"
 }
 
+test_search_uses_the_selected_compressor_and_reads_plain_sessions() {
+  local home out real_zstd wrapper marker plain
+  home=$(setup_fixture_home)
+  real_zstd=$(command -v zstd)
+  wrapper="$TMP/recording-zstd"
+  marker="$TMP/zstd-ran"
+  cat >"$wrapper" <<'EOF'
+#!/usr/bin/env bash
+: >"$FM_TEST_ZSTD_MARKER"
+exec "$FM_TEST_REAL_ZSTD" "$@"
+EOF
+  chmod +x "$wrapper"
+  out=$(FM_HOME="$home" FM_ZSTD="$wrapper" FM_TEST_ZSTD_MARKER="$marker" \
+        FM_TEST_REAL_ZSTD="$real_zstd" "$SEARCH" 'tugboat host' 2>/dev/null) \
+    || fail 'search failed through the selected compressor'
+  assert_contains "$out" 'tugboat host' 'the selected compressor must return the compressed hit'
+  assert_present "$marker" 'the selected compressor must perform the content scan'
+
+  plain="$home/data/transcripts/claude-redacted/migration.txt"
+  printf '# cwd      /home/x/migration\n# span     2026-08-18T10:00:00Z\nplain migration session\n' >"$plain"
+  out=$(FM_HOME="$home" FM_ZSTD="$wrapper" FM_TEST_ZSTD_MARKER="$marker" \
+        FM_TEST_REAL_ZSTD="$real_zstd" "$SEARCH" 'plain migration session' 2>/dev/null) \
+    || fail 'search did not read a plain session during migration'
+  assert_contains "$out" 'plain migration session' \
+    'a plain migration-era session must bypass the compressor and remain searchable'
+  pass "the selected compressor scans compressed sessions without hiding plain migration files"
+}
+
 # The reason the documentation had to change, stated as a test rather than as a
 # claim: over this store the old documented command answers "nothing here" and
 # exits as though that were true. Worse than nothing, it half answers - the
@@ -581,6 +609,7 @@ test_search_resolves_the_archive_from_fm_home
 test_search_narrows_the_file_set_by_index
 test_search_reports_a_missing_archive_rather_than_no_matches
 test_search_reads_the_compressed_store
+test_search_uses_the_selected_compressor_and_reads_plain_sessions
 test_plain_grep_does_not_read_the_sessions
 test_search_status_says_matched_or_not_matched
 test_search_reports_scanner_failures_as_errors

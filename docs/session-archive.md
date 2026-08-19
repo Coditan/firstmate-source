@@ -54,7 +54,7 @@ rg -z 'pattern' "$FM_HOME/data/transcripts"
 ```
 
 `rg` and `zstd` are therefore hard requirements of a search here, and the wrapper reports a missing one as a missing tool rather than as a search that found nothing.
-`FM_RG` and `FM_ZSTD` name the binaries on a vessel where they sit elsewhere.
+`FM_RG` names ripgrep and `FM_ZSTD` names the compressor the wrapper uses to scan sessions and read their headers when those binaries sit elsewhere.
 
 ## Rebuild
 
