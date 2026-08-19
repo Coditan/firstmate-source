@@ -508,6 +508,18 @@ assert_present() {
 # fm_skill_frontmatter <skill-dir>: print the YAML frontmatter block only, from
 # the opening `---` on line 1 to the next `---`, so a column-0 key anywhere in
 # the SKILL.md body can never satisfy a frontmatter probe.
+# fm_installed_skill_dirs: print the directory name of every skill this
+# repository INSTALLED from upstream rather than authored, one per line, read
+# from the installer's own manifest. Derived from skills-lock.json on purpose:
+# a hand-maintained list of installed skills goes stale the moment someone runs
+# the installer again, which is the same silent-staleness failure the checks
+# that use it exist to catch. Prints nothing when no manifest exists.
+fm_installed_skill_dirs() {
+  local lock="$ROOT/skills-lock.json"
+  [ -f "$lock" ] || return 0
+  sed -n 's|.*"skillPath"[[:space:]]*:[[:space:]]*"\.agents/skills/\([^/"]*\)/SKILL\.md".*|\1|p' "$lock"
+}
+
 fm_skill_frontmatter() {
   awk '
     NR == 1 { if ($0 !~ /^---[[:space:]]*$/) exit; next }

@@ -51,7 +51,7 @@ Verify credentials only through their effect, such as a successful authenticated
 Load `secrets-handling` for safe mechanics, dangerous-command alternatives, and exposure response.
 
 You may maintain this repo's private operational state directly.
-Shared tracked material is `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.codex/`, `.github/workflows/`, `bin/`, `roles/`, `.agents/skills/`, and public `skills/`.
+Shared tracked material is `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.codex/`, `.github/workflows/`, `bin/`, `roles/`, `.agents/skills/`, `skills-lock.json`, and public `skills/`.
 When any crewmate is live, delegate changes to shared tracked material rather than competing with supervision; when the fleet is empty, firstmate may change it directly.
 This repo is a shared template, while `.env`, `data/`, `state/`, `config/`, `projects/`, `.local/axi/`, `.no-mistakes/`, and `graphify-out/` are captain-private and gitignored.
 Ship shared tracked changes through this repo's no-mistakes pipeline and PR path, with the same merge authority as any other project.
@@ -509,6 +509,8 @@ These skills are not captain-invocable; load them only at their precise triggers
 - `fmx-respond` - load on an `x-mention <request_id>` `check:` wake to handle the mention, on an `x-mode-error ...` `check:` wake to report the X-mode configuration blocker, and on any milestone or terminal wake for an X-mode-linked task before posting its completion follow-up; relevant only when X mode is on.
 - `firstmate-codexapp` - load before coordinating a visible Codex Desktop thread, evaluating a Codex App backend request, or reconciling Codex Desktop host-tool smoke evidence for Firstmate work.
 - `firstmate-coding-guidelines` - load before changing firstmate's shared, tracked material, as defined by section 1's list, whether editing directly or briefing a crewmate for a firstmate-repo task.
+- `axi` - load before building, modifying, or reviewing any agent-facing CLI; it is the official AXI skill, installed verbatim from upstream and never edited here, and `docs/axi-skill-provenance.md` carries its licence notice and update route.
+- `axi-tool-intake` - load before filing, scoping, or briefing work that would build, adopt, derive, or extend an agent-ergonomic CLI for this fleet, and before telling the captain that none exists for a domain; it carries only what the AXI specification does not, and `axi` remains the sole owner of the design contract.
 
 ## 14. X mode
 
