@@ -256,7 +256,7 @@ The path's worker, automated gates, and captain approval remain authoritative:
 Delivery mode and `yolo` are orthogonal.
 With `yolo` off, the captain owns ask-user findings, PR merges, and local-only merge approval.
 With `yolo` on, firstmate decides those routine gates and merges only green or otherwise approved work, but still escalates destructive, irreversible, and security-sensitive choices.
-In this organisation, while the current plan does not permit forge enforcement, required checks are reports and not controls: nothing refuses a red merge.
+Since the captain chose an ungated fleet on 2026-08-17, required checks in this organisation are reports and not controls while the current plan does not permit forge enforcement: nothing refuses a red merge.
 The replacement control is that the captain or firstmate reads every required check against the pull request's head commit before merging; do not trust a whole-branch aggregate view, because it can report superseded failures as current.
 If the plan changes or the fleet moves to a forge that enforces required checks, remove this temporary ungated-fleet statement here and update the GitHub audit note that points at it.
 Never merge a red PR.
