@@ -36,9 +36,10 @@ record shape and refuses before writing anything when the shape disagrees with
 found no input files. An empty archive is never a silent success here.
 
 THE STORE IS COMPRESSED, AND A FULL CONTENT SCAN IS STILL THE INDEX. Each
-session is written as one zstd-compressed file, `<session>.txt.zst`, because
-ripgrep reads zstd directly with `-z`: the whole store is scanned by content on
-every search and no second artefact exists that could disagree with it. An
+session is written as one zstd-compressed file, `<session>.txt.zst`, and the
+search decompresses every one of them into grep: the whole store is scanned by
+content on every search and no second artefact exists that could disagree with
+it. An
 inverted index is still forbidden here, for the reason it always was - it can go
 stale silently.
 Compression cannot, because a wrong decompression is an error and not a wrong
@@ -145,9 +146,9 @@ def scan(text, pats):
 
 # ---------------------------------------------------------------- storage
 
-# One session, one compressed file. The extension is what makes the store
-# searchable without a wrapper: ripgrep decides how to read a file from it, so
-# `.txt.zst` is read as text and a plain `.txt` still left in the store is too.
+# One session, one compressed file. The extension is what tells a reader how to
+# open it, so `.txt.zst` is decompressed and a plain `.txt` still left in the
+# store from an older build is read as it is.
 SUFFIX = '.txt.zst'
 PLAIN_SUFFIX = '.txt'
 DEFAULT_LEVEL = 3

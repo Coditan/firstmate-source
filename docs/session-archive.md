@@ -39,7 +39,7 @@ bin/fm-transcript-search.sh 'pattern' --files-only
 ```
 
 **A full content scan is the index.**
-The archive is UTF-8 text laid out one file per session, and a scan of the whole store was measured at 0.63 to 0.92 s over the compressed 48.9 MB on 2026-08-18, so no inverted index exists and none should be added.
+The archive is UTF-8 text laid out one file per session, and a scan of the whole store was measured at 1.44 to 1.48 s over the compressed 48.9 MB on 2026-08-19, so no inverted index exists and none should be added.
 An index is a component that can be silently out of date, which is exactly the failure this archive was built against.
 Compression does not reintroduce that failure and is why it was worth doing: the compressed file is the content, not a summary of it, and a decompression that goes wrong is an error rather than a wrong answer.
 `_index.tsv` is not a search index: it narrows the file set before the scan runs, and only when `--since` or `--cwd` asks it to.
@@ -47,15 +47,27 @@ Compression does not reintroduce that failure and is why it was worth doing: the
 **Plain `grep -r` no longer reads this archive.**
 It matches nothing in a compressed session and exits reporting no matches, over an archive that is full - the same silent emptiness the whole design refuses, arriving through the documentation instead of through the reader.
 It is worse than wholly blind: `_index.tsv` is the one plain file left, so a phrase that happens to sit in its first-user-message column still matches, and the blindness looks selective rather than total.
-Anyone who wants the raw tool rather than the wrapper uses ripgrep's own decompressing scan, which reads exactly what the wrapper reads:
+Anyone who wants the raw tools rather than the wrapper reads a session exactly as the wrapper does:
 
 ```sh
-rg -z 'pattern' "$FM_HOME/data/transcripts"
+zstd -dcq some-session.txt.zst | grep 'pattern'
 ```
 
-`rg` and `zstd` are therefore hard requirements of a search here, and the wrapper reports a missing one as a missing tool rather than as a search that found nothing.
-`FM_RG` may name ripgrep elsewhere, but search requires `zstd` on PATH and deliberately has no `FM_ZSTD` override.
-A single compressor knob that governed only part of the search process repeatedly let its prerequisite check pass before the scan read nothing or the session header disappeared, so the partial override was withdrawn rather than allowed to remain misleading.
+### The tools a search requires
+
+`zstd`, `grep` and `xargs`, on `PATH`.
+That is the whole list, and the wrapper reports a missing one as a missing tool rather than as a search that found nothing.
+No override names any of them, because a knob governing only part of the process twice passed its own prerequisite check before the scan read nothing.
+
+The list is short deliberately.
+An earlier version scanned with ripgrep and `-z`; it was withdrawn on 2026-08-19 on measurement rather than taste.
+Ripgrep behaved differently on this seat and on the CI runner - which flags the build accepted, whether it could decompress at all - and twice reported an empty result over a full archive.
+A search tool that answers differently depending on the machine it runs on is the same silent disagreement this archive exists to refuse, so the dependency was removed rather than pinned to a version.
+`zstd` is already required to build the store, and `grep` and `xargs` are on any machine that can run this repository's tests at all.
+
+**A scan that stops reading early is ordinary and must never be read as a failure.**
+`grep` stops as soon as it can answer, the decompressor feeding it then dies of a broken pipe, and an implementation that counts that as a scanner error returns nothing over a full archive: measured on 2026-08-19 at 0 matching sessions where 75 were expected, with every test still passing, because a one-session fixture is too small to make anything stop early.
+`tests/fm-transcript-archive.test.sh` now plants that case - a dozen sessions with the match at the top and a long tail behind it - and requires all twelve back.
 
 ## Rebuild
 
@@ -137,7 +149,7 @@ Codex                418.7 MB        143.6 MB        21.7 MB    2.9:1        37
 combined            1426.3 MB        260.2 MB        48.9 MB    5.5:1       110
 sessions                                2273
 full rebuild + verification                          ~129 s
-full-content search over the store, three queries    0.63 - 0.92 s
+full-content search over the store, whole store      1.44 - 1.48 s
 verification residual hits                              0
 ```
 

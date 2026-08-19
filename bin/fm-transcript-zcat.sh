@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# ripgrep --pre adapter for compressed and retained plain session files.
+# fm-transcript-zcat.sh - read one session file from the archive, whatever
+# shape it is in: compressed sessions come back through zstd, and a plain one
+# left from a store built before compression comes back as it is.
+#
+# One owner for that decision, because the scan and the session-header read
+# must never disagree about how a file is read.
 set -uo pipefail
 
 case $1 in

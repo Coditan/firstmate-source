@@ -7,8 +7,8 @@
 # The archive is rebuilt from the raw stores every time, then the detector is
 # re-run against the output and required to return zero.
 #
-# The store is written compressed, one zstd file per session, and is searched
-# through the decompressor by bin/fm-transcript-search.sh. `zstd` is therefore a
+# The store is written compressed, one zstd file per session, and is searched by
+# bin/fm-transcript-search.sh, which decompresses each session into grep. `zstd` is therefore a
 # hard requirement of a rebuild: the reducer refuses rather than leaving a store
 # that is half compressed and half plain. A rebuild also compresses whatever
 # plain session files it finds already in the store, so an archive built before
@@ -133,9 +133,9 @@ Every claim made from this archive travels with both bounds.
 
 The sessions are zstd-compressed, one file each. **Plain `grep -r` does not read
 them: it finds nothing here and says so as if the archive were empty.** Use the
-wrapper, or ripgrep's own decompressing search if you want the raw tool:
+wrapper, or read a session the same way it does if you want the raw tools:
 
-    rg -z 'pattern' .
+    zstd -dcq some-session.txt.zst | grep 'pattern'
 
 A full scan of the content is still what answers every query, so there is no
 index here and none is to be added.
@@ -148,12 +148,12 @@ Full detail: `docs/session-archive.md` in the firstmate repository.
 EOF
   echo "== wrote $ARCHIVE/README.md (the honest bound, on the artefact)"
 elif grep -qE 'Plain .?grep -r' "$ARCHIVE/README.md" 2>/dev/null &&
-     ! grep -q 'rg -z' "$ARCHIVE/README.md" 2>/dev/null; then
+     ! grep -q 'zstd -dcq' "$ARCHIVE/README.md" 2>/dev/null; then
   # This README predates compression and still tells its reader that plain
   # grep works here. It does not: it returns nothing, with no error, over a
   # full archive. The file is not overwritten because someone may have written
   # into it, so the correction is named instead of made.
   echo "WARNING: $ARCHIVE/README.md still points readers at plain grep -r, which reads" >&2
   echo "         nothing from a compressed store and reports no error while doing it." >&2
-  echo "         Correct that sentence: the wrapper, or rg -z, is what searches this archive." >&2
+  echo "         Correct that sentence: the wrapper, or zstd piped into grep, is what reads this archive." >&2
 fi

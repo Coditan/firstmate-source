@@ -17,15 +17,25 @@
 #
 # THE STORE IS COMPRESSED, SO PLAIN `grep -r` NO LONGER READS IT. It matches
 # nothing here and exits as though the archive were empty, which is the one
-# answer this archive must never give. The scan therefore runs through ripgrep
-# with zstd as its explicit preprocessor. `rg` and `zstd` on PATH are hard
-# requirements: a missing one is reported as a missing tool, never as a search
-# that found nothing. Anyone who
-# would rather not use this wrapper runs `rg -z <pattern>` over the archive
-# directory directly and gets the same content scan. FM_RG may name ripgrep
-# elsewhere. Search deliberately has no FM_ZSTD override: one compressor knob
-# governing only part of the process repeatedly passed its prerequisite check
-# before the scan read nothing or the session header disappeared.
+# answer this archive must never give. The scan therefore decompresses each
+# session and pipes it into grep, one file at a time, spread across the
+# machine's cores.
+#
+# THE TOOLS THIS SEARCH REQUIRES ARE `zstd`, `grep` and `xargs`, all on PATH,
+# and a missing one is reported as a missing tool rather than as a search that
+# found nothing. That list is deliberately short. An earlier version scanned
+# with ripgrep, whose behaviour differed from machine to machine - which flags
+# its build supported, whether it could decompress at all - and twice reported
+# an empty result over a full archive because of it. A search tool that answers
+# differently depending on the machine it runs on is the same silent
+# disagreement this archive exists to refuse, so the dependency is gone rather
+# than pinned. No override names any of these tools either, for the same reason:
+# one knob governing only part of the process twice passed its own prerequisite
+# check before the scan read nothing.
+#
+# Anyone who would rather not use this wrapper reads a session the same way it
+# does - `zstd -dcq <session>.txt.zst | grep <pattern>` - and gets the same
+# content scan.
 #
 # The archive is this home's private material and never travels: it resolves
 # under $FM_HOME/data/transcripts, so a secondmate home searches its own store
@@ -87,22 +97,25 @@ if [ "$present" -eq 0 ]; then
   exit 2
 fi
 
-# The searcher is named before anything else is done, because "no matches" and
+# The tools are named before anything else is done, because "no matches" and
 # "the tool that reads this store is not installed" are the same output to a
 # caller and only one of them is true.
-RG="${FM_RG:-rg}"
 ZSTD=zstd
-PREPROCESSOR="$SCRIPT_DIR/fm-transcript-zcat.sh"
-for tool in "$RG" "$ZSTD"; do
+READER="$SCRIPT_DIR/fm-transcript-zcat.sh"
+for tool in "$ZSTD" grep xargs; do
   command -v "$tool" >/dev/null 2>&1 && continue
   echo "$tool is not installed, and the session store is compressed: this search cannot run." >&2
-  echo "Install ripgrep and zstd (apt install ripgrep zstd), or point FM_RG at ripgrep." >&2
+  echo "Install zstd (apt install zstd); grep and xargs are expected on any machine that runs this." >&2
   echo "Refusing rather than reporting no matches over an archive that was never read." >&2
   exit 2
 done
-# A user ripgrep config can change what a search means - case folding, column
-# limits, skipped files - and this store's answers must not depend on it.
-export RIPGREP_CONFIG_PATH=
+[ -x "$READER" ] || { echo "missing session reader: $READER" >&2; exit 2; }
+
+# One scan per core. A machine that will not say how many it has gets a modest
+# default rather than an unbounded fan-out.
+jobs=$(nproc 2>/dev/null || echo 4)
+case "$jobs" in ''|*[!0-9]*) jobs=4;; esac
+[ "$jobs" -ge 1 ] || jobs=1
 
 # narrow the file set from the per-source index when asked
 filelist="$(mktemp)"; trap 'rm -f "$filelist"' EXIT
@@ -134,46 +147,62 @@ n=$(wc -l < "$filelist")
 echo "# searching $n session files under: ${roots[*]}" >&2
 [ "$n" -gt 0 ] || exit 1
 
-# The file set is handed over in batches. Each batch normalises a genuine
-# no-match to success so xargs can keep scanning, while preserving scanner
-# failures. The final output then decides whether the completed search matched.
+# The file set is handed over in batches, spread across cores. Two rules hold
+# inside a batch, and both were learned from a defect rather than designed in.
+#
+# A reader killed by SIGPIPE is not a failure. grep stops reading the moment it
+# can answer - always with -q, sometimes with -C - and the decompressor feeding
+# it then dies of a broken pipe. Treating that as a scanner error is what once
+# returned 0 matching sessions where 75 were expected, on a full archive, so
+# status 141 counts as success here while any other reader failure is real.
+#
+# A genuine no-match must not stop the scan. It is normalised to success inside
+# the batch so xargs keeps going, and what the completed search actually found
+# decides the exit status at the end.
 if [ "$files_only" = 1 ]; then
   # shellcheck disable=SC2016
-  xargs -a "$filelist" -d '\n' bash -c '
-    rg=$1; preprocessor=$2; pattern=$3; shift 3
+  xargs -a "$filelist" -d '\n' -P "$jobs" -n 16 bash -c '
+    reader=$1; pattern=$2; shift 2
     for path do
-      "$preprocessor" "$path" | "$rg" -q -e "$pattern"
+      "$reader" "$path" | grep -qE -e "$pattern"
       statuses=("${PIPESTATUS[@]}")
-      [ "${statuses[0]}" -eq 0 ] || exit 255
       case ${statuses[1]} in
         0) printf "%s\n" "$path" ;;
         1) ;;
         *) exit 255 ;;
       esac
+      case ${statuses[0]} in
+        0|141) ;;
+        *) exit 255 ;;
+      esac
     done
-  ' _ "$RG" "$PREPROCESSOR" "$q" |
+  ' _ "$READER" "$q" |
+  sort |
   awk 'NF { print; found=1 } END { exit(found ? 0 : 1) }'
   statuses=("${PIPESTATUS[@]}")
   [ "${statuses[0]}" -eq 0 ] || exit 2
-  exit "${statuses[1]}"
+  exit "${statuses[2]}"
 fi
 
+# Every emitted line carries its own session path, including the separators
+# between context groups, so parallel batches cannot misattribute a line. The
+# stable sort then gathers each session's lines back together - equal keys keep
+# their arrival order, so a session's own lines stay in file order - and the
+# reader below prints one header per session.
 # shellcheck disable=SC2016
-xargs -a "$filelist" -d '\n' bash -c '
-  rg=$1; preprocessor=$2; context=$3; pattern=$4; shift 4
+xargs -a "$filelist" -d '\n' -P "$jobs" -n 16 bash -c '
+  reader=$1; context=$2; pattern=$3; shift 3
   for path do
-    "$preprocessor" "$path" |
-      "$rg" -n --no-heading --color never -C "$context" -e "$pattern" |
-      awk -v path="$path" '\''
-        /^--$/ { print; next }
-        { printf "%c%s%c%s\n", 28, path, 28, $0 }
-      '\''
+    "$reader" "$path" |
+      grep -nE -C "$context" -e "$pattern" |
+      awk -v path="$path" '\''{ printf "%c%s%c%s\n", 28, path, 28, $0 }'\''
     statuses=("${PIPESTATUS[@]}")
-    [ "${statuses[0]}" -eq 0 ] || exit 255
     case ${statuses[1]} in 0|1) ;; *) exit 255;; esac
+    case ${statuses[0]} in 0|141) ;; *) exit 255;; esac
     [ "${statuses[2]}" -eq 0 ] || exit 255
   done
-' _ "$RG" "$PREPROCESSOR" "$ctx" "$q" |
+' _ "$READER" "$ctx" "$q" |
+sort -s -t "$(printf '\034')" -k2,2 |
 awk -v arch="$ARCHIVE" -v zstd="$ZSTD" '
   function shell_quote(s, out, i, c) {
     out="\""
@@ -184,7 +213,6 @@ awk -v arch="$ARCHIVE" -v zstd="$ZSTD" '
     }
     return out "\""
   }
-  /^--$/ { print "  --"; next }
   substr($0, 1, 1) != sprintf("%c", 28) { next }
   {
     record=substr($0, 2)
@@ -206,9 +234,10 @@ awk -v arch="$ARCHIVE" -v zstd="$ZSTD" '
       last=path
       found=1
     }
-    print "  " rest
+    if (rest == "--") print "  --"
+    else print "  " rest
   }
   END { exit(found ? 0 : 1) }'
 statuses=("${PIPESTATUS[@]}")
 [ "${statuses[0]}" -eq 0 ] || exit 2
-exit "${statuses[1]}"
+exit "${statuses[2]}"

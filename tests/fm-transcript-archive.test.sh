@@ -511,30 +511,70 @@ test_search_reads_the_compressed_store() {
   pass "search reads the compressed store and still reports the session header with the hit"
 }
 
-test_search_does_not_depend_on_ripgrep_compression_flags() {
-  local home out wrapper real_rg
+# The case that broke twice in CI was a machine whose ripgrep did not behave
+# like this one's. The search no longer uses ripgrep at all, and that is proven
+# by running it on a PATH where ripgrep genuinely cannot be resolved - not by
+# stubbing a flag, which is what let the defect through the previous two rounds.
+# THE CASE EVERY OTHER FIXTURE MISSED. A scan that stops reading as soon as it
+# can answer kills the decompressor feeding it with SIGPIPE. Treating that
+# ordinary event as a scanner failure returned 0 matching sessions where 75 were
+# expected, over a full archive, and no test saw it: a one-session fixture with
+# one match near the end fits in the pipe buffer, so nothing ever short-circuits.
+# This fixture puts the match at the TOP of each session and a long tail behind
+# it, which is what forces the reader to stop early while the decompressor is
+# still writing. If the defect returns, this is what fails.
+test_a_scan_that_stops_early_still_reports_every_session() {
+  local store i out rc=0 count expected=12
+  store="$TMP/early-stop/claude-redacted"
+  rm -rf "$TMP/early-stop"
+  mkdir -p "$store"
+  for i in $(seq 1 "$expected"); do
+    {
+      printf '# session big%s.jsonl\n# cwd      /home/x/p%s\n' "$i" "$i"
+      printf '# span     2026-08-18 10:00:00 .. 2026-08-18 10:05:00\n\n'
+      printf '    the sought phrase sits near the top of this session\n'
+      yes '    a long tail that keeps the decompressor writing well past the match' |
+        head -20000
+    } | zstd -q -3 -o "$store/big$i.txt.zst"
+  done
+
+  out=$(FM_TRANSCRIPT_ARCHIVE="$TMP/early-stop" "$SEARCH" 'sought phrase' --files-only 2>/dev/null) || rc=$?
+  [ "$rc" -eq 0 ] || fail "a search matching every session must exit 0, got $rc"
+  count=$(printf '%s\n' "$out" | grep -c 'big[0-9]*\.txt\.zst')
+  [ "$count" -eq "$expected" ] \
+    || fail "--files-only reported $count of $expected sessions; a scan that stops early lost the rest"
+
+  rc=0
+  out=$(FM_TRANSCRIPT_ARCHIVE="$TMP/early-stop" "$SEARCH" 'sought phrase' -C 1 2>/dev/null) || rc=$?
+  [ "$rc" -eq 0 ] || fail "the context path must exit 0 when every session matched, got $rc"
+  count=$(printf '%s\n' "$out" | grep -c '^=== ')
+  [ "$count" -eq "$expected" ] \
+    || fail "the context path reported $count of $expected sessions"
+  pass "every session is reported when the scan stops reading each one early"
+}
+
+test_search_works_on_a_machine_without_ripgrep() {
+  local home out bindir tool
   home=$(setup_fixture_home)
-  wrapper="$TMP/rg-without-z"
-  real_rg=$(command -v rg)
-  # Model the older runner ripgrep that made --pre return no hits, as well as a
-  # build without implicit -z decompression. The wrapper's public result must
-  # come from the explicit zstd pipeline supported by both versions.
-  cat >"$wrapper" <<'EOF'
-#!/usr/bin/env bash
-for arg in "$@"; do
-  case "$arg" in
-    -z|-*z*|--pre) exit 1 ;;
-  esac
-done
-exec "$FM_TEST_REAL_RG" "$@"
-EOF
-  chmod +x "$wrapper"
-  out=$(FM_HOME="$home" FM_RG="$wrapper" FM_TEST_REAL_RG="$real_rg" \
-        "$SEARCH" 'tugboat host' 2>/dev/null) \
-    || fail 'search depended on ripgrep implicit decompression instead of the required zstd tool'
+  bindir="$TMP/no-rg-path"
+  rm -rf "$bindir"
+  mkdir -p "$bindir"
+  # A PATH holding exactly what the search is allowed to need, and nothing else.
+  # type -P resolves the executable itself: an interactive shell may carry a
+  # function or alias by the same name, and linking that name to itself makes a
+  # fixture that proves nothing.
+  for tool in bash sh zstd grep xargs awk sed sort find wc mktemp nproc rm cat dirname tr head; do
+    if type -P "$tool" >/dev/null 2>&1; then
+      ln -sf "$(type -P "$tool")" "$bindir/$tool"
+    fi
+  done
+  PATH="$bindir" type -P rg >/dev/null 2>&1 \
+    && fail 'the no-ripgrep fixture PATH still resolves ripgrep, so it proves nothing'
+  out=$(PATH="$bindir" FM_HOME="$home" "$SEARCH" 'tugboat host' 2>/dev/null) \
+    || fail 'search failed on a machine with no ripgrep on PATH'
   assert_contains "$out" 'tugboat host' \
-    'external zstd preprocessing must return the compressed hit'
-  pass "search does not depend on ripgrep's version-dependent compression flags"
+    'the hit must come back from a machine that has no ripgrep at all'
+  pass "search runs and finds its hit on a PATH where ripgrep cannot be resolved"
 }
 
 test_search_reads_plain_sessions_during_migration() {
@@ -599,9 +639,19 @@ test_search_reports_scanner_failures_as_errors() {
 }
 
 test_search_without_its_tool_refuses_rather_than_finding_nothing() {
-  local home out rc=0
+  local home out rc=0 bindir tool
   home=$(setup_fixture_home)
-  out=$(FM_HOME="$home" FM_RG="$TMP/no-such-rg" "$SEARCH" 'tugboat host' 2>&1) || rc=$?
+  # A PATH with everything except the decompressor: the store cannot be read,
+  # and the caller must be told that rather than told there were no matches.
+  bindir="$TMP/no-zstd-path"
+  rm -rf "$bindir"
+  mkdir -p "$bindir"
+  for tool in bash sh grep xargs awk sed sort find wc mktemp nproc rm cat dirname tr head; do
+    if type -P "$tool" >/dev/null 2>&1; then
+      ln -sf "$(type -P "$tool")" "$bindir/$tool"
+    fi
+  done
+  out=$(PATH="$bindir" FM_HOME="$home" "$SEARCH" 'tugboat host' 2>&1) || rc=$?
   [ "$rc" -eq 2 ] || fail "a missing search tool must be reported as such, got exit $rc"
   assert_contains "$out" 'not installed' 'the refusal must name the missing tool'
   case "$out" in
@@ -655,7 +705,8 @@ test_search_formatter_is_portable_to_mawk
 test_search_narrows_the_file_set_by_index
 test_search_reports_a_missing_archive_rather_than_no_matches
 test_search_reads_the_compressed_store
-test_search_does_not_depend_on_ripgrep_compression_flags
+test_search_works_on_a_machine_without_ripgrep
+test_a_scan_that_stops_early_still_reports_every_session
 test_search_reads_plain_sessions_during_migration
 test_plain_grep_does_not_read_the_sessions
 test_search_status_says_matched_or_not_matched
