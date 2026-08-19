@@ -981,6 +981,7 @@ prepare_task_signal_link() {  # <public-path> <signal-dir> <leaf>
     fi
     mv "$public" "$target" || return 1
   fi
+  [ -e "$target" ] || : > "$target" || return 1
   ln -s "$rel" "$public"
 }
 

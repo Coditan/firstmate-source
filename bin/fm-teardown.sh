@@ -665,7 +665,7 @@ current_worktree_uses_treehouse() {
 # Return a worktree/home via `treehouse return --force`, tolerating a transient or
 # stale git index.lock left by a killed crew process. See the script header.
 teardown_treehouse_return() {
-  local dir=$1 cd_dir=$2 label=$3 post_cleanup_check=${4:-} self=${5:-$ID} state_dir=${6:-$STATE}
+  local dir=$1 cd_dir=$2 label=$3 post_cleanup_check=${4:-} self=${5:-$ID} state_dir=${6:-$STATE} pre_return_cleanup=${7:-}
   local out lock attempt=0 max_retries lock_desc holder_rc
   local -a lease_args=()
 
@@ -678,6 +678,7 @@ teardown_treehouse_return() {
 
   # Capture stdout+stderr so non-lock failures stay visible and lock failures can
   # be matched by signature even when the lock file is already gone mid-check.
+  [ -z "$pre_return_cleanup" ] || "$pre_return_cleanup" "$dir" || return 1
   if out=$( ( cd "$cd_dir" && treehouse return --force ${lease_args[@]+"${lease_args[@]}"} "$dir" ) 2>&1 ); then
     [ -n "$out" ] && printf '%s\n' "$out"
     return 0
@@ -713,6 +714,7 @@ teardown_treehouse_return() {
       return "$holder_rc"
     fi
 
+    [ -z "$pre_return_cleanup" ] || "$pre_return_cleanup" "$dir" || return 1
     if out=$( ( cd "$cd_dir" && treehouse return --force ${lease_args[@]+"${lease_args[@]}"} "$dir" ) 2>&1 ); then
       [ -n "$out" ] && printf '%s\n' "$out"
       echo "teardown: $label return succeeded on retry; lock cleared on its own" >&2
@@ -755,6 +757,7 @@ teardown_treehouse_return() {
         holder_rc=$?
         return "$holder_rc"
       fi
+      [ -z "$pre_return_cleanup" ] || "$pre_return_cleanup" "$dir" || return 1
       if out=$( ( cd "$cd_dir" && treehouse return --force ${lease_args[@]+"${lease_args[@]}"} "$dir" ) 2>&1 ); then
         [ -n "$out" ] && printf '%s\n' "$out"
         echo "teardown: $label return succeeded after stale-lock cleanup" >&2
@@ -1177,8 +1180,7 @@ cleanup_firstmate_home_children() {
       validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
       require_no_other_slot_holder "$child_wt" "$child_proj" "child worktree" "$child_id" "$sub_state" || return $?
       if [ -n "$child_proj" ] && [ -d "$child_proj" ] && command -v treehouse >/dev/null 2>&1; then
-        if teardown_treehouse_return "$child_wt" "$child_proj" "child worktree" "" "$child_id" "$sub_state"; then
-          remove_task_turnend_hooks "$child_wt"
+        if teardown_treehouse_return "$child_wt" "$child_proj" "child worktree" "" "$child_id" "$sub_state" remove_task_turnend_hooks; then
           :
         else
           child_return_rc=$?
@@ -1309,8 +1311,7 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   if [ "$FORCE" != "--force" ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ]; then
     post_lock_cleanup_check=validate_worktree_teardown_safety
   fi
-  if teardown_treehouse_return "$WT" "$PROJ" "worktree" "$post_lock_cleanup_check"; then
-    remove_task_turnend_hooks "$WT"
+  if teardown_treehouse_return "$WT" "$PROJ" "worktree" "$post_lock_cleanup_check" "$ID" "$STATE" remove_task_turnend_hooks; then
     if [ "$branch" != "HEAD" ]; then
       git -C "$PROJ" branch -D "$branch" >/dev/null 2>&1 || true
     fi

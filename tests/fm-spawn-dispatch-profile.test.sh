@@ -29,7 +29,7 @@ codex_crewmate_profile_flags_for_id() {  # <task-id>
 }
 
 assert_codex_signal_paths() {  # <task-id>
-  local id=$1 status_link turn_link
+  local id=$1 status_link turn_link probe
   [ -d "$HOME_DIR/state/.crew-signal/$id" ] \
     || fail "codex spawn did not create the per-task signal directory for $id"
   [ -L "$HOME_DIR/state/$id.status" ] \
@@ -42,6 +42,14 @@ assert_codex_signal_paths() {  # <task-id>
     || fail "state/$id.status points to $status_link, not .crew-signal/$id/status"
   [ "$turn_link" = ".crew-signal/$id/turn-ended" ] \
     || fail "state/$id.turn-ended points to $turn_link, not .crew-signal/$id/turn-ended"
+  [ -f "$HOME_DIR/state/$id.status" ] \
+    || fail "state/$id.status does not have a live private signal target"
+  [ -f "$HOME_DIR/state/$id.turn-ended" ] \
+    || fail "state/$id.turn-ended does not have a live private signal target"
+  probe="done: public append reached private signal target for $id"
+  printf '%s\n' "$probe" >> "$HOME_DIR/state/$id.status"
+  [ "$(tail -n 1 "$HOME_DIR/state/.crew-signal/$id/status")" = "$probe" ] \
+    || fail "append through state/$id.status did not land in state/.crew-signal/$id/status"
 }
 
 make_spawn_fakebin() {
@@ -500,6 +508,26 @@ test_codex_threads_model_and_effort() {
   pass "codex receives --model and model_reasoning_effort profile flags"
 }
 
+test_codex_signal_setup_migrates_existing_status_log() {
+  local rec id out status expected
+  id=profile-codex-migrate-z3
+  rec=$(make_spawn_case profile-codex-migrate codex "$id")
+  read_case_record "$rec"
+  expected="working: existing event before codex respawn"
+  printf '%s\n' "$expected" > "$HOME_DIR/state/$id.status"
+
+  set +e
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" 2>&1); status=$?
+  set -e
+
+  expect_code 0 "$status" "codex spawn should migrate an existing public status log"
+  assert_codex_signal_paths "$id"
+  [ "$(head -n 1 "$HOME_DIR/state/.crew-signal/$id/status")" = "$expected" ] \
+    || fail "existing public status log was not preserved in the private signal target"
+  assert_contains "$out" "spawned $id harness=codex" "codex migration spawn did not report success"
+  pass "codex signal setup migrates an existing public status log without truncating it"
+}
+
 test_codex_omits_out_of_range_max_effort() {
   local rec id out status launch expected_flags
   id=profile-codex-max-z4
@@ -816,6 +844,7 @@ test_raw_claude_launch_with_own_settings_writes_no_overlay
 test_raw_claude_shaped_wrapper_gets_no_settings_flag
 test_claude_threads_model_and_effort
 test_codex_threads_model_and_effort
+test_codex_signal_setup_migrates_existing_status_log
 test_codex_omits_out_of_range_max_effort
 test_codex_crewmate_carries_the_pipeline_socket_network_grant
 test_codex_secondmate_does_not_carry_the_crewmate_network_grant
