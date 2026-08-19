@@ -235,7 +235,7 @@ Firstmate's skills live in two separate places with different audiences:
 - [docs/codex-status-signalling.md](docs/codex-status-signalling.md) - why Codex direct reports get a per-task writable status-signal directory, how the public status paths stay stable, and what live evidence led to the split.
 - [docs/codex-sandbox-network.md](docs/codex-sandbox-network.md) - why a Codex crewmate carries a sandbox network grant to reach the local no-mistakes daemon socket, what that whole-dimension grant admits, and why it rides the launch line rather than the tracked Codex profile.
 - [docs/gitlab-merge-watch.md](docs/gitlab-merge-watch.md) - how the merge watch follows a GitLab merge request on any instance, and the evidence behind it.
-- [docs/merge-gate-audit.md](docs/merge-gate-audit.md) - how to audit GitHub merge gates across rulesets and classic branch protection, including the current heavyliftrental fleet gate map.
+- [docs/merge-gate-audit.md](docs/merge-gate-audit.md) - how to audit GitHub merge gates across rulesets and classic branch protection, including the historical heavyliftrental fleet gate map.
 - [docs/turnend-guard.md](docs/turnend-guard.md) - the primary session's structural "no turn ends blind" backstop: verified per-harness hook mechanisms, scoping, loop safety, and fail-open tradeoffs.
 - [docs/context-reset.md](docs/context-reset.md) - the stow-then-clear context ceiling: what the watcher measures, when it resets, asks, blocks, or reports itself unenforced, and every refusal the reset tool makes.
 - [docs/wake-delivery.md](docs/wake-delivery.md) - how a queued wake becomes a model turn: the external listener, why no session holds a delivery object, and the verdict that keeps a dead listener from looking like a quiet fleet.
