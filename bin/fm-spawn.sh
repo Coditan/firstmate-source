@@ -119,8 +119,10 @@
 #     __CLAUDESETTINGS__ absolute path to the per-task Claude settings overlay; the
 #                  overlay is written ONLY when the launch command names it, and a
 #                  claude-shaped raw launch command gets --settings for it injected
-#     __CODEXCONFIG__ Codex profile overrides parsed from .codex/config.toml, plus the
-#                  crewmate-only sandbox network grant (docs/codex-sandbox-network.md)
+#     __CODEXCONFIG__ Codex profile overrides parsed from .codex/config.toml, plus
+#                  Codex launch-line grants for the per-task signal directory and
+#                  crewmate-only network access (docs/codex-status-signalling.md,
+#                  docs/codex-sandbox-network.md)
 #     __PIEXT__    absolute path to state/<task-id>.pi-ext.ts (pi turn-end extension,
 #                  written by this script; outside the worktree to avoid pi's trust gate)
 #     __PITURNEND__ absolute path to .pi/extensions/fm-primary-turnend-guard.ts in a pi secondmate home

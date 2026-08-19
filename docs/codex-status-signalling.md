@@ -62,14 +62,15 @@ The wording fix alone is still not enough, because another live refusal describe
 The runtime fix removes the external write from the normal path.
 The runtime fix also stops success from depending on which way the same reviewer happens to reason about an otherwise identical status append.
 
-## Silent no-status shape
+## Instance B, the silent no-status shape
 
-The live evidence file recorded a worse shape where a retry appeared to succeed with no output but the real `state/<id>.status` still did not exist.
+The live evidence file recorded Instance B, the worse shape where a status write reported success with no output but the real `state/<id>.status` still did not exist.
 The raw Codex transcript available for `fm-remove-gate-assumption` did not confirm that exact second status command.
 It did confirm the initial sandbox `Read-only file system` failure, the reviewer denial of the escalated status append, and a later zero-output `git status --short` command.
 So this repository records the silent write as an operator-observed live symptom, not as a raw-transcript-confirmed filesystem overlay finding.
 
 The fix still treats the class as first-order.
+The public append command remains the worker's status path, but `fm-spawn.sh` makes that public path a symlink into the per-task writable signal directory, so the write that reports success has one real writable target instead of relying on an external append or approval fallback.
 `fm-crew-state.sh` now reports `cause: no-status-after-turn-end` when a turn-end marker exists and no status event landed.
 That makes a completed turn with no status line distinguishable from a generic missing run or idle pane.
 
@@ -92,6 +93,7 @@ The Codex launch line receives only this directory as a filesystem writable root
 The worker still appends to the public path named in its brief, `state/<id>.status`.
 The write lands through the symlink into the private per-task directory that Codex is allowed to modify.
 This preserves the public status-file contract for firstmate, watcher, wake-drain, brief text, and any existing reader.
+A symlinked public status path is a fleet-wide contract change, so reviewers should judge it as a change to every reader and cleaner that touches `state/<id>.status` or `state/<id>.turn-ended`, not as a Codex-only launch detail.
 
 The successful representative probe was:
 
