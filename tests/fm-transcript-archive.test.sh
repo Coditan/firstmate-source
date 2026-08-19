@@ -715,7 +715,7 @@ test_search_reports_scanner_failures_as_errors() {
 # compressed data is exactly that, and it must never pass as a session that
 # simply held no match.
 test_search_fails_on_a_store_file_it_cannot_read() {
-  local store rc=0 out
+  local store rc=0 out size
   store="$TMP/corrupt-store/claude-redacted"
   rm -rf "$TMP/corrupt-store"
   mkdir -p "$store"
@@ -727,7 +727,25 @@ test_search_fails_on_a_store_file_it_cannot_read() {
   FM_TRANSCRIPT_ARCHIVE="$TMP/corrupt-store" "$SEARCH" 'anything at all' >/dev/null 2>&1 || rc=$?
   [ "$rc" -eq 2 ] \
     || fail "the context path must also fail on an unreadable store file, got exit $rc"
-  pass "an unreadable session file is a scanner error, not a session that held no match"
+
+  rm -f "$store/broken.txt.zst"
+  {
+    printf 'sought phrase near the top\n'
+    seq 1 10000
+  } | zstd -q -3 -o "$store/truncated.txt.zst"
+  size=$(wc -c <"$store/truncated.txt.zst")
+  truncate -s "$((size - 1))" "$store/truncated.txt.zst"
+  rc=0
+  out=$(FM_TRANSCRIPT_ARCHIVE="$TMP/corrupt-store" "$SEARCH" 'sought phrase' --files-only 2>/dev/null) || rc=$?
+  [ "$rc" -eq 2 ] \
+    || fail "a truncated matching session must be a scanner error in --files-only, got exit $rc"
+  [ -z "$out" ] \
+    || fail "a truncated matching session must not be reported as a valid match"
+  rc=0
+  FM_TRANSCRIPT_ARCHIVE="$TMP/corrupt-store" "$SEARCH" 'sought phrase' >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] \
+    || fail "the context path must reject a truncated matching session, got exit $rc"
+  pass "unreadable sessions fail whether or not their readable prefix matches"
 }
 
 test_search_without_its_tool_refuses_rather_than_finding_nothing() {

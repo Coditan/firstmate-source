@@ -158,16 +158,11 @@ echo "# searching $n session files under: ${roots[*]}" >&2
 # The file set is handed over in batches, spread across cores. Two rules hold
 # inside a batch, and both were learned from a defect rather than designed in.
 #
-# THE READER'S EXIT STATUS ONLY MEANS SOMETHING WHEN THE CONSUMER READ TO THE
-# END, and that is the whole rule. grep stops reading the moment it can answer,
-# and the decompressor feeding it then dies on the closed pipe - as signal 141
-# here, as a write error on another machine, as whatever the local zstd build
-# does. None of those say anything about the file, so when grep reports a match
-# the reader's status is not consulted. When grep read the session through and
-# found nothing, the reader had every chance to finish, so a non-zero status
-# there is a genuine failure to read the store and stays an error. This is not
-# the status being ignored, it is the status being read only where it carries
-# information.
+# EVERY SESSION IS READ THROUGH, so a non-zero reader status is always a genuine
+# failure to read the store. grep must not stop at the first match: doing so
+# closes the reader's pipe early and makes its status describe the closed pipe
+# rather than the file. Both search paths therefore consume the whole session
+# before deciding whether it matched.
 #
 # Both ways of getting this wrong have been measured on this branch. Requiring
 # the reader to exit 0 returned 0 matching sessions where 75 were expected, over
@@ -184,13 +179,15 @@ if [ "$files_only" = 1 ]; then
     reader=$1; pattern=$2; partdir=$3; shift 3
     part="$partdir/part.$$"
     for path do
-      "$reader" "$path" | grep -qaE -e "$pattern"
+      "$reader" "$path" | grep -aE -e "$pattern" >/dev/null
       statuses=("${PIPESTATUS[@]}")
       case ${statuses[1]} in
-        0) printf "%s\n" "$path" >>"$part" ;;
-        1) [ "${statuses[0]}" -eq 0 ] || exit 255 ;;
+        0) matched=1 ;;
+        1) matched=0 ;;
         *) exit 255 ;;
       esac
+      [ "${statuses[0]}" -eq 0 ] || exit 255
+      [ "$matched" -eq 0 ] || printf "%s\n" "$path" >>"$part"
     done
   ' _ "$READER" "$q" "$partdir" || exit 2
   find "$partdir" -type f -exec cat {} + 2>/dev/null |
