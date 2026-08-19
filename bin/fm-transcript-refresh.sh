@@ -64,8 +64,6 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-mkdir -p "$ARCHIVE"
-
 built=0
 for s in claude codex; do
   case "$s" in

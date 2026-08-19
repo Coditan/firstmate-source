@@ -17,12 +17,14 @@
 #
 # THE STORE IS COMPRESSED, SO PLAIN `grep -r` NO LONGER READS IT. It matches
 # nothing here and exits as though the archive were empty, which is the one
-# answer this archive must never give. The scan therefore runs through ripgrep
-# with a zstd preprocessor, and `rg` is a hard requirement: a missing one is
+# answer this archive must never give. The scan therefore runs through ripgrep's
+# `-z`, and `rg` and `zstd` on PATH are hard requirements: a missing one is
 # reported as a missing tool, never as a search that found nothing. Anyone who
 # would rather not use this wrapper runs `rg -z <pattern>` over the archive
-# directory directly and gets the same content scan. FM_RG names ripgrep and
-# FM_ZSTD names the compressor used for both the scan and session headers.
+# directory directly and gets the same content scan. FM_RG may name ripgrep
+# elsewhere. Search deliberately has no FM_ZSTD override: one compressor knob
+# governing only part of the process repeatedly passed its prerequisite check
+# before the scan read nothing or the session header disappeared.
 #
 # The archive is this home's private material and never travels: it resolves
 # under $FM_HOME/data/transcripts, so a secondmate home searches its own store
@@ -88,16 +90,14 @@ fi
 # "the tool that reads this store is not installed" are the same output to a
 # caller and only one of them is true.
 RG="${FM_RG:-rg}"
-ZSTD="${FM_ZSTD:-zstd}"
-PREPROCESSOR="$SCRIPT_DIR/fm-transcript-zcat.sh"
+ZSTD=zstd
 for tool in "$RG" "$ZSTD"; do
   command -v "$tool" >/dev/null 2>&1 && continue
   echo "$tool is not installed, and the session store is compressed: this search cannot run." >&2
-  echo "Install ripgrep and zstd (apt install ripgrep zstd), or point FM_RG and FM_ZSTD at them." >&2
+  echo "Install ripgrep and zstd (apt install ripgrep zstd), or point FM_RG at ripgrep." >&2
   echo "Refusing rather than reporting no matches over an archive that was never read." >&2
   exit 2
 done
-export FM_ZSTD="$ZSTD"
 # A user ripgrep config can change what a search means - case folding, column
 # limits, skipped files - and this store's answers must not depend on it.
 export RIPGREP_CONFIG_PATH=
@@ -138,10 +138,10 @@ echo "# searching $n session files under: ${roots[*]}" >&2
 if [ "$files_only" = 1 ]; then
   # shellcheck disable=SC2016
   xargs -a "$filelist" -d '\n' bash -c '
-    rg=$1; preprocessor=$2; pattern=$3; shift 3
-    "$rg" -l --pre "$preprocessor" --pre-glob "*.zst" -e "$pattern" -- "$@"
+    rg=$1; pattern=$2; shift 2
+    "$rg" -lz -e "$pattern" -- "$@"
     case $? in 0|1) exit 0;; *) exit 255;; esac
-  ' _ "$RG" "$PREPROCESSOR" "$q" |
+  ' _ "$RG" "$q" |
   awk 'NF { print; found=1 } END { exit(found ? 0 : 1) }'
   statuses=("${PIPESTATUS[@]}")
   [ "${statuses[0]}" -eq 0 ] || exit 2
@@ -150,12 +150,20 @@ fi
 
 # shellcheck disable=SC2016
 xargs -a "$filelist" -d '\n' bash -c '
-  rg=$1; preprocessor=$2; context=$3; pattern=$4; shift 4
-  "$rg" --pre "$preprocessor" --pre-glob "*.zst" -n -H --null --no-heading \
-    --color never -C "$context" -e "$pattern" -- "$@"
+  rg=$1; context=$2; pattern=$3; shift 3
+  "$rg" -z -n -H --null --no-heading --color never -C "$context" -e "$pattern" -- "$@"
   case $? in 0|1) exit 0;; *) exit 255;; esac
-' _ "$RG" "$PREPROCESSOR" "$ctx" "$q" |
+' _ "$RG" "$ctx" "$q" |
 awk -F'\0' -v arch="$ARCHIVE" -v zstd="$ZSTD" '
+  function shell_quote(s, out, i, c) {
+    out="\""
+    for (i=1; i<=length(s); i++) {
+      c=substr(s,i,1)
+      if (c=="\\" || c=="\"" || c=="$" || c=="`") out=out "\\" c
+      else out=out c
+    }
+    return out "\""
+  }
   /^--$/ { print "  --"; next }
   NF < 2 { next }
   {
@@ -164,9 +172,9 @@ awk -F'\0' -v arch="$ARCHIVE" -v zstd="$ZSTD" '
       # The session header is read the same way the store is: through the
       # decompressor when the file is compressed, plainly when it is not.
       if (path ~ /\.zst$/)
-        cmd=zstd " -dcq -- \"" path "\" | sed -n \"1,8p\""
+        cmd=shell_quote(zstd) " -dcq -- " shell_quote(path) " | sed -n \"1,8p\""
       else
-        cmd="sed -n \"1,8p\" \"" path "\""
+        cmd="sed -n \"1,8p\" " shell_quote(path)
       cmd = cmd " | grep -E \"^# (cwd|span)\" | sed \"s/^# *//\" | tr \"\\n\" \"|\""
       hdr=""; cmd | getline hdr; close(cmd)
       short=path; sub(arch "/", "", short)

@@ -44,10 +44,11 @@ stale silently.
 Compression cannot, because a wrong decompression is an error and not a wrong
 answer.
 
-The compressor is the `zstd` binary (FM_ZSTD overrides it). It is a hard
-requirement rather than a preference: a run that cannot compress refuses instead
-of leaving a store that is half compressed and half plain, which is exactly the
-kind of quiet disagreement this archive exists to avoid.
+The compressor is the `zstd` binary (FM_ZSTD overrides it for building and
+verifying). It is a hard requirement rather than a preference: a run that cannot
+compress refuses instead of leaving a store that is half compressed and half
+plain, which is exactly the kind of quiet disagreement this archive exists to
+avoid.
 
 Usage:
   fm-transcript-reduce.py --source claude|codex --in DIR --out DIR

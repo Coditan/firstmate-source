@@ -54,7 +54,8 @@ rg -z 'pattern' "$FM_HOME/data/transcripts"
 ```
 
 `rg` and `zstd` are therefore hard requirements of a search here, and the wrapper reports a missing one as a missing tool rather than as a search that found nothing.
-`FM_RG` names ripgrep and `FM_ZSTD` names the compressor the wrapper uses to scan sessions and read their headers when those binaries sit elsewhere.
+`FM_RG` may name ripgrep elsewhere, but search requires `zstd` on PATH and deliberately has no `FM_ZSTD` override.
+A single compressor knob that governed only part of the search process repeatedly let its prerequisite check pass before the scan read nothing or the session header disappeared, so the partial override was withdrawn rather than allowed to remain misleading.
 
 ## Rebuild
 
@@ -75,6 +76,7 @@ A raw store that does not exist on this vessel is reported and skipped, never tr
 
 Each session is written as one zstd file at level 3, which took this seat's store from 271.2 MB to 52.1 MB on 2026-08-18.
 `zstd` is a hard requirement of a rebuild rather than a preference: a run that cannot compress refuses before writing anything, because a store that is half compressed and half plain is a store whose answers depend on which half a question lands in.
+`FM_ZSTD` may name the compressor used specifically for building and verifying the store; it does not apply to searching.
 A rebuild also compresses whatever plain session files it finds already in the store and drops the plain copies it has just superseded, so an archive built before compression converges on the first refresh instead of being stranded, and a retained session the rebuild cannot reach is compressed where it lies rather than left behind.
 The level is a knob, `--level`, and the measurement behind the default is below.
 

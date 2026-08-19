@@ -383,6 +383,21 @@ test_a_build_without_a_compressor_refuses_before_writing() {
   pass "a missing compressor refuses the build instead of writing a store nobody can search"
 }
 
+test_refresh_without_a_compressor_leaves_no_archive() {
+  local home out rc=0
+  home="$TMP/refresh-nozstd-home"
+  write_claude_session "$TMP/refresh-nozstd-src/claude/project"
+  out=$(FM_HOME="$home" FM_CLAUDE_SESSIONS="$TMP/refresh-nozstd-src/claude" \
+        FM_CODEX_SESSIONS="$TMP/refresh-nozstd-src/codex" FM_ZSTD="$TMP/no-such-zstd" \
+        "$REFRESH" 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail 'refresh with no compressor must not exit 0'
+  assert_contains "$out" 'half compressed and half plain' \
+    'refresh must preserve the reducer refusal message'
+  assert_absent "$home/data/transcripts" \
+    'refresh must not create an archive before the compressor prerequisite passes'
+  pass "refresh with no compressor refuses before creating the archive"
+}
+
 # --- search ------------------------------------------------------------------
 
 # Build a fixture home so search is exercised the way a vessel that is not this
@@ -478,32 +493,16 @@ test_search_reads_the_compressed_store() {
   pass "search reads the compressed store and still reports the session header with the hit"
 }
 
-test_search_uses_the_selected_compressor_and_reads_plain_sessions() {
-  local home out real_zstd wrapper marker plain
+test_search_reads_plain_sessions_during_migration() {
+  local home out plain
   home=$(setup_fixture_home)
-  real_zstd=$(command -v zstd)
-  wrapper="$TMP/recording-zstd"
-  marker="$TMP/zstd-ran"
-  cat >"$wrapper" <<'EOF'
-#!/usr/bin/env bash
-: >"$FM_TEST_ZSTD_MARKER"
-exec "$FM_TEST_REAL_ZSTD" "$@"
-EOF
-  chmod +x "$wrapper"
-  out=$(FM_HOME="$home" FM_ZSTD="$wrapper" FM_TEST_ZSTD_MARKER="$marker" \
-        FM_TEST_REAL_ZSTD="$real_zstd" "$SEARCH" 'tugboat host' 2>/dev/null) \
-    || fail 'search failed through the selected compressor'
-  assert_contains "$out" 'tugboat host' 'the selected compressor must return the compressed hit'
-  assert_present "$marker" 'the selected compressor must perform the content scan'
-
   plain="$home/data/transcripts/claude-redacted/migration.txt"
   printf '# cwd      /home/x/migration\n# span     2026-08-18T10:00:00Z\nplain migration session\n' >"$plain"
-  out=$(FM_HOME="$home" FM_ZSTD="$wrapper" FM_TEST_ZSTD_MARKER="$marker" \
-        FM_TEST_REAL_ZSTD="$real_zstd" "$SEARCH" 'plain migration session' 2>/dev/null) \
+  out=$(FM_HOME="$home" "$SEARCH" 'plain migration session' 2>/dev/null) \
     || fail 'search did not read a plain session during migration'
   assert_contains "$out" 'plain migration session' \
-    'a plain migration-era session must bypass the compressor and remain searchable'
-  pass "the selected compressor scans compressed sessions without hiding plain migration files"
+    'a plain migration-era session must remain searchable'
+  pass "search reads plain sessions that remain during migration"
 }
 
 # The reason the documentation had to change, stated as a test rather than as a
@@ -603,13 +602,14 @@ test_a_rebuild_compresses_a_retained_session_it_cannot_rebuild
 test_verification_reads_the_compressed_store_it_verifies
 test_verification_refuses_a_store_file_it_cannot_read
 test_a_build_without_a_compressor_refuses_before_writing
+test_refresh_without_a_compressor_leaves_no_archive
 test_refresh_builds_verifies_and_lands_the_bound
 test_refresh_does_not_overwrite_an_existing_readme
 test_search_resolves_the_archive_from_fm_home
 test_search_narrows_the_file_set_by_index
 test_search_reports_a_missing_archive_rather_than_no_matches
 test_search_reads_the_compressed_store
-test_search_uses_the_selected_compressor_and_reads_plain_sessions
+test_search_reads_plain_sessions_during_migration
 test_plain_grep_does_not_read_the_sessions
 test_search_status_says_matched_or_not_matched
 test_search_reports_scanner_failures_as_errors
