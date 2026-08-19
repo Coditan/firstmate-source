@@ -156,10 +156,10 @@ zstd -9                    159.6 s             48.7 MB               5.62x
 ```
 
 Level 3 is the default because level 9 spends 40 more seconds of every rebuild to save 3.4 MB, which is 1.2 percent of what was already saved.
-The ratio is material-dependent in the same way the reduction is: these are readings from one seat's transcripts, not properties of zstd.
+The compression ratio is material-dependent: these are readings from one seat's transcripts, not properties of zstd.
 Search cost is not part of this tradeoff - zstd decompresses at roughly the same speed whatever level wrote the file - so the level buys rebuild time against disk and nothing else.
 
-The ratio is material-dependent and is not a property of the tool: the same design measured 56:1 on a seat whose sessions averaged 17 MB, against 0.63 MB here.
+The reduction ratio is material-dependent and is not a property of the tool: the same design measured 56:1 on a seat whose sessions averaged 17 MB, against 0.63 MB here.
 `--fold-injected` folds Codex's machine-injected user messages down to their marker and their tail, taking the Codex store from 142.2 MB to 44.1 MB.
 It is off by default, and the reason is the finding rather than the size: folding dropped 24 of the 37 redaction findings, including 16 of the 22 private-key blocks, because those sat inside the folded region.
 The folded archive is not cleaner - less of it was ever looked at.
