@@ -558,6 +558,7 @@ When X mode is opted in, bootstrap also requires `curl` and `jq` before arming t
 `tasks-axi` and `quota-axi` are required bootstrap tools in every profile, the same class as `lavish-axi`.
 An absent or incompatible `tasks-axi` reports `MISSING: tasks-axi` with an install command targeting `$FM_HOME/.local/axi`; when `config/backlog-backend` is not `manual` and compatible `tasks-axi` is on `PATH`, bootstrap stays silent and firstmate uses its verbs for routine backlog mutations, otherwise it hand-edits `data/backlog.md` until installation is approved and completed.
 An absent `quota-axi` reports `MISSING: quota-axi` with the same home-owned prefix; `bin/fm-dispatch-select.sh` still selects uniformly from the valid candidate array with an OS-backed random source when quota data is unavailable.
+A tool this fleet has evaluated and depends on in principle but that no configuration yet requires has no declaration route in this list or in the per-backend delta, and [`docs/forgejo-axi-adoption.md`](forgejo-axi-adoption.md) records the first case and the open question it waits on.
 
 ### AXI-suite self-update
 

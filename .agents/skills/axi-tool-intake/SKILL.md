@@ -99,7 +99,8 @@ Read that procedure there rather than from memory.
 
 **How a tool reaches every seat in this fleet has no settled answer, and inventing one is worse than naming the gap.**
 
-Who owns this fleet's AXI suite, and what the accepted route is for adding a tool to it, is tracked as `fleet-forgejo-axi` and `fm-axi-nomistakes-guidance-off-argv` - two records asking the same ownership question about the same suite, meant to be answered once for both.
+Who owns this fleet's AXI suite, and what the accepted route is for adding a tool to it, remains tracked as `fm-axi-nomistakes-guidance-off-argv`.
+`fleet-forgejo-axi` settled the separate adopt-or-fork question for `forgejo-axi`; [`docs/forgejo-axi-adoption.md`](../../../docs/forgejo-axi-adoption.md) owns that ruling and the unresolved declaration question it inherited.
 
 Two things follow while it is open.
 A tool that exists only on the seat that built it is not what was asked for, so "it works here" is not a completed deliverable.
