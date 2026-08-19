@@ -934,6 +934,106 @@ test_watcher_clears_the_throttle_when_the_session_ends() {
   pass "a session that ends clears the throttle it left behind"
 }
 
+# --- an absent protection is not routine traffic ----------------------------
+#
+# The defect these exist for was not the diagnosis, which was exact, but the
+# REPEAT: the unenforced wake arrived once an hour for a whole day on 2026-08-19,
+# word-for-word identical every time, and was absorbed every time. What each
+# report could not say is that it was not the first.
+
+test_a_first_absent_report_carries_only_its_diagnosis() {
+  local out
+  make_case
+  rm -f "$STATE_DIR/.primary-transcript"
+  out=$(watch_reason)
+  assert_contains "$out" "cannot be measured" "the first unenforced report lost its diagnosis"
+  assert_not_contains "$out" "no working protection since" \
+    "a first report claimed a history it does not have"
+  pass "the first report of an absent protection states the condition and nothing more"
+}
+
+test_a_repeated_absent_report_says_how_long_and_how_often() {
+  local out
+  make_case
+  rm -f "$STATE_DIR/.primary-transcript"
+  watch_reason >/dev/null
+  # Back-date the first report by seven hours: what the captain was actually
+  # given all day was the first sentence, seven more times.
+  printf 'unenforced %s 1\n' "$(( $(date +%s) - 25200 ))" > "$STATE_DIR/.context-ceiling-absent-since"
+  out=$(watch_reason FM_CONTEXT_ERROR_RESURFACE=0)
+  assert_contains "$out" "cannot be measured" \
+    "the repeat was made louder by making it vaguer: the diagnosis is gone"
+  assert_contains "$out" "unenforced" "the repeat stopped naming the ceiling as unenforced"
+  assert_contains "$out" "no working protection since" "a repeat did not say the protection is absent"
+  assert_contains "$out" "7h 0m ago" "a repeat did not say how long the protection has been gone"
+  assert_contains "$out" "report 2" "a repeat did not say how many reports it has survived"
+  assert_contains "$out" "tell the captain plainly" \
+    "a repeat did not say what to do with an absence nobody has repaired"
+  pass "a repeated absent-protection report carries its own age and count, and keeps its diagnosis"
+}
+
+# The other half of the same rule: nothing about a protection that is WORKING
+# gets louder. The ask branch fires whenever the captain is present, which is
+# most of the day, and turning that into an escalation would bury the class this
+# change exists to raise.
+test_a_repeated_ask_gains_no_escalation() {
+  local first second
+  make_case
+  write_transcript "$TRANSCRIPT" 900000 "$(iso_ago 60)"
+  first=$(watch_reason)
+  assert_contains "$first" "ASK the captain" "the first ask was not reported"
+  second=$(watch_reason FM_CONTEXT_ERROR_RESURFACE=0)
+  assert_contains "$second" "ASK the captain" "the ask did not come back after its quiet period"
+  assert_not_contains "$second" "no working protection since" \
+    "a working ceiling was escalated as an absent protection"
+  [ -e "$STATE_DIR/.context-ceiling-absent-since" ] \
+    && fail "a working ceiling started an absence clock"
+  pass "a ceiling that is working, and merely waiting for the captain, repeats unchanged"
+}
+
+# A different absence is a different occurrence. Dating an unresettable ceiling
+# from the moment an unmeasurable one started would report an age that never
+# happened, which is the same defect as reporting no age at all.
+test_a_changed_absent_class_restarts_the_clock() {
+  local out
+  make_case
+  rm -f "$STATE_DIR/.primary-transcript"
+  watch_reason >/dev/null
+  printf 'unenforced %s 4\n' "$(( $(date +%s) - 25200 ))" > "$STATE_DIR/.context-ceiling-absent-since"
+  # The transcript comes back and the re-entry hook goes away: measurable again,
+  # but the reset it would order cannot run.
+  record_ok
+  write_settings "$HOME_DIR" 'startup|resume' 'fm-sessionstart-nudge.sh'
+  out=$(watch_reason FM_CONTEXT_ERROR_RESURFACE=0)
+  assert_contains "$out" "cannot run safely" "the blocked branch did not report its own condition"
+  assert_not_contains "$out" "no working protection since" \
+    "a newly blocked ceiling inherited the age of a different absence"
+  assert_contains "$(cat "$STATE_DIR/.context-ceiling-absent-since")" "blocked" \
+    "the absence record was not rebound to the class actually reported"
+  pass "an absence of a different kind is dated from itself, not from the one before it"
+}
+
+test_a_resolved_condition_clears_the_absence_clock() {
+  local out
+  make_case
+  rm -f "$STATE_DIR/.primary-transcript"
+  watch_reason >/dev/null
+  assert_present "$STATE_DIR/.context-ceiling-absent-since" "an absent protection left no absence record"
+  # The session records its transcript again: the protection is back.
+  record_ok
+  write_transcript "$TRANSCRIPT" 1000 ""
+  watch_reason >/dev/null
+  [ -e "$STATE_DIR/.context-ceiling-absent-since" ] \
+    && fail "a repaired ceiling kept the absence clock of the outage before it"
+  # It goes away again: this is a new outage and must report as a first one.
+  rm -f "$STATE_DIR/.primary-transcript"
+  out=$(watch_reason)
+  assert_contains "$out" "cannot be measured" "the new outage was not reported"
+  assert_not_contains "$out" "no working protection since" \
+    "a new outage was reported with the previous outage's history"
+  pass "a protection that comes back clears its own absence clock, so the next outage is a first report"
+}
+
 # The regression this exists for: the ceiling wake is appended to
 # state/.wake-queue, and an undrained queue is the first thing fm_context_quiet
 # tests, so the very next poll after a ceiling wake finds the fleet busy. Reading
@@ -1206,6 +1306,11 @@ test_watcher_surfaces_a_changed_branch_immediately
 test_watcher_clears_the_throttle_when_the_condition_resolves
 test_watcher_clears_the_throttle_when_the_session_ends
 test_watcher_keeps_the_throttle_while_its_own_wake_is_undrained
+test_a_first_absent_report_carries_only_its_diagnosis
+test_a_repeated_absent_report_says_how_long_and_how_often
+test_a_repeated_ask_gains_no_escalation
+test_a_changed_absent_class_restarts_the_clock
+test_a_resolved_condition_clears_the_absence_clock
 test_watcher_publishes_a_stable_class_per_branch
 test_watcher_refuses_to_hand_over_a_reset_with_a_broken_restart_path
 test_watcher_process_enqueues_the_ceiling_wake

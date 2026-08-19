@@ -52,7 +52,7 @@ What that sweep owes this mechanism when a ceiling wake calls it is owned by the
 
 | Piece | Owner |
 | --- | --- |
-| Where this session's transcript is | `bin/fm-sessionstart-nudge.sh` writes `state/.primary-transcript` on every primary session start, including the one a clear creates; [docs/sessionstart-nudge.md](sessionstart-nudge.md) owns that record's own contract, and this mechanism only consumes it |
+| Where this session's transcript is | `bin/fm-sessionstart-nudge.sh` writes `state/.primary-transcript` on every primary session start this home's lock is not already held against, including the one a clear creates; [docs/sessionstart-nudge.md](sessionstart-nudge.md) owns that record's own contract, the lock gate, and what a session does when it cannot name its own process, and this mechanism only consumes the record |
 | Ceiling, quiet, and captain-present predicates | `bin/fm-context-lib.sh` |
 | The measurement and the reset, ask, blocked, or unenforced branch | `bin/fm-watch.sh`'s `context_ceiling_surface` |
 | The receipt | `bin/fm-stow-receipt.sh` |
@@ -190,11 +190,42 @@ A silent non-fire is the defect class this whole line of work exists to remove, 
 
 - **It fires and firstmate does not act.** The wake is durable. An enqueued wake that is never drained is already an alarm.
 - **The observation stops running.** The watcher's own death is already alarmed by the liveness guard.
-- **A session is running here and cannot be measured** - no transcript recorded, an unreadable one, a record naming a different session process than the one holding the home lock, or a missing `jq` or `perl` (the bounded tail read needs both). That is reported as its own wake saying the ceiling is unenforced.
+- **A session is running here and cannot be measured** - no transcript recorded, an unreadable one, a record naming a different session process than the one holding the home lock, or a missing `jq` or `perl` (the bounded tail read needs both). That is reported as its own wake saying the ceiling is unenforced, and every repeat of it says how long that has been true; see "an absent protection is not routine traffic" below.
   The live session lock is what makes this an alarm rather than noise: with no session running, there is genuinely nothing to measure, and a fresh home, a home between sessions, and every non-primary home would otherwise carry a permanent false alarm.
   The record and the lock are keyed on the same session process on purpose, so a disagreement between them means the record describes a session that has finished - measuring it would report the wrong number rather than no number, which is why that case is reported instead of used.
 - **The way back in is broken.** If `clear` ever leaves the `SessionStart` matcher, or the nudge script goes missing, the wake reports the blocker instead of ordering a reset, and the reset tool refuses. That check proves the hook is still wired and its script is still there; what carries the fresh session's rebuild instruction after a self-clear is `AGENTS.md` section 3, for the reason in "the way back in, precisely" below.
 - **A reset is attempted and refused.** Every refusal prints its concrete reason and appends one line to `state/.context-reset.log`.
+
+### An absent protection is not routine traffic
+
+The wake above is only half of the job, and the other half was measured failing.
+On 2026-08-19 this home's ceiling was unenforced from one session start onward; the wake fired once an hour for the whole day, word-for-word identical every time, and nothing was repaired.
+Two vessels found the underlying defect, both because the wake said precisely what was wrong - so the diagnosis was never the problem.
+The repeat was.
+An identical line read as a line that had already been read, and what no report could say was that it was not the first.
+
+The branches divide on one question the predicate now publishes as `FM_CONTEXT_CEILING_PROTECTION`: is the ceiling being applied at all?
+
+| Class | Protection | Why |
+|---|---|---|
+| `unenforced` | absent | no number can be read from this session |
+| `blocked` | absent | a number can be read, but the reset it would order cannot run |
+| `ask` | present | the ceiling is working; a captain who is present is a reason to wait |
+| `reset` | present | the ceiling is working, and this is it working |
+
+Only the absent classes report differently on a repeat.
+The first report of one states the condition and nothing more.
+Every later report keeps that diagnosis verbatim and adds what only a repeat can know: when the protection went, how long it has been gone, and how many reports it has survived.
+It closes by naming the only two things left to do with an absence nobody has repaired - repair it through its owner, or tell the captain plainly that it stands unrepaired - which is what `AGENTS.md` section 8 already requires of a ceiling wake that names a condition rather than a next step.
+
+Three things are deliberately not done here.
+The cadence is untouched, so nothing is made louder - `FM_CONTEXT_ERROR_RESURFACE` still governs every class, and the volume of the working classes is not raised to carry the absent one.
+The diagnosis is never rewritten, shortened, or generalised, because making a warning louder by making it vaguer would remove the property that let both vessels find this at all.
+And there is no threshold to tune: the second report IS the escalation, since one resurface period has passed with a protection missing and nothing done, which is the definition of not routine.
+
+`state/.context-ceiling-absent-since` carries `<class> <first-report-epoch> <reports>` as content rather than as an mtime, because the mtime moves on every rewrite and the whole value of the record is the moment that did not move.
+A change of class restarts it - a ceiling that stopped being unmeasurable and started being unresettable is a different absence, and dating the new one from the old would report an age that never happened.
+A resolved condition clears it, so the next outage reports as a first one.
 
 Every wake the watcher raises here - `reset`, `ask`, `blocked`, and `unenforced` alike - is reported at most once per `FM_CONTEXT_ERROR_RESURFACE` while the condition behind it is unchanged.
 Every branch here describes a condition rather than an event - a present captain stays present, a broken hook stays broken, an unmeasurable transcript stays unmeasurable - so repeating any of them on the poll cadence would spend a model turn every five minutes on news that has not changed, which is the opposite of what this mechanism is for.
@@ -348,3 +379,4 @@ All under `state/`, all gitignored:
 | `.context-reset.log` | `bin/fm-context-reset.sh` | one durable line per refusal, `--check` pass, or completed reset |
 | `.last-context-check` | `bin/fm-watch.sh` | ceiling-read cadence, as an mtime, so it survives a watcher restart |
 | `.context-ceiling-surfaced` | `bin/fm-watch.sh` | the branch class last reported (`reset`, `ask`, `blocked`, `unenforced`), as content, and when it was reported, as an mtime; throttles an unchanged condition, and is cleared only when the condition genuinely resolves |
+| `.context-ceiling-absent-since` | `bin/fm-watch.sh` | `<class> <first-report-epoch> <reports>` for the current absent-protection condition, so a repeat can say how long the ceiling has had no protection and how many reports that has survived; cleared when the condition resolves or the protection comes back |

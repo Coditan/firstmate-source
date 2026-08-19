@@ -155,6 +155,73 @@ SH
   chmod +x "$fakebin/ps"
 }
 
+# make_fake_ps_second_session <fakebin> <holder-pid>: this session's own ancestry
+# never reaches a harness pid the lock could name, while <holder-pid> reports as
+# a live `claude`. That is a SECOND session in a home whose first session already
+# holds the lock: the walk from here resolves to a different harness process than
+# the one in state/.lock.
+make_fake_ps_second_session() {
+  local fakebin=$1 holder_pid=$2
+  cat > "$fakebin/ps" <<SH
+#!/usr/bin/env bash
+set -u
+pid=""
+prev=""
+for arg in "\$@"; do
+  [ "\$prev" = "-p" ] && pid="\$arg"
+  prev="\$arg"
+done
+case "\$*" in
+  *"comm="*)
+    if [ "\$pid" = "$holder_pid" ]; then printf '/usr/local/bin/claude\n'; else printf '/bin/bash\n'; fi
+    exit 0 ;;
+  *"args="*)
+    if [ "\$pid" = "$holder_pid" ]; then printf 'claude\n'; else printf 'bash\n'; fi
+    exit 0 ;;
+  *"ppid="*)
+    if [ "\$pid" = "$holder_pid" ]; then printf '1\n'; else printf '%s\n' "\$\$"; fi
+    exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/ps"
+}
+
+# make_fake_ps_flaky <fakebin> <holder-pid> <failures>: the first <failures>
+# invocations cannot read the process table at all, and every one after that
+# behaves like make_fake_ps_holder. This is the transient this seat actually hit
+# on 2026-08-19 - one unreadable probe at the instant the hook ran, and a walk
+# that resolved perfectly by hand minutes later.
+make_fake_ps_flaky() {
+  local fakebin=$1 holder_pid=$2 failures=$3
+  cat > "$fakebin/ps" <<SH
+#!/usr/bin/env bash
+set -u
+counter="$fakebin/../ps-attempts"
+n=\$(cat "\$counter" 2>/dev/null || printf 0)
+n=\$((n + 1))
+printf '%s\n' "\$n" > "\$counter"
+[ "\$n" -gt $failures ] || exit 1
+pid=""
+prev=""
+for arg in "\$@"; do
+  [ "\$prev" = "-p" ] && pid="\$arg"
+  prev="\$arg"
+done
+case "\$*" in
+  *"comm="*)
+    if [ "\$pid" = "$holder_pid" ]; then printf '/usr/local/bin/claude\n'; else printf '/bin/bash\n'; fi
+    exit 0 ;;
+  *"args="*)
+    if [ "\$pid" = "$holder_pid" ]; then printf 'claude\n'; else printf 'bash\n'; fi
+    exit 0 ;;
+  *"ppid="*) printf '%s\n' "$holder_pid"; exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/ps"
+}
+
 # run_nudge_with_payload <root> <fakebin> <payload>: drive the wrapper the way a
 # harness hook does, with the payload on stdin. An empty payload means the
 # harnesses that hand the wrapper nothing.
@@ -359,6 +426,167 @@ test_non_primary_records_nothing() {
   pass "fm-sessionstart-nudge: only a genuine primary claims the home's transcript record"
 }
 
+# The gap ak measured on their own seat: a second primary session in a home that
+# already has one takes over the record even though the lock refuses it, and the
+# ceiling then measures the new, nearly empty session instead of the one running
+# the fleet.
+test_second_session_does_not_take_over_the_record() {
+  local root="$TMP_ROOT/record-second-session" fakebin record holder out status=0
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  # A real live process to stand in for the first session's harness, so the
+  # gate's liveness test is answered by the kernel and not by the fixture.
+  sleep 30 &
+  holder=$!
+  make_fake_ps_second_session "$fakebin" "$holder"
+  record="$root/state/.primary-transcript"
+  printf 'status=ok\nharness_pid=%s\nsession_id=first-session\ntranscript_path=/tmp/first-session.jsonl\nrecorded_at=1\n' \
+    "$holder" > "$record"
+  printf '%s\n' "$holder" > "$root/state/.lock"
+  out=$(run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD") || status=$?
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  expect_code 0 "$status" "second-session run"
+  [ "$out" = "$NUDGE_LINE" ] || fail "the second session was not told to run session start: $out"
+  [ "$(record_field "$record" session_id)" = first-session ] \
+    || fail "a second session took over the running session's transcript record: $(cat "$record")"
+  [ "$(record_field "$record" harness_pid)" = "$holder" ] \
+    || fail "a second session rebound the record to itself: $(cat "$record")"
+  pass "fm-sessionstart-nudge: a second session in a home that already has one leaves the record alone"
+}
+
+# The same gate, on the shape this seat hit: the second session could not even
+# name its own harness process, so it had nothing to compare against the lock.
+# An unidentified session must not be treated as the holder by default.
+test_unidentified_second_session_does_not_take_over_the_record() {
+  local root="$TMP_ROOT/record-second-unidentified" fakebin record holder
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  sleep 30 &
+  holder=$!
+  make_fake_ps_holder "$fakebin" "$holder"
+  # The walk from this process never reaches the holder, so this session cannot
+  # name itself; the holder is nonetheless live and holds the lock.
+  cat > "$fakebin/ps" <<SH
+#!/usr/bin/env bash
+set -u
+pid=""
+prev=""
+for arg in "\$@"; do
+  [ "\$prev" = "-p" ] && pid="\$arg"
+  prev="\$arg"
+done
+case "\$*" in
+  *"comm="*)
+    if [ "\$pid" = "$holder" ]; then printf '/usr/local/bin/claude\n'; else printf '/bin/bash\n'; fi
+    exit 0 ;;
+  *"args="*)
+    if [ "\$pid" = "$holder" ]; then printf 'claude\n'; else printf 'bash\n'; fi
+    exit 0 ;;
+  *"ppid="*) printf '1\n'; exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/ps"
+  record="$root/state/.primary-transcript"
+  printf 'status=ok\nharness_pid=%s\nsession_id=first-session\ntranscript_path=/tmp/first-session.jsonl\nrecorded_at=1\n' \
+    "$holder" > "$record"
+  printf '%s\n' "$holder" > "$root/state/.lock"
+  FM_HARNESS_PID_RETRY_DELAYS= run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD" >/dev/null
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  [ "$(record_field "$record" status)" = ok ] \
+    || fail "a session that could not identify itself overwrote a live session's record: $(cat "$record")"
+  [ "$(record_field "$record" session_id)" = first-session ] \
+    || fail "a session that could not identify itself claimed the record: $(cat "$record")"
+  pass "fm-sessionstart-nudge: a session that cannot name itself does not claim a live session's record"
+}
+
+# The gate must not swallow the ordinary case it sits in front of: a lock left
+# behind by a session that has ended is not another session, and refusing to
+# record against it would be the same silent non-measurement from the other side.
+test_a_stale_lock_does_not_block_the_record() {
+  local root="$TMP_ROOT/record-stale-lock" fakebin record
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  make_fake_ps_holder "$fakebin" 626262
+  record="$root/state/.primary-transcript"
+  # 999999999 is not a live process, so bin/fm-lock.sh would take this lock over.
+  printf '999999999\n' > "$root/state/.lock"
+  run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD" >/dev/null
+  [ "$(record_field "$record" status)" = ok ] \
+    || fail "a lock left by a finished session blocked this session's record: $(cat "$record")"
+  [ "$(record_field "$record" harness_pid)" = 626262 ] \
+    || fail "the record was not bound to the session that will hold the lock: $(cat "$record")"
+  pass "fm-sessionstart-nudge: a lock left behind by a finished session does not block a fresh record"
+}
+
+# A clear keeps the harness process, so the lock is genuinely this session's own
+# and the record MUST be replaced - the gate has to let its own holder through.
+test_the_lock_holder_still_records_after_a_clear() {
+  local root="$TMP_ROOT/record-holder-after-clear" fakebin record
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  make_fake_ps_holder "$fakebin" "$$"
+  record="$root/state/.primary-transcript"
+  printf 'status=ok\nharness_pid=%s\nsession_id=old-session\ntranscript_path=/tmp/old-session.jsonl\nrecorded_at=1\n' \
+    "$$" > "$record"
+  printf '%s\n' "$$" > "$root/state/.lock"
+  expect_silent_zero "lock holder after a clear" run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD"
+  [ "$(record_field "$record" session_id)" = 11111111-2222-3333-4444-555555555555 ] \
+    || fail "the lock holder was refused its own record after a clear: $(cat "$record")"
+  pass "fm-sessionstart-nudge: the session holding the lock still replaces its own record"
+}
+
+# The second door: the harness process could not be resolved at the instant the
+# hook ran, and the record then named no session at all for a whole day. A
+# bounded retry is what separates a transient unreadable probe from a settled
+# answer, and it has to actually be spent.
+test_a_transient_lookup_failure_is_retried() {
+  local root="$TMP_ROOT/record-transient" fakebin record
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  make_fake_ps_flaky "$fakebin" 646464 1
+  record="$root/state/.primary-transcript"
+  FM_HARNESS_PID_RETRY_DELAYS="0 0" run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD" >/dev/null
+  [ "$(record_field "$record" status)" = ok ] \
+    || fail "a single unreadable probe was taken as a settled answer: $(cat "$record")"
+  [ "$(record_field "$record" harness_pid)" = 646464 ] \
+    || fail "the retried record does not name the resolved session owner: $(cat "$record")"
+  pass "fm-sessionstart-nudge: a transient failure to read the process table is retried, not recorded"
+}
+
+test_a_settled_lookup_failure_is_recorded_with_its_cause() {
+  local root="$TMP_ROOT/record-settled-failure" fakebin record
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  # Every probe fails, so the retry is spent and the walk never completes: the
+  # answer is UNKNOWN, which is a different claim from "no harness is here" and
+  # must not be recorded as that one.
+  make_fake_ps_flaky "$fakebin" 656565 9999
+  record="$root/state/.primary-transcript"
+  FM_HARNESS_PID_RETRY_DELAYS="0 0" run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD" >/dev/null
+  [ "$(record_field "$record" status)" = error ] \
+    || fail "an unresolvable session owner produced a usable-looking record: $(cat "$record")"
+  [ "$(record_field "$record" error)" = harness-lookup-failed ] \
+    || fail "an unreadable process table was recorded as a settled negative: $(cat "$record")"
+  pass "fm-sessionstart-nudge: a process table that stays unreadable is recorded as unknown, not as absent"
+}
+
+# The record is only worth anything because nothing else can write it: a
+# hand-written or agent-written one would be a watchman that lies. The wrapper is
+# the only writer, and this enumerates every tracked script that so much as names
+# the path, so a new one has to be looked at rather than appearing quietly.
+test_only_the_session_start_hook_names_the_record_path() {
+  local expected found
+  expected=$(printf '%s\n' fm-context-lib.sh fm-harness-pid-lib.sh fm-sessionstart-nudge.sh)
+  found=$(grep -rlF '.primary-transcript' "$ROOT/bin" | while IFS= read -r f; do basename "$f"; done | sort -u)
+  [ "$found" = "$expected" ] || fail "a tracked script that names the transcript record appeared or vanished; only bin/fm-sessionstart-nudge.sh may write it, bin/fm-context-lib.sh owns the read path, and bin/fm-harness-pid-lib.sh only refers to it in prose. Found: $(printf '%s' "$found" | tr '\n' ' ')"
+  grep -n '\.primary-transcript' "$ROOT/bin/fm-context-lib.sh" | grep -qE '>|mv |tee ' \
+    && fail "the reader that owns the record's path also writes to it"
+  pass "fm-sessionstart-nudge: the session-start hook is the only tracked writer of the transcript record"
+}
+
 test_opencode_plugin_delivers_exact_nudge_once() {
   local root="$TMP_ROOT/opencode-primary" out status=0
   make_primary "$root"
@@ -452,5 +680,12 @@ test_absent_harness_process_records_an_empty_harness_pid
 test_unwritable_state_leaves_no_stale_ok_record
 test_failed_record_replace_leaves_no_stale_ok_record
 test_non_primary_records_nothing
+test_second_session_does_not_take_over_the_record
+test_unidentified_second_session_does_not_take_over_the_record
+test_a_stale_lock_does_not_block_the_record
+test_the_lock_holder_still_records_after_a_clear
+test_a_transient_lookup_failure_is_retried
+test_a_settled_lookup_failure_is_recorded_with_its_cause
+test_only_the_session_start_hook_names_the_record_path
 test_opencode_plugin_delivers_exact_nudge_once
 test_tracked_harness_registration

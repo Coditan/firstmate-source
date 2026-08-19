@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Record a genuine firstmate primary's transcript position, then print the
-# one-line session-start instruction unless that session already acquired the
-# home lock.
+# Record a genuine firstmate primary's transcript position, unless another live
+# session already holds this home's lock, then print the one-line session-start
+# instruction unless that session already acquired the home lock.
 # Every silence and error path exits 0 because Claude SessionStart exit 2 blocks
 # session initialization.
 set -u
@@ -21,6 +21,50 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-harness-pid-lib.sh"
 
 RECORD="$STATE/.primary-transcript"
+LOCK="$STATE/.lock"
+
+# 0 when the pid in state/.lock is live and sits in this process's own ancestry,
+# which means session start already ran in this harness session - the state a
+# /clear leaves behind, since a clear starts a new session id inside the same
+# harness process the lock is keyed on.
+# It is also the second, independent way this session can prove the lock is its
+# own: it walks parents rather than matching a harness name, so it still answers
+# when fm_harness_pid cannot.
+lock_is_in_ancestry() {
+  local lock_pid pid=$$ _
+  [ -f "$LOCK" ] || return 1
+  IFS= read -r lock_pid < "$LOCK" 2>/dev/null || return 1
+  case "$lock_pid" in
+    ''|*[!0-9]*|1) return 1 ;;
+  esac
+  kill -0 "$lock_pid" 2>/dev/null || return 1
+  for _ in 1 2 3 4 5 6 7 8; do
+    [ "$pid" = "$lock_pid" ] && return 0
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    [ -n "$pid" ] && [ "$pid" -gt 1 ] || return 1
+  done
+  return 1
+}
+
+# 0 when this session must not touch the record, because another live session
+# already holds this home's lock and will therefore keep every authority the
+# record's consumers act on.
+# Recording is gated on the lock rather than merely coinciding with it: a second
+# session in a home that already has one is refused the lock and stays
+# read-only, but it used to rewrite the record with its own transcript, so the
+# ceiling then measured the new, nearly empty session while the session actually
+# running the fleet went unmeasured - the protection absent exactly where it was
+# meant to apply.
+# Two independent proofs that the lock is this session's own are accepted, and
+# either is enough: the holder is this session's harness pid, or the holder is
+# in this process's ancestry. When neither can be shown the record is left
+# alone, which is the conservative reading of a session that cannot say who it
+# is: leaving another session's true record in place costs nothing, and
+# overwriting it costs the measurement.
+record_belongs_to_another_session() {  # <this-session-harness-pid>
+  lock_is_in_ancestry && return 1
+  fm_session_lock_held_by_other "$LOCK" "$1"
+}
 
 # Leave nothing behind that a reader could still take for a current record when
 # this session cannot publish its own: a previous session's ok record names
@@ -33,19 +77,24 @@ invalidate_transcript_record() {
 
 # Record where this session's transcript lives and which harness process owns
 # it, for the context-reset mechanism that later measures that transcript and
-# binds a receipt to its position. Written on EVERY primary session start,
-# including the one a /clear creates - which is why it runs before the
-# already-ran check below, whose lock ancestry survives a clear - so the record
-# can never outlive the session it names. A value that cannot be determined is
-# recorded as an explicit error rather than left out, because a consumer that
-# silently compares against the wrong transcript is worse than one that refuses.
+# binds a receipt to its position. Written on every primary session start this
+# home's lock is not already held against - including the one a /clear creates,
+# which is why it runs before the already-ran check below, whose lock ancestry
+# survives a clear - so the record can never outlive the session it names.
+# A value that cannot be determined is recorded as an explicit error rather than
+# left out, because a consumer that silently compares against the wrong
+# transcript is worse than one that refuses.
 # docs/sessionstart-nudge.md owns the fields and the consumer contract.
 record_transcript_position() {
   local payload='' pid='' sid='' path='' err='' tmp
+  # Resolved with a bounded retry, and before anything else, because everything
+  # below turns on it: the gate needs it to tell this session apart from the
+  # lock holder, and the record needs it to name its own owner.
+  fm_harness_pid_settled >/dev/null && pid=$FM_HARNESS_PID
+  record_belongs_to_another_session "$pid" && return 0
   [ -t 0 ] || IFS= read -r -d '' -t 2 payload 2>/dev/null
-  pid=$(fm_harness_pid) || pid=''
   if [ -z "$pid" ]; then
-    err=no-harness-process
+    err=${FM_HARNESS_PID_ERROR:-no-harness-process}
   elif [ -z "$payload" ]; then
     err=no-hook-payload
   elif ! command -v jq >/dev/null 2>&1; then
@@ -84,22 +133,6 @@ record_transcript_position() {
 fm_is_gate_agent "$FM_ROOT" && exit 0
 fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
 record_transcript_position
-
-lock_is_in_ancestry() {
-  local lock_pid pid=$$ _
-  [ -f "$STATE/.lock" ] || return 1
-  IFS= read -r lock_pid < "$STATE/.lock" 2>/dev/null || return 1
-  case "$lock_pid" in
-    ''|*[!0-9]*|1) return 1 ;;
-  esac
-  kill -0 "$lock_pid" 2>/dev/null || return 1
-  for _ in 1 2 3 4 5 6 7 8; do
-    [ "$pid" = "$lock_pid" ] && return 0
-    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
-    [ -n "$pid" ] && [ "$pid" -gt 1 ] || return 1
-  done
-  return 1
-}
 
 lock_is_in_ancestry && exit 0
 nudge=
