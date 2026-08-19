@@ -456,6 +456,23 @@ test_search_resolves_the_archive_from_fm_home() {
   pass "search resolves its archive from FM_HOME and reaches both stores"
 }
 
+test_search_formatter_is_portable_to_mawk() {
+  local home out shim
+  command -v mawk >/dev/null 2>&1 || {
+    pass "mawk is unavailable, so the portable formatter check is not applicable"
+    return
+  }
+  home=$(setup_fixture_home)
+  shim="$TMP/mawk-path"
+  mkdir -p "$shim"
+  ln -s "$(command -v mawk)" "$shim/awk"
+  out=$(PATH="$shim:$PATH" FM_HOME="$home" "$SEARCH" 'tugboat host' 2>/dev/null) \
+    || fail 'search lost a real hit when its formatter ran under mawk'
+  assert_contains "$out" 'tugboat host' \
+    'the portable formatter must preserve the matching line under mawk'
+  pass "search formatting preserves real hits under mawk as well as gawk"
+}
+
 test_search_narrows_the_file_set_by_index() {
   local home out
   home=$(setup_fixture_home)
@@ -634,6 +651,7 @@ test_refresh_without_a_compressor_leaves_no_archive
 test_refresh_builds_verifies_and_lands_the_bound
 test_refresh_does_not_overwrite_an_existing_readme
 test_search_resolves_the_archive_from_fm_home
+test_search_formatter_is_portable_to_mawk
 test_search_narrows_the_file_set_by_index
 test_search_reports_a_missing_archive_rather_than_no_matches
 test_search_reads_the_compressed_store

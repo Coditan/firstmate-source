@@ -166,7 +166,7 @@ xargs -a "$filelist" -d '\n' bash -c '
       "$rg" -n --no-heading --color never -C "$context" -e "$pattern" |
       awk -v path="$path" '\''
         /^--$/ { print; next }
-        { printf "%s%c%s\n", path, 0, $0 }
+        { printf "%c%s%c%s\n", 28, path, 28, $0 }
       '\''
     statuses=("${PIPESTATUS[@]}")
     [ "${statuses[0]}" -eq 0 ] || exit 255
@@ -174,7 +174,7 @@ xargs -a "$filelist" -d '\n' bash -c '
     [ "${statuses[2]}" -eq 0 ] || exit 255
   done
 ' _ "$RG" "$PREPROCESSOR" "$ctx" "$q" |
-awk -F'\0' -v arch="$ARCHIVE" -v zstd="$ZSTD" '
+awk -v arch="$ARCHIVE" -v zstd="$ZSTD" '
   function shell_quote(s, out, i, c) {
     out="\""
     for (i=1; i<=length(s); i++) {
@@ -185,9 +185,13 @@ awk -F'\0' -v arch="$ARCHIVE" -v zstd="$ZSTD" '
     return out "\""
   }
   /^--$/ { print "  --"; next }
-  NF < 2 { next }
+  substr($0, 1, 1) != sprintf("%c", 28) { next }
   {
-    path=$1; rest=$2
+    record=substr($0, 2)
+    split_at=index(record, sprintf("%c", 28))
+    if (!split_at) next
+    path=substr(record, 1, split_at - 1)
+    rest=substr(record, split_at + 1)
     if (path != last) {
       # The session header is read the same way the store is: through the
       # decompressor when the file is compressed, plainly when it is not.
