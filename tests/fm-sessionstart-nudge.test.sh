@@ -510,7 +510,7 @@ SH
   printf 'status=ok\nharness_pid=%s\nsession_id=first-session\ntranscript_path=/tmp/first-session.jsonl\nrecorded_at=1\n' \
     "$holder" > "$record"
   printf '%s\n' "$holder" > "$root/state/.lock"
-  FM_HARNESS_PID_RETRY_DELAYS= run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD" >/dev/null
+  FM_HARNESS_PID_RETRY_DELAYS='' run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD" >/dev/null
   kill "$holder" 2>/dev/null || true
   wait "$holder" 2>/dev/null || true
   [ "$(record_field "$record" status)" = ok ] \

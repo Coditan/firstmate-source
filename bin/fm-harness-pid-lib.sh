@@ -67,6 +67,7 @@ fm_harness_pid() {
         ;;
     esac
     if ! pid=$(ps -o ppid= -p "$pid" 2>/dev/null); then
+      # shellcheck disable=SC2034 # Read by callers after fm_harness_pid returns.
       FM_HARNESS_PID_ERROR=harness-lookup-failed
       return 1
     fi
