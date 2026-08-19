@@ -9,11 +9,12 @@
 # line with n lines of context, and the derivative path.
 #
 # A FULL CONTENT SCAN IS THE INDEX. The archive is UTF-8 text laid out one file
-# per session, zstd-compressed, and a scan of the whole store costs well under a
-# second, so no inverted index exists and none should be added: a search index is
-# a component that can be silently out of date, which is the exact failure this
-# archive was built against. `_index.tsv` is not a search index - it narrows the
-# FILE SET before the scan runs, and only when --since or --cwd asks it to.
+# per session, zstd-compressed, and a scan of the whole store costs about one and
+# a half seconds. No inverted index exists and none should be added: a search
+# index is a component that can be silently out of date, which is the exact
+# failure this archive was built against. `_index.tsv` is not a search index - it
+# narrows the FILE SET before the scan runs, and only when --since or --cwd asks
+# it to.
 #
 # THE STORE IS COMPRESSED, SO PLAIN `grep -r` NO LONGER READS IT. It matches
 # nothing here and exits as though the archive were empty, which is the one
