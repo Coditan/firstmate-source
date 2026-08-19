@@ -87,11 +87,13 @@ Related, and a trap for the measurement itself: `data/learnings.md`, 2026-07-29 
 
 `/sea-chart` amended [Wayfinder](https://github.com/mattpocock/skills/tree/main/skills/engineering/wayfinder) by Matt Pocock for weeks with the MIT licence condition unmet. The captain had to correct the claim. `docs/sea-chart-provenance.md` carries the copyright notice, the licence text, and the comparison.
 
-**Whether anything else came from that repository is still open.** It is carried forward deliberately as an open item rather than closed by assumption.
+The broader 2026-08-17 provenance sweep found no other tracked firstmate artefact with evidence of direct derivation from that repository.
+It also confirmed that the installed `mattpocock-skills` plugin at commit `2ab958093e83e0ec752e6c1c5932da465bf23e0c` carries its own MIT `LICENSE`, so the installed plugin's condition is met.
 
 The generalisation, from `data/learnings.md`, 2026-08-03, where the same error appeared three times in one day: **the channel something arrives through says nothing about where it came from.** Our own pin, our own commit, and a source line that names nobody proves authorship of the *file*, not of the *idea*. Checking one's own home answers a question about one's own home, not about the fleet.
 
-A related note from the same day: a source with no licence file, no versions, and no history - a gist, for instance - is adopted as an undated text snapshot, and a later reader cannot tell whether it has moved. That belongs written down beside the adoption.
+A related note from the same day: a source with no licence file, no versions, and no history - a gist, for instance - is adopted as an undated text snapshot, and a later reader cannot tell whether it has moved.
+That belongs written down beside the adoption.
 
 ### 9. Leftover workspaces and state
 

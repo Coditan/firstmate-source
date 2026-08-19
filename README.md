@@ -260,3 +260,5 @@ Third-party material, all from [`mattpocock/skills`](https://github.com/mattpoco
 - `/domain-modeling` adopts the domain-modeling skill. [`docs/domain-modeling-provenance.md`](docs/domain-modeling-provenance.md) carries the same notice and licence text, along with what was kept, changed, and dropped with the cost of each omission.
 
 `/codebase-sweep` is not on that list: it loads the `codebase-design` plugin skill and copies nothing from it, and its sweep subjects are traced to a talk by the same author rather than derived from his code. [`docs/codebase-sweep-provenance.md`](docs/codebase-sweep-provenance.md) records what came from that talk, what did not, and the measurement behind the difference.
+
+Operational provenance records for installed local tools and Codex-managed bundles that are not vendored into this repository live in [`docs/provenance-metadata-followups.md`](docs/provenance-metadata-followups.md).
