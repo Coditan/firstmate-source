@@ -44,7 +44,15 @@ Verified by effect against that host, unauthenticated:
 - `status` reports the server version and a probed capability map.
 - `repo view`, `pr list`, `pr view`, `pr checks`, `pr merged` all return real data for the public `axitest/axi-demo` repository and its pull request 1.
 - `pr checks` computed `state: success`, `passes: true` from that host's two real commit statuses against the pull request's own head SHA, which is the reading `AGENTS.md` section 7 requires and a whole-branch aggregate cannot give.
-- Each contributed change below was exercised against that host before its pull request was opened, except where the next section says otherwise.
+
+Which of the six contributions that covers, stated per contribution rather than as one blanket claim:
+
+- Contributions 1, 2 and 3 change what the client asks a host and what it reports back, and each was run against that live host before its pull request was opened.
+  For contribution 3 the exception in the next section applies: only the empty `review_decision` was reachable.
+- Contributions 4 and 5 reach no host at all.
+  The version fast path was measured locally against a bare-node floor, and `setup hooks` was exercised against a temporary home directory, never the real one.
+  Neither has live-host evidence because neither has a live-host behaviour to have evidence about.
+- Contribution 6 changes a catalogue file in a different repository and touches no code.
 
 ## What could not be verified, and why
 
