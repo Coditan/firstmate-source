@@ -6,25 +6,63 @@
 #   - the captain-approved flag is present;
 #   - the project clone exists under this home's projects/ directory;
 #   - data/projects.md contains exactly one matching registry entry;
+#   - no registered secondmate home still carries this project;
+#   - no in-flight or queued backlog item names this project as its repo;
+#   - no live task metadata still references this project;
 #   - the primary clone has no uncommitted changes;
-#   - every local branch tip is either preserved on a remote-tracking ref, has
-#     content already represented on the default branch, or names a merged PR;
 #   - every attached worktree is either the primary clone or a prunable stale
 #     entry;
-#   - no registered secondmate home still carries this project;
-#   - no in-flight or queued backlog item names this project as its repo.
+#   - every local work-bearing ref is either preserved on a remote-tracking ref,
+#     has content already represented on the default branch, or names a merged
+#     PR.
+#
+# WORK-BEARING REFS. Only refs/heads used to be enumerated, so a stash entry, a
+# detached-HEAD commit, a local-only tag, a clone parked mid-rebase, and the
+# recorded HEAD of a pruned worktree were all invisible to the landed-work test:
+# each of those clones passed with PASS and would have been deleted. One
+# enumeration closes all of them. It covers:
+#   - every ref in the shared ref space except refs/remotes/* and
+#     refs/prefetch/*, which hold remote content rather than local work:
+#     refs/heads, refs/tags, refs/stash, refs/notes, and anything else a tool
+#     has written;
+#   - every entry of the refs/stash reflog AND the refs/stash tip, because
+#     refs/stash names only the newest stash while `git stash list` IS that
+#     reflog, so older entries hang off no ref and a reflog-less refs/stash
+#     lists nothing;
+#   - HEAD, the only ref holding a detached commit or the replay point of an
+#     interrupted rebase;
+#   - the recorded HEAD of every worktree entry, prunable ones included, because
+#     a pruned worktree's directory is gone while its commits still live only in
+#     this clone's object database.
+# Deliberately NOT enumerated: the HEAD reflog. It is an automatic undo log, not
+# a deliberate save, and every reset, amend, and rebase leaves entries in it that
+# no longer represent wanted work, so honouring it would refuse nearly every
+# clone. This limit is stated rather than left implied: the sweep is complete
+# over named refs, stashes, HEADs, and worktree heads, and no further.
+#
+# REMOTE REFRESH. The refresh runs after the cheap read-only checks, so a project
+# that will be refused anyway never gets its remote-tracking refs pruned first,
+# and a failed refresh no longer ends the run: a deleted origin, or a network or
+# auth outage, is exactly the situation that motivates removing a clone. When the
+# refresh fails, the run continues and every verdict it prints carries the notice
+# that the proofs rest on the last known remote-tracking state, so the run
+# refuses on the landed-work evidence or passes on it, never on the fetch.
 #
 # On a real removal the project directory and registry entry are changed as one
-# operation: the clone is first moved to a private removal path, the registry is
-# atomically rewritten, and only then is the moved clone deleted. If the registry
-# rewrite fails, the clone is moved back before the helper exits.
+# operation: the registry is snapshotted, the clone is moved to a private removal
+# path, the registry is atomically rewritten, and only then is the moved clone
+# deleted. An EXIT/INT/TERM/HUP trap restores both the clone and the registry if
+# anything interrupts that window before the delete begins.
 #
 # Usage: fm-project-remove.sh <project-name> --captain-approved [--dry-run]
 #   --captain-approved  required proof that firstmate is acting on the captain's
-#                       explicit project-removal decision.
+#                       explicit project-removal decision. Required for --dry-run
+#                       too, so the documented dry-run invocation names both.
 #   --dry-run           run the full read-only safety inspection and print what
 #                       would be removed, without fetching, pruning, moving, or
-#                       deleting anything.
+#                       deleting anything. Because it does not refresh remotes,
+#                       its verdict is computed against the current
+#                       remote-tracking state, and it says so in its output.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -78,6 +116,50 @@ esac
 [ "$CAPTAIN_APPROVED" -eq 1 ] \
   || refuse "missing --captain-approved; project removal requires the captain's explicit removal decision."
 
+# Removal-window and scratch-file bookkeeping, read by cleanup_on_exit below.
+REMOVE_PATH=''
+REMOVAL_STAGED=0
+REMOVAL_DELETING=0
+REMOVAL_REGISTRY_BACKUP=''
+PATCH_INDEX_FILE=''
+PROJECT_ABS=''
+
+# The move/rewrite/delete window is the one stretch where an interrupted run can
+# leave the clone at a hidden path with its registry entry already gone, so it
+# restores both halves rather than leaving manual recovery to whoever finds it.
+# Once the delete has begun the clone is no longer whole, so it is deliberately
+# NOT moved back into place looking like a working checkout; the leftover path is
+# named instead.
+cleanup_on_exit() {
+  if [ "$REMOVAL_STAGED" -eq 1 ] && [ "$REMOVAL_DELETING" -eq 0 ]; then
+    REMOVAL_STAGED=0
+    if [ -n "$REMOVAL_REGISTRY_BACKUP" ] && [ -f "$REMOVAL_REGISTRY_BACKUP" ]; then
+      cp -- "$REMOVAL_REGISTRY_BACKUP" "$REG" 2>/dev/null \
+        || printf 'ERROR: could not restore %s from %s.\n' "$REG" "$REMOVAL_REGISTRY_BACKUP" >&2
+    fi
+    if mv -- "$REMOVE_PATH" "$PROJECT_ABS" 2>/dev/null; then
+      printf 'REFUSED: removal of %s was interrupted; the clone and its registry entry were restored.\n' \
+        "$PROJECT_NAME" >&2
+    else
+      printf 'ERROR: removal of %s was interrupted and its clone could not be restored to %s; it is at %s.\n' \
+        "$PROJECT_NAME" "$PROJECT_ABS" "$REMOVE_PATH" >&2
+    fi
+  fi
+  [ -z "$REMOVAL_REGISTRY_BACKUP" ] || rm -f -- "$REMOVAL_REGISTRY_BACKUP"
+  [ -z "$PATCH_INDEX_FILE" ] || rm -f -- "$PATCH_INDEX_FILE"
+}
+
+# shellcheck disable=SC2317,SC2329 # Invoked by the signal traps below.
+signal_exit() {
+  trap - HUP INT TERM
+  exit "$1"
+}
+
+trap cleanup_on_exit EXIT
+trap 'signal_exit 129' HUP
+trap 'signal_exit 130' INT
+trap 'signal_exit 143' TERM
+
 canonical_existing_dir() {
   local target=$1
   [ -n "$target" ] && [ -d "$target" ] || return 1
@@ -116,15 +198,15 @@ path_is_child_of() {
   return 1
 }
 
+# One git call rather than one merge-base per remote ref: the enumeration below
+# asks this of every branch, tag, stash entry, and worktree head, and a repo with
+# many remote branches would otherwise multiply out into thousands of processes.
+# `--contains` is the same reachability test `merge-base --is-ancestor` performs.
 commit_on_any_remote() {
-  local commit=$1 ref
-  while IFS= read -r ref; do
-    [ -n "$ref" ] || continue
-    git -C "$PROJECT_ABS" merge-base --is-ancestor "$commit" "$ref" 2>/dev/null && return 0
-  done <<EOF
-$(git -C "$PROJECT_ABS" for-each-ref --format='%(refname)' refs/remotes 2>/dev/null || true)
-EOF
-  return 1
+  local commit=$1 found
+  found=$(git -C "$PROJECT_ABS" for-each-ref --count=1 --contains "$commit" \
+    --format='%(refname)' refs/remotes 2>/dev/null) || return 1
+  [ -n "$found" ]
 }
 
 commit_in_default_history() {
@@ -132,55 +214,76 @@ commit_in_default_history() {
   git -C "$PROJECT_ABS" merge-base --is-ancestor "$commit" "$DEFAULT_REF" 2>/dev/null
 }
 
-branch_patch_content_in_default() {
-  local branch=$1 cherry line commit patch_id default_commit matches='' seen=0
-  cherry=$(git -C "$PROJECT_ABS" cherry "$DEFAULT_REF" "$branch" 2>/dev/null) || return 1
+commit_patch_id() {
+  git -C "$PROJECT_ABS" show --pretty=medium --no-ext-diff "$1" 2>/dev/null \
+    | git patch-id --stable 2>/dev/null \
+    | awk 'NR == 1 { print $1 }'
+}
+
+# Naming the commit that landed a patch used to rescan the whole default history
+# per unlanded commit per branch: 6.7ms a commit, so a 20k-commit project spent
+# ~135s per commit with no output and looked hung. `git log -p | git patch-id`
+# builds the same mapping in one pass, once per run, lazily - nothing is scanned
+# unless a ref actually needs a name.
+#
+# Every caller between here and the main shell reports through a variable rather
+# than through stdout, because a command substitution runs in a subshell and the
+# built index would be forgotten the moment the proof for one ref finished - the
+# per-ref rescan back again, plus a leaked scratch file per ref.
+build_patch_index() {
+  local file
+  [ -z "$PATCH_INDEX_FILE" ] || return 0
+  file=$(mktemp "${TMPDIR:-/tmp}/fm-project-remove-patch-index.XXXXXX") || return 1
+  printf 'note: indexing %s patch ids once to name landed content.\n' "$DEFAULT_REF" >&2
+  git -C "$PROJECT_ABS" log -p --no-ext-diff "$DEFAULT_REF" 2>/dev/null \
+    | git patch-id --stable > "$file" 2>/dev/null || true
+  PATCH_INDEX_FILE=$file
+}
+
+# `git cherry` reporting no `+` line has ALREADY proved the content landed. What
+# follows only names the landed commits for the audit trail, so a naming miss
+# leaves PATCH_PROOF_NAMES empty and still returns the proof, instead of
+# revoking it and pushing the ref toward refusal.
+PATCH_PROOF_NAMES=''
+rev_patch_content_in_default() {
+  local rev=$1 cherry line commit patch_id landed matches='' seen=0
+  PATCH_PROOF_NAMES=''
+  cherry=$(git -C "$PROJECT_ABS" cherry "$DEFAULT_REF" "$rev" 2>/dev/null) || return 1
   [ -n "$cherry" ] || return 0
   ! printf '%s\n' "$cherry" | grep -q '^+' || return 1
   while IFS= read -r line; do
     case "$line" in '- '*)
+      seen=1
       commit=${line#'- '}
-      patch_id=$(git -C "$PROJECT_ABS" show --pretty=medium --no-ext-diff "$commit" 2>/dev/null \
-        | git patch-id --stable 2>/dev/null \
-        | awk 'NR == 1 { print $1 }') || return 1
+      patch_id=$(commit_patch_id "$commit") || continue
       [ -n "$patch_id" ] || continue
-      default_commit=$(
-        git -C "$PROJECT_ABS" log --format=%H "$DEFAULT_REF" 2>/dev/null |
-          while IFS= read -r candidate; do
-            [ -n "$candidate" ] || continue
-            candidate_patch=$(git -C "$PROJECT_ABS" show --pretty=medium --no-ext-diff "$candidate" 2>/dev/null \
-              | git patch-id --stable 2>/dev/null \
-              | awk 'NR == 1 { print $1 }') || exit 1
-            [ "$candidate_patch" = "$patch_id" ] || continue
-            printf '%s\n' "$candidate"
-            exit 0
-          done
-      ) || return 1
-      [ -n "$default_commit" ] || return 1
-      default_commit=$(git -C "$PROJECT_ABS" rev-parse --short "$default_commit" 2>/dev/null || printf '%s' "$default_commit")
+      build_patch_index || continue
+      landed=$(awk -v id="$patch_id" '$1 == id { print $2; exit }' "$PATCH_INDEX_FILE") || continue
+      [ -n "$landed" ] || continue
+      landed=$(git -C "$PROJECT_ABS" rev-parse --short "$landed" 2>/dev/null || printf '%s' "$landed")
       case "
 $matches
 " in *"
-$default_commit
+$landed
 "*) ;;
         *)
-          matches="${matches}${default_commit}
+          matches="${matches}${landed}
 "
           ;;
       esac
-      seen=1
       ;;
     esac
   done <<EOF
 $cherry
 EOF
   [ "$seen" -eq 1 ] || return 1
-  printf '%s' "$matches" | paste -sd, -
+  [ -z "$matches" ] || PATCH_PROOF_NAMES=$(printf '%s' "$matches" | paste -sd, -)
+  return 0
 }
 
-branch_tree_in_default_history() {
-  local branch=$1 tree commit
-  tree=$(git -C "$PROJECT_ABS" rev-parse --verify "$branch^{tree}" 2>/dev/null) || return 1
+rev_tree_in_default_history() {
+  local rev=$1 tree commit
+  tree=$(git -C "$PROJECT_ABS" rev-parse --verify "$rev^{tree}" 2>/dev/null) || return 1
   commit=$(git -C "$PROJECT_ABS" log --format='%H %T' "$DEFAULT_REF" 2>/dev/null \
     | awk -v t="$tree" '$2 == t { print $1; exit }') || return 1
   [ -n "$commit" ] || return 1
@@ -230,9 +333,9 @@ github_has_commit() {
 }
 
 merged_pr_proves_branch() {
-  local branch=$1 number out state pr_head tip repo
+  local branch=$1 tip=$2 number out state pr_head repo
   number=$(pr_number_from_branch "$branch") || return 1
-  tip=$(git -C "$PROJECT_ABS" rev-parse --verify "$branch^{commit}" 2>/dev/null) || return 1
+  [ -n "$tip" ] || return 1
   if command -v gh-axi >/dev/null 2>&1; then
     out=$(cd "$PROJECT_ABS" && gh-axi pr view "$number" --json state,headRefOid -q '.state + "\t" + .headRefOid' 2>/dev/null) || out=''
     state=${out%%	*}
@@ -249,35 +352,103 @@ merged_pr_proves_branch() {
   [ "$pr_head" = "$tip" ] || github_has_commit "$repo" "$tip"
 }
 
-branch_is_safe() {
-  local branch=$1 tip proof
-  tip=$(git -C "$PROJECT_ABS" rev-parse --verify "$branch^{commit}" 2>/dev/null) || return 1
+work_ref_noun() {
+  case "$1" in
+    branch) printf 'local branch\n' ;;
+    tag) printf 'local tag\n' ;;
+    stash) printf 'stashed change\n' ;;
+    head) printf 'detached HEAD\n' ;;
+    worktree) printf 'worktree HEAD\n' ;;
+    *) printf 'local ref\n' ;;
+  esac
+}
+
+# Emit one "kind<TAB>label<TAB>rev" record per work-bearing ref. See the
+# WORK-BEARING REFS note in the header for what is enumerated and what is not.
+work_ref_records() {
+  local refname oid path head _branch _prunable abs_path
+  # The stash reflog comes first so its selector labels win the commit-level
+  # deduplication over the bare refs/stash tip below. Both are emitted: the
+  # reflog IS `git stash list`, but a refs/stash written without a reflog - by
+  # `git update-ref`, or after .git/logs/refs/stash is lost - lists nothing at
+  # all, and its commit would otherwise be enumerated nowhere.
+  while IFS=$'\t' read -r oid refname; do
+    [ -n "$oid" ] || continue
+    printf 'stash\t%s\t%s\n' "${refname:-refs/stash}" "$oid"
+  done <<EOF
+$(git -C "$PROJECT_ABS" reflog show --format='%H%x09%gd' refs/stash 2>/dev/null || true)
+EOF
+  while IFS=$'\t' read -r refname oid; do
+    [ -n "$refname" ] && [ -n "$oid" ] || continue
+    case "$refname" in
+      # refs/remotes/* is the preservation proof itself. refs/prefetch/* is
+      # written only by `git maintenance`'s prefetch task, straight from the
+      # remote and never from local work, and it can run ahead of the last real
+      # fetch - so enumerating it would refuse a clone over commits that are on
+      # the remote by construction.
+      refs/remotes/*|refs/prefetch/*) continue ;;
+      refs/stash) printf 'stash\t%s\t%s\n' "$refname" "$oid" ;;
+      refs/heads/*) printf 'branch\t%s\t%s\n' "${refname#refs/heads/}" "$oid" ;;
+      refs/tags/*) printf 'tag\t%s\t%s\n' "${refname#refs/tags/}" "$oid" ;;
+      *) printf 'ref\t%s\t%s\n' "$refname" "$oid" ;;
+    esac
+  done <<EOF
+$(git -C "$PROJECT_ABS" for-each-ref --format='%(refname)%09%(objectname)' 2>/dev/null || true)
+EOF
+  oid=$(git -C "$PROJECT_ABS" rev-parse --verify --quiet HEAD 2>/dev/null || true)
+  [ -z "$oid" ] || printf 'head\tHEAD\t%s\n' "$oid"
+  while IFS=$'\t' read -r path head _branch _prunable; do
+    [ -n "$path" ] && [ -n "$head" ] || continue
+    if [ -d "$path" ]; then
+      abs_path=$(canonical_existing_dir "$path" 2>/dev/null || printf '%s' "$path")
+    else
+      abs_path=$path
+    fi
+    [ "$abs_path" != "$PROJECT_ABS" ] || continue
+    printf 'worktree\t%s\t%s\n' "$path" "$head"
+  done <<EOF
+$(worktree_records)
+EOF
+}
+
+REF_PROOF=''
+ref_is_safe() {
+  local kind=$1 label=$2 tip=$3 tree_proof
+  REF_PROOF=''
   if commit_on_any_remote "$tip"; then
-    printf 'remote-tracking ref contains %s\n' "$tip"
+    REF_PROOF="remote-tracking ref contains $tip"
     return 0
   fi
   if commit_in_default_history "$tip"; then
-    printf 'default branch contains %s by ancestry\n' "$tip"
+    REF_PROOF="default branch contains $tip by ancestry"
     return 0
   fi
-  if proof=$(branch_patch_content_in_default "$branch"); then
-    printf 'default branch history contains patch content landed as %s\n' "$proof"
+  if rev_patch_content_in_default "$tip"; then
+    if [ -n "$PATCH_PROOF_NAMES" ]; then
+      REF_PROOF="default branch history contains patch content landed as $PATCH_PROOF_NAMES"
+    else
+      REF_PROOF="default branch history contains the patch content of every commit above $DEFAULT_REF"
+    fi
     return 0
   fi
-  if proof=$(branch_tree_in_default_history "$branch"); then
-    printf 'default branch history contains branch tip tree landed as %s\n' "$proof"
+  if tree_proof=$(rev_tree_in_default_history "$tip"); then
+    REF_PROOF="default branch history contains this tip tree landed as $tree_proof"
     return 0
   fi
-  if merged_pr_proves_branch "$branch"; then
-    printf 'merged PR %s records this branch tip\n' "$(pr_number_from_branch "$branch")"
+  if [ "$kind" = branch ] && merged_pr_proves_branch "$label" "$tip"; then
+    REF_PROOF="merged PR $(pr_number_from_branch "$label") records this branch tip"
     return 0
   fi
   return 1
 }
 
-branch_refusal_detail() {
-  local branch=$1
-  git -C "$PROJECT_ABS" log --oneline "$branch" --not --remotes --not "$DEFAULT_REF" -- 2>/dev/null \
+# `--not --remotes --not "$DEFAULT_REF"` flipped the default ref back to a
+# POSITIVE ref, so the evidence listed the default branch's own landed commits
+# beneath the unlanded one and made the risk look several times larger than it
+# was. One `--not` excludes both.
+ref_refusal_detail() {
+  local tip=$1
+  git -C "$PROJECT_ABS" log --oneline "$tip" --not --remotes "$DEFAULT_REF" -- 2>/dev/null \
     | sed -n '1,6p'
 }
 
@@ -370,23 +541,40 @@ primary_dirty_line_is_registered_claude_worktree() {
   path_is_registered_claude_worktree "$abs_path"
 }
 
-check_local_branches() {
-  local branch proof detail bad=0
-  while IFS= read -r branch; do
-    [ -n "$branch" ] || continue
-    if proof=$(branch_is_safe "$branch"); then
-      BRANCH_PROOFS="${BRANCH_PROOFS}${branch}: ${proof}
+check_local_work_refs() {
+  local kind label rev noun tip detail seen='' bad=0
+  while IFS=$'\t' read -r kind label rev; do
+    [ -n "$kind" ] || continue
+    noun=$(work_ref_noun "$kind")
+    tip=$(git -C "$PROJECT_ABS" rev-parse --verify --quiet "$rev^{commit}" 2>/dev/null) || tip=''
+    if [ -z "$tip" ]; then
+      bad=1
+      printf '%s %s records %s, which is not a commit this clone can resolve\n' \
+        "$noun" "$label" "$rev" >&2
+      continue
+    fi
+    case "
+$seen
+" in *"
+$tip
+"*) continue ;;
+    esac
+    seen="${seen}${tip}
+"
+    if ref_is_safe "$kind" "$label" "$tip"; then
+      WORK_PROOFS="${WORK_PROOFS}${noun} ${label}: ${REF_PROOF}
 "
       continue
     fi
     bad=1
-    printf 'local branch %s has no preservation or landed-content proof\n' "$branch" >&2
-    detail=$(branch_refusal_detail "$branch" || true)
+    printf '%s %s has no preservation or landed-content proof\n' "$noun" "$label" >&2
+    detail=$(ref_refusal_detail "$tip" || true)
     [ -z "$detail" ] || printf '%s\n' "$detail" >&2
   done <<EOF
-$(git -C "$PROJECT_ABS" for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null)
+$(work_ref_records)
 EOF
-  [ "$bad" -eq 0 ] || refuse "local branches carry commits that are not proved landed or preserved."
+  [ "$bad" -eq 0 ] \
+    || refuse "local branches, tags, stashes, or worktree heads carry commits that are not proved landed or preserved."
 }
 
 emit_worktree_record() {
@@ -432,8 +620,8 @@ attachment_kind() {
 }
 
 check_attached_worktrees() {
-  local path _head branch prunable abs_path kind dirty bad=0
-  while IFS=$'\t' read -r path _head branch prunable; do
+  local path head branch prunable abs_path kind dirty bad=0
+  while IFS=$'\t' read -r path head branch prunable; do
     [ -n "$path" ] || continue
     if [ -d "$path" ]; then
       abs_path=$(canonical_existing_dir "$path" 2>/dev/null || printf '%s' "$path")
@@ -442,7 +630,7 @@ check_attached_worktrees() {
     fi
     [ "$abs_path" != "$PROJECT_ABS" ] || continue
     if [ "$prunable" = 1 ]; then
-      ATTACHED_PROOFS="${ATTACHED_PROOFS}${path}: prunable stale worktree entry
+      ATTACHED_PROOFS="${ATTACHED_PROOFS}${path}: prunable stale worktree entry; its recorded HEAD ${head:-none} is proved with the local work refs
 "
       continue
     fi
@@ -682,41 +870,66 @@ path_is_child_of "$PROJECTS_ABS" "$PROJECT_ABS" \
 git -C "$PROJECT_ABS" rev-parse --show-toplevel >/dev/null 2>&1 \
   || refuse "project path $PROJECT_ABS is not an inspectable git worktree."
 
-if [ "$DRY_RUN" -eq 0 ]; then
-  fetch_before_removal || refuse "cannot refresh remotes for $PROJECT_NAME before removal."
+# Cheap, read-only, repository-untouching checks first: a project that will be
+# refused for a registry, backlog, secondmate, or live-work reason must not have
+# its remote-tracking refs pruned by a refresh it never needed.
+check_registry
+check_secondmates
+check_backlog
+check_live_meta
+
+REMOTES_REFRESHED=1
+if [ "$DRY_RUN" -eq 1 ]; then
+  REMOTES_REFRESHED=0
+elif ! fetch_before_removal; then
+  REMOTES_REFRESHED=0
+  printf 'WARNING: could not refresh remotes for %s; preservation proofs below rest on the last known remote-tracking state.\n' \
+    "$PROJECT_NAME" >&2
 fi
 
 DEFAULT_REF=$(project_default_ref) \
   || refuse "cannot determine a default branch for $PROJECT_NAME."
-BRANCH_PROOFS=''
+WORK_PROOFS=''
 ATTACHED_PROOFS=''
 
-check_registry
 check_primary_clean
-check_local_branches
 check_attached_worktrees
-check_secondmates
-check_backlog
-check_live_meta
+check_local_work_refs
 
 if [ "$DRY_RUN" -eq 1 ]; then
   printf 'PASS: project %s removal safety checks passed.\n' "$PROJECT_NAME"
   printf 'DRY-RUN: would remove %s.\n' "$PROJECT_ABS"
   printf 'DRY-RUN: would remove the matching entry from %s in the same operation.\n' "$REG"
+  printf 'DRY-RUN: remote-tracking state was not refreshed, so a real run can reach a different verdict.\n'
   printf 'Default ref: %s\n' "$DEFAULT_REF"
-  printf 'Local branch proofs:\n%s' "$BRANCH_PROOFS"
+  printf 'Local work proofs:\n%s' "$WORK_PROOFS"
   printf 'Attached worktree proofs:\n%s' "$ATTACHED_PROOFS"
   exit 0
 fi
+
+[ "$REMOTES_REFRESHED" -eq 1 ] \
+  || printf 'WARNING: the proofs for %s rest on unrefreshed remote-tracking state.\n' "$PROJECT_NAME" >&2
 
 REMOVE_PATH="$PROJECTS_ABS/.fm-removing-${PROJECT_NAME}.$$"
 [ ! -e "$REMOVE_PATH" ] || refuse "temporary removal path already exists: $REMOVE_PATH."
 
 remove_attached_worktrees || refuse "failed to remove attached worktrees for $PROJECT_NAME; project clone and registry left in place."
-mv "$PROJECT_ABS" "$REMOVE_PATH" || refuse "failed to move project clone to removal path; registry left unchanged."
-if ! rewrite_registry_without_project; then
-  mv "$REMOVE_PATH" "$PROJECT_ABS" 2>/dev/null || true
-  refuse "failed to remove $PROJECT_NAME from $REG; project clone restored if possible."
-fi
-rm -rf -- "$REMOVE_PATH"
+
+REMOVAL_REGISTRY_BACKUP="$REG.removing.$$"
+cp -- "$REG" "$REMOVAL_REGISTRY_BACKUP" \
+  || refuse "could not snapshot the project registry at $REG; project clone and registry left in place."
+
+mv -- "$PROJECT_ABS" "$REMOVE_PATH" || refuse "failed to move project clone to removal path; registry left unchanged."
+REMOVAL_STAGED=1
+
+rewrite_registry_without_project \
+  || refuse "failed to remove $PROJECT_NAME from $REG."
+
+REMOVAL_DELETING=1
+rm -rf -- "$REMOVE_PATH" || {
+  printf 'ERROR: %s was unregistered but its moved clone could not be deleted; it is at %s and must be removed by hand.\n' \
+    "$PROJECT_NAME" "$REMOVE_PATH" >&2
+  exit 1
+}
+REMOVAL_STAGED=0
 printf 'removed project %s and registry entry from %s\n' "$PROJECT_NAME" "$REG"
