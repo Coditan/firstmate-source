@@ -51,6 +51,13 @@ compress refuses instead of leaving a store that is half compressed and half
 plain, which is exactly the kind of quiet disagreement this archive exists to
 avoid.
 
+KNOWN CONDITION ON FM_ZSTD: it is what lets a store be built on a machine where
+zstd is not on PATH, and it governs building and verifying only. The search
+always uses the zstd on PATH, so a store written by an overridden compressor is
+read back by a different one, and the two have to be able to read each other.
+Ordinary zstd builds can; pointing this at something that is not zstd-compatible
+leaves a store nothing else can open.
+
 Usage:
   fm-transcript-reduce.py --source claude|codex --in DIR --out DIR
                           [--patterns FILE] [--truncate 400] [--limit N]

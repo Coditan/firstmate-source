@@ -515,6 +515,77 @@ test_search_reads_the_compressed_store() {
 # like this one's. The search no longer uses ripgrep at all, and that is proven
 # by running it on a PATH where ripgrep genuinely cannot be resolved - not by
 # stubbing a flag, which is what let the defect through the previous two rounds.
+# The machine this was written on reports a closed pipe as signal 141. The CI
+# runner's zstd reports it as an ordinary error instead, and a search that
+# matched EVERY session therefore exited 2 there while passing here. So the rule
+# is tested against a reader that behaves like the runner's rather than like
+# this seat's: the search script itself runs, with only its sibling reader
+# swapped for one that swallows the signal and reports a plain failure.
+test_a_reader_that_hides_the_signal_still_reports_a_match() {
+  local store bindir i rc=0 out count expected=6
+  store="$TMP/odd-reader/claude-redacted"
+  rm -rf "$TMP/odd-reader"
+  mkdir -p "$store"
+  for i in $(seq 1 "$expected"); do
+    {
+      printf '# session odd%s.jsonl\n# cwd      /home/x/odd%s\n' "$i" "$i"
+      printf '# span     2026-08-19 10:00:00 .. 2026-08-19 10:05:00\n\n'
+      printf '    the sought phrase sits near the top of this session\n'
+      yes '    a long tail that keeps the decompressor writing well past the match' 2>/dev/null |
+        head -20000
+    } | zstd -q -3 -o "$store/odd$i.txt.zst"
+  done
+
+  bindir="$TMP/odd-reader-bin"
+  rm -rf "$bindir"
+  mkdir -p "$bindir"
+  cp "$SEARCH" "$bindir/fm-transcript-search.sh"
+  cat >"$bindir/fm-transcript-zcat.sh" <<'EOF'
+#!/usr/bin/env bash
+# Models a decompressor that reports a closed pipe as an ordinary failure
+# instead of dying on the signal, which is what the CI runner's zstd does.
+zstd -dcq -- "$1" 2>/dev/null || exit 1
+EOF
+  chmod +x "$bindir/fm-transcript-search.sh" "$bindir/fm-transcript-zcat.sh"
+
+  out=$(FM_TRANSCRIPT_ARCHIVE="$TMP/odd-reader" "$bindir/fm-transcript-search.sh" \
+        'sought phrase' --files-only 2>/dev/null) || rc=$?
+  [ "$rc" -eq 0 ] \
+    || fail "a search matching every session must exit 0 even when the reader hides the signal, got $rc"
+  count=$(printf '%s\n' "$out" | grep -c 'odd[0-9]*\.txt\.zst')
+  [ "$count" -eq "$expected" ] || fail "reported $count of $expected sessions"
+  pass "a reader that reports the closed pipe as a plain failure does not turn a full match into an error"
+}
+
+# A reduced session is UTF-8 by construction, but it quotes material that is
+# not always clean, and one stray control byte makes grep call the whole file
+# binary and print no lines for it. Measured on the live archive: five sessions
+# that --files-only reported as containing the term were missing from the
+# context output of the same query. A search that answers one way per session
+# and another way per line is disagreeing with itself.
+test_a_session_with_a_control_byte_is_still_reported() {
+  local store out rc=0
+  store="$TMP/binary-byte/claude-redacted"
+  rm -rf "$TMP/binary-byte"
+  mkdir -p "$store"
+  {
+    printf '# session odd.jsonl\n# cwd      /home/x/odd\n'
+    printf '# span     2026-08-19 10:00:00 .. 2026-08-19 10:05:00\n\n'
+    printf '    a quoted blob follows: \001\002\003 and then text\n'
+    printf '    the sought phrase is on its own line here\n'
+  } | zstd -q -3 -o "$store/odd.txt.zst"
+
+  out=$(FM_TRANSCRIPT_ARCHIVE="$TMP/binary-byte" "$SEARCH" 'sought phrase' --files-only 2>/dev/null) || rc=$?
+  [ "$rc" -eq 0 ] || fail "--files-only must find a session carrying a control byte, got exit $rc"
+  assert_contains "$out" 'odd.txt.zst' '--files-only must name the session'
+  rc=0
+  out=$(FM_TRANSCRIPT_ARCHIVE="$TMP/binary-byte" "$SEARCH" 'sought phrase' -C 1 2>/dev/null) || rc=$?
+  [ "$rc" -eq 0 ] || fail "the context path must find it too, got exit $rc"
+  assert_contains "$out" 'sought phrase' \
+    'the matching line must be printed, not swallowed as an unprintable file'
+  pass "a session carrying a control byte is reported by both search paths, not silently skipped"
+}
+
 # THE CASE EVERY OTHER FIXTURE MISSED. A scan that stops reading as soon as it
 # can answer kills the decompressor feeding it with SIGPIPE. Treating that
 # ordinary event as a scanner failure returned 0 matching sessions where 75 were
@@ -638,6 +709,27 @@ test_search_reports_scanner_failures_as_errors() {
   pass "scanner failures are errors while an ordinary no-match remains distinct"
 }
 
+# The other half of the reader-status rule, and the half that is easy to lose:
+# once a search stops treating a closed pipe as a failure, it must still fail on
+# a session file it genuinely could not read. A store file that is not valid
+# compressed data is exactly that, and it must never pass as a session that
+# simply held no match.
+test_search_fails_on_a_store_file_it_cannot_read() {
+  local store rc=0 out
+  store="$TMP/corrupt-store/claude-redacted"
+  rm -rf "$TMP/corrupt-store"
+  mkdir -p "$store"
+  printf 'this is not compressed data at all\n' >"$store/broken.txt.zst"
+  out=$(FM_TRANSCRIPT_ARCHIVE="$TMP/corrupt-store" "$SEARCH" 'anything at all' --files-only 2>&1 >/dev/null) || rc=$?
+  [ "$rc" -eq 2 ] \
+    || fail "a store file that cannot be read must be a scanner error, got exit $rc"
+  rc=0
+  FM_TRANSCRIPT_ARCHIVE="$TMP/corrupt-store" "$SEARCH" 'anything at all' >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] \
+    || fail "the context path must also fail on an unreadable store file, got exit $rc"
+  pass "an unreadable session file is a scanner error, not a session that held no match"
+}
+
 test_search_without_its_tool_refuses_rather_than_finding_nothing() {
   local home out rc=0 bindir tool
   home=$(setup_fixture_home)
@@ -707,9 +799,12 @@ test_search_reports_a_missing_archive_rather_than_no_matches
 test_search_reads_the_compressed_store
 test_search_works_on_a_machine_without_ripgrep
 test_a_scan_that_stops_early_still_reports_every_session
+test_a_reader_that_hides_the_signal_still_reports_a_match
+test_a_session_with_a_control_byte_is_still_reported
 test_search_reads_plain_sessions_during_migration
 test_plain_grep_does_not_read_the_sessions
 test_search_status_says_matched_or_not_matched
 test_search_reports_scanner_failures_as_errors
+test_search_fails_on_a_store_file_it_cannot_read
 test_search_without_its_tool_refuses_rather_than_finding_nothing
 test_refresh_names_a_readme_that_still_promises_plain_grep

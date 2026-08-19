@@ -10,7 +10,7 @@
 #
 # A FULL CONTENT SCAN IS THE INDEX. The archive is UTF-8 text laid out one file
 # per session, zstd-compressed, and a scan of the whole store costs about one and
-# a half seconds. No inverted index exists and none should be added: a search
+# a half seconds for the file list, or two and a half with context. No inverted index exists and none should be added: a search
 # index is a component that can be silently out of date, which is the exact
 # failure this archive was built against. `_index.tsv` is not a search index - it
 # narrows the FILE SET before the scan runs, and only when --since or --cwd asks
@@ -119,7 +119,14 @@ case "$jobs" in ''|*[!0-9]*) jobs=4;; esac
 [ "$jobs" -ge 1 ] || jobs=1
 
 # narrow the file set from the per-source index when asked
-filelist="$(mktemp)"; trap 'rm -f "$filelist"' EXIT
+filelist="$(mktemp)"
+# Each parallel worker writes its own file rather than into a shared pipe.
+# Buffered writes from concurrent workers interleave at block boundaries, not at
+# line boundaries, which split lines in half: measured on this archive as three
+# runs of one query returning 8121, 8105 and 8104 lines, with header lines cut
+# mid-path. A search whose answer changes between runs is not a search.
+partdir="$(mktemp -d)"
+trap 'rm -rf "$filelist" "$partdir"' EXIT
 for r in "${roots[@]}"; do
   [ -d "$r" ] || continue
   idx="$r/_index.tsv"
@@ -151,11 +158,22 @@ echo "# searching $n session files under: ${roots[*]}" >&2
 # The file set is handed over in batches, spread across cores. Two rules hold
 # inside a batch, and both were learned from a defect rather than designed in.
 #
-# A reader killed by SIGPIPE is not a failure. grep stops reading the moment it
-# can answer - always with -q, sometimes with -C - and the decompressor feeding
-# it then dies of a broken pipe. Treating that as a scanner error is what once
-# returned 0 matching sessions where 75 were expected, on a full archive, so
-# status 141 counts as success here while any other reader failure is real.
+# THE READER'S EXIT STATUS ONLY MEANS SOMETHING WHEN THE CONSUMER READ TO THE
+# END, and that is the whole rule. grep stops reading the moment it can answer,
+# and the decompressor feeding it then dies on the closed pipe - as signal 141
+# here, as a write error on another machine, as whatever the local zstd build
+# does. None of those say anything about the file, so when grep reports a match
+# the reader's status is not consulted. When grep read the session through and
+# found nothing, the reader had every chance to finish, so a non-zero status
+# there is a genuine failure to read the store and stays an error. This is not
+# the status being ignored, it is the status being read only where it carries
+# information.
+#
+# Both ways of getting this wrong have been measured on this branch. Requiring
+# the reader to exit 0 returned 0 matching sessions where 75 were expected, over
+# a full archive. Accepting only signal 141 made a search that matched every
+# session exit 2 on a machine whose zstd reports a closed pipe differently. A
+# search that lies about whether it worked is the same defect either way round.
 #
 # A genuine no-match must not stop the scan. It is normalised to success inside
 # the batch so xargs keeps going, and what the completed search actually found
@@ -163,28 +181,30 @@ echo "# searching $n session files under: ${roots[*]}" >&2
 if [ "$files_only" = 1 ]; then
   # shellcheck disable=SC2016
   xargs -a "$filelist" -d '\n' -P "$jobs" -n 16 bash -c '
-    reader=$1; pattern=$2; shift 2
+    reader=$1; pattern=$2; partdir=$3; shift 3
+    part="$partdir/part.$$"
     for path do
-      "$reader" "$path" | grep -qE -e "$pattern"
+      "$reader" "$path" | grep -qaE -e "$pattern"
       statuses=("${PIPESTATUS[@]}")
       case ${statuses[1]} in
-        0) printf "%s\n" "$path" ;;
-        1) ;;
-        *) exit 255 ;;
-      esac
-      case ${statuses[0]} in
-        0|141) ;;
+        0) printf "%s\n" "$path" >>"$part" ;;
+        1) [ "${statuses[0]}" -eq 0 ] || exit 255 ;;
         *) exit 255 ;;
       esac
     done
-  ' _ "$READER" "$q" |
+  ' _ "$READER" "$q" "$partdir" || exit 2
+  find "$partdir" -type f -exec cat {} + 2>/dev/null |
   sort |
   awk 'NF { print; found=1 } END { exit(found ? 0 : 1) }'
-  statuses=("${PIPESTATUS[@]}")
-  [ "${statuses[0]}" -eq 0 ] || exit 2
-  exit "${statuses[2]}"
+  exit "${PIPESTATUS[2]}"
 fi
 
+# The scan reads every session as text (-a). A reduced session is UTF-8 by
+# construction, but a stray control byte from the material it quotes makes grep
+# call the whole file binary and print no lines at all - measured here as five
+# sessions that contain the term reported by --files-only and missing from the
+# context output, which is a search quietly disagreeing with itself.
+#
 # Every emitted line carries its own session path, including the separators
 # between context groups, so parallel batches cannot misattribute a line. The
 # stable sort then gathers each session's lines back together - equal keys keep
@@ -192,17 +212,21 @@ fi
 # reader below prints one header per session.
 # shellcheck disable=SC2016
 xargs -a "$filelist" -d '\n' -P "$jobs" -n 16 bash -c '
-  reader=$1; context=$2; pattern=$3; shift 3
+  reader=$1; context=$2; pattern=$3; partdir=$4; shift 4
+  part="$partdir/part.$$"
   for path do
     "$reader" "$path" |
-      grep -nE -C "$context" -e "$pattern" |
-      awk -v path="$path" '\''{ printf "%c%s%c%s\n", 28, path, 28, $0 }'\''
+      grep -naE -C "$context" -e "$pattern" |
+      awk -v path="$path" '\''{ printf "%c%s%c%s\n", 28, path, 28, $0 }'\'' >>"$part"
     statuses=("${PIPESTATUS[@]}")
     case ${statuses[1]} in 0|1) ;; *) exit 255;; esac
-    case ${statuses[0]} in 0|141) ;; *) exit 255;; esac
+    # grep -C reads the session through whether or not it matched, so here the
+    # reader always had its chance and its status always carries information.
+    [ "${statuses[0]}" -eq 0 ] || exit 255
     [ "${statuses[2]}" -eq 0 ] || exit 255
   done
-' _ "$READER" "$ctx" "$q" |
+' _ "$READER" "$ctx" "$q" "$partdir" || exit 2
+find "$partdir" -type f -exec cat {} + 2>/dev/null |
 sort -s -t "$(printf '\034')" -k2,2 |
 awk -v arch="$ARCHIVE" -v zstd="$ZSTD" '
   function shell_quote(s, out, i, c) {
@@ -239,6 +263,4 @@ awk -v arch="$ARCHIVE" -v zstd="$ZSTD" '
     else print "  " rest
   }
   END { exit(found ? 0 : 1) }'
-statuses=("${PIPESTATUS[@]}")
-[ "${statuses[0]}" -eq 0 ] || exit 2
-exit "${statuses[2]}"
+exit "${PIPESTATUS[2]}"

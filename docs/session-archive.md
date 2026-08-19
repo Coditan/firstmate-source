@@ -39,7 +39,7 @@ bin/fm-transcript-search.sh 'pattern' --files-only
 ```
 
 **A full content scan is the index.**
-The archive is UTF-8 text laid out one file per session, and a scan of the whole store was measured at 1.44 to 1.48 s over the compressed 48.9 MB on 2026-08-19, so no inverted index exists and none should be added.
+The archive is UTF-8 text laid out one file per session, and a scan of the whole store was measured at 1.50 to 1.54 s for the file list, and 2.31 to 2.64 s with context, over the compressed 48.9 MB on 2026-08-19, so no inverted index exists and none should be added.
 An index is a component that can be silently out of date, which is exactly the failure this archive was built against.
 Compression does not reintroduce that failure and is why it was worth doing: the compressed file is the content, not a summary of it, and a decompression that goes wrong is an error rather than a wrong answer.
 `_index.tsv` is not a search index: it narrows the file set before the scan runs, and only when `--since` or `--cwd` asks it to.
@@ -88,7 +88,8 @@ A raw store that does not exist on this vessel is reported and skipped, never tr
 
 Each session is written as one zstd file at level 3, which took this seat's store from 271.2 MB to 52.1 MB on 2026-08-18.
 `zstd` is a hard requirement of a rebuild rather than a preference: a run that cannot compress refuses before writing anything, because a store that is half compressed and half plain is a store whose answers depend on which half a question lands in.
-`FM_ZSTD` may name the compressor used specifically for building and verifying the store; it does not apply to searching.
+`FM_ZSTD` may name the compressor used specifically for building and verifying the store; it does not apply to searching, and it exists because it is the only way to build a store on a machine where `zstd` is not on `PATH`.
+That split is a known condition rather than an oversight: a store written by an overridden compressor is read back by the `zstd` the search finds on `PATH`, so the two have to be able to read each other, which ordinary zstd builds do and something that is not zstd-compatible does not.
 A rebuild also compresses whatever plain session files it finds already in the store and drops the plain copies it has just superseded, so an archive built before compression converges on the first refresh instead of being stranded, and a retained session the rebuild cannot reach is compressed where it lies rather than left behind.
 The level is a knob, `--level`, and the measurement behind the default is below.
 
@@ -149,7 +150,7 @@ Codex                418.7 MB        143.6 MB        21.7 MB    2.9:1        37
 combined            1426.3 MB        260.2 MB        48.9 MB    5.5:1       110
 sessions                                2273
 full rebuild + verification                          ~129 s
-full-content search over the store, whole store      1.44 - 1.48 s
+full-content search, file list / with context       1.50 - 1.54 s / 2.31 - 2.64 s
 verification residual hits                              0
 ```
 
