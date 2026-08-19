@@ -2888,8 +2888,145 @@ EOF
   pass "GitLab merge requests are followed on any instance and never wake falsely"
 }
 
+# The third forge's identity: its host is configuration, and a host that is not
+# the configured instance is refused rather than followed.
+test_forgejo_pull_request_identity() {
+  local dir state url other rc out row
+  # Dynamically scoped so every parse below resolves against this fixture home
+  # and this fleet's configured instance, and so both are restored on return.
+  # shellcheck disable=SC2034 # Read by fm_pr_home and fm_pr_configured_forgejo_host.
+  local FM_HOME FM_FORGEJO_HOST=
+  dir=$(make_case forgejo-identity)
+  state="$dir/home/state"
+  FM_HOME="$dir/home"
+  url=https://forge.example/team/tools/pulls/7
+
+  # A home that has configured no instance has no Forgejo provider at all, so a
+  # Forgejo address is refused there exactly as it was before this forge existed.
+  ! fm_pr_url_parse "$url" \
+    || fail "an unconfigured home resolved a Forgejo pull request URL"
+
+  # The instance is named by configuration, read the way config/backend is read.
+  printf '\n  \n%s\n' forge.example > "$dir/home/config/forgejo-host"
+  fm_pr_url_parse "$url" || fail "parser rejected a canonical Forgejo pull request URL"
+  [ "$FM_PR_PROVIDER" = forgejo ] || fail "parser did not tag a Forgejo URL as forgejo"
+  [ "$FM_PR_URL" = "$url" ] || fail "parser changed a canonical Forgejo URL"
+  [ "$FM_PR_HOST" = forge.example ] || fail "parser returned wrong Forgejo host"
+  [ "$FM_PR_PATH" = team/tools ] || fail "parser returned wrong Forgejo project path"
+  [ "$FM_PR_NUMBER" = 7 ] || fail "parser returned wrong Forgejo pull request number"
+  [ -z "$FM_PR_OWNER" ] && [ -z "$FM_PR_REPO" ] \
+    || fail "parser set GitHub owner/repository for a Forgejo URL"
+
+  # The host is carried, not assumed: the same project path and number on a
+  # differently configured instance resolves to that instance.
+  other=https://code.internal/team/tools/pulls/7
+  FM_FORGEJO_HOST=code.internal
+  fm_pr_url_parse "$other" || fail "parser rejected a Forgejo URL on another configured instance"
+  [ "$FM_PR_HOST" = code.internal ] || fail "parser did not carry the configured Forgejo host"
+  ! fm_pr_url_parse "$url" \
+    || fail "parser resolved a Forgejo URL against an instance this home does not run"
+  FM_FORGEJO_HOST=
+
+  # THE REFUSAL, PROVEN BY TRYING IT. Each of these has the exact shape of a
+  # Forgejo pull request and a host that is not the configured instance. A
+  # look-alike host is how fleet work reaches someone else's server, and every
+  # later step trusts this answer without re-deriving it.
+  for row in \
+    https://forge.example.evil/team/tools/pulls/7 \
+    https://evilforge.example/team/tools/pulls/7 \
+    https://notforge.example/team/tools/pulls/7 \
+    https://sub.forge.example/team/tools/pulls/7 \
+    https://forge.example.co/team/tools/pulls/7 \
+    https://github.com/team/tools/pulls/7 \
+    https://gitlab.com/team/tools/pulls/7; do
+    ! fm_pr_url_parse "$row" \
+      || fail "parser resolved a Forgejo-shaped URL on a host that is not the configured instance"
+    [ -z "$FM_PR_PROVIDER" ] && [ -z "$FM_PR_URL" ] && [ -z "$FM_PR_HOST" ] \
+      || fail "a refused Forgejo-shaped URL left identity fields set"
+  done
+
+  # Non-canonical spellings on the right instance are refused too, so one pull
+  # request has exactly one address.
+  for row in \
+    https://Forge.example/team/tools/pulls/7 \
+    https://forge.example:443/team/tools/pulls/7 \
+    https://user@forge.example/team/tools/pulls/7 \
+    http://forge.example/team/tools/pulls/7 \
+    https://forge.example/team/tools/pulls/7/ \
+    https://forge.example/team/tools/pulls/7?x=1 \
+    https://forge.example/team/tools/pulls/7#note \
+    https://forge.example/team/tools/pulls/0 \
+    https://forge.example/team/tools/pulls/07 \
+    https://forge.example/team/tools/pulls/ \
+    https://forge.example/team/tools/pull/7 \
+    https://forge.example/tools/pulls/7 \
+    https://forge.example/org/team/tools/pulls/7 \
+    https://forge.example//tools/pulls/7 \
+    https://forge.example/team/tools.git/pulls/7 \
+    https://forge.example/team/tools.atom/pulls/7 \
+    https://forge.example/-team/tools/pulls/7 \
+    https://forge.example/team/./pulls/7 \
+    https://forge.example/team/../pulls/7; do
+    ! fm_pr_url_parse "$row" \
+      || fail "parser accepted a non-canonical Forgejo URL"
+  done
+
+  # The two forges that already worked are untouched by any of this, including
+  # while an instance is configured.
+  fm_pr_url_parse https://github.com/o/r/pull/1 \
+    || fail "a configured Forgejo instance broke GitHub parsing"
+  [ "$FM_PR_PROVIDER" = github ] || fail "a GitHub URL stopped tagging as github"
+  fm_pr_url_parse https://gitlab.example/group/sub/project/-/merge_requests/3 \
+    || fail "a configured Forgejo instance broke GitLab parsing"
+  [ "$FM_PR_PROVIDER" = gitlab ] || fail "a GitLab URL stopped tagging as gitlab"
+  for row in "${INVALID_URLS[@]}"; do
+    ! fm_pr_url_parse "$row" \
+      || fail "a configured Forgejo instance admitted a rejected raw-byte URL class"
+  done
+
+  # Identity is not a watch. The static poll reads GitHub and GitLab only and is
+  # silent on everything else, so arming refuses where it can still be reported
+  # rather than watching nothing.
+  write_task_meta "$dir" task-a
+  set +e
+  out=$(FM_FORGEJO_HOST=forge.example run_check_entry "$dir" task-a "$url" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "arming a Forgejo watch succeeded"
+  case "$out" in
+    *"not supported yet"*) ;;
+    *) fail "arming a Forgejo watch did not report that the watch is unsupported" ;;
+  esac
+  [ ! -e "$state/task-a.check.sh" ] || fail "refused Forgejo arming left a poll armed"
+  [ ! -e "$state/task-a.pr-poll" ] || fail "refused Forgejo arming left a sidecar behind"
+  ! grep -q '^pr=' "$state/task-a.meta" || fail "refused Forgejo arming recorded a pull request"
+
+  # The merge path addresses GitHub only, so it refuses rather than sending a
+  # merge to the wrong forge.
+  write_task_meta "$dir" task-b
+  set +e
+  FM_FORGEJO_HOST=forge.example run_merge_entry "$dir" task-b "$url" >/dev/null 2>&1
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "merge wrapper did not refuse a Forgejo pull request URL"
+  [ ! -s "$dir/gh-axi.log" ] || fail "merge wrapper reached the GitHub CLI for a Forgejo URL"
+
+  # The instance is configuration, never a constant: no file in this path names
+  # one, which is what makes moving the fleet a configuration change.
+  ! grep -qF forge.example "$ROOT/bin/fm-pr-lib.sh" \
+    || fail "the shared PR library hardcodes a Forgejo host"
+  ! grep -qF forge.example "$ROOT/bin/fm-pr-poll.sh" \
+    || fail "the static poll hardcodes a Forgejo host"
+  ! grep -qF forge.example "$ROOT/bin/fm-pr-check.sh" \
+    || fail "the arming path hardcodes a Forgejo host"
+  grep -qF 'config/forgejo-host' "$ROOT/bin/fm-pr-lib.sh" \
+    || fail "the shared PR library reads no configured Forgejo instance"
+  pass "a Forgejo pull request resolves only on the configured instance and every other host is refused"
+}
+
 test_parser_matrix
 test_gitlab_merge_watch
+test_forgejo_pull_request_identity
 test_invalid_entrypoints_have_zero_side_effects
 test_valid_recording_and_merge_derivation
 test_decision_completion_preserves_poll_validation

@@ -511,6 +511,26 @@ A secondmate home on the same machine as its primary writes the same pointer; on
 Nothing creates the surface implicitly: `fm-finding.sh init` creates it and says so, and every other command refuses an absent surface with exit 3.
 A reachable surface always reports counted numbers and an unreachable one reports no number at all, so an empty surface and a surface nobody can reach are never the same reading.
 
+## Forge instance (config/forgejo-host / FM_FORGEJO_HOST)
+
+The captain chose to replace GitHub with the fleet's own self-hosted forge, and every step of that migration has to answer one question the same way: which instance is ours.
+This file is that answer for firstmate's own tools, and it is the only place they read it from.
+`bin/fm-pr-lib.sh` reads it while resolving a change address into the provider-tagged identity, and [`docs/forgejo-pr-identity.md`](forgejo-pr-identity.md) owns the evidence and the boundary of what this identity does and does not yet reach.
+This section owns only where the host comes from.
+
+Resolution order is `FM_FORGEJO_HOST`, then the first non-empty line of `config/forgejo-host` with whitespace stripped, exactly like `config/backend`.
+A home that sets neither has no Forgejo provider at all: every address of that shape is refused there, unchanged from before the provider existed.
+That is deliberate, because the alternative to refusing is guessing an instance nobody chose.
+
+An address whose host is not the resolved instance is refused rather than warned about or passed through, even when its shape is a perfect Forgejo pull request.
+A host that merely resembles the fleet's own is how a tool ends up acting on someone else's server, and every later step in the migration reads this identity back without re-deriving it.
+The resolved value is never validated on its own: an address host has to pass the shape rules and then equal the configured value byte for byte, so a mistyped instance can only ever refuse.
+
+No script on that path names an instance: `tests/fm-pr-check-security.test.sh` asserts that the shared PR library, the static poll, and the arming path each contain no Forgejo host at all.
+Moving the fleet to a different instance is therefore a configuration change rather than a code change.
+
+`config/forgejo-host` is not yet in the inheritable set that `bin/fm-config-inherit-lib.sh` declares, for the same reason `config/batch-delays` is not: identity parsing is the only consumer so far, and whether a secondmate home should inherit this instance belongs to whichever unit first gives a secondmate something to do with it.
+
 ## Event batching delays (config/batch-delays)
 
 The event batcher groups supervision events by priority and holds each class for a bounded time.
@@ -861,6 +881,7 @@ FM_ZELLIJ_SESSION=firstmate  # zellij-only: named session for normal backend ops
 FM_BACKEND_CMUX_COMPOSER_LINES=20  # cmux-only: tail lines scanned to locate the composer row for submit verification
 FM_BACKEND_CMUX_IDLE_RE='^Type a message\.\.\.$'  # cmux-only: empty-composer placeholder regex after border/prompt stripping
 CMUX_SOCKET_PASSWORD=   # cmux-only: socket password fallback when config/cmux-socket-password is absent (docs/cmux-backend.md)
+FM_FORGEJO_HOST=        # this fleet's Forgejo instance for change-address identity; overrides config/forgejo-host, and unset in both means no Forgejo provider at all
 FM_FINDINGS_DIR=        # political officer's findings surface; overrides config/findings-dir, which overrides FM_HOME/data/findings
 FM_FINDING_NOW=         # ISO-8601 UTC instant the drain rule computes deadlines against; unset means now. An unparseable value is refused, never replaced by the wall clock
 FM_SERVICE_PORT_RANGE=4400-4499   # port window bin/fm-service-port.sh probes; above lavish-axi's 4387 default and below the ephemeral range
