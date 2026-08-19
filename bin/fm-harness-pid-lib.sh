@@ -45,7 +45,10 @@ fm_harness_pid() {
       FM_HARNESS_PID_ERROR=harness-lookup-failed
       return 1
     fi
-    args=$(ps -o args= -p "$pid" 2>/dev/null)
+    if ! args=$(ps -o args= -p "$pid" 2>/dev/null); then
+      FM_HARNESS_PID_ERROR=harness-lookup-failed
+      return 1
+    fi
     if printf '%s' "$(basename "$comm")" | grep -qE "$FM_HARNESS_RE"; then
       FM_HARNESS_PID_ERROR=
       FM_HARNESS_PID=$pid
@@ -63,7 +66,11 @@ fm_harness_pid() {
         fi
         ;;
     esac
-    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    if ! pid=$(ps -o ppid= -p "$pid" 2>/dev/null); then
+      FM_HARNESS_PID_ERROR=harness-lookup-failed
+      return 1
+    fi
+    pid=${pid//[[:space:]]/}
     [ -n "$pid" ] && [ "$pid" -gt 1 ] || return 1
   done
   return 1

@@ -222,6 +222,24 @@ SH
   chmod +x "$fakebin/ps"
 }
 
+# make_fake_ps_probe_failure <fakebin> <probe>: complete every process-table
+# probe except the named one, which stays unreadable through every retry.
+make_fake_ps_probe_failure() {
+  local fakebin=$1 probe=$2
+  cat > "$fakebin/ps" <<SH
+#!/usr/bin/env bash
+set -u
+case "\$*" in
+  *"$probe="*) exit 1 ;;
+  *"comm="*) printf '/bin/bash\n'; exit 0 ;;
+  *"args="*) printf 'bash\n'; exit 0 ;;
+  *"ppid="*) printf '1\n'; exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/ps"
+}
+
 # run_nudge_with_payload <root> <fakebin> <payload>: drive the wrapper the way a
 # harness hook does, with the payload on stdin. An empty payload means the
 # harnesses that hand the wrapper nothing.
@@ -573,18 +591,37 @@ test_a_settled_lookup_failure_is_recorded_with_its_cause() {
   pass "fm-sessionstart-nudge: a process table that stays unreadable is recorded as unknown, not as absent"
 }
 
-# The record is only worth anything because nothing else can write it: a
-# hand-written or agent-written one would be a watchman that lies. The wrapper is
-# the only writer, and this enumerates every tracked script that so much as names
-# the path, so a new one has to be looked at rather than appearing quietly.
-test_only_the_session_start_hook_names_the_record_path() {
+test_each_process_table_probe_failure_is_recorded_as_unknown() {
+  local probe root fakebin record
+  for probe in comm args ppid; do
+    root="$TMP_ROOT/record-$probe-probe-failure"
+    make_primary "$root"
+    fakebin=$(fm_fakebin "$root")
+    make_fake_ps_probe_failure "$fakebin" "$probe"
+    record="$root/state/.primary-transcript"
+    FM_HARNESS_PID_RETRY_DELAYS="0" run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD" >/dev/null
+    [ "$(record_field "$record" status)" = error ] \
+      || fail "a failed $probe= probe produced a usable-looking record: $(cat "$record")"
+    [ "$(record_field "$record" error)" = harness-lookup-failed ] \
+      || fail "a failed $probe= probe was recorded as a settled negative: $(cat "$record")"
+  done
+  pass "fm-sessionstart-nudge: every failed process-table probe is recorded as unknown"
+}
+
+# This allowlist contract is a deliberate exemption from the test-quality rule's
+# prohibition on source-content tests because this is a repository-wide negative
+# property that no single executable interface can demonstrate. It enumerates
+# every tracked script under bin/ that NAMES the record path; it does not prove
+# what writes that path, and forces every new name to be reviewed instead of
+# appearing quietly.
+test_primary_transcript_path_name_allowlist_contract() {
   local expected found
   expected=$(printf '%s\n' fm-context-lib.sh fm-harness-pid-lib.sh fm-sessionstart-nudge.sh)
   found=$(grep -rlF '.primary-transcript' "$ROOT/bin" | while IFS= read -r f; do basename "$f"; done | sort -u)
   [ "$found" = "$expected" ] || fail "a tracked script that names the transcript record appeared or vanished; only bin/fm-sessionstart-nudge.sh may write it, bin/fm-context-lib.sh owns the read path, and bin/fm-harness-pid-lib.sh only refers to it in prose. Found: $(printf '%s' "$found" | tr '\n' ' ')"
   grep -n '\.primary-transcript' "$ROOT/bin/fm-context-lib.sh" | grep -qE '>|mv |tee ' \
     && fail "the reader that owns the record's path also writes to it"
-  pass "fm-sessionstart-nudge: the session-start hook is the only tracked writer of the transcript record"
+  pass "fm-sessionstart-nudge: the primary-transcript path name allowlist contract holds"
 }
 
 test_opencode_plugin_delivers_exact_nudge_once() {
@@ -686,6 +723,7 @@ test_a_stale_lock_does_not_block_the_record
 test_the_lock_holder_still_records_after_a_clear
 test_a_transient_lookup_failure_is_retried
 test_a_settled_lookup_failure_is_recorded_with_its_cause
-test_only_the_session_start_hook_names_the_record_path
+test_each_process_table_probe_failure_is_recorded_as_unknown
+test_primary_transcript_path_name_allowlist_contract
 test_opencode_plugin_delivers_exact_nudge_once
 test_tracked_harness_registration

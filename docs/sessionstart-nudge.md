@@ -71,6 +71,11 @@ That is the conservative reading rather than an accident: leaving another sessio
 A lock left behind by a session that has ended is not another session.
 `fm_harness_alive` is what separates the two, so a stale lock does not block a fresh session's record - refusing there would be the same silent non-measurement from the other side.
 
+One simultaneous-start race is an accepted limitation of this gate.
+Two primary sessions starting in the same home at the same instant can both observe no live holder and both publish a record before either acquires the lock, so the loser of the later lock acquisition may have written last.
+The outcome is a reported unenforced ceiling, not a wrong number: `fm_context_ceiling_reason` compares the record's harness pid against the lock's and reports the mismatch instead of measuring it, so this is not the silent non-measurement this change was made to prevent, and that report now escalates on repeat.
+Moving publication to a boundary owned by lock acquisition would break replacement on a fresh start, because only the SessionStart hook payload carries `session_id` and `transcript_path`, while `bin/fm-lock.sh` runs later in a different process with neither.
+
 ## What a lock holder does when it cannot resolve its own harness process
 
 Gating alone does not close the second door: a session that WILL hold the lock and cannot name its own harness process still records an error, and the ceiling is still unenforced for the life of that session.
