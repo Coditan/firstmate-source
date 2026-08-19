@@ -526,7 +526,7 @@ An address whose host is not the resolved instance is refused rather than warned
 A host that merely resembles the fleet's own is how a tool ends up acting on someone else's server, and every later step in the migration reads this identity back without re-deriving it.
 The resolved value is never validated on its own: an address host has to pass the shape rules and then equal the configured value byte for byte, so a mistyped instance can only ever refuse.
 
-No script on that path names an instance: `tests/fm-pr-check-security.test.sh` asserts that the shared PR library, the static poll, and the arming path each contain no Forgejo host at all.
+`tests/fm-pr-check-security.test.sh` proves that the same project path and pull request number resolve under both `forge.example` and `code.internal`, while a home with neither setting refuses every address of that shape, which a hardcoded host could not produce.
 Moving the fleet to a different instance is therefore a configuration change rather than a code change.
 
 `config/forgejo-host` is not yet in the inheritable set that `bin/fm-config-inherit-lib.sh` declares, for the same reason `config/batch-delays` is not: identity parsing is the only consumer so far, and whether a secondmate home should inherit this instance belongs to whichever unit first gives a secondmate something to do with it.

@@ -98,7 +98,7 @@ No GitHub or GitLab address can take that shape, so a refused Forgejo address fa
 
 ## No forge hostname is in the code
 
-`bin/fm-pr-lib.sh`, `bin/fm-pr-poll.sh`, and `bin/fm-pr-check.sh` contain no Forgejo host at all, and the test asserts that for each of them.
+`tests/fm-pr-check-security.test.sh` proves that the same project path and pull request number resolve under both `forge.example` and `code.internal`, while a home with neither setting refuses every address of that shape, which a hardcoded host could not produce.
 Moving the fleet to a different instance is therefore a configuration change, exactly as reaching a self-hosted GitLab already is.
 `tests/fm-pr-check-security.test.sh` already made the equivalent assertion for `gitlab.com`; this slice extends the same rule to the forge the fleet is moving onto.
 

@@ -3011,16 +3011,6 @@ test_forgejo_pull_request_identity() {
   [ "$rc" -eq 2 ] || fail "merge wrapper did not refuse a Forgejo pull request URL"
   [ ! -s "$dir/gh-axi.log" ] || fail "merge wrapper reached the GitHub CLI for a Forgejo URL"
 
-  # The instance is configuration, never a constant: no file in this path names
-  # one, which is what makes moving the fleet a configuration change.
-  ! grep -qF forge.example "$ROOT/bin/fm-pr-lib.sh" \
-    || fail "the shared PR library hardcodes a Forgejo host"
-  ! grep -qF forge.example "$ROOT/bin/fm-pr-poll.sh" \
-    || fail "the static poll hardcodes a Forgejo host"
-  ! grep -qF forge.example "$ROOT/bin/fm-pr-check.sh" \
-    || fail "the arming path hardcodes a Forgejo host"
-  grep -qF 'config/forgejo-host' "$ROOT/bin/fm-pr-lib.sh" \
-    || fail "the shared PR library reads no configured Forgejo instance"
   pass "a Forgejo pull request resolves only on the configured instance and every other host is refused"
 }
 
