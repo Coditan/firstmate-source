@@ -141,7 +141,7 @@ if [ "$files_only" = 1 ]; then
   # shellcheck disable=SC2016
   xargs -a "$filelist" -d '\n' bash -c '
     rg=$1; preprocessor=$2; pattern=$3; shift 3
-    "$rg" -l --pre "$preprocessor" --pre-glob "*.zst" -e "$pattern" -- "$@"
+    "$rg" -l --pre "$preprocessor" -e "$pattern" -- "$@"
     case $? in 0|1) exit 0;; *) exit 255;; esac
   ' _ "$RG" "$PREPROCESSOR" "$q" |
   awk 'NF { print; found=1 } END { exit(found ? 0 : 1) }'
@@ -153,7 +153,7 @@ fi
 # shellcheck disable=SC2016
 xargs -a "$filelist" -d '\n' bash -c '
   rg=$1; preprocessor=$2; context=$3; pattern=$4; shift 4
-  "$rg" --pre "$preprocessor" --pre-glob "*.zst" -n -H --null --no-heading \
+  "$rg" --pre "$preprocessor" -n -H --null --no-heading \
     --color never -C "$context" -e "$pattern" -- "$@"
   case $? in 0|1) exit 0;; *) exit 255;; esac
 ' _ "$RG" "$PREPROCESSOR" "$ctx" "$q" |
