@@ -129,6 +129,23 @@ if [ -z "$SERVES" ] && [ -n "$SERVES_PATH" ]; then
   die "--serves-path was given without --serves, so no bytes would be fetched"
 fi
 
+# Candidate blobs are hashed with whichever of the two hashers this machine has;
+# macOS ships shasum and no sha256sum. Which one is decided once, and its
+# absence is a named reason rather than an empty hash that matches nothing.
+HASH_KIND=
+if command -v sha256sum >/dev/null 2>&1; then
+  HASH_KIND=sha256sum
+elif command -v shasum >/dev/null 2>&1; then
+  HASH_KIND=shasum
+fi
+hash_stdin() {
+  case "$HASH_KIND" in
+    sha256sum) sha256sum | cut -d' ' -f1 ;;
+    shasum) shasum -a 256 | cut -d' ' -f1 ;;
+    *) return 127 ;;
+  esac
+}
+
 TIMEOUT_BIN=$(command -v timeout 2>/dev/null || true)
 tmo() {
   if [ -n "$TIMEOUT_BIN" ]; then
@@ -247,8 +264,19 @@ compose_config_files={{index .Config.Labels "com.docker.compose.project.config_f
       echo "error=fetch failed: $(printf '%s' "$code" | tr '\n' ' ' | cut -c1-200)"
       exit 0
     fi
-    sha=$(sha256sum <"$tmp" 2>/dev/null | cut -d' ' -f1)
     size=$(wc -c <"$tmp" | tr -d ' ')
+    # macOS vessels ship shasum and no sha256sum. A host with neither says so:
+    # a silently empty hash would be compared against candidate blobs as if it
+    # were the bytes the host serves.
+    if command -v sha256sum >/dev/null 2>&1; then
+      sha=$(sha256sum <"$tmp" | cut -d' ' -f1)
+    elif command -v shasum >/dev/null 2>&1; then
+      sha=$(shasum -a 256 <"$tmp" | cut -d' ' -f1)
+    else
+      rm -f "$tmp"
+      echo "error=neither sha256sum nor shasum is available on the host, so the bytes it serves could not be hashed"
+      exit 0
+    fi
     rm -f "$tmp"
     echo "http=$code"
     echo "sha256=$sha"
@@ -473,18 +501,27 @@ if [ "$REQ_SERVED" -eq 1 ]; then
 
   if [ -n "$sv_err" ]; then
     WHY_SERVED=$sv_err
-  elif [ -z "$sv_sha" ]; then
-    WHY_SERVED="the fetch of $SERVES returned no bytes to hash"
   else
     case "$sv_http" in
       2??) : ;;
       *) WHY_SERVED="$SERVES answered HTTP ${sv_http:-<none>}, so the bytes it returned are not the served file" ;;
     esac
+    if [ -z "$WHY_SERVED" ] && { [ -z "$sv_sha" ] || [ -z "$sv_bytes" ]; }; then
+      WHY_SERVED="the fetch of $SERVES returned no bytes to hash"
+    fi
+    # A zero-byte body hashes to the well-defined digest of no input, and so
+    # does every commit at which the probe path does not exist. Comparing it
+    # would report a MATCH for a commit that never held the file.
+    if [ -z "$WHY_SERVED" ] && [ "$sv_bytes" = 0 ]; then
+      WHY_SERVED="$SERVES answered HTTP $sv_http with a zero-byte body, so there are no served bytes to compare against any commit"
+    fi
   fi
 
   if [ -z "$WHY_SERVED" ]; then
     if ! git -C "$CLONE" rev-parse --git-dir >/dev/null 2>&1; then
       WHY_SERVED="--clone $CLONE is not a git repository, so no candidate blob could be read"
+    elif [ -z "$HASH_KIND" ]; then
+      WHY_SERVED="neither sha256sum nor shasum is available here, so no candidate blob could be hashed"
     fi
   fi
 
@@ -511,32 +548,43 @@ if [ "$REQ_SERVED" -eq 1 ]; then
       [ "$dup" -eq 0 ] && resolved+=("$full")
     done
 
-    matches=()
-    for c in ${resolved[@]+"${resolved[@]}"}; do
-      blob=$(git -C "$CLONE" cat-file blob "$c:$SERVES_PATH" 2>/dev/null | sha256sum | cut -d' ' -f1)
-      if [ -z "$blob" ]; then
-        printf 'served:    candidate %s   %s is absent at that commit\n' "$(short "$c")" "$SERVES_PATH"
-        continue
-      fi
-      if [ "$blob" = "$sv_sha" ]; then
-        printf 'served:    candidate %s   MATCH\n' "$(short "$c")"
-        matches+=("$c")
-      else
-        printf 'served:    candidate %s   differs\n' "$(short "$c")"
-      fi
-    done
-
-    if [ "${#matches[@]}" -eq 1 ]; then
-      VAL_SERVED=${matches[0]}
-    elif [ "${#matches[@]}" -eq 0 ]; then
-      WHY_SERVED="no candidate commit's $SERVES_PATH matches the bytes $SERVES serves"
+    if [ "${#resolved[@]}" -eq 0 ]; then
+      # Nothing was compared. Reporting that as "no candidate matches" would
+      # read as a measured disagreement with the repository, which is the very
+      # conflation the four verdicts exist to remove.
+      WHY_SERVED="no candidate commit was available to compare the bytes $SERVES serves against; pass --candidate, or a --source-remote or --checkout that resolves"
     else
-      # A reading that cannot discriminate must not produce a definite answer.
-      # Taking the last match here is how a clean AGREE gets reported for a host
-      # that could equally be running any of the tied commits.
-      tied=
-      for c in "${matches[@]}"; do tied="$tied $(short "$c")"; done
-      WHY_SERVED="AMBIGUOUS: $SERVES_PATH is byte-identical at${tied}, so the served bytes cannot tell those commits apart"
+      matches=()
+      for c in ${resolved[@]+"${resolved[@]}"}; do
+        # cat-file's own status says whether the path exists at that commit. An
+        # empty hash cannot: sha256 of no input is a well-defined digest, so
+        # inferring absence from it hands every commit missing the file the same
+        # digest an empty response body has.
+        if ! blob=$(git -C "$CLONE" cat-file blob "$c:$SERVES_PATH" 2>/dev/null | hash_stdin
+          exit "${PIPESTATUS[0]}"); then
+          printf 'served:    candidate %s   %s is absent at that commit\n' "$(short "$c")" "$SERVES_PATH"
+          continue
+        fi
+        if [ "$blob" = "$sv_sha" ]; then
+          printf 'served:    candidate %s   MATCH\n' "$(short "$c")"
+          matches+=("$c")
+        else
+          printf 'served:    candidate %s   differs\n' "$(short "$c")"
+        fi
+      done
+
+      if [ "${#matches[@]}" -eq 1 ]; then
+        VAL_SERVED=${matches[0]}
+      elif [ "${#matches[@]}" -eq 0 ]; then
+        WHY_SERVED="no candidate commit's $SERVES_PATH matches the bytes $SERVES serves"
+      else
+        # A reading that cannot discriminate must not produce a definite answer.
+        # Taking the last match here is how a clean AGREE gets reported for a
+        # host that could equally be running any of the tied commits.
+        tied=
+        for c in "${matches[@]}"; do tied="$tied $(short "$c")"; done
+        WHY_SERVED="AMBIGUOUS: $SERVES_PATH is byte-identical at${tied}, so the served bytes cannot tell those commits apart"
+      fi
     fi
   fi
 

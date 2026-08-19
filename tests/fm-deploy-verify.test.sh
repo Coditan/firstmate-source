@@ -128,6 +128,33 @@ printf 'beta\n' >"$REPO/probe.txt"
 git -C "$REPO" add -A && git -C "$REPO" commit -qm three
 C=$(git -C "$REPO" rev-parse HEAD)
 git -C "$REPO" branch old "$A"
+# A commit at which the probe path does NOT exist. Ordinary history: the file a
+# later run probes for was added, or removed, at some point.
+git -C "$REPO" checkout -q -b noprobe
+git -C "$REPO" rm -q probe.txt
+git -C "$REPO" commit -qm "no probe"
+D=$(git -C "$REPO" rev-parse HEAD)
+git -C "$REPO" checkout -q main
+
+# path_without <dir> <command>... - a PATH directory holding everything the
+# current PATH holds EXCEPT the named commands, so a test can run the tool on a
+# machine that genuinely lacks a tool rather than on one pretending to.
+path_without() {
+  local dir=$1 d f b drop
+  shift
+  drop=" $* "
+  mkdir -p "$dir"
+  for d in ${PATH//:/ }; do
+    [ -d "$d" ] || continue
+    for f in "$d"/*; do
+      [ -e "$f" ] || continue
+      b=${f##*/}
+      case "$drop" in *" $b "*) continue ;; esac
+      [ -e "$dir/$b" ] && continue
+      ln -s "$f" "$dir/$b" 2>/dev/null || true
+    done
+  done
+}
 
 # inspect_fixture <file> <running> <restarts> <revision> [extra template lines]
 inspect_fixture() {
@@ -248,6 +275,84 @@ test_a_non_2xx_served_response_is_unread() {
   expect_code 3 "$RC" "a non-2xx served response must be indeterminate"
   assert_contains "$OUT" 'HTTP 503' "the reason must name the status the URL answered with"
   pass "a non-2xx response is an unread reading rather than served bytes"
+}
+
+# A commit that does not hold the probe path, and a response body of no bytes,
+# hash to the SAME well-defined digest. Inferring either from an empty hash
+# makes every commit missing the file match an empty response.
+
+test_a_candidate_without_the_probe_path_is_reported_absent_not_compared() {
+  reset_env
+  run_tool --serves 'http://stub/probe.txt' --serves-path probe.txt --clone "$REPO" \
+    --candidate "$D"
+  expect_code 3 "$RC" "a candidate that does not hold the probe path leaves the reading unresolved"
+  assert_contains "$OUT" 'probe.txt is absent at that commit' \
+    "a commit without the probe path must be reported absent, by its own reason"
+  assert_not_contains "$OUT" 'MATCH' "a commit without the probe path must never match"
+  assert_not_contains "$OUT" 'differs' \
+    "an absent path is not a differing blob: it was never compared"
+  assert_not_contains "$OUT" 'verdict: AGREE' "a reading resolved from nothing must not agree"
+  pass "a candidate lacking the probe path is reported absent and never compared"
+}
+
+test_an_empty_served_body_is_unread_rather_than_bytes_that_match() {
+  reset_env
+  export FM_FAKE_CURL_BODY=''
+  run_tool --serves 'http://stub/probe.txt' --serves-path probe.txt --clone "$REPO" \
+    --candidate "$C" --candidate "$D"
+  expect_code 3 "$RC" "a zero-byte 200 body must be indeterminate"
+  assert_contains "$OUT" 'served:    UNREAD' "an empty body is an unread reading"
+  assert_contains "$OUT" 'zero-byte body' "the reason must name the empty body"
+  assert_not_contains "$OUT" 'MATCH' "no commit may match a response that carried no bytes"
+  assert_not_contains "$OUT" 'verdict: AGREE' "an empty body must never reach agreement"
+  pass "a zero-byte 200 response is unread, and matches no commit"
+}
+
+test_a_served_reading_with_no_candidate_says_nothing_was_compared() {
+  reset_env
+  run_tool --serves 'http://stub/probe.txt' --serves-path probe.txt --clone "$REPO"
+  expect_code 3 "$RC" "a served reading with nothing to compare against is indeterminate"
+  assert_contains "$OUT" 'no candidate commit was available' \
+    "an empty candidate set must say nothing was compared"
+  assert_not_contains "$OUT" 'matches the bytes' \
+    "nothing compared must not read as a measured mismatch against the repository"
+  assert_not_contains "$OUT" 'verdict: AGREE' "a run that compared no candidate must not agree"
+  pass "a served reading with no candidate names that nothing was available to compare"
+}
+
+# --- the served reading on a machine that ships shasum and no sha256sum -----
+
+test_the_served_reading_survives_a_machine_without_sha256sum() {
+  reset_env
+  command -v shasum >/dev/null 2>&1 || fail "this test needs shasum present to prove the fallback"
+  local nosha="$T/path-no-sha256sum"
+  [ -d "$nosha" ] || path_without "$nosha" sha256sum
+  RC=0
+  OUT=$(PATH="$nosha" "$TOOL" --host stub-host --checkout "$REPO" \
+    --source-remote "$REPO" --source-ref refs/heads/main \
+    --serves 'http://stub/probe.txt' --serves-path probe.txt --clone "$REPO" 2>&1) || RC=$?
+  expect_code 0 "$RC" "a macOS-shaped machine must still take the served reading"
+  assert_not_contains "$OUT" 'served:    UNREAD' \
+    "a missing sha256sum must not make the served reading unreadable"
+  assert_contains "$OUT" 'MATCH' "the candidate blob must still be hashed and compared"
+  assert_contains "$OUT" 'verdict: AGREE' "the reading must resolve as it does with sha256sum"
+  pass "the served reading falls back to shasum where sha256sum is absent"
+}
+
+test_a_machine_with_no_hasher_says_so_rather_than_hashing_nothing() {
+  reset_env
+  local nohash="$T/path-no-hashers"
+  [ -d "$nohash" ] || path_without "$nohash" sha256sum shasum
+  RC=0
+  OUT=$(PATH="$nohash" "$TOOL" --host stub-host --checkout "$REPO" \
+    --serves 'http://stub/probe.txt' --serves-path probe.txt --clone "$REPO" \
+    --candidate "$C" 2>&1) || RC=$?
+  expect_code 3 "$RC" "a machine that cannot hash must be indeterminate"
+  assert_contains "$OUT" 'served:    UNREAD' "an unhashable reading must render unread"
+  assert_contains "$OUT" 'shasum' "the reason must name the missing hasher"
+  assert_not_contains "$OUT" 'MATCH' "nothing may match when nothing could be hashed"
+  assert_not_contains "$OUT" 'verdict: AGREE' "a reading that could not be taken must not agree"
+  pass "a machine with neither hasher names that, rather than hashing nothing"
 }
 
 # --- D4: nothing checked is its own outcome ---------------------------------
@@ -578,6 +683,11 @@ test_a_served_reading_that_cannot_discriminate_resolves_to_nothing
 test_one_commit_offered_twice_is_one_candidate_and_not_a_tie
 test_no_candidate_match_is_unread_rather_than_a_guess
 test_a_non_2xx_served_response_is_unread
+test_a_candidate_without_the_probe_path_is_reported_absent_not_compared
+test_an_empty_served_body_is_unread_rather_than_bytes_that_match
+test_a_served_reading_with_no_candidate_says_nothing_was_compared
+test_the_served_reading_survives_a_machine_without_sha256sum
+test_a_machine_with_no_hasher_says_so_rather_than_hashing_nothing
 test_a_run_that_compared_nothing_is_never_clean
 test_a_reading_not_requested_is_not_a_reading_that_failed
 test_drift_is_reported_when_both_sides_were_read_and_differ
