@@ -494,16 +494,19 @@ test_search_reads_the_compressed_store() {
   pass "search reads the compressed store and still reports the session header with the hit"
 }
 
-test_search_does_not_depend_on_ripgrep_implicit_decompression() {
+test_search_does_not_depend_on_ripgrep_compression_flags() {
   local home out wrapper real_rg
   home=$(setup_fixture_home)
   wrapper="$TMP/rg-without-z"
   real_rg=$(command -v rg)
+  # Model the older runner ripgrep that made --pre return no hits, as well as a
+  # build without implicit -z decompression. The wrapper's public result must
+  # come from the explicit zstd pipeline supported by both versions.
   cat >"$wrapper" <<'EOF'
 #!/usr/bin/env bash
 for arg in "$@"; do
   case "$arg" in
-    -z|-*z*) exit 1 ;;
+    -z|-*z*|--pre) exit 1 ;;
   esac
 done
 exec "$FM_TEST_REAL_RG" "$@"
@@ -513,8 +516,8 @@ EOF
         "$SEARCH" 'tugboat host' 2>/dev/null) \
     || fail 'search depended on ripgrep implicit decompression instead of the required zstd tool'
   assert_contains "$out" 'tugboat host' \
-    'explicit zstd preprocessing must return the compressed hit'
-  pass "search uses its required zstd tool rather than ripgrep's version-dependent implicit decompressor"
+    'external zstd preprocessing must return the compressed hit'
+  pass "search does not depend on ripgrep's version-dependent compression flags"
 }
 
 test_search_reads_plain_sessions_during_migration() {
@@ -634,7 +637,7 @@ test_search_resolves_the_archive_from_fm_home
 test_search_narrows_the_file_set_by_index
 test_search_reports_a_missing_archive_rather_than_no_matches
 test_search_reads_the_compressed_store
-test_search_does_not_depend_on_ripgrep_implicit_decompression
+test_search_does_not_depend_on_ripgrep_compression_flags
 test_search_reads_plain_sessions_during_migration
 test_plain_grep_does_not_read_the_sessions
 test_search_status_says_matched_or_not_matched
