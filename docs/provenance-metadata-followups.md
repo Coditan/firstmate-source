@@ -13,16 +13,16 @@ This record is a pointer for the skill wrapper; it does not change or re-license
 
 ## Codex system `review-agent`
 
-Local record now exists, with licence inherited from the installed Codex/OpenAI system-skill bundle rather than from an adjacent file.
+Local record now exists; local licence or terms evidence not found.
 `/home/crew/.codex/skills/.system/review-agent/` contains `SKILL.md` and `agents/openai.yaml`, but no local licence or terms file was found in that skill directory.
-The named source is the installed Codex/OpenAI system-skill bundle under `/home/crew/.codex/skills/.system/`.
+The named source pointer is the installed Codex/OpenAI system-skill bundle under `/home/crew/.codex/skills/.system/`, whose root contains `.codex-system-skills.marker` but no local bundle-level licence or terms file.
 This record does not infer a separate licence for the individual skill.
 
 ## Codex system `plugin-creator`
 
-Local record now exists, with licence inherited from the installed Codex/OpenAI system-skill bundle rather than from an adjacent file.
+Local record now exists; local licence or terms evidence not found.
 `/home/crew/.codex/skills/.system/plugin-creator/` contains `SKILL.md`, scripts, references, agents, and assets, but no local licence or terms file was found in that skill directory.
-The named source is the installed Codex/OpenAI system-skill bundle under `/home/crew/.codex/skills/.system/`.
+The named source pointer is the installed Codex/OpenAI system-skill bundle under `/home/crew/.codex/skills/.system/`, whose root contains `.codex-system-skills.marker` but no local bundle-level licence or terms file.
 This record does not infer a separate licence for the individual skill.
 
 ## Codex plugin `plugin-management`
