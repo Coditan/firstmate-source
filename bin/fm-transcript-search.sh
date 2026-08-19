@@ -141,8 +141,16 @@ if [ "$files_only" = 1 ]; then
   # shellcheck disable=SC2016
   xargs -a "$filelist" -d '\n' bash -c '
     rg=$1; preprocessor=$2; pattern=$3; shift 3
-    "$rg" -l --pre "$preprocessor" -e "$pattern" -- "$@"
-    case $? in 0|1) exit 0;; *) exit 255;; esac
+    for path do
+      "$preprocessor" "$path" | "$rg" -q -e "$pattern"
+      statuses=("${PIPESTATUS[@]}")
+      [ "${statuses[0]}" -eq 0 ] || exit 255
+      case ${statuses[1]} in
+        0) printf "%s\n" "$path" ;;
+        1) ;;
+        *) exit 255 ;;
+      esac
+    done
   ' _ "$RG" "$PREPROCESSOR" "$q" |
   awk 'NF { print; found=1 } END { exit(found ? 0 : 1) }'
   statuses=("${PIPESTATUS[@]}")
@@ -153,9 +161,18 @@ fi
 # shellcheck disable=SC2016
 xargs -a "$filelist" -d '\n' bash -c '
   rg=$1; preprocessor=$2; context=$3; pattern=$4; shift 4
-  "$rg" --pre "$preprocessor" -n -H --null --no-heading \
-    --color never -C "$context" -e "$pattern" -- "$@"
-  case $? in 0|1) exit 0;; *) exit 255;; esac
+  for path do
+    "$preprocessor" "$path" |
+      "$rg" -n --no-heading --color never -C "$context" -e "$pattern" |
+      awk -v path="$path" '\''
+        /^--$/ { print; next }
+        { printf "%s%c%s\n", path, 0, $0 }
+      '\''
+    statuses=("${PIPESTATUS[@]}")
+    [ "${statuses[0]}" -eq 0 ] || exit 255
+    case ${statuses[1]} in 0|1) ;; *) exit 255;; esac
+    [ "${statuses[2]}" -eq 0 ] || exit 255
+  done
 ' _ "$RG" "$PREPROCESSOR" "$ctx" "$q" |
 awk -F'\0' -v arch="$ARCHIVE" -v zstd="$ZSTD" '
   function shell_quote(s, out, i, c) {
