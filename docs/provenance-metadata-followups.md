@@ -46,7 +46,5 @@ The installed package metadata still omits the field; this record notes the loca
 
 ## Herdr licence boundary
 
-Firstmate's CI installer pins Herdr `v0.7.4` and verifies the official release asset for that exact version.
-Licence statements about the Herdr binary Firstmate installs are statements about that pinned release evidence, not about upstream `master`.
-The 2026-08-17 sweep found Herdr `v0.7.4` carrying AGPL-3.0-or-later / commercial licence evidence, while current upstream `master` carried different Apache-2.0 licence text.
-Firstmate does not vendor Herdr source; it drives the `herdr` CLI as a separate process.
+The Herdr licence boundary belongs to [`docs/herdr-backend.md`](herdr-backend.md), because that document owns Firstmate's Herdr install, runtime, and verification evidence.
+This follow-up records only that the 2026-08-17 sweep required that boundary to distinguish the pinned release evidence from current upstream `master`.
