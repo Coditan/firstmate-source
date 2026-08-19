@@ -196,18 +196,22 @@ Choose `--serves-path` deliberately: it must be a file that CHANGED between the 
 
 ### Transcripts
 
-These are the tool's own output.
+These are the tool's own output, pasted whole: each block is one run reproducing the scenario it illustrates, from the run's first line to its verdict.
 Because this file is public, **host aliases, machine identifiers, hostnames, absolute paths, container names, repository URLs and image digests are replaced with neutral stand-ins**.
-Nothing else in these blocks is edited: no line is reordered, no reading invented, and no verdict reworded.
+Nothing else in these blocks is edited: no line is reordered, no reading invented, no verdict reworded, and **no line omitted** - each block is one whole run from its first line to its verdict.
+Completeness is not tidiness here.
+The lines an editor is most tempted to cut are the ones reporting that a reading could not be taken, and those are the evidence these examples exist to show, not the noise around it.
+An unmarked omission would also make this document assert something about itself that a reader can check and find false, in a file whose whole standard is that its examples were really produced.
 
 A healthy readback - three facts, three comparisons, all agreeing.
 Note `read-as=sudo` on both host readings, and the compose lines: that is section 1 step 4, the directory the deploy path operates on, read off the running container rather than taken from the command line:
 
 ```
+fm-deploy-verify.sh - read-only readback, 2026-08-19T23:39:34Z
 host:      deploy-host   machine-id <elided>   hostname app-1   MEASURED
-source:    79b9f3e399c4   <source-repo> refs/heads/main   FROM THE RECORD
-checkout:  79b9f3e399c4   /opt/app   branch=main   read-as=sudo   MEASURED
-container: 79b9f3e399c4   api   running=true restarts=0 started=2026-08-19T11:21:46.90411194Z   read-as=sudo   MEASURED
+source:    ddd574e77bea   <source-repo> refs/heads/main   FROM THE RECORD
+checkout:  ddd574e77bea   /opt/app   branch=main   read-as=sudo   MEASURED
+container: ddd574e77bea   api   running=true restarts=0 started=2026-08-19T11:21:46.90411194Z   read-as=sudo   MEASURED
            image=sha256:<elided>
            compose working_dir=/opt/app/compose
            compose config_files=/opt/app/compose/docker-compose.yml
@@ -216,10 +220,10 @@ container: 79b9f3e399c4   api   running=true restarts=0 started=2026-08-19T11:21
 served:    NOT REQUESTED - no --serves given
 
 comparisons
-  source    vs checkout   AGREE 79b9f3e399c4
-  source    vs container  AGREE 79b9f3e399c4
+  source    vs checkout   AGREE ddd574e77bea
+  source    vs container  AGREE ddd574e77bea
   source    vs served     NOT COMPARED - no --serves given, so this run ordered no such reading
-  checkout  vs container  AGREE 79b9f3e399c4
+  checkout  vs container  AGREE ddd574e77bea
   checkout  vs served     NOT COMPARED - no --serves given, so this run ordered no such reading
   container vs served     NOT COMPARED - no --serves given, so this run ordered no such reading
 
@@ -230,8 +234,26 @@ A container that is not running, read against a source that matches its label.
 `docker inspect` succeeds on a stopped and on a crash-looping container, so the label is right there to read and it means nothing:
 
 ```
+fm-deploy-verify.sh - read-only readback, 2026-08-19T23:39:43Z
+host:      deploy-host   machine-id <elided>   hostname app-1   MEASURED
+source:    ddd574e77bea   <source-repo> refs/heads/main   FROM THE RECORD
+checkout:  NOT REQUESTED - no --checkout given
 container: UNREAD - container router is not running (state=exited, restarts=15); the image it was created from is not evidence of what is serving
-...
+           image=sha256:<elided>
+           compose working_dir=/opt/app/compose
+           compose config_files=/opt/app/compose/docker-compose.yml
+           mounts (what this container actually reads from):
+             /opt/app -> /srv/app (ro)
+served:    NOT REQUESTED - no --serves given
+
+comparisons
+  source    vs checkout   NOT COMPARED - no --checkout given, so this run ordered no such reading
+  source    vs container  NOT COMPARED - container was requested and could not be read
+  source    vs served     NOT COMPARED - no --serves given, so this run ordered no such reading
+  checkout  vs container  NOT COMPARED - no --checkout given, so this run ordered no such reading
+  checkout  vs served     NOT COMPARED - no --checkout or --serves given, so this run ordered no such reading
+  container vs served     NOT COMPARED - no --serves given, so this run ordered no such reading
+
 stated out loud
   - the running-side reading was requested and could not be taken: container router is not running (state=exited, restarts=15); the image it was created from is not evidence of what is serving
 
@@ -239,24 +261,35 @@ verdict: INDETERMINATE - a requested reading could not be taken; nothing here sa
 ```
 
 Live drift, found on a first run, with the mount reading and the served-bytes resolution both in play.
-The host serves an application by directory mount, the checkout is five days behind the source ref, and the served bytes confirm the checkout independently:
+The host serves an application by directory mount, the checkout is behind the source ref, and the served bytes confirm the checkout independently:
 
 ```
-source:    cab254b0659d   <source-repo> refs/heads/main   FROM THE RECORD
-checkout:  0947a914ff64   /opt/app   branch=main   read-as=none   MEASURED
+fm-deploy-verify.sh - read-only readback, 2026-08-19T23:39:53Z
+host:      deploy-host   machine-id <elided>   hostname app-1   MEASURED
+source:    e1ade8f18e13   <source-repo> refs/heads/main   FROM THE RECORD
+checkout:  ddd574e77bea   /opt/app   branch=main   read-as=none   MEASURED
            WARNING: 1 uncommitted path(s) in that checkout
 container: UNREAD - container web carries no org.opencontainers.image.revision label, so what it is running cannot be read from it
+           image=sha256:<elided>
            mounts (what this container actually reads from):
              /opt/app/apps/qmob -> /srv/app/qmob (ro)
              /opt/build/public-parts -> /usr/share/nginx/html/parts (ro)
-served:    candidate cab254b0659d is absent from the local clone and was not compared
-served:    candidate 0947a914ff64   MATCH
-served:    0947a914ff64   <served-url>   sha256=09fd6ff31cc2 bytes=38879   MEASURED, resolved against blobs FROM THE RECORD
+served:    candidate e1ade8f18e13 is absent from the local clone and was not compared
+served:    candidate ddd574e77bea   MATCH
+served:    ddd574e77bea   <served-url>   sha256=9f8ba5feb666 bytes=10   MEASURED, resolved against blobs FROM THE RECORD
+           the container revision was NOT a candidate for these bytes; pass it with --candidate to have it compared
 
 comparisons
-  source    vs checkout   DIFFER cab254b0659d vs 0947a914ff64
-  source    vs served     DIFFER cab254b0659d vs 0947a914ff64
-  checkout  vs served     AGREE 0947a914ff64
+  source    vs checkout   DIFFER e1ade8f18e13 vs ddd574e77bea
+  source    vs container  NOT COMPARED - container was requested and could not be read
+  source    vs served     DIFFER e1ade8f18e13 vs ddd574e77bea
+  checkout  vs container  NOT COMPARED - container was requested and could not be read
+  checkout  vs served     AGREE ddd574e77bea
+  container vs served     NOT COMPARED - container was requested and could not be read
+
+stated out loud
+  - /opt/app has 1 uncommitted path(s), so its HEAD does not describe every file it holds
+  - the running-side reading was requested and could not be taken: container web carries no org.opencontainers.image.revision label, so what it is running cannot be read from it
 
 verdict: DRIFT - 2 of 3 compared pair(s) disagree, and a requested reading could not be taken, so what disagrees may not be all of it
 ```

@@ -306,6 +306,27 @@ field() {
   printf '%s\n' "$1" | sed -n "s/^$2=//p" | head -1
 }
 
+# has_fields <output> - true when the reply carried at least one key=value line,
+# which is to say the payload ran at all.
+has_fields() {
+  printf '%s\n' "$1" | grep -q '^[a-z_][a-z_0-9]*='
+}
+
+# no_reading_reason <output> <reason when the reply really was empty>
+# read_host folds stderr in, so a transport that failed - unreachable, refused,
+# permission denied, host key changed - answers with ssh's own words and no
+# key=value line at all. Reporting that as an empty reply is false, and it
+# throws away the one thing that explains the run.
+no_reading_reason() {
+  local raw=$1 empty_reason=$2 excerpt
+  excerpt=$(printf '%s' "$raw" | tr '\n' ' ' | sed 's/^ *//; s/ *$//' | cut -c1-200)
+  if [ -z "$excerpt" ] || has_fields "$raw"; then
+    printf '%s' "$empty_reason"
+  else
+    printf 'no reading came back, the reply was: %s' "$excerpt"
+  fi
+}
+
 # A docker template renders a missing label as the literal <no value>. Treat it
 # and the empty string alike: an absent revision label is an unread reading, not
 # a commit.
@@ -332,6 +353,7 @@ REQ_CONTAINER=0; VAL_CONTAINER=; WHY_CONTAINER=
 REQ_SERVED=0;    VAL_SERVED=;    WHY_SERVED=
 
 INDETERMINATE=0
+CONTAINER_IN_POOL=0
 NOTES=()
 note() { NOTES+=("$1"); }
 
@@ -353,14 +375,15 @@ ID_MACHINE=$(field "$ID_OUT" machine)
 ID_HOST=$(field "$ID_OUT" hostname)
 
 if [ -n "$ID_ERR" ] || { [ -z "$ID_MACHINE" ] && [ -z "$ID_HOST" ]; }; then
+  ID_WHY=${ID_ERR:-$(no_reading_reason "$ID_OUT" "no identity in the reply")}
   if [ -n "$EXPECT_MACHINE" ]; then
     printf 'REFUSED: --expect-machine %s was given and the host identity could not be read (%s)\n' \
-      "$EXPECT_MACHINE" "${ID_ERR:-no identity in the reply}" >&2
+      "$EXPECT_MACHINE" "$ID_WHY" >&2
     exit 1
   fi
-  printf 'host:      %s   UNREADABLE - %s\n' "${HOST:-this machine}" "${ID_ERR:-no identity in the reply}"
+  printf 'host:      %s   UNREADABLE - %s\n' "${HOST:-this machine}" "$ID_WHY"
   INDETERMINATE=1
-  note "the machine behind ${HOST:-this machine} could not be identified, so no reading below is tied to a known machine"
+  note "the machine behind ${HOST:-this machine} could not be identified: $ID_WHY"
 else
   if [ -n "$EXPECT_MACHINE" ] && [ "$EXPECT_MACHINE" != "$ID_MACHINE" ] && [ "$EXPECT_MACHINE" != "$ID_HOST" ]; then
     printf 'REFUSED: --expect-machine %s, but %s is machine-id %s / hostname %s\n' \
@@ -377,11 +400,69 @@ if [ "$REQ_SOURCE" -eq 1 ]; then
   # private remote with no cached credential blocks on a prompt, and a verifier
   # that hangs is worse than one that reports it could not read: an unattended
   # run never returns a verdict at all.
+  # The peeled pattern is asked for by name. An annotated tag answers with the
+  # TAG OBJECT, whose sha equals no container label and no checkout HEAD, so
+  # taking it would report a confident DRIFT produced by this tool's own
+  # resolution rather than by anything on the host.
   if src_out=$(GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/echo SSH_ASKPASS_REQUIRE=never \
-      GIT_SSH_COMMAND='ssh -oBatchMode=yes' tmo git ls-remote --exit-code -- "$SOURCE_REMOTE" "$SOURCE_REF" 2>&1); then
-    VAL_SOURCE=$(printf '%s\n' "$src_out" | awk 'NF{print $1; exit}')
-    if [ -z "$VAL_SOURCE" ]; then
+      GIT_SSH_COMMAND='ssh -oBatchMode=yes' tmo git ls-remote --exit-code -- \
+      "$SOURCE_REMOTE" "$SOURCE_REF" "$SOURCE_REF^{}" 2>&1); then
+    src_n=0
+    src_ref=(); src_sha=(); src_peeled=()
+    while read -r sha ref; do
+      [ -n "$sha" ] || continue
+      [ -n "$ref" ] || continue
+      case "$sha" in
+        *[!0-9a-f]*) continue ;;
+      esac
+      peel=0
+      case "$ref" in
+        *'^{}') ref=${ref%'^{}'}; peel=1 ;;
+      esac
+      i=0
+      seen_ref=0
+      while [ "$i" -lt "$src_n" ]; do
+        if [ "${src_ref[$i]}" = "$ref" ]; then
+          seen_ref=1
+          if [ "$peel" -eq 1 ] || [ "${src_peeled[$i]}" -eq 0 ]; then
+            src_sha[i]=$sha
+            src_peeled[i]=$peel
+          fi
+          break
+        fi
+        i=$((i + 1))
+      done
+      if [ "$seen_ref" -eq 0 ]; then
+        src_ref[src_n]=$ref
+        src_sha[src_n]=$sha
+        src_peeled[src_n]=$peel
+        src_n=$((src_n + 1))
+      fi
+    done <<SRC_REFS
+$src_out
+SRC_REFS
+    src_distinct=0
+    src_matched=
+    i=0
+    while [ "$i" -lt "$src_n" ]; do
+      j=0
+      dup=0
+      while [ "$j" -lt "$i" ]; do
+        [ "${src_sha[$j]}" = "${src_sha[$i]}" ] && dup=1 && break
+        j=$((j + 1))
+      done
+      [ "$dup" -eq 0 ] && src_distinct=$((src_distinct + 1))
+      src_matched="$src_matched ${src_ref[$i]}=$(short "${src_sha[$i]}")"
+      i=$((i + 1))
+    done
+    if [ "$src_distinct" -eq 1 ]; then
+      VAL_SOURCE=${src_sha[0]}
+    elif [ "$src_distinct" -eq 0 ]; then
       WHY_SOURCE="the remote answered without a commit for $SOURCE_REF"
+    else
+      # A reading that cannot discriminate must not produce a definite answer,
+      # here for the same reason the served-bytes tie refuses one.
+      WHY_SOURCE="AMBIGUOUS: $SOURCE_REF matches more than one commit on $SOURCE_REMOTE -$src_matched, so which commit it names cannot be read"
     fi
   else
     WHY_SOURCE="git ls-remote could not read $SOURCE_REF from $SOURCE_REMOTE: $(printf '%s' "$src_out" | tr '\n' ' ' | cut -c1-160)"
@@ -411,7 +492,7 @@ if [ "$REQ_CHECKOUT" -eq 1 ]; then
     # An empty reply is an unread reading, not a clean checkout. Reporting a
     # blank HEAD as a reading - and then warning about its blank dirty count -
     # is exactly the confident-about-nothing outcome this tool exists to stop.
-    WHY_CHECKOUT="the checkout reading came back empty for $CHECKOUT"
+    WHY_CHECKOUT=$(no_reading_reason "$co_out" "the checkout reading came back empty for $CHECKOUT")
   else
     VAL_CHECKOUT=$co_head
   fi
@@ -449,7 +530,7 @@ if [ "$REQ_CONTAINER" -eq 1 ]; then
   if [ -n "$ct_err" ]; then
     WHY_CONTAINER=$ct_err
   elif [ -z "$ct_running" ]; then
-    WHY_CONTAINER="the container reading came back empty for $CONTAINER"
+    WHY_CONTAINER=$(no_reading_reason "$ct_out" "the container reading came back empty for $CONTAINER")
   elif [ "$ct_running" != true ]; then
     # docker inspect succeeds on a stopped and on a crash-looping container, so
     # the revision label is still there to read. It is not evidence: the image a
@@ -501,6 +582,8 @@ if [ "$REQ_SERVED" -eq 1 ]; then
 
   if [ -n "$sv_err" ]; then
     WHY_SERVED=$sv_err
+  elif ! has_fields "$sv_out"; then
+    WHY_SERVED=$(no_reading_reason "$sv_out" "the fetch of $SERVES came back empty")
   else
     case "$sv_http" in
       2??) : ;;
@@ -547,6 +630,13 @@ if [ "$REQ_SERVED" -eq 1 ]; then
       done
       [ "$dup" -eq 0 ] && resolved+=("$full")
     done
+
+    if [ -n "$VAL_CONTAINER" ]; then
+      ct_full=$(git -C "$CLONE" rev-parse --verify --quiet "$VAL_CONTAINER^{commit}" 2>/dev/null || true)
+      for seen in ${resolved[@]+"${resolved[@]}"}; do
+        [ -n "$ct_full" ] && [ "$seen" = "$ct_full" ] && CONTAINER_IN_POOL=1 && break
+      done
+    fi
 
     if [ "${#resolved[@]}" -eq 0 ]; then
       # Nothing was compared. Reporting that as "no candidate matches" would
@@ -611,7 +701,11 @@ if [ "$REQ_SERVED" -eq 1 ]; then
   # Saying so out loud, resolved or not, is the tool's own rule turned on
   # itself - silence is what makes an unestablished reading look like agreement.
   if [ "$REQ_CONTAINER" -eq 1 ]; then
-    printf '           the container revision was NOT a candidate for these bytes; pass it with --candidate to have it compared\n'
+    if [ "$CONTAINER_IN_POOL" -eq 1 ]; then
+      printf '           the container revision was supplied as a candidate and was compared, so these bytes did not establish it independently\n'
+    else
+      printf '           the container revision was NOT a candidate for these bytes; pass it with --candidate to have it compared\n'
+    fi
   fi
 else
   printf 'served:    NOT REQUESTED - no --serves given\n'

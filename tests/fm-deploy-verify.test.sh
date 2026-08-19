@@ -48,6 +48,12 @@ while [ "$#" -gt 0 ]; do
 done
 host=$1; shift
 printf '%s | %s\n' "$host" "$*" >>"${FM_FAKE_SSH_LOG:-/dev/null}"
+# A transport that fails outright - unreachable, refused, host key changed -
+# answers on stderr and never runs the payload at all.
+case "${FM_FAKE_SSH_FAIL:-}" in
+  '') : ;;
+  *) printf '%s\n' "$FM_FAKE_SSH_FAIL" >&2; exit 255 ;;
+esac
 # A host that answers the transport but returns nothing for one verb. Real, and
 # the reason the tool must not read an empty reply as a reading.
 case "${FM_FAKE_SSH_EMPTY_VERB:-}" in
@@ -55,6 +61,12 @@ case "${FM_FAKE_SSH_EMPTY_VERB:-}" in
   *) case "$*" in
        *"'${FM_FAKE_SSH_EMPTY_VERB}'"*) exit 0 ;;
      esac ;;
+esac
+# The far side is a different machine: what it has on PATH is its business, so
+# a test can give the host tools the verifier itself does not have.
+case "${FM_FAKE_SSH_PATH:-}" in
+  '') : ;;
+  *) PATH=$FM_FAKE_SSH_PATH; export PATH ;;
 esac
 exec /bin/sh -c "$*"
 EOF
@@ -135,6 +147,12 @@ git -C "$REPO" rm -q probe.txt
 git -C "$REPO" commit -qm "no probe"
 D=$(git -C "$REPO" rev-parse HEAD)
 git -C "$REPO" checkout -q main
+# An ANNOTATED tag: ls-remote answers with the tag object, and the commit only
+# through the peeled entry. Deploys pinned to a tag are the ordinary case.
+git -C "$REPO" tag -a v1 -m 'release 1' "$A"
+# One name carried by two different refs at two different commits.
+git -C "$REPO" branch collide "$A"
+git -C "$REPO" tag -a collide -m collide "$C"
 
 # path_without <dir> <command>... - a PATH directory holding everything the
 # current PATH holds EXCEPT the named commands, so a test can run the tool on a
@@ -175,9 +193,11 @@ inspect_fixture() {
 }
 
 RUNNING_AT_C="$T/inspect-running.txt"
+RUNNING_AT_A="$T/inspect-running-at-a.txt"
 STOPPED_AT_C="$T/inspect-stopped.txt"
 NO_LABEL="$T/inspect-nolabel.txt"
 inspect_fixture "$RUNNING_AT_C" true 0 "$C"
+inspect_fixture "$RUNNING_AT_A" true 0 "$A"
 inspect_fixture "$STOPPED_AT_C" false 17 "$C"
 inspect_fixture "$NO_LABEL" true 0 '<no value>'
 
@@ -194,7 +214,7 @@ reset_env() {
   export FM_FAKE_CURL_CODE=200
   export FM_FAKE_CURL_BODY='beta
 '
-  unset FM_FAKE_SSH_EMPTY_VERB
+  unset FM_FAKE_SSH_EMPTY_VERB FM_FAKE_SSH_FAIL FM_FAKE_SSH_PATH
 }
 
 # run_tool <args...> - run the verifier against the stub host, capture output
@@ -354,6 +374,7 @@ test_a_served_reading_with_no_candidate_says_nothing_was_compared() {
 
 test_the_container_revision_is_named_as_excluded_when_the_reading_resolves() {
   reset_env
+  export FM_FAKE_DOCKER_INSPECT="$RUNNING_AT_A"
   run_tool --container svc --serves 'http://stub/probe.txt' --serves-path probe.txt \
     --clone "$REPO" --candidate "$C"
   assert_contains "$OUT" 'the container revision was NOT a candidate for these bytes' \
@@ -368,12 +389,30 @@ test_the_container_revision_is_named_as_excluded_when_the_reading_fails() {
   reset_env
   export FM_FAKE_CURL_BODY='gamma
 '
+  export FM_FAKE_DOCKER_INSPECT="$RUNNING_AT_A"
   run_tool --container svc --serves 'http://stub/probe.txt' --serves-path probe.txt \
     --clone "$REPO" --candidate "$C"
   assert_contains "$OUT" 'served:    UNREAD' "this run must leave the served reading unresolved"
   assert_contains "$OUT" 'the container revision was NOT a candidate for these bytes' \
     "the exclusion must be stated whether or not the reading resolved"
   pass "an unresolved served reading also says the container revision was not a candidate"
+}
+
+test_the_container_revision_is_named_as_included_when_it_was_passed() {
+  # The run the message above tells the operator to make. Repeating the
+  # exclusion line here would state something untrue of this run, and would hide
+  # the one thing worth knowing: the served bytes were confirmed by a commit the
+  # container reading itself nominated.
+  reset_env
+  run_tool --container svc --serves 'http://stub/probe.txt' --serves-path probe.txt \
+    --clone "$REPO" --candidate "$C"
+  assert_contains "$OUT" 'the container revision was supplied as a candidate and was compared' \
+    "a run that compared the container's own revision must say so"
+  assert_contains "$OUT" 'did not establish it independently' \
+    "the operator must learn that this reading did not stand on its own"
+  assert_not_contains "$OUT" 'was NOT a candidate' \
+    "the tool must not claim an exclusion that this run did not make"
+  pass "a container revision that was passed as a candidate is reported as compared, not excluded"
 }
 
 test_no_exclusion_is_claimed_when_no_container_was_requested() {
@@ -406,7 +445,7 @@ test_the_served_reading_survives_a_machine_without_sha256sum() {
   pass "the served reading falls back to shasum where sha256sum is absent"
 }
 
-test_a_machine_with_no_hasher_says_so_rather_than_hashing_nothing() {
+test_a_host_with_no_hasher_says_so_rather_than_hashing_nothing() {
   reset_env
   local nohash="$T/path-no-hashers"
   [ -d "$nohash" ] || path_without "$nohash" sha256sum shasum
@@ -415,12 +454,36 @@ test_a_machine_with_no_hasher_says_so_rather_than_hashing_nothing() {
     --serves 'http://stub/probe.txt' --serves-path probe.txt --clone "$REPO" \
     --candidate "$C" 2>&1) || RC=$?
   record_verdicts "$OUT"
-  expect_code 3 "$RC" "a machine that cannot hash must be indeterminate"
+  expect_code 3 "$RC" "a host that cannot hash must be indeterminate"
   assert_contains "$OUT" 'served:    UNREAD' "an unhashable reading must render unread"
-  assert_contains "$OUT" 'shasum' "the reason must name the missing hasher"
+  assert_contains "$OUT" 'available on the host' \
+    "the reason must name the side that could not hash: the host fetching the bytes"
   assert_not_contains "$OUT" 'MATCH' "nothing may match when nothing could be hashed"
   assert_not_contains "$OUT" 'verdict: AGREE' "a reading that could not be taken must not agree"
-  pass "a machine with neither hasher names that, rather than hashing nothing"
+  pass "a host with neither hasher names that, rather than hashing nothing"
+}
+
+test_a_verifier_with_no_hasher_says_so_rather_than_hashing_nothing() {
+  # The asymmetric case, and the only one that reaches the LOCAL guard: the host
+  # can hash the bytes it serves, and the machine running the verifier cannot
+  # hash the candidate blobs it would compare them against.
+  reset_env
+  local nohash="$T/path-no-hashers"
+  [ -d "$nohash" ] || path_without "$nohash" sha256sum shasum
+  export FM_FAKE_SSH_PATH="$PATH"
+  RC=0
+  OUT=$(PATH="$nohash" "$TOOL" --host stub-host --checkout "$REPO" \
+    --serves 'http://stub/probe.txt' --serves-path probe.txt --clone "$REPO" \
+    --candidate "$C" 2>&1) || RC=$?
+  record_verdicts "$OUT"
+  expect_code 3 "$RC" "a verifier that cannot hash must be indeterminate"
+  assert_contains "$OUT" 'no candidate blob could be hashed' \
+    "the local guard must name that the candidate side could not be hashed"
+  assert_not_contains "$OUT" 'available on the host' \
+    "the host hashed its own bytes here, so the remote guard must not be the one that fired"
+  assert_not_contains "$OUT" 'MATCH' "nothing may match when no candidate blob could be hashed"
+  assert_not_contains "$OUT" 'verdict: AGREE' "a reading that could not be taken must not agree"
+  pass "a verifier that cannot hash names the candidate side, not the host"
 }
 
 # --- D4: nothing checked is its own outcome ---------------------------------
@@ -572,6 +635,50 @@ EOF
   expect_code 3 "$RC" "an unreadable source must be indeterminate"
   assert_contains "$OUT" 'source:    UNREAD' "an unreadable source must render unread"
   pass "a source remote that would prompt returns unread within a bound"
+}
+
+# --- the source ref resolves to a commit, or to nothing ---------------------
+
+test_an_annotated_tag_resolves_to_the_commit_it_points_at() {
+  # ls-remote answers a bare annotated tag with the TAG OBJECT. Taking that sha
+  # would compare a tag against commits and report a confident DRIFT produced by
+  # this tool's own resolution rather than by anything on the host.
+  reset_env
+  export FM_FAKE_DOCKER_INSPECT="$RUNNING_AT_A"
+  run_tool --container svc --source-remote "$REPO" --source-ref v1
+  expect_code 0 "$RC" "a tag pointing at the running commit must agree"
+  assert_contains "$OUT" "source:    ${A:0:12}" "the tag must resolve to the commit it points at"
+  assert_contains "$OUT" 'verdict: AGREE' "a tag and a container at the same commit agree"
+  pass "an annotated --source-ref resolves to its commit, not to the tag object"
+}
+
+test_a_source_ref_matching_two_refs_resolves_to_neither() {
+  # A branch and a tag of the same name at different commits. Taking whichever
+  # the remote listed first is the same fault the served-bytes tie refuses.
+  reset_env
+  run_tool --container svc --source-remote "$REPO" --source-ref collide
+  expect_code 3 "$RC" "an ambiguous source ref must be indeterminate"
+  assert_contains "$OUT" 'source:    UNREAD' "an ambiguous ref must render unread"
+  assert_contains "$OUT" 'AMBIGUOUS' "the tie must be named as ambiguous"
+  assert_contains "$OUT" 'refs/heads/collide' "the reason must name the first matched ref"
+  assert_contains "$OUT" 'refs/tags/collide' "the reason must name the second matched ref"
+  assert_not_contains "$OUT" 'verdict: DRIFT' \
+    "a resolution this tool could not make must never be reported as the host disagreeing"
+  pass "a source ref carried by two refs at two commits resolves to neither"
+}
+
+# --- a transport that failed says why ---------------------------------------
+
+test_a_transport_failure_reaches_the_output_as_its_own_reason() {
+  reset_env
+  export FM_FAKE_SSH_FAIL='ssh: connect to host stub-host port 22: Connection refused'
+  run_tool --container svc --checkout "$REPO"
+  expect_code 3 "$RC" "a host that could not be reached must be indeterminate"
+  assert_contains "$OUT" 'Connection refused' \
+    "the transport's own words are the reason, and must not be discarded"
+  assert_not_contains "$OUT" 'came back empty' \
+    "a reply carrying a diagnostic was not empty, and must not be described as empty"
+  pass "a transport failure is reported with the reason the transport gave"
 }
 
 # --- host identity ----------------------------------------------------------
@@ -788,9 +895,11 @@ test_an_empty_served_body_is_unread_rather_than_bytes_that_match
 test_a_served_reading_with_no_candidate_says_nothing_was_compared
 test_the_container_revision_is_named_as_excluded_when_the_reading_resolves
 test_the_container_revision_is_named_as_excluded_when_the_reading_fails
+test_the_container_revision_is_named_as_included_when_it_was_passed
 test_no_exclusion_is_claimed_when_no_container_was_requested
 test_the_served_reading_survives_a_machine_without_sha256sum
-test_a_machine_with_no_hasher_says_so_rather_than_hashing_nothing
+test_a_host_with_no_hasher_says_so_rather_than_hashing_nothing
+test_a_verifier_with_no_hasher_says_so_rather_than_hashing_nothing
 test_a_run_that_compared_nothing_is_never_clean
 test_a_reading_not_requested_is_not_a_reading_that_failed
 test_drift_is_reported_when_both_sides_were_read_and_differ
@@ -801,6 +910,9 @@ test_sudo_yes_forces_the_checkout_reading_through_sudo
 test_sudo_auto_falls_back_only_when_the_plain_reading_fails
 test_an_empty_checkout_reply_is_unread_and_raises_no_dirty_warning
 test_a_source_remote_that_would_prompt_is_unread_within_a_bound
+test_an_annotated_tag_resolves_to_the_commit_it_points_at
+test_a_source_ref_matching_two_refs_resolves_to_neither
+test_a_transport_failure_reaches_the_output_as_its_own_reason
 test_expect_machine_refuses_before_any_other_reading_is_taken
 test_expect_machine_refuses_when_the_identity_cannot_be_read
 test_an_unreadable_identity_makes_the_run_indeterminate
