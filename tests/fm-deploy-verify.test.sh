@@ -202,6 +202,16 @@ reset_env() {
 run_tool() {
   RC=0
   OUT=$("$TOOL" --host stub-host "$@" 2>&1) || RC=$?
+  record_verdicts "$OUT"
+}
+
+# Every verdict line any run below emits is kept, so a later guard can hold the
+# skill's quoted verdicts against output the tool really produced rather than
+# against its source.
+VERDICTS="$T/emitted-verdicts.txt"
+: >"$VERDICTS"
+record_verdicts() {
+  printf '%s\n' "$1" | sed -n '/^verdict: /p' >>"$VERDICTS"
 }
 
 # --- D2: a stopped container is never an agreement --------------------------
@@ -288,11 +298,31 @@ test_a_candidate_without_the_probe_path_is_reported_absent_not_compared() {
   expect_code 3 "$RC" "a candidate that does not hold the probe path leaves the reading unresolved"
   assert_contains "$OUT" 'probe.txt is absent at that commit' \
     "a commit without the probe path must be reported absent, by its own reason"
+  assert_contains "$OUT" 'probe.txt exists at no candidate commit, so the bytes' \
+    "not one blob was opened, so the reading must say it compared against nothing"
   assert_not_contains "$OUT" 'MATCH' "a commit without the probe path must never match"
+  assert_not_contains "$OUT" 'matches the bytes' \
+    "nothing compared must not be reported as the repository disagreeing with the host"
   assert_not_contains "$OUT" 'differs' \
     "an absent path is not a differing blob: it was never compared"
   assert_not_contains "$OUT" 'verdict: AGREE' "a reading resolved from nothing must not agree"
   pass "a candidate lacking the probe path is reported absent and never compared"
+}
+
+# The control for the reason above: one candidate holds the path and differs, so
+# a blob WAS opened, and that run must still read as a measured mismatch.
+test_a_candidate_that_holds_the_path_and_differs_is_a_measured_mismatch() {
+  reset_env
+  export FM_FAKE_CURL_BODY='gamma
+'
+  run_tool --serves 'http://stub/probe.txt' --serves-path probe.txt --clone "$REPO" \
+    --candidate "$C" --candidate "$D"
+  expect_code 3 "$RC" "a measured mismatch is still an unresolved reading"
+  assert_contains "$OUT" "matches the bytes" \
+    "a blob that was opened and differed must be reported as a measured mismatch"
+  assert_not_contains "$OUT" 'exists at no candidate commit' \
+    "a run that opened a blob must not claim it compared against nothing"
+  pass "a candidate that holds the path and differs is a measured mismatch, not nothing compared"
 }
 
 test_an_empty_served_body_is_unread_rather_than_bytes_that_match() {
@@ -320,17 +350,54 @@ test_a_served_reading_with_no_candidate_says_nothing_was_compared() {
   pass "a served reading with no candidate names that nothing was available to compare"
 }
 
+# --- what the served reading did NOT consider -------------------------------
+
+test_the_container_revision_is_named_as_excluded_when_the_reading_resolves() {
+  reset_env
+  run_tool --container svc --serves 'http://stub/probe.txt' --serves-path probe.txt \
+    --clone "$REPO" --candidate "$C"
+  assert_contains "$OUT" 'the container revision was NOT a candidate for these bytes' \
+    "an operator must be told which reading was kept out of the candidate pool"
+  assert_contains "$OUT" '--candidate' "the message must name how to have it compared"
+  pass "a resolved served reading still says the container revision was not a candidate"
+}
+
+test_the_container_revision_is_named_as_excluded_when_the_reading_fails() {
+  # The same statement is owed when the reading resolves to nothing: otherwise
+  # the operator has to infer the exclusion from an empty result.
+  reset_env
+  export FM_FAKE_CURL_BODY='gamma
+'
+  run_tool --container svc --serves 'http://stub/probe.txt' --serves-path probe.txt \
+    --clone "$REPO" --candidate "$C"
+  assert_contains "$OUT" 'served:    UNREAD' "this run must leave the served reading unresolved"
+  assert_contains "$OUT" 'the container revision was NOT a candidate for these bytes' \
+    "the exclusion must be stated whether or not the reading resolved"
+  pass "an unresolved served reading also says the container revision was not a candidate"
+}
+
+test_no_exclusion_is_claimed_when_no_container_was_requested() {
+  reset_env
+  run_tool --serves 'http://stub/probe.txt' --serves-path probe.txt --clone "$REPO" \
+    --candidate "$C"
+  assert_not_contains "$OUT" 'the container revision was NOT a candidate' \
+    "a run that asked for no container reading has no exclusion to report"
+  pass "the exclusion is stated only where a container reading was actually taken"
+}
+
 # --- the served reading on a machine that ships shasum and no sha256sum -----
 
 test_the_served_reading_survives_a_machine_without_sha256sum() {
   reset_env
-  command -v shasum >/dev/null 2>&1 || fail "this test needs shasum present to prove the fallback"
+  command -v shasum >/dev/null 2>&1 \
+    || { echo "skip: shasum not found (needed to prove the sha256sum fallback)"; return 0; }
   local nosha="$T/path-no-sha256sum"
   [ -d "$nosha" ] || path_without "$nosha" sha256sum
   RC=0
   OUT=$(PATH="$nosha" "$TOOL" --host stub-host --checkout "$REPO" \
     --source-remote "$REPO" --source-ref refs/heads/main \
     --serves 'http://stub/probe.txt' --serves-path probe.txt --clone "$REPO" 2>&1) || RC=$?
+  record_verdicts "$OUT"
   expect_code 0 "$RC" "a macOS-shaped machine must still take the served reading"
   assert_not_contains "$OUT" 'served:    UNREAD' \
     "a missing sha256sum must not make the served reading unreadable"
@@ -347,6 +414,7 @@ test_a_machine_with_no_hasher_says_so_rather_than_hashing_nothing() {
   OUT=$(PATH="$nohash" "$TOOL" --host stub-host --checkout "$REPO" \
     --serves 'http://stub/probe.txt' --serves-path probe.txt --clone "$REPO" \
     --candidate "$C" 2>&1) || RC=$?
+  record_verdicts "$OUT"
   expect_code 3 "$RC" "a machine that cannot hash must be indeterminate"
   assert_contains "$OUT" 'served:    UNREAD' "an unhashable reading must render unread"
   assert_contains "$OUT" 'shasum' "the reason must name the missing hasher"
@@ -390,6 +458,19 @@ test_drift_is_reported_when_both_sides_were_read_and_differ() {
   assert_contains "$OUT" 'verdict: DRIFT' "a real disagreement must be reported as drift"
   assert_contains "$OUT" 'DIFFER' "the disagreeing pair must be named"
   pass "a disagreement between two read sides is reported as drift"
+}
+
+test_drift_alongside_an_unread_reading_says_both() {
+  # Drift is still drift when another requested reading could not be taken, and
+  # the verdict has to carry both: what disagrees may not be all of it.
+  reset_env
+  export FM_FAKE_DOCKER_INSPECT="$STOPPED_AT_C"
+  run_tool --container svc --checkout "$REPO" --source-remote "$REPO" --source-ref refs/heads/old
+  expect_code 2 "$RC" "a disagreement stays drift even when a reading was unreadable"
+  assert_contains "$OUT" 'verdict: DRIFT' "the disagreement must still be reported as drift"
+  assert_contains "$OUT" 'a requested reading could not be taken, so what disagrees may not be all of it' \
+    "the verdict must name the unread reading alongside the drift"
+  pass "drift alongside an unread reading reports both, and exits 2"
 }
 
 # --- D6: remote arguments survive the remote re-parse -----------------------
@@ -596,6 +677,7 @@ test_a_local_run_needs_no_host() {
   reset_env
   RC=0
   OUT=$("$TOOL" --checkout "$REPO" --source-remote "$REPO" --source-ref refs/heads/main 2>&1) || RC=$?
+  record_verdicts "$OUT"
   expect_code 0 "$RC" "a local run must work with no --host"
   assert_contains "$OUT" 'this machine' "a local run must name the machine it read"
   pass "the readings can be taken locally with no host"
@@ -612,6 +694,15 @@ test_serves_without_a_path_is_refused() {
 }
 
 # --- the skill --------------------------------------------------------------
+#
+# The five cases below read SKILL.md and assert that particular sentences are in
+# it. That is deliberate and it is not the source-substring anti-pattern: here
+# the written procedure IS the deliverable, so checking its wording is checking
+# the thing itself rather than using text as a proxy for behavior somewhere
+# else. The verdict cross-check further down was a different kind of thing - it
+# grepped the TOOL's source for strings the tool prints, which proves nothing
+# about what it prints - and real output was available for the cost of keeping
+# the lines the runs above already emitted, so it uses that instead.
 
 test_the_skill_cites_no_private_report_paths() {
   # Other vessels adopt this skill and cannot read this home's task records, so
@@ -650,20 +741,28 @@ test_the_skill_states_what_the_tool_does_not_cover() {
 
 # Guards the anti-pattern that put a paraphrased transcript under a label whose
 # whole standard is that the output was really produced: any verdict line quoted
-# in the skill must be one this tool can still emit. It checks verdict lines
-# only - the rest of a transcript stays an author's discipline - and a changed
-# verdict string fails here rather than shipping a quotation of output that no
-# longer exists.
+# in the skill must be one the runs above ACTUALLY EMITTED. The corpus is the
+# verdict lines recorded from every run in this file, which between them cover
+# all four exit statuses; the per-run counts are the only thing normalised away,
+# because a transcript is quoted from one run and the corpus comes from another.
+# It checks verdict lines only - the rest of a transcript stays an author's
+# discipline - and a single reworded verdict fails here rather than shipping a
+# quotation of output that no longer exists.
 test_every_verdict_quoted_in_the_skill_is_one_the_tool_can_emit() {
-  local line normalised found=0
+  local line found=0 emitted="$T/emitted-verdicts-normalised.txt" want
+  [ -s "$VERDICTS" ] || fail "no verdict line was captured, so this guard proved nothing"
+  sed 's/[0-9][0-9]*/N/g' "$VERDICTS" | sort -u >"$emitted"
+  for want in AGREE DRIFT INDETERMINATE 'NOTHING CHECKED'; do
+    grep -Fq "verdict: $want" "$emitted" \
+      || fail "the runs above emitted no $want verdict, so this guard covers less than it claims"
+  done
   while IFS= read -r line; do
     found=1
-    normalised=$(printf '%s' "$line" | sed 's/[0-9][0-9]*/%s/g')
-    grep -Fq -- "$normalised" "$TOOL" \
-      || fail "the skill quotes a verdict this tool cannot emit: $line"
+    grep -Fqx -- "$(printf '%s' "$line" | sed 's/[0-9][0-9]*/N/g')" "$emitted" \
+      || fail "the skill quotes a verdict line no run of this tool produced: $line"
   done < <(grep -ho 'verdict: [A-Z].*' "$SKILL" || true)
   [ "$found" = 1 ] || fail "the skill quotes no verdict line, so this guard proved nothing"
-  pass "every verdict line quoted in the skill is one the tool still emits"
+  pass "every verdict line quoted in the skill is one the tool was seen to emit"
 }
 
 test_the_skill_declares_its_load_trigger() {
@@ -684,13 +783,18 @@ test_one_commit_offered_twice_is_one_candidate_and_not_a_tie
 test_no_candidate_match_is_unread_rather_than_a_guess
 test_a_non_2xx_served_response_is_unread
 test_a_candidate_without_the_probe_path_is_reported_absent_not_compared
+test_a_candidate_that_holds_the_path_and_differs_is_a_measured_mismatch
 test_an_empty_served_body_is_unread_rather_than_bytes_that_match
 test_a_served_reading_with_no_candidate_says_nothing_was_compared
+test_the_container_revision_is_named_as_excluded_when_the_reading_resolves
+test_the_container_revision_is_named_as_excluded_when_the_reading_fails
+test_no_exclusion_is_claimed_when_no_container_was_requested
 test_the_served_reading_survives_a_machine_without_sha256sum
 test_a_machine_with_no_hasher_says_so_rather_than_hashing_nothing
 test_a_run_that_compared_nothing_is_never_clean
 test_a_reading_not_requested_is_not_a_reading_that_failed
 test_drift_is_reported_when_both_sides_were_read_and_differ
+test_drift_alongside_an_unread_reading_says_both
 test_remote_arguments_survive_the_remote_reparse
 test_sudo_no_keeps_the_checkout_reading_off_sudo
 test_sudo_yes_forces_the_checkout_reading_through_sudo

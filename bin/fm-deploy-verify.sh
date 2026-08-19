@@ -555,6 +555,7 @@ if [ "$REQ_SERVED" -eq 1 ]; then
       WHY_SERVED="no candidate commit was available to compare the bytes $SERVES serves against; pass --candidate, or a --source-remote or --checkout that resolves"
     else
       matches=()
+      compared=0
       for c in ${resolved[@]+"${resolved[@]}"}; do
         # cat-file's own status says whether the path exists at that commit. An
         # empty hash cannot: sha256 of no input is a well-defined digest, so
@@ -565,6 +566,7 @@ if [ "$REQ_SERVED" -eq 1 ]; then
           printf 'served:    candidate %s   %s is absent at that commit\n' "$(short "$c")" "$SERVES_PATH"
           continue
         fi
+        compared=$((compared + 1))
         if [ "$blob" = "$sv_sha" ]; then
           printf 'served:    candidate %s   MATCH\n' "$(short "$c")"
           matches+=("$c")
@@ -575,6 +577,13 @@ if [ "$REQ_SERVED" -eq 1 ]; then
 
       if [ "${#matches[@]}" -eq 1 ]; then
         VAL_SERVED=${matches[0]}
+      elif [ "$compared" -eq 0 ]; then
+        # Candidates existed and not one blob was opened, so nothing was
+        # compared. That is a third state, and it must not borrow the wording of
+        # either the empty candidate set above or a measured no-match below: an
+        # operator who mistyped --serves-path would otherwise read this as the
+        # repository disagreeing with the host.
+        WHY_SERVED="$SERVES_PATH exists at no candidate commit, so the bytes $SERVES serves were compared against nothing"
       elif [ "${#matches[@]}" -eq 0 ]; then
         WHY_SERVED="no candidate commit's $SERVES_PATH matches the bytes $SERVES serves"
       else
@@ -595,6 +604,14 @@ if [ "$REQ_SERVED" -eq 1 ]; then
     printf 'served:    UNREAD - %s\n' "$WHY_SERVED"
     INDETERMINATE=1
     note "the served-bytes reading was requested and could not be taken: $WHY_SERVED"
+  fi
+  # The container's own revision label is deliberately kept out of the candidate
+  # pool: letting one reading nominate the commit a second reading then confirms
+  # is a claim verifying itself, which is the fault this tool exists to catch.
+  # Saying so out loud, resolved or not, is the tool's own rule turned on
+  # itself - silence is what makes an unestablished reading look like agreement.
+  if [ "$REQ_CONTAINER" -eq 1 ]; then
+    printf '           the container revision was NOT a candidate for these bytes; pass it with --candidate to have it compared\n'
   fi
 else
   printf 'served:    NOT REQUESTED - no --serves given\n'
