@@ -44,6 +44,13 @@ The tmux fallback also records `state/.watch-keeper.pid`, while systemd converge
 `AGENTS.md` retains the run-once and read-once operator rules, lock-refusal safety, installation consent, and direct-report recovery boundaries because those facts apply at every session start.
 Ordinary dead-direct-report recovery is owned by `stuck-crewmate-recovery`, while persistent-secondmate recovery is owned by `secondmate-provisioning`.
 
+## Board appearance (config/board-appearance.html)
+
+The optional local, gitignored `config/board-appearance.html` supplies one vessel's board palette, type, marks, and component finish.
+`bin/fm-board.sh` reads it from the effective `FM_HOME`; when it is absent, the builder selects the shipped, visibly labelled neutral fallback instead.
+[`docs/board-layout.md`](board-layout.md) owns the fragment format, the shared structural boundary, and the measured contrast requirements.
+The file is not inherited by secondmate homes, because each vessel chooses and maintains its own design language.
+
 ## Vessel role (config/role / roles/)
 
 This section is the single owner of the vessel-role contract; `bin/fm-role-lib.sh`'s header owns the resolution mechanics and `roles/<name>.md` owns each role's own instructions.

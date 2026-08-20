@@ -1,0 +1,64 @@
+<!-- default-appearance.html - neutral fallback, not a vessel design language.
+     It uses browser fonts and system colours instead of choosing a palette or type system. -->
+<style data-fm-board-appearance="default">
+:root {
+  color-scheme: light dark;
+  --fm-canvas: Canvas;
+  --fm-text: CanvasText;
+  --fm-link: LinkText;
+}
+body { background: var(--fm-canvas); color: var(--fm-text); }
+a { color: var(--fm-link); }
+code { border: 1px solid; padding: 1px 5px; }
+.fm-wrap { background: var(--fm-canvas); border: 2px solid; }
+.fm-issue { border-bottom: 1px solid; }
+.fm-vessel, .fm-sub, .fm-note, .fm-cid, .fm-ev, .fm-step, .fm-offline { color: var(--fm-text); }
+.fm-vessel, .fm-sub, .fm-cap, .fm-cid, .fm-tag, .fm-age, .fm-step,
+.fm-rec, .fm-queued, .fm-table th, .fm-foot { font-size: .8125rem; }
+h1 { font-size: clamp(1.25rem, 4.2vw, 2rem); }
+h2 { border-bottom: 1px solid; }
+.fm-appearance-default {
+  border: 1px dashed;
+  padding: 8px 12px;
+  color: var(--fm-text);
+  font-size: .8125rem;
+}
+.fm-tally, .fm-reserve, .fm-stat, .fm-map, .fm-agebar, .fm-field,
+.fm-opt, .fm-free, .fm-panel, .fm-offline { border: 1px solid; }
+.fm-tally-legend, .fm-foot { border-top: 1px solid; }
+.fm-stat b, .fm-tally-count b { font-size: clamp(1.6rem, 5.5vw, 2.5rem); }
+.fm-map text { fill: currentColor; }
+.fm-map .fm-map-node { fill: var(--fm-canvas); stroke: currentColor; }
+.fm-map .fm-map-node-gate, .fm-map .fm-map-node-open { fill: var(--fm-canvas); stroke: currentColor; stroke-width: 2; }
+.fm-map .fm-map-edge, .fm-map .fm-map-edge-gate { stroke: currentColor; fill: none; }
+.fm-map .fm-map-edge-soft { stroke: currentColor; fill: none; stroke-dasharray: 5 4; }
+.fm-legend i, .fm-step b, .fm-num, .fm-tag { border: 1px solid currentColor; }
+.fm-agebar i, .fm-step-link, .fm-dist span, .fm-dist-legend i { background: currentColor; }
+.fm-dist .fm-d1, .fm-dist-legend .fm-d1 { opacity: .25; }
+.fm-dist .fm-d2, .fm-dist-legend .fm-d2 { opacity: .45; }
+.fm-dist .fm-d3, .fm-dist-legend .fm-d3 { opacity: .65; }
+.fm-dist .fm-dn, .fm-dist-legend .fm-dn { opacity: .85; }
+.fm-grid { border-top: 1px solid; }
+.fm-card { border-bottom: 1px solid; }
+.fm-card.is-gate { outline: 2px solid; outline-offset: -2px; }
+.fm-card.is-void .fm-ctitle, .fm-opt.is-void b { text-decoration: line-through; }
+.fm-ev { border-left: 2px solid; }
+.fm-variants { color: var(--fm-text); }
+.fm-variants code { border: 0; padding: 0; }
+.fm-opt:has(input:checked) { outline: 2px solid; outline-offset: -2px; }
+:focus-visible { outline: 2px solid; outline-offset: 2px; }
+.fm-submit { border: 2px solid; background: var(--fm-canvas); color: var(--fm-text); }
+.fm-queued.is-warn { font-weight: 700; }
+.fm-table th { border-bottom: 2px solid; }
+</style>
+<svg data-fm-board-marks="default" width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+<defs>
+<symbol id="fm-mk-open" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+<symbol id="fm-mk-pencil" viewBox="0 0 20 20"><path d="M4 16 L16 4" stroke="currentColor" stroke-width="2"/></symbol>
+<symbol id="fm-mk-struck" viewBox="0 0 20 20"><path d="M3 10 L8 15 L17 5" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+<symbol id="fm-mk-gate" viewBox="0 0 20 20"><path d="M10 2 L18 10 L10 18 L2 10 Z" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+<symbol id="fm-mk-held" viewBox="0 0 20 20"><path d="M7 4 V16 M13 4 V16" stroke="currentColor" stroke-width="2"/></symbol>
+<symbol id="fm-mk-run" viewBox="0 0 20 20"><path d="M4 10 H16" stroke="currentColor" stroke-width="2"/></symbol>
+<symbol id="fm-mk-void" viewBox="0 0 20 20"><path d="M4 4 L16 16 M16 4 L4 16" stroke="currentColor" stroke-width="2"/></symbol>
+</defs>
+</svg>

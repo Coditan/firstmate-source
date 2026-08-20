@@ -408,6 +408,78 @@ test_missing_required_arguments_are_refused() {
   pass "the builder refuses an incomplete invocation"
 }
 
+test_default_appearance_is_visible_and_usable() {
+  local clean_home=$TMP_ROOT/default-home
+  mkdir -p "$clean_home"
+  rm -f "$OUT"
+  FM_HOME=$clean_home "$BOARD" --title T --body "$TMP_ROOT/body.html" --out "$OUT" \
+    >/dev/null 2>&1 || fail "a seat with no local appearance could not build a board"
+  assert_grep 'data-fm-board-appearance="default"' "$OUT" \
+    "the neutral fallback was not inlined"
+  assert_grep 'Default board appearance - no local vessel design is active.' "$OUT" \
+    "the neutral fallback is not visibly identified as a default"
+  assert_grep 'symbol id="fm-mk-open"' "$OUT" \
+    "the neutral fallback does not carry the required marks"
+  pass "a seat with no local design gets a visibly labelled usable default"
+}
+
+test_local_appearance_replaces_the_default() {
+  local local_home=$TMP_ROOT/local-home mark
+  mkdir -p "$local_home/config"
+  {
+    printf '<style data-test-local-appearance>.fm-wrap{outline:7px double}</style>\n'
+    printf '<svg width="0" height="0"><defs>\n'
+    for mark in open pencil struck gate held run void; do
+      printf '<symbol id="fm-mk-%s" viewBox="0 0 20 20"><circle cx="10" cy="10" r="5"/></symbol>\n' "$mark"
+    done
+    printf '</defs></svg>\n'
+  } > "$local_home/config/board-appearance.html"
+  rm -f "$OUT"
+  FM_HOME=$local_home "$BOARD" --title T --body "$TMP_ROOT/body.html" --out "$OUT" \
+    >/dev/null 2>&1 || fail "a valid vessel-local appearance was refused"
+  assert_grep 'data-test-local-appearance' "$OUT" \
+    "the vessel-local appearance was not inlined"
+  assert_no_grep 'data-fm-board-appearance="default"' "$OUT" \
+    "the neutral fallback was still inlined beneath a vessel-local appearance"
+  assert_no_grep 'Default board appearance - no local vessel design is active.' "$OUT" \
+    "a locally designed board was still labelled as the default"
+  pass "a vessel-local appearance replaces the neutral fallback"
+}
+
+test_incomplete_local_appearance_is_refused() {
+  local bad_home=$TMP_ROOT/bad-home status=0
+  mkdir -p "$bad_home/config"
+  printf '<style>body{display:block}</style>\n' > "$bad_home/config/board-appearance.html"
+  rm -f "$OUT"
+  FM_HOME=$bad_home "$BOARD" --title T --body "$TMP_ROOT/body.html" --out "$OUT" \
+    >/dev/null 2>"$BUILD_ERR_FILE" || status=$?
+  [ "$status" != 0 ] || fail "an appearance without the semantic marks was accepted"
+  assert_contains "$(build_stderr)" "missing mark fm-mk-open" \
+    "the incomplete appearance refusal did not name its first missing mark"
+  assert_absent "$OUT" "an incomplete appearance was refused but still wrote a board"
+  pass "an incomplete vessel appearance is refused instead of breaking a board"
+}
+
+test_local_appearance_contract_and_notice_are_shipped() {
+  local layout=$ROOT/docs/board-layout.md
+  local configuration=$ROOT/docs/configuration.md
+  local notice=$ROOT/docs/board-appearance-broadcast.md
+  assert_grep "\$FM_HOME/config/board-appearance.html" "$layout" \
+    "the board reference does not name the vessel-private appearance file"
+  assert_no_grep 'Boards are set in **Tally**' "$layout" \
+    "the shared board reference still claims this vessel's design for every reader"
+  assert_grep '## Board appearance (config/board-appearance.html)' "$configuration" \
+    "the configuration owner does not record the vessel-local appearance file"
+  assert_present "$notice" "the All-Ships notice is missing from the change"
+  assert_grep 'defect in the shared code, not a failure by any seat' "$notice" \
+    "the notice does not assign the defect to shared code"
+  assert_grep 'sets no deadline and asks for no reply' "$notice" \
+    "the notice does not preserve the no-deadline, no-reply instruction"
+  assert_grep 'Ours is named Tally, and it is ours only' "$notice" \
+    "the notice does not name this vessel's design as this vessel's only"
+  pass "the local-appearance contract and bounded All-Ships notice ship together"
+}
+
 # --- the versioned layout is genuinely shared --------------------------------
 
 test_two_different_board_shapes_share_the_layout() {
@@ -451,14 +523,21 @@ test_two_different_board_shapes_share_the_layout() {
 test_layout_lives_in_one_place() {
   # The point of the whole change: the layout is an artifact agents INCLUDE, not
   # one they retype. If the assets stop existing, boards would drift again.
-  local css js
+  local css fallback js
   css=$("$BOARD" --print-assets | sed -n '1p')
-  js=$("$BOARD" --print-assets | sed -n '2p')
+  fallback=$("$BOARD" --print-assets | sed -n '2p')
+  js=$("$BOARD" --print-assets | sed -n '3p')
   assert_present "$css" "the versioned layout stylesheet is missing"
+  assert_present "$fallback" "the neutral fallback appearance is missing"
   assert_present "$js" "the versioned board behavior is missing"
-  assert_grep 'prefers-color-scheme' "$css" "layout lost its dark-mode support"
+  assert_grep '.fm-wrap' "$css" "shared layout lost the board container"
+  assert_no_grep 'font-family' "$css" "shared layout still chooses vessel typography"
+  ! grep -Eq '#[0-9A-Fa-f]{3,8}' "$css" \
+    || fail "shared layout still carries a literal palette"
+  assert_grep 'data-fm-board-appearance="default"' "$fallback" \
+    "fallback asset is not visibly identifiable as the default"
   assert_grep 'queueKey' "$js" "board behavior lost the per-question queueKey"
-  pass "the layout and behavior live in one versioned place"
+  pass "shared structure, neutral fallback, and behavior have distinct owners"
 }
 
 # --- board behavior, exercised as logic rather than rendering ----------------
@@ -497,6 +576,10 @@ test_the_decision_shape_offers_choices_and_a_note
 test_board_escapes_its_title
 test_check_mode_reports_both_verdicts
 test_missing_required_arguments_are_refused
+test_default_appearance_is_visible_and_usable
+test_local_appearance_replaces_the_default
+test_incomplete_local_appearance_is_refused
+test_local_appearance_contract_and_notice_are_shipped
 test_layout_lives_in_one_place
 test_two_different_board_shapes_share_the_layout
 test_board_behavior_contract

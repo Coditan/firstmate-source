@@ -9,10 +9,13 @@
 # the CSS in the reader's browser on every open. That is a measured load cost,
 # not a matter of taste, and the captain asked for it to stop.
 #
-# So the layout became one versioned artifact that a generator INCLUDES:
-#   bin/board-assets/layout.css   styling      (one owner)
-#   bin/board-assets/board.js     behavior     (one owner)
-# This script inlines both into the emitted board. Inlining rather than linking
+# So the structure and neutral fallback became versioned artifacts that a
+# generator includes:
+#   bin/board-assets/layout.css               structure       (one owner)
+#   bin/board-assets/default-appearance.html  neutral fallback (one owner)
+#   bin/board-assets/board.js                  behavior        (one owner)
+# A vessel replaces only the fallback with $FM_HOME/config/board-appearance.html.
+# This script inlines the selected assets into the emitted board. Inlining rather than linking
 # siblings is deliberate: a board must render when opened straight from disk with
 # no Lavish server, and `lavish-axi export` must keep producing one portable
 # file. A self-contained board satisfies both without any copying step.
@@ -27,16 +30,16 @@
 #     the one place a vessel's name is already recorded rather than typed into a
 #     second one, and the build is REFUSED when it cannot be resolved, because a
 #     nameless board is exactly the board the rule exists to prevent.
-#   - THE MARK SET, the seven symbols Tally draws states with, defined once per
-#     board and referenced with <use href="#fm-mk-...">.
+#   - THE MARK SET, seven semantic symbols supplied by the selected appearance
+#     fragment and referenced with <use href="#fm-mk-...">.
 #   - THE TALLY STRIP CONTAINER, emitted empty and hidden. board.js fills it
 #     from the board's own question forms and owns the count of what has not
 #     been sent back. A body that typed that number could type it wrong, and a
 #     wrong count of what reached the captain is the defect the strip exists to
 #     make visible.
 #
-# docs/board-layout.md names the components; the design language behind them is
-# recorded there too.
+# docs/board-layout.md names the components and owns the appearance-fragment
+# contract.
 #
 # THE GUARD
 # The no-network rule is enforced HERE, at the only choke point every board
@@ -87,7 +90,8 @@
 #   --vessel <n>     the building vessel's name for the header; see below
 #   --lang <code>    document language (default: de)
 #   --check <f>...   run the no-network guard over existing files and exit
-#   --print-assets   print the paths of the versioned layout assets
+#   --print-assets   print the paths of the shared layout, fallback appearance,
+#                    and behavior assets
 #
 # THE VESSEL NAME is resolved, in this order:
 #   1. --vessel <n>
@@ -112,6 +116,7 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 ASSETS="$SCRIPT_DIR/board-assets"
 CSS="$ASSETS/layout.css"
+DEFAULT_APPEARANCE="$ASSETS/default-appearance.html"
 JS="$ASSETS/board.js"
 
 die() {
@@ -183,25 +188,28 @@ vessel_display() {  # <raw>
     }'
 }
 
-# mark_set - the seven marks Tally draws every state with, defined once.
-#
-# Referenced from anywhere on the board as <use href="#fm-mk-open">. Two of the
-# seven - run and void - are drawn in ink and carry no hue at all, which is the
-# language's own rule that under way, landed and failed are never coloured.
-mark_set() {
-  cat <<'SVG'
-<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
-<defs>
-<symbol id="fm-mk-open" viewBox="0 0 20 20"><rect x="2.5" y="2.5" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
-<symbol id="fm-mk-pencil" viewBox="0 0 20 20"><rect x="2.5" y="2.5" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4.6 15.4 L15.4 4.6" stroke="currentColor" stroke-width="1.4" stroke-dasharray="2.4 1.8" fill="none"/></symbol>
-<symbol id="fm-mk-struck" viewBox="0 0 20 20"><rect x="2.5" y="2.5" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M4 16 L16 4" stroke="currentColor" stroke-width="2.4" fill="none"/></symbol>
-<symbol id="fm-mk-gate" viewBox="0 0 20 20"><rect x="2.5" y="2.5" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3.5" y="3.5" width="6.5" height="13" fill="currentColor"/></symbol>
-<symbol id="fm-mk-held" viewBox="0 0 20 20"><rect x="2.5" y="2.5" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="10" cy="10" r="3.1" fill="currentColor"/></symbol>
-<symbol id="fm-mk-run" viewBox="0 0 20 20"><rect x="2.5" y="2.5" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="4.5" y="8.8" width="11" height="2.4" fill="currentColor"/></symbol>
-<symbol id="fm-mk-void" viewBox="0 0 20 20"><rect x="2.5" y="2.5" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.4 5.4 L14.6 14.6 M14.6 5.4 L5.4 14.6" stroke="currentColor" stroke-width="2" fill="none"/></symbol>
-</defs>
-</svg>
-SVG
+# resolve_appearance - print the vessel-private appearance fragment when it
+# exists, otherwise the shipped neutral fallback.
+resolve_appearance() {
+  local local_appearance="$FM_HOME/config/board-appearance.html"
+  if [ -f "$local_appearance" ]; then
+    printf '%s\n' "$local_appearance"
+  else
+    printf '%s\n' "$DEFAULT_APPEARANCE"
+  fi
+}
+
+# validate_appearance - refuse an incomplete appearance before it can produce a
+# board whose controls or state marks are invisible.
+validate_appearance() {  # <file>
+  local file=$1 mark folded
+  folded=$(fold_open_tags "$file")
+  printf '%s\n' "$folded" | grep -Eiq '<style([[:space:]>])' \
+    || die "appearance fragment has no <style>: $file"
+  for mark in open pencil struck gate held run void; do
+    printf '%s\n' "$folded" | grep -Eiq "<symbol[^>]*id=[\"']fm-mk-${mark}[\"']" \
+      || die "appearance fragment is missing mark fm-mk-$mark: $file"
+  done
 }
 
 # fold_open_tags - print `<line-number>:<text>` with the newlines inside an
@@ -400,7 +408,7 @@ CHECK_FILES=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -h|--help) usage; exit 0 ;;
-    --print-assets) printf '%s\n%s\n' "$CSS" "$JS"; exit 0 ;;
+    --print-assets) printf '%s\n%s\n%s\n' "$CSS" "$DEFAULT_APPEARANCE" "$JS"; exit 0 ;;
     --check)
       MODE="check"
       shift
@@ -435,7 +443,13 @@ fi
 [ -n "$BODY" ] || die "--body is required"
 [ -n "$OUT" ] || die "--out is required"
 [ -f "$CSS" ] || die "missing layout asset: $CSS"
+[ -f "$DEFAULT_APPEARANCE" ] || die "missing default appearance asset: $DEFAULT_APPEARANCE"
 [ -f "$JS" ] || die "missing behavior asset: $JS"
+
+APPEARANCE=$(resolve_appearance)
+validate_appearance "$APPEARANCE"
+APPEARANCE_IS_DEFAULT=0
+[ "$APPEARANCE" != "$DEFAULT_APPEARANCE" ] || APPEARANCE_IS_DEFAULT=1
 
 [ -n "$VESSEL" ] || VESSEL=$(resolve_vessel)
 [ -n "$VESSEL" ] || die "cannot resolve the building vessel's name for the header.
@@ -469,7 +483,7 @@ esc_title=$(html_escape "$TITLE")
   printf '<style>\n'
   cat "$CSS"
   printf '</style>\n</head>\n<body>\n'
-  mark_set
+  cat "$APPEARANCE"
   printf '<div class="fm-wrap">\n'
   printf '<header class="fm-issue">\n<div>\n'
   printf '<p class="fm-vessel">%s</p>\n' "$(html_escape "$VESSEL")"
@@ -477,6 +491,9 @@ esc_title=$(html_escape "$TITLE")
   printf '</div>\n'
   [ -z "$SUBTITLE" ] || printf '<p class="fm-sub">%s</p>\n' "$(html_escape "$SUBTITLE")"
   printf '</header>\n'
+  if [ "$APPEARANCE_IS_DEFAULT" = 1 ]; then
+    printf '<p class="fm-appearance-default">Default board appearance - no local vessel design is active.</p>\n'
+  fi
   # Emitted empty and hidden. board.js fills it from the board's own question
   # forms and owns the count; a board that asks nothing leaves it hidden.
   printf '<div class="fm-tally" hidden></div>\n'

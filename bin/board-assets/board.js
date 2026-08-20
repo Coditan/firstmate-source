@@ -24,7 +24,7 @@
  *   - queued state is displayed separately from selected state.
  *
  * THE TALLY STRIP
- * This file also owns the tally strip, Tally's signature component and the one
+ * This file also owns the tally strip, the shared component and the one
  * place in the fleet's surfaces where the difference between chosen and SENT is
  * counted rather than merely described. The count is of entries that have not
  * been sent back, so:

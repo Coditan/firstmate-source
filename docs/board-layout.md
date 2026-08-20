@@ -3,18 +3,20 @@
 Reference for the components `bin/fm-board.sh` makes available to a board body.
 The script's header owns the build mechanics and the no-network guard; this file owns the markup each component expects.
 
-## The design language
+## Structure shared, appearance local
 
-Boards are set in **Tally**, this vessel's own design language, adopted 2026-08-17.
-The full reference - the two laws, the seven marks, the three hues, the measured contrast figures, and the reasoning behind each component - is the scout report `data/coditan-design-language/report.md` and its specimen, which live in this home's private records rather than in this repository.
-Read them before changing a token or adding a component, and re-measure rather than asserting; `bin/board-assets/layout.css` carries the figures a reader without those records still needs.
+Every vessel's board structure comes from `bin/board-assets/layout.css`.
+Its palette, type, marks, and component finish come from the vessel-private file `$FM_HOME/config/board-appearance.html`, which this repository does not ship.
+The builder uses that file when it exists and otherwise uses `bin/board-assets/default-appearance.html`, a visibly labelled neutral fallback based on browser fonts and system colours rather than a vessel design language.
 
-Two of its laws bind everything below.
-Ink is the record, and colour is a claim on the captain and nothing else - three hues exist, and under way, landed, and failed get none of them.
-Every sheet declares its own incompleteness, in the same instrument that carries its counts, which is what `.fm-reserve` is for.
+An appearance fragment is a self-contained HTML fragment with one `<style>` block and one hidden inline `<svg>` definition containing the seven semantic symbol ids `fm-mk-open`, `fm-mk-pencil`, `fm-mk-struck`, `fm-mk-gate`, `fm-mk-held`, `fm-mk-run`, and `fm-mk-void`.
+It is one fragment rather than separate CSS and SVG files so a vessel cannot apply its component styling without the marks that belong to it, or the marks without their styling.
+`bin/fm-board.sh` refuses a local fragment missing its style block or any required mark rather than silently producing a broken board.
+The selected fragment is inlined after the shared structural CSS, so each vessel's own component rules are authoritative.
 
-Tally is this vessel's language and nobody else's.
-Every other vessel applies the fleet's board rules with its own design and its own name, so nothing here is sent onward as a fleet standard.
+Every appearance must preserve distinct non-colour cues for state, and every foreground/background pair used for text must measure at least WCAG AA contrast.
+Edges and non-text controls that carry meaning must measure at least 3:1 against adjacent colours.
+These are fleet requirements; the actual values, shapes, and type choices remain local.
 
 ## Why boards are built, not hand-written
 
@@ -28,20 +30,21 @@ That is the load cost the captain asked to be rid of.
 Lavish's own guidance puts that CDN snippet third, behind a named user preference and behind the subject project's design system.
 A stated preference for a board that opens fast is a named user preference, so the third choice was no longer available.
 
-The layout is therefore one versioned artifact:
+The shared board contract is therefore three versioned artifacts:
 
-    bin/board-assets/layout.css   styling   (one owner)
-    bin/board-assets/board.js     behavior  (one owner)
+    bin/board-assets/layout.css                structure          (one owner)
+    bin/board-assets/default-appearance.html   neutral fallback    (one owner)
+    bin/board-assets/board.js                  behavior           (one owner)
 
-`bin/fm-board.sh` inlines both into every board.
+`bin/fm-board.sh` inlines the structure, the selected appearance, and the behavior into every board.
 Inlining rather than linking siblings is deliberate: a board must render when opened straight from disk with no Lavish server, and `lavish-axi export` must keep producing one portable file.
 A self-contained board satisfies both without a copying step.
 
 ## Guarantees
 
 - **No network requests.** No CDN, no remote font, script, image, or stylesheet. Enforced by the builder, not by convention.
-- **System fonts.** No webfont is loaded, so text paints immediately.
-- **Light and dark**, following the reader's device via `prefers-color-scheme`, both directions readable.
+- **No remote fonts.** A local appearance may use installed faces only, so text paints without a network fetch.
+- **Measured contrast.** Every local appearance is responsible for meeting the requirements above in each theme it supports.
 - **Responsive** from a narrow phone to a wide desktop, with no horizontal scrolling at body level. Wide content scrolls inside its own container.
 - **Navigational links stay allowed.** `<a href="https://...">` is not a network request.
 
@@ -64,7 +67,7 @@ Three things the builder writes and a body never does.
 Writing any of them into a body creates a second copy of something that is already recorded, and the copy is the one that goes stale.
 
 - **The vessel name**, in every board's header. `bin/fm-board.sh --help` owns how it is resolved; a board it cannot resolve is refused rather than written unattributed.
-- **The mark set**, the seven symbols referenced as `<use href="#fm-mk-open">` and its siblings: `open`, `pencil`, `struck`, `gate`, `held`, `run`, `void`.
+- **The selected appearance**, including the seven symbols referenced as `<use href="#fm-mk-open">` and its siblings: `open`, `pencil`, `struck`, `gate`, `held`, `run`, `void`.
 - **The tally strip**, container and contents both.
 
 ## Layout components
