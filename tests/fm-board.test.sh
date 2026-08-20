@@ -517,7 +517,7 @@ test_unusable_symbol_definitions_are_refused() {
 test_nonpainting_symbol_geometry_is_refused() {
   local bad_home=$TMP_ROOT/nonpainting-marks-home case_name mark status
   mkdir -p "$bad_home/config"
-  for case_name in empty-path missing-reference two-point-polygon; do
+  for case_name in empty-path missing-reference two-point-polygon zero-width zero-opacity style-zero-width style-zero-opacity; do
     {
       printf '<style>body{display:block}</style>\n<svg><defs>\n'
       for mark in open pencil struck gate held run void; do
@@ -525,6 +525,10 @@ test_nonpainting_symbol_geometry_is_refused() {
           empty-path) printf '<symbol id="fm-mk-%s"><path/></symbol>\n' "$mark" ;;
           missing-reference) printf '<symbol id="fm-mk-%s"><use href="#missing"/></symbol>\n' "$mark" ;;
           two-point-polygon) printf '<symbol id="fm-mk-%s"><polygon points="0,0 10,10"/></symbol>\n' "$mark" ;;
+          zero-width) printf '<symbol id="fm-mk-%s"><line x2="10" stroke="currentColor" stroke-width="0"/></symbol>\n' "$mark" ;;
+          zero-opacity) printf '<symbol id="fm-mk-%s"><line x2="10" stroke="currentColor" stroke-opacity="0"/></symbol>\n' "$mark" ;;
+          style-zero-width) printf '<symbol id="fm-mk-%s"><line x2="10" style="stroke:currentColor;stroke-width:0"/></symbol>\n' "$mark" ;;
+          style-zero-opacity) printf '<symbol id="fm-mk-%s"><line x2="10" style="stroke:currentColor;stroke-opacity:0"/></symbol>\n' "$mark" ;;
         esac
       done
       printf '</defs></svg>\n'

@@ -240,7 +240,46 @@ appearance_elements() {  # <file>
       return count
     }
 
-    function points_paint(s, polygon, stroke,   cross, distinct, i, j, k, n, value) {
+    function style_value(s, name,   found, pattern, rest, value) {
+      pattern = "(^|;)[[:space:]]*" name "[[:space:]]*:[[:space:]]*"
+      found = ""
+      while (match(s, pattern)) {
+        rest = substr(s, RSTART + RLENGTH)
+        if (match(rest, /;/)) { value = substr(rest, 1, RSTART - 1) }
+        else { value = rest }
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+        found = value
+        s = rest
+      }
+      return found
+    }
+
+    function effective(s, name, fallback,   style, value) {
+      style = tolower(attribute(s, "style"))
+      value = style_value(style, name)
+      if (value == "") { value = tolower(attribute(s, name)) }
+      if (value == "") { value = fallback }
+      return value
+    }
+
+    function positive(value) {
+      return value != "" && value + 0 > 0
+    }
+
+    function stroke_visible(s,   color, opacity, width) {
+      color = effective(s, "stroke", "none")
+      opacity = effective(s, "stroke-opacity", "1")
+      width = effective(s, "stroke-width", "1")
+      return color != "none" && positive(opacity) && positive(width)
+    }
+
+    function fill_visible(s,   color, opacity) {
+      color = effective(s, "fill", "black")
+      opacity = effective(s, "fill-opacity", "1")
+      return color != "none" && positive(opacity)
+    }
+
+    function points_paint(s, polygon, has_stroke,   cross, distinct, i, j, k, n, value) {
       for (i in point_x) { delete point_x[i] }
       for (i in point_y) { delete point_y[i] }
       n = 0
@@ -257,7 +296,7 @@ appearance_elements() {  # <file>
       for (i = 2; i <= n; i++) {
         if (point_x[i] != point_x[1] || point_y[i] != point_y[1]) { distinct = 1; break }
       }
-      if (stroke != "" && stroke != "none" && distinct) { return 1 }
+      if (has_stroke && distinct) { return 1 }
       if (!polygon || n < 3) { return 0 }
       for (i = 1; i <= n - 2; i++) {
         for (j = i + 1; j <= n - 1; j++) {
@@ -283,13 +322,13 @@ appearance_elements() {  # <file>
       return 1
     }
 
-    function paints(s, lower,   d, fill, height, points, r, rx, ry, stroke, tag, width, x1, x2, y1, y2) {
+    function paints(s, lower,   d, has_fill, has_stroke, height, points, r, rx, ry, tag, width, x1, x2, y1, y2) {
       tag = lower
       sub(/^</, "", tag); sub(/[[:space:]>].*$/, "", tag)
       if (!visible_paint(s)) { return 0 }
-      fill = tolower(attribute(s, "fill"))
-      stroke = tolower(attribute(s, "stroke"))
-      if (fill == "none" && (stroke == "" || stroke == "none")) { return 0 }
+      has_fill = fill_visible(s)
+      has_stroke = stroke_visible(s)
+      if (!has_fill && !has_stroke) { return 0 }
       if (tag == "circle") { r = attribute(s, "r"); return r != "" && r + 0 > 0 }
       if (tag == "ellipse") {
         rx = attribute(s, "rx"); ry = attribute(s, "ry")
@@ -300,20 +339,20 @@ appearance_elements() {  # <file>
         return width != "" && height != "" && width + 0 > 0 && height + 0 > 0
       }
       if (tag == "line") {
-        if (stroke == "" || stroke == "none") { return 0 }
+        if (!has_stroke) { return 0 }
         x1 = attribute(s, "x1") + 0; y1 = attribute(s, "y1") + 0
         x2 = attribute(s, "x2") + 0; y2 = attribute(s, "y2") + 0
         return x1 != x2 || y1 != y2
       }
       if (tag == "polygon" || tag == "polyline") {
         points = attribute(s, "points")
-        return points_paint(points, tag == "polygon", stroke)
+        return points_paint(points, tag == "polygon" && has_fill, has_stroke)
       }
       if (tag == "path") {
         d = attribute(s, "d")
         if (d == "" || !(d ~ /[LlHhVvCcSsQqTtAaZz]/ || (d ~ /^[[:space:]]*[Mm]/ && number_count(d) >= 4))) { return 0 }
-        if (stroke != "" && stroke != "none") { return 1 }
-        return fill != "none" && (d ~ /[Zz]/ || (d ~ /^[[:space:]]*[Mm]/ && number_count(d) >= 6))
+        if (has_stroke) { return 1 }
+        return has_fill && (d ~ /[Zz]/ || (d ~ /^[[:space:]]*[Mm]/ && number_count(d) >= 6))
       }
       return 0
     }
