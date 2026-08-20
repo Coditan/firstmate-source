@@ -20,7 +20,8 @@ watcher poll (every FM_CONTEXT_CHECK_INTERVAL)
   read this session's recorded transcript -> context size
     over 300k, and the fleet is quiet?
       re-entry path broken          -> queue wake: BLOCKED
-      captain active, or away mode  -> queue wake: ASK
+      captain counts as present, or away mode
+                                    -> queue wake: ASK
       captain not present           -> queue wake: RESET
 
 firstmate drains the wake (already obligatory)
