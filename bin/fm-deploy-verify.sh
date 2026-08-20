@@ -373,12 +373,16 @@ REQ_CONTAINER=0; VAL_CONTAINER=; WHY_CONTAINER=
 REQ_SERVED=0;    VAL_SERVED=;    WHY_SERVED=
 
 INDETERMINATE=0
-# What the served-bytes candidate pool held, and how each member got there.
-# The notice below is derived from these and nothing else: whether a pool was
-# built at all, and by which route the container's own revision entered it.
+# Facts about the container's own revision as a served-bytes candidate, each
+# recorded at the one point it becomes known. The notice is DERIVED FROM THEM
+# ONCE, below, after the candidate loop has finished - nothing is decided at
+# print time. Three rounds of this notice were wrong because its wording was
+# assembled from flags read in a different order than they were established.
 SERVED_POOL_BUILT=0
-CONTAINER_ROUTE=
-CONTAINER_ROUTE_FROM=
+CT_FULL=
+CT_COMPARED=0
+CT_SKIPPED_WHY=
+CT_NOTICE=
 NOTES=()
 note() { NOTES+=("$1"); }
 
@@ -657,26 +661,7 @@ if [ "$REQ_SERVED" -eq 1 ]; then
     done
 
     SERVED_POOL_BUILT=1
-    if [ -n "$VAL_CONTAINER" ]; then
-      ct_full=$(commit_in_clone "$VAL_CONTAINER")
-      if [ -n "$ct_full" ]; then
-        [ -n "$VAL_SOURCE" ] && [ "$(commit_in_clone "$VAL_SOURCE")" = "$ct_full" ] &&
-          CONTAINER_ROUTE_FROM="the source ref"
-        [ -n "$VAL_CHECKOUT" ] && [ "$(commit_in_clone "$VAL_CHECKOUT")" = "$ct_full" ] &&
-          CONTAINER_ROUTE_FROM="${CONTAINER_ROUTE_FROM:+$CONTAINER_ROUTE_FROM and }the checkout"
-        if [ -n "$CONTAINER_ROUTE_FROM" ]; then
-          # The record named this commit on its own account, so the served bytes
-          # resolved it independently of the container reading. Describing that
-          # as a candidacy the container nominated would hedge the tool's own
-          # clean verdict on the most ordinary successful deploy.
-          CONTAINER_ROUTE=record
-        else
-          for cand in ${CANDIDATES[@]+"${CANDIDATES[@]}"}; do
-            [ "$(commit_in_clone "$cand")" = "$ct_full" ] && CONTAINER_ROUTE=candidate && break
-          done
-        fi
-      fi
-    fi
+    [ -n "$VAL_CONTAINER" ] && CT_FULL=$(commit_in_clone "$VAL_CONTAINER")
 
     if [ "${#resolved[@]}" -eq 0 ]; then
       # Nothing was compared. Reporting that as "no candidate matches" would
@@ -687,6 +672,7 @@ if [ "$REQ_SERVED" -eq 1 ]; then
       matches=()
       compared=0
       unreadable=0
+      unruled=
       for c in ${resolved[@]+"${resolved[@]}"}; do
         # The TREE says whether the path exists at that commit; cat-file's status
         # cannot, because it is equally non-zero when the path is there and its
@@ -695,23 +681,29 @@ if [ "$REQ_SERVED" -eq 1 ]; then
         # second as the first states something the record contradicts.
         if ! git -C "$CLONE" rev-parse --verify --quiet "$c:$SERVES_PATH" >/dev/null 2>&1; then
           printf 'served:    candidate %s   %s is absent at that commit\n' "$(short "$c")" "$SERVES_PATH"
+          [ "$c" = "$CT_FULL" ] && CT_SKIPPED_WHY="$SERVES_PATH is absent at that commit"
           continue
         fi
         if ! cat_err=$(git -C "$CLONE" cat-file blob "$c:$SERVES_PATH" 2>&1 >/dev/null); then
           unreadable=$((unreadable + 1))
+          unruled="$unruled $(short "$c")"
           printf 'served:    candidate %s   %s is in that commit and its blob could not be read from %s: %s\n' \
             "$(short "$c")" "$SERVES_PATH" "$CLONE" \
             "$(printf '%s' "$cat_err" | tr '\n' ' ' | cut -c1-160)"
+          [ "$c" = "$CT_FULL" ] && CT_SKIPPED_WHY="its blob could not be read from $CLONE"
           continue
         fi
         if ! blob=$(git -C "$CLONE" cat-file blob "$c:$SERVES_PATH" 2>/dev/null | hash_stdin
           exit "${PIPESTATUS[0]}"); then
           unreadable=$((unreadable + 1))
+          unruled="$unruled $(short "$c")"
           printf 'served:    candidate %s   %s could not be hashed from %s\n' \
             "$(short "$c")" "$SERVES_PATH" "$CLONE"
+          [ "$c" = "$CT_FULL" ] && CT_SKIPPED_WHY="its blob could not be hashed from $CLONE"
           continue
         fi
         compared=$((compared + 1))
+        [ "$c" = "$CT_FULL" ] && CT_COMPARED=1
         if [ "$blob" = "$sv_sha" ]; then
           printf 'served:    candidate %s   MATCH\n' "$(short "$c")"
           matches+=("$c")
@@ -720,10 +712,28 @@ if [ "$REQ_SERVED" -eq 1 ]; then
         fi
       done
 
-      if [ "${#matches[@]}" -eq 1 ]; then
+      if [ "${#matches[@]}" -gt 1 ]; then
+        # A reading that cannot discriminate must not produce a definite answer.
+        # Taking the last match here is how a clean AGREE gets reported for a
+        # host that could equally be running any of the tied commits.
+        tied=
+        for c in "${matches[@]}"; do tied="$tied $(short "$c")"; done
+        WHY_SERVED="AMBIGUOUS: $SERVES_PATH is byte-identical at${tied}, so the served bytes cannot tell those commits apart"
+      elif [ "$unreadable" -gt 0 ]; then
+        # A candidate whose blob was never opened was not ruled out. Had it been
+        # byte-identical to the one that matched, this same run would have been
+        # refused as a tie, so a definite answer here rests on something this
+        # reading could not check - and a no-match claim would cover commits it
+        # never compared.
+        if [ "${#matches[@]}" -eq 1 ]; then
+          WHY_SERVED="AMBIGUOUS: $SERVES_PATH matches at $(short "${matches[0]}") and could not be read at${unruled}, so the served bytes cannot tell that commit from the ones left unread"
+        elif [ "$compared" -eq 0 ]; then
+          WHY_SERVED="$SERVES_PATH could not be read from $CLONE at any candidate commit that holds it, so the bytes $SERVES serves were compared against nothing"
+        else
+          WHY_SERVED="no candidate commit whose $SERVES_PATH could be read matches the bytes $SERVES serves, and it could not be read at${unruled}, so those commits are not ruled out"
+        fi
+      elif [ "${#matches[@]}" -eq 1 ]; then
         VAL_SERVED=${matches[0]}
-      elif [ "$compared" -eq 0 ] && [ "$unreadable" -gt 0 ]; then
-        WHY_SERVED="$SERVES_PATH could not be read from $CLONE at any candidate commit that holds it, so the bytes $SERVES serves were compared against nothing"
       elif [ "$compared" -eq 0 ]; then
         # Candidates existed and not one blob was opened, so nothing was
         # compared. That is a third state, and it must not borrow the wording of
@@ -731,15 +741,8 @@ if [ "$REQ_SERVED" -eq 1 ]; then
         # operator who mistyped --serves-path would otherwise read this as the
         # repository disagreeing with the host.
         WHY_SERVED="$SERVES_PATH exists at no candidate commit, so the bytes $SERVES serves were compared against nothing"
-      elif [ "${#matches[@]}" -eq 0 ]; then
-        WHY_SERVED="no candidate commit's $SERVES_PATH matches the bytes $SERVES serves"
       else
-        # A reading that cannot discriminate must not produce a definite answer.
-        # Taking the last match here is how a clean AGREE gets reported for a
-        # host that could equally be running any of the tied commits.
-        tied=
-        for c in "${matches[@]}"; do tied="$tied $(short "$c")"; done
-        WHY_SERVED="AMBIGUOUS: $SERVES_PATH is byte-identical at${tied}, so the served bytes cannot tell those commits apart"
+        WHY_SERVED="no candidate commit's $SERVES_PATH matches the bytes $SERVES serves"
       fi
     fi
   fi
@@ -755,21 +758,38 @@ if [ "$REQ_SERVED" -eq 1 ]; then
   # The container's own revision label is deliberately kept out of the candidate
   # pool: letting one reading nominate the commit a second reading then confirms
   # is a claim verifying itself, which is the fault this tool exists to catch.
-  # Saying so out loud, resolved or not, is the tool's own rule turned on
-  # itself - silence is what makes an unestablished reading look like agreement.
+  # Saying so out loud is the tool's own rule turned on itself - silence is what
+  # makes an unestablished reading look like agreement.
+  #
+  # ONE question, answered once, here, where every fact it rests on is final:
+  # was the commit the container reports among those whose blob was actually
+  # hashed and compared for these bytes - and if not, why not.
   if [ "$REQ_CONTAINER" -eq 1 ]; then
     if [ -z "$VAL_CONTAINER" ]; then
-      printf '           the container revision could not be read, so no commit of its own was a candidate for these bytes\n'
+      CT_NOTICE="the container revision could not be read, so no commit of its own was a candidate for these bytes"
     elif [ "$SERVED_POOL_BUILT" -eq 0 ]; then
-      printf '           no candidate pool was built, so whether the container revision would have been a candidate for these bytes is not established\n'
-    elif [ "$CONTAINER_ROUTE" = candidate ]; then
-      printf '           the container revision was supplied with --candidate and was compared, so these bytes did not establish it independently\n'
-    elif [ "$CONTAINER_ROUTE" = record ]; then
-      printf '           that commit was a candidate because %s named it, not because the container did, so these bytes were resolved independently of the container reading\n' \
-        "$CONTAINER_ROUTE_FROM"
+      CT_NOTICE="no candidate pool was built, so whether the container revision would have been a candidate for these bytes is not established"
+    elif [ -z "$CT_FULL" ]; then
+      CT_NOTICE="the commit the container reports is not in --clone $CLONE, so it could not be a candidate for these bytes; point --clone at a repository that holds it"
+    elif [ "$CT_COMPARED" -eq 1 ]; then
+      ct_named=
+      [ -n "$VAL_SOURCE" ] && [ "$(commit_in_clone "$VAL_SOURCE")" = "$CT_FULL" ] &&
+        ct_named="the source ref"
+      [ -n "$VAL_CHECKOUT" ] && [ "$(commit_in_clone "$VAL_CHECKOUT")" = "$CT_FULL" ] &&
+        ct_named="${ct_named:+$ct_named and }the checkout"
+      if [ -n "$ct_named" ]; then
+        CT_NOTICE="the commit the container reports was compared as a candidate $ct_named named, not on the container's own account"
+        [ -n "$VAL_SERVED" ] && [ "$VAL_SERVED" = "$CT_FULL" ] &&
+          CT_NOTICE="$CT_NOTICE, so these bytes resolved to it independently of the container reading"
+      else
+        CT_NOTICE="the container revision was compared only because --candidate supplied it, so these bytes did not establish it independently"
+      fi
+    elif [ -n "$CT_SKIPPED_WHY" ]; then
+      CT_NOTICE="the commit the container reports was a candidate for these bytes and was NOT compared: $CT_SKIPPED_WHY"
     else
-      printf '           the container revision was NOT a candidate for these bytes; pass it with --candidate to have it compared\n'
+      CT_NOTICE="the container revision was NOT a candidate for these bytes; pass it with --candidate to have it compared"
     fi
+    printf '           %s\n' "$CT_NOTICE"
   fi
 else
   printf 'served:    NOT REQUESTED - no --serves given\n'

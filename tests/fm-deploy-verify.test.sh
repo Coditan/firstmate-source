@@ -174,14 +174,19 @@ git -C "$REPO" tag -a collide -m collide "$C"
 # A repository that HAS the path at its head and CANNOT read the blob: the
 # ordinary state of a filtered clone whose promisor remote is unreachable,
 # reproduced here by removing the loose object so the fixture needs no network.
+# P's blob is the missing one; Q's is readable and matches the default served
+# body, so one repository carries both an unruled-out candidate and a match.
 BLOBLESS="$T/blobless"
 mkdir -p "$BLOBLESS"
 git -C "$BLOBLESS" init -q -b main
+printf 'alpha\n' >"$BLOBLESS/probe.txt"
+git -C "$BLOBLESS" add -A && git -C "$BLOBLESS" commit -qm "probe alpha"
+BLOBLESS_P=$(git -C "$BLOBLESS" rev-parse HEAD)
+BLOBLESS_P_BLOB=$(git -C "$BLOBLESS" rev-parse "HEAD:probe.txt")
 printf 'beta\n' >"$BLOBLESS/probe.txt"
-git -C "$BLOBLESS" add -A && git -C "$BLOBLESS" commit -qm "with a probe"
-BLOBLESS_HEAD=$(git -C "$BLOBLESS" rev-parse HEAD)
-BLOBLESS_BLOB=$(git -C "$BLOBLESS" rev-parse "HEAD:probe.txt")
-rm -f "$BLOBLESS/.git/objects/${BLOBLESS_BLOB:0:2}/${BLOBLESS_BLOB:2}"
+git -C "$BLOBLESS" add -A && git -C "$BLOBLESS" commit -qm "probe beta"
+BLOBLESS_Q=$(git -C "$BLOBLESS" rev-parse HEAD)
+rm -f "$BLOBLESS/.git/objects/${BLOBLESS_P_BLOB:0:2}/${BLOBLESS_P_BLOB:2}"
 
 # path_without <dir> <command>... - a PATH directory holding everything the
 # current PATH holds EXCEPT the named commands, so a test can run the tool on a
@@ -436,7 +441,7 @@ test_the_container_revision_is_named_as_included_when_it_was_passed() {
   reset_env
   run_tool --container svc --serves 'http://stub/probe.txt' --serves-path probe.txt \
     --clone "$REPO" --candidate "$C"
-  assert_contains "$OUT" 'the container revision was supplied with --candidate and was compared' \
+  assert_contains "$OUT" 'the container revision was compared only because --candidate supplied it' \
     "a run that compared the container's own revision must say so"
   assert_contains "$OUT" 'did not establish it independently' \
     "the operator must learn that this reading did not stand on its own"
@@ -454,9 +459,11 @@ test_a_commit_the_record_named_is_not_described_as_the_container_nominating_it()
   run_tool --container svc --checkout "$REPO" --source-remote "$REPO" --source-ref refs/heads/main \
     --serves 'http://stub/probe.txt' --serves-path probe.txt --clone "$REPO"
   expect_code 0 "$RC" "the ordinary all-agree run must still agree"
-  assert_contains "$OUT" 'not because the container did' \
+  assert_contains "$OUT" "not on the container's own account" \
     "a commit the record named must be reported as an independent nomination"
-  assert_not_contains "$OUT" 'supplied with --candidate' \
+  assert_contains "$OUT" 'these bytes resolved to it independently' \
+    "this run did resolve to that commit, so the independence is established and may be said"
+  assert_not_contains "$OUT" '--candidate supplied it' \
     "nothing was supplied with --candidate on this run"
   assert_not_contains "$OUT" 'did not establish it independently' \
     "these bytes did establish the commit independently of the container reading"
@@ -491,6 +498,56 @@ test_an_unread_container_revision_is_not_reported_as_an_excluded_candidate() {
   assert_not_contains "$OUT" 'pass it with --candidate' \
     "there is no revision to pass, so the tool must not advise passing one"
   pass "an unread container revision is reported as unread, not as an excluded candidate"
+}
+
+test_a_container_revision_absent_from_the_clone_is_not_advised_to_be_passed() {
+  # --candidate does not help here: the same tool answers that the candidate is
+  # absent from the local clone. Advising it would send the operator round a
+  # loop that ends where it started.
+  reset_env
+  local f="$T/inspect-foreign.txt"
+  inspect_fixture "$f" true 0 0123456789abcdef0123456789abcdef01234567
+  export FM_FAKE_DOCKER_INSPECT="$f"
+  run_tool --container svc --serves 'http://stub/probe.txt' --serves-path probe.txt \
+    --clone "$REPO" --candidate "$C"
+  assert_contains "$OUT" 'is not in --clone' \
+    "a revision the clone does not hold must be reported as that, not as an exclusion"
+  assert_contains "$OUT" 'point --clone at a repository that holds it' \
+    "the notice must name the thing that would actually help"
+  assert_not_contains "$OUT" 'pass it with --candidate' \
+    "passing --candidate cannot compare a commit this clone does not have"
+  pass "a container revision absent from --clone is reported as absent, not as an excluded candidate"
+}
+
+test_a_container_revision_whose_blob_is_unreadable_is_not_reported_as_compared() {
+  reset_env
+  local f="$T/inspect-blobless-p.txt"
+  inspect_fixture "$f" true 0 "$BLOBLESS_P"
+  export FM_FAKE_DOCKER_INSPECT="$f"
+  run_tool --container svc --serves 'http://stub/probe.txt' --serves-path probe.txt \
+    --clone "$BLOBLESS" --candidate "$BLOBLESS_P"
+  assert_contains "$OUT" 'was a candidate for these bytes and was NOT compared' \
+    "a candidate whose blob could not be read was not compared, and must not be said to be"
+  assert_contains "$OUT" 'its blob could not be read' "the notice must carry why it was not compared"
+  assert_not_contains "$OUT" '--candidate supplied it' \
+    "the tool must not claim a comparison it could not make"
+  pass "a container revision whose blob is unreadable is reported as not compared"
+}
+
+test_no_independence_is_claimed_when_the_served_reading_resolved_nothing() {
+  reset_env
+  export FM_FAKE_CURL_BODY='gamma
+'
+  run_tool --container svc --source-remote "$REPO" --source-ref refs/heads/main \
+    --serves 'http://stub/probe.txt' --serves-path probe.txt --clone "$REPO"
+  expect_code 3 "$RC" "served bytes matching no candidate leave the reading unresolved"
+  assert_contains "$OUT" "not on the container's own account" \
+    "the commit was still compared as a candidate the record named"
+  assert_not_contains "$OUT" 'resolved to it independently' \
+    "these bytes resolved nothing, so no independence may be claimed from them"
+  assert_not_contains "$OUT" 'that commit was a candidate' \
+    "the notice must not point at a commit the reader cannot identify"
+  pass "a served reading that resolved nothing claims no independence"
 }
 
 test_no_exclusion_is_claimed_when_no_container_was_requested() {
@@ -782,7 +839,7 @@ test_a_reading_cut_off_by_the_timeout_names_the_bound_that_killed_it() {
 test_a_blob_the_clone_cannot_read_is_not_reported_as_absent() {
   reset_env
   run_tool --serves 'http://stub/probe.txt' --serves-path probe.txt \
-    --clone "$BLOBLESS" --candidate "$BLOBLESS_HEAD"
+    --clone "$BLOBLESS" --candidate "$BLOBLESS_P"
   expect_code 3 "$RC" "a blob that could not be read leaves the reading unresolved"
   assert_contains "$OUT" 'its blob could not be read from' \
     "an unreadable blob must be reported as unreadable, in git's own terms"
@@ -793,6 +850,47 @@ test_a_blob_the_clone_cannot_read_is_not_reported_as_absent() {
   assert_not_contains "$OUT" 'MATCH' "nothing may match when no blob was read"
   assert_not_contains "$OUT" 'verdict: AGREE' "a reading taken from nothing must not agree"
   pass "a path whose blob this clone cannot read is not reported as absent at that commit"
+}
+
+test_a_match_beside_an_unreadable_candidate_does_not_resolve() {
+  # Q matches the served bytes and P's blob could not be opened. Had P been
+  # byte-identical to Q, this same run would have been refused as a tie, so a
+  # definite answer here would rest on something the reading could not check.
+  reset_env
+  run_tool --serves 'http://stub/probe.txt' --serves-path probe.txt --clone "$BLOBLESS" \
+    --candidate "$BLOBLESS_P" --candidate "$BLOBLESS_Q"
+  expect_code 3 "$RC" "a reading that could not rule every candidate out must be indeterminate"
+  assert_contains "$OUT" 'MATCH' "the match itself is still reported"
+  assert_contains "$OUT" 'AMBIGUOUS' "a candidate left unread makes the reading unable to discriminate"
+  assert_contains "$OUT" "${BLOBLESS_P:0:12}" "the reason must name the candidate left unruled-out"
+  assert_not_contains "$OUT" 'MEASURED, resolved against blobs' \
+    "a reading that could not rule out every candidate must not report a definite commit"
+  assert_not_contains "$OUT" 'verdict: AGREE' "an unresolved served reading must not agree"
+  pass "a match beside an unreadable candidate resolves to nothing rather than to the match"
+}
+
+test_a_mismatch_beside_an_unreadable_candidate_is_not_a_measured_no_match() {
+  reset_env
+  export FM_FAKE_CURL_BODY='gamma
+'
+  run_tool --serves 'http://stub/probe.txt' --serves-path probe.txt --clone "$BLOBLESS" \
+    --candidate "$BLOBLESS_P" --candidate "$BLOBLESS_Q"
+  expect_code 3 "$RC" "an unruled-out candidate leaves the reading unresolved"
+  assert_contains "$OUT" 'so those commits are not ruled out' \
+    "a no-match claim must not silently cover candidates whose blobs were never opened"
+  assert_contains "$OUT" "${BLOBLESS_P:0:12}" "the unopened candidate must be named"
+  pass "a mismatch beside an unreadable candidate is not reported as a measured no-match"
+}
+
+test_two_readable_candidates_still_resolve_to_the_one_that_matches() {
+  # The control for both cases above: same shape, nothing unreadable.
+  reset_env
+  run_tool --serves 'http://stub/probe.txt' --serves-path probe.txt --clone "$REPO" \
+    --candidate "$A" --candidate "$C"
+  assert_contains "$OUT" 'MEASURED, resolved against blobs' \
+    "with every candidate readable the reading still resolves"
+  assert_not_contains "$OUT" 'AMBIGUOUS' "two readable candidates that differ are not a tie"
+  pass "control: readable candidates still resolve to the one that matches"
 }
 
 test_a_readable_blob_at_the_same_shape_of_clone_still_compares() {
@@ -1043,6 +1141,9 @@ test_the_container_revision_is_named_as_excluded_when_the_reading_resolves
 test_the_container_revision_is_named_as_excluded_when_the_reading_fails
 test_the_container_revision_is_named_as_included_when_it_was_passed
 test_no_exclusion_is_claimed_when_no_container_was_requested
+test_a_container_revision_absent_from_the_clone_is_not_advised_to_be_passed
+test_a_container_revision_whose_blob_is_unreadable_is_not_reported_as_compared
+test_no_independence_is_claimed_when_the_served_reading_resolved_nothing
 test_a_commit_the_record_named_is_not_described_as_the_container_nominating_it
 test_no_candidacy_is_claimed_when_the_served_reading_never_got_that_far
 test_an_unread_container_revision_is_not_reported_as_an_excluded_candidate
@@ -1065,6 +1166,9 @@ test_a_transport_failure_reaches_the_output_as_its_own_reason
 test_a_reading_cut_off_by_the_timeout_names_the_bound_that_killed_it
 test_a_blob_the_clone_cannot_read_is_not_reported_as_absent
 test_a_readable_blob_at_the_same_shape_of_clone_still_compares
+test_a_match_beside_an_unreadable_candidate_does_not_resolve
+test_a_mismatch_beside_an_unreadable_candidate_is_not_a_measured_no_match
+test_two_readable_candidates_still_resolve_to_the_one_that_matches
 test_the_host_probe_file_is_removed_even_when_the_payload_is_cut_short
 test_expect_machine_refuses_before_any_other_reading_is_taken
 test_expect_machine_refuses_when_the_identity_cannot_be_read
