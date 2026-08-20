@@ -30,7 +30,8 @@ The reason to keep it separate is fault isolation in both directions: a listener
 | `systemd/fm-delivery@.service` | the unit template, one instance per home, `Restart=always` |
 | `bin/fm-pane-activity-lib.sh` | the pre-typing pane reads, shared with the away daemon |
 
-Every instance is per-home, exactly like the watcher: the systemd instance name and the tmux keeper name are both derived from `FM_HOME` alone, so nothing can reach across homes.
+Every instance is per-home, exactly like the watcher: the systemd instance name and the tmux keeper name are both derived from `FM_HOME` alone, so service ownership and coordination records cannot collide across homes.
+That home scoping does not prove pane ownership; endpoint publication and the tmux server round-trip below own address verification.
 The keeper name keeps a bounded sanitized home basename for recognition and uses a truncated SHA-256 digest of the complete home path for identity.
 On upgrade, each service checks the former checksum-based name once and stops it only when that home's keeper pid and lock record prove ownership, leaving an unprovable legacy session untouched.
 

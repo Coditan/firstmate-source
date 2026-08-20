@@ -13,9 +13,9 @@
 #
 # This is the companion of bin/fm-watcher-service.sh: the watcher owns the loop
 # that DETECTS wakes, this owns the listener that DELIVERS them.  Both are
-# per-home, both are supervised outside the harness, and neither can reach
-# another home - the systemd instance name and the tmux keeper name are both
-# derived from FM_HOME alone.
+# per-home and both are supervised outside the harness.  docs/wake-delivery.md
+# owns the distinction between home-scoped service coordination and verified
+# endpoint addressing.
 #
 # A working systemd user manager selects the tracked fm-delivery@.service
 # template.  First installation and enablement happen only through install-unit
