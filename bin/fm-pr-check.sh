@@ -4,7 +4,9 @@
 # The watcher check source is byte-for-byte bin/fm-pr-poll.sh; task and PR data
 # live only in a private sidecar and are never interpolated into shell source.
 # A GitHub pull request URL and a GitLab merge request URL are both accepted,
-# including a merge request on a self-hosted GitLab instance.
+# including a merge request on a self-hosted GitLab instance. A pull request on
+# this fleet's configured Forgejo instance parses into the same identity but
+# cannot be watched yet, and is refused here rather than armed.
 # Usage: fm-pr-check.sh <task-id> <pr-url>
 set -eu
 
@@ -45,6 +47,16 @@ fi
 # reported, so the absent tool stops the watch here instead of watching nothing.
 if [ "$PROVIDER" = gitlab ] && ! command -v glab >/dev/null 2>&1; then
   echo "error: watching a GitLab merge request requires glab on PATH" >&2
+  exit 1
+fi
+
+# Refuse to arm a Forgejo watch for the same reason. bin/fm-pr-lib.sh resolves a
+# Forgejo pull request into the provider-tagged identity, but bin/fm-pr-poll.sh
+# reads GitHub and GitLab only and is silent on everything else, so arming one
+# here would report success and then watch nothing until a human noticed. The
+# refusal lifts when the poll learns to read this forge.
+if [ "$PROVIDER" = forgejo ]; then
+  echo "error: watching a Forgejo pull request is not supported yet" >&2
   exit 1
 fi
 

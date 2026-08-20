@@ -4,13 +4,18 @@
 # constructing task paths or performing any side effect.
 #
 # The stored identity is provider-tagged: provider, url, host, path, number.
-# "path" is the full project path, which is owner/repository on GitHub and an
-# arbitrarily nested group/subgroup/project namespace on GitLab. A GitLab
-# project can sit at any depth, so no owner/repository pair can address one and
-# the sidecar carries the whole path instead. GitLab also runs on self-hosted
-# instances, so the host is part of that identity rather than a constant. Every
-# consumer re-derives the identity from the stored URL and refuses any record
-# whose parts do not reconstruct that exact URL.
+# "path" is the full project path, which is owner/repository on GitHub and on
+# Forgejo, and an arbitrarily nested group/subgroup/project namespace on GitLab.
+# A GitLab project can sit at any depth, so no owner/repository pair can address
+# one and the sidecar carries the whole path instead. GitLab and Forgejo both run
+# on self-hosted instances, so the host is part of that identity rather than a
+# constant. Every consumer re-derives the identity from the stored URL and
+# refuses any record whose parts do not reconstruct that exact URL.
+#
+# No self-hosted forge hostname appears anywhere in this file. GitLab accepts any
+# instance because the stored record carries the one it names, and this fleet's
+# own Forgejo host is read from configuration, so moving the fleet to a different
+# instance is a configuration change rather than a code change.
 #
 # state/<id>.meta is shared append-only key=value metadata, and this library
 # owns only the PR-specific identity contract for that file. A current
@@ -86,14 +91,15 @@ fm_task_id_creation_valid() {
   [ "${#id}" -le 64 ]
 }
 
-# GitLab serves self-hosted instances, so the host is part of the identity
-# rather than a constant. It is accepted only as a lowercase DNS name with no
-# userinfo, port, or trailing dot, which keeps one canonical spelling per MR.
-# github.com is refused here even though its shape is otherwise valid: it is
-# GitHub's own host and never a GitLab instance, so a URL like
-# https://github.com/o/r/-/merge_requests/1 (a typo'd or spoofed GitHub URL)
-# would otherwise be armed as a GitLab watch that can never succeed.
-fm_pr_gitlab_host_valid() {
+# GitLab and Forgejo both serve self-hosted instances, so the host is part of
+# the identity rather than a constant. It is accepted only as a lowercase DNS
+# name with no userinfo, port, or trailing dot, which keeps one canonical
+# spelling per change. github.com is refused here even though its shape is
+# otherwise valid: it is GitHub's own host and never a self-hosted instance of
+# another forge, so a URL like https://github.com/o/r/-/merge_requests/1 (a
+# typo'd or spoofed GitHub URL) would otherwise be armed as a watch that can
+# never succeed.
+fm_pr_self_hosted_host_valid() {
   local host=${1-} label
   local LC_ALL=C
   local -a labels
@@ -109,6 +115,53 @@ fm_pr_gitlab_host_valid() {
       -*|*-) return 1 ;;
     esac
   done
+}
+
+# This home, resolved the way every other bin/ script resolves it.
+fm_pr_home() {
+  local script_dir root
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  root="${FM_ROOT_OVERRIDE:-$(cd "$script_dir/.." && pwd)}"
+  printf '%s\n' "${FM_HOME:-$root}"
+}
+
+# The Forgejo instance this fleet works on is configuration, never a constant
+# here: FM_FORGEJO_HOST, else the first non-empty line of
+# <home>/config/forgejo-host with whitespace stripped, mirroring how
+# config/backend is read. Prints nothing when the home names no instance.
+fm_pr_configured_forgejo_host() {
+  local pointer line value
+  if [ -n "${FM_FORGEJO_HOST:-}" ]; then
+    printf '%s\n' "$FM_FORGEJO_HOST"
+    return 0
+  fi
+  pointer="$(fm_pr_home)/config/forgejo-host"
+  [ -f "$pointer" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    value=$(printf '%s' "$line" | tr -d '[:space:]')
+    if [ -n "$value" ]; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+  done < "$pointer"
+}
+
+# A Forgejo host must additionally BE this home's configured instance. A shape
+# test alone is not enough: an address that merely looks like a Forgejo pull
+# request would otherwise arm fleet work against someone else's server, and
+# later Forgejo slices rely on this parser's answer instead of repeating the
+# host check. A home that has configured no instance therefore refuses every
+# Forgejo address rather than guessing one.
+#
+# The configured value is deliberately not validated separately. The address
+# host has already passed the shape rules above and must then equal the
+# configured value byte for byte, so a misconfigured host can only ever refuse.
+fm_pr_forgejo_host_valid() {
+  local host=${1-} configured
+  configured=$(fm_pr_configured_forgejo_host) || return 1
+  [ -n "$configured" ] || return 1
+  fm_pr_self_hosted_host_valid "$host" || return 1
+  [ "$host" = "$configured" ]
 }
 
 # A GitLab project path is group[/subgroup...]/project, so at least two
@@ -133,15 +186,38 @@ fm_pr_gitlab_path_valid() {
   done
 }
 
-# Parse a canonical PR or MR URL into the provider-tagged identity. Validation
-# is strict and per provider: the GitHub username and repository rules are
-# unchanged, and GitLab gets its own host and namespace rules rather than a
-# loosened GitHub rule.
+# A Forgejo project is owner/repository at a fixed depth of two, unlike a
+# GitLab namespace and like a GitHub repository. Forgejo serves a repository's
+# ".git" clone address and its ".atom" feed off the same path, so neither can
+# name a real repository and both are refused, exactly as they are on GitLab.
+fm_pr_forgejo_path_valid() {
+  local path=${1-} segment
+  local LC_ALL=C
+  local -a segments
+  [ "${#path}" -ge 3 ] && [ "${#path}" -le 1024 ] || return 1
+  case "$path" in
+    /*|*/|*//*) return 1 ;;
+  esac
+  IFS=/ read -ra segments <<< "$path"
+  [ "${#segments[@]}" -eq 2 ] || return 1
+  for segment in "${segments[@]}"; do
+    [ "${#segment}" -ge 1 ] && [ "${#segment}" -le 100 ] || return 1
+    case "$segment" in
+      .|..|-*|*.git|*.atom|*[!A-Za-z0-9._-]*) return 1 ;;
+    esac
+  done
+}
+
+# Parse a canonical pull or merge request URL into the provider-tagged identity.
+# Validation is strict and per provider: the GitHub username and repository
+# rules are unchanged, and GitLab and Forgejo each get their own host and
+# namespace rules rather than a loosened GitHub rule.
 #
 # FM_PR_OWNER and FM_PR_REPO are additionally set for github because
-# bin/fm-pr-merge.sh addresses GitHub by owner/repository. A gitlab URL leaves
-# them empty; teaching the merge path about GitLab is a separate change, and
-# until then it refuses a GitLab URL rather than merging anything.
+# bin/fm-pr-merge.sh addresses GitHub by owner/repository. A gitlab or forgejo
+# URL leaves them empty; teaching the merge path about either forge is a
+# separate change, and until then it refuses those URLs rather than merging
+# anything.
 fm_pr_url_parse() {
   local raw=${1-} pattern host path
   local LC_ALL=C
@@ -168,6 +244,26 @@ fm_pr_url_parse() {
     FM_PR_NUMBER=${BASH_REMATCH[3]}
     return 0
   fi
+  # Forgejo serves a pull request at /<owner>/<repository>/pulls/<number>, which
+  # neither other provider can produce: GitHub uses the singular "pull" and
+  # GitLab reserves "/-/merge_requests/". A URL of this shape is therefore
+  # answered here or refused here, and never reinterpreted as another provider -
+  # which is what makes a wrong host a refusal rather than a fall-through. The
+  # path class contains "/", so the match is greedy to the last "/pulls/" and a
+  # deeper path lands in the capture, where the two-segment rule refuses it.
+  pattern='^https://([a-z0-9.-]{1,253})/([A-Za-z0-9._/-]+)/pulls/([1-9][0-9]*)$'
+  if [[ "$raw" =~ $pattern ]]; then
+    host=${BASH_REMATCH[1]}
+    path=${BASH_REMATCH[2]}
+    fm_pr_forgejo_host_valid "$host" || return 1
+    fm_pr_forgejo_path_valid "$path" || return 1
+    FM_PR_PROVIDER=forgejo
+    FM_PR_URL=$raw
+    FM_PR_HOST=$host
+    FM_PR_PATH=$path
+    FM_PR_NUMBER=${BASH_REMATCH[3]}
+    return 0
+  fi
   # The path class contains "/" and "-", so this match is greedy to the last
   # "/-/merge_requests/". Any earlier separator therefore lands inside the
   # captured path, where the reserved "-" segment is refused.
@@ -175,7 +271,9 @@ fm_pr_url_parse() {
   [[ "$raw" =~ $pattern ]] || return 1
   host=${BASH_REMATCH[1]}
   path=${BASH_REMATCH[2]}
-  fm_pr_gitlab_host_valid "$host" || return 1
+  # Any instance is a GitLab instance: the stored record names the one it
+  # addresses and every consumer rebuilds the URL from that record.
+  fm_pr_self_hosted_host_valid "$host" || return 1
   fm_pr_gitlab_path_valid "$path" || return 1
   FM_PR_PROVIDER=gitlab
   FM_PR_URL=$raw
