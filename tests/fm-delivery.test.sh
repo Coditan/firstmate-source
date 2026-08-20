@@ -440,7 +440,7 @@ SH
 }
 
 test_real_tmux_server_collision_refuses_an_unproven_endpoint() {
-  local home owner_socket sibling_socket owner_server sibling_server owner_pane sibling_pane replacement_pane pid out i
+  local home owner_socket sibling_socket owner_server sibling_server owner_socket_path sibling_socket_path owner_pane sibling_pane replacement_pane pid out i
   command -v tmux >/dev/null 2>&1 || { echo "skip: tmux not installed"; return 0; }
   home=$(make_home real-tmux-collision)
   owner_socket="fm-delivery-owner-$$"
@@ -467,6 +467,8 @@ SH
     || fail "the two real tmux servers did not construct a pane-id collision ($owner_pane vs $sibling_pane)"
   owner_server=$(tmux -L "$owner_socket" display-message -p -t owner '#{socket_path},#{pid}')
   sibling_server=$(tmux -L "$sibling_socket" display-message -p -t sibling '#{socket_path},#{pid}')
+  owner_socket_path=${owner_server%,*}
+  sibling_socket_path=${sibling_server%,*}
 
   # Recreate the unsafe legacy record exactly: a pane id that resolves on both
   # servers, with no server identity to distinguish them.  Point the listener's
@@ -510,6 +512,22 @@ SH
 
   tmux -L "$owner_socket" kill-server 2>/dev/null || true
   rm -f "$home/owner.received"
+  rm -f "$owner_socket_path"
+  ln -s "$sibling_socket_path" "$owner_socket_path"
+  publish_endpoint "$home" tmux "$owner_pane" "$owner_server"
+  pid=$(start_listener "$home" "TMUX=${sibling_server},0")
+  out=$(wait_for_report "$home" "server identity does not match")
+  case "$out" in undeliverable:*) ;; *) fail "a redirected socket endpoint looked deliverable: $out" ;; esac
+  sleep 0.3
+  [ ! -e "$home/sibling.received" ] \
+    || fail "the redirected socket endpoint typed into the sibling vessel's pane"
+  stop_listener "$pid"
+
+  # A real socket redirect can prove that the server echoes its canonical path,
+  # but forcing that other live server to reuse the dead server's pid is not
+  # reproducible here.  The redirect above covers the real socket-path mismatch;
+  # the replacement below independently covers a real pid mismatch at one path.
+  rm -f "$owner_socket_path"
   tmux -L "$owner_socket" new-session -d -s replacement \
     "$home/collision-agent.sh" "$home/replacement.received"
   sleep 0.5

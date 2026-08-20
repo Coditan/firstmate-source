@@ -86,12 +86,13 @@ fm_tmux_quote_command_arg() {
 }
 
 fm_tmux_run_command_string() {
-  local identity=$1 command=$2 socket pid output marker done tmux_command=${FM_TMUX_COMMAND:-tmux}
+  local identity=$1 command=$2 socket pid identity_matches output marker done tmux_command=${FM_TMUX_COMMAND:-tmux}
   socket=${identity%,*}
   pid=${identity##*,}
+  identity_matches="#{&&:#{==:#{socket_path},$socket},#{==:#{pid},$pid}}"
   marker="__FM_TMUX_SERVER_MISMATCH_$$__"
   done="__FM_TMUX_SERVER_CONNECTED_$$__"
-  output=$("$tmux_command" -S "$socket" if-shell -F "#{==:#{pid},$pid}" "$command" \
+  output=$("$tmux_command" -S "$socket" if-shell -F "$identity_matches" "$command" \
     "display-message -p '$marker'" \; display-message -p "$done" 2>/dev/null) || true
   case "$output" in
     "$done") output= ;;
