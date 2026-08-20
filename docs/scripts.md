@@ -158,7 +158,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-pr-poll.sh`          | Provide the byte-static watcher program for validated PR/MR-poll sidecars           |
 | `fm-pr-check-migrate.sh` | Quarantine older task polls without execution and rebuild only canonical polls       |
 | `fm-pr-check.sh`         | Record validated `pr=` and `pr_head=` values, then atomically arm a static merge poll |
-| `fm-pr-merge.sh`         | Refuse a placeholder PR title, and separately a title it could not read, record PR metadata, then merge a task's canonical full GitHub URL and have the forge delete the merged head branch |
+| `fm-pr-merge.sh`         | Refuse a placeholder PR title, and separately a title it could not read, record PR metadata, then merge a task's canonical full GitHub URL and have the forge delete the merged head branch; `--no-local-task` lands a PR no task here owns, recording nothing and saying so |
 | `fm-promote.sh`          | Promote a scout task in place to a protected ship task                               |
 | `fm-slot-guard.sh`       | Watch recorded pooled worktrees for conflicting live task holders                    |
 | `fm-teardown.sh`         | Fail-closed teardown: refuse another task's pooled worktree, return landed ship worktrees, require completed scout deliverables, retire secondmate homes |

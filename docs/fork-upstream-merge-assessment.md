@@ -143,6 +143,7 @@ They categorise as follows.
 - **Pre-existing contract failures, 3 scripts.**
   `tests/fm-arm-pretool-check.test.sh` fails `A13 via codex must allow, got exit 2` with `[watcher-bundled] a protected watcher command must be the sole final command after approved setup nodes`.
   `tests/fm-pr-merge.test.sh` fails `records-before-merge: fm-pr-merge should succeed: expected exit 0, got 1`.
+  **Superseded 2026-08-20, for `tests/fm-pr-merge.test.sh` only:** that failure was the fixture, not the code. `bin/fm-pr-merge.sh` prepends `$FM_HOME/.local/axi/bin` to its own PATH, and a session exporting a real `FM_HOME` put the operator's own `gh-axi` ahead of the test's fakebin, so the real forge CLI ran against an invented repository. The fixture now pins `FM_HOME` to a per-case directory and the script passes. The measurement above is left as it was taken.
   `tests/fm-journal.test.sh` fails without a Herdr or watcher explanation.
   These three are real and unrelated to upstream; they are already failing on what the fleet runs today.
 
