@@ -207,11 +207,11 @@ A healthy readback - three facts, three comparisons, all agreeing.
 Note `read-as=sudo` on both host readings, and the compose lines: that is section 1 step 4, the directory the deploy path operates on, read off the running container rather than taken from the command line:
 
 ```
-fm-deploy-verify.sh - read-only readback, 2026-08-19T23:39:34Z
+fm-deploy-verify.sh - read-only readback, 2026-08-19T23:59:15Z
 host:      deploy-host   machine-id <elided>   hostname app-1   MEASURED
-source:    ddd574e77bea   <source-repo> refs/heads/main   FROM THE RECORD
-checkout:  ddd574e77bea   /opt/app   branch=main   read-as=sudo   MEASURED
-container: ddd574e77bea   api   running=true restarts=0 started=2026-08-19T11:21:46.90411194Z   read-as=sudo   MEASURED
+source:    daf5ec9da1f5   <source-repo> refs/heads/main   FROM THE RECORD
+checkout:  daf5ec9da1f5   /opt/app   branch=main   read-as=sudo   MEASURED
+container: daf5ec9da1f5   api   running=true restarts=0 started=2026-08-19T11:21:46.90411194Z   read-as=sudo   MEASURED
            image=sha256:<elided>
            compose working_dir=/opt/app/compose
            compose config_files=/opt/app/compose/docker-compose.yml
@@ -220,10 +220,10 @@ container: ddd574e77bea   api   running=true restarts=0 started=2026-08-19T11:21
 served:    NOT REQUESTED - no --serves given
 
 comparisons
-  source    vs checkout   AGREE ddd574e77bea
-  source    vs container  AGREE ddd574e77bea
+  source    vs checkout   AGREE daf5ec9da1f5
+  source    vs container  AGREE daf5ec9da1f5
   source    vs served     NOT COMPARED - no --serves given, so this run ordered no such reading
-  checkout  vs container  AGREE ddd574e77bea
+  checkout  vs container  AGREE daf5ec9da1f5
   checkout  vs served     NOT COMPARED - no --serves given, so this run ordered no such reading
   container vs served     NOT COMPARED - no --serves given, so this run ordered no such reading
 
@@ -234,9 +234,9 @@ A container that is not running, read against a source that matches its label.
 `docker inspect` succeeds on a stopped and on a crash-looping container, so the label is right there to read and it means nothing:
 
 ```
-fm-deploy-verify.sh - read-only readback, 2026-08-19T23:39:43Z
+fm-deploy-verify.sh - read-only readback, 2026-08-19T23:59:15Z
 host:      deploy-host   machine-id <elided>   hostname app-1   MEASURED
-source:    ddd574e77bea   <source-repo> refs/heads/main   FROM THE RECORD
+source:    daf5ec9da1f5   <source-repo> refs/heads/main   FROM THE RECORD
 checkout:  NOT REQUESTED - no --checkout given
 container: UNREAD - container router is not running (state=exited, restarts=15); the image it was created from is not evidence of what is serving
            image=sha256:<elided>
@@ -264,27 +264,27 @@ Live drift, found on a first run, with the mount reading and the served-bytes re
 The host serves an application by directory mount, the checkout is behind the source ref, and the served bytes confirm the checkout independently:
 
 ```
-fm-deploy-verify.sh - read-only readback, 2026-08-19T23:39:53Z
+fm-deploy-verify.sh - read-only readback, 2026-08-19T23:59:16Z
 host:      deploy-host   machine-id <elided>   hostname app-1   MEASURED
-source:    e1ade8f18e13   <source-repo> refs/heads/main   FROM THE RECORD
-checkout:  ddd574e77bea   /opt/app   branch=main   read-as=none   MEASURED
+source:    d00938db1d4e   <source-repo> refs/heads/main   FROM THE RECORD
+checkout:  daf5ec9da1f5   /opt/app   branch=main   read-as=none   MEASURED
            WARNING: 1 uncommitted path(s) in that checkout
 container: UNREAD - container web carries no org.opencontainers.image.revision label, so what it is running cannot be read from it
            image=sha256:<elided>
            mounts (what this container actually reads from):
              /opt/app/apps/qmob -> /srv/app/qmob (ro)
              /opt/build/public-parts -> /usr/share/nginx/html/parts (ro)
-served:    candidate e1ade8f18e13 is absent from the local clone and was not compared
-served:    candidate ddd574e77bea   MATCH
-served:    ddd574e77bea   <served-url>   sha256=9f8ba5feb666 bytes=10   MEASURED, resolved against blobs FROM THE RECORD
-           the container revision was NOT a candidate for these bytes; pass it with --candidate to have it compared
+served:    candidate d00938db1d4e is absent from the local clone and was not compared
+served:    candidate daf5ec9da1f5   MATCH
+served:    daf5ec9da1f5   <served-url>   sha256=9f8ba5feb666 bytes=10   MEASURED, resolved against blobs FROM THE RECORD
+           the container revision could not be read, so no commit of its own was a candidate for these bytes
 
 comparisons
-  source    vs checkout   DIFFER e1ade8f18e13 vs ddd574e77bea
+  source    vs checkout   DIFFER d00938db1d4e vs daf5ec9da1f5
   source    vs container  NOT COMPARED - container was requested and could not be read
-  source    vs served     DIFFER e1ade8f18e13 vs ddd574e77bea
+  source    vs served     DIFFER d00938db1d4e vs daf5ec9da1f5
   checkout  vs container  NOT COMPARED - container was requested and could not be read
-  checkout  vs served     AGREE ddd574e77bea
+  checkout  vs served     AGREE daf5ec9da1f5
   container vs served     NOT COMPARED - container was requested and could not be read
 
 stated out loud

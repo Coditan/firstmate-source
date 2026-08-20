@@ -48,6 +48,12 @@ while [ "$#" -gt 0 ]; do
 done
 host=$1; shift
 printf '%s | %s\n' "$host" "$*" >>"${FM_FAKE_SSH_LOG:-/dev/null}"
+# A host that accepts the connection and never answers: firewalled, blackholed,
+# or simply wedged. The verifier's own --timeout is the only thing that ends it.
+case "${FM_FAKE_SSH_SLEEP:-}" in
+  '') : ;;
+  *) sleep "$FM_FAKE_SSH_SLEEP"; exit 0 ;;
+esac
 # A transport that fails outright - unreachable, refused, host key changed -
 # answers on stderr and never runs the payload at all.
 case "${FM_FAKE_SSH_FAIL:-}" in
@@ -104,6 +110,17 @@ while [ "$#" -gt 0 ]; do
 done
 printf '%s\n' "$url" >>"${FM_FAKE_CURL_LOG:-/dev/null}"
 [ -n "$out" ] && printf '%s' "${FM_FAKE_CURL_BODY:-}" >"$out"
+# A payload cut short after the probe file exists and before it is removed: the
+# connection dropping, or the verifier's own bound firing on the far side.
+case "${FM_FAKE_CURL_KILL_PAYLOAD:-}" in
+  '') : ;;
+  *)
+    # curl runs inside a command substitution, so its parent is a forked
+    # subshell; the payload itself is one level further up.
+    payload=$(ps -o ppid= -p "$PPID" 2>/dev/null | tr -d ' ')
+    [ -n "$payload" ] && kill -TERM "$payload" 2>/dev/null
+    ;;
+esac
 printf '%s' "${FM_FAKE_CURL_CODE:-200}"
 EOF
 
@@ -153,6 +170,18 @@ git -C "$REPO" tag -a v1 -m 'release 1' "$A"
 # One name carried by two different refs at two different commits.
 git -C "$REPO" branch collide "$A"
 git -C "$REPO" tag -a collide -m collide "$C"
+
+# A repository that HAS the path at its head and CANNOT read the blob: the
+# ordinary state of a filtered clone whose promisor remote is unreachable,
+# reproduced here by removing the loose object so the fixture needs no network.
+BLOBLESS="$T/blobless"
+mkdir -p "$BLOBLESS"
+git -C "$BLOBLESS" init -q -b main
+printf 'beta\n' >"$BLOBLESS/probe.txt"
+git -C "$BLOBLESS" add -A && git -C "$BLOBLESS" commit -qm "with a probe"
+BLOBLESS_HEAD=$(git -C "$BLOBLESS" rev-parse HEAD)
+BLOBLESS_BLOB=$(git -C "$BLOBLESS" rev-parse "HEAD:probe.txt")
+rm -f "$BLOBLESS/.git/objects/${BLOBLESS_BLOB:0:2}/${BLOBLESS_BLOB:2}"
 
 # path_without <dir> <command>... - a PATH directory holding everything the
 # current PATH holds EXCEPT the named commands, so a test can run the tool on a
@@ -214,7 +243,8 @@ reset_env() {
   export FM_FAKE_CURL_CODE=200
   export FM_FAKE_CURL_BODY='beta
 '
-  unset FM_FAKE_SSH_EMPTY_VERB FM_FAKE_SSH_FAIL FM_FAKE_SSH_PATH
+  unset FM_FAKE_SSH_EMPTY_VERB FM_FAKE_SSH_FAIL FM_FAKE_SSH_PATH FM_FAKE_SSH_SLEEP
+  unset FM_FAKE_CURL_KILL_PAYLOAD
 }
 
 # run_tool <args...> - run the verifier against the stub host, capture output
@@ -406,13 +436,61 @@ test_the_container_revision_is_named_as_included_when_it_was_passed() {
   reset_env
   run_tool --container svc --serves 'http://stub/probe.txt' --serves-path probe.txt \
     --clone "$REPO" --candidate "$C"
-  assert_contains "$OUT" 'the container revision was supplied as a candidate and was compared' \
+  assert_contains "$OUT" 'the container revision was supplied with --candidate and was compared' \
     "a run that compared the container's own revision must say so"
   assert_contains "$OUT" 'did not establish it independently' \
     "the operator must learn that this reading did not stand on its own"
   assert_not_contains "$OUT" 'was NOT a candidate' \
     "the tool must not claim an exclusion that this run did not make"
   pass "a container revision that was passed as a candidate is reported as compared, not excluded"
+}
+
+test_a_commit_the_record_named_is_not_described_as_the_container_nominating_it() {
+  # The ordinary successful deploy: source, checkout and container are one
+  # commit, and NO --candidate is passed. The candidate came from the record, so
+  # the served bytes did resolve it independently, and the tool must not hedge
+  # its own clean verdict by describing that as the container's own nomination.
+  reset_env
+  run_tool --container svc --checkout "$REPO" --source-remote "$REPO" --source-ref refs/heads/main \
+    --serves 'http://stub/probe.txt' --serves-path probe.txt --clone "$REPO"
+  expect_code 0 "$RC" "the ordinary all-agree run must still agree"
+  assert_contains "$OUT" 'not because the container did' \
+    "a commit the record named must be reported as an independent nomination"
+  assert_not_contains "$OUT" 'supplied with --candidate' \
+    "nothing was supplied with --candidate on this run"
+  assert_not_contains "$OUT" 'did not establish it independently' \
+    "these bytes did establish the commit independently of the container reading"
+  pass "a candidate contributed by the record is not described as one the container made"
+}
+
+test_no_candidacy_is_claimed_when_the_served_reading_never_got_that_far() {
+  # The served reading failed before any candidate pool was built, and the
+  # operator had already passed --candidate. Telling them to pass --candidate is
+  # advice they have followed, about a comparison that never happened.
+  reset_env
+  export FM_FAKE_CURL_CODE=503
+  run_tool --container svc --serves 'http://stub/probe.txt' --serves-path probe.txt \
+    --clone "$REPO" --candidate "$C"
+  expect_code 3 "$RC" "a non-2xx served reading is indeterminate"
+  assert_contains "$OUT" 'no candidate pool was built' \
+    "a run that never built a pool must say candidacy was not established"
+  assert_not_contains "$OUT" 'pass it with --candidate' \
+    "the tool must not advise an argument this run was already given"
+  assert_not_contains "$OUT" 'was compared' \
+    "nothing was compared on a run that never opened a blob"
+  pass "a served reading that failed early claims nothing about candidacy"
+}
+
+test_an_unread_container_revision_is_not_reported_as_an_excluded_candidate() {
+  reset_env
+  export FM_FAKE_DOCKER_INSPECT="$STOPPED_AT_C"
+  run_tool --container svc --serves 'http://stub/probe.txt' --serves-path probe.txt \
+    --clone "$REPO" --candidate "$C"
+  assert_contains "$OUT" 'the container revision could not be read' \
+    "with no revision read there is no commit of the container's to exclude"
+  assert_not_contains "$OUT" 'pass it with --candidate' \
+    "there is no revision to pass, so the tool must not advise passing one"
+  pass "an unread container revision is reported as unread, not as an excluded candidate"
 }
 
 test_no_exclusion_is_claimed_when_no_container_was_requested() {
@@ -681,6 +759,74 @@ test_a_transport_failure_reaches_the_output_as_its_own_reason() {
   pass "a transport failure is reported with the reason the transport gave"
 }
 
+# --- a reading the tool's own bound killed ----------------------------------
+
+test_a_reading_cut_off_by_the_timeout_names_the_bound_that_killed_it() {
+  command -v timeout >/dev/null 2>&1 \
+    || { echo "skip: timeout not found (needed to bound a wedged reading)"; return 0; }
+  reset_env
+  export FM_FAKE_SSH_SLEEP=30
+  RC=0
+  OUT=$("$TOOL" --host stub-host --timeout 1 --checkout "$REPO" 2>&1) || RC=$?
+  record_verdicts "$OUT"
+  expect_code 3 "$RC" "a host that never answered must be indeterminate"
+  assert_contains "$OUT" 'did not return within the 1s this run allowed' \
+    "the bound that ended the reading is a fact the tool holds and must say"
+  assert_not_contains "$OUT" 'came back empty' \
+    "the host did not answer with nothing: it was cut off before it could answer"
+  pass "a reading killed by --timeout names the bound rather than reporting an empty reply"
+}
+
+# --- a blob the clone cannot read is not an absent path ---------------------
+
+test_a_blob_the_clone_cannot_read_is_not_reported_as_absent() {
+  reset_env
+  run_tool --serves 'http://stub/probe.txt' --serves-path probe.txt \
+    --clone "$BLOBLESS" --candidate "$BLOBLESS_HEAD"
+  expect_code 3 "$RC" "a blob that could not be read leaves the reading unresolved"
+  assert_contains "$OUT" 'its blob could not be read from' \
+    "an unreadable blob must be reported as unreadable, in git's own terms"
+  assert_not_contains "$OUT" 'is absent at that commit' \
+    "the path IS at that commit; only its blob is missing from this clone"
+  assert_not_contains "$OUT" 'exists at no candidate commit' \
+    "the reason must not assert something the tree of that same clone contradicts"
+  assert_not_contains "$OUT" 'MATCH' "nothing may match when no blob was read"
+  assert_not_contains "$OUT" 'verdict: AGREE' "a reading taken from nothing must not agree"
+  pass "a path whose blob this clone cannot read is not reported as absent at that commit"
+}
+
+test_a_readable_blob_at_the_same_shape_of_clone_still_compares() {
+  # The control: same fixture repository, same probe path, blob present.
+  reset_env
+  run_tool --serves 'http://stub/probe.txt' --serves-path probe.txt \
+    --clone "$REPO" --candidate "$C"
+  assert_contains "$OUT" 'MATCH' "a readable blob must still be hashed and compared"
+  assert_not_contains "$OUT" 'could not be read from' \
+    "a clone that holds the blob must not report it unreadable"
+  pass "control: a readable blob at the same probe path still compares"
+}
+
+# --- the probe file the payload puts on the host ----------------------------
+
+test_the_host_probe_file_is_removed_even_when_the_payload_is_cut_short() {
+  # The payload is killed after the probe file exists and before its own rm.
+  # What the tool leaves on a host is the one side effect it promises never to
+  # have, so it must survive the run being interrupted.
+  command -v ps >/dev/null 2>&1 \
+    || { echo "skip: ps not found (needed to interrupt the payload mid-fetch)"; return 0; }
+  reset_env
+  local probedir="$T/probe-tmpdir"
+  rm -rf "$probedir"; mkdir -p "$probedir"
+  export FM_FAKE_CURL_KILL_PAYLOAD=1
+  TMPDIR="$probedir" run_tool --serves 'http://stub/probe.txt' --serves-path probe.txt \
+    --clone "$REPO" --candidate "$C"
+  unset FM_FAKE_CURL_KILL_PAYLOAD
+  local left
+  left=$(find "$probedir" -type f | head -5)
+  [ -z "$left" ] || fail "the payload left a file on the host: $left"$'\n'"$OUT"
+  pass "an interrupted payload leaves no probe file behind on the host"
+}
+
 # --- host identity ----------------------------------------------------------
 
 test_expect_machine_refuses_before_any_other_reading_is_taken() {
@@ -897,6 +1043,9 @@ test_the_container_revision_is_named_as_excluded_when_the_reading_resolves
 test_the_container_revision_is_named_as_excluded_when_the_reading_fails
 test_the_container_revision_is_named_as_included_when_it_was_passed
 test_no_exclusion_is_claimed_when_no_container_was_requested
+test_a_commit_the_record_named_is_not_described_as_the_container_nominating_it
+test_no_candidacy_is_claimed_when_the_served_reading_never_got_that_far
+test_an_unread_container_revision_is_not_reported_as_an_excluded_candidate
 test_the_served_reading_survives_a_machine_without_sha256sum
 test_a_host_with_no_hasher_says_so_rather_than_hashing_nothing
 test_a_verifier_with_no_hasher_says_so_rather_than_hashing_nothing
@@ -913,6 +1062,10 @@ test_a_source_remote_that_would_prompt_is_unread_within_a_bound
 test_an_annotated_tag_resolves_to_the_commit_it_points_at
 test_a_source_ref_matching_two_refs_resolves_to_neither
 test_a_transport_failure_reaches_the_output_as_its_own_reason
+test_a_reading_cut_off_by_the_timeout_names_the_bound_that_killed_it
+test_a_blob_the_clone_cannot_read_is_not_reported_as_absent
+test_a_readable_blob_at_the_same_shape_of_clone_still_compares
+test_the_host_probe_file_is_removed_even_when_the_payload_is_cut_short
 test_expect_machine_refuses_before_any_other_reading_is_taken
 test_expect_machine_refuses_when_the_identity_cannot_be_read
 test_an_unreadable_identity_makes_the_run_indeterminate

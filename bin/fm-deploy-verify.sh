@@ -259,8 +259,12 @@ compose_config_files={{index .Config.Labels "com.docker.compose.project.config_f
     seconds=${2:-30}
     if [ -z "$url" ]; then echo "error=no URL given"; exit 0; fi
     tmp=$(mktemp 2>/dev/null) || { echo "error=could not create a temporary file on the host"; exit 0; }
+    # This probe is the one thing the tool puts on a host. A payload cut short
+    # between the mktemp and an explicit rm - the outer timeout firing on ssh,
+    # or the connection dropping - would leave it there, which is the tool
+    # quietly failing the read-only promise it publishes.
+    trap 'rm -f "$tmp"' EXIT INT TERM
     if ! code=$(curl -sS --max-time "$seconds" -o "$tmp" -w '%{http_code}' -- "$url" 2>&1); then
-      rm -f "$tmp"
       echo "error=fetch failed: $(printf '%s' "$code" | tr '\n' ' ' | cut -c1-200)"
       exit 0
     fi
@@ -273,11 +277,9 @@ compose_config_files={{index .Config.Labels "com.docker.compose.project.config_f
     elif command -v shasum >/dev/null 2>&1; then
       sha=$(shasum -a 256 <"$tmp" | cut -d' ' -f1)
     else
-      rm -f "$tmp"
       echo "error=neither sha256sum nor shasum is available on the host, so the bytes it serves could not be hashed"
       exit 0
     fi
-    rm -f "$tmp"
     echo "http=$code"
     echo "sha256=$sha"
     echo "bytes=$size"
@@ -293,12 +295,24 @@ FM_PAYLOAD
 read_host() {
   local verb=$1
   shift
+  local out rc=0
   if [ -n "$HOST" ]; then
-    printf '%s\n' "$PAYLOAD" | tmo ssh -o BatchMode=yes -o ConnectTimeout="$TIMEOUT" \
-      -- "$HOST" "bash -s --$(shq "$SUDO_MODE" "$verb" "$@")" 2>&1
+    out=$(printf '%s\n' "$PAYLOAD" | tmo ssh -o BatchMode=yes -o ConnectTimeout="$TIMEOUT" \
+      -- "$HOST" "bash -s --$(shq "$SUDO_MODE" "$verb" "$@")" 2>&1) || rc=$?
   else
-    printf '%s\n' "$PAYLOAD" | tmo bash -s -- "$SUDO_MODE" "$verb" "$@" 2>&1
+    out=$(printf '%s\n' "$PAYLOAD" | tmo bash -s -- "$SUDO_MODE" "$verb" "$@" 2>&1) || rc=$?
   fi
+  printf '%s\n' "$out"
+  # A reading this tool's own bound killed produces no bytes and no stderr, so
+  # without this it arrives as a reply that came back empty. The host said
+  # nothing because it was not given time to; that bound is a fact the tool
+  # holds, and it answers in the payload's own vocabulary.
+  case "$rc" in
+    124|137|143)
+      printf 'error=the %s reading did not return within the %ss this run allowed, so the host was cut off rather than heard from\n' \
+        "$verb" "$TIMEOUT"
+      ;;
+  esac
 }
 
 # field <output> <key> - first value of key=..., empty when absent.
@@ -341,6 +355,12 @@ short() {
   printf '%s' "${1:0:12}"
 }
 
+# commit_in_clone <rev> - the full commit sha in --clone, empty when it is not
+# there. Two readings that name the same commit differently must compare equal.
+commit_in_clone() {
+  git -C "$CLONE" rev-parse --verify --quiet "$1^{commit}" 2>/dev/null || true
+}
+
 # --- the four facts ---------------------------------------------------------
 #
 # Each fact carries three things, and the third is what the tool is for:
@@ -353,7 +373,12 @@ REQ_CONTAINER=0; VAL_CONTAINER=; WHY_CONTAINER=
 REQ_SERVED=0;    VAL_SERVED=;    WHY_SERVED=
 
 INDETERMINATE=0
-CONTAINER_IN_POOL=0
+# What the served-bytes candidate pool held, and how each member got there.
+# The notice below is derived from these and nothing else: whether a pool was
+# built at all, and by which route the container's own revision entered it.
+SERVED_POOL_BUILT=0
+CONTAINER_ROUTE=
+CONTAINER_ROUTE_FROM=
 NOTES=()
 note() { NOTES+=("$1"); }
 
@@ -631,11 +656,26 @@ if [ "$REQ_SERVED" -eq 1 ]; then
       [ "$dup" -eq 0 ] && resolved+=("$full")
     done
 
+    SERVED_POOL_BUILT=1
     if [ -n "$VAL_CONTAINER" ]; then
-      ct_full=$(git -C "$CLONE" rev-parse --verify --quiet "$VAL_CONTAINER^{commit}" 2>/dev/null || true)
-      for seen in ${resolved[@]+"${resolved[@]}"}; do
-        [ -n "$ct_full" ] && [ "$seen" = "$ct_full" ] && CONTAINER_IN_POOL=1 && break
-      done
+      ct_full=$(commit_in_clone "$VAL_CONTAINER")
+      if [ -n "$ct_full" ]; then
+        [ -n "$VAL_SOURCE" ] && [ "$(commit_in_clone "$VAL_SOURCE")" = "$ct_full" ] &&
+          CONTAINER_ROUTE_FROM="the source ref"
+        [ -n "$VAL_CHECKOUT" ] && [ "$(commit_in_clone "$VAL_CHECKOUT")" = "$ct_full" ] &&
+          CONTAINER_ROUTE_FROM="${CONTAINER_ROUTE_FROM:+$CONTAINER_ROUTE_FROM and }the checkout"
+        if [ -n "$CONTAINER_ROUTE_FROM" ]; then
+          # The record named this commit on its own account, so the served bytes
+          # resolved it independently of the container reading. Describing that
+          # as a candidacy the container nominated would hedge the tool's own
+          # clean verdict on the most ordinary successful deploy.
+          CONTAINER_ROUTE=record
+        else
+          for cand in ${CANDIDATES[@]+"${CANDIDATES[@]}"}; do
+            [ "$(commit_in_clone "$cand")" = "$ct_full" ] && CONTAINER_ROUTE=candidate && break
+          done
+        fi
+      fi
     fi
 
     if [ "${#resolved[@]}" -eq 0 ]; then
@@ -646,14 +686,29 @@ if [ "$REQ_SERVED" -eq 1 ]; then
     else
       matches=()
       compared=0
+      unreadable=0
       for c in ${resolved[@]+"${resolved[@]}"}; do
-        # cat-file's own status says whether the path exists at that commit. An
-        # empty hash cannot: sha256 of no input is a well-defined digest, so
-        # inferring absence from it hands every commit missing the file the same
-        # digest an empty response body has.
+        # The TREE says whether the path exists at that commit; cat-file's status
+        # cannot, because it is equally non-zero when the path is there and its
+        # blob is not in this clone - the ordinary state of a filtered clone, or
+        # of one that cannot reach the remote it would fetch from. Reading the
+        # second as the first states something the record contradicts.
+        if ! git -C "$CLONE" rev-parse --verify --quiet "$c:$SERVES_PATH" >/dev/null 2>&1; then
+          printf 'served:    candidate %s   %s is absent at that commit\n' "$(short "$c")" "$SERVES_PATH"
+          continue
+        fi
+        if ! cat_err=$(git -C "$CLONE" cat-file blob "$c:$SERVES_PATH" 2>&1 >/dev/null); then
+          unreadable=$((unreadable + 1))
+          printf 'served:    candidate %s   %s is in that commit and its blob could not be read from %s: %s\n' \
+            "$(short "$c")" "$SERVES_PATH" "$CLONE" \
+            "$(printf '%s' "$cat_err" | tr '\n' ' ' | cut -c1-160)"
+          continue
+        fi
         if ! blob=$(git -C "$CLONE" cat-file blob "$c:$SERVES_PATH" 2>/dev/null | hash_stdin
           exit "${PIPESTATUS[0]}"); then
-          printf 'served:    candidate %s   %s is absent at that commit\n' "$(short "$c")" "$SERVES_PATH"
+          unreadable=$((unreadable + 1))
+          printf 'served:    candidate %s   %s could not be hashed from %s\n' \
+            "$(short "$c")" "$SERVES_PATH" "$CLONE"
           continue
         fi
         compared=$((compared + 1))
@@ -667,6 +722,8 @@ if [ "$REQ_SERVED" -eq 1 ]; then
 
       if [ "${#matches[@]}" -eq 1 ]; then
         VAL_SERVED=${matches[0]}
+      elif [ "$compared" -eq 0 ] && [ "$unreadable" -gt 0 ]; then
+        WHY_SERVED="$SERVES_PATH could not be read from $CLONE at any candidate commit that holds it, so the bytes $SERVES serves were compared against nothing"
       elif [ "$compared" -eq 0 ]; then
         # Candidates existed and not one blob was opened, so nothing was
         # compared. That is a third state, and it must not borrow the wording of
@@ -701,8 +758,15 @@ if [ "$REQ_SERVED" -eq 1 ]; then
   # Saying so out loud, resolved or not, is the tool's own rule turned on
   # itself - silence is what makes an unestablished reading look like agreement.
   if [ "$REQ_CONTAINER" -eq 1 ]; then
-    if [ "$CONTAINER_IN_POOL" -eq 1 ]; then
-      printf '           the container revision was supplied as a candidate and was compared, so these bytes did not establish it independently\n'
+    if [ -z "$VAL_CONTAINER" ]; then
+      printf '           the container revision could not be read, so no commit of its own was a candidate for these bytes\n'
+    elif [ "$SERVED_POOL_BUILT" -eq 0 ]; then
+      printf '           no candidate pool was built, so whether the container revision would have been a candidate for these bytes is not established\n'
+    elif [ "$CONTAINER_ROUTE" = candidate ]; then
+      printf '           the container revision was supplied with --candidate and was compared, so these bytes did not establish it independently\n'
+    elif [ "$CONTAINER_ROUTE" = record ]; then
+      printf '           that commit was a candidate because %s named it, not because the container did, so these bytes were resolved independently of the container reading\n' \
+        "$CONTAINER_ROUTE_FROM"
     else
       printf '           the container revision was NOT a candidate for these bytes; pass it with --candidate to have it compared\n'
     fi
