@@ -85,67 +85,20 @@ fm_tmux_quote_command_arg() {
   printf "'%s'" "$value"
 }
 
-fm_tmux_control_response() {  # <read-fd> <output-var>
-  local read_fd=$1 output_var=$2 line response='' started=0
-  while IFS= read -r -u "$read_fd" line; do
-    case "$line" in
-      %begin\ *) started=1; response= ;;
-      %end\ *)
-        [ "$started" -eq 1 ] || continue
-        printf -v "$output_var" '%s' "$response"
-        return 0
-        ;;
-      %error\ *) return 1 ;;
-      *)
-        [ "$started" -eq 1 ] || continue
-        if [ -n "$response" ]; then
-          response="$response
-$line"
-        else
-          response=$line
-        fi
-        ;;
-    esac
-  done
-  return 1
-}
-
-fm_tmux_control_close() {  # <read-fd> <write-fd> <client-pid>
-  # fm_tmux_control_response assigns this variable indirectly via printf -v.
-  # shellcheck disable=SC2034
-  local read_fd=$1 write_fd=$2 client_pid=$3 ignored
-  { printf '%s\n' kill-session >&"$write_fd"; } 2>/dev/null || true
-  fm_tmux_control_response "$read_fd" ignored 2>/dev/null || true
-  exec {write_fd}>&-
-  exec {read_fd}<&-
-  wait "$client_pid" 2>/dev/null || true
-}
-
 fm_tmux_run_command_string() {
-  local identity=$1 command=$2 socket server_identity output tmux_command=${FM_TMUX_COMMAND:-tmux}
-  local read_fd write_fd client_pid
+  local identity=$1 command=$2 socket identity_check output marker completion_marker tmux_command=${FM_TMUX_COMMAND:-tmux}
   socket=${identity%,*}
-  coproc FM_TMUX_CONTROL { "$tmux_command" -C -S "$socket" 2>/dev/null; }
-  read_fd=${FM_TMUX_CONTROL[0]}
-  write_fd=${FM_TMUX_CONTROL[1]}
-  client_pid=$FM_TMUX_CONTROL_PID
-
-  fm_tmux_control_response "$read_fd" output \
-    || { fm_tmux_control_close "$read_fd" "$write_fd" "$client_pid"; return 126; }
-  printf '%s\n' "display-message -p '#{socket_path},#{pid}'" >&"$write_fd" \
-    || { fm_tmux_control_close "$read_fd" "$write_fd" "$client_pid"; return 126; }
-  fm_tmux_control_response "$read_fd" server_identity \
-    || { fm_tmux_control_close "$read_fd" "$write_fd" "$client_pid"; return 126; }
-  if [ "$server_identity" != "$identity" ]; then
-    fm_tmux_control_close "$read_fd" "$write_fd" "$client_pid"
-    return 125
-  fi
-
-  printf '%s\n' "$command" >&"$write_fd" \
-    || { fm_tmux_control_close "$read_fd" "$write_fd" "$client_pid"; return 126; }
-  fm_tmux_control_response "$read_fd" output \
-    || { fm_tmux_control_close "$read_fd" "$write_fd" "$client_pid"; return 126; }
-  fm_tmux_control_close "$read_fd" "$write_fd" "$client_pid"
+  identity_check="test \"\${TMUX%,*}\" = $(fm_tmux_quote_command_arg "$identity")"
+  marker="__FM_TMUX_SERVER_MISMATCH_$$__"
+  completion_marker="__FM_TMUX_SERVER_CONNECTED_$$__"
+  output=$("$tmux_command" -S "$socket" if-shell "$identity_check" "$command" \
+    "display-message -p '$marker'" \; display-message -p "$completion_marker" 2>/dev/null) || true
+  case "$output" in
+    "$completion_marker") output= ;;
+    *$'\n'"$completion_marker") output=${output%$'\n'"$completion_marker"} ;;
+    *) return 126 ;;
+  esac
+  [ "$output" != "$marker" ] || return 125
   printf '%s' "$output"
 }
 

@@ -579,7 +579,10 @@ task_json_lines() {
       if fm_backend_target_exists "$backend" "$target" "fm-$id" >/dev/null 2>&1; then
         endpoint_exists=true
       else
-        [ "$?" -eq 1 ] && endpoint_exists=false
+        case $? in
+          1) endpoint_exists=false ;;
+          *) : ;;
+        esac
       fi
     fi
     agent_alive=not_checked
