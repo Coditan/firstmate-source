@@ -36,7 +36,8 @@ Load `codebase-design` first.
 On this seat it is a plugin skill (`mattpocock-skills:codebase-design`), not a directory inside any repository, so reach it through the harness skill mechanism rather than looking for it in the project.
 If it is not installed here, say so in the report and stop rather than improvising its vocabulary from memory.
 A sweep that silently drops the vocabulary it claims to use is an unmeasured claim wearing the clothes of a measured one, and that is the defect class this whole instrument exists to avoid.
-Its `DEEPENING.md` and `DESIGN-IT-TWICE.md` are worth opening when a finding needs a proposed shape rather than only a diagnosis.
+Its `DEEPENING.md` is worth opening when a finding needs a proposed shape rather than only a diagnosis.
+For the shape itself, load `design-it-twice` rather than its `DESIGN-IT-TWICE.md`: this fleet's version of that exercise is wired to the real model panel, and it carries the test for when a middle finding is contested enough to spend one on.
 
 Then work the five subjects below.
 Every one of them is in the talk, and the wording is kept close to it on purpose; `docs/codebase-sweep-provenance.md` carries the transcript's own words beside each.
