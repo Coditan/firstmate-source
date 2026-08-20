@@ -443,7 +443,7 @@ test_real_tmux_server_collision_refuses_an_unproven_endpoint() {
   local home owner_socket sibling_socket owner_server sibling_server owner_socket_path sibling_socket_path owner_pane sibling_pane replacement_pane pid out i
   command -v tmux >/dev/null 2>&1 || { echo "skip: tmux not installed"; return 0; }
   home=$(make_home real-tmux-collision)
-  owner_socket="fm-delivery-owner-$$"
+  owner_socket="fm-delivery-owner,$$"
   sibling_socket="fm-delivery-sibling-$$"
 
   cat > "$home/collision-agent.sh" <<'SH'
@@ -510,8 +510,19 @@ SH
   [ ! -e "$home/sibling.received" ] || fail "the server-bound endpoint still reached the sibling vessel"
   stop_listener "$pid"
 
-  tmux -L "$owner_socket" kill-server 2>/dev/null || true
   rm -f "$home/owner.received"
+  publish_endpoint "$home" tmux "$owner_pane" "$owner_socket_path,99999"
+  pid=$(start_listener "$home" "TMUX=${sibling_server},0")
+  out=$(wait_for_report "$home" "server identity does not match")
+  case "$out" in undeliverable:*) ;; *) fail "a mismatched comma-socket endpoint looked deliverable: $out" ;; esac
+  sleep 0.3
+  [ ! -e "$home/owner.received" ] \
+    || fail "the mismatched comma-socket endpoint typed into its pane"
+  [ ! -e "$home/sibling.received" ] \
+    || fail "the mismatched comma-socket endpoint typed into the sibling vessel's pane"
+  stop_listener "$pid"
+
+  tmux -L "$owner_socket" kill-server 2>/dev/null || true
   rm -f "$owner_socket_path"
   ln -s "$sibling_socket_path" "$owner_socket_path"
   publish_endpoint "$home" tmux "$owner_pane" "$owner_server"
