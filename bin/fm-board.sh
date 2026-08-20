@@ -214,6 +214,80 @@ validate_appearance() {  # <file>
 
 appearance_elements() {  # <file>
   awk '
+    function attribute(s, name,   low, pattern, start, quote, rest, finish) {
+      low = tolower(s)
+      pattern = "[[:space:]]" name "[[:space:]]*=[[:space:]]*"
+      if (match(low, pattern) == 0) { return "" }
+      start = RSTART + RLENGTH
+      quote = substr(s, start, 1)
+      if (quote == "\"" || quote == "\047") {
+        rest = substr(s, start + 1)
+        finish = index(rest, quote)
+        if (finish == 0) { return "" }
+        return substr(rest, 1, finish - 1)
+      }
+      rest = substr(s, start)
+      if (match(rest, /[[:space:]>]/) == 0) { return rest }
+      return substr(rest, 1, RSTART - 1)
+    }
+
+    function number_count(s,   count) {
+      count = 0
+      while (match(s, /[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?/)) {
+        count++
+        s = substr(s, RSTART + RLENGTH)
+      }
+      return count
+    }
+
+    function visible_paint(s,   style, opacity, display, visibility) {
+      style = tolower(attribute(s, "style"))
+      opacity = attribute(s, "opacity")
+      display = tolower(attribute(s, "display"))
+      visibility = tolower(attribute(s, "visibility"))
+      if (display == "none" || visibility == "hidden" || (opacity != "" && opacity ~ /^0*(\.0*)?$/)) { return 0 }
+      if (style ~ /(^|;)[[:space:]]*display[[:space:]]*:[[:space:]]*none([[:space:]]*;|$)/) { return 0 }
+      if (style ~ /(^|;)[[:space:]]*visibility[[:space:]]*:[[:space:]]*hidden([[:space:]]*;|$)/) { return 0 }
+      if (style ~ /(^|;)[[:space:]]*opacity[[:space:]]*:[[:space:]]*0*(\.0*)?([[:space:]]*;|$)/) { return 0 }
+      return 1
+    }
+
+    function paints(s, lower,   d, fill, height, points, r, rx, ry, stroke, tag, width, x1, x2, y1, y2) {
+      tag = lower
+      sub(/^</, "", tag); sub(/[[:space:]>].*$/, "", tag)
+      if (!visible_paint(s)) { return 0 }
+      fill = tolower(attribute(s, "fill"))
+      stroke = tolower(attribute(s, "stroke"))
+      if (fill == "none" && (stroke == "" || stroke == "none")) { return 0 }
+      if (tag == "circle") { r = attribute(s, "r"); return r != "" && r + 0 > 0 }
+      if (tag == "ellipse") {
+        rx = attribute(s, "rx"); ry = attribute(s, "ry")
+        return rx != "" && ry != "" && rx + 0 > 0 && ry + 0 > 0
+      }
+      if (tag == "rect") {
+        width = attribute(s, "width"); height = attribute(s, "height")
+        return width != "" && height != "" && width + 0 > 0 && height + 0 > 0
+      }
+      if (tag == "line") {
+        if (stroke == "" || stroke == "none") { return 0 }
+        x1 = attribute(s, "x1") + 0; y1 = attribute(s, "y1") + 0
+        x2 = attribute(s, "x2") + 0; y2 = attribute(s, "y2") + 0
+        return x1 != x2 || y1 != y2
+      }
+      if (tag == "polygon" || tag == "polyline") {
+        points = attribute(s, "points")
+        if (number_count(points) < 4) { return 0 }
+        return tag == "polygon" || (stroke != "" && stroke != "none")
+      }
+      if (tag == "path") {
+        d = attribute(s, "d")
+        if (d == "" || !(d ~ /[LlHhVvCcSsQqTtAaZz]/ || (d ~ /^[[:space:]]*[Mm]/ && number_count(d) >= 4))) { return 0 }
+        if (stroke != "" && stroke != "none") { return 1 }
+        return fill != "none" && (d ~ /[Zz]/ || (d ~ /^[[:space:]]*[Mm]/ && number_count(d) >= 6))
+      }
+      return 0
+    }
+
     BEGIN { data = ""; raw = ""; svg = 0 }
     { data = data $0 "\n" }
     END {
@@ -260,8 +334,8 @@ appearance_elements() {  # <file>
           symbol = token; drawable = 0
           continue
         }
-        if (symbol != "" && lower ~ /^<(circle|ellipse|foreignobject|image|line|path|polygon|polyline|rect|text|use)([[:space:]>])/) {
-          drawable = 1
+        if (symbol != "" && lower ~ /^<(circle|ellipse|line|path|polygon|polyline|rect)([[:space:]>])/) {
+          if (paints(token, lower)) { drawable = 1 }
         }
       }
     }
