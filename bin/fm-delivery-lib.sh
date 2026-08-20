@@ -101,13 +101,25 @@ fm_delivery_endpoint_path() {  # <state>
   printf '%s/.primary-endpoint\n' "$1"
 }
 
-fm_delivery_endpoint_write() {  # <state> <backend> <target> <harness> <session-lock-pid>
-  local state=$1 backend=$2 target=$3 harness=$4 session=$5 record tmp
+fm_delivery_tmux_server_valid() {  # <socket-path,server-pid>
+  local identity=${1:-} socket pid
+  socket=${identity%,*}
+  pid=${identity##*,}
+  [ "$socket" != "$identity" ] && [ -n "$socket" ] || return 1
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$pid" -gt 0 ] 2>/dev/null
+}
+
+fm_delivery_endpoint_write() {  # <state> <backend> <target> <harness> <session-lock-pid> [tmux-server]
+  local state=$1 backend=$2 target=$3 harness=$4 session=$5 tmux_server=${6:-} record tmp
   record=$(fm_delivery_endpoint_path "$state")
   [ -n "$backend" ] && [ -n "$target" ] || return 2
-  case "$backend$target$harness$session" in
+  case "$backend$target$harness$session$tmux_server" in
     *$'\n'*|*$'\r'*) return 2 ;;
   esac
+  if [ "$backend" = tmux ]; then
+    fm_delivery_tmux_server_valid "$tmux_server" || return 2
+  fi
   mkdir -p "$state" || return 1
   tmp=$(mktemp "$record.XXXXXX") || return 1
   {
@@ -115,6 +127,9 @@ fm_delivery_endpoint_write() {  # <state> <backend> <target> <harness> <session-
     printf 'target=%s\n' "$target"
     printf 'harness=%s\n' "${harness:-unknown}"
     printf 'session-lock-pid=%s\n' "$session"
+    if [ "$backend" = tmux ]; then
+      printf 'tmux-server=%s\n' "$tmux_server"
+    fi
   } > "$tmp" || { rm -f "$tmp"; return 1; }
   mv -f "$tmp" "$record" || { rm -f "$tmp"; return 1; }
   chmod 600 "$record" 2>/dev/null || true
@@ -124,12 +139,14 @@ FM_DELIVERY_ENDPOINT_BACKEND=
 FM_DELIVERY_ENDPOINT_TARGET=
 FM_DELIVERY_ENDPOINT_HARNESS=
 FM_DELIVERY_ENDPOINT_SESSION=
+FM_DELIVERY_ENDPOINT_TMUX_SERVER=
 fm_delivery_endpoint_read() {  # <state>
   local state=$1 record line key value
   FM_DELIVERY_ENDPOINT_BACKEND=
   FM_DELIVERY_ENDPOINT_TARGET=
   FM_DELIVERY_ENDPOINT_HARNESS=
   FM_DELIVERY_ENDPOINT_SESSION=
+  FM_DELIVERY_ENDPOINT_TMUX_SERVER=
   record=$(fm_delivery_endpoint_path "$state")
   [ -f "$record" ] && [ ! -L "$record" ] || return 1
   while IFS= read -r line || [ -n "$line" ]; do
@@ -141,6 +158,7 @@ fm_delivery_endpoint_read() {  # <state>
       target) FM_DELIVERY_ENDPOINT_TARGET=$value ;;
       harness) FM_DELIVERY_ENDPOINT_HARNESS=$value ;;
       session-lock-pid) FM_DELIVERY_ENDPOINT_SESSION=$value ;;
+      tmux-server) FM_DELIVERY_ENDPOINT_TMUX_SERVER=$value ;;
     esac
   done < "$record"
   [ -n "$FM_DELIVERY_ENDPOINT_BACKEND" ] && [ -n "$FM_DELIVERY_ENDPOINT_TARGET" ]
@@ -153,6 +171,8 @@ fm_delivery_endpoint_read() {  # <state>
 #   malformed       a record exists but carries no usable backend/target pair
 #   stale-session   the session that published it is not the one holding the
 #                   lock now, so its pane is somebody else's or nobody's
+#   unproven-server a tmux endpoint carries no valid server identity, so its
+#                   pane id is ambiguous across servers on the same machine
 FM_DELIVERY_ENDPOINT_STATUS=
 fm_delivery_endpoint_status() {  # <state>
   local state=$1 record current
@@ -165,6 +185,11 @@ fm_delivery_endpoint_status() {  # <state>
     FM_DELIVERY_ENDPOINT_STATUS=malformed
     return 1
   fi
+  if [ "$FM_DELIVERY_ENDPOINT_BACKEND" = tmux ] \
+     && ! fm_delivery_tmux_server_valid "$FM_DELIVERY_ENDPOINT_TMUX_SERVER"; then
+    FM_DELIVERY_ENDPOINT_STATUS=unproven-server
+    return 1
+  fi
   current=$(cat "$state/.lock" 2>/dev/null || true)
   if [ -z "$FM_DELIVERY_ENDPOINT_SESSION" ] || [ "$FM_DELIVERY_ENDPOINT_SESSION" != "$current" ]; then
     FM_DELIVERY_ENDPOINT_STATUS=stale-session
@@ -172,6 +197,20 @@ fm_delivery_endpoint_status() {  # <state>
   fi
   FM_DELIVERY_ENDPOINT_STATUS=ok
   return 0
+}
+
+# The one place a status becomes a sentence.  Both readers of the classifier -
+# the public verdict and the listener's own log - print the same words for the
+# same condition, so a new status cannot be legible in one and a bare label in
+# the other.
+fm_delivery_endpoint_reason() {  # <status>
+  case "$1" in
+    absent) printf 'no session has published where the model turn lives\n' ;;
+    malformed) printf 'the published endpoint record carries no usable address\n' ;;
+    stale-session) printf 'the endpoint was published by a session that no longer holds the fleet lock\n' ;;
+    unproven-server) printf 'the published tmux endpoint carries no provable server identity; a pane id alone is ambiguous\n' ;;
+    *) printf 'the endpoint is unusable (%s)\n' "$1" ;;
+  esac
 }
 
 fm_delivery_queue_depth() {  # <state>
@@ -258,12 +297,7 @@ fm_delivery_report() {  # <state> <delivery-path> [grace] [home]
     return 0
   fi
   if ! fm_delivery_endpoint_status "$state"; then
-    case "$FM_DELIVERY_ENDPOINT_STATUS" in
-      absent) reason='no session has published where the model turn lives' ;;
-      malformed) reason='the published endpoint record carries no usable address' ;;
-      stale-session) reason='the endpoint was published by a session that no longer holds the fleet lock' ;;
-      *) reason="the endpoint is unusable ($FM_DELIVERY_ENDPOINT_STATUS)" ;;
-    esac
+    reason=$(fm_delivery_endpoint_reason "$FM_DELIVERY_ENDPOINT_STATUS")
     printf 'undeliverable: listener pid %s is up with %s wake(s) pending, but %s\n' \
       "$FM_DELIVERY_HEALTHY_PID" "$depth" "$reason"
     return 1

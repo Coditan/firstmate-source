@@ -97,10 +97,14 @@ queue_wake() {  # <home>
     || fail "could not queue a wake"
 }
 
-publish_endpoint() {  # <home> <backend> <target>
+publish_endpoint() {  # <home> <backend> <target> [tmux-server]
+  local tmux_server=${4:-}
+  if [ "$2" = tmux ] && [ -z "$tmux_server" ]; then
+    tmux_server="/tmp/fm-delivery-unreachable-$$.sock,99999"
+  fi
   FM_HOME="$1" FM_STATE_OVERRIDE="$1/state" bash -c \
-    '. "$1/bin/fm-delivery-lib.sh"; fm_delivery_endpoint_write "$2" "$3" "$4" claude "$5"' \
-    _ "$ROOT" "$1/state" "$2" "$3" "$(cat "$1/state/.lock")" \
+    '. "$1/bin/fm-delivery-lib.sh"; fm_delivery_endpoint_write "$2" "$3" "$4" claude "$5" "$6"' \
+    _ "$ROOT" "$1/state" "$2" "$3" "$(cat "$1/state/.lock")" "$tmux_server" \
     || fail "could not publish the endpoint"
 }
 
@@ -230,7 +234,7 @@ test_a_wake_queued_with_no_listener_is_delivered_once_one_returns() {
   out=$(report "$home")
   case "$out" in down:*) ;; *) fail "expected a down verdict before the listener starts, got: $out" ;; esac
   pid=$(start_listener "$home")
-  out=$(wait_for_report "$home" "published pane %99")
+  out=$(wait_for_report "$home" "published tmux server")
   case "$out" in
     undeliverable:*) ;;
     *) fail "the returned listener did not assess the queued wake's endpoint, got: $out" ;;
@@ -247,7 +251,7 @@ test_a_session_exit_and_restart_loses_no_wake() {
   pid=$(start_listener "$home")
   publish_endpoint "$home" tmux '%99'
   queue_wake "$home"
-  out=$(wait_for_report "$home" "published pane %99")
+  out=$(wait_for_report "$home" "published tmux server")
   case "$out" in undeliverable:*) ;; *) fail "the first dead pane must be assessed as blocked: $out" ;; esac
 
   # The session exits: its lock record is gone and the endpoint it published now
@@ -263,7 +267,7 @@ test_a_session_exit_and_restart_loses_no_wake() {
   # A new session starts, takes the lock, and publishes its own endpoint.
   printf '%s\n' "$$" > "$home/state/.lock"
   publish_endpoint "$home" tmux '%100'
-  out=$(wait_for_report "$home" "published pane %100")
+  out=$(wait_for_report "$home" "published tmux server")
   case "$out" in
     undeliverable:*) ;;
     *) fail "the restarted session's dead pane must be assessed as blocked: $out" ;;
@@ -303,7 +307,7 @@ test_away_mode_stands_the_listener_down_without_killing_it() {
 # --- refusing an unsafe target ----------------------------------------------
 
 test_pane_level_submit_blockers_reach_the_verdict() {
-  local home pid out socket session i
+  local home pid out socket session server i
   command -v tmux >/dev/null 2>&1 || { echo "skip: tmux not installed"; return 0; }
 
   home=$(make_home unsupported-backend)
@@ -316,9 +320,21 @@ test_pane_level_submit_blockers_reach_the_verdict() {
   case "$out" in undeliverable:*) ;; *) fail "an unsupported backend looked deliverable: $out" ;; esac
   stop_listener "$pid"
 
+  socket="fm-delivery-blocker-$$"
+  session=fm-delivery-unknown-composer
+  cat > "$home/dead-shell.sh" <<'SH'
+#!/usr/bin/env bash
+printf '$ '
+IFS= read -r _
+sleep 300
+SH
+  chmod +x "$home/dead-shell.sh"
+  tmux -L "$socket" new-session -d -s "$session" "$home/dead-shell.sh"
+  server=$(tmux -L "$socket" display-message -p -t "$session" '#{socket_path},#{pid}')
+
   home=$(make_home removed-pane)
   queue_wake "$home"
-  publish_endpoint "$home" tmux '%99999'
+  publish_endpoint "$home" tmux '%99999' "$server"
   pid=$(start_listener "$home")
   out=$(wait_for_report "$home" "published pane %99999")
   grep -qF "published pane %99999" "$home/state/.delivery.log" \
@@ -327,21 +343,9 @@ test_pane_level_submit_blockers_reach_the_verdict() {
   stop_listener "$pid"
 
   home=$(make_home unknown-composer)
-  socket="fm-delivery-blocker-$$"
-  session=fm-delivery-unknown-composer
-  tmux -L "$socket" new-session -d -s "$session" 'bash --noprofile --norc -i'
-  mkdir -p "$home/bin"
-  cat > "$home/bin/tmux" <<SH
-#!/usr/bin/env bash
-if [ "\${1:-}" = capture-pane ]; then
-  exit 1
-fi
-exec $(command -v tmux) -L '$socket' "\$@"
-SH
-  chmod +x "$home/bin/tmux"
-  publish_endpoint "$home" tmux "$session"
+  publish_endpoint "$home" tmux "$session" "$server"
   queue_wake "$home"
-  pid=$(start_listener "$home" PATH="$home/bin:$PATH")
+  pid=$(start_listener "$home")
   out=$(wait_for_report "$home" "composer could not be confirmed empty")
   grep -qF "composer could not be confirmed empty" "$home/state/.delivery.log" \
     || fail "the submit path did not record the unknown composer blocker"
@@ -368,7 +372,7 @@ SH
 # about the submit, which is the half that touches the captain's terminal.
 
 test_real_tmux_delivery_reaches_the_composer() {
-  local home socket session pid i pane out
+  local home socket session server pid i pane out
   command -v tmux >/dev/null 2>&1 || { echo "skip: tmux not installed"; return 0; }
   home=$(make_home real-tmux)
   socket="fm-delivery-test-$$"
@@ -388,6 +392,7 @@ sleep 300
 SH
   chmod +x "$home/agent.sh"
   tmux -L "$socket" new-session -d -s "$session" "$home/agent.sh" "$home/received.txt"
+  server=$(tmux -L "$socket" display-message -p -t "$session" '#{socket_path},#{pid}')
   # shellcheck disable=SC2064 # Expand the socket name now, at trap-set time.
   trap "tmux -L '$socket' kill-server 2>/dev/null || true; cleanup_listeners; fm_test_cleanup" EXIT
   sleep 0.5
@@ -404,7 +409,7 @@ exec $(command -v tmux) -L '$socket' "\$@"
 SH
   chmod +x "$home/bin/tmux"
 
-  publish_endpoint "$home" tmux "$session"
+  publish_endpoint "$home" tmux "$session" "$server"
   queue_wake "$home"
   pid=$(start_listener "$home" PATH="$home/bin:$PATH")
 
@@ -432,6 +437,130 @@ SH
   stop_listener "$pid"
   tmux -L "$socket" kill-server 2>/dev/null || true
   pass "the listener submits the canonical typed wake into a real tmux agent composer"
+}
+
+test_real_tmux_server_collision_refuses_an_unproven_endpoint() {
+  local home owner_socket sibling_socket owner_server sibling_server owner_socket_path sibling_socket_path owner_pane sibling_pane replacement_pane pid out i
+  command -v tmux >/dev/null 2>&1 || { echo "skip: tmux not installed"; return 0; }
+  home=$(make_home real-tmux-collision)
+  owner_socket="fm-delivery-owner,$$"
+  sibling_socket="fm-delivery-sibling-$$"
+
+  cat > "$home/collision-agent.sh" <<'SH'
+#!/usr/bin/env bash
+printf '\xe2\x9d\xaf '
+IFS= read -r line
+printf '%s' "$line" > "$1"
+printf '\nRECEIVED\n'
+sleep 300
+SH
+  chmod +x "$home/collision-agent.sh"
+  tmux -L "$owner_socket" new-session -d -s owner "$home/collision-agent.sh" "$home/owner.received"
+  tmux -L "$sibling_socket" new-session -d -s sibling "$home/collision-agent.sh" "$home/sibling.received"
+  # shellcheck disable=SC2064 # Expand both socket names now, at trap-set time.
+  trap "tmux -L '$owner_socket' kill-server 2>/dev/null || true; tmux -L '$sibling_socket' kill-server 2>/dev/null || true; cleanup_listeners; fm_test_cleanup" EXIT
+  sleep 0.5
+
+  owner_pane=$(tmux -L "$owner_socket" display-message -p -t owner '#{pane_id}')
+  sibling_pane=$(tmux -L "$sibling_socket" display-message -p -t sibling '#{pane_id}')
+  [ "$owner_pane" = "$sibling_pane" ] \
+    || fail "the two real tmux servers did not construct a pane-id collision ($owner_pane vs $sibling_pane)"
+  owner_server=$(tmux -L "$owner_socket" display-message -p -t owner '#{socket_path},#{pid}')
+  sibling_server=$(tmux -L "$sibling_socket" display-message -p -t sibling '#{socket_path},#{pid}')
+  owner_socket_path=${owner_server%,*}
+  sibling_socket_path=${sibling_server%,*}
+
+  # Recreate the unsafe legacy record exactly: a pane id that resolves on both
+  # servers, with no server identity to distinguish them.  Point the listener's
+  # ambient tmux context at the sibling server.  The old submit path delivered
+  # there and logged success; the guarded path must refuse before any pane read.
+  {
+    printf 'backend=tmux\n'
+    printf 'target=%s\n' "$owner_pane"
+    printf 'harness=claude\n'
+    printf 'session-lock-pid=%s\n' "$(cat "$home/state/.lock")"
+  } > "$home/state/.primary-endpoint"
+  queue_wake "$home"
+  pid=$(start_listener "$home" "TMUX=${sibling_server},0")
+  out=$(wait_for_report "$home" "pane id alone is ambiguous")
+  case "$out" in undeliverable:*) ;; *) fail "an unproven colliding endpoint looked deliverable: $out" ;; esac
+  sleep 0.3
+  [ ! -e "$home/owner.received" ] || fail "the refused collision still typed into the owner's pane"
+  [ ! -e "$home/sibling.received" ] || fail "the refused collision typed into the sibling vessel's pane"
+  grep -qF 'delivered:' "$home/state/.delivery.log" \
+    && fail "the refused collision was logged as delivered"
+  # The listener's own log has to name the cause in the same words the public
+  # verdict uses.  A bare status label here is how a refusal reads as an
+  # unexplained silence to whoever opens the log first.
+  grep -qF 'a pane id alone is ambiguous' "$home/state/.delivery.log" \
+    || fail "the listener log did not name why the colliding endpoint was refused"
+  stop_listener "$pid"
+
+  # The same colliding pane id becomes safe once the endpoint binds it to the
+  # owner's server.  Keep the listener ambiently pointed at the sibling: the
+  # record, not ambient process state, must select and prove the destination.
+  publish_endpoint "$home" tmux "$owner_pane" "$owner_server"
+  pid=$(start_listener "$home" "TMUX=${sibling_server},0")
+  i=0
+  while [ ! -s "$home/owner.received" ] && [ "$i" -lt 200 ]; do
+    sleep 0.05
+    i=$((i + 1))
+  done
+  [ -s "$home/owner.received" ] || fail "the server-bound endpoint did not reach its owning pane"
+  [ ! -e "$home/sibling.received" ] || fail "the server-bound endpoint still reached the sibling vessel"
+  stop_listener "$pid"
+  [ "$(tmux -L "$owner_socket" list-sessions -F '#{session_name}')" = owner ] \
+    || fail "guarded delivery leaked control sessions on the owning server"
+
+  rm -f "$home/owner.received"
+  publish_endpoint "$home" tmux "$owner_pane" "$owner_socket_path,99999"
+  pid=$(start_listener "$home" "TMUX=${sibling_server},0")
+  out=$(wait_for_report "$home" "server identity does not match")
+  case "$out" in undeliverable:*) ;; *) fail "a mismatched comma-socket endpoint looked deliverable: $out" ;; esac
+  sleep 0.3
+  [ ! -e "$home/owner.received" ] \
+    || fail "the mismatched comma-socket endpoint typed into its pane"
+  [ ! -e "$home/sibling.received" ] \
+    || fail "the mismatched comma-socket endpoint typed into the sibling vessel's pane"
+  stop_listener "$pid"
+
+  tmux -L "$owner_socket" kill-server 2>/dev/null || true
+  rm -f "$owner_socket_path"
+  ln -s "$sibling_socket_path" "$owner_socket_path"
+  publish_endpoint "$home" tmux "$owner_pane" "$owner_server"
+  pid=$(start_listener "$home" "TMUX=${sibling_server},0")
+  out=$(wait_for_report "$home" "server identity does not match")
+  case "$out" in undeliverable:*) ;; *) fail "a redirected socket endpoint looked deliverable: $out" ;; esac
+  sleep 0.3
+  [ ! -e "$home/sibling.received" ] \
+    || fail "the redirected socket endpoint typed into the sibling vessel's pane"
+  stop_listener "$pid"
+
+  # A real socket redirect can prove that the server echoes its canonical path,
+  # but forcing that other live server to reuse the dead server's pid is not
+  # reproducible here.  The redirect above covers the real socket-path mismatch;
+  # the replacement below independently covers a real pid mismatch at one path.
+  rm -f "$owner_socket_path"
+  tmux -L "$owner_socket" new-session -d -s replacement \
+    "$home/collision-agent.sh" "$home/replacement.received"
+  sleep 0.5
+  replacement_pane=$(tmux -L "$owner_socket" display-message -p -t replacement '#{pane_id}')
+  [ "$replacement_pane" = "$owner_pane" ] \
+    || fail "the replacement server did not reuse the colliding pane id ($replacement_pane vs $owner_pane)"
+
+  publish_endpoint "$home" tmux "$owner_pane" "$owner_server"
+  pid=$(start_listener "$home" "TMUX=${sibling_server},0")
+  out=$(wait_for_report "$home" "server identity does not match")
+  case "$out" in undeliverable:*) ;; *) fail "a socket-reused endpoint looked deliverable: $out" ;; esac
+  sleep 0.3
+  [ ! -e "$home/replacement.received" ] \
+    || fail "the stale server identity typed into the replacement server's pane"
+  stop_listener "$pid"
+
+  tmux -L "$owner_socket" kill-server 2>/dev/null || true
+  tmux -L "$sibling_socket" kill-server 2>/dev/null || true
+  trap 'cleanup_listeners; fm_test_cleanup' EXIT
+  pass "a real two-server pane-id collision is refused without server identity and routed only when server identity is proven"
 }
 
 # --- the reaper has nothing left to kill --------------------------------------
@@ -504,7 +633,7 @@ SH
   kill -0 "$pid" 2>/dev/null || fail "destroying the session process group also destroyed delivery"
   queue_wake "$home"
   sleep 0.5
-  case "$(wait_for_report "$home" "published pane %99")" in
+  case "$(wait_for_report "$home" "published tmux server")" in
     undeliverable:*) ;;
     *) fail "delivery did not keep assessing wakes after the session process group was destroyed: $(report "$home")" ;;
   esac
@@ -533,7 +662,7 @@ test_service_status_and_repair_command_are_answerable_without_systemd() {
 }
 
 test_publish_endpoint_refuses_rather_than_guessing() {
-  local home out rc=0
+  local home out rc=0 socket server
   home=$(make_home publish-refusal)
   # No pane in the environment at all: publishing an address nobody verified is
   # worse than reporting that there is none, because the listener would then type
@@ -552,20 +681,53 @@ test_publish_endpoint_refuses_rather_than_guessing() {
     TMUX_PANE='%7' "$SERVICE" publish-endpoint 2>&1) || rc=$?
   [ "$rc" -ne 0 ] || fail "publishing succeeded with no session lock to name"
   assert_contains "$out" "no fleet lock is recorded" "the lockless refusal did not name its reason"
+
+  printf '%s\n' "$$" > "$home/state/.lock"
+  socket="fm-delivery-publish-refusal-$$"
+  tmux -L "$socket" new-session -d -s publish-refusal 'sleep 300'
+  server=$(tmux -L "$socket" display-message -p -t publish-refusal '#{socket_path},#{pid}')
+  rc=0
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_DELIVERY_ENDPOINT_BACKEND_OVERRIDE=tmux FM_DELIVERY_ENDPOINT_TARGET_OVERRIDE='%99999' \
+    TMUX="${server},0" "$SERVICE" publish-endpoint 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "publishing succeeded for a target absent from the selected server"
+  assert_contains "$out" "DELIVERY_ENDPOINT:" "the unresolved-target refusal lost its diagnostic label"
+  [ ! -e "$home/state/.primary-endpoint" ] || fail "an unresolved target still wrote an endpoint record"
+
+  tmux -L "$socket" kill-server 2>/dev/null || true
+  rc=0
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_DELIVERY_ENDPOINT_BACKEND_OVERRIDE=tmux FM_DELIVERY_ENDPOINT_TARGET_OVERRIDE='%0' \
+    TMUX="${server},0" "$SERVICE" publish-endpoint 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "publishing succeeded with no server behind the selected socket"
+  assert_contains "$out" "DELIVERY_ENDPOINT:" "the unreachable-server refusal lost its diagnostic label"
+  [ ! -e "$home/state/.primary-endpoint" ] || fail "an unreachable server still wrote an endpoint record"
   pass "publishing an endpoint refuses a guessed pane and a nameless session"
 }
 
 test_publish_endpoint_records_the_session_that_published_it() {
-  local home
+  local home socket session server pane
+  command -v tmux >/dev/null 2>&1 || { echo "skip: tmux not installed"; return 0; }
   home=$(make_home publish-ok)
+  socket="fm-delivery-publish-$$"
+  session=fm-delivery-publish
+  tmux -L "$socket" new-session -d -s "$session" 'sleep 300'
+  # shellcheck disable=SC2064 # Expand the socket name now, at trap-set time.
+  trap "tmux -L '$socket' kill-server 2>/dev/null || true; cleanup_listeners; fm_test_cleanup" EXIT
+  pane=$(tmux -L "$socket" display-message -p -t "$session" '#{pane_id}')
+  server=$(tmux -L "$socket" display-message -p -t "$session" '#{socket_path},#{pid}')
   FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_ROOT_OVERRIDE="$ROOT" \
-    TMUX_PANE='%7' "$SERVICE" publish-endpoint >/dev/null \
+    TMUX="${server},0" TMUX_PANE="$pane" "$SERVICE" publish-endpoint >/dev/null \
     || fail "publishing from a pane with a live lock failed"
   grep -qx 'backend=tmux' "$home/state/.primary-endpoint" || fail "the published record lost its backend"
-  grep -qx 'target=%7' "$home/state/.primary-endpoint" || fail "the published record lost its target"
+  grep -qx "target=$pane" "$home/state/.primary-endpoint" || fail "the published record lost its target"
+  grep -Fqx "tmux-server=$server" "$home/state/.primary-endpoint" \
+    || fail "the published record did not bind the pane to its tmux server"
   grep -qx "session-lock-pid=$$" "$home/state/.primary-endpoint" \
     || fail "the published record did not name the publishing session"
-  pass "a published endpoint records its backend, target, and owning session"
+  tmux -L "$socket" kill-server 2>/dev/null || true
+  trap 'cleanup_listeners; fm_test_cleanup' EXIT
+  pass "a published endpoint records its backend, target, tmux server, and owning session"
 }
 
 test_delivery_keeper_migrates_only_an_owned_legacy_session() {
@@ -617,6 +779,7 @@ test_a_session_exit_and_restart_loses_no_wake
 test_away_mode_stands_the_listener_down_without_killing_it
 test_pane_level_submit_blockers_reach_the_verdict
 test_real_tmux_delivery_reaches_the_composer
+test_real_tmux_server_collision_refuses_an_unproven_endpoint
 test_destroying_the_whole_session_process_group_leaves_delivery_running
 test_service_status_and_repair_command_are_answerable_without_systemd
 test_publish_endpoint_refuses_rather_than_guessing

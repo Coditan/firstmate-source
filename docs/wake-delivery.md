@@ -30,7 +30,8 @@ The reason to keep it separate is fault isolation in both directions: a listener
 | `systemd/fm-delivery@.service` | the unit template, one instance per home, `Restart=always` |
 | `bin/fm-pane-activity-lib.sh` | the pre-typing pane reads, shared with the away daemon |
 
-Every instance is per-home, exactly like the watcher: the systemd instance name and the tmux keeper name are both derived from `FM_HOME` alone, so nothing can reach across homes.
+Every instance is per-home, exactly like the watcher: the systemd instance name and the tmux keeper name are both derived from `FM_HOME` alone, so service ownership and coordination records cannot collide across homes.
+That home scoping does not prove pane ownership; endpoint publication and the tmux server round-trip below own address verification.
 The keeper name keeps a bounded sanitized home basename for recognition and uses a truncated SHA-256 digest of the complete home path for identity.
 On upgrade, each service checks the former checksum-based name once and stops it only when that home's keeper pid and lock record prove ownership, leaving an unprovable legacy session untouched.
 
@@ -64,9 +65,14 @@ A wake survives the session exiting and restarting for the same reason.
 
 The listener runs under a service manager with no session context, so unlike the away daemon it cannot discover the captain's pane from its own environment.
 The locked session publishes it once at session start through `bin/fm-delivery-service.sh publish-endpoint`, which records the backend, the target, the harness, and the session-lock pid in `state/.primary-endpoint`.
+For tmux, publication resolves the target to its exact pane id and also records the server's socket path and pid.
+The listener selects that recorded server explicitly and requires it to echo the same identity before it performs any target lookup, pane read, or keystroke.
+This matters because a tmux pane id is unique only within one server, so two vessels on one machine can both have a live `%0`.
 
 Recording the publishing session is what makes a stale record detectable.
 A record left behind by an exited session names a pane that is now somebody else's or nobody's, and typing into an unverified address is worse than reporting that there is none - so `publish-endpoint` refuses a guessed pane and a session with no recorded lock, rather than writing an address nobody verified.
+A tmux record with no valid server identity is likewise `undeliverable`; the listener never resolves its bare pane id against ambient process state.
+Binding the target to its server does not constrain which terminal the captain selects, because publication records and proves the selected endpoint rather than imposing a home-path policy on it.
 
 ## Every state says which one it is
 
@@ -85,7 +91,7 @@ So the outside view is never a boolean.
 | `stalled` | a live, identity-matched listener whose beacon aged out |
 | `down` | no live, identity-matched listener at all |
 
-`undeliverable` always names its own cause: no endpoint published, a malformed record, an endpoint from a session that no longer holds the lock, a pane that no longer exists, a pane mid-turn, a composer holding unsubmitted text, a composer that could not be confirmed empty, or a backend this listener has no verified composer primitives for.
+`undeliverable` always names its own cause: no endpoint published, a malformed record, a tmux endpoint with no provable server identity, an endpoint from a session that no longer holds the lock, a pane that no longer exists, a pane mid-turn, a composer holding unsubmitted text, a composer that could not be confirmed empty, or a backend this listener has no verified composer primitives for.
 
 The listener publishes the last resolved submit attempt as one bounded, single-line outcome record.
 A blocked attempt records its concrete cause, a confirmed submit clears it, and an empty durable queue clears it so stale failure cannot mask a healthy home.
@@ -100,6 +106,7 @@ Asserting only the healthy path would let the whole distinguishability property 
 ## Refusing an unsafe pane
 
 Only an affirmatively empty genuine agent composer is typed into.
+Before those pane-level checks, a tmux endpoint must carry a valid `socket-path,server-pid` identity, the listener connects through that socket, and the responding server must echo the recorded identity.
 `pane_is_busy` and the shared composer classifier report `pending` for real unsubmitted text - a captain's half-typed line, or a previous submit whose Enter was swallowed - and `unknown` for a bare dead-shell prompt or an unreadable pane.
 Neither is a safe target: the first would merge with the captain's text, the second would hand a shell a command.
 Both defer, and both are named in the verdict.
@@ -131,6 +138,8 @@ That run covers three of the acceptance conditions directly: a wake queued while
 `tests/fm-delivery.test.sh` covers the session-exit boundary the smoke does not: a wake pending while the session exits must be neither lost nor delivered to the pane that session left behind, so the listener reports the stale endpoint by name, and the wake is delivered to the new session's own pane once it publishes one.
 
 The portable suite in `tests/fm-delivery.test.sh` covers the rest, including a real tmux end-to-end: a stand-in agent pane that draws the agent composer glyph and reads one line receives the canonical typed `watcher` input and the drain instruction, while the durable queue record stays untouched for the drain.
+It also creates two real tmux servers whose pane ids collide, points the listener's ambient tmux context at the sibling server, and requires a legacy pane-only endpoint to refuse without typing into either pane.
+The same test then publishes the owning server identity and requires delivery to reach only that server despite the hostile ambient context.
 
 The reaper's own precondition - roughly thirty minutes of terminal idleness plus a host memory-pressure event - cannot be produced on demand, so the reaper-survival condition is proven by the stronger property instead.
 `test_destroying_the_whole_session_process_group_leaves_delivery_running` starts the listener in its own process group the way a service manager does, starts a stand-in session with `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP` explicitly empty (the reaper enabled) and background jobs of its own, then `kill -KILL`s that entire process group - everything a reaper could reach, and more - and requires the listener to be alive and still `delivering` afterwards.

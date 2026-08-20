@@ -131,18 +131,28 @@ delivery_body() {  # <queue-depth>
 # submit, and sets SUBMIT_REASON to the concrete blocker otherwise so the caller
 # can name it rather than falling silent.
 SUBMIT_REASON=
-attempt_submit() {  # <backend> <target> <queue-depth>
-  local backend=$1 target=$2 depth=$3 composer verdict encoded body
+attempt_submit() {  # <backend> <target> <tmux-server> <queue-depth>
+  local backend=$1 target=$2 tmux_server=$3 depth=$4 composer verdict encoded body
   SUBMIT_REASON=
   if ! fm_backend_list_contains "$SUPPORTED_BACKENDS" "$backend"; then
     SUBMIT_REASON="the published endpoint names backend '$backend', which this listener has no verified composer primitives for"
     return 1
+  fi
+  if [ "$backend" = tmux ]; then
+    if ! fm_delivery_tmux_server_valid "$tmux_server"; then
+      SUBMIT_REASON="the published tmux endpoint carries no provable server identity; a pane id alone is ambiguous"
+      return 1
+    fi
+    local FM_TMUX_SERVER_IDENTITY=$tmux_server
+    export FM_TMUX_SERVER_IDENTITY
   fi
   if fm_backend_target_exists "$backend" "$target"; then
     :
   else
     case $? in
       1) SUBMIT_REASON="the published pane $target no longer exists" ;;
+      125) SUBMIT_REASON="the published tmux server identity does not match the server at its recorded socket" ;;
+      126) SUBMIT_REASON="the published tmux server could not be verified" ;;
       *) SUBMIT_REASON="the published pane $target could not be verified" ;;
     esac
     return 1
@@ -160,6 +170,8 @@ attempt_submit() {  # <backend> <target> <queue-depth>
   if [ "$composer" != empty ]; then
     case "$composer" in
       pending) SUBMIT_REASON="the session composer holds unsubmitted text; delivery waits rather than merging with it" ;;
+      server-mismatch) SUBMIT_REASON="the published tmux server identity does not match the server at its recorded socket" ;;
+      server-unverifiable) SUBMIT_REASON="the published tmux server could not be verified" ;;
       *) SUBMIT_REASON="the session composer could not be confirmed empty (state=${composer:-unknown}: dead shell prompt or unreadable pane)" ;;
     esac
     return 1
@@ -175,6 +187,14 @@ attempt_submit() {  # <backend> <target> <queue-depth>
   verdict=$(fm_backend_send_text_submit "$backend" "$target" "$encoded" "$SUBMIT_RETRIES" "$SUBMIT_SLEEP" "$SUBMIT_SLEEP")
   if [ "$verdict" = empty ]; then
     return 0
+  fi
+  if [ "$verdict" = server-mismatch ]; then
+    SUBMIT_REASON="the published tmux server identity does not match the server at its recorded socket"
+    return 1
+  fi
+  if [ "$verdict" = server-unverifiable ]; then
+    SUBMIT_REASON="the published tmux server could not be verified"
+    return 1
   fi
   SUBMIT_REASON="the submit was not confirmed (verdict=${verdict:-unknown}); the text may be sitting in the composer"
   return 1
@@ -200,12 +220,7 @@ cycle() {
     return 0
   fi
   if ! fm_delivery_endpoint_status "$STATE"; then
-    case "$FM_DELIVERY_ENDPOINT_STATUS" in
-      absent) reason='no session has published where the model turn lives' ;;
-      malformed) reason='the published endpoint record carries no usable address' ;;
-      stale-session) reason='the endpoint was published by a session that no longer holds the fleet lock' ;;
-      *) reason="the endpoint is unusable ($FM_DELIVERY_ENDPOINT_STATUS)" ;;
-    esac
+    reason=$(fm_delivery_endpoint_reason "$FM_DELIVERY_ENDPOINT_STATUS")
     log_condition "endpoint:$FM_DELIVERY_ENDPOINT_STATUS" \
       "undeliverable: $depth wake(s) pending but $reason"
     return 0
@@ -218,7 +233,8 @@ cycle() {
   if [ "$LAST_DEFER" -ne 0 ] && [ $((now - LAST_DEFER)) -lt "$DEFER" ]; then
     return 0
   fi
-  if attempt_submit "$FM_DELIVERY_ENDPOINT_BACKEND" "$FM_DELIVERY_ENDPOINT_TARGET" "$depth"; then
+  if attempt_submit "$FM_DELIVERY_ENDPOINT_BACKEND" "$FM_DELIVERY_ENDPOINT_TARGET" \
+      "$FM_DELIVERY_ENDPOINT_TMUX_SERVER" "$depth"; then
     fm_delivery_attempt_outcome_clear "$STATE"
     LAST_SUBMIT=$now
     LAST_DEFER=0
