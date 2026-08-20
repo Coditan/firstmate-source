@@ -86,7 +86,7 @@ fm_tmux_quote_command_arg() {
 }
 
 fm_tmux_control_response() {  # <read-fd> <output-var>
-  local read_fd=$1 output_var=$2 line response= started=0
+  local read_fd=$1 output_var=$2 line response='' started=0
   while IFS= read -r -u "$read_fd" line; do
     case "$line" in
       %begin\ *) started=1; response= ;;
@@ -111,8 +111,10 @@ $line"
 }
 
 fm_tmux_control_close() {  # <read-fd> <write-fd> <client-pid>
+  # fm_tmux_control_response assigns this variable indirectly via printf -v.
+  # shellcheck disable=SC2034
   local read_fd=$1 write_fd=$2 client_pid=$3 ignored
-  printf '%s\n' kill-session >&"$write_fd" 2>/dev/null || true
+  { printf '%s\n' kill-session >&"$write_fd"; } 2>/dev/null || true
   fm_tmux_control_response "$read_fd" ignored 2>/dev/null || true
   exec {write_fd}>&-
   exec {read_fd}<&-
@@ -148,7 +150,7 @@ fm_tmux_run_command_string() {
 }
 
 fm_tmux_command_string() {
-  local command= arg
+  local command='' arg
   for arg in "$@"; do
     command="$command$(fm_tmux_quote_command_arg "$arg") "
   done
