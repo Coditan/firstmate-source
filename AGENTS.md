@@ -206,6 +206,7 @@ It runs on one named repository at a time and never fleet-wide, its three risk t
 ## 7. Task lifecycle
 
 The delivery lifecycle is an always-loaded operational contract; referenced scripts own exact commands, flags, and data mechanics.
+When a vessel move is ordered, before releasing it for cutover, or while verifying it after cutover, load the `move-vessel` skill; it owns the moving vessel's half and never the receiving container build or host deployment.
 
 ### Intake and authority
 
