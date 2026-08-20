@@ -24,7 +24,8 @@
 #
 #   0  AGREE            at least one pair had both sides read, and every such pair agrees
 #   2  DRIFT            at least one pair had both sides read and they differ
-#   3  INDETERMINATE    a reading this run ASKED FOR could not be taken
+#   3  INDETERMINATE    a reading this run ASKED FOR could not be taken, or two
+#                       readings it took could not be compared
 #   4  NOTHING CHECKED  every requested reading was taken, and no pair had both sides read
 #   1  refused          usage error, or --expect-machine did not match
 #
@@ -62,9 +63,11 @@ fm-deploy-verify.sh - read-only readback of what a host is actually running.
   --candidate <commit>       extra candidate commit for the served-bytes
                              reading; repeatable. The source and checkout
                              commits are candidates automatically
-  --clone <dir>              local clone the candidate blobs are read from
-                             (default: the current directory; used only by
-                             --serves)
+  --clone <dir>              local clone the candidate blobs are read from, and
+                             the repository two readings are resolved against
+                             when they name a commit differently, such as a
+                             revision label carrying a short sha
+                             (default: the current directory)
   --sudo auto|yes|no         elevation policy for BOTH the docker and the git
                              readings on the host (default: auto, which probes
                              unelevated first and falls back to sudo -n). The
@@ -139,11 +142,14 @@ elif command -v shasum >/dev/null 2>&1; then
   HASH_KIND=shasum
 fi
 hash_stdin() {
+  local out
   case "$HASH_KIND" in
-    sha256sum) sha256sum | cut -d' ' -f1 ;;
-    shasum) shasum -a 256 | cut -d' ' -f1 ;;
+    sha256sum) out=$(sha256sum) || return 1 ;;
+    shasum) out=$(shasum -a 256) || return 1 ;;
     *) return 127 ;;
   esac
+  [ -n "$out" ] || return 1
+  printf '%s' "${out%% *}"
 }
 
 TIMEOUT_BIN=$(command -v timeout 2>/dev/null || true)
@@ -433,9 +439,11 @@ if [ "$REQ_SOURCE" -eq 1 ]; then
   # TAG OBJECT, whose sha equals no container label and no checkout HEAD, so
   # taking it would report a confident DRIFT produced by this tool's own
   # resolution rather than by anything on the host.
-  if src_out=$(GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/echo SSH_ASKPASS_REQUIRE=never \
+  src_rc=0
+  src_out=$(GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/echo SSH_ASKPASS_REQUIRE=never \
       GIT_SSH_COMMAND='ssh -oBatchMode=yes' tmo git ls-remote --exit-code -- \
-      "$SOURCE_REMOTE" "$SOURCE_REF" "$SOURCE_REF^{}" 2>&1); then
+      "$SOURCE_REMOTE" "$SOURCE_REF" "$SOURCE_REF^{}" 2>&1) || src_rc=$?
+  if [ "$src_rc" -eq 0 ]; then
     src_n=0
     src_ref=(); src_sha=(); src_peeled=()
     while read -r sha ref; do
@@ -494,7 +502,25 @@ SRC_REFS
       WHY_SOURCE="AMBIGUOUS: $SOURCE_REF matches more than one commit on $SOURCE_REMOTE -$src_matched, so which commit it names cannot be read"
     fi
   else
-    WHY_SOURCE="git ls-remote could not read $SOURCE_REF from $SOURCE_REMOTE: $(printf '%s' "$src_out" | tr '\n' ' ' | cut -c1-160)"
+    # --exit-code answers 2 for "no matching refs were found" and says nothing
+    # else, so a mistyped or deleted ref - the likeliest source failure there is
+    # - would otherwise render as a sentence that stops at a colon.
+    src_excerpt=$(printf '%s' "$src_out" | tr '\n' ' ' | sed 's/^ *//; s/ *$//' | cut -c1-160)
+    case "$src_rc" in
+      2)
+        WHY_SOURCE="$SOURCE_REMOTE answered and has no ref matching $SOURCE_REF"
+        ;;
+      124|137|143)
+        WHY_SOURCE="reading $SOURCE_REF from $SOURCE_REMOTE did not return within the ${TIMEOUT}s this run allowed"
+        ;;
+      *)
+        if [ -n "$src_excerpt" ]; then
+          WHY_SOURCE="git ls-remote could not read $SOURCE_REF from $SOURCE_REMOTE: $src_excerpt"
+        else
+          WHY_SOURCE="git ls-remote could not read $SOURCE_REF from $SOURCE_REMOTE: it exited $src_rc and said nothing"
+        fi
+        ;;
+    esac
   fi
   if [ -n "$VAL_SOURCE" ]; then
     printf 'source:    %s   %s %s   FROM THE RECORD\n' "$(short "$VAL_SOURCE")" "$SOURCE_REMOTE" "$SOURCE_REF"
@@ -638,6 +664,8 @@ if [ "$REQ_SERVED" -eq 1 ]; then
   fi
 
   if [ -z "$WHY_SERVED" ]; then
+    BLOB_ERR=$(mktemp 2>/dev/null) || BLOB_ERR=/dev/null
+    trap 'rm -f "$BLOB_ERR"' EXIT INT TERM
     # Deduplicate first. An unchanged source head and checkout head are ONE
     # candidate, and printing it twice would manufacture a tie out of a single
     # commit.
@@ -684,20 +712,29 @@ if [ "$REQ_SERVED" -eq 1 ]; then
           [ "$c" = "$CT_FULL" ] && CT_SKIPPED_WHY="$SERVES_PATH is absent at that commit"
           continue
         fi
-        if ! cat_err=$(git -C "$CLONE" cat-file blob "$c:$SERVES_PATH" 2>&1 >/dev/null); then
+        # One read of the object, and both statuses kept: git's says whether the
+        # blob could be read at all, the hasher's says whether it could be
+        # digested. Reading it twice to learn the two separately would leave one
+        # of the guards unable to fire.
+        blob_rc=0
+        blob=$(git -C "$CLONE" cat-file blob "$c:$SERVES_PATH" 2>"$BLOB_ERR" | hash_stdin
+          set -- "${PIPESTATUS[@]}"
+          [ "$1" -ne 0 ] && exit 1
+          [ "$2" -ne 0 ] && exit 2
+          exit 0) || blob_rc=$?
+        if [ "$blob_rc" -eq 1 ]; then
           unreadable=$((unreadable + 1))
           unruled="$unruled $(short "$c")"
           printf 'served:    candidate %s   %s is in that commit and its blob could not be read from %s: %s\n' \
             "$(short "$c")" "$SERVES_PATH" "$CLONE" \
-            "$(printf '%s' "$cat_err" | tr '\n' ' ' | cut -c1-160)"
+            "$(tr '\n' ' ' <"$BLOB_ERR" | sed 's/^ *//; s/ *$//' | cut -c1-160)"
           [ "$c" = "$CT_FULL" ] && CT_SKIPPED_WHY="its blob could not be read from $CLONE"
           continue
         fi
-        if ! blob=$(git -C "$CLONE" cat-file blob "$c:$SERVES_PATH" 2>/dev/null | hash_stdin
-          exit "${PIPESTATUS[0]}"); then
+        if [ "$blob_rc" -ne 0 ]; then
           unreadable=$((unreadable + 1))
           unruled="$unruled $(short "$c")"
-          printf 'served:    candidate %s   %s could not be hashed from %s\n' \
+          printf 'served:    candidate %s   %s was read from %s and could not be hashed\n' \
             "$(short "$c")" "$SERVES_PATH" "$CLONE"
           [ "$c" = "$CT_FULL" ] && CT_SKIPPED_WHY="its blob could not be hashed from $CLONE"
           continue
@@ -798,6 +835,7 @@ fi
 # --- comparisons ------------------------------------------------------------
 COMPARED=0
 DIFFERED=0
+INCOMPARABLE=0
 
 req_of() { eval "printf '%s' \"\$REQ_${1}\""; }
 val_of() { eval "printf '%s' \"\$VAL_${1}\""; }
@@ -818,9 +856,51 @@ label_of() {
   esac
 }
 
+# --- one commit, one name ---------------------------------------------------
+#
+# The four facts arrive named differently. ls-remote and rev-parse answer with
+# full shas; a revision label carries whatever the image stamped, which is
+# commonly a short sha and sometimes a version string. Comparing those as raw
+# strings reports DRIFT against a host running exactly what was asked for, so
+# each fact is put through the clone ONCE, here, on the invariant this file
+# already states: two readings that name the same commit must compare equal.
+NRM_SOURCE=; NRM_CHECKOUT=; NRM_CONTAINER=; NRM_SERVED=
+[ -n "$VAL_SOURCE" ] && NRM_SOURCE=$(commit_in_clone "$VAL_SOURCE")
+[ -n "$VAL_CHECKOUT" ] && NRM_CHECKOUT=$(commit_in_clone "$VAL_CHECKOUT")
+[ -n "$VAL_CONTAINER" ] && NRM_CONTAINER=$(commit_in_clone "$VAL_CONTAINER")
+[ -n "$VAL_SERVED" ] && NRM_SERVED=$(commit_in_clone "$VAL_SERVED")
+nrm_of() {
+  case "$1" in
+    SOURCE) printf '%s' "$NRM_SOURCE" ;;
+    CHECKOUT) printf '%s' "$NRM_CHECKOUT" ;;
+    CONTAINER) printf '%s' "$NRM_CONTAINER" ;;
+    SERVED) printf '%s' "$NRM_SERVED" ;;
+  esac
+}
+
+# is_full_sha <value> - a complete object name, which two readings can be held
+# against each other without asking the clone anything.
+is_full_sha() {
+  case "$1" in *[!0-9a-f]*) return 1 ;; esac
+  [ "${#1}" -eq 40 ] || [ "${#1}" -eq 64 ]
+}
+
+# is_prefix_of <short> <long> - true when both are hex and the first names the
+# second. A clone that cannot resolve either name is not a licence to call them
+# different: a stamped short sha is the same commit as the full one.
+is_prefix_of() {
+  local sh=$1 lo=$2
+  [ "${#sh}" -ge 7 ] || return 1
+  [ "${#sh}" -lt "${#lo}" ] || return 1
+  case "$sh" in *[!0-9a-f]*) return 1 ;; esac
+  case "$lo" in *[!0-9a-f]*) return 1 ;; esac
+  case "$lo" in "$sh"*) return 0 ;; esac
+  return 1
+}
+
 printf '\ncomparisons\n'
 compare() {
-  local a=$1 b=$2 la lb pad
+  local a=$1 b=$2 la lb pad va vb na nb
   la=$(label_of "$a"); lb=$(label_of "$b")
   pad=$(printf '%-9s vs %-9s' "$la" "$lb")
   if [ "$(req_of "$a")" -eq 0 ] || [ "$(req_of "$b")" -eq 0 ]; then
@@ -830,19 +910,39 @@ compare() {
     printf '  %s  NOT COMPARED - no %s given, so this run ordered no such reading\n' "$pad" "$missing"
     return
   fi
-  if [ -z "$(val_of "$a")" ] || [ -z "$(val_of "$b")" ]; then
+  va=$(val_of "$a"); vb=$(val_of "$b")
+  if [ -z "$va" ] || [ -z "$vb" ]; then
     local unread=
-    [ -z "$(val_of "$a")" ] && unread="$la"
-    [ -z "$(val_of "$b")" ] && unread="${unread:+$unread and }$lb"
+    [ -z "$va" ] && unread="$la"
+    [ -z "$vb" ] && unread="${unread:+$unread and }$lb"
     printf '  %s  NOT COMPARED - %s was requested and could not be read\n' "$pad" "$unread"
     return
   fi
+  na=$(nrm_of "$a"); nb=$(nrm_of "$b")
+  if [ -n "$na" ] && [ -n "$nb" ]; then
+    va=$na; vb=$nb
+  elif [ "$va" != "$vb" ] && ! is_prefix_of "$va" "$vb" && ! is_prefix_of "$vb" "$va" &&
+    ! { is_full_sha "$va" && is_full_sha "$vb"; }; then
+    # The two names are not equal, neither names the other, and --clone could
+    # not settle it. Whether they are the same commit is not established, and
+    # calling that a disagreement would be a definite answer to a question this
+    # run could not ask.
+    local unresolved=
+    [ -z "$na" ] && unresolved="$la"
+    [ -z "$nb" ] && unresolved="${unresolved:+$unresolved and }$lb"
+    printf '  %s  NOT COMPARABLE - %s could not be resolved to a commit in --clone %s, so whether these name one commit is not established\n' \
+      "$pad" "$unresolved" "$CLONE"
+    INCOMPARABLE=$((INCOMPARABLE + 1))
+    note "$la and $lb could not be compared: $unresolved could not be resolved to a commit in --clone $CLONE"
+    return
+  fi
   COMPARED=$((COMPARED + 1))
-  if [ "$(val_of "$a")" = "$(val_of "$b")" ]; then
-    printf '  %s  AGREE %s\n' "$pad" "$(short "$(val_of "$a")")"
+  if [ "$va" = "$vb" ] || is_prefix_of "$va" "$vb" || is_prefix_of "$vb" "$va"; then
+    [ "${#va}" -lt "${#vb}" ] && va=$vb
+    printf '  %s  AGREE %s\n' "$pad" "$(short "$va")"
   else
     DIFFERED=$((DIFFERED + 1))
-    printf '  %s  DIFFER %s vs %s\n' "$pad" "$(short "$(val_of "$a")")" "$(short "$(val_of "$b")")"
+    printf '  %s  DIFFER %s vs %s\n' "$pad" "$(short "$va")" "$(short "$vb")"
   fi
 }
 
@@ -859,18 +959,28 @@ if [ "${#NOTES[@]}" -gt 0 ]; then
 fi
 
 printf '\n'
+# What this run could not establish, in its own words, so the same clause reads
+# the same whether it hedges a drift or stands as the verdict.
+SHORTFALL=
+if [ "$INDETERMINATE" -eq 1 ] && [ "$INCOMPARABLE" -gt 0 ]; then
+  SHORTFALL=$(printf 'a requested reading could not be taken, and %s pair(s) could not be compared' "$INCOMPARABLE")
+elif [ "$INDETERMINATE" -eq 1 ]; then
+  SHORTFALL="a requested reading could not be taken"
+elif [ "$INCOMPARABLE" -gt 0 ]; then
+  SHORTFALL=$(printf '%s pair(s) could not be compared' "$INCOMPARABLE")
+fi
 if [ "$DIFFERED" -gt 0 ]; then
-  if [ "$INDETERMINATE" -eq 1 ]; then
-    printf 'verdict: DRIFT - %s of %s compared pair(s) disagree, and a requested reading could not be taken, so what disagrees may not be all of it\n' \
-      "$DIFFERED" "$COMPARED"
+  if [ -n "$SHORTFALL" ]; then
+    printf 'verdict: DRIFT - %s of %s compared pair(s) disagree, and %s, so what disagrees may not be all of it\n' \
+      "$DIFFERED" "$COMPARED" "$SHORTFALL"
   else
     printf 'verdict: DRIFT - %s of %s compared pair(s) disagree; the host is not running what this run expected\n' \
       "$DIFFERED" "$COMPARED"
   fi
   exit 2
 fi
-if [ "$INDETERMINATE" -eq 1 ]; then
-  printf 'verdict: INDETERMINATE - a requested reading could not be taken; nothing here says the host is current\n'
+if [ -n "$SHORTFALL" ]; then
+  printf 'verdict: INDETERMINATE - %s; nothing here says the host is current\n' "$SHORTFALL"
   exit 3
 fi
 if [ "$COMPARED" -eq 0 ]; then

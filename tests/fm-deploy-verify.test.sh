@@ -226,12 +226,18 @@ inspect_fixture() {
   } >"$f"
 }
 
+SHORT_SHA_AT_C="$T/inspect-short-sha.txt"
+VERSION_LABEL="$T/inspect-version-label.txt"
 RUNNING_AT_C="$T/inspect-running.txt"
 RUNNING_AT_A="$T/inspect-running-at-a.txt"
 STOPPED_AT_C="$T/inspect-stopped.txt"
 NO_LABEL="$T/inspect-nolabel.txt"
 inspect_fixture "$RUNNING_AT_C" true 0 "$C"
 inspect_fixture "$RUNNING_AT_A" true 0 "$A"
+# What a CI stamp ordinarily writes: ${GITHUB_SHA::7}, or rev-parse --short.
+inspect_fixture "$SHORT_SHA_AT_C" true 0 "${C:0:7}"
+# A label that names no commit at all, which the tool cannot resolve anywhere.
+inspect_fixture "$VERSION_LABEL" true 0 v1.2.3
 inspect_fixture "$STOPPED_AT_C" false 17 "$C"
 inspect_fixture "$NO_LABEL" true 0 '<no value>'
 
@@ -1004,6 +1010,92 @@ test_the_running_container_reports_what_it_actually_reads_from() {
   pass "the container reading names the directory it works in and the paths it reads from"
 }
 
+# --- two readings that name one commit differently --------------------------
+
+test_a_short_sha_revision_label_agrees_with_the_full_sha_it_names() {
+  # The ordinary CI stamp. A raw string comparison reports DRIFT against a host
+  # running exactly what was asked for, which is a wrong verdict produced by the
+  # tool's own value handling rather than by anything on the host.
+  reset_env
+  export FM_FAKE_DOCKER_INSPECT="$SHORT_SHA_AT_C"
+  run_tool --container svc --checkout "$REPO" --source-remote "$REPO" \
+    --source-ref refs/heads/main --clone "$REPO"
+  expect_code 0 "$RC" "a short-sha label naming the deployed commit must agree"
+  assert_contains "$OUT" 'verdict: AGREE' "two names for one commit must not read as drift"
+  assert_not_contains "$OUT" 'DIFFER' "no pair here disagrees"
+  pass "a short-sha revision label agrees with the full sha it names"
+}
+
+test_a_short_sha_revision_label_still_drifts_against_another_commit() {
+  # The control: same short-sha shape, pointing at a commit the source ref does
+  # not name, so the disagreement is real and must still be reported.
+  reset_env
+  local f="$T/inspect-short-sha-at-a.txt"
+  inspect_fixture "$f" true 0 "${A:0:7}"
+  export FM_FAKE_DOCKER_INSPECT="$f"
+  run_tool --container svc --source-remote "$REPO" --source-ref refs/heads/main --clone "$REPO"
+  expect_code 2 "$RC" "a short sha naming a different commit is still drift"
+  assert_contains "$OUT" 'DIFFER' "a real disagreement must still be named"
+  pass "control: a short-sha label naming another commit still reports drift"
+}
+
+test_a_revision_label_that_names_no_commit_is_not_reported_as_drift() {
+  reset_env
+  export FM_FAKE_DOCKER_INSPECT="$VERSION_LABEL"
+  run_tool --container svc --source-remote "$REPO" --source-ref refs/heads/main --clone "$REPO"
+  expect_code 3 "$RC" "a pair the tool cannot settle is not a disagreement"
+  assert_contains "$OUT" 'NOT COMPARABLE' \
+    "a label the clone cannot resolve leaves the pair unsettled, not disagreeing"
+  assert_not_contains "$OUT" 'DIFFER' \
+    "the tool must not answer a question it could not ask"
+  assert_not_contains "$OUT" 'verdict: DRIFT' "an unsettled pair is not drift"
+  assert_contains "$OUT" 'could not be compared' \
+    "the verdict must carry what this run could not establish"
+  pass "a revision label naming no commit is reported as not comparable, never as drift"
+}
+
+# --- a source ref the remote does not carry ---------------------------------
+
+test_a_ref_the_remote_does_not_have_is_named_as_that() {
+  reset_env
+  run_tool --container svc --source-remote "$REPO" --source-ref refs/heads/nope
+  expect_code 3 "$RC" "an unresolvable source ref is indeterminate"
+  assert_contains "$OUT" 'has no ref matching refs/heads/nope' \
+    "a remote that answered and holds no such ref must be told apart from one that failed"
+  assert_not_contains "$OUT" 'refs/heads/nope:' \
+    "the reason must not trail off where a diagnostic would have been"
+  pass "a ref the remote does not carry is reported as absent rather than as a failed read"
+}
+
+# --- a blob that reads and will not hash ------------------------------------
+
+test_a_blob_that_reads_but_cannot_be_hashed_is_not_reported_as_differing() {
+  reset_env
+  local brokenbin="$T/broken-hasher"
+  mkdir -p "$brokenbin"
+  cat >"$brokenbin/sha256sum" <<'EOF'
+#!/usr/bin/env bash
+exit 3
+EOF
+  chmod +x "$brokenbin/sha256sum"
+  ln -sf /bin/false "$brokenbin/shasum" 2>/dev/null || true
+  # The host keeps a working hasher: only the verifier's own hashing breaks, so
+  # the served bytes arrive and the candidate blob is what cannot be digested.
+  export FM_FAKE_SSH_PATH="$PATH"
+  RC=0
+  OUT=$(PATH="$brokenbin:$PATH" "$TOOL" --host stub-host \
+    --serves 'http://stub/probe.txt' --serves-path probe.txt --clone "$REPO" \
+    --candidate "$C" 2>&1) || RC=$?
+  record_verdicts "$OUT"
+  expect_code 3 "$RC" "a blob that could not be hashed leaves the reading unresolved"
+  assert_contains "$OUT" 'could not be hashed' \
+    "a hashing failure must be named, not folded into a comparison"
+  assert_not_contains "$OUT" 'differs' \
+    "a blob that was never digested cannot be reported as differing"
+  assert_not_contains "$OUT" 'MATCH' "nothing may match when nothing was hashed"
+  pass "a blob that reads but cannot be hashed is named, not reported as differing"
+}
+
 # --- read-only ---------------------------------------------------------------
 
 test_the_tool_only_ever_reads() {
@@ -1177,6 +1269,11 @@ test_a_container_without_a_revision_label_is_unread
 test_a_missing_container_is_unread_with_the_reason
 test_restarts_on_a_running_container_are_stated_out_loud
 test_the_running_container_reports_what_it_actually_reads_from
+test_a_short_sha_revision_label_agrees_with_the_full_sha_it_names
+test_a_short_sha_revision_label_still_drifts_against_another_commit
+test_a_revision_label_that_names_no_commit_is_not_reported_as_drift
+test_a_ref_the_remote_does_not_have_is_named_as_that
+test_a_blob_that_reads_but_cannot_be_hashed_is_not_reported_as_differing
 test_the_tool_only_ever_reads
 test_a_local_run_needs_no_host
 test_serves_without_a_path_is_refused
