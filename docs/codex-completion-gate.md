@@ -11,7 +11,7 @@ It is the third Codex sandbox record and is separate from both of the others.
 
 `bin/fm-decision-hold.sh complete` is the shared investigation and visual-review completion gate.
 `bin/fm-teardown.sh` calls its read-only `verify` before it will tear down a scout, so the gate is what stops a scout being erased before unresolved captain decisions are registered.
-Its durable output is two keys in the task's metadata, `decisions_reviewed=1` and `decision_keys=`.
+Its durable output is two attestation keys for the task, `decisions_reviewed=1` and `decision_keys=`.
 
 A worker that cannot run the gate has two exits.
 It can stop and wait, which costs a supervision round trip.

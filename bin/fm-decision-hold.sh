@@ -7,7 +7,7 @@
 # The invoking agent inventories unresolved decisions, assigns stable keys, and
 # routes dependent work. This script supplies deterministic identities, creates
 # and verifies structured tasks-axi captain holds, records completion attestation
-# in the originating task's metadata, and closes a hold only after a durable
+# for the originating task, and closes a hold only after a durable
 # decision record has been linked to existing dependent work.
 #
 # A hold identity is <origin-id>-decision-<decision-key>. Origin ids and decision

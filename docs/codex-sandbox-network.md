@@ -177,7 +177,7 @@ Check the spawning home's own `bin/fm-spawn.sh` for the grant before concluding 
 ## 9. What the grant does not cover
 
 The network grant covers the network dimension and nothing else.
-A separate per-task status-signal writable root is documented in [`docs/codex-status-signalling.md`](codex-status-signalling.md).
+A separate per-task signal writable root is documented in [`docs/codex-status-signalling.md`](codex-status-signalling.md), with completion-gate attestation evidence owned by [`docs/codex-completion-gate.md`](codex-completion-gate.md).
 A pipeline run also writes in two places outside the workspace, and the sandbox refuses both.
 Measured 2026-08-11 from a real `codex exec` worker carrying the full crewmate profile, network grant included:
 

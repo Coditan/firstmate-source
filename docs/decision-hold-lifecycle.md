@@ -13,7 +13,8 @@ The `hold` subcommand maps an originating work id and stable decision key to `<o
 It creates a kind `captain` backlog item when absent and invokes `tasks-axi hold <id> --reason <reason> --kind captain` on every retry.
 It rejects an identity collision, a changed title, and attempts to reopen an already resolved identity, including one that retention has already moved into the archive.
 
-The `complete` subcommand unions the reviewed keys into `decision_keys=` and appends `decisions_reviewed=1` while originating task metadata is live.
+The `complete` subcommand unions the reviewed keys into `decision_keys=` and records `decisions_reviewed=1` while originating task metadata is live.
+For a Codex task with a per-task signal directory, [`docs/codex-completion-gate.md`](codex-completion-gate.md) owns why that attestation is stored in the signal directory and read as a metadata overlay.
 A post-teardown visual review can complete against the surviving report and durable holds without recreating volatile task metadata.
 It accepts `--none` as an explicit semantic inventory result, not as inferred absence.
 It verifies every listed identity against tasks-axi before recording completion.
