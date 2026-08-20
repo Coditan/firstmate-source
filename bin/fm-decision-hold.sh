@@ -79,6 +79,9 @@
 # complete against the surviving report and holds without recreating task state.
 # `complete` may append its metadata keys after a task's PR fields; bin/fm-pr-lib.sh
 # owns the PR parser contract and does not reserve a state/<id>.meta tail.
+# Those keys do not always land in the meta: a task with a per-task signal directory
+# keeps them there instead, so a sandboxed worker can close its own gate. See
+# attestation_overlay below and docs/codex-completion-gate.md.
 # `verify` is read-only and is called by scout teardown so teardown cannot erase a
 # source before this gate has succeeded. A resolved captain hold that retention
 # moved into data/done-archive.md remains a durable completion record, but only
@@ -274,6 +277,45 @@ sorted_key_union() {  # <comma-list> <newline-or-space-separated-new-keys>
 
 meta_value() {  # <meta> <key>
   grep "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2- || true
+}
+
+# WHERE THE COMPLETION ATTESTATION IS WRITTEN, AND WHY IT IS NOT ALWAYS THE META.
+# `decisions_reviewed` and `decision_keys` are private to this script: nothing else
+# in bin/ reads or writes them. That is what lets them live somewhere other than
+# state/<id>.meta without touching the meta contract every other script depends on.
+#
+# A sandboxed Codex direct report cannot write state/<id>.meta at all. Its launch
+# grants exactly one writable filesystem root, the per-task signal directory that
+# bin/fm-spawn.sh creates (docs/codex-status-signalling.md). So the completion gate
+# - the safety gate that stops a scout being torn down before unresolved captain
+# decisions are registered - had to escalate for approval on every Codex run, and a
+# model then decided per run whether the gate was allowed to close. Measured
+# 2026-08-17 on hlr-calc-kernel-probe-3: the same gate that four earlier scouts
+# closed was refused, so the gate's success was a coin flip. docs/codex-completion-gate.md
+# keeps that evidence.
+#
+# The attestation therefore lands in the task's own signal directory whenever
+# fm-spawn made one, and in state/<id>.meta otherwise. This is ONE record, not two:
+# meta is a last-wins key=value log, and the overlay is read as if it were appended
+# to meta, which is exactly what it replaces. Both halves are read together by
+# attestation_value, so no caller can see one without the other.
+attestation_overlay() {  # <origin-id> -> path, or non-zero when the task has none
+  local dir="$STATE/.crew-signal/$1"
+  [ -d "$dir" ] || return 1
+  printf '%s\n' "$dir/decisions"
+}
+
+attestation_target() {  # <origin-id> <meta>
+  attestation_overlay "$1" || printf '%s\n' "$2"
+}
+
+attestation_value() {  # <origin-id> <meta> <key>
+  local overlay
+  if overlay=$(attestation_overlay "$1") && [ -f "$overlay" ]; then
+    cat "$2" "$overlay" 2>/dev/null | grep "^$3=" | tail -1 | cut -d= -f2- || true
+  else
+    meta_value "$2" "$3"
+  fi
 }
 
 origin_open_decisions() {  # <origin-id>
@@ -1019,7 +1061,7 @@ command_complete() {
     done
   fi
   if [ "$has_meta" = 1 ]; then
-    previous=$(meta_value "$meta" decision_keys)
+    previous=$(attestation_value "$origin" "$meta" decision_keys)
   fi
   keys=$(sorted_key_union "$previous" "$supplied")
   if [ -n "$keys" ]; then
@@ -1043,8 +1085,9 @@ $open
 EOF
 
   if [ "$has_meta" = 1 ]; then
-    if [ "$(meta_value "$meta" decisions_reviewed)" != 1 ] || [ "$previous" != "$keys" ]; then
-      printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$keys" >> "$meta"
+    if [ "$(attestation_value "$origin" "$meta" decisions_reviewed)" != 1 ] || [ "$previous" != "$keys" ]; then
+      printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$keys" \
+        >> "$(attestation_target "$origin" "$meta")"
     fi
 
     # Transfer any still-open status decision to its durable backlog owner so the
@@ -1069,9 +1112,9 @@ command_verify() {
   meta="$STATE/$origin.meta"
   [ -f "$meta" ] || fail "origin metadata is absent: $meta"
   require_tasks_axi
-  reviewed=$(meta_value "$meta" decisions_reviewed)
+  reviewed=$(attestation_value "$origin" "$meta" decisions_reviewed)
   [ "$reviewed" = 1 ] || fail "origin $origin has no completed unresolved-decision inventory"
-  keys=$(meta_value "$meta" decision_keys)
+  keys=$(attestation_value "$origin" "$meta" decision_keys)
   if [ -n "$keys" ]; then
     while IFS= read -r key; do
       [ -n "$key" ] || continue
