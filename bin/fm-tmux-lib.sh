@@ -121,16 +121,16 @@ fm_tmux_command() {
 }
 
 fm_tmux_resolve_bound_endpoint() {
-  local target=$1 identity=$2 first second output server pane listing
-  first=$(fm_tmux_command_string list-panes -t "$target" -F 'PANE=#{pane_id}')
-  second=$(fm_tmux_command_string display-message -p -t "$target" 'SERVER=#{socket_path},#{pid},#{pane_id}')
-  output=$(fm_tmux_run_command_string "$identity" "$first ; $second") || return $?
-  server=$(printf '%s\n' "$output" | sed -n 's/^SERVER=//p' | tail -1)
+  local target=$1 identity=$2 second output server pane returned_pane
+  pane=$(FM_TMUX_SERVER_IDENTITY="$identity" fm_tmux_resolve_pane "$target") || return $?
+  second=$(fm_tmux_command_string display-message -p -t "$pane" 'SERVER=#{socket_path},#{pid},#{pane_id}')
+  output=$(fm_tmux_run_command_string "$identity" "$second") || return $?
+  server=${output#SERVER=}
+  [ "$server" != "$output" ] || return 1
   [ -n "$server" ] || return 1
-  pane=${server##*,}
+  returned_pane=${server##*,}
   server=${server%,*}
-  listing=$(printf '%s\n' "$output" | sed -n 's/^PANE=//p')
-  printf '%s\n' "$listing" | grep -qxF "$pane" || return 1
+  [ "$returned_pane" = "$pane" ] || return 1
   printf '%s\t%s\n' "$server" "$pane"
 }
 
