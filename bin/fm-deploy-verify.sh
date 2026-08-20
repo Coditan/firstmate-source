@@ -361,6 +361,26 @@ short() {
   printf '%s' "${1:0:12}"
 }
 
+# is_object_name <value> - hex, and long enough for git to accept it as an
+# abbreviated object name.
+is_object_name() {
+  case "$1" in
+    ''|*[!0-9a-fA-F]*) return 1 ;;
+  esac
+  [ "${#1}" -ge 4 ]
+}
+
+# reading_in_clone <value> - the full commit sha in --clone for a value that
+# NAMES AN OBJECT, empty for anything else. A reading taken off the host is
+# arbitrary text: git's revision grammar would resolve a label of `main` or
+# `HEAD~3` against the VERIFIER'S OWN clone and answer with a commit the host
+# never reported, turning a fact about this machine into a verdict about that
+# one. Only --candidate, which the operator typed on purpose, may name a ref.
+reading_in_clone() {
+  is_object_name "$1" || { printf ''; return; }
+  commit_in_clone "$1"
+}
+
 # commit_in_clone <rev> - the full commit sha in --clone, empty when it is not
 # there. Two readings that name the same commit differently must compare equal.
 commit_in_clone() {
@@ -664,8 +684,15 @@ if [ "$REQ_SERVED" -eq 1 ]; then
   fi
 
   if [ -z "$WHY_SERVED" ]; then
-    BLOB_ERR=$(mktemp 2>/dev/null) || BLOB_ERR=/dev/null
-    trap 'rm -f "$BLOB_ERR"' EXIT INT TERM
+    # The trap belongs to a file this run created. Installing it over the
+    # /dev/null fallback would have the run remove the device node on its way
+    # out, which is the sharpest breach of read-only this script could make.
+    BLOB_ERR=$(mktemp 2>/dev/null) || BLOB_ERR=
+    if [ -n "$BLOB_ERR" ]; then
+      trap 'rm -f "$BLOB_ERR"' EXIT INT TERM
+    else
+      BLOB_ERR=/dev/null
+    fi
     # Deduplicate first. An unchanged source head and checkout head are ONE
     # candidate, and printing it twice would manufacture a tie out of a single
     # commit.
@@ -689,7 +716,7 @@ if [ "$REQ_SERVED" -eq 1 ]; then
     done
 
     SERVED_POOL_BUILT=1
-    [ -n "$VAL_CONTAINER" ] && CT_FULL=$(commit_in_clone "$VAL_CONTAINER")
+    [ -n "$VAL_CONTAINER" ] && CT_FULL=$(reading_in_clone "$VAL_CONTAINER")
 
     if [ "${#resolved[@]}" -eq 0 ]; then
       # Nothing was compared. Reporting that as "no candidate matches" would
@@ -804,15 +831,17 @@ if [ "$REQ_SERVED" -eq 1 ]; then
   if [ "$REQ_CONTAINER" -eq 1 ]; then
     if [ -z "$VAL_CONTAINER" ]; then
       CT_NOTICE="the container revision could not be read, so no commit of its own was a candidate for these bytes"
+    elif ! is_object_name "$VAL_CONTAINER"; then
+      CT_NOTICE="the container revision $VAL_CONTAINER does not name an object, so it was not resolved to a commit and was not a candidate for these bytes"
     elif [ "$SERVED_POOL_BUILT" -eq 0 ]; then
       CT_NOTICE="no candidate pool was built, so whether the container revision would have been a candidate for these bytes is not established"
     elif [ -z "$CT_FULL" ]; then
       CT_NOTICE="the commit the container reports is not in --clone $CLONE, so it could not be a candidate for these bytes; point --clone at a repository that holds it"
     elif [ "$CT_COMPARED" -eq 1 ]; then
       ct_named=
-      [ -n "$VAL_SOURCE" ] && [ "$(commit_in_clone "$VAL_SOURCE")" = "$CT_FULL" ] &&
+      [ -n "$VAL_SOURCE" ] && [ "$(reading_in_clone "$VAL_SOURCE")" = "$CT_FULL" ] &&
         ct_named="the source ref"
-      [ -n "$VAL_CHECKOUT" ] && [ "$(commit_in_clone "$VAL_CHECKOUT")" = "$CT_FULL" ] &&
+      [ -n "$VAL_CHECKOUT" ] && [ "$(reading_in_clone "$VAL_CHECKOUT")" = "$CT_FULL" ] &&
         ct_named="${ct_named:+$ct_named and }the checkout"
       if [ -n "$ct_named" ]; then
         CT_NOTICE="the commit the container reports was compared as a candidate $ct_named named, not on the container's own account"
@@ -865,10 +894,10 @@ label_of() {
 # each fact is put through the clone ONCE, here, on the invariant this file
 # already states: two readings that name the same commit must compare equal.
 NRM_SOURCE=; NRM_CHECKOUT=; NRM_CONTAINER=; NRM_SERVED=
-[ -n "$VAL_SOURCE" ] && NRM_SOURCE=$(commit_in_clone "$VAL_SOURCE")
-[ -n "$VAL_CHECKOUT" ] && NRM_CHECKOUT=$(commit_in_clone "$VAL_CHECKOUT")
-[ -n "$VAL_CONTAINER" ] && NRM_CONTAINER=$(commit_in_clone "$VAL_CONTAINER")
-[ -n "$VAL_SERVED" ] && NRM_SERVED=$(commit_in_clone "$VAL_SERVED")
+[ -n "$VAL_SOURCE" ] && NRM_SOURCE=$(reading_in_clone "$VAL_SOURCE")
+[ -n "$VAL_CHECKOUT" ] && NRM_CHECKOUT=$(reading_in_clone "$VAL_CHECKOUT")
+[ -n "$VAL_CONTAINER" ] && NRM_CONTAINER=$(reading_in_clone "$VAL_CONTAINER")
+[ -n "$VAL_SERVED" ] && NRM_SERVED=$(reading_in_clone "$VAL_SERVED")
 nrm_of() {
   case "$1" in
     SOURCE) printf '%s' "$NRM_SOURCE" ;;
@@ -899,6 +928,19 @@ is_prefix_of() {
 }
 
 printf '\ncomparisons\n'
+# A reading compared under a name it did not report is a substitution, and an
+# unseen substitution is how a wrong answer passes for a read one. Say it.
+resolved_line() {
+  local val=$1 nrm=$2 label=$3
+  [ -n "$nrm" ] && [ "$nrm" != "$val" ] &&
+    printf '  %s reported %s, resolved through --clone %s to %s\n' \
+      "$label" "$val" "$CLONE" "$(short "$nrm")"
+  return 0
+}
+resolved_line "$VAL_SOURCE" "$NRM_SOURCE" source
+resolved_line "$VAL_CHECKOUT" "$NRM_CHECKOUT" checkout
+resolved_line "$VAL_CONTAINER" "$NRM_CONTAINER" container
+resolved_line "$VAL_SERVED" "$NRM_SERVED" served
 compare() {
   local a=$1 b=$2 la lb pad va vb na nb
   la=$(label_of "$a"); lb=$(label_of "$b")

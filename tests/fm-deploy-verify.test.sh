@@ -69,10 +69,15 @@ case "${FM_FAKE_SSH_EMPTY_VERB:-}" in
      esac ;;
 esac
 # The far side is a different machine: what it has on PATH is its business, so
-# a test can give the host tools the verifier itself does not have.
+# a test can give the host tools the verifier itself does not have. The same
+# goes for where it can write its own scratch files.
 case "${FM_FAKE_SSH_PATH:-}" in
   '') : ;;
   *) PATH=$FM_FAKE_SSH_PATH; export PATH ;;
+esac
+case "${FM_FAKE_SSH_TMPDIR:-}" in
+  '') : ;;
+  *) TMPDIR=$FM_FAKE_SSH_TMPDIR; export TMPDIR ;;
 esac
 exec /bin/sh -c "$*"
 EOF
@@ -228,6 +233,7 @@ inspect_fixture() {
 
 SHORT_SHA_AT_C="$T/inspect-short-sha.txt"
 VERSION_LABEL="$T/inspect-version-label.txt"
+BRANCH_LABEL="$T/inspect-branch-label.txt"
 RUNNING_AT_C="$T/inspect-running.txt"
 RUNNING_AT_A="$T/inspect-running-at-a.txt"
 STOPPED_AT_C="$T/inspect-stopped.txt"
@@ -238,6 +244,9 @@ inspect_fixture "$RUNNING_AT_A" true 0 "$A"
 inspect_fixture "$SHORT_SHA_AT_C" true 0 "${C:0:7}"
 # A label that names no commit at all, which the tool cannot resolve anywhere.
 inspect_fixture "$VERSION_LABEL" true 0 v1.2.3
+# A label naming a ref that DOES resolve in the verifier's own clone. git's
+# revision grammar would answer with a commit the host never reported.
+inspect_fixture "$BRANCH_LABEL" true 0 main
 inspect_fixture "$STOPPED_AT_C" false 17 "$C"
 inspect_fixture "$NO_LABEL" true 0 '<no value>'
 
@@ -255,6 +264,7 @@ reset_env() {
   export FM_FAKE_CURL_BODY='beta
 '
   unset FM_FAKE_SSH_EMPTY_VERB FM_FAKE_SSH_FAIL FM_FAKE_SSH_PATH FM_FAKE_SSH_SLEEP
+  unset FM_FAKE_SSH_TMPDIR
   unset FM_FAKE_CURL_KILL_PAYLOAD
 }
 
@@ -1023,6 +1033,8 @@ test_a_short_sha_revision_label_agrees_with_the_full_sha_it_names() {
   expect_code 0 "$RC" "a short-sha label naming the deployed commit must agree"
   assert_contains "$OUT" 'verdict: AGREE' "two names for one commit must not read as drift"
   assert_not_contains "$OUT" 'DIFFER' "no pair here disagrees"
+  assert_contains "$OUT" "container reported ${C:0:7}, resolved through --clone" \
+    "a reading compared under a name it did not report must say so, and through what"
   pass "a short-sha revision label agrees with the full sha it names"
 }
 
@@ -1037,6 +1049,69 @@ test_a_short_sha_revision_label_still_drifts_against_another_commit() {
   expect_code 2 "$RC" "a short sha naming a different commit is still drift"
   assert_contains "$OUT" 'DIFFER' "a real disagreement must still be named"
   pass "control: a short-sha label naming another commit still reports drift"
+}
+
+test_a_revision_label_naming_a_ref_is_never_resolved_through_the_clone() {
+  # `main` resolves in the verifier's OWN clone, which may have no relation to
+  # the deploy target. Answering from it would report a commit the host never
+  # named, and would do it at exit 0.
+  reset_env
+  export FM_FAKE_DOCKER_INSPECT="$BRANCH_LABEL"
+  run_tool --container svc --source-remote "$REPO" --source-ref refs/heads/main --clone "$REPO"
+  assert_not_contains "$OUT" 'verdict: AGREE' \
+    "a label that names a ref must never produce agreement about the host"
+  assert_not_contains "$OUT" 'AGREE ' "no pair may be reported as agreeing here"
+  expect_code 3 "$RC" "a label the tool may not resolve leaves the pair unsettled"
+  assert_contains "$OUT" 'NOT COMPARABLE' \
+    "the pair must be reported as unsettled, with its reason"
+  assert_not_contains "$OUT" "resolved through --clone" \
+    "nothing may be resolved from a reading that does not name an object"
+  pass "a revision label naming a ref is never resolved through the verifier's clone"
+}
+
+test_a_revision_label_naming_a_ref_is_not_attributed_a_commit_in_the_served_notice() {
+  reset_env
+  export FM_FAKE_DOCKER_INSPECT="$BRANCH_LABEL"
+  run_tool --container svc --serves 'http://stub/probe.txt' --serves-path probe.txt \
+    --clone "$REPO" --source-remote "$REPO" --source-ref refs/heads/main
+  assert_contains "$OUT" 'does not name an object' \
+    "the served notice must say the label named no object rather than resolving one"
+  assert_not_contains "$OUT" 'the commit the container reports was compared' \
+    "no commit may be attributed to a container that reported none"
+  assert_not_contains "$OUT" 'verdict: AGREE' "nothing here earns agreement"
+  pass "a ref-shaped label is not attributed a commit in the served-bytes notice"
+}
+
+test_the_run_never_removes_the_null_device_when_no_temp_file_was_made() {
+  # With no writable TMPDIR the scratch file falls back to the null device. A
+  # cleanup trap installed over that fallback would have the run delete a system
+  # device node on its way out, as root.
+  reset_env
+  local rmbin="$T/rm-watch"
+  mkdir -p "$rmbin"
+  cat >"$rmbin/rm" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FM_FAKE_RM_LOG"
+exec /bin/rm "$@"
+EOF
+  chmod +x "$rmbin/rm"
+  export FM_FAKE_RM_LOG="$T/rm.log"
+  : >"$FM_FAKE_RM_LOG"
+  # The HOST can still write its own scratch file: only the verifier's side is
+  # left without a usable temporary directory, which is the case that falls back.
+  export FM_FAKE_SSH_TMPDIR="$T"
+  RC=0
+  OUT=$(TMPDIR="$T/no-such-tmpdir" PATH="$rmbin:$PATH" "$TOOL" --host stub-host \
+    --serves 'http://stub/probe.txt' --serves-path probe.txt --clone "$REPO" \
+    --candidate "$C" 2>&1) || RC=$?
+  record_verdicts "$OUT"
+  assert_contains "$OUT" 'MATCH' \
+    "this run must get as far as hashing a candidate, or it proves nothing"
+  assert_no_grep '/dev/null' "$FM_FAKE_RM_LOG" \
+    "the run must never ask for the null device to be removed"
+  [ -c /dev/null ] || fail "the null device must still be a device node"
+  unset FM_FAKE_RM_LOG
+  pass "a run that could not make a temp file never removes the null device"
 }
 
 test_a_revision_label_that_names_no_commit_is_not_reported_as_drift() {
@@ -1272,6 +1347,9 @@ test_the_running_container_reports_what_it_actually_reads_from
 test_a_short_sha_revision_label_agrees_with_the_full_sha_it_names
 test_a_short_sha_revision_label_still_drifts_against_another_commit
 test_a_revision_label_that_names_no_commit_is_not_reported_as_drift
+test_a_revision_label_naming_a_ref_is_never_resolved_through_the_clone
+test_a_revision_label_naming_a_ref_is_not_attributed_a_commit_in_the_served_notice
+test_the_run_never_removes_the_null_device_when_no_temp_file_was_made
 test_a_ref_the_remote_does_not_have_is_named_as_that
 test_a_blob_that_reads_but_cannot_be_hashed_is_not_reported_as_differing
 test_the_tool_only_ever_reads
