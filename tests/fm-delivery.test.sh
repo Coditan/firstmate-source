@@ -631,7 +631,7 @@ test_service_status_and_repair_command_are_answerable_without_systemd() {
 }
 
 test_publish_endpoint_refuses_rather_than_guessing() {
-  local home out rc=0
+  local home out rc=0 socket server
   home=$(make_home publish-refusal)
   # No pane in the environment at all: publishing an address nobody verified is
   # worse than reporting that there is none, because the listener would then type
@@ -650,6 +650,27 @@ test_publish_endpoint_refuses_rather_than_guessing() {
     TMUX_PANE='%7' "$SERVICE" publish-endpoint 2>&1) || rc=$?
   [ "$rc" -ne 0 ] || fail "publishing succeeded with no session lock to name"
   assert_contains "$out" "no fleet lock is recorded" "the lockless refusal did not name its reason"
+
+  printf '%s\n' "$$" > "$home/state/.lock"
+  socket="fm-delivery-publish-refusal-$$"
+  tmux -L "$socket" new-session -d -s publish-refusal 'sleep 300'
+  server=$(tmux -L "$socket" display-message -p -t publish-refusal '#{socket_path},#{pid}')
+  rc=0
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_DELIVERY_ENDPOINT_BACKEND_OVERRIDE=tmux FM_DELIVERY_ENDPOINT_TARGET_OVERRIDE='%99999' \
+    TMUX="${server},0" "$SERVICE" publish-endpoint 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "publishing succeeded for a target absent from the selected server"
+  assert_contains "$out" "DELIVERY_ENDPOINT:" "the unresolved-target refusal lost its diagnostic label"
+  [ ! -e "$home/state/.primary-endpoint" ] || fail "an unresolved target still wrote an endpoint record"
+
+  tmux -L "$socket" kill-server 2>/dev/null || true
+  rc=0
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_DELIVERY_ENDPOINT_BACKEND_OVERRIDE=tmux FM_DELIVERY_ENDPOINT_TARGET_OVERRIDE='%0' \
+    TMUX="${server},0" "$SERVICE" publish-endpoint 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "publishing succeeded with no server behind the selected socket"
+  assert_contains "$out" "DELIVERY_ENDPOINT:" "the unreachable-server refusal lost its diagnostic label"
+  [ ! -e "$home/state/.primary-endpoint" ] || fail "an unreachable server still wrote an endpoint record"
   pass "publishing an endpoint refuses a guessed pane and a nameless session"
 }
 

@@ -85,20 +85,13 @@ fm_tmux_quote_command_arg() {
   printf "'%s'" "$value"
 }
 
-fm_tmux_command() {
-  local identity=${FM_TMUX_SERVER_IDENTITY:-} socket pid arg command= output marker done
-  if [ -z "$identity" ]; then
-    tmux "$@"
-    return $?
-  fi
+fm_tmux_run_command_string() {
+  local identity=$1 command=$2 socket pid output marker done tmux_command=${FM_TMUX_COMMAND:-tmux}
   socket=${identity%,*}
   pid=${identity##*,}
   marker="__FM_TMUX_SERVER_MISMATCH_$$__"
   done="__FM_TMUX_SERVER_CONNECTED_$$__"
-  for arg in "$@"; do
-    command="$command$(fm_tmux_quote_command_arg "$arg") "
-  done
-  output=$(tmux -S "$socket" if-shell -F "#{==:#{pid},$pid}" "$command" \
+  output=$("$tmux_command" -S "$socket" if-shell -F "#{==:#{pid},$pid}" "$command" \
     "display-message -p '$marker'" \; display-message -p "$done" 2>/dev/null) || true
   case "$output" in
     "$done") output= ;;
@@ -107,6 +100,38 @@ fm_tmux_command() {
   esac
   [ "$output" != "$marker" ] || return 125
   printf '%s' "$output"
+}
+
+fm_tmux_command_string() {
+  local command= arg
+  for arg in "$@"; do
+    command="$command$(fm_tmux_quote_command_arg "$arg") "
+  done
+  printf '%s' "$command"
+}
+
+fm_tmux_command() {
+  local identity=${FM_TMUX_SERVER_IDENTITY:-} command tmux_command=${FM_TMUX_COMMAND:-tmux}
+  if [ -z "$identity" ]; then
+    "$tmux_command" "$@"
+    return $?
+  fi
+  command=$(fm_tmux_command_string "$@")
+  fm_tmux_run_command_string "$identity" "$command"
+}
+
+fm_tmux_resolve_bound_endpoint() {
+  local target=$1 identity=$2 first second output server pane listing
+  first=$(fm_tmux_command_string list-panes -t "$target" -F 'PANE=#{pane_id}')
+  second=$(fm_tmux_command_string display-message -p -t "$target" 'SERVER=#{socket_path},#{pid},#{pane_id}')
+  output=$(fm_tmux_run_command_string "$identity" "$first ; $second") || return $?
+  server=$(printf '%s\n' "$output" | sed -n 's/^SERVER=//p' | tail -1)
+  [ -n "$server" ] || return 1
+  pane=${server##*,}
+  server=${server%,*}
+  listing=$(printf '%s\n' "$output" | sed -n 's/^PANE=//p')
+  printf '%s\n' "$listing" | grep -qxF "$pane" || return 1
+  printf '%s\t%s\n' "$server" "$pane"
 }
 
 # fm_tmux_resolve_pane: the ONE sanctioned gate every read of a caller-supplied

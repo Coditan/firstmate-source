@@ -375,7 +375,7 @@ restart_keeper() {
 # to submit into.  Refuses rather than guessing: a listener typing into a pane
 # nobody verified is worse than one that reports it has nowhere to deliver.
 publish_endpoint() {
-  local backend target harness session tmux_server resolved_target
+  local backend target harness session tmux_server resolved_target bound
   # shellcheck source=bin/fm-supervisor-target-lib.sh
   . "$SCRIPT_DIR/fm-supervisor-target-lib.sh"
   backend=${FM_DELIVERY_ENDPOINT_BACKEND_OVERRIDE:-}
@@ -395,14 +395,20 @@ publish_endpoint() {
   fi
   tmux_server=
   if [ "$backend" = tmux ]; then
-    resolved_target=$(fm_tmux_resolve_pane "$target" "$TMUX_CMD") || {
+    tmux_server=${TMUX:-}
+    tmux_server=${tmux_server%,*}
+    fm_delivery_tmux_server_valid "$tmux_server" || {
+      echo "DELIVERY_ENDPOINT: the tmux server for target $target could not be identified; no endpoint was published" >&2
+      return 1
+    }
+    local FM_TMUX_COMMAND=$TMUX_CMD
+    export FM_TMUX_COMMAND
+    bound=$(fm_tmux_resolve_bound_endpoint "$target" "$tmux_server") || {
       echo "DELIVERY_ENDPOINT: tmux target $target could not be proved on this session's server; no endpoint was published" >&2
       return 1
     }
-    tmux_server=$("$TMUX_CMD" display-message -p -t "$resolved_target" '#{socket_path},#{pid}' 2>/dev/null) || {
-      echo "DELIVERY_ENDPOINT: the tmux server for pane $resolved_target could not be identified; no endpoint was published" >&2
-      return 1
-    }
+    tmux_server=${bound%%$'\t'*}
+    resolved_target=${bound#*$'\t'}
     fm_delivery_tmux_server_valid "$tmux_server" || {
       echo "DELIVERY_ENDPOINT: tmux returned an unusable server identity for pane $resolved_target; no endpoint was published" >&2
       return 1
