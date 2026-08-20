@@ -244,14 +244,25 @@ appearance_elements() {  # <file>
         data = substr(data, finish + 1)
         lower = tolower(token)
         if (lower ~ /^<style([[:space:]>])/) { print "style"; raw = "style"; continue }
-        if (lower ~ /^<(script|textarea|title)([[:space:]>])/) {
+        if (lower ~ /^<(script|template|textarea|title)([[:space:]>])/) {
           raw = lower
           sub(/^</, "", raw); sub(/[[:space:]>].*$/, "", raw)
           continue
         }
+        if (lower ~ /^<\/symbol([[:space:]>])/) {
+          if (symbol != "" && drawable) { print "symbol " symbol }
+          symbol = ""; drawable = 0
+          continue
+        }
         if (lower ~ /^<\/svg([[:space:]>])/) { if (svg > 0) { svg-- }; continue }
         if (lower ~ /^<svg([[:space:]>])/) { svg++; continue }
-        if (svg > 0 && lower ~ /^<symbol([[:space:]>])/) { print "symbol " token }
+        if (svg > 0 && lower ~ /^<symbol([[:space:]>])/) {
+          symbol = token; drawable = 0
+          continue
+        }
+        if (symbol != "" && lower ~ /^<(circle|ellipse|foreignobject|image|line|path|polygon|polyline|rect|text|use)([[:space:]>])/) {
+          drawable = 1
+        }
       }
     }
   ' "$1"

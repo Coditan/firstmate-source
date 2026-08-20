@@ -484,6 +484,36 @@ test_marks_hidden_in_non_markup_are_refused() {
   pass "only real symbol elements inside SVG satisfy the mark contract"
 }
 
+test_unusable_symbol_definitions_are_refused() {
+  local bad_home=$TMP_ROOT/unusable-marks-home case_name mark status
+  mkdir -p "$bad_home/config"
+  for case_name in empty template; do
+    {
+      printf '<style>body{display:block}</style>\n'
+      [ "$case_name" != template ] || printf '<template>\n'
+      printf '<svg><defs>\n'
+      for mark in open pencil struck gate held run void; do
+        if [ "$case_name" = empty ]; then
+          printf '<symbol id="fm-mk-%s"></symbol>\n' "$mark"
+        else
+          printf '<symbol id="fm-mk-%s"><circle r="5"/></symbol>\n' "$mark"
+        fi
+      done
+      printf '</defs></svg>\n'
+      [ "$case_name" != template ] || printf '</template>\n'
+    } > "$bad_home/config/board-appearance.html"
+    status=0
+    rm -f "$OUT"
+    FM_HOME=$bad_home "$BOARD" --title T --body "$TMP_ROOT/body.html" --out "$OUT" \
+      >/dev/null 2>"$BUILD_ERR_FILE" || status=$?
+    [ "$status" != 0 ] || fail "$case_name symbol definitions were accepted"
+    assert_contains "$(build_stderr)" "missing mark fm-mk-open" \
+      "$case_name symbol refusal did not identify the absent usable mark"
+    assert_absent "$OUT" "$case_name symbols were refused but a board was still written"
+  done
+  pass "empty and inert symbol definitions cannot satisfy the mark contract"
+}
+
 # --- the versioned layout is genuinely shared --------------------------------
 
 test_two_different_board_shapes_share_the_layout() {
@@ -577,6 +607,7 @@ test_default_appearance_is_visible_and_usable
 test_local_appearance_replaces_the_default
 test_incomplete_local_appearance_is_refused
 test_marks_hidden_in_non_markup_are_refused
+test_unusable_symbol_definitions_are_refused
 test_asset_interface_reports_the_composed_inputs
 test_two_different_board_shapes_share_the_layout
 test_board_behavior_contract
