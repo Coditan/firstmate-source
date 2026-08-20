@@ -123,6 +123,12 @@ Two facts bind wherever that wake is read.
 Every claim of currency names its hop - `released`, `pinned`, or `installed` - and this round measures all three for this seat only, so a clean round never means the fleet is current.
 A reading the round could not take is reported as unmeasured and never as current, because an instrument that cannot read must not be relayed as an all-clear.
 
+### Quota reporting
+
+Every quota claim names its provider and window, and this reading measures this seat only, so a healthy reading here never means the fleet has quota.
+Never infer another vessel's quota from this seat's reading, and report a reading that could not be taken as unable to read rather than as healthy.
+A seat that can see that its allowance will exhaust before the window resets announces that while it can still speak, naming the projected exhaustion time and the reset time so the fleet can route around it instead of discovering the exhausted seat by its silence.
+
 ## 4. Harness and runtime dispatch
 
 Load `harness-adapters` before every spawn or recovery and before trust handling, skill invocation, interrupt, exit, resume, or adapter verification.
