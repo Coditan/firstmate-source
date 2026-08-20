@@ -110,6 +110,15 @@ $line"
   return 1
 }
 
+fm_tmux_control_close() {  # <read-fd> <write-fd> <client-pid>
+  local read_fd=$1 write_fd=$2 client_pid=$3 ignored
+  printf '%s\n' kill-session >&"$write_fd" 2>/dev/null || true
+  fm_tmux_control_response "$read_fd" ignored 2>/dev/null || true
+  exec {write_fd}>&-
+  exec {read_fd}<&-
+  wait "$client_pid" 2>/dev/null || true
+}
+
 fm_tmux_run_command_string() {
   local identity=$1 command=$2 socket server_identity output tmux_command=${FM_TMUX_COMMAND:-tmux}
   local read_fd write_fd client_pid
@@ -120,25 +129,21 @@ fm_tmux_run_command_string() {
   client_pid=$FM_TMUX_CONTROL_PID
 
   fm_tmux_control_response "$read_fd" output \
-    || { exec {write_fd}>&-; exec {read_fd}<&-; wait "$client_pid" 2>/dev/null || true; return 126; }
+    || { fm_tmux_control_close "$read_fd" "$write_fd" "$client_pid"; return 126; }
   printf '%s\n' "display-message -p '#{socket_path},#{pid}'" >&"$write_fd" \
-    || { exec {write_fd}>&-; exec {read_fd}<&-; wait "$client_pid" 2>/dev/null || true; return 126; }
+    || { fm_tmux_control_close "$read_fd" "$write_fd" "$client_pid"; return 126; }
   fm_tmux_control_response "$read_fd" server_identity \
-    || { exec {write_fd}>&-; exec {read_fd}<&-; wait "$client_pid" 2>/dev/null || true; return 126; }
+    || { fm_tmux_control_close "$read_fd" "$write_fd" "$client_pid"; return 126; }
   if [ "$server_identity" != "$identity" ]; then
-    exec {write_fd}>&-
-    exec {read_fd}<&-
-    wait "$client_pid" 2>/dev/null || true
+    fm_tmux_control_close "$read_fd" "$write_fd" "$client_pid"
     return 125
   fi
 
   printf '%s\n' "$command" >&"$write_fd" \
-    || { exec {write_fd}>&-; exec {read_fd}<&-; wait "$client_pid" 2>/dev/null || true; return 126; }
+    || { fm_tmux_control_close "$read_fd" "$write_fd" "$client_pid"; return 126; }
   fm_tmux_control_response "$read_fd" output \
-    || { exec {write_fd}>&-; exec {read_fd}<&-; wait "$client_pid" 2>/dev/null || true; return 126; }
-  exec {write_fd}>&-
-  exec {read_fd}<&-
-  wait "$client_pid" 2>/dev/null || true
+    || { fm_tmux_control_close "$read_fd" "$write_fd" "$client_pid"; return 126; }
+  fm_tmux_control_close "$read_fd" "$write_fd" "$client_pid"
   printf '%s' "$output"
 }
 

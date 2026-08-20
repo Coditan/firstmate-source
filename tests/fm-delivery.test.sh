@@ -509,6 +509,8 @@ SH
   [ -s "$home/owner.received" ] || fail "the server-bound endpoint did not reach its owning pane"
   [ ! -e "$home/sibling.received" ] || fail "the server-bound endpoint still reached the sibling vessel"
   stop_listener "$pid"
+  [ "$(tmux -L "$owner_socket" list-sessions -F '#{session_name}')" = owner ] \
+    || fail "guarded delivery leaked control sessions on the owning server"
 
   rm -f "$home/owner.received"
   publish_endpoint "$home" tmux "$owner_pane" "$owner_socket_path,99999"
