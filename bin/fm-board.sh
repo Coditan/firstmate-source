@@ -202,14 +202,59 @@ resolve_appearance() {
 # validate_appearance - refuse an incomplete appearance before it can produce a
 # board whose controls or state marks are invisible.
 validate_appearance() {  # <file>
-  local file=$1 mark folded
-  folded=$(fold_open_tags "$file")
-  printf '%s\n' "$folded" | grep -Eiq '<style([[:space:]>])' \
+  local file=$1 mark elements
+  elements=$(appearance_elements "$file")
+  printf '%s\n' "$elements" | grep -qx 'style' \
     || die "appearance fragment has no <style>: $file"
   for mark in open pencil struck gate held run void; do
-    printf '%s\n' "$folded" | grep -Eiq "<symbol[^>]*id=[\"']fm-mk-${mark}[\"']" \
+    printf '%s\n' "$elements" | grep -Eiq "^symbol[[:space:]].*id[[:space:]]*=[[:space:]]*[\"']fm-mk-${mark}[\"']" \
       || die "appearance fragment is missing mark fm-mk-$mark: $file"
   done
+}
+
+appearance_elements() {  # <file>
+  awk '
+    BEGIN { data = ""; raw = ""; svg = 0 }
+    { data = data $0 "\n" }
+    END {
+      while (data != "") {
+        low = tolower(data)
+        if (raw != "") {
+          closing = "</" raw
+          at = index(low, closing)
+          if (at == 0) { break }
+          data = substr(data, at)
+          raw = ""
+          continue
+        }
+        comment = index(data, "<!--")
+        tag = index(data, "<")
+        if (comment > 0 && (tag == 0 || comment == tag)) {
+          data = substr(data, comment + 4)
+          finish = index(data, "-->")
+          if (finish == 0) { break }
+          data = substr(data, finish + 3)
+          continue
+        }
+        if (tag == 0) { break }
+        data = substr(data, tag)
+        finish = index(data, ">")
+        if (finish == 0) { break }
+        token = substr(data, 1, finish)
+        data = substr(data, finish + 1)
+        lower = tolower(token)
+        if (lower ~ /^<style([[:space:]>])/) { print "style"; raw = "style"; continue }
+        if (lower ~ /^<(script|textarea|title)([[:space:]>])/) {
+          raw = lower
+          sub(/^</, "", raw); sub(/[[:space:]>].*$/, "", raw)
+          continue
+        }
+        if (lower ~ /^<\/svg([[:space:]>])/) { if (svg > 0) { svg-- }; continue }
+        if (lower ~ /^<svg([[:space:]>])/) { svg++; continue }
+        if (svg > 0 && lower ~ /^<symbol([[:space:]>])/) { print "symbol " token }
+      }
+    }
+  ' "$1"
 }
 
 # fold_open_tags - print `<line-number>:<text>` with the newlines inside an

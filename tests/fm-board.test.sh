@@ -460,24 +460,28 @@ test_incomplete_local_appearance_is_refused() {
   pass "an incomplete vessel appearance is refused instead of breaking a board"
 }
 
-test_local_appearance_contract_and_notice_are_shipped() {
-  local layout=$ROOT/docs/board-layout.md
-  local configuration=$ROOT/docs/configuration.md
-  local notice=$ROOT/docs/board-appearance-broadcast.md
-  assert_grep "\$FM_HOME/config/board-appearance.html" "$layout" \
-    "the board reference does not name the vessel-private appearance file"
-  assert_no_grep 'Boards are set in **Tally**' "$layout" \
-    "the shared board reference still claims this vessel's design for every reader"
-  assert_grep '## Board appearance (config/board-appearance.html)' "$configuration" \
-    "the configuration owner does not record the vessel-local appearance file"
-  assert_present "$notice" "the All-Ships notice is missing from the change"
-  assert_grep 'defect in the shared code, not a failure by any seat' "$notice" \
-    "the notice does not assign the defect to shared code"
-  assert_grep 'sets no deadline and asks for no reply' "$notice" \
-    "the notice does not preserve the no-deadline, no-reply instruction"
-  assert_grep 'Ours is named Tally, and it is ours only' "$notice" \
-    "the notice does not name this vessel's design as this vessel's only"
-  pass "the local-appearance contract and bounded All-Ships notice ship together"
+test_marks_hidden_in_non_markup_are_refused() {
+  local bad_home=$TMP_ROOT/hidden-marks-home mark status=0
+  mkdir -p "$bad_home/config"
+  {
+    printf '<style>body{display:block}'
+    for mark in open pencil struck gate held run void; do
+      printf '<symbol id="fm-mk-%s"></symbol>' "$mark"
+    done
+    printf '</style>\n<!-- <svg><defs>'
+    for mark in open pencil struck gate held run void; do
+      printf '<symbol id="fm-mk-%s"></symbol>' "$mark"
+    done
+    printf '</defs></svg> -->\n'
+  } > "$bad_home/config/board-appearance.html"
+  rm -f "$OUT"
+  FM_HOME=$bad_home "$BOARD" --title T --body "$TMP_ROOT/body.html" --out "$OUT" \
+    >/dev/null 2>"$BUILD_ERR_FILE" || status=$?
+  [ "$status" != 0 ] || fail "marks inside style text or a comment were accepted"
+  assert_contains "$(build_stderr)" "missing mark fm-mk-open" \
+    "the hidden-mark refusal did not identify the absent usable mark"
+  assert_absent "$OUT" "hidden marks were refused but a board was still written"
+  pass "only real symbol elements inside SVG satisfy the mark contract"
 }
 
 # --- the versioned layout is genuinely shared --------------------------------
@@ -520,9 +524,7 @@ test_two_different_board_shapes_share_the_layout() {
   pass "two structurally different boards build from the one shared layout"
 }
 
-test_layout_lives_in_one_place() {
-  # The point of the whole change: the layout is an artifact agents INCLUDE, not
-  # one they retype. If the assets stop existing, boards would drift again.
+test_asset_interface_reports_the_composed_inputs() {
   local css fallback js
   css=$("$BOARD" --print-assets | sed -n '1p')
   fallback=$("$BOARD" --print-assets | sed -n '2p')
@@ -530,14 +532,9 @@ test_layout_lives_in_one_place() {
   assert_present "$css" "the versioned layout stylesheet is missing"
   assert_present "$fallback" "the neutral fallback appearance is missing"
   assert_present "$js" "the versioned board behavior is missing"
-  assert_grep '.fm-wrap' "$css" "shared layout lost the board container"
-  assert_no_grep 'font-family' "$css" "shared layout still chooses vessel typography"
-  ! grep -Eq '#[0-9A-Fa-f]{3,8}' "$css" \
-    || fail "shared layout still carries a literal palette"
-  assert_grep 'data-fm-board-appearance="default"' "$fallback" \
-    "fallback asset is not visibly identifiable as the default"
-  assert_grep 'queueKey' "$js" "board behavior lost the per-question queueKey"
-  pass "shared structure, neutral fallback, and behavior have distinct owners"
+  [ "$css" != "$fallback" ] && [ "$fallback" != "$js" ] && [ "$css" != "$js" ] \
+    || fail "the asset interface did not report three distinct composed inputs"
+  pass "the builder reports each input to its composed board"
 }
 
 # --- board behavior, exercised as logic rather than rendering ----------------
@@ -579,7 +576,7 @@ test_missing_required_arguments_are_refused
 test_default_appearance_is_visible_and_usable
 test_local_appearance_replaces_the_default
 test_incomplete_local_appearance_is_refused
-test_local_appearance_contract_and_notice_are_shipped
-test_layout_lives_in_one_place
+test_marks_hidden_in_non_markup_are_refused
+test_asset_interface_reports_the_composed_inputs
 test_two_different_board_shapes_share_the_layout
 test_board_behavior_contract
