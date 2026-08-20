@@ -9,7 +9,7 @@ Every vessel's board structure comes from `bin/board-assets/layout.css`.
 Its palette, type, marks, and component finish come from the vessel-private file `$FM_HOME/config/board-appearance.html`, which this repository does not ship.
 The builder uses that file when it exists and otherwise uses `bin/board-assets/default-appearance.html`, a visibly labelled neutral fallback based on browser fonts and system colours rather than a vessel design language.
 
-An appearance fragment is a self-contained HTML fragment with one `<style>` block and one hidden inline `<svg>` definition containing the seven semantic symbol ids `fm-mk-open`, `fm-mk-pencil`, `fm-mk-struck`, `fm-mk-gate`, `fm-mk-held`, `fm-mk-run`, and `fm-mk-void`.
+An appearance fragment is a self-contained HTML fragment with a `<style>` block and inline `<svg>` definitions containing drawable symbols with the seven semantic ids `fm-mk-open`, `fm-mk-pencil`, `fm-mk-struck`, `fm-mk-gate`, `fm-mk-held`, `fm-mk-run`, and `fm-mk-void`.
 It is one fragment rather than separate CSS and SVG files so a vessel cannot apply its component styling without the marks that belong to it, or the marks without their styling.
 `bin/fm-board.sh` refuses a local fragment missing its style block or any required mark rather than silently producing a broken board.
 The selected fragment is inlined after the shared structural CSS, so each vessel's own component rules are authoritative.
