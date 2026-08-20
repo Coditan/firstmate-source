@@ -269,6 +269,7 @@ The replacement control is that the captain or firstmate reads every required ch
 If the plan changes or the fleet moves to a forge that enforces required checks, remove this temporary ungated-fleet statement here and update the GitHub audit note that points at it.
 Never merge a red PR.
 Use `bin/fm-pr-merge.sh` for every task PR merge so merge metadata is recorded, and use `bin/fm-merge-local.sh` for approved local-only landing; never call a lower-level merge command around their guards.
+When no task in this home owns the pull request, because its task was already cleaned up or another vessel built it and handed it over, that same script's `--no-local-task` form is the sanctioned route, and its header owns why that is not a way past the recording requirement.
 After an autonomous merge, give the captain a one-line full-URL or local-main outcome.
 
 ### Validate

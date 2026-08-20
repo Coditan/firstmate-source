@@ -69,8 +69,42 @@
 # match a placeholder through; --allow-placeholder-title lands a read placeholder
 # deliberately, and never lets an unread title through. Collapsing the two would
 # make an operator assert something they do not know in order to merge.
+#
+# A pull request that no task in this home owns is landed through
+# --no-local-task, which takes no task id at all. Two real situations produce
+# one. Its task was torn down after the work finished, measured on 2026-08-20 on
+# PRs 153, 155 and 156 of Coditan/firstmate-source, all green and none of them
+# mergeable here. Or another vessel built it and handed it over for this
+# vessel's merge decision, so the task metadata only ever existed in that
+# vessel's home. Until this flag existed neither had any sanctioned route to
+# land, and a guard that protects nothing while blocking real work is the exact
+# pressure that gets guards reached around.
+#
+# The requirement is untouched for the case it was built for. A merge naming a
+# task still records pr= and pr_head= through bin/fm-pr-check.sh and still
+# refuses when that recording did not happen; the recording is never optional
+# for a task that exists. --no-local-task is not an override of that check,
+# because a merge with no local task has no local cleanup to protect: pr= and
+# pr_head= exist so bin/fm-teardown.sh can verify landed work after a squash,
+# and there is no teardown here to verify anything.
+#
+# What keeps it from becoming that override wearing a nicer name is that it
+# carries no task id, so there is no task it can be aimed at. A second check
+# backs that up: it refuses if any task in this home has already recorded this
+# pull request's URL, which is the ordinary state of an owned task because
+# firstmate records the URL when the pull request is first reported. That check
+# cannot see a task that owns the pull request and has not recorded it yet, and
+# does not pretend to - the missing task id is what carries the guarantee, and
+# this is the second line rather than the first.
+#
+# The no-local-task merge says in its own output that it recorded nothing and
+# why, rather than succeeding silently, because a later reader has to be able to
+# tell the two paths apart: one leaves a recorded pr= and an armed merge watch
+# behind, and the other leaves nothing at all.
 # Usage: fm-pr-merge.sh [--allow-placeholder-title] [--allow-unreadable-title]
 #          <task-id> <pr-url> [-- <extra gh-axi pr merge args>]
+#        fm-pr-merge.sh [--allow-placeholder-title] [--allow-unreadable-title]
+#          --no-local-task <pr-url> [-- <extra gh-axi pr merge args>]
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -88,6 +122,7 @@ fm_axi_prepend_path "$FM_HOME"
 # never collide with a gh-axi flag forwarded after the -- separator.
 ALLOW_PLACEHOLDER_TITLE=0
 ALLOW_UNREADABLE_TITLE=0
+NO_LOCAL_TASK=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --allow-placeholder-title)
@@ -98,20 +133,45 @@ while [ "$#" -gt 0 ]; do
       ALLOW_UNREADABLE_TITLE=1
       shift
       ;;
+    --no-local-task)
+      NO_LOCAL_TASK=1
+      shift
+      ;;
     *) break ;;
   esac
 done
 
-if [ "$#" -lt 2 ]; then
-  echo "error: invalid PR merge request" >&2
-  exit 2
+# --no-local-task takes the PR URL alone. An empty ID is this path's single
+# marker for "no task in this home owns this pull request", and every later
+# task-shaped step reads that marker rather than re-deciding the question.
+ID=
+if [ "$NO_LOCAL_TASK" -eq 1 ]; then
+  if [ "$#" -lt 1 ]; then
+    echo "error: invalid PR merge request" >&2
+    exit 2
+  fi
+  RAW_URL=$1
+  shift 1
+  # With no task id the first positional is the URL, so a task id passed here
+  # out of habit would otherwise slide silently into the forwarded merge
+  # arguments. Extra arguments must be introduced by an explicit -- on this path.
+  if [ "$#" -gt 0 ] && [ "$1" != "--" ]; then
+    echo "error: --no-local-task takes only the PR URL; pass any extra merge arguments after --" >&2
+    exit 2
+  fi
+else
+  if [ "$#" -lt 2 ]; then
+    echo "error: invalid PR merge request" >&2
+    exit 2
+  fi
+  ID=$1
+  RAW_URL=$2
+  shift 2
 fi
-ID=$1
-RAW_URL=$2
 # bin/fm-pr-lib.sh parses GitLab merge request URLs so the watcher can follow
 # them, but this path still addresses only GitHub by owner/repository. The
 # provider check holds that refusal exactly as it was until merge parity lands.
-if ! fm_pr_task_id_valid "$ID" || ! fm_pr_url_parse "$RAW_URL" \
+if { [ -n "$ID" ] && ! fm_pr_task_id_valid "$ID"; } || ! fm_pr_url_parse "$RAW_URL" \
   || [ "$FM_PR_PROVIDER" != github ]; then
   echo "error: invalid PR merge request" >&2
   exit 2
@@ -120,7 +180,6 @@ URL=$FM_PR_URL
 PR_OWNER=$FM_PR_OWNER
 PR_REPO=$FM_PR_REPO
 PR_NUMBER=$FM_PR_NUMBER
-shift 2
 [ "${1:-}" = "--" ] && shift
 
 caller_has_merge_method() {
@@ -207,11 +266,55 @@ read_pr_title() {
   done
 }
 
+# The task in this home, if any, that has already recorded this pull request's
+# URL. Symlinked metadata is skipped rather than followed, for the same reason
+# the task path refuses one below.
+owning_task_id() {
+  local candidate id
+  [ -d "$STATE" ] || return 0
+  for candidate in "$STATE"/*.meta; do
+    [ -f "$candidate" ] || continue
+    [ ! -L "$candidate" ] || continue
+    if grep -qxF "pr=$URL" "$candidate"; then
+      id=${candidate##*/}
+      printf '%s' "${id%.meta}"
+      return 0
+    fi
+  done
+  return 0
+}
+
 # Task-derived paths are constructed only after the canonical ID validation.
-META="$STATE/$ID.meta"
-if [ ! -f "$META" ] || [ -L "$META" ]; then
-  echo "error: task metadata is unavailable" >&2
-  exit 1
+META=
+if [ -n "$ID" ]; then
+  META="$STATE/$ID.meta"
+  if [ ! -f "$META" ] || [ -L "$META" ]; then
+    cat >&2 <<EOF
+error: task metadata is unavailable
+remedy: this home holds no record of task $ID, so there is nothing here to
+       record this merge against. Check the task id first, because a typo lands
+       exactly here. If no task in this home owns this pull request - its task
+       was already cleaned up, or another vessel built it and handed it over -
+       merge it with no task id at all:
+         fm-pr-merge.sh --no-local-task $URL
+       That path records nothing and says so in its own output. It is not a way
+       to skip the recording for a task that does exist.
+EOF
+    exit 1
+  fi
+else
+  OWNING_TASK=$(owning_task_id)
+  if [ -n "$OWNING_TASK" ]; then
+    cat >&2 <<EOF
+error: PR $PR_NUMBER in $PR_OWNER/$PR_REPO is already recorded by task
+       $OWNING_TASK in this home, so a local task does own it and
+       --no-local-task does not describe it. Merging it that way would skip the
+       recording that task's cleanup reads to verify its work landed.
+remedy: merge it naming the task it belongs to:
+         fm-pr-merge.sh $OWNING_TASK $URL
+EOF
+    exit 1
+  fi
 fi
 
 # Refuse a placeholder title before any state is recorded and before the merge,
@@ -256,11 +359,23 @@ EOF
   exit 1
 fi
 
-"$SCRIPT_DIR/fm-pr-check.sh" "$ID" "$URL"
-grep -qxF "pr=$URL" "$META" || {
-  echo "error: PR metadata recording failed" >&2
-  exit 1
-}
+if [ -n "$ID" ]; then
+  "$SCRIPT_DIR/fm-pr-check.sh" "$ID" "$URL"
+  grep -qxF "pr=$URL" "$META" || {
+    echo "error: PR metadata recording failed" >&2
+    exit 1
+  }
+else
+  # Said out loud, and before the merge, so this outcome can never be mistaken
+  # for the recorded one by whoever reads the run afterwards.
+  cat <<EOF
+note: PR $PR_NUMBER in $PR_OWNER/$PR_REPO is being merged with no local task, so
+      no pr= and no pr_head= were recorded and no merge watch was armed. Nothing
+      here will need that record: it exists so a task's cleanup can verify its
+      work landed, and this pull request has no task in this home to clean up. A
+      merge naming a task still records both.
+EOF
+fi
 
 merge_args=()
 if ! caller_has_merge_method "$@"; then
