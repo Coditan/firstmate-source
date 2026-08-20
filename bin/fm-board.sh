@@ -240,6 +240,37 @@ appearance_elements() {  # <file>
       return count
     }
 
+    function points_paint(s, polygon, stroke,   cross, distinct, i, j, k, n, value) {
+      for (i in point_x) { delete point_x[i] }
+      for (i in point_y) { delete point_y[i] }
+      n = 0
+      while (match(s, /[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?/)) {
+        value = substr(s, RSTART, RLENGTH) + 0
+        s = substr(s, RSTART + RLENGTH)
+        if (n % 2 == 0) { point_x[int(n / 2) + 1] = value }
+        else { point_y[int(n / 2) + 1] = value }
+        n++
+      }
+      if (n % 2 != 0) { return 0 }
+      n = int(n / 2)
+      distinct = 0
+      for (i = 2; i <= n; i++) {
+        if (point_x[i] != point_x[1] || point_y[i] != point_y[1]) { distinct = 1; break }
+      }
+      if (stroke != "" && stroke != "none" && distinct) { return 1 }
+      if (!polygon || n < 3) { return 0 }
+      for (i = 1; i <= n - 2; i++) {
+        for (j = i + 1; j <= n - 1; j++) {
+          for (k = j + 1; k <= n; k++) {
+            cross = (point_x[j] - point_x[i]) * (point_y[k] - point_y[i]) \
+              - (point_y[j] - point_y[i]) * (point_x[k] - point_x[i])
+            if (cross != 0) { return 1 }
+          }
+        }
+      }
+      return 0
+    }
+
     function visible_paint(s,   style, opacity, display, visibility) {
       style = tolower(attribute(s, "style"))
       opacity = attribute(s, "opacity")
@@ -276,8 +307,7 @@ appearance_elements() {  # <file>
       }
       if (tag == "polygon" || tag == "polyline") {
         points = attribute(s, "points")
-        if (number_count(points) < 4) { return 0 }
-        return tag == "polygon" || (stroke != "" && stroke != "none")
+        return points_paint(points, tag == "polygon", stroke)
       }
       if (tag == "path") {
         d = attribute(s, "d")

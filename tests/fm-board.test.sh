@@ -517,15 +517,15 @@ test_unusable_symbol_definitions_are_refused() {
 test_nonpainting_symbol_geometry_is_refused() {
   local bad_home=$TMP_ROOT/nonpainting-marks-home case_name mark status
   mkdir -p "$bad_home/config"
-  for case_name in empty-path missing-reference; do
+  for case_name in empty-path missing-reference two-point-polygon; do
     {
       printf '<style>body{display:block}</style>\n<svg><defs>\n'
       for mark in open pencil struck gate held run void; do
-        if [ "$case_name" = empty-path ]; then
-          printf '<symbol id="fm-mk-%s"><path/></symbol>\n' "$mark"
-        else
-          printf '<symbol id="fm-mk-%s"><use href="#missing"/></symbol>\n' "$mark"
-        fi
+        case "$case_name" in
+          empty-path) printf '<symbol id="fm-mk-%s"><path/></symbol>\n' "$mark" ;;
+          missing-reference) printf '<symbol id="fm-mk-%s"><use href="#missing"/></symbol>\n' "$mark" ;;
+          two-point-polygon) printf '<symbol id="fm-mk-%s"><polygon points="0,0 10,10"/></symbol>\n' "$mark" ;;
+        esac
       done
       printf '</defs></svg>\n'
     } > "$bad_home/config/board-appearance.html"
@@ -538,7 +538,7 @@ test_nonpainting_symbol_geometry_is_refused() {
       "$case_name refusal did not identify the absent usable mark"
     assert_absent "$OUT" "$case_name geometry was refused but a board was still written"
   done
-  pass "empty paths and unresolved references cannot satisfy the mark contract"
+  pass "nonpainting geometry cannot satisfy the mark contract"
 }
 
 # --- the versioned layout is genuinely shared --------------------------------
