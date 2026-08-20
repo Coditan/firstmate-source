@@ -284,8 +284,19 @@ fi
 # the approved path it replaces this check rather than stacking on top of it - see
 # "the two paths" in the header for why stacking them would make that path
 # unreachable rather than merely careful.
+#
+# The refusal names WHICH condition it hit, because more than one reaches this
+# point and they are not the same news. "The captain spoke" is a fact about the
+# captain; "presence could not be established" is a fact about the transcript, and
+# the fail-safe in fm_context_captain_active deliberately reports it as present.
+# Both refuse - unknown must keep meaning present - but an operator who is told
+# the first when the second is true has been sent to look in the wrong place, and
+# on 2026-08-20 that cost three attempts before anyone measured underneath it.
 if [ "$CAPTAIN_APPROVED" -eq 0 ] && fm_context_captain_active "$FM_CONTEXT_LAST_HUMAN_TS"; then
-  refuse "the captain has been active within the last ${FM_CONTEXT_CAPTAIN_IDLE_SECS}s; ask before resetting instead of resetting during a live conversation, and re-run with --captain-approved only once the captain has actually approved"
+  if [ "$FM_CONTEXT_CAPTAIN_PRESENCE" = spoke ]; then
+    refuse "$FM_CONTEXT_CAPTAIN_PRESENCE_WHY; ask before resetting instead of resetting during a live conversation, and re-run with --captain-approved only once the captain has actually approved"
+  fi
+  refuse "$FM_CONTEXT_CAPTAIN_PRESENCE_WHY, and a presence that cannot be established counts as present rather than absent; repair what stopped it being readable, or re-run with --captain-approved once the captain has actually approved"
 fi
 
 # --- 4. the fleet is still quiet, re-checked at the moment of the discard ---

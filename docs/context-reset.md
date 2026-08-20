@@ -152,21 +152,52 @@ The wake is a diagnosis; the authority for this path is the captain's answer, an
 
 ## How captain presence is decided
 
-Claude Code usually stamps every user record in the transcript with a structural origin, so the scan starts from provenance fields and uses message text only to classify syntactic Firstmate operational inputs whose producer metadata was lost:
+Two tests decide it, in this order, and the order is the whole point.
+
+**First the marker, then the provenance.**
+Any string-content user record that `bin/fm-operational-input.sh` classifies is a Firstmate delivery and is dropped, whatever provenance it carries.
+Only what survives that is read for its structural origin fields.
 
 | Record shape | Meaning |
 | --- | --- |
-| `origin.kind == "human"` | a genuine captain prompt (`promptSource` `typed`, `queued`, or `suggestion_accepted`) |
+| classified by `bin/fm-operational-input.sh`, on any provenance at all | a Firstmate delivery: current `FIRSTMATE_OP` kinds, `from-firstmate`, and the legacy operational forms. Never captain activity |
+| `origin.kind == "human"`, unmarked | a genuine captain prompt (`promptSource` `typed`, `queued`, or `suggestion_accepted`) |
 | `origin.kind == "task-notification"`, `promptSource == "system"` | a background-task wake delivery - this is how an unattended session keeps moving, and it must never read as the captain |
 | `isMeta: true` | a hook or system injection |
 | array content of `tool_result` | a tool result |
-| string content, no origin, no promptSource, classified by `bin/fm-operational-input.sh` | a Firstmate operational input whose producer metadata was lost; current `FIRSTMATE_OP` kinds, `from-firstmate`, and legacy operational forms are excluded from captain activity |
-| string content, no origin, no promptSource, not classified by `bin/fm-operational-input.sh` | an unattributed but unmarked user message, including slash-command expansion output; it still counts as human so ambiguity blocks autonomous reset |
+| string content, no origin, no promptSource, unmarked | an unattributed but unmarked user message, including slash-command expansion output; it still counts as human so ambiguity blocks autonomous reset |
 
-The shared scan therefore publishes exactly four things from the transcript: the last assistant record's token `usage` numbers, the timestamp of the last genuine captain prompt, that same record's own `uuid`, and the file's byte size.
+**Provenance cannot separate Firstmate from the captain, because Firstmate speaks through the captain's own input channel.**
+Until 2026-08-20 the marker test ran only on the last row - records with no origin and no promptSource - on the belief that a structural origin was enough for everything above it.
+It is not.
+A wake reaches the session by being TYPED into its pane, so the harness stamps it `origin.kind == "human"`, `promptSource == "typed"`: byte for byte the provenance of a captain prompt.
+The structural test matched first, the classifier was never consulted, and every delivered wake re-dated the captain to the moment of its own delivery.
+
+That made the mechanism defeat itself, and the shape is worth stating plainly because nothing about it is specific to this seat.
+The watcher picked the reset branch at the moment it EMITTED the wake, and the act of delivering that wake wrote the record that made `bin/fm-context-reset.sh` refuse the very order it had just given.
+The reset branch could not be carried out on any seat that receives wakes, which is every seat.
+Measured on this home 2026-08-20: four such cycles over three hours, with the ask branch interleaving.
+
+The same fact killed the widening rule below without anyone being able to see it.
+The bounded tail of a busy session always holds a delivered wake, every wake counted as a captain record, so a record was always "found" and the widen never ran.
+Fixing the classification is what makes that path load-bearing for the first time.
+
+The shared scan publishes exactly four things from the transcript: the last assistant record's token `usage` numbers, the timestamp of the last genuine captain prompt, that same record's own `uuid`, and the file's byte size.
 The id is there because the captain-approved path has to NAME the record it treated as the approval, and a clock reading cannot name one.
 Message content is inspected only for `bin/fm-operational-input.sh`'s syntactic operational-input classification and is never printed; a record id is the same structural metadata as the origin fields above, not content.
 Every ambiguity resolves toward "the captain is here", because a false quiet costs a discarded conversation and a false busy costs one deferred reset.
+
+**What this costs, stated rather than hidden.**
+`bin/fm-operational-input.sh` says plainly that a successful parse proves syntax and never sender identity: the marker is copyable and authenticates nobody.
+Running it ahead of provenance therefore means a captain message that happens to match one of those forms exactly would not count as captain activity.
+That is accepted rather than overlooked, for two reasons.
+It is unreachable by accident - the current forms open with U+2063, and the legacy ones require an exact full-string or long multi-line match - and there is no third option available: a delivered wake and a captain prompt are identical in every structural field, so either the marker decides or nothing does.
+The cost of getting it wrong in that direction is one captain message not blocking a reset that still has to pass the receipt, the quiet check and the growth bound; the cost of the alternative was a mechanism that could not fire at all.
+
+Only Claude reaches any of this.
+The transcript path comes solely from `state/.primary-transcript`, and `bin/fm-sessionstart-nudge.sh` records `status=error`, `error=no-hook-payload` on Codex, Grok, OpenCode and Pi, because none of their registrations hands the wrapper a payload on stdin - Codex drains it before executing the wrapper, the other three pass no input at all.
+`fm_context_record_read` refuses an error record, so `fm_context_scan` never runs there.
+`bin/fm-operational-input.sh` itself is unchanged and its other consumers on every harness are unaffected.
 
 **An absent record is not evidence of absence.**
 The read is bounded to the last `FM_CONTEXT_TAIL_BYTES` so that one watcher poll can never become an unbounded read of a multi-hundred-megabyte transcript.
@@ -230,6 +261,7 @@ A resolved condition clears it, so the next outage reports as a first one.
 Every wake the watcher raises here - `reset`, `ask`, `blocked`, and `unenforced` alike - is reported at most once per `FM_CONTEXT_ERROR_RESURFACE` while the condition behind it is unchanged.
 Every branch here describes a condition rather than an event - a present captain stays present, a broken hook stays broken, an unmeasurable transcript stays unmeasurable - so repeating any of them on the poll cadence would spend a model turn every five minutes on news that has not changed, which is the opposite of what this mechanism is for.
 The throttle is keyed on a branch class the predicate publishes as a stable token, never on the payload's wording, so rewording a message can never quietly merge two conditions under one key.
+The ask payload names which condition took that branch - a captain who spoke, away mode, or a presence that could not be established - and that clause is deliberately not part of the key: all three mean the same thing to do, so moving between them is not a change worth a fresh wake.
 A condition that *changes* surfaces on the very next poll: a captain who goes away does not have to wait out the ask throttle before the reset branch can fire.
 
 The throttle is cleared only when the condition genuinely resolves - nothing is running in this home, or the session is back under the ceiling.
@@ -263,7 +295,10 @@ They are listed in the order they are evaluated, which is the order they fire in
 7. The captain has spoken since the receipt was written.
 8. On the captain-approved path only: the captain record carries no id the log could cite, its timestamp is unreadable, or the receipt was filed before it rather than after. A same-second filing reads as not-after and refuses, which biases the one ambiguous case toward refusing and costs at most a second.
 9. Away mode is active - on either path.
-10. The captain has been active within `FM_CONTEXT_CAPTAIN_IDLE_SECS`. Not applied on the captain-approved path, where the approval replaces the inference; see "when the captain approves" above.
+10. The captain counts as present. Not applied on the captain-approved path, where the approval replaces the inference; see "when the captain approves" above.
+    Three different conditions reach this refusal and it names which one it hit: the captain has been active within `FM_CONTEXT_CAPTAIN_IDLE_SECS`, the captain's last timestamp could not be read, or the current time could not be read.
+    The last two are the fail-safe in "an absent record is not evidence of absence" working as intended - unknown keeps meaning present - and the refusal says so rather than asserting activity nothing established.
+    Refusal 6 above catches the fourth condition, no captain record at all, before this one is reached.
 11. The fleet is no longer quiet: an undrained wake, a routed request awaiting its reply, or a worker waiting on an answer.
 12. The re-entry hook is no longer wired: it no longer runs `bin/fm-sessionstart-nudge.sh` on a clear, or that script is gone. This checks the wiring, not that anything is injected; see "the way back in, precisely" above.
 13. Supervision is not running.
@@ -362,6 +397,45 @@ whether it meant approval is not something this tool can check.
 | The named record is a real captain record | `27d05873-...` is an `origin.kind == "human"` record in that transcript, and its last one |
 | The memory is verifiably gone | Asked for a codeword given before the reset, the lab session answered "I don't have any codeword - this conversation was just cleared" |
 | The harness process survives | Pane pid `1559658` before the clear and after it, as the 2026-08-02 evidence above also found |
+
+The refusal text quoted in that block is what the tool printed on 2026-08-10.
+The autonomous refusal was reworded on 2026-08-20, in the change below, so that it names which of its conditions it hit; the block is left as recorded, because it is evidence of a moment rather than a statement of current wording.
+
+### A delivered wake was counting as the captain
+
+Measured on this home 2026-08-20, Claude Code on tmux, against the primary session's own real transcript.
+No reset was attempted and nothing was discarded: every reading below is the shared predicates run directly, read-only.
+
+The wake record's own structure, which is the whole finding - it is stamped exactly as a captain prompt is:
+
+```
+$ jq -c 'select(.type=="user") | {origin, promptSource, isMeta}' <the 04:27:14.510Z record>
+{"origin":{"kind":"human"},"promptSource":"typed","isMeta":null}
+
+$ jq -r '.message.content' <the same record> | bin/fm-operational-input.sh classify
+watcher
+```
+
+The classifier recognised it all along.
+The scan never asked it, because `.origin.kind == "human"` matched first.
+
+Against a copy of the transcript cut off immediately after that record, so the newest user record is the delivered wake:
+
+| Reading | Before | After |
+|---|---|---|
+| `FM_CONTEXT_LAST_HUMAN_TS` | `2026-08-20T04:27:14.510Z` - the wake itself | `2026-08-19T23:35:04.049Z` - the prior genuine captain record, `origin.kind == "human"`, unmarked |
+| `fm_context_captain_active` | present; 62 seconds old at the moment of the incident, which is what refused the reset | absent |
+| `FM_CONTEXT_SCAN_WIDENED` | `false` - a record was always "found", so the widen never ran | `false` at the 2 MiB bound, `true` at a 200 KB bound, where the tail holds only operational records |
+
+And the direction that matters more, on the live transcript at the time of the fix, whose newest user record is a real captain message:
+
+```
+$ fm_context_scan "$transcript"; fm_context_captain_active "$FM_CONTEXT_LAST_HUMAN_TS"
+TS=2026-08-20T07:36:10.654Z  ->  ACTIVE (spoke)
+```
+
+The guard still refuses.
+A fix that made the scan skip too much would silently disable the protection that keeps a reset out of a live conversation, which is worse than the defect it repairs, so both directions are asserted in `tests/fm-context-reset.test.sh` rather than only the one that was broken.
 
 ## Tunables
 
