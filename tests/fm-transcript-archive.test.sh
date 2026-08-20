@@ -14,7 +14,12 @@
 #   2. The pattern file must not match itself. A detector whose patterns appear
 #      in plain text writes those patterns into the next session transcript, and
 #      every later scan then inflates on its own tooling.
-#   3. THIS FILE must not match the pattern file either. Property 2 closes the
+#   3. A DOCUMENTED SEARCH MUST NOT SILENTLY RETURN NOTHING. The store is
+#      compressed, and plain grep reads a compressed file as no matches with no
+#      error - the same silent emptiness as 1, arriving through the
+#      documentation instead of through the reader. So the search path is
+#      exercised over a compressed store here.
+#   4. THIS FILE must not match the pattern file either. Property 2 closes the
 #      pattern list; it does not close the fixtures. The first build of this tool
 #      left five real redactions in its own session from fixtures typed in plain
 #      form. Every credential-shaped fixture below is therefore assembled at run
@@ -30,11 +35,26 @@ set -u
 REDUCE="$ROOT/bin/fm-transcript-reduce.py"
 SEARCH="$ROOT/bin/fm-transcript-search.sh"
 REFRESH="$ROOT/bin/fm-transcript-refresh.sh"
+ZCAT="$ROOT/bin/fm-transcript-zcat.sh"
 PATTERNS="$ROOT/bin/fm-transcript-patterns/patterns.txt"
 INJECTED="$ROOT/bin/fm-transcript-patterns/injected-prefixes.txt"
 
 TMP=""
 fm_test_tmproot TMP fm-transcript
+
+# --- reading the store ------------------------------------------------------
+
+# Every session in the store is one zstd file, so a test reads it the way a
+# search does - through the decompressor - and never by opening it as text.
+read_session() {
+  zstd -dcq -- "$1"
+}
+
+# Session files in a store, both shapes, so a test that expects only one shape
+# has to say so.
+store_files() {
+  find "$1" \( -name '*.txt.zst' -o -name '*.txt' \) -type f | sort
+}
 
 # --- fixture builders -------------------------------------------------------
 
@@ -101,7 +121,7 @@ PY
 
 test_tool_is_tracked_and_runnable() {
   local f
-  for f in "$REDUCE" "$SEARCH" "$REFRESH"; do
+  for f in "$REDUCE" "$SEARCH" "$REFRESH" "$ZCAT"; do
     assert_present "$f" "missing tool file: $f"
     [ -x "$f" ] || fail "$f must be executable"
   done
@@ -163,7 +183,8 @@ test_claude_reader_reads_claude_material() {
   write_claude_session "$TMP/claude-in/proj"
   out=$(python3 "$REDUCE" --source claude --in "$TMP/claude-in" --out "$TMP/claude-out" 2>&1) || rc=$?
   [ "$rc" -eq 0 ] || { printf '%s\n' "$out" >&2; fail "claude reader failed on claude material"; }
-  body=$(cat "$TMP/claude-out/proj/sess.txt")
+  assert_present "$TMP/claude-out/proj/sess.txt.zst" 'the session must be written compressed'
+  body=$(read_session "$TMP/claude-out/proj/sess.txt.zst")
   assert_contains "$body" 'find the tugboat host' 'the user side must survive verbatim'
   assert_contains "$body" 'looking now' 'the assistant side must survive verbatim'
   assert_contains "$body" '$ ls -la /srv' 'the command must survive verbatim'
@@ -177,7 +198,7 @@ test_codex_reader_reads_codex_material() {
   write_codex_session "$TMP/codex-in/2026/08/18"
   out=$(python3 "$REDUCE" --source codex --in "$TMP/codex-in" --out "$TMP/codex-out" 2>&1) || rc=$?
   [ "$rc" -eq 0 ] || { printf '%s\n' "$out" >&2; fail "codex reader failed on codex material"; }
-  body=$(cat "$TMP/codex-out/2026/08/18/rollout-2026-08-18T11-00-00-abc.txt")
+  body=$(read_session "$TMP/codex-out/2026/08/18/rollout-2026-08-18T11-00-00-abc.txt.zst")
   assert_contains "$body" 'where did the harbour report go' 'the user side must survive verbatim'
   assert_contains "$body" '$ grep -r harbour' 'the command must survive verbatim'
   assert_contains "$body" '# cwd      /home/x/bravo' 'session_meta must supply the header'
@@ -242,7 +263,7 @@ test_redactor_masks_a_synthetic_credential() {
   [ "$rc" -eq 0 ] || { printf '%s\n' "$out" >&2; fail 'the reducer failed on the credential fixture'; }
   assert_contains "$out" 'github-token' 'the run summary must count the prefix-anchored class'
   assert_contains "$out" 'assigned-secret' 'the run summary must count the context-anchored class'
-  body=$(cat "$TMP/creds-out/proj/creds.txt")
+  body=$(read_session "$TMP/creds-out/proj/creds.txt.zst")
   assert_contains "$body" 'REDACTED github-token' 'a removed value must leave a naming marker'
   case "$body" in
     *"$tok"*) fail 'the prefix-anchored value survived into the derivative' ;;
@@ -261,10 +282,11 @@ test_verification_is_zero_on_clean_and_loud_on_dirty() {
   # A verification that can only ever say zero proves nothing, so plant one.
   mkdir -p "$TMP/dirty"
   tok=$(fixture_prefixed_token)
-  printf 'a line carrying %s in it\n' "$tok" >"$TMP/dirty/planted.txt"
+  printf 'a line carrying %s in it\n' "$tok" |
+    zstd -q -o "$TMP/dirty/planted.txt.zst"
   rc=0
   out=$(python3 "$REDUCE" --verify-only --out "$TMP/dirty" 2>&1) || rc=$?
-  [ "$rc" -ne 0 ] || fail 'verification must fail on a derivative that still carries a value'
+  [ "$rc" -ne 0 ] || fail 'verification must fail on a compressed derivative that still carries a value'
   assert_contains "$out" 'HIT' 'a residual hit must be reported with its file'
   case "$out" in
     *"$tok"*) fail 'verification must report classes and counts, never the matched value' ;;
@@ -285,6 +307,96 @@ test_verification_over_nothing_is_not_an_all_clear() {
     *'0 residual hits'*) fail 'an unverifiable directory must not print a zero-hit verdict' ;;
   esac
   pass "verifying a directory with no derivative in it refuses instead of reporting zero"
+}
+
+# --- the store is compressed, wholly ----------------------------------------
+
+test_the_store_is_written_compressed_and_leaves_nothing_plain() {
+  local out rc=0 plain
+  write_claude_session "$TMP/zst-in/proj"
+  out=$(python3 "$REDUCE" --source claude --in "$TMP/zst-in" --out "$TMP/zst-out" 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] || { printf '%s\n' "$out" >&2; fail 'the reducer failed writing a compressed store'; }
+  assert_present "$TMP/zst-out/proj/sess.txt.zst" 'the session must land as one compressed file'
+  assert_absent "$TMP/zst-out/proj/sess.txt" 'no plain copy of a written session may be left behind'
+  plain=$(find "$TMP/zst-out" -name '*.txt' -type f | wc -l)
+  [ "$plain" -eq 0 ] || fail "the store must hold no plain session files, found $plain"
+  assert_contains "$out" 'on disk' 'the summary must state what the store actually costs on disk'
+  assert_grep 'sess.txt.zst' "$TMP/zst-out/_index.tsv" \
+    'the index must name the file that exists, not the one that used to'
+  pass "a build writes one compressed file per session and leaves no plain copy"
+}
+
+# The archive keeps sessions the raw store no longer has, and a rebuild cannot
+# reach them. Left alone they would stay plain forever - half a compressed
+# archive and half not - so a rebuild compresses them where they lie, without
+# removing the one thing they carry, which is their content.
+test_a_rebuild_compresses_a_retained_session_it_cannot_rebuild() {
+  local out rc=0 body
+  write_claude_session "$TMP/keep-in/proj"
+  python3 "$REDUCE" --source claude --in "$TMP/keep-in" --out "$TMP/keep-out" >/dev/null 2>&1 \
+    || fail 'the first build failed'
+  mkdir -p "$TMP/keep-out/gone"
+  printf '# session gone/old.jsonl\n# cwd      /home/x/gone\n\nan older answer worth keeping\n' \
+    >"$TMP/keep-out/gone/old.txt"
+  out=$(python3 "$REDUCE" --source claude --in "$TMP/keep-in" --out "$TMP/keep-out" 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] || { printf '%s\n' "$out" >&2; fail 'the rebuild failed'; }
+  assert_absent "$TMP/keep-out/gone/old.txt" 'the retained plain session must not be left uncompressed'
+  assert_present "$TMP/keep-out/gone/old.txt.zst" 'the retained session must survive as a compressed file'
+  body=$(read_session "$TMP/keep-out/gone/old.txt.zst")
+  assert_contains "$body" 'an older answer worth keeping' \
+    'compressing a retained session must not cost a word of it'
+  assert_contains "$out" 'converged' 'the run must say what it converged rather than doing it silently'
+  pass "a rebuild converges a retained plain session into the compressed store, content intact"
+}
+
+test_verification_reads_the_compressed_store_it_verifies() {
+  local out rc=0
+  out=$(python3 "$REDUCE" --verify-only --out "$TMP/zst-out" 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] || { printf '%s\n' "$out" >&2; fail 'verification failed over a compressed store'; }
+  assert_contains "$out" '1 files scanned' \
+    'verification must count the compressed session it read, not skip it as an unknown file'
+  assert_contains "$out" '0 residual hits' 'verification must state the residual count'
+  pass "verification opens the compressed store and counts what it scanned"
+}
+
+# A store file the decompressor cannot read is not a clean file; it is a file
+# nobody read. Counting it as verified is the silent all-clear this tool exists
+# to refuse.
+test_verification_refuses_a_store_file_it_cannot_read() {
+  local out rc=0
+  mkdir -p "$TMP/corrupt"
+  printf 'not a compressed file at all\n' >"$TMP/corrupt/broken.txt.zst"
+  out=$(python3 "$REDUCE" --verify-only --out "$TMP/corrupt" 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail 'a store file that cannot be decompressed must not verify clean'
+  assert_contains "$out" 'could not be read' 'the refusal must say the file was never verified'
+  pass "an unreadable store file is reported as unread rather than counted as clean"
+}
+
+test_a_build_without_a_compressor_refuses_before_writing() {
+  local out rc=0
+  write_claude_session "$TMP/nozstd-in/proj"
+  out=$(FM_ZSTD="$TMP/no-such-zstd" python3 "$REDUCE" --source claude \
+        --in "$TMP/nozstd-in" --out "$TMP/nozstd-out" 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail 'a build with no compressor must not exit 0'
+  assert_contains "$out" 'not on PATH' 'the refusal must name the missing tool'
+  assert_contains "$out" 'half compressed and half plain' 'the refusal must say what it is avoiding'
+  assert_absent "$TMP/nozstd-out" 'nothing may be written when the compressor is missing'
+  pass "a missing compressor refuses the build instead of writing a store nobody can search"
+}
+
+test_refresh_without_a_compressor_leaves_no_archive() {
+  local home out rc=0
+  home="$TMP/refresh-nozstd-home"
+  write_claude_session "$TMP/refresh-nozstd-src/claude/project"
+  out=$(FM_HOME="$home" FM_CLAUDE_SESSIONS="$TMP/refresh-nozstd-src/claude" \
+        FM_CODEX_SESSIONS="$TMP/refresh-nozstd-src/codex" FM_ZSTD="$TMP/no-such-zstd" \
+        "$REFRESH" 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail 'refresh with no compressor must not exit 0'
+  assert_contains "$out" 'half compressed and half plain' \
+    'refresh must preserve the reducer refusal message'
+  assert_absent "$home/data/transcripts" \
+    'refresh must not create an archive before the compressor prerequisite passes'
+  pass "refresh with no compressor refuses before creating the archive"
 }
 
 # --- search ------------------------------------------------------------------
@@ -344,6 +456,23 @@ test_search_resolves_the_archive_from_fm_home() {
   pass "search resolves its archive from FM_HOME and reaches both stores"
 }
 
+test_search_formatter_is_portable_to_mawk() {
+  local home out shim
+  command -v mawk >/dev/null 2>&1 || {
+    pass "mawk is unavailable, so the portable formatter check is not applicable"
+    return
+  }
+  home=$(setup_fixture_home)
+  shim="$TMP/mawk-path"
+  mkdir -p "$shim"
+  ln -s "$(command -v mawk)" "$shim/awk"
+  out=$(PATH="$shim:$PATH" FM_HOME="$home" "$SEARCH" 'tugboat host' 2>/dev/null) \
+    || fail 'search lost a real hit when its formatter ran under mawk'
+  assert_contains "$out" 'tugboat host' \
+    'the portable formatter must preserve the matching line under mawk'
+  pass "search formatting preserves real hits under mawk as well as gawk"
+}
+
 test_search_narrows_the_file_set_by_index() {
   local home out
   home=$(setup_fixture_home)
@@ -368,6 +497,335 @@ test_search_reports_a_missing_archive_rather_than_no_matches() {
   pass "an archive that is not there reads as absent, never as no matches"
 }
 
+test_search_reads_the_compressed_store() {
+  local home out plain
+  home=$(setup_fixture_home)
+  plain=$(find "$home/data/transcripts" -name '*.txt' -type f | wc -l)
+  [ "$plain" -eq 0 ] || fail "the fixture archive must be wholly compressed, found $plain plain files"
+  out=$(FM_HOME="$home" "$SEARCH" 'tugboat host' 2>/dev/null) \
+    || fail 'search found nothing in a compressed archive it should have matched'
+  assert_contains "$out" 'tugboat host' 'the matching line must come back out of the compressed file'
+  assert_contains "$out" '.txt.zst' 'the hit must name the compressed session file it came from'
+  assert_contains "$out" 'cwd      /home/x/alpha' \
+    'the session header must be read through the decompressor too, not skipped'
+  pass "search reads the compressed store and still reports the session header with the hit"
+}
+
+# The case that broke twice in CI was a machine whose ripgrep did not behave
+# like this one's. The search no longer uses ripgrep at all, and that is proven
+# by running it on a PATH where ripgrep genuinely cannot be resolved - not by
+# stubbing a flag, which is what let the defect through the previous two rounds.
+# The machine this was written on reports a closed pipe as signal 141. The CI
+# runner's zstd reports it as an ordinary error instead, and a search that
+# matched EVERY session therefore exited 2 there while passing here. So the rule
+# is tested against a reader that behaves like the runner's rather than like
+# this seat's: the search script itself runs, with only its sibling reader
+# swapped for one that swallows the signal and reports a plain failure.
+test_a_reader_that_hides_the_signal_still_reports_a_match() {
+  local store bindir i rc=0 out count expected=6
+  store="$TMP/odd-reader/claude-redacted"
+  rm -rf "$TMP/odd-reader"
+  mkdir -p "$store"
+  for i in $(seq 1 "$expected"); do
+    {
+      printf '# session odd%s.jsonl\n# cwd      /home/x/odd%s\n' "$i" "$i"
+      printf '# span     2026-08-19 10:00:00 .. 2026-08-19 10:05:00\n\n'
+      printf '    the sought phrase sits near the top of this session\n'
+      yes '    a long tail that keeps the decompressor writing well past the match' 2>/dev/null |
+        head -20000
+    } | zstd -q -3 -o "$store/odd$i.txt.zst"
+  done
+
+  bindir="$TMP/odd-reader-bin"
+  rm -rf "$bindir"
+  mkdir -p "$bindir"
+  cp "$SEARCH" "$bindir/fm-transcript-search.sh"
+  cat >"$bindir/fm-transcript-zcat.sh" <<'EOF'
+#!/usr/bin/env bash
+# Models a decompressor that reports a closed pipe as an ordinary failure
+# instead of dying on the signal, which is what the CI runner's zstd does.
+zstd -dcq -- "$1" 2>/dev/null || exit 1
+EOF
+  chmod +x "$bindir/fm-transcript-search.sh" "$bindir/fm-transcript-zcat.sh"
+
+  out=$(FM_TRANSCRIPT_ARCHIVE="$TMP/odd-reader" "$bindir/fm-transcript-search.sh" \
+        'sought phrase' --files-only 2>/dev/null) || rc=$?
+  [ "$rc" -eq 0 ] \
+    || fail "a search matching every session must exit 0 even when the reader hides the signal, got $rc"
+  count=$(printf '%s\n' "$out" | grep -c 'odd[0-9]*\.txt\.zst')
+  [ "$count" -eq "$expected" ] || fail "reported $count of $expected sessions"
+  pass "a reader that reports the closed pipe as a plain failure does not turn a full match into an error"
+}
+
+# A reduced session is UTF-8 by construction, but it quotes material that is
+# not always clean, and one stray control byte makes grep call the whole file
+# binary and print no lines for it. Measured on the live archive: five sessions
+# that --files-only reported as containing the term were missing from the
+# context output of the same query. A search that answers one way per session
+# and another way per line is disagreeing with itself.
+test_a_session_with_a_control_byte_is_still_reported() {
+  local store out rc=0
+  store="$TMP/binary-byte/claude-redacted"
+  rm -rf "$TMP/binary-byte"
+  mkdir -p "$store"
+  {
+    printf '# session odd.jsonl\n# cwd      /home/x/odd\n'
+    printf '# span     2026-08-19 10:00:00 .. 2026-08-19 10:05:00\n\n'
+    printf '    a quoted blob follows: \001\002\003 and then text\n'
+    printf '    the sought phrase is on its own line here\n'
+  } | zstd -q -3 -o "$store/odd.txt.zst"
+
+  out=$(FM_TRANSCRIPT_ARCHIVE="$TMP/binary-byte" "$SEARCH" 'sought phrase' --files-only 2>/dev/null) || rc=$?
+  [ "$rc" -eq 0 ] || fail "--files-only must find a session carrying a control byte, got exit $rc"
+  assert_contains "$out" 'odd.txt.zst' '--files-only must name the session'
+  rc=0
+  out=$(FM_TRANSCRIPT_ARCHIVE="$TMP/binary-byte" "$SEARCH" 'sought phrase' -C 1 2>/dev/null) || rc=$?
+  [ "$rc" -eq 0 ] || fail "the context path must find it too, got exit $rc"
+  assert_contains "$out" 'sought phrase' \
+    'the matching line must be printed, not swallowed as an unprintable file'
+  pass "a session carrying a control byte is reported by both search paths, not silently skipped"
+}
+
+# THE CASE EVERY OTHER FIXTURE MISSED. A scan that stops reading as soon as it
+# can answer kills the decompressor feeding it with SIGPIPE. Treating that
+# ordinary event as a scanner failure returned 0 matching sessions where 75 were
+# expected, over a full archive, and no test saw it: a one-session fixture with
+# one match near the end fits in the pipe buffer, so nothing ever short-circuits.
+# This fixture puts the match at the TOP of each session and a long tail behind
+# it, which is what forces the reader to stop early while the decompressor is
+# still writing. If the defect returns, this is what fails.
+test_a_scan_that_stops_early_still_reports_every_session() {
+  local store i out rc=0 count expected=12
+  store="$TMP/early-stop/claude-redacted"
+  rm -rf "$TMP/early-stop"
+  mkdir -p "$store"
+  for i in $(seq 1 "$expected"); do
+    {
+      printf '# session big%s.jsonl\n# cwd      /home/x/p%s\n' "$i" "$i"
+      printf '# span     2026-08-18 10:00:00 .. 2026-08-18 10:05:00\n\n'
+      printf '    the sought phrase sits near the top of this session\n'
+      yes '    a long tail that keeps the decompressor writing well past the match' |
+        head -20000
+    } | zstd -q -3 -o "$store/big$i.txt.zst"
+  done
+
+  out=$(FM_TRANSCRIPT_ARCHIVE="$TMP/early-stop" "$SEARCH" 'sought phrase' --files-only 2>/dev/null) || rc=$?
+  [ "$rc" -eq 0 ] || fail "a search matching every session must exit 0, got $rc"
+  count=$(printf '%s\n' "$out" | grep -c 'big[0-9]*\.txt\.zst')
+  [ "$count" -eq "$expected" ] \
+    || fail "--files-only reported $count of $expected sessions; a scan that stops early lost the rest"
+
+  rc=0
+  out=$(FM_TRANSCRIPT_ARCHIVE="$TMP/early-stop" "$SEARCH" 'sought phrase' -C 1 2>/dev/null) || rc=$?
+  [ "$rc" -eq 0 ] || fail "the context path must exit 0 when every session matched, got $rc"
+  count=$(printf '%s\n' "$out" | grep -c '^=== ')
+  [ "$count" -eq "$expected" ] \
+    || fail "the context path reported $count of $expected sessions"
+  pass "every session is reported when the scan stops reading each one early"
+}
+
+test_search_works_on_a_machine_without_ripgrep() {
+  local home out bindir tool
+  home=$(setup_fixture_home)
+  bindir="$TMP/no-rg-path"
+  rm -rf "$bindir"
+  mkdir -p "$bindir"
+  # A PATH holding exactly what the search is allowed to need, and nothing else.
+  # type -P resolves the executable itself: an interactive shell may carry a
+  # function or alias by the same name, and linking that name to itself makes a
+  # fixture that proves nothing.
+  for tool in bash sh zstd grep xargs awk sed sort find wc mktemp nproc rm cat dirname tr head; do
+    if type -P "$tool" >/dev/null 2>&1; then
+      ln -sf "$(type -P "$tool")" "$bindir/$tool"
+    fi
+  done
+  PATH="$bindir" type -P rg >/dev/null 2>&1 \
+    && fail 'the no-ripgrep fixture PATH still resolves ripgrep, so it proves nothing'
+  out=$(PATH="$bindir" FM_HOME="$home" "$SEARCH" 'tugboat host' 2>/dev/null) \
+    || fail 'search failed on a machine with no ripgrep on PATH'
+  assert_contains "$out" 'tugboat host' \
+    'the hit must come back from a machine that has no ripgrep at all'
+  pass "search runs and finds its hit on a PATH where ripgrep cannot be resolved"
+}
+
+test_search_reads_plain_sessions_during_migration() {
+  local home out plain
+  home=$(setup_fixture_home)
+  plain="$home/data/transcripts/claude-redacted/migration.txt"
+  printf '# cwd      /home/x/migration\n# span     2026-08-18T10:00:00Z\nplain migration session\n' >"$plain"
+  out=$(FM_HOME="$home" "$SEARCH" 'plain migration session' 2>/dev/null) \
+    || fail 'search did not read a plain session during migration'
+  assert_contains "$out" 'plain migration session' \
+    'a plain migration-era session must remain searchable'
+  pass "search reads plain sessions that remain during migration"
+}
+
+# The reason the documentation had to change, stated as a test rather than as a
+# claim: over this store the old documented command answers "nothing here" and
+# exits as though that were true. Worse than nothing, it half answers - the
+# index is the one plain file left, so a phrase that happens to sit in its
+# first-user-message column still matches and the emptiness looks selective
+# rather than total.
+test_plain_grep_does_not_read_the_sessions() {
+  local home rc=0 out
+  home=$(setup_fixture_home)
+  out=$(grep -r 'looking now' "$home/data/transcripts" 2>/dev/null) || rc=$?
+  [ "$rc" -eq 1 ] || fail "plain grep was expected to report no matches over a compressed store, got exit $rc"
+  [ -z "$out" ] || fail 'plain grep unexpectedly read a compressed session'
+  out=$(FM_HOME="$home" "$SEARCH" 'looking now' 2>/dev/null) \
+    || fail 'the wrapper must find what plain grep could not'
+  assert_contains "$out" 'looking now' 'the same phrase must come back through the wrapper'
+  pass "plain grep reports no matches on material the wrapper finds, which is why it is no longer documented"
+}
+
+# A caller that scripts this tool reads its exit status, and the file set is
+# handed to the scanner in batches: a batch with no hit must not make a search
+# that matched look like a search that failed.
+test_search_status_says_matched_or_not_matched() {
+  local home rc=0
+  home=$(setup_fixture_home)
+  FM_HOME="$home" "$SEARCH" 'tugboat host' >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || fail "a search that matched must exit 0, got $rc"
+  rc=0
+  FM_HOME="$home" "$SEARCH" 'tugboat host' --files-only >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || fail "a --files-only search that matched must exit 0, got $rc"
+  rc=0
+  FM_HOME="$home" "$SEARCH" 'nothing here says this at all' >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 1 ] || fail "a search that matched nothing must exit 1, got $rc"
+  pass "the exit status states whether the search matched, not how a batch of it ended"
+}
+
+test_search_reports_scanner_failures_as_errors() {
+  local home rc=0
+  home=$(setup_fixture_home)
+  FM_HOME="$home" "$SEARCH" '[' >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] || fail "a malformed regex must be reported as a scanner error, got exit $rc"
+  rc=0
+  FM_HOME="$home" "$SEARCH" '[' --files-only >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] || fail "a malformed --files-only regex must be reported as a scanner error, got exit $rc"
+  rc=0
+  FM_HOME="$home" "$SEARCH" 'nothing here says this at all' >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 1 ] || fail "an ordinary no-match must remain exit 1, got $rc"
+  pass "scanner failures are errors while an ordinary no-match remains distinct"
+}
+
+test_search_reports_output_pipeline_failures_as_errors() {
+  local home bindir tool rc=0
+  home=$(setup_fixture_home)
+  bindir="$TMP/failing-sort-path"
+  rm -rf "$bindir"
+  mkdir -p "$bindir"
+  for tool in bash sh zstd grep xargs awk sed find wc mktemp nproc rm cat dirname tr head; do
+    if type -P "$tool" >/dev/null 2>&1; then
+      ln -sf "$(type -P "$tool")" "$bindir/$tool"
+    fi
+  done
+  ln -sf "$(type -P false)" "$bindir/sort"
+  PATH="$bindir" FM_HOME="$home" "$SEARCH" 'tugboat host' --files-only >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] || fail "a --files-only sort failure must exit 2, got $rc"
+  rc=0
+  PATH="$bindir" FM_HOME="$home" "$SEARCH" 'tugboat host' >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] || fail "a context sort failure must exit 2, got $rc"
+  pass "output pipeline failures are scanner errors on both search paths"
+}
+
+test_search_reports_file_gathering_failures_as_errors() {
+  local home bindir tool rc=0
+  home=$(setup_fixture_home)
+  bindir="$TMP/failing-find-path"
+  rm -rf "$bindir"
+  mkdir -p "$bindir"
+  for tool in bash sh zstd grep xargs awk sed sort wc mktemp nproc rm cat dirname tr head; do
+    if type -P "$tool" >/dev/null 2>&1; then
+      ln -sf "$(type -P "$tool")" "$bindir/$tool"
+    fi
+  done
+  ln -sf "$(type -P false)" "$bindir/find"
+  PATH="$bindir" FM_HOME="$home" "$SEARCH" 'tugboat host' --files-only >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] || fail "a file gathering failure must exit 2, got $rc"
+  pass "file gathering failures refuse before scanning a partial file set"
+}
+
+# The other half of the reader-status rule, and the half that is easy to lose:
+# once a search stops treating a closed pipe as a failure, it must still fail on
+# a session file it genuinely could not read. A store file that is not valid
+# compressed data is exactly that, and it must never pass as a session that
+# simply held no match.
+test_search_fails_on_a_store_file_it_cannot_read() {
+  local store rc=0 out size
+  store="$TMP/corrupt-store/claude-redacted"
+  rm -rf "$TMP/corrupt-store"
+  mkdir -p "$store"
+  printf 'this is not compressed data at all\n' >"$store/broken.txt.zst"
+  out=$(FM_TRANSCRIPT_ARCHIVE="$TMP/corrupt-store" "$SEARCH" 'anything at all' --files-only 2>&1 >/dev/null) || rc=$?
+  [ "$rc" -eq 2 ] \
+    || fail "a store file that cannot be read must be a scanner error, got exit $rc"
+  rc=0
+  FM_TRANSCRIPT_ARCHIVE="$TMP/corrupt-store" "$SEARCH" 'anything at all' >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] \
+    || fail "the context path must also fail on an unreadable store file, got exit $rc"
+
+  rm -f "$store/broken.txt.zst"
+  {
+    printf 'sought phrase near the top\n'
+    seq 1 10000
+  } | zstd -q -3 -o "$store/truncated.txt.zst"
+  size=$(wc -c <"$store/truncated.txt.zst")
+  truncate -s "$((size - 1))" "$store/truncated.txt.zst"
+  rc=0
+  out=$(FM_TRANSCRIPT_ARCHIVE="$TMP/corrupt-store" "$SEARCH" 'sought phrase' --files-only 2>/dev/null) || rc=$?
+  [ "$rc" -eq 2 ] \
+    || fail "a truncated matching session must be a scanner error in --files-only, got exit $rc"
+  [ -z "$out" ] \
+    || fail "a truncated matching session must not be reported as a valid match"
+  rc=0
+  FM_TRANSCRIPT_ARCHIVE="$TMP/corrupt-store" "$SEARCH" 'sought phrase' >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] \
+    || fail "the context path must reject a truncated matching session, got exit $rc"
+  pass "unreadable sessions fail whether or not their readable prefix matches"
+}
+
+test_search_without_its_tool_refuses_rather_than_finding_nothing() {
+  local home out rc=0 bindir tool
+  home=$(setup_fixture_home)
+  # A PATH with everything except the decompressor: the store cannot be read,
+  # and the caller must be told that rather than told there were no matches.
+  bindir="$TMP/no-zstd-path"
+  rm -rf "$bindir"
+  mkdir -p "$bindir"
+  for tool in bash sh grep xargs awk sed sort find wc mktemp nproc rm cat dirname tr head; do
+    if type -P "$tool" >/dev/null 2>&1; then
+      ln -sf "$(type -P "$tool")" "$bindir/$tool"
+    fi
+  done
+  out=$(PATH="$bindir" FM_HOME="$home" "$SEARCH" 'tugboat host' 2>&1) || rc=$?
+  [ "$rc" -eq 2 ] || fail "a missing search tool must be reported as such, got exit $rc"
+  assert_contains "$out" 'not installed' 'the refusal must name the missing tool'
+  case "$out" in
+    *'tugboat host'*) fail 'a refused search must not look like a search that ran' ;;
+  esac
+  pass "a missing decompressing search tool refuses instead of reporting no matches"
+}
+
+# An archive built before compression carries a README that still promises plain
+# grep. The rebuild must not overwrite what someone wrote there, and must not
+# leave the stale command standing unremarked either.
+test_refresh_names_a_readme_that_still_promises_plain_grep() {
+  local home out tick='`'
+  home=$(setup_fixture_home)
+  printf 'captain notes\n\nPlain %sgrep -r%s works too - grep is the index.\n' \
+    "$tick" "$tick" \
+    >"$home/data/transcripts/README.md"
+  out=$(FM_HOME="$home" FM_CLAUDE_SESSIONS="$TMP/home-src/claude" \
+        FM_CODEX_SESSIONS="$TMP/home-src/codex" "$REFRESH" 2>&1 >/dev/null) \
+    || fail 'refresh failed against an archive with an older README'
+  assert_contains "$out" 'still points readers at plain' \
+    'a README promising plain grep must be named as stale'
+  assert_grep 'captain notes' "$home/data/transcripts/README.md" \
+    'naming the stale sentence must not overwrite what someone wrote'
+  pass "a rebuild names a README that still promises plain grep instead of silently keeping it"
+}
+
 test_tool_is_tracked_and_runnable
 test_no_home_path_is_hardcoded
 test_patterns_file_does_not_match_itself
@@ -381,8 +839,29 @@ test_a_run_that_recovers_no_entries_fails
 test_redactor_masks_a_synthetic_credential
 test_verification_is_zero_on_clean_and_loud_on_dirty
 test_verification_over_nothing_is_not_an_all_clear
+test_the_store_is_written_compressed_and_leaves_nothing_plain
+test_a_rebuild_compresses_a_retained_session_it_cannot_rebuild
+test_verification_reads_the_compressed_store_it_verifies
+test_verification_refuses_a_store_file_it_cannot_read
+test_a_build_without_a_compressor_refuses_before_writing
+test_refresh_without_a_compressor_leaves_no_archive
 test_refresh_builds_verifies_and_lands_the_bound
 test_refresh_does_not_overwrite_an_existing_readme
 test_search_resolves_the_archive_from_fm_home
+test_search_formatter_is_portable_to_mawk
 test_search_narrows_the_file_set_by_index
 test_search_reports_a_missing_archive_rather_than_no_matches
+test_search_reads_the_compressed_store
+test_search_works_on_a_machine_without_ripgrep
+test_a_scan_that_stops_early_still_reports_every_session
+test_a_reader_that_hides_the_signal_still_reports_a_match
+test_a_session_with_a_control_byte_is_still_reported
+test_search_reads_plain_sessions_during_migration
+test_plain_grep_does_not_read_the_sessions
+test_search_status_says_matched_or_not_matched
+test_search_reports_scanner_failures_as_errors
+test_search_reports_output_pipeline_failures_as_errors
+test_search_reports_file_gathering_failures_as_errors
+test_search_fails_on_a_store_file_it_cannot_read
+test_search_without_its_tool_refuses_rather_than_finding_nothing
+test_refresh_names_a_readme_that_still_promises_plain_grep

@@ -7,8 +7,15 @@
 # The archive is rebuilt from the raw stores every time, then the detector is
 # re-run against the output and required to return zero.
 #
+# The store is written compressed, one zstd file per session, and is searched by
+# bin/fm-transcript-search.sh, which decompresses each session into grep. `zstd` is therefore a
+# hard requirement of a rebuild: the reducer refuses rather than leaving a store
+# that is half compressed and half plain. A rebuild also compresses whatever
+# plain session files it finds already in the store, so an archive built before
+# compression converges on the first refresh instead of being left behind.
+#
 # Usage:
-#   fm-transcript-refresh.sh [--fold-injected] [--limit N]
+#   fm-transcript-refresh.sh [--fold-injected] [--limit N] [--level N]
 #
 #   --fold-injected  codex only: fold machine-injected user messages down to
 #                    their marker and their tail. It shrinks the Codex store by
@@ -16,6 +23,8 @@
 #                    findings with it, because less of the material was ever
 #                    looked at. Off by default for that reason.
 #   --limit N        reduce only the first N files of each store (smoke runs).
+#   --level N        zstd compression level; the default and the measurement
+#                    behind it are in docs/session-archive.md.
 #
 # Paths, all overridable so this runs on a vessel that is not the one it was
 # written on:
@@ -44,16 +53,16 @@ CODEX_IN="${FM_CODEX_SESSIONS:-$HOME/.codex/sessions}"
 
 fold=()
 limit=()
+level=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --fold-injected) fold=(--fold-injected); shift;;
     --limit) limit=(--limit "${2:?--limit needs a number}"); shift 2;;
-    -h|--help) sed -n '2,31p' "$0" | sed 's/^# \?//'; exit 0;;
+    --level) level=(--level "${2:?--level needs a number}"); shift 2;;
+    -h|--help) sed -n '2,41p' "$0" | sed 's/^# \?//'; exit 0;;
     *) echo "unknown argument: $1" >&2; exit 2;;
   esac
 done
-
-mkdir -p "$ARCHIVE"
 
 built=0
 for s in claude codex; do
@@ -67,7 +76,8 @@ for s in claude codex; do
   fi
   echo "== reducing $s from $in_dir"
   python3 "$REDUCE" --source "$s" --in "$in_dir" --out "$ARCHIVE/$s-redacted" \
-          --quiet "${extra[@]+"${extra[@]}"}" "${limit[@]+"${limit[@]}"}"
+          --quiet "${extra[@]+"${extra[@]}"}" "${limit[@]+"${limit[@]}"}" \
+          "${level[@]+"${level[@]}"}"
   built=1
 done
 
@@ -121,7 +131,14 @@ Every claim made from this archive travels with both bounds.
     bin/fm-transcript-search.sh 'pattern' --since 2026-08-15 --cwd myproject
     bin/fm-transcript-search.sh 'pattern' --files-only
 
-Plain `grep -r` works too - grep is the index, and there is no index to go stale.
+The sessions are zstd-compressed, one file each. **Plain `grep -r` does not read
+them: it finds nothing here and says so as if the archive were empty.** Use the
+wrapper, or read a session the same way it does if you want the raw tools:
+
+    zstd -dcq some-session.txt.zst | grep 'pattern'
+
+A full scan of the content is still what answers every query, so there is no
+index here and none is to be added.
 
 ## Rebuild
 
@@ -130,4 +147,13 @@ Plain `grep -r` works too - grep is the index, and there is no index to go stale
 Full detail: `docs/session-archive.md` in the firstmate repository.
 EOF
   echo "== wrote $ARCHIVE/README.md (the honest bound, on the artefact)"
+elif grep -qE 'Plain .?grep -r' "$ARCHIVE/README.md" 2>/dev/null &&
+     ! grep -q 'zstd -dcq' "$ARCHIVE/README.md" 2>/dev/null; then
+  # This README predates compression and still tells its reader that plain
+  # grep works here. It does not: it returns nothing, with no error, over a
+  # full archive. The file is not overwritten because someone may have written
+  # into it, so the correction is named instead of made.
+  echo "WARNING: $ARCHIVE/README.md still points readers at plain grep -r, which reads" >&2
+  echo "         nothing from a compressed store and reports no error while doing it." >&2
+  echo "         Correct that sentence: the wrapper, or zstd piped into grep, is what reads this archive." >&2
 fi
