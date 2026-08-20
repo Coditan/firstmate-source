@@ -40,7 +40,7 @@ DELIVERY="$SCRIPT_DIR/fm-delivery.sh"
 UNIT_SOURCE="$FM_ROOT/systemd/fm-delivery@.service"
 SYSTEMCTL=${FM_DELIVERY_SYSTEMCTL:-systemctl}
 SYSTEMD_ESCAPE=${FM_DELIVERY_SYSTEMD_ESCAPE:-systemd-escape}
-TMUX=${FM_DELIVERY_TMUX:-tmux}
+TMUX_CMD=${FM_DELIVERY_TMUX:-tmux}
 USER_UNIT_DIR=${FM_DELIVERY_SYSTEMD_UNIT_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user}
 UNIT_DEST="$USER_UNIT_DIR/fm-delivery@.service"
 SERVICE_ENV="$STATE/.delivery-service.env"
@@ -119,7 +119,7 @@ systemd_usable() {
 }
 
 keeper_usable() {
-  command -v "$TMUX" >/dev/null 2>&1
+  command -v "$TMUX_CMD" >/dev/null 2>&1
 }
 
 select_backend() {
@@ -148,7 +148,7 @@ legacy_keeper_name() {
 
 legacy_keeper_owned() {
   local name=$1
-  fm_legacy_keeper_owned_by_home "$TMUX" "$name" "$STATE/.delivery-keeper.pid" \
+  fm_legacy_keeper_owned_by_home "$TMUX_CMD" "$name" "$STATE/.delivery-keeper.pid" \
     "$STATE/.delivery.lock" "$FM_HOME"
 }
 
@@ -156,9 +156,9 @@ stop_legacy_keeper() {
   local name
   FM_DELIVERY_LEGACY_STOPPED=0
   name=$(legacy_keeper_name) || return 1
-  "$TMUX" has-session -t "$name" 2>/dev/null || return 0
+  "$TMUX_CMD" has-session -t "$name" 2>/dev/null || return 0
   legacy_keeper_owned "$name" || return 0
-  "$TMUX" kill-session -t "$name" || return 1
+  "$TMUX_CMD" kill-session -t "$name" || return 1
   FM_DELIVERY_LEGACY_STOPPED=1
 }
 
@@ -327,8 +327,8 @@ install_systemd() {
 stop_keeper() {
   local name
   name=$(keeper_name) || return 1
-  if "$TMUX" has-session -t "$name" 2>/dev/null; then
-    "$TMUX" kill-session -t "$name" || return 1
+  if "$TMUX_CMD" has-session -t "$name" 2>/dev/null; then
+    "$TMUX_CMD" kill-session -t "$name" || return 1
   fi
   stop_legacy_keeper
 }
@@ -341,7 +341,7 @@ start_keeper() {
   version=$(delivery_source_version) || return 1
   resolved_path=$(fm_service_path) || return 1
   mkdir -p "$STATE" || return 1
-  "$TMUX" new-session -d -s "$name" "$SCRIPT_DIR/fm-delivery-keeper.sh" "$FM_HOME" "$FM_ROOT" "$STATE" "$version" "$resolved_path"
+  "$TMUX_CMD" new-session -d -s "$name" "$SCRIPT_DIR/fm-delivery-keeper.sh" "$FM_HOME" "$FM_ROOT" "$STATE" "$version" "$resolved_path"
 }
 
 ensure_keeper() {
@@ -354,7 +354,7 @@ ensure_keeper() {
   if healthy_listener && listener_record_matches keeper; then
     return 0
   fi
-  if "$TMUX" has-session -t "$name" 2>/dev/null; then
+  if "$TMUX_CMD" has-session -t "$name" 2>/dev/null; then
     stop_keeper || return 1
   fi
   if healthy_listener; then
@@ -375,7 +375,7 @@ restart_keeper() {
 # to submit into.  Refuses rather than guessing: a listener typing into a pane
 # nobody verified is worse than one that reports it has nowhere to deliver.
 publish_endpoint() {
-  local backend target harness session
+  local backend target harness session tmux_server resolved_target
   # shellcheck source=bin/fm-supervisor-target-lib.sh
   . "$SCRIPT_DIR/fm-supervisor-target-lib.sh"
   backend=${FM_DELIVERY_ENDPOINT_BACKEND_OVERRIDE:-}
@@ -393,7 +393,23 @@ publish_endpoint() {
     echo "DELIVERY_ENDPOINT: no fleet lock is recorded for this home, so the endpoint would name no session; publish it from the session holding the lock" >&2
     return 1
   fi
-  fm_delivery_endpoint_write "$STATE" "$backend" "$target" "$harness" "$session" || {
+  tmux_server=
+  if [ "$backend" = tmux ]; then
+    resolved_target=$(fm_tmux_resolve_pane "$target" "$TMUX_CMD") || {
+      echo "DELIVERY_ENDPOINT: tmux target $target could not be proved on this session's server; no endpoint was published" >&2
+      return 1
+    }
+    tmux_server=$("$TMUX_CMD" display-message -p -t "$resolved_target" '#{socket_path},#{pid}' 2>/dev/null) || {
+      echo "DELIVERY_ENDPOINT: the tmux server for pane $resolved_target could not be identified; no endpoint was published" >&2
+      return 1
+    }
+    fm_delivery_tmux_server_valid "$tmux_server" || {
+      echo "DELIVERY_ENDPOINT: tmux returned an unusable server identity for pane $resolved_target; no endpoint was published" >&2
+      return 1
+    }
+    target=$resolved_target
+  fi
+  fm_delivery_endpoint_write "$STATE" "$backend" "$target" "$harness" "$session" "$tmux_server" || {
     echo "DELIVERY_ENDPOINT: could not write the endpoint record under $STATE" >&2
     return 1
   }

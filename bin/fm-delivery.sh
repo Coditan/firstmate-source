@@ -131,12 +131,31 @@ delivery_body() {  # <queue-depth>
 # submit, and sets SUBMIT_REASON to the concrete blocker otherwise so the caller
 # can name it rather than falling silent.
 SUBMIT_REASON=
-attempt_submit() {  # <backend> <target> <queue-depth>
-  local backend=$1 target=$2 depth=$3 composer verdict encoded body
+attempt_submit() {  # <backend> <target> <tmux-server> <queue-depth>
+  local backend=$1 target=$2 tmux_server=$3 depth=$4 composer verdict encoded body actual_server
   SUBMIT_REASON=
   if ! fm_backend_list_contains "$SUPPORTED_BACKENDS" "$backend"; then
     SUBMIT_REASON="the published endpoint names backend '$backend', which this listener has no verified composer primitives for"
     return 1
+  fi
+  if [ "$backend" = tmux ]; then
+    if ! fm_delivery_tmux_server_valid "$tmux_server"; then
+      SUBMIT_REASON="the published tmux endpoint carries no provable server identity; a pane id alone is ambiguous"
+      return 1
+    fi
+    # tmux pane ids are unique only inside one server.  Select the recorded
+    # server explicitly, then require that server to echo the same socket and
+    # pid before any target lookup, pane read, or keystroke can run.
+    local TMUX="${tmux_server},0"
+    export TMUX
+    actual_server=$(tmux display-message -p '#{socket_path},#{pid}' 2>/dev/null) || {
+      SUBMIT_REASON="the published tmux server could not be verified"
+      return 1
+    }
+    if [ "$actual_server" != "$tmux_server" ]; then
+      SUBMIT_REASON="the published tmux server identity does not match the server at its recorded socket"
+      return 1
+    fi
   fi
   if fm_backend_target_exists "$backend" "$target"; then
     :
@@ -218,7 +237,8 @@ cycle() {
   if [ "$LAST_DEFER" -ne 0 ] && [ $((now - LAST_DEFER)) -lt "$DEFER" ]; then
     return 0
   fi
-  if attempt_submit "$FM_DELIVERY_ENDPOINT_BACKEND" "$FM_DELIVERY_ENDPOINT_TARGET" "$depth"; then
+  if attempt_submit "$FM_DELIVERY_ENDPOINT_BACKEND" "$FM_DELIVERY_ENDPOINT_TARGET" \
+      "$FM_DELIVERY_ENDPOINT_TMUX_SERVER" "$depth"; then
     fm_delivery_attempt_outcome_clear "$STATE"
     LAST_SUBMIT=$now
     LAST_DEFER=0
