@@ -408,6 +408,143 @@ test_missing_required_arguments_are_refused() {
   pass "the builder refuses an incomplete invocation"
 }
 
+test_default_appearance_is_visible_and_usable() {
+  local clean_home=$TMP_ROOT/default-home
+  mkdir -p "$clean_home"
+  rm -f "$OUT"
+  FM_HOME=$clean_home "$BOARD" --title T --body "$TMP_ROOT/body.html" --out "$OUT" \
+    >/dev/null 2>&1 || fail "a seat with no local appearance could not build a board"
+  assert_grep 'data-fm-board-appearance="default"' "$OUT" \
+    "the neutral fallback was not inlined"
+  assert_grep 'Default board appearance - no local vessel design is active.' "$OUT" \
+    "the neutral fallback is not visibly identified as a default"
+  assert_grep 'symbol id="fm-mk-open"' "$OUT" \
+    "the neutral fallback does not carry the required marks"
+  pass "a seat with no local design gets a visibly labelled usable default"
+}
+
+test_local_appearance_replaces_the_default() {
+  local local_home=$TMP_ROOT/local-home mark
+  mkdir -p "$local_home/config"
+  {
+    printf '<style data-test-local-appearance>.fm-wrap{outline:7px double}</style>\n'
+    printf '<svg width="0" height="0"><defs>\n'
+    for mark in open pencil struck gate held run void; do
+      printf '<symbol id="fm-mk-%s" viewBox="0 0 20 20"><circle cx="10" cy="10" r="5"/></symbol>\n' "$mark"
+    done
+    printf '</defs></svg>\n'
+  } > "$local_home/config/board-appearance.html"
+  rm -f "$OUT"
+  FM_HOME=$local_home "$BOARD" --title T --body "$TMP_ROOT/body.html" --out "$OUT" \
+    >/dev/null 2>&1 || fail "a valid vessel-local appearance was refused"
+  assert_grep 'data-test-local-appearance' "$OUT" \
+    "the vessel-local appearance was not inlined"
+  assert_no_grep 'data-fm-board-appearance="default"' "$OUT" \
+    "the neutral fallback was still inlined beneath a vessel-local appearance"
+  assert_no_grep 'Default board appearance - no local vessel design is active.' "$OUT" \
+    "a locally designed board was still labelled as the default"
+  pass "a vessel-local appearance replaces the neutral fallback"
+}
+
+test_incomplete_local_appearance_is_refused() {
+  local bad_home=$TMP_ROOT/bad-home status=0
+  mkdir -p "$bad_home/config"
+  printf '<style>body{display:block}</style>\n' > "$bad_home/config/board-appearance.html"
+  rm -f "$OUT"
+  FM_HOME=$bad_home "$BOARD" --title T --body "$TMP_ROOT/body.html" --out "$OUT" \
+    >/dev/null 2>"$BUILD_ERR_FILE" || status=$?
+  [ "$status" != 0 ] || fail "an appearance without the semantic marks was accepted"
+  assert_contains "$(build_stderr)" "missing mark fm-mk-open" \
+    "the incomplete appearance refusal did not name its first missing mark"
+  assert_absent "$OUT" "an incomplete appearance was refused but still wrote a board"
+  pass "an incomplete vessel appearance is refused instead of breaking a board"
+}
+
+test_marks_hidden_in_non_markup_are_refused() {
+  local bad_home=$TMP_ROOT/hidden-marks-home mark status=0
+  mkdir -p "$bad_home/config"
+  {
+    printf '<style>body{display:block}'
+    for mark in open pencil struck gate held run void; do
+      printf '<symbol id="fm-mk-%s"></symbol>' "$mark"
+    done
+    printf '</style>\n<!-- <svg><defs>'
+    for mark in open pencil struck gate held run void; do
+      printf '<symbol id="fm-mk-%s"></symbol>' "$mark"
+    done
+    printf '</defs></svg> -->\n'
+  } > "$bad_home/config/board-appearance.html"
+  rm -f "$OUT"
+  FM_HOME=$bad_home "$BOARD" --title T --body "$TMP_ROOT/body.html" --out "$OUT" \
+    >/dev/null 2>"$BUILD_ERR_FILE" || status=$?
+  [ "$status" != 0 ] || fail "marks inside style text or a comment were accepted"
+  assert_contains "$(build_stderr)" "missing mark fm-mk-open" \
+    "the hidden-mark refusal did not identify the absent usable mark"
+  assert_absent "$OUT" "hidden marks were refused but a board was still written"
+  pass "only real symbol elements inside SVG satisfy the mark contract"
+}
+
+test_unusable_symbol_definitions_are_refused() {
+  local bad_home=$TMP_ROOT/unusable-marks-home case_name mark status
+  mkdir -p "$bad_home/config"
+  for case_name in empty template; do
+    {
+      printf '<style>body{display:block}</style>\n'
+      [ "$case_name" != template ] || printf '<template>\n'
+      printf '<svg><defs>\n'
+      for mark in open pencil struck gate held run void; do
+        if [ "$case_name" = empty ]; then
+          printf '<symbol id="fm-mk-%s"></symbol>\n' "$mark"
+        else
+          printf '<symbol id="fm-mk-%s"><circle r="5"/></symbol>\n' "$mark"
+        fi
+      done
+      printf '</defs></svg>\n'
+      [ "$case_name" != template ] || printf '</template>\n'
+    } > "$bad_home/config/board-appearance.html"
+    status=0
+    rm -f "$OUT"
+    FM_HOME=$bad_home "$BOARD" --title T --body "$TMP_ROOT/body.html" --out "$OUT" \
+      >/dev/null 2>"$BUILD_ERR_FILE" || status=$?
+    [ "$status" != 0 ] || fail "$case_name symbol definitions were accepted"
+    assert_contains "$(build_stderr)" "missing mark fm-mk-open" \
+      "$case_name symbol refusal did not identify the absent usable mark"
+    assert_absent "$OUT" "$case_name symbols were refused but a board was still written"
+  done
+  pass "empty and inert symbol definitions cannot satisfy the mark contract"
+}
+
+test_nonpainting_symbol_geometry_is_refused() {
+  local bad_home=$TMP_ROOT/nonpainting-marks-home case_name mark status
+  mkdir -p "$bad_home/config"
+  for case_name in empty-path missing-reference two-point-polygon zero-width zero-opacity style-zero-width style-zero-opacity; do
+    {
+      printf '<style>body{display:block}</style>\n<svg><defs>\n'
+      for mark in open pencil struck gate held run void; do
+        case "$case_name" in
+          empty-path) printf '<symbol id="fm-mk-%s"><path/></symbol>\n' "$mark" ;;
+          missing-reference) printf '<symbol id="fm-mk-%s"><use href="#missing"/></symbol>\n' "$mark" ;;
+          two-point-polygon) printf '<symbol id="fm-mk-%s"><polygon points="0,0 10,10"/></symbol>\n' "$mark" ;;
+          zero-width) printf '<symbol id="fm-mk-%s"><line x2="10" stroke="currentColor" stroke-width="0"/></symbol>\n' "$mark" ;;
+          zero-opacity) printf '<symbol id="fm-mk-%s"><line x2="10" stroke="currentColor" stroke-opacity="0"/></symbol>\n' "$mark" ;;
+          style-zero-width) printf '<symbol id="fm-mk-%s"><line x2="10" style="stroke:currentColor;stroke-width:0"/></symbol>\n' "$mark" ;;
+          style-zero-opacity) printf '<symbol id="fm-mk-%s"><line x2="10" style="stroke:currentColor;stroke-opacity:0"/></symbol>\n' "$mark" ;;
+        esac
+      done
+      printf '</defs></svg>\n'
+    } > "$bad_home/config/board-appearance.html"
+    status=0
+    rm -f "$OUT"
+    FM_HOME=$bad_home "$BOARD" --title T --body "$TMP_ROOT/body.html" --out "$OUT" \
+      >/dev/null 2>"$BUILD_ERR_FILE" || status=$?
+    [ "$status" != 0 ] || fail "$case_name geometry was accepted"
+    assert_contains "$(build_stderr)" "missing mark fm-mk-open" \
+      "$case_name refusal did not identify the absent usable mark"
+    assert_absent "$OUT" "$case_name geometry was refused but a board was still written"
+  done
+  pass "nonpainting geometry cannot satisfy the mark contract"
+}
+
 # --- the versioned layout is genuinely shared --------------------------------
 
 test_two_different_board_shapes_share_the_layout() {
@@ -448,17 +585,17 @@ test_two_different_board_shapes_share_the_layout() {
   pass "two structurally different boards build from the one shared layout"
 }
 
-test_layout_lives_in_one_place() {
-  # The point of the whole change: the layout is an artifact agents INCLUDE, not
-  # one they retype. If the assets stop existing, boards would drift again.
-  local css js
+test_asset_interface_reports_the_composed_inputs() {
+  local css fallback js
   css=$("$BOARD" --print-assets | sed -n '1p')
-  js=$("$BOARD" --print-assets | sed -n '2p')
+  fallback=$("$BOARD" --print-assets | sed -n '2p')
+  js=$("$BOARD" --print-assets | sed -n '3p')
   assert_present "$css" "the versioned layout stylesheet is missing"
+  assert_present "$fallback" "the neutral fallback appearance is missing"
   assert_present "$js" "the versioned board behavior is missing"
-  assert_grep 'prefers-color-scheme' "$css" "layout lost its dark-mode support"
-  assert_grep 'queueKey' "$js" "board behavior lost the per-question queueKey"
-  pass "the layout and behavior live in one versioned place"
+  [ "$css" != "$fallback" ] && [ "$fallback" != "$js" ] && [ "$css" != "$js" ] \
+    || fail "the asset interface did not report three distinct composed inputs"
+  pass "the builder reports each input to its composed board"
 }
 
 # --- board behavior, exercised as logic rather than rendering ----------------
@@ -497,6 +634,12 @@ test_the_decision_shape_offers_choices_and_a_note
 test_board_escapes_its_title
 test_check_mode_reports_both_verdicts
 test_missing_required_arguments_are_refused
-test_layout_lives_in_one_place
+test_default_appearance_is_visible_and_usable
+test_local_appearance_replaces_the_default
+test_incomplete_local_appearance_is_refused
+test_marks_hidden_in_non_markup_are_refused
+test_unusable_symbol_definitions_are_refused
+test_nonpainting_symbol_geometry_is_refused
+test_asset_interface_reports_the_composed_inputs
 test_two_different_board_shapes_share_the_layout
 test_board_behavior_contract

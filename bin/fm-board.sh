@@ -9,10 +9,13 @@
 # the CSS in the reader's browser on every open. That is a measured load cost,
 # not a matter of taste, and the captain asked for it to stop.
 #
-# So the layout became one versioned artifact that a generator INCLUDES:
-#   bin/board-assets/layout.css   styling      (one owner)
-#   bin/board-assets/board.js     behavior     (one owner)
-# This script inlines both into the emitted board. Inlining rather than linking
+# So the structure and neutral fallback became versioned artifacts that a
+# generator includes:
+#   bin/board-assets/layout.css               structure       (one owner)
+#   bin/board-assets/default-appearance.html  neutral fallback (one owner)
+#   bin/board-assets/board.js                  behavior        (one owner)
+# A vessel replaces only the fallback with $FM_HOME/config/board-appearance.html.
+# This script inlines the selected assets into the emitted board. Inlining rather than linking
 # siblings is deliberate: a board must render when opened straight from disk with
 # no Lavish server, and `lavish-axi export` must keep producing one portable
 # file. A self-contained board satisfies both without any copying step.
@@ -27,16 +30,16 @@
 #     the one place a vessel's name is already recorded rather than typed into a
 #     second one, and the build is REFUSED when it cannot be resolved, because a
 #     nameless board is exactly the board the rule exists to prevent.
-#   - THE MARK SET, the seven symbols Tally draws states with, defined once per
-#     board and referenced with <use href="#fm-mk-...">.
+#   - THE MARK SET, seven semantic symbols supplied by the selected appearance
+#     fragment and referenced with <use href="#fm-mk-...">.
 #   - THE TALLY STRIP CONTAINER, emitted empty and hidden. board.js fills it
 #     from the board's own question forms and owns the count of what has not
 #     been sent back. A body that typed that number could type it wrong, and a
 #     wrong count of what reached the captain is the defect the strip exists to
 #     make visible.
 #
-# docs/board-layout.md names the components; the design language behind them is
-# recorded there too.
+# docs/board-layout.md names the components and owns the appearance-fragment
+# contract.
 #
 # THE GUARD
 # The no-network rule is enforced HERE, at the only choke point every board
@@ -87,7 +90,8 @@
 #   --vessel <n>     the building vessel's name for the header; see below
 #   --lang <code>    document language (default: de)
 #   --check <f>...   run the no-network guard over existing files and exit
-#   --print-assets   print the paths of the versioned layout assets
+#   --print-assets   print the paths of the shared layout, fallback appearance,
+#                    and behavior assets
 #
 # THE VESSEL NAME is resolved, in this order:
 #   1. --vessel <n>
@@ -112,6 +116,7 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 ASSETS="$SCRIPT_DIR/board-assets"
 CSS="$ASSETS/layout.css"
+DEFAULT_APPEARANCE="$ASSETS/default-appearance.html"
 JS="$ASSETS/board.js"
 
 die() {
@@ -183,25 +188,227 @@ vessel_display() {  # <raw>
     }'
 }
 
-# mark_set - the seven marks Tally draws every state with, defined once.
-#
-# Referenced from anywhere on the board as <use href="#fm-mk-open">. Two of the
-# seven - run and void - are drawn in ink and carry no hue at all, which is the
-# language's own rule that under way, landed and failed are never coloured.
-mark_set() {
-  cat <<'SVG'
-<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
-<defs>
-<symbol id="fm-mk-open" viewBox="0 0 20 20"><rect x="2.5" y="2.5" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
-<symbol id="fm-mk-pencil" viewBox="0 0 20 20"><rect x="2.5" y="2.5" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4.6 15.4 L15.4 4.6" stroke="currentColor" stroke-width="1.4" stroke-dasharray="2.4 1.8" fill="none"/></symbol>
-<symbol id="fm-mk-struck" viewBox="0 0 20 20"><rect x="2.5" y="2.5" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M4 16 L16 4" stroke="currentColor" stroke-width="2.4" fill="none"/></symbol>
-<symbol id="fm-mk-gate" viewBox="0 0 20 20"><rect x="2.5" y="2.5" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3.5" y="3.5" width="6.5" height="13" fill="currentColor"/></symbol>
-<symbol id="fm-mk-held" viewBox="0 0 20 20"><rect x="2.5" y="2.5" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="10" cy="10" r="3.1" fill="currentColor"/></symbol>
-<symbol id="fm-mk-run" viewBox="0 0 20 20"><rect x="2.5" y="2.5" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="4.5" y="8.8" width="11" height="2.4" fill="currentColor"/></symbol>
-<symbol id="fm-mk-void" viewBox="0 0 20 20"><rect x="2.5" y="2.5" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.4 5.4 L14.6 14.6 M14.6 5.4 L5.4 14.6" stroke="currentColor" stroke-width="2" fill="none"/></symbol>
-</defs>
-</svg>
-SVG
+# resolve_appearance - print the vessel-private appearance fragment when it
+# exists, otherwise the shipped neutral fallback.
+resolve_appearance() {
+  local local_appearance="$FM_HOME/config/board-appearance.html"
+  if [ -f "$local_appearance" ]; then
+    printf '%s\n' "$local_appearance"
+  else
+    printf '%s\n' "$DEFAULT_APPEARANCE"
+  fi
+}
+
+# validate_appearance - refuse an incomplete appearance before it can produce a
+# board whose controls or state marks are invisible.
+validate_appearance() {  # <file>
+  local file=$1 mark elements
+  elements=$(appearance_elements "$file")
+  printf '%s\n' "$elements" | grep -qx 'style' \
+    || die "appearance fragment has no <style>: $file"
+  for mark in open pencil struck gate held run void; do
+    printf '%s\n' "$elements" | grep -Eiq "^symbol[[:space:]].*id[[:space:]]*=[[:space:]]*[\"']fm-mk-${mark}[\"']" \
+      || die "appearance fragment is missing mark fm-mk-$mark: $file"
+  done
+}
+
+appearance_elements() {  # <file>
+  awk '
+    function attribute(s, name,   low, pattern, start, quote, rest, finish) {
+      low = tolower(s)
+      pattern = "[[:space:]]" name "[[:space:]]*=[[:space:]]*"
+      if (match(low, pattern) == 0) { return "" }
+      start = RSTART + RLENGTH
+      quote = substr(s, start, 1)
+      if (quote == "\"" || quote == "\047") {
+        rest = substr(s, start + 1)
+        finish = index(rest, quote)
+        if (finish == 0) { return "" }
+        return substr(rest, 1, finish - 1)
+      }
+      rest = substr(s, start)
+      if (match(rest, /[[:space:]>]/) == 0) { return rest }
+      return substr(rest, 1, RSTART - 1)
+    }
+
+    function number_count(s,   count) {
+      count = 0
+      while (match(s, /[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?/)) {
+        count++
+        s = substr(s, RSTART + RLENGTH)
+      }
+      return count
+    }
+
+    function style_value(s, name,   found, pattern, rest, value) {
+      pattern = "(^|;)[[:space:]]*" name "[[:space:]]*:[[:space:]]*"
+      found = ""
+      while (match(s, pattern)) {
+        rest = substr(s, RSTART + RLENGTH)
+        if (match(rest, /;/)) { value = substr(rest, 1, RSTART - 1) }
+        else { value = rest }
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+        found = value
+        s = rest
+      }
+      return found
+    }
+
+    function effective(s, name, fallback,   style, value) {
+      style = tolower(attribute(s, "style"))
+      value = style_value(style, name)
+      if (value == "") { value = tolower(attribute(s, name)) }
+      if (value == "") { value = fallback }
+      return value
+    }
+
+    function positive(value) {
+      return value != "" && value + 0 > 0
+    }
+
+    function stroke_visible(s,   color, opacity, width) {
+      color = effective(s, "stroke", "none")
+      opacity = effective(s, "stroke-opacity", "1")
+      width = effective(s, "stroke-width", "1")
+      return color != "none" && positive(opacity) && positive(width)
+    }
+
+    function fill_visible(s,   color, opacity) {
+      color = effective(s, "fill", "black")
+      opacity = effective(s, "fill-opacity", "1")
+      return color != "none" && positive(opacity)
+    }
+
+    function points_paint(s, polygon, has_stroke,   cross, distinct, i, j, k, n, value) {
+      for (i in point_x) { delete point_x[i] }
+      for (i in point_y) { delete point_y[i] }
+      n = 0
+      while (match(s, /[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?/)) {
+        value = substr(s, RSTART, RLENGTH) + 0
+        s = substr(s, RSTART + RLENGTH)
+        if (n % 2 == 0) { point_x[int(n / 2) + 1] = value }
+        else { point_y[int(n / 2) + 1] = value }
+        n++
+      }
+      if (n % 2 != 0) { return 0 }
+      n = int(n / 2)
+      distinct = 0
+      for (i = 2; i <= n; i++) {
+        if (point_x[i] != point_x[1] || point_y[i] != point_y[1]) { distinct = 1; break }
+      }
+      if (has_stroke && distinct) { return 1 }
+      if (!polygon || n < 3) { return 0 }
+      for (i = 1; i <= n - 2; i++) {
+        for (j = i + 1; j <= n - 1; j++) {
+          for (k = j + 1; k <= n; k++) {
+            cross = (point_x[j] - point_x[i]) * (point_y[k] - point_y[i]) \
+              - (point_y[j] - point_y[i]) * (point_x[k] - point_x[i])
+            if (cross != 0) { return 1 }
+          }
+        }
+      }
+      return 0
+    }
+
+    function visible_paint(s,   style, opacity, display, visibility) {
+      style = tolower(attribute(s, "style"))
+      opacity = attribute(s, "opacity")
+      display = tolower(attribute(s, "display"))
+      visibility = tolower(attribute(s, "visibility"))
+      if (display == "none" || visibility == "hidden" || (opacity != "" && opacity ~ /^0*(\.0*)?$/)) { return 0 }
+      if (style ~ /(^|;)[[:space:]]*display[[:space:]]*:[[:space:]]*none([[:space:]]*;|$)/) { return 0 }
+      if (style ~ /(^|;)[[:space:]]*visibility[[:space:]]*:[[:space:]]*hidden([[:space:]]*;|$)/) { return 0 }
+      if (style ~ /(^|;)[[:space:]]*opacity[[:space:]]*:[[:space:]]*0*(\.0*)?([[:space:]]*;|$)/) { return 0 }
+      return 1
+    }
+
+    function paints(s, lower,   d, has_fill, has_stroke, height, points, r, rx, ry, tag, width, x1, x2, y1, y2) {
+      tag = lower
+      sub(/^</, "", tag); sub(/[[:space:]>].*$/, "", tag)
+      if (!visible_paint(s)) { return 0 }
+      has_fill = fill_visible(s)
+      has_stroke = stroke_visible(s)
+      if (!has_fill && !has_stroke) { return 0 }
+      if (tag == "circle") { r = attribute(s, "r"); return r != "" && r + 0 > 0 }
+      if (tag == "ellipse") {
+        rx = attribute(s, "rx"); ry = attribute(s, "ry")
+        return rx != "" && ry != "" && rx + 0 > 0 && ry + 0 > 0
+      }
+      if (tag == "rect") {
+        width = attribute(s, "width"); height = attribute(s, "height")
+        return width != "" && height != "" && width + 0 > 0 && height + 0 > 0
+      }
+      if (tag == "line") {
+        if (!has_stroke) { return 0 }
+        x1 = attribute(s, "x1") + 0; y1 = attribute(s, "y1") + 0
+        x2 = attribute(s, "x2") + 0; y2 = attribute(s, "y2") + 0
+        return x1 != x2 || y1 != y2
+      }
+      if (tag == "polygon" || tag == "polyline") {
+        points = attribute(s, "points")
+        return points_paint(points, tag == "polygon" && has_fill, has_stroke)
+      }
+      if (tag == "path") {
+        d = attribute(s, "d")
+        if (d == "" || !(d ~ /[LlHhVvCcSsQqTtAaZz]/ || (d ~ /^[[:space:]]*[Mm]/ && number_count(d) >= 4))) { return 0 }
+        if (has_stroke) { return 1 }
+        return has_fill && (d ~ /[Zz]/ || (d ~ /^[[:space:]]*[Mm]/ && number_count(d) >= 6))
+      }
+      return 0
+    }
+
+    BEGIN { data = ""; raw = ""; svg = 0 }
+    { data = data $0 "\n" }
+    END {
+      while (data != "") {
+        low = tolower(data)
+        if (raw != "") {
+          closing = "</" raw
+          at = index(low, closing)
+          if (at == 0) { break }
+          data = substr(data, at)
+          raw = ""
+          continue
+        }
+        comment = index(data, "<!--")
+        tag = index(data, "<")
+        if (comment > 0 && (tag == 0 || comment == tag)) {
+          data = substr(data, comment + 4)
+          finish = index(data, "-->")
+          if (finish == 0) { break }
+          data = substr(data, finish + 3)
+          continue
+        }
+        if (tag == 0) { break }
+        data = substr(data, tag)
+        finish = index(data, ">")
+        if (finish == 0) { break }
+        token = substr(data, 1, finish)
+        data = substr(data, finish + 1)
+        lower = tolower(token)
+        if (lower ~ /^<style([[:space:]>])/) { print "style"; raw = "style"; continue }
+        if (lower ~ /^<(script|template|textarea|title)([[:space:]>])/) {
+          raw = lower
+          sub(/^</, "", raw); sub(/[[:space:]>].*$/, "", raw)
+          continue
+        }
+        if (lower ~ /^<\/symbol([[:space:]>])/) {
+          if (symbol != "" && drawable) { print "symbol " symbol }
+          symbol = ""; drawable = 0
+          continue
+        }
+        if (lower ~ /^<\/svg([[:space:]>])/) { if (svg > 0) { svg-- }; continue }
+        if (lower ~ /^<svg([[:space:]>])/) { svg++; continue }
+        if (svg > 0 && lower ~ /^<symbol([[:space:]>])/) {
+          symbol = token; drawable = 0
+          continue
+        }
+        if (symbol != "" && lower ~ /^<(circle|ellipse|line|path|polygon|polyline|rect)([[:space:]>])/) {
+          if (paints(token, lower)) { drawable = 1 }
+        }
+      }
+    }
+  ' "$1"
 }
 
 # fold_open_tags - print `<line-number>:<text>` with the newlines inside an
@@ -400,7 +607,7 @@ CHECK_FILES=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -h|--help) usage; exit 0 ;;
-    --print-assets) printf '%s\n%s\n' "$CSS" "$JS"; exit 0 ;;
+    --print-assets) printf '%s\n%s\n%s\n' "$CSS" "$DEFAULT_APPEARANCE" "$JS"; exit 0 ;;
     --check)
       MODE="check"
       shift
@@ -435,7 +642,13 @@ fi
 [ -n "$BODY" ] || die "--body is required"
 [ -n "$OUT" ] || die "--out is required"
 [ -f "$CSS" ] || die "missing layout asset: $CSS"
+[ -f "$DEFAULT_APPEARANCE" ] || die "missing default appearance asset: $DEFAULT_APPEARANCE"
 [ -f "$JS" ] || die "missing behavior asset: $JS"
+
+APPEARANCE=$(resolve_appearance)
+validate_appearance "$APPEARANCE"
+APPEARANCE_IS_DEFAULT=0
+[ "$APPEARANCE" != "$DEFAULT_APPEARANCE" ] || APPEARANCE_IS_DEFAULT=1
 
 [ -n "$VESSEL" ] || VESSEL=$(resolve_vessel)
 [ -n "$VESSEL" ] || die "cannot resolve the building vessel's name for the header.
@@ -469,7 +682,7 @@ esc_title=$(html_escape "$TITLE")
   printf '<style>\n'
   cat "$CSS"
   printf '</style>\n</head>\n<body>\n'
-  mark_set
+  cat "$APPEARANCE"
   printf '<div class="fm-wrap">\n'
   printf '<header class="fm-issue">\n<div>\n'
   printf '<p class="fm-vessel">%s</p>\n' "$(html_escape "$VESSEL")"
@@ -477,6 +690,9 @@ esc_title=$(html_escape "$TITLE")
   printf '</div>\n'
   [ -z "$SUBTITLE" ] || printf '<p class="fm-sub">%s</p>\n' "$(html_escape "$SUBTITLE")"
   printf '</header>\n'
+  if [ "$APPEARANCE_IS_DEFAULT" = 1 ]; then
+    printf '<p class="fm-appearance-default">Default board appearance - no local vessel design is active.</p>\n'
+  fi
   # Emitted empty and hidden. board.js fills it from the board's own question
   # forms and owns the count; a board that asks nothing leaves it hidden.
   printf '<div class="fm-tally" hidden></div>\n'

@@ -72,7 +72,7 @@ A skill named in `docs/configuration.md` is documented, not triggered.
 - **Public `skills/`.**
 Installer-facing, explicitly not loaded by firstmate.
 - **`bin/board-assets/layout.css`.**
-`--fm-panel` matches the string `panel` and means a CSS colour token.
+`.fm-panel` matches the string `panel` and means a board component class.
 
 ### Test scope
 
