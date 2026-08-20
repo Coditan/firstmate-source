@@ -50,6 +50,7 @@ Re-measure the host with:
 - Drive through the accessibility snapshot rather than `eval`.
 - Re-resolve accessibility uids before every action.
 - Never treat a screenshot's exit status as evidence.
+- Never conclude from `query` alone that a long board is missing controls: a plain accessibility snapshot truncates around 21k characters, mid-form on a board with enough decisions, and `query` reads `snapshot --full` for exactly that reason.
 
 The driver header owns the measured reasoning and implementation details behind these constraints.
 

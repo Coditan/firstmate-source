@@ -324,6 +324,79 @@ test_query_reports_an_unlistened_board() {
   pass "query reports a board that is listening to nobody"
 }
 
+test_query_requests_the_full_snapshot_on_a_long_board() {
+  # Measured 2026-08-19: a real seven-decision board's plain snapshot cut off
+  # mid-way through card 6, and cmd_query reported "decision cards: 5". A
+  # two-card fixture never exercises that call shape at all, so this test
+  # fakes chrome-devtools-axi to behave the same way the real one does: the
+  # plain `snapshot` call truncates, `snapshot --full` does not.
+  local q_tmp fakebin full_file truncated_file out status=0 i
+  fm_test_tmproot q_tmp fm-run-db-full-snapshot
+  fakebin=$(fm_fakebin "$q_tmp")
+  full_file="$q_tmp/full.txt"
+  truncated_file="$q_tmp/truncated.txt"
+
+  {
+    printf 'uid=g1:1_0 RootWebArea "Board · Lavish" url="http://example.invalid/session/x"\n'
+    printf '  uid=g1:1_1 Iframe\n'
+    printf '    uid=g1:1_2 RootWebArea "Board" url="http://example.invalid/artifact/x/index.html?artifact_revision=1"\n'
+    for i in 1 2 3 4 5 6 7; do
+      printf '      uid=g1:1_%s0 form\n' "$i"
+      printf '        uid=g1:1_%s1 radio "Option eins Karte %s"\n' "$i" "$i"
+      printf '        uid=g1:1_%s2 radio "Option zwei Karte %s"\n' "$i" "$i"
+      printf '        uid=g1:1_%s3 textbox "Begründung (optional)" multiline\n' "$i"
+      printf '        uid=g1:1_%s4 button "Antwort vormerken"\n' "$i"
+    done
+  } > "$full_file"
+
+  # The un-full snapshot chrome-devtools-axi actually returns on this shape:
+  # five complete cards, then the byte budget runs out mid-way through card
+  # 6's own form line - not even that line survives intact - and card 7 never
+  # appears at all. This is what the wire looked like on 2026-08-19.
+  {
+    printf 'uid=g1:1_0 RootWebArea "Board · Lavish" url="http://example.invalid/session/x"\n'
+    printf '  uid=g1:1_1 Iframe\n'
+    printf '    uid=g1:1_2 RootWebArea "Board" url="http://example.invalid/artifact/x/index.html?artifact_revision=1"\n'
+    for i in 1 2 3 4 5; do
+      printf '      uid=g1:1_%s0 form\n' "$i"
+      printf '        uid=g1:1_%s1 radio "Option eins Karte %s"\n' "$i" "$i"
+      printf '        uid=g1:1_%s2 radio "Option zwei Karte %s"\n' "$i" "$i"
+      printf '        uid=g1:1_%s3 textbox "Begründung (optional)" multiline\n' "$i"
+      printf '        uid=g1:1_%s4 button "Antwort vormerken"\n' "$i"
+    done
+    printf '      uid=g1:1_60 fo'
+  } > "$truncated_file"
+
+  # Pin that the truncated fixture itself undercounts, through the existing
+  # snapshot test seam - otherwise this test would prove nothing about the
+  # fixture actually being long enough to expose the defect.
+  local truncated_out
+  truncated_out=$(FM_RUN_DECISIONBOARD_SNAPSHOT="$truncated_file" "$DRIVER" query 2>&1) || true
+  assert_contains "$truncated_out" "decision cards: 5" \
+    "the truncated fixture must itself undercount, or this test cannot tell --full from plain"
+
+  cat > "$fakebin/chrome-devtools-axi" <<'SH'
+#!/usr/bin/env bash
+if [ "$1" = snapshot ]; then
+  if [ "${2:-}" = --full ]; then
+    cat "$FULL_SNAP"
+  else
+    cat "$TRUNCATED_SNAP"
+  fi
+fi
+SH
+  chmod +x "$fakebin/chrome-devtools-axi"
+
+  out=$(PATH="$fakebin:$PATH" FULL_SNAP="$full_file" TRUNCATED_SNAP="$truncated_file" \
+    "$DRIVER" query 2>&1) || status=$?
+  [ "$status" -eq 0 ] || fail "query rejected a fully-populated seven-card board"$'\n'"$out"
+  assert_contains "$out" "decision cards: 7" \
+    "query undercounted a long board - it is reading the plain snapshot, not --full"
+  assert_contains "$out" "with selectable options: 7" \
+    "query undercounted the option sets on a long board"
+  pass "query reads the full snapshot and counts every card on a long board"
+}
+
 test_selftest_arms_the_poll_before_answering() {
   local selftest_tmp fakebin fake_root fake_driver out first_event second_event third_event
   fm_test_tmproot selftest_tmp fm-run-db-selftest
@@ -924,6 +997,7 @@ test_query_reports_missing_notes_without_refusing_them
 test_query_can_refuse_missing_notes_when_the_contract_flips
 test_query_counts_a_decision_form_that_carries_nothing
 test_query_reports_an_unlistened_board
+test_query_requests_the_full_snapshot_on_a_long_board
 test_selftest_arms_the_poll_before_answering
 test_selftest_refuses_to_answer_without_a_listening_poll
 test_shot_refuses_a_screenshot_that_wrote_nothing

@@ -338,7 +338,12 @@ snapshot() {
     return 0
   fi
   need_bridge
-  chrome-devtools-axi snapshot 2>&1 | fold_snapshot
+  # A snapshot without --full truncates at roughly 21k characters, mid-form on a
+  # board with enough decisions - measured 2026-08-19 on a real seven-decision
+  # board, where the plain snapshot cut off mid-way through card 6 and
+  # cmd_query silently under-counted to "decision cards: 5". --full is not
+  # optional here: this is the driver's only inventory source.
+  chrome-devtools-axi snapshot --full 2>&1 | fold_snapshot
 }
 
 # fold_snapshot - put every node back on ONE line.
