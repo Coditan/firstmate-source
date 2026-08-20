@@ -914,19 +914,6 @@ is_full_sha() {
   [ "${#1}" -eq 40 ] || [ "${#1}" -eq 64 ]
 }
 
-# is_prefix_of <short> <long> - true when both are hex and the first names the
-# second. A clone that cannot resolve either name is not a licence to call them
-# different: a stamped short sha is the same commit as the full one.
-is_prefix_of() {
-  local sh=$1 lo=$2
-  [ "${#sh}" -ge 7 ] || return 1
-  [ "${#sh}" -lt "${#lo}" ] || return 1
-  case "$sh" in *[!0-9a-f]*) return 1 ;; esac
-  case "$lo" in *[!0-9a-f]*) return 1 ;; esac
-  case "$lo" in "$sh"*) return 0 ;; esac
-  return 1
-}
-
 printf '\ncomparisons\n'
 # A reading compared under a name it did not report is a substitution, and an
 # unseen substitution is how a wrong answer passes for a read one. Say it.
@@ -963,12 +950,11 @@ compare() {
   na=$(nrm_of "$a"); nb=$(nrm_of "$b")
   if [ -n "$na" ] && [ -n "$nb" ]; then
     va=$na; vb=$nb
-  elif [ "$va" != "$vb" ] && ! is_prefix_of "$va" "$vb" && ! is_prefix_of "$vb" "$va" &&
-    ! { is_full_sha "$va" && is_full_sha "$vb"; }; then
-    # The two names are not equal, neither names the other, and --clone could
-    # not settle it. Whether they are the same commit is not established, and
-    # calling that a disagreement would be a definite answer to a question this
-    # run could not ask.
+  elif ! { is_full_sha "$va" && is_full_sha "$vb"; }; then
+    # An abbreviated or non-object reading has no identity until --clone
+    # resolves it. Whether the names refer to the same commit is not established,
+    # and calling them equal or different would answer a question this run could
+    # not ask.
     local unresolved=
     [ -z "$na" ] && unresolved="$la"
     [ -z "$nb" ] && unresolved="${unresolved:+$unresolved and }$lb"
@@ -979,8 +965,7 @@ compare() {
     return
   fi
   COMPARED=$((COMPARED + 1))
-  if [ "$va" = "$vb" ] || is_prefix_of "$va" "$vb" || is_prefix_of "$vb" "$va"; then
-    [ "${#va}" -lt "${#vb}" ] && va=$vb
+  if [ "$va" = "$vb" ]; then
     printf '  %s  AGREE %s\n' "$pad" "$(short "$va")"
   else
     DIFFERED=$((DIFFERED + 1))

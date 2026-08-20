@@ -1051,6 +1051,26 @@ test_a_short_sha_revision_label_still_drifts_against_another_commit() {
   pass "control: a short-sha label naming another commit still reports drift"
 }
 
+test_an_unresolved_short_sha_cannot_agree_by_textual_prefix() {
+  reset_env
+  local unrelated="$T/unrelated-clone"
+  mkdir -p "$unrelated"
+  git -C "$unrelated" init -q -b main
+  printf 'unrelated\n' >"$unrelated/unrelated.txt"
+  git -C "$unrelated" add -A && git -C "$unrelated" commit -qm unrelated
+  export FM_FAKE_DOCKER_INSPECT="$SHORT_SHA_AT_C"
+  run_tool --container svc --source-remote "$REPO" --source-ref refs/heads/main \
+    --clone "$unrelated"
+  expect_code 3 "$RC" "an unresolved short sha leaves the comparison unsettled"
+  assert_contains "$OUT" 'NOT COMPARABLE' \
+    "an abbreviation the clone cannot resolve must be reported as not comparable"
+  assert_not_contains "$OUT" 'verdict: AGREE' \
+    "a textual prefix without clone resolution must not earn agreement"
+  assert_not_contains "$OUT" 'AGREE ' \
+    "no pair may agree from an unresolved textual prefix"
+  pass "an unresolved short sha cannot agree by textual prefix"
+}
+
 test_a_revision_label_naming_a_ref_is_never_resolved_through_the_clone() {
   # `main` resolves in the verifier's OWN clone, which may have no relation to
   # the deploy target. Answering from it would report a commit the host never
@@ -1346,6 +1366,7 @@ test_restarts_on_a_running_container_are_stated_out_loud
 test_the_running_container_reports_what_it_actually_reads_from
 test_a_short_sha_revision_label_agrees_with_the_full_sha_it_names
 test_a_short_sha_revision_label_still_drifts_against_another_commit
+test_an_unresolved_short_sha_cannot_agree_by_textual_prefix
 test_a_revision_label_that_names_no_commit_is_not_reported_as_drift
 test_a_revision_label_naming_a_ref_is_never_resolved_through_the_clone
 test_a_revision_label_naming_a_ref_is_not_attributed_a_commit_in_the_served_notice
