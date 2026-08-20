@@ -688,7 +688,7 @@ fm_backend_composer_state() {  # <backend> <target> -> empty|pending|unknown
 # that errors on an unknown id; tmux was the outlier because its probe command
 # substitutes a different target rather than failing.
 fm_backend_target_exists() {  # <backend> <target> [expected-label]
-  local backend=$1 target=$2 expected_label=${3:-} session pane state out tab_id scoped title wsid sfid
+  local backend=$1 target=$2 expected_label=${3:-} session pane state out tab_id scoped title wsid sfid rc
   case "$backend" in
     tmux)
       # Dispatched, not inlined: the raw `tmux display-message -p -t "$target"
@@ -697,7 +697,15 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
       # and so returns 0 either way (fm_tmux_resolve_pane, bin/fm-tmux-lib.sh).
       fm_backend_source tmux || return 2
       fm_backend_tmux_target_exists "$target" && return 0
-      out=$(tmux list-panes -a -F '#{session_name}:#{window_name}\t#{session_name}:#{window_index}\t#{session_name}:#{window_name}.#{pane_index}\t#{session_name}:#{window_index}.#{pane_index}\t#{window_name}\t#{window_id}\t#{pane_id}' 2>/dev/null) || return 2
+      rc=$?
+      [ "$rc" -eq 125 ] && return 125
+      [ "$rc" -eq 126 ] && return 126
+      out=$(fm_tmux_command list-panes -a -F '#{session_name}:#{window_name}\t#{session_name}:#{window_index}\t#{session_name}:#{window_name}.#{pane_index}\t#{session_name}:#{window_index}.#{pane_index}\t#{window_name}\t#{window_id}\t#{pane_id}' 2>/dev/null) || {
+        rc=$?
+        [ "$rc" -eq 125 ] && return 125
+        [ "$rc" -eq 126 ] && return 126
+        return 2
+      }
       printf '%s\n' "$out" | awk -F '\t' -v target="$target" '{ for (i = 1; i <= NF; i++) if ($i == target) found = 1 } END { exit !found }' && return 2
       return 1
       ;;

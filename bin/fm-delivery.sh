@@ -132,7 +132,7 @@ delivery_body() {  # <queue-depth>
 # can name it rather than falling silent.
 SUBMIT_REASON=
 attempt_submit() {  # <backend> <target> <tmux-server> <queue-depth>
-  local backend=$1 target=$2 tmux_server=$3 depth=$4 composer verdict encoded body actual_server
+  local backend=$1 target=$2 tmux_server=$3 depth=$4 composer verdict encoded body
   SUBMIT_REASON=
   if ! fm_backend_list_contains "$SUPPORTED_BACKENDS" "$backend"; then
     SUBMIT_REASON="the published endpoint names backend '$backend', which this listener has no verified composer primitives for"
@@ -143,25 +143,16 @@ attempt_submit() {  # <backend> <target> <tmux-server> <queue-depth>
       SUBMIT_REASON="the published tmux endpoint carries no provable server identity; a pane id alone is ambiguous"
       return 1
     fi
-    # tmux pane ids are unique only inside one server.  Select the recorded
-    # server explicitly, then require that server to echo the same socket and
-    # pid before any target lookup, pane read, or keystroke can run.
-    local TMUX="${tmux_server},0"
-    export TMUX
-    actual_server=$(tmux display-message -p '#{socket_path},#{pid}' 2>/dev/null) || {
-      SUBMIT_REASON="the published tmux server could not be verified"
-      return 1
-    }
-    if [ "$actual_server" != "$tmux_server" ]; then
-      SUBMIT_REASON="the published tmux server identity does not match the server at its recorded socket"
-      return 1
-    fi
+    local FM_TMUX_SERVER_IDENTITY=$tmux_server
+    export FM_TMUX_SERVER_IDENTITY
   fi
   if fm_backend_target_exists "$backend" "$target"; then
     :
   else
     case $? in
       1) SUBMIT_REASON="the published pane $target no longer exists" ;;
+      125) SUBMIT_REASON="the published tmux server identity does not match the server at its recorded socket" ;;
+      126) SUBMIT_REASON="the published tmux server could not be verified" ;;
       *) SUBMIT_REASON="the published pane $target could not be verified" ;;
     esac
     return 1
@@ -179,6 +170,8 @@ attempt_submit() {  # <backend> <target> <tmux-server> <queue-depth>
   if [ "$composer" != empty ]; then
     case "$composer" in
       pending) SUBMIT_REASON="the session composer holds unsubmitted text; delivery waits rather than merging with it" ;;
+      server-mismatch) SUBMIT_REASON="the published tmux server identity does not match the server at its recorded socket" ;;
+      server-unverifiable) SUBMIT_REASON="the published tmux server could not be verified" ;;
       *) SUBMIT_REASON="the session composer could not be confirmed empty (state=${composer:-unknown}: dead shell prompt or unreadable pane)" ;;
     esac
     return 1
@@ -194,6 +187,14 @@ attempt_submit() {  # <backend> <target> <tmux-server> <queue-depth>
   verdict=$(fm_backend_send_text_submit "$backend" "$target" "$encoded" "$SUBMIT_RETRIES" "$SUBMIT_SLEEP" "$SUBMIT_SLEEP")
   if [ "$verdict" = empty ]; then
     return 0
+  fi
+  if [ "$verdict" = server-mismatch ]; then
+    SUBMIT_REASON="the published tmux server identity does not match the server at its recorded socket"
+    return 1
+  fi
+  if [ "$verdict" = server-unverifiable ]; then
+    SUBMIT_REASON="the published tmux server could not be verified"
+    return 1
   fi
   SUBMIT_REASON="the submit was not confirmed (verdict=${verdict:-unknown}); the text may be sitting in the composer"
   return 1

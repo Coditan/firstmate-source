@@ -79,6 +79,36 @@
 # (grok's mid-turn cancel hint, shown iff a turn is running - verified grok 0.2.73).
 FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel'
 
+fm_tmux_quote_command_arg() {
+  local value=$1
+  value=${value//\'/\'\\\'\'}
+  printf "'%s'" "$value"
+}
+
+fm_tmux_command() {
+  local identity=${FM_TMUX_SERVER_IDENTITY:-} socket pid arg command= output marker done
+  if [ -z "$identity" ]; then
+    tmux "$@"
+    return $?
+  fi
+  socket=${identity%,*}
+  pid=${identity##*,}
+  marker="__FM_TMUX_SERVER_MISMATCH_$$__"
+  done="__FM_TMUX_SERVER_CONNECTED_$$__"
+  for arg in "$@"; do
+    command="$command$(fm_tmux_quote_command_arg "$arg") "
+  done
+  output=$(tmux -S "$socket" if-shell -F "#{==:#{pid},$pid}" "$command" \
+    "display-message -p '$marker'" \; display-message -p "$done" 2>/dev/null) || true
+  case "$output" in
+    "$done") output= ;;
+    *$'\n'"$done") output=${output%$'\n'"$done"} ;;
+    *) return 126 ;;
+  esac
+  [ "$output" != "$marker" ] || return 125
+  printf '%s' "$output"
+}
+
 # fm_tmux_resolve_pane: the ONE sanctioned gate every read of a caller-supplied
 # tmux target must pass. Prints the pane id <target> actually names and returns
 # 0; prints nothing and returns 1 when the target does not resolve.
@@ -135,11 +165,29 @@ FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel'
 # stop a probe from doing. Every production caller already passes the
 # session-qualified target recorded in state/<id>.meta's window=.
 fm_tmux_resolve_pane() {  # <target> [tmux-command] -> prints pane id, or returns 1
-  local target=${1:-} tmux_command=${2:-tmux} listing named id
+  local target=${1:-} tmux_command=${2:-tmux} listing named id rc
   [ -n "$target" ] || return 1
-  listing=$("$tmux_command" list-panes -t "$target" -F '#{pane_id}' 2>/dev/null) || return 1
+  if [ "$tmux_command" = tmux ]; then
+    listing=$(fm_tmux_command list-panes -t "$target" -F '#{pane_id}' 2>/dev/null) || {
+      rc=$?
+      [ "$rc" -eq 125 ] && return 125
+      [ "$rc" -eq 126 ] && return 126
+      return 1
+    }
+  else
+    listing=$("$tmux_command" list-panes -t "$target" -F '#{pane_id}' 2>/dev/null) || return 1
+  fi
   [ -n "$listing" ] || return 1
-  named=$("$tmux_command" display-message -p -t "$target" '#{pane_id}' 2>/dev/null) || return 1
+  if [ "$tmux_command" = tmux ]; then
+    named=$(fm_tmux_command display-message -p -t "$target" '#{pane_id}' 2>/dev/null) || {
+      rc=$?
+      [ "$rc" -eq 125 ] && return 125
+      [ "$rc" -eq 126 ] && return 126
+      return 1
+    }
+  else
+    named=$("$tmux_command" display-message -p -t "$target" '#{pane_id}' 2>/dev/null) || return 1
+  fi
   [ -n "$named" ] || return 1
   while read -r id _; do
     if [ "$id" = "$named" ]; then
@@ -193,11 +241,26 @@ fm_tmux_strip_ghost() { fm_composer_strip_ghost; }
 # already collapsed to unknown - but the gate makes the refusal come from the
 # target check rather than from a second command happening to be stricter.
 fm_tmux_composer_state() {  # <target> -> empty|pending|unknown
-  local target=$1 pane cy raw plain stripped bordered=0
-  pane=$(fm_tmux_resolve_pane "$target") || { printf 'unknown'; return 0; }
-  cy=$(tmux display-message -p -t "$pane" '#{cursor_y}' 2>/dev/null) || { printf 'unknown'; return 0; }
+  local target=$1 pane cy raw plain stripped bordered=0 rc
+  pane=$(fm_tmux_resolve_pane "$target") || {
+    rc=$?
+    [ "$rc" -eq 125 ] && { printf 'server-mismatch'; return 0; }
+    [ "$rc" -eq 126 ] && { printf 'server-unverifiable'; return 0; }
+    printf 'unknown'; return 0
+  }
+  cy=$(fm_tmux_command display-message -p -t "$pane" '#{cursor_y}' 2>/dev/null) || {
+    rc=$?
+    [ "$rc" -eq 125 ] && { printf 'server-mismatch'; return 0; }
+    [ "$rc" -eq 126 ] && { printf 'server-unverifiable'; return 0; }
+    printf 'unknown'; return 0
+  }
   case "$cy" in ''|*[!0-9]*) printf 'unknown'; return 0 ;; esac
-  raw=$(tmux capture-pane -e -p -t "$pane" -S "$cy" -E "$cy" 2>/dev/null) || { printf 'unknown'; return 0; }
+  raw=$(fm_tmux_command capture-pane -e -p -t "$pane" -S "$cy" -E "$cy" 2>/dev/null) || {
+    rc=$?
+    [ "$rc" -eq 125 ] && { printf 'server-mismatch'; return 0; }
+    [ "$rc" -eq 126 ] && { printf 'server-unverifiable'; return 0; }
+    printf 'unknown'; return 0
+  }
   # bordered: from the plain row (borders survive an all-ANSI strip).
   plain=$(printf '%s\n' "$raw" | fm_composer_strip_ansi)
   fm_composer_trim "$plain" plain
@@ -233,7 +296,7 @@ fm_pane_input_pending() {  # <target>
 # (an agent mid-turn). Scans a 40-line tail like fm-watch.sh.
 fm_pane_is_busy() {  # <target>
   local win=$1 tail40
-  tail40=$(tmux capture-pane -p -t "$win" -S -40 2>/dev/null) || return 1
+  tail40=$(fm_tmux_command capture-pane -p -t "$win" -S -40 2>/dev/null) || return 1
   printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -6 \
     | grep -qiE "${FM_BUSY_REGEX:-$FM_TMUX_BUSY_REGEX_DEFAULT}"
 }
@@ -257,9 +320,13 @@ fm_pane_is_busy() {  # <target>
 # fm-send's lenient success policies both treat a busy-queued Enter as
 # delivered.
 fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep>
-  local target=$1 retries=$2 sleep_s=$3 i=0 state
+  local target=$1 retries=$2 sleep_s=$3 i=0 state rc
   while :; do
-    tmux send-keys -t "$target" Enter 2>/dev/null || true
+    fm_tmux_command send-keys -t "$target" Enter 2>/dev/null || {
+      rc=$?
+      [ "$rc" -eq 125 ] && { printf 'server-mismatch'; return 0; }
+      [ "$rc" -eq 126 ] && { printf 'server-unverifiable'; return 0; }
+    }
     sleep "$sleep_s"
     state=$(fm_tmux_composer_state "$target")
     [ "$state" = pending ] || { printf '%s' "$state"; return 0; }
@@ -279,8 +346,13 @@ fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep>
 }
 
 fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle>
-  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5
-  tmux send-keys -t "$target" -l "$text" 2>/dev/null || { printf 'send-failed'; return 0; }
+  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 rc
+  fm_tmux_command send-keys -t "$target" -l "$text" 2>/dev/null || {
+    rc=$?
+    [ "$rc" -eq 125 ] && { printf 'server-mismatch'; return 0; }
+    [ "$rc" -eq 126 ] && { printf 'server-unverifiable'; return 0; }
+    printf 'send-failed'; return 0
+  }
   sleep "$settle"
   fm_tmux_submit_enter_core "$target" "$retries" "$sleep_s"
 }

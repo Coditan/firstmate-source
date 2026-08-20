@@ -322,7 +322,14 @@ test_pane_level_submit_blockers_reach_the_verdict() {
 
   socket="fm-delivery-blocker-$$"
   session=fm-delivery-unknown-composer
-  tmux -L "$socket" new-session -d -s "$session" 'bash --noprofile --norc -i'
+  cat > "$home/dead-shell.sh" <<'SH'
+#!/usr/bin/env bash
+printf '$ '
+IFS= read -r _
+sleep 300
+SH
+  chmod +x "$home/dead-shell.sh"
+  tmux -L "$socket" new-session -d -s "$session" "$home/dead-shell.sh"
   server=$(tmux -L "$socket" display-message -p -t "$session" '#{socket_path},#{pid}')
 
   home=$(make_home removed-pane)
@@ -336,18 +343,9 @@ test_pane_level_submit_blockers_reach_the_verdict() {
   stop_listener "$pid"
 
   home=$(make_home unknown-composer)
-  mkdir -p "$home/bin"
-  cat > "$home/bin/tmux" <<SH
-#!/usr/bin/env bash
-if [ "\${1:-}" = capture-pane ]; then
-  exit 1
-fi
-exec $(command -v tmux) -L '$socket' "\$@"
-SH
-  chmod +x "$home/bin/tmux"
   publish_endpoint "$home" tmux "$session" "$server"
   queue_wake "$home"
-  pid=$(start_listener "$home" PATH="$home/bin:$PATH")
+  pid=$(start_listener "$home")
   out=$(wait_for_report "$home" "composer could not be confirmed empty")
   grep -qF "composer could not be confirmed empty" "$home/state/.delivery.log" \
     || fail "the submit path did not record the unknown composer blocker"
@@ -442,7 +440,7 @@ SH
 }
 
 test_real_tmux_server_collision_refuses_an_unproven_endpoint() {
-  local home owner_socket sibling_socket owner_server sibling_server owner_pane sibling_pane pid out i
+  local home owner_socket sibling_socket owner_server sibling_server owner_pane sibling_pane replacement_pane pid out i
   command -v tmux >/dev/null 2>&1 || { echo "skip: tmux not installed"; return 0; }
   home=$(make_home real-tmux-collision)
   owner_socket="fm-delivery-owner-$$"
@@ -509,6 +507,25 @@ SH
   [ -s "$home/owner.received" ] || fail "the server-bound endpoint did not reach its owning pane"
   [ ! -e "$home/sibling.received" ] || fail "the server-bound endpoint still reached the sibling vessel"
   stop_listener "$pid"
+
+  tmux -L "$owner_socket" kill-server 2>/dev/null || true
+  rm -f "$home/owner.received"
+  tmux -L "$owner_socket" new-session -d -s replacement \
+    "$home/collision-agent.sh" "$home/replacement.received"
+  sleep 0.5
+  replacement_pane=$(tmux -L "$owner_socket" display-message -p -t replacement '#{pane_id}')
+  [ "$replacement_pane" = "$owner_pane" ] \
+    || fail "the replacement server did not reuse the colliding pane id ($replacement_pane vs $owner_pane)"
+
+  publish_endpoint "$home" tmux "$owner_pane" "$owner_server"
+  pid=$(start_listener "$home" "TMUX=${sibling_server},0")
+  out=$(wait_for_report "$home" "server identity does not match")
+  case "$out" in undeliverable:*) ;; *) fail "a socket-reused endpoint looked deliverable: $out" ;; esac
+  sleep 0.3
+  [ ! -e "$home/replacement.received" ] \
+    || fail "the stale server identity typed into the replacement server's pane"
+  stop_listener "$pid"
+
   tmux -L "$owner_socket" kill-server 2>/dev/null || true
   tmux -L "$sibling_socket" kill-server 2>/dev/null || true
   trap 'cleanup_listeners; fm_test_cleanup' EXIT
