@@ -199,6 +199,20 @@ fm_delivery_endpoint_status() {  # <state>
   return 0
 }
 
+# The one place a status becomes a sentence.  Both readers of the classifier -
+# the public verdict and the listener's own log - print the same words for the
+# same condition, so a new status cannot be legible in one and a bare label in
+# the other.
+fm_delivery_endpoint_reason() {  # <status>
+  case "$1" in
+    absent) printf 'no session has published where the model turn lives\n' ;;
+    malformed) printf 'the published endpoint record carries no usable address\n' ;;
+    stale-session) printf 'the endpoint was published by a session that no longer holds the fleet lock\n' ;;
+    unproven-server) printf 'the published tmux endpoint carries no provable server identity; a pane id alone is ambiguous\n' ;;
+    *) printf 'the endpoint is unusable (%s)\n' "$1" ;;
+  esac
+}
+
 fm_delivery_queue_depth() {  # <state>
   local queue=$1/.wake-queue
   [ -s "$queue" ] || { printf '0\n'; return; }
@@ -283,13 +297,7 @@ fm_delivery_report() {  # <state> <delivery-path> [grace] [home]
     return 0
   fi
   if ! fm_delivery_endpoint_status "$state"; then
-    case "$FM_DELIVERY_ENDPOINT_STATUS" in
-      absent) reason='no session has published where the model turn lives' ;;
-      malformed) reason='the published endpoint record carries no usable address' ;;
-      stale-session) reason='the endpoint was published by a session that no longer holds the fleet lock' ;;
-      unproven-server) reason='the published tmux endpoint carries no provable server identity; a pane id alone is ambiguous' ;;
-      *) reason="the endpoint is unusable ($FM_DELIVERY_ENDPOINT_STATUS)" ;;
-    esac
+    reason=$(fm_delivery_endpoint_reason "$FM_DELIVERY_ENDPOINT_STATUS")
     printf 'undeliverable: listener pid %s is up with %s wake(s) pending, but %s\n' \
       "$FM_DELIVERY_HEALTHY_PID" "$depth" "$reason"
     return 1

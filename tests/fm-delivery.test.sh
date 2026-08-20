@@ -489,6 +489,11 @@ SH
   [ ! -e "$home/sibling.received" ] || fail "the refused collision typed into the sibling vessel's pane"
   grep -qF 'delivered:' "$home/state/.delivery.log" \
     && fail "the refused collision was logged as delivered"
+  # The listener's own log has to name the cause in the same words the public
+  # verdict uses.  A bare status label here is how a refusal reads as an
+  # unexplained silence to whoever opens the log first.
+  grep -qF 'a pane id alone is ambiguous' "$home/state/.delivery.log" \
+    || fail "the listener log did not name why the colliding endpoint was refused"
   stop_listener "$pid"
 
   # The same colliding pane id becomes safe once the endpoint binds it to the

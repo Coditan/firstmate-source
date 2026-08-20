@@ -219,12 +219,7 @@ cycle() {
     return 0
   fi
   if ! fm_delivery_endpoint_status "$STATE"; then
-    case "$FM_DELIVERY_ENDPOINT_STATUS" in
-      absent) reason='no session has published where the model turn lives' ;;
-      malformed) reason='the published endpoint record carries no usable address' ;;
-      stale-session) reason='the endpoint was published by a session that no longer holds the fleet lock' ;;
-      *) reason="the endpoint is unusable ($FM_DELIVERY_ENDPOINT_STATUS)" ;;
-    esac
+    reason=$(fm_delivery_endpoint_reason "$FM_DELIVERY_ENDPOINT_STATUS")
     log_condition "endpoint:$FM_DELIVERY_ENDPOINT_STATUS" \
       "undeliverable: $depth wake(s) pending but $reason"
     return 0
