@@ -4,6 +4,7 @@ Why Codex direct reports receive a per-task writable signal directory, how `stat
 
 This is a verification and incident record for the 2026-08-18 worker-signalling gap.
 The mechanism here is separate from the no-mistakes socket network grant recorded in [`docs/codex-sandbox-network.md`](codex-sandbox-network.md).
+The same per-task directory later became the home of the completion-gate attestation, for the same reason and with the same evidence discipline; [`docs/codex-completion-gate.md`](codex-completion-gate.md) owns that record.
 
 ## Observed spread
 

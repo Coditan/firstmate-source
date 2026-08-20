@@ -943,6 +943,62 @@ test_record_refuses_text_it_could_not_store_faithfully() {
   pass "recording refuses text it could not store verbatim, before writing anything"
 }
 
+# A sandboxed Codex direct report is granted exactly one writable filesystem root,
+# its per-task signal directory, so it cannot write state/<id>.meta at all. Before
+# this was fixed the completion gate had to escalate for model approval on every
+# Codex run and was refused outright on 2026-08-17 (docs/codex-completion-gate.md).
+# The attestation must therefore land in that directory when one exists, stay
+# readable by the gate teardown runs, and keep working for a task that has no such
+# directory or that was already attested in its meta before this change.
+test_completion_attestation_reaches_a_sandboxed_worker_writable_root() {
+  local home id meta plain legacy
+  home=$(make_home sandboxed-attestation)
+  id=sample-sandboxed-scout
+  mkdir -p "$home/data/$id" "$home/state/.crew-signal/$id"
+  printf '# report\n' > "$home/data/$id/report.md"
+  meta="$home/state/$id.meta"
+  printf 'id=%s\nkind=scout\nharness=codex\nrepo=sample\n' "$id" > "$meta"
+
+  # The one write the gate needs must not be the meta: make the meta unwritable,
+  # which is what the sandbox does to a Codex worker, and require completion anyway.
+  chmod 444 "$meta"
+  run_decisions "$home" complete "$id" --none >/dev/null \
+    || { chmod 644 "$meta"; fail "completion gate could not close without writing the meta"; }
+  chmod 644 "$meta"
+
+  assert_grep "decisions_reviewed=1" "$home/state/.crew-signal/$id/decisions" \
+    "attestation did not reach the worker-writable signal directory"
+  assert_no_grep "decisions_reviewed=1" "$meta" \
+    "attestation was written to the meta a sandboxed worker cannot reach"
+
+  run_decisions "$home" verify "$id" >/dev/null \
+    || fail "verify could not read an attestation held in the signal directory"
+  run_teardown "$home" "$id" >/dev/null 2>&1 \
+    || fail "scout teardown refused a task attested in its signal directory"
+
+  # A task with no signal directory keeps attesting into its meta.
+  home=$(make_home plain-attestation)
+  plain=sample-plain-scout
+  mkdir -p "$home/data/$plain"
+  printf '# report\n' > "$home/data/$plain/report.md"
+  printf 'id=%s\nkind=scout\nharness=claude\nrepo=sample\n' "$plain" > "$home/state/$plain.meta"
+  run_decisions "$home" complete "$plain" --none >/dev/null \
+    || fail "completion gate regressed for a task with no signal directory"
+  assert_grep "decisions_reviewed=1" "$home/state/$plain.meta" \
+    "attestation did not stay in the meta when no signal directory exists"
+
+  # A task attested in its meta before this change still verifies once it has one.
+  legacy=sample-legacy-scout
+  mkdir -p "$home/data/$legacy" "$home/state/.crew-signal/$legacy"
+  printf '# report\n' > "$home/data/$legacy/report.md"
+  printf 'id=%s\nkind=scout\nharness=codex\nrepo=sample\ndecisions_reviewed=1\ndecision_keys=\n' \
+    "$legacy" > "$home/state/$legacy.meta"
+  run_decisions "$home" verify "$legacy" >/dev/null \
+    || fail "an attestation recorded in the meta before this change stopped verifying"
+
+  pass "completion attestation reaches a sandboxed worker's only writable root"
+}
+
 test_uninventoried_report_decision_refuses_completion
 test_undoored_decisions_become_durable_records
 test_record_is_idempotent_and_refuses_a_conflicting_answer
@@ -957,3 +1013,4 @@ test_none_inventory_and_resolved_prose_do_not_create_holds
 test_terminal_single_owner_status_decision_does_not_block_empty_inventory
 test_secondmate_hold_stays_in_authoritative_home
 test_resolve_matches_quoted_blocked_by_edges
+test_completion_attestation_reaches_a_sandboxed_worker_writable_root
