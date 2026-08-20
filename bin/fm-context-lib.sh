@@ -13,11 +13,14 @@
 # WHAT IS READ FROM THE TRANSCRIPT, AND WHAT IS NOT
 # Only four things: the last assistant record's token `usage` numbers, the
 # timestamp of the last genuine captain prompt, that prompt's own record id, and
-# the file's byte size. Message CONTENT is never read and never printed. That is
-# a hard constraint - the watcher runs unattended and its output lands in wake
-# payloads - and it is enforceable here because Claude Code stamps every user
-# record with a structural `origin.kind`, so provenance needs no text inspection
-# at all (see fm_context_scan).
+# the file's byte size. Message CONTENT is never PRINTED. That is a hard
+# constraint - the watcher runs unattended and its output lands in wake payloads.
+# Content is INSPECTED, for exactly one purpose: the syntactic operational-input
+# test owned by bin/fm-operational-input.sh, which is the only thing that can tell
+# a firstmate delivery apart from a captain prompt. Structural provenance cannot,
+# and believing otherwise is what broke this: a wake is typed into the session's
+# pane, so the harness stamps it with the same `origin.kind == "human"` and
+# `promptSource == "typed"` a captain prompt carries (see fm_context_scan).
 #
 # docs/context-reset.md owns the mechanism narrative, the verified evidence, and
 # the limits. This file owns the predicates; each consumer script's header owns
@@ -209,17 +212,33 @@ fm_context_record_read() {  # <state-dir>
 # measurements from what that read covered. fm_context_scan owns how wide the
 # read is and whether one pass is enough.
 #
-# Provenance is structural, never textual. Claude Code marks a typed captain
-# prompt `origin.kind == "human"`; a background-task wake delivery is
-# `origin.kind == "task-notification"` with `promptSource == "system"`; hook and
-# system injections carry `isMeta: true`; tool results carry array content. The
-# one remaining shape - a string-content user record with neither origin nor
-# promptSource - counts as human only when it is not one of the syntactic
-# operational inputs owned by bin/fm-operational-input.sh. That keeps slash-command
-# expansions captain-visible while excluding watcher, guard, session-start,
-# away-supervisor, launch-brief, from-firstmate, and legacy operational deliveries
-# that have already lost their producer metadata by the time they reach the
-# transcript. Every ambiguity resolves toward "the captain is here", because the
+# TWO TESTS, IN THIS ORDER, AND THE ORDER IS THE WHOLE POINT.
+#
+# First the syntactic one: any string-content user record that
+# bin/fm-operational-input.sh classifies is a firstmate delivery and is dropped,
+# whatever provenance it carries. Then the structural one, over what is left:
+# Claude Code marks a captain prompt `origin.kind == "human"`; a background-task
+# wake delivery is `origin.kind == "task-notification"` with
+# `promptSource == "system"`; hook and system injections carry `isMeta: true`;
+# tool results carry array content; and a string-content record with neither
+# origin nor promptSource counts as human, which keeps slash-command expansions
+# captain-visible.
+#
+# The syntactic test used to run only on that last shape, and that was the defect.
+# Firstmate's own wake delivery reaches the session by being TYPED into its pane,
+# so the harness stamps it `origin.kind == "human"`, `promptSource == "typed"` -
+# byte for byte the provenance of a captain prompt. The structural test matched
+# first, the classifier was never consulted, and every delivered wake re-dated the
+# captain to the moment of its own delivery. Measured on this seat 2026-08-20:
+# the watcher chose the reset branch and the wake carrying that order was itself
+# the record that then made bin/fm-context-reset.sh refuse it, four times over
+# three hours. Provenance cannot separate firstmate from the captain, because
+# firstmate speaks through the captain's own input channel; only the marker can.
+#
+# What is excluded is therefore every marked delivery - watcher, guard,
+# session-start, away-supervisor, launch-brief, telegram-correspondent,
+# from-firstmate, and the legacy operational forms - on any provenance at all.
+# Every remaining ambiguity resolves toward "the captain is here", because the
 # cost of a false quiet is a discarded conversation and the cost of a false busy
 # is one deferred reset.
 #
@@ -267,14 +286,8 @@ _fm_context_scan_pass() {  # <transcript-path> <bytes>
           | select(.type == "user")
           | select(.isMeta != true)
           | select((.message.content | type) == "string")
-          | select(
-              .origin.kind == "human"
-              or (
-                .origin == null
-                and .promptSource == null
-                and ((.message.content | firstmate_operational_input) | not)
-              )
-            )
+          | select((.message.content | firstmate_operational_input) | not)
+          | select(.origin.kind == "human" or (.origin == null and .promptSource == null))
         ] | last ) as $human
     | "\($tokens // "")\t\($human.timestamp // "")\t\($human.uuid // "")"
   ' 2>/dev/null) || {
@@ -378,16 +391,63 @@ fm_context_scan() {  # <transcript-path>
 # cannot say where the captain last spoke cannot be read as saying the captain is
 # gone. An absent record is not evidence of absence. A malformed one returns 0
 # for the same reason: a value that cannot be understood must not read as silence.
+#
+# FOUR CONDITIONS REACH ONE RETURN VALUE, SO THE RETURN VALUE IS NOT THE WHOLE
+# ANSWER. Three different things make this say "present" - the captain spoke, the
+# timestamp could not be read, no timestamp exists at all - and a caller that
+# reports all three as "the captain has been active" states as fact something it
+# has not established. That is not a wording nicety: on 2026-08-20 that one
+# sentence sent three attempts chasing a timing race that was never there,
+# because the message named a cause instead of the condition it actually hit.
+# So the condition is published alongside the return value:
+#
+#   FM_CONTEXT_CAPTAIN_PRESENCE      a stable token, never prose:
+#     spoke         a readable timestamp inside the idle window (returns 0)
+#     unreadable    a timestamp that is not an instant this can compare (0)
+#     unrecorded    no captain record was found anywhere (0)
+#     unmeasurable  the current time could not be read, so nothing can be
+#                   compared against anything (0)
+#     idle          a readable timestamp older than the idle window (returns 1)
+#   FM_CONTEXT_CAPTAIN_PRESENCE_WHY  one clause naming that condition, written to
+#                                    drop into a caller's own sentence. The
+#                                    condition is stated here so the two callers
+#                                    cannot describe it differently; each still
+#                                    composes its own consequence around it.
+FM_CONTEXT_CAPTAIN_PRESENCE=
+FM_CONTEXT_CAPTAIN_PRESENCE_WHY=
 fm_context_captain_active() {  # <last-human-ts>
   local ts=$1 threshold
-  [ -n "$ts" ] || return 0
-  threshold=$(fm_context_iso_utc "$(( $(date +%s) - FM_CONTEXT_CAPTAIN_IDLE_SECS ))") || return 0
-  [ -n "$threshold" ] || return 0
+  FM_CONTEXT_CAPTAIN_PRESENCE=
+  FM_CONTEXT_CAPTAIN_PRESENCE_WHY=
+  if [ -z "$ts" ]; then
+    FM_CONTEXT_CAPTAIN_PRESENCE=unrecorded
+    FM_CONTEXT_CAPTAIN_PRESENCE_WHY="no captain message was found anywhere in this session's transcript, so nothing can show the captain is away"
+    return 0
+  fi
+  threshold=$(fm_context_iso_utc "$(( $(date +%s) - FM_CONTEXT_CAPTAIN_IDLE_SECS ))") || threshold=
+  if [ -z "$threshold" ]; then
+    FM_CONTEXT_CAPTAIN_PRESENCE=unmeasurable
+    FM_CONTEXT_CAPTAIN_PRESENCE_WHY="the current time could not be read, so the captain's last message at $ts cannot be placed inside or outside the ${FM_CONTEXT_CAPTAIN_IDLE_SECS}s window"
+    return 0
+  fi
   case "$ts" in
     [0-9][0-9][0-9][0-9]-*) ;;
-    *) return 0 ;;
+    *)
+      FM_CONTEXT_CAPTAIN_PRESENCE=unreadable
+      FM_CONTEXT_CAPTAIN_PRESENCE_WHY="the captain's last message carries an unreadable timestamp ('$ts'), so it cannot be placed inside or outside the ${FM_CONTEXT_CAPTAIN_IDLE_SECS}s window"
+      return 0
+      ;;
   esac
-  [ "$ts" \> "$threshold" ]
+  if [ "$ts" \> "$threshold" ]; then
+    FM_CONTEXT_CAPTAIN_PRESENCE=spoke
+    FM_CONTEXT_CAPTAIN_PRESENCE_WHY="the captain has been active within the last ${FM_CONTEXT_CAPTAIN_IDLE_SECS}s (last message at $ts)"
+    return 0
+  fi
+  # shellcheck disable=SC2034 # Read by callers after fm_context_captain_active returns.
+  FM_CONTEXT_CAPTAIN_PRESENCE=idle
+  # shellcheck disable=SC2034 # Read by callers after fm_context_captain_active returns.
+  FM_CONTEXT_CAPTAIN_PRESENCE_WHY="the captain's last message at $ts is older than the ${FM_CONTEXT_CAPTAIN_IDLE_SECS}s window"
+  return 1
 }
 
 # Return 0 when the fleet is quiet enough to discard a session's context.
@@ -475,7 +535,9 @@ fm_context_restart_path_ok() {  # <fm-home> <fm-root>
 #                           the ceiling is UNENFORCED and an observer must see it
 #   ... cannot run safely   over ceiling and quiet, but the re-entry hook is gone
 #   ... ask the captain     over ceiling and quiet, but the captain is in live
-#                           conversation or away mode owns delivery
+#                           conversation, away mode owns delivery, or presence
+#                           could not be established at all - the payload names
+#                           which of those it actually hit
 #   ... reset               over ceiling, quiet, and the captain is not present
 #
 # Alongside the printed text it publishes three variables, so a caller that needs
@@ -528,7 +590,7 @@ _fm_context_ceiling_surfaced() {  # <class> <reason>
 }
 
 fm_context_ceiling_reason() {  # <state-dir> <fm-home> <fm-root>
-  local state=$1 home=$2 root=$3 branch msg
+  local state=$1 home=$2 root=$3 branch msg cause
   # shellcheck disable=SC2034 # Read by callers after fm_context_ceiling_reason returns.
   FM_CONTEXT_CEILING_REASON=
   # shellcheck disable=SC2034 # Read by callers after fm_context_ceiling_reason returns.
@@ -566,9 +628,19 @@ fm_context_ceiling_reason() {  # <state-dir> <fm-home> <fm-root>
     FM_CONTEXT_CEILING_STATE=suppressed
     return 0
   fi
+  # Both conditions take the ask branch, and the payload names which one it hit.
+  # Away mode is stated first because that is the order the reset tool refuses in,
+  # so the wake and the refusal name the same cause when both are true.
   branch=reset
-  [ -e "$state/.afk" ] && branch=ask
-  fm_context_captain_active "$FM_CONTEXT_LAST_HUMAN_TS" && branch=ask
+  cause=
+  if [ -e "$state/.afk" ]; then
+    branch=ask
+    cause="away mode is active and owns wake delivery, so a reset here is the captain's call rather than an autonomous one"
+  fi
+  if fm_context_captain_active "$FM_CONTEXT_LAST_HUMAN_TS"; then
+    branch=ask
+    [ -n "$cause" ] || cause=$FM_CONTEXT_CAPTAIN_PRESENCE_WHY
+  fi
   if ! fm_context_restart_path_ok "$home" "$root"; then
     printf -v msg 'check: context-ceiling: %s tokens is over the %s ceiling, but a reset cannot run safely: %s' \
       "$FM_CONTEXT_TOKENS" "$FM_CONTEXT_CEILING" "$FM_CONTEXT_RESTART_ERROR"
@@ -576,8 +648,8 @@ fm_context_ceiling_reason() {  # <state-dir> <fm-home> <fm-root>
     return 0
   fi
   if [ "$branch" = ask ]; then
-    printf -v msg 'check: context-ceiling: %s tokens is over the %s ceiling and the fleet is quiet, but the captain has been active - ASK the captain before resetting; never reset autonomously during a live conversation' \
-      "$FM_CONTEXT_TOKENS" "$FM_CONTEXT_CEILING"
+    printf -v msg 'check: context-ceiling: %s tokens is over the %s ceiling and the fleet is quiet, but %s - ASK the captain before resetting; never reset autonomously during a live conversation' \
+      "$FM_CONTEXT_TOKENS" "$FM_CONTEXT_CEILING" "$cause"
     _fm_context_ceiling_surfaced ask "$msg"
     return 0
   fi

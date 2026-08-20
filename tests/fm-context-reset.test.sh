@@ -1164,6 +1164,264 @@ test_unattributed_unmarked_recent_user_message_still_counts_as_the_captain() {
   pass "an unattributed unmarked recent user message still blocks autonomous reset"
 }
 
+# --- firstmate speaks through the captain's own input channel ---------------
+
+# The record shapes the classification actually turns on, built one at a time so
+# a test can put them in whatever ORDER the case is about. A delivered wake and a
+# captain prompt are byte-for-byte identical in provenance - both are typed into
+# the same pane - so only their content separates them, and only ordering shows
+# which of the two the scan ended up on.
+captain_record() {  # <ts> [uuid]
+  jq -cn --arg uuid "${2:-$CAPTAIN_RECORD_ID}" --arg ts "$1" \
+    '{type:"user", origin:{kind:"human"}, promptSource:"typed", uuid:$uuid,
+      message:{role:"user", content:"captain says something"}, timestamp:$ts}'
+}
+
+typed_operational_record() {  # <content> <ts> [uuid]
+  jq -cn --arg uuid "${3:-typed-operational-record-0001}" --arg content "$1" --arg ts "$2" \
+    '{type:"user", origin:{kind:"human"}, promptSource:"typed", uuid:$uuid,
+      message:{role:"user", content:$content}, timestamp:$ts}'
+}
+
+write_records() {  # <path> <tokens> <record-json...>
+  local path=$1 tokens=$2
+  shift 2
+  {
+    printf '{"type":"user","isMeta":true,"message":{"role":"user","content":"session-start nudge"},"timestamp":"2020-01-01T00:00:00.000Z"}\n'
+    [ "$#" -eq 0 ] || printf '%s\n' "$@"
+    printf '{"type":"assistant","message":{"usage":{"input_tokens":%s,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}\n' "$tokens"
+  } > "$path"
+}
+
+# The defect this whole change exists for, in its exact measured shape.
+# Firstmate's wake delivery is TYPED into the session's pane, so the harness
+# stamps it `origin.kind == "human"`, `promptSource == "typed"` - the provenance
+# of a captain prompt, because it arrived through the captain's own input
+# channel. The structural test matched it first and the operational classifier
+# was never consulted, so every delivered wake re-dated the captain to the moment
+# of its own delivery: the watcher chose the reset branch, the wake carrying that
+# order became the newest "captain" record, and the reset tool then refused the
+# order the watcher had just given. Four times over three hours on this seat,
+# 2026-08-20. The mechanism could not fire on any seat that receives wakes,
+# which is every seat.
+test_a_typed_wake_delivery_is_not_mistaken_for_the_captain() {
+  local fields out old_ts operational
+  make_case
+  old_ts=$(iso_ago 86400)
+  fm_operational_input_encode watcher \
+    "Wake delivery: 1 wake record(s) are pending in the durable queue." operational \
+    || fail "fixture could not compose a watcher operational input"
+  write_records "$TRANSCRIPT" 900000 \
+    "$(captain_record "$old_ts")" \
+    "$(typed_operational_record "$operational" "$(iso_now)")"
+  fields=$(scan_published_fields "$TRANSCRIPT")
+  assert_contains "$fields" "ts=[$old_ts]" \
+    "a typed wake delivery displaced the last real captain timestamp"
+  assert_contains "$fields" "uuid=[$CAPTAIN_RECORD_ID]" \
+    "a typed wake delivery displaced the last real captain record id"
+  out=$(watch_reason)
+  assert_contains "$out" "the captain is not present" \
+    "a typed wake delivery was mistaken for captain activity, so the reset branch was unreachable"
+  pass "a wake delivery typed into the pane is not captain activity, whatever provenance the harness stamped on it"
+}
+
+# The other direction, and it is the one that matters more. A scan that skips too
+# much silently disables the guard protecting the captain from a reset landing
+# mid-conversation - a far worse outcome than the bug above. So: the newest
+# record is a genuine captain prompt sitting BEHIND a typed wake delivery, in the
+# order a real conversation produces it, and it must still win.
+test_a_captain_prompt_behind_a_typed_wake_delivery_still_blocks_the_reset() {
+  local fields out recent_ts operational
+  make_case
+  recent_ts=$(iso_ago 60)
+  fm_operational_input_encode watcher \
+    "Wake delivery: 1 wake record(s) are pending in the durable queue." operational \
+    || fail "fixture could not compose a watcher operational input"
+  write_records "$TRANSCRIPT" 900000 \
+    "$(typed_operational_record "$operational" "$(iso_ago 120)")" \
+    "$(captain_record "$recent_ts")"
+  write_receipt
+  fields=$(scan_published_fields "$TRANSCRIPT")
+  assert_contains "$fields" "ts=[$recent_ts]" \
+    "the captain's own prompt was skipped along with the wake delivery in front of it"
+  assert_contains "$fields" "uuid=[$CAPTAIN_RECORD_ID]" \
+    "the captain's own record id was skipped along with the wake delivery in front of it"
+  out=$(watch_reason)
+  assert_contains "$out" "ASK the captain" \
+    "the watcher offered an autonomous reset while the captain was mid-conversation"
+  assert_not_contains "$out" "fm-context-reset.sh" \
+    "the watcher handed over a reset command while the captain was mid-conversation"
+  assert_refuses "the captain has been active within the last" \
+    "a reset while the captain has spoken since the last wake delivery"
+  pass "a captain prompt is still the captain when a typed wake delivery sits in front of it"
+}
+
+# Narrowing the exclusion to the one payload that caused the incident would leave
+# every other delivery still re-dating the captain, so each form firstmate can
+# put on that channel is asserted on the shape it actually arrives in: typed,
+# with a captain prompt's provenance.
+test_every_operational_form_stays_excluded_when_typed() {
+  local kind old_ts operational fields forms=()
+  make_case
+  old_ts=$(iso_ago 86400)
+  for kind in session-start watcher turn-end-guard away-supervisor launch-brief telegram-correspondent; do
+    fm_operational_input_encode "$kind" "operational body for $kind" operational \
+      || fail "fixture could not compose a $kind operational input"
+    forms+=("$operational")
+  done
+  fm_operational_input_construct from-firstmate "routed instruction" operational \
+    || fail "fixture could not compose a from-firstmate input"
+  forms+=("$operational")
+  forms+=(
+    "$FM_LEGACY_SESSIONSTART"
+    "${FM_LEGACY_AWAY_PREFIX}context ceiling)"
+    "${FM_LEGACY_WATCHER_PREFIX}context ceiling${FM_LEGACY_WATCHER_SUFFIX}"
+    "${FM_LEGACY_TURNEND_PREFIX}recover supervision"
+    "${FM_OPERATIONAL_PREFIX}an untyped legacy operational body"
+  )
+  for operational in "${forms[@]}"; do
+    write_records "$TRANSCRIPT" 900000 \
+      "$(captain_record "$old_ts")" \
+      "$(typed_operational_record "$operational" "$(iso_now)")"
+    fields=$(scan_published_fields "$TRANSCRIPT")
+    assert_contains "$fields" "ts=[$old_ts]" \
+      "a typed operational input was read as captain activity: $(printf '%s' "$operational" | head -c 40)"
+  done
+  pass "every operational form the classifier recognises stays excluded when it arrives with a captain prompt's provenance"
+}
+
+# --- one return value, four conditions, four sentences ----------------------
+
+# fm_context_captain_active answers "present" for three genuinely different
+# reasons, and its fail-safe for the unknown ones is correct and stays. What was
+# wrong is that the callers printed the same sentence for all of them: on
+# 2026-08-20 "the captain has been active within the last 1800s" was printed on a
+# seat where the captain had not spoken for hours, and it read as a timing race
+# for three attempts because the sentence named a cause rather than the condition.
+presence_facts() {  # <last-human-ts>
+  # FAKEBIN is on PATH so a test can put a deliberately broken tool in front of
+  # the real one for the condition that needs it.
+  # shellcheck disable=SC2016 # The inner script's positional args are the child shell's, on purpose.
+  env -u FM_ROOT_OVERRIDE PATH="$FAKEBIN:$PATH" bash -c '
+      set -u
+      . "$1"
+      if fm_context_captain_active "$2"; then v=present; else v=absent; fi
+      printf "%s/%s/%s\n" "$v" "$FM_CONTEXT_CAPTAIN_PRESENCE" "$FM_CONTEXT_CAPTAIN_PRESENCE_WHY"
+    ' fm-context-reset-test "$ROOT/bin/fm-context-lib.sh" "$1"
+}
+
+# A date that cannot produce the comparison instant, so nothing can be placed
+# inside or outside the window. `date +%s` still answers, because the failure
+# under test is the ISO conversion the comparison needs, not the clock itself.
+install_failing_iso_date() {  # <fakebin>
+  cat > "$1/date" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  +%s) exec /bin/date "$@" ;;
+esac
+exit 1
+EOF
+  chmod +x "$1/date"
+}
+
+test_each_reason_the_captain_counts_as_present_names_itself() {
+  local spoke unreadable unrecorded unmeasurable idle
+  make_case
+  spoke=$(presence_facts "$(iso_ago 60)")
+  unreadable=$(presence_facts "not-an-instant")
+  unrecorded=$(presence_facts "")
+  idle=$(presence_facts "$(iso_ago 86400)")
+  install_failing_iso_date "$FAKEBIN"
+  unmeasurable=$(presence_facts "$(iso_ago 86400)")
+  rm -f "$FAKEBIN/date"
+
+  assert_contains "$spoke" "present/spoke/" "a captain who genuinely spoke was not reported as having spoken"
+  assert_contains "$spoke" "the captain has been active within the last" "the spoke condition lost its own sentence"
+  assert_contains "$unreadable" "present/unreadable/" "an unreadable captain timestamp was not reported as unreadable"
+  assert_contains "$unreadable" "unreadable timestamp" "the unreadable condition did not say the timestamp could not be read"
+  assert_contains "$unrecorded" "present/unrecorded/" "an absent captain record was not reported as absent"
+  assert_contains "$unrecorded" "was found anywhere" "the unrecorded condition did not say nothing was found"
+  assert_contains "$unmeasurable" "present/unmeasurable/" "an unreadable clock was not reported as unmeasurable"
+  assert_contains "$unmeasurable" "current time could not be read" "the unmeasurable condition did not say the clock could not be read"
+  assert_contains "$idle" "absent/idle/" "a long-silent captain was not reported as idle"
+
+  # The point of the tokens is that they are DIFFERENT. Four conditions that all
+  # mean "present" must not collapse back into one indistinguishable answer.
+  [ "${spoke%%/*}" = present ] || fail "the spoke condition stopped counting as present"
+  [ "$spoke" != "$unreadable" ] || fail "a captain who spoke and an unreadable timestamp produced the same answer"
+  [ "$spoke" != "$unrecorded" ] || fail "a captain who spoke and an absent record produced the same answer"
+  [ "$unreadable" != "$unrecorded" ] || fail "an unreadable timestamp and an absent record produced the same answer"
+  [ "$unmeasurable" != "$spoke" ] || fail "an unreadable clock and a captain who spoke produced the same answer"
+  pass "each reason the captain counts as present names itself instead of all four claiming the captain spoke"
+}
+
+# The same distinction where an operator actually meets it: the tool's refusal.
+# `unrecorded` refuses earlier, on the receipt's captain equality, and that
+# refusal already says what it is - what matters is that the three sentences are
+# three sentences.
+test_a_refusal_names_which_captain_condition_it_hit() {
+  local spoke_out unreadable_out unrecorded_out
+
+  make_case
+  write_transcript "$TRANSCRIPT" 900000 "$(iso_ago 60)"
+  write_receipt
+  run_reset
+  spoke_out=$RESET_OUT
+  expect_code 1 "$RESET_CODE" "a reset while the captain is in live conversation must refuse"
+  assert_contains "$spoke_out" "the captain has been active within the last" \
+    "a genuinely active captain was not named as the cause"
+
+  make_case
+  write_records "$TRANSCRIPT" 900000 "$(captain_record "not-an-instant")"
+  write_receipt
+  run_reset
+  unreadable_out=$RESET_OUT
+  expect_code 1 "$RESET_CODE" "a reset whose captain timestamp cannot be read must refuse"
+  assert_contains "$unreadable_out" "unreadable timestamp" \
+    "an unreadable captain timestamp was not named as the cause"
+  assert_contains "$unreadable_out" "counts as present rather than absent" \
+    "the refusal did not say that an unestablished presence is treated as present"
+  assert_not_contains "$unreadable_out" "the captain has been active within the last" \
+    "an unreadable timestamp still claimed the captain had been active"
+
+  make_case
+  write_transcript "$TRANSCRIPT" 900000 ""
+  write_receipt
+  run_reset
+  unrecorded_out=$RESET_OUT
+  expect_code 1 "$RESET_CODE" "a reset with no captain record at all must refuse"
+  assert_contains "$unrecorded_out" "could not be established" \
+    "a transcript with no captain record was not named as the cause"
+  assert_not_contains "$unrecorded_out" "the captain has been active within the last" \
+    "a transcript with no captain record still claimed the captain had been active"
+  pass "three conditions that all refuse produce three refusals an operator can tell apart"
+}
+
+# The watcher's ask branch carries the same three conditions plus away mode, and
+# it is the sentence firstmate actually reads.
+test_the_ask_wake_names_which_condition_it_hit() {
+  local out
+  make_case
+  write_records "$TRANSCRIPT" 900000 "$(captain_record "not-an-instant")"
+  out=$(watch_reason)
+  assert_contains "$out" "unreadable timestamp" \
+    "the ask wake did not say the captain's timestamp could not be read"
+  assert_not_contains "$out" "the captain has been active" \
+    "the ask wake claimed the captain had been active when nothing established that"
+
+  make_case
+  write_transcript "$TRANSCRIPT" 900000 "$(iso_ago 86400)"
+  : > "$STATE_DIR/.afk"
+  out=$(watch_reason)
+  assert_contains "$out" "away mode is active" \
+    "the ask wake did not say away mode was what took this branch"
+  assert_not_contains "$out" "the captain has been active" \
+    "the away-mode ask wake claimed the captain had been active instead"
+  assert_class "ask/surfaced" "an ask branch whose cause is away mode rather than a captain who spoke"
+  rm -f "$STATE_DIR/.afk"
+  pass "the ask wake names the condition it hit rather than always naming the captain"
+}
+
 # --- an absent captain record is not evidence of an absent captain ----------
 
 # The read is bounded so one poll can never become an unbounded read, and that
@@ -1224,6 +1482,42 @@ test_a_complete_read_with_no_captain_record_fails_closed() {
     "a complete read that found no captain record did not fail closed to captain-present"
   assert_class "ask/surfaced" "a live session whose transcript holds no captain record at all"
   pass "a transcript that cannot say where the captain last spoke fails closed to the captain being present"
+}
+
+# The widen-once path was DEAD on any seat that receives wakes, and nobody could
+# see it: the bounded tail always held a delivered wake, every wake counted as a
+# captain record, so a record was always "found" and the widen never ran. Fixing
+# the classification is what makes this load-bearing for the first time, so it is
+# exercised on the shape that now reaches it - a truncated transcript whose whole
+# tail is operational traffic and whose only captain prompt sits behind the bound.
+test_a_captain_behind_a_tail_of_only_operational_records_is_still_the_captain() {
+  local facts out operational records=() i
+  make_case
+  export FM_CONTEXT_TAIL_BYTES=$TAIL_BYTES
+  fm_operational_input_encode watcher \
+    "Wake delivery: 1 wake record(s) are pending in the durable queue. $(head -c 600 /dev/zero | tr '\0' 'x')" \
+    operational \
+    || fail "fixture could not compose a watcher operational input"
+  records+=("$(captain_record "$(iso_ago 300)")")
+  for i in 1 2 3 4 5; do
+    records+=("$(typed_operational_record "$operational" "$(iso_now)" "typed-operational-record-000$i")")
+  done
+  write_records "$TRANSCRIPT" 900000 "${records[@]}"
+  write_receipt
+  facts=$(scan_facts)
+  assert_contains "$facts" "true/true/" \
+    "a bounded read whose tail held only operational records did not widen to find the captain"
+  assert_contains "$facts" "/present" \
+    "a captain prompt behind a tail of operational records did not read as the captain being present"
+  out=$(watch_reason FM_CONTEXT_TAIL_BYTES="$TAIL_BYTES")
+  assert_contains "$out" "ASK the captain" \
+    "the watcher did not take the ask branch for a captain behind a tail of operational records"
+  assert_not_contains "$out" "fm-context-reset.sh" \
+    "the watcher handed over a reset while the captain was mid-conversation"
+  assert_refuses "the captain has been active within the last" \
+    "a reset while the captain's prompt sits behind a tail of operational records"
+  unset FM_CONTEXT_TAIL_BYTES
+  pass "a tail carrying only operational records widens once and still finds the captain behind it"
 }
 
 # The receipt's captain check is an EQUALITY, so two unknowns would compare equal
@@ -1318,7 +1612,14 @@ test_wake_delivery_is_not_mistaken_for_the_captain
 test_unattributed_operational_wake_delivery_is_not_mistaken_for_the_captain
 test_telegram_correspondent_input_cannot_satisfy_the_approved_path
 test_unattributed_unmarked_recent_user_message_still_counts_as_the_captain
+test_a_typed_wake_delivery_is_not_mistaken_for_the_captain
+test_a_captain_prompt_behind_a_typed_wake_delivery_still_blocks_the_reset
+test_every_operational_form_stays_excluded_when_typed
+test_each_reason_the_captain_counts_as_present_names_itself
+test_a_refusal_names_which_captain_condition_it_hit
+test_the_ask_wake_names_which_condition_it_hit
 test_a_captain_beyond_the_bounded_tail_is_still_the_captain
 test_a_complete_read_with_no_captain_record_fails_closed
+test_a_captain_behind_a_tail_of_only_operational_records_is_still_the_captain
 test_receipt_refuses_when_the_captain_timestamp_is_unknown
 test_a_pane_the_send_path_reserves_refuses
