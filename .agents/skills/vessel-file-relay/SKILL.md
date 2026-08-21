@@ -93,7 +93,7 @@ Two invariants bind whatever happens next, and nothing here relaxes either.
 No secret value ever passes through the shared Bridge repository: every vessel pulls it, it has no per-audience access control, and anything committed sits in its history permanently.
 Bridge may name a credential, say which vessel needs it, and carry a fingerprint that lets both sides confirm they mean the same thing, using the dedicated `secret-request` and `secret-ready` envelope kinds whose `body_md` the CLI structurally refuses to fill.
 It may never carry the value or any part of it.
-That same doctrine document's sections 6 and 7 own those envelope fields and the fingerprint recipe.
+`fleet/doctrine/credential-store-boundary.md` sections 6 and 7 own those envelope fields and the fingerprint recipe.
 Read all of these in the fleet repository itself; `docs/admiralty-fleet-repo.md` says where that repository is and what it owns.
 
 ## 3. Expected obstacle: Claude Code's Auto Mode classifier
