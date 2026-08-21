@@ -121,3 +121,37 @@ fm_nm_reaches() {  # <path>
   PATH="${1:-}" command -v no-mistakes >/dev/null 2>&1 && return 0
   fm_nm_installed_cli >/dev/null 2>&1
 }
+
+# The PATH the validation pipeline's own daemon runs with, or failure when this
+# seat cannot be asked.
+#
+# Why it has to be READ rather than assumed (measured on the coditan vessel,
+# 2026-08-21): the daemon is no-mistakes' own systemd user unit, not one
+# firstmate composes, and it pins its PATH explicitly:
+#
+#   $ systemctl --user cat 'no-mistakes-daemon-*.service' | grep '^Environment="PATH'
+#   Environment="PATH=/home/coditan/.local/bin:/home/coditan/go/bin:...:/sbin"
+#
+# That value reaches ~/.local/bin and ~/bin and reaches NEITHER the npm global
+# prefix nor any firstmate home's $FM_HOME/.local/axi/bin. So a forge client
+# installed the way this fleet installs its own AXI copies is invisible to the
+# pipeline while `command -v` in a session answers yes - the same shape of split
+# reading this library was written for, one process boundary further out.
+#
+# Fails rather than guessing wherever there is no systemctl or no such unit, so
+# a caller can say the reach is unestablished instead of reporting an all-clear
+# it did not measure.
+fm_nm_daemon_path() {
+  local unit path lister
+  command -v systemctl >/dev/null 2>&1 || return 1
+  for lister in list-unit-files list-units; do
+    unit=$(systemctl --user "$lister" --all --plain --no-legend --no-pager \
+      'no-mistakes-daemon-*.service' 2>/dev/null | awk 'NR==1 {print $1}')
+    [ -n "$unit" ] && break
+  done
+  [ -n "$unit" ] || return 1
+  path=$(systemctl --user show -p Environment --value "$unit" 2>/dev/null \
+    | tr ' ' '\n' | sed -n 's/^PATH=//p' | head -n 1)
+  [ -n "$path" ] || return 1
+  printf '%s\n' "$path"
+}

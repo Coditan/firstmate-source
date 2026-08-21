@@ -537,6 +537,8 @@ The resolved value is never validated on its own: an address host has to pass th
 `tests/fm-pr-check-security.test.sh` proves that the same project path and pull request number resolve under both `forge.example` and `code.internal`, while a home with neither setting refuses every address of that shape, which a hardcoded host could not produce.
 Moving the fleet to a different instance is therefore a configuration change rather than a code change.
 
+Setting this value also makes `forgejo-axi` a required tool for the home (see "Forge client" under "Toolchain" below), because naming an instance is what turns a forge client from evaluated into needed.
+
 `config/forgejo-host` is not yet in the inheritable set that `bin/fm-config-inherit-lib.sh` declares, for the same reason `config/batch-delays` is not: identity parsing is the only consumer so far, and whether a secondmate home should inherit this instance belongs to whichever unit first gives a secondmate something to do with it.
 
 ## Event batching delays (config/batch-delays)
@@ -586,7 +588,21 @@ When X mode is opted in, bootstrap also requires `curl` and `jq` before arming t
 `tasks-axi` and `quota-axi` are required bootstrap tools in every profile, the same class as `lavish-axi`.
 An absent or incompatible `tasks-axi` reports `MISSING: tasks-axi` with an install command targeting `$FM_HOME/.local/axi`; when `config/backlog-backend` is not `manual` and compatible `tasks-axi` is on `PATH`, bootstrap stays silent and firstmate uses its verbs for routine backlog mutations, otherwise it hand-edits `data/backlog.md` until installation is approved and completed.
 An absent `quota-axi` reports `MISSING: quota-axi` with the same home-owned prefix; `bin/fm-dispatch-select.sh` still selects uniformly from the valid candidate array with an OS-backed random source when quota data is unavailable.
-A tool this fleet has evaluated and depends on in principle but that no configuration yet requires has no declaration route in this list or in the per-backend delta, and [`docs/forgejo-axi-adoption.md`](forgejo-axi-adoption.md) records the first case and the open question it waits on.
+
+### Forge client (conditional on a configured Forgejo instance)
+
+There is a third required-tool route, narrower than the two above and keyed to neither a backend nor every home: a home that names a Forgejo instance under "Forge instance" also needs `forgejo-axi` 1.3.0 or newer, and a home that names none needs nothing and is told nothing.
+A forge client is not a runtime backend, so the per-backend delta has no condition to hang it on, and requiring it universally would print a missing-tool line on every seat for a tool nothing there calls.
+
+The requirement is not "the tool is on `PATH`", and that is why it reports `FORGE_CLIENT:` rather than `MISSING:`.
+Two processes run this client: an agent session, and the validation pipeline's daemon, which is one shared unit serving every lane and home on the host and which pins its own `PATH`.
+That daemon `PATH` reaches neither the npm global prefix nor any home's `$FM_HOME/.local/axi/bin`, so a copy a session resolves happily can be invisible to the pipeline; `command -v forgejo-axi` answering yes does not settle the question.
+Bootstrap therefore reads the daemon's own environment, resolves the client against that `PATH`, and reads the version from the executable the pipeline would actually run.
+The printed install command targets a prefix that daemon already reaches, so one install serves both, and installing the client anywhere else silences nothing.
+A seat whose daemon environment cannot be read is reported as unestablished rather than as an all-clear, for the same reason the daily currency round reports a reading it could not take that way.
+
+The floor covers two verb surfaces rather than this fleet's own: `bin/fm-bootstrap.sh` owns the version constants and the evidence note, and [`docs/forgejo-axi-adoption.md`](forgejo-axi-adoption.md) owns the licence, provenance, maintenance risk, and the one coupling a version floor cannot cover.
+One fact from that record belongs here rather than only there, because this is where a home decides to depend on the client: `forgejo-axi` is a single maintainer's project with no external issues and no external contributor but this fleet, so a home that configures a forge instance is taking on a dependency the fleet watches rather than one anybody else exercises.
 
 ### AXI-suite self-update
 

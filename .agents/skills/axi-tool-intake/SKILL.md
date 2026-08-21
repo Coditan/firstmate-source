@@ -38,13 +38,14 @@ An unrecorded search is indistinguishable from no search, and a result that does
 
 The two indexes disagree in **both** directions:
 
-- `forgejo-axi` is on npm at 1.2.0 and is **not** in the axi.md catalogue.
+- At the time of this measurement, `forgejo-axi` was on npm at 1.2.0 and was **not** in the axi.md catalogue.
 - `docker-axi` and `jj-axi` are **in** the axi.md catalogue and return a flat 404 on npm under those names.
 
 So checking one index and finding nothing proves nothing at all.
 
-Absence from the catalogue means only that nobody added an entry to `catalog.yaml`.
-It is not evidence that a tool is unofficial, unmaintained, or unsuitable: `forgejo-axi` is MIT, at its third release, and absent purely because no one filed the pull request.
+Absence from the catalogue means only that no entry has been accepted into `catalog.yaml`.
+It is not evidence that a tool is unofficial, unmaintained, or unsuitable: `forgejo-axi` was MIT and at its third release when this measurement found it absent.
+An entry has since been proposed, and [`docs/forgejo-axi-adoption.md`](../../../docs/forgejo-axi-adoption.md) owns its current status.
 
 ### What it cost, both directions
 
@@ -100,7 +101,8 @@ Read that procedure there rather than from memory.
 **How a tool reaches every seat in this fleet has no settled answer, and inventing one is worse than naming the gap.**
 
 Who owns this fleet's AXI suite, and what the accepted route is for adding a tool to it, remains tracked as `fm-axi-nomistakes-guidance-off-argv`.
-`fleet-forgejo-axi` settled the separate adopt-or-fork question for `forgejo-axi`; [`docs/forgejo-axi-adoption.md`](../../../docs/forgejo-axi-adoption.md) owns that ruling and the unresolved declaration question it inherited.
+`fleet-forgejo-axi` settled the separate adopt-or-fork question for `forgejo-axi`, and a configured Forgejo instance now gives that client a conditional declaration route.
+[`docs/configuration.md`](../../../docs/configuration.md) owns that route, while [`docs/forgejo-axi-adoption.md`](../../../docs/forgejo-axi-adoption.md) owns the ruling and the still-open auto-update boundary decision.
 
 Two things follow while it is open.
 A tool that exists only on the seat that built it is not what was asked for, so "it works here" is not a completed deliverable.
