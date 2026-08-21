@@ -255,6 +255,12 @@ third=$(FM_GH_INBOX_PER_PAGE=1 FM_GH_INBOX_MAX_PAGES=1 inbox)
 assert_contains "$third" "pull/23" "later bounded sweeps must reach older notifications"
 pass "bounded notification sweeps advance through older pages"
 
+FM_GH_INBOX_PER_PAGE=1 FM_GH_INBOX_MAX_PAGES=1 inbox >/dev/null
+feed "$(notification 24 mention 2026-08-20T10:00:00Z PullRequest acme/widget acme/widget/pulls/24 'new newest')"
+newest=$(FM_GH_INBOX_PER_PAGE=1 FM_GH_INBOX_MAX_PAGES=1 inbox)
+assert_contains "$newest" "pull/24" "reaching the feed end must return the next sweep to page one"
+pass "a complete notification sweep returns to the newest page"
+
 reset_home
 printf '%s\n' '90 2026-08-20T06:00:00Z named -' >"$HOME_DIR/state/github-inbox.seen"
 FM_GH_INBOX_PER_PAGE=1 FM_GH_INBOX_MAX_PAGES=1 inbox >/dev/null

@@ -263,7 +263,6 @@ FEED_JQ='"" + ([.[] | select(.unread) | .id + " " + (.reason // "-") + " " + (.u
 FEED=
 FEED_COUNT=0
 FEED_BOUNDED=
-FEED_COMPLETE=
 NEXT_CURSOR=1
 
 read_cursor() {
@@ -279,7 +278,6 @@ read_feed() {
   FEED=
   FEED_COUNT=0
   FEED_BOUNDED=
-  FEED_COMPLETE=
   NEXT_CURSOR=$page
   while [ "$pages" -lt "$MAX_PAGES" ]; do
     gh_read "notifications?all=false&per_page=$PER_PAGE&page=$page" "$FEED_JQ" || return 1
@@ -294,9 +292,7 @@ read_feed() {
     FEED_COUNT=$((FEED_COUNT + lines))
     if [ "$lines" -lt "$PER_PAGE" ]; then
       NEXT_CURSOR=1
-      if [ "$start_page" -eq 1 ]; then
-        FEED_COMPLETE=1
-      else
+      if [ "$start_page" -ne 1 ]; then
         FEED_BOUNDED=1
       fi
       return 0
