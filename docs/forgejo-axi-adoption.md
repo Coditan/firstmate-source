@@ -155,7 +155,18 @@ The floor is not chosen against this fleet's scripts alone, and that matters bec
 The parallel pipeline investigation established that the validation pipeline drives nine invocations of this client, of which eight are verbs this fleet's own scripts never call: `status`, `pr find`, `pr create`, `pr update`, `pr checks`, `pr mergeability`, `pr merged`, and `run view --log-failed`.
 
 All nine were checked against 1.3.0 with the flag shapes the pipeline uses - `pr find --repo --head --base --state`, `pr create --repo --head --base --title --body`, `pr update --repo NUMBER --title --body`, `run view --repo RUN_ID --log-failed` - before the floor was set, rather than inferred from the fleet's half.
-All nine are present.
+All nine are present, and presence was not treated as coverage on its own.
+Two further things were checked at the floor, because a verb that exists can still fail a caller.
+
+Every one of the nine accepts the connection flags the pipeline appends to all of them: a deliberately invalid flag on `pr merged` reports its accepted set as `--base-url, --ca-file, --help, --json, --repo, --timeout-ms, --token-env`, which contains the three the pipeline relies on.
+
+The two response fields whose absence would decode to a zero value instead of failing loudly were read back live at 1.3.0, since those are the two the pipeline investigation named as the dangerous ones:
+
+```
+$ forgejo-axi status --json           -> capabilities.probe = {"source":"swagger","complete":true}
+$ forgejo-axi pr find ... --json      -> search_info = {"complete":true,"pages":3,"fetched":130,"total":130}
+```
+
 The floor is therefore 1.3.0 for the fleet's own reasons (G1, G2 and G3 all close there) and 1.3.0 covers the pipeline's surface as well; none of the pipeline's verbs is newer than the client's 1.2.0 surface, so no pipeline verb pushed the floor up.
 
 **What a version floor cannot cover, said plainly.**

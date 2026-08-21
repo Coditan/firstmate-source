@@ -659,7 +659,12 @@ NO_MISTAKES_MIN_PATCH=2
 # drives status, pr find, pr create, pr update, pr checks, pr mergeability,
 # pr merged and run view --log-failed; all nine of its invocations were run
 # against 1.3.0 with the flag shapes it uses before this floor was set, rather
-# than assumed from the fleet's own half.
+# than assumed from the fleet's own half. Coverage was checked three ways, not
+# one: every one of the nine accepts the connection flags the pipeline appends
+# to all of them, and the two response fields whose ABSENCE would decode to a
+# dangerous zero value rather than fail loudly - status's capabilities.probe
+# .complete and pr find's search_info.complete - were both read back from a live
+# host at this floor.
 # docs/forgejo-axi-adoption.md owns that evidence, the maintenance risk this
 # dependency carries, and the one thing a version floor cannot cover: nothing
 # upstream pins the JSON shape the pipeline decodes.
