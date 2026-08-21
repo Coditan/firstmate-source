@@ -7,6 +7,7 @@
 #          Silent = all good.
 #          Lines: "MISSING: <tool> (install: <command>)",
 #                 "MISSING_MANUAL: <tool> (instructions: <url>)", "NEEDS_GH_AUTH",
+#                 "FORGE_CLIENT: <what is wrong with this home's Forgejo client, or what could not be established about it>",
 #                 "BACKEND_INVALID: <name> (known: <names>)",
 #                 "ROLE_INVALID: <name> (known: <names>)",
 #                 "ROLE_OVERLAY_MISSING: <name> (expected: roles/<name>.md)",
@@ -141,6 +142,11 @@ fm_axi_prepend_path "$FM_HOME"
 . "$SCRIPT_DIR/fm-nm-path-lib.sh"
 # shellcheck source=bin/fm-service-path-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-service-path-lib.sh"
+# Sourced for fm_pr_configured_forgejo_host alone: the Forgejo client is
+# required only where this home names an instance, and that resolution has one
+# owner rather than a second copy of it here.
+# shellcheck source=bin/fm-pr-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-pr-lib.sh"
 # Resolve the no-mistakes CLI here too, so bootstrap's version and compatibility
 # reads are about the binary an unattended reader will actually run rather than
 # about whatever the launching shell reached. No-op where the CLI already
@@ -532,6 +538,33 @@ secondmate_liveness_sweep() {
   return 0
 }
 
+# The npm prefix whose bin directory the validation pipeline's daemon already
+# reaches, given that daemon's own PATH. $HOME/.local is preferred because it is
+# the conventional user bin directory and the one that daemon PATH leads with on
+# the seat this was measured against; otherwise the first $HOME-rooted bin
+# directory it names. A seat whose daemon cannot be asked still gets
+# $HOME/.local rather than the vessel prefix, because the vessel prefix is the
+# one answer that is known to be wrong for a shared daemon.
+#
+# Fails only where there is no HOME to root a user install in, which is an
+# environment that cannot name an install directory at all.
+forgejo_client_prefix() {  # [daemon-path]
+  local path=${1-} dir
+  [ -n "${HOME:-}" ] || return 1
+  local IFS=:
+  for dir in $path; do
+    [ "$dir" = "${HOME%/}/.local/bin" ] || continue
+    printf '%s\n' "${HOME%/}/.local"
+    return 0
+  done
+  for dir in $path; do
+    case "$dir" in
+      "${HOME%/}"/*/bin|"${HOME%/}"/bin) printf '%s\n' "${dir%/bin}"; return 0 ;;
+    esac
+  done
+  printf '%s\n' "${HOME%/}/.local"
+}
+
 install_cmd() {
   local prefix tool_bin
   prefix=$(fm_axi_prefix "$FM_HOME")
@@ -549,6 +582,31 @@ install_cmd() {
       printf 'npm install -g --prefix %q %q && PATH=%q:%s %q setup hooks\n' "$prefix" "$1" "$tool_bin" "\$PATH" "$1"
       ;;
     tasks-axi|quota-axi) printf 'npm install -g --prefix %q %q\n' "$prefix" "$1" ;;
+    forgejo-axi)
+      # NOT the vessel prefix, and deliberately NOT a member of
+      # FM_AXI_SUITE_TOOLS. Two reasons, and they point the same way.
+      #
+      # The vessel prefix is per-home by design, and the process that has to run
+      # this client besides a session is the validation pipeline's daemon - one
+      # shared unit serving every lane and home on the host, whose PATH reaches
+      # no vessel prefix at all. A per-home copy therefore cannot be the thing
+      # the pipeline runs, so the install goes where the daemon already looks
+      # and one copy serves both (forgejo_client_prefix below).
+      #
+      # The suite boundary auto-installs patch and minor releases on a cadence,
+      # and this is a third party's package rather than the kunchenguid suite,
+      # so entering that boundary is a supply-chain decision the captain owns
+      # (docs/forgejo-axi-adoption.md). The repair here is a one-time install.
+      #
+      # The version range is a literal this script owns, so it is single-quoted
+      # rather than %q-escaped: %q renders the caret as \^, which pastes and
+      # runs correctly but reads like a typo in a line the captain is asked to
+      # trust.
+      prefix=$(forgejo_client_prefix "$(fm_nm_daemon_path 2>/dev/null || true)") || return 1
+      printf "npm install -g --prefix %q 'forgejo-axi@^%s.%s.%s' && PATH=%q:%s %q setup hooks\n" \
+        "$prefix" "$FORGEJO_AXI_MIN_MAJOR" "$FORGEJO_AXI_MIN_MINOR" "$FORGEJO_AXI_MIN_PATCH" \
+        "$prefix/bin" "\$PATH" forgejo-axi
+      ;;
     *) return 1 ;;
   esac
 }
@@ -574,6 +632,8 @@ missing_tool_diagnostic() {
 # fm_backend_required_tools (bin/fm-backend.sh). So a herdr/zellij/cmux home is
 # never told tmux is missing, and only orca drops treehouse. A backend value with
 # no verified dependency set is reported before the universal checks continue.
+# A third, narrower route sits below in forgejo_client_check: a requirement keyed
+# to a configured forge instance rather than to a backend.
 COMMON_TOOLS="node git gh no-mistakes gh-axi chrome-devtools-axi lavish-axi tasks-axi quota-axi"
 BACKEND=$(fm_backend_name)
 BACKEND_VALID=1
@@ -585,6 +645,27 @@ TOOLS="$BACKEND_TOOLS $COMMON_TOOLS"
 NO_MISTAKES_MIN_MAJOR=1
 NO_MISTAKES_MIN_MINOR=31
 NO_MISTAKES_MIN_PATCH=2
+# The Forgejo client is the fleet's third declaration route, and the only
+# conditional one that is not keyed to a runtime backend: a forge client is not
+# a backend, and requiring it universally would print a missing-tool line on
+# every seat for a tool nothing there calls. It is required exactly where this
+# home names a Forgejo instance, which is the same signal bin/fm-pr-lib.sh
+# already resolves an address against (docs/configuration.md "Forge instance").
+#
+# The floor covers TWO verb surfaces, because two processes run this client and
+# the larger surface is not the fleet's own. The fleet's scripts need the field
+# selector, pull-request-URL addressing, and per-row check and review state,
+# which is what makes the floor 1.3.0. The validation pipeline additionally
+# drives status, pr find, pr create, pr update, pr checks, pr mergeability,
+# pr merged and run view --log-failed; all nine of its invocations were run
+# against 1.3.0 with the flag shapes it uses before this floor was set, rather
+# than assumed from the fleet's own half.
+# docs/forgejo-axi-adoption.md owns that evidence, the maintenance risk this
+# dependency carries, and the one thing a version floor cannot cover: nothing
+# upstream pins the JSON shape the pipeline decodes.
+FORGEJO_AXI_MIN_MAJOR=1
+FORGEJO_AXI_MIN_MINOR=3
+FORGEJO_AXI_MIN_PATCH=0
 
 treehouse_supports_lease() {
   treehouse get --help 2>&1 | grep -Eq '(^|[^[:alnum:]_-])--lease([^[:alnum:]_-]|$)'
@@ -607,6 +688,67 @@ no_mistakes_compatible() {
   [ "$minor" -gt "$NO_MISTAKES_MIN_MINOR" ] && return 0
   [ "$minor" -eq "$NO_MISTAKES_MIN_MINOR" ] || return 1
   [ "$patch" -ge "$NO_MISTAKES_MIN_PATCH" ]
+}
+
+forgejo_axi_version_parts() {  # <executable>
+  local output
+  output=$("$1" --version 2>/dev/null) || return 1
+  printf '%s\n' "$output" | sed -nE 's/.*[vV]?([0-9]+)\.([0-9]+)\.([0-9]+).*/\1 \2 \3/p' | head -n 1
+}
+
+forgejo_axi_compatible() {  # <executable>
+  local parts major minor patch extra
+  parts=$(forgejo_axi_version_parts "$1") || return 1
+  IFS=' ' read -r major minor patch extra <<< "$parts"
+  [ -n "$major" ] && [ -n "$minor" ] && [ -n "$patch" ] && [ -z "$extra" ] || return 1
+  [ "$major" -gt "$FORGEJO_AXI_MIN_MAJOR" ] && return 0
+  [ "$major" -eq "$FORGEJO_AXI_MIN_MAJOR" ] || return 1
+  [ "$minor" -gt "$FORGEJO_AXI_MIN_MINOR" ] && return 0
+  [ "$minor" -eq "$FORGEJO_AXI_MIN_MINOR" ] || return 1
+  [ "$patch" -ge "$FORGEJO_AXI_MIN_PATCH" ]
+}
+
+# One requirement, one check, one line: a Forgejo client that BOTH a session and
+# the validation pipeline can run, at or above the floor.
+#
+# It does not report MISSING:, and that is deliberate rather than a naming
+# choice. MISSING: everywhere else means `command -v` says no, and here
+# `command -v` can say yes while the requirement still fails - the pipeline runs
+# the client from its daemon's PATH, which reaches no vessel prefix and no npm
+# global prefix (bin/fm-nm-path-lib.sh's fm_nm_daemon_path records the
+# measurement). Reusing MISSING: would send the reader to check the one thing
+# that cannot settle it.
+#
+# The version is read from the executable the PIPELINE would run, not from
+# whatever this session resolves, so two copies at different versions cannot
+# report the newer one and run the older.
+#
+# A home that names no Forgejo instance prints nothing at all, so seats that
+# never touch the forge pay no diagnostic for a tool they never call.
+forgejo_client_check() {
+  local host daemon_path scope resolved version repair
+  host=$(fm_pr_configured_forgejo_host 2>/dev/null) || return 0
+  [ -n "$host" ] || return 0
+  if daemon_path=$(fm_nm_daemon_path 2>/dev/null); then
+    scope=measured
+    resolved=$(PATH="$daemon_path" command -v forgejo-axi 2>/dev/null)
+  else
+    scope=unestablished
+    resolved=$(command -v forgejo-axi 2>/dev/null)
+  fi
+  if [ -z "$resolved" ]; then
+    repair="install: $(install_cmd forgejo-axi)"
+    echo "FORGE_CLIENT: forgejo-axi is not installed where both this session and the validation pipeline can run it, and $host is this home's forge ($repair)"
+    return 0
+  fi
+  if ! forgejo_axi_compatible "$resolved"; then
+    version=$("$resolved" --version 2>/dev/null | head -n 1)
+    repair="install: $(install_cmd forgejo-axi)"
+    echo "FORGE_CLIENT: forgejo-axi at $resolved reports '${version:-no version}', below the required $FORGEJO_AXI_MIN_MAJOR.$FORGEJO_AXI_MIN_MINOR.$FORGEJO_AXI_MIN_PATCH ($repair)"
+    return 0
+  fi
+  [ "$scope" = unestablished ] || return 0
+  echo "FORGE_CLIENT: forgejo-axi at $resolved meets the floor for this session, but this seat cannot read the validation pipeline daemon's environment, so whether the pipeline can run it is unestablished rather than confirmed"
 }
 
 # Startup assertion for the run-state reader's dependency.
@@ -1049,6 +1191,7 @@ run_reader_reach_check
 if command -v tasks-axi >/dev/null 2>&1 && ! fm_tasks_axi_compatible; then
   echo "MISSING: tasks-axi (install: $(install_cmd tasks-axi))"
 fi
+forgejo_client_check
 gh auth status >/dev/null 2>&1 || echo "NEEDS_GH_AUTH"
 # Worktree-tangle check: the firstmate primary checkout (FM_ROOT) must sit on its
 # default branch, not a feature branch (see fm-tangle-lib.sh). Scoped to the

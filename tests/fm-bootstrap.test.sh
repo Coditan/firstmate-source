@@ -876,6 +876,110 @@ SH
   pass "captain-approved AXI installs and hooks use the vessel prefix"
 }
 
+add_forgejo_axi() {  # <dir> <version>
+  local dir=$1 version=$2
+  mkdir -p "$dir"
+  cat > "$dir/forgejo-axi" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = --version ]; then
+  printf '%s\n' '$version'
+  exit 0
+fi
+exit 0
+SH
+  chmod +x "$dir/forgejo-axi"
+}
+
+# A systemctl that answers only the two questions fm_nm_daemon_path asks, so the
+# case decides what the pipeline daemon's PATH is instead of the machine running
+# the suite. With FM_FAKE_DAEMON_PATH unset it names no unit at all, which is
+# the seat that cannot be asked.
+add_fake_systemctl() {
+  local fakebin=$1
+  cat > "$fakebin/systemctl" <<'SH'
+#!/usr/bin/env bash
+[ -n "${FM_FAKE_DAEMON_PATH:-}" ] || exit 0
+for arg in "$@"; do
+  case "$arg" in
+    list-unit-files|list-units)
+      printf '%s\n' 'no-mistakes-daemon-test.service enabled enabled'
+      exit 0 ;;
+    show)
+      printf '%s\n' "HOME=/fake PATH=$FM_FAKE_DAEMON_PATH"
+      exit 0 ;;
+  esac
+done
+exit 0
+SH
+  chmod +x "$fakebin/systemctl"
+}
+
+# The Forgejo client is required by a CONFIGURED FORGE INSTANCE, not by a backend
+# and not universally, and the requirement is that the VALIDATION PIPELINE can
+# run it - not that this session can. Those two answers differ in production:
+# the pipeline daemon pins its own PATH and reaches neither the npm global
+# prefix nor any vessel prefix, so a client a session resolves happily can be
+# invisible to the pipeline. The `session only` row below is that case.
+#
+# The silent row matters just as much: a home that names no instance must never
+# be told to install a client it has nothing to point at, which is why this
+# requirement was not added to the universal toolchain.
+test_forgejo_client_follows_configured_instance() {
+  local label host daemon where version mode case_dir fakebin daemonbin home out n
+  n=0
+  while IFS='^' read -r label host daemon where version mode; do
+    [ -n "$label" ] || continue
+    n=$((n + 1))
+    case_dir="$TMP_ROOT/forgejo-client-$n"
+    home="$case_dir/home"
+    daemonbin="$case_dir/fakehome/.local/bin"
+    mkdir -p "$home/config" "$daemonbin"
+    printf '%s\n' manual > "$home/config/backlog-backend"
+    [ "$host" = "-" ] || printf '%s\n' "$host" > "$home/config/forgejo-host"
+    fakebin=$(make_fake_toolchain "$case_dir")
+    add_fake_systemctl "$fakebin"
+    case "$where" in
+      session) add_forgejo_axi "$fakebin" "$version" ;;
+      daemon)  add_forgejo_axi "$daemonbin" "$version" ;;
+    esac
+    out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+      HOME="$case_dir/fakehome" \
+      FM_FAKE_DAEMON_PATH=$([ "$daemon" = yes ] && printf '%s' "$daemonbin:$BASE_PATH") \
+      FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_FORGEJO_HOST='' "$ROOT/bin/fm-bootstrap.sh")
+    case "$mode" in
+      empty)
+        [ -z "$out" ] || fail "$label: expected silence, got: $out" ;;
+      absent)
+        assert_contains "$out" "FORGE_CLIENT: forgejo-axi is not installed where both this session and the validation pipeline can run it" \
+          "$label: expected the not-runnable-by-both line"
+        assert_contains "$out" "--prefix $case_dir/fakehome/.local " \
+          "$label: install must target a prefix the pipeline daemon reaches"
+        assert_contains "$out" "'forgejo-axi@^1.3.0'" "$label: install line must pin the version floor"
+        assert_contains "$out" "forgejo-axi setup hooks" "$label: install line must install session hooks" ;;
+      stale)
+        assert_contains "$out" "below the required 1.3.0" "$label: expected the version-floor line"
+        assert_contains "$out" "'forgejo-axi@^1.3.0'" "$label: install line must pin the version floor" ;;
+      unestablished)
+        assert_contains "$out" "cannot read the validation pipeline daemon's environment" \
+          "$label: expected an unestablished reading rather than an all-clear"
+        assert_not_contains "$out" "is not installed" "$label: an unreadable daemon must not be reported as an absent client" ;;
+    esac
+  done <<'ROWS'
+no configured instance stays silent with no client at all^-^yes^none^-^empty
+no configured instance stays silent with an old client^-^yes^session^0.9.0^empty
+a configured instance requires the client^forge.example^yes^none^-^absent
+a client the session sees but the pipeline cannot is not installed^forge.example^yes^session^1.3.0^absent
+a client the pipeline reaches at the floor is accepted^forge.example^yes^daemon^1.3.0^empty
+a client the pipeline reaches at a newer minor is accepted^forge.example^yes^daemon^1.4.2^empty
+a client the pipeline reaches at a newer major is accepted^forge.example^yes^daemon^2.0.0^empty
+a below-floor client the pipeline reaches is reported^forge.example^yes^daemon^1.2.0^stale
+an unparseable client version is reported^forge.example^yes^daemon^forgejo-axi dev build^stale
+an unreadable daemon environment is unestablished, not an all-clear^forge.example^no^session^1.3.0^unestablished
+an unreadable daemon environment still reports an absent client^forge.example^no^none^-^absent
+ROWS
+  pass "bootstrap requires a Forgejo client the validation pipeline can run, only where an instance is configured"
+}
+
 # A vessel that has a tailnet but is still emitting loopback board links is the
 # regression this check exists to catch: it is silent by construction, because a
 # loopback board renders correctly on the machine that made it.
@@ -965,3 +1069,4 @@ test_crew_dispatch_validation
 test_currency_base_validation
 test_approved_axi_install_uses_vessel_prefix
 test_lavish_access_detection
+test_forgejo_client_follows_configured_instance

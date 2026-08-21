@@ -2,7 +2,7 @@
 name: bootstrap-diagnostics
 description: >-
   Agent-only handling playbook for session-start bootstrap diagnostics.
-  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, ROLE_INVALID, ROLE_OVERLAY_MISSING, NEEDS_GH_AUTH, TANGLE, SELF_DRIFT, CREW_DISPATCH invalid, CURRENCY_BASE, LAVISH_ACCESS, BACKLOG_STALE, BACKLOG_UNREADABLE, DECISION_LEDGER, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, AXI_SUITE_UPDATED, AXI_SUITE_REVIEW, AXI_SUITE_STUCK, AXI_SUITE_SHADOWED, AXI_SUITE_SHADOW_UNKNOWN, FIRSTMATE_UPDATE_AVAILABLE, FIRSTMATE_UPDATE_STUCK, FORK_SYNC, FORK_SYNC_STUCK, CURRENCY_ROUND, MEMORY_ALARM, GITHUB_INBOX, CURATION_NUDGE, CODEBASE_SWEEP_NUDGE, FORGE_STATUS, SLOT_GUARD, GROSSREINSCHIFF, RUN_READER, WATCHER_UNIT, DELIVERY_UNIT, FREQUENCY_MONITOR_UNIT, BOSUN_UNIT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
+  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, ROLE_INVALID, ROLE_OVERLAY_MISSING, NEEDS_GH_AUTH, FORGE_CLIENT, TANGLE, SELF_DRIFT, CREW_DISPATCH invalid, CURRENCY_BASE, LAVISH_ACCESS, BACKLOG_STALE, BACKLOG_UNREADABLE, DECISION_LEDGER, FLEET_SYNC, PR_CHECK_MIGRATION, SECONDMATE_SYNC, SECONDMATE_LIVENESS, NUDGE_SECONDMATES, AXI_SUITE_UPDATED, AXI_SUITE_REVIEW, AXI_SUITE_STUCK, AXI_SUITE_SHADOWED, AXI_SUITE_SHADOW_UNKNOWN, FIRSTMATE_UPDATE_AVAILABLE, FIRSTMATE_UPDATE_STUCK, FORK_SYNC, FORK_SYNC_STUCK, CURRENCY_ROUND, MEMORY_ALARM, GITHUB_INBOX, CURATION_NUDGE, CODEBASE_SWEEP_NUDGE, FORGE_STATUS, SLOT_GUARD, GROSSREINSCHIFF, RUN_READER, WATCHER_UNIT, DELIVERY_UNIT, FREQUENCY_MONITOR_UNIT, BOSUN_UNIT, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
   A silent bootstrap section, or a BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -30,6 +30,13 @@ When any diagnostic needs captain attention, report the plain consequence and re
   Either this home is behind the fork that carries the overlay, in which case `/updatefirstmate` resolves it, or the overlay has not been written yet, in which case the role is not usable and the home should return to `vessel` until it is.
   Do not write the missing overlay from memory to silence the line.
 - `NEEDS_GH_AUTH` - ask the captain to run `! gh auth login` (interactive; you cannot run it for them).
+- `FORGE_CLIENT: ...` - this home names a Forgejo instance, so it needs a Forgejo client that BOTH a session and the validation pipeline can run, and one of the three things that requirement asks was not true.
+  Read which sentence the line carries before acting, because they need different words to the captain and only two of them are an install.
+  `is not installed where both this session and the validation pipeline can run it` means the client is absent from the pipeline daemon's own PATH; `command -v forgejo-axi` answering yes in your session does not contradict it and is not evidence against the line.
+  Pass `forgejo-axi` to `bin/fm-bootstrap.sh install` after the captain approves, exactly as for `MISSING:`, and never install it somewhere else to silence the line - the printed prefix is chosen because the pipeline daemon already reaches it, and a copy anywhere else leaves the requirement failing.
+  `below the required <floor>` is the same repair against an installed copy that is too old.
+  `cannot read the validation pipeline daemon's environment` is NOT an install: it means this seat could not be asked the question at all, so report it to the captain as unestablished rather than as a working or a broken client, and never let it stand as an all-clear.
+  `docs/forgejo-axi-adoption.md` owns why the floor is what it is, the maintenance risk this dependency carries, and what this check cannot cover.
 - `WATCHER_UNIT: missing ...` or `WATCHER_UNIT: ... disabled ...` - explain that persistent supervision needs the per-home user-service instance, ask for explicit consent, then run `bin/fm-bootstrap.sh install watcher-unit` only after approval.
   The installation copies the tracked template, writes this home's private environment, reloads the user manager, and enables and starts only the instance encoded from this home.
 - `WATCHER_UNIT: user lingering is disabled ...` - explain that logout can stop the user manager, ask separately for explicit consent, then run `bin/fm-bootstrap.sh install watcher-linger` only after approval.
