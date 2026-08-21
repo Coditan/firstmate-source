@@ -167,10 +167,10 @@ test_the_partial_adoption_is_defended_and_its_cost_is_named() {
 test_the_upstream_offer_is_complete_and_marked_unsent() {
   assert_present "$OFFER" "the prepared upstream offer is missing"
   assert_grep 'NOT SENT' "$OFFER" "the upstream offer must be marked unsent"
-  assert_grep 'The decision this is waiting on' "$OFFER" \
-    "the offer must name the decision that gates publishing it"
+  assert_grep 'the one gate still standing' "$OFFER" \
+    "the offer must name the gate that still stands between it and publication"
   assert_grep 'Under what identity' "$OFFER" \
-    "the offer must name the identity question, which is not merely a wording review"
+    "the offer must record which identity it would go out under"
   assert_grep 'The exact command that would open it' "$OFFER" \
     "the offer must carry the exact command that would publish it"
   assert_grep 'The covering note, which is the pull-request body' "$OFFER" \
@@ -185,9 +185,70 @@ test_the_offer_proposes_no_dependency_on_this_fleet() {
     "the offer must state that our mechanism is not what is proposed"
   assert_grep 'an upstream skill cannot depend on one fleet' "$PROV" \
     "the provenance must record the implementation-neutrality constraint"
-  assert_grep 'That mechanism is ours and is not what I am proposing' "$OFFER" \
-    "the covering note must disclaim proposing our mechanism"
+  assert_grep 'arrangement is mine and is not what I am proposing' "$OFFER" \
+    "the covering note must disclaim proposing the local mechanism"
   pass "the offer stays implementation-neutral and proposes no fleet dependency"
+}
+
+# --- what the note may not say in public ------------------------------------
+
+# The captain's ruling of 2026-08-21, in his own words, was "not say that in
+# pubnlic". The note goes out under an HLR account, so first-person plural in it
+# tells a public reader that HLR operates a fleet of agent-managed repositories -
+# true, not public, and not his to have disclosed by a turn of phrase. The
+# failure mode this guards is a later well-meaning edit restoring "we", which
+# reads as ordinary authorial voice and discloses on the way past.
+covering_note() {
+  awk '/^## The covering note/{f=1} f && /^## The exact command/{exit} f' "$OFFER"
+}
+
+test_the_covering_note_makes_no_public_claim_about_an_agent_fleet() {
+  local note phrase
+  note=$(covering_note)
+  [ -n "$note" ] || fail "the covering note section is missing"
+  # First person singular is explicitly fine; the plural and the estate are not.
+  if printf '%s' "$note" | grep -qEi '(^|[^[:alnum:]])(we|our|ours)([^[:alnum:]]|$)'; then
+    fail "the covering note must speak in the first person singular, never as a 'we' that implies an estate"
+  fi
+  for phrase in 'fleet' 'firstmate' 'fm-model-panel' 'crewmate' 'vessel'; do
+    if printf '%s' "$note" | grep -qi -- "$phrase"; then
+      fail "the covering note must not describe the estate it is used across or name internal machinery: found '$phrase'"
+    fi
+  done
+  # Removing the disclosure must not be achieved by removing the evidence.
+  assert_grep 'I know that because I built the other case' "$OFFER" \
+    "the note must keep the first-hand basis of the independence claim"
+  pass "the covering note makes no public claim about an agent fleet"
+}
+
+# The technical content was explicitly not his to trade for the rewrite, and a
+# rewrite is exactly when content quietly gets softened along with the phrasing.
+test_the_rewrite_did_not_weaken_the_three_proposed_changes() {
+  local phrase
+  for phrase in \
+    '### 0. Decide whether to fan out at all' \
+    'Sub-agents are not independent by default' \
+    "check each design's load-bearing claims against the code"; do
+    assert_grep "$phrase" "$OFFER" "the rewrite dropped a proposed change: $phrase"
+  done
+  pass "all three proposed changes survived the wording rewrite"
+}
+
+test_the_settled_decisions_and_the_remaining_gate_are_recorded() {
+  assert_grep 'an HLR account, not a personal one' "$OFFER" \
+    "the offer must record the identity the captain chose"
+  assert_grep 'hlr-show-wording' "$OFFER" \
+    "the offer must record his answer, which is the identity and the gate in one"
+  assert_grep 'his read of the final text' "$OFFER" \
+    "the offer must record that his read of the final text is the last gate"
+  assert_grep 'not say that in pubnlic' "$OFFER" \
+    "his quoted ruling must stay exactly as he wrote it"
+  assert_grep 'The spelling in that quotation is his and is reproduced as he wrote it' "$OFFER" \
+    "the odd spelling must be explained beside the quotation rather than inside it"
+  # He was not asked about these two, so neither may be recorded as decided.
+  assert_grep 'Two flags were deliberately not raised with him as decisions' "$OFFER" \
+    "the offer must not present unraised flags as answered"
+  pass "the settled decisions, his words, and the remaining gate are recorded"
 }
 
 # --- reachability -----------------------------------------------------------
@@ -220,4 +281,7 @@ test_the_adoption_carries_its_licence_notice_and_accounting
 test_the_partial_adoption_is_defended_and_its_cost_is_named
 test_the_upstream_offer_is_complete_and_marked_unsent
 test_the_offer_proposes_no_dependency_on_this_fleet
+test_the_covering_note_makes_no_public_claim_about_an_agent_fleet
+test_the_rewrite_did_not_weaken_the_three_proposed_changes
+test_the_settled_decisions_and_the_remaining_gate_are_recorded
 test_the_skill_is_reachable_from_the_instruction_surface

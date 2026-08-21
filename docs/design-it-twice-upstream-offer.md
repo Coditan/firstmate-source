@@ -2,19 +2,40 @@
 
 **Status: prepared, NOT SENT.**
 Opening a pull request on a stranger's public repository is outward-facing and not cheaply undone, so this page holds the whole contribution and nothing has left this machine.
-The captain approved the intent on 2026-08-20 and still owns the wording, the identity it goes out under, and the moment it goes.
-The decision that gates it is stated at the bottom of this page.
+The captain approved the intent on 2026-08-20, and on 2026-08-21 he settled the channel and the identity and ordered one rewrite of the wording.
+One gate remains and it is his: **he reads the final text before anything is published.**
+The decisions, and what is still open, are stated at the bottom of this page.
 
 This is the reciprocal half of [`design-it-twice-provenance.md`](design-it-twice-provenance.md).
-We adopted one file of Matt Pocock's `codebase-design` skill, wiring its fan-out to this fleet's model panel, and two of the things we had to add are not fleet-specific at all.
+This fleet adopted one file of Matt Pocock's `codebase-design` skill and wired its fan-out to the model panel, and two of the things that had to be added are not local at all.
 They are offered back.
 
-## The constraint this offer is written under
+## Two constraints this offer is written under
 
-Our mechanism is `bin/fm-model-panel.sh`: two analysts on provably distinct pinned models who cannot see each other's work, plus a judge that re-verifies their load-bearing claims.
+**It proposes no dependency on anyone's tooling.**
+The mechanism behind the independence claim is `bin/fm-model-panel.sh`: two analysts on provably distinct pinned models who cannot see each other's work, plus a judge that re-verifies their load-bearing claims.
 **None of that is being proposed upstream.**
-An upstream skill has to run in any repository, on any harness, with no script of ours anywhere, so what is proposed is prose that names a property the reader can check for themselves.
-Where our experience is the evidence, the note says so and says that the mechanism is ours.
+An upstream skill has to run in any repository, on any harness, with no local script anywhere, so what is proposed is prose that names a property the reader can check for themselves.
+Where first-hand experience is the evidence, the note says so, and says plainly that the arrangement it comes from is the author's own and is not the proposal.
+
+**It makes no public claim about who runs what.**
+The captain ruled on 2026-08-21, in his own words, "not say that in pubnlic".
+He was answering one specific exposure: the note said "we" and "our fleet" throughout and would go out under an HLR account, so a reader would infer that HLR operates a fleet of agent-managed repositories.
+That is true, it is not currently public, and he does not want it made public.
+The rewrite below removes that inference without weakening a single technical claim.
+The spelling in that quotation is his and is reproduced as he wrote it.
+
+### What may be published from this page, and the test it has to pass
+
+Only the indented blocks are published: the prose changes, the changeset, and the covering note.
+Everything else here is internal explanation and never leaves this repository.
+
+Each publishable block was swept against the captain's own test - **does a public reader learn from it that HLR runs an agent fleet?** - and every failing phrase was rewritten.
+The note now speaks in the first person singular, describes no estate of repositories, and names no internal script.
+
+The surrounding internal prose keeps its ordinary vocabulary, because it names no HLR entity and fails no part of that test.
+One residual link is his to weigh rather than this page's to bury: this repository is public, so an account that opens the pull request and is also visible here could be traced back, which reaches the same inference by a different route.
+That is a fact about the account, not about the wording, and it does not change under any rewrite of the text.
 
 ## What would change upstream
 
@@ -103,12 +124,12 @@ That wording is gone as of release 1.2.3, which dropped one harness's tool and a
 ## The covering note, which is the pull-request body
 
     Thank you for these skills. This proposal exists because `codebase-design` did
-    its job: it told us to design the interface more than once, and that is the only
+    its job: it told me to design the interface more than once, and that is the only
     reason a second design got produced at all. Everything below touches the fan-out
     step only, and none of it touches the vocabulary.
 
-    We run these skills across a fleet of agent-managed repositories, so we hit the
-    fan-out step often, and three things kept needing to be added by hand.
+    I reach for the fan-out step often, and three things kept needing to be added by
+    hand.
 
     **1. An entry test in front of the fan-out.**
     Your own docs page already records what happens without one: issue 449, where an
@@ -127,13 +148,14 @@ That wording is gone as of release 1.2.3, which dropped one harness's tool and a
     three independent designs that agree. Nothing tells the reader which one they
     got.
 
-    We know this because we built the other case and it cost us something: our own
-    formation for this refuses to start unless it can prove two distinct pinned model
-    identities, and we built that refusal precisely because we could not otherwise
-    tell the two apart. **That mechanism is ours and is not what I am proposing** -
-    an upstream skill should not depend on one team's script, and this one runs
-    everywhere. What is proposed is one paragraph telling the reader which case they
-    are in, and asking them to say so when they present the comparison.
+    I know that because I built the other case, and building it is what taught me the
+    difference: for this kind of fan-out I now pin the models explicitly and refuse to
+    proceed when they cannot be shown to differ. I put that refusal in precisely
+    because I could not otherwise tell the two apart from the output. **That
+    arrangement is mine and is not what I am proposing** - an upstream skill should
+    not depend on one person's setup, and this one runs everywhere. What is proposed
+    is one paragraph telling the reader which case they are in, and asking them to
+    say so when they present the comparison.
 
     **3. Verification before the recommendation.**
     Step 3 compares the designs and recommends one, and the comparison is against the
@@ -179,16 +201,24 @@ The fork step needs an authenticated GitHub identity, and which identity is the 
 
 `gh-axi` is this fleet's sanctioned GitHub route and covers `pr` and `repo`; check its current help before running the fork step, because a fork of a repository this fleet does not own is not an operation it has performed before.
 
-## The decision this is waiting on
+## What the captain decided, and the one gate still standing
 
-**What would be published:** the three prose changes above, the docs re-sync, the changeset, and the covering note, all publicly and permanently visible.
+Decided 2026-08-21, recorded as `fm-codebase-design-calls-panel-decision-upstream-pr-identity-and-wording` and `fm-codebase-design-calls-panel-decision-upstream-pr-no-public-fleet-mention`:
 
-**Under what identity:** an unresolved question, and the reason this is not merely a wording review.
-A pull request carries a GitHub account and a commit author, and the fleet has no account designated for outward contributions.
-The candidates are the captain's own account, a fleet account created for the purpose, or not opening a pull request at all and sending the proposal to Matt Pocock as an issue or a message instead.
+**Channel:** a public pull request.
+Settled earlier and unchanged.
 
-**Where:** `https://github.com/mattpocock/skills`, a public repository owned by someone with no relationship to this fleet.
+**Under what identity:** an HLR account, not a personal one.
+His answer on the board was `hlr-show-wording`, which is the identity and the gate in one: the account is chosen, and the wording is shown to him before anything goes out.
 
-**Not cheaply undone:** a closed pull request stays visible, and its author stays attributed.
+**The wording:** rewritten, above, so it makes no public claim that HLR operates a fleet of agent-managed repositories.
+All three proposed changes are untouched, and so is the honest attribution of where the independence claim comes from; it is simply no longer sourced to a described estate.
 
-Until that decision is given, this page is the whole contribution and it stays here.
+**Two flags were deliberately not raised with him as decisions, and stay as they are.**
+The note cites his own issue numbers 449 and 564 back at him, and the stale-quotation correction rides in the same pull request with an offer to split it out.
+
+**Still open, and the only thing between this page and publication:** his read of the final text.
+
+**Not cheaply undone:** a closed pull request stays visible, and its author stays attributed, which is why the gate is a read and not a nod.
+
+Until he approves the text, this page is the whole contribution and it stays here.
