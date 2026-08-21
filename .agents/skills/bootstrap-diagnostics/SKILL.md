@@ -113,7 +113,7 @@ When any diagnostic needs captain attention, report the plain consequence and re
   An actual crossing or recovery arrives as a `check:` wake instead, and that one is captain-facing: it names a process, an account, and the work it was serving, and nothing has been limited or killed, so the decision is still open.
 - `GITHUB_INBOX: <detail>` - this home armed the GitHub notification watch and it has stopped reading, so threads addressed to this fleet are going unread.
   It appears only on a home that armed it: watching one notification feed from several homes would have each of them surface the same threads separately, so arming is a per-home decision and silence here means this home did not opt in (docs/github-inbox.md).
-  `cannot run` means the check file lost its executable bit or its registration; run `bin/fm-github-inbox.sh --arm` and report the reason if it refuses.
+  `cannot run` means the check file lost its executable bit; run `bin/fm-github-inbox.sh --arm` and report the reason if it refuses.
   `has never completed a reading` or `has stopped running` means the watch exists but the monitoring service is not running it, which is a supervision fault rather than a GitHub one: repair it through the emitted supervision instructions, exactly as for a lapsed watcher.
   Never read this line as a verdict on the feed - it says the instrument is not reading, not that nobody has written to this fleet; `bin/fm-github-inbox.sh --status` gives the current reading when you need it.
   Threads actually addressed to this fleet arrive as a `check:` wake instead, carrying the link and what happened, and an unreadable feed says so there rather than passing as an empty inbox.
