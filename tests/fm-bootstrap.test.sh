@@ -959,10 +959,24 @@ test_forgejo_client_follows_configured_instance() {
       stale)
         assert_contains "$out" "below the required 1.3.0" "$label: expected the version-floor line"
         assert_contains "$out" "'forgejo-axi@^1.3.0'" "$label: install line must pin the version floor" ;;
-      unestablished)
+      unestablished-current)
         assert_contains "$out" "cannot read the validation pipeline daemon's environment" \
           "$label: expected an unestablished reading rather than an all-clear"
-        assert_not_contains "$out" "is not installed" "$label: an unreadable daemon must not be reported as an absent client" ;;
+        assert_contains "$out" "this session resolves $fakebin/forgejo-axi at '$version', which meets the required 1.3.0 floor" \
+          "$label: expected the session's floor-meeting version"
+        assert_not_contains "$out" "install:" "$label: an unreadable daemon must not propose an install" ;;
+      unestablished-stale)
+        assert_contains "$out" "cannot read the validation pipeline daemon's environment" \
+          "$label: expected an unestablished reading rather than a version failure"
+        assert_contains "$out" "this session resolves $fakebin/forgejo-axi at '$version', which does not meet the required 1.3.0 floor" \
+          "$label: expected the session's below-floor version"
+        assert_not_contains "$out" "install:" "$label: an unreadable daemon must not propose an install" ;;
+      unestablished-absent)
+        assert_contains "$out" "cannot read the validation pipeline daemon's environment" \
+          "$label: expected an unestablished reading rather than an absent-client failure"
+        assert_contains "$out" "this session resolves no forgejo-axi" \
+          "$label: expected the session's absent-client reading"
+        assert_not_contains "$out" "install:" "$label: an unreadable daemon must not propose an install" ;;
     esac
   done <<'ROWS'
 no configured instance stays silent with no client at all^-^yes^none^-^empty
@@ -974,8 +988,9 @@ a client the pipeline reaches at a newer minor is accepted^forge.example^yes^dae
 a client the pipeline reaches at a newer major is accepted^forge.example^yes^daemon^2.0.0^empty
 a below-floor client the pipeline reaches is reported^forge.example^yes^daemon^1.2.0^stale
 an unparseable client version is reported^forge.example^yes^daemon^forgejo-axi dev build^stale
-an unreadable daemon environment is unestablished, not an all-clear^forge.example^no^session^1.3.0^unestablished
-an unreadable daemon environment still reports an absent client^forge.example^no^none^-^absent
+an unreadable daemon environment is unestablished, not an all-clear^forge.example^no^session^1.3.0^unestablished-current
+an unreadable daemon environment reports the session's stale client^forge.example^no^session^1.2.0^unestablished-stale
+an unreadable daemon environment reports the session's absent client as unestablished^forge.example^no^none^-^unestablished-absent
 ROWS
   pass "bootstrap requires a Forgejo client the validation pipeline can run, only where an instance is configured"
 }

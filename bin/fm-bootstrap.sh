@@ -731,16 +731,24 @@ forgejo_axi_compatible() {  # <executable>
 # A home that names no Forgejo instance prints nothing at all, so seats that
 # never touch the forge pay no diagnostic for a tool they never call.
 forgejo_client_check() {
-  local host daemon_path scope resolved version repair
+  local host daemon_path resolved version repair
   host=$(fm_pr_configured_forgejo_host 2>/dev/null) || return 0
   [ -n "$host" ] || return 0
-  if daemon_path=$(fm_nm_daemon_path 2>/dev/null); then
-    scope=measured
-    resolved=$(PATH="$daemon_path" command -v forgejo-axi 2>/dev/null)
-  else
-    scope=unestablished
+  if ! daemon_path=$(fm_nm_daemon_path 2>/dev/null); then
     resolved=$(command -v forgejo-axi 2>/dev/null)
+    if [ -z "$resolved" ]; then
+      echo "FORGE_CLIENT: this seat cannot read the validation pipeline daemon's environment, so whether the pipeline can run forgejo-axi is unestablished; this session resolves no forgejo-axi"
+      return 0
+    fi
+    version=$("$resolved" --version 2>/dev/null | head -n 1)
+    if forgejo_axi_compatible "$resolved"; then
+      echo "FORGE_CLIENT: this seat cannot read the validation pipeline daemon's environment, so whether the pipeline can run forgejo-axi is unestablished; this session resolves $resolved at '${version:-no version}', which meets the required $FORGEJO_AXI_MIN_MAJOR.$FORGEJO_AXI_MIN_MINOR.$FORGEJO_AXI_MIN_PATCH floor"
+    else
+      echo "FORGE_CLIENT: this seat cannot read the validation pipeline daemon's environment, so whether the pipeline can run forgejo-axi is unestablished; this session resolves $resolved at '${version:-no version}', which does not meet the required $FORGEJO_AXI_MIN_MAJOR.$FORGEJO_AXI_MIN_MINOR.$FORGEJO_AXI_MIN_PATCH floor"
+    fi
+    return 0
   fi
+  resolved=$(PATH="$daemon_path" command -v forgejo-axi 2>/dev/null)
   if [ -z "$resolved" ]; then
     repair="install: $(install_cmd forgejo-axi)"
     echo "FORGE_CLIENT: forgejo-axi is not installed where both this session and the validation pipeline can run it, and $host is this home's forge ($repair)"
@@ -752,8 +760,6 @@ forgejo_client_check() {
     echo "FORGE_CLIENT: forgejo-axi at $resolved reports '${version:-no version}', below the required $FORGEJO_AXI_MIN_MAJOR.$FORGEJO_AXI_MIN_MINOR.$FORGEJO_AXI_MIN_PATCH ($repair)"
     return 0
   fi
-  [ "$scope" = unestablished ] || return 0
-  echo "FORGE_CLIENT: forgejo-axi at $resolved meets the floor for this session, but this seat cannot read the validation pipeline daemon's environment, so whether the pipeline can run it is unestablished rather than confirmed"
 }
 
 # Startup assertion for the run-state reader's dependency.
