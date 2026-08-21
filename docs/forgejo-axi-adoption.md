@@ -271,7 +271,7 @@ What the captain would have to choose, when he takes it:
 2. Whether a third party's package may enter the auto-updating suite boundary at all, and with what review.
 3. Whether `forgejo-axi`'s own `update` verb is acceptable inside that boundary or must be suppressed.
 
-Of those three, the first two are answered above and the third is deliberately still his.
+Of those three, only the first is answered above; the second remains with the captain, and the third is moot while the second remains untaken.
 
 ## Maintaining this file
 
