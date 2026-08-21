@@ -915,17 +915,17 @@ SH
 }
 
 # The Forgejo client is required by a CONFIGURED FORGE INSTANCE, not by a backend
-# and not universally, and the requirement is that the VALIDATION PIPELINE can
-# run it - not that this session can. Those two answers differ in production:
-# the pipeline daemon pins its own PATH and reaches neither the npm global
-# prefix nor any vessel prefix, so a client a session resolves happily can be
-# invisible to the pipeline. The `session only` row below is that case.
+# and not universally, and the requirement is that BOTH this session and the
+# validation pipeline can run the same client. Those answers differ in
+# production: the pipeline daemon pins its own PATH and reaches neither the npm
+# global prefix nor any vessel prefix, so a client only one side resolves cannot
+# satisfy the requirement.
 #
 # The silent row matters just as much: a home that names no instance must never
 # be told to install a client it has nothing to point at, which is why this
 # requirement was not added to the universal toolchain.
 test_forgejo_client_follows_configured_instance() {
-  local label host daemon where version mode case_dir fakebin daemonbin home out n
+  local label host daemon where version mode case_dir fakebin daemonbin daemon_path home out n
   n=0
   while IFS='^' read -r label host daemon where version mode; do
     [ -n "$label" ] || continue
@@ -941,10 +941,17 @@ test_forgejo_client_follows_configured_instance() {
     case "$where" in
       session) add_forgejo_axi "$fakebin" "$version" ;;
       daemon)  add_forgejo_axi "$daemonbin" "$version" ;;
+      both)    add_forgejo_axi "$fakebin" "$version" ;;
+    esac
+    case "$daemon" in
+      yes) daemon_path="$daemonbin:$BASE_PATH" ;;
+      shared) daemon_path="$fakebin:$daemonbin:$BASE_PATH" ;;
+      nouser) daemon_path="$BASE_PATH" ;;
+      no) daemon_path= ;;
     esac
     out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
       HOME="$case_dir/fakehome" \
-      FM_FAKE_DAEMON_PATH=$([ "$daemon" = yes ] && printf '%s' "$daemonbin:$BASE_PATH") \
+      FM_FAKE_DAEMON_PATH="$daemon_path" \
       FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_FORGEJO_HOST='' "$ROOT/bin/fm-bootstrap.sh")
     case "$mode" in
       empty)
@@ -959,6 +966,17 @@ test_forgejo_client_follows_configured_instance() {
       stale)
         assert_contains "$out" "below the required 1.3.0" "$label: expected the version-floor line"
         assert_contains "$out" "'forgejo-axi@^1.3.0'" "$label: install line must pin the version floor" ;;
+      session-absent)
+        assert_contains "$out" "meets the required 1.3.0 floor for the validation pipeline" \
+          "$label: expected the measured daemon version"
+        assert_contains "$out" "but this session resolves no forgejo-axi" \
+          "$label: expected the missing session reach" ;;
+      no-prefix)
+        assert_contains "$out" "the pipeline daemon's PATH names no user-owned directory this fleet can install into" \
+          "$label: expected the measured PATH blocker"
+        assert_contains "$out" "the daemon's own PATH must change" \
+          "$label: expected the actionable repair"
+        assert_not_contains "$out" "install:" "$label: an unreachable prefix must not produce an install command" ;;
       unestablished-current)
         assert_contains "$out" "cannot read the validation pipeline daemon's environment" \
           "$label: expected an unestablished reading rather than an all-clear"
@@ -983,11 +1001,13 @@ no configured instance stays silent with no client at all^-^yes^none^-^empty
 no configured instance stays silent with an old client^-^yes^session^0.9.0^empty
 a configured instance requires the client^forge.example^yes^none^-^absent
 a client the session sees but the pipeline cannot is not installed^forge.example^yes^session^1.3.0^absent
-a client the pipeline reaches at the floor is accepted^forge.example^yes^daemon^1.3.0^empty
-a client the pipeline reaches at a newer minor is accepted^forge.example^yes^daemon^1.4.2^empty
-a client the pipeline reaches at a newer major is accepted^forge.example^yes^daemon^2.0.0^empty
+a client only the pipeline reaches at the floor is not accepted^forge.example^yes^daemon^1.3.0^session-absent
+the same floor client on both paths is accepted^forge.example^shared^both^1.3.0^empty
+the same newer minor client on both paths is accepted^forge.example^shared^both^1.4.2^empty
+the same newer major client on both paths is accepted^forge.example^shared^both^2.0.0^empty
 a below-floor client the pipeline reaches is reported^forge.example^yes^daemon^1.2.0^stale
 an unparseable client version is reported^forge.example^yes^daemon^forgejo-axi dev build^stale
+an install is refused when the daemon PATH has no user-owned bin^forge.example^nouser^none^-^no-prefix
 an unreadable daemon environment is unestablished, not an all-clear^forge.example^no^session^1.3.0^unestablished-current
 an unreadable daemon environment reports the session's stale client^forge.example^no^session^1.2.0^unestablished-stale
 an unreadable daemon environment reports the session's absent client as unestablished^forge.example^no^none^-^unestablished-absent

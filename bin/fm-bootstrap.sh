@@ -542,12 +542,10 @@ secondmate_liveness_sweep() {
 # reaches, given that daemon's own PATH. $HOME/.local is preferred because it is
 # the conventional user bin directory and the one that daemon PATH leads with on
 # the seat this was measured against; otherwise the first $HOME-rooted bin
-# directory it names. A seat whose daemon cannot be asked still gets
-# $HOME/.local rather than the vessel prefix, because the vessel prefix is the
-# one answer that is known to be wrong for a shared daemon.
+# directory it names.
 #
-# Fails only where there is no HOME to root a user install in, which is an
-# environment that cannot name an install directory at all.
+# Fails where there is no HOME or the measured PATH names no user-owned bin
+# directory, because an install outside that PATH would not repair daemon reach.
 forgejo_client_prefix() {  # [daemon-path]
   local path=${1-} dir
   [ -n "${HOME:-}" ] || return 1
@@ -562,7 +560,7 @@ forgejo_client_prefix() {  # [daemon-path]
       "${HOME%/}"/*/bin|"${HOME%/}"/bin) printf '%s\n' "${dir%/bin}"; return 0 ;;
     esac
   done
-  printf '%s\n' "${HOME%/}/.local"
+  return 1
 }
 
 install_cmd() {
@@ -731,7 +729,7 @@ forgejo_axi_compatible() {  # <executable>
 # A home that names no Forgejo instance prints nothing at all, so seats that
 # never touch the forge pay no diagnostic for a tool they never call.
 forgejo_client_check() {
-  local host daemon_path resolved version repair
+  local host daemon_path resolved session_resolved version repair
   host=$(fm_pr_configured_forgejo_host 2>/dev/null) || return 0
   [ -n "$host" ] || return 0
   if ! daemon_path=$(fm_nm_daemon_path 2>/dev/null); then
@@ -750,14 +748,29 @@ forgejo_client_check() {
   fi
   resolved=$(PATH="$daemon_path" command -v forgejo-axi 2>/dev/null)
   if [ -z "$resolved" ]; then
-    repair="install: $(install_cmd forgejo-axi)"
-    echo "FORGE_CLIENT: forgejo-axi is not installed where both this session and the validation pipeline can run it, and $host is this home's forge ($repair)"
+    if repair=$(install_cmd forgejo-axi); then
+      echo "FORGE_CLIENT: forgejo-axi is not installed where both this session and the validation pipeline can run it, and $host is this home's forge (install: $repair)"
+    else
+      echo "FORGE_CLIENT: forgejo-axi is not installed where both this session and the validation pipeline can run it, and $host is this home's forge; the pipeline daemon's PATH names no user-owned directory this fleet can install into, so the daemon's own PATH must change"
+    fi
     return 0
   fi
   if ! forgejo_axi_compatible "$resolved"; then
     version=$("$resolved" --version 2>/dev/null | head -n 1)
-    repair="install: $(install_cmd forgejo-axi)"
-    echo "FORGE_CLIENT: forgejo-axi at $resolved reports '${version:-no version}', below the required $FORGEJO_AXI_MIN_MAJOR.$FORGEJO_AXI_MIN_MINOR.$FORGEJO_AXI_MIN_PATCH ($repair)"
+    if repair=$(install_cmd forgejo-axi); then
+      echo "FORGE_CLIENT: forgejo-axi at $resolved reports '${version:-no version}', below the required $FORGEJO_AXI_MIN_MAJOR.$FORGEJO_AXI_MIN_MINOR.$FORGEJO_AXI_MIN_PATCH (install: $repair)"
+    else
+      echo "FORGE_CLIENT: forgejo-axi at $resolved reports '${version:-no version}', below the required $FORGEJO_AXI_MIN_MAJOR.$FORGEJO_AXI_MIN_MINOR.$FORGEJO_AXI_MIN_PATCH; the pipeline daemon's PATH names no user-owned directory this fleet can install into, so the daemon's own PATH must change"
+    fi
+    return 0
+  fi
+  session_resolved=$(command -v forgejo-axi 2>/dev/null)
+  if [ -z "$session_resolved" ]; then
+    echo "FORGE_CLIENT: forgejo-axi at $resolved meets the required $FORGEJO_AXI_MIN_MAJOR.$FORGEJO_AXI_MIN_MINOR.$FORGEJO_AXI_MIN_PATCH floor for the validation pipeline, but this session resolves no forgejo-axi"
+    return 0
+  fi
+  if [ "$session_resolved" != "$resolved" ]; then
+    echo "FORGE_CLIENT: forgejo-axi at $resolved meets the required $FORGEJO_AXI_MIN_MAJOR.$FORGEJO_AXI_MIN_MINOR.$FORGEJO_AXI_MIN_PATCH floor for the validation pipeline, but this session resolves a different copy at $session_resolved"
     return 0
   fi
 }
