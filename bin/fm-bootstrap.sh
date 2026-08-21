@@ -32,6 +32,7 @@
 #                 "GROSSREINSCHIFF: weekly fleet cleanup sweep is due (...)",
 #                 "CURRENCY_ROUND: the daily update check <is not armed|has stopped> (...)",
 #                 "MEMORY_ALARM: <nothing is watching this machine|the memory watch ... has stopped> (...)",
+#                 "GITHUB_INBOX: the GitHub notification watch ... has stopped (...)",
 #                 "CURATION_NUDGE|CODEBASE_SWEEP_NUDGE: <not armed|could not be armed|scheduler refusal|state persistence failure|state health indeterminate|supervision outage> (...)",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...",
 #                 "WATCHER_UNIT: <consent, convergence, or fallback detail>",
@@ -1178,6 +1179,12 @@ fi
 "$SCRIPT_DIR/fm-currency-round.sh" --armed || true
 # And the same question of the memory alarm: armed once is not running now.
 "$SCRIPT_DIR/fm-memory-alarm.sh" --armed || true
+# And of the GitHub notification watch, which is deliberately asked ONLY here and
+# never armed here: several homes draining one notification feed would each
+# surface the same threads separately, so arming it is a per-home decision
+# (docs/github-inbox.md). This says nothing on a home that never armed it, and
+# speaks only when a home that did has stopped reading.
+"$SCRIPT_DIR/fm-github-inbox.sh" --armed || true
 # And of each fleet nudge subject, which answers it from what the work produced
 # - that subject's last firing and next scheduled sweep - rather than from the
 # check's own claim to be armed, because a timer's own surfaces report health
