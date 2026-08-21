@@ -25,6 +25,7 @@ fm_test_tmproot TMP_ROOT fm-github-inbox-tests
 CHECK_SCRIPT="$ROOT/bin/fm-github-inbox.sh"
 HOME_DIR="$TMP_ROOT/home"
 FIX="$TMP_ROOT/fixtures"
+REQUEST_LOG="$TMP_ROOT/requests.log"
 mkdir -p "$HOME_DIR/state" "$HOME_DIR/data" "$FIX"
 
 ME=fleetaccount
@@ -39,6 +40,7 @@ FAKE_GH="$TMP_ROOT/fake-gh"
 cat >"$FAKE_GH" <<'EOF'
 #!/usr/bin/env bash
 set -u
+printf '%s\n' "$*" >>"$FM_TEST_GH_LOG"
 [ "${FM_TEST_GH_FAIL:-0}" = 1 ] && exit 1
 path=$2
 expr=$4
@@ -46,10 +48,14 @@ src=
 case "$path" in
   user) src="$FM_TEST_GH_FIX/user.json" ;;
   notifications*)
-    case "$path" in
-      *page=1*) src="$FM_TEST_GH_FIX/notifications.json" ;;
-      *) src="$FM_TEST_GH_FIX/empty.json" ;;
-    esac ;;
+    page=${path##*&page=}
+    if [ "$page" = 1 ]; then
+      src="$FM_TEST_GH_FIX/notifications.json"
+    else
+      src="$FM_TEST_GH_FIX/notifications-page-$page.json"
+      [ -f "$src" ] || src="$FM_TEST_GH_FIX/empty.json"
+    fi
+    ;;
   repos/*/issues/*/timeline*)
     rest=${path#repos/*/issues/}
     number=${rest%%/*}
@@ -69,8 +75,8 @@ printf '{"login":"%s"}\n' "$ME" >"$FIX/user.json"
 inbox() {
   env FM_HOME="$HOME_DIR" \
       FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
-      FM_GH_INBOX_GH="$FAKE_GH" FM_TEST_GH_FIX="$FIX" \
-      FM_GH_INBOX_PER_PAGE=50 \
+      FM_GH_INBOX_GH="$FAKE_GH" FM_TEST_GH_FIX="$FIX" FM_TEST_GH_LOG="$REQUEST_LOG" \
+      FM_GH_INBOX_PER_PAGE="${FM_GH_INBOX_PER_PAGE:-50}" \
       "$CHECK_SCRIPT" "$@"
 }
 
@@ -235,6 +241,28 @@ later=$(FM_GH_INBOX_MAX_INSPECT=1 inbox)
 assert_contains "$later" "pull/14" "a thread not examined must be examined on a later pass"
 pass "a thread beyond the inspection cap is examined later, never dropped"
 
+# --- a feed larger than one page window advances across sweeps --------------
+
+reset_home
+feed "$(notification 21 mention 2026-08-20T09:00:00Z PullRequest acme/widget acme/widget/pulls/21 'newest')"
+printf '%s\n' "[$(notification 22 mention 2026-08-20T08:00:00Z PullRequest acme/widget acme/widget/pulls/22 'older')]" >"$FIX/notifications-page-2.json"
+printf '%s\n' "[$(notification 23 mention 2026-08-20T07:00:00Z PullRequest acme/widget acme/widget/pulls/23 'oldest')]" >"$FIX/notifications-page-3.json"
+first=$(FM_GH_INBOX_PER_PAGE=1 FM_GH_INBOX_MAX_PAGES=1 inbox)
+assert_contains "$first" "pull/21" "the first bounded sweep must read the first page"
+second=$(FM_GH_INBOX_PER_PAGE=1 FM_GH_INBOX_MAX_PAGES=1 inbox)
+assert_contains "$second" "pull/22" "the next bounded sweep must resume at the next page"
+third=$(FM_GH_INBOX_PER_PAGE=1 FM_GH_INBOX_MAX_PAGES=1 inbox)
+assert_contains "$third" "pull/23" "later bounded sweeps must reach older notifications"
+pass "bounded notification sweeps advance through older pages"
+
+reset_home
+printf '%s\n' '90 2026-08-20T06:00:00Z named -' >"$HOME_DIR/state/github-inbox.seen"
+FM_GH_INBOX_PER_PAGE=1 FM_GH_INBOX_MAX_PAGES=1 inbox >/dev/null
+assert_contains "$(cat "$HOME_DIR/state/github-inbox.seen")" "90 2026-08-20T06:00:00Z named -" \
+  "a partial feed read must retain records outside its current window"
+pass "a partial notification sweep does not prune unseen records"
+rm -f "$FIX"/notifications-page-*.json
+
 # --- a history too long to read is not an all-clear -------------------------
 
 reset_home
@@ -275,16 +303,17 @@ pass "arming verifies a real reading first and says what it verified"
 
 # --- nothing is ever marked read --------------------------------------------
 
-# Comments are stripped first: the header names the endpoints it refuses to call,
-# and naming them is the point of the header.
-code=$(grep -vE '^[[:space:]]*#' "$CHECK_SCRIPT")
-if printf '%s\n' "$code" | grep -qE '\b(POST|PUT|PATCH|DELETE)\b'; then
-  fail "the notification watch must never issue a mutating GitHub request"
-fi
-# shellcheck disable=SC2016  # $GH is the script's own text, not this shell's
-callsites=$(printf '%s\n' "$code" | grep -c '"$GH" api' || true)
-[ "$callsites" = 1 ] ||
-  fail "every GitHub request must go through the one reader, found $callsites call sites"
+assert_present "$REQUEST_LOG" "the request log must contain executable evidence"
+[ -s "$REQUEST_LOG" ] || fail "the request log must not be empty"
+while IFS= read -r request; do
+  case "$request" in
+    api\ *\ --jq\ *) ;;
+    *) fail "every GitHub request must use the plain GET interface, got: $request" ;;
+  esac
+  case "$request" in
+    *' --method '*|*' -X '*) fail "the notification watch must not select a mutating method, got: $request" ;;
+  esac
+done <"$REQUEST_LOG"
 pass "the notification watch issues no mutating GitHub request, so it can consume nothing"
 
 # --- the staleness report is opt-in -----------------------------------------
@@ -295,7 +324,7 @@ out=$(inbox --armed)
 inbox --arm >/dev/null 2>&1 || fail "arming must succeed before the staleness case"
 out=$(env FM_GH_INBOX_NOW=$(( $(date +%s) + 7200 )) \
       FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
-      FM_GH_INBOX_GH="$FAKE_GH" FM_TEST_GH_FIX="$FIX" "$CHECK_SCRIPT" --armed)
+      FM_GH_INBOX_GH="$FAKE_GH" FM_TEST_GH_FIX="$FIX" FM_TEST_GH_LOG="$REQUEST_LOG" "$CHECK_SCRIPT" --armed)
 assert_contains "$out" "GITHUB_INBOX:" "a watch that armed and then stopped must say so"
 pass "the staleness report is silent on homes that never armed and speaks on ones that did"
 

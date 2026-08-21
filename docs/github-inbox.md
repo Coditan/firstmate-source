@@ -114,7 +114,8 @@ That way the opt-in stays an opt-in and a watch that dies is still noticed.
 - Notifications the captain reads in a browser leave the unread feed, and this check never sees them.
   That is the cost of the shared identity, and the machine account is what removes it.
 - One reading reaches `FM_GH_INBOX_PER_PAGE` x `FM_GH_INBOX_MAX_PAGES` unread threads.
-  Beyond that the line says there are more than one reading reaches, rather than trimming quietly.
+  Beyond that the line says there are more than one reading reaches, and the next sweep resumes at the next older page.
+  A short page completes the traversal and resets the next sweep to page 1.
 - A thread with 100 or more timeline events is surfaced with the caveat that its history could not be read in full, because an ascending read at that size may be hiding the newest events.
 - It never marks anything read, so it cannot tell GitHub what the fleet has seen.
   Its own record does that, where being wrong costs a repeat rather than a loss.

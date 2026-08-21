@@ -17,9 +17,10 @@
 # and consuming one nobody saw is the same silent loss in a new place. Every
 # request this script makes is a GET; there is no call to
 # PUT /notifications or PUT /notifications/threads/<id> anywhere in it, and
-# tests/fm-github-inbox.test.sh asserts that no mutating method appears in this
-# file at all. What has been surfaced is tracked in this home's own record
-# instead, where being wrong costs a repeat rather than a loss.
+# tests/fm-github-inbox.test.sh records the requests the reader receives and
+# asserts that all of them use its non-mutating interface. What has been
+# surfaced is tracked in this home's own record instead, where being wrong
+# costs a repeat rather than a loss.
 #
 # IT HAS NO BASELINE, DELIBERATELY
 # The upstream-pull-request watch was armed twice on nothing before it was
@@ -112,8 +113,9 @@
 #   github-inbox.seen      one record per notification this check has evaluated:
 #                          id, the updated_at it was evaluated at, the verdict,
 #                          and the newest foreign activity already surfaced for
-#                          that thread. Pruned to the feed on every readable pass.
+#                          that thread. Pruned only after a complete feed pass.
 #   github-inbox.state     readable or unreadable, and since when
+#   github-inbox.cursor    first notification-feed page for the next sweep
 #   github-inbox.check.sh  the armed watcher check (with .check-trust)
 #
 # Environment:
@@ -141,6 +143,7 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 
 SEEN="$STATE/github-inbox.seen"
 STATE_FILE="$STATE/github-inbox.state"
+CURSOR="$STATE/github-inbox.cursor"
 CHECK="$STATE/github-inbox.check.sh"
 
 GH=${FM_GH_INBOX_GH:-gh-axi}
@@ -260,13 +263,25 @@ FEED_JQ='"" + ([.[] | select(.unread) | .id + " " + (.reason // "-") + " " + (.u
 FEED=
 FEED_COUNT=0
 FEED_BOUNDED=
+FEED_COMPLETE=
+NEXT_CURSOR=1
+
+read_cursor() {
+  local page
+  page=$(awk 'NR == 1 { print $1 }' "$CURSOR" 2>/dev/null)
+  case "$page" in ''|*[!0-9]*|0) printf '1' ;; *) printf '%s' "$page" ;; esac
+}
 
 read_feed() {
-  local page=1 payload lines
+  local page start_page payload lines pages=0
+  page=$(read_cursor)
+  start_page=$page
   FEED=
   FEED_COUNT=0
   FEED_BOUNDED=
-  while [ "$page" -le "$MAX_PAGES" ]; do
+  FEED_COMPLETE=
+  NEXT_CURSOR=$page
+  while [ "$pages" -lt "$MAX_PAGES" ]; do
     gh_read "notifications?all=false&per_page=$PER_PAGE&page=$page" "$FEED_JQ" || return 1
     payload=$GH_READ_OUT
     lines=0
@@ -277,12 +292,22 @@ read_feed() {
 "
     fi
     FEED_COUNT=$((FEED_COUNT + lines))
-    [ "$lines" -lt "$PER_PAGE" ] && return 0
+    if [ "$lines" -lt "$PER_PAGE" ]; then
+      NEXT_CURSOR=1
+      if [ "$start_page" -eq 1 ]; then
+        FEED_COMPLETE=1
+      else
+        FEED_BOUNDED=1
+      fi
+      return 0
+    fi
     page=$((page + 1))
+    pages=$((pages + 1))
   done
   # Every page came back full, so there are unread threads this reading did not
   # reach. Said out loud rather than trimmed away.
   FEED_BOUNDED=1
+  NEXT_CURSOR=$page
   return 0
 }
 
@@ -395,6 +420,14 @@ write_seen() {
   tmp=$(mktemp "$STATE/.fm-github-inbox-seen.XXXXXX") || return 1
   printf '%s' "$body" >"$tmp" || { rm -f -- "$tmp"; return 1; }
   mv -f -- "$tmp" "$SEEN" || { rm -f -- "$tmp"; return 1; }
+}
+
+write_cursor() {
+  local tmp
+  umask 077
+  tmp=$(mktemp "$STATE/.fm-github-inbox-cursor.XXXXXX") || return 1
+  printf '%s\n' "$NEXT_CURSOR" >"$tmp" || { rm -f -- "$tmp"; return 1; }
+  mv -f -- "$tmp" "$CURSOR" || { rm -f -- "$tmp"; return 1; }
 }
 
 # --- classification ---------------------------------------------------------
@@ -569,6 +602,17 @@ evaluate() {
   done <<EOT
 $(printf '%s' "$FEED")
 EOT
+
+  if [ -n "$FEED_BOUNDED" ] && [ -f "$SEEN" ]; then
+    while read -r record; do
+      [ -n "$record" ] || continue
+      id=${record%% *}
+      if ! printf '%s' "$FEED" | awk -v id="$id" '$1 == id { found = 1 } END { exit !found }'; then
+        NEW_SEEN="${NEW_SEEN}${record}
+"
+      fi
+    done <"$SEEN"
+  fi
 }
 
 compose_line() {
@@ -586,7 +630,7 @@ compose_line() {
   [ "$PENDING" -gt 0 ] && extras="$extras $PENDING more wait to be named on the next pass."
   [ "$DEFERRED" -gt 0 ] && extras="$extras $DEFERRED were not examined this pass and are still queued."
   [ "$ROUTINE" -gt 0 ] && extras="$extras $ROUTINE further unread thread(s) were this fleet's own work and were not surfaced."
-  [ -n "$FEED_BOUNDED" ] && extras="$extras There are more unread notifications than one reading reaches, so older ones were not seen."
+  [ -n "$FEED_BOUNDED" ] && extras="$extras There are more unread notifications than one reading reaches; later sweeps continue from older pages."
   printf '%s%s\n' "$line" "$extras"
   return 0
 }
@@ -720,9 +764,11 @@ if LINE=$(compose_line); then
       "the notification watch read the feed but could not record what it surfaced in $SEEN, so it stopped rather than risk surfacing the same threads forever or none of them"
     exit 0
   }
+  write_cursor || true
   printf '%s\n' "$LINE"
   exit 0
 fi
 
 write_seen "$NEW_SEEN" || true
+write_cursor || true
 exit 0
