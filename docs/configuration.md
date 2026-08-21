@@ -588,6 +588,7 @@ When X mode is opted in, bootstrap also requires `curl` and `jq` before arming t
 `tasks-axi` and `quota-axi` are required bootstrap tools in every profile, the same class as `lavish-axi`.
 An absent or incompatible `tasks-axi` reports `MISSING: tasks-axi` with an install command targeting `$FM_HOME/.local/axi`; when `config/backlog-backend` is not `manual` and compatible `tasks-axi` is on `PATH`, bootstrap stays silent and firstmate uses its verbs for routine backlog mutations, otherwise it hand-edits `data/backlog.md` until installation is approved and completed.
 An absent `quota-axi` reports `MISSING: quota-axi` with the same home-owned prefix; `bin/fm-dispatch-select.sh` still selects uniformly from the valid candidate array with an OS-backed random source when quota data is unavailable.
+
 ### Forge client (conditional on a configured Forgejo instance)
 
 There is a third required-tool route, narrower than the two above and keyed to neither a backend nor every home: a home that names a Forgejo instance under "Forge instance" also needs `forgejo-axi` 1.3.0 or newer, and a home that names none needs nothing and is told nothing.
@@ -602,7 +603,6 @@ A seat whose daemon environment cannot be read is reported as unestablished rath
 
 The floor covers two verb surfaces rather than this fleet's own: `bin/fm-bootstrap.sh` owns the version constants and the evidence note, and [`docs/forgejo-axi-adoption.md`](forgejo-axi-adoption.md) owns the licence, provenance, maintenance risk, and the one coupling a version floor cannot cover.
 One fact from that record belongs here rather than only there, because this is where a home decides to depend on the client: `forgejo-axi` is a single maintainer's project with no external issues and no external contributor but this fleet, so a home that configures a forge instance is taking on a dependency the fleet watches rather than one anybody else exercises.
-
 
 ### AXI-suite self-update
 

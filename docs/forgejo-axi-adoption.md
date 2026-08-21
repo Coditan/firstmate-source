@@ -246,7 +246,7 @@ Nothing in this record should be read as saying a Forgejo project can be shipped
 
 This was the part of adoption that could not be completed then, and it was reported rather than improvised around.
 
-This fleet declares a tool in exactly three places, and `forgejo-axi` fits none of them today.
+At that time this fleet declared a tool in exactly three places, and `forgejo-axi` fit none of them.
 
 - **`COMMON_TOOLS` in `bin/fm-bootstrap.sh`**, the universal toolchain, whose single documentation owner is `docs/configuration.md` "Toolchain".
   Every entry there is *required*, and an absent one prints `MISSING:` at every session start.
