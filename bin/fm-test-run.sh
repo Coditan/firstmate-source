@@ -3,6 +3,15 @@
 # composition for portable CI shards, local --jobs for the proven-isolated set,
 # timing markers, and the complete-regression coverage guard.
 #
+# --check-coverage is this repository's one zero-drift gate location. It proves
+# three derived things, and every file set it compares is derived from the
+# directory or the document itself, never from a list kept here by hand:
+#   1. the lane partition equals the complete tests/*.test.sh inventory
+#   2. docs/scripts.md names every bin/*.sh, once, and nothing that is gone
+#   3. every tests/*.test.sh carries a decided family - there is no catch-all
+# A second gate location would be a second hand-kept thing, so new derived
+# invariants belong here rather than in a new script or a new CI job.
+#
 # Selection modes (exactly one of: --all, --family, --changed, --lane,
 # --proven-isolated, or script paths):
 #   fm-test-run.sh --all
@@ -18,7 +27,9 @@
 #   fm-test-run.sh --list --lane portable-parallel-1
 #   fm-test-run.sh --list-families
 #   fm-test-run.sh --list-lanes
-#   fm-test-run.sh --check-coverage
+#   fm-test-run.sh --check-coverage   (also proves the two derived zero-drift
+#                                      guards: the docs/scripts.md index and the
+#                                      test-family map)
 #
 # Aggregation (no suite execution):
 #   fm-test-run.sh --aggregate-json <out.json> <lane.json> [more lane.json...]
@@ -113,29 +124,40 @@ now_ms() {
   fi
 }
 
-# Primary family for one tests/*.test.sh basename. Unmapped scripts are
-# unclassified so new tests are still runnable and visible in summaries.
+# Primary family for one tests/*.test.sh basename, or empty output when the
+# basename is not mapped. There is deliberately no catch-all: an unmapped
+# tests/*.test.sh is a gap in this map that someone must close, run_coverage_guard
+# fails on it by name, and family_for_script refuses to run it.
 family_for_basename() {
   case "$1" in
-    fm-arm-pretool-check.test.sh|fm-brief.test.sh|fm-calm-pi-extension.test.sh|\
-    fm-captain-translation-contract.test.sh|fm-cd-pretool-check.test.sh|\
+    fm-arm-pretool-check.test.sh|fm-axi-tool-intake.test.sh|fm-brief.test.sh|\
+    fm-calm-pi-extension.test.sh|fm-captain-translation-contract.test.sh|\
+    fm-cd-pretool-check.test.sh|fm-codebase-sweep.test.sh|\
     fm-composer-ghost.test.sh|fm-composer-lib.test.sh|\
-    fm-continuity-pretool-check.test.sh|fm-crew-state.test.sh|fm-decision-hold-lifecycle.test.sh|\
-    fm-dispatch-select.test.sh|fm-ensure-agents-md.test.sh|fm-grok-harness.test.sh|\
+    fm-continuity-pretool-check.test.sh|fm-crew-state.test.sh|\
+    fm-decision-hold-lifecycle.test.sh|fm-deploy-verify.test.sh|\
+    fm-dispatch-select.test.sh|fm-ensure-agents-md.test.sh|fm-grade.test.sh|\
+    fm-grok-harness.test.sh|fm-grossreinschiff.test.sh|\
     fm-herdr-lab.test.sh|fm-instruction-owners.test.sh|fm-lint.test.sh|\
     fm-install-herdr.test.sh|fm-model-panel.test.sh|fm-nm-test-contract.test.sh|\
     fm-no-mistakes-ownership.test.sh|\
-    fm-operational-input.test.sh|fm-pi-primary-types.test.sh|\
-    fm-send-popup-settle.test.sh|fm-send-settle.test.sh|fm-stow-contract.test.sh|\
-    fm-subagent-pretool-check.test.sh|\
-    fm-supervision-instructions.test.sh|fm-tmux-submit-busy.test.sh|\
-    fm-tmux-target-resolve.test.sh|fm-transition-lib.test.sh|\
+    fm-operational-input.test.sh|fm-pdf-output.test.sh|fm-pi-primary-types.test.sh|\
+    fm-private-material-ignore.test.sh|fm-project-remove.test.sh|\
+    fm-role-config.test.sh|fm-run-reader-reach.test.sh|fm-runtime-ignore.test.sh|\
+    fm-send-popup-settle.test.sh|fm-send-settle.test.sh|fm-slot-guard.test.sh|\
+    fm-stow-contract.test.sh|fm-subagent-pretool-check.test.sh|\
+    fm-supervision-cost.test.sh|fm-supervision-instructions.test.sh|\
+    fm-test-lib.test.sh|fm-tmux-submit-busy.test.sh|\
+    fm-tmux-target-resolve.test.sh|fm-transcript-archive.test.sh|\
+    fm-transition-lib.test.sh|\
     fm-test-run.test.sh|fm-test-isolation-proof.test.sh)
       printf '%s\n' pure-contract-unit
       ;;
-    fm-daemon.test.sh|fm-delivery.test.sh|fm-guard-stale-banner.test.sh|\
-    fm-supervision-events.test.sh|fm-turnend-guard.test.sh|fm-wake-daemon-lifecycle-e2e.test.sh|\
-    fm-wake-queue.test.sh|fm-watch-triage.test.sh|\
+    fm-bosun.test.sh|fm-context-reset.test.sh|fm-daemon.test.sh|\
+    fm-delivery.test.sh|fm-event-batch.test.sh|fm-guard-stale-banner.test.sh|\
+    fm-journal.test.sh|fm-supervision-events.test.sh|fm-turnend-guard.test.sh|\
+    fm-wake-daemon-lifecycle-e2e.test.sh|fm-wake-queue.test.sh|\
+    fm-watch-run-bounded.test.sh|fm-watch-triage.test.sh|\
     fm-watcher-lock.test.sh)
       printf '%s\n' watcher-wake-lock
       ;;
@@ -145,7 +167,8 @@ family_for_basename() {
     fm-backend-herdr-smoke.test.sh|fm-backend-herdr-workspace-per-home-e2e.test.sh)
       printf '%s\n' real-herdr-gated
       ;;
-    fm-backlog-handoff.test.sh|fm-secondmate-harness.test.sh|fm-secondmate-lifecycle-e2e.test.sh|\
+    fm-backlog-handoff.test.sh|fm-pending-reply.test.sh|fm-secondmate-harness.test.sh|\
+    fm-secondmate-lifecycle-e2e.test.sh|\
     fm-secondmate-liveness.test.sh|fm-secondmate-safety.test.sh|fm-secondmate-sync.test.sh|\
     fm-send-secondmate-marker.test.sh|fm-shared-captain-inheritance.test.sh)
       printf '%s\n' secondmate
@@ -162,12 +185,13 @@ family_for_basename() {
       printf '%s\n' live-harness-optin
       ;;
     fm-backend-herdr.test.sh|fm-backend-tmux-smoke.test.sh|fm-backend.test.sh|\
-    fm-send-strict.test.sh|fm-spawn-batch.test.sh|fm-spawn-dispatch-profile.test.sh|\
+    fm-send-strict.test.sh|fm-spawn-batch.test.sh|fm-spawn-brief-off-argv.test.sh|\
+    fm-spawn-dispatch-profile.test.sh|\
     fm-spawn-worktree-settle.test.sh)
       printf '%s\n' backend-dispatch
       ;;
     fm-pr-check-security.test.sh|fm-pr-merge.test.sh|fm-review-diff.test.sh|\
-    fm-teardown.test.sh|fm-x-mode.test.sh)
+    fm-teardown.test.sh|fm-x-mode.test.sh|no-mistakes-required-workflow.test.sh)
       printf '%s\n' pr-forge
       ;;
     fm-afk-inject-e2e.test.sh|fm-afk-return.test.sh)
@@ -176,6 +200,34 @@ family_for_basename() {
     fm-bearings-snapshot.test.sh|fm-fleet-snapshot-argv-limit.test.sh|\
     fm-fleet-snapshot-view.test.sh)
       printf '%s\n' snapshot-bearings
+      ;;
+    fm-backlog-lint.test.sh|fm-board.test.sh|fm-decision-inventory.test.sh|\
+    fm-decision-ledger.test.sh|fm-run-decisionboard.test.sh|fm-sea-chart.test.sh|\
+    fm-to-backlog.test.sh)
+      printf '%s\n' decision-backlog
+      ;;
+    fm-axi-suite.test.sh|fm-currency-round.test.sh|fm-firstmate-update-check.test.sh|\
+    fm-fleet-update-check.test.sh|fm-forge-status.test.sh|fm-fork-sync-check.test.sh|\
+    fm-github-inbox.test.sh|fm-nudge.test.sh|fm-self-drift.test.sh)
+      printf '%s\n' currency-updates
+      ;;
+    fm-memory-alarm.test.sh|fm-memory-alarm-crossing-e2e.test.sh|\
+    fm-memory-ceiling-probe.test.sh|fm-memory-reading.test.sh)
+      printf '%s\n' memory-watch
+      ;;
+    fm-finding-drain.test.sh|fm-finding-surface.test.sh|fm-urgency.test.sh)
+      printf '%s\n' findings-urgency
+      ;;
+    fm-bridge-relay.test.sh|fm-frequency-monitor.test.sh|fm-tg-recv-arm.test.sh|\
+    fm-tg-recv-route.test.sh|fm-tg-send.test.sh|fm-watch-bridge-inbox.test.sh)
+      printf '%s\n' messaging-relay
+      ;;
+    fm-bosun-service.test.sh|fm-frequency-monitor-service.test.sh|\
+    fm-watcher-service.test.sh)
+      printf '%s\n' service-units
+      ;;
+    fm-watcher-systemd-smoke.test.sh)
+      printf '%s\n' systemd-live-optin
       ;;
     fm-backend-cmux.test.sh|fm-backend-cmux-smoke.test.sh)
       printf '%s\n' cmux
@@ -187,21 +239,49 @@ family_for_basename() {
       printf '%s\n' orca
       ;;
     *)
-      printf '%s\n' unclassified
       ;;
   esac
+}
+
+# True when the path names one of this repository's own test scripts. Only those
+# are in the inventory the family map must cover.
+is_repo_test_path() {
+  case "$1" in
+    tests/*.test.sh) [ -f "$ROOT/$1" ] ;;
+    "$ROOT"/tests/*.test.sh) [ -f "$1" ] ;;
+    *) return 1 ;;
+  esac
+}
+
+# Family for one selected script path. A repository test with no family is a gap
+# someone must close, so this refuses rather than bucketing it. A script from
+# outside tests/ - an ad-hoc fixture handed to the runner directly - is ad-hoc,
+# which is not a family any --family or lane selection can reach.
+family_for_script() {
+  local p=$1 fam
+  fam=$(family_for_basename "$(basename "$p")")
+  if [ -n "$fam" ]; then
+    printf '%s\n' "$fam"
+    return 0
+  fi
+  if is_repo_test_path "$p"; then
+    die "no test family for $(basename "$p"): add it to family_for_basename in bin/fm-test-run.sh (there is no catch-all family)"
+  fi
+  printf '%s\n' ad-hoc
 }
 
 expected_gate_skip_for_family() {
   case "$1" in
     real-herdr-gated) printf '%s\n' herdr ;;
-    live-harness-optin) printf '%s\n' optin-env ;;
+    live-harness-optin|systemd-live-optin) printf '%s\n' optin-env ;;
     cmux|zellij|orca) printf '%s\n' optional-binary ;;
     snapshot-bearings) printf '%s\n' optional-binary ;;
     *) printf '%s\n' none ;;
   esac
 }
 
+# Every family a tests/*.test.sh can carry. ad-hoc is deliberately absent: it
+# belongs only to scripts outside this inventory, so no selection may reach it.
 list_known_families() {
   cat <<'EOF'
 pure-contract-unit
@@ -214,10 +294,16 @@ backend-dispatch
 pr-forge
 afk
 snapshot-bearings
+decision-backlog
+currency-updates
+memory-watch
+findings-urgency
+messaging-relay
+service-units
+systemd-live-optin
 cmux
 zellij
 orca
-unclassified
 EOF
 }
 
@@ -330,7 +416,7 @@ select_proven_isolated() {
 }
 
 select_lane() {
-  local want=$1 s base fam found=0
+  local want=$1 s fam found=0
   case "$want" in
     portable-parallel-1)
       while IFS= read -r s; do
@@ -352,8 +438,7 @@ select_lane() {
       # stays here, serial only.
       while IFS= read -r s; do
         [ -n "$s" ] || continue
-        base=$(basename "$s")
-        fam=$(family_for_basename "$base")
+        fam=$(family_for_script "$s")
         if [ "$fam" = "real-herdr-gated" ]; then
           continue
         fi
@@ -375,9 +460,104 @@ select_lane() {
   [ "$found" -eq 1 ] || die "lane '$want' selected no tests"
 }
 
+# Every bin/*.sh, derived from the directory itself. A hand-kept enumeration
+# here would be the very drift this guard exists to catch.
+list_bin_scripts() {
+  local f
+  for f in "$ROOT"/bin/*.sh; do
+    [ -f "$f" ] || continue
+    basename "$f"
+  done | LC_ALL=C sort
+}
+
+# Every script named in the first column of docs/scripts.md's index table,
+# derived from the table itself for the same reason.
+list_indexed_scripts() {
+  # The backticks are Markdown table syntax, not command substitution.
+  # shellcheck disable=SC2016
+  sed -n 's/^| *`\([^`]*\)`.*/\1/p' "$ROOT/docs/scripts.md"
+}
+
+# docs/scripts.md must name every bin/*.sh, must not name a file that is gone,
+# and must name each one once.
+run_script_index_guard() {
+  local tmp missing stale dups entry rc=0
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-script-index.XXXXXX")
+
+  list_bin_scripts >"$tmp/scripts"
+  list_indexed_scripts | LC_ALL=C sort >"$tmp/indexed_raw"
+  LC_ALL=C sort -u "$tmp/indexed_raw" >"$tmp/indexed"
+  LC_ALL=C grep '\.sh$' "$tmp/indexed" >"$tmp/indexed_sh" || true
+
+  dups=$(LC_ALL=C uniq -d "$tmp/indexed_raw" || true)
+  if [ -n "$dups" ]; then
+    log "script index guard: docs/scripts.md names a script more than once:"
+    printf '%s\n' "$dups" >&2
+    rc=1
+  fi
+
+  missing=$(LC_ALL=C comm -23 "$tmp/scripts" "$tmp/indexed_sh" || true)
+  if [ -n "$missing" ]; then
+    log "script index guard: every bin/*.sh must have a row in docs/scripts.md; these have none:"
+    printf '%s\n' "$missing" >&2
+    rc=1
+  fi
+
+  stale=
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    [ -e "$ROOT/bin/$entry" ] && continue
+    stale="${stale}${entry}
+"
+  done <"$tmp/indexed"
+  if [ -n "$stale" ]; then
+    log "script index guard: docs/scripts.md names files that are not in bin/:"
+    printf '%s' "$stale" >&2
+    rc=1
+  fi
+
+  if [ "$rc" -eq 0 ]; then
+    printf 'FM_SCRIPT_INDEX ok scripts=%s indexed=%s\n' \
+      "$(wc -l <"$tmp/scripts" | tr -d ' ')" \
+      "$(wc -l <"$tmp/indexed" | tr -d ' ')"
+  fi
+  rm -rf "$tmp"
+  return "$rc"
+}
+
+# Every tests/*.test.sh must carry a decided family. There is no catch-all to
+# fall into, so this names every gap at once rather than dying on the first.
+run_family_guard() {
+  local s unmapped=
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    [ -n "$(family_for_basename "$(basename "$s")")" ] && continue
+    unmapped="${unmapped}${s}
+"
+  done < <(all_repo_tests)
+  if [ -n "$unmapped" ]; then
+    log "family guard: every tests/*.test.sh must map to a family in family_for_basename (there is no catch-all); these do not:"
+    printf '%s' "$unmapped" >&2
+    return 1
+  fi
+  printf 'FM_TEST_FAMILIES ok total=%s families=%s\n' \
+    "$(all_repo_tests | wc -l | tr -d ' ')" \
+    "$(list_known_families | wc -l | tr -d ' ')"
+  return 0
+}
+
 run_coverage_guard() {
   local tmp missing extra a b
   local -a saved_scripts=()
+  local rc=0
+
+  # The two derived zero-drift guards run first: the family guard names every
+  # unmapped test at once, which the lane selections below could not do because
+  # family_for_script refuses on the first one it meets.
+  run_script_index_guard || rc=1
+  run_family_guard || rc=1
+  [ "$rc" -eq 0 ] || return 1
+
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-coverage.XXXXXX")
 
   all_repo_tests | LC_ALL=C sort -u >"$tmp/all"
@@ -572,12 +752,11 @@ select_all() {
 }
 
 select_family() {
-  local want=$1 s base fam found=0
+  local want=$1 s fam found=0
   [ -n "$want" ] || die "--family requires a name"
   while IFS= read -r s; do
     [ -n "$s" ] || continue
-    base=$(basename "$s")
-    fam=$(family_for_basename "$base")
+    fam=$(family_for_script "$s")
     if [ "$fam" = "$want" ]; then
       add_script "$s"
       found=1
@@ -592,7 +771,7 @@ families_for_test_reference() {
   while IFS= read -r s; do
     [ -n "$s" ] || continue
     if grep -Fq "$needle" "$s"; then
-      family_for_basename "$(basename "$s")"
+      family_for_script "$s"
       found=1
     fi
   done < <(all_repo_tests)
@@ -685,7 +864,7 @@ families_for_changed_path() {
       # bin/fm-bridge-relay.sh classifies this script's per-project outcome
       # vocabulary to decide whether a Bridge read may answer at all, so a reword
       # here must re-run the relay's own suite; its basename family
-      # (unclassified) would never select it from this path.
+      # (messaging-relay) would never select it from this path.
       printf '%s\n' "__script_required__:fm-bridge-relay.test.sh"
       ;;
     bin/fm-session-start.sh|bin/fm-bootstrap.sh|\
@@ -847,7 +1026,8 @@ select_changed() {
   for f in "${unique_families[@]+"${unique_families[@]}"}"; do
     while IFS= read -r s; do
       [ -n "$s" ] || continue
-      if [ "$(family_for_basename "$(basename "$s")")" = "$f" ]; then
+      fam=$(family_for_script "$s")
+      if [ "$fam" = "$f" ]; then
         add_script "$s"
       fi
     done < <(all_repo_tests)
@@ -896,7 +1076,7 @@ apply_exclude_families() {
   local -a kept=()
   [ "${#EXCLUDE_FAMILIES[@]}" -gt 0 ] || return 0
   for s in "${SCRIPTS[@]+"${SCRIPTS[@]}"}"; do
-    fam=$(family_for_basename "$(basename "$s")")
+    fam=$(family_for_script "$s")
     keep=1
     for ex in "${EXCLUDE_FAMILIES[@]}"; do
       if [ "$fam" = "$ex" ]; then
@@ -1283,9 +1463,8 @@ family_bump() {
 
 record_script_result() {
   local script=$1 rc=$2 duration=$3 out=$4 end_iso=$5
-  local base family expected gate_skip fail_delta
-  base=$(basename "$script")
-  family=$(family_for_basename "$base")
+  local family expected gate_skip fail_delta
+  family=$(family_for_script "$script")
   expected=$(expected_gate_skip_for_family "$family")
 
   if [ -n "$FAIL_ON_GATE_SKIP" ] && detect_gate_skip_token "$out" "$FAIL_ON_GATE_SKIP"; then
@@ -1317,9 +1496,8 @@ record_script_result() {
 
 run_one_serial() {
   local script=$1
-  local base family expected out begin_iso begin_ms end_ms end_iso duration rc
-  base=$(basename "$script")
-  family=$(family_for_basename "$base")
+  local family expected out begin_iso begin_ms end_ms end_iso duration rc
+  family=$(family_for_script "$script")
   expected=$(expected_gate_skip_for_family "$family")
   out="$RUN_TMP/out.$TOTAL"
   begin_iso=$(now_iso)
@@ -1421,8 +1599,7 @@ else
     work="$RUN_TMP/w$worker_n"
     mkdir -p "$work/tmp"
     chmod 0700 "$work" "$work/tmp" || die "could not chmod 0700 worker root $work"
-    base=$(basename "$script")
-    family=$(family_for_basename "$base")
+    family=$(family_for_script "$script")
     expected=$(expected_gate_skip_for_family "$family")
     printf 'FM_TEST_BEGIN %s %s family=%s expected_gate_skip=%s\n' \
       "$(now_iso)" "$script" "$family" "$expected"
