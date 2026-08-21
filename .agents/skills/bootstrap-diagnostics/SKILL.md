@@ -30,11 +30,14 @@ When any diagnostic needs captain attention, report the plain consequence and re
   Either this home is behind the fork that carries the overlay, in which case `/updatefirstmate` resolves it, or the overlay has not been written yet, in which case the role is not usable and the home should return to `vessel` until it is.
   Do not write the missing overlay from memory to silence the line.
 - `NEEDS_GH_AUTH` - ask the captain to run `! gh auth login` (interactive; you cannot run it for them).
-- `FORGE_CLIENT: ...` - this home names a Forgejo instance, so it needs a Forgejo client that BOTH a session and the validation pipeline can run, and one of the three things that requirement asks was not true.
-  Read which sentence the line carries before acting, because they need different words to the captain and only two of them are an install.
+- `FORGE_CLIENT: ...` - this home names a Forgejo instance, so it needs the same Forgejo client to resolve for both a session and the validation pipeline, with the daemon-resolved executable at or above the floor, and some part of that requirement was not established.
+  Read which sentence the line carries before acting, because only a line that prints an install command is an install.
   `is not installed where both this session and the validation pipeline can run it` means the client is absent from the pipeline daemon's own PATH; `command -v forgejo-axi` answering yes in your session does not contradict it and is not evidence against the line.
   Pass `forgejo-axi` to `bin/fm-bootstrap.sh install` after the captain approves, exactly as for `MISSING:`, and never install it somewhere else to silence the line - the printed prefix is chosen because the pipeline daemon already reaches it, and a copy anywhere else leaves the requirement failing.
-  `below the required <floor>` is the same repair against an installed copy that is too old.
+  `below the required <floor>` with a printed install command is the same repair against the daemon-resolved copy being too old.
+  `meets the required <floor> floor for the validation pipeline, but this session resolves no forgejo-axi` is NOT an install: repair the session's `PATH` so it reaches the daemon-resolved executable.
+  `meets the required <floor> floor for the validation pipeline, but this session resolves a different copy` is NOT an install: repair the session's `PATH` ordering or shadowing so both environments resolve the daemon-measured executable.
+  `the pipeline daemon's PATH names no user-owned directory this fleet can install into` is NOT an install, even when the same line reports absence or an old version: the daemon's own `PATH` must first name a user-owned bin directory.
   `cannot read the validation pipeline daemon's environment` is NOT an install: it means this seat could not be asked the question at all, so report it to the captain as unestablished rather than as a working or a broken client, and never let it stand as an all-clear.
   `docs/forgejo-axi-adoption.md` owns why the floor is what it is, the maintenance risk this dependency carries, and what this check cannot cover.
 - `WATCHER_UNIT: missing ...` or `WATCHER_UNIT: ... disabled ...` - explain that persistent supervision needs the per-home user-service instance, ask for explicit consent, then run `bin/fm-bootstrap.sh install watcher-unit` only after approval.

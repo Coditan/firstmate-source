@@ -177,17 +177,17 @@ The floor buys a known-good starting point and a visible diagnostic; it does not
 ## 2026-08-21: the declaration route, and what it deliberately does not decide
 
 The 2026-08-19 record below closes by saying this fleet had no accepted route for depending on a third-party agent CLI, and named three choices the captain would have to make.
-Two of them are answered by construction now; the third is deliberately left where it was.
+Only the first is answered by construction now; the second remains with the captain, and the third is moot while the second remains untaken.
 
 **Answered: a tool is declared by being required, and the condition is a configured forge instance.**
 `bin/fm-bootstrap.sh` requires `forgejo-axi` at or above the floor exactly where this home names a Forgejo instance under `config/forgejo-host` or `FM_FORGEJO_HOST`, and says nothing at all where it does not.
 So nothing is declared before it is required, and no seat is told to install a client it has nothing to point at.
 `docs/configuration.md` "Forge client" owns the route; `bin/fm-bootstrap.sh` owns the constants and the mechanics.
 
-**Answered: the requirement is that the pipeline can run it, not that a session can.**
-Those are different questions on this seat and the difference is not theoretical.
+**Implemented invariant: both an agent session and the validation pipeline's daemon must run the same client.**
+Those are different execution environments on this seat and the difference is not theoretical.
 The pipeline's daemon is one shared unit for the whole host and pins its own `PATH`, which reaches neither the npm global prefix nor any home's vessel prefix.
-So the check reads that daemon's environment, resolves the client against it, and reads the version from the executable the pipeline would run - one mechanism, one install location, rather than a firstmate-side declaration beside a pipeline-side one.
+So the check reads that daemon's environment, requires the same executable to resolve from both its `PATH` and the session's `PATH`, and reads the version from the executable the daemon would run - one mechanism and one install location rather than separate session-side and pipeline-side declarations.
 Measured on this seat on 2026-08-21, with a 1.3.0 client on the session's own `PATH`:
 
 ```
@@ -202,7 +202,7 @@ It was not taken: that key exists only in the pipeline release that carries a Fo
 Putting the binary where the daemon already looks needs no agreement from either side and stays true if that key is ever renamed.
 
 **What a silent check does and does not mean.**
-It means the client is installed at or above the floor somewhere the pipeline can run it.
+It means the same client resolves for both an agent session and the validation pipeline's daemon, and the executable the daemon would run is at or above the floor.
 It does not mean the pipeline can ship to a Forgejo repository: that additionally needs a pipeline release with a Forgejo path, and a base URL and credential in the daemon's own environment, none of which this check reads and none of which are this record's to claim.
 
 **Not answered, and left to the captain: whether a third party's package may enter the auto-updating suite boundary.**
