@@ -124,6 +124,90 @@ now_ms() {
   fi
 }
 
+# WHAT EACH FAMILY IS, AND THE QUESTION THAT DECIDES A BORDER CASE
+#
+# A family is a decision about what a test is ABOUT, so every one below states
+# the boundary it claims and the discriminator against the family it is most
+# easily confused with. Read this before adding a mapping: if a new test does
+# not fit a stated boundary, widen a boundary here on purpose or add a family
+# with its own, rather than filing it where it merely fits alphabetically.
+#
+#   pure-contract-unit   Fixture-driven behavior and contract tests of one
+#                        script, library, or instruction surface, needing
+#                        nothing but this repository. This is where a test
+#                        belongs when its subject is one unit's own contract,
+#                        not a subsystem. Not a bucket: it is claimed by a
+#                        stated boundary, and a test that needs a live host, an
+#                        external source, or a subsystem's shared state fails it.
+#   watcher-wake-lock    The supervision loop's own machinery: watcher ticks,
+#                        wake queue, delivery, journal, event batching, locks,
+#                        turn-end guards, the context ceiling, and the bosun
+#                        that observes it. vs service-units: this is what the
+#                        loop DOES; service-units is how it is installed and
+#                        kept alive. fm-nudge is here rather than with the
+#                        currency checks because a periodic subject with its own
+#                        record is watcher machinery, whatever it nudges about.
+#   service-units        The unit tier around those daemons: backend selection,
+#                        consent, convergence, fallback, and reporting. Its
+#                        subject is the installation, never the loop's behavior.
+#   systemd-live-optin   The one smoke that drives a real `systemd --user` and
+#                        is opt-in by env. Separated from service-units so its
+#                        expected gate skip (optin-env) is not claimed by three
+#                        suites that must actually run in CI: a family carries
+#                        one expected-skip class, so a mixed family would lie
+#                        about three of its four members.
+#   messaging-relay      A message crossing this home's boundary in either
+#                        direction, and the seam that carries it: Bridge relay
+#                        and inbox, the frequency monitor, direct Telegram send
+#                        and receive. vs watcher-wake-lock: the subject is the
+#                        message and its transport, not the tick that noticed it.
+#   currency-checks      "Has the code or tooling this seat runs been overtaken
+#                        by its source?" Every member measures a hop between
+#                        what runs here and what exists upstream, and reports a
+#                        hop it could not measure. vs external-watches: these
+#                        are readings taken on demand or at session start, and
+#                        they compare this seat against its own source.
+#   external-watches     A cadence watch over a source outside this repository
+#                        entirely, keeping its own record of what it has already
+#                        surfaced so an unreadable source is never reported as a
+#                        quiet one. The record-of-what-was-surfaced is the
+#                        discriminator, because that is what makes it a watch
+#                        rather than a reading.
+#   decision-backlog     The durable backlog and captain-decision store, and the
+#                        surfaces that only PRESENT them: board layout, the
+#                        board driver, the sea chart, the breakdown filer, the
+#                        dependency lint. Nothing here decides anything, which
+#                        is why fm-grade is not here: a review-quality scale
+#                        judges work, it does not hold a record about work.
+#   findings-urgency     The two mechanisms that decide how soon something must
+#                        be looked at: the findings surface with its
+#                        severity-to-deadline table, and the promoter that
+#                        raises an event whose own declaration understates it.
+#                        They are one family because both answer "how soon",
+#                        not because they share a store - they do not.
+#   memory-watch         Anything whose subject is this host's memory headroom:
+#                        the attributable reading, the alarm over it, the
+#                        ceiling probe, and the live crossing that proves the
+#                        alarm fires. vs watcher-wake-lock: the alarm arrives as
+#                        an ordinary wake, but its subject is the instrument.
+#   real-herdr-gated     Needs a real Herdr binary. Lane-significant: the
+#                        portable lanes exclude it and a dedicated required lane
+#                        owns it, so this is the one family a mapping must never
+#                        be guessed into.
+#   live-harness-optin   Needs a live agent harness and is opt-in by env.
+#   secondmate           Secondmate homes, their lifecycle, their inherited
+#                        material, and the parent-side guards on what they
+#                        return.
+#   session-bootstrap    Session start, bootstrap sweeps, fleet sync, self
+#                        update, and the tangle and gate refusals around them.
+#   backend-dispatch     Choosing and launching a worker: backends, dispatch
+#                        profiles, spawn, and the send path into a pane.
+#   pr-forge             Work leaving this repository: review diffs, PR checks,
+#                        merges, teardown, X mode, and the PR-body workflow.
+#   afk                  Away mode and its return.
+#   snapshot-bearings    The read-only fleet snapshot and its projections.
+#   cmux, zellij, orca   One optional backend binary each.
+#
 # Primary family for one tests/*.test.sh basename, or empty output when the
 # basename is not mapped. There is deliberately no catch-all: an unmapped
 # tests/*.test.sh is a gap in this map that someone must close, run_coverage_guard
@@ -155,7 +239,8 @@ family_for_basename() {
       ;;
     fm-bosun.test.sh|fm-context-reset.test.sh|fm-daemon.test.sh|\
     fm-delivery.test.sh|fm-event-batch.test.sh|fm-guard-stale-banner.test.sh|\
-    fm-journal.test.sh|fm-supervision-events.test.sh|fm-turnend-guard.test.sh|\
+    fm-journal.test.sh|fm-nudge.test.sh|fm-supervision-events.test.sh|\
+    fm-turnend-guard.test.sh|\
     fm-wake-daemon-lifecycle-e2e.test.sh|fm-wake-queue.test.sh|\
     fm-watch-run-bounded.test.sh|fm-watch-triage.test.sh|\
     fm-watcher-lock.test.sh)
@@ -207,9 +292,11 @@ family_for_basename() {
       printf '%s\n' decision-backlog
       ;;
     fm-axi-suite.test.sh|fm-currency-round.test.sh|fm-firstmate-update-check.test.sh|\
-    fm-fleet-update-check.test.sh|fm-forge-status.test.sh|fm-fork-sync-check.test.sh|\
-    fm-github-inbox.test.sh|fm-nudge.test.sh|fm-self-drift.test.sh)
-      printf '%s\n' currency-updates
+    fm-fleet-update-check.test.sh|fm-fork-sync-check.test.sh|fm-self-drift.test.sh)
+      printf '%s\n' currency-checks
+      ;;
+    fm-forge-status.test.sh|fm-github-inbox.test.sh)
+      printf '%s\n' external-watches
       ;;
     fm-memory-alarm.test.sh|fm-memory-alarm-crossing-e2e.test.sh|\
     fm-memory-ceiling-probe.test.sh|fm-memory-reading.test.sh)
@@ -295,7 +382,8 @@ pr-forge
 afk
 snapshot-bearings
 decision-backlog
-currency-updates
+currency-checks
+external-watches
 memory-watch
 findings-urgency
 messaging-relay
@@ -525,10 +613,11 @@ run_script_index_guard() {
   return "$rc"
 }
 
-# Every tests/*.test.sh must carry a decided family. There is no catch-all to
-# fall into, so this names every gap at once rather than dying on the first.
+# Every tests/*.test.sh must carry a decided family, and every family must state
+# the boundary it claims. There is no catch-all to fall into, so this names every
+# gap at once rather than dying on the first.
 run_family_guard() {
-  local s unmapped=
+  local s fam boundaries unmapped='' undocumented=''
   while IFS= read -r s; do
     [ -n "$s" ] || continue
     [ -n "$(family_for_basename "$(basename "$s")")" ] && continue
@@ -538,6 +627,24 @@ run_family_guard() {
   if [ -n "$unmapped" ]; then
     log "family guard: every tests/*.test.sh must map to a family in family_for_basename (there is no catch-all); these do not:"
     printf '%s' "$unmapped" >&2
+    return 1
+  fi
+
+  # A classification someone has to live with is only defensible while its
+  # reasoning is present, so the boundary block above family_for_basename must
+  # name every family the map can produce. Undocumented is the same defect one
+  # layer up: a decision nobody wrote down.
+  boundaries=$(sed -n '/^# WHAT EACH FAMILY IS/,/^family_for_basename() {/p' \
+    "$ROOT/bin/fm-test-run.sh")
+  while IFS= read -r fam; do
+    [ -n "$fam" ] || continue
+    printf '%s\n' "$boundaries" | grep -Fqw -- "$fam" && continue
+    undocumented="${undocumented}${fam}
+"
+  done < <(list_known_families)
+  if [ -n "$undocumented" ]; then
+    log "family guard: every family must state its boundary in the block above family_for_basename; these state none:"
+    printf '%s' "$undocumented" >&2
     return 1
   fi
   printf 'FM_TEST_FAMILIES ok total=%s families=%s\n' \

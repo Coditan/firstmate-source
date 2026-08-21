@@ -611,6 +611,41 @@ test_family_guard_refuses_a_test_with_no_family() {
   pass "the family guard refuses an unmapped test instead of bucketing it, and passes when every test is mapped"
 }
 
+test_family_guard_refuses_a_family_with_no_stated_boundary() {
+  # A classification is only defensible while its reasoning is present, so a
+  # family the boundary block does not name is the same defect one layer up.
+  local tmp root runner out rc
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-boundary-guard.XXXXXX")
+  root="$tmp/repo"
+  mkdir -p "$root"
+  cp -a "$ROOT/bin" "$ROOT/docs" "$ROOT/tests" "$root/"
+  runner="$root/bin/fm-test-run.sh"
+
+  python3 - "$runner" <<'PY_EDIT'
+import sys
+from pathlib import Path
+p = Path(sys.argv[1])
+t = p.read_text()
+old = "    fm-backend-orca.test.sh)\n      printf '%s\\n' orca\n      ;;\n"
+assert t.count(old) == 1
+t = t.replace(old, old + "    fm-nothing-real.test.sh)\n      printf '%s\\n' undocumented-family\n      ;;\n")
+old_list = "cmux\nzellij\norca\nEOF"
+assert t.count(old_list) == 1
+t = t.replace(old_list, "cmux\nzellij\norca\nundocumented-family\nEOF")
+p.write_text(t)
+PY_EDIT
+
+  set +e
+  out=$("$runner" --check-coverage 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || { rm -rf "$tmp"; fail "a family with no stated boundary must fail the gate, got exit 0: $out"; }
+  assert_contains "$out" "undocumented-family" "the refusal must name the family with no boundary"
+  assert_contains "$out" "must state its boundary" "the refusal must say what is missing"
+  rm -rf "$tmp"
+  pass "the family guard refuses a family whose boundary is not stated"
+}
+
 test_jobs_requires_proven_isolated() {
   local tmp rc
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-jobs.XXXXXX")
@@ -808,6 +843,7 @@ test_ci_and_docs_call_the_owner
 test_portable_shard_union_and_coverage_guard
 test_script_index_guard_refuses_an_unindexed_script
 test_family_guard_refuses_a_test_with_no_family
+test_family_guard_refuses_a_family_with_no_stated_boundary
 test_jobs_requires_proven_isolated
 test_jobs_parallel_scheduler_and_failure_propagation
 test_aggregate_json
