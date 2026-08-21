@@ -925,7 +925,7 @@ SH
 # be told to install a client it has nothing to point at, which is why this
 # requirement was not added to the universal toolchain.
 test_forgejo_client_follows_configured_instance() {
-  local label host daemon where version mode case_dir fakebin daemonbin daemon_path home out n
+  local label host daemon where version mode case_dir fakebin daemonbin daemon_path session_path home out n
   n=0
   while IFS='^' read -r label host daemon where version mode; do
     [ -n "$label" ] || continue
@@ -944,12 +944,13 @@ test_forgejo_client_follows_configured_instance() {
       both)    add_forgejo_axi "$fakebin" "$version" ;;
     esac
     case "$daemon" in
-      yes) daemon_path="$daemonbin:$BASE_PATH" ;;
-      shared) daemon_path="$fakebin:$daemonbin:$BASE_PATH" ;;
-      nouser) daemon_path="$BASE_PATH" ;;
-      no) daemon_path= ;;
+      yes) daemon_path="$daemonbin:$BASE_PATH"; session_path="$fakebin:$BASE_PATH" ;;
+      commonprefix) daemon_path="$daemonbin:$BASE_PATH"; session_path="$daemonbin:$fakebin:$BASE_PATH" ;;
+      shared) daemon_path="$fakebin:$daemonbin:$BASE_PATH"; session_path="$fakebin:$BASE_PATH" ;;
+      nouser) daemon_path="$BASE_PATH"; session_path="$fakebin:$BASE_PATH" ;;
+      no) daemon_path=; session_path="$fakebin:$BASE_PATH" ;;
     esac
-    out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    out=$(PATH="$session_path" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
       HOME="$case_dir/fakehome" \
       FM_FAKE_DAEMON_PATH="$daemon_path" \
       FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_FORGEJO_HOST='' "$ROOT/bin/fm-bootstrap.sh")
@@ -962,7 +963,13 @@ test_forgejo_client_follows_configured_instance() {
         assert_contains "$out" "--prefix $case_dir/fakehome/.local " \
           "$label: install must target a prefix the pipeline daemon reaches"
         assert_contains "$out" "'forgejo-axi@^1.3.0'" "$label: install line must pin the version floor"
-        assert_contains "$out" "forgejo-axi setup hooks" "$label: install line must install session hooks" ;;
+        assert_contains "$out" "forgejo-axi setup hooks" "$label: install line must install session hooks"
+        assert_not_contains "$out" "also make" "$label: a prefix on both PATHs needs no extra PATH repair" ;;
+      install-session-path)
+        assert_contains "$out" "--prefix $case_dir/fakehome/.local " \
+          "$label: install must target the daemon-reachable prefix"
+        assert_contains "$out" "also make $daemonbin reachable from an agent session's PATH" \
+          "$label: daemon-only reach must name the session PATH repair" ;;
       stale)
         assert_contains "$out" "below the required 1.3.0" "$label: expected the version-floor line"
         assert_contains "$out" "'forgejo-axi@^1.3.0'" "$label: install line must pin the version floor" ;;
@@ -999,8 +1006,8 @@ test_forgejo_client_follows_configured_instance() {
   done <<'ROWS'
 no configured instance stays silent with no client at all^-^yes^none^-^empty
 no configured instance stays silent with an old client^-^yes^session^0.9.0^empty
-a configured instance requires the client^forge.example^yes^none^-^absent
-a client the session sees but the pipeline cannot is not installed^forge.example^yes^session^1.3.0^absent
+a configured instance requires the client^forge.example^commonprefix^none^-^absent
+a client the session sees but the pipeline cannot is not installed^forge.example^yes^session^1.3.0^install-session-path
 a client only the pipeline reaches at the floor is not accepted^forge.example^yes^daemon^1.3.0^session-absent
 the same floor client on both paths is accepted^forge.example^shared^both^1.3.0^empty
 the same newer minor client on both paths is accepted^forge.example^shared^both^1.4.2^empty

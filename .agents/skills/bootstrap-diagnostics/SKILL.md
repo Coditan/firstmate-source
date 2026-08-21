@@ -31,9 +31,10 @@ When any diagnostic needs captain attention, report the plain consequence and re
   Do not write the missing overlay from memory to silence the line.
 - `NEEDS_GH_AUTH` - ask the captain to run `! gh auth login` (interactive; you cannot run it for them).
 - `FORGE_CLIENT: ...` - this home names a Forgejo instance, so it needs the same Forgejo client to resolve for both a session and the validation pipeline, with the daemon-resolved executable at or above the floor, and some part of that requirement was not established.
-  Read which sentence the line carries before acting, because only a line that prints an install command is an install.
+  Read which sentence the line carries before acting, because only a line that prints an install command includes an install.
   `is not installed where both this session and the validation pipeline can run it` means the client is absent from the pipeline daemon's own PATH; `command -v forgejo-axi` answering yes in your session does not contradict it and is not evidence against the line.
   Pass `forgejo-axi` to `bin/fm-bootstrap.sh install` after the captain approves, exactly as for `MISSING:`, and never install it somewhere else to silence the line - the printed prefix is chosen because the pipeline daemon already reaches it, and a copy anywhere else leaves the requirement failing.
+  When that install text also says `make <bin> reachable from an agent session's PATH`, the install alone is incomplete: apply the named session-side PATH repair too, because the selected prefix is daemon-reachable but not session-reachable.
   `below the required <floor>` with a printed install command is the same repair against the daemon-resolved copy being too old.
   `meets the required <floor> floor for the validation pipeline, but this session resolves no forgejo-axi` is NOT an install: repair the session's `PATH` so it reaches the daemon-resolved executable.
   `meets the required <floor> floor for the validation pipeline, but this session resolves a different copy` is NOT an install: repair the session's `PATH` ordering or shadowing so both environments resolve the daemon-measured executable.

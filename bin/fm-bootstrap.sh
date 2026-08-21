@@ -546,19 +546,34 @@ secondmate_liveness_sweep() {
 #
 # Fails where there is no HOME or the measured PATH names no user-owned bin
 # directory, because an install outside that PATH would not repair daemon reach.
-forgejo_client_prefix() {  # [daemon-path]
-  local path=${1-} dir
-  [ -n "${HOME:-}" ] || return 1
+path_contains_dir() {  # <path> <directory>
+  local path=$1 wanted=$2 dir
   local IFS=:
   for dir in $path; do
-    [ "$dir" = "${HOME%/}/.local/bin" ] || continue
-    printf '%s\n' "${HOME%/}/.local"
-    return 0
+    [ "$dir" = "$wanted" ] && return 0
   done
-  for dir in $path; do
-    case "$dir" in
-      "${HOME%/}"/*/bin|"${HOME%/}"/bin) printf '%s\n' "${dir%/bin}"; return 0 ;;
-    esac
+  return 1
+}
+
+forgejo_client_prefix() {  # [daemon-path] [session-path]
+  local path=${1-} session_path=${2-} dir common
+  [ -n "${HOME:-}" ] || return 1
+  for common in yes no; do
+    if path_contains_dir "$path" "${HOME%/}/.local/bin" &&
+      { [ "$common" = no ] || path_contains_dir "$session_path" "${HOME%/}/.local/bin"; }; then
+      printf '%s\n' "${HOME%/}/.local"
+      return 0
+    fi
+    local IFS=:
+    for dir in $path; do
+      case "$dir" in
+        "${HOME%/}"/*/bin|"${HOME%/}"/bin) ;;
+        *) continue ;;
+      esac
+      [ "$common" = no ] || path_contains_dir "$session_path" "$dir" || continue
+      printf '%s\n' "${dir%/bin}"
+      return 0
+    done
   done
   return 1
 }
@@ -600,7 +615,7 @@ install_cmd() {
       # rather than %q-escaped: %q renders the caret as \^, which pastes and
       # runs correctly but reads like a typo in a line the captain is asked to
       # trust.
-      prefix=$(forgejo_client_prefix "$(fm_nm_daemon_path 2>/dev/null || true)") || return 1
+      prefix=$(forgejo_client_prefix "$(fm_nm_daemon_path 2>/dev/null || true)" "${PATH:-}") || return 1
       printf "npm install -g --prefix %q 'forgejo-axi@^%s.%s.%s' && PATH=%q:%s %q setup hooks\n" \
         "$prefix" "$FORGEJO_AXI_MIN_MAJOR" "$FORGEJO_AXI_MIN_MINOR" "$FORGEJO_AXI_MIN_PATCH" \
         "$prefix/bin" "\$PATH" forgejo-axi
@@ -711,6 +726,17 @@ forgejo_axi_compatible() {  # <executable>
   [ "$patch" -ge "$FORGEJO_AXI_MIN_PATCH" ]
 }
 
+forgejo_client_install_repair() {  # <daemon-path>
+  local daemon_path=$1 repair prefix bin
+  repair=$(install_cmd forgejo-axi) || return 1
+  prefix=$(forgejo_client_prefix "$daemon_path" "${PATH:-}") || return 1
+  bin=$prefix/bin
+  printf '%s' "$repair"
+  if ! path_contains_dir "${PATH:-}" "$bin"; then
+    printf '; also make %s reachable from an agent session\047s PATH' "$bin"
+  fi
+}
+
 # One requirement, one check, one line: a Forgejo client that BOTH a session and
 # the validation pipeline can run, at or above the floor.
 #
@@ -748,7 +774,7 @@ forgejo_client_check() {
   fi
   resolved=$(PATH="$daemon_path" command -v forgejo-axi 2>/dev/null)
   if [ -z "$resolved" ]; then
-    if repair=$(install_cmd forgejo-axi); then
+    if repair=$(forgejo_client_install_repair "$daemon_path"); then
       echo "FORGE_CLIENT: forgejo-axi is not installed where both this session and the validation pipeline can run it, and $host is this home's forge (install: $repair)"
     else
       echo "FORGE_CLIENT: forgejo-axi is not installed where both this session and the validation pipeline can run it, and $host is this home's forge; the pipeline daemon's PATH names no user-owned directory this fleet can install into, so the daemon's own PATH must change"
@@ -757,7 +783,7 @@ forgejo_client_check() {
   fi
   if ! forgejo_axi_compatible "$resolved"; then
     version=$("$resolved" --version 2>/dev/null | head -n 1)
-    if repair=$(install_cmd forgejo-axi); then
+    if repair=$(forgejo_client_install_repair "$daemon_path"); then
       echo "FORGE_CLIENT: forgejo-axi at $resolved reports '${version:-no version}', below the required $FORGEJO_AXI_MIN_MAJOR.$FORGEJO_AXI_MIN_MINOR.$FORGEJO_AXI_MIN_PATCH (install: $repair)"
     else
       echo "FORGE_CLIENT: forgejo-axi at $resolved reports '${version:-no version}', below the required $FORGEJO_AXI_MIN_MAJOR.$FORGEJO_AXI_MIN_MINOR.$FORGEJO_AXI_MIN_PATCH; the pipeline daemon's PATH names no user-owned directory this fleet can install into, so the daemon's own PATH must change"
