@@ -206,7 +206,9 @@ now_ms() {
 #                        merges, teardown, X mode, and the PR-body workflow.
 #   afk                  Away mode and its return.
 #   snapshot-bearings    The read-only fleet snapshot and its projections.
-#   cmux, zellij, orca   One optional backend binary each.
+#   cmux                 One optional backend binary.
+#   zellij               One optional backend binary.
+#   orca                 One optional backend binary.
 #
 # Primary family for one tests/*.test.sh basename, or empty output when the
 # basename is not mapped. There is deliberately no catch-all: an unmapped
@@ -346,15 +348,16 @@ is_repo_test_path() {
 # which is not a family any --family or lane selection can reach.
 family_for_script() {
   local p=$1 fam
+  if ! is_repo_test_path "$p"; then
+    printf '%s\n' ad-hoc
+    return 0
+  fi
   fam=$(family_for_basename "$(basename "$p")")
   if [ -n "$fam" ]; then
     printf '%s\n' "$fam"
     return 0
   fi
-  if is_repo_test_path "$p"; then
-    die "no test family for $(basename "$p"): add it to family_for_basename in bin/fm-test-run.sh (there is no catch-all family)"
-  fi
-  printf '%s\n' ad-hoc
+  die "no test family for $(basename "$p"): add it to family_for_basename in bin/fm-test-run.sh (there is no catch-all family)"
 }
 
 expected_gate_skip_for_family() {
@@ -638,7 +641,7 @@ run_family_guard() {
     "$ROOT/bin/fm-test-run.sh")
   while IFS= read -r fam; do
     [ -n "$fam" ] || continue
-    printf '%s\n' "$boundaries" | grep -Fqw -- "$fam" && continue
+    printf '%s\n' "$boundaries" | grep -Eq "^#   ${fam}[[:space:]]" && continue
     undocumented="${undocumented}${fam}
 "
   done < <(list_known_families)

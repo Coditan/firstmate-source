@@ -255,7 +255,7 @@ assert doc["families"] == []
 test_timing_markers_and_json() {
   local tmp fixture out json begin_n end_n summary
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-timing.XXXXXX")
-  fixture="$tmp/ok.test.sh"
+  fixture="$tmp/fm-lint.test.sh"
   out="$tmp/out.txt"
   json="$tmp/timing.json"
   cat >"$fixture" <<'SH'
@@ -628,10 +628,10 @@ p = Path(sys.argv[1])
 t = p.read_text()
 old = "    fm-backend-orca.test.sh)\n      printf '%s\\n' orca\n      ;;\n"
 assert t.count(old) == 1
-t = t.replace(old, old + "    fm-nothing-real.test.sh)\n      printf '%s\\n' undocumented-family\n      ;;\n")
+t = t.replace(old, old + "    fm-nothing-real.test.sh)\n      printf '%s\\n' source\n      ;;\n")
 old_list = "cmux\nzellij\norca\nEOF"
 assert t.count(old_list) == 1
-t = t.replace(old_list, "cmux\nzellij\norca\nundocumented-family\nEOF")
+t = t.replace(old_list, "cmux\nzellij\norca\nsource\nEOF")
 p.write_text(t)
 PY_EDIT
 
@@ -640,7 +640,7 @@ PY_EDIT
   rc=$?
   set -e
   [ "$rc" -ne 0 ] || { rm -rf "$tmp"; fail "a family with no stated boundary must fail the gate, got exit 0: $out"; }
-  assert_contains "$out" "undocumented-family" "the refusal must name the family with no boundary"
+  assert_contains "$out" "source" "the refusal must name the family with no boundary"
   assert_contains "$out" "must state its boundary" "the refusal must say what is missing"
   rm -rf "$tmp"
   pass "the family guard refuses a family whose boundary is not stated"
