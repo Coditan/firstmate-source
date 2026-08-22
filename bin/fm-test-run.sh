@@ -219,6 +219,7 @@ family_for_basename() {
     fm-arm-pretool-check.test.sh|fm-axi-tool-intake.test.sh|fm-brief.test.sh|\
     fm-calm-pi-extension.test.sh|fm-captain-translation-contract.test.sh|\
     fm-cd-pretool-check.test.sh|fm-codebase-sweep.test.sh|\
+    fm-design-it-twice.test.sh|\
     fm-composer-ghost.test.sh|fm-composer-lib.test.sh|\
     fm-continuity-pretool-check.test.sh|fm-crew-state.test.sh|\
     fm-decision-hold-lifecycle.test.sh|fm-deploy-verify.test.sh|\
