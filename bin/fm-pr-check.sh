@@ -7,7 +7,29 @@
 # including a merge request on a self-hosted GitLab instance. A pull request on
 # this fleet's configured Forgejo instance parses into the same identity but
 # cannot be watched yet, and is refused here rather than armed.
-# Usage: fm-pr-check.sh <task-id> <pr-url>
+#
+# --no-watch records the identity and arms nothing. It exists for one caller:
+# bin/fm-pr-merge.sh merging a pull request on a forge the poll cannot read yet.
+# That merge still has to record pr= so the same metadata exists as for any
+# other forge, and the alternative - arming a watch that watches nothing - is
+# the exact shape this file refuses above. So the recording is separated from
+# the arming rather than the arming being faked.
+#
+# Three things keep --no-watch from becoming a quiet way to lose a watch:
+#   - It says in its own output that no watch was armed, rather than printing
+#     the "armed:" line the arming path prints.
+#   - It refuses when any poll artifact already exists for the task, because
+#     rewriting pr= underneath an armed poll invalidates that poll's own
+#     identity checks and the poll would then go silent instead of failing.
+#   - It never lifts a refusal the arming path makes for its own reasons; it
+#     simply is not the arming path.
+#
+# --pr-head <sha> records a head commit the caller has already resolved from the
+# forge, instead of this path reading one. The value is validated as a commit
+# SHA like every other pr_head, and the caller that supplies it is the merge
+# path, which has to resolve the head anyway to pass it to a forge that requires
+# it. Nothing is inferred: an absent flag still means the ordinary lookup.
+# Usage: fm-pr-check.sh [--no-watch] [--pr-head <sha>] <task-id> <pr-url>
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,12 +40,37 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 
+NO_WATCH=0
+SUPPLIED_PR_HEAD=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --no-watch)
+      NO_WATCH=1
+      shift
+      ;;
+    --pr-head)
+      [ "$#" -ge 2 ] || { echo "error: invalid PR check request" >&2; exit 2; }
+      SUPPLIED_PR_HEAD=$2
+      shift 2
+      ;;
+    --pr-head=*)
+      SUPPLIED_PR_HEAD=${1#--pr-head=}
+      shift
+      ;;
+    *) break ;;
+  esac
+done
+
 if [ "$#" -ne 2 ]; then
   echo "error: invalid PR check request" >&2
   exit 2
 fi
 ID=$1
 RAW_URL=$2
+if [ -n "$SUPPLIED_PR_HEAD" ] && ! fm_pr_head_valid "$SUPPLIED_PR_HEAD"; then
+  echo "error: invalid PR check request" >&2
+  exit 2
+fi
 if ! fm_pr_task_id_valid "$ID" || ! fm_pr_url_parse "$RAW_URL"; then
   echo "error: invalid PR check request" >&2
   exit 2
@@ -45,7 +92,8 @@ fi
 # every error by design, so a missing CLI would be indistinguishable from a
 # merge request that is never merged. Arming is the one point where that can be
 # reported, so the absent tool stops the watch here instead of watching nothing.
-if [ "$PROVIDER" = gitlab ] && ! command -v glab >/dev/null 2>&1; then
+if [ "$NO_WATCH" -eq 0 ] && [ "$PROVIDER" = gitlab ] \
+  && ! command -v glab >/dev/null 2>&1; then
   echo "error: watching a GitLab merge request requires glab on PATH" >&2
   exit 1
 fi
@@ -55,7 +103,7 @@ fi
 # reads GitHub and GitLab only and is silent on everything else, so arming one
 # here would report success and then watch nothing until a human noticed. The
 # refusal lifts when the poll learns to read this forge.
-if [ "$PROVIDER" = forgejo ]; then
+if [ "$NO_WATCH" -eq 0 ] && [ "$PROVIDER" = forgejo ]; then
   echo "error: watching a Forgejo pull request is not supported yet" >&2
   exit 1
 fi
@@ -66,6 +114,29 @@ fi
 "$SCRIPT_DIR/fm-pr-check-migrate.sh" --checks-safe || exit 1
 "$FM_ROOT/bin/fm-guard.sh" || true
 
+# Recording without arming must never silently break a watch that already
+# exists. A published poll binds the task metadata's pull request identity, so
+# rewriting pr= underneath one leaves artifacts whose own validation fails, and
+# a poll that fails validation goes quiet rather than complaining. Refuse here,
+# where it can still be said out loud.
+if [ "$NO_WATCH" -eq 1 ]; then
+  for artifact in "$STATE/$ID.check.sh" "$STATE/$ID.pr-poll" \
+    "$STATE/$ID.pr-poll-registration"; do
+    if [ -e "$artifact" ] || [ -L "$artifact" ]; then
+      cat >&2 <<EOF
+error: task $ID already has a merge watch armed, so recording without arming
+       would leave that watch bound to a pull request this call is replacing.
+       It would then stop reporting instead of failing, which is the outcome
+       --no-watch exists to avoid rather than to cause.
+remedy: arm the watch for this pull request instead, which records and rearms in
+       one step:
+         fm-pr-check.sh $ID $URL
+EOF
+      exit 1
+    fi
+  done
+fi
+
 # pr_head is recorded only when the forge's CLI can supply it. gh exposes the
 # head commit as a selectable field; plain glab exposes it only inside its JSON
 # output, which would need a JSON processor firstmate does not require, so a
@@ -73,9 +144,13 @@ fi
 # bin/fm-teardown.sh reads the head from the forge at teardown rather than from
 # metadata and falls back to its provider-agnostic content check, and
 # bin/fm-review-diff.sh resolves the head from the remote when none is recorded.
+# A caller that already resolved the head from the forge supplies it directly,
+# and this path records that value rather than reading a second one: two reads
+# could disagree, and the one the caller is acting on is the one worth storing.
 WT=$(grep '^worktree=' "$META" | tail -1 | cut -d= -f2- || true)
-PR_HEAD=
-if [ "$PROVIDER" = github ] && [ -n "$WT" ] && [ -d "$WT" ] && command -v gh >/dev/null 2>&1; then
+PR_HEAD=$SUPPLIED_PR_HEAD
+if [ -z "$PR_HEAD" ] && [ "$PROVIDER" = github ] && [ -n "$WT" ] && [ -d "$WT" ] \
+  && command -v gh >/dev/null 2>&1; then
   if REMOTE_HEAD=$(cd "$WT" && gh pr view "$URL" --json headRefOid -q .headRefOid 2>/dev/null) \
     && fm_pr_head_valid "$REMOTE_HEAD"; then
     PR_HEAD=$REMOTE_HEAD
@@ -89,8 +164,10 @@ pr_check_cleanup() {
 }
 trap pr_check_cleanup EXIT
 trap 'exit 1' HUP INT TERM
-fm_pr_poll_prepare "$STATE" "$ID" "$PROVIDER" "$URL" "$HOST" "$PROJECT_PATH" "$NUMBER" "$SCRIPT_DIR/fm-pr-poll.sh" \
-  || { echo "error: could not prepare PR poll" >&2; exit 1; }
+if [ "$NO_WATCH" -eq 0 ]; then
+  fm_pr_poll_prepare "$STATE" "$ID" "$PROVIDER" "$URL" "$HOST" "$PROJECT_PATH" "$NUMBER" "$SCRIPT_DIR/fm-pr-poll.sh" \
+    || { echo "error: could not prepare PR poll" >&2; exit 1; }
+fi
 
 META_DEVICE=$(fm_pr_file_device "$META") || exit 1
 STATE_DEVICE=$(fm_pr_file_device "$STATE") || exit 1
@@ -118,6 +195,19 @@ fm_pr_metadata_identity_parse "$META" || exit 1
 [ "$FM_PR_META_PROVIDER" = "$PROVIDER" ] && [ "$FM_PR_META_URL" = "$URL" ] \
   && [ "$FM_PR_META_HOST" = "$HOST" ] && [ "$FM_PR_META_PATH" = "$PROJECT_PATH" ] \
   && [ "$FM_PR_META_NUMBER" = "$NUMBER" ] || exit 1
+
+if [ "$NO_WATCH" -eq 1 ]; then
+  # Said out loud, and in different words from the arming path, because the two
+  # outcomes differ in exactly one way that matters later: one leaves something
+  # that will report this pull request being merged, and this one does not.
+  printf 'recorded: state/%s.meta\n' "$ID"
+  cat <<EOF
+note: no merge watch was armed, because --no-watch was requested. Nothing will
+      report PR $NUMBER in $PROJECT_PATH on $HOST being merged; whoever asked
+      for that owns the outcome.
+EOF
+  exit 0
+fi
 
 fm_pr_poll_publish_prepared || {
   echo "error: could not publish PR poll" >&2

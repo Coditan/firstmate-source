@@ -524,6 +524,7 @@ A reachable surface always reports counted numbers and an unreachable one report
 The captain chose to replace GitHub with the fleet's own self-hosted forge, and every step of that migration has to answer one question the same way: which instance is ours.
 This file is that answer for firstmate's own tools, and it is the only place they read it from.
 `bin/fm-pr-lib.sh` reads it while resolving a change address into the provider-tagged identity, and [`docs/forgejo-pr-identity.md`](forgejo-pr-identity.md) owns the evidence and the boundary of what this identity does and does not yet reach.
+`bin/fm-pr-merge.sh` reads the same resolved host to derive the base URL it merges against, so a merge follows the pull request's own instance rather than whatever the environment names; [`docs/forgejo-merge-helper.md`](forgejo-merge-helper.md) owns that evidence and what it could not exercise.
 This section owns only where the host comes from.
 
 Resolution order is `FM_FORGEJO_HOST`, then the first non-empty line of `config/forgejo-host` with whitespace stripped, exactly like `config/backend`.
@@ -539,7 +540,7 @@ Moving the fleet to a different instance is therefore a configuration change rat
 
 Setting this value also makes `forgejo-axi` a required tool for the home (see "Forge client" under "Toolchain" below), because naming an instance is what turns a forge client from evaluated into needed.
 
-`config/forgejo-host` is not yet in the inheritable set that `bin/fm-config-inherit-lib.sh` declares, for the same reason `config/batch-delays` is not: identity parsing is the only consumer so far, and whether a secondmate home should inherit this instance belongs to whichever unit first gives a secondmate something to do with it.
+`config/forgejo-host` is not yet in the inheritable set that `bin/fm-config-inherit-lib.sh` declares, for the same reason `config/batch-delays` is not: identity parsing and the merge path are the only consumers so far, both of them in the home that owns the task, and whether a secondmate home should inherit this instance belongs to whichever unit first gives a secondmate something to do with it.
 
 ## Event batching delays (config/batch-delays)
 

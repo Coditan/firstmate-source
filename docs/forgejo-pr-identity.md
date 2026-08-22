@@ -106,16 +106,23 @@ Moving the fleet to a different instance is therefore a configuration change, ex
 
 The two forges that already worked behave identically to before, proven by their own tests passing unchanged.
 
-Nothing watches or merges a Forgejo pull request yet.
-`bin/fm-pr-poll.sh` reads GitHub and GitLab only, and `bin/fm-pr-merge.sh` addresses GitHub only.
-Because the poll is silent on everything it cannot read, arming a Forgejo watch would report success and then watch nothing, so `bin/fm-pr-check.sh` refuses it where the refusal can still be reported:
+Nothing watched or merged a Forgejo pull request when this slice landed.
+
+**Updated 2026-08-22: the merge path learned this forge.**
+`bin/fm-pr-merge.sh` now merges a pull request on the configured instance through `forgejo-axi`, passing the head commit that forge requires, and [`docs/forgejo-merge-helper.md`](forgejo-merge-helper.md) owns that evidence and its boundary.
+It reads this parser's answer rather than repeating the host check, which is what the three properties above were written to support.
+
+Watching is still absent, and the refusal below is unchanged:
+`bin/fm-pr-poll.sh` reads GitHub and GitLab only, and because the poll is silent on everything it cannot read, arming a Forgejo watch would report success and then watch nothing.
+So `bin/fm-pr-check.sh` still refuses it where the refusal can still be reported:
 
 ```
 $ fm-pr-check.sh task-a https://forge.example/team/tools/pulls/7
 error: watching a Forgejo pull request is not supported yet
 ```
 
-That refusal is the correct outcome for this slice and is expected to be removed by the slice that teaches the poll to read this forge.
+That refusal is expected to be removed by the slice that teaches the poll to read this forge.
+The merge path does not remove it and does not route around it: it records through `fm-pr-check.sh --no-watch`, which records the same metadata, arms nothing, and says in its own output that nothing will report the merge.
 
 ## Maintaining this file
 
