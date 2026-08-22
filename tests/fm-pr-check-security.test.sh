@@ -3001,15 +3001,71 @@ test_forgejo_pull_request_identity() {
   [ ! -e "$state/task-a.pr-poll" ] || fail "refused Forgejo arming left a sidecar behind"
   ! grep -q '^pr=' "$state/task-a.meta" || fail "refused Forgejo arming recorded a pull request"
 
-  # The merge path addresses GitHub only, so it refuses rather than sending a
-  # merge to the wrong forge.
+  # The merge path now addresses this forge, and the property that matters here
+  # is the one this file owns: which server a merge is sent to. An address on an
+  # instance this home does not run is refused before any forge is reached, and
+  # a merge for this instance never goes to the GitHub client.
+  # tests/fm-pr-merge.test.sh owns what that merge then does.
   write_task_meta "$dir" task-b
+  set +e
+  FM_FORGEJO_HOST=forge.example \
+    run_merge_entry "$dir" task-b https://forge.example.evil/team/tools/pulls/7 \
+    >/dev/null 2>&1
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "merge wrapper accepted a Forgejo-shaped URL on another instance"
+  [ ! -s "$dir/gh-axi.log" ] \
+    || fail "merge wrapper reached the GitHub CLI for an address on another instance"
+  ! grep -q '^pr=' "$state/task-b.meta" \
+    || fail "merge wrapper recorded an address on an instance this home does not run"
+
   set +e
   FM_FORGEJO_HOST=forge.example run_merge_entry "$dir" task-b "$url" >/dev/null 2>&1
   rc=$?
   set -e
-  [ "$rc" -eq 2 ] || fail "merge wrapper did not refuse a Forgejo pull request URL"
+  [ "$rc" -ne 0 ] \
+    || fail "merge wrapper merged a Forgejo pull request with no forge client on PATH"
   [ ! -s "$dir/gh-axi.log" ] || fail "merge wrapper reached the GitHub CLI for a Forgejo URL"
+
+  # Recording without arming is what lets a merge on this forge record the same
+  # metadata as any other, and it says so rather than printing the armed line.
+  write_task_meta "$dir" task-c
+  out=$(FM_FORGEJO_HOST=forge.example run_check_entry "$dir" --no-watch task-c "$url" 2>&1) \
+    || fail "recording a Forgejo pull request without arming was refused"
+  case "$out" in
+    *"recorded: state/task-c.meta"*) ;;
+    *) fail "recording without arming did not say what it recorded" ;;
+  esac
+  case "$out" in
+    *"no merge watch was armed"*) ;;
+    *) fail "recording without arming did not report the absent watch" ;;
+  esac
+  case "$out" in
+    *armed:*) fail "recording without arming printed the arming path's own line" ;;
+  esac
+  grep -qxF "pr=$url" "$state/task-c.meta" \
+    || fail "recording without arming did not record the pull request"
+  [ ! -e "$state/task-c.check.sh" ] || fail "recording without arming armed a poll"
+  [ ! -e "$state/task-c.pr-poll" ] || fail "recording without arming left a sidecar"
+  [ ! -e "$state/task-c.pr-poll-registration" ] \
+    || fail "recording without arming left a registration"
+
+  # And it refuses where it would silently break a watch that already exists: an
+  # armed poll binds the metadata this call would rewrite underneath it.
+  write_task_meta "$dir" task-d
+  run_check_entry "$dir" task-d https://github.com/o/r/pull/4 >/dev/null 2>&1 \
+    || fail "arming a GitHub watch failed in the fixture"
+  set +e
+  out=$(run_check_entry "$dir" --no-watch task-d https://github.com/o/r/pull/5 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "recording without arming silently replaced an armed watch"
+  case "$out" in
+    *"already has a merge watch armed"*) ;;
+    *) fail "the refusal did not say a watch was already armed" ;;
+  esac
+  grep -qxF "pr=https://github.com/o/r/pull/4" "$state/task-d.meta" \
+    || fail "the refused call rewrote the metadata the armed watch is bound to"
 
   pass "a Forgejo pull request resolves only on the configured instance and every other host is refused"
 }

@@ -821,6 +821,432 @@ test_recording_failure_still_refuses_for_a_task_that_exists() {
   pass "fm-pr-merge still refuses to merge a task whose PR recording failed"
 }
 
+# ---------------------------------------------------------------------------
+# The self-hosted forge.
+#
+# Every case below drives bin/fm-pr-merge.sh against a recording forgejo-axi
+# stand-in, so what is proven here is what this path decides and what argv it
+# builds. What that argv then does to a forge is proven separately, by running
+# the real client against a Forgejo-shaped server; docs/forgejo-merge-helper.md
+# carries that run and names the seam between the two.
+#
+# jq is required rather than skipped around, because the merge path itself
+# requires it on this forge: a case that quietly skipped would leave the whole
+# forge path unexercised while the suite still reported green.
+require_jq_for_forge() {
+  command -v jq >/dev/null 2>&1 \
+    || fail "jq is required to exercise the Forgejo merge path; install jq and re-run"
+}
+
+FORGEJO_HEAD_A=aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11
+FORGEJO_HEAD_B=bb22bb22bb22bb22bb22bb22bb22bb22bb22bb22
+
+# A case whose home names this fleet's Forgejo instance, so bin/fm-pr-lib.sh
+# resolves an address on it. A home that names none refuses every Forgejo
+# address, which is its own case below.
+make_forgejo_case() {
+  local name=$1 case_dir
+  case_dir=$(make_case "$name")
+  mkdir -p "$case_dir/home/config" "$case_dir/wt"
+  printf '%s\n' forge.example > "$case_dir/home/config/forgejo-host"
+  printf '%s\n' "$case_dir"
+}
+
+# The forge client stand-in. It answers the one read this path makes and the one
+# merge it performs, and it enforces the head the real client enforces, so a
+# head that moved between the two is refused here as it is there.
+#
+# Knobs, each of which exists to cause one condition a guard is supposed to
+# catch: FM_TEST_FORGEJO_TITLE the title read back; FM_TEST_FORGEJO_NO_TITLE the
+# forge omitting it; FM_TEST_FORGEJO_NO_HEAD the forge omitting the head;
+# FM_TEST_FORGEJO_VIEW_FAIL the read failing outright;
+# FM_TEST_FORGEJO_HEAD_AT_MERGE the head having moved by merge time;
+# FM_TEST_FORGEJO_PROOF_MERGED and FM_TEST_FORGEJO_PROOF_HEAD a call that exits
+# zero while its own merged proof does not say the work was done.
+add_forgejo_mock() {
+  local case_dir=$1 head=$2
+  cat > "$case_dir/fakebin/forgejo-axi" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "\$FM_TEST_FORGEJO_LOG"
+head='$head'
+case "\${1:-} \${2:-}" in
+  "pr view")
+    [ "\${FM_TEST_FORGEJO_VIEW_FAIL:-0}" = 0 ] || exit 1
+    fields=
+    if [ "\${FM_TEST_FORGEJO_NO_TITLE:-0}" = 0 ]; then
+      fields="\"title\":\"\${FM_TEST_FORGEJO_TITLE-fix(merge): teach the helper this forge}\""
+    fi
+    if [ "\${FM_TEST_FORGEJO_NO_HEAD:-0}" = 0 ]; then
+      [ -z "\$fields" ] || fields="\$fields,"
+      fields="\$fields\"head_sha\":\"\$head\""
+    fi
+    printf '{"pull_request":{%s}}\n' "\$fields"
+    exit 0
+    ;;
+  "pr merge")
+    expected=
+    prev=
+    for arg in "\$@"; do
+      [ "\$prev" != --expected-head ] || expected=\$arg
+      prev=\$arg
+    done
+    actual=\${FM_TEST_FORGEJO_HEAD_AT_MERGE:-\$head}
+    if [ "\$expected" != "\$actual" ]; then
+      # On stdout, where the real client answers in both directions, so this
+      # case proves the merge path puts a captured refusal back where a caller
+      # can see it rather than swallowing it with the proof it was reading for.
+      printf '{"error":"Pull request head changed","code":"HEAD_CHANGED"}\n'
+      exit 1
+    fi
+    printf '{"proof":{"merged":%s,"number":7,"head_sha":"%s","merge_commit_sha":"cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33"}}\n' \
+      "\${FM_TEST_FORGEJO_PROOF_MERGED:-true}" "\${FM_TEST_FORGEJO_PROOF_HEAD:-\$actual}"
+    exit 0
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/forgejo-axi"
+}
+
+# Errexit is on for most of this file, so every call below is wrapped the way
+# the cases above wrap theirs: a refusal is the outcome under test, not a fault.
+run_forgejo_merge() {
+  local case_dir=$1; shift
+  FM_TEST_FORGEJO_LOG="$case_dir/forgejo-axi.log" \
+    run_pr_merge "$case_dir" "$@" > "$case_dir/stdout" 2> "$case_dir/stderr"
+}
+
+test_forgejo_merge_records_then_merges_the_head_it_read() {
+  local case_dir rc
+  require_jq_for_forge
+  case_dir=$(make_forgejo_case forgejo-merges)
+  add_gh_mocks "$case_dir" 4444444444444444444444444444444444444444
+  add_forgejo_mock "$case_dir" "$FORGEJO_HEAD_A"
+  : > "$case_dir/gh-axi.log"
+  : > "$case_dir/forgejo-axi.log"
+
+  set +e
+  run_forgejo_merge "$case_dir" task-x1 https://forge.example/team/tools/pulls/7
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "forgejo-merges: merging on the configured instance should succeed"
+  assert_grep 'pr=https://forge.example/team/tools/pulls/7' "$case_dir/state/task-x1.meta" \
+    "forgejo-merges: pr= was not recorded the way it is for the other forge"
+  assert_grep "pr_head=$FORGEJO_HEAD_A" "$case_dir/state/task-x1.meta" \
+    "forgejo-merges: pr_head= was not recorded from the head this merge was gated on"
+  grep -qxF "pr merge 7 --repo team/tools --base-url https://forge.example --expected-head $FORGEJO_HEAD_A --method merge --json" \
+    "$case_dir/forgejo-axi.log" \
+    || fail "forgejo-merges: the merge did not name the project, the instance, the head, and a real merge commit"
+  [ ! -s "$case_dir/gh-axi.log" ] \
+    || fail "forgejo-merges: a pull request on the self-hosted forge reached the GitHub client"
+
+  # The two guarantees this forge does not give are stated by the run itself.
+  assert_grep 'no merge watch was armed' "$case_dir/stdout" \
+    "forgejo-merges: the absent merge watch was not reported"
+  assert_grep 'deletes no branch' "$case_dir/stdout" \
+    "forgejo-merges: the branch that is not deleted was not reported"
+  [ ! -e "$case_dir/state/task-x1.check.sh" ] \
+    || fail "forgejo-merges: a watch was armed for a forge nothing can watch"
+  [ ! -e "$case_dir/state/task-x1.pr-poll" ] \
+    || fail "forgejo-merges: a poll sidecar was left for a forge nothing can watch"
+  assert_grep "merged: PR 7 in team/tools on forge.example" "$case_dir/stdout" \
+    "forgejo-merges: the merge did not report what it merged"
+  pass "fm-pr-merge merges on the self-hosted forge, records the same metadata, and reports both absent guarantees"
+}
+
+test_forgejo_merge_refuses_a_head_that_moved() {
+  local case_dir rc
+  require_jq_for_forge
+  case_dir=$(make_forgejo_case forgejo-head-moved)
+  add_gh_mocks "$case_dir" 4444444444444444444444444444444444444444
+  add_forgejo_mock "$case_dir" "$FORGEJO_HEAD_A"
+  : > "$case_dir/forgejo-axi.log"
+
+  set +e
+  FM_TEST_FORGEJO_HEAD_AT_MERGE=$FORGEJO_HEAD_B \
+    run_forgejo_merge "$case_dir" task-x1 https://forge.example/team/tools/pulls/7
+  rc=$?
+  set -e
+
+  [ "$rc" -ne 0 ] || fail "forgejo-head-moved: a head that moved under the merge was merged anyway"
+  # The client answers on stdout in both directions and this path captures it to
+  # check the proof, so a refusal has to be put back where a caller reads it.
+  assert_grep 'HEAD_CHANGED' "$case_dir/stderr" \
+    "forgejo-head-moved: the refusal was captured and never shown"
+  assert_no_grep 'merged: PR' "$case_dir/stdout" \
+    "forgejo-head-moved: a refused merge still reported a merge"
+  pass "fm-pr-merge refuses a Forgejo merge whose head moved rather than merging a different commit"
+}
+
+test_forgejo_merge_refuses_a_head_the_forge_did_not_supply() {
+  local case_dir rc
+  require_jq_for_forge
+  case_dir=$(make_forgejo_case forgejo-no-head)
+  add_gh_mocks "$case_dir" 4444444444444444444444444444444444444444
+  add_forgejo_mock "$case_dir" "$FORGEJO_HEAD_A"
+  : > "$case_dir/forgejo-axi.log"
+
+  set +e
+  FM_TEST_FORGEJO_NO_HEAD=1 \
+    run_forgejo_merge "$case_dir" task-x1 https://forge.example/team/tools/pulls/7
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "forgejo-no-head: a merge with no head to gate on was not refused"
+  assert_grep 'could not read the head commit' "$case_dir/stderr" \
+    "forgejo-no-head: the refusal did not name the missing head"
+  assert_no_grep '^pr=' "$case_dir/state/task-x1.meta" \
+    "forgejo-no-head: the pull request was recorded before the refusal"
+  assert_no_grep 'pr merge' "$case_dir/forgejo-axi.log" \
+    "forgejo-no-head: a merge was attempted with no head to name"
+  pass "fm-pr-merge refuses a Forgejo merge when the forge supplied no head, with no override"
+}
+
+test_forgejo_merge_refuses_an_unprovable_success() {
+  local case_dir rc
+  require_jq_for_forge
+  case_dir=$(make_forgejo_case forgejo-unproven)
+  add_gh_mocks "$case_dir" 4444444444444444444444444444444444444444
+  add_forgejo_mock "$case_dir" "$FORGEJO_HEAD_A"
+  : > "$case_dir/forgejo-axi.log"
+
+  set +e
+  FM_TEST_FORGEJO_PROOF_MERGED=false \
+    run_forgejo_merge "$case_dir" task-x1 https://forge.example/team/tools/pulls/7
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "forgejo-unproven: a merge whose own proof denies it was reported as done"
+  assert_grep 'does not confirm it' "$case_dir/stderr" \
+    "forgejo-unproven: the refusal did not say the proof failed to confirm the merge"
+  assert_no_grep 'merged: PR' "$case_dir/stdout" \
+    "forgejo-unproven: an unproven merge still printed a merge line"
+  pass "fm-pr-merge refuses a Forgejo merge that exits zero while its own proof does not say the work was done"
+}
+
+test_forgejo_merge_refuses_a_proof_naming_another_head() {
+  local case_dir rc
+  require_jq_for_forge
+  case_dir=$(make_forgejo_case forgejo-proof-head)
+  add_gh_mocks "$case_dir" 4444444444444444444444444444444444444444
+  add_forgejo_mock "$case_dir" "$FORGEJO_HEAD_A"
+  : > "$case_dir/forgejo-axi.log"
+
+  set +e
+  FM_TEST_FORGEJO_PROOF_HEAD=$FORGEJO_HEAD_B \
+    run_forgejo_merge "$case_dir" task-x1 https://forge.example/team/tools/pulls/7
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "forgejo-proof-head: a proof naming another head was accepted"
+  assert_grep "must name $FORGEJO_HEAD_A" "$case_dir/stderr" \
+    "forgejo-proof-head: the refusal did not name the head that should have been merged"
+  pass "fm-pr-merge refuses a Forgejo merged proof that names a head other than the one it merged"
+}
+
+test_forgejo_merge_refuses_branch_deletion_rather_than_emulating_it() {
+  local case_dir rc
+  require_jq_for_forge
+  case_dir=$(make_forgejo_case forgejo-delete-branch)
+  add_gh_mocks "$case_dir" 4444444444444444444444444444444444444444
+  add_forgejo_mock "$case_dir" "$FORGEJO_HEAD_A"
+  : > "$case_dir/forgejo-axi.log"
+
+  set +e
+  run_forgejo_merge "$case_dir" task-x1 https://forge.example/team/tools/pulls/7 -- --delete-branch
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "forgejo-delete-branch: --delete-branch was accepted on a forge that cannot do it"
+  assert_grep 'cannot delete the head branch' "$case_dir/stderr" \
+    "forgejo-delete-branch: the refusal did not say why"
+  [ ! -s "$case_dir/forgejo-axi.log" ] \
+    || fail "forgejo-delete-branch: the forge was reached before the argument was refused"
+  assert_no_grep '^pr=' "$case_dir/state/task-x1.meta" \
+    "forgejo-delete-branch: state was recorded before the argument was refused"
+  pass "fm-pr-merge refuses --delete-branch on the self-hosted forge instead of deleting a branch behind the merge"
+}
+
+test_forgejo_merge_accepts_keeping_the_branch_and_an_explicit_squash() {
+  local case_dir rc
+  require_jq_for_forge
+  case_dir=$(make_forgejo_case forgejo-squash)
+  add_gh_mocks "$case_dir" 4444444444444444444444444444444444444444
+  add_forgejo_mock "$case_dir" "$FORGEJO_HEAD_A"
+  : > "$case_dir/forgejo-axi.log"
+
+  set +e
+  run_forgejo_merge "$case_dir" task-x1 https://forge.example/team/tools/pulls/7 \
+    -- --squash --delete-branch=false
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "forgejo-squash: an explicit squash keeping the branch was refused"
+  grep -qxF "pr merge 7 --repo team/tools --base-url https://forge.example --expected-head $FORGEJO_HEAD_A --method squash --json" \
+    "$case_dir/forgejo-axi.log" \
+    || fail "forgejo-squash: --squash did not become this forge's own merge method"
+  pass "fm-pr-merge translates --squash into this forge's merge method and honours keeping the branch"
+}
+
+test_forgejo_merge_refuses_a_flag_written_for_the_other_forge() {
+  local case_dir rc
+  require_jq_for_forge
+  case_dir=$(make_forgejo_case forgejo-foreign-flag)
+  add_gh_mocks "$case_dir" 4444444444444444444444444444444444444444
+  add_forgejo_mock "$case_dir" "$FORGEJO_HEAD_A"
+  : > "$case_dir/forgejo-axi.log"
+
+  set +e
+  run_forgejo_merge "$case_dir" task-x1 https://forge.example/team/tools/pulls/7 -- --auto
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "forgejo-foreign-flag: a GitHub-shaped flag was forwarded to another client"
+  assert_grep 'is not a merge argument this path can send' "$case_dir/stderr" \
+    "forgejo-foreign-flag: the refusal did not say the argument belongs to the other forge"
+  [ ! -s "$case_dir/forgejo-axi.log" ] \
+    || fail "forgejo-foreign-flag: the forge was reached with an argument it does not accept"
+  pass "fm-pr-merge refuses an unknown merge argument on the self-hosted forge rather than forwarding it"
+}
+
+test_forgejo_merge_keeps_the_placeholder_title_guard() {
+  local case_dir rc
+  require_jq_for_forge
+  case_dir=$(make_forgejo_case forgejo-placeholder)
+  add_gh_mocks "$case_dir" 4444444444444444444444444444444444444444
+  add_forgejo_mock "$case_dir" "$FORGEJO_HEAD_A"
+  : > "$case_dir/forgejo-axi.log"
+
+  set +e
+  FM_TEST_FORGEJO_TITLE='chore: update pull request' \
+    run_forgejo_merge "$case_dir" task-x1 https://forge.example/team/tools/pulls/7
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "forgejo-placeholder: a placeholder title merged on this forge"
+  assert_grep "which is the validation pipeline's" "$case_dir/stderr" \
+    "forgejo-placeholder: the placeholder refusal did not fire"
+  assert_grep 'forgejo-axi pr update --repo team/tools 7' "$case_dir/stderr" \
+    "forgejo-placeholder: the remedy named the other forge's retitle command"
+  assert_no_grep 'pr merge' "$case_dir/forgejo-axi.log" \
+    "forgejo-placeholder: the merge ran despite the placeholder title"
+  pass "fm-pr-merge keeps the placeholder-title guard on the self-hosted forge, with that forge's own remedy"
+}
+
+test_forgejo_merge_refuses_an_unreadable_title_distinctly() {
+  local case_dir rc
+  require_jq_for_forge
+  case_dir=$(make_forgejo_case forgejo-unreadable)
+  add_gh_mocks "$case_dir" 4444444444444444444444444444444444444444
+  add_forgejo_mock "$case_dir" "$FORGEJO_HEAD_A"
+  : > "$case_dir/forgejo-axi.log"
+
+  set +e
+  FM_TEST_FORGEJO_VIEW_FAIL=1 \
+    run_forgejo_merge "$case_dir" task-x1 https://forge.example/team/tools/pulls/7
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "forgejo-unreadable: a title nobody read was merged"
+  assert_grep 'could not read the title' "$case_dir/stderr" \
+    "forgejo-unreadable: the refusal did not say the title was unread"
+  assert_no_grep 'pr merge' "$case_dir/forgejo-axi.log" \
+    "forgejo-unreadable: the merge ran with no title read"
+  pass "fm-pr-merge refuses an unreadable Forgejo title distinctly rather than calling it a placeholder"
+}
+
+test_forgejo_merge_names_a_credential_that_will_not_be_read() {
+  local case_dir rc
+  require_jq_for_forge
+  case_dir=$(make_forgejo_case forgejo-ignored-token)
+  add_gh_mocks "$case_dir" 4444444444444444444444444444444444444444
+  add_forgejo_mock "$case_dir" "$FORGEJO_HEAD_A"
+  : > "$case_dir/forgejo-axi.log"
+
+  # A bare token is never read when the instance is passed as a flag.
+  set +e
+  HOME="$case_dir/home" FORGEJO_TOKEN=not-a-real-token \
+    run_forgejo_merge "$case_dir" task-x1 https://forge.example/team/tools/pulls/7
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "forgejo-ignored-token: the note should not stop the merge"
+  assert_grep 'FORGEJO_TOKEN is set' "$case_dir/stderr" \
+    "forgejo-ignored-token: a credential that will not be read went unmentioned"
+  assert_no_grep 'not-a-real-token' "$case_dir/stderr" \
+    "forgejo-ignored-token: the note printed the credential itself"
+  assert_no_grep 'not-a-real-token' "$case_dir/stdout" \
+    "forgejo-ignored-token: the credential reached standard output"
+
+  # The note still names the ignored bare token when another credential source
+  # may be available, without claiming anything about that other credential.
+  set +e
+  HOME="$case_dir/home" FORGEJO_TOKEN=not-a-real-token \
+    FORGEJO_TOKEN_FORGE_2E_EXAMPLE=not-a-real-token \
+    run_forgejo_merge "$case_dir" task-x1 https://forge.example/team/tools/pulls/7
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "forgejo-ignored-token: a host-scoped credential should merge"
+  assert_grep 'FORGEJO_TOKEN is set' "$case_dir/stderr" \
+    "forgejo-ignored-token: another credential source suppressed the bare-token note"
+  assert_no_grep 'not-a-real-token' "$case_dir/stderr" \
+    "forgejo-ignored-token: the note printed a credential value"
+  assert_no_grep 'not-a-real-token' "$case_dir/stdout" \
+    "forgejo-ignored-token: a credential value reached standard output"
+  pass "fm-pr-merge always names a bare token that will not be read, without printing its value or blocking"
+}
+
+test_forgejo_merge_needs_the_forge_client() {
+  local case_dir rc
+  require_jq_for_forge
+  case_dir=$(make_forgejo_case forgejo-no-client)
+  add_gh_mocks "$case_dir" 4444444444444444444444444444444444444444
+  # Deliberately no forge client anywhere this run can see it.
+  rm -f "$case_dir/fakebin/forgejo-axi"
+
+  FM_TEST_BASE_PATH_ONLY=1 \
+    PATH="$case_dir/fakebin:/usr/bin:/bin" \
+    FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$case_dir/home" \
+    FM_STATE_OVERRIDE="$case_dir/state" FM_TEST_GH_AXI_LOG="$case_dir/gh-axi.log" \
+    "$PR_MERGE" task-x1 https://forge.example/team/tools/pulls/7 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" && rc=0 || rc=$?
+
+  expect_code 1 "$rc" "forgejo-no-client: the merge proceeded with no client to reach the forge"
+  assert_grep 'needs forgejo-axi on PATH' "$case_dir/stderr" \
+    "forgejo-no-client: the refusal did not name the missing client"
+  assert_no_grep '^pr=' "$case_dir/state/task-x1.meta" \
+    "forgejo-no-client: state was recorded before the client was found missing"
+  pass "fm-pr-merge refuses a Forgejo merge with no forge client, before recording anything"
+}
+
+test_forgejo_address_on_another_instance_is_refused() {
+  local case_dir rc
+  require_jq_for_forge
+  case_dir=$(make_forgejo_case forgejo-other-instance)
+  add_gh_mocks "$case_dir" 4444444444444444444444444444444444444444
+  add_forgejo_mock "$case_dir" "$FORGEJO_HEAD_A"
+  : > "$case_dir/forgejo-axi.log"
+  : > "$case_dir/gh-axi.log"
+
+  # The exact shape of a pull request on this forge, on a host this home does
+  # not run. A merge sent there is a merge on somebody else's server.
+  set +e
+  run_forgejo_merge "$case_dir" task-x1 https://forge.example.evil/team/tools/pulls/7
+  rc=$?
+  set -e
+
+  expect_code 2 "$rc" "forgejo-other-instance: an address on another instance was accepted"
+  [ ! -s "$case_dir/forgejo-axi.log" ] \
+    || fail "forgejo-other-instance: the forge client was reached for another instance"
+  [ ! -s "$case_dir/gh-axi.log" ] \
+    || fail "forgejo-other-instance: the GitHub client was reached for another instance"
+  assert_no_grep '^pr=' "$case_dir/state/task-x1.meta" \
+    "forgejo-other-instance: an address on another instance was recorded"
+  pass "fm-pr-merge refuses a Forgejo-shaped address on an instance this home does not run"
+}
+
 test_no_method_defaults_to_merge_commit_after_recording
 test_merge_failure_propagates_after_recording
 test_placeholder_title_refuses_before_recording
@@ -847,3 +1273,16 @@ test_no_local_task_keeps_the_other_guards
 test_no_local_task_refuses_a_pr_a_local_task_owns
 test_no_local_task_refuses_a_stray_task_id
 test_recording_failure_still_refuses_for_a_task_that_exists
+test_forgejo_merge_records_then_merges_the_head_it_read
+test_forgejo_merge_refuses_a_head_that_moved
+test_forgejo_merge_refuses_a_head_the_forge_did_not_supply
+test_forgejo_merge_refuses_an_unprovable_success
+test_forgejo_merge_refuses_a_proof_naming_another_head
+test_forgejo_merge_refuses_branch_deletion_rather_than_emulating_it
+test_forgejo_merge_accepts_keeping_the_branch_and_an_explicit_squash
+test_forgejo_merge_refuses_a_flag_written_for_the_other_forge
+test_forgejo_merge_keeps_the_placeholder_title_guard
+test_forgejo_merge_refuses_an_unreadable_title_distinctly
+test_forgejo_merge_names_a_credential_that_will_not_be_read
+test_forgejo_merge_needs_the_forge_client
+test_forgejo_address_on_another_instance_is_refused

@@ -214,10 +214,9 @@ fm_pr_forgejo_path_valid() {
 # namespace rules rather than a loosened GitHub rule.
 #
 # FM_PR_OWNER and FM_PR_REPO are additionally set for github because
-# bin/fm-pr-merge.sh addresses GitHub by owner/repository. A gitlab or forgejo
-# URL leaves them empty; teaching the merge path about either forge is a
-# separate change, and until then it refuses those URLs rather than merging
-# anything.
+# bin/fm-pr-merge.sh addresses GitHub by owner/repository. GitLab and Forgejo
+# URLs leave them empty; the merge path addresses Forgejo by FM_PR_PATH and
+# still refuses GitLab rather than sending it to the wrong forge.
 fm_pr_url_parse() {
   local raw=${1-} pattern host path
   local LC_ALL=C
