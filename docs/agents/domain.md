@@ -38,10 +38,18 @@ So an agent exploring the clone will find no fleet glossary and no decision reco
 It means they are held per home, outside the tracked tree, and are reachable only from a running firstmate home.
 Do not infer from an empty clone that the fleet has recorded no vocabulary and no decisions, and do not start a tracked store here to fill the apparent hole.
 
-## What this file does not do
+## No skill reads this file today
 
-It is a pointer for a reader that comes looking for one, and its reach is smaller than it appears.
+This file is groundwork for a reader that has not arrived yet, and it should be read that way rather than as something load-bearing.
 
-The skills that consume domain vocabulary read `CONTEXT.md` directly and proceed silently when it is absent; none of them reads this file to be redirected.
-So writing this file does not, by itself, point those skills at the owners above.
-It answers the reader that goes looking for the repository's domain layout, and it stops the next agent from creating the store this repository already decided against.
+No installed skill reads it.
+Measured on one seat on 2026-08-22 against `mattpocock-skills` 1.2.3, the only skill source naming `docs/agents/domain.md` is the setup skill that writes it.
+The skills that actually consume domain vocabulary, among them `tdd`, `diagnosing-bugs`, and `codebase-design`, read `CONTEXT.md` directly and proceed silently when it is absent.
+None of them is redirected here, so writing this file does not by itself point any of them at the owners above.
+
+That is worth stating plainly because the upstream documentation says the opposite.
+The plugin's own `docs/engineering/domain-modeling.md` recommends putting instructions in "your own `docs/agents/domain.md`, which the skills already read".
+The installed skill files do not implement that claim, so it was checked against the artifact rather than taken on the documentation's word, and this note records the result.
+
+What the file does do is answer the reader that comes looking for this repository's domain layout, and stop the next agent from creating the store this repository already decided against.
+That is a smaller job than the file's existence implies, and naming its size here is cheaper than letting someone discover it by depending on it.
