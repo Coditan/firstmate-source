@@ -568,10 +568,10 @@ content_in_default() {
 }
 
 # Has the worktree's committed work actually LANDED, though its commits are not
-# reachable from any remote-tracking branch? True when a merged PR proves the
-# current local work is contained in the PR head, OR the content is already in the
-# default branch (fallback, which also covers the no-PR and gh-error paths). False
-# only for genuinely unlanded work.
+# reachable from a refreshed remote-tracking branch of any counted remote? True
+# when a merged PR proves the current local work is contained in the PR head, OR
+# the content is already in the default branch (fallback, which also covers the
+# no-PR and gh-error paths). False only for genuinely unlanded work.
 work_is_landed() {
   local branch=$1
   pr_is_merged "$branch" && return 0
