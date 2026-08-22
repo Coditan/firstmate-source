@@ -1164,8 +1164,7 @@ test_forgejo_merge_names_a_credential_that_will_not_be_read() {
   add_forgejo_mock "$case_dir" "$FORGEJO_HEAD_A"
   : > "$case_dir/forgejo-axi.log"
 
-  # A bare token and nothing host-scoped, with a HOME that holds no hosts file:
-  # the one arrangement where a credential is set and still not read.
+  # A bare token is never read when the instance is passed as a flag.
   set +e
   HOME="$case_dir/home" FORGEJO_TOKEN=not-a-real-token \
     run_forgejo_merge "$case_dir" task-x1 https://forge.example/team/tools/pulls/7
@@ -1180,8 +1179,8 @@ test_forgejo_merge_names_a_credential_that_will_not_be_read() {
   assert_no_grep 'not-a-real-token' "$case_dir/stdout" \
     "forgejo-ignored-token: the credential reached standard output"
 
-  # And it stays quiet when a host-scoped credential is what is set, because a
-  # note that fires on the ordinary arrangement is a note nobody reads.
+  # The note still names the ignored bare token when another credential source
+  # may be available, without claiming anything about that other credential.
   set +e
   HOME="$case_dir/home" FORGEJO_TOKEN=not-a-real-token \
     FORGEJO_TOKEN_FORGE_2E_EXAMPLE=not-a-real-token \
@@ -1190,9 +1189,13 @@ test_forgejo_merge_names_a_credential_that_will_not_be_read() {
   set -e
 
   expect_code 0 "$rc" "forgejo-ignored-token: a host-scoped credential should merge"
-  assert_no_grep 'FORGEJO_TOKEN is set' "$case_dir/stderr" \
-    "forgejo-ignored-token: the note fired where the credential will be read"
-  pass "fm-pr-merge says when a credential that is set will not be read, and never prints it"
+  assert_grep 'FORGEJO_TOKEN is set' "$case_dir/stderr" \
+    "forgejo-ignored-token: another credential source suppressed the bare-token note"
+  assert_no_grep 'not-a-real-token' "$case_dir/stderr" \
+    "forgejo-ignored-token: the note printed a credential value"
+  assert_no_grep 'not-a-real-token' "$case_dir/stdout" \
+    "forgejo-ignored-token: a credential value reached standard output"
+  pass "fm-pr-merge always names a bare token that will not be read, without printing its value or blocking"
 }
 
 test_forgejo_merge_needs_the_forge_client() {

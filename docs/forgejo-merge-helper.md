@@ -185,19 +185,17 @@ GET /api/v1/repos/team/tools/pulls/7 auth=absent
 GET /api/v1/repos/team/tools/pulls/7 auth=present
 ```
 
-So the helper says so, once, when a bare token is set and nothing host-scoped is:
+So the helper says so whenever a bare token is set, regardless of whether another credential source may also be available:
 
 ```
 note: FORGEJO_TOKEN is set, and this merge names the instance as a flag, which
       is exactly the case where that client reads a token only from a
-      host-scoped FORGEJO_TOKEN_<HOST> variable or from its own hosts.json. So
-      this merge will reach forge.example with no credential at all, and whatever the
-      forge then says will be about permission rather than about the token being
-      ignored. Nothing here judges whether a credential would be accepted.
+      host-scoped FORGEJO_TOKEN_<HOST> variable or from its own hosts.json.
+      The bare FORGEJO_TOKEN will not be read on this path.
 ```
 
 It is a note and never a check.
-It says a credential that is set will not be read; it says nothing about whether any credential would be accepted, because only the forge can answer that.
+It says only that the bare credential is not read on this path; it does not claim that no other credential will be used or whether any credential would be accepted, because only the client and forge can answer those questions.
 This fleet has already been bitten once by a credential check that passed while the credential was absent, and a check that implies more than it measured is that defect wearing a different coat.
 
 Whoever wires this fleet's own credential should therefore set `FORGEJO_TOKEN_<HOST>` or write the client's `hosts.json`, not `FORGEJO_TOKEN`.

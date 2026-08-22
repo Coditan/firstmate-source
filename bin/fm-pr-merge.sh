@@ -163,7 +163,9 @@
 # is what keeps a merge from being sent to whatever instance the environment
 # happens to name. Because the base URL arrives as a flag, that client resolves
 # a token only from FORGEJO_TOKEN_<HOST> or its hosts.json and never from a bare
-# FORGEJO_TOKEN. This path deliberately does not pre-check that credential: a
+# FORGEJO_TOKEN. Whenever that bare token is set, this path notes that it will
+# not be read, without inferring whether another credential will be used. This
+# path deliberately does not pre-check any credential: a
 # reachable token proves nothing about whether it may merge, and the read of the
 # pull request that happens first is real evidence where a presence check is not.
 # jq is required on this forge because the client answers in JSON and the title
@@ -272,10 +274,12 @@ if [ "$PROVIDER" = forgejo ]; then
   PR_LOCATION="$PR_PATH on $PR_HOST"
   PR_RETITLE_CMD="forgejo-axi pr update --repo $PR_PATH $PR_NUMBER --base-url $FORGEJO_BASE_URL --title"
   PR_TITLE_READ_CMD="forgejo-axi pr view --repo $PR_PATH $PR_NUMBER --base-url $FORGEJO_BASE_URL --fields title"
+  PR_TITLE_CLIENT=forgejo-axi
 else
   PR_LOCATION="$PR_OWNER/$PR_REPO"
   PR_RETITLE_CMD="gh pr edit $PR_NUMBER --repo $PR_OWNER/$PR_REPO --title"
   PR_TITLE_READ_CMD="gh pr view $PR_NUMBER --repo $PR_OWNER/$PR_REPO --json title"
+  PR_TITLE_CLIENT=gh
 fi
 [ "${1:-}" = "--" ] && shift
 
@@ -315,17 +319,13 @@ EOF
   # This is a note and never a check. It says a credential that is set will not
   # be read; it says nothing about whether any credential would be accepted,
   # because only the forge can answer that and the read below is what asks it.
-  # Names only are examined and no value is ever printed.
-  if [ -n "${FORGEJO_TOKEN:-}" ] \
-    && ! env | grep -q '^FORGEJO_TOKEN_[A-Za-z0-9_]*=' \
-    && [ ! -f "${HOME:-}/.config/forgejo-axi/hosts.json" ]; then
+  # No value is ever printed.
+  if [ -n "${FORGEJO_TOKEN:-}" ]; then
     cat >&2 <<EOF
 note: FORGEJO_TOKEN is set, and this merge names the instance as a flag, which
       is exactly the case where that client reads a token only from a
-      host-scoped FORGEJO_TOKEN_<HOST> variable or from its own hosts.json. So
-      this merge will reach $PR_HOST with no credential at all, and whatever the
-      forge then says will be about permission rather than about the token being
-      ignored. Nothing here judges whether a credential would be accepted.
+      host-scoped FORGEJO_TOKEN_<HOST> variable or from its own hosts.json.
+      The bare FORGEJO_TOKEN will not be read on this path.
 EOF
   fi
 fi
@@ -592,8 +592,8 @@ error: could not read the title of PR $PR_NUMBER in $PR_LOCATION, after up
        title says. That is all this reports: the title was not read, not judged.
 remedy: the cause may be transient - a rate limit, a network failure, or a token
        momentarily without read scope on that repository - in which case re-running
-       this merge is usually enough. It may also be that the forge client is not
-       installed, or not authenticated for that repository; check with
+       this merge is usually enough. It may also be that $PR_TITLE_CLIENT is not installed, or
+       not authenticated for that repository; check with
          $PR_TITLE_READ_CMD
        To merge without having read the title, re-run with
        --allow-unreadable-title before the task id. That flag asserts only that
