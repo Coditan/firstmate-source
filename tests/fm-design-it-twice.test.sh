@@ -6,8 +6,8 @@
 # is an attribution, a discrimination borrowed from another skill that must not
 # be quietly widened, and a claim about what a formation can and cannot prove.
 # Each of those degrades silently under a well-meaning edit - a gate softened
-# into an invitation, a borrowed bar restated and drifted, an unsent draft
-# losing the word that says it is unsent - and none of them would fail any
+# into an invitation, a borrowed bar restated and drifted, a sent record
+# slipping back into pre-send wording - and none of them would fail any
 # behavioral test, because there is no behavior to fail. So the checks live here.
 # shellcheck disable=SC2016
 set -u
@@ -178,7 +178,7 @@ test_the_upstream_offer_records_what_was_actually_published() {
     "the offer must record which channel carried it"
   assert_grep 'Under what identity' "$OFFER" \
     "the offer must record which identity it went out under"
-  assert_grep 'The prepared pull-request command sequence' "$OFFER" \
+  assert_grep 'The prepared pull-request sequence and what ran' "$OFFER" \
     "the offer must keep the command sequence that was attempted"
   assert_grep 'Steps 1 to 3 ran, step 4 was refused, and the issue command recorded below the block is what actually published the contribution' "$OFFER" \
     "the offer must distinguish the attempted pull-request sequence from the published issue"
@@ -188,6 +188,8 @@ test_the_upstream_offer_records_what_was_actually_published() {
     "the offer must keep the issue body it published"
   assert_grep 'I have left that correction on the branch; say the word and I will split it out.' "$OFFER" \
     "the offer must carry the issue-channel form of the stale-quotation sentence"
+  assert_grep 'What was allowed to go upstream, and the test it passed' "$OFFER" \
+    "the offer must describe the publication boundary as a completed record"
   pass "the offer records the address, the channel, and the identity it went out under"
 }
 
@@ -280,6 +282,10 @@ test_the_settled_decisions_and_the_published_outcome_are_recorded() {
     "his quoted ruling must stay exactly as he wrote it"
   assert_grep 'The spelling in that quotation is his and is reproduced as he wrote it' "$OFFER" \
     "the odd spelling must be explained beside the quotation rather than inside it"
+  assert_grep 'On 2026-08-21 he was answering one specific exposure' "$OFFER" \
+    "the offer must date-anchor the original HLR exposure"
+  assert_grep 'The residual link he weighed before deciding did remain in the published contribution' "$OFFER" \
+    "the offer must record the published byline exposure"
   # He was not asked about these two, so neither may be recorded as decided.
   assert_grep 'Two flags were deliberately not raised with him as decisions' "$OFFER" \
     "the offer must not present unraised flags as answered"

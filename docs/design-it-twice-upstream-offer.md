@@ -21,22 +21,22 @@ Where first-hand experience is the evidence, the note says so, and says plainly 
 
 **It makes no public claim about who runs what.**
 The captain ruled on 2026-08-21, in his own words, "not say that in pubnlic".
-He was answering one specific exposure: the note said "we" and "our fleet" throughout and would go out under an HLR account, so a reader would infer that HLR operates a fleet of agent-managed repositories.
+On 2026-08-21 he was answering one specific exposure: the note said "we" and "our fleet" throughout and would go out under an HLR account, so a reader would infer that HLR operates a fleet of agent-managed repositories.
 That is true, it is not currently public, and he does not want it made public.
 The rewrite below removes that inference without weakening a single technical claim.
 The spelling in that quotation is his and is reproduced as he wrote it.
 
-### What may be published from this page, and the test it has to pass
+### What was allowed to go upstream, and the test it passed
 
-Only the indented blocks are published: the prose changes, the changeset, and the covering note.
-Everything else here is internal explanation and never leaves this repository.
+Only the indented blocks were allowed to go upstream: the prose changes, the changeset, and the covering note.
+Everything else here is internal explanation and was not sent upstream.
 
 Each publishable block was swept against the captain's own test - **does a public reader learn from it that HLR runs an agent fleet?** - and every failing phrase was rewritten.
 The note now speaks in the first person singular, describes no estate of repositories, and names no internal script.
 
 The surrounding internal prose keeps its ordinary vocabulary, because it names no HLR entity and fails no part of that test.
-One residual link is his to weigh rather than this page's to bury: this repository is public, so an account that opens the pull request and is also visible here could be traced back, which reaches the same inference by a different route.
-That is a fact about the account, not about the wording, and it does not change under any rewrite of the text.
+The residual link he weighed before deciding did remain in the published contribution: the issue and branch byline is also visible from this public repository, which reaches the same inference by a different route.
+That is a fact about the byline, not about the wording, and it did not change under any rewrite of the text.
 
 ## What would change upstream
 
@@ -238,7 +238,7 @@ Two sentences were added at the top explaining why it arrives as an issue, and n
     A changeset and the docs-page re-sync are both on the branch, per `CLAUDE.md`.
     If the gate reads too strong, I would rather weaken it than drop it.
 
-## The prepared pull-request command sequence
+## The prepared pull-request sequence and what ran
 
 This is the pull-request sequence as originally prepared, kept as the record of what was attempted rather than as instructions to follow.
 Steps 1 to 3 ran, step 4 was refused, and the issue command recorded below the block is what actually published the contribution.
@@ -274,7 +274,7 @@ The cause is the owner's own setting, in GitHub's words to the captain on the co
 That is not a permissions defect on this seat, and it was proved upstream-side by opening and immediately closing a pull request on the fork itself, which succeeded.
 
 **Do not retry the pull request by any route.**
-What ran instead was one `gh-axi issue create` against `mattpocock/skills`, carrying this page's covering note with the two sentences the channel itself forced.
+What ran instead was one `gh-axi issue create` against `mattpocock/skills`, carrying the published issue body above.
 The issue path was measured open rather than assumed: issues 937 and 938 were opened by non-collaborators within the half hour before, and the repository has issues enabled with 383 of them open.
 
 ## What the captain decided and what happened
