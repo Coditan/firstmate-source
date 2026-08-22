@@ -536,20 +536,10 @@ For every X-linked terminal outcome, load that owner and post the final completi
 
 ## Agent skills
 
-### Issue tracker
+Some installed engineering skills read a per-repository configuration surface under `docs/agents/`.
 
-Work is tracked in the fleet backlog, not GitHub Issues; GitHub carries pull requests only.
-See [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
-
-### Triage labels
-
-The five Matt Pocock skill roles map onto backlog state and hold kinds rather than tracker labels.
-See [docs/agents/triage-labels.md](docs/agents/triage-labels.md).
-
-### Domain docs
-
-This repository uses single-context domain docs.
-See [docs/agents/domain.md](docs/agents/domain.md).
+- Issue tracker: `docs/agents/issue-tracker.md`.
+- Domain docs: `docs/agents/domain.md`.
 
 ## Maintaining this file
 
