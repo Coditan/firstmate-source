@@ -6,7 +6,11 @@
 # (a secondmate teardown prints none, since secondmates are not backlog items).
 # REFUSES if the worktree holds work that has not LANDED, because cleanup
 # hard-resets/removes the worktree and kills its processes. Work has landed when it is
-# reachable from any remote-tracking branch (a fork counts as a remote, so
+# reachable from a remote-tracking branch of a COUNTED remote - one the project is
+# registered against, never the validation pipeline's own local mirror, and re-read
+# from the remote itself with --prune immediately before the test, so a branch the
+# remote no longer has cannot pass off a stale cached ref (see "Which remotes may
+# prove that work has LANDED" below; a fork still counts as a remote, so
 # upstream-contribution PRs pushed to a fork satisfy this in any mode), OR - for a
 # normal ship task whose commits are not so reachable - when its PR is merged and
 # GitHub reports a PR head that contains the current local work, or its content is
@@ -145,6 +149,175 @@ KIND=$(grep '^kind=' "$META" | cut -d= -f2- || true)
 [ -n "$KIND" ] || KIND=ship
 MODE=$(grep '^mode=' "$META" | cut -d= -f2- || true)
 [ -n "$MODE" ] || MODE=no-mistakes
+
+# --- Which remotes may prove that work has LANDED ----------------------------
+# `git log HEAD --not --remotes` counts EVERY remote-tracking ref, and a model
+# panel reproduced both ways that lied on 2026-08-21, in a clean sandbox:
+#
+#   1. The validation pipeline pushes every task branch into its own bare mirror
+#      under ~/.no-mistakes/repos/<id>.git (docs/merged-branch-cleanup.md section
+#      3). That mirror is a remote by git's reckoning, never reaches the forge,
+#      and is invisible to gh - so work that got no further than the pipeline's
+#      own scratch passed as landed and the worktree was cleared.
+#   2. A remote-tracking ref is a local cache of what a remote had at the last
+#      fetch. A branch deleted on the remote afterwards leaves its ref standing,
+#      and that stale ref passed as landed too.
+#
+# So landing evidence now needs both halves. The ref must belong to a remote the
+# PROJECT is registered against - never the pipeline's private mirror - and it
+# must be re-read from that remote, with --prune, immediately before the test.
+# A remote that cannot be re-read supplies no evidence at all: its cached refs
+# are dropped rather than trusted, so an unreadable remote makes teardown refuse
+# instead of quietly reporting work as landed that nobody could confirm.
+#
+# Nothing here widens what counts, and nothing here narrows it into an outage: a
+# fork remote still counts, because a fork is a repository the project is
+# registered against and a fork-pushed contribution really has left this machine.
+# The re-read also ACCEPTS work no cached ref mentioned, which the check refused
+# before. tests/fm-teardown.test.sh covers both directions.
+#
+# Nothing in this block is specific to one hosting service. A self-hosted forge
+# is simply another remote the project is registered against, matched by the same
+# effective URL, so extending the landed proof to read PR state from that forge
+# is a change to pr_is_merged and nothing here.
+FM_LANDING_REMOTES_RESOLVED=0
+FM_LANDING_REMOTES=
+FM_LANDING_REMOTES_UNREADABLE=
+FM_LANDING_REMOTES_UNUSABLE=
+
+# The URL a remote actually uses. `remote get-url` reports the configured string;
+# `ls-remote --get-url` reports what git would really talk to, with
+# url.<base>.insteadOf rewriting applied, and contacts nothing to say so.
+remote_effective_url() {  # <repo dir> <remote name>
+  git -C "$1" ls-remote --get-url "$2" 2>/dev/null
+}
+
+# Compare URLs by the repository they address rather than by how they were typed:
+# a trailing slash and a trailing .git name the same place.
+normalized_remote_url() {  # <url>
+  local url=$1
+  url=${url%/}
+  url=${url%.git}
+  url=${url%/}
+  printf '%s' "$url"
+}
+
+# The validation pipeline's own scratch mirror, recognized the way
+# bin/fm-gate-refuse-lib.sh recognizes a gate worktree: by the pipeline's own
+# path contract, plus NM_HOME for an install that relocated its state. The path
+# shape is the signal that survives a renamed remote.
+url_is_pipeline_mirror() {  # <url>
+  local url=$1 nm_repos
+  case "$url" in
+    */.no-mistakes/repos/*) return 0 ;;
+  esac
+  if [ -n "${NM_HOME:-}" ]; then
+    nm_repos="${NM_HOME%/}/repos/"
+    case "$url" in "$nm_repos"*) return 0 ;; esac
+  fi
+  return 1
+}
+
+# The remote URLs this project is registered against: every remote configured on
+# the project clone except the pipeline's mirror. Reading them from the PROJECT
+# uses the project's own record of where it publishes. A linked worktree shares
+# that remote configuration, so this is not a trust boundary against a worker
+# that deliberately adds a remote and pushes to it. This is a confused-worker
+# check, like bin/fm-gate-refuse-lib.sh, not an adversarial one. It establishes
+# that landed work is on a project-registered remote matched by effective URL,
+# never merely on the pipeline mirror, and confirmed by re-reading the remote
+# instead of trusting a cached ref. Falls back to the worktree's own remotes only
+# when the project directory is not a readable repository - for a linked
+# worktree that is the same set anyway.
+project_registered_remote_urls() {
+  local dir name url
+  dir=$PROJ
+  if [ -z "$dir" ] || ! git -C "$dir" rev-parse --git-dir >/dev/null 2>&1; then
+    dir=$WT
+  fi
+  git -C "$dir" remote 2>/dev/null | while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    url=$(remote_effective_url "$dir" "$name") || continue
+    [ -n "$url" ] || continue
+    url_is_pipeline_mirror "$url" && continue
+    printf '%s\n' "$(normalized_remote_url "$url")"
+  done | sort -u
+}
+
+# Re-read one remote, pruning refs it no longer has. Bounded, because a remote
+# that hangs must not hold cleanup open forever; a timeout is a failed read, and
+# a failed read costs the remote its vote.
+fetch_landing_remote() {  # <remote name>
+  local name=$1
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${FM_TEARDOWN_FETCH_TIMEOUT_SECS:-120}" \
+      git -C "$WT" fetch --quiet --prune "$name" >/dev/null 2>&1
+  else
+    git -C "$WT" fetch --quiet --prune "$name" >/dev/null 2>&1
+  fi
+}
+
+# Resolve, once per run, which of the worktree's remotes count and refresh them.
+# Sets FM_LANDING_REMOTES (the names that count), FM_LANDING_REMOTES_UNREADABLE
+# (the ones that would have counted but could not be re-read) and
+# FM_LANDING_REMOTES_UNUSABLE (the ones whose name cannot be used as a ref
+# selector). The last two are named in the refusal, so an operator sees which
+# remotes were left out and why rather than only that the check said no.
+resolve_landing_remotes() {
+  local registered name url norm remotes='' unreadable='' unusable=''
+  [ "$FM_LANDING_REMOTES_RESOLVED" = 1 ] && return 0
+  FM_LANDING_REMOTES_RESOLVED=1
+  registered=$(project_registered_remote_urls)
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    # A remote name is used below as a `git log --remotes=<glob>` pattern. A name
+    # carrying glob metacharacters would select refs it does not own, so it is
+    # dropped rather than guessed at.
+    case "$name" in
+      *[!A-Za-z0-9._-]*) unusable="$unusable $name" ; continue ;;
+    esac
+    url=$(remote_effective_url "$WT" "$name") || continue
+    [ -n "$url" ] || continue
+    norm=$(normalized_remote_url "$url")
+    printf '%s\n' "$registered" | grep -qxF -- "$norm" || continue
+    if fetch_landing_remote "$name"; then
+      remotes="$remotes $name"
+    else
+      unreadable="$unreadable $name"
+    fi
+  done <<EOF
+$(git -C "$WT" remote 2>/dev/null)
+EOF
+  FM_LANDING_REMOTES=${remotes# }
+  FM_LANDING_REMOTES_UNREADABLE=${unreadable# }
+  FM_LANDING_REMOTES_UNUSABLE=${unusable# }
+}
+
+# The committed work that no counted remote has, in the requested `git log`
+# format. Returns non-zero when git could not answer, which every caller treats
+# exactly as it treated a failed `git log` before.
+commits_not_on_landing_remotes() {  # <git log format flag>
+  local fmt=$1 name
+  local -a not=()
+  resolve_landing_remotes
+  for name in $FM_LANDING_REMOTES; do
+    not+=("--remotes=$name")
+  done
+  git -C "$WT" log "$fmt" HEAD --not ${not[@]+"${not[@]}"} -- 2>/dev/null
+}
+
+# Names the registered remotes whose refs were left out of the test, or prints
+# nothing when every one of them answered and counted.
+unreadable_remotes_note() {
+  if [ -n "$FM_LANDING_REMOTES_UNREADABLE" ]; then
+    printf 'not counted, because these remotes could not be re-read: %s\n' \
+      "$FM_LANDING_REMOTES_UNREADABLE"
+  fi
+  if [ -n "$FM_LANDING_REMOTES_UNUSABLE" ]; then
+    printf 'not counted, because these remote names cannot select refs: %s\n' \
+      "$FM_LANDING_REMOTES_UNUSABLE"
+  fi
+}
 
 default_branch() {
   local ref branch
@@ -329,7 +502,7 @@ unpushed_patches_are_in_pr_head() {
       | sort -u
   ) || return 1
   [ -n "$pr_patch_ids" ] || return 1
-  unpushed=$(git -C "$WT" log --format=%H HEAD --not --remotes -- 2>/dev/null) || return 1
+  unpushed=$(commits_not_on_landing_remotes --format=%H) || return 1
   [ -n "$unpushed" ] || return 1
   while IFS= read -r commit; do
     [ -n "$commit" ] || continue
@@ -395,10 +568,10 @@ content_in_default() {
 }
 
 # Has the worktree's committed work actually LANDED, though its commits are not
-# reachable from any remote-tracking branch? True when a merged PR proves the
-# current local work is contained in the PR head, OR the content is already in the
-# default branch (fallback, which also covers the no-PR and gh-error paths). False
-# only for genuinely unlanded work.
+# reachable from a refreshed remote-tracking branch of any counted remote? True
+# when a merged PR proves the current local work is contained in the PR head, OR
+# the content is already in the default branch (fallback, which also covers the
+# no-PR and gh-error paths). False only for genuinely unlanded work.
 work_is_landed() {
   local branch=$1
   pr_is_merged "$branch" && return 0
@@ -786,6 +959,11 @@ validate_worktree_teardown_safety() {
   case "$KIND" in
     secondmate|scout) return 0 ;;
   esac
+  # Resolve and refresh the counted remotes HERE, in this shell. The unpushed
+  # query below runs in a command substitution, and a subshell's answer about
+  # which remotes could not be re-read would die with it - leaving a refusal that
+  # cannot say why it did not trust the refs it saw.
+  resolve_landing_remotes
 
   if ! dirty_raw=$(git -C "$WT" status --porcelain 2>/dev/null); then
     if worktree_safety_blocked_by_lock "uncommitted changes"; then
@@ -804,7 +982,7 @@ validate_worktree_teardown_safety() {
     | grep -vE '^(\?\? (\.claude/|\.fm-grok-turnend$)|.. \.claude/settings\.fm-task\.json$)' \
     | head -1 || true)
 
-  if ! unpushed_raw=$(git -C "$WT" log --oneline HEAD --not --remotes -- 2>/dev/null); then
+  if ! unpushed_raw=$(commits_not_on_landing_remotes --oneline); then
     if worktree_safety_blocked_by_lock "commits not on a remote"; then
       return "$TEARDOWN_WORKTREE_SAFETY_LOCK_BLOCKED"
     fi
@@ -826,9 +1004,10 @@ validate_worktree_teardown_safety() {
     fi
     unmerged=$(printf '%s\n' "$unmerged_raw" | head -5)
     if [ -n "$dirty" ] || [ -n "$unmerged" ]; then
-      echo "REFUSED: local-only worktree $WT has work not yet merged into $DEFAULT and not on any remote." >&2
+      echo "REFUSED: local-only worktree $WT has work not yet merged into $DEFAULT and not on a remote this project publishes to." >&2
       [ -n "$dirty" ] && echo "uncommitted changes present" >&2
       [ -n "$unmerged" ] && printf 'commits not yet on %s:\n%s\n' "$DEFAULT" "$unmerged" >&2
+      unreadable_remotes_note >&2
       echo "Merge the branch into local $DEFAULT first (bin/fm-merge-local.sh after the captain approves), or push to a fork/remote, or get the captain's explicit OK to discard, then --force." >&2
       return 1
     fi
@@ -844,8 +1023,9 @@ validate_worktree_teardown_safety() {
       TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY=$branch
     fi
     if ! work_is_landed "$branch"; then
-      echo "REFUSED: worktree $WT has work not on any remote and not landed." >&2
+      echo "REFUSED: worktree $WT has work not on a remote this project publishes to and not landed." >&2
       printf 'unpushed commits:\n%s\n' "$unpushed" >&2
+      unreadable_remotes_note >&2
       echo "Push the branch, land its PR, or get the captain's explicit OK to discard, then --force." >&2
       return 1
     fi

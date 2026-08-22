@@ -2,10 +2,12 @@
 # Tests for bin/fm-teardown.sh's landed-work safety and stale-lock recovery.
 #
 # The check refuses to tear down a worktree whose work has not LANDED, because
-# treehouse return hard-resets the worktree. "Landed" means reachable from a remote
-# OR - for a normal ship task whose commits are not so reachable - its PR is merged
-# and GitHub reports a PR head that contains the current local work, or its content
-# is already in the up-to-date default branch.
+# treehouse return hard-resets the worktree. "Landed" means reachable from a COUNTED
+# remote - one the project is registered against, never the validation pipeline's own
+# local mirror, and re-read from the remote with --prune before the test - OR, for a
+# normal ship task whose commits are not so reachable, its PR is merged and GitHub
+# reports a PR head that contains the current local work, or its content is already in
+# the up-to-date default branch.
 #
 # Covers three fixes:
 #   - local-only fork-remote: a fork IS a remote, so fork-pushed upstream-
@@ -55,6 +57,16 @@
 #   (cc) repository-tracked .claude/settings.local.json         -> KEPT
 #   (dd) legacy hook whose tracked-ness git cannot answer       -> KEPT
 #   (ee) Codex per-task signal directory                         -> REMOVED
+#
+# Landed-proof narrowing (both failure modes reproduced 2026-08-21 before the fix):
+#   (ff) work only on the validation pipeline's local mirror   -> REFUSE (mirror)
+#   (gg) branch deleted on the remote after the last fetch     -> REFUSE (stale ref)
+#   (hh) a registered remote that cannot be re-read            -> REFUSE, and say so
+#   (ii) a relocated pipeline mirror named by NM_HOME          -> REFUSE (mirror)
+# The same narrowing must still ACCEPT work that really landed, or it is an outage
+# rather than a guard:
+#   (jj) branch on the remote, no cached ref for it             -> ALLOW (re-read)
+#   (kk) pipeline mirror registered AND branch on origin        -> ALLOW (everyday)
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -197,6 +209,31 @@ add_fork_with_pushed_branch() {
   # so refs/remotes/fork/fm-task-x1 is visible from the worktree (shared object db).
   git -C "$case_dir/wt" push -q fork fm/task-x1
   git -C "$case_dir/project" fetch -q fork
+}
+
+# Add the validation pipeline's own scratch mirror as a remote and push the task
+# branch to it, exactly as `no-mistakes init` plus a pipeline run leaves a project:
+# a bare repository under the pipeline's repos root that never reaches the forge.
+# The branch is then on a remote by git's reckoning, and on no hosting service at
+# all. Args: case_dir
+add_pipeline_mirror_with_pushed_branch() {
+  local case_dir=$1 mirror
+  mirror="$case_dir/.no-mistakes/repos/6e487fc7bf03.git"
+  mkdir -p "$(dirname "$mirror")"
+  git init -q --bare "$mirror"
+  git -C "$case_dir/project" remote add no-mistakes "$mirror"
+  git -C "$case_dir/wt" push -q no-mistakes fm/task-x1
+  git -C "$case_dir/project" fetch -q no-mistakes
+}
+
+# Push the task branch to origin, fetch it so the remote-tracking ref exists, then
+# delete the branch on the remote itself. The tracking ref left behind is stale:
+# it names work the remote no longer has. Args: case_dir
+push_then_delete_branch_on_origin() {
+  local case_dir=$1
+  git -C "$case_dir/wt" push -q origin fm/task-x1
+  git -C "$case_dir/project" fetch -q origin
+  git -C "$case_dir/origin.git" update-ref -d refs/heads/fm/task-x1
 }
 
 # Commit a real file change on the worktree's task branch (unlike wt_commit, which
@@ -1534,7 +1571,156 @@ test_herdr_projection_teardown_retains_journal_when_close_unconfirmed() {
   pass "herdr projection teardown retains the stale journal and attempts no workspace cleanup when exact-pane close is unconfirmed"
 }
 
+test_pipeline_mirror_only_refuses() {
+  local case_dir rc
+  case_dir=$(make_case mirror-only)
+  write_meta "$case_dir" no-mistakes ship
+  # Real content, so the content-in-default fallback cannot call it landed.
+  wt_commit_file "$case_dir" mirror.txt "only on the pipeline mirror" "mirror-only work"
+  add_pipeline_mirror_with_pushed_branch "$case_dir"
+
+  # The work really is on that mirror and really is nowhere else.
+  git -C "$case_dir/project" rev-parse --verify -q refs/remotes/no-mistakes/fm/task-x1 >/dev/null \
+    || fail "mirror-only: the mirror remote-tracking ref was not created"
+  ! git -C "$case_dir/origin.git" rev-parse --verify -q refs/heads/fm/task-x1 >/dev/null \
+    || fail "mirror-only: the branch reached origin, so this case proves nothing"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "mirror-only: teardown must refuse work that reached only the pipeline mirror"
+  grep -q REFUSED "$case_dir/stderr" || fail "mirror-only: no REFUSED line in stderr"
+  pass "work present only on the validation pipeline's local mirror is refused"
+}
+
+test_branch_deleted_on_remote_after_fetch_refuses() {
+  local case_dir rc
+  case_dir=$(make_case remote-deleted)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" gone.txt "pushed, then deleted upstream" "deleted-upstream work"
+  push_then_delete_branch_on_origin "$case_dir"
+
+  # The stale tracking ref is still here, which is exactly the trap.
+  git -C "$case_dir/project" rev-parse --verify -q refs/remotes/origin/fm/task-x1 >/dev/null \
+    || fail "remote-deleted: the stale tracking ref is gone, so this case proves nothing"
+  ! git -C "$case_dir/origin.git" rev-parse --verify -q refs/heads/fm/task-x1 >/dev/null \
+    || fail "remote-deleted: the branch still exists on the remote, so this case proves nothing"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "remote-deleted: teardown must refuse work the remote no longer has"
+  grep -q REFUSED "$case_dir/stderr" || fail "remote-deleted: no REFUSED line in stderr"
+  pass "work whose branch was deleted on the remote after the last fetch is refused"
+}
+
+test_unreadable_remote_is_not_trusted() {
+  local case_dir rc
+  case_dir=$(make_case unreadable-remote)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" unreadable.txt "pushed, remote now unreachable" "unreadable-remote work"
+  git -C "$case_dir/wt" push -q origin fm/task-x1
+  git -C "$case_dir/project" fetch -q origin
+  # The remote itself is gone, so nothing can be confirmed there any more. The
+  # cached tracking ref still says the branch is on it.
+  rm -rf "$case_dir/origin.git"
+  git -C "$case_dir/project" rev-parse --verify -q refs/remotes/origin/fm/task-x1 >/dev/null \
+    || fail "unreadable-remote: the cached tracking ref is gone, so this case proves nothing"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "unreadable-remote: teardown must refuse when no remote could be re-read"
+  grep -q REFUSED "$case_dir/stderr" || fail "unreadable-remote: no REFUSED line in stderr"
+  assert_grep "could not be re-read: origin" "$case_dir/stderr" \
+    "unreadable-remote: the refusal did not name the remote whose refs were not trusted"
+  pass "a remote that cannot be re-read supplies no landing evidence, and the refusal says so"
+}
+
+test_relocated_pipeline_mirror_only_refuses() {
+  local case_dir rc mirror
+  case_dir=$(make_case mirror-relocated)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" relocated.txt "only on a relocated mirror" "relocated-mirror work"
+  # An install whose state lives somewhere other than ~/.no-mistakes: the path
+  # shape no longer gives it away, and NM_HOME is what names it.
+  mirror="$case_dir/nm-elsewhere/repos/6e487fc7bf03.git"
+  mkdir -p "$(dirname "$mirror")"
+  git init -q --bare "$mirror"
+  git -C "$case_dir/project" remote add no-mistakes "$mirror"
+  git -C "$case_dir/wt" push -q no-mistakes fm/task-x1
+  git -C "$case_dir/project" fetch -q no-mistakes
+
+  set +e
+  NM_HOME="$case_dir/nm-elsewhere" \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "mirror-relocated: teardown must refuse work that reached only a relocated pipeline mirror"
+  grep -q REFUSED "$case_dir/stderr" || fail "mirror-relocated: no REFUSED line in stderr"
+  pass "a relocated pipeline mirror named by NM_HOME is refused as landing evidence too"
+}
+
+test_branch_on_remote_but_never_fetched_allows() {
+  local case_dir rc
+  case_dir=$(make_case never-fetched)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" pushed.txt "on the remote right now" "pushed work"
+  git -C "$case_dir/wt" push -q origin fm/task-x1
+  # The remote has the branch; this clone has no cached ref saying so, which is
+  # what a clone that pushed from elsewhere, or pruned, or never fetched looks like.
+  git -C "$case_dir/project" update-ref -d refs/remotes/origin/fm/task-x1
+  git -C "$case_dir/origin.git" rev-parse --verify -q refs/heads/fm/task-x1 >/dev/null \
+    || fail "never-fetched: the branch is not on the remote, so this case proves nothing"
+  ! git -C "$case_dir/project" rev-parse --verify -q refs/remotes/origin/fm/task-x1 >/dev/null \
+    || fail "never-fetched: a cached ref survived, so this case proves nothing"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "never-fetched: teardown must accept work the remote really has"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "never-fetched: teardown printed a REFUSED line"
+  pass "work the remote holds is torn down even when no cached ref said so (the re-read accepts too)"
+}
+
+test_pipeline_mirror_alongside_origin_allows() {
+  local case_dir rc
+  case_dir=$(make_case mirror-and-origin)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" shipped.txt "pushed to both" "shipped work"
+  # The everyday shape of a no-mistakes ship task: the pipeline mirror is a
+  # registered remote AND the branch reached origin. Excluding the mirror must
+  # not cost the ordinary case its teardown.
+  add_pipeline_mirror_with_pushed_branch "$case_dir"
+  git -C "$case_dir/wt" push -q origin fm/task-x1
+  git -C "$case_dir/project" fetch -q origin
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "mirror-and-origin: teardown must accept work that reached origin"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "mirror-and-origin: teardown printed a REFUSED line"
+  pass "an excluded pipeline mirror does not stop ordinary origin-pushed work being torn down"
+}
+
 test_local_only_fork_remote_allows
+test_pipeline_mirror_only_refuses
+test_branch_deleted_on_remote_after_fetch_refuses
+test_unreadable_remote_is_not_trusted
+test_relocated_pipeline_mirror_only_refuses
+test_branch_on_remote_but_never_fetched_allows
+test_pipeline_mirror_alongside_origin_allows
 test_teardown_prompts_tasks_axi_done_when_compatible
 test_teardown_manual_backend_prompts_hand_edit_even_when_tasks_axi_present
 test_local_only_truly_unpushed_refuses
