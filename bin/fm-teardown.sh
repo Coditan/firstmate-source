@@ -219,10 +219,16 @@ url_is_pipeline_mirror() {  # <url>
 }
 
 # The remote URLs this project is registered against: every remote configured on
-# the project clone except the pipeline's mirror. Read from the PROJECT, so a
-# remote added inside a disposable worktree cannot appoint itself as proof. Falls
-# back to the worktree's own remotes only when the project directory is not a
-# readable repository - for a linked worktree that is the same set anyway.
+# the project clone except the pipeline's mirror. Reading them from the PROJECT
+# uses the project's own record of where it publishes. A linked worktree shares
+# that remote configuration, so this is not a trust boundary against a worker
+# that deliberately adds a remote and pushes to it. This is a confused-worker
+# check, like bin/fm-gate-refuse-lib.sh, not an adversarial one. It establishes
+# that landed work is on a project-registered remote matched by effective URL,
+# never merely on the pipeline mirror, and confirmed by re-reading the remote
+# instead of trusting a cached ref. Falls back to the worktree's own remotes only
+# when the project directory is not a readable repository - for a linked
+# worktree that is the same set anyway.
 project_registered_remote_urls() {
   local dir name url
   dir=$PROJ
