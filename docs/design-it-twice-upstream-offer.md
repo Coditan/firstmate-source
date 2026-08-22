@@ -185,7 +185,8 @@ The issue-channel changes from the approved pull-request form are the ones recor
 
 Two sentences were added at the top explaining why it arrives as an issue, and nothing else changed.
 
-    A pull request for this was prepared and pushed, but this repository limits opening pull requests to collaborators, so it arrives as an issue instead. The branch is public and ready to take however you prefer: https://github.com/Freudator86/skills/tree/design-it-twice-entry-test
+    A pull request for this was prepared and pushed, but this repository limits opening pull requests to collaborators, so it arrives as an issue instead.
+    The branch is public and ready to take however you prefer: https://github.com/Freudator86/skills/tree/design-it-twice-entry-test
 
     Thank you for these skills. This proposal exists because `codebase-design` did
     its job: it told me to design the interface more than once, and that is the only
@@ -234,13 +235,14 @@ Two sentences were added at the top explaining why it arrives as an issue, and n
     so the page and issue 564 both read as if it were still there. I have left that
     correction on the branch; say the word and I will split it out.
 
-    A changeset and the docs-page re-sync are both on the branch, per `CLAUDE.md`. If the
-    gate reads too strong, I would rather weaken it than drop it.
+    A changeset and the docs-page re-sync are both on the branch, per `CLAUDE.md`.
+    If the gate reads too strong, I would rather weaken it than drop it.
 
-## The exact command that would open it
+## The prepared pull-request command sequence
 
-Nothing below has been run.
-The fork step needs an authenticated GitHub identity, and which identity is the captain's decision.
+This is the pull-request sequence as originally prepared, kept as the record of what was attempted rather than as instructions to follow.
+Steps 1 to 3 ran, step 4 was refused, and the issue command recorded below the block is what actually published the contribution.
+The refusal detail is recorded under "Steps 1 to 3 ran on 2026-08-22 and step 4 could not."
 
     # 1. Fork under the identity the captain names, and clone the fork.
     gh repo fork mattpocock/skills --clone=true --remote=true --fork-name=skills
@@ -275,12 +277,15 @@ That is not a permissions defect on this seat, and it was proved upstream-side b
 What ran instead was one `gh-axi issue create` against `mattpocock/skills`, carrying this page's covering note with the two sentences the channel itself forced.
 The issue path was measured open rather than assumed: issues 937 and 938 were opened by non-collaborators within the half hour before, and the repository has issues enabled with 383 of them open.
 
-## What the captain decided, and the one gate still standing
+## What the captain decided and what happened
 
 Decided 2026-08-21, recorded as `fm-codebase-design-calls-panel-decision-upstream-pr-identity-and-wording` and `fm-codebase-design-calls-panel-decision-upstream-pr-no-public-fleet-mention`:
 
-**Channel:** a public pull request.
-Settled earlier and unchanged.
+**Channel:** first a public pull request, then the issue route that actually carried it.
+On 2026-08-21 he settled on a public pull request.
+That route turned out to be closed by the repository owner rather than by anything on this side.
+On 2026-08-22 he approved sending it as an issue instead, in one word, "ok", recorded as `fm-codebase-design-calls-panel-decision-upstream-pr-cannot-be-opened`.
+The channel-revisited entry below carries the exact change from the approved pull-request form to the published issue form.
 
 **Under what identity:** first an HLR account, then the personal account that actually existed on this seat.
 On 2026-08-21 he chose an HLR account, not a personal one, and his answer on the board was `hlr-show-wording`, which carried the show-the-wording gate with it.
@@ -293,7 +298,7 @@ The contribution went out under `Freudator86`, and the commits on the offered br
 All three proposed changes are untouched, and so is the honest attribution of where the independence claim comes from; it is simply no longer sourced to a described estate.
 
 **Two flags were deliberately not raised with him as decisions, and stay as they are.**
-The note cites his own issue numbers 449 and 564 back at him, and the stale-quotation correction rides in the same pull request with an offer to split it out.
+The note cites his own issue numbers 449 and 564 back at him, and the stale-quotation correction rides with the same contribution with an offer to split it out.
 
 **The final text:** read and approved on 2026-08-22, in one word, "good".
 The approved pull-request form is preserved above.

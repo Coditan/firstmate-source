@@ -162,7 +162,7 @@ test_the_partial_adoption_is_defended_and_its_cost_is_named() {
   pass "the partial adoption is defended and its cost is named"
 }
 
-# --- the offer upstream, which is prepared and must stay unsent -------------
+# --- the offer upstream, which was published as an issue --------------------
 
 # The page said NOT SENT for as long as that was true. It is now sent, and a
 # status field that still claimed otherwise would be the defect this repository
@@ -178,8 +178,10 @@ test_the_upstream_offer_records_what_was_actually_published() {
     "the offer must record which channel carried it"
   assert_grep 'Under what identity' "$OFFER" \
     "the offer must record which identity it went out under"
-  assert_grep 'The exact command that would open it' "$OFFER" \
-    "the offer must keep the command sequence it was published by"
+  assert_grep 'The prepared pull-request command sequence' "$OFFER" \
+    "the offer must keep the command sequence that was attempted"
+  assert_grep 'Steps 1 to 3 ran, step 4 was refused, and the issue command recorded below the block is what actually published the contribution' "$OFFER" \
+    "the offer must distinguish the attempted pull-request sequence from the published issue"
   assert_grep 'The approved covering note, in pull-request form' "$OFFER" \
     "the offer must keep the covering note the captain approved"
   assert_grep 'The published issue body' "$OFFER" \
@@ -257,7 +259,13 @@ test_the_rewrite_did_not_weaken_the_three_proposed_changes() {
   pass "all three proposed changes survived the wording rewrite"
 }
 
-test_the_settled_decisions_and_the_remaining_gate_are_recorded() {
+test_the_settled_decisions_and_the_published_outcome_are_recorded() {
+  assert_grep 'What the captain decided and what happened' "$OFFER" \
+    "the offer must present the decisions as a completed outcome"
+  assert_grep 'On 2026-08-21 he settled on a public pull request' "$OFFER" \
+    "the offer must record the first channel the captain chose"
+  assert_grep 'On 2026-08-22 he approved sending it as an issue instead, in one word, "ok"' "$OFFER" \
+    "the offer must record the issue-channel override"
   assert_grep 'On 2026-08-21 he chose an HLR account, not a personal one' "$OFFER" \
     "the offer must record the first identity the captain chose"
   assert_grep 'hlr-show-wording' "$OFFER" \
@@ -275,7 +283,7 @@ test_the_settled_decisions_and_the_remaining_gate_are_recorded() {
   # He was not asked about these two, so neither may be recorded as decided.
   assert_grep 'Two flags were deliberately not raised with him as decisions' "$OFFER" \
     "the offer must not present unraised flags as answered"
-  pass "the settled decisions, his words, and the remaining gate are recorded"
+  pass "the settled decisions, his words, and the published outcome are recorded"
 }
 
 # --- reachability -----------------------------------------------------------
@@ -311,5 +319,5 @@ test_the_closed_pull_request_route_is_recorded_with_its_cause
 test_the_offer_proposes_no_dependency_on_this_fleet
 test_the_covering_note_makes_no_public_claim_about_an_agent_fleet
 test_the_rewrite_did_not_weaken_the_three_proposed_changes
-test_the_settled_decisions_and_the_remaining_gate_are_recorded
+test_the_settled_decisions_and_the_published_outcome_are_recorded
 test_the_skill_is_reachable_from_the_instruction_surface
