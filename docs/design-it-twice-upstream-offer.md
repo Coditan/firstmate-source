@@ -1,10 +1,11 @@
 # Upstream offer: an entry test and an independence warning for DESIGN-IT-TWICE.md
 
-**Status: prepared, NOT SENT.**
-Opening a pull request on a stranger's public repository is outward-facing and not cheaply undone, so this page holds the whole contribution and nothing has left this machine.
-The captain approved the intent on 2026-08-20, and on 2026-08-21 he settled the channel and the identity and ordered one rewrite of the wording.
-One gate remains and it is his: **he reads the final text before anything is published.**
-The decisions, and what is still open, are stated at the bottom of this page.
+**Status: SENT on 2026-08-22, as an issue rather than a pull request.**
+`https://github.com/mattpocock/skills/issues/939`, opened by `Freudator86`, carrying the approved text.
+The branch it offers is public at `https://github.com/Freudator86/skills/tree/design-it-twice-entry-test`, commit `53f7cf6`.
+
+Every gate was passed before it went: the captain approved the intent on 2026-08-20, settled the identity and ordered the wording rewrite on 2026-08-21, read the rewritten text and approved it on 2026-08-22, and approved the change of channel the same day.
+The decisions, and the refusal that moved the channel, are recorded at the bottom of this page.
 
 This is the reciprocal half of [`design-it-twice-provenance.md`](design-it-twice-provenance.md).
 This fleet adopted one file of Matt Pocock's `codebase-design` skill and wired its fan-out to the model panel, and two of the things that had to be added are not local at all.
@@ -199,7 +200,17 @@ The fork step needs an authenticated GitHub identity, and which identity is the 
       --title "codebase-design: gate the design-it-twice fan-out and name what it cannot guarantee" \
       --body-file /tmp/design-it-twice-note.md
 
-`gh-axi` is this fleet's sanctioned GitHub route and covers `pr` and `repo`; check its current help before running the fork step, because a fork of a repository this fleet does not own is not an operation it has performed before.
+`gh-axi` is this fleet's sanctioned GitHub route and covers `pr`, `issue`, and `repo`.
+
+**Steps 1 to 3 ran on 2026-08-22 and step 4 could not.**
+The fork, the branch, and commit `53f7cf6` are public, authored under the captain's personal GitHub identity rather than the repository's default `hlr` committer, because an HLR address in public commit metadata would have re-added the signal the rewrite removed.
+Step 4 was refused three ways - `gh-axi pr create` with an explicit head, the same from inside the fork, and the REST create-PR endpoint - while the same credentials read the repository and pushed to the fork.
+The cause is the owner's own setting, in GitHub's words to the captain on the compare page: "An owner of this repository has limited the ability to open a pull request to users that are collaborators on this repository."
+That is not a permissions defect on this seat, and it was proved upstream-side by opening and immediately closing a pull request on the fork itself, which succeeded.
+
+**Do not retry the pull request by any route.**
+What ran instead was one `gh-axi issue create` against `mattpocock/skills`, carrying this page's covering note with the two sentences the channel itself forced.
+The issue path was measured open rather than assumed: issues 937 and 938 were opened by non-collaborators within the half hour before, and the repository has issues enabled with 383 of them open.
 
 ## What the captain decided, and the one gate still standing
 
@@ -217,8 +228,12 @@ All three proposed changes are untouched, and so is the honest attribution of wh
 **Two flags were deliberately not raised with him as decisions, and stay as they are.**
 The note cites his own issue numbers 449 and 564 back at him, and the stale-quotation correction rides in the same pull request with an offer to split it out.
 
-**Still open, and the only thing between this page and publication:** his read of the final text.
+**The final text:** read and approved on 2026-08-22, in one word, "good".
+It went out unchanged.
 
-**Not cheaply undone:** a closed pull request stays visible, and its author stays attributed, which is why the gate is a read and not a nod.
+**The channel, revisited the same day:** approved in one word, "ok", after the pull-request route turned out to be closed by the repository owner rather than by anything on this side.
+Only two sentences of the approved note changed, and only because the channel forced them: the one that said the stale-quotation correction sits "in this PR" now points at the branch, and the one about the changeset and the docs re-sync now says both are on the branch.
+Two sentences were added at the top saying why it arrives as an issue.
+Nothing else moved: the proposal is unsoftened, both issue-number citations stand, and the sentence disclaiming the local mechanism as the proposal stands.
 
-Until he approves the text, this page is the whole contribution and it stays here.
+**Not cheaply undone, and now done:** the fork, the branch, and the issue are public and attributed, which is why every one of those gates was a read rather than a nod.

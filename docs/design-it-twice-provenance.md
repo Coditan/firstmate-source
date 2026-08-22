@@ -156,8 +156,8 @@ Every item below is a capability the original has and this adoption does not.
 The entry test and the independence warning are not fleet-specific, and this adoption is the reason we know they are missing.
 [`docs/design-it-twice-upstream-offer.md`](design-it-twice-upstream-offer.md) holds the prepared contribution: the proposed prose, the covering note, the exact command that would open it, and the captain's decisions on it.
 It is written to stay implementation-neutral, because an upstream skill cannot depend on one fleet's script, and its covering note is written to make no public claim about who operates what.
-On 2026-08-21 he settled the channel and the identity and ordered that second rewrite; his read of the final text is the one gate left.
-It is **not sent**.
+He settled the identity and ordered that second rewrite on 2026-08-21, approved the rewritten text on 2026-08-22, and approved moving the channel the same day when the repository turned out to restrict pull requests to its own collaborators.
+It was **sent on 2026-08-22** as `https://github.com/mattpocock/skills/issues/939`, offering the public branch at `https://github.com/Freudator86/skills/tree/design-it-twice-entry-test`.
 
 ## Repeating this comparison
 

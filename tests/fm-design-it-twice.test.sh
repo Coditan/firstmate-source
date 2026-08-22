@@ -164,18 +164,38 @@ test_the_partial_adoption_is_defended_and_its_cost_is_named() {
 
 # --- the offer upstream, which is prepared and must stay unsent -------------
 
-test_the_upstream_offer_is_complete_and_marked_unsent() {
-  assert_present "$OFFER" "the prepared upstream offer is missing"
-  assert_grep 'NOT SENT' "$OFFER" "the upstream offer must be marked unsent"
-  assert_grep 'the one gate still standing' "$OFFER" \
-    "the offer must name the gate that still stands between it and publication"
+# The page said NOT SENT for as long as that was true. It is now sent, and a
+# status field that still claimed otherwise would be the defect this repository
+# re-measures records for. What replaces the unsent assertion is the published
+# address, so the page can never go back to describing an intention.
+test_the_upstream_offer_records_what_was_actually_published() {
+  assert_present "$OFFER" "the upstream offer record is missing"
+  assert_no_grep 'NOT SENT' "$OFFER" \
+    "the offer was sent on 2026-08-22 and must not still describe itself as unsent"
+  assert_grep 'https://github.com/mattpocock/skills/issues/939' "$OFFER" \
+    "the offer must record the address it was actually published at"
+  assert_grep 'as an issue rather than a pull request' "$OFFER" \
+    "the offer must record which channel carried it"
   assert_grep 'Under what identity' "$OFFER" \
-    "the offer must record which identity it would go out under"
+    "the offer must record which identity it went out under"
   assert_grep 'The exact command that would open it' "$OFFER" \
-    "the offer must carry the exact command that would publish it"
+    "the offer must keep the command sequence it was published by"
   assert_grep 'The covering note, which is the pull-request body' "$OFFER" \
-    "the offer must carry the covering note"
-  pass "the upstream offer is complete, has a command, and is marked unsent"
+    "the offer must keep the covering note it published"
+  pass "the offer records the address, the channel, and the identity it went out under"
+}
+
+# The pull-request route is closed by the repository owner, not by anything on
+# this side. Recording the cause verbatim is what stops a later session reading
+# the absent pull request as an unfinished task and retrying it.
+test_the_closed_pull_request_route_is_recorded_with_its_cause() {
+  assert_grep '**Do not retry the pull request by any route.**' "$OFFER" \
+    "the page must forbid retrying the closed channel"
+  assert_grep 'An owner of this repository has limited the ability to open a pull request to users that are collaborators on this repository' "$OFFER" \
+    "the page must carry GitHub's own words for why the pull-request route is closed"
+  assert_grep 'proved upstream-side by opening and immediately closing a pull request on the fork itself' "$OFFER" \
+    "the page must record how the cause was proved rather than assumed"
+  pass "the closed pull-request route is recorded with the cause that closed it"
 }
 
 # An upstream skill runs in repositories that have never heard of this fleet, so
@@ -239,8 +259,8 @@ test_the_settled_decisions_and_the_remaining_gate_are_recorded() {
     "the offer must record the identity the captain chose"
   assert_grep 'hlr-show-wording' "$OFFER" \
     "the offer must record his answer, which is the identity and the gate in one"
-  assert_grep 'his read of the final text' "$OFFER" \
-    "the offer must record that his read of the final text is the last gate"
+  assert_grep 'read and approved on 2026-08-22, in one word, "good"' "$OFFER" \
+    "the offer must record his approval of the final text"
   assert_grep 'not say that in pubnlic' "$OFFER" \
     "his quoted ruling must stay exactly as he wrote it"
   assert_grep 'The spelling in that quotation is his and is reproduced as he wrote it' "$OFFER" \
@@ -279,7 +299,8 @@ test_the_exercise_decides_nothing_and_routes_the_shape_choice
 test_the_skill_states_what_it_does_not_cover
 test_the_adoption_carries_its_licence_notice_and_accounting
 test_the_partial_adoption_is_defended_and_its_cost_is_named
-test_the_upstream_offer_is_complete_and_marked_unsent
+test_the_upstream_offer_records_what_was_actually_published
+test_the_closed_pull_request_route_is_recorded_with_its_cause
 test_the_offer_proposes_no_dependency_on_this_fleet
 test_the_covering_note_makes_no_public_claim_about_an_agent_fleet
 test_the_rewrite_did_not_weaken_the_three_proposed_changes
