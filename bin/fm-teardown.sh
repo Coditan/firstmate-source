@@ -170,10 +170,16 @@ MODE=$(grep '^mode=' "$META" | cut -d= -f2- || true)
 # are dropped rather than trusted, so an unreadable remote makes teardown refuse
 # instead of quietly reporting work as landed that nobody could confirm.
 #
-# Nothing here widens what counts. A fork remote still counts, because a fork is
-# a repository the project is registered against and a fork-pushed contribution
-# really has left this machine; that behavior is covered by the fork case in
-# tests/fm-teardown.test.sh and is deliberately untouched.
+# Nothing here widens what counts, and nothing here narrows it into an outage: a
+# fork remote still counts, because a fork is a repository the project is
+# registered against and a fork-pushed contribution really has left this machine.
+# The re-read also ACCEPTS work no cached ref mentioned, which the check refused
+# before. tests/fm-teardown.test.sh covers both directions.
+#
+# Nothing in this block is specific to one hosting service. A self-hosted forge
+# is simply another remote the project is registered against, matched by the same
+# effective URL, so extending the landed proof to read PR state from that forge
+# is a change to pr_is_merged and nothing here.
 FM_LANDING_REMOTES_RESOLVED=0
 FM_LANDING_REMOTES=
 FM_LANDING_REMOTES_UNREADABLE=
