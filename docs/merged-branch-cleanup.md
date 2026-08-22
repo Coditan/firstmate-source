@@ -13,7 +13,7 @@ This document names all three, records which one firstmate's own code owns, and 
 | # | Producer | Owner | Status |
 |:-:|---|---|---|
 | 1 | The forge does not delete the head branch on merge | Per-repository setting | Not code; see below |
-| 2 | Firstmate's merge path never asked the forge to delete it | `bin/fm-pr-merge.sh` | Fixed |
+| 2 | Firstmate's merge path may not ask the forge to delete it | `bin/fm-pr-merge.sh` | Fixed on GitHub; unavailable on Forgejo |
 | 3 | The validation pipeline cannot delete its own mirror branch | The `no-mistakes` binary | Not fixed, and deliberately not half-built |
 
 Fixing one does not fix the others.
@@ -45,8 +45,9 @@ Set it one repository at a time, on the captain's word for that repository, and 
 
 ## 2. Firstmate's merge path
 
-`bin/fm-pr-merge.sh` is the one path firstmate uses to merge a task's pull request, and it now asks the forge to delete the head branch as part of the merge.
-Its header owns the exact flags and the caller's opt-out; do not restate them here.
+`bin/fm-pr-merge.sh` is the one path firstmate uses to merge a task's pull request.
+On GitHub it asks the forge to delete the head branch as part of the merge; on Forgejo the client provides no branch deletion, so the helper reports that absence and leaves the branch in place rather than emulating deletion with a separate action.
+Its header owns the exact flags, refusals, and caller choices; do not restate them here.
 
 The safety properties that matter are properties of the merge command itself, verified against `gh` 2.96.0 by reading `pkg/cmd/pr/merge/merge.go` at tag `v2.96.0`:
 
@@ -55,11 +56,12 @@ The safety properties that matter are properties of the merge command itself, ve
 - A head branch the forge already deleted under `delete_branch_on_merge` is tolerated as success (404 and 422 are treated as the goal already achieved), so producers 1 and 2 do not fight.
 - No local branch is touched, because `CanDeleteLocalBranch` is set to `!cmd.Flags().Changed("repo")` and this path always passes `--repo`.
 
-Firstmate issues no branch-delete command of its own anywhere in this path.
+Firstmate issues no separate branch-delete command of its own anywhere in either provider path.
 That is the whole reason the properties above are sufficient: there is no second code path that could delete a branch when the merge did not happen.
 
 This is worth having in addition to producer 1, not instead of it.
-It covers repositories where the setting cannot be changed, and it makes the intent visible at the call site rather than resting on a forge preference nobody can see from the code.
+On GitHub it covers repositories where the setting cannot be changed, and it makes the intent visible at the call site rather than resting on a forge preference nobody can see from the code.
+On Forgejo producer 2 remains because the merge client cannot perform branch deletion as part of the merge.
 
 ## 3. The validation pipeline's mirror, and why it is not fixed here
 
