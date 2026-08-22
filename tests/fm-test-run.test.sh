@@ -255,7 +255,7 @@ assert doc["families"] == []
 test_timing_markers_and_json() {
   local tmp fixture out json begin_n end_n summary
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-timing.XXXXXX")
-  fixture="$tmp/ok.test.sh"
+  fixture="$tmp/fm-lint.test.sh"
   out="$tmp/out.txt"
   json="$tmp/timing.json"
   cat >"$fixture" <<'SH'
@@ -270,7 +270,9 @@ SH
   end_n=$(grep -c '^FM_TEST_END ' "$out" || true)
   [ "$begin_n" -eq 1 ] || fail "expected one FM_TEST_BEGIN, got $begin_n"
   [ "$end_n" -eq 1 ] || fail "expected one FM_TEST_END, got $end_n"
-  grep -Eq '^FM_TEST_BEGIN .+ family=unclassified expected_gate_skip=none$' "$out" \
+  # A fixture from outside tests/ is ad-hoc, the one family no selection reaches;
+  # a tests/*.test.sh with no family is refused instead (see the guard tests).
+  grep -Eq '^FM_TEST_BEGIN .+ family=ad-hoc expected_gate_skip=none$' "$out" \
     || fail "BEGIN line missing family/expected_gate_skip: $(grep '^FM_TEST_BEGIN' "$out")"
   grep -Eq '^FM_TEST_END .+ exit=0 duration_ms=[0-9]+ gate_skip=false$' "$out" \
     || fail "END line missing exit/duration/gate_skip: $(grep '^FM_TEST_END' "$out")"
@@ -511,6 +513,9 @@ test_portable_shard_union_and_coverage_guard() {
     || fail "herdr family must include smoke"
   out=$("$RUNNER" --check-coverage)
   assert_contains "$out" "FM_TEST_COVERAGE ok" "coverage guard success marker"
+  # The same gate location owns the other two derived zero-drift guards.
+  assert_contains "$out" "FM_SCRIPT_INDEX ok" "script index guard success marker"
+  assert_contains "$out" "FM_TEST_FAMILIES ok" "test family guard success marker"
   all_count=$("$RUNNER" --list --all | wc -l | tr -d ' ')
   union_count=$(printf '%s\n' "$s1" "$s2" "$serial" "$herdr" | LC_ALL=C sort -u | wc -l | tr -d ' ')
   [ "$union_count" = "$all_count" ] \
@@ -523,6 +528,122 @@ test_portable_shard_union_and_coverage_guard() {
   [ "$first" = "tests/fm-arm-pretool-check.test.sh" ] \
     || fail "shard 1 must start with longest proven script, got $first"
   pass "portable shard union, disjointness, and coverage guard hold"
+}
+
+# A scratch tree holding only what the two derived guards read: the runner
+# itself, a docs/scripts.md index, and a tests/ directory. The lane partition
+# cannot hold here, which does not matter - both guards run before it and
+# return without reaching it.
+init_guard_scratch() {
+  local root=$1
+  mkdir -p "$root/bin" "$root/docs" "$root/tests"
+  cp "$RUNNER" "$root/bin/fm-test-run.sh"
+  chmod +x "$root/bin/fm-test-run.sh"
+  {
+    printf '# The bin/ toolbelt\n\n'
+    printf '| Script | Purpose |\n'
+    printf '| --- | --- |\n'
+    # shellcheck disable=SC2016  # Markdown backticks, not command substitution
+    printf '| `fm-test-run.sh` | The runner under test |\n'
+  } >"$root/docs/scripts.md"
+}
+
+test_script_index_guard_refuses_an_unindexed_script() {
+  local tmp root out rc
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-index-guard.XXXXXX")
+  root="$tmp/repo"
+  init_guard_scratch "$root"
+  printf '#!/usr/bin/env bash\n' >"$root/bin/fm-orphan.sh"
+
+  set +e
+  out=$("$root/bin/fm-test-run.sh" --check-coverage 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || { rm -rf "$tmp"; fail "an unindexed bin/*.sh must fail the gate, got exit 0: $out"; }
+  assert_contains "$out" "fm-orphan.sh" "the refusal must name the script with no index row"
+  assert_contains "$out" "must have a row in docs/scripts.md" "the refusal must say what is missing"
+
+  # shellcheck disable=SC2016  # Markdown backticks, not command substitution
+  printf '| `fm-orphan.sh` | Indexed now |\n' >>"$root/docs/scripts.md"
+  out=$("$root/bin/fm-test-run.sh" --check-coverage 2>&1 || true)
+  assert_contains "$out" "FM_SCRIPT_INDEX ok" "the index guard must pass once the row exists"
+
+  # The other drift direction: a row naming a file that is gone.
+  rm -f "$root/bin/fm-orphan.sh"
+  set +e
+  out=$("$root/bin/fm-test-run.sh" --check-coverage 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || { rm -rf "$tmp"; fail "a stale index row must fail the gate, got exit 0: $out"; }
+  assert_contains "$out" "not in bin/" "the refusal must name the stale row"
+  rm -rf "$tmp"
+  pass "the script index guard refuses an unindexed script and a stale row, and passes without them"
+}
+
+test_family_guard_refuses_a_test_with_no_family() {
+  local tmp root out rc
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-family-guard.XXXXXX")
+  root="$tmp/repo"
+  init_guard_scratch "$root"
+  printf '#!/usr/bin/env bash\necho "ok - fixture"\n' >"$root/tests/fm-orphan.test.sh"
+  chmod +x "$root/tests/fm-orphan.test.sh"
+
+  set +e
+  out=$("$root/bin/fm-test-run.sh" --check-coverage 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || { rm -rf "$tmp"; fail "a test with no family must fail the gate, got exit 0: $out"; }
+  assert_contains "$out" "tests/fm-orphan.test.sh" "the refusal must name the unmapped test"
+  assert_contains "$out" "there is no catch-all" "the refusal must say the catch-all is gone"
+
+  # Selecting or running it refuses too, rather than bucketing it.
+  set +e
+  out=$(cd "$root" && bin/fm-test-run.sh tests/fm-orphan.test.sh 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || { rm -rf "$tmp"; fail "running a test with no family must refuse (exit 2), got $rc: $out"; }
+  assert_contains "$out" "no test family for fm-orphan.test.sh" "the run refusal must name the test"
+
+  mv "$root/tests/fm-orphan.test.sh" "$root/tests/fm-lint.test.sh"
+  out=$("$root/bin/fm-test-run.sh" --check-coverage 2>&1 || true)
+  assert_contains "$out" "FM_TEST_FAMILIES ok" "the family guard must pass once every test is mapped"
+  rm -rf "$tmp"
+  pass "the family guard refuses an unmapped test instead of bucketing it, and passes when every test is mapped"
+}
+
+test_family_guard_refuses_a_family_with_no_stated_boundary() {
+  # A classification is only defensible while its reasoning is present, so a
+  # family the boundary block does not name is the same defect one layer up.
+  local tmp root runner out rc
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-boundary-guard.XXXXXX")
+  root="$tmp/repo"
+  mkdir -p "$root"
+  cp -a "$ROOT/bin" "$ROOT/docs" "$ROOT/tests" "$root/"
+  runner="$root/bin/fm-test-run.sh"
+
+  python3 - "$runner" <<'PY_EDIT'
+import sys
+from pathlib import Path
+p = Path(sys.argv[1])
+t = p.read_text()
+old = "    fm-backend-orca.test.sh)\n      printf '%s\\n' orca\n      ;;\n"
+assert t.count(old) == 1
+t = t.replace(old, old + "    fm-nothing-real.test.sh)\n      printf '%s\\n' source\n      ;;\n")
+old_list = "cmux\nzellij\norca\nEOF"
+assert t.count(old_list) == 1
+t = t.replace(old_list, "cmux\nzellij\norca\nsource\nEOF")
+p.write_text(t)
+PY_EDIT
+
+  set +e
+  out=$("$runner" --check-coverage 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || { rm -rf "$tmp"; fail "a family with no stated boundary must fail the gate, got exit 0: $out"; }
+  assert_contains "$out" "source" "the refusal must name the family with no boundary"
+  assert_contains "$out" "must state its boundary" "the refusal must say what is missing"
+  rm -rf "$tmp"
+  pass "the family guard refuses a family whose boundary is not stated"
 }
 
 test_jobs_requires_proven_isolated() {
@@ -720,6 +841,9 @@ test_fail_on_gate_skip_token
 test_exclude_family
 test_ci_and_docs_call_the_owner
 test_portable_shard_union_and_coverage_guard
+test_script_index_guard_refuses_an_unindexed_script
+test_family_guard_refuses_a_test_with_no_family
+test_family_guard_refuses_a_family_with_no_stated_boundary
 test_jobs_requires_proven_isolated
 test_jobs_parallel_scheduler_and_failure_propagation
 test_aggregate_json

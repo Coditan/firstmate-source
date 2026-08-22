@@ -16,8 +16,10 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-currency-round.sh` | Run this home's daily currency round, arm it on the watcher, and report a home that has stopped being checked |
 | `fm-nudge.sh` | Raise this home's off-grid fleet nudges - one watcher check with several subjects, each on its own period and its own target whose minute never lands on the five-minute grid - arm that one check, and report a schedule nothing is executing (docs/nudge-cadence.md) |
 | `fm-forge-status.sh` | Read the forge's own status page on a settable cadence, append every new reading to a durable log, wake firstmate only on a new one, arm it on the watcher, and report a watch nothing is executing (docs/forge-status-watch.md) |
+| `fm-github-inbox.sh` | Read GitHub's own notification feed on a cadence without ever marking one read, wake firstmate only for a thread addressed to this fleet, arm it on the watcher, and report a feed nothing is reading (docs/github-inbox.md) |
 | `fm-firstmate-update-check.sh` | Read-only check for relevant instruction-surface commits on the source this deployment updates from |
 | `fm-fork-sync-check.sh` | Detect unabsorbed real-upstream content in the curated fork and prefilter both sides of its commit review |
+| `fm-fleet-update-check.sh` | Answer whether this vessel runs current shared code across all three hops - own origin, the pin it carries, and that pin's age against its source - reporting a hop it could not measure as unmeasured (docs/pin-age-check.md) |
 | `fm-grossreinschiff-due.sh` | Report whether this home's weekly Thursday cleanup sweep is due, and record a completed one |
 | `fm-lint.sh`             | Single owner of firstmate's shell-lint definition: file set, config, and pinned ShellCheck version |
 | `fm-install-shellcheck.sh` | Install CI's pinned, checksum-verified ShellCheck build `fm-lint.sh` requires      |
@@ -50,6 +52,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-transcript-reduce.py` | Build this home's reduced, redacted session derivative with one of two readers selected by `--source`, writing one compressed file per session, or re-verify an existing one to zero through the decompressor; refuses a source that disagrees with the material's shape, or a missing compressor, rather than writing the empty or half-compressed archive either would produce (docs/session-archive.md) |
 | `fm-transcript-search.sh` | Search that derivative with context, narrowing the file set by date and working directory first; a full content scan is the index, so there is none to go stale, the compressed store is decompressed into grep one session at a time across cores rather than read by plain grep, and an archive or a required tool that is not there reads as absent rather than as no matches (docs/session-archive.md) |
 | `fm-transcript-refresh.sh` | Rebuild both stores from this vessel's own raw transcripts, converge any plain session files left from an older build into the compressed store, verify the output to zero, and leave the honest bound on the artefact; the raw stores are read-only inputs and a store this vessel does not have is skipped, never counted as empty (docs/session-archive.md) |
+| `fm-transcript-zcat.sh`  | One owner for reading a session file out of the archive whatever shape it is in, so the scan and the header read never disagree |
 | `fm-herdr-lab.sh`        | Provision and guardedly operate an isolated, never-default Herdr lab session         |
 | `fm-install-herdr.sh`    | Install CI's exact-version Herdr pin with official asset URL, SHA-256, and protocol checks |
 | `fm-install-treehouse.sh`| Install CI's exact-version Treehouse pin for real-Herdr E2E that needs spawn worktrees |
@@ -95,6 +98,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-merge-local.sh`      | Fast-forward a `local-only` project's local default branch after approval            |
 | `fm-bridge-relay.sh`     | Guardedly relay envelope-only `send`/`inbox`/`status`/`broadcast` calls to the coditan-bridge checkout's own scripts, refreshing it through fleet sync first and refusing a read it cannot prove current |
 | `fm-review-diff.sh`      | Review a crewmate branch or recorded PR head against the authoritative base          |
+| `fm-deploy-verify.sh`    | Take the read-only readback readings a deploy claim rests on - source, checkout, container, and service - and never report agreement that was not measured |
 | `fm-pdf-finish.sh`       | Assemble a generated PDF through a conforming producer and publish it only if the gate passes (docs/pdf-output.md) |
 | `fm-pdf-verify.sh`       | Refuse a PDF a real reader cannot read as spec-conforming; fails closed when it cannot check |
 | `fm-pdf-lib.sh`          | Shared `--pages`/`--quiet` parsing and Ghostscript resolution for both PDF scripts    |
@@ -114,6 +118,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-delivery-lib.sh`     | Delivery records, listener health, the primary-endpoint record, and the one-line delivery verdict |
 | `fm-delivery-service.sh` | Install, converge, restart, and report this home's delivery listener; publish the session endpoint |
 | `fm-delivery-keeper.sh`  | tmux keeper tier for the delivery listener where systemd --user is unusable          |
+| `fm-keeper-name-lib.sh`  | Shared home-scoped keeper session naming for the watcher and delivery keepers, plus the legacy name a home may still be running under |
 | `fm-pane-activity-lib.sh` | The shared pre-typing pane reads every process that types into the captain's pane takes |
 | `fm-watch.sh`            | Singleton-safe daemon watcher that absorbs benign wakes and durably queues actionable ones |
 | `fm-context-lib.sh`      | The context-ceiling predicates and branch classification - size, quiet boundary, captain presence, receipt freshness, re-entry path, blocked, ask, reset, and unenforced - shared by the watcher and the reset tool (docs/context-reset.md) |
@@ -148,6 +153,8 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-bosun-service.sh`    | Detect, converge, or explicitly install the opted-in home's bosun unit, reading liveness from the observer's own work rather than from whether the unit says active (docs/configuration.md "Bosun observer service") |
 | `fm-event-batch.sh`      | Group journal events into priority batches, hold each for a bounded time, and reconcile every event against the journal with `account`; it decides timing and grouping only (docs/event-batching.md) |
 | `fm-event-batch-lib.sh`  | The batcher's member and batch record contracts, the never-dropped cursor order, and the verb-to-timing-class mapping |
+| `fm-urgency-lib.sh`      | The urgency promoter: the priority ladder, the rule table, the never-lower property, and the promotion record it writes when an event's own declaration understates its content |
+| `fm-urgency.sh`          | Read and replay this home's urgency promotions; classify and replay never promote a live event and never write a record |
 | `fm-classify-lib.sh`     | Shared captain-relevant and declared-external-wait wake classification vocabulary    |
 | `fm-send.sh`             | Send one verified literal line or supported key through the target's recorded backend |
 | `fm-tmux-lib.sh`         | Shared tmux pane primitives for target resolution, own-window startup repair, busy detection, composer capture, and verified submit |

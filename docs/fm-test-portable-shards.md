@@ -75,8 +75,16 @@ The original Phase 1 artifacts measured the serial remainder at about **13 minut
 2. Proven-isolated embeds match `bin/fm-test-isolation-proof.sh --list`.
 3. Union of portable parallel shards + portable serial + real-Herdr family equals the complete `tests/*.test.sh` inventory.
 4. Those four partitions are pairwise disjoint (no missing scripts, no duplicates).
+5. `docs/scripts.md` names every `bin/*.sh`, names each one once, and names nothing that is gone (`FM_SCRIPT_INDEX ok`).
+6. Every `tests/*.test.sh` carries a decided family (`FM_TEST_FAMILIES ok`); there is no catch-all family to fall into, so an unmapped test refuses here and at every selection rather than defaulting.
+7. Every family states the boundary it claims, in the block above `family_for_basename`, so a classification the fleet has to live with cannot outlive its reasoning.
 
-CI runs that guard as a required job (`test-coverage`).
+Every file set the guard compares is derived from the directory or the document itself.
+What each family means, and the discriminator against the family it is most easily confused with, lives at the map in `bin/fm-test-run.sh` rather than here, so a reviewer meets the reasoning where the mapping is made.
+That is deliberate: a hand-kept enumeration inside the gate would be the same ungated list the gate exists to catch, and the flat globs these checks rest on are also why a regroup of `bin/` would silently narrow them.
+
+This is the repository's single zero-drift gate location, run in CI as the required `test-coverage` job.
+New derived invariants belong here rather than in a second script or a second job, because a second location is a second thing to keep by hand.
 
 ## Timing artifacts
 
