@@ -1004,7 +1004,7 @@ validate_worktree_teardown_safety() {
     fi
     unmerged=$(printf '%s\n' "$unmerged_raw" | head -5)
     if [ -n "$dirty" ] || [ -n "$unmerged" ]; then
-      echo "REFUSED: local-only worktree $WT has work not yet merged into $DEFAULT and not on any remote." >&2
+      echo "REFUSED: local-only worktree $WT has work not yet merged into $DEFAULT and not on a remote this project publishes to." >&2
       [ -n "$dirty" ] && echo "uncommitted changes present" >&2
       [ -n "$unmerged" ] && printf 'commits not yet on %s:\n%s\n' "$DEFAULT" "$unmerged" >&2
       unreadable_remotes_note >&2
@@ -1023,7 +1023,7 @@ validate_worktree_teardown_safety() {
       TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY=$branch
     fi
     if ! work_is_landed "$branch"; then
-      echo "REFUSED: worktree $WT has work not on any remote and not landed." >&2
+      echo "REFUSED: worktree $WT has work not on a remote this project publishes to and not landed." >&2
       printf 'unpushed commits:\n%s\n' "$unpushed" >&2
       unreadable_remotes_note >&2
       echo "Push the branch, land its PR, or get the captain's explicit OK to discard, then --force." >&2
