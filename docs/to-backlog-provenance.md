@@ -119,7 +119,7 @@ Each of these is a substitution with our own mechanism, not a capability dropped
   In this fleet the captain speaks to firstmate rather than to a tracker, so a flag that stopped the agent reaching for it would stop it being reached at all.
   The protection the flag provides is preserved at a different point instead, and structurally rather than by a flag: the quiz is mandatory and nothing is filed before the captain approves the breakdown.
 - **`ready-for-agent` became a computed state rather than a label.**
-  We have no triage-label vocabulary, and the frontier here is `tasks-axi ready` - queued, unblocked, unheld - which is the original's own definition of the frontier with nothing to keep in sync.
+  We have no GitHub Issue label surface, and [`docs/agents/triage-labels.md`](agents/triage-labels.md) maps the original triage vocabulary onto backlog state instead.
   One shade of meaning does not survive: the label is the author asserting up front that a ticket is agent-grabbable, where our dispatchability is firstmate's judgement at intake under `AGENTS.md` section 7.
   That residue is recorded under "What we dropped", item 2.
 - **The domain glossary and ADRs became the project's `AGENTS.md`.**
@@ -148,12 +148,12 @@ Every item below is a capability the original has and this adoption does not.
 
 1. **The `/setup-matt-pocock-skills` prerequisite, and per-repo tracker configuration.**
    The original requires a setup pass that records which tracker a repo uses, its label vocabulary, and its domain-doc layout, and to-tickets refuses to guess without it.
-   We have one fleet-wide backlog and `config/backlog-backend` already selects its backend, so there is nothing per repo to scaffold.
-   Cost: none that we can see, but it is a real dependency of the original that we simply do not satisfy, and a future second tracker would expose the gap.
+   Firstmate now carries the small per-repo pointer scaffold under [`docs/agents/`](agents/), while the real tracker contract remains the one fleet-wide backlog and `config/backlog-backend` still selects only its backend.
+   Cost: none for the current single-tracker fleet, but a future second tracker would need a policy change in the docs/agents owners rather than a local guess by to-backlog.
 2. **The triage label vocabulary, and the `triage` skill it serves.**
    The original applies `ready-for-agent` as it publishes, out of a five-label vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`) shared with a `triage` skill we have not adopted.
-   We have no label surface at all.
-   Cost: an author cannot mark one unit as ready for a worker and another as still needing information; every filed unit looks alike until firstmate judges it at intake.
+   [`docs/agents/triage-labels.md`](agents/triage-labels.md) owns the mapping from those names to backlog state and hold kinds, and there is still no GitHub Issue label surface.
+   Cost: an author cannot stamp a label onto one unit as ready for a worker and another as still needing information; every filed unit looks alike until firstmate judges it at intake.
 3. **The local-file publication shape.**
    `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01` in dependency order, one file per unit.
    Deliberate: it is the original's fallback for a repo with no tracker, and we always have one.
