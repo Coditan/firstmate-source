@@ -1,7 +1,7 @@
 # Upstream offer: an entry test and an independence warning for DESIGN-IT-TWICE.md
 
 **Status: SENT on 2026-08-22, as an issue rather than a pull request.**
-`https://github.com/mattpocock/skills/issues/939`, opened by `Freudator86`, carrying the approved text.
+`https://github.com/mattpocock/skills/issues/939`, opened by `Freudator86`, carrying the issue-form text recorded below.
 The branch it offers is public at `https://github.com/Freudator86/skills/tree/design-it-twice-entry-test`, commit `53f7cf6`.
 
 Every gate was passed before it went: the captain approved the intent on 2026-08-20, settled the identity and ordered the wording rewrite on 2026-08-21, read the rewritten text and approved it on 2026-08-22, and approved the change of channel the same day.
@@ -122,7 +122,7 @@ That wording is gone as of release 1.2.3, which dropped one harness's tool and a
       against the code before recommending, rather than against the design that
       made them.
 
-## The covering note, which is the pull-request body
+## The approved covering note, in pull-request form
 
     Thank you for these skills. This proposal exists because `codebase-design` did
     its job: it told me to design the interface more than once, and that is the only
@@ -174,6 +174,69 @@ That wording is gone as of release 1.2.3, which dropped one harness's tool and a
     A changeset is included and the docs page is re-synced, per `CLAUDE.md`. If the
     gate reads too strong, I would rather weaken it than drop it.
 
+## The published issue body
+
+The issue-channel changes from the approved pull-request form are the ones recorded in the channel decision below.
+
+| Approved pull-request form | Published issue form |
+| --- | --- |
+| `I have left that correction in this PR; say the word and I will split it out.` | `I have left that correction on the branch; say the word and I will split it out.` |
+| `A changeset is included and the docs page is re-synced, per CLAUDE.md.` | `A changeset and the docs-page re-sync are both on the branch, per CLAUDE.md.` |
+
+Two sentences were added at the top explaining why it arrives as an issue, and nothing else changed.
+
+    A pull request for this was prepared and pushed, but this repository limits opening pull requests to collaborators, so it arrives as an issue instead. The branch is public and ready to take however you prefer: https://github.com/Freudator86/skills/tree/design-it-twice-entry-test
+
+    Thank you for these skills. This proposal exists because `codebase-design` did
+    its job: it told me to design the interface more than once, and that is the only
+    reason a second design got produced at all. Everything below touches the fan-out
+    step only, and none of it touches the vocabulary.
+
+    I reach for the fan-out step often, and three things kept needing to be added by
+    hand.
+
+    **1. An entry test in front of the fan-out.**
+    Your own docs page already records what happens without one: issue 449, where an
+    agent pointed at `codebase-design` "reached for the most action-shaped content it
+    could find - the parallel sub-agents in DESIGN-IT-TWICE.md" and ran a long way
+    before asking anything. The fan-out is the most action-shaped thing in the skill,
+    and nothing in front of it asks whether this particular question is worth three
+    or four full designs. The proposed gate is deliberately weak: do it twice in your
+    head first, and fan out when several shapes are defensible and the answer would
+    change what you ship. It is not "don't fan out".
+
+    **2. Naming what parallel sub-agents cannot guarantee.**
+    The step's value is divergence, and today the divergence comes from the differing
+    constraint prompts alone. If the sub-agents inherit one harness default, all
+    three designs come from one model, and three designs that agree look exactly like
+    three independent designs that agree. Nothing tells the reader which one they
+    got.
+
+    I know that because I built the other case, and building it is what taught me the
+    difference: for this kind of fan-out I now pin the models explicitly and refuse to
+    proceed when they cannot be shown to differ. I put that refusal in precisely
+    because I could not otherwise tell the two apart from the output. **That
+    arrangement is mine and is not what I am proposing** - an upstream skill should
+    not depend on one person's setup, and this one runs everywhere. What is proposed
+    is one paragraph telling the reader which case they are in, and asking them to
+    say so when they present the comparison.
+
+    **3. Verification before the recommendation.**
+    Step 3 compares the designs and recommends one, and the comparison is against the
+    designs as written. A sub-agent's design is an argument, and the one that reads
+    best is not reliably the deepest. The proposed check ties to two principles
+    already in `SKILL.md`: run the deletion test against the real callers, and ask
+    whether the second adapter exists or the seam is hypothetical.
+
+    Also, small and separate: the docs page still answers "Does the design-it-twice
+    pattern work outside Claude Code?" by quoting this file as saying "spawn 3+
+    sub-agents in parallel using the Agent tool". 1.2.3 removed exactly that wording,
+    so the page and issue 564 both read as if it were still there. I have left that
+    correction on the branch; say the word and I will split it out.
+
+    A changeset and the docs-page re-sync are both on the branch, per `CLAUDE.md`. If the
+    gate reads too strong, I would rather weaken it than drop it.
+
 ## The exact command that would open it
 
 Nothing below has been run.
@@ -219,8 +282,12 @@ Decided 2026-08-21, recorded as `fm-codebase-design-calls-panel-decision-upstrea
 **Channel:** a public pull request.
 Settled earlier and unchanged.
 
-**Under what identity:** an HLR account, not a personal one.
-His answer on the board was `hlr-show-wording`, which is the identity and the gate in one: the account is chosen, and the wording is shown to him before anything goes out.
+**Under what identity:** first an HLR account, then the personal account that actually existed on this seat.
+On 2026-08-21 he chose an HLR account, not a personal one, and his answer on the board was `hlr-show-wording`, which carried the show-the-wording gate with it.
+That identity did not exist here: the only authenticated GitHub account was the personal one, `Freudator86`.
+Before deciding, he was shown the consequence: `Freudator86` is publicly visible as the author of merged pull request 159 on the public `Coditan/firstmate-source`, so publishing from it reaches the same inference about an agent fleet by byline that the wording rewrite had removed from the text.
+On 2026-08-22 he replaced the earlier choice, verbatim, with "use my personal", recorded as `fm-codebase-design-calls-panel-decision-upstream-publishing-identity`.
+The contribution went out under `Freudator86`, and the commits on the offered branch were authored under that personal identity rather than this repository's default `hlr` committer, for the same reason.
 
 **The wording:** rewritten, above, so it makes no public claim that HLR operates a fleet of agent-managed repositories.
 All three proposed changes are untouched, and so is the honest attribution of where the independence claim comes from; it is simply no longer sourced to a described estate.
@@ -229,7 +296,7 @@ All three proposed changes are untouched, and so is the honest attribution of wh
 The note cites his own issue numbers 449 and 564 back at him, and the stale-quotation correction rides in the same pull request with an offer to split it out.
 
 **The final text:** read and approved on 2026-08-22, in one word, "good".
-It went out unchanged.
+The approved pull-request form is preserved above.
 
 **The channel, revisited the same day:** approved in one word, "ok", after the pull-request route turned out to be closed by the repository owner rather than by anything on this side.
 Only two sentences of the approved note changed, and only because the channel forced them: the one that said the stale-quotation correction sits "in this PR" now points at the branch, and the one about the changeset and the docs re-sync now says both are on the branch.

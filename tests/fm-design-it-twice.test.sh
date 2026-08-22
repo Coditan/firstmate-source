@@ -180,8 +180,12 @@ test_the_upstream_offer_records_what_was_actually_published() {
     "the offer must record which identity it went out under"
   assert_grep 'The exact command that would open it' "$OFFER" \
     "the offer must keep the command sequence it was published by"
-  assert_grep 'The covering note, which is the pull-request body' "$OFFER" \
-    "the offer must keep the covering note it published"
+  assert_grep 'The approved covering note, in pull-request form' "$OFFER" \
+    "the offer must keep the covering note the captain approved"
+  assert_grep 'The published issue body' "$OFFER" \
+    "the offer must keep the issue body it published"
+  assert_grep 'I have left that correction on the branch; say the word and I will split it out.' "$OFFER" \
+    "the offer must carry the issue-channel form of the stale-quotation sentence"
   pass "the offer records the address, the channel, and the identity it went out under"
 }
 
@@ -213,13 +217,12 @@ test_the_offer_proposes_no_dependency_on_this_fleet() {
 # --- what the note may not say in public ------------------------------------
 
 # The captain's ruling of 2026-08-21, in his own words, was "not say that in
-# pubnlic". The note goes out under an HLR account, so first-person plural in it
-# tells a public reader that HLR operates a fleet of agent-managed repositories -
-# true, not public, and not his to have disclosed by a turn of phrase. The
-# failure mode this guards is a later well-meaning edit restoring "we", which
-# reads as ordinary authorial voice and discloses on the way past.
+# pubnlic". The note was first prepared for an HLR account, then went out under
+# a personal account whose public byline still made the same inference reachable.
+# The failure mode this guards is a later well-meaning edit restoring "we",
+# which reads as ordinary authorial voice and discloses on the way past.
 covering_note() {
-  awk '/^## The covering note/{f=1} f && /^## The exact command/{exit} f' "$OFFER"
+  awk '/^## The approved covering note/{f=1} f && /^## The published issue body/{exit} f' "$OFFER"
 }
 
 test_the_covering_note_makes_no_public_claim_about_an_agent_fleet() {
@@ -255,10 +258,14 @@ test_the_rewrite_did_not_weaken_the_three_proposed_changes() {
 }
 
 test_the_settled_decisions_and_the_remaining_gate_are_recorded() {
-  assert_grep 'an HLR account, not a personal one' "$OFFER" \
-    "the offer must record the identity the captain chose"
+  assert_grep 'On 2026-08-21 he chose an HLR account, not a personal one' "$OFFER" \
+    "the offer must record the first identity the captain chose"
   assert_grep 'hlr-show-wording' "$OFFER" \
     "the offer must record his answer, which is the identity and the gate in one"
+  assert_grep 'On 2026-08-22 he replaced the earlier choice, verbatim, with "use my personal"' "$OFFER" \
+    "the offer must record the personal-account override"
+  assert_grep 'the only authenticated GitHub account was the personal one, `Freudator86`' "$OFFER" \
+    "the offer must record why the earlier identity choice was replaced"
   assert_grep 'read and approved on 2026-08-22, in one word, "good"' "$OFFER" \
     "the offer must record his approval of the final text"
   assert_grep 'not say that in pubnlic' "$OFFER" \
