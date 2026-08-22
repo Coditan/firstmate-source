@@ -531,6 +531,23 @@ An X-only home still requires a healthy delivery listener so mentions can wake i
 On an `x-mention <request_id>` or `x-mode-error ...` check wake, load `fmx-respond`, which owns classification, public-safety policy, reply or dismissal, task linking, and follow-ups.
 For every X-linked terminal outcome, load that owner and post the final completion follow-up before teardown, regardless of earlier milestone follow-ups.
 
+## Agent skills
+
+### Issue tracker
+
+Work is tracked in the fleet backlog, not GitHub Issues; GitHub carries pull requests only.
+See [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
+
+### Triage labels
+
+The five Matt Pocock skill roles map onto backlog state and hold kinds rather than tracker labels.
+See [docs/agents/triage-labels.md](docs/agents/triage-labels.md).
+
+### Domain docs
+
+This repository uses single-context domain docs.
+See [docs/agents/domain.md](docs/agents/domain.md).
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.
