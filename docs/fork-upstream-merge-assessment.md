@@ -1,6 +1,6 @@
 # Fork-to-upstream merge assessment
 
-This document records a measured attempt to merge canonical upstream into this curated fork, and the reasons the attempt stopped short of landing.
+This document records measured attempts to merge canonical upstream into this curated fork, and the reasons they stopped short of landing.
 It is evidence, not narrative: every number below names the command that produced it and the commits it was measured against.
 [`docs/fork-patches.md`](fork-patches.md) remains the authoritative patch registry, and this document does not replace it or re-stamp its pin.
 
