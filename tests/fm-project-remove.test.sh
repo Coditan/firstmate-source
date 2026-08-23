@@ -46,6 +46,21 @@ commit_branch() {
   git -C "$repo" switch -q main
 }
 
+# Register the validation pipeline's own scratch mirror as a remote of the clone
+# and push a branch to it, exactly as `no-mistakes init` plus a pipeline run
+# leaves a project: a bare repository under the pipeline's repos root that never
+# reaches the forge. The branch is then on a remote by git's reckoning, and on no
+# hosting service at all. Args: home branch [repos_root]
+add_pipeline_mirror_with_pushed_branch() {
+  local home=$1 branch=$2 repos_root=${3:-$1/.no-mistakes} mirror
+  mirror="$repos_root/repos/6e487fc7bf03.git"
+  mkdir -p "$(dirname "$mirror")"
+  git init -q --bare "$mirror"
+  git -C "$home/projects/alpha" remote add no-mistakes "$mirror"
+  git -C "$home/projects/alpha" push -q no-mistakes "$branch"
+  git -C "$home/projects/alpha" fetch -q no-mistakes
+}
+
 fake_gh_axi_with_pr_head() {
   local fakebin=$1 number=$2 state=$3 head=$4
   cat > "$fakebin/gh-axi" <<SH
@@ -867,6 +882,113 @@ test_documented_dry_run_invocation_is_accepted() {
   pass "documented project-removal invocations are accepted by the helper"
 }
 
+# --- counted remotes ----------------------------------------------------------
+#
+# A preservation proof used to accept ANY remote-tracking ref, and the validation
+# pipeline's own mirror is a remote by git's reckoning. The mirror-only fixture
+# below was caused to PASS against the unfixed script before the narrowing was
+# written, which is the whole reason this group exists. The last three cases
+# carry the accepting direction: a guard that refuses everything is an outage.
+
+test_pipeline_mirror_only_refuses() {
+  local home repo rc=0
+  home=$(make_home mirror-only)
+  repo="$home/projects/alpha"
+  commit_branch "$repo" fm/task-x1 mirror.txt "only on the pipeline mirror"
+  add_pipeline_mirror_with_pushed_branch "$home" fm/task-x1
+
+  # The work really is on that mirror and really is nowhere else.
+  git -C "$repo" rev-parse --verify -q refs/remotes/no-mistakes/fm/task-x1 >/dev/null \
+    || fail "mirror-only: the mirror remote-tracking ref was not created"
+  ! git -C "$home/origin.git" rev-parse --verify -q refs/heads/fm/task-x1 >/dev/null \
+    || fail "mirror-only: the branch reached origin, so this case proves nothing"
+
+  run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 1 "$rc" "work present only on the pipeline mirror"
+  assert_grep "local branch fm/task-x1 has no preservation" "$home/err" \
+    "mirror-only refusal did not name the branch the mirror could not prove"
+  # The evidence is drawn against the same counted set as the verdict; a bare
+  # --remotes here would hide the very commit being refused over.
+  assert_grep "add mirror.txt" "$home/err" \
+    "mirror-only refusal printed no commit evidence for the work it refused over"
+  [ -d "$home/projects/alpha" ] || fail "mirror-only refusal removed the clone"
+  pass "project removal refuses work that reached only the validation pipeline's local mirror"
+}
+
+test_relocated_pipeline_mirror_only_refuses() {
+  local home repo rc=0
+  home=$(make_home mirror-relocated)
+  repo="$home/projects/alpha"
+  commit_branch "$repo" fm/task-x1 relocated.txt "only on a relocated mirror"
+  # An install whose state lives somewhere other than ~/.no-mistakes: the path
+  # shape no longer gives it away, and NM_HOME is what names it.
+  add_pipeline_mirror_with_pushed_branch "$home" fm/task-x1 "$home/nm-elsewhere"
+
+  NM_HOME="$home/nm-elsewhere" \
+    run_remove "$home" alpha --captain-approved --dry-run > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 1 "$rc" "work present only on a relocated pipeline mirror"
+  assert_grep "local branch fm/task-x1 has no preservation" "$home/err" \
+    "relocated-mirror refusal did not name the branch"
+  [ -d "$home/projects/alpha" ] || fail "relocated-mirror refusal removed the clone"
+  pass "a relocated pipeline mirror named by NM_HOME is refused as preservation proof too"
+}
+
+test_pipeline_mirror_beside_origin_still_removes() {
+  local home repo rc=0
+  home=$(make_home mirror-beside-origin)
+  repo="$home/projects/alpha"
+  # The everyday shape of a validated ship task: the mirror IS registered as a
+  # remote, AND the branch really reached origin. Excluding the mirror must not
+  # cost this clone its removal.
+  commit_branch "$repo" fm/task-x1 shipped.txt "landed on origin as well"
+  git -C "$repo" push -q origin fm/task-x1
+  git -C "$repo" fetch -q origin
+  add_pipeline_mirror_with_pushed_branch "$home" fm/task-x1
+
+  run_remove "$home" alpha --captain-approved > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 0 "$rc" "mirror registered beside a real origin push"
+  [ ! -e "$home/projects/alpha" ] || fail "mirror-beside-origin removal left the clone on disk"
+  assert_no_grep "- alpha " "$home/data/projects.md" \
+    "mirror-beside-origin removal did not remove the registry entry"
+  pass "work on origin still removes the clone when the pipeline mirror is also registered"
+}
+
+test_dead_pipeline_mirror_does_not_block_the_refresh() {
+  local home repo mirror rc=0
+  home=$(make_home mirror-dead)
+  repo="$home/projects/alpha"
+  commit_branch "$repo" fm/task-x1 shipped.txt "landed on origin"
+  git -C "$repo" push -q origin fm/task-x1
+  git -C "$repo" fetch -q origin
+  add_pipeline_mirror_with_pushed_branch "$home" fm/task-x1
+  # The pipeline's scratch is disposable and routinely disappears. `fetch --all`
+  # would have failed the whole refresh over it and cost origin its re-read.
+  mirror=$(git -C "$repo" remote get-url no-mistakes)
+  rm -rf "$mirror"
+
+  run_remove "$home" alpha --captain-approved > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 0 "$rc" "dead pipeline mirror beside a healthy origin"
+  assert_no_grep "could not refresh remotes" "$home/err" \
+    "a dead pipeline mirror was allowed to fail the refresh of the real remotes"
+  [ ! -e "$home/projects/alpha" ] || fail "dead-mirror removal left the clone on disk"
+  pass "a dead pipeline mirror neither blocks the remote refresh nor its verdict"
+}
+
+test_unreachable_remote_warning_names_the_remote() {
+  local home rc=0
+  home=$(make_home unreachable-remote-named)
+  rm -rf "$home/origin.git"
+  run_remove "$home" alpha --captain-approved > "$home/out" 2> "$home/err" || rc=$?
+  expect_code 0 "$rc" "unreachable remote removal"
+  # Removal reaches its verdict on the evidence rather than on the fetch, which
+  # is where it diverges from teardown - so the warning has to say WHICH proofs
+  # rest on unrefreshed state, not merely that some do.
+  assert_grep "could not refresh remotes for alpha (origin)" "$home/err" \
+    "the unrefreshed-state warning did not name the remote that could not be re-read"
+  pass "an unreadable remote is named in the warning whose proofs rest on unrefreshed state"
+}
+
+
 test_requires_captain_approval
 test_dirty_primary_refuses
 test_unlanded_branch_refuses
@@ -897,6 +1019,11 @@ test_remote_tags_do_not_block_removal
 test_prefetch_refs_do_not_block_removal
 test_unreachable_remote_still_removes
 test_unreachable_remote_still_refuses_unlanded_work
+test_pipeline_mirror_only_refuses
+test_relocated_pipeline_mirror_only_refuses
+test_pipeline_mirror_beside_origin_still_removes
+test_dead_pipeline_mirror_does_not_block_the_refresh
+test_unreachable_remote_warning_names_the_remote
 test_refused_run_does_not_prune_remote_tracking_refs
 test_landed_content_naming_scans_default_history_once
 test_refusal_evidence_excludes_default_branch_commits

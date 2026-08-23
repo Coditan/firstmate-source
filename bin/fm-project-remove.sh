@@ -12,9 +12,31 @@
 #   - the primary clone has no uncommitted changes;
 #   - every attached worktree is either the primary clone or a prunable stale
 #     entry;
-#   - every local work-bearing ref is either preserved on a remote-tracking ref,
-#     has content already represented on the default branch, or names a merged
-#     PR.
+#   - every local work-bearing ref is either preserved on a COUNTED remote's
+#     remote-tracking ref, has content already represented on the default
+#     branch, or names a merged PR.
+#
+# COUNTED REMOTES. A preservation proof used to accept any remote-tracking ref at
+# all, and the validation pipeline's own bare mirror under
+# ~/.no-mistakes/repos/<id>.git is a remote by git's reckoning. So a branch that
+# got no further than the pipeline's own scratch read as preserved and the whole
+# clone was deleted. bin/fm-landing-remote-lib.sh owns the recognition, shared
+# with bin/fm-teardown.sh so the two cannot drift; only remotes the project is
+# actually registered against are cited as proof here, and a remote whose name
+# cannot serve as a ref selector is named as left out rather than silently
+# counted.
+#
+# WHERE THIS DIVERGES FROM TEARDOWN, DELIBERATELY. Teardown treats a remote it
+# could not re-read as supplying no evidence at all: it drops that remote's
+# cached refs and refuses. Removal must not, and the REMOTE REFRESH note below
+# says why - a dead origin is the ordinary reason a clone is being removed, and
+# refusing on the fetch would make such a clone unremovable while its own local
+# proofs are unchanged. Removal therefore keeps the cached refs, names every
+# remote it could not re-read, and reaches its verdict on the landed-work
+# evidence. The residual is stated rather than hidden: when a counted remote
+# cannot be re-read, a branch deleted on that remote since the last fetch still
+# passes on its stale tracking ref, and the warning is what tells an operator the
+# proof rests on unrefreshed state. Teardown closes that half; removal reports it.
 #
 # WORK-BEARING REFS. Only refs/heads used to be enumerated, so a stash entry, a
 # detached-HEAD commit, a local-only tag, a clone parked mid-rebase, and the
@@ -40,10 +62,13 @@
 # clone. This limit is stated rather than left implied: the sweep is complete
 # over named refs, stashes, HEADs, and worktree heads, and no further.
 #
-# REMOTE REFRESH. The refresh runs after the cheap read-only checks, so a project
-# that will be refused anyway never gets its remote-tracking refs pruned first,
-# and a failed refresh no longer ends the run: a deleted origin, or a network or
-# auth outage, is exactly the situation that motivates removing a clone. When the
+# REMOTE REFRESH. Only counted remotes are refreshed; the pipeline's mirror is
+# neither fetched nor cited, and each remote is fetched on its own so one dead
+# remote does not cost another its re-read. The refresh runs after the cheap
+# read-only checks, so a project that will be refused anyway never gets its
+# remote-tracking refs pruned first, and a failed refresh no longer ends the run:
+# a deleted origin, or a network or auth outage, is exactly the situation that
+# motivates removing a clone. When the
 # refresh fails, the run continues and every verdict it prints carries the notice
 # that the proofs rest on the last known remote-tracking state, so the run
 # refuses on the landed-work evidence or passes on it, never on the fetch.
@@ -74,6 +99,12 @@ PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 REG="$DATA/projects.md"
 BACKLOG="$DATA/backlog.md"
 SECONDMATES="$DATA/secondmates.md"
+
+# Which remotes may be cited as proof that work left this machine. Shared with
+# bin/fm-teardown.sh so one reading of "that is only the pipeline's own mirror"
+# serves both; the policy built on it below is this script's own.
+# shellcheck source=bin/fm-landing-remote-lib.sh
+. "$SCRIPT_DIR/fm-landing-remote-lib.sh"
 
 usage() {
   cat >&2 <<'EOF'
@@ -198,14 +229,64 @@ path_is_child_of() {
   return 1
 }
 
+# The remotes whose refs may be cited as preservation proof: every remote this
+# clone is configured against except the validation pipeline's own mirror, which
+# never leaves the machine. Resolved once per run and locally only - reading a
+# remote's effective URL contacts nothing.
+#
+# A remote whose name cannot serve as a ref selector is recorded separately and
+# named in the output. Dropping it silently would understate the proof; counting
+# it would let its pattern select refs it does not own.
+FM_COUNTED_REMOTES_RESOLVED=0
+FM_COUNTED_REMOTES=
+FM_COUNTED_REMOTES_UNUSABLE=
+FM_REMOTES_UNREADABLE=
+FM_COUNTED_REF_PATTERNS=()
+
+#
+# The ref-selector patterns are built once here, not per ref. Every work-bearing
+# ref asks commit_on_any_remote below, and rebuilding them there would put a
+# subshell back into the loop the one-git-call note is about.
+# `refs/remotes/<name>` matches that remote's refs and no others: git matches a
+# literal pattern completely or up to a slash, so `refs/remotes/origin` selects
+# refs/remotes/origin/main and never refs/remotes/origin-fork/main.
+resolve_counted_remotes() {
+  local name url counted='' unusable=''
+  [ "$FM_COUNTED_REMOTES_RESOLVED" = 1 ] && return 0
+  FM_COUNTED_REMOTES_RESOLVED=1
+  FM_COUNTED_REF_PATTERNS=()
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    if ! remote_name_selects_refs "$name"; then
+      unusable="$unusable $name"
+      continue
+    fi
+    url=$(remote_effective_url "$PROJECT_ABS" "$name") || continue
+    [ -n "$url" ] || continue
+    url_is_pipeline_mirror "$url" && continue
+    counted="$counted $name"
+    FM_COUNTED_REF_PATTERNS+=("refs/remotes/$name")
+  done <<EOF
+$(git -C "$PROJECT_ABS" remote 2>/dev/null)
+EOF
+  FM_COUNTED_REMOTES=${counted# }
+  FM_COUNTED_REMOTES_UNUSABLE=${unusable# }
+}
+
 # One git call rather than one merge-base per remote ref: the enumeration below
 # asks this of every branch, tag, stash entry, and worktree head, and a repo with
 # many remote branches would otherwise multiply out into thousands of processes.
 # `--contains` is the same reachability test `merge-base --is-ancestor` performs.
+#
+# With no counted remote there is no remote proof to be had, and the empty
+# pattern list must NOT fall through to scanning all of refs/remotes - that is
+# exactly the reading this narrowing exists to remove.
 commit_on_any_remote() {
   local commit=$1 found
+  resolve_counted_remotes
+  [ "${#FM_COUNTED_REF_PATTERNS[@]}" -gt 0 ] || return 1
   found=$(git -C "$PROJECT_ABS" for-each-ref --count=1 --contains "$commit" \
-    --format='%(refname)' refs/remotes 2>/dev/null) || return 1
+    --format='%(refname)' "${FM_COUNTED_REF_PATTERNS[@]}" 2>/dev/null) || return 1
   [ -n "$found" ]
 }
 
@@ -446,9 +527,19 @@ ref_is_safe() {
 # POSITIVE ref, so the evidence listed the default branch's own landed commits
 # beneath the unlanded one and made the risk look several times larger than it
 # was. One `--not` excludes both.
+#
+# The exclusions name the counted remotes rather than all of them, so the
+# evidence is drawn against the same set the verdict was: a bare `--remotes`
+# here would hide the very commits that reached only the pipeline's mirror, and
+# a refusal would print nothing to justify itself.
 ref_refusal_detail() {
-  local tip=$1
-  git -C "$PROJECT_ABS" log --oneline "$tip" --not --remotes "$DEFAULT_REF" -- 2>/dev/null \
+  local tip=$1 name
+  local -a not=()
+  resolve_counted_remotes
+  for name in $FM_COUNTED_REMOTES; do
+    not+=("--remotes=$name")
+  done
+  git -C "$PROJECT_ABS" log --oneline "$tip" --not ${not[@]+"${not[@]}"} "$DEFAULT_REF" -- 2>/dev/null \
     | sed -n '1,6p'
 }
 
@@ -830,11 +921,19 @@ rewrite_registry_without_project() {
   mv "$tmp" "$REG"
 }
 
+# Refresh the counted remotes only. `fetch --all` also fetched the pipeline's
+# mirror, which supplies no proof and whose absence would fail the whole refresh
+# and cost every real remote its re-read. Each is fetched on its own so one dead
+# remote does not hide another that answered.
 fetch_before_removal() {
-  local remotes
-  remotes=$(git -C "$PROJECT_ABS" remote 2>/dev/null || true)
-  [ -n "$remotes" ] || return 0
-  git -C "$PROJECT_ABS" fetch --all --prune --quiet
+  local name failed=''
+  resolve_counted_remotes
+  [ -n "$FM_COUNTED_REMOTES" ] || return 0
+  for name in $FM_COUNTED_REMOTES; do
+    git -C "$PROJECT_ABS" fetch --prune --quiet "$name" || failed="$failed $name"
+  done
+  FM_REMOTES_UNREADABLE=${failed# }
+  [ -z "$failed" ]
 }
 
 remove_attached_worktrees() {
@@ -883,9 +982,18 @@ if [ "$DRY_RUN" -eq 1 ]; then
   REMOTES_REFRESHED=0
 elif ! fetch_before_removal; then
   REMOTES_REFRESHED=0
-  printf 'WARNING: could not refresh remotes for %s; preservation proofs below rest on the last known remote-tracking state.\n' \
-    "$PROJECT_NAME" >&2
+  printf 'WARNING: could not refresh remotes for %s (%s); preservation proofs below rest on the last known remote-tracking state.\n' \
+    "$PROJECT_NAME" "$FM_REMOTES_UNREADABLE" >&2
 fi
+
+# Named here rather than only inside a refusal: a remote left out of the proof is
+# just as material to a run that PASSES, and this is the only place that says so.
+# Resolved explicitly, because a dry run never reaches the fetch that would
+# otherwise have resolved it, and it must report the same omission a real run does.
+resolve_counted_remotes
+[ -z "$FM_COUNTED_REMOTES_UNUSABLE" ] \
+  || printf 'WARNING: these remote names cannot select refs and were not counted as preservation proof for %s: %s\n' \
+    "$PROJECT_NAME" "$FM_COUNTED_REMOTES_UNUSABLE" >&2
 
 DEFAULT_REF=$(project_default_ref) \
   || refuse "cannot determine a default branch for $PROJECT_NAME."

@@ -185,38 +185,13 @@ FM_LANDING_REMOTES=
 FM_LANDING_REMOTES_UNREADABLE=
 FM_LANDING_REMOTES_UNUSABLE=
 
-# The URL a remote actually uses. `remote get-url` reports the configured string;
-# `ls-remote --get-url` reports what git would really talk to, with
-# url.<base>.insteadOf rewriting applied, and contacts nothing to say so.
-remote_effective_url() {  # <repo dir> <remote name>
-  git -C "$1" ls-remote --get-url "$2" 2>/dev/null
-}
-
-# Compare URLs by the repository they address rather than by how they were typed:
-# a trailing slash and a trailing .git name the same place.
-normalized_remote_url() {  # <url>
-  local url=$1
-  url=${url%/}
-  url=${url%.git}
-  url=${url%/}
-  printf '%s' "$url"
-}
-
-# The validation pipeline's own scratch mirror, recognized the way
-# bin/fm-gate-refuse-lib.sh recognizes a gate worktree: by the pipeline's own
-# path contract, plus NM_HOME for an install that relocated its state. The path
-# shape is the signal that survives a renamed remote.
-url_is_pipeline_mirror() {  # <url>
-  local url=$1 nm_repos
-  case "$url" in
-    */.no-mistakes/repos/*) return 0 ;;
-  esac
-  if [ -n "${NM_HOME:-}" ]; then
-    nm_repos="${NM_HOME%/}/repos/"
-    case "$url" in "$nm_repos"*) return 0 ;; esac
-  fi
-  return 1
-}
+# Recognizing the pipeline's own mirror, and comparing two remote URLs, is one
+# contract shared with bin/fm-project-remove.sh, which discards a whole project
+# clone on the same reasoning. bin/fm-landing-remote-lib.sh owns it so the two
+# cannot drift; the POLICY below - fetch or drop, and refuse - stays here,
+# because removal's policy genuinely differs and that library says so.
+# shellcheck source=bin/fm-landing-remote-lib.sh
+. "$SCRIPT_DIR/fm-landing-remote-lib.sh"
 
 # The remote URLs this project is registered against: every remote configured on
 # the project clone except the pipeline's mirror. Reading them from the PROJECT
@@ -270,12 +245,12 @@ resolve_landing_remotes() {
   registered=$(project_registered_remote_urls)
   while IFS= read -r name; do
     [ -n "$name" ] || continue
-    # A remote name is used below as a `git log --remotes=<glob>` pattern. A name
-    # carrying glob metacharacters would select refs it does not own, so it is
-    # dropped rather than guessed at.
-    case "$name" in
-      *[!A-Za-z0-9._-]*) unusable="$unusable $name" ; continue ;;
-    esac
+    # A remote name is used below as a `git log --remotes=<glob>` pattern, so a
+    # name that cannot serve as a ref selector is left out rather than guessed at.
+    if ! remote_name_selects_refs "$name"; then
+      unusable="$unusable $name"
+      continue
+    fi
     url=$(remote_effective_url "$WT" "$name") || continue
     [ -n "$url" ] || continue
     norm=$(normalized_remote_url "$url")
