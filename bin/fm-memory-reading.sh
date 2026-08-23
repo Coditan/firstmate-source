@@ -729,6 +729,7 @@ PRIOR_FILE="$TMP/prior.tsv"
 GROWTH_INTERVAL=0
 GROWTH_REASON=
 GROWTH_SCOPE=0
+INTERVAL_WAITED=0
 
 read_prior() {
   local epoch age parse_status="$TMP/prior-status" epoch_file="$TMP/prior-epoch"
@@ -745,6 +746,7 @@ read_prior() {
       return
     fi
     sleep "$INTERVAL"
+    INTERVAL_WAITED=1
     read_processes
     if [ "$PS_OK" -ne 1 ]; then
       GROWTH_REASON="the second process-table read failed"
@@ -1187,7 +1189,7 @@ reading_cost() {
   case "$ended" in ''|*[!0-9]*) ended='' ;; esac
   if [ -n "$STARTED_MS" ] && [ -n "$ended" ]; then
     wall=$(( (ended - STARTED_MS) / 1000000 ))
-    [ "$INTERVAL" -gt 0 ] && wall="$wall (of which ${INTERVAL}000 was the requested wait)"
+    [ "$INTERVAL_WAITED" -eq 1 ] && wall="$wall (of which ${INTERVAL}000 was the requested wait)"
     wall="${wall}ms wall"
   else
     wall="wall time unavailable in scope (no nanosecond clock on this machine)"

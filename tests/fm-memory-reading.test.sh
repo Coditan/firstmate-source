@@ -499,6 +499,7 @@ test_a_short_explicit_interval_uses_the_same_floor() {
   line=$(process_line_from_section "$out" 'LARGEST TRACKED PROCESSES' 1000)
   assert_contains "$line" 'scoped' 'a short explicit interval did not take the scoped path'
   assert_not_contains "$line" 'MiB/min' 'a short explicit interval produced a growth rate'
+  assert_not_contains "$out" 'requested wait' 'a scoped explicit interval claimed a wait that never occurred'
   pass "a short explicit interval uses the configured sampling floor"
 }
 
@@ -511,6 +512,7 @@ test_an_explicit_floor_override_preserves_the_short_survey() {
   line=$(process_line_from_section "$out" 'LARGEST TRACKED PROCESSES' 1000)
   assert_contains "$line" 'MiB/min' 'the explicit floor override produced no growth rate'
   assert_not_contains "$out" 'growth scoped for every process above' 'the explicit floor override remained scoped'
+  assert_contains "$out" 'of which 12000 was the requested wait' 'an actual explicit wait was omitted from the reading cost'
   pass "an explicit floor override preserves the deliberate short survey"
 }
 
