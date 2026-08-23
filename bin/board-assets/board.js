@@ -460,6 +460,17 @@
       return;
     }
     var key = form.getAttribute('data-fm-question');
+    var labelledby = (form.getAttribute('aria-labelledby') || '').trim();
+    if (labelledby) {
+      var missingLabel = labelledby.split(/\s+/).find(function (id) {
+        return !document.getElementById(id);
+      });
+      if (missingLabel) {
+        window.console.warn('fm-board: the form for "' + key +
+          '" has aria-labelledby pointing to missing id "' + missingLabel +
+          '", so the form may end up unnamed.');
+      }
+    }
     if (form.querySelector && !form.querySelector('.fm-queued')) {
       window.console.warn('fm-board: the form for "' + key +
         '" has no .fm-queued box, so nothing on it can report a queued or an empty answer.');
@@ -500,23 +511,17 @@
   // every board - including its own demonstrably answerable fixture - as carrying
   // no decision to answer.
   //
-  // A NAMED form carries the form role under either mapping. So naming it removes
-  // the check's dependency on which mapping a build implements, rather than
-  // betting on one. It is also what a screen reader needs to say which decision
-  // the region belongs to, which the unnamed form never told anybody.
+  // A NAMED form carries the form role under either mapping. So naming forms that
+  // declare no name removes that dependency at source. An author-supplied
+  // aria-labelledby is deliberately left alone: only the rendered browser tree
+  // can establish its computed name, and run-decisionboard refuses a tree where
+  // the decision containers remain absent. This file only warns when a referenced
+  // id provably does not exist; it does not approximate accessible-name rules.
   function nameForm(form) {
     if ((form.getAttribute('aria-label') || '').trim()) {
       return;
     }
-    var labelledby = (form.getAttribute('aria-labelledby') || '').trim();
-    var labelled = labelledby && labelledby.split(/\s+/).some(function (id) {
-      var source = document.getElementById(id);
-      if (!source) return false;
-      return ['aria-label', 'alt', 'title', 'value'].some(function (attribute) {
-        return (source.getAttribute(attribute) || '').trim();
-      }) || (source.textContent || '').trim();
-    });
-    if (labelled) return;
+    if (form.hasAttribute('aria-labelledby')) return;
     var name = questionLabel(form);
     if (name) {
       form.setAttribute('aria-label', name);

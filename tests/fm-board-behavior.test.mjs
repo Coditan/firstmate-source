@@ -438,7 +438,7 @@ function input(doc, el) {
 // reader which decision the region belongs to.
 
 {
-  const { doc } = install({ withLavish: true });
+  const { doc, warnings } = install({ withLavish: true });
   const labelled = buildForm('frage-o', { choice: 'A' });
   const bare = makeElement('form', { 'data-fm-question': 'frage-p' });
   const preset = makeElement('form',
@@ -446,36 +446,28 @@ function input(doc, el) {
   const missingReference = makeElement('form',
     { 'data-fm-question': 'frage-r', 'aria-labelledby': 'fehlt' });
   const emptyReference = makeElement('form',
-    { 'data-fm-question': 'frage-s', 'aria-labelledby': 'leer' });
+    { 'data-fm-question': 'frage-s', 'aria-labelledby': '' });
   const validReference = makeElement('form',
     { 'data-fm-question': 'frage-t', 'aria-labelledby': 'titel' });
-  const attributeReference = makeElement('form',
-    { 'data-fm-question': 'frage-u', 'aria-labelledby': 'attribut bild' });
-  const emptyLabel = makeElement('div');
   const validLabel = makeElement('div');
-  const attributeLabel = makeElement('div', { 'aria-label': 'Attributtitel' });
-  const imageLabel = makeElement('img', { alt: 'Bildtitel' });
   validLabel.textContent = 'Autorentitel';
-  doc._byId.leer = emptyLabel;
   doc._byId.titel = validLabel;
-  doc._byId.attribut = attributeLabel;
-  doc._byId.bild = imageLabel;
-  reinit(doc, [labelled.form, bare, preset, missingReference, emptyReference, validReference,
-    attributeReference]);
+  reinit(doc, [labelled.form, bare, preset, missingReference, emptyReference, validReference]);
   check(labelled.form.getAttribute('aria-label') === 'Testfrage',
     'a decision form is named from its data-fm-label');
   check(bare.getAttribute('aria-label') === 'frage-p',
     'a form with no label falls back to its question key rather than staying unnamed');
   check(preset.getAttribute('aria-label') === 'Eigener Name',
     'a name the board declared itself is left alone');
-  check(missingReference.getAttribute('aria-label') === 'frage-r',
-    'a missing aria-labelledby target falls back to the question key');
-  check(emptyReference.getAttribute('aria-label') === 'frage-s',
-    'an empty aria-labelledby target falls back to the question key');
+  check(missingReference.getAttribute('aria-label') === null,
+    'an author aria-labelledby with a missing target is not overridden');
+  check(emptyReference.getAttribute('aria-label') === null,
+    'an author aria-labelledby attribute is left alone without predicting its name');
   check(validReference.getAttribute('aria-label') === null,
-    'an aria-labelledby reference with naming content is left alone');
-  check(attributeReference.getAttribute('aria-label') === null,
-    'aria-label and image alt content reached through aria-labelledby are left alone');
+    'an author aria-labelledby with an existing target is left alone');
+  check(warnings.some((warning) => warning.includes('frage-r') && warning.includes('fehlt')
+      && warning.includes('may end up unnamed')),
+    'a dangling aria-labelledby id warns through the form defect channel');
 }
 
 process.exit(failures === 0 ? 0 : 1);
