@@ -26,6 +26,7 @@ body {
 p { margin: 0; }
 a { overflow-wrap: anywhere; }
 code { overflow-wrap: anywhere; }
+.fm-mono { overflow-wrap: anywhere; }
 
 .fm-wrap {
   max-width: 1180px;
