@@ -115,9 +115,9 @@
 #   FM_MEMORY_GROWTH_MIB_MIN  MiB/min at or above which a process is called
 #                             growing rather than steady (default 5)
 #   FM_MEMORY_SAMPLE_MAX_AGE  how old the stored sample may be before growth is
-#                             unmeasured rather than meaningless (default 900)
+#                             unmeasured rather than meaningless (default 1260)
 #   FM_MEMORY_SAMPLE_MIN_AGE  interval below which growth is scoped because the
-#                             operator ran it too soon to divide by (default 5)
+#                             operator ran it too soon to divide by (default 270)
 #   FM_MEMORY_SAMPLES         path of the stored sample. Tests use it for
 #                             isolation, and bin/fm-memory-alarm.sh uses it to
 #                             keep a sample of its own: growth is measured
@@ -154,12 +154,12 @@ SAMPLES=${FM_MEMORY_SAMPLES:-$STATE/memory-reading.samples}
 
 TRACK_MIB=${FM_MEMORY_TRACK_MIB:-32}
 GROWTH_MIB_MIN=${FM_MEMORY_GROWTH_MIB_MIN:-5}
-SAMPLE_MAX_AGE=${FM_MEMORY_SAMPLE_MAX_AGE:-900}
-SAMPLE_MIN_AGE=${FM_MEMORY_SAMPLE_MIN_AGE:-5}
+SAMPLE_MAX_AGE=${FM_MEMORY_SAMPLE_MAX_AGE:-1260}
+SAMPLE_MIN_AGE=${FM_MEMORY_SAMPLE_MIN_AGE:-270}
 case "$TRACK_MIB" in ''|*[!0-9]*) TRACK_MIB=32 ;; esac
 case "$GROWTH_MIB_MIN" in ''|*[!0-9]*) GROWTH_MIB_MIN=5 ;; esac
-case "$SAMPLE_MAX_AGE" in ''|*[!0-9]*) SAMPLE_MAX_AGE=900 ;; esac
-case "$SAMPLE_MIN_AGE" in ''|*[!0-9]*) SAMPLE_MIN_AGE=5 ;; esac
+case "$SAMPLE_MAX_AGE" in ''|*[!0-9]*) SAMPLE_MAX_AGE=1260 ;; esac
+case "$SAMPLE_MIN_AGE" in ''|*[!0-9]*) SAMPLE_MIN_AGE=270 ;; esac
 
 # The delivery path, by the script names it runs under. Deliberately a superset
 # and deliberately matched only against the first two argv tokens: a worker's

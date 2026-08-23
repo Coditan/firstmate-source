@@ -424,7 +424,7 @@ test_growth_separates_a_large_steady_process_from_a_fast_growing_one() {
   new_scene "$dir"
   # pid 1000 is the largest and unchanged; pid 1006 is far smaller and has
   # quadrupled. Started 600s ago, so the recorded start epoch is NOW-600.
-  write_sample "$dir/samples" $((NOW - 60)) \
+  write_sample "$dir/samples" $((NOW - 300)) \
     "1000=$((NOW - 600)):512000" \
     "1006=$((NOW - 600)):17500"
   out=$(run_reading "$dir")
@@ -474,16 +474,57 @@ test_a_stale_prior_sample_is_unmeasured_rather_than_meaningless() {
 }
 
 test_too_short_an_interval_is_scoped_rather_than_divided_by() {
-  local dir="$TMP_ROOT/short" out status=0
+  local dir="$TMP_ROOT/short" out line status=0
   new_scene "$dir"
-  write_sample "$dir/samples" $((NOW - 1)) "1000=$((NOW - 600)):1000"
+  write_sample "$dir/samples" $((NOW - 6)) "1000=$((NOW - 600)):1000"
   out=$(run_reading "$dir") || status=$?
   expect_code 0 "$status" "a stored sample under the minimum interval"
-  assert_contains "$out" 'under the' 'a one-second interval was divided by anyway'
+  assert_contains "$out" 'under the 270s floor' 'a six-second interval was divided by anyway'
   assert_contains "$out" 'scoped for this run' 'a short operator interval was not labelled scoped'
+  line=$(process_line_from_section "$out" 'LARGEST TRACKED PROCESSES' 1000)
+  assert_contains "$line" 'scoped' 'a six-second allocation spike was not scoped'
+  assert_not_contains "$line" 'MiB/min' 'a six-second allocation spike became a machine-wide rate'
   assert_not_contains "$out" 'UNMEASURED for every tracked process' 'a short operator interval was labelled unmeasured'
   assert_not_contains "$out" ' unmeasured  unmeasured ' 'a short interval encoded per-process growth as unmeasured'
   pass "an interval under the floor is scoped rather than divided by"
+}
+
+test_the_watcher_interval_still_reports_a_real_rate() {
+  local dir="$TMP_ROOT/watcher-interval" out line status=0
+  new_scene "$dir"
+  write_sample "$dir/samples" $((NOW - 300)) "1000=$((NOW - 600)):1000"
+  out=$(run_reading "$dir") || status=$?
+  expect_code 0 "$status" "the watcher's 300-second sampling interval"
+  line=$(process_line_from_section "$out" 'FASTEST GROWING' 1000)
+  [ -n "$line" ] || fail "a process growing across the watcher's interval had no rate"
+  assert_contains "$line" 'MiB/min' 'the realistic interval did not produce a growth rate'
+  assert_contains "$line" 'growing' 'the realistic interval did not classify the growth'
+  pass "the watcher's realistic interval still produces a growth rate"
+}
+
+test_the_observed_delayed_interval_remains_measurable() {
+  local dir="$TMP_ROOT/delayed" out status=0
+  new_scene "$dir"
+  write_sample "$dir/samples" $((NOW - 926))
+  out=$(run_reading "$dir") || status=$?
+  expect_code 0 "$status" "the observed 926-second delayed interval"
+  assert_contains "$out" 'measured over 926s' 'the observed delayed interval was not retained as measured'
+  assert_not_contains "$out" 'growth unmeasured for every process above' 'the observed delayed interval was still marked unmeasured'
+  pass "the observed 926-second delayed interval remains measurable"
+}
+
+test_an_interval_past_the_new_ceiling_stays_unmeasured() {
+  local dir="$TMP_ROOT/past-window" out line status=0
+  new_scene "$dir"
+  write_sample "$dir/samples" $((NOW - 1261)) "1000=$((NOW - 2000)):1000"
+  out=$(run_reading "$dir") || status=$?
+  expect_code 3 "$status" "an interval past the 1260-second ceiling"
+  assert_contains "$out" 'growth unmeasured for every process above' 'an over-age sample was treated as measured'
+  assert_contains "$out" 'past the 1260s window' 'the new ceiling was not named in the blindness report'
+  line=$(process_line_from_section "$out" 'LARGEST TRACKED PROCESSES' 1000)
+  assert_contains "$line" 'unmeasured' 'an over-age process was not marked unmeasured'
+  assert_not_contains "$line" 'MiB/min' 'an over-age sample produced a growth rate'
+  pass "an interval past the new ceiling remains explicitly unmeasured"
 }
 
 test_corrupt_and_future_samples_force_incomplete_readings() {
@@ -526,14 +567,14 @@ EOF
 
   rm -rf "$dir"
   new_scene "$dir"
-  write_sample "$dir/samples" $((NOW - 60))
+  write_sample "$dir/samples" $((NOW - 300))
   printf 'not-a-pid\t123\t456\n' >> "$dir/samples"
   status=0
   out=$(run_reading "$dir") || status=$?
   expect_code 3 "$status" "a malformed sample process record"
   assert_contains "$out" 'malformed process record' 'the malformed sample record was silently discarded'
 
-  write_sample "$dir/samples" $((NOW - 60))
+  write_sample "$dir/samples" $((NOW - 300))
   status=0
   out=$(run_reading "$dir") || status=$?
   expect_code 0 "$status" "a well-formed sample with no process records"
@@ -546,7 +587,7 @@ test_a_reused_pid_is_not_reported_as_growth() {
   new_scene "$dir"
   # Same pid, but the recorded process started far earlier: this is a different
   # process now, and the difference in size is not growth.
-  write_sample "$dir/samples" $((NOW - 60)) "1000=$((NOW - 90000)):1000"
+  write_sample "$dir/samples" $((NOW - 300)) "1000=$((NOW - 90000)):1000"
   out=$(run_reading "$dir")
   line=$(process_line_from_section "$out" 'LARGEST TRACKED PROCESSES' 1000)
   [ -n "$line" ] || fail "the reused-pid process row was not found"
@@ -783,6 +824,9 @@ test_growth_with_no_prior_sample_is_unmeasured_never_zero
 test_an_unreadable_prior_sample_is_an_instrument_failure
 test_a_stale_prior_sample_is_unmeasured_rather_than_meaningless
 test_too_short_an_interval_is_scoped_rather_than_divided_by
+test_the_watcher_interval_still_reports_a_real_rate
+test_the_observed_delayed_interval_remains_measurable
+test_an_interval_past_the_new_ceiling_stays_unmeasured
 test_corrupt_and_future_samples_force_incomplete_readings
 test_sample_body_failures_are_not_first_sightings
 test_a_reused_pid_is_not_reported_as_growth

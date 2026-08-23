@@ -109,8 +109,12 @@ GROW_SECONDS=$(( CAP_MIB / RATE_MIB_S ))
   skip "this host has so little free memory that the runaway would finish in ${GROW_SECONDS}s, too fast to span two samples"
 
 alarm() {
+  # The sampling-window contract has fixture coverage in fm-memory-reading.test.sh.
+  # This live test compresses time and lowers the floor so it can prove the separate process-to-alarm path.
+  # Waiting 270 seconds between live test polls would add no evidence about that path.
   env FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
       FM_MEMORY_ALARM_HORIZON_MIN="$HORIZON_MIN" \
+      FM_MEMORY_SAMPLE_MIN_AGE=1 \
       "$ALARM"
 }
 

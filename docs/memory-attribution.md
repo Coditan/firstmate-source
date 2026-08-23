@@ -75,10 +75,10 @@ All of the following was run on `hlr-web-1` on 2026-08-13 against the reading as
 A self-capping balloon grew to a hard 600 MiB ceiling at roughly 20 MiB/s inside this task's own worktree, held flat, and exited.
 The host had ~15.9 GiB RAM headroom throughout, and the balloon's own shell carried a `ulimit -v` guard, so the runaway was scoped rather than a load test.
 
-During the growth phase:
+During the growth phase, this deliberately short survey lowered the sampling floor explicitly so it did not weaken the alarm's operational default:
 
 ```
-$ ./bin/fm-memory-reading.sh --no-store --interval 12 --largest 4 --growing 4
+$ FM_MEMORY_SAMPLE_MIN_AGE=12 ./bin/fm-memory-reading.sh --no-store --interval 12 --largest 4 --growing 4
 FASTEST GROWING
    RSS MiB          GROWTH  SIZE TREND PID      COMMAND              ATTRIBUTION
        330 +1200.2 MiB/min  growing    22424    python3 balloon.py   coditan / task fleet-host-protection-after-reaper-panel-memory-attribution (ship, firstmate-fork)
