@@ -31,8 +31,7 @@
 # convergence point inherits it - no other change needed. config/secondmate-harness
 # is deliberately NOT in the list: it is the primary's own setting for launching
 # secondmates, and a secondmate never spawns secondmates, so it must not flow
-# downstream. config/fork-sync-upstream is likewise excluded: only the curator
-# vessel compares the curated fork against real upstream. config/role is NOT in
+# downstream. config/role is NOT in
 # the list for the same reason as config/secondmate-harness: a coordinator's
 # secondmate is not itself a coordinator, and inheriting the role would silently
 # spread a no-crew posture (docs/configuration.md "Vessel role").

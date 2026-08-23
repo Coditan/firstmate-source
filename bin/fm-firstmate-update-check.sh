@@ -20,20 +20,16 @@
 #
 # The compared source comes from FM_FIRSTMATE_UPSTREAM_URL, then the local
 # gitignored config/firstmate-update-base file, then the canonical default - see
-# bin/fm-currency-base-lib.sh for the full precedence and for why this base is
-# deliberately separate from config/fork-sync-upstream. A present but unusable
+# bin/fm-currency-base-lib.sh for the full precedence. A present but unusable
 # config file records FIRSTMATE_UPDATE_STUCK rather than silently comparing
 # against a source this deployment never updates from.
 #
 # EVERY FINDING NAMES THE SOURCE IT COMPARED and the hop that source came from,
-# for the reason bin/fm-fork-sync-check.sh names both of its sides: a comparison
-# that does not say what it compared cannot be caught reading the wrong thing,
-# and a misconfigured base produces a finding indistinguishable from a correct
-# one. The finding also says "update source" rather than "upstream", because on
-# a fleet-deployed seat the source this deployment updates from is the fleet
-# repository, while "upstream" in the sibling fork check names the template that
-# repository's fork tracks. One word for two repositories is how a reader ends
-# up confident about the wrong one.
+# because a comparison that does not say what it compared cannot be caught
+# reading the wrong thing, and a misconfigured base produces a finding
+# indistinguishable from a correct one. The finding says "update source" rather
+# than "upstream", because on a fleet-deployed seat the source this deployment
+# updates from is the fleet repository.
 #
 # Usage: fm-firstmate-update-check.sh
 # Environment:
