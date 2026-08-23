@@ -213,12 +213,8 @@ EOF
     "the unreadable-record diagnostic must name its closing condition"
   assert_grep "BACKLOG_UNREADABLE" "$ROOT/.agents/skills/bootstrap-diagnostics/SKILL.md" \
     "the coded diagnostic must have a documented handling procedure"
-  # AGENTS.md section 13 no longer enumerates the diagnostic prefixes. The two
-  # copies of that list had already drifted apart, so bootstrap-diagnostics is
-  # now their one owner and the instruction surface reaches this line through
-  # the general trigger asserted here.
-  assert_grep "- \`bootstrap-diagnostics\` - load whenever" "$ROOT/AGENTS.md" \
-    "AGENTS.md must still trigger the skill that owns the coded diagnostics"
+  # AGENTS.md section 13 no longer carries a second copy of the diagnostic-prefix list.
+  # bootstrap-diagnostics is its one owner, while fm-instruction-owners and fm-bootstrap own the general AGENTS.md trigger's presence and wording.
   pass "an unresolvable record is a coded documented diagnostic, not a reader-disagreement false alarm"
 }
 

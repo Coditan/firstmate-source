@@ -618,10 +618,8 @@ pass "the guard is registered on all five tracked harness surfaces, with Pi's cr
 # --- the instruction surface points at the entry point -----------------------
 
 assert_grep 'bin/fm-lavish.sh' "$ROOT/AGENTS.md" "AGENTS.md must name the entry point"
-# The prefix list lives in bootstrap-diagnostics alone (asserted next); section
-# 13 carries only the general trigger that reaches it.
-assert_grep '- `bootstrap-diagnostics` - load whenever' "$ROOT/AGENTS.md" \
-  "AGENTS.md must still trigger the skill that owns the new bootstrap diagnostic"
+# AGENTS.md section 13 no longer carries a second copy of the diagnostic-prefix list.
+# bootstrap-diagnostics is its one owner, while fm-instruction-owners and fm-bootstrap own the general AGENTS.md trigger's presence and wording.
 assert_grep 'LAVISH_ACCESS' "$ROOT/.agents/skills/bootstrap-diagnostics/SKILL.md" \
   "bootstrap-diagnostics must own the LAVISH_ACCESS response"
 assert_grep 'fm-lavish.sh' "$ROOT/bin/fm-brief.sh" \
