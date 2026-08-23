@@ -25,6 +25,16 @@
 # config file records FIRSTMATE_UPDATE_STUCK rather than silently comparing
 # against a source this deployment never updates from.
 #
+# EVERY FINDING NAMES THE SOURCE IT COMPARED and the hop that source came from,
+# for the reason bin/fm-fork-sync-check.sh names both of its sides: a comparison
+# that does not say what it compared cannot be caught reading the wrong thing,
+# and a misconfigured base produces a finding indistinguishable from a correct
+# one. The finding also says "update source" rather than "upstream", because on
+# a fleet-deployed seat the source this deployment updates from is the fleet
+# repository, while "upstream" in the sibling fork check names the template that
+# repository's fork tracks. One word for two repositories is how a reader ends
+# up confident about the wrong one.
+#
 # Usage: fm-firstmate-update-check.sh
 # Environment:
 #   FM_FIRSTMATE_UPSTREAM_URL overrides the configured comparison base.
@@ -57,6 +67,7 @@ record_stuck() {
 fm_currency_base_resolve "$CONFIG" "$FM_CURRENCY_BASE_UPDATE_ITEM" ||
   record_stuck "config/$FM_CURRENCY_BASE_UPDATE_ITEM is unusable - $FM_CURRENCY_BASE_REASON"
 UPSTREAM_URL=$FM_CURRENCY_BASE_VALUE
+UPDATE_SOURCE=$FM_CURRENCY_BASE_SOURCE
 
 # Match fm-update.sh: compare from the deployment's local default-branch ref,
 # not a possibly detached or feature-branch HEAD.
@@ -72,7 +83,7 @@ if [ -z "$compare_repo" ]; then
   git -C "$tmp" init --bare -q || record_stuck "temporary comparison repository cannot be initialized"
   git -C "$tmp" fetch -q --no-tags "$FM_ROOT" "$current:refs/heads/local" || record_stuck "local default-branch commit cannot be copied for comparison"
   if ! git -C "$tmp" fetch -q --no-tags "$UPSTREAM_URL" HEAD:refs/heads/upstream; then
-    record_stuck "upstream default-branch lookup failed ($UPSTREAM_URL)"
+    record_stuck "update-source default-branch lookup failed ($UPSTREAM_URL, from $UPDATE_SOURCE)"
   fi
   compare_repo=$tmp
   upstream=$(git -C "$tmp" rev-parse --verify refs/heads/upstream)
@@ -95,7 +106,13 @@ if git -C "$compare_repo" diff --quiet "$base" "$upstream" -- AGENTS.md roles bi
   exit 0
 fi
 
-printf 'FIRSTMATE_UPDATE_AVAILABLE: upstream instruction update %s -> %s; dispatch a crewmate to broadcast via Bridge All-Ships\n' \
-  "$current" "$upstream" > "$AVAILABLE"
+{
+  printf 'FIRSTMATE_UPDATE_AVAILABLE: instruction update %s -> %s on the source this deployment updates from; dispatch a crewmate to broadcast via Bridge All-Ships\n' \
+    "$current" "$upstream"
+  # Which repository produced that reading. Without this line a base pointing at
+  # a repository this deployment never updates from reads exactly like a correct
+  # one - the defect its sibling check was caught in on 2026-08-17.
+  printf '  compared: this deployment against %s (from %s)\n' "$UPSTREAM_URL" "$UPDATE_SOURCE"
+} > "$AVAILABLE"
 rm -f "$STUCK"
 cat "$AVAILABLE"
