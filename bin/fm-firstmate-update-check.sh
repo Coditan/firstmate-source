@@ -19,7 +19,7 @@
 # docs/currency-round.md owns why this is not an external cron or systemd timer.
 #
 # The compared source comes from FM_FIRSTMATE_UPSTREAM_URL, then the local
-# gitignored config/firstmate-update-base file, then the canonical default - see
+# gitignored config/firstmate-update-base file, then the built-in default - see
 # bin/fm-currency-base-lib.sh for the full precedence. A present but unusable
 # config file records FIRSTMATE_UPDATE_STUCK rather than silently comparing
 # against a source this deployment never updates from.

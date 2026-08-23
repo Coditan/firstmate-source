@@ -10,7 +10,7 @@
 #   1. FM_FIRSTMATE_UPSTREAM_URL (explicit, per-invocation, passed through
 #      unvalidated so existing test harnesses keep working)
 #   2. the local gitignored config/firstmate-update-base file
-#   3. FM_CURRENCY_BASE_DEFAULT, the canonical upstream template
+#   3. FM_CURRENCY_BASE_DEFAULT, the update source this deployment came from
 # An absent config file therefore changes nothing for an unconfigured home.
 # A PRESENT but unusable file never silently falls back to the default: the
 # resolver refuses with a reason, the check script persists that as its own
@@ -21,8 +21,8 @@
 # invoke them in a command substitution: fm_currency_base_resolve sets
 # FM_CURRENCY_BASE_VALUE on success and FM_CURRENCY_BASE_REASON on refusal.
 
-# The canonical upstream template, used when nothing is configured.
-FM_CURRENCY_BASE_DEFAULT="https://github.com/kunchenguid/firstmate.git"
+# The update source this deployment came from, used when nothing is configured.
+FM_CURRENCY_BASE_DEFAULT="https://github.com/Coditan/firstmate-source.git"
 
 # The declared config-dir-relative item names, so callers never spell them, plus
 # the two result globals. All four are read by sourcing callers only.

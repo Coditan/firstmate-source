@@ -657,9 +657,9 @@ A seed that genuinely stalls, or that is never attempted because the seeding bud
 It mutates only `state/firstmate-update.available` and `state/firstmate-update.stuck`; its header and `--help` output own exact overrides and mechanics.
 It is invoked by the daily currency round rather than scheduled externally, because an instruction to install a timer had already failed silently on this fleet.
 
-The local gitignored `config/firstmate-update-base` names the artifact this deployment actually updates from, so the instruction-surface check compares against the right source instead of assuming the original template.
+The local gitignored `config/firstmate-update-base` names the artifact this deployment actually updates from, so the instruction-surface check compares against the right source.
 The file holds exactly one non-empty line naming a git URL (`https://`, `http://`, `ssh://`, `git://`, `git+ssh://`, or `file://`), an scp-style `host:path` remote, or an absolute local path; a relative path is refused because it would resolve against each caller's working directory.
-Precedence for the comparison base, highest first, is the explicit `FM_FIRSTMATE_UPSTREAM_URL` environment variable, then the config file, then the default `https://github.com/kunchenguid/firstmate.git`.
+Precedence for the comparison base, highest first, is the explicit `FM_FIRSTMATE_UPSTREAM_URL` environment variable, then the config file, then the default `https://github.com/Coditan/firstmate-source.git`.
 The environment variable is passed through unvalidated so existing harnesses keep working.
 Every `FIRSTMATE_UPDATE_AVAILABLE:` finding and unreachable-base `FIRSTMATE_UPDATE_STUCK:` refusal names the update-source URL and the hop that supplied it, because a comparison that does not say what it compared cannot be caught reading the wrong thing.
 A config path that exists but is not a readable regular file, such as a directory or a dangling symlink, is refused for that reason rather than treated as absent.

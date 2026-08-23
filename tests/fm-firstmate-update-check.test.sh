@@ -171,7 +171,7 @@ test_resolver_precedence_and_default() {
   # shellcheck source=bin/fm-currency-base-lib.sh disable=SC1091
   . "$ROOT/bin/fm-currency-base-lib.sh"
 
-  [ "$FM_CURRENCY_BASE_DEFAULT" = 'https://github.com/kunchenguid/firstmate.git' ] \
+  [ "$FM_CURRENCY_BASE_DEFAULT" = 'https://github.com/Coditan/firstmate-source.git' ] \
     || fail "the documented default base changed: $FM_CURRENCY_BASE_DEFAULT"
 
   fm_currency_base_resolve "$config" "$FM_CURRENCY_BASE_UPDATE_ITEM" \
