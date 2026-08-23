@@ -151,6 +151,81 @@ uid=g2:1_0 RootWebArea "Leerbrett · Lavish" url="http://example.invalid/session
 SNAP
 }
 
+# The fixture board as this host actually renders it since board.js began naming
+# decision forms - recorded 2026-08-23 from Chrome 151.0.7922.71 through
+# chrome-devtools-axi 0.1.29, trimmed of the chrome lines these readers never
+# touch. Two things are new against answerable_snapshot above: each form carries
+# its decision label as its accessible name, and the board's own tally strip is
+# in the tree as one numbered button per registered decision.
+named_form_snapshot() {
+  cat <<'SNAP'
+page:
+  title: Probebrett · Lavish
+  refs: 64
+snapshot:
+uid=g1477:152_0 RootWebArea "Probebrett · Lavish" url="http://crew-hlr.tail7b8448.ts.net:4451/session/206fbc97d061fe07"
+  uid=g1477:152_5 Iframe
+    uid=g1477:153_0 RootWebArea "Probebrett" url="http://crew-hlr.tail7b8448.ts.net:4451/artifact/206fbc97d061fe07/index.html?artifact_revision=2"
+      uid=g1477:153_10 button "1. Probe-Entscheidung A, unberührt"
+      uid=g1477:153_11 button "2. Probe-Entscheidung B, unberührt"
+      uid=g1477:153_17 StaticText "Probe-Entscheidung A"
+      uid=g1477:153_21 form "Probe-Entscheidung A"
+        uid=g1477:153_22 radio "Option eins Die Option, die der Treiber wählt."
+        uid=g1477:153_26 radio "Option zwei Bleibt ungewählt."
+        uid=g1477:153_30 textbox "Begründung (optional)" multiline
+        uid=g1477:153_31 button "Antwort vormerken"
+      uid=g1477:153_34 StaticText "Probe-Entscheidung B"
+      uid=g1477:153_36 form "Probe-Entscheidung B"
+        uid=g1477:153_37 radio "Ja"
+        uid=g1477:153_39 radio "Nein"
+        uid=g1477:153_41 textbox "Begründung (optional)" multiline
+        uid=g1477:153_42 button "Antwort vormerken"
+  uid=g1477:152_7 complementary
+    uid=g1477:152_10 StaticText "Your agent is not listening. If this persists, ask your agent to poll for updates from Lavish."
+    uid=g1477:152_15 button "Send to Agent"
+SNAP
+}
+
+# THE SAME RECORDING with both form containers deleted and their controls lifted
+# to the frame's own indent. It is DERIVED, not recorded, and that is stated
+# rather than blurred: no browser here produces it, because Chrome 151 exposes
+# both a named and an unnamed form as role form (measured 2026-08-23).
+#
+# It stands for the build reported from another vessel on 2026-08-23, which
+# exposed no node with role form inside the artifact frame at all. On that build
+# this reader counted zero decisions on every board including its own answerable
+# fixture, and published "this board carries no decision form at all" - a claim
+# about the board, made from a fact about the browser. This fixture pins the
+# distinction the reader must now draw: the controls and the board's own tally
+# are both still here, so the honest verdict is that the instrument could not
+# read, and the dishonest one is that the board cannot be answered.
+containerless_snapshot() {
+  cat <<'SNAP'
+page:
+  title: Probebrett · Lavish
+  refs: 64
+snapshot:
+uid=g1477:152_0 RootWebArea "Probebrett · Lavish" url="http://crew-hlr.tail7b8448.ts.net:4451/session/206fbc97d061fe07"
+  uid=g1477:152_5 Iframe
+    uid=g1477:153_0 RootWebArea "Probebrett" url="http://crew-hlr.tail7b8448.ts.net:4451/artifact/206fbc97d061fe07/index.html?artifact_revision=2"
+      uid=g1477:153_10 button "1. Probe-Entscheidung A, unberührt"
+      uid=g1477:153_11 button "2. Probe-Entscheidung B, unberührt"
+      uid=g1477:153_17 StaticText "Probe-Entscheidung A"
+      uid=g1477:153_22 radio "Option eins Die Option, die der Treiber wählt."
+      uid=g1477:153_26 radio "Option zwei Bleibt ungewählt."
+      uid=g1477:153_30 textbox "Begründung (optional)" multiline
+      uid=g1477:153_31 button "Antwort vormerken"
+      uid=g1477:153_34 StaticText "Probe-Entscheidung B"
+      uid=g1477:153_37 radio "Ja"
+      uid=g1477:153_39 radio "Nein"
+      uid=g1477:153_41 textbox "Begründung (optional)" multiline
+      uid=g1477:153_42 button "Antwort vormerken"
+  uid=g1477:152_7 complementary
+    uid=g1477:152_10 StaticText "Your agent is not listening. If this persists, ask your agent to poll for updates from Lavish."
+    uid=g1477:152_15 button "Send to Agent"
+SNAP
+}
+
 # query_with <snapshot-producer> runs the driver's reader against that recorded
 # snapshot and sets QUERY_OUT and QUERY_STATUS in the CALLING shell. Both matter
 # to every caller, and a command substitution would run this in a subshell and
@@ -313,6 +388,47 @@ test_query_counts_a_decision_form_that_carries_nothing() {
   assert_contains "$QUERY_OUT" "no selectable options" \
     "query must name the missing options"
   pass "query counts a decision form that carries nothing and reports it"
+}
+
+test_query_counts_a_named_decision_form() {
+  query_with named_form_snapshot
+  [ "$QUERY_STATUS" -eq 0 ] || fail "query rejected the board this host actually renders"$'\n'"$QUERY_OUT"
+  assert_contains "$QUERY_OUT" "decision cards: 2" \
+    "a form carrying an accessible name must still be counted as a decision"
+  assert_contains "$QUERY_OUT" "decisions the board itself counts: 2" \
+    "query must read the board's own tally strip alongside the tree"
+  pass "query counts named decision forms and reads the board's own tally"
+}
+
+test_query_reports_an_unreadable_tree_rather_than_an_unanswerable_board() {
+  query_with containerless_snapshot
+  [ "$QUERY_STATUS" -ne 0 ] \
+    || fail "query passed a board it could not see the decisions of"$'\n'"$QUERY_OUT"
+  # The whole point: it must refuse, and it must not refuse with the wrong claim.
+  case "$QUERY_OUT" in
+    *"carries no decision form at all"*)
+      fail "query published a claim about the board from a fact about the browser"$'\n'"$QUERY_OUT" ;;
+  esac
+  assert_contains "$QUERY_OUT" "could not read" \
+    "query must say the instrument could not read this tree"
+  assert_contains "$QUERY_OUT" "The board itself counts 2" \
+    "query must name what the board's own tally reports, or its refusal is unactionable"
+  pass "query reports an unreadable tree as unread, not as an unanswerable board"
+}
+
+test_query_still_names_a_board_that_asks_nothing() {
+  query_with prose_snapshot
+  # The other half of the discrimination: no containers AND no tally squares is
+  # the real defect, and it must keep its own plain sentence.
+  assert_contains "$QUERY_OUT" "decisions the board itself counts: 0" \
+    "a board that asks nothing must report a tally of nothing"
+  assert_contains "$QUERY_OUT" "nothing on it can be answered" \
+    "a board that genuinely asks nothing must still be named as unanswerable"
+  case "$QUERY_OUT" in
+    *"could not read"*)
+      fail "query excused a genuinely unanswerable board as an unreadable instrument"$'\n'"$QUERY_OUT" ;;
+  esac
+  pass "a board that asks nothing is still called unanswerable, not unreadable"
 }
 
 test_query_reports_an_unlistened_board() {
@@ -996,6 +1112,9 @@ test_query_distinguishes_note_evidence_from_button_shape
 test_query_reports_missing_notes_without_refusing_them
 test_query_can_refuse_missing_notes_when_the_contract_flips
 test_query_counts_a_decision_form_that_carries_nothing
+test_query_counts_a_named_decision_form
+test_query_reports_an_unreadable_tree_rather_than_an_unanswerable_board
+test_query_still_names_a_board_that_asks_nothing
 test_query_reports_an_unlistened_board
 test_query_requests_the_full_snapshot_on_a_long_board
 test_selftest_arms_the_poll_before_answering

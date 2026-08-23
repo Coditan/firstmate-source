@@ -51,13 +51,16 @@ Re-measure the host with:
 - Re-resolve accessibility uids before every action.
 - Never treat a screenshot's exit status as evidence.
 - Never conclude from `query` alone that a long board is missing controls: a plain accessibility snapshot truncates around 21k characters, mid-form on a board with enough decisions, and `query` reads `snapshot --full` for exactly that reason.
+- `query` reporting no decisions is two verdicts, and it says which: a board that genuinely asks nothing, or a browser build that exposed no decision container while the board's own tally still counts decisions.
+- The second is an instrument that could not read; relay it as that and never as a board that cannot be answered.
 
 The driver header owns the measured reasoning and implementation details behind these constraints.
 
-## Follow-up when PR 117 merges
+## Follow-up: the note-required default is now due
 
-Missing note fields are report-only today because the current board contract permits choice-only answers.
-When PR 117 merges, change the `FM_RUN_DECISIONBOARD_NOTE_REQUIRED` default from `report` to `refuse`.
+Missing note fields are report-only today because the board contract at the time permitted choice-only answers.
+The condition for changing the `FM_RUN_DECISIONBOARD_NOTE_REQUIRED` default from `report` to `refuse` was PR 117, and PR 117 merged on 2026-08-17 - checked 2026-08-23.
+So this is an outstanding change rather than a pending condition, and it is its own task: flipping the default refuses every board built before the contract changed.
 The driver cannot track that requirement automatically because no machine-readable owner exists for it.
 
 ## What this skill does not do

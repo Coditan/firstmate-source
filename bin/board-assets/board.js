@@ -478,6 +478,35 @@
     }
   }
 
+  // Give every decision form an accessible name.
+  //
+  // This is not decoration. Whether a <form> reaches the accessibility tree as
+  // role "form" AT ALL depends on it: HTML-AAM maps an UNNAMED <form> to a plain
+  // generic container and only a NAMED one to the form role, and browser builds
+  // differ in whether they have adopted that mapping yet.
+  //
+  // Measured here on 2026-08-23, Chrome 151.0.7922.71: a named and an unnamed
+  // decision form were BOTH exposed as `form`, so this build still uses the older
+  // unconditional mapping. Reported the same day from another vessel's browser
+  // build, and not reproduced here: no node with role form inside the artifact
+  // frame at all, which made the run-decisionboard answerability check report
+  // every board - including its own demonstrably answerable fixture - as carrying
+  // no decision to answer.
+  //
+  // A NAMED form carries the form role under either mapping. So naming it removes
+  // the check's dependency on which mapping a build implements, rather than
+  // betting on one. It is also what a screen reader needs to say which decision
+  // the region belongs to, which the unnamed form never told anybody.
+  function nameForm(form) {
+    if (form.getAttribute('aria-label') || form.getAttribute('aria-labelledby')) {
+      return;
+    }
+    var name = questionLabel(form);
+    if (name) {
+      form.setAttribute('aria-label', name);
+    }
+  }
+
   function init() {
     pickLanguage();
     QUESTIONS = [];
@@ -490,6 +519,7 @@
       if (!forms[i].hasAttribute('data-lavish-question')) {
         forms[i].setAttribute('data-lavish-question', key);
       }
+      nameForm(forms[i]);
       reportFormDefects(forms[i]);
       if (key && !(key in STATE)) {
         QUESTIONS.push({ key: key, label: questionLabel(forms[i]), jump: jumpTarget(forms[i]) });
