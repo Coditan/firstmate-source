@@ -314,6 +314,9 @@ function input(doc, el) {
   check(tallyCount(tally) === 3, 'the count starts at one per question, none sent back');
   check((row.innerHTML.match(/fm-tally-sq/g) || []).length === 3,
     'the strip carries one square per question');
+  check(tally.getAttribute('role') === 'group'
+      && tally.getAttribute('aria-label') === 'Offene Entscheidungen',
+    'the German tally strip exposes a localized named group');
   check(row.innerHTML.includes('#fm-mk-open'), 'an untouched question shows an empty square');
   check(row.innerHTML.includes('data-fm-jump="e1"'),
     'each square jumps to the entry its question sits in');
@@ -419,6 +422,52 @@ function input(doc, el) {
   reinit(doc, [a.form]);
   check(stripParts(tally).legend.innerHTML.includes('Pencil'),
     'an English board gets an English legend rather than a half-translated one');
+  check(tally.getAttribute('aria-label') === 'Open decisions',
+    'an English board gets an English tally group name');
+}
+
+// --- 15. every decision form is named ------------------------------------
+//
+// Not cosmetic. Whether a <form> reaches the accessibility tree as role "form"
+// at all depends on it: HTML-AAM exposes an UNNAMED form as a generic container
+// and only a NAMED one as the form role, and browser builds differ on whether
+// they have adopted that mapping. run-decisionboard's answerability check finds
+// decisions by that role, so on a build that has, an unnamed form makes the
+// check report a perfectly answerable board as carrying nothing to answer -
+// which is what a vessel measured on 2026-08-23. The name also tells a screen
+// reader which decision the region belongs to.
+
+{
+  const { doc, warnings } = install({ withLavish: true });
+  const labelled = buildForm('frage-o', { choice: 'A' });
+  const bare = makeElement('form', { 'data-fm-question': 'frage-p' });
+  const preset = makeElement('form',
+    { 'data-fm-question': 'frage-q', 'data-fm-label': 'Abgeleitet', 'aria-label': 'Eigener Name' });
+  const missingReference = makeElement('form',
+    { 'data-fm-question': 'frage-r', 'aria-labelledby': 'fehlt' });
+  const emptyReference = makeElement('form',
+    { 'data-fm-question': 'frage-s', 'aria-labelledby': '' });
+  const validReference = makeElement('form',
+    { 'data-fm-question': 'frage-t', 'aria-labelledby': 'titel' });
+  const validLabel = makeElement('div');
+  validLabel.textContent = 'Autorentitel';
+  doc._byId.titel = validLabel;
+  reinit(doc, [labelled.form, bare, preset, missingReference, emptyReference, validReference]);
+  check(labelled.form.getAttribute('aria-label') === 'Testfrage',
+    'a decision form is named from its data-fm-label');
+  check(bare.getAttribute('aria-label') === 'frage-p',
+    'a form with no label falls back to its question key rather than staying unnamed');
+  check(preset.getAttribute('aria-label') === 'Eigener Name',
+    'a name the board declared itself is left alone');
+  check(missingReference.getAttribute('aria-label') === null,
+    'an author aria-labelledby with a missing target is not overridden');
+  check(emptyReference.getAttribute('aria-label') === null,
+    'an author aria-labelledby attribute is left alone without predicting its name');
+  check(validReference.getAttribute('aria-label') === null,
+    'an author aria-labelledby with an existing target is left alone');
+  check(warnings.some((warning) => warning.includes('frage-r') && warning.includes('fehlt')
+      && warning.includes('may end up unnamed')),
+    'a dangling aria-labelledby id warns through the form defect channel');
 }
 
 process.exit(failures === 0 ? 0 : 1);

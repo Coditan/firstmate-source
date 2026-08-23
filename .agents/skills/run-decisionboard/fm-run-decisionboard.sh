@@ -19,7 +19,17 @@
 #   open    bin/fm-lavish.sh emitted a URL, and it is the reachable one
 #   drive   Chrome is pointed at that URL through a bridge that was restarted
 #   poll    bin/fm-lavish.sh is listening before any answer is made
-#   query   the rendered board carries answerable controls, inside its iframe
+#   query   the rendered board carries answerable controls, inside its iframe.
+#           WHAT THIS PREDICATE COVERS, stated because the last one did not: it
+#           holds exactly when the artifact frame exposes a decision container
+#           carrying selectable options, a note field and a button, for as many
+#           decisions as the board's own tally strip says it asks. That is the
+#           same set of world-states as "a decision on this board can be
+#           answered" only up to the SHAPE of the controls - whether the button
+#           really submits is proved by `answer`, not here, and `query` says so
+#           in its own output. The set it must never be confused with is "the
+#           tree happened to contain a node whose role string is form": that was
+#           the old predicate, and gotcha 9 is what made the difference total.
 #   shot    a screenshot exists on disk, in this home, non-empty
 #   answer  a choice and a note were entered and queued on the board
 #   send    the queued answer left the board
@@ -85,6 +95,22 @@
 #      neighbour's browser session, which is a cost this accepts rather than one
 #      it avoids.
 #
+#   9. Whether a <form> is exposed as role "form" AT ALL is a property of the
+#      BROWSER BUILD, not of the board. HTML-AAM maps an UNNAMED <form> to a
+#      generic container and only a NAMED one to the form role; builds differ in
+#      whether they have adopted that mapping. Measured here 2026-08-23 on Chrome
+#      151.0.7922.71: a named and an unnamed decision form were both exposed as
+#      `form`, so this build still uses the older unconditional mapping. Reported
+#      the same day from another vessel's build, and NOT reproduced here: no node
+#      with role form inside the artifact frame at all, so this check counted zero
+#      decisions on every board including its own answerable fixture.
+#      Two things follow, and both are in the code. board.js now gives every
+#      decision form an accessible name, so the form role no longer depends on
+#      which mapping a build implements. And `query` no longer publishes "this
+#      board carries no decision form" for a tree that exposed none: it reads the
+#      board's own tally strip, which counts what board.js registered, and reports
+#      an unreadable instrument rather than an unanswerable board.
+#
 # Usage:
 #   fm-run-decisionboard.sh selftest [--keep]      the whole loop on a fixture board
 #   fm-run-decisionboard.sh doctor                 re-measure this host's facts
@@ -109,9 +135,13 @@
 #   FM_RUN_DECISIONBOARD_NOTE_REQUIRED
 #                                  report (default) names missing note fields but
 #                                  does not refuse them; refuse makes query fail.
-#                                  Change the default when PR 117 merges. No
-#                                  machine-readable note requirement exists for
-#                                  this driver to follow automatically.
+#                                  The condition for flipping this default was
+#                                  PR 117, which merged 2026-08-17 (checked
+#                                  2026-08-23), so the flip is outstanding work
+#                                  and not a pending condition; SKILL.md carries
+#                                  why it is its own task. No machine-readable
+#                                  note requirement exists for this driver to
+#                                  follow automatically.
 #   FM_RUN_DECISIONBOARD_TMPDIR    the world-writable directory screenshots are
 #                                  staged through (default /tmp). See `shot`.
 #                                  In a sandboxed worker, set TMPDIR and
@@ -402,7 +432,15 @@ queued_confirmation() {
     | head -1
 }
 
-parse_forms() {  # <inventory|subtree> [decision-number]
+# parse_forms <inventory|subtree|tally> [decision-number]
+#
+# `tally` prints one line for every button inside the board's own tally strip.
+# board.js builds one square per form[data-fm-question] it registered
+# and numbers them in document order, so the strip is a SECOND reading of how
+# many answerable decisions the board carries - taken from the code path that
+# actually queues an answer, not from the shape of the tree. It is what tells an
+# exposed-nothing tree (gotcha 9) apart from a board that really asks nothing.
+parse_forms() {  # <inventory|subtree|tally> [decision-number]
   local mode=$1 target=${2:-}
   awk -v mode="$mode" -v target="$target" '
     {
@@ -413,7 +451,7 @@ parse_forms() {  # <inventory|subtree> [decision-number]
     }
     # The artifact frame announces itself as a RootWebArea served from /artifact/.
     body ~ /^uid=[^ ]+ RootWebArea/ && body ~ /\/artifact\// {
-      in_art = 1; art_indent = indent; form_indent = -1; next
+      in_art = 1; art_indent = indent; form_indent = -1; tally_indent = -1; next
     }
     in_art && indent <= art_indent { in_art = 0 }
     !in_art { next }
@@ -423,6 +461,17 @@ parse_forms() {  # <inventory|subtree> [decision-number]
       role = rest; sub(/ .*/, "", role)
       name = ""
       if (match(rest, /"[^"]*"/)) { name = substr(rest, RSTART + 1, RLENGTH - 2) }
+    }
+    # This is a closed vocabulary shared with board.js. A new board language
+    # must add its tallyLabel here too or its strip is unreadable.
+    mode == "tally" && role == "group" && (name == "Offene Entscheidungen" || name == "Open decisions") {
+      tally_indent = indent
+      next
+    }
+    mode == "tally" && tally_indent >= 0 && indent <= tally_indent { tally_indent = -1 }
+    mode == "tally" && tally_indent >= 0 && role == "button" {
+      print ++tally_buttons
+      next
     }
     role == "form" {
       forms++; form_indent = indent
@@ -456,14 +505,17 @@ parse_inventory() {
 # --- query ------------------------------------------------------------------
 
 cmd_query() {
-  local inv snap decisions with_options with_note with_button listening note_policy
+  local inv snap squares decisions with_options with_note with_button listening note_policy
   note_policy=${FM_RUN_DECISIONBOARD_NOTE_REQUIRED:-report}
   case "$note_policy" in
     report|refuse) ;;
     *) die "query: FM_RUN_DECISIONBOARD_NOTE_REQUIRED must be 'report' or 'refuse', not '$note_policy'" ;;
   esac
-  inv=$(form_inventory)
+  # One snapshot, three readings. Gotcha 4 makes every extra snapshot a new
+  # generation, and the counts below must all describe the SAME board state.
   snap=$(snapshot)
+  inv=$(printf '%s\n' "$snap" | parse_forms inventory)
+  squares=$(printf '%s\n' "$snap" | parse_forms tally | sort -un | grep -c '^[0-9]' || true)
   decisions=$(printf '%s\n' "$inv" | awk -F'\t' '$2 == "form" {print $1}' | sort -un | wc -l | tr -d ' ')
   [ -n "$inv" ] || decisions=0
   with_options=$(printf '%s\n' "$inv" | awk -F'\t' '$2 == "radio" {print $1}' | sort -un | wc -l | tr -d ' ')
@@ -479,6 +531,11 @@ cmd_query() {
   printf '  with selectable options: %s\n' "$with_options"
   printf '  with a note field: %s\n' "$with_note"
   printf '  with a button (role only): %s\n' "$with_button"
+  if [ "$squares" -gt 0 ]; then
+    printf '  decisions the board itself counts: %s\n' "$squares"
+  else
+    printf '  decisions the board itself counts: unavailable (no tally reading)\n'
+  fi
   printf '  button evidence: necessary shape only; role=button cannot distinguish submit from help or reset. Only answer proves submission by clicking it and reading the queued confirmation.\n'
   printf '  poll listening: %s\n' "$listening"
   if [ -n "$inv" ]; then
@@ -490,8 +547,27 @@ cmd_query() {
     printf 'FINDING: no poll is armed on this board - the captain would see "Your agent is not listening".\n'
   fi
   # The defect this whole skill exists for: a board that cannot be answered.
+  #
+  # Zero decision containers has two causes and they are not the same claim.
+  # Either the board really asks nothing that can be answered, or this browser
+  # build did not expose the containers (gotcha 9) and nothing here could count
+  # them. The board's own tally separates the two, because those squares exist
+  # only where board.js registered an answerable form. Publishing the first
+  # sentence for the second case is what refused a demonstrably answerable
+  # fixture on another vessel on 2026-08-23, and a guard that refuses everything
+  # is one the next operator switches off.
+  if [ "$decisions" -eq 0 ] && [ "$squares" -gt 0 ]; then
+    printf 'FINDING: this browser build exposed no decision container inside the board, so nothing here could count or drive its decisions. The board itself counts %s, so this is an instrument that could not read, not a board that cannot be answered - do not report it as either answerable or unanswerable.\n' \
+      "$squares"
+    return 1
+  fi
   if [ "$decisions" -eq 0 ]; then
     printf 'FINDING: this board carries no decision form at all; nothing on it can be answered.\n'
+    return 1
+  fi
+  if [ "$squares" -gt 0 ] && [ "$squares" -ne "$decisions" ]; then
+    printf 'FINDING: the accessibility tree exposes %s decision cards, but the board runtime tally counts %s decisions; these readings disagree, so answers could replace one another instead of remaining distinct.\n' \
+      "$decisions" "$squares"
     return 1
   fi
   if [ "$with_options" -lt "$decisions" ]; then
