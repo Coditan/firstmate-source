@@ -79,6 +79,7 @@
       legendBlank: 'Leer = unberührt',
       legendPencil: 'Bleistift = gewählt, nicht gesendet - zählt weiter',
       legendStruck: 'Gestrichen = zurückgeschickt',
+      tallyLabel: 'Offene Entscheidungen',
       sqBlank: ', unberührt',
       sqPencil: ', gewählt aber nicht gesendet',
       sqStruck: ', zurückgeschickt'
@@ -97,6 +98,7 @@
       legendBlank: 'Empty = untouched',
       legendPencil: 'Pencil = chosen, not sent - still counted',
       legendStruck: 'Struck = sent back',
+      tallyLabel: 'Open decisions',
       sqBlank: ', blank',
       sqPencil: ', chosen but not sent',
       sqStruck: ', sent back'
@@ -240,6 +242,11 @@
       // A board that asks nothing needs no count of what is unanswered.
       return;
     }
+
+    // The driver recognizes this localized closed vocabulary too. A new board
+    // language must add its tallyLabel there as well or its strip is unreadable.
+    strip.setAttribute('role', 'group');
+    strip.setAttribute('aria-label', T.tallyLabel);
 
     stripCount = document.createElement('div');
     stripCount.className = 'fm-tally-count';
@@ -504,7 +511,10 @@
     var labelledby = (form.getAttribute('aria-labelledby') || '').trim();
     var labelled = labelledby && labelledby.split(/\s+/).some(function (id) {
       var source = document.getElementById(id);
-      return source && (source.textContent || '').trim();
+      if (!source) return false;
+      return ['aria-label', 'alt', 'title', 'value'].some(function (attribute) {
+        return (source.getAttribute(attribute) || '').trim();
+      }) || (source.textContent || '').trim();
     });
     if (labelled) return;
     var name = questionLabel(form);

@@ -198,7 +198,33 @@ snapshot:
 uid=g1477:152_0 RootWebArea "Widerspruechliches Brett · Lavish" url="http://example.invalid/session/x"
   uid=g1477:152_5 Iframe
     uid=g1477:153_0 RootWebArea "Widerspruechliches Brett" url="http://example.invalid/artifact/x/index.html"
-      uid=g1477:153_10 button "1. Gemeinsame Entscheidung, unberührt"
+      uid=g1477:153_9 group "Offene Entscheidungen"
+        uid=g1477:153_10 button "1. Gemeinsame Entscheidung, unberührt"
+      uid=g1477:153_21 form "Entscheidung A"
+        uid=g1477:153_22 radio "Option A"
+        uid=g1477:153_30 textbox "Begründung (optional)" multiline
+        uid=g1477:153_31 button "Antwort vormerken"
+      uid=g1477:153_36 form "Entscheidung B"
+        uid=g1477:153_37 radio "Option B"
+        uid=g1477:153_41 textbox "Begründung (optional)" multiline
+        uid=g1477:153_42 button "Antwort vormerken"
+SNAP
+}
+
+# A marked tally strip beside an unrelated numbered action. The action is a
+# sibling, not a child of the strip, and therefore is not part of its reading.
+marked_tally_with_numbered_action_snapshot() {
+  cat <<'SNAP'
+page:
+  title: Probebrett · Lavish
+snapshot:
+uid=g1477:152_0 RootWebArea "Probebrett · Lavish" url="http://example.invalid/session/x"
+  uid=g1477:152_5 Iframe
+    uid=g1477:153_0 RootWebArea "Probebrett" url="http://example.invalid/artifact/x/index.html"
+      uid=g1477:153_8 button "1. Navigation öffnen"
+      uid=g1477:153_9 group "Offene Entscheidungen"
+        uid=g1477:153_10 button "Entscheidung öffnen"
+        uid=g1477:153_11 button "Noch eine Entscheidung öffnen"
       uid=g1477:153_21 form "Entscheidung A"
         uid=g1477:153_22 radio "Option A"
         uid=g1477:153_30 textbox "Begründung (optional)" multiline
@@ -232,8 +258,9 @@ snapshot:
 uid=g1477:152_0 RootWebArea "Probebrett · Lavish" url="http://crew-hlr.tail7b8448.ts.net:4451/session/206fbc97d061fe07"
   uid=g1477:152_5 Iframe
     uid=g1477:153_0 RootWebArea "Probebrett" url="http://crew-hlr.tail7b8448.ts.net:4451/artifact/206fbc97d061fe07/index.html?artifact_revision=2"
-      uid=g1477:153_10 button "1. Probe-Entscheidung A, unberührt"
-      uid=g1477:153_11 button "2. Probe-Entscheidung B, unberührt"
+      uid=g1477:153_9 group "Offene Entscheidungen"
+        uid=g1477:153_10 button "1. Probe-Entscheidung A, unberührt"
+        uid=g1477:153_11 button "2. Probe-Entscheidung B, unberührt"
       uid=g1477:153_17 StaticText "Probe-Entscheidung A"
       uid=g1477:153_22 radio "Option eins Die Option, die der Treiber wählt."
       uid=g1477:153_26 radio "Option zwei Bleibt ungewählt."
@@ -419,9 +446,17 @@ test_query_counts_a_named_decision_form() {
   [ "$QUERY_STATUS" -eq 0 ] || fail "query rejected the board this host actually renders"$'\n'"$QUERY_OUT"
   assert_contains "$QUERY_OUT" "decision cards: 2" \
     "a form carrying an accessible name must still be counted as a decision"
+  assert_contains "$QUERY_OUT" "decisions the board itself counts: unavailable (no tally reading)" \
+    "an unmarked historical tally must not be guessed from button names"
+  pass "query counts named decision forms without guessing an unmarked tally"
+}
+
+test_query_scopes_tally_buttons_to_the_marked_group() {
+  query_with marked_tally_with_numbered_action_snapshot
+  [ "$QUERY_STATUS" -eq 0 ] || fail "query counted a numbered action outside the tally"$'\n'"$QUERY_OUT"
   assert_contains "$QUERY_OUT" "decisions the board itself counts: 2" \
-    "query must read the board's own tally strip alongside the tree"
-  pass "query counts named decision forms and reads the board's own tally"
+    "query must count only buttons contained by the marked tally group"
+  pass "query scopes tally buttons to the marked group"
 }
 
 test_query_refuses_a_tally_and_tree_count_mismatch() {
@@ -1147,6 +1182,7 @@ test_query_reports_missing_notes_without_refusing_them
 test_query_can_refuse_missing_notes_when_the_contract_flips
 test_query_counts_a_decision_form_that_carries_nothing
 test_query_counts_a_named_decision_form
+test_query_scopes_tally_buttons_to_the_marked_group
 test_query_refuses_a_tally_and_tree_count_mismatch
 test_query_reports_an_unreadable_tree_rather_than_an_unanswerable_board
 test_query_still_names_a_board_that_asks_nothing

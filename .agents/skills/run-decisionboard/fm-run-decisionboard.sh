@@ -434,8 +434,8 @@ queued_confirmation() {
 
 # parse_forms <inventory|subtree|tally> [decision-number]
 #
-# `tally` prints the ordinal of every square of the board's own tally strip, one
-# per line. board.js builds one square per form[data-fm-question] it registered
+# `tally` prints one line for every button inside the board's own tally strip.
+# board.js builds one square per form[data-fm-question] it registered
 # and numbers them in document order, so the strip is a SECOND reading of how
 # many answerable decisions the board carries - taken from the code path that
 # actually queues an answer, not from the shape of the tree. It is what tells an
@@ -451,7 +451,7 @@ parse_forms() {  # <inventory|subtree|tally> [decision-number]
     }
     # The artifact frame announces itself as a RootWebArea served from /artifact/.
     body ~ /^uid=[^ ]+ RootWebArea/ && body ~ /\/artifact\// {
-      in_art = 1; art_indent = indent; form_indent = -1; next
+      in_art = 1; art_indent = indent; form_indent = -1; tally_indent = -1; next
     }
     in_art && indent <= art_indent { in_art = 0 }
     !in_art { next }
@@ -462,11 +462,15 @@ parse_forms() {  # <inventory|subtree|tally> [decision-number]
       name = ""
       if (match(rest, /"[^"]*"/)) { name = substr(rest, RSTART + 1, RLENGTH - 2) }
     }
-    # A tally square is a button in the artifact frame and outside every form,
-    # named "<n>. <decision label><state>" by board.js.
-    mode == "tally" && role == "button" && name ~ /^[0-9]+\. / {
-      ordinal = name; sub(/\..*/, "", ordinal)
-      print ordinal + 0
+    # This is a closed vocabulary shared with board.js. A new board language
+    # must add its tallyLabel here too or its strip is unreadable.
+    mode == "tally" && role == "group" && (name == "Offene Entscheidungen" || name == "Open decisions") {
+      tally_indent = indent
+      next
+    }
+    mode == "tally" && tally_indent >= 0 && indent <= tally_indent { tally_indent = -1 }
+    mode == "tally" && tally_indent >= 0 && role == "button" {
+      print ++tally_buttons
       next
     }
     role == "form" {

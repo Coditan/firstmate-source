@@ -314,6 +314,9 @@ function input(doc, el) {
   check(tallyCount(tally) === 3, 'the count starts at one per question, none sent back');
   check((row.innerHTML.match(/fm-tally-sq/g) || []).length === 3,
     'the strip carries one square per question');
+  check(tally.getAttribute('role') === 'group'
+      && tally.getAttribute('aria-label') === 'Offene Entscheidungen',
+    'the German tally strip exposes a localized named group');
   check(row.innerHTML.includes('#fm-mk-open'), 'an untouched question shows an empty square');
   check(row.innerHTML.includes('data-fm-jump="e1"'),
     'each square jumps to the entry its question sits in');
@@ -419,6 +422,8 @@ function input(doc, el) {
   reinit(doc, [a.form]);
   check(stripParts(tally).legend.innerHTML.includes('Pencil'),
     'an English board gets an English legend rather than a half-translated one');
+  check(tally.getAttribute('aria-label') === 'Open decisions',
+    'an English board gets an English tally group name');
 }
 
 // --- 15. every decision form is named ------------------------------------
@@ -444,12 +449,19 @@ function input(doc, el) {
     { 'data-fm-question': 'frage-s', 'aria-labelledby': 'leer' });
   const validReference = makeElement('form',
     { 'data-fm-question': 'frage-t', 'aria-labelledby': 'titel' });
+  const attributeReference = makeElement('form',
+    { 'data-fm-question': 'frage-u', 'aria-labelledby': 'attribut bild' });
   const emptyLabel = makeElement('div');
   const validLabel = makeElement('div');
+  const attributeLabel = makeElement('div', { 'aria-label': 'Attributtitel' });
+  const imageLabel = makeElement('img', { alt: 'Bildtitel' });
   validLabel.textContent = 'Autorentitel';
   doc._byId.leer = emptyLabel;
   doc._byId.titel = validLabel;
-  reinit(doc, [labelled.form, bare, preset, missingReference, emptyReference, validReference]);
+  doc._byId.attribut = attributeLabel;
+  doc._byId.bild = imageLabel;
+  reinit(doc, [labelled.form, bare, preset, missingReference, emptyReference, validReference,
+    attributeReference]);
   check(labelled.form.getAttribute('aria-label') === 'Testfrage',
     'a decision form is named from its data-fm-label');
   check(bare.getAttribute('aria-label') === 'frage-p',
@@ -462,6 +474,8 @@ function input(doc, el) {
     'an empty aria-labelledby target falls back to the question key');
   check(validReference.getAttribute('aria-label') === null,
     'an aria-labelledby reference with naming content is left alone');
+  check(attributeReference.getAttribute('aria-label') === null,
+    'aria-label and image alt content reached through aria-labelledby are left alone');
 }
 
 process.exit(failures === 0 ? 0 : 1);
