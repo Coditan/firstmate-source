@@ -40,8 +40,8 @@
 # calling it unmeasured would make incompleteness the permanent norm and
 # destroy the signal. The remedy is to run this reading from the other
 # installation too, or to point --home at records this account can read.
-# No active account slice, no stored growth sample on a first run, and a stored
-# sample younger than the configured floor are also scope. The first two are
+# No active account slice, no stored growth sample on a first run, and a sample
+# interval younger than the configured floor are also scope. The first two are
 # expected absences and the last is the operator's own cadence. They do not
 # force exit 3, so the next slice's alarm does not learn to discount failure.
 # The wall-clock and peak-memory cost figures measure this instrument rather
@@ -734,6 +734,11 @@ read_prior() {
   local epoch age parse_status="$TMP/prior-status" epoch_file="$TMP/prior-epoch"
   : > "$PRIOR_FILE"
   if [ "$INTERVAL" -gt 0 ]; then
+    if [ "$INTERVAL" -lt "$SAMPLE_MIN_AGE" ]; then
+      GROWTH_REASON="only ${INTERVAL}s between explicit samples, under the ${SAMPLE_MIN_AGE}s floor this rate can be divided by"
+      GROWTH_SCOPE=1
+      return
+    fi
     if ! cp "$PS_FILE" "$TMP/first.tsv"; then
       GROWTH_REASON="the first process-table read could not be retained for comparison"
       unmeasured growth-sample "$GROWTH_REASON"

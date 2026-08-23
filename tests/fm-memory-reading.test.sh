@@ -489,6 +489,31 @@ test_too_short_an_interval_is_scoped_rather_than_divided_by() {
   pass "an interval under the floor is scoped rather than divided by"
 }
 
+test_a_short_explicit_interval_uses_the_same_floor() {
+  local dir="$TMP_ROOT/short-explicit" out line status=0
+  new_scene "$dir"
+  out=$(run_reading "$dir" --interval 12) || status=$?
+  expect_code 0 "$status" "an explicit interval under the default minimum"
+  assert_contains "$out" 'under the 270s floor' 'a short explicit interval bypassed the sampling floor'
+  assert_contains "$out" 'scoped for this run' 'a short explicit interval was not labelled scoped'
+  line=$(process_line_from_section "$out" 'LARGEST TRACKED PROCESSES' 1000)
+  assert_contains "$line" 'scoped' 'a short explicit interval did not take the scoped path'
+  assert_not_contains "$line" 'MiB/min' 'a short explicit interval produced a growth rate'
+  pass "a short explicit interval uses the configured sampling floor"
+}
+
+test_an_explicit_floor_override_preserves_the_short_survey() {
+  local dir="$TMP_ROOT/short-explicit-override" out line status=0
+  new_scene "$dir"
+  out=$(run_reading "$dir" "FM_MEMORY_SAMPLE_MIN_AGE=12" --interval 12) || status=$?
+  expect_code 0 "$status" "the deliberate 12-second explicit survey"
+  assert_contains "$out" 'measured over 12s' 'the explicit floor override did not enable the short survey'
+  line=$(process_line_from_section "$out" 'LARGEST TRACKED PROCESSES' 1000)
+  assert_contains "$line" 'MiB/min' 'the explicit floor override produced no growth rate'
+  assert_not_contains "$out" 'growth scoped for every process above' 'the explicit floor override remained scoped'
+  pass "an explicit floor override preserves the deliberate short survey"
+}
+
 test_the_watcher_interval_still_reports_a_real_rate() {
   local dir="$TMP_ROOT/watcher-interval" out line status=0
   new_scene "$dir"
@@ -824,6 +849,8 @@ test_growth_with_no_prior_sample_is_unmeasured_never_zero
 test_an_unreadable_prior_sample_is_an_instrument_failure
 test_a_stale_prior_sample_is_unmeasured_rather_than_meaningless
 test_too_short_an_interval_is_scoped_rather_than_divided_by
+test_a_short_explicit_interval_uses_the_same_floor
+test_an_explicit_floor_override_preserves_the_short_survey
 test_the_watcher_interval_still_reports_a_real_rate
 test_the_observed_delayed_interval_remains_measurable
 test_an_interval_past_the_new_ceiling_stays_unmeasured
