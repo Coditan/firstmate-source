@@ -40,7 +40,7 @@ Two, both 2026-08-02/03:
 
 ### 3. No-op instructions
 
-The `## Graphify` block in `AGENTS.md` instructs every session to run `graphify query` for codebase questions, gated on `graphify-out/graph.json`.
+A prior `## Graphify` block in `AGENTS.md` instructed every session to run `graphify query` for codebase questions, gated on `graphify-out/graph.json`.
 
     $ ls /home/coditan/coditan-firstmate/graphify-out/
     ls: cannot access '/home/coditan/coditan-firstmate/graphify-out/': No such file or directory

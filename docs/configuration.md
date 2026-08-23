@@ -206,7 +206,7 @@ The Graphify hook exits successfully if `graphify` is not on `PATH`; otherwise i
 That hook is intentionally portable and bounded so Codex tool use is not blocked by a missing Graphify install or a slow hook.
 
 `graphify-out/` is local, generated Graphify state and stays gitignored.
-Dirty files under `graphify-out/` are expected after hooks or incremental updates and are not a reason to skip Graphify-assisted navigation when `graphify-out/graph.json` exists.
+Graph freshness and navigation rules are owned by `AGENTS.md` section "Graphify".
 
 ## Captain Preferences (data/captain.md / data/captain-shared.md)
 
