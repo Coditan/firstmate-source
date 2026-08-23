@@ -63,8 +63,9 @@
 # SIZE AND GROWTH ARE DIFFERENT QUESTIONS
 # A big steady worker is normal; a small one doubling every minute is the
 # problem. Growth is measured against the previous run's sample, so the first
-# run on a home reports growth as scoped rather than as zero. Pass
-# --interval to take both samples inside one run instead.
+# run on a home reports growth as scoped rather than as zero. Pass --interval
+# with an interval at or above the configured floor to take both samples inside
+# one run instead; a shorter explicit interval stays scoped without waiting.
 #
 # WAKE DELIVERY IS LABELLED, NOT RANKED
 # The per-session wake-delivery listener is a few megabytes and is what makes
@@ -85,9 +86,11 @@
 #                                        previous sample
 #   fm-memory-reading.sh --json          the same reading as one object with
 #                                        schema fm-memory-reading.v1
-#   fm-memory-reading.sh --interval N    take both growth samples in this run,
-#                                        N seconds apart, instead of using the
-#                                        stored one
+#   fm-memory-reading.sh --interval N    when N meets the configured sampling
+#                                        floor, take both growth samples in
+#                                        this run N seconds apart instead of
+#                                        using the stored one; otherwise leave
+#                                        growth scoped without waiting
 #   fm-memory-reading.sh --largest N     how many processes to name by size
 #                                        (default 8)
 #   fm-memory-reading.sh --growing N     how many to name by growth (default 8)
