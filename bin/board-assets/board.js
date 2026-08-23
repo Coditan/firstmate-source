@@ -498,9 +498,15 @@
   // betting on one. It is also what a screen reader needs to say which decision
   // the region belongs to, which the unnamed form never told anybody.
   function nameForm(form) {
-    if (form.getAttribute('aria-label') || form.getAttribute('aria-labelledby')) {
+    if ((form.getAttribute('aria-label') || '').trim()) {
       return;
     }
+    var labelledby = (form.getAttribute('aria-labelledby') || '').trim();
+    var labelled = labelledby && labelledby.split(/\s+/).some(function (id) {
+      var source = document.getElementById(id);
+      return source && (source.textContent || '').trim();
+    });
+    if (labelled) return;
     var name = questionLabel(form);
     if (name) {
       form.setAttribute('aria-label', name);

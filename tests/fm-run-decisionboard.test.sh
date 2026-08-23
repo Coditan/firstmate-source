@@ -186,6 +186,30 @@ uid=g1477:152_0 RootWebArea "Probebrett · Lavish" url="http://crew-hlr.tail7b84
 SNAP
 }
 
+# A recorded-style malformed board tree with two complete decision forms but
+# only one runtime tally square. This is the reachable shape produced when two
+# forms share a data-fm-question: board.js registers one queue key, so answering
+# one form can silently replace the other form's queued answer.
+tally_mismatch_snapshot() {
+  cat <<'SNAP'
+page:
+  title: Widerspruechliches Brett · Lavish
+snapshot:
+uid=g1477:152_0 RootWebArea "Widerspruechliches Brett · Lavish" url="http://example.invalid/session/x"
+  uid=g1477:152_5 Iframe
+    uid=g1477:153_0 RootWebArea "Widerspruechliches Brett" url="http://example.invalid/artifact/x/index.html"
+      uid=g1477:153_10 button "1. Gemeinsame Entscheidung, unberührt"
+      uid=g1477:153_21 form "Entscheidung A"
+        uid=g1477:153_22 radio "Option A"
+        uid=g1477:153_30 textbox "Begründung (optional)" multiline
+        uid=g1477:153_31 button "Antwort vormerken"
+      uid=g1477:153_36 form "Entscheidung B"
+        uid=g1477:153_37 radio "Option B"
+        uid=g1477:153_41 textbox "Begründung (optional)" multiline
+        uid=g1477:153_42 button "Antwort vormerken"
+SNAP
+}
+
 # THE SAME RECORDING with both form containers deleted and their controls lifted
 # to the frame's own indent. It is DERIVED, not recorded, and that is stated
 # rather than blurred: no browser here produces it, because Chrome 151 exposes
@@ -400,6 +424,16 @@ test_query_counts_a_named_decision_form() {
   pass "query counts named decision forms and reads the board's own tally"
 }
 
+test_query_refuses_a_tally_and_tree_count_mismatch() {
+  query_with tally_mismatch_snapshot
+  [ "$QUERY_STATUS" -ne 0 ] || fail "query accepted contradictory decision counts"$'\n'"$QUERY_OUT"
+  assert_contains "$QUERY_OUT" "accessibility tree exposes 2 decision cards" \
+    "the mismatch must identify the tree reading"
+  assert_contains "$QUERY_OUT" "board runtime tally counts 1 decisions" \
+    "the mismatch must identify the runtime reading"
+  pass "query refuses contradictory tree and runtime decision counts"
+}
+
 test_query_reports_an_unreadable_tree_rather_than_an_unanswerable_board() {
   query_with containerless_snapshot
   [ "$QUERY_STATUS" -ne 0 ] \
@@ -420,8 +454,8 @@ test_query_still_names_a_board_that_asks_nothing() {
   query_with prose_snapshot
   # The other half of the discrimination: no containers AND no tally squares is
   # the real defect, and it must keep its own plain sentence.
-  assert_contains "$QUERY_OUT" "decisions the board itself counts: 0" \
-    "a board that asks nothing must report a tally of nothing"
+  assert_contains "$QUERY_OUT" "decisions the board itself counts: unavailable (no tally reading)" \
+    "a missing tally reading must be reported as unavailable"
   assert_contains "$QUERY_OUT" "nothing on it can be answered" \
     "a board that genuinely asks nothing must still be named as unanswerable"
   case "$QUERY_OUT" in
@@ -1113,6 +1147,7 @@ test_query_reports_missing_notes_without_refusing_them
 test_query_can_refuse_missing_notes_when_the_contract_flips
 test_query_counts_a_decision_form_that_carries_nothing
 test_query_counts_a_named_decision_form
+test_query_refuses_a_tally_and_tree_count_mismatch
 test_query_reports_an_unreadable_tree_rather_than_an_unanswerable_board
 test_query_still_names_a_board_that_asks_nothing
 test_query_reports_an_unlistened_board

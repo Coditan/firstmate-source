@@ -438,13 +438,30 @@ function input(doc, el) {
   const bare = makeElement('form', { 'data-fm-question': 'frage-p' });
   const preset = makeElement('form',
     { 'data-fm-question': 'frage-q', 'data-fm-label': 'Abgeleitet', 'aria-label': 'Eigener Name' });
-  reinit(doc, [labelled.form, bare, preset]);
+  const missingReference = makeElement('form',
+    { 'data-fm-question': 'frage-r', 'aria-labelledby': 'fehlt' });
+  const emptyReference = makeElement('form',
+    { 'data-fm-question': 'frage-s', 'aria-labelledby': 'leer' });
+  const validReference = makeElement('form',
+    { 'data-fm-question': 'frage-t', 'aria-labelledby': 'titel' });
+  const emptyLabel = makeElement('div');
+  const validLabel = makeElement('div');
+  validLabel.textContent = 'Autorentitel';
+  doc._byId.leer = emptyLabel;
+  doc._byId.titel = validLabel;
+  reinit(doc, [labelled.form, bare, preset, missingReference, emptyReference, validReference]);
   check(labelled.form.getAttribute('aria-label') === 'Testfrage',
     'a decision form is named from its data-fm-label');
   check(bare.getAttribute('aria-label') === 'frage-p',
     'a form with no label falls back to its question key rather than staying unnamed');
   check(preset.getAttribute('aria-label') === 'Eigener Name',
     'a name the board declared itself is left alone');
+  check(missingReference.getAttribute('aria-label') === 'frage-r',
+    'a missing aria-labelledby target falls back to the question key');
+  check(emptyReference.getAttribute('aria-label') === 'frage-s',
+    'an empty aria-labelledby target falls back to the question key');
+  check(validReference.getAttribute('aria-label') === null,
+    'an aria-labelledby reference with naming content is left alone');
 }
 
 process.exit(failures === 0 ? 0 : 1);

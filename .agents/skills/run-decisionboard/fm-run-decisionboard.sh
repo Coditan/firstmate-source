@@ -527,7 +527,11 @@ cmd_query() {
   printf '  with selectable options: %s\n' "$with_options"
   printf '  with a note field: %s\n' "$with_note"
   printf '  with a button (role only): %s\n' "$with_button"
-  printf '  decisions the board itself counts: %s\n' "$squares"
+  if [ "$squares" -gt 0 ]; then
+    printf '  decisions the board itself counts: %s\n' "$squares"
+  else
+    printf '  decisions the board itself counts: unavailable (no tally reading)\n'
+  fi
   printf '  button evidence: necessary shape only; role=button cannot distinguish submit from help or reset. Only answer proves submission by clicking it and reading the queued confirmation.\n'
   printf '  poll listening: %s\n' "$listening"
   if [ -n "$inv" ]; then
@@ -555,6 +559,11 @@ cmd_query() {
   fi
   if [ "$decisions" -eq 0 ]; then
     printf 'FINDING: this board carries no decision form at all; nothing on it can be answered.\n'
+    return 1
+  fi
+  if [ "$squares" -gt 0 ] && [ "$squares" -ne "$decisions" ]; then
+    printf 'FINDING: the accessibility tree exposes %s decision cards, but the board runtime tally counts %s decisions; these readings disagree, so answers could replace one another instead of remaining distinct.\n' \
+      "$decisions" "$squares"
     return 1
   fi
   if [ "$with_options" -lt "$decisions" ]; then
