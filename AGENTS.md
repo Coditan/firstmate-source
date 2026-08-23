@@ -227,6 +227,9 @@ Classify the deliverable:
 When the captain invokes `/panel`, asks for a panel, a second opinion from another model, or an adversarial cross-check of an answer, load the `panel` skill.
 It owns that formation of independent scouts plus a judge, and when it is worth its cost.
 
+When a codebase-design exercise reaches the point of exploring alternative interfaces for one module, load the `design-it-twice` skill.
+It owns designing that interface more than once, and the test for when the question is contested enough to reach for a panel rather than settling it in one head.
+
 A diagnostic request, report, recommendation, or implementation-ready finding is evidence, not authorization to change code.
 Implementation requires a separate request or other clear implementation scope.
 Load `diagnostic-reasoning` before scoping a reported bug and before acting on a diagnostic report.

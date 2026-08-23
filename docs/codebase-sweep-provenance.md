@@ -89,7 +89,9 @@ The cadence is a separate mechanism and is not the skill's to build or to regist
 
 `codebase-design` is a plugin skill from **[`mattpocock/skills`](https://github.com/mattpocock/skills)**, by **Matt Pocock**, installed on this seat through the official plugin marketplace at `mattpocock-skills/*/skills/engineering/codebase-design`.
 `codebase-sweep` **loads** it and copies nothing from it, so no file here is derived from it and no licence notice travels with this page.
-Where this repository does adopt from that source, the notice lands with the adoption; see `docs/domain-modeling-provenance.md`, `docs/to-backlog-provenance.md`, and `docs/sea-chart-provenance.md`.
+Where this repository does adopt from that source, the notice lands with the adoption; see `docs/domain-modeling-provenance.md`, `docs/to-backlog-provenance.md`, `docs/sea-chart-provenance.md`, and `docs/design-it-twice-provenance.md`.
+That last one is an adoption of one file of `codebase-design` itself, its `DESIGN-IT-TWICE.md`, made after this page was written.
+It narrows nothing here: the sweep still only loads the plugin skill and still copies nothing from it, and the vocabulary is reached through the plugin exactly as this section says.
 
 ## Re-measure before repeating any of this
 
