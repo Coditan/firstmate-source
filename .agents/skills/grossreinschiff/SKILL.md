@@ -123,7 +123,9 @@ Record each captain-decision reading with `bin/fm-decision-hold.sh recheck --out
 **Test:** for each instruction with a precondition, check the precondition on this home and say which homes were checked. One home answers a question about one home - never report it as a fleet answer.
 **Verdict:** `fires` / `never fires here` / `unmeasured elsewhere`.
 **Who acts:** report from firstmate; any edit to shared tracked material is a dispatched task through the pipeline, and while crew is live firstmate delegates rather than competing with supervision (`AGENTS.md` section 1).
-**Evidence:** the `## Graphify` block in `AGENTS.md` instructs every session to query a knowledge graph, gated on `graphify-out/graph.json`, which exists on no measured firstmate home - verify with `ls graphify-out/graph.json`. Separately, fleet doctrine was classified as session-binding that no shipped instruction delivers. Both 2026-08-02/03.
+**Evidence:** a prior `## Graphify` block in `AGENTS.md` instructed every session to query a knowledge graph, gated on `graphify-out/graph.json`, which existed on no measured firstmate home - verify with `ls graphify-out/graph.json`.
+Separately, fleet doctrine was classified as session-binding that no shipped instruction delivers.
+Both 2026-08-02/03.
 
 ### 4. Duplicate records for one defect
 
