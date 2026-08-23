@@ -422,8 +422,11 @@ test_skill_never_promises_deletion_authority() {
 
 test_cadence_is_reachable_from_the_instruction_surface() {
   assert_grep 'grossreinschiff' "$AGENTS" "AGENTS.md must name the sweep skill"
-  assert_grep 'GROSSREINSCHIFF:' "$AGENTS" \
-    "AGENTS.md section 13 must list the due line among the bootstrap diagnostics"
+  # The due line's prefix is owned by bootstrap-diagnostics (asserted below);
+  # AGENTS.md reaches it through the general trigger rather than a second copy
+  # of the prefix list.
+  assert_grep '- `bootstrap-diagnostics` - load whenever' "$AGENTS" \
+    "AGENTS.md must still trigger the skill that owns the due line"
   # Cadence state behavior is covered by the executable cadence tests above.
   assert_grep 'GROSSREINSCHIFF: weekly fleet cleanup sweep is due' "$BOOTSTRAP_SKILL" \
     "bootstrap-diagnostics must own the response to the due line"

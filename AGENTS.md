@@ -505,25 +505,25 @@ It owns the three-hop reading, and the rule that a hop it could not measure is r
 
 These skills are not captain-invocable; load them only at their precise triggers.
 
-- `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `ROLE_INVALID:`, `ROLE_OVERLAY_MISSING:`, `NEEDS_GH_AUTH`, `FORGE_CLIENT:`, `TANGLE:`, `SELF_DRIFT:`, `CREW_DISPATCH: invalid`, `CURRENCY_BASE:`, `LAVISH_ACCESS:`, `BACKLOG_STALE:`, `BACKLOG_UNREADABLE:`, `DECISION_LEDGER:`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `NUDGE_SECONDMATES:`, `AXI_SUITE_UPDATED:`, `AXI_SUITE_REVIEW:`, `AXI_SUITE_STUCK:`, `AXI_SUITE_SHADOWED:`, `AXI_SUITE_SHADOW_UNKNOWN:`, `FIRSTMATE_UPDATE_AVAILABLE:`, `FIRSTMATE_UPDATE_STUCK:`, `FORK_SYNC:`, `FORK_SYNC_STUCK:`, `CURRENCY_ROUND:`, `MEMORY_ALARM:`, `GITHUB_INBOX:`, `CURATION_NUDGE:`, `CODEBASE_SWEEP_NUDGE:`, `FORGE_STATUS:`, `SLOT_GUARD:`, `GROSSREINSCHIFF:`, `RUN_READER:`, `DELIVERY_UNIT:`, `BOSUN_UNIT:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
+- `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line, or a standalone `bin/fm-bootstrap.sh` run prints one; that skill owns which prefixes those are and what each needs, and silence or a `BOOTSTRAP_INFO:` fact needs no load.
 - `diagnostic-reasoning` - load before scoping a reported bug and before acting on a diagnostic report.
 - `deploying` - load before any deploy, redeploy, migration, recompute, or rollback against a running host, before re-running a deploy to confirm an earlier one worked, and before reporting that a change is live; firstmate loads it to brief such a task, and the worker loads it to run one.
 - `ask-user-authority` - load before deciding any ask-user finding, regardless of the project's `yolo` posture.
-- `harness-adapters` - load before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
+- `harness-adapters` - load before every harness-specific operation section 4 lists.
 - `firstmate-orca` - load before switching to Orca, spawning or supervising Orca-backed work, smoke-testing Orca backend behavior, debugging Orca task state, or reconciling Orca-backed task metadata.
-- `project-discipline` - load at intake when the work will produce a change others depend on, and again before declaring that work complete; not for a question, a read-only check, or a single-file fix.
+- `project-discipline` - load at the intake and completion points section 7 names, which also names what it is not for.
 - `project-management` - load before adding, creating, removing, or initializing a project.
 - `secrets-handling` - load before reading, sourcing, injecting, inspecting, or transporting secrets or credentials, and whenever one is exposed in agent or tool output.
 - `vessel-file-relay` - load when the captain hands over a local file path and asks that it be sent to, or made available to, a vessel, and before answering a request to move a secret or credential onto a vessel, which that skill routes to the fleet's one credential delivery path instead of relaying.
-- `stuck-crewmate-recovery` - load when the session-start digest reports an ordinary direct report's endpoint dead or its metadata has no window, or after a stale wake, looping pane, repeated confusion, an answered-by-brief question, an unresponsive crewmate, or a failed steer.
-- `secondmate-provisioning` - load before creating, seeding, validating, launching, handing backlog to, recovering, pushing inherited local material into, or retiring a secondmate home, and before editing `data/secondmates.md`.
+- `stuck-crewmate-recovery` - load when the session-start digest reports an ordinary direct report's endpoint dead or its metadata has no window, and at the stuck-worker triggers section 8 names.
+- `secondmate-provisioning` - load before the secondmate lifecycle steps sections 6, 7, and 11 name.
 - `decision-hold-lifecycle` - load the moment the captain decides anything, whichever door it arrived through - a registered hold, an ask-user finding, or a sentence in chat - and before filing, folding, re-measuring, completing, or routing any captain decision record.
   A decision he gives is recorded when it is GIVEN or it is lost, and a question is filed only after disposing of the ones already there: on 2026-08-17 four decisions he gave appeared zero times in the backlog, while across three seats two-thirds, 40 percent, and none of the open records were duplicates or already answered.
-- `fmx-respond` - load on an `x-mention <request_id>` `check:` wake to handle the mention, on an `x-mode-error ...` `check:` wake to report the X-mode configuration blocker, and on any milestone or terminal wake for an X-mode-linked task before posting its completion follow-up; relevant only when X mode is on.
+- `fmx-respond` - load on the X-mode mention and error wakes and before an X-linked completion follow-up, as sections 8 and 14 state.
 - `firstmate-codexapp` - load before coordinating a visible Codex Desktop thread, evaluating a Codex App backend request, or reconciling Codex Desktop host-tool smoke evidence for Firstmate work.
 - `firstmate-coding-guidelines` - load before changing firstmate's shared, tracked material, as defined by section 1's list, whether editing directly or briefing a crewmate for a firstmate-repo task.
 - `axi` - load before building, modifying, or reviewing any agent-facing CLI; it is the official AXI skill, installed verbatim from upstream and never edited here, and `docs/axi-skill-provenance.md` carries its licence notice and update route.
-- `axi-tool-intake` - load before filing, scoping, or briefing work that would build, adopt, derive, or extend an agent-ergonomic CLI for this fleet, and before telling the captain that none exists for a domain; it carries only what the AXI specification does not, and `axi` remains the sole owner of the design contract.
+- `axi-tool-intake` - load before filing, scoping, or briefing work that would build, adopt, derive, or extend an agent-ergonomic CLI for this fleet, and before telling the captain that none exists for a domain.
 
 ## 14. X mode
 
