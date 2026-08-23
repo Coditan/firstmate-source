@@ -168,9 +168,9 @@ Graphics are inline SVG and CSS - no diagram library, and nothing that only deco
 **Gate map** - what decides what.
 An inline `<svg>` inside `.fm-map`.
 The SVG keeps a `min-width` so shapes stay legible on a phone and scroll inside the panel instead of squashing.
-Node classes: `fm-map-node`, `fm-map-node-gate`, `fm-map-node-open`.
+Apply the node classes `fm-map-node`, `fm-map-node-gate`, and `fm-map-node-open` to SVG shape elements only.
 Edge classes: `fm-map-edge`, `fm-map-edge-gate`, and `fm-map-edge-soft` for a relationship that is weaker than a recorded one.
-Label text is `fm-map-dim` where it should read as secondary.
+Label text takes `fm-map-dim` where it should read as secondary, or no class otherwise.
 Add a `.fm-legend` under it.
 
 **Standing bar** - how long something has waited.
