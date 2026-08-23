@@ -249,6 +249,12 @@ run_nudge_with_payload() {
     FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$NUDGE"
 }
 
+run_nudge_script_with_home() {
+  local nudge=$1 home=$2 fakebin=$3 payload=$4
+  printf '%s' "$payload" | env -u NO_MISTAKES_GATE PATH="$fakebin:$PATH" FM_GATE_REFUSE_BYPASS=0 \
+    FM_HOME="$home" "$nudge"
+}
+
 record_field() {
   local record=$1 key=$2 line
   while IFS= read -r line; do
@@ -442,6 +448,36 @@ test_non_primary_records_nothing() {
   [ ! -e "$root/state/.primary-transcript" ] \
     || fail "an unmarked linked task worktree claimed the home's transcript record"
   pass "fm-sessionstart-nudge: only a genuine primary claims the home's transcript record"
+}
+
+test_linked_task_worktree_with_separate_home_leaves_record_alone() {
+  local home="$TMP_ROOT/record-linked-separate-home-home"
+  local base="$TMP_ROOT/record-linked-separate-home-base"
+  local root="$TMP_ROOT/record-linked-separate-home-worktree"
+  local fakebin record
+  make_primary "$home"
+  fakebin=$(fm_fakebin "$home")
+  make_fake_ps_holder "$fakebin" 929292
+  run_nudge_with_payload "$home" "$fakebin" "$CLAUDE_PAYLOAD" >/dev/null
+  record="$home/state/.primary-transcript"
+  [ "$(record_field "$record" status)" = ok ] \
+    || fail "the setup run did not create a usable transcript record: $(cat "$record")"
+
+  fm_git_worktree "$base" "$root" fm/sessionstart-linked-separate-home
+  mkdir -p "$root/bin" "$root/state"
+  : > "$root/AGENTS.md"
+  cp "$ROOT/bin/fm-sessionstart-nudge.sh" "$ROOT/bin/fm-primary-scope-lib.sh" \
+    "$ROOT/bin/fm-gate-refuse-lib.sh" "$ROOT/bin/fm-operational-input.sh" \
+    "$ROOT/bin/fm-harness-pid-lib.sh" "$root/bin/"
+  chmod +x "$root/bin/fm-sessionstart-nudge.sh"
+  make_fake_ps_no_harness "$fakebin"
+  expect_silent_zero "linked task worktree with separate home" \
+    run_nudge_script_with_home "$root/bin/fm-sessionstart-nudge.sh" "$home" "$fakebin" "$CLAUDE_PAYLOAD"
+  [ "$(record_field "$record" status)" = ok ] \
+    || fail "a linked task worktree invalidated another home's transcript record: $(cat "$record")"
+  [ "$(record_field "$record" session_id)" = 11111111-2222-3333-4444-555555555555 ] \
+    || fail "a linked task worktree replaced another home's transcript record: $(cat "$record")"
+  pass "fm-sessionstart-nudge: a linked task worktree with a separate home leaves that home's transcript record alone"
 }
 
 # The gap ak measured on their own seat: a second primary session in a home that
@@ -717,6 +753,7 @@ test_absent_harness_process_records_an_empty_harness_pid
 test_unwritable_state_leaves_no_stale_ok_record
 test_failed_record_replace_leaves_no_stale_ok_record
 test_non_primary_records_nothing
+test_linked_task_worktree_with_separate_home_leaves_record_alone
 test_second_session_does_not_take_over_the_record
 test_unidentified_second_session_does_not_take_over_the_record
 test_a_stale_lock_does_not_block_the_record

@@ -260,7 +260,7 @@ The interactive session is the door both vessels came through, and it is the one
 
 ## Regression coverage
 
-`tests/fm-sessionstart-nudge.test.sh` proves wrapper silence for both gate signals, an unmarked linked worktree, a missing state directory, and an already-owned lock.
+`tests/fm-sessionstart-nudge.test.sh` proves wrapper silence for both gate signals, an unmarked linked worktree, a linked task worktree with a separate `FM_HOME`, a missing state directory, and an already-owned lock.
 It proves the transcript record's ok fields, that the record and `bin/fm-lock.sh` name the same harness process, that a silent post-clear start still replaces a superseded record, that a missing transcript path, an absent payload, and an unidentifiable owning process each record a visible error rather than leaving a stale or absent value, and that a non-primary claims no record.
 It proves the lock gate in both directions: a second session in a home that already has one leaves the record alone, a session that cannot name itself does not claim a live session's record, a lock left by a finished session does not block a fresh one, and the lock holder still replaces its own record after a clear.
 It proves the retry is spent rather than declared - a single unreadable probe resolves and records `status=ok`, while a process table that stays unreadable records `harness-lookup-failed` rather than the settled negative `no-harness-process`.

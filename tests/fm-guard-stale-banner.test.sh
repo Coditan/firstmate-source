@@ -35,6 +35,7 @@ run_guard_case() {
   FM_ROOT_OVERRIDE="$(case_root "$dir")" \
     FM_HOME="$(case_home "$dir")" \
     FM_GUARD_GRACE=999 \
+    FM_WATCH_SERVICE_FORCE_BACKEND=keeper \
     "$ROOT/bin/fm-guard.sh" 2>&1
 }
 
@@ -44,6 +45,7 @@ run_guard_case_read_only() {
     FM_HOME="$(case_home "$dir")" \
     FM_GUARD_GRACE=999 \
     FM_GUARD_READ_ONLY=1 \
+    FM_WATCH_SERVICE_FORCE_BACKEND=keeper \
     "$ROOT/bin/fm-guard.sh" 2>&1
 }
 
@@ -72,7 +74,7 @@ test_first_stale_call_prints_full_banner() {
   out=$(run_guard_case "$dir")
   [ "$(count_text "$out" "WATCHER DAEMON DOWN - SUPERVISION IS OFF")" -eq 1 ] \
     || fail "first stale guard call did not print exactly one full banner: $out"
-  assert_contains "$out" "Daemon repair: systemctl --user restart" \
+  assert_contains "$out" "Daemon repair: bin/fm-watcher-service.sh restart" \
     "full banner must keep the scoped daemon-repair instruction"
   assert_contains "$out" "WILL still run" \
     "full banner must keep the guarded-operation continuation line"
