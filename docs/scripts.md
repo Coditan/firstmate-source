@@ -94,6 +94,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `backends/cmux.sh`       | Experimental cmux session-provider adapter                                           |
 | `fm-config-push.sh`      | Push declared inherited local material to live secondmates mid-session and send a pointer to the literal-content config reread when config changed |
 | `fm-project-mode.sh`     | Resolve a project's delivery mode and `+yolo` flag from `data/projects.md`           |
+| `fm-landing-remote-lib.sh` | Shared owner of which remote may be cited as proof that work left this machine for `fm-teardown.sh` and `fm-project-remove.sh` |
 | `fm-project-remove.sh`   | Guardedly remove a captain-approved project clone and its `data/projects.md` entry    |
 | `fm-merge-local.sh`      | Fast-forward a `local-only` project's local default branch after approval            |
 | `fm-bridge-relay.sh`     | Guardedly relay envelope-only `send`/`inbox`/`status`/`broadcast` calls to the coditan-bridge checkout's own scripts, refreshing it through fleet sync first and refusing a read it cannot prove current |
