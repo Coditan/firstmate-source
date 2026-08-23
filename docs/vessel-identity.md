@@ -47,7 +47,7 @@ The label never claims to be the live vessel.
 It answers "which home on which host is this session driving", and it answers nothing about whether that vessel can be woken.
 No probe of the seat, the delivery listener, the watcher, or the session lock happens here, by design: the brief that produced this mechanism scoped it to identity display and left attach-time health checking out.
 
-Three limits are real and are not designed away.
+Four limits are real and are not designed away.
 
 - **Same home path and same reported host name on both sides renders an identical label.**
   A container given the host's own name, or a second seat on the same host, cannot be separated by this mechanism.
@@ -58,7 +58,7 @@ Three limits are real and are not designed away.
   The session's start time is immutable, so stamping it is exactly as truthful as reading it live.
 - **Two homes whose basenames collide on one host render one name.**
   `/home/a/firstmate` and `/home/b/firstmate` both read `firstmate@<host>`.
-  The full path is one `bin/fm-vessel-identity.sh --long` away, and the digest line names it at session start.
+  The full path is one `bin/fm-vessel-identity.sh --long` away; the digest repeats the short label and does not distinguish this collision.
 - **The status bar is a tmux session option, so it names one home per tmux session.**
   A seat normally owns its own tmux session, and its worker windows join that same one (`bin/backends/tmux.sh`), so one label is the right number.
   Two seats for two different homes opened as windows of ONE tmux session would share one bar, and it would wear the name of whichever seat started last.
