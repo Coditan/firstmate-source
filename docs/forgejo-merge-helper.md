@@ -203,8 +203,8 @@ Whoever wires this fleet's own credential should therefore set `FORGEJO_TOKEN_<H
 ## The merge method, and why the default matters more here
 
 The default is a real merge commit, as it is on GitHub, and `--squash` is translated where a caller asks for it deliberately.
-This repository requires every upstream-sync pull request to land as a true merge commit (`AGENTS.md` section 12): a squashed tip is never an ancestor of the default branch, so a version pin's ancestry would claim a lineage that does not exist.
-That rule does not change on this forge, and the helper's default is what holds it when nobody passes a method.
+That default matters for ancestry-preserving flows such as vendored pin merges: a squashed tip is never an ancestor of the default branch, so a version pin's ancestry would claim a lineage that does not exist.
+The helper's default is what holds that property when nobody passes a method.
 
 ## What this deliberately did not change
 

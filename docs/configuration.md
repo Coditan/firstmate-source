@@ -651,9 +651,9 @@ Because seeding is much slower than a steady-state check, it reports on standard
 That output streams live when a captain runs `bin/fm-bootstrap.sh` in a terminal; `bin/fm-session-start.sh` captures bootstrap output for the digest, so under automated session start the same lines arrive together once bootstrap returns, and the summary is what makes the pass interpretable after the fact.
 A seed that genuinely stalls, or that is never attempted because the seeding budget is already spent, is still reported as `AXI_SUITE_STUCK:` naming which of the two happened, identically from both install paths; the external copy remains the fallback and the next cadence window retries.
 
-### Upstream firstmate update check
+### Firstmate update-source check
 
-`bin/fm-firstmate-update-check.sh` compares the local default branch with the configured comparison base and persists a signal only when an upstream-only commit changes `AGENTS.md`, `bin/`, `roles/`, or `.agents/skills/`.
+`bin/fm-firstmate-update-check.sh` compares the local default branch with the configured comparison base and persists a signal only when a source-only commit changes `AGENTS.md`, `bin/`, `roles/`, or `.agents/skills/`.
 It mutates only `state/firstmate-update.available` and `state/firstmate-update.stuck`; its header and `--help` output own exact overrides and mechanics.
 It is invoked by the daily currency round rather than scheduled externally, because an instruction to install a timer had already failed silently on this fleet.
 
@@ -690,8 +690,8 @@ Skipped items, such as a destination checkout that does not yet gitignore the it
 
 ### Daily currency round
 
-`bin/fm-currency-round.sh` is the trigger behind firstmate's standing duty to check for updates daily, and the only thing that gives the two checks above a cadence that survives session boundaries.
-Session start is not daily and neither check ran from bootstrap, so before this round a home that never installed an external timer never checked at all, and printed the same nothing a current home prints.
+`bin/fm-currency-round.sh` is the trigger behind firstmate's standing duty to check for updates daily, and the only thing that gives the instruction-surface check a cadence that survives session boundaries.
+Session start is not daily and the instruction-surface check did not run from bootstrap, so before this round a home that never installed an external timer never checked at all, and printed the same nothing a current home prints.
 [currency-round.md](currency-round.md) owns the evidence, the hop vocabulary, the rejected alternatives, and the scope boundary; the script's header owns its flags, state files, and mechanics.
 
 The locked bootstrap step arms the round with `--arm`, which writes and registers this home's `state/currency-round.check.sh` watcher check and is idempotent, so arming converges on every session start instead of depending on a per-home install step nobody verifies.

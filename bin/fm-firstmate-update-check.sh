@@ -8,7 +8,7 @@
 # contacts Bridge. A supervising firstmate relays FIRSTMATE_UPDATE_AVAILABLE
 # through the normal crewmate-dispatch path.
 #
-# "Relevant" means an upstream-only commit changes AGENTS.md, roles/, bin/, or
+# "Relevant" means a source-only commit changes AGENTS.md, roles/, bin/, or
 # .agents/skills/. These are the running instruction surfaces named by
 # AGENTS.md section 12; roles/ is included because a role overlay amends
 # AGENTS.md for whichever home selects it. Public skills/ are installer-facing
