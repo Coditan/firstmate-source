@@ -148,13 +148,15 @@ test_unreachable_base_refusal_names_the_hop_that_produced_it() {
   fm_git_init_commit "$repo"
   mkdir -p "$config"
   printf '%s\n' "$TMP_ROOT/unreachable-absent-source" > "$config/firstmate-update-base"
+  mkdir -p "$state"
+  printf 'FIRSTMATE_UPDATE_AVAILABLE: stale prior reading\n' > "$state/firstmate-update.available"
 
   out=$(run_fetching_check "$repo" "$state" "$config")
   assert_contains "$out" 'update-source default-branch lookup failed' \
     "an unreadable update source did not refuse"
   assert_contains "$out" "from config/firstmate-update-base" \
     "the refusal did not name the hop that produced the unreadable base"
-  [ ! -f "$state/firstmate-update.available" ] || fail "a refused check published an update signal"
+  [ ! -f "$state/firstmate-update.available" ] || fail "a refused check retained the prior update signal"
   pass "an unreadable update source refuses by naming both the address and its hop"
 }
 

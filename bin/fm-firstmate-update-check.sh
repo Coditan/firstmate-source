@@ -58,6 +58,7 @@ mkdir -p "$STATE" 2>/dev/null || {
 
 record_stuck() {
   printf 'FIRSTMATE_UPDATE_STUCK: %s\n' "$1" > "$STUCK"
+  rm -f "$AVAILABLE"
   cat "$STUCK"
   exit 0
 }
