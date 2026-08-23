@@ -82,6 +82,7 @@ The two are now separated mechanically, by whether the check stamped a newly com
 A suppressed round reports what the last completed comparison recorded: an open finding still on disk reads `behind` and reaches the supervisor, a recorded refusal reads `unmeasured`, and a comparison that has never completed reads `unmeasured` rather than clean.
 A suppressed round with a clean recent record is still recorded as `unmeasured`, because no reading was taken in it, but it does not surface: a slower instrument's own declared cadence is a scheduled interval rather than blindness, and waking on every one of them would spend a wake on a healthy home every three days, which is how a check earns being ignored.
 Once the gap outlives twice that instrument's own cadence (`FM_CURRENCY_ROUND_FORK_STALE`, six days) the reading says the comparison has stopped looking and surfaces normally, so nothing stopped can hide behind the interval.
+[currency-instrument-verification.md](currency-instrument-verification.md) records the 2026-08-23 re-measurement of both comparisons on this seat, including the reproduction that separates a suppressed reading from a clean one.
 
 ## Why the watcher, and not the three alternatives
 

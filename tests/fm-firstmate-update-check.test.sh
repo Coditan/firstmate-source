@@ -92,8 +92,14 @@ test_configured_base_is_the_repository_compared() {
 
   out=$(run_fetching_check "$repo" "$state" "$config")
   assert_contains "$out" 'FIRSTMATE_UPDATE_AVAILABLE:' "the configured comparison base was not compared against"
+  # A finding alone cannot tell a correct base from a wrong one, so the finding
+  # has to name the repository and the hop that produced it.
+  assert_contains "$out" "compared: this deployment against $TMP_ROOT/configured-source (from config/firstmate-update-base)" \
+    "the finding did not name the repository it compared and the hop that named it"
+  assert_grep 'compared: this deployment against' "$state/firstmate-update.available" \
+    "the persisted finding did not carry its comparison provenance"
   [ ! -f "$state/firstmate-update.stuck" ] || fail "a usable configured base recorded a stuck diagnostic"
-  pass "a configured update base is the repository actually compared"
+  pass "a configured update base is the repository actually compared, and the finding says so"
 }
 
 test_environment_override_beats_the_configured_base() {
@@ -109,7 +115,9 @@ test_environment_override_beats_the_configured_base() {
     run_fetching_check "$repo" "$state" "$config")
   assert_contains "$out" 'FIRSTMATE_UPDATE_AVAILABLE:' "the environment override was not used as the comparison base"
   assert_not_contains "$out" 'FIRSTMATE_UPDATE_STUCK:' "the environment override did not beat the configured base"
-  pass "an explicit environment base outranks the configured update base"
+  assert_contains "$out" "compared: this deployment against $TMP_ROOT/envwins-source (from FM_FIRSTMATE_UPSTREAM_URL)" \
+    "the finding named neither the overriding repository nor the override as its hop"
+  pass "an explicit environment base outranks the configured update base, and the finding names it"
 }
 
 test_unusable_configured_base_refuses_loudly() {
@@ -127,6 +135,29 @@ test_unusable_configured_base_refuses_loudly() {
   assert_grep 'is unusable' "$state/firstmate-update.stuck" "the refusal was not persisted"
   [ ! -f "$state/firstmate-update.available" ] || fail "a refused check published an update signal"
   pass "an unusable configured update base refuses instead of comparing against the default"
+}
+
+# A base that resolves but cannot be read is the case where naming the hop pays:
+# the refusal has to point at the thing an operator changes, not just at a URL
+# that looked plausible.
+test_unreachable_base_refusal_names_the_hop_that_produced_it() {
+  local repo state config out
+  repo="$TMP_ROOT/unreachable"
+  state="$TMP_ROOT/unreachable-state"
+  config="$TMP_ROOT/unreachable-config"
+  fm_git_init_commit "$repo"
+  mkdir -p "$config"
+  printf '%s\n' "$TMP_ROOT/unreachable-absent-source" > "$config/firstmate-update-base"
+  mkdir -p "$state"
+  printf 'FIRSTMATE_UPDATE_AVAILABLE: stale prior reading\n' > "$state/firstmate-update.available"
+
+  out=$(run_fetching_check "$repo" "$state" "$config")
+  assert_contains "$out" 'update-source default-branch lookup failed' \
+    "an unreadable update source did not refuse"
+  assert_contains "$out" "from config/firstmate-update-base" \
+    "the refusal did not name the hop that produced the unreadable base"
+  [ ! -f "$state/firstmate-update.available" ] || fail "a refused check retained the prior update signal"
+  pass "an unreadable update source refuses by naming both the address and its hop"
 }
 
 # Direct coverage of the shared resolver both checks use, including the case a
@@ -262,6 +293,7 @@ test_installer_only_update_is_not_relevant
 test_configured_base_is_the_repository_compared
 test_environment_override_beats_the_configured_base
 test_unusable_configured_base_refuses_loudly
+test_unreachable_base_refusal_names_the_hop_that_produced_it
 test_resolver_precedence_and_default
 test_resolver_rejects_unusable_values
 test_resolver_refuses_present_but_unusable_file

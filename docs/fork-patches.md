@@ -4,9 +4,11 @@ This ledger is the fork-maintenance tax that the fleet repository is meant to en
 Until a vessel is actually cut over, this registry stays authoritative.
 The 2026-08-01 review, extended on 2026-08-02, records all 94 fork-only, non-merge commits reported by `git rev-list --oneline --no-merges "$upstream..$fork"` for fork `22b6464` against canonical upstream `a805766`.
 That fork commit is a pinned snapshot of the fork's default branch, not a live reference.
-`bin/fm-fork-sync-check.sh` resolves its own fork side from the live origin `HEAD` instead, so its commit set grows the moment anything lands on the fork's default branch while this pin stays where it is.
+`bin/fm-fork-sync-check.sh` resolves its own fork side from that repository's live default-branch `HEAD` instead, so its commit set grows the moment anything lands on the fork's default branch while this pin stays where it is.
 A divergence between the check's count and this registry's row count is therefore expected and is not a defect in either.
-The fork side of that check is this repository, `Coditan/firstmate-source` — the fleet's pin source — resolved from `origin`, never from a written-down address.
+The fork side of that check is this repository, `Coditan/firstmate-source`, the fleet's pin source, resolved through `bin/fm-currency-base-lib.sh`: `FM_FIRSTMATE_FORK_URL`, then `config/fork-sync-fork`, then a remote named `fork`, then `origin`.
+Until 2026-08-17 it was taken from `origin` alone, which is this repository only where the home is a plain clone of it; on a seat deployed from the fleet repository `origin` is that fleet repository, and the check listed its commits as fork-only patches.
+Every finding now names both compared repositories and the hop each came from, so a reading of the wrong repository is visible in the finding rather than only in its numbers.
 That distinction became load-bearing on 2026-08: the former address `Freudator86/firstmate` now hosts a **separate live repository** carrying upstream's content, so following the old name succeeds and silently reads the wrong repository instead of failing (Freudator86/admiralty#50).
 Commits can land here between this registry's pin re-stamps, so part of such a divergence is simply newer landed work rather than an omission on this home's side.
 The remedy is to add one row per unrecorded commit and re-stamp the pin in the sentence above; `git rev-list --oneline --no-merges <pinned-fork>..origin/main` names exactly what a stale pin is missing.
