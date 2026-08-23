@@ -35,6 +35,7 @@ run_guard_case() {
   FM_ROOT_OVERRIDE="$(case_root "$dir")" \
     FM_HOME="$(case_home "$dir")" \
     FM_GUARD_GRACE=999 \
+    FM_WATCH_SERVICE_FORCE_BACKEND=keeper \
     "$ROOT/bin/fm-guard.sh" 2>&1
 }
 
@@ -44,6 +45,7 @@ run_guard_case_read_only() {
     FM_HOME="$(case_home "$dir")" \
     FM_GUARD_GRACE=999 \
     FM_GUARD_READ_ONLY=1 \
+    FM_WATCH_SERVICE_FORCE_BACKEND=keeper \
     "$ROOT/bin/fm-guard.sh" 2>&1
 }
 
