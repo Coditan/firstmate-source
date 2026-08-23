@@ -222,11 +222,11 @@ So every option set carries one, and `board.js` names a form built without one o
 
 `is-void` on an option strikes it through: a settled option is struck, never removed, because a sheet that silently drops an answered option hides that it was ever asked.
 
-A board body declares no accessible name on the form: `board.js` sets one at startup, from `data-fm-label` and otherwise from the question key.
+A board body normally leaves the form's accessible name to `board.js`, which sets one at startup from `data-fm-label` and otherwise from the question key.
 That is not styling.
 Whether a `<form>` reaches the accessibility tree as role `form` at all depends on having a name - HTML-AAM exposes an unnamed one as a generic container - and browser builds differ on whether they have adopted that mapping.
 The `run-decisionboard` driver finds a board's decisions by that role, so on a build that has adopted it, unnamed forms make an entirely answerable board read as carrying nothing to answer; that was measured on another vessel on 2026-08-23.
-A board that wants its own wording sets `aria-label` itself and keeps it.
+A board that wants its own wording may set `aria-label` or `aria-labelledby`; `board.js` preserves either instead of replacing it, and warns when an `aria-labelledby` reference names an id that does not exist.
 
 The radio `name` must equal `data-fm-question`.
 A board that breaks that rule still submits - `board.js` falls back to the form's own checked radio and warns on the console - but the two are meant to be one declared key.
