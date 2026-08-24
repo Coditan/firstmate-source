@@ -94,6 +94,22 @@ launch_command() {
   return 1
 }
 
+resume_style_launch_command() {  # <command>
+  local cmd=" $1 " first base
+  first=${1%%[	 ]*}
+  base=${first##*/}
+  case "$cmd" in
+    *" resume "*|*" --resume"*|*" --continue"*)
+      return 0
+      ;;
+  esac
+  [ "$base" = claude ] || return 1
+  case "$cmd" in
+    *" -c "*|*" -c") return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 endpoint_file() {
   printf '%s/.primary-endpoint\n' "$STATE"
 }
@@ -121,6 +137,10 @@ launch_in_tmux() {  # <reason>
     log "launch refused: no config/seat-launch-command and no FM_SEAT_LAUNCH_COMMAND"
     return 1
   }
+  if resume_style_launch_command "$cmd"; then
+    log "launch refused: resume-style config/seat-launch-command is not safe for the seat respawner"
+    return 1
+  fi
   socket=$(tmux_socket_from_endpoint) || {
     log "launch refused: published endpoint is not a live tmux server-bound endpoint"
     return 1
@@ -130,7 +150,20 @@ launch_in_tmux() {  # <reason>
 }
 
 condition_key() {  # <status-line>
-  printf '%s' "$1" | cksum | awk '{print $1 ":" $2}'
+  local status=$1 condition=$1
+  case "$status" in
+    undeliverable:*)
+      condition=${status#undeliverable: listener pid }
+      case "$condition" in
+        *" is up with "*" wake(s) pending, but "*)
+          condition=${condition#* is up with }
+          condition=${condition#* wake(s) pending, but }
+          condition="undeliverable:$condition"
+          ;;
+      esac
+      ;;
+  esac
+  printf '%s' "$condition" | cksum | awk '{print $1 ":" $2}'
 }
 
 read_attempt_record() {  # <key>

@@ -99,7 +99,7 @@ test_stay_down_marker_is_authoritative() {
 }
 
 test_giveup_path_reports_a_finding() {
-  local home delivery tmux log status findings
+  local home delivery tmux log status findings launch_count
   home=$(make_home giveup)
   status="$home/status.txt"
   delivery="$home/fake-delivery"
@@ -112,9 +112,12 @@ test_giveup_path_reports_a_finding() {
   FM_FAKE_DELIVERY_STATUS="$status" run_respawner_once "$home" "$delivery" "$tmux" \
     || fail "respawner refused the first unreachable check"
   [ -e "$log" ] || fail "first unreachable check did not attempt a launch"
+  printf 'undeliverable: listener pid 1 is up with 2 wake(s) pending, but the endpoint was published by a session that no longer holds the fleet lock\n' > "$status"
   FM_FAKE_DELIVERY_STATUS="$status" run_respawner_once "$home" "$delivery" "$tmux" \
     || fail "respawner refused the give-up check"
 
+  launch_count=$(wc -l < "$log" | tr -d ' ')
+  [ "$launch_count" = 1 ] || fail "changed wake count reset the retry bound; got $launch_count launches"
   findings=$(find "$home/data/findings" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')
   [ "$findings" = 1 ] || fail "give-up path did not emit exactly one finding; got $findings"
   assert_grep "exhausted 1 launch attempt" "$home/data/findings/"*.json \
@@ -152,6 +155,27 @@ test_launch_uses_respawner_service_path() {
   pass "seat respawner preserves the service PATH for tmux launches"
 }
 
+test_resume_style_launch_command_is_refused() {
+  local home delivery tmux log status
+  home=$(make_home resume-command)
+  status="$home/status.txt"
+  delivery="$home/fake-delivery"
+  tmux="$home/fake-tmux"
+  log="$home/tmux.log"
+  printf 'undeliverable: listener pid 1 is up with 1 wake(s) pending, but no session has published where the model turn lives\n' > "$status"
+  write_fake_delivery "$delivery"
+  write_fake_tmux "$tmux" "$log"
+  printf 'codex resume --last\n' > "$home/config/seat-launch-command"
+
+  FM_FAKE_DELIVERY_STATUS="$status" run_respawner_once "$home" "$delivery" "$tmux" \
+    || fail "respawner refused to complete a cycle after rejecting resume launch"
+  [ ! -e "$log" ] || fail "resume-style launch command reached tmux"
+  assert_grep "resume-style config/seat-launch-command" "$home/state/.seat-respawner.log" \
+    "resume-style launch rejection was not operator-visible"
+  pass "seat respawner refuses resume-style launch commands"
+}
+
 test_stay_down_marker_is_authoritative
 test_giveup_path_reports_a_finding
 test_launch_uses_respawner_service_path
+test_resume_style_launch_command_is_refused
