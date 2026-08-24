@@ -350,7 +350,7 @@ test_drain_asserts_watcher_liveness() {
     || fail "drain accepted a fresh beacon without an identity-matched watcher"
   : > "$err"
   fm_test_record_supervision_healthy "$FM_ROOT_OVERRIDE" "$state"
-  FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=300 "$DRAIN" >/dev/null 2> "$err" || fail "drain failed with healthy supervision"
+  FM_HOME="$FM_ROOT_OVERRIDE" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=300 "$DRAIN" >/dev/null 2> "$err" || fail "drain failed with healthy supervision"
   [ ! -s "$err" ] || fail "drain warned with identity-matched daemon and delivery locks: $(cat "$err")"
   pass "drain asserts watcher liveness: rejects beacon-only state and accepts identity-matched daemon plus stub"
 }

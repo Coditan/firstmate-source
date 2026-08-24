@@ -30,10 +30,18 @@ wake() { printf '%s\n' "$1" >> "$WAKE_LOG"; return 0; }
 sleep() { printf 'SLEEP\n' >> "$SLEEP_LOG"; }
 
 reset_state() {
-  rm -f "$STATE_DIR"/*.meta "$STATE_DIR"/*.status "$STATE_DIR"/.wake-queue \
+  rm -f "$STATE_DIR"/*.meta "$STATE_DIR"/*.status "$STATE_DIR"/*.turn-ended "$STATE_DIR"/.wake-queue \
     "$STATE_DIR"/.wake-queue.seq "$STATE_DIR"/.watch-triage.log \
+    "$STATE_DIR"/.seen-* "$STATE_DIR"/.hb-surfaced-* \
+    "$STATE_DIR"/.hash-* "$STATE_DIR"/.count-* "$STATE_DIR"/.stale-* \
+    "$STATE_DIR"/.wedge-escalations-* "$STATE_DIR"/.wedgeheld-* \
+    "$STATE_DIR"/.paused-* "$STATE_DIR"/.degraded-* \
     "$STATE_DIR"/.herdr-escalated-* "$STATE_DIR"/.parked-* \
     "$STATE_DIR"/.parkedmeta-* "$STATE_DIR"/.parkedresurfaced-* \
+    "$STATE_DIR"/.subsuper-seen-status-* "$STATE_DIR"/.subsuper-stale-* \
+    "$STATE_DIR"/.subsuper-paused-* "$STATE_DIR"/.wedge-alarm-history \
+    "$STATE_DIR"/.subsuper-escalations "$STATE_DIR"/.subsuper-escalations.since \
+    "$STATE_DIR"/.subsuper-inject-wedged \
     "$TMP"/panes "$TMP"/wtcalls "$TMP"/wtcalled 2>/dev/null || true
   : > "$WAKE_LOG"
   : > "$SLEEP_LOG"
@@ -168,6 +176,65 @@ fm_write_meta "$STATE_DIR/tk7.meta" "window=default:wG:pR" "backend=herdr" "kind
 mark_parked "default:wG:pR" || fail "mark_parked refused a kind=scout window"
 [ -e "$STATE_DIR/.parked-default_wG_pR" ] || fail "mark_parked did not create the expected marker for a kind=scout window"
 pass "mark_parked: a kind=scout window is accepted exactly like the default ship kind"
+
+# --- per-task state marker pruning -----------------------------------------
+
+reset_state
+fm_write_meta "$STATE_DIR/live.meta" "window=default:wLive:p1" "backend=herdr" "kind=ship"
+printf 'working: still active\n' > "$STATE_DIR/live.status"
+: > "$STATE_DIR/live.turn-ended"
+live_window_key=$(window_state_key "default:wLive:p1")
+old_window_key=$(window_state_key "default:wOld:p2")
+live_task_key=$(fm_state_marker_key live)
+old_task_key=$(fm_state_marker_key old)
+printf 'sig' > "$STATE_DIR/.seen-live_status"
+printf 'sig' > "$STATE_DIR/.seen-live_turn-ended"
+printf 'sig' > "$STATE_DIR/.seen-old_status"
+printf 'done: relayed\n' > "$STATE_DIR/.hb-surfaced-$live_task_key"
+printf 'done: stale\n' > "$STATE_DIR/.hb-surfaced-$old_task_key"
+for prefix in .hash- .count- .stale- .stale-since- .wedge-escalations- .wedgeheld- \
+  .paused- .paused-rechecked- .paused-resurfaced- .parked- .parkedmeta- \
+  .parkedresurfaced- .degraded- .herdr-escalated-; do
+  : > "$STATE_DIR/${prefix}${live_window_key}"
+  : > "$STATE_DIR/${prefix}${old_window_key}"
+done
+printf 'history stays\n' > "$STATE_DIR/.wedge-alarm-history"
+fm_state_marker_prune_watcher "$STATE_DIR"
+[ -e "$STATE_DIR/.seen-live_status" ] || fail "watcher prune removed a live status seen marker"
+[ -e "$STATE_DIR/.seen-live_turn-ended" ] || fail "watcher prune removed a live turn-ended seen marker"
+[ ! -e "$STATE_DIR/.seen-old_status" ] || fail "watcher prune retained an orphaned seen marker"
+[ -e "$STATE_DIR/.hb-surfaced-$live_task_key" ] || fail "watcher prune removed a live heartbeat surfaced marker"
+[ ! -e "$STATE_DIR/.hb-surfaced-$old_task_key" ] || fail "watcher prune retained an orphaned heartbeat surfaced marker"
+for prefix in .hash- .count- .stale- .stale-since- .wedge-escalations- .wedgeheld- \
+  .paused- .paused-rechecked- .paused-resurfaced- .parked- .parkedmeta- \
+  .parkedresurfaced- .degraded- .herdr-escalated-; do
+  [ -e "$STATE_DIR/${prefix}${live_window_key}" ] || fail "watcher prune removed live ${prefix}${live_window_key}"
+  [ ! -e "$STATE_DIR/${prefix}${old_window_key}" ] || fail "watcher prune retained orphaned ${prefix}${old_window_key}"
+done
+[ -e "$STATE_DIR/.wedge-alarm-history" ] || fail "watcher prune removed append-only wedge history"
+pass "state marker pruning: watcher removes only orphaned per-task markers"
+
+reset_state
+fm_write_meta "$STATE_DIR/live.meta" "window=default:wLive:p1" "backend=herdr" "kind=ship"
+printf 'done: waiting on relay\n' > "$STATE_DIR/live.status"
+live_task_key=$(fm_state_marker_key live)
+old_task_key=$(fm_state_marker_key old)
+for prefix in .subsuper-seen-status- .subsuper-stale- .subsuper-paused-; do
+  : > "$STATE_DIR/${prefix}${live_task_key}"
+  : > "$STATE_DIR/${prefix}${old_task_key}"
+done
+printf 'pending digest\n' > "$STATE_DIR/.subsuper-escalations"
+printf 'oldest\n' > "$STATE_DIR/.subsuper-escalations.since"
+printf 'wedged\n' > "$STATE_DIR/.subsuper-inject-wedged"
+fm_state_marker_prune_subsuper "$STATE_DIR"
+for prefix in .subsuper-seen-status- .subsuper-stale- .subsuper-paused-; do
+  [ -e "$STATE_DIR/${prefix}${live_task_key}" ] || fail "subsuper prune removed live ${prefix}${live_task_key}"
+  [ ! -e "$STATE_DIR/${prefix}${old_task_key}" ] || fail "subsuper prune retained orphaned ${prefix}${old_task_key}"
+done
+[ -e "$STATE_DIR/.subsuper-escalations" ] || fail "subsuper prune removed buffered escalations"
+[ -e "$STATE_DIR/.subsuper-escalations.since" ] || fail "subsuper prune removed escalation age sidecar"
+[ -e "$STATE_DIR/.subsuper-inject-wedged" ] || fail "subsuper prune removed max-defer wedge marker"
+pass "state marker pruning: away supervisor removes only orphaned per-task markers"
 
 # --- event_wait_or_sleep: secondmate windows are excluded from the pane list --
 
