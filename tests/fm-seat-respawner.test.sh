@@ -141,7 +141,7 @@ test_launch_uses_respawner_service_path() {
   write_executing_fake_tmux "$tmux" "$log"
   {
     printf '#!/usr/bin/env bash\n'
-    printf 'printf launched > "$FM_HOME/launch.out"\n'
+    printf "printf launched > \"\$FM_HOME/launch.out\"\n"
   } > "$tool_dir/fm-custom-seat"
   chmod +x "$tool_dir/fm-custom-seat"
   printf 'fm-custom-seat\n' > "$home/config/seat-launch-command"
