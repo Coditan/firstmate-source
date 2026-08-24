@@ -33,6 +33,9 @@ set -u
 # shellcheck source=tests/lib.sh
 # shellcheck disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=bin/fm-harness-pid-lib.sh
+# shellcheck disable=SC1091
+. "$ROOT/bin/fm-harness-pid-lib.sh"
 
 LOCK_SH="$ROOT/bin/fm-lock.sh"
 fm_test_tmproot TMP_ROOT fm-lock
@@ -131,6 +134,27 @@ prepare() {
   PREP_FAKEBIN=$(fm_fakebin "$PREP_ROOT")
   live_pid PREP_HARNESS
   make_fake_ps_holder "$PREP_FAKEBIN" "$PREP_HARNESS"
+}
+
+test_the_shared_predicate_refuses_every_claimed_nonregular_lock_path() {
+  local root target
+  root=$(fixture shared-nonregular)
+
+  mkdir "$root/state/.lock"
+  fm_session_lock_held_by_other "$root/state/.lock" "" \
+    || fail "the shared predicate must refuse a directory at the lock path"
+  rmdir "$root/state/.lock"
+
+  target="$root/elsewhere"
+  : > "$target"
+  ln -s "$target" "$root/state/.lock"
+  fm_session_lock_held_by_other "$root/state/.lock" "" \
+    || fail "the shared predicate must refuse a symlink at the lock path"
+  rm "$root/state/.lock"
+
+  ln -s "$root/never-created" "$root/state/.lock"
+  fm_session_lock_held_by_other "$root/state/.lock" "" \
+    || fail "the shared predicate must refuse a dangling symlink at the lock path"
 }
 
 test_a_free_lock_is_acquired_and_the_pid_is_published() {
@@ -375,6 +399,7 @@ SH
 }
 
 test_a_free_lock_is_acquired_and_the_pid_is_published
+test_the_shared_predicate_refuses_every_claimed_nonregular_lock_path
 test_a_live_holder_refuses_the_second_session
 test_a_session_reacquiring_its_own_lock_is_answered_without_the_claim
 test_acquisition_serialises_on_the_claim_lock

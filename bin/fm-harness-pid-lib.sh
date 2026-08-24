@@ -106,11 +106,12 @@ fm_harness_alive() {
   printf '%s' "$(basename "$comm") $(ps -o args= -p "$pid" 2>/dev/null)" | grep -qE "$FM_HARNESS_RE"
 }
 
-# Return 0 when this session cannot show the home is free: the session lock file
-# <lock> is held by a LIVE harness process that is not <my-harness-pid>, or the
-# lock exists and cannot be read at all - exactly the conditions bin/fm-lock.sh
-# refuses acquisition on, and therefore the conditions under which this session
-# will get no fleet authority at all.
+# Return 0 when this session cannot show the home is free: the session lock path
+# <lock> exists but is not a usable regular file (including any symlink), cannot
+# be read at all, or is held by a LIVE harness process that is not
+# <my-harness-pid> - exactly the conditions bin/fm-lock.sh refuses acquisition
+# on, and therefore the conditions under which this session will get no fleet
+# authority at all. A lock path absent altogether returns 1 (free).
 # ONE owner, because the lock and the primary transcript record have to agree on
 # who this home's session is: a second copy of "another session holds this home"
 # would let a session be refused the lock by one test and take over the record
@@ -121,7 +122,8 @@ fm_harness_alive() {
 # act as one.
 fm_session_lock_held_by_other() {  # <lock-file> <my-harness-pid>
   local lock=$1 me=$2 holder
-  [ -f "$lock" ] || return 1
+  [ -e "$lock" ] || [ -L "$lock" ] || return 1
+  [ -f "$lock" ] && [ ! -L "$lock" ] || return 0
   # Read with cat rather than one `read`: a lock file written without a trailing
   # newline makes `read` report failure even though it filled the variable, and
   # a holder mistaken for absent is the takeover this predicate exists to stop.

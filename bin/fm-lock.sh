@@ -53,7 +53,9 @@ fi
 # clear either.
 refuse_not_ours() {
   local holder
-  if ! holder=$(cat "$LOCK" 2>/dev/null); then
+  if [ ! -f "$LOCK" ] || [ -L "$LOCK" ]; then
+    echo "error: the session lock is not a regular file; operate read-only until resolved" >&2
+  elif ! holder=$(cat "$LOCK" 2>/dev/null); then
     echo "error: the session lock is unreadable, so this session cannot show it is free; operate read-only until resolved" >&2
   else
     echo "error: another live firstmate session holds the lock (pid $holder); operate read-only until resolved" >&2
@@ -126,17 +128,8 @@ CLAIM_LOCK_HELD=1
 
 # Re-read under the claim: the holder may have changed between the pre-check
 # above and this point, which is the whole reason the claim exists.
-if [ -e "$LOCK" ] || [ -L "$LOCK" ]; then
-  # A symlink or a directory where the lock belongs is refused rather than
-  # followed: writing through it publishes this session's pid somewhere nobody
-  # reads the lock from.
-  if [ ! -f "$LOCK" ] || [ -L "$LOCK" ]; then
-    echo "error: the session lock is not a regular file; operate read-only until resolved" >&2
-    exit 1
-  fi
-  if fm_session_lock_held_by_other "$LOCK" "$me"; then
-    refuse_not_ours
-  fi
+if fm_session_lock_held_by_other "$LOCK" "$me"; then
+  refuse_not_ours
 fi
 
 if ! { printf '%s\n' "$me" > "$LOCK"; } 2>/dev/null; then
