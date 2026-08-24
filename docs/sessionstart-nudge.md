@@ -83,7 +83,8 @@ Gating alone does not close the second door: a session that WILL hold the lock a
 
 **It retries, bounded, and then records the failure with its cause.**
 `fm_harness_pid_settled` re-attempts the walk with the waits in `FM_HARNESS_PID_RETRY_DELAYS` (0.1, 0.2, 0.4, 0.8 seconds), which is 1.5 seconds spent only on the path that is already failing.
-That is the right shape because the answer is not always a settled one: `fm_harness_pid` now distinguishes `no-harness-process` - the walk COMPLETED and no ancestor was a harness - from `harness-lookup-failed`, where a `ps` probe failed so the walk could not be completed and the answer is unknown rather than negative.
+That is the right shape because the answer is not always a settled one: `fm_harness_pid` now distinguishes `no-harness-process` - the walk COMPLETED and no ancestor was a harness - from `harness-lookup-failed`, where a process-table probe failed or returned unusable data so the walk could not be completed and the answer is unknown rather than negative.
+An empty or malformed parent pid from a successful `ppid=` probe is in that same unknown class, because the walk cannot prove it reached the root of the ancestry.
 On 2026-08-19 this seat's hook recorded the failure at session start and the same walk resolved correctly by hand later the same day, which is the signature of an unknown answer rather than a settled one.
 The record now carries which of the two it was, so the next occurrence is diagnosable instead of being re-argued.
 
@@ -264,7 +265,7 @@ The interactive session is the door both vessels came through, and it is the one
 `tests/fm-sessionstart-nudge.test.sh` proves wrapper silence for both gate signals, an unmarked linked worktree, a linked task worktree with a separate `FM_HOME`, a missing state directory, and an already-owned lock.
 It proves the transcript record's ok fields, that the record and `bin/fm-lock.sh` name the same harness process, that a silent post-clear start still replaces a superseded record, that a missing transcript path, an absent payload, and an unidentifiable owning process each record a visible error rather than leaving a stale or absent value, and that a non-primary claims no record.
 It proves the lock gate in both directions: a second session in a home that already has one leaves the record alone, a session that cannot name itself does not claim a live session's record, a lock left by a finished session does not block a fresh one, and the lock holder still replaces its own record after a clear.
-It proves the retry is spent rather than declared - a single unreadable probe resolves and records `status=ok`, while a process table that stays unreadable records `harness-lookup-failed` rather than the settled negative `no-harness-process`.
+It proves the retry is spent rather than declared - a single unreadable probe resolves and records `status=ok`, while a process table that stays unreadable, or returns an empty or malformed parent pid, records `harness-lookup-failed` rather than the settled negative `no-harness-process`.
 It also proves that an unidentifiable owning process leaves `harness_pid` empty rather than a probeable sentinel, and that a session which cannot write its record leaves no previous `status=ok` record behind, whether the state directory refuses the write or the atomic replace fails.
 It proves exact U+2063 `FIRSTMATE_OP:`-prefixed, `session-start`-typed one-line output for a plain primary and a marked linked secondmate primary.
 It also verifies tracked wrapper registration for Claude, Codex, OpenCode, Pi, and Grok.

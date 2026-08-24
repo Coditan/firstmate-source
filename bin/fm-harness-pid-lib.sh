@@ -21,8 +21,9 @@ FM_HARNESS_PID_RETRY_DELAYS="${FM_HARNESS_PID_RETRY_DELAYS-0.1 0.2 0.4 0.8}"
 # a consumer that flattens them cannot diagnose its own failure afterwards:
 #   no-harness-process     the ancestry walk COMPLETED and no ancestor was a
 #                          harness - a settled negative answer.
-#   harness-lookup-failed  a `ps` probe failed, so the walk could not be
-#                          completed and the answer is UNKNOWN, not negative.
+#   harness-lookup-failed  a `ps` probe failed or returned an unusable parent
+#                          pid, so the walk could not be completed and the
+#                          answer is UNKNOWN, not negative.
 # This distinction is what makes a bounded retry meaningful rather than
 # superstitious: an unknown answer can change on the next attempt.
 FM_HARNESS_PID_ERROR=
@@ -71,8 +72,15 @@ fm_harness_pid() {
       FM_HARNESS_PID_ERROR=harness-lookup-failed
       return 1
     fi
-    pid=${pid//[[:space:]]/}
-    [ -n "$pid" ] && [ "$pid" -gt 1 ] || return 1
+    pid=$(printf '%s' "$pid" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    case "$pid" in
+      ''|*[!0-9]*)
+        # shellcheck disable=SC2034 # Read by callers after fm_harness_pid returns.
+        FM_HARNESS_PID_ERROR=harness-lookup-failed
+        return 1
+        ;;
+      0|1) return 1 ;;
+    esac
   done
   return 1
 }
