@@ -736,7 +736,7 @@ GROWTH_SAMPLE_DROPPED=0
 INTERVAL_WAITED=0
 
 read_prior() {
-  local epoch age parse_status="$TMP/prior-status" epoch_file="$TMP/prior-epoch" status
+  local epoch age parse_status="$TMP/prior-status" epoch_file="$TMP/prior-epoch" status dropped=0
   : > "$PRIOR_FILE"
   if [ "$INTERVAL" -gt 0 ]; then
     if [ "$INTERVAL" -lt "$SAMPLE_MIN_AGE" ]; then
@@ -812,7 +812,7 @@ read_prior() {
   fi
   status=$(head -1 "$parse_status" 2>/dev/null)
   case "$status" in
-    dropped\ *) GROWTH_SAMPLE_DROPPED=${status#dropped } ;;
+    dropped\ *) dropped=${status#dropped } ;;
   esac
   epoch=$(head -1 "$epoch_file" 2>/dev/null)
   age=$((NOW - epoch))
@@ -832,6 +832,7 @@ read_prior() {
     return
   fi
   GROWTH_INTERVAL=$age
+  GROWTH_SAMPLE_DROPPED=$dropped
 }
 
 store_sample() {

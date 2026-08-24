@@ -608,6 +608,19 @@ EOF
   [ "$(printf '%s' "$out" | jq -r '.growth.dropped_sample_records')" = 1 ] \
     || fail "json did not expose the dropped stored-sample record count"
 
+  write_sample "$dir/samples" $((NOW + 60)) "1000=$((NOW - 600)):512000"
+  printf 'not-a-pid\t123\t456\n' >> "$dir/samples"
+  status=0
+  out=$(run_reading "$dir" --no-store) || status=$?
+  expect_code 3 "$status" "future-dated sample with one malformed stored sample record"
+  assert_contains "$out" 'stored sample is dated in the future' 'the future-dated sample was not refused'
+  assert_not_contains "$out" 'growth measured from the remaining records' 'a refused sample was described as measured'
+  status=0
+  out=$(run_reading "$dir" --no-store --json) || status=$?
+  expect_code 3 "$status" "json future-dated sample with one malformed stored sample record"
+  [ "$(printf '%s' "$out" | jq -r '.growth.dropped_sample_records')" = 0 ] \
+    || fail "json exposed dropped stored-sample records for a refused sample"
+
   write_sample "$dir/samples" $((NOW - 300))
   printf 'not-a-pid\t123\t456\n' >> "$dir/samples"
   status=0
