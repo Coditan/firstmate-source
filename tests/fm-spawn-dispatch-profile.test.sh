@@ -20,12 +20,55 @@ codex_signal_root_flag() {  # <task-id>
   printf -- "-c 'sandbox_workspace_write.writable_roots=[\"%s/state/.crew-signal/%s\"]'" "$HOME_DIR" "$1"
 }
 
+# The crewmate form of the same flag: the per-task signal directory AND the git
+# common directory of the worktree the spawn is launched into. Resolved here the
+# way fm-spawn resolves it - from the worktree, canonicalized - rather than by
+# rebuilding "$PROJ_DIR/.git", so a test that passes proves the script asked git
+# rather than proving both sides string-build the same guess.
+codex_resolved_git_common_dir() {  # <worktree>
+  local wt=$1 common
+  common=$(git -C "$wt" rev-parse --git-common-dir) \
+    || fail "test setup: $wt has no resolvable git common directory"
+  (cd "$wt" && cd "$common" && pwd -P) \
+    || fail "test setup: could not canonicalize the git common directory of $wt"
+}
+
+codex_crew_roots_flag() {  # <task-id> <worktree>
+  printf -- "-c 'sandbox_workspace_write.writable_roots=[\"%s/state/.crew-signal/%s\", \"%s\"]'" \
+    "$HOME_DIR" "$1" "$(codex_resolved_git_common_dir "$2")"
+}
+
+# The composed writable_roots array, one root per line. A substring assertion on the
+# launch line cannot answer "is the working tree a root?", because the granted git
+# directory has the working tree's path as its prefix; reading the array as a list can.
+codex_launch_writable_roots() {  # <launch-line>
+  printf '%s\n' "$1" \
+    | sed -n 's/.*sandbox_workspace_write\.writable_roots=\[\([^]]*\)\].*/\1/p' \
+    | tr ',' '\n' \
+    | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//' \
+    | sed '/^$/d'
+}
+
+assert_root_present() {  # <roots> <root> <msg>
+  printf '%s\n' "$1" | grep -qxF "$2" \
+    || fail "$3 (missing root: '$2')"$'\n'"--- roots ---"$'\n'"$1"
+}
+
+assert_root_absent() {  # <roots> <root> <msg>
+  printf '%s\n' "$1" | grep -qxF "$2" \
+    && fail "$3 (unexpected root: '$2')"$'\n'"--- roots ---"$'\n'"$1"
+  return 0
+}
+
 codex_secondmate_profile_flags_for_id() {  # <task-id>
   printf '%s %s' "$CODEX_SECONDMATE_PROFILE_FLAGS" "$(codex_signal_root_flag "$1")"
 }
 
-codex_crewmate_profile_flags_for_id() {  # <task-id>
-  printf '%s %s' "$(codex_secondmate_profile_flags_for_id "$1")" "$CODEX_CREW_NETWORK_FLAG"
+# Defaults to the case's $WT_DIR, which is the worktree run_spawn hands the fake
+# pane; a case that launches into a different worktree passes it explicitly.
+codex_crewmate_profile_flags_for_id() {  # <task-id> [worktree]
+  printf '%s %s %s' "$CODEX_SECONDMATE_PROFILE_FLAGS" \
+    "$(codex_crew_roots_flag "$1" "${2:-$WT_DIR}")" "$CODEX_CREW_NETWORK_FLAG"
 }
 
 assert_codex_signal_paths() {  # <task-id>
@@ -600,7 +643,7 @@ test_codex_crewmate_carries_the_pipeline_socket_network_grant() {
 # Pinning the omission here is what stops the grant from creeping outward to a
 # supervising session the next time this branch is edited.
 test_codex_secondmate_does_not_carry_the_crewmate_network_grant() {
-  local rec id sm out status launch expected_flags
+  local rec id sm out status launch expected_flags roots count
   id=secondmate-codex-net-z21
   rec=$(make_spawn_case secondmate-codex-net codex "$id")
   read_case_record "$rec"
@@ -620,7 +663,128 @@ test_codex_secondmate_does_not_carry_the_crewmate_network_grant() {
     "secondmate codex launch widened the filesystem grant to the whole state directory"
   assert_not_contains "$launch" "network_access" \
     "the crewmate network grant widened to a secondmate, which supervises rather than runs the pipeline"
-  pass "a codex secondmate launch omits the crewmate-only sandbox network grant"
+  # The same reasoning excludes a secondmate from the git-directory grant, and its
+  # blast radius there is wider than a crewmate's: a secondmate home is a worktree of
+  # the FIRSTMATE repository, so its common directory is the primary checkout's own
+  # git directory. It ships nothing from that home, so it needs no ref write there.
+  roots=$(codex_launch_writable_roots "$launch")
+  count=$(printf '%s\n' "$roots" | wc -l | tr -d ' ')
+  [ "$count" = 1 ] \
+    || fail "secondmate codex launch carries $count writable roots, not the signal root alone"$'\n'"--- roots ---"$'\n'"$roots"
+  assert_root_present "$roots" "$HOME_DIR/state/.crew-signal/$id" \
+    "secondmate codex launch lost its per-task signal root"
+  pass "a codex secondmate launch omits the crewmate-only network and git-directory grants"
+}
+
+# A Codex crewmate works in a linked worktree whose refs live in the project's
+# PRIMARY checkout, so the first ref write a ship task makes - creating its branch -
+# lands outside the workspace and outside the signal root. These four tests pin the
+# second writable root that closes that: it names the git common directory, it never
+# names the working tree, a plain clone gets no second root at all, and a worktree
+# whose common directory cannot be resolved refuses the launch instead of quietly
+# composing the pre-grant line.
+test_codex_crewmate_can_write_its_worktree_refs() {
+  local rec id out status launch expected_flags roots common
+  id=profile-codex-refs-z23
+  rec=$(make_spawn_case profile-codex-refs codex "$id")
+  read_case_record "$rec"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "codex ship spawn should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  expected_flags=$(codex_crewmate_profile_flags_for_id "$id")
+  assert_contains "$launch" "$expected_flags" \
+    "codex ship launch did not grant the worktree's git common directory alongside the signal root"
+  common=$(codex_resolved_git_common_dir "$WT_DIR")
+  roots=$(codex_launch_writable_roots "$launch")
+  assert_root_present "$roots" "$common" \
+    "codex ship launch does not name the git common directory its ref writes land in"
+  pass "a codex crewmate launch grants the git common directory its branch creation writes"
+}
+
+# The prohibition this grant must not retire: hard rule 1 in AGENTS.md, and the
+# spawn-time isolation assertion, both rest on a worker being unable to write into
+# projects/<name>/. Granting <project>/.git must leave the working tree that contains
+# it ungranted, which no substring assertion on the launch line can show - the
+# project path is a prefix of the granted one - so this reads the roots as a list.
+test_codex_crewmate_is_not_granted_the_project_working_tree() {
+  local rec id out status launch roots proj_real wt_real
+  id=profile-codex-tree-z24
+  rec=$(make_spawn_case profile-codex-tree codex "$id")
+  read_case_record "$rec"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "codex ship spawn should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  roots=$(codex_launch_writable_roots "$launch")
+  proj_real=$(cd "$PROJ_DIR" && pwd -P)
+  wt_real=$(cd "$WT_DIR" && pwd -P)
+  assert_root_absent "$roots" "$proj_real" \
+    "codex ship launch made the project working tree a writable root"
+  assert_root_absent "$roots" "$wt_real" \
+    "codex ship launch named the worktree itself as a writable root"
+  pass "the git-directory grant leaves the project working tree ungranted"
+}
+
+# A plain clone keeps its common directory inside its own working tree, which
+# workspace-write already covers. Emitting it anyway would put a redundant second
+# element in the array; emitting it wrongly could put a malformed one there.
+test_codex_plain_clone_gets_no_second_writable_root() {
+  local rec id plain out status launch roots count
+  id=profile-codex-plain-z25
+  rec=$(make_spawn_case profile-codex-plain codex "$id")
+  read_case_record "$rec"
+  plain="$CASE_DIR/plain-clone"
+  fm_git_init_commit "$plain"
+
+  out=$(run_spawn "$HOME_DIR" "$plain" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "codex spawn into a plain clone should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "$(codex_signal_root_flag "$id")" \
+    "a plain-clone codex launch lost the per-task signal root"
+  roots=$(codex_launch_writable_roots "$launch")
+  count=$(printf '%s\n' "$roots" | sed '/^$/d' | wc -l | tr -d ' ')
+  [ "$count" = 1 ] \
+    || fail "a plain clone produced $count writable roots, not the signal root alone"$'\n'"--- roots ---"$'\n'"$roots"
+  assert_root_absent "$roots" "$(cd "$plain" && pwd -P)/.git" \
+    "a plain clone was granted its own git directory a second time"
+  pass "a plain clone adds no second writable root and no duplicate"
+}
+
+# Unresolvable must refuse. Emitting no second root would restore the pre-grant
+# behaviour - every ref write escalating to the approval reviewer - with nothing on
+# the launch line or in the output to say the grant was dropped.
+test_codex_unresolvable_common_dir_refuses_the_launch() {
+  local rec id real_git out status
+  id=profile-codex-nocommon-z26
+  rec=$(make_spawn_case profile-codex-nocommon codex "$id")
+  read_case_record "$rec"
+  real_git=$(command -v git) || fail "test setup: no git on PATH"
+  cat > "$FAKEBIN_DIR/git" <<SH
+#!/usr/bin/env bash
+for a in "\$@"; do
+  [ "\$a" = "--git-common-dir" ] && exit 1
+done
+exec $real_git "\$@"
+SH
+  chmod +x "$FAKEBIN_DIR/git"
+
+  # The same set +e/set -e wrapper test_codex_signal_setup_migrates_existing_status_log
+  # uses: a nonzero spawn is this test's expected result, not its failure.
+  set +e
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR"); status=$?
+  set -e
+
+  [ "$status" != 0 ] \
+    || fail "codex spawn launched despite an unresolvable git common directory"$'\n'"--- output ---"$'\n'"$out"
+  assert_contains "$out" "could not resolve the git common directory" \
+    "the refusal did not name the unresolvable git common directory"
+  [ ! -s "$LAUNCH_LOG" ] \
+    || fail "codex spawn composed a launch line after refusing the grant"$'\n'"$(cat "$LAUNCH_LOG")"
+  pass "an unresolvable git common directory refuses the launch instead of silently dropping the grant"
 }
 
 # The grant lives entirely in the codex branch of the launch composition. A claude
@@ -848,6 +1012,10 @@ test_codex_signal_setup_migrates_existing_status_log
 test_codex_omits_out_of_range_max_effort
 test_codex_crewmate_carries_the_pipeline_socket_network_grant
 test_codex_secondmate_does_not_carry_the_crewmate_network_grant
+test_codex_crewmate_can_write_its_worktree_refs
+test_codex_crewmate_is_not_granted_the_project_working_tree
+test_codex_plain_clone_gets_no_second_writable_root
+test_codex_unresolvable_common_dir_refuses_the_launch
 test_non_codex_crewmate_acquires_no_sandbox_network_grant
 test_tracked_codex_profile_leaves_launch_grants_to_the_launch_line
 test_grok_threads_model_and_reasoning_effort

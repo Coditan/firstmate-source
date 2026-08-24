@@ -178,6 +178,7 @@ Check the spawning home's own `bin/fm-spawn.sh` for the grant before concluding 
 
 The network grant covers the network dimension and nothing else.
 A separate per-task signal writable root is documented in [`docs/codex-status-signalling.md`](codex-status-signalling.md), with completion-gate attestation evidence owned by [`docs/codex-completion-gate.md`](codex-completion-gate.md).
+The `PROBE1` refusal below is closed by a separate git-directory writable root, owned by [`docs/codex-sandbox-git-directory.md`](codex-sandbox-git-directory.md); `PROBE2` is not, and stays as recorded here.
 A pipeline run also writes in two places outside the workspace, and the sandbox refuses both.
 Measured 2026-08-11 from a real `codex exec` worker carrying the full crewmate profile, network grant included:
 
@@ -206,7 +207,9 @@ That is a separate captain decision, and it is deliberately not taken here.
 
 An earlier draft of this section inferred that the approval path, `approval_policy = "on-request"` with `approvals_reviewer = "auto_review"`, is what clears such a filesystem refusal, reasoning from the fact that Codex crewmates do commit in this linked-worktree layout.
 The run above is evidence against that inference for the gate push: the worker had both settings available, did not escalate, and returned the error.
-How a Codex crewmate nevertheless commits here is therefore unexplained rather than settled, and the next reader should treat it as an open question rather than a mechanism to rely on.
+How a Codex crewmate nevertheless commits here was left open by this record.
+It was answered on 2026-08-24 by a live ref-write refusal that did escalate and was approved, so the approval path was carrying the git writes after all - for the git directory, though still not for the gate push above.
+[`docs/codex-sandbox-git-directory.md`](codex-sandbox-git-directory.md) owns that finding and the grant taken in response.
 
 One instrument limit remains.
 `codex sandbox` and `codex exec` are both weaker instruments than the interactive `codex` session `bin/fm-spawn.sh` actually launches, so a refusal measured through them may still understate what a real crewmate achieves.
