@@ -296,7 +296,8 @@ family_for_basename() {
       printf '%s\n' decision-backlog
       ;;
     fm-axi-suite.test.sh|fm-currency-round.test.sh|fm-firstmate-update-check.test.sh|\
-    fm-fleet-update-check.test.sh|fm-self-drift.test.sh)
+    fm-fleet-update-check.test.sh|fm-self-drift.test.sh|\
+    fm-upstream-distance.test.sh)
       printf '%s\n' currency-checks
       ;;
     fm-forge-status.test.sh|fm-github-inbox.test.sh)
@@ -983,9 +984,6 @@ families_for_changed_path() {
     bin/fm-sessionstart-nudge.sh|bin/fm-tangle*|bin/fm-update.sh|\
     bin/fm-gate-refuse*|bin/fm-lock*)
       printf '%s\n' session-bootstrap
-      ;;
-    bin/fm-fork-sync-check.sh)
-      printf '%s\n' currency-checks
       ;;
     bin/fm-pr-*|bin/fm-merge-local.sh|bin/fm-teardown.sh|bin/fm-review-diff.sh|\
     bin/fm-x-*|bin/fm-check*)
