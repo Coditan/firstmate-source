@@ -21,8 +21,9 @@ FM_HARNESS_PID_RETRY_DELAYS="${FM_HARNESS_PID_RETRY_DELAYS-0.1 0.2 0.4 0.8}"
 # a consumer that flattens them cannot diagnose its own failure afterwards:
 #   no-harness-process     the ancestry walk COMPLETED and no ancestor was a
 #                          harness - a settled negative answer.
-#   harness-lookup-failed  a `ps` probe failed, so the walk could not be
-#                          completed and the answer is UNKNOWN, not negative.
+#   harness-lookup-failed  a `ps` probe failed or returned an unusable parent
+#                          pid, so the walk could not be completed and the
+#                          answer is UNKNOWN, not negative.
 # This distinction is what makes a bounded retry meaningful rather than
 # superstitious: an unknown answer can change on the next attempt.
 FM_HARNESS_PID_ERROR=
