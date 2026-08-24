@@ -125,7 +125,7 @@ launch_in_tmux() {  # <reason>
     log "launch refused: published endpoint is not a live tmux server-bound endpoint"
     return 1
   }
-  shell_command="cd $(shell_quote "$FM_HOME") && export FM_HOME=$(shell_quote "$FM_HOME") FM_ROOT_OVERRIDE=$(shell_quote "$FM_ROOT") && exec $cmd"
+  shell_command="cd $(shell_quote "$FM_HOME") && export FM_HOME=$(shell_quote "$FM_HOME") FM_ROOT_OVERRIDE=$(shell_quote "$FM_ROOT") PATH=$(shell_quote "${PATH:-}") && exec $cmd"
   "$TMUX_CMD" -S "$socket" new-window -n firstmate "$shell_command" >/dev/null
 }
 

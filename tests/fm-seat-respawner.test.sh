@@ -19,7 +19,7 @@ make_home() {
     printf 'target=%%9\n'
     printf 'harness=claude\n'
     printf 'session-lock-pid=999999\n'
-    printf 'tmux-server=%s,1\n' "$home/tmux.sock"
+    printf 'tmux-server=%s,%s\n' "$home/tmux.sock" "$$"
   } > "$home/state/.primary-endpoint"
   printf '%s\n' "$home"
 }
@@ -43,6 +43,20 @@ write_fake_tmux() {
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$log"
 exit 0
+SH
+  chmod +x "$path"
+}
+
+write_executing_fake_tmux() {
+  local path=$1 log=$2
+  cat > "$path" <<SH
+#!/usr/bin/env bash
+last=
+for arg do
+  last=\$arg
+done
+printf '%s\n' "\$*" >> "$log"
+env -i PATH=/usr/bin:/bin /bin/sh -c "\$last"
 SH
   chmod +x "$path"
 }
@@ -109,5 +123,35 @@ test_giveup_path_reports_a_finding() {
   pass "seat respawner reports exhausted retry episodes through findings"
 }
 
+test_launch_uses_respawner_service_path() {
+  local home delivery tmux log status tool_dir launched base_path
+  home=$(make_home service-path)
+  status="$home/status.txt"
+  delivery="$home/fake-delivery"
+  tmux="$home/fake-tmux"
+  log="$home/tmux.log"
+  tool_dir="$home/service-bin"
+  launched="$home/launch.out"
+  mkdir -p "$tool_dir"
+  printf 'undeliverable: listener pid 1 is up with 1 wake(s) pending, but no session has published where the model turn lives\n' > "$status"
+  write_fake_delivery "$delivery"
+  write_executing_fake_tmux "$tmux" "$log"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'printf launched > "$FM_HOME/launch.out"\n'
+  } > "$tool_dir/fm-custom-seat"
+  chmod +x "$tool_dir/fm-custom-seat"
+  printf 'fm-custom-seat\n' > "$home/config/seat-launch-command"
+
+  base_path=${PATH:-/usr/bin:/bin}
+  PATH="$tool_dir:$base_path" FM_FAKE_DELIVERY_STATUS="$status" \
+    run_respawner_once "$home" "$delivery" "$tmux" \
+    || fail "respawner did not carry its service PATH into the tmux launch"
+  [ "$(cat "$launched" 2>/dev/null || true)" = launched ] \
+    || fail "tmux launch command could not resolve the service PATH command"
+  pass "seat respawner preserves the service PATH for tmux launches"
+}
+
 test_stay_down_marker_is_authoritative
 test_giveup_path_reports_a_finding
+test_launch_uses_respawner_service_path
