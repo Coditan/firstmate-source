@@ -273,6 +273,10 @@ A Codex secondmate does not receive it, and it never reaches the supervising ses
 It is a whole-dimension grant that also admits general outbound network from that crewmate, because 0.145.0 has no narrower knob; `docs/codex-sandbox-network.md` owns the measurements and the reason it rides the launch line rather than the tracked profile.
 Do not diagnose a Codex worker's blocked outbound connection as a missing filesystem permission, and do not reach for `danger-full-access` or `--dangerously-bypass-approvals-and-sandbox` to unblock one.
 
+A Codex crewmate also receives its worktree's git common directory as a second `sandbox_workspace_write.writable_roots` entry, because a linked worktree keeps its refs in the project's primary checkout and the sandbox otherwise refuses the branch creation that opens every ship task.
+The project's working tree is never a writable root, and a secondmate receives neither this grant nor the network one; `docs/codex-sandbox-git-directory.md` owns the measurements and the blast radius.
+A Codex worker refused a ref write is not short of filesystem permission on the account: check the spawning home's own `bin/fm-spawn.sh` for the grant before touching permissions on the repository.
+
 Reasoning effort is the one fact that moved.
 Codex's effort vocabulary is now per-model rather than fleet-wide, and the newest models accept levels above `xhigh`: as of 0.145.0 the bundled catalog gives `gpt-5.6-sol` and `gpt-5.6-terra` low through `ultra`, `gpt-5.6-luna` low through `max`, and every older model low through `xhigh`.
 Passing a level a model does not support is rejected outright on the `-c model_reasoning_effort=...` launch path firstmate actually uses, and the whole turn dies with it.

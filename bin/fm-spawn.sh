@@ -15,9 +15,13 @@
 #   A Codex direct report gets one per-task state/.crew-signal/<id>/ writable root,
 #   with public state/<id>.status and state/<id>.turn-ended paths symlinked into it.
 #   A Codex CREWMATE additionally gets sandbox_workspace_write.network_access, which
-#   is what lets it reach the local no-mistakes daemon socket; a Codex secondmate does
-#   not. Those grants live on the launch line rather than in the profile file on
-#   purpose (docs/codex-sandbox-network.md, docs/codex-status-signalling.md).
+#   is what lets it reach the local no-mistakes daemon socket, and its worktree's git
+#   common directory as a second writable root, which is what lets it write refs -
+#   creating its branch first of all. That grant is the git directory only: the
+#   project's working tree is never a writable root. A Codex secondmate gets neither.
+#   Those grants live on the launch line rather than in the profile file on purpose
+#   (docs/codex-sandbox-network.md, docs/codex-sandbox-git-directory.md,
+#   docs/codex-status-signalling.md).
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   spawn. Without it, the script resolves FM_BACKEND, then config/backend, then
 #   runtime auto-detection (the runtime firstmate itself is executing inside -
@@ -140,7 +144,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUPPORTED_HARNESSES=(claude codex opencode pi grok)
 
 usage() {
-  sed -n '2,86p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,90p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 case "${1:-}" in
@@ -728,7 +732,7 @@ toml_double_quoted_value() {  # <value>
 }
 
 codex_config_flags_for_harness() {
-  local harness=$1 kind=$2 signal_dir=${3:-} key value escaped_signal_dir
+  local harness=$1 kind=$2 signal_dir=${3:-} git_common_dir=${4:-} key value roots=
   case "$harness" in
     codex*) ;;
     *) return 0 ;;
@@ -738,9 +742,22 @@ codex_config_flags_for_harness() {
     printf -- '-c %s ' "$(shell_quote "$key=\"$value\"")"
   done
   if [ -n "$signal_dir" ]; then
-    escaped_signal_dir=$(toml_double_quoted_value "$signal_dir")
-    printf -- '-c %s ' "$(shell_quote "sandbox_workspace_write.writable_roots=[\"$escaped_signal_dir\"]")"
+    roots="\"$(toml_double_quoted_value "$signal_dir")\""
   fi
+  # The git common directory of a linked worktree lives in the project's PRIMARY
+  # checkout, so it is in neither the workspace nor the signal root: without it the
+  # sandbox refuses the first ref write a ship task makes, which is creating its own
+  # branch (docs/codex-sandbox-git-directory.md). The caller resolves the path
+  # from the worktree actually being launched into and passes empty when the
+  # worktree already contains its own common directory.
+  # This grants the git directory ONLY. The project's working tree stays outside
+  # every writable root, because AGENTS.md hard rule 1 and the spawn-time isolation
+  # assertion both rest on a worker being unable to write into projects/<name>/.
+  if [ -n "$git_common_dir" ]; then
+    [ -z "$roots" ] || roots="$roots, "
+    roots="$roots\"$(toml_double_quoted_value "$git_common_dir")\""
+  fi
+  [ -z "$roots" ] || printf -- '-c %s ' "$(shell_quote "sandbox_workspace_write.writable_roots=[$roots]")"
   # A secondmate is a supervising firstmate home rather than a pipeline worker: it
   # routes work, and its own crewmates pick the grant up from its own call into this
   # same path. The supervising primary never reaches this function at all, because
@@ -749,6 +766,39 @@ codex_config_flags_for_harness() {
     secondmate) return 0 ;;
   esac
   printf -- '-c %s ' "$(shell_quote "$CODEX_CREW_NETWORK_FLAG")"
+}
+
+# The git common directory a Codex direct report must be able to write, or empty
+# when the worktree already contains it.
+#
+# Resolved from the worktree actually being launched into, never string-built from
+# the project argument: which directory a worktree's refs live in is a property of
+# that worktree's own .git pointer, and only git can answer it. Canonicalized with
+# pwd -P for the same reason PROJ_ABS_REAL is: the sandbox compares physically
+# resolved paths, so a symlinked prefix here would name a root that never matches.
+#
+# A plain clone keeps its common directory inside its own working tree, which the
+# workspace-write sandbox already covers, so it returns empty rather than emitting a
+# second root that would duplicate what the workspace grant already carries.
+#
+# Unresolvable is a refusal, not a silent fallback: emitting no root would restore
+# the pre-grant behaviour - every ref write escalating to the approval reviewer -
+# with nothing on the launch line or in the output to say so.
+codex_git_common_dir_grant() {  # <worktree>
+  local wt=$1 common= wt_real=
+  common=$(git -C "$wt" rev-parse --git-common-dir 2>/dev/null) || common=
+  if [ -n "$common" ]; then
+    common=$(cd "$wt" && cd "$common" 2>/dev/null && pwd -P) || common=
+  fi
+  if [ -z "$common" ]; then
+    echo "error: could not resolve the git common directory of $wt; refusing to launch a Codex worker whose every ref write the sandbox would then refuse" >&2
+    return 1
+  fi
+  wt_real=$(cd "$wt" 2>/dev/null && pwd -P) || wt_real=
+  if [ -n "$wt_real" ] && { [ "$common" = "$wt_real" ] || path_is_ancestor_of "$wt_real" "$common"; }; then
+    return 0
+  fi
+  printf '%s\n' "$common"
 }
 
 json_escape() {
@@ -1410,7 +1460,19 @@ fi
 
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
 EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
-CODEXCONFIG=$(codex_config_flags_for_harness "$HARNESS" "$KIND" "${TASK_SIGNAL_DIR_REAL:-}")
+# A Codex crewmate is launched into a linked worktree whose refs live in the
+# project's primary checkout, outside every root granted so far, so the sandbox
+# refuses its very first act - creating its branch. A secondmate is deliberately
+# excluded: it supervises rather than ships, its home holds no task branch, and its
+# common directory is the FIRSTMATE repository's own git directory, shared with the
+# primary checkout. Its crewmates get the grant from its own call into this path.
+CODEX_GIT_COMMON_DIR=
+if [ "$KIND" != secondmate ]; then
+  case "$HARNESS" in
+    codex*) CODEX_GIT_COMMON_DIR=$(codex_git_common_dir_grant "$WT") || exit 1 ;;
+  esac
+fi
+CODEXCONFIG=$(codex_config_flags_for_harness "$HARNESS" "$KIND" "${TASK_SIGNAL_DIR_REAL:-}" "$CODEX_GIT_COMMON_DIR")
 META_WINDOW=$T
 [ "$BACKEND" = orca ] && META_WINDOW=$W
 if [ "$KIND" = secondmate ] && [ "$SPAWN_TASK_LOCK_HELD" != 1 ]; then

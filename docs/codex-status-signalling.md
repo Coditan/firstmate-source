@@ -123,6 +123,6 @@ Metadata, parked markers, and other watcher signatures keep their existing non-d
 ## Scope
 
 The signal writable root is given to Codex ship, scout, and secondmate direct reports.
-The network grant remains crewmate-only and is still documented separately.
+The network grant remains crewmate-only and is still documented separately, as does the crewmate-only git-directory root that shares this same `writable_roots` array ([`docs/codex-sandbox-git-directory.md`](codex-sandbox-git-directory.md)).
 No non-Codex harness receives a Codex sandbox writable-root override.
 Teardown removes the public symlinks and the private `state/.crew-signal/<id>` directory with the rest of the task's volatile state.
