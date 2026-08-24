@@ -299,6 +299,16 @@ The first unit copy and `enable --now` require explicit captain consent through 
 Convergence, the recorded `PATH`, and the keeper tier's handed-down `PATH` argument all follow the watcher's rules above; `state/.delivery-service.env` is its environment file and `state/.delivery.lock/service-path` its keeper-tier record.
 `docs/wake-delivery.md` owns what the listener does with that lifetime, including the verdicts `bin/fm-delivery-service.sh status` reports and why silence is never one of them.
 
+## Seat respawner service
+
+`bin/fm-seat-respawner-service.sh` owns the per-home primary-seat respawner.
+The tracked template is `systemd/fm-seat-respawner@.service` and the instance is `fm-seat-respawner@$(systemd-escape --path "$FM_HOME").service`.
+The first unit copy and `enable --now` require explicit captain consent through `RESPAWNER_UNIT:` and `bin/fm-bootstrap.sh install seat-respawner-unit`.
+Bootstrap never installs, enables, or starts it silently.
+After installation, locked bootstrap converges stale template bytes, checkout path, composed service `PATH`, and the respawner source version.
+The respawner itself reads the wake-delivery service verdict rather than probing panes, honors `state/.seat-stay-down`, uses `config/seat-launch-command` as its fresh-start launch command, and reports exhausted retry episodes through the findings surface.
+[`docs/seat-respawner.md`](seat-respawner.md) owns the mechanism, retry bound, accepted manual-close trade, and verification limits.
+
 ## Bridge frequency monitor service
 
 `bin/fm-frequency-monitor.sh` is a separate plain-shell Bridge inbox loop with a default five-second cadence.
@@ -989,6 +999,11 @@ FM_DELIVERY_STOP_TIMEOUT=20   # seconds fm-delivery-service waits for a recorded
 FM_DELIVERY_LOG_MAX_BYTES=262144   # size cap on state/.delivery.log before it is trimmed to FM_DELIVERY_LOG_KEEP_LINES
 FM_DELIVERY_LOG_KEEP_LINES=500   # lines kept when that log is trimmed
 FM_ARM_CONFIRM_TIMEOUT=10   # seconds fm-watcher-service waits to confirm a fresh watcher before reporting failure
+FM_SEAT_RESPAWNER_POLL=15    # seconds between primary-seat respawner checks of the delivery service verdict
+FM_SEAT_RESPAWNER_BACKOFF=30 # seconds before the second attempt for one unreachable-seat episode; doubles per attempt
+FM_SEAT_RESPAWNER_MAX_BACKOFF=900 # maximum seconds between respawn attempts for one episode
+FM_SEAT_RESPAWNER_MAX_ATTEMPTS=5 # attempts before the respawner emits a finding and stops retrying that episode
+FM_SEAT_LAUNCH_COMMAND=      # test or specialized override for config/seat-launch-command; must be a fresh start, not resume-style
 FM_TG_RECV_ATTACH_POLL=0.5  # seconds between checks while fm-tg-recv-arm is attached to an existing receiver
 FM_TG_RECV_ATTACH_CONFIRM_TIMEOUT=2  # seconds fm-tg-recv-arm waits for a competing arm to publish receiver metadata
 FM_TG_RECV_TERM_WAIT_CYCLES=30  # termination polling cycles before fm-tg-recv-arm preserves a live receiver lock after wrapper shutdown

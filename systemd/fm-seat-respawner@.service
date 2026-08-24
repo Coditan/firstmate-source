@@ -1,0 +1,14 @@
+[Unit]
+Description=Firstmate primary-seat respawner for %I
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Environment=FM_SEAT_RESPAWNER_DAEMON=1
+EnvironmentFile=/%I/state/.seat-respawner-service.env
+ExecStart=/usr/bin/env bash ${FM_SEAT_RESPAWNER_EXEC}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -243,7 +243,7 @@ family_for_basename() {
       ;;
     fm-bosun.test.sh|fm-context-reset.test.sh|fm-daemon.test.sh|\
     fm-delivery.test.sh|fm-event-batch.test.sh|fm-guard-stale-banner.test.sh|\
-    fm-journal.test.sh|fm-nudge.test.sh|fm-supervision-events.test.sh|\
+    fm-journal.test.sh|fm-nudge.test.sh|fm-seat-respawner.test.sh|fm-supervision-events.test.sh|\
     fm-turnend-guard.test.sh|\
     fm-wake-daemon-lifecycle-e2e.test.sh|fm-wake-queue.test.sh|\
     fm-watch-run-bounded.test.sh|fm-watch-triage.test.sh|\
@@ -950,12 +950,16 @@ families_for_changed_path() {
       # family (watcher-wake-lock) would never select it from this path.
       printf '%s\n' "__script_required__:fm-bridge-relay.test.sh"
       ;;
-    bin/fm-watch*|bin/fm-wake*|bin/fm-delivery*|\
+    bin/fm-watch*|bin/fm-wake*|bin/fm-delivery*|bin/fm-seat-respawner.sh|\
     bin/fm-daemon*|bin/fm-turnend-guard*|bin/fm-pane-activity-lib.sh)
       printf '%s\n' watcher-wake-lock
       # The pre-typing pane reads are shared with the away daemon, and the
       # delivery listener's health predicate is read by the session-start digest.
       printf '%s\n' afk
+      printf '%s\n' session-bootstrap
+      ;;
+    bin/fm-seat-stay-down.sh|bin/fm-seat-respawner-service.sh)
+      printf '%s\n' service-units
       printf '%s\n' session-bootstrap
       ;;
     bin/fm-afk*)
