@@ -71,7 +71,7 @@ fm_harness_pid() {
       FM_HARNESS_PID_ERROR=harness-lookup-failed
       return 1
     fi
-    pid=${pid//[[:space:]]/}
+    pid=$(printf '%s' "$pid" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
     case "$pid" in
       ''|*[!0-9]*)
         # shellcheck disable=SC2034 # Read by callers after fm_harness_pid returns.

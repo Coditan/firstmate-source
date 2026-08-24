@@ -240,17 +240,18 @@ SH
   chmod +x "$fakebin/ps"
 }
 
-# make_fake_ps_empty_ppid <fakebin>: `ps` returns successfully for the parent
-# probe but provides no parent pid, so the ancestry walk did not complete.
-make_fake_ps_empty_ppid() {
-  local fakebin=$1
+# make_fake_ps_ppid_response <fakebin> <response>: `ps` returns successfully for
+# the parent probe with the supplied response.
+make_fake_ps_ppid_response() {
+  local fakebin=$1 response=$2
+  printf '%s' "$response" > "$fakebin/ppid-response"
   cat > "$fakebin/ps" <<'SH'
 #!/usr/bin/env bash
 set -u
 case "$*" in
   *"comm="*) printf '/bin/bash\n'; exit 0 ;;
   *"args="*) printf 'bash\n'; exit 0 ;;
-  *"ppid="*) exit 0 ;;
+  *"ppid="*) cat "$(dirname "$0")/ppid-response"; exit 0 ;;
 esac
 exit 1
 SH
@@ -661,18 +662,39 @@ test_each_process_table_probe_failure_is_recorded_as_unknown() {
   pass "fm-sessionstart-nudge: every failed process-table probe is recorded as unknown"
 }
 
-test_an_empty_parent_pid_is_recorded_as_unknown() {
-  local root="$TMP_ROOT/record-empty-ppid" fakebin record
+test_an_unusable_parent_pid_is_recorded_as_unknown() {
+  local label response root fakebin record
+  for label in empty malformed; do
+    case "$label" in
+      empty) response='' ;;
+      malformed) response='12 34' ;;
+    esac
+    root="$TMP_ROOT/record-$label-ppid"
+    make_primary "$root"
+    fakebin=$(fm_fakebin "$root")
+    make_fake_ps_ppid_response "$fakebin" "$response"
+    record="$root/state/.primary-transcript"
+    FM_HARNESS_PID_RETRY_DELAYS="0" run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD" >/dev/null
+    [ "$(record_field "$record" status)" = error ] \
+      || fail "an $label ppid= probe produced a usable-looking record: $(cat "$record")"
+    [ "$(record_field "$record" error)" = harness-lookup-failed ] \
+      || fail "an $label ppid= probe was recorded as a settled negative: $(cat "$record")"
+  done
+  pass "fm-sessionstart-nudge: an unusable parent pid is recorded as unknown"
+}
+
+test_outer_whitespace_on_parent_pid_is_accepted() {
+  local root="$TMP_ROOT/record-trimmed-ppid" fakebin record
   make_primary "$root"
   fakebin=$(fm_fakebin "$root")
-  make_fake_ps_empty_ppid "$fakebin"
+  make_fake_ps_ppid_response "$fakebin" '  1  '
   record="$root/state/.primary-transcript"
   FM_HARNESS_PID_RETRY_DELAYS="0" run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD" >/dev/null
   [ "$(record_field "$record" status)" = error ] \
-    || fail "an empty ppid= probe produced a usable-looking record: $(cat "$record")"
-  [ "$(record_field "$record" error)" = harness-lookup-failed ] \
-    || fail "an empty ppid= probe was recorded as a settled negative: $(cat "$record")"
-  pass "fm-sessionstart-nudge: an empty parent pid is recorded as unknown"
+    || fail "a root parent pid with outer whitespace produced a usable-looking record: $(cat "$record")"
+  [ "$(record_field "$record" error)" = no-harness-process ] \
+    || fail "a root parent pid with outer whitespace was not recorded as a settled negative: $(cat "$record")"
+  pass "fm-sessionstart-nudge: outer whitespace on a parent pid is accepted"
 }
 
 # This allowlist contract is a deliberate exemption from the test-quality rule's
@@ -792,7 +814,8 @@ test_the_lock_holder_still_records_after_a_clear
 test_a_transient_lookup_failure_is_retried
 test_a_settled_lookup_failure_is_recorded_with_its_cause
 test_each_process_table_probe_failure_is_recorded_as_unknown
-test_an_empty_parent_pid_is_recorded_as_unknown
+test_an_unusable_parent_pid_is_recorded_as_unknown
+test_outer_whitespace_on_parent_pid_is_accepted
 test_primary_transcript_path_name_allowlist_contract
 test_opencode_plugin_delivers_exact_nudge_once
 test_tracked_harness_registration
