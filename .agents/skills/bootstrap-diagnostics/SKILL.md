@@ -27,7 +27,7 @@ When any diagnostic needs captain attention, report the plain consequence and re
   Report the concrete consequence to the captain, correct the file to one of the listed values or remove it to return this home to the default `vessel` role, then rerun session start so the overlay actually reaches the session.
   Do not guess which role was meant.
 - `ROLE_OVERLAY_MISSING: <name> (expected: roles/<name>.md)` - the selected role is recognized but its tracked overlay file is not present in this code root, so the role's instructions were not delivered.
-  Either this home is behind the fork that carries the overlay, in which case `/updatefirstmate` resolves it, or the overlay has not been written yet, in which case the role is not usable and the home should return to `vessel` until it is.
+  Either this home is behind the update source that carries the overlay, in which case `/updatefirstmate` resolves it, or the overlay has not been written yet, in which case the role is not usable and the home should return to `vessel` until it is.
   Do not write the missing overlay from memory to silence the line.
 - `NEEDS_GH_AUTH` - ask the captain to run `! gh auth login` (interactive; you cannot run it for them).
 - `FORGE_CLIENT: ...` - this home names a Forgejo instance, so it needs the same Forgejo client to resolve for both a session and the validation pipeline, with the daemon-resolved executable at or above the floor, and some part of that requirement was not established.
