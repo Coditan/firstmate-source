@@ -110,8 +110,9 @@
 #
 # State, under FM_HOME/state:
 #   memory-reading.samples   the previous sample this run measures growth
-#                            against: one epoch line and one record per tracked
-#                            process
+#                            against: one `epoch <seconds>` line and then
+#                            one `pid<TAB>start_epoch<TAB>rss_kb` record per
+#                            tracked process
 #
 # Environment:
 #   FM_MEMORY_TRACK_MIB       tracking floor in MiB (default 32)
@@ -732,10 +733,11 @@ PRIOR_FILE="$TMP/prior.tsv"
 GROWTH_INTERVAL=0
 GROWTH_REASON=
 GROWTH_SCOPE=0
+GROWTH_SAMPLE_DROPPED=0
 INTERVAL_WAITED=0
 
 read_prior() {
-  local epoch age parse_status="$TMP/prior-status" epoch_file="$TMP/prior-epoch"
+  local epoch age parse_status="$TMP/prior-status" epoch_file="$TMP/prior-epoch" status dropped=0
   : > "$PRIOR_FILE"
   if [ "$INTERVAL" -gt 0 ]; then
     if [ "$INTERVAL" -lt "$SAMPLE_MIN_AGE" ]; then
@@ -779,30 +781,40 @@ read_prior() {
   if ! awk -F'\t' -v epoch_file="$epoch_file" -v status_file="$parse_status" '
     /^#/ || /^[[:space:]]*$/ { next }
     /^epoch / {
-      if (seen_epoch || $0 !~ /^epoch [0-9]+$/) { bad = 1; next }
+      if (seen_epoch || $0 !~ /^epoch [0-9]+$/) { timestamp_bad = 1; next }
       epoch = $0
       sub(/^epoch /, "", epoch)
       print epoch > epoch_file
       seen_epoch = 1
       next
     }
-    NF == 3 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ { print; next }
-    { bad = 1 }
+    NF == 3 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ { rows++; print; next }
+    { dropped++ }
     END {
-      if (!seen_epoch) print "timestamp" > status_file
-      if (bad) print "malformed" > status_file
-      if (!seen_epoch || bad) exit 1
+      if (!seen_epoch || timestamp_bad) {
+        print "timestamp" > status_file
+        exit 1
+      }
+      if (rows == 0) {
+        print "empty" > status_file
+        exit 1
+      }
+      if (dropped) print "dropped " dropped > status_file
     }
   ' "$SAMPLES" > "$PRIOR_FILE" 2>/dev/null; then
     case "$(head -1 "$parse_status" 2>/dev/null)" in
       timestamp) GROWTH_REASON="the stored sample carries no usable timestamp" ;;
-      malformed) GROWTH_REASON="the stored sample carries a malformed process record" ;;
+      empty) GROWTH_REASON="the stored sample carries no usable process records" ;;
       *) GROWTH_REASON="the stored sample body could not be read" ;;
     esac
     : > "$PRIOR_FILE"
     unmeasured growth-sample "$GROWTH_REASON"
     return
   fi
+  status=$(head -1 "$parse_status" 2>/dev/null)
+  case "$status" in
+    dropped\ *) dropped=${status#dropped } ;;
+  esac
   epoch=$(head -1 "$epoch_file" 2>/dev/null)
   age=$((NOW - epoch))
   if [ "$age" -lt 0 ]; then
@@ -821,6 +833,7 @@ read_prior() {
     return
   fi
   GROWTH_INTERVAL=$age
+  GROWTH_SAMPLE_DROPPED=$dropped
 }
 
 store_sample() {
@@ -837,10 +850,18 @@ store_sample() {
   if ! {
     printf '# fm-memory-reading.samples v1\n'
     printf 'epoch %s\n' "$NOW"
-    awk -F'\t' '{ printf "%s\t%s\t%s\n", $1, $4, $3 }' "$PROCS_FILE"
+    awk -F'\t' '
+      $1 ~ /^[0-9]+$/ && $4 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ {
+        rows++
+        printf "%s\t%s\t%s\n", $1, $4, $3
+        next
+      }
+      { bad = 1 }
+      END { if (bad || rows == 0) exit 1 }
+    ' "$PROCS_FILE"
   } > "$tmp" 2>/dev/null; then
     rm -f "$tmp"
-    unmeasured sample-storage "$tmp could not be written"
+    unmeasured sample-storage "$tmp could not be written from a valid non-empty process sample"
     return 0
   fi
   if ! mv -f "$tmp" "$SAMPLES" 2>/dev/null; then
@@ -1123,6 +1144,10 @@ render_human() {
     printf '  none: measured over %ss, no tracked process grew by %s MiB/min or more (%s process(es) had no measurable growth)\n' \
       "$GROWTH_INTERVAL" "$GROWTH_MIB_MIN" "$count"
   fi
+  if [ "$GROWTH_SAMPLE_DROPPED" -gt 0 ]; then
+    printf '  note: dropped %s malformed stored sample record(s); growth measured from the remaining records\n' \
+      "$GROWTH_SAMPLE_DROPPED"
+  fi
 
   count=$(awk -F'\t' '$8 == "unattributed"' "$PROCS_FILE" | wc -l | tr -d ' ')
   sum=$(awk -F'\t' '$8 == "unattributed" { s += $3 } END { printf "%d", s + 0 }' "$PROCS_FILE")
@@ -1216,6 +1241,7 @@ render_json() {
     --arg growth_interval "$GROWTH_INTERVAL" \
     --arg growth_reason "$GROWTH_REASON" \
     --argjson growth_scoped "$GROWTH_SCOPE" \
+    --argjson growth_dropped "$GROWTH_SAMPLE_DROPPED" \
     --arg cost "$(reading_cost)" \
     --arg total_kb "${MEM_TOTAL_KB:-}" \
     --arg avail_kb "${MEM_AVAIL_KB:-}" \
@@ -1264,7 +1290,8 @@ render_json() {
       })),
       growth: { interval_seconds: ($growth_interval | tonumber),
                 scope_reason: (if $growth_scoped == 1 then $growth_reason else null end),
-                unmeasured_reason: (if $growth_reason == "" or $growth_scoped == 1 then null else $growth_reason end) },
+                unmeasured_reason: (if $growth_reason == "" or $growth_scoped == 1 then null else $growth_reason end),
+                dropped_sample_records: $growth_dropped },
       processes: ($procs | lines | map(split("\t") | . as $f | {
         pid: ($f[0] | tonumber), account: $f[1], uid: $f[12],
         rss_kb: ($f[2] | tonumber), started_epoch: ($f[3] | tonumber),
