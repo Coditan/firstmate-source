@@ -18,11 +18,12 @@
 # cadence through the existing watcher. It only reads and writes local state;
 # docs/currency-round.md owns why this is not an external cron or systemd timer.
 #
-# The compared source comes from FM_FIRSTMATE_UPSTREAM_URL, then the local
+# The compared source comes from FM_FIRSTMATE_UPDATE_SOURCE_URL, then the local
 # gitignored config/firstmate-update-base file, then the built-in default - see
 # bin/fm-currency-base-lib.sh for the full precedence. A present but unusable
 # config file records FIRSTMATE_UPDATE_STUCK rather than silently comparing
-# against a source this deployment never updates from.
+# against a source this deployment never updates from. FM_FIRSTMATE_UPSTREAM_URL
+# remains a compatibility alias.
 #
 # EVERY FINDING NAMES THE SOURCE IT COMPARED and the hop that source came from,
 # because a comparison that does not say what it compared cannot be caught
@@ -33,9 +34,11 @@
 #
 # Usage: fm-firstmate-update-check.sh
 # Environment:
-#   FM_FIRSTMATE_UPSTREAM_URL overrides the configured comparison base.
-#   FM_FIRSTMATE_UPSTREAM_HEAD skips network discovery and uses the named
+#   FM_FIRSTMATE_UPDATE_SOURCE_URL overrides the configured comparison base.
+#   FM_FIRSTMATE_UPSTREAM_URL is a compatibility alias for the same override.
+#   FM_FIRSTMATE_UPDATE_SOURCE_HEAD skips network discovery and uses the named
 #     commit already present in FM_FIRSTMATE_COMPARE_REPO (tests only).
+#   FM_FIRSTMATE_UPSTREAM_HEAD is a compatibility alias for the same test head.
 #   FM_FIRSTMATE_COMPARE_REPO overrides the comparison repository (tests only).
 set -u
 
@@ -63,7 +66,7 @@ record_stuck() {
 . "$SCRIPT_DIR/fm-currency-base-lib.sh"
 fm_currency_base_resolve "$CONFIG" "$FM_CURRENCY_BASE_UPDATE_ITEM" ||
   record_stuck "config/$FM_CURRENCY_BASE_UPDATE_ITEM is unusable - $FM_CURRENCY_BASE_REASON"
-UPSTREAM_URL=$FM_CURRENCY_BASE_VALUE
+UPDATE_SOURCE_URL=$FM_CURRENCY_BASE_VALUE
 UPDATE_SOURCE=$FM_CURRENCY_BASE_SOURCE
 
 # Match fm-update.sh: compare from the deployment's local default-branch ref,
@@ -79,37 +82,37 @@ if [ -z "$compare_repo" ]; then
   trap 'rm -rf "$tmp"' EXIT
   git -C "$tmp" init --bare -q || record_stuck "temporary comparison repository cannot be initialized"
   git -C "$tmp" fetch -q --no-tags "$FM_ROOT" "$current:refs/heads/local" || record_stuck "local default-branch commit cannot be copied for comparison"
-  if ! git -C "$tmp" fetch -q --no-tags "$UPSTREAM_URL" HEAD:refs/heads/upstream; then
-    record_stuck "update-source default-branch lookup failed ($UPSTREAM_URL, from $UPDATE_SOURCE)"
+  if ! git -C "$tmp" fetch -q --no-tags "$UPDATE_SOURCE_URL" HEAD:refs/heads/update-source; then
+    record_stuck "update-source default-branch lookup failed ($UPDATE_SOURCE_URL, from $UPDATE_SOURCE)"
   fi
   compare_repo=$tmp
-  upstream=$(git -C "$tmp" rev-parse --verify refs/heads/upstream)
+  update_source=$(git -C "$tmp" rev-parse --verify refs/heads/update-source)
 else
-  upstream=${FM_FIRSTMATE_UPSTREAM_HEAD:-}
-  [ -n "$upstream" ] || record_stuck "test comparison repository requires FM_FIRSTMATE_UPSTREAM_HEAD"
+  update_source=${FM_FIRSTMATE_UPDATE_SOURCE_HEAD:-${FM_FIRSTMATE_UPSTREAM_HEAD:-}}
+  [ -n "$update_source" ] || record_stuck "test comparison repository requires FM_FIRSTMATE_UPDATE_SOURCE_HEAD"
 fi
 
 git -C "$compare_repo" cat-file -e "$current^{commit}" 2>/dev/null || record_stuck "local comparison commit is unavailable"
-git -C "$compare_repo" cat-file -e "$upstream^{commit}" 2>/dev/null || record_stuck "upstream comparison commit is unavailable"
+git -C "$compare_repo" cat-file -e "$update_source^{commit}" 2>/dev/null || record_stuck "update-source comparison commit is unavailable"
 
-if git -C "$compare_repo" merge-base --is-ancestor "$upstream" "$current" 2>/dev/null; then
+if git -C "$compare_repo" merge-base --is-ancestor "$update_source" "$current" 2>/dev/null; then
   rm -f "$AVAILABLE" "$STUCK"
   exit 0
 fi
 
-base=$(git -C "$compare_repo" merge-base "$current" "$upstream" 2>/dev/null) || record_stuck "local and upstream histories have no merge base"
-if git -C "$compare_repo" diff --quiet "$base" "$upstream" -- AGENTS.md roles bin .agents/skills; then
+base=$(git -C "$compare_repo" merge-base "$current" "$update_source" 2>/dev/null) || record_stuck "local and update-source histories have no merge base"
+if git -C "$compare_repo" diff --quiet "$base" "$update_source" -- AGENTS.md roles bin .agents/skills; then
   rm -f "$AVAILABLE" "$STUCK"
   exit 0
 fi
 
 {
   printf 'FIRSTMATE_UPDATE_AVAILABLE: instruction update %s -> %s on the source this deployment updates from; dispatch a crewmate to broadcast via Bridge All-Ships\n' \
-    "$current" "$upstream"
+    "$current" "$update_source"
   # Which repository produced that reading. Without this line a base pointing at
   # a repository this deployment never updates from reads exactly like a correct
   # one - the defect its sibling check was caught in on 2026-08-17.
-  printf '  compared: this deployment against %s (from %s)\n' "$UPSTREAM_URL" "$UPDATE_SOURCE"
+  printf '  compared: this deployment against %s (from %s)\n' "$UPDATE_SOURCE_URL" "$UPDATE_SOURCE"
 } > "$AVAILABLE"
 rm -f "$STUCK"
 cat "$AVAILABLE"

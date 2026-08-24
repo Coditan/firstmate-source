@@ -74,7 +74,7 @@ Delivery uses two seams that already existed, and no new instruction-include mec
 `AGENTS.md`'s own load line tells an agent to load `roles/<name>.md` when `config/role` names a role, which gives persistence after context compaction.
 Both are deliberate: the digest is authoritative at startup, the instruction line survives a context reset.
 `AGENTS.md` itself is never swapped per role, because CI hard-requires the `CLAUDE.md -> AGENTS.md` symlink.
-`roles/` is tracked instruction surface alongside `AGENTS.md`, `bin/`, and `.agents/skills/`, so an overlay change fast-forwards to running homes and counts as an upstream instruction update.
+`roles/` is tracked instruction surface alongside `AGENTS.md`, `bin/`, and `.agents/skills/`, so an overlay change fast-forwards to running homes and counts as an update-source instruction update.
 
 `config/role` is deliberately NOT in the inheritable set that `bin/fm-config-inherit-lib.sh` declares, exactly like `config/secondmate-harness`.
 A coordinator's secondmate is not itself a coordinator, and inheriting the role would silently spread a no-crew posture into homes that need crews.
@@ -659,8 +659,9 @@ It is invoked by the daily currency round rather than scheduled externally, beca
 
 The local gitignored `config/firstmate-update-base` names the artifact this deployment actually updates from, so the instruction-surface check compares against the right source.
 The file holds exactly one non-empty line naming a git URL (`https://`, `http://`, `ssh://`, `git://`, `git+ssh://`, or `file://`), an scp-style `host:path` remote, or an absolute local path; a relative path is refused because it would resolve against each caller's working directory.
-Precedence for the comparison base, highest first, is the explicit `FM_FIRSTMATE_UPSTREAM_URL` environment variable, then the config file, then the default `https://github.com/Coditan/firstmate-source.git`.
-The environment variable is passed through unvalidated so existing harnesses keep working.
+Precedence for the comparison base, highest first, is the explicit `FM_FIRSTMATE_UPDATE_SOURCE_URL` environment variable, then the config file, then the default `https://github.com/Coditan/firstmate-source.git`.
+`FM_FIRSTMATE_UPSTREAM_URL` remains a compatibility alias.
+The environment override is passed through unvalidated so existing harnesses keep working.
 Every `FIRSTMATE_UPDATE_AVAILABLE:` finding and unreachable-base `FIRSTMATE_UPDATE_STUCK:` refusal names the update-source URL and the hop that supplied it, because a comparison that does not say what it compared cannot be caught reading the wrong thing.
 A config path that exists but is not a readable regular file, such as a directory or a dangling symlink, is refused for that reason rather than treated as absent.
 An absent file changes nothing for an unconfigured home, but a present unusable file never silently falls back: bootstrap reports it at startup as `CURRENCY_BASE:`, and the check records its own `FIRSTMATE_UPDATE_STUCK:` rather than comparing against the wrong base.
@@ -1006,7 +1007,7 @@ FM_WEDGE_ALARM_HISTORY=            # optional path override for the append-only 
 FM_WATCH_TRIAGE_LOG_MAX_BYTES=262144   # size cap for the watcher's absorbed-wake debug log
 FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT=     # optional seconds allowed for bootstrap's best-effort clone refresh; unset/blank defaults to max(20, 5 + 3 * origin-backed-project-count)
 FM_SELF_DRIFT_BOOTSTRAP_TIMEOUT=10   # seconds allowed for bootstrap's best-effort origin fetch when checking the primary checkout's default branch for self-drift
-FM_FIRSTMATE_UPSTREAM_URL=      # highest-precedence instruction-surface comparison base, above config/firstmate-update-base; passed through unvalidated
+FM_FIRSTMATE_UPDATE_SOURCE_URL= # highest-precedence instruction-surface comparison base, above config/firstmate-update-base; passed through unvalidated; FM_FIRSTMATE_UPSTREAM_URL is a compatibility alias
 FM_FLEET_PRUNE=1        # set to 0 to skip pruning local branches whose upstream is gone
 FM_STALE_WORKTREE_LOCK_AGE_SECS=30       # min mtime age before fm-teardown.sh treats a leftover worktree git index.lock as provably stale
 FM_TREEHOUSE_RETURN_LOCK_RETRIES=3        # retries after a treehouse return fails on the transient git index.lock signature
