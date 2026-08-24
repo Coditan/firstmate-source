@@ -144,7 +144,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-transition-lib.sh`   | Shared backend-neutral agent-state transition record and supervision policy          |
 | `fm-config-inherit-lib.sh` | Shared primary-to-secondmate inherited local-material propagation and config-reread delivery |
 | `fm-tasks-axi-lib.sh`    | Shared backlog-backend selector and `tasks-axi` compatibility probe                  |
-| `fm-currency-base-lib.sh` | Shared resolution and validation of the two update-source comparison bases          |
+| `fm-currency-base-lib.sh` | Shared resolution and validation of the update-source comparison base              |
 | `fm-wake-drain.sh`       | Atomically drain queued watcher wakes within a bounded echo that preserves rather than discards what it withholds, emit bounded best-effort status-event annotations, then assert watcher liveness |
 | `fm-wake-lib.sh`         | Shared durable wake queue, portable locks, and watcher/away-daemon identity/health helpers |
 | `fm-journal.sh`          | Read the append-only event journal in arrival order, and report the horizon and gaps the stream cannot account for (docs/event-journal.md) |

@@ -18,12 +18,12 @@
 # cadence through the existing watcher. It only reads and writes local state;
 # docs/currency-round.md owns why this is not an external cron or systemd timer.
 #
-# The compared source comes from FM_FIRSTMATE_UPDATE_SOURCE_URL, then the local
-# gitignored config/firstmate-update-base file, then the built-in default - see
+# The compared source comes from FM_FIRSTMATE_UPDATE_SOURCE_URL, then the
+# FM_FIRSTMATE_UPSTREAM_URL compatibility alias, then the local gitignored
+# config/firstmate-update-base file, then the built-in default - see
 # bin/fm-currency-base-lib.sh for the full precedence. A present but unusable
 # config file records FIRSTMATE_UPDATE_STUCK rather than silently comparing
-# against a source this deployment never updates from. FM_FIRSTMATE_UPSTREAM_URL
-# remains a compatibility alias.
+# against a source this deployment never updates from.
 #
 # EVERY FINDING NAMES THE SOURCE IT COMPARED and the hop that source came from,
 # because a comparison that does not say what it compared cannot be caught
