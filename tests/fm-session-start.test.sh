@@ -761,6 +761,32 @@ EOF
   pass "an empty fleet reports (none), inactive Telegram receive, and an absent AFK flag"
 }
 
+# Two seats can exist for one home while a vessel is being moved, and attaching
+# to the wrong one looks exactly like attaching to the right one. The digest has
+# to name the vessel it belongs to, and has to say when the status-bar surface
+# was not stamped rather than leaving that blank.
+test_digest_states_which_vessel_this_session_belongs_to() {
+  local rec root home fakebin out vessel_line lock_line
+  rec=$(new_world vessel-line)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" "VESSEL: $(basename "$home")@" "digest did not name this session's vessel"
+  assert_contains "$out" "FM_VESSEL_IDENTITY_DISABLE=1" \
+    "digest did not say the status-bar surface was left unstamped"
+
+  vessel_line=$(printf '%s\n' "$out" | grep -n '^VESSEL:' | head -1 | cut -d: -f1)
+  lock_line=$(printf '%s\n' "$out" | grep -n '^LOCK$' | head -1 | cut -d: -f1)
+  [ -n "$vessel_line" ] && [ -n "$lock_line" ] || fail "VESSEL or LOCK header missing: $out"
+  [ "$vessel_line" -lt "$lock_line" ] || fail "the vessel is named after the lock section"
+
+  pass "the digest names which vessel this session belongs to, before anything else"
+}
+
 test_next_step_sources_x_mode_cadence() {
   local rec root home fakebin out
   rec=$(new_world next-step-x)
@@ -966,6 +992,7 @@ test_backlog_compact_tasks_axi_omits_bodies_and_keeps_metadata
 test_backlog_compact_manual_backend_skips_indented_bodies
 test_backlog_compact_tasks_axi_unavailable_uses_manual_fallback
 test_fleet_digest_empty_fleet
+test_digest_states_which_vessel_this_session_belongs_to
 test_next_step_sources_x_mode_cadence
 test_telegram_receiver_guidance
 test_next_step_afk_delegates_to_daemon

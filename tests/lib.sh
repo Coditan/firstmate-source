@@ -115,6 +115,15 @@ export FM_GROSSREINSCHIFF_DISABLE=1
 # systemd and tmux managers.
 # Unrelated behavior suites must not inspect or mutate the developer's live
 # user manager merely because they compose fm-bootstrap.sh.
+# The vessel-identity stamp writes a status-bar option onto the tmux session the
+# caller is attached to, and a suite composing bin/fm-session-start.sh runs
+# inside the operator's OWN terminal. Silence the stamp suite-wide so a test run
+# never restyles the seat it was launched from; tests/fm-vessel-identity.test.sh
+# sets it back to 0 and drives a private tmux server instead. The no-op is
+# reported rather than hidden, so a real session that inherited this flag says
+# it has no label rather than looking labelled.
+export FM_VESSEL_IDENTITY_DISABLE=1
+
 export FM_TEST_SKIP_WATCHER_SERVICE=1
 
 # --- reporters --------------------------------------------------------------

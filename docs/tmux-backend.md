@@ -327,6 +327,12 @@ The classifier deliberately reports `unknown` for `node`/`python`/`python3` rath
 Practical effect: a dead `pi` secondmate is not auto-healed by the liveness sweep today; it is reported as `skipped: liveness probe inconclusive` instead, which still surfaces it for a human to act on.
 Resolving this would need either a `pi`-specific env marker inspectable from outside the process (mirroring `PI_CODING_AGENT=true`, which `bin/fm-harness.sh` already uses for self-detection but which is not readable from a different process without deeper introspection) or accepting the argument-inspection fragility - not attempted here.
 
+## `#{t/f/<strftime>:<variable>}` renders the current clock, not the variable
+
+tmux 3.4's documented per-variable strftime modifier returns the CURRENT time for the variable it names, measured 2026-08-23 against `session_created` and `window_activity` alike.
+`#{t:<variable>}` is correct.
+The full probe, and the status-bar clause that was built on `#{t:...}` because of it, are in [vessel-identity.md](vessel-identity.md#tmux-34-renders-tfstrftimevariable-as-the-current-clock).
+
 ## Limitations
 
 None specific to tmux for the reference path itself - it is the fully verified reference backend, while Orca and cmux are the backends without secondmate support.

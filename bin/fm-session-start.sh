@@ -30,6 +30,14 @@
 #                       reserved firstmate name before any pane reads can confuse
 #                       firstmate with that crew. This is lock-free, targets only
 #                       the caller's own tmux window, and is a no-op outside tmux.
+#   0b. vessel identity - stamp WHICH home on WHICH host this session is
+#                       driving onto the session's own status bar, so a person
+#                       attaching reads it off the first frame instead of
+#                       running a command. Lock-free, targets only the caller's
+#                       own tmux session, no-op outside tmux, and it checks no
+#                       health: bin/fm-vessel-identity.sh owns the mechanics and
+#                       docs/vessel-identity.md owns what it shows when a moved
+#                       vessel's old seat is still running.
 #   1. lock          - acquire the per-home session lock FIRST, before any
 #                       shared-state mutating step runs.
 #   2. bootstrap      - detect-only diagnostics always run. The eight
@@ -309,6 +317,20 @@ section "SESSION START - $FM_HOME"
 # (see fm_tmux_ensure_own_window in fm-tmux-lib.sh). Safe, lock-free, no-op
 # outside tmux.
 fm_tmux_ensure_own_window >/dev/null 2>&1 || true
+
+# Two seats can exist for one home - a moved vessel keeps its original seat as
+# the way back - and attaching to the wrong one looks exactly like attaching to
+# the right one. State this session's own vessel here, and put the same label
+# on the status bar where an attaching person meets it without asking.
+VESSEL_LABEL=$("$SCRIPT_DIR/fm-vessel-identity.sh" 2>/dev/null || true)
+VESSEL_ARM=$("$SCRIPT_DIR/fm-vessel-identity.sh" --arm-tmux 2>&1 || true)
+case "$VESSEL_ARM" in
+  armed\ *) VESSEL_SURFACE='status bar armed' ;;
+  not-tmux) VESSEL_SURFACE='no status bar: not a tmux session' ;;
+  disabled) VESSEL_SURFACE='status bar NOT armed: FM_VESSEL_IDENTITY_DISABLE=1' ;;
+  *) VESSEL_SURFACE="status bar NOT armed: $VESSEL_ARM" ;;
+esac
+printf 'VESSEL: %s (%s)\n' "${VESSEL_LABEL:-unresolved-home}" "$VESSEL_SURFACE"
 
 # --- 1. lock -----------------------------------------------------------
 subsection "LOCK"
