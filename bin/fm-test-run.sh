@@ -226,7 +226,7 @@ family_for_basename() {
     fm-dispatch-select.test.sh|fm-ensure-agents-md.test.sh|fm-grade.test.sh|\
     fm-grok-harness.test.sh|fm-grossreinschiff.test.sh|\
     fm-herdr-lab.test.sh|fm-instruction-owners.test.sh|fm-landing-remote-lib.test.sh|\
-    fm-lint.test.sh|\
+    fm-lint.test.sh|fm-lock.test.sh|\
     fm-install-herdr.test.sh|fm-model-panel.test.sh|fm-nm-test-contract.test.sh|\
     fm-no-mistakes-ownership.test.sh|\
     fm-operational-input.test.sh|fm-pdf-output.test.sh|fm-pi-primary-types.test.sh|\

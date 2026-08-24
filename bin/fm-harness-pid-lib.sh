@@ -106,10 +106,11 @@ fm_harness_alive() {
   printf '%s' "$(basename "$comm") $(ps -o args= -p "$pid" 2>/dev/null)" | grep -qE "$FM_HARNESS_RE"
 }
 
-# Return 0 when the session lock file <lock> is held by a LIVE harness process
-# that is not <my-harness-pid> - exactly the condition bin/fm-lock.sh refuses
-# acquisition on, and therefore the condition under which this session will get
-# no fleet authority at all.
+# Return 0 when this session cannot show the home is free: the session lock file
+# <lock> is held by a LIVE harness process that is not <my-harness-pid>, or the
+# lock exists and cannot be read at all - exactly the conditions bin/fm-lock.sh
+# refuses acquisition on, and therefore the conditions under which this session
+# will get no fleet authority at all.
 # ONE owner, because the lock and the primary transcript record have to agree on
 # who this home's session is: a second copy of "another session holds this home"
 # would let a session be refused the lock by one test and take over the record
@@ -124,7 +125,10 @@ fm_session_lock_held_by_other() {  # <lock-file> <my-harness-pid>
   # Read with cat rather than one `read`: a lock file written without a trailing
   # newline makes `read` report failure even though it filled the variable, and
   # a holder mistaken for absent is the takeover this predicate exists to stop.
-  holder=$(cat "$lock" 2>/dev/null) || return 1
+  # A lock that exists and cannot be READ is answered the same way, and for the
+  # same reason: the question is whether this session can show the home is free,
+  # and a reader that cannot see the holder has shown nothing.
+  holder=$(cat "$lock" 2>/dev/null) || return 0
   holder=${holder%%$'\n'*}
   holder=${holder//[[:space:]]/}
   case "$holder" in
