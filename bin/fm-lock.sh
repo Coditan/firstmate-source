@@ -102,8 +102,11 @@ rm -f "$probe" 2>/dev/null || {
 if [ -f "$LOCK" ] && [ ! -L "$LOCK" ]; then
   old=$(cat "$LOCK" 2>/dev/null || true)
   if [ "$old" = "$me" ]; then
-    echo "lock acquired: harness pid $me"
-    exit 0
+    verified=$(cat "$LOCK" 2>/dev/null || true)
+    if [ -f "$LOCK" ] && [ ! -L "$LOCK" ] && [ "$verified" = "$me" ]; then
+      echo "lock acquired: harness pid $me"
+      exit 0
+    fi
   fi
 fi
 # The refusal test itself lives in fm-harness-pid-lib.sh so that the primary
@@ -121,13 +124,21 @@ fi
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 CLAIM_LOCK="$STATE/.lock.acquire"
 CLAIM_LOCK_HELD=0
+LOCK_PUBLISH_TMP=
 release_claim_lock() {
   if [ "$CLAIM_LOCK_HELD" -eq 1 ]; then
     fm_lock_release "$CLAIM_LOCK"
     CLAIM_LOCK_HELD=0
   fi
 }
-trap release_claim_lock EXIT
+cleanup_lock_acquisition() {
+  if [ -n "$LOCK_PUBLISH_TMP" ]; then
+    rm -f "$LOCK_PUBLISH_TMP" 2>/dev/null || true
+    LOCK_PUBLISH_TMP=
+  fi
+  release_claim_lock
+}
+trap cleanup_lock_acquisition EXIT
 trap 'exit 1' HUP INT TERM
 
 claim_rc=0
@@ -150,10 +161,19 @@ if fm_session_lock_held_by_other "$LOCK" "$me"; then
   refuse_not_ours
 fi
 
-if ! { printf '%s\n' "$me" > "$LOCK"; } 2>/dev/null; then
+LOCK_PUBLISH_TMP=$(mktemp "$STATE/.lock-publish.XXXXXX" 2>/dev/null) || {
+  echo "error: cannot write session lock; operate read-only until resolved" >&2
+  exit 1
+}
+if ! { printf '%s\n' "$me" > "$LOCK_PUBLISH_TMP"; } 2>/dev/null; then
   echo "error: cannot write session lock; operate read-only until resolved" >&2
   exit 1
 fi
+if ! mv -f -- "$LOCK_PUBLISH_TMP" "$LOCK" 2>/dev/null; then
+  echo "error: cannot publish session lock; operate read-only until resolved" >&2
+  exit 1
+fi
+LOCK_PUBLISH_TMP=
 # Read back what is actually there. A write that reported success and left
 # something else behind - a full filesystem, a lock replaced underneath us - is
 # indistinguishable from a held lock until someone reads it, and by then the

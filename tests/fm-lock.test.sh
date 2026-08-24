@@ -207,6 +207,68 @@ test_a_session_reacquiring_its_own_lock_is_answered_without_the_claim() {
   drop_claim_lock "$root"
 }
 
+test_reacquisition_falls_through_when_ownership_changes_during_verification() {
+  local root fakebin harness out status=0 marker real_cat
+  prepare reacquire-changed
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
+  printf '%s\n' "$harness" > "$root/state/.lock"
+  marker="$root/cat-swapped"
+  real_cat=$(command -v cat)
+  cat > "$fakebin/cat" <<SH
+#!/usr/bin/env bash
+set -u
+if [ "\${1:-}" = "$root/state/.lock" ] && [ ! -e "$marker" ]; then
+  "$real_cat" "\$1"
+  printf '%s\n' '99999999' > "\$1"
+  : > "$marker"
+  exit 0
+fi
+exec "$real_cat" "\$@"
+SH
+  chmod +x "$fakebin/cat"
+  hold_claim_lock "$root"
+
+  out=$(FM_LOCK_WAIT_TIMEOUT=1 run_lock "$root" "$fakebin") || status=$?
+  drop_claim_lock "$root"
+  expect_code 1 "$status" "changed ownership must fall through the optimistic fast path"
+  assert_contains "$out" "cannot serialise session-lock acquisition" \
+    "a changed own-lock record must enter ordinary claim acquisition"
+  [ "$(cat "$root/state/.lock")" = "99999999" ] \
+    || fail "a failed fall-through must not report or republish the old ownership"
+}
+
+test_atomic_publication_never_writes_through_a_swapped_lock_symlink() {
+  local root fakebin harness out target real_mv
+  prepare atomic-publication
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
+  target="$root/symlink-target"
+  printf '%s\n' 'untouched' > "$target"
+  real_mv=$(command -v mv)
+  cat > "$fakebin/mv" <<SH
+#!/usr/bin/env bash
+set -u
+dest=
+for arg in "\$@"; do dest=\$arg; done
+if [ "\$dest" = "$root/state/.lock" ]; then
+  rm -f "\$dest"
+  ln -s "$target" "\$dest"
+fi
+exec "$real_mv" "\$@"
+SH
+  chmod +x "$fakebin/mv"
+
+  out=$(run_lock "$root" "$fakebin") \
+    || fail "atomic publication must replace a swapped symlink without following it"
+  assert_contains "$out" "lock acquired: harness pid $harness" \
+    "atomic publication must still prove the published holder"
+  [ "$(cat "$target")" = "untouched" ] \
+    || fail "publication must not write through a symlink swapped onto the lock path"
+  [ "$(cat "$root/state/.lock")" = "$harness" ] \
+    || fail "the atomic rename must replace the symlink with this session's lock"
+  [ -z "$(find "$root/state" -maxdepth 1 -name '.lock-publish.*' -print -quit)" ] \
+    || fail "atomic publication must not leave its temporary file behind"
+}
+
 # hold_claim_lock <root>: take state/.lock.acquire from a live background process
 # using bin/fm-wake-lib.sh, the primitive that owns it, and publish that
 # process's pid as CLAIM_HOLDER_PID. Returns only once the claim is actually
@@ -545,6 +607,8 @@ test_a_free_lock_is_acquired_and_the_pid_is_published
 test_the_shared_predicate_refuses_every_claimed_nonregular_lock_path
 test_a_live_holder_refuses_the_second_session
 test_a_session_reacquiring_its_own_lock_is_answered_without_the_claim
+test_reacquisition_falls_through_when_ownership_changes_during_verification
+test_atomic_publication_never_writes_through_a_swapped_lock_symlink
 test_acquisition_serialises_on_the_claim_lock
 test_an_unreadable_lock_is_never_treated_as_free
 test_status_never_reports_an_unreadable_lock_as_free
