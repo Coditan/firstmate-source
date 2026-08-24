@@ -624,21 +624,93 @@ test_a_scan_that_stops_early_still_reports_every_session() {
   pass "every session is reported when the scan stops reading each one early"
 }
 
-test_search_works_on_a_machine_without_ripgrep() {
-  local home out bindir tool
-  home=$(setup_fixture_home)
-  bindir="$TMP/no-rg-path"
+# --- restricted-PATH fixtures -----------------------------------------------
+
+# restricted_path <bindir> <tool>...: build a PATH holding exactly the named
+# tools and nothing else.
+#
+# type -P resolves the executable itself: an interactive shell may carry a
+# function or alias by the same name, and linking that name to itself makes a
+# fixture that proves nothing.
+#
+# A tool this seat does not have is REFUSED here rather than quietly left out.
+# Leaving it out builds a different world on every seat while the assertions
+# that follow keep describing the same one, which is how a case can pass on a
+# seat where it was never exercised.
+restricted_path() {
+  local bindir=$1 tool missing=""
+  shift
   rm -rf "$bindir"
   mkdir -p "$bindir"
-  # A PATH holding exactly what the search is allowed to need, and nothing else.
-  # type -P resolves the executable itself: an interactive shell may carry a
-  # function or alias by the same name, and linking that name to itself makes a
-  # fixture that proves nothing.
-  for tool in bash sh zstd grep xargs awk sed sort find wc mktemp nproc rm cat dirname tr head; do
+  for tool in "$@"; do
     if type -P "$tool" >/dev/null 2>&1; then
       ln -sf "$(type -P "$tool")" "$bindir/$tool"
+    else
+      missing="$missing $tool"
     fi
   done
+  [ -z "$missing" ] \
+    || fail "this seat has no$missing, so the restricted PATH this case describes cannot be built here"
+}
+
+# failing_tool <bindir> <tool> <marker> [drain]: replace one tool on a restricted
+# PATH with a stand-in that RECORDS THAT IT RAN and then fails, and prove the
+# replacement took before any assertion leans on it.
+#
+# Both halves are here because of a measurement, not a worry. The stand-in is
+# WRITTEN OUT rather than symlinked to `false`, because a symlink named `sort`
+# whose target is a multi-call binary - busybox, toybox - runs the SORT applet:
+# such a binary picks its applet from argv[0], which is `sort`, not from the
+# name of the file the link points at. On a seat whose /usr/bin/false is one of
+# those symlinks, `ln -sf "$(type -P false)" "$bindir/sort"` therefore installs
+# a WORKING sort. Measured on 2026-08-24 with /usr/bin/false pointed at busybox
+# and bin/fm-transcript-search.sh untouched: the search sorted its output,
+# matched, and exited 0, and this file reported "a --files-only sort failure
+# must exit 2, got 0" - a defect in the tool that did not exist. An exported
+# shell function of the same name, and a BASH_ENV that restores a full PATH,
+# were measured to produce the same 0 by different routes.
+#
+# So the stand-in is checked rather than assumed: it must fail when the search's
+# own PATH resolves it, and it must leave its marker. A case that cannot build
+# the world it describes refuses here instead of asserting something it never
+# ran.
+#
+# `drain` makes the stand-in read its input to the end before failing, and a
+# stand-in that sits in the MIDDLE of a pipeline needs it. One that exits at
+# once closes the pipe on the stage above, which then fails too - measured here
+# on 2026-08-24 as PIPESTATUS `1 1 1` where a draining stand-in gives `0 1 1` -
+# so the caller's refusal is satisfied by the UPSTREAM status and the middle
+# stage's own status is never read. A case named for a sort failure that would
+# pass with the sort status ignored has not tested a sort failure. Draining
+# leaves exactly one non-zero stage, so nothing but that stage can carry the
+# refusal. A stand-in whose input is not a pipe - a file-gathering tool the
+# caller redirects to a file - must NOT drain: it would read the caller's own
+# stdin and hang.
+failing_tool() {
+  local bindir=$1 tool=$2 marker=$3 drain=${4:-} rc=0
+  rm -f "$bindir/$tool"
+  {
+    printf '#!/bin/sh\n'
+    printf ': >"%s"\n' "$marker"
+    [ "$drain" = drain ] && printf 'while read -r _; do :; done\n'
+    printf 'exit 1\n'
+  } >"$bindir/$tool"
+  chmod +x "$bindir/$tool"
+  rm -f "$marker"
+  PATH="$bindir" bash -c "$tool </dev/null >/dev/null 2>&1" || rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "the fixture PATH still runs a working $tool, so this case was never built"
+  [ -f "$marker" ] \
+    || fail "the stand-in $tool never ran from the fixture PATH, so this case was never built"
+  rm -f "$marker"
+}
+
+test_search_works_on_a_machine_without_ripgrep() {
+  local home out bindir
+  home=$(setup_fixture_home)
+  bindir="$TMP/no-rg-path"
+  restricted_path "$bindir" \
+    bash sh zstd grep xargs awk sed sort find wc mktemp nproc rm cat dirname tr head
   PATH="$bindir" type -P rg >/dev/null 2>&1 \
     && fail 'the no-ripgrep fixture PATH still resolves ripgrep, so it proves nothing'
   out=$(PATH="$bindir" FM_HOME="$home" "$SEARCH" 'tugboat host' 2>/dev/null) \
@@ -709,39 +781,43 @@ test_search_reports_scanner_failures_as_errors() {
   pass "scanner failures are errors while an ordinary no-match remains distinct"
 }
 
+# The marker is read BEFORE the exit status, and the two say different things.
+# A missing marker means the search returned before it ever sorted, so the case
+# below asserts nothing about a sort failure; a present marker means the sort
+# step ran and failed, so the exit status is then the tool's own answer and
+# anything other than 2 is a status the tool dropped.
 test_search_reports_output_pipeline_failures_as_errors() {
-  local home bindir tool rc=0
+  local home bindir marker rc=0
   home=$(setup_fixture_home)
   bindir="$TMP/failing-sort-path"
-  rm -rf "$bindir"
-  mkdir -p "$bindir"
-  for tool in bash sh zstd grep xargs awk sed find wc mktemp nproc rm cat dirname tr head; do
-    if type -P "$tool" >/dev/null 2>&1; then
-      ln -sf "$(type -P "$tool")" "$bindir/$tool"
-    fi
-  done
-  ln -sf "$(type -P false)" "$bindir/sort"
+  marker="$TMP/failing-sort-ran"
+  restricted_path "$bindir" \
+    bash sh zstd grep xargs awk sed find wc mktemp nproc rm cat dirname tr head
+  failing_tool "$bindir" sort "$marker" drain
   PATH="$bindir" FM_HOME="$home" "$SEARCH" 'tugboat host' --files-only >/dev/null 2>&1 || rc=$?
+  [ -f "$marker" ] \
+    || fail 'the --files-only search returned before it sorted, so no sort failure was exercised'
   [ "$rc" -eq 2 ] || fail "a --files-only sort failure must exit 2, got $rc"
+  rm -f "$marker"
   rc=0
   PATH="$bindir" FM_HOME="$home" "$SEARCH" 'tugboat host' >/dev/null 2>&1 || rc=$?
+  [ -f "$marker" ] \
+    || fail 'the context search returned before it sorted, so no sort failure was exercised'
   [ "$rc" -eq 2 ] || fail "a context sort failure must exit 2, got $rc"
   pass "output pipeline failures are scanner errors on both search paths"
 }
 
 test_search_reports_file_gathering_failures_as_errors() {
-  local home bindir tool rc=0
+  local home bindir marker rc=0
   home=$(setup_fixture_home)
   bindir="$TMP/failing-find-path"
-  rm -rf "$bindir"
-  mkdir -p "$bindir"
-  for tool in bash sh zstd grep xargs awk sed sort wc mktemp nproc rm cat dirname tr head; do
-    if type -P "$tool" >/dev/null 2>&1; then
-      ln -sf "$(type -P "$tool")" "$bindir/$tool"
-    fi
-  done
-  ln -sf "$(type -P false)" "$bindir/find"
+  marker="$TMP/failing-find-ran"
+  restricted_path "$bindir" \
+    bash sh zstd grep xargs awk sed sort wc mktemp nproc rm cat dirname tr head
+  failing_tool "$bindir" find "$marker"
   PATH="$bindir" FM_HOME="$home" "$SEARCH" 'tugboat host' --files-only >/dev/null 2>&1 || rc=$?
+  [ -f "$marker" ] \
+    || fail 'the search never ran find, so no file gathering failure was exercised'
   [ "$rc" -eq 2 ] || fail "a file gathering failure must exit 2, got $rc"
   pass "file gathering failures refuse before scanning a partial file set"
 }
@@ -786,18 +862,13 @@ test_search_fails_on_a_store_file_it_cannot_read() {
 }
 
 test_search_without_its_tool_refuses_rather_than_finding_nothing() {
-  local home out rc=0 bindir tool
+  local home out rc=0 bindir
   home=$(setup_fixture_home)
   # A PATH with everything except the decompressor: the store cannot be read,
   # and the caller must be told that rather than told there were no matches.
   bindir="$TMP/no-zstd-path"
-  rm -rf "$bindir"
-  mkdir -p "$bindir"
-  for tool in bash sh grep xargs awk sed sort find wc mktemp nproc rm cat dirname tr head; do
-    if type -P "$tool" >/dev/null 2>&1; then
-      ln -sf "$(type -P "$tool")" "$bindir/$tool"
-    fi
-  done
+  restricted_path "$bindir" \
+    bash sh grep xargs awk sed sort find wc mktemp nproc rm cat dirname tr head
   out=$(PATH="$bindir" FM_HOME="$home" "$SEARCH" 'tugboat host' 2>&1) || rc=$?
   [ "$rc" -eq 2 ] || fail "a missing search tool must be reported as such, got exit $rc"
   assert_contains "$out" 'not installed' 'the refusal must name the missing tool'
