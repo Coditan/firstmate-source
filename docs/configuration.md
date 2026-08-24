@@ -37,6 +37,7 @@ Several vessels can share one machine as separate UNIX accounts, so a successful
 
 Watcher coordination uses `state/.watch.lock` for the daemon pid, executable, home, manager, source, and X-mode identities plus the keeper tier's handed-down service `PATH`, `state/.last-watcher-beat` for daemon freshness, `state/.wake-queue` for durable delivery, and `state/.wake-queue.lock` for atomic append and drain.
 Delivery coordination is the companion service's, in the same shape: `state/.delivery.lock` for the listener pid, executable, home, manager, and source identities, `state/.last-delivery-beat` for listener freshness, and `state/.primary-endpoint` for the address the locked session published (docs/wake-delivery.md).
+Seat-respawner coordination uses `state/.seat-respawner.lock` for the respawner pid, home, and executable identity, `state/.last-seat-respawner-beat` for respawner freshness, `state/.seat-stay-down` for the declared stop marker, and `state/.seat-respawn-attempts`, `state/.seat-respawn-giveup`, and `state/.seat-respawner.log` for one unreachable-seat retry episode (docs/seat-respawner.md).
 The tmux fallback also records `state/.watch-keeper.pid`, while systemd convergence writes the private mode-`0600` `state/.watch-service.env` environment file.
 
 `bin/fm-session-start.sh`'s header is the single owner of session-start ordering, composed commands, digest contents, and the digest's startup mechanism.
@@ -308,6 +309,14 @@ Bootstrap never installs, enables, or starts it silently.
 After installation, locked bootstrap converges stale template bytes, checkout path, composed service `PATH`, and the respawner source version.
 The respawner itself reads the wake-delivery service verdict rather than probing panes, honors `state/.seat-stay-down`, uses `config/seat-launch-command` as its fresh-start launch command, and reports exhausted retry episodes through the findings surface.
 [`docs/seat-respawner.md`](seat-respawner.md) owns the mechanism, retry bound, accepted manual-close trade, and verification limits.
+
+## Seat launch command (config/seat-launch-command / FM_SEAT_LAUNCH_COMMAND)
+
+`config/seat-launch-command` is the local, gitignored command the seat respawner runs in a new tmux window when the primary seat is unreachable.
+The file format is the first non-empty, non-comment line, read under the effective config directory.
+The command must start a fresh seat and must not use resume-style flags such as `--resume`, `--continue`, or Claude's `-c` unless that exact resume path has separately proven lock ownership and context-size safety.
+`FM_SEAT_LAUNCH_COMMAND` overrides the file for tests and specialized service environments only.
+An absent command makes the respawner log a refused launch and keep the bounded retry episode rather than guessing how to start a seat.
 
 ## Bridge frequency monitor service
 

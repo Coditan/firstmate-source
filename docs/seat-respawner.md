@@ -18,9 +18,8 @@ Deliberate shutdown is declared, not inferred.
 `bin/fm-seat-stay-down.sh down` writes `state/.seat-stay-down`, and `bin/fm-seat-stay-down.sh up` clears it.
 While that marker exists, the respawner clears its current retry episode and leaves the seat down.
 
-The fresh launch command comes from `config/seat-launch-command`, or from `FM_SEAT_LAUNCH_COMMAND` for tests and specialized service environments.
-The command must be a fresh start command.
-Do not put `--resume`, `--continue`, or another transcript-resume flag there unless the lock and context-size guard have been measured under that exact flag.
+The fresh launch command is configured through `config/seat-launch-command`, or `FM_SEAT_LAUNCH_COMMAND` for tests and specialized service environments.
+[`docs/configuration.md`](configuration.md#seat-launch-command-configseat-launch-command--fm_seat_launch_command) owns that file's format and the fresh-start restriction.
 
 ## Trade
 
