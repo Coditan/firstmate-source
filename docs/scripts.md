@@ -120,6 +120,9 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-delivery-lib.sh`     | Delivery records, listener health, the primary-endpoint record, and the one-line delivery verdict |
 | `fm-delivery-service.sh` | Install, converge, restart, and report this home's delivery listener; publish the session endpoint |
 | `fm-delivery-keeper.sh`  | tmux keeper tier for the delivery listener where systemd --user is unusable          |
+| `fm-seat-stay-down.sh`   | Declare or clear this home's primary-seat stay-down marker for the respawner         |
+| `fm-seat-respawner.sh`   | Bounded per-home primary-seat respawner driven by the delivery service verdict       |
+| `fm-seat-respawner-service.sh` | Install, converge, restart, and report the home-scoped primary-seat respawner unit |
 | `fm-keeper-name-lib.sh`  | Shared home-scoped keeper session naming for the watcher and delivery keepers, plus the legacy name a home may still be running under |
 | `fm-pane-activity-lib.sh` | The shared pre-typing pane reads every process that types into the captain's pane takes |
 | `fm-state-marker-prune-lib.sh` | Shared pruning of orphaned per-task supervision markers while preserving global buffers and history |

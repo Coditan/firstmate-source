@@ -76,6 +76,7 @@ It prints one honest `started`, `attached`, or `FAILED` status before the stub b
 The listener publishes `state/.delivery.lock` and `state/.last-delivery-beat`, submits a typed wake into the session pane while the durable queue is non-empty, and never drains that queue.
 Killing the stub loses no wake and costs exactly one delivery re-arm.
 `bin/fm-watcher-service.sh` owns systemd instance encoding, unit convergence, scoped restarts, explicit-consent installation and lingering, and the tmux fallback keeper.
+`bin/fm-seat-respawner-service.sh` adds a separately consented home-scoped unit that relaunches only the primary seat when delivery reports pending wakes as undeliverable; [configuration.md](configuration.md#seat-respawner-service) owns its install and configuration mechanics, and [seat-respawner.md](seat-respawner.md) owns the trade and retry bounds.
 Optional direct Telegram receive is armed separately from watcher supervision when `config/telegram.env` and an executable `config/fm-tg-recv.sh` exist.
 `bin/fm-tg-recv-arm.sh` starts or attaches to one home-scoped receiver through `state/.tg-recv.lock`, while `docs/configuration.md` owns the local receiver split between the legacy captain line and the optional non-captain correspondent lane.
 `bin/fm-tg-send.sh` provides the outbound seam through an installed per-home sender; `docs/telegram-outbound.md` owns its purpose, boundaries, provisioning, targets, and evidence.
@@ -303,6 +304,6 @@ Separately, and regardless of size or quiet, it reports the ceiling as unenforce
 
 ## Development notes
 
-The watcher service combines always-on bash triage with a durable queue, a race-proof singleton lock, systemd or tmux-keeper restart ownership, source-version convergence, and a separately identity-matched delivery listener with its own unit.
+The watcher service combines always-on bash triage with a durable queue, a race-proof singleton lock, systemd or tmux-keeper restart ownership, source-version convergence, a separately identity-matched delivery listener with its own unit, and a separately consented primary-seat respawner.
 The presence-gated sub-supervisor (`bin/fm-supervise-daemon.sh`) provides walk-away supervision via the `/afk` skill while reading the same durable queue without taking ownership of the watcher process.
 The Herdr event-wait capability cache periodically re-probes a disabled push path inside the long-lived watcher, so a transient capability failure does not persist until service restart.
