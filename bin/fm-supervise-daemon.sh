@@ -173,6 +173,11 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # shellcheck source=bin/fm-classify-lib.sh
 . "$FM_DAEMON_DIR/fm-classify-lib.sh"
 
+# Prune this daemon's per-task markers once their task records are gone. Global
+# away-mode buffers and wedge alarms deliberately outlive individual teardowns.
+# shellcheck source=bin/fm-state-marker-prune-lib.sh
+. "$FM_DAEMON_DIR/fm-state-marker-prune-lib.sh"
+
 # Supervisor-pane discovery (FM_SUPERVISOR_TARGET_DEFAULT,
 # FM_SUPERVISOR_BACKEND_DEFAULT, discover_supervisor_target,
 # discover_supervisor_backend). Shared with the script-owned away launcher
@@ -902,6 +907,7 @@ _oldest_line_age() {  # <buf> -> seconds since the oldest buffered item first ar
 housekeeping() {  # <state>
   local state=$1 now due f key task win marker age last max_defer oldest pause_secs
   now=$(_now)
+  fm_state_marker_prune_subsuper "$state"
   migrate_watcher_pause_markers "$state"
 
   # (1) batch flush
