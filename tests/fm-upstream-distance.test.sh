@@ -263,6 +263,35 @@ test_a_reading_that_cannot_be_taken_is_never_reported_as_current() {
   pass "a reading that cannot be taken exits 3 and says so, never 0"
 }
 
+test_failed_git_evidence_never_becomes_a_verdict() {
+  local repo shim real_git command out status
+  repo=$(world failed-evidence)
+  git -C "$repo" checkout -q -b upstream
+  write "$repo" bin/up.sh up
+  commit "$repo" "upstream-change"
+  git -C "$repo" checkout -q main
+  shim="$TMP_ROOT/git-shim"
+  mkdir -p "$shim"
+  real_git=$(command -v git)
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'if [ "${3:-}" = "$FAIL_GIT_COMMAND" ]; then' \
+    '  printf "injected %s failure\n" "$FAIL_GIT_COMMAND" >&2' \
+    '  exit 71' \
+    'fi' \
+    'exec "$REAL_GIT" "$@"' > "$shim/git"
+  chmod +x "$shim/git"
+
+  for command in ls-tree cherry diff-tree log; do
+    status=0
+    out=$(REAL_GIT="$real_git" FAIL_GIT_COMMAND="$command" PATH="$shim:$PATH" \
+      read_distance "$repo" --no-write 2>&1) || status=$?
+    [ "$status" = 3 ] || fail "a failed git $command exited $status instead of 3: $out"
+    assert_contains "$out" 'UNMEASURABLE:' "a failed git $command did not refuse the reading"
+    assert_contains "$out" "injected $command failure" "a failed git $command hid git's reason"
+  done
+  pass "failed Git evidence exits unmeasurable instead of producing a verdict"
+}
+
 test_exit_status_separates_outstanding_work_from_nothing_outstanding() {
   local repo status
   repo=$(world statuses)
@@ -308,18 +337,40 @@ test_the_default_report_lands_where_a_later_reader_can_use_it() {
   pass "the report lands in the home's durable records by default"
 }
 
-test_no_armed_or_reporting_surface_refers_to_this_reading() {
-  local hit
-  # The captain's objection is to a standing report, so the absence of one is a
-  # requirement. These are the surfaces that speak without being run.
-  hit=$(grep -rl 'fm-upstream-distance\|upstream-distance' \
-    "$ROOT/bin/fm-bootstrap.sh" "$ROOT/bin/fm-session-start.sh" \
-    "$ROOT/bin/fm-currency-round.sh" "$ROOT/bin/fm-watch.sh" \
-    "$ROOT/bin/fm-nudge.sh" "$ROOT/docs/supervision-protocols" \
-    "$ROOT/AGENTS.md" 2>/dev/null || true)
+test_startup_and_currency_surfaces_do_not_arm_or_report_this_reading() {
+  local home bootstrap_out currency_out hit state_contract
+  home="$TMP_ROOT/silence-home"
+  mkdir -p "$home/state" "$home/config"
+
+  bootstrap_out=$(env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT \
+    FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_TEST_SKIP_WATCHER_SERVICE=1 \
+    FM_CURRENCY_ROUND_DISABLE=1 \
+    "$ROOT/bin/fm-bootstrap.sh" 2>&1) || true
+  bootstrap_out=${bootstrap_out//"$TMP_ROOT"/[tmproot]}
+  assert_not_contains "$bootstrap_out" 'upstream-distance' \
+    "bootstrap emitted a line naming the on-demand reading"
+  assert_not_contains "$bootstrap_out" 'UPSTREAM_DISTANCE:' \
+    "bootstrap emitted a diagnostic for the on-demand reading"
+
+  currency_out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_CURRENCY_ROUND_TOOLS='' FM_CURRENCY_ROUND_TIMEOUT=1 \
+    "$ROOT/bin/fm-currency-round.sh" --status 2>&1) || true
+  currency_out=${currency_out//"$TMP_ROOT"/[tmproot]}
+  assert_not_contains "$currency_out" 'upstream-distance' \
+    "the currency round reported the on-demand reading"
+  assert_not_contains "$currency_out" 'upstream distance' \
+    "the currency round measured the on-demand reading"
+
+  hit=$(find "$home/state" -type f -printf '%f\n' 2>/dev/null |
+    grep 'upstream-distance\|UPSTREAM_DISTANCE' || true)
   [ -z "$hit" ] ||
-    fail "an unasked-reporting surface refers to the on-demand reading: $hit"
-  pass "no startup, watcher, currency, nudge, or instruction surface refers to this reading"
+    fail "startup or currency execution armed the on-demand reading: $hit"
+  state_contract=$(find "$home/state" -type f -exec sed "s|$TMP_ROOT|[tmproot]|g" {} + 2>/dev/null || true)
+  assert_not_contains "$state_contract" 'upstream-distance' \
+    "registered watcher or schedule state names the on-demand reading"
+  assert_not_contains "$state_contract" 'UPSTREAM_DISTANCE' \
+    "registered watcher or schedule state contains a diagnostic for the on-demand reading"
+  pass "startup and currency surfaces neither report nor arm the on-demand reading"
 }
 
 test_session_start_gains_no_line_from_a_written_report() {
@@ -354,7 +405,8 @@ test_a_live_upstream_change_this_fork_lacks_needs_review
 test_counts_are_of_the_whole_range_even_when_the_list_is_windowed
 test_the_reading_names_both_repositories_it_compared
 test_a_reading_that_cannot_be_taken_is_never_reported_as_current
+test_failed_git_evidence_never_becomes_a_verdict
 test_exit_status_separates_outstanding_work_from_nothing_outstanding
 test_the_default_report_lands_where_a_later_reader_can_use_it
-test_no_armed_or_reporting_surface_refers_to_this_reading
+test_startup_and_currency_surfaces_do_not_arm_or_report_this_reading
 test_session_start_gains_no_line_from_a_written_report

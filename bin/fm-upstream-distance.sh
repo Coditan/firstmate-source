@@ -222,8 +222,13 @@ resolve_fork_side() {
 
 COMPARE_REPO=${FM_UPSTREAM_DISTANCE_COMPARE_REPO:-}
 TMP_REPO=""
+SCRATCH_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-upstream-distance-work.XXXXXX") ||
+  unmeasurable "temporary working storage cannot be created"
 # shellcheck disable=SC2329  # invoked indirectly by the EXIT trap below
-cleanup() { [ -z "$TMP_REPO" ] || rm -rf "$TMP_REPO"; }
+cleanup() {
+  [ -z "$TMP_REPO" ] || rm -rf "$TMP_REPO"
+  rm -rf "$SCRATCH_DIR"
+}
 trap cleanup EXIT
 
 if [ -n "$COMPARE_REPO" ]; then
@@ -278,7 +283,10 @@ declare -A FORK_BLOB=()
 declare -A UPSTREAM_BLOB=()
 
 load_tree() {
-  local rev=$1 name=$2 record head type blob path
+  local rev=$1 name=$2 record head type blob path tree_file
+  tree_file="$SCRATCH_DIR/${name}.tree"
+  git -C "$COMPARE_REPO" ls-tree -r -z "$rev" > "$tree_file" ||
+    unmeasurable "the $name side's tree cannot be listed"
   # -z, so a path holding a space, a quote, or a newline is read as itself
   # rather than as git's quoted rendering of itself.
   while IFS= read -r -d '' record; do
@@ -291,7 +299,7 @@ load_tree() {
     blob=$3
     [ "$type" = blob ] || continue
     if [ "$name" = fork ]; then FORK_BLOB["$path"]=$blob; else UPSTREAM_BLOB["$path"]=$blob; fi
-  done < <(git -C "$COMPARE_REPO" ls-tree -r -z "$rev" 2>/dev/null)
+  done < "$tree_file"
 }
 load_tree "$FORK" fork
 load_tree "$UPSTREAM" upstream
@@ -301,15 +309,18 @@ load_tree "$UPSTREAM" upstream
 # Commits upstream holds that are patch-equivalent to something the fork already
 # has. This is the ONLY evidence that earns the word absorbed.
 declare -A EQUIVALENT=()
+CHERRY_FILE="$SCRATCH_DIR/cherry"
+git -C "$COMPARE_REPO" cherry "$FORK" "$UPSTREAM" > "$CHERRY_FILE" ||
+  unmeasurable "patch equivalence between the two sides cannot be computed"
 while read -r mark sha; do
   [ "$mark" = "-" ] || continue
   EQUIVALENT["$sha"]=1
-done < <(git -C "$COMPARE_REPO" cherry "$FORK" "$UPSTREAM" 2>/dev/null)
+done < "$CHERRY_FILE"
 
 # --- verdict every upstream-only change --------------------------------------
 
 verdict_for() {
-  local commit=$1 path files=0 present_upstream=0 present_both=0 same=0
+  local commit=$1 path files=0 present_upstream=0 present_both=0 same=0 paths_file
   VERDICT=needs-review
   VERDICT_WHY=""
   if [ -n "${EQUIVALENT[$commit]:-}" ]; then
@@ -317,6 +328,9 @@ verdict_for() {
     VERDICT_WHY="patch-equivalent to a commit this fork already carries"
     return 0
   fi
+  paths_file="$SCRATCH_DIR/paths"
+  git -C "$COMPARE_REPO" diff-tree --no-commit-id --name-only -r -z "$commit" > "$paths_file" ||
+    unmeasurable "the paths touched by change $commit cannot be read"
   while IFS= read -r -d '' path; do
     [ -n "$path" ] || continue
     files=$((files + 1))
@@ -327,7 +341,7 @@ verdict_for() {
         [ "${FORK_BLOB[$path]}" = "${UPSTREAM_BLOB[$path]}" ] && same=$((same + 1))
       fi
     fi
-  done < <(git -C "$COMPARE_REPO" diff-tree --no-commit-id --name-only -r -z "$commit" 2>/dev/null)
+  done < "$paths_file"
   # Stated rather than reached by vacuous truth: with no paths at all, "no path
   # survives upstream" would be true of nothing, which is how the defect above
   # was built. A change that touches nothing is called out as touching nothing.
@@ -362,6 +376,9 @@ n_superseded=0
 n_needs_review=0
 seen=0
 DETAIL=""
+LOG_FILE="$SCRATCH_DIR/upstream-only.log"
+git -C "$COMPARE_REPO" log --no-merges --format='%H %s' "$FORK..$UPSTREAM" > "$LOG_FILE" ||
+  unmeasurable "the upstream-only changes cannot be enumerated"
 while IFS= read -r line; do
   [ -n "$line" ] || continue
   commit=${line%% *}
@@ -381,7 +398,7 @@ while IFS= read -r line; do
 # full ids: an abbreviated key would match nothing there and report a change the
 # fork demonstrably carries as needing review. The id is shortened for display
 # only, after the lookup.
-done < <(git -C "$COMPARE_REPO" log --no-merges --format='%H %s' "$FORK..$UPSTREAM" 2>/dev/null)
+done < "$LOG_FILE"
 
 # The enumeration and the count are taken by two different git invocations, so
 # they are compared rather than assumed equal: a silent shortfall here is the
