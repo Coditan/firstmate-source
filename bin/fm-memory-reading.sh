@@ -40,8 +40,8 @@
 # calling it unmeasured would make incompleteness the permanent norm and
 # destroy the signal. The remedy is to run this reading from the other
 # installation too, or to point --home at records this account can read.
-# No active account slice, no stored growth sample on a first run, and a stored
-# sample younger than the configured floor are also scope. The first two are
+# No active account slice, no stored growth sample on a first run, and a sample
+# interval younger than the configured floor are also scope. The first two are
 # expected absences and the last is the operator's own cadence. They do not
 # force exit 3, so the next slice's alarm does not learn to discount failure.
 # The wall-clock and peak-memory cost figures measure this instrument rather
@@ -63,8 +63,9 @@
 # SIZE AND GROWTH ARE DIFFERENT QUESTIONS
 # A big steady worker is normal; a small one doubling every minute is the
 # problem. Growth is measured against the previous run's sample, so the first
-# run on a home reports growth as scoped rather than as zero. Pass
-# --interval to take both samples inside one run instead.
+# run on a home reports growth as scoped rather than as zero. Pass --interval
+# with an interval at or above the configured floor to take both samples inside
+# one run instead; a shorter explicit interval stays scoped without waiting.
 #
 # WAKE DELIVERY IS LABELLED, NOT RANKED
 # The per-session wake-delivery listener is a few megabytes and is what makes
@@ -85,9 +86,11 @@
 #                                        previous sample
 #   fm-memory-reading.sh --json          the same reading as one object with
 #                                        schema fm-memory-reading.v1
-#   fm-memory-reading.sh --interval N    take both growth samples in this run,
-#                                        N seconds apart, instead of using the
-#                                        stored one
+#   fm-memory-reading.sh --interval N    when N meets the configured sampling
+#                                        floor, take both growth samples in
+#                                        this run N seconds apart instead of
+#                                        using the stored one; otherwise leave
+#                                        growth scoped without waiting
 #   fm-memory-reading.sh --largest N     how many processes to name by size
 #                                        (default 8)
 #   fm-memory-reading.sh --growing N     how many to name by growth (default 8)
@@ -115,9 +118,9 @@
 #   FM_MEMORY_GROWTH_MIB_MIN  MiB/min at or above which a process is called
 #                             growing rather than steady (default 5)
 #   FM_MEMORY_SAMPLE_MAX_AGE  how old the stored sample may be before growth is
-#                             unmeasured rather than meaningless (default 900)
+#                             unmeasured rather than meaningless (default 1260)
 #   FM_MEMORY_SAMPLE_MIN_AGE  interval below which growth is scoped because the
-#                             operator ran it too soon to divide by (default 5)
+#                             operator ran it too soon to divide by (default 270)
 #   FM_MEMORY_SAMPLES         path of the stored sample. Tests use it for
 #                             isolation, and bin/fm-memory-alarm.sh uses it to
 #                             keep a sample of its own: growth is measured
@@ -154,12 +157,12 @@ SAMPLES=${FM_MEMORY_SAMPLES:-$STATE/memory-reading.samples}
 
 TRACK_MIB=${FM_MEMORY_TRACK_MIB:-32}
 GROWTH_MIB_MIN=${FM_MEMORY_GROWTH_MIB_MIN:-5}
-SAMPLE_MAX_AGE=${FM_MEMORY_SAMPLE_MAX_AGE:-900}
-SAMPLE_MIN_AGE=${FM_MEMORY_SAMPLE_MIN_AGE:-5}
+SAMPLE_MAX_AGE=${FM_MEMORY_SAMPLE_MAX_AGE:-1260}
+SAMPLE_MIN_AGE=${FM_MEMORY_SAMPLE_MIN_AGE:-270}
 case "$TRACK_MIB" in ''|*[!0-9]*) TRACK_MIB=32 ;; esac
 case "$GROWTH_MIB_MIN" in ''|*[!0-9]*) GROWTH_MIB_MIN=5 ;; esac
-case "$SAMPLE_MAX_AGE" in ''|*[!0-9]*) SAMPLE_MAX_AGE=900 ;; esac
-case "$SAMPLE_MIN_AGE" in ''|*[!0-9]*) SAMPLE_MIN_AGE=5 ;; esac
+case "$SAMPLE_MAX_AGE" in ''|*[!0-9]*) SAMPLE_MAX_AGE=1260 ;; esac
+case "$SAMPLE_MIN_AGE" in ''|*[!0-9]*) SAMPLE_MIN_AGE=270 ;; esac
 
 # The delivery path, by the script names it runs under. Deliberately a superset
 # and deliberately matched only against the first two argv tokens: a worker's
@@ -729,17 +732,24 @@ PRIOR_FILE="$TMP/prior.tsv"
 GROWTH_INTERVAL=0
 GROWTH_REASON=
 GROWTH_SCOPE=0
+INTERVAL_WAITED=0
 
 read_prior() {
   local epoch age parse_status="$TMP/prior-status" epoch_file="$TMP/prior-epoch"
   : > "$PRIOR_FILE"
   if [ "$INTERVAL" -gt 0 ]; then
+    if [ "$INTERVAL" -lt "$SAMPLE_MIN_AGE" ]; then
+      GROWTH_REASON="only ${INTERVAL}s between explicit samples, under the ${SAMPLE_MIN_AGE}s floor this rate can be divided by"
+      GROWTH_SCOPE=1
+      return
+    fi
     if ! cp "$PS_FILE" "$TMP/first.tsv"; then
       GROWTH_REASON="the first process-table read could not be retained for comparison"
       unmeasured growth-sample "$GROWTH_REASON"
       return
     fi
     sleep "$INTERVAL"
+    INTERVAL_WAITED=1
     read_processes
     if [ "$PS_OK" -ne 1 ]; then
       GROWTH_REASON="the second process-table read failed"
@@ -1182,7 +1192,7 @@ reading_cost() {
   case "$ended" in ''|*[!0-9]*) ended='' ;; esac
   if [ -n "$STARTED_MS" ] && [ -n "$ended" ]; then
     wall=$(( (ended - STARTED_MS) / 1000000 ))
-    [ "$INTERVAL" -gt 0 ] && wall="$wall (of which ${INTERVAL}000 was the requested wait)"
+    [ "$INTERVAL_WAITED" -eq 1 ] && wall="$wall (of which ${INTERVAL}000 was the requested wait)"
     wall="${wall}ms wall"
   else
     wall="wall time unavailable in scope (no nanosecond clock on this machine)"

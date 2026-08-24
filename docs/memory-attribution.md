@@ -49,7 +49,7 @@ Every reading prints the installations it read, and anything they do not cover i
 That boundary is permanent and known in advance, so it is reported as declared scope rather than as an instrument failure.
 Treating it as unmeasured would make incompleteness the permanent norm and destroy the signal the exit status carries.
 The remedy is to run the reading from the other installation too, or to point `--home` at records this account can read.
-The captain chose the same scope treatment for an account with no active session slice, an ordinary first run with no stored growth sample, and a stored sample younger than the minimum interval.
+The captain chose the same scope treatment for an account with no active session slice, an ordinary first run with no stored growth sample, and a stored or explicit sample interval younger than the minimum interval.
 Those are known absences or operator cadence, not failed instruments.
 If they forced exit 3, the alarm would learn to discount the failure status it must consume.
 The wall-clock and peak-memory cost figures measure the reading itself rather than machine memory.
@@ -75,10 +75,10 @@ All of the following was run on `hlr-web-1` on 2026-08-13 against the reading as
 A self-capping balloon grew to a hard 600 MiB ceiling at roughly 20 MiB/s inside this task's own worktree, held flat, and exited.
 The host had ~15.9 GiB RAM headroom throughout, and the balloon's own shell carried a `ulimit -v` guard, so the runaway was scoped rather than a load test.
 
-During the growth phase:
+During the growth phase, this deliberately short survey lowered the sampling floor explicitly so it did not weaken the alarm's operational default:
 
 ```
-$ ./bin/fm-memory-reading.sh --no-store --interval 12 --largest 4 --growing 4
+$ FM_MEMORY_SAMPLE_MIN_AGE=12 ./bin/fm-memory-reading.sh --no-store --interval 12 --largest 4 --growing 4
 FASTEST GROWING
    RSS MiB          GROWTH  SIZE TREND PID      COMMAND              ATTRIBUTION
        330 +1200.2 MiB/min  growing    22424    python3 balloon.py   coditan / task fleet-host-protection-after-reaper-panel-memory-attribution (ship, firstmate-fork)
@@ -155,8 +155,8 @@ Growth has its own set, because an unmeasurable growth rate is the easiest thing
 | stored sample contains a malformed process record | `unmeasured` input `growth-sample`; exit 3 |
 | stored sample has a valid epoch and no process records | measured empty baseline; current processes are first sightings; exit 0 remains possible |
 | stored sample is future-dated | `unmeasured` input `growth-sample`; exit 3 |
-| prior sample older than the growth window | `unmeasured` input `growth-sample`, with the age and window; exit 3 |
-| interval shorter than the divide-by floor | scope, with the interval and floor; exit 0 remains possible |
+| stored sample older than the growth window | `unmeasured` input `growth-sample`, with the age and window; exit 3 |
+| stored or explicit interval shorter than the divide-by floor | scope, with the interval and floor; exit 0 remains possible |
 | second process-table read fails during `--interval` | `unmeasured` input `growth-sample`; exit 3 |
 | the pid now belongs to a later process | per-process `unmeasured`, "different, later process" - never counted as growth |
 | the process exited during the reading | reported as `exited`, never silently dropped |

@@ -60,6 +60,21 @@ That measurement predates the swapfile and calibrates ordinary RAM headroom, not
 
 For contrast, from the same instrument while a runaway was deliberately driven: 451 to 1,326 MiB/min.
 
+### Sampling window: 270 to 1,260 seconds
+
+The sampling window was re-measured on this host on 2026-08-23 after four alarm readings within about ten minutes contradicted one another: 60, 0, 148, and about 7 MiB/min.
+The 148 MiB/min reading extrapolated the whole machine's RAM headroom into an 81.9-minute horizon even though the sample interval was only seconds long.
+
+Seven independent reads of `/proc/meminfo` every 45 seconds from 20:17:39 through 20:22:09 put `MemAvailable` between 12,164 and 12,200 MiB.
+The full 270-second window gained 31 MiB and the entire low-to-high band was 36 MiB, or 0.30% of available memory.
+The **270-second minimum** is that complete measured window: a shorter interval is scoped and can produce neither a rate nor a horizon.
+
+The alarm's real invocation path is the authenticated `state/memory-alarm.check.sh` entry written by `bin/fm-memory-alarm.sh --arm` and run by `bin/fm-watch.sh`.
+The watcher makes checks due after 300 seconds and observes that due time on its 15-second loop, so one base scheduling slot is at most 315 seconds before time spent in the sequential checks.
+On the measured home the stored sample nevertheless reached 926 seconds, just short of three such 315-second slots, and the old 900-second ceiling reported the growth instrument blind.
+The **1,260-second maximum** is four 315-second slots, leaving one further full slot beyond that measured delay without accepting a sample indefinitely.
+A sample older than 1,260 seconds remains unmeasured and forces the alarm's existing blindness path rather than becoming an all-clear.
+
 ### Horizon: 15 minutes
 
 The watcher sweeps `state/*.check.sh` every 300 seconds, so the alarm reads the machine every 5 minutes.
