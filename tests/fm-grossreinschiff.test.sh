@@ -422,8 +422,8 @@ test_skill_never_promises_deletion_authority() {
 
 test_cadence_is_reachable_from_the_instruction_surface() {
   assert_grep 'grossreinschiff' "$AGENTS" "AGENTS.md must name the sweep skill"
-  assert_grep 'GROSSREINSCHIFF:' "$AGENTS" \
-    "AGENTS.md section 13 must list the due line among the bootstrap diagnostics"
+  # AGENTS.md section 13 no longer carries a second copy of the diagnostic-prefix list.
+  # bootstrap-diagnostics is its one owner, while fm-instruction-owners and fm-bootstrap own the general AGENTS.md trigger's presence and wording.
   # Cadence state behavior is covered by the executable cadence tests above.
   assert_grep 'GROSSREINSCHIFF: weekly fleet cleanup sweep is due' "$BOOTSTRAP_SKILL" \
     "bootstrap-diagnostics must own the response to the due line"

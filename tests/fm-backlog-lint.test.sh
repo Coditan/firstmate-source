@@ -213,8 +213,8 @@ EOF
     "the unreadable-record diagnostic must name its closing condition"
   assert_grep "BACKLOG_UNREADABLE" "$ROOT/.agents/skills/bootstrap-diagnostics/SKILL.md" \
     "the coded diagnostic must have a documented handling procedure"
-  assert_grep "BACKLOG_UNREADABLE" "$ROOT/AGENTS.md" \
-    "the coded diagnostic must be registered with the other bootstrap codes"
+  # AGENTS.md section 13 no longer carries a second copy of the diagnostic-prefix list.
+  # bootstrap-diagnostics is its one owner, while fm-instruction-owners and fm-bootstrap own the general AGENTS.md trigger's presence and wording.
   pass "an unresolvable record is a coded documented diagnostic, not a reader-disagreement false alarm"
 }
 
