@@ -9,7 +9,9 @@ Every figure below was measured for this document; none is carried forward from 
 This document owns one thing the other two do not: what gets taken, in what order, and why each boundary sits where it does.
 
 The daily upstream cadence is separate work and is deliberately not delivered by this unit.
-`fleet-upstream-integration-measure-on-demand` owns the on-demand comparison with a defensible per-change verdict.
+`fleet-upstream-integration-measure-on-demand` owns the on-demand comparison with a defensible per-change verdict, and delivered it as `bin/fm-upstream-distance.sh`.
+That script's header is the one owner of its verdict vocabulary and of the evidence each verdict rests on; nothing here restates it.
+It speaks only when it is run: it arms no check, registers no watcher subject, and adds no line to the session-start digest, which `tests/fm-upstream-distance.test.sh` proves by starting a session against a written report and finding none.
 `fleet-upstream-integration-daily-arm-and-dispatch` owns the recurring daily check that wakes only when it finds something actionable, and is blocked by the on-demand comparison unit.
 Neither a recurring check nor its scheduling is added here, and no session-start surface reports an upstream count or distance.
 

@@ -20,6 +20,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-github-inbox.sh` | Read GitHub's own notification feed on a cadence without ever marking one read, wake firstmate only for a thread addressed to this fleet, arm it on the watcher, and report a feed nothing is reading (docs/github-inbox.md) |
 | `fm-firstmate-update-check.sh` | Read-only check for relevant instruction-surface commits on the source this deployment updates from |
 | `fm-fleet-update-check.sh` | Answer whether this vessel runs current shared code across all three hops - own origin, the pin it carries, and that pin's age against its source - reporting a hop it could not measure as unmeasured (docs/pin-age-check.md) |
+| `fm-upstream-distance.sh` | Read on demand what canonical upstream carries that this fork does not, give every one of those changes a verdict that names the evidence it rests on, and write the reading where a later reader can use it - it arms nothing and reports to nobody unless it is run (docs/upstream-integration-plan.md) |
 | `fm-grossreinschiff-due.sh` | Report whether this home's weekly Thursday cleanup sweep is due, and record a completed one |
 | `fm-lint.sh`             | Single owner of firstmate's shell-lint definition: file set, config, and pinned ShellCheck version |
 | `fm-install-shellcheck.sh` | Install CI's pinned, checksum-verified ShellCheck build `fm-lint.sh` requires      |

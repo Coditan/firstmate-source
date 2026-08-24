@@ -126,6 +126,9 @@ That comparison is quiet when a path is absent from both tips, so a fork patch w
 | `434d9f6`, `2b0ed47`, `2e89d1f` | `PANEL-VALIDATION-FINDINGS.md` | **not absorbed** | Upstream has never carried that file. It was created and retired entirely inside the fork. |
 | `ae05f61` | `bin/fm-wake-wait.sh`, `tests/fm-wake-wait.test.sh` | **not absorbed** | Upstream has never carried either path. The fork deleted them in `344178f supervision: host wake delivery outside the harness`. |
 
+That mechanism was re-measured on 2026-08-24 rather than taken from this account: `test_a_path_absent_from_both_sides_is_never_absorbed` in `tests/fm-upstream-distance.test.sh` runs the retired check's own `git diff --quiet` against a fixture of exactly this shape, asserts that it is quiet, and asserts that the reading which replaced it calls that change `superseded` instead.
+Absence cannot reach the replacement's `absorbed` at all, because that verdict now rests only on patch equivalence, and it cannot reach its `converged` either, because that one requires the path to be present on both sides before their content is compared.
+
 Those 16 need a verdict the registry's vocabulary does not have.
 They are not `absorbed`, because upstream carries nothing of their effect.
 They are not `keep` or `upstream-candidate` either, because the thing each one edits no longer exists in this fork's tree; they contribute nothing to the current code and travel only as history.
