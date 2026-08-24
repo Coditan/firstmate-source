@@ -85,7 +85,9 @@ state/<id>.status -> .crew-signal/<id>/status
 state/<id>.turn-ended -> .crew-signal/<id>/turn-ended
 ```
 
-The Codex launch line receives only this directory as a filesystem writable root:
+The Codex launch line's `writable_roots` array carries this per-task signal root for every Codex direct report.
+A ship or scout crewmate's array additionally carries its worktree's git common directory; [`docs/codex-sandbox-git-directory.md`](codex-sandbox-git-directory.md) owns that second root.
+A secondmate receives the one-element form shown here:
 
 ```text
 -c 'sandbox_workspace_write.writable_roots=["<FM_HOME>/state/.crew-signal/<id>"]'
