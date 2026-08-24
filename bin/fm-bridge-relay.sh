@@ -129,8 +129,9 @@ done
 
 # resolve_home_vessel: set HOME_VESSEL to the one vessel this home is, and
 # HOME_VESSEL_SOURCE to the record it was read from, or set IDENTITY_PROBLEM and
-# fail. $FM_HOME is tried before $FM_ROOT, the order bin/fm-board.sh already uses
-# to answer the same question. $FM_BRIDGE_VESSEL is deliberately not consulted:
+# fail. $FM_HOME is tried before $FM_ROOT, matching the local-record precedence
+# bin/fm-board.sh uses for its separate display/default-vessel question.
+# $FM_BRIDGE_VESSEL is deliberately not consulted:
 # it is an environment variable, which is exactly what the Bridge scripts refuse
 # to take an identity from, and it names one or more inboxes to WATCH, which is a
 # different question from which vessel this home is. A record naming more than
