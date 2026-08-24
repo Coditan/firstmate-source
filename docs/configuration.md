@@ -190,10 +190,12 @@ Do not treat that file as inert for sessions running inside this repository.
 Codex 0.145.0 reads it as configuration for a Codex session whose working directory is in this repo, which is measured in [`docs/codex-sandbox-network.md`](codex-sandbox-network.md) section 5 and corrects an earlier claim here that repo-local `.codex/config.toml` is never auto-loaded.
 Anything written into it therefore reaches a supervising Codex firstmate session too, not only the crewmates `fm-spawn` launches.
 
-For that reason one Codex sandbox setting deliberately does NOT live in that file.
+For that reason the Codex sandbox grants that must be scoped to spawned direct reports deliberately do NOT live in that file.
 A Codex direct report receives a per-task `sandbox_workspace_write.writable_roots` entry for `state/.crew-signal/<id>`, with public `state/<id>.status` and `state/<id>.turn-ended` paths symlinked into it.
 The unresolved-decision completion gate also uses that directory for its attestation when it exists; [`docs/codex-completion-gate.md`](codex-completion-gate.md) owns that evidence record.
 [`docs/codex-status-signalling.md`](codex-status-signalling.md) owns the worker-signalling incident evidence and the watcher change that follows those symlinks.
+A Codex crewmate also receives its worktree's git common directory as a second `writable_roots` entry, so linked-worktree ref writes work without granting the project working tree; a Codex secondmate does not receive it, and neither does the supervising session.
+[`docs/codex-sandbox-git-directory.md`](codex-sandbox-git-directory.md) owns the measurements, blast radius, and placement rationale for that git-directory grant.
 A Codex CREWMATE additionally receives `sandbox_workspace_write.network_access=true` on its launch line, which is what lets it reach the local no-mistakes daemon socket; a Codex secondmate does not receive it, and neither does the supervising session.
 Codex classes a unix-socket connect as network access rather than filesystem access, and 0.145.0 offers no narrower knob, so this is a whole-dimension grant that also admits general outbound network from that crewmate.
 [`docs/codex-sandbox-network.md`](codex-sandbox-network.md) owns the measurements behind all of that, including what the grant admits and why the launch line rather than the profile file is the only placement that confines it.
