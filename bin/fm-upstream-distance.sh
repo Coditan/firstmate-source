@@ -275,15 +275,16 @@ MERGE_BASE=$(git -C "$COMPARE_REPO" merge-base "$FORK" "$UPSTREAM" 2>/dev/null) 
 
 # --- the tips, read once each ------------------------------------------------
 
-# Path -> blob id for a whole tree, so presence and content are both O(1) per
-# path afterwards. PRESENCE IS THE LOAD-BEARING PART: the retired check inferred
-# agreement from `git diff --quiet` being silent, which it also is when a path
-# is on neither side. Here a path that is not a key is absent, full stop.
-declare -A FORK_BLOB=()
-declare -A UPSTREAM_BLOB=()
+# Path -> object id for every blob or gitlink in a whole tree, so presence and
+# content are both O(1) per path afterwards. PRESENCE IS THE LOAD-BEARING PART:
+# the retired check inferred agreement from `git diff --quiet` being silent,
+# which it also is when a path is on neither side. Here a path that is not a key
+# is absent, full stop.
+declare -A FORK_OBJECT=()
+declare -A UPSTREAM_OBJECT=()
 
 load_tree() {
-  local rev=$1 name=$2 record head type blob path tree_file
+  local rev=$1 name=$2 record head type object path tree_file
   tree_file="$SCRATCH_DIR/${name}.tree"
   git -C "$COMPARE_REPO" ls-tree -r -z "$rev" > "$tree_file" ||
     unmeasurable "the $name side's tree cannot be listed"
@@ -296,15 +297,15 @@ load_tree() {
     # shellcheck disable=SC2086  # deliberate split of git's fixed three fields.
     set -- $head
     type=$2
-    blob=$3
-    [ "$type" = blob ] || continue
-    if [ "$name" = fork ]; then FORK_BLOB["$path"]=$blob; else UPSTREAM_BLOB["$path"]=$blob; fi
+    object=$3
+    case $type in blob|commit) ;; *) continue ;; esac
+    if [ "$name" = fork ]; then FORK_OBJECT["$path"]=$object; else UPSTREAM_OBJECT["$path"]=$object; fi
   done < "$tree_file"
 }
 load_tree "$FORK" fork
 load_tree "$UPSTREAM" upstream
-[ "${#FORK_BLOB[@]}" -gt 0 ] || unmeasurable "the fork side's tree could not be listed"
-[ "${#UPSTREAM_BLOB[@]}" -gt 0 ] || unmeasurable "the upstream side's tree could not be listed"
+[ "${#FORK_OBJECT[@]}" -gt 0 ] || unmeasurable "the fork side's tree could not be listed"
+[ "${#UPSTREAM_OBJECT[@]}" -gt 0 ] || unmeasurable "the upstream side's tree could not be listed"
 
 # Commits upstream holds that are patch-equivalent to something the fork already
 # has. This is the ONLY evidence that earns the word absorbed.
@@ -334,11 +335,11 @@ verdict_for() {
   while IFS= read -r -d '' path; do
     [ -n "$path" ] || continue
     files=$((files + 1))
-    if [ -n "${UPSTREAM_BLOB[$path]:-}" ]; then
+    if [ -n "${UPSTREAM_OBJECT[$path]:-}" ]; then
       present_upstream=$((present_upstream + 1))
-      if [ -n "${FORK_BLOB[$path]:-}" ]; then
+      if [ -n "${FORK_OBJECT[$path]:-}" ]; then
         present_both=$((present_both + 1))
-        [ "${FORK_BLOB[$path]}" = "${UPSTREAM_BLOB[$path]}" ] && same=$((same + 1))
+        [ "${FORK_OBJECT[$path]}" = "${UPSTREAM_OBJECT[$path]}" ] && same=$((same + 1))
       fi
     fi
   done < "$paths_file"

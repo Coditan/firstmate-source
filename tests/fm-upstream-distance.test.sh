@@ -166,6 +166,49 @@ test_tip_agreement_is_converged_and_needs_presence_on_both_sides() {
   pass "tip agreement earns converged, and says it is evidence rather than proof"
 }
 
+test_gitlinks_are_present_paths_and_compare_by_object_id() {
+  local repo target_a target_b out
+  repo=$(world gitlinks-converged)
+  target_a=$(git -C "$repo" rev-parse HEAD)
+  git -C "$repo" checkout -q -b upstream
+  git -C "$repo" update-index --add --cacheinfo "160000,$target_a,modules/dependency"
+  git -C "$repo" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -q -m "upstream-adds-gitlink"
+  git -C "$repo" checkout -q main
+  write "$repo" bin/fork-route.sh route
+  commit "$repo" "fork-takes-another-route"
+  target_b=$(git -C "$repo" rev-parse HEAD)
+  git -C "$repo" update-index --add --cacheinfo "160000,$target_b,modules/dependency"
+  git -C "$repo" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -q -m "fork-adds-different-gitlink"
+  git -C "$repo" update-index --cacheinfo "160000,$target_a,modules/dependency"
+  git -C "$repo" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -q -m "fork-converges-gitlink"
+
+  out=$(read_distance "$repo" --no-write) || true
+  [ "$(verdict_of "$out" upstream-adds-gitlink)" = converged ] ||
+    fail "an identical gitlink on both tips was not called converged: $out"
+
+  repo=$(world gitlinks-differ)
+  target_a=$(git -C "$repo" rev-parse HEAD)
+  git -C "$repo" checkout -q -b upstream
+  git -C "$repo" update-index --add --cacheinfo "160000,$target_a,modules/dependency"
+  git -C "$repo" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -q -m "upstream-adds-live-gitlink"
+  git -C "$repo" checkout -q main
+  write "$repo" bin/fork-route.sh route
+  commit "$repo" "fork-creates-another-target"
+  target_b=$(git -C "$repo" rev-parse HEAD)
+  git -C "$repo" update-index --add --cacheinfo "160000,$target_b,modules/dependency"
+  git -C "$repo" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -q -m "fork-adds-divergent-gitlink"
+
+  out=$(read_distance "$repo" --no-write) || true
+  [ "$(verdict_of "$out" upstream-adds-live-gitlink)" = needs-review ] ||
+    fail "a surviving divergent gitlink was not called needs-review: $out"
+  pass "gitlinks count as present paths and compare by object id"
+}
+
 test_a_live_upstream_change_this_fork_lacks_needs_review() {
   local repo out
   repo=$(world needs-review)
@@ -401,6 +444,7 @@ test_a_path_absent_from_both_sides_is_never_absorbed
 test_a_change_that_touches_no_path_is_stated_rather_than_assumed
 test_absorbed_rests_only_on_patch_equivalence
 test_tip_agreement_is_converged_and_needs_presence_on_both_sides
+test_gitlinks_are_present_paths_and_compare_by_object_id
 test_a_live_upstream_change_this_fork_lacks_needs_review
 test_counts_are_of_the_whole_range_even_when_the_list_is_windowed
 test_the_reading_names_both_repositories_it_compared
