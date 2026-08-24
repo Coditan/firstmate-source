@@ -1,8 +1,8 @@
-# Curated fork patch registry
+# Local patch stack registry
 
 This ledger records why the local patch stack exists and what each patch contributes.
-It is a durable patch registry, not an upstream merge to-do list or a standing report of upstream distance.
-[`docs/upstream-integration-plan.md`](upstream-integration-plan.md) owns how upstream effects are selected and integrated, including the 2026-08-24 session-lock hardening and the separate work needed for an upstream-check cadence.
+It is a durable local patch stack registry, not a source-integration to-do list or a standing report of source distance.
+[`docs/upstream-integration-plan.md`](upstream-integration-plan.md) owns how upstream effects are selected and integrated, including the 2026-08-24 session-lock hardening and the separate work needed for an update-source check cadence.
 Future work may inspect a row to understand a local patch, but every verdict remains subject to the evidence rule below.
 The 2026-08-01 review, extended on 2026-08-02, records all 94 fork-only, non-merge commits reported by `git rev-list --oneline --no-merges "$upstream..$fork"` for fork `22b6464` against canonical upstream `a805766`.
 That fork commit is a pinned snapshot of the fork's default branch, not a live reference.

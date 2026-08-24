@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Network-free behavior tests for the upstream firstmate update check.
+# Network-free behavior tests for the firstmate update-source check.
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -17,44 +17,44 @@ commit_file() {
 }
 
 run_check() {
-  local repo=$1 state=$2 upstream=$3
+  local repo=$1 state=$2 update_source=$3
   FM_ROOT_OVERRIDE="$repo" FM_HOME="$repo" FM_STATE_OVERRIDE="$state" \
-    FM_FIRSTMATE_COMPARE_REPO="$repo" FM_FIRSTMATE_UPSTREAM_HEAD="$upstream" \
+    FM_FIRSTMATE_COMPARE_REPO="$repo" FM_FIRSTMATE_UPDATE_SOURCE_HEAD="$update_source" \
     "$ROOT/bin/fm-firstmate-update-check.sh"
 }
 
 test_relevant_update_found_and_cleared_when_current() {
-  local repo state current upstream out
+  local repo state current update_source out
   repo="$TMP_ROOT/relevant"
   state="$TMP_ROOT/relevant-state"
   fm_git_init_commit "$repo"
   current=$(commit_file "$repo" AGENTS.md local)
-  git -C "$repo" branch upstream-fixture
-  upstream=$(commit_file "$repo" bin/new-check.sh upstream)
-  git -C "$repo" branch -f upstream-fixture "$upstream"
+  git -C "$repo" branch update-source-fixture
+  update_source=$(commit_file "$repo" bin/new-check.sh update-source)
+  git -C "$repo" branch -f update-source-fixture "$update_source"
   git -C "$repo" reset -q --hard "$current"
 
-  out=$(run_check "$repo" "$state" "$upstream")
-  assert_contains "$out" 'FIRSTMATE_UPDATE_AVAILABLE:' "relevant upstream update was not reported"
+  out=$(run_check "$repo" "$state" "$update_source")
+  assert_contains "$out" 'FIRSTMATE_UPDATE_AVAILABLE:' "relevant update-source update was not reported"
   assert_grep 'FIRSTMATE_UPDATE_AVAILABLE:' "$state/firstmate-update.available" "available signal was not persisted"
 
-  git -C "$repo" merge --ff-only -q upstream-fixture
-  out=$(run_check "$repo" "$state" "$upstream")
+  git -C "$repo" merge --ff-only -q update-source-fixture
+  out=$(run_check "$repo" "$state" "$update_source")
   [ -z "$out" ] || fail "up-to-date check emitted a diagnostic: $out"
   [ ! -f "$state/firstmate-update.available" ] || fail "up-to-date check did not clear the available signal"
-  pass "relevant upstream updates are signaled and an up-to-date deployment is silent"
+  pass "relevant update-source updates are signaled and an up-to-date deployment is silent"
 }
 
 test_installer_only_update_is_not_relevant() {
-  local repo state current upstream out
+  local repo state current update_source out
   repo="$TMP_ROOT/installer-only"
   state="$TMP_ROOT/installer-only-state"
   fm_git_init_commit "$repo"
   current=$(commit_file "$repo" AGENTS.md local)
-  upstream=$(commit_file "$repo" skills/example/SKILL.md installer-only)
+  update_source=$(commit_file "$repo" skills/example/SKILL.md installer-only)
   git -C "$repo" reset -q --hard "$current"
 
-  out=$(run_check "$repo" "$state" "$upstream")
+  out=$(run_check "$repo" "$state" "$update_source")
   [ -z "$out" ] || fail "installer-only update was treated as relevant: $out"
   [ ! -f "$state/firstmate-update.available" ] || fail "installer-only update persisted an available signal"
   pass "public installer-skill-only changes do not trigger a running-vessel update"
@@ -111,11 +111,11 @@ test_environment_override_beats_the_configured_base() {
   mkdir -p "$config"
   printf '%s\n' "$TMP_ROOT/envwins-absent-source" > "$config/firstmate-update-base"
 
-  out=$(FM_FIRSTMATE_UPSTREAM_URL="$TMP_ROOT/envwins-source" \
+  out=$(FM_FIRSTMATE_UPDATE_SOURCE_URL="$TMP_ROOT/envwins-source" \
     run_fetching_check "$repo" "$state" "$config")
   assert_contains "$out" 'FIRSTMATE_UPDATE_AVAILABLE:' "the environment override was not used as the comparison base"
   assert_not_contains "$out" 'FIRSTMATE_UPDATE_STUCK:' "the environment override did not beat the configured base"
-  assert_contains "$out" "compared: this deployment against $TMP_ROOT/envwins-source (from FM_FIRSTMATE_UPSTREAM_URL)" \
+  assert_contains "$out" "compared: this deployment against $TMP_ROOT/envwins-source (from FM_FIRSTMATE_UPDATE_SOURCE_URL)" \
     "the finding named neither the overriding repository nor the override as its hop"
   pass "an explicit environment base outranks the configured update base, and the finding names it"
 }
@@ -167,7 +167,7 @@ test_resolver_precedence_and_default() {
   local config
   config="$TMP_ROOT/resolver-config"
   mkdir -p "$config"
-  unset FM_FIRSTMATE_UPSTREAM_URL
+  unset FM_FIRSTMATE_UPDATE_SOURCE_URL FM_FIRSTMATE_UPSTREAM_URL
   # shellcheck source=bin/fm-currency-base-lib.sh disable=SC1091
   . "$ROOT/bin/fm-currency-base-lib.sh"
 
@@ -185,11 +185,22 @@ test_resolver_precedence_and_default() {
   [ "$FM_CURRENCY_BASE_VALUE" = 'https://example.invalid/fleet.git' ] \
     || fail "the config file was not used: $FM_CURRENCY_BASE_VALUE"
 
-  FM_FIRSTMATE_UPSTREAM_URL='https://example.invalid/env.git'
+  FM_FIRSTMATE_UPDATE_SOURCE_URL='https://example.invalid/env.git'
   fm_currency_base_resolve "$config" "$FM_CURRENCY_BASE_UPDATE_ITEM" \
     || fail "an environment base refused"
   [ "$FM_CURRENCY_BASE_VALUE" = 'https://example.invalid/env.git' ] \
     || fail "the environment base did not win: $FM_CURRENCY_BASE_VALUE"
+  [ "$FM_CURRENCY_BASE_SOURCE" = 'FM_FIRSTMATE_UPDATE_SOURCE_URL' ] \
+    || fail "the environment base source was misnamed: $FM_CURRENCY_BASE_SOURCE"
+  unset FM_FIRSTMATE_UPDATE_SOURCE_URL
+
+  FM_FIRSTMATE_UPSTREAM_URL='https://example.invalid/env-compat.git'
+  fm_currency_base_resolve "$config" "$FM_CURRENCY_BASE_UPDATE_ITEM" \
+    || fail "a compatibility environment base refused"
+  [ "$FM_CURRENCY_BASE_VALUE" = 'https://example.invalid/env-compat.git' ] \
+    || fail "the compatibility environment base did not win: $FM_CURRENCY_BASE_VALUE"
+  [ "$FM_CURRENCY_BASE_SOURCE" = 'FM_FIRSTMATE_UPSTREAM_URL compatibility alias' ] \
+    || fail "the compatibility environment source was misnamed: $FM_CURRENCY_BASE_SOURCE"
   unset FM_FIRSTMATE_UPSTREAM_URL
 
   pass "the shared resolver applies environment, then config file, then the documented default"
@@ -199,7 +210,7 @@ test_resolver_rejects_unusable_values() {
   local config value
   config="$TMP_ROOT/reject-config"
   mkdir -p "$config"
-  unset FM_FIRSTMATE_UPSTREAM_URL
+  unset FM_FIRSTMATE_UPDATE_SOURCE_URL FM_FIRSTMATE_UPSTREAM_URL
   # shellcheck source=bin/fm-currency-base-lib.sh disable=SC1091
   . "$ROOT/bin/fm-currency-base-lib.sh"
 
@@ -237,7 +248,7 @@ test_resolver_refuses_present_but_unusable_file() {
   local config dangling
   config="$TMP_ROOT/unusable-file-config"
   mkdir -p "$config"
-  unset FM_FIRSTMATE_UPSTREAM_URL
+  unset FM_FIRSTMATE_UPDATE_SOURCE_URL FM_FIRSTMATE_UPSTREAM_URL
   # shellcheck source=bin/fm-currency-base-lib.sh disable=SC1091
   . "$ROOT/bin/fm-currency-base-lib.sh"
 

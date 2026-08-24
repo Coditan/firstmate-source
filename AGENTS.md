@@ -490,9 +490,9 @@ The scaffold is a safety contract, not a suggestion.
 
 Firstmate's shared instruction surface reaches running homes only after it lands on the default branch and those homes fast-forward.
 Only `AGENTS.md`, `bin/`, `roles/`, and `.agents/skills/` are loaded by a running firstmate; public `skills/` is an installer-facing surface.
-`bin/fm-firstmate-update-check.sh` detects source-only changes to that instruction surface; the daily currency round of section 3 is what gives it a cadence that survives session boundaries, and `docs/fork-patches.md` owns the retained local patch registry.
+`bin/fm-firstmate-update-check.sh` detects source-only changes to that instruction surface; the daily currency round of section 3 is what gives it a cadence that survives session boundaries, and `docs/fork-patches.md` owns the retained local patch stack registry.
 When bootstrap prints `FIRSTMATE_UPDATE_AVAILABLE:`, dispatch a crewmate to notify the whole fleet through Bridge All-Ships rather than writing to Bridge directly.
-Firstmate no longer tracks canonical upstream; that is why the patch registry is now a durable local-patch record rather than a merge to-do list.
+Firstmate no longer treats the former canonical repository as a tracking source; that is why the local patch stack registry is now a durable local-patch record rather than a merge to-do list.
 When the captain invokes `/updatefirstmate` or asks to update firstmate, load the `/updatefirstmate` skill.
 It performs guarded fast-forward updates of firstmate and registered secondmate homes, refreshes instructions, and never touches anything under `projects/`.
 Bootstrap separately detects when the primary checkout's own default branch has drifted from its own origin and reports `SELF_DRIFT:`; `/updatefirstmate` resolves only the clean fast-forward (behind-only) case, while an ahead or diverged primary needs a manual preserve-and-merge crewmate task instead - `bootstrap-diagnostics` owns the exact remediation text.

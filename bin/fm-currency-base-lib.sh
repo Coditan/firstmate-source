@@ -4,11 +4,12 @@
 #
 # config/firstmate-update-base names the artifact THIS deployment updates from,
 # so bin/fm-firstmate-update-check.sh asks "does the instruction surface I
-# actually run have upstream-only changes?" against the right source.
+# actually run have source-only changes?" against the right source.
 #
 # Precedence for the comparison base, highest first:
-#   1. FM_FIRSTMATE_UPSTREAM_URL (explicit, per-invocation, passed through
+#   1. FM_FIRSTMATE_UPDATE_SOURCE_URL (explicit, per-invocation, passed through
 #      unvalidated so existing test harnesses keep working)
+#      FM_FIRSTMATE_UPSTREAM_URL is accepted as a compatibility alias.
 #   2. the local gitignored config/firstmate-update-base file
 #   3. FM_CURRENCY_BASE_DEFAULT, the update source this deployment came from
 # An absent config file therefore changes nothing for an unconfigured home.
@@ -138,9 +139,14 @@ fm_currency_base_resolve() {
   FM_CURRENCY_BASE_REASON=""
   FM_CURRENCY_BASE_VALUE=""
   FM_CURRENCY_BASE_SOURCE=""
+  if [ -n "${FM_FIRSTMATE_UPDATE_SOURCE_URL:-}" ]; then
+    FM_CURRENCY_BASE_VALUE=$FM_FIRSTMATE_UPDATE_SOURCE_URL
+    FM_CURRENCY_BASE_SOURCE="FM_FIRSTMATE_UPDATE_SOURCE_URL"
+    return 0
+  fi
   if [ -n "${FM_FIRSTMATE_UPSTREAM_URL:-}" ]; then
     FM_CURRENCY_BASE_VALUE=$FM_FIRSTMATE_UPSTREAM_URL
-    FM_CURRENCY_BASE_SOURCE="FM_FIRSTMATE_UPSTREAM_URL"
+    FM_CURRENCY_BASE_SOURCE="FM_FIRSTMATE_UPSTREAM_URL compatibility alias"
     return 0
   fi
   fm_currency_base_file_value "$config_dir" "$item"

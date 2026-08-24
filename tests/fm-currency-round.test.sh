@@ -197,10 +197,10 @@ test_behind_instruction_surface_names_the_released_hop() {
   home=$(make_home behind)
   install_round "$home"
 
-  out=$(STUB_UPDATE_OUT='FIRSTMATE_UPDATE_AVAILABLE: upstream instruction update aaa -> bbb' \
+  out=$(STUB_UPDATE_OUT='FIRSTMATE_UPDATE_AVAILABLE: update-source instruction update aaa -> bbb' \
     run_round "$home" --force)
   assert_contains "$out" 'instruction-surface (released) behind' \
-    "an upstream instruction change must be reported against the released hop"
+    "an update-source instruction change must be reported against the released hop"
   assert_contains "$out" 'Decide immediate or batch' \
     "a behind-only finding must carry the decision it needs"
   pass "an instruction-surface change is reported and named by hop"

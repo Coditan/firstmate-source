@@ -5,7 +5,7 @@ It is re-derived here against the tree as it stands, so that no later session ha
 Every figure below was measured for this document; none is carried forward from an earlier reading, and where an earlier reading and this one disagree, this one says so rather than quietly replacing it.
 
 [`docs/fork-upstream-merge-assessment.md`](fork-upstream-merge-assessment.md) remains the record of the merge attempts themselves and is not restated here.
-[`docs/fork-patches.md`](fork-patches.md) remains the authoritative patch registry and is the only place a patch verdict is recorded.
+[`docs/fork-patches.md`](fork-patches.md) remains the authoritative local patch stack registry and is the only place a patch verdict is recorded.
 This document owns one thing the other two do not: what gets taken, in what order, and why each boundary sits where it does.
 
 The daily upstream cadence is separate work and is deliberately not delivered by this unit.
@@ -172,7 +172,7 @@ Both sides added these paths with no common ancestor, so each is a design decisi
 The rest - `bin/fm-test-run.sh`, `bin/fm-pending-reply-lib.sh`, `bin/fm-subagent-pretool-check.sh`, `bin/fm-test-isolation-proof.sh`, the two skills, the six documents, the three `.pi` extensions and the ten test counterparts - are one decision each.
 Group them only where one decision genuinely covers several files, such as a script and its own test.
 
-### Stage 7 - the patch registry
+### Stage 7 - the local patch stack registry
 
 **Scope.** Add the fourth verdict category the captain approved on 2026-08-19, apply it to the sixteen patches that have no honest verdict, and then close the registry's coverage gap.
 
