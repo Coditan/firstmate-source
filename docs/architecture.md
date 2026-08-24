@@ -29,6 +29,7 @@ Fresh stale panes use the same current-state read before trusting the status log
 No-change heartbeats are also benign.
 Absorbed wakes advance their suppression markers, log to `state/.watch-triage.log`, and keep the watcher blocking without a queue record or LLM turn.
 Possible-wedge candidates additionally retain their exact surfaced or suppressed disposition in `state/.wedge-alarm-history`, which is not size-capped like the triage debug log.
+After parked-marker reconciliation, the watcher prunes per-task suppression markers whose task metadata, status, and recorded window are gone, while preserving global queue, lock, batch, journal, and append-only history records.
 After each drain, `fm-wake-drain.sh` runs the same liveness guard as the supervision scripts, so a lapsed watcher chain surfaces even on a turn that only drains and handles queued wakes.
 Routine watcher polling, supervision no-ops, elapsed waiting time, and absorbed benign wakes stay silent.
 A declared external wait trades that silence for one bounded recheck per pause window, so a forgotten pause cannot remain invisible indefinitely.
@@ -86,6 +87,7 @@ The guard covers the main primary and genuinely marked secondmate homes, exempts
 
 A presence-gated sub-supervisor (`bin/fm-supervise-daemon.sh`) extends this for walk-away supervision: the `/afk` skill starts it through the tracked foreground helper `bin/fm-afk-start.sh`, after which the external watcher keeps enqueuing and the away daemon reads new queue records without draining the queue.
 The watcher and daemon share `bin/fm-classify-lib.sh` for captain-relevant status verbs, declared-external-wait vocabulary, and status-scan primitives.
+The daemon housekeeping prunes only its own orphaned per-task markers and leaves away-mode escalation buffers and failed-delivery wedge markers intact.
 Terminal verbs remain captain-relevant, while a nonterminal progress verb cannot become terminal merely because its prose contains a legacy free-text token such as `merged`; bare legacy free-text lines remain compatible.
 The always-on watcher also uses that library's absorb classification on no-verb signals and first-sighting stale panes before status-log terminality is trusted, while the daemon maintains distinct wedge and declared-pause recheck cadences.
 The watcher reads that classification once more when a wedge timer would escalate, so an idle pane whose run is still active - or parked at the decision gate above with its worker confirmed alive - never climbs the escalation ladder, and a hold lasting a full pause-recheck window still surfaces one bounded recheck.

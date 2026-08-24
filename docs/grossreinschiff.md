@@ -97,7 +97,7 @@ That belongs written down beside the adoption.
 
 ### 9. Leftover workspaces and state
 
-Worktrees held by closed tasks, parked markers for tasks that are done, stale check registrations.
+Worktrees held by closed tasks, stale check registrations, and script-owned state markers whose producers do not clean up after task teardown.
 
 Live instance on this home, 2026-08-03:
 
@@ -113,7 +113,8 @@ Live instance on this home, 2026-08-03:
 
 A check registration and its trust binding for `graph-freshness`, with no `state/graph-freshness.meta` - the task is gone and the check is still armed for the watcher.
 
-`data/learnings.md`, 2026-08-03 adds the trap for this item: re-running `bin/fm-pr-check.sh` on a task silently drops that task's `state/.parked-*` marker. A missing marker is therefore not proof the task is finished.
+Superseded 2026-08-24 for per-task watcher and away-supervisor markers: their owning long-lived loops now prune orphaned markers through `bin/fm-state-marker-prune-lib.sh` after the task metadata, status, and recorded window are gone, while preserving global buffers and append-only history.
+The stale check registration case remains on the weekly sweep because custom checks are separate watcher inputs, not per-task suppression markers.
 
 ## The landedness ladder, and why ancestry is banned
 

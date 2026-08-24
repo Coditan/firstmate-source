@@ -187,10 +187,9 @@ The broader 2026-08-17 provenance sweep found no other tracked firstmate artefac
 **Look for:** artefacts outliving the task that created them.
 **Test:** reconcile each artefact against live task metadata (`state/<id>.meta`) and the pool (`treehouse status`):
 - worktrees held by tasks that are closed;
-- `state/.parked-*` markers for tasks that are done;
 - `state/<id>.check.sh` and `state/<id>.check-trust` with no `state/<id>.meta`.
+Per-task watcher and away-supervisor markers are pruned by their owning loops; `bin/fm-state-marker-prune-lib.sh`'s header owns that pruning boundary.
 **Never reclaim a worktree the sweep cannot prove is clean.** `bin/fm-teardown.sh` owns the complete test and its refusal is the correct answer, not an obstacle - property 3.
-**Care:** re-running `bin/fm-pr-check.sh` on a task silently drops that task's `state/.parked-*` marker, so a missing marker is not by itself proof the task is done (`data/learnings.md`, 2026-08-03).
 **Who acts:** firstmate, on its own state; worktree return goes through `bin/fm-teardown.sh`.
 **Evidence:** `state/graph-freshness.check.sh` and `state/graph-freshness.check-trust` exist on this home with no `state/graph-freshness.meta` - a check registration outliving its task, still armed for the watcher. Observed 2026-08-03.
 
