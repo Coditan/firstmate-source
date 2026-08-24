@@ -55,7 +55,8 @@ The record's consumer is the stow-then-clear mechanism.
 
 ## Only the session that can hold the lock writes the record
 
-Recording is gated on the home's session lock, and `fm_session_lock_held_by_other` in `bin/fm-harness-pid-lib.sh` is the single owner of the live-other-session test that `bin/fm-lock.sh` also uses, so the record gate and lock acquisition cannot drift on which existing holder they refuse.
+Recording is gated on the home's session lock, and `fm_session_lock_held_by_other` in `bin/fm-harness-pid-lib.sh` is the single owner of the test that decides whether this session can show the home is free.
+`bin/fm-lock.sh` uses the same predicate, so the record gate and lock acquisition cannot drift on whether they refuse a live other holder, an unreadable lock, or a lock path that is not a usable regular file.
 A session start that finds another live harness holding `state/.lock` writes nothing, removes nothing, and still prints the nudge, because a lock-refused session must still run session start to discover that it is read-only.
 
 Until 2026-08-19 the record was written unconditionally, and that produced the same failure through two different doors.

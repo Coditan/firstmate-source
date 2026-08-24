@@ -95,7 +95,7 @@ Read the complete digest once and trust it as this turn's startup and recovery i
 Do not separately re-read the context, backlog, metadata, or bulk status inputs it just printed unless a source was reported absent or corrupt, older history is specifically needed, or a targeted workflow must inspect before writing.
 An `ABSENT` captain, shared-captain, secondmate, or learnings file means the firstmate repo's built-in defaults, no shared captain preferences, no registered secondmates, or no captured learnings; rebuild an absent or stale project registry from the clones before dispatch.
 
-If the session lock is refused, tell the captain another active session is managing the fleet and remain read-only.
+If the session lock is refused, report the refusal reason and remain read-only.
 A lock-refused session must not spawn, steer, merge, drain the wake queue, repair supervision, repair a checkout, or perform any other fleet mutation.
 
 Bootstrap detects first, asks for consent, and installs only after the captain approves in the current session.

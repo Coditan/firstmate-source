@@ -1,9 +1,9 @@
 # Curated fork patch registry
 
 This ledger records why the local patch stack exists and what each patch contributes.
-It is no longer a merge to-do list: on 2026-08-23 the captain decided to stop tracking canonical upstream after the re-measurement in [`docs/fork-upstream-merge-assessment.md`](fork-upstream-merge-assessment.md) showed two products rather than a product and its fork.
-That decision accepted a known cost: upstream carries real robustness work this repository lacks, specifically the `bin/fm-lock.sh` write-probe and claim-lock hardening named by the re-measurement, but that work is entangled with the arm-serving code split and is not lifted piecemeal here.
-Future work may still inspect a row to understand a local patch, but noticing a missing upstream fix is not by itself a reason to reopen upstream tracking.
+It is a durable patch registry, not an upstream merge to-do list or a standing report of upstream distance.
+[`docs/upstream-integration-plan.md`](upstream-integration-plan.md) owns how upstream effects are selected and integrated, including the 2026-08-24 session-lock hardening and the separate work needed for an upstream-check cadence.
+Future work may inspect a row to understand a local patch, but every verdict remains subject to the evidence rule below.
 The 2026-08-01 review, extended on 2026-08-02, records all 94 fork-only, non-merge commits reported by `git rev-list --oneline --no-merges "$upstream..$fork"` for fork `22b6464` against canonical upstream `a805766`.
 That fork commit is a pinned snapshot of the fork's default branch, not a live reference.
 Commits can land here after this registry's pinned snapshot, so part of such a divergence is simply newer landed work rather than an omission on this home's side.
