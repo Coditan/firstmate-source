@@ -110,8 +110,9 @@
 #
 # State, under FM_HOME/state:
 #   memory-reading.samples   the previous sample this run measures growth
-#                            against: one epoch line and one record per tracked
-#                            process
+#                            against: one `epoch <seconds>` line and then
+#                            one `pid<TAB>start_epoch<TAB>rss_kb` record per
+#                            tracked process
 #
 # Environment:
 #   FM_MEMORY_TRACK_MIB       tracking floor in MiB (default 32)
