@@ -316,6 +316,7 @@ test_failed_git_evidence_never_becomes_a_verdict() {
   shim="$TMP_ROOT/git-shim"
   mkdir -p "$shim"
   real_git=$(command -v git)
+  # shellcheck disable=SC2016  # the shim body is written verbatim and expands at shim run time
   printf '%s\n' '#!/usr/bin/env bash' \
     'if [ "${3:-}" = "$FAIL_GIT_COMMAND" ]; then' \
     '  printf "injected %s failure\n" "$FAIL_GIT_COMMAND" >&2' \
