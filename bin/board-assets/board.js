@@ -37,6 +37,12 @@
  * returns its square to pencil and the count with it, for the same reason - the
  * answer now showing is one nobody has received.
  *
+ * Board state is also persisted in this browser per board file. A board is a
+ * static sheet: the durable answer record is the Lavish poll result, not the
+ * HTML file. But a reopened sheet that renders all questions blank after they
+ * were queued reads exactly like the answers were discarded, so the sheet keeps
+ * enough local state to render its own last-known marks honestly on reopen.
+ *
  * The strip is BUILT here rather than declared in a board body. A count that is
  * typed by hand is a count that can be wrong, and this one exists precisely
  * because a wrong count about what reached the captain is the defect. The
@@ -67,7 +73,9 @@
   var TEXT = {
     de: {
       queued: 'Vorgemerkt: ',
+      sent: 'Zurückgeschickt: ',
       queuedNote: 'Vorgemerkt: freie Anmerkung',
+      sentNote: 'Zurückgeschickt: freie Anmerkung',
       empty: 'Nichts vorgemerkt: bitte eine Option wählen oder eine Anmerkung schreiben.',
       decision: 'Entscheidung "',
       noChoice: '(keine Option gewählt)',
@@ -86,7 +94,9 @@
     },
     en: {
       queued: 'Queued: ',
+      sent: 'Sent back: ',
       queuedNote: 'Queued: note only',
+      sentNote: 'Sent back: note only',
       empty: 'Nothing queued: choose an option or write a note.',
       decision: 'Decision "',
       noChoice: '(no option chosen)',
@@ -176,6 +186,10 @@
     say(form, answer.choice ? T.queued + answer.choice : T.queuedNote, false);
   }
 
+  function markSent(form, answer) {
+    say(form, answer.choice ? T.sent + answer.choice : T.sentNote, false);
+  }
+
   function markUnanswered(form) {
     say(form, T.empty, true);
   }
@@ -188,6 +202,7 @@
 
   var QUESTIONS = [];
   var STATE = {};
+  var SAVED = {};
   var strip = null;
   var stripCount = null;
   var stripNumber = null;
@@ -227,6 +242,77 @@
   function squareLabel(index, state) {
     var tail = state === 'struck' ? T.sqStruck : state === 'pencil' ? T.sqPencil : T.sqBlank;
     return String(index + 1) + '. ' + QUESTIONS[index].label + tail;
+  }
+
+  function storageKey() {
+    var loc = window.location || {};
+    var file = loc.pathname || loc.href || document.URL || '';
+    return 'fm-board-state:v1:' + file;
+  }
+
+  function storage() {
+    try {
+      var s = window.localStorage;
+      var k = '__fm_board_storage_probe__';
+      if (!s || typeof s.getItem !== 'function' || typeof s.setItem !== 'function') {
+        return null;
+      }
+      s.setItem(k, '1');
+      if (typeof s.removeItem === 'function') {
+        s.removeItem(k);
+      }
+      return s;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function loadSaved() {
+    var s = storage();
+    if (!s) {
+      return {};
+    }
+    try {
+      var raw = s.getItem(storageKey());
+      var parsed = raw ? JSON.parse(raw) : {};
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function saveQuestion(key, state, answer) {
+    var s = storage();
+    if (!s || !key) {
+      return;
+    }
+    SAVED[key] = {
+      state: state === 'struck' || state === 'pencil' ? state : 'blank',
+      choice: answer && answer.choice ? String(answer.choice) : '',
+      note: answer && answer.note ? String(answer.note) : ''
+    };
+    try {
+      s.setItem(storageKey(), JSON.stringify(SAVED));
+    } catch (e) {
+      // Persistence is only presentation recovery. The board remains usable
+      // when a browser refuses storage.
+    }
+  }
+
+  function restoreAnswer(form, answer) {
+    if (!answer) {
+      return;
+    }
+    if (answer.choice && form.querySelectorAll) {
+      var radios = form.querySelectorAll('input[type="radio"]');
+      for (var i = 0; i < radios.length; i++) {
+        radios[i].checked = radios[i].value === answer.choice;
+      }
+    }
+    var note = form.querySelector('[data-fm-note]');
+    if (note && answer.note) {
+      note.value = answer.note;
+    }
   }
 
   function buildStrip() {
@@ -340,6 +426,7 @@
     var form = el.closest('form[data-fm-question]');
     if (form) {
       setState(form, 'pencil');
+      saveQuestion(questionKey(form), 'pencil', answerOf(form));
     }
   }
 
@@ -401,6 +488,8 @@
     // Only here. This is the completed submit, and the only transition that
     // takes a square out of the count.
     setState(form, 'struck');
+    markSent(form, answer);
+    saveQuestion(key, 'struck', answer);
   }
 
   function showOffline(show) {
@@ -532,6 +621,7 @@
     pickLanguage();
     QUESTIONS = [];
     STATE = {};
+    SAVED = loadSaved();
     // The playbook wants data-lavish-question on the question wrapper. Derive it
     // from data-fm-question so a board body declares the key exactly once.
     var forms = document.querySelectorAll('form[data-fm-question]');
@@ -544,7 +634,14 @@
       reportFormDefects(forms[i]);
       if (key && !(key in STATE)) {
         QUESTIONS.push({ key: key, label: questionLabel(forms[i]), jump: jumpTarget(forms[i]) });
-        STATE[key] = 'blank';
+        var saved = SAVED[key] || {};
+        STATE[key] = saved.state === 'struck' || saved.state === 'pencil' ? saved.state : 'blank';
+        restoreAnswer(forms[i], saved);
+        if (STATE[key] === 'struck') {
+          markSent(forms[i], saved);
+        } else if (STATE[key] === 'pencil') {
+          markQueued(forms[i], saved);
+        }
       }
     }
     buildStrip();

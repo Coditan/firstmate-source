@@ -18,6 +18,8 @@
 //      asserted, because the wrong one is the failure the strip exists to fix:
 //      a mark the captain chose but never sent reaches nobody, and a count that
 //      dropped when he merely chose would tell him it had.
+//   5. A reopened board restores the browser-local submitted/editing state for
+//      the same board file, so an already answered sheet does not render blank.
 
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -112,10 +114,21 @@ function buildForm(key, { choice, note, radio, entryId, noNote } = {}) {
     entry.appendChild(form);
   }
   form._formData = new Map([[key, choice]]);
+  form._formData._form = form;
   return { form, queued, note: noteEl };
 }
 
-function install({ withLavish, lang = 'de' } = {}) {
+function makeStorage(seed = {}) {
+  const store = { ...seed };
+  return {
+    _store: store,
+    getItem: (k) => (k in store ? store[k] : null),
+    setItem: (k, v) => { store[k] = String(v); },
+    removeItem: (k) => { delete store[k]; },
+  };
+}
+
+function install({ withLavish, lang = 'de', storage = makeStorage(), path = '/boards/test.html' } = {}) {
   const queued = [];
   const warnings = [];
   const offline = makeElement('div');
@@ -137,18 +150,30 @@ function install({ withLavish, lang = 'de' } = {}) {
   global.window = {
     setTimeout: () => { /* never fire: keeps the poll from looping in-test */ },
     console: { warn: (m) => warnings.push(String(m)) },
+    localStorage: storage,
+    location: { pathname: path },
     lavish: withLavish
       ? { queuePrompt: (text, opts) => queued.push({ text, opts }) }
       : undefined,
   };
   global.FormData = class {
     constructor(form) { this._m = form._formData; }
-    get(k) { return this._m.get(k); }
+    get(k) {
+      const recorded = this._m.get(k);
+      if (recorded !== null && recorded !== undefined && recorded !== '') return recorded;
+      const radios = formsOfMap(this._m).filter((el) =>
+        el.tagName === 'INPUT' && el.name === k && el.checked);
+      return radios[0] ? radios[0].value : recorded;
+    }
   };
   // Evaluate the real script against these globals.
   // eslint-disable-next-line no-new-func
   new Function('window', 'document', 'FormData', source)(global.window, doc, global.FormData);
-  return { doc, queued, offline, warnings, tally };
+  return { doc, queued, offline, warnings, tally, storage };
+}
+
+function formsOfMap(map) {
+  return map && map._form ? map._form.children : [];
 }
 
 // reinit - re-run the script with these forms visible, so init() sees them.
@@ -406,6 +431,52 @@ function input(doc, el) {
 // --- 13. a board that asks nothing prints no strip ------------------------
 
 {
+  const sharedStorage = makeStorage();
+  const first = install({ withLavish: true, storage: sharedStorage, path: '/boards/reopen.html' });
+  const sent = buildForm('q1', {
+    choice: undefined,
+    note: 'stored',
+    radio: { name: 'q1', value: 'A', checked: true },
+    entryId: 'e1',
+  });
+  reinit(first.doc, [sent.form]);
+  submit(first.doc, sent.form);
+  check(tallyCount(first.tally) === 0, 'the first submit clears the reopened-board fixture count');
+
+  const reopened = install({ withLavish: true, storage: sharedStorage, path: '/boards/reopen.html' });
+  const restored = buildForm('q1', {
+    choice: undefined,
+    radio: { name: 'q1', value: 'A', checked: false },
+    entryId: 'e1',
+  });
+  reinit(reopened.doc, [restored.form]);
+  const restoredRadio = restored.form.children.find((el) => el.tagName === 'INPUT');
+  check(tallyCount(reopened.tally) === 0,
+    'a reopened board restores the submitted question as already sent');
+  check(restoredRadio.checked === true,
+    'a reopened board restores the selected option instead of rendering blank controls');
+  check(restored.queued.textContent.includes('Zurückgeschickt'),
+    'a reopened submitted answer says it was already sent back in the question body');
+
+  restored.note.value = 'changed after reopen';
+  input(reopened.doc, restored.note);
+
+  const edited = install({ withLavish: true, storage: sharedStorage, path: '/boards/reopen.html' });
+  const editedForm = buildForm('q1', {
+    choice: undefined,
+    radio: { name: 'q1', value: 'A', checked: false },
+    entryId: 'e1',
+  });
+  reinit(edited.doc, [editedForm.form]);
+  check(tallyCount(edited.tally) === 1,
+    'an edited reopened answer persists as chosen-but-unsent on the next reopen');
+  check(stripParts(edited.tally).row.innerHTML.includes('#fm-mk-pencil'),
+    'the edited reopened answer restores the pencil mark rather than the struck mark');
+}
+
+// --- 14. a board that asks nothing prints no strip ------------------------
+
+{
   const { doc, tally, warnings } = install({ withLavish: true });
   reinit(doc, []);
   check(tally.hasAttribute('hidden'), 'a board with no questions leaves the strip hidden');
@@ -414,7 +485,7 @@ function input(doc, el) {
     'a board with no questions is not warned about a strip it does not need');
 }
 
-// --- 14. the strip follows the document language --------------------------
+// --- 15. the strip follows the document language --------------------------
 
 {
   const { doc, tally } = install({ withLavish: true, lang: 'en' });
@@ -426,7 +497,7 @@ function input(doc, el) {
     'an English board gets an English tally group name');
 }
 
-// --- 15. every decision form is named ------------------------------------
+// --- 16. every decision form is named ------------------------------------
 //
 // Not cosmetic. Whether a <form> reaches the accessibility tree as role "form"
 // at all depends on it: HTML-AAM exposes an UNNAMED form as a generic container
