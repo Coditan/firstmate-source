@@ -361,6 +361,70 @@ test_status_reports_an_unreachable_state_without_trying_to_create_it() {
     "status must distinguish an unreadable state directory from a free lock"
 }
 
+test_a_symlink_to_a_usable_state_directory_is_used_consistently() {
+  local root fakebin harness out
+  prepare symlinked-state-directory
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
+  rmdir "$root/state"
+  mkdir "$root/real-state"
+  ln -s "$root/real-state" "$root/state"
+
+  out=$(run_lock "$root" "$fakebin") \
+    || fail "acquisition must accept a state path resolving to a usable directory"
+  assert_contains "$out" "lock acquired: harness pid $harness" \
+    "acquisition through a state-directory symlink must publish authority"
+  [ "$(cat "$root/real-state/.lock")" = "$harness" ] \
+    || fail "the lock must land in the resolved state directory"
+
+  out=$(run_lock "$root" "$fakebin" status) || fail "status must always exit 0"
+  assert_contains "$out" "lock: held by live harness pid $harness" \
+    "status must inspect the same resolved state directory acquisition uses"
+}
+
+test_unusable_state_paths_are_refused_and_reported_unavailable() {
+  local root fakebin out status
+
+  prepare dangling-state-path
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN
+  rmdir "$root/state"
+  ln -s "$root/missing-state" "$root/state"
+  status=0
+  out=$(run_lock "$root" "$fakebin") || status=$?
+  expect_code 1 "$status" "acquisition must refuse a dangling state-directory symlink"
+  assert_contains "$out" "cannot create session-lock state directory" \
+    "a dangling state-directory symlink must retain the creation refusal"
+  out=$(run_lock "$root" "$fakebin" status) || fail "status must always exit 0"
+  assert_contains "$out" "lock: unavailable (state path is not a directory)" \
+    "status must report a dangling state-directory symlink as unusable"
+
+  prepare state-symlink-to-file
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN
+  rmdir "$root/state"
+  : > "$root/state-file"
+  ln -s "$root/state-file" "$root/state"
+  status=0
+  out=$(run_lock "$root" "$fakebin") || status=$?
+  expect_code 1 "$status" "acquisition must refuse a state path resolving to a file"
+  assert_contains "$out" "cannot create session-lock state directory" \
+    "a state symlink to a file must retain the creation refusal"
+  out=$(run_lock "$root" "$fakebin" status) || fail "status must always exit 0"
+  assert_contains "$out" "lock: unavailable (state path is not a directory)" \
+    "status must report a state symlink to a file as unusable"
+
+  prepare regular-file-state-path
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN
+  rmdir "$root/state"
+  : > "$root/state"
+  status=0
+  out=$(run_lock "$root" "$fakebin") || status=$?
+  expect_code 1 "$status" "acquisition must refuse a regular file at the state path"
+  assert_contains "$out" "cannot create session-lock state directory" \
+    "a regular file at the state path must retain the creation refusal"
+  out=$(run_lock "$root" "$fakebin" status) || fail "status must always exit 0"
+  assert_contains "$out" "lock: unavailable (state path is not a directory)" \
+    "status must report a regular file at the state path as unusable"
+}
+
 test_a_lock_that_is_not_a_regular_file_is_refused_and_not_written_through() {
   local root fakebin harness out status=0 target
   prepare symlinked
@@ -460,6 +524,8 @@ test_acquisition_serialises_on_the_claim_lock
 test_an_unreadable_lock_is_never_treated_as_free
 test_status_never_reports_an_unreadable_lock_as_free
 test_status_reports_an_unreachable_state_without_trying_to_create_it
+test_a_symlink_to_a_usable_state_directory_is_used_consistently
+test_unusable_state_paths_are_refused_and_reported_unavailable
 test_a_lock_that_is_not_a_regular_file_is_refused_and_not_written_through
 test_a_dangling_lock_symlink_is_refused_rather_than_created
 test_a_state_directory_that_cannot_be_written_refuses_before_claiming

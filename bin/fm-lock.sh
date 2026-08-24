@@ -35,7 +35,7 @@ if [ "${1:-}" = "status" ]; then
     echo "lock: unavailable (state directory absent)"
     exit 0
   fi
-  if [ ! -d "$STATE" ] || [ -L "$STATE" ]; then
+  if [ ! -d "$STATE" ]; then
     echo "lock: unavailable (state path is not a directory)"
     exit 0
   fi
