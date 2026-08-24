@@ -152,8 +152,8 @@ Growth has its own set, because an unmeasurable growth rate is the easiest thing
 | no prior sample | scope, "nothing to compare against" - never `+0.0 MiB/min`; exit 0 remains possible |
 | stored sample has no usable epoch | `unmeasured` input `growth-sample`; exit 3 |
 | stored sample body cannot be read | `unmeasured` input `growth-sample`; never converted into first sightings; exit 3 |
-| stored sample contains a malformed process record | `unmeasured` input `growth-sample`; exit 3 |
-| stored sample has a valid epoch and no process records | measured empty baseline; current processes are first sightings; exit 0 remains possible |
+| stored sample contains some malformed process records | malformed records are dropped, counted in the growth section and JSON, and growth is measured from the remaining records; exit 0 remains possible |
+| stored sample has no usable process records | `unmeasured` input `growth-sample`; exit 3 |
 | stored sample is future-dated | `unmeasured` input `growth-sample`; exit 3 |
 | stored sample older than the growth window | `unmeasured` input `growth-sample`, with the age and window; exit 3 |
 | stored or explicit interval shorter than the divide-by floor | scope, with the interval and floor; exit 0 remains possible |

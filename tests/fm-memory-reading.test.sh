@@ -532,7 +532,7 @@ test_the_watcher_interval_still_reports_a_real_rate() {
 test_the_observed_delayed_interval_remains_measurable() {
   local dir="$TMP_ROOT/delayed" out status=0
   new_scene "$dir"
-  write_sample "$dir/samples" $((NOW - 926))
+  write_sample "$dir/samples" $((NOW - 926)) "1000=$((NOW - 600)):512000"
   out=$(run_reading "$dir") || status=$?
   expect_code 0 "$status" "the observed 926-second delayed interval"
   assert_contains "$out" 'measured over 926s' 'the observed delayed interval was not retained as measured'
@@ -594,19 +594,33 @@ EOF
 
   rm -rf "$dir"
   new_scene "$dir"
+  write_sample "$dir/samples" $((NOW - 300)) "1000=$((NOW - 600)):512000"
+  printf 'not-a-pid\t123\t456\n' >> "$dir/samples"
+  status=0
+  out=$(run_reading "$dir" --no-store) || status=$?
+  expect_code 0 "$status" "one malformed stored sample record alongside usable records"
+  assert_contains "$out" 'memory-reading: complete' 'one malformed sample record blinded the whole reading'
+  assert_contains "$out" 'dropped 1 malformed stored sample record' 'the dropped sample record count was not named'
+  assert_not_contains "$out" 'growth-sample' 'one malformed sample record was reported as a failed growth instrument'
+  status=0
+  out=$(run_reading "$dir" --no-store --json) || status=$?
+  expect_code 0 "$status" "json with one malformed stored sample record alongside usable records"
+  [ "$(printf '%s' "$out" | jq -r '.growth.dropped_sample_records')" = 1 ] \
+    || fail "json did not expose the dropped stored-sample record count"
+
   write_sample "$dir/samples" $((NOW - 300))
   printf 'not-a-pid\t123\t456\n' >> "$dir/samples"
   status=0
   out=$(run_reading "$dir") || status=$?
-  expect_code 3 "$status" "a malformed sample process record"
-  assert_contains "$out" 'malformed process record' 'the malformed sample record was silently discarded'
+  expect_code 3 "$status" "a stored sample with no usable process records"
+  assert_contains "$out" 'carries no usable process records' 'an all-bad sample body was not refused'
 
   write_sample "$dir/samples" $((NOW - 300))
   status=0
   out=$(run_reading "$dir") || status=$?
-  expect_code 0 "$status" "a well-formed sample with no process records"
-  assert_contains "$out" 'first sighting of this process' 'a well-formed empty sample was treated as a failed read'
-  pass "sample body failures are incomplete while a valid empty body remains usable"
+  expect_code 3 "$status" "a stored sample with an empty process body"
+  assert_contains "$out" 'carries no usable process records' 'an empty sample body was not refused'
+  pass "sample body failures are incomplete while isolated malformed records are dropped and counted"
 }
 
 test_a_reused_pid_is_not_reported_as_growth() {
