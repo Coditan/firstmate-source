@@ -330,6 +330,37 @@ test_status_never_reports_an_unreadable_lock_as_free() {
     "a lock that cannot be read must be its own state and never free"
 }
 
+test_status_reports_an_unreachable_state_without_trying_to_create_it() {
+  local root fakebin out status=0
+  if [ "$IS_ROOT" -eq 1 ]; then
+    echo "skip: running as root, so mode bits do not block state access"
+    return 0
+  fi
+
+  prepare status-uncreatable
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN
+  mkdir -p "$root/sealed"
+  chmod 500 "$root/sealed"
+  out=$(env -u FM_HOME -u FM_ROOT_OVERRIDE PATH="$fakebin:$PATH" \
+    FM_STATE_OVERRIDE="$root/sealed/state" "$LOCK_SH" status 2>&1) || status=$?
+  chmod 700 "$root/sealed"
+  expect_code 0 "$status" "status must succeed when the state directory cannot be created"
+  assert_contains "$out" "lock: unavailable (state directory absent)" \
+    "status must not call an unreachable absent state directory free"
+  [ ! -e "$root/sealed/state" ] \
+    || fail "status must not create the state directory it inspects"
+
+  prepare status-unreadable-state
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN
+  chmod 000 "$root/state"
+  status=0
+  out=$(run_lock "$root" "$fakebin" status) || status=$?
+  chmod 700 "$root/state"
+  expect_code 0 "$status" "status must succeed when the state directory cannot be read"
+  assert_contains "$out" "lock: unavailable (state directory unreadable)" \
+    "status must distinguish an unreadable state directory from a free lock"
+}
+
 test_a_lock_that_is_not_a_regular_file_is_refused_and_not_written_through() {
   local root fakebin harness out status=0 target
   prepare symlinked
@@ -428,6 +459,7 @@ test_a_session_reacquiring_its_own_lock_is_answered_without_the_claim
 test_acquisition_serialises_on_the_claim_lock
 test_an_unreadable_lock_is_never_treated_as_free
 test_status_never_reports_an_unreadable_lock_as_free
+test_status_reports_an_unreachable_state_without_trying_to_create_it
 test_a_lock_that_is_not_a_regular_file_is_refused_and_not_written_through
 test_a_dangling_lock_symlink_is_refused_rather_than_created
 test_a_state_directory_that_cannot_be_written_refuses_before_claiming

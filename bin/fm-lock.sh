@@ -26,18 +26,23 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 LOCK="$STATE/.lock"
-# A state directory that cannot be created is refused rather than carried on
-# from: every later step here writes into it, and reporting an acquired lock
-# that lives nowhere is the exact failure the verification below exists to stop.
-mkdir -p "$STATE" 2>/dev/null || {
-  echo "error: cannot create session-lock state directory $STATE; operate read-only until resolved" >&2
-  exit 1
-}
 
 # shellcheck source=bin/fm-harness-pid-lib.sh
 . "$SCRIPT_DIR/fm-harness-pid-lib.sh"
 
 if [ "${1:-}" = "status" ]; then
+  if [ ! -e "$STATE" ] && [ ! -L "$STATE" ]; then
+    echo "lock: unavailable (state directory absent)"
+    exit 0
+  fi
+  if [ ! -d "$STATE" ] || [ -L "$STATE" ]; then
+    echo "lock: unavailable (state path is not a directory)"
+    exit 0
+  fi
+  if [ ! -r "$STATE" ] || [ ! -x "$STATE" ]; then
+    echo "lock: unavailable (state directory unreadable)"
+    exit 0
+  fi
   if { [ -e "$LOCK" ] || [ -L "$LOCK" ]; } && { [ ! -f "$LOCK" ] || [ -L "$LOCK" ]; }; then
     echo "lock: unavailable (not a regular file)"
     exit 0
@@ -50,6 +55,14 @@ if [ "${1:-}" = "status" ]; then
   if fm_harness_alive "$old"; then echo "lock: held by live harness pid $old"; else echo "lock: stale (pid $old dead or not a harness)"; fi
   exit 0
 fi
+
+# A state directory that cannot be created is refused rather than carried on
+# from: every later step here writes into it, and reporting an acquired lock
+# that lives nowhere is the exact failure the verification below exists to stop.
+mkdir -p "$STATE" 2>/dev/null || {
+  echo "error: cannot create session-lock state directory $STATE; operate read-only until resolved" >&2
+  exit 1
+}
 
 # Why this refusal names two different causes: a lock held by a live session and
 # a lock nobody can read are both reasons not to proceed, but only one of them is
