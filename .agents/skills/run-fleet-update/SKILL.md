@@ -114,7 +114,6 @@ Real output from this seat, 2026-08-17 (the `seat-can-update` line reads the che
 ```
 round: 2026-08-17T01:30:57Z
 reading: instruction-surface hop=released state=ok detail=no instruction-surface change on the configured update source
-reading: fork-absorption hop=released state=ok detail=the curated fork has absorbed real upstream content, or the three-day cadence has not reopened
 reading: pin-age hop=pinned state=behind detail=the pin 6ef0e3e is 72 commit(s) and 15 merged PR(s) behind main on https://github.com/Coditan/firstmate-source.git (source head 49a7688)
 reading: seat-can-update hop=installed state=blocked detail=this checkout is on fm/fm-run-fleet-update-skill, not main; an arriving update would be skipped
 reading: tool:gh hop=installed state=ok detail=2.97.0 against 2.97.0

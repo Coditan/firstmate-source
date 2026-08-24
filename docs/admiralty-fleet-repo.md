@@ -153,7 +153,7 @@ None of that means the canonical upstream template absorbed those patches: the v
   A vessel's own `origin` is the authority on whether that vessel has been cut over; read it there.
 - Restoring the ancestry as this fork's `main` advances past `e52cc76` is an open captain decision, not a solved problem.
   Ancestry is a property of the commit graph and not of tree content, so a pin bump alone does not restore it: a bump commit on `admiralty` copies the fork's newer tree, but it does not add the fork's newer commits to `admiralty`'s ancestor set.
-  Absorbing that history so an already-updated vessel stays fast-forwardable needs a true merge of the fork's `main` into `admiralty`'s `main`, which is consistent with the standing rule that upstream-sync pull requests land as true merge commits rather than squashes.
+  Absorbing that history so an already-updated vessel stays fast-forwardable needs a true merge of the fork's `main` into `admiralty`'s `main`, for the same ancestry-preserving reason [forgejo-merge-helper.md](forgejo-merge-helper.md) records for vendored pin merges.
   How such a merge interacts with the drift gate is no longer the open part: `admiralty`'s own `fleet/doctrine/pin-and-bump.md` owns the merge-bump procedure, including regenerating the manifest in that same commit and the verification to put in the pull request.
   **The procedure has since been applied.**
   `admiralty`'s `chore(pin): bump vendored firstmate to b5c0bf6` (commit `4bf4acfd3f9eb5ad6edc99e84c2221843f0b500b`, 2026-08-04) lands as a true merge: its second parent is this fork's `b5c0bf65d43ca274e8f8ae3b700426d614e7585c`, so `admiralty`'s ancestor set now includes the fork's history up to that commit, not just its tree.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC1091,SC2016,SC2088
+# shellcheck disable=SC1091,SC2016,SC2031,SC2088
 # Behavior tests for the protected-command PreToolUse seatbelt (docs/arm-pretool-check.md).
 #
 # bin/fm-arm-command-policy.mjs is the single owner of command classification.
@@ -13,6 +13,7 @@ set -u
 
 CHECK="$ROOT/bin/fm-arm-pretool-check.sh"
 POLICY="$ROOT/bin/fm-arm-command-policy.mjs"
+export FM_HOME="$ROOT"
 
 # --- full cross-harness acceptance matrix ----------------------------------
 

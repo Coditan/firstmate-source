@@ -1,17 +1,13 @@
 # Curated fork patch registry
 
-This ledger is the fork-maintenance tax that the fleet repository is meant to end; see [`docs/admiralty-fleet-repo.md`](admiralty-fleet-repo.md) for what replaces it and how far that work has got.
-Until a vessel is actually cut over, this registry stays authoritative.
+This ledger records why the local patch stack exists and what each patch contributes.
+It is no longer a merge to-do list: on 2026-08-23 the captain decided to stop tracking canonical upstream after the re-measurement in [`docs/fork-upstream-merge-assessment.md`](fork-upstream-merge-assessment.md) showed two products rather than a product and its fork.
+That decision accepted a known cost: upstream carries real robustness work this repository lacks, specifically the `bin/fm-lock.sh` write-probe and claim-lock hardening named by the re-measurement, but that work is entangled with the arm-serving code split and is not lifted piecemeal here.
+Future work may still inspect a row to understand a local patch, but noticing a missing upstream fix is not by itself a reason to reopen upstream tracking.
 The 2026-08-01 review, extended on 2026-08-02, records all 94 fork-only, non-merge commits reported by `git rev-list --oneline --no-merges "$upstream..$fork"` for fork `22b6464` against canonical upstream `a805766`.
 That fork commit is a pinned snapshot of the fork's default branch, not a live reference.
-`bin/fm-fork-sync-check.sh` resolves its own fork side from that repository's live default-branch `HEAD` instead, so its commit set grows the moment anything lands on the fork's default branch while this pin stays where it is.
-A divergence between the check's count and this registry's row count is therefore expected and is not a defect in either.
-The fork side of that check is this repository, `Coditan/firstmate-source`, the fleet's pin source, resolved through `bin/fm-currency-base-lib.sh`: `FM_FIRSTMATE_FORK_URL`, then `config/fork-sync-fork`, then a remote named `fork`, then `origin`.
-Until 2026-08-17 it was taken from `origin` alone, which is this repository only where the home is a plain clone of it; on a seat deployed from the fleet repository `origin` is that fleet repository, and the check listed its commits as fork-only patches.
-Every finding now names both compared repositories and the hop each came from, so a reading of the wrong repository is visible in the finding rather than only in its numbers.
-That distinction became load-bearing on 2026-08: the former address `Freudator86/firstmate` now hosts a **separate live repository** carrying upstream's content, so following the old name succeeds and silently reads the wrong repository instead of failing (Freudator86/admiralty#50).
-Commits can land here between this registry's pin re-stamps, so part of such a divergence is simply newer landed work rather than an omission on this home's side.
-The remedy is to add one row per unrecorded commit and re-stamp the pin in the sentence above; `git rev-list --oneline --no-merges <pinned-fork>..origin/main` names exactly what a stale pin is missing.
+Commits can land here after this registry's pinned snapshot, so part of such a divergence is simply newer landed work rather than an omission on this home's side.
+The remedy is to add one row per unrecorded commit; `git rev-list --oneline --no-merges <pinned-fork>..origin/main` names exactly what a stale pin is missing.
 The registry is deliberately not self-updating, because a generated row could only restate the diff, which is the reconstructed motive this document exists to prevent.
 
 Each fork-only, non-merge commit has one row recording what it does, the problem that required it, its current verdict, and whether another vessel would want it.
@@ -23,19 +19,19 @@ Use `absorbed` when upstream fully replaces the patch and it can be dropped, `ke
 The matching `git cherry "$upstream" "$fork"` check found no patch-equivalent commit mechanically, so no `absorbed` verdict can rest on it.
 The test used instead is whether upstream already carries the whole of what the commit contributes, judged at content level rather than by filename.
 A shared path proves nothing on its own, because a commit can edit a file upstream also has while every line it changes is fork-authored, and a commit that mixes an already-upstream effect with fork-only material is not absorbed however clearly the upstream side is evidenced.
-That is also why the check's own per-commit `absorbed` label in `state/fork-sync.pending` is a prefilter and never this column's verdict: it fires on patch equivalence or on the fork and upstream tips agreeing across the commit's touched files, which is exactly the filename-level shortcut rejected here.
+The retired fork-sync check's own per-commit `absorbed` label in `state/fork-sync.pending` was therefore a prefilter and never this column's verdict: it fired on patch equivalence or on the fork and upstream tips agreeing across the commit's touched files, which is exactly the filename-level shortcut rejected here.
 Every `absorbed` row therefore names the upstream file, rule or provenance that already carries its effect, and every row denied that verdict names what upstream does not have.
 That rule is why a patch and its own guard can end up on opposite sides: `dba4fdb` restores a skill upstream still ships, while `779c347` and `33f2e8e` pin that skill inside `tests/fm-instruction-owners.test.sh`, of which upstream has no copy.
 It is why `93b21ac`, `fc25d2f` and `063e03e` are not absorbed despite carrying real upstream substance - each creates a file upstream does not have, and dropping the commit would drop that file with it.
 And it is why `1c53ff8` is not absorbed either, reaching the same collision through a shared path rather than a new one: it edits `docs/configuration.md`, which upstream has, but the paragraph it edits is fork-authored throughout.
-Measured against upstream `d843712` on 2026-08-18, that prefilter is weaker still than filename-level: it fires on a path absent from both tips, so a fork patch whose file the fork itself later deleted is labelled absorbed although upstream never carried the file, which accounts for 16 of the 17 patches it then labelled; see [`docs/fork-upstream-merge-assessment.md`](fork-upstream-merge-assessment.md) for that measurement, the conflict surface behind it, and the reason the pin in the opening paragraph is not yet re-stamped.
+Measured against upstream `d843712` on 2026-08-18, that prefilter is weaker still than filename-level: it fires on a path absent from both tips, so a fork patch whose file the fork itself later deleted is labelled absorbed although upstream never carried the file, which accounts for 16 of the 17 patches it then labelled; see [`docs/fork-upstream-merge-assessment.md`](fork-upstream-merge-assessment.md) for that measurement and the conflict surface behind it.
 
 Scope answers a separate question and is assigned independently of Verdict: would another vessel hit this problem and want this behavior, or does the patch exist only because of this home's own configuration and history?
-A `keep` patch can still be general - the fork-sync checks are the clearest case, since every downstream vessel wants them while upstream, being the upstream, has no use for them.
+A `keep` patch can still be general when every downstream vessel wants it while upstream has no use for it.
 An `absorbed` patch can still be ship-specific, as `dba4fdb` is: the skill it restores belongs to upstream, but the loss it repairs was this fork's alone.
 The honest result is lopsided, with only eleven ship-specific rows, because these patches overwhelmingly harden mechanisms every vessel shares; what is genuinely local to this home is its Codex approval profile (`2bdd0f1`), the two repairs to its own history reconciliation (`abcc1e1`, `e59d3a0`), its admiralty move record (`356cd52`), the restoration of a skill only this fork had lost (`dba4fdb`), and the six commits that build and correct this registry itself (`78c6ad1`, `26aef70`, `229f396`, `06d7d54`, `baed08b`, `c839e29`).
 
-Re-review a row when the upstream tip moves.
+Rows are not re-reviewed just because the upstream tip moves.
 
 | Commit | What it does | Why it exists | Verdict | Scope | Last reviewed upstream |
 | --- | --- | --- | --- | --- | --- |

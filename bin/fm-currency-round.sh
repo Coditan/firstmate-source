@@ -39,21 +39,6 @@
 #                                   its marker was never produced and bootstrap
 #                                   printed nothing - indistinguishable from
 #                                   current. This round is its cadence.
-#   fork-absorption      released   bin/fm-fork-sync-check.sh, only on a home
-#                                   configured as the fork curator by the
-#                                   presence of config/fork-sync-upstream. A
-#                                   non-curator home is skipped by name rather
-#                                   than compared against an upstream it does
-#                                   not curate. That check carries its OWN
-#                                   three-day cadence and prints nothing when it
-#                                   suppresses a run, which is not the same as
-#                                   finding nothing: reading the two as one had
-#                                   this round record ok while an open FORK_SYNC
-#                                   finding sat on disk. The two are now told
-#                                   apart by whether the check stamped a
-#                                   completed run, and a suppressed round reports
-#                                   the last completed comparison's recorded
-#                                   state, never a fresh all-clear.
 #   seat-can-update      installed  whether this checkout could take a
 #                                   fast-forward AT ALL, using bin/fm-ff-lib.sh's
 #                                   own predicates. A stray untracked file makes
@@ -93,12 +78,6 @@
 # state is reported once rather than daily. An unmeasured reading must repeat in
 # two consecutive rounds before it surfaces, so one network blip is not a
 # finding while sustained blindness is.
-# A reading that is unmeasured only because a slower instrument's OWN declared
-# cadence has not reopened is recorded as unmeasured but does not surface: a
-# scheduled interval is not blindness, and waking on every one would spend a wake
-# on a healthy home every few days. It goes back to surfacing the moment the gap
-# outlives that instrument's cadence, so nothing stopped can hide behind it.
-#
 # Usage:
 #   fm-currency-round.sh            detect: run the round when due, print at
 #                                   most one CURRENCY_ROUND line, always exit 0
@@ -126,11 +105,6 @@
 #                               invocation.
 #   FM_CURRENCY_ROUND_STALE     how old a completed round may be before --armed
 #                               calls the round stopped (default 172800).
-#   FM_CURRENCY_ROUND_FORK_STALE how old the last COMPLETED fork comparison may
-#                               be before a round that did not re-measure it
-#                               calls that instrument stopped rather than merely
-#                               waiting for its cadence (default 518400, twice
-#                               the comparison's own three-day gate).
 #   FM_CURRENCY_ROUND_TIMEOUT   ceiling in seconds for each external step
 #                               (default 12), so no single hung network call can
 #                               consume the watcher's whole per-check budget.
@@ -160,13 +134,9 @@ CHECK="$STATE/currency-round.check.sh"
 INTERVAL=${FM_CURRENCY_ROUND_INTERVAL:-86400}
 STALE=${FM_CURRENCY_ROUND_STALE:-172800}
 STEP_TIMEOUT=${FM_CURRENCY_ROUND_TIMEOUT:-12}
-# Twice the fork comparison's own three-day cadence. Inside it, a round that did
-# not re-measure is waiting; beyond it, the instrument has stopped.
-FORK_STALE=${FM_CURRENCY_ROUND_FORK_STALE:-518400}
 case "$INTERVAL" in *[!0-9]*) INTERVAL=86400 ;; '') INTERVAL=86400 ;; esac
 case "$STALE" in *[!0-9]*) STALE=172800 ;; '') STALE=172800 ;; esac
 case "$STEP_TIMEOUT" in *[!0-9]*) STEP_TIMEOUT=12 ;; '') STEP_TIMEOUT=12 ;; esac
-case "$FORK_STALE" in *[!0-9]*) FORK_STALE=518400 ;; '') FORK_STALE=518400 ;; esac
 
 # The runtime tools nothing else keeps current. gh, treehouse, and uv track
 # their own upstream releases; shellcheck's reference is the version
@@ -250,21 +220,11 @@ bounded() {
 # disagree. The detail is last because it is free text that may itself contain a
 # separator; every field before it is a fixed word.
 #
-# <surface> is yes for every ordinary reading. It is no only for a reading that
-# is genuinely unmeasured yet needs no decision because an instrument's OWN
-# declared cadence has not reopened yet. Such a reading is still recorded as
-# unmeasured - the report never claims a reading nobody took - but it does not
-# spend a wake, because a scheduled interval is not blindness. Blindness that
-# outlasts that interval sets surface back to yes, so the distinction cannot be
-# used to hide a stopped instrument.
+# <surface> is yes for every ordinary reading.
 READINGS=()
 
 reading() {  # <subject> <hop> <state> <detail>
   READINGS+=("$1|$2|$3|yes|$4")
-}
-
-reading_scheduled_gap() {  # <subject> <hop> <detail>
-  READINGS+=("$1|$2|unmeasured|no|$3")
 }
 
 # Compare two dotted numeric versions. Prints "older", "same", or "newer" for
@@ -331,82 +291,6 @@ read_instruction_surface() {
       reading instruction-surface released behind "$(printf '%s' "$out" | head -1)"
       ;;
   esac
-}
-
-# The epoch of the fork comparison's last COMPLETED run, or empty when it has
-# never completed one. This is the check's own record that it looked.
-fork_sync_stamp() {
-  local stamp=''
-  [ -f "$STATE/fork-sync.last-run" ] && IFS= read -r stamp < "$STATE/fork-sync.last-run"
-  case "${stamp:-}" in ''|*[!0-9]*) return 1 ;; esac
-  printf '%s' "$stamp"
-}
-
-# The fork comparison prints nothing in TWO different situations, and reading
-# them as one is how this round once recorded an all-clear while an open
-# FORK_SYNC finding sat on disk: the check found nothing to report, and the
-# check's own three-day cadence gate meant it never looked. They are told apart
-# mechanically, by whether the check stamped a newly completed run, and the
-# suppressed branch then reports what the last completed comparison actually
-# recorded rather than inventing a clean reading for it.
-read_fork_absorption() {
-  local out status=0 before='' after='' age
-  if [ ! -f "$CONFIG/fork-sync-upstream" ]; then
-    reading fork-absorption released skipped \
-      "this home is not configured as the fork curator (no config/fork-sync-upstream)"
-    return 0
-  fi
-  before=$(fork_sync_stamp || true)
-  out=$(bounded "$SCRIPT_DIR/fm-fork-sync-check.sh" 2>/dev/null) || status=$?
-  after=$(fork_sync_stamp || true)
-  if [ "$status" -ne 0 ]; then
-    reading fork-absorption released unmeasured \
-      "the fork-absorption check could not complete (exit $status; it may have exceeded ${STEP_TIMEOUT}s)"
-    return 0
-  fi
-  case "$out" in
-    FORK_SYNC_STUCK:*)
-      reading fork-absorption released unmeasured "${out#FORK_SYNC_STUCK: }"
-      return 0
-      ;;
-    '') ;;
-    *)
-      reading fork-absorption released behind "$(printf '%s' "$out" | head -1)"
-      return 0
-      ;;
-  esac
-  if [ -n "$after" ] && [ "$after" != "$before" ]; then
-    reading fork-absorption released ok \
-      "the fork comparison ran in this round and found no unabsorbed upstream content"
-    return 0
-  fi
-  # From here the comparison did not run: every reading below is the recorded
-  # state of an EARLIER comparison, and says so.
-  if [ -f "$STATE/fork-sync.pending" ]; then
-    reading fork-absorption released behind \
-      "$(head -1 "$STATE/fork-sync.pending" 2>/dev/null) [recorded $(epoch_utc "${after:-$NOW}"), not re-measured this round]"
-    return 0
-  fi
-  if [ -f "$STATE/fork-sync.stuck" ]; then
-    out=$(head -1 "$STATE/fork-sync.stuck" 2>/dev/null)
-    reading fork-absorption released unmeasured \
-      "${out#FORK_SYNC_STUCK: } [recorded earlier, not re-measured this round]"
-    return 0
-  fi
-  if [ -z "$after" ]; then
-    reading fork-absorption released unmeasured \
-      "the fork comparison has never completed a run, so nothing about fork absorption has ever been measured on this home"
-    return 0
-  fi
-  age=$(( NOW - after ))
-  [ "$age" -ge 0 ] || age=0
-  if [ "$age" -ge "$FORK_STALE" ]; then
-    reading fork-absorption released unmeasured \
-      "the fork comparison last completed $((age / 86400)) day(s) ago, past its own $((FORK_STALE / 86400))-day limit, so it has stopped looking rather than merely waiting for its cadence"
-    return 0
-  fi
-  reading_scheduled_gap fork-absorption released \
-    "the fork comparison did not run in this round; its own cadence last completed at $(epoch_utc "$after") and found nothing to absorb"
 }
 
 # Can this seat take an update at all? Uses fm-ff-lib.sh's own predicates so the
@@ -540,7 +424,6 @@ read_tools() {
 run_round() {
   READINGS=()
   read_instruction_surface
-  read_fork_absorption
   read_pin_age
   read_seat_can_update
   read_tools

@@ -160,9 +160,9 @@ test_unreachable_base_refusal_names_the_hop_that_produced_it() {
   pass "an unreadable update source refuses by naming both the address and its hop"
 }
 
-# Direct coverage of the shared resolver both checks use, including the case a
-# behavior test cannot reach without the network: an unconfigured home must
-# still resolve the documented default.
+# Direct coverage of the shared resolver, including the case a behavior test
+# cannot reach without the network: an unconfigured home must still resolve the
+# documented default.
 test_resolver_precedence_and_default() {
   local config
   config="$TMP_ROOT/resolver-config"
@@ -171,7 +171,7 @@ test_resolver_precedence_and_default() {
   # shellcheck source=bin/fm-currency-base-lib.sh disable=SC1091
   . "$ROOT/bin/fm-currency-base-lib.sh"
 
-  [ "$FM_CURRENCY_BASE_DEFAULT" = 'https://github.com/kunchenguid/firstmate.git' ] \
+  [ "$FM_CURRENCY_BASE_DEFAULT" = 'https://github.com/Coditan/firstmate-source.git' ] \
     || fail "the documented default base changed: $FM_CURRENCY_BASE_DEFAULT"
 
   fm_currency_base_resolve "$config" "$FM_CURRENCY_BASE_UPDATE_ITEM" \
@@ -191,12 +191,6 @@ test_resolver_precedence_and_default() {
   [ "$FM_CURRENCY_BASE_VALUE" = 'https://example.invalid/env.git' ] \
     || fail "the environment base did not win: $FM_CURRENCY_BASE_VALUE"
   unset FM_FIRSTMATE_UPSTREAM_URL
-
-  # The two bases are independent, so a curator vessel can configure both.
-  fm_currency_base_resolve "$config" "$FM_CURRENCY_BASE_FORK_ITEM" \
-    || fail "the fork base refused while only the update base was configured"
-  [ "$FM_CURRENCY_BASE_VALUE" = "$FM_CURRENCY_BASE_DEFAULT" ] \
-    || fail "the update base leaked into the fork base: $FM_CURRENCY_BASE_VALUE"
 
   pass "the shared resolver applies environment, then config file, then the documented default"
 }

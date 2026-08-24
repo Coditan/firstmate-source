@@ -651,31 +651,21 @@ Because seeding is much slower than a steady-state check, it reports on standard
 That output streams live when a captain runs `bin/fm-bootstrap.sh` in a terminal; `bin/fm-session-start.sh` captures bootstrap output for the digest, so under automated session start the same lines arrive together once bootstrap returns, and the summary is what makes the pass interpretable after the fact.
 A seed that genuinely stalls, or that is never attempted because the seeding budget is already spent, is still reported as `AXI_SUITE_STUCK:` naming which of the two happened, identically from both install paths; the external copy remains the fallback and the next cadence window retries.
 
-### Upstream firstmate and curated-fork checks
+### Firstmate update-source check
 
-`bin/fm-firstmate-update-check.sh` compares the local default branch with the configured comparison base and persists a signal only when an upstream-only commit changes `AGENTS.md`, `bin/`, `roles/`, or `.agents/skills/`.
-`bin/fm-fork-sync-check.sh` compares the curated fork with real upstream, self-gates successful checks to a three-day cadence, and points fork-only review at `docs/fork-patches.md`.
-Neither script mutates the checkout or runs from bootstrap, so schedule them externally; their headers and `--help` output own exact overrides and mechanics.
+`bin/fm-firstmate-update-check.sh` compares the local default branch with the configured comparison base and persists a signal only when a source-only commit changes `AGENTS.md`, `bin/`, `roles/`, or `.agents/skills/`.
+It mutates only `state/firstmate-update.available` and `state/firstmate-update.stuck`; its header and `--help` output own exact overrides and mechanics.
+It is invoked by the daily currency round rather than scheduled externally, because an instruction to install a timer had already failed silently on this fleet.
 
-Each check reads its own comparison base because the two answer different questions, and a curator vessel running from a fleet repository needs all of them at once.
-The local gitignored `config/firstmate-update-base` names the artifact this deployment actually updates from, so the instruction-surface check compares against the right source instead of assuming the original template.
-The local gitignored `config/fork-sync-upstream` names the real upstream the curated fork tracks, so the fork check keeps asking whether the fork absorbed upstream content even when the deployment itself runs from somewhere else.
-The local gitignored `config/fork-sync-fork` names the curated fork itself, which is the other side of that same comparison.
-Each file holds exactly one non-empty line naming a git URL (`https://`, `http://`, `ssh://`, `git://`, `git+ssh://`, or `file://`), an scp-style `host:path` remote, or an absolute local path; a relative path is refused because it would resolve against each caller's working directory.
-Precedence for the two upstream bases, highest first, is the explicit `FM_FIRSTMATE_UPSTREAM_URL` environment variable, then the config file, then the default `https://github.com/kunchenguid/firstmate.git`.
-The environment variable is passed through unvalidated so existing harnesses keep working, and it overrides both checks at once.
-Precedence for the fork side, highest first, is `FM_FIRSTMATE_FORK_URL`, then `config/fork-sync-fork`, then a remote named `fork`, then `origin`; there is no default, because a fork nobody named cannot be guessed and the resolver refuses rather than inventing one.
-Until 2026-08-17 the fork side came from `origin` alone, which is the fork only in the plain topology: on this curator vessel, deployed from a fleet repository, `origin` is that fleet repository, so the check compared upstream against it and listed its commits as fork-only patches while reporting a confident count.
-The `fork` remote hop exists so such a seat measures correctly with no new configuration, because a remote spelled `fork` is an operator declaring in git's own vocabulary that this checkout's fork is a different repository from its origin; `config/fork-sync-fork` remains the way to state it rather than infer it, and is the hop to set wherever the inference is not obviously right.
-Every `FORK_SYNC:` finding names both repositories it compared and which hop each came from, because a comparison that does not say what it compared cannot be caught reading the wrong thing.
-Every `FIRSTMATE_UPDATE_AVAILABLE:` finding and unreachable-base `FIRSTMATE_UPDATE_STUCK:` refusal likewise names the update-source URL and the hop that supplied it.
-Before fetching, the check establishes each side's repository identity rather than comparing URL spelling: GitHub repositories use the forge's numeric repository ID, while local and `file://` repositories use their symlink-resolved absolute git directory.
-A fork side with the same established identity as upstream is refused as `FORK_SYNC_STUCK:` rather than compared, since comparing a repository with itself reports everything absorbed, which is the quietest possible wrong answer.
-If either identity cannot be established, the check refuses as `FORK_SYNC_STUCK:` rather than guessing from URL spelling or proceeding with an unverified comparison.
+The local gitignored `config/firstmate-update-base` names the artifact this deployment actually updates from, so the instruction-surface check compares against the right source.
+The file holds exactly one non-empty line naming a git URL (`https://`, `http://`, `ssh://`, `git://`, `git+ssh://`, or `file://`), an scp-style `host:path` remote, or an absolute local path; a relative path is refused because it would resolve against each caller's working directory.
+Precedence for the comparison base, highest first, is the explicit `FM_FIRSTMATE_UPSTREAM_URL` environment variable, then the config file, then the default `https://github.com/Coditan/firstmate-source.git`.
+The environment variable is passed through unvalidated so existing harnesses keep working.
+Every `FIRSTMATE_UPDATE_AVAILABLE:` finding and unreachable-base `FIRSTMATE_UPDATE_STUCK:` refusal names the update-source URL and the hop that supplied it, because a comparison that does not say what it compared cannot be caught reading the wrong thing.
 A config path that exists but is not a readable regular file, such as a directory or a dangling symlink, is refused for that reason rather than treated as absent.
-An absent file changes nothing for an unconfigured home, but a present unusable file never silently falls back: bootstrap reports it at startup as `CURRENCY_BASE:`, and the affected check records its own `FIRSTMATE_UPDATE_STUCK:` or `FORK_SYNC_STUCK:` rather than comparing against the wrong base.
+An absent file changes nothing for an unconfigured home, but a present unusable file never silently falls back: bootstrap reports it at startup as `CURRENCY_BASE:`, and the check records its own `FIRSTMATE_UPDATE_STUCK:` rather than comparing against the wrong base.
 `bin/fm-currency-base-lib.sh` is the single owner of that resolution and validation.
-`config/firstmate-update-base` is inherited by secondmate homes since every home in a deployment updates from the same source; `config/fork-sync-upstream` and `config/fork-sync-fork` are not, because only the curator vessel curates the fork.
+`config/firstmate-update-base` is inherited by secondmate homes since every home in a deployment updates from the same source.
 Bootstrap also reports a `TANGLE:` line when `FM_ROOT` is on a named non-default branch; follow the printed checkout remediation rather than treating it as an installable tool problem.
 In a read-only session that did not get the fleet lock, the same line is advisory and omits the checkout command.
 When `FM_ROOT` sits on its default branch instead, bootstrap reports a `SELF_DRIFT:` line if that branch and its own origin disagree; [architecture.md](architecture.md#self-updates-stay-safe) owns the detection and remediation, and `FM_SELF_DRIFT_BOOTSTRAP_TIMEOUT` below bounds its fetch.
@@ -700,8 +690,8 @@ Skipped items, such as a destination checkout that does not yet gitignore the it
 
 ### Daily currency round
 
-`bin/fm-currency-round.sh` is the trigger behind firstmate's standing duty to check for updates daily, and the only thing that gives the two checks above a cadence that survives session boundaries.
-Session start is not daily and neither check ran from bootstrap, so before this round a home that never installed an external timer never checked at all, and printed the same nothing a current home prints.
+`bin/fm-currency-round.sh` is the trigger behind firstmate's standing duty to check for updates daily, and the only thing that gives the instruction-surface check a cadence that survives session boundaries.
+Session start is not daily and the instruction-surface check did not run from bootstrap, so before this round a home that never installed an external timer never checked at all, and printed the same nothing a current home prints.
 [currency-round.md](currency-round.md) owns the evidence, the hop vocabulary, the rejected alternatives, and the scope boundary; the script's header owns its flags, state files, and mechanics.
 
 The locked bootstrap step arms the round with `--arm`, which writes and registers this home's `state/currency-round.check.sh` watcher check and is idempotent, so arming converges on every session start instead of depending on a per-home install step nobody verifies.
@@ -1016,8 +1006,7 @@ FM_WEDGE_ALARM_HISTORY=            # optional path override for the append-only 
 FM_WATCH_TRIAGE_LOG_MAX_BYTES=262144   # size cap for the watcher's absorbed-wake debug log
 FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT=     # optional seconds allowed for bootstrap's best-effort clone refresh; unset/blank defaults to max(20, 5 + 3 * origin-backed-project-count)
 FM_SELF_DRIFT_BOOTSTRAP_TIMEOUT=10   # seconds allowed for bootstrap's best-effort origin fetch when checking the primary checkout's default branch for self-drift
-FM_FIRSTMATE_UPSTREAM_URL=      # highest-precedence currency comparison base for BOTH upstream checks, above config/firstmate-update-base and config/fork-sync-upstream; passed through unvalidated
-FM_FIRSTMATE_FORK_URL=          # highest-precedence curated-fork side of the fork-sync comparison, above config/fork-sync-fork and this checkout's fork and origin remotes; passed through unvalidated
+FM_FIRSTMATE_UPSTREAM_URL=      # highest-precedence instruction-surface comparison base, above config/firstmate-update-base; passed through unvalidated
 FM_FLEET_PRUNE=1        # set to 0 to skip pruning local branches whose upstream is gone
 FM_STALE_WORKTREE_LOCK_AGE_SECS=30       # min mtime age before fm-teardown.sh treats a leftover worktree git index.lock as provably stale
 FM_TREEHOUSE_RETURN_LOCK_RETRIES=3        # retries after a treehouse return fails on the transient git index.lock signature

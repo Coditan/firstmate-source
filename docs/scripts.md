@@ -19,7 +19,6 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-forge-status.sh` | Read the forge's own status page on a settable cadence, append every new reading to a durable log, wake firstmate only on a new one, arm it on the watcher, and report a watch nothing is executing (docs/forge-status-watch.md) |
 | `fm-github-inbox.sh` | Read GitHub's own notification feed on a cadence without ever marking one read, wake firstmate only for a thread addressed to this fleet, arm it on the watcher, and report a feed nothing is reading (docs/github-inbox.md) |
 | `fm-firstmate-update-check.sh` | Read-only check for relevant instruction-surface commits on the source this deployment updates from |
-| `fm-fork-sync-check.sh` | Detect unabsorbed real-upstream content in the curated fork and prefilter both sides of its commit review |
 | `fm-fleet-update-check.sh` | Answer whether this vessel runs current shared code across all three hops - own origin, the pin it carries, and that pin's age against its source - reporting a hop it could not measure as unmeasured (docs/pin-age-check.md) |
 | `fm-grossreinschiff-due.sh` | Report whether this home's weekly Thursday cleanup sweep is due, and record a completed one |
 | `fm-lint.sh`             | Single owner of firstmate's shell-lint definition: file set, config, and pinned ShellCheck version |

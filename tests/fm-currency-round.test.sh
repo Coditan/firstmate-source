@@ -2,8 +2,8 @@
 # Network-free behavior tests for the daily currency round.
 #
 # Every reading that would reach the network is replaced by a fixture: the
-# instruction-surface and fork-absorption checks are stubbed through a fake bin,
-# and the tool table is overridden with pinned references that are local scripts.
+# instruction-surface check is stubbed through a fake bin, and the tool table is
+# overridden with pinned references that are local scripts.
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -38,15 +38,6 @@ make_home() {
 #!/usr/bin/env bash
 [ -n "${STUB_UPDATE_OUT:-}" ] && printf '%s\n' "$STUB_UPDATE_OUT"
 exit "${STUB_UPDATE_RC:-0}"
-SH
-  # STUB_FORK_STAMP is how a run that ACTUALLY COMPARED is distinguished from one
-  # the check's own three-day gate suppressed: the real check stamps its last-run
-  # only when a comparison completed, and both produce no output.
-  cat > "$home/stub/fm-fork-sync-check.sh" <<'SH'
-#!/usr/bin/env bash
-[ -n "${STUB_FORK_OUT:-}" ] && printf '%s\n' "$STUB_FORK_OUT"
-[ -n "${STUB_FORK_STAMP:-}" ] && printf '%s\n' "$STUB_FORK_STAMP" > "$FM_STATE_OVERRIDE/fork-sync.last-run"
-exit 0
 SH
   cat > "$home/stub/fm-fleet-update-check.sh" <<'SH'
 #!/usr/bin/env bash
@@ -266,126 +257,6 @@ test_cadence_gates_the_round_and_force_overrides_it() {
   pass "the cadence gates the round and can be overridden"
 }
 
-test_fork_absorption_is_skipped_unless_this_home_curates_the_fork() {
-  local home
-  home=$(make_home curator)
-  install_round "$home"
-
-  run_round "$home" --force >/dev/null
-  assert_grep 'reading: fork-absorption hop=released state=skipped' \
-    "$home/state/currency-round.report" \
-    "a home that does not curate the fork must be skipped by name"
-
-  printf 'https://example.invalid/upstream.git\n' > "$home/config/fork-sync-upstream"
-  STUB_FORK_OUT='FORK_SYNC: upstream aaa not merged into fork' \
-    run_round "$home" --force >/dev/null
-  assert_grep 'reading: fork-absorption hop=released state=behind' \
-    "$home/state/currency-round.report" \
-    "a curator home must have its fork absorption measured"
-  pass "the fork reading runs only on the home that curates the fork"
-}
-
-# The fork comparison prints nothing both when it found nothing and when its own
-# three-day gate stopped it looking. These five tests pin BOTH directions: a
-# suppressed round must never read as ok, and a round that genuinely compared
-# must still read as ok, because an instrument that reports unmeasured for
-# everything is exactly as useless as one that reports ok for everything.
-FORK_NOW=1000000000
-FORK_YESTERDAY=$((FORK_NOW - 86400))
-FORK_LAST_WEEK=$((FORK_NOW - 7 * 86400))
-
-make_curator_home() {
-  local name=$1 home
-  home=$(make_home "$name")
-  install_round "$home"
-  printf 'https://example.invalid/upstream.git\n' > "$home/config/fork-sync-upstream"
-  printf '%s\n' "$home"
-}
-
-test_a_suppressed_fork_comparison_reports_the_finding_still_on_disk() {
-  local home out report
-  home=$(make_curator_home forkpending)
-  printf 'FORK_SYNC: upstream aaaaaaa not merged into fork (191 upstream-only commits)\n' \
-    > "$home/state/fork-sync.pending"
-  printf '%s\n' "$FORK_YESTERDAY" > "$home/state/fork-sync.last-run"
-
-  out=$(FM_CURRENCY_ROUND_NOW="$FORK_NOW" run_round "$home" --force)
-  report="$home/state/currency-round.report"
-  assert_grep 'reading: fork-absorption hop=released state=behind' "$report" \
-    "a round that did not re-measure must report the finding the last comparison recorded"
-  assert_grep 'not re-measured this round' "$report" \
-    "the reading must say the comparison did not run in this round"
-  assert_contains "$out" 'fork-absorption (released) behind' \
-    "an open fork finding must reach the supervisor even when the comparison was suppressed"
-  pass "a suppressed fork comparison reports the open finding instead of an all-clear"
-}
-
-test_a_fork_comparison_that_actually_ran_clean_still_reads_ok() {
-  local home out report
-  home=$(make_curator_home forkclean)
-
-  out=$(FM_CURRENCY_ROUND_NOW="$FORK_NOW" STUB_FORK_STAMP="$FORK_NOW" \
-    run_round "$home" --force)
-  [ -z "$out" ] || fail "a genuinely clean round must stay silent: $out"
-  report="$home/state/currency-round.report"
-  assert_grep 'reading: fork-absorption hop=released state=ok' "$report" \
-    "a comparison that ran and found nothing must still read ok"
-  assert_grep 'ran in this round' "$report" \
-    "the ok reading must say the comparison actually ran"
-  pass "a fork comparison that ran and found nothing still reads ok"
-}
-
-test_a_suppressed_clean_fork_comparison_reads_unmeasured_without_waking_anyone() {
-  local home out report
-  home=$(make_curator_home forkgap)
-  printf '%s\n' "$FORK_YESTERDAY" > "$home/state/fork-sync.last-run"
-
-  out=$(FM_CURRENCY_ROUND_NOW="$FORK_NOW" run_round "$home" --force)
-  report="$home/state/currency-round.report"
-  assert_grep 'reading: fork-absorption hop=released state=unmeasured' "$report" \
-    "a round that did not look must not record ok"
-  assert_grep 'did not run in this round' "$report" \
-    "the reading must say why it is unmeasured"
-  [ -z "$out" ] || fail "a cadence gap inside the comparison's own window must not wake anyone: $out"
-
-  # Twice, because the ordinary unmeasured rule surfaces on the second
-  # consecutive round and a healthy three-day gate would then wake a supervisor
-  # every cycle forever.
-  out=$(FM_CURRENCY_ROUND_NOW="$FORK_NOW" run_round "$home" --force)
-  [ -z "$out" ] || fail "a repeated cadence gap inside the window must still not wake anyone: $out"
-  pass "a suppressed clean comparison is recorded unmeasured and spends no wake"
-}
-
-test_a_fork_comparison_that_stopped_running_surfaces() {
-  local home out report
-  home=$(make_curator_home forkstopped)
-  printf '%s\n' "$FORK_LAST_WEEK" > "$home/state/fork-sync.last-run"
-
-  FM_CURRENCY_ROUND_NOW="$FORK_NOW" run_round "$home" --force >/dev/null
-  report="$home/state/currency-round.report"
-  assert_grep 'reading: fork-absorption hop=released state=unmeasured' "$report" \
-    "a comparison past its own cadence must read unmeasured"
-  assert_grep 'stopped looking' "$report" \
-    "the reading must separate a stopped instrument from one merely waiting"
-  out=$(FM_CURRENCY_ROUND_NOW="$FORK_NOW" run_round "$home" --force)
-  assert_contains "$out" 'fork-absorption (released) unmeasured' \
-    "sustained blindness past the comparison's own cadence must surface"
-  pass "a fork comparison that outlives its own cadence is reported as stopped"
-}
-
-test_a_fork_comparison_that_never_ran_is_unmeasured() {
-  local home
-  home=$(make_curator_home forknever)
-
-  FM_CURRENCY_ROUND_NOW="$FORK_NOW" run_round "$home" --force >/dev/null
-  assert_grep 'reading: fork-absorption hop=released state=unmeasured' \
-    "$home/state/currency-round.report" \
-    "a home whose comparison has never completed must not read ok"
-  assert_grep 'never completed a run' "$home/state/currency-round.report" \
-    "the reading must say nothing has ever been measured"
-  pass "a fork comparison that has never completed is unmeasured, not ok"
-}
-
 test_arming_is_idempotent_and_registers_the_check() {
   local home first second
   home=$(make_home arm)
@@ -462,12 +333,6 @@ test_behind_instruction_surface_names_the_released_hop
 test_an_unmeasured_reading_never_reports_all_clear
 test_unchanged_findings_are_reported_once
 test_cadence_gates_the_round_and_force_overrides_it
-test_fork_absorption_is_skipped_unless_this_home_curates_the_fork
-test_a_suppressed_fork_comparison_reports_the_finding_still_on_disk
-test_a_fork_comparison_that_actually_ran_clean_still_reads_ok
-test_a_suppressed_clean_fork_comparison_reads_unmeasured_without_waking_anyone
-test_a_fork_comparison_that_stopped_running_surfaces
-test_a_fork_comparison_that_never_ran_is_unmeasured
 test_arming_is_idempotent_and_registers_the_check
 test_an_unarmed_or_stopped_round_is_loud
 test_a_disabled_round_stays_out_of_composing_suites

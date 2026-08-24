@@ -29,7 +29,6 @@
 #                 "SECONDMATE_LIVENESS: secondmate <id>: skipped: <reason>|respawn failed: <reason>",
 #                 "AXI_SUITE_UPDATED|REVIEW|STUCK|SHADOWED|SHADOW_UNKNOWN: <detail>",
 #                 "FIRSTMATE_UPDATE_AVAILABLE|STUCK: <detail>",
-#                 "FORK_SYNC: <detail>" or "FORK_SYNC_STUCK: <detail>",
 #                 "GROSSREINSCHIFF: weekly fleet cleanup sweep is due (...)",
 #                 "CURRENCY_ROUND: the daily update check <is not armed|has stopped> (...)",
 #                 "MEMORY_ALARM: <nothing is watching this machine|the memory watch ... has stopped> (...)",
@@ -986,25 +985,17 @@ EOF
   echo "FMX: X mode on - relay poll armed via state/x-watch.check.sh; 30s watcher cadence in config/x-mode.env"
 }
 
-# Detect-only: a currency comparison base that is configured but unusable. The
-# two upstream checks run externally, so without this the captain would not
-# learn about a bad base until the next scheduled run wrote its own STUCK file.
+# Detect-only: an instruction-surface comparison base that is configured but
+# unusable. Without this the captain would not learn about a bad base until the
+# next daily currency round wrote its own STUCK file.
 currency_base_validate() {
   local item status
-  for item in "$FM_CURRENCY_BASE_UPDATE_ITEM" "$FM_CURRENCY_BASE_FORK_ITEM" "$FM_CURRENCY_BASE_FORK_REPO_ITEM"; do
-    fm_currency_base_file_value "$CONFIG" "$item"
-    status=$?
-    # 0 is a usable value and 2 is an absent file; only 1 is actionable.
-    [ "$status" -eq 1 ] || continue
-    # The fork side has no canonical default to fall back to - removing the file
-    # drops it to this checkout's own remotes - so it does not get the other
-    # two's remediation sentence, which would name the wrong recovery.
-    if [ "$item" = "$FM_CURRENCY_BASE_FORK_REPO_ITEM" ]; then
-      echo "CURRENCY_BASE: config/$item is unusable - $FM_CURRENCY_BASE_REASON; fix it or remove the file to fall back to this checkout's fork remote, then its origin"
-      continue
-    fi
-    echo "CURRENCY_BASE: config/$item is unusable - $FM_CURRENCY_BASE_REASON; fix it or remove the file to compare against $FM_CURRENCY_BASE_DEFAULT"
-  done
+  item=$FM_CURRENCY_BASE_UPDATE_ITEM
+  fm_currency_base_file_value "$CONFIG" "$item"
+  status=$?
+  # 0 is a usable value and 2 is an absent file; only 1 is actionable.
+  [ "$status" -eq 1 ] || return 0
+  echo "CURRENCY_BASE: config/$item is unusable - $FM_CURRENCY_BASE_REASON; fix it or remove the file to compare against $FM_CURRENCY_BASE_DEFAULT"
 }
 
 # Detect-only: this vessel is still handing the captain review-board links that
@@ -1392,6 +1383,4 @@ fi
 "$SCRIPT_DIR/fm-slot-guard.sh" --armed || true
 [ -f "$STATE/firstmate-update.available" ] && cat "$STATE/firstmate-update.available"
 [ -f "$STATE/firstmate-update.stuck" ] && cat "$STATE/firstmate-update.stuck"
-[ -f "$STATE/fork-sync.pending" ] && cat "$STATE/fork-sync.pending"
-[ -f "$STATE/fork-sync.stuck" ] && cat "$STATE/fork-sync.stuck"
 exit 0
