@@ -178,3 +178,29 @@ The reduction ratio is material-dependent and is not a property of the tool: the
 `--fold-injected` folds Codex's machine-injected user messages down to their marker and their tail, taking the Codex store from 142.2 MB to 44.1 MB.
 It is off by default, and the reason is the finding rather than the size: folding dropped 24 of the 37 redaction findings, including 16 of the 22 private-key blocks, because those sat inside the folded region.
 The folded archive is not cleaner - less of it was ever looked at.
+
+## A search test that passed where it was written, 2026-08-24, one seat
+
+A peer vessel's run of `tests/fm-transcript-archive.test.sh` reported `not ok - a --files-only sort failure must exit 2, got 0`, twice, while the same test on this seat passed every assertion.
+The case builds a restricted PATH, replaces `sort` on it with a stand-in that fails, and requires the search to exit 2.
+
+The tool was not the fault, and the difference was not a missing tool either.
+Dropping each of the fifteen tools the case links, one at a time, produced exit 1, 2 or 127 on this seat and never 0, so a case that returns before it sorts cannot produce the reported symptom.
+Replacing `sort` with a stand-in that fails at once, one that consumes its input and then fails, and one that emits output and then fails each produced exit 2 on both search paths.
+`bin/fm-transcript-search.sh` reads the sort stage's status on both paths and always did.
+
+What produced the 0 was the fixture, which installed a working `sort` and then asserted an exit status as though it had not.
+The stand-in was a symlink to whatever `type -P false` resolved to, and a multi-call binary picks its applet from `argv[0]`.
+`argv[0]` there is `sort`, not the name of the file the link points at, so on a seat whose `/usr/bin/false` is a BusyBox or toybox symlink the case installs BusyBox's own `sort`.
+Simulated here by pointing `false` at this seat's BusyBox and changing nothing else, the pre-change test file reproduced the peer's line verbatim, `not ok - a --files-only sort failure must exit 2, got 0`, and the search's own output showed it had sorted its result and matched.
+An exported shell function named `sort`, and a `BASH_ENV` that restores a full PATH, were measured to produce the same 0 by different routes.
+
+A second defect sat behind the first, and it held even where the case passed.
+A stand-in that exits before reading its input closes the pipe on the stage above it, which then fails too: measured as `PIPESTATUS` `1 1 1`, against `0 1 1` for a stand-in that drains first.
+The refusal was therefore satisfied by the upstream status, and the sort stage's own status was never read by the assertion that is named for it.
+A tool mutated to ignore the sort stage's status passed the pre-change case and fails the post-change one.
+
+The case now refuses instead of asserting: it names a tool this seat does not have rather than silently building a different world, writes its stand-in out instead of linking to another program's name, proves the stand-in fails and runs before the assertion leans on it, and drains so that exactly one stage in the pipeline is non-zero.
+
+What is not established from here: the peer seat's own `/usr/bin/false` was never inspected, so BusyBox is a sufficient mechanism for the reported line and not a measured cause of it.
+The reproduction above says the fixture can produce that exact line with the tool untouched; it does not say that is what happened there.
