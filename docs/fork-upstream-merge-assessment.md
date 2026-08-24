@@ -4,6 +4,10 @@ This document records measured attempts to merge canonical upstream into this cu
 It is evidence, not narrative: every number below names the command that produced it and the commits it was measured against.
 [`docs/fork-patches.md`](fork-patches.md) remains the authoritative patch registry, and this document does not replace it or re-stamp its pin.
 
+The plan those attempts kept asking for now exists as its own document: [`docs/upstream-integration-plan.md`](upstream-integration-plan.md) owns what gets taken, in what order, and why each boundary sits where it does, re-derived against the tips of 2026-08-24.
+It also answers the four things the closing section of this document said a successor would need.
+Read it before proposing any further merge, because its governing decision is that a merge is no longer the instrument.
+
 The 2026-08-18 attempt below is kept as taken.
 A second attempt on 2026-08-23 re-measured both tips and stopped short of landing for reasons the first attempt had not measured; that reading is in [The 2026-08-23 re-measurement](#the-2026-08-23-re-measurement) and supersedes every number in the 2026-08-18 sections it contradicts.
 
