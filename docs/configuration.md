@@ -855,6 +855,21 @@ The watcher caches each vessel's fetched tree signature and derived priority sep
 The frequency monitor deliberately narrows that compatibility list to its first vessel and fetches it every `FM_FREQUENCY_MONITOR_INTERVAL` seconds.
 Both paths share the same signature and marker implementation, so the slow fallback and fast service cannot drift in their definition of new mail or duplicate one signature during a concurrent check.
 
+## Bridge sender identity (config/bridge-vessel)
+
+The same `config/bridge-vessel` record answers a second, narrower question: which one vessel this home IS when it sends Bridge mail.
+`bin/fm-bridge-relay.sh` reads it before dispatching `send` or `broadcast`, and refuses the call when the `--from` on the command line names any other vessel.
+It reads only the record - `$FM_HOME/config/bridge-vessel`, then `$FM_ROOT/config/bridge-vessel` - and deliberately not `FM_BRIDGE_VESSEL`: the environment variable is the watch list above, and the Bridge scripts refuse to take a sender identity from an environment that may serve several vessels at once.
+
+Three consequences follow from that, and each is a refusal rather than a substitution.
+
+- A home with no record, or an empty one, cannot send at all until one roster vessel id is recorded.
+- A record naming more than one vessel is a watch list and cannot say which vessel this home is, so it is refused rather than resolved to its first word.
+- A call with no `--from`, or one naming another vessel, is refused before any refresh or dispatch; the relay names this home's vessel in the refusal and never writes the flag itself.
+
+The reason is that a wrongly attributed envelope is worse than an unsent one: it is delivered, the recipient acts on it, and the reply goes to a seat that never sent it.
+That happened on 2026-08-20, and `bin/fm-bridge-relay.sh`'s own header carries the measurement.
+
 ## Certsync health check (FM_CERTSYNC_*)
 
 `bin/fm-watch.sh` folds certsync health into the ordinary heartbeat path when a certsync deployment is present under the home.
