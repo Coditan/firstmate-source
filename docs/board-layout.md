@@ -104,6 +104,10 @@ The semantics are the component, and they are not a preference:
 - An empty submit, and a submit on a board opened with no Lavish server, send nothing and therefore move nothing.
 - Changing an answer after sending returns its square to pencil and the count with it, because the answer now showing is one nobody has received.
 
+The strip state is restored from browser-local storage when the same board file is reopened.
+That storage is presentation recovery only: the durable answer record is still the Lavish poll result, not the static HTML file and not the browser cache.
+The restored states are the same three states the live strip uses, so a sent answer reopens struck and out of the count, while an edited-but-unsent answer reopens pencil and still counted.
+
 That distinction is the same one "Decision controls" states below, and it is the captain's own recorded failure: a board where he pressed send and nobody heard.
 `tests/fm-board-behavior.test.mjs` asserts both directions, because the wrong one is what this exists to fix.
 
@@ -231,7 +235,9 @@ A board that wants its own wording may set `aria-label` or `aria-labelledby`; `b
 The radio `name` must equal `data-fm-question`.
 A board that breaks that rule still submits - `board.js` falls back to the form's own checked radio and warns on the console - but the two are meant to be one declared key.
 Selecting an option only updates local state; the explicit submit queues exactly one prompt, under the question key as `queueKey`, so re-answering replaces the earlier unsent answer instead of appending a second one.
-Queued state is shown separately from selected state, in the same `fm-queued` box, and it is the same distinction the tally strip counts.
+The `fm-queued` box shows whether the answer currently in the controls is only queued locally or has been sent back.
+It restores that browser-local presentation state when the same board file is reopened, but the authoritative answer still lives only in the Lavish poll result.
+That is the same distinction the tally strip counts.
 A submit that carries neither a choice nor a note is never silent: the box says so, in `is-warn` colour.
 
 Add one `<div class="fm-offline"></div>` per board.
