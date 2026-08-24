@@ -785,7 +785,10 @@ codex_config_flags_for_harness() {
 # the pre-grant behaviour - every ref write escalating to the approval reviewer -
 # with nothing on the launch line or in the output to say so.
 codex_git_common_dir_grant() {  # <worktree>
-  local wt=$1 common= wt_real=
+  local wt common wt_real
+  wt=$1
+  common=
+  wt_real=
   common=$(git -C "$wt" rev-parse --git-common-dir 2>/dev/null) || common=
   if [ -n "$common" ]; then
     common=$(cd "$wt" && cd "$common" 2>/dev/null && pwd -P) || common=
