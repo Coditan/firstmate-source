@@ -84,6 +84,7 @@ Gating alone does not close the second door: a session that WILL hold the lock a
 **It retries, bounded, and then records the failure with its cause.**
 `fm_harness_pid_settled` re-attempts the walk with the waits in `FM_HARNESS_PID_RETRY_DELAYS` (0.1, 0.2, 0.4, 0.8 seconds), which is 1.5 seconds spent only on the path that is already failing.
 That is the right shape because the answer is not always a settled one: `fm_harness_pid` now distinguishes `no-harness-process` - the walk COMPLETED and no ancestor was a harness - from `harness-lookup-failed`, where a `ps` probe failed so the walk could not be completed and the answer is unknown rather than negative.
+An empty or malformed parent pid from a successful `ppid=` probe is in that same unknown class, because the walk cannot prove it reached the root of the ancestry.
 On 2026-08-19 this seat's hook recorded the failure at session start and the same walk resolved correctly by hand later the same day, which is the signature of an unknown answer rather than a settled one.
 The record now carries which of the two it was, so the next occurrence is diagnosable instead of being re-argued.
 

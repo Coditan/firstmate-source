@@ -240,6 +240,23 @@ SH
   chmod +x "$fakebin/ps"
 }
 
+# make_fake_ps_empty_ppid <fakebin>: `ps` returns successfully for the parent
+# probe but provides no parent pid, so the ancestry walk did not complete.
+make_fake_ps_empty_ppid() {
+  local fakebin=$1
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "$*" in
+  *"comm="*) printf '/bin/bash\n'; exit 0 ;;
+  *"args="*) printf 'bash\n'; exit 0 ;;
+  *"ppid="*) exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/ps"
+}
+
 # run_nudge_with_payload <root> <fakebin> <payload>: drive the wrapper the way a
 # harness hook does, with the payload on stdin. An empty payload means the
 # harnesses that hand the wrapper nothing.
@@ -644,6 +661,20 @@ test_each_process_table_probe_failure_is_recorded_as_unknown() {
   pass "fm-sessionstart-nudge: every failed process-table probe is recorded as unknown"
 }
 
+test_an_empty_parent_pid_is_recorded_as_unknown() {
+  local root="$TMP_ROOT/record-empty-ppid" fakebin record
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  make_fake_ps_empty_ppid "$fakebin"
+  record="$root/state/.primary-transcript"
+  FM_HARNESS_PID_RETRY_DELAYS="0" run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD" >/dev/null
+  [ "$(record_field "$record" status)" = error ] \
+    || fail "an empty ppid= probe produced a usable-looking record: $(cat "$record")"
+  [ "$(record_field "$record" error)" = harness-lookup-failed ] \
+    || fail "an empty ppid= probe was recorded as a settled negative: $(cat "$record")"
+  pass "fm-sessionstart-nudge: an empty parent pid is recorded as unknown"
+}
+
 # This allowlist contract is a deliberate exemption from the test-quality rule's
 # prohibition on source-content tests because this is a repository-wide negative
 # property that no single executable interface can demonstrate. It enumerates
@@ -761,6 +792,7 @@ test_the_lock_holder_still_records_after_a_clear
 test_a_transient_lookup_failure_is_retried
 test_a_settled_lookup_failure_is_recorded_with_its_cause
 test_each_process_table_probe_failure_is_recorded_as_unknown
+test_an_empty_parent_pid_is_recorded_as_unknown
 test_primary_transcript_path_name_allowlist_contract
 test_opencode_plugin_delivers_exact_nudge_once
 test_tracked_harness_registration

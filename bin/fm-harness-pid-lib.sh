@@ -72,7 +72,14 @@ fm_harness_pid() {
       return 1
     fi
     pid=${pid//[[:space:]]/}
-    [ -n "$pid" ] && [ "$pid" -gt 1 ] || return 1
+    case "$pid" in
+      ''|*[!0-9]*)
+        # shellcheck disable=SC2034 # Read by callers after fm_harness_pid returns.
+        FM_HARNESS_PID_ERROR=harness-lookup-failed
+        return 1
+        ;;
+      0|1) return 1 ;;
+    esac
   done
   return 1
 }
