@@ -39,7 +39,8 @@ if [ "${1:-}" = "status" ]; then
     echo "lock: unavailable (state path is not a directory)"
     exit 0
   fi
-  if [ ! -r "$STATE" ] || [ ! -x "$STATE" ]; then
+  # Status judges the state directory by whether the lock path inside it can be reached, never by whether the directory can be listed.
+  if [ ! -x "$STATE" ]; then
     echo "lock: unavailable (state directory unreadable)"
     exit 0
   fi

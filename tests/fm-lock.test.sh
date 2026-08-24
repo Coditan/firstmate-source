@@ -381,6 +381,31 @@ test_a_symlink_to_a_usable_state_directory_is_used_consistently() {
     "status must inspect the same resolved state directory acquisition uses"
 }
 
+test_a_searchable_unlistable_state_directory_is_used_consistently() {
+  local root fakebin harness out status=0
+  if [ "$IS_ROOT" -eq 1 ]; then
+    echo "skip: running as root, so mode bits do not block directory listing"
+    return 0
+  fi
+
+  prepare searchable-unlistable-state
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
+  chmod 300 "$root/state"
+  out=$(run_lock "$root" "$fakebin") || status=$?
+  chmod 700 "$root/state"
+  expect_code 0 "$status" "acquisition must accept a searchable writable state directory"
+  assert_contains "$out" "lock acquired: harness pid $harness" \
+    "acquisition must not require directory-listing permission"
+
+  chmod 300 "$root/state"
+  status=0
+  out=$(run_lock "$root" "$fakebin" status) || status=$?
+  chmod 700 "$root/state"
+  expect_code 0 "$status" "status must accept a searchable state directory"
+  assert_contains "$out" "lock: held by live harness pid $harness" \
+    "status must inspect the known lock path without listing its directory"
+}
+
 test_unusable_state_paths_are_refused_and_reported_unavailable() {
   local root fakebin out status
 
@@ -525,6 +550,7 @@ test_an_unreadable_lock_is_never_treated_as_free
 test_status_never_reports_an_unreadable_lock_as_free
 test_status_reports_an_unreachable_state_without_trying_to_create_it
 test_a_symlink_to_a_usable_state_directory_is_used_consistently
+test_a_searchable_unlistable_state_directory_is_used_consistently
 test_unusable_state_paths_are_refused_and_reported_unavailable
 test_a_lock_that_is_not_a_regular_file_is_refused_and_not_written_through
 test_a_dangling_lock_symlink_is_refused_rather_than_created
