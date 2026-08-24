@@ -425,8 +425,10 @@
     }
     var form = el.closest('form[data-fm-question]');
     if (form) {
+      var answer = answerOf(form);
       setState(form, 'pencil');
-      saveQuestion(questionKey(form), 'pencil', answerOf(form));
+      markQueued(form, answer || { choice: '', note: '' });
+      saveQuestion(questionKey(form), 'pencil', answer);
     }
   }
 

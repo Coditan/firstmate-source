@@ -426,6 +426,8 @@ function input(doc, el) {
   check(tallyCount(tally) === 1, 'editing the sent note immediately puts it back in the count');
   check(stripParts(tally).row.innerHTML.includes('#fm-mk-pencil'),
     'and returns its square to pencil');
+  check(a.queued.textContent.includes('Vorgemerkt') && !a.queued.textContent.includes('Zurückgeschickt'),
+    'and the question body stops claiming the edited answer was already sent');
 }
 
 // --- 13. a board that asks nothing prints no strip ------------------------
