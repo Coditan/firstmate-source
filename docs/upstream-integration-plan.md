@@ -8,6 +8,11 @@ Every figure below was measured for this document; none is carried forward from 
 [`docs/fork-patches.md`](fork-patches.md) remains the authoritative patch registry and is the only place a patch verdict is recorded.
 This document owns one thing the other two do not: what gets taken, in what order, and why each boundary sits where it does.
 
+The daily upstream cadence is separate work and is deliberately not delivered by this unit.
+`fleet-upstream-integration-measure-on-demand` owns the on-demand comparison with a defensible per-change verdict.
+`fleet-upstream-integration-daily-arm-and-dispatch` owns the recurring daily check that wakes only when it finds something actionable, and is blocked by the on-demand comparison unit.
+Neither a recurring check nor its scheduling is added here, and no session-start surface reports an upstream count or distance.
+
 ## What was measured, and against which repositories
 
 Measured 2026-08-24T10:19Z, in a disposable worktree of this repository, with no working tree touched: the conflict readings come from `git merge-tree --write-tree --name-only`, which produces the same markers a real merge would write without performing one.

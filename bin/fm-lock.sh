@@ -38,6 +38,10 @@ mkdir -p "$STATE" 2>/dev/null || {
 . "$SCRIPT_DIR/fm-harness-pid-lib.sh"
 
 if [ "${1:-}" = "status" ]; then
+  if { [ -e "$LOCK" ] || [ -L "$LOCK" ]; } && { [ ! -f "$LOCK" ] || [ -L "$LOCK" ]; }; then
+    echo "lock: unavailable (not a regular file)"
+    exit 0
+  fi
   if [ ! -f "$LOCK" ]; then echo "lock: free"; exit 0; fi
   # An unreadable lock is not a free one. Saying so is the whole value of this
   # branch: a reader that cannot see the holder must not report the holder's

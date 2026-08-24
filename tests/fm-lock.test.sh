@@ -280,7 +280,7 @@ test_an_unreadable_lock_is_never_treated_as_free() {
 }
 
 test_status_never_reports_an_unreadable_lock_as_free() {
-  local root fakebin harness out
+  local root fakebin harness out target
   prepare status-reads
   root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
 
@@ -295,6 +295,29 @@ test_status_never_reports_an_unreadable_lock_as_free() {
   printf '%s\n' "99999999" > "$root/state/.lock"
   out=$(run_lock "$root" "$fakebin" status) || fail "status must always exit 0"
   assert_contains "$out" "lock: stale" "a dead holder must be reported as stale"
+
+  rm "$root/state/.lock"
+  mkdir "$root/state/.lock"
+  out=$(run_lock "$root" "$fakebin" status) || fail "status must always exit 0"
+  assert_contains "$out" "lock: unavailable (not a regular file)" \
+    "a directory at the lock path must be reported as unavailable"
+  rmdir "$root/state/.lock"
+
+  target="$root/status-target"
+  : > "$target"
+  ln -s "$target" "$root/state/.lock"
+  out=$(run_lock "$root" "$fakebin" status) || fail "status must always exit 0"
+  assert_contains "$out" "lock: unavailable (not a regular file)" \
+    "a symlink at the lock path must be reported as unavailable"
+  rm "$root/state/.lock" "$target"
+
+  ln -s "$root/status-missing" "$root/state/.lock"
+  out=$(run_lock "$root" "$fakebin" status) || fail "status must always exit 0"
+  assert_contains "$out" "lock: unavailable (not a regular file)" \
+    "a dangling symlink at the lock path must be reported as unavailable"
+  rm "$root/state/.lock"
+
+  printf '%s\n' "99999999" > "$root/state/.lock"
 
   if [ "$IS_ROOT" -eq 1 ]; then
     echo "skip: running as root, so the unreadable status case cannot be built"
