@@ -4,6 +4,11 @@
 # Usage: fm-bridge-relay.sh <send|inbox|status|broadcast> [args...]
 # The checkout is always $FM_HOME/projects/coditan-bridge, or
 # $FM_PROJECTS_OVERRIDE/coditan-bridge when that override is set.
+# `send` and `broadcast` carry a sender, so they are refused unless the --from on
+# the command line names the one vessel this home is, read from
+# config/bridge-vessel. See the "sender identity" block below for what that
+# refuses, why it never writes the flag itself, and the 2026-08-20 measurement
+# behind it.
 # Before dispatch, this guard requires a clean checkout on its default branch
 # with an upstream; its own Git inspection is strictly read-only and it never
 # accepts an arbitrary command. Moving the checkout is delegated entirely to
@@ -81,6 +86,157 @@ case "$subcommand" in
     exit 1
     ;;
 esac
+
+# --- sender identity ---------------------------------------------------------
+# An envelope carries a claim about who sent it, and the Bridge scripts take
+# that claim from the command line: bridge-send.sh and bridge-broadcast.sh both
+# require --from and deliberately never infer it, because one shell environment
+# may serve several vessel identities. That leaves the value to whoever composes
+# the call, and on 2026-08-20 a worker of this home composed --from tugboat. The
+# envelope was published correctly and attributed to a vessel that did not send
+# it, so a reply addressed to its sender would reach a seat that never wrote it.
+# Bridge's own check_sender_git_identity saw that mismatch and, by its own
+# documented design, warned and continued, because a Bridge host may legitimately
+# operate more than one vessel. That is Bridge's call about its hosts and is not
+# changed from here.
+# This relay is narrower than a Bridge host: it is one home's send path, and one
+# home is one vessel. So it refuses a sender-bearing call whose --from does not
+# name this home, before any refresh and before any dispatch. It refuses rather
+# than substituting the right name, for the same reason it refuses rather than
+# defaulting: a send path that quietly writes a sender the caller did not ask for
+# is the same defect with a different author, and the forwarded arguments are
+# inspected here, never rewritten. A wrongly attributed envelope is worse than an
+# unsent one, because the recipient acts on it and the reply is lost.
+sender_bearing=no
+case "$subcommand" in
+  send | broadcast) sender_bearing=yes ;;
+esac
+
+# A help request composes nothing, so it is not a send and is not guarded: an
+# operator who cannot yet resolve this home's identity must still be able to read
+# what the flags are. Only a spelling before the `--` terminator counts, because
+# the Bridge parsers treat everything after it as positional.
+wants_help=no
+for arg in "$@"; do
+  case "$arg" in
+    --) break ;;
+    --help | -h)
+      wants_help=yes
+      break
+      ;;
+  esac
+done
+
+# resolve_home_vessel: set HOME_VESSEL to the one vessel this home is, and
+# HOME_VESSEL_SOURCE to the record it was read from, or set IDENTITY_PROBLEM and
+# fail. $FM_HOME is tried before $FM_ROOT, the order bin/fm-board.sh already uses
+# to answer the same question. $FM_BRIDGE_VESSEL is deliberately not consulted:
+# it is an environment variable, which is exactly what the Bridge scripts refuse
+# to take an identity from, and it names one or more inboxes to WATCH, which is a
+# different question from which vessel this home is. A record naming more than
+# one vessel is refused for that second reason rather than resolved to its first
+# word: a list of mailboxes cannot answer a question about identity, and picking
+# from it would be a guess wearing a reading's clothes.
+resolve_home_vessel() {
+  local candidate raw
+  local -a names=()
+  HOME_VESSEL=""
+  HOME_VESSEL_SOURCE=""
+  IDENTITY_PROBLEM=""
+  for candidate in "$FM_HOME/config/bridge-vessel" "$FM_ROOT/config/bridge-vessel"; do
+    [ -f "$candidate" ] || continue
+    if ! raw=$(cat "$candidate" 2>/dev/null); then
+      IDENTITY_PROBLEM="this home's Bridge identity record exists but cannot be read: $candidate"
+      return 1
+    fi
+    # Word-split the whole record, with globbing off so a record holding a
+    # pattern character is read as the text it is rather than as filenames.
+    set -f
+    # shellcheck disable=SC2206
+    names=($raw)
+    set +f
+    if [ "${#names[@]}" -eq 0 ]; then
+      IDENTITY_PROBLEM="this home's Bridge identity record is empty: $candidate"
+      return 1
+    fi
+    if [ "${#names[@]}" -gt 1 ]; then
+      IDENTITY_PROBLEM="this home's Bridge identity record names ${#names[@]} vessels (${names[*]}): $candidate selects inboxes to watch and cannot say which one vessel this home is"
+      return 1
+    fi
+    HOME_VESSEL="${names[0]}"
+    HOME_VESSEL_SOURCE="$candidate"
+    return 0
+  done
+  IDENTITY_PROBLEM="this home has no Bridge identity record; tried $FM_HOME/config/bridge-vessel and $FM_ROOT/config/bridge-vessel"
+  return 1
+}
+
+# scan_sender_claims: echo one line per --from spelling in the forwarded
+# arguments, and nothing when there is none. Every occurrence is reported, not
+# the first: the Bridge parsers keep the LAST --from they see, so approving on an
+# earlier one would let a second spelling carry a different vessel past this
+# guard. The scan reads any --from token as a claim rather than reproducing the
+# Bridge parser's flag table, which can drift: over-reading can only produce a
+# refusal, while under-reading would produce a send. It stops at `--` because
+# everything after it is positional to those same parsers. Each claim is emitted
+# behind a leading marker so a trailing --from with no value stays a visible
+# claim - it is a sender the caller asked for and could not name - instead of
+# collapsing into the same empty output as no --from at all.
+scan_sender_claims() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --) return 0 ;;
+      --from)
+        if [ "$#" -lt 2 ]; then
+          printf 'v\n'
+          return 0
+        fi
+        printf 'v%s\n' "$2"
+        shift
+        ;;
+      --from=*) printf 'v%s\n' "${1#--from=}" ;;
+    esac
+    shift
+  done
+}
+
+if [ "$sender_bearing" = yes ] && [ "$wants_help" = no ]; then
+  if ! resolve_home_vessel; then
+    {
+      echo "fm-bridge-relay: SENDER IDENTITY UNRESOLVED - refusing to run '$subcommand'"
+      echo "fm-bridge-relay: NOTHING WAS SENT. This is a send that did not happen, not a send that failed:"
+      echo "fm-bridge-relay: an envelope attributed to the wrong vessel is delivered and acted on, and its reply goes to a seat that never sent it."
+      echo "fm-bridge-relay: reason: $IDENTITY_PROBLEM"
+      echo "fm-bridge-relay: remedy: record exactly one roster vessel id in $FM_HOME/config/bridge-vessel"
+    } >&2
+    exit 1
+  fi
+
+  claims=$(scan_sender_claims "$@")
+  if [ -z "$claims" ]; then
+    {
+      echo "fm-bridge-relay: refusing to run '$subcommand' without --from"
+      echo "fm-bridge-relay: this home's Bridge identity is '$HOME_VESSEL' (from $HOME_VESSEL_SOURCE)"
+      echo "fm-bridge-relay: remedy: pass --from $HOME_VESSEL; this relay never supplies a sender the caller did not write"
+    } >&2
+    exit 1
+  fi
+  while IFS= read -r marked_claim; do
+    claim=${marked_claim#v}
+    if [ "$claim" = "$HOME_VESSEL" ]; then
+      continue
+    fi
+    {
+      echo "fm-bridge-relay: SENDER IDENTITY MISMATCH - refusing to run '$subcommand' as a vessel this home is not"
+      echo "fm-bridge-relay: NOTHING WAS SENT. This is a send that did not happen, not a send that failed:"
+      echo "fm-bridge-relay: an envelope attributed to the wrong vessel is delivered and acted on, and its reply goes to a seat that never sent it."
+      echo "fm-bridge-relay: requested sender: '${claim:-<no value>}'"
+      echo "fm-bridge-relay: this home's Bridge identity: '$HOME_VESSEL' (from $HOME_VESSEL_SOURCE)"
+      echo "fm-bridge-relay: remedy: send as $HOME_VESSEL, or ask the vessel that owns '${claim:-that name}' to send its own mail"
+    } >&2
+    exit 1
+  done <<< "$claims"
+fi
 
 # classify_read_shaped: echo "yes" when this call must never answer from a stale
 # clone, "no" only when it is positively recognised as a write that owns its own

@@ -15,7 +15,11 @@ make_bridge() {
   seed="$TMP_ROOT/$name/seed"
   origin="$TMP_ROOT/$name/origin.git"
   bridge="$home/projects/coditan-bridge"
-  mkdir -p "$seed/bin" "$home/projects"
+  mkdir -p "$seed/bin" "$home/projects" "$home/config"
+  # Every fixture home is a vessel, because a sender-bearing call from a home
+  # with no identity is refused before it reaches anything these tests measure.
+  # Tests about the identity guard itself overwrite this with set_home_vessel.
+  printf 'tugboat\n' > "$home/config/bridge-vessel"
 
   cat > "$seed/bin/bridge-stub.sh" <<'SH'
 #!/usr/bin/env bash
@@ -50,6 +54,19 @@ SH
   origin_abs=$(cd "$origin" && pwd -P)
   git clone -q "file://$origin_abs" "$bridge"
   printf '%s\n' "$home"
+}
+
+# set_home_vessel <home> [record-text]: replace the fixture's Bridge identity
+# record with exactly <record-text>, or remove the record entirely when no text is
+# given. The text is written verbatim, so a caller can hand it an empty record or
+# one naming several vessels.
+set_home_vessel() {
+  local home=$1
+  if [ "$#" -lt 2 ]; then
+    rm -f "$home/config/bridge-vessel"
+    return 0
+  fi
+  printf '%s' "$2" > "$home/config/bridge-vessel"
 }
 
 # Publish one envelope straight to origin, leaving the clone one commit behind.
@@ -92,17 +109,23 @@ strand_clone() {
 }
 
 # run_relay <home> [args...]: run the relay against a fixture home with stderr
-# merged into stdout. Three knobs a caller may set for the duration of its own
+# merged into stdout. Four knobs a caller may set for the duration of its own
 # calls: RELAY_PATH_PREFIX prepends a fakebin dir to PATH,
 # RELAY_FLEET_SYNC_RETRIES overrides fleet-sync's packed-refs lock retry count so
-# a simulated lock race does not sit through its real retry waits, and RELAY_BIN
-# runs a different copy of the relay (see stub_fleet_sync).
+# a simulated lock race does not sit through its real retry waits, RELAY_BIN
+# runs a different copy of the relay (see stub_fleet_sync), and
+# RELAY_ROOT_OVERRIDE points $FM_ROOT at a fixture directory. That last one
+# matters only to the sender-identity tests: the relay falls back to
+# $FM_ROOT/config/bridge-vessel, and a test asserting that a home has no identity
+# must not quietly pass or fail on whether the real firstmate root the suite runs
+# from happens to carry that gitignored file.
 run_relay() {
   local home=$1
   shift
   PATH="${RELAY_PATH_PREFIX:+$RELAY_PATH_PREFIX:}$PATH" \
     FM_FLEET_SYNC_PACKED_REFS_LOCK_RETRIES="${RELAY_FLEET_SYNC_RETRIES:-3}" \
-    FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" BRIDGE_RELAY_CAPTURE="$home/capture" \
+    FM_HOME="$home" FM_ROOT_OVERRIDE="${RELAY_ROOT_OVERRIDE:-$ROOT}" \
+    BRIDGE_RELAY_CAPTURE="$home/capture" \
     "${RELAY_BIN:-$RELAY}" "$@" 2>&1
 }
 
@@ -229,7 +252,7 @@ test_dirty_checkout_is_rejected() {
   bridge="$home/projects/coditan-bridge"
   printf 'uncommitted\n' > "$bridge/dirty.txt"
 
-  out=$(run_relay "$home" send vessel payload); rc=$?
+  out=$(run_relay "$home" send vessel payload --from tugboat); rc=$?
   expect_code 1 "$rc" "dirty checkout"
   assert_contains "$out" 'has uncommitted changes' "dirty checkout refusal was unclear"
   assert_absent "$home/capture" "dirty checkout still invoked the Bridge script"
@@ -266,18 +289,26 @@ test_untracked_default_branch_is_rejected() {
 
 test_valid_calls_dispatch_verbatim() {
   local home bridge subcommand capture out
+  local -a args
   home=$(make_bridge valid)
   bridge="$home/projects/coditan-bridge"
 
   for subcommand in send inbox status broadcast; do
     capture="$home/capture"
     rm -f "$capture"
-    out=$(relay_own_output "$(run_relay "$home" "$subcommand" 'argument with spaces' '--literal=*' '')")
+    # The two sender-bearing commands must name this home's vessel to run at all,
+    # so they carry it here; the flag is forwarded like every other argument and
+    # is never supplied, reordered, or rewritten by the relay.
+    args=('argument with spaces' '--literal=*' '')
+    case "$subcommand" in
+      send | broadcast) args+=(--from tugboat) ;;
+    esac
+    out=$(relay_own_output "$(run_relay "$home" "$subcommand" "${args[@]}")")
     [ -z "$out" ] || fail "$subcommand dispatch produced unexpected output: $out"
     assert_grep "script=bridge-$subcommand.sh" "$capture" \
       "$subcommand did not select its matching Bridge script"
     assert_grep "cwd=$bridge" "$capture" "$subcommand did not run inside the Bridge checkout"
-    assert_grep 'argc=3' "$capture" "$subcommand did not preserve the argument count"
+    assert_grep "argc=${#args[@]}" "$capture" "$subcommand did not preserve the argument count"
     assert_grep 'arg0=<argument with spaces>' "$capture" "$subcommand changed a spaced argument"
     assert_grep 'arg1=<--literal=*>' "$capture" "$subcommand expanded a literal argument"
     assert_grep 'arg2=<>' "$capture" "$subcommand dropped an empty argument"
@@ -692,6 +723,155 @@ test_only_read_shaped_calls_refuse() {
   pass "Bridge relay refuses only the read-shaped calls and warns on the publishing ones"
 }
 
+# --- sender identity ---------------------------------------------------------
+# MEASURED 2026-08-20: a worker of a home whose config/bridge-vessel reads `hlr`
+# sent a Bridge envelope with `--from tugboat`. It was published correctly and
+# attributed to a vessel that did not send it, so a reply addressed to its sender
+# would have reached the wrong seat. Nothing on this path read this home's own
+# identity, so nothing could disagree with the claim the caller wrote.
+
+test_a_sender_that_is_not_this_home_is_refused() {
+  local home out rc
+  home=$(make_bridge wrong-sender)
+  set_home_vessel "$home" 'hlr'
+  # Stranded on purpose: a sender-bearing call against a checkout the refresh
+  # cannot prove current normally warns and dispatches, so a refusal here also
+  # shows the identity check runs before the refresh rather than after it.
+  publish_envelope_at_origin wrong-sender coditan
+  strand_clone wrong-sender
+
+  out=$(run_relay "$home" send coditan research 'Firstmate PR handover' --from tugboat); rc=$?
+  expect_code 1 "$rc" "send as a vessel this home is not"
+  assert_contains "$out" 'SENDER IDENTITY MISMATCH' "the wrong-sender refusal was unclear"
+  assert_contains "$out" "requested sender: 'tugboat'" "the refusal did not name the requested sender"
+  assert_contains "$out" "this home's Bridge identity: 'hlr'" \
+    "the refusal did not name the vessel this home actually is"
+  assert_contains "$out" 'NOTHING WAS SENT' "the refusal did not say the send never happened"
+  assert_not_contains "$out" 'not proven current' \
+    "the identity check ran after the refresh instead of before it"
+  assert_absent "$home/capture" "the misattributed send still reached the Bridge script"
+  pass "Bridge relay refuses a send whose sender is not the vessel this home is"
+}
+
+test_the_sender_that_is_this_home_dispatches() {
+  local home out
+  home=$(make_bridge right-sender)
+  set_home_vessel "$home" 'hlr'
+
+  # The trailing pair sits after `--`, where the Bridge parsers read it as
+  # positional text rather than as a second sender, and this guard reads it the
+  # same way.
+  out=$(relay_own_output "$(run_relay "$home" send coditan research subject --from hlr -- --from tugboat)")
+  [ -z "$out" ] || fail "a correctly attributed send produced unexpected output: $out"
+  assert_grep 'script=bridge-send.sh' "$home/capture" "a correctly attributed send never dispatched"
+  assert_grep 'arg3=<--from>' "$home/capture" "the sender flag was not forwarded"
+  assert_grep 'arg4=<hlr>' "$home/capture" "the sender value was not forwarded"
+  assert_grep 'argc=8' "$home/capture" "the relay did not forward the arguments unchanged"
+  pass "Bridge relay dispatches a send that names this home, forwarding it unchanged"
+}
+
+test_a_send_with_no_sender_names_this_home() {
+  local home out rc
+  home=$(make_bridge no-sender)
+  set_home_vessel "$home" 'hlr'
+
+  out=$(run_relay "$home" send coditan research subject); rc=$?
+  expect_code 1 "$rc" "send with no sender"
+  assert_contains "$out" "refusing to run 'send' without --from" "the missing-sender refusal was unclear"
+  assert_contains "$out" "this home's Bridge identity is 'hlr'" \
+    "the missing-sender refusal did not name the vessel the caller should have written"
+  assert_contains "$out" 'never supplies a sender the caller did not write' \
+    "the missing-sender refusal did not say the relay will not fill the value in"
+  assert_absent "$home/capture" "the senderless send still reached the Bridge script"
+  pass "Bridge relay refuses a send with no sender and names the vessel this home is"
+}
+
+test_an_identity_it_cannot_resolve_refuses_the_send() {
+  local home out rc empty_root
+  home=$(make_bridge unresolved)
+  empty_root="$TMP_ROOT/unresolved/empty-root"
+  mkdir -p "$empty_root"
+
+  # No record at all.
+  set_home_vessel "$home"
+  out=$(RELAY_ROOT_OVERRIDE="$empty_root" run_relay "$home" send coditan research subject --from hlr); rc=$?
+  expect_code 1 "$rc" "send from a home with no identity record"
+  assert_contains "$out" 'SENDER IDENTITY UNRESOLVED' "the missing-record refusal was unclear"
+  assert_contains "$out" 'has no Bridge identity record' "the refusal did not say the record is missing"
+  assert_absent "$home/capture" "a send from a home with no identity still dispatched"
+
+  # A record that holds only whitespace.
+  set_home_vessel "$home" '   '
+  out=$(RELAY_ROOT_OVERRIDE="$empty_root" run_relay "$home" send coditan research subject --from hlr); rc=$?
+  expect_code 1 "$rc" "send from a home whose identity record is empty"
+  assert_contains "$out" 'identity record is empty' "the empty-record refusal was unclear"
+  assert_absent "$home/capture" "a send from an empty identity record still dispatched"
+
+  # A record naming several vessels: that is a list of inboxes to watch, and the
+  # relay refuses it rather than resolving it to its first word, because picking
+  # one would be a guess and the guess is the defect.
+  set_home_vessel "$home" 'hlr tugboat'
+  out=$(RELAY_ROOT_OVERRIDE="$empty_root" run_relay "$home" send coditan research subject --from hlr); rc=$?
+  expect_code 1 "$rc" "send from a home whose identity record names several vessels"
+  assert_contains "$out" 'names 2 vessels (hlr tugboat)' "the multi-vessel refusal did not quote the record"
+  assert_absent "$home/capture" "a send from a multi-vessel identity record still dispatched"
+  pass "Bridge relay refuses a send whenever it cannot resolve this home to exactly one vessel"
+}
+
+test_a_second_sender_spelling_cannot_slip_past() {
+  local home out rc
+  home=$(make_bridge two-senders)
+  set_home_vessel "$home" 'hlr'
+
+  # The Bridge parsers keep the LAST --from, so a guard that approved on the
+  # first would let the second carry another vessel's name onto the envelope.
+  out=$(run_relay "$home" send coditan research subject --from hlr --from tugboat); rc=$?
+  expect_code 1 "$rc" "send whose second sender flag names another vessel"
+  assert_contains "$out" "requested sender: 'tugboat'" "the refusal read the wrong sender flag"
+  assert_absent "$home/capture" "a send with a trailing wrong sender still dispatched"
+
+  rm -f "$home/capture"
+  out=$(run_relay "$home" send coditan research subject --from tugboat --from hlr); rc=$?
+  expect_code 1 "$rc" "send whose first sender flag names another vessel"
+  assert_contains "$out" "requested sender: 'tugboat'" "the refusal missed the leading sender flag"
+  assert_absent "$home/capture" "a send with a leading wrong sender still dispatched"
+  pass "Bridge relay checks every sender spelling in the call, not just one of them"
+}
+
+test_a_broadcast_is_guarded_like_a_send() {
+  local home out rc
+  home=$(make_bridge wrong-broadcast)
+  set_home_vessel "$home" 'hlr'
+
+  out=$(run_relay "$home" broadcast directive subject --from tugboat); rc=$?
+  expect_code 1 "$rc" "broadcast as a vessel this home is not"
+  assert_contains "$out" 'SENDER IDENTITY MISMATCH' "the wrong-sender broadcast refusal was unclear"
+  assert_contains "$out" "refusing to run 'broadcast'" "the refusal did not name the broadcast"
+  assert_absent "$home/capture" "the misattributed broadcast still reached the Bridge script"
+  pass "Bridge relay guards a broadcast's sender exactly as it guards a send's"
+}
+
+test_reads_and_help_are_not_sender_guarded() {
+  local home out rc empty_root
+  home=$(make_bridge unguarded)
+  empty_root="$TMP_ROOT/unguarded/empty-root"
+  mkdir -p "$empty_root"
+  # A home with no identity at all: a read still answers and a help request still
+  # prints, because neither composes an envelope and neither can misattribute one.
+  set_home_vessel "$home"
+
+  local call
+  for call in "inbox --vessel tugboat" "status --show tugboat" "send --help" "broadcast -h"; do
+    rm -f "$home/capture"
+    # shellcheck disable=SC2086
+    out=$(relay_own_output "$(RELAY_ROOT_OVERRIDE="$empty_root" run_relay "$home" $call)"); rc=$?
+    expect_code 0 "$rc" "'$call' from a home with no identity record"
+    [ -z "$out" ] || fail "'$call' produced unexpected output: $out"
+    assert_grep 'script=bridge-' "$home/capture" "'$call' was refused for an identity it never needed"
+  done
+  pass "Bridge relay guards only the calls that carry a sender, never a read or a help request"
+}
+
 test_unknown_subcommand_is_rejected
 test_dirty_checkout_is_rejected
 test_non_default_branch_is_rejected
@@ -714,3 +894,10 @@ test_unrecognized_status_form_refuses_a_read
 test_lock_contention_proceeds_only_while_level
 test_fast_forward_lock_contention_proceeds_when_level
 test_only_read_shaped_calls_refuse
+test_a_sender_that_is_not_this_home_is_refused
+test_the_sender_that_is_this_home_dispatches
+test_a_send_with_no_sender_names_this_home
+test_an_identity_it_cannot_resolve_refuses_the_send
+test_a_second_sender_spelling_cannot_slip_past
+test_a_broadcast_is_guarded_like_a_send
+test_reads_and_help_are_not_sender_guarded

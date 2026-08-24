@@ -97,7 +97,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-landing-remote-lib.sh` | Shared remote URL, pipeline-mirror, and ref-selector recognition for `fm-teardown.sh` and `fm-project-remove.sh` |
 | `fm-project-remove.sh`   | Guardedly remove a captain-approved project clone and its `data/projects.md` entry    |
 | `fm-merge-local.sh`      | Fast-forward a `local-only` project's local default branch after approval            |
-| `fm-bridge-relay.sh`     | Guardedly relay envelope-only `send`/`inbox`/`status`/`broadcast` calls to the coditan-bridge checkout's own scripts, refreshing it through fleet sync first and refusing a read it cannot prove current |
+| `fm-bridge-relay.sh`     | Guardedly relay envelope-only `send`/`inbox`/`status`/`broadcast` calls to the coditan-bridge checkout's own scripts, refreshing it through fleet sync first, refusing a read it cannot prove current, and refusing a send or broadcast whose `--from` is not the vessel this home is |
 | `fm-review-diff.sh`      | Review a crewmate branch or recorded PR head against the authoritative base          |
 | `fm-deploy-verify.sh`    | Take the read-only readback readings a deploy claim rests on - source, checkout, container, and service - and never report agreement that was not measured |
 | `fm-pdf-finish.sh`       | Assemble a generated PDF through a conforming producer and publish it only if the gate passes (docs/pdf-output.md) |
