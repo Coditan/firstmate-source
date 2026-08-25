@@ -128,6 +128,7 @@ install_guard_scripts() {
   cp "$ROOT/bin/fm-primary-scope-lib.sh" "$dir/bin/fm-primary-scope-lib.sh"
   cp "$ROOT/bin/fm-supervision-lib.sh" "$dir/bin/fm-supervision-lib.sh"
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/fm-wake-lib.sh"
+  cp "$ROOT/bin/fm-harness-pid-lib.sh" "$dir/bin/fm-harness-pid-lib.sh"
   cp "$ROOT/bin/fm-delivery-lib.sh" "$dir/bin/fm-delivery-lib.sh"
   cp "$ROOT/bin/fm-delivery-service.sh" "$dir/bin/fm-delivery-service.sh"
   cp "$ROOT/bin/fm-service-path-lib.sh" "$dir/bin/fm-service-path-lib.sh"
