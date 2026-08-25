@@ -962,8 +962,8 @@ command_answered_by() {
   answer_rows=$(scan_identity_rows "$answer")
   [ -n "$answer_rows" ] \
     || fail "answer record $answer is in neither $DATA/backlog.md nor $ARCHIVE"
-  printf '%s\n' "$answer_rows" | awk -F'\t' '$4 == 1 && $5 == 1 { found = 1 } END { exit found ? 0 : 1 }' \
-    || fail "answer record $answer holds no captain row carrying a recorded resolution; only a record that stores the captain's own words can answer another"
+  printf '%s\n' "$answer_rows" | awk -F'\t' '$3 == 1 && $4 == 1 && $5 == 1 { found = 1 } END { exit found ? 0 : 1 }' \
+    || fail "answer record $answer has not finished closing; re-run the same fm-decision-hold.sh record call before pointing another record at it, or the pointer will not resolve"
   text=$(stored_decision_text "$answer") \
     || fail "answer record $answer has no readable stored decision text"
   digest=$(stored_decision_digest "$answer") \

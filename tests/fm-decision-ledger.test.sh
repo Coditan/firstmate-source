@@ -848,8 +848,15 @@ test_a_recovered_answer_disposes_a_record_no_other_verb_can_reach() {
 # to overwrite his words with a pointer, or to launder a fresh loss into a settled
 # one. Each is proved on a record of that shape rather than argued.
 test_attesting_an_answer_cannot_reach_a_live_or_answered_or_unanswered_record() {
-  local home rc=0 audit
+  local home rc=0 audit out
   home=$(seed_recovered_answer_home attest-refusals)
+  printf 'an answer whose close has not finished\n' > "$home/unfinished.txt"
+  run_hold "$home" record unfinished-answer captured --door chat \
+    --decision-file "$home/unfinished.txt" --title "An unfinished answer" \
+    --repo sample >/dev/null 2>&1 \
+    || fail "recording the unfinished answer fixture failed"
+  sed -i.bak 's/^- \[x\] unfinished-answer-decision-captured /- [ ] unfinished-answer-decision-captured /' \
+    "$home/data/backlog.md"
   tasks_in "$home" add "still-open-decision-q" "A question genuinely waiting on him" \
     --kind captain --repo firstmate >/dev/null
   tasks_in "$home" hold "still-open-decision-q" --reason "captain decision pending" --kind captain >/dev/null
@@ -865,6 +872,18 @@ test_attesting_an_answer_cannot_reach_a_live_or_answered_or_unanswered_record() 
   if run_hold "$home" answered-by fm-bwrap-apparmor-upstream-doc --by unrelated-scout >/dev/null 2>&1; then
     fail "only a record that stores his words may answer another"
   fi
+
+  if out=$(run_hold "$home" answered-by fm-bwrap-apparmor-upstream-doc \
+       --by unfinished-answer-decision-captured 2>&1); then
+    fail "an answer record whose close has not finished must not be accepted"
+  fi
+  assert_contains "$out" "answer record unfinished-answer-decision-captured has not finished closing" \
+    "the refusal must explain that the answer record must finish closing first"
+  rc=0
+  audit=$(run_ledger "$home" --audit) || rc=$?
+  [ "$rc" -eq 1 ] || fail "a refused unfinished answer must leave the finding standing"
+  assert_contains "$audit" "closed-without-record fm-bwrap-apparmor-upstream-doc" \
+    "refusing an unfinished answer must not dispose of the target record"
 
   # A record closed AFTER the baseline is a genuine new failure. The baseline cannot
   # cover it, and neither can an attestation whose named answer does not exist.
