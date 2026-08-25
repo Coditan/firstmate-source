@@ -675,6 +675,62 @@ run_lock_in_new_pid_ns() {
     FM_STATE_OVERRIDE="$root/state" "$LOCK_SH" "$@" 2>&1
 }
 
+make_namespace_identity_unreadable() {  # <fakebin>
+  local fakebin=$1 real_readlink
+  real_readlink=$(command -v readlink)
+  cat > "$fakebin/readlink" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = /proc/self/ns/pid ]; then
+  exit 1
+fi
+exec "$real_readlink" "\$@"
+SH
+  chmod +x "$fakebin/readlink"
+}
+
+make_nonlinux_uname() {  # <fakebin>
+  local fakebin=$1 real_uname
+  real_uname=$(command -v uname)
+  cat > "$fakebin/uname" <<SH
+#!/usr/bin/env bash
+case "\${1:-}" in
+  -s) printf 'FreeBSD\n' ;;
+  -n) printf 'fixture-host\n' ;;
+  *) exec "$real_uname" "\$@" ;;
+esac
+SH
+  chmod +x "$fakebin/uname"
+}
+
+test_linux_refuses_when_its_pid_namespace_identity_is_unreadable() {
+  local root fakebin out status=0
+  prepare unreadable-linux-pidns
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN
+  make_namespace_identity_unreadable "$fakebin"
+
+  out=$(run_lock "$root" "$fakebin") || status=$?
+  expect_code 1 "$status" "Linux must refuse when its pid namespace identity cannot be read"
+  assert_contains "$out" "cannot identify this session's process namespace" \
+    "the refusal must name the missing process namespace identity"
+  [ ! -e "$root/state/.lock" ] \
+    || fail "an unidentifiable Linux pid table must never publish a lock record"
+}
+
+test_a_kernel_without_pid_namespaces_uses_a_machine_scoped_token() {
+  local root fakebin harness out status=0
+  prepare nonlinux-pid-table
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
+  make_namespace_identity_unreadable "$fakebin"
+  make_nonlinux_uname "$fakebin"
+
+  out=$(run_lock "$root" "$fakebin") || status=$?
+  expect_code 0 "$status" "a kernel without pid namespaces must identify its machine-scoped pid table"
+  assert_contains "$out" "lock acquired: harness pid $harness" \
+    "the machine-scoped token must permit a provable acquisition"
+  [ "$(lock_field "$root/state/.lock" pidns)" = "nons:FreeBSD:fixture-host" ] \
+    || fail "the published lock must carry the staged machine-scoped pid-table token"
+}
+
 test_a_holder_in_another_pid_table_is_refused_even_when_it_looks_dead() {
   local root fakebin harness out status=0
   prepare foreign-table
@@ -936,6 +992,8 @@ test_a_dangling_lock_symlink_is_refused_rather_than_created
 test_a_state_directory_that_cannot_be_written_refuses_before_claiming
 test_a_state_directory_that_cannot_be_created_refuses
 test_a_session_that_cannot_identify_itself_acquires_nothing
+test_linux_refuses_when_its_pid_namespace_identity_is_unreadable
+test_a_kernel_without_pid_namespaces_uses_a_machine_scoped_token
 test_a_holder_in_another_pid_table_is_refused_even_when_it_looks_dead
 test_status_calls_a_holder_in_another_pid_table_unmeasurable_not_stale
 test_a_real_pid_namespace_cannot_take_a_lock_held_on_this_host

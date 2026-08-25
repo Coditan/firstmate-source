@@ -40,8 +40,8 @@ handover=<ticket>          (present only while an offer stands)
 ```
 
 Line one is unchanged, so every reader that already took the first line kept working; the fields below it are additive.
-Two readers took the WHOLE file and were changed to take line one - `fm_context_session_live` in `bin/fm-context-lib.sh` and the endpoint publisher in `bin/fm-delivery-service.sh`.
-Both would otherwise have been handed a multi-line string where they expected a number, and the first of them would have reported a live session as none.
+Three readers took the WHOLE file and were changed to read the holder from line one - `fm_context_session_live` in `bin/fm-context-lib.sh`, the endpoint publisher in `bin/fm-delivery-service.sh`, and endpoint validation in `bin/fm-delivery-lib.sh`.
+They would otherwise have been handed a multi-line string where they expected a number, causing context and endpoint ownership checks to reject a live session.
 
 The liveness test was NOT loosened, which was the trap this work was warned about.
 A lock that stops refusing is not a lock.
@@ -52,7 +52,9 @@ What changed is that the test now knows when it cannot see:
   Not "stale", not "held" - neither is a claim this reader is entitled to make.
 - The reader cannot name its own table: refuse, for the same reason.
 
-Where the kernel has no pid namespaces at all the whole machine is one table, and the token names the machine.
+On Linux, failure to read `/proc/self/ns/pid` is a refusal because a hostname cannot distinguish pid namespaces that share one machine identity.
+The accepted cost is that such a home operates read-only until its pid namespace identity becomes readable.
+Only where the kernel has no pid namespaces at all is the whole machine one table and the token names the machine.
 The host name is deliberately part of it: two machines sharing one home over a network filesystem are two tables and must not be read as one.
 
 ## The handover, and the cost that was chosen

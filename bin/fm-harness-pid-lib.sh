@@ -131,10 +131,11 @@ fm_harness_alive() {
 # formed, which a caller must treat as "I cannot say which table I am in" and
 # never as a match.
 # On Linux the namespace inode IS the table's identity, and it is the same
-# string the kernel shows for every process in it. Where the kernel has no pid
-# namespaces at all, the whole machine is one table, so the machine names it -
-# with its host name included deliberately, because two machines sharing one
-# home over a network filesystem are two tables and must not be read as one.
+# string the kernel shows for every process in it. If that identity cannot be
+# read, Linux must refuse: a hostname is not a pid-table identity where distinct
+# namespaces can share it. On kernels without pid namespaces the whole machine
+# is one table, so the machine names it - with its host name included because
+# two machines sharing one home over a network filesystem are two tables.
 fm_pid_namespace_token() {
   local token sys host
   if token=$(readlink /proc/self/ns/pid 2>/dev/null) && [ -n "$token" ]; then
@@ -142,9 +143,13 @@ fm_pid_namespace_token() {
     return 0
   fi
   sys=$(uname -s 2>/dev/null) || return 1
+  sys=${sys//[[:space:]]/}
+  [ -n "$sys" ] || return 1
+  [ "$sys" != Linux ] || return 1
   host=$(uname -n 2>/dev/null) || return 1
-  [ -n "$sys" ] && [ -n "$host" ] || return 1
-  printf 'nons:%s:%s\n' "${sys//[[:space:]]/}" "${host//[[:space:]]/}"
+  host=${host//[[:space:]]/}
+  [ -n "$host" ] || return 1
+  printf 'nons:%s:%s\n' "$sys" "$host"
 }
 
 # The session-lock record, as published by bin/fm-lock.sh:
