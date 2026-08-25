@@ -8,16 +8,20 @@
 # that day, because the answers lived only in worker status logs, a pull-request
 # body, and one session's context - all three temporary. bin/fm-decision-hold.sh
 # `record` closed the write side of that. This is the read side: the command a fresh
-# session, a bearings pass, and a decision board run BEFORE presenting anything as
-# open.
+# session runs BEFORE presenting any captain decision record as open.
 #
 # WHAT IT READS
 # The one store, directly: `kind: captain` rows in the active home's
-# data/backlog.md and data/done-archive.md. Not a second store - it never writes,
-# and it holds nothing of its own. It reads the raw markdown rather than
-# `tasks-axi show`, for two reasons: `show` cannot see archived rows at all, and its
-# escaped one-line body is a representation of the captain's words rather than the
-# words. The raw row is the only place the bytes survive unmediated.
+# data/backlog.md and data/done-archive.md.
+# That is the captain decision-record set.
+# It is deliberately narrower than the captain-actionable hold set in
+# bin/fm-fleet-snapshot.sh, which counts queued, unblocked records held with
+# `hold-kind: captain` whatever their own record kind.
+# Not a second store - it never writes, and it holds nothing of its own.
+# It reads the raw markdown rather than `tasks-axi show`, for two reasons: `show`
+# cannot see archived rows at all, and its escaped one-line body is a
+# representation of the captain's words rather than the words.
+# The raw row is the only place the bytes survive unmediated.
 #
 # THE DIGEST IS RE-CHECKED ON EVERY READ
 # bin/fm-decision-hold.sh stores a sha256 of the exact decision text alongside it.
@@ -176,7 +180,8 @@
 # Output contract: `fm-decision-ledger.v1`.
 #   settled[]  id, origin, key, title, repo, door, closed, source, routed[],
 #              decision (verbatim), digest, verbatim (digest re-check)
-#   open[]     id, title, repo, held, blocks[] - captain questions still unanswered
+#   open[]     id, title, repo, held, blocks[] - captain decision records still
+#              unanswered
 #   folded[]   id, title, successor, fold_reason - questions a later record covers
 #   answered_elsewhere[]  id, title, answer_record - closed questions whose answer
 #              is stored under another identity
@@ -872,7 +877,7 @@ fi
 
 printf '%s' "$LEDGER" | jq -r '
   "settled captain decisions: \(.settled_total) (showing \(.settled | length))",
-  "open captain questions: \(.open | length)",
+  "open captain decision records: \(.open | length)",
   "questions folded into a later record: \(.folded | length)",
   "questions whose answer is stored under another record: \(.answered_elsewhere | length)",
   (if (.audit | length) > 0 then
