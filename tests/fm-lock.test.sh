@@ -15,7 +15,14 @@
 #     that decision is already made and queuing it would stall session start;
 #   - what the lock file holds afterwards is read back and checked, so a write
 #     that reported success and left something else behind is caught here rather
-#     than by whoever reads the lock next.
+#     than by whoever reads the lock next;
+#   - the record names the PID TABLE its holder pid came from, and a session
+#     reading a record from a table it cannot see into is refused rather than
+#     told the holder is dead - the case a seat inside a container hits, staged
+#     here in a real pid namespace rather than reasoned about;
+#   - ownership can be PASSED, through a ticket the outgoing holder issues while
+#     it is still the recorded holder, so the record never names nobody and
+#     never names two.
 #
 # One negative case is deliberately absent and is named rather than implied:
 # the read-back's own failure branch - a write that succeeds and leaves content
@@ -64,6 +71,36 @@ live_pid() {
   local p=$!
   BG_PIDS+=("$p")
   printf -v "$1" '%s' "$p"
+}
+
+# lock_pid <lock-file>: the holder pid the record names, which is line one. The
+# fields below it are read with lock_field, never by matching the whole file:
+# an assertion that compares the file's entire contents to a pid is asserting
+# the record's SHAPE, and would have to be rewritten for every field added.
+lock_pid() {
+  sed -n '1p' "$1"
+}
+
+# lock_field <lock-file> <name>: the value of a key=value field, empty if absent.
+lock_field() {
+  sed -n "s/^$2=//p" "$1"
+}
+
+# my_pidns: this process's own pid-table token, resolved by the one owner of it.
+my_pidns() {
+  fm_pid_namespace_token
+}
+
+# write_record <lock-file> <pid> [pidns] [ticket]: compose a record by hand, the
+# way a holding session would have left it. A pidns of "-" means a record from
+# before this fork named pid tables at all.
+write_record() {
+  local lock=$1 pid=$2 ns=${3:--} ticket=${4:-}
+  {
+    printf '%s\n' "$pid"
+    [ "$ns" = "-" ] || printf 'pidns=%s\n' "$ns"
+    [ -z "$ticket" ] || printf 'handover=%s\n' "$ticket"
+  } > "$lock"
 }
 
 # fixture <name>: a home with an empty state directory, path on stdout.
@@ -165,8 +202,10 @@ test_a_free_lock_is_acquired_and_the_pid_is_published() {
   out=$(run_lock "$root" "$fakebin") || fail "acquiring a free lock must succeed"
   assert_contains "$out" "lock acquired: harness pid $harness" \
     "acquisition must report the harness pid it published"
-  [ "$(cat "$root/state/.lock")" = "$harness" ] \
+  [ "$(lock_pid "$root/state/.lock")" = "$harness" ] \
     || fail "the lock file must hold the resolved harness pid, not the tool call's own"
+  [ "$(lock_field "$root/state/.lock" pidns)" = "$(my_pidns)" ] \
+    || fail "the record must name the pid table its holder pid came from"
   [ ! -e "$root/state/.lock.acquire" ] \
     || fail "the claim lock must be released once the session lock is published"
   [ -z "$(find "$root/state" -maxdepth 1 -name '.lock-write.*' -print -quit)" ] \
@@ -185,7 +224,7 @@ test_a_live_holder_refuses_the_second_session() {
   expect_code 1 "$status" "a lock held by another live session must not be acquired"
   assert_contains "$out" "another live firstmate session holds the lock (pid $other)" \
     "the refusal must name the holder an operator has to go and look at"
-  [ "$(cat "$root/state/.lock")" = "$other" ] \
+  [ "$(lock_pid "$root/state/.lock")" = "$other" ] \
     || fail "a refused acquisition must leave the holder's own record intact"
 }
 
@@ -193,7 +232,7 @@ test_a_session_reacquiring_its_own_lock_is_answered_without_the_claim() {
   local root fakebin harness out
   prepare reacquire
   root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
-  printf '%s\n' "$harness" > "$root/state/.lock"
+  write_record "$root/state/.lock" "$harness" "$(my_pidns)"
 
   # Hold the claim lock from a live process. A session that had to take the
   # claim would now block and time out; the one that owns the lock already must
@@ -211,7 +250,9 @@ test_reacquisition_falls_through_when_ownership_changes_during_verification() {
   local root fakebin harness out status=0 marker real_cat
   prepare reacquire-changed
   root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
-  printf '%s\n' "$harness" > "$root/state/.lock"
+  # A full record, not a bare pid: a record naming no pid table falls through
+  # for its own reason, and this test is about the fast path's re-read.
+  write_record "$root/state/.lock" "$harness" "$(my_pidns)"
   marker="$root/cat-swapped"
   real_cat=$(command -v cat)
   cat > "$fakebin/cat" <<SH
@@ -233,7 +274,7 @@ SH
   expect_code 1 "$status" "changed ownership must fall through the optimistic fast path"
   assert_contains "$out" "cannot serialise session-lock acquisition" \
     "a changed own-lock record must enter ordinary claim acquisition"
-  [ "$(cat "$root/state/.lock")" = "99999999" ] \
+  [ "$(lock_pid "$root/state/.lock")" = "99999999" ] \
     || fail "a failed fall-through must not report or republish the old ownership"
 }
 
@@ -263,7 +304,7 @@ SH
     "atomic publication must still prove the published holder"
   [ "$(cat "$target")" = "untouched" ] \
     || fail "publication must not write through a symlink swapped onto the lock path"
-  [ "$(cat "$root/state/.lock")" = "$harness" ] \
+  [ "$(lock_pid "$root/state/.lock")" = "$harness" ] \
     || fail "the atomic rename must replace the symlink with this session's lock"
   [ -z "$(find "$root/state" -maxdepth 1 -name '.lock-publish.*' -print -quit)" ] \
     || fail "atomic publication must not leave its temporary file behind"
@@ -337,7 +378,7 @@ test_an_unreadable_lock_is_never_treated_as_free() {
   expect_code 1 "$status" "a lock nobody can read must not be acquired"
   assert_contains "$out" "the session lock is unreadable" \
     "the refusal must say the lock could not be read, not that someone holds it"
-  [ "$(cat "$root/state/.lock")" = "99999999" ] \
+  [ "$(lock_pid "$root/state/.lock")" = "99999999" ] \
     || fail "a refused acquisition must not have overwritten the unreadable lock"
 }
 
@@ -435,7 +476,7 @@ test_a_symlink_to_a_usable_state_directory_is_used_consistently() {
     || fail "acquisition must accept a state path resolving to a usable directory"
   assert_contains "$out" "lock acquired: harness pid $harness" \
     "acquisition through a state-directory symlink must publish authority"
-  [ "$(cat "$root/real-state/.lock")" = "$harness" ] \
+  [ "$(lock_pid "$root/real-state/.lock")" = "$harness" ] \
     || fail "the lock must land in the resolved state directory"
 
   out=$(run_lock "$root" "$fakebin" status) || fail "status must always exit 0"
@@ -603,6 +644,418 @@ SH
   [ ! -e "$root/state/.lock" ] || fail "no lock may exist after a refused acquisition"
 }
 
+# --- the pid table the holder pid came from --------------------------------
+
+# ns_available: whether this machine will hand an unprivileged process a real
+# pid namespace. Skipped rather than failed where it will not, and the skip says
+# what went unproven - a suite that quietly drops its own central case reads
+# afterwards exactly like one that ran it.
+NS_AVAILABLE=
+ns_available() {
+  if [ -z "$NS_AVAILABLE" ]; then
+    if unshare --user --pid --fork /bin/true 2>/dev/null; then
+      NS_AVAILABLE=yes
+    else
+      NS_AVAILABLE=no
+    fi
+  fi
+  [ "$NS_AVAILABLE" = yes ]
+}
+
+# run_lock_in_new_pid_ns <root> <fakebin> [args...]: the same script, in a real
+# pid namespace of its own. Not a simulation of a container and not a fake `ps`
+# standing in for one: the pid table really is a different one, which is the
+# whole point - the defect being tested is invisible to any fixture that only
+# pretends.
+run_lock_in_new_pid_ns() {
+  local root=$1 fakebin=$2
+  shift 2
+  unshare --user --pid --fork \
+    env -u FM_HOME -u FM_ROOT_OVERRIDE PATH="$fakebin:$PATH" \
+    FM_STATE_OVERRIDE="$root/state" "$LOCK_SH" "$@" 2>&1
+}
+
+make_namespace_identity_unreadable() {  # <fakebin>
+  local fakebin=$1 real_readlink
+  real_readlink=$(command -v readlink)
+  cat > "$fakebin/readlink" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = /proc/self/ns/pid ]; then
+  exit 1
+fi
+exec "$real_readlink" "\$@"
+SH
+  chmod +x "$fakebin/readlink"
+}
+
+make_nonlinux_uname() {  # <fakebin>
+  local fakebin=$1 real_uname
+  real_uname=$(command -v uname)
+  cat > "$fakebin/uname" <<SH
+#!/usr/bin/env bash
+case "\${1:-}" in
+  -s) printf 'FreeBSD\n' ;;
+  -n) printf 'fixture-host\n' ;;
+  *) exec "$real_uname" "\$@" ;;
+esac
+SH
+  chmod +x "$fakebin/uname"
+}
+
+make_machine_identity() {  # <fakebin> <value|empty|unreadable>
+  local fakebin=$1 mode=$2 real_cat
+  real_cat=$(command -v cat)
+  cat > "$fakebin/cat" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = /etc/machine-id ]; then
+  case "$mode" in
+    empty) exit 0 ;;
+    unreadable) exit 1 ;;
+    *) printf '%s\n' "$mode"; exit 0 ;;
+  esac
+fi
+exec "$real_cat" "\$@"
+SH
+  chmod +x "$fakebin/cat"
+}
+
+test_linux_refuses_when_its_pid_namespace_identity_is_unreadable() {
+  local root fakebin out status=0
+  prepare unreadable-linux-pidns
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN
+  make_namespace_identity_unreadable "$fakebin"
+
+  out=$(run_lock "$root" "$fakebin") || status=$?
+  expect_code 1 "$status" "Linux must refuse when its pid namespace identity cannot be read"
+  assert_contains "$out" "cannot identify this session's process namespace" \
+    "the refusal must name the missing process namespace identity"
+  [ ! -e "$root/state/.lock" ] \
+    || fail "an unidentifiable Linux pid table must never publish a lock record"
+}
+
+test_linux_refuses_when_its_machine_identity_is_unusable() {
+  local mode root fakebin out status
+  for mode in unreadable empty; do
+    prepare "${mode}-linux-machine-id"
+    root=$PREP_ROOT fakebin=$PREP_FAKEBIN status=0
+    make_machine_identity "$fakebin" "$mode"
+
+    out=$(run_lock "$root" "$fakebin") || status=$?
+    expect_code 1 "$status" "Linux must refuse when machine-id is $mode"
+    assert_contains "$out" "readable /etc/machine-id" \
+      "the refusal must name the missing Linux machine identity"
+    [ ! -e "$root/state/.lock" ] \
+      || fail "an unidentifiable Linux machine must never publish a lock record"
+  done
+}
+
+test_the_same_namespace_inode_on_another_machine_is_foreign() {
+  local root fakebin harness otherbin other out status=0
+  prepare machine-scoped-pidns
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
+  make_machine_identity "$fakebin" machine-a
+  run_lock "$root" "$fakebin" >/dev/null || fail "the first machine must acquire the lock"
+  assert_contains "$(lock_field "$root/state/.lock" pidns)" "linux:machine-a:pid:[" \
+    "the first record must combine machine identity with namespace inode"
+
+  kill "$harness" 2>/dev/null || true
+  wait "$harness" 2>/dev/null || true
+  otherbin=$(fm_fakebin "$root/other-machine")
+  live_pid other
+  make_fake_ps_holder "$otherbin" "$other"
+  make_machine_identity "$otherbin" machine-b
+
+  out=$(run_lock "$root" "$otherbin") || status=$?
+  expect_code 1 "$status" "the same namespace inode on another machine must remain foreign"
+  assert_contains "$out" "liveness is unmeasurable" \
+    "the second machine must refuse rather than probe the first machine's dead-looking pid"
+  [ "$(lock_pid "$root/state/.lock")" = "$harness" ] \
+    || fail "the second machine must leave the first machine's record intact"
+}
+
+test_a_kernel_without_pid_namespaces_uses_a_machine_scoped_token() {
+  local root fakebin harness out status=0
+  prepare nonlinux-pid-table
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
+  make_namespace_identity_unreadable "$fakebin"
+  make_nonlinux_uname "$fakebin"
+
+  out=$(run_lock "$root" "$fakebin") || status=$?
+  expect_code 0 "$status" "a kernel without pid namespaces must identify its machine-scoped pid table"
+  assert_contains "$out" "lock acquired: harness pid $harness" \
+    "the machine-scoped token must permit a provable acquisition"
+  [ "$(lock_field "$root/state/.lock" pidns)" = "nons:FreeBSD:fixture-host" ] \
+    || fail "the published lock must carry the staged machine-scoped pid-table token"
+}
+
+test_a_holder_in_another_pid_table_is_refused_even_when_it_looks_dead() {
+  local root fakebin harness out status=0
+  prepare foreign-table
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
+  # A pid that is definitively dead in THIS table, recorded against another one.
+  # That combination is the entire argument: the liveness test answers "dead",
+  # and answering "dead" is exactly what this session is not entitled to do
+  # about a table it cannot see into.
+  write_record "$root/state/.lock" 99999999 "pid:[4026533181]"
+
+  out=$(run_lock "$root" "$fakebin") || status=$?
+  expect_code 1 "$status" "a holder in an unreadable pid table must not be taken over"
+  assert_contains "$out" "process namespace pid:[4026533181], which this session cannot see into" \
+    "the refusal must say the table cannot be seen into, not that the holder is gone"
+  assert_contains "$out" "handover" \
+    "the refusal must name the way ownership is meant to move instead"
+  [ "$(lock_pid "$root/state/.lock")" = "99999999" ] \
+    || fail "a refused acquisition must leave the foreign record untouched"
+}
+
+test_status_calls_a_holder_in_another_pid_table_unmeasurable_not_stale() {
+  local root fakebin harness out
+  prepare foreign-status
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
+  write_record "$root/state/.lock" 99999999 "pid:[4026533181]"
+
+  out=$(run_lock "$root" "$fakebin" status) || fail "status must always exit 0"
+  assert_contains "$out" "liveness is unmeasurable from here" \
+    "status must report what it cannot measure rather than guessing at it"
+  assert_not_contains "$out" "lock: stale" \
+    "a holder in another pid table must never be reported stale"
+  assert_not_contains "$out" "lock: held by live harness" \
+    "a holder this session cannot probe must not be reported live either"
+}
+
+test_a_real_pid_namespace_cannot_take_a_lock_held_on_this_host() {
+  local root fakebin harness insidebin out status=0 probe
+  prepare real-namespace
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
+  if ! ns_available; then
+    echo "skip: this machine refuses an unprivileged pid namespace, so the cross-boundary refusal is UNPROVEN here"
+    return 0
+  fi
+  # The host seat takes the lock for real, so the record's table token is this
+  # host's own rather than one the test made up.
+  out=$(run_lock "$root" "$fakebin") || fail "the host seat must acquire first"
+  assert_contains "$out" "lock acquired: harness pid $harness" "host acquisition failed"
+
+  # The danger is asserted before the fix is: inside its own pid table the live
+  # host holder does not answer, so a liveness test alone WOULD call it dead.
+  probe=$(unshare --user --pid --fork /bin/bash -c \
+    "if kill -0 $harness 2>/dev/null; then echo visible; else echo invisible; fi" 2>&1)
+  [ "$probe" = invisible ] \
+    || fail "this fixture proves nothing unless the host holder is invisible inside the namespace (got: $probe)"
+
+  insidebin=$(fm_fakebin "$root/inside")
+  make_fake_ps_holder "$insidebin" 424242
+  status=0
+  out=$(run_lock_in_new_pid_ns "$root" "$insidebin") || status=$?
+  expect_code 1 "$status" \
+    "a seat in another pid namespace must not take a lock the host seat holds"
+  assert_contains "$out" "which this session cannot see into" \
+    "the inside seat must refuse because it cannot see, not because it found a holder"
+  [ "$(lock_pid "$root/state/.lock")" = "$harness" ] \
+    || fail "the host seat's ownership must survive the refused takeover"
+  [ -z "$(lock_field "$root/state/.lock" handover)" ] \
+    || fail "a refused takeover must not leave a handover offer behind"
+}
+
+test_a_second_session_on_this_host_is_still_refused() {
+  local root fakebin harness other otherbin out status=0
+  prepare second-host-session
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
+  out=$(run_lock "$root" "$fakebin") || fail "the first session must acquire"
+
+  # A genuinely different live harness on the SAME host, resolved through its own
+  # ancestry: the ordinary single-seat case, which naming pid tables must not
+  # have loosened.
+  live_pid other
+  otherbin=$(fm_fakebin "$root/second")
+  make_fake_ps_holder "$otherbin" "$other" "$harness"
+  status=0
+  out=$(run_lock "$root" "$otherbin") || status=$?
+  expect_code 1 "$status" "a second session on this host must still be refused"
+  assert_contains "$out" "another live firstmate session holds the lock (pid $harness)" \
+    "the same-host refusal must still name the holder"
+  [ "$(lock_pid "$root/state/.lock")" = "$harness" ] \
+    || fail "the refused second session must not have republished the lock"
+}
+
+# --- passing ownership rather than dropping it -----------------------------
+
+test_help_describes_the_irrevocable_handover_interface() {
+  local out first last
+  out=$("$LOCK_SH" --help) || fail "session-lock help must be readable"
+  first=$(printf '%s\n' "$out" | sed -n '1p')
+  last=$(printf '%s\n' "$out" | tail -n 1)
+  [ "$first" = "Acquire, inspect or hand over the per-home firstmate session lock." ] \
+    || fail "help must begin with the script header"
+  [ "$last" = "       fm-lock.sh handover              stand down and print the successor's ticket" ] \
+    || fail "help must end with the final supported usage line"
+  assert_contains "$out" "The offer is final" \
+    "help must state that a handover offer is irrevocable"
+  assert_not_contains "$out" "--cancel" \
+    "help must not advertise a withdrawal operation"
+}
+
+test_an_irrevocable_offer_keeps_the_home_owned_for_one_successor() {
+  local root fakebin harness other otherbin out ticket status=0
+  prepare handover-offer
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
+  run_lock "$root" "$fakebin" >/dev/null || fail "the outgoing seat must hold the lock first"
+
+  out=$(run_lock "$root" "$fakebin" handover) || fail "the holder must be able to offer ownership"
+  ticket=$(printf '%s\n' "$out" | sed -n 's/^ticket: //p')
+  [ "${#ticket}" -eq 32 ] || fail "the offer must print a ticket a successor can present (got: $ticket)"
+
+  # The chosen cost, asserted rather than described: the record still names the
+  # outgoing holder, so at no point does it name nobody.
+  [ "$(lock_pid "$root/state/.lock")" = "$harness" ] \
+    || fail "an offer must leave the outgoing seat recorded, so the home is never unowned"
+  [ "$(lock_field "$root/state/.lock" handover)" = "$ticket" ] \
+    || fail "the record must name the one successor the ticket was issued to"
+
+  out=$(run_lock "$root" "$fakebin" status) || fail "status must always exit 0"
+  assert_contains "$out" "handover offered" "status must show that an offer stands"
+
+  # And the other half of the cost: the seat that stood down cannot quietly
+  # resume, which is what keeps two seats from acting at once.
+  status=0
+  out=$(run_lock "$root" "$fakebin") || status=$?
+  expect_code 1 "$status" "a seat that offered its ownership away must not resume by re-acquiring"
+  assert_contains "$out" "the offer cannot be withdrawn" \
+    "the refusal must state that the offer is final"
+  assert_not_contains "$out" "--cancel" \
+    "the refusal must not name a withdrawal command"
+  [ "$(lock_pid "$root/state/.lock")" = "$harness" ] \
+    || fail "a refused re-acquire must leave the outgoing holder recorded"
+  [ "$(lock_field "$root/state/.lock" handover)" = "$ticket" ] \
+    || fail "a refused re-acquire must leave the successor's ticket intact"
+
+  status=0
+  out=$(run_lock "$root" "$fakebin" handover --cancel) || status=$?
+  expect_code 2 "$status" "the handover interface must provide no withdrawal operation"
+  assert_contains "$out" "unknown option --cancel" \
+    "a withdrawal attempt must be rejected as unsupported"
+  [ "$(lock_field "$root/state/.lock" handover)" = "$ticket" ] \
+    || fail "an unsupported withdrawal must leave the final offer intact"
+
+  status=0
+  out=$(run_lock "$root" "$fakebin" acquire --handover "${ticket}deadbeef") || status=$?
+  expect_code 1 "$status" "a ticket that does not match the standing offer must be refused"
+  assert_contains "$out" "does not match the offer" "the refusal must say the ticket did not match"
+  [ "$(lock_pid "$root/state/.lock")" = "$harness" ] \
+    || fail "a mismatched ticket must leave ownership where it was"
+
+  otherbin=$(fm_fakebin "$root/successor")
+  live_pid other
+  make_fake_ps_holder "$otherbin" "$other" "$harness"
+  status=0
+  out=$(run_lock "$root" "$otherbin" acquire --handover "$ticket") || status=$?
+  expect_code 0 "$status" "the named successor must still redeem an irrevocable offer"
+  assert_contains "$out" "lock acquired by handover: harness pid $other (from pid $harness)" \
+    "the successor must report the ownership transfer"
+  [ "$(lock_pid "$root/state/.lock")" = "$other" ] \
+    || fail "redemption must publish the named successor as holder"
+  [ -z "$(lock_field "$root/state/.lock" handover)" ] \
+    || fail "redemption must consume the final offer"
+}
+
+test_a_ticket_is_refused_when_no_offer_stands() {
+  local root fakebin harness out status=0
+  prepare handover-unoffered
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
+  run_lock "$root" "$fakebin" >/dev/null || fail "the seat must hold the lock first"
+
+  out=$(run_lock "$root" "$fakebin" acquire --handover 0123456789abcdef0123456789abcdef) || status=$?
+  expect_code 1 "$status" "a ticket must not take a lock nobody offered"
+  assert_contains "$out" "no offer stands on this lock" \
+    "the refusal must say there was nothing to claim"
+}
+
+test_a_seat_that_holds_nothing_cannot_offer_ownership() {
+  local root fakebin harness out status=0
+  prepare handover-nonholder
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
+
+  out=$(run_lock "$root" "$fakebin" handover) || status=$?
+  expect_code 1 "$status" "a seat with no ownership must not be able to offer it"
+  assert_contains "$out" "does not hold the lock" "the refusal must say why"
+  [ ! -e "$root/state/.lock" ] || fail "a refused offer must not have created a record"
+}
+
+test_ownership_passes_into_a_real_pid_namespace_by_handover() {
+  local root fakebin harness insidebin out ticket inside_ns status=0
+  prepare handover-across
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
+  if ! ns_available; then
+    echo "skip: this machine refuses an unprivileged pid namespace, so the cross-boundary handover is UNPROVEN here"
+    return 0
+  fi
+  run_lock "$root" "$fakebin" >/dev/null || fail "the host seat must hold the lock first"
+  out=$(run_lock "$root" "$fakebin" handover) || fail "the host seat must be able to offer"
+  ticket=$(printf '%s\n' "$out" | sed -n 's/^ticket: //p')
+  [ "${#ticket}" -eq 32 ] || fail "the offer must print a ticket"
+  [ "$(lock_pid "$root/state/.lock")" = "$harness" ] \
+    || fail "the home must stay owned while the successor is still starting"
+
+  insidebin=$(fm_fakebin "$root/inside")
+  make_fake_ps_holder "$insidebin" 424242
+  status=0
+  out=$(run_lock_in_new_pid_ns "$root" "$insidebin" acquire --handover "$ticket") || status=$?
+  expect_code 0 "$status" "a presented ticket must move ownership across the boundary refusal blocks"
+  assert_contains "$out" "lock acquired by handover: harness pid 424242 (from pid $harness)" \
+    "the successor must report that it took ownership by handover, and from whom"
+  [ "$(lock_pid "$root/state/.lock")" = "424242" ] \
+    || fail "the record must now name the seat inside the namespace"
+  inside_ns=$(lock_field "$root/state/.lock" pidns)
+  [ -n "$inside_ns" ] && [ "$inside_ns" != "$(my_pidns)" ] \
+    || fail "the record must name the successor's own pid table, not the host's (got: $inside_ns)"
+  [ -z "$(lock_field "$root/state/.lock" handover)" ] \
+    || fail "a claimed ticket must not stay claimable"
+
+  # And the boundary now holds the other way round, which is the proof that the
+  # refusal is about tables and not about which side of one you happen to be on.
+  status=0
+  out=$(run_lock "$root" "$fakebin") || status=$?
+  expect_code 1 "$status" "the host seat must not take back a lock now held inside the namespace"
+  assert_contains "$out" "which this session cannot see into" \
+    "the host seat must refuse for the same measured reason the inside seat did"
+}
+
+# --- records written before this fork named pid tables ---------------------
+
+test_a_record_naming_no_pid_table_is_upgraded_and_the_gap_is_said_out_loud() {
+  local root fakebin harness out status=0
+  prepare legacy-upgrade
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
+  write_record "$root/state/.lock" 99999999 -
+
+  out=$(run_lock "$root" "$fakebin") || status=$?
+  expect_code 0 "$status" "a record naming no pid table whose holder is gone must still be takeable"
+  assert_contains "$out" "named no process namespace" \
+    "taking such a record must say what could not be proved about the holder it replaced"
+  [ "$(lock_field "$root/state/.lock" pidns)" = "$(my_pidns)" ] \
+    || fail "the upgrade must be a one-shot: what it wrote must name a table"
+
+  # Second time round there is nothing left to warn about, which is what makes
+  # it a one-shot rather than a standing noise source.
+  out=$(run_lock "$root" "$fakebin") || fail "re-acquisition must succeed"
+  assert_not_contains "$out" "named no process namespace" \
+    "the warning must not repeat once the record names a table"
+}
+
+test_a_record_naming_no_pid_table_still_refuses_a_live_holder() {
+  local root fakebin harness other out status=0
+  prepare legacy-live-holder
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
+  live_pid other
+  make_fake_ps_holder "$fakebin" "$harness" "$other"
+  write_record "$root/state/.lock" "$other" -
+
+  out=$(run_lock "$root" "$fakebin") || status=$?
+  expect_code 1 "$status" "the transitional reading must not have loosened the ordinary refusal"
+  assert_contains "$out" "another live firstmate session holds the lock (pid $other)" \
+    "a live holder in a record naming no table must still be named as the holder"
+}
+
 test_a_free_lock_is_acquired_and_the_pid_is_published
 test_the_shared_predicate_refuses_every_claimed_nonregular_lock_path
 test_a_live_holder_refuses_the_second_session
@@ -621,5 +1074,20 @@ test_a_dangling_lock_symlink_is_refused_rather_than_created
 test_a_state_directory_that_cannot_be_written_refuses_before_claiming
 test_a_state_directory_that_cannot_be_created_refuses
 test_a_session_that_cannot_identify_itself_acquires_nothing
+test_linux_refuses_when_its_pid_namespace_identity_is_unreadable
+test_linux_refuses_when_its_machine_identity_is_unusable
+test_the_same_namespace_inode_on_another_machine_is_foreign
+test_a_kernel_without_pid_namespaces_uses_a_machine_scoped_token
+test_a_holder_in_another_pid_table_is_refused_even_when_it_looks_dead
+test_status_calls_a_holder_in_another_pid_table_unmeasurable_not_stale
+test_a_real_pid_namespace_cannot_take_a_lock_held_on_this_host
+test_a_second_session_on_this_host_is_still_refused
+test_help_describes_the_irrevocable_handover_interface
+test_an_irrevocable_offer_keeps_the_home_owned_for_one_successor
+test_a_ticket_is_refused_when_no_offer_stands
+test_a_seat_that_holds_nothing_cannot_offer_ownership
+test_ownership_passes_into_a_real_pid_namespace_by_handover
+test_a_record_naming_no_pid_table_is_upgraded_and_the_gap_is_said_out_loud
+test_a_record_naming_no_pid_table_still_refuses_a_live_holder
 
-pass "session lock: authority is published only when it can be proved, and every way of failing to prove it is its own refusal"
+pass "session lock: authority is published only when it can be proved, every way of failing to prove it is its own refusal, a holder in a pid table this session cannot see into is refused rather than judged dead, and ownership can be passed without the home ever naming nobody or naming two"

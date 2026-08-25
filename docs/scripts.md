@@ -176,7 +176,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-slot-guard.sh`       | Watch recorded pooled worktrees for conflicting live task holders                    |
 | `fm-teardown.sh`         | Fail-closed teardown: refuse another task's pooled worktree, return landed ship worktrees, require completed scout deliverables, retire secondmate homes |
 | `fm-harness.sh`          | Detect the running harness and resolve crew or secondmate harness, model, and effort |
-| `fm-lock.sh`             | Per-home firstmate session lock                                                      |
+| `fm-lock.sh`             | Per-home firstmate session lock: acquire, status, and handover of ownership between seats, with the holder's pid table recorded so a reader across a container boundary refuses rather than guesses (`docs/session-lock-across-boundaries.md`) |
 | `fm-harness-pid-lib.sh`  | Shared harness-process identity for every per-session record, from a tool call's ancestry, plus the bounded retry and the one owner of "another live session holds this home's lock" |
 | `fm-x-lib.sh`            | Shared X-mode config, relay, and reply-threading helpers                             |
 | `fm-x-poll.sh`           | One bounded X relay poll: stash newly offered mentions and emit their once-only wake |

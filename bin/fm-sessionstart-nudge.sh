@@ -23,20 +23,27 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 RECORD="$STATE/.primary-transcript"
 LOCK="$STATE/.lock"
 
-# 0 when the pid in state/.lock is live and sits in this process's own ancestry,
-# which means session start already ran in this harness session - the state a
-# /clear leaves behind, since a clear starts a new session id inside the same
-# harness process the lock is keyed on.
+# 0 when the holder in state/.lock is live, names this process's pid table, and
+# sits in this process's own ancestry, which means session start already ran in
+# this harness session - the state a /clear leaves behind.
 # It is also the second, independent way this session can prove the lock is its
 # own: it walks parents rather than matching a harness name, so it still answers
-# when fm_harness_pid cannot.
+# when fm_harness_pid cannot. A session that cannot name its own pid table loses
+# this fallback deliberately rather than assuming a same-number pid is its own.
+# A legacy record naming no table keeps the old ancestry reading because this
+# hook runs before fm-lock.sh can replace that record on the first upgraded
+# session; refusing it here would leave that session's context ceiling unmeasured.
 lock_is_in_ancestry() {
-  local lock_pid pid=$$ _
-  [ -f "$LOCK" ] || return 1
-  IFS= read -r lock_pid < "$LOCK" 2>/dev/null || return 1
+  local lock_pid pid=$$ _ mine_ns
+  fm_session_lock_record_read "$LOCK" || return 1
+  lock_pid=$FM_LOCK_RECORD_PID
   case "$lock_pid" in
     ''|*[!0-9]*|1) return 1 ;;
   esac
+  if [ -n "$FM_LOCK_RECORD_PIDNS" ]; then
+    mine_ns=$(fm_pid_namespace_token) || return 1
+    [ "$mine_ns" = "$FM_LOCK_RECORD_PIDNS" ] || return 1
+  fi
   kill -0 "$lock_pid" 2>/dev/null || return 1
   for _ in 1 2 3 4 5 6 7 8; do
     [ "$pid" = "$lock_pid" ] && return 0

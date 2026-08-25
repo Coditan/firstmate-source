@@ -13,8 +13,8 @@ It sources `bin/fm-gate-refuse-lib.sh` and stays silent for a no-mistakes gate a
 It shares `bin/fm-primary-scope-lib.sh` with `bin/fm-turnend-guard.sh`, so the two hooks cannot drift on primary detection.
 The Shared Predicate section of `docs/turnend-guard.md` remains authoritative for marker validation, plain-checkout detection, and the required firstmate-shaped paths.
 
-Before printing, the wrapper reads `state/.lock` and walks at most eight parents from its own pid, the ancestry depth Pi's `lockOwnership()` and the shared `bin/fm-harness-pid-lib.sh` also use.
-If the lock names a live pid in that ancestry, session-start already ran in this harness session and the wrapper stays silent.
+Before printing, the wrapper parses `state/.lock` through `bin/fm-harness-pid-lib.sh` and walks at most eight parents from its own pid, the ancestry depth Pi's `lockOwnership()` and the shared library also use.
+If the lock names this session's pid table and a live pid in that ancestry, session-start already ran in this harness session and the wrapper stays silent.
 Every path exits 0, including malformed state and adapter errors, because Claude SessionStart exit 2 blocks session initialization.
 
 ## Primary transcript record
@@ -56,7 +56,7 @@ The record's consumer is the stow-then-clear mechanism.
 ## Only the session that can hold the lock writes the record
 
 Recording is gated on the home's session lock, and `fm_session_lock_held_by_other` in `bin/fm-harness-pid-lib.sh` is the single owner of the test that decides whether this session can show the home is free.
-`bin/fm-lock.sh` uses the same predicate, so the record gate and lock acquisition cannot drift on whether they refuse a live other holder, an unreadable lock, or a lock path that is not a usable regular file.
+`bin/fm-lock.sh` uses the same predicate, so the record gate and lock acquisition cannot drift on any refusal that predicate owns; [session-lock-across-boundaries.md](session-lock-across-boundaries.md) records the cross-process-table case.
 A session start that finds another live harness holding `state/.lock` writes nothing, removes nothing, and still prints the nudge, because a lock-refused session must still run session start to discover that it is read-only.
 
 Until 2026-08-19 the record was written unconditionally, and that produced the same failure through two different doors.
@@ -64,8 +64,10 @@ A SECOND primary session in a home that already had one rewrote the record with 
 And a session that could not resolve its own harness process wrote `status=error` over a working record, which is how this seat's record came to read `status=error, error=no-harness-process` for a whole day.
 Both leave the session most likely to be over the ceiling as the one nothing is watching, which is the protection being absent exactly where it was meant to apply.
 
-Two independent proofs that the lock is this session's own are accepted, and either is enough: the holder is this session's resolved harness pid, or the holder sits in this process's own ancestry.
+Two independent proofs that the lock is this session's own are accepted, and either is enough: the holder is this session's resolved harness pid in the recorded pid table, or the holder sits in this process's own ancestry and the recorded pid table matches this session's.
 The second exists because the first can fail: an ancestry walk answers even when no ancestor matches a known harness name, and a `/clear` inside the lock holder must still replace its own record.
+A session that cannot name its own pid table cannot use the ancestry proof and leaves the record alone rather than accepting a colliding pid number.
+A legacy lock record naming no pid table keeps the old ancestry reading because the SessionStart hook runs before `bin/fm-lock.sh` rewrites that record on the first upgraded session, and refusing it there would leave that session's context ceiling unenforced for its whole life.
 When neither can be shown - a session that cannot say who it is, next to a lock that names a live harness - the record is left alone.
 That is the conservative reading rather than an accident: leaving another session's true record in place costs nothing, and overwriting it costs the measurement.
 
