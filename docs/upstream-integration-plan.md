@@ -92,7 +92,7 @@ Where a class of work is larger than one session, the class is named and its mem
 
 ### Stage 1 - the session lock (landed with this document)
 
-**Scope.** Upstream's hardening of `bin/fm-lock.sh`, re-implemented on this fork's own identity contract: refusal when the state directory cannot be created, a write probe before anything is claimed, a claim lock serialising the read-then-write, refusal of a lock that is not a regular file, refusal of a lock that exists and cannot be read, and read-back verification that what now sits in the lock file is this session's own pid.
+**Scope.** Upstream's hardening of `bin/fm-lock.sh`, re-implemented on this fork's own identity contract: refusal when the state directory cannot be created, a write probe before anything is claimed, a claim lock serialising the read-then-write, refusal of a lock that is not a regular file, refusal of a lock that exists and cannot be read, and read-back verification that the lock record names this session's own pid and process table.
 Delivered with `tests/fm-lock.test.sh`, which fails against the tree before the change.
 
 **Why this boundary.**
@@ -193,7 +193,7 @@ Split it by patch class when it is filed, never commit by commit.
 ## What is unmeasured
 
 - **Whether the merged tree's suite passes.** No merge was landed by this work and none is proposed, so there is no merged-tree run, and nothing here claims one.
-- **The read-back branch of Stage 1's own verification.** Its negative case - a write that reports success and leaves content that is not this session's pid - has no portable fixture; `tests/fm-lock.test.sh` says so in its own header rather than implying coverage it does not have.
+- **The read-back branch of Stage 1's own verification.** Its negative case - a write that reports success and leaves a record that does not name this session's pid and process table - has no portable fixture; `tests/fm-lock.test.sh` says so in its own header rather than implying coverage it does not have.
 - **Whether any given upstream subsystem in Stage 5 is wanted.** That is a decision, not a measurement, and this plan deliberately does not pre-empt it.
 - **How far each stage's estimate holds.**
   The sizes above are conflict-region counts and path counts, which are a proxy for effort and not a measurement of it.
