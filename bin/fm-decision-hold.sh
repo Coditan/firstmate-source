@@ -900,7 +900,7 @@ stored_decision_digest() {  # <id>
 # blank lines, so where one body ends can only be decided by looking past the blank
 # to whether an indented line follows.
 replace_row_bodies() {  # <file> <comma-separated header line numbers> <body>
-  local file=$1 lines=$2 body=$3 tmp
+  local file=$1 lines=$2 body=$3 tmp mode
   tmp=$(mktemp "${file%/*}/.fm-decision-body.XXXXXX") || return 1
   FM_DH_LINES="$lines" FM_DH_BODY="$body" awk '
     BEGIN {
@@ -926,7 +926,11 @@ replace_row_bodies() {  # <file> <comma-separated header line numbers> <body>
       }
     }
   ' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
-  chmod --reference="$file" "$tmp" 2>/dev/null || true
+  # The replacement arrives by rename, so a reader never sees a half-written
+  # backlog; the mode is carried across explicitly because mktemp creates 0600 and
+  # both stat spellings are needed to stay off a GNU-only flag.
+  mode=$(stat -c '%a' "$file" 2>/dev/null || stat -f '%Lp' "$file" 2>/dev/null) || mode=''
+  [ -z "$mode" ] || chmod "$mode" "$tmp"
   mv "$tmp" "$file"
 }
 
