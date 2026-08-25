@@ -48,18 +48,25 @@
 #     [--repo <repo>] [--routed-to <task-id>...] \
 #     (--supersedes <id>... | --new-ground)
 #   fm-decision-hold.sh supersede <hold-id> --by <successor-id> --reason <one line>
+#   fm-decision-hold.sh answered-by <record-id> --by <answered-record-id>
 #   fm-decision-hold.sh recheck <origin-id> <decision-key> \
 #     --outcome <holds|broken|unmeasurable> --measured-at <locator> [--note <line>] \
 #     [--premise <restated line>]
 #
-# ONE RECORD, THREE ACTS, ONE RE-MEASUREMENT.
+# ONE RECORD, FOUR DISPOSITIONS, ONE RE-MEASUREMENT.
 # A captain decision record is FILED (`hold`) with the premise that makes it live,
-# ANSWERED (`record`, `resolve`) with the captain's verbatim words, or FOLDED
+# ANSWERED (`record`, `resolve`) with the captain's verbatim words, FOLDED
 # (`supersede`) into a later record that covers its ground without claiming he
-# answered it. `recheck` re-measures a filed record's premise and closes nothing.
+# answered it, or found to have been ANSWERED ELSEWHERE (`answered-by`), which
+# points a closed record at the record that stores his words for it.
+# `recheck` re-measures a filed record's premise and closes nothing.
 # These are dispositions of one record in one store, not separate systems: a second
 # store that could disagree with this one would only make a reader ask which is
-# lying.
+# lying. `answered-by` exists because the other three each state something false
+# about a record whose answer was recovered later and stored under a different
+# identity: a fold says he did not answer, a second `record` would make a second
+# copy of his words that can drift from the first, and the ledger's adoption
+# baseline says the answer is lost.
 #
 # `--premise`, `--title`, and the disposition flags apply when the identity is NEW.
 # Repeating either command on an identity that already exists is still idempotent
@@ -776,6 +783,235 @@ verify_hold_superseded() {  # <hold-id>
   return 1
 }
 
+# --- the fourth disposition: answered elsewhere -------------------------------
+#
+# A record can be FILED, ANSWERED, or FOLDED. `answered-by` adds the fourth thing a
+# record can turn out to be: closed with the captain's answer stored under a
+# DIFFERENT identity. None of the other three says that. A fold says in as many
+# words that he did not answer, so folding one of these would write a falsehood into
+# the store; an answer written here would be a second copy of his words that could
+# drift from the first; and the adoption baseline says the answer is lost, which is
+# also false once it has been found.
+#
+# It is addressed to a ROW, not to an identity, and reads and writes the raw
+# markdown rather than going through tasks-axi. Both are forced by the case that
+# produced it. Retention can leave one identity holding an answered row in
+# data/backlog.md and an unanswered row in data/done-archive.md, so an
+# identity-addressed write would rewrite whichever row the tool happened to
+# resolve; and `tasks-axi show` cannot see an archived row at all, which is what
+# made `supersede` unable to reach these records even before its already-closed
+# guard refused them.
+#
+# Nothing here may run on an OPEN row, on a row already carrying the captain's
+# words, or on a row already folded. Those three exclusions are what keep this from
+# becoming a way to close a live question or to overwrite an answer with a pointer.
+POINTER_MARKER='Answered elsewhere by fm-decision-hold.'
+
+build_pointer_body() {  # <answer-id> <answer-digest>
+  printf '%s\nAnswer record: %s\nAnswer digest: %s\nState: closed; the captain answered this question and his words are stored under %s.\n' \
+    "$POINTER_MARKER" "$1" "$2" "$1"
+}
+
+# Every row this home holds under one identity, one per line, as
+# `<file>\t<header line>\t<closed>\t<captain>\t<answered>\t<folded>\t<pointed>\t<pointer target>`.
+scan_identity_rows() {  # <id>
+  local file
+  for file in "$DATA/backlog.md" "$ARCHIVE"; do
+    [ -f "$file" ] || continue
+    FM_DH_TARGET="$1" FM_DH_FILE="$file" FM_DH_MARKER="$POINTER_MARKER" awk '
+      BEGIN { target = ENVIRON["FM_DH_TARGET"]; file = ENVIRON["FM_DH_FILE"]
+              marker = ENVIRON["FM_DH_MARKER"] }
+      function is_header(l) {
+        return (l ~ /^- \[[ xX]\] [A-Za-z0-9][A-Za-z0-9._-]* - /) \
+          || (l ~ /^- \*\*[A-Za-z0-9][A-Za-z0-9._-]*\*\* - /)
+      }
+      function emit() {
+        if (!active) return
+        printf "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%s\n", file, ln, closed, captain, answered, folded, pointed, pointer
+        active = 0
+      }
+      {
+        line = $0
+        sub(/\r$/, "", line)
+        if (is_header(line)) {
+          emit()
+          closed = (index(line, "- [x] " target " - ") == 1 || index(line, "- [X] " target " - ") == 1)
+          active = closed || index(line, "- [ ] " target " - ") == 1 \
+            || index(line, "- **" target "** - ") == 1
+          if (active) {
+            captain = (index(line, "(kind: captain)") > 0)
+            answered = 0; folded = 0; pointed = 0; pointer = ""; ln = NR
+          }
+          next
+        }
+        if (!active) next
+        if (line != "" && index(line, "  ") != 1) { emit(); next }
+        body = (line == "" ? "" : substr(line, 3))
+        if (body == "Resolution recorded by fm-decision-hold.") answered = 1
+        if (body == "Superseded by fm-decision-hold.") folded = 1
+        if (body == marker) pointed = 1
+        if (index(body, "Answer record: ") == 1) pointer = substr(body, 16)
+      }
+      END { emit() }
+    ' "$file"
+  done
+}
+
+# The digest the answer record itself recorded, read only from a row that carries
+# the whole resolution envelope. A half-written record yields nothing rather than a
+# digest with no text behind it, which is the same rule stored_decision_text follows.
+stored_decision_digest() {  # <id>
+  local file text
+  for file in "$DATA/backlog.md" "$ARCHIVE"; do
+    [ -f "$file" ] || continue
+    text=$(FM_DH_TARGET="$1" awk '
+      BEGIN { target = ENVIRON["FM_DH_TARGET"] }
+      function is_header(l) {
+        return (l ~ /^- \[[ xX]\] [A-Za-z0-9][A-Za-z0-9._-]* - /) \
+          || (l ~ /^- \*\*[A-Za-z0-9][A-Za-z0-9._-]*\*\* - /)
+      }
+      {
+        line = $0
+        sub(/\r$/, "", line)
+        if (is_header(line)) {
+          active = (index(line, "- [x] " target " - ") == 1 || index(line, "- [X] " target " - ") == 1 \
+            || index(line, "- [ ] " target " - ") == 1 || index(line, "- **" target "** - ") == 1)
+          if (active) { marker = 0; digest = ""; routed = 0 }
+          next
+        }
+        if (!active) next
+        if (line != "" && index(line, "  ") != 1) { active = 0; next }
+        body = (line == "" ? "" : substr(line, 3))
+        if (body == "Resolution recorded by fm-decision-hold.") marker = 1
+        else if (index(body, "Decision digest: ") == 1) digest = substr(body, 18)
+        else if (body == "Routed work:") routed = 1
+        if (marker && routed && digest != "") { found = digest }
+      }
+      END { if (found == "") exit 1; print found }
+    ' "$file") || continue
+    printf "%s" "$text"
+    return 0
+  done
+  return 1
+}
+
+# Replaces the body of the rows whose header lines are listed, and touches nothing
+# else in the file. The whole file is buffered because a body may legally contain
+# blank lines, so where one body ends can only be decided by looking past the blank
+# to whether an indented line follows.
+replace_row_bodies() {  # <file> <comma-separated header line numbers> <body>
+  local file=$1 lines=$2 body=$3 tmp
+  tmp=$(mktemp "${file%/*}/.fm-decision-body.XXXXXX") || return 1
+  FM_DH_LINES="$lines" FM_DH_BODY="$body" awk '
+    BEGIN {
+      split(ENVIRON["FM_DH_LINES"], want, ",")
+      for (i in want) target[want[i] + 0] = 1
+      bn = split(ENVIRON["FM_DH_BODY"], newbody, "\n")
+      while (bn > 0 && newbody[bn] == "") bn--
+    }
+    { all[NR] = $0 }
+    END {
+      i = 1
+      while (i <= NR) {
+        print all[i]
+        if (!(i in target)) { i++; continue }
+        last = i
+        j = i + 1
+        while (j <= NR && (all[j] == "" || index(all[j], "  ") == 1)) {
+          if (all[j] != "") last = j
+          j++
+        }
+        for (k = 1; k <= bn; k++) print "  " newbody[k]
+        i = last + 1
+      }
+    }
+  ' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
+  chmod --reference="$file" "$tmp" 2>/dev/null || true
+  mv "$tmp" "$file"
+}
+
+command_answered_by() {
+  local id=${1:-} answer='' rows answer_rows text digest write_lines='' targets=0
+  local total=0 open_rows=0 answered_rows=0 folded_rows=0 noncaptain=0 already=0 file ln
+  local closed captain has_answer folded pointed pointer lines
+  [ "$#" -ge 1 ] || { usage >&2; exit 2; }
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --by) shift; answer=${1:-} ;;
+      *) usage >&2; exit 2 ;;
+    esac
+    shift
+  done
+  validate_slug record-id "$id"
+  validate_slug answer-id "$answer"
+
+  rows=$(scan_identity_rows "$id")
+  [ -n "$rows" ] \
+    || fail "captain record $id is in neither $DATA/backlog.md nor $ARCHIVE"
+
+  # The answer is proved BEFORE anything is written, and proved from the stored
+  # bytes rather than from the claim: its own recorded digest must match a fresh
+  # sha256 of the text this home is holding. An attestation pointing at words
+  # nobody re-hashed would be exactly the unverified authority the digest exists
+  # against.
+  answer_rows=$(scan_identity_rows "$answer")
+  [ -n "$answer_rows" ] \
+    || fail "answer record $answer is in neither $DATA/backlog.md nor $ARCHIVE"
+  printf '%s\n' "$answer_rows" | awk -F'\t' '$4 == 1 && $5 == 1 { found = 1 } END { exit found ? 0 : 1 }' \
+    || fail "answer record $answer holds no captain row carrying a recorded resolution; only a record that stores the captain's own words can answer another"
+  text=$(stored_decision_text "$answer") \
+    || fail "answer record $answer has no readable stored decision text"
+  digest=$(stored_decision_digest "$answer") \
+    || fail "answer record $answer carries no recorded decision digest"
+  [ "$(sha256_text "$text")" = "$digest" ] \
+    || fail "answer record $answer no longer matches its recorded digest; repair that record before pointing another one at it"
+
+  while IFS=$'\t' read -r file ln closed captain has_answer folded pointed pointer; do
+    [ -n "$file" ] || continue
+    total=$((total + 1))
+    if [ "$captain" -ne 1 ]; then noncaptain=$((noncaptain + 1)); continue; fi
+    if [ "$closed" -ne 1 ]; then open_rows=$((open_rows + 1)); continue; fi
+    if [ "$has_answer" -eq 1 ]; then answered_rows=$((answered_rows + 1)); continue; fi
+    if [ "$folded" -eq 1 ]; then folded_rows=$((folded_rows + 1)); continue; fi
+    if [ "$pointed" -eq 1 ]; then
+      [ "$pointer" = "$answer" ] \
+        || fail "captain record $id is already recorded as answered by $pointer; it cannot also be recorded as answered by $answer"
+      already=$((already + 1))
+      continue
+    fi
+    write_lines="$write_lines$file"$'\t'"$ln"$'\n'
+    targets=$((targets + 1))
+  done <<EOF
+$rows
+EOF
+
+  if [ "$targets" -eq 0 ]; then
+    [ "$already" -eq 0 ] || { printf 'answered elsewhere: %s -> %s (already recorded)\n' "$id" "$answer"; return 0; }
+    [ "$open_rows" -eq 0 ] \
+      || fail "captain record $id is still open; an open question is answered with \`record\`, never attested to another record"
+    [ "$answered_rows" -eq 0 ] \
+      || fail "captain record $id already stores the captain's own words; a pointer would replace them"
+    [ "$folded_rows" -eq 0 ] \
+      || fail "captain record $id is already folded into a later record"
+    [ "$noncaptain" -eq 0 ] \
+      || fail "backlog item $id is not kind captain"
+    fail "captain record $id has no closed row to attest"
+  fi
+
+  for file in "$DATA/backlog.md" "$ARCHIVE"; do
+    lines=$(printf '%s' "$write_lines" | awk -F'\t' -v f="$file" '$1 == f { printf "%s%s", (n++ ? "," : ""), $2 }')
+    [ -n "$lines" ] || continue
+    replace_row_bodies "$file" "$lines" "$(build_pointer_body "$answer" "$digest")" \
+      || fail "could not record the answer pointer on $id in $file"
+  done
+
+  printf '%s\n' "$(scan_identity_rows "$id")" \
+    | awk -F'\t' -v want="$answer" '$3 == 1 && $5 == 0 && $6 == 0 { if ($7 != 1 || $8 != want) bad = 1 } END { exit bad ? 1 : 0 }' \
+    || fail "captain record $id did not retain its answer pointer"
+  printf 'answered elsewhere: %s -> %s (%d row(s))\n' "$id" "$answer" "$targets"
+}
+
 # --- the intake disposition gate ---------------------------------------------
 #
 # WHY THIS IS A GATE AND NOT A DETECTOR. Measured on 2026-08-17 across three seats:
@@ -1347,6 +1583,7 @@ case "${1:-}" in
   hold) shift; command_hold "$@" ;;
   record) shift; command_record "$@" ;;
   supersede) shift; command_supersede "$@" ;;
+  answered-by) shift; command_answered_by "$@" ;;
   recheck) shift; command_recheck "$@" ;;
   complete) shift; command_complete "$@" ;;
   verify) shift; command_verify "$@" ;;

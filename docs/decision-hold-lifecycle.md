@@ -91,9 +91,10 @@ The script header owns the full current class list; the close-integrity classes 
 | class | shape in the records | what it means |
 | --- | --- | --- |
 | `unfinished-close` | captain item carries a resolution record, is not Done | the close was interrupted; the identical `record` call completes it |
-| `closed-without-record` | captain item is Done, carries no resolution record | the question left the open surfaces and the answer was never stored |
+| `closed-without-record` | captain item is Done, carries no resolution record | the question left the open surfaces and the answer was never stored; where an answered record exists for the same investigation the finding names it and the `answered-by` call that disposes of it |
 | `acted-but-open` | captain hold still held, blocks at least one task, every task it blocks is Done | the work went ahead, so the answer was given; nothing closed the hold |
 | `altered-record` | stored decision text does not match its recorded digest | the stored words are no longer the words that were recorded |
+| `answer-pointer-broken` | record attested as answered elsewhere, named answer record absent or carrying a different digest | the pointer no longer resolves, so it is not a disposition |
 
 `acted-but-open` is the class that catches an answered-and-acted-on hold once the work it gated has finished.
 
@@ -181,6 +182,35 @@ They are a backstop for records filed before this gate existed, not the mechanis
 `verify_hold_durable` and the archive scan accept a folded record as durable, so a completion gate never demands an answer to a question a later record already covers.
 An answered record can never be folded: its body carries the captain's words, and a fold would replace them with a pointer.
 
+### The class that had no route out, and the fourth disposition
+
+`closed-without-record` was the only audit class with no reachable resolution.
+Its records are closed, so `supersede` refuses them by design; several live in `data/done-archive.md`, which `tasks-axi show` cannot see at all; and a row closed with no observable date cannot be covered by the adoption baseline either.
+Measured on the main home on 2026-08-25, three findings were in all three of those states at once and had reported at every session start since:
+
+| record | shape | why every existing route refused it |
+| --- | --- | --- |
+| `bridge-messaging-lighter-delivery-decision-delivery-path` | archived row, `(merged 2026-07-23)` | closed, dateless, and its own answered row lives under the same identity in `data/backlog.md` |
+| `fm-bwrap-apparmor-upstream-doc` | archived row, `(merged 2026-07-24)` | closed, dateless, and not an `<origin>-decision-<key>` identity at all |
+| `fmc-upload-storage-redesign` | archived row, `(merged 2026-07-25)` | the same, a captain-gated work item predating the store |
+
+The captain's answers to all three had been recovered verbatim from this home's session archive on 2026-08-25 and recorded under later identities, so the finding was not merely unactionable but false: it said the answer was nowhere in this home while the home was holding it.
+His standing ruling of 2026-08-24 is that a diagnostic reaching a reader who cannot act on it is a defect whatever it measures, and that the fix is either to make it fire only where somebody owns it or to attach the action so it stops being a report.
+This takes the second.
+
+`answered-by` is the fourth disposition: it writes an `Answered elsewhere by fm-decision-hold.` envelope naming the answer record and the digest that answer carried when the attestation was made.
+It is addressed to a ROW rather than to an identity, and reads and writes the raw markdown rather than going through `tasks-axi`, because retention can leave one identity holding an answered row in `data/backlog.md` and an unanswered row in `data/done-archive.md` - the first record in the table above is exactly that - and an identity-addressed write would rewrite whichever row the tool happened to resolve.
+
+Three exclusions bound it, and each is what keeps it from becoming a way to close something that is not settled.
+It never runs on an open row, so a live repairable finding cannot be attested away.
+It never runs on a row already carrying the captain's words, so a pointer can never replace them.
+It never runs on a row already folded.
+The answer it names must be a captain record in this home carrying a recorded resolution whose stored text re-hashes to its own recorded digest, checked before anything is written.
+
+The reader never takes that step itself.
+A shared origin group is where to look, not proof that the stored answer answers this question, because one work item can gate two decisions; withholding the finding on a group match would be the ledger repairing a record on a guess.
+So the finding names the candidate and the exact command, the attestation is a person's act, and what is automated is only reading the pointer back: `answer-pointer-broken` reports when the named record is no longer an answered captain record here carrying the attested digest.
+
 ## Premise re-measurement, and the outcome that must never be folded
 
 The proposal was a premise re-check that folds a decision whose stated premise no longer measures true.
@@ -251,6 +281,11 @@ With no baseline recorded, `bin/fm-bootstrap.sh` printed 13 `DECISION_LEDGER:` l
 
 The 2026-08-18 argv-boundary fix keeps growable decision-ledger JSON records off `jq --argjson` so Linux's one-string `MAX_ARGSTRLEN` limit cannot make a large home unreadable.
 Independent verification on the real firstmate home showed the pre-fix failure was loud rather than lossy: both the broken and fixed versions reported 13 open questions and 31 audit findings.
+Fourth-disposition (`answered-by`) verification date: 2026-08-25.
+`test_a_recovered_answer_disposes_a_record_no_other_verb_can_reach` proves the route on an archived, dateless, non-`<origin>-decision-<key>` record after showing `supersede` refuses it and the baseline skips it.
+`test_attesting_an_answer_cannot_reach_a_live_or_answered_or_unanswered_record` proves the three exclusions and that a record closed after the baseline still reports.
+`test_an_answer_pointer_that_no_longer_resolves_reports_again` proves the pointer is read back rather than trusted.
+
 The oversized synthetic backlog regression crosses the 131072-byte argv ceiling with 350 already-closed captain records, proves `--records` returns all 350 records, proves pre-baseline `--audit --json` reports all 350 findings with none excluded, then proves `--record-baseline` and the post-baseline audit carry all 350 as withheld rather than dropping any.
 
 Two defects were found by these regressions rather than by reading, and both are recorded because each is a shape the next change could reproduce.
