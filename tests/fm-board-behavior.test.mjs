@@ -20,6 +20,8 @@
 //      dropped when he merely chose would tell him it had.
 //   5. A reopened board restores the browser-local submitted/editing state for
 //      the same board file, so an already answered sheet does not render blank.
+//   6. The tally strip follows the document language for computed sentences,
+//      warnings, labels, and legend text.
 
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
