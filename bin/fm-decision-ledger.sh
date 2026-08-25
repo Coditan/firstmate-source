@@ -48,7 +48,14 @@
 #   closed-without-record  A captain item is closed and carries no resolution
 #                          record. The question is gone from the open surfaces and
 #                          the answer was never stored, which is the loss this
-#                          whole mechanism exists to prevent.
+#                          whole mechanism exists to prevent. Where this home
+#                          already holds an answered record for the same
+#                          investigation, the finding names it and the command
+#                          that attests it. See "THE CLASS THAT HAD NO ROUTE OUT".
+#   answer-pointer-broken  A record attested as answered elsewhere whose named
+#                          answer record is no longer an answered captain record
+#                          in this home carrying the digest the attestation was
+#                          made against.
 #   acted-but-open         A captain hold is still held, it blocks at least one
 #                          task, and every task it blocks is done. The work went
 #                          ahead, so the decision was given; nothing closed the
@@ -98,6 +105,34 @@
 # --json` still carries every withheld finding under `baseline_excluded`, and
 # re-taking a baseline means removing that file by hand.
 #
+# THE CLASS THAT HAD NO ROUTE OUT, AND THE DISPOSITION THAT GAVE IT ONE
+# `closed-without-record` was the one class with no reachable resolution. Its
+# records are closed, so `supersede` refuses them by design; several live in
+# data/done-archive.md, which `tasks-axi show` cannot see at all; and a row closed
+# without an observable date cannot be baselined either. Three findings on this
+# home were in all three of those states at once and reported at every session
+# start with no action able to clear them - while the captain's answers to all
+# three had since been recovered and stored under other identities, so the finding
+# was not merely unactionable but false.
+#
+# The captain ruled on 2026-08-24 that a standing diagnostic reaching a reader who
+# cannot act on it is a defect whatever it measures, and that the fix is one of two
+# things and never a third: make it fire only where somebody owns it, or attach the
+# action so it stops being a report. This takes the second. The finding now names
+# the answered record for the same investigation and the exact
+# `fm-decision-hold.sh answered-by` call that disposes of it, and that command is
+# the fourth disposition: it records on the closed row that his answer is stored
+# under another identity, and this reader stops demanding one.
+#
+# THIS READER NEVER TAKES THAT STEP ITSELF. A shared origin group is where to look,
+# not proof that the stored answer answers THIS question - one work item can gate
+# two decisions. Withholding the finding on a group match would be this command
+# repairing a record on a guess, which is the thing the whole file refuses to do.
+# So the attestation is a person's act, and what is automated is only the reading
+# back: the named record must still be an answered captain record here and still
+# carry the digest the attestation was made against, or `answer-pointer-broken`
+# reports.
+#
 # ONLY A DATED CLOSED RECORD MAY BE BASELINED. A closed record's answer is either stored
 # or it is lost, and nothing a later session does can recover a lost one. Every
 # other class sits on a LIVE record, which is repairable by definition, so no
@@ -143,6 +178,8 @@
 #              decision (verbatim), digest, verbatim (digest re-check)
 #   open[]     id, title, repo, held, blocks[] - captain questions still unanswered
 #   folded[]   id, title, successor, fold_reason - questions a later record covers
+#   answered_elsewhere[]  id, title, answer_record - closed questions whose answer
+#              is stored under another identity
 #   audit[]    class, id, detail
 #   baseline_excluded[]  the same shape, for findings the adoption baseline covers
 #   baseline   path, recorded, count - null when this home has taken no baseline
@@ -289,15 +326,21 @@ parse_records() {
     }
     function flush(   i, decision, grab, envelope, digest, routed, door, line,
                       superseded, successor, premise, premise_checked, fold_reason,
-                      state_text, premise_filed) {
+                      state_text, premise_filed, pointed, answer_record, answer_digest) {
       if (cur_id == "") return
       decision = ""; grab = 0; envelope = 0; digest = ""; routed = ""; door = ""
       superseded = 0; successor = ""; premise = ""; premise_checked = ""; fold_reason = ""
       state_text = ""; premise_filed = ""
+      pointed = 0; answer_record = ""; answer_digest = ""
       for (i = 1; i <= bn; i++) {
         line = body[i]
         if (i == 1 && line == "Resolution recorded by fm-decision-hold.") { envelope = 1; continue }
         if (i == 1 && line == "Superseded by fm-decision-hold.") { superseded = 1; continue }
+        # THE FOURTH DISPOSITION. A closed record whose answer is stored under a
+        # different identity, attested by fm-decision-hold.sh answered-by. It is
+        # neither answered here nor folded: the pointer is checked below against
+        # the record it names, so a pointer to nothing reports rather than settles.
+        if (i == 1 && line == "Answered elsewhere by fm-decision-hold.") { pointed = 1; continue }
         # A premise is carried by an open record, outside either envelope, so it is
         # read from any body line rather than from a fixed position.
         if (index(line, "Premise: ") == 1) { premise = substr(line, 10); continue }
@@ -309,6 +352,11 @@ parse_records() {
         if (superseded) {
           if (index(line, "Successor: ") == 1) { successor = substr(line, 12) }
           else if (index(line, "Reason: ") == 1) { fold_reason = substr(line, 9) }
+          continue
+        }
+        if (pointed) {
+          if (index(line, "Answer record: ") == 1) { answer_record = substr(line, 16) }
+          else if (index(line, "Answer digest: ") == 1) { answer_digest = substr(line, 16) }
           continue
         }
         if (!envelope) continue
@@ -330,14 +378,15 @@ parse_records() {
       # The decision ran up to the blank line before "Routed work:"; drop that
       # separator and the line terminator the accumulator added.
       sub(/\n\n$/, "", decision)
-      printf "%s{\"id\":\"%s\",\"title\":\"%s\",\"repo\":\"%s\",\"kind\":\"%s\",\"state\":\"%s\",\"source\":\"%s\",\"closed\":\"%s\",\"hold_kind\":\"%s\",\"held\":%s,\"blockers\":\"%s\",\"envelope\":%s,\"complete\":%s,\"digest\":\"%s\",\"door\":\"%s\",\"routed\":\"%s\",\"decision\":\"%s\",\"folded\":%s,\"successor\":\"%s\",\"fold_reason\":\"%s\",\"premise\":\"%s\",\"premise_measured\":\"%s\",\"premise_filed\":\"%s\",\"state_text\":\"%s\"}",
+      printf "%s{\"id\":\"%s\",\"title\":\"%s\",\"repo\":\"%s\",\"kind\":\"%s\",\"state\":\"%s\",\"source\":\"%s\",\"closed\":\"%s\",\"hold_kind\":\"%s\",\"held\":%s,\"blockers\":\"%s\",\"envelope\":%s,\"complete\":%s,\"digest\":\"%s\",\"door\":\"%s\",\"routed\":\"%s\",\"decision\":\"%s\",\"folded\":%s,\"successor\":\"%s\",\"fold_reason\":\"%s\",\"premise\":\"%s\",\"premise_measured\":\"%s\",\"premise_filed\":\"%s\",\"state_text\":\"%s\",\"pointed\":%s,\"answer_record\":\"%s\",\"answer_digest\":\"%s\"}",
         (emitted++ ? "," : ""), jesc(cur_id), jesc(cur_title), jesc(cur_repo), jesc(cur_kind),
         cur_state, cur_source, jesc(cur_closed), jesc(cur_hold_kind),
         (cur_hold == "" ? "false" : "true"), jesc(cur_blockers),
         (envelope ? "true" : "false"), (grab == 2 ? "true" : "false"),
         jesc(digest), jesc(door), jesc(routed), jesc(decision),
         (superseded ? "true" : "false"), jesc(successor), jesc(fold_reason),
-        jesc(premise), jesc(premise_checked), jesc(premise_filed), jesc(state_text)
+        jesc(premise), jesc(premise_checked), jesc(premise_filed), jesc(state_text),
+        (pointed ? "true" : "false"), jesc(answer_record), jesc(answer_digest)
       cur_id = ""
     }
     BEGIN { printf "[" }
@@ -438,9 +487,42 @@ CLASSIFIED=$(printf '%s' "$RECORDS" | jq '
         ($caps | map(select(.envelope and .state != "done")
                      | {class: "unfinished-close", id: .id,
                         detail: "carries a recorded captain decision but is still open; re-run the same fm-decision-hold.sh record call to finish the close"}))
-        + ($caps | map(select(.state == "done" and (.envelope | not) and (.folded | not))
+        # CLOSED WITH THE ANSWER NOWHERE - AND, WHEN THERE IS ONE, WHERE TO LOOK.
+        # This was the one class with no route to resolution. Its records are
+        # closed, so `supersede` refuses them; several are archived, which
+        # `tasks-axi show` cannot see; and a dateless closed row cannot be
+        # baselined either, so three of them reported at every session start
+        # forever. Where this home already holds an ANSWERED captain record for
+        # the same investigation, the finding names it and the exact command that
+        # attests it, so the line carries its own next step instead of being a
+        # standing demand nobody can meet. The attestation belongs to a person and never to
+        # this reader: a shared origin is a place to look, not proof that the
+        # stored answer is the answer to THIS question.
+        + ($caps | map(select(.state == "done" and (.envelope | not) and (.folded | not) and (.pointed | not))
+                     | . as $c
+                     | ($answered | map(select(.origin == $c.origin)) | map(.id)) as $cand
                      | {class: "closed-without-record", id: .id,
-                        detail: "closed with no captain decision stored and no supersession recorded; the answer is nowhere in this home"}))
+                        detail: (if ($cand | length) > 0
+                                 then ("closed with no captain decision stored, yet this home holds an answered captain record for the same investigation: "
+                                       + ($cand | join(", "))
+                                       + "; if it carries his answer to THIS question, attach it with fm-decision-hold.sh answered-by "
+                                       + $c.id + " --by " + ($cand | first)
+                                       + ", and if none of them does, his answer here is lost and belongs in the adoption baseline")
+                                 else "closed with no captain decision stored and no supersession recorded; the answer is nowhere in this home" end)}))
+        # A POINTER THAT NO LONGER RESOLVES IS NOT A DISPOSITION. The attested
+        # answer record must still be an answered captain record in this home AND
+        # still carry the digest the attestation was made against, so a later
+        # hand-edit of his words breaks the pointer rather than being inherited by
+        # every record aimed at them.
+        + ($caps | map(select(.pointed)
+                     | . as $p
+                     | ($answered | map(select(.id == $p.answer_record))) as $hit
+                     | select(($hit | length) == 0
+                              or (($hit | map(.digest) | index($p.answer_digest)) == null))
+                     | {class: "answer-pointer-broken", id: .id,
+                        detail: ("is recorded as answered by " + $p.answer_record
+                                 + ", but this home holds no answered captain record under that id carrying the attested digest; re-attest it with fm-decision-hold.sh answered-by "
+                                 + $p.id + " --by <answered record id>, or repair the record it names")}))
         + ($caps | map(select(.live and .held and .all_deps_done)
                      | {class: "acted-but-open", id: .id,
                         detail: ("still held, yet every task it blocks is done: " + (.blocks | join(", ")))}))
@@ -522,11 +604,12 @@ if [ "$MODE" = records ]; then
     [.captain[]
      | select($repo == "" or .repo == $repo)
      | {cls: (if .settled then "settled" elif .superseded then "superseded"
+              elif .pointed then "answered-elsewhere"
               elif .live then "open" else "closed" end),
         id, repo, title, closed}]
     | (map(select(.cls == "open")) | sort_by(.id))
       + (map(select(.cls == "settled")) | sort_by(.closed) | reverse)
-      + (map(select(.cls == "superseded" or .cls == "closed")) | sort_by(.id))
+      + (map(select(.cls == "superseded" or .cls == "answered-elsewhere" or .cls == "closed")) | sort_by(.id))
     | .[] | [.cls, .id, .repo, .title] | @tsv'
   exit 0
 fi
@@ -662,11 +745,13 @@ OPEN=$(printf '%s' "$CLASSIFIED" | jq -c \
     | {id, title, repo, held, blocks, premise, premise_measured, premise_outcome}]')
 FOLDED=$(printf '%s' "$CLASSIFIED" | jq -c \
   '[.captain[] | select(.superseded) | {id, title, successor, fold_reason}]')
+POINTED=$(printf '%s' "$CLASSIFIED" | jq -c \
+  '[.captain[] | select(.pointed) | {id, title, answer_record}]')
 
 SHOWN=$LIMIT
 [ "$ALL" -eq 1 ] && SHOWN=$COUNT
 
-LEDGER=$(json_stdin "$VERIFIED" "$OPEN" "$AUDIT" "$BASELINE_EXCLUDED" "$BASELINE_JSON" "$FOLDED" \
+LEDGER=$(json_stdin "$VERIFIED" "$OPEN" "$AUDIT" "$BASELINE_EXCLUDED" "$BASELINE_JSON" "$FOLDED" "$POINTED" \
   | jq -cn \
   --arg home "$FM_HOME" \
   --arg basepath "$BASELINE" \
@@ -678,11 +763,13 @@ LEDGER=$(json_stdin "$VERIFIED" "$OPEN" "$AUDIT" "$BASELINE_EXCLUDED" "$BASELINE
    | input as $excluded
    | input as $baseline
    | input as $folded
+   | input as $pointed
    | {schema: "fm-decision-ledger.v1", home: $home,
     settled_total: ($settled | length),
     settled: $settled[0:$shown],
     open: $open,
     folded: $folded,
+    answered_elsewhere: $pointed,
     audit: $audit,
     baseline_excluded: $excluded,
     baseline: (if ($baseline | length) > 0
@@ -787,6 +874,7 @@ printf '%s' "$LEDGER" | jq -r '
   "settled captain decisions: \(.settled_total) (showing \(.settled | length))",
   "open captain questions: \(.open | length)",
   "questions folded into a later record: \(.folded | length)",
+  "questions whose answer is stored under another record: \(.answered_elsewhere | length)",
   (if (.audit | length) > 0 then
      "", "UNFINISHED DECISION RECORDS - these need repair, not a new question:",
      (.audit[] | "  \(.class)  \(.id)\n      \(.detail)")

@@ -767,6 +767,222 @@ EOF
   pass "the decision board's input drops a question whose answer is already recorded"
 }
 
+
+# THE ONE CLASS THAT HAD NO ROUTE TO RESOLUTION.
+# Three `closed-without-record` findings reported at every session start on the main
+# home with no action able to clear them: closed, so `supersede` refused them;
+# archived, so `tasks-axi show` could not see them; and closed with no observable
+# date, so the adoption baseline could not cover them either. Two of the three ids
+# were captain-GATED WORK items predating the decision store, so they are not
+# `<origin>-decision-<key>` identities at all and no identity-shaped repair reaches
+# them. Meanwhile his answers had been recovered and stored under later ids, so the
+# finding was also false. This is the shape that must now have a way out.
+seed_recovered_answer_home() {  # <name> - a pre-mechanism work item whose answer turned up later
+  local home=$1
+  home=$(make_home "$home")
+  printf 'worth raising as an in issue or change in kunchenguid/firstmate upstream\n' > "$home/d.txt"
+  run_hold "$home" record fm-bwrap-apparmor-upstream-doc raise-upstream --door chat \
+    --decision-file "$home/d.txt" --title "Whether the gotcha is raised upstream" \
+    --repo firstmate >/dev/null 2>&1 \
+    || fail "recording the recovered answer failed"
+  cat > "$home/data/done-archive.md" <<'EOF'
+## Archived 2026-07-24
+- [x] fm-bwrap-apparmor-upstream-doc - Document the codex-bwrap gotcha upstream (kind: captain) (merged 2026-07-24)
+  State: closed when its work landed.
+
+## Archived 2026-07-24
+- [x] unrelated-scout - Scout: something else entirely (kind: scout) (reported 2026-07-24)
+EOF
+  printf '%s\n' "$home"
+}
+
+test_a_recovered_answer_disposes_a_record_no_other_verb_can_reach() {
+  local home audit out rc=0
+  home=$(seed_recovered_answer_home recovered-answer)
+
+  audit=$(run_ledger "$home" --audit) || rc=$?
+  [ "$rc" -eq 1 ] || fail "a closed record with no stored answer must be a finding"
+  assert_contains "$audit" "closed-without-record fm-bwrap-apparmor-upstream-doc" \
+    "the pre-mechanism work item must be the record that reports"
+  assert_contains "$audit" "answered-by fm-bwrap-apparmor-upstream-doc --by fm-bwrap-apparmor-upstream-doc-decision-raise-upstream" \
+    "the finding must carry the exact command that disposes of it, not merely a demand"
+
+  # The two routes that existed before this one, on the same record.
+  if run_hold "$home" supersede fm-bwrap-apparmor-upstream-doc \
+       --by fm-bwrap-apparmor-upstream-doc-decision-raise-upstream --reason x >/dev/null 2>&1; then
+    fail "a fold must never dispose of this record: a fold states he did not answer it, and he did"
+  fi
+  printf -- '- [x] old-dated-decision-lost - A pre-mechanism loss the baseline can bind (repo: firstmate) (kind: captain) (done 2026-08-01)\n' \
+    >> "$home/data/backlog.md"
+  out=$(run_ledger "$home" --record-baseline 2>&1) \
+    || fail "the baseline must still be takeable on a home that has losses"
+  assert_contains "$out" "skipped 1 finding(s) whose closed record has no closed date" \
+    "the baseline must still refuse a record it cannot bind to an observed closure"
+  rc=0
+  audit=$(run_ledger "$home" --audit) || rc=$?
+  [ "$rc" -eq 1 ] || fail "the baseline must not have covered the dateless record"
+
+  out=$(run_hold "$home" answered-by fm-bwrap-apparmor-upstream-doc \
+    --by fm-bwrap-apparmor-upstream-doc-decision-raise-upstream) \
+    || fail "attesting the recovered answer must succeed on an archived non-decision identity"
+  assert_contains "$out" "answered elsewhere: fm-bwrap-apparmor-upstream-doc" \
+    "the disposition must say what it recorded"
+
+  rc=0
+  audit=$(run_ledger "$home" --audit) || rc=$?
+  [ "$rc" -eq 0 ] || fail "the finding must be gone once the answer is attested: $audit"
+
+  out=$(run_ledger "$home" --json --all) || fail "the ledger could not read the home"
+  assert_contains "$out" '"verbatim": true' \
+    "attesting another record must leave the captain's own words verifiable"
+  assert_contains "$out" '"answer_record": "fm-bwrap-apparmor-upstream-doc-decision-raise-upstream"' \
+    "the read side must surface where a closed record's answer is stored"
+
+  run_hold "$home" answered-by fm-bwrap-apparmor-upstream-doc \
+    --by fm-bwrap-apparmor-upstream-doc-decision-raise-upstream >/dev/null \
+    || fail "re-attesting the same answer must be idempotent, not a second write"
+  pass "a recovered answer disposes of a closed archived record that no other verb can reach"
+}
+
+# The three exclusions that keep this from becoming a way to close a live question,
+# to overwrite his words with a pointer, or to launder a fresh loss into a settled
+# one. Each is proved on a record of that shape rather than argued.
+test_attesting_an_answer_cannot_reach_a_live_or_answered_or_unanswered_record() {
+  local home rc=0 audit out
+  home=$(seed_recovered_answer_home attest-refusals)
+  printf 'an answer whose close has not finished\n' > "$home/unfinished.txt"
+  run_hold "$home" record unfinished-answer captured --door chat \
+    --decision-file "$home/unfinished.txt" --title "An unfinished answer" \
+    --repo sample >/dev/null 2>&1 \
+    || fail "recording the unfinished answer fixture failed"
+  sed -i.bak 's/^- \[x\] unfinished-answer-decision-captured /- [ ] unfinished-answer-decision-captured /' \
+    "$home/data/backlog.md"
+  tasks_in "$home" add "still-open-decision-q" "A question genuinely waiting on him" \
+    --kind captain --repo firstmate >/dev/null
+  tasks_in "$home" hold "still-open-decision-q" --reason "captain decision pending" --kind captain >/dev/null
+
+  if run_hold "$home" answered-by still-open-decision-q \
+       --by fm-bwrap-apparmor-upstream-doc-decision-raise-upstream >/dev/null 2>&1; then
+    fail "a live question must never be closed by attesting it to another record"
+  fi
+  if run_hold "$home" answered-by fm-bwrap-apparmor-upstream-doc-decision-raise-upstream \
+       --by fm-bwrap-apparmor-upstream-doc-decision-raise-upstream >/dev/null 2>&1; then
+    fail "a record holding his own words must never have them replaced by a pointer"
+  fi
+  if run_hold "$home" answered-by fm-bwrap-apparmor-upstream-doc --by unrelated-scout >/dev/null 2>&1; then
+    fail "only a record that stores his words may answer another"
+  fi
+
+  if out=$(run_hold "$home" answered-by fm-bwrap-apparmor-upstream-doc \
+       --by unfinished-answer-decision-captured 2>&1); then
+    fail "an answer record whose close has not finished must not be accepted"
+  fi
+  assert_contains "$out" "answer record unfinished-answer-decision-captured has not finished closing" \
+    "the refusal must explain that the answer record must finish closing first"
+  rc=0
+  audit=$(run_ledger "$home" --audit) || rc=$?
+  [ "$rc" -eq 1 ] || fail "a refused unfinished answer must leave the finding standing"
+  assert_contains "$audit" "closed-without-record fm-bwrap-apparmor-upstream-doc" \
+    "refusing an unfinished answer must not dispose of the target record"
+
+  # A record closed AFTER the baseline is a genuine new failure. The baseline cannot
+  # cover it, and neither can an attestation whose named answer does not exist.
+  printf -- '- [x] old-dated-decision-lost - A pre-mechanism loss the baseline can bind (repo: firstmate) (kind: captain) (done 2026-08-01)\n' \
+    >> "$home/data/backlog.md"
+  run_ledger "$home" --record-baseline >/dev/null 2>&1 || fail "baseline failed"
+  printf -- '- [x] after-baseline-decision-lost - Closed today with the answer nowhere (repo: firstmate) (kind: captain) (done 2026-08-30)\n' \
+    >> "$home/data/backlog.md"
+  rc=0
+  audit=$(run_ledger "$home" --audit) || rc=$?
+  [ "$rc" -eq 1 ] || fail "a loss after the baseline must report"
+  assert_contains "$audit" "closed-without-record after-baseline-decision-lost" \
+    "the baseline must not cover a record closed after it was taken"
+  if run_hold "$home" answered-by after-baseline-decision-lost --by no-such-record >/dev/null 2>&1; then
+    fail "an attestation naming a record this home does not hold must be refused"
+  fi
+  rc=0
+  audit=$(run_ledger "$home" --audit) || rc=$?
+  [ "$rc" -eq 1 ] || fail "a refused attestation must leave the finding standing"
+  assert_contains "$audit" "closed-without-record after-baseline-decision-lost" \
+    "a refused attestation must change nothing about what reports"
+  assert_contains "$audit" "the answer is nowhere in this home" \
+    "a record with no answered record for its investigation keeps the plain loss wording"
+  pass "attesting an answer cannot reach a live, an answered, or an unbacked record"
+}
+
+test_attestation_binds_validation_and_digest_to_one_answer_row() {
+  local home ambiguous audit out rc=0
+  home=$(seed_recovered_answer_home answer-row-selection)
+  cat "$home/data/backlog.md" >> "$home/data/done-archive.md"
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
+  printf 'different unfinished words\n' > "$home/different.txt"
+  run_hold "$home" record different-answer live --door chat \
+    --decision-file "$home/different.txt" --title "A different unfinished answer" \
+    --repo sample >/dev/null 2>&1 \
+    || fail "recording the mixed-row answer fixture failed"
+  sed -i.bak \
+    's/^- \[x\] different-answer-decision-live /- [ ] fm-bwrap-apparmor-upstream-doc-decision-raise-upstream /' \
+    "$home/data/backlog.md"
+
+  run_hold "$home" answered-by fm-bwrap-apparmor-upstream-doc \
+    --by fm-bwrap-apparmor-upstream-doc-decision-raise-upstream >/dev/null \
+    || fail "the closed answer row must be selected instead of the unfinished live row"
+  rc=0
+  audit=$(run_ledger "$home" --audit) || rc=$?
+  [ "$rc" -eq 0 ] || fail "the pointer must remain valid against the selected closed answer row: $audit"
+  assert_not_contains "$audit" "answer-pointer-broken fm-bwrap-apparmor-upstream-doc" \
+    "the pointer must bind to the qualifying closed row's digest"
+
+  ambiguous=$(seed_recovered_answer_home ambiguous-answer-rows)
+  cat "$ambiguous/data/backlog.md" >> "$ambiguous/data/done-archive.md"
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$ambiguous/data/backlog.md"
+  printf 'different closed words\n' > "$ambiguous/different.txt"
+  run_hold "$ambiguous" record different-answer closed --door chat \
+    --decision-file "$ambiguous/different.txt" --title "A different closed answer" \
+    --repo sample >/dev/null 2>&1 \
+    || fail "recording the ambiguous answer fixture failed"
+  sed -i.bak \
+    's/^- \[x\] different-answer-decision-closed /- [x] fm-bwrap-apparmor-upstream-doc-decision-raise-upstream /' \
+    "$ambiguous/data/backlog.md"
+  if out=$(run_hold "$ambiguous" answered-by fm-bwrap-apparmor-upstream-doc \
+       --by fm-bwrap-apparmor-upstream-doc-decision-raise-upstream 2>&1); then
+    fail "closed answer rows with different digests must be refused as ambiguous"
+  fi
+  assert_contains "$out" "closed captain rows carrying different decision digests" \
+    "the refusal must identify the ambiguous answer identity"
+  rc=0
+  audit=$(run_ledger "$ambiguous" --audit) || rc=$?
+  [ "$rc" -eq 1 ] || fail "refusing an ambiguous answer must leave the target finding standing"
+  assert_contains "$audit" "closed-without-record fm-bwrap-apparmor-upstream-doc" \
+    "an ambiguous answer refusal must not dispose of the target"
+  pass "attestation hashes one qualifying answer row and refuses ambiguous rows"
+}
+
+# A pointer is only a disposition while it still resolves. It is bound to the digest
+# the attestation was made against, so it cannot silently follow a record that was
+# emptied, reopened, or re-answered with different text.
+test_an_answer_pointer_that_no_longer_resolves_reports_again() {
+  local home audit rc=0
+  home=$(seed_recovered_answer_home pointer-breaks)
+  run_hold "$home" answered-by fm-bwrap-apparmor-upstream-doc \
+    --by fm-bwrap-apparmor-upstream-doc-decision-raise-upstream >/dev/null \
+    || fail "attesting failed"
+  run_ledger "$home" --audit >/dev/null || fail "the home must read clean once attested"
+
+  python3 - "$home/data/backlog.md" <<'EOF'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+cut = text.index("- [x] fm-bwrap-apparmor-upstream-doc-decision-raise-upstream")
+open(path, "w").write(text[:cut])
+EOF
+  audit=$(run_ledger "$home" --audit) || rc=$?
+  [ "$rc" -eq 1 ] || fail "a pointer at a record that is gone must report again"
+  assert_contains "$audit" "answer-pointer-broken fm-bwrap-apparmor-upstream-doc" \
+    "the reader must name the record whose attested answer no longer resolves"
+  pass "an answer pointer that no longer resolves reports instead of settling"
+}
+
 test_settled_decision_survives_retention_into_the_archive
 test_a_second_question_cannot_be_filed_without_disposing_of_the_first
 test_an_answer_folds_the_questions_it_settles
@@ -785,3 +1001,7 @@ test_a_baseline_cannot_silence_a_repairable_record
 test_removing_a_baseline_entry_invalidates_every_entry
 test_oversized_decision_payloads_do_not_travel_on_argv
 test_the_decision_board_input_never_carries_an_answered_question
+test_a_recovered_answer_disposes_a_record_no_other_verb_can_reach
+test_attesting_an_answer_cannot_reach_a_live_or_answered_or_unanswered_record
+test_attestation_binds_validation_and_digest_to_one_answer_row
+test_an_answer_pointer_that_no_longer_resolves_reports_again

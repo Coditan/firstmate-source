@@ -37,9 +37,14 @@ Never scrape chat, a report, or terminal output to guess that a decision occurre
 
 ## Filing a question means disposing of the ones already there
 
-A record can end three ways, and all three are dispositions of the one store: it is **answered** (`record`, `resolve`) with the captain's words, **folded** (`supersede`) into a later record that covers its ground, or it is still open.
+A record can end four ways, and all four are dispositions of the one store: it is **answered** (`record`, `resolve`) with the captain's words, **folded** (`supersede`) into a later record that covers its ground, recorded as **answered elsewhere** (`answered-by`) when a closed record turns out to have its answer stored under another identity, or it is still open.
 A fold never claims he answered anything; it says a later record asks this better and points at it.
 A folded record is therefore a valid disposition of its own question, but never a successor to fold into when that would release gated work without an answer.
+
+`answered-by` is the one to reach for when `bin/fm-decision-ledger.sh --audit` reports `closed-without-record` and names an answered record for the same investigation - a recovered answer stored under a later identity, which is what happens when a pre-mechanism work item gated a decision and the answer was found afterwards.
+Do not fold such a record: a fold states in the record that he did not answer it, which is false here, and re-`record`ing his words under the closed identity would make a second copy of them that can drift from the first.
+Attest it only when you have read the named record and it answers THIS question - a shared investigation is where to look, not proof, because one work item can gate two decisions.
+When none of the candidates answers it, his answer here really is lost and the record belongs in the adoption baseline instead.
 
 `hold` and `record` refuse to add a captain record while this home holds others for the same repository that you have not disposed of.
 The refusal lists them - the open questions and the recorded answers both - and you re-run with `--supersedes <id>` for each one this record folds, or `--new-ground` when none of them asks this question.
