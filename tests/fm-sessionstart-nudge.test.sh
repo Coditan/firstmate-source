@@ -10,6 +10,8 @@ fm_test_tmproot TMP_ROOT fm-sessionstart-nudge
 NUDGE="$ROOT/bin/fm-sessionstart-nudge.sh"
 # shellcheck source=bin/fm-operational-input.sh
 . "$ROOT/bin/fm-operational-input.sh"
+# shellcheck source=bin/fm-harness-pid-lib.sh
+. "$ROOT/bin/fm-harness-pid-lib.sh"
 NUDGE_TEXT="Run \`bin/fm-session-start.sh\` now, exactly once, before executing any other instructions."
 fm_operational_input_encode session-start "$NUDGE_TEXT" NUDGE_LINE \
   || fail "could not construct expected session-start nudge"
@@ -149,6 +151,29 @@ case "$*" in
   *"comm="*) printf '/bin/bash\n'; exit 0 ;;
   *"args="*) printf 'bash\n'; exit 0 ;;
   *"ppid="*) printf '1\n'; exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/ps"
+}
+
+make_fake_ps_ancestry_without_harness() {  # <fakebin> <ancestor-pid>
+  local fakebin=$1 ancestor=$2
+  cat > "$fakebin/ps" <<SH
+#!/usr/bin/env bash
+set -u
+pid=""
+prev=""
+for arg in "\$@"; do
+  [ "\$prev" = "-p" ] && pid="\$arg"
+  prev="\$arg"
+done
+case "\$*" in
+  *"comm="*) printf '/bin/bash\n'; exit 0 ;;
+  *"args="*) printf 'bash\n'; exit 0 ;;
+  *"ppid="*)
+    if [ "\$pid" = "$ancestor" ]; then printf '1\n'; else printf '%s\n' "$ancestor"; fi
+    exit 0 ;;
 esac
 exit 1
 SH
@@ -612,6 +637,61 @@ test_the_lock_holder_still_records_after_a_clear() {
   pass "fm-sessionstart-nudge: the session holding the lock still replaces its own record"
 }
 
+test_foreign_pid_table_rejects_an_ancestry_pid_collision() {
+  local root="$TMP_ROOT/record-foreign-ancestry" fakebin record out status=0
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  make_fake_ps_ancestry_without_harness "$fakebin" "$$"
+  record="$root/state/.primary-transcript"
+  printf 'status=ok\nharness_pid=%s\nsession_id=first-session\ntranscript_path=/tmp/first-session.jsonl\nrecorded_at=1\n' \
+    "$$" > "$record"
+  printf '%s\npidns=foreign-pid-table\n' "$$" > "$root/state/.lock"
+
+  out=$(FM_HARNESS_PID_RETRY_DELAYS='' run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD") || status=$?
+  expect_code 0 "$status" "foreign-table ancestry collision"
+  [ "$out" = "$NUDGE_LINE" ] || fail "a foreign-table session was not nudged to discover its read-only state: $out"
+  [ "$(record_field "$record" session_id)" = first-session ] \
+    || fail "an ancestor pid collision from another table overwrote the transcript record: $(cat "$record")"
+  [ "$(record_field "$record" transcript_path)" = /tmp/first-session.jsonl ] \
+    || fail "an ancestor pid collision changed the recorded transcript: $(cat "$record")"
+}
+
+test_same_pid_table_accepts_the_ancestry_fallback() {
+  local root="$TMP_ROOT/record-same-table-ancestry" fakebin record
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  make_fake_ps_ancestry_without_harness "$fakebin" "$$"
+  record="$root/state/.primary-transcript"
+  printf 'status=ok\nharness_pid=%s\nsession_id=old-session\ntranscript_path=/tmp/old-session.jsonl\nrecorded_at=1\n' \
+    "$$" > "$record"
+  printf '%s\npidns=%s\n' "$$" "$(fm_pid_namespace_token)" > "$root/state/.lock"
+
+  FM_HARNESS_PID_RETRY_DELAYS='' expect_silent_zero "same-table ancestry fallback" \
+    run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD"
+  [ "$(record_field "$record" status)" = error ] \
+    || fail "the same-table ancestry fallback did not replace the old record: $(cat "$record")"
+  [ "$(record_field "$record" error)" = no-harness-process ] \
+    || fail "the accepted ancestry fallback did not record the settled harness result: $(cat "$record")"
+}
+
+test_legacy_lock_accepts_the_ancestry_fallback_once() {
+  local root="$TMP_ROOT/record-legacy-ancestry" fakebin record
+  make_primary "$root"
+  fakebin=$(fm_fakebin "$root")
+  make_fake_ps_ancestry_without_harness "$fakebin" "$$"
+  record="$root/state/.primary-transcript"
+  printf 'status=ok\nharness_pid=%s\nsession_id=old-session\ntranscript_path=/tmp/old-session.jsonl\nrecorded_at=1\n' \
+    "$$" > "$record"
+  printf '%s\n' "$$" > "$root/state/.lock"
+
+  FM_HARNESS_PID_RETRY_DELAYS='' expect_silent_zero "legacy ancestry fallback" \
+    run_nudge_with_payload "$root" "$fakebin" "$CLAUDE_PAYLOAD"
+  [ "$(record_field "$record" status)" = error ] \
+    || fail "the legacy ancestry carve-out did not replace the old record: $(cat "$record")"
+  [ "$(record_field "$record" error)" = no-harness-process ] \
+    || fail "the legacy ancestry carve-out did not record the settled harness result: $(cat "$record")"
+}
+
 # The second door: the harness process could not be resolved at the instant the
 # hook ran, and the record then named no session at all for a whole day. A
 # bounded retry is what separates a transient unreadable probe from a settled
@@ -813,6 +893,9 @@ test_second_session_does_not_take_over_the_record
 test_unidentified_second_session_does_not_take_over_the_record
 test_a_stale_lock_does_not_block_the_record
 test_the_lock_holder_still_records_after_a_clear
+test_foreign_pid_table_rejects_an_ancestry_pid_collision
+test_same_pid_table_accepts_the_ancestry_fallback
+test_legacy_lock_accepts_the_ancestry_fallback_once
 test_a_transient_lookup_failure_is_retried
 test_a_settled_lookup_failure_is_recorded_with_its_cause
 test_each_process_table_probe_failure_is_recorded_as_unknown
