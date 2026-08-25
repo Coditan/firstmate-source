@@ -38,6 +38,11 @@ if [ -z "${FM_WAKE_LIB_DIR:-}" ]; then
   . "$FM_DELIVERY_LIB_DIR/fm-wake-lib.sh"
 fi
 
+if ! declare -F fm_session_lock_record_read >/dev/null 2>&1; then
+  # shellcheck source=bin/fm-harness-pid-lib.sh
+  . "$FM_DELIVERY_LIB_DIR/fm-harness-pid-lib.sh"
+fi
+
 # Seconds a delivery beacon may age before the listener is read as stalled.
 # Shared with the watcher's grace on purpose: one fleet, one staleness bar.
 FM_DELIVERY_GRACE_DEFAULT=${FM_DELIVERY_GRACE:-${FM_GUARD_GRACE:-300}}
@@ -175,7 +180,7 @@ fm_delivery_endpoint_read() {  # <state>
 #                   pane id is ambiguous across servers on the same machine
 FM_DELIVERY_ENDPOINT_STATUS=
 fm_delivery_endpoint_status() {  # <state>
-  local state=$1 record current
+  local state=$1 record
   record=$(fm_delivery_endpoint_path "$state")
   if [ ! -f "$record" ] || [ -L "$record" ]; then
     FM_DELIVERY_ENDPOINT_STATUS=absent
@@ -190,8 +195,8 @@ fm_delivery_endpoint_status() {  # <state>
     FM_DELIVERY_ENDPOINT_STATUS=unproven-server
     return 1
   fi
-  current=$(cat "$state/.lock" 2>/dev/null || true)
-  if [ -z "$FM_DELIVERY_ENDPOINT_SESSION" ] || [ "$FM_DELIVERY_ENDPOINT_SESSION" != "$current" ]; then
+  fm_session_lock_record_read "$state/.lock" || true
+  if [ -z "$FM_DELIVERY_ENDPOINT_SESSION" ] || [ "$FM_DELIVERY_ENDPOINT_SESSION" != "$FM_LOCK_RECORD_PID" ]; then
     FM_DELIVERY_ENDPOINT_STATUS=stale-session
     return 1
   fi

@@ -108,6 +108,48 @@ publish_endpoint() {  # <home> <backend> <target> [tmux-server]
     || fail "could not publish the endpoint"
 }
 
+test_endpoint_status_reads_the_holder_from_a_multiline_lock_record() {
+  local home status
+  home=$(make_home multiline-session-lock)
+  {
+    printf '%s\n' "$$"
+    printf 'pidns=pid:[12345]\n'
+  } > "$home/state/.lock"
+  FM_HOME="$home" bash -c \
+    '. "$1/bin/fm-delivery-lib.sh"; fm_delivery_endpoint_write "$2" pi local pi "$3"' \
+    _ "$ROOT" "$home/state" "$$" \
+    || fail "could not publish an endpoint for a multiline session lock"
+
+  status=$(FM_HOME="$home" bash -c \
+    '. "$1/bin/fm-delivery-lib.sh"; fm_delivery_endpoint_status "$2"; printf "%s\n" "$FM_DELIVERY_ENDPOINT_STATUS"' \
+    _ "$ROOT" "$home/state") \
+    || fail "a matching multiline session lock was classified unusable"
+  [ "$status" = ok ] || fail "a matching multiline session lock was classified $status"
+
+  {
+    printf '%s\n' "$$"
+    printf 'pidns=pid:[12345]\n'
+    printf 'handover=one-time-ticket\n'
+  } > "$home/state/.lock"
+  status=$(FM_HOME="$home" bash -c \
+    '. "$1/bin/fm-delivery-lib.sh"; fm_delivery_endpoint_status "$2"; printf "%s\n" "$FM_DELIVERY_ENDPOINT_STATUS"' \
+    _ "$ROOT" "$home/state") \
+    || fail "a matching handover lock was classified unusable"
+  [ "$status" = ok ] || fail "a matching handover lock was classified $status"
+
+  {
+    printf '%s\n' "999999"
+    printf 'pidns=pid:[12345]\n'
+    printf 'handover=one-time-ticket\n'
+  } > "$home/state/.lock"
+  status=$(FM_HOME="$home" bash -c \
+    '. "$1/bin/fm-delivery-lib.sh"; fm_delivery_endpoint_status "$2" || true; printf "%s\n" "$FM_DELIVERY_ENDPOINT_STATUS"' \
+    _ "$ROOT" "$home/state")
+  [ "$status" = stale-session ] \
+    || fail "an endpoint owned by a different holder was classified $status"
+  pass "endpoint status reads the holder pid from multiline session lock records"
+}
+
 # --- the six verdicts -------------------------------------------------------
 
 test_every_not_delivering_state_names_itself() {
@@ -771,6 +813,7 @@ SH
   pass "delivery keeper migration replaces owned legacy state and preserves unowned sessions"
 }
 
+test_endpoint_status_reads_the_holder_from_a_multiline_lock_record
 test_every_not_delivering_state_names_itself
 test_a_live_listener_with_a_dead_beacon_is_stalled_not_down
 test_the_listener_never_touches_the_durable_queue
