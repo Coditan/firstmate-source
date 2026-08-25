@@ -192,7 +192,10 @@ function stripParts(tally) {
   const row = tally.children.find((c) => c._classes.has('fm-tally-row')) || null;
   const legend = tally.children.find((c) => c._classes.has('fm-tally-legend')) || null;
   const number = count ? count.children.find((c) => c.tagName === 'B') : null;
-  return { count, row, legend, number };
+  const words = count ? count.children.find((c) => c.tagName === 'DIV') : null;
+  const caption = words ? words.children.find((c) => c.tagName === 'STRONG') : null;
+  const warning = words ? words.children.find((c) => c.tagName === 'SPAN') : null;
+  return { count, row, legend, number, caption, warning };
 }
 
 function tallyCount(tally) {
@@ -334,9 +337,13 @@ function input(doc, el) {
   const c = buildForm('q3', { choice: 'C', entryId: 'e3' });
   reinit(doc, [a.form, b.form, c.form]);
 
-  const { row, legend } = stripParts(tally);
+  const { row, legend, caption, warning } = stripParts(tally);
   check(!tally.hasAttribute('hidden'), 'a board that asks questions reveals its tally strip');
   check(tallyCount(tally) === 3, 'the count starts at one per question, none sent back');
+  check(caption.textContent === 'von 3 noch nicht zurückgeschickt',
+    'a German board gets a German computed tally sentence');
+  check(warning.textContent.includes('nie gesendet'),
+    'a German board gets a German unsent-warning sentence');
   check((row.innerHTML.match(/fm-tally-sq/g) || []).length === 3,
     'the strip carries one square per question');
   check(tally.getAttribute('role') === 'group'
@@ -493,7 +500,12 @@ function input(doc, el) {
   const { doc, tally } = install({ withLavish: true, lang: 'en' });
   const a = buildForm('q1', { choice: 'A', entryId: 'e1' });
   reinit(doc, [a.form]);
-  check(stripParts(tally).legend.innerHTML.includes('Pencil'),
+  const { caption, warning, legend } = stripParts(tally);
+  check(caption.textContent === 'of 1 not sent back yet',
+    'an English board gets an English computed tally sentence');
+  check(warning.textContent.includes('never sent'),
+    'an English board gets an English unsent-warning sentence');
+  check(legend.innerHTML.includes('Pencil'),
     'an English board gets an English legend rather than a half-translated one');
   check(tally.getAttribute('aria-label') === 'Open decisions',
     'an English board gets an English tally group name');
