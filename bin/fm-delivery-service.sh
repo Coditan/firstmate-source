@@ -388,7 +388,9 @@ publish_endpoint() {
     backend=$(discover_supervisor_backend) || true
   fi
   harness=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
-  session=$(cat "$STATE/.lock" 2>/dev/null || true)
+  # First line only: the endpoint record names one session process, and
+  # bin/fm-lock.sh's lock record carries fields below that pid.
+  session=$(sed -n '1p' "$STATE/.lock" 2>/dev/null | tr -d '[:space:]' || true)
   if [ -z "$session" ]; then
     echo "DELIVERY_ENDPOINT: no fleet lock is recorded for this home, so the endpoint would name no session; publish it from the session holding the lock" >&2
     return 1

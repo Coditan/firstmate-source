@@ -316,7 +316,9 @@ test_record_binds_to_the_same_pid_as_the_session_lock() {
   out=$(PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$ROOT/bin/fm-lock.sh") || status=$?
   expect_code 0 "$status" "lock acquisition next to a transcript record"
   assert_contains "$out" "lock acquired: harness pid 515151" "fm-lock.sh stopped reporting the shared harness pid"
-  [ "$(record_field "$root/state/.primary-transcript" harness_pid)" = "$(cat "$root/state/.lock")" ] \
+  # Line one of the lock record is the holder pid; bin/fm-lock.sh carries the
+  # pid table it belongs to in the fields below it.
+  [ "$(record_field "$root/state/.primary-transcript" harness_pid)" = "$(sed -n '1p' "$root/state/.lock")" ] \
     || fail "the transcript record and the session lock disagree about which session owns this home"
   pass "fm-sessionstart-nudge: the transcript record and the session lock name the same harness process"
 }

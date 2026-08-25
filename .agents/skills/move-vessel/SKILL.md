@@ -100,6 +100,10 @@ The receiving vessel already has the move authority; it lacks knowledge of the m
 One envelope is the release, with no polling and no second confirmation.
 If the release is not ready, send the measured reason rather than silence or a premature release.
 
+Releasing the seat itself is a separate act with a command behind it: `bin/fm-lock.sh handover` stands this seat down and prints a one-time ticket the destination presents, so ownership is passed rather than dropped.
+Use it rather than simply ending this session: ending one leaves the home unowned until something else takes it, and taking it by assumption is what the destination is refused from doing.
+The seat that has offered its ownership away must not act again unless it withdraws the offer deliberately, and between the offer and the destination's acquisition no seat is supervising - that gap is the chosen cost and `docs/session-lock-across-boundaries.md` states why it was chosen over the alternative.
+
 ## Verify from inside after cutover
 
 Enter the destination as the moved vessel and inspect the running thing rather than accepting an outside report or substituting values from the definition.

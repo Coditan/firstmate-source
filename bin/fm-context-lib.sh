@@ -155,7 +155,11 @@ FM_CONTEXT_LOCK_PID=
 fm_context_session_live() {  # <state-dir>
   local pid
   FM_CONTEXT_LOCK_PID=
-  pid=$(cat "$1/.lock" 2>/dev/null) || return 1
+  # First line only: bin/fm-lock.sh's record keeps the holder pid on line one and
+  # carries its process-namespace identity below it, so a whole-file read would
+  # hand this numeric test a multi-line string and report a live session as none.
+  pid=$(sed -n '1p' "$1/.lock" 2>/dev/null) || return 1
+  pid=${pid//[[:space:]]/}
   case "$pid" in
     ''|*[!0-9]*|0|1) return 1 ;;
   esac

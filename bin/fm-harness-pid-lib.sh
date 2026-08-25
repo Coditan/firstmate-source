@@ -114,12 +114,99 @@ fm_harness_alive() {
   printf '%s' "$(basename "$comm") $(ps -o args= -p "$pid" 2>/dev/null)" | grep -qE "$FM_HARNESS_RE"
 }
 
+# --- the pid table a recorded pid belongs to -------------------------------
+# A pid is only meaningful inside one process-id table. `kill -0` resolves it in
+# the CALLER's table, so a reader in a different pid namespace tests a number
+# against a table the number was never issued from, finds nothing, and concludes
+# the process is dead. Measured on this fleet's own host on 2026-08-25: a host
+# pid answered `kill -0` from the host and did NOT answer it from an unprivileged
+# `unshare --user --pid --fork` namespace, while `ps` still saw it through the
+# host /proc that was still mounted - so even a reader that consults both is
+# answered "dead" by the first test.
+# That is why every session-lock record names the table its pid came from. The
+# comparison is not decoration: it is what lets a reader say "I cannot see that
+# process" instead of "that process is gone", and those are different answers.
+
+# Print a token naming this process's pid table. Return 1 when none can be
+# formed, which a caller must treat as "I cannot say which table I am in" and
+# never as a match.
+# On Linux the namespace inode IS the table's identity, and it is the same
+# string the kernel shows for every process in it. Where the kernel has no pid
+# namespaces at all, the whole machine is one table, so the machine names it -
+# with its host name included deliberately, because two machines sharing one
+# home over a network filesystem are two tables and must not be read as one.
+fm_pid_namespace_token() {
+  local token sys host
+  if token=$(readlink /proc/self/ns/pid 2>/dev/null) && [ -n "$token" ]; then
+    printf '%s\n' "${token//[[:space:]]/}"
+    return 0
+  fi
+  sys=$(uname -s 2>/dev/null) || return 1
+  host=$(uname -n 2>/dev/null) || return 1
+  [ -n "$sys" ] && [ -n "$host" ] || return 1
+  printf 'nons:%s:%s\n' "${sys//[[:space:]]/}" "${host//[[:space:]]/}"
+}
+
+# The session-lock record, as published by bin/fm-lock.sh:
+#
+#     <holder-pid>
+#     pidns=<token>
+#     handover=<ticket>        (present only while an offer stands)
+#
+# Line one stays the bare pid it has always been, so every reader that already
+# takes the first line keeps working unchanged; the fields below it are additive.
+# ONE owner for the parse, because a second copy of it would decide "who holds
+# this home" by its own rules the moment either is edited.
+#
+# Publishes FM_LOCK_RECORD_PID, FM_LOCK_RECORD_PIDNS and FM_LOCK_RECORD_HANDOVER.
+# Returns 1 when the path is absent, is not a usable regular file, or cannot be
+# read - three conditions a caller must keep apart from an empty record, which
+# is why FM_LOCK_RECORD_ERROR names which one it was.
+FM_LOCK_RECORD_PID=
+FM_LOCK_RECORD_PIDNS=
+FM_LOCK_RECORD_HANDOVER=
+FM_LOCK_RECORD_ERROR=
+fm_session_lock_record_read() {  # <lock-file>
+  local lock=$1 body line
+  FM_LOCK_RECORD_PID=
+  FM_LOCK_RECORD_PIDNS=
+  FM_LOCK_RECORD_HANDOVER=
+  FM_LOCK_RECORD_ERROR=
+  if [ ! -e "$lock" ] && [ ! -L "$lock" ]; then
+    FM_LOCK_RECORD_ERROR=absent
+    return 1
+  fi
+  if [ ! -f "$lock" ] || [ -L "$lock" ]; then
+    FM_LOCK_RECORD_ERROR=not-a-regular-file
+    return 1
+  fi
+  # cat rather than one `read`: a record written without a trailing newline makes
+  # `read` report failure even though it filled the variable, and a holder
+  # mistaken for absent is the takeover this whole file exists to stop.
+  body=$(cat "$lock" 2>/dev/null) || {
+    FM_LOCK_RECORD_ERROR=unreadable
+    return 1
+  }
+  FM_LOCK_RECORD_PID=${body%%$'\n'*}
+  FM_LOCK_RECORD_PID=${FM_LOCK_RECORD_PID//[[:space:]]/}
+  while IFS= read -r line; do
+    line=${line//[[:space:]]/}
+    # shellcheck disable=SC2034 # Both fields are read by callers after fm_session_lock_record_read returns.
+    case "$line" in
+      pidns=*) FM_LOCK_RECORD_PIDNS=${line#pidns=} ;;
+      handover=*) FM_LOCK_RECORD_HANDOVER=${line#handover=} ;;
+    esac
+  done <<< "$body"
+  return 0
+}
+
 # Return 0 when this session cannot show the home is free: the session lock path
 # <lock> exists but is not a usable regular file (including any symlink), cannot
-# be read at all, or is held by a LIVE harness process that is not
-# <my-harness-pid> - exactly the conditions bin/fm-lock.sh refuses acquisition
-# on, and therefore the conditions under which this session will get no fleet
-# authority at all. A lock path absent altogether returns 1 (free).
+# be read at all, names a holder whose pid table this session cannot see into,
+# or names a LIVE harness process that is not <my-harness-pid> - exactly the
+# conditions bin/fm-lock.sh refuses acquisition on, and therefore the conditions
+# under which this session will get no fleet authority at all. A lock path absent
+# altogether returns 1 (free).
 # ONE owner, because the lock and the primary transcript record have to agree on
 # who this home's session is: a second copy of "another session holds this home"
 # would let a session be refused the lock by one test and take over the record
@@ -128,22 +215,83 @@ fm_harness_alive() {
 # equals the holder and is therefore refused. That is the conservative reading
 # rather than an accident: a session that cannot prove it is the holder must not
 # act as one.
+#
+# The pid-table comparison is what makes this predicate answerable across a
+# container boundary, and it is deliberately NOT a liveness test that has been
+# loosened. A holder recorded in another table is refused, not probed: this
+# session has no way to see whether that process is alive, and a reader that
+# cannot see must say so rather than assume the answer it would prefer. Passing
+# ownership to such a session is what `fm-lock.sh handover` exists for; there is
+# no path here that takes it by guessing.
+#
+# Publishes FM_SESSION_LOCK_VERDICT so a caller can name WHICH refusal it hit
+# without re-reading and re-deciding the record itself:
+#   free          nothing usable is recorded, or the recorded holder is dead
+#   mine          the recorded holder is this session
+#   held          a live harness holds it, in this session's own pid table
+#   foreign       a holder is recorded in a pid table this session cannot see
+#   unreadable    the record exists and cannot be read
+#   nonregular    the lock path is not a usable regular file
+#   unidentified  this session cannot name its own pid table
+FM_SESSION_LOCK_VERDICT=
+FM_SESSION_LOCK_LEGACY=0
 fm_session_lock_held_by_other() {  # <lock-file> <my-harness-pid>
-  local lock=$1 me=$2 holder
-  [ -e "$lock" ] || [ -L "$lock" ] || return 1
-  [ -f "$lock" ] && [ ! -L "$lock" ] || return 0
-  # Read with cat rather than one `read`: a lock file written without a trailing
-  # newline makes `read` report failure even though it filled the variable, and
-  # a holder mistaken for absent is the takeover this predicate exists to stop.
-  # A lock that exists and cannot be READ is answered the same way, and for the
-  # same reason: the question is whether this session can show the home is free,
-  # and a reader that cannot see the holder has shown nothing.
-  holder=$(cat "$lock" 2>/dev/null) || return 0
-  holder=${holder%%$'\n'*}
-  holder=${holder//[[:space:]]/}
-  case "$holder" in
-    ''|*[!0-9]*) return 1 ;;
+  local lock=$1 me=$2 mine_ns
+  FM_SESSION_LOCK_VERDICT=free
+  FM_SESSION_LOCK_LEGACY=0
+  if ! fm_session_lock_record_read "$lock"; then
+    case "$FM_LOCK_RECORD_ERROR" in
+      absent) FM_SESSION_LOCK_VERDICT=free; return 1 ;;
+      not-a-regular-file) FM_SESSION_LOCK_VERDICT=nonregular; return 0 ;;
+      *) FM_SESSION_LOCK_VERDICT=unreadable; return 0 ;;
+    esac
+  fi
+  # shellcheck disable=SC2153 # Assigned by fm_session_lock_record_read just above; not a misspelling of FM_LOCK_RECORD_PIDNS.
+  # shellcheck disable=SC2153 # Assigned by fm_session_lock_record_read just above; not a misspelling of FM_LOCK_RECORD_PIDNS.
+  case "$FM_LOCK_RECORD_PID" in
+    ''|*[!0-9]*) FM_SESSION_LOCK_VERDICT=free; return 1 ;;
   esac
-  [ "$holder" = "$me" ] && return 1
-  fm_harness_alive "$holder"
+  if [ "$FM_LOCK_RECORD_PID" = "$me" ] && [ -n "$me" ]; then
+    # Same number, and this session's own table by construction - but only when
+    # the record agrees about the table. A record naming another table with the
+    # same pid number is a DIFFERENT process that happens to share an integer,
+    # and reading it as ours is the collision this comparison exists to catch.
+    if [ -z "$FM_LOCK_RECORD_PIDNS" ]; then
+      FM_SESSION_LOCK_LEGACY=1
+      FM_SESSION_LOCK_VERDICT=mine
+      return 1
+    fi
+    if mine_ns=$(fm_pid_namespace_token) && [ "$mine_ns" = "$FM_LOCK_RECORD_PIDNS" ]; then
+      FM_SESSION_LOCK_VERDICT=mine
+      return 1
+    fi
+    FM_SESSION_LOCK_VERDICT=foreign
+    return 0
+  fi
+  if [ -n "$FM_LOCK_RECORD_PIDNS" ]; then
+    if ! mine_ns=$(fm_pid_namespace_token); then
+      FM_SESSION_LOCK_VERDICT=unidentified
+      return 0
+    fi
+    if [ "$mine_ns" != "$FM_LOCK_RECORD_PIDNS" ]; then
+      FM_SESSION_LOCK_VERDICT=foreign
+      return 0
+    fi
+  else
+    # A record with no table named is one this fork wrote before it recorded
+    # them. It is read the way it was written - as a pid in the reader's own
+    # table - and the first acquisition after it replaces it with a record that
+    # names one. That transitional reading is the ONE case here that cannot tell
+    # a foreign holder from a dead one, which is why bin/fm-lock.sh says so out
+    # loud when it takes such a lock rather than upgrading it silently.
+    # shellcheck disable=SC2034 # Read by callers after the predicate returns.
+    FM_SESSION_LOCK_LEGACY=1
+  fi
+  if fm_harness_alive "$FM_LOCK_RECORD_PID"; then
+    FM_SESSION_LOCK_VERDICT=held
+    return 0
+  fi
+  # shellcheck disable=SC2034 # Read by callers after the predicate returns.
+  FM_SESSION_LOCK_VERDICT=free
+  return 1
 }
