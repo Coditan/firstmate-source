@@ -266,6 +266,7 @@ Third-party material, all from [`mattpocock/skills`](https://github.com/mattpoco
 - `/to-backlog` and `bin/fm-to-backlog.sh` adopt the to-tickets skill. [`docs/to-backlog-provenance.md`](docs/to-backlog-provenance.md) carries the same notice and licence text, along with what was kept, changed, and dropped with the cost of each omission.
 - `/domain-modeling` adopts the domain-modeling skill. [`docs/domain-modeling-provenance.md`](docs/domain-modeling-provenance.md) carries the same notice and licence text, along with what was kept, changed, and dropped with the cost of each omission.
 - `/design-it-twice` adopts one file of the codebase-design skill, its `DESIGN-IT-TWICE.md`, and not the vocabulary the rest of that skill owns. [`docs/design-it-twice-provenance.md`](docs/design-it-twice-provenance.md) carries the same notice and licence text, what was kept, changed, and dropped with the cost of each omission, and why only half of that skill is on this side of the line.
+- `scout-research` forks the research skill, because that skill's opening step - spin up a background agent - is refused in a firstmate primary home. [`docs/scout-research-provenance.md`](docs/scout-research-provenance.md) carries the same notice and licence text, what was kept, changed, and dropped with the cost of each omission, the measurement behind the fork, and how a reader chooses between this skill and the plugin it forks.
 
 Third-party material from a different upstream, on different terms:
 

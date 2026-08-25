@@ -507,6 +507,7 @@ These skills are not captain-invocable; load them only at their precise triggers
 
 - `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line, or a standalone `bin/fm-bootstrap.sh` run prints one; that skill owns which prefixes those are and what each needs, and silence or a `BOOTSTRAP_INFO:` fact needs no load.
 - `diagnostic-reasoning` - load before scoping a reported bug and before acting on a diagnostic report.
+- `scout-research` - load before dispatching an investigation whose deliverable is knowledge rather than a change, and when carrying one out as a scout; it forks the `research` plugin skill because that skill's opening step is refused in a primary home, and `docs/scout-research-provenance.md` carries its licence notice.
 - `deploying` - load before any deploy, redeploy, migration, recompute, or rollback against a running host, before re-running a deploy to confirm an earlier one worked, and before reporting that a change is live; firstmate loads it to brief such a task, and the worker loads it to run one.
 - `ask-user-authority` - load before deciding any ask-user finding, regardless of the project's `yolo` posture.
 - `harness-adapters` - load before every harness-specific operation section 4 lists.
