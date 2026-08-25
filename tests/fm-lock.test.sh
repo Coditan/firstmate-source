@@ -702,6 +702,23 @@ SH
   chmod +x "$fakebin/uname"
 }
 
+make_machine_identity() {  # <fakebin> <value|empty|unreadable>
+  local fakebin=$1 mode=$2 real_cat
+  real_cat=$(command -v cat)
+  cat > "$fakebin/cat" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = /etc/machine-id ]; then
+  case "$mode" in
+    empty) exit 0 ;;
+    unreadable) exit 1 ;;
+    *) printf '%s\n' "$mode"; exit 0 ;;
+  esac
+fi
+exec "$real_cat" "\$@"
+SH
+  chmod +x "$fakebin/cat"
+}
+
 test_linux_refuses_when_its_pid_namespace_identity_is_unreadable() {
   local root fakebin out status=0
   prepare unreadable-linux-pidns
@@ -714,6 +731,46 @@ test_linux_refuses_when_its_pid_namespace_identity_is_unreadable() {
     "the refusal must name the missing process namespace identity"
   [ ! -e "$root/state/.lock" ] \
     || fail "an unidentifiable Linux pid table must never publish a lock record"
+}
+
+test_linux_refuses_when_its_machine_identity_is_unusable() {
+  local mode root fakebin out status
+  for mode in unreadable empty; do
+    prepare "${mode}-linux-machine-id"
+    root=$PREP_ROOT fakebin=$PREP_FAKEBIN status=0
+    make_machine_identity "$fakebin" "$mode"
+
+    out=$(run_lock "$root" "$fakebin") || status=$?
+    expect_code 1 "$status" "Linux must refuse when machine-id is $mode"
+    assert_contains "$out" "readable /etc/machine-id" \
+      "the refusal must name the missing Linux machine identity"
+    [ ! -e "$root/state/.lock" ] \
+      || fail "an unidentifiable Linux machine must never publish a lock record"
+  done
+}
+
+test_the_same_namespace_inode_on_another_machine_is_foreign() {
+  local root fakebin harness otherbin other out status=0
+  prepare machine-scoped-pidns
+  root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
+  make_machine_identity "$fakebin" machine-a
+  run_lock "$root" "$fakebin" >/dev/null || fail "the first machine must acquire the lock"
+  assert_contains "$(lock_field "$root/state/.lock" pidns)" "linux:machine-a:pid:[" \
+    "the first record must combine machine identity with namespace inode"
+
+  kill "$harness" 2>/dev/null || true
+  wait "$harness" 2>/dev/null || true
+  otherbin=$(fm_fakebin "$root/other-machine")
+  live_pid other
+  make_fake_ps_holder "$otherbin" "$other"
+  make_machine_identity "$otherbin" machine-b
+
+  out=$(run_lock "$root" "$otherbin") || status=$?
+  expect_code 1 "$status" "the same namespace inode on another machine must remain foreign"
+  assert_contains "$out" "liveness is unmeasurable" \
+    "the second machine must refuse rather than probe the first machine's dead-looking pid"
+  [ "$(lock_pid "$root/state/.lock")" = "$harness" ] \
+    || fail "the second machine must leave the first machine's record intact"
 }
 
 test_a_kernel_without_pid_namespaces_uses_a_machine_scoped_token() {
@@ -823,8 +880,23 @@ test_a_second_session_on_this_host_is_still_refused() {
 
 # --- passing ownership rather than dropping it -----------------------------
 
-test_an_offer_keeps_the_home_owned_and_names_exactly_one_successor() {
-  local root fakebin harness out ticket status=0
+test_help_describes_the_irrevocable_handover_interface() {
+  local out first last
+  out=$("$LOCK_SH" --help) || fail "session-lock help must be readable"
+  first=$(printf '%s\n' "$out" | sed -n '1p')
+  last=$(printf '%s\n' "$out" | tail -n 1)
+  [ "$first" = "Acquire, inspect or hand over the per-home firstmate session lock." ] \
+    || fail "help must begin with the script header"
+  [ "$last" = "       fm-lock.sh handover              stand down and print the successor's ticket" ] \
+    || fail "help must end with the final supported usage line"
+  assert_contains "$out" "The offer is final" \
+    "help must state that a handover offer is irrevocable"
+  assert_not_contains "$out" "--cancel" \
+    "help must not advertise a withdrawal operation"
+}
+
+test_an_irrevocable_offer_keeps_the_home_owned_for_one_successor() {
+  local root fakebin harness other otherbin out ticket status=0
   prepare handover-offer
   root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
   run_lock "$root" "$fakebin" >/dev/null || fail "the outgoing seat must hold the lock first"
@@ -848,8 +920,22 @@ test_an_offer_keeps_the_home_owned_and_names_exactly_one_successor() {
   status=0
   out=$(run_lock "$root" "$fakebin") || status=$?
   expect_code 1 "$status" "a seat that offered its ownership away must not resume by re-acquiring"
-  assert_contains "$out" "handover --cancel" \
-    "the refusal must name the one deliberate way back"
+  assert_contains "$out" "the offer cannot be withdrawn" \
+    "the refusal must state that the offer is final"
+  assert_not_contains "$out" "--cancel" \
+    "the refusal must not name a withdrawal command"
+  [ "$(lock_pid "$root/state/.lock")" = "$harness" ] \
+    || fail "a refused re-acquire must leave the outgoing holder recorded"
+  [ "$(lock_field "$root/state/.lock" handover)" = "$ticket" ] \
+    || fail "a refused re-acquire must leave the successor's ticket intact"
+
+  status=0
+  out=$(run_lock "$root" "$fakebin" handover --cancel) || status=$?
+  expect_code 2 "$status" "the handover interface must provide no withdrawal operation"
+  assert_contains "$out" "unknown option --cancel" \
+    "a withdrawal attempt must be rejected as unsupported"
+  [ "$(lock_field "$root/state/.lock" handover)" = "$ticket" ] \
+    || fail "an unsupported withdrawal must leave the final offer intact"
 
   status=0
   out=$(run_lock "$root" "$fakebin" acquire --handover "${ticket}deadbeef") || status=$?
@@ -857,23 +943,19 @@ test_an_offer_keeps_the_home_owned_and_names_exactly_one_successor() {
   assert_contains "$out" "does not match the offer" "the refusal must say the ticket did not match"
   [ "$(lock_pid "$root/state/.lock")" = "$harness" ] \
     || fail "a mismatched ticket must leave ownership where it was"
-}
 
-test_an_offer_can_be_withdrawn_and_the_seat_acts_again() {
-  local root fakebin harness out status=0
-  prepare handover-cancel
-  root=$PREP_ROOT fakebin=$PREP_FAKEBIN harness=$PREP_HARNESS
-  run_lock "$root" "$fakebin" >/dev/null || fail "the seat must hold the lock first"
-  run_lock "$root" "$fakebin" handover >/dev/null || fail "the seat must be able to offer"
-
-  out=$(run_lock "$root" "$fakebin" handover --cancel) || fail "an offer must be withdrawable"
-  assert_contains "$out" "handover cancelled" "cancelling must say so"
+  otherbin=$(fm_fakebin "$root/successor")
+  live_pid other
+  make_fake_ps_holder "$otherbin" "$other" "$harness"
+  status=0
+  out=$(run_lock "$root" "$otherbin" acquire --handover "$ticket") || status=$?
+  expect_code 0 "$status" "the named successor must still redeem an irrevocable offer"
+  assert_contains "$out" "lock acquired by handover: harness pid $other (from pid $harness)" \
+    "the successor must report the ownership transfer"
+  [ "$(lock_pid "$root/state/.lock")" = "$other" ] \
+    || fail "redemption must publish the named successor as holder"
   [ -z "$(lock_field "$root/state/.lock" handover)" ] \
-    || fail "a withdrawn offer must leave no ticket a successor could still present"
-  out=$(run_lock "$root" "$fakebin") || status=$?
-  expect_code 0 "$status" "the seat must act again once it has withdrawn its offer"
-  assert_contains "$out" "lock acquired: harness pid $harness" \
-    "re-acquisition after a withdrawal must report the same holder"
+    || fail "redemption must consume the final offer"
 }
 
 test_a_ticket_is_refused_when_no_offer_stands() {
@@ -993,13 +1075,15 @@ test_a_state_directory_that_cannot_be_written_refuses_before_claiming
 test_a_state_directory_that_cannot_be_created_refuses
 test_a_session_that_cannot_identify_itself_acquires_nothing
 test_linux_refuses_when_its_pid_namespace_identity_is_unreadable
+test_linux_refuses_when_its_machine_identity_is_unusable
+test_the_same_namespace_inode_on_another_machine_is_foreign
 test_a_kernel_without_pid_namespaces_uses_a_machine_scoped_token
 test_a_holder_in_another_pid_table_is_refused_even_when_it_looks_dead
 test_status_calls_a_holder_in_another_pid_table_unmeasurable_not_stale
 test_a_real_pid_namespace_cannot_take_a_lock_held_on_this_host
 test_a_second_session_on_this_host_is_still_refused
-test_an_offer_keeps_the_home_owned_and_names_exactly_one_successor
-test_an_offer_can_be_withdrawn_and_the_seat_acts_again
+test_help_describes_the_irrevocable_handover_interface
+test_an_irrevocable_offer_keeps_the_home_owned_for_one_successor
 test_a_ticket_is_refused_when_no_offer_stands
 test_a_seat_that_holds_nothing_cannot_offer_ownership
 test_ownership_passes_into_a_real_pid_namespace_by_handover

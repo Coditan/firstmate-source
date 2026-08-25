@@ -102,7 +102,7 @@ If the release is not ready, send the measured reason rather than silence or a p
 
 Releasing the seat itself is a separate act with a command behind it: `bin/fm-lock.sh handover` stands this seat down and prints a one-time ticket the destination presents, so ownership is passed rather than dropped.
 Use it rather than simply ending this session: ending one leaves the home unowned until something else takes it, and taking it by assumption is what the destination is refused from doing.
-The seat that has offered its ownership away must not act again unless it withdraws the offer deliberately, and between the offer and the destination's acquisition no seat is supervising - that gap is the chosen cost and `docs/session-lock-across-boundaries.md` states why it was chosen over the alternative.
+The seat's offer is final because releasing authority is a fact rather than a proposal, and between the offer and the destination's acquisition no seat is supervising - that gap is the chosen cost and `docs/session-lock-across-boundaries.md` states why it was chosen over the alternative.
 
 ## Verify from inside after cutover
 

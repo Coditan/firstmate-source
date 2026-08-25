@@ -35,7 +35,7 @@ The record now carries the identity of the table its holder pid came from:
 
 ```
 <holder-pid>
-pidns=pid:[4026531836]
+pidns=linux:<machine-id>:pid:[4026531836]
 handover=<ticket>          (present only while an offer stands)
 ```
 
@@ -52,8 +52,9 @@ What changed is that the test now knows when it cannot see:
   Not "stale", not "held" - neither is a claim this reader is entitled to make.
 - The reader cannot name its own table: refuse, for the same reason.
 
-On Linux, failure to read `/proc/self/ns/pid` is a refusal because a hostname cannot distinguish pid namespaces that share one machine identity.
-The accepted cost is that such a home operates read-only until its pid namespace identity becomes readable.
+On Linux, the token combines `/etc/machine-id` with `/proc/self/ns/pid` because the namespace inode is unique only within one kernel and homes can be shared across machines.
+The stable machine id is used instead of `/proc/sys/kernel/random/boot_id` because a boot-scoped token would make a pre-reboot record foreign and wedge the home rather than letting its dead holder free normally.
+Failure to read either Linux identity component is a refusal, and the accepted cost is that such a home operates read-only until both become readable.
 Only where the kernel has no pid namespaces at all is the whole machine one table and the token names the machine.
 The host name is deliberately part of it: two machines sharing one home over a network filesystem are two tables and must not be read as one.
 
@@ -66,7 +67,7 @@ The item this closes required the choice to be stated rather than left implicit.
 It is this:
 
 - There is never a moment when the record names nobody, and never a moment when it names two.
-- The offer is the outgoing seat's standing-down, and it is enforced: that seat is refused a plain re-acquire afterwards and must run `handover --cancel` to take authority back deliberately.
+- The offer is the outgoing seat's standing-down, it is final, and that seat is refused a plain re-acquire afterwards.
 - **The cost is a gap in which no seat is ACTING** - between the offer and the successor's acquisition, the home is owned and unsupervised.
 
 That gap was chosen over the alternative because an unsupervised minute is recoverable and two seats both draining the wake queue, dispatching, and merging is not.
@@ -77,7 +78,9 @@ The gap is bounded by how long the successor takes to start, and it is visible: 
 - **The claim lock is still pid-based.**
   `bin/fm-wake-lib.sh` owns `state/.lock.acquire`, and its staleness test is `fm_pid_alive` plus a freshness window - the same reading that fails across a table boundary.
   Two acquisitions in different tables overlapping by longer than that window can therefore both take the claim.
-  The consequence is bounded and it was left as it is on purpose: the claim only serialises the read-then-write, and the refusal that matters no longer depends on it.
+  That weakness is bounded for competing plain acquisitions because the losing side's publication read-back catches the overwritten record.
+  It did not safely serialise two operations that both legitimately intended to write, so the withdrawal operation was removed and a handover offer is final.
+  A residual race remains if ticket redemption overlaps a third seat's plain acquisition at the moment the offering process dies: the plain acquisition can read the same-table holder as dead while the ticket remains redeemable.
   That primitive is also shared with the watcher, the delivery listener, batching, the journal, the bosun, and the urgency surface, so changing it is a fleet-wide blast radius rather than a lock fix.
 - **A record written before this change names no table.**
   It is read the way it was written - as a pid in the reader's own table - and replaced by the first acquisition after it.

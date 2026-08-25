@@ -130,22 +130,28 @@ fm_harness_alive() {
 # Print a token naming this process's pid table. Return 1 when none can be
 # formed, which a caller must treat as "I cannot say which table I am in" and
 # never as a match.
-# On Linux the namespace inode IS the table's identity, and it is the same
-# string the kernel shows for every process in it. If that identity cannot be
-# read, Linux must refuse: a hostname is not a pid-table identity where distinct
-# namespaces can share it. On kernels without pid namespaces the whole machine
-# is one table, so the machine names it - with its host name included because
-# two machines sharing one home over a network filesystem are two tables.
+# On Linux the namespace inode identifies the table within one kernel, and the
+# machine-id scopes it across machines sharing a home. The boot id is not used:
+# after a reboot it would make the old record foreign and wedge the home instead
+# of letting the dead holder free normally. If either stable machine identity or
+# namespace identity cannot be read, Linux refuses rather than publishing a
+# token that can collide. On kernels without pid namespaces the whole machine is
+# one table, so the machine names it with its host name included.
 fm_pid_namespace_token() {
-  local token sys host
-  if token=$(readlink /proc/self/ns/pid 2>/dev/null) && [ -n "$token" ]; then
-    printf '%s\n' "${token//[[:space:]]/}"
-    return 0
-  fi
+  local token sys host machine
   sys=$(uname -s 2>/dev/null) || return 1
   sys=${sys//[[:space:]]/}
   [ -n "$sys" ] || return 1
-  [ "$sys" != Linux ] || return 1
+  if [ "$sys" = Linux ]; then
+    token=$(readlink /proc/self/ns/pid 2>/dev/null) || return 1
+    token=${token//[[:space:]]/}
+    [ -n "$token" ] || return 1
+    machine=$(cat /etc/machine-id 2>/dev/null) || return 1
+    machine=${machine//[[:space:]]/}
+    [ -n "$machine" ] || return 1
+    printf 'linux:%s:%s\n' "$machine" "$token"
+    return 0
+  fi
   host=$(uname -n 2>/dev/null) || return 1
   host=${host//[[:space:]]/}
   [ -n "$host" ] || return 1

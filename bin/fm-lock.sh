@@ -27,11 +27,12 @@
 # Handover exists because a lock that only frees when its owner dies can be
 # dropped but never passed. `handover` keeps the outgoing seat recorded as the
 # holder - so the home is never unowned - while standing that seat down, and
-# prints a one-time ticket. The successor presents the ticket and the record is
-# replaced in one atomic rename. THE COST IS STATED RATHER THAN HIDDEN: between
-# the offer and the successor's acquisition no seat is acting, and that gap was
-# chosen over the alternative, because an unsupervised minute is recoverable and
-# two seats both dispatching and merging is not.
+# prints a one-time ticket. The offer is final: the successor presents the
+# ticket and the record is replaced in one atomic rename. THE COST IS STATED
+# RATHER THAN HIDDEN: between the offer and the successor's acquisition no seat
+# is acting, and that gap was chosen over the alternative, because an
+# unsupervised minute is recoverable and two seats both dispatching and merging
+# is not.
 #
 # Usage: fm-lock.sh                       acquire; exit 1 unless ownership is verified
 #        fm-lock.sh acquire [--handover TICKET]
@@ -40,7 +41,6 @@
 #                                         FM_LOCK_HANDOVER_TICKET
 #        fm-lock.sh status                print holder and liveness; always exits 0
 #        fm-lock.sh handover              stand down and print the successor's ticket
-#        fm-lock.sh handover --cancel     withdraw a standing offer and resume authority
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -54,7 +54,6 @@ LOCK="$STATE/.lock"
 
 MODE=acquire
 TICKET="${FM_LOCK_HANDOVER_TICKET:-}"
-CANCEL=0
 case "${1:-}" in
   ''|acquire) [ -n "${1:-}" ] && shift ;;
   status) MODE=status; shift ;;
@@ -69,9 +68,6 @@ while [ $# -gt 0 ]; do
       shift
       [ $# -gt 0 ] || { echo "error: --handover needs a ticket" >&2; exit 2; }
       TICKET=$1; shift ;;
-    --cancel)
-      [ "$MODE" = handover ] || { echo "error: --cancel applies to handover only" >&2; exit 2; }
-      CANCEL=1; shift ;;
     *) echo "error: unknown option $1; run $0 --help" >&2; exit 2 ;;
   esac
 done
@@ -140,9 +136,9 @@ refuse_not_ours() {
     unreadable)
       echo "error: the session lock is unreadable, so this session cannot show it is free; operate read-only until resolved" >&2 ;;
     unidentified)
-      echo "error: this session cannot identify its own process namespace, so it cannot show the lock holder is not live; operate read-only until resolved" >&2 ;;
+      echo "error: this session cannot identify its own process namespace; Linux requires readable /etc/machine-id and /proc/self/ns/pid, so the lock holder's liveness is unmeasurable and this session must operate read-only until resolved" >&2 ;;
     foreign)
-      echo "error: the session lock is held by pid $FM_LOCK_RECORD_PID in process namespace $FM_LOCK_RECORD_PIDNS, which this session cannot see into, so it cannot be shown free; take ownership with a handover from the holding session rather than by assuming it is gone" >&2 ;;
+      echo "error: the session lock is held by pid $FM_LOCK_RECORD_PID in process namespace $FM_LOCK_RECORD_PIDNS, which this session cannot see into; liveness is unmeasurable, so take ownership with a handover from the holding session rather than by assuming it is gone" >&2 ;;
     *)
       echo "error: another live firstmate session holds the lock (pid $FM_LOCK_RECORD_PID); operate read-only until resolved" >&2 ;;
   esac
@@ -151,7 +147,7 @@ refuse_not_ours() {
 
 me=$(fm_harness_pid) || { echo "error: cannot locate harness process in ancestry" >&2; exit 1; }
 my_ns=$(fm_pid_namespace_token) || {
-  echo "error: cannot identify this session's process namespace, so the lock it wrote could not be read correctly by anyone else; operate read-only until resolved" >&2
+  echo "error: cannot identify this session's process namespace; Linux requires readable /etc/machine-id and /proc/self/ns/pid, so the lock it wrote could not be read correctly by anyone else; operate read-only until resolved" >&2
   exit 1
 }
 
@@ -253,18 +249,8 @@ if [ "$MODE" = handover ]; then
     echo "error: this session does not hold the lock, so it has no ownership to hand over; acquire it first" >&2
     exit 1
   fi
-  if [ "$CANCEL" -eq 1 ]; then
-    if [ -z "$FM_LOCK_RECORD_HANDOVER" ]; then
-      echo "error: no handover offer stands on this lock; nothing to cancel" >&2
-      exit 1
-    fi
-    publish_record "$me" "$my_ns" ""
-    release_claim_lock
-    echo "handover cancelled: harness pid $me holds the lock and is acting again"
-    exit 0
-  fi
   if [ -n "$FM_LOCK_RECORD_HANDOVER" ]; then
-    echo "error: a handover offer already stands on this lock; cancel it before making another so exactly one successor is named" >&2
+    echo "error: a handover offer already stands on this lock and is final, so another cannot be made; exactly one successor remains named" >&2
     exit 1
   fi
   # Refused rather than weakened to a guessable value: a ticket anyone can
@@ -281,8 +267,7 @@ if [ "$MODE" = handover ]; then
 handover offered by harness pid $me
 ticket: $new_ticket
 This session is still the recorded holder, so the home is never unowned, but it
-has stood down and must not act with fleet authority again unless it runs
-"$0 handover --cancel".
+has stood down and must not act with fleet authority again. This offer is final.
 No seat is supervising until the successor runs:
   FM_LOCK_HANDOVER_TICKET=$new_ticket <its session start>
 or, directly:
@@ -326,7 +311,7 @@ fi
 # decision that is already made.
 if ! fm_session_lock_held_by_other "$LOCK" "$me" && [ "$FM_SESSION_LOCK_VERDICT" = mine ]; then
   if [ -n "$FM_LOCK_RECORD_HANDOVER" ]; then
-    echo "error: this session offered its ownership away and stood down, so it must not resume authority by re-acquiring; run \"$0 handover --cancel\" to take it back deliberately, or let the successor present its ticket" >&2
+    echo "error: this session offered its ownership away and stood down; the offer cannot be withdrawn, and authority returns only when the named successor presents its ticket or this session's process ends and the record frees normally" >&2
     exit 1
   fi
   # A record from before this fork wrote pid tables names no table, so it is
