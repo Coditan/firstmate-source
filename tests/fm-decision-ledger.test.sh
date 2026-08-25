@@ -910,6 +910,54 @@ test_attesting_an_answer_cannot_reach_a_live_or_answered_or_unanswered_record() 
   pass "attesting an answer cannot reach a live, an answered, or an unbacked record"
 }
 
+test_attestation_binds_validation_and_digest_to_one_answer_row() {
+  local home ambiguous audit out rc=0
+  home=$(seed_recovered_answer_home answer-row-selection)
+  cat "$home/data/backlog.md" >> "$home/data/done-archive.md"
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
+  printf 'different unfinished words\n' > "$home/different.txt"
+  run_hold "$home" record different-answer live --door chat \
+    --decision-file "$home/different.txt" --title "A different unfinished answer" \
+    --repo sample >/dev/null 2>&1 \
+    || fail "recording the mixed-row answer fixture failed"
+  sed -i.bak \
+    's/^- \[x\] different-answer-decision-live /- [ ] fm-bwrap-apparmor-upstream-doc-decision-raise-upstream /' \
+    "$home/data/backlog.md"
+
+  run_hold "$home" answered-by fm-bwrap-apparmor-upstream-doc \
+    --by fm-bwrap-apparmor-upstream-doc-decision-raise-upstream >/dev/null \
+    || fail "the closed answer row must be selected instead of the unfinished live row"
+  rc=0
+  audit=$(run_ledger "$home" --audit) || rc=$?
+  [ "$rc" -eq 0 ] || fail "the pointer must remain valid against the selected closed answer row: $audit"
+  assert_not_contains "$audit" "answer-pointer-broken fm-bwrap-apparmor-upstream-doc" \
+    "the pointer must bind to the qualifying closed row's digest"
+
+  ambiguous=$(seed_recovered_answer_home ambiguous-answer-rows)
+  cat "$ambiguous/data/backlog.md" >> "$ambiguous/data/done-archive.md"
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$ambiguous/data/backlog.md"
+  printf 'different closed words\n' > "$ambiguous/different.txt"
+  run_hold "$ambiguous" record different-answer closed --door chat \
+    --decision-file "$ambiguous/different.txt" --title "A different closed answer" \
+    --repo sample >/dev/null 2>&1 \
+    || fail "recording the ambiguous answer fixture failed"
+  sed -i.bak \
+    's/^- \[x\] different-answer-decision-closed /- [x] fm-bwrap-apparmor-upstream-doc-decision-raise-upstream /' \
+    "$ambiguous/data/backlog.md"
+  if out=$(run_hold "$ambiguous" answered-by fm-bwrap-apparmor-upstream-doc \
+       --by fm-bwrap-apparmor-upstream-doc-decision-raise-upstream 2>&1); then
+    fail "closed answer rows with different digests must be refused as ambiguous"
+  fi
+  assert_contains "$out" "closed captain rows carrying different decision digests" \
+    "the refusal must identify the ambiguous answer identity"
+  rc=0
+  audit=$(run_ledger "$ambiguous" --audit) || rc=$?
+  [ "$rc" -eq 1 ] || fail "refusing an ambiguous answer must leave the target finding standing"
+  assert_contains "$audit" "closed-without-record fm-bwrap-apparmor-upstream-doc" \
+    "an ambiguous answer refusal must not dispose of the target"
+  pass "attestation hashes one qualifying answer row and refuses ambiguous rows"
+}
+
 # A pointer is only a disposition while it still resolves. It is bound to the digest
 # the attestation was made against, so it cannot silently follow a record that was
 # emptied, reopened, or re-answered with different text.
@@ -955,4 +1003,5 @@ test_oversized_decision_payloads_do_not_travel_on_argv
 test_the_decision_board_input_never_carries_an_answered_question
 test_a_recovered_answer_disposes_a_record_no_other_verb_can_reach
 test_attesting_an_answer_cannot_reach_a_live_or_answered_or_unanswered_record
+test_attestation_binds_validation_and_digest_to_one_answer_row
 test_an_answer_pointer_that_no_longer_resolves_reports_again

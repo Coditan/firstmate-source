@@ -895,6 +895,44 @@ stored_decision_digest() {  # <id>
   return 1
 }
 
+decision_resolution_at_row() {  # <id> <file> <header-line>
+  FM_DH_TARGET="$1" FM_DH_LINE="$3" awk '
+    BEGIN { target = ENVIRON["FM_DH_TARGET"]; wanted = ENVIRON["FM_DH_LINE"] + 0 }
+    function is_header(l) {
+      return (l ~ /^- \[[ xX]\] [A-Za-z0-9][A-Za-z0-9._-]* - /) \
+        || (l ~ /^- \*\*[A-Za-z0-9][A-Za-z0-9._-]*\*\* - /)
+    }
+    {
+      line = $0
+      sub(/\r$/, "", line)
+      if (NR == wanted) {
+        active = (index(line, "- [x] " target " - ") == 1 || index(line, "- [X] " target " - ") == 1) \
+          && index(line, "(kind: captain)") > 0
+        next
+      }
+      if (!active) next
+      if (is_header(line) || (line != "" && index(line, "  ") != 1)) { active = 0; next }
+      body = (line == "" ? "" : substr(line, 3))
+      if (grabbing) {
+        if (body == "Routed work:" && n > 0 && decision[n] == "") {
+          n--; routed = 1; grabbing = 0; active = 0
+          next
+        }
+        decision[++n] = body
+        next
+      }
+      if (body == "Resolution recorded by fm-decision-hold.") marker = 1
+      else if (index(body, "Decision digest: ") == 1) digest = substr(body, 18)
+      else if (body == "Captain decision:") grabbing = 1
+    }
+    END {
+      if (!marker || digest == "" || !routed || n == 0) exit 1
+      print digest
+      for (i = 1; i <= n; i++) printf "%s%s", decision[i], (i < n ? "\n" : "")
+    }
+  ' "$2"
+}
+
 # Replaces the body of the rows whose header lines are listed, and touches nothing
 # else in the file. The whole file is buffered because a body may legally contain
 # blank lines, so where one body ends can only be decided by looking past the blank
@@ -935,9 +973,9 @@ replace_row_bodies() {  # <file> <comma-separated header line numbers> <body>
 }
 
 command_answered_by() {
-  local id=${1:-} answer='' rows answer_rows text digest write_lines='' targets=0
+  local id=${1:-} answer='' rows answer_rows text='' digest='' resolution write_lines='' targets=0
   local total=0 open_rows=0 answered_rows=0 folded_rows=0 noncaptain=0 already=0 file ln
-  local closed captain has_answer folded pointed pointer lines
+  local closed captain has_answer folded pointed pointer lines qualifying=0 candidates=0 row_digest
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
   while [ "$#" -gt 0 ]; do
@@ -962,12 +1000,29 @@ command_answered_by() {
   answer_rows=$(scan_identity_rows "$answer")
   [ -n "$answer_rows" ] \
     || fail "answer record $answer is in neither $DATA/backlog.md nor $ARCHIVE"
-  printf '%s\n' "$answer_rows" | awk -F'\t' '$3 == 1 && $4 == 1 && $5 == 1 { found = 1 } END { exit found ? 0 : 1 }' \
-    || fail "answer record $answer has not finished closing; re-run the same fm-decision-hold.sh record call before pointing another record at it, or the pointer will not resolve"
-  text=$(stored_decision_text "$answer") \
-    || fail "answer record $answer has no readable stored decision text"
-  digest=$(stored_decision_digest "$answer") \
-    || fail "answer record $answer carries no recorded decision digest"
+  # Qualifying rows are considered in the store's existing file order, backlog
+  # then archive, and the first one supplies both the text and digest being hashed.
+  while IFS=$'\t' read -r file ln closed captain has_answer folded pointed pointer; do
+    [ -n "$file" ] || continue
+    [ "$closed" -eq 1 ] && [ "$captain" -eq 1 ] && [ "$has_answer" -eq 1 ] || continue
+    candidates=$((candidates + 1))
+    resolution=$(decision_resolution_at_row "$answer" "$file" "$ln") || continue
+    row_digest=${resolution%%$'\n'*}
+    if [ "$qualifying" -eq 0 ]; then
+      digest=$row_digest
+      text=${resolution#*$'\n'}
+    elif [ "$row_digest" != "$digest" ]; then
+      fail "answer record $answer has closed captain rows carrying different decision digests; repair the ambiguous answer identity before pointing another record at it"
+    fi
+    qualifying=$((qualifying + 1))
+  done <<EOF
+$answer_rows
+EOF
+  if [ "$qualifying" -eq 0 ]; then
+    [ "$candidates" -eq 0 ] \
+      && fail "answer record $answer has not finished closing; re-run the same fm-decision-hold.sh record call before pointing another record at it, or the pointer will not resolve"
+    fail "answer record $answer has no closed captain row carrying a complete readable resolution; repair that record before pointing another one at it"
+  fi
   [ "$(sha256_text "$text")" = "$digest" ] \
     || fail "answer record $answer no longer matches its recorded digest; repair that record before pointing another one at it"
 
