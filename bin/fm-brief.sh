@@ -283,7 +283,7 @@ PREMISE_SECTION=$(cat <<'EOF'
 # Premise declaration - NONE ASSERTED
 **DECLARED ABSENT:** this scaffold cannot inspect the task text that replaces `{TASK}` later.
 This brief is declared to hand you no asserted fact you would act on without re-deriving it first.
-If the task text does hand you one - which branch is stale, which file holds the value, which commit is the right one, that a named path is safe to take - stop and regenerate the brief with `--premise` before dispatch.
+If the task text does hand you one - which branch is stale, which file holds the value, which commit is the right one, that a named path is safe to take - append `blocked: brief asserts a fact but was scaffolded without --premise` to the status file and stop; firstmate will regenerate it.
 Do not write a disproof step into this unguarded brief by hand.
 EOF
 )
