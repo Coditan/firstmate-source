@@ -272,6 +272,37 @@ test_premise_omission_is_loud_for_ship_and_scout() {
   pass "fm-brief.sh: ship and scout scaffolds make an omitted premise fail-visible"
 }
 
+# The scaffold's stdout line is the only cue firstmate gets that a SECOND placeholder
+# must be filled before dispatch: nothing downstream catches an unfilled {PREMISE}
+# (fm-model-panel.sh only guards a whole-line {TASK}). Pin both renderings.
+test_premise_scaffold_stdout_names_every_placeholder() {
+  local home id kind out
+  home="$TMP_ROOT/premise-stdout-home"
+  mkdir -p "$home/data"
+  for kind in ship scout; do
+    id="brief-premise-stdout-$kind"
+    if [ "$kind" = scout ]; then
+      out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --scout --premise 2>/dev/null)
+    else
+      out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --premise 2>/dev/null)
+    fi
+    assert_contains "$out" "replace {TASK} and {PREMISE}" \
+      "$kind --premise scaffold did not cue the second placeholder on stdout"
+
+    id="brief-nopremise-stdout-$kind"
+    if [ "$kind" = scout ]; then
+      out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --scout 2>/dev/null)
+    else
+      out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate 2>/dev/null)
+    fi
+    assert_contains "$out" "replace {TASK}" \
+      "$kind scaffold lost the {TASK} cue on stdout"
+    assert_not_contains "$out" "{PREMISE}" \
+      "$kind scaffold cued a premise placeholder it did not emit"
+  done
+  pass "fm-brief.sh: the scaffold's stdout names every placeholder still to be filled"
+}
+
 test_premise_is_rejected_for_secondmate_charters() {
   local home status
   home="$TMP_ROOT/premise-secondmate-home"
@@ -518,6 +549,7 @@ test_herdr_lab_omission_is_loud_for_ship_and_scout
 test_herdr_lab_contract_applies_to_scouts_but_not_secondmates
 test_premise_step_is_narrow_and_repair_worded
 test_premise_omission_is_loud_for_ship_and_scout
+test_premise_scaffold_stdout_names_every_placeholder
 test_premise_is_rejected_for_secondmate_charters
 test_secondmate_no_projects_charter
 test_pause_verb_override_renders_all_brief_scaffolds

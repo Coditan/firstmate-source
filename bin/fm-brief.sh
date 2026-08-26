@@ -27,11 +27,12 @@
 #   caller-supplied repo string cannot reliably identify this repo. Briefs made
 #   without it carry a loud declaration so an omitted contract cannot be silent.
 #   --premise is mandatory when the brief hands the worker an asserted fact it is
-#   expected to act on without re-deriving it - the same condition dispatch rule 2
-#   decides on. It adds the disproof step and a {PREMISE} placeholder for the one
-#   fact; firstmate replaces {PREMISE} exactly as it replaces {TASK}. The flag must
-#   be explicit for the same reason --herdr-lab is, and briefs made without it carry
-#   a loud declaration so an omitted premise cannot be silent.
+#   expected to act on without re-deriving it - the same condition the dispatch
+#   effort rule for premise-carrying briefs decides on. It adds the disproof step
+#   and a {PREMISE} placeholder for the one fact; firstmate replaces {PREMISE}
+#   exactly as it replaces {TASK}. The flag must be explicit for the same reason
+#   --herdr-lab is, and briefs made without it carry a loud declaration so an
+#   omitted premise cannot be silent.
 # For ship tasks, the definition of done is shaped by the project's delivery mode
 # (data/projects.md via fm-project-mode.sh; see the project-management skill
 # and AGENTS.md task lifecycle):
