@@ -205,6 +205,86 @@ test_herdr_lab_omission_is_loud_for_ship_and_scout() {
   pass "fm-brief.sh: ship and scout scaffolds make omitted Herdr intent fail-visible"
 }
 
+# The premise disproof step is the measured control from the 2026-08-18/25 effort lab:
+# it disproves ONE named assertion and repairs rather than merely stopping. It must not
+# drift into a general verification section - the vendor documents that separate
+# verification steps in harness scaffolding cause over-verification on this model - so
+# these assertions pin both the repair wording and the absence of a general re-check.
+test_premise_step_is_narrow_and_repair_worded() {
+  local home id brief kind
+  home="$TMP_ROOT/premise-home"
+  mkdir -p "$home/data"
+  for kind in ship scout; do
+    id="brief-premise-$kind"
+    if [ "$kind" = scout ]; then
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --scout --premise >/dev/null 2>&1
+    else
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --premise >/dev/null 2>&1
+    fi
+    brief="$home/data/$id/brief.md"
+    assert_present "$brief" "$kind --premise brief was not scaffolded"
+    assert_grep "# The premise this brief asserts" "$brief" \
+      "$kind --premise brief missing the disproof section"
+    assert_grep "{PREMISE}" "$brief" \
+      "$kind --premise brief missing the premise slot the caller fills"
+    assert_grep "name the single check whose result would show that assertion is WRONG, run that check, and paste its output" "$brief" \
+      "$kind --premise brief lost the measured disproof instruction"
+    assert_grep "do NOT follow this brief literally: carry out what it was actually trying to achieve" "$brief" \
+      "$kind --premise brief lost the repair wording and reads as stop-only"
+    assert_grep "This is one named assertion, not a standing instruction to re-check the rest of the brief." "$brief" \
+      "$kind --premise brief lost the bound that keeps the step narrow"
+    assert_no_grep "# Premise declaration - NONE ASSERTED" "$brief" \
+      "$kind --premise brief retained the absent-premise declaration"
+    # The step must stay narrow: no general verification instruction anywhere in the brief.
+    assert_no_grep "check your work" "$brief" \
+      "$kind --premise brief widened into a general verification instruction"
+    assert_no_grep "verify before proceeding" "$brief" \
+      "$kind --premise brief widened into a general verification instruction"
+    assert_no_grep "double-check" "$brief" \
+      "$kind --premise brief widened into a general verification instruction"
+  done
+  pass "fm-brief.sh: --premise emits the narrow repair-worded disproof step"
+}
+
+test_premise_omission_is_loud_for_ship_and_scout() {
+  local home id brief kind
+  home="$TMP_ROOT/premise-gate-home"
+  mkdir -p "$home/data"
+  for kind in ship scout; do
+    id="brief-premise-gate-$kind"
+    if [ "$kind" = scout ]; then
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --scout >/dev/null 2>&1
+    else
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate >/dev/null 2>&1
+    fi
+    brief="$home/data/$id/brief.md"
+    assert_grep "# Premise declaration - NONE ASSERTED" "$brief" \
+      "$kind brief silently omitted the premise declaration"
+    assert_grep "regenerate the brief with \`--premise\` before dispatch" "$brief" \
+      "$kind brief missing the fail-visible regeneration instruction"
+    assert_grep "Do not write a disproof step into this unguarded brief by hand." "$brief" \
+      "$kind brief missing the ban on hand-written disproof wording"
+    assert_no_grep "# The premise this brief asserts" "$brief" \
+      "$kind brief emitted the disproof step without --premise"
+    assert_no_grep "{PREMISE}" "$brief" \
+      "$kind brief left an unusable premise slot without --premise"
+  done
+  pass "fm-brief.sh: ship and scout scaffolds make an omitted premise fail-visible"
+}
+
+test_premise_is_rejected_for_secondmate_charters() {
+  local home status
+  home="$TMP_ROOT/premise-secondmate-home"
+  mkdir -p "$home/data"
+  status=0
+  FM_HOME="$home" FM_SECONDMATE_CHARTER=ops \
+    "$ROOT/bin/fm-brief.sh" premise-secondmate --secondmate firstmate --premise >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "secondmate --premise must be rejected"
+  assert_absent "$home/data/premise-secondmate/brief.md" \
+    "rejected secondmate --premise still wrote a brief"
+  pass "fm-brief.sh: --premise is rejected for secondmate charters"
+}
+
 test_secondmate_no_projects_charter() {
   local home brief status
   home="$TMP_ROOT/no-projects-home"
@@ -436,6 +516,9 @@ test_herdr_lab_contract_is_explicit_and_complete
 test_herdr_lab_contract_quotes_foreign_firstmate_path
 test_herdr_lab_omission_is_loud_for_ship_and_scout
 test_herdr_lab_contract_applies_to_scouts_but_not_secondmates
+test_premise_step_is_narrow_and_repair_worded
+test_premise_omission_is_loud_for_ship_and_scout
+test_premise_is_rejected_for_secondmate_charters
 test_secondmate_no_projects_charter
 test_pause_verb_override_renders_all_brief_scaffolds
 test_scout_and_secondmate_load_decision_hold_policy
