@@ -52,6 +52,35 @@ run_bearings() {  # <home> <args...>
     "$BEARINGS" --json "$@"
 }
 
+test_open_count_labels_name_distinct_sets_without_changing_predicates() {
+  local home bearings ledger
+  home=$(make_home label-distinct-sets)
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] deploy-prod - Deploy the stack (repo: firstmate) (kind: ship) (hold: production action needs his live word) (hold-kind: captain)
+- [ ] choose-release - Choose the release channel (repo: firstmate) (kind: captain) (hold: captain release choice pending) (hold-kind: captain)
+- [ ] blocked-deploy - Clear the residue rows blocked-by: ship-task (repo: firstmate) (kind: ship) (hold: production data change, captain-gated) (hold-kind: captain)
+
+## Done
+EOF
+
+  bearings=$(run_bearings "$home" --all-decisions)
+  printf '%s' "$bearings" | jq -e '
+    .captain_actionable_holds_count == 2
+      and ([.decisions_open[].id] | sort) == ["choose-release","deploy-prod"]
+      and ([.decisions_open[].id] | index("blocked-deploy") | not)
+  ' >/dev/null || fail "bearings must label and preserve the captain-actionable hold set: $bearings"
+
+  ledger=$(run_ledger "$home")
+  assert_contains "$ledger" "open captain decision records: 1" \
+    "ledger must label the narrower captain decision-record set"
+  assert_no_grep "open captain questions" "$ledger" \
+    "ledger must not use the ambiguous open captain questions label"
+  pass "open-count labels name captain-actionable holds and captain decision records separately"
+}
+
 assert_over_argv_ceiling() {  # <bytes> <what>
   [ "$1" -gt "$ARGV_STRING_LIMIT" ] \
     || fail "$2 is $1 bytes, no longer over the $ARGV_STRING_LIMIT-byte argv ceiling this test defends"
@@ -302,7 +331,7 @@ test_an_answer_folds_the_questions_it_settles() {
     "a fold must never read as the captain having answered that record"
 
   out=$(run_ledger "$home")
-  assert_contains "$out" "open captain questions: 0" \
+  assert_contains "$out" "open captain decision records: 0" \
     "nothing may remain open once the answer folded the question"
   assert_contains "$out" "intra-group heisst: gleiche muttergesellschaft." \
     "the answer must be readable in his own words"
@@ -984,6 +1013,7 @@ EOF
 }
 
 test_settled_decision_survives_retention_into_the_archive
+test_open_count_labels_name_distinct_sets_without_changing_predicates
 test_a_second_question_cannot_be_filed_without_disposing_of_the_first
 test_an_answer_folds_the_questions_it_settles
 test_retry_completes_folds_after_the_successor_already_exists

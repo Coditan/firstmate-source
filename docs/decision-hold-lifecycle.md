@@ -258,9 +258,14 @@ The record is not dropped silently: it still appears in the queued gates surface
 It resolves every repeated `blocked-by:` edge against structured Done records, keeps real unfinished blockers unresolved, records blocker ids found nowhere in the live backlog or done archive as dangling, and classifies only an unblocked captain hold as actionable.
 Its secondmate-home summary classifies an actionable captain hold as `captain_decision` and preserves blocked captain holds as queued work in the owning home.
 
-`bin/fm-bearings-snapshot.sh` projects actionable captain holds into `decisions_open`, leaves blocked captain holds in ordinary queued gates, and surfaces dangling blocker edges in `integrity[]` as ready work with a data-integrity caution.
+`bin/fm-bearings-snapshot.sh` projects actionable captain holds into `decisions_open`, labels the total as `captain_actionable_holds_count`, leaves blocked captain holds in ordinary queued gates, and surfaces dangling blocker edges in `integrity[]` as ready work with a data-integrity caution.
 It excludes completed kind `captain` records from Recently Landed.
 The projection remains read-only and does not inspect historical prose.
+
+`bin/fm-decision-ledger.sh` reads a narrower set: only `kind: captain` rows in the active home's backlog and done archive.
+Its human count is therefore labelled `open captain decision records`, not open captain questions.
+That difference is deliberate: bearings answers "which unblocked holds are captain-actionable now?", while the ledger answers "which captain decision records exist in the store?".
+The numbers must not be forced to agree.
 
 ## Verification record
 
@@ -271,8 +276,12 @@ Archived-resolution fallback verification date: 2026-07-27.
 Every-door recording, supersession, intake gate, and premise re-measurement verification date: 2026-08-17.
 Adoption-baseline, board-input, and startup-cap verification date: 2026-08-17.
 Oversized decision-ledger argv-boundary verification date: 2026-08-18.
+Decision-count label verification date: 2026-08-25.
 
 The baseline measurement was taken against a copy of the main home's `data/backlog.md` and `data/done-archive.md`, read-only, with `FM_HOME` pointed at the copy.
+The 2026-08-24 record reproduction measured the label defect with bearings showing 2 captain-actionable holds while the ledger showed 0 open captain decision records.
+By implementation time this home had moved: before the patch, bearings showed 3 while the ledger showed 1; after the patch the same predicates still differed, with `captain_actionable_holds_count` 3, `decisions_open` length 3, and ledger open captain decision records 1.
+The regression is only label clarity, not count convergence.
 Before: `--audit` printed 58 findings and exited 1 - 48 `closed-without-record`, 9 `stale-body-state`, 1 `duplicate-suspect`.
 After `--record-baseline`: 2 findings, being the `duplicate-suspect` and a `closed-without-record` deliberately appended after the baseline to prove a later loss still reports, plus one line naming the 57 withheld.
 A `duplicate-suspect` line hand-added to the baseline file silenced its finding on the first attempt.
