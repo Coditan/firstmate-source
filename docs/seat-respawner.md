@@ -52,8 +52,8 @@ Where each episode's record lives, and how long it outlives its process, stays w
 
 ## Limits
 
-The portable tests cover honoring the stay-down marker and reporting the give-up path.
-The real tmux effect proof should use a throwaway `FM_HOME`, a private tmux socket, a fake delivery-status command that first reports `undeliverable:`, and a harmless configured launch command.
+`tests/fm-seat-respawner.test.sh` covers the portable properties: honoring the stay-down marker, reporting the give-up path, refusing to relaunch beside a live first mate or on a lock it could not read, holding the next launch while a first turn is owed, composing no `PATH` for the fresh seat, refusing a resume-style launch command, and the keeper convergence's place in the watcher's sweep.
+The real tmux effect is proved end to end by `tests/fm-seat-absence-e2e.test.sh`, on a throwaway `FM_HOME` with a private tmux socket, a stand-in delivery status that first reports `undeliverable:`, a harmless configured launch command, and a stand-in seat that is really killed; [seat-absence.md](seat-absence.md) owns what that run establishes and what it still cannot.
 Do not test this by killing the live firstmate seat.
 
 The fresh seat is given one typed first turn, because a launched agent otherwise sits idle and publishes nothing; [seat-absence.md](seat-absence.md) owns that requirement and its measurement.

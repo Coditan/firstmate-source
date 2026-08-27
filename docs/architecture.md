@@ -76,7 +76,10 @@ It prints one honest `started`, `attached`, or `FAILED` status before the stub b
 The listener publishes `state/.delivery.lock` and `state/.last-delivery-beat`, submits a typed wake into the session pane while the durable queue is non-empty, and never drains that queue.
 Killing the stub loses no wake and costs exactly one delivery re-arm.
 `bin/fm-watcher-service.sh` owns systemd instance encoding, unit convergence, scoped restarts, explicit-consent installation and lingering, and the tmux fallback keeper.
-`bin/fm-seat-respawner-service.sh` adds a separately consented home-scoped unit that relaunches only the primary seat when delivery reports pending wakes as undeliverable; [configuration.md](configuration.md#seat-respawner-service) owns its install and configuration mechanics, and [seat-respawner.md](seat-respawner.md) owns the trade and retry bounds.
+`bin/fm-seat-respawner-service.sh` supervises a restarter for the primary seat alone: a separately consented home-scoped unit where a `systemd --user` manager works, and an automatically selected tmux keeper where one does not, converged on every watcher sweep rather than at session start, because a restarter re-ensured by a seat session start is re-ensured by the thing it exists to restart.
+It relaunches only when this home's session lock reads absent and delivery reports pending wakes as undeliverable, and it gives the fresh seat one typed first turn, since a restart is finished when a seat holds the lock rather than when a process exists.
+`bin/fm-seat-alarm.sh` is the detection half, armed on the same check sweep, and it is the one alarm that messages the captain itself because firstmate is the subject of its reading.
+[configuration.md](configuration.md#seat-respawner-service) owns install and configuration mechanics, [seat-respawner.md](seat-respawner.md) owns the trade and retry bounds, and [seat-absence.md](seat-absence.md) owns the detection half, the supervision arrangement, and what is still not covered.
 Optional direct Telegram receive runs in its own consent-gated systemd user service when `config/telegram.env` and an executable `config/fm-tg-recv.sh` exist, with the previous session-owned tracked task retained only until that unit is installed.
 `bin/fm-tg-recv-arm.sh` starts or attaches to one home-scoped receiver through `state/.tg-recv.lock`, and service-owned output enters the durable wake queue before the unit restarts; `docs/configuration.md` owns the lifecycle and the local receiver split between the legacy captain line and the optional non-captain correspondent lane.
 `bin/fm-tg-send.sh` provides the outbound seam through an installed per-home sender; `docs/telegram-outbound.md` owns its purpose, boundaries, provisioning, targets, and evidence.
@@ -304,6 +307,6 @@ Separately, and regardless of size or quiet, it reports the ceiling as unenforce
 
 ## Development notes
 
-The watcher service combines always-on bash triage with a durable queue, a race-proof singleton lock, systemd or tmux-keeper restart ownership, source-version convergence, a separately identity-matched delivery listener with its own unit, and a separately consented primary-seat respawner.
+The watcher service combines always-on bash triage with a durable queue, a race-proof singleton lock, systemd or tmux-keeper restart ownership, source-version convergence, a separately identity-matched delivery listener with its own unit, and a primary-seat respawner whose keeper tier is converged from the watcher itself, beside the seat-absence alarm that same sweep carries.
 The presence-gated sub-supervisor (`bin/fm-supervise-daemon.sh`) provides walk-away supervision via the `/afk` skill while reading the same durable queue without taking ownership of the watcher process.
 The Herdr event-wait capability cache periodically re-probes a disabled push path inside the long-lived watcher, so a transient capability failure does not persist until service restart.
