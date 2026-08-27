@@ -421,9 +421,14 @@ read_state() {
 # filesystem that is full or over quota lets mktemp make the empty entry and
 # then refuses the content or the rename, and that is exactly the failure this
 # is being asked about; a probe that stopped at the create would call such a
-# home persistable and hand the grace an age it can never measure. The target
-# this alarm actually renames over is checked too, since a $STATE_FILE that is
-# not a plain file is a rename that will fail however much room there is.
+# home persistable and hand the grace an age it can never measure.
+#
+# AN EXIT STATUS IS NOT THE READING; WHERE THE RECORD LANDED IS. `mv file dir`
+# does not fail - it moves the file INSIDE the directory and reports success -
+# so a target that is not a plain file leaves the record somewhere nothing will
+# ever read it while every step says it worked. That is why this asks whether
+# the byte it wrote is now a plain file AT the target, and why $STATE_FILE, the
+# path this alarm actually renames over, is held to the same test.
 memory_persistable() {
   local tmp probe="$DATA/.fm-seat-alarm-probe"
   mkdir -p "$DATA" 2>/dev/null || return 1
@@ -432,7 +437,11 @@ memory_persistable() {
   fi
   tmp=$(mktemp "$DATA/.fm-seat-alarm-probe.XXXXXX" 2>/dev/null) || return 1
   printf 'probe\n' > "$tmp" 2>/dev/null || { rm -f -- "$tmp" 2>/dev/null; return 1; }
-  mv -f -- "$tmp" "$probe" 2>/dev/null || { rm -f -- "$tmp" 2>/dev/null; return 1; }
+  if ! mv -f -- "$tmp" "$probe" 2>/dev/null \
+    || [ ! -f "$probe" ] || [ -L "$probe" ]; then
+    rm -f -- "$tmp" "$probe/${tmp##*/}" 2>/dev/null || true
+    return 1
+  fi
   rm -f -- "$probe" 2>/dev/null || true
 }
 
