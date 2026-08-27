@@ -350,10 +350,18 @@ test_every_brief_declares_exactly_one_premise_state() {
     # firstmate to regenerate a brief for a member it already dispatched.
     assert_no_grep 'blocked:' "$block" \
       "$kind --no-premise block still tells its reader to stop"
-    assert_no_grep 'regenerate' "$block" \
-      "$kind --no-premise block still asks for a regeneration no programmatic caller can do"
     assert_no_grep 'and stop' "$block" \
       "$kind --no-premise block still tells its reader to stop"
+    assert_no_grep 'firstmate will regenerate' "$block" \
+      "$kind --no-premise block still promises a regeneration no programmatic caller can do"
+    assert_no_grep 'regenerate the brief' "$block" \
+      "$kind --no-premise block still asks its reader to seek a regeneration"
+    # The declaration covers this scaffold only; vouching for task text the
+    # caller pastes in unread is the overclaim this whole control exists to catch.
+    assert_no_grep 'carries no asserted fact' "$block" \
+      "$kind --no-premise block vouches for task text its caller never inspected"
+    assert_no_grep 'There is nothing to disprove here' "$block" \
+      "$kind --no-premise block makes a blanket denial about the task's content"
   done
   pass "fm-brief.sh: every scaffold declares exactly one of the three premise states"
 }

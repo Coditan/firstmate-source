@@ -300,8 +300,9 @@ elif [ "$NO_PREMISE" -eq 1 ]; then
 REPLACE_NOTE="{TASK}"
 PREMISE_SECTION=$(cat <<'EOF'
 # Premise declaration - DECLARED NONE
-**DECLARED NONE:** the caller that scaffolded this brief composed its task text itself and declares that text carries no asserted fact you would act on without re-deriving it.
-There is nothing to disprove here, so there is no disproof step and nothing about it is missing.
+**DECLARED NONE:** this brief's scaffolding names no asserted premise for you to disprove, and that is the whole of what this declaration covers.
+It says nothing about the task text below, which a programmatic caller composed on its own.
+That caller cannot regenerate this brief once you are dispatched, so the absence of a disproof step here is declared rather than missing.
 Do not write a disproof step into this brief by hand.
 EOF
 )
