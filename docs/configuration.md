@@ -307,14 +307,28 @@ The tracked template is `systemd/fm-seat-respawner@.service` and the instance is
 The first unit copy and `enable --now` require explicit captain consent through `RESPAWNER_UNIT:` and `bin/fm-bootstrap.sh install seat-respawner-unit`.
 Bootstrap never installs, enables, or starts it silently.
 After installation, locked bootstrap converges stale template bytes, checkout path, composed service `PATH`, and the respawner source version.
-The respawner itself reads the wake-delivery service verdict rather than probing panes, honors `state/.seat-stay-down`, uses `config/seat-launch-command` as its fresh-start launch command, and reports exhausted retry episodes through the findings surface.
-[`docs/seat-respawner.md`](seat-respawner.md) owns the mechanism, retry bound, accepted manual-close trade, and verification limits.
+If `systemd --user` is unavailable, a detached home-scoped tmux keeper is selected automatically, as it is for the watcher and the delivery listener; `bin/fm-seat-respawner-service.sh select` reports which tier a home is on and the keeper tier needs no install.
+That tier is converged on every watcher sweep through the check `bin/fm-seat-respawner-service.sh --arm` installs, rather than only at session start, because a restarter re-ensured by a seat session start is re-ensured by the thing it exists to restart.
+The respawner itself reads the wake-delivery service verdict rather than probing panes, honors `state/.seat-stay-down`, uses `config/seat-launch-command` as its fresh-start launch command, gives the fresh seat one typed first turn, and reports exhausted retry episodes through the findings surface.
+[`docs/seat-respawner.md`](seat-respawner.md) owns the mechanism, retry bound, accepted manual-close trade, and verification limits, and [`docs/seat-absence.md`](seat-absence.md) owns the detection half, the supervision arrangement, and what is still not covered.
+
+## Seat absence alarm
+
+`bin/fm-seat-alarm.sh` is the per-home watch for the seat's own absence, armed as a watcher check at every session start and reported by `SEAT_ALARM:` when it is unarmed or has stopped running.
+It is the one alarm in this fleet that carries its own message out through `bin/fm-tg-send.sh` rather than printing a line for firstmate to route, because firstmate is the subject of its reading and cannot report its own absence.
+[`docs/seat-absence.md`](seat-absence.md) owns its verdicts, what it keys on, its cadence, and the residual it does not close.
 
 ## Seat launch command (config/seat-launch-command / FM_SEAT_LAUNCH_COMMAND)
 
 `config/seat-launch-command` is the local, gitignored command the seat respawner runs in a new tmux window when the primary seat is unreachable.
 The file format is the first non-empty, non-comment line, read under the effective config directory.
 The command must start a fresh seat and must not use resume-style flags such as `--resume`, `--continue`, or Claude's `-c` unless that exact resume path has separately proven lock ownership and context-size safety.
+
+**The command owns the seat's environment, because nothing else can.**
+The respawner composes no `PATH` for it: a respawned seat never reads `~/.profile` on its own, so any value composed by the launcher silently becomes the seat's tool set, and a value composed outside the login chain cannot reproduce what that chain produces.
+Measured on `coditan-vessel`, 2026-08-27, with `env -i HOME=/home/coditan`: `bash -lc 'command -v claude'` resolves `/usr/local/bin/claude` 2.1.234 while `bash -lic` resolves `~/.npm-global/bin/claude` 2.1.247, because `~/.bashrc` returns at its own `case $- in *i*` guard before the line that adds the npm prefix.
+So a login shell alone fixes the tool suite and **not** the agent binary, and a home wanting the maintained copies of both needs an INTERACTIVE login shell - `bash -lic 'exec claude'` rather than `bash -lc`.
+`/bin/sh` on that host is `dash`, which constrains anything ever appended to `~/.profile`, since non-bash login shells read it too.
 `FM_SEAT_LAUNCH_COMMAND` overrides the file for tests and specialized service environments only.
 An absent command makes the respawner log a refused launch and keep the bounded retry episode rather than guessing how to start a seat.
 

@@ -115,6 +115,15 @@ Two facts bind wherever that wake is read.
 The alarm limits, throttles, and kills nothing, so it is a call for a decision and never a report of one already taken.
 A reading it could not take is reported as unable to see and never as an all-clear, for the same reason the currency round reports one that way.
 
+### Losing this seat
+
+A seat that stops is now noticed by something other than the captain walking into it.
+The locked bootstrap step arms `bin/fm-seat-alarm.sh` on the watcher, and every session start reports `SEAT_ALARM:` when this home's watch is unarmed or has stopped running; `docs/seat-absence.md` owns the reading, the restart arrangement, and the residual neither closes.
+Three facts bind wherever this is met.
+This is the one alarm that messages the captain itself, because firstmate is the subject of its reading and cannot route a report about its own absence, so a session must never treat its own quiet as unobserved.
+A seat being closed on purpose is declared with `bin/fm-seat-stay-down.sh down` first, or the captain is paged for an absence he chose.
+A restart is finished when a seat holds this home's lock and not when a process exists, because a launched seat sits idle until something gives it its first turn.
+
 ### Daily update checking
 
 Firstmate's daily currency duty has a mechanism, so it is never carried by memory: the locked bootstrap step arms `bin/fm-currency-round.sh` on the watcher, and every session start reports `CURRENCY_ROUND:` when this home's check is unarmed or has stopped running.
