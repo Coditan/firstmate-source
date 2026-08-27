@@ -166,7 +166,10 @@
 #                      is reading.
 #
 # State, under FM_HOME/state:
-#   seat-alarm.check.sh  the armed watcher check (with .check-trust)
+#   seat-vacancy.check.sh  the armed watcher check (with .check-trust). The id
+#                      sorts AFTER seat-restart.check.sh on purpose, so the
+#                      restarter's convergence is never the check this alarm
+#                      displaces; bin/fm-seat-respawner-service.sh owns why.
 #
 # Environment:
 #   FM_SEAT_ALARM_REPEAT    seconds between repeats while absent or unmeasured
@@ -201,7 +204,17 @@ SEND=${FM_SEAT_ALARM_SEND:-$SCRIPT_DIR/fm-tg-send.sh}
 RESPAWNER_SERVICE="$SCRIPT_DIR/fm-seat-respawner-service.sh"
 LOG="$DATA/seat-alarm.log"
 STATE_FILE="$DATA/seat-alarm.state"
-CHECK="$STATE/seat-alarm.check.sh"
+CHECK="$STATE/seat-vacancy.check.sh"
+CHECK_ID=seat-vacancy
+
+# The id this check was armed under before the sweep-ordering rename. --arm
+# removes it by its exact name once the replacement is registered, because a
+# home that updates would otherwise keep BOTH shims registered and the watcher
+# would run the superseded one too - and the superseded one sorts ahead of the
+# restarter's convergence check, which is the ordering this rename exists to
+# correct. bin/fm-seat-respawner-service.sh's arm_check owns the reasoning.
+LEGACY_CHECK="$STATE/seat-alarm.check.sh"
+LEGACY_TRUST="$STATE/seat-alarm.check-trust"
 LOCK_FILE="$STATE/.lock"
 ENDPOINT="$STATE/.primary-endpoint"
 STAY_DOWN="$STATE/.seat-stay-down"
@@ -603,7 +616,11 @@ SHIM
     chmod 0700 "$tmp" || { rm -f -- "$tmp"; return 1; }
     mv -f -- "$tmp" "$CHECK" || { rm -f -- "$tmp"; return 1; }
   fi
-  "$SCRIPT_DIR/fm-check-register.sh" seat-alarm >/dev/null || return 1
+  "$SCRIPT_DIR/fm-check-register.sh" "$CHECK_ID" >/dev/null || return 1
+  # Retire the predecessor only once its replacement is armed and registered, so
+  # a failure here never leaves a home with neither.
+  rm -f -- "$LEGACY_CHECK" "$LEGACY_TRUST" 2>/dev/null || return 1
+  [ ! -e "$LEGACY_CHECK" ] && [ ! -e "$LEGACY_TRUST" ]
 }
 
 armed_diagnostic() {

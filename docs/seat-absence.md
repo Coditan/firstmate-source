@@ -111,6 +111,10 @@ The arrangement that ships instead is a pair rather than a chain:
 
 - `bin/fm-seat-respawner-service.sh --arm` installs a watcher check that converges the respawner's keeper tier **on every watcher sweep**.
   The watcher outlives the seat - it is the component that stayed alive through the outage - so the seat is no longer anywhere in the restart path.
+  "Every sweep" is carried by the shim's **id**, not by hope: `bin/fm-watch.sh` globs `$STATE/*.check.sh` in collation order and breaks out of the sweep at the first check that prints a line, so `state/seat-restart.check.sh` is named to sort before `state/seat-vacancy.check.sh` - the alarm's - and the alarm can never displace the convergence.
+  That ordering is safe rather than a coin toss because the convergence check is **silent while the restarter is healthy**: it prints only when it had to act or cannot, so on an ordinary sweep it breaks nothing and the alarm is reached as before.
+  It matters most in the state the alarm is loudest in - while the captain's channel is refusing, the alarm reprints its line every sweep - because under the previous `seat-alarm` / `seat-respawner` names that skipped the convergence for the whole outage, which is exactly when a keeper that died mid-outage needed restarting.
+  A home armed under the old ids is migrated by `--arm` itself: each side removes its own superseded shim and `.check-trust` by exact name once the replacement is registered, because a shim left behind is one the watcher keeps running.
   Converging compares the running respawner's own lock record against what this home would start now, so a keeper left on pre-update bytes is restarted and said out loud rather than counted as healthy because something is alive.
   On a home with no systemd that is the only way a self-update reaches the restarter at all.
   The comparison is split by owner, and deliberately: the watcher-hosted check compares the recorded manager and source version, which are composed identically wherever they are asked, while the recorded service `PATH` is compared only by the session-side `ensure_keeper`.
@@ -155,6 +159,17 @@ Two things would close the residual, and neither is this repository's to take:
   That was disabled by the captain's own decision of 2026-08-26 and walks back the standing rule that nothing of this vessel's runs outside the container, so it is his call and is named here as an option rather than proposed as the answer.
   Whether it is currently enabled **could not be measured from inside the container**: `loginctl` answers `System has not been booted with systemd as init system (PID 1). Can't operate.`
 
+**The watcher runs at most one speaking check per sweep, so a first observation of an absence can be delayed without bound.**
+`bin/fm-watch.sh:1663` globs `$STATE/*.check.sh` in collation order; at `bin/fm-watch.sh:1698-1701` the first check that prints ANY line appends the wake, touches `$STATE/.last-check` and calls `wake()`.
+In daemon mode - how the watcher actually runs (`bin/fm-watch.sh:132`, `bin/fm-watch-keeper.sh:59`) - `wake()` sets `WAKE_PENDING=1` and returns (`bin/fm-watch.sh:380-382`), so the `[ "$WAKE_PENDING" -eq 0 ] || break` on the next line always fires and every later-sorting check is skipped.
+Because `.last-check` was already touched, those skipped checks then wait a full `FM_CHECK_INTERVAL` - 300s by default - rather than running later in the same sweep.
+Measured on this vessel's own home, six shims already sort before the alarm's: `chartroom-gnhf-overnight`, `currency-round`, `forge-status`, `graph-freshness`, `memory-alarm` and `nudge`.
+So on any sweep one of those speaks, the alarm does not run at all, and the outward page - which is sent from inside the alarm process, not from the printed line - slips another interval, and again for every later sweep an earlier check speaks on.
+This is a **different and unbounded** mechanism from the settled two-sweep latency documented below, which is bounded at two sweeps.
+Nothing is corrupted by it: `since`, the grace and the repeat are all epoch-based, so a skipped sweep only delays.
+The ordering fix above buys the restarter's convergence out of this against the alarm specifically, and buys nothing against the six that sort ahead of both.
+It is a defect in the shared monitoring loop rather than in this change, and it is filed as separate work against that loop rather than guarded around here - accreting a private guard is what the loop does not need.
+
 **A watcher that is alive but wedged is deliberately never revived, and during an outage there is nobody to make the decision that non-action defers to.**
 `fm_watcher_healthy` separates `dead` from `beacon-stale`, and only `dead` opens a revival, because restarting a live watcher stops it mid-sweep and the sweep it interrupts is the one carrying this alarm.
 The bullet above leaves `beacon-stale` to a session holding the fleet lock - and a seat outage is precisely when no such session exists.
@@ -193,7 +208,7 @@ It is milder than the outage this change was written for only because a present 
 Closing it is a design question rather than a patch - it needs either a sixth verdict or a named owner for "present but unreachable" - and adding a reachability reading to the respawner would recreate the second source of truth [seat-respawner.md](seat-respawner.md) deliberately refuses, so it is left to separate work rather than widened into this change.
 
 **A state directory that has been DELETED mostly cannot be reported, because the alarm goes with it.**
-The alarm runs only from `state/seat-alarm.check.sh`, and `bin/fm-watch.sh` finds checks by globbing `$STATE/*.check.sh`, so when `state/` is removed the shim is removed too and nothing invokes the alarm at all.
+The alarm runs only from `state/seat-vacancy.check.sh`, and `bin/fm-watch.sh` finds checks by globbing `$STATE/*.check.sh`, so when `state/` is removed the shim is removed too and nothing invokes the alarm at all.
 Re-arming happens at session start, which needs the seat that is by definition the thing missing.
 The `unmeasured` reading for unreachable records is still right and still taken - what reaches it on a real vessel is a `state/` that exists and is not a usable directory, a symlink being the realistic form, whose target can still hold the shim.
 Read the code and its test for that case, not for a deleted directory handled end to end.

@@ -29,7 +29,9 @@
 # bin/fm-bootstrap.sh and therefore by a seat, so a restarter supervised that way
 # is re-ensured by the very thing it exists to restart - a circle that cannot
 # turn once the seat is the part that is gone.  So `--arm` installs a watcher
-# check that converges the keeper tier on every watcher sweep.  The watcher
+# check that converges the keeper tier on every watcher sweep - every one of
+# them, which is a property of the shim's id rather than a hope: arm_check below
+# owns why.  The watcher
 # outlives the seat, which takes the seat out of the restart path; and
 # bin/fm-seat-respawner.sh revives a provably dead watcher in return, so either
 # process surviving restores both.  docs/seat-absence.md owns what remains when
@@ -55,7 +57,15 @@ UNIT_DEST="$USER_UNIT_DIR/fm-seat-respawner@.service"
 SERVICE_ENV="$STATE/.seat-respawner-service.env"
 TMUX_CMD=${FM_SEAT_RESPAWNER_TMUX:-tmux}
 KEEPER="$SCRIPT_DIR/fm-seat-respawner-keeper.sh"
-CHECK="$STATE/seat-respawner.check.sh"
+CHECK="$STATE/seat-restart.check.sh"
+CHECK_ID=seat-restart
+
+# The id this check was armed under before the sweep-ordering rename.  --arm
+# removes it by its exact name once the replacement is registered, because a
+# home that updates would otherwise keep BOTH shims registered and the watcher
+# would run the superseded one too.
+LEGACY_CHECK="$STATE/seat-respawner.check.sh"
+LEGACY_TRUST="$STATE/seat-respawner.check-trust"
 BEAT="$STATE/.last-seat-respawner-beat"
 CONVERGE_REPORTED="$STATE/.seat-respawner-converge-reported"
 GRACE=${FM_SEAT_RESPAWNER_GRACE:-120}
@@ -416,6 +426,19 @@ status_report() {
 # out of the restart path: the shim runs every watcher sweep, so the keeper tier
 # is re-ensured by a process that outlives the seat rather than by a session that
 # cannot start while the seat is gone.
+#
+# THE ID CARRIES THE ORDERING, AND THAT IS WHY "EVERY SWEEP" IS TRUE.
+# bin/fm-watch.sh globs "$STATE"/*.check.sh in collation order and breaks out of
+# the sweep at the FIRST check that prints a line, so a check is only reached on
+# sweeps where no earlier-sorting sibling speaks.  `seat-restart` sorts before
+# `seat-vacancy`, the seat alarm's shim, so the alarm can never displace this
+# one - which matters most in the state the alarm is loudest in: while the
+# captain's channel is refusing, the alarm reprints its line every sweep, and
+# under the old `seat-alarm` / `seat-respawner` ordering that skipped this
+# convergence for the whole outage, exactly when a keeper that died mid-outage
+# needed restarting.  Ordering it first costs the alarm nothing, because this
+# check is SILENT while the restarter is healthy - it prints only when it had to
+# act or cannot - so on an ordinary sweep it does not break anything at all.
 arm_check() {
   local desired current tmp
   desired=$(cat <<SHIM
@@ -440,7 +463,11 @@ SHIM
     chmod 0700 "$tmp" || { rm -f -- "$tmp"; return 1; }
     mv -f -- "$tmp" "$CHECK" || { rm -f -- "$tmp"; return 1; }
   fi
-  "$SCRIPT_DIR/fm-check-register.sh" seat-respawner >/dev/null || return 1
+  "$SCRIPT_DIR/fm-check-register.sh" "$CHECK_ID" >/dev/null || return 1
+  # Retire the predecessor only once its replacement is armed and registered, so
+  # a failure here never leaves a home with neither.
+  rm -f -- "$LEGACY_CHECK" "$LEGACY_TRUST" 2>/dev/null || return 1
+  [ ! -e "$LEGACY_CHECK" ] && [ ! -e "$LEGACY_TRUST" ]
 }
 
 # A condition that cannot clear is reported ONCE, not once per sweep.
