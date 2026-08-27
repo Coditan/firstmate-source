@@ -122,7 +122,7 @@ The arrangement that ships instead is a pair rather than a chain:
   Reviving that one would stop and restart a running watcher, and the sweep it interrupts is the one that carries the seat alarm.
   **A wedged-but-live watcher is therefore left alone here on purpose**, for a session holding the fleet lock to decide - the one deliberate non-action in this pair.
 
-So either process surviving restores both, and only the loss of **both** is unrecoverable without a seat.
+So either process surviving restores the other from the dead, and what is unrecoverable without a seat is the loss of **both** - or a watcher that is alive but wedged, which neither half will restart.
 
 ## What is still not covered
 
@@ -154,6 +154,28 @@ Two things would close the residual, and neither is this repository's to take:
 - User lingering for this account, so a `systemd --user` manager exists.
   That was disabled by the captain's own decision of 2026-08-26 and walks back the standing rule that nothing of this vessel's runs outside the container, so it is his call and is named here as an option rather than proposed as the answer.
   Whether it is currently enabled **could not be measured from inside the container**: `loginctl` answers `System has not been booted with systemd as init system (PID 1). Can't operate.`
+
+**A watcher that is alive but wedged is deliberately never revived, and during an outage there is nobody to make the decision that non-action defers to.**
+`fm_watcher_healthy` separates `dead` from `beacon-stale`, and only `dead` opens a revival, because restarting a live watcher stops it mid-sweep and the sweep it interrupts is the one carrying this alarm.
+The bullet above leaves `beacon-stale` to a session holding the fleet lock - and a seat outage is precisely when no such session exists.
+So a watcher stuck in that state stays stuck, with the respawner running beside it and correctly declining to touch it, and nothing reports the standoff.
+Machine suspend necessarily produces `beacon-stale`, so this is a reachable state rather than a theoretical one.
+The trade was taken knowingly: a false revival during a slow sweep kills the very sweep that pages the captain, which is worse than a wedged watcher nobody restarts.
+
+**On a host with no GNU `timeout`, the captain is never paged, and nothing says so.**
+`notify()` bounds the outward send as `printf ... | timeout "$SEND_TIMEOUT" "$SEND"`, with no `command -v` guard in front of it.
+Where neither `timeout` nor `gtimeout` is on `PATH` the shell cannot find it, the send fails with `rc=127`, and a failed send is deliberately not counted as a notification - so `notified` is never set, the message is due again on the next sweep, and the same 127 repeats for as long as the absence lasts.
+The captain gets nothing.
+`--armed` stays silent throughout, because it keys off the mtime of `data/seat-alarm.state`, which every sweep rewrites; `--status` still answers `ABSENT` correctly, but only to a human who runs it, which is the shortcut this alarm exists to remove the need for.
+On that class of home the primary deliverable of this change does not exist at all.
+The printed line is not silent - it repeats once per sweep, through exactly the mechanism the broken-channel residual below describes - but it is the outward page that never lands.
+
+Scope, measured rather than assumed: **this vessel is not affected**, `command -v timeout` answers `/usr/bin/timeout` here.
+The exposure is hosts without GNU coreutils, which this fleet does support: `bin/fm-watch.sh` - the loop that hosts this very check - falls back `timeout` to `gtimeout` to a perl alarm, and `fm_path_mtime` in `bin/fm-wake-lib.sh` and the tmux probe in `bin/fm-backend.sh` both branch on `uname = Darwin`.
+It is also pre-existing rather than introduced by review: the unguarded call was in this branch's first commit, `2595c24`. The bounded probe added later degrades honestly to `RESTARTER=unknown` and is not the call that matters.
+
+The fix is known and was deliberately not taken, under a standing decision that nothing further changes in `bin/fm-seat-alarm.sh`: resolve `timeout`/`gtimeout` once into a variable and skip the wrapper when neither exists, exactly as `bin/fm-currency-round.sh` already does with `HAVE_TIMEOUT`.
+Whoever picks this up does not have to rediscover it.
 
 **A pane the respawner launched can be left running with nothing tracking it, and this does not report that either.**
 The sequence is reachable and is the one this vessel already lived through.
