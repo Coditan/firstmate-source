@@ -296,10 +296,20 @@ deliver_first_turn() {
   case "$at" in ''|*[!0-9]*) at=0 ;; esac
   age=$(( $(date +%s) - at ))
 
-  # A seat that took the lock has had its turn; nothing more is owed to it.
+  # A seat holds the lock, so nothing more is owed to this record - but which
+  # seat it is decides what actually happened. Only a pane that was typed into
+  # can have run the session start that takes the lock; when this one never was,
+  # the holder is another seat (a human starting one by hand is the measured
+  # case) and the pane this record names is still open with no turn. Saying
+  # "landed" for that would put a state nobody established into the one log an
+  # investigator reads afterwards.
   if seat_holds_lock; then
     rm -f -- "$FIRST_TURN"
-    log "first turn landed: a seat now holds this home"
+    if [ -n "$submitted" ]; then
+      log "first turn landed: a seat now holds this home"
+    else
+      log "this home is held by a seat; pane $pane was never given its turn and is still open"
+    fi
     return 0
   fi
   # Bounded, and abandoned out loud. A first turn that never lands must not be
