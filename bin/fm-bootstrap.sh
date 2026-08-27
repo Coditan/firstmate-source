@@ -32,6 +32,7 @@
 #                 "GROSSREINSCHIFF: weekly fleet cleanup sweep is due (...)",
 #                 "CURRENCY_ROUND: the daily update check <is not armed|has stopped> (...)",
 #                 "MEMORY_ALARM: <nothing is watching this machine|the memory watch ... has stopped> (...)",
+#                 "SEAT_ALARM: <nothing is watching whether this vessel still has a first mate|the first-mate watch ... has stopped> (...)",
 #                 "GITHUB_INBOX: the GitHub notification watch ... has stopped (...)",
 #                 "CURATION_NUDGE|CODEBASE_SWEEP_NUDGE: <not armed|could not be armed|scheduler refusal|state persistence failure|state health indeterminate|supervision outage> (...)",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...",
@@ -1315,6 +1316,20 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   if ! "$SCRIPT_DIR/fm-memory-alarm.sh" --arm >/dev/null 2>&1; then
     echo "MEMORY_ALARM: the memory watch could not be armed on this home, so nothing will notice RAM-headroom loss or runaway growth; run $SCRIPT_DIR/fm-memory-alarm.sh --arm to see why"
   fi
+  # Arm this home's first-mate watch, for the same reason and on tighter terms
+  # than either: this is the alarm for the seat's OWN absence, and the outage it
+  # was written for was six hours long precisely because the absence had to be
+  # noticed by the captain walking into it.
+  if ! "$SCRIPT_DIR/fm-seat-alarm.sh" --arm >/dev/null 2>&1; then
+    echo "SEAT_ALARM: the first-mate watch could not be armed on this home, so nothing would report this vessel's own first mate going missing; run $SCRIPT_DIR/fm-seat-alarm.sh --arm to see why"
+  fi
+  # And arm the convergence check that keeps the first-mate RESTART running
+  # between sessions. Armed here and converged from the watcher, because a
+  # restarter re-ensured only by a seat session start is re-ensured by the thing
+  # it exists to restart.
+  if ! "$SCRIPT_DIR/fm-seat-respawner-service.sh" --arm >/dev/null 2>&1; then
+    echo "RESPAWNER_UNIT: the first-mate restart watch could not be armed on this home, so the restart would stop with this session; run $SCRIPT_DIR/fm-seat-respawner-service.sh --arm to see why"
+  fi
   # Arm this home's off-grid fleet nudges, for the same reason and on the same
   # terms: AGENTS.md already said to prune data/learnings.md and data/captain.md
   # rather than append, and to sweep a repository before it takes a large amount
@@ -1371,6 +1386,10 @@ fi
 "$SCRIPT_DIR/fm-currency-round.sh" --armed || true
 # And the same question of the memory alarm: armed once is not running now.
 "$SCRIPT_DIR/fm-memory-alarm.sh" --armed || true
+# And of the first-mate watch and the restart that depends on it, which are the
+# two readings a seat cannot take about itself once it is gone.
+"$SCRIPT_DIR/fm-seat-alarm.sh" --armed || true
+"$SCRIPT_DIR/fm-seat-respawner-service.sh" --armed || true
 # And of the GitHub notification watch, which is deliberately asked ONLY here and
 # never armed here: several homes draining one notification feed would each
 # surface the same threads separately, so arming it is a per-home decision
