@@ -443,6 +443,103 @@ test_a_failed_send_is_retried_rather_than_counted() {
   pass "a send that failed is retried rather than counted as delivered"
 }
 
+
+# THE LINK THIS WHOLE TASK RESTS ON, and the one no case above exercises: every
+# other test here calls the alarm directly, which is the captain typing a
+# command - the exact thing the 2026-08-27 outage proved insufficient. What has
+# to hold is that the alarm is reached by the one loop that outlives the seat.
+#
+# So this arms the home the way bin/fm-bootstrap.sh does, then takes the
+# watcher's OWN sweep steps over the shim that arming registered:
+# fm_pr_poll_artifacts_valid must decline it, fm_custom_check_snapshot_prepare
+# must accept it (an unregistered or tampered shim is rejected and never run),
+# and run_check_capture must be what executes it. Those three are sourced from
+# bin/fm-watch.sh rather than reimplemented, so a change to how the watcher
+# admits or runs a check is a change this case sees.
+#
+# The outward half is the real one too: the shim exports no FM_SEAT_ALARM_SEND,
+# so the page leaves through bin/fm-tg-send.sh into this home's configured
+# sender, and it is that sender - the last hop before the wire - that records
+# what the captain would have received.
+watcher_sweeps() {  # <home> [epoch-override] -> the line the watcher would wake on
+  local home=$1 now=${2:-}
+  (
+    export FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_ROOT_OVERRIDE="$ROOT"
+    [ -z "$now" ] || export FM_SEAT_ALARM_NOW="$now"
+    # shellcheck source=bin/fm-watch.sh
+    . "$ROOT/bin/fm-watch.sh"
+    if fm_pr_poll_artifacts_valid "$home/state" seat-vacancy "$ROOT/bin/fm-pr-poll.sh"; then
+      printf 'WRONG-BRANCH: the watcher took the pull-request poll path\n'
+      exit 0
+    fi
+    if ! fm_custom_check_snapshot_prepare "$home/state" seat-vacancy; then
+      printf 'REJECTED: the watcher refused to run the armed first-mate watch\n'
+      exit 0
+    fi
+    run_check_capture "$FM_CUSTOM_CHECK_SNAPSHOT" || { printf 'CAPTURE-FAILED\n'; exit 0; }
+    printf '%s' "$FM_CHECK_RESULT"
+    fm_custom_check_snapshot_cleanup
+  )
+}
+
+# The last hop before the Telegram wire, so what it records is what the captain
+# would have received. It is installed as this home's configured sender rather
+# than substituted for bin/fm-tg-send.sh, which stays the real script.
+write_recording_home_sender() {  # <home>
+  local home=$1
+  printf 'TELEGRAM_BOT_TOKEN=fixture-not-a-credential\n' > "$home/config/telegram.env"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'cat >> "%s/phone"\n' "$home"
+    printf 'printf -- "---\\n" >> "%s/phone"\n' "$home"
+  } > "$home/config/fm-tg-send.sh"
+  chmod +x "$home/config/fm-tg-send.sh"
+}
+
+pages() {  # <home>
+  grep -c '^---$' "$1/phone" 2>/dev/null || printf '0\n'
+}
+
+test_the_watcher_runs_the_armed_alarm_and_pages_the_captain_itself() {
+  local home line pid now
+  home=$(make_home armed-sweep)
+  write_recording_home_sender "$home"
+  record_endpoint "$home"
+
+  # A live first mate first, so the silence below is a reading and not an
+  # unreachable check quietly producing nothing on every home.
+  pid=$(start_harness_shaped_process "$home" claude)
+  record_seat "$home" "$pid"
+  env FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ALARM" --arm >/dev/null \
+    || fail "the first-mate watch could not be armed"
+  line=$(watcher_sweeps "$home")
+  [ -z "$line" ] || fail "a watcher sweep of a healthy vessel produced a wake: $line"
+  [ "$(pages "$home")" = 0 ] || fail "a watcher sweep of a healthy vessel paged the captain"
+
+  # Now the seat dies, and NOTHING else changes: no command is typed, no shortcut
+  # is pressed, and the same sweep runs again.
+  kill "$pid" 2>/dev/null || true
+  while kill -0 "$pid" 2>/dev/null; do sleep 0.1; done
+  queue_wakes "$home" 43 21600
+  now=$(date +%s)
+  line=$(watcher_sweeps "$home" "$now")
+  case "$line" in
+    REJECTED*|WRONG-BRANCH*|CAPTURE-FAILED*) fail "$line" ;;
+  esac
+  # The shipped grace is left where it ships, so this is the second sweep of a
+  # still-absent seat rather than a threshold lowered to make a case pass.
+  line=$(watcher_sweeps "$home" "$((now + 120))")
+  assert_contains "$line" "no first mate" \
+    "the watcher sweep produced no wake line for an absent first mate"
+  [ "$(pages "$home")" -ge 1 ] \
+    || fail "the watcher ran the alarm but nothing reached the captain's own channel"
+  assert_grep "43 notification(s) are waiting" "$home/phone" \
+    "the page the watcher sent did not carry the work the missing seat was not draining"
+  assert_grep "because there is no first mate here to send it" "$home/phone" \
+    "the page did not come from the vessel itself"
+  pass "the watcher runs the armed watch and the captain is paged with no human acting"
+}
+
 test_a_live_seat_is_silent
 test_an_absent_seat_is_reported_outward_with_the_work_that_is_waiting
 test_a_live_crewmate_does_not_make_an_absent_seat_read_present
@@ -458,3 +555,4 @@ test_it_speaks_on_change_then_repeats_on_its_own_cadence
 test_a_returning_first_mate_is_recorded_and_never_announced
 test_a_failed_send_is_retried_rather_than_counted
 test_a_restarter_that_stopped_cycling_is_never_called_running
+test_the_watcher_runs_the_armed_alarm_and_pages_the_captain_itself

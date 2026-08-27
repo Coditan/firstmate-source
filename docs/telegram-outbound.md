@@ -36,6 +36,11 @@ Sending happens on an event or not at all.
 This vessel is already the fleet's largest automated writer, and a recurring notification is precisely the noise the current supervision-cost work exists to remove; `docs/supervision-cost.md` owns that argument.
 A status message that arrives whether or not anything happened trains its reader to stop looking, which costs exactly the messages that mattered.
 
+The one automated caller in this repository is worth naming, because it looks like an exception and is not one.
+`bin/fm-seat-alarm.sh` sends from a watcher check rather than from a session, and repeats while this vessel has no first mate.
+That is a condition that persists rather than a schedule that fires: nothing is sent while a seat is present, and the repeat exists because one unrepeated message about an absence nobody is awake to read is the failure it was written for.
+It is also the only send with no session behind it, since firstmate cannot route a report about its own absence; `docs/seat-absence.md` owns that reading, its cadence, and the residual it does not close.
+
 **It is also not wired into away-mode escalation**, and that is the deliberate next step rather than a gap left open by accident.
 `bin/fm-supervise-daemon.sh` and the wedge alarm in `docs/wedge-alarm.md` raise alerts on the machine the fleet runs on; this channel reaches the captain wherever he is.
 Connecting the two is a real change to what wakes him and when, so it is decided on its own rather than arriving as a side effect of building the path.
