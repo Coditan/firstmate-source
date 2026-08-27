@@ -184,6 +184,12 @@ This alarm reports that the vessel has lost its first mate and says nothing when
 It was announced once and the announcement was removed rather than repaired, because announcing once requires a memory the alarm cannot always keep: with `data/` unwritable the previous verdict never advances, so every later sweep re-entered the transition and re-sent, each message naming a longer absence than the last and every one of them describing an absence that had already ended.
 Reporting a return with a length of time that was never true was judged worse than not reporting the return, so the trade is deliberate and this is the cost of it.
 
+**While the captain's channel is refusing, the printed line repeats once per sweep instead of once per episode.**
+The once-per-episode guard is derived from an empty `notified` field, and since a failed send is deliberately NOT counted as a notification - so the next sweep tries again rather than falling silent on a message nobody got - that field means "no send has succeeded yet" rather than "this is the first sweep of this episode".
+So for as long as `bin/fm-tg-send.sh` keeps refusing - a revoked token, a sustained outage, repeated send-timeout expiry - every sweep recomputes the guard as true and re-emits both the transition line and its `entered verdict=` log line: measured, six sweeps at the 300s default produced five printed lines and five log entries for one absence.
+`bin/fm-watch.sh` enqueues a durable wake for any non-empty check line and `fm_wake_append` does not deduplicate by kind or key, so that grows the queue once per sweep during exactly the window in which nobody is draining it, and an investigator reads one episode as five.
+This is a known residual rather than an oversight: separating the two facts needs another field in the alarm's own record, and that record is one of the things this file has already had to move out of the directory it measures.
+
 One further dependency of the restart path is worth naming because it is invisible until it bites.
 The respawner launches into the tmux server recorded in `state/.primary-endpoint`, and refuses when that server is gone.
 On the real vessel the server outlives the seat only because the entrypoint's bare `vessel:0` window keeps it alive; if the seat's window were the only one, the server would exit with the seat and the respawner would correctly refuse to launch.
@@ -233,7 +239,7 @@ It starts a real tmux server on a private socket, runs a stand-in seat that beha
 2. a replacement seat process was started with no human in the loop;
 3. **the home still reads `ABSENT` at that point**, because the process exists and has not yet had a turn;
 4. the fresh seat was given a typed first turn telling it to run its session start, after which it holds the lock under a **different pid**;
-5. the returned seat is told it was away.
+5. the restored seat reads as `present` and **nothing is said on either channel** - no outward message and no printed line - with only `recovered from=absent` written to the alarm's own history.
 
 A second case sets the stay-down marker and requires the same real kill to be left alone, and a third stands the keeper tier up on a private socket and requires it to converge without a seat.
 
