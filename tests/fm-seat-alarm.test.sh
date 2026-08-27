@@ -295,7 +295,7 @@ test_an_alarm_that_cannot_remember_does_not_grow_the_wake_queue_each_sweep() {
 # handed an age of zero on every sweep and the alarm is silent about a dead seat
 # for as long as it lasts.
 test_an_absence_is_reported_when_the_record_write_cannot_land() {
-  local home now k sends_after_state sends_after_probe
+  local home now k
   home=$(make_home write-cannot-land)
   record_seat "$home" 999999
   record_endpoint "$home"
@@ -306,23 +306,27 @@ test_an_absence_is_reported_when_the_record_write_cannot_land() {
   for k in 0 300 600; do
     run_alarm_as_shipped "$home" FM_SEAT_ALARM_NOW="$((now + k))" >/dev/null
   done
-  sends_after_state=$(sends "$home")
-  [ "$sends_after_state" -gt 0 ] \
+  [ "$(sends "$home")" -gt 0 ] \
     || fail "a dead seat went unreported because the alarm's own record could not be renamed into place"
   rm -rf "$home/data/seat-alarm.state"
 
-  # The same shape one step earlier: the rename the probe itself performs fails,
-  # which is the step a create-only probe would never have exercised.
+  # The same shape one step earlier, and the one a create-only probe cannot see:
+  # the probe's own rename REPORTS SUCCESS while putting the record where
+  # nothing will read it, because mv moves a file into a directory rather than
+  # refusing. What the alarm says on those sweeps is the assertion - a send
+  # count alone is satisfied by the ordinary grace path.
+  : > "$home/outbox"
   mkdir -p "$home/data/.fm-seat-alarm-probe"
-  for k in 900 1200 1500; do
+  for k in 900 1200; do
     run_alarm_as_shipped "$home" FM_SEAT_ALARM_NOW="$((now + k))" >/dev/null
   done
-  sends_after_probe=$(sends "$home")
   rm -rf "$home/data/.fm-seat-alarm-probe"
-  [ "$sends_after_probe" -gt "$sends_after_state" ] \
-    || fail "a dead seat went unreported while the alarm's probe could create but not rename"
+  [ "$(sends "$home")" -gt 0 ] \
+    || fail "a dead seat went unreported while the alarm's record could be created but never landed"
   assert_grep "cannot write its own records" "$home/outbox" \
     "the captain was not told this vessel cannot keep the record it paces itself on"
+  assert_no_grep "repeats every" "$home/outbox" \
+    "a vessel that cannot remember having sent a message promised the repeat cadence anyway"
   pass "an absence is reported when the alarm's record write cannot land"
 }
 
