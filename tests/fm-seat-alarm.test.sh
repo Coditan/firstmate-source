@@ -197,13 +197,17 @@ test_an_unmeasured_reading_is_not_printed_as_a_confirmed_absence() {
   pass "an unmeasured reading is never printed as a confirmed absence"
 }
 
-# The most catastrophic reading this alarm can take is a home whose records are
-# gone, and it must never be the quietest. This drives the sequence that
-# matters and drives it AS SHIPPED: an absence already paged, the records then
-# removed ONCE, and several sweeps at the default grace and the default repeat.
-# The alarm must not repair what it just reported, and it must not be silenced
-# by an age it had no record to measure.
-test_a_home_that_loses_its_records_is_reported_and_keeps_being_reported() {
+# A reading this alarm could not take must never be its quietest, and this
+# drives that AS SHIPPED: an absence already paged, the records then made
+# unreadable ONCE, and several sweeps at the default grace and the default
+# repeat. The alarm must not repair what it just reported, and it must not be
+# silenced by an age it had no record to measure.
+#
+# The fixture removes state/ because that is the cheapest way to make the
+# reading unreadable; do not read it as the deleted-directory case covered end
+# to end, which it is not - on a vessel the alarm lives inside that directory
+# and goes with it. docs/seat-absence.md carries that residual.
+test_a_reading_that_cannot_be_taken_is_reported_and_keeps_being_reported() {
   local home now line
   home=$(make_home records-vanished)
   record_seat "$home" 999999
@@ -239,6 +243,59 @@ test_a_home_that_loses_its_records_is_reported_and_keeps_being_reported() {
   assert_grep "verdict=unmeasured" "$home/data/seat-alarm.state" \
     "an unreachable home was recorded as one that never had a first mate"
   pass "a home that loses its records is reported unmeasured and keeps being reported"
+}
+
+# The alarm paces itself out of its own record - the grace and the repeat are
+# both read from it - so a home whose data/ cannot be written has neither. That
+# must not be what silences it: an absence whose record cannot be kept is still
+# an absence, and the captain is the only channel left when the seat is gone.
+test_an_absence_is_reported_even_when_the_alarm_cannot_keep_its_own_record() {
+  local home now
+  home=$(make_home amnesiac)
+  record_seat "$home" 999999
+  record_endpoint "$home"
+  chmod 500 "$home/data"
+  now=$(date +%s)
+  run_alarm_as_shipped "$home" FM_SEAT_ALARM_NOW="$now" >/dev/null
+  run_alarm_as_shipped "$home" FM_SEAT_ALARM_NOW="$((now + 300))" >/dev/null
+  run_alarm_as_shipped "$home" FM_SEAT_ALARM_NOW="$((now + 600))" >/dev/null
+  chmod 700 "$home/data"
+  [ "$(sends "$home")" -gt 0 ] \
+    || fail "a vessel that could not write its own records went silent about a first mate it had lost"
+  assert_grep "no first mate" "$home/outbox" "the absence itself was never carried outward"
+  # It must not report a duration it had no record to measure, and it must not
+  # promise a cadence it cannot keep.
+  assert_no_grep "for 0s" "$home/outbox" \
+    "the captain was given a length of absence that was an artefact of the missing record"
+  assert_grep "an unknown time" "$home/outbox" \
+    "the message named a measured duration where the alarm had none"
+  assert_no_grep "repeats every" "$home/outbox" \
+    "an alarm that cannot remember having sent a message promised a repeat cadence anyway"
+  assert_grep "cannot write its own records" "$home/outbox" \
+    "the captain was not told why this vessel keeps repeating itself"
+  pass "an absence is reported even when the alarm cannot keep its own record"
+}
+
+# The other half of the same reading. Without a record there is no such thing as
+# "the first sweep of this episode", so the printed line - which the watcher
+# turns into a durable wake, undeduplicated - must not be emitted on the
+# strength of a claim nothing here can establish.
+test_an_alarm_that_cannot_remember_does_not_grow_the_wake_queue_each_sweep() {
+  local home now line lines=0 k
+  home=$(make_home amnesiac-quiet)
+  record_endpoint "$home"
+  rm -rf "$home/state"
+  chmod 500 "$home/data"
+  now=$(date +%s)
+  for k in 0 300 600 900; do
+    line=$(run_alarm_as_shipped "$home" FM_SEAT_ALARM_NOW="$((now + k))")
+    [ -z "$line" ] || lines=$((lines + 1))
+  done
+  chmod 700 "$home/data"
+  [ "$(sends "$home")" -gt 0 ] || fail "an unreadable home told the captain nothing"
+  [ "$lines" = 0 ] \
+    || fail "an alarm with no memory printed $lines lines in four sweeps, one durable wake each, for an episode it could not tell apart from the last"
+  pass "an alarm that cannot remember does not grow the wake queue on every sweep"
 }
 
 # The cadence AT THE VALUES THIS ALARM SHIPS WITH. A fixture that drops the
@@ -419,7 +476,9 @@ test_a_declared_stand_down_is_not_an_alarm
 test_a_home_that_never_seated_is_not_an_alarm
 test_an_unreadable_record_is_reported_and_never_read_as_healthy
 test_an_unmeasured_reading_is_not_printed_as_a_confirmed_absence
-test_a_home_that_loses_its_records_is_reported_and_keeps_being_reported
+test_a_reading_that_cannot_be_taken_is_reported_and_keeps_being_reported
+test_an_absence_is_reported_even_when_the_alarm_cannot_keep_its_own_record
+test_an_alarm_that_cannot_remember_does_not_grow_the_wake_queue_each_sweep
 test_it_speaks_on_change_then_repeats_on_its_own_cadence
 test_recovery_is_reported_only_to_someone_who_was_told
 test_a_failed_send_is_retried_rather_than_counted

@@ -167,6 +167,17 @@ Neither half acts on it and neither reports it.
 It is milder than the outage this change was written for only because a present seat still reads its own session-start digest, which an absent one cannot.
 Closing it is a design question rather than a patch - it needs either a sixth verdict or a named owner for "present but unreachable" - and adding a reachability reading to the respawner would recreate the second source of truth [seat-respawner.md](seat-respawner.md) deliberately refuses, so it is left to separate work rather than widened into this change.
 
+**A state directory that has been DELETED mostly cannot be reported, because the alarm goes with it.**
+The alarm runs only from `state/seat-alarm.check.sh`, and `bin/fm-watch.sh` finds checks by globbing `$STATE/*.check.sh`, so when `state/` is removed the shim is removed too and nothing invokes the alarm at all.
+Re-arming happens at session start, which needs the seat that is by definition the thing missing.
+The `unmeasured` reading for unreachable records is still right and still taken - what reaches it on a real vessel is a `state/` that exists and is not a usable directory, a symlink being the realistic form, whose target can still hold the shim.
+Read the code and its test for that case, not for a deleted directory handled end to end.
+
+**An alarm that cannot write its own records cannot pace itself, and says so rather than going quiet.**
+The grace and the repeat cadence are both read out of `data/seat-alarm.state`, so a `data/` that cannot be written leaves neither available: every sweep would measure an age of zero, a nonzero grace would never open, and the instrument would be permanently silent on the one reading it exists to shout about - which is the failure of 2026-08-27 arriving through the alarm's own bookkeeping.
+So when the memory cannot be kept the grace is not applied at all, the outward message drops the duration it cannot measure and says plainly that this vessel cannot remember having sent it, and the printed line is withheld until the memory returns rather than growing the durable wake queue once per sweep on a "first sweep of this episode" nothing can establish.
+The outward repeat is then per sweep, deliberately: no bound is available to an alarm with no memory, and silence is the worse of the two failures.
+
 One further dependency of the restart path is worth naming because it is invisible until it bites.
 The respawner launches into the tmux server recorded in `state/.primary-endpoint`, and refuses when that server is gone.
 On the real vessel the server outlives the seat only because the entrypoint's bare `vessel:0` window keeps it alive; if the seat's window were the only one, the server would exit with the seat and the respawner would correctly refuse to launch.
