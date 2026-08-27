@@ -271,7 +271,7 @@ evaluate() {
     REASON="this home's local records are not reachable at $STATE, so whether a first mate is running cannot be read"
     return
   fi
-  if [ -e "$STAY_DOWN" ] && [ ! -L "$STAY_DOWN" ]; then
+  if [ -f "$STAY_DOWN" ] && [ ! -L "$STAY_DOWN" ]; then
     VERDICT=standing-down
     REASON='the first mate was deliberately stood down and is meant to be absent'
     return
@@ -569,8 +569,16 @@ AGE=$((NOW - SINCE))
 case "$VERDICT" in
   absent|unmeasured)
     # The grace exists so an ordinary restart between two sweeps does not page
-    # him; it is deliberately far shorter than the sweep that finds it, because
-    # a seat that is down is down.
+    # him. What it costs is measured rather than nominal: SINCE is reset on the
+    # verdict TRANSITION, so AGE is 0 on the sweep that first observes the
+    # absence - that sweep records the state and sends nothing, and the message
+    # goes out on the SECOND sweep, between one and two sweep intervals after
+    # the seat actually died (5 to 10 minutes at the FM_CHECK_INTERVAL default
+    # of 300). Any grace below the sweep interval is therefore indistinguishable
+    # from any other: GRACE=60 and GRACE=299 behave identically, and only
+    # GRACE=0 pages on the observing sweep. docs/seat-absence.md sets the
+    # captain's expectation to that second sweep so a working alarm is not read
+    # as a broken one.
     if [ "$AGE" -ge "$GRACE" ]; then
       DUE=0
       if [ -z "$NOTIFIED" ]; then
