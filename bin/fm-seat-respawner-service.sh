@@ -58,9 +58,11 @@ KEEPER="$SCRIPT_DIR/fm-seat-respawner-keeper.sh"
 CHECK="$STATE/seat-respawner.check.sh"
 BEAT="$STATE/.last-seat-respawner-beat"
 GRACE=${FM_SEAT_RESPAWNER_GRACE:-120}
+CONFIRM_TIMEOUT=${FM_SEAT_RESPAWNER_CONFIRM_TIMEOUT:-10}
 STALE=${FM_SEAT_RESPAWNER_ARMED_STALE:-1800}
 NOW=${FM_SEAT_RESPAWNER_NOW:-$(date +%s)}
 case "$GRACE" in ''|*[!0-9]*) GRACE=120 ;; esac
+case "$CONFIRM_TIMEOUT" in ''|*[!0-9]*|0) CONFIRM_TIMEOUT=10 ;; esac
 case "$STALE" in ''|*[!0-9]*) STALE=1800 ;; esac
 case "$NOW" in ''|*[!0-9]*) NOW=$(date +%s) ;; esac
 
@@ -219,6 +221,21 @@ stop_keeper() {
   fi
 }
 
+# A started SESSION is not a started respawner: `tmux new-session` returns as
+# soon as the window exists, and a respawner that dies immediately in it - a
+# $STATE it cannot write, a service PATH that cannot reach bash - would leave
+# every caller free to report a restoration that did not hold. The watcher's own
+# ensure_keeper ends the same way, for the same reason.
+wait_for_healthy() {
+  local deadline
+  deadline=$(( $(date +%s) + CONFIRM_TIMEOUT ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    healthy_respawner && return 0
+    sleep 0.2
+  done
+  healthy_respawner
+}
+
 ensure_keeper() {
   local name
   name=$(keeper_name) || return 1
@@ -227,12 +244,14 @@ ensure_keeper() {
     return 0
   fi
   stop_keeper || return 1
-  start_keeper
+  start_keeper || return 1
+  wait_for_healthy
 }
 
 restart_keeper() {
   stop_keeper || return 1
-  start_keeper
+  start_keeper || return 1
+  wait_for_healthy
 }
 
 unit_instance() {
@@ -369,13 +388,24 @@ bootstrap_check() {
   fi
 }
 
+# `up:` is composed into a sentence the captain reads on his phone during an
+# outage - bin/fm-seat-alarm.sh's restarter_clause turns it into "an automatic
+# restart is running and should bring it back on its own" - so it may only be
+# printed for the same reading healthy_respawner takes, beacon and home
+# included. A live pid that has stopped cycling gets its own `stalled:` prefix,
+# as bin/fm-delivery-lib.sh already gives the listener; every reader that is not
+# looking for `up:` or `down:` reads it as unknown, which is the honest answer.
 status_report() {
   local age=999999 pid backend
   backend=$(select_backend)
   [ -e "$BEAT" ] && age=$(fm_path_age "$BEAT")
   pid=$(recorded_respawner_field pid)
-  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+  if healthy_respawner; then
     printf 'up: respawner pid %s last beat %ss ago (%s)\n' "$pid" "$age" "$backend"
+  elif [ "$(recorded_respawner_field fm-home)" = "$FM_HOME" ] \
+    && [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    printf 'stalled: respawner pid %s is alive but its beacon is %ss old (grace %ss, %s)\n' \
+      "$pid" "$age" "$GRACE" "$backend"
   else
     printf 'down: no live respawner lock for this home (last beat %ss ago, %s)\n' "$age" "$backend"
   fi

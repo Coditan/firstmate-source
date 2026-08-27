@@ -10,15 +10,22 @@ fm_test_tmproot TMP_ROOT fm-seat-alarm
 
 PIDNS=$(. "$ROOT/bin/fm-harness-pid-lib.sh"; fm_pid_namespace_token)
 
-make_home() {  # <name>
-  local home=$TMP_ROOT/$1
-  mkdir -p "$home/state" "$home/config" "$home/data"
+# The captain's channel, recording what it was handed. Every message the alarm
+# sends outward lands in <home>/outbox terminated by a --- line.
+write_recording_send() {  # <home>
+  local home=$1
   {
     printf '#!/usr/bin/env bash\n'
     printf 'cat >> "%s/outbox"\n' "$home"
     printf 'printf -- "---\\n" >> "%s/outbox"\n' "$home"
   } > "$home/send"
   chmod +x "$home/send"
+}
+
+make_home() {  # <name>
+  local home=$TMP_ROOT/$1
+  mkdir -p "$home/state" "$home/config" "$home/data"
+  write_recording_send "$home"
   printf '%s\n' "$home"
 }
 
@@ -214,6 +221,61 @@ test_recovery_is_reported_only_to_someone_who_was_told() {
 
 # A notification path that fails quietly gets trusted while it is dead, which is
 # this alarm's own defect wearing a different hat.
+# The restarter clause is composed from bin/fm-seat-respawner-service.sh status,
+# and during an outage there is no session start to contradict it, so it is the
+# only word the captain gets about whether anything is coming. A respawner
+# process that is alive but has stopped cycling must not become an assurance.
+test_a_restarter_that_stopped_cycling_is_never_called_running() {
+  local home restarter
+  home=$(make_home stalled-restarter)
+  record_seat "$home" 999999
+  record_endpoint "$home"
+  # A live pid recorded as this home's respawner, and no beacon it ever wrote.
+  restarter=$(start_harness_shaped_process "$home" claude)
+  mkdir -p "$home/state/.seat-respawner.lock"
+  {
+    printf 'pid=%s\n' "$restarter"
+    printf 'fm-home=%s\n' "$home"
+  } > "$home/state/.seat-respawner.lock/record"
+
+  run_alarm "$home" >/dev/null
+  kill "$restarter" 2>/dev/null || true
+  assert_no_grep "should bring it back on its own" "$home/outbox" \
+    "a restarter that never cycled was reported to the captain as bringing the seat back"
+  assert_grep "Whether anything is trying to bring it back could not be read" "$home/outbox" \
+    "an unreadable restarter state was not reported as unreadable"
+  pass "a restarter that has stopped cycling is never reported as running"
+}
+
+# The absence repeats end when the condition ends, so the recovery message is
+# the only thing that can correct what the captain was last told. One transient
+# send failure must not be the end of it.
+test_a_failed_recovery_send_is_retried_on_the_next_sweep() {
+  local home now pid
+  home=$(make_home recovery-retry)
+  record_seat "$home" 999999
+  record_endpoint "$home"
+  now=$(date +%s)
+  run_alarm "$home" FM_SEAT_ALARM_NOW="$now" >/dev/null
+  [ "$(sends "$home")" = 1 ] || fail "the absence was never carried outward"
+
+  pid=$(start_harness_shaped_process "$home" claude)
+  record_seat "$home" "$pid"
+  printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 1\n' > "$home/send"
+  chmod +x "$home/send"
+  run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 900))" >/dev/null
+  [ "$(sends "$home")" = 1 ] || fail "a failed recovery send was counted as delivered"
+
+  write_recording_send "$home"
+  run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 960))" >/dev/null
+  kill "$pid" 2>/dev/null || true
+  [ "$(sends "$home")" = 2 ] \
+    || fail "the recovery message was never retried, so the captain keeps the absence he was told about"
+  assert_grep "has a first mate again" "$home/outbox" \
+    "the retried message was not the recovery"
+  pass "a recovery message nobody got is retried on the next sweep"
+}
+
 test_a_failed_send_is_retried_rather_than_counted() {
   local home now
   home=$(make_home send-failure)
@@ -242,3 +304,5 @@ test_an_unmeasured_reading_is_not_printed_as_a_confirmed_absence
 test_it_speaks_on_change_then_repeats_on_its_own_cadence
 test_recovery_is_reported_only_to_someone_who_was_told
 test_a_failed_send_is_retried_rather_than_counted
+test_a_restarter_that_stopped_cycling_is_never_called_running
+test_a_failed_recovery_send_is_retried_on_the_next_sweep
