@@ -86,6 +86,17 @@ export FM_CODEBASE_SWEEP_NUDGE_DISABLE=1
 # suites still exercise arming.
 export FM_FORGE_STATUS_DISABLE=1
 
+# The first-mate watch and the restart it depends on are armed by that same
+# locked bootstrap step and have the same property: every fixture home is
+# unarmed by definition, so every suite that composes fm-bootstrap.sh would
+# otherwise see both diagnostics. Silence the reporting modes suite-wide;
+# tests/fm-seat-alarm.test.sh, tests/fm-seat-respawner.test.sh and
+# tests/fm-seat-absence-e2e.test.sh set them back to 0 and drive the readings
+# against their own fixture homes. --arm is deliberately NOT silenced, so the
+# bootstrap suites still exercise arming.
+export FM_SEAT_ALARM_DISABLE=1
+export FM_SEAT_RESPAWNER_DISABLE=1
+
 # bin/fm-nm-path-lib.sh resolves the no-mistakes CLI from the seat's install
 # location as well as from PATH, so a fixture that strips the CLI off PATH is no
 # longer stripped: on a developer machine it would quietly reach the REAL
