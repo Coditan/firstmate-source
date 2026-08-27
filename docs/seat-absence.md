@@ -159,6 +159,14 @@ The next cycle reads the home as held, settles the pending record and clears the
 The log is honest about what it established - it says a seat holds this home and that the recorded pane's turn is settled, and claims nothing about the pane - but nothing probes that window afterwards and nothing reports it.
 Closing it would mean the respawner probing and judging a pane it no longer has a claim on, which is a larger decision than this change is making.
 
+**A seat that holds the lock and cannot be reached is owned by neither half. This is a known hole, not an oversight.**
+`bin/fm-session-start.sh` acquires the fleet lock before it publishes the endpoint, and that publish is `|| true`, so a seat that takes the lock and then fails to publish - a crash in that window, or a publish the session continues past - leaves the lock naming a live harness while the endpoint reads absent.
+`fm_delivery_report` then prints `undeliverable:` for as long as it lasts; `one_cycle` refuses to launch for as long as it lasts, because presence reads `present` and a home with a first mate is not missing one; and the alarm stays silent for as long as it lasts, for exactly the same reason.
+Wakes pile up undrained with nobody saying so - the 2026-08-27 shape reached through a seat that is there rather than through one that is gone.
+Neither half acts on it and neither reports it.
+It is milder than the outage this change was written for only because a present seat still reads its own session-start digest, which an absent one cannot.
+Closing it is a design question rather than a patch - it needs either a sixth verdict or a named owner for "present but unreachable" - and adding a reachability reading to the respawner would recreate the second source of truth [seat-respawner.md](seat-respawner.md) deliberately refuses, so it is left to separate work rather than widened into this change.
+
 One further dependency of the restart path is worth naming because it is invisible until it bites.
 The respawner launches into the tmux server recorded in `state/.primary-endpoint`, and refuses when that server is gone.
 On the real vessel the server outlives the seat only because the entrypoint's bare `vessel:0` window keeps it alive; if the seat's window were the only one, the server would exit with the seat and the respawner would correctly refuse to launch.
@@ -238,6 +246,8 @@ bin/fm-seat-respawner-service.sh status
 ```
 
 `select` must answer `keeper` on this container and `status` must answer `up:` after the arm.
+`up:` is the whole reading and not merely a live pid: it requires this home's own respawner lock, a beacon inside `FM_SEAT_RESPAWNER_GRACE`, and the process alive.
+A respawner whose process is alive but has stopped cycling answers `stalled:` instead, and the alarm turns that into "whether anything is trying to bring it back could not be read" rather than into an assurance - so `stalled:` is a failed arm for this runbook's purposes, not a pass.
 Then, and only with the captain watching, the real end-to-end: note the seat's recorded pid from `bin/fm-lock.sh status`, close the seat, and confirm a message arrives on the captain's channel and that `bin/fm-lock.sh status` afterwards names a **different** live pid.
 
 **Expect that message on the SECOND watcher sweep, not the first.**
