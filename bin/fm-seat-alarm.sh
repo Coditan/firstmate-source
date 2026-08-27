@@ -140,13 +140,24 @@
 #                      state/ because "how often has this vessel lost its first
 #                      mate, and did the captain actually get told" is asked
 #                      long after the volatile record of the moment is gone.
-#
-# State, under FM_HOME/state:
 #   seat-alarm.state   the last state this alarm decided, when it decided it,
 #                      when it last notified, and any recovery message the
 #                      channel refused - so a transition can be told from a
 #                      continuation, the repeat cadence survives a restart, and
-#                      an owed recovery is retried without rewriting the verdict
+#                      an owed recovery is retried without rewriting the verdict.
+#                      IT LIVES BESIDE THE LOG RATHER THAN IN state/ BECAUSE
+#                      state/ IS ONE OF THE THINGS THIS ALARM MEASURES, and a
+#                      memory kept inside the measured directory failed in both
+#                      directions at once: writing it PUT THE DIRECTORY BACK, so
+#                      the sweep after an unreachable-records reading found the
+#                      records reachable again and settled on `unattended`; and
+#                      it VANISHED WITH THE DIRECTORY, so every sweep measured
+#                      an age of zero and the grace below never opened. One send
+#                      went out and the instrument was quiet from then on. An
+#                      instrument does not keep its records inside the thing it
+#                      is reading.
+#
+# State, under FM_HOME/state:
 #   seat-alarm.check.sh  the armed watcher check (with .check-trust)
 #
 # Environment:
@@ -178,7 +189,7 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 SEND=${FM_SEAT_ALARM_SEND:-$SCRIPT_DIR/fm-tg-send.sh}
 RESPAWNER_SERVICE="$SCRIPT_DIR/fm-seat-respawner-service.sh"
 LOG="$DATA/seat-alarm.log"
-STATE_FILE="$STATE/seat-alarm.state"
+STATE_FILE="$DATA/seat-alarm.state"
 CHECK="$STATE/seat-alarm.check.sh"
 LOCK_FILE="$STATE/.lock"
 ENDPOINT="$STATE/.primary-endpoint"
@@ -240,6 +251,7 @@ iso() { date -u -d "@$1" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u '+%Y-%m-%d
 
 VERDICT=unmeasured
 REASON='the reading did not run'
+RECORDS_REACHABLE=0
 SEAT_PID=
 QUEUE_DEPTH=
 QUEUE_OLDEST_AGE=
@@ -278,24 +290,34 @@ read_restarter() {
   esac
 }
 
-# THE ORDER OF THE READINGS IS PART OF THE READING, AND THIS IS THE RULE:
-# A PROBE THAT MUTATES WHAT IT MEASURES IS NOT A PROBE. Take every reading that
-# a later step could destroy BEFORE that step runs, record it, and branch on the
-# recorded value.
+# THE READING IS TAKEN ONCE AND EVERYTHING AFTERWARDS ANSWERS FROM IT, AND THIS
+# IS THE RULE: A PROBE THAT MUTATES WHAT IT MEASURES IS NOT A PROBE. Whether
+# this home's records are reachable is measured on the first line of evaluate,
+# published in RECORDS_REACHABLE, and every later step - here, in the branches
+# below, and in write_state at the end of the sweep - reads that published value
+# instead of asking the filesystem again.
 #
-# The reachability reading is the one this rule exists for, and it was learned
-# the hard way. read_restarter runs bin/fm-seat-respawner-service.sh, which
-# sources bin/fm-wake-lib.sh, which creates this home's state directory as a
-# side effect of BEING SOURCED - so while those two probes ran first, the
-# unreachable-records branch below could never fire: the probe had rebuilt the
-# very condition the branch exists to report, and a home whose records were gone
-# read as `unattended` and told nobody anything. A probe added ABOVE the
-# reachability reading re-opens that hole silently. Add it below.
+# It is stated as a rule rather than as a caution on one call site because this
+# file met it twice through different doors. First a probe REPAIRED the
+# condition before it was measured: read_restarter runs
+# bin/fm-seat-respawner-service.sh, which sources bin/fm-wake-lib.sh, which
+# creates this home's state directory as a side effect of BEING SOURCED, so the
+# unreachable-records branch could never fire. Then, with the reading taken
+# first, the alarm repaired the condition AFTER measuring it: write_state made
+# the directory it had just reported missing, so the next sweep read a healthy
+# home. Ordering alone does not close that, and neither would deleting the two
+# creations - the next one added anywhere, including inside a library somebody
+# sources, would re-open it in silence.
+#
+# What closes it is the shape: one measurement, carried, and NO WRITE by this
+# file into the directory it measures. Both halves must hold. If you add a probe
+# to evaluate, add it below the measurement; if you add a write, put it beside
+# the log in data/, which this alarm does not read as a symptom.
 evaluate() {
-  local records_reachable=1
-  [ -d "$STATE" ] && [ ! -L "$STATE" ] || records_reachable=0
+  RECORDS_REACHABLE=1
+  [ -d "$STATE" ] && [ ! -L "$STATE" ] || RECORDS_REACHABLE=0
 
-  if [ "$records_reachable" -eq 0 ]; then
+  if [ "$RECORDS_REACHABLE" -eq 0 ]; then
     # Nothing else is read here: the queue and the restarter both live behind
     # the records this reading just found unreachable, so asking them would
     # answer with confident clauses ("nothing is waiting") composed from a
@@ -397,8 +419,8 @@ read_state() {
 
 write_state() {  # <verdict> <since> <notified> <recovery-from> <recovery-away> <recovery-at>
   local tmp
-  mkdir -p "$STATE" || return 1
-  tmp=$(mktemp "$STATE/.fm-seat-alarm-state.XXXXXX") || return 1
+  mkdir -p "$DATA" || return 1
+  tmp=$(mktemp "$DATA/.fm-seat-alarm-state.XXXXXX") || return 1
   {
     printf 'verdict=%s\n' "$1"
     printf 'since=%s\n' "$2"
@@ -680,7 +702,21 @@ case "$VERDICT" in
     # GRACE=0 pages on the observing sweep. docs/seat-absence.md sets the
     # captain's expectation to that second sweep so a working alarm is not read
     # as a broken one.
+    #
+    # An age this alarm could not MEASURE is not an age, and must never be what
+    # silences it. AGE is derived from the previous sweep's record, so a sweep
+    # with no record behind it measures 0 - and if the record cannot be
+    # persisted at all (a data/ that cannot be written, a rename that fails),
+    # EVERY sweep measures 0, a nonzero grace never opens, and the alarm goes
+    # permanently quiet on the one reading it exists to shout about. So an
+    # unmeasured reading with nothing remembered behind it is not held back.
+    GRACE_PASSED=0
     if [ "$AGE" -ge "$GRACE" ]; then
+      GRACE_PASSED=1
+    elif [ "$VERDICT" = unmeasured ] && [ -z "$PREV_VERDICT" ]; then
+      GRACE_PASSED=1
+    fi
+    if [ "$GRACE_PASSED" -eq 1 ]; then
       DUE=0
       if [ -z "$NOTIFIED" ]; then
         DUE=1
