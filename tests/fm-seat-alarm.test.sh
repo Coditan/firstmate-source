@@ -66,6 +66,16 @@ run_alarm() {  # <home> [extra env assignments...]
     "$@" "$ALARM"
 }
 
+# The same invocation with NOTHING pinned away from the value this vessel
+# actually runs with, so a case can exercise the grace and the repeat cadence as
+# they ship. A fixture that lowers a threshold to make its assertion pass is
+# testing the fixture.
+run_alarm_as_shipped() {  # <home> [extra env assignments...]
+  local home=$1; shift
+  env FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_SEAT_ALARM_SEND="$home/send" \
+    "$@" "$ALARM"
+}
+
 sends() {  # <home>
   grep -c '^---$' "$1/outbox" 2>/dev/null || printf '0\n'
 }
@@ -188,52 +198,72 @@ test_an_unmeasured_reading_is_not_printed_as_a_confirmed_absence() {
 }
 
 # The most catastrophic reading this alarm can take is a home whose records are
-# gone, and it must never be the quietest. It is also the one reading the
-# alarm's own probes can destroy before it is taken, so this drives the
-# sequence that matters: an absence already paged, and then the records vanish.
-test_a_home_that_loses_its_records_mid_outage_is_never_read_as_unattended() {
+# gone, and it must never be the quietest. This drives the sequence that
+# matters and drives it AS SHIPPED: an absence already paged, the records then
+# removed ONCE, and several sweeps at the default grace and the default repeat.
+# The alarm must not repair what it just reported, and it must not be silenced
+# by an age it had no record to measure.
+test_a_home_that_loses_its_records_is_reported_and_keeps_being_reported() {
   local home now line
   home=$(make_home records-vanished)
   record_seat "$home" 999999
   record_endpoint "$home"
   now=$(date +%s)
-  run_alarm "$home" FM_SEAT_ALARM_NOW="$now" >/dev/null
+  run_alarm_as_shipped "$home" FM_SEAT_ALARM_NOW="$now" >/dev/null
+  run_alarm_as_shipped "$home" FM_SEAT_ALARM_NOW="$((now + 300))" >/dev/null
   [ "$(sends "$home")" = 1 ] || fail "the absence was never carried outward"
 
+  # Removed once. Nothing below puts it back, and nothing below may need it to
+  # be put back: whatever the alarm does from here, it does to a home whose
+  # records stayed gone.
   rm -rf "$home/state"
-  line=$(run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 300))")
+
+  run_alarm_as_shipped "$home" FM_SEAT_ALARM_NOW="$((now + 600))" >/dev/null
+  line=$(run_alarm_as_shipped "$home" FM_SEAT_ALARM_NOW="$((now + 900))")
+  [ ! -e "$home/state" ] \
+    || fail "the alarm rebuilt the records it had just reported missing, so the next reading finds a healthy home"
   [ "$(sends "$home")" = 2 ] \
-    || fail "a home that lost its records went silent, leaving the captain holding the absence he was told about"
+    || fail "a home that lost its records went quiet, leaving the captain holding the absence he was told about"
   assert_grep "cannot tell whether it has a first mate" "$home/outbox" \
     "the captain was not told the reading could no longer be taken"
   assert_contains "$line" "has not been able to tell" \
     "the vessel's own line did not say the records were unreachable"
 
-  # Still gone on the next sweep, and still reported: the repeat is uncapped so
-  # the alarm does not go quiet while the fault lasts.
-  rm -rf "$home/state"
-  run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 600))" >/dev/null
+  # The repeat is uncapped precisely so the alarm does not go quiet while the
+  # fault lasts, and the fault here is the instrument itself.
+  run_alarm_as_shipped "$home" FM_SEAT_ALARM_NOW="$((now + 1200))" >/dev/null
+  [ "$(sends "$home")" = 2 ] || fail "the repeat cadence was ignored while the records were gone"
+  run_alarm_as_shipped "$home" FM_SEAT_ALARM_NOW="$((now + 900 + 1800))" >/dev/null
   [ "$(sends "$home")" = 3 ] \
-    || fail "a home whose records stayed gone stopped being reported"
-  assert_grep "verdict=unmeasured" "$home/state/seat-alarm.state" \
+    || fail "a home whose records stayed gone stopped being reported after one message"
+  assert_grep "verdict=unmeasured" "$home/data/seat-alarm.state" \
     "an unreachable home was recorded as one that never had a first mate"
-  pass "a home that loses its records mid-outage is reported unmeasured, not unattended"
+  pass "a home that loses its records is reported unmeasured and keeps being reported"
 }
 
+# The cadence AT THE VALUES THIS ALARM SHIPS WITH. A fixture that drops the
+# grace to zero passes straight over a gate that never opens, which is how a
+# permanently silent alarm survived a review round, and this is the case whose
+# whole subject is WHEN it speaks. The sweep that first observes the absence
+# records it and says nothing; the message goes out once the grace has passed;
+# then not again until the repeat interval is out.
 test_it_speaks_on_change_then_repeats_on_its_own_cadence() {
   local home now
   home=$(make_home cadence)
   record_seat "$home" 999999
   record_endpoint "$home"
   now=$(date +%s)
-  run_alarm "$home" FM_SEAT_ALARM_NOW="$now" >/dev/null
-  [ "$(sends "$home")" = 1 ] || fail "entering the absence did not notify"
-  [ -z "$(run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 60))")" ] \
+  [ -z "$(run_alarm_as_shipped "$home" FM_SEAT_ALARM_NOW="$now")" ] \
+    || fail "the sweep that first observed the absence spoke before its grace had passed"
+  [ "$(sends "$home")" = 0 ] || fail "the observing sweep notified inside the grace"
+  run_alarm_as_shipped "$home" FM_SEAT_ALARM_NOW="$((now + 300))" >/dev/null
+  [ "$(sends "$home")" = 1 ] || fail "an absence that outlasted the grace did not notify"
+  [ -z "$(run_alarm_as_shipped "$home" FM_SEAT_ALARM_NOW="$((now + 600))")" ] \
     || fail "an unchanged absence produced a second line"
   [ "$(sends "$home")" = 1 ] || fail "an unchanged absence notified again inside its own window"
-  run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 1900))" >/dev/null
+  run_alarm_as_shipped "$home" FM_SEAT_ALARM_NOW="$((now + 300 + 1800))" >/dev/null
   [ "$(sends "$home")" = 2 ] || fail "a persisting absence went quiet instead of repeating"
-  pass "an absence is reported once, then repeats on its own cadence"
+  pass "an absence is reported once its grace has passed, then repeats on its own cadence"
 }
 
 test_recovery_is_reported_only_to_someone_who_was_told() {
@@ -335,8 +365,8 @@ test_a_recovery_the_channel_never_took_stays_out_of_the_record() {
   line=$(run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 1200))")
   [ -z "$line" ] || fail "an undelivered recovery was announced again two sweeps later: $line"
 
-  # state/seat-alarm.state is this alarm's own record of its last reading.
-  assert_grep "verdict=present" "$home/state/seat-alarm.state" \
+  # data/seat-alarm.state is this alarm's own record of its last reading.
+  assert_grep "verdict=present" "$home/data/seat-alarm.state" \
     "the alarm recorded an absence while a live first mate held this home's lock"
 
   # Once the retry window is out, the owed recovery is abandoned - and the live
@@ -389,7 +419,7 @@ test_a_declared_stand_down_is_not_an_alarm
 test_a_home_that_never_seated_is_not_an_alarm
 test_an_unreadable_record_is_reported_and_never_read_as_healthy
 test_an_unmeasured_reading_is_not_printed_as_a_confirmed_absence
-test_a_home_that_loses_its_records_mid_outage_is_never_read_as_unattended
+test_a_home_that_loses_its_records_is_reported_and_keeps_being_reported
 test_it_speaks_on_change_then_repeats_on_its_own_cadence
 test_recovery_is_reported_only_to_someone_who_was_told
 test_a_failed_send_is_retried_rather_than_counted
