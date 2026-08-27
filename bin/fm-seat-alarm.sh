@@ -94,6 +94,13 @@
 # the outage is longest, which is the same defect as an alarm that goes quiet
 # when it cannot see.
 #
+# BOTH the grace and that cadence are read out of the record below, so when the
+# record cannot be written neither is available: the grace is not applied at all
+# (silence would be the worse failure), the outward message says plainly that
+# this vessel cannot remember having sent it, and the printed line is withheld
+# until the memory comes back rather than growing the durable wake queue once
+# per sweep on a "first sweep of this episode" nothing here can establish.
+#
 # Recovery is announced ONCE. A recovery send the channel refuses is then OWED
 # rather than repeated: the verdict stays what the reading established, the
 # message is retried from a record of its own, and it is abandoned once it has
@@ -252,6 +259,7 @@ iso() { date -u -d "@$1" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u '+%Y-%m-%d
 VERDICT=unmeasured
 REASON='the reading did not run'
 RECORDS_REACHABLE=0
+MEMORY_PERSISTABLE=1
 SEAT_PID=
 QUEUE_DEPTH=
 QUEUE_OLDEST_AGE=
@@ -290,34 +298,42 @@ read_restarter() {
   esac
 }
 
-# THE READING IS TAKEN ONCE AND EVERYTHING AFTERWARDS ANSWERS FROM IT, AND THIS
-# IS THE RULE: A PROBE THAT MUTATES WHAT IT MEASURES IS NOT A PROBE. Whether
-# this home's records are reachable is measured on the first line of evaluate,
-# published in RECORDS_REACHABLE, and every later step - here, in the branches
-# below, and in write_state at the end of the sweep - reads that published value
-# instead of asking the filesystem again.
+# A PROBE THAT MUTATES WHAT IT MEASURES IS NOT A PROBE, AND THIS IS THE RULE
+# THAT KEEPS THIS FUNCTION HONEST. Whether this home's records are reachable is
+# measured on the FIRST line of evaluate, before anything else runs, and
+# published in RECORDS_REACHABLE.
 #
-# It is stated as a rule rather than as a caution on one call site because this
-# file met it twice through different doors. First a probe REPAIRED the
-# condition before it was measured: read_restarter runs
-# bin/fm-seat-respawner-service.sh, which sources bin/fm-wake-lib.sh, which
-# creates this home's state directory as a side effect of BEING SOURCED, so the
-# unreachable-records branch could never fire. Then, with the reading taken
-# first, the alarm repaired the condition AFTER measuring it: write_state made
-# the directory it had just reported missing, so the next sweep read a healthy
-# home. Ordering alone does not close that, and neither would deleting the two
-# creations - the next one added anywhere, including inside a library somebody
-# sources, would re-open it in silence.
+# It is a rule rather than a caution on one call site because this file met it
+# twice through different doors. First a probe REPAIRED the condition before it
+# was measured: read_restarter runs bin/fm-seat-respawner-service.sh, which
+# sources bin/fm-wake-lib.sh, which creates this home's state directory as a
+# side effect of BEING SOURCED, so the unreachable-records branch could never
+# fire. Then, with the reading taken first, the alarm repaired the condition
+# AFTER measuring it: write_state made the directory it had just reported
+# missing, so the next sweep read a healthy home.
 #
-# What closes it is the shape: one measurement, carried, and NO WRITE by this
-# file into the directory it measures. Both halves must hold. If you add a probe
-# to evaluate, add it below the measurement; if you add a write, put it beside
-# the log in data/, which this alarm does not read as a symptom.
+# Two things hold it closed, and both are needed. The reading is taken FIRST, so
+# no probe added below it can answer the question before it is asked; and in
+# detect mode this file WRITES NOTHING INTO $STATE - its log and its memory both
+# live in $DATA, so no write of its own can put back what it just reported
+# missing. (--arm does write the check shim into $STATE, which is the one
+# deliberate exception and is not part of a reading.) If you add a probe to
+# evaluate, add it below the measurement; if you add a write, put it in data/,
+# which this alarm does not read as a symptom.
 evaluate() {
   RECORDS_REACHABLE=1
   [ -d "$STATE" ] && [ ! -L "$STATE" ] || RECORDS_REACHABLE=0
 
   if [ "$RECORDS_REACHABLE" -eq 0 ]; then
+    # What actually reaches this branch on a vessel is a $STATE that exists and
+    # is not a usable directory - a symlink, most of it. A state/ that has been
+    # DELETED mostly cannot: this alarm runs only from the check shim inside it,
+    # bin/fm-watch.sh finds checks by globbing "$STATE"/*.check.sh, so the shim
+    # goes with the directory and nothing invokes this file at all. The reading
+    # is still taken and still reported - that costs nothing and the branch is
+    # genuinely reachable - but do not read it as covering a deleted state/ end
+    # to end. docs/seat-absence.md carries that residual.
+    #
     # Nothing else is read here: the queue and the restarter both live behind
     # the records this reading just found unreachable, so asking them would
     # answer with confident clauses ("nothing is waiting") composed from a
@@ -417,6 +433,18 @@ read_state() {
   fi
 }
 
+# Whether this alarm can keep a memory at all, measured the only way it can be:
+# by writing. An empty record cannot tell "this alarm has never run here" from
+# "this alarm cannot remember anything", and those two want opposite treatment -
+# the first is an ordinary first sweep, the second means every later reading in
+# this sweep that leans on the previous one is an artefact.
+memory_persistable() {
+  local tmp
+  mkdir -p "$DATA" 2>/dev/null || return 1
+  tmp=$(mktemp "$DATA/.fm-seat-alarm-probe.XXXXXX" 2>/dev/null) || return 1
+  rm -f -- "$tmp" 2>/dev/null || true
+}
+
 write_state() {  # <verdict> <since> <notified> <recovery-from> <recovery-away> <recovery-at>
   local tmp
   mkdir -p "$DATA" || return 1
@@ -465,6 +493,10 @@ restarter_clause() {
 }
 
 repeat_clause() {
+  [ "$MEMORY_PERSISTABLE" -eq 1 ] || {
+    printf 'This vessel cannot write its own records, so it cannot remember having told you: expect this on every check until that is fixed.'
+    return
+  }
   [ "$REPEAT" -gt 0 ] || { printf 'This is the only message you will get about it.'; return; }
   printf 'This repeats every %s while it lasts.' "$(human_duration "$REPEAT")"
 }
@@ -669,6 +701,8 @@ esac
 
 [ "${FM_SEAT_ALARM_DISABLE:-0}" = 1 ] && exit 0
 
+MEMORY_PERSISTABLE=1
+memory_persistable || MEMORY_PERSISTABLE=0
 read_state
 evaluate
 
@@ -683,6 +717,11 @@ if [ "$VERDICT" = "$PREV_VERDICT" ]; then
 fi
 AGE=$((NOW - SINCE))
 [ "$AGE" -ge 0 ] || AGE=0
+# SINCE comes from the previous sweep's record. With no memory to keep it, every
+# sweep sets SINCE to itself and the age that falls out is an artefact of that,
+# not a measurement - so it is not reported as one. human_duration renders an
+# empty age as "an unknown time".
+[ "$MEMORY_PERSISTABLE" -eq 1 ] || AGE=
 
 case "$VERDICT" in
   absent|unmeasured)
@@ -703,17 +742,17 @@ case "$VERDICT" in
     # captain's expectation to that second sweep so a working alarm is not read
     # as a broken one.
     #
-    # An age this alarm could not MEASURE is not an age, and must never be what
-    # silences it. AGE is derived from the previous sweep's record, so a sweep
-    # with no record behind it measures 0 - and if the record cannot be
-    # persisted at all (a data/ that cannot be written, a rename that fails),
-    # EVERY sweep measures 0, a nonzero grace never opens, and the alarm goes
-    # permanently quiet on the one reading it exists to shout about. So an
-    # unmeasured reading with nothing remembered behind it is not held back.
+    # A GRACE IS APPLIED TO AN AGE, AND AN AGE THIS ALARM COULD NOT MEASURE MUST
+    # NEVER BE WHAT SILENCES IT. When the memory cannot be kept, every sweep
+    # measures 0, a nonzero grace never opens, and the alarm goes permanently
+    # quiet on the one reading it exists to shout about - measured, on a home
+    # whose data/ could not be written: eight sweeps, an hour of a dead seat,
+    # nothing sent and nothing printed. So the grace is asked only when there is
+    # a remembered age to ask it about.
     GRACE_PASSED=0
-    if [ "$AGE" -ge "$GRACE" ]; then
+    if [ "$MEMORY_PERSISTABLE" -eq 0 ]; then
       GRACE_PASSED=1
-    elif [ "$VERDICT" = unmeasured ] && [ -z "$PREV_VERDICT" ]; then
+    elif [ "$AGE" -ge "$GRACE" ]; then
       GRACE_PASSED=1
     fi
     if [ "$GRACE_PASSED" -eq 1 ]; then
@@ -724,8 +763,14 @@ case "$VERDICT" in
         DUE=1
       fi
       if [ "$DUE" -eq 1 ]; then
+        # FIRST means "this is the first sweep of this episode", which is a fact
+        # about the previous sweep and is therefore not knowable without a
+        # memory. An alarm that cannot tell one sweep from the next must not
+        # claim one, and must not grow the durable wake queue once per sweep on
+        # the strength of the claim - so the printed line waits for the memory
+        # to come back, while the outward send below does not.
         FIRST=0
-        [ -n "$NOTIFIED" ] || FIRST=1
+        [ "$MEMORY_PERSISTABLE" -eq 1 ] && [ -z "$NOTIFIED" ] && FIRST=1
         if notify "$VERDICT" "$AGE"; then
           NOTIFIED=$NOW
         fi
