@@ -178,22 +178,13 @@ test_an_unmeasured_reading_is_not_printed_as_a_confirmed_absence() {
     "an unmeasured reading was printed as a confirmed absence"
   assert_contains "$line" "has not been able to tell" \
     "an unmeasured reading did not say that is what it was"
-
-  pid=$(start_harness_shaped_process "$home" claude)
-  record_seat "$home" "$pid"
-  line=$(run_alarm "$home")
-  kill "$pid" 2>/dev/null || true
-  assert_not_contains "$line" "without a first mate" \
-    "recovering from an unmeasured reading claimed an absence that was never established"
-  assert_contains "$line" "could not tell" \
-    "recovering from an unmeasured reading did not say what it had been unable to read"
   # The outward channel, which is the deliverable itself. The printed line is
-  # read by the seat that comes back; this is the one the captain gets, and it
-  # is the one a test that only reads stdout cannot protect.
-  assert_no_grep "without one" "$home/outbox" \
+  # read by the seat; this is the one the captain gets, and it is the one a test
+  # that only reads stdout cannot protect.
+  assert_no_grep "has had no first mate" "$home/outbox" \
     "the captain was told of an absence the reading explicitly refused to establish"
-  assert_grep "of not being able to tell" "$home/outbox" \
-    "the outward recovery message did not say what the vessel had been unable to read"
+  assert_grep "cannot tell whether it has a first mate" "$home/outbox" \
+    "the outward message did not say what the vessel had been unable to read"
   pass "an unmeasured reading is never printed as a confirmed absence"
 }
 
@@ -298,6 +289,43 @@ test_an_alarm_that_cannot_remember_does_not_grow_the_wake_queue_each_sweep() {
   pass "an alarm that cannot remember does not grow the wake queue on every sweep"
 }
 
+# The memory reading is only worth what it measures. A record write that cannot
+# LAND - the create succeeds and the rename does not, which is what a full or
+# over-quota filesystem does - has to read as unpersistable, or the grace is
+# handed an age of zero on every sweep and the alarm is silent about a dead seat
+# for as long as it lasts.
+test_an_absence_is_reported_when_the_record_write_cannot_land() {
+  local home now k sends_after_state sends_after_probe
+  home=$(make_home write-cannot-land)
+  record_seat "$home" 999999
+  record_endpoint "$home"
+  now=$(date +%s)
+
+  # The record's own destination cannot be renamed over.
+  mkdir -p "$home/data/seat-alarm.state"
+  for k in 0 300 600; do
+    run_alarm_as_shipped "$home" FM_SEAT_ALARM_NOW="$((now + k))" >/dev/null
+  done
+  sends_after_state=$(sends "$home")
+  [ "$sends_after_state" -gt 0 ] \
+    || fail "a dead seat went unreported because the alarm's own record could not be renamed into place"
+  rm -rf "$home/data/seat-alarm.state"
+
+  # The same shape one step earlier: the rename the probe itself performs fails,
+  # which is the step a create-only probe would never have exercised.
+  mkdir -p "$home/data/.fm-seat-alarm-probe"
+  for k in 900 1200 1500; do
+    run_alarm_as_shipped "$home" FM_SEAT_ALARM_NOW="$((now + k))" >/dev/null
+  done
+  sends_after_probe=$(sends "$home")
+  rm -rf "$home/data/.fm-seat-alarm-probe"
+  [ "$sends_after_probe" -gt "$sends_after_state" ] \
+    || fail "a dead seat went unreported while the alarm's probe could create but not rename"
+  assert_grep "cannot write its own records" "$home/outbox" \
+    "the captain was not told this vessel cannot keep the record it paces itself on"
+  pass "an absence is reported when the alarm's record write cannot land"
+}
+
 # The cadence AT THE VALUES THIS ALARM SHIPS WITH. A fixture that drops the
 # grace to zero passes straight over a gate that never opens, which is how a
 # permanently silent alarm survived a review round, and this is the case whose
@@ -323,20 +351,42 @@ test_it_speaks_on_change_then_repeats_on_its_own_cadence() {
   pass "an absence is reported once its grace has passed, then repeats on its own cadence"
 }
 
-test_recovery_is_reported_only_to_someone_who_was_told() {
-  local home now pid line
-  home=$(make_home recovery)
+# A return is written to the history and announced nowhere. Announcing it once
+# would need a memory this alarm cannot always keep, and the sweeps after a
+# return must add nothing to either channel however many of them there are.
+test_a_returning_first_mate_is_recorded_and_never_announced() {
+  local home now pid line k
+  home=$(make_home returned)
   record_seat "$home" 999999
   record_endpoint "$home"
   now=$(date +%s)
-  run_alarm "$home" FM_SEAT_ALARM_NOW="$now" >/dev/null
+  run_alarm_as_shipped "$home" FM_SEAT_ALARM_NOW="$now" >/dev/null
+  run_alarm_as_shipped "$home" FM_SEAT_ALARM_NOW="$((now + 300))" >/dev/null
+  [ "$(sends "$home")" = 1 ] || fail "the absence was never carried outward"
+
   pid=$(start_harness_shaped_process "$home" claude)
   record_seat "$home" "$pid"
-  line=$(run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 900))")
-  assert_contains "$line" "has one again" "the returned first mate was not told it had been away"
-  [ "$(sends "$home")" = 2 ] || fail "the captain was not told the first mate came back"
+  for k in 900 1200 1500 3600; do
+    line=$(run_alarm_as_shipped "$home" FM_SEAT_ALARM_NOW="$((now + k))")
+    [ -z "$line" ] || fail "the return was announced to the wake queue: $line"
+  done
+  [ "$(sends "$home")" = 1 ] \
+    || fail "the captain was sent more than one message for a return that happened once"
+  assert_grep "recovered from=absent away=900" "$home/data/seat-alarm.log" \
+    "the return was not written to the history an investigator reads"
+
+  # The seat dies again: the new absence is its own, and is measured from its
+  # own start rather than from the episode that ended.
   kill "$pid" 2>/dev/null || true
-  pass "a recovery is reported to a captain who was told about the absence"
+  record_seat "$home" 999999
+  run_alarm_as_shipped "$home" FM_SEAT_ALARM_NOW="$((now + 3900))" >/dev/null
+  run_alarm_as_shipped "$home" FM_SEAT_ALARM_NOW="$((now + 4200))" >/dev/null
+  [ "$(sends "$home")" = 2 ] || fail "the second absence was never carried outward"
+  assert_grep "no first mate for 5m" "$home/outbox" \
+    "the second absence was not measured from its own start"
+  assert_no_grep "1h10m" "$home/outbox" \
+    "the captain was given the earlier episode's clock for a later absence"
+  pass "a returning first mate is recorded and never announced"
 }
 
 # A notification path that fails quietly gets trusted while it is dead, which is
@@ -367,90 +417,6 @@ test_a_restarter_that_stopped_cycling_is_never_called_running() {
   pass "a restarter that has stopped cycling is never reported as running"
 }
 
-# The absence repeats end when the condition ends, so the recovery message is
-# the only thing that can correct what the captain was last told. One transient
-# send failure must not be the end of it.
-test_a_failed_recovery_send_is_retried_on_the_next_sweep() {
-  local home now pid
-  home=$(make_home recovery-retry)
-  record_seat "$home" 999999
-  record_endpoint "$home"
-  now=$(date +%s)
-  run_alarm "$home" FM_SEAT_ALARM_NOW="$now" >/dev/null
-  [ "$(sends "$home")" = 1 ] || fail "the absence was never carried outward"
-
-  pid=$(start_harness_shaped_process "$home" claude)
-  record_seat "$home" "$pid"
-  printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 1\n' > "$home/send"
-  chmod +x "$home/send"
-  run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 900))" >/dev/null
-  [ "$(sends "$home")" = 1 ] || fail "a failed recovery send was counted as delivered"
-
-  write_recording_send "$home"
-  run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 960))" >/dev/null
-  kill "$pid" 2>/dev/null || true
-  [ "$(sends "$home")" = 2 ] \
-    || fail "the recovery message was never retried, so the captain keeps the absence he was told about"
-  assert_grep "has a first mate again" "$home/outbox" \
-    "the retried message was not the recovery"
-  pass "a recovery message nobody got is retried on the next sweep"
-}
-
-# The retry must be of the SEND, not of the reading. A channel that stays broken
-# must not leave the alarm asserting an absence the lock says has ended, must not
-# re-announce the recovery every sweep, and must not let the earlier episode's
-# clock measure the next absence.
-test_a_recovery_the_channel_never_took_stays_out_of_the_record() {
-  local home now pid line
-  home=$(make_home recovery-broken-channel)
-  record_seat "$home" 999999
-  record_endpoint "$home"
-  now=$(date +%s)
-  run_alarm "$home" FM_SEAT_ALARM_NOW="$now" >/dev/null
-  [ "$(sends "$home")" = 1 ] || fail "the absence was never carried outward"
-
-  # The seat comes back, and the captain's channel is broken from here on.
-  pid=$(start_harness_shaped_process "$home" claude)
-  record_seat "$home" "$pid"
-  printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 1\n' > "$home/send"
-  chmod +x "$home/send"
-  line=$(run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 600))")
-  assert_contains "$line" "has one again" "the returning seat was not told it had been away"
-
-  line=$(run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 900))")
-  [ -z "$line" ] || fail "an undelivered recovery was announced again a sweep later: $line"
-  line=$(run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 1200))")
-  [ -z "$line" ] || fail "an undelivered recovery was announced again two sweeps later: $line"
-
-  # data/seat-alarm.state is this alarm's own record of its last reading.
-  assert_grep "verdict=present" "$home/data/seat-alarm.state" \
-    "the alarm recorded an absence while a live first mate held this home's lock"
-
-  # Once the retry window is out, the owed recovery is abandoned - and the live
-  # seat is told, because the captain is left believing this vessel has nobody
-  # and cannot learn otherwise from the channel that refused the message.
-  line=$(run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 600 + 1800))")
-  assert_contains "$line" "could not be delivered" \
-    "an abandoned recovery told the seat holding this home nothing"
-  assert_contains "$line" "may still believe" \
-    "the abandoned recovery did not say what the captain is left believing"
-  line=$(run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 600 + 2100))")
-  [ -z "$line" ] || fail "an abandoned recovery was announced more than once: $line"
-
-  # The seat dies again. The new absence is its own, and must be measured from
-  # its own start rather than from the episode whose recovery never landed.
-  kill "$pid" 2>/dev/null || true
-  record_seat "$home" 999999
-  write_recording_send "$home"
-  run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 3000))" >/dev/null
-  run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 3000 + 1800))" >/dev/null
-  assert_grep "no first mate for 30m" "$home/outbox" \
-    "the second absence was not measured from its own start"
-  assert_no_grep "no first mate for 50m" "$home/outbox" \
-    "the captain was given the earlier episode's clock for a later absence"
-  pass "a recovery the channel never took stays out of the record"
-}
-
 test_a_failed_send_is_retried_rather_than_counted() {
   local home now
   home=$(make_home send-failure)
@@ -479,9 +445,8 @@ test_an_unmeasured_reading_is_not_printed_as_a_confirmed_absence
 test_a_reading_that_cannot_be_taken_is_reported_and_keeps_being_reported
 test_an_absence_is_reported_even_when_the_alarm_cannot_keep_its_own_record
 test_an_alarm_that_cannot_remember_does_not_grow_the_wake_queue_each_sweep
+test_an_absence_is_reported_when_the_record_write_cannot_land
 test_it_speaks_on_change_then_repeats_on_its_own_cadence
-test_recovery_is_reported_only_to_someone_who_was_told
+test_a_returning_first_mate_is_recorded_and_never_announced
 test_a_failed_send_is_retried_rather_than_counted
 test_a_restarter_that_stopped_cycling_is_never_called_running
-test_a_failed_recovery_send_is_retried_on_the_next_sweep
-test_a_recovery_the_channel_never_took_stays_out_of_the_record
