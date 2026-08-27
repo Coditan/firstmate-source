@@ -33,8 +33,9 @@
 #   exactly as it replaces {TASK}. The flag must be explicit for the same reason
 #   --herdr-lab is, and briefs made without it carry a loud declaration so an
 #   omitted premise cannot be silent.
-#   --no-premise is that same declaration made deliberately: the caller states
-#   this brief carries no asserted fact, so there is nothing to disprove.
+#   --no-premise is that same declaration made deliberately: the scaffolding
+#   names no premise, and that is the whole of what the declaration covers.
+#   It makes no claim about the task text the caller composes.
 #   It is for PROGRAMMATIC callers that compose their own task text and cannot be
 #   regenerated after dispatch. The omitted-premise block tells the reader to stop
 #   and have firstmate regenerate the brief, and such a caller has no firstmate to
@@ -301,7 +302,7 @@ REPLACE_NOTE="{TASK}"
 PREMISE_SECTION=$(cat <<'EOF'
 # Premise declaration - DECLARED NONE
 **DECLARED NONE:** this brief's scaffolding names no asserted premise for you to disprove, and that is the whole of what this declaration covers.
-It says nothing about the task text below, which a programmatic caller composed on its own.
+It says nothing about the task text above, which a programmatic caller composed on its own.
 That caller cannot regenerate this brief once you are dispatched, so the absence of a disproof step here is declared rather than missing.
 Do not write a disproof step into this brief by hand.
 EOF
