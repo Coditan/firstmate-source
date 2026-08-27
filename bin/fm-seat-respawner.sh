@@ -44,7 +44,7 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 RESPAWNER_PATH="$SCRIPT_DIR/fm-seat-respawner.sh"
 DELIVERY_SERVICE="${FM_SEAT_DELIVERY_SERVICE:-$SCRIPT_DIR/fm-delivery-service.sh}"
-TMUX_CMD="${FM_SEAT_TMUX:-tmux}"
+TMUX_CMD="${FM_SEAT_TMUX:-${FM_TMUX_COMMAND:-tmux}}"
 POLL=${FM_SEAT_RESPAWNER_POLL:-15}
 BASE_BACKOFF=${FM_SEAT_RESPAWNER_BACKOFF:-30}
 MAX_BACKOFF=${FM_SEAT_RESPAWNER_MAX_BACKOFF:-900}
@@ -61,6 +61,7 @@ SUBMIT_RETRIES=${FM_SEAT_SUBMIT_RETRIES:-3}
 SUBMIT_SLEEP=${FM_SEAT_SUBMIT_SLEEP:-0.4}
 case "$FIRST_TURN_DEADLINE" in ''|*[!0-9]*) FIRST_TURN_DEADLINE=600 ;; esac
 case "$SUBMIT_RETRIES" in ''|*[!0-9]*) SUBMIT_RETRIES=3 ;; esac
+case "$SUBMIT_SLEEP" in ''|.|*[!0-9.]*|*.*.*) SUBMIT_SLEEP=0.4 ;; esac
 ATTEMPTS="$STATE/.seat-respawn-attempts"
 GIVEUP="$STATE/.seat-respawn-giveup"
 BEAT="$STATE/.last-seat-respawner-beat"
@@ -180,7 +181,7 @@ shell_quote() {
 }
 
 launch_in_tmux() {  # <reason>
-  local cmd socket shell_command
+  local cmd socket shell_command pane
   cmd=$(launch_command) || {
     log "launch refused: no config/seat-launch-command and no FM_SEAT_LAUNCH_COMMAND"
     return 1
@@ -315,8 +316,8 @@ deliver_first_turn() {
   fi
   [ -n "$pane" ] || { rm -f -- "$FIRST_TURN"; return 0; }
 
-  local FM_TMUX_SERVER_IDENTITY=$server
-  export FM_TMUX_SERVER_IDENTITY
+  local FM_TMUX_SERVER_IDENTITY=$server FM_TMUX_COMMAND=$TMUX_CMD
+  export FM_TMUX_SERVER_IDENTITY FM_TMUX_COMMAND
   rc=0
   fm_backend_target_exists tmux "$pane" || rc=$?
   # Only a CONFIDENT absence retires the record. Every other non-zero answer
