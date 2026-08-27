@@ -337,7 +337,12 @@ deliver_first_turn() {
   }
   verdict=$(fm_backend_send_text_submit tmux "$pane" "$encoded" "$SUBMIT_RETRIES" "$SUBMIT_SLEEP" "$SUBMIT_SLEEP")
   if [ "$verdict" = empty ]; then
-    first_turn_mark submitted || rm -f -- "$FIRST_TURN"
+    # The record stands even when the mark cannot be written. At most one
+    # retype follows, which the composer-empty test above already makes
+    # unlikely; dropping it instead would release the launch hold on a seat
+    # that is at this moment running its session start.
+    first_turn_mark submitted \
+      || log "first turn was typed into pane $pane but could not be marked; the record stands"
     log "first turn submitted to pane $pane"
   else
     log "first turn was not confirmed (verdict=${verdict:-unknown}); leaving it to the next cycle"
@@ -435,6 +440,20 @@ one_cycle() {
     return 0
   fi
   deliver_first_turn
+  # PRESENCE, ASKED BEFORE REACHABILITY. A home whose session lock names a live
+  # harness is not missing a seat, whatever the delivery verdict says about
+  # reaching it - and an ordinary busy seat produces `undeliverable:` (the
+  # listener's own pane_is_busy branch), so relaunching on that verdict alone
+  # opens a second agent window beside a first mate that is merely working.
+  # This is the same lock reading bin/fm-seat-alarm.sh calls presence, asked
+  # here for the same question; docs/seat-respawner.md carries the revision.
+  if seat_holds_lock; then
+    if [ -f "$ATTEMPTS" ]; then
+      log "launch refused: this home's session lock names a live first mate"
+    fi
+    clear_episode
+    return 0
+  fi
   status_line=$("$DELIVERY_SERVICE" status 2>&1 || true)
   case "$status_line" in *$'\n'*) status_line=${status_line%%$'\n'*} ;; esac
   if ! respawn_needed "$status_line"; then
