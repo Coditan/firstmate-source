@@ -361,8 +361,32 @@ test_an_unreadable_lock_never_produces_a_launch() {
   pass "seat respawner never launches on a lock it could not read"
 }
 
+# The watcher wakes firstmate on any line this check prints, so a start it did
+# not confirm would announce a restoration that did not hold once per sweep -
+# 288 turns a day at the default interval, each of them false.
+test_converge_never_claims_a_start_it_could_not_confirm() {
+  local home tmux log line
+  home=$(make_home unconfirmed-start)
+  tmux="$home/fake-tmux"
+  log="$home/tmux.log"
+  write_fake_tmux "$tmux" "$log"
+
+  line=$(env FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$home/state" \
+    FM_CONFIG_OVERRIDE="$home/config" FM_SEAT_RESPAWNER_FORCE_BACKEND=keeper \
+    FM_SEAT_RESPAWNER_TMUX="$tmux" FM_SEAT_RESPAWNER_CONFIRM_TIMEOUT=1 \
+    "$SERVICE" converge)
+
+  assert_grep "new-session" "$log" "converging never tried to start a keeper"
+  assert_contains "$line" "could not be started" \
+    "a keeper whose respawner never came up was reported as started again"
+  assert_not_contains "$line" "has been started again" \
+    "converging claimed a restoration that never happened"
+  pass "converging never claims a start it could not confirm"
+}
+
 test_stay_down_marker_is_authoritative
 test_giveup_path_reports_a_finding
+test_converge_never_claims_a_start_it_could_not_confirm
 test_a_live_first_mate_is_never_relaunched
 test_an_unreadable_lock_never_produces_a_launch
 test_a_pending_first_turn_holds_the_next_launch
