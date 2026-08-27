@@ -770,8 +770,8 @@ EOF
   make_fake_toolchain "$fakebin"
   make_fake_ps_claude "$fakebin"
   since=$(( $(date +%s) - 25200 ))
-  printf 'unenforced\n' > "$home/state/.context-ceiling-surfaced"
-  printf 'unenforced %s 7\n' "$since" > "$home/state/.context-ceiling-absent-since"
+  printf 'unenforced record-missing %s 7\n' "$since" > "$home/state/.context-ceiling-surfaced"
+  printf 'unenforced record-missing %s 7\n' "$since" > "$home/state/.context-ceiling-absent-since"
 
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
 
@@ -785,6 +785,28 @@ EOF
     "the startup digest did not expose the standing absence's age"
 
   pass "session start keeps a suppressed context-ceiling condition visible without a wake"
+}
+
+test_fleet_digest_reports_a_working_standing_context_ceiling_condition() {
+  local rec root home fakebin out since
+  rec=$(new_world standing-working-context-ceiling)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  since=$(( $(date +%s) - 1800 ))
+  printf 'ask captain-spoke %s 4\n' "$since" > "$home/state/.context-ceiling-surfaced"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+
+  assert_contains "$out" "class=ask; condition=captain-spoke" \
+    "the startup digest omitted the working condition identity"
+  assert_contains "$out" "observations=4" \
+    "the startup digest omitted the working condition observation count"
+  assert_contains "$out" "age=18" \
+    "the startup digest omitted the working condition age"
+  pass "session start reports chronology for working and absent standing conditions"
 }
 
 # Two seats can exist for one home while a vessel is being moved, and attaching
@@ -1019,6 +1041,7 @@ test_backlog_compact_manual_backend_skips_indented_bodies
 test_backlog_compact_tasks_axi_unavailable_uses_manual_fallback
 test_fleet_digest_empty_fleet
 test_fleet_digest_reports_a_standing_context_ceiling_condition
+test_fleet_digest_reports_a_working_standing_context_ceiling_condition
 test_digest_states_which_vessel_this_session_belongs_to
 test_next_step_sources_x_mode_cadence
 test_telegram_receiver_guidance

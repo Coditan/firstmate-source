@@ -252,7 +252,7 @@ This chooses the durable-record and session-start-digest escalation path instead
 That choice implements the captain's 2026-08-27 direction to say the condition once and stay quiet until it changes, while keeping the absence visible whenever a session starts.
 It also avoids replacing a measured hourly cost with a shorter, unmeasured request cadence.
 
-`state/.context-ceiling-absent-since` carries `<class> <first-observed-epoch> <observations>` as content rather than as an mtime, because the mtime moves on every rewrite and the whole value of the record is the moment that did not move.
+`state/.context-ceiling-absent-since` carries `<class> <condition> <first-observed-epoch> <observations>` as content rather than as an mtime, because the mtime moves on every rewrite and the whole value of the record is the moment that did not move.
 The watcher updates the observation count on every eligible poll even when it suppresses the wake, so elapsed age and persistence remain available without a model turn.
 The session-start digest prints the class, first-observed epoch, current age, and observation count.
 A change of class restarts it - a ceiling that stopped being unmeasurable and started being unresettable is a different absence, and dating the new one from the old would report an age that never happened.
@@ -453,5 +453,5 @@ All under `state/`, all gitignored:
 | `.stow-receipt` | `bin/fm-stow-receipt.sh` | knowledge filed, bound to a transcript position; removed on a completed reset |
 | `.context-reset.log` | `bin/fm-context-reset.sh` | one durable line per refusal, `--check` pass, or completed reset |
 | `.last-context-check` | `bin/fm-watch.sh` | ceiling-read cadence, as an mtime, so it survives a watcher restart |
-| `.context-ceiling-surfaced` | `bin/fm-watch.sh` | the branch class last reported (`reset`, `ask`, `blocked`, `unenforced`), as content; suppresses an unchanged condition after its first wake, and is cleared only when the condition genuinely resolves |
-| `.context-ceiling-absent-since` | `bin/fm-watch.sh` | `<class> <first-observed-epoch> <observations>` for the current absent-protection condition, so the session-start digest can show how long the ceiling has had no protection and how many polls have observed it without raising repeat wakes; cleared when the condition resolves or the protection comes back |
+| `.context-ceiling-surfaced` | `bin/fm-watch.sh` | `<class> <condition> <first-observed-epoch> <observations>` for the standing condition; suppresses only an unchanged semantic condition after its first wake, and is cleared only when the condition genuinely resolves |
+| `.context-ceiling-absent-since` | `bin/fm-watch.sh` | `<class> <condition> <first-observed-epoch> <observations>` for the current absent-protection condition, so the session-start digest can show how long the ceiling has had no protection and how many polls have observed it without raising repeat wakes; cleared when the condition resolves or the protection comes back |

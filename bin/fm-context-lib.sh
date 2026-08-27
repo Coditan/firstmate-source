@@ -178,19 +178,23 @@ FM_CONTEXT_TRANSCRIPT=
 FM_CONTEXT_SESSION_ID=
 FM_CONTEXT_RECORD_PID=
 FM_CONTEXT_RECORD_ERROR=
+FM_CONTEXT_RECORD_ERROR_KIND=
 fm_context_record_read() {  # <state-dir>
   local state=$1 record status
   FM_CONTEXT_TRANSCRIPT=
   FM_CONTEXT_SESSION_ID=
   FM_CONTEXT_RECORD_PID=
   FM_CONTEXT_RECORD_ERROR=
+  FM_CONTEXT_RECORD_ERROR_KIND=
   record=$(fm_context_record_path "$state")
   if [ ! -f "$record" ]; then
+    FM_CONTEXT_RECORD_ERROR_KIND=missing
     FM_CONTEXT_RECORD_ERROR="no session transcript recorded at $record"
     return 1
   fi
   status=$(fm_context_kv "$record" status || true)
   if [ "$status" != ok ]; then
+    FM_CONTEXT_RECORD_ERROR_KIND=error
     FM_CONTEXT_RECORD_ERROR="session transcript record is in error state: $(fm_context_kv "$record" error || printf 'unspecified')"
     return 1
   fi
@@ -199,16 +203,17 @@ fm_context_record_read() {  # <state-dir>
   FM_CONTEXT_RECORD_PID=$(fm_context_kv "$record" harness_pid || true)
   case "$FM_CONTEXT_TRANSCRIPT" in
     /*) ;;
-    *) FM_CONTEXT_RECORD_ERROR="recorded transcript path is not absolute"; return 1 ;;
+    *) FM_CONTEXT_RECORD_ERROR_KIND=path-relative; FM_CONTEXT_RECORD_ERROR="recorded transcript path is not absolute"; return 1 ;;
   esac
   if [ ! -f "$FM_CONTEXT_TRANSCRIPT" ]; then
+    FM_CONTEXT_RECORD_ERROR_KIND=transcript-missing
     FM_CONTEXT_RECORD_ERROR="recorded transcript $FM_CONTEXT_TRANSCRIPT does not exist"
     return 1
   fi
   case "$FM_CONTEXT_RECORD_PID" in
-    ''|*[!0-9]*) FM_CONTEXT_RECORD_ERROR="recorded harness pid is not numeric"; return 1 ;;
+    ''|*[!0-9]*) FM_CONTEXT_RECORD_ERROR_KIND=pid-invalid; FM_CONTEXT_RECORD_ERROR="recorded harness pid is not numeric"; return 1 ;;
   esac
-  [ -n "$FM_CONTEXT_SESSION_ID" ] || { FM_CONTEXT_RECORD_ERROR="recorded session id is empty"; return 1; }
+  [ -n "$FM_CONTEXT_SESSION_ID" ] || { FM_CONTEXT_RECORD_ERROR_KIND=session-id-empty; FM_CONTEXT_RECORD_ERROR="recorded session id is empty"; return 1; }
   return 0
 }
 
@@ -340,6 +345,7 @@ FM_CONTEXT_TOKENS=
 FM_CONTEXT_LAST_HUMAN_TS=
 FM_CONTEXT_LAST_HUMAN_UUID=
 FM_CONTEXT_SCAN_ERROR=
+FM_CONTEXT_SCAN_ERROR_KIND=
 FM_CONTEXT_SCAN_TRUNCATED=false
 FM_CONTEXT_SCAN_WIDENED=false
 fm_context_scan() {  # <transcript-path>
@@ -349,14 +355,17 @@ fm_context_scan() {  # <transcript-path>
   # shellcheck disable=SC2034 # Read by callers and tests after fm_context_scan returns.
   FM_CONTEXT_LAST_HUMAN_UUID=
   FM_CONTEXT_SCAN_ERROR=
+  FM_CONTEXT_SCAN_ERROR_KIND=
   FM_CONTEXT_SCAN_TRUNCATED=false
   # shellcheck disable=SC2034 # Read by callers and tests after fm_context_scan returns.
   FM_CONTEXT_SCAN_WIDENED=false
   if ! command -v jq >/dev/null 2>&1; then
+    FM_CONTEXT_SCAN_ERROR_KIND=jq-missing
     FM_CONTEXT_SCAN_ERROR="jq is not installed; the transcript cannot be measured"
     return 1
   fi
   if ! command -v perl >/dev/null 2>&1; then
+    FM_CONTEXT_SCAN_ERROR_KIND=perl-missing
     FM_CONTEXT_SCAN_ERROR="perl is not installed; the transcript cannot be measured"
     return 1
   fi
@@ -364,6 +373,7 @@ fm_context_scan() {  # <transcript-path>
   case "$bytes" in
     ''|*[!0-9]*)
       FM_CONTEXT_SCAN_ERROR="could not size the transcript $transcript"
+      FM_CONTEXT_SCAN_ERROR_KIND=size-failed
       return 1
       ;;
   esac
@@ -378,8 +388,10 @@ fm_context_scan() {  # <transcript-path>
       FM_CONTEXT_TOKENS=
       if [ "$FM_CONTEXT_SCAN_WIDENED" = true ]; then
         FM_CONTEXT_SCAN_ERROR="no token usage record anywhere in $transcript"
+        FM_CONTEXT_SCAN_ERROR_KIND=usage-missing
       else
         FM_CONTEXT_SCAN_ERROR="no token usage record in the last ${FM_CONTEXT_TAIL_BYTES} bytes of $transcript"
+        FM_CONTEXT_SCAN_ERROR_KIND=usage-outside-tail
       fi
       return 1
       ;;
@@ -503,16 +515,20 @@ fm_context_quiet() {  # <state-dir>
 # the hook unwired from `clear`, or the script removed outright. It is one jq
 # read, and the fallback above is the only thing standing behind it.
 FM_CONTEXT_RESTART_ERROR=
+FM_CONTEXT_RESTART_ERROR_KIND=
 fm_context_restart_path_ok() {  # <fm-home> <fm-root>
   local home=$1 root=$2 settings nudge
   FM_CONTEXT_RESTART_ERROR=
+  FM_CONTEXT_RESTART_ERROR_KIND=
   settings="$home/.claude/settings.json"
   nudge="$root/bin/fm-sessionstart-nudge.sh"
   if ! command -v jq >/dev/null 2>&1; then
+    FM_CONTEXT_RESTART_ERROR_KIND=jq-missing
     FM_CONTEXT_RESTART_ERROR="jq is not installed; the re-entry hook cannot be verified"
     return 1
   fi
   if [ ! -f "$settings" ]; then
+    FM_CONTEXT_RESTART_ERROR_KIND=settings-missing
     FM_CONTEXT_RESTART_ERROR="no hook settings at $settings"
     return 1
   fi
@@ -523,10 +539,12 @@ fm_context_restart_path_ok() {  # <fm-home> <fm-root>
         | join(" ")
         | test("fm-sessionstart-nudge\\.sh")
       ' "$settings" >/dev/null 2>&1; then
+    FM_CONTEXT_RESTART_ERROR_KIND=hook-unwired
     FM_CONTEXT_RESTART_ERROR="the session-start hook in $settings no longer runs fm-sessionstart-nudge.sh on a clear"
     return 1
   fi
   if [ ! -x "$nudge" ]; then
+    FM_CONTEXT_RESTART_ERROR_KIND=nudge-unavailable
     FM_CONTEXT_RESTART_ERROR="the session-start hook script $nudge is missing or not executable"
     return 1
   fi
@@ -551,8 +569,12 @@ fm_context_restart_path_ok() {  # <fm-home> <fm-root>
 #   FM_CONTEXT_CEILING_REASON  the same text this prints, empty when there is none
 #   FM_CONTEXT_CEILING_CLASS   the branch identity as a stable token - unenforced,
 #                              blocked, ask, reset - empty when there is no
-#                              reason. This is the throttle key: it is never prose
+#                              reason. This is the display class: it is never prose
 #                              and does not move when a payload is reworded.
+#   FM_CONTEXT_CEILING_CONDITION  the stable semantic condition within that
+#                              display class. This changes when the failed
+#                              predicate or blocker changes and never contains
+#                              mutable message wording.
 #   FM_CONTEXT_CEILING_STATE   which of three outcomes this poll had:
 #     surfaced    a reason is being reported
 #     resolved    the condition is genuinely gone: nothing is running here, or
@@ -579,18 +601,20 @@ fm_context_restart_path_ok() {  # <fm-home> <fm-root>
 #   that difference is spent.
 FM_CONTEXT_CEILING_REASON=
 FM_CONTEXT_CEILING_CLASS=
+FM_CONTEXT_CEILING_CONDITION=
 FM_CONTEXT_CEILING_STATE=
 FM_CONTEXT_CEILING_PROTECTION=
 
-_fm_context_ceiling_surfaced() {  # <class> <reason>
+_fm_context_ceiling_surfaced() {  # <class> <condition> <reason>
   FM_CONTEXT_CEILING_CLASS=$1
-  FM_CONTEXT_CEILING_REASON=$2
+  FM_CONTEXT_CEILING_CONDITION=$2
+  FM_CONTEXT_CEILING_REASON=$3
   FM_CONTEXT_CEILING_STATE=surfaced
   case "$1" in
     unenforced|blocked) FM_CONTEXT_CEILING_PROTECTION=absent ;;
     *) FM_CONTEXT_CEILING_PROTECTION=present ;;
   esac
-  printf '%s' "$2"
+  printf '%s' "$3"
 }
 
 fm_context_ceiling_reason() {  # <state-dir> <fm-home> <fm-root>
@@ -599,6 +623,7 @@ fm_context_ceiling_reason() {  # <state-dir> <fm-home> <fm-root>
   FM_CONTEXT_CEILING_REASON=
   # shellcheck disable=SC2034 # Read by callers after fm_context_ceiling_reason returns.
   FM_CONTEXT_CEILING_CLASS=
+  FM_CONTEXT_CEILING_CONDITION=
   # shellcheck disable=SC2034 # Read by callers after fm_context_ceiling_reason returns.
   FM_CONTEXT_CEILING_PROTECTION=
   FM_CONTEXT_CEILING_STATE=resolved
@@ -607,7 +632,7 @@ fm_context_ceiling_reason() {  # <state-dir> <fm-home> <fm-root>
   if ! fm_context_record_read "$state"; then
     printf -v msg 'check: context-ceiling: a firstmate session is running here but its context cannot be measured (%s); the %s ceiling is unenforced until that is repaired' \
       "$FM_CONTEXT_RECORD_ERROR" "$FM_CONTEXT_CEILING"
-    _fm_context_ceiling_surfaced unenforced "$msg"
+    _fm_context_ceiling_surfaced unenforced "record-${FM_CONTEXT_RECORD_ERROR_KIND:-unknown}" "$msg"
     return 0
   fi
   # The session lock and the transcript record are keyed on the same session
@@ -617,13 +642,13 @@ fm_context_ceiling_reason() {  # <state-dir> <fm-home> <fm-root>
   if [ "$FM_CONTEXT_RECORD_PID" != "$FM_CONTEXT_LOCK_PID" ]; then
     printf -v msg 'check: context-ceiling: the recorded transcript belongs to session process %s but session process %s is the one running here; the %s ceiling is unenforced until this session records its transcript again' \
       "$FM_CONTEXT_RECORD_PID" "$FM_CONTEXT_LOCK_PID" "$FM_CONTEXT_CEILING"
-    _fm_context_ceiling_surfaced unenforced "$msg"
+    _fm_context_ceiling_surfaced unenforced session-mismatch "$msg"
     return 0
   fi
   if ! fm_context_scan "$FM_CONTEXT_TRANSCRIPT"; then
     printf -v msg 'check: context-ceiling: a firstmate session is running here but its context cannot be measured (%s); the %s ceiling is unenforced until that is repaired' \
       "$FM_CONTEXT_SCAN_ERROR" "$FM_CONTEXT_CEILING"
-    _fm_context_ceiling_surfaced unenforced "$msg"
+    _fm_context_ceiling_surfaced unenforced "scan-${FM_CONTEXT_SCAN_ERROR_KIND:-unknown}" "$msg"
     return 0
   fi
   [ "$FM_CONTEXT_TOKENS" -ge "$FM_CONTEXT_CEILING" ] || return 0
@@ -648,16 +673,20 @@ fm_context_ceiling_reason() {  # <state-dir> <fm-home> <fm-root>
   if ! fm_context_restart_path_ok "$home" "$root"; then
     printf -v msg 'check: context-ceiling: %s tokens is over the %s ceiling, but a reset cannot run safely: %s' \
       "$FM_CONTEXT_TOKENS" "$FM_CONTEXT_CEILING" "$FM_CONTEXT_RESTART_ERROR"
-    _fm_context_ceiling_surfaced blocked "$msg"
+    _fm_context_ceiling_surfaced blocked "restart-${FM_CONTEXT_RESTART_ERROR_KIND:-unknown}" "$msg"
     return 0
   fi
   if [ "$branch" = ask ]; then
     printf -v msg 'check: context-ceiling: %s tokens is over the %s ceiling and the fleet is quiet, but %s - ASK the captain before resetting; never reset autonomously during a live conversation' \
       "$FM_CONTEXT_TOKENS" "$FM_CONTEXT_CEILING" "$cause"
-    _fm_context_ceiling_surfaced ask "$msg"
+    if [ -e "$state/.afk" ]; then
+      _fm_context_ceiling_surfaced ask away "$msg"
+    else
+      _fm_context_ceiling_surfaced ask "captain-${FM_CONTEXT_CAPTAIN_PRESENCE:-unknown}" "$msg"
+    fi
     return 0
   fi
   printf -v msg 'check: context-ceiling: %s tokens is over the %s ceiling, the fleet is quiet and the captain is not present - run /stow now, then in the SAME turn run: %s/bin/fm-stow-receipt.sh && %s/bin/fm-context-reset.sh' \
     "$FM_CONTEXT_TOKENS" "$FM_CONTEXT_CEILING" "$root" "$root"
-  _fm_context_ceiling_surfaced reset "$msg"
+  _fm_context_ceiling_surfaced reset ready "$msg"
 }

@@ -956,12 +956,12 @@ test_an_unchanged_absence_updates_its_record_without_another_wake() {
   rm -f "$STATE_DIR/.primary-transcript"
   watch_reason >/dev/null
   since=$(( $(date +%s) - 25200 ))
-  printf 'unenforced %s 1\n' "$since" > "$STATE_DIR/.context-ceiling-absent-since"
+  printf 'unenforced record-missing %s 1\n' "$since" > "$STATE_DIR/.context-ceiling-absent-since"
   touch -t 202001010000 "$STATE_DIR/.context-ceiling-surfaced"
   out=$(watch_reason)
   [ -z "$out" ] || fail "an unchanged absent protection raised a second wake: $out"
   record=$(cat "$STATE_DIR/.context-ceiling-absent-since")
-  [ "$record" = "unenforced $since 2" ] \
+  [ "$record" = "unenforced record-missing $since 2" ] \
     || fail "the quiet absence did not retain its age and advance its observation count: $record"
   pass "an unchanged absence stays quiet while its durable age and observation count advance"
 }
@@ -979,6 +979,20 @@ test_an_absence_record_failure_repeats_the_wake() {
   assert_contains "$out" "cannot be measured" \
     "a failed absence-record update left the unenforced ceiling silent"
   pass "an unenforced ceiling repeats its wake when its durable record cannot be updated"
+}
+
+test_a_changed_failure_in_the_same_class_wakes_immediately() {
+  local out
+  make_case
+  rm -f "$STATE_DIR/.primary-transcript"
+  watch_reason >/dev/null
+  printf 'status=error\nerror=discovery failed\n' > "$STATE_DIR/.primary-transcript"
+
+  out=$(watch_reason)
+
+  assert_contains "$out" "error state" \
+    "a different unenforced failure inherited suppression from the previous failure"
+  pass "a changed semantic failure wakes immediately even when its display class is unchanged"
 }
 
 # The other half of the same rule: nothing about a protection that is WORKING
@@ -1003,19 +1017,19 @@ test_an_unchanged_ask_gains_no_escalation() {
 # from the moment an unmeasurable one started would report an age that never
 # happened, which is the same defect as reporting no age at all.
 test_a_changed_absent_class_restarts_the_clock() {
-  local out record_class record_since record_observations old_since
+  local out record_class record_condition record_since record_observations old_since
   make_case
   rm -f "$STATE_DIR/.primary-transcript"
   watch_reason >/dev/null
   old_since=$(( $(date +%s) - 25200 ))
-  printf 'unenforced %s 4\n' "$old_since" > "$STATE_DIR/.context-ceiling-absent-since"
+  printf 'unenforced record-missing %s 4\n' "$old_since" > "$STATE_DIR/.context-ceiling-absent-since"
   # The transcript comes back and the re-entry hook goes away: measurable again,
   # but the reset it would order cannot run.
   record_ok
   write_settings "$HOME_DIR" 'startup|resume' 'fm-sessionstart-nudge.sh'
   out=$(watch_reason)
   assert_contains "$out" "cannot run safely" "the blocked branch did not report its own condition"
-  read -r record_class record_since record_observations \
+  read -r record_class record_condition record_since record_observations \
     < "$STATE_DIR/.context-ceiling-absent-since"
   [ "$record_class" = blocked ] \
     || fail "the absence record kept the old class after the condition changed: $record_class"
@@ -1616,6 +1630,7 @@ test_watcher_keeps_suppression_while_its_own_wake_is_undrained
 test_a_first_absent_report_carries_only_its_diagnosis
 test_an_unchanged_absence_updates_its_record_without_another_wake
 test_an_absence_record_failure_repeats_the_wake
+test_a_changed_failure_in_the_same_class_wakes_immediately
 test_an_unchanged_ask_gains_no_escalation
 test_a_changed_absent_class_restarts_the_clock
 test_a_resolved_condition_clears_the_absence_clock

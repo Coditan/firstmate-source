@@ -987,26 +987,43 @@ age_of() {  # seconds since file mtime; "due immediately" if missing
 
 # Record every observation of an absent-protection ceiling without raising a
 # second wake for an unchanged condition. state/.context-ceiling-absent-since
-# carries "<class> <first-observed-epoch> <observations>" as content rather than
+# carries "<class> <condition> <first-observed-epoch> <observations>" as content rather than
 # relying on its mtime, because the mtime moves on every rewrite and the whole
 # point of the record is the moment that did NOT move. A change of class restarts
 # it: a ceiling that stopped being unmeasurable and started being unresettable is
 # a different absence, and dating the new one from the old one would overstate it.
-context_absence_observe() {  # <class>
-  local class=$1 file="$STATE/.context-ceiling-absent-since" prev_class since observations now
+context_absence_observe() {  # <class> <condition>
+  local class=$1 condition=$2 file="$STATE/.context-ceiling-absent-since"
+  local prev_class prev_condition since observations now
   now=$(date +%s)
   # The redirect is opened before the 2>/dev/null would take effect, so an absent
   # file is checked for rather than left to print a shell error on every poll.
-  [ -f "$file" ] && { read -r prev_class since observations < "$file" 2>/dev/null || true; }
+  [ -f "$file" ] && { read -r prev_class prev_condition since observations < "$file" 2>/dev/null || true; }
   case "${since:-}${observations:-}" in
-    *[!0-9]*|'') prev_class=; since=; observations= ;;
+    *[!0-9]*|'') prev_class=; prev_condition=; since=; observations= ;;
   esac
-  if [ "${prev_class:-}" != "$class" ] || [ -z "${since:-}" ] || [ -z "${observations:-}" ]; then
+  if [ "${prev_class:-}" != "$class" ] || [ "${prev_condition:-}" != "$condition" ]; then
     since=$now
     observations=0
   fi
   observations=$((observations + 1))
-  printf '%s %s %s\n' "$class" "$since" "$observations" > "$file" 2>/dev/null
+  printf '%s %s %s %s\n' "$class" "$condition" "$since" "$observations" > "$file" 2>/dev/null
+}
+
+context_ceiling_observe() {  # <class> <condition>
+  local class=$1 condition=$2 file="$STATE/.context-ceiling-surfaced"
+  local prev_class prev_condition since observations now
+  now=$(date +%s)
+  [ -f "$file" ] && { read -r prev_class prev_condition since observations < "$file" 2>/dev/null || true; }
+  case "${since:-}${observations:-}" in
+    *[!0-9]*|'') prev_class=; prev_condition=; since=; observations= ;;
+  esac
+  if [ "${prev_class:-}" != "$class" ] || [ "${prev_condition:-}" != "$condition" ]; then
+    since=$now
+    observations=0
+  fi
+  observations=$((observations + 1))
+  printf '%s %s %s %s\n' "$class" "$condition" "$since" "$observations" > "$file" 2>/dev/null
 }
 
 # Print the context-ceiling wake reason when there is one, and nothing on an
@@ -1022,7 +1039,7 @@ context_absence_observe() {  # <class>
 # stays unmeasurable, so re-reporting any of them on the poll cadence would spend
 # a model turn every CONTEXT_CHECK_INTERVAL on news that has not changed - the
 # opposite of what this mechanism exists to do. Suppression is keyed on the
-# published class, so a condition that CHANGES (the captain leaves and the ask
+# published semantic identity, so a condition that CHANGES (the captain leaves and the ask
 # branch becomes the reset branch) surfaces on the very next poll instead of
 # inheriting the previous branch's silence. Only an unchanged, still-true
 # condition stays quiet, and its marker remains durable until the condition
@@ -1041,7 +1058,7 @@ context_absence_observe() {  # <class>
 # If that record cannot be updated, suppression fails open and the wake repeats,
 # because an unenforced ceiling must never become both silent and unrecorded.
 context_ceiling_surface() {
-  local marker previous reason absence_recorded=1
+  local marker previous_class= previous_condition= reason recorded=1 absence_recorded=1
   fm_context_ceiling_reason "$STATE" "$FM_HOME" "$FM_ROOT" >/dev/null || return 0
   marker="$STATE/.context-ceiling-surfaced"
   case "$FM_CONTEXT_CEILING_STATE" in
@@ -1052,21 +1069,27 @@ context_ceiling_surface() {
     surfaced) ;;
     *) return 0 ;;
   esac
-  previous=$(cat "$marker" 2>/dev/null || true)
+  [ -f "$marker" ] \
+    && { read -r previous_class previous_condition _ _ < "$marker" 2>/dev/null || true; }
   if [ "$FM_CONTEXT_CEILING_PROTECTION" = absent ]; then
-    if ! context_absence_observe "$FM_CONTEXT_CEILING_CLASS"; then
+    if ! context_absence_observe "$FM_CONTEXT_CEILING_CLASS" "$FM_CONTEXT_CEILING_CONDITION"; then
       absence_recorded=0
       triage_log "could not update the standing context-ceiling absence record"
     fi
   else
     rm -f "$STATE/.context-ceiling-absent-since" 2>/dev/null || true
   fi
-  if [ "$previous" = "$FM_CONTEXT_CEILING_CLASS" ] && [ "$absence_recorded" -eq 1 ]; then
+  if ! context_ceiling_observe "$FM_CONTEXT_CEILING_CLASS" "$FM_CONTEXT_CEILING_CONDITION"; then
+    recorded=0
+    triage_log "could not update the standing context-ceiling record"
+  fi
+  if [ "$previous_class" = "$FM_CONTEXT_CEILING_CLASS" ] \
+    && [ "$previous_condition" = "$FM_CONTEXT_CEILING_CONDITION" ] \
+    && [ "$absence_recorded" -eq 1 ] && [ "$recorded" -eq 1 ]; then
     triage_log "absorbed context-ceiling $FM_CONTEXT_CEILING_CLASS (unchanged since it was last reported)"
     return 0
   fi
   reason=$FM_CONTEXT_CEILING_REASON
-  printf '%s\n' "$FM_CONTEXT_CEILING_CLASS" > "$marker" 2>/dev/null || true
   printf '%s' "$reason"
 }
 
