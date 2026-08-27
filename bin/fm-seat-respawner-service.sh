@@ -152,16 +152,23 @@ recorded_respawner_field() {  # <key>
 # actually got.  Without this comparison the tier would never reconverge: a home
 # would keep running the bytes it started with after every self-update, silently
 # and indefinitely, which on a container with no systemd is every home.
-# Mirrors watcher_record_matches in bin/fm-watcher-service.sh, including the
-# PATH comparison being made for the keeper only - the systemd tier's copy lives
-# in the service environment file service_env_matches already compares.
-respawner_record_matches() {  # <manager>
-  local manager=$1 expected_version expected_path
+# Mirrors watcher_record_matches in bin/fm-watcher-service.sh.
+#
+# The recorded service PATH has ONE converging owner, and it is the session, not
+# the watcher-hosted check.  fm_service_path resolves tools with the CALLER's
+# PATH by design, so two managers running in different environments would each
+# read the other's recorded value as drift and stop-and-start the keeper on every
+# sweep and every session start.  Manager and source version are composed
+# identically wherever they are asked, so both tiers may compare those; only the
+# environment-dependent field is asked by the session alone, which is also the
+# only place a poorly-reaching PATH can be diagnosed and repaired.
+respawner_record_matches() {  # <manager> [compare-service-path]
+  local manager=$1 compare_path=${2:-0} expected_version expected_path
   expected_version=$(source_version) || return 1
   [ "$(recorded_respawner_field manager)" = "$manager" ] \
     && [ "$(recorded_respawner_field source-version)" = "$expected_version" ] \
     || return 1
-  [ "$manager" = keeper ] || return 0
+  [ "$manager" = keeper ] && [ "$compare_path" = 1 ] || return 0
   expected_path=$(fm_service_path) || return 1
   [ "$(recorded_respawner_field service-path)" = "$expected_path" ]
 }
@@ -206,7 +213,7 @@ ensure_keeper() {
   local name
   name=$(keeper_name) || return 1
   if "$TMUX_CMD" has-session -t "$name" 2>/dev/null && healthy_respawner \
-    && respawner_record_matches keeper; then
+    && respawner_record_matches keeper 1; then
     return 0
   fi
   stop_keeper || return 1
