@@ -328,6 +328,13 @@ test_a_live_first_mate_is_never_relaunched() {
     || fail "a home with a live first mate kept an active retry episode"
   assert_grep "launch refused" "$home/state/.seat-respawner.log" \
     "refusing to relaunch beside a live first mate was not operator-visible"
+  # The pending turn was never typed, so the seat holding this home is another
+  # one and the pane the record named is still open. The log an investigator
+  # reads afterwards must say that rather than claim a turn landed.
+  assert_grep "was never given its turn and is still open" "$home/state/.seat-respawner.log" \
+    "a pane left open with no turn was not reported"
+  assert_no_grep "first turn landed" "$home/state/.seat-respawner.log" \
+    "a turn that was never typed was logged as landed"
   pass "seat respawner never launches beside a first mate that holds this home"
 }
 
