@@ -306,16 +306,27 @@ test_a_recovery_the_channel_never_took_stays_out_of_the_record() {
   assert_grep "verdict=present" "$home/state/seat-alarm.state" \
     "the alarm recorded an absence while a live first mate held this home's lock"
 
+  # Once the retry window is out, the owed recovery is abandoned - and the live
+  # seat is told, because the captain is left believing this vessel has nobody
+  # and cannot learn otherwise from the channel that refused the message.
+  line=$(run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 600 + 1800))")
+  assert_contains "$line" "could not be delivered" \
+    "an abandoned recovery told the seat holding this home nothing"
+  assert_contains "$line" "may still believe" \
+    "the abandoned recovery did not say what the captain is left believing"
+  line=$(run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 600 + 2100))")
+  [ -z "$line" ] || fail "an abandoned recovery was announced more than once: $line"
+
   # The seat dies again. The new absence is its own, and must be measured from
   # its own start rather than from the episode whose recovery never landed.
   kill "$pid" 2>/dev/null || true
   record_seat "$home" 999999
   write_recording_send "$home"
-  run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 2400))" >/dev/null
-  run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 2400 + 1800))" >/dev/null
+  run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 3000))" >/dev/null
+  run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 3000 + 1800))" >/dev/null
   assert_grep "no first mate for 30m" "$home/outbox" \
     "the second absence was not measured from its own start"
-  assert_no_grep "no first mate for 40m" "$home/outbox" \
+  assert_no_grep "no first mate for 50m" "$home/outbox" \
     "the captain was given the earlier episode's clock for a later absence"
   pass "a recovery the channel never took stays out of the record"
 }
