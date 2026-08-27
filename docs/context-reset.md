@@ -228,6 +228,12 @@ A silent non-fire is the defect class this whole line of work exists to remove, 
 - **The way back in is broken.** If `clear` ever leaves the `SessionStart` matcher, or the nudge script goes missing, the wake reports the blocker instead of ordering a reset, and the reset tool refuses. That check proves the hook is still wired and its script is still there; what carries the fresh session's rebuild instruction after a self-clear is `AGENTS.md` section 3, for the reason in "the way back in, precisely" below.
 - **A reset is attempted and refused.** Every refusal prints its concrete reason and appends one line to `state/.context-reset.log`.
 
+### What firstmate repairs, and what it must not
+
+Only a missing or unreadable `state/.primary-transcript` record, or one whose recorded session pid differs from the lock pid, has no in-session repair: `bin/fm-sessionstart-nudge.sh` re-records it only on a fresh primary session start, so never hand-write that record.
+A blocked wake means the re-entry hook or its `.claude/settings.json` needs repair, and both are the firstmate repo's shared tracked material: fix them through the `AGENTS.md` section 1 pipeline and PR path, delegating to a worker while the fleet is live, never by editing them in place.
+Either condition is reported to the captain in `AGENTS.md` section 9 language.
+
 ### An absent protection is not routine traffic
 
 The wake above is only half of the job, and the other half was measured failing twice in different ways.

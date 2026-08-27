@@ -15,6 +15,9 @@ HARNESS="$ROOT/.agents/skills/harness-adapters/SKILL.md"
 CODING="$ROOT/.agents/skills/firstmate-coding-guidelines/SKILL.md"
 RECOVERY="$ROOT/.agents/skills/stuck-crewmate-recovery/SKILL.md"
 SECONDMATE="$ROOT/.agents/skills/secondmate-provisioning/SKILL.md"
+CREWDISPATCH="$ROOT/.agents/skills/crew-dispatch/SKILL.md"
+TASKLANDING="$ROOT/.agents/skills/task-landing/SKILL.md"
+CAPTAINSURFACES="$ROOT/.agents/skills/captain-surfaces/SKILL.md"
 CONFIG="$ROOT/docs/configuration.md"
 AGENTS="$ROOT/AGENTS.md"
 BRIEF="$ROOT/bin/fm-brief.sh"
@@ -39,6 +42,15 @@ test_new_skill_metadata_and_triggers() {
     'ask-user-authority' "$ASKUSER"
     'Use before deciding any ask-user finding, regardless of the project'"'"'s yolo posture, to distinguish corrections within accepted intent from product or engineering contract expansion that requires the captain.'
     '`ask-user-authority` - load before deciding any ask-user finding, regardless of the project'"'"'s `yolo` posture.'
+    'crew-dispatch' "$CREWDISPATCH"
+    'Use before spawning a crewmate or scout, before steering one, and whenever a no-mistakes validation run on a live worker needs triggering, reading, or answering.'
+    '`crew-dispatch` - load at the dispatch, steering, and validation trigger section 7 names.'
+    'task-landing' "$TASKLANDING"
+    'Use when a worker reports a PR or a clean ready branch, before recording or landing one, after relaying a terminal task outcome, before tearing a finished task down, when a scout'"'"'s report arrives, and before promoting a scout to implementation.'
+    '`task-landing` - load at the PR, landing, cleanup, and scout-outcome trigger section 7 names.'
+    'captain-surfaces' "$CAPTAINSURFACES"
+    'Use before building or opening a review board, a decision board, or a sea chart, before sending him anything while he is out of session, and before producing a PDF deliverable.'
+    '`captain-surfaces` - load at the surface trigger section 9 names, before anything reaches the captain other than plain chat.'
   )
   for ((i = 0; i < ${#owners[@]}; i += 4)); do
     name=${owners[i]}

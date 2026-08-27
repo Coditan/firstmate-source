@@ -80,7 +80,7 @@ The seam waits for it, so bounding the wire is the sender's own job, the way the
 A guard here would have to be a timeout, and a timeout short enough to be useful is also short enough to cut off a slow but genuine delivery and then report a message as unsent that the captain is reading.
 Naming it is worth more than half-solving it.
 
-**The caller's half of this is not discarding that exit status**, which is why the script's header says so and `AGENTS.md` section 9 repeats it at the point of use.
+**The caller's half of this is not discarding that exit status**, which is why the script's header says so and the `captain-surfaces` skill repeats it at the point of use.
 A path that can fail quietly gets trusted while it is dead.
 That is not a hypothetical: on 2026-08-11 this fleet had a monitoring hookup report healthy against a process that no longer existed, and the session went blind while every surface said it was fine.
 Adding a second instance of that shape, in the channel that exists to carry the things that matter most, would be the worst possible place to add it.
