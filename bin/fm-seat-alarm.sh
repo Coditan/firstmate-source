@@ -92,7 +92,12 @@
 # miniature. The repeat is deliberately slow (30 minutes by default) and it is
 # deliberately UNCAPPED: a cap would make an alarm that goes quiet exactly when
 # the outage is longest, which is the same defect as an alarm that goes quiet
-# when it cannot see. Recovery sends once and stops.
+# when it cannot see.
+#
+# Recovery is announced ONCE. A recovery send the channel refuses is then OWED
+# rather than repeated: the verdict stays what the reading established, the
+# message is retried from a record of its own, and it is abandoned out loud in
+# the log once it has gone undelivered for one repeat interval.
 #
 # WHAT IT DOES NOT DO
 # It restarts nothing, repairs nothing, and kills nothing. There is no mechanism
@@ -128,9 +133,11 @@
 #                      long after the volatile record of the moment is gone.
 #
 # State, under FM_HOME/state:
-#   seat-alarm.state   the last state this alarm decided, when it decided it, and
-#                      when it last notified, so a transition can be told from a
-#                      continuation and the repeat cadence survives a restart
+#   seat-alarm.state   the last state this alarm decided, when it decided it,
+#                      when it last notified, and any recovery message the
+#                      channel refused - so a transition can be told from a
+#                      continuation, the repeat cadence survives a restart, and
+#                      an owed recovery is retried without rewriting the verdict
 #   seat-alarm.check.sh  the armed watcher check (with .check-trust)
 #
 # Environment:
@@ -314,27 +321,50 @@ log_line() {  # <text>
   printf '%s %s\n' "$(iso "$NOW")" "$1" >> "$LOG" 2>/dev/null || true
 }
 
+# The recovery-* fields carry a recovery message that was composed and refused
+# by the channel: which verdict it recovers FROM, the away duration measured
+# from the ORIGINAL episode, and when it was first owed. They sit BESIDE the
+# verdict rather than rewriting it, so `verdict` keeps saying what the last
+# reading established and the next absence still measures itself from its own
+# start. A record written before these fields existed simply owes nothing.
 PREV_VERDICT=
 PREV_SINCE=
 PREV_NOTIFIED=
+PREV_RECOVERY_FROM=
+PREV_RECOVERY_AWAY=
+PREV_RECOVERY_AT=
 read_state() {
   local line
   PREV_VERDICT=
   PREV_SINCE=
   PREV_NOTIFIED=
+  PREV_RECOVERY_FROM=
+  PREV_RECOVERY_AWAY=
+  PREV_RECOVERY_AT=
   [ -f "$STATE_FILE" ] && [ ! -L "$STATE_FILE" ] || return 0
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       verdict=*) PREV_VERDICT=${line#verdict=} ;;
       since=*) PREV_SINCE=${line#since=} ;;
       notified=*) PREV_NOTIFIED=${line#notified=} ;;
+      recovery-from=*) PREV_RECOVERY_FROM=${line#recovery-from=} ;;
+      recovery-away=*) PREV_RECOVERY_AWAY=${line#recovery-away=} ;;
+      recovery-at=*) PREV_RECOVERY_AT=${line#recovery-at=} ;;
     esac
   done < "$STATE_FILE"
   case "$PREV_SINCE" in *[!0-9]*|'') PREV_SINCE= ;; esac
   case "$PREV_NOTIFIED" in *[!0-9]*|'') PREV_NOTIFIED= ;; esac
+  case "$PREV_RECOVERY_AWAY" in *[!0-9]*|'') PREV_RECOVERY_AWAY= ;; esac
+  case "$PREV_RECOVERY_AT" in *[!0-9]*|'') PREV_RECOVERY_AT= ;; esac
+  case "$PREV_RECOVERY_FROM" in absent|unmeasured) ;; *) PREV_RECOVERY_FROM= ;; esac
+  if [ -z "$PREV_RECOVERY_AWAY" ] || [ -z "$PREV_RECOVERY_AT" ]; then
+    PREV_RECOVERY_FROM=
+    PREV_RECOVERY_AWAY=
+    PREV_RECOVERY_AT=
+  fi
 }
 
-write_state() {  # <verdict> <since> <notified>
+write_state() {  # <verdict> <since> <notified> <recovery-from> <recovery-away> <recovery-at>
   local tmp
   mkdir -p "$STATE" || return 1
   tmp=$(mktemp "$STATE/.fm-seat-alarm-state.XXXXXX") || return 1
@@ -342,6 +372,9 @@ write_state() {  # <verdict> <since> <notified>
     printf 'verdict=%s\n' "$1"
     printf 'since=%s\n' "$2"
     printf 'notified=%s\n' "$3"
+    printf 'recovery-from=%s\n' "${4:-}"
+    printf 'recovery-away=%s\n' "${5:-}"
+    printf 'recovery-at=%s\n' "${6:-}"
   } > "$tmp" || { rm -f -- "$tmp"; return 1; }
   mv -f -- "$tmp" "$STATE_FILE" || { rm -f -- "$tmp"; return 1; }
 }
@@ -400,12 +433,14 @@ compose_message() {  # <verdict> <duration-seconds>
       printf '%s\n' "$(repeat_clause)"
       ;;
     present)
-      # Keyed on the verdict this recovers FROM, exactly as recovery_line is.
+      # Keyed on the verdict this recovers FROM - published by whichever path is
+      # sending, the transition or a retry of a send that was refused, so a
+      # late delivery still describes the episode it belongs to.
       # An unmeasured reading established no absence, so a recovery from one
       # must not name a length of time the vessel had no first mate: that would
       # report a confirmed state on the very channel this alarm exists to be
       # trusted on.
-      case "${PREV_VERDICT:-}" in
+      case "${RECOVERY_FROM:-}" in
         unmeasured)
           printf 'Captain, this vessel can see a first mate again after %s of not being able to tell.\n' "$(human_duration "$age")"
           ;;
@@ -464,6 +499,31 @@ notify() {  # <verdict> <duration-seconds>
   fi
   log_line "send-failed verdict=$1 rc=$rc detail=$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
   return 1
+}
+
+# A recovery the channel refused, retried from its own record. The away
+# duration and the verdict it recovers from come from that record, so a late
+# delivery still describes the original episode rather than the time since.
+# Bounded by the repeat cadence - the same window an absence would have used to
+# tell him again - so a channel that stays broken stops owing this and says so,
+# rather than carrying a message nobody can be sent forever.
+retry_owed_recovery() {
+  local owed_for
+  [ -n "$PREV_RECOVERY_AWAY" ] || return 0
+  owed_for=$((NOW - PREV_RECOVERY_AT))
+  [ "$owed_for" -ge 0 ] || owed_for=0
+  if [ "$REPEAT" -le 0 ] || [ "$owed_for" -ge "$REPEAT" ]; then
+    log_line "recovery-abandoned away=$PREV_RECOVERY_AWAY owed-for=$owed_for"
+    return 0
+  fi
+  RECOVERY_FROM=$PREV_RECOVERY_FROM
+  if notify present "$PREV_RECOVERY_AWAY"; then
+    log_line "recovery-sent-late away=$PREV_RECOVERY_AWAY owed-for=$owed_for"
+    RECOVERY_FROM=
+    return 0
+  fi
+  RECOVERY_AWAY=$PREV_RECOVERY_AWAY
+  RECOVERY_AT=$PREV_RECOVERY_AT
 }
 
 # --- modes ------------------------------------------------------------------
@@ -559,6 +619,9 @@ evaluate
 
 SINCE=$NOW
 NOTIFIED=
+RECOVERY_FROM=
+RECOVERY_AWAY=
+RECOVERY_AT=
 if [ "$VERDICT" = "$PREV_VERDICT" ]; then
   SINCE=${PREV_SINCE:-$NOW}
   NOTIFIED=$PREV_NOTIFIED
@@ -568,6 +631,11 @@ AGE=$((NOW - SINCE))
 
 case "$VERDICT" in
   absent|unmeasured)
+    # A recovery still owed from an earlier episode is stale news now: what the
+    # captain needs is this absence, which the branch below reports with its own
+    # duration. Dropped in the log rather than silently.
+    [ -z "$PREV_RECOVERY_AWAY" ] \
+      || log_line "recovery-dropped away=$PREV_RECOVERY_AWAY reason=absent-again"
     # The grace exists so an ordinary restart between two sweeps does not page
     # him. What it costs is measured rather than nominal: SINCE is reset on the
     # verdict TRANSITION, so AGE is 0 on the sweep that first observes the
@@ -606,28 +674,36 @@ case "$VERDICT" in
   present)
     case "$PREV_VERDICT" in
       absent|unmeasured)
-        log_line "recovered from=$PREV_VERDICT away=$((NOW - ${PREV_SINCE:-$NOW})) depth=${QUEUE_DEPTH:-unreadable}"
+        AWAY=$((NOW - ${PREV_SINCE:-$NOW}))
+        [ "$AWAY" -ge 0 ] || AWAY=0
+        log_line "recovered from=$PREV_VERDICT away=$AWAY depth=${QUEUE_DEPTH:-unreadable}"
         # Told he lost it, so tell him it is back; never announce a recovery
         # from an absence he was never told about.
         #
-        # A failed send here is NOT recorded as a recovery, for the reason
-        # notify's own header gives: the repeats stopped when the condition
-        # ended, so a recovery message nobody got would leave the captain
-        # holding the last thing he was told - that this vessel has no first
-        # mate - with nothing ever correcting it. The state is left as it stands
-        # instead, so the next sweep reads the same transition and tries again.
-        if [ -n "$PREV_NOTIFIED" ] && ! notify present "$((NOW - ${PREV_SINCE:-$NOW}))"; then
-          RECOVERY_UNSENT=1
+        # A send the channel refuses is OWED, not repeated and not un-read: the
+        # verdict this sweep established is `present` - a live harness holds the
+        # lock - and that is what gets persisted. Rewinding the record to the
+        # absence instead would assert an absence that has demonstrably ended,
+        # and would then measure the NEXT absence from the wrong episode's start.
+        RECOVERY_FROM=$PREV_VERDICT
+        if [ -n "$PREV_NOTIFIED" ] && ! notify present "$AWAY"; then
+          RECOVERY_AWAY=$AWAY
+          RECOVERY_AT=$NOW
+          log_line "recovery-owed from=$PREV_VERDICT away=$AWAY"
+        else
+          RECOVERY_FROM=
         fi
-        recovery_line "$PREV_VERDICT" "$((NOW - ${PREV_SINCE:-$NOW}))"
+        # Once per episode, exactly as the absence branch's transition line is:
+        # the verdict advances here, so this is the only sweep that reaches this
+        # line however long the send goes on being refused.
+        recovery_line "$PREV_VERDICT" "$AWAY"
+        ;;
+      *)
+        retry_owed_recovery
         ;;
     esac
     ;;
 esac
 
-if [ "${RECOVERY_UNSENT:-0}" = 1 ]; then
-  write_state "$PREV_VERDICT" "${PREV_SINCE:-$NOW}" "$PREV_NOTIFIED" || true
-else
-  write_state "$VERDICT" "$SINCE" "$NOTIFIED" || true
-fi
+write_state "$VERDICT" "$SINCE" "$NOTIFIED" "$RECOVERY_FROM" "$RECOVERY_AWAY" "$RECOVERY_AT" || true
 exit 0
