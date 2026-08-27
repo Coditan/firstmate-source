@@ -170,6 +170,13 @@ test_an_unmeasured_reading_is_not_printed_as_a_confirmed_absence() {
     "recovering from an unmeasured reading claimed an absence that was never established"
   assert_contains "$line" "could not tell" \
     "recovering from an unmeasured reading did not say what it had been unable to read"
+  # The outward channel, which is the deliverable itself. The printed line is
+  # read by the seat that comes back; this is the one the captain gets, and it
+  # is the one a test that only reads stdout cannot protect.
+  assert_no_grep "without one" "$home/outbox" \
+    "the captain was told of an absence the reading explicitly refused to establish"
+  assert_grep "of not being able to tell" "$home/outbox" \
+    "the outward recovery message did not say what the vessel had been unable to read"
   pass "an unmeasured reading is never printed as a confirmed absence"
 }
 

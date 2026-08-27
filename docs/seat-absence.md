@@ -111,8 +111,11 @@ The arrangement that ships instead is a pair rather than a chain:
 
 - `bin/fm-seat-respawner-service.sh --arm` installs a watcher check that converges the respawner's keeper tier **on every watcher sweep**.
   The watcher outlives the seat - it is the component that stayed alive through the outage - so the seat is no longer anywhere in the restart path.
-  Converging compares the running respawner's own lock record - its manager, its source version, and the service `PATH` it was handed - against what this home would start now, exactly as `bin/fm-watcher-service.sh` compares the watcher's, so a keeper left on pre-update bytes is restarted and said out loud rather than counted as healthy because something is alive.
+  Converging compares the running respawner's own lock record against what this home would start now, so a keeper left on pre-update bytes is restarted and said out loud rather than counted as healthy because something is alive.
   On a home with no systemd that is the only way a self-update reaches the restarter at all.
+  The comparison is split by owner, and deliberately: the watcher-hosted check compares the recorded manager and source version, which are composed identically wherever they are asked, while the recorded service `PATH` is compared only by the session-side `ensure_keeper`.
+  That field is composed from the asking process's own `PATH` by design (`bin/fm-service-path-lib.sh`), so two managers running in different environments would each read the other's recorded value as drift and stop-and-start the keeper on every sweep and every session start.
+  One owner for it, and it is the session - which is also the only place a poorly-reaching `PATH` can be diagnosed and repaired.
 - `bin/fm-seat-respawner.sh` revives a **provably dead** watcher in return, through `fm_watcher_healthy`, this fleet's one owner of that question.
   It is deliberately narrow: never on a recorded-version or recorded-PATH mismatch, which are convergence decisions belonging to a session holding the fleet lock, and rate-limited so a watcher that cannot start is retried rather than hammered.
 
