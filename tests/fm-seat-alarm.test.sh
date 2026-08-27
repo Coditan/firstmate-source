@@ -146,6 +146,33 @@ test_an_unreadable_record_is_reported_and_never_read_as_healthy() {
   pass "a reading that could not be taken is never reported as healthy"
 }
 
+# The same constraint, in the words the vessel prints rather than the verdict it
+# records: a reading that could not be taken must not be reported as a state it
+# never established. The outward message already keeps the two apart.
+test_an_unmeasured_reading_is_not_printed_as_a_confirmed_absence() {
+  local home line pid
+  home=$(make_home unmeasured-wording)
+  record_endpoint "$home"
+  printf 'x\n' > "$home/state/.lock"
+  chmod 000 "$home/state/.lock"
+  line=$(run_alarm "$home")
+  chmod 600 "$home/state/.lock"
+  assert_not_contains "$line" "has had no first mate" \
+    "an unmeasured reading was printed as a confirmed absence"
+  assert_contains "$line" "has not been able to tell" \
+    "an unmeasured reading did not say that is what it was"
+
+  pid=$(start_harness_shaped_process "$home" claude)
+  record_seat "$home" "$pid"
+  line=$(run_alarm "$home")
+  kill "$pid" 2>/dev/null || true
+  assert_not_contains "$line" "without a first mate" \
+    "recovering from an unmeasured reading claimed an absence that was never established"
+  assert_contains "$line" "could not tell" \
+    "recovering from an unmeasured reading did not say what it had been unable to read"
+  pass "an unmeasured reading is never printed as a confirmed absence"
+}
+
 test_it_speaks_on_change_then_repeats_on_its_own_cadence() {
   local home now
   home=$(make_home cadence)
@@ -204,6 +231,7 @@ test_a_live_crewmate_does_not_make_an_absent_seat_read_present
 test_a_declared_stand_down_is_not_an_alarm
 test_a_home_that_never_seated_is_not_an_alarm
 test_an_unreadable_record_is_reported_and_never_read_as_healthy
+test_an_unmeasured_reading_is_not_printed_as_a_confirmed_absence
 test_it_speaks_on_change_then_repeats_on_its_own_cadence
 test_recovery_is_reported_only_to_someone_who_was_told
 test_a_failed_send_is_retried_rather_than_counted

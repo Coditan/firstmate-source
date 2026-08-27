@@ -14,8 +14,13 @@ Read it before changing anything here: this component restarts a seat and delibe
 
 The respawner does not probe panes itself.
 It reads `bin/fm-delivery-service.sh status`, whose verdicts are owned by [wake-delivery.md](wake-delivery.md).
-Only an `undeliverable:` verdict is a relaunch condition.
-That keeps the reachability reading in the existing delivery component instead of creating a second source of truth.
+An `undeliverable:` verdict is what opens a relaunch, which keeps the reachability reading in the existing delivery component instead of creating a second source of truth for it.
+
+**Revised on new evidence: an `undeliverable:` verdict is no longer sufficient on its own.**
+A seat that is merely mid-turn produces exactly that verdict - the delivery listener's own busy-pane branch blocks the submit and `fm_delivery_report` therefore prints `undeliverable:` - so relaunching on that verdict alone opened a second agent window beside a first mate that was working, once per retry attempt.
+The respawner now also asks whether this home's session lock names a live harness, and refuses to launch, clearing the retry episode, when it does.
+That is a PRESENCE reading and not a reachability one: it is the same session lock `bin/fm-seat-alarm.sh` reads, through the same owner in `bin/fm-harness-pid-lib.sh`.
+So the rationale above survives unchanged - there is still exactly one owner of "can the seat be reached" and exactly one of "is a seat here" - and only the sentence about sufficiency moved.
 
 Deliberate shutdown is declared, not inferred.
 `bin/fm-seat-stay-down.sh down` writes `state/.seat-stay-down`, and `bin/fm-seat-stay-down.sh up` clears it.
