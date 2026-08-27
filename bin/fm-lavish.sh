@@ -228,29 +228,60 @@ if ! IDENTITY=$("$SCRIPT_DIR/fm-service-port.sh" lavish --check 2>&1); then
 fi
 
 ADDR=""; TAILADDR=""; DNSNAME=""; MACHINE=""; SEAT=""; WINDOW=""; REACHABILITY=""; REASON=""
-while IFS='=' read -r key value; do
-  case "$key" in
-    addr) ADDR=$value ;;
-    tailaddr) TAILADDR=$value ;;
-    dnsname) DNSNAME=$value ;;
-    machine) MACHINE=$value ;;
-    seat) SEAT=$value ;;
-    window) WINDOW=$value ;;
-    reachability) REACHABILITY=$value ;;
-    reason) REASON=$value ;;
-  esac
-done <<EOF
-$IDENTITY
-EOF
 
-[ -n "$ADDR" ] && [ -n "$SEAT" ] || die "the address resolver returned no usable address" 4
+# Read once here from the --check pre-read, and AGAIN from the allocation
+# itself. The two can genuinely differ: --check cannot know whether publishing a
+# proxy will succeed, because there is no port to publish yet, and a resolution
+# that degrades at that moment must not leave this wrapper holding the link host
+# and the message the pre-read implied.
+read_identity() {
+  while IFS='=' read -r key value; do
+    case "$key" in
+      addr) ADDR=$value ;;
+      tailaddr) TAILADDR=$value ;;
+      dnsname) DNSNAME=$value ;;
+      machine) MACHINE=$value ;;
+      seat) SEAT=$value ;;
+      window) WINDOW=$value ;;
+      reachability) REACHABILITY=$value ;;
+      reason) REASON=$value ;;
+    esac
+  done <<EOF
+$1
+EOF
+}
 
 # ADDR is the address to BIND, which is not always the address to LINK. On a
 # node whose tailnet address cannot be bound the port is bound on loopback and
 # published onto that address, so the link still has to name the tailnet - the
 # proxy is where the board genuinely answers, and 127.0.0.1 is exactly the link
-# this wrapper exists to stop being handed over.
-LINK_HOST=${DNSNAME:-${TAILADDR:-$ADDR}}
+# this wrapper exists to stop being handed over. When no proxy could be
+# published, though, the tailnet names nothing that answers, and falling back to
+# loopback is the honest link even though it opens only here.
+resolve_link_identity() {
+  LINK_HOST=${DNSNAME:-${TAILADDR:-$ADDR}}
+  case "$REACHABILITY" in
+    tailnet|tailnet-proxied) ;;
+    *) LINK_HOST=$ADDR ;;
+  esac
+  # The Host header a browser sends through the published proxy carries the
+  # tailnet NAME, measured rather than reasoned about
+  # (bin/fm-tailnet-serve-lib.sh records that measurement), so both the name and
+  # the tailnet address belong in the allowlist whenever the tailnet identity is
+  # what the link names. The allowlist is compared on hostname alone, so the
+  # port the proxy adds is not part of the question.
+  ALLOWED="$LINK_HOST $ADDR $CLAIM_TOKEN"
+  case "$REACHABILITY" in
+    tailnet|tailnet-proxied)
+      [ -z "$TAILADDR" ] || [ "$TAILADDR" = "$ADDR" ] || ALLOWED="$TAILADDR $ALLOWED"
+      [ -z "$MACHINE" ] || ALLOWED="$MACHINE $ALLOWED"
+      ;;
+  esac
+}
+
+read_identity "$IDENTITY"
+
+[ -n "$ADDR" ] && [ -n "$SEAT" ] || die "the address resolver returned no usable address" 4
 
 # --- claim token ------------------------------------------------------------
 
@@ -266,17 +297,7 @@ if [ -z "${CLAIM_TOKEN:-}" ]; then
     || die "cannot write this home's board claim token" 4
 fi
 
-# The Host header a browser sends through the published proxy carries the
-# tailnet NAME, measured rather than reasoned about (bin/fm-tailnet-serve-lib.sh
-# records that measurement), so both the name and the tailnet address belong in
-# the allowlist whenever the tailnet identity is what the link names. The
-# allowlist is compared on hostname alone, so the port the proxy adds is not
-# part of the question.
-ALLOWED="$LINK_HOST $ADDR $CLAIM_TOKEN"
-[ -z "$TAILADDR" ] || [ "$TAILADDR" = "$ADDR" ] || ALLOWED="$TAILADDR $ALLOWED"
-case "$REACHABILITY" in
-  tailnet|tailnet-proxied) [ -z "$MACHINE" ] || ALLOWED="$MACHINE $ALLOWED" ;;
-esac
+resolve_link_identity
 
 # --- is the server on our recorded port actually ours ------------------------
 #
@@ -386,6 +407,13 @@ if [ "$NEEDS_PORT" -eq 1 ]; then
   fi
   PORT=$(printf '%s\n' "$RECORD" | sed -n 's/^port=\([0-9][0-9]*\)$/\1/p' | head -1)
   [ -n "$PORT" ] || die "the port allocator returned no port" 5
+  # The allocation is the authoritative resolution, not the pre-read: publishing
+  # a proxy can only be attempted once a port exists, so this is the first point
+  # at which a vessel that cannot publish one is known to be loopback-only. Left
+  # unread, this wrapper would hand over a tailnet link that answers nothing,
+  # which is the one thing it exists to prevent.
+  read_identity "$RECORD"
+  resolve_link_identity
   if [ -n "$RELOCATE_FROM" ]; then
     note "moving this vessel's boards from port $RELOCATE_FROM to $PORT; links already handed over on the old port stop working"
     stop_server "$RELOCATE_FROM"

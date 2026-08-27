@@ -940,6 +940,24 @@ assert_contains "$(cat "$FM_TEST_TS_SERVE_LOG")" "--http=$u_port off" \
   "the withdrawal names the port it published"
 pass "stopping a proxied board takes its tailnet endpoint down with it"
 
+# The promise was never "bind this address". It was "never hand him a link that
+# opens nowhere", so the branch with no proxy at all has to keep saying so.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_N=$(make_home "$TMP_ROOT/vessel-n")
+make_serving_lavish "$HOME_N"
+out=$(FM_TEST_TS_MODE=userspace FM_TEST_TS_SERVE=broken FM_HOME="$HOME_N" \
+  FM_SERVICE_PORT_RANGE=4801-4804 "$ROOT/bin/fm-lavish.sh" "$HOME_N/.lavish/board.html" 2>&1)
+assert_contains "$out" "this board opens only on this machine" \
+  "with no proxy to publish, the vessel must still say the link goes nowhere else"
+assert_contains "$out" "EADDRNOTAVAIL" "and must still name why"
+assert_not_contains "$out" "192.0.2.1:" \
+  "a tailnet link must never be emitted when nothing answers on the tailnet"
+n_owner="$HOME_N/state/lavish/fm-owner"
+assert_grep "link_host=127.0.0.1" "$n_owner" \
+  "the link falls back to loopback rather than naming an address nothing serves"
+pass "a vessel with an unbindable address and no proxy is told its board opens only here"
+
 # --- entry point: an explicit --port earns no shortcut -----------------------
 #
 # lavish-axi's own stop shuts down whatever answers /health on the address it is
