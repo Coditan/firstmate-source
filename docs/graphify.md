@@ -13,9 +13,4 @@ Treat it as current only when `graphify-out/graph.json` records `built_at_commit
 When a current graph exists, prefer `graphify query "<question>"` for codebase questions, `graphify path "<A>" "<B>"` for relationships, and `graphify explain "<concept>"` for focused concepts.
 Use `graphify-out/wiki/index.md` for broad navigation when it exists, and read `graphify-out/GRAPH_REPORT.md` only for architecture review or when query, path, and explain do not surface enough context.
 
-## Who may rebuild a graph
-
-Firstmate may read project graphs but must not run `graphify update .` inside `projects/`.
-A crewmate may run `graphify update .` only inside its own isolated task worktree, as part of a change it is already authorized to make there.
-
 On `/graphify`, use these rules directly; no graphify skill is installed here.

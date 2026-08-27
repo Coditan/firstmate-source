@@ -446,6 +446,7 @@ Firstmate's shared instruction surface reaches running homes only after it lands
 Only `AGENTS.md`, `bin/`, `roles/`, and `.agents/skills/` are loaded by a running firstmate; public `skills/` is an installer-facing surface.
 `bin/fm-firstmate-update-check.sh` detects source-only changes to that instruction surface; the daily currency round of section 3 is what gives it a cadence that survives session boundaries, and `docs/fork-patches.md` owns the retained local patch stack registry.
 Bootstrap reports `FIRSTMATE_UPDATE_AVAILABLE:` when that source carries a change and `SELF_DRIFT:` when this checkout's own default branch has drifted from its own origin; `bootstrap-diagnostics` owns what each one needs.
+Any fleet-wide notice, including the one a `FIRSTMATE_UPDATE_AVAILABLE:` report calls for, goes out by dispatching a crewmate to send it through Bridge All-Ships, never by firstmate writing to Bridge directly.
 When the captain invokes `/updatefirstmate` or asks to update firstmate, load the `/updatefirstmate` skill.
 It performs guarded fast-forward updates of firstmate and registered secondmate homes, refreshes instructions, and never touches anything under `projects/`; it resolves only the clean fast-forward case.
 
