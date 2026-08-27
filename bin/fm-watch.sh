@@ -989,9 +989,9 @@ age_of() {  # seconds since file mtime; "due immediately" if missing
 # second wake for an unchanged condition. state/.context-ceiling-absent-since
 # carries "<class> <condition> <first-observed-epoch> <observations>" as content rather than
 # relying on its mtime, because the mtime moves on every rewrite and the whole
-# point of the record is the moment that did NOT move. A change of class restarts
-# it: a ceiling that stopped being unmeasurable and started being unresettable is
-# a different absence, and dating the new one from the old one would overstate it.
+# point of the record is the moment that did NOT move. A change of class or
+# semantic condition restarts it: dating a new absence from the old one would
+# overstate it.
 context_absence_observe() {  # <class> <condition>
   local class=$1 condition=$2 file="$STATE/.context-ceiling-absent-since"
   local prev_class prev_condition since observations now

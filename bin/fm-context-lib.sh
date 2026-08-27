@@ -562,8 +562,8 @@ fm_context_restart_path_ok() {  # <fm-home> <fm-root>
 #                           which of those it actually hit
 #   ... reset               over ceiling, quiet, and the captain is not present
 #
-# Alongside the printed text it publishes three variables, so a caller that needs
-# to throttle can call it directly instead of through a command substitution that
+# Alongside the printed text it publishes five variables, so a caller that needs
+# to suppress repeats can call it directly instead of through a command substitution that
 # would discard them:
 #
 #   FM_CONTEXT_CEILING_REASON  the same text this prints, empty when there is none
@@ -579,11 +579,11 @@ fm_context_restart_path_ok() {  # <fm-home> <fm-root>
 #     surfaced    a reason is being reported
 #     resolved    the condition is genuinely gone: nothing is running here, or
 #                 the session is under the ceiling. ONLY this may clear a caller's
-#                 throttle
+#                 suppression marker
 #     suppressed  over the ceiling, but the fleet is not quiet, so this poll has
 #                 nothing to say YET. The condition is unchanged and still true,
 #                 and treating it as resolved would let a ceiling wake erase its
-#                 own throttle - fm_context_quiet's first test is whether
+#                 own suppression marker - fm_context_quiet's first test is whether
 #                 state/.wake-queue is non-empty, and that queue is exactly where
 #                 the wake this check produces is parked until firstmate drains it
 #
@@ -593,12 +593,9 @@ fm_context_restart_path_ok() {  # <fm-home> <fm-root>
 #                 reset that number would trigger cannot run
 #     present     ask and reset - the ceiling is working and this is it working;
 #                 a captain who is present is a reason to wait, not a defect
-#   The distinction exists because the two classes have to be REPORTED
-#   differently. An unenforced ceiling was reported once an hour for a whole day
-#   on 2026-08-19 and changed nothing, because each report was word-for-word the
-#   previous one and read as routine. A protection that is merely idle may repeat
-#   unchanged; a protection that is absent may not, and bin/fm-watch.sh is where
-#   that difference is spent.
+#   The distinction exists because absent protection needs a second durable
+#   observation record. bin/fm-watch.sh keeps that record current while every
+#   unchanged class and condition remains wake-suppressed.
 FM_CONTEXT_CEILING_REASON=
 FM_CONTEXT_CEILING_CLASS=
 FM_CONTEXT_CEILING_CONDITION=

@@ -255,14 +255,14 @@ It also avoids replacing a measured hourly cost with a shorter, unmeasured reque
 `state/.context-ceiling-absent-since` carries `<class> <condition> <first-observed-epoch> <observations>` as content rather than as an mtime, because the mtime moves on every rewrite and the whole value of the record is the moment that did not move.
 The watcher updates the observation count on every eligible poll even when it suppresses the wake, so elapsed age and persistence remain available without a model turn.
 The session-start digest prints the class, first-observed epoch, current age, and observation count.
-A change of class restarts it - a ceiling that stopped being unmeasurable and started being unresettable is a different absence, and dating the new one from the old would report an age that never happened.
+A change of class or semantic condition restarts it - a ceiling that stopped being unmeasurable and started being unresettable, or changed from one measurement failure to another, is a different absence, and dating the new one from the old would report an age that never happened.
 A resolved condition clears it, so the next outage reports as a first one.
 If the watcher cannot update the absence record, it raises the wake again instead of letting an unenforced ceiling become both silent and unrecorded.
 
 Every wake the watcher raises here - `reset`, `ask`, `blocked`, and `unenforced` alike - is reported once while the condition behind it is unchanged.
 Every branch here describes a condition rather than an event - a present captain stays present, a broken hook stays broken, an unmeasurable transcript stays unmeasurable - so repeating any of them on the poll cadence would spend a model turn every five minutes on news that has not changed, which is the opposite of what this mechanism is for.
-Suppression is keyed on a branch class the predicate publishes as a stable token, never on the payload's wording, so rewording a message can never quietly split one condition into two keys.
-The ask payload names which condition took that branch - a captain who spoke, away mode, or a presence that could not be established - and that clause is deliberately not part of the key: all three mean the same thing to do, so moving between them is not a change worth a fresh wake.
+Suppression is keyed on the branch class and semantic condition the predicate publishes as stable tokens, never on the payload's wording, so rewording a message cannot split one condition into two keys.
+The condition distinguishes failed predicates and blockers within one display class, including a captain who spoke, away mode, or presence that could not be established, so a repaired or worsened condition wakes immediately even when its display class stays the same.
 A condition that *changes* surfaces on the very next eligible poll: a captain who goes away does not inherit the ask branch's silence before the reset branch can fire.
 
 The suppression marker is cleared only when the condition genuinely resolves - nothing is running in this home, or the session is back under the ceiling.
