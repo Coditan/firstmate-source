@@ -187,6 +187,39 @@ test_an_unmeasured_reading_is_not_printed_as_a_confirmed_absence() {
   pass "an unmeasured reading is never printed as a confirmed absence"
 }
 
+# The most catastrophic reading this alarm can take is a home whose records are
+# gone, and it must never be the quietest. It is also the one reading the
+# alarm's own probes can destroy before it is taken, so this drives the
+# sequence that matters: an absence already paged, and then the records vanish.
+test_a_home_that_loses_its_records_mid_outage_is_never_read_as_unattended() {
+  local home now line
+  home=$(make_home records-vanished)
+  record_seat "$home" 999999
+  record_endpoint "$home"
+  now=$(date +%s)
+  run_alarm "$home" FM_SEAT_ALARM_NOW="$now" >/dev/null
+  [ "$(sends "$home")" = 1 ] || fail "the absence was never carried outward"
+
+  rm -rf "$home/state"
+  line=$(run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 300))")
+  [ "$(sends "$home")" = 2 ] \
+    || fail "a home that lost its records went silent, leaving the captain holding the absence he was told about"
+  assert_grep "cannot tell whether it has a first mate" "$home/outbox" \
+    "the captain was not told the reading could no longer be taken"
+  assert_contains "$line" "has not been able to tell" \
+    "the vessel's own line did not say the records were unreachable"
+
+  # Still gone on the next sweep, and still reported: the repeat is uncapped so
+  # the alarm does not go quiet while the fault lasts.
+  rm -rf "$home/state"
+  run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 600))" >/dev/null
+  [ "$(sends "$home")" = 3 ] \
+    || fail "a home whose records stayed gone stopped being reported"
+  assert_grep "verdict=unmeasured" "$home/state/seat-alarm.state" \
+    "an unreachable home was recorded as one that never had a first mate"
+  pass "a home that loses its records mid-outage is reported unmeasured, not unattended"
+}
+
 test_it_speaks_on_change_then_repeats_on_its_own_cadence() {
   local home now
   home=$(make_home cadence)
@@ -356,6 +389,7 @@ test_a_declared_stand_down_is_not_an_alarm
 test_a_home_that_never_seated_is_not_an_alarm
 test_an_unreadable_record_is_reported_and_never_read_as_healthy
 test_an_unmeasured_reading_is_not_printed_as_a_confirmed_absence
+test_a_home_that_loses_its_records_mid_outage_is_never_read_as_unattended
 test_it_speaks_on_change_then_repeats_on_its_own_cadence
 test_recovery_is_reported_only_to_someone_who_was_told
 test_a_failed_send_is_retried_rather_than_counted
