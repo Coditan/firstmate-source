@@ -464,6 +464,7 @@ test_a_failed_send_is_retried_rather_than_counted() {
 watcher_sweeps() {  # <home> [epoch-override] -> the line the watcher would wake on
   local home=$1 now=${2:-}
   (
+    # shellcheck disable=SC2031 # The subshell IS the isolation: this environment exists only for the watcher sourced below, and no caller reads it afterwards.
     export FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_ROOT_OVERRIDE="$ROOT"
     [ -z "$now" ] || export FM_SEAT_ALARM_NOW="$now"
     # shellcheck source=bin/fm-watch.sh
