@@ -650,10 +650,15 @@ EOF
 # Scaffold a scout brief through the shared scaffold, then replace its {TASK}
 # placeholder with the composed panel task text. Failing loudly when the
 # placeholder is absent keeps this honest if the scaffold ever changes shape.
+# The brief is scaffolded with --no-premise: a panel member is handed a QUESTION
+# to derive, not an asserted fact to act on, so there is no premise to disprove.
+# Declaring that is not the same as omitting it. The default omitted state tells
+# the reader to append `blocked:` and stop, which is not a terminal event here
+# and would stand the whole panel down with no firstmate to regenerate anything.
 scaffold_scout_brief() {
   local id=$1 repo=$2 task_file=$3 brief
   brief="$DATA/$id/brief.md"
-  "$FM_ROOT/bin/fm-brief.sh" "$id" "$repo" --scout >/dev/null \
+  "$FM_ROOT/bin/fm-brief.sh" "$id" "$repo" --scout --no-premise >/dev/null \
     || die "could not scaffold the brief for $id"
   awk -v taskfile="$task_file" '
     $0 == "{TASK}" && !filled {

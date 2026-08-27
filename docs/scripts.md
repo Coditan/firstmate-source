@@ -41,7 +41,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-finding.sh`          | Append to and read the political officer's findings surface: create it, emit a finding, list, show, and check a surface that reports unreachable as its own reading rather than as empty (docs/findings-surface.md) |
 | `fm-finding-lib.sh`      | The findings surface's record contract, spelled once for the emit and drain sides: where the surface is, what a finding and an outcome are checked against, and the severity-to-deadline table the queue sorts by |
 | `fm-finding-drain.sh`    | Take findings off that surface by earliest deadline first, list the overdue ones, and write each drained finding's outcome back as a sibling record the officer cannot create (docs/findings-surface.md) |
-| `fm-brief.sh`            | Scaffold ship, scout, secondmate-charter, and Herdr-lab briefs                       |
+| `fm-brief.sh`            | Scaffold ship, scout, secondmate-charter, premise, and Herdr-lab briefs             |
 | `fm-model-panel.sh`      | Run a model panel: two independent analysts on different models, then a judge that re-verifies both |
 | `fm-grade.sh`            | Grade review quality on git-derived and blind evidence rather than the reviewed tool's own ledger (docs/review-grading.md) |
 | `fm-supervision-cost.sh` | Measure what supervision costs a session in freshly written tokens, from the provider's own usage records (docs/supervision-cost.md) |

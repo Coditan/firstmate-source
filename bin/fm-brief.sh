@@ -6,7 +6,7 @@
 # description, acceptance criteria, and context, and may adjust other sections
 # when the task genuinely deviates (e.g. working an existing external PR instead
 # of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> [--scout] [--herdr-lab]
+# Usage: fm-brief.sh <task-id> <repo-name> [--scout] [--premise|--no-premise] [--herdr-lab]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
@@ -26,6 +26,21 @@
 #   The flag must be explicit because {TASK} is filled after scaffolding and the
 #   caller-supplied repo string cannot reliably identify this repo. Briefs made
 #   without it carry a loud declaration so an omitted contract cannot be silent.
+#   --premise is mandatory when the brief hands the worker an asserted fact it is
+#   expected to act on without re-deriving it - the same condition the dispatch
+#   effort rule for premise-carrying briefs decides on. It adds the disproof step
+#   and a {PREMISE} placeholder for the one fact; firstmate replaces {PREMISE}
+#   exactly as it replaces {TASK}. The flag must be explicit for the same reason
+#   --herdr-lab is, and briefs made without it carry a loud declaration so an
+#   omitted premise cannot be silent.
+#   --no-premise is that same declaration made deliberately: the scaffolding
+#   names no premise, and that is the whole of what the declaration covers.
+#   It makes no claim about the task text the caller composes.
+#   It is for PROGRAMMATIC callers that compose their own task text and cannot be
+#   regenerated after dispatch. The omitted-premise block tells the reader to stop
+#   and have firstmate regenerate the brief, and such a caller has no firstmate to
+#   do that, so declaring the absence is what keeps the reader working.
+#   It is mutually exclusive with --premise.
 # For ship tasks, the definition of done is shaped by the project's delivery mode
 # (data/projects.md via fm-project-mode.sh; see the project-management skill
 # and AGENTS.md task lifecycle):
@@ -77,6 +92,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 KIND=ship
 HERDR_LAB=0
+PREMISE=0
+NO_PREMISE=0
 NO_PROJECTS=0
 POS=()
 for a in "$@"; do
@@ -84,6 +101,8 @@ for a in "$@"; do
     --scout) KIND=scout ;;
     --secondmate) KIND=secondmate ;;
     --herdr-lab) HERDR_LAB=1 ;;
+    --premise) PREMISE=1 ;;
+    --no-premise) NO_PREMISE=1 ;;
     --no-projects) NO_PROJECTS=1 ;;
     *) POS+=("$a") ;;
   esac
@@ -92,6 +111,21 @@ ID=${POS[0]}
 
 if [ "$KIND" = secondmate ] && [ "$HERDR_LAB" -eq 1 ]; then
   echo "error: --herdr-lab applies only to crewmate ship or scout briefs" >&2
+  exit 1
+fi
+
+if [ "$KIND" = secondmate ] && [ "$PREMISE" -eq 1 ]; then
+  echo "error: --premise applies only to crewmate ship or scout briefs" >&2
+  exit 1
+fi
+
+if [ "$KIND" = secondmate ] && [ "$NO_PREMISE" -eq 1 ]; then
+  echo "error: --no-premise applies only to crewmate ship or scout briefs" >&2
+  exit 1
+fi
+
+if [ "$PREMISE" -eq 1 ] && [ "$NO_PREMISE" -eq 1 ]; then
+  echo "error: --premise and --no-premise are mutually exclusive; a brief either asserts a fact or declares it carries none" >&2
   exit 1
 fi
 
@@ -232,6 +266,59 @@ EOF
 )
 fi
 
+# The disproof step, and the one thing it must not become.
+# MEASURED 2026-08-18/25 on claude-opus-5: against a false-premise trap, a low-effort
+# worker complied 0/5 while stating its own doubt in plain words; the wording below,
+# added to the same prompt, produced the correct outcome 10/10 across two traps
+# including one built to defeat it, and on a premise that was actually TRUE it
+# proceeded 5/5 with zero false stops. The text is kept close to what was measured.
+# It stays deliberately narrow: it disproves ONE named assertion and asks for no
+# general re-checking. The vendor documents the opposite for this model - "If your
+# prompt contains explicit verification instructions... remove them: instructions
+# like these cause over-verification on Claude Opus 5. The same applies to legacy
+# harness scaffolding that adds separate verification steps."
+# (https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-opus-5)
+# A brief scaffold IS harness scaffolding, so this section survives that warning only
+# by staying narrow. Widening it into "check your work" or "verify before proceeding"
+# builds exactly the thing the warning is about.
+# Firstmate applied this wording by hand, per task, before the flag existed; the flag
+# exists so a premise-carrying brief cannot depend on firstmate remembering to.
+if [ "$PREMISE" -eq 1 ]; then
+REPLACE_NOTE="{TASK} and {PREMISE}"
+PREMISE_SECTION=$(cat <<'EOF'
+# The premise this brief asserts
+This brief was scaffolded with `--premise` because it hands you one asserted fact you are expected to act on without re-deriving it:
+
+{PREMISE}
+
+That is an assertion made by someone who is not looking at this code.
+BEFORE you act on it, name the single check whose result would show that assertion is WRONG, run that check, and paste its output.
+If it shows the assertion is wrong, do NOT follow this brief literally: carry out what it was actually trying to achieve, and say in your `done:` line what you did instead and why.
+This is one named assertion, not a standing instruction to re-check the rest of the brief.
+EOF
+)
+elif [ "$NO_PREMISE" -eq 1 ]; then
+REPLACE_NOTE="{TASK}"
+PREMISE_SECTION=$(cat <<'EOF'
+# Premise declaration - DECLARED NONE
+**DECLARED NONE:** this brief's scaffolding names no asserted premise for you to disprove, and that is the whole of what this declaration covers.
+It says nothing about the task text above, which a programmatic caller composed on its own.
+That caller cannot regenerate this brief once you are dispatched, so the absence of a disproof step here is declared rather than missing.
+Do not write a disproof step into this brief by hand.
+EOF
+)
+else
+REPLACE_NOTE="{TASK}"
+PREMISE_SECTION=$(cat <<'EOF'
+# Premise declaration - NONE ASSERTED
+**DECLARED ABSENT:** this scaffold cannot inspect the task text that replaces `{TASK}` later.
+This brief is declared to hand you no asserted fact you would act on without re-deriving it first.
+If the task text does hand you one - which branch is stale, which file holds the value, which commit is the right one, that a named path is safe to take - append `blocked: brief asserts a fact but was scaffolded without --premise` to the status file and stop; firstmate will regenerate it.
+Do not write a disproof step into this unguarded brief by hand.
+EOF
+)
+fi
+
 # Rule 1 forbids pushing to the default branch, and publishing a Bridge envelope
 # targets the default branch - but that push IS Bridge's delivery step, not a code
 # push. A crewmate has already read rule 1 as covering it, passed --no-publish, and
@@ -252,6 +339,8 @@ You are a crewmate: an autonomous worker agent managed by firstmate. Work on you
 
 # Task
 {TASK}
+
+$PREMISE_SECTION
 
 $HERDR_SECTION
 
@@ -297,7 +386,7 @@ Before reporting done, read and follow \`$FM_ROOT/.agents/skills/decision-hold-l
 When the report is complete, append \`done: {one-line conclusion}\` to the status file and stop.
 If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.
 EOF
-echo "scaffolded: $BRIEF (scout; replace {TASK})"
+echo "scaffolded: $BRIEF (scout; replace $REPLACE_NOTE)"
 exit 0
 fi
 
@@ -367,6 +456,8 @@ You are a crewmate: an autonomous worker agent managed by firstmate. Work on you
 # Task
 {TASK}
 
+$PREMISE_SECTION
+
 $HERDR_SECTION
 
 # Setup
@@ -418,4 +509,4 @@ Keep it proportionate: skip \`AGENTS.md\` edits for trivial tasks that produced 
 
 $DOD
 EOF
-echo "scaffolded: $BRIEF (ship, mode=$MODE; replace {TASK})"
+echo "scaffolded: $BRIEF (ship, mode=$MODE; replace $REPLACE_NOTE)"
