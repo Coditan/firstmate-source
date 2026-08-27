@@ -18,9 +18,15 @@ An `undeliverable:` verdict is what opens a relaunch, which keeps the reachabili
 
 **Revised on new evidence: an `undeliverable:` verdict is no longer sufficient on its own.**
 A seat that is merely mid-turn produces exactly that verdict - the delivery listener's own busy-pane branch blocks the submit and `fm_delivery_report` therefore prints `undeliverable:` - so relaunching on that verdict alone opened a second agent window beside a first mate that was working, once per retry attempt.
-The respawner now also asks whether this home's session lock names a live harness, and refuses to launch, clearing the retry episode, when it does.
-That is a PRESENCE reading and not a reachability one: it is the same session lock `bin/fm-seat-alarm.sh` reads, through the same owner in `bin/fm-harness-pid-lib.sh`.
-So the rationale above survives unchanged - there is still exactly one owner of "can the seat be reached" and exactly one of "is a seat here" - and only the sentence about sufficiency moved.
+The respawner therefore asks a PRESENCE question first, and only an absence opens a launch.
+That is not a second reachability reading, so the rationale above survives: there is still exactly one owner of "can the seat be reached" and exactly one of "is a seat here".
+
+**The presence reading is one shared verdict, not a local predicate.**
+`bin/fm-seat-presence-lib.sh` classifies the session-lock record `present` / `absent` / `unmeasured`, and both `bin/fm-seat-alarm.sh` and this script consume it, so the two halves share the DECISION and not merely the parse.
+That correction replaced a boolean `seat_holds_lock` here, which answered "no seat" to every reading that was not a confident yes - including a record it could not read and a holder in a pid table it cannot see into, both of which the alarm calls `unmeasured` and refuses to report as an absence.
+Four review findings on this branch were that one conversion arriving through different doors, so the conversion was removed rather than guarded door by door.
+`present` refuses the launch and clears the retry episode; `unmeasured` refuses it and leaves the episode untouched, silently, because reporting an unmeasured home is the alarm's and it does so on its own uncapped cadence; only `absent` reaches the delivery verdict at all.
+`standing-down` and `unattended` stay with the alarm: they are read from the stay-down marker and the published endpoint rather than from the lock, and this script reads the marker itself.
 
 Deliberate shutdown is declared, not inferred.
 `bin/fm-seat-stay-down.sh down` writes `state/.seat-stay-down`, and `bin/fm-seat-stay-down.sh up` clears it.
