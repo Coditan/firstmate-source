@@ -141,15 +141,40 @@ keeper_name() {
   fm_keeper_name seat-respawner "$FM_HOME"
 }
 
+# One field of the running respawner's own published lock record.
+recorded_respawner_field() {  # <key>
+  sed -n "s/^$1=//p" "$STATE/.seat-respawner.lock/record" 2>/dev/null | head -1
+}
+
+# Does the RUNNING respawner match what this session would start now?  The
+# keeper tier has no environment file to compare, so its version and its PATH
+# arrive as launch arguments and the lock record is the only evidence of what it
+# actually got.  Without this comparison the tier would never reconverge: a home
+# would keep running the bytes it started with after every self-update, silently
+# and indefinitely, which on a container with no systemd is every home.
+# Mirrors watcher_record_matches in bin/fm-watcher-service.sh, including the
+# PATH comparison being made for the keeper only - the systemd tier's copy lives
+# in the service environment file service_env_matches already compares.
+respawner_record_matches() {  # <manager>
+  local manager=$1 expected_version expected_path
+  expected_version=$(source_version) || return 1
+  [ "$(recorded_respawner_field manager)" = "$manager" ] \
+    && [ "$(recorded_respawner_field source-version)" = "$expected_version" ] \
+    || return 1
+  [ "$manager" = keeper ] || return 0
+  expected_path=$(fm_service_path) || return 1
+  [ "$(recorded_respawner_field service-path)" = "$expected_path" ]
+}
+
 # The running respawner, judged by its own published lock and its own beacon -
 # never by a process name.  A process-name test cannot tell one home's respawner
 # from another's, and on this fleet's container it could not tell the seat from
 # its crew either, which is the mistake this whole area exists to stop making.
 healthy_respawner() {
   local pid age
-  pid=$(sed -n 's/^pid=//p' "$STATE/.seat-respawner.lock/record" 2>/dev/null | head -1)
+  pid=$(recorded_respawner_field pid)
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$(sed -n 's/^fm-home=//p' "$STATE/.seat-respawner.lock/record" 2>/dev/null | head -1)" = "$FM_HOME" ] || return 1
+  [ "$(recorded_respawner_field fm-home)" = "$FM_HOME" ] || return 1
   kill -0 "$pid" 2>/dev/null || return 1
   [ -e "$BEAT" ] || return 1
   age=$(fm_path_age "$BEAT") || return 1
@@ -180,7 +205,8 @@ stop_keeper() {
 ensure_keeper() {
   local name
   name=$(keeper_name) || return 1
-  if "$TMUX_CMD" has-session -t "$name" 2>/dev/null && healthy_respawner; then
+  if "$TMUX_CMD" has-session -t "$name" 2>/dev/null && healthy_respawner \
+    && respawner_record_matches keeper; then
     return 0
   fi
   stop_keeper || return 1
@@ -232,6 +258,7 @@ write_service_env() {
     printf 'FM_STATE_OVERRIDE=%s\n' "$(systemd_env_quote "$STATE")"
     printf 'FM_CONFIG_OVERRIDE=%s\n' "$(systemd_env_quote "$CONFIG")"
     printf 'FM_SEAT_RESPAWNER_EXEC=%s\n' "$(systemd_env_quote "$RESPAWNER")"
+    printf 'FM_SEAT_RESPAWNER_MANAGER=systemd\n'
     printf 'PATH=%s\n' "$(systemd_env_quote "$resolved_path")"
     printf 'FM_SEAT_RESPAWNER_SOURCE_VERSION=%s\n' "$(systemd_env_quote "$version")"
   } > "$tmp" || { rm -f "$tmp"; return 1; }
@@ -255,6 +282,7 @@ service_env_matches() {
     && grep -Fx "FM_STATE_OVERRIDE=$(systemd_env_quote "$STATE")" "$SERVICE_ENV" >/dev/null 2>&1 \
     && grep -Fx "FM_CONFIG_OVERRIDE=$(systemd_env_quote "$CONFIG")" "$SERVICE_ENV" >/dev/null 2>&1 \
     && grep -Fx "FM_SEAT_RESPAWNER_EXEC=$(systemd_env_quote "$RESPAWNER")" "$SERVICE_ENV" >/dev/null 2>&1 \
+    && grep -Fx 'FM_SEAT_RESPAWNER_MANAGER=systemd' "$SERVICE_ENV" >/dev/null 2>&1 \
     && grep -Fx "PATH=$(systemd_env_quote "$resolved_path")" "$SERVICE_ENV" >/dev/null 2>&1 \
     && grep -Fx "FM_SEAT_RESPAWNER_SOURCE_VERSION=$(systemd_env_quote "$version")" "$SERVICE_ENV" >/dev/null 2>&1
 }
@@ -328,7 +356,7 @@ status_report() {
   local age=999999 pid backend
   backend=$(select_backend)
   [ -e "$BEAT" ] && age=$(fm_path_age "$BEAT")
-  pid=$(sed -n 's/^pid=//p' "$STATE/.seat-respawner.lock/record" 2>/dev/null | head -1)
+  pid=$(recorded_respawner_field pid)
   if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
     printf 'up: respawner pid %s last beat %ss ago (%s)\n' "$pid" "$age" "$backend"
   else
@@ -370,12 +398,24 @@ SHIM
 # Always exit 0: the watcher reads the line, not the status.  Silent while the
 # restarter is running, and silent on the systemd tier, which bootstrap owns.
 converge() {
+  local stale=0
   [ "${FM_SEAT_RESPAWNER_DISABLE:-0}" = 1 ] && return 0
   case "$(select_backend)" in
     keeper)
-      healthy_respawner && return 0
+      if healthy_respawner; then
+        respawner_record_matches keeper && return 0
+        # Running, and not what this home would start now.  A restarter left on
+        # pre-update bytes is the half of a restart that silently stops being a
+        # restoration, so it is converged and said out loud rather than counted
+        # as healthy because something with the right name is alive.
+        stale=1
+      fi
       if ensure_keeper; then
-        echo "seat-respawner: the automatic restart for this vessel's first mate had stopped and has been started again"
+        if [ "$stale" -eq 1 ]; then
+          echo "seat-respawner: the automatic restart for this vessel's first mate was running an out-of-date copy and has been restarted on the current one"
+        else
+          echo "seat-respawner: the automatic restart for this vessel's first mate had stopped and has been started again"
+        fi
       else
         echo "seat-respawner: the automatic restart for this vessel's first mate is not running and could not be started, so nothing would bring it back if it stopped"
       fi
@@ -394,6 +434,18 @@ armed_diagnostic() {
   if [ ! -f "$CHECK" ] || [ ! -x "$CHECK" ]; then
     printf 'RESPAWNER_UNIT: nothing keeps this vessel'"'"'s first-mate restart running between sessions, so it would stop with the next one that ends (fix: %s/fm-seat-respawner-service.sh --arm)\n' \
       "$SCRIPT_DIR"
+    return 0
+  fi
+  # A beacon that was never created is the state this whole area exists to
+  # remove - a restarter in the tree and never once running - so it is read from
+  # the check's own mtime and reported, exactly as bin/fm-seat-alarm.sh reports
+  # its never-evaluated case, rather than being the one state that stays silent.
+  if [ ! -e "$BEAT" ]; then
+    mtime=$(stat -c %Y "$CHECK" 2>/dev/null) || return 0
+    age=$((NOW - mtime))
+    [ "$age" -gt "$STALE" ] &&
+      printf 'RESPAWNER_UNIT: this vessel'"'"'s first-mate restart was armed %ss ago and has never run, so nothing would bring the first mate back if it stopped now (fix: %s/fm-seat-respawner-service.sh restart)\n' \
+        "$age" "$SCRIPT_DIR"
     return 0
   fi
   mtime=$(stat -c %Y "$BEAT" 2>/dev/null) || return 0

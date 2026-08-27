@@ -6,6 +6,7 @@ set -u
 
 RESPAWNER="$ROOT/bin/fm-seat-respawner.sh"
 STAY_DOWN="$ROOT/bin/fm-seat-stay-down.sh"
+SERVICE="$ROOT/bin/fm-seat-respawner-service.sh"
 
 fm_test_tmproot TMP_ROOT fm-seat-respawner
 
@@ -47,6 +48,24 @@ SH
   chmod +x "$path"
 }
 
+# A fake tmux that answers `new-window -P -F '#{pane_id}'` the way tmux does,
+# so the launch records the pending first turn a real one would.
+write_pane_fake_tmux() {
+  local path=$1 log=$2
+  cat > "$path" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$log"
+for arg do
+  if [ "\$arg" = new-window ]; then
+    printf '%%9\n'
+    break
+  fi
+done
+exit 0
+SH
+  chmod +x "$path"
+}
+
 write_executing_fake_tmux() {
   local path=$1 log=$2
   cat > "$path" <<SH
@@ -71,8 +90,9 @@ run_respawner_once() {
   FM_SEAT_DELIVERY_SERVICE="$delivery" \
   FM_SEAT_TMUX="$tmux" \
   FM_SEAT_RESPAWNER_ONCE=1 \
-  FM_SEAT_RESPAWNER_BACKOFF=1 \
-  FM_SEAT_RESPAWNER_MAX_ATTEMPTS=1 \
+  FM_SEAT_RESPAWNER_BACKOFF="${FM_SEAT_RESPAWNER_BACKOFF:-1}" \
+  FM_SEAT_RESPAWNER_MAX_ATTEMPTS="${FM_SEAT_RESPAWNER_MAX_ATTEMPTS:-1}" \
+  FM_SEAT_REVIVE_WATCHER=0 \
     "$RESPAWNER"
 }
 
@@ -179,7 +199,84 @@ test_resume_style_launch_command_is_refused() {
   pass "seat respawner refuses resume-style launch commands"
 }
 
+# One launch per unattended home at a time. The delivery verdict stays
+# undeliverable until the fresh seat finishes session start and publishes an
+# endpoint, which outlasts the first backoff, so a respawner that kept launching
+# on schedule would leave live agent processes in windows nothing tracks - up to
+# one per retry. The pending first-turn record is what it waits on.
+test_a_pending_first_turn_holds_the_next_launch() {
+  local home delivery tmux log status launches
+  home=$(make_home first-turn-hold)
+  status="$home/status.txt"
+  delivery="$home/fake-delivery"
+  tmux="$home/fake-tmux"
+  log="$home/tmux.log"
+  printf 'undeliverable: listener pid 1 is up with 1 wake(s) pending, but no session has published where the model turn lives\n' > "$status"
+  write_fake_delivery "$delivery"
+  write_pane_fake_tmux "$tmux" "$log"
+
+  FM_SEAT_RESPAWNER_MAX_ATTEMPTS=3 FM_FAKE_DELIVERY_STATUS="$status" \
+    run_respawner_once "$home" "$delivery" "$tmux" \
+    || fail "respawner refused the first unreachable check"
+  launches=$(grep -c new-window "$log" 2>/dev/null || printf 0)
+  [ "$launches" = 1 ] || fail "the first cycle did not launch exactly one seat; got $launches"
+  [ -f "$home/state/.seat-first-turn" ] \
+    || fail "the launch recorded no pending first turn, so there is nothing to hold on"
+
+  # Past the retry backoff, so the next launch is due on schedule and only the
+  # pending first turn can be what holds it.
+  sleep 2
+  FM_SEAT_RESPAWNER_MAX_ATTEMPTS=3 FM_FAKE_DELIVERY_STATUS="$status" \
+    run_respawner_once "$home" "$delivery" "$tmux" \
+    || fail "respawner refused the second unreachable check"
+
+  launches=$(grep -c new-window "$log" 2>/dev/null || printf 0)
+  [ "$launches" = 1 ] \
+    || fail "a second seat was launched while the first had not taken the lock; got $launches"
+  [ -f "$home/state/.seat-first-turn" ] \
+    || fail "the pending first turn was dropped while its pane could not be read"
+  assert_grep "launch held" "$home/state/.seat-respawner.log" \
+    "holding the next launch was not operator-visible"
+  pass "seat respawner waits out the seat it already started before starting another"
+}
+
+# The state this whole area exists to remove is a restarter that is in the tree
+# and has never once run, so an armed home with no beacon at all must be the
+# loudest case rather than the one that stays silent.
+test_an_armed_restart_that_never_ran_is_reported() {
+  local home out
+  home=$(make_home never-ran)
+
+  run_service() {  # <now> <arg...>
+    local now=$1; shift
+    env FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$home/state" \
+      FM_CONFIG_OVERRIDE="$home/config" FM_SEAT_RESPAWNER_FORCE_BACKEND=keeper \
+      FM_SEAT_RESPAWNER_TMUX="$(command -v sh)" FM_SEAT_RESPAWNER_NOW="$now" \
+      "$SERVICE" "$@"
+  }
+
+  out=$(run_service "" --armed)
+  assert_contains "$out" "nothing keeps this vessel" \
+    "an unarmed home must say nothing keeps its restart running"
+
+  run_service "" --arm >/dev/null || fail "the restart watch could not be armed"
+  out=$(run_service "" --armed)
+  [ -z "$out" ] || fail "a freshly armed home must not be called stopped: $out"
+
+  out=$(run_service "$(( $(date +%s) + 7200 ))" --armed)
+  assert_contains "$out" "has never run" \
+    "an armed restart that never produced a beat said nothing"
+
+  : > "$home/state/.last-seat-respawner-beat"
+  out=$(run_service "$(( $(date +%s) + 7200 ))" --armed)
+  assert_contains "$out" "last ran" \
+    "a restart that ran and stopped was not reported"
+  pass "an armed restart that never ran and one that stopped are both reported"
+}
+
 test_stay_down_marker_is_authoritative
 test_giveup_path_reports_a_finding
+test_a_pending_first_turn_holds_the_next_launch
+test_an_armed_restart_that_never_ran_is_reported
 test_launch_does_not_pin_the_respawners_path
 test_resume_style_launch_command_is_refused

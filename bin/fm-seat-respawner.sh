@@ -103,6 +103,15 @@ write_lock() {
     printf 'pid-identity=%s\n' "$identity"
     printf 'fm-home=%s\n' "$FM_HOME"
     printf 'respawner-path=%s\n' "$RESPAWNER_PATH"
+    # What this process was STARTED with, recorded so a later convergence can
+    # compare it, exactly as bin/fm-watch.sh records the same three for the
+    # watcher.  A keeper receives its version and PATH as launch arguments that
+    # would otherwise leave no trace at all, so without this record the keeper
+    # tier could never reconverge on a self-update and would keep running the
+    # bytes it started with.
+    printf 'manager=%s\n' "${FM_SEAT_RESPAWNER_MANAGER:-session}"
+    printf 'source-version=%s\n' "${FM_SEAT_RESPAWNER_SOURCE_VERSION:-unknown}"
+    printf 'service-path=%s\n' "${FM_SEAT_RESPAWNER_SERVICE_PATH:-}"
   } > "$tmp" || { rm -f "$tmp"; return 1; }
   mv -f "$tmp" "$LOCKDIR/record" || { rm -f "$tmp"; return 1; }
 }
@@ -242,14 +251,39 @@ first_turn_body() {
   printf 'You are the firstmate primary seat for this home, started automatically after the previous seat stopped. Run bin/fm-session-start.sh now, exactly once, before reading anything else, and follow the supervision block it prints.'
 }
 
-# Returns 0 when the first turn is settled - submitted, abandoned, or none
-# pending - and leaves the record in place when it should simply be retried.
+first_turn_pending() {
+  [ -f "$FIRST_TURN" ] && [ ! -L "$FIRST_TURN" ]
+}
+
+# Add <key>=<now> to the pending record, atomically, leaving what is already in
+# it alone. fm_retry_kv_get reads the first match, so a key is only ever marked once.
+first_turn_mark() {  # <key>
+  local tmp
+  first_turn_pending || return 1
+  tmp=$(mktemp "$FIRST_TURN.XXXXXX") || return 1
+  { cat -- "$FIRST_TURN" && printf '%s=%s\n' "$1" "$(date +%s)"; } > "$tmp" \
+    || { rm -f -- "$tmp"; return 1; }
+  mv -f -- "$tmp" "$FIRST_TURN" || { rm -f -- "$tmp"; return 1; }
+}
+
+abandon_first_turn() {  # <reason>
+  first_turn_pending || return 0
+  rm -f -- "$FIRST_TURN"
+  log "first turn dropped: $1"
+}
+
+# Always returns 0. The record is retired only when the turn has LANDED (a seat
+# holds this home), when the pane is confidently gone, or when the deadline
+# passes - never merely because the keystroke was typed, because session start
+# rather than the keystroke is what makes a first mate, and one_cycle holds the
+# next launch for exactly as long as this record stands.
 deliver_first_turn() {
-  local pane server at age composer encoded verdict
-  [ -f "$FIRST_TURN" ] && [ ! -L "$FIRST_TURN" ] || return 0
+  local pane server at age submitted composer encoded verdict rc
+  first_turn_pending || return 0
   pane=$(fm_retry_kv_get "$FIRST_TURN" pane 2>/dev/null || true)
   server=$(fm_retry_kv_get "$FIRST_TURN" server 2>/dev/null || true)
   at=$(fm_retry_kv_get "$FIRST_TURN" at 2>/dev/null || true)
+  submitted=$(fm_retry_kv_get "$FIRST_TURN" submitted 2>/dev/null || true)
   case "$at" in ''|*[!0-9]*) at=0 ;; esac
   age=$(( $(date +%s) - at ))
 
@@ -263,18 +297,31 @@ deliver_first_turn() {
   # retried forever in silence, and the absence keeps being reported either way.
   if [ "$age" -ge "$FIRST_TURN_DEADLINE" ]; then
     rm -f -- "$FIRST_TURN"
-    log "first turn abandoned after ${age}s: pane $pane never presented an empty agent composer"
+    if [ -n "$submitted" ]; then
+      log "first turn abandoned after ${age}s: pane $pane was given its turn and never took this home's lock"
+    else
+      log "first turn abandoned after ${age}s: pane $pane never presented an empty agent composer"
+    fi
     return 0
   fi
   [ -n "$pane" ] || { rm -f -- "$FIRST_TURN"; return 0; }
 
   local FM_TMUX_SERVER_IDENTITY=$server
   export FM_TMUX_SERVER_IDENTITY
-  fm_backend_target_exists tmux "$pane" || {
+  rc=0
+  fm_backend_target_exists tmux "$pane" || rc=$?
+  # Only a CONFIDENT absence retires the record. Every other non-zero answer
+  # means the backend could not be asked, and reading "I could not ask" as "the
+  # pane is gone" would release the next launch to open a second window beside a
+  # seat that is still sitting there - the orphan this record exists to prevent.
+  if [ "$rc" -eq 1 ]; then
     rm -f -- "$FIRST_TURN"
     log "first turn abandoned: pane $pane no longer exists"
     return 0
-  }
+  fi
+  [ "$rc" -eq 0 ] || return 0
+  # Typed once: a seat mid-session-start must not be typed into a second time.
+  [ -z "$submitted" ] || return 0
   # The same two reads delivery takes, from the same owners, for the same
   # reason: a busy pane must not be interrupted and only an affirmatively empty
   # genuine agent composer is ever typed into. A bare shell reads as unknown
@@ -290,7 +337,7 @@ deliver_first_turn() {
   }
   verdict=$(fm_backend_send_text_submit tmux "$pane" "$encoded" "$SUBMIT_RETRIES" "$SUBMIT_SLEEP" "$SUBMIT_SLEEP")
   if [ "$verdict" = empty ]; then
-    rm -f -- "$FIRST_TURN"
+    first_turn_mark submitted || rm -f -- "$FIRST_TURN"
     log "first turn submitted to pane $pane"
   else
     log "first turn was not confirmed (verdict=${verdict:-unknown}); leaving it to the next cycle"
@@ -300,11 +347,19 @@ deliver_first_turn() {
 
 # Only a session start takes this home's lock, so the lock naming a live harness
 # is the one proof that a restart produced a first mate rather than a process.
+# The record is read through its one owner, bin/fm-harness-pid-lib.sh, rather
+# than parsed again here: a holder recorded in a pid table this process cannot
+# see into is never read as a live local one just because the number matches
+# something alive here.
 seat_holds_lock() {
-  local pid
-  pid=$(sed -n '1p' "$STATE/.lock" 2>/dev/null | tr -d '[:space:]')
-  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-  fm_harness_alive "$pid"
+  local ns
+  fm_session_lock_record_read "$STATE/.lock" || return 1
+  case "$FM_LOCK_RECORD_PID" in ''|*[!0-9]*) return 1 ;; esac
+  if [ -n "$FM_LOCK_RECORD_PIDNS" ] \
+    && { ! ns=$(fm_pid_namespace_token) || [ "$ns" != "$FM_LOCK_RECORD_PIDNS" ]; }; then
+    return 1
+  fi
+  fm_harness_alive "$FM_LOCK_RECORD_PID"
 }
 
 clear_episode() {
@@ -369,12 +424,17 @@ one_cycle() {
   local status_line key now count next delay
   beat || return 1
   revive_watcher_if_dead
-  deliver_first_turn
+  # The declared stand-down is read BEFORE any pending turn is delivered, and it
+  # settles that turn rather than racing it: a marker set after a launch must
+  # leave the home unattended, not have the session-start instruction typed into
+  # the pane on the next cycle.
   if stay_down; then
     clear_episode
+    abandon_first_turn "the stay-down marker was set before it landed"
     log "stay-down marker present; leaving seat down"
     return 0
   fi
+  deliver_first_turn
   status_line=$("$DELIVERY_SERVICE" status 2>&1 || true)
   case "$status_line" in *$'\n'*) status_line=${status_line%%$'\n'*} ;; esac
   if ! respawn_needed "$status_line"; then
@@ -386,6 +446,19 @@ one_cycle() {
   count=$FM_RETRY_ATTEMPT_COUNT
   next=$FM_RETRY_ATTEMPT_NEXT
   now=$(date +%s)
+  # A seat this respawner already started, still on its way to the lock, is not
+  # a reason to start another. The delivery verdict stays undeliverable until
+  # session start publishes an endpoint - well past the first backoff - so
+  # launching on schedule here would leave a live agent in a window nothing
+  # tracks or reports. Waiting costs no attempt, and FM_SEAT_FIRST_TURN_DEADLINE
+  # bounds it, so a pane that never presents a composer still frees the next one.
+  if first_turn_pending; then
+    if [ "$now" -ge "$next" ] && [ -z "$(fm_retry_kv_get "$FIRST_TURN" deferred 2>/dev/null || true)" ]; then
+      first_turn_mark deferred || true
+      log "launch held: the seat already started for this episode has not taken this home's lock yet"
+    fi
+    return 0
+  fi
   if [ "$count" -ge "$MAX_ATTEMPTS" ]; then
     emit_giveup_finding "$key" "$status_line" || true
     return 0
