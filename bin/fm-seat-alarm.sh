@@ -96,8 +96,17 @@
 #
 # Recovery is announced ONCE. A recovery send the channel refuses is then OWED
 # rather than repeated: the verdict stays what the reading established, the
-# message is retried from a record of its own, and it is abandoned out loud in
-# the log once it has gone undelivered for one repeat interval.
+# message is retried from a record of its own, and it is abandoned once it has
+# gone undelivered for one repeat interval.
+#
+# That abandonment is the ONE case this file prints for the wake queue as well
+# as writing the log, and the reason above does not hold against it: the
+# objection to the queue is that a line joins a pile nobody is reading WHILE THE
+# SEAT IS GONE, and this path is reached only when the verdict is `present`, so
+# a first mate holds the lock and will read it. What it must learn is that the
+# captain was told this vessel had no first mate and the correction never
+# arrived, which nothing else on this vessel can tell it. The record is cleared
+# in the same breath, so it is one line per owed recovery and cannot repeat.
 #
 # WHAT IT DOES NOT DO
 # It restarts nothing, repairs nothing, and kills nothing. There is no mechanism
@@ -514,6 +523,8 @@ retry_owed_recovery() {
   [ "$owed_for" -ge 0 ] || owed_for=0
   if [ "$REPEAT" -le 0 ] || [ "$owed_for" -ge "$REPEAT" ]; then
     log_line "recovery-abandoned away=$PREV_RECOVERY_AWAY owed-for=$owed_for"
+    printf 'seat-alarm: this vessel told the captain it had no first mate, and the message saying it has one again could not be delivered in %s of trying; he may still believe this vessel is unattended, and only you can correct that\n' \
+      "$(human_duration "$owed_for")"
     return 0
   fi
   RECOVERY_FROM=$PREV_RECOVERY_FROM
@@ -670,6 +681,13 @@ case "$VERDICT" in
         fi
       fi
     fi
+    ;;
+  standing-down|unattended)
+    # No recovery is owed to a vessel that is deliberately down or has never
+    # seated one, and the record is dropped in the log rather than silently -
+    # the same treatment the absence arm gives it, for the same reader.
+    [ -z "$PREV_RECOVERY_AWAY" ] \
+      || log_line "recovery-dropped away=$PREV_RECOVERY_AWAY reason=$VERDICT"
     ;;
   present)
     case "$PREV_VERDICT" in
