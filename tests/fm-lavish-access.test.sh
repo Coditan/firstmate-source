@@ -5,6 +5,9 @@
 # Three cooperating pieces are covered here:
 #   - bin/fm-service-port.sh, the general vessel-local port allocator, whose one
 #     rule is that a successful bind is the only proof a port is free;
+#   - bin/fm-tailnet-serve-lib.sh, the one owner of publishing a loopback port
+#     onto this node's tailnet address and withdrawing it again, driven end to
+#     end here through the fake `tailscale serve` below;
 #   - bin/fm-lavish.sh, the entry point that turns that into a link the captain
 #     can actually open, and that degrades honestly when it cannot;
 #   - bin/fm-lavish-pretool-check.sh, the guard that denies bare `lavish-axi`.
@@ -957,6 +960,129 @@ n_owner="$HOME_N/state/lavish/fm-owner"
 assert_grep "link_host=127.0.0.1" "$n_owner" \
   "the link falls back to loopback rather than naming an address nothing serves"
 pass "a vessel with an unbindable address and no proxy is told its board opens only here"
+
+# The same vessel, opened a SECOND time. One open cannot see this: the --check
+# pre-read resolves tailnet-proxied every run, because whether a proxy will
+# publish is unanswerable until a port exists, so a staleness comparison taken
+# from the pre-read never agrees with the record the allocation writes. Deciding
+# it from the pre-read restarts a healthy board on every open, poll and end, and
+# drops the reviewer's connected browser each time.
+n_port=$(printf '%s\n' "$out" | sed -n 's|.*://[^:]*:\([0-9][0-9]*\)/session/.*|\1|p' | head -1)
+[ -n "$n_port" ] || fail "the degraded open should still emit a session link, got: $out"
+n_pid=$(cat "$FM_TEST_SERVERS/$n_port.pid" 2>/dev/null)
+[ -n "$n_pid" ] || fail "the degraded open should have left a board server running on $n_port"
+again=$(FM_TEST_TS_MODE=userspace FM_TEST_TS_SERVE=broken FM_HOME="$HOME_N" \
+  FM_SERVICE_PORT_RANGE=4801-4804 "$ROOT/bin/fm-lavish.sh" "$HOME_N/.lavish/board.html" 2>&1)
+assert_not_contains "$again" "different address configuration" \
+  "a vessel that degrades identically every run has not changed configuration"
+assert_contains "$again" ":$n_port/session" "the second open keeps the same port"
+[ "$(cat "$FM_TEST_SERVERS/$n_port.pid" 2>/dev/null)" = "$n_pid" ] \
+  || fail "the healthy board server was restarted on an unchanged configuration"
+alive=$(node "$ROOT/bin/fm-service-port-probe.mjs" http "http://127.0.0.1:$n_port/health" 2>/dev/null)
+[ "$alive" = 200 ] || fail "the board must still be serving after a second open"
+pass "a degraded vessel reopens onto its own running board instead of restarting it every time"
+
+# --- entry point: a publication does not outlive the board it points at ------
+#
+# lavish-axi stops itself after its idle timeout and immediately when the last
+# session ends with nothing connected, and neither path runs a line of the
+# wrapper. Serve configuration is node-wide and persistent, so it survives all
+# of that and would republish whatever binds that loopback port next under this
+# node's tailnet name.
+
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_R=$(make_home "$TMP_ROOT/vessel-r")
+make_serving_lavish "$HOME_R"
+opened=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_R" FM_SERVICE_PORT_RANGE=4806-4807 \
+  "$ROOT/bin/fm-lavish.sh" "$HOME_R/.lavish/board.html" 2>/dev/null)
+r_port=$(printf '%s\n' "$opened" | sed -n 's|.*://[^:]*:\([0-9][0-9]*\)/session/.*|\1|p' | head -1)
+[ -n "$r_port" ] || fail "the proxied open should emit a port, got: $opened"
+grep -qx "$r_port" "$FM_TEST_TS_SERVE_STATE" \
+  || fail "the open should have published $r_port: $(cat "$FM_TEST_TS_SERVE_STATE")"
+
+# The negative first: a board that is still answering keeps its publication.
+FM_TEST_TS_MODE=userspace FM_HOME="$HOME_R" FM_SERVICE_PORT_RANGE=4806-4807 \
+  "$ROOT/bin/fm-lavish.sh" "$HOME_R/.lavish/board.html" >/dev/null 2>&1
+grep -qx "$r_port" "$FM_TEST_TS_SERVE_STATE" \
+  || fail "a board that is still answering must keep its publication"
+
+# An unrelated entry, belonging to an account this vessel cannot speak for, with
+# nothing serving behind it either. The reconcile is bounded to this home's own
+# recorded port, so this one has to survive untouched: a node-wide sweep is the
+# same harm as withdrawing a neighbour's port, at a larger blast radius.
+printf '%s\n' 8443 >> "$FM_TEST_TS_SERVE_STATE"
+
+# Killed the way the idle self-stop ends it: without telling the wrapper.
+kill "$(cat "$FM_TEST_SERVERS/$r_port.pid")" 2>/dev/null || true
+rm -f "$FM_TEST_SERVERS/$r_port.pid"
+for _ in $(seq 1 100); do
+  node "$ROOT/bin/fm-service-port-probe.mjs" http "http://127.0.0.1:$r_port/health" \
+    >/dev/null 2>&1 || break
+  sleep 0.05
+done
+
+# A different window on the next run, so nothing republishes the old port and
+# only the reconcile can take it down.
+FM_TEST_TS_MODE=userspace FM_HOME="$HOME_R" FM_SERVICE_PORT_RANGE=4808-4809 \
+  "$ROOT/bin/fm-lavish.sh" "$HOME_R/.lavish/board.html" >/dev/null 2>&1
+! grep -qx "$r_port" "$FM_TEST_TS_SERVE_STATE" \
+  || fail "a publication whose board is gone must not survive the next run: $(cat "$FM_TEST_TS_SERVE_STATE")"
+grep -qx 8443 "$FM_TEST_TS_SERVE_STATE" \
+  || fail "the reconcile must touch this home's own port only, never sweep the node"
+pass "a publication left behind by a board that stopped itself is withdrawn, and only that one"
+
+# --- entry point: a bare stop withdraws nothing it has not proved ------------
+#
+# Serve configuration belongs to the whole node. A co-hosted vessel in userspace
+# mode can walk its own window onto this vessel's seat and publish it, and a
+# bare `stop` here resolves its port to exactly that seat with nothing proved
+# about it. Withdrawing then takes a live board off the tailnet from under an
+# account this vessel cannot speak for.
+
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_W=$(make_home "$TMP_ROOT/vessel-w")
+w_seat=$(field seat "$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_W" \
+  FM_SERVICE_PORT_RANGE=4811-4811 "$ROOT/bin/fm-service-port.sh" lavish --check)")
+[ "$w_seat" = 4811 ] || fail "a single-port window seats this vessel on 4811, got '$w_seat'"
+
+w_ready="$TMP_ROOT/vessel-w.ready"
+rm -f "$w_ready"
+node "$TMP_ROOT/board-server.mjs" "$w_ready" 127.0.0.1 "$w_seat" localhost \
+  </dev/null >"$TMP_ROOT/vessel-w.log" 2>&1 &
+W_PID=$!
+# Registered where the EXIT trap reaps it, so a failing run does not leave this
+# seat held and turn the next run's first assertion into the flake.
+printf '%s\n' "$W_PID" > "$FM_TEST_SERVERS/$w_seat.pid"
+for _ in $(seq 1 100); do [ -s "$w_ready" ] && break; sleep 0.05; done
+[ -s "$w_ready" ] || fail "the co-hosted vessel's board did not come up"
+printf '%s\n' "$w_seat" > "$FM_TEST_TS_SERVE_STATE"
+
+out=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_W" FM_SERVICE_PORT_RANGE=4811-4811 \
+  "$ROOT/bin/fm-lavish.sh" stop 2>&1)
+expect_code 0 "$?" "a bare stop with nothing of this vessel's own is not a failure"
+assert_contains "$out" "nothing to stop" "a vessel with no board of its own has nothing to stop"
+grep -qx "$w_seat" "$FM_TEST_TS_SERVE_STATE" \
+  || fail "a live board this vessel cannot prove is its own was taken off the tailnet: $(cat "$FM_TEST_TS_SERVE_LOG")"
+alive=$(node "$ROOT/bin/fm-service-port-probe.mjs" http "http://127.0.0.1:$w_seat/health" 2>/dev/null)
+[ "$alive" = 200 ] || fail "the co-hosted vessel's board must still be serving after the stop"
+kill "$W_PID" 2>/dev/null || true
+wait "$W_PID" 2>/dev/null || true
+rm -f "$FM_TEST_SERVERS/$w_seat.pid"
+for _ in $(seq 1 100); do
+  node "$ROOT/bin/fm-service-port-probe.mjs" http "http://127.0.0.1:$w_seat/health" \
+    >/dev/null 2>&1 || break
+  sleep 0.05
+done
+
+# The other half of the same rule, so the guard is a proof and not a refusal to
+# act: a seat with nothing serving behind it is still withdrawn.
+FM_TEST_TS_MODE=userspace FM_HOME="$HOME_W" FM_SERVICE_PORT_RANGE=4811-4811 \
+  "$ROOT/bin/fm-lavish.sh" stop >/dev/null 2>&1
+[ -z "$(tr -d '[:space:]' < "$FM_TEST_TS_SERVE_STATE")" ] \
+  || fail "a publication with nothing behind it must still be withdrawn: $(cat "$FM_TEST_TS_SERVE_STATE")"
+pass "a bare stop withdraws only a publication with nothing serving behind it"
 
 # --- entry point: an explicit --port earns no shortcut -----------------------
 #

@@ -51,6 +51,14 @@
 # serving is refused by name; one that answers nothing at all is reported as
 # nothing to stop.
 #
+# An explicit stop is not the only way a board ends, though: lavish-axi stops
+# itself when it goes idle and when the last session ends with nothing
+# connected, and a published proxy outlives all of that, a crash, and a reboot.
+# So every run that could open or stop a board first reconciles THIS home's own
+# recorded port - only that port, and only while nothing answers behind it - so
+# a dead board does not leave whatever binds that loopback port next answering
+# on the tailnet under this node's name.
+#
 # What it sets, and why each one is needed:
 #   LAVISH_AXI_HOST            the address the board binds, so the server is
 #                              reachable off this machine. Never a wildcard: an
@@ -314,18 +322,30 @@ port_is_ours() {
 
 # Deliberately without the token: it separates "a board is serving here and it
 # is not ours" from "nothing is serving here at all", which are different facts
-# and deserve different answers.
-port_answers() {
+# and deserve different answers. The address is named explicitly by the second
+# form, because a published proxy always points at loopback whatever this run
+# resolved as its own bind address.
+port_answers_on() {
   command -v node >/dev/null 2>&1 || return 1
   [ -f "$PROBE" ] || return 1
-  node "$PROBE" http "http://$ADDR:$1/health" >/dev/null 2>&1
+  node "$PROBE" http "http://$1:$2/health" >/dev/null 2>&1
 }
 
-owned_port() {
+port_answers() {
+  port_answers_on "$ADDR" "$1"
+}
+
+recorded_port() {
   local record="$STATE/service-port.lavish" recorded=""
   [ -r "$record" ] || return 1
   recorded=$(sed -n 's/^port=\([0-9][0-9]*\)$/\1/p' "$record" | head -1)
   [ -n "$recorded" ] || return 1
+  printf '%s\n' "$recorded"
+}
+
+owned_port() {
+  local recorded
+  recorded=$(recorded_port) || return 1
   port_is_ours "$recorded" || return 1
   printf '%s\n' "$recorded"
 }
@@ -350,9 +370,11 @@ in_window() {
 stop_server() {
   # Safe only because the claim token has already proved this process is this
   # home's; the same call against an unproven port could shut down a neighbour.
+  # It deliberately leaves the publication alone: a caller that is about to bind
+  # the same port again still needs it, and a caller that is walking away says
+  # so by calling withdraw_proxy itself.
   LAVISH_AXI_HOST=$ADDR LAVISH_AXI_PORT=$1 \
     "$LAVISH" stop --port "$1" >/dev/null 2>&1 || true
-  withdraw_proxy "$1"
 }
 
 # A published proxy outlives the server it points at, so a stopped board would
@@ -365,21 +387,41 @@ withdraw_proxy() {
   fm_tailnet_serve_withdraw "$1" || true
 }
 
+# lavish-axi stops itself when it goes idle and when the last session ends with
+# nothing connected, and neither path runs a line of this wrapper, so an
+# explicit stop is not the only way a board goes away. The publication survives
+# it - and a crash, and a reboot - which would leave whatever binds that
+# loopback port next answering under this node's tailnet name to the whole
+# tailnet, wider than the account that published it ever approved.
+#
+# The scope here is deliberately narrow and must stay narrow: only THIS home's
+# own recorded port, and only while nothing at all answers behind it. Every
+# other entry in the node's serve configuration belongs to an account this
+# vessel cannot speak for, and sweeping them is exactly the harm the ownership
+# rule above exists to prevent.
+reconcile_stale_publication() {
+  local recorded
+  command -v node >/dev/null 2>&1 || return 0
+  [ -f "$PROBE" ] || return 0
+  recorded=$(recorded_port) || return 0
+  fm_tailnet_serve_published "$recorded" || return 0
+  port_answers_on 127.0.0.1 "$recorded" && return 0
+  fm_tailnet_serve_withdraw "$recorded" || true
+}
+
+if [ "$NEEDS_PORT" -eq 1 ] || [ "$SUBCOMMAND" = stop ]; then
+  reconcile_stale_publication
+fi
+
 MINE=""
-STALE_SAME_PORT=""
 RELOCATE_FROM=""
 PROVEN=$(owned_port) || PROVEN=""
 if [ -n "$PROVEN" ]; then
-  # The running server emits the link host it was born with, so a changed link
-  # host is a stale server rather than a reusable one.
-  if [ "$(owner_field link_host || true)" = "$LINK_HOST" ] \
-    && [ "$(owner_field allowed || true)" = "$ALLOWED" ] \
-    && in_window "$PROVEN"; then
+  if in_window "$PROVEN"; then
+    # Whether the running server was started with the configuration this run
+    # resolves is not answerable yet, so that comparison waits for the
+    # allocation below and this port is offered to the allocator as ours.
     MINE=$PROVEN
-  elif in_window "$PROVEN"; then
-    # Same port wanted, new configuration: stopping first is what frees the seat
-    # to be reclaimed immediately.
-    STALE_SAME_PORT=$PROVEN
   else
     # A different port is wanted, so the working board must survive until a
     # replacement is actually secured. Tearing it down first would turn a failed
@@ -389,11 +431,6 @@ if [ -n "$PROVEN" ]; then
 fi
 
 # --- port -------------------------------------------------------------------
-
-if [ "$NEEDS_PORT" -eq 1 ] && [ -n "$STALE_SAME_PORT" ]; then
-  note "the running board server was started with a different address configuration; restarting it so links are correct"
-  stop_server "$STALE_SAME_PORT"
-fi
 
 PORT=""
 if [ "$NEEDS_PORT" -eq 1 ]; then
@@ -417,6 +454,22 @@ if [ "$NEEDS_PORT" -eq 1 ]; then
   if [ -n "$RELOCATE_FROM" ]; then
     note "moving this vessel's boards from port $RELOCATE_FROM to $PORT; links already handed over on the old port stop working"
     stop_server "$RELOCATE_FROM"
+    withdraw_proxy "$RELOCATE_FROM"
+  fi
+  # The running server emits the link host it was born with, so a changed link
+  # host is a stale server rather than a reusable one. Decided from the
+  # allocation and never from the --check pre-read: only the allocation knows
+  # whether a proxy was published, so on a vessel that degrades every time, a
+  # pre-read comparison never agrees with the record it wrote and would restart
+  # a healthy board - dropping the reviewer's connected browser - on every
+  # single open, poll, and end.
+  if [ -n "$MINE" ] \
+    && { [ "$(owner_field link_host || true)" != "$LINK_HOST" ] \
+      || [ "$(owner_field allowed || true)" != "$ALLOWED" ]; }; then
+    note "the running board server was started with a different address configuration; restarting it so links are correct"
+    # Same port wanted, so the publication the allocation just made still names
+    # the right port and is deliberately left standing across the restart.
+    stop_server "$MINE"
   fi
 else
   PORT=${MINE:-${PROVEN:-$SEAT}}
@@ -447,7 +500,12 @@ if [ "$SUBCOMMAND" = stop ] && [ "$EXPLICIT_PORT" -eq 1 ]; then
   fi
   PORT=$EXPLICIT_PORT_VALUE
 elif [ "$SUBCOMMAND" = stop ] && [ -z "$PROVEN" ]; then
-  withdraw_proxy "$PORT"
+  # Nothing here has been proved to be this vessel's, and PORT has fallen back
+  # to the bare seat, which a co-hosted vessel walking its own window can have
+  # published for a board of its own. So the same proof the explicit --port
+  # branch applies is required: a publication is only withdrawn where nothing is
+  # serving behind it at all.
+  port_answers "$PORT" || withdraw_proxy "$PORT"
   note "no review-board server owned by this vessel is running on $ADDR; nothing to stop"
   exit 0
 fi

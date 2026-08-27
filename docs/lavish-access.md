@@ -62,13 +62,17 @@ The session URL is built inside the server process from the environment it was b
 So exporting a corrected `LAVISH_AXI_LINK_HOST` on a later invocation changes nothing while a healthy server is still running on that port.
 `bin/fm-lavish.sh` records the configuration it launched a server with, compares it on the next run, and restarts its own server on a mismatch - which is safe only because the claim token has already proved the process belongs to this home.
 
+That comparison is made against the configuration the ALLOCATION resolved, never against the `--check` pre-read.
+The pre-read cannot know whether a proxy will publish, because no port exists yet, so on a vessel that degrades to loopback every time it never agrees with the record it wrote a moment earlier.
+Comparing against it would find a mismatch on every single open, poll, and end, and would restart a perfectly healthy board - dropping the reviewer's connected browser - to re-allocate the identical port and the identical link host.
+
 Stopping reaches into a running process the same way, so it carries the same proof, and an explicitly named port is no exception.
 `lavish-axi stop` shuts down whatever answers `/health` with a lavish-axi body on the address it is handed, without authentication and without regard for the owning UNIX account, and every co-hosted vessel binds that same address.
 So `bin/fm-lavish.sh stop --port <n>` runs the claim-token probe against `<n>` before it reaches `lavish-axi` at all: a port that answers but is not this home's is refused by name and left running, and a port that answers nothing is reported as nothing to stop.
 
 A port outside the currently resolved window counts as the same kind of staleness: an operator who narrows `FM_SERVICE_PORT_RANGE` to move this service off a conflict would otherwise keep the old port forever, because it is still legitimately ours.
 The two cases are handled differently on purpose.
-When the same port is still wanted, the old server is stopped first so the seat can be reclaimed immediately.
+When the same port is still wanted, the port is claimed back as this home's own and the old server is then stopped, so the seat is reclaimed immediately and the publication that names it is left standing across the restart.
 When a different port is wanted, the working board keeps serving until a replacement port has actually been secured, so a failed move cannot turn into a lost board - and a successful move says plainly that links already handed over on the old port stop working.
 
 ## The port allocator
@@ -131,6 +135,21 @@ Three facts this rests on, each measured rather than reasoned about, with the me
 
 `bin/fm-tailnet-serve-lib.sh` is the one owner of publishing and withdrawing.
 Serve configuration belongs to the tailscale node, which every UNIX account on this machine shares, so a port is only ever withdrawn where its ownership has already been proved by the claim token, or where nothing is serving on it at all.
+
+### An explicit stop is not the only way a board ends
+
+`lavish-axi` stops itself after `LAVISH_AXI_IDLE_TIMEOUT_MS` with no connections, and immediately when the last session ends with nothing connected.
+Neither path runs a line of `bin/fm-lavish.sh`, so neither withdraws anything, and a crash or a reboot leaves the same residue.
+What survives is worse than a `502`: the entry outlives the board and then republishes whatever binds that loopback port next - a co-hosted vessel's board, or any local-only tool that lands in the 4400-4499 window - to the whole tailnet under this node's name, which is wider than the account that published it ever approved.
+
+So every run that could open or stop a board first reconciles the publication, before it decides anything else.
+
+**The scope of that reconcile is deliberately narrow, and it must stay narrow.**
+It touches only THIS home's own port, proved through this home's own `state/service-port.<service>` record, and only while nothing at all answers behind it.
+It is not a sweep of `tailscale serve status`, and it must never be "improved" into one.
+Serve configuration is node-wide across every UNIX account on this machine, so reaching an entry this vessel has not proved is its own is the same harm as withdrawing a neighbour's published port - at a larger blast radius, because a sweep does it to every account at once.
+Measured on `coditan-vessel` while this rule was written: a second, unrelated residue was live on 8443 proxying to `127.0.0.1:4391`, and its target still answered `200`.
+It is out of scope on both counts - not this home's port, and not dead - and it was left untouched.
 
 When no proxy can be published, the link falls back to loopback and the wrapper says the board opens only on this machine.
 The promise this whole mechanism makes was never "bind the tailnet address"; it was "never hand the captain a link that opens nowhere", and a tailnet link on a vessel with no proxy would break exactly that promise.
