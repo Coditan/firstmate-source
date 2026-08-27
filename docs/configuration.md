@@ -309,7 +309,7 @@ Bootstrap never installs, enables, or starts it silently.
 After installation, locked bootstrap converges stale template bytes, checkout path, composed service `PATH`, and the respawner source version.
 If `systemd --user` is unavailable, a detached home-scoped tmux keeper is selected automatically, as it is for the watcher and the delivery listener; `bin/fm-seat-respawner-service.sh select` reports which tier a home is on and the keeper tier needs no install.
 That tier is converged on every watcher sweep through the check `bin/fm-seat-respawner-service.sh --arm` installs, rather than only at session start, because a restarter re-ensured by a seat session start is re-ensured by the thing it exists to restart.
-The respawner itself reads the wake-delivery service verdict rather than probing panes, honors `state/.seat-stay-down`, uses `config/seat-launch-command` as its fresh-start launch command, gives the fresh seat one typed first turn, and reports exhausted retry episodes through the findings surface.
+The respawner itself reads the wake-delivery service verdict rather than probing panes, refuses to launch while the session lock names a live first mate, honors `state/.seat-stay-down`, uses `config/seat-launch-command` as its fresh-start launch command, gives the fresh seat one typed first turn, and reports exhausted retry episodes through the findings surface.
 [`docs/seat-respawner.md`](seat-respawner.md) owns the mechanism, retry bound, accepted manual-close trade, and verification limits, and [`docs/seat-absence.md`](seat-absence.md) owns the detection half, the supervision arrangement, and what is still not covered.
 
 ## Seat absence alarm

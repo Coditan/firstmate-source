@@ -245,11 +245,22 @@ test_the_keeper_tier_is_selected_and_converged_without_a_seat() {
 
   # A tmux pinned to this test's private socket, so the probe never creates or
   # kills a session next to the fleet this repo actually runs.
-  printf '#!/usr/bin/env bash\nexec %s -S %s "$@"\n' "$(command -v tmux)" "$SOCKET" > "$HOME_DIR/tmux-shim"
+  #
+  # It also publishes FM_SEAT_REVIVE_WATCHER=0 into that server's environment
+  # before every call. The keeper this test starts is launched by `tmux
+  # new-session`, which runs its command under the SERVER's environment rather
+  # than this caller's, so the variable set below in run_service does not reach
+  # the respawner the keeper spawns - and that respawner would otherwise revive
+  # a "dead" watcher for this fixture home on the DEFAULT socket, where this
+  # repo runs its own live fleet. A server this shim has to create instead
+  # inherits the value from run_service through this process.
+  printf '#!/usr/bin/env bash\n%s -S %s set-environment -g FM_SEAT_REVIVE_WATCHER 0 2>/dev/null || true\nexec %s -S %s "$@"\n' \
+    "$(command -v tmux)" "$SOCKET" "$(command -v tmux)" "$SOCKET" > "$HOME_DIR/tmux-shim"
   chmod +x "$HOME_DIR/tmux-shim"
 
   run_service() {
     env FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$HOME_DIR/state" \
+      FM_SEAT_REVIVE_WATCHER=0 \
       FM_SEAT_RESPAWNER_FORCE_BACKEND=keeper FM_SEAT_RESPAWNER_TMUX="$HOME_DIR/tmux-shim" \
       "$service" "$@"
   }
@@ -269,6 +280,12 @@ test_the_keeper_tier_is_selected_and_converged_without_a_seat() {
   # sweep would bury the one sweep where it mattered.
   [ -z "$(run_service converge)" ] \
     || fail "converging an already-running restarter was not silent"
+
+  # No fixture may reach the host's default tmux socket. A watcher revived for
+  # this throwaway home would record its keeper here, and would then go on
+  # sweeping a home this suite deletes.
+  [ ! -e "$HOME_DIR/state/.watch-keeper.pid" ] \
+    || fail "the fixture respawner started a real watcher keeper for a throwaway home"
 
   run_service restart >/dev/null 2>&1 || true
   "$HOME_DIR/tmux-shim" kill-session -t "$(. "$ROOT/bin/fm-keeper-name-lib.sh"; fm_keeper_name seat-respawner "$HOME_DIR")" 2>/dev/null || true

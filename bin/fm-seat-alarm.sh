@@ -429,6 +429,33 @@ compose_message() {  # <verdict> <duration-seconds>
   esac
 }
 
+# The line the watcher prints, which is the one the returning seat reads. The
+# two verdicts get different words for the same reason compose_message gives
+# them different words: an absence was established and an unmeasured reading was
+# not, so printing the confirmed sentence for both would state a fact the
+# reading explicitly did not take.
+transition_line() {  # <verdict> <duration-seconds>
+  case "$1" in
+    unmeasured)
+      printf 'seat-alarm: this vessel has not been able to tell whether it has a first mate for %s (%s); %s %s\n' \
+        "$(human_duration "$2")" "$REASON" "$(waiting_clause)" "$(restarter_clause)" ;;
+    *)
+      printf 'seat-alarm: this vessel has had no first mate for %s (%s); %s %s\n' \
+        "$(human_duration "$2")" "$REASON" "$(waiting_clause)" "$(restarter_clause)" ;;
+  esac
+}
+
+recovery_line() {  # <previous-verdict> <duration-seconds>
+  case "$1" in
+    unmeasured)
+      printf 'seat-alarm: this vessel could not tell whether it had a first mate for %s and can see one now; %s\n' \
+        "$(human_duration "$2")" "$(waiting_clause)" ;;
+    *)
+      printf 'seat-alarm: this vessel went %s without a first mate and has one again; %s\n' \
+        "$(human_duration "$2")" "$(waiting_clause)" ;;
+  esac
+}
+
 # Send, and never discard the result. A notification path that fails quietly
 # gets trusted while it is dead, which is this task's own defect wearing a
 # different hat. A failed send is recorded and NOT counted as a notification, so
@@ -574,8 +601,7 @@ case "$VERDICT" in
         # draining it.
         if [ "$FIRST" -eq 1 ]; then
           log_line "entered verdict=$VERDICT reason=$REASON depth=${QUEUE_DEPTH:-unreadable} restarter=$RESTARTER"
-          printf 'seat-alarm: this vessel has had no first mate for %s (%s); %s %s\n' \
-            "$(human_duration "$AGE")" "$REASON" "$(waiting_clause)" "$(restarter_clause)"
+          transition_line "$VERDICT" "$AGE"
         fi
       fi
     fi
@@ -587,8 +613,7 @@ case "$VERDICT" in
         # Told he lost it, so tell him it is back; never announce a recovery
         # from an absence he was never told about.
         [ -z "$PREV_NOTIFIED" ] || notify present "$((NOW - ${PREV_SINCE:-$NOW}))" || true
-        printf 'seat-alarm: this vessel went %s without a first mate and has one again; %s\n' \
-          "$(human_duration "$((NOW - ${PREV_SINCE:-$NOW}))")" "$(waiting_clause)"
+        recovery_line "$PREV_VERDICT" "$((NOW - ${PREV_SINCE:-$NOW}))"
         ;;
     esac
     ;;

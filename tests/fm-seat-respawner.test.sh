@@ -10,6 +10,21 @@ SERVICE="$ROOT/bin/fm-seat-respawner-service.sh"
 
 fm_test_tmproot TMP_ROOT fm-seat-respawner
 
+PIDNS=$(. "$ROOT/bin/fm-harness-pid-lib.sh"; fm_pid_namespace_token)
+
+# A process whose name and command line look exactly like a harness, so the
+# lock this component reads names something a liveness test accepts.
+start_harness_shaped_process() {  # <home>
+  printf '#!/usr/bin/env bash\nsleep 60\n' > "$1/claude"
+  chmod +x "$1/claude"
+  "$1/claude" >/dev/null 2>&1 </dev/null &
+  printf '%s\n' "$!"
+}
+
+record_seat() {  # <home> <pid>
+  printf '%s\npidns=%s\n' "$2" "$PIDNS" > "$1/state/.lock"
+}
+
 make_home() {
   local name=$1 home
   home="$TMP_ROOT/$name"
@@ -274,8 +289,51 @@ test_an_armed_restart_that_never_ran_is_reported() {
   pass "an armed restart that never ran and one that stopped are both reported"
 }
 
+# A busy first mate produces the same `undeliverable:` verdict a missing one
+# does - the delivery listener blocks the submit on a mid-turn pane - so the
+# verdict alone cannot open a relaunch. The session lock is the presence
+# reading, the same one bin/fm-seat-alarm.sh takes, and a home whose lock names
+# a live harness is not missing a seat.
+test_a_live_first_mate_is_never_relaunched() {
+  local home delivery tmux log status seat launches
+  home=$(make_home lock-held)
+  status="$home/status.txt"
+  delivery="$home/fake-delivery"
+  tmux="$home/fake-tmux"
+  log="$home/tmux.log"
+  printf 'undeliverable: listener pid 1 is up with 1 wake(s) pending, but the session pane is mid-turn\n' > "$status"
+  write_fake_delivery "$delivery"
+  write_pane_fake_tmux "$tmux" "$log"
+
+  FM_SEAT_RESPAWNER_MAX_ATTEMPTS=3 FM_FAKE_DELIVERY_STATUS="$status" \
+    run_respawner_once "$home" "$delivery" "$tmux" \
+    || fail "respawner refused the first unreachable check"
+  [ -f "$home/state/.seat-respawn-attempts" ] || fail "the first cycle opened no retry episode"
+
+  # The seat that was there all along takes this home's lock, exactly as a busy
+  # one holds it while the listener reports the pane unreachable.
+  seat=$(start_harness_shaped_process "$home")
+  record_seat "$home" "$seat"
+
+  sleep 2
+  FM_SEAT_RESPAWNER_MAX_ATTEMPTS=3 FM_FAKE_DELIVERY_STATUS="$status" \
+    run_respawner_once "$home" "$delivery" "$tmux" \
+    || fail "respawner refused a cycle while a live first mate held the lock"
+  kill "$seat" 2>/dev/null || true
+
+  launches=$(grep -c new-window "$log" 2>/dev/null || printf 0)
+  [ "$launches" = 1 ] \
+    || fail "a second seat was launched beside a live first mate; got $launches"
+  [ ! -e "$home/state/.seat-respawn-attempts" ] \
+    || fail "a home with a live first mate kept an active retry episode"
+  assert_grep "launch refused" "$home/state/.seat-respawner.log" \
+    "refusing to relaunch beside a live first mate was not operator-visible"
+  pass "seat respawner never launches beside a first mate that holds this home"
+}
+
 test_stay_down_marker_is_authoritative
 test_giveup_path_reports_a_finding
+test_a_live_first_mate_is_never_relaunched
 test_a_pending_first_turn_holds_the_next_launch
 test_an_armed_restart_that_never_ran_is_reported
 test_launch_does_not_pin_the_respawners_path
