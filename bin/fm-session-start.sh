@@ -85,8 +85,9 @@
 #                       data/captain.md, data/captain-shared.md,
 #                       data/learnings.md: read-only, always safe, always runs.
 #   7. fleet digest   - a compact data/backlog.md identity/metadata listing,
-#                       every state/*.meta, a bounded state/*.status tail,
-#                       state/.afk, and a cheap per-task endpoint-liveness read:
+#                       the standing context-ceiling condition from
+#                       docs/context-reset.md, every state/*.meta, a bounded
+#                       state/*.status tail, state/.afk, and a cheap per-task endpoint-liveness read:
 #                       read-only, always runs. The status tail is labeled as
 #                       wake-EVENT history rather than current state, and prints
 #                       the full log path so a deeper read is one command away.
@@ -476,6 +477,66 @@ print_file_or_absent "$DATA/learnings.md" "data/learnings.md"
 # --- 7. fleet-state digest ---------------------------------------------
 section "FLEET STATE"
 print_backlog_compact "$DATA/backlog.md" "data/backlog.md"
+
+subsection "Standing context-ceiling condition (docs/context-reset.md)"
+CEILING_MARKER="$STATE/.context-ceiling-surfaced"
+CEILING_ABSENCE="$STATE/.context-ceiling-absent-since"
+if [ ! -f "$CEILING_MARKER" ]; then
+  printf '(none)\n'
+elif read -r CEILING_CLASS CEILING_CONDITION CEILING_SINCE CEILING_OBSERVATIONS < "$CEILING_MARKER"; then
+  case "${CEILING_SINCE:-}${CEILING_OBSERVATIONS:-}" in
+    *[!0-9]*|'')
+      printf 'unreadable standing record - do not treat the condition as clear\n'
+      CEILING_CLASS=unreadable
+      ;;
+    *)
+      CEILING_AGE=$(( $(date +%s) - CEILING_SINCE ))
+      [ "$CEILING_AGE" -ge 0 ] || CEILING_AGE=0
+      ;;
+  esac
+  case "$CEILING_CLASS" in
+    reset|ask)
+      printf 'class=%s; condition=%s; first_observed_epoch=%s; age=%ss; observations=%s; unchanged wake suppression is active until the condition changes or resolves\n' \
+        "$CEILING_CLASS" "$CEILING_CONDITION" "$CEILING_SINCE" "$CEILING_AGE" "$CEILING_OBSERVATIONS"
+      ;;
+    blocked|unenforced)
+      CEILING_ABSENCE_CLASS=
+      CEILING_ABSENCE_CONDITION=
+      CEILING_ABSENCE_SINCE=
+      CEILING_ABSENCE_OBSERVATIONS=
+      if [ -f "$CEILING_ABSENCE" ]; then
+        read -r CEILING_ABSENCE_CLASS CEILING_ABSENCE_CONDITION CEILING_ABSENCE_SINCE CEILING_ABSENCE_OBSERVATIONS \
+          < "$CEILING_ABSENCE" 2>/dev/null || true
+      fi
+      case "${CEILING_ABSENCE_SINCE:-}${CEILING_ABSENCE_OBSERVATIONS:-}" in
+        *[!0-9]*|'')
+          printf 'class=%s; absence record unreadable - do not treat this condition as clear\n' \
+            "$CEILING_CLASS"
+          ;;
+        *)
+          if [ "$CEILING_ABSENCE_CLASS" != "$CEILING_CLASS" ] \
+            || [ "$CEILING_ABSENCE_CONDITION" != "$CEILING_CONDITION" ]; then
+            printf 'class=%s; condition=%s; absence record names class=%s condition=%s - do not treat this condition as clear\n' \
+              "$CEILING_CLASS" "$CEILING_CONDITION" "${CEILING_ABSENCE_CLASS:-missing}" \
+              "${CEILING_ABSENCE_CONDITION:-missing}"
+          else
+            CEILING_ABSENCE_AGE=$(( $(date +%s) - CEILING_ABSENCE_SINCE ))
+            [ "$CEILING_ABSENCE_AGE" -ge 0 ] || CEILING_ABSENCE_AGE=0
+            printf 'class=%s; condition=%s; first_observed_epoch=%s; age=%ss; observations=%s; unchanged wake suppression is active\n' \
+              "$CEILING_CLASS" "$CEILING_CONDITION" "$CEILING_SINCE" "$CEILING_AGE" \
+              "$CEILING_OBSERVATIONS"
+          fi
+          ;;
+      esac
+      ;;
+    *)
+      printf 'unreadable class %s - do not treat the standing condition as clear\n' \
+        "${CEILING_CLASS:-missing}"
+      ;;
+  esac
+else
+  printf 'unreadable marker - do not treat the standing condition as clear\n'
+fi
 
 subsection "Direct reports (state/*.meta; state=resting secondmates are not work under way)"
 META_FOUND=0

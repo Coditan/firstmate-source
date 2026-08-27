@@ -740,7 +740,7 @@ test_unverified_harness_refuses() {
 # --- the watcher's ceiling branch -------------------------------------------
 
 # The watcher's own function, sourced from the real bin/fm-watch.sh (which
-# returns before its lock and loop when sourced), so the throttle and the branch
+# returns before its lock and loop when sourced), so suppression and the branch
 # are exercised as the watcher runs them. The watcher path is passed as $1, never
 # as $0: its source guard compares BASH_SOURCE[0] against $0, so a $0 that names
 # the watcher would make it start its real singleton loop instead of returning.
@@ -756,7 +756,7 @@ watch_reason() {  # [extra env assignments...]
 
 # The branch identity and the poll's resolution state, straight from the shared
 # predicate. Asserting these rather than payload wording is the point: the class
-# is the throttle key, so a reworded message must never quietly change which
+# is the suppression key, so a reworded message must never quietly change which
 # condition a wake counts as.
 watch_class() {
   # shellcheck disable=SC2016 # The inner script's $1 is the child shell's, on purpose.
@@ -857,33 +857,31 @@ test_watcher_is_silent_with_no_session_running() {
   pass "a home with no session running says nothing rather than alarming forever"
 }
 
-test_watcher_throttles_but_does_not_silence_the_measurement_failure() {
-  local first second third
+test_watcher_reports_a_measurement_failure_once_until_it_changes() {
+  local first second
   make_case
   rm -f "$STATE_DIR/.primary-transcript"
   first=$(watch_reason)
   assert_contains "$first" "cannot be measured" "the first measurement failure was not reported"
+  touch -t 202001010000 "$STATE_DIR/.context-ceiling-surfaced"
   second=$(watch_reason)
-  [ -z "$second" ] || fail "the measurement failure repeated on the very next poll: $second"
-  third=$(watch_reason FM_CONTEXT_ERROR_RESURFACE=0)
-  assert_contains "$third" "cannot be measured" "the measurement failure never came back after its quiet period"
-  pass "a standing measurement failure reports periodically instead of once or forever"
+  [ -z "$second" ] || fail "an unchanged measurement failure raised a second wake: $second"
+  pass "a standing measurement failure raises one wake and stays quiet until it changes"
 }
 
 # The ask branch is the one a captain who is present would otherwise hear every
-# CONTEXT_CHECK_INTERVAL for as long as they are around, so it is throttled on
+# CONTEXT_CHECK_INTERVAL for as long as they are around, so it is suppressed on
 # exactly the same terms as the unmeasurable one.
-test_watcher_throttles_an_unchanged_ask() {
-  local first second third
+test_watcher_reports_an_unchanged_ask_once() {
+  local first second
   make_case
   write_transcript "$TRANSCRIPT" 900000 "$(iso_ago 60)"
   first=$(watch_reason)
   assert_contains "$first" "ASK the captain" "the first ask was not reported"
+  touch -t 202001010000 "$STATE_DIR/.context-ceiling-surfaced"
   second=$(watch_reason)
-  [ -z "$second" ] || fail "an unchanged ask repeated on the very next poll: $second"
-  third=$(watch_reason FM_CONTEXT_ERROR_RESURFACE=0)
-  assert_contains "$third" "ASK the captain" "the ask never came back after its quiet period"
-  pass "a still-true ask is held quiet for its resurface period rather than nagging every poll"
+  [ -z "$second" ] || fail "an unchanged ask raised a second wake: $second"
+  pass "a still-true ask raises one wake and stays quiet until it changes"
 }
 
 test_watcher_surfaces_a_changed_branch_immediately() {
@@ -897,49 +895,49 @@ test_watcher_surfaces_a_changed_branch_immediately() {
   write_transcript "$TRANSCRIPT" 900000 "$(iso_ago 86400)"
   second=$(watch_reason)
   assert_contains "$second" "the captain is not present" \
-    "a changed ceiling branch was suppressed by the previous branch's throttle"
+    "a changed ceiling branch inherited suppression from the previous class"
   assert_contains "$second" "fm-context-reset.sh" "the reset branch surfaced without its commands"
   pass "a ceiling branch that changes surfaces on the next poll instead of waiting out the old one"
 }
 
-test_watcher_clears_the_throttle_when_the_condition_resolves() {
+test_watcher_clears_suppression_when_the_condition_resolves() {
   local out
   make_case
   out=$(watch_reason)
   assert_contains "$out" "the captain is not present" "the reset branch did not report first"
-  assert_present "$STATE_DIR/.context-ceiling-surfaced" "a reported ceiling branch left no throttle marker"
+  assert_present "$STATE_DIR/.context-ceiling-surfaced" "a reported ceiling branch left no suppression marker"
   # Back under the ceiling: the condition is genuinely gone, not merely quiet.
   write_transcript "$TRANSCRIPT" 1000 ""
   assert_class "/resolved" "a session back under the ceiling"
   out=$(watch_reason)
   [ -z "$out" ] || fail "a session back under the ceiling still reported: $out"
   [ -e "$STATE_DIR/.context-ceiling-surfaced" ] \
-    && fail "a resolved condition left the ceiling throttle marker in place"
+    && fail "a resolved condition left the ceiling suppression marker in place"
   write_transcript "$TRANSCRIPT" 900000 "$(iso_ago 86400)"
   out=$(watch_reason)
   assert_contains "$out" "the captain is not present" \
-    "the ceiling report did not return immediately after the throttle was cleared"
-  pass "a condition that genuinely resolves clears the throttle, so the next one reports at once"
+    "the ceiling report did not return immediately after suppression was cleared"
+  pass "a condition that genuinely resolves clears suppression, so the next one reports at once"
 }
 
-test_watcher_clears_the_throttle_when_the_session_ends() {
+test_watcher_clears_suppression_when_the_session_ends() {
   make_case
   watch_reason >/dev/null
-  assert_present "$STATE_DIR/.context-ceiling-surfaced" "a reported ceiling branch left no throttle marker"
+  assert_present "$STATE_DIR/.context-ceiling-surfaced" "a reported ceiling branch left no suppression marker"
   rm -f "$STATE_DIR/.lock"
   assert_class "/resolved" "a home with no session running"
   watch_reason >/dev/null
   [ -e "$STATE_DIR/.context-ceiling-surfaced" ] \
-    && fail "a home whose session ended kept the previous session's ceiling throttle"
-  pass "a session that ends clears the throttle it left behind"
+    && fail "a home whose session ended kept the previous session's ceiling suppression marker"
+  pass "a session that ends clears the suppression marker it left behind"
 }
 
 # --- an absent protection is not routine traffic ----------------------------
 #
 # The defect these exist for was not the diagnosis, which was exact, but the
 # REPEAT: the unenforced wake arrived once an hour for a whole day on 2026-08-19,
-# word-for-word identical every time, and was absorbed every time. What each
-# report could not say is that it was not the first.
+# word-for-word identical every time, and was absorbed every time. The durable
+# record must carry what the repeated model turns used to carry.
 
 test_a_first_absent_report_carries_only_its_diagnosis() {
   local out
@@ -952,64 +950,93 @@ test_a_first_absent_report_carries_only_its_diagnosis() {
   pass "the first report of an absent protection states the condition and nothing more"
 }
 
-test_a_repeated_absent_report_says_how_long_and_how_often() {
+test_an_unchanged_absence_updates_its_record_without_another_wake() {
+  local out record since
+  make_case
+  rm -f "$STATE_DIR/.primary-transcript"
+  watch_reason >/dev/null
+  since=$(( $(date +%s) - 25200 ))
+  printf 'unenforced record-missing %s 1\n' "$since" > "$STATE_DIR/.context-ceiling-absent-since"
+  touch -t 202001010000 "$STATE_DIR/.context-ceiling-surfaced"
+  out=$(watch_reason)
+  [ -z "$out" ] || fail "an unchanged absent protection raised a second wake: $out"
+  record=$(cat "$STATE_DIR/.context-ceiling-absent-since")
+  [ "$record" = "unenforced record-missing $since 2" ] \
+    || fail "the quiet absence did not retain its age and advance its observation count: $record"
+  pass "an unchanged absence stays quiet while its durable age and observation count advance"
+}
+
+test_an_absence_record_failure_repeats_the_wake() {
   local out
   make_case
   rm -f "$STATE_DIR/.primary-transcript"
   watch_reason >/dev/null
-  # Back-date the first report by seven hours: what the captain was actually
-  # given all day was the first sentence, seven more times.
-  printf 'unenforced %s 1\n' "$(( $(date +%s) - 25200 ))" > "$STATE_DIR/.context-ceiling-absent-since"
-  out=$(watch_reason FM_CONTEXT_ERROR_RESURFACE=0)
+  rm -f "$STATE_DIR/.context-ceiling-absent-since"
+  mkdir "$STATE_DIR/.context-ceiling-absent-since"
+
+  out=$(watch_reason 2>/dev/null)
+
   assert_contains "$out" "cannot be measured" \
-    "the repeat was made louder by making it vaguer: the diagnosis is gone"
-  assert_contains "$out" "unenforced" "the repeat stopped naming the ceiling as unenforced"
-  assert_contains "$out" "no working protection since" "a repeat did not say the protection is absent"
-  assert_contains "$out" "7h 0m ago" "a repeat did not say how long the protection has been gone"
-  assert_contains "$out" "report 2" "a repeat did not say how many reports it has survived"
-  assert_contains "$out" "tell the captain plainly" \
-    "a repeat did not say what to do with an absence nobody has repaired"
-  pass "a repeated absent-protection report carries its own age and count, and keeps its diagnosis"
+    "a failed absence-record update left the unenforced ceiling silent"
+  pass "an unenforced ceiling repeats its wake when its durable record cannot be updated"
+}
+
+test_a_changed_failure_in_the_same_class_wakes_immediately() {
+  local out
+  make_case
+  rm -f "$STATE_DIR/.primary-transcript"
+  watch_reason >/dev/null
+  printf 'status=error\nerror=discovery failed\n' > "$STATE_DIR/.primary-transcript"
+
+  out=$(watch_reason)
+
+  assert_contains "$out" "error state" \
+    "a different unenforced failure inherited suppression from the previous failure"
+  pass "a changed semantic failure wakes immediately even when its display class is unchanged"
 }
 
 # The other half of the same rule: nothing about a protection that is WORKING
 # gets louder. The ask branch fires whenever the captain is present, which is
 # most of the day, and turning that into an escalation would bury the class this
 # change exists to raise.
-test_a_repeated_ask_gains_no_escalation() {
+test_an_unchanged_ask_gains_no_escalation() {
   local first second
   make_case
   write_transcript "$TRANSCRIPT" 900000 "$(iso_ago 60)"
   first=$(watch_reason)
   assert_contains "$first" "ASK the captain" "the first ask was not reported"
-  second=$(watch_reason FM_CONTEXT_ERROR_RESURFACE=0)
-  assert_contains "$second" "ASK the captain" "the ask did not come back after its quiet period"
-  assert_not_contains "$second" "no working protection since" \
-    "a working ceiling was escalated as an absent protection"
+  touch -t 202001010000 "$STATE_DIR/.context-ceiling-surfaced"
+  second=$(watch_reason)
+  [ -z "$second" ] || fail "an unchanged working ceiling was escalated: $second"
   [ -e "$STATE_DIR/.context-ceiling-absent-since" ] \
     && fail "a working ceiling started an absence clock"
-  pass "a ceiling that is working, and merely waiting for the captain, repeats unchanged"
+  pass "a ceiling that is working, and merely waiting for the captain, stays quiet unchanged"
 }
 
 # A different absence is a different occurrence. Dating an unresettable ceiling
 # from the moment an unmeasurable one started would report an age that never
 # happened, which is the same defect as reporting no age at all.
 test_a_changed_absent_class_restarts_the_clock() {
-  local out
+  local out record_class record_since record_observations old_since
   make_case
   rm -f "$STATE_DIR/.primary-transcript"
   watch_reason >/dev/null
-  printf 'unenforced %s 4\n' "$(( $(date +%s) - 25200 ))" > "$STATE_DIR/.context-ceiling-absent-since"
+  old_since=$(( $(date +%s) - 25200 ))
+  printf 'unenforced record-missing %s 4\n' "$old_since" > "$STATE_DIR/.context-ceiling-absent-since"
   # The transcript comes back and the re-entry hook goes away: measurable again,
   # but the reset it would order cannot run.
   record_ok
   write_settings "$HOME_DIR" 'startup|resume' 'fm-sessionstart-nudge.sh'
-  out=$(watch_reason FM_CONTEXT_ERROR_RESURFACE=0)
+  out=$(watch_reason)
   assert_contains "$out" "cannot run safely" "the blocked branch did not report its own condition"
-  assert_not_contains "$out" "no working protection since" \
-    "a newly blocked ceiling inherited the age of a different absence"
-  assert_contains "$(cat "$STATE_DIR/.context-ceiling-absent-since")" "blocked" \
-    "the absence record was not rebound to the class actually reported"
+  read -r record_class _ record_since record_observations \
+    < "$STATE_DIR/.context-ceiling-absent-since"
+  [ "$record_class" = blocked ] \
+    || fail "the absence record kept the old class after the condition changed: $record_class"
+  [ "$record_since" -gt "$old_since" ] \
+    || fail "the changed absence inherited the previous class's first-observed time"
+  [ "$record_observations" -eq 1 ] \
+    || fail "the changed absence inherited the previous class's observation count"
   pass "an absence of a different kind is dated from itself, not from the one before it"
 }
 
@@ -1037,9 +1064,9 @@ test_a_resolved_condition_clears_the_absence_clock() {
 # The regression this exists for: the ceiling wake is appended to
 # state/.wake-queue, and an undrained queue is the first thing fm_context_quiet
 # tests, so the very next poll after a ceiling wake finds the fleet busy. Reading
-# that as "the condition is gone" let each wake erase its own throttle and come
-# back once per drain cycle - roughly the nagging the throttle was added to end.
-test_watcher_keeps_the_throttle_while_its_own_wake_is_undrained() {
+# that as "the condition is gone" let each wake erase its own suppression marker
+# and come back once per drain cycle.
+test_watcher_keeps_suppression_while_its_own_wake_is_undrained() {
   local first second third
   make_case
   write_transcript "$TRANSCRIPT" 900000 "$(iso_ago 60)"
@@ -1051,12 +1078,12 @@ test_watcher_keeps_the_throttle_while_its_own_wake_is_undrained() {
   second=$(watch_reason)
   [ -z "$second" ] || fail "a busy poll reported a second ceiling wake: $second"
   assert_present "$STATE_DIR/.context-ceiling-surfaced" \
-    "an undrained wake erased the throttle it had just set"
+    "an undrained wake erased the suppression marker it had just set"
   # Firstmate drains, and the captain is still there: nothing has changed.
   rm -f "$STATE_DIR/.wake-queue"
   third=$(watch_reason)
   [ -z "$third" ] || fail "the ask re-fired after its own wake was drained: $third"
-  pass "a ceiling wake sitting undrained does not clear the throttle it set"
+  pass "a ceiling wake sitting undrained does not clear its suppression marker"
 }
 
 test_watcher_publishes_a_stable_class_per_branch() {
@@ -1594,15 +1621,17 @@ test_watcher_is_silent_while_the_fleet_is_busy
 test_watcher_reports_when_it_cannot_measure
 test_watcher_reports_a_record_from_a_finished_session
 test_watcher_is_silent_with_no_session_running
-test_watcher_throttles_but_does_not_silence_the_measurement_failure
-test_watcher_throttles_an_unchanged_ask
+test_watcher_reports_a_measurement_failure_once_until_it_changes
+test_watcher_reports_an_unchanged_ask_once
 test_watcher_surfaces_a_changed_branch_immediately
-test_watcher_clears_the_throttle_when_the_condition_resolves
-test_watcher_clears_the_throttle_when_the_session_ends
-test_watcher_keeps_the_throttle_while_its_own_wake_is_undrained
+test_watcher_clears_suppression_when_the_condition_resolves
+test_watcher_clears_suppression_when_the_session_ends
+test_watcher_keeps_suppression_while_its_own_wake_is_undrained
 test_a_first_absent_report_carries_only_its_diagnosis
-test_a_repeated_absent_report_says_how_long_and_how_often
-test_a_repeated_ask_gains_no_escalation
+test_an_unchanged_absence_updates_its_record_without_another_wake
+test_an_absence_record_failure_repeats_the_wake
+test_a_changed_failure_in_the_same_class_wakes_immediately
+test_an_unchanged_ask_gains_no_escalation
 test_a_changed_absent_class_restarts_the_clock
 test_a_resolved_condition_clears_the_absence_clock
 test_watcher_publishes_a_stable_class_per_branch

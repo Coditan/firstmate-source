@@ -168,12 +168,6 @@ CERTSYNC_HEALTH_TIMEOUT=${FM_CERTSYNC_HEALTH_TIMEOUT:-5}  # seconds allowed for 
 CERTSYNC_HEALTH_RESURFACE=${FM_CERTSYNC_HEALTH_RESURFACE:-3600}  # seconds before repeating unchanged unhealthy or cannot-run certsync
 CERTSYNC_HEARTBEAT_MAX_AGE=${FM_CERTSYNC_HEARTBEAT_MAX_AGE:-7200}  # certsync heartbeat older than this reads as unhealthy (daemon stopped / syncs failing); 2x the 3600s max sync interval; 0 disables
 CONTEXT_CHECK_INTERVAL=${FM_CONTEXT_CHECK_INTERVAL:-300}  # seconds between context-ceiling reads
-# How long an UNCHANGED context-ceiling report stays quiet before it says so
-# again. Long, because every branch of that check describes a standing condition
-# rather than an event - but finite, because a ceiling nobody hears about is an
-# unenforced ceiling, and letting that state go quiet forever is the exact
-# failure this check exists to end. A change of branch is never throttled.
-CONTEXT_ERROR_RESURFACE=${FM_CONTEXT_ERROR_RESURFACE:-3600}
 # Shared Bridge detection and enqueue-before-marker deduplication.  The
 # standalone frequency monitor loads this same library, and its own lock keeps
 # the two independent processes from surfacing one signature twice.
@@ -991,47 +985,45 @@ age_of() {  # seconds since file mtime; "due immediately" if missing
   echo $(( $(date +%s) - m ))
 }
 
-# The clause appended to an absent-protection ceiling wake, and nothing at all on
-# the first report of one. state/.context-ceiling-absent-since carries
-# "<class> <first-report-epoch> <reports>" as content rather than as an mtime,
-# because the mtime moves on every rewrite and the whole point of the record is
-# the moment that did NOT move. A change of class restarts it: a ceiling that
-# stopped being unmeasurable and started being unresettable is a different
-# absence, and dating the new one from the old one would overstate it.
-context_absence_clause() {  # <class>
-  local class=$1 file="$STATE/.context-ceiling-absent-since" prev_class since reports now age
+# Record every observation of an absent-protection ceiling without raising a
+# second wake for an unchanged condition. state/.context-ceiling-absent-since
+# carries "<class> <condition> <first-observed-epoch> <observations>" as content rather than
+# relying on its mtime, because the mtime moves on every rewrite and the whole
+# point of the record is the moment that did NOT move. A change of class or
+# semantic condition restarts it: dating a new absence from the old one would
+# overstate it.
+context_absence_observe() {  # <class> <condition>
+  local class=$1 condition=$2 file="$STATE/.context-ceiling-absent-since"
+  local prev_class prev_condition since observations now
   now=$(date +%s)
   # The redirect is opened before the 2>/dev/null would take effect, so an absent
   # file is checked for rather than left to print a shell error on every poll.
-  [ -f "$file" ] && { read -r prev_class since reports < "$file" 2>/dev/null || true; }
-  case "${since:-}${reports:-}" in
-    *[!0-9]*|'') prev_class=; since=; reports= ;;
+  [ -f "$file" ] && { read -r prev_class prev_condition since observations < "$file" 2>/dev/null || true; }
+  case "${since:-}${observations:-}" in
+    *[!0-9]*|'') prev_class=; prev_condition=; since=; observations= ;;
   esac
-  if [ "${prev_class:-}" != "$class" ] || [ -z "${since:-}" ] || [ -z "${reports:-}" ]; then
+  if [ "${prev_class:-}" != "$class" ] || [ "${prev_condition:-}" != "$condition" ]; then
     since=$now
-    reports=0
+    observations=0
   fi
-  reports=$((reports + 1))
-  printf '%s %s %s\n' "$class" "$since" "$reports" > "$file" 2>/dev/null || true
-  [ "$reports" -gt 1 ] || return 0
-  age=$((now - since))
-  [ "$age" -ge 0 ] || age=0
-  printf ' - the context ceiling has had no working protection since %sZ, %s ago, and this is report %s with nothing repaired; an absent protection is not routine traffic, so repair the condition named above through its owner or tell the captain plainly that it stands unrepaired' \
-    "$(fm_context_iso_utc "$since")" "$(context_absence_duration "$age")" "$reports"
+  observations=$((observations + 1))
+  printf '%s %s %s %s\n' "$class" "$condition" "$since" "$observations" > "$file" 2>/dev/null
 }
 
-# Whole hours and minutes, because the reader has to weigh how long a protection
-# has been missing and a raw second count makes that arithmetic rather than a
-# reading.
-context_absence_duration() {  # <seconds>
-  local secs=$1 hours minutes
-  hours=$((secs / 3600))
-  minutes=$(((secs % 3600) / 60))
-  if [ "$hours" -gt 0 ]; then
-    printf '%sh %sm' "$hours" "$minutes"
-  else
-    printf '%sm' "$minutes"
+context_ceiling_observe() {  # <class> <condition>
+  local class=$1 condition=$2 file="$STATE/.context-ceiling-surfaced"
+  local prev_class prev_condition since observations now
+  now=$(date +%s)
+  [ -f "$file" ] && { read -r prev_class prev_condition since observations < "$file" 2>/dev/null || true; }
+  case "${since:-}${observations:-}" in
+    *[!0-9]*|'') prev_class=; prev_condition=; since=; observations= ;;
+  esac
+  if [ "${prev_class:-}" != "$class" ] || [ "${prev_condition:-}" != "$condition" ]; then
+    since=$now
+    observations=0
   fi
+  observations=$((observations + 1))
+  printf '%s %s %s %s\n' "$class" "$condition" "$since" "$observations" > "$file" 2>/dev/null
 }
 
 # Print the context-ceiling wake reason when there is one, and nothing on an
@@ -1041,37 +1033,32 @@ context_absence_duration() {  # <seconds>
 # substitution because the branch class and the poll's resolution state are
 # published as variables, and a subshell would discard both.
 #
-# EVERY reason is throttled, not just the unmeasurable one. Each branch there
-# describes a condition rather than an event: a captain who is present stays
+# EVERY reason is suppressed after its first wake, not just the unmeasurable one.
+# Each branch there describes a condition rather than an event: a captain who is present stays
 # present, a broken re-entry hook stays broken, and an unmeasurable transcript
 # stays unmeasurable, so re-reporting any of them on the poll cadence would spend
 # a model turn every CONTEXT_CHECK_INTERVAL on news that has not changed - the
-# opposite of what this mechanism exists to do. The throttle is keyed on the
-# published class, so a condition that CHANGES (the captain leaves and the ask
+# opposite of what this mechanism exists to do. Suppression is keyed on the
+# published semantic identity, so a condition that CHANGES (the captain leaves and the ask
 # branch becomes the reset branch) surfaces on the very next poll instead of
-# waiting out the previous branch's quiet period. Only an unchanged, still-true
-# condition is held quiet, and only to CONTEXT_ERROR_RESURFACE - never forever,
-# because a ceiling nobody hears about is an unenforced ceiling.
+# inheriting the previous branch's silence. Only an unchanged, still-true
+# condition stays quiet, and its marker remains durable until the condition
+# changes or resolves.
 #
 # Only a RESOLVED poll clears the marker. A suppressed one leaves it exactly as
 # it is: the wake this check produces sits in state/.wake-queue until firstmate
 # drains it, and an undrained queue is precisely what makes the next poll
 # non-quiet - so clearing on "no reason this poll" would let every ceiling wake
-# erase its own throttle and re-fire once per drain cycle.
+# erase its own suppression marker and re-fire once per drain cycle.
 #
-# A class whose protection is ABSENT is reported differently on every repeat, and
-# that is the one thing here that is not throttling. The unenforced wake was
-# delivered once an hour for a whole day on 2026-08-19 and changed nothing: every
-# report was word-for-word the one before it, so each read as a line that had
-# already been read. The repeat is the news. A first report states the condition;
-# every later one adds how long the protection has been gone and how many reports
-# it has survived, which is a fact about this occurrence that the first report
-# could not have carried and that no amount of re-reading the first one supplies.
-# The diagnosis itself is never touched - both vessels found this defect BECAUSE
-# the wake said precisely what was wrong - and the cadence is never raised, so a
-# class that is merely idle is not made louder to carry a class that is absent.
+# A class whose protection is ABSENT keeps its first-observed time and observation
+# count current on every eligible poll, including polls whose wake is suppressed.
+# This is the escalation path for an unchanged absence: the durable record and
+# session-start digest keep it visible without spending another model turn.
+# If that record cannot be updated, suppression fails open and the wake repeats,
+# because an unenforced ceiling must never become both silent and unrecorded.
 context_ceiling_surface() {
-  local marker previous reason
+  local marker previous_class='' previous_condition='' reason recorded=1 absence_recorded=1
   fm_context_ceiling_reason "$STATE" "$FM_HOME" "$FM_ROOT" >/dev/null || return 0
   marker="$STATE/.context-ceiling-surfaced"
   case "$FM_CONTEXT_CEILING_STATE" in
@@ -1082,19 +1069,27 @@ context_ceiling_surface() {
     surfaced) ;;
     *) return 0 ;;
   esac
-  previous=$(cat "$marker" 2>/dev/null || true)
-  if [ "$previous" = "$FM_CONTEXT_CEILING_CLASS" ] \
-    && [ "$(age_of "$marker")" -lt "$CONTEXT_ERROR_RESURFACE" ]; then
+  [ -f "$marker" ] \
+    && { read -r previous_class previous_condition _ _ < "$marker" 2>/dev/null || true; }
+  if [ "$FM_CONTEXT_CEILING_PROTECTION" = absent ]; then
+    if ! context_absence_observe "$FM_CONTEXT_CEILING_CLASS" "$FM_CONTEXT_CEILING_CONDITION"; then
+      absence_recorded=0
+      triage_log "could not update the standing context-ceiling absence record"
+    fi
+  else
+    rm -f "$STATE/.context-ceiling-absent-since" 2>/dev/null || true
+  fi
+  if ! context_ceiling_observe "$FM_CONTEXT_CEILING_CLASS" "$FM_CONTEXT_CEILING_CONDITION"; then
+    recorded=0
+    triage_log "could not update the standing context-ceiling record"
+  fi
+  if [ "$previous_class" = "$FM_CONTEXT_CEILING_CLASS" ] \
+    && [ "$previous_condition" = "$FM_CONTEXT_CEILING_CONDITION" ] \
+    && [ "$absence_recorded" -eq 1 ] && [ "$recorded" -eq 1 ]; then
     triage_log "absorbed context-ceiling $FM_CONTEXT_CEILING_CLASS (unchanged since it was last reported)"
     return 0
   fi
   reason=$FM_CONTEXT_CEILING_REASON
-  if [ "$FM_CONTEXT_CEILING_PROTECTION" = absent ]; then
-    reason=$reason$(context_absence_clause "$FM_CONTEXT_CEILING_CLASS")
-  else
-    rm -f "$STATE/.context-ceiling-absent-since" 2>/dev/null || true
-  fi
-  printf '%s\n' "$FM_CONTEXT_CEILING_CLASS" > "$marker" 2>/dev/null || true
   printf '%s' "$reason"
 }
 

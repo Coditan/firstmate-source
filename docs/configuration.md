@@ -963,7 +963,6 @@ FM_CONTEXT_RECEIPT_MAX_AGE=900   # seconds a state/.stow-receipt stays fresh; th
 FM_CONTEXT_RECEIPT_MAX_GROWTH_BYTES=262144   # bytes the transcript may advance past the position the receipt was bound to before that receipt no longer describes what a reset would discard
 FM_CONTEXT_TAIL_BYTES=2097152   # bounded trailing transcript read per measurement, widened once to the whole file when that tail holds no captain record
 FM_CONTEXT_CHECK_INTERVAL=300   # seconds between the watcher's context-ceiling reads
-FM_CONTEXT_ERROR_RESURFACE=3600   # seconds an unchanged context-ceiling report stays quiet before it is made again; a changed branch class is never held
 FM_BRIDGE_VESSEL=         # optional override for config/bridge-vessel; one or more space-separated vessels; absent disables Bridge inbox scanning
 FM_BRIDGE_ROOT=$FM_HOME/projects/coditan-bridge   # Bridge clone whose origin/main ref the watcher reads
 FM_BRIDGE_URGENT_CHECK_INTERVAL=30   # Bridge-only cadence while highest declared pending priority is high or immediate
