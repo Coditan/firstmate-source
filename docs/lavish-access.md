@@ -132,6 +132,10 @@ Three facts this rests on, each measured rather than reasoned about, with the me
 `bin/fm-tailnet-serve-lib.sh` is the one owner of publishing and withdrawing.
 Serve configuration belongs to the tailscale node, which every UNIX account on this machine shares, so a port is only ever withdrawn where its ownership has already been proved by the claim token, or where nothing is serving on it at all.
 
+When no proxy can be published, the link falls back to loopback and the wrapper says the board opens only on this machine.
+The promise this whole mechanism makes was never "bind the tailnet address"; it was "never hand the captain a link that opens nowhere", and a tailnet link on a vessel with no proxy would break exactly that promise.
+The wrapper therefore re-reads the resolution from the allocation rather than from its own `--check` pre-read: whether a proxy can be published is only answerable once a port exists, so the pre-read cannot know it, and a wrapper that trusted the pre-read emitted a tailnet link on a vessel that had none.
+
 The diagnosis is not removed by any of this.
 A vessel in this state still says, on every open, that its address cannot be bound and that this is what userspace mode looks like; what changed is that the board also works.
 The durable alternative - giving the container `/dev/net/tun` and `NET_ADMIN` so tailscale runs in kernel mode - is a change to the vessel definition and is not this mechanism's to make.
@@ -408,6 +412,35 @@ $ grep -o 'userspace tailnet probe board' got.html
 userspace tailnet probe board
 ```
 
+#### That 200, on its own, does not prove the proxy carried it
+
+This is the trap, and it was walked into during this work before being caught.
+
+A request made **from this container** to this node's own tailnet address reaches a loopback listener whether or not any proxy is published.
+Measured with a port bound only on `127.0.0.1` and published nowhere:
+
+```
+$ tailscale serve status | grep -c 4477
+0
+$ curl -s -o /dev/null -w '%{http_code}\n' http://100.73.181.90:4477/
+200
+$ curl -s -o /dev/null -w '%{http_code}\n' http://172.28.0.2:4477/     # eth0's own address
+000
+```
+
+So an on-host `curl` returning 200 over the tailnet name is not by itself evidence of the proxy, and must never be reported as such.
+
+The discriminator is `X-Forwarded-Host`, which `tailscale serve` sets and the same-host path does not.
+Same URL, same listener, proxy withdrawn and then published, as the echo server behind it logged each request:
+
+```
+proxy down: HOST=coditan-vessel.tail7b8448.ts.net:4477 XFH=
+proxy up:   HOST=coditan-vessel.tail7b8448.ts.net:4477 XFH=coditan-vessel.tail7b8448.ts.net:4477
+```
+
+That is what proves the proxy path works, and it is the reading any future on-host check has to take.
+A remote peer has no such same-host shortcut: for it, the published proxy is the only listener on that address.
+
 The poll path, driven from a real browser over that same link.
 `chrome-devtools-axi` could not be used - every command, `open` included, answered `error: No page is currently selected / code: BROWSER_ERROR` - so headless Chrome 152.0.7977.64 was driven directly over CDP instead.
 The page loaded the real Lavish UI (`document.title` = `userspace tailnet probe board · Lavish`, with its `Send to Agent` composer present), text was typed into the composer through the native value setter plus an `input` event, and the button was clicked:
@@ -436,7 +469,8 @@ A bindable address stays `reachability=tailnet` with an empty serve log; a host 
 ### Open gap: the off-device request
 
 Acceptance asked for an HTTP 200 fetched from a different device on the tailnet.
-That was not completed from this task's worktree: the two other Linux nodes (`aurora`, `crew-allesknut`) refuse SSH with `Permission denied (publickey,password)` and do not advertise a Tailscale SSH host key, and the captain's own `timbook` and `s26-ultra-von-tim` cannot be driven from here.
+That was not completed from this task's worktree, and it was not completed from `coditan-vessel` either when the proxied path was added on 2026-08-27.
+Every peer refuses SSH from this seat - `tailscale ssh` reports no advertised SSH host key for `crew-hlr`, `aurora`, `coditan`, `crew-allesknut`, `tugboat-cloud`, or `timbook-wsl`, and plain `ssh` answers `Permission denied (publickey)` for each - so no command can be run on another node to make the request.
 
 What was proved instead is everything on this side of the wire: the server binds only the tailnet address (loopback is refused), the emitted hostname resolves to that address, a request carrying the tailnet name is accepted by the Host allowlist and returns 200, and `tailscale ping timbook` answers directly.
 The remaining check is one request from the captain's PC or phone against a link the wrapper emits.
