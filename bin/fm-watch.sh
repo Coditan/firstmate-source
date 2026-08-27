@@ -1058,7 +1058,7 @@ context_ceiling_observe() {  # <class> <condition>
 # If that record cannot be updated, suppression fails open and the wake repeats,
 # because an unenforced ceiling must never become both silent and unrecorded.
 context_ceiling_surface() {
-  local marker previous_class= previous_condition= reason recorded=1 absence_recorded=1
+  local marker previous_class='' previous_condition='' reason recorded=1 absence_recorded=1
   fm_context_ceiling_reason "$STATE" "$FM_HOME" "$FM_ROOT" >/dev/null || return 0
   marker="$STATE/.context-ceiling-surfaced"
   case "$FM_CONTEXT_CEILING_STATE" in

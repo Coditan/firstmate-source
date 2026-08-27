@@ -1017,7 +1017,7 @@ test_an_unchanged_ask_gains_no_escalation() {
 # from the moment an unmeasurable one started would report an age that never
 # happened, which is the same defect as reporting no age at all.
 test_a_changed_absent_class_restarts_the_clock() {
-  local out record_class record_condition record_since record_observations old_since
+  local out record_class record_since record_observations old_since
   make_case
   rm -f "$STATE_DIR/.primary-transcript"
   watch_reason >/dev/null
@@ -1029,7 +1029,7 @@ test_a_changed_absent_class_restarts_the_clock() {
   write_settings "$HOME_DIR" 'startup|resume' 'fm-sessionstart-nudge.sh'
   out=$(watch_reason)
   assert_contains "$out" "cannot run safely" "the blocked branch did not report its own condition"
-  read -r record_class record_condition record_since record_observations \
+  read -r record_class _ record_since record_observations \
     < "$STATE_DIR/.context-ceiling-absent-since"
   [ "$record_class" = blocked ] \
     || fail "the absence record kept the old class after the condition changed: $record_class"

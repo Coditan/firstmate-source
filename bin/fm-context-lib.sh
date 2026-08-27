@@ -203,17 +203,17 @@ fm_context_record_read() {  # <state-dir>
   FM_CONTEXT_RECORD_PID=$(fm_context_kv "$record" harness_pid || true)
   case "$FM_CONTEXT_TRANSCRIPT" in
     /*) ;;
-    *) FM_CONTEXT_RECORD_ERROR_KIND=path-relative; FM_CONTEXT_RECORD_ERROR="recorded transcript path is not absolute"; return 1 ;;
+    *) FM_CONTEXT_RECORD_ERROR_KIND='path-relative'; FM_CONTEXT_RECORD_ERROR="recorded transcript path is not absolute"; return 1 ;;
   esac
   if [ ! -f "$FM_CONTEXT_TRANSCRIPT" ]; then
-    FM_CONTEXT_RECORD_ERROR_KIND=transcript-missing
+    FM_CONTEXT_RECORD_ERROR_KIND='transcript-missing'
     FM_CONTEXT_RECORD_ERROR="recorded transcript $FM_CONTEXT_TRANSCRIPT does not exist"
     return 1
   fi
   case "$FM_CONTEXT_RECORD_PID" in
-    ''|*[!0-9]*) FM_CONTEXT_RECORD_ERROR_KIND=pid-invalid; FM_CONTEXT_RECORD_ERROR="recorded harness pid is not numeric"; return 1 ;;
+    ''|*[!0-9]*) FM_CONTEXT_RECORD_ERROR_KIND='pid-invalid'; FM_CONTEXT_RECORD_ERROR="recorded harness pid is not numeric"; return 1 ;;
   esac
-  [ -n "$FM_CONTEXT_SESSION_ID" ] || { FM_CONTEXT_RECORD_ERROR_KIND=session-id-empty; FM_CONTEXT_RECORD_ERROR="recorded session id is empty"; return 1; }
+  [ -n "$FM_CONTEXT_SESSION_ID" ] || { FM_CONTEXT_RECORD_ERROR_KIND='session-id-empty'; FM_CONTEXT_RECORD_ERROR="recorded session id is empty"; return 1; }
   return 0
 }
 
@@ -523,12 +523,12 @@ fm_context_restart_path_ok() {  # <fm-home> <fm-root>
   settings="$home/.claude/settings.json"
   nudge="$root/bin/fm-sessionstart-nudge.sh"
   if ! command -v jq >/dev/null 2>&1; then
-    FM_CONTEXT_RESTART_ERROR_KIND=jq-missing
+    FM_CONTEXT_RESTART_ERROR_KIND='jq-missing'
     FM_CONTEXT_RESTART_ERROR="jq is not installed; the re-entry hook cannot be verified"
     return 1
   fi
   if [ ! -f "$settings" ]; then
-    FM_CONTEXT_RESTART_ERROR_KIND=settings-missing
+    FM_CONTEXT_RESTART_ERROR_KIND='settings-missing'
     FM_CONTEXT_RESTART_ERROR="no hook settings at $settings"
     return 1
   fi
@@ -539,12 +539,12 @@ fm_context_restart_path_ok() {  # <fm-home> <fm-root>
         | join(" ")
         | test("fm-sessionstart-nudge\\.sh")
       ' "$settings" >/dev/null 2>&1; then
-    FM_CONTEXT_RESTART_ERROR_KIND=hook-unwired
+    FM_CONTEXT_RESTART_ERROR_KIND='hook-unwired'
     FM_CONTEXT_RESTART_ERROR="the session-start hook in $settings no longer runs fm-sessionstart-nudge.sh on a clear"
     return 1
   fi
   if [ ! -x "$nudge" ]; then
-    FM_CONTEXT_RESTART_ERROR_KIND=nudge-unavailable
+    FM_CONTEXT_RESTART_ERROR_KIND='nudge-unavailable'
     FM_CONTEXT_RESTART_ERROR="the session-start hook script $nudge is missing or not executable"
     return 1
   fi
@@ -620,6 +620,7 @@ fm_context_ceiling_reason() {  # <state-dir> <fm-home> <fm-root>
   FM_CONTEXT_CEILING_REASON=
   # shellcheck disable=SC2034 # Read by callers after fm_context_ceiling_reason returns.
   FM_CONTEXT_CEILING_CLASS=
+  # shellcheck disable=SC2034 # Read by callers after fm_context_ceiling_reason returns.
   FM_CONTEXT_CEILING_CONDITION=
   # shellcheck disable=SC2034 # Read by callers after fm_context_ceiling_reason returns.
   FM_CONTEXT_CEILING_PROTECTION=
