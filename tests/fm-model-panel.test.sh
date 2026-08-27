@@ -549,6 +549,42 @@ test_analyst_briefs_share_the_question_and_forbid_peeking() {
   pass "both analysts get the identical question and an explicit independence rule"
 }
 
+# A panel member's question IS an asserted fact it acts on, so every brief the
+# panel scaffolds must carry the premise contract with that question filled in.
+# Scaffolded without it, the brief instead tells the member to append `blocked:`
+# and stop - and `blocked:` is not a terminal event for this panel, so a
+# complying member leaves no report, the panel stands down non-waivably, and
+# every re-run rebuilds the same unguarded brief.
+test_panel_briefs_carry_the_question_as_a_disprovable_premise() {
+  local home out brief question
+  home=$(new_home premise "$TWO_MODELS")
+  question="$TMP_ROOT/premise-question.md"
+  printf 'The retry loop is the cause of the stall.\n' > "$question"
+  out=$(run_panel "$home" start --id prem --project "$home/subject" --question-file "$question") \
+    || fail "start failed: $out"
+
+  printf 'analyst a findings\n' > "$home/data/prem-a/report.md"
+  printf 'analyst b findings\n' > "$home/data/prem-b/report.md"
+  say_status "$home" prem-a 'done: analysed'
+  say_status "$home" prem-b 'done: analysed'
+  out=$(run_panel "$home" advance prem) || fail "advance failed: $out"
+
+  for brief in "$home/data/prem-a/brief.md" "$home/data/prem-b/brief.md" \
+    "$home/data/prem-judge/brief.md"; do
+    assert_present "$brief" "a panel brief was not scaffolded"
+    assert_grep '# The premise this brief asserts' "$brief" \
+      "a panel brief lost the premise contract"
+    assert_grep 'The retry loop is the cause of the stall.' "$brief" \
+      "a panel brief left its premise slot unfilled"
+    assert_no_grep '# Premise declaration - NONE ASSERTED' "$brief" \
+      "a panel brief declares no premise and tells its member to stop on one"
+    assert_no_grep 'append `blocked: brief asserts a fact but was scaffolded without --premise`' "$brief" \
+      "a panel brief tells its member to stop with a status the panel never treats as terminal"
+    assert_no_grep '{PREMISE}' "$brief" "a panel brief left an unusable premise placeholder"
+  done
+  pass "every panel brief carries the question as a disprovable premise"
+}
+
 test_judge_waits_for_every_report_then_gets_both() {
   local home out log brief
   home=$(new_home judge-gate "$TWO_MODELS")
@@ -1172,6 +1208,7 @@ test_identical_analyst_models_refuse
 test_same_model_through_two_harnesses_refuses
 test_reduced_form_is_named_not_a_panel
 test_analyst_briefs_share_the_question_and_forbid_peeking
+test_panel_briefs_carry_the_question_as_a_disprovable_premise
 test_judge_waits_for_every_report_then_gets_both
 test_terminal_member_without_a_report_stands_the_panel_down
 test_gone_analyst_with_nothing_stands_the_panel_down
