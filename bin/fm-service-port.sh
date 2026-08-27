@@ -19,6 +19,17 @@
 #      reason instead of a tailnet address the consumer would put into a link
 #      that opens nothing off this machine.
 #
+# There is a third case between those two, and it is a real vessel rather than a
+# hypothetical one: a node that HAS a tailnet address it cannot bind. In
+# userspace networking mode - no /dev/net/tun, no NET_ADMIN - tailscaled runs
+# its own network stack, so the node is genuinely on the tailnet while no local
+# interface carries its address and every bind on it fails EADDRNOTAVAIL. That
+# is neither "tailnet" (nothing here can listen on the address) nor "loopback"
+# (the vessel really is reachable from the captain's devices), so it is named
+# and served on its own terms: reachability=tailnet-proxied, the port bound on
+# loopback, and that port published onto the tailnet address with
+# `tailscale serve` (bin/fm-tailnet-serve-lib.sh owns that mechanism).
+#
 # Usage:
 #   fm-service-port.sh <service> [--mine <port>]... [--check]
 #
@@ -39,6 +50,7 @@
 #   machine=crew-hlr
 #   dnsname=crew-hlr.tail7b8448.ts.net
 #   addr=100.121.172.63
+#   tailaddr=100.121.172.63
 #   seat=4413
 #   window=4400-4499
 #   port=4413
@@ -49,9 +61,25 @@
 #               available; unknown-<vessel> when there is no tailnet, so a
 #               machine that cannot be identified is never silently treated as
 #               a distinct one.
+#   addr        the address the service must BIND. It is the tailnet address
+#               under reachability=tailnet, and 127.0.0.1 under both
+#               tailnet-proxied and loopback, so a consumer always binds what
+#               this names without inspecting the reachability first.
+#   tailaddr    this node's own tailnet address whenever one was resolved, even
+#               when it could not be bound. Empty with no usable tailnet. It is
+#               a reachable link target under tailnet-proxied, because the
+#               published proxy answers on it.
 #   dnsname     the hostname a link may use. Set ONLY when it resolves over IPv4
 #               to addr, so a consumer never writes a name into a URL without
 #               that name having been checked. Empty means "use addr".
+#   reachability
+#               tailnet          the address is this node's own and was bound.
+#               tailnet-proxied  the node has a tailnet address it cannot bind,
+#                                so the port is bound on loopback and published
+#                                onto that address with `tailscale serve`. Links
+#                                still use the tailnet name or address, because
+#                                that is where the service genuinely answers.
+#               loopback         no reach off this machine was established.
 #   seat        the deterministic preferred port for this service in this home.
 #   port        the port actually bound (absent under --check).
 #   reason      empty when fully nominal; otherwise one plain sentence naming
@@ -64,8 +92,9 @@
 #      are port-scoped, and the probe's own line counts how many candidates fell
 #      into each case and names the errnos, so neither is asserted for the other.
 #   2  usage error
-#   3  the resolved address cannot be bound on this host, or the probe runtime
-#      is unavailable - distinct from 1, because no port was ever contended
+#   3  the resolved address cannot be bound on this host AND could not be
+#      published over `tailscale serve` either, or the probe runtime is
+#      unavailable - distinct from 1, because no port was ever contended
 #
 # The port window defaults to 4400-4499: above lavish-axi's compiled-in 4387
 # default so a stray bare invocation never lands on an allocated seat, and far
@@ -81,6 +110,9 @@ FM_HOME="${FM_HOME:-$FM_ROOT}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 PROBE="$SCRIPT_DIR/fm-service-port-probe.mjs"
+
+# shellcheck source=bin/fm-tailnet-serve-lib.sh
+. "$SCRIPT_DIR/fm-tailnet-serve-lib.sh"
 
 die() {
   printf 'SERVICE_PORT: %s\n' "$1" >&2
@@ -169,10 +201,22 @@ HOME_REAL=$(cd "$FM_HOME" 2>/dev/null && pwd -P) || HOME_REAL=$FM_HOME
 # including secondmate homes.
 
 ADDR=""
+TAILADDR=""
 DNSNAME=""
 MACHINE=""
 REACHABILITY=loopback
 REASON=""
+
+# Several independent facts can degrade one resolution at once - an unresolvable
+# name on a node that also cannot bind its own address, say - and dropping
+# either would hand the reader half a diagnosis.
+add_reason() {
+  if [ -z "$REASON" ]; then
+    REASON=$1
+  else
+    REASON="$REASON; $1"
+  fi
+}
 
 tailscale_json() {
   command -v jq >/dev/null 2>&1 || return 1
@@ -182,27 +226,27 @@ tailscale_json() {
 resolve_tailnet() {
   local json state addr host suffix dnsname
   command -v tailscale >/dev/null 2>&1 || {
-    REASON="tailscale is not installed on this host"
+    add_reason "tailscale is not installed on this host"
     return 1
   }
   json=$(tailscale_json) || {
-    REASON="tailscale status could not be read as JSON (jq missing or tailscale not responding)"
+    add_reason "tailscale status could not be read as JSON (jq missing or tailscale not responding)"
     return 1
   }
   [ -n "$json" ] || {
-    REASON="tailscale status returned nothing"
+    add_reason "tailscale status returned nothing"
     return 1
   }
   state=$(printf '%s' "$json" | jq -r '.BackendState // empty' 2>/dev/null)
   [ "$state" = "Running" ] || {
-    REASON="tailscale is installed but not running (backend state: ${state:-unknown})"
+    add_reason "tailscale is installed but not running (backend state: ${state:-unknown})"
     return 1
   }
   addr=$(printf '%s' "$json" | jq -r '[.Self.TailscaleIPs // [] | .[] | select(test("^[0-9]+\\.")) ] | first // empty' 2>/dev/null)
   case "$addr" in
     [0-9]*.[0-9]*.[0-9]*.[0-9]*) ;;
     *)
-      REASON="tailscale reports no IPv4 address for this node"
+      add_reason "tailscale reports no IPv4 address for this node"
       return 1
       ;;
   esac
@@ -212,6 +256,7 @@ resolve_tailnet() {
   dnsname=${dnsname%.}
   [ -n "$dnsname" ] || { [ -z "$host" ] || [ -z "$suffix" ] || dnsname="$host.$suffix"; }
   ADDR=$addr
+  TAILADDR=$addr
   MACHINE=$host
   REACHABILITY=tailnet
   # A name is only worth writing into a link once it has been checked, so an
@@ -222,11 +267,11 @@ resolve_tailnet() {
   # hand the reader a concrete diagnosis that is simply untrue.
   if [ -n "$dnsname" ]; then
     if ! command -v node >/dev/null 2>&1 || [ ! -f "$PROBE" ]; then
-      REASON="the tailnet name $dnsname could not be checked here (node or $PROBE is unavailable), so links use the address instead"
+      add_reason "the tailnet name $dnsname could not be checked here (node or $PROBE is unavailable), so links use the address instead"
     elif node "$PROBE" resolve "$dnsname" "$addr" >/dev/null 2>&1; then
       DNSNAME=$dnsname
     else
-      REASON="the tailnet name $dnsname does not resolve to $addr here, so links use the address instead"
+      add_reason "the tailnet name $dnsname does not resolve to $addr here, so links use the address instead"
     fi
   fi
   return 0
@@ -234,11 +279,37 @@ resolve_tailnet() {
 
 if ! resolve_tailnet; then
   ADDR=127.0.0.1
+  TAILADDR=""
   DNSNAME=""
   REACHABILITY=loopback
   MACHINE=""
 fi
 [ -n "$MACHINE" ] || MACHINE="unknown-$VESSEL"
+
+# --- can this node actually bind the address it was given? -------------------
+#
+# A resolved tailnet address is not yet a bindable one. Asked here with an
+# ephemeral port rather than discovered halfway through a window walk, so the
+# answer is available to --check too - a consumer decides its bind address and
+# its link host before it ever claims a port, and would otherwise probe an
+# address nothing can listen on.
+
+if [ "$REACHABILITY" = tailnet ]; then
+  if ! command -v node >/dev/null 2>&1 || [ ! -f "$PROBE" ]; then
+    : # Nothing to check with. The window walk below still reports honestly.
+  elif ! node "$PROBE" addr "$ADDR" >/dev/null 2>&1; then
+    if fm_tailnet_serve_available; then
+      REACHABILITY=tailnet-proxied
+      ADDR=127.0.0.1
+      add_reason "this node has the tailnet address $TAILADDR but no local interface carries it (bind fails EADDRNOTAVAIL), which is what tailscale userspace networking mode looks like; the port is bound on loopback and published onto the tailnet address with tailscale serve instead"
+    else
+      REACHABILITY=loopback
+      ADDR=127.0.0.1
+      DNSNAME=""
+      add_reason "this node has the tailnet address $TAILADDR but no local interface carries it (bind fails EADDRNOTAVAIL) and tailscale serve is not available to publish a loopback port onto it, so nothing here is reachable off this machine"
+    fi
+  fi
+fi
 
 # --- window and deterministic seat ------------------------------------------
 
@@ -272,6 +343,7 @@ emit() {
   printf 'machine=%s\n' "$MACHINE"
   printf 'dnsname=%s\n' "$DNSNAME"
   printf 'addr=%s\n' "$ADDR"
+  printf 'tailaddr=%s\n' "$TAILADDR"
   printf 'seat=%s\n' "$SEAT"
   printf 'window=%s-%s\n' "$WINDOW_START" "$WINDOW_END"
   [ -z "${1:-}" ] || printf 'port=%s\n' "$1"
@@ -334,6 +406,23 @@ if [ -z "${PORT:-}" ]; then
   case "$PORT" in
     ''|*[!0-9]*) die "the port probe returned no usable port for $SERVICE on $ADDR" 3 ;;
   esac
+fi
+
+# --- publish the proxy ------------------------------------------------------
+#
+# Only now, because the proxy has to name the port that was actually bound: the
+# published port and the loopback port are the same number so a consumer's own
+# link, which carries its bound port, answers unchanged. A failure here is not
+# reported as reach, because it is not reach.
+
+if [ "$REACHABILITY" = tailnet-proxied ]; then
+  if fm_tailnet_serve_publish "$PORT"; then
+    :
+  else
+    REACHABILITY=loopback
+    DNSNAME=""
+    add_reason "publishing port $PORT onto $TAILADDR with tailscale serve failed, so this board is reachable only on this machine"
+  fi
 fi
 
 # --- published record -------------------------------------------------------
