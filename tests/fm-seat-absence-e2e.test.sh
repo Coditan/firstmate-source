@@ -216,8 +216,11 @@ test_a_killed_seat_is_reported_outward_and_comes_back() {
   [ "$second_pid" != "$first_pid" ] || fail "the seat pid did not change, so nothing was restarted"
   kill -0 "$second_pid" 2>/dev/null || fail "the replacement seat is not running"
 
-  # OBSERVATION 5: the vessel says so, and tells the returned seat it was away.
-  assert_contains "$(run_alarm)" "has one again" "the returned seat was never told it had been away"
+  # OBSERVATION 5: the vessel reads the restored seat as present, says nothing
+  # about the return on either channel, and writes it to its own history.
+  [ -z "$(run_alarm)" ] || fail "the restored seat produced a line where the alarm has nothing to say"
+  assert_grep "recovered from=absent" "$HOME_DIR/data/seat-alarm.log" \
+    "the restoration this suite just drove was not written to the alarm's history"
 
   kill -KILL "$second_pid" 2>/dev/null || true
   pass "a deliberately killed seat is reported outward, comes back, and is given its first turn"
