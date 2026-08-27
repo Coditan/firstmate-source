@@ -4,6 +4,11 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# This is the suite that drives the restart service itself - its converge and
+# --armed readings - so the suite-wide silencer tests/lib.sh sets for every
+# other fixture home is lifted here.
+export FM_SEAT_RESPAWNER_DISABLE=0
+
 RESPAWNER="$ROOT/bin/fm-seat-respawner.sh"
 STAY_DOWN="$ROOT/bin/fm-seat-stay-down.sh"
 SERVICE="$ROOT/bin/fm-seat-respawner-service.sh"
@@ -396,10 +401,112 @@ test_converge_never_claims_a_start_it_could_not_confirm() {
   pass "converging never claims a start it could not confirm, and says a persisting failure once"
 }
 
+# A watcher service that records what it was asked to do and reports the keeper
+# tier, so a revival attempt leaves a trace instead of touching a real watcher.
+write_fake_watcher_service() {  # <path> <log>
+  local path=$1 log=$2
+  cat > "$path" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$log"
+if [ "\${1:-}" = select ]; then printf 'keeper\n'; fi
+exit 0
+SH
+  chmod +x "$path"
+}
+
+# The record a live watcher publishes about itself: pid, home, watcher path and
+# the identity that makes pid reuse a mismatch.
+record_watcher() {  # <home> <pid>
+  local home=$1 pid=$2 lockdir identity
+  lockdir="$home/state/.watch.lock"
+  mkdir -p "$lockdir"
+  # Sourced through `env` with this fixture's overrides, because
+  # bin/fm-wake-lib.sh creates a state directory as a side effect of being
+  # sourced and must never be allowed to create this repo's own.
+  # shellcheck disable=SC2016 # The inner script's positional args are the child shell's, on purpose.
+  identity=$(env FM_STATE_OVERRIDE="$home/state" FM_HOME="$home" bash -c \
+    '. "$1/bin/fm-wake-lib.sh"; fm_pid_identity "$2"' _ "$ROOT" "$pid")
+  printf '%s\n' "$pid" > "$lockdir/pid"
+  printf '%s\n' "$home" > "$lockdir/fm-home"
+  printf '%s\n' "$ROOT/bin/fm-watch.sh" > "$lockdir/watcher-path"
+  printf '%s\n' "$identity" > "$lockdir/pid-identity"
+}
+
+watcher_health() {  # <home>
+  local home=$1
+  # shellcheck disable=SC2016 # The inner script's positional args are the child shell's, on purpose.
+  env FM_STATE_OVERRIDE="$home/state" FM_HOME="$home" bash -c \
+    '. "$1/bin/fm-wake-lib.sh"
+     fm_watcher_healthy "$2/state" "$1/bin/fm-watch.sh" 300 "$2" || true
+     printf "%s\n" "$FM_WATCHER_HEALTH"' _ "$ROOT" "$home"
+}
+
+# A watcher that is ALIVE but whose beacon has aged out is not a dead watcher.
+# bin/fm-wake-lib.sh classifies that as beacon-stale and names machine suspend as
+# the case that necessarily produces it, so reviving on the bare unhealthy return
+# stops and restarts a running watcher - and the sweep it kills mid-flight is the
+# one that now carries the seat alarm itself.
+test_only_a_provably_dead_watcher_is_revived() {
+  local home delivery tmux svc svclog watcher health
+
+  home=$(make_home watcher-revive)
+  delivery="$home/fake-delivery"
+  tmux="$home/fake-tmux"
+  svc="$home/fake-watcher-service"
+  svclog="$home/watcher-service.log"
+  printf 'delivered: nothing is waiting for this vessel\n' > "$home/status.txt"
+  write_fake_delivery "$delivery"
+  write_fake_tmux "$tmux" "$home/tmux.log"
+  write_fake_watcher_service "$svc" "$svclog"
+
+  run_revive_cycle() {
+    FM_HOME="$home" \
+    FM_ROOT_OVERRIDE="$ROOT" \
+    FM_STATE_OVERRIDE="$home/state" \
+    FM_CONFIG_OVERRIDE="$home/config" \
+    FM_FINDINGS_DIR="$home/data/findings" \
+    FM_SEAT_DELIVERY_SERVICE="$delivery" \
+    FM_FAKE_DELIVERY_STATUS="$home/status.txt" \
+    FM_SEAT_TMUX="$tmux" \
+    FM_SEAT_RESPAWNER_ONCE=1 \
+    FM_SEAT_REVIVE_WATCHER=1 \
+    FM_SEAT_WATCHER_SERVICE="$svc" \
+      "$RESPAWNER" >/dev/null 2>&1 || true
+  }
+
+  # A live, identity-matched watcher that has never touched a beacon: the very
+  # state a suspended host leaves behind.
+  watcher=$(start_harness_shaped_process "$home")
+  sleep 0.4
+  record_watcher "$home" "$watcher"
+  health=$(watcher_health "$home")
+  [ "$health" = beacon-stale ] \
+    || fail "the fixture did not produce a live watcher with an aged-out beacon: $health"
+
+  run_revive_cycle
+  assert_no_grep "ensure" "$svclog" \
+    "a live watcher whose beacon had aged out was stopped and restarted"
+  [ ! -e "$home/state/.seat-respawner-watcher-revived" ] \
+    || fail "a live watcher whose beacon had aged out was recorded as revived"
+
+  # The same home once the watcher is genuinely gone.
+  kill "$watcher" 2>/dev/null || true
+  wait "$watcher" 2>/dev/null || true
+  health=$(watcher_health "$home")
+  [ "$health" = dead ] \
+    || fail "the fixture did not produce a dead watcher after the kill: $health"
+
+  run_revive_cycle
+  assert_grep "ensure" "$svclog" \
+    "a watcher that had actually died was never revived"
+  pass "only a provably dead watcher is revived, never a live one whose beacon aged out"
+}
+
 test_stay_down_marker_is_authoritative
 test_giveup_path_reports_a_finding
 test_converge_never_claims_a_start_it_could_not_confirm
 test_a_live_first_mate_is_never_relaunched
+test_only_a_provably_dead_watcher_is_revived
 test_an_unreadable_lock_never_produces_a_launch
 test_a_pending_first_turn_holds_the_next_launch
 test_an_armed_restart_that_never_ran_is_reported

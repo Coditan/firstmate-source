@@ -461,20 +461,34 @@ emit_giveup_finding() {  # <key> <status-line>
 # either one is recoverable without a seat.  Without this the two form a chain
 # rather than a pair, and a chain has an end.
 #
-# Deliberately narrow.  It acts only when fm_watcher_healthy - this fleet's one
-# owner of that question - says there is no healthy watcher at all, never on a
+# Deliberately narrow.  It acts only on the `dead` classification published by
+# fm_watcher_healthy - this fleet's one owner of that question - never on a
 # recorded-version or recorded-PATH mismatch.  Those are convergence decisions
 # that belong to a session with the fleet lock, and a background process racing
 # one over them would produce two managers fighting over one service.  It is also
 # rate-limited, so a watcher that cannot start is retried rather than hammered,
 # and skipped entirely on a systemd home where the unit's own Restart=always
 # already owns this.
+#
+# `dead` RATHER THAN THE BOOLEAN, AND A WEDGED-BUT-LIVE WATCHER IS THEREFORE
+# LEFT ALONE ON PURPOSE.  fm_watcher_healthy returns non-zero for two states,
+# and only one of them is a death: bin/fm-wake-lib.sh classifies a live,
+# identity-matched watcher whose beacon has aged out as `beacon-stale`, and
+# names machine suspend as the case that necessarily produces it, because a
+# frozen host cannot touch a beacon.  Reviving on the boolean would restart a
+# watcher that is alive - `ensure` stops it first - and the sweep it kills is
+# the one that now carries the seat alarm itself.  When staleness is caused by a
+# slow sweep, the replacement is killed the same way and the sweep never
+# completes.  So the trade is taken deliberately in the other direction: a
+# watcher that is alive but wedged is not restarted here, and is left to a
+# session holding the fleet lock, which is the half that may decide it.
 revive_watcher_if_dead() {
   local age
   [ "${FM_SEAT_REVIVE_WATCHER:-1}" = 1 ] || return 0
   [ -x "$WATCHER_SERVICE" ] || return 0
   [ "$("$WATCHER_SERVICE" select 2>/dev/null || true)" = keeper ] || return 0
   fm_watcher_healthy "$STATE" "$WATCH" "$WATCHER_GRACE" "$FM_HOME" && return 0
+  [ "${FM_WATCHER_HEALTH:-}" = dead ] || return 0
   if [ -e "$WATCHER_REVIVED" ]; then
     age=$(fm_path_age "$WATCHER_REVIVED") || age=$WATCHER_REVIVE_EVERY
     case "$age" in ''|*[!0-9]*) age=$WATCHER_REVIVE_EVERY ;; esac
