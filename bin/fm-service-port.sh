@@ -92,9 +92,13 @@
 #      are port-scoped, and the probe's own line counts how many candidates fell
 #      into each case and names the errnos, so neither is asserted for the other.
 #   2  usage error
-#   3  the resolved address cannot be bound on this host AND could not be
-#      published over `tailscale serve` either, or the probe runtime is
-#      unavailable - distinct from 1, because no port was ever contended
+#   3  no port was ever contended, which is what separates this from 1: the
+#      probe runtime is unavailable, or the address stopped being bindable
+#      partway through the window walk after the address probe had already
+#      passed. A resolved address that cannot be bound AND cannot be published
+#      over `tailscale serve` is NOT this - it degrades to a successful loopback
+#      allocation carrying that diagnosis, so a consumer reads it from
+#      reachability=loopback rather than from an exit code.
 #
 # The port window defaults to 4400-4499: above lavish-axi's compiled-in 4387
 # default so a stray bare invocation never lands on an allocated seat, and far
