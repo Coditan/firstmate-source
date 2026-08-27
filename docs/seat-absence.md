@@ -89,6 +89,10 @@ That matters most in the failure case: a launch command that did not start an ag
 The message itself is built by `bin/fm-operational-input.sh` as a typed `session-start` operational input, and its body is the instruction only - what the seat then does is `AGENTS.md` section 3's, and a body summarising the fleet here would be a second copy of state that could disagree with the durable records the seat is about to read.
 
 The pending first turn is recorded in `state/.seat-first-turn`, so it survives the respawner itself restarting, and it is bounded: a turn that never lands is abandoned out loud in `state/.seat-respawner.log` after `FM_SEAT_FIRST_TURN_DEADLINE` rather than retried forever in silence.
+That record is also what holds the next launch.
+The delivery verdict stays undeliverable until the fresh seat finishes session start and publishes an endpoint, which outlasts the first backoff, so a respawner that kept launching on schedule would leave a live agent in a window nothing tracks - one per retry.
+While the record stands, the retry schedule waits without consuming an attempt, and the same deadline is what eventually frees it.
+A stand-down declared while a turn is pending settles that turn instead of racing it: `state/.seat-stay-down` is read first, and it drops the pending record rather than letting the next cycle type into the pane.
 
 **The success test moved with it.**
 A restart is not finished when the window exists.
@@ -107,6 +111,8 @@ The arrangement that ships instead is a pair rather than a chain:
 
 - `bin/fm-seat-respawner-service.sh --arm` installs a watcher check that converges the respawner's keeper tier **on every watcher sweep**.
   The watcher outlives the seat - it is the component that stayed alive through the outage - so the seat is no longer anywhere in the restart path.
+  Converging compares the running respawner's own lock record - its manager, its source version, and the service `PATH` it was handed - against what this home would start now, exactly as `bin/fm-watcher-service.sh` compares the watcher's, so a keeper left on pre-update bytes is restarted and said out loud rather than counted as healthy because something is alive.
+  On a home with no systemd that is the only way a self-update reaches the restarter at all.
 - `bin/fm-seat-respawner.sh` revives a **provably dead** watcher in return, through `fm_watcher_healthy`, this fleet's one owner of that question.
   It is deliberately narrow: never on a recorded-version or recorded-PATH mismatch, which are convergence decisions belonging to a session holding the fleet lock, and rate-limited so a watcher that cannot start is retried rather than hammered.
 

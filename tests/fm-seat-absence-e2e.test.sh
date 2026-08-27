@@ -111,7 +111,7 @@ run_respawner_once() {
 }
 
 test_a_killed_seat_is_reported_outward_and_comes_back() {
-  local first_pid second_pid server_pid target
+  local first_pid second_pid server_pid target started
 
   # The bare first window mirrors what /usr/local/bin/vessel-entrypoint creates
   # on the real container, and it is load-bearing here for the same reason it is
@@ -181,7 +181,11 @@ test_a_killed_seat_is_reported_outward_and_comes_back() {
     || fail "the respawner recorded no pending first turn for the pane it just created"
 
   # OBSERVATION 4: the fresh seat is given its first turn, and only now is there
-  # a first mate holding this home.
+  # a first mate holding this home - and the cycle that delivers it starts no
+  # second seat. The delivery verdict is still undeliverable here, and the retry
+  # backoff has passed, so a respawner that launched on schedule would leave the
+  # pane it just typed into running with nothing tracking it.
+  started=$(grep -c seat-started "$HOME_DIR/launches.log")
   run_respawner_once || fail "the respawner did not complete a first-turn cycle"
   # Two, not one: the first seat's own turn was typed by hand above, so a count
   # of one would pass without the respawner having done anything at all.
@@ -191,6 +195,8 @@ test_a_killed_seat_is_reported_outward_and_comes_back() {
     "the first turn was not a typed operational input"
   assert_grep "fm-session-start" "$HOME_DIR/first-turns.log" \
     "the first turn did not tell the fresh seat to run its session start"
+  [ "$(grep -c seat-started "$HOME_DIR/launches.log")" = "$started" ] \
+    || fail "a second seat was launched while the first had not yet taken the lock"
   wait_for 20 sh -c "[ \"\$(sed -n 1p '$HOME_DIR/state/.lock' | tr -d '[:space:]')\" != '$first_pid' ]" \
     || fail "the replacement seat never took the session lock"
   second_pid=$(seat_pid_from_lock)
@@ -210,10 +216,20 @@ test_a_declared_stand_down_survives_a_real_kill() {
   local before
   : > "$HOME_DIR/state/.seat-stay-down"
   before=$(grep -c seat-started "$HOME_DIR/launches.log" 2>/dev/null || printf 0)
+  # A turn recorded before the marker was set. The declared stand-down has to
+  # settle it rather than race it: typed on the next cycle, it would run session
+  # start and leave this home attended despite the declared absence.
+  {
+    printf 'pane=%s\n' "$(tm display-message -p -t vessel:firstmate '#{pane_id}' 2>/dev/null || printf '%%9')"
+    printf 'server=%s,%s\n' "$SOCKET" "$(tm display-message -p '#{pid}' 2>/dev/null || printf 1)"
+    printf 'at=%s\n' "$(date +%s)"
+  } > "$HOME_DIR/state/.seat-first-turn"
   run_respawner_once || fail "the respawner did not complete a cycle"
   sleep 1
   [ "$(grep -c seat-started "$HOME_DIR/launches.log" 2>/dev/null || printf 0)" = "$before" ] \
     || fail "a deliberately stood-down seat was restarted anyway"
+  [ ! -e "$HOME_DIR/state/.seat-first-turn" ] \
+    || fail "a declared stand-down left a first turn pending, which the next cycle would type"
   [ -z "$(run_alarm)" ] || fail "a deliberately stood-down seat was reported as missing"
   rm -f "$HOME_DIR/state/.seat-stay-down"
   pass "a deliberately stood-down seat is left down and not reported as missing"
