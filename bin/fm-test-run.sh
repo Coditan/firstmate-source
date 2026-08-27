@@ -953,6 +953,7 @@ families_for_changed_path() {
       printf '%s\n' "__script_required__:fm-bridge-relay.test.sh"
       ;;
     bin/fm-watch*|bin/fm-wake*|bin/fm-delivery*|bin/fm-seat-respawner.sh|\
+    bin/fm-seat-presence-lib.sh|\
     bin/fm-daemon*|bin/fm-turnend-guard*|bin/fm-pane-activity-lib.sh)
       printf '%s\n' watcher-wake-lock
       # The pre-typing pane reads are shared with the away daemon, and the

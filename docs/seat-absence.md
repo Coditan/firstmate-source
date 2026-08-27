@@ -203,7 +203,7 @@ It starts a real tmux server on a private socket, runs a stand-in seat that beha
 4. the fresh seat was given a typed first turn telling it to run its session start, after which it holds the lock under a **different pid**;
 5. the returned seat is told it was away.
 
-A second case sets the stay-down marker and requires the same real kill to be left alone.
+A second case sets the stay-down marker and requires the same real kill to be left alone, and a third stands the keeper tier up on a private socket and requires it to converge without a seat.
 
 The stand-in deliberately does NOT take the lock on startup.
 One that did would hide the idle-seat failure, and the suite was checked against that: with `deliver_first_turn` disabled, the run fails at observation 4 rather than passing anyway.
@@ -212,6 +212,7 @@ One that did would hide the idle-seat failure, and the suite was checked against
 $ bash tests/fm-seat-absence-e2e.test.sh
 ok - a deliberately killed seat is reported outward, comes back, and is given its first turn
 ok - a deliberately stood-down seat is left down and not reported as missing
+ok - the restarter is supervised without a service manager and without a seat
 ```
 
 The standing rule in [seat-respawner.md](seat-respawner.md) still holds: this is never tested by killing a live firstmate seat.
