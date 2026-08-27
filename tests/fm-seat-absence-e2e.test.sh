@@ -37,7 +37,14 @@ mkdir -p "$HOME_DIR/state" "$HOME_DIR/config" "$HOME_DIR/data"
 
 tm() { tmux -S "$SOCKET" "$@"; }
 
-cleanup_server() { tm kill-server >/dev/null 2>&1 || true; }
+# The server dies first, then the registered temp roots go. This trap REPLACES
+# the one tests/lib.sh installs for fm_test_tmproot, so it has to call
+# fm_test_cleanup itself or every run of this suite leaves a whole fixture home
+# - lock, logs, endpoint record and tmux socket - behind in TMPDIR forever.
+cleanup_server() {
+  tm kill-server >/dev/null 2>&1 || true
+  fm_test_cleanup
+}
 trap cleanup_server EXIT
 
 # A stand-in seat: it does what a seat does that this machinery reads - it holds
