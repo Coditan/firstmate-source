@@ -96,7 +96,7 @@ The alternatives were rejected for concrete reasons, not by preference:
   Claude's `SessionStart` exit 2 blocks session initialization, so this is reachable, and it is the worst available outcome: it trades a home whose ceiling is unmeasured for a home with no session at all.
   The ceiling exists to keep a long session healthy, not to prevent one existing.
 - **Let something repair the record after the fact - a later hook, a watcher, or the agent itself.**
-  `AGENTS.md` forbids hand-writing this record and is right to: a hand-written record is a watchman that lies, and an agent-written one asserts a transcript position nobody observed.
+  [docs/context-reset.md](context-reset.md) forbids hand-writing this record and is right to: a hand-written record is a watchman that lies, and an agent-written one asserts a transcript position nobody observed.
   Rejected in the same breath: having the watcher find the transcript itself by taking the newest file under the harness's project directory, because "newest" is a guess, and a wrong guess measures the wrong session - which is the defect, not the repair.
 - **Retry until it succeeds.**
   A process table that stays unreadable would then hang session initialization behind it, turning a missing measurement into a missing session by a slower route.
