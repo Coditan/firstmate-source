@@ -276,6 +276,50 @@ test_a_failed_recovery_send_is_retried_on_the_next_sweep() {
   pass "a recovery message nobody got is retried on the next sweep"
 }
 
+# The retry must be of the SEND, not of the reading. A channel that stays broken
+# must not leave the alarm asserting an absence the lock says has ended, must not
+# re-announce the recovery every sweep, and must not let the earlier episode's
+# clock measure the next absence.
+test_a_recovery_the_channel_never_took_stays_out_of_the_record() {
+  local home now pid line
+  home=$(make_home recovery-broken-channel)
+  record_seat "$home" 999999
+  record_endpoint "$home"
+  now=$(date +%s)
+  run_alarm "$home" FM_SEAT_ALARM_NOW="$now" >/dev/null
+  [ "$(sends "$home")" = 1 ] || fail "the absence was never carried outward"
+
+  # The seat comes back, and the captain's channel is broken from here on.
+  pid=$(start_harness_shaped_process "$home" claude)
+  record_seat "$home" "$pid"
+  printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 1\n' > "$home/send"
+  chmod +x "$home/send"
+  line=$(run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 600))")
+  assert_contains "$line" "has one again" "the returning seat was not told it had been away"
+
+  line=$(run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 900))")
+  [ -z "$line" ] || fail "an undelivered recovery was announced again a sweep later: $line"
+  line=$(run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 1200))")
+  [ -z "$line" ] || fail "an undelivered recovery was announced again two sweeps later: $line"
+
+  # state/seat-alarm.state is this alarm's own record of its last reading.
+  assert_grep "verdict=present" "$home/state/seat-alarm.state" \
+    "the alarm recorded an absence while a live first mate held this home's lock"
+
+  # The seat dies again. The new absence is its own, and must be measured from
+  # its own start rather than from the episode whose recovery never landed.
+  kill "$pid" 2>/dev/null || true
+  record_seat "$home" 999999
+  write_recording_send "$home"
+  run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 2400))" >/dev/null
+  run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 2400 + 1800))" >/dev/null
+  assert_grep "no first mate for 30m" "$home/outbox" \
+    "the second absence was not measured from its own start"
+  assert_no_grep "no first mate for 40m" "$home/outbox" \
+    "the captain was given the earlier episode's clock for a later absence"
+  pass "a recovery the channel never took stays out of the record"
+}
+
 test_a_failed_send_is_retried_rather_than_counted() {
   local home now
   home=$(make_home send-failure)
@@ -306,3 +350,4 @@ test_recovery_is_reported_only_to_someone_who_was_told
 test_a_failed_send_is_retried_rather_than_counted
 test_a_restarter_that_stopped_cycling_is_never_called_running
 test_a_failed_recovery_send_is_retried_on_the_next_sweep
+test_a_recovery_the_channel_never_took_stays_out_of_the_record
