@@ -123,6 +123,9 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-seat-stay-down.sh`   | Declare or clear this home's primary-seat stay-down marker for the respawner         |
 | `fm-seat-respawner.sh`   | Bounded per-home primary-seat respawner driven by the delivery service verdict       |
 | `fm-seat-respawner-service.sh` | Install, converge, restart, and report the home-scoped primary-seat respawner unit |
+| `fm-seat-respawner-keeper.sh` | tmux keeper tier for the primary-seat respawner where systemd --user is unusable, converged from the watcher rather than from a seat (docs/seat-absence.md) |
+| `fm-seat-alarm.sh`       | Report out loud when this vessel has no first mate, keyed on the session lock and never on a process name, messaging the captain directly because firstmate is the subject of the reading (docs/seat-absence.md) |
+| `fm-seat-presence-lib.sh` | The one present/absent/unmeasured reading of the session lock, shared by the seat alarm and the seat respawner so detection and restart cannot disagree |
 | `fm-keeper-name-lib.sh`  | Shared home-scoped keeper session naming for the watcher and delivery keepers, plus the legacy name a home may still be running under |
 | `fm-pane-activity-lib.sh` | The shared pre-typing pane reads every process that types into the captain's pane takes |
 | `fm-state-marker-prune-lib.sh` | Shared pruning of orphaned per-task supervision markers while preserving global buffers and history |
