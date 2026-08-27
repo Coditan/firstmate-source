@@ -12,6 +12,13 @@
 // That residual race is real and is handled by the caller retrying, not by
 // pretending the probe reserved anything.
 //
+// `addr` exists because a node can hold an ADDRESS without the machine having
+// an INTERFACE for it. A tailscale node in userspace mode is exactly that: it
+// answers with a tailnet IPv4 while no local interface carries it, so every
+// bind on that address fails EADDRNOTAVAIL no matter which port is asked for.
+// Asking that question with an ephemeral port answers it without walking, and
+// without touching any port a service might want.
+//
 // `resolve` exists because the hostname written into a link is only useful if
 // it resolves to the address the service actually bound. Checking that before
 // the URL is emitted is what keeps a link from failing silently on another
@@ -41,6 +48,14 @@
 //                facts and neither may be asserted for the other. This is a
 //                port-scoped verdict, so callers must not report it as an
 //                unusable address either.
+//   fm-service-port-probe.mjs addr <addr>
+//       Exit 0 - <addr> can be bound on this host; no specific port is claimed,
+//                because the question is about the address alone.
+//       Exit 4 - <addr> cannot be bound at all here (EADDRNOTAVAIL,
+//                EAFNOSUPPORT, EINVAL); the reason is on stderr.
+//       Exit 1 - the bind failed for a port-scoped reason, which answers
+//                nothing about the address and must not be read as either
+//                verdict.
 //   fm-service-port-probe.mjs resolve <hostname> <expected-ipv4>
 //       Exit 0 - <hostname> resolves over IPv4 to <expected-ipv4>.
 //       Exit 1 - it does not resolve, or resolves elsewhere; reason on stderr.
@@ -66,6 +81,7 @@ const ADDRESS_UNUSABLE = new Set(["EADDRNOTAVAIL", "EAFNOSUPPORT", "EINVAL"]);
 function usage() {
   process.stderr.write(
     "Usage: fm-service-port-probe.mjs bind <addr> <port>...\n" +
+      "       fm-service-port-probe.mjs addr <addr>\n" +
       "       fm-service-port-probe.mjs resolve <hostname> <expected-ipv4>\n" +
       "       fm-service-port-probe.mjs http <url> [<host-header>]\n",
   );
@@ -149,6 +165,30 @@ async function bindMode(argv) {
   return 5;
 }
 
+// Port 0 asks the kernel for any ephemeral port, so this isolates the address
+// question from the port question: a free ephemeral port always exists, and an
+// address that cannot be bound fails on every one of them.
+async function addrMode(argv) {
+  const addr = argv[0];
+  if (!addr || argv.length > 1) {
+    usage();
+    return 2;
+  }
+  const verdict = await tryBind(addr, 0);
+  if (verdict.state === "free") return 0;
+  if (verdict.state === "unusable") {
+    process.stderr.write(
+      `fm-service-port-probe: cannot bind ${addr} on this host (${verdict.code})\n`,
+    );
+    return 4;
+  }
+  process.stderr.write(
+    `fm-service-port-probe: ${addr} answered ${verdict.code || "EADDRINUSE"} on an ephemeral port, ` +
+      "which says nothing about whether the address itself is bindable\n",
+  );
+  return 1;
+}
+
 async function resolveMode(argv) {
   const [hostname, expected] = argv;
   if (!hostname || !expected) {
@@ -226,6 +266,7 @@ function httpMode(argv) {
 async function main() {
   const [mode, ...rest] = process.argv.slice(2);
   if (mode === "bind") return bindMode(rest);
+  if (mode === "addr") return addrMode(rest);
   if (mode === "resolve") return resolveMode(rest);
   if (mode === "http") return httpMode(rest);
   usage();

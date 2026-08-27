@@ -52,16 +52,19 @@
 # nothing to stop.
 #
 # What it sets, and why each one is needed:
-#   LAVISH_AXI_HOST            the tailnet address, so the server is reachable
-#                              off this machine. Never a wildcard: an
+#   LAVISH_AXI_HOST            the address the board binds, so the server is
+#                              reachable off this machine. Never a wildcard: an
 #                              all-interfaces bind is broader than the captain
-#                              approved.
+#                              approved. On a node whose tailnet address cannot
+#                              be bound this is loopback, and the board reaches
+#                              the tailnet through the published proxy instead.
 #   LAVISH_AXI_PORT            a port proved free by bin/fm-service-port.sh, so
 #                              vessels sharing this machine do not collide.
 #   LAVISH_AXI_LINK_HOST       the hostname written into the link. The tailnet
 #                              DNS name only after it has been confirmed to
-#                              resolve to the bound address; otherwise the
-#                              address itself.
+#                              resolve to this node's tailnet address; otherwise
+#                              that address itself, and loopback only when no
+#                              tailnet reach was established at all.
 #   LAVISH_AXI_ALLOWED_HOSTS   this vessel's tailnet DNS name, its short node
 #                              name, its address, and this home's claim token.
 #                              Never "*".
@@ -81,6 +84,9 @@
 #   - No usable tailnet: this says so in one plain sentence and falls back to
 #     loopback. The board still opens locally and is never presented as
 #     reachable.
+#   - A tailnet address this node cannot bind: the allocator says so in one
+#     plain sentence, binds loopback, and publishes that port onto the tailnet
+#     address. The diagnosis is kept; what changes is that the board also works.
 #   - The link host does not answer after the board opens: this says so and
 #     names the address form that does work.
 #   - No free port in the window: bin/fm-service-port.sh refuses. There is no
@@ -109,6 +115,8 @@ TOKEN_FILE="$LAV_STATE/claim-token"
 
 # shellcheck source=bin/fm-axi-path-lib.sh
 . "$SCRIPT_DIR/fm-axi-path-lib.sh"
+# shellcheck source=bin/fm-tailnet-serve-lib.sh
+. "$SCRIPT_DIR/fm-tailnet-serve-lib.sh"
 
 note() { printf 'fm-lavish: %s\n' "$1" >&2; }
 die() { note "$1"; exit "${2:-1}"; }
@@ -219,10 +227,11 @@ if ! IDENTITY=$("$SCRIPT_DIR/fm-service-port.sh" lavish --check 2>&1); then
   die "could not resolve this vessel's address for review boards" 4
 fi
 
-ADDR=""; DNSNAME=""; MACHINE=""; SEAT=""; WINDOW=""; REACHABILITY=""; REASON=""
+ADDR=""; TAILADDR=""; DNSNAME=""; MACHINE=""; SEAT=""; WINDOW=""; REACHABILITY=""; REASON=""
 while IFS='=' read -r key value; do
   case "$key" in
     addr) ADDR=$value ;;
+    tailaddr) TAILADDR=$value ;;
     dnsname) DNSNAME=$value ;;
     machine) MACHINE=$value ;;
     seat) SEAT=$value ;;
@@ -236,7 +245,12 @@ EOF
 
 [ -n "$ADDR" ] && [ -n "$SEAT" ] || die "the address resolver returned no usable address" 4
 
-LINK_HOST=${DNSNAME:-$ADDR}
+# ADDR is the address to BIND, which is not always the address to LINK. On a
+# node whose tailnet address cannot be bound the port is bound on loopback and
+# published onto that address, so the link still has to name the tailnet - the
+# proxy is where the board genuinely answers, and 127.0.0.1 is exactly the link
+# this wrapper exists to stop being handed over.
+LINK_HOST=${DNSNAME:-${TAILADDR:-$ADDR}}
 
 # --- claim token ------------------------------------------------------------
 
@@ -252,8 +266,17 @@ if [ -z "${CLAIM_TOKEN:-}" ]; then
     || die "cannot write this home's board claim token" 4
 fi
 
+# The Host header a browser sends through the published proxy carries the
+# tailnet NAME, measured rather than reasoned about (bin/fm-tailnet-serve-lib.sh
+# records that measurement), so both the name and the tailnet address belong in
+# the allowlist whenever the tailnet identity is what the link names. The
+# allowlist is compared on hostname alone, so the port the proxy adds is not
+# part of the question.
 ALLOWED="$LINK_HOST $ADDR $CLAIM_TOKEN"
-[ "$REACHABILITY" != tailnet ] || [ -z "$MACHINE" ] || ALLOWED="$MACHINE $ALLOWED"
+[ -z "$TAILADDR" ] || [ "$TAILADDR" = "$ADDR" ] || ALLOWED="$TAILADDR $ALLOWED"
+case "$REACHABILITY" in
+  tailnet|tailnet-proxied) [ -z "$MACHINE" ] || ALLOWED="$MACHINE $ALLOWED" ;;
+esac
 
 # --- is the server on our recorded port actually ours ------------------------
 #
@@ -308,6 +331,17 @@ stop_server() {
   # home's; the same call against an unproven port could shut down a neighbour.
   LAVISH_AXI_HOST=$ADDR LAVISH_AXI_PORT=$1 \
     "$LAVISH" stop --port "$1" >/dev/null 2>&1 || true
+  withdraw_proxy "$1"
+}
+
+# A published proxy outlives the server it points at, so a stopped board would
+# otherwise leave a tailnet endpoint answering nothing on this vessel's own
+# name. Serve configuration belongs to the whole node, which every UNIX account
+# on this machine shares, so this is called only where ownership of the port has
+# already been proved or where nothing is serving on it at all.
+withdraw_proxy() {
+  [ "$REACHABILITY" = tailnet-proxied ] || return 0
+  fm_tailnet_serve_withdraw "$1" || true
 }
 
 MINE=""
@@ -379,11 +413,13 @@ if [ "$SUBCOMMAND" = stop ] && [ "$EXPLICIT_PORT" -eq 1 ]; then
     if port_answers "$EXPLICIT_PORT_VALUE"; then
       die "the board server on $ADDR port $EXPLICIT_PORT_VALUE is not one this vessel can prove is its own, so it was not stopped; a co-hosted vessel serves on this same address, and only the home that opened a board may stop it" 7
     fi
+    withdraw_proxy "$EXPLICIT_PORT_VALUE"
     note "no review-board server owned by this vessel is running on $ADDR port $EXPLICIT_PORT_VALUE; nothing to stop"
     exit 0
   fi
   PORT=$EXPLICIT_PORT_VALUE
 elif [ "$SUBCOMMAND" = stop ] && [ -z "$PROVEN" ]; then
+  withdraw_proxy "$PORT"
   note "no review-board server owned by this vessel is running on $ADDR; nothing to stop"
   exit 0
 fi
@@ -408,14 +444,28 @@ fi
 # genuinely loopback-only host is the silent failure this whole mechanism exists
 # to end.
 if [ "$NEEDS_PORT" -eq 1 ]; then
-  if [ "$REACHABILITY" != tailnet ]; then
-    note "no tailnet on this host (${REASON:-reason unavailable}) - this board opens only on this machine."
-  elif [ -n "$REASON" ]; then
-    note "$REASON"
-  fi
+  case "$REACHABILITY" in
+    tailnet|tailnet-proxied)
+      [ -z "$REASON" ] || note "$REASON"
+      ;;
+    *)
+      note "no tailnet on this host (${REASON:-reason unavailable}) - this board opens only on this machine."
+      ;;
+  esac
 fi
 
 # --- run --------------------------------------------------------------------
+
+# Withdrawn before the stop rather than after it, because `stop` replaces this
+# process and there is no "after" to run in. The port has already been proved to
+# be this home's by the claim token above, which is the whole condition on
+# touching node-wide serve configuration, and a proxy left pointing at a port
+# that is about to stop answering is the dead tailnet endpoint this exists to
+# prevent - it answers 502 rather than nothing, which reads as a broken board
+# rather than a closed one.
+if [ "$SUBCOMMAND" = stop ]; then
+  withdraw_proxy "$PORT"
+fi
 
 if [ "$SUBCOMMAND" != open ]; then
   exec "$LAVISH" "${ARGS[@]}"
