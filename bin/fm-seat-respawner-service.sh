@@ -96,6 +96,15 @@ source_version() {
     "$SCRIPT_DIR/fm-pane-activity-lib.sh"
     "$SCRIPT_DIR/fm-harness-pid-lib.sh"
     "$SCRIPT_DIR/fm-seat-presence-lib.sh"
+    # The typing path, listed for the same reason watch_source_version lists it:
+    # fm_backend_composer_state dispatches into fm-tmux-lib.sh, which classifies
+    # through fm-composer-lib.sh, and both the existence probe and the submit go
+    # through fm_backend_source tmux into backends/.  A convergence check blind
+    # to those would keep a keeper typing into panes with the pre-update rule for
+    # what an affirmatively empty agent composer is.
+    "$SCRIPT_DIR/fm-tmux-lib.sh"
+    "$SCRIPT_DIR/fm-composer-lib.sh"
+    "$SCRIPT_DIR"/backends/*.sh
   )
   if command -v sha256sum >/dev/null 2>&1; then
     sum=$(
