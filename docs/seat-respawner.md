@@ -5,9 +5,12 @@ It is intentionally home-scoped and does not scan for other seats.
 
 ## Design
 
-`bin/fm-seat-respawner.sh` runs as a per-home `systemd --user` unit through `systemd/fm-seat-respawner@.service`.
+`bin/fm-seat-respawner.sh` runs as a per-home `systemd --user` unit through `systemd/fm-seat-respawner@.service` where a systemd user manager works, and as a detached home-scoped tmux keeper where one does not, exactly as the watcher and the delivery listener already do.
 The unit instance is keyed by `systemd-escape --path "$FM_HOME"`, matching the watcher and delivery service shape.
-Bootstrap reports `RESPAWNER_UNIT:` when the unit is missing, disabled, stale, or unavailable, and `bin/fm-bootstrap.sh install seat-respawner-unit` is the only install path.
+Bootstrap reports `RESPAWNER_UNIT:` when the unit is missing, disabled, stale, or unavailable, and `bin/fm-bootstrap.sh install seat-respawner-unit` is the only install path on the systemd tier; the keeper tier needs no install.
+
+Which tier supervises the keeper, and why it is not a seat session start, is owned by [seat-absence.md](seat-absence.md) along with the detection half.
+Read it before changing anything here: this component restarts a seat and deliberately does not report that one is missing, and it does not consider a restart finished until a seat holds the session lock.
 
 The respawner does not probe panes itself.
 It reads `bin/fm-delivery-service.sh status`, whose verdicts are owned by [wake-delivery.md](wake-delivery.md).
@@ -38,6 +41,8 @@ When the attempt bound is reached for the same delivery condition, the respawner
 The portable tests cover honoring the stay-down marker and reporting the give-up path.
 The real tmux effect proof should use a throwaway `FM_HOME`, a private tmux socket, a fake delivery-status command that first reports `undeliverable:`, and a harmless configured launch command.
 Do not test this by killing the live firstmate seat.
+
+The fresh seat is given one typed first turn, because a launched agent otherwise sits idle and publishes nothing; [seat-absence.md](seat-absence.md) owns that requirement and its measurement.
 
 This does not replace the watcher or delivery listener.
 It also does not repair a missing delivery listener, a broken findings surface, a missing launch command, or a non-tmux endpoint.

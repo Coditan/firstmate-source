@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+set -u
+
+# shellcheck source=tests/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+ALARM="$ROOT/bin/fm-seat-alarm.sh"
+
+fm_test_tmproot TMP_ROOT fm-seat-alarm
+
+PIDNS=$(. "$ROOT/bin/fm-harness-pid-lib.sh"; fm_pid_namespace_token)
+
+make_home() {  # <name>
+  local home=$TMP_ROOT/$1
+  mkdir -p "$home/state" "$home/config" "$home/data"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'cat >> "%s/outbox"\n' "$home"
+    printf 'printf -- "---\\n" >> "%s/outbox"\n' "$home"
+  } > "$home/send"
+  chmod +x "$home/send"
+  printf '%s\n' "$home"
+}
+
+# A seat is recorded, never inferred: the record names the pid AND the pid table.
+record_seat() {  # <home> <pid>
+  printf '%s\npidns=%s\n' "$2" "$PIDNS" > "$1/state/.lock"
+}
+
+record_endpoint() {  # <home>
+  printf 'backend=tmux\ntarget=%%0\n' > "$1/state/.primary-endpoint"
+}
+
+queue_wakes() {  # <home> <count> <oldest-age-seconds>
+  local home=$1 count=$2 age=$3 now i
+  now=$(date +%s)
+  : > "$home/state/.wake-queue"
+  for i in $(seq 1 "$count"); do
+    printf '%s\t%s\tsignal\tk%s\tp\n' "$((now - age + i - 1))" "$i" "$i" >> "$home/state/.wake-queue"
+  done
+}
+
+# A process whose name and command line look exactly like a harness, so a reading
+# that keys on either is caught by the tests below rather than in production.
+start_harness_shaped_process() {  # <home> <basename>
+  local home=$1 name=$2
+  printf '#!/usr/bin/env bash\nsleep 60\n' > "$home/$name"
+  chmod +x "$home/$name"
+  # Detached from this function's stdout, or the command substitution around it
+  # would wait for the process to exit before returning.
+  "$home/$name" >/dev/null 2>&1 </dev/null &
+  printf '%s\n' "$!"
+}
+
+run_alarm() {  # <home> [extra env assignments...]
+  local home=$1; shift
+  env FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_SEAT_ALARM_SEND="$home/send" FM_SEAT_ALARM_GRACE=0 \
+    "$@" "$ALARM"
+}
+
+sends() {  # <home>
+  grep -c '^---$' "$1/outbox" 2>/dev/null || printf '0\n'
+}
+
+test_a_live_seat_is_silent() {
+  local home pid
+  home=$(make_home present)
+  pid=$(start_harness_shaped_process "$home" claude)
+  record_seat "$home" "$pid"
+  record_endpoint "$home"
+  [ -z "$(run_alarm "$home")" ] || fail "a healthy vessel produced a line"
+  [ "$(sends "$home")" = 0 ] || fail "a healthy vessel notified the captain"
+  kill "$pid" 2>/dev/null || true
+  pass "a vessel with a live first mate says nothing"
+}
+
+# The measured shape of the 2026-08-27 outage: the seat gone, its work piling up,
+# and live harness-shaped processes in the container that were crewmates.
+test_an_absent_seat_is_reported_outward_with_the_work_that_is_waiting() {
+  local home crew line
+  home=$(make_home absent)
+  crew=$(start_harness_shaped_process "$home" claude)
+  record_seat "$home" 999999
+  record_endpoint "$home"
+  queue_wakes "$home" 43 20880
+  line=$(run_alarm "$home")
+  assert_contains "$line" "no first mate" "the returning seat is not told it was away"
+  [ "$(sends "$home")" = 1 ] || fail "the captain was not told the vessel lost its first mate"
+  assert_grep "43 notification" "$home/outbox" "the message did not say how much work was waiting"
+  assert_grep "5h48m" "$home/outbox" "the message did not say how long the oldest work had waited"
+  kill "$crew" 2>/dev/null || true
+  pass "an absent first mate is reported outward while it is still absent"
+}
+
+# Fact 5 of the task that produced this file: during the outage both live claude
+# processes were crewmates in task worktrees. Anything keying on a process name,
+# or on a pane's current command, would have called the vessel healthy while it
+# was blind.
+test_a_live_crewmate_does_not_make_an_absent_seat_read_present() {
+  local home crew status
+  home=$(make_home crew-immune)
+  crew=$(start_harness_shaped_process "$home" claude)
+  record_seat "$home" 999999
+  record_endpoint "$home"
+  status=$(env FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ALARM" --status) && fail \
+    "an absent seat exited 0 while a harness-shaped process was running"
+  assert_contains "$status" "ABSENT" "a live crewmate made the absent seat read as present"
+  kill "$crew" 2>/dev/null || true
+  pass "a live crewmate cannot make an absent first mate read as present"
+}
+
+test_a_declared_stand_down_is_not_an_alarm() {
+  local home
+  home=$(make_home stay-down)
+  record_seat "$home" 999999
+  record_endpoint "$home"
+  : > "$home/state/.seat-stay-down"
+  [ -z "$(run_alarm "$home")" ] || fail "a declared stand-down produced a line"
+  [ "$(sends "$home")" = 0 ] || fail "a declared stand-down notified the captain"
+  pass "a deliberately stood-down first mate is not reported as missing"
+}
+
+test_a_home_that_never_seated_is_not_an_alarm() {
+  local home
+  home=$(make_home unattended)
+  [ -z "$(run_alarm "$home")" ] || fail "a home that never seated produced a line"
+  [ "$(sends "$home")" = 0 ] || fail "a home that never seated notified the captain"
+  pass "a home that has never had a first mate is not reported as missing one"
+}
+
+# The constraint this whole design is held to: a reading that could not be taken
+# is never an all-clear. An alarm that goes quiet when its instrument breaks is
+# indistinguishable from a healthy vessel.
+test_an_unreadable_record_is_reported_and_never_read_as_healthy() {
+  local home status rc=0
+  home=$(make_home unmeasured)
+  record_endpoint "$home"
+  printf 'x\n' > "$home/state/.lock"
+  chmod 000 "$home/state/.lock"
+  status=$(env FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ALARM" --status) || rc=$?
+  chmod 600 "$home/state/.lock"
+  [ "$rc" = 3 ] || fail "an unreadable record did not report itself unmeasured (exit $rc)"
+  assert_contains "$status" "UNMEASURED" "an unreadable record did not say it was unmeasured"
+  assert_contains "$status" "not an all-clear" "an unmeasured reading did not refuse to be an all-clear"
+  pass "a reading that could not be taken is never reported as healthy"
+}
+
+test_it_speaks_on_change_then_repeats_on_its_own_cadence() {
+  local home now
+  home=$(make_home cadence)
+  record_seat "$home" 999999
+  record_endpoint "$home"
+  now=$(date +%s)
+  run_alarm "$home" FM_SEAT_ALARM_NOW="$now" >/dev/null
+  [ "$(sends "$home")" = 1 ] || fail "entering the absence did not notify"
+  [ -z "$(run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 60))")" ] \
+    || fail "an unchanged absence produced a second line"
+  [ "$(sends "$home")" = 1 ] || fail "an unchanged absence notified again inside its own window"
+  run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 1900))" >/dev/null
+  [ "$(sends "$home")" = 2 ] || fail "a persisting absence went quiet instead of repeating"
+  pass "an absence is reported once, then repeats on its own cadence"
+}
+
+test_recovery_is_reported_only_to_someone_who_was_told() {
+  local home now pid line
+  home=$(make_home recovery)
+  record_seat "$home" 999999
+  record_endpoint "$home"
+  now=$(date +%s)
+  run_alarm "$home" FM_SEAT_ALARM_NOW="$now" >/dev/null
+  pid=$(start_harness_shaped_process "$home" claude)
+  record_seat "$home" "$pid"
+  line=$(run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 900))")
+  assert_contains "$line" "has one again" "the returned first mate was not told it had been away"
+  [ "$(sends "$home")" = 2 ] || fail "the captain was not told the first mate came back"
+  kill "$pid" 2>/dev/null || true
+  pass "a recovery is reported to a captain who was told about the absence"
+}
+
+# A notification path that fails quietly gets trusted while it is dead, which is
+# this alarm's own defect wearing a different hat.
+test_a_failed_send_is_retried_rather_than_counted() {
+  local home now
+  home=$(make_home send-failure)
+  record_seat "$home" 999999
+  record_endpoint "$home"
+  printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 1\n' > "$home/send"
+  chmod +x "$home/send"
+  now=$(date +%s)
+  run_alarm "$home" FM_SEAT_ALARM_NOW="$now" >/dev/null
+  assert_grep "send-failed" "$home/data/seat-alarm.log" "a failed send was not recorded"
+  printf '#!/usr/bin/env bash\ncat >> "%s/outbox"\nprintf -- "---\\n" >> "%s/outbox"\n' "$home" "$home" > "$home/send"
+  chmod +x "$home/send"
+  run_alarm "$home" FM_SEAT_ALARM_NOW="$((now + 60))" >/dev/null
+  [ "$(sends "$home")" = 1 ] \
+    || fail "a send that failed was counted as delivered and never retried"
+  pass "a send that failed is retried rather than counted as delivered"
+}
+
+test_a_live_seat_is_silent
+test_an_absent_seat_is_reported_outward_with_the_work_that_is_waiting
+test_a_live_crewmate_does_not_make_an_absent_seat_read_present
+test_a_declared_stand_down_is_not_an_alarm
+test_a_home_that_never_seated_is_not_an_alarm
+test_an_unreadable_record_is_reported_and_never_read_as_healthy
+test_it_speaks_on_change_then_repeats_on_its_own_cadence
+test_recovery_is_reported_only_to_someone_who_was_told
+test_a_failed_send_is_retried_rather_than_counted
