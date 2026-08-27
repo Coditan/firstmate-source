@@ -126,33 +126,37 @@ test_giveup_path_reports_a_finding() {
   pass "seat respawner reports exhausted retry episodes through findings"
 }
 
-test_launch_uses_respawner_service_path() {
-  local home delivery tmux log status tool_dir launched base_path
-  home=$(make_home service-path)
+# The launcher used to export its own PATH into the fresh seat, so a respawned
+# seat silently ran a different tool set from a hand-started one. Measured on
+# coditan-vessel 2026-08-27: `bash -lc` reaches claude 2.1.234 and `bash -lic`
+# reaches 2.1.247, because ~/.bashrc returns at its interactive guard before the
+# line that adds the npm prefix. No value composed by the launcher can reproduce
+# that chain, so it composes none and the launch command owns its own
+# environment. This asserts the absence, because the defect was invisible - a
+# pinned PATH produces a seat that runs perfectly, on the wrong binary.
+test_launch_does_not_pin_the_respawners_path() {
+  local home delivery tmux log status
+  home=$(make_home no-path-pin)
   status="$home/status.txt"
   delivery="$home/fake-delivery"
   tmux="$home/fake-tmux"
   log="$home/tmux.log"
-  tool_dir="$home/service-bin"
-  launched="$home/launch.out"
-  mkdir -p "$tool_dir"
   printf 'undeliverable: listener pid 1 is up with 1 wake(s) pending, but no session has published where the model turn lives\n' > "$status"
   write_fake_delivery "$delivery"
-  write_executing_fake_tmux "$tmux" "$log"
-  {
-    printf '#!/usr/bin/env bash\n'
-    printf "printf launched > \"\$FM_HOME/launch.out\"\n"
-  } > "$tool_dir/fm-custom-seat"
-  chmod +x "$tool_dir/fm-custom-seat"
-  printf 'fm-custom-seat\n' > "$home/config/seat-launch-command"
+  write_fake_tmux "$tmux" "$log"
+  printf "bash -lic 'exec claude'\n" > "$home/config/seat-launch-command"
 
-  base_path=${PATH:-/usr/bin:/bin}
-  PATH="$tool_dir:$base_path" FM_FAKE_DELIVERY_STATUS="$status" \
+  PATH="$home/should-not-be-pinned:${PATH:-/usr/bin:/bin}" FM_FAKE_DELIVERY_STATUS="$status" \
     run_respawner_once "$home" "$delivery" "$tmux" \
-    || fail "respawner did not carry its service PATH into the tmux launch"
-  [ "$(cat "$launched" 2>/dev/null || true)" = launched ] \
-    || fail "tmux launch command could not resolve the service PATH command"
-  pass "seat respawner preserves the service PATH for tmux launches"
+    || fail "respawner did not complete a launch cycle"
+  assert_grep "new-window" "$log" "the launch never reached tmux"
+  assert_no_grep "should-not-be-pinned" "$log" \
+    "the respawner pinned its own PATH into the fresh seat"
+  assert_no_grep "PATH=" "$log" \
+    "the respawner composed a PATH for the seat; the launch command owns its own environment"
+  assert_grep "exec bash -lic" "$log" \
+    "the configured launch command did not reach tmux intact"
+  pass "seat respawner composes no PATH for the fresh seat"
 }
 
 test_resume_style_launch_command_is_refused() {
@@ -177,5 +181,5 @@ test_resume_style_launch_command_is_refused() {
 
 test_stay_down_marker_is_authoritative
 test_giveup_path_reports_a_finding
-test_launch_uses_respawner_service_path
+test_launch_does_not_pin_the_respawners_path
 test_resume_style_launch_command_is_refused
