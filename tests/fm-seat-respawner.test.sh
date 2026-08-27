@@ -502,11 +502,71 @@ test_only_a_provably_dead_watcher_is_revived() {
   pass "only a provably dead watcher is revived, never a live one whose beacon aged out"
 }
 
+# The watcher breaks its check sweep at the FIRST check that prints a line
+# (bin/fm-watch.sh:1698-1701), so "converged on every watcher sweep" is only true
+# if no sibling that speaks sorts ahead of the convergence shim. The seat alarm
+# is the sibling that would, so the two ids carry the ordering. Measured through
+# the watcher's own glob rather than argued from the names.
+test_convergence_is_swept_before_the_alarm_and_supersedes_its_old_shim() {
+  local home shims restart_at vacancy_at i legacy id c
+
+  home=$(make_home sweep-order)
+
+  # A home armed under the pre-rename ids, exactly as an updating vessel has it.
+  for legacy in seat-alarm seat-respawner; do
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$home/state/$legacy.check.sh"
+    chmod 0700 "$home/state/$legacy.check.sh"
+    printf 'fm-custom-check-v1\ndeadbeef\n' > "$home/state/$legacy.check-trust"
+  done
+
+  env FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$home/state" \
+    FM_CONFIG_OVERRIDE="$home/config" FM_SEAT_RESPAWNER_FORCE_BACKEND=keeper \
+    "$SERVICE" --arm >/dev/null || fail "the restart watch could not be armed"
+  env FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$home/state" \
+    FM_CONFIG_OVERRIDE="$home/config" FM_DATA_OVERRIDE="$home/data" \
+    "$ROOT/bin/fm-seat-alarm.sh" --arm >/dev/null || fail "the first-mate watch could not be armed"
+
+  # A superseded shim the watcher would keep executing is the whole hazard of a
+  # rename, so arming must have removed both halves of each old pair.
+  for legacy in seat-alarm seat-respawner; do
+    [ ! -e "$home/state/$legacy.check.sh" ] \
+      || fail "arming left the superseded $legacy shim in place for the watcher to run"
+    [ ! -e "$home/state/$legacy.check-trust" ] \
+      || fail "arming left the superseded $legacy registration in place"
+  done
+
+  # Both replacements must satisfy the predicate the watcher itself gates on.
+  for id in seat-restart seat-vacancy; do
+    # shellcheck disable=SC2016 # The inner script's positional args are the child shell's, on purpose.
+    env FM_STATE_OVERRIDE="$home/state" FM_HOME="$home" bash -c \
+      '. "$1/bin/fm-pr-lib.sh"
+       . "$1/bin/fm-check-lib.sh"
+       fm_custom_check_registered "$2/state" "$3"' _ "$ROOT" "$home" "$id" \
+      || fail "$id was not left registered for the watcher to execute"
+  done
+
+  # The watcher's own enumeration: `for c in "$STATE"/*.check.sh`.
+  shims=()
+  for c in "$home/state"/*.check.sh; do shims+=("$(basename "$c")"); done
+  restart_at=-1
+  vacancy_at=-1
+  for i in "${!shims[@]}"; do
+    [ "${shims[$i]}" = seat-restart.check.sh ] && restart_at=$i
+    [ "${shims[$i]}" = seat-vacancy.check.sh ] && vacancy_at=$i
+  done
+  [ "$restart_at" -ge 0 ] && [ "$vacancy_at" -ge 0 ] \
+    || fail "the sweep did not yield both shims: ${shims[*]}"
+  [ "$restart_at" -lt "$vacancy_at" ] \
+    || fail "the alarm is swept before the convergence, so it can displace it: ${shims[*]}"
+  pass "the restarter's convergence is swept before the alarm and supersedes the old shims"
+}
+
 test_stay_down_marker_is_authoritative
 test_giveup_path_reports_a_finding
 test_converge_never_claims_a_start_it_could_not_confirm
 test_a_live_first_mate_is_never_relaunched
 test_only_a_provably_dead_watcher_is_revived
+test_convergence_is_swept_before_the_alarm_and_supersedes_its_old_shim
 test_an_unreadable_lock_never_produces_a_launch
 test_a_pending_first_turn_holds_the_next_launch
 test_an_armed_restart_that_never_ran_is_reported
