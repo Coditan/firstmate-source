@@ -248,6 +248,7 @@ Firstmate's skills live in two separate places with different audiences:
 - [docs/session-archive.md](docs/session-archive.md) - the searchable session archive: a reduced, redacted, compressed, per-vessel derivative of this machine's own transcripts, why a full content scan is the index, why a wrong reader is made loud, and the honest bound that travels with every claim made from it.
 - [docs/supervision-protocols/](docs/supervision-protocols/) - rendered primary-harness supervision protocols for Claude, Codex, OpenCode, Pi, Grok, and unknown harness fallback.
 - [docs/supervision-cost.md](docs/supervision-cost.md) - what supervision costs in freshly written tokens, measured from provider usage records with `bin/fm-supervision-cost.sh`, plus the before-and-after for three repairs and what the measurement does not cover.
+- [docs/graphify.md](docs/graphify.md) - reading a project's knowledge graph: the staleness test an answer must pass, which command to reach for, and who may rebuild one.
 - [docs/scripts.md](docs/scripts.md) - the `bin/` toolbelt reference.
 - [`AGENTS.md`](AGENTS.md) - the distro's always-loaded operating contract and routing index for conditional procedures.
 - [CONTRIBUTING.md](CONTRIBUTING.md) - how to contribute, including the dev/test commands.

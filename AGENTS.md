@@ -107,21 +107,15 @@ A silent bootstrap section needs no action; for any printed actionable diagnosti
 
 ### Running out of memory
 
-This machine now has swap as a shock absorber, and a container memory limit is proposed but unmeasured for this seat, so the alarm is no longer the only boundary between runaway growth and a kernel kill.
-It remains the fleet's early warning for RAM-headroom loss and runaway growth before the host degrades into reclaim or swap pressure.
 The locked bootstrap step arms `bin/fm-memory-alarm.sh` on the watcher, and every session start reports `MEMORY_ALARM:` when this home's alarm is unarmed or has stopped running.
-`docs/memory-alarm.md` owns the thresholds, how they were derived, and what the alarm cannot see; its crossings and recoveries arrive as an ordinary `check:` wake under section 8, naming the process, its account, and the work it was serving.
-Two facts bind wherever that wake is read.
-The alarm limits, throttles, and kills nothing, so it is a call for a decision and never a report of one already taken.
-A reading it could not take is reported as unable to see and never as an all-clear, for the same reason the currency round reports one that way.
+Its crossings and recoveries arrive as an ordinary `check:` wake under section 8, naming the process, its account, and the work it was serving.
+Read `docs/memory-alarm.md` before acting on one: it owns the thresholds, how they were derived, what the alarm cannot see, and the two facts that bind wherever that wake is read.
 
 ### Daily update checking
 
 Firstmate's daily currency duty has a mechanism, so it is never carried by memory: the locked bootstrap step arms `bin/fm-currency-round.sh` on the watcher, and every session start reports `CURRENCY_ROUND:` when this home's check is unarmed or has stopped running.
-`docs/configuration.md` "Daily currency round" and `docs/currency-round.md` own the cadence, the readings, and the scope; the round's findings arrive as an ordinary `check:` wake under section 8.
-Two facts bind wherever that wake is read.
-Every claim of currency names its hop - `released`, `pinned`, or `installed` - and this round measures all three for this seat only, so a clean round never means the fleet is current.
-A reading the round could not take is reported as unmeasured and never as current, because an instrument that cannot read must not be relayed as an all-clear.
+The round's findings arrive as an ordinary `check:` wake under section 8.
+Read `docs/currency-round.md` before acting on one: it owns the readings, the scope, and the two facts that bind wherever that wake is read, while `docs/configuration.md` "Daily currency round" owns the cadence and configuration.
 
 ### Quota reporting
 
@@ -239,16 +233,13 @@ Classify work as dispatchable when it does not overlap work under way, or queued
 Dispatch independent work immediately with no concurrency cap, serialize coarse overlaps, and record blockers durably.
 Write the task-specific brief under section 11 before spawning.
 
-### Dispatch and supervision handoff
+### Dispatch, steering, and validation
 
+Load `crew-dispatch` before spawning a crewmate or scout, before steering one, and before triggering, reading, or answering a no-mistakes validation run on a live worker.
+It owns the spawn handoff, the steering channel, validation-run ownership, and how a run's true state is read.
 Spawn only through `bin/fm-spawn.sh` after the profile and backend checks in section 4.
 The spawn must resolve a genuine isolated task worktree distinct from the primary checkout; a failed isolation assertion stops the task.
-After spawning, confirm the worker is processing the brief, handle any trust dialog through `harness-adapters`, and record ship or scout work as under way.
-A persistent secondmate is recorded in the secondmate registry and runtime state, never as a backlog work item.
-
-Steer a worker with short single-line messages through fail-closed `fm-send`; put long instructions in a file.
-A secondmate's routed reply returns through status or a document pointer, not by firstmate peeking into its chat.
-For the parent-owned correlation, recovery, and escalation contract on marked secondmate requests, see `bin/fm-pending-reply-lib.sh`.
+An ask-user finding returns as `needs-decision`; firstmate decides only when the configured authority permits, otherwise escalates to the captain.
 Supervise all live work under section 8.
 
 ### Selected delivery path and approval authority
@@ -275,47 +266,17 @@ Use `bin/fm-pr-merge.sh` for every task PR merge so merge metadata is recorded, 
 When no task in this home owns the pull request, because its task was already cleaned up or another vessel built it and handed it over, that same script's `--no-local-task` form is the sanctioned route, and its header owns why that is not a way past the recording requirement.
 After an autonomous merge, give the captain a one-line full-URL or local-main outcome.
 
-### Validate
+### PR ready, landing, cleanup, and scout outcomes
 
-For a no-mistakes ship, trigger validation on the same worker after its implementation commit, using the harness invocation owned by `harness-adapters`.
-The task worker that starts a no-mistakes run drives the pipeline and owns every `no-mistakes axi run` and `no-mistakes axi respond` call through the next gate or outcome.
-Firstmate never invokes `no-mistakes axi respond` for a crew-owned run.
-
-An ask-user finding returns as `needs-decision`; firstmate decides only when the configured authority permits, otherwise escalates to the captain.
-Send the same worker one exact decision naming the decision key, step, action, affected finding IDs, instructions where needed, and exact response command.
-Require the matching `resolved` event, forbid `--yes`, and require the worker to process every synchronous return until completion or a genuinely new escalation.
-Resume fleet supervision immediately after the decision lands.
-
-Judge validation by the current-code-matched run step through `bin/fm-crew-state.sh`, not by shell liveness or the last status event.
-Running, fixing, or CI states remain working; parked approval or fix-review states require the worker to follow the active gate help; passed or checks-passed is done; failed or cancelled is failed.
-A worker hand-editing, committing, aborting, or restarting during an active validation run duplicates pipeline ownership; steer it back to the gate response flow.
-The worker reports the PR when CI first becomes green rather than waiting for merge monitoring to finish.
-
-### PR ready, landing, and teardown
-
-For PR-based ship tasks, the ready signal depends on mode: `no-mistakes` reports `done: PR <url> checks green` after CI is green, while `direct-PR` reports `done: PR <url>` after opening the PR.
-Run `bin/fm-pr-check.sh <id> <PR url>` - it records `pr=` and the forge's `pr_head=` when available in the task's meta and arms the watcher's merge poll.
-Tell the captain the PR's full URL, always the complete `https://...` link rather than a bare `#number`, a concise outcome summary, and the no-mistakes risk level when applicable.
+Load `task-landing` when a worker reports a PR or a clean ready branch, before recording or landing one, before tearing a finished task down, when a scout's report arrives, and before promoting a scout to implementation.
+It owns PR recording, the landing and cleanup sequence, secondmate retirement, and the scout report and promotion path.
 A captain instruction to merge is explicit authority; `yolo` is the only standing routine authority.
-For any custom `state/<id>.check.sh` you write yourself, keep it an ordinary single-link mode-`0700` file, print one line only when firstmate should wake, print nothing otherwise, finish before `FM_CHECK_TIMEOUT`, then bind its current bytes with `bin/fm-check-register.sh <id>` before the watcher may execute it.
-
 Tear down a ship task only after landing is confirmed.
 A teardown refusal for uncommitted or unlanded work is a stop-and-investigate result, never an obstacle to bypass.
 Never force teardown without explicit discard authority.
-After successful teardown, record completion, retain only the configured recent Done history, and re-evaluate queued work whose blockers and time gates have cleared.
-
-A secondmate is persistent and an empty queue is healthy.
-Retire one only on an explicit captain or main-firstmate decision, after loading `secondmate-provisioning`; its home must contain no work under way, and forced discard still requires explicit captain authority.
-
-### Scout outcome and promotion
-
 A completed scout must leave a self-contained report before its scratch worktree can be discarded.
-Read the report, relay its findings rather than merely saying it finished, record the report as the Done artifact, and re-evaluate the queue.
 A report may recommend implementation but does not authorize it.
 Before treating the investigation or any visual review as complete, load `decision-hold-lifecycle`; teardown enforces that shared completion gate.
-When implementation is separately authorized, promote the existing scout through `bin/fm-promote.sh` rather than creating a duplicate task.
-The promoted worker must inventory scratch state, return to a clean default-branch base, carry over only intended fix changes, create the ship branch, and follow the project's selected delivery path.
-Scratch commits and debug edits never ride along, and a reproduced bug becomes the regression test.
 
 ## 8. Supervision protocol
 
@@ -333,7 +294,7 @@ At the start of every wake-handling turn, drain the durable wake queue before pe
 Session start is the only exception because its one-shot digest already drained while locked or deliberately left the queue untouched in lock-refused read-only mode.
 A status line is a wake event, not current state; use `bin/fm-crew-state.sh` when current state matters, especially before re-escalating an old decision, blocker, or pause.
 A declared `paused:` event means a bounded external wait expected to clear on its own, while `blocked:` means firstmate action is needed.
-After relaying a terminal task outcome and confirming that only external human action remains, run `bin/fm-mark-parked.sh <window>` (the exact window recorded in its meta) so repeated pane changes use the bounded external-wait cadence; it refuses an unrecognized window or a `kind=secondmate` window instead of silently creating a marker that matches nothing or that fights pause tracking.
+After relaying a terminal task outcome and confirming that only external human action remains, load `task-landing` and mark that task parked so repeated pane changes use the bounded external-wait cadence.
 
 Handle actionable wakes as follows:
 
@@ -342,9 +303,7 @@ Handle actionable wakes as follows:
 3. For `check:`, act on the named poll result, including merges, Bridge inbox traffic, X-mode events, certsync health, and a context-ceiling wake whose payload carries its own next step: either run `/stow` and then, in that same turn, the receipt and reset commands it names, or ask the captain first because the wake says captain presence, unestablished presence, or away mode makes the reset not firstmate's to take autonomously.
    A ceiling wake that instead reports the ceiling unenforced, or a reset blocked, names a condition rather than a next step: repair the named condition through its owner, or say plainly that it stands unrepaired, because a ceiling nobody can measure is one nobody is holding.
    For an unenforced wake, first repair the concrete condition named in the wake payload through its owner, or say plainly that it stands unrepaired.
-   Only a missing or unreadable `state/.primary-transcript` record, or one whose recorded session pid differs from the lock pid, has no in-session repair: `bin/fm-sessionstart-nudge.sh` re-records it only on a fresh primary session start, so never hand-write that record.
-   A blocked wake means the re-entry hook or its `.claude/settings.json` needs repair, and both are this repo's shared tracked material: fix them through the section 1 pipeline and PR path, delegating to a worker while the fleet is live, never by editing them in place.
-   `docs/context-reset.md` owns both conditions in full, and either is reported to the captain in section 9 language.
+   `docs/context-reset.md` owns both conditions in full, including the one that has no in-session repair and the one whose repair is a tracked-material change; either is reported to the captain in section 9 language.
 4. For `heartbeat:`, review the whole fleet from the structured fleet view, reconcile suspicious tasks and PR state, update the backlog, and never report an unchanged fleet as progress.
 
 When any wake reports a merged PR for a project cloned in this home, refresh that clone through the guarded fleet-sync path.
@@ -431,16 +390,10 @@ Reach the captain immediately for:
 
 Do not surface automatic fixes, retries, routine progress, or internal supervision mechanics.
 Batch non-urgent updates into the next natural reply.
-Use plain chat for a yes-or-no decision and `bin/fm-lavish.sh` only when several options or a structured report benefit from a visual surface; it is the only sanctioned way to open a review board, because bare `lavish-axi` hands the captain a link that opens nowhere but this machine (docs/lavish-access.md).
-Build every board with `bin/fm-board.sh` rather than hand-writing its layout, so it makes no network request and opens immediately (docs/board-layout.md).
-Before handing the captain a board that carries decisions, and whenever the captain invokes `/run-decisionboard` or a board must be driven or screenshotted rather than only built, load the `run-decisionboard` skill: a board that was only looked at has never been shown to be answerable, which is how seven decisions once reached him with nothing on the page to click.
-When the captain invokes `/decisionboard` or asks to see the open decisions laid out visually, load the `decisionboard` skill.
-When the captain invokes `/sea-chart` or asks where one named undertaking stands against its own destination, load the `sea-chart` skill.
-The board is the fleet-wide standing inbox with no destination and the chart is one undertaking with one; both skills state that boundary from their own side, so do not merge them.
+Use plain chat for a yes-or-no decision.
+Before reaching for any other surface - a review board through `bin/fm-lavish.sh`, a decision board, a `/sea-chart`, a message to him while he is not in a session, or a PDF - load `captain-surfaces`, which owns surface choice and the entry point each one must go through.
+No surface widens this list: the escalation bar above is the only bar, whichever surface carries it.
 Whenever a PR is mentioned, include its full `https://...` URL before any shorthand reference.
-When something on this list must reach the captain while he is not in a session, send it with `bin/fm-tg-send.sh`, which carries one message, or one explicitly named file, to him and refuses rather than reporting a delivery nobody got; it is a delivery path and never a second definition of what deserves his attention, so this section remains the only bar (docs/telegram-outbound.md).
-Send on the event, never on a schedule, and never discard that command's exit status, because a notification path that fails quietly gets trusted while it is dead.
-Generate a PDF deliverable only through `bin/fm-pdf-finish.sh`, which refuses to publish a file a real reader cannot read, because a browser-printed document looks correct on screen and fails at the recipient (docs/pdf-output.md).
 Mention cost as a courtesy when unusually much work is running, but never block on it.
 
 ## 10. Backlog contract
@@ -492,11 +445,9 @@ The scaffold is a safety contract, not a suggestion.
 Firstmate's shared instruction surface reaches running homes only after it lands on the default branch and those homes fast-forward.
 Only `AGENTS.md`, `bin/`, `roles/`, and `.agents/skills/` are loaded by a running firstmate; public `skills/` is an installer-facing surface.
 `bin/fm-firstmate-update-check.sh` detects source-only changes to that instruction surface; the daily currency round of section 3 is what gives it a cadence that survives session boundaries, and `docs/fork-patches.md` owns the retained local patch stack registry.
-When bootstrap prints `FIRSTMATE_UPDATE_AVAILABLE:`, dispatch a crewmate to notify the whole fleet through Bridge All-Ships rather than writing to Bridge directly.
-Firstmate no longer treats the former canonical repository as a tracking source; that is why the local patch stack registry is now a durable local-patch record rather than a merge to-do list.
+Bootstrap reports `FIRSTMATE_UPDATE_AVAILABLE:` when that source carries a change and `SELF_DRIFT:` when this checkout's own default branch has drifted from its own origin; `bootstrap-diagnostics` owns what each one needs.
 When the captain invokes `/updatefirstmate` or asks to update firstmate, load the `/updatefirstmate` skill.
-It performs guarded fast-forward updates of firstmate and registered secondmate homes, refreshes instructions, and never touches anything under `projects/`.
-Bootstrap separately detects when the primary checkout's own default branch has drifted from its own origin and reports `SELF_DRIFT:`; `/updatefirstmate` resolves only the clean fast-forward (behind-only) case, while an ahead or diverged primary needs a manual preserve-and-merge crewmate task instead - `bootstrap-diagnostics` owns the exact remediation text.
+It performs guarded fast-forward updates of firstmate and registered secondmate homes, refreshes instructions, and never touches anything under `projects/`; it resolves only the clean fast-forward case.
 
 Being level with your own origin is one hop of three, and answering it alone has already let a vessel behind shared code pass its own currency check; `docs/pin-age-check.md` owns the recorded incident.
 Load the `run-fleet-update` skill when the captain invokes `/run-fleet-update`, says "update yourself" or asks whether this vessel is current, when the daily round reports a `pin-age` finding, and before ever telling the captain that this vessel is running current shared code.
@@ -513,6 +464,9 @@ These skills are not captain-invocable; load them only at their precise triggers
 - `ask-user-authority` - load before deciding any ask-user finding, regardless of the project's `yolo` posture.
 - `harness-adapters` - load before every harness-specific operation section 4 lists.
 - `firstmate-orca` - load before switching to Orca, spawning or supervising Orca-backed work, smoke-testing Orca backend behavior, debugging Orca task state, or reconciling Orca-backed task metadata.
+- `crew-dispatch` - load at the dispatch, steering, and validation trigger section 7 names.
+- `task-landing` - load at the PR, landing, cleanup, and scout-outcome trigger section 7 names.
+- `captain-surfaces` - load at the surface trigger section 9 names, before anything reaches the captain other than plain chat.
 - `project-discipline` - load at the intake and completion points section 7 names, which also names what it is not for.
 - `project-management` - load before adding, creating, removing, or initializing a project.
 - `secrets-handling` - load before reading, sourcing, injecting, inspecting, or transporting secrets or credentials, and whenever one is exposed in agent or tool output.
@@ -554,13 +508,6 @@ When updating this file, preserve every safety boundary and keep the always-load
 ## Graphify
 
 Project clones under `projects/` may have knowledge graphs in `graphify-out/`; firstmate treats them as read-only, and this repo has none by construction because `graphify-out/` is captain-private and gitignored.
-
-Before trusting any graph answer, compare the graph's build record with that project's current `HEAD`.
-Treat it as current only when `graphify-out/graph.json` records `built_at_commit` equal to `git rev-parse HEAD`; if the field is missing or differs, including an ancestor behind `HEAD`, verify from source instead.
-
-When a current graph exists, prefer `graphify query "<question>"` for codebase questions, `graphify path "<A>" "<B>"` for relationships, and `graphify explain "<concept>"` for focused concepts.
-Use `graphify-out/wiki/index.md` for broad navigation when it exists, and read `graphify-out/GRAPH_REPORT.md` only for architecture review or when query, path, and explain do not surface enough context.
-
 Firstmate may read project graphs but must not run `graphify update .` inside `projects/`.
 A crewmate may run `graphify update .` only inside its own isolated task worktree, as part of a change it is already authorized to make there.
-On `/graphify`, use these rules directly; no graphify skill is installed here.
+Before answering a codebase question from a graph, on `/graphify`, and before briefing a crewmate to use one, read `docs/graphify.md`: it owns the staleness test a graph answer must pass and which command to reach for.
