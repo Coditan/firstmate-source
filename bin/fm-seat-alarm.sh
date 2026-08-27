@@ -609,12 +609,25 @@ case "$VERDICT" in
         log_line "recovered from=$PREV_VERDICT away=$((NOW - ${PREV_SINCE:-$NOW})) depth=${QUEUE_DEPTH:-unreadable}"
         # Told he lost it, so tell him it is back; never announce a recovery
         # from an absence he was never told about.
-        [ -z "$PREV_NOTIFIED" ] || notify present "$((NOW - ${PREV_SINCE:-$NOW}))" || true
+        #
+        # A failed send here is NOT recorded as a recovery, for the reason
+        # notify's own header gives: the repeats stopped when the condition
+        # ended, so a recovery message nobody got would leave the captain
+        # holding the last thing he was told - that this vessel has no first
+        # mate - with nothing ever correcting it. The state is left as it stands
+        # instead, so the next sweep reads the same transition and tries again.
+        if [ -n "$PREV_NOTIFIED" ] && ! notify present "$((NOW - ${PREV_SINCE:-$NOW}))"; then
+          RECOVERY_UNSENT=1
+        fi
         recovery_line "$PREV_VERDICT" "$((NOW - ${PREV_SINCE:-$NOW}))"
         ;;
     esac
     ;;
 esac
 
-write_state "$VERDICT" "$SINCE" "$NOTIFIED" || true
+if [ "${RECOVERY_UNSENT:-0}" = 1 ]; then
+  write_state "$PREV_VERDICT" "${PREV_SINCE:-$NOW}" "$PREV_NOTIFIED" || true
+else
+  write_state "$VERDICT" "$SINCE" "$NOTIFIED" || true
+fi
 exit 0
