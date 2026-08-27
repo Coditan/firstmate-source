@@ -240,7 +240,7 @@ test_a_declared_stand_down_survives_a_real_kill() {
 # here" on a container with no service manager and stopped, so the restarter was
 # in the tree and never running.
 test_the_keeper_tier_is_selected_and_converged_without_a_seat() {
-  local service line
+  local service line beat
   service="$ROOT/bin/fm-seat-respawner-service.sh"
 
   # A tmux pinned to this test's private socket, so the probe never creates or
@@ -254,8 +254,13 @@ test_the_keeper_tier_is_selected_and_converged_without_a_seat() {
   # a "dead" watcher for this fixture home on the DEFAULT socket, where this
   # repo runs its own live fleet. A server this shim has to create instead
   # inherits the value from run_service through this process.
-  printf '#!/usr/bin/env bash\n%s -S %s set-environment -g FM_SEAT_REVIVE_WATCHER 0 2>/dev/null || true\nexec %s -S %s "$@"\n' \
-    "$(command -v tmux)" "$SOCKET" "$(command -v tmux)" "$SOCKET" > "$HOME_DIR/tmux-shim"
+  cat > "$HOME_DIR/tmux-shim" <<SHIM
+#!/usr/bin/env bash
+TMUX_BIN=$(command -v tmux)
+"\$TMUX_BIN" -S "$SOCKET" set-environment -g FM_SEAT_REVIVE_WATCHER 0 2>/dev/null || true
+"\$TMUX_BIN" -S "$SOCKET" set-environment -g FM_SEAT_RESPAWNER_POLL 2 2>/dev/null || true
+exec "\$TMUX_BIN" -S "$SOCKET" "\$@"
+SHIM
   chmod +x "$HOME_DIR/tmux-shim"
 
   run_service() {
@@ -282,8 +287,20 @@ test_the_keeper_tier_is_selected_and_converged_without_a_seat() {
     || fail "converging an already-running restarter was not silent"
 
   # No fixture may reach the host's default tmux socket. A watcher revived for
-  # this throwaway home would record its keeper here, and would then go on
-  # sweeping a home this suite deletes.
+  # this throwaway home would be started there, and would then go on sweeping a
+  # home this suite deletes.
+  #
+  # Read after a SECOND beacon rather than on a timer: the beacon is touched at
+  # the start of every cycle, so a newer one proves the previous cycle ran to
+  # completion - and the revive step is the first thing in it. The rate-limit
+  # marker is what that step writes before it calls the watcher service at all,
+  # so it catches the attempt even when the start itself is slow or fails.
+  beat=$(stat -c %Y "$HOME_DIR/state/.last-seat-respawner-beat" 2>/dev/null) \
+    || fail "the running restarter published no beacon to read"
+  wait_for 30 sh -c "[ \"\$(stat -c %Y '$HOME_DIR/state/.last-seat-respawner-beat' 2>/dev/null)\" != '$beat' ]" \
+    || fail "the restarter never began a second cycle, so what its first one did could not be read"
+  [ ! -e "$HOME_DIR/state/.seat-respawner-watcher-revived" ] \
+    || fail "the fixture respawner tried to revive a watcher for a throwaway home"
   [ ! -e "$HOME_DIR/state/.watch-keeper.pid" ] \
     || fail "the fixture respawner started a real watcher keeper for a throwaway home"
 

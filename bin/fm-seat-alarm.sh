@@ -423,7 +423,19 @@ compose_message() {  # <verdict> <duration-seconds>
       printf '%s\n' "$(repeat_clause)"
       ;;
     present)
-      printf 'Captain, this vessel has a first mate again after %s without one.\n' "$(human_duration "$age")"
+      # Keyed on the verdict this recovers FROM, exactly as recovery_line is.
+      # An unmeasured reading established no absence, so a recovery from one
+      # must not name a length of time the vessel had no first mate: that would
+      # report a confirmed state on the very channel this alarm exists to be
+      # trusted on.
+      case "${PREV_VERDICT:-}" in
+        unmeasured)
+          printf 'Captain, this vessel can see a first mate again after %s of not being able to tell.\n' "$(human_duration "$age")"
+          ;;
+        *)
+          printf 'Captain, this vessel has a first mate again after %s without one.\n' "$(human_duration "$age")"
+          ;;
+      esac
       printf '%s\n' "$(waiting_clause)"
       ;;
   esac
