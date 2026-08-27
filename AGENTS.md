@@ -111,6 +111,15 @@ The locked bootstrap step arms `bin/fm-memory-alarm.sh` on the watcher, and ever
 Its crossings and recoveries arrive as an ordinary `check:` wake under section 8, naming the process, its account, and the work it was serving.
 Read `docs/memory-alarm.md` before acting on one: it owns the thresholds, how they were derived, what the alarm cannot see, and the two facts that bind wherever that wake is read.
 
+### Losing this seat
+
+A seat that stops is now noticed by something other than the captain walking into it.
+The locked bootstrap step arms `bin/fm-seat-alarm.sh` on the watcher, and every session start reports `SEAT_ALARM:` when this home's watch is unarmed or has stopped running; `docs/seat-absence.md` owns the reading, the restart arrangement, and the residual neither closes.
+Three facts bind wherever this is met.
+This is the one alarm that messages the captain itself, because firstmate is the subject of its reading and cannot route a report about its own absence, so a session must never treat its own quiet as unobserved.
+A seat being closed on purpose is declared with `bin/fm-seat-stay-down.sh down` first, or the captain is paged for an absence he chose.
+A restart is finished when a seat holds this home's lock and not when a process exists, because a launched seat sits idle until something gives it its first turn.
+
 ### Daily update checking
 
 Firstmate's daily currency duty has a mechanism, so it is never carried by memory: the locked bootstrap step arms `bin/fm-currency-round.sh` on the watcher, and every session start reports `CURRENCY_ROUND:` when this home's check is unarmed or has stopped running.
