@@ -176,7 +176,13 @@ Read the code and its test for that case, not for a deleted directory handled en
 **An alarm that cannot write its own records cannot pace itself, and says so rather than going quiet.**
 The grace and the repeat cadence are both read out of `data/seat-alarm.state`, so a `data/` that cannot be written leaves neither available: every sweep would measure an age of zero, a nonzero grace would never open, and the instrument would be permanently silent on the one reading it exists to shout about - which is the failure of 2026-08-27 arriving through the alarm's own bookkeeping.
 So when the memory cannot be kept the grace is not applied at all, the outward message drops the duration it cannot measure and says plainly that this vessel cannot remember having sent it, and the printed line is withheld until the memory returns rather than growing the durable wake queue once per sweep on a "first sweep of this episode" nothing can establish.
+That reading is taken by writing, and by writing the whole of what the record write does - create, fill, rename over a target, remove - because a full or over-quota filesystem lets the create succeed and then refuses the content or the rename, and a probe that stopped at the create would call such a home persistable and hand the grace an age it can never measure.
 The outward repeat is then per sweep, deliberately: no bound is available to an alarm with no memory, and silence is the worse of the two failures.
+
+**A return is never announced, so the captain learns of one by the repeats stopping.**
+This alarm reports that the vessel has lost its first mate and says nothing when it has one again; the return is written to `data/seat-alarm.log` and nowhere else.
+It was announced once and the announcement was removed rather than repaired, because announcing once requires a memory the alarm cannot always keep: with `data/` unwritable the previous verdict never advances, so every later sweep re-entered the transition and re-sent, each message naming a longer absence than the last and every one of them describing an absence that had already ended.
+Reporting a return with a length of time that was never true was judged worse than not reporting the return, so the trade is deliberate and this is the cost of it.
 
 One further dependency of the restart path is worth naming because it is invisible until it bites.
 The respawner launches into the tmux server recorded in `state/.primary-endpoint`, and refuses when that server is gone.
