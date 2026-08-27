@@ -57,6 +57,7 @@ TMUX_CMD=${FM_SEAT_RESPAWNER_TMUX:-tmux}
 KEEPER="$SCRIPT_DIR/fm-seat-respawner-keeper.sh"
 CHECK="$STATE/seat-respawner.check.sh"
 BEAT="$STATE/.last-seat-respawner-beat"
+CONVERGE_REPORTED="$STATE/.seat-respawner-converge-reported"
 GRACE=${FM_SEAT_RESPAWNER_GRACE:-120}
 CONFIRM_TIMEOUT=${FM_SEAT_RESPAWNER_CONFIRM_TIMEOUT:-10}
 STALE=${FM_SEAT_RESPAWNER_ARMED_STALE:-1800}
@@ -442,6 +443,26 @@ SHIM
   "$SCRIPT_DIR/fm-check-register.sh" seat-respawner >/dev/null || return 1
 }
 
+# A condition that cannot clear is reported ONCE, not once per sweep.
+# bin/fm-watch.sh enqueues a durable wake for any line a check prints and
+# fm_wake_append does not deduplicate, so a keeper whose respawner never becomes
+# healthy would otherwise cost a supervision turn every FM_CHECK_INTERVAL - 288
+# a day at the default - for a state no turn can repair. The condition is what
+# is remembered, not the line: a different condition, or the same one after it
+# cleared, is announced again. bin/fm-seat-alarm.sh keeps the same discipline
+# for its own transition line, on the same ground.
+converge_report() {  # <condition-key> <line>
+  [ "$(cat "$CONVERGE_REPORTED" 2>/dev/null || true)" = "$1" ] && return 0
+  mkdir -p "$STATE" 2>/dev/null || true
+  printf '%s\n' "$1" > "$CONVERGE_REPORTED" 2>/dev/null || true
+  printf '%s\n' "$2"
+}
+
+# A restart, or a healthy sweep, ends whatever condition was last reported.
+converge_condition_cleared() {
+  rm -f -- "$CONVERGE_REPORTED" 2>/dev/null || true
+}
+
 # Always exit 0: the watcher reads the line, not the status.  Silent while the
 # restarter is running, and silent on the systemd tier, which bootstrap owns.
 converge() {
@@ -450,7 +471,7 @@ converge() {
   case "$(select_backend)" in
     keeper)
       if healthy_respawner; then
-        respawner_record_matches keeper && return 0
+        respawner_record_matches keeper && { converge_condition_cleared; return 0; }
         # Running, and not what this home would start now.  A restarter left on
         # pre-update bytes is the half of a restart that silently stops being a
         # restoration, so it is converged and said out loud rather than counted
@@ -458,17 +479,22 @@ converge() {
         stale=1
       fi
       if ensure_keeper; then
+        # A start that happened is an event rather than a condition, so it is
+        # said every time it happens - and it ends the condition before it.
+        converge_condition_cleared
         if [ "$stale" -eq 1 ]; then
           echo "seat-respawner: the automatic restart for this vessel's first mate was running an out-of-date copy and has been restarted on the current one"
         else
           echo "seat-respawner: the automatic restart for this vessel's first mate had stopped and has been started again"
         fi
       else
-        echo "seat-respawner: the automatic restart for this vessel's first mate is not running and could not be started, so nothing would bring it back if it stopped"
+        converge_report keeper-start-failed \
+          "seat-respawner: the automatic restart for this vessel's first mate is not running and could not be started, so nothing would bring it back if it stopped"
       fi
       ;;
     none)
-      echo "seat-respawner: nothing on this vessel can restart its first mate if it stops (no service manager and no tmux)"
+      converge_report no-backend \
+        "seat-respawner: nothing on this vessel can restart its first mate if it stops (no service manager and no tmux)"
       ;;
   esac
   return 0

@@ -371,17 +371,29 @@ test_converge_never_claims_a_start_it_could_not_confirm() {
   log="$home/tmux.log"
   write_fake_tmux "$tmux" "$log"
 
-  line=$(env FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$home/state" \
-    FM_CONFIG_OVERRIDE="$home/config" FM_SEAT_RESPAWNER_FORCE_BACKEND=keeper \
-    FM_SEAT_RESPAWNER_TMUX="$tmux" FM_SEAT_RESPAWNER_CONFIRM_TIMEOUT=1 \
-    "$SERVICE" converge)
+  converge_once() {
+    env FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$home/state" \
+      FM_CONFIG_OVERRIDE="$home/config" FM_SEAT_RESPAWNER_FORCE_BACKEND=keeper \
+      FM_SEAT_RESPAWNER_TMUX="$tmux" FM_SEAT_RESPAWNER_CONFIRM_TIMEOUT=1 \
+      "$SERVICE" converge
+  }
 
+  line=$(converge_once)
   assert_grep "new-session" "$log" "converging never tried to start a keeper"
   assert_contains "$line" "could not be started" \
     "a keeper whose respawner never came up was reported as started again"
   assert_not_contains "$line" "has been started again" \
     "converging claimed a restoration that never happened"
-  pass "converging never claims a start it could not confirm"
+
+  # The watcher enqueues a durable wake for any line a check prints, so a
+  # condition no turn can repair must be said once rather than every sweep.
+  line=$(converge_once)
+  [ -z "$line" ] \
+    || fail "the same unclearable failure was announced again on the next sweep: $line"
+  line=$(converge_once)
+  [ -z "$line" ] \
+    || fail "the same unclearable failure was announced again two sweeps later: $line"
+  pass "converging never claims a start it could not confirm, and says a persisting failure once"
 }
 
 test_stay_down_marker_is_authoritative

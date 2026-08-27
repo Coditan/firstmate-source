@@ -953,7 +953,7 @@ families_for_changed_path() {
       printf '%s\n' "__script_required__:fm-bridge-relay.test.sh"
       ;;
     bin/fm-watch*|bin/fm-wake*|bin/fm-delivery*|bin/fm-seat-respawner.sh|\
-    bin/fm-seat-presence-lib.sh|\
+    bin/fm-seat-respawner-keeper.sh|bin/fm-seat-presence-lib.sh|\
     bin/fm-daemon*|bin/fm-turnend-guard*|bin/fm-pane-activity-lib.sh)
       printf '%s\n' watcher-wake-lock
       # The pre-typing pane reads are shared with the away daemon, and the
@@ -964,6 +964,11 @@ families_for_changed_path() {
     bin/fm-seat-stay-down.sh|bin/fm-seat-respawner-service.sh)
       printf '%s\n' service-units
       printf '%s\n' session-bootstrap
+      # The tier this script owns is covered by the seat suites, not by the
+      # unit-template family its name sits in: the keeper convergence, the
+      # `stalled:` status contract and the armed diagnostics all have their
+      # regressions there.
+      printf '%s\n' watcher-wake-lock
       ;;
     bin/fm-afk*)
       printf '%s\n' afk
