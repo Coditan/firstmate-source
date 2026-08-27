@@ -278,15 +278,37 @@ read_restarter() {
   esac
 }
 
+# THE ORDER OF THE READINGS IS PART OF THE READING, AND THIS IS THE RULE:
+# A PROBE THAT MUTATES WHAT IT MEASURES IS NOT A PROBE. Take every reading that
+# a later step could destroy BEFORE that step runs, record it, and branch on the
+# recorded value.
+#
+# The reachability reading is the one this rule exists for, and it was learned
+# the hard way. read_restarter runs bin/fm-seat-respawner-service.sh, which
+# sources bin/fm-wake-lib.sh, which creates this home's state directory as a
+# side effect of BEING SOURCED - so while those two probes ran first, the
+# unreachable-records branch below could never fire: the probe had rebuilt the
+# very condition the branch exists to report, and a home whose records were gone
+# read as `unattended` and told nobody anything. A probe added ABOVE the
+# reachability reading re-opens that hole silently. Add it below.
 evaluate() {
-  read_queue
-  read_restarter
+  local records_reachable=1
+  [ -d "$STATE" ] && [ ! -L "$STATE" ] || records_reachable=0
 
-  if [ ! -d "$STATE" ] || [ -L "$STATE" ]; then
+  if [ "$records_reachable" -eq 0 ]; then
+    # Nothing else is read here: the queue and the restarter both live behind
+    # the records this reading just found unreachable, so asking them would
+    # answer with confident clauses ("nothing is waiting") composed from a
+    # directory that is not there. Their unset defaults say "could not be read",
+    # which is the truth.
     VERDICT=unmeasured
     REASON="this home's local records are not reachable at $STATE, so whether a first mate is running cannot be read"
     return
   fi
+
+  read_queue
+  read_restarter
+
   if [ -f "$STAY_DOWN" ] && [ ! -L "$STAY_DOWN" ]; then
     VERDICT=standing-down
     REASON='the first mate was deliberately stood down and is meant to be absent'
