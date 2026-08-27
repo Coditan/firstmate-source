@@ -321,6 +321,7 @@ The respawner itself reads the wake-delivery service verdict rather than probing
 `bin/fm-seat-alarm.sh` is the per-home watch for the seat's own absence, armed as a watcher check at every session start and reported by `SEAT_ALARM:` when it is unarmed or has stopped running.
 It is the one alarm in this fleet that carries its own message out through `bin/fm-tg-send.sh` rather than printing a line for firstmate to route, because firstmate is the subject of its reading and cannot report its own absence.
 [`docs/seat-absence.md`](seat-absence.md) owns its verdicts, what it keys on, its cadence, and the residual it does not close.
+Its own header owns the tuning - the grace an absence must persist for, the repeat interval, the staleness bar `--armed` reads, and the send and probe timeouts - so the values are stated once, beside the code that applies them, rather than copied into the list below.
 
 ## Seat launch command (config/seat-launch-command / FM_SEAT_LAUNCH_COMMAND)
 
@@ -1029,6 +1030,14 @@ FM_SEAT_RESPAWNER_POLL=15    # seconds between primary-seat respawner checks of 
 FM_SEAT_RESPAWNER_BACKOFF=30 # seconds before the second attempt for one unreachable-seat episode; doubles per attempt
 FM_SEAT_RESPAWNER_MAX_BACKOFF=900 # maximum seconds between respawn attempts for one episode
 FM_SEAT_RESPAWNER_MAX_ATTEMPTS=5 # attempts before the respawner emits a finding and stops retrying that episode
+FM_SEAT_RESPAWNER_GRACE=120  # seconds before a respawner beacon reads as stale; a live process whose beacon is older answers status stalled rather than up, and the alarm reports the restarter as unreadable rather than as under way
+FM_SEAT_RESPAWNER_CONFIRM_TIMEOUT=10   # seconds fm-seat-respawner-service waits to confirm a fresh respawner before reporting failure
+FM_SEAT_RESPAWNER_ARMED_STALE=1800   # seconds without a completed respawner cycle before --armed reports the restart as stopped
+FM_SEAT_FIRST_TURN_DEADLINE=600   # seconds a launched seat may owe its typed first turn before that turn is abandoned out loud; the same record holds the next launch until then, so one idle pane is never joined by another
+FM_SEAT_SUBMIT_RETRIES=3     # Enter-only retries when submitting that first turn, the delivery listener's rule unchanged: the text is typed once and never retyped
+FM_SEAT_SUBMIT_SLEEP=0.4     # seconds between those Enter retries and the settle read after them
+FM_SEAT_WATCHER_GRACE=       # seconds before the respawner reads a watcher beacon as stale; falls back to FM_GUARD_GRACE so one fleet has one staleness bar
+FM_SEAT_WATCHER_REVIVE_EVERY=120   # seconds between attempts to revive a provably DEAD watcher; a live watcher whose beacon aged out is never restarted here (docs/seat-absence.md)
 FM_SEAT_LAUNCH_COMMAND=      # test or specialized override for config/seat-launch-command; must be a fresh start, not resume-style
 FM_TG_RECV_ATTACH_POLL=0.5  # seconds between checks while fm-tg-recv-arm is attached to an existing receiver
 FM_TG_RECV_ATTACH_CONFIRM_TIMEOUT=2  # seconds fm-tg-recv-arm waits for a competing arm to publish receiver metadata
