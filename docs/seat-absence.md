@@ -118,6 +118,9 @@ The arrangement that ships instead is a pair rather than a chain:
   One owner for it, and it is the session - which is also the only place a poorly-reaching `PATH` can be diagnosed and repaired.
 - `bin/fm-seat-respawner.sh` revives a **provably dead** watcher in return, through `fm_watcher_healthy`, this fleet's one owner of that question.
   It is deliberately narrow: never on a recorded-version or recorded-PATH mismatch, which are convergence decisions belonging to a session holding the fleet lock, and rate-limited so a watcher that cannot start is retried rather than hammered.
+  Narrow means the `dead` classification specifically, not the unhealthy return: `fm_watcher_healthy` also reports `beacon-stale`, which is a watcher that is **alive** and identity-matched whose beacon aged out, and which a machine suspend necessarily produces because a frozen host cannot touch a beacon.
+  Reviving that one would stop and restart a running watcher, and the sweep it interrupts is the one that carries the seat alarm.
+  **A wedged-but-live watcher is therefore left alone here on purpose**, for a session holding the fleet lock to decide - the one deliberate non-action in this pair.
 
 So either process surviving restores both, and only the loss of **both** is unrecoverable without a seat.
 

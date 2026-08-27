@@ -184,6 +184,9 @@
 #   FM_SEAT_ALARM_SEND      the outward sender to use (tests)
 #   FM_SEAT_ALARM_SEND_TIMEOUT  seconds allowed for one send (default 15), kept
 #                           well inside the watcher's 30s per-check budget
+#   FM_SEAT_ALARM_PROBE_TIMEOUT  seconds allowed for the one outward probe this
+#                           reading takes (default 5), so probe plus send stay
+#                           inside that same 30s budget
 #   FM_SEAT_ALARM_NOW       override the current epoch (tests)
 set -u
 
@@ -208,12 +211,14 @@ REPEAT=${FM_SEAT_ALARM_REPEAT:-1800}
 GRACE=${FM_SEAT_ALARM_GRACE:-60}
 STALE=${FM_SEAT_ALARM_STALE:-1800}
 SEND_TIMEOUT=${FM_SEAT_ALARM_SEND_TIMEOUT:-15}
+PROBE_TIMEOUT=${FM_SEAT_ALARM_PROBE_TIMEOUT:-5}
 NOW=${FM_SEAT_ALARM_NOW:-$(date +%s)}
 
 case "$REPEAT" in *[!0-9]*|'') REPEAT=1800 ;; esac
 case "$GRACE" in *[!0-9]*|'') GRACE=60 ;; esac
 case "$STALE" in *[!0-9]*|'') STALE=1800 ;; esac
 case "$SEND_TIMEOUT" in *[!0-9]*|''|0) SEND_TIMEOUT=15 ;; esac
+case "$PROBE_TIMEOUT" in *[!0-9]*|''|0) PROBE_TIMEOUT=5 ;; esac
 case "$NOW" in *[!0-9]*|'') NOW=$(date +%s) ;; esac
 
 # shellcheck source=bin/fm-harness-pid-lib.sh
@@ -287,11 +292,27 @@ read_queue() {
 # because "absent and a restart is under way" and "absent and nothing is trying"
 # are different messages and the captain acts differently on them. An
 # unanswerable reading says so; it never reads as "a restart is under way".
+#
+# This is the one call in this file that leaves the process, and it is BOUNDED
+# for the same reason the outward send is: the whole check is killed by
+# bin/fm-watch.sh at FM_CHECK_TIMEOUT, and a probe that can block until then
+# takes the message down with it - on a systemd home whose user manager is
+# wedged, the D-Bus reading inside it blocks, and the alarm would die before
+# notify() and before write_state(), silently, every sweep, on exactly the dead
+# seat it exists to shout about. A probe that ran out of time is already an
+# unreadable restarter, which is a state this reading can report.
+#
+# It also refuses to run at all when this home's records were found unreachable,
+# because it is the probe named in the mutation rule above evaluate: it reaches
+# bin/fm-wake-lib.sh, which creates this home's state directory as a side effect
+# of being sourced. The unread default is the honest answer there.
 read_restarter() {
   local line
+  RESTARTER=
+  [ "$RECORDS_REACHABLE" -eq 1 ] || return 0
   RESTARTER=unknown
   [ -x "$RESPAWNER_SERVICE" ] || return 0
-  line=$("$RESPAWNER_SERVICE" status 2>/dev/null) || true
+  line=$(timeout "$PROBE_TIMEOUT" "$RESPAWNER_SERVICE" status 2>/dev/null) || true
   case "$line" in
     up:*) RESTARTER=up ;;
     down:*) RESTARTER=down ;;
@@ -346,7 +367,6 @@ evaluate() {
   fi
 
   read_queue
-  read_restarter
 
   if [ -f "$STAY_DOWN" ] && [ ! -L "$STAY_DOWN" ]; then
     VERDICT=standing-down
@@ -620,6 +640,7 @@ case "$MODE" in
     exit 0 ;;
   status)
     evaluate
+    read_restarter
     printf 'seat-alarm: %s - %s\n' "$(printf '%s' "$VERDICT" | tr '[:lower:]' '[:upper:]')" "$REASON"
     [ -z "$SEAT_PID" ] || printf 'recorded first mate: pid %s\n' "$SEAT_PID"
     printf 'waiting work: %s\n' "$(waiting_clause)"
@@ -704,6 +725,11 @@ case "$VERDICT" in
         # to come back, while the outward send below does not.
         FIRST=0
         [ "$MEMORY_PERSISTABLE" -eq 1 ] && [ -z "$NOTIFIED" ] && FIRST=1
+        # Asked here rather than in the reading, per that reading's own rule
+        # that a probe goes below the measurement: nothing above needs it, only
+        # the message about to go out does, and a healthy vessel then pays no
+        # subprocess for it on any sweep.
+        read_restarter
         if notify "$VERDICT" "$AGE"; then
           NOTIFIED=$NOW
         fi
