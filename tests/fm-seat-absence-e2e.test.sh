@@ -111,7 +111,7 @@ run_respawner_once() {
 }
 
 test_a_killed_seat_is_reported_outward_and_comes_back() {
-  local first_pid second_pid server_pid target started
+  local first_pid second_pid server_pid target started turns_before
 
   # The bare first window mirrors what /usr/local/bin/vessel-entrypoint creates
   # on the real container, and it is load-bearing here for the same reason it is
@@ -179,6 +179,19 @@ test_a_killed_seat_is_reported_outward_and_comes_back() {
     || fail "a launched but idle seat was read as a first mate; the process existing is not the test"
   [ -f "$HOME_DIR/state/.seat-first-turn" ] \
     || fail "the respawner recorded no pending first turn for the pane it just created"
+
+  # A reading that could not be taken is not an absence on this half either: a
+  # first mate this process cannot see is still a first mate, so an unreadable
+  # lock must leave the pane untouched and the pending turn standing.
+  turns_before=$(wc -l < "$HOME_DIR/first-turns.log")
+  chmod 000 "$HOME_DIR/state/.lock"
+  run_respawner_once || true
+  sleep 1
+  chmod 600 "$HOME_DIR/state/.lock"
+  [ "$(wc -l < "$HOME_DIR/first-turns.log")" = "$turns_before" ] \
+    || fail "a lock that could not be read still had a first turn typed into the pane"
+  [ -f "$HOME_DIR/state/.seat-first-turn" ] \
+    || fail "a lock that could not be read retired the pending first turn"
 
   # OBSERVATION 4: the fresh seat is given its first turn, and only now is there
   # a first mate holding this home - and the cycle that delivers it starts no

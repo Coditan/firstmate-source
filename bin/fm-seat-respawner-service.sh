@@ -95,6 +95,7 @@ source_version() {
     "$SCRIPT_DIR/fm-backend.sh"
     "$SCRIPT_DIR/fm-pane-activity-lib.sh"
     "$SCRIPT_DIR/fm-harness-pid-lib.sh"
+    "$SCRIPT_DIR/fm-seat-presence-lib.sh"
   )
   if command -v sha256sum >/dev/null 2>&1; then
     sum=$(
