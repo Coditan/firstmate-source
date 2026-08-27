@@ -152,6 +152,13 @@ Two things would close the residual, and neither is this repository's to take:
   That was disabled by the captain's own decision of 2026-08-26 and walks back the standing rule that nothing of this vessel's runs outside the container, so it is his call and is named here as an option rather than proposed as the answer.
   Whether it is currently enabled **could not be measured from inside the container**: `loginctl` answers `System has not been booted with systemd as init system (PID 1). Can't operate.`
 
+**A pane the respawner launched can be left running with nothing tracking it, and this does not report that either.**
+The sequence is reachable and is the one this vessel already lived through.
+The respawner launches a pane and records the first turn owed to it; that pane's composer never becomes affirmatively empty within the poll window, which a trust prompt or an update screen is enough to cause, so nothing is typed into it; the alarm pages the captain; a human then starts a seat by hand and it takes `state/.lock` - literally the 2026-08-27 sequence recorded at the top of this file.
+The next cycle reads the home as held, settles the pending record and clears the episode, and the agent in the launched pane goes on running with nothing watching it.
+The log is honest about what it established - it says a seat holds this home and that the recorded pane's turn is settled, and claims nothing about the pane - but nothing probes that window afterwards and nothing reports it.
+Closing it would mean the respawner probing and judging a pane it no longer has a claim on, which is a larger decision than this change is making.
+
 One further dependency of the restart path is worth naming because it is invisible until it bites.
 The respawner launches into the tmux server recorded in `state/.primary-endpoint`, and refuses when that server is gone.
 On the real vessel the server outlives the seat only because the entrypoint's bare `vessel:0` window keeps it alive; if the seat's window were the only one, the server would exit with the seat and the respawner would correctly refuse to launch.
@@ -231,5 +238,11 @@ bin/fm-seat-respawner-service.sh status
 ```
 
 `select` must answer `keeper` on this container and `status` must answer `up:` after the arm.
-Then, and only with the captain watching, the real end-to-end: note the seat's recorded pid from `bin/fm-lock.sh status`, close the seat, and confirm a message arrives on the captain's channel within one watcher sweep and that `bin/fm-lock.sh status` afterwards names a **different** live pid.
+Then, and only with the captain watching, the real end-to-end: note the seat's recorded pid from `bin/fm-lock.sh status`, close the seat, and confirm a message arrives on the captain's channel and that `bin/fm-lock.sh status` afterwards names a **different** live pid.
+
+**Expect that message on the SECOND watcher sweep, not the first.**
+`SINCE` is reset on the verdict transition, so `AGE` is 0 on the sweep that first observes the absence: that sweep records the state and sends nothing, and the message goes out on the next one.
+The page therefore lands between one and two sweep intervals after the seat actually died - 5 to 10 minutes at the `FM_CHECK_INTERVAL` default of 300.
+Worth knowing before anyone tunes it: any `FM_SEAT_ALARM_GRACE` below the sweep interval is indistinguishable from any other, so the default `60` and a value of `299` behave identically, and only `0` pages on the observing sweep.
+A message on the second sweep is the alarm working, not the alarm being late.
 `bin/fm-seat-stay-down.sh down` cancels the restart first if the seat is being closed on purpose.
