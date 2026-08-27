@@ -326,21 +326,45 @@ test_a_live_first_mate_is_never_relaunched() {
     || fail "a second seat was launched beside a live first mate; got $launches"
   [ ! -e "$home/state/.seat-respawn-attempts" ] \
     || fail "a home with a live first mate kept an active retry episode"
-  assert_grep "launch refused" "$home/state/.seat-respawner.log" \
-    "refusing to relaunch beside a live first mate was not operator-visible"
-  # The pending turn was never typed, so the seat holding this home is another
-  # one and the pane the record named is still open. The log an investigator
-  # reads afterwards must say that rather than claim a turn landed.
-  assert_grep "was never given its turn and is still open" "$home/state/.seat-respawner.log" \
-    "a pane left open with no turn was not reported"
-  assert_no_grep "first turn landed" "$home/state/.seat-respawner.log" \
-    "a turn that was never typed was logged as landed"
+  [ ! -e "$home/state/.seat-first-turn" ] \
+    || fail "a home held by a first mate kept a pending first turn"
+  assert_grep "a seat now holds this home" "$home/state/.seat-respawner.log" \
+    "settling the pending first turn against a held home was not operator-visible"
   pass "seat respawner never launches beside a first mate that holds this home"
+}
+
+# The reading that could not be taken. Every earlier orphaning finding on this
+# branch was a state that is not "seat present" being converted into "launch",
+# and this is the last door into it: a lock this process cannot read says
+# nothing about whether a first mate holds this home, so it must not open one.
+test_an_unreadable_lock_never_produces_a_launch() {
+  local home delivery tmux log status rc=0
+  home=$(make_home unmeasured-lock)
+  status="$home/status.txt"
+  delivery="$home/fake-delivery"
+  tmux="$home/fake-tmux"
+  log="$home/tmux.log"
+  printf 'undeliverable: listener pid 1 is up with 1 wake(s) pending, but no session has published where the model turn lives\n' > "$status"
+  write_fake_delivery "$delivery"
+  write_pane_fake_tmux "$tmux" "$log"
+  printf 'x\n' > "$home/state/.lock"
+  chmod 000 "$home/state/.lock"
+
+  FM_FAKE_DELIVERY_STATUS="$status" run_respawner_once "$home" "$delivery" "$tmux" || rc=$?
+  chmod 600 "$home/state/.lock"
+  [ "$rc" = 0 ] || fail "respawner refused to complete a cycle over an unreadable lock"
+
+  [ ! -e "$log" ] \
+    || fail "a lock this home could not read was treated as an absent first mate and produced a launch"
+  [ ! -e "$home/state/.seat-respawn-attempts" ] \
+    || fail "a reading that could not be taken opened a retry episode"
+  pass "seat respawner never launches on a lock it could not read"
 }
 
 test_stay_down_marker_is_authoritative
 test_giveup_path_reports_a_finding
 test_a_live_first_mate_is_never_relaunched
+test_an_unreadable_lock_never_produces_a_launch
 test_a_pending_first_turn_holds_the_next_launch
 test_an_armed_restart_that_never_ran_is_reported
 test_launch_does_not_pin_the_respawners_path

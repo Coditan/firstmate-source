@@ -182,8 +182,9 @@ case "$SEND_TIMEOUT" in *[!0-9]*|''|0) SEND_TIMEOUT=15 ;; esac
 case "$NOW" in *[!0-9]*|'') NOW=$(date +%s) ;; esac
 
 # shellcheck source=bin/fm-harness-pid-lib.sh
-# shellcheck source=bin/fm-harness-pid-lib.sh
 . "$SCRIPT_DIR/fm-harness-pid-lib.sh"
+# shellcheck source=bin/fm-seat-presence-lib.sh
+. "$SCRIPT_DIR/fm-seat-presence-lib.sh"
 
 MODE=detect
 case "${1:-}" in
@@ -262,7 +263,6 @@ read_restarter() {
 }
 
 evaluate() {
-  local ns
   read_queue
   read_restarter
 
@@ -277,57 +277,34 @@ evaluate() {
     return
   fi
 
-  if ! fm_session_lock_record_read "$LOCK_FILE"; then
-    case "$FM_LOCK_RECORD_ERROR" in
-      absent)
-        if [ -f "$ENDPOINT" ] && [ ! -L "$ENDPOINT" ]; then
-          VERDICT=absent
-          REASON='no first mate holds this vessel, though one has run here before'
-        else
-          VERDICT=unattended
-          REASON='no first mate has ever run in this home, so there is none to be missing'
-        fi ;;
-      unreadable)
-        VERDICT=unmeasured
-        REASON='this vessel keeps a record of which first mate holds it and that record cannot be read, so its absence cannot be told from its presence' ;;
-      *)
-        VERDICT=unmeasured
-        REASON='the record naming this vessel'"'"'s first mate is not a usable file, so nothing here can say whether one is running' ;;
-    esac
-    return
-  fi
-
-  # shellcheck disable=SC2153 # Set by fm_session_lock_record_read above.
-  SEAT_PID=$FM_LOCK_RECORD_PID
-  case "$SEAT_PID" in
-    ''|*[!0-9]*)
-      if [ -f "$ENDPOINT" ] && [ ! -L "$ENDPOINT" ]; then
-        VERDICT=absent
-        REASON='no first mate holds this vessel, though one has run here before'
-      else
-        VERDICT=unattended
-        REASON='no first mate has ever run in this home, so there is none to be missing'
-      fi
+  # The lock reading itself belongs to bin/fm-seat-presence-lib.sh, which
+  # bin/fm-seat-respawner.sh consumes too, so the detector and the restarter
+  # cannot disagree about what the record says.
+  fm_seat_presence "$LOCK_FILE"
+  # shellcheck disable=SC2153 # Published by fm_seat_presence above.
+  SEAT_PID=$FM_SEAT_PRESENCE_PID
+  case "$FM_SEAT_PRESENCE" in
+    present|unmeasured)
+      VERDICT=$FM_SEAT_PRESENCE
+      REASON=$FM_SEAT_PRESENCE_REASON
       return ;;
   esac
 
-  # A pid means nothing outside the table it was issued from. When the record
-  # names a table this process cannot see into, the honest answer is that
-  # liveness is unreadable from here - never that the holder is gone.
-  if [ -n "$FM_LOCK_RECORD_PIDNS" ] \
-    && { ! ns=$(fm_pid_namespace_token) || [ "$ns" != "$FM_LOCK_RECORD_PIDNS" ]; }; then
-    VERDICT=unmeasured
-    REASON='this vessel'"'"'s first mate is recorded as running somewhere this check cannot see into, so whether it is still running is unreadable from here'
-    return
-  fi
-
-  if fm_harness_alive "$SEAT_PID"; then
-    VERDICT=present
-    REASON='a first mate is running and holds this vessel'
+  # Absent, and only the alarm splits it further: whether a home that records no
+  # holder ever had one is a question the ENDPOINT answers, not the lock, and
+  # only this half reports the difference.
+  if [ -z "$SEAT_PID" ]; then
+    if [ -f "$ENDPOINT" ] && [ ! -L "$ENDPOINT" ]; then
+      VERDICT=absent
+      REASON='no first mate holds this vessel, though one has run here before'
+    else
+      VERDICT=unattended
+      REASON='no first mate has ever run in this home, so there is none to be missing'
+    fi
     return
   fi
   VERDICT=absent
-  REASON='the first mate that held this vessel is no longer running'
+  REASON=$FM_SEAT_PRESENCE_REASON
 }
 
 # --- durable record ---------------------------------------------------------

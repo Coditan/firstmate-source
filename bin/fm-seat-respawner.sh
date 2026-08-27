@@ -82,6 +82,8 @@ LOCKDIR="$STATE/.seat-respawner.lock"
 . "$SCRIPT_DIR/fm-pane-activity-lib.sh"
 # shellcheck source=bin/fm-harness-pid-lib.sh
 . "$SCRIPT_DIR/fm-harness-pid-lib.sh"
+# shellcheck source=bin/fm-seat-presence-lib.sh
+. "$SCRIPT_DIR/fm-seat-presence-lib.sh"
 
 POLL=$(fm_retry_num_or_default "$POLL" 15)
 BASE_BACKOFF=$(fm_retry_num_or_default "$BASE_BACKOFF" 30)
@@ -287,22 +289,19 @@ deliver_first_turn() {
   case "$at" in ''|*[!0-9]*) at=0 ;; esac
   age=$(( $(date +%s) - at ))
 
-  # A seat holds the lock, so nothing more is owed to this record - but which
-  # seat it is decides what actually happened. Only a pane that was typed into
-  # can have run the session start that takes the lock; when this one never was,
-  # the holder is another seat (a human starting one by hand is the measured
-  # case) and the pane this record names is still open with no turn. Saying
-  # "landed" for that would put a state nobody established into the one log an
-  # investigator reads afterwards.
-  if seat_holds_lock; then
-    rm -f -- "$FIRST_TURN"
-    if [ -n "$submitted" ]; then
-      log "first turn landed: a seat now holds this home"
-    else
-      log "this home is held by a seat; pane $pane was never given its turn and is still open"
-    fi
-    return 0
-  fi
+  # The same three-verdict reading one_cycle acts on, asked of the same lock.
+  # A seat holding this home settles the record, whichever seat it is; a reading
+  # that could not be taken settles nothing and must not lead on to the typing
+  # below, because a first mate this process cannot see is still a first mate.
+  fm_seat_presence "$STATE/.lock"
+  case "$FM_SEAT_PRESENCE" in
+    present)
+      rm -f -- "$FIRST_TURN"
+      log "a seat now holds this home; the first turn recorded for pane $pane is settled"
+      return 0 ;;
+    unmeasured)
+      return 0 ;;
+  esac
   # Bounded, and abandoned out loud. A first turn that never lands must not be
   # retried forever in silence, and the absence keeps being reported either way.
   if [ "$age" -ge "$FIRST_TURN_DEADLINE" ]; then
@@ -358,23 +357,6 @@ deliver_first_turn() {
     log "first turn was not confirmed (verdict=${verdict:-unknown}); leaving it to the next cycle"
   fi
   return 0
-}
-
-# Only a session start takes this home's lock, so the lock naming a live harness
-# is the one proof that a restart produced a first mate rather than a process.
-# The record is read through its one owner, bin/fm-harness-pid-lib.sh, rather
-# than parsed again here: a holder recorded in a pid table this process cannot
-# see into is never read as a live local one just because the number matches
-# something alive here.
-seat_holds_lock() {
-  local ns
-  fm_session_lock_record_read "$STATE/.lock" || return 1
-  case "$FM_LOCK_RECORD_PID" in ''|*[!0-9]*) return 1 ;; esac
-  if [ -n "$FM_LOCK_RECORD_PIDNS" ] \
-    && { ! ns=$(fm_pid_namespace_token) || [ "$ns" != "$FM_LOCK_RECORD_PIDNS" ]; }; then
-    return 1
-  fi
-  fm_harness_alive "$FM_LOCK_RECORD_PID"
 }
 
 clear_episode() {
@@ -450,20 +432,24 @@ one_cycle() {
     return 0
   fi
   deliver_first_turn
-  # PRESENCE, ASKED BEFORE REACHABILITY. A home whose session lock names a live
-  # harness is not missing a seat, whatever the delivery verdict says about
-  # reaching it - and an ordinary busy seat produces `undeliverable:` (the
-  # listener's own pane_is_busy branch), so relaunching on that verdict alone
-  # opens a second agent window beside a first mate that is merely working.
-  # This is the same lock reading bin/fm-seat-alarm.sh calls presence, asked
-  # here for the same question; docs/seat-respawner.md carries the revision.
-  if seat_holds_lock; then
-    if [ -f "$ATTEMPTS" ]; then
-      log "launch refused: this home's session lock names a live first mate"
-    fi
-    clear_episode
-    return 0
-  fi
+  # PRESENCE, ASKED BEFORE REACHABILITY, AND ONLY AN ABSENCE OPENS A LAUNCH.
+  # A home whose lock names a live harness is not missing a seat whatever the
+  # delivery verdict says about reaching it - an ordinary busy seat produces
+  # `undeliverable:` through the listener's own busy-pane branch. A reading that
+  # could not be taken is not an absence either, and this is the half that acts:
+  # only the alarm may speak about an unmeasured home, and neither half may
+  # start a second seat over one. docs/seat-respawner.md carries the revision.
+  fm_seat_presence "$STATE/.lock"
+  case "$FM_SEAT_PRESENCE" in
+    present)
+      clear_episode
+      return 0 ;;
+    unmeasured)
+      # The episode is left exactly as it stands: this half declines to act on a
+      # reading it could not take, and saying so out loud is the alarm's, which
+      # reports an unmeasured home to the captain on its own cadence.
+      return 0 ;;
+  esac
   status_line=$("$DELIVERY_SERVICE" status 2>&1 || true)
   case "$status_line" in *$'\n'*) status_line=${status_line%%$'\n'*} ;; esac
   if ! respawn_needed "$status_line"; then
