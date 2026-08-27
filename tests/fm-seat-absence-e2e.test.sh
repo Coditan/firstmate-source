@@ -18,6 +18,11 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# This suite drives both halves end to end against its own throwaway home, so
+# both suite-wide silencers from tests/lib.sh are lifted here.
+export FM_SEAT_ALARM_DISABLE=0
+export FM_SEAT_RESPAWNER_DISABLE=0
+
 RESPAWNER="$ROOT/bin/fm-seat-respawner.sh"
 ALARM="$ROOT/bin/fm-seat-alarm.sh"
 

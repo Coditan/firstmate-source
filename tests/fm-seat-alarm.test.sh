@@ -4,6 +4,10 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# This is the suite that drives the alarm itself, so the suite-wide silencer
+# tests/lib.sh sets for every other fixture home is lifted here.
+export FM_SEAT_ALARM_DISABLE=0
+
 ALARM="$ROOT/bin/fm-seat-alarm.sh"
 
 fm_test_tmproot TMP_ROOT fm-seat-alarm
