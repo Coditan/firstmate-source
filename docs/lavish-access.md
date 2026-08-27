@@ -28,9 +28,9 @@ The fix therefore has to be a firstmate-owned mechanism that is hard to bypass b
 
 | Variable | Value | Why |
 | --- | --- | --- |
-| `LAVISH_AXI_HOST` | this vessel's tailnet IPv4 address | reachable off this machine, and never a wildcard, because an all-interfaces bind is broader than was approved |
+| `LAVISH_AXI_HOST` | this vessel's tailnet IPv4 address, or loopback where that address cannot be bound | reachable off this machine, and never a wildcard, because an all-interfaces bind is broader than was approved |
 | `LAVISH_AXI_PORT` | a port proved free by `bin/fm-service-port.sh` | vessels sharing one machine do not collide |
-| `LAVISH_AXI_LINK_HOST` | the tailnet DNS name, but only once it has been confirmed to resolve to the bound address; otherwise the address | the hostname the captain actually receives is checked before he receives it |
+| `LAVISH_AXI_LINK_HOST` | the tailnet DNS name, but only once it has been confirmed to resolve to this node's tailnet address; otherwise that address, and loopback only when no reach was established at all | the hostname the captain actually receives is checked before he receives it, and it names where the board answers rather than where it is bound |
 | `LAVISH_AXI_ALLOWED_HOSTS` | this vessel's DNS name, short node name, address, and this home's claim token; never `*` | a closed Host allowlist rather than an open one |
 | `LAVISH_AXI_STATE_DIR` | `FM_HOME/state/lavish` | a secondmate home shares its UNIX account with its parent, so without this they share one server and one session store |
 
@@ -102,9 +102,39 @@ The rule is that no URL is emitted implying reach the vessel has not established
 - **The link host does not answer after the board opens** - the wrapper names the address form that does work.
 - **Every candidate port is taken** - `bin/fm-service-port.sh` exits non-zero with one plain sentence and no board is opened.
   There is deliberately no silent loopback downgrade here, because that would reproduce the original bug somewhere new.
-- **The address cannot be bound at all** - a distinct exit code and message, because that is a network-interface problem and reporting it as a port collision would send the reader hunting the wrong thing.
+- **The address cannot be bound at all** - the vessel says so and is served anyway, over a published proxy; see "A tailnet address that cannot be bound" below.
+  When even that is unavailable the allocator degrades to `reachability=loopback` carrying the same diagnosis, because a proxy that could not be published is not reach.
+  It is never reported as a port collision, because that is a network-interface problem and reporting it as contention would send the reader hunting the wrong thing.
   Only address-scoped errnos (`EADDRNOTAVAIL`, `EAFNOSUPPORT`, `EINVAL`) count as this, and they are the only ones that end the walk early, since no port on that address could have worked.
   A port-scoped refusal such as `EACCES` on a privileged port is neither a collision nor an unusable address: the walk continues past it, and only if nothing in the window binds does the allocator report that some candidates were held and others refused.
+
+### A tailnet address that cannot be bound
+
+A tailscale node can hold an ADDRESS without the machine having an INTERFACE for it.
+In userspace networking mode - no `/dev/net/tun`, no `NET_ADMIN` in the bounding set - `tailscaled` runs its own network stack, so the node is genuinely on the tailnet while no local interface carries its address.
+Every `bind()` on that address fails `EADDRNOTAVAIL`, for every port, so no port window can rescue it.
+
+That is neither of the two cases the allocator originally had a name for.
+It is not `tailnet`, because nothing on this machine can listen on the address.
+It is not `loopback`, because the vessel really is reachable from the captain's devices.
+So it is `reachability=tailnet-proxied`: the port is bound on loopback and published onto the tailnet address with `tailscale serve`, whose listener lives inside `tailscaled`'s userspace stack rather than on a host interface.
+
+Three facts this rests on, each measured rather than reasoned about, with the measurements in "The userspace-mode vessel" below.
+
+- The published port and the loopback port are deliberately the same number.
+  Lavish writes its own bound port into every link it emits and has no environment variable that separates the two, so a proxy on a different port would emit a link answering nothing.
+  The two listeners never collide despite the shared number, because one is on the tailnet address inside the userspace stack and the other is on `127.0.0.1`.
+- A request arriving through the proxy carries `Host: <tailnet-dns-name>:<port>`, and Lavish compares its allowlist on hostname alone.
+  So the names the wrapper already allows are the names the proxy needs, and no wildcard is introduced.
+- The proxy is withdrawn when the board is stopped.
+  Left behind, this vessel's own tailnet name answers `502` on that port, which reads as a broken board rather than a closed one.
+
+`bin/fm-tailnet-serve-lib.sh` is the one owner of publishing and withdrawing.
+Serve configuration belongs to the tailscale node, which every UNIX account on this machine shares, so a port is only ever withdrawn where its ownership has already been proved by the claim token, or where nothing is serving on it at all.
+
+The diagnosis is not removed by any of this.
+A vessel in this state still says, on every open, that its address cannot be bound and that this is what userspace mode looks like; what changed is that the board also works.
+The durable alternative - giving the container `/dev/net/tun` and `NET_ADMIN` so tailscale runs in kernel mode - is a change to the vessel definition and is not this mechanism's to make.
 
 A readiness probe must target the address that was bound.
 Probing loopback while a service binds only a tailnet address reports a healthy server as failed to start; that happened during this investigation and cost real time.
@@ -317,6 +347,91 @@ $ FM_ROOT_OVERRIDE=/tmp bin/fm-lavish-pretool-check.sh --command 'lavish-axi x.h
 
 Claude's `--claude` deny leaves stdout empty, Grok's stdin shape returns the stdout decision object, and a checkout without the wrapper is inert.
 `tests/fm-lavish-access.test.sh` owns the full acceptance matrix.
+
+### The userspace-mode vessel
+
+Measured 2026-08-27 on `coditan-vessel` (tailscale node `coditan-vessel.tail7b8448.ts.net`, address `100.73.181.90`), a container whose tailscale runs in userspace mode.
+
+The condition, and that it is address-scoped rather than port-scoped:
+
+```
+$ ls -l /dev/net/tun
+ls: cannot access '/dev/net/tun': No such file or directory
+$ ip -4 addr show | grep -E '^[0-9]+:'
+1: lo: <LOOPBACK,UP,LOWER_UP> ...
+2: eth0@if431: <BROADCAST,MULTICAST,UP,LOWER_UP> ...
+$ node bin/fm-service-port-probe.mjs addr 100.73.181.90
+fm-service-port-probe: cannot bind 100.73.181.90 on this host (EADDRNOTAVAIL)
+$ echo $?
+4
+```
+
+`CapBnd` was `00000000a80425fb`, whose bit 12 (`CAP_NET_ADMIN`) is clear.
+No `tailscale0` interface exists, so the address the node advertises is carried by nothing local.
+
+Before this change, `bin/fm-lavish.sh` opened no board at all on this vessel: `bin/fm-service-port.sh` exited 3 with `100.73.181.90 cannot be bound on this host`, and the wrapper reported `no port is available for a review board on this vessel`.
+
+The Host header a browser sends through the proxy, measured with an echo server rather than inferred:
+
+```
+$ tailscale serve --bg --http=4479 http://127.0.0.1:4479
+$ curl -s -o /dev/null -w '%{http_code}\n' http://coditan-vessel.tail7b8448.ts.net:4479/
+200
+# the echo server's own log line for that request:
+HOST=coditan-vessel.tail7b8448.ts.net:4479 XFH=coditan-vessel.tail7b8448.ts.net:4479 URL=/
+```
+
+The name, not loopback and not the address, and carrying the published port.
+Reading the installed `lavish-axi` (`isAllowedHostHeader`) confirms the allowlist is compared on `authority.hostname`, so the port the proxy adds is not part of the question.
+
+A board opened end to end through the entry point:
+
+```
+$ FM_HOME=/home/coditan/coditan-firstmate bin/fm-lavish.sh /tmp/.../probe-board.html
+fm-lavish: this node has the tailnet address 100.73.181.90 but no local interface carries it
+  (bind fails EADDRNOTAVAIL), which is what tailscale userspace networking mode looks like;
+  the port is bound on loopback and published onto the tailnet address with tailscale serve instead
+session:
+  url: "http://coditan-vessel.tail7b8448.ts.net:4451/session/9aca2df349accd0a"
+  status: opened
+```
+
+Fetched over the tailnet name rather than over loopback, and returning the board's own content:
+
+```
+$ curl -s -w 'HTTP=%{http_code} via=%{remote_ip}\n' \
+    http://coditan-vessel.tail7b8448.ts.net:4451/session/9aca2df349accd0a -o got.html
+HTTP=200 via=100.73.181.90
+$ wc -c got.html
+16800 got.html
+$ grep -o 'userspace tailnet probe board' got.html
+userspace tailnet probe board
+```
+
+The poll path, driven from a real browser over that same link.
+`chrome-devtools-axi` could not be used - every command, `open` included, answered `error: No page is currently selected / code: BROWSER_ERROR` - so headless Chrome 152.0.7977.64 was driven directly over CDP instead.
+The page loaded the real Lavish UI (`document.title` = `userspace tailnet probe board · Lavish`, with its `Send to Agent` composer present), text was typed into the composer through the native value setter plus an `input` event, and the button was clicked:
+
+```
+$ bin/fm-lavish.sh poll /tmp/.../probe-board.html
+prompts[1]{uid,prompt,selector,tag,text}:
+  "","FM_POLL_PROOF: queued from a real browser over the tailnet name","",message,Freeform message
+```
+
+Teardown, and what it prevents:
+
+```
+# with the proxy left standing after the board stops
+$ curl -s -o /dev/null -w 'HTTP=%{http_code}\n' http://coditan-vessel.tail7b8448.ts.net:4451/health
+HTTP=502
+# after bin/fm-lavish.sh stop withdraws it
+$ tailscale serve status        # the 4451 entry is gone
+$ curl -s -o /dev/null -m 6 -w 'HTTP=%{http_code}\n' http://coditan-vessel.tail7b8448.ts.net:4451/health
+HTTP=000
+```
+
+The fallback firing only where it should is held by `tests/fm-lavish-access.test.sh`, hermetically: a fake tailscale in `userspace` mode reports `192.0.2.1` (TEST-NET-1, assigned on no host, so the bind genuinely fails rather than being mocked into failing), and the fake `tailscale serve` logs every invocation.
+A bindable address stays `reachability=tailnet` with an empty serve log; a host with no tailnet at all keeps its existing loopback behaviour and message with an empty serve log; and an unbindable address whose serve cannot publish degrades to loopback rather than claiming reach.
 
 ### Open gap: the off-device request
 

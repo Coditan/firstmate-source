@@ -1048,7 +1048,13 @@ lavish_access_check() {
   [ "$found" -gt 0 ] || return 0
   reach=$("$SCRIPT_DIR/fm-service-port.sh" lavish --check 2>/dev/null \
     | sed -n 's/^reachability=\(.*\)$/\1/p' | head -1)
-  [ "$reach" = tailnet ] || return 0
+  # A vessel serving its boards through a published proxy has just as much reach
+  # to offer as one binding its own address, so a loopback link is just as stale
+  # there and the notice has to fire for both.
+  case "$reach" in
+    tailnet|tailnet-proxied) ;;
+    *) return 0 ;;
+  esac
   echo "LAVISH_ACCESS: $found open review board link(s) still point at this machine only and will not open on the captain's devices; reopen them with bin/fm-lavish.sh"
 }
 

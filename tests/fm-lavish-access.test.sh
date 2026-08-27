@@ -32,10 +32,49 @@ command -v jq >/dev/null 2>&1 || fail "jq is required for the tailnet identity r
 #   badname  - running, but the DNS name does not resolve to the address
 #   stopped  - installed but not running
 #   noipv4   - running with no IPv4 address
+#   userspace - running on an address no local interface carries, which is what
+#               tailscale userspace networking mode looks like. 192.0.2.1 is
+#               TEST-NET-1: it is assigned on no host, so the bind really does
+#               fail EADDRNOTAVAIL here rather than being mocked into failing.
+#
+# It also fakes `tailscale serve`, keeping its published ports in
+# FM_TEST_TS_SERVE_STATE and logging every serve invocation to
+# FM_TEST_TS_SERVE_LOG, so a test can assert that the proxy path was taken - or,
+# just as importantly, that it was NOT. FM_TEST_TS_SERVE=broken makes every
+# serve mutation fail, which is the vessel that has the unbindable address and
+# no way around it.
 make_fake_tailscale() {
   local bin=$1
   cat > "$bin/tailscale" <<'SH'
 #!/usr/bin/env bash
+if [ "${1:-}" = serve ]; then
+  printf '%s\n' "$*" >> "${FM_TEST_TS_SERVE_LOG:-/dev/null}"
+  state=${FM_TEST_TS_SERVE_STATE:-/dev/null}
+  if [ "${2:-}" = status ]; then
+    printf '{"TCP":{'
+    sep=""
+    while read -r p; do
+      [ -n "$p" ] || continue
+      printf '%s"%s":{"HTTP":true}' "$sep" "$p"
+      sep=","
+    done < <(sort -u "$state" 2>/dev/null)
+    printf '}}\n'
+    exit 0
+  fi
+  [ "${FM_TEST_TS_SERVE:-ok}" = broken ] && exit 1
+  port=""
+  for a in "$@"; do
+    case "$a" in --http=*) port=${a#--http=} ;; esac
+  done
+  [ -n "$port" ] || exit 1
+  if [ "${*: -1}" = off ]; then
+    grep -vx "$port" "$state" > "$state.tmp" 2>/dev/null || : > "$state.tmp"
+    mv -f "$state.tmp" "$state"
+  else
+    printf '%s\n' "$port" >> "$state"
+  fi
+  exit 0
+fi
 [ "${1:-}" = status ] || exit 1
 [ "${2:-}" = --json ] || { echo "127.0.0.1 fake"; exit 0; }
 case "${FM_TEST_TS_MODE:-running}" in
@@ -50,6 +89,9 @@ case "${FM_TEST_TS_MODE:-running}" in
     ;;
   noipv4)
     printf '{"BackendState":"Running","MagicDNSSuffix":"","Self":{"HostName":"v6only","DNSName":"v6only.","TailscaleIPs":["fd7a::1"]}}\n'
+    ;;
+  userspace)
+    printf '{"BackendState":"Running","MagicDNSSuffix":"","Self":{"HostName":"userspace","DNSName":"userspace.","TailscaleIPs":["192.0.2.1"]}}\n'
     ;;
   *) exit 1 ;;
 esac
@@ -141,6 +183,10 @@ make_fake_tailscale "$FAKEBIN"
 PATH="$FAKEBIN:$PATH"
 export PATH
 export FM_TEST_TS_MODE=running
+export FM_TEST_TS_SERVE_STATE="$TMP_ROOT/serve-state"
+export FM_TEST_TS_SERVE_LOG="$TMP_ROOT/serve-log"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
 
 # --- the probe is the oracle -------------------------------------------------
 
@@ -290,6 +336,82 @@ for mode in stopped noipv4; do
   esac
 done
 pass "a vessel with no usable tailnet says so concretely instead of implying reach"
+
+# --- allocator: an address the node has but cannot bind ----------------------
+#
+# The case that is neither of the other two. Each assertion below is paired with
+# its negative, because a fallback that fires everywhere has replaced the
+# resolution rather than extended it, and would hand every ordinary vessel a
+# proxy it never needed.
+
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+node "$PROBE" addr 127.0.0.1 >/dev/null 2>&1
+expect_code 0 "$?" "loopback is bindable, so the address probe must say so"
+node "$PROBE" addr 192.0.2.1 >/dev/null 2>&1
+expect_code 4 "$?" "an address no interface carries is exit 4 from the address probe"
+pass "the address probe separates a bindable address from one this host cannot carry"
+
+# The bindable case first, so the negative is measured on the same fixtures.
+bindable=$(FM_HOME="$HOME_B" FM_SERVICE_PORT_RANGE=4740-4759 \
+  "$ROOT/bin/fm-service-port.sh" lavish)
+[ "$(field reachability "$bindable")" = tailnet ] \
+  || fail "a bindable tailnet address must stay reachability=tailnet"
+[ "$(field addr "$bindable")" = 127.0.0.1 ] || fail "the bindable address is bound directly"
+[ "$(field tailaddr "$bindable")" = 127.0.0.1 ] || fail "tailaddr names the node's own address"
+[ ! -s "$FM_TEST_TS_SERVE_LOG" ] \
+  || fail "a bindable address must not publish a proxy: $(cat "$FM_TEST_TS_SERVE_LOG")"
+pass "a vessel that can bind its own tailnet address never reaches the proxy path"
+
+: > "$FM_TEST_TS_SERVE_LOG"
+proxied=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_B" FM_SERVICE_PORT_RANGE=4740-4759 \
+  "$ROOT/bin/fm-service-port.sh" lavish)
+expect_code 0 "$?" "an unbindable address with a working serve must resolve, not refuse"
+[ "$(field reachability "$proxied")" = tailnet-proxied ] \
+  || fail "an unbindable tailnet address is its own reachability, got '$(field reachability "$proxied")'"
+[ "$(field addr "$proxied")" = 127.0.0.1 ] || fail "the proxied case binds loopback"
+[ "$(field tailaddr "$proxied")" = 192.0.2.1 ] \
+  || fail "the proxied case must still name the tailnet address it could not bind"
+proxied_port=$(field port "$proxied")
+assert_contains "$(cat "$FM_TEST_TS_SERVE_LOG")" "--http=$proxied_port" \
+  "the port actually bound is the port published"
+assert_contains "$(cat "$FM_TEST_TS_SERVE_LOG")" "http://127.0.0.1:$proxied_port" \
+  "the proxy points at the loopback port that was bound"
+# The diagnosis is the thing a vessel in this state most needs said out loud,
+# and making it work is not a licence to stop saying it.
+assert_contains "$proxied" "EADDRNOTAVAIL" "the reason keeps the concrete errno"
+assert_contains "$proxied" "userspace" "the reason keeps the userspace-mode diagnosis"
+pass "an address the node holds but cannot bind is served over a published proxy and still diagnosed"
+
+# Serve is the whole reason this case is not simply loopback, so a serve that
+# cannot publish must not be reported as reach.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+noserve=$(FM_TEST_TS_MODE=userspace FM_TEST_TS_SERVE=broken FM_HOME="$HOME_B" \
+  FM_SERVICE_PORT_RANGE=4740-4759 "$ROOT/bin/fm-service-port.sh" lavish)
+expect_code 0 "$?" "a vessel with no way off the machine still gets a local board"
+[ "$(field reachability "$noserve")" = loopback ] \
+  || fail "an unpublishable proxy must degrade to loopback, not claim tailnet reach"
+[ -z "$(field dnsname "$noserve")" ] \
+  || fail "a name that cannot be reached must not be offered for links"
+assert_contains "$noserve" "EADDRNOTAVAIL" "the degraded case still names why the address failed"
+pass "an unbindable address with no working proxy is reported as loopback rather than as reach"
+
+# The no-tailnet vessel is unchanged by any of this: same reachability, same
+# message, and no serve configuration touched on its behalf.
+: > "$FM_TEST_TS_SERVE_LOG"
+for mode in stopped noipv4; do
+  untouched=$(FM_TEST_TS_MODE=$mode FM_HOME="$HOME_B" FM_SERVICE_PORT_RANGE=4740-4759 \
+    "$ROOT/bin/fm-service-port.sh" lavish)
+  [ "$(field reachability "$untouched")" = loopback ] || fail "$mode must still be loopback"
+  [ -z "$(field tailaddr "$untouched")" ] \
+    || fail "$mode has no tailnet address to name"
+done
+[ ! -s "$FM_TEST_TS_SERVE_LOG" ] \
+  || fail "a host with no tailnet must not publish anything: $(cat "$FM_TEST_TS_SERVE_LOG")"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a host with no tailnet at all keeps its existing loopback behaviour untouched"
 
 badname=$(FM_TEST_TS_MODE=badname FM_HOME="$HOME_B" FM_SERVICE_PORT_RANGE=4740-4759 \
   "$ROOT/bin/fm-service-port.sh" lavish --check)
@@ -767,6 +889,56 @@ assert_contains "$out" "stopped" "stop reaches this vessel's own server"
 out=$(FM_HOME="$HOME_C" FM_SERVICE_PORT_RANGE=4792-4793 "$ROOT/bin/fm-lavish.sh" stop 2>&1)
 assert_contains "$out" "nothing to stop" "a second stop has nothing left to reach"
 pass "stop reaches this vessel's own server and then reports honestly that none is left"
+
+# --- entry point: the vessel whose address it cannot bind --------------------
+#
+# The board binds loopback here, but nothing the captain is handed may say so:
+# the link and the allowlist have to name the tailnet, because the published
+# proxy is where the board actually answers.
+
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_U=$(make_home "$TMP_ROOT/vessel-u")
+make_serving_lavish "$HOME_U"
+out=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_U" FM_SERVICE_PORT_RANGE=4796-4799 \
+  "$ROOT/bin/fm-lavish.sh" "$HOME_U/.lavish/board.html" 2>&1)
+assert_contains "$out" "EADDRNOTAVAIL" "the vessel still says its address cannot be bound"
+u_port=$(printf '%s\n' "$out" | sed -n 's|.*://[^:]*:\([0-9][0-9]*\)/session/.*|\1|p' | head -1)
+[ -n "$u_port" ] || fail "the proxied open should still emit a session link, got: $out"
+assert_contains "$out" "192.0.2.1:$u_port/session/" \
+  "the link must name the tailnet address, never the loopback the board is bound to"
+assert_not_contains "$out" "127.0.0.1:$u_port/session/" \
+  "a loopback link is exactly what this wrapper exists to stop handing over"
+u_owner="$HOME_U/state/lavish/fm-owner"
+assert_grep "addr=127.0.0.1" "$u_owner" "the board still binds the address it can bind"
+assert_grep "link_host=192.0.2.1" "$u_owner" "the recorded link host is the tailnet address"
+u_allowed=$(sed -n 's/^allowed=//p' "$u_owner" | tail -1)
+# Measured, not reasoned about: a request through the published proxy carries
+# the tailnet name as its Host, and the allowlist is compared on hostname alone.
+case " $u_allowed " in
+  *" 192.0.2.1 "*) : ;;
+  *) fail "the allowlist must carry the tailnet address the proxy answers on: $u_allowed" ;;
+esac
+case " $u_allowed " in
+  *" userspace "*) : ;;
+  *) fail "the allowlist must carry this node's own name: $u_allowed" ;;
+esac
+case " $u_allowed " in
+  *" * "*) fail "the allowlist must never become a wildcard: $u_allowed" ;;
+esac
+assert_contains "$(cat "$FM_TEST_TS_SERVE_LOG")" "--http=$u_port" \
+  "the port the board bound is the port published onto the tailnet"
+pass "a vessel that cannot bind its own address still hands over a tailnet link"
+
+# A proxy outliving its board leaves this vessel's own name answering nothing,
+# which reads as a broken board rather than a closed one.
+FM_TEST_TS_MODE=userspace FM_HOME="$HOME_U" FM_SERVICE_PORT_RANGE=4796-4799 \
+  "$ROOT/bin/fm-lavish.sh" stop >/dev/null 2>&1
+[ "$(sort -u "$FM_TEST_TS_SERVE_STATE" | tr -d '[:space:]')" = "" ] \
+  || fail "stopping the board must withdraw its published proxy, still published: $(cat "$FM_TEST_TS_SERVE_STATE")"
+assert_contains "$(cat "$FM_TEST_TS_SERVE_LOG")" "--http=$u_port off" \
+  "the withdrawal names the port it published"
+pass "stopping a proxied board takes its tailnet endpoint down with it"
 
 # --- entry point: an explicit --port earns no shortcut -----------------------
 #
