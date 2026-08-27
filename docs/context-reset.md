@@ -222,7 +222,7 @@ A silent non-fire is the defect class this whole line of work exists to remove, 
 
 - **It fires and firstmate does not act.** The wake is durable. An enqueued wake that is never drained is already an alarm.
 - **The observation stops running.** The watcher's own death is already alarmed by the liveness guard.
-- **A session is running here and cannot be measured** - no transcript recorded, an unreadable one, a record naming a different session process than the one holding the home lock, or a missing `jq` or `perl` (the bounded tail read needs both). That is reported as its own wake saying the ceiling is unenforced, and every repeat of it says how long that has been true; see "an absent protection is not routine traffic" below.
+- **A session is running here and cannot be measured** - no transcript recorded, an unreadable one, a record naming a different session process than the one holding the home lock, or a missing `jq` or `perl` (the bounded tail read needs both). That is reported as its own wake saying the ceiling is unenforced, and every later observation remains visible through the standing-condition record and session-start digest; see "an absent protection is not routine traffic" below.
   The live session lock is what makes this an alarm rather than noise: with no session running, there is genuinely nothing to measure, and a fresh home, a home between sessions, and every non-primary home would otherwise carry a permanent false alarm.
   The record and the lock are keyed on the same session process on purpose, so a disagreement means the record does not describe the current lock holder - measuring it would report the wrong number rather than no number, which is why that case is reported instead of used.
 - **The way back in is broken.** If `clear` ever leaves the `SessionStart` matcher, or the nudge script goes missing, the wake reports the blocker instead of ordering a reset, and the reset tool refuses. That check proves the hook is still wired and its script is still there; what carries the fresh session's rebuild instruction after a self-clear is `AGENTS.md` section 3, for the reason in "the way back in, precisely" below.
@@ -230,11 +230,12 @@ A silent non-fire is the defect class this whole line of work exists to remove, 
 
 ### An absent protection is not routine traffic
 
-The wake above is only half of the job, and the other half was measured failing.
+The wake above is only half of the job, and the other half was measured failing twice in different ways.
 On 2026-08-19 this home's ceiling was unenforced from one session start onward; the wake fired once an hour for the whole day, word-for-word identical every time, and nothing was repaired.
 Two vessels found the underlying defect, both because the wake said precisely what was wrong - so the diagnosis was never the problem.
-The repeat was.
-An identical line read as a line that had already been read, and what no report could say was that it was not the first.
+The first repair made each repeat carry its age and count because an unenforced ceiling must not go silent forever.
+The 2026-08-27 wake-cost measurement then showed that 22 unchanged repeats recreated 5,800,307 tokens of accumulated session context while doing only 7,414 tokens of new work.
+The hourly resurface landed just beyond the measured 60-minute cache cliff, so the repeat itself became the dominant cost.
 
 The branches divide on one question the predicate now publishes as `FM_CONTEXT_CEILING_PROTECTION`: is the ceiling being applied at all?
 
@@ -245,30 +246,29 @@ The branches divide on one question the predicate now publishes as `FM_CONTEXT_C
 | `ask` | present | the ceiling is working; a captain who is present is a reason to wait |
 | `reset` | present | the ceiling is working, and this is it working |
 
-Only the absent classes report differently on a repeat.
-The first report of one states the condition and nothing more.
-Every later report keeps that diagnosis verbatim and adds what only a repeat can know: when the protection went, how long it has been gone, and how many reports it has survived.
-It closes by naming the only two things left to do with an absence nobody has repaired - repair it through its owner, or tell the captain plainly that it stands unrepaired - which is what `AGENTS.md` section 8 already requires of a ceiling wake that names a condition rather than a next step.
+The first observation of an absent class raises one wake with the complete diagnosis.
+Every later unchanged observation updates durable state without raising another wake.
+This chooses the durable-record and session-start-digest escalation path instead of one extra wake at a later age.
+That choice implements the captain's 2026-08-27 direction to say the condition once and stay quiet until it changes, while keeping the absence visible whenever a session starts.
+It also avoids replacing a measured hourly cost with a shorter, unmeasured request cadence.
 
-Three things are deliberately not done here.
-The cadence is untouched, so nothing is made louder - `FM_CONTEXT_ERROR_RESURFACE` still governs every class, and the volume of the working classes is not raised to carry the absent one.
-The diagnosis is never rewritten, shortened, or generalised, because making a warning louder by making it vaguer would remove the property that let both vessels find this at all.
-And there is no threshold to tune: the second report IS the escalation, since one resurface period has passed with a protection missing and nothing done, which is the definition of not routine.
-
-`state/.context-ceiling-absent-since` carries `<class> <first-report-epoch> <reports>` as content rather than as an mtime, because the mtime moves on every rewrite and the whole value of the record is the moment that did not move.
+`state/.context-ceiling-absent-since` carries `<class> <first-observed-epoch> <observations>` as content rather than as an mtime, because the mtime moves on every rewrite and the whole value of the record is the moment that did not move.
+The watcher updates the observation count on every eligible poll even when it suppresses the wake, so elapsed age and persistence remain available without a model turn.
+The session-start digest prints the class, first-observed epoch, current age, and observation count.
 A change of class restarts it - a ceiling that stopped being unmeasurable and started being unresettable is a different absence, and dating the new one from the old would report an age that never happened.
 A resolved condition clears it, so the next outage reports as a first one.
+If the watcher cannot update the absence record, it raises the wake again instead of letting an unenforced ceiling become both silent and unrecorded.
 
-Every wake the watcher raises here - `reset`, `ask`, `blocked`, and `unenforced` alike - is reported at most once per `FM_CONTEXT_ERROR_RESURFACE` while the condition behind it is unchanged.
+Every wake the watcher raises here - `reset`, `ask`, `blocked`, and `unenforced` alike - is reported once while the condition behind it is unchanged.
 Every branch here describes a condition rather than an event - a present captain stays present, a broken hook stays broken, an unmeasurable transcript stays unmeasurable - so repeating any of them on the poll cadence would spend a model turn every five minutes on news that has not changed, which is the opposite of what this mechanism is for.
-The throttle is keyed on a branch class the predicate publishes as a stable token, never on the payload's wording, so rewording a message can never quietly merge two conditions under one key.
+Suppression is keyed on a branch class the predicate publishes as a stable token, never on the payload's wording, so rewording a message can never quietly split one condition into two keys.
 The ask payload names which condition took that branch - a captain who spoke, away mode, or a presence that could not be established - and that clause is deliberately not part of the key: all three mean the same thing to do, so moving between them is not a change worth a fresh wake.
-A condition that *changes* surfaces on the very next poll: a captain who goes away does not have to wait out the ask throttle before the reset branch can fire.
+A condition that *changes* surfaces on the very next eligible poll: a captain who goes away does not inherit the ask branch's silence before the reset branch can fire.
 
-The throttle is cleared only when the condition genuinely resolves - nothing is running in this home, or the session is back under the ceiling.
-A poll that finds the fleet busy is a different thing entirely, and leaves the throttle alone.
+The suppression marker is cleared only when the condition genuinely resolves - nothing is running in this home, or the session is back under the ceiling.
+A poll that finds the fleet busy is a different thing entirely, and leaves the marker alone.
 This distinction is load-bearing rather than pedantic: the ceiling wake is appended to `state/.wake-queue`, an undrained queue is the first thing that makes a poll non-quiet, and only firstmate drains it from inside a turn.
-Treating "nothing to say this poll" as "the condition is gone" would let every ceiling wake erase its own throttle and come back once per drain cycle.
+Treating "nothing to say this poll" as "the condition is gone" would let every ceiling wake erase its own suppression marker and come back once per drain cycle.
 
 ## The way back in, precisely
 
@@ -441,8 +441,8 @@ A fix that made the scan skip too much would silently disable the protection tha
 ## Tunables
 
 All read from the environment, all with working defaults.
-`bin/fm-context-lib.sh` defines the measurement bounds - `FM_CONTEXT_CEILING`, `FM_CONTEXT_CAPTAIN_IDLE_SECS`, `FM_CONTEXT_RECEIPT_MAX_AGE`, `FM_CONTEXT_RECEIPT_MAX_GROWTH_BYTES`, `FM_CONTEXT_TAIL_BYTES` - and `bin/fm-watch.sh` defines the observation cadence, `FM_CONTEXT_CHECK_INTERVAL` and `FM_CONTEXT_ERROR_RESURFACE`.
-[docs/configuration.md](configuration.md) lists all seven with their defaults, alongside every other runtime variable.
+`bin/fm-context-lib.sh` defines the measurement bounds - `FM_CONTEXT_CEILING`, `FM_CONTEXT_CAPTAIN_IDLE_SECS`, `FM_CONTEXT_RECEIPT_MAX_AGE`, `FM_CONTEXT_RECEIPT_MAX_GROWTH_BYTES`, `FM_CONTEXT_TAIL_BYTES` - and `bin/fm-watch.sh` defines the observation cadence, `FM_CONTEXT_CHECK_INTERVAL`.
+[docs/configuration.md](configuration.md) lists all six with their defaults, alongside every other runtime variable.
 
 ## State this mechanism owns
 
@@ -453,5 +453,5 @@ All under `state/`, all gitignored:
 | `.stow-receipt` | `bin/fm-stow-receipt.sh` | knowledge filed, bound to a transcript position; removed on a completed reset |
 | `.context-reset.log` | `bin/fm-context-reset.sh` | one durable line per refusal, `--check` pass, or completed reset |
 | `.last-context-check` | `bin/fm-watch.sh` | ceiling-read cadence, as an mtime, so it survives a watcher restart |
-| `.context-ceiling-surfaced` | `bin/fm-watch.sh` | the branch class last reported (`reset`, `ask`, `blocked`, `unenforced`), as content, and when it was reported, as an mtime; throttles an unchanged condition, and is cleared only when the condition genuinely resolves |
-| `.context-ceiling-absent-since` | `bin/fm-watch.sh` | `<class> <first-report-epoch> <reports>` for the current absent-protection condition, so a repeat can say how long the ceiling has had no protection and how many reports that has survived; cleared when the condition resolves or the protection comes back |
+| `.context-ceiling-surfaced` | `bin/fm-watch.sh` | the branch class last reported (`reset`, `ask`, `blocked`, `unenforced`), as content; suppresses an unchanged condition after its first wake, and is cleared only when the condition genuinely resolves |
+| `.context-ceiling-absent-since` | `bin/fm-watch.sh` | `<class> <first-observed-epoch> <observations>` for the current absent-protection condition, so the session-start digest can show how long the ceiling has had no protection and how many polls have observed it without raising repeat wakes; cleared when the condition resolves or the protection comes back |

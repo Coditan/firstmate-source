@@ -85,8 +85,9 @@
 #                       data/captain.md, data/captain-shared.md,
 #                       data/learnings.md: read-only, always safe, always runs.
 #   7. fleet digest   - a compact data/backlog.md identity/metadata listing,
-#                       every state/*.meta, a bounded state/*.status tail,
-#                       state/.afk, and a cheap per-task endpoint-liveness read:
+#                       the standing context-ceiling condition from
+#                       docs/context-reset.md, every state/*.meta, a bounded
+#                       state/*.status tail, state/.afk, and a cheap per-task endpoint-liveness read:
 #                       read-only, always runs. The status tail is labeled as
 #                       wake-EVENT history rather than current state, and prints
 #                       the full log path so a deeper read is one command away.
@@ -476,6 +477,53 @@ print_file_or_absent "$DATA/learnings.md" "data/learnings.md"
 # --- 7. fleet-state digest ---------------------------------------------
 section "FLEET STATE"
 print_backlog_compact "$DATA/backlog.md" "data/backlog.md"
+
+subsection "Standing context-ceiling condition (docs/context-reset.md)"
+CEILING_MARKER="$STATE/.context-ceiling-surfaced"
+CEILING_ABSENCE="$STATE/.context-ceiling-absent-since"
+if [ ! -f "$CEILING_MARKER" ]; then
+  printf '(none)\n'
+elif IFS= read -r CEILING_CLASS < "$CEILING_MARKER"; then
+  case "$CEILING_CLASS" in
+    reset|ask)
+      printf 'class=%s; unchanged wake suppression is active until the condition changes or resolves\n' \
+        "$CEILING_CLASS"
+      ;;
+    blocked|unenforced)
+      CEILING_ABSENCE_CLASS=
+      CEILING_ABSENCE_SINCE=
+      CEILING_ABSENCE_OBSERVATIONS=
+      if [ -f "$CEILING_ABSENCE" ]; then
+        read -r CEILING_ABSENCE_CLASS CEILING_ABSENCE_SINCE CEILING_ABSENCE_OBSERVATIONS \
+          < "$CEILING_ABSENCE" 2>/dev/null || true
+      fi
+      case "${CEILING_ABSENCE_SINCE:-}${CEILING_ABSENCE_OBSERVATIONS:-}" in
+        *[!0-9]*|'')
+          printf 'class=%s; absence record unreadable - do not treat this condition as clear\n' \
+            "$CEILING_CLASS"
+          ;;
+        *)
+          if [ "$CEILING_ABSENCE_CLASS" != "$CEILING_CLASS" ]; then
+            printf 'class=%s; absence record names class=%s - do not treat this condition as clear\n' \
+              "$CEILING_CLASS" "${CEILING_ABSENCE_CLASS:-missing}"
+          else
+            CEILING_ABSENCE_AGE=$(( $(date +%s) - CEILING_ABSENCE_SINCE ))
+            [ "$CEILING_ABSENCE_AGE" -ge 0 ] || CEILING_ABSENCE_AGE=0
+            printf 'class=%s; first_observed_epoch=%s; age=%ss; observations=%s; unchanged wake suppression is active\n' \
+              "$CEILING_CLASS" "$CEILING_ABSENCE_SINCE" "$CEILING_ABSENCE_AGE" \
+              "$CEILING_ABSENCE_OBSERVATIONS"
+          fi
+          ;;
+      esac
+      ;;
+    *)
+      printf 'unreadable class %s - do not treat the standing condition as clear\n' \
+        "${CEILING_CLASS:-missing}"
+      ;;
+  esac
+else
+  printf 'unreadable marker - do not treat the standing condition as clear\n'
+fi
 
 subsection "Direct reports (state/*.meta; state=resting secondmates are not work under way)"
 META_FOUND=0

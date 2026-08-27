@@ -761,6 +761,32 @@ EOF
   pass "an empty fleet reports (none), inactive Telegram receive, and an absent AFK flag"
 }
 
+test_fleet_digest_reports_a_standing_context_ceiling_condition() {
+  local rec root home fakebin out since
+  rec=$(new_world standing-context-ceiling)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  since=$(( $(date +%s) - 25200 ))
+  printf 'unenforced\n' > "$home/state/.context-ceiling-surfaced"
+  printf 'unenforced %s 7\n' "$since" > "$home/state/.context-ceiling-absent-since"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+
+  assert_contains "$out" "Standing context-ceiling condition" \
+    "the startup digest omitted its standing context-ceiling surface"
+  assert_contains "$out" "class=unenforced" \
+    "the startup digest did not name the standing condition's published class"
+  assert_contains "$out" "observations=7" \
+    "the startup digest did not expose how many times the absence persisted"
+  assert_contains "$out" "age=252" \
+    "the startup digest did not expose the standing absence's age"
+
+  pass "session start keeps a suppressed context-ceiling condition visible without a wake"
+}
+
 # Two seats can exist for one home while a vessel is being moved, and attaching
 # to the wrong one looks exactly like attaching to the right one. The digest has
 # to name the vessel it belongs to, and has to say when the status-bar surface
@@ -992,6 +1018,7 @@ test_backlog_compact_tasks_axi_omits_bodies_and_keeps_metadata
 test_backlog_compact_manual_backend_skips_indented_bodies
 test_backlog_compact_tasks_axi_unavailable_uses_manual_fallback
 test_fleet_digest_empty_fleet
+test_fleet_digest_reports_a_standing_context_ceiling_condition
 test_digest_states_which_vessel_this_session_belongs_to
 test_next_step_sources_x_mode_cadence
 test_telegram_receiver_guidance
