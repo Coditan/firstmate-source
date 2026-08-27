@@ -6,7 +6,7 @@
 # description, acceptance criteria, and context, and may adjust other sections
 # when the task genuinely deviates (e.g. working an existing external PR instead
 # of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> [--scout] [--premise] [--herdr-lab]
+# Usage: fm-brief.sh <task-id> <repo-name> [--scout] [--premise|--no-premise] [--herdr-lab]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
@@ -33,6 +33,13 @@
 #   exactly as it replaces {TASK}. The flag must be explicit for the same reason
 #   --herdr-lab is, and briefs made without it carry a loud declaration so an
 #   omitted premise cannot be silent.
+#   --no-premise is that same declaration made deliberately: the caller states
+#   this brief carries no asserted fact, so there is nothing to disprove.
+#   It is for PROGRAMMATIC callers that compose their own task text and cannot be
+#   regenerated after dispatch. The omitted-premise block tells the reader to stop
+#   and have firstmate regenerate the brief, and such a caller has no firstmate to
+#   do that, so declaring the absence is what keeps the reader working.
+#   It is mutually exclusive with --premise.
 # For ship tasks, the definition of done is shaped by the project's delivery mode
 # (data/projects.md via fm-project-mode.sh; see the project-management skill
 # and AGENTS.md task lifecycle):
@@ -85,6 +92,7 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 KIND=ship
 HERDR_LAB=0
 PREMISE=0
+NO_PREMISE=0
 NO_PROJECTS=0
 POS=()
 for a in "$@"; do
@@ -93,6 +101,7 @@ for a in "$@"; do
     --secondmate) KIND=secondmate ;;
     --herdr-lab) HERDR_LAB=1 ;;
     --premise) PREMISE=1 ;;
+    --no-premise) NO_PREMISE=1 ;;
     --no-projects) NO_PROJECTS=1 ;;
     *) POS+=("$a") ;;
   esac
@@ -106,6 +115,16 @@ fi
 
 if [ "$KIND" = secondmate ] && [ "$PREMISE" -eq 1 ]; then
   echo "error: --premise applies only to crewmate ship or scout briefs" >&2
+  exit 1
+fi
+
+if [ "$KIND" = secondmate ] && [ "$NO_PREMISE" -eq 1 ]; then
+  echo "error: --no-premise applies only to crewmate ship or scout briefs" >&2
+  exit 1
+fi
+
+if [ "$PREMISE" -eq 1 ] && [ "$NO_PREMISE" -eq 1 ]; then
+  echo "error: --premise and --no-premise are mutually exclusive; a brief either asserts a fact or declares it carries none" >&2
   exit 1
 fi
 
@@ -275,6 +294,15 @@ That is an assertion made by someone who is not looking at this code.
 BEFORE you act on it, name the single check whose result would show that assertion is WRONG, run that check, and paste its output.
 If it shows the assertion is wrong, do NOT follow this brief literally: carry out what it was actually trying to achieve, and say in your `done:` line what you did instead and why.
 This is one named assertion, not a standing instruction to re-check the rest of the brief.
+EOF
+)
+elif [ "$NO_PREMISE" -eq 1 ]; then
+REPLACE_NOTE="{TASK}"
+PREMISE_SECTION=$(cat <<'EOF'
+# Premise declaration - DECLARED NONE
+**DECLARED NONE:** the caller that scaffolded this brief composed its task text itself and declares that text carries no asserted fact you would act on without re-deriving it.
+There is nothing to disprove here, so there is no disproof step and nothing about it is missing.
+Do not write a disproof step into this brief by hand.
 EOF
 )
 else

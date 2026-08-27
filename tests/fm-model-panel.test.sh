@@ -549,17 +549,16 @@ test_analyst_briefs_share_the_question_and_forbid_peeking() {
   pass "both analysts get the identical question and an explicit independence rule"
 }
 
-# A panel member's question IS an asserted fact it acts on, so every brief the
-# panel scaffolds must carry the premise contract with that question filled in.
-# Scaffolded without it, the brief instead tells the member to append `blocked:`
-# and stop - and `blocked:` is not a terminal event for this panel, so a
-# complying member leaves no report, the panel stands down non-waivably, and
-# every re-run rebuilds the same unguarded brief.
-test_panel_briefs_carry_the_question_as_a_disprovable_premise() {
+# A panel member is handed a QUESTION to derive, not an asserted fact to act on,
+# so every panel brief must carry the DECLARED-none premise state. The undeclared
+# state tells its reader to append `blocked:` and stop, and `blocked:` is not a
+# terminal event for this panel, so a complying member would leave no report and
+# stand the panel down non-waivably with no firstmate to regenerate anything.
+test_panel_briefs_declare_they_carry_no_premise() {
   local home out brief question
   home=$(new_home premise "$TWO_MODELS")
   question="$TMP_ROOT/premise-question.md"
-  printf 'The retry loop is the cause of the stall.\n' > "$question"
+  printf 'Why does the deploy stall?\n' > "$question"
   out=$(run_panel "$home" start --id prem --project "$home/subject" --question-file "$question") \
     || fail "start failed: $out"
 
@@ -572,17 +571,19 @@ test_panel_briefs_carry_the_question_as_a_disprovable_premise() {
   for brief in "$home/data/prem-a/brief.md" "$home/data/prem-b/brief.md" \
     "$home/data/prem-judge/brief.md"; do
     assert_present "$brief" "a panel brief was not scaffolded"
-    assert_grep '# The premise this brief asserts' "$brief" \
-      "a panel brief lost the premise contract"
-    assert_grep 'The retry loop is the cause of the stall.' "$brief" \
-      "a panel brief left its premise slot unfilled"
+    assert_grep '# Premise declaration - DECLARED NONE' "$brief" \
+      "a panel brief does not declare that it carries no premise"
     assert_no_grep '# Premise declaration - NONE ASSERTED' "$brief" \
-      "a panel brief declares no premise and tells its member to stop on one"
+      "a panel brief left its premise state undeclared"
     assert_no_grep 'append `blocked: brief asserts a fact but was scaffolded without --premise`' "$brief" \
       "a panel brief tells its member to stop with a status the panel never treats as terminal"
-    assert_no_grep '{PREMISE}' "$brief" "a panel brief left an unusable premise placeholder"
+    # The question is the thing to DERIVE, so it must not be restated as an
+    # assertion to disprove. It still reaches the member inside the task text.
+    assert_no_grep '# The premise this brief asserts' "$brief" \
+      "a panel brief reframed its question as an asserted premise"
+    assert_grep 'Why does the deploy stall?' "$brief" "a panel brief lost the question"
   done
-  pass "every panel brief carries the question as a disprovable premise"
+  pass "every panel brief declares it carries no premise to disprove"
 }
 
 test_judge_waits_for_every_report_then_gets_both() {
@@ -1208,7 +1209,7 @@ test_identical_analyst_models_refuse
 test_same_model_through_two_harnesses_refuses
 test_reduced_form_is_named_not_a_panel
 test_analyst_briefs_share_the_question_and_forbid_peeking
-test_panel_briefs_carry_the_question_as_a_disprovable_premise
+test_panel_briefs_declare_they_carry_no_premise
 test_judge_waits_for_every_report_then_gets_both
 test_terminal_member_without_a_report_stands_the_panel_down
 test_gone_analyst_with_nothing_stands_the_panel_down

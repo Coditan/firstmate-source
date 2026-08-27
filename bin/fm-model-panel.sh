@@ -648,41 +648,32 @@ EOF
 }
 
 # Scaffold a scout brief through the shared scaffold, then replace its {TASK}
-# and {PREMISE} placeholders with the composed panel task text and the panel
-# question. The question IS the asserted fact a panel member acts on, so the
-# brief is scaffolded with --premise: the unguarded scaffold's absent-premise
-# declaration tells the reader to append `blocked:` and stop, which is not a
-# terminal event here and would stand the whole panel down. Failing loudly when
-# a placeholder survives keeps this honest if the scaffold ever changes shape.
+# placeholder with the composed panel task text. Failing loudly when the
+# placeholder is absent keeps this honest if the scaffold ever changes shape.
+# The brief is scaffolded with --no-premise: a panel member is handed a QUESTION
+# to derive, not an asserted fact to act on, so there is no premise to disprove.
+# Declaring that is not the same as omitting it. The default omitted state tells
+# the reader to append `blocked:` and stop, which is not a terminal event here
+# and would stand the whole panel down with no firstmate to regenerate anything.
 scaffold_scout_brief() {
-  local id=$1 repo=$2 task_file=$3 premise_file=$4 brief placeholder
+  local id=$1 repo=$2 task_file=$3 brief
   brief="$DATA/$id/brief.md"
-  "$FM_ROOT/bin/fm-brief.sh" "$id" "$repo" --scout --premise >/dev/null \
+  "$FM_ROOT/bin/fm-brief.sh" "$id" "$repo" --scout --no-premise >/dev/null \
     || die "could not scaffold the brief for $id"
-  awk -v taskfile="$task_file" -v premisefile="$premise_file" '
-    function emit(file,   line) {
-      while ((getline line < file) > 0) print line
-      close(file)
-    }
-    $0 == "{TASK}" && !task_filled {
-      emit(taskfile)
-      task_filled = 1
-      next
-    }
-    $0 == "{PREMISE}" && !premise_filled {
-      emit(premisefile)
-      premise_filled = 1
+  awk -v taskfile="$task_file" '
+    $0 == "{TASK}" && !filled {
+      while ((getline line < taskfile) > 0) print line
+      close(taskfile)
+      filled = 1
       next
     }
     { print }
   ' "$brief" > "$brief.tmp"
   mv "$brief.tmp" "$brief"
-  # Only a WHOLE line is a placeholder; the scaffold's Herdr and premise
-  # declarations mention the tokens inline and must not count as unfilled.
-  for placeholder in '{TASK}' '{PREMISE}'; do
-    ! grep -Fxq "$placeholder" "$brief" \
-      || die "the scout scaffold for $id still has an unfilled $placeholder line; the brief scaffold changed shape"
-  done
+  # Only a WHOLE line of "{TASK}" is the placeholder; the scaffold's Herdr
+  # declaration mentions the token inline and must not count as unfilled.
+  ! grep -Fxq '{TASK}' "$brief" \
+    || die "the scout scaffold for $id still has an unfilled {TASK} line; the brief scaffold changed shape"
 }
 
 dispatch_scout() {
@@ -887,11 +878,11 @@ $identity_b"
     task_b=$(panel_mktemp)
     compose_analyst_task "$task_a" A "$question_path" "$report_a" "$report_b" "$form"
     compose_analyst_task "$task_b" B "$question_path" "$report_b" "$report_a" "$form"
-    scaffold_scout_brief "$id_a" "$repo_label" "$task_a" "$question_path"
-    scaffold_scout_brief "$id_b" "$repo_label" "$task_b" "$question_path"
+    scaffold_scout_brief "$id_a" "$repo_label" "$task_a"
+    scaffold_scout_brief "$id_b" "$repo_label" "$task_b"
   else
     compose_analyst_task "$task_a" A "$question_path" "$report_a" "" "$form"
-    scaffold_scout_brief "$id_a" "$repo_label" "$task_a" "$question_path"
+    scaffold_scout_brief "$id_a" "$repo_label" "$task_a"
   fi
 
   printf 'panel: %s form=%s project=%s\n' "$panel_id" "$form" "$project"
@@ -1319,7 +1310,7 @@ cmd_advance() {
   trap panel_cleanup EXIT
   task_judge=$(panel_mktemp)
   compose_judge_task "$task_judge" "$question_path" "$report_judge" "$form" "$report_a" "$report_b" "$unfinished"
-  scaffold_scout_brief "$id_judge" "$(basename "$project")" "$task_judge" "$question_path"
+  scaffold_scout_brief "$id_judge" "$(basename "$project")" "$task_judge"
   dispatch_scout "$id_judge" "$project" "$profile_judge" \
     || die "could not dispatch the judge ($id_judge); every analyst report is still in place, so this is safe to retry"
   if [ -n "$superseded_of" ]; then

@@ -273,8 +273,8 @@ test_premise_omission_is_loud_for_ship_and_scout() {
 }
 
 # The scaffold's stdout line is the only cue firstmate gets that a SECOND placeholder
-# must be filled before dispatch: nothing downstream catches an unfilled {PREMISE}
-# (fm-model-panel.sh only guards a whole-line {TASK}). Pin both renderings.
+# must be filled before dispatch, and filling it is a manual step on the path where
+# a human scaffolds a brief and replaces the slots by hand. Pin both renderings.
 test_premise_scaffold_stdout_names_every_placeholder() {
   local home id kind out
   home="$TMP_ROOT/premise-stdout-home"
@@ -301,6 +301,82 @@ test_premise_scaffold_stdout_names_every_placeholder() {
       "$kind scaffold cued a premise placeholder it did not emit"
   done
   pass "fm-brief.sh: the scaffold's stdout names every placeholder still to be filled"
+}
+
+# The premise slot has exactly three states and a brief must always be in one of
+# them: a premise asserted, no premise DECLARED by the caller, or the omission
+# left undeclared. Only the undeclared state tells the reader to stop, so a brief
+# that is in none of them has quietly lost the whole contract.
+test_every_brief_declares_exactly_one_premise_state() {
+  local home id kind brief states
+  home="$TMP_ROOT/premise-states-home"
+  mkdir -p "$home/data"
+  for kind in ship scout; do
+    local -a scout_flag=()
+    [ "$kind" = ship ] || scout_flag=(--scout)
+    for id in asserted declared undeclared; do
+      local -a flag=()
+      case "$id" in
+        asserted) flag=(--premise) ;;
+        declared) flag=(--no-premise) ;;
+      esac
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "premise-state-$kind-$id" firstmate \
+        "${scout_flag[@]+"${scout_flag[@]}"}" "${flag[@]+"${flag[@]}"}" >/dev/null 2>&1
+      brief="$home/data/premise-state-$kind-$id/brief.md"
+      assert_present "$brief" "$kind/$id brief was not scaffolded"
+      states=$(grep -c -e '# The premise this brief asserts' \
+        -e '# Premise declaration - DECLARED NONE' \
+        -e '# Premise declaration - NONE ASSERTED' "$brief" || true)
+      [ "$states" = 1 ] \
+        || fail "$kind/$id brief declares $states premise states, expected exactly 1"
+    done
+
+    brief="$home/data/premise-state-$kind-declared/brief.md"
+    assert_grep '# Premise declaration - DECLARED NONE' "$brief" \
+      "$kind --no-premise brief lost the declared-none block"
+    assert_no_grep '# Premise declaration - NONE ASSERTED' "$brief" \
+      "$kind --no-premise brief kept the undeclared stop-and-report block"
+    assert_no_grep '{PREMISE}' "$brief" \
+      "$kind --no-premise brief left an unusable premise slot"
+    # Scope the stop assertions to the declared block itself: the brief's
+    # unrelated Herdr declaration legitimately carries its own stop wording.
+    local block="$home/data/premise-state-$kind-declared/premise-block.md"
+    awk '/^# Premise declaration - DECLARED NONE$/ { inblock = 1; next }
+         inblock && /^# / { exit }
+         inblock { print }' "$brief" > "$block"
+    assert_grep 'Do not write a disproof step into this brief by hand.' "$block" \
+      "$kind --no-premise brief lost the ban on hand-written disproof wording"
+    # Removing the stop is the whole point: a programmatic caller has no
+    # firstmate to regenerate a brief for a member it already dispatched.
+    assert_no_grep 'blocked:' "$block" \
+      "$kind --no-premise block still tells its reader to stop"
+    assert_no_grep 'regenerate' "$block" \
+      "$kind --no-premise block still asks for a regeneration no programmatic caller can do"
+    assert_no_grep 'and stop' "$block" \
+      "$kind --no-premise block still tells its reader to stop"
+  done
+  pass "fm-brief.sh: every scaffold declares exactly one of the three premise states"
+}
+
+test_premise_flags_are_mutually_exclusive() {
+  local home status
+  home="$TMP_ROOT/premise-exclusive-home"
+  mkdir -p "$home/data"
+  status=0
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" premise-both firstmate --premise --no-premise \
+    >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "--premise with --no-premise must be rejected"
+  assert_absent "$home/data/premise-both/brief.md" \
+    "rejected --premise --no-premise still wrote a brief"
+
+  status=0
+  FM_HOME="$home" FM_SECONDMATE_CHARTER=ops \
+    "$ROOT/bin/fm-brief.sh" no-premise-secondmate --secondmate firstmate --no-premise \
+    >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "secondmate --no-premise must be rejected"
+  assert_absent "$home/data/no-premise-secondmate/brief.md" \
+    "rejected secondmate --no-premise still wrote a brief"
+  pass "fm-brief.sh: --no-premise refuses to combine with --premise or a charter"
 }
 
 test_premise_is_rejected_for_secondmate_charters() {
@@ -550,6 +626,8 @@ test_herdr_lab_contract_applies_to_scouts_but_not_secondmates
 test_premise_step_is_narrow_and_repair_worded
 test_premise_omission_is_loud_for_ship_and_scout
 test_premise_scaffold_stdout_names_every_placeholder
+test_every_brief_declares_exactly_one_premise_state
+test_premise_flags_are_mutually_exclusive
 test_premise_is_rejected_for_secondmate_charters
 test_secondmate_no_projects_charter
 test_pause_verb_override_renders_all_brief_scaffolds
