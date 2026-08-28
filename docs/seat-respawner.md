@@ -58,8 +58,20 @@ Two operating constraints bind wherever it is started.
 The keeper must run on a terminal socket separate from the one it watches, because a keeper sharing that socket dies with the thing it revives.
 It restores a session and its windows on a target server that survived, and it deliberately refuses to create a new target server: total server loss is not what this stopgap covers.
 
-Its arguments and environment are owned by the script's own header.
-`tests/fm-seat-keeper.test.sh` covers the detector: that a named dead-seat verdict restores the seat, that one reading is not enough, that a healthy verdict and a listener restart both leave the seat alone, and that an unrecognised verdict is refused and logged.
+The keeper obeys the same declarations the respawner obeys, because a home running it as the stand-in for the unit must not lose them.
+While `state/.seat-stay-down` exists it clears its retry episode and leaves the seat down.
+Restores are bounded the same way too: `FM_SEAT_KEEPER_MAX_ATTEMPTS` attempts for one delivery condition, backing off from `FM_SEAT_KEEPER_RETRY_SEC` up to `FM_SEAT_KEEPER_MAX_BACKOFF`, then a give-up marker and one high-severity evidence record through `bin/fm-finding.sh` instead of relaunching a seat that can never come up forever.
+The condition a restore episode counts is the delivery verdict's stable key, owned by `bin/fm-delivery-lib.sh` and shared with the respawner, so a wake arriving between two readings cannot look like a different condition.
+One keeper runs per state directory: a second hand-started keeper finds the live one's identity-matched lock record and refuses rather than racing it.
+
+Two limits of this stopgap are known, deliberate, and not fixed here.
+The keeper does not read `config/seat-launch-command`, and its default relaunch command starts `claude`.
+A home whose primary seat is Codex, OpenCode, Pi, Grok, or any other tool must set `FM_SEAT_KEEPER_SEAT_COMMAND`, or the keeper brings back the wrong seat.
+The keeper also assumes the target terminal server uses `base-index 0`.
+On a server configured with `base-index 1` it logs `launch refused: <session>:1 exists as 'bash', not firstmate` every cycle and never restores the seat.
+
+Its arguments and environment are owned by the script's own header, which states both limits again where someone reading the script meets them.
+`tests/fm-seat-keeper.test.sh` covers the behaviour: that a named dead-seat verdict restores the seat, that one reading is not enough, that a wake count changing between two readings is still one condition, that a healthy verdict and a listener restart both leave the seat alone, that an unrecognised verdict is refused and logged, that a declared stay-down is honoured and released, that the attempt bound gives up with a finding, and that a second keeper refuses to run.
 
 This is a stopgap, not a replacement for the respawner.
 A home that gains a working per-user service manager should install the unit above and stop hand-starting the keeper.

@@ -32,6 +32,8 @@ LOCKDIR="$STATE/.seat-respawner.lock"
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-delivery-lib.sh
+. "$SCRIPT_DIR/fm-delivery-lib.sh"
 
 num_or_default() {  # <value> <default>
   case "$1" in ''|*[!0-9]*|0) printf '%s\n' "$2" ;; *) printf '%s\n' "$1" ;; esac
@@ -149,23 +151,6 @@ launch_in_tmux() {  # <reason>
   "$TMUX_CMD" -S "$socket" new-window -n firstmate "$shell_command" >/dev/null
 }
 
-condition_key() {  # <status-line>
-  local status=$1 condition=$1
-  case "$status" in
-    undeliverable:*)
-      condition=${status#undeliverable: listener pid }
-      case "$condition" in
-        *" is up with "*" wake(s) pending, but "*)
-          condition=${condition#* is up with }
-          condition=${condition#* wake(s) pending, but }
-          condition="undeliverable:$condition"
-          ;;
-      esac
-      ;;
-  esac
-  printf '%s' "$condition" | cksum | awk '{print $1 ":" $2}'
-}
-
 read_attempt_record() {  # <key>
   local want=$1 key count next
   key=$(kv_get "$ATTEMPTS" key 2>/dev/null || true)
@@ -253,7 +238,7 @@ one_cycle() {
     clear_episode
     return 0
   fi
-  key=$(condition_key "$status_line")
+  key=$(fm_delivery_condition_key "$status_line")
   read_attempt_record "$key"
   count=$FM_SEAT_ATTEMPT_COUNT
   next=$FM_SEAT_ATTEMPT_NEXT

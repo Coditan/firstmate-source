@@ -243,7 +243,8 @@ family_for_basename() {
       ;;
     fm-bosun.test.sh|fm-context-reset.test.sh|fm-daemon.test.sh|\
     fm-delivery.test.sh|fm-event-batch.test.sh|fm-guard-stale-banner.test.sh|\
-    fm-journal.test.sh|fm-nudge.test.sh|fm-seat-respawner.test.sh|fm-supervision-events.test.sh|\
+    fm-journal.test.sh|fm-nudge.test.sh|fm-seat-keeper.test.sh|\
+    fm-seat-respawner.test.sh|fm-supervision-events.test.sh|\
     fm-turnend-guard.test.sh|\
     fm-wake-daemon-lifecycle-e2e.test.sh|fm-wake-queue.test.sh|\
     fm-watch-run-bounded.test.sh|fm-watch-triage.test.sh|\

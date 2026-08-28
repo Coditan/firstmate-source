@@ -317,3 +317,29 @@ fm_delivery_report() {  # <state> <delivery-path> [grace] [home]
     "${FM_DELIVERY_ENDPOINT_HARNESS:-unknown harness}"
   return 0
 }
+
+# One stable key for the CONDITION a verdict above names, with the parts that
+# change between two readings of the same condition removed: the listener pid,
+# the pending wake count, and the beat age.  A supervisor that counts consecutive
+# readings, or attempts against one episode, must count the guarded condition and
+# not byte-identical prose, and the grammar those readings are written in is
+# owned here.  Every consumer reads this key rather than re-deriving the shape of
+# the lines above, because a second derivation drifts from the first silently.
+fm_delivery_condition_key() {  # <status-line>
+  local status=$1 condition=$1
+  case "$status" in
+    undeliverable:*)
+      condition=${status#undeliverable: listener pid }
+      case "$condition" in
+        *" is up with "*" wake(s) pending, but "*)
+          condition=${condition#* is up with }
+          condition=${condition#* wake(s) pending, but }
+          condition="undeliverable:$condition"
+          ;;
+      esac
+      ;;
+    down:*) condition='down: no live identity-matched delivery listener for this home' ;;
+    stalled:*) condition='stalled: delivery listener beacon aged out' ;;
+  esac
+  printf '%s' "$condition" | cksum | awk '{print $1 ":" $2}'
+}
