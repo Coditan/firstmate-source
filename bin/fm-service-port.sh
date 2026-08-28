@@ -85,6 +85,13 @@
 #                                onto that address with `tailscale serve`. Links
 #                                still use the tailnet name or address, because
 #                                that is where the service genuinely answers.
+#                                That publication is node-wide and survives both
+#                                this process and a reboot, so the consumer
+#                                INHERITS the obligation to take it down with
+#                                fm_tailnet_serve_withdraw when its service
+#                                stops; bin/fm-tailnet-serve-lib.sh owns that
+#                                mechanism and states what a caller must have
+#                                proved before touching a port.
 #               loopback         no reach off this machine was established.
 #   seat        the deterministic preferred port for this service in this home.
 #   port        the port actually bound (absent under --check).

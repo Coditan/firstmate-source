@@ -976,6 +976,33 @@ assert_contains "$(cat "$FM_TEST_TS_SERVE_LOG")" "--http=$u_port off" \
   "the withdrawal names the port it published"
 pass "stopping a proxied board takes its tailnet endpoint down with it"
 
+# A withdrawal that does not take is the exact residue this mechanism exists to
+# prevent, and `stop` replaces this process, so the moment before it is the only
+# one in which it can be said at all.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_Y=$(make_home "$TMP_ROOT/vessel-y")
+make_serving_lavish "$HOME_Y"
+y_out=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_Y" FM_SERVICE_PORT_RANGE=4826-4827 \
+  "$ROOT/bin/fm-lavish.sh" "$HOME_Y/.lavish/board.html" 2>/dev/null)
+y_port=$(printf '%s\n' "$y_out" | sed -n 's|.*://[^:]*:\([0-9][0-9]*\)/session/.*|\1|p' | head -1)
+[ -n "$y_port" ] || fail "the proxied open should emit a port, got: $y_out"
+grep -qx "$y_port" "$FM_TEST_TS_SERVE_STATE" || fail "the open should have published $y_port"
+
+# Serve can still be read but no longer mutated, so the off command runs and the
+# port stays published, which is the one answer that means the withdrawal failed
+# rather than that there was nothing to withdraw.
+y_stop=$(FM_TEST_TS_MODE=userspace FM_TEST_TS_SERVE=broken FM_HOME="$HOME_Y" \
+  FM_SERVICE_PORT_RANGE=4826-4827 "$ROOT/bin/fm-lavish.sh" stop 2>&1)
+expect_code 0 "$?" "a failed withdrawal must be reported, never turned into a refusal to stop"
+assert_contains "$y_stop" "could not be withdrawn" \
+  "a tailnet endpoint left standing must be said out loud, not left for the captain to find"
+assert_contains "$y_stop" "$y_port" "the report names the port still answering"
+assert_contains "$y_stop" "stopped" "the board really did stop, and the run says so"
+grep -qx "$y_port" "$FM_TEST_TS_SERVE_STATE" \
+  || fail "this case only means anything while the withdrawal genuinely did not take"
+pass "a withdrawal that did not take is reported rather than left silent"
+
 # The promise was never "bind this address". It was "never hand him a link that
 # opens nowhere", so the branch with no proxy at all has to keep saying so.
 : > "$FM_TEST_TS_SERVE_STATE"
