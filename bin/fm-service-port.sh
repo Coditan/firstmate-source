@@ -70,8 +70,14 @@
 #               a reachable link target under tailnet-proxied, because the
 #               published proxy answers on it.
 #   dnsname     the hostname a link may use. Set ONLY when it resolves over IPv4
-#               to addr, so a consumer never writes a name into a URL without
-#               that name having been checked. Empty means "use addr".
+#               to tailaddr, this node's own tailnet address, so a consumer
+#               never writes a name into a URL without that name having been
+#               checked. Empty means "use the address the link would otherwise
+#               name": tailaddr under tailnet-proxied, where addr is loopback
+#               and naming it would emit a link that opens nowhere, and addr
+#               under tailnet and loopback, where the two are the same answer.
+#               Cleared whenever no reach off this machine was established, so a
+#               name is never offered on the loopback degrade.
 #   reachability
 #               tailnet          the address is this node's own and was bound.
 #               tailnet-proxied  the node has a tailnet address it cannot bind,
@@ -298,10 +304,23 @@ fi
 # its link host before it ever claims a port, and would otherwise probe an
 # address nothing can listen on.
 
+# Only exit 4 answers this question. The probe separates an address that cannot
+# be bound here from a bind that failed for a port-scoped reason - EPERM,
+# ENOTSUP, fd pressure - which says nothing about the address either way, and
+# exit 2 is a usage error rather than a verdict at all. Reading any non-zero as
+# unbindable would rebind a healthy kernel-mode vessel on loopback, publish a
+# node-wide serve entry it never needed, and tell it its address fails
+# EADDRNOTAVAIL in userspace mode, which would simply not be true. Anything but
+# 4 falls through to the window walk, which reports what it actually met.
+
 if [ "$REACHABILITY" = tailnet ]; then
   if ! command -v node >/dev/null 2>&1 || [ ! -f "$PROBE" ]; then
     : # Nothing to check with. The window walk below still reports honestly.
-  elif ! node "$PROBE" addr "$ADDR" >/dev/null 2>&1; then
+  else
+    node "$PROBE" addr "$ADDR" >/dev/null 2>&1
+    ADDR_PROBE_STATUS=$?
+  fi
+  if [ "${ADDR_PROBE_STATUS:-0}" -eq 4 ]; then
     if fm_tailnet_serve_available; then
       REACHABILITY=tailnet-proxied
       ADDR=127.0.0.1
