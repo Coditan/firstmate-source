@@ -42,3 +42,24 @@ Do not test this by killing the live firstmate seat.
 This does not replace the watcher or delivery listener.
 It also does not repair a missing delivery listener, a broken findings surface, a missing launch command, or a non-tmux endpoint.
 Those failures are logged under `state/.seat-respawner.log` and remain operator-visible rather than being guessed past.
+
+## Container stopgap: `bin/fm-seat-keeper.sh`
+
+The respawner above needs a per-user service manager to run it.
+A home inside a container often has none: `systemctl --user` reports `offline`, so nothing survives to notice a dead seat, and a restart comes up with a healthy-looking terminal and no seat at all.
+`bin/fm-seat-keeper.sh` is the stopgap for exactly that home, hosted in a terminal instead of a unit.
+
+It reads the same source of truth: `bin/fm-delivery-service.sh status`, whose verdicts are owned by [wake-delivery.md](wake-delivery.md).
+It never uses a socket pathname or a process-name match as its seat-death detector, because a name match has already reported another account's unrelated process as this fleet's wedged run.
+Two readings of the same guarded condition are required before it acts, and an unrecognised verdict resets that evidence and is logged rather than guessed past.
+A `down:` verdict alone is not seat death: it becomes one only when an independent terminal reading also says the target session is absent, because a listener restart looks identical from the verdict alone.
+
+Two operating constraints bind wherever it is started.
+The keeper must run on a terminal socket separate from the one it watches, because a keeper sharing that socket dies with the thing it revives.
+It restores a session and its windows on a target server that survived, and it deliberately refuses to create a new target server: total server loss is not what this stopgap covers.
+
+Its arguments and environment are owned by the script's own header.
+`tests/fm-seat-keeper.test.sh` covers the detector: that a named dead-seat verdict restores the seat, that one reading is not enough, that a healthy verdict and a listener restart both leave the seat alone, and that an unrecognised verdict is refused and logged.
+
+This is a stopgap, not a replacement for the respawner.
+A home that gains a working per-user service manager should install the unit above and stop hand-starting the keeper.
