@@ -108,6 +108,7 @@ The rule is that no URL is emitted implying reach the vessel has not established
   There is deliberately no silent loopback downgrade here, because that would reproduce the original bug somewhere new.
 - **The address cannot be bound at all** - the vessel says so and is served anyway, over a published proxy; see "A tailnet address that cannot be bound" below.
   When even that is unavailable the allocator degrades to `reachability=loopback` carrying the same diagnosis, because a proxy that could not be published is not reach.
+  The wrapper says `this vessel is not reachable off this machine (<reason>) - this board opens only on this machine.` on that degrade, not the no-tailnet sentence above, because this node does have a tailnet address and sending the reader hunting a missing one is the misdirection the reason lines exist to avoid.
   It is never reported as a port collision, because that is a network-interface problem and reporting it as contention would send the reader hunting the wrong thing.
   Only address-scoped errnos (`EADDRNOTAVAIL`, `EAFNOSUPPORT`, `EINVAL`) count as this, and they are the only ones that end the walk early, since no port on that address could have worked.
   A port-scoped refusal such as `EACCES` on a privileged port is neither a collision nor an unusable address: the walk continues past it, and only if nothing in the window binds does the allocator report that some candidates were held and others refused.
@@ -132,6 +133,9 @@ Three facts this rests on, each measured rather than reasoned about, with the me
   So the names the wrapper already allows are the names the proxy needs, and no wildcard is introduced.
 - The proxy is withdrawn when the board is stopped.
   Left behind, this vessel's own tailnet name answers `502` on that port, which reads as a broken board rather than a closed one.
+- The proxy is published only for a run that will LEAVE a board serving, which the wrapper states to the allocator with `--serving`.
+  `open`, `poll`, and `server` do; `end` closes the last session and lets the server stop itself, so publishing for it would manufacture a route to nothing that outlives the process and the machine's next reboot.
+  A port some earlier run already published still reads as `tailnet-proxied` without `--serving`, because reading a route is not making one.
 
 `bin/fm-tailnet-serve-lib.sh` is the one owner of publishing and withdrawing.
 Serve configuration belongs to the tailscale node, which every UNIX account on this machine shares, so a port is only ever withdrawn where its ownership has already been proved by the claim token, or where nothing is serving on it at all.

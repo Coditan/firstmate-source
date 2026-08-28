@@ -221,6 +221,17 @@ case "$SUBCOMMAND" in
   *) NEEDS_PORT=0 ;;
 esac
 
+# Needing a port and leaving a board serving on it are different questions, and
+# only the second may publish a route onto the tailnet. `open`, `poll`, and
+# `server` all leave lavish-axi's server up and a reviewer able to reach it.
+# `end` closes the last session and lets that server stop itself, so a route
+# published for it would point at nothing and would survive this process, this
+# vessel, and the machine's next reboot.
+case "$SUBCOMMAND" in
+  open|poll|server) LEAVES_SERVER=1 ;;
+  *) LEAVES_SERVER=0 ;;
+esac
+
 # The vessel's own AXI prefix wins over whatever PATH resolves, so a home always
 # drives its own installed lavish-axi. Resolved after the wrapper's own flags so
 # --fm-help and the share refusal still work on a vessel that has no lavish-axi.
@@ -333,6 +344,18 @@ port_answers_on() {
 
 port_answers() {
   port_answers_on "$ADDR" "$1"
+}
+
+# The other half of the ownership rule: a port nothing is serving on may be
+# withdrawn by anyone, so this has to be sure of BOTH listeners. A publication
+# always forwards to loopback, while this run may have resolved the tailnet
+# address to bind, and after a node regains kernel-mode networking those are
+# different places. Asking only the bind address would call a co-hosted vessel's
+# live proxied board silent and take it off the tailnet.
+nothing_serves_on() {
+  port_answers "$1" && return 1
+  port_answers_on 127.0.0.1 "$1" && return 1
+  return 0
 }
 
 recorded_port() {
@@ -449,6 +472,7 @@ PORT=""
 if [ "$NEEDS_PORT" -eq 1 ]; then
   ALLOCATE=("$SCRIPT_DIR/fm-service-port.sh" lavish)
   [ -z "$MINE" ] || ALLOCATE+=(--mine "$MINE")
+  [ "$LEAVES_SERVER" -eq 0 ] || ALLOCATE+=(--serving)
   if ! RECORD=$("${ALLOCATE[@]}" 2>&1); then
     printf '%s\n' "$RECORD" >&2
     [ -z "$RELOCATE_FROM" ] \
@@ -507,7 +531,7 @@ if [ "$SUBCOMMAND" = stop ] && [ "$EXPLICIT_PORT" -eq 1 ]; then
     if port_answers "$EXPLICIT_PORT_VALUE"; then
       die "the board server on $ADDR port $EXPLICIT_PORT_VALUE is not one this vessel can prove is its own, so it was not stopped; a co-hosted vessel serves on this same address, and only the home that opened a board may stop it" 7
     fi
-    withdraw_proxy "$EXPLICIT_PORT_VALUE"
+    nothing_serves_on "$EXPLICIT_PORT_VALUE" && withdraw_proxy "$EXPLICIT_PORT_VALUE"
     note "no review-board server owned by this vessel is running on $ADDR port $EXPLICIT_PORT_VALUE; nothing to stop"
     exit 0
   fi
@@ -518,7 +542,7 @@ elif [ "$SUBCOMMAND" = stop ] && [ -z "$PROVEN" ]; then
   # published for a board of its own. So the same proof the explicit --port
   # branch applies is required: a publication is only withdrawn where nothing is
   # serving behind it at all.
-  port_answers "$PORT" || withdraw_proxy "$PORT"
+  nothing_serves_on "$PORT" && withdraw_proxy "$PORT"
   note "no review-board server owned by this vessel is running on $ADDR; nothing to stop"
   exit 0
 fi

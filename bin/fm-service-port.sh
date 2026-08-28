@@ -28,10 +28,11 @@
 # (the vessel really is reachable from the captain's devices), so it is named
 # and served on its own terms: reachability=tailnet-proxied, the port bound on
 # loopback, and that port published onto the tailnet address with
-# `tailscale serve` (bin/fm-tailnet-serve-lib.sh owns that mechanism).
+# `tailscale serve` (bin/fm-tailnet-serve-lib.sh owns that mechanism) for a
+# caller that said with --serving it will leave a service listening there.
 #
 # Usage:
-#   fm-service-port.sh <service> [--mine <port>]... [--check]
+#   fm-service-port.sh <service> [--mine <port>]... [--serving] [--check]
 #
 #   <service>   lowercase slug naming the service, e.g. lavish
 #   --mine      a port the CALLER has already proved it owns and is still using.
@@ -39,6 +40,15 @@
 #               you are yourself listening on would report a false collision.
 #               The ownership proof belongs to the caller; this script does not
 #               and cannot verify it.
+#   --serving   this run WILL leave a service listening on the returned port.
+#               It is the only thing that authorises publishing a proxy under
+#               reachability=tailnet-proxied, and it is the caller's statement to
+#               make because only the caller knows what it is about to run. A
+#               publication is node-wide and survives a reboot, so a run that
+#               closes a service, or only inspects one, must not leave a route
+#               pointing at a port nothing answers on. Without it an ALREADY
+#               published port is still reported as tailnet-proxied, because that
+#               reads a route somebody else established rather than making one.
 #   --check     resolve identity and reachability only. No bind is attempted and
 #               no record is written, so no port is claimed: the output carries
 #               seat= (the deterministic preference) and no port= at all.
@@ -138,22 +148,29 @@ die() {
 
 usage() {
   cat <<'EOF'
-Usage: fm-service-port.sh <service> [--mine <port>]... [--check]
+Usage: fm-service-port.sh <service> [--mine <port>]... [--serving] [--check]
 
 Prints key=value lines describing this vessel's reachable address and a port it
 actually bound for <service>. --check resolves identity and reachability only
-and claims no port. See the script header for the full contract.
+and claims no port. --serving states that this run will leave a service
+listening, which is what authorises publishing a proxy. See the script header
+for the full contract.
 EOF
 }
 
 SERVICE=""
 CHECK_ONLY=0
+SERVING=0
 MINE=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --check)
       CHECK_ONLY=1
+      shift
+      ;;
+    --serving)
+      SERVING=1
       shift
       ;;
     --mine)
@@ -444,14 +461,25 @@ fi
 # published port and the loopback port are the same number so a consumer's own
 # link, which carries its bound port, answers unchanged. A failure here is not
 # reported as reach, because it is not reach.
+#
+# And only for a caller that said it will leave a service listening. A
+# publication belongs to the whole tailscale node and outlives this process and
+# the machine's next reboot, so a run that closes a service or merely inspects
+# one would otherwise manufacture a permanent route to a port nothing answers
+# on. A port somebody else already published is a different matter: reading that
+# route is not making one, so it is still reported as the reach it is.
 
 if [ "$REACHABILITY" = tailnet-proxied ]; then
-  if fm_tailnet_serve_publish "$PORT"; then
-    :
-  else
+  if [ "$SERVING" -eq 1 ]; then
+    if ! fm_tailnet_serve_publish "$PORT"; then
+      REACHABILITY=loopback
+      DNSNAME=""
+      add_reason "publishing port $PORT onto $TAILADDR with tailscale serve failed, so this board is reachable only on this machine"
+    fi
+  elif ! fm_tailnet_serve_published "$PORT"; then
     REACHABILITY=loopback
     DNSNAME=""
-    add_reason "publishing port $PORT onto $TAILADDR with tailscale serve failed, so this board is reachable only on this machine"
+    add_reason "port $PORT is not published onto $TAILADDR and this run was not told it would leave a service listening on it, so no route was made and nothing here is reachable off this machine"
   fi
 fi
 
