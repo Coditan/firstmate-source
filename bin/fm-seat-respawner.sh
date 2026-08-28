@@ -303,9 +303,38 @@ deliver_first_turn() {
     unmeasured)
       return 0 ;;
   esac
+  # The pane's own address, established before the deadline test below because
+  # that test now asks whether the pane is still there.
+  local FM_TMUX_SERVER_IDENTITY=$server FM_TMUX_COMMAND=$TMUX_CMD
+  export FM_TMUX_SERVER_IDENTITY FM_TMUX_COMMAND
+
   # Bounded, and abandoned out loud. A first turn that never lands must not be
   # retried forever in silence, and the absence keeps being reported either way.
+  #
+  # THE ONE CASE THE DEADLINE MUST NOT END. A pane that was typed into and is
+  # still there holds a live agent part-way through its session start. Retiring
+  # the record for it would release the launch hold, and the very next cycle
+  # would find presence still absent and delivery still undeliverable and open a
+  # SECOND seat beside the live one - the orphan this record exists to prevent,
+  # arriving through the deadline rather than through a verdict. So the hold
+  # keeps standing while both facts hold, and nothing is spent by waiting: it
+  # consumes no launch attempt, the presence arm above still retires the record
+  # the moment any seat takes this home, and the confident-absence branch below
+  # still retires it the moment the pane goes. Only a CONFIDENT yes holds; an
+  # unreachable backend falls through and is abandoned as before, because a hold
+  # on a reading nobody could take is a hold on nothing.
   if [ "$age" -ge "$FIRST_TURN_DEADLINE" ]; then
+    if [ -n "$submitted" ] && [ -n "$pane" ]; then
+      rc=0
+      fm_backend_target_exists tmux "$pane" || rc=$?
+      if [ "$rc" -eq 0 ]; then
+        if [ -z "$(kv_get "$FIRST_TURN" held 2>/dev/null || true)" ]; then
+          first_turn_mark held || true
+          log "first turn held past ${age}s: pane $pane was given its turn and is still open; not launching beside it"
+        fi
+        return 0
+      fi
+    fi
     rm -f -- "$FIRST_TURN"
     if [ -n "$submitted" ]; then
       log "first turn abandoned after ${age}s: pane $pane was given its turn and never took this home's lock"
@@ -316,8 +345,6 @@ deliver_first_turn() {
   fi
   [ -n "$pane" ] || { rm -f -- "$FIRST_TURN"; return 0; }
 
-  local FM_TMUX_SERVER_IDENTITY=$server FM_TMUX_COMMAND=$TMUX_CMD
-  export FM_TMUX_SERVER_IDENTITY FM_TMUX_COMMAND
   rc=0
   fm_backend_target_exists tmux "$pane" || rc=$?
   # Only a CONFIDENT absence retires the record. Every other non-zero answer
