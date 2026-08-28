@@ -41,6 +41,11 @@ exit "${FM_TEST_READING_EXIT:-0}"
 EOF
 chmod +x "$FAKE"
 
+# Every fixture carries a stall reading, because every real reading does: the
+# reader marks a missing pressure file unmeasured, so a complete reading without
+# a stall average is a shape the machine cannot produce. FM_TEST_STALL sets it.
+FM_TEST_STALL=0.00
+
 # reading <available_mib> <complete> [<growth_kb_per_min> <protected> <kind> <detail>]
 reading() {
   local avail_mib=$1 complete=$2 growth=${3:-0} protected=${4:-false} kind=${5:-task} detail=${6:-'alpha (ship, alpha-project)'}
@@ -50,17 +55,54 @@ reading() {
       "$growth" "$kind" "$detail" "$protected")
   fi
   [ "$complete" = false ] && unmeasured='[{"input":"process-table","reason":"the process table could not be read"}]'
-  printf '{"schema":"fm-memory-reading.v1","complete":%s,"unmeasured":%s,"headroom":{"total_kb":24019908,"available_kb":%s},"growth":%s,"processes":%s}\n' \
-    "$complete" "$unmeasured" "$((avail_mib * 1024))" "$growth_obj" "$procs" >"$ANSWER"
+  printf '{"schema":"fm-memory-reading.v1","complete":%s,"unmeasured":%s,"headroom":{"total_kb":24019908,"available_kb":%s,"swap_total_kb":33554428,"swap_free_kb":33554428},"stall":%s,"growth":%s,"processes":%s}\n' \
+    "$complete" "$unmeasured" "$((avail_mib * 1024))" "$(stall_obj "$FM_TEST_STALL")" "$growth_obj" "$procs" >"$ANSWER"
+}
+
+# stall_obj <full> [<some>]  -  "none" makes the reading carry no stall average
+# at all. `some` defaults above `full`, which is the only ordering the kernel can
+# produce: every task stalled implies at least one task stalled. Both windows are
+# set to the same value; the alarm decides on avg60 and reports some_avg60.
+stall_obj() {
+  local full=$1 some=${2:-}
+  if [ "$full" = none ]; then
+    printf '{"some_avg10":null,"some_avg60":null,"full_avg10":null,"full_avg60":null}'
+    return
+  fi
+  [ -n "$some" ] || some=$(awk -v f="$full" 'BEGIN { printf "%.2f", f * 1.1 }')
+  printf '{"some_avg10":%s,"some_avg60":%s,"full_avg10":%s,"full_avg60":%s}' "$some" "$some" "$full" "$full"
+}
+
+# A machine already drowning: headroom and growth both look fine, and the only
+# thing that says otherwise is how long work spent waiting on memory. This is
+# the 2026-08-27 shape, and neither of the two original conditions can see it.
+# reading_thrashing <available_mib> <full_stall> [<swap_used_mib>] [<rss_mib>] [<some_stall>]
+reading_thrashing() {
+  local avail_mib=$1 stall=$2 swap_used=${3:-4245} rss_mib=${4:-2900} some=${5:-}
+  local swap_total=33554428
+  printf '{"schema":"fm-memory-reading.v1","complete":true,"unmeasured":[],"headroom":{"total_kb":24019908,"available_kb":%s,"swap_total_kb":%s,"swap_free_kb":%s},"stall":%s,"growth":{"interval_seconds":300,"scope_reason":null,"unmeasured_reason":null},"processes":[{"pid":9001,"account":"coditan","rss_kb":%s,"growth_kb_per_min":0,"attribution":{"kind":"task","detail":"beta (ship, beta-project)","route":"cwd"},"protected":false,"command":"chrome --headless"},{"pid":9002,"account":"coditan","rss_kb":40000,"growth_kb_per_min":0,"attribution":{"kind":"task","detail":"gamma (ship, gamma-project)","route":"cwd"},"protected":false,"command":"node small.js"}]}\n' \
+    "$((avail_mib * 1024))" "$swap_total" "$((swap_total - swap_used * 1024))" \
+    "$(stall_obj "$stall" "$some")" "$((rss_mib * 1024))" >"$ANSWER"
 }
 
 # A reading whose growth the instrument could not compare at all.
 reading_growth_scoped() {
-  printf '{"schema":"fm-memory-reading.v1","complete":true,"unmeasured":[],"headroom":{"total_kb":24019908,"available_kb":%s},"growth":{"interval_seconds":0,"scope_reason":"no stored sample yet","unmeasured_reason":null},"processes":[]}\n' \
-    "$(( $1 * 1024 ))" >"$ANSWER"
+  printf '{"schema":"fm-memory-reading.v1","complete":true,"unmeasured":[],"headroom":{"total_kb":24019908,"available_kb":%s,"swap_total_kb":33554428,"swap_free_kb":33554428},"stall":%s,"growth":{"interval_seconds":0,"scope_reason":"no stored sample yet","unmeasured_reason":null},"processes":[]}\n' \
+    "$(( $1 * 1024 ))" "$(stall_obj "$FM_TEST_STALL")" >"$ANSWER"
 }
 
 alarm() {
+  env FM_HOME="$HOME_DIR" \
+      FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
+      FM_MEMORY_ALARM_READING="$FAKE" FM_TEST_ANSWER="$ANSWER" \
+      FM_MEMORY_ALARM_FLOOR_MIB=2400 FM_MEMORY_ALARM_HORIZON_MIN=15 \
+      FM_MEMORY_ALARM_STALL=2.00 \
+      "$ALARM" "$@"
+}
+
+# The alarm as a home gets it with no stall threshold chosen, which is how it
+# ships. `alarm` above sets one so the stall cases can exercise the condition.
+unconfigured_alarm() {
   env FM_HOME="$HOME_DIR" \
       FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
       FM_MEMORY_ALARM_READING="$FAKE" FM_TEST_ANSWER="$ANSWER" \
@@ -70,6 +112,7 @@ alarm() {
 
 reset_home() {
   rm -rf "$HOME_DIR"; mkdir -p "$HOME_DIR/state" "$HOME_DIR/data"
+  FM_TEST_STALL=0.00
 }
 
 log_lines() {
@@ -220,7 +263,9 @@ test_scoped_growth_on_a_calm_machine_is_not_a_growth_all_clear() {
   local out
   out=$(alarm --status)
   assert_contains "$out" "not comparable" "an uncomparable growth reading must say so"
-  assert_contains "$out" "only headroom was judged" "and must say which condition it actually judged"
+  assert_contains "$out" "not judged" "and must say that the condition was not judged"
+  assert_contains "$out" "memory stall 0.00% with nothing able to run" \
+    "and must state the conditions it DID judge, so a reader can tell them apart"
   assert_not_contains "$out" "growth 0 MiB/min" \
     "growth that could not be compared must never be printed as a measured zero"
   pass "growth that could not be compared is stated, never rendered as a measured zero"
@@ -349,6 +394,223 @@ test_an_alarm_that_stopped_running_is_reported() {
   pass "an alarm that stopped running is reported rather than mistaken for a calm machine"
 }
 
+test_a_machine_already_drowning_in_swap_is_seen() {
+  # The 2026-08-27 shape: RAM headroom comfortably above the floor, nothing
+  # growing, and a machine nobody can use. Both original conditions read clear
+  # here, which is why this one exists.
+  # The readings are tugboat-cloud's, from the incident itself: 38.0% of uptime
+  # with nothing able to run, 42.0% with at least one task waiting, headroom
+  # 3577 MiB - above the 2400 MiB floor throughout - and 4245 MiB in swap.
+  reset_home
+  reading 16000 true 0
+  alarm >/dev/null
+  reading_thrashing 3577 38.0 4245 2900 42.0
+  local out
+  out=$(alarm)
+  assert_contains "$out" "MEMORY_ALARM:" "a machine stalling on memory must be announced"
+  assert_contains "$out" "stalling on memory" \
+    "the line must not open by calling this a RAM-headroom shortage, which is the one thing it is not"
+  assert_not_contains "$out" "running out of RAM headroom" \
+    "headroom is healthy in this shape and saying otherwise sends the reader after the wrong cause"
+  assert_contains "$out" "run at all for 38.0% of the last 60 seconds" \
+    "the crossing must state the stall it measured, and say what it means"
+  assert_contains "$out" "2.00 threshold" "and must name the threshold it crossed"
+  assert_contains "$out" "At least one task was waiting for 42.0% of it" \
+    "and must carry the wider stall reading as evidence beside the one it decided on"
+  assert_contains "$out" "3577 MiB of RAM headroom still looked available" \
+    "and must state the healthy headroom reading alongside it"
+  assert_contains "$out" "Swap in use: 4245 MiB" "and must state how much has already gone to swap"
+  assert_contains "$out" "Nothing has been limited or killed" \
+    "the crossing must say plainly that nothing was acted against"
+  pass "a machine already drowning in swap is seen, and named as stalling rather than short of headroom"
+}
+
+test_the_two_original_conditions_stay_silent_on_that_same_reading() {
+  # The load-bearing claim of this whole change, asserted rather than argued:
+  # with the stall condition switched off, the exact incident reading produces
+  # nothing at all. Headroom is above the floor and nothing is growing.
+  reset_home
+  reading 16000 true 0
+  env FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
+      FM_MEMORY_ALARM_READING="$FAKE" FM_TEST_ANSWER="$ANSWER" \
+      FM_MEMORY_ALARM_STALL=100 "$ALARM" >/dev/null
+  reading_thrashing 3577 38.0 4245 2900 42.0
+  local out
+  out=$(env FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
+            FM_MEMORY_ALARM_READING="$FAKE" FM_TEST_ANSWER="$ANSWER" \
+            FM_MEMORY_ALARM_FLOOR_MIB=2400 FM_MEMORY_ALARM_HORIZON_MIN=15 \
+            FM_MEMORY_ALARM_STALL=100 "$ALARM")
+  assert_contains "|$out|" "||" \
+    "headroom and growth alone must be shown to say nothing here, which is why this condition exists"
+  pass "the headroom and horizon conditions are silent on the incident reading, as measured"
+}
+
+test_the_stall_crossing_names_the_largest_resident_process_not_a_grower() {
+  # Nothing is growing in this shape - the memory was taken hours earlier - so a
+  # growth ranking would name nobody at exactly the moment somebody needs naming.
+  reset_home
+  reading 16000 true 0
+  alarm >/dev/null
+  reading_thrashing 3577 38.0
+  local out
+  out=$(alarm)
+  assert_contains "$out" "Largest resident process:" \
+    "a stall crossing must name by residency, because nothing is growing in this shape"
+  assert_contains "$out" "chrome --headless (pid 9001)" "the alarm must name the process"
+  assert_contains "$out" "account coditan" "the alarm must name the account"
+  assert_contains "$out" "serving task beta (ship, beta-project)" "the alarm must name the work it serves"
+  assert_contains "$out" "holding 2900 MiB resident" "and must state the measurement it named it on"
+  assert_not_contains "$out" "Largest grower" \
+    "naming a grower here would report the absence of the wrong measurement"
+  assert_grep 'memory stall' "$HOME_DIR/data/memory-alarm.log" \
+    "the durable record must carry the stall it decided on"
+  assert_grep 'chrome --headless' "$HOME_DIR/data/memory-alarm.log" \
+    "and must carry the process it named"
+  pass "a stall crossing names the largest resident process, with its account and its work"
+}
+
+test_the_stall_condition_keeps_the_protected_label() {
+  reset_home
+  reading 16000 true 0
+  alarm >/dev/null
+  printf '{"schema":"fm-memory-reading.v1","complete":true,"unmeasured":[],"headroom":{"total_kb":24019908,"available_kb":%s,"swap_total_kb":33554428,"swap_free_kb":29200000},"stall":{"some_avg10":42.0,"some_avg60":42.0,"full_avg10":38.0,"full_avg60":38.0},"growth":{"interval_seconds":300,"scope_reason":null,"unmeasured_reason":null},"processes":[{"pid":9003,"account":"coditan","rss_kb":2969600,"growth_kb_per_min":0,"attribution":{"kind":"infrastructure","detail":"wake delivery for coditan-firstmate","route":"cwd"},"protected":true,"command":"fm-delivery"}]}\n' \
+    "$(( 3577 * 1024 ))" >"$ANSWER"
+  local out
+  out=$(alarm)
+  assert_contains "$out" "wake-delivery listener, which nothing may act against" \
+    "the protected label must travel with the name on this condition too, not only on growth"
+  pass "the stall condition carries the protected label wherever it names a process"
+}
+
+test_ordinary_busy_operation_does_not_reach_the_stall_threshold() {
+  # The measured band this threshold sits in: ordinary fleet work read 0.00, and
+  # the heaviest non-thrashing reading on record read 0.25. Neither may fire.
+  reset_home
+  local out
+  # yacht measured windowed full memory stall across five vantages on
+  # 2026-08-28: every one read 0.00 except tugboat's post-recovery avg300 at
+  # 0.02. 0.10 is well past the top of that band and must still say nothing.
+  for level in 0.00 0.02 0.10; do
+    reset_home
+    reading_thrashing 16000 "$level"
+    out=$(alarm)
+    assert_contains "|$out|" "||" \
+      "a full stall of $level must not fire: it is at or above the whole measured quiet band"
+  done
+  pass "the stall threshold sits clear of the measured quiet band across every seat sampled"
+}
+
+test_a_stall_reading_the_alarm_could_not_take_is_never_an_all_clear() {
+  # The reader marks a missing pressure file unmeasured, so this shape should
+  # never reach the alarm. If it ever does, the answer is "could not see",
+  # because a stall condition that reports absence as quiet is the exact failure
+  # this alarm exists to remove.
+  reset_home
+  reading 16000 true 0
+  alarm >/dev/null
+  FM_TEST_STALL=none
+  reading 16000 true 0
+  local out status=0
+  out=$(alarm --status) || status=$?
+  expect_code 0 "$status" "--status with headroom and growth still readable"
+  assert_contains "$out" "memory stall could not be read" \
+    "a stall the alarm could not read must say so in its own voice"
+  assert_contains "$out" "not judged" "and must say that the condition went unjudged"
+  assert_not_contains "$out" "memory stall 0.00%" \
+    "a stall that could not be read must never be printed as a measured zero"
+  pass "a stall reading the alarm could not take is reported as unjudged, never as quiet"
+}
+
+test_recovery_is_not_declared_on_a_stall_nobody_could_read() {
+  reset_home
+  reading 16000 true 0
+  alarm >/dev/null
+  reading_thrashing 3577 38.0
+  alarm >/dev/null                   # crossed on stall
+  FM_TEST_STALL=none
+  reading 16000 true 0               # headroom and growth fine, stall unreadable
+  local out
+  out=$(alarm)
+  assert_not_contains "$out" "recovered" \
+    "a shortage must not be declared over by a run that could not re-read the condition that raised it"
+  assert_contains "$out" "not re-evaluated" "the alarm must say why it cannot call the shortage over"
+  pass "recovery is never declared on the strength of a stall nobody could read"
+}
+
+test_a_stall_recovery_must_be_earned_by_the_margin() {
+  reset_home
+  reading 16000 true 0
+  alarm >/dev/null
+  reading_thrashing 3577 38.0
+  alarm >/dev/null
+  # Back under the 2.00 threshold, but not clear of it by the recovery margin
+  # (2.00 / 1.25 = 1.60). Recovery must not be declared on this.
+  reading_thrashing 3577 1.80
+  local out
+  out=$(alarm)
+  assert_contains "|$out|" "||" "a stall inside the recovery margin must not declare recovery"
+  [ "$(log_lines)" -eq 1 ] || fail "hovering at the stall line must not write a recovery record"
+  reading_thrashing 3577 0.10
+  out=$(alarm)
+  assert_contains "$out" "recovered" "a stall clear of the margin must declare recovery"
+  pass "leaving a stall crossing is earned by the recovery margin, not by dipping under the line"
+}
+
+test_a_malformed_stall_threshold_falls_back_rather_than_holding_the_alarm_crossed() {
+  # An unparsable threshold would compare as zero in awk and hold this condition
+  # crossed on every reading forever, which is the loudest possible way to go
+  # blind. It must fall back to the shipped default instead.
+  reset_home
+  reading_thrashing 16000 0.00
+  local out
+  out=$(env FM_HOME="$HOME_DIR" \
+            FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
+            FM_MEMORY_ALARM_READING="$FAKE" FM_TEST_ANSWER="$ANSWER" \
+            FM_MEMORY_ALARM_STALL="not a number" "$ALARM" --status)
+  assert_contains "$out" "memory-alarm: ok" "a malformed threshold must not hold a calm machine crossed"
+  assert_contains "$out" "no stall threshold has been chosen" \
+    "a threshold that could not be understood must leave the condition unwatched and say so"
+  pass "a malformed stall threshold leaves the condition unwatched rather than firing forever"
+}
+
+test_an_unchosen_stall_threshold_is_reported_never_silently_unwatched() {
+  # The condition ships unconfigured because no defensible threshold exists yet.
+  # An alarm that quietly does not watch for something is indistinguishable from
+  # one that watched and found nothing, which is the failure this whole
+  # programme removes - so the absence has to be spoken.
+  reset_home
+  reading_thrashing 16000 29.30
+  local out status=0
+  out=$(unconfigured_alarm --status) || status=$?
+  expect_code 0 "$status" "an unconfigured stall condition on an otherwise healthy machine"
+  assert_contains "$out" "no stall threshold has been chosen" \
+    "an unconfigured condition must name itself rather than pass for a clear reading"
+  assert_contains "$out" "not being watched for memory stall" \
+    "and must say plainly what is not being watched"
+  assert_not_contains "$out" "memory stall 29.30%" \
+    "an unjudged condition must not print its reading as though it had been judged"
+  assert_not_contains "$out" "CROSSED" "and must never fire on a threshold nobody chose"
+  pass "an unchosen stall threshold is reported as unwatched, never passed off as calm"
+}
+
+test_an_unchosen_stall_threshold_does_not_block_a_recovery_it_never_raised() {
+  # STALL_BLIND blocks recovery because the instrument failed. An unset threshold
+  # must NOT, or a home that never configures one would be stuck crossed forever
+  # after its first headroom shortage.
+  reset_home
+  local out
+  reading 16000 true 0
+  unconfigured_alarm >/dev/null
+  reading 1800 true 0
+  out=$(unconfigured_alarm)
+  assert_contains "$out" "running out of RAM headroom" "the headroom floor must still cross with no stall threshold set"
+  reading 16000 true 0
+  out=$(unconfigured_alarm)
+  assert_contains "$out" "recovered" \
+    "a condition that was never armed must not hold the alarm crossed for ever"
+  pass "an unchosen stall threshold leaves the other two conditions working end to end"
+}
+
 test_usage_errors_exit_two() {
   local status=0
   "$ALARM" --nonsense >/dev/null 2>&1 || status=$?
@@ -372,6 +634,17 @@ test_an_instrument_that_could_not_read_is_never_an_all_clear
 test_a_reading_that_produced_nothing_is_blindness_not_health
 test_recovery_is_not_declared_on_growth_nobody_could_compare
 test_scoped_growth_on_a_calm_machine_is_not_a_growth_all_clear
+test_a_machine_already_drowning_in_swap_is_seen
+test_the_two_original_conditions_stay_silent_on_that_same_reading
+test_the_stall_crossing_names_the_largest_resident_process_not_a_grower
+test_the_stall_condition_keeps_the_protected_label
+test_ordinary_busy_operation_does_not_reach_the_stall_threshold
+test_a_stall_reading_the_alarm_could_not_take_is_never_an_all_clear
+test_recovery_is_not_declared_on_a_stall_nobody_could_read
+test_a_stall_recovery_must_be_earned_by_the_margin
+test_a_malformed_stall_threshold_falls_back_rather_than_holding_the_alarm_crossed
+test_an_unchosen_stall_threshold_is_reported_never_silently_unwatched
+test_an_unchosen_stall_threshold_does_not_block_a_recovery_it_never_raised
 test_status_labels_horizon_as_ram_headroom_not_swap_exhaustion
 test_the_wake_delivery_listener_keeps_its_label
 test_the_alarm_limits_nothing_and_kills_nothing

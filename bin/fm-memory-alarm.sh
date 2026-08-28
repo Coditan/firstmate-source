@@ -38,7 +38,7 @@
 # outcome and not a pass. An alarm that goes quiet when its instrument breaks is
 # the failure this whole programme was built to remove.
 #
-# THE TWO CONDITIONS, AND WHY THEY ARE BOTH NEEDED
+# THE THREE CONDITIONS, AND WHY EACH IS NEEDED
 #   headroom   RAM headroom from MemAvailable below the floor. A backstop: it
 #              catches memory going somewhere no single tracked process is
 #              visibly growing into, such as many small processes or one that
@@ -50,9 +50,33 @@
 #              the fastest single process, because five workers growing at
 #              500 MiB/min exhaust this machine exactly as fast as one at
 #              2500 MiB/min and no single one of them looks alarming.
-# The process NAMED is the largest contributor to that growth, with the account
-# and the task the reading attributes it to. The condition is about the machine;
-# the name is about who to talk to.
+#   stall      host memory pressure-stall `full avg60` at or above the stall
+#              threshold. The two conditions above both divide by MemAvailable,
+#              which the kernel defines as memory available to new work WITHOUT
+#              SWAPPING - so once pressure has already been absorbed into swap,
+#              both of them read healthy while the machine is unusable. This
+#              condition measures the wait itself rather than the shortage that
+#              causes it, so it can see a machine that is ALREADY drowning
+#              rather than only one about to run out.
+#              It reads `full` rather than `some` deliberately. `some` counts
+#              time in which ANY task waited on memory, which one process
+#              refaulting can produce on an otherwise healthy machine. `full`
+#              counts time in which NOTHING could run at all, which is the
+#              condition that makes a seat unreachable - in the incident this
+#              was built for, the seat's own agent was one of the blocked
+#              processes. `some` is still reported as evidence beside it.
+#              It reads the 60-second window rather than the 10-second one
+#              because the alarm polls every 300 seconds: avg60 covers six
+#              times more of that interval, and every seat the fleet has
+#              sampled measured the same 0.00 on both, so the longer window
+#              costs nothing measurable and rejects more.
+# The process NAMED differs by condition, because the shapes differ. headroom
+# and horizon name the largest contributor to growth. stall names the largest
+# RESIDENT process instead: in the shape that condition exists for, the memory
+# was taken hours earlier and nothing is growing now, so a growth ranking would
+# name nobody at exactly the moment somebody needs naming. Either way the
+# condition is about the machine and the name is about who to talk to, and both
+# carry the account, the attributed work, and the protected label.
 #
 # It self-tightens as RAM headroom goes, which is the property that makes one
 # horizon work across the whole range: at 16 GB RAM headroom it takes more than
@@ -65,6 +89,16 @@
 #              least twice before the RAM headroom it predicts is gone. A
 #              horizon shorter than that cadence could go from silent to
 #              reclaim or swap pressure between two polls without ever firing.
+#   stall      NOT CHOSEN. There is no defensible value yet, so this
+#              condition ships UNCONFIGURED and evaluates nothing until
+#              FM_MEMORY_ALARM_STALL is set. Measured on coditan-vessel on
+#              2026-08-28: this repo's own tooling, on a healthy seat that
+#              never fell below 11,325 MiB of RAM headroom, drove windowed
+#              full memory stall to 29.30 - the same magnitude as the 37.74%
+#              a real 22-hour starvation produced. Ordinary busy work and a
+#              starving machine overlap on this reading, so no threshold
+#              separates them. docs/memory-alarm.md owns that measurement and
+#              what would have to be measured to settle it.
 #   floor      well below the lowest headroom measured across a real busy
 #              period on this fleet, so ordinary work does not reach it. From
 #              that busy low, something would have to consume roughly ten
@@ -129,6 +163,13 @@
 # Environment:
 #   FM_MEMORY_ALARM_FLOOR_MIB    headroom floor in MiB (default 2400)
 #   FM_MEMORY_ALARM_HORIZON_MIN  RAM-headroom horizon in minutes (default 15)
+#   FM_MEMORY_ALARM_STALL        host memory pressure-stall `full avg60` at or
+#                                above which the stall condition crosses, as a
+#                                percentage of wall time. UNSET BY DEFAULT and
+#                                deliberately so: see above. While it is unset
+#                                the condition never fires, and every verdict
+#                                says the condition is not being watched rather
+#                                than letting silence read as cover.
 #   FM_MEMORY_ALARM_RECOVERY     multiplier a reading must clear both
 #                                thresholds by before recovery is declared
 #                                (default 1.25)
@@ -157,6 +198,7 @@ CHECK="$STATE/memory-alarm.check.sh"
 
 FLOOR_MIB=${FM_MEMORY_ALARM_FLOOR_MIB:-2400}
 HORIZON_MIN=${FM_MEMORY_ALARM_HORIZON_MIN:-15}
+STALL_MAX=${FM_MEMORY_ALARM_STALL:-}
 RECOVERY=${FM_MEMORY_ALARM_RECOVERY:-1.25}
 STALE=${FM_MEMORY_ALARM_STALE:-1800}
 NOW=${FM_MEMORY_ALARM_NOW:-$(date +%s)}
@@ -164,6 +206,11 @@ NOW=${FM_MEMORY_ALARM_NOW:-$(date +%s)}
 case "$FLOOR_MIB" in *[!0-9]*|'') FLOOR_MIB=2400 ;; esac
 case "$HORIZON_MIN" in *[!0-9]*|'') HORIZON_MIN=15 ;; esac
 case "$STALE" in *[!0-9]*|'') STALE=1800 ;; esac
+# A stall threshold is a percentage and so may carry one decimal point. An
+# unset one leaves the condition unconfigured; a malformed one is discarded the
+# same way rather than reaching awk, where an unparsable value would compare as
+# zero and hold the condition crossed forever.
+case "$STALL_MAX" in ''|.|*.|*[!0-9.]*|*.*.*) STALL_MAX= ;; esac
 
 MODE=detect
 case "${1:-}" in
@@ -197,10 +244,38 @@ VERDICT=unmeasured
 REASON=
 DETAIL=
 GROWTH_BLIND=
+STALL_BLIND=
+STALL_UNSET=
 AVAIL_MIB=0
 MINUTES=
 GROWTH_MIB_MIN=0
+STALL_FULL60=
+STALL_SOME60=
+SWAP_USED_MIB=
 OFFENDER=
+RESIDENT=
+CROSS_KIND=
+
+# The reading distinguishes work it can name from work it cannot, and the alarm
+# must not blur them: a process it cannot attribute is reported as unattributed
+# with the reason, never handed an owner no record names. Both the grower the
+# headroom and horizon conditions name and the resident process the stall
+# condition names are phrased here, once, so the two can never drift apart.
+name_process() {  # <command> <pid> <account> <kind> <detail> <protected> <measure>
+  local cmd=$1 pid=$2 account=$3 kind=$4 detail=$5 protected=$6 measure=$7 named
+  case "$kind" in
+    task)           named="$cmd (pid $pid), account $account, serving task $detail, $measure" ;;
+    firstmate-home) named="$cmd (pid $pid), account $account, the firstmate session for $detail, $measure" ;;
+    infrastructure) named="$cmd (pid $pid), account $account, $detail, $measure" ;;
+    *)              named="$cmd (pid $pid), account $account, $measure - not attributed to any work: $detail" ;;
+  esac
+  # The label travels with the name. Anything reading this alarm later must
+  # inherit the fact that this process is what makes every wake arrive, rather
+  # than rediscovering it from a list it does not have.
+  [ "$protected" = protected ] &&
+    named="$named - and this is the wake-delivery listener, which nothing may act against"
+  printf '%s' "$named"
+}
 
 evaluate() {
   local raw status=0 record
@@ -241,12 +316,25 @@ evaluate() {
     | ([$growing[].growth_kb_per_min] | add | n0) as $growth_kb_min
     | ($growing | sort_by(-.growth_kb_per_min) | first) as $top
     | (if $growth_kb_min > 0 then ($avail_kb / $growth_kb_min) else null end) as $minutes
+    # The stall condition names the largest RESIDENT process, not the largest
+    # grower: in the shape it exists for the memory was taken hours ago and
+    # nothing is growing, so ranking by growth would name nobody.
+    | ([.processes[] | select((.rss_kb | n0) > 0)] | sort_by(-.rss_kb) | first) as $res
+    | (.headroom.swap_free_kb) as $swap_free_kb
+    | (if $swap_free_kb == null then null
+       else (((.headroom.swap_total_kb | n0) - $swap_free_kb) / 1024 | floor) end) as $swap_used_mib
     | (.complete == false) as $incomplete
     # A run with no comparable prior sample reports growth as SCOPED, and the
     # reading deliberately still exits 0 for it. That is a known absence, not a
     # broken instrument - but it is not a growth measurement either, and calling
     # it zero would be the substituted zero this whole programme refuses.
     | (.growth.scope_reason != null or .growth.unmeasured_reason != null) as $growth_blind
+    # A completeness claim is not a stall measurement. The reading marks a
+    # missing or unparsable pressure file unmeasured, so this should never fire
+    # on a real reading - but if the number is absent while the reading calls
+    # itself complete, the condition was not evaluated, and the one thing this
+    # alarm may never do is turn that into a zero.
+    | (.stall.full_avg60 == null) as $stall_blind
     | [
         (if $incomplete then "incomplete" else "complete" end),
         (if $growth_blind then (.growth.scope_reason // .growth.unmeasured_reason) else "" end),
@@ -260,7 +348,18 @@ evaluate() {
         (if $top == null then "" else $top.attribution.detail end),
         (if $top == null then "" else ($top.growth_kb_per_min / 1024 | floor | tostring) end),
         (if $top == null then "" elif $top.protected then "protected" else "ordinary" end),
-        (if $incomplete then ([.unmeasured[] | .input + " (" + .reason + ")"] | join("; ")) else "" end)
+        (if $incomplete then ([.unmeasured[] | .input + " (" + .reason + ")"] | join("; ")) else "" end),
+        (if $stall_blind then "the reading carried no host memory-stall average" else "" end),
+        (if $stall_blind then "" else (.stall.full_avg60 | tostring) end),
+        (if (.stall.some_avg60) == null then "" else (.stall.some_avg60 | tostring) end),
+        (if $swap_used_mib == null then "" else ($swap_used_mib | tostring) end),
+        (if $res == null then "" else $res.command end),
+        (if $res == null then "" else ($res.pid | tostring) end),
+        (if $res == null then "" else $res.account end),
+        (if $res == null then "" else $res.attribution.kind end),
+        (if $res == null then "" else $res.attribution.detail end),
+        (if $res == null then "" else ($res.rss_kb / 1024 | floor | tostring) end),
+        (if $res == null then "" elif $res.protected then "protected" else "ordinary" end)
       ]
     # Joined on the unit separator, NOT on a tab: a tab counts as whitespace to
     # the shell read below, so an empty field between two tabs collapses and
@@ -277,8 +376,11 @@ evaluate() {
 
   local completeness growth_blind unmeasured_list
   local top_cmd top_pid top_account top_kind top_detail top_growth top_protected
+  local res_cmd res_pid res_account res_kind res_detail res_rss res_protected
   IFS=$'\037' read -r completeness growth_blind AVAIL_MIB GROWTH_MIB_MIN MINUTES \
     top_cmd top_pid top_account top_kind top_detail top_growth top_protected unmeasured_list \
+    STALL_BLIND STALL_FULL60 STALL_SOME60 SWAP_USED_MIB \
+    res_cmd res_pid res_account res_kind res_detail res_rss res_protected \
     <<<"$record"
 
   if [ "$completeness" = incomplete ] || [ "$status" -eq 3 ]; then
@@ -292,82 +394,131 @@ evaluate() {
   fi
 
   if [ -n "$top_pid" ] && [ "${top_growth:-0}" -ge 1 ]; then
-    # The reading distinguishes work it can name from work it cannot, and the
-    # alarm must not blur them: an offender it cannot attribute is reported as
-    # unattributed with the reason, never handed an owner no record names.
-    case "$top_kind" in
-      task)
-        OFFENDER="$top_cmd (pid $top_pid), account $top_account, serving task $top_detail, growing $top_growth MiB/min" ;;
-      firstmate-home)
-        OFFENDER="$top_cmd (pid $top_pid), account $top_account, the firstmate session for $top_detail, growing $top_growth MiB/min" ;;
-      infrastructure)
-        OFFENDER="$top_cmd (pid $top_pid), account $top_account, $top_detail, growing $top_growth MiB/min" ;;
-      *)
-        OFFENDER="$top_cmd (pid $top_pid), account $top_account, growing $top_growth MiB/min - not attributed to any work: $top_detail" ;;
-    esac
-    # The label travels with the name. Anything reading this alarm later must
-    # inherit the fact that this process is what makes every wake arrive, rather
-    # than rediscovering it from a list it does not have.
-    [ "$top_protected" = protected ] &&
-      OFFENDER="$OFFENDER - and this is the wake-delivery listener, which nothing may act against"
+    OFFENDER=$(name_process "$top_cmd" "$top_pid" "$top_account" "$top_kind" "$top_detail" \
+      "$top_protected" "growing $top_growth MiB/min")
+  fi
+  if [ -n "$res_pid" ]; then
+    RESIDENT=$(name_process "$res_cmd" "$res_pid" "$res_account" "$res_kind" "$res_detail" \
+      "$res_protected" "holding $res_rss MiB resident")
   fi
 
   GROWTH_BLIND="$growth_blind"
+  # Two different silences, and they must never be merged. STALL_BLIND means the
+  # instrument failed, which blocks a recovery because the condition that raised
+  # an alarm could not be re-read. STALL_UNSET means the fleet has not chosen a
+  # threshold, so this condition never raised anything and cannot hold a
+  # recovery back - but it is still reported, because a condition nobody is
+  # watching has to say so rather than pass for a clear reading.
+  [ -n "$STALL_MAX" ] || STALL_UNSET="no stall threshold has been chosen for this fleet yet, so this machine is not being watched for memory stall at all"
 
-  # Crossed if either condition holds. Recovery must clear BOTH by the margin.
+  # Crossed if ANY condition holds. Recovery must clear ALL of them by the
+  # margin, so adding a condition can only make recovery harder to declare.
   local crossed=no
-  [ "$AVAIL_MIB" -lt "$FLOOR_MIB" ] && crossed=yes
+  [ "$AVAIL_MIB" -lt "$FLOOR_MIB" ] && { crossed=yes; CROSS_KIND=headroom; }
   if [ -z "$GROWTH_BLIND" ] && [ "$MINUTES" != NA ] &&
      awk -v m="$MINUTES" -v h="$HORIZON_MIN" 'BEGIN { exit !(m + 0 < h + 0) }'; then
     crossed=yes
+    [ -n "$CROSS_KIND" ] || CROSS_KIND=horizon
+  fi
+  if [ -z "$STALL_BLIND" ] && [ -z "$STALL_UNSET" ] &&
+     awk -v s="$STALL_FULL60" -v t="$STALL_MAX" 'BEGIN { exit !(s + 0 >= t + 0) }'; then
+    crossed=yes
+    [ -n "$CROSS_KIND" ] || CROSS_KIND=stall
   fi
 
   if [ "$crossed" = yes ]; then
     VERDICT=crossed
-    if [ "$AVAIL_MIB" -lt "$FLOOR_MIB" ]; then
-      REASON="only $AVAIL_MIB MiB of RAM headroom is available, below the $FLOOR_MIB MiB floor"
-    else
-      REASON="growth across the running work totals $GROWTH_MIB_MIN MiB/min, which would use up the $AVAIL_MIB MiB RAM headroom still available without swapping in about $MINUTES minutes"
-    fi
+    case "$CROSS_KIND" in
+      headroom)
+        REASON="only $AVAIL_MIB MiB of RAM headroom is available, below the $FLOOR_MIB MiB floor" ;;
+      horizon)
+        REASON="growth across the running work totals $GROWTH_MIB_MIN MiB/min, which would use up the $AVAIL_MIB MiB RAM headroom still available without swapping in about $MINUTES minutes" ;;
+      stall)
+        # State the headroom that looks healthy in the same breath as the stall,
+        # because a reader who sees only one of the two numbers will reach for
+        # the wrong explanation of the machine in front of them.
+        REASON="nothing on this machine could run at all for $STALL_FULL60% of the last 60 seconds - every task was blocked waiting on memory - which is at or above the $STALL_MAX threshold, while $AVAIL_MIB MiB of RAM headroom still looked available; that figure counts only memory available WITHOUT swapping, so it reads healthy once the pressure has already been absorbed"
+        [ -z "$STALL_SOME60" ] ||
+          REASON="$REASON. At least one task was waiting for $STALL_SOME60% of it"
+        if [ -n "$SWAP_USED_MIB" ]; then
+          REASON="$REASON. Swap in use: $SWAP_USED_MIB MiB"
+        else
+          REASON="$REASON. Swap use could not be read"
+        fi ;;
+    esac
     return
   fi
 
   # Below the recovery bar but not crossed: still elevated, so a machine
   # hovering at the line is not repeatedly declared recovered.
-  local floor_clear=yes horizon_clear=yes
+  local floor_clear=yes horizon_clear=yes stall_clear=yes
   awk -v a="$AVAIL_MIB" -v f="$FLOOR_MIB" -v r="$RECOVERY" 'BEGIN { exit !(a + 0 >= f * r) }' || floor_clear=no
   if [ -z "$GROWTH_BLIND" ] && [ "$MINUTES" != NA ]; then
     awk -v m="$MINUTES" -v h="$HORIZON_MIN" -v r="$RECOVERY" 'BEGIN { exit !(m + 0 >= h * r) }' || horizon_clear=no
   fi
+  # The margin divides here rather than multiplying: a stall crossing is high
+  # values, so clearing it by a quarter means falling a quarter BELOW the line.
+  if [ -z "$STALL_BLIND" ] && [ -z "$STALL_UNSET" ]; then
+    awk -v s="$STALL_FULL60" -v t="$STALL_MAX" -v r="$RECOVERY" 'BEGIN { exit !(s + 0 <= t / r) }' || stall_clear=no
+  fi
 
-  if [ "$floor_clear" = yes ] && [ "$horizon_clear" = yes ]; then
-    VERDICT=ok
-    if [ -n "$GROWTH_BLIND" ]; then
-      REASON="$AVAIL_MIB MiB RAM headroom available; growth was not comparable this run ($GROWTH_BLIND), so only headroom was judged"
+  # A calm verdict has to say which conditions it actually judged, because the
+  # difference between "all three read clear" and "one of them was never
+  # evaluated" is exactly the difference this alarm exists to keep visible.
+  local unjudged="" unjudged_tail="so that condition was not judged"
+  [ -z "$GROWTH_BLIND" ] || unjudged="growth was not comparable this run ($GROWTH_BLIND)"
+  local stall_note=
+  if [ -n "$STALL_BLIND" ]; then
+    stall_note="memory stall could not be read this run ($STALL_BLIND)"
+  elif [ -n "$STALL_UNSET" ]; then
+    stall_note="$STALL_UNSET"
+  fi
+  if [ -n "$stall_note" ]; then
+    if [ -z "$unjudged" ]; then
+      unjudged="$stall_note"
     else
-      REASON="$AVAIL_MIB MiB RAM headroom available, growth $GROWTH_MIB_MIN MiB/min"
-      # Beyond a few hours the projection says nothing anyone would act on, and
-      # printing four significant figures of it invites belief it has not earned.
-      if [ "$MINUTES" != NA ] &&
-         awk -v m="$MINUTES" 'BEGIN { exit !(m + 0 < 240) }'; then
-        REASON="$REASON, about $MINUTES minutes of RAM headroom left at that rate"
-      fi
+      unjudged="$unjudged, and $stall_note"
+      unjudged_tail="so neither condition was judged"
     fi
+  fi
+
+  REASON="$AVAIL_MIB MiB RAM headroom available"
+  [ -n "$GROWTH_BLIND" ] || REASON="$REASON, growth $GROWTH_MIB_MIN MiB/min"
+  { [ -n "$STALL_BLIND" ] || [ -n "$STALL_UNSET" ]; } ||
+    REASON="$REASON, memory stall $STALL_FULL60% with nothing able to run"
+
+  if [ "$floor_clear" = yes ] && [ "$horizon_clear" = yes ] && [ "$stall_clear" = yes ]; then
+    VERDICT=ok
+    # Beyond a few hours the projection says nothing anyone would act on, and
+    # printing four significant figures of it invites belief it has not earned.
+    if [ -z "$GROWTH_BLIND" ] && [ "$MINUTES" != NA ] &&
+       awk -v m="$MINUTES" 'BEGIN { exit !(m + 0 < 240) }'; then
+      REASON="$REASON, about $MINUTES minutes of RAM headroom left at that rate"
+    fi
+    [ -z "$unjudged" ] || REASON="$REASON; $unjudged, $unjudged_tail"
   else
     VERDICT=elevated
-    REASON="$AVAIL_MIB MiB RAM headroom available, growth $GROWTH_MIB_MIN MiB/min - past neither threshold, but not yet clear of them by the recovery margin"
-    [ -z "$GROWTH_BLIND" ] || REASON="$AVAIL_MIB MiB RAM headroom available, and growth was not comparable this run ($GROWTH_BLIND)"
+    REASON="$REASON - past no threshold, but not yet clear of them all by the recovery margin"
+    [ -z "$unjudged" ] || REASON="$REASON; $unjudged, $unjudged_tail"
   fi
 }
 
 # --- durable record ---------------------------------------------------------
 
 record_transition() {
-  local from=$1 to=$2 line=$3
+  local from=$1 to=$2 line=$3 named
   mkdir -p "$DATA" 2>/dev/null || return 1
-  printf '%s\t%s\t%s -> %s\t%s MiB RAM headroom available\t%s MiB/min growth\t%s minutes left\t%s\t%s\n' \
+  # A stall crossing records the resident process, because that is the evidence
+  # it was decided on; recording "no process was growing" for it would file the
+  # absence of the wrong measurement as the reason.
+  if [ "$CROSS_KIND" = stall ]; then
+    named="${RESIDENT:-no process was named}"
+  else
+    named="${OFFENDER:-no process was growing}"
+  fi
+  printf '%s\t%s\t%s -> %s\t%s MiB RAM headroom available\t%s MiB/min growth\t%s minutes left\t%s memory stall\t%s\t%s\n' \
     "$NOW" "$(iso "$NOW")" "$from" "$to" "$AVAIL_MIB" "$GROWTH_MIB_MIN" "${MINUTES:-NA}" \
-    "${OFFENDER:-no process was growing}" "$line" >>"$LOG" 2>/dev/null
+    "${STALL_FULL60:-NA}" "$named" "$line" >>"$LOG" 2>/dev/null
 }
 
 read_state() {
@@ -471,7 +622,11 @@ case "$MODE" in
     case "$VERDICT" in
       crossed)
         printf 'memory-alarm: CROSSED - %s\n' "$REASON"
-        printf 'largest grower: %s\n' "${OFFENDER:-none: no tracked process was growing, so the memory went somewhere this reading does not attribute}"
+        if [ "$CROSS_KIND" = stall ]; then
+          printf 'largest resident process: %s\n' "${RESIDENT:-none: no tracked process holds enough memory for this reading to name}"
+        else
+          printf 'largest grower: %s\n' "${OFFENDER:-none: no tracked process was growing, so the memory went somewhere this reading does not attribute}"
+        fi
         printf 'nothing has been limited, throttled, or killed by this alarm, and nothing here can be\n'
         exit 4 ;;
       unmeasured)
@@ -503,9 +658,14 @@ SINCE=$(read_state_since)
 # headroom alone. That is enough to stay quiet while already quiet, and never
 # enough to declare a shortage over - so a crossing lapses into "cannot see"
 # rather than into a recovery nobody measured.
-if [ "$VERDICT" = ok ] && [ -n "$GROWTH_BLIND" ] && [ "$PREVIOUS" = crossed ]; then
+if [ "$VERDICT" = ok ] && [ "$PREVIOUS" = crossed ] &&
+   { [ -n "$GROWTH_BLIND" ] || [ -n "$STALL_BLIND" ]; }; then
   VERDICT=unmeasured
-  REASON="whether the shortage is over is unknown: growth could not be compared this run ($GROWTH_BLIND), so the condition that raised the alarm was not re-evaluated"
+  if [ -n "$GROWTH_BLIND" ]; then
+    REASON="whether the shortage is over is unknown: growth could not be compared this run ($GROWTH_BLIND), so the conditions that raise this alarm were not re-evaluated in full"
+  else
+    REASON="whether the shortage is over is unknown: memory stall could not be read this run ($STALL_BLIND), so the conditions that raise this alarm were not re-evaluated in full"
+  fi
 fi
 
 # elevated is a damping band, not a state worth announcing: it exists so that a
@@ -524,7 +684,15 @@ fi
 LINE=
 case "$CURRENT" in
   crossed)
-    LINE="MEMORY_ALARM: this machine is running out of RAM headroom - $REASON. Largest grower: ${OFFENDER:-no tracked process was growing, so the headroom is going somewhere this reading does not attribute}. Nothing has been limited or killed."
+    # The opening clause is chosen by the condition, because "running out of RAM
+    # headroom" is the one thing a stall crossing is NOT: its whole point is
+    # that headroom reads healthy while the machine is unusable, and a reader
+    # sent looking for a shortage would go looking for the wrong thing.
+    if [ "$CROSS_KIND" = stall ]; then
+      LINE="MEMORY_ALARM: this machine is stalling on memory - $REASON. Largest resident process: ${RESIDENT:-no tracked process holds enough memory for this reading to name}. Nothing has been limited or killed."
+    else
+      LINE="MEMORY_ALARM: this machine is running out of RAM headroom - $REASON. Largest grower: ${OFFENDER:-no tracked process was growing, so the headroom is going somewhere this reading does not attribute}. Nothing has been limited or killed."
+    fi
     ;;
   ok)
     if [ "$PREVIOUS" = crossed ]; then

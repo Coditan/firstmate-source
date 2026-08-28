@@ -132,6 +132,9 @@
 #                             looking at the machine
 #   FM_MEMORY_MEMINFO         headroom source (default /proc/meminfo)
 #   FM_MEMORY_PRESSURE        stall source (default /proc/pressure/memory)
+#   FM_MEMORY_PRESSURE_IO     the io stall source, read ONLY to prove that this
+#                             kernel accounts pressure at all
+#                             (default /proc/pressure/io)
 #   FM_MEMORY_CGROUP_ROOT     cgroup root (default /sys/fs/cgroup)
 #   FM_MEMORY_PS              process-table command (tests); must print
 #                             pid ppid user rss etimes args
@@ -152,6 +155,7 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
 MEMINFO=${FM_MEMORY_MEMINFO:-/proc/meminfo}
 PRESSURE=${FM_MEMORY_PRESSURE:-/proc/pressure/memory}
+PRESSURE_IO=${FM_MEMORY_PRESSURE_IO:-/proc/pressure/io}
 CGROUP_ROOT=${FM_MEMORY_CGROUP_ROOT:-/sys/fs/cgroup}
 PROC=${FM_MEMORY_PROC:-/proc}
 SAMPLES=${FM_MEMORY_SAMPLES:-$STATE/memory-reading.samples}
@@ -310,11 +314,34 @@ read_headroom() {
 # least one task (some) or every task (full) was stalled waiting on memory.
 # This is the reading that separates "the machine is busy" from "the machine is
 # thrashing", and unlike free-memory arithmetic it cannot be argued with.
+#
+# A SUCCESSFUL READ IS NOT A MEASUREMENT
+# A kernel can expose /proc/pressure/memory, answer every field, and account
+# nothing into it. A WSL seat measured on 2026-08-28 read all four averages as
+# 0.00 AND a cumulative total of exactly zero over 3,526 seconds of uptime,
+# while its io counter stood at 2,063,189 - so pressure accounting worked there
+# and only the memory account was flat. From a single read that is
+# indistinguishable from a genuinely quiet machine, and it looks exactly like
+# calm, which is the one thing this reading may never report when it cannot see.
+#
+# So the memory account has to prove itself rather than merely answer. The
+# cumulative `total=` counter is what proves it: it is monotonic since boot, so
+# on any machine that has ever waited on memory it is positive, and the io
+# counter is the control that separates "this kernel does not account memory
+# pressure" from "this kernel accounts nothing yet". A flat memory account
+# beside a live io account is reported as unmeasured.
+#
+# The counter is used ONLY for that proof and never as a trigger. It never
+# falls, so a condition built on it would fire permanently after any past
+# starvation and could never recover.
 
 STALL_SOME10=
 STALL_SOME60=
 STALL_FULL10=
 STALL_FULL60=
+STALL_SOME_TOTAL=
+STALL_FULL_TOTAL=
+STALL_IO_TOTAL=
 
 parse_pressure_file() {  # <file> -> "some10 some60 full10 full60" or empty
   awk '
@@ -330,8 +357,20 @@ parse_pressure_file() {  # <file> -> "some10 some60 full10 full60" or empty
   ' "$1" 2>/dev/null
 }
 
+pressure_totals() {  # <file> -> "some_total full_total" or empty
+  awk '
+    function num(s) { sub(/^[a-z]+=/, "", s); return s }
+    $1 == "some" { for (i = 2; i <= NF; i++) if ($i ~ /^total=/) s = num($i) }
+    $1 == "full" { for (i = 2; i <= NF; i++) if ($i ~ /^total=/) f = num($i) }
+    END {
+      if (s !~ /^[0-9]+$/ || f !~ /^[0-9]+$/) exit 1
+      printf "%s %s\n", s, f
+    }
+  ' "$1" 2>/dev/null
+}
+
 read_stall() {
-  local parsed
+  local parsed totals io_totals
   if [ ! -e "$PRESSURE" ]; then
     unmeasured stall "$PRESSURE does not exist (this kernel exposes no memory pressure metric)"
     return
@@ -345,6 +384,29 @@ read_stall() {
     unmeasured stall "$PRESSURE carries no recognisable some/full averages"
     return
   fi
+  totals=$(pressure_totals "$PRESSURE")
+  if [ -z "$totals" ]; then
+    unmeasured stall "$PRESSURE carries no recognisable some/full total counters, so its averages cannot be shown to mean anything"
+    return
+  fi
+  read -r STALL_SOME_TOTAL STALL_FULL_TOTAL <<< "$totals"
+
+  # The positive readability test. A flat memory account is only evidence of a
+  # dead account when something proves this kernel accounts pressure at all, so
+  # the io counter is read purely as that control and is never reported as a
+  # stall.
+  if [ "$STALL_SOME_TOTAL" -eq 0 ] && [ "$STALL_FULL_TOTAL" -eq 0 ]; then
+    io_totals=$(pressure_totals "$PRESSURE_IO")
+    STALL_IO_TOTAL=${io_totals%% *}
+    case "$STALL_IO_TOTAL" in ''|*[!0-9]*) STALL_IO_TOTAL= ;; esac
+    if [ -n "$STALL_IO_TOTAL" ] && [ "$STALL_IO_TOTAL" -gt 0 ]; then
+      unmeasured stall "$PRESSURE has accounted exactly zero memory stall since boot while $PRESSURE_IO has accounted $STALL_IO_TOTAL, so this kernel accounts pressure but not memory pressure: its zeros are an absent measurement rather than a quiet machine"
+      STALL_SOME_TOTAL=
+      STALL_FULL_TOTAL=
+      return
+    fi
+  fi
+
   read -r STALL_SOME10 STALL_SOME60 STALL_FULL10 STALL_FULL60 <<< "$parsed"
 }
 
@@ -1065,6 +1127,10 @@ render_human() {
   if [ -n "$STALL_SOME10" ]; then
     printf '  some  avg10=%s  avg60=%s        (at least one task stalled)\n' "$STALL_SOME10" "$STALL_SOME60"
     printf '  full  avg10=%s  avg60=%s        (every task stalled)\n' "$STALL_FULL10" "$STALL_FULL60"
+    # Shown so a reader can see that the zeros above are a live account rather
+    # than an absent one. Monotonic since boot: evidence, never a trigger.
+    printf '  since boot: some %sus, full %sus  (proof the averages are accounted)\n' \
+      "$STALL_SOME_TOTAL" "$STALL_FULL_TOTAL"
   else
     printf '  UNMEASURED - see the unmeasured section below\n'
   fi
@@ -1249,6 +1315,7 @@ render_json() {
     --arg swap_free_kb "${SWAP_FREE_KB:-}" \
     --arg some10 "${STALL_SOME10:-}" --arg some60 "${STALL_SOME60:-}" \
     --arg full10 "${STALL_FULL10:-}" --arg full60 "${STALL_FULL60:-}" \
+    --arg some_total "${STALL_SOME_TOTAL:-}" --arg full_total "${STALL_FULL_TOTAL:-}" \
     --rawfile unmeasured "$UNMEASURED_FILE" \
     --rawfile accounts "$ACCOUNTS_FILE" \
     --rawfile procs "$PROCS_FILE" \
@@ -1280,7 +1347,10 @@ render_json() {
       },
       stall: {
         some_avg10: num($some10), some_avg60: num($some60),
-        full_avg10: num($full10), full_avg60: num($full60)
+        full_avg10: num($full10), full_avg60: num($full60),
+        # Proof that the averages above mean something, never a trigger: this
+        # counter is monotonic since boot and so can never fall.
+        some_total_us: num($some_total), full_total_us: num($full_total)
       },
       accounts: ($accounts | lines | map(split("\t") | . as $f | {
         uid: $f[0], account: $f[1],
