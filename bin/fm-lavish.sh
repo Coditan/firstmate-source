@@ -390,9 +390,14 @@ stop_server() {
 # tailnet or loopback. Deciding from the current reachability orphans exactly
 # those, and once the record names a different port nothing can reach them
 # again.
+#
+# The status is returned rather than swallowed, because it carries a fact no
+# caller can recover afterwards: a non-zero answer means the port is STILL
+# published after the off command ran, so the withdrawal did not take. A caller
+# that is about to hand control away is the one that has to say so.
 withdraw_proxy() {
   fm_tailnet_serve_published "$1" || return 0
-  fm_tailnet_serve_withdraw "$1" || true
+  fm_tailnet_serve_withdraw "$1"
 }
 
 # lavish-axi stops itself when it goes idle and when the last session ends with
@@ -566,8 +571,15 @@ fi
 # that is about to stop answering is the dead tailnet endpoint this exists to
 # prevent - it answers 502 rather than nothing, which reads as a broken board
 # rather than a closed one.
+#
+# A withdrawal that did not take is reported rather than refused. The board is
+# stopping either way, and this is the one moment it can be said at all: the
+# exec below replaces this process, so a silent failure here would leave the
+# captain told his board was stopped while his own tailnet name keeps answering
+# on that port.
 if [ "$SUBCOMMAND" = stop ]; then
-  withdraw_proxy "$PORT"
+  withdraw_proxy "$PORT" \
+    || note "this board is stopping, but its published tailnet endpoint on port $PORT could not be withdrawn, so this vessel's tailnet name keeps answering there until \`tailscale serve --http=$PORT off\` succeeds"
 fi
 
 if [ "$SUBCOMMAND" != open ]; then
