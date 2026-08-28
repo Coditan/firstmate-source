@@ -3,7 +3,7 @@
 `bin/fm-memory-alarm.sh` wakes the fleet when `hlr-web-1` is running out of RAM headroom, or is already stalling on memory it has, and names the process responsible, its account, and the work it was serving.
 It limits nothing, throttles nothing, and kills nothing.
 
-This document owns how its thresholds were derived, what would have to happen to cross them, why the third condition has no threshold yet, and what the alarm cannot see.
+This document owns how its thresholds were derived, what would have to happen to cross them, and what the alarm cannot see.
 The script's own header owns its flags, its states, and its records; nothing here restates them.
 
 ## Why there is no ceiling under it
@@ -12,7 +12,7 @@ The design this replaced was a cgroup ceiling with an alarm on crossing it.
 That was built as far as measuring it and then abandoned on the measurement, because a ceiling on this host is crossed thousands of times by ordinary file reading with 16 GB RAM headroom, and holding a cgroup at one generates memory-stall time on the very reading the alarm consumes.
 `docs/memory-ceiling-caveat.md` owns that finding and `bin/fm-memory-ceiling-probe.sh` re-measures it.
 That finding is now load-bearing in a second way, and it grew: the signal a ceiling was measured to manufacture is the same signal this alarm's stall condition would read, and ordinary work on this seat has since been measured driving that signal ten times higher than the probe did, with no ceiling anywhere.
-That is a large part of why the stall condition has no threshold; see "Stall: no threshold, and why there is none" below.
+That is a large part of why the stall condition decides on duration rather than on a level; see "Stall: gate 1.00, window 7200 seconds" below.
 
 The captain's decision after that measurement was to build the alarm on RAM headroom and growth with no cgroup limit at all.
 That remains true after the 32 GiB swapfile added on 2026-08-17.
@@ -31,7 +31,7 @@ The reading's `protected` label on the wake-delivery listener is still carried i
 | --------- | ------------ | -------------- |
 | headroom | RAM headroom from `MemAvailable` is below the floor | a backstop, for memory going somewhere no tracked process is visibly growing into |
 | horizon | total growth across tracked processes would consume that RAM headroom within the horizon | the primary trigger, and the one that warns rather than confirms |
-| stall | host memory pressure-stall `full avg60` is at or above the stall threshold - **no threshold is chosen, so this condition is unconfigured and evaluates nothing** | it is the only reading that could see a machine which is ALREADY unusable rather than about to become so, and it does not yet separate one from a busy one |
+| stall | host memory pressure-stall `full avg60` has stayed at or above the gate CONTINUOUSLY for longer than the window | the only one that can see a machine which is ALREADY unusable rather than about to become so |
 
 Available memory here is `/proc/meminfo` `MemAvailable`, not RAM plus swap.
 The local `proc_meminfo(5)` page defines `MemAvailable` as an estimate of memory available for new applications without swapping, while `SwapFree` is a separate field.
@@ -63,8 +63,13 @@ The condition crosses on `full`, and reports `some` beside it as evidence.
 `full` is lost machine throughput by definition, and it is the reading that matches the failure this condition exists for: in the 2026-08-27 incident, six processes sat in uninterruptible sleep and one of them was the seat's own agent, which is why the terminal read as frozen.
 Neither can be argued with by arithmetic about what is nominally available, because both count time that work actually spent not running.
 
-It reads the **60-second** window rather than the 10-second one.
-The alarm polls every 300 seconds, so `avg60` covers six times more of the interval between polls than `avg10` does, and every seat the fleet has sampled measured the same 0.00 on both - so the longer window costs nothing measurable and rejects more.
+It reads the **60-second** average rather than the 10-second one.
+The alarm polls every 300 seconds, so `avg60` covers six times more of the interval between polls than `avg10` does, and every seat the fleet has sampled measured the same 0.00 on both - so the longer average costs nothing measurable and rejects more.
+
+**And it decides on duration, not on level.**
+Crossing the gate does not raise the alarm; it starts a clock.
+The condition crosses only when the stall has stayed over that gate continuously for longer than the window.
+The next section is why, and it is the single most important thing on this page.
 
 ### Two things the condition deliberately does not trigger on
 
@@ -74,6 +79,10 @@ It is **evidence only**.
 It never falls, so a condition built on it would fire permanently after any past starvation and could never recover: `tugboat-cloud` still reads 37.7% on that counter at load 0.60, fully recovered, with every windowed value at zero.
 That is the same recovery-must-be-earned trap this alarm already handles for its other conditions.
 The counter is put to one use instead, below, where its never-falling property is exactly what is wanted.
+
+**Not an instantaneous magnitude.**
+No level separates the two states on this fleet's hosts - the measurement is below - so a condition that fired on a reading being high would fire on the linter.
+The level is used only as a gate: it decides whether this machine counts as stalling at all, and the clock does the rest.
 
 **Not swap volume.**
 Measured on 2026-08-28: a 12-core seat carrying 3,032 MiB of swap in use and an 8-core seat carrying 2,929 MiB were both completely calm.
@@ -153,15 +162,13 @@ A horizon at or below the sweep interval could take the machine from silent to r
 **What would have to happen to cross it:** at the lowest headroom ordinary work produced (14,656 MiB), sustained growth of **977 MiB/min** across everything running.
 The fastest growth ordinary work produced was 31.5 MiB/min, so the bar sits **31 times above** measured ordinary behaviour - and the deliberately driven runaway cleared it comfortably.
 
-### Stall: no threshold, and why there is none
+### Stall: gate 1.00, window 7200 seconds
 
-The condition is built, tested and shipped **unconfigured**.
-It evaluates nothing until `FM_MEMORY_ALARM_STALL` is set, and while it is unset every verdict says so rather than letting the silence read as cover.
-That is not caution about a number somebody could refine later.
-On the evidence this fleet now holds, **no threshold on this reading separates a busy machine from a starving one**, and the measurement that shows it was taken here.
+This condition is the only one of the three that does not decide on a level, and the reason is measured rather than preferred.
 
-#### What the quiet end looked like before it was measured under load
+#### Why no level works
 
+The quiet readings looked decisive at first.
 `yacht` sampled cumulative full memory stall as a share of uptime across five vantages on 2026-08-28:
 
 | Seat | Full memory stall / uptime | Share |
@@ -172,86 +179,80 @@ On the evidence this fleet now holds, **no threshold on this reading separates a
 | a WSL seat | 0.0 s / 3,525.9 s | 0.0000% - see the readability trap above |
 
 **Windowed** `memory full` across every vantage at that moment read `avg10`, `avg60` and `avg300` all at **0.00**, except `tugboat`'s `avg300=0.02`.
-The 2026-08-13 fleet survey read `some avg10` 0.00 at every sample under ten live agents plus lint, the test suite, repository-wide greps and git churn.
+That looked like a quiet band of 0.00 to 0.02 against an incident at 37.7%, and a threshold in the low single digits looked defensible.
+Every one of those readings was taken at **low load**.
 
-On that evidence the quiet band looked like 0.00 to 0.02, the incident looked like 37.7%, and a threshold in the low single digits looked defensible - about 100x above quiet and about 19x below the incident.
-Every one of those readings was taken at **low load**, and the survey that was not is the only one, on one 23 GiB host, reported at `avg10` only.
-
-#### The measurement that removed the gap
-
-Taken on `coditan-vessel` on 2026-08-28: 12 cores, 23,456 MiB, 32 GiB swap.
-The load is this repository's own tooling and nothing else - four concurrent `bin/fm-lint.sh` runs, the memory test suites in a loop, repository-wide greps, and `git log -p` churn.
-Nothing allocated deliberately; no balloon, no ceiling, no swap driver.
-`/proc/pressure/memory` was sampled every 3 seconds for 330 seconds.
+Then the load was applied.
+Measured on `coditan-vessel` on 2026-08-28 - 12 cores, 23,456 MiB, 32 GiB swap - driving this repository's own tooling and nothing else: four concurrent `bin/fm-lint.sh` runs, the memory suites in a loop, repository-wide greps, and `git log -p` churn.
+No balloon, no ceiling, no swap driver.
 
 | Reading | Peak |
 | ------- | ---- |
 | `full avg60` | **29.30** |
 | `full avg10` | 49.45 |
 | `some avg60` | 33.32 |
-| `some avg10` | 57.95 |
 | load, 12 cores | 25.68 |
 | **minimum RAM headroom across the entire run** | **11,325 MiB** |
 
-The load and the sampling, so this can be run again rather than believed:
+**29.30 against the incident's 37.74**, on a seat that never came within 8.9 GB of the alarm's own floor and recovered the moment the load stopped.
+The bands overlap, so no level fires on one and not the other.
+A draft of this condition shipped 2.00 on the low-load evidence alone; that value is measured false-firing here at fourteen times over.
+
+#### What does separate them
+
+Ordinary work **finishes**.
+The healthy seat above went quiet the instant its load stopped.
+The incident ran 21 hours 45 minutes and was still going when somebody intervened.
+That is the discriminator, and it is `yacht`'s argument.
+
+So the level is demoted to a **gate** - it decides only whether this machine counts as stalling at all - and the **window** decides whether that stalling means anything.
+
+#### The gate: `full avg60` at or above 1.00
+
+Fifty times the top of the measured windowed quiet band (0.02), and far below anything either a busy seat (29.30) or the incident (37.74) produced.
+It is deliberately easy to cross: crossing it starts a clock and nothing more.
+
+#### The window: 7,200 seconds, from two measurements
+
+**The bound the captain named** - the longest continuous heavy job this repository can produce.
+Measured on `coditan-vessel` on 2026-08-28, running the two jobs CI runs, back to back, which is also what a local validation run does:
 
 ```
-for n in 1 2 3 4; do ( ./bin/fm-lint.sh >/dev/null 2>&1 ) & done
-( for i in $(seq 1 16); do bash tests/fm-memory-alarm.test.sh   >/dev/null 2>&1; done ) &
-( for i in $(seq 1 16); do bash tests/fm-memory-reading.test.sh >/dev/null 2>&1; done ) &
-( for i in $(seq 1 200); do grep -rI 'memory' . >/dev/null 2>&1; done ) &
-( for i in $(seq 1 100); do git log -p -120  >/dev/null 2>&1; done ) &
-
-while :; do
-  awk '$1=="full"{print substr($2,7), substr($3,7)}' /proc/pressure/memory
-  awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo
-  sleep 3
-done
+$ time bin/fm-lint.sh              # rc=0
+1080s
+$ time bin/fm-test-run.sh --all    # 162 test scripts
+3231s
+                                   continuous total 4311s  (1h11m51s)
 ```
 
-The peak of the run, `t` seconds from the start of sampling:
+Host memory stall was sampled every 5 seconds throughout all 4,311 seconds of it.
+**Peak `full avg60`: 0.43.**
+The repository's own heaviest legitimate job, run end to end, never reached the gate at all.
 
-```
-t       some10   some60   full10   full60   availMiB  load1
-297s    14.71    24.59    13.31    21.73    11598     21.83
-300s    46.13    31.05    40.87    27.49    11552     25.68
-303s    47.19    33.32    40.85    29.30    13206     24.58
-306s    31.64    31.18    27.39    27.42    12171     23.17
-309s    25.90    30.16    22.43    26.52    12310     23.17
-```
+**What did reach the gate**, in the four-way pile-up above that peaked at 29.30: the longest continuous stretch at or above 1.00 was **216 seconds**.
 
-The seat was never in trouble.
-It never came within 8.9 GB of the alarm's own 2,400 MiB floor, nothing was killed, and every reading fell back to zero when the load stopped.
+**7,200 seconds is 1.67 times the measured 4,311-second job, and 33 times the longest stretch any ordinary work was measured holding the gate.**
+At the watcher's 300-second cadence it is 24 consecutive polls.
 
-**29.30 against the incident's 37.74.**
-A healthy machine running this fleet's ordinary heavy work reached the same magnitude of memory stall as a machine that was unusable for 22 hours.
-The two bands overlap, so there is no value that fires on one and not the other:
+#### What the window costs, stated plainly
 
-- Anything low enough to catch a starvation early fires on a busy afternoon - **2.00 was measured firing here**, at 14x over.
-- Anything high enough to clear ordinary work sits at the incident's own magnitude, where it is no longer an early warning of anything and is still not shown to separate.
+Two hours of a starvation before anything is said.
+Against the incident that motivated this - 21 hours 45 minutes, with every instrument reporting ok throughout - that is 9% of it.
+Against a starvation shorter than two hours, this condition says nothing at all, and that is a deliberate trade recorded under what the alarm cannot see.
 
-An earlier draft of this condition shipped 2.00 on exactly the reasoning in the section above.
-It is recorded here because the reasoning was sound and the conclusion was wrong, and the only thing that separated them was running the load.
+#### What this still does not rest on
 
-#### Why this is a property of the reading rather than of the threshold
+**The incident figure is a cumulative counter, not a windowed reading.**
+`/proc/pressure/*`'s `total=` is monotonic since boot, and nothing on `tugboat-cloud` records pressure-stall over time, so **no `avg60` survives from any moment inside the incident** and there is no curve.
+The 37.74% is an average over a whole 22.9-hour boot.
 
-Pressure-stall counts time spent waiting on memory.
-It does not distinguish a page-cache refault under heavy file work from a swap-in under starvation, and this fleet's ordinary work is heavy file work: shellcheck across `bin/`, repeated repository-wide greps, git object churn.
-`docs/memory-ceiling-caveat.md` recorded the same instrument being driven to 2.76-3.42 by page-cache reclaim alone on a host with 16 GB to spare.
-This measurement is that finding at ten times the magnitude, with no ceiling involved.
+**Its attribution is reasoning, not measurement.**
+The leak ran about 22 hours of a 22.9-hour boot, post-repair windowed readings are zero, and the recorded quiet baseline is 0.00 under deliberate heavy load, so no ordinary-operation source could have accumulated 34,627 seconds of stall on that boot.
+`tugboat-cloud` is explicit that this is not a per-minute attribution they can make, and it is not claimed as one here.
 
-#### What would have to be measured to settle it
-
-Not a bigger sample of the same thing.
-The open question is whether any reading available here separates the two states, and these are the candidates, none of them measured:
-
-- **Duration.** The episodes above decayed within minutes; the incident ran 21 hours 45 minutes. A condition on stall *sustained across consecutive polls* might separate them - but nothing has measured how long an ordinary-work episode can persist, and the run above held stall high for its whole five minutes, which is already two polls apart.
-- **Swap-in rate alongside stall.** Stall plus sustained `pswpin` would distinguish refault-from-disk from swap thrash. No ordinary baseline exists for that rate, which is why the alarm never adopted one.
-- **The cgroup vantage.** `/sys/fs/cgroup/memory.pressure` is readable here and answers "am I drowning" rather than "is this machine drowning". Whether it separates better is unmeasured.
-- **A deliberate swap-thrash reproduction**, which is still outstanding and is the only thing that would give the loud end a windowed curve rather than an after-the-fact counter.
-
-Until one of those is measured, this condition stays unconfigured, and the alarm says on every poll that this machine is not being watched for memory stall.
-That is worse than a working condition and better than a number that would have woken the fleet every time somebody ran the linter.
+**The duration side has one incident behind it, not an experiment.**
+That ordinary work finishes and a starvation does not is measured on this seat and observed once on `tugboat`'s.
+A deliberate swap-thrash reproduction, held long enough to produce a windowed curve, is still outstanding and is what would turn the loud end from an after-the-fact counter into a measurement.
 
 ### Floor: 2,400 MiB
 
@@ -286,9 +287,11 @@ Stated because a limit nobody wrote down is one somebody will later assume away.
 - **It reads a sixty-second window every five minutes, so a short starvation can fall between two polls.**
   The incident it was built for lasted 21 hours 45 minutes, so this costs nothing there.
   An episode shorter than the gap between polls is a real blind spot.
-- **It is not watching for memory stall at all.**
-  The stall condition ships unconfigured because no threshold on that reading separates a busy machine from a starving one on the evidence measured so far: see "Stall: no threshold, and why there is none".
-  The shape the 2026-08-27 incident took is therefore still unwatched, and the alarm says so on every poll rather than leaving the gap silent.
+- **It says nothing about a starvation shorter than the window.**
+  The stall condition needs two hours of continuous stalling before it crosses, because no level separates a busy machine from a starving one and duration is what does: see "Stall: gate 1.00, window 7200 seconds".
+  A machine that is unusable for an hour and then recovers passes this condition in silence, and that is the price of not firing every time somebody runs the linter.
+- **A home can switch the stall condition off, and one that has is told so.**
+  Setting the gate to the empty string leaves the condition unconfigured; it then fires nothing, and every verdict says this machine is not being watched for memory stall rather than leaving the gap silent.
 - **A memory account that is flat while nothing else has accounted pressure either is taken at face value.**
   The positive readability test needs a live io counter as its control.
   On a machine where both accounts are still at zero - a fresh boot, or a container with no disk activity - a dead memory account and a genuinely quiet one are indistinguishable, and the reading reports the zeros.
@@ -377,9 +380,9 @@ A seat could therefore sit at load 18 with 71% iowait and its own agent blocked,
 That the two conditions cannot see this shape is **derived** from their definitions plus the readings above; it was not established by deliberately reproducing the starvation.
 What makes it more than an argument is that the derivation is now asserted rather than asserted-about: `test_the_two_original_conditions_stay_silent_on_that_same_reading` in `tests/fm-memory-alarm.test.sh` feeds the incident's own headroom, growth, swap and stall figures to the alarm with the stall condition disabled and requires it to produce no line at all, while `test_a_machine_already_drowning_in_swap_is_seen` requires the same reading to fire once the condition is enabled.
 
-Both tests set a stall threshold explicitly, because the shipped alarm has none.
-They prove the condition works when a threshold exists; they do not make one defensible, and "Stall: no threshold, and why there is none" above records why none is.
+Both tests drive a run of consecutive polls rather than a single reading, because a single reading is exactly what this condition refuses to decide on.
 The stall figures in them are `tugboat-cloud`'s cumulative counters: a 22-hour average rather than a poll-time reading, since no windowed reading survives from inside the incident.
+`test_ordinary_heavy_work_goes_over_the_gate_and_never_crosses` is the other half of the pair, holding this seat's own measured 29.30 over the gate for twenty polls and requiring silence.
 
 ### An alarm that cannot fail visibly is not an assurance
 
@@ -397,6 +400,9 @@ The last row is removed from `bin/fm-memory-reading.sh` and caught by `tests/fm-
 | the `protected` label dropped from the named process | yes |
 | the stall condition, so a machine already thrashing reports ok | yes |
 | a stall the instrument could not read printed as a measured zero | yes |
+| the run reset, so a busy stretch that ended still counted toward the window | yes |
+| the polling-continuity guard, so a gap nobody watched was credited as a run | yes |
+| the window, so the condition crossed on a level the way the draft did | yes |
 | the positive readability test, so a kernel accounting nothing reads calm | yes |
 
 The suite also asserts the boundary the captain drew around this slice: the alarm contains no path that limits, throttles, or kills, checked against the code with its commentary stripped out, so prose about killing cannot satisfy or break it.
