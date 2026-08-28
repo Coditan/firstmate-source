@@ -382,8 +382,16 @@ stop_server() {
 # name. Serve configuration belongs to the whole node, which every UNIX account
 # on this machine shares, so this is called only where ownership of the port has
 # already been proved or where nothing is serving on it at all.
+#
+# What is asked is whether THIS PORT is published, never how the current run
+# resolved. A publication made while the node was in userspace mode outlives
+# that mode: the container can regain /dev/net/tun, or serve can be momentarily
+# unavailable, and the same port then needs taking down by a run that resolved
+# tailnet or loopback. Deciding from the current reachability orphans exactly
+# those, and once the record names a different port nothing can reach them
+# again.
 withdraw_proxy() {
-  [ "$REACHABILITY" = tailnet-proxied ] || return 0
+  fm_tailnet_serve_published "$1" || return 0
   fm_tailnet_serve_withdraw "$1" || true
 }
 
@@ -535,7 +543,16 @@ if [ "$NEEDS_PORT" -eq 1 ]; then
       [ -z "$REASON" ] || note "$REASON"
       ;;
     *)
-      note "no tailnet on this host (${REASON:-reason unavailable}) - this board opens only on this machine."
+      # A vessel that HAS a tailnet address it can neither bind nor publish is
+      # not a vessel with no tailnet, and saying so sends the reader hunting the
+      # wrong thing. Both branches state the same consequence; only the fact
+      # they lead with differs, and the concrete diagnosis stays where it is
+      # owned, in REASON.
+      if [ -n "$TAILADDR" ]; then
+        note "this vessel is not reachable off this machine (${REASON:-reason unavailable}) - this board opens only on this machine."
+      else
+        note "no tailnet on this host (${REASON:-reason unavailable}) - this board opens only on this machine."
+      fi
       ;;
   esac
 fi
