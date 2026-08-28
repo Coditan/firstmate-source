@@ -175,9 +175,12 @@
 #   FM_SEAT_ALARM_REPEAT    seconds between repeats while absent or unmeasured
 #                           (default 1800); 0 disables repeating, transitions
 #                           still notify
-#   FM_SEAT_ALARM_GRACE     seconds an absence must persist before it is
-#                           notified (default 60), so an ordinary seat restart
-#                           between two sweeps does not page the captain
+#   FM_SEAT_ALARM_GRACE     minimum age an absence must reach before it is
+#                           notified (default 60). The age is measured from
+#                           the verdict transition, not from the death, so any
+#                           value below the sweep interval behaves identically:
+#                           the page lands on the SECOND sweep either way, and
+#                           only 0 pages on the sweep that first observes it
 #   FM_SEAT_ALARM_STALE     how long without a completed evaluation before
 #                           --armed calls the alarm stopped (default 1800)
 #   FM_SEAT_ALARM_DISABLE=1 silence detect and --armed only, so suites that
