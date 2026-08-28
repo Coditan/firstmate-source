@@ -675,6 +675,51 @@ test_a_genuinely_calm_stall_reading_is_not_confusable_with_a_blind_one() {
   pass "a measured calm stall and an unreadable one differ in text and in exit status"
 }
 
+test_a_kernel_that_accounts_no_memory_pressure_is_unmeasured_not_calm() {
+  # Measured on a WSL seat on 2026-08-28: every memory pressure average 0.00 AND
+  # a cumulative total of exactly zero over 3,526 seconds of uptime, while the io
+  # counter stood at 2,063,189. Pressure accounting worked there; only the memory
+  # account was flat. From a single read that is indistinguishable from a quiet
+  # machine, so the reading has to prove the account is live rather than trust
+  # that the file answered.
+  local dir="$TMP_ROOT/flatmem" out status=0
+  new_scene "$dir"
+  printf 'some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n' > "$dir/pressure"
+  printf 'some avg10=0.00 avg60=0.00 avg300=0.00 total=2063189\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=1031594\n' > "$dir/io-pressure"
+  out=$(run_reading "$dir" "FM_MEMORY_PRESSURE_IO=$dir/io-pressure") || status=$?
+
+  expect_code 3 "$status" "a kernel that accounts no memory pressure"
+  assert_contains "$out" 'memory-reading: INCOMPLETE' \
+    'a flat memory account beside a live io account was accepted as a complete reading'
+  assert_contains "$out" 'accounted exactly zero memory stall since boot' \
+    'the reading did not say why it distrusts these zeros'
+  assert_not_contains "$(stall_block "$out")" 'avg10=' \
+    'the reading printed stall averages it had just decided were meaningless'
+
+  # The control: same flat memory account, but io is flat too, so nothing proves
+  # this kernel accounts pressure at all and the zeros are not called dead.
+  printf 'some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n' > "$dir/io-pressure"
+  status=0
+  out=$(run_reading "$dir" "FM_MEMORY_PRESSURE_IO=$dir/io-pressure") || status=$?
+  expect_code 0 "$status" "a freshly booted machine with both accounts still at zero"
+  assert_contains "$(stall_block "$out")" 'avg10=0.00' \
+    'a machine with no pressure accounted anywhere yet must not be called blind on that alone'
+  pass "a kernel that accounts pressure but not memory pressure reports unmeasured, never calm"
+}
+
+test_the_cumulative_counter_is_carried_as_proof_and_never_as_a_trigger() {
+  # The counter is monotonic since boot, so anything that fired on it could never
+  # recover. It is carried so a reader can check the averages mean something.
+  local dir="$TMP_ROOT/totals" out
+  new_scene "$dir"
+  out=$(run_reading "$dir" --json)
+  [ "$(printf '%s' "$out" | jq -r '.stall.some_total_us')" = 5135032 ] \
+    || fail 'the json did not carry the cumulative some counter'
+  [ "$(printf '%s' "$out" | jq -r '.stall.full_total_us')" = 4911577 ] \
+    || fail 'the json did not carry the cumulative full counter'
+  pass "the cumulative stall counters are carried in the reading as proof the averages are live"
+}
+
 test_each_unreadable_input_is_named_and_forces_a_non_zero_exit() {
   local dir="$TMP_ROOT/badinputs" out status case_name
 
@@ -887,6 +932,8 @@ test_corrupt_and_future_samples_force_incomplete_readings
 test_sample_body_failures_are_not_first_sightings
 test_a_reused_pid_is_not_reported_as_growth
 test_a_genuinely_calm_stall_reading_is_not_confusable_with_a_blind_one
+test_a_kernel_that_accounts_no_memory_pressure_is_unmeasured_not_calm
+test_the_cumulative_counter_is_carried_as_proof_and_never_as_a_trigger
 test_each_unreadable_input_is_named_and_forces_a_non_zero_exit
 test_a_cgroup_tree_nobody_read_is_not_reported_as_an_account_with_no_session
 test_a_nonsearchable_cgroup_tree_is_unmeasured
