@@ -114,7 +114,7 @@ Read `docs/memory-alarm.md` before acting on one: it owns the thresholds, how th
 ### Losing this seat
 
 A seat that stops is now noticed by something other than the captain walking into it.
-The locked bootstrap step arms `bin/fm-seat-alarm.sh` on the watcher, and every session start reports `SEAT_ALARM:` when this home's watch is unarmed or has stopped running; `docs/seat-absence.md` owns the reading, the restart arrangement, and the residual neither closes.
+The locked bootstrap step arms `bin/fm-seat-alarm.sh` on the watcher of the vessel it watches - and only there, because a secondmate home inherits no outbound sender - and every session start on that vessel reports `SEAT_ALARM:` when its watch is unarmed or has stopped running; `docs/seat-absence.md` owns the reading, the restart arrangement, and the residual neither closes.
 Three facts bind wherever this is met.
 This is the one alarm that messages the captain itself, because firstmate is the subject of its reading and cannot route a report about its own absence, so a session must never treat its own quiet as unobserved.
 A seat being closed on purpose is declared with `bin/fm-seat-stay-down.sh down` first, or the captain is paged for an absence he chose.

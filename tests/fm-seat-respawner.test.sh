@@ -255,9 +255,112 @@ test_a_pending_first_turn_holds_the_next_launch() {
     || fail "a second seat was launched while the first had not taken the lock; got $launches"
   [ -f "$home/state/.seat-first-turn" ] \
     || fail "the pending first turn was dropped while its pane could not be read"
-  assert_grep "launch held" "$home/state/.seat-respawner.log" \
+  assert_grep "held: the seat already started for this episode" "$home/state/.seat-respawner.log" \
     "holding the next launch was not operator-visible"
   pass "seat respawner waits out the seat it already started before starting another"
+}
+
+# A HELD LAUNCH MUST STILL REACH THE END OF THE EPISODE. A pane whose agent
+# never finishes session start stays open indefinitely, so the pending record
+# holds the next launch indefinitely; an episode that never advanced its counter
+# while held would never reach the retry bound, never emit the give-up finding,
+# and never say anything at all - the silent absence this whole area exists to
+# remove, arriving through the hold instead of through the seat. So waiting costs
+# exactly what launching costs, and a hold that never lands ends the same way an
+# exhausted relaunch episode does.
+test_a_held_first_turn_still_reaches_the_retry_bound_and_gives_up() {
+  local home delivery tmux log status launches findings
+  home=$(make_home held-giveup)
+  status="$home/status.txt"
+  delivery="$home/fake-delivery"
+  tmux="$home/fake-tmux"
+  log="$home/tmux.log"
+  printf 'undeliverable: listener pid 1 is up with 1 wake(s) pending, but no session has published where the model turn lives\n' > "$status"
+  write_fake_delivery "$delivery"
+  write_pane_fake_tmux "$tmux" "$log"
+
+  # Attempt 1 launches and records the first turn owed to the pane it opened.
+  FM_SEAT_RESPAWNER_MAX_ATTEMPTS=3 FM_FAKE_DELIVERY_STATUS="$status" \
+    run_respawner_once "$home" "$delivery" "$tmux" \
+    || fail "respawner refused the first unreachable check"
+  [ -f "$home/state/.seat-first-turn" ] \
+    || fail "the launch recorded no pending first turn, so there is nothing to hold on"
+
+  # Attempts 2 and 3 are due on schedule and are held rather than launched, and
+  # each one spends the attempt it was due.
+  sleep 2
+  FM_SEAT_RESPAWNER_MAX_ATTEMPTS=3 FM_FAKE_DELIVERY_STATUS="$status" \
+    run_respawner_once "$home" "$delivery" "$tmux" \
+    || fail "respawner refused the second unreachable check"
+  sleep 3
+  FM_SEAT_RESPAWNER_MAX_ATTEMPTS=3 FM_FAKE_DELIVERY_STATUS="$status" \
+    run_respawner_once "$home" "$delivery" "$tmux" \
+    || fail "respawner refused the third unreachable check"
+  [ -f "$home/state/.seat-first-turn" ] \
+    || fail "the pending first turn was dropped before the bound was reached"
+
+  # The bound is now reached, and the episode must end the way an exhausted one
+  # ends: out loud, through the findings surface.
+  FM_SEAT_RESPAWNER_MAX_ATTEMPTS=3 FM_FAKE_DELIVERY_STATUS="$status" \
+    run_respawner_once "$home" "$delivery" "$tmux" \
+    || fail "respawner refused the give-up check"
+
+  launches=$(grep -c new-window "$log" 2>/dev/null || printf 0)
+  [ "$launches" = 1 ] \
+    || fail "a held episode launched a second seat beside the first; got $launches"
+  [ -f "$home/state/.seat-respawn-giveup" ] \
+    || fail "a first turn that never landed held the episode open forever and never gave up"
+  findings=$(find "$home/data/findings" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')
+  [ "$findings" = 1 ] \
+    || fail "a held episode did not emit exactly one give-up finding; got $findings"
+  assert_grep "exhausted 3 launch attempt" "$home/data/findings/"*.json \
+    "the give-up finding from a held episode did not name the exhausted attempt bound"
+  pass "a first turn that never lands still reaches the retry bound and gives up out loud"
+}
+
+# The verdict the alarm turns into a sentence on the captain's phone. A
+# respawner that is beating normally while the seat it started never finished
+# starting is not a recovery under way, so it may not answer `up:`.
+test_a_held_first_turn_is_reported_as_holding_rather_than_up() {
+  local home out beat
+  home=$(make_home holding-status)
+  beat="$home/state/.last-seat-respawner-beat"
+
+  run_status() {
+    env FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$home/state" \
+      FM_CONFIG_OVERRIDE="$home/config" FM_SEAT_RESPAWNER_FORCE_BACKEND=keeper \
+      "$SERVICE" status
+  }
+
+  # A respawner cycling normally: its own lock, this home, a live pid, a fresh
+  # beacon. Nothing held yet.
+  mkdir -p "$home/state/.seat-respawner.lock"
+  {
+    printf 'pid=%s\n' "$$"
+    printf 'fm-home=%s\n' "$home"
+  } > "$home/state/.seat-respawner.lock/record"
+  : > "$beat"
+  out=$(run_status)
+  case "$out" in
+    up:*) : ;;
+    *) fail "a healthy respawner with nothing held did not answer up: $out" ;;
+  esac
+
+  # Now it is holding a first turn it typed into a pane that never took the lock.
+  {
+    printf 'pane=%%9\n'
+    printf 'at=%s\n' "$(date +%s)"
+    printf 'submitted=%s\n' "$(date +%s)"
+    printf 'held=%s\n' "$(date +%s)"
+  } > "$home/state/.seat-first-turn"
+  out=$(run_status)
+  case "$out" in
+    holding:*) : ;;
+    *) fail "a respawner holding a seat that never started did not answer holding: $out" ;;
+  esac
+  assert_contains "$out" "has not finished starting" \
+    "the holding verdict did not say what it is waiting on"
+  pass "a respawner holding a seat that never finished starting answers holding rather than up"
 }
 
 # The state this whole area exists to remove is a restarter that is in the tree
@@ -569,6 +672,8 @@ test_only_a_provably_dead_watcher_is_revived
 test_convergence_is_swept_before_the_alarm_and_supersedes_its_old_shim
 test_an_unreadable_lock_never_produces_a_launch
 test_a_pending_first_turn_holds_the_next_launch
+test_a_held_first_turn_still_reaches_the_retry_bound_and_gives_up
+test_a_held_first_turn_is_reported_as_holding_rather_than_up
 test_an_armed_restart_that_never_ran_is_reported
 test_launch_does_not_pin_the_respawners_path
 test_resume_style_launch_command_is_refused

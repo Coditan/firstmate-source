@@ -326,12 +326,19 @@ deliver_first_turn() {
   # would find presence still absent and delivery still undeliverable and open a
   # SECOND seat beside the live one - the orphan this record exists to prevent,
   # arriving through the deadline rather than through a verdict. So the hold
-  # keeps standing while both facts hold, and nothing is spent by waiting: it
-  # consumes no launch attempt, the presence arm above still retires the record
-  # the moment any seat takes this home, and the confident-absence branch below
-  # still retires it the moment the pane goes. Only a CONFIDENT yes holds; an
-  # unreachable backend falls through and is abandoned as before, because a hold
-  # on a reading nobody could take is a hold on nothing.
+  # keeps standing while both facts hold: the presence arm above still retires
+  # the record the moment any seat takes this home, and the confident-absence
+  # branch below still retires it the moment the pane goes. Only a CONFIDENT yes
+  # holds; an unreachable backend falls through and is abandoned as before,
+  # because a hold on a reading nobody could take is a hold on nothing.
+  #
+  # WAITING IS NOT FREE, AND THAT IS WHAT BOUNDS THIS. one_cycle spends a launch
+  # attempt on every cycle a hold is otherwise due, so a hold that never lands
+  # reaches MAX_ATTEMPTS and gives up out loud exactly as an exhausted relaunch
+  # episode does. The `held` mark below is also what
+  # bin/fm-seat-respawner-service.sh reports as `holding:`, so the captain is
+  # told a seat was started and has not finished starting rather than that a
+  # restart is under way.
   if [ "$age" -ge "$FIRST_TURN_DEADLINE" ]; then
     if [ -n "$submitted" ] && [ -n "$pane" ]; then
       rc=0
@@ -581,19 +588,15 @@ one_cycle() {
   count=$FM_SEAT_ATTEMPT_COUNT
   next=$FM_SEAT_ATTEMPT_NEXT
   now=$(date +%s)
-  # A seat this respawner already started, still on its way to the lock, is not
-  # a reason to start another. The delivery verdict stays undeliverable until
-  # session start publishes an endpoint - well past the first backoff - so
-  # launching on schedule here would leave a live agent in a window nothing
-  # tracks or reports. Waiting costs no attempt, and FM_SEAT_FIRST_TURN_DEADLINE
-  # bounds it, so a pane that never presents a composer still frees the next one.
-  if first_turn_pending; then
-    if [ "$now" -ge "$next" ] && [ -z "$(kv_get "$FIRST_TURN" deferred 2>/dev/null || true)" ]; then
-      first_turn_mark deferred || true
-      log "launch held: the seat already started for this episode has not taken this home's lock yet"
-    fi
-    return 0
-  fi
+  # THE BOUND IS TESTED BEFORE THE HOLD, AND A HELD CYCLE STILL SPENDS AN
+  # ATTEMPT. A first turn that never lands can hold indefinitely - a pane whose
+  # agent blocks before session start stays open forever, so the deadline branch
+  # in deliver_first_turn keeps holding it - and an episode that never advances
+  # its counter never reaches MAX_ATTEMPTS, never gives up, and never emits the
+  # finding that is the only thing in this half that speaks. So an unbounded
+  # wait would be a silent one. Waiting therefore costs exactly what a launch
+  # costs, and an episode that stays held ends the same way an exhausted one
+  # does.
   if [ "$count" -ge "$MAX_ATTEMPTS" ]; then
     emit_giveup_finding "$key" "$status_line" || true
     return 0
@@ -605,6 +608,17 @@ one_cycle() {
   delay=$(backoff_for "$count")
   next=$((now + delay))
   write_attempt_record "$key" "$count" "$next" || return 1
+  # A seat this respawner already started, still on its way to the lock, is not
+  # a reason to start another. The delivery verdict stays undeliverable until
+  # session start publishes an endpoint - well past the first backoff - so
+  # launching on schedule here would leave a live agent in a window nothing
+  # tracks or reports. The attempt above is spent either way; only the launch is
+  # withheld.
+  if first_turn_pending; then
+    first_turn_mark deferred || true
+    log "launch attempt $count held: the seat already started for this episode has not taken this home's lock yet"
+    return 0
+  fi
   if launch_in_tmux "$status_line"; then
     log "launch attempt $count submitted after: $status_line"
   else
