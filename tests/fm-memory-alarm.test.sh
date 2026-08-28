@@ -96,7 +96,7 @@ alarm() {
       FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
       FM_MEMORY_ALARM_READING="$FAKE" FM_TEST_ANSWER="$ANSWER" \
       FM_MEMORY_ALARM_FLOOR_MIB=2400 FM_MEMORY_ALARM_HORIZON_MIN=15 \
-      FM_MEMORY_ALARM_STALL=2.00 \
+      FM_MEMORY_ALARM_STALL=1.00 FM_MEMORY_ALARM_STALL_WINDOW="${FM_TEST_STALL_WINDOW:-5400}" \
       "$ALARM" "$@"
 }
 
@@ -107,12 +107,25 @@ unconfigured_alarm() {
       FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
       FM_MEMORY_ALARM_READING="$FAKE" FM_TEST_ANSWER="$ANSWER" \
       FM_MEMORY_ALARM_FLOOR_MIB=2400 FM_MEMORY_ALARM_HORIZON_MIN=15 \
+      FM_MEMORY_ALARM_STALL='' \
       "$ALARM" "$@"
+}
+
+# Drive the alarm at a chosen moment, so a run of consecutive polls can be
+# played out in a test without waiting for one in real time.
+alarm_at() {  # <epoch-offset-seconds> [args...]
+  local at=$1; shift
+  # A subshell with an exported override, not `env`: `env` runs a program and
+  # cannot invoke a shell function, and a silently failed call produces no
+  # output - which every "must stay silent" assertion here would have passed.
+  ( export FM_MEMORY_ALARM_NOW="$((BASE_NOW + at))"; alarm "$@" )
 }
 
 reset_home() {
   rm -rf "$HOME_DIR"; mkdir -p "$HOME_DIR/state" "$HOME_DIR/data"
   FM_TEST_STALL=0.00
+  FM_TEST_STALL_WINDOW=5400
+  BASE_NOW=$(date +%s)
 }
 
 log_lines() {
@@ -397,32 +410,36 @@ test_an_alarm_that_stopped_running_is_reported() {
 test_a_machine_already_drowning_in_swap_is_seen() {
   # The 2026-08-27 shape: RAM headroom comfortably above the floor, nothing
   # growing, and a machine nobody can use. Both original conditions read clear
-  # here, which is why this one exists.
-  # The readings are tugboat-cloud's, from the incident itself: 38.0% of uptime
-  # with nothing able to run, 42.0% with at least one task waiting, headroom
-  # 3577 MiB - above the 2400 MiB floor throughout - and 4245 MiB in swap.
+  # here, which is why this one exists. It takes a RUN of consecutive polls to
+  # cross, because duration is the discriminator, so play one out.
   reset_home
   reading 16000 true 0
-  alarm >/dev/null
+  alarm_at 0 >/dev/null
+  local out t
+  # tugboat's incident figures: 38.0% with nothing able to run, 42.0% with at
+  # least one task waiting, headroom 3577 MiB, and 4245 MiB already in swap.
+  for t in $(seq 300 300 5400); do
+    reading_thrashing 3577 38.0 4245 2900 42.0
+    out=$(alarm_at "$t")
+    assert_contains "|$out|" "||" "at ${t}s the run is still short of the window and must stay silent"
+  done
   reading_thrashing 3577 38.0 4245 2900 42.0
-  local out
-  out=$(alarm)
-  assert_contains "$out" "MEMORY_ALARM:" "a machine stalling on memory must be announced"
+  out=$(alarm_at 5700)
+  assert_contains "$out" "MEMORY_ALARM:" "a stall that outlasts the window must be announced"
   assert_contains "$out" "stalling on memory" \
     "the line must not open by calling this a RAM-headroom shortage, which is the one thing it is not"
   assert_not_contains "$out" "running out of RAM headroom" \
     "headroom is healthy in this shape and saying otherwise sends the reader after the wrong cause"
+  assert_contains "$out" "continuously for 1h30m" \
+    "the crossing must lead with the duration, because the duration is the finding"
   assert_contains "$out" "run at all for 38.0% of the last 60 seconds" \
-    "the crossing must state the stall it measured, and say what it means"
-  assert_contains "$out" "2.00 threshold" "and must name the threshold it crossed"
-  assert_contains "$out" "At least one task was waiting for 42.0% of it" \
-    "and must carry the wider stall reading as evidence beside the one it decided on"
-  assert_contains "$out" "3577 MiB of RAM headroom still looked available" \
+    "and must still state the level it measured"
+  assert_contains "$out" "3577 MiB of RAM headroom still looks available" \
     "and must state the healthy headroom reading alongside it"
   assert_contains "$out" "Swap in use: 4245 MiB" "and must state how much has already gone to swap"
   assert_contains "$out" "Nothing has been limited or killed" \
     "the crossing must say plainly that nothing was acted against"
-  pass "a machine already drowning in swap is seen, and named as stalling rather than short of headroom"
+  pass "a machine still stalling after the whole window is seen, and named as stalling rather than short of headroom"
 }
 
 test_the_two_original_conditions_stay_silent_on_that_same_reading() {
@@ -431,15 +448,10 @@ test_the_two_original_conditions_stay_silent_on_that_same_reading() {
   # nothing at all. Headroom is above the floor and nothing is growing.
   reset_home
   reading 16000 true 0
-  env FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
-      FM_MEMORY_ALARM_READING="$FAKE" FM_TEST_ANSWER="$ANSWER" \
-      FM_MEMORY_ALARM_STALL=100 "$ALARM" >/dev/null
+  unconfigured_alarm >/dev/null
   reading_thrashing 3577 38.0 4245 2900 42.0
   local out
-  out=$(env FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
-            FM_MEMORY_ALARM_READING="$FAKE" FM_TEST_ANSWER="$ANSWER" \
-            FM_MEMORY_ALARM_FLOOR_MIB=2400 FM_MEMORY_ALARM_HORIZON_MIN=15 \
-            FM_MEMORY_ALARM_STALL=100 "$ALARM")
+  out=$(unconfigured_alarm)
   assert_contains "|$out|" "||" \
     "headroom and growth alone must be shown to say nothing here, which is why this condition exists"
   pass "the headroom and horizon conditions are silent on the incident reading, as measured"
@@ -450,10 +462,12 @@ test_the_stall_crossing_names_the_largest_resident_process_not_a_grower() {
   # growth ranking would name nobody at exactly the moment somebody needs naming.
   reset_home
   reading 16000 true 0
-  alarm >/dev/null
-  reading_thrashing 3577 38.0
-  local out
-  out=$(alarm)
+  alarm_at 0 >/dev/null
+  local out t
+  for t in $(seq 300 300 5700); do
+    reading_thrashing 3577 38.0
+    out=$(alarm_at "$t")
+  done
   assert_contains "$out" "Largest resident process:" \
     "a stall crossing must name by residency, because nothing is growing in this shape"
   assert_contains "$out" "chrome --headless (pid 9001)" "the alarm must name the process"
@@ -462,8 +476,8 @@ test_the_stall_crossing_names_the_largest_resident_process_not_a_grower() {
   assert_contains "$out" "holding 2900 MiB resident" "and must state the measurement it named it on"
   assert_not_contains "$out" "Largest grower" \
     "naming a grower here would report the absence of the wrong measurement"
-  assert_grep 'memory stall' "$HOME_DIR/data/memory-alarm.log" \
-    "the durable record must carry the stall it decided on"
+  assert_grep 'memory stall for' "$HOME_DIR/data/memory-alarm.log" \
+    "the durable record must carry the run it decided on"
   assert_grep 'chrome --headless' "$HOME_DIR/data/memory-alarm.log" \
     "and must carry the process it named"
   pass "a stall crossing names the largest resident process, with its account and its work"
@@ -472,32 +486,110 @@ test_the_stall_crossing_names_the_largest_resident_process_not_a_grower() {
 test_the_stall_condition_keeps_the_protected_label() {
   reset_home
   reading 16000 true 0
-  alarm >/dev/null
-  printf '{"schema":"fm-memory-reading.v1","complete":true,"unmeasured":[],"headroom":{"total_kb":24019908,"available_kb":%s,"swap_total_kb":33554428,"swap_free_kb":29200000},"stall":{"some_avg10":42.0,"some_avg60":42.0,"full_avg10":38.0,"full_avg60":38.0},"growth":{"interval_seconds":300,"scope_reason":null,"unmeasured_reason":null},"processes":[{"pid":9003,"account":"coditan","rss_kb":2969600,"growth_kb_per_min":0,"attribution":{"kind":"infrastructure","detail":"wake delivery for coditan-firstmate","route":"cwd"},"protected":true,"command":"fm-delivery"}]}\n' \
-    "$(( 3577 * 1024 ))" >"$ANSWER"
-  local out
-  out=$(alarm)
+  alarm_at 0 >/dev/null
+  local out t
+  for t in $(seq 300 300 5700); do
+    printf '{"schema":"fm-memory-reading.v1","complete":true,"unmeasured":[],"headroom":{"total_kb":24019908,"available_kb":%s,"swap_total_kb":33554428,"swap_free_kb":29200000},"stall":{"some_avg10":42.0,"some_avg60":42.0,"full_avg10":38.0,"full_avg60":38.0},"growth":{"interval_seconds":300,"scope_reason":null,"unmeasured_reason":null},"processes":[{"pid":9003,"account":"coditan","rss_kb":2969600,"growth_kb_per_min":0,"attribution":{"kind":"infrastructure","detail":"wake delivery for coditan-firstmate","route":"cwd"},"protected":true,"command":"fm-delivery"}]}\n' \
+      "$(( 3577 * 1024 ))" >"$ANSWER"
+    out=$(alarm_at "$t")
+  done
   assert_contains "$out" "wake-delivery listener, which nothing may act against" \
     "the protected label must travel with the name on this condition too, not only on growth"
   pass "the stall condition carries the protected label wherever it names a process"
 }
 
-test_ordinary_busy_operation_does_not_reach_the_stall_threshold() {
-  # The measured band this threshold sits in: ordinary fleet work read 0.00, and
-  # the heaviest non-thrashing reading on record read 0.25. Neither may fire.
-  reset_home
-  local out
+test_the_measured_quiet_band_does_not_even_start_a_run() {
   # yacht measured windowed full memory stall across five vantages on
   # 2026-08-28: every one read 0.00 except tugboat's post-recovery avg300 at
-  # 0.02. 0.10 is well past the top of that band and must still say nothing.
-  for level in 0.00 0.02 0.10; do
+  # 0.02. The gate sits above that band, so a quiet machine starts no clock.
+  local out level
+  for level in 0.00 0.02 0.37; do
     reset_home
     reading_thrashing 16000 "$level"
-    out=$(alarm)
-    assert_contains "|$out|" "||" \
-      "a full stall of $level must not fire: it is at or above the whole measured quiet band"
+    out=$(alarm_at 0 --status)
+    assert_contains "$out" "memory-alarm: ok" "a stall of $level is inside the measured quiet band"
+    assert_not_contains "$out" "stalling for" \
+      "a reading inside the measured quiet band must not start a run at all"
   done
-  pass "the stall threshold sits clear of the measured quiet band across every seat sampled"
+  pass "the gate sits above the whole measured quiet band, so a calm machine starts no clock"
+}
+
+test_ordinary_heavy_work_goes_over_the_gate_and_never_crosses() {
+  # The measurement this design rests on. On coditan-vessel on 2026-08-28 this
+  # repository's own tooling drove full avg60 to 29.30 on a healthy seat - higher
+  # than plenty of real trouble - and then STOPPED, because work that finishes
+  # stops stalling. Level cannot tell those apart; duration can.
+  reset_home
+  reading 16000 true 0
+  alarm_at 0 >/dev/null
+  local out t
+  for t in 300 600 900 1200; do
+    reading_thrashing 16000 29.30
+    out=$(alarm_at "$t")
+    assert_contains "|$out|" "||" "ordinary heavy work at ${t}s must not fire, however high the level goes"
+  done
+  # The job finishes. The clock must go back to zero, not carry on.
+  reading_thrashing 16000 0.00
+  out=$(alarm_at 1500)
+  assert_contains "|$out|" "||" "the end of a busy stretch is not an event"
+  # A second, longer stretch must be timed from its own start: if the run were
+  # not reset it would inherit 1200s and cross far too early.
+  for t in $(seq 1800 300 6600); do
+    reading_thrashing 16000 29.30
+    out=$(alarm_at "$t")
+    assert_contains "|$out|" "||" "a fresh busy stretch at ${t}s must be timed from its own start"
+  done
+  [ "$(log_lines)" -eq 0 ] || fail "ordinary heavy work must leave no durable record at all"
+  pass "ordinary heavy work goes far over the gate, ends, and never reaches the window"
+}
+
+test_a_run_is_only_a_run_if_the_polls_actually_happened() {
+  # A gap in polling means nobody was watching, and a stretch nobody watched is
+  # not a run that was seen. Without this, a watcher that stopped for an hour
+  # would come back and credit itself the whole hour.
+  reset_home
+  reading 16000 true 0
+  alarm_at 0 >/dev/null
+  reading_thrashing 16000 29.30
+  alarm_at 300 >/dev/null
+  # Nothing polls for well past the continuity limit, then one poll arrives at a
+  # moment that would be past the window if the unwatched gap were credited.
+  reading_thrashing 16000 29.30
+  local out
+  out=$(alarm_at 6000)
+  assert_contains "|$out|" "||" \
+    "a gap in polling must restart the run rather than hand it the time nobody watched"
+  pass "a run of consecutive polls is credited only for the polls that happened"
+}
+
+test_a_calm_machine_says_how_far_a_run_has_got() {
+  # A run under way is the clock this condition decides on. A reader who cannot
+  # see it cannot tell an ordinary busy stretch from the start of something that
+  # will not stop.
+  reset_home
+  reading_thrashing 16000 29.30
+  alarm_at 0 >/dev/null
+  reading_thrashing 16000 29.30
+  local out
+  out=$(alarm_at 900 --status)
+  assert_contains "$out" "memory-alarm: ok" "a short run must not be a crossing"
+  assert_contains "$out" "stalling for 15m0s of the 1h30m it would take to count" \
+    "a calm verdict must show how far the run has got and what it would take"
+  pass "a calm machine states the run under way and the window it would have to outlast"
+}
+
+test_status_does_not_advance_the_run_it_reports() {
+  # The same rule the growth sample has: somebody asking what the alarm sees
+  # right now must not be feeding the clock they are reading.
+  reset_home
+  reading_thrashing 16000 29.30
+  alarm_at 0 >/dev/null
+  local before after
+  before=$(cat "$HOME_DIR/state/memory-alarm.stall")
+  alarm_at 300 --status >/dev/null
+  after=$(cat "$HOME_DIR/state/memory-alarm.stall")
+  [ "$before" = "$after" ] || fail "--status advanced the run it was only supposed to report"
+  pass "--status reports the run without extending it"
 }
 
 test_a_stall_reading_the_alarm_could_not_take_is_never_an_all_clear() {
@@ -524,39 +616,47 @@ test_a_stall_reading_the_alarm_could_not_take_is_never_an_all_clear() {
 test_recovery_is_not_declared_on_a_stall_nobody_could_read() {
   reset_home
   reading 16000 true 0
-  alarm >/dev/null
-  reading_thrashing 3577 38.0
-  alarm >/dev/null                   # crossed on stall
+  alarm_at 0 >/dev/null
+  local t
+  for t in $(seq 300 300 5700); do
+    reading_thrashing 3577 38.0
+    alarm_at "$t" >/dev/null          # crossed on a run past the window
+  done
   FM_TEST_STALL=none
-  reading 16000 true 0               # headroom and growth fine, stall unreadable
+  reading 16000 true 0                # headroom and growth fine, stall unreadable
   local out
-  out=$(alarm)
+  out=$(alarm_at 6000)
   assert_not_contains "$out" "recovered" \
     "a shortage must not be declared over by a run that could not re-read the condition that raised it"
   assert_contains "$out" "not re-evaluated" "the alarm must say why it cannot call the shortage over"
   pass "recovery is never declared on the strength of a stall nobody could read"
 }
 
-test_a_stall_recovery_must_be_earned_by_the_margin() {
+test_leaving_a_stall_crossing_is_earned_by_the_run_ending() {
   reset_home
   reading 16000 true 0
-  alarm >/dev/null
+  alarm_at 0 >/dev/null
+  local out t
+  for t in $(seq 300 300 5700); do
+    reading_thrashing 3577 38.0
+    out=$(alarm_at "$t")
+  done
+  assert_contains "$out" "MEMORY_ALARM:" "the crossing must have happened by the end of the window"
+  # Still stalling: silent, and still crossed.
   reading_thrashing 3577 38.0
-  alarm >/dev/null
-  # Back under the 2.00 threshold, but not clear of it by the recovery margin
-  # (2.00 / 1.25 = 1.60). Recovery must not be declared on this.
-  reading_thrashing 3577 1.80
-  local out
-  out=$(alarm)
-  assert_contains "|$out|" "||" "a stall inside the recovery margin must not declare recovery"
-  [ "$(log_lines)" -eq 1 ] || fail "hovering at the stall line must not write a recovery record"
-  reading_thrashing 3577 0.10
-  out=$(alarm)
-  assert_contains "$out" "recovered" "a stall clear of the margin must declare recovery"
-  pass "leaving a stall crossing is earned by the recovery margin, not by dipping under the line"
+  out=$(alarm_at 6000)
+  assert_contains "|$out|" "||" "a continuing stall must be reported once, not on every poll"
+  # The stall ends, so the run resets and the recovery is announced.
+  reading_thrashing 16000 0.00
+  out=$(alarm_at 6300)
+  assert_contains "$out" "recovered" "the end of the stall must be announced"
+  [ "$(log_lines)" -eq 2 ] || fail "crossing and recovery must each leave exactly one record"
+  assert_grep 'memory stall for' "$HOME_DIR/data/memory-alarm.log" \
+    "the durable record must carry the run the decision was made on"
+  pass "a stall crossing is left when the run ends, and reported once at each end"
 }
 
-test_a_malformed_stall_threshold_falls_back_rather_than_holding_the_alarm_crossed() {
+test_a_malformed_stall_gate_falls_back_rather_than_holding_the_alarm_crossed() {
   # An unparsable threshold would compare as zero in awk and hold this condition
   # crossed on every reading forever, which is the loudest possible way to go
   # blind. It must fall back to the shipped default instead.
@@ -568,33 +668,33 @@ test_a_malformed_stall_threshold_falls_back_rather_than_holding_the_alarm_crosse
             FM_MEMORY_ALARM_READING="$FAKE" FM_TEST_ANSWER="$ANSWER" \
             FM_MEMORY_ALARM_STALL="not a number" "$ALARM" --status)
   assert_contains "$out" "memory-alarm: ok" "a malformed threshold must not hold a calm machine crossed"
-  assert_contains "$out" "no stall threshold has been chosen" \
-    "a threshold that could not be understood must leave the condition unwatched and say so"
-  pass "a malformed stall threshold leaves the condition unwatched rather than firing forever"
+  assert_contains "$out" "no stall gate is configured" \
+    "a gate that could not be understood must leave the condition unwatched and say so"
+  pass "a malformed stall gate leaves the condition unwatched rather than firing forever"
 }
 
-test_an_unchosen_stall_threshold_is_reported_never_silently_unwatched() {
-  # The condition ships unconfigured because no defensible threshold exists yet.
-  # An alarm that quietly does not watch for something is indistinguishable from
-  # one that watched and found nothing, which is the failure this whole
-  # programme removes - so the absence has to be spoken.
+test_an_unconfigured_stall_gate_is_reported_never_silently_unwatched() {
+  # A home can switch this condition off, and one that has must be told so. An
+  # alarm that quietly does not watch for something is indistinguishable from one
+  # that watched and found nothing, which is the failure this whole programme
+  # removes, so the absence has to be spoken.
   reset_home
   reading_thrashing 16000 29.30
   local out status=0
   out=$(unconfigured_alarm --status) || status=$?
   expect_code 0 "$status" "an unconfigured stall condition on an otherwise healthy machine"
-  assert_contains "$out" "no stall threshold has been chosen" \
+  assert_contains "$out" "no stall gate is configured" \
     "an unconfigured condition must name itself rather than pass for a clear reading"
   assert_contains "$out" "not being watched for memory stall" \
     "and must say plainly what is not being watched"
   assert_not_contains "$out" "memory stall 29.30%" \
     "an unjudged condition must not print its reading as though it had been judged"
   assert_not_contains "$out" "CROSSED" "and must never fire on a threshold nobody chose"
-  pass "an unchosen stall threshold is reported as unwatched, never passed off as calm"
+  pass "an unconfigured stall gate is reported as unwatched, never passed off as calm"
 }
 
-test_an_unchosen_stall_threshold_does_not_block_a_recovery_it_never_raised() {
-  # STALL_BLIND blocks recovery because the instrument failed. An unset threshold
+test_an_unconfigured_stall_gate_does_not_block_a_recovery_it_never_raised() {
+  # STALL_BLIND blocks recovery because the instrument failed. An unset gate
   # must NOT, or a home that never configures one would be stuck crossed forever
   # after its first headroom shortage.
   reset_home
@@ -608,7 +708,25 @@ test_an_unchosen_stall_threshold_does_not_block_a_recovery_it_never_raised() {
   out=$(unconfigured_alarm)
   assert_contains "$out" "recovered" \
     "a condition that was never armed must not hold the alarm crossed for ever"
-  pass "an unchosen stall threshold leaves the other two conditions working end to end"
+  pass "an unconfigured stall gate leaves the other two conditions working end to end"
+}
+
+test_the_shipped_gate_and_window_are_the_ones_the_document_derives() {
+  # Every case above sets the gate and window explicitly so it can drive a run
+  # deterministically, which means none of them would notice the shipped
+  # defaults drifting away from the measurements docs/memory-alarm.md derives
+  # them from. This is the case that would.
+  reset_home
+  reading_thrashing 16000 29.30
+  local out
+  out=$(env FM_HOME="$HOME_DIR" \
+            FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
+            FM_MEMORY_ALARM_READING="$FAKE" FM_TEST_ANSWER="$ANSWER" "$ALARM" --status)
+  assert_contains "$out" "of the 2h0m it would take to count" \
+    "the shipped window must stay the 7200s the document derives from the measured 4311s job"
+  assert_contains "$out" "stalling for 0s" \
+    "and the shipped gate must be low enough that a stall of 29.30 starts a run"
+  pass "the shipped gate and window match the measurements the document derives them from"
 }
 
 test_usage_errors_exit_two() {
@@ -636,15 +754,20 @@ test_recovery_is_not_declared_on_growth_nobody_could_compare
 test_scoped_growth_on_a_calm_machine_is_not_a_growth_all_clear
 test_a_machine_already_drowning_in_swap_is_seen
 test_the_two_original_conditions_stay_silent_on_that_same_reading
+test_ordinary_heavy_work_goes_over_the_gate_and_never_crosses
+test_a_run_is_only_a_run_if_the_polls_actually_happened
+test_the_measured_quiet_band_does_not_even_start_a_run
+test_a_calm_machine_says_how_far_a_run_has_got
+test_status_does_not_advance_the_run_it_reports
 test_the_stall_crossing_names_the_largest_resident_process_not_a_grower
 test_the_stall_condition_keeps_the_protected_label
-test_ordinary_busy_operation_does_not_reach_the_stall_threshold
 test_a_stall_reading_the_alarm_could_not_take_is_never_an_all_clear
 test_recovery_is_not_declared_on_a_stall_nobody_could_read
-test_a_stall_recovery_must_be_earned_by_the_margin
-test_a_malformed_stall_threshold_falls_back_rather_than_holding_the_alarm_crossed
-test_an_unchosen_stall_threshold_is_reported_never_silently_unwatched
-test_an_unchosen_stall_threshold_does_not_block_a_recovery_it_never_raised
+test_leaving_a_stall_crossing_is_earned_by_the_run_ending
+test_a_malformed_stall_gate_falls_back_rather_than_holding_the_alarm_crossed
+test_an_unconfigured_stall_gate_is_reported_never_silently_unwatched
+test_an_unconfigured_stall_gate_does_not_block_a_recovery_it_never_raised
+test_the_shipped_gate_and_window_are_the_ones_the_document_derives
 test_status_labels_horizon_as_ram_headroom_not_swap_exhaustion
 test_the_wake_delivery_listener_keeps_its_label
 test_the_alarm_limits_nothing_and_kills_nothing

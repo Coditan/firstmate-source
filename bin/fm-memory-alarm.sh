@@ -89,16 +89,20 @@
 #              least twice before the RAM headroom it predicts is gone. A
 #              horizon shorter than that cadence could go from silent to
 #              reclaim or swap pressure between two polls without ever firing.
-#   stall      NOT CHOSEN. There is no defensible value yet, so this
-#              condition ships UNCONFIGURED and evaluates nothing until
-#              FM_MEMORY_ALARM_STALL is set. Measured on coditan-vessel on
-#              2026-08-28: this repo's own tooling, on a healthy seat that
-#              never fell below 11,325 MiB of RAM headroom, drove windowed
-#              full memory stall to 29.30 - the same magnitude as the 37.74%
-#              a real 22-hour starvation produced. Ordinary busy work and a
-#              starving machine overlap on this reading, so no threshold
-#              separates them. docs/memory-alarm.md owns that measurement and
-#              what would have to be measured to settle it.
+#   stall      DURATION, not level. No magnitude separates the two states:
+#              measured on coditan-vessel on 2026-08-28, this repo's own
+#              tooling drove windowed full memory stall to 29.30 on a healthy
+#              seat that never fell below 11,325 MiB of RAM headroom, against
+#              the 37.74% a real 22-hour starvation produced. What does
+#              separate them is that ordinary work FINISHES: the healthy seat
+#              recovered the instant the load stopped, and the incident ran
+#              21h45m and would have kept going. So the gate is set just above
+#              the measured quiet band and the WINDOW does the discriminating.
+#              The window is 1.67x the longest continuous heavy job this
+#              repository can produce - lint then the full suite, measured at
+#              4311s - and 33x the longest stretch any ordinary work was
+#              measured holding the gate at all. docs/memory-alarm.md owns
+#              both measurements.
 #   floor      well below the lowest headroom measured across a real busy
 #              period on this fleet, so ordinary work does not reach it. From
 #              that busy low, something would have to consume roughly ten
@@ -153,6 +157,14 @@
 # State, under FM_HOME/state:
 #   memory-alarm.state    the last state this alarm decided, so a transition can
 #                         be told from a continuation
+#   memory-alarm.stall    the run of consecutive polls that have seen this
+#                         machine stalling: the epoch the current run began and
+#                         the epoch of the last poll that continued it. A run
+#                         is what the stall condition measures, so it has to
+#                         outlive the poll that observed it. It records the
+#                         last poll as well as the first because a gap in
+#                         polling means the polls were not consecutive, and a
+#                         run nobody was watching is not a run that was seen.
 #   memory-alarm.samples  this alarm's OWN growth sample, kept apart from the
 #                         reading's, so that an operator running the reading by
 #                         hand does not reset what the alarm compares against.
@@ -164,12 +176,18 @@
 #   FM_MEMORY_ALARM_FLOOR_MIB    headroom floor in MiB (default 2400)
 #   FM_MEMORY_ALARM_HORIZON_MIN  RAM-headroom horizon in minutes (default 15)
 #   FM_MEMORY_ALARM_STALL        host memory pressure-stall `full avg60` at or
-#                                above which the stall condition crosses, as a
-#                                percentage of wall time. UNSET BY DEFAULT and
-#                                deliberately so: see above. While it is unset
-#                                the condition never fires, and every verdict
-#                                says the condition is not being watched rather
-#                                than letting silence read as cover.
+#                                above which this machine counts as stalling at
+#                                all, as a percentage of wall time
+#                                (default 1.00). This is a gate, not a
+#                                severity judgement: crossing it starts a
+#                                clock rather than raising an alarm. Set it to
+#                                the empty string to leave the condition
+#                                unconfigured, in which case it fires nothing
+#                                and every verdict says so.
+#   FM_MEMORY_ALARM_STALL_WINDOW how long, in seconds, the stall must stay at
+#                                or above that gate CONTINUOUSLY before the
+#                                condition crosses (default 7200, two hours).
+#                                This is the discriminator; see above.
 #   FM_MEMORY_ALARM_RECOVERY     multiplier a reading must clear both
 #                                thresholds by before recovery is declared
 #                                (default 1.25)
@@ -194,11 +212,13 @@ READING=${FM_MEMORY_ALARM_READING:-$SCRIPT_DIR/fm-memory-reading.sh}
 LOG="$DATA/memory-alarm.log"
 STATE_FILE="$STATE/memory-alarm.state"
 SAMPLES="$STATE/memory-alarm.samples"
+STALL_RUN_FILE="$STATE/memory-alarm.stall"
 CHECK="$STATE/memory-alarm.check.sh"
 
 FLOOR_MIB=${FM_MEMORY_ALARM_FLOOR_MIB:-2400}
 HORIZON_MIN=${FM_MEMORY_ALARM_HORIZON_MIN:-15}
-STALL_MAX=${FM_MEMORY_ALARM_STALL:-}
+STALL_MAX=${FM_MEMORY_ALARM_STALL-1.00}
+STALL_WINDOW=${FM_MEMORY_ALARM_STALL_WINDOW:-7200}
 RECOVERY=${FM_MEMORY_ALARM_RECOVERY:-1.25}
 STALE=${FM_MEMORY_ALARM_STALE:-1800}
 NOW=${FM_MEMORY_ALARM_NOW:-$(date +%s)}
@@ -211,6 +231,14 @@ case "$STALE" in *[!0-9]*|'') STALE=1800 ;; esac
 # same way rather than reaching awk, where an unparsable value would compare as
 # zero and hold the condition crossed forever.
 case "$STALL_MAX" in ''|.|*.|*[!0-9.]*|*.*.*) STALL_MAX= ;; esac
+case "$STALL_WINDOW" in *[!0-9]*|'') STALL_WINDOW=7200 ;; esac
+
+# A run of polls is only a run if the polls happened. The watcher makes checks
+# due after 300s and observes that on a 15s loop, so one slot is at most 315s;
+# 1260s is four of those, the same figure docs/memory-alarm.md derives for the
+# growth sample. A longer gap than that means nobody was watching, and a run
+# nobody was watching is restarted rather than credited.
+STALL_CONTINUITY_MAX=1260
 
 MODE=detect
 case "${1:-}" in
@@ -251,6 +279,8 @@ MINUTES=
 GROWTH_MIB_MIN=0
 STALL_FULL60=
 STALL_SOME60=
+STALL_RUN_SECONDS=0
+STALL_ACTIVE=
 SWAP_USED_MIB=
 OFFENDER=
 RESIDENT=
@@ -409,7 +439,8 @@ evaluate() {
   # threshold, so this condition never raised anything and cannot hold a
   # recovery back - but it is still reported, because a condition nobody is
   # watching has to say so rather than pass for a clear reading.
-  [ -n "$STALL_MAX" ] || STALL_UNSET="no stall threshold has been chosen for this fleet yet, so this machine is not being watched for memory stall at all"
+  [ -n "$STALL_MAX" ] || STALL_UNSET="no stall gate is configured for this home, so this machine is not being watched for memory stall at all"
+  read_stall_run
 
   # Crossed if ANY condition holds. Recovery must clear ALL of them by the
   # margin, so adding a condition can only make recovery harder to declare.
@@ -420,8 +451,11 @@ evaluate() {
     crossed=yes
     [ -n "$CROSS_KIND" ] || CROSS_KIND=horizon
   fi
+  # DURATION, not level. Being over the gate starts the clock; only running
+  # past the window crosses. Ordinary heavy work goes over the gate routinely
+  # and never reaches the window, because it finishes.
   if [ -z "$STALL_BLIND" ] && [ -z "$STALL_UNSET" ] &&
-     awk -v s="$STALL_FULL60" -v t="$STALL_MAX" 'BEGIN { exit !(s + 0 >= t + 0) }'; then
+     [ "$STALL_RUN_SECONDS" -ge "$STALL_WINDOW" ]; then
     crossed=yes
     [ -n "$CROSS_KIND" ] || CROSS_KIND=stall
   fi
@@ -434,10 +468,11 @@ evaluate() {
       horizon)
         REASON="growth across the running work totals $GROWTH_MIB_MIN MiB/min, which would use up the $AVAIL_MIB MiB RAM headroom still available without swapping in about $MINUTES minutes" ;;
       stall)
-        # State the headroom that looks healthy in the same breath as the stall,
-        # because a reader who sees only one of the two numbers will reach for
-        # the wrong explanation of the machine in front of them.
-        REASON="nothing on this machine could run at all for $STALL_FULL60% of the last 60 seconds - every task was blocked waiting on memory - which is at or above the $STALL_MAX threshold, while $AVAIL_MIB MiB of RAM headroom still looked available; that figure counts only memory available WITHOUT swapping, so it reads healthy once the pressure has already been absorbed"
+        # Lead with the duration, because the duration is the finding. The level
+        # alone says nothing: ordinary work reaches it and stops, and this one
+        # has not stopped. State the healthy headroom in the same breath, or a
+        # reader will go looking for a shortage that is not there.
+        REASON="this machine has been stalling on memory continuously for $(human_duration "$STALL_RUN_SECONDS"), past the $(human_duration "$STALL_WINDOW") that the longest heavy job this repository can run fits inside - work that finishes stops stalling, and this has not. Nothing could run at all for $STALL_FULL60% of the last 60 seconds. $AVAIL_MIB MiB of RAM headroom still looks available, but that figure counts only memory available WITHOUT swapping, so it reads healthy once the pressure has already been absorbed"
         [ -z "$STALL_SOME60" ] ||
           REASON="$REASON. At least one task was waiting for $STALL_SOME60% of it"
         if [ -n "$SWAP_USED_MIB" ]; then
@@ -456,10 +491,14 @@ evaluate() {
   if [ -z "$GROWTH_BLIND" ] && [ "$MINUTES" != NA ]; then
     awk -v m="$MINUTES" -v h="$HORIZON_MIN" -v r="$RECOVERY" 'BEGIN { exit !(m + 0 >= h * r) }' || horizon_clear=no
   fi
-  # The margin divides here rather than multiplying: a stall crossing is high
-  # values, so clearing it by a quarter means falling a quarter BELOW the line.
+  # This condition crosses on duration, so it clears on duration too, and the
+  # margin divides rather than multiplies because a crossing here is a LONG run.
+  # It deliberately does not test the instantaneous level: ordinary heavy work
+  # goes over the gate all the time, and holding a headroom recovery back
+  # because somebody is running the linter would change what the other two
+  # conditions do, which this addition may not.
   if [ -z "$STALL_BLIND" ] && [ -z "$STALL_UNSET" ]; then
-    awk -v s="$STALL_FULL60" -v t="$STALL_MAX" -v r="$RECOVERY" 'BEGIN { exit !(s + 0 <= t / r) }' || stall_clear=no
+    awk -v r="$STALL_RUN_SECONDS" -v w="$STALL_WINDOW" -v m="$RECOVERY" 'BEGIN { exit !(r + 0 <= w / m) }' || stall_clear=no
   fi
 
   # A calm verdict has to say which conditions it actually judged, because the
@@ -484,8 +523,14 @@ evaluate() {
 
   REASON="$AVAIL_MIB MiB RAM headroom available"
   [ -n "$GROWTH_BLIND" ] || REASON="$REASON, growth $GROWTH_MIB_MIN MiB/min"
-  { [ -n "$STALL_BLIND" ] || [ -n "$STALL_UNSET" ]; } ||
+  if [ -z "$STALL_BLIND" ] && [ -z "$STALL_UNSET" ]; then
     REASON="$REASON, memory stall $STALL_FULL60% with nothing able to run"
+    # A run under way on a calm machine is worth stating: it is the clock this
+    # condition decides on, and a reader who cannot see it cannot tell an
+    # ordinary busy stretch from the start of something that will not stop.
+    [ -z "$STALL_ACTIVE" ] ||
+      REASON="$REASON, stalling for $(human_duration "$STALL_RUN_SECONDS") of the $(human_duration "$STALL_WINDOW") it would take to count"
+  fi
 
   if [ "$floor_clear" = yes ] && [ "$horizon_clear" = yes ] && [ "$stall_clear" = yes ]; then
     VERDICT=ok
@@ -503,6 +548,52 @@ evaluate() {
   fi
 }
 
+# --- the stall run ----------------------------------------------------------
+#
+# The stall condition measures a RUN of consecutive polls that saw this machine
+# stalling, so the run has to outlive the poll that observed it. This reads it,
+# extends it, and returns how long it has been going.
+#
+# Only detect mode writes. --status must not extend a run, for the same reason
+# it must not advance the growth sample: somebody asking what the alarm sees
+# right now would otherwise be feeding the clock they are reading.
+
+read_stall_run() {  # sets STALL_RUN_SECONDS, and STALL_ACTIVE when a run is on
+  local start="" last="" stalling=no
+
+  if [ -z "$STALL_BLIND" ] && [ -n "$STALL_MAX" ] &&
+     awk -v s="$STALL_FULL60" -v g="$STALL_MAX" 'BEGIN { exit !(s + 0 >= g + 0) }'; then
+    stalling=yes
+  fi
+
+  if [ -f "$STALL_RUN_FILE" ]; then
+    read -r start last _ <"$STALL_RUN_FILE" 2>/dev/null || true
+    case "${start:-}" in ''|*[!0-9]*) start= ;; esac
+    case "${last:-}" in ''|*[!0-9]*) last= ;; esac
+  fi
+
+  if [ "$stalling" != yes ]; then
+    # The run is over. Clearing it is the whole reason ordinary work does not
+    # reach the window: it finishes, and the clock goes back to zero.
+    [ "$MODE" = status ] || rm -f -- "$STALL_RUN_FILE" 2>/dev/null
+    STALL_RUN_SECONDS=0
+    STALL_ACTIVE=
+    return
+  fi
+
+  STALL_ACTIVE=yes
+  if [ -z "$start" ] || [ -z "$last" ] || [ "$((NOW - last))" -gt "$STALL_CONTINUITY_MAX" ] ||
+     [ "$NOW" -lt "$start" ]; then
+    start=$NOW
+  fi
+  STALL_RUN_SECONDS=$((NOW - start))
+  [ "$STALL_RUN_SECONDS" -ge 0 ] || STALL_RUN_SECONDS=0
+  if [ "$MODE" != status ]; then
+    mkdir -p "$STATE" 2>/dev/null &&
+      printf '%s %s\n' "$start" "$NOW" >"$STALL_RUN_FILE" 2>/dev/null
+  fi
+}
+
 # --- durable record ---------------------------------------------------------
 
 record_transition() {
@@ -516,9 +607,9 @@ record_transition() {
   else
     named="${OFFENDER:-no process was growing}"
   fi
-  printf '%s\t%s\t%s -> %s\t%s MiB RAM headroom available\t%s MiB/min growth\t%s minutes left\t%s memory stall\t%s\t%s\n' \
+  printf '%s\t%s\t%s -> %s\t%s MiB RAM headroom available\t%s MiB/min growth\t%s minutes left\t%s memory stall for %s\t%s\t%s\n' \
     "$NOW" "$(iso "$NOW")" "$from" "$to" "$AVAIL_MIB" "$GROWTH_MIB_MIN" "${MINUTES:-NA}" \
-    "${STALL_FULL60:-NA}" "$named" "$line" >>"$LOG" 2>/dev/null
+    "${STALL_FULL60:-NA}" "$(human_duration "$STALL_RUN_SECONDS")" "$named" "$line" >>"$LOG" 2>/dev/null
 }
 
 read_state() {
@@ -623,6 +714,8 @@ case "$MODE" in
       crossed)
         printf 'memory-alarm: CROSSED - %s\n' "$REASON"
         if [ "$CROSS_KIND" = stall ]; then
+          printf 'stalling since: %s (gate %s%%, window %s)\n' \
+            "$(iso "$((NOW - STALL_RUN_SECONDS))")" "$STALL_MAX" "$(human_duration "$STALL_WINDOW")"
           printf 'largest resident process: %s\n' "${RESIDENT:-none: no tracked process holds enough memory for this reading to name}"
         else
           printf 'largest grower: %s\n' "${OFFENDER:-none: no tracked process was growing, so the memory went somewhere this reading does not attribute}"
