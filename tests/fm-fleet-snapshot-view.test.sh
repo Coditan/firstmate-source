@@ -354,6 +354,69 @@ EOF
   pass "backlog normalization preserves strict roles, resolves real blockers, and flags a dangling one"
 }
 
+# A captain hold is a question addressed to the captain, and what phase the work
+# is in does not change who is being asked. Gating this surface on `queued`
+# withheld exactly the more urgent half - a question that STOPPED work already
+# under way - and withheld it in silence. Measured on the main home 2026-08-29:
+# 9 records carried `hold-kind: captain` outside Done, the surface returned 8,
+# and the missing one was a Commodore decision sitting on in-flight work.
+# The disclosure half is not decoration: on the reporting vessel a count of 2
+# looked complete for nineteen days because nothing on the surface said what it
+# was not counting. Every captain-kind hold now either reaches the surface or is
+# named in backlog.omitted[] with the reason it did not.
+test_captain_hold_reaches_the_surface_whatever_phase_the_work_is_in() {
+  local home fakebin out
+  home=$(make_home captain-hold-phase)
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+- [ ] under-way - Deployment window (repo: alpha) (kind: ship) (hold: captain picks the window) (hold-kind: captain)
+- [ ] blocker-work - Work another decision waits on (repo: alpha) (kind: ship)
+
+## Queued
+- [ ] before-start - API shape (repo: alpha) (kind: ship) (hold: captain picks the shape) (hold-kind: captain)
+- [ ] gated - Gated decision blocked-by: blocker-work - waits (repo: alpha) (kind: captain) (hold: captain picks the vendor) (hold-kind: captain)
+- [ ] answered - Answered but unclosed (repo: alpha) (kind: captain) (hold: captain picks the name) (hold-kind: captain)
+  Resolution recorded by fm-decision-hold.
+- [ ] phantom - Held off by a broken edge only blocked-by: ghost-x - waits (repo: alpha) (kind: captain) (hold: captain picks the date) (hold-kind: captain)
+- [ ] other-audience - Waiting on a vendor (repo: alpha) (kind: ship) (hold: vendor replies) (hold-kind: external)
+
+## Done
+- [x] settled - Settled question (repo: alpha) (kind: captain) (hold: captain picked it) (hold-kind: captain) (done 2026-08-20)
+EOF
+  mkdir -p "$home/projects/blocker-work"
+  fm_write_meta "$home/state/blocker-work.meta" \
+    "window=firstmate:fm-blocker-work" "worktree=$home/projects/blocker-work" \
+    "project=alpha" "harness=codex" "kind=ship" "mode=ship"
+  printf 'working: under way\n' > "$home/state/blocker-work.status"
+  fakebin=$(make_fakebin "$home")
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
+
+  printf '%s' "$out" | jq -e '
+    ([.backlog.records[] | select(.captain_actionable == true) | .id] | sort)
+      == ["before-start", "under-way"]
+  ' >/dev/null || fail "a captain hold on work under way did not reach the actionable surface: $out"
+
+  # Every captain-kind hold is either on the surface or named in omitted[] with a
+  # reason. The invariant is what makes a short list distinguishable from a
+  # filtered one, so it is asserted as an invariant and not as a list of cases.
+  printf '%s' "$out" | jq -e '
+    ([.backlog.records[] | select(.structured and .hold_kind == "captain")] | length) as $held
+    | ([.backlog.records[] | select(.captain_actionable == true)] | length) as $shown
+    | ([.backlog.omitted[] | select(.surface == "captain_actionable") | .count] | add // 0) as $withheld
+    | ($held == $shown + $withheld)
+  ' >/dev/null || fail "captain holds were neither shown nor disclosed as withheld: $out"
+
+  printf '%s' "$out" | jq -e '
+    ([.backlog.omitted[] | select(.surface == "captain_actionable")
+      | {reason, ids}] | sort_by(.reason))
+      == [{reason: "answered_pending_close", ids: ["answered"]},
+          {reason: "blocked_by_unresolved", ids: ["gated"]},
+          {reason: "dangling_blocker_edge", ids: ["phantom"]},
+          {reason: "state_terminal", ids: ["settled"]}]
+  ' >/dev/null || fail "the withheld captain holds were not disclosed with their reasons: $out"
+  pass "a captain hold reaches the surface whatever phase its work is in, and every withheld one is named"
+}
+
 # The canonical snapshot decides "is this blocker target real" across BOTH the
 # live backlog and the done archive, so a target that is real in neither is a
 # data-integrity fault the reader must surface, while a target still present as a
@@ -819,6 +882,7 @@ test_empty_fleet_json
 test_fixture_snapshot_json
 test_main_inventory_orphan_and_unstructured_disclosure
 test_normalized_roles_and_plural_blocker_readiness
+test_captain_hold_reaches_the_surface_whatever_phase_the_work_is_in
 test_dangling_blocker_is_integrity_not_a_gate
 test_event_hints_follow_reconciled_current_state
 test_open_decision_survives_later_unrelated_event
