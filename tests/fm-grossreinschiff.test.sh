@@ -420,6 +420,40 @@ test_skill_never_promises_deletion_authority() {
   pass "the sweep reports and never claims deletion authority"
 }
 
+test_skill_excludes_live_branches_after_the_ladder() {
+  assert_grep 'After the ladder, before forming the proposed deletion set' "$SKILL" \
+    "the liveness exclusion must run after landedness is settled"
+  assert_grep 'checked out in any worktree' "$SKILL" \
+    "a checked-out branch must not reach the proposed deletion set"
+  assert_grep 'matches a live task record under `state/<id>.meta`' "$SKILL" \
+    "a branch matching live task metadata must not reach the proposed deletion set"
+  assert_grep 'Report the exclusion count even when it is zero' "$SKILL" \
+    "the sweep must say how many rows the liveness exclusion removed"
+  assert_grep 'does not change their landedness verdict' "$SKILL" \
+    "the liveness exclusion must not weaken or rewrite the ladder"
+  pass "the branch inventory excludes live branches after the landedness ladder"
+}
+
+test_skill_requires_tip_reverify_before_deletion() {
+  assert_grep "Record the measured tip for every remaining deletion candidate" "$SKILL" \
+    "the sweep must leave a tip value for later deletion verification"
+  assert_grep "re-verify each candidate's tip immediately before deleting it" "$SKILL" \
+    "deletion must re-check the branch tip immediately before acting"
+  assert_grep "must refuse that row if the tip moved" "$SKILL" \
+    "a moved branch tip must be refused, not deleted"
+  pass "a later deletion task must refuse candidates whose tip moved"
+}
+
+test_report_shape_keeps_the_deletion_set_single_sourced() {
+  assert_grep 'points to the single deletion-set section instead of duplicating the rows' "$SKILL" \
+    "the conclusion must not carry a second copy of the deletion rows"
+  assert_grep 'in exactly one place in the report' "$SKILL" \
+    "the deletion set must be single-sourced in the report"
+  assert_grep 'rewrite the conclusion before relaying the number to the captain' "$SKILL" \
+    "corrected deletion counts must not drift from the relayed summary"
+  pass "the report shape prevents duplicate deletion-set counts from drifting"
+}
+
 test_cadence_is_reachable_from_the_instruction_surface() {
   assert_grep 'grossreinschiff' "$AGENTS" "AGENTS.md must name the sweep skill"
   # AGENTS.md section 13 no longer carries a second copy of the diagnostic-prefix list.
@@ -479,6 +513,9 @@ test_x_is_withheld_from_a_branch_that_adds_no_paths
 test_skill_states_the_five_safety_properties
 test_skill_covers_all_nine_checklist_items
 test_skill_never_promises_deletion_authority
+test_skill_excludes_live_branches_after_the_ladder
+test_skill_requires_tip_reverify_before_deletion
+test_report_shape_keeps_the_deletion_set_single_sourced
 test_cadence_is_reachable_from_the_instruction_surface
 test_doc_owns_the_cadence_decision_and_its_alternatives
 test_doc_records_the_ladder_order_and_its_own_checklist_hits
