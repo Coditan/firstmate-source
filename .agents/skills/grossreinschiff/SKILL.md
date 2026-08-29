@@ -42,6 +42,7 @@ These bind every item below. They are properties, not preferences: each one is a
 3. **It never touches unlanded work, and a refusal is a stop-and-investigate result.**
    `AGENTS.md` section 1 rule 3 is not relaxed for a cleanup sweep - a sweep is exactly when it is most tempting to relax it.
    An `undetermined` verdict is never promoted to a deletion candidate to make a number look tidier.
+   Landed is not the same as free: after the landedness ladder settles branch content, item 1 still excludes live branches before any proposed deletion set is written.
 
 4. **Each finding names its evidence** - file and line, or command and output.
    The next sweep must be able to re-measure the claim, not inherit a belief from this one.
@@ -99,6 +100,11 @@ Where the incident is dated, it is a past measurement and is written as one - re
 **Surface:** each project's repository, plus any local mirror the pipeline pushes to.
 **Look for:** branches whose work has landed and which nothing prunes.
 **Test:** the ladder above, per branch. Report `landed` / `landed (vacuous)` / `not landed` / `undetermined` with the code that settled it.
+After the ladder, before forming the proposed deletion set, exclude any branch that is checked out in any worktree or that matches a live task record under `state/<id>.meta`.
+Report the exclusion count even when it is zero, so the reader can tell the liveness exclusion ran.
+Keep the liveness exclusion outside the landedness ladder: it removes rows from the deletion candidate set, but it does not change their landedness verdict.
+Record the measured tip for every remaining deletion candidate.
+Any later branch-deletion task must re-verify each candidate's tip immediately before deleting it and must refuse that row if the tip moved since the sweep measured it.
 **Also report the producers**, not only the tombstones: a sweep that deletes 146 branches and leaves the three producers running has bought one week.
 **Who acts:** a scout per project for the inventory (read-only); deletion is a separate authorised task.
 **Evidence:** `coditan-bridge` carried 154 branch entries, 146 of them tombstones of landed work, and three separate producers would each have had to prune - the forge's `delete_branch_on_merge`, the merge helper's flags, and the pipeline's own mirror. Measured 2026-08-03; `docs/grossreinschiff.md` item 1 carries it, from the captain-private report's §5. Of the three, the merge helper now prunes: `bin/fm-pr-merge.sh` passes `--delete-branch`. The forge setting and the pipeline mirror still do not. Producer status is owned by `docs/merged-branch-cleanup.md`.
@@ -201,8 +207,12 @@ It is a private evidence report, so it keeps exact identifiers, paths, commands,
 Required structure:
 
 1. **Conclusion first** - what was found, per item, in numbers.
+   The conclusion names the proposed deletion count and points to the single deletion-set section instead of duplicating the rows there.
 2. **One section per checklist item that produced a finding**, each entry carrying its verdict, the test code or command that settled it, and the evidence line.
-3. **The proposed deletion set**, ordered most-safe-first, with the recovery path for each entry stated - for a GitHub branch that is `refs/pull/<n>/head`, which the forge retains permanently, including for closed-unmerged PRs. **Verify the recovery path rather than assuming it**: the sprawl report checked all 80 refs and got 80 matches, 0 mismatches.
+3. **The proposed deletion set**, in exactly one place in the report and ordered most-safe-first, with each row's measured tip and recovery path stated - for a GitHub branch that is `refs/pull/<n>/head`, which the forge retains permanently, including for closed-unmerged PRs.
+   **Verify the recovery path rather than assuming it**: the sprawl report checked all 80 refs and got 80 matches, 0 mismatches.
+   This set is the post-ladder, post-liveness-exclusion set, and the report states how many ladder-landed rows the liveness exclusion removed.
+   If review or a later correction changes the set, rewrite the conclusion before relaying the number to the captain.
 4. **What this sweep did not cover** - mandatory, see below.
 
 Then tell the captain, in plain language: what was found, what it means, and what needs their word before anything is removed.
