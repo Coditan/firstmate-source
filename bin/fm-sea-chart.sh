@@ -251,7 +251,7 @@
 #   decisions[]        open decisions, after the board's collapse rule
 #   withheld[]         open captain-gated records this chart's decision list does
 #                      not carry, each with the `cause` that kept it off - blocked,
-#                      in-flight, no-hold, other-hold, stale-edge, dangling-edge,
+#                      no-hold, other-hold, stale-edge, dangling-edge,
 #                      unpaired-variant, folded-elsewhere, non-member-variant,
 #                      not-returned - and `why` in words; blocked
 #                      means a decision the fleet has lost, stale-edge and
@@ -590,11 +590,18 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
     else null end;
 
   # Why a captain-gated record is not on the decision list of this chart. These are
-  # different pieces of news and must not share one sentence: a blocked record is
-  # one the fleet has lost track of, while an in-flight one is being worked right
-  # now. Captain-actionability (bin/fm-fleet-snapshot.sh) wants a queued record
-  # held with hold-kind captain and nothing unresolved against it, so each failing
-  # clause gets its own name and its own words.
+  # different pieces of news and must not share one sentence, so each failing
+  # clause gets its own name and its own words. Captain-actionability
+  # (bin/fm-captain-actionable-lib.sh) wants a non-terminal record held with
+  # hold-kind captain and nothing unresolved against it.
+  # There is deliberately NO in-flight clause. Until 2026-08-29 the predicate also
+  # required `queued`, and this function named that as a cause - which read as
+  # reassurance ("somebody is working it right now") for the one shape that is the
+  # opposite of reassuring: a question that did not merely precede the work, it
+  # STOPPED work already under way. That clause is gone from the predicate, so
+  # such a record now reaches the decision list and never arrives here at all; an
+  # in-flight record that still arrives here is held off by something else, and
+  # the clauses below name whichever it is rather than blaming the phase.
   # The unpaired-variant and folded-elsewhere clauses come FIRST, together,
   # because they are the two cases where the record DID reach the actionable
   # surface, so every sentence below them - each of which says the surface never
@@ -612,12 +619,9 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
     elif (unresolved($done; $known) | length) > 0
     then {cause: "blocked",
           why: "blocked by another record that has not resolved, so it never reaches the actionable surface"}
-    elif .state != "queued"
-    then {cause: "in-flight",
-          why: "in flight rather than queued: somebody is working it right now, so it is not a decision lying unanswered"}
     elif .hold_reason == null
     then {cause: "no-hold",
-          why: "queued with no hold recorded, so nothing on the record states what the captain is being asked"}
+          why: "open with no hold recorded, so nothing on the record states what the captain is being asked"}
     elif .hold_kind != "captain"
     then {cause: "other-hold",
           why: (if .hold_kind == null

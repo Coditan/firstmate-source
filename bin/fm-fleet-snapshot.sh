@@ -15,7 +15,7 @@
 #   generated: UTC observation time for this fresh command execution.
 #   fm_home: resolved operational home.
 #   roots: resolved root/config/data/state/projects directories.
-#   backlog: {path,present,records[]} where records are ordered as written in
+#   backlog: {path,present,records[],omitted[]} where records are ordered as written in
 #     data/backlog.md and cover In flight, Queued, and Done.
 #     Canonical tasks-axi rows are structured; free-form non-empty lines in
 #     those sections are preserved as unstructured records.
@@ -29,6 +29,13 @@
 #     `--backlog-json` is intentionally raw per-file input: it does not read the
 #     paired live/archive file, so missing ids stay in unresolved_blocker_ids there
 #     and dangling_blocker_ids is absent.
+#     omitted[] is {surface,reason,count,ids} and names every record carrying
+#     `hold-kind: captain` that captain_actionable did not return, so the two sets
+#     are exhaustive over that population and a short list is distinguishable from
+#     a filtered one. bin/fm-captain-actionable-lib.sh owns the predicate, the
+#     reason vocabulary, and why each clause is there; under `--backlog-json` the
+#     reasons follow that file's own blocker resolution, as everything else there
+#     does.
 #   tasks[]: one row per state/<id>.meta, sorted by id.
 #     current_state is parsed from bin/fm-crew-state.sh <id> and preserves
 #     state, source, cause, detail, and raw line separately. cause is the
@@ -150,6 +157,9 @@ validate_positive_bound FM_SNAPSHOT_REGISTRY_TIMEOUT "$FM_SNAPSHOT_REGISTRY_TIME
 # shellcheck source=bin/fm-blocker-class-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-blocker-class-lib.sh"  # FM_BLOCKER_CLASS_JQ: one owner of "is a blocked-by target real"
+# shellcheck source=bin/fm-captain-actionable-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-captain-actionable-lib.sh"  # FM_CAPTAIN_ACTIONABLE_JQ: one owner of "is this asking the captain"
 
 usage() {
   cat <<'EOF'
@@ -330,12 +340,12 @@ first_pr_url_in_file() {  # <file>
 backlog_json() {  # [<backlog-path>] - defaults to this home's $BACKLOG
   local backlog=${1:-$BACKLOG}
   if [ ! -f "$backlog" ]; then
-    jq -n --arg path "$backlog" '{path:$path,present:false,records:[]}'
+    jq -n --arg path "$backlog" '{path:$path,present:false,records:[],omitted:[]}'
     return 0
   fi
 
   # shellcheck disable=SC2094
-  jq -Rn --arg path "$backlog" '
+  jq -Rn --arg path "$backlog" "$FM_CAPTAIN_ACTIONABLE_JQ"'
     def trim: gsub("^[[:space:]]+|[[:space:]]+$"; "");
     def section_state:
       if . == "In flight" then "in_flight"
@@ -470,19 +480,6 @@ backlog_json() {  # [<backlog-path>] - defaults to this home's $BACKLOG
                elif .state == "queued" then "queued"
                else "done" end)
           | .requires_child_metadata = (.current_role == "worker")
-          # The audience of a hold is `hold_kind`, never the record kind. A record
-          # kind says what the work IS - ship, scout, fog - and `tasks-axi hold
-          # --kind captain` is what says the captain is the one being asked, which
-          # is why AGENTS.md section 10 files a captain-gated thread with that one
-          # command and says nothing about the record kind. Requiring both
-          # fields made every hold filed exactly as instructed invisible: measured
-          # on this home 2026-08-09, 35 records carried `hold-kind: captain` and the
-          # surface returned 32, the missing ones being a production deploy filed as
-          # kind ship and a thread carrying no record kind at all.
-          # `hold --kind` is a closed vocabulary (captain, external, load, parked,
-          # future), so widening admits only records someone deliberately held for
-          # the captain. A blocked record is still withheld here - that is a
-          # separate, separately filed gap and this predicate does not change it.
           # A captain item whose body already carries a recorded decision has been
           # ANSWERED; only its close is unfinished. Presenting it as an open
           # question is how the captain gets asked something he has already
@@ -495,11 +492,18 @@ backlog_json() {  # [<backlog-path>] - defaults to this home's $BACKLOG
           | .answered_pending_close =
               (.state != "done"
                and ((.body_lines // [])[0] == "Resolution recorded by fm-decision-hold."))
-          | .captain_actionable =
-              (.state == "queued" and .hold_kind == "captain"
-               and .hold_reason != null and (.unresolved_blocker_ids | length) == 0
-               and (.answered_pending_close | not))
+          # bin/fm-captain-actionable-lib.sh owns this predicate, why each clause is
+          # there, and the three times a clause of it produced false invisibility.
+          | .captain_actionable = fm_captain_actionable(.)
         else . end)
+    # Say what this surface is not counting, in the shape the snapshot already
+    # uses to disclose a withheld record. Every captain-kind hold is either
+    # returned as captain_actionable or named here with the reason it was not,
+    # so a short list is distinguishable from a filtered one without re-deriving
+    # the predicate. The full-snapshot assembly recomputes this AFTER it
+    # reclassifies dangling blocker edges, because until then a phantom edge is
+    # indistinguishable from a real gate.
+    | .omitted = fm_captain_actionable_omitted(.records)
     | del(.section,.order)
   ' < "$backlog"
 }
@@ -1479,7 +1483,7 @@ json_stdin \
   --arg data "$DATA" \
   --arg config "$CONFIG" \
   --arg projects "$PROJECTS" \
-  "$FM_BLOCKER_CLASS_JQ"'input as $raw_backlog | input as $tasks | input as $main_inventory
+  "$FM_BLOCKER_CLASS_JQ$FM_CAPTAIN_ACTIONABLE_JQ"'input as $raw_backlog | input as $tasks | input as $main_inventory
    | input as $scout_reports | input as $secondmate_current | input as $secondmate_landed
    | input as $archive
    | ([ $raw_backlog.records[]? | select(.structured and .id != null) | {key:.id, value:true} ]
@@ -1496,7 +1500,13 @@ json_stdin \
          | .dangling_blocker_ids = $dangling
          | .unresolved_blocker_ids =
              [ (.unresolved_blocker_ids // [])[] | select(. as $b | ($dangling | index($b)) == null) ]
-       else . + {dangling_blocker_ids: []} end)) as $backlog
+       else . + {dangling_blocker_ids: []} end)
+     # captain_actionable is deliberately NOT recomputed here: a record still
+     # carrying a broken edge is withheld until the edge is cleared, which
+     # tests/fm-fleet-snapshot-view.test.sh pins. The DISCLOSURE is recomputed,
+     # so such a record is named as held off by a dangling edge rather than as
+     # gated by a blocker that no longer appears on it.
+     | .omitted = fm_captain_actionable_omitted(.records)) as $backlog
    | def backlog_by_id($id): ($backlog.records[]? | select(.structured == true and .id == $id) | .) // null;
    def task_by_id($id): ($tasks[]? | select(.id == $id) | .) // null;
    def report_kind($id): (task_by_id($id).kind // backlog_by_id($id).kind // "scout");
