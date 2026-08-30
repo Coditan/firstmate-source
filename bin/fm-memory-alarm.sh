@@ -179,9 +179,10 @@
 #                         this alarm decided, so a transition can be told from a
 #                         continuation; the set of conditions it could not JUDGE
 #                         on that poll - `headroom,horizon,stall` in that order,
-#                         or `-` when all three were judged; and the condition
-#                         that raised the crossing it is holding, or `-` when it
-#                         is holding none. A condition enters the watch set
+#                         or `-` when all three were judged; and the set of
+#                         conditions that raised the crossing it is holding, in
+#                         the same order, or `-` when it is holding none. A
+#                         condition enters the watch set
 #                         because its instrument could not be read or because
 #                         the home deliberately left its gate unconfigured, and
 #                         for no other reason: one suppressed by an expected,
@@ -189,11 +190,16 @@
 #                         sample yet, one too young to divide by, one aged past
 #                         its window - is scope rather than blindness, resolves
 #                         on the next poll that stores a sample, and never
-#                         enters the set. The crossed condition is carried
-#                         because a condition that is blind but never crossed
-#                         says nothing about whether the shortage is over, so
-#                         only the one that RAISED the alarm may hold a
-#                         recovery back. The watch
+#                         enters the set. The crossed set is carried because a
+#                         condition that is blind but never crossed says nothing
+#                         about whether the shortage is over, so only the ones
+#                         that RAISED the alarm may hold a recovery back - and
+#                         they hold it for as long as they cannot be re-read,
+#                         not for one poll. A raiser leaves the set only on a
+#                         reading that re-read it and found it below its
+#                         threshold, so an affirmative recovery is announced
+#                         only once every raiser has actually been looked at
+#                         again and cleared. The watch
 #                         set is carried because a machine only PARTLY watched
 #                         is not a watched machine: a change in it is a
 #                         transition and is spoken once, exactly as a crossing
@@ -372,6 +378,7 @@ SWAP_USED_MIB=
 OFFENDER=
 RESIDENT=
 CROSS_KIND=
+CROSS_SET=
 
 # Which of the three conditions this poll could not JUDGE, in a fixed order so
 # two polls that saw the same thing produce the same string. It is derived from
@@ -606,11 +613,16 @@ evaluate() {
   # Crossed if ANY condition holds. Recovery must clear ALL of them by the
   # margin, so adding a condition can only make recovery harder to declare.
   local crossed=no
-  [ "$AVAIL_MIB" -lt "$FLOOR_MIB" ] && { crossed=yes; CROSS_KIND=headroom; }
+  # CROSS_KIND is the primary one, by priority, and chooses the wording and the
+  # process named. CROSS_SET is EVERY condition that crossed, because a recovery
+  # has to clear all of them and a poll on which two crossed must not be
+  # remembered as one.
+  [ "$AVAIL_MIB" -lt "$FLOOR_MIB" ] && { crossed=yes; CROSS_KIND=headroom; CROSS_SET=headroom; }
   if [ -z "$GROWTH_BLIND" ] && [ "$MINUTES" != NA ] &&
      awk -v m="$MINUTES" -v h="$HORIZON_MIN" 'BEGIN { exit !(m + 0 < h + 0) }'; then
     crossed=yes
     [ -n "$CROSS_KIND" ] || CROSS_KIND=horizon
+    CROSS_SET="${CROSS_SET:+$CROSS_SET,}horizon"
   fi
   # DURATION, not level. Being over the gate starts the clock; only running
   # past the window crosses. Ordinary heavy work goes over the gate routinely
@@ -619,6 +631,7 @@ evaluate() {
      [ "$STALL_RUN_SECONDS" -ge "$STALL_WINDOW" ]; then
     crossed=yes
     [ -n "$CROSS_KIND" ] || CROSS_KIND=stall
+    CROSS_SET="${CROSS_SET:+$CROSS_SET,}stall"
   fi
 
   if [ "$crossed" = yes ]; then
@@ -848,17 +861,85 @@ read_state_watch() {
   esac
 }
 
-# Which condition raised the crossing this alarm is currently holding, so a
-# later poll can tell whether the condition that RAISED it is the one it cannot
+# Which conditions raised the crossing this alarm is currently holding, so a
+# later poll can tell whether the ones that RAISED it are the ones it cannot
 # re-read. A blind condition that never crossed says nothing about whether the
-# shortage is over, and must not hold a recovery back.
+# shortage is over and must not hold a recovery back; a condition that DID raise
+# it and cannot be re-read must hold it back for as long as that lasts, however
+# many polls that is. It is a set rather than one name because two conditions
+# can cross on the same poll, and clearing one of them does not end a shortage
+# the other is still holding. A record from before this field carried a set - a
+# single bare name - parses as a one-element set rather than as nothing.
 read_state_crossed() {
-  local kind=
-  [ -f "$STATE_FILE" ] && { read -r _ _ _ kind <"$STATE_FILE" 2>/dev/null || true; }
-  case "${kind:-}" in
-    headroom|horizon|stall) printf '%s' "$kind" ;;
-    *) printf '%s' - ;;
+  local raw='' out='' c
+  [ -f "$STATE_FILE" ] && { read -r _ _ _ raw <"$STATE_FILE" 2>/dev/null || true; }
+  for c in headroom horizon stall; do
+    case ",${raw:-}," in *",$c,"*) out="${out:+$out,}$c" ;; esac
+  done
+  printf '%s' "${out:--}"
+}
+
+in_set() {  # <condition> <set>
+  case ",$2," in *",$1,"*) return 0 ;; esac
+  return 1
+}
+
+# Whether THIS poll actually re-read a condition. Headroom always was, because
+# a poll that could not read it reaches no verdict at all.
+condition_reread() {  # <condition>
+  case "$1" in
+    headroom) return 0 ;;
+    horizon)  [ -z "$GROWTH_BLIND" ] ;;
+    stall)    [ -z "$STALL_BLIND" ] && [ -z "$STALL_UNSET" ] ;;
+    *) return 1 ;;
   esac
+}
+
+# The crossing still on the books after this poll. A raiser leaves it only by
+# being re-read and found below its threshold; anything that crossed on this
+# poll joins it. So a shortage survives any number of polls that could not see
+# the condition holding it, and ends only on a reading that actually looked.
+crossing_after_this_poll() {  # <held-set>
+  local held=$1 out='' c
+  for c in headroom horizon stall; do
+    if in_set "$c" "$CROSS_SET"; then
+      out="${out:+$out,}$c"
+    elif in_set "$c" "$held" && ! condition_reread "$c"; then
+      out="${out:+$out,}$c"
+    fi
+  done
+  printf '%s' "${out:--}"
+}
+
+# The conditions in the reader's vocabulary rather than the record's.
+raiser_names() {  # <set>
+  local set=$1 out='' c name
+  for c in headroom horizon stall; do
+    in_set "$c" "$set" || continue
+    case "$c" in
+      headroom) name="RAM headroom" ;;
+      horizon)  name=growth ;;
+      *)        name="memory stall" ;;
+    esac
+    out="${out:+$out and }$name"
+  done
+  printf '%s' "$out"
+}
+
+# The raisers this poll could not re-read, phrased with the reason each gave.
+unreadable_raisers() {  # <set>
+  local set=$1 out='' c why
+  for c in headroom horizon stall; do
+    if in_set "$c" "$set" && ! condition_reread "$c"; then
+      case "$c" in
+        horizon) why="growth could not be compared this run ($GROWTH_BLIND)" ;;
+        stall)   why="memory stall could not be read this run (${STALL_BLIND:-$STALL_UNSET})" ;;
+        *)       why="RAM headroom could not be re-read this run" ;;
+      esac
+      out="${out:+$out, and }$why"
+    fi
+  done
+  printf '%s' "$out"
 }
 
 write_state() {
@@ -988,10 +1069,11 @@ evaluate
 PREVIOUS=$(read_state)
 SINCE=$(read_state_since)
 PREVIOUS_WATCH=$(read_state_watch)
-# The crossing this alarm is holding, if any: the stored one while a shortage is
-# still on, replaced by this poll's own when it crosses afresh.
-CROSSED_KIND=$(read_state_crossed)
-[ "$VERDICT" != crossed ] || CROSSED_KIND=${CROSS_KIND:--}
+# The crossing that was on the books BEFORE this poll, and the one that is on
+# them after it. They are separate because the second decides what to say and
+# the first decides how long the shortage has been running.
+HELD_CROSSED=$(read_state_crossed)
+CROSSED_KIND=$(crossing_after_this_poll "$HELD_CROSSED")
 # Taken BEFORE the recovery guard below can rewrite the verdict, because it
 # records what this poll could judge, not what it decided to say about it.
 WATCH=$(unjudged_conditions)
@@ -1001,7 +1083,7 @@ WATCH=$(unjudged_conditions)
 # headroom alone. That is enough to stay quiet while already quiet, and never
 # enough to declare a shortage over - so a crossing lapses into "cannot see"
 # rather than into a recovery nobody measured.
-# It blocks on the condition that RAISED this crossing and on nothing else. An
+# It blocks on the conditions that RAISED this crossing and on nothing else. An
 # input no condition uses - a cgroup tree a container does not have, an
 # installation whose records this account cannot read - says nothing about
 # whether the shortage is over, and neither does a condition that is blind but
@@ -1009,15 +1091,16 @@ WATCH=$(unjudged_conditions)
 # be able to report a headroom shortage as ended. Blocking on either would
 # announce every genuine recovery on such a host as a blindness, and then a
 # restoration of sight that never happened.
-if [ "$VERDICT" = ok ] && [ "$PREVIOUS" = crossed ] &&
-   { { [ "$CROSSED_KIND" = horizon ] && [ -n "$GROWTH_BLIND" ]; } ||
-     { [ "$CROSSED_KIND" = stall ] && [ -n "$STALL_BLIND" ]; }; }; then
+#
+# It keys on the crossing still on the books rather than on the previous poll's
+# verdict, so it holds for as long as the shortage does. Keying on the verdict
+# would hold it for exactly ONE poll: the second consecutive poll that could not
+# re-read the raiser would find the previous verdict was `unmeasured` rather than
+# `crossed`, skip the block, and tell a machine still in shortage that the
+# shortage had ended.
+if [ "$VERDICT" = ok ] && [ "$CROSSED_KIND" != - ]; then
   VERDICT=unmeasured
-  if [ "$CROSSED_KIND" = horizon ]; then
-    REASON="whether the shortage is over is unknown: this alarm crossed on growth, and growth could not be compared this run ($GROWTH_BLIND), so the condition that raised it was not re-evaluated"
-  else
-    REASON="whether the shortage is over is unknown: this alarm crossed on memory stall, and stall could not be read this run ($STALL_BLIND), so the condition that raised it was not re-evaluated"
-  fi
+  REASON="whether the shortage is over is unknown: this alarm crossed on $(raiser_names "$CROSSED_KIND"), and $(unreadable_raisers "$CROSSED_KIND"), so the condition that raised it was not re-evaluated"
   incomplete_note
   stall_gate_note
 fi
@@ -1027,6 +1110,8 @@ fi
 # It holds whatever the previous state was.
 CURRENT=$VERDICT
 [ "$CURRENT" = elevated ] && CURRENT=$PREVIOUS
+# Reaching calm means every raiser was re-read and cleared, so nothing is held.
+[ "$CURRENT" != ok ] || CROSSED_KIND=-
 
 # A machine only PARTLY watched is not a watched machine, so which conditions
 # went unjudged is a state in its own right: a change in that set is a
@@ -1076,15 +1161,13 @@ case "$CURRENT" in
     fi
     ;;
   ok)
-    if [ "$PREVIOUS" = crossed ] || [ "$CROSSED_KIND" != - ]; then
+    if [ "$PREVIOUS" = crossed ] || [ "$HELD_CROSSED" != - ]; then
       LINE="MEMORY_ALARM: recovered - $REASON. The shortage lasted $(human_duration "$((NOW - SINCE))")."
     elif [ "$WATCH" = - ]; then
       LINE="MEMORY_ALARM: the memory watch can see this machine again - $REASON."
     else
       LINE="MEMORY_ALARM: the memory watch reads this machine as calm on the conditions it could judge, and it still cannot judge $WATCH, so this machine is only partly watched - $REASON. This is not an all-clear for what it cannot judge."
     fi
-    # The shortage is over, so the crossing this alarm was holding is released.
-    CROSSED_KIND=-
     ;;
   unmeasured)
     LINE="MEMORY_ALARM: the memory watch has gone blind - $REASON. This is not an all-clear."
@@ -1099,9 +1182,13 @@ fi
 # into "cannot tell": the shortage did not end there, it stopped being
 # judgeable, so the clock keeps running and the recovery that finally comes can
 # still say how long it lasted.
+# A crossing that was ALREADY on the books keeps its clock; one that is new on
+# this poll starts it here, whatever the previous state was. Reading the held
+# crossing rather than the one this poll leaves behind is what keeps a fresh
+# shortage from inheriting the epoch at which some unrelated input went blind.
 if [ "$CURRENT" = "$PREVIOUS" ]; then
   SINCE_NEXT=$SINCE
-elif [ "$CROSSED_KIND" != - ] && [ "$PREVIOUS" != ok ]; then
+elif [ "$CURRENT" != ok ] && [ "$HELD_CROSSED" != - ]; then
   SINCE_NEXT=$SINCE
 else
   SINCE_NEXT=$NOW

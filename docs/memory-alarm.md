@@ -263,7 +263,9 @@ It exists for the shapes the horizon cannot see: memory taken by processes below
 
 ### Recovery margin: 1.25
 
-Leaving the crossed state requires clearing **both** thresholds by a quarter, so a machine sitting at the line reports once instead of alternating.
+Leaving the crossed state requires clearing **all three** conditions by a quarter, so a machine sitting at the line reports once instead of alternating.
+Headroom and horizon clear it by beating their thresholds by that multiple.
+The stall condition clears it in the other arithmetic direction, because it crosses on duration rather than on a level: the run multiplied by the margin must still fit inside the window.
 Recovery is deliberately harder than crossing.
 
 ## What the alarm cannot see
@@ -315,7 +317,10 @@ Stated because a limit nobody wrote down is one somebody will later assume away.
   Blindness is per-condition and never blanket, though: an incomplete reading still yields the verdict of every condition whose own input was present, names every input it could not read alongside that verdict, and says on the same line that it is not a full all-clear.
   RAM headroom is the single exception, because the floor measures it and the horizon divides by it: a reading without it leaves nothing to judge at all.
   So `fm-memory-alarm.sh --status` exits 3 only when NO condition could be judged, 0 when at least one was judged and none crossed, and 4 when one crossed.
-  So making blindness narrower did not make recovery easier: what a recovery must clear is the condition that raised the alarm, which is a narrower and more exacting test than the reading's completeness ever was.
+  This did make recovery easier in one direction and harder in another, and both halves are worth stating.
+  Easier: a headroom or horizon crossing can now be declared over on a host where an unrelated condition is permanently blind, which before this change could never happen at all, because the old guard blocked recovery from ANY crossing whenever growth could not be compared.
+  Harder: the crossing is now carried in the state record and survives every poll that could not re-read it, so a raiser is cleared only by a reading that actually looked at it again and found it below its threshold, however many polls that takes.
+  The justification for the first half is the second: a condition that never raised the alarm says nothing about whether the shortage is over, while one that did says everything, and it is now held to that for as long as the shortage lasts.
 
 ## Evidence
 

@@ -485,6 +485,97 @@ test_a_growth_sample_that_merely_aged_out_is_not_a_lost_instrument() {
   pass "a growth sample that merely aged out is scope, not a lost instrument"
 }
 
+test_a_crossing_is_held_for_every_poll_that_could_not_re_read_its_raiser() {
+  # The guard must key on the crossing still on the books, not on the previous
+  # poll's verdict. Keyed on the verdict it holds for exactly ONE poll: the
+  # second consecutive blind poll finds the previous verdict was `unmeasured`
+  # rather than `crossed`, skips the block, and tells a machine still in
+  # shortage that the shortage ended.
+  reset_home
+  reading 16000 true 0
+  alarm_at 0 >/dev/null
+  reading 16000 true $((1200 * 1024)) false task 'alpha (ship, alpha-project)'
+  local out t
+  out=$(alarm_at 300)
+  assert_contains "$out" "MEMORY_ALARM:" "the horizon crossing must be announced"
+
+  # Three consecutive polls that cannot compare growth at all.
+  for t in 600 900 1200; do
+    reading_process_table_unreadable 16000
+    out=$(alarm_at "$t")
+    assert_not_contains "$out" "recovered" \
+      "no poll that could not re-read the raiser may declare the shortage over"
+    assert_not_contains "$out" "can see this machine again" \
+      "nor may any of them claim sight was regained"
+  done
+
+  # The raiser becomes readable and reads clear: now, and only now, it is over.
+  reading 16000 true 0
+  out=$(alarm_at 1500)
+  assert_contains "$out" "recovered" \
+    "the shortage ends on the first poll that re-read the raiser and found it clear"
+  assert_contains "$out" "The shortage lasted 20m0s" \
+    "and the duration must be measured from the original crossing"
+  pass "a crossing is held for every poll that could not re-read its raiser"
+}
+
+test_a_second_raiser_that_went_blind_still_holds_the_shortage() {
+  # Two conditions cross on the same poll. Clearing one of them does not end a
+  # shortage the other is still holding, so the record has to carry the set
+  # rather than whichever one came first by priority.
+  reset_home
+  FM_TEST_STALL_WINDOW=600
+  reading 16000 true 0
+  alarm_at 0 >/dev/null
+
+  # The stall run builds while headroom is still fine.
+  local out t
+  for t in 300 600; do
+    reading_thrashing 16000 38.0
+    out=$(alarm_at "$t")
+  done
+  # Now headroom drops too, so headroom and stall cross on the same poll.
+  reading_thrashing 1800 38.0
+  out=$(alarm_at 900)
+  assert_contains "$out" "MEMORY_ALARM:" "the double crossing must be announced"
+
+  # Headroom is restored, but the stall account goes unreadable, so the stall
+  # crossing was never cleared.
+  reading_stall_unmeasured 16000
+  out=$(alarm_at 1200)
+  assert_not_contains "$out" "recovered" \
+    "a shortage must not be called over while a second raiser could not be re-read"
+  assert_contains "$out" "memory stall could not be read" \
+    "and the alarm must name the raiser it could not re-evaluate"
+  pass "a second raiser that went blind still holds the shortage"
+}
+
+test_a_crossing_after_a_blind_stretch_is_timed_from_the_crossing() {
+  # The clock is carried across a crossed to unmeasured lapse on purpose, but a
+  # crossing that is NEW on this poll must not inherit the epoch at which some
+  # unrelated input went blind.
+  reset_home
+  reading 16000 true 0
+  alarm_at 0 >/dev/null
+
+  # Headroom itself becomes unreadable, so nothing can be judged, for an hour.
+  local out t
+  for t in 300 3900; do
+    reading_headroom_unmeasured
+    alarm_at "$t" >/dev/null
+  done
+
+  # Headroom returns and this machine is genuinely short.
+  reading 1800 true 0
+  out=$(alarm_at 4200)
+  assert_contains "$out" "running out of RAM headroom" "the crossing must be announced"
+  reading 16000 true 0
+  out=$(alarm_at 4500)
+  assert_contains "$out" "The shortage lasted 5m0s" \
+    "a fresh crossing must be timed from itself, not from the onset of blindness"
+  pass "a crossing after a blind stretch is timed from the crossing"
+}
+
 test_a_shortage_ends_even_where_another_condition_can_never_be_read() {
   # The WSL shape this branch exists to detect: the memory-stall account can
   # never be read. A headroom shortage on such a host must still be reported as
@@ -1286,6 +1377,9 @@ test_an_input_no_condition_uses_does_not_hold_back_a_recovery
 test_a_recovery_states_how_long_the_shortage_actually_lasted
 test_sight_is_never_claimed_regained_while_a_condition_is_still_unreadable
 test_a_growth_sample_that_merely_aged_out_is_not_a_lost_instrument
+test_a_crossing_is_held_for_every_poll_that_could_not_re_read_its_raiser
+test_a_second_raiser_that_went_blind_still_holds_the_shortage
+test_a_crossing_after_a_blind_stretch_is_timed_from_the_crossing
 test_a_shortage_ends_even_where_another_condition_can_never_be_read
 test_a_shortage_the_crossed_condition_could_not_re_read_keeps_its_clock
 test_a_watch_change_on_a_crossed_machine_says_it_is_still_crossed
