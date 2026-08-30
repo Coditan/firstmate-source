@@ -95,11 +95,19 @@
 #   - A tailnet address this node cannot bind: the allocator says so in one
 #     plain sentence, binds loopback, and publishes that port onto the tailnet
 #     address. The diagnosis is kept; what changes is that the board also works.
+#   - A tailnet address that can be neither bound nor published: this says the
+#     vessel is not reachable off this machine rather than that it has no
+#     tailnet, because it plainly has one.
+#   - Nothing established either way: this says so and claims neither reach nor
+#     its absence, which is what a run that tested nothing honestly holds.
 #   - The link host does not answer after the board opens: this says so and
 #     names the address form that does work.
 #   - No free port in the window: bin/fm-service-port.sh refuses. There is no
 #     silent loopback downgrade, because that would reproduce the original bug
 #     somewhere new.
+#
+# docs/lavish-access.md's "Honest degradation" list is the one owner of the
+# exact sentences; this list names the branches they cover.
 #
 # `share` publishes the board to a third-party host. Review boards carry fleet
 # names, security findings, and captain decisions, so it is refused unless
@@ -374,6 +382,9 @@ port_answers() {
 # live proxied board silent and take it off the tailnet.
 nothing_serves_on() {
   port_answers "$1" && return 1
+  # On every vessel this mechanism exists for, ADDR already IS loopback, so the
+  # second probe would spawn a node process to ask a question just answered.
+  [ "$ADDR" = 127.0.0.1 ] && return 0
   port_answers_on 127.0.0.1 "$1" && return 1
   return 0
 }
@@ -553,10 +564,13 @@ if [ "$SUBCOMMAND" = stop ] && [ "$EXPLICIT_PORT" -eq 1 ]; then
       ;;
   esac
   if ! port_is_ours "$EXPLICIT_PORT_VALUE"; then
-    if port_answers "$EXPLICIT_PORT_VALUE"; then
+    # One question, asked once: is ANYTHING serving here. A board that answers
+    # but cannot be proved this vessel's is refused by name, and only a port
+    # with nothing behind it on either listener may have its route withdrawn.
+    if ! nothing_serves_on "$EXPLICIT_PORT_VALUE"; then
       die "the board server on $ADDR port $EXPLICIT_PORT_VALUE is not one this vessel can prove is its own, so it was not stopped; a co-hosted vessel serves on this same address, and only the home that opened a board may stop it" 7
     fi
-    nothing_serves_on "$EXPLICIT_PORT_VALUE" && withdraw_proxy "$EXPLICIT_PORT_VALUE"
+    withdraw_proxy "$EXPLICIT_PORT_VALUE"
     note "no review-board server owned by this vessel is running on $ADDR port $EXPLICIT_PORT_VALUE; nothing to stop"
     exit 0
   fi
