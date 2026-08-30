@@ -466,7 +466,8 @@ untested=$(FM_TEST_TS_MODE=userspace FM_TEST_TS_SERVE=broken FM_HOME="$HOME_P" \
   FM_SERVICE_PORT_RANGE=4846-4847 "$ROOT/bin/fm-service-port.sh" lavish)
 [ "$(field reachability "$untested")" = loopback ] \
   || fail "a run that tested nothing must not overwrite a tested host fact, got '$(field reachability "$untested")'"
-[ "$(field route "$untested")" = none ] || fail "no route exists, so route= says none"
+[ -z "$(field route "$untested")" ] \
+  || fail "route describes a proxied route and is empty off that value, got '$(field route "$untested")'"
 [ -z "$(field dnsname "$untested")" ] \
   || fail "no name may be offered where no reach was established"
 assert_grep "reachability=loopback" "$HOME_P/state/service-port.lavish" \
@@ -476,6 +477,114 @@ assert_not_contains "$untested" "was not told" \
 : > "$FM_TEST_TS_SERVE_STATE"
 : > "$FM_TEST_TS_SERVE_LOG"
 pass "a run that neither published nor found a route claims no proxy reach of its own"
+
+# --- allocator: reachability has one door, and it refuses to be raised --------
+#
+# Three review rounds each found a different path asserting the flattering
+# reachability value on evidence that did not support it. The rule is enforced
+# rather than remembered: a verdict is carried together with how it was
+# established, and one function refuses to RAISE the claim on anything but
+# probed evidence.
+#
+# The first assertion is a source-structure invariant, named as such: the
+# contract is "REACHABILITY is assigned in exactly one place, inside the door".
+# It is here so a fourth writer added later fails this suite until it is routed
+# through the door, which no behavioural test of today's paths can catch.
+writers=$(grep -c '^[[:space:]]*REACHABILITY=' "$ROOT/bin/fm-service-port.sh")
+[ "$writers" = 2 ] \
+  || fail "reachability must be written only by its initialiser and the one door; found $writers assignments in bin/fm-service-port.sh, so a new writer needs routing through set_reachability and covering here"
+
+# And the door itself, executed: every verdict this allocator can reach arrives
+# with evidence that says how, and no path reports a bare claim.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+bound=$(FM_HOME="$HOME_B" FM_SERVICE_PORT_RANGE=4856-4857 \
+  "$ROOT/bin/fm-service-port.sh" lavish --serving)
+[ "$(field reachability "$bound")" = tailnet ] || fail "a bindable address is tailnet"
+[ "$(field reachability_evidence "$bound")" = probed ] \
+  || fail "a bind this run performed is probed evidence, got '$(field reachability_evidence "$bound")'"
+
+notail=$(FM_TEST_TS_MODE=stopped FM_HOME="$HOME_B" FM_SERVICE_PORT_RANGE=4856-4857 \
+  "$ROOT/bin/fm-service-port.sh" lavish --serving)
+[ "$(field reachability "$notail")" = loopback ] || fail "no tailnet is loopback"
+[ "$(field reachability_evidence "$notail")" = probed ] \
+  || fail "a tailscale this run read is probed evidence, got '$(field reachability_evidence "$notail")'"
+
+# The pre-read claims no port, so it has nothing to test with and says so. This
+# is the signal four commits taught every consumer not to trust, and it is now
+# visible in the data rather than only in the header.
+preread=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_B" FM_SERVICE_PORT_RANGE=4856-4857 \
+  "$ROOT/bin/fm-service-port.sh" lavish --check)
+[ "$(field reachability "$preread")" = tailnet-proxied ] || fail "the pre-read still resolves proxied"
+[ "$(field reachability_evidence "$preread")" = assumed \
+  ] || fail "a run with no port to test with reports assumed, got '$(field reachability_evidence "$preread")'"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "every reachability verdict travels with how it was established, through one door"
+
+# --- allocator: nothing established is its own answer ------------------------
+#
+# A run that neither published a route nor found one, on a home with no record
+# to carry forward, has tested NOTHING. Claiming loopback there is the same
+# unbacked assertion as claiming proxied, just in the flattering direction for
+# a different reader, so the honest value is neither.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_U0=$(make_home "$TMP_ROOT/vessel-u0")
+[ ! -e "$HOME_U0/state/service-port.lavish" ] || fail "this case needs a home with no record yet"
+first=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_U0" FM_SERVICE_PORT_RANGE=4861-4862 \
+  "$ROOT/bin/fm-service-port.sh" lavish)
+expect_code 0 "$?" "a first run that will not serve still gets a port"
+[ "$(field reachability "$first")" = untested ] \
+  || fail "with nothing tested and nothing to carry, neither answer may be asserted, got '$(field reachability "$first")'"
+[ "$(field reachability_evidence "$first")" = none ] \
+  || fail "untested carries no evidence, got '$(field reachability_evidence "$first")'"
+[ -z "$(field route "$first")" ] \
+  || fail "route describes a proxied route and must be empty off that value, got '$(field route "$first")'"
+[ -z "$(field dnsname "$first")" ] || fail "no name is offered where nothing was established"
+
+# The wrapper must not turn that into a claim either.
+HOME_U1=$(make_home "$TMP_ROOT/vessel-u1")
+make_serving_lavish "$HOME_U1"
+u1=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_U1" FM_SERVICE_PORT_RANGE=4863-4864 \
+  "$ROOT/bin/fm-lavish.sh" end "$HOME_U1/.lavish/board.html" 2>&1)
+assert_not_contains "$u1" "not reachable off this machine" \
+  "an untested vessel must not be told it is unreachable"
+assert_not_contains "$u1" "no tailnet on this host" \
+  "nor that it has no tailnet, which it plainly has"
+assert_contains "$u1" "nothing has established whether" \
+  "the captain is told which of the two it is: neither"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a run that established nothing says so rather than picking the flattering answer"
+
+# --- entry point: a run that opens nothing publishes no route ----------------
+#
+# `open --help <board>.html` is an accepted shape that dispatches open and then
+# answers help without reaching the handler, so lavish-axi binds nothing. A
+# route published for it is node-wide, outlives this process and the machine's
+# next reboot, and republishes whatever binds that loopback port next.
+
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_H=$(make_home "$TMP_ROOT/vessel-h")
+make_serving_lavish "$HOME_H"
+FM_TEST_TS_MODE=userspace FM_HOME="$HOME_H" FM_SERVICE_PORT_RANGE=4866-4867 \
+  "$ROOT/bin/fm-lavish.sh" open --help "$HOME_H/.lavish/board.html" >/dev/null 2>&1
+[ -z "$(sort -u "$FM_TEST_TS_SERVE_STATE" | tr -d '[:space:]')" ] \
+  || fail "a run that opens nothing must leave no route: $(cat "$FM_TEST_TS_SERVE_STATE")"
+
+# The positive half on the same fixtures, or the rule above would be satisfied
+# by never publishing at all.
+h_out=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_H" FM_SERVICE_PORT_RANGE=4866-4867 \
+  "$ROOT/bin/fm-lavish.sh" "$HOME_H/.lavish/board.html" 2>/dev/null)
+h_port=$(printf '%s\n' "$h_out" | sed -n 's|.*://[^:]*:\([0-9][0-9]*\)/session/.*|\1|p' | head -1)
+[ -n "$h_port" ] || fail "an ordinary open should emit a port, got: $h_out"
+grep -qx "$h_port" "$FM_TEST_TS_SERVE_STATE" \
+  || fail "an ordinary open still publishes its route: $(cat "$FM_TEST_TS_SERVE_STATE")"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "only a run that actually leaves a board serving publishes a route"
 
 # Serve is the whole reason this case is not simply loopback, so a serve that
 # cannot publish must not be reported as reach.

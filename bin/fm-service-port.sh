@@ -67,6 +67,7 @@
 #   window=4400-4499
 #   port=4413
 #   reachability=tailnet
+#   reachability_evidence=probed
 #   route=
 #   reason=
 #
@@ -106,17 +107,41 @@
 #                                stops; bin/fm-tailnet-serve-lib.sh owns that
 #                                mechanism and states what a caller must have
 #                                proved before touching a port.
-#               loopback         no reach off this machine was established.
+#               loopback         reach off this machine was tested and there is
+#                                none.
+#               untested         nothing has established either reach or its
+#                                absence. Distinct from loopback, which is a
+#                                tested negative, and a consumer must not flatten
+#                                the two: a board still opens locally, but no
+#                                claim is made about the tailnet either way.
 #
 #               This describes the HOST and never this run. A vessel that can be
 #               reached by proxy stays tailnet-proxied on a run that published no
 #               route at all; read route= for what the run itself did.
 #
-#               A run that neither published a route nor found one already
-#               published has TESTED nothing about proxy capability, so it never
-#               asserts tailnet-proxied on its own: it carries forward whatever
-#               a previous allocation established, and claims loopback when there
-#               is nothing to carry.
+#               An ALLOCATION that neither published a route nor found one
+#               already published has tested nothing about proxy capability, so
+#               it never asserts tailnet-proxied on its own: it carries forward
+#               whatever a previous allocation established, and says untested
+#               when there is nothing to carry. A --check run is exempt, and
+#               deliberately so: it claims no port, so it has nothing to test
+#               with and reports the resolution it can see, which is why every
+#               consumer reads the allocation rather than the pre-read. Read
+#               reachability_evidence= to tell the two apart.
+#   reachability_evidence
+#               how the reachability value beside it was established, so a
+#               verdict can never be read without its backing.
+#               probed           this run tested the claim itself.
+#               carried          restated from a previous allocation's record.
+#               assumed          inferred from signals that do not test it, such
+#                                as tailscaled being up, or a --check run with no
+#                                port to test with.
+#               none             nothing was established at all.
+#
+#               Raising the claim requires probed evidence and is refused
+#               otherwise; lowering or restating it passes freely. One function
+#               in this script enforces that and is the only writer of either
+#               field.
 #   route       whether a `tailscale serve` route onto tailaddr exists for this
 #               port. Only meaningful under reachability=tailnet-proxied, and
 #               empty otherwise, including under --check, where there is no port
@@ -264,9 +289,60 @@ ADDR=""
 TAILADDR=""
 DNSNAME=""
 MACHINE=""
-REACHABILITY=loopback
+# Starts at the most optimistic value carrying NO evidence, because this
+# resolver only ever LOWERS a claim as evidence arrives. Every real verdict
+# below replaces it before anything is emitted.
+REACHABILITY=tailnet
+REACHABILITY_EVIDENCE=none
 ROUTE=""
 REASON=""
+
+# --- the one door onto reachability -----------------------------------------
+#
+# A bare verdict lets any path assert the flattering answer, and three separate
+# review rounds found three different paths doing exactly that: one claimed
+# proxy reach from tailscaled merely being up, one restated a run's own choice
+# as a host fact, and one asserted no-reach where nothing had been tested. So a
+# verdict is no longer sayable without saying how it was established.
+#
+#   probed   this run tested the claim itself: a bind probe, a publish attempt,
+#            or reading a route that is actually in place.
+#   carried  restated from the resolution a previous allocation recorded.
+#   assumed  inferred from signals that do not test it, such as tailscaled being
+#            up, or a --check run where no port exists to test with.
+#   none     nothing was established at all.
+#
+# RAISING the claim - asserting more reach than is currently held - requires
+# probed evidence and is refused otherwise. Lowering it, or restating it
+# unchanged, passes freely, because a run may always report less than it found.
+# Every assignment to REACHABILITY goes through here, and
+# tests/fm-lavish-access.test.sh fails if a new one appears that does not.
+reach_rank() {
+  case "$1" in
+    tailnet) printf '3\n' ;;
+    tailnet-proxied) printf '2\n' ;;
+    loopback) printf '1\n' ;;
+    *) printf '0\n' ;;
+  esac
+}
+
+set_reachability() {
+  local to=$1 evidence=$2
+  case "$to" in
+    tailnet|tailnet-proxied|loopback|untested) ;;
+    *) die "set_reachability: unknown reachability '$to'" ;;
+  esac
+  case "$evidence" in
+    probed|carried|assumed|none) ;;
+    *) die "set_reachability: unknown evidence '$evidence'" ;;
+  esac
+  if [ "$evidence" != probed ] \
+    && [ "$(reach_rank "$to")" -gt "$(reach_rank "$REACHABILITY")" ]; then
+    return 1
+  fi
+  REACHABILITY=$to
+  REACHABILITY_EVIDENCE=$evidence
+}
 
 # Several independent facts can degrade one resolution at once - an unresolvable
 # name on a node that also cannot bind its own address, say - and dropping
@@ -319,7 +395,7 @@ resolve_tailnet() {
   ADDR=$addr
   TAILADDR=$addr
   MACHINE=$host
-  REACHABILITY=tailnet
+  set_reachability tailnet assumed
   # A name is only worth writing into a link once it has been checked, so an
   # unresolvable or misdirected name degrades to the bare address with a reason
   # rather than becoming a URL that fails on the captain's device. A name that
@@ -342,7 +418,7 @@ if ! resolve_tailnet; then
   ADDR=127.0.0.1
   TAILADDR=""
   DNSNAME=""
-  REACHABILITY=loopback
+  set_reachability loopback probed
   MACHINE=""
 fi
 [ -n "$MACHINE" ] || MACHINE="unknown-$VESSEL"
@@ -371,13 +447,17 @@ if [ "$REACHABILITY" = tailnet ]; then
     node "$PROBE" addr "$ADDR" >/dev/null 2>&1
     ADDR_PROBE_STATUS=$?
   fi
-  if [ "${ADDR_PROBE_STATUS:-0}" -eq 4 ]; then
+  if [ "${ADDR_PROBE_STATUS:-0}" -eq 0 ] && [ -n "${ADDR_PROBE_STATUS:-}" ]; then
+    set_reachability tailnet probed
+  elif [ "${ADDR_PROBE_STATUS:-0}" -eq 4 ]; then
     if fm_tailnet_serve_available; then
-      REACHABILITY=tailnet-proxied
+      # Assumed, not probed: tailscaled being up says nothing about whether a
+      # route can actually be published, which only an attempt answers.
+      set_reachability tailnet-proxied assumed
       ADDR=127.0.0.1
       add_reason "this node has the tailnet address $TAILADDR but no local interface carries it (bind fails EADDRNOTAVAIL), which is what tailscale userspace networking mode looks like, so a port cannot be bound on that address and is bound on loopback instead"
     else
-      REACHABILITY=loopback
+      set_reachability loopback probed
       ADDR=127.0.0.1
       DNSNAME=""
       add_reason "this node has the tailnet address $TAILADDR but no local interface carries it (bind fails EADDRNOTAVAIL) and tailscale serve is not available to publish a loopback port onto it, so nothing here is reachable off this machine"
@@ -430,6 +510,7 @@ emit() {
   printf 'window=%s-%s\n' "$WINDOW_START" "$WINDOW_END"
   [ -z "${1:-}" ] || printf 'port=%s\n' "$1"
   printf 'reachability=%s\n' "$REACHABILITY"
+  printf 'reachability_evidence=%s\n' "$REACHABILITY_EVIDENCE"
   printf 'route=%s\n' "$ROUTE"
   printf 'reason=%s\n' "$REASON"
 }
@@ -517,37 +598,53 @@ if [ "$REACHABILITY" = tailnet-proxied ]; then
   if [ "$SERVING" -eq 1 ]; then
     if fm_tailnet_serve_publish "$PORT"; then
       ROUTE=published
+      set_reachability tailnet-proxied probed
     else
-      REACHABILITY=loopback
+      set_reachability loopback probed
       DNSNAME=""
       add_reason "publishing port $PORT onto $TAILADDR with tailscale serve failed, so this board is reachable only on this machine"
     fi
   elif fm_tailnet_serve_published "$PORT"; then
     ROUTE=published
+    set_reachability tailnet-proxied probed
   else
     ROUTE=none
     # This run published nothing and found nothing published, so it has tested
     # NOTHING about whether this node can be proxied at all: fm_tailnet_serve_available
     # reports only that tailscaled is running, and publishability is unanswerable
-    # until a publish is actually attempted. Asserting tailnet-proxied from it
-    # would overwrite a host fact that a run which DID attempt one established -
-    # on a vessel whose serve cannot publish, that revives a session-start notice
-    # offering a remedy which only degrades to the same link again, and tells the
-    # fleet registry a vessel with no reach off the machine is proxy-reachable.
+    # until a publish is actually attempted.
     #
     # Reading the record here is not the read this script forbids. What may never
     # be read from it is whether a PORT is free, which only a successful bind
     # answers; the resolution a previous allocation established is a different
     # question, and carrying it forward is what stops an untested run overwriting
-    # a tested one.
+    # a tested one. With nothing to carry, the honest answer is neither reach nor
+    # no-reach but untested, because claiming either would be the same unbacked
+    # assertion in the opposite direction.
     PRIOR=$(recorded_reachability)
-    if [ "$PRIOR" != tailnet-proxied ]; then
-      REACHABILITY=loopback
-      DNSNAME=""
-      add_reason "no tailscale serve route onto $TAILADDR has been established for $SERVICE, so no reach off this machine is claimed until one is"
-    fi
+    case "$PRIOR" in
+      tailnet-proxied)
+        set_reachability tailnet-proxied carried
+        ;;
+      loopback)
+        set_reachability loopback carried
+        DNSNAME=""
+        add_reason "no tailscale serve route onto $TAILADDR has been established for $SERVICE, so no reach off this machine is claimed until one is"
+        ;;
+      *)
+        set_reachability untested none
+        DNSNAME=""
+        add_reason "nothing has yet tested whether $SERVICE can be reached off this machine over $TAILADDR, and this run attempted no route, so neither reach nor its absence is claimed"
+        ;;
+    esac
   fi
 fi
+
+# route describes a `tailscale serve` route, which only exists under
+# tailnet-proxied, so a degrade out of that value takes the field with it. Both
+# loopback paths above would otherwise disagree about the same field: the
+# publish failure leaves it empty and the carry-forward leaves it populated.
+[ "$REACHABILITY" = tailnet-proxied ] || ROUTE=""
 
 # --- published record -------------------------------------------------------
 #
