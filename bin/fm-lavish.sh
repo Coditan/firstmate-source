@@ -568,7 +568,7 @@ if [ "$SUBCOMMAND" = stop ] && [ "$EXPLICIT_PORT" -eq 1 ]; then
     # but cannot be proved this vessel's is refused by name, and only a port
     # with nothing behind it on either listener may have its route withdrawn.
     if ! nothing_serves_on "$EXPLICIT_PORT_VALUE"; then
-      die "the board server on $ADDR port $EXPLICIT_PORT_VALUE is not one this vessel can prove is its own, so it was not stopped; a co-hosted vessel serves on this same address, and only the home that opened a board may stop it" 7
+      die "something is serving on port $EXPLICIT_PORT_VALUE on this machine and this vessel cannot prove it is its own, so it was not stopped; only the home that opened a board may stop it" 7
     fi
     withdraw_proxy "$EXPLICIT_PORT_VALUE"
     note "no review-board server owned by this vessel is running on $ADDR port $EXPLICIT_PORT_VALUE; nothing to stop"

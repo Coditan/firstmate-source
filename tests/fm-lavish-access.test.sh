@@ -539,6 +539,77 @@ expect_code 0 "$?" "a pre-read whose probe gave no verdict still resolves identi
 : > "$FM_TEST_TS_SERVE_LOG"
 pass "reading a node's identity establishes its address, never that anything can reach it"
 
+# A probe runtime that answers every ADDRESS question with a port-scoped status
+# while leaving every other probe mode intact, which is what EPERM, ENOTSUP or
+# fd pressure look like on an otherwise healthy vessel.
+REFUSES_ADDR="$TMP_ROOT/refuses-addr-bin"
+mkdir -p "$REFUSES_ADDR"
+REAL_NODE=$(command -v node) || fail "these cases need a real node to delegate to"
+cat > "$REFUSES_ADDR/node" <<SH
+#!/usr/bin/env bash
+[ "\${2:-}" = addr ] && exit 1
+exec "$REAL_NODE" "\$@"
+SH
+chmod +x "$REFUSES_ADDR/node"
+
+# A checked name is still a name for reach nobody established. Under a verdict
+# that names no reach, offering it invites the consumer to write it into a URL
+# on a vessel whose port is bound somewhere else entirely.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+nameless=$(PATH="$REFUSES_ADDR:$PATH" FM_TEST_TS_MODE=running FM_HOME="$HOME_B" \
+  FM_SERVICE_PORT_RANGE=4881-4882 "$ROOT/bin/fm-service-port.sh" lavish --check)
+expect_code 0 "$?" "a pre-read whose address answer was port-scoped still resolves identity"
+[ "$(field reachability "$nameless")" = untested ] \
+  || fail "a port-scoped answer is not an address verdict, got '$(field reachability "$nameless")'"
+[ -z "$(field dnsname "$nameless")" ] \
+  || fail "no name may be offered under a verdict that names no reach, got '$(field dnsname "$nameless")'"
+[ "$(field tailaddr "$nameless")" = 127.0.0.1 ] \
+  || fail "the node's own address is still reported, got '$(field tailaddr "$nameless")'"
+pass "a name is withheld wherever nothing established the reach it would name"
+
+# The ephemeral probe can miss for a port-scoped reason, but the window walk
+# binds the tailnet address for real. That bind IS the test.
+HOME_WB=$(make_home "$TMP_ROOT/vessel-wb")
+walked=$(PATH="$REFUSES_ADDR:$PATH" FM_TEST_TS_MODE=kernel FM_HOME="$HOME_WB" \
+  FM_SERVICE_PORT_RANGE=4883-4884 "$ROOT/bin/fm-service-port.sh" lavish)
+expect_code 0 "$?" "the walk still allocates when the address probe answered nothing"
+[ "$(field addr "$walked")" = 127.0.0.2 ] \
+  || fail "the board is bound on the tailnet address, got '$(field addr "$walked")'"
+[ "$(field reachability "$walked")" = tailnet ] \
+  || fail "a board demonstrably bound on the tailnet address is not untested, got '$(field reachability "$walked")'"
+[ "$(field reachability_evidence "$walked")" = probed ] \
+  || fail "and the bind is what established it, got '$(field reachability_evidence "$walked")'"
+assert_grep "reachability=tailnet" "$HOME_WB/state/service-port.lavish" \
+  "the published record carries the same answer"
+pass "a successful walk on the tailnet address is evidence, not something to discard"
+
+# A tailscale that cannot be READ has tested nothing. Recording that as a tested
+# no-reach would silence the bootstrap notice and bar the proxy verdict for the
+# rest of the run on the strength of a missing jq.
+HOME_UR=$(make_home "$TMP_ROOT/vessel-ur")
+unread=$(FM_TEST_TS_MODE=unreadable FM_HOME="$HOME_UR" \
+  FM_SERVICE_PORT_RANGE=4886-4887 "$ROOT/bin/fm-service-port.sh" lavish)
+expect_code 0 "$?" "a vessel whose tailscale will not answer still gets a local board"
+[ "$(field reachability "$unread")" = untested ] \
+  || fail "an unreadable status establishes nothing either way, got '$(field reachability "$unread")'"
+[ "$(field reachability_evidence "$unread")" = none ] \
+  || fail "and nothing backs it, got '$(field reachability_evidence "$unread")'"
+[ "$(field addr "$unread")" = 127.0.0.1 ] \
+  || fail "the board still binds somewhere, got '$(field addr "$unread")'"
+assert_grep "reachability=untested" "$HOME_UR/state/service-port.lavish" \
+  "and the record does not claim a tested no-reach"
+# A vessel that really has no tailnet is a different fact, and still says so.
+none_at_all=$(FM_TEST_TS_MODE=stopped FM_HOME="$HOME_UR" \
+  FM_SERVICE_PORT_RANGE=4888-4889 "$ROOT/bin/fm-service-port.sh" lavish)
+[ "$(field reachability "$none_at_all")" = loopback ] \
+  || fail "a backend that answered and is not running IS a tested negative, got '$(field reachability "$none_at_all")'"
+[ "$(field reachability_evidence "$none_at_all")" = probed ] \
+  || fail "and this run tested it, got '$(field reachability_evidence "$none_at_all")'"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a status that could not be read is never recorded as reach that was tested and absent"
+
 # --- allocator: reachability has one door, and it refuses to be raised --------
 #
 # Three review rounds each found a different path asserting the flattering
@@ -1705,8 +1776,12 @@ err=$(FM_HOME="$HOME_C" FM_SERVICE_PORT_RANGE=4792-4793 \
   "$ROOT/bin/fm-lavish.sh" stop --port 4794 2>&1 >/dev/null)
 expect_code 7 "$?" "an unproven --port must be refused, not obeyed"
 assert_contains "$err" "4794" "the refusal names the port it declined to touch"
-assert_contains "$err" "not one this vessel can prove is its own" \
+assert_contains "$err" "cannot prove it is its own" \
   "the refusal says plainly why the port was left alone"
+assert_contains "$err" "something is serving on port" \
+  "and names what it actually observed"
+assert_not_contains "$err" "co-hosted" \
+  "without asserting a neighbouring vessel it never identified"
 alive=$(node "$ROOT/bin/fm-service-port-probe.mjs" http http://127.0.0.1:4794/health 2>/dev/null)
 [ "$alive" = 200 ] || fail "a neighbour's board must still be serving after a refused stop"
 kill "$NEIGHBOUR_PID" 2>/dev/null || true

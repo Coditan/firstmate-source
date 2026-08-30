@@ -26,7 +26,9 @@
 #   carried  restated from the resolution a previous allocation recorded, which
 #            some earlier run did test.
 #   assumed  inferred from signals that do not test it, such as tailscaled being
-#            up, or a run with no port to test with.
+#            up. Nothing in this fleet writes it today, because every verdict is
+#            written only after its own test; it stays here because refusing a
+#            raise that carries it is precisely what this door is for.
 #   none     nothing was established at all.
 #
 # TWO RULES, and between them a run can only ever say what it has earned.
@@ -94,7 +96,7 @@ fm_reachability_rule_out() {
   barred=$(fm_reachability_rank "${1:-}")
   barred=$((barred - 1))
   [ "$barred" -lt "${REACHABILITY_CEILING:-3}" ] && REACHABILITY_CEILING=$barred
-  if [ "$(fm_reachability_rank "${REACHABILITY:-untested}")" -gt "$REACHABILITY_CEILING" ]; then
+  if [ "$(fm_reachability_rank "${REACHABILITY:-untested}")" -gt "${REACHABILITY_CEILING:-3}" ]; then
     REACHABILITY=untested
     REACHABILITY_EVIDENCE=none
   fi
