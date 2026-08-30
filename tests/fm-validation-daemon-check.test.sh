@@ -59,9 +59,11 @@ new_case() {  # <name> -> echoes case dir
   printf '%s\n' "$d"
 }
 
-# A fake no-mistakes whose `daemon status` behaves as <mode>, written to
-# <dir>/no-mistakes. The modes are the CLI's real answers, measured against
-# no-mistakes v1.48.0 on 2026-08-30 and recorded in docs/validation-daemon.md:
+# A fake no-mistakes whose `daemon status` behaves as <mode> and whose
+# `--version` answers <version>, defaulting to the floor this fleet requires,
+# written to <dir>/no-mistakes. The first two modes are the CLI's real answers,
+# measured against no-mistakes v1.48.0 on 2026-08-30 and recorded in
+# docs/validation-daemon.md:
 #
 #   running  ->   ● daemon running (pid 1727379)
 #   down     ->   ○ daemon not running
@@ -69,22 +71,30 @@ new_case() {  # <name> -> echoes case dir
 # BOTH exit 0, which is why the check reads the answer instead of the status.
 # `wedged` never answers at all, and `garbled` answers in a shape no version of
 # this check should guess at.
-make_fake_nm() {  # <dir> <mode>
-  local dir=$1 mode=$2
+#
+# `no-daemon` and `stale-pid` are the two rewordings that make a loose match
+# dangerous. Both report a daemon that is DOWN, both carry "daemon running" as a
+# substring, and neither carries "daemon not running". `stale-pid` is the harder
+# of the two, because it also carries "(pid" - the incident's own stale-pid
+# shape - so it defeats an affirmative anchor as well as a negative one.
+make_fake_nm() {  # <dir> <mode> [version]
+  local dir=$1 mode=$2 version=${3:-v1.31.2}
   mkdir -p "$dir"
   cat > "$dir/no-mistakes" <<SH
 #!/usr/bin/env bash
 set -u
 if [ "\${1:-}" = --version ]; then
-  printf '%s\n' 'no-mistakes version v1.31.2 (fake)'
+  printf '%s\n' 'no-mistakes version $version (fake)'
   exit 0
 fi
 if [ "\${1:-}" = daemon ] && [ "\${2:-}" = status ]; then
   case "$mode" in
-    running) printf '  \xe2\x97\x8f daemon running (pid 4242)\n'; exit 0 ;;
-    down)    printf '  \xe2\x97\x8b daemon not running\n'; exit 0 ;;
-    wedged)  sleep 30; exit 0 ;;
-    garbled) printf 'unknown subcommand "status"\n'; exit 2 ;;
+    running)   printf '  \xe2\x97\x8f daemon running (pid 4242)\n'; exit 0 ;;
+    down)      printf '  \xe2\x97\x8b daemon not running\n'; exit 0 ;;
+    no-daemon) printf '  \xe2\x97\x8b no daemon running\n'; exit 0 ;;
+    stale-pid) printf '  \xe2\x97\x8b no daemon running (pid 3223240 no longer exists)\n'; exit 0 ;;
+    wedged)    sleep 30; exit 0 ;;
+    garbled)   printf 'unknown subcommand "status"\n'; exit 2 ;;
   esac
 fi
 exit 0
@@ -242,6 +252,57 @@ test_a_seat_that_cannot_bound_the_call_says_so() {
   pass "a seat that cannot bound the call says so"
 }
 
+# The healthy verdict is the one branch where a wrong answer is SILENCE, so it is
+# the one branch that must not be reachable from a loose match. Both fixtures
+# here report a daemon that is down in wording the measured CLI does not use; a
+# check anchored on "daemon running" alone reads each as an all-clear and
+# reproduces the original defect against a differently worded tool.
+test_a_down_daemon_worded_otherwise_is_never_an_all_clear() {
+  local d fakebin out mode
+  for mode in no-daemon stale-pid; do
+    d=$(new_case "worded-$mode")
+    fakebin=$(make_fakebin "$d")
+    make_fake_nm "$d/nmbin" "$mode"
+
+    out=$(run_bootstrap "$d" "$d/nmbin:$fakebin")
+    assert_contains "$out" "VALIDATION_DAEMON:" \
+      "an answer reporting a daemon that is down ($mode) must never pass as healthy by saying nothing"
+    assert_contains "$out" "unestablished" \
+      "wording this check cannot classify is a reading it did not take, not a verdict"
+  done
+  pass "a daemon reported down in other wording is never an all-clear"
+}
+
+# A CLI below the version floor cannot be asked at all, so silence here would be
+# the same all-clear this check exists to remove - but the standing repair cannot
+# work either, because both daemon verbs need the upgrade first. The line has to
+# carry the action that IS available, which is the upgrade MISSING: already names.
+test_a_below_floor_cli_names_the_upgrade_as_its_repair() {
+  local d fakebin out line missing upgrade
+  d=$(new_case below-floor)
+  fakebin=$(make_fakebin "$d")
+  make_fake_nm "$d/nmbin" running v1.30.9
+
+  out=$(run_bootstrap "$d" "$d/nmbin:$fakebin")
+  line=$(printf '%s\n' "$out" | grep '^VALIDATION_DAEMON:' || true)
+  assert_contains "$line" "unestablished" \
+    "a CLI that cannot be asked has taken no reading, so its daemon answer must not be relayed as one"
+  missing=$(printf '%s\n' "$out" | grep '^MISSING: no-mistakes ' || true)
+  upgrade=${missing#*(install: }
+  upgrade=${upgrade%)}
+  [ -n "$upgrade" ] && [ "$upgrade" != "$missing" ] \
+    || fail "the below-floor fixture must also produce the MISSING: line whose repair this one borrows"
+  assert_contains "$line" "$upgrade" \
+    "the repair must be the upgrade MISSING: already prints, because it is the only action that can succeed here"
+  assert_not_contains "$line" "no-mistakes daemon status" \
+    "a hand reading cannot be prescribed on a CLI that cannot answer it"
+  assert_not_contains "$line" "no-mistakes daemon start" \
+    "a start cannot be prescribed on a CLI that cannot run it"
+  assert_contains "$line" "never no-mistakes update" \
+    "naming an upgrade must not read as lifting the ban on the update path"
+  pass "a below-floor CLI names the upgrade as its repair"
+}
+
 # --- 4. absence has an owner already ----------------------------------------
 
 # Repeating it here would give one fact two owners and tell the reader to start a
@@ -266,6 +327,8 @@ test_a_running_daemon_prints_nothing
 test_a_wedged_daemon_is_reported_as_unreadable_not_healthy
 test_an_unrecognised_answer_is_reported_as_unreadable
 test_a_seat_that_cannot_bound_the_call_says_so
+test_a_down_daemon_worded_otherwise_is_never_an_all_clear
+test_a_below_floor_cli_names_the_upgrade_as_its_repair
 test_a_wholly_absent_cli_is_left_to_the_missing_line
 
 printf 'all fm-validation-daemon-check tests passed\n'

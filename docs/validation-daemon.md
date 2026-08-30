@@ -50,6 +50,23 @@ An exit status would report every dead daemon as healthy, which is the defect th
 Anything that is neither answer is treated as an unreadable instrument rather than as a verdict.
 This fleet does not own `no-mistakes`, so its output can change under us, and both guesses are worse than saying so: guessing healthy hides a dead daemon, and guessing dead sends a reader to restart a live one.
 
+The two verdicts are not matched with equal looseness, because their wrong answers do not cost the same.
+A wrong `unestablished` costs one line the reader can act on, while a wrong healthy is SILENCE, which is the original defect restated.
+So the healthy arm is anchored on the affirmative shape actually measured, `daemon running (pid`, and any answer carrying `not running` or `no daemon running` is barred from it outright before that anchor is tried.
+Both halves are load-bearing against a rewording rather than one: `no daemon running` reports a daemon that is DOWN while carrying `daemon running` as a substring, and a stale-pid phrasing of it such as `no daemon running (pid 3223240 no longer exists)` carries `daemon running (pid` as well, so the anchor alone would read the incident's own shape as healthy.
+Every current answer still costs no line, and a future rewording of either verdict lands in `unestablished` rather than in a false all-clear.
+
+## An uninstalled CLI and an unusable one are not the same case
+
+A `no-mistakes` that is not installed at all is left silent here on purpose.
+`MISSING: no-mistakes` already owns absence, its repair is to install the tool rather than to start a daemon, and there is no reading to take from a tool that is not there.
+
+A CLI that IS installed but sits below the version floor this fleet requires is the opposite case, and it does print.
+It cannot be asked, so the check has taken no reading, and staying silent about an instrument that cannot read is exactly the all-clear this whole check exists to remove.
+What changes on that path is the repair rather than the verdict: `no-mistakes daemon status` and `no-mistakes daemon start` cannot succeed until the upgrade lands, and a diagnostic that prescribes a command the reader cannot run is the defect the 2026-08-24 ruling names.
+So the below-floor line names the upgrade instead, using the same install command `MISSING: no-mistakes` already prints.
+That command is the installer script, not `no-mistakes update`, so naming it does not reopen the path the next section bars; the line keeps that warning too.
+
 ## Why the repair is never `no-mistakes update`
 
 `no-mistakes update` resets the daemon as part of upgrading the tool.

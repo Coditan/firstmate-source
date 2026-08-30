@@ -854,7 +854,7 @@ VALIDATION_DAEMON_NOT_UPDATE='never no-mistakes update, which resets the daemon 
 VALIDATION_DAEMON_REPAIR="take the reading by hand with no-mistakes daemon status, and if it is down bring it back with no-mistakes daemon start - $VALIDATION_DAEMON_NOT_UPDATE"
 
 validation_daemon_unestablished() {
-  echo "VALIDATION_DAEMON: whether the validation pipeline daemon is running is unestablished - $1 - so this is not an all-clear; $VALIDATION_DAEMON_REPAIR"
+  echo "VALIDATION_DAEMON: whether the validation pipeline daemon is running is unestablished - $1 - so this is not an all-clear; ${2:-$VALIDATION_DAEMON_REPAIR}"
 }
 
 # Startup assertion for the validation pipeline daemon.
@@ -904,7 +904,11 @@ validation_daemon_unestablished() {
 # guessing dead sends a reader to restart a live one.
 #
 # Absence is not this check's to report: MISSING: already owns an uninstalled
-# CLI, and its repair is to install it rather than to start a daemon.
+# CLI, and its repair is to install it rather than to start a daemon. A CLI
+# BELOW the version floor is the opposite case and does print here: it cannot
+# be asked, and silence about an instrument that cannot read is the all-clear
+# this check exists to remove. That path names the upgrade as its repair,
+# because neither daemon verb can succeed until the upgrade lands.
 #
 # FM_VALIDATION_DAEMON_CHECK_DISABLE exists for the same reason the
 # currency-round and run-reader ones do: every behavior suite that composes
@@ -915,6 +919,12 @@ validation_daemon_check() {
   local timeout_bin out rc=0 seconds
   [ "${FM_VALIDATION_DAEMON_CHECK_DISABLE:-0}" != 1 ] || return 0
   command -v no-mistakes >/dev/null 2>&1 || return 0
+  if ! no_mistakes_compatible; then
+    validation_daemon_unestablished \
+      "the installed no-mistakes is below the version floor this fleet requires, so it cannot be asked" \
+      "upgrade the CLI first with $(install_cmd no-mistakes), and take the reading once it answers on a supported version - $VALIDATION_DAEMON_NOT_UPDATE"
+    return 0
+  fi
   seconds=${FM_VALIDATION_DAEMON_TIMEOUT:-5}
   case "$seconds" in ''|*[!0-9]*) seconds=5 ;; esac
   [ "$seconds" -gt 0 ] 2>/dev/null || seconds=5
@@ -938,7 +948,8 @@ validation_daemon_check() {
       echo "VALIDATION_DAEMON: the validation pipeline daemon is not running, so every parked review on this account is unanswerable until it is back and nothing else on this seat will say so (repair: no-mistakes daemon start - $VALIDATION_DAEMON_NOT_UPDATE)"
       return 0
       ;;
-    *"daemon running"*) return 0 ;;
+    *"not running"*|*"no daemon running"*) ;;
+    *"daemon running (pid"*) return 0 ;;
   esac
   validation_daemon_unestablished "no-mistakes daemon status answered in a shape this check does not recognise (exit $rc), and this fleet does not own that tool's output"
 }
