@@ -111,11 +111,28 @@ x_mode=0
 [ -f "$CONFIG/x-mode.env" ] && x_mode=1
 queue_pending=0
 [ "$FM_SUP_QUEUE_PENDING" = true ] && queue_pending=1
-DELIVERY_REASON=$("$SCRIPT_DIR/fm-supervision-instructions.sh" --afk "$afk" --x-mode "$x_mode" \
-  --queue-pending "$queue_pending" --repair-line 2>/dev/null \
-  || printf '%s\n' 're-arm wake delivery according to the session-start operating block before ending the turn')
-DAEMON_REASON=$("$SCRIPT_DIR/fm-watcher-service.sh" repair-command 2>/dev/null \
-  || printf '%s\n' 'bin/fm-watcher-service.sh restart')
+# --- who is being told -------------------------------------------------------
+# This guard ships in tracked hook files, so a crewmate or scout working on
+# firstmate itself runs the very same hook from its task worktree while
+# FM_ROOT_OVERRIDE still names the home that launched it. The diagnosis below is
+# then correct and the block is still worth one forced continuation - the worker
+# needs that turn to report it - but the repair is not the worker's to run:
+# AGENTS.md reserves supervision repair to firstmate, and a worker can see
+# neither the other homes on this account nor what else is in flight. So the
+# repair commands are computed and printed only for the session that operates
+# this home. Nothing above this line changes: which home is evaluated and whether
+# its supervision is unhealthy are decided identically for both addressees.
+operator=0
+fm_session_operates_home "$SCRIPT_DIR/.." "$FM_ROOT" && operator=1
+DELIVERY_REASON=
+DAEMON_REASON=
+if [ "$operator" -eq 1 ]; then
+  DELIVERY_REASON=$("$SCRIPT_DIR/fm-supervision-instructions.sh" --afk "$afk" --x-mode "$x_mode" \
+    --queue-pending "$queue_pending" --repair-line 2>/dev/null \
+    || printf '%s\n' 're-arm wake delivery according to the session-start operating block before ending the turn')
+  DAEMON_REASON=$("$SCRIPT_DIR/fm-watcher-service.sh" repair-command 2>/dev/null \
+    || printf '%s\n' 'bin/fm-watcher-service.sh restart')
+fi
 if [ "$FM_SUP_IN_FLIGHT" -gt 0 ]; then
   protected_desc="$FM_SUP_IN_FLIGHT task(s) in flight"
 else
@@ -127,7 +144,9 @@ rule='━━━━━━━━━━━━━━━━━━━━━━━━�
   printf '●  TURN WOULD END BLIND - SUPERVISION IS INCOMPLETE\n'
   if [ "$daemon_healthy" -eq 0 ]; then
     printf '●  Watcher daemon down: %s and no healthy daemon holds this home lock (last beat: %s).\n' "$protected_desc" "$FM_SUP_BEACON_DESC"
-    printf '●  Daemon repair: %s; treat this as a supervision incident and verify the beacon+lock predicate.\n' "$DAEMON_REASON"
+    if [ "$operator" -eq 1 ]; then
+      printf '●  Daemon repair: %s; treat this as a supervision incident and verify the beacon+lock predicate.\n' "$DAEMON_REASON"
+    fi
   fi
   if [ "$delivery_armed" -eq 0 ]; then
     if [ "$afk" -eq 1 ]; then
@@ -135,9 +154,13 @@ rule='━━━━━━━━━━━━━━━━━━━━━━━━�
     else
       printf '●  Wake delivery missing: no identity-matched delivery stub is armed for this session.\n'
     fi
-    printf '●  Delivery repair: %s\n' "$DELIVERY_REASON"
+    if [ "$operator" -eq 1 ]; then
+      printf '●  Delivery repair: %s\n' "$DELIVERY_REASON"
+    fi
   fi
-  if [ "$afk" -eq 1 ]; then
+  if [ "$operator" -eq 0 ]; then
+    printf '●  This is the supervision of the home that launched this task, and repairing it belongs to firstmate, not to a task worker: report the stalled supervision in your task status line, run no fleet command against that home, and carry on with your own task in this worktree.\n'
+  elif [ "$afk" -eq 1 ]; then
     printf '●  This forced continuation is internal maintenance; after restoring away delivery, end silently unless a queued wake is captain-relevant under AGENTS.md section 9.\n'
   else
     printf '●  This forced continuation is internal maintenance; after draining and restoring delivery, end silently unless a queued wake is captain-relevant under AGENTS.md section 9.\n'

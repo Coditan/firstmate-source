@@ -31,3 +31,22 @@ fm_primary_scope_matches() {
   [ -d "$root/bin" ] || return 1
   [ -d "$state" ] || return 1
 }
+
+# Return 0 when the session that invoked this hook is the one operating $2, the
+# home whose supervision was just evaluated: the checkout the running hook was
+# loaded from ($1) resolves to that same home. Firstmate runs the tracked hooks
+# out of its own home, and so does a secondmate in its own home, so both match.
+# A crewmate or scout runs the very same tracked hooks out of its disposable task
+# worktree while FM_ROOT_OVERRIDE still names the home that launched it, so the
+# two differ and the session is a worker that may not repair that home.
+# This decides only WHO a guard addresses. It never selects which home is
+# evaluated and never takes part in judging that home's supervision, so a wrong
+# answer here can only misaddress a message, never suppress a refusal.
+# An unresolvable path answers "not the operator", because handing a repair
+# command to a worker is the failure this predicate exists to prevent.
+fm_session_operates_home() {
+  local session=$1 home=$2 session_real home_real
+  session_real=$(CDPATH='' cd -- "$session" 2>/dev/null && pwd -P) || return 1
+  home_real=$(CDPATH='' cd -- "$home" 2>/dev/null && pwd -P) || return 1
+  [ "$session_real" = "$home_real" ]
+}

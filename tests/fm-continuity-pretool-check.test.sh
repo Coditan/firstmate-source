@@ -6,23 +6,42 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 CHECK="$ROOT/bin/fm-continuity-pretool-check.sh"
-WATCH="$ROOT/bin/fm-watch.sh"
 fm_test_tmproot TMP_ROOT fm-continuity-pretool-tests
 PRIMARY="$TMP_ROOT/primary"
 STATE="$PRIMARY/state"
 OUT="$TMP_ROOT/out"
 ERR="$TMP_ROOT/err"
 
-mkdir -p "$PRIMARY/bin" "$STATE"
+# The gate names recovery commands only for the session that OPERATES the home it
+# just judged, which it reads from the checkout the running hook was loaded from.
+# So a fixture that means "firstmate's own session" has to run the gate out of the
+# fixture home's own bin/, exactly as the turn-end guard's fixtures already do.
+# Running the repo's copy against a fixture home is the WORKER shape instead, and
+# the worker tests below use precisely that.
+install_check_scripts() {
+  local dir=$1 file
+  mkdir -p "$dir/bin"
+  for file in fm-continuity-pretool-check.sh fm-continuity-command-policy.mjs \
+    fm-arm-command-policy.mjs fm-supervision-lib.sh fm-primary-scope-lib.sh \
+    fm-wake-lib.sh fm-journal-lib.sh; do
+    cp "$ROOT/bin/$file" "$dir/bin/$file"
+  done
+  chmod +x "$dir/bin/fm-continuity-pretool-check.sh"
+}
+
+mkdir -p "$STATE"
 printf '# fixture\n' > "$PRIMARY/AGENTS.md"
 git -C "$PRIMARY" init -q
+install_check_scripts "$PRIMARY"
+PRIMARY_CHECK="$PRIMARY/bin/fm-continuity-pretool-check.sh"
+WATCH="$PRIMARY/bin/fm-watch.sh"
 
 run_command() {
   local command=$1 rc=0
   : > "$OUT"
   : > "$ERR"
   FM_ROOT_OVERRIDE="$PRIMARY" FM_HOME="$PRIMARY" FM_STATE_OVERRIDE="$STATE" \
-    "$CHECK" --command "$command" > "$OUT" 2> "$ERR" || rc=$?
+    "$PRIMARY_CHECK" --command "$command" > "$OUT" 2> "$ERR" || rc=$?
   return "$rc"
 }
 
@@ -103,9 +122,92 @@ test_child_worktree_and_malformed_input_fail_open() {
 
   expect_allow "malformed dynamic shell" "bin/fm-send.sh 'unterminated"
   printf '%s' '{not-json' | FM_ROOT_OVERRIDE="$PRIMARY" FM_HOME="$PRIMARY" FM_STATE_OVERRIDE="$STATE" \
-    "$CHECK" > "$OUT" 2> "$ERR" || rc=$?
+    "$PRIMARY_CHECK" > "$OUT" 2> "$ERR" || rc=$?
   [ "$rc" -eq 0 ] || fail "malformed Claude transport must fail open"
   pass "continuity gate excludes child worktrees and fails open on opaque input"
+}
+
+# --- addressee: firstmate's own session vs a task worker ---------------------
+# The tracked hooks ride in EVERY worktree of this repo, so a crewmate or scout
+# working on firstmate itself runs this very gate out of its task worktree while
+# FM_ROOT_OVERRIDE still names the home that launched it. The gate then judges the
+# launching home - correctly, and this test keeps that refusal - but used to hand
+# the worker that home's recovery commands. Reproduced live on 2026-08-30 on
+# three separate runtimes, each told to "repair supervision through
+# bin/fm-watcher-service.sh and bin/fm-delivery-service.sh" while ten tasks were
+# in flight in a home none of them could see. AGENTS.md section 1 reserves those
+# to firstmate: obeying does damage, refusing leaves the worker stuck.
+WORKER_FORBIDDEN_COMMANDS='bin/fm-watcher-service.sh bin/fm-delivery-service.sh bin/fm-wake-drain.sh bin/fm-teardown.sh'
+
+make_worker_worktree() {
+  local dir="$TMP_ROOT/worker-wt"
+  [ ! -d "$dir" ] || { printf '%s\n' "$dir"; return 0; }
+  git -C "$PRIMARY" config user.name fixture
+  git -C "$PRIMARY" config user.email fixture@example.test
+  git -C "$PRIMARY" add AGENTS.md
+  git -C "$PRIMARY" diff --cached --quiet || git -C "$PRIMARY" commit -qm fixture
+  git -C "$PRIMARY" worktree add -q -b continuity-worker "$dir"
+  install_check_scripts "$dir"
+  printf '%s\n' "$dir"
+}
+
+run_command_as_worker() {
+  local command=$1 wt rc=0
+  wt=$(make_worker_worktree)
+  : > "$OUT"
+  : > "$ERR"
+  FM_ROOT_OVERRIDE="$PRIMARY" FM_HOME="$PRIMARY" FM_STATE_OVERRIDE="$STATE" \
+    "$wt/bin/fm-continuity-pretool-check.sh" --command "$command" > "$OUT" 2> "$ERR" || rc=$?
+  return "$rc"
+}
+
+test_worker_refusal_names_no_command_reserved_to_firstmate() {
+  local rc=0 message command
+  rm -rf "$STATE/.watch.lock"
+  printf 'project=fixture\n' > "$STATE/task.meta"
+
+  run_command_as_worker 'bin/fm-crew-state.sh task' || rc=$?
+  [ "$rc" -eq 2 ] || fail "a worker must still be refused: the launching home's supervision is genuinely down"
+  message=$(jq -r '.systemMessage' "$ERR")
+  for command in $WORKER_FORBIDDEN_COMMANDS; do
+    case "$message" in
+      *"$command"*) fail "worker refusal handed a task worker $command, which AGENTS.md reserves to firstmate: $message" ;;
+    esac
+  done
+  assert_contains "$message" "repairing that home's supervision belongs to firstmate and not to a task worker" \
+    "worker refusal must name firstmate as the one who repairs it"
+  assert_contains "$message" "report the stalled supervision in your task status line" \
+    "worker refusal must name reporting as the worker's own next action"
+  assert_contains "$message" "(blocked: fm-crew-state.sh)" "worker refusal must still name the command it refused"
+
+  # A forced teardown reaches the gate through the other reason code, and its
+  # operator wording tells the reader to retry the literal bin/fm-teardown.sh.
+  # A worker may not run that one either, so this branch must not leak it.
+  run_command_as_worker 'bin/fm-teardown.sh task --force' || rc=$?
+  [ "$rc" -eq 2 ] || fail "a worker must still be refused a forced teardown"
+  message=$(jq -r '.systemMessage' "$ERR")
+  for command in $WORKER_FORBIDDEN_COMMANDS; do
+    case "$message" in
+      *"$command"*) fail "worker forced-teardown refusal handed a task worker $command: $message" ;;
+    esac
+  done
+  pass "continuity gate refuses a task worker without naming any command AGENTS.md reserves to firstmate"
+}
+
+# The other half of the pair: the session that operates this home must keep the
+# recovery commands. The fix is an addressee split, not a quietening.
+test_operator_refusal_still_names_the_recovery_commands() {
+  local rc=0 message
+  rm -rf "$STATE/.watch.lock"
+  printf 'project=fixture\n' > "$STATE/task.meta"
+  run_command 'bin/fm-crew-state.sh task' || rc=$?
+  [ "$rc" -eq 2 ] || fail "the operator must still be refused when its own supervision is down"
+  message=$(jq -r '.systemMessage' "$ERR")
+  assert_contains "$message" 'repair supervision through bin/fm-watcher-service.sh and bin/fm-delivery-service.sh' \
+    "the session operating this home must still be handed the supervision repair commands"
+  assert_contains "$message" 'drain wakes with bin/fm-wake-drain.sh' \
+    "the session operating this home must still be handed the drain"
+  pass "continuity gate still hands the session operating this home its full recovery instruction"
 }
 
 test_claude_hook_registration_preserves_stop_backstop() {
@@ -122,4 +224,6 @@ test_claude_hook_registration_preserves_stop_backstop() {
 test_gate_scope_and_recovery_exceptions
 test_live_lock_allows_fleet_command_even_with_stale_beacon
 test_child_worktree_and_malformed_input_fail_open
+test_worker_refusal_names_no_command_reserved_to_firstmate
+test_operator_refusal_still_names_the_recovery_commands
 test_claude_hook_registration_preserves_stop_backstop

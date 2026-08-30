@@ -24,6 +24,7 @@ The marker must be a regular non-symlink file whose first line, after all whites
 An unmarked checkout, or one with an invalid marker, falls through to the git-dir check.
 That check keeps crewmate and scout worktrees inert because firstmate provisions them as linked git worktrees, where `git rev-parse --git-dir` differs from `git rev-parse --git-common-dir`.
 It also requires `AGENTS.md`, `bin/`, and the effective state directory to exist.
+That exemption is what keeps a worker silent when the guard evaluates the worker's own worktree; it does not fire when `FM_ROOT_OVERRIDE` points the guard at the launching home instead, and `docs/watcher-continuity.md` owns who the resulting banner is addressed to and why an operator keeps the repair commands while a worker is handed none.
 
 For an in-scope primary checkout, it counts supervision-relevant work from `state/*.meta`.
 A `kind=secondmate` record with explicit `state=resting` remains registered but is excluded; every ordinary task, active secondmate, and legacy secondmate with no state still counts.
@@ -216,7 +217,7 @@ Firstmate deliberately does not track `.claude/settings.local.json` anywhere, an
 
 ## Tests
 
-`tests/fm-turnend-guard.test.sh` covers the split daemon-and-delivery predicate, independent repair lines, delivery-stub pid and identity matching, primary scoping, `FM_HOME` and `FM_STATE_OVERRIDE` precedence, dead and healthy away-pusher states with queued wakes, queued wakes with no `state/*.meta` record left, the drain-first delivery repair a queued-wake activation prints, both closing-banner branches (away restores delivery and never names a drain anywhere in the banner; a normal session keeps drain-and-restore), fail-open behavior without `jq`, tracked hook registration for all five harnesses, and passive-adapter loop guards.
+`tests/fm-turnend-guard.test.sh` covers the split daemon-and-delivery predicate, independent repair lines, delivery-stub pid and identity matching, primary scoping, `FM_HOME` and `FM_STATE_OVERRIDE` precedence, dead and healthy away-pusher states with queued wakes, queued wakes with no `state/*.meta` record left, the drain-first delivery repair a queued-wake activation prints, both closing-banner branches (away restores delivery and never names a drain anywhere in the banner; a normal session keeps drain-and-restore), fail-open behavior without `jq`, tracked hook registration for all five harnesses, passive-adapter loop guards, and the paired addressee banners for the shared guard and for the grok adapter's prepended instruction.
 The per-task crewmate overlay recorded in the 2026-07-25 subsection is pinned from the spawn side by `tests/fm-spawn-dispatch-profile.test.sh` (a repository-tracked `.claude/settings.local.json` survives a claude spawn, the overlay is written under the distinct name and git-excluded, and the launch line carries `--settings` for it) and from the teardown side by `tests/fm-teardown.test.sh` cases (z) through (dd) (a tracked-and-dirty overlay still tears down, that tolerance does not mask other genuine uncommitted work, and a repository-tracked legacy `settings.local.json` is never removed).
 The default behavior suite does not invoke live language-model harnesses.
 `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh` opts into the isolated interactive Pi regression recorded above.
