@@ -44,6 +44,12 @@
 # interval younger than the configured floor are also scope. The first two are
 # expected absences and the last is the operator's own cadence. They do not
 # force exit 3, so the next slice's alarm does not learn to discount failure.
+# A stored sample this run cannot use - stale, corrupt, or dated in the future
+# - joins them ONLY when this run replaces it with its own, which puts the
+# reading in the same known absence a first run is already in. Under --no-store
+# nothing replaces it and the reason stays unmeasured, and a sample path that
+# is not a regular file stays unmeasured whatever the mode, because no
+# replacement can be written over it. See read_prior below.
 # The wall-clock and peak-memory cost figures measure this instrument rather
 # than machine memory. Their platform-dependent absence is scope and stays
 # visible without making the memory reading untrustworthy.
@@ -66,6 +72,11 @@
 # run on a home reports growth as scoped rather than as zero. Pass --interval
 # with an interval at or above the configured floor to take both samples inside
 # one run instead; a shorter explicit interval stays scoped without waiting.
+# A stored sample that has gone unusable is DISCARDED AND REPLACED rather than
+# reported as blindness, at no cost beyond the sample this run was storing
+# anyway: no extra process-table read, no wait, and nothing that can hang.
+# read_prior owns exactly when that applies and when the reason stays
+# unmeasured.
 #
 # WAKE DELIVERY IS LABELLED, NOT RANKED
 # The per-session wake-delivery listener is a few megabytes and is what makes
@@ -118,8 +129,9 @@
 #   FM_MEMORY_TRACK_MIB       tracking floor in MiB (default 32)
 #   FM_MEMORY_GROWTH_MIB_MIN  MiB/min at or above which a process is called
 #                             growing rather than steady (default 5)
-#   FM_MEMORY_SAMPLE_MAX_AGE  how old the stored sample may be before growth is
-#                             unmeasured rather than meaningless (default 1260)
+#   FM_MEMORY_SAMPLE_MAX_AGE  how old the stored sample may be before it is
+#                             discarded and replaced rather than divided by
+#                             (default 1260)
 #   FM_MEMORY_SAMPLE_MIN_AGE  interval below which growth is scoped because the
 #                             operator ran it too soon to divide by (default 270)
 #   FM_MEMORY_SAMPLES         path of the stored sample. Tests use it for
@@ -813,6 +825,37 @@ GROWTH_SCOPE=0
 GROWTH_SAMPLE_DROPPED=0
 INTERVAL_WAITED=0
 
+# A STORED SAMPLE THIS RUN CANNOT USE IS NOT A BROKEN INSTRUMENT, IF THIS RUN
+# REPLACES IT
+# A host that was frozen for hours comes back with a stored sample far too old
+# to divide by, and reporting that as blindness relays a machine nobody could
+# measure as a machine nobody can see. The repair is to discard the unusable
+# sample and let this run's own take its place, which leaves the reading in
+# exactly the state a first run on a new home is already in - a known absence
+# this reading has always reported as SCOPED and exited 0 for.
+#
+# The replacement is what earns the softer word, so it is only taken when this
+# run is actually storing. Under --no-store nothing replaces the unusable
+# sample, the next run would be just as blind as this one, and the reason stays
+# unmeasured.
+#
+# A fresh sample that FAILS is still unmeasured. Two separate mechanisms hold
+# that, and neither depends on the caller: a sample path that is not a regular
+# file cannot be written over at all and never reaches this helper, and a
+# replacement that cannot be written is marked unmeasured by store_sample
+# below, which makes the whole reading incomplete however this growth reason
+# reads.
+unusable_prior() {  # <reason>
+  : > "$PRIOR_FILE"
+  if [ "$STORE" -eq 1 ]; then
+    GROWTH_REASON="$1, so it was discarded and this run's own sample takes its place"
+    GROWTH_SCOPE=1
+    return
+  fi
+  GROWTH_REASON="$1, and this reading was asked not to store, so nothing replaces it"
+  unmeasured growth-sample "$GROWTH_REASON"
+}
+
 read_prior() {
   local epoch age parse_status="$TMP/prior-status" epoch_file="$TMP/prior-epoch" status dropped=0
   : > "$PRIOR_FILE"
@@ -848,9 +891,18 @@ read_prior() {
     GROWTH_SCOPE=1
     return
   fi
-  if [ ! -f "$SAMPLES" ] || [ ! -r "$SAMPLES" ]; then
-    GROWTH_REASON="the stored sample exists but could not be read"
+  # A path that is not a regular file is the one unusable prior a fresh sample
+  # cannot repair: storing writes aside and moves into place, and moving a file
+  # onto a directory puts it INSIDE that directory, so the unreadable prior
+  # would survive every replacement and the growth instrument would be blind
+  # for good while reporting itself merely scoped.
+  if [ ! -f "$SAMPLES" ]; then
+    GROWTH_REASON="the stored sample path exists but is not a regular file, so nothing can be read from it or written over it"
     unmeasured growth-sample "$GROWTH_REASON"
+    return
+  fi
+  if [ ! -r "$SAMPLES" ]; then
+    unusable_prior "the stored sample exists but could not be read"
     return
   fi
   : > "$parse_status"
@@ -879,13 +931,13 @@ read_prior() {
       if (dropped) print "dropped " dropped > status_file
     }
   ' "$SAMPLES" > "$PRIOR_FILE" 2>/dev/null; then
+    local why
     case "$(head -1 "$parse_status" 2>/dev/null)" in
-      timestamp) GROWTH_REASON="the stored sample carries no usable timestamp" ;;
-      empty) GROWTH_REASON="the stored sample carries no usable process records" ;;
-      *) GROWTH_REASON="the stored sample body could not be read" ;;
+      timestamp) why="the stored sample carries no usable timestamp" ;;
+      empty) why="the stored sample carries no usable process records" ;;
+      *) why="the stored sample body could not be read" ;;
     esac
-    : > "$PRIOR_FILE"
-    unmeasured growth-sample "$GROWTH_REASON"
+    unusable_prior "$why"
     return
   fi
   status=$(head -1 "$parse_status" 2>/dev/null)
@@ -895,13 +947,11 @@ read_prior() {
   epoch=$(head -1 "$epoch_file" 2>/dev/null)
   age=$((NOW - epoch))
   if [ "$age" -lt 0 ]; then
-    GROWTH_REASON="the stored sample is dated in the future, so the interval cannot be trusted"
-    unmeasured growth-sample "$GROWTH_REASON"
+    unusable_prior "the stored sample is dated in the future, so the interval cannot be trusted"
     return
   fi
   if [ "$age" -gt "$SAMPLE_MAX_AGE" ]; then
-    GROWTH_REASON="the stored sample is ${age}s old, past the ${SAMPLE_MAX_AGE}s window a growth rate means anything over"
-    unmeasured growth-sample "$GROWTH_REASON"
+    unusable_prior "the stored sample is ${age}s old, past the ${SAMPLE_MAX_AGE}s window a growth rate means anything over"
     return
   fi
   if [ "$age" -lt "$SAMPLE_MIN_AGE" ]; then

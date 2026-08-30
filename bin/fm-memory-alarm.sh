@@ -124,6 +124,19 @@
 # machine, so both are stated here, both are reproducible from the doc, and the
 # alarm was proven by driving a real crossing rather than by argument.
 #
+# THE SAME NUMBERS ARE NOT WORTH THE SAME ON EVERY MACHINE
+# Every threshold above was measured on one host, and which condition is
+# actually carrying the warning depends on whether the machine has swap. With
+# swap a shortage degrades and only `stall` can see it; without swap there is
+# no degrading stretch at all and the floor is the entire warning. So the alarm
+# reads MemTotal and SwapTotal from the same reading and states, in its own
+# voice, what its margin is worth on the machine it is on - including that the
+# floor is a far larger share of a small host than of the one it was derived
+# on, and that no ordinary-headroom baseline exists for a small swapless host
+# to place it against. It states this and moves no threshold, because a floor
+# for that shape would be an invented number rather than a measured one; see
+# machine_shape below and docs/memory-alarm.md.
+#
 # NOISE CONTROL: IT SPEAKS ON CHANGE, NEVER ON CADENCE
 # A watcher check that printed on every sweep while memory was tight would cost
 # a model turn every five minutes for news that has not changed, and would bury
@@ -338,6 +351,14 @@ if [ "$STALL_WINDOW" -le 0 ]; then
   STALL_GATE_NOTE="${STALL_GATE_NOTE:+$STALL_GATE_NOTE, and }the FM_MEMORY_ALARM_STALL_WINDOW configured for this home was zero, which any run at all outlasts, so the shipped default window of $STALL_WINDOW seconds is in force instead of it"
 fi
 
+# The floor's derivation, which docs/memory-alarm.md "Floor: 2,400 MiB" owns:
+# the shipped 2400 MiB was 10.2% of the 23,456 MiB host it was measured on, and
+# 6.1 times below the lowest RAM headroom ordinary busy work reached there.
+# Both figures are properties of THAT host, so the alarm carries them to state
+# what its own margin is worth on the machine it is actually running on.
+CALIBRATION_FLOOR_MIB=2400
+CALIBRATION_TOTAL_MIB=23456
+
 # A run of polls is only a run if the polls happened. The watcher makes checks
 # due after 300s and observes that on a 15s loop, so one slot is at most 315s;
 # 1260s is four of those, the same figure docs/memory-alarm.md derives for the
@@ -390,6 +411,9 @@ STALL_ACTIVE=
 STALL_RUN_UNPERSISTED=
 READING_INCOMPLETE=
 SWAP_USED_MIB=
+TOTAL_MIB=
+SWAP_TOTAL_MIB=
+SHAPE_NOTE=
 OFFENDER=
 RESIDENT=
 CROSS_KIND=
@@ -564,7 +588,14 @@ evaluate() {
         (if $res == null then "" else $res.attribution.kind end),
         (if $res == null then "" else $res.attribution.detail end),
         (if $res == null then "" else ($res.rss_kb / 1024 | floor | tostring) end),
-        (if $res == null then "" elif $res.protected then "protected" else "ordinary" end)
+        (if $res == null then "" elif $res.protected then "protected" else "ordinary" end),
+        # The shape of the machine itself, which decides what the numbers
+        # above are worth rather than what they are. A null SwapTotal stays
+        # empty here and is never rendered as zero: "no swap" and "swap could
+        # not be read" are opposite findings for this alarm.
+        (((.headroom.total_kb | n0) / 1024 | floor) | tostring),
+        (if (.headroom.swap_total_kb) == null then ""
+         else ((.headroom.swap_total_kb) / 1024 | floor | tostring) end)
       ]
     # Joined on the unit separator, NOT on a tab: a tab counts as whitespace to
     # the shell read below, so an empty field between two tabs collapses and
@@ -587,6 +618,7 @@ evaluate() {
     top_cmd top_pid top_account top_kind top_detail top_growth top_protected unmeasured_list \
     STALL_BLIND STALL_FULL60 STALL_SOME60 SWAP_USED_MIB \
     res_cmd res_pid res_account res_kind res_detail res_rss res_protected \
+    TOTAL_MIB SWAP_TOTAL_MIB \
     <<<"$record"
 
   # Every unmeasured input is named whatever verdict follows, because the
@@ -632,6 +664,7 @@ evaluate() {
   # watching has to say so rather than pass for a clear reading.
   [ -n "$STALL_MAX" ] || STALL_UNSET="no stall gate is configured for this home, so this machine is not being watched for memory stall at all"
   read_stall_run
+  machine_shape
 
   # Whether each condition is clear of its threshold BY THE MARGIN, decided here
   # rather than on the calm path alone, because the crossing record consults it
@@ -758,6 +791,57 @@ evaluate() {
   fi
   incomplete_note
   stall_gate_note
+}
+
+# --- the machine's shape ----------------------------------------------------
+#
+# THE SAME NUMBERS ARE NOT WORTH THE SAME ON BOTH SHAPES
+# WITH swap, a shortage degrades. MemAvailable counts only memory available
+# WITHOUT swapping, so it reads healthy while the machine thrashes: failure is
+# slow and silent, and the stall condition is the only one of the three that
+# can see it.
+# WITHOUT swap there is no degradation phase at all. The machine runs, and then
+# the kernel kills something. Headroom is honest there and the distance to the
+# floor is the entire warning, because there is no thrashing stretch for the
+# stall condition to see and no growth left to extrapolate once the kill lands.
+#
+# That distance is not a fixed number of megabytes. The floor was derived as a
+# share of one host's RAM and as a ratio to the lowest headroom ordinary work
+# reached ON THAT HOST, and neither figure travels: 2400 MiB is 10.2% of the
+# 23,456 MiB machine it was measured on and 31% of a 7,746 MiB one, where it
+# stops being a backstop below ordinary operation and becomes a line ordinary
+# operation may sit near. No ordinary-headroom distribution has ever been
+# measured on a small swapless host in this fleet, so this alarm does NOT
+# invent a floor for one - inventing it is the one thing the evidence does not
+# support. It reads the shape it is actually on and states what its own margin
+# is worth there, which is the half that is measurable today and is what lets
+# somebody re-measure the other half. docs/memory-alarm.md owns both.
+#
+# Nothing here changes when the alarm fires. It changes what the alarm says
+# about what its silence is worth, which is the part that was missing.
+
+machine_shape() {  # sets SHAPE_NOTE
+  SHAPE_NOTE=
+  # Unknown is never rendered as absent. A missing SwapTotal already makes the
+  # reading incomplete, so this should not be reachable on a real reading - but
+  # if it ever is, "no swap" and "swap could not be read" are opposite findings
+  # here and collapsing them would be the substituted zero this alarm refuses.
+  if [ -z "$SWAP_TOTAL_MIB" ]; then
+    SHAPE_NOTE="Whether this machine has swap configured could not be read, so which of these conditions carries the warning here is unknown."
+    return
+  fi
+  if [ "$SWAP_TOTAL_MIB" -gt 0 ]; then
+    SHAPE_NOTE="This machine has $SWAP_TOTAL_MIB MiB of swap configured, so a shortage degrades into swap rather than into an immediate kill - which is why healthy RAM headroom here is not evidence that this machine is healthy, and the stall condition is the one that answers that."
+    return
+  fi
+  if [ -z "$TOTAL_MIB" ] || [ "$TOTAL_MIB" -le 0 ]; then
+    SHAPE_NOTE="This machine has no swap configured, so the floor is the whole warning - but its total RAM could not be read, so what that floor is worth here cannot be stated."
+    return
+  fi
+  local share cal_share
+  share=$(awk -v f="$FLOOR_MIB" -v t="$TOTAL_MIB" 'BEGIN { printf "%.1f", f * 100 / t }')
+  cal_share=$(awk -v f="$CALIBRATION_FLOOR_MIB" -v t="$CALIBRATION_TOTAL_MIB" 'BEGIN { printf "%.1f", f * 100 / t }')
+  SHAPE_NOTE="This machine has no swap configured, so there is no degradation phase below the floor: it runs, and then the kernel kills something. The $FLOOR_MIB MiB floor is the whole warning, and here it is $share% of this machine's $TOTAL_MIB MiB against the $cal_share% it was derived at on a $CALIBRATION_TOTAL_MIB MiB host - no ordinary-headroom baseline has been measured on a machine this size, so that margin is inherited here rather than verified."
 }
 
 # --- the stall run ----------------------------------------------------------
@@ -1126,10 +1210,15 @@ decide_poll() {
         # and a reader sent looking for a shortage would go looking for the
         # wrong thing.
         if [ "$CROSS_KIND" = stall ]; then
-          OUT_LINE="MEMORY_ALARM: this machine is stalling on memory - $REASON. Largest resident process: ${RESIDENT:-no tracked process holds enough memory for this reading to name}. Nothing has been limited or killed."
+          OUT_LINE="MEMORY_ALARM: this machine is stalling on memory - $REASON. Largest resident process: ${RESIDENT:-no tracked process holds enough memory for this reading to name}."
         else
-          OUT_LINE="MEMORY_ALARM: this machine is running out of RAM headroom - $REASON. Largest grower: ${OFFENDER:-no tracked process was growing, so the headroom is going somewhere this reading does not attribute}. Nothing has been limited or killed."
+          OUT_LINE="MEMORY_ALARM: this machine is running out of RAM headroom - $REASON. Largest grower: ${OFFENDER:-no tracked process was growing, so the headroom is going somewhere this reading does not attribute}."
         fi
+        # What the crossing is worth depends on whether this machine has
+        # anywhere to put the pressure, and the reader cannot know which
+        # machine this is.
+        [ -z "$SHAPE_NOTE" ] || OUT_LINE="$OUT_LINE $SHAPE_NOTE"
+        OUT_LINE="$OUT_LINE Nothing has been limited or killed."
         ;;
       ok)
         if [ "$PREVIOUS" = crossed ] || [ "$HELD_CROSSED" != - ]; then
@@ -1259,6 +1348,7 @@ case "$MODE" in
           printf 'largest grower: %s\n' "${OFFENDER:-none: no tracked process was growing, so the memory went somewhere this reading does not attribute}"
         fi
         [ -z "$DETAIL" ] || printf 'unmeasured inputs: %s\n' "$DETAIL"
+        [ -z "$SHAPE_NOTE" ] || printf 'machine shape: %s\n' "$SHAPE_NOTE"
         printf 'nothing has been limited, throttled, or killed by this alarm, and nothing here can be\n'
         exit 4 ;;
       unmeasured)
@@ -1270,6 +1360,10 @@ case "$MODE" in
         printf 'memory-alarm: %s - %s\n' "$VERDICT" "$REASON"
         [ -z "$OFFENDER" ] || printf 'largest grower: %s\n' "$OFFENDER"
         [ -z "$DETAIL" ] || printf 'unmeasured inputs: %s\n' "$DETAIL"
+        # A calm verdict is exactly where the shape matters most: it says which
+        # of the three conditions this machine is actually relying on, so a
+        # reader can tell a calm reading from a calm reading that means little.
+        [ -z "$SHAPE_NOTE" ] || printf 'machine shape: %s\n' "$SHAPE_NOTE"
         exit 0 ;;
     esac ;;
 esac

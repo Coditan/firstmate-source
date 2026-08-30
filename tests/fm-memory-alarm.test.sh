@@ -46,6 +46,14 @@ chmod +x "$FAKE"
 # a stall average is a shape the machine cannot produce. FM_TEST_STALL sets it.
 FM_TEST_STALL=0.00
 
+# The shape of the machine the fixture describes. The defaults are this fleet's
+# calibration host - 23,456 MiB with 32 GiB of swap - so every case written
+# before the alarm read shape at all still describes the machine it was written
+# against. `null` for the swap total is a machine whose swap could not be read,
+# which is not the same reading as a machine with none.
+FM_TEST_TOTAL_KB=24019908
+FM_TEST_SWAP_TOTAL_KB=33554428
+
 # reading <available_mib> <complete> [<growth_kb_per_min> <protected> <kind> <detail>]
 reading() {
   local avail_mib=$1 complete=$2 growth=${3:-0} protected=${4:-false} kind=${5:-task} detail=${6:-'alpha (ship, alpha-project)'}
@@ -62,8 +70,10 @@ reading() {
     unmeasured='[{"input":"account-slices","reason":"no account'"'"'s total, limit, or stall was read at all"}]'
     export FM_TEST_READING_EXIT=3
   fi
-  printf '{"schema":"fm-memory-reading.v1","complete":%s,"unmeasured":%s,"headroom":{"total_kb":24019908,"available_kb":%s,"swap_total_kb":33554428,"swap_free_kb":33554428},"stall":%s,"growth":%s,"processes":%s}\n' \
-    "$complete" "$unmeasured" "$((avail_mib * 1024))" "$(stall_obj "$FM_TEST_STALL")" "$growth_obj" "$procs" >"$ANSWER"
+  local swap_free=$FM_TEST_SWAP_TOTAL_KB
+  printf '{"schema":"fm-memory-reading.v1","complete":%s,"unmeasured":%s,"headroom":{"total_kb":%s,"available_kb":%s,"swap_total_kb":%s,"swap_free_kb":%s},"stall":%s,"growth":%s,"processes":%s}\n' \
+    "$complete" "$unmeasured" "$FM_TEST_TOTAL_KB" "$((avail_mib * 1024))" \
+    "$FM_TEST_SWAP_TOTAL_KB" "$swap_free" "$(stall_obj "$FM_TEST_STALL")" "$growth_obj" "$procs" >"$ANSWER"
 }
 
 # stall_obj <full> [<some>]  -  "none" makes the reading carry no stall average
@@ -201,6 +211,8 @@ reset_home() {
   FM_TEST_STALL=0.00
   FM_TEST_AT=
   FM_TEST_STALL_WINDOW=5400
+  FM_TEST_TOTAL_KB=24019908
+  FM_TEST_SWAP_TOTAL_KB=33554428
   BASE_NOW=$(date +%s)
 }
 
@@ -1595,6 +1607,79 @@ test_the_shipped_gate_and_window_are_the_ones_the_document_derives() {
   pass "the shipped gate and window match the measurements the document derives them from"
 }
 
+test_a_machine_with_no_swap_is_told_apart_from_one_with_swap() {
+  # The 2026-08-30 constraint: the same numbers are not worth the same on both
+  # shapes. With swap, a shortage degrades and healthy headroom proves nothing;
+  # without swap there is no degrading stretch at all, so the floor is the whole
+  # warning - and that floor is a far larger share of a small host than of the
+  # one it was derived on.
+  reset_home
+  local out
+  reading 1800 true 0
+  out=$(alarm)
+  assert_contains "$out" "MiB of swap configured" "a machine with swap did not say so on its crossing"
+  assert_contains "$out" "not evidence that this machine is healthy"     "a machine with swap did not say what its healthy headroom is worth"
+
+  reset_home
+  # tugboat-cloud's shape, which this vessel is moving onto: 7,746 MiB, no swap.
+  FM_TEST_TOTAL_KB=7931904
+  FM_TEST_SWAP_TOTAL_KB=0
+  reading 1800 true 0
+  out=$(alarm)
+  assert_contains "$out" "no swap configured" "a machine with no swap did not say so on its crossing"
+  assert_contains "$out" "the kernel kills something"     "a swapless machine did not say that there is no degrading stretch below the floor"
+  # 2400 of 7746 MiB is 31.0%, against the 10.2% the floor was derived at.
+  assert_contains "$out" "31.0% of this machine" "the floor's share of this machine was not stated"
+  assert_contains "$out" "10.2% it was derived at" "the share the floor was derived at was not stated"
+  assert_contains "$out" "inherited here rather than verified"     "an unverified margin was not reported as unverified"
+  pass "a machine with no swap is told apart from one with swap, and says what its floor is worth"
+}
+
+test_swap_that_could_not_be_read_is_never_reported_as_no_swap() {
+  # A missing SwapTotal already makes the reading incomplete, so this should not
+  # be reachable in the field. It is asserted anyway because "no swap" and "swap
+  # could not be read" are opposite findings here, and collapsing them would be
+  # the substituted zero this alarm exists to refuse.
+  reset_home
+  FM_TEST_SWAP_TOTAL_KB=null
+  reading 1800 true 0
+  local out
+  out=$(alarm)
+  assert_contains "$out" "could not be read" "unreadable swap was not reported as unread"
+  assert_not_contains "$out" "no swap configured" "unreadable swap was reported as a machine with no swap"
+  pass "swap that could not be read is never reported as a machine with no swap"
+}
+
+test_reading_the_shape_moves_no_threshold() {
+  # The standing constraint on this branch: reading the shape ADDS a reading and
+  # changes nothing about when the alarm fires. Same headroom, same growth, same
+  # stall, two machines - the firing decision must be identical.
+  local with_swap without_swap
+  reset_home
+  reading 1800 true 0
+  with_swap=$(alarm)
+  reset_home
+  FM_TEST_TOTAL_KB=7931904
+  FM_TEST_SWAP_TOTAL_KB=0
+  reading 1800 true 0
+  without_swap=$(alarm)
+  assert_contains "$with_swap" "running out of RAM headroom" "the floor stopped crossing on a machine with swap"
+  assert_contains "$without_swap" "running out of RAM headroom" "the floor stopped crossing on a machine with no swap"
+
+  # And a machine above the floor stays silent on both shapes.
+  reset_home
+  reading 16000 true 0
+  with_swap=$(alarm)
+  reset_home
+  FM_TEST_TOTAL_KB=7931904
+  FM_TEST_SWAP_TOTAL_KB=0
+  reading 16000 true 0
+  without_swap=$(alarm)
+  [ -z "$with_swap" ] || fail "a healthy machine with swap spoke: $with_swap"
+  [ -z "$without_swap" ] || fail "a healthy machine with no swap spoke: $without_swap"
+  pass "reading the shape changes what the alarm says, never when it fires"
+}
+
 test_usage_errors_exit_two() {
   local status=0
   "$ALARM" --nonsense >/dev/null 2>&1 || status=$?
@@ -1665,4 +1750,7 @@ test_the_alarm_limits_nothing_and_kills_nothing
 test_persistence_failures_replace_transition_claims_with_diagnostics
 test_arming_registers_a_check_and_is_idempotent
 test_an_alarm_that_stopped_running_is_reported
+test_a_machine_with_no_swap_is_told_apart_from_one_with_swap
+test_swap_that_could_not_be_read_is_never_reported_as_no_swap
+test_reading_the_shape_moves_no_threshold
 test_usage_errors_exit_two

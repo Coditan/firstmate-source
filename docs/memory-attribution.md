@@ -149,17 +149,22 @@ The cgroup case was found by constructing it.
 A bogus cgroup root originally exited 0, because every account then reported "no active session slice" - the identical wording a genuinely logged-out account produces.
 That is the same defect in miniature, so the reading now establishes once whether the tree was readable at all and separates the two.
 
-Growth has its own set, because an unmeasurable growth rate is the easiest thing in the reading to report as zero:
+Growth has its own set, because an unmeasurable growth rate is the easiest thing in the reading to report as zero.
+Several rows below turn on whether the run is storing, and the rule is one rule: a stored sample this run cannot use is an **unusable prior**, and an unusable prior that this run REPLACES with its own sample is scope, because the reading is then in the same known absence a first run on a new home is already in.
+An unusable prior that nothing replaces stays unmeasured, because the next run would be just as blind as this one.
+`--no-store` never replaces one, and a replacement that could not be written is reported as `sample-storage` and makes the reading incomplete anyway.
+`docs/memory-alarm.md` "A stored sample this run cannot use" owns why that distinction exists.
 
 | Condition | Reported as |
 | --------- | ----------- |
 | no prior sample | scope, "nothing to compare against" - never `+0.0 MiB/min`; exit 0 remains possible |
-| stored sample has no usable epoch | `unmeasured` input `growth-sample`; exit 3 |
-| stored sample body cannot be read | `unmeasured` input `growth-sample`; never converted into first sightings; exit 3 |
+| stored sample has no usable epoch | unusable prior: scope when this run replaces it, `unmeasured` input `growth-sample` and exit 3 when it does not |
+| stored sample body cannot be read | unusable prior, same rule; never converted into first sightings either way |
 | stored sample contains some malformed process records | malformed records are dropped, counted in the growth section and JSON, and growth is measured from the remaining records; exit 0 remains possible |
-| stored sample has no usable process records | `unmeasured` input `growth-sample`; exit 3 |
-| stored sample is future-dated | `unmeasured` input `growth-sample`; exit 3 |
-| stored sample older than the growth window | `unmeasured` input `growth-sample`, with the age and window; exit 3 |
+| stored sample has no usable process records | unusable prior, same rule |
+| stored sample is future-dated | unusable prior, same rule |
+| stored sample older than the growth window | unusable prior, same rule, and the age and window are always named |
+| stored sample path is not a regular file | `unmeasured` input `growth-sample`; exit 3, whatever the mode, because no replacement can be written over it |
 | stored or explicit interval shorter than the divide-by floor | scope, with the interval and floor; exit 0 remains possible |
 | second process-table read fails during `--interval` | `unmeasured` input `growth-sample`; exit 3 |
 | the pid now belongs to a later process | per-process `unmeasured`, "different, later process" - never counted as growth |

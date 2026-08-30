@@ -451,26 +451,53 @@ test_growth_with_no_prior_sample_is_unmeasured_never_zero() {
   pass "growth with no prior sample is reported unmeasured, never as zero growth"
 }
 
-test_an_unreadable_prior_sample_is_an_instrument_failure() {
+test_a_sample_path_no_replacement_can_overwrite_stays_unmeasured() {
   local dir="$TMP_ROOT/unreadable-sample" out status=0
   new_scene "$dir"
+  # A directory, not a file. Storing writes aside and moves into place, and a
+  # move onto a directory lands INSIDE it, so this prior would survive every
+  # replacement - which is why it is the one unusable prior the fresh sample
+  # below is not allowed to soften.
   mkdir "$dir/samples"
   out=$(run_reading "$dir") || status=$?
-  expect_code 3 "$status" "an existing unreadable stored sample"
+  expect_code 3 "$status" "a stored sample path that is not a regular file"
   assert_contains "$out" 'growth-sample' 'the failed growth instrument was not named'
-  assert_contains "$out" 'exists but could not be read' 'the unreadable sample was reported absent'
-  pass "an unreadable stored sample is incomplete, not scoped"
+  assert_contains "$out" 'is not a regular file' 'the unwritable sample path was not named'
+  assert_not_contains "$out" 'takes its place' 'a prior no replacement can overwrite was reported as replaced'
+  pass "a stored sample path no fresh sample can overwrite stays unmeasured"
 }
 
-test_a_stale_prior_sample_is_unmeasured_rather_than_meaningless() {
-  local dir="$TMP_ROOT/stale" out status=0
+test_an_unusable_prior_is_replaced_rather_than_reported_as_blindness() {
+  local dir="$TMP_ROOT/stale" out status=0 stored
   new_scene "$dir"
+  # A host frozen for hours comes back to exactly this: a stored sample far too
+  # old to divide by. The instrument is not broken, and saying it is relays a
+  # machine nobody could measure as a machine nobody can see.
   write_sample "$dir/samples" $((NOW - 100000)) "1000=$((NOW - 600)):1000"
   out=$(run_reading "$dir") || status=$?
-  expect_code 3 "$status" "a stale stored sample"
-  assert_contains "$out" 'growth unmeasured for every process above' 'a stale sample was used as if current'
+  expect_code 0 "$status" "a stale stored sample this run replaces"
+  assert_contains "$out" 'growth scoped for every process above' 'a replaced stale sample was still reported as blindness'
+  assert_not_contains "$out" 'growth unmeasured for every process above' 'a replaced stale sample was reported unmeasured'
   assert_contains "$out" 'past the' 'the staleness reason is missing'
-  pass "a prior sample older than the growth window is reported unmeasured"
+  assert_contains "$out" 'takes its place' 'the reading did not say the unusable sample was replaced'
+  assert_not_contains "$out" '+0.0 MiB/min' 'a replaced sample produced a growth rate it never measured'
+  # The replacement is the whole claim, so it is read back rather than assumed.
+  stored=$(awk '/^epoch /{print $2}' "$dir/samples")
+  [ "$stored" = "$NOW" ] || fail "the unusable stored sample was not replaced with this run's own (epoch $stored)"
+  pass "an unusable stored sample is discarded and replaced rather than reported as blindness"
+}
+
+test_an_unusable_prior_nothing_replaces_is_still_unmeasured() {
+  local dir="$TMP_ROOT/stale-nostore" out status=0
+  new_scene "$dir"
+  write_sample "$dir/samples" $((NOW - 100000)) "1000=$((NOW - 600)):1000"
+  # --no-store takes no fresh sample, so the next run would be just as blind.
+  # The softer word is earned by the replacement, and there is none here.
+  out=$(run_reading "$dir" --no-store) || status=$?
+  expect_code 3 "$status" "a stale stored sample nothing replaces"
+  assert_contains "$out" 'growth unmeasured for every process above' 'an unreplaced stale sample was reported as scope'
+  assert_contains "$out" 'nothing replaces it' 'the reading did not say why the stale sample stood'
+  pass "an unusable stored sample nothing replaces stays unmeasured"
 }
 
 test_too_short_an_interval_is_scoped_rather_than_divided_by() {
@@ -540,22 +567,32 @@ test_the_observed_delayed_interval_remains_measurable() {
   pass "the observed 926-second delayed interval remains measurable"
 }
 
-test_an_interval_past_the_new_ceiling_stays_unmeasured() {
+test_an_interval_past_the_ceiling_is_never_divided_by() {
   local dir="$TMP_ROOT/past-window" out line status=0
   new_scene "$dir"
   write_sample "$dir/samples" $((NOW - 1261)) "1000=$((NOW - 2000)):1000"
+  # Replacing the sample is not the same as accepting it. The ceiling still
+  # refuses to divide by this interval; what changed is that the refusal is
+  # repaired in the same run instead of being reported as a broken instrument.
   out=$(run_reading "$dir") || status=$?
-  expect_code 3 "$status" "an interval past the 1260-second ceiling"
-  assert_contains "$out" 'growth unmeasured for every process above' 'an over-age sample was treated as measured'
-  assert_contains "$out" 'past the 1260s window' 'the new ceiling was not named in the blindness report'
+  expect_code 0 "$status" "an over-age sample this run replaces"
+  assert_contains "$out" 'past the 1260s window' 'the ceiling was not named in the growth report'
   line=$(process_line_from_section "$out" 'LARGEST TRACKED PROCESSES' 1000)
-  assert_contains "$line" 'unmeasured' 'an over-age process was not marked unmeasured'
+  assert_contains "$line" 'scoped' 'an over-age process was not marked scoped'
   assert_not_contains "$line" 'MiB/min' 'an over-age sample produced a growth rate'
-  pass "an interval past the new ceiling remains explicitly unmeasured"
+
+  write_sample "$dir/samples" $((NOW - 1261)) "1000=$((NOW - 2000)):1000"
+  status=0
+  out=$(run_reading "$dir" --no-store) || status=$?
+  expect_code 3 "$status" "an over-age sample nothing replaces"
+  assert_contains "$out" 'growth unmeasured for every process above' 'an over-age sample nothing replaced was treated as scope'
+  line=$(process_line_from_section "$out" 'LARGEST TRACKED PROCESSES' 1000)
+  assert_not_contains "$line" 'MiB/min' 'an over-age sample produced a growth rate'
+  pass "an interval past the ceiling is never divided by, replaced or not"
 }
 
-test_corrupt_and_future_samples_force_incomplete_readings() {
-  local dir="$TMP_ROOT/badsample" out status case_name
+test_corrupt_and_future_samples_are_replaced_or_reported() {
+  local dir="$TMP_ROOT/badsample" out status case_name stored
   for case_name in corrupt future; do
     rm -rf "$dir"
     new_scene "$dir"
@@ -564,11 +601,18 @@ test_corrupt_and_future_samples_force_incomplete_readings() {
       future) write_sample "$dir/samples" $((NOW + 60)) "1000=$((NOW - 600)):512000" ;;
     esac
     status=0
-    out=$(run_reading "$dir") || status=$?
-    expect_code 3 "$status" "a $case_name stored sample"
+    out=$(run_reading "$dir" --no-store) || status=$?
+    expect_code 3 "$status" "a $case_name stored sample nothing replaces"
     assert_contains "$out" 'growth-sample' "a $case_name sample did not name the failed input"
+
+    status=0
+    out=$(run_reading "$dir") || status=$?
+    expect_code 0 "$status" "a $case_name stored sample this run replaces"
+    assert_contains "$out" 'takes its place' "a $case_name sample was not reported as replaced"
+    stored=$(awk '/^epoch /{print $2}' "$dir/samples")
+    [ "$stored" = "$NOW" ] || fail "a $case_name stored sample was not replaced (epoch $stored)"
   done
-  pass "corrupt and future-dated samples force incomplete readings"
+  pass "corrupt and future-dated samples are replaced when storing and reported when not"
 }
 
 test_sample_body_failures_are_not_first_sightings() {
@@ -587,10 +631,16 @@ EOF
     printf 'exec %q "$@"\n' "$real_awk"
   } > "$dir/bin/awk"
   chmod +x "$dir/bin/awk"
-  out=$(run_reading "$dir" "PATH=$dir/bin:$PATH" "FAIL_SAMPLE=$dir/samples") || status=$?
-  expect_code 3 "$status" "a sample whose body could not be read"
+  out=$(run_reading "$dir" --no-store "PATH=$dir/bin:$PATH" "FAIL_SAMPLE=$dir/samples") || status=$?
+  expect_code 3 "$status" "a sample whose body could not be read and nothing replaces"
   assert_contains "$out" 'stored sample body could not be read' 'the failed sample body was not named'
   assert_not_contains "$out" 'first sighting of this process' 'the failed sample body became ordinary first sightings'
+
+  status=0
+  out=$(run_reading "$dir" "PATH=$dir/bin:$PATH" "FAIL_SAMPLE=$dir/samples") || status=$?
+  expect_code 0 "$status" "a sample whose body could not be read and this run replaces"
+  assert_contains "$out" 'stored sample body could not be read' 'the replaced sample body was not named'
+  assert_not_contains "$out" 'first sighting of this process' 'a replaced sample body became ordinary first sightings'
 
   rm -rf "$dir"
   new_scene "$dir"
@@ -624,15 +674,22 @@ EOF
   write_sample "$dir/samples" $((NOW - 300))
   printf 'not-a-pid\t123\t456\n' >> "$dir/samples"
   status=0
-  out=$(run_reading "$dir") || status=$?
+  out=$(run_reading "$dir" --no-store) || status=$?
   expect_code 3 "$status" "a stored sample with no usable process records"
   assert_contains "$out" 'carries no usable process records' 'an all-bad sample body was not refused'
 
   write_sample "$dir/samples" $((NOW - 300))
   status=0
-  out=$(run_reading "$dir") || status=$?
+  out=$(run_reading "$dir" --no-store) || status=$?
   expect_code 3 "$status" "a stored sample with an empty process body"
   assert_contains "$out" 'carries no usable process records' 'an empty sample body was not refused'
+
+  write_sample "$dir/samples" $((NOW - 300))
+  status=0
+  out=$(run_reading "$dir") || status=$?
+  expect_code 0 "$status" "an empty sample body this run replaces"
+  assert_contains "$out" 'carries no usable process records' 'a replaced empty sample body was not named'
+  assert_not_contains "$out" 'first sighting of this process' 'a replaced empty sample body became ordinary first sightings'
   pass "sample body failures are incomplete while isolated malformed records are dropped and counted"
 }
 
@@ -991,15 +1048,16 @@ test_wake_delivery_is_labelled_protected_however_small
 test_a_worker_that_merely_mentions_the_delivery_script_is_not_labelled
 test_growth_separates_a_large_steady_process_from_a_fast_growing_one
 test_growth_with_no_prior_sample_is_unmeasured_never_zero
-test_an_unreadable_prior_sample_is_an_instrument_failure
-test_a_stale_prior_sample_is_unmeasured_rather_than_meaningless
+test_a_sample_path_no_replacement_can_overwrite_stays_unmeasured
+test_an_unusable_prior_is_replaced_rather_than_reported_as_blindness
+test_an_unusable_prior_nothing_replaces_is_still_unmeasured
 test_too_short_an_interval_is_scoped_rather_than_divided_by
 test_a_short_explicit_interval_uses_the_same_floor
 test_an_explicit_floor_override_preserves_the_short_survey
 test_the_watcher_interval_still_reports_a_real_rate
 test_the_observed_delayed_interval_remains_measurable
-test_an_interval_past_the_new_ceiling_stays_unmeasured
-test_corrupt_and_future_samples_force_incomplete_readings
+test_an_interval_past_the_ceiling_is_never_divided_by
+test_corrupt_and_future_samples_are_replaced_or_reported
 test_sample_body_failures_are_not_first_sightings
 test_a_reused_pid_is_not_reported_as_growth
 test_a_genuinely_calm_stall_reading_is_not_confusable_with_a_blind_one
