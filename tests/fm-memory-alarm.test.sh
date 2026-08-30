@@ -59,7 +59,7 @@ reading() {
   # the status the alarm actually receives.
   export FM_TEST_READING_EXIT=0
   if [ "$complete" = false ]; then
-    unmeasured='[{"input":"process-table","reason":"the process table could not be read"}]'
+    unmeasured='[{"input":"account-slices","reason":"no account'"'"'s total, limit, or stall was read at all"}]'
     export FM_TEST_READING_EXIT=3
   fi
   printf '{"schema":"fm-memory-reading.v1","complete":%s,"unmeasured":%s,"headroom":{"total_kb":24019908,"available_kb":%s,"swap_total_kb":33554428,"swap_free_kb":33554428},"stall":%s,"growth":%s,"processes":%s}\n' \
@@ -354,20 +354,25 @@ test_one_unreadable_input_does_not_silence_the_conditions_that_were_read() {
 
 test_a_recovery_is_never_declared_from_a_reading_that_missed_an_input() {
   # Firing gets no harder on an incomplete reading; leaving must get no easier -
-  # but only for the CONDITIONS. A condition that raised the alarm and could not
-  # be re-read blocks the recovery absolutely.
+  # but only for the condition that RAISED the alarm. Here the horizon crossed
+  # and growth is what the next poll cannot compare, so the shortage may not be
+  # called over however healthy headroom looks.
   reset_home
-  reading 1800 true 0
+  reading 16000 true 0
   alarm >/dev/null
+  reading 16000 true $((1200 * 1024)) false task 'alpha (ship, alpha-project)'
   local out
-  reading_stall_unmeasured 16000
+  out=$(alarm)
+  assert_contains "$out" "MEMORY_ALARM:" "the horizon crossing must be announced"
+
+  reading_process_table_unreadable 16000
   out=$(alarm)
   assert_not_contains "$out" "recovered" \
-    "a shortage must not be declared over by a poll that could not re-read a condition"
+    "a shortage must not be declared over by a poll that could not re-read the condition that raised it"
   assert_contains "$out" "gone blind" "the alarm must say instead that it cannot tell"
-  assert_contains "$out" "memory stall could not be read" \
+  assert_contains "$out" "crossed on growth" \
     "and must name the condition it could not re-evaluate"
-  pass "a crossing is never left on the strength of a condition nobody could re-read"
+  pass "a crossing is never left on the strength of the condition that raised it going unread"
 }
 
 test_an_input_no_condition_uses_does_not_hold_back_a_recovery() {
@@ -389,7 +394,7 @@ test_an_input_no_condition_uses_does_not_hold_back_a_recovery() {
     "a recovery judged by all three conditions is a recovery, whatever else the reading missed"
   assert_not_contains "$out" "gone blind" \
     "a readable condition must never be reported as one the alarm could not re-evaluate"
-  assert_contains "$out" "process-table" "and the input it could not read is still named"
+  assert_contains "$out" "account-slices" "and the input it could not read is still named"
 
   out=$(alarm)
   assert_contains "|$out|" "||" \
@@ -429,7 +434,7 @@ test_sight_is_never_claimed_regained_while_a_condition_is_still_unreadable() {
   local out
   reading_stall_unmeasured 16000
   out=$(alarm)
-  assert_contains "$out" "no longer judge stall" "the lost condition must be spoken once"
+  assert_contains "$out" "cannot judge stall" "the lost condition must be spoken once"
 
   reading_stall_unmeasured 1800
   out=$(alarm)
@@ -475,9 +480,104 @@ test_a_growth_sample_that_merely_aged_out_is_not_a_lost_instrument() {
   # instrument, and losing it is spoken.
   reading_process_table_unreadable 16000
   out=$(alarm)
-  assert_contains "$out" "no longer judge horizon" \
+  assert_contains "$out" "cannot judge horizon" \
     "a process table nobody could read is the horizon's instrument failing, and must be spoken"
   pass "a growth sample that merely aged out is scope, not a lost instrument"
+}
+
+test_a_shortage_ends_even_where_another_condition_can_never_be_read() {
+  # The WSL shape this branch exists to detect: the memory-stall account can
+  # never be read. A headroom shortage on such a host must still be reported as
+  # ended, with the duration it lasted - a condition that is blind but never
+  # crossed says nothing about whether the shortage is over, and blocking on it
+  # would announce every genuine recovery there as a blindness instead.
+  reset_home
+  reading_stall_unmeasured 16000
+  alarm_at 0 >/dev/null
+
+  local out
+  reading_stall_unmeasured 1800
+  out=$(alarm_at 300)
+  assert_contains "$out" "running out of RAM headroom" "the headroom crossing must be announced"
+
+  reading_stall_unmeasured 16000
+  out=$(alarm_at 900)
+  assert_contains "$out" "recovered" \
+    "a headroom shortage must end even where the stall account can never be read"
+  assert_contains "$out" "The shortage lasted 10m0s" \
+    "and must carry the duration it really lasted"
+  assert_not_contains "$out" "gone blind" \
+    "a condition that never crossed must not turn a recovery into a blindness"
+  pass "a shortage ends and states its duration even where another condition can never be read"
+}
+
+test_a_shortage_the_crossed_condition_could_not_re_read_keeps_its_clock() {
+  # The other half: when the condition that RAISED the alarm is the one that
+  # cannot be re-read, the shortage is genuinely unjudgeable and must not be
+  # called over. It did not end there, though, so the clock keeps running and
+  # the recovery that finally comes still says how long it lasted.
+  reset_home
+  FM_TEST_STALL_WINDOW=600
+  reading 16000 true 0
+  alarm_at 0 >/dev/null
+
+  local out t
+  for t in 300 600 900; do
+    reading_thrashing 3577 38.0
+    out=$(alarm_at "$t")
+  done
+  assert_contains "$out" "stalling on memory" "the stall crossing must be announced"
+
+  # The account goes unreadable while the stall crossing is held.
+  reading_stall_unmeasured 16000
+  out=$(alarm_at 1200)
+  assert_contains "$out" "gone blind" \
+    "a crossing whose own condition cannot be re-read must not be called over"
+  assert_contains "$out" "crossed on memory stall" "and must name the condition that raised it"
+
+  # It comes back, and reads clear.
+  reading_thrashing 16000 0.00
+  out=$(alarm_at 1500)
+  assert_contains "$out" "recovered" "the shortage must be reported as ended once it can be judged"
+  # The crossing was declared at t=900 and the shortage ends at t=1500. A clock
+  # restarted by the blind poll at t=1200 would report 5m0s instead.
+  assert_contains "$out" "The shortage lasted 10m0s" \
+    "and the clock must have survived the poll that could not judge it"
+  pass "a shortage nobody could re-judge keeps its clock and still reports its duration"
+}
+
+test_a_watch_change_on_a_crossed_machine_says_it_is_still_crossed() {
+  # This is the only line the poll emits, so a reader must not be able to take
+  # it as a monitoring notice for a machine that is currently out of memory.
+  reset_home
+  reading 16000 true 0
+  alarm_at 0 >/dev/null
+  reading 1800 true 0
+  alarm_at 300 >/dev/null
+
+  local out
+  reading_stall_unmeasured 1800
+  out=$(alarm_at 600)
+  assert_contains "$out" "still running out of RAM headroom" \
+    "a watch change on a crossed machine must name the shortage it is holding"
+  assert_contains "$out" "cannot judge stall" "and must still report what it lost"
+  pass "a watch change on a crossed machine names the shortage it is still holding"
+}
+
+test_an_unconfigured_gate_is_not_reported_as_a_condition_the_alarm_lost() {
+  # A home that never configured the gate must still be told the condition is
+  # unwatched - that is the standing rule - but it was never judged, so it was
+  # never lost either.
+  reset_home
+  reading_thrashing 16000 0.00
+  local out
+  out=$(unconfigured_alarm)
+  assert_contains "$out" "only partly watched" \
+    "an unconfigured condition must still be reported rather than passed off as calm"
+  assert_not_contains "$out" "no longer judge" \
+    "a gate nobody configured was never judged, so it cannot have been lost"
+  assert_contains "$out" "no stall gate is configured" "and the reading must say why"
+  pass "an unconfigured gate is reported as unwatched without claiming the alarm lost it"
 }
 
 test_a_condition_that_becomes_unjudgeable_is_spoken_once() {
@@ -494,7 +594,7 @@ test_a_condition_that_becomes_unjudgeable_is_spoken_once() {
   out=$(alarm)
   assert_contains "$out" "MEMORY_ALARM:" \
     "a condition that became unjudgeable must be spoken on the watcher's channel"
-  assert_contains "$out" "no longer judge stall" "and must name the condition it lost"
+  assert_contains "$out" "cannot judge stall" "and must name the condition it lost"
   assert_contains "$out" "not an all-clear" "and must not read as an all-clear"
   assert_not_contains "$out" "CROSSED" "and must never call a judged machine crossed"
 
@@ -1186,6 +1286,10 @@ test_an_input_no_condition_uses_does_not_hold_back_a_recovery
 test_a_recovery_states_how_long_the_shortage_actually_lasted
 test_sight_is_never_claimed_regained_while_a_condition_is_still_unreadable
 test_a_growth_sample_that_merely_aged_out_is_not_a_lost_instrument
+test_a_shortage_ends_even_where_another_condition_can_never_be_read
+test_a_shortage_the_crossed_condition_could_not_re_read_keeps_its_clock
+test_a_watch_change_on_a_crossed_machine_says_it_is_still_crossed
+test_an_unconfigured_gate_is_not_reported_as_a_condition_the_alarm_lost
 test_a_condition_that_becomes_unjudgeable_is_spoken_once
 test_a_blind_stall_poll_neither_erases_the_run_nor_credits_it
 test_a_reading_that_produced_nothing_is_blindness_not_health
