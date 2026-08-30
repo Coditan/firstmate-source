@@ -69,7 +69,7 @@ That path covers two different readings, and the line says which one it took, be
 `answered with no version this check could read` is the case where `no-mistakes --version` exited non-zero or printed a banner no major.minor.patch could be parsed out of, so no version was established at all.
 Collapsing the second into the first would tell a reader on the newest release that their CLI is out of date, which is a version reading the check never took, and reporting a reading it did not take is the one thing this check is built not to do.
 What changes on that path is the repair rather than the verdict: `no-mistakes daemon status` and `no-mistakes daemon start` cannot succeed until the upgrade lands, and a diagnostic that prescribes a command the reader cannot run is the defect the 2026-08-24 ruling names.
-So the below-floor line names the upgrade instead, using the same install command `MISSING: no-mistakes` already prints.
+So both version reasons name the upgrade instead, using the same install command `MISSING: no-mistakes` already prints, and the handling playbook routes both of them there rather than to a by-hand daemon reading.
 That command is the installer script, not `no-mistakes update`, so naming it does not reopen the path the next section bars; the line keeps that warning too.
 
 ## Why the repair is never `no-mistakes update`

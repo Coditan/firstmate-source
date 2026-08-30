@@ -85,8 +85,9 @@ When any diagnostic needs captain attention, report the plain consequence and re
   `neither timeout nor gtimeout` means this seat cannot bound the call, and asking unbounded would hang session start behind a wedged daemon.
   `below the version floor this fleet requires` and `answered with no version this check could read` both mean the installed CLI cannot be asked at all, so these reasons carry the upgrade as their repair instead of a daemon command, and the `MISSING: no-mistakes` line names the same upgrade.
   They are two different readings and the line says which one it took: the first established a version and found it too old, while the second established no version at all, so do not report the second as an out-of-date CLI.
-  In every case except the below-floor one take the reading yourself with `no-mistakes daemon status` before concluding anything, and never relay the silence as healthy.
-  On the below-floor path do the upgrade the line names first, because neither daemon verb can succeed until it lands; the ban on `no-mistakes update` still holds, and the printed upgrade is the installer script rather than that path.
+  Never relay the silence as healthy on any of these paths, whichever reason the line carries.
+  On the timeout, unrecognised-shape and no-bounding-command reasons take the reading yourself with `no-mistakes daemon status` before concluding anything, because the CLI can still answer on those.
+  On either version reason do the upgrade the line names first instead, because neither daemon verb can succeed until it lands; the ban on `no-mistakes update` still holds, and the printed upgrade is the installer script rather than that path.
 - `FREQUENCY_MONITOR_UNIT: missing ...` or `FREQUENCY_MONITOR_UNIT: ... disabled ...` - explain that the configured Bridge inbox remains durable but live-session delivery stays on the slower watcher fallback, ask for explicit consent, then run `bin/fm-bootstrap.sh install frequency-monitor-unit` only after approval.
   The installation copies the tracked template, writes this home's private environment, reloads the user manager, and enables and starts only the instance encoded from this home.
 - `FREQUENCY_MONITOR_UNIT: <instance> needs locked convergence ...` - this read-only session found stale unit bytes, source path or version, environment, or runtime state.
