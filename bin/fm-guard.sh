@@ -46,6 +46,23 @@ STALE_BANNER_MARKER="$STATE/.guard-watcher-stale-banner"
 . "$SCRIPT_DIR/fm-tangle-lib.sh"
 # shellcheck source=bin/fm-supervision-lib.sh
 . "$SCRIPT_DIR/fm-supervision-lib.sh"
+# shellcheck source=bin/fm-primary-scope-lib.sh
+. "$SCRIPT_DIR/fm-primary-scope-lib.sh"
+
+# Who this guard is talking to, decided once. READ_ONLY answers whether the
+# session may write, not who it is, so a crewmate or scout falls through it and
+# would otherwise be handed a repair AGENTS.md section 1 reserves to firstmate.
+# The comparison is against FM_HOME rather than FM_ROOT, unlike the two guards
+# that additionally gate on fm_primary_scope_matches: this file has no such gate,
+# FM_HOME is the home it actually judges (STATE, fm_watcher_healthy and
+# fm_delivery_healthy all take it), and bin/fm-spawn.sh prepends only
+# FM_HOME=<launching home> to a crewmate's launch command, so with
+# FM_ROOT_OVERRIDE unset FM_ROOT is the worker's OWN worktree and an FM_ROOT
+# comparison would answer "operator" for the exact case this split exists to
+# catch. This decides wording only; every health verdict below is unchanged and
+# the alarm still prints for every addressee.
+OPERATES_HOME=0
+fm_session_operates_home "$SCRIPT_DIR/.." "$FM_HOME" && OPERATES_HOME=1
 
 # Deterministic episode key from beacon state: same continuous stale beacon
 # (or continuous absence) shares a key; a recovered-then-restale beacon gets a
@@ -201,23 +218,28 @@ if [ "$daemon_healthy" = false ]; then
     print_full_banner=1
   fi
   if [ "$print_full_banner" -eq 1 ]; then
-    if [ "$READ_ONLY" -eq 1 ]; then
-      fix='Watcher daemon repair belongs to the session holding the fleet lock.'
-    else
-      fix=$("$SCRIPT_DIR/fm-watcher-service.sh" repair-command 2>/dev/null || printf '%s\n' 'bin/fm-watcher-service.sh restart')
+    fix=
+    if [ "$OPERATES_HOME" -eq 1 ]; then
+      if [ "$READ_ONLY" -eq 1 ]; then
+        fix='Watcher daemon repair belongs to the session holding the fleet lock.'
+      else
+        fix=$("$SCRIPT_DIR/fm-watcher-service.sh" repair-command 2>/dev/null || printf '%s\n' 'bin/fm-watcher-service.sh restart')
+      fi
     fi
     rule='━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
     {
       printf '●%s\n' "$rule"
       printf '●  WATCHER DAEMON DOWN - SUPERVISION IS OFF\n'
       printf '●  %s task(s) in flight, but no identity-matched watcher has a fresh beacon (last beat: %s, grace %ss).\n' "$in_flight" "$beacon_desc" "$GRACE"
-      if [ "$READ_ONLY" -eq 1 ]; then
+      if [ "$OPERATES_HOME" -eq 0 ]; then
+        printf '●  This is the supervision of the home that launched this task, and repairing it belongs to firstmate, not to a task worker: report the stalled supervision in your task status line and carry on with your own task in this worktree.\n'
+      elif [ "$READ_ONLY" -eq 1 ]; then
         printf '●  This read-only session should report the lapse, not repair it.\n'
       else
         printf '●  This is a daemon incident; restart only this home-scoped service and verify its lock plus beacon.\n'
       fi
       printf '●  %s\n' "$CONTINUE_LINE"
-      printf '●  Daemon repair: %s\n' "$fix"
+      [ -z "$fix" ] || printf '●  Daemon repair: %s\n' "$fix"
       printf '●%s\n' "$rule"
     } >&2
   else
@@ -237,7 +259,10 @@ if [ "$daemon_healthy" = true ] && [ "$delivery_armed" = false ]; then
   # verdict word would need the relay to know every verdict this guard can
   # produce. One owner for the verdict vocabulary, one stable prefix for the
   # readers that only need to recognise the line.
-  if [ "$READ_ONLY" -eq 1 ]; then
+  if [ "$OPERATES_HOME" -eq 0 ]; then
+    printf 'WARNING: wake delivery listener %s - repairing it belongs to firstmate, not to a task worker: report the stalled supervision in your task status line and carry on with your own task in this worktree.\n' \
+      "${delivery_verdict:-down}" >&2
+  elif [ "$READ_ONLY" -eq 1 ]; then
     printf 'WARNING: wake delivery listener %s - the session holding the fleet lock must repair it.\n' \
       "${delivery_verdict:-down}" >&2
   else
