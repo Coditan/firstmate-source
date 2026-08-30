@@ -511,7 +511,12 @@ if [ "$NEEDS_PORT" -eq 1 ]; then
   # pre-read comparison never agrees with the record it wrote and would restart
   # a healthy board - dropping the reviewer's connected browser - on every
   # single open, poll, and end.
-  if [ -n "$MINE" ] \
+  #
+  # Only a run that leaves a server may act on this. A run that starts nothing
+  # cannot correct a mismatch, and its own link host is resolved from a route it
+  # deliberately did not publish, so letting it compare would tear down a healthy
+  # board over a difference it created and was never going to fix.
+  if [ "$LEAVES_SERVER" -eq 1 ] && [ -n "$MINE" ] \
     && { [ "$(owner_field link_host || true)" != "$LINK_HOST" ] \
       || [ "$(owner_field allowed || true)" != "$ALLOWED" ]; }; then
     note "the running board server was started with a different address configuration; restarting it so links are correct"
@@ -566,7 +571,12 @@ export LAVISH_AXI_LINK_HOST="$LINK_HOST"
 export LAVISH_AXI_ALLOWED_HOSTS="$ALLOWED"
 export LAVISH_AXI_STATE_DIR="$LAV_STATE"
 
-if [ "$NEEDS_PORT" -eq 1 ]; then
+# What a server was LAUNCHED with, which is the only thing the comparison above
+# can mean, so only a run that launches one may write it. A run that starts
+# nothing would otherwise record a link host no running server ever used - and
+# the next run that does start one would read that, find a mismatch it did not
+# cause, and stop a healthy board to fix it.
+if [ "$LEAVES_SERVER" -eq 1 ]; then
   ( umask 077; printf 'port=%s\naddr=%s\nlink_host=%s\nallowed=%s\n' \
       "$PORT" "$ADDR" "$LINK_HOST" "$ALLOWED" > "$OWNER" ) 2>/dev/null || true
 fi
