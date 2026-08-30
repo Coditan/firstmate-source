@@ -88,7 +88,8 @@ services:
 ```
 
 Each vessel reads those values straight out of its own `FM_HOME/state/service-port.<service>`, which `bin/fm-service-port.sh` already writes in exactly this shape.
-That script's header is the one owner of what every field means, including the full `reachability` vocabulary and which of `addr`, `tailaddr`, and `dnsname` a consumer binds and which it links.
+That script's header is the one owner of what every field means, including the full `reachability` and `route` vocabularies and which of `addr`, `tailaddr`, and `dnsname` a consumer binds and which it links.
+`reachability` describes the host and `route` describes what one run did, so a vessel reachable by proxy keeps its `bind:` value even on a run that published no route.
 Read it there rather than inferring the set from the example above, which shows one row and not the contract.
 
 ## Migration, without central guessing

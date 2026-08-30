@@ -1090,6 +1090,15 @@ SH
   assert_contains "$out" "LAVISH_ACCESS: 1 open review board link(s)" \
     "an open loopback board link must be reported, and an ended one must not be counted"
 
+  # A vessel reached by a published proxy has just as much reach to offer, so a
+  # loopback link is just as stale there. The record keeps saying tailnet-proxied
+  # even after a run that published no route, because that is a fact about the
+  # host, so this notice must keep firing on exactly that vessel.
+  record_as tailnet-proxied
+  out=$(run_case userspace)
+  assert_contains "$out" "LAVISH_ACCESS: 1 open review board link(s)" \
+    "a proxied vessel's stale loopback link is reported like any other"
+
   record_as loopback
   out=$(run_case off)
   assert_not_contains "$out" "LAVISH_ACCESS:" \
