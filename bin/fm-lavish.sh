@@ -246,7 +246,7 @@ if ! IDENTITY=$("$SCRIPT_DIR/fm-service-port.sh" lavish --check 2>&1); then
   die "could not resolve this vessel's address for review boards" 4
 fi
 
-ADDR=""; TAILADDR=""; DNSNAME=""; MACHINE=""; SEAT=""; WINDOW=""; REACHABILITY=""; REASON=""
+ADDR=""; TAILADDR=""; DNSNAME=""; MACHINE=""; SEAT=""; WINDOW=""; REACHABILITY=""; ROUTE=""; REASON=""
 
 # Read once here from the --check pre-read, and AGAIN from the allocation
 # itself. The two can genuinely differ: --check cannot know whether publishing a
@@ -263,11 +263,27 @@ read_identity() {
       seat) SEAT=$value ;;
       window) WINDOW=$value ;;
       reachability) REACHABILITY=$value ;;
+      route) ROUTE=$value ;;
       reason) REASON=$value ;;
     esac
   done <<EOF
 $1
 EOF
+}
+
+# Whether the link may name the tailnet at all. Under tailnet-proxied that is
+# not answered by the reachability alone, because reachability describes the
+# HOST: a vessel that can be reached by proxy stays tailnet-proxied on a run
+# that published no route, and naming the tailnet then would hand over a link
+# that opens nowhere. An empty route is the --check pre-read, where no port
+# exists yet and so no route can have been decided either way; only a definite
+# route=none withholds the name.
+links_the_tailnet() {
+  case "$REACHABILITY" in
+    tailnet) return 0 ;;
+    tailnet-proxied) [ "$ROUTE" != none ] ;;
+    *) return 1 ;;
+  esac
 }
 
 # ADDR is the address to BIND, which is not always the address to LINK. On a
@@ -279,10 +295,7 @@ EOF
 # loopback is the honest link even though it opens only here.
 resolve_link_identity() {
   LINK_HOST=${DNSNAME:-${TAILADDR:-$ADDR}}
-  case "$REACHABILITY" in
-    tailnet|tailnet-proxied) ;;
-    *) LINK_HOST=$ADDR ;;
-  esac
+  links_the_tailnet || LINK_HOST=$ADDR
   # The Host header a browser sends through the published proxy carries the
   # tailnet NAME, measured rather than reasoned about
   # (bin/fm-tailnet-serve-lib.sh records that measurement), so both the name and
@@ -290,12 +303,10 @@ resolve_link_identity() {
   # what the link names. The allowlist is compared on hostname alone, so the
   # port the proxy adds is not part of the question.
   ALLOWED="$LINK_HOST $ADDR $CLAIM_TOKEN"
-  case "$REACHABILITY" in
-    tailnet|tailnet-proxied)
-      [ -z "$TAILADDR" ] || [ "$TAILADDR" = "$ADDR" ] || ALLOWED="$TAILADDR $ALLOWED"
-      [ -z "$MACHINE" ] || ALLOWED="$MACHINE $ALLOWED"
-      ;;
-  esac
+  if links_the_tailnet; then
+    [ -z "$TAILADDR" ] || [ "$TAILADDR" = "$ADDR" ] || ALLOWED="$TAILADDR $ALLOWED"
+    [ -z "$MACHINE" ] || ALLOWED="$MACHINE $ALLOWED"
+  fi
 }
 
 read_identity "$IDENTITY"

@@ -392,6 +392,8 @@ expect_code 0 "$?" "an unbindable address with a working serve must resolve, not
 [ "$(field tailaddr "$proxied")" = 192.0.2.1 ] \
   || fail "the proxied case must still name the tailnet address it could not bind"
 proxied_port=$(field port "$proxied")
+[ "$(field route "$proxied")" = published ] \
+  || fail "a serving run that published must say so in route=, got '$(field route "$proxied")'"
 assert_contains "$(cat "$FM_TEST_TS_SERVE_LOG")" "--http=$proxied_port" \
   "the port actually bound is the port published"
 assert_contains "$(cat "$FM_TEST_TS_SERVE_LOG")" "http://127.0.0.1:$proxied_port" \
@@ -410,14 +412,23 @@ pass "an address the node holds but cannot bind is served over a published proxy
 unserved=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_B" FM_SERVICE_PORT_RANGE=4740-4759 \
   "$ROOT/bin/fm-service-port.sh" lavish)
 expect_code 0 "$?" "a caller that will not leave a service listening still gets a port"
-[ "$(field reachability "$unserved")" = loopback ] \
-  || fail "a route that was never made is not reach, got '$(field reachability "$unserved")'"
-[ -z "$(field dnsname "$unserved")" ] \
-  || fail "no name may be offered for a route that was not made"
+# The run made no route, and says so in route=. What it must NOT do is restate
+# that as a fact about the host: this vessel can be reached by proxy, and a
+# consumer of the record - the fleet registry, the session-start notice - would
+# otherwise read a proxy-capable vessel as loopback-only because a board closed.
+[ "$(field reachability "$unserved")" = tailnet-proxied ] \
+  || fail "a run that published nothing must not restate the host as unreachable, got '$(field reachability "$unserved")'"
+[ "$(field route "$unserved")" = none ] \
+  || fail "the run's own outcome belongs in route=, got '$(field route "$unserved")'"
 assert_contains "$(cat "$FM_TEST_TS_SERVE_LOG")" "serve status" \
   "the allocator still has to READ whether a route already exists"
 assert_not_contains "$(cat "$FM_TEST_TS_SERVE_LOG")" "--bg" \
   "nothing may be published for a run that will not leave a service listening"
+# One reason cannot say both that a route exists and that none was made.
+assert_not_contains "$unserved" "published onto" \
+  "the reason must not claim a route this run did not make"
+assert_contains "$unserved" "no tailscale serve route was published" \
+  "the reason names what this run actually did"
 
 # Reading a route somebody else established is not making one, so an already
 # published port is still the reach it is.
@@ -428,6 +439,8 @@ standing=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_B" \
   "$ROOT/bin/fm-service-port.sh" lavish)
 [ "$(field reachability "$standing")" = tailnet-proxied ] \
   || fail "an already published port is still proxied reach, got '$(field reachability "$standing")'"
+[ "$(field route "$standing")" = published ] \
+  || fail "a route somebody else established is still a route, got '$(field route "$standing")'"
 assert_not_contains "$(cat "$FM_TEST_TS_SERVE_LOG")" "--bg" \
   "an existing route must be read, never re-made"
 : > "$FM_TEST_TS_SERVE_STATE"
@@ -1305,11 +1318,26 @@ done
 # Out of scope on both counts, so it has to survive whatever this run does.
 printf '%s\n' 8443 >> "$FM_TEST_TS_SERVE_STATE"
 
-FM_TEST_TS_MODE=userspace FM_HOME="$HOME_Z" FM_SERVICE_PORT_RANGE=4841-4842 \
-  "$ROOT/bin/fm-lavish.sh" end "$HOME_Z/.lavish/board.html" >/dev/null 2>&1
+z_end=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_Z" FM_SERVICE_PORT_RANGE=4841-4842 \
+  "$ROOT/bin/fm-lavish.sh" end "$HOME_Z/.lavish/board.html" 2>&1)
 [ "$(sort -u "$FM_TEST_TS_SERVE_STATE" | tr -d '[:space:]')" = 8443 ] \
   || fail "closing a board must not manufacture a route to a port nothing answers on: $(cat "$FM_TEST_TS_SERVE_STATE")"
-pass "closing a board withdraws its route and never publishes a new one"
+
+# Not publishing is this RUN's outcome and must not be restated as a fact about
+# the host. Closing a board cannot make a proxy-capable vessel unreachable, and
+# saying so would send the captain hunting a network fault he does not have.
+assert_not_contains "$z_end" "not reachable off this machine" \
+  "closing a board must not report the host as unreachable"
+assert_not_contains "$z_end" "no tailnet on this host" \
+  "and must not report a tailnet this vessel plainly has as missing"
+assert_not_contains "$z_end" "published onto" \
+  "one run cannot both claim a route and report that none was made"
+z_record="$HOME_Z/state/service-port.lavish"
+assert_grep "reachability=tailnet-proxied" "$z_record" \
+  "the published record keeps describing the host, which is still reachable by proxy"
+assert_grep "route=none" "$z_record" \
+  "and carries this run's own outcome separately"
+pass "closing a board withdraws its route, publishes none, and still calls the host reachable by proxy"
 
 # --- entry point: an explicit --port earns no shortcut -----------------------
 #

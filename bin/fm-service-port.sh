@@ -46,9 +46,11 @@
 #               make because only the caller knows what it is about to run. A
 #               publication is node-wide and survives a reboot, so a run that
 #               closes a service, or only inspects one, must not leave a route
-#               pointing at a port nothing answers on. Without it an ALREADY
-#               published port is still reported as tailnet-proxied, because that
-#               reads a route somebody else established rather than making one.
+#               pointing at a port nothing answers on. It changes route=, never
+#               reachability=: whether THIS run published a route says nothing
+#               about whether the host can be reached by proxy, and a run that
+#               finds a route somebody else already published reports it, because
+#               reading a route is not making one.
 #   --check     resolve identity and reachability only. No bind is attempted and
 #               no record is written, so no port is claimed: the output carries
 #               seat= (the deterministic preference) and no port= at all.
@@ -65,6 +67,7 @@
 #   window=4400-4499
 #   port=4413
 #   reachability=tailnet
+#   route=
 #   reason=
 #
 #   machine     tailnet node name, the only fleet-unique machine identity
@@ -91,9 +94,10 @@
 #   reachability
 #               tailnet          the address is this node's own and was bound.
 #               tailnet-proxied  the node has a tailnet address it cannot bind,
-#                                so the port is bound on loopback and published
-#                                onto that address with `tailscale serve`. Links
-#                                still use the tailnet name or address, because
+#                                so the port is bound on loopback and reached
+#                                over that address through a `tailscale serve`
+#                                route. Links use the tailnet name or address
+#                                once route=published says one exists, because
 #                                that is where the service genuinely answers.
 #                                That publication is node-wide and survives both
 #                                this process and a reboot, so the consumer
@@ -103,6 +107,22 @@
 #                                mechanism and states what a caller must have
 #                                proved before touching a port.
 #               loopback         no reach off this machine was established.
+#
+#               This describes the HOST and never this run. A vessel that can be
+#               reached by proxy stays tailnet-proxied on a run that published no
+#               route at all; read route= for what the run itself did.
+#   route       whether a `tailscale serve` route onto tailaddr exists for this
+#               port. Only meaningful under reachability=tailnet-proxied, and
+#               empty otherwise, including under --check, where there is no port
+#               to route yet.
+#               published        a route is in place, so a link may name the
+#                                tailnet, and whoever holds the port owes its
+#                                withdrawal.
+#               none             this run made none, because --serving did not
+#                                say it would leave a service listening. A link
+#                                must not name the tailnet until a serving run
+#                                publishes one, even though the host itself is
+#                                still reachable by proxy.
 #   seat        the deterministic preferred port for this service in this home.
 #   port        the port actually bound (absent under --check).
 #   reason      empty when fully nominal; otherwise one plain sentence naming
@@ -239,6 +259,7 @@ TAILADDR=""
 DNSNAME=""
 MACHINE=""
 REACHABILITY=loopback
+ROUTE=""
 REASON=""
 
 # Several independent facts can degrade one resolution at once - an unresolvable
@@ -348,7 +369,7 @@ if [ "$REACHABILITY" = tailnet ]; then
     if fm_tailnet_serve_available; then
       REACHABILITY=tailnet-proxied
       ADDR=127.0.0.1
-      add_reason "this node has the tailnet address $TAILADDR but no local interface carries it (bind fails EADDRNOTAVAIL), which is what tailscale userspace networking mode looks like; the port is bound on loopback and published onto the tailnet address with tailscale serve instead"
+      add_reason "this node has the tailnet address $TAILADDR but no local interface carries it (bind fails EADDRNOTAVAIL), which is what tailscale userspace networking mode looks like, so a port cannot be bound on that address and is bound on loopback instead"
     else
       REACHABILITY=loopback
       ADDR=127.0.0.1
@@ -395,6 +416,7 @@ emit() {
   printf 'window=%s-%s\n' "$WINDOW_START" "$WINDOW_END"
   [ -z "${1:-}" ] || printf 'port=%s\n' "$1"
   printf 'reachability=%s\n' "$REACHABILITY"
+  printf 'route=%s\n' "$ROUTE"
   printf 'reason=%s\n' "$REASON"
 }
 
@@ -467,19 +489,30 @@ fi
 # the machine's next reboot, so a run that closes a service or merely inspects
 # one would otherwise manufacture a permanent route to a port nothing answers
 # on. A port somebody else already published is a different matter: reading that
-# route is not making one, so it is still reported as the reach it is.
+# route is not making one, so it is still reported as the route it is.
+#
+# What that choice may NOT do is change reachability, which is a fact about the
+# host and not about this run: a node that can be reached by proxy is still
+# tailnet-proxied on a run that publishes nothing. The run's own outcome is
+# route=, so a reader can tell "this host is reachable by proxy" apart from
+# "this run made no route". A proxy that could not be published AT ALL is the
+# one case that does move reachability, because then the host really has no
+# reach to describe.
 
 if [ "$REACHABILITY" = tailnet-proxied ]; then
   if [ "$SERVING" -eq 1 ]; then
-    if ! fm_tailnet_serve_publish "$PORT"; then
+    if fm_tailnet_serve_publish "$PORT"; then
+      ROUTE=published
+    else
       REACHABILITY=loopback
       DNSNAME=""
       add_reason "publishing port $PORT onto $TAILADDR with tailscale serve failed, so this board is reachable only on this machine"
     fi
-  elif ! fm_tailnet_serve_published "$PORT"; then
-    REACHABILITY=loopback
-    DNSNAME=""
-    add_reason "port $PORT is not published onto $TAILADDR and this run was not told it would leave a service listening on it, so no route was made and nothing here is reachable off this machine"
+  elif fm_tailnet_serve_published "$PORT"; then
+    ROUTE=published
+  else
+    ROUTE=none
+    add_reason "no tailscale serve route was published for port $PORT onto $TAILADDR, because this run was not told it would leave a service listening on it"
   fi
 fi
 

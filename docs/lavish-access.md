@@ -122,7 +122,7 @@ Every `bind()` on that address fails `EADDRNOTAVAIL`, for every port, so no port
 That is neither of the two cases the allocator originally had a name for.
 It is not `tailnet`, because nothing on this machine can listen on the address.
 It is not `loopback`, because the vessel really is reachable from the captain's devices.
-So it is `reachability=tailnet-proxied`: the port is bound on loopback and published onto the tailnet address with `tailscale serve`, whose listener lives inside `tailscaled`'s userspace stack rather than on a host interface.
+So it is `reachability=tailnet-proxied`: the port is bound on loopback and reached over the tailnet address through a `tailscale serve` route, whose listener lives inside `tailscaled`'s userspace stack rather than on a host interface.
 
 Three facts this rests on, each measured rather than reasoned about, with the measurements in "The userspace-mode vessel" below.
 
@@ -133,9 +133,16 @@ Three facts this rests on, each measured rather than reasoned about, with the me
   So the names the wrapper already allows are the names the proxy needs, and no wildcard is introduced.
 - The proxy is withdrawn when the board is stopped.
   Left behind, this vessel's own tailnet name answers `502` on that port, which reads as a broken board rather than a closed one.
-- The proxy is published only for a run that will LEAVE a board serving, which the wrapper states to the allocator with `--serving`.
-  `open`, `poll`, and `server` do; `end` closes the last session and lets the server stop itself, so publishing for it would manufacture a route to nothing that outlives the process and the machine's next reboot.
-  A port some earlier run already published still reads as `tailnet-proxied` without `--serving`, because reading a route is not making one.
+
+One design rule sits on top of those three, and it is reasoned rather than measured.
+The route is published only for a run that will LEAVE a board serving, which the wrapper states to the allocator with `--serving`.
+`open`, `poll`, and `server` do; `end` closes the last session and lets the server stop itself, so publishing for it would manufacture a route to nothing that outlives the process and the machine's next reboot.
+
+That choice is carried by `route=`, never by `reachability=`.
+`reachability` is a fact about the HOST, so a vessel that can be reached by proxy stays `tailnet-proxied` on a run that published nothing, and `route=none` is what says this run made no route.
+Reading it the other way would tell the captain his vessel is unreachable because he closed a board, overwrite the published record every consumer of the fleet registry reads, and silence the `LAVISH_ACCESS` notice that is supposed to catch a stale loopback link on exactly that vessel.
+A port some earlier run already published reports `route=published` without `--serving`, because reading a route is not making one.
+`bin/fm-service-port.sh`'s header owns the full vocabulary of both fields.
 
 `bin/fm-tailnet-serve-lib.sh` is the one owner of publishing and withdrawing.
 Serve configuration belongs to the tailscale node, which every UNIX account on this machine shares, so a port is only ever withdrawn where its ownership has already been proved by the claim token, or where nothing is serving on it at all.
