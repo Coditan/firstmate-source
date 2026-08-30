@@ -231,6 +231,15 @@ case "$SUBCOMMAND" in
   open|poll|server) LEAVES_SERVER=1 ;;
   *) LEAVES_SERVER=0 ;;
 esac
+# One thing the argv shape CAN answer: a run carrying a help flag prints usage
+# and returns without reaching any handler, so it leaves no server whatever
+# subcommand it names. `open --help <board>.html` is an accepted shape and it
+# would otherwise publish a node-wide route for a port lavish-axi never binds.
+for arg in "${ARGS[@]}"; do
+  case "$arg" in
+    --help|-h) LEAVES_SERVER=0; break ;;
+  esac
+done
 
 # The vessel's own AXI prefix wins over whatever PATH resolves, so a home always
 # drives its own installed lavish-axi. Resolved after the wrapper's own flags so
@@ -592,6 +601,11 @@ if [ "$NEEDS_PORT" -eq 1 ]; then
     tailnet|tailnet-proxied)
       [ -z "$REASON" ] || note "$REASON"
       ;;
+    untested)
+      # Neither reach nor its absence has been established, and saying either
+      # would be the same unbacked assertion in opposite directions.
+      note "nothing has established whether this vessel is reachable off this machine (${REASON:-reason unavailable}) - this board certainly opens here, and the next open settles the rest."
+      ;;
     *)
       # A vessel that HAS a tailnet address it can neither bind nor publish is
       # not a vessel with no tailnet, and saying so sends the reader hunting the
@@ -650,6 +664,16 @@ case "$OUTPUT" in
   *://*/session/*) OPENED=1 ;;
   *) OPENED=0 ;;
 esac
+
+# A route is node-wide and outlives this process and the machine's next reboot,
+# so it may not stand for a board that never opened. The argv shape cannot
+# answer that on its own, which is exactly why OPENED is observed rather than
+# predicted, and the withdrawal carries the same guard as every other: only
+# where nothing is serving on the port at all.
+if [ "$OPENED" -eq 0 ] && [ "$ROUTE" = published ] && nothing_serves_on "$PORT"; then
+  withdraw_proxy "$PORT" \
+    || note "no board opened, but the tailnet route on port $PORT could not be withdrawn"
+fi
 
 # Verify the name that is now sitting in the captain's link, not the address we
 # bound. A bind that succeeded proves nothing about whether the emitted URL

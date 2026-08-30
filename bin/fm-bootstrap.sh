@@ -1060,7 +1060,10 @@ lavish_access_check() {
   reach=$(sed -n 's/^reachability=\(.*\)$/\1/p' "$record" | head -1)
   # A vessel serving its boards through a published proxy has just as much reach
   # to offer as one binding its own address, so a loopback link is just as stale
-  # there and the notice has to fire for both.
+  # there and the notice has to fire for both. Every other value stays silent,
+  # and reachability=untested deliberately so: nothing has established that this
+  # vessel has any reach to offer, so telling the captain to reopen a board would
+  # promise an outcome no run here has seen.
   case "$reach" in
     tailnet|tailnet-proxied) ;;
     *) return 0 ;;

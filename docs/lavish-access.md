@@ -140,6 +140,8 @@ The route is published only for a run that will LEAVE a board serving, which the
 
 That choice is carried by `route=`, never by `reachability=`.
 `reachability` is a fact about the HOST, so a vessel that can be reached by proxy stays `tailnet-proxied` on a run that published nothing, and `route=none` is what says this run made no route.
+That holds because such a run CARRIES FORWARD what a previous allocation established rather than asserting it afresh, and with nothing to carry it says `untested` rather than inventing either answer.
+Each verdict travels with `reachability_evidence`, naming how it was established, and `bin/fm-service-port.sh`'s header owns both vocabularies.
 Reading it the other way would tell the captain his vessel is unreachable because he closed a board, overwrite the published record every consumer of the fleet registry reads, and silence the `LAVISH_ACCESS` notice that is supposed to catch a stale loopback link on exactly that vessel.
 A port some earlier run already published reports `route=published` without `--serving`, because reading a route is not making one.
 `bin/fm-service-port.sh`'s header owns the full vocabulary of both fields.
