@@ -707,6 +707,41 @@ test_a_kernel_that_accounts_no_memory_pressure_is_unmeasured_not_calm() {
   pass "a kernel that accounts pressure but not memory pressure reports unmeasured, never calm"
 }
 
+test_an_io_control_nobody_could_read_is_told_apart_from_a_flat_one() {
+  # Both leave the memory account's zeros standing, so from the verdict alone
+  # they are the same outcome - but "the control has accounted no pressure
+  # anywhere yet" and "the control could not be read at all" are different
+  # facts, and this reader never reports an instrument it could not read as a
+  # zero. The reading's own json (schema fm-memory-reading.v1) is the contract
+  # where it says which of the two it was.
+  local dir="$TMP_ROOT/iocontrol" out
+  new_scene "$dir"
+  printf 'some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n' > "$dir/pressure"
+
+  printf 'some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n' > "$dir/io-pressure"
+  out=$(run_reading "$dir" --json "FM_MEMORY_PRESSURE_IO=$dir/io-pressure")
+  [ "$(printf '%s' "$out" | jq -r '.stall.io_control')" = flat ] \
+    || fail 'an io control that read zero was not reported as a flat account'
+
+  rm -f "$dir/io-pressure"
+  out=$(run_reading "$dir" --json "FM_MEMORY_PRESSURE_IO=$dir/io-pressure")
+  [ "$(printf '%s' "$out" | jq -r '.stall.io_control')" = unreadable ] \
+    || fail 'an io control that could not be read was reported as though it had read zero'
+
+  printf 'some avg10=0.00 avg60=0.00 avg300=0.00 total=2063189\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=1031594\n' > "$dir/io-pressure"
+  out=$(run_reading "$dir" --json "FM_MEMORY_PRESSURE_IO=$dir/io-pressure" || true)
+  [ "$(printf '%s' "$out" | jq -r '.stall.io_control')" = live ] \
+    || fail 'a live io control was not named as the control that condemned the memory account'
+
+  # A machine whose memory account is not flat needs no control at all, so the
+  # reading says it consulted none rather than inventing a reading of one.
+  make_pressure_calm "$dir/pressure"
+  out=$(run_reading "$dir" --json "FM_MEMORY_PRESSURE_IO=$dir/io-pressure")
+  [ "$(printf '%s' "$out" | jq -r '.stall.io_control')" = null ] \
+    || fail 'the reading claimed an io control state on a run that never needed one'
+  pass "an io control that could not be read is told apart from one that read zero"
+}
+
 test_the_cumulative_counter_is_carried_as_proof_and_never_as_a_trigger() {
   # The counter is monotonic since boot, so anything that fired on it could never
   # recover. It is carried so a reader can check the averages mean something.
@@ -725,6 +760,7 @@ test_each_unreadable_input_is_named_and_forces_a_non_zero_exit() {
 
   # Every case is an input constructed to be bad on purpose.
   for case_name in pressure-empty pressure-garbage pressure-missing \
+                   pressure-no-totals \
                    meminfo-empty meminfo-garbage meminfo-no-available \
                    ps-fails ps-empty ps-malformed cgroup-absent home-unreadable; do
     rm -rf "$dir"
@@ -734,6 +770,7 @@ test_each_unreadable_input_is_named_and_forces_a_non_zero_exit() {
       pressure-empty)      : > "$dir/pressure" ;;
       pressure-garbage)    printf 'nothing about memory here\n' > "$dir/pressure" ;;
       pressure-missing)    rm -f "$dir/pressure" ;;
+      pressure-no-totals)  printf 'some avg10=0.00 avg60=0.00 avg300=0.00\nfull avg10=0.00 avg60=0.00 avg300=0.00\n' > "$dir/pressure" ;;
       meminfo-empty)       : > "$dir/meminfo" ;;
       meminfo-garbage)     printf 'MemTotal: not-a-number\n' > "$dir/meminfo" ;;
       meminfo-no-available) printf 'MemTotal: 24019276 kB\nMemFree: 100 kB\n' > "$dir/meminfo" ;;
@@ -933,6 +970,7 @@ test_sample_body_failures_are_not_first_sightings
 test_a_reused_pid_is_not_reported_as_growth
 test_a_genuinely_calm_stall_reading_is_not_confusable_with_a_blind_one
 test_a_kernel_that_accounts_no_memory_pressure_is_unmeasured_not_calm
+test_an_io_control_nobody_could_read_is_told_apart_from_a_flat_one
 test_the_cumulative_counter_is_carried_as_proof_and_never_as_a_trigger
 test_each_unreadable_input_is_named_and_forces_a_non_zero_exit
 test_a_cgroup_tree_nobody_read_is_not_reported_as_an_account_with_no_session

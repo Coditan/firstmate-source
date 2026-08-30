@@ -1313,7 +1313,7 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   # Arm this home's memory alarm, for the same reason and on the same terms: an
   # alarm a home must remember to arm is one that is not watching.
   if ! "$SCRIPT_DIR/fm-memory-alarm.sh" --arm >/dev/null 2>&1; then
-    echo "MEMORY_ALARM: the memory watch could not be armed on this home, so nothing will notice RAM-headroom loss or runaway growth; run $SCRIPT_DIR/fm-memory-alarm.sh --arm to see why"
+    echo "MEMORY_ALARM: the memory watch could not be armed on this home, so nothing will notice RAM-headroom loss, runaway growth, or memory stall held past the window; run $SCRIPT_DIR/fm-memory-alarm.sh --arm to see why"
   fi
   # Arm this home's off-grid fleet nudges, for the same reason and on the same
   # terms: AGENTS.md already said to prune data/learnings.md and data/captain.md

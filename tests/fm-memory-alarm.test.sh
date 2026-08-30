@@ -85,6 +85,21 @@ reading_thrashing() {
     "$(stall_obj "$stall" "$some")" "$((rss_mib * 1024))" >"$ANSWER"
 }
 
+# A reading that read everything except the host stall account. This is the WSL
+# and fresh-kernel shape: headroom and growth are both there and both perfectly
+# judgeable, and only the one condition whose own input is missing is blind.
+reading_stall_unmeasured() {  # <available_mib>
+  printf '{"schema":"fm-memory-reading.v1","complete":false,"unmeasured":[{"input":"stall","reason":"the memory pressure account has recorded exactly zero since boot beside a live io account"}],"headroom":{"total_kb":24019908,"available_kb":%s,"swap_total_kb":33554428,"swap_free_kb":33554428},"stall":%s,"growth":{"interval_seconds":300,"scope_reason":null,"unmeasured_reason":null},"processes":[]}\n' \
+    "$(( $1 * 1024 ))" "$(stall_obj none)" >"$ANSWER"
+}
+
+# A reading that could not measure RAM headroom itself. Both other conditions
+# divide by it, so nothing here can be judged at all.
+reading_headroom_unmeasured() {
+  printf '{"schema":"fm-memory-reading.v1","complete":false,"unmeasured":[{"input":"headroom","reason":"/proc/meminfo carries no usable MemTotal/MemAvailable pair"}],"headroom":{"total_kb":null,"available_kb":null,"swap_total_kb":null,"swap_free_kb":null},"stall":%s,"growth":{"interval_seconds":300,"scope_reason":null,"unmeasured_reason":null},"processes":[]}\n' \
+    "$(stall_obj 0.00)" >"$ANSWER"
+}
+
 # A reading whose growth the instrument could not compare at all.
 reading_growth_scoped() {
   printf '{"schema":"fm-memory-reading.v1","complete":true,"unmeasured":[],"headroom":{"total_kb":24019908,"available_kb":%s,"swap_total_kb":33554428,"swap_free_kb":33554428},"stall":%s,"growth":{"interval_seconds":0,"scope_reason":"no stored sample yet","unmeasured_reason":null},"processes":[]}\n' \
@@ -122,6 +137,22 @@ malformed_gate_alarm() {
       "$ALARM" "$@"
 }
 
+# The alarm as a home gets it when the gate or the window has been configured to
+# zero. Both are unusable: no reading falls below a zero gate, and every run
+# outlasts a zero window.
+# FM_TEST_AT carries the moment rather than an exported override in a subshell,
+# so a case can play a run forward without the shell losing the value it set.
+zero_configured_alarm() {  # <gate> <window> [args...]
+  local gate=$1 window=$2; shift 2
+  env FM_HOME="$HOME_DIR" \
+      FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
+      FM_MEMORY_ALARM_READING="$FAKE" FM_TEST_ANSWER="$ANSWER" \
+      FM_MEMORY_ALARM_NOW="${FM_TEST_AT:-$BASE_NOW}" \
+      FM_MEMORY_ALARM_FLOOR_MIB=2400 FM_MEMORY_ALARM_HORIZON_MIN=15 \
+      FM_MEMORY_ALARM_STALL="$gate" FM_MEMORY_ALARM_STALL_WINDOW="$window" \
+      "$ALARM" "$@"
+}
+
 # Drive the alarm at a chosen moment, so a run of consecutive polls can be
 # played out in a test without waiting for one in real time.
 alarm_at() {  # <epoch-offset-seconds> [args...]
@@ -135,6 +166,7 @@ alarm_at() {  # <epoch-offset-seconds> [args...]
 reset_home() {
   rm -rf "$HOME_DIR"; mkdir -p "$HOME_DIR/state" "$HOME_DIR/data"
   FM_TEST_STALL=0.00
+  FM_TEST_AT=
   FM_TEST_STALL_WINDOW=5400
   BASE_NOW=$(date +%s)
 }
@@ -237,21 +269,69 @@ test_a_machine_hovering_at_the_line_does_not_flap() {
 }
 
 test_an_instrument_that_could_not_read_is_never_an_all_clear() {
+  # Headroom is the one input nothing here can proceed without: both other
+  # conditions divide by it. Without it NO condition can be judged, and that is
+  # the only shape that still produces a bare "cannot see" verdict.
   reset_home
   reading 16000 true 0
   alarm >/dev/null
-  reading 16000 false 0
+  reading_headroom_unmeasured
   local out status=0
   out=$(alarm)
-  assert_contains "$out" "gone blind" "an incomplete reading must be announced as blindness"
+  assert_contains "$out" "gone blind" "a reading with no headroom must be announced as blindness"
   assert_contains "$out" "not an all-clear" "and must say in words that it is not an all-clear"
-  assert_contains "$out" "process-table" "and must name the input it could not read"
+  assert_contains "$out" "headroom" "and must name the input it could not read"
 
   out=$(alarm --status) || status=$?
-  expect_code 3 "$status" "--status on an incomplete reading"
-  assert_contains "$out" "UNMEASURED" "--status must report an incomplete reading as unmeasured"
-  assert_not_contains "$out" "memory-alarm: ok" "--status must never call an incomplete reading ok"
+  expect_code 3 "$status" "--status when no condition could be judged"
+  assert_contains "$out" "UNMEASURED" "--status must report a reading it could not judge as unmeasured"
+  assert_not_contains "$out" "memory-alarm: ok" "--status must never call such a reading ok"
   pass "an instrument that could not read is reported as blind, never as an all-clear"
+}
+
+test_one_unreadable_input_does_not_silence_the_conditions_that_were_read() {
+  # A kernel that has simply never accounted memory stall makes the reading
+  # incomplete. Before, that returned before any condition was tested, so a
+  # machine actually running out of RAM headroom went unreported on exactly the
+  # hosts where the stall account is flat. Headroom and horizon keep their
+  # behaviour whatever the stall account does.
+  reset_home
+  reading 16000 true 0
+  alarm >/dev/null
+
+  local out status=0
+  reading_stall_unmeasured 16000
+  out=$(alarm --status) || status=$?
+  expect_code 0 "$status" "--status when only the stall account was unreadable"
+  assert_contains "$out" "16000 MiB RAM headroom" \
+    "the headroom condition must still be judged when its own input was read"
+  assert_contains "$out" "not a full all-clear" \
+    "a verdict from an incomplete reading must say it is not a full all-clear"
+  assert_contains "$out" "stall" "and must name the input it could not read"
+  assert_not_contains "$out" "UNMEASURED" \
+    "one unreadable input must not be reported as though nothing could be judged"
+
+  # And the headroom condition still FIRES, which is the whole point.
+  reading_stall_unmeasured 1800
+  out=$(alarm)
+  assert_contains "$out" "MEMORY_ALARM:" "a headroom crossing must be announced on an incomplete reading"
+  assert_contains "$out" "below the 2400 MiB floor" "and must name the threshold it crossed"
+  assert_contains "$out" "Unmeasured:" "and must still name what it could not read"
+  pass "one unreadable input leaves the conditions whose own inputs were read still judged"
+}
+
+test_a_recovery_is_never_declared_from_a_reading_that_missed_an_input() {
+  # Firing gets no harder on an incomplete reading; leaving must get no easier.
+  reset_home
+  reading 1800 true 0
+  alarm >/dev/null
+  local out
+  reading_stall_unmeasured 16000
+  out=$(alarm)
+  assert_not_contains "$out" "recovered" \
+    "a shortage must not be declared over by a reading that could not read every input"
+  assert_contains "$out" "gone blind" "the alarm must say instead that it cannot tell"
+  pass "a crossing is never left on the strength of a reading that missed an input"
 }
 
 test_a_reading_that_produced_nothing_is_blindness_not_health() {
@@ -717,6 +797,96 @@ test_a_stall_run_that_cannot_be_persisted_is_reported_rather_than_read_as_calm()
   pass "a stall run that cannot be persisted is reported rather than passed off as a calm machine"
 }
 
+test_a_zero_stall_gate_falls_back_rather_than_pinning_the_alarm_crossed() {
+  # 0 is the value an operator reaches for to mean "off" - the documented off
+  # switch is the empty string. Taken literally it is a gate no reading can ever
+  # fall below, so an idle machine reads as stalling on every poll, the run never
+  # resets, and past the window the alarm is pinned crossed with nothing wrong
+  # and no way back. It falls back the same way a malformed gate does.
+  reset_home
+  reading_thrashing 16000 0.00
+  local out status=0
+  out=$(zero_configured_alarm 0 7200 --status) || status=$?
+  expect_code 0 "$status" "an idle machine with the gate configured to zero"
+  assert_contains "$out" "memory-alarm: ok" "a zero gate must not hold an idle machine crossed"
+  assert_not_contains "$out" "stalling for" "an idle machine must start no run against a zero gate"
+  assert_contains "$out" "was zero" "the reading must say the configured value was not usable"
+  assert_contains "$out" "default gate of 1.00%" "and must state the gate it fell back to"
+
+  # 0.00 is the same value wearing a percentage, and must fall back too.
+  status=0
+  out=$(zero_configured_alarm 0.00 7200 --status) || status=$?
+  expect_code 0 "$status" "an idle machine with the gate configured to 0.00"
+  assert_contains "$out" "default gate of 1.00%" "a zero written as a percentage must fall back as well"
+
+  # Driven forward: a machine that is genuinely idle stays silent for longer
+  # than the window a zero gate would have crossed inside.
+  reset_home
+  local t
+  for t in $(seq 0 300 7500); do
+    reading_thrashing 16000 0.00
+    FM_TEST_AT=$((BASE_NOW + t)) out=$(zero_configured_alarm 0 7200)
+    assert_contains "|$out|" "||" "an idle machine with a zero gate must never fire"
+  done
+  pass "a stall gate configured to zero falls back to the shipped default and says so"
+}
+
+test_a_zero_stall_window_falls_back_rather_than_crossing_on_the_first_poll() {
+  # The run test is `>=`, so a zero window is outlasted by a run of zero
+  # seconds: it would cross on the first poll of a machine that has not stalled
+  # for a single second.
+  reset_home
+  reading_thrashing 16000 0.00
+  local out status=0
+  out=$(zero_configured_alarm 1.00 0 --status) || status=$?
+  expect_code 0 "$status" "a calm machine with the window configured to zero"
+  assert_contains "$out" "memory-alarm: ok" "a zero window must not cross on the first poll"
+  assert_contains "$out" "WINDOW configured for this home was zero" \
+    "the reading must say the configured window was not usable"
+  assert_contains "$out" "7200 seconds" "and must state the window it fell back to"
+
+  # Even a machine over the gate must not cross straight away: the fallback
+  # window is what it now has to outlast.
+  reset_home
+  reading_thrashing 3577 38.0
+  out=$(zero_configured_alarm 1.00 0)
+  assert_contains "|$out|" "||" "a stalling machine must not cross a zero window on its first poll"
+  pass "a stall window configured to zero falls back to the shipped default and says so"
+}
+
+test_a_run_that_could_not_be_cleared_is_not_credited_across_the_calm_poll() {
+  # rm needs a writable DIRECTORY, so a clear can fail while the run file itself
+  # is still writable. If the stale start survives, the next stalling poll reads
+  # it back and credits the run straight across the calm poll that should have
+  # reset it, crossing the window on a machine that was never stalling
+  # continuously.
+  reset_home
+  reading 16000 true 0
+  alarm_at 0 >/dev/null
+
+  # A run begins well before the window would be reached.
+  reading_thrashing 3577 38.0
+  alarm_at 300 >/dev/null
+  [ -s "$HOME_DIR/state/memory-alarm.stall" ] || fail "the first stalling poll did not record a run"
+
+  # The directory loses write permission, so the file can be truncated but not
+  # unlinked, and the machine goes calm.
+  chmod 500 "$HOME_DIR/state"
+  local out
+  reading_thrashing 16000 0.00
+  out=$(alarm_at 600)
+  chmod 700 "$HOME_DIR/state"
+  assert_contains "|$out|" "||" "a clear that fell back to truncation is not an instrument failure"
+
+  # The machine stalls again. The clock must start from here, not from the run
+  # the calm poll was supposed to end.
+  reading_thrashing 3577 38.0
+  out=$(alarm_at 900 --status)
+  assert_not_contains "$out" "CROSSED" "a reset run must not be credited across the calm poll"
+  assert_contains "$out" "stalling for 0s" "the run must restart at the poll that saw the stall again"
+  pass "a run that could not be unlinked is invalidated rather than credited across a calm poll"
+}
+
 test_an_unconfigured_stall_gate_is_reported_never_silently_unwatched() {
   # A home can switch this condition off, and one that has must be told so. An
   # alarm that quietly does not watch for something is indistinguishable from one
@@ -793,6 +963,8 @@ test_a_continuing_shortage_is_reported_once
 test_crossing_and_recovery_both_leave_a_durable_record
 test_a_machine_hovering_at_the_line_does_not_flap
 test_an_instrument_that_could_not_read_is_never_an_all_clear
+test_one_unreadable_input_does_not_silence_the_conditions_that_were_read
+test_a_recovery_is_never_declared_from_a_reading_that_missed_an_input
 test_a_reading_that_produced_nothing_is_blindness_not_health
 test_recovery_is_not_declared_on_growth_nobody_could_compare
 test_scoped_growth_on_a_calm_machine_is_not_a_growth_all_clear
@@ -810,6 +982,9 @@ test_recovery_is_not_declared_on_a_stall_nobody_could_read
 test_leaving_a_stall_crossing_is_earned_by_the_run_ending
 test_a_malformed_stall_gate_falls_back_to_the_shipped_default_and_says_so
 test_a_stall_run_that_cannot_be_persisted_is_reported_rather_than_read_as_calm
+test_a_zero_stall_gate_falls_back_rather_than_pinning_the_alarm_crossed
+test_a_zero_stall_window_falls_back_rather_than_crossing_on_the_first_poll
+test_a_run_that_could_not_be_cleared_is_not_credited_across_the_calm_poll
 test_an_unconfigured_stall_gate_is_reported_never_silently_unwatched
 test_an_unconfigured_stall_gate_does_not_block_a_recovery_it_never_raised
 test_the_shipped_gate_and_window_are_the_ones_the_document_derives

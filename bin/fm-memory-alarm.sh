@@ -21,7 +21,8 @@
 # owns that finding and bin/fm-memory-ceiling-probe.sh re-measures it; a
 # proposed container ceiling must be checked against that caveat rather than
 # assumed safe because swap now exists.
-# So this alarm fires on headroom and on growth, and nothing here limits,
+# So this alarm fires on headroom, on growth, and on memory stall held past a
+# window - the three conditions below - and nothing here limits,
 # throttles, or kills anything. Nothing is ever throttled, so the wake-delivery
 # stub and the supervision watcher cannot be: there is no mechanism in this file
 # that could reach them, or anything else.
@@ -37,6 +38,17 @@
 # reading into an all-clear. It reports that it could not see, which is a third
 # outcome and not a pass. An alarm that goes quiet when its instrument breaks is
 # the failure this whole programme was built to remove.
+#
+# Incompleteness is per-condition, though, and never blanket. One unreadable
+# input must not silence the conditions whose OWN inputs are present, or a
+# kernel that has simply never accounted memory stall would take headroom and
+# horizon down with it. RAM headroom is the single input nothing here can
+# proceed without, because both other conditions divide by it; if it is
+# unmeasured no verdict is reached at all. Otherwise every condition whose
+# input was read is judged, every condition whose input was not is reported as
+# unjudged, every unmeasured input is named on the same reading, and a verdict
+# reached from an incomplete reading says so rather than passing for an
+# unqualified all-clear.
 #
 # THE THREE CONDITIONS, AND WHY EACH IS NEEDED
 #   headroom   RAM headroom from MemAvailable below the floor. A backstop: it
@@ -141,9 +153,12 @@
 #
 # Exit status:
 #   0  in the default and --arm modes, always: a check's job is its line
-#   0  --status: measured, and not crossed
+#   0  --status: at least one condition was judged, and none crossed
 #   4  --status: crossed
-#   3  --status: the reading was incomplete, so no verdict is issued
+#   3  --status: NO condition could be judged, so no verdict is issued. An
+#      incomplete reading alone does not produce this: a reading missing an
+#      input no condition needs still yields the verdict of the conditions it
+#      could judge, and names what it could not read alongside it.
 #   2  usage error
 #
 # Durable record, under FM_HOME/data:
@@ -184,13 +199,19 @@
 #                                the empty string to leave the condition
 #                                unconfigured, in which case it fires nothing
 #                                and every verdict says so. A value that is not
-#                                a usable percentage is a typo rather than a
-#                                choice, so it falls back to the default and
-#                                every verdict says that instead.
+#                                a usable percentage, and a zero - which no
+#                                reading can ever fall below, so it would hold
+#                                this condition crossed forever - are typos
+#                                rather than choices, so each falls back to the
+#                                default and every verdict says that instead.
 #   FM_MEMORY_ALARM_STALL_WINDOW how long, in seconds, the stall must stay at
 #                                or above that gate CONTINUOUSLY before the
 #                                condition crosses (default 7200, two hours).
-#                                This is the discriminator; see above.
+#                                This is the discriminator; see above. A zero
+#                                window would cross on the first poll of a
+#                                machine that is not stalling at all, so it
+#                                falls back to the default and every verdict
+#                                says that instead.
 #   FM_MEMORY_ALARM_RECOVERY     margin a reading must clear all three
 #                                conditions by before recovery is declared:
 #                                headroom and horizon must beat their
@@ -240,14 +261,32 @@ case "$STALE" in *[!0-9]*|'') STALE=1800 ;; esac
 # switching the newest condition off on a home that meant to have it. Either way
 # it never reaches awk, where an unparsable value would compare as zero and hold
 # the condition crossed forever.
+#
+# A gate of zero is the same failure wearing a parsable face: no reading can
+# ever fall below it, so an idle machine reads as stalling on every poll, the
+# run never resets, and past the window the alarm is pinned crossed with nothing
+# wrong. It is the value an operator reaches for to mean "off" - the documented
+# off switch is the empty string - so it falls back rather than firing.
 STALL_GATE_NOTE=
 case "$STALL_MAX" in
   '') ;;
   .|*.|*[!0-9.]*|*.*.*)
     STALL_MAX=1.00
     STALL_GATE_NOTE="the FM_MEMORY_ALARM_STALL configured for this home was not a usable percentage, so the shipped default gate of $STALL_MAX% is in force instead of it" ;;
+  *)
+    if ! awk -v g="$STALL_MAX" 'BEGIN { exit !(g + 0 > 0) }'; then
+      STALL_MAX=1.00
+      STALL_GATE_NOTE="the FM_MEMORY_ALARM_STALL configured for this home was zero, which no reading can ever fall below, so the shipped default gate of $STALL_MAX% is in force instead of it"
+    fi ;;
 esac
 case "$STALL_WINDOW" in *[!0-9]*|'') STALL_WINDOW=7200 ;; esac
+# A zero window is worse than a zero gate: the run test is `>=`, so it holds on
+# a machine that has not stalled for a single second and crosses on the first
+# poll.
+if [ "$STALL_WINDOW" -le 0 ]; then
+  STALL_WINDOW=7200
+  STALL_GATE_NOTE="${STALL_GATE_NOTE:+$STALL_GATE_NOTE, and }the FM_MEMORY_ALARM_STALL_WINDOW configured for this home was zero, which any run at all outlasts, so the shipped default window of $STALL_WINDOW seconds is in force instead of it"
+fi
 
 # A run of polls is only a run if the polls happened. The watcher makes checks
 # due after 300s and observes that on a 15s loop, so one slot is at most 315s;
@@ -298,10 +337,27 @@ STALL_SOME60=
 STALL_RUN_SECONDS=0
 STALL_ACTIVE=
 STALL_RUN_UNPERSISTED=
+READING_INCOMPLETE=
 SWAP_USED_MIB=
 OFFENDER=
 RESIDENT=
 CROSS_KIND=
+
+# A threshold this alarm substituted for an unusable one is stated on every
+# verdict, whichever one is reached, so a fallback can never be mistaken for a
+# home that chose the number.
+stall_gate_note() {
+  [ -z "$STALL_GATE_NOTE" ] || REASON="$REASON; $STALL_GATE_NOTE"
+}
+
+# A verdict reached from a reading that could not read every input carries that
+# fact in the same breath, because "all three read clear" and "one input was
+# never read" are exactly the two things this alarm exists to keep apart. The
+# inputs themselves are named in the detail that travels with the verdict.
+incomplete_note() {
+  [ -z "$READING_INCOMPLETE" ] ||
+    REASON="$REASON; the reading this came from could not read every input, so it is not a full all-clear"
+}
 
 # The reading distinguishes work it can name from work it cannot, and the alarm
 # must not blur them: a process it cannot attribute is reported as unattributed
@@ -329,10 +385,12 @@ evaluate() {
 
   if ! command -v jq >/dev/null 2>&1; then
     REASON="jq is not on PATH, so the reading could not be parsed"
+    stall_gate_note
     return
   fi
   if [ ! -x "$READING" ]; then
     REASON="the memory reading at $READING is missing or not executable, so there was nothing to read"
+    stall_gate_note
     return
   fi
 
@@ -349,6 +407,7 @@ evaluate() {
 
   if [ -z "$raw" ]; then
     REASON="the memory reading produced nothing (exit $status), so this machine is unmeasured rather than fine"
+    stall_gate_note
     return
   fi
 
@@ -371,6 +430,11 @@ evaluate() {
     | (if $swap_free_kb == null then null
        else (((.headroom.swap_total_kb | n0) - $swap_free_kb) / 1024 | floor) end) as $swap_used_mib
     | (.complete == false) as $incomplete
+    # The one input no condition here can do without: the floor measures
+    # headroom and the horizon divides by it. Tested before the n0 above
+    # substitutes a zero for it, because a substituted zero would read as a
+    # machine with no memory left.
+    | (.headroom.available_kb == null) as $headroom_blind
     # A run with no comparable prior sample reports growth as SCOPED, and the
     # reading deliberately still exits 0 for it. That is a known absence, not a
     # broken instrument - but it is not a growth measurement either, and calling
@@ -384,6 +448,7 @@ evaluate() {
     | (.stall.full_avg60 == null) as $stall_blind
     | [
         (if $incomplete then "incomplete" else "complete" end),
+        (if $headroom_blind then "blind" else "read" end),
         (if $growth_blind then (.growth.scope_reason // .growth.unmeasured_reason) else "" end),
         ($avail_mib | tostring),
         ($growth_kb_min / 1024 | floor | tostring),
@@ -418,25 +483,36 @@ evaluate() {
 
   if [ -z "$record" ]; then
     REASON="the memory reading could not be parsed, so this machine is unmeasured rather than fine"
+    stall_gate_note
     return
   fi
 
-  local completeness growth_blind unmeasured_list
+  local completeness headroom_state growth_blind unmeasured_list
   local top_cmd top_pid top_account top_kind top_detail top_growth top_protected
   local res_cmd res_pid res_account res_kind res_detail res_rss res_protected
-  IFS=$'\037' read -r completeness growth_blind AVAIL_MIB GROWTH_MIB_MIN MINUTES \
+  IFS=$'\037' read -r completeness headroom_state growth_blind AVAIL_MIB GROWTH_MIB_MIN MINUTES \
     top_cmd top_pid top_account top_kind top_detail top_growth top_protected unmeasured_list \
     STALL_BLIND STALL_FULL60 STALL_SOME60 SWAP_USED_MIB \
     res_cmd res_pid res_account res_kind res_detail res_rss res_protected \
     <<<"$record"
 
+  # Every unmeasured input is named whatever verdict follows, because the
+  # reading's contract is that an input nobody could read is never invisible.
   if [ "$completeness" = incomplete ] || [ "$status" -eq 3 ]; then
-    REASON="the memory reading could not read every input, so whether this machine is in trouble is unknown"
+    READING_INCOMPLETE=yes
     DETAIL="$unmeasured_list"
+  fi
+
+  if [ "$headroom_state" = blind ]; then
+    REASON="the memory reading could not read this machine's RAM headroom, so no condition could be judged and whether this machine is in trouble is unknown"
+    stall_gate_note
     return
   fi
-  if [ "$status" -ne 0 ]; then
+  # Exit 3 is the reading's incompleteness status and is handled above; any
+  # other non-zero exit means its numbers themselves are not to be trusted.
+  if [ "$status" -ne 0 ] && [ "$status" -ne 3 ]; then
     REASON="the memory reading exited $status, so its numbers were not trusted"
+    stall_gate_note
     return
   fi
 
@@ -498,9 +574,8 @@ evaluate() {
           REASON="$REASON. Swap use could not be read"
         fi ;;
     esac
-    # A substituted gate is stated on the same reading it decided, so a
-    # fallback can never be mistaken for a home that chose this number.
-    [ -z "$STALL_GATE_NOTE" ] || REASON="$REASON; $STALL_GATE_NOTE"
+    incomplete_note
+    stall_gate_note
     return
   fi
 
@@ -570,7 +645,8 @@ evaluate() {
     REASON="$REASON - past no threshold, but not yet clear of them all by the recovery margin"
     [ -z "$unjudged" ] || REASON="$REASON; $unjudged, $unjudged_tail"
   fi
-  [ -z "$STALL_GATE_NOTE" ] || REASON="$REASON; $STALL_GATE_NOTE"
+  incomplete_note
+  stall_gate_note
 }
 
 # --- the stall run ----------------------------------------------------------
@@ -599,10 +675,19 @@ read_stall_run() {  # sets STALL_RUN_SECONDS, and STALL_ACTIVE when a run is on
 
   if [ "$stalling" != yes ]; then
     # The run is over. Clearing it is the whole reason ordinary work does not
-    # reach the window: it finishes, and the clock goes back to zero. A run
-    # that could not be cleared is the same instrument failure as one that
-    # could not be written, in the other direction, so it is said too.
-    if [ "$MODE" != status ] && ! rm -f -- "$STALL_RUN_FILE" 2>/dev/null; then
+    # reach the window: it finishes, and the clock goes back to zero.
+    #
+    # Unlinking needs a writable DIRECTORY, so it can fail while the run file
+    # itself is still perfectly writable - and a run file that survives a failed
+    # clear is worse than one that could not be written, because a later poll
+    # reads the old start back and credits the run straight across the calm poll
+    # that should have reset it, crossing the window on a machine that was never
+    # stalling continuously. So truncation is the fallback: it needs only the
+    # file, and it leaves content the start/last validation above rejects, which
+    # is what invalidates the stale run. Only when neither works is the run
+    # genuinely beyond this alarm's control, and then it says so.
+    if [ "$MODE" != status ] && ! rm -f -- "$STALL_RUN_FILE" 2>/dev/null &&
+       ! : 2>/dev/null >"$STALL_RUN_FILE"; then
       STALL_RUN_UNPERSISTED=yes
     fi
     STALL_RUN_SECONDS=0
@@ -712,7 +797,7 @@ SHIM
 armed_diagnostic() {
   local mtime age
   if [ ! -f "$CHECK" ] || [ ! -x "$CHECK" ]; then
-    printf 'MEMORY_ALARM: nothing is watching this machine for RAM-headroom loss and runaway growth (fix: %s/fm-memory-alarm.sh --arm)\n' \
+    printf 'MEMORY_ALARM: nothing is watching this machine for RAM-headroom loss, runaway growth, or memory stall held past the window - the last being the only one that sees a machine already drowning in swap (fix: %s/fm-memory-alarm.sh --arm)\n' \
       "$SCRIPT_DIR"
     return 0
   fi
@@ -754,6 +839,7 @@ case "$MODE" in
         else
           printf 'largest grower: %s\n' "${OFFENDER:-none: no tracked process was growing, so the memory went somewhere this reading does not attribute}"
         fi
+        [ -z "$DETAIL" ] || printf 'unmeasured inputs: %s\n' "$DETAIL"
         printf 'nothing has been limited, throttled, or killed by this alarm, and nothing here can be\n'
         exit 4 ;;
       unmeasured)
@@ -764,6 +850,7 @@ case "$MODE" in
       *)
         printf 'memory-alarm: %s - %s\n' "$VERDICT" "$REASON"
         [ -z "$OFFENDER" ] || printf 'largest grower: %s\n' "$OFFENDER"
+        [ -z "$DETAIL" ] || printf 'unmeasured inputs: %s\n' "$DETAIL"
         exit 0 ;;
     esac ;;
 esac
@@ -796,13 +883,16 @@ SINCE=$(read_state_since)
 # enough to declare a shortage over - so a crossing lapses into "cannot see"
 # rather than into a recovery nobody measured.
 if [ "$VERDICT" = ok ] && [ "$PREVIOUS" = crossed ] &&
-   { [ -n "$GROWTH_BLIND" ] || [ -n "$STALL_BLIND" ]; }; then
+   { [ -n "$GROWTH_BLIND" ] || [ -n "$STALL_BLIND" ] || [ -n "$READING_INCOMPLETE" ]; }; then
   VERDICT=unmeasured
   if [ -n "$GROWTH_BLIND" ]; then
     REASON="whether the shortage is over is unknown: growth could not be compared this run ($GROWTH_BLIND), so the conditions that raise this alarm were not re-evaluated in full"
-  else
+  elif [ -n "$STALL_BLIND" ]; then
     REASON="whether the shortage is over is unknown: memory stall could not be read this run ($STALL_BLIND), so the conditions that raise this alarm were not re-evaluated in full"
+  else
+    REASON="whether the shortage is over is unknown: the reading could not read every input this run, so the conditions that raise this alarm were not re-evaluated in full"
   fi
+  stall_gate_note
 fi
 
 # elevated is a damping band, not a state worth announcing: it exists so that a
@@ -840,9 +930,10 @@ case "$CURRENT" in
     ;;
   unmeasured)
     LINE="MEMORY_ALARM: the memory watch has gone blind - $REASON. This is not an all-clear."
-    [ -z "$DETAIL" ] || LINE="$LINE Unmeasured: $DETAIL"
     ;;
 esac
+# Whatever the line says, the inputs nobody could read are named on it.
+[ -z "$DETAIL" ] || LINE="$LINE Unmeasured: $DETAIL"
 
 if ! record_transition "$PREVIOUS" "$CURRENT" "$LINE"; then
   printf 'MEMORY_ALARM: the memory watch could not record the %s to %s transition in %s; the transition was measured but not durably completed.\n' \

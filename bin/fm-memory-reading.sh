@@ -342,6 +342,14 @@ STALL_FULL60=
 STALL_SOME_TOTAL=
 STALL_FULL_TOTAL=
 STALL_IO_TOTAL=
+# Which of three states the io control was in when the readability test needed
+# it: `live` (it has accounted pressure, so a flat memory account is a dead
+# one), `flat` (it has accounted none either, so nothing distinguishes a dead
+# account from a machine that has not stalled yet), or `unreadable` (the control
+# itself could not be read, which is not the same as a zero and must never be
+# reported as one). Empty when the test did not need a control, because the
+# memory account was not flat.
+STALL_IO_CONTROL=
 
 parse_pressure_file() {  # <file> -> "some10 some60 full10 full60" or empty
   awk '
@@ -399,6 +407,13 @@ read_stall() {
     io_totals=$(pressure_totals "$PRESSURE_IO")
     STALL_IO_TOTAL=${io_totals%% *}
     case "$STALL_IO_TOTAL" in ''|*[!0-9]*) STALL_IO_TOTAL= ;; esac
+    if [ -z "$STALL_IO_TOTAL" ]; then
+      STALL_IO_CONTROL=unreadable
+    elif [ "$STALL_IO_TOTAL" -gt 0 ]; then
+      STALL_IO_CONTROL=live
+    else
+      STALL_IO_CONTROL=flat
+    fi
     if [ -n "$STALL_IO_TOTAL" ] && [ "$STALL_IO_TOTAL" -gt 0 ]; then
       unmeasured stall "$PRESSURE has accounted exactly zero memory stall since boot while $PRESSURE_IO has accounted $STALL_IO_TOTAL, so this kernel accounts pressure but not memory pressure: its zeros are an absent measurement rather than a quiet machine"
       STALL_SOME_TOTAL=
@@ -1316,6 +1331,7 @@ render_json() {
     --arg some10 "${STALL_SOME10:-}" --arg some60 "${STALL_SOME60:-}" \
     --arg full10 "${STALL_FULL10:-}" --arg full60 "${STALL_FULL60:-}" \
     --arg some_total "${STALL_SOME_TOTAL:-}" --arg full_total "${STALL_FULL_TOTAL:-}" \
+    --arg io_control "${STALL_IO_CONTROL:-}" \
     --rawfile unmeasured "$UNMEASURED_FILE" \
     --rawfile accounts "$ACCOUNTS_FILE" \
     --rawfile procs "$PROCS_FILE" \
@@ -1350,7 +1366,12 @@ render_json() {
         full_avg10: num($full10), full_avg60: num($full60),
         # Proof that the averages above mean something, never a trigger: this
         # counter is monotonic since boot and so can never fall.
-        some_total_us: num($some_total), full_total_us: num($full_total)
+        some_total_us: num($some_total), full_total_us: num($full_total),
+        # Which state the io control was in when the readability test needed
+        # it, and null when it needed no control at all. A control that could
+        # not be read is not a control that read zero, and this is where the
+        # two are told apart.
+        io_control: (if $io_control == "" then null else $io_control end)
       },
       accounts: ($accounts | lines | map(split("\t") | . as $f | {
         uid: $f[0], account: $f[1],

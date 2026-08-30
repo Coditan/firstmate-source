@@ -295,6 +295,8 @@ Stated because a limit nobody wrote down is one somebody will later assume away.
 - **A memory account that is flat while nothing else has accounted pressure either is taken at face value.**
   The positive readability test needs a live io counter as its control.
   On a machine where both accounts are still at zero - a fresh boot, or a container with no disk activity - a dead memory account and a genuinely quiet one are indistinguishable, and the reading reports the zeros.
+  A control that could not be read at all is a third state and not the same as one that read zero, so the reading names which of the three it was in `stall.io_control` (`live`, `flat`, or `unreadable`) rather than letting an instrument nobody could read pass for a counter that answered.
+  It still reports the zeros in the `unreadable` case, because a control it could not consult is not evidence against the account it was meant to check.
 - **The stall condition is host-wide, and so is the process it names.**
   It reads `/proc/pressure/memory`, so a stall generated inside one container or cgroup is reported as the machine stalling.
   The process it names is the largest resident one the reading can see, which is the best available answer to who to talk to and not proof of who caused the wait.
@@ -304,6 +306,10 @@ Stated because a limit nobody wrote down is one somebody will later assume away.
   Pressure-stall is not present on every kernel or in every container, and where it is present it is not always accounted.
   Where `/proc/pressure/memory` is absent, unreadable, or provably not accounting, the reader marks it unmeasured, the reading is incomplete, and the alarm reports that it could not see rather than that the machine is fine.
   A calm verdict names the conditions it actually judged, so "all three read clear" can be told apart from "one of them was never evaluated", and a stall that could not be read is never printed as `0.00`.
+  Blindness is per-condition and never blanket, though: an incomplete reading still yields the verdict of every condition whose own input was present, names every input it could not read alongside that verdict, and says on the same line that it is not a full all-clear.
+  RAM headroom is the single exception, because the floor measures it and the horizon divides by it: a reading without it leaves nothing to judge at all.
+  So `fm-memory-alarm.sh --status` exits 3 only when NO condition could be judged, 0 when at least one was judged and none crossed, and 4 when one crossed.
+  A crossed alarm is never declared recovered by a reading that could not read every input, so making blindness narrower cannot make recovery easier.
 
 ## Evidence
 
