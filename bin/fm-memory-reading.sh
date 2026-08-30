@@ -414,7 +414,7 @@ read_stall() {
     else
       STALL_IO_CONTROL=flat
     fi
-    if [ -n "$STALL_IO_TOTAL" ] && [ "$STALL_IO_TOTAL" -gt 0 ]; then
+    if [ "$STALL_IO_CONTROL" = live ]; then
       unmeasured stall "$PRESSURE has accounted exactly zero memory stall since boot while $PRESSURE_IO has accounted $STALL_IO_TOTAL, so this kernel accounts pressure but not memory pressure: its zeros are an absent measurement rather than a quiet machine"
       STALL_SOME_TOTAL=
       STALL_FULL_TOTAL=

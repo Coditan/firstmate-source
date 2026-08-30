@@ -70,13 +70,28 @@ START_AVAIL=$(avail_mib)
 [ "$START_AVAIL" -ge "$MIN_AVAIL_MIB" ] ||
   skip "only $START_AVAIL MiB RAM headroom available, below the $MIN_AVAIL_MIB MiB floor this test refuses to run under"
 
-# The reading needs a live process table to see the balloon at all. It is asked
-# against THIS test's own state directory, not the ambient home: a reading given
-# a home with no state directory cannot store or find a growth sample and
-# reports itself incomplete, which is a fact about the question asked rather
-# than about the host.
-env FM_STATE_OVERRIDE="$HOME_DIR/state" "$ROOT/bin/fm-memory-reading.sh" --no-store --json >/dev/null 2>&1 ||
-  skip "the memory reading is incomplete on this host, so a crossing could not be attributed to anything"
+# The reading needs a live process table to see the balloon at all, and RAM
+# headroom to divide by. It is asked against THIS test's own state directory,
+# not the ambient home: a reading given a home with no state directory cannot
+# store or find a growth sample and reports itself incomplete, which is a fact
+# about the question asked rather than about the host.
+#
+# The guard is on those inputs and NOT on the reading's exit status. An
+# incomplete reading is no longer a blind alarm - a host whose memory pressure
+# account is absent or provably not accounting exits 3 while headroom, growth
+# and the process table are all perfectly readable, and the crossing this test
+# drives is a headroom and horizon crossing that such a host judges exactly as
+# any other does. Skipping on exit 3 would retire the only live proof there is
+# on precisely the hosts the stall work was measured against.
+READING_JSON=$(env FM_STATE_OVERRIDE="$HOME_DIR/state" \
+  "$ROOT/bin/fm-memory-reading.sh" --no-store --json 2>/dev/null || true)
+[ -n "$READING_JSON" ] ||
+  skip "the memory reading produced nothing on this host, so a crossing could not be attributed to anything"
+[ "$(printf '%s' "$READING_JSON" | jq -r '.headroom.available_kb')" != null ] ||
+  skip "this host's RAM headroom is unmeasured, so no condition could judge a crossing"
+[ "$(printf '%s' "$READING_JSON" | jq -r \
+    '[.unmeasured[].input] | map(select(. == "processes" or . == "growth-sample")) | length')" = 0 ] ||
+  skip "this host's process table or growth sample is unmeasured, so a crossing could not be attributed to anything"
 
 # --- the runaway ------------------------------------------------------------
 
