@@ -120,8 +120,10 @@ queue_pending=0
 # AGENTS.md reserves supervision repair to firstmate, and a worker can see
 # neither the other homes on this account nor what else is in flight. So the
 # repair commands are computed and printed only for the session that operates
-# this home. Nothing above this line changes: which home is evaluated and whether
-# its supervision is unhealthy are decided identically for both addressees.
+# this home, measured against FM_ROOT - the home this session would be operating,
+# which coincides with the FM_HOME judged above on every path traced.
+# Nothing above this line changes: which home is evaluated and whether its
+# supervision is unhealthy are decided identically for both addressees.
 operator=0
 fm_session_operates_home "$SCRIPT_DIR/.." "$FM_ROOT" && operator=1
 DELIVERY_REASON=
@@ -159,7 +161,7 @@ rule='━━━━━━━━━━━━━━━━━━━━━━━━�
     fi
   fi
   if [ "$operator" -eq 0 ]; then
-    printf '●  This is the supervision of the home that launched this task, and repairing it belongs to firstmate, not to a task worker: report the stalled supervision in your task status line, run no fleet command against that home, and carry on with your own task in this worktree.\n'
+    printf '●  This is the supervision of the home that launched this task, and repairing it belongs to firstmate, not to a task worker: report the stalled supervision in your task status line and carry on with your own task in this worktree.\n'
   elif [ "$afk" -eq 1 ]; then
     printf '●  This forced continuation is internal maintenance; after restoring away delivery, end silently unless a queued wake is captain-relevant under AGENTS.md section 9.\n'
   else

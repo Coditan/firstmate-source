@@ -52,7 +52,7 @@ if fm_session_operates_home "$ROOT" "$FM_ROOT" 2>/dev/null; then
   HEADLINE='TURN WOULD END BLIND - supervision is off. Repair missing watcher supervision according to the session-start operating block before ending the turn.'
   [ -n "$REASON" ] || REASON='tasks in flight, no live watcher - repair missing watcher supervision according to the session-start operating block before ending the turn'
 else
-  HEADLINE='SUPERVISION IS OFF IN THE HOME THAT LAUNCHED THIS TASK. Repairing it belongs to firstmate, not to a task worker: report the stalled supervision in your task status line, run no fleet command against that home, and carry on with your own task in this worktree.'
+  HEADLINE='SUPERVISION IS OFF IN THE HOME THAT LAUNCHED THIS TASK. Repairing it belongs to firstmate, not to a task worker: report the stalled supervision in your task status line and carry on with your own task in this worktree.'
   [ -n "$REASON" ] || REASON='tasks in flight in the launching home, no live watcher - report it rather than repairing it.'
 fi
 # shellcheck source=bin/fm-operational-input.sh

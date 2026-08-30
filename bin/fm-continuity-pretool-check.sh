@@ -13,8 +13,10 @@
 # weaken the Stop hook.
 #
 # One refusal, two addressees. The recovery commands this message names are
-# reserved to the session that operates the evaluated home, so they are printed
-# only when this hook was loaded from that home's own checkout. A worker running
+# reserved to the session that operates this home, so they are printed only when
+# this hook was loaded from that home's own checkout. The comparison is against
+# FM_ROOT, the home this session would be operating, which coincides with the
+# FM_HOME the supervision predicate judged on every path traced. A worker running
 # the same tracked hook from its task worktree is told to report the stalled
 # supervision instead and is handed no command. See fm_session_operates_home in
 # bin/fm-primary-scope-lib.sh; the refusal is identical either way.
@@ -122,7 +124,7 @@ if fm_session_operates_home "$SCRIPT_DIR/.." "$FM_ROOT"; then
       ;;
   esac
 else
-  REASON="[watcher-continuity] tasks are in flight in the home that launched this task and no live watcher holds its home lock; repairing that home's supervision belongs to firstmate and not to a task worker, so run no fleet command against it - report the stalled supervision in your task status line and carry on with your own task in this worktree (blocked: $BLOCKED_SCRIPT)"
+  REASON="[watcher-continuity] tasks are in flight in the home that launched this task and no live watcher holds its home lock; repairing that home's supervision belongs to firstmate and not to a task worker - report the stalled supervision in your task status line and carry on with your own task in this worktree (blocked: $BLOCKED_SCRIPT)"
 fi
 ESCAPED=$(printf '%s' "$REASON" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n' ' ')
 printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"},"systemMessage":"%s"}\n' "$ESCAPED" >&2

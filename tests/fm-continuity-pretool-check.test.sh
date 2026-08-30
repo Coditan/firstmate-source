@@ -138,6 +138,10 @@ test_child_worktree_and_malformed_input_fail_open() {
 # in flight in a home none of them could see. AGENTS.md section 1 reserves those
 # to firstmate: obeying does damage, refusing leaves the worker stuck.
 WORKER_FORBIDDEN_COMMANDS='bin/fm-watcher-service.sh bin/fm-delivery-service.sh bin/fm-wake-drain.sh bin/fm-teardown.sh'
+# The worker message states only the worker's own duty. It deliberately does not
+# claim the gate forbids every fleet command against that home, because the
+# recovery allowlist in bin/fm-continuity-command-policy.mjs does not.
+WORKER_REPORT_TAIL='report the stalled supervision in your task status line and carry on with your own task in this worktree'
 
 make_worker_worktree() {
   local dir="$TMP_ROOT/worker-wt"
@@ -176,8 +180,8 @@ test_worker_refusal_names_no_command_reserved_to_firstmate() {
   done
   assert_contains "$message" "repairing that home's supervision belongs to firstmate and not to a task worker" \
     "worker refusal must name firstmate as the one who repairs it"
-  assert_contains "$message" "report the stalled supervision in your task status line" \
-    "worker refusal must name reporting as the worker's own next action"
+  assert_contains "$message" "$WORKER_REPORT_TAIL" \
+    "worker refusal must name reporting as the worker's own next action, and claim nothing the gate does not enforce"
   assert_contains "$message" "(blocked: fm-crew-state.sh)" "worker refusal must still name the command it refused"
 
   # A forced teardown reaches the gate through the other reason code, and its
