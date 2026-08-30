@@ -260,6 +260,62 @@ test_a_pending_first_turn_holds_the_next_launch() {
   pass "seat respawner waits out the seat it already started before starting another"
 }
 
+# THE BOUND, AND WHAT THE GIVE-UP MAY CLAIM WHEN IT IS REACHED.
+#
+# The captain ruled twice on this episode. First that the launch hold must still
+# be bounded by the existing attempt limit, because a hold that never ends is a
+# home nobody is coming back to and nothing ever says so. Then that the finding
+# which ends it may not call a held cycle a launch: an episode whose first turn
+# never lands makes ONE window call, and telling him five launches were spent
+# would be the same overclaim this branch refuses everywhere else.
+#
+# So both halves are asserted here together, because either one alone is wrong.
+# The bound without the honest count reports five launches that never happened;
+# the honest count without the bound reports nothing at all, forever.
+#
+# It also asserts the one fact he can act on and the finding used not to carry:
+# that a pane is still open holding this episode, so the silence is a deliberate
+# refusal to open a second seat beside a live one, not a restarter that quit.
+test_a_held_episode_is_bounded_and_the_giveup_counts_launches_as_launches() {
+  local home delivery tmux log status launches findings i
+  home=$(make_home held-bound)
+  status="$home/status.txt"
+  delivery="$home/fake-delivery"
+  tmux="$home/fake-tmux"
+  log="$home/tmux.log"
+  printf 'undeliverable: listener pid 1 is up with 1 wake(s) pending, but no session has published where the model turn lives\n' > "$status"
+  write_fake_delivery "$delivery"
+  write_pane_fake_tmux "$tmux" "$log"
+
+  # Four cycles at a three-attempt bound: one launch, then holds. Each later
+  # cycle sleeps past the backoff so nothing but the pending first turn can be
+  # what holds it.
+  i=0
+  while [ "$i" -lt 4 ]; do
+    [ "$i" -eq 0 ] || sleep 2
+    FM_SEAT_RESPAWNER_MAX_ATTEMPTS=3 FM_FAKE_DELIVERY_STATUS="$status" \
+      run_respawner_once "$home" "$delivery" "$tmux" \
+      || fail "respawner refused cycle $i"
+    i=$((i + 1))
+  done
+
+  [ -f "$home/state/.seat-first-turn" ] \
+    || fail "the pending first turn was dropped, so no cycle was actually held"
+  launches=$(grep -c new-window "$log" 2>/dev/null || printf 0)
+  [ "$launches" = 1 ] \
+    || fail "a held episode opened more than one seat; got $launches launches"
+  findings=$(find "$home/data/findings" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')
+  [ "$findings" = 1 ] \
+    || fail "a held episode never reached its bound; got $findings give-up findings"
+  assert_no_grep "exhausted 3 launch attempt" "$home/data/findings/"*.json \
+    "the give-up finding claimed launches that were holds"
+  assert_grep "1 launch attempt" "$home/data/findings/"*.json \
+    "the give-up finding did not name the one launch that was actually made"
+  assert_grep "%9" "$home/data/findings/"*.json \
+    "the give-up finding did not name the pane still holding this episode"
+  pass "a held episode is bounded and its give-up counts launches as launches"
+}
+
 # The state this whole area exists to remove is a restarter that is in the tree
 # and has never once run, so an armed home with no beacon at all must be the
 # loudest case rather than the one that stays silent.
@@ -569,6 +625,7 @@ test_only_a_provably_dead_watcher_is_revived
 test_convergence_is_swept_before_the_alarm_and_supersedes_its_old_shim
 test_an_unreadable_lock_never_produces_a_launch
 test_a_pending_first_turn_holds_the_next_launch
+test_a_held_episode_is_bounded_and_the_giveup_counts_launches_as_launches
 test_an_armed_restart_that_never_ran_is_reported
 test_launch_does_not_pin_the_respawners_path
 test_resume_style_launch_command_is_refused

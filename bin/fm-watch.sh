@@ -1653,8 +1653,33 @@ while :; do
   # keeps producing signals - the slow poll (e.g. merge detection) would then
   # never run until the fleet went quiet. Checks are due only every
   # CHECK_INTERVAL, so most cycles skip this block and fall straight through.
+  #
+  # EVERY DUE CHECK RUNS, AND A CHECK THAT SPEAKS DOES NOT END THE SWEEP.
+  # It used to. wake() was called from inside this loop, which exits the process
+  # in one-shot mode and breaks the loop in daemon mode, and .last-check was
+  # touched first - so the checks sorted behind the first speaker did not run,
+  # and then waited a full CHECK_INTERVAL before their next chance. The order is
+  # the plain glob order of state/*.check.sh, so ADDING ANY WATCH could silently
+  # delay any watch behind it, and the delay was invisible: a starved sweep looks
+  # exactly like a sweep on which nothing had anything to say.
+  #
+  # Measured on coditan-vessel over the 50.3h ending 2026-08-30 22:13Z, from
+  # state/sweep-tick.log against the wake journal: of 401 sweeps, 67 ended early
+  # on a check sorting before seat-alarm.check.sh, and 60 of those were
+  # CONSECUTIVE - 5.3 hours, 16:57Z to 22:16Z on 2026-08-30, in which the seat
+  # alarm would not have run once while reporting itself armed and healthy. That
+  # is the length of the outage the alarm exists to catch.
+  #
+  # So the sweep now queues each speaking check's wake as it goes and delivers
+  # afterwards. The durable queue is what firstmate drains, so queueing inside the
+  # loop is what makes a check's output survive; wake() is delivery, and delivery
+  # happens once the sweep is over. This costs no extra model turns - firstmate
+  # drains the whole queue in one turn either way - only more lines in that one
+  # turn. It costs no worst-case sweep time either: a sweep on which nothing spoke
+  # already ran every check, and that was 83% of the 401 measured.
   if [ "$(age_of "$STATE/.last-check")" -ge "$CHECK_INTERVAL" ]; then
     rejected_checks=
+    check_reasons=()
     for c in "$STATE"/*.check.sh; do
       [ -e "$c" ] || continue
       if [ "$(basename "$c")" = x-watch.check.sh ]; then
@@ -1691,20 +1716,22 @@ while :; do
       if [ -n "$out" ]; then
         reason="check: $c: $out"
         fm_wake_append check "$c" "$reason" || exit 1
-        touch "$STATE/.last-check"
-        wake "$reason"
-        [ "$WAKE_PENDING" -eq 0 ] || break
+        check_reasons+=("$reason")
       fi
     done
-    [ "$WAKE_PENDING" -eq 0 ] || continue
     if [ -n "$rejected_checks" ]; then
       reason="check: rejected unauthenticated state checks:$rejected_checks"
       fm_wake_append check unauthenticated-state-checks "$reason" || exit 1
-      touch "$STATE/.last-check"
-      wake "$reason"
-      [ "$WAKE_PENDING" -eq 0 ] || continue
+      check_reasons+=("$reason")
     fi
+    # The cadence anchor moves before the first delivery, never after it, because
+    # wake() exits the process in one-shot mode: touching afterwards would leave
+    # the sweep unanchored and re-run every check on the next watcher.
     touch "$STATE/.last-check"
+    for reason in ${check_reasons[@]+"${check_reasons[@]}"}; do
+      wake "$reason"
+    done
+    [ "$WAKE_PENDING" -eq 0 ] || continue
   fi
 
   if [ "${#BRIDGE_VESSELS[@]}" -eq 0 ] || [ ! -d "$BRIDGE_ROOT/.git" ]; then
