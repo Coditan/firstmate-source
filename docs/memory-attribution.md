@@ -107,10 +107,12 @@ The third line is the honest case: a 599 MiB worker of another account, named an
 
 ### A calm reading and a blind one are not confusable
 
-The sharpest pair, because both look calm:
+The sharpest pair, because both look calm.
+A file whose averages really are zero is only reported `complete` when its cumulative `total=` counters corroborate those zeros: either they are non-zero, so this kernel has accounted memory stall at some point and is simply quiet now, or the io control is flat as well, so nothing distinguishes a dead account from a machine that has just booted.
+Zero averages beside a cumulative total of exactly zero, on a kernel whose io account is live, are an absent measurement rather than a quiet machine, and are reported unmeasured.
 
 ```
-$ FM_MEMORY_PRESSURE=<file with real zero averages> ./bin/fm-memory-reading.sh
+$ FM_MEMORY_PRESSURE=<file with real zero averages over non-zero totals> ./bin/fm-memory-reading.sh
 memory-reading: complete - every input in scope was measured
   some  avg10=0.00  avg60=0.00
 exit 0
@@ -128,6 +130,8 @@ Every deliberately bad input constructed, and what the reading said:
 | stall file empty | 3 | `stall`: carries no recognisable some/full averages |
 | stall file holding unrelated text | 3 | `stall`: carries no recognisable some/full averages |
 | stall file absent | 3 | `stall`: this kernel exposes no memory pressure metric |
+| stall file with averages but no some/full `total=` counters | 3 | `stall`: carries no recognisable some/full total counters, so its averages cannot be shown to mean anything |
+| stall file flat at zero, both totals zero, beside a live io account | 3 | `stall`: this kernel accounts pressure but not memory pressure, so its zeros are an absent measurement rather than a quiet machine |
 | headroom file empty | 3 | `headroom`: no usable MemTotal/MemAvailable pair |
 | headroom file with a non-numeric MemTotal | 3 | `headroom`: no usable MemTotal/MemAvailable pair |
 | headroom file with MemTotal but no MemAvailable | 3 | `headroom`: no usable MemTotal/MemAvailable pair |

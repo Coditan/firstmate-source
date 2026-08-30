@@ -183,14 +183,21 @@
 #                                clock rather than raising an alarm. Set it to
 #                                the empty string to leave the condition
 #                                unconfigured, in which case it fires nothing
-#                                and every verdict says so.
+#                                and every verdict says so. A value that is not
+#                                a usable percentage is a typo rather than a
+#                                choice, so it falls back to the default and
+#                                every verdict says that instead.
 #   FM_MEMORY_ALARM_STALL_WINDOW how long, in seconds, the stall must stay at
 #                                or above that gate CONTINUOUSLY before the
 #                                condition crosses (default 7200, two hours).
 #                                This is the discriminator; see above.
-#   FM_MEMORY_ALARM_RECOVERY     multiplier a reading must clear both
-#                                thresholds by before recovery is declared
-#                                (default 1.25)
+#   FM_MEMORY_ALARM_RECOVERY     margin a reading must clear all three
+#                                conditions by before recovery is declared:
+#                                headroom and horizon must beat their
+#                                thresholds by this multiple, and the stall run
+#                                multiplied by it must still fit inside the
+#                                window, because that condition crosses on
+#                                duration rather than on a level (default 1.25)
 #   FM_MEMORY_ALARM_STALE        how long without a completed evaluation before
 #                                --armed calls the alarm stopped (default 1800)
 #   FM_MEMORY_ALARM_DISABLE=1    silence detect and --armed only, so suites that
@@ -227,10 +234,19 @@ case "$FLOOR_MIB" in *[!0-9]*|'') FLOOR_MIB=2400 ;; esac
 case "$HORIZON_MIN" in *[!0-9]*|'') HORIZON_MIN=15 ;; esac
 case "$STALE" in *[!0-9]*|'') STALE=1800 ;; esac
 # A stall threshold is a percentage and so may carry one decimal point. An
-# unset one leaves the condition unconfigured; a malformed one is discarded the
-# same way rather than reaching awk, where an unparsable value would compare as
-# zero and hold the condition crossed forever.
-case "$STALL_MAX" in ''|.|*.|*[!0-9.]*|*.*.*) STALL_MAX= ;; esac
+# EMPTY one leaves the condition unconfigured, which is a deliberate choice a
+# home can make. A MALFORMED one is not a choice, it is a typo, so it falls back
+# to the shipped default the way every sibling threshold above does rather than
+# switching the newest condition off on a home that meant to have it. Either way
+# it never reaches awk, where an unparsable value would compare as zero and hold
+# the condition crossed forever.
+STALL_GATE_NOTE=
+case "$STALL_MAX" in
+  '') ;;
+  .|*.|*[!0-9.]*|*.*.*)
+    STALL_MAX=1.00
+    STALL_GATE_NOTE="the FM_MEMORY_ALARM_STALL configured for this home was not a usable percentage, so the shipped default gate of $STALL_MAX% is in force instead of it" ;;
+esac
 case "$STALL_WINDOW" in *[!0-9]*|'') STALL_WINDOW=7200 ;; esac
 
 # A run of polls is only a run if the polls happened. The watcher makes checks
@@ -281,6 +297,7 @@ STALL_FULL60=
 STALL_SOME60=
 STALL_RUN_SECONDS=0
 STALL_ACTIVE=
+STALL_RUN_UNPERSISTED=
 SWAP_USED_MIB=
 OFFENDER=
 RESIDENT=
@@ -481,6 +498,9 @@ evaluate() {
           REASON="$REASON. Swap use could not be read"
         fi ;;
     esac
+    # A substituted gate is stated on the same reading it decided, so a
+    # fallback can never be mistaken for a home that chose this number.
+    [ -z "$STALL_GATE_NOTE" ] || REASON="$REASON; $STALL_GATE_NOTE"
     return
   fi
 
@@ -491,14 +511,18 @@ evaluate() {
   if [ -z "$GROWTH_BLIND" ] && [ "$MINUTES" != NA ]; then
     awk -v m="$MINUTES" -v h="$HORIZON_MIN" -v r="$RECOVERY" 'BEGIN { exit !(m + 0 >= h * r) }' || horizon_clear=no
   fi
-  # This condition crosses on duration, so it clears on duration too, and the
-  # margin divides rather than multiplies because a crossing here is a LONG run.
+  # This condition crosses on duration, so it clears on duration too: the run
+  # must fit inside the window with the margin applied to it, because a crossing
+  # here is a LONG run. The margin multiplies the run rather than dividing the
+  # window so that an unusable RECOVERY degrades to zero and still clears, the
+  # same harmless way it does for the two conditions above, instead of making
+  # awk divide by zero and pinning this machine at elevated forever.
   # It deliberately does not test the instantaneous level: ordinary heavy work
   # goes over the gate all the time, and holding a headroom recovery back
   # because somebody is running the linter would change what the other two
   # conditions do, which this addition may not.
   if [ -z "$STALL_BLIND" ] && [ -z "$STALL_UNSET" ]; then
-    awk -v r="$STALL_RUN_SECONDS" -v w="$STALL_WINDOW" -v m="$RECOVERY" 'BEGIN { exit !(r + 0 <= w / m) }' || stall_clear=no
+    awk -v r="$STALL_RUN_SECONDS" -v w="$STALL_WINDOW" -v m="$RECOVERY" 'BEGIN { exit !(r * m <= w + 0) }' || stall_clear=no
   fi
 
   # A calm verdict has to say which conditions it actually judged, because the
@@ -546,6 +570,7 @@ evaluate() {
     REASON="$REASON - past no threshold, but not yet clear of them all by the recovery margin"
     [ -z "$unjudged" ] || REASON="$REASON; $unjudged, $unjudged_tail"
   fi
+  [ -z "$STALL_GATE_NOTE" ] || REASON="$REASON; $STALL_GATE_NOTE"
 }
 
 # --- the stall run ----------------------------------------------------------
@@ -574,8 +599,12 @@ read_stall_run() {  # sets STALL_RUN_SECONDS, and STALL_ACTIVE when a run is on
 
   if [ "$stalling" != yes ]; then
     # The run is over. Clearing it is the whole reason ordinary work does not
-    # reach the window: it finishes, and the clock goes back to zero.
-    [ "$MODE" = status ] || rm -f -- "$STALL_RUN_FILE" 2>/dev/null
+    # reach the window: it finishes, and the clock goes back to zero. A run
+    # that could not be cleared is the same instrument failure as one that
+    # could not be written, in the other direction, so it is said too.
+    if [ "$MODE" != status ] && ! rm -f -- "$STALL_RUN_FILE" 2>/dev/null; then
+      STALL_RUN_UNPERSISTED=yes
+    fi
     STALL_RUN_SECONDS=0
     STALL_ACTIVE=
     return
@@ -589,8 +618,13 @@ read_stall_run() {  # sets STALL_RUN_SECONDS, and STALL_ACTIVE when a run is on
   STALL_RUN_SECONDS=$((NOW - start))
   [ "$STALL_RUN_SECONDS" -ge 0 ] || STALL_RUN_SECONDS=0
   if [ "$MODE" != status ]; then
-    mkdir -p "$STATE" 2>/dev/null &&
-      printf '%s %s\n' "$start" "$NOW" >"$STALL_RUN_FILE" 2>/dev/null
+    # 2>/dev/null comes FIRST: a redirection that cannot be opened is reported
+    # by the shell as it applies them, left to right, so suppressing stderr
+    # afterwards would leave the raw error on the watcher's own output line.
+    if ! { mkdir -p "$STATE" 2>/dev/null &&
+           printf '%s %s\n' "$start" "$NOW" 2>/dev/null >"$STALL_RUN_FILE"; }; then
+      STALL_RUN_UNPERSISTED=yes
+    fi
   fi
 }
 
@@ -742,6 +776,16 @@ esac
 [ "${FM_MEMORY_ALARM_DISABLE:-0}" = 1 ] && exit 0
 
 evaluate
+
+# The run of consecutive polls is the ONLY thing the stall condition decides on,
+# so a run that could not be written down is this alarm's instrument breaking:
+# every later poll would start the clock from zero and this machine would read
+# calm forever on exactly the shape the condition exists to see. It is said on
+# the poll it happens, whatever the state does, the same way a state or a
+# transition that could not be persisted is.
+[ -z "$STALL_RUN_UNPERSISTED" ] ||
+  printf 'MEMORY_ALARM: the memory watch could not persist the memory-stall run in %s; this poll was measured but not durably completed, so the stall condition cannot count consecutive polls and this machine is not being watched for memory stall.\n' \
+    "$STALL_RUN_FILE"
 
 PREVIOUS=$(read_state)
 SINCE=$(read_state_since)
