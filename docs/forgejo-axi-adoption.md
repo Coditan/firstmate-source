@@ -186,7 +186,7 @@ So nothing is declared before it is required, and no seat is told to install a c
 
 **Implemented invariant: both an agent session and the validation pipeline's daemon must run the same client.**
 Those are different execution environments on this seat and the difference is not theoretical.
-The pipeline's daemon is one shared unit for the whole host and pins its own `PATH`, which reaches neither the npm global prefix nor any home's vessel prefix.
+The pipeline's daemon is one shared `systemd --user` unit per ACCOUNT - one daemon behind every firstmate home on it, rather than one for the whole host ([validation-daemon.md](validation-daemon.md) owns that measurement) - and it pins its own `PATH`, which reaches neither the npm global prefix nor any home's vessel prefix.
 So the check reads that daemon's environment, requires the same executable to resolve from both its `PATH` and the session's `PATH`, and reads the version from the executable the daemon would run - one mechanism and one install location rather than separate session-side and pipeline-side declarations.
 Measured on this seat on 2026-08-21, with a 1.3.0 client on the session's own `PATH`:
 

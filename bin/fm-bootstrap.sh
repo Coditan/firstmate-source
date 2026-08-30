@@ -33,6 +33,8 @@
 #                 "CURRENCY_ROUND: the daily update check <is not armed|has stopped> (...)",
 #                 "MEMORY_ALARM: <nothing is watching this machine|the memory watch ... has stopped> (...)",
 #                 "GITHUB_INBOX: the GitHub notification watch ... has stopped (...)",
+#                 "FORGE_STATUS: the forge status watch could not be armed on this home (...)",
+#                 "SLOT_GUARD: the worktree-ownership watch could not be armed on this home (...)",
 #                 "CURATION_NUDGE|CODEBASE_SWEEP_NUDGE: <not armed|could not be armed|scheduler refusal|state persistence failure|state health indeterminate|supervision outage> (...)",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...",
 #                 "WATCHER_UNIT: <consent, convergence, or fallback detail>",
@@ -41,7 +43,10 @@
 #                 "RESPAWNER_UNIT: <consent, convergence, or health detail>",
 #                 "BOSUN_UNIT: <consent, convergence, judge-reach, or health detail>",
 #                 "RUN_READER: no-mistakes runs in this session (<path>) but a
-#                 context that inherits no shell setup cannot reach it (...)".
+#                 context that inherits no shell setup cannot reach it (...)",
+#                 "VALIDATION_DAEMON: the validation pipeline daemon is not
+#                 running (...)" or "VALIDATION_DAEMON: whether the validation
+#                 pipeline daemon is running is unestablished - <reason> (...)".
 #          When a RUNNING secondmate worktree is fast-forwarded to firstmate's
 #          own current default-branch commit (a purely LOCAL fast-forward, never
 #          an origin fetch) AND its loaded instruction surface (AGENTS.md, bin/,
@@ -696,9 +701,9 @@ no_mistakes_version_parts() {
   printf '%s\n' "$output" | sed -nE 's/.*[vV]?([0-9]+)\.([0-9]+)\.([0-9]+).*/\1 \2 \3/p' | head -n 1
 }
 
-no_mistakes_compatible() {
+no_mistakes_compatible() {  # [already-read version parts]
   local parts major minor patch extra
-  parts=$(no_mistakes_version_parts) || return 1
+  if [ "$#" -gt 0 ]; then parts=$1; else parts=$(no_mistakes_version_parts) || return 1; fi
   IFS=' ' read -r major minor patch extra <<< "$parts"
   [ -n "$major" ] && [ -n "$minor" ] && [ -n "$patch" ] && [ -z "$extra" ] || return 1
   [ "$major" -gt "$NO_MISTAKES_MIN_MAJOR" ] && return 0
@@ -840,6 +845,150 @@ run_reader_reach_check() {
     repair="this environment has no HOME to derive an install directory from - export NO_MISTAKES_INSTALL_DIR to the directory holding the CLI"
   fi
   echo "RUN_READER: no-mistakes runs in this session ($resolved) but a context that inherits no shell setup cannot reach it, so crew run-state reads from the watcher, hooks and reviewer sessions answer 'degraded - run-reader-missing' instead of the real state (repair: $repair)"
+}
+
+# The forbidden neighbour of the repair, spelled once. Every line this check can
+# print names it, and two spellings of one rule leave a reader deciding which is
+# current (docs/validation-daemon.md owns why the update path is barred).
+VALIDATION_DAEMON_NOT_UPDATE='never no-mistakes update, which resets the daemon as part of a version change and would carry that change into parked runs'
+# What an unreadable answer asks for: a reading taken by hand BEFORE any action,
+# because every unreadable case is one where acting on the guess is the hazard.
+VALIDATION_DAEMON_REPAIR="take the reading by hand with no-mistakes daemon status, and if it is down bring it back with no-mistakes daemon start - $VALIDATION_DAEMON_NOT_UPDATE"
+
+validation_daemon_upgrade_repair() {
+  echo "upgrade the CLI first with $(install_cmd no-mistakes), and take the reading once it answers on a supported version - $VALIDATION_DAEMON_NOT_UPDATE"
+}
+
+validation_daemon_unestablished() {
+  echo "VALIDATION_DAEMON: whether the validation pipeline daemon is running is unestablished - $1 - so this is not an all-clear; ${2:-$VALIDATION_DAEMON_REPAIR}"
+}
+
+# Startup assertion for the validation pipeline daemon.
+#
+# Why it is a check and not a habit (measured on the coditan vessel, 2026-08-30):
+# a seat restart killed every crewmate AND the no-mistakes daemon. The crewmates
+# were visible - each pane sat at a bare shell prompt - and the daemon was
+# visible nowhere:
+#
+#   connect to daemon socket: dial unix /home/coditan/.no-mistakes/socket: connect: connection refused
+#   recorded pid 3223240 no longer exists
+#
+# Four parked runs were unanswerable for about forty minutes with no status
+# line, no diagnostic, no wake and no failing command, and it surfaced only when
+# a relaunched worker tried to answer its own review gate. NOTHING on a seat
+# touches the daemon until something needs it, so a seat with no gate work in
+# flight carries a dead one indefinitely and reads perfectly healthy - the exact
+# shape no amount of care detects and one reading does.
+#
+# DETECT ONLY, deliberately, and not by analogy to the arming steps below. Those
+# arm per-HOME mechanisms under this home's own session lock; this daemon is
+# per-ACCOUNT - one socket under $HOME serving every firstmate home and
+# secondmate on the account - so the lock that guards them does not cover it.
+# Two homes can hold their own locks at the same moment and both act, and a home
+# holding its own lock has established nothing about its siblings - the daemon
+# process carries no home identity in its environment at all, so no home can even
+# enumerate them.
+#
+# The narrower argument rules out the smallest autonomy too: "start only when it
+# is provably absent" is exactly the reading a WEDGED socket gets wrong, and an
+# auto-start there puts a second process against the same root while parked runs
+# sit inside the first. The escalation from "not answering" to a start is the
+# whole hazard, so this check does not make it. The action goes to the reader,
+# who can see whether anything is running; docs/validation-daemon.md records the
+# measurements this rests on, including the sibling-home one this seat could not
+# take itself.
+#
+# Every home on the account prints this line, and that duplication is correct:
+# each of them really is impaired, so it is not a fleet-level fact reported N
+# times the way an unread GitHub thread would be. The line names the ACCOUNT and
+# never a number of homes, because no home can count its siblings.
+#
+# The answer is read from the OUTPUT, not the exit status: v1.48.0 exits 0 for
+# both "daemon running (pid N)" and "daemon not running", including with a stale
+# pid file recording a dead process. Anything else is an unreadable instrument
+# rather than a verdict, because guessing healthy hides a dead daemon and
+# guessing dead sends a reader to restart a live one.
+#
+# A version that refuses the verb outright is the same class one band higher, and
+# it is read from the REFUSAL rather than inferred from a number, because when
+# the daemon verbs were introduced is a fact this fleet cannot establish for a
+# tool it does not own. That refusal reaches stderr on the measured CLI, so
+# stderr is captured separately and consulted only after stdout has failed to
+# yield a verdict - merging it would put the tool's own update banner inside the
+# text the healthy and down verdicts are matched against.
+#
+# Absence is not this check's to report: MISSING: already owns an uninstalled
+# CLI, and its repair is to install it rather than to start a daemon. A CLI that
+# IS installed but whose version does not clear the floor is the opposite case
+# and does print here: it cannot be asked, and silence about an instrument that
+# cannot read is the all-clear this check exists to remove. That path names the
+# upgrade as its repair, because neither daemon verb can succeed until the
+# upgrade lands, and it says which of the two things it established - that the
+# version is below the floor, or that no version could be read at all - because
+# a version this seat never read is not a version it may report.
+#
+# FM_VALIDATION_DAEMON_CHECK_DISABLE exists for the same reason the
+# currency-round and run-reader ones do: every behavior suite that composes
+# bootstrap runs with a FAKE no-mistakes, whose daemon answer is meaningless, so
+# the line would print under every unrelated assertion. tests/lib.sh disables it
+# suite-wide and tests/fm-validation-daemon-check.test.sh sets it back to 0.
+validation_daemon_check() {  # [already-read version parts]
+  local timeout_bin out err rc=0 seconds version_reason parts err_file
+  [ "${FM_VALIDATION_DAEMON_CHECK_DISABLE:-0}" != 1 ] || return 0
+  command -v no-mistakes >/dev/null 2>&1 || return 0
+  if [ "$#" -gt 0 ]; then parts=$1; else parts=$(no_mistakes_version_parts 2>/dev/null) || parts=; fi
+  if ! no_mistakes_compatible "$parts"; then
+    if [ -n "$parts" ]; then
+      version_reason="the installed no-mistakes is below the version floor this fleet requires, so it cannot be asked"
+    else
+      version_reason="no-mistakes --version answered with no version this check could read, so whether the installed CLI meets the floor this fleet requires is itself unestablished and it cannot be asked"
+    fi
+    validation_daemon_unestablished "$version_reason" "$(validation_daemon_upgrade_repair)"
+    return 0
+  fi
+  seconds=${FM_VALIDATION_DAEMON_TIMEOUT:-5}
+  case "$seconds" in ''|*[!0-9]*) seconds=5 ;; esac
+  [ "$seconds" -gt 0 ] 2>/dev/null || seconds=5
+  timeout_bin=
+  if [ "${FM_VALIDATION_DAEMON_FORCE_UNBOUNDED:-0}" != 1 ]; then
+    if command -v timeout >/dev/null 2>&1; then timeout_bin=timeout
+    elif command -v gtimeout >/dev/null 2>&1; then timeout_bin=gtimeout
+    fi
+  fi
+  if [ -z "$timeout_bin" ]; then
+    validation_daemon_unestablished "this seat has neither timeout nor gtimeout to bound the call, and asking unbounded would hang session start behind a wedged daemon"
+    return 0
+  fi
+  err=
+  err_file=$(mktemp "${TMPDIR:-/tmp}/fm-validation-daemon.XXXXXX" 2>/dev/null) || err_file=
+  if [ -n "$err_file" ]; then
+    out=$("$timeout_bin" "$seconds" no-mistakes daemon status 2>"$err_file") || rc=$?
+    err=$(cat "$err_file" 2>/dev/null) || err=
+    rm -f -- "$err_file"
+  else
+    out=$("$timeout_bin" "$seconds" no-mistakes daemon status 2>/dev/null) || rc=$?
+  fi
+  if [ "$rc" -eq 124 ]; then
+    validation_daemon_unestablished "it did not answer within ${seconds}s, which is a wedged daemon rather than a dead one"
+    return 0
+  fi
+  case "$out" in
+    *"daemon not running"*)
+      echo "VALIDATION_DAEMON: the validation pipeline daemon is not running, so every parked review on this account is unanswerable until it is back and nothing else on this seat will say so (repair: no-mistakes daemon start - $VALIDATION_DAEMON_NOT_UPDATE)"
+      return 0
+      ;;
+    *"not running"*|*"no daemon running"*) ;;
+    *"daemon running (pid"*) return 0 ;;
+  esac
+  case "$out$err" in
+    *"unknown command "*|*"unknown subcommand"*|*"Available Commands:"*)
+      validation_daemon_unestablished \
+        "the installed no-mistakes refused daemon status as a command it does not have, so this version cannot be asked" \
+        "$(validation_daemon_upgrade_repair)"
+      return 0
+      ;;
+  esac
+  validation_daemon_unestablished "no-mistakes daemon status answered in a shape this check does not recognise (exit $rc), and this fleet does not own that tool's output"
 }
 
 x_mode_write_if_changed() {
@@ -1231,10 +1380,17 @@ if fm_backend_list_contains "$TOOLS" treehouse \
   && command -v treehouse >/dev/null 2>&1 && ! treehouse_supports_lease; then
   echo "MISSING: treehouse (install: $(install_cmd treehouse))"
 fi
-if command -v no-mistakes >/dev/null 2>&1 && ! no_mistakes_compatible; then
+# One reading of an immutable fact, shared by the two checks that need it: the
+# MISSING: gate below and validation_daemon_check. Both distinguish a version
+# that parsed from one that did not, so the empty case is passed through rather
+# than collapsed.
+NO_MISTAKES_VERSION_PARTS=$(no_mistakes_version_parts 2>/dev/null) || NO_MISTAKES_VERSION_PARTS=
+if command -v no-mistakes >/dev/null 2>&1 \
+  && ! no_mistakes_compatible "$NO_MISTAKES_VERSION_PARTS"; then
   echo "MISSING: no-mistakes (install: $(install_cmd no-mistakes))"
 fi
 run_reader_reach_check
+validation_daemon_check "$NO_MISTAKES_VERSION_PARTS"
 if command -v tasks-axi >/dev/null 2>&1 && ! fm_tasks_axi_compatible; then
   echo "MISSING: tasks-axi (install: $(install_cmd tasks-axi))"
 fi

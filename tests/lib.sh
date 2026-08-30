@@ -105,6 +105,15 @@ export NO_MISTAKES_INSTALL_DIR=/nonexistent/fm-test-no-mistakes-install-dir
 # directly over both a reachable and an unreachable seat.
 export FM_RUN_READER_CHECK_DISABLE=1
 
+# The validation pipeline daemon assertion runs in that same detect pass and asks
+# a live question of the no-mistakes CLI. Every fixture's CLI is a fake whose
+# daemon answer is invented, so the line would be true of the fake and say
+# nothing about the subject under test - and on a developer machine a suite that
+# happened to reach the real CLI would report on the operator's own daemon.
+# Silence it suite-wide; tests/fm-validation-daemon-check.test.sh sets it back to
+# 0 and drives every answer shape from its own fake.
+export FM_VALIDATION_DAEMON_CHECK_DISABLE=1
+
 # The weekly Grossreinschiff cadence check runs in bootstrap's detect pass, so
 # every suite that composes fm-bootstrap.sh would otherwise see its due line the
 # moment a fixture home has no sweep record - which is always. Silence the
