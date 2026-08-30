@@ -469,6 +469,45 @@ EOF
   pass "every skill declares a load trigger and every section 13 trigger names a real skill"
 }
 
+# On 2026-08-30 a Codex crewmate dispatched to edit one guard script ran
+# bin/fm-session-start.sh within a minute of launching, and recorded its reason:
+# the command is "explicitly required by the trusted AGENTS.md instructions". It
+# was right about the file and wrong about the addressee. AGENTS.md speaks to the
+# firstmate primary in the imperative throughout, and every worker sent into this
+# repository is handed it as instructions by its harness.
+#
+# What this test proves is narrow and worth stating: that the notice exists, that
+# it names the traps rather than only the principle, and that it sits ahead of the
+# first imperative a skimming reader would meet. It does NOT prove any worker was
+# routed by it - no assertion over a source file can establish that a reader
+# behaved. The evidence for routing is a worker that stops, and the only place it
+# can appear is a status file.
+test_agents_md_tells_a_worker_it_is_not_addressed() {
+  local notice contract
+  for phrase in \
+    'this file is not addressed to you' \
+    'operating contract of the firstmate primary that dispatched you' \
+    'the file you may be changing, not your own orders' \
+    'Your brief governs' \
+    'the brief wins and you say so in a status line' \
+    'Running session start, taking the session lock, draining the wake queue, running the bootstrap sweeps, and arming any check in this home are the primary'; do
+    assert_grep "$phrase" "$AGENTS" "AGENTS.md lost the worker-addressee notice phrase '$phrase'"
+  done
+  # Ahead of the first imperative, not merely present somewhere in a 900-line
+  # file: the worker this is for reads the first screen and acts.
+  notice=$(grep -n -F -m1 'this file is not addressed to you' "$AGENTS" | cut -d: -f1)
+  contract=$(grep -n -F -m1 'You are the first mate.' "$AGENTS" | cut -d: -f1)
+  [ -n "$notice" ] && [ -n "$contract" ] \
+    || fail "could not locate both the worker notice and the start of the operating contract"
+  [ "$notice" -lt "$contract" ] \
+    || fail "the worker-addressee notice (line $notice) does not precede the operating contract (line $contract)"
+  # The notice reaches a Claude worker only because CLAUDE.md is the same file.
+  [ -L "$ROOT/CLAUDE.md" ] || fail "CLAUDE.md is not a symlink, so it no longer inherits the notice"
+  [ "$(readlink "$ROOT/CLAUDE.md")" = "AGENTS.md" ] \
+    || fail "CLAUDE.md does not point at AGENTS.md, so it no longer inherits the notice"
+  pass "AGENTS.md tells a worker it is not the addressee, before the contract begins"
+}
+
 test_new_skill_metadata_and_triggers
 test_every_skill_declares_a_load_trigger
 test_domain_modeling_owner_is_triggered_and_attributed
@@ -483,3 +522,4 @@ test_state_startup_and_ordinary_recovery_placement
 test_recovery_stop_is_keyed_on_the_degraded_state
 test_compressed_agents_owner_map
 test_compressed_agents_retains_authority_and_supervision_safety
+test_agents_md_tells_a_worker_it_is_not_addressed
