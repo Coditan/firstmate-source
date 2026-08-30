@@ -19,9 +19,14 @@
 #   common directory as a second writable root, which is what lets it write refs -
 #   creating its branch first of all. That grant is the git directory only: the
 #   project's working tree is never a writable root. A Codex secondmate gets neither.
+#   A Codex CREWMATE also gets the project's own no-mistakes gate repository as a
+#   third writable root, which is what lets its gate push create the quarantine
+#   directory git-receive-pack needs - the step every pipeline ship task dies at
+#   without it. That grant is ONE project's gate: the daemon's own directory and
+#   every other project's gate stay refused. A Codex secondmate gets none of the three.
 #   Those grants live on the launch line rather than in the profile file on purpose
 #   (docs/codex-sandbox-network.md, docs/codex-sandbox-git-directory.md,
-#   docs/codex-status-signalling.md).
+#   docs/codex-sandbox-gate-repo.md, docs/codex-status-signalling.md).
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   spawn. Without it, the script resolves FM_BACKEND, then config/backend, then
 #   runtime auto-detection (the runtime firstmate itself is executing inside -
@@ -124,9 +129,11 @@
 #                  overlay is written ONLY when the launch command names it, and a
 #                  claude-shaped raw launch command gets --settings for it injected
 #     __CODEXCONFIG__ Codex profile overrides parsed from .codex/config.toml, plus
-#                  Codex launch-line grants for the per-task signal directory and
-#                  crewmate-only network access (docs/codex-status-signalling.md,
-#                  docs/codex-sandbox-network.md)
+#                  Codex launch-line grants for the per-task signal directory,
+#                  crewmate-only network access, and the crewmate-only git common
+#                  directory and no-mistakes gate repository writable roots
+#                  (docs/codex-status-signalling.md, docs/codex-sandbox-network.md,
+#                  docs/codex-sandbox-git-directory.md, docs/codex-sandbox-gate-repo.md)
 #     __PIEXT__    absolute path to state/<task-id>.pi-ext.ts (pi turn-end extension,
 #                  written by this script; outside the worktree to avoid pi's trust gate)
 #     __PITURNEND__ absolute path to .pi/extensions/fm-primary-turnend-guard.ts in a pi secondmate home
@@ -732,7 +739,7 @@ toml_double_quoted_value() {  # <value>
 }
 
 codex_config_flags_for_harness() {
-  local harness=$1 kind=$2 signal_dir=${3:-} git_common_dir=${4:-} key value roots=
+  local harness=$1 kind=$2 signal_dir=${3:-} git_common_dir=${4:-} gate_repo_dir=${5:-} key value roots=
   case "$harness" in
     codex*) ;;
     *) return 0 ;;
@@ -756,6 +763,22 @@ codex_config_flags_for_harness() {
   if [ -n "$git_common_dir" ]; then
     [ -z "$roots" ] || roots="$roots, "
     roots="$roots\"$(toml_double_quoted_value "$git_common_dir")\""
+  fi
+  # The no-mistakes gate repository is a bare repo under the daemon's data directory,
+  # so it is in none of the roots above: without it the sandbox refuses the quarantine
+  # directory git-receive-pack creates for an incoming push, and every Codex-dispatched
+  # pipeline ship task dies at the gate push (docs/codex-sandbox-gate-repo.md). A push
+  # to a local path runs receive-pack as the PUSHING process, which is why this is the
+  # crewmate's confinement to answer rather than the daemon's.
+  # This grants ONE project's gate. The daemon's own bin/ and runtime directory stay
+  # refused, and so does every other project's gate, which is why the grant is the
+  # resolved gate repository and never the /home/<user>/.no-mistakes/repos root: that
+  # root would hand every crewmate write access to every other project's gate.
+  # Guarded on kind here as well as at the call site, so a secondmate cannot acquire
+  # the root through a caller that resolved one anyway.
+  if [ -n "$gate_repo_dir" ] && [ "$kind" != secondmate ]; then
+    [ -z "$roots" ] || roots="$roots, "
+    roots="$roots\"$(toml_double_quoted_value "$gate_repo_dir")\""
   fi
   [ -z "$roots" ] || printf -- '-c %s ' "$(shell_quote "sandbox_workspace_write.writable_roots=[$roots]")"
   # A secondmate is a supervising firstmate home rather than a pipeline worker: it
@@ -802,6 +825,79 @@ codex_git_common_dir_grant() {  # <worktree>
     return 0
   fi
   printf '%s\n' "$common"
+}
+
+# The no-mistakes gate repository a Codex direct report must be able to write, or
+# empty when the project has no gate configured.
+#
+# Resolved from the worktree remote's effective push destination, which is the exact
+# local path `git push` will hand to git-receive-pack. That is deliberately obtained
+# from git itself, rather than a parallel oracle that could disagree with the push:
+# `no-mistakes status` also prints the gate, but it is human-formatted, it needs the
+# daemon up to answer, and it resolves the primary repo rather than this worktree.
+# A linked worktree shares its repository's config, so asking the worktree is correct.
+# Resolved FROM the worktree, because a relative remote url is relative to the
+# repository rather than to wherever fm-spawn was invoked, and canonicalized with
+# pwd -P for the same reason PROJ_ABS_REAL is: the sandbox compares physically
+# resolved paths, so a symlinked prefix here would name a root that never matches.
+# Plain paths, local `file:///` URLs, and `file://localhost/` URLs are supported.
+# Other schemes, host-bearing file URLs, and scp-style destinations with a colon
+# before the first slash cannot name a local writable root and therefore refuse.
+#
+# A project with no no-mistakes remote is not gated, so there is nothing to grant and
+# this returns empty rather than inventing a root - the same shape as a plain clone
+# needing no git-directory root. Such a worker is no worse off than before this grant
+# existed; creating a gate that does not exist yet is NOT covered, because that writes
+# into the repos root this grant deliberately does not include.
+#
+# Unresolvable is a refusal, not a silent fallback: a configured gate remote means the
+# worker WILL push there, so launching with the root silently dropped would strand it
+# at the gate push with a message that names none of this - exactly the failure this
+# grant exists to end.
+#
+# The authorized capability is one project gate. A remote with several effective
+# push destinations therefore refuses rather than granting only a subset that still
+# fails or widening the capability to several gates that were never approved.
+# The resolved directory must itself be a bare git repository, so a misconfigured
+# remote cannot turn a project worktree or the daemon data directory into the grant.
+codex_gate_repo_grant() {  # <worktree>
+  local wt urls url_count url path prefix gate bare git_dir
+  wt=$1
+  git -C "$wt" remote 2>/dev/null | grep -Fxq no-mistakes || return 0
+  urls=$(git -C "$wt" remote get-url --push --all no-mistakes 2>/dev/null) || urls=
+  url_count=$(printf '%s\n' "$urls" | sed '/^$/d' | wc -l | tr -d ' ')
+  if [ "$url_count" -gt 1 ]; then
+    echo "error: $wt names $url_count effective push destinations for its no-mistakes remote; refusing to launch a Codex worker authorized to write one project gate" >&2
+    return 1
+  fi
+  url=$urls
+  case "$url" in
+    file://localhost/*) path=${url#file://localhost} ;;
+    file:///*) path=${url#file://} ;;
+    *://*) path= ;;
+    /*|./*|../*) path=$url ;;
+    *:*)
+      prefix=${url%%:*}
+      case "$prefix" in
+        */*) path=$url ;;
+        *) path= ;;
+      esac
+      ;;
+    *) path=$url ;;
+  esac
+  gate=$(cd "$wt" && cd "$path" 2>/dev/null && pwd -P) || gate=
+  if [ -z "$gate" ]; then
+    echo "error: $wt names a no-mistakes gate at '$url' that does not resolve to a directory; refusing to launch a Codex worker whose gate push the sandbox would then refuse" >&2
+    return 1
+  fi
+  bare=$(git -C "$gate" rev-parse --is-bare-repository 2>/dev/null) || bare=
+  git_dir=$(git -C "$gate" rev-parse --absolute-git-dir 2>/dev/null) || git_dir=
+  [ -z "$git_dir" ] || git_dir=$(cd "$git_dir" 2>/dev/null && pwd -P) || git_dir=
+  if [ "$bare" != true ] || [ "$git_dir" != "$gate" ]; then
+    echo "error: $wt names a no-mistakes gate at '$url', resolved to '$gate', that is not a bare gate repository; refusing to launch a Codex worker with that writable root" >&2
+    return 1
+  fi
+  printf '%s\n' "$gate"
 }
 
 json_escape() {
@@ -1470,12 +1566,21 @@ EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
 # common directory is the FIRSTMATE repository's own git directory, shared with the
 # primary checkout. Its crewmates get the grant from its own call into this path.
 CODEX_GIT_COMMON_DIR=
+# The project's no-mistakes gate is a bare repo under the daemon's data directory,
+# outside every root granted so far, so the sandbox refuses the quarantine directory
+# its gate push must create - the step a pipeline ship task dies at. A secondmate is
+# excluded for the same reason as above: it supervises rather than ships and runs no
+# pipeline of its own, and its crewmates get the grant from its own call into this path.
+CODEX_GATE_REPO_DIR=
 if [ "$KIND" != secondmate ]; then
   case "$HARNESS" in
-    codex*) CODEX_GIT_COMMON_DIR=$(codex_git_common_dir_grant "$WT") || exit 1 ;;
+    codex*)
+      CODEX_GIT_COMMON_DIR=$(codex_git_common_dir_grant "$WT") || exit 1
+      CODEX_GATE_REPO_DIR=$(codex_gate_repo_grant "$WT") || exit 1
+      ;;
   esac
 fi
-CODEXCONFIG=$(codex_config_flags_for_harness "$HARNESS" "$KIND" "${TASK_SIGNAL_DIR_REAL:-}" "$CODEX_GIT_COMMON_DIR")
+CODEXCONFIG=$(codex_config_flags_for_harness "$HARNESS" "$KIND" "${TASK_SIGNAL_DIR_REAL:-}" "$CODEX_GIT_COMMON_DIR" "$CODEX_GATE_REPO_DIR")
 META_WINDOW=$T
 [ "$BACKEND" = orca ] && META_WINDOW=$W
 if [ "$KIND" = secondmate ] && [ "$SPAWN_TASK_LOCK_HELD" != 1 ]; then

@@ -787,6 +787,352 @@ SH
   pass "an unresolvable git common directory refuses the launch instead of silently dropping the grant"
 }
 
+# Point a fixture repository at a bare gate the way `no-mistakes init` does, so the
+# spawn resolves the grant from the same effective push destination a real push uses.
+# Returns the physically resolved gate path, which is what the launch line must name.
+fm_fixture_gate_repo() {  # <repo> <gate-dir>
+  local repo=$1 gate=$2
+  git init -q --bare "$gate" || fail "test setup: could not create the fixture gate at $gate"
+  git -C "$repo" remote add no-mistakes "$gate" \
+    || fail "test setup: could not point $repo at the fixture gate"
+  (cd "$gate" && pwd -P) || fail "test setup: could not canonicalize $gate"
+}
+
+# A gate push runs git-receive-pack as the PUSHING process, so the quarantine
+# directory it creates under the gate's objects/ is created by the sandboxed crewmate
+# and refused: every Codex-dispatched pipeline ship task dies there
+# (docs/codex-sandbox-gate-repo.md). These thirteen tests pin the third writable root from
+# every side a later edit could break it from: a crewmate must carry it, it must name
+# ONE gate and never the repos root that would reach every other project's gate, a
+# push URL override must replace the fetch URL, a secondmate must not carry it even
+# when one is resolvable, an ungated project must still launch, and a configured gate
+# whose push destination is missing, multiple, non-bare, or does not resolve must refuse.
+test_codex_crewmate_can_write_its_gate_repository() {
+  local rec id gate out status launch roots
+  id=profile-codex-gate-z27
+  rec=$(make_spawn_case profile-codex-gate codex "$id")
+  read_case_record "$rec"
+  gate=$(fm_fixture_gate_repo "$PROJ_DIR" "$CASE_DIR/gate.git")
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "codex ship spawn should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  roots=$(codex_launch_writable_roots "$launch")
+  assert_root_present "$roots" "$gate" \
+    "codex ship launch does not name the gate repository its pipeline push must write"
+  assert_contains "$launch" "$CODEX_CREW_NETWORK_FLAG" \
+    "the gate grant displaced the network grant that reaches the daemon socket"
+  assert_root_present "$roots" "$HOME_DIR/state/.crew-signal/$id" \
+    "the gate grant displaced the per-task signal root"
+  assert_root_present "$roots" "$(codex_resolved_git_common_dir "$WT_DIR")" \
+    "the gate grant displaced the git common directory root"
+  assert_not_contains "$launch" "danger-full-access" \
+    "the gate grant must not be delivered by widening the whole sandbox"
+  assert_not_contains "$launch" "--dangerously-bypass-approvals-and-sandbox" \
+    "the gate grant must not be delivered by bypassing the sandbox"
+  pass "a codex crewmate launch grants the gate repository its pipeline push writes"
+}
+
+# The boundary this grant must draw in the capability, not only in the brief text.
+# Granting the repos ROOT would work too, and would hand every crewmate write access
+# to every other project's gate and to any gate created later; granting the daemon's
+# own directory would reach the binary a crewmate is forbidden to touch. Measured:
+# with one gate granted, a sibling gate and the daemon directory both stay refused.
+test_codex_gate_grant_names_one_gate_not_the_repository_root() {
+  local rec id gate out status launch roots repos_root
+  id=profile-codex-gate-scope-z28
+  rec=$(make_spawn_case profile-codex-gate-scope codex "$id")
+  read_case_record "$rec"
+  mkdir -p "$CASE_DIR/nm/repos"
+  gate=$(fm_fixture_gate_repo "$PROJ_DIR" "$CASE_DIR/nm/repos/deadbeef.git")
+  repos_root=$(cd "$CASE_DIR/nm/repos" && pwd -P)
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "codex ship spawn should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  roots=$(codex_launch_writable_roots "$launch")
+  assert_root_present "$roots" "$gate" "codex ship launch lost its own gate root"
+  assert_root_absent "$roots" "$repos_root" \
+    "codex ship launch widened the gate grant to the repository root, reaching every other project's gate"
+  assert_root_absent "$roots" "$(cd "$CASE_DIR/nm" && pwd -P)" \
+    "codex ship launch widened the gate grant to the daemon's own data directory"
+  pass "the gate grant names one project's gate, never the repository root or the daemon directory"
+}
+
+test_codex_gate_grant_uses_effective_push_destination() {
+  local rec id fetch_gate push_gate out status launch roots
+  id=profile-codex-gate-pushurl-z33
+  rec=$(make_spawn_case profile-codex-gate-pushurl codex "$id")
+  read_case_record "$rec"
+  fetch_gate=$(fm_fixture_gate_repo "$PROJ_DIR" "$CASE_DIR/fetch-gate.git")
+  git init -q --bare "$CASE_DIR/push-gate.git" \
+    || fail "test setup: could not create the push fixture gate"
+  git -C "$PROJ_DIR" config remote.no-mistakes.pushurl "$CASE_DIR/push-gate.git" \
+    || fail "test setup: could not configure the fixture push URL"
+  push_gate=$(cd "$CASE_DIR/push-gate.git" && pwd -P) \
+    || fail "test setup: could not canonicalize the push fixture gate"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "codex ship spawn with a push URL override should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  roots=$(codex_launch_writable_roots "$launch")
+  assert_root_present "$roots" "$push_gate" \
+    "codex ship launch does not grant the remote's effective push destination"
+  assert_root_absent "$roots" "$fetch_gate" \
+    "codex ship launch grants the fetch URL instead of the effective push destination"
+  pass "the gate grant follows the remote's effective push destination"
+}
+
+test_codex_gate_grant_accepts_local_file_url() {
+  local rec id gate out status launch roots
+  id=profile-codex-gate-file-url-z37
+  rec=$(make_spawn_case profile-codex-gate-file-url codex "$id")
+  read_case_record "$rec"
+  git init -q --bare "$CASE_DIR/file-url-gate.git" \
+    || fail "test setup: could not create the file URL fixture gate"
+  gate=$(cd "$CASE_DIR/file-url-gate.git" && pwd -P) \
+    || fail "test setup: could not canonicalize the file URL fixture gate"
+  git -C "$PROJ_DIR" remote add no-mistakes "file://$gate" \
+    || fail "test setup: could not configure the local file URL gate"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "codex ship spawn with a local file URL gate should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  roots=$(codex_launch_writable_roots "$launch")
+  assert_root_present "$roots" "$gate" \
+    "codex ship launch did not normalize the local file URL to its gate path"
+  pass "a local file URL gate becomes its filesystem writable root"
+}
+
+test_codex_gate_grant_accepts_anchored_colon_path() {
+  local rec id gate out status launch roots
+  id=profile-codex-gate-colon-path-z38
+  rec=$(make_spawn_case profile-codex-gate-colon-path codex "$id")
+  read_case_record "$rec"
+  git init -q --bare "$WT_DIR/name:gate.git" \
+    || fail "test setup: could not create the anchored colon-path gate"
+  gate=$(cd "$WT_DIR/name:gate.git" && pwd -P) \
+    || fail "test setup: could not canonicalize the anchored colon-path gate"
+  git -C "$PROJ_DIR" remote add no-mistakes "./name:gate.git" \
+    || fail "test setup: could not configure the anchored colon-path gate"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "codex ship spawn with an anchored colon-path gate should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  roots=$(codex_launch_writable_roots "$launch")
+  assert_root_present "$roots" "$gate" \
+    "codex ship launch rejected an explicitly anchored local path containing a colon"
+  pass "an anchored colon-path gate remains a local writable root"
+}
+
+test_codex_scp_style_gate_destination_refuses_the_launch() {
+  local rec id gate out status launch roots
+  id=profile-codex-scp-gate-z39
+  rec=$(make_spawn_case profile-codex-scp-gate codex "$id")
+  read_case_record "$rec"
+  git init -q --bare "$WT_DIR/host:gate.git" \
+    || fail "test setup: could not create the matching scp-style fixture directory"
+  gate=$(cd "$WT_DIR/host:gate.git" && pwd -P) \
+    || fail "test setup: could not canonicalize the matching scp-style fixture directory"
+  git -C "$PROJ_DIR" remote add no-mistakes "host:gate.git" \
+    || fail "test setup: could not configure the scp-style gate destination"
+
+  set +e
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR"); status=$?
+  set -e
+
+  [ "$status" != 0 ] \
+    || fail "codex spawn launched despite a scp-style gate destination"$'\n'"--- output ---"$'\n'"$out"
+  assert_contains "$out" "does not resolve to a directory" \
+    "the refusal did not identify the scp-style gate as ungrantable"
+  launch=$(cat "$LAUNCH_LOG")
+  [ -z "$launch" ] \
+    || fail "codex spawn composed a launch line after refusing the scp-style gate"$'\n'"$launch"
+  roots=$(codex_launch_writable_roots "$launch")
+  assert_root_absent "$roots" "$gate" \
+    "the scp-style destination granted its coincidentally matching local repository"
+  pass "a scp-style gate cannot grant a matching local repository"
+}
+
+# A secondmate supervises rather than ships and runs no pipeline of its own, so it
+# needs no gate root. Its home is given a resolvable gate here on purpose: a test
+# whose fixture has no gate to find would pass without exercising the guard at all.
+test_codex_secondmate_does_not_carry_the_gate_grant() {
+  local rec id sm out status launch roots count
+  id=secondmate-codex-gate-z29
+  rec=$(make_spawn_case secondmate-codex-gate codex "$id")
+  read_case_record "$rec"
+  sm="$CASE_DIR/secondmate-home"
+  fm_git_init_commit "$sm"
+  make_seeded_secondmate_home "$sm" "$id"
+  fm_fixture_gate_repo "$sm" "$CASE_DIR/secondmate-gate.git" > /dev/null
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
+  status=$?
+  expect_code 0 "$status" "secondmate codex spawn should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_not_contains "$launch" "gate.git" \
+    "the crewmate-only gate grant widened to a secondmate, which runs no pipeline of its own"
+  roots=$(codex_launch_writable_roots "$launch")
+  count=$(printf '%s\n' "$roots" | sed '/^$/d' | wc -l | tr -d ' ')
+  [ "$count" = 1 ] \
+    || fail "secondmate codex launch carries $count writable roots, not the signal root alone"$'\n'"--- roots ---"$'\n'"$roots"
+  assert_root_present "$roots" "$HOME_DIR/state/.crew-signal/$id" \
+    "secondmate codex launch lost its per-task signal root"
+  pass "a codex secondmate launch omits the crewmate-only gate grant"
+}
+
+# A project with no no-mistakes remote is not gated, so there is nothing to grant.
+# That is the legitimate empty case, not a failure: refusing it would break every
+# spawn into a project that has not been gated, which worked before this grant existed.
+test_codex_ungated_project_gets_no_gate_root() {
+  local rec id out status launch roots count
+  id=profile-codex-ungated-z30
+  rec=$(make_spawn_case profile-codex-ungated codex "$id")
+  read_case_record "$rec"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "codex spawn into an ungated project should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  roots=$(codex_launch_writable_roots "$launch")
+  count=$(printf '%s\n' "$roots" | sed '/^$/d' | wc -l | tr -d ' ')
+  [ "$count" = 2 ] \
+    || fail "an ungated project produced $count writable roots, not the signal and git-directory roots alone"$'\n'"--- roots ---"$'\n'"$roots"
+  pass "a project with no gate configured adds no third writable root"
+}
+
+# Unresolvable must refuse. A configured gate remote means the worker WILL push
+# there, so composing the launch line with the root silently dropped would strand it
+# at the gate push with a message that names none of this.
+test_codex_unresolvable_gate_repo_refuses_the_launch() {
+  local rec id out status
+  id=profile-codex-nogate-z31
+  rec=$(make_spawn_case profile-codex-nogate codex "$id")
+  read_case_record "$rec"
+  git -C "$PROJ_DIR" remote add no-mistakes "$CASE_DIR/gate-that-does-not-exist.git" \
+    || fail "test setup: could not point the fixture at a missing gate"
+
+  # The same set +e/set -e wrapper the sibling refusal test uses: a nonzero spawn is
+  # this test's expected result, not its failure.
+  set +e
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR"); status=$?
+  set -e
+
+  [ "$status" != 0 ] \
+    || fail "codex spawn launched despite an unresolvable gate repository"$'\n'"--- output ---"$'\n'"$out"
+  assert_contains "$out" "does not resolve to a directory" \
+    "the refusal did not name the unresolvable gate repository"
+  [ ! -s "$LAUNCH_LOG" ] \
+    || fail "codex spawn composed a launch line after refusing the gate grant"$'\n'"$(cat "$LAUNCH_LOG")"
+  pass "an unresolvable gate repository refuses the launch instead of silently dropping the grant"
+}
+
+test_codex_configured_gate_without_push_destination_refuses_the_launch() {
+  local rec id out status
+  id=profile-codex-empty-gate-z34
+  rec=$(make_spawn_case profile-codex-empty-gate codex "$id")
+  read_case_record "$rec"
+  git -C "$PROJ_DIR" config remote.no-mistakes.url "" \
+    || fail "test setup: could not configure an empty gate URL"
+
+  set +e
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR"); status=$?
+  set -e
+
+  [ "$status" != 0 ] \
+    || fail "codex spawn launched despite a configured gate with no push destination"$'\n'"--- output ---"$'\n'"$out"
+  assert_contains "$out" "does not resolve to a directory" \
+    "the refusal did not name the configured gate's unresolvable push destination"
+  [ ! -s "$LAUNCH_LOG" ] \
+    || fail "codex spawn composed a launch line after effective push resolution failed"$'\n'"$(cat "$LAUNCH_LOG")"
+  pass "a configured gate without an effective push destination refuses the launch"
+}
+
+test_codex_gate_with_multiple_push_destinations_refuses_the_launch() {
+  local rec id gate_one gate_two out status launch
+  id=profile-codex-multiple-gates-z35
+  rec=$(make_spawn_case profile-codex-multiple-gates codex "$id")
+  read_case_record "$rec"
+  gate_one=$(fm_fixture_gate_repo "$PROJ_DIR" "$CASE_DIR/push-gate-one.git")
+  git init -q --bare "$CASE_DIR/push-gate-two.git" \
+    || fail "test setup: could not create the second push fixture gate"
+  gate_two=$(cd "$CASE_DIR/push-gate-two.git" && pwd -P) \
+    || fail "test setup: could not canonicalize the second push fixture gate"
+  git -C "$PROJ_DIR" config --add remote.no-mistakes.pushurl "$gate_one" \
+    || fail "test setup: could not configure the first push destination"
+  git -C "$PROJ_DIR" config --add remote.no-mistakes.pushurl "$gate_two" \
+    || fail "test setup: could not configure the second push destination"
+
+  set +e
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR"); status=$?
+  set -e
+
+  [ "$status" != 0 ] \
+    || fail "codex spawn launched despite multiple effective push destinations"$'\n'"--- output ---"$'\n'"$out"
+  assert_contains "$out" "names 2 effective push destinations" \
+    "the refusal did not name the worktree's multiple effective push destinations"
+  launch=$(cat "$LAUNCH_LOG")
+  [ -z "$launch" ] \
+    || fail "codex spawn composed a launch line after refusing multiple gate destinations"$'\n'"$launch"
+  assert_not_contains "$launch" "$gate_one" "the refused launch granted the first push destination"
+  assert_not_contains "$launch" "$gate_two" "the refused launch granted the second push destination"
+  pass "multiple effective gate push destinations refuse the launch"
+}
+
+test_codex_non_bare_gate_destination_refuses_the_launch() {
+  local rec id out status launch roots worktree
+  id=profile-codex-non-bare-gate-z36
+  rec=$(make_spawn_case profile-codex-non-bare-gate codex "$id")
+  read_case_record "$rec"
+  worktree=$(cd "$PROJ_DIR" && pwd -P) \
+    || fail "test setup: could not canonicalize the project working tree"
+  git -C "$PROJ_DIR" remote add no-mistakes "$worktree" \
+    || fail "test setup: could not point the fixture gate remote at its working tree"
+
+  set +e
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR"); status=$?
+  set -e
+
+  [ "$status" != 0 ] \
+    || fail "codex spawn launched despite a non-bare gate destination"$'\n'"--- output ---"$'\n'"$out"
+  assert_contains "$out" "is not a bare gate repository" \
+    "the refusal did not identify the non-bare gate destination"
+  launch=$(cat "$LAUNCH_LOG")
+  [ -z "$launch" ] \
+    || fail "codex spawn composed a launch line after refusing the non-bare gate"$'\n'"$launch"
+  roots=$(codex_launch_writable_roots "$launch")
+  assert_root_absent "$roots" "$worktree" \
+    "the refused non-bare destination made the project working tree writable"
+  pass "a non-bare gate destination cannot become a writable root"
+}
+
+# The gate grant lives entirely in the codex branch of the launch composition, like
+# its two siblings. This fixture IS gated, so a claude launch that acquired anything
+# would show it here; the harnesses the fleet runs today must be untouched.
+test_non_codex_crewmate_acquires_no_gate_grant() {
+  local rec id gate out status launch
+  id=profile-claude-gate-z32
+  rec=$(make_spawn_case profile-claude-gate claude "$id")
+  read_case_record "$rec"
+  gate=$(fm_fixture_gate_repo "$PROJ_DIR" "$CASE_DIR/gate.git")
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "claude spawn into a gated project should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_not_contains "$launch" "$gate" \
+    "the codex gate grant leaked into a claude launch"
+  assert_not_contains "$launch" "writable_roots" \
+    "codex sandbox writable roots leaked into a claude launch"
+  pass "a non-codex crewmate launch acquires no gate grant even in a gated project"
+}
+
 # The grant lives entirely in the codex branch of the launch composition. A claude
 # crewmate's launch line is unchanged by it, which is what keeps this change from
 # altering the behaviour of the harness the fleet runs today.
@@ -1016,6 +1362,19 @@ test_codex_crewmate_can_write_its_worktree_refs
 test_codex_crewmate_is_not_granted_the_project_working_tree
 test_codex_plain_clone_gets_no_second_writable_root
 test_codex_unresolvable_common_dir_refuses_the_launch
+test_codex_crewmate_can_write_its_gate_repository
+test_codex_gate_grant_names_one_gate_not_the_repository_root
+test_codex_gate_grant_uses_effective_push_destination
+test_codex_gate_grant_accepts_local_file_url
+test_codex_gate_grant_accepts_anchored_colon_path
+test_codex_scp_style_gate_destination_refuses_the_launch
+test_codex_secondmate_does_not_carry_the_gate_grant
+test_codex_ungated_project_gets_no_gate_root
+test_codex_unresolvable_gate_repo_refuses_the_launch
+test_codex_configured_gate_without_push_destination_refuses_the_launch
+test_codex_gate_with_multiple_push_destinations_refuses_the_launch
+test_codex_non_bare_gate_destination_refuses_the_launch
+test_non_codex_crewmate_acquires_no_gate_grant
 test_non_codex_crewmate_acquires_no_sandbox_network_grant
 test_tracked_codex_profile_leaves_launch_grants_to_the_launch_line
 test_grok_threads_model_and_reasoning_effort

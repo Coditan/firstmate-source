@@ -178,7 +178,7 @@ Check the spawning home's own `bin/fm-spawn.sh` for the grant before concluding 
 
 The network grant covers the network dimension and nothing else.
 A separate per-task signal writable root is documented in [`docs/codex-status-signalling.md`](codex-status-signalling.md), with completion-gate attestation evidence owned by [`docs/codex-completion-gate.md`](codex-completion-gate.md).
-The `PROBE1` refusal below is closed by a separate git-directory writable root, owned by [`docs/codex-sandbox-git-directory.md`](codex-sandbox-git-directory.md); `PROBE2` is not, and stays as recorded here.
+The `PROBE1` refusal below is closed by a separate git-directory writable root, owned by [`docs/codex-sandbox-git-directory.md`](codex-sandbox-git-directory.md); `PROBE2` is closed by a separate gate-repository writable root, owned by [`docs/codex-sandbox-gate-repo.md`](codex-sandbox-gate-repo.md).
 A pipeline run also writes in two places outside the workspace, and the sandbox refuses both.
 Measured 2026-08-11 from a real `codex exec` worker carrying the full crewmate profile, network grant included:
 
@@ -202,8 +202,9 @@ Another lane's run pushed to that same repository successfully the same day, and
 The refusal is the sandbox.
 
 So the grant is necessary but not sufficient for an end-to-end Codex pipeline run.
-Closing that gap would need `writable_roots` extended to cover the no-mistakes data directory, which is a second confinement dimension on the filesystem axis rather than a wider setting of this one.
-That is a separate captain decision, and it is deliberately not taken here.
+Closing that gap needs `writable_roots` extended on the filesystem axis, which is a second confinement dimension rather than a wider setting of this one.
+That was a separate captain decision, taken on 2026-08-29 and owned by [`docs/codex-sandbox-gate-repo.md`](codex-sandbox-gate-repo.md).
+It extends to the project's own gate repository alone, not to the no-mistakes data directory this section anticipated: measurement showed one gate is enough for the push, while the data directory would have reached the daemon and every other project's gate.
 
 An earlier draft of this section inferred that the approval path, `approval_policy = "on-request"` with `approvals_reviewer = "auto_review"`, is what clears such a filesystem refusal, reasoning from the fact that Codex crewmates do commit in this linked-worktree layout.
 The run above is evidence against that inference for the gate push: the worker had both settings available, did not escalate, and returned the error.
