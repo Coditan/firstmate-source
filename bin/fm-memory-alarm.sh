@@ -379,6 +379,10 @@ OFFENDER=
 RESIDENT=
 CROSS_KIND=
 CROSS_SET=
+HEADROOM_BLIND=
+FLOOR_CLEAR=
+HORIZON_CLEAR=
+STALL_CLEAR=
 
 # Which of the three conditions this poll could not JUDGE, in a fixed order so
 # two polls that saw the same thing produce the same string. It is derived from
@@ -578,6 +582,10 @@ evaluate() {
   fi
 
   if [ "$headroom_state" = blind ]; then
+    HEADROOM_BLIND=yes
+    # Nothing was judged, so nothing cleared. Stated rather than left to the
+    # empty initialiser, because a held raiser is released on these very flags.
+    FLOOR_CLEAR=no; HORIZON_CLEAR=no; STALL_CLEAR=no
     REASON="the memory reading could not read this machine's RAM headroom, so no condition could be judged and whether this machine is in trouble is unknown"
     stall_gate_note
     return
@@ -609,6 +617,30 @@ evaluate() {
   # watching has to say so rather than pass for a clear reading.
   [ -n "$STALL_MAX" ] || STALL_UNSET="no stall gate is configured for this home, so this machine is not being watched for memory stall at all"
   read_stall_run
+
+  # Whether each condition is clear of its threshold BY THE MARGIN, decided here
+  # rather than on the calm path alone, because the crossing record consults it
+  # to decide which raisers this poll may release. A condition that merely dipped
+  # back under its threshold has not cleared: the margin is what clearing means,
+  # and an `elevated` poll has by definition cleared nothing.
+  FLOOR_CLEAR=yes; HORIZON_CLEAR=yes; STALL_CLEAR=yes
+  awk -v a="$AVAIL_MIB" -v f="$FLOOR_MIB" -v r="$RECOVERY" 'BEGIN { exit !(a + 0 >= f * r) }' || FLOOR_CLEAR=no
+  if [ -z "$GROWTH_BLIND" ] && [ "$MINUTES" != NA ]; then
+    awk -v m="$MINUTES" -v h="$HORIZON_MIN" -v r="$RECOVERY" 'BEGIN { exit !(m + 0 >= h * r) }' || HORIZON_CLEAR=no
+  fi
+  # This condition crosses on duration, so it clears on duration too: the run
+  # must fit inside the window with the margin applied to it, because a crossing
+  # here is a LONG run. The margin multiplies the run rather than dividing the
+  # window so that an unusable RECOVERY degrades to zero and still clears, the
+  # same harmless way it does for the two conditions above, instead of making
+  # awk divide by zero and pinning this machine at elevated forever.
+  # It deliberately does not test the instantaneous level: ordinary heavy work
+  # goes over the gate all the time, and holding a headroom recovery back
+  # because somebody is running the linter would change what the other two
+  # conditions do, which this addition may not.
+  if [ -z "$STALL_BLIND" ] && [ -z "$STALL_UNSET" ]; then
+    awk -v r="$STALL_RUN_SECONDS" -v w="$STALL_WINDOW" -v m="$RECOVERY" 'BEGIN { exit !(r * m <= w + 0) }' || STALL_CLEAR=no
+  fi
 
   # Crossed if ANY condition holds. Recovery must clear ALL of them by the
   # margin, so adding a condition can only make recovery harder to declare.
@@ -662,24 +694,7 @@ evaluate() {
 
   # Below the recovery bar but not crossed: still elevated, so a machine
   # hovering at the line is not repeatedly declared recovered.
-  local floor_clear=yes horizon_clear=yes stall_clear=yes
-  awk -v a="$AVAIL_MIB" -v f="$FLOOR_MIB" -v r="$RECOVERY" 'BEGIN { exit !(a + 0 >= f * r) }' || floor_clear=no
-  if [ -z "$GROWTH_BLIND" ] && [ "$MINUTES" != NA ]; then
-    awk -v m="$MINUTES" -v h="$HORIZON_MIN" -v r="$RECOVERY" 'BEGIN { exit !(m + 0 >= h * r) }' || horizon_clear=no
-  fi
-  # This condition crosses on duration, so it clears on duration too: the run
-  # must fit inside the window with the margin applied to it, because a crossing
-  # here is a LONG run. The margin multiplies the run rather than dividing the
-  # window so that an unusable RECOVERY degrades to zero and still clears, the
-  # same harmless way it does for the two conditions above, instead of making
-  # awk divide by zero and pinning this machine at elevated forever.
-  # It deliberately does not test the instantaneous level: ordinary heavy work
-  # goes over the gate all the time, and holding a headroom recovery back
-  # because somebody is running the linter would change what the other two
-  # conditions do, which this addition may not.
-  if [ -z "$STALL_BLIND" ] && [ -z "$STALL_UNSET" ]; then
-    awk -v r="$STALL_RUN_SECONDS" -v w="$STALL_WINDOW" -v m="$RECOVERY" 'BEGIN { exit !(r * m <= w + 0) }' || stall_clear=no
-  fi
+  local floor_clear=$FLOOR_CLEAR horizon_clear=$HORIZON_CLEAR stall_clear=$STALL_CLEAR
 
   # A calm verdict has to say which conditions it actually judged, because the
   # difference between "all three read clear" and "one of them was never
@@ -884,27 +899,52 @@ in_set() {  # <condition> <set>
   return 1
 }
 
-# Whether THIS poll actually re-read a condition. Headroom always was, because
-# a poll that could not read it reaches no verdict at all.
+# Two different questions, which one predicate must never be asked to answer at
+# once. RE-READ is whether this poll actually read the condition's inputs and
+# evaluated it. An unconfigured stall gate is NOT an instrument failure: the
+# fleet chose not to watch that condition, which is the distinction the comment
+# above STALL_UNSET draws and which this must not blur.
 condition_reread() {  # <condition>
   case "$1" in
-    headroom) return 0 ;;
+    headroom) [ -z "$HEADROOM_BLIND" ] ;;
     horizon)  [ -z "$GROWTH_BLIND" ] ;;
-    stall)    [ -z "$STALL_BLIND" ] && [ -z "$STALL_UNSET" ] ;;
+    stall)    [ -z "$STALL_BLIND" ] ;;
+    *) return 1 ;;
+  esac
+}
+
+# CLEARED is whether the condition was judged this poll and found clear of its
+# threshold BY THE RECOVERY MARGIN - the same arithmetic the recovery path uses.
+# Merely dipping back under the threshold is not clearing, which is why an
+# `elevated` poll releases nothing.
+condition_cleared() {  # <condition>
+  condition_reread "$1" || return 1
+  case "$1" in
+    headroom) [ "$FLOOR_CLEAR" = yes ] ;;
+    horizon)  [ "$HORIZON_CLEAR" = yes ] ;;
+    stall)    [ "$STALL_CLEAR" = yes ] ;;
     *) return 1 ;;
   esac
 }
 
 # The crossing still on the books after this poll. A raiser leaves it only by
-# being re-read and found below its threshold; anything that crossed on this
-# poll joins it. So a shortage survives any number of polls that could not see
-# the condition holding it, and ends only on a reading that actually looked.
+# being re-read AND found clear of its threshold by the margin; anything that
+# crossed on this poll joins it. So a shortage survives any number of polls that
+# could not see the condition holding it, survives a poll that saw it merely
+# hovering, and ends only on a reading that actually looked and found it clear.
+#
+# The one other way out is the fleet switching a condition off. A stall raiser
+# recorded while a gate was configured cannot be re-read once the gate is empty,
+# so holding it would pin this home in "cannot tell" for ever; the home has
+# chosen to stop watching that condition, so the raiser is RELEASED rather than
+# cleared, and it keeps appearing in the watch set so nothing passes for calm.
 crossing_after_this_poll() {  # <held-set>
   local held=$1 out='' c
   for c in headroom horizon stall; do
     if in_set "$c" "$CROSS_SET"; then
       out="${out:+$out,}$c"
-    elif in_set "$c" "$held" && ! condition_reread "$c"; then
+    elif in_set "$c" "$held" && ! condition_cleared "$c" &&
+         ! { [ "$c" = stall ] && [ -n "$STALL_UNSET" ]; }; then
       out="${out:+$out,}$c"
     fi
   done
@@ -926,18 +966,27 @@ raiser_names() {  # <set>
   printf '%s' "$out"
 }
 
-# The raisers this poll could not re-read, phrased with the reason each gave.
-unreadable_raisers() {  # <set>
+# Why each still-held raiser is still held, in its own words: either this poll
+# could not read it at all, or it read it and found it not yet clear of its
+# threshold by the recovery margin.
+held_raiser_reasons() {  # <set>
   local set=$1 out='' c why
   for c in headroom horizon stall; do
-    if in_set "$c" "$set" && ! condition_reread "$c"; then
+    in_set "$c" "$set" || continue
+    if condition_reread "$c"; then
+      case "$c" in
+        horizon) why="growth was compared but has not cleared the horizon by the recovery margin" ;;
+        stall)   why="the memory-stall run was read but has not fallen clear of the window by the recovery margin" ;;
+        *)       why="RAM headroom was read but has not risen clear of the floor by the recovery margin" ;;
+      esac
+    else
       case "$c" in
         horizon) why="growth could not be compared this run ($GROWTH_BLIND)" ;;
-        stall)   why="memory stall could not be read this run (${STALL_BLIND:-$STALL_UNSET})" ;;
-        *)       why="RAM headroom could not be re-read this run" ;;
+        stall)   why="memory stall could not be read this run ($STALL_BLIND)" ;;
+        *)       why="RAM headroom could not be read this run" ;;
       esac
-      out="${out:+$out, and }$why"
     fi
+    out="${out:+$out, and }$why"
   done
   printf '%s' "$out"
 }
@@ -1100,7 +1149,7 @@ WATCH=$(unjudged_conditions)
 # shortage had ended.
 if [ "$VERDICT" = ok ] && [ "$CROSSED_KIND" != - ]; then
   VERDICT=unmeasured
-  REASON="whether the shortage is over is unknown: this alarm crossed on $(raiser_names "$CROSSED_KIND"), and $(unreadable_raisers "$CROSSED_KIND"), so the condition that raised it was not re-evaluated"
+  REASON="whether the shortage is over is unknown: this alarm crossed on $(raiser_names "$CROSSED_KIND"), and $(held_raiser_reasons "$CROSSED_KIND"), so not every condition that raised it has been re-read and found clear"
   incomplete_note
   stall_gate_note
 fi

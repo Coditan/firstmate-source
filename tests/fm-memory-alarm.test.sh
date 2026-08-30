@@ -152,6 +152,7 @@ unconfigured_alarm() {
   env FM_HOME="$HOME_DIR" \
       FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
       FM_MEMORY_ALARM_READING="$FAKE" FM_TEST_ANSWER="$ANSWER" \
+      FM_MEMORY_ALARM_NOW="${FM_TEST_AT:-$BASE_NOW}" \
       FM_MEMORY_ALARM_FLOOR_MIB=2400 FM_MEMORY_ALARM_HORIZON_MIN=15 \
       FM_MEMORY_ALARM_STALL='' \
       "$ALARM" "$@"
@@ -485,6 +486,104 @@ test_a_growth_sample_that_merely_aged_out_is_not_a_lost_instrument() {
   pass "a growth sample that merely aged out is scope, not a lost instrument"
 }
 
+test_a_raiser_that_only_dipped_under_its_threshold_is_not_released() {
+  # The recovery margin is what clearing means. A horizon crossing that comes
+  # back to just past the threshold - the `elevated` damping band, which is the
+  # ordinary way out of a horizon crossing - has cleared nothing, so the raiser
+  # stays on the books. Releasing it there let a later poll that could not
+  # compare growth at all declare the shortage over.
+  reset_home
+  reading 16000 true 0
+  alarm_at 0 >/dev/null
+
+  # 16000 MiB against 1600 MiB/min is 10 minutes: inside the 15-minute horizon.
+  local out
+  reading 16000 true $((1600 * 1024)) false task 'alpha (ship, alpha-project)'
+  out=$(alarm_at 300)
+  assert_contains "$out" "running out of RAM headroom" "the horizon crossing must be announced"
+
+  # 16000 MiB against 1000 MiB/min is 16 minutes: past the threshold, but short
+  # of the 18.75 the 1.25 margin demands, so this is the elevated band.
+  reading 16000 true $((1000 * 1024)) false task 'alpha (ship, alpha-project)'
+  out=$(alarm_at 600)
+  assert_contains "|$out|" "||" "a machine hovering at the line reports nothing"
+
+  # Now growth cannot be compared at all. The raiser is still held, so this poll
+  # may not call the shortage over.
+  reading_process_table_unreadable 16000
+  out=$(alarm_at 900)
+  assert_not_contains "$out" "recovered" \
+    "a poll that could not compare growth must not end a horizon shortage"
+  assert_contains "$out" "gone blind" "it must say instead that it cannot tell"
+  assert_contains "$out" "crossed on growth" "and must name the raiser still holding it"
+
+  # Growth comes back clear of the margin: 16000 against 500 is 32 minutes.
+  reading 16000 true $((500 * 1024)) false task 'alpha (ship, alpha-project)'
+  out=$(alarm_at 1200)
+  assert_contains "$out" "recovered" "clearing the margin is what ends it"
+  assert_contains "$out" "The shortage lasted 15m0s" \
+    "and the duration must run from the original crossing"
+  pass "a raiser that only dipped under its threshold is not released"
+}
+
+test_a_raiser_survives_the_poll_that_could_not_read_its_own_input() {
+  # Headroom is the one input the alarm cannot proceed without, so the poll that
+  # cannot read it judges nothing. That is precisely not a poll that re-read the
+  # headroom condition, and the raiser must survive it - otherwise the shortage's
+  # end is never reported as a recovery and its duration is lost.
+  reset_home
+  reading 16000 true 0
+  alarm_at 0 >/dev/null
+  reading 1800 true 0
+  local out
+  out=$(alarm_at 300)
+  assert_contains "$out" "running out of RAM headroom" "the headroom crossing must be announced"
+
+  reading_headroom_unmeasured
+  out=$(alarm_at 600)
+  assert_not_contains "$out" "recovered" "a poll that judged nothing must not end the shortage"
+
+  reading 16000 true 0
+  out=$(alarm_at 900)
+  assert_contains "$out" "recovered" "the shortage's end must be reported as a recovery"
+  assert_contains "$out" "The shortage lasted 10m0s" \
+    "and must carry the duration measured from the crossing"
+  assert_not_contains "$out" "can see this machine again" \
+    "a shortage that ended is a recovery, not merely a regained instrument"
+  pass "a raiser survives the poll that could not read its own input"
+}
+
+test_switching_the_stall_gate_off_releases_a_stall_raiser_it_would_otherwise_pin() {
+  # A stall raiser cannot be re-read once the gate is empty, so holding it would
+  # leave this home in "cannot tell" for ever and swallow every later recovery.
+  # The fleet has chosen to stop watching that condition, so the raiser is
+  # released - and the condition still reports itself unwatched, so nothing
+  # about it passes for calm.
+  reset_home
+  FM_TEST_STALL_WINDOW=600
+  reading 16000 true 0
+  alarm_at 0 >/dev/null
+  local out t
+  for t in 300 600 900; do
+    reading_thrashing 3577 38.0
+    out=$(alarm_at "$t")
+  done
+  assert_contains "$out" "stalling on memory" "the stall crossing must be announced"
+
+  # The operator uses the documented off switch on a now-calm machine.
+  reading_thrashing 16000 0.00
+  FM_TEST_AT=$((BASE_NOW + 1200)) out=$(unconfigured_alarm)
+  assert_not_contains "$out" "gone blind" \
+    "a condition the fleet switched off must not pin the alarm in cannot-tell"
+  assert_contains "$out" "recovered" "the shortage must be reported as over"
+  assert_contains "$out" "no stall gate is configured" \
+    "and the unwatched condition must still say so rather than pass for calm"
+
+  FM_TEST_AT=$((BASE_NOW + 1500)) out=$(unconfigured_alarm)
+  assert_contains "|$out|" "||" "and the next poll is silent rather than pinned"
+  pass "switching the stall gate off releases a stall raiser it would otherwise pin"
+}
+
 test_a_crossing_is_held_for_every_poll_that_could_not_re_read_its_raiser() {
   # The guard must key on the crossing still on the books, not on the previous
   # poll's verdict. Keyed on the verdict it holds for exactly ONE poll: the
@@ -765,7 +864,7 @@ test_recovery_is_not_declared_on_growth_nobody_could_compare() {
   out=$(alarm)
   assert_not_contains "$out" "recovered" \
     "a shortage must not be declared over by a run that never re-evaluated the condition that raised it"
-  assert_contains "$out" "not re-evaluated" "the alarm must say why it cannot call the shortage over"
+  assert_contains "$out" "re-read and found clear" "the alarm must say why it cannot call the shortage over"
   pass "recovery is never declared on the strength of growth nobody could compare"
 }
 
@@ -1127,7 +1226,7 @@ test_recovery_is_not_declared_on_a_stall_nobody_could_read() {
   out=$(alarm_at 6000)
   assert_not_contains "$out" "recovered" \
     "a shortage must not be declared over by a run that could not re-read the condition that raised it"
-  assert_contains "$out" "not re-evaluated" "the alarm must say why it cannot call the shortage over"
+  assert_contains "$out" "re-read and found clear" "the alarm must say why it cannot call the shortage over"
   pass "recovery is never declared on the strength of a stall nobody could read"
 }
 
@@ -1377,6 +1476,9 @@ test_an_input_no_condition_uses_does_not_hold_back_a_recovery
 test_a_recovery_states_how_long_the_shortage_actually_lasted
 test_sight_is_never_claimed_regained_while_a_condition_is_still_unreadable
 test_a_growth_sample_that_merely_aged_out_is_not_a_lost_instrument
+test_a_raiser_that_only_dipped_under_its_threshold_is_not_released
+test_a_raiser_survives_the_poll_that_could_not_read_its_own_input
+test_switching_the_stall_gate_off_releases_a_stall_raiser_it_would_otherwise_pin
 test_a_crossing_is_held_for_every_poll_that_could_not_re_read_its_raiser
 test_a_second_raiser_that_went_blind_still_holds_the_shortage
 test_a_crossing_after_a_blind_stretch_is_timed_from_the_crossing
