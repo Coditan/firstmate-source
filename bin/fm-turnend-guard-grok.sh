@@ -34,11 +34,31 @@ RC=$?
 [ "$RC" -eq 2 ] || exit 0
 
 REASON=$(cat "$ERR" 2>/dev/null || true)
-[ -n "$REASON" ] || REASON='tasks in flight, no live watcher - repair missing watcher supervision according to the session-start operating block before ending the turn'
+
+# This adapter prepends its own instruction to the shared guard's message, so it
+# has to pick the same addressee the shared guard did. A crewmate or scout
+# working on firstmate itself runs this adapter from its task worktree while
+# FM_ROOT_OVERRIDE still names the home that launched it, and repairing that
+# home's supervision is firstmate's under AGENTS.md, not the worker's.
+# An unreadable predicate leaves fm_session_operates_home undefined, which the
+# `if` below then reads as "not the operator" - the addressee that is handed no
+# command, and so the safe one to fall back to.
+FM_ROOT=${FM_ROOT_OVERRIDE:-$ROOT}
+if [ -r "$ROOT/bin/fm-primary-scope-lib.sh" ]; then
+  # shellcheck source=bin/fm-primary-scope-lib.sh
+  . "$ROOT/bin/fm-primary-scope-lib.sh"
+fi
+if fm_session_operates_home "$ROOT" "$FM_ROOT" 2>/dev/null; then
+  HEADLINE='TURN WOULD END BLIND - supervision is off. Repair missing watcher supervision according to the session-start operating block before ending the turn.'
+  [ -n "$REASON" ] || REASON='tasks in flight, no live watcher - repair missing watcher supervision according to the session-start operating block before ending the turn'
+else
+  HEADLINE='SUPERVISION IS OFF IN THE HOME THAT LAUNCHED THIS TASK. Repairing it belongs to firstmate, not to a task worker: report the stalled supervision in your task status line, run no fleet command against that home, and carry on with your own task in this worktree.'
+  [ -n "$REASON" ] || REASON='tasks in flight in the launching home, no live watcher - report it rather than repairing it.'
+fi
 # shellcheck source=bin/fm-operational-input.sh
 . "$ROOT/bin/fm-operational-input.sh"
 fm_operational_input_encode turn-end-guard \
-  "TURN WOULD END BLIND - supervision is off. Repair missing watcher supervision according to the session-start operating block before ending the turn.
+  "$HEADLINE
 
 $REASON" \
   PROMPT || exit 0

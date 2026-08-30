@@ -23,6 +23,19 @@ Whether a listener is up at that moment is irrelevant to whether the record surv
 Claude's PreToolUse continuity gate allows the wake drain, the supervision-repair commands, and independently fail-closed teardown, but refuses other fleet commands while tasks are in flight and no identity-matched live watcher holds the home lock.
 Allowing an ordinary literal teardown prevents a terminal wake from creating a recovery circle: forced or dynamically constructed teardown remains blocked, ordinary teardown itself still refuses dirty, unlanded, incomplete-scout, and unresolved-decision cases, and the turn-end guard continues to require supervision for any tasks left in flight.
 
+### Who the refusal is addressed to
+
+Both guards ship in tracked hook files, so every worktree of this repo carries them, including the disposable task worktree a crewmate or scout gets when the work is on firstmate itself.
+Such a worker runs the identical hook while `FM_ROOT_OVERRIDE` still names the home that launched it, so the guard evaluates that home - and on 2026-08-30 it was right to: the home lock was held by a dead process while several unlocked watcher loops kept every beacon current, and the refusal was correct even though firstmate first read it as a false alarm.
+What was wrong was the addressee.
+Three separate runtimes were each handed `bin/fm-watcher-service.sh restart` against a home with ten tasks in flight that none of them could see, and `AGENTS.md` section 1 reserves supervision repair to firstmate: a worker that obeys does damage and a worker that refuses is stuck, so both outcomes were the guard's fault rather than the worker's.
+
+`fm_session_operates_home` in `bin/fm-primary-scope-lib.sh` decides the addressee by asking whether the checkout the running hook was loaded from is the home just evaluated.
+Firstmate's own session matches, a secondmate in its own home matches, and a task worktree does not.
+It decides only wording: which home is evaluated and whether that home's supervision is unhealthy are computed identically for both addressees, so a wrong answer here can misaddress a message but can never suppress a refusal.
+An operator keeps the recovery commands verbatim; a worker is told that repairing that home belongs to firstmate, is asked to report the stalled supervision in its task status line, and is handed no command at all.
+`bin/fm-turnend-guard-grok.sh` prepends its own instruction to the shared banner, so it reads the same predicate rather than carrying a second answer.
+
 The turn-end guard remains the final backstop rather than the normal mechanism.
 Its own predicate is documented in `docs/turnend-guard.md`; since the delivery move it asks `fm_delivery_healthy` about this home's listener instead of asking whether the session armed a waiter.
 
@@ -39,6 +52,9 @@ Nothing now exits on a single stale reading, because nothing is a one-shot wait:
 
 `tests/fm-watcher-lock.test.sh` covers verified-successor attach, the typed self-eviction failure, bounded and successor-linked lifecycle rows, a SIGSTOP counterfactual that distinguishes a live PID from a stale beacon before classifying termination, and the guard's three states with work in flight.
 `tests/fm-continuity-pretool-check.test.sh` proves the Claude gate rejects only non-recovery fleet execution in the precise unhealthy state and preserves the existing Stop registration.
+It also pairs the two addressees: a worker running the gate from a task worktree is still refused but is handed none of the commands reserved to firstmate, while the session operating the home still gets its full recovery instruction.
+`tests/fm-turnend-guard.test.sh` pairs them the same way for the turn-end banner and for the grok adapter's prepended instruction.
+Both worker tests were run against the pre-fix code first and reproduced the defect verbatim.
 `tests/fm-watcher-service.test.sh` covers backend selection, consent, the keeper fallback, and source-version convergence.
 `tests/fm-delivery.test.sh` and `tests/fm-watcher-systemd-smoke.test.sh` own delivery's own coverage; `docs/wake-delivery.md` states what they prove.
 
