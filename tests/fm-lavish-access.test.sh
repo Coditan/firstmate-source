@@ -397,6 +397,8 @@ expect_code 0 "$?" "an unbindable address with a working serve must resolve, not
 proxied_port=$(field port "$proxied")
 [ "$(field route "$proxied")" = published ] \
   || fail "a serving run that published must say so in route=, got '$(field route "$proxied")'"
+[ "$(field reachability_evidence "$proxied")" = probed ] \
+  || fail "the publish attempt IS the test, so proxied reach is earned rather than assumed, got '$(field reachability_evidence "$proxied")'"
 assert_contains "$(cat "$FM_TEST_TS_SERVE_LOG")" "--http=$proxied_port" \
   "the port actually bound is the port published"
 assert_contains "$(cat "$FM_TEST_TS_SERVE_LOG")" "http://127.0.0.1:$proxied_port" \
@@ -481,6 +483,62 @@ assert_not_contains "$untested" "was not told" \
 : > "$FM_TEST_TS_SERVE_LOG"
 pass "a run that neither published nor found a route claims no proxy reach of its own"
 
+# --- allocator: a recorded verdict this run has DISPROVED is refused ---------
+#
+# The refusal is not a hypothetical the door can only be shown in isolation: a
+# container that has lost /dev/net/tun since its last allocation leaves a record
+# saying `tailnet` on a node whose address this run then proves unbindable. The
+# door refuses that carry because a test outranks a record, and the resolver has
+# no case arm deciding which recorded values are still credible.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_K2=$(make_home "$TMP_ROOT/vessel-k2")
+printf 'port=4871\nreachability=tailnet\nreachability_evidence=probed\n' \
+  > "$HOME_K2/state/service-port.lavish"
+disproved=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_K2" FM_SERVICE_PORT_RANGE=4871-4872 \
+  "$ROOT/bin/fm-service-port.sh" lavish)
+expect_code 0 "$?" "a refused carry is a resolution, not a failure"
+[ "$(field reachability "$disproved")" = untested ] \
+  || fail "a record this run disproved must not be carried, got '$(field reachability "$disproved")'"
+[ "$(field reachability_evidence "$disproved")" = none ] \
+  || fail "and nothing is left claiming to back it, got '$(field reachability_evidence "$disproved")'"
+# The half-applied record the whole mechanism exists to prevent: a tailnet
+# verdict sitting beside a loopback bind address.
+[ "$(field addr "$disproved")" = 127.0.0.1 ] \
+  || fail "the bind address still degrades, got '$(field addr "$disproved")'"
+assert_grep "reachability=untested" "$HOME_K2/state/service-port.lavish" \
+  "and the record it publishes says so too"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a verdict this run ruled out is refused however credible the record claiming it"
+
+# The concrete emission the finding named: a run whose address probe returns a
+# status that is NOT an address verdict - exit 3 here, and the same holds for a
+# probe runtime that is missing entirely. Nothing about binding that address was
+# established, so the pre-read every wrapper invocation makes must not hand back
+# a tested label for it.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+NOVERDICT="$TMP_ROOT/noverdict-bin"
+mkdir -p "$NOVERDICT"
+cat > "$NOVERDICT/node" <<'SH'
+#!/usr/bin/env bash
+exit 3
+SH
+chmod +x "$NOVERDICT/node"
+unprobed=$(PATH="$NOVERDICT:$PATH" FM_TEST_TS_MODE=running FM_HOME="$HOME_B" \
+  FM_SERVICE_PORT_RANGE=4876-4877 "$ROOT/bin/fm-service-port.sh" lavish --check)
+expect_code 0 "$?" "a pre-read whose probe gave no verdict still resolves identity"
+[ "$(field tailaddr "$unprobed")" = 127.0.0.1 ] \
+  || fail "the node's own address is still read from tailscale, got '$(field tailaddr "$unprobed")'"
+[ "$(field reachability "$unprobed")" = untested ] \
+  || fail "an address no bind was proved on must not be reported as reach, got '$(field reachability "$unprobed")'"
+[ "$(field reachability_evidence "$unprobed")" = none ] \
+  || fail "and must not borrow a tested label, got '$(field reachability_evidence "$unprobed")'"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "reading a node's identity establishes its address, never that anything can reach it"
+
 # --- allocator: reachability has one door, and it refuses to be raised --------
 #
 # Three review rounds each found a different path asserting the flattering
@@ -543,14 +601,16 @@ notail=$(FM_TEST_TS_MODE=stopped FM_HOME="$HOME_B" FM_SERVICE_PORT_RANGE=4856-48
 [ "$(field reachability_evidence "$notail")" = probed ] \
   || fail "a tailscale this run read is probed evidence, got '$(field reachability_evidence "$notail")'"
 
-# The pre-read claims no port, so it has nothing to test with and says so. This
-# is the signal four commits taught every consumer not to trust, and it is now
-# visible in the data rather than only in the header.
+# The pre-read claims no port, so it never reaches a publish attempt and has
+# established nothing about proxy reach. It says exactly that rather than
+# borrowing a tested label for an address no bind was ever attempted on.
 preread=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_B" FM_SERVICE_PORT_RANGE=4856-4857 \
   "$ROOT/bin/fm-service-port.sh" lavish --check)
-[ "$(field reachability "$preread")" = tailnet-proxied ] || fail "the pre-read still resolves proxied"
-[ "$(field reachability_evidence "$preread")" = assumed \
-  ] || fail "a run with no port to test with reports assumed, got '$(field reachability_evidence "$preread")'"
+[ "$(field reachability "$preread")" = untested ] \
+  || fail "a pre-read that tested no route claims none, got '$(field reachability "$preread")'"
+[ "$(field reachability_evidence "$preread")" = none ] \
+  || fail "and carries no evidence, got '$(field reachability_evidence "$preread")'"
+assert_contains "$preread" "EADDRNOTAVAIL" "while still naming what it DID test"
 : > "$FM_TEST_TS_SERVE_STATE"
 : > "$FM_TEST_TS_SERVE_LOG"
 pass "every reachability verdict travels with how it was established, through one door"
@@ -598,6 +658,17 @@ pass "every reachability verdict travels with how it was established, through on
   # A record carried forward is a run that probed it, once, so it may raise.
   fm_set_reachability tailnet-proxied carried || exit 15
   [ "$REACHABILITY" = tailnet-proxied ] || exit 16
+
+  # But a test that RULES a verdict out outranks any record of it: nothing may
+  # claim it again, on any evidence at all.
+  fm_reachability_rule_out tailnet-proxied
+  fm_set_reachability tailnet-proxied carried && exit 17
+  fm_set_reachability tailnet probed && exit 18
+  # And a verdict the new bar contradicts does not stand: the run just learned
+  # its own held answer is false.
+  [ "$REACHABILITY" = untested ] || exit 19
+  fm_set_reachability loopback carried || exit 20
+  [ "$REACHABILITY" = loopback ] || exit 21
   exit 0
 )
 expect_code 0 "$?" "the door must refuse a raise on untested evidence and leave the verdict whole"

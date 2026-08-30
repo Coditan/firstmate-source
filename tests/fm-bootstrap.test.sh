@@ -1114,7 +1114,7 @@ SH
     HOME="$case_dir/fakehome" FM_FAKE_TAILNET=userspace \
     "$ROOT/bin/fm-service-port.sh" lavish --check 2>/dev/null \
     | sed -n 's/^reachability=\(.*\)$/\1/p' | head -1)
-  [ "$preread" = tailnet-proxied ] \
+  [ "$preread" = untested ] \
     || fail "this case only means anything while the pre-read still disagrees with the record, got '$preread'"
   out=$(run_case userspace)
   assert_not_contains "$out" "LAVISH_ACCESS:" \
