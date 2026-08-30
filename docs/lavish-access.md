@@ -103,6 +103,8 @@ The rule is that no URL is emitted implying reach the vessel has not established
   The board still opens locally and is never presented as reachable.
 - **The tailnet name does not resolve to the bound address** - the link falls back to the address and the reason says so, rather than writing an unchecked name into the captain's link.
 - **The tailnet name could not be checked at all**, because `node` or the probe is unavailable - the link falls back to the address and the reason says *that*, since reporting a resolution failure that was never attempted is a concrete diagnosis that happens to be untrue.
+- **Nothing established either way** - `reachability=untested`, on a vessel whose first port-claiming run neither published a route nor found one, and the wrapper prints `nothing has established whether this vessel is reachable off this machine (<reason>) - this board certainly opens here, and the next open settles the rest.`
+  That is deliberately not either loopback sentence: an untested vessel has not been shown unreachable.
 - **The link host does not answer after the board opens** - the wrapper names the address form that does work.
 - **Every candidate port is taken** - `bin/fm-service-port.sh` exits non-zero with one plain sentence and no board is opened.
   There is deliberately no silent loopback downgrade here, because that would reproduce the original bug somewhere new.
@@ -136,15 +138,15 @@ Three facts this rests on, each measured rather than reasoned about, with the me
 
 One design rule sits on top of those three, and it is reasoned rather than measured.
 The route is published only for a run that will LEAVE a board serving, which the wrapper states to the allocator with `--serving`.
-`open`, `poll`, and `server` do; `end` closes the last session and lets the server stop itself, so publishing for it would manufacture a route to nothing that outlives the process and the machine's next reboot.
+`open`, `poll`, and `server` do, unless the argv carries a help flag, which answers usage and reaches no handler; `end` closes the last session and lets the server stop itself, so publishing for either would manufacture a route to nothing that outlives the process and the machine's next reboot.
+A route the wrapper did publish is withdrawn again when no session link came back, because the argv shape is a prediction and the emitted link is the observation.
 
 That choice is carried by `route=`, never by `reachability=`.
 `reachability` is a fact about the HOST, so a vessel that can be reached by proxy stays `tailnet-proxied` on a run that published nothing, and `route=none` is what says this run made no route.
 That holds because such a run CARRIES FORWARD what a previous allocation established rather than asserting it afresh, and with nothing to carry it says `untested` rather than inventing either answer.
-Each verdict travels with `reachability_evidence`, naming how it was established, and `bin/fm-service-port.sh`'s header owns both vocabularies.
 Reading it the other way would tell the captain his vessel is unreachable because he closed a board, overwrite the published record every consumer of the fleet registry reads, and silence the `LAVISH_ACCESS` notice that is supposed to catch a stale loopback link on exactly that vessel.
 A port some earlier run already published reports `route=published` without `--serving`, because reading a route is not making one.
-`bin/fm-service-port.sh`'s header owns the full vocabulary of both fields.
+Each verdict also travels with `reachability_evidence`, naming how it was established, and `bin/fm-service-port.sh`'s header owns the full vocabulary of all three fields, while `bin/fm-reachability-lib.sh` owns the rule that a verdict may never claim more reach than something has established.
 
 `bin/fm-tailnet-serve-lib.sh` is the one owner of publishing and withdrawing.
 Serve configuration belongs to the tailscale node, which every UNIX account on this machine shares, so a port is only ever withdrawn where its ownership has already been proved by the claim token, or where nothing is serving on it at all.
@@ -195,7 +197,8 @@ That leaves one dependency on somebody else's output shape, and it is pinned rat
 The test skips visibly when `lavish-axi` is not installed, because a check that passes without checking anything is the same failure in a smaller package.
 
 Two things still have to be decided before the run, and are therefore still decided from the arguments.
-The port claim comes first because a port has to exist before the command can run at all, so `bin/fm-lavish.sh open --help <board>.html` does take a port from the window and does rewrite `state/service-port.lavish` and `state/lavish/fm-owner`, and can restart or relocate this vessel's own server on the way.
+The port claim comes first because a port has to exist before the command can run at all, so `bin/fm-lavish.sh open --help <board>.html` does take a port from the window, does rewrite `state/service-port.lavish`, and can relocate this vessel's own server on the way.
+It no longer rewrites `state/lavish/fm-owner` and no longer restarts a running board, because both describe a server this shape never launches.
 That is the wrapper's ordinary open bookkeeping against its own home rather than a false statement to the captain, and closing it would mean running the command before knowing what port to run it on.
 The other is a command that replaces this process with `lavish-axi` (`poll`, `end`, `server`): nothing after an `exec` can observe anything, which is one more reason the host's own reachability is stated before the run rather than after it.
 

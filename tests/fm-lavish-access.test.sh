@@ -5,6 +5,9 @@
 # Three cooperating pieces are covered here:
 #   - bin/fm-service-port.sh, the general vessel-local port allocator, whose one
 #     rule is that a successful bind is the only proof a port is free;
+#   - bin/fm-reachability-lib.sh, the one owner of the reachability verdict and
+#     of the evidence behind it, driven directly below as well as through the
+#     allocator that uses it;
 #   - bin/fm-tailnet-serve-lib.sh, the one owner of publishing a loopback port
 #     onto this node's tailnet address and withdrawing it again, driven end to
 #     end here through the fake `tailscale serve` below;
@@ -486,13 +489,43 @@ pass "a run that neither published nor found a route claims no proxy reach of it
 # established, and one function refuses to RAISE the claim on anything but
 # probed evidence.
 #
-# The first assertion is a source-structure invariant, named as such: the
-# contract is "REACHABILITY is assigned in exactly one place, inside the door".
-# It is here so a fourth writer added later fails this suite until it is routed
-# through the door, which no behavioural test of today's paths can catch.
-writers=$(grep -c '^[[:space:]]*REACHABILITY=' "$ROOT/bin/fm-service-port.sh")
-[ "$writers" = 2 ] \
-  || fail "reachability must be written only by its initialiser and the one door; found $writers assignments in bin/fm-service-port.sh, so a new writer needs routing through set_reachability and covering here"
+# The first assertion is a STRUCTURAL invariant rather than a behavioural one,
+# and says so when it fails: the contract is "the reachability globals are
+# assigned only inside bin/fm-reachability-lib.sh". No behavioural test can
+# catch a writer that behaves correctly today, which is what every one of those
+# three rounds looked like at the time.
+#
+# It names WHERE each assignment is allowed rather than counting them, because a
+# change that adds one writer while removing another keeps a count unchanged.
+# Every assignment shape is in scope: bare or indented, a conditional tail, an
+# export, a read, and a local in some helper.
+reachability_assignments() {
+  grep -nE \
+    -e '(^|[^[:alnum:]_])(export[[:space:]]+|local[[:space:]]+|declare[[:space:]]+([^;|&]*[[:space:]])?)?REACHABILITY(_EVIDENCE|_CEILING)?=' \
+    -e '(^|[^[:alnum:]_])(read|mapfile|readarray)[[:space:]][^;|&#]*[^[:alnum:]_]REACHABILITY(_EVIDENCE|_CEILING)?([^[:alnum:]_]|$)' \
+    "$1" | grep -v '^[0-9]*:[[:space:]]*#' || true
+}
+
+# The resolver and the publish library must not touch the verdict at all: every
+# one of them goes through the library that owns the rule.
+for owned in fm-service-port.sh fm-tailnet-serve-lib.sh; do
+  strays=$(reachability_assignments "$ROOT/bin/$owned")
+  [ -z "$strays" ] \
+    || fail "STRUCTURAL GUARD, not a behavioural failure: the reachability verdict, its evidence and its ceiling may be assigned only inside bin/fm-reachability-lib.sh, and bin/$owned now assigns one directly - route it through fm_set_reachability and cover the new path here. Offending lines: $strays"
+done
+
+# The wrapper is different: it does not resolve a verdict, it PARSES the one the
+# allocator emitted. So exactly two shapes are allowed there, the record
+# parser's initialiser and its key dispatch, and anything else is the wrapper
+# starting to invent a verdict of its own.
+strays=$(reachability_assignments "$ROOT/bin/fm-lavish.sh" \
+  | grep -v 'REACHABILITY=""' | grep -v 'REACHABILITY=\$value' || true)
+[ -z "$strays" ] \
+  || fail "STRUCTURAL GUARD, not a behavioural failure: bin/fm-lavish.sh may only copy reachability out of the allocation it read (REACHABILITY=\"\" and REACHABILITY=\$value), never synthesise one - route this through the allocator and cover it here. Offending lines: $strays"
+
+# And the guard has to be watching the file that actually owns the field.
+[ -n "$(reachability_assignments "$ROOT/bin/fm-reachability-lib.sh")" ] \
+  || fail "STRUCTURAL GUARD, not a behavioural failure: bin/fm-reachability-lib.sh is named as the one owner of the reachability globals but assigns none, so this guard is watching the wrong file"
 
 # And the door itself, executed: every verdict this allocator can reach arrives
 # with evidence that says how, and no path reports a bare claim.
@@ -522,6 +555,68 @@ preread=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_B" FM_SERVICE_PORT_RANGE=4856
 : > "$FM_TEST_TS_SERVE_LOG"
 pass "every reachability verdict travels with how it was established, through one door"
 
+# --- the door itself: a raise on untested evidence is refused ----------------
+#
+# bin/fm-reachability-lib.sh is sourced and driven directly, because the rule it
+# enforces is about writers that do not exist yet: every path in the allocator
+# today is internally consistent, so no fixture can make the allocator attempt
+# the raise. What the library must guarantee is that when one does, it fails
+# closed and leaves nothing half-applied.
+(
+  # shellcheck source=bin/fm-reachability-lib.sh
+  . "$ROOT/bin/fm-reachability-lib.sh"
+  fm_reachability_init
+  [ "$REACHABILITY" = untested ] && [ "$REACHABILITY_EVIDENCE" = none ] \
+    || exit 1
+
+  # A run that has looked at nothing holds nothing, so the very first verdict is
+  # already gated: tailscaled being up is not evidence of reach.
+  fm_set_reachability tailnet-proxied assumed && exit 2
+  [ "$REACHABILITY" = untested ] || exit 3
+  [ "$REACHABILITY_EVIDENCE" = none ] || exit 4
+
+  # Established evidence raises freely, because it tested what it claims.
+  fm_set_reachability tailnet probed || exit 5
+  [ "$REACHABILITY" = tailnet ] || exit 6
+
+  # Lowering on any evidence passes: a run may always report less than it found.
+  fm_set_reachability tailnet-proxied assumed || exit 7
+  fm_set_reachability loopback probed || exit 8
+  [ "$REACHABILITY" = loopback ] || exit 9
+
+  # The round-six defect returning: proxy reach claimed from tailscaled being
+  # up, after a run has probed its way down to no reach at all.
+  fm_set_reachability tailnet-proxied assumed && exit 10
+  [ "$REACHABILITY" = loopback ] || exit 11
+  [ "$REACHABILITY_EVIDENCE" = probed ] || exit 12
+
+  # A refusal leaves nothing half-applied, so a caller that ignores the status
+  # cannot end up with a verdict and an evidence value from different writes.
+  fm_set_reachability tailnet none && exit 13
+  [ "$REACHABILITY" = loopback ] && [ "$REACHABILITY_EVIDENCE" = probed ] || exit 14
+
+  # A record carried forward is a run that probed it, once, so it may raise.
+  fm_set_reachability tailnet-proxied carried || exit 15
+  [ "$REACHABILITY" = tailnet-proxied ] || exit 16
+  exit 0
+)
+expect_code 0 "$?" "the door must refuse a raise on untested evidence and leave the verdict whole"
+
+# A verdict it has never heard of is a programming error, not a resolution, and
+# must not be written under any evidence.
+(
+  # shellcheck source=bin/fm-reachability-lib.sh
+  . "$ROOT/bin/fm-reachability-lib.sh"
+  fm_reachability_init
+  fm_set_reachability sideways probed 2>/dev/null && exit 1
+  [ "$REACHABILITY" = untested ] || exit 2
+  fm_set_reachability loopback hearsay 2>/dev/null && exit 3
+  [ "$REACHABILITY" = untested ] || exit 4
+  exit 0
+)
+expect_code 0 "$?" "an unknown verdict or evidence is refused rather than written"
+pass "the one door refuses a raise nothing tested, and refuses it whole"
+
 # --- allocator: nothing established is its own answer ------------------------
 #
 # A run that neither published a route nor found one, on a home with no record
@@ -545,7 +640,6 @@ expect_code 0 "$?" "a first run that will not serve still gets a port"
 
 # The wrapper must not turn that into a claim either.
 HOME_U1=$(make_home "$TMP_ROOT/vessel-u1")
-make_serving_lavish "$HOME_U1"
 u1=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_U1" FM_SERVICE_PORT_RANGE=4863-4864 \
   "$ROOT/bin/fm-lavish.sh" end "$HOME_U1/.lavish/board.html" 2>&1)
 assert_not_contains "$u1" "not reachable off this machine" \
@@ -568,7 +662,6 @@ pass "a run that established nothing says so rather than picking the flattering 
 : > "$FM_TEST_TS_SERVE_STATE"
 : > "$FM_TEST_TS_SERVE_LOG"
 HOME_H=$(make_home "$TMP_ROOT/vessel-h")
-make_serving_lavish "$HOME_H"
 FM_TEST_TS_MODE=userspace FM_HOME="$HOME_H" FM_SERVICE_PORT_RANGE=4866-4867 \
   "$ROOT/bin/fm-lavish.sh" open --help "$HOME_H/.lavish/board.html" >/dev/null 2>&1
 [ -z "$(sort -u "$FM_TEST_TS_SERVE_STATE" | tr -d '[:space:]')" ] \
