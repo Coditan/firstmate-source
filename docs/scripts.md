@@ -81,6 +81,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-board.sh`            | Build a review board on the shared standard layout and refuse one that reaches the network (docs/board-layout.md) |
 | `fm-service-port.sh`     | Resolve one vessel-local service's reachable address and a port it actually bound     |
 | `fm-service-port-probe.mjs` | Bind, address, DNS, and readiness oracle for the service-port allocator          |
+| `fm-reachability-lib.sh` | Own a service's reachability verdict and the evidence behind it, refusing any claim of more reach than something established (docs/lavish-access.md) |
 | `fm-tailnet-serve-lib.sh` | Publish a loopback port onto this node's tailnet address, and withdraw it again (docs/lavish-access.md) |
 | `fm-supervision-instructions.sh` | Render the session-start primary-harness supervision block or the one-line repair instruction |
 | `fm-home-seed.sh`        | Transactionally provision a secondmate home and maintain `data/secondmates.md`       |
