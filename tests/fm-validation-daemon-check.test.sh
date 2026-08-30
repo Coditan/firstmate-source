@@ -150,6 +150,40 @@ nm_install_cmd() {  # <bootstrap output> -> echoes the no-mistakes install comma
   printf '%s\n' "${missing%)}"
 }
 
+# Six reasons now share the unestablished line, which is identical across all of
+# them except the reason clause and the repair. A test asserting only the word
+# `unestablished` therefore cannot tell them apart, and stays green when one
+# branch's pattern widens until it swallows another's answers - the branch would
+# be gone and its test would still pass. Every unestablished assertion here names
+# its OWN reason and its OWN repair, so a swallow makes the swallowed test fail.
+#
+# The repair is the second half of the identity, not decoration: `hand` is for
+# reasons that leave the CLI able to answer, `upgrade` for reasons whose blocker
+# is the installed tool itself and where the hand reading would be refused
+# exactly as the check's was.
+assert_unestablished() {  # <line> <reason fragment> <hand|upgrade> <what>
+  local line=$1 reason=$2 repair=$3 what=$4
+  assert_contains "$line" "VALIDATION_DAEMON:" \
+    "$what must print the line at all rather than passing as healthy by saying nothing"
+  assert_contains "$line" "unestablished" \
+    "$what must report a reading it could not take, never a verdict"
+  assert_contains "$line" "$reason" \
+    "$what must carry its own reason clause rather than another branch's"
+  case $repair in
+    hand)
+      assert_contains "$line" "take the reading by hand with no-mistakes daemon status" \
+        "$what leaves the CLI able to answer, so the hand reading is the repair it must name"
+      ;;
+    upgrade)
+      assert_not_contains "$line" "take the reading by hand with no-mistakes daemon status" \
+        "$what cannot run the hand reading, so the line must not prescribe it"
+      ;;
+    *) fail "assert_unestablished: unknown repair family '$repair'" ;;
+  esac
+  assert_contains "$line" "never no-mistakes update" \
+    "$what must keep the ban on the update path, which no reason varies"
+}
+
 run_bootstrap() {  # <dir> <path-prefix>
   PATH="$2:${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" \
     FM_HOME="$1/home" FM_ROOT_OVERRIDE="$1/home" \
@@ -249,10 +283,8 @@ test_a_wedged_daemon_is_reported_as_unreadable_not_healthy() {
   out=$(run_bootstrap "$d" "$d/nmbin:$fakebin")
   elapsed=$(( $(date +%s) - started ))
   line=$(daemon_line "$out")
-  assert_contains "$line" "VALIDATION_DAEMON:" \
-    "a daemon that never answers must not pass as healthy by saying nothing"
-  assert_contains "$line" "unestablished" \
-    "a reading that could not be taken is reported as unable to read, never as healthy"
+  assert_unestablished "$line" "which is a wedged daemon rather than a dead one" hand \
+    "a daemon that never answers"
   [ "$elapsed" -lt 25 ] || fail "the check must bound its call; the fixture daemon sleeps 30s and startup waited ${elapsed}s"
   pass "a wedged daemon is reported as unreadable and does not stall startup"
 }
@@ -269,10 +301,8 @@ test_an_unrecognised_answer_is_reported_as_unreadable() {
 
   out=$(run_bootstrap "$d" "$d/nmbin:$fakebin")
   line=$(daemon_line "$out")
-  assert_contains "$line" "VALIDATION_DAEMON:" \
-    "an answer this check cannot classify must not be classified as healthy"
-  assert_contains "$line" "unestablished" \
-    "the line must say the reading was not taken rather than assert a state"
+  assert_unestablished "$line" "answered in a shape this check does not recognise" hand \
+    "an answer this check cannot classify"
   pass "an unrecognised answer is reported as unreadable"
 }
 
@@ -287,10 +317,8 @@ test_a_seat_that_cannot_bound_the_call_says_so() {
 
   out=$(FM_VALIDATION_DAEMON_FORCE_UNBOUNDED=1 run_bootstrap "$d" "$d/nmbin:$fakebin")
   line=$(daemon_line "$out")
-  assert_contains "$line" "VALIDATION_DAEMON:" \
-    "a seat that cannot bound the call must say the reading was not taken"
-  assert_contains "$line" "unestablished" \
-    "an unbounded seat has taken no reading, so it must not report one"
+  assert_unestablished "$line" "neither timeout nor gtimeout to bound the call" hand \
+    "a seat that cannot bound the call"
   pass "a seat that cannot bound the call says so"
 }
 
@@ -308,10 +336,8 @@ test_a_down_daemon_worded_otherwise_is_never_an_all_clear() {
 
     out=$(run_bootstrap "$d" "$d/nmbin:$fakebin")
     line=$(daemon_line "$out")
-    assert_contains "$line" "VALIDATION_DAEMON:" \
-      "an answer reporting a daemon that is down ($mode) must never pass as healthy by saying nothing"
-    assert_contains "$line" "unestablished" \
-      "wording this check cannot classify is a reading it did not take, not a verdict"
+    assert_unestablished "$line" "answered in a shape this check does not recognise" hand \
+      "a daemon reported down in wording this check cannot classify ($mode)"
   done
   pass "a daemon reported down in other wording is never an all-clear"
 }
@@ -328,8 +354,8 @@ test_a_below_floor_cli_names_the_upgrade_as_its_repair() {
 
   out=$(run_bootstrap "$d" "$d/nmbin:$fakebin")
   line=$(daemon_line "$out")
-  assert_contains "$line" "unestablished" \
-    "a CLI that cannot be asked has taken no reading, so its daemon answer must not be relayed as one"
+  assert_unestablished "$line" "below the version floor this fleet requires" upgrade \
+    "a CLI whose version was read and found too old"
   upgrade=$(nm_install_cmd "$out") \
     || fail "the below-floor fixture must also produce the MISSING: line whose repair this one borrows"
   assert_contains "$line" "$upgrade" \
@@ -338,8 +364,6 @@ test_a_below_floor_cli_names_the_upgrade_as_its_repair() {
     "a hand reading cannot be prescribed on a CLI that cannot answer it"
   assert_not_contains "$line" "no-mistakes daemon start" \
     "a start cannot be prescribed on a CLI that cannot run it"
-  assert_contains "$line" "never no-mistakes update" \
-    "naming an upgrade must not read as lifting the ban on the update path"
   pass "a below-floor CLI names the upgrade as its repair"
 }
 
@@ -359,8 +383,8 @@ test_a_version_that_could_not_be_read_is_not_called_out_of_date() {
 
     out=$(run_bootstrap "$d" "$d/nmbin:$fakebin")
     line=$(daemon_line "$out")
-    assert_contains "$line" "unestablished" \
-      "a CLI whose version could not be read ($version) has taken no reading, and its daemon answer must not be relayed as one"
+    assert_unestablished "$line" "answered with no version this check could read" upgrade \
+      "a CLI whose version could not be read ($version)"
     assert_not_contains "$line" "below the version floor" \
       "no version was established for $version, so the line must not assert the CLI is out of date"
     upgrade=$(nm_install_cmd "$out") \
@@ -392,14 +416,10 @@ test_a_cli_that_refuses_the_verb_names_the_upgrade() {
 
     out=$(run_bootstrap "$d" "$d/nmbin:$fakebin")
     line=$(daemon_line "$out")
-    assert_contains "$line" "unestablished" \
-      "a CLI that refuses the verb ($mode) has taken no reading, so its refusal must not be relayed as one"
+    assert_unestablished "$line" "refused daemon status as a command it does not have" upgrade \
+      "a CLI that refuses the verb ($mode)"
     assert_contains "$line" "$upgrade" \
       "the repair must be the upgrade, because neither daemon verb exists on a CLI that refused this one"
-    assert_not_contains "$line" "take the reading by hand with no-mistakes daemon status" \
-      "a hand reading cannot be prescribed on a CLI that just refused that command"
-    assert_contains "$line" "never no-mistakes update" \
-      "naming an upgrade must not read as lifting the ban on the update path"
   done
   pass "a CLI that refuses the verb names the upgrade as its repair"
 }

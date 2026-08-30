@@ -84,7 +84,9 @@ stderr is therefore consulted only after stdout has failed to yield a verdict, a
 `no-mistakes update` resets the daemon as part of upgrading the tool.
 On this seat at the time of the incident that would have carried 1.48.0 to 1.60.2 as a side effect of a repair, with four parked runs sitting inside the old version.
 A repair must not smuggle a version change into parked work.
-Every line this check prints names `no-mistakes daemon start` and explicitly forbids the update path, because a reader who meets only the first has no way to know the second is not an equivalent.
+Every line this check prints carries a repair the reader can actually take on the path that printed it, and every one of them forbids the update path.
+Which repair that is depends on what is blocked: the paths where the CLI can still answer name `no-mistakes daemon start`, while the paths whose blocker is the installed tool itself - a version below the floor, a version that could not be read, and a CLI that refuses the verb - name the upgrade instead.
+The ban is the half that never varies, because a reader who meets only the repair has no way to know the update path is not an equivalent.
 
 ## Why it detects and does not start
 
