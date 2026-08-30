@@ -151,7 +151,44 @@ The alarm's real invocation path is the authenticated `state/memory-alarm.check.
 The watcher makes checks due after 300 seconds and observes that due time on its 15-second loop, so one base scheduling slot is at most 315 seconds before time spent in the sequential checks.
 On the measured home the stored sample nevertheless reached 926 seconds, just short of three such 315-second slots, and the old 900-second ceiling reported the growth instrument blind.
 The **1,260-second maximum** is four 315-second slots, leaving one further full slot beyond that measured delay without accepting a sample indefinitely.
-A sample older than 1,260 seconds remains unmeasured and forces the alarm's existing blindness path rather than becoming an all-clear.
+A sample older than 1,260 seconds is never divided by, and the next section owns what happens to it instead.
+
+### A stored sample this run cannot use
+
+A sample past the ceiling above, or corrupt, or dated in the future, is not a growth measurement.
+It was also, until 2026-08-30, reported as a broken instrument: the reading marked `growth-sample` unmeasured, exited 3, and the alarm said it had gone blind.
+
+That was measured to be wrong for the commonest cause of it.
+A peer seat on a WSL2 laptop whose virtual machine freezes when idle recorded its own check ticks every 305 seconds broken by two holes, 03:51:01Z to 09:21:50Z and 09:32:04Z to 11:00:27Z, and the blind report fired on the first tick after each hole.
+Its durable wake queue was empty across both holes and the watcher survived under the same process, so nothing was actually broken: the machine had simply not been running, and it came back holding a sample hours too old to divide by.
+That reading is one seat on one host, and a laptop that suspends is not a machine that thrashes swap, so it is adjacent evidence rather than this fleet's own cause.
+It also disproves the theory that seat's own 2026-08-20 records offered - that the per-check sweep pauses once a check produces a wake and does not resume until that wake is drained - as the cause of those two instances, because the holes predate their own wakes.
+That mechanism is not disproved in general and that code path is still unexamined.
+
+The captain's decision on 2026-08-30 was that **the blind path takes a fresh sample** rather than only reporting an absent or stale one.
+Widening the freshness window was the other candidate and was rejected on the same evidence: no window that could span a multi-hour host freeze would still be short enough to divide a rate by.
+
+So an unusable stored sample is now **discarded and replaced with this run's own**, and growth for that run is reported as **scope** rather than as blindness.
+That is not a softer verdict for the same state.
+It is the state a first run on a new home has always been in, which this reading has always reported as scope and exited 0 for: a known absence rather than a broken instrument.
+The alarm still does not judge the horizon condition on such a run, still says in its verdict which conditions it actually judged, and still refuses to declare a shortage over on a poll whose growth it could not compare.
+
+**It costs nothing and cannot hang.**
+The fresh sample is the process table this run had already read and was already about to store.
+There is no second read, no wait, and no new failure mode.
+
+**A fresh sample that fails is still unmeasured**, held by two separate mechanisms rather than by the caller remembering to check:
+
+- `--no-store` takes no fresh sample, so nothing replaces the unusable prior and the next run would be just as blind.
+  The reason stays unmeasured there, which is also why `fm-memory-alarm.sh --status` and its detect mode can honestly disagree about the same machine: `--status` is deliberately forbidden from advancing the sample it is reading.
+- A sample path that is not a regular file stays unmeasured whatever the mode.
+  Storing writes aside and moves into place, and moving a file onto a directory lands it inside that directory, so such a prior would survive every replacement and the instrument would be blind for good while reporting itself merely scoped.
+- A replacement that could not be written is reported as `sample-storage` and makes the whole reading incomplete, which the alarm reads as blindness however the growth reason itself reads.
+
+**What this does not cover.**
+The gap itself is still not reported by this alarm.
+A machine that was frozen for five hours comes back and reads healthy, and nothing here says it was gone, because while it was gone there was no seat to say it to.
+`fm-memory-alarm.sh --armed` is the instrument for that, and it answers only at session start.
 
 ### Horizon: 15 minutes
 
@@ -268,6 +305,65 @@ Headroom and horizon clear it by beating their thresholds by that multiple.
 The stall condition clears it in the other arithmetic direction, because it crosses on duration rather than on a level: the run multiplied by the margin must still fit inside the window.
 Recovery is deliberately harder than crossing.
 
+## What these numbers are worth on a different machine
+
+Every threshold above was measured on one host.
+Which of the three conditions is actually carrying the warning depends on the machine, and until 2026-08-30 the alarm did not know which machine it was on.
+
+**With swap**, a shortage degrades.
+`MemAvailable` counts only memory available without swapping, so it reads healthy while the machine thrashes.
+Failure is slow and silent, and the stall condition is the only one of the three that can see it.
+That is the whole finding this document's 2026-08-27 evidence section records.
+
+**Without swap**, there is no degrading stretch at all.
+The machine runs, and then the kernel kills something.
+Headroom is honest there and the distance to the floor is the entire warning, because there is no thrashing stretch for the stall condition to see and nothing left to extrapolate once the kill lands.
+
+So one set of numbers cannot be right for both shapes, and the floor is where that bites.
+The floor was derived twice over as a property of **its** host: 2,400 MiB is 10.2% of that machine's 23,456 MiB, and 6.1 times below the lowest RAM headroom ordinary busy work reached there.
+Neither figure travels.
+The same 2,400 MiB is **31.0%** of a 7,746 MiB host, where it stops being a backstop below ordinary operation and becomes a line ordinary operation may sit near.
+This is live rather than theoretical: this vessel is moving from a 23,456 MiB machine with 32 GiB of swap onto a 7,746 MiB host with none, so the alarm that is an early warning here would sit on the edge there with no thrashing phase to warn during.
+
+### What ships, and what deliberately does not
+
+The alarm now reads `MemTotal` and `SwapTotal` from the same reading it already takes, and states in its own voice what its margin is worth on the machine it is on.
+On a machine with swap it says that healthy RAM headroom is not evidence the machine is healthy and that the stall condition is the one that answers that.
+On a machine with no swap it says there is no degrading stretch below the floor, gives the floor's share of **this** machine's RAM beside the 10.2% it was derived at, and says plainly that the margin is inherited here rather than verified.
+A `SwapTotal` that could not be read is reported as unread, never as a machine with no swap; those are opposite findings and collapsing them would be the substituted zero this alarm exists to refuse.
+
+**No threshold moved, and no condition changed when it fires.**
+`test_reading_the_shape_moves_no_threshold` in `tests/fm-memory-alarm.test.sh` holds that: the same headroom, growth and stall figures must produce the same crossing and the same silence on both shapes.
+
+**A swapless floor was not invented, because the evidence does not support one.**
+Two candidate derivations were tried against the record and both fail:
+
+- **The floor as a share of RAM.**
+  10.2% of 7,746 MiB is 790 MiB.
+  That is *looser in absolute terms* on the machine with no shock absorber and the least warning, which is the wrong direction, and it would also be a change to `headroom` that this branch is constrained not to make.
+- **The floor as a distance the poll cadence must cover.**
+  This is the right shape of argument, and the number it needs is how much memory ordinary work on a small swapless host consumes between two 300-second polls.
+  That has never been measured on such a host in this fleet.
+
+What the record does hold is one reading from a 7,746 MiB host: `MemAvailable` sat at 3,575 to 3,578 MiB throughout the 2026-08-27 incident, while that machine was unusable.
+That is 1.49 times the floor, against the 6.1 times the floor sits below ordinary busy headroom on the calibration host.
+It is a single reading from a degraded machine and not an ordinary-operation baseline, so it does not set a floor either - but it is enough to say the floor's stated safety property is unverified at that host size rather than merely untested.
+
+**What would settle it** is the same measurement the floor already rests on, taken again on the destination: `MemAvailable` sampled every 60 seconds through a deliberately driven busy period of this fleet's own work on the 7,746 MiB swapless host, giving the minimum and median ordinary headroom there.
+The floor then follows from the same rule that produced 2,400 MiB, rather than from a preference.
+Until that exists, the alarm reports the shape and states the gap.
+
+### The container's own cap, which is not in this branch
+
+The alarm reports on the **host**.
+Inside a container with its own memory cap, the number that matters is the cgroup's: this seat runs capped at 8.00 GiB inside a 23,456 MiB host and can exhaust its own cap while the host reads perfectly fine.
+
+That is left out of this branch deliberately, and it is its own piece of work.
+A cap-relative headroom condition is a **fourth condition** with its own floor, and it would need its own ordinary-operation baseline measured inside the cap, which does not exist.
+Adding it on one datapoint is the same invented number this section just refused for the swapless floor.
+The vantage question also already has a measured owner: "Which pressure a containerised seat reads, and why" above records the cgroup pressure file as the obvious input for a later refinement, and this seat's separate container blindness is filed as `fm-memory-alarm-blind-forever-in-container`.
+Both belong together, and neither belongs here.
+
 ## What the alarm cannot see
 
 Stated because a limit nobody wrote down is one somebody will later assume away.
@@ -302,6 +398,15 @@ Stated because a limit nobody wrote down is one somebody will later assume away.
 - **The stall condition is host-wide, and so is the process it names.**
   It reads `/proc/pressure/memory`, so a stall generated inside one container or cgroup is reported as the machine stalling.
   The process it names is the largest resident one the reading can see, which is the best available answer to who to talk to and not proof of who caused the wait.
+- **It does not report that the machine was gone.**
+  A host that was suspended or frozen for hours comes back, replaces the stored sample it could no longer use, and reads healthy.
+  Nothing in the alarm says it was away, because while it was away there was no seat to say it to.
+  `--armed` is the instrument for that and it answers only at session start.
+- **Its floor is calibrated for one host size, and it says so rather than adjusting.**
+  See "What these numbers are worth on a different machine" above.
+  On a small host with no swap the floor is a much larger share of RAM than the share it was derived at, no ordinary-headroom baseline has been measured at that size, and the alarm reports that gap instead of inventing a number to close it.
+- **It measures the host, not this container's own cap.**
+  A seat can exhaust its own cgroup limit while the host reads healthy, and no condition here sees that.
 - **It is a call for a decision, not a decision taken.**
   Nothing is limited or killed, so a crossing that nobody acts on ends in exactly the state it would have ended in without the alarm.
 - **A reading it could not take is reported as blindness, never as an all-clear**, and a shortage is never declared over by a poll that could not re-evaluate the condition that raised it.
@@ -415,7 +520,7 @@ The stall figures in them are `tugboat-cloud`'s cumulative counters: a 22-hour a
 Both failure directions are exercised rather than argued.
 `tests/fm-memory-alarm.test.sh` holds the alarm to the properties that would let it lie.
 Each was then removed from the script, one at a time, to confirm the suite actually catches its absence rather than merely passing alongside it.
-The last row is removed from `bin/fm-memory-reading.sh` and caught by `tests/fm-memory-reading.test.sh`; the rest are in the alarm and its own suite:
+The positive readability test and the two stored-sample rows are removed from `bin/fm-memory-reading.sh` and caught by `tests/fm-memory-reading.test.sh`; the rest are in the alarm and its own suite:
 
 | Behaviour removed | Caught |
 | ----------------- | ------ |
@@ -430,5 +535,8 @@ The last row is removed from `bin/fm-memory-reading.sh` and caught by `tests/fm-
 | the polling-continuity guard, so a gap nobody watched was credited as a run | yes |
 | the window, so the condition crossed on a level the way the draft did | yes |
 | the positive readability test, so a kernel accounting nothing reads calm | yes |
+| the replacement rule, so an unusable sample nobody replaced still reads as scope | yes |
+| the guard on a sample path no replacement can overwrite, so a permanently blind instrument reads as scope | yes |
+| the unread-swap guard, so a machine whose swap could not be read reads as a machine with none | yes |
 
 The suite also asserts the boundary the captain drew around this slice: the alarm contains no path that limits, throttles, or kills, checked against the code with its commentary stripped out, so prose about killing cannot satisfy or break it.
