@@ -111,6 +111,17 @@ unconfigured_alarm() {
       "$ALARM" "$@"
 }
 
+# The alarm as a home gets it when somebody has fat-fingered the gate. Unlike an
+# empty one, this is a typo rather than a choice, so the condition stays on.
+malformed_gate_alarm() {
+  env FM_HOME="$HOME_DIR" \
+      FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
+      FM_MEMORY_ALARM_READING="$FAKE" FM_TEST_ANSWER="$ANSWER" \
+      FM_MEMORY_ALARM_FLOOR_MIB=2400 FM_MEMORY_ALARM_HORIZON_MIN=15 \
+      FM_MEMORY_ALARM_STALL='not a number' \
+      "$ALARM" "$@"
+}
+
 # Drive the alarm at a chosen moment, so a run of consecutive polls can be
 # played out in a test without waiting for one in real time.
 alarm_at() {  # <epoch-offset-seconds> [args...]
@@ -656,21 +667,54 @@ test_leaving_a_stall_crossing_is_earned_by_the_run_ending() {
   pass "a stall crossing is left when the run ends, and reported once at each end"
 }
 
-test_a_malformed_stall_gate_falls_back_rather_than_holding_the_alarm_crossed() {
+test_a_malformed_stall_gate_falls_back_to_the_shipped_default_and_says_so() {
   # An unparsable threshold would compare as zero in awk and hold this condition
   # crossed on every reading forever, which is the loudest possible way to go
-  # blind. It must fall back to the shipped default instead.
+  # blind. It falls back to the shipped default instead, the way every sibling
+  # threshold does - a typo is not a decision to stop watching this machine -
+  # and says on the same reading that the configured value was unusable, so the
+  # substitution can never be mistaken for a home that chose 1.00 deliberately.
   reset_home
   reading_thrashing 16000 0.00
   local out
-  out=$(env FM_HOME="$HOME_DIR" \
-            FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
-            FM_MEMORY_ALARM_READING="$FAKE" FM_TEST_ANSWER="$ANSWER" \
-            FM_MEMORY_ALARM_STALL="not a number" "$ALARM" --status)
+  out=$(malformed_gate_alarm --status)
   assert_contains "$out" "memory-alarm: ok" "a malformed threshold must not hold a calm machine crossed"
-  assert_contains "$out" "no stall gate is configured" \
-    "a gate that could not be understood must leave the condition unwatched and say so"
-  pass "a malformed stall gate leaves the condition unwatched rather than firing forever"
+  assert_contains "$out" "memory stall 0.00%" \
+    "a malformed gate must leave the condition judged on the default, not switched off"
+  assert_contains "$out" "FM_MEMORY_ALARM_STALL" \
+    "the reading must name the setting whose configured value it could not use"
+  assert_contains "$out" "default gate of 1.00%" "and must state the gate it fell back to"
+  assert_not_contains "$out" "no stall gate is configured" \
+    "a malformed gate is a substitution, not an unconfigured condition"
+
+  # And the substituted gate is really in force: a machine over it starts the
+  # clock, which an unwatched condition would never report at all.
+  reading_thrashing 3577 38.0
+  out=$(malformed_gate_alarm --status)
+  assert_contains "$out" "stalling for" \
+    "the fallback gate must actually gate, so a stalling machine starts a run against it"
+  pass "a malformed stall gate falls back to the shipped default, keeps watching, and says the configured value was unusable"
+}
+
+test_a_stall_run_that_cannot_be_persisted_is_reported_rather_than_read_as_calm() {
+  # The run of consecutive polls is the only thing this condition decides on. A
+  # run that cannot be written is never credited, so the alarm would report calm
+  # forever on exactly the shape it was built for - going quiet when its own
+  # instrument breaks, which is the failure this whole programme removes.
+  reset_home
+  reading 16000 true 0
+  alarm_at 0 >/dev/null
+  # A directory where the run file goes: nothing can write it, whoever runs this.
+  mkdir -p "$HOME_DIR/state/memory-alarm.stall"
+  reading_thrashing 3577 38.0
+  local out
+  out=$(alarm_at 300)
+  assert_contains "$out" "MEMORY_ALARM:" \
+    "a stall run that could not be persisted must not leave the poll silent"
+  assert_contains "$out" "could not persist the memory-stall run" \
+    "the alarm must say the run was not durably recorded"
+  assert_contains "$out" "memory-alarm.stall" "and must name the file it could not write"
+  pass "a stall run that cannot be persisted is reported rather than passed off as a calm machine"
 }
 
 test_an_unconfigured_stall_gate_is_reported_never_silently_unwatched() {
@@ -764,7 +808,8 @@ test_the_stall_condition_keeps_the_protected_label
 test_a_stall_reading_the_alarm_could_not_take_is_never_an_all_clear
 test_recovery_is_not_declared_on_a_stall_nobody_could_read
 test_leaving_a_stall_crossing_is_earned_by_the_run_ending
-test_a_malformed_stall_gate_falls_back_rather_than_holding_the_alarm_crossed
+test_a_malformed_stall_gate_falls_back_to_the_shipped_default_and_says_so
+test_a_stall_run_that_cannot_be_persisted_is_reported_rather_than_read_as_calm
 test_an_unconfigured_stall_gate_is_reported_never_silently_unwatched
 test_an_unconfigured_stall_gate_does_not_block_a_recovery_it_never_raised
 test_the_shipped_gate_and_window_are_the_ones_the_document_derives
