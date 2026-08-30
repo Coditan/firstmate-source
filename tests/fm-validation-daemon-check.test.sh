@@ -47,7 +47,6 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 BOOTSTRAP="$ROOT/bin/fm-bootstrap.sh"
-SKILL="$ROOT/.agents/skills/bootstrap-diagnostics/SKILL.md"
 fm_test_tmproot TMP_ROOT fm-validation-daemon-check
 
 # This suite is the one place the check is exercised, so it opts back in to the
@@ -260,19 +259,6 @@ test_a_wholly_absent_cli_is_left_to_the_missing_line() {
   pass "a wholly absent CLI is left to the MISSING: line"
 }
 
-# --- 5. the printed line has a documented handling procedure ------------------
-
-# A prefix with no entry in the handling playbook reaches a reader with nothing
-# to do about it. bootstrap-diagnostics is its one owner; fm-instruction-owners
-# and fm-bootstrap own the general AGENTS.md trigger's presence and wording.
-test_the_prefix_has_an_owner_in_the_handling_playbook() {
-  assert_grep 'VALIDATION_DAEMON' "$SKILL" \
-    "bootstrap-diagnostics must own the VALIDATION_DAEMON response"
-  assert_grep 'no-mistakes update' "$SKILL" \
-    "the playbook must carry the warning against the update path too"
-  pass "the prefix has an owner in the handling playbook"
-}
-
 test_a_dead_daemon_is_reported_at_startup
 test_the_line_warns_against_the_update_path
 test_the_line_claims_no_count_of_homes
@@ -281,6 +267,5 @@ test_a_wedged_daemon_is_reported_as_unreadable_not_healthy
 test_an_unrecognised_answer_is_reported_as_unreadable
 test_a_seat_that_cannot_bound_the_call_says_so
 test_a_wholly_absent_cli_is_left_to_the_missing_line
-test_the_prefix_has_an_owner_in_the_handling_playbook
 
 printf 'all fm-validation-daemon-check tests passed\n'

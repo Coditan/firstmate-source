@@ -231,7 +231,8 @@ family_for_basename() {
     fm-no-mistakes-ownership.test.sh|\
     fm-operational-input.test.sh|fm-pdf-output.test.sh|fm-pi-primary-types.test.sh|\
     fm-private-material-ignore.test.sh|fm-project-remove.test.sh|\
-    fm-role-config.test.sh|fm-run-reader-reach.test.sh|fm-runtime-ignore.test.sh|\
+    fm-role-config.test.sh|fm-run-reader-reach.test.sh|\
+    fm-validation-daemon-check.test.sh|fm-runtime-ignore.test.sh|\
     fm-send-popup-settle.test.sh|fm-send-settle.test.sh|fm-slot-guard.test.sh|\
     fm-stow-contract.test.sh|fm-subagent-pretool-check.test.sh|\
     fm-supervision-cost.test.sh|fm-supervision-instructions.test.sh|\

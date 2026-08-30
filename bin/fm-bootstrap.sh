@@ -853,6 +853,10 @@ VALIDATION_DAEMON_NOT_UPDATE='never no-mistakes update, which resets the daemon 
 # because every unreadable case is one where acting on the guess is the hazard.
 VALIDATION_DAEMON_REPAIR="take the reading by hand with no-mistakes daemon status, and if it is down bring it back with no-mistakes daemon start - $VALIDATION_DAEMON_NOT_UPDATE"
 
+validation_daemon_unestablished() {
+  echo "VALIDATION_DAEMON: whether the validation pipeline daemon is running is unestablished - $1 - so this is not an all-clear; $VALIDATION_DAEMON_REPAIR"
+}
+
 # Startup assertion for the validation pipeline daemon.
 #
 # Why it is a check and not a habit (measured on the coditan vessel, 2026-08-30):
@@ -912,7 +916,8 @@ validation_daemon_check() {
   [ "${FM_VALIDATION_DAEMON_CHECK_DISABLE:-0}" != 1 ] || return 0
   command -v no-mistakes >/dev/null 2>&1 || return 0
   seconds=${FM_VALIDATION_DAEMON_TIMEOUT:-5}
-  case "$seconds" in ''|*[!0-9]*|0) seconds=5 ;; esac
+  case "$seconds" in ''|*[!0-9]*) seconds=5 ;; esac
+  [ "$seconds" -gt 0 ] 2>/dev/null || seconds=5
   timeout_bin=
   if [ "${FM_VALIDATION_DAEMON_FORCE_UNBOUNDED:-0}" != 1 ]; then
     if command -v timeout >/dev/null 2>&1; then timeout_bin=timeout
@@ -920,12 +925,12 @@ validation_daemon_check() {
     fi
   fi
   if [ -z "$timeout_bin" ]; then
-    echo "VALIDATION_DAEMON: whether the validation pipeline daemon is running is unestablished - this seat has neither timeout nor gtimeout to bound the call, and asking unbounded would hang session start behind a wedged daemon - so this is not an all-clear; $VALIDATION_DAEMON_REPAIR"
+    validation_daemon_unestablished "this seat has neither timeout nor gtimeout to bound the call, and asking unbounded would hang session start behind a wedged daemon"
     return 0
   fi
   out=$("$timeout_bin" "$seconds" no-mistakes daemon status 2>/dev/null) || rc=$?
   if [ "$rc" -eq 124 ]; then
-    echo "VALIDATION_DAEMON: whether the validation pipeline daemon is running is unestablished - it did not answer within ${seconds}s, which is a wedged daemon rather than a dead one - so this is not an all-clear; $VALIDATION_DAEMON_REPAIR"
+    validation_daemon_unestablished "it did not answer within ${seconds}s, which is a wedged daemon rather than a dead one"
     return 0
   fi
   case "$out" in
@@ -935,7 +940,7 @@ validation_daemon_check() {
       ;;
     *"daemon running"*) return 0 ;;
   esac
-  echo "VALIDATION_DAEMON: whether the validation pipeline daemon is running is unestablished - no-mistakes daemon status answered in a shape this check does not recognise (exit $rc), and this fleet does not own that tool's output - so this is not an all-clear; $VALIDATION_DAEMON_REPAIR"
+  validation_daemon_unestablished "no-mistakes daemon status answered in a shape this check does not recognise (exit $rc), and this fleet does not own that tool's output"
 }
 
 x_mode_write_if_changed() {
