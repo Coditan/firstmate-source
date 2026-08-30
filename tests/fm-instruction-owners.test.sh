@@ -490,7 +490,7 @@ test_agents_md_tells_a_worker_it_is_not_addressed() {
     'the file you may be changing, not your own orders' \
     'Your brief governs' \
     'the brief wins and you say so in a status line' \
-    'taking the session lock, draining the wake queue, running the bootstrap sweeps, and arming any check are the primary'; do
+    'Running session start, taking the session lock, draining the wake queue, running the bootstrap sweeps, and arming any check in this home are the primary'; do
     assert_grep "$phrase" "$AGENTS" "AGENTS.md lost the worker-addressee notice phrase '$phrase'"
   done
   # Ahead of the first imperative, not merely present somewhere in a 900-line
