@@ -885,6 +885,10 @@ codex_gate_repo_grant() {  # <worktree>
       ;;
     *) path=$url ;;
   esac
+  if [ -z "$path" ]; then
+    echo "error: $wt names a no-mistakes gate at '$url' that does not resolve to a directory; refusing to launch a Codex worker whose gate push the sandbox would then refuse" >&2
+    return 1
+  fi
   gate=$(cd "$wt" && cd "$path" 2>/dev/null && pwd -P) || gate=
   if [ -z "$gate" ]; then
     echo "error: $wt names a no-mistakes gate at '$url' that does not resolve to a directory; refusing to launch a Codex worker whose gate push the sandbox would then refuse" >&2
