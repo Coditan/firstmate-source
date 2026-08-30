@@ -205,10 +205,13 @@ assert_unestablished() {  # <line> <reason fragment> <hand|upgrade> <what>
     "$what must keep the ban on the update path, which no reason varies"
 }
 
-run_bootstrap() {  # <dir> <path-prefix>
+# The bound is a parameter rather than a constant because the guards that sanitize
+# it are themselves under test: `${3-1}` and not `${3:-1}`, so a case can pass an
+# explicitly EMPTY bound and have it reach the check as one.
+run_bootstrap() {  # <dir> <path-prefix> [timeout]
   PATH="$2:${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" \
     FM_HOME="$1/home" FM_ROOT_OVERRIDE="$1/home" \
-    FM_VALIDATION_DAEMON_TIMEOUT=1 \
+    FM_VALIDATION_DAEMON_TIMEOUT="${3-1}" \
     "$BOOTSTRAP" 2>/dev/null
 }
 
@@ -444,6 +447,38 @@ test_a_cli_that_refuses_the_verb_names_the_upgrade() {
   pass "a CLI that refuses the verb names the upgrade as its repair"
 }
 
+# The bound is the one guard whose failure is SILENT: a disabled timeout prints
+# nothing and hangs, so nothing else in this suite would notice its removal. Each
+# value here is hostile in a different way - `00` and `000` are digits-only yet
+# numerically zero, which GNU timeout documents as DISABLING the bound; `abc` is
+# not a number at all; and an empty bound would become `timeout ""`. All four
+# must land on the documented 5s default instead.
+#
+# Both halves of the assertion matter and neither alone is enough. The reason
+# clause naming `within 5s` proves the fallback is the documented default rather
+# than some other number, and the elapsed bound proves the call was actually cut
+# short: the fixture daemon sleeps 30s, so an unbounded call returns only after
+# it, and a check that merely printed the right words while waiting would fail
+# here.
+test_a_hostile_timeout_value_still_bounds_the_call() {
+  local d fakebin out line started elapsed bound
+  for bound in 00 000 abc ''; do
+    d=$(new_case "timeout-${bound:-empty}")
+    fakebin=$(make_fakebin "$d")
+    make_fake_nm "$d/nmbin" wedged
+
+    started=$(date +%s)
+    out=$(run_bootstrap "$d" "$d/nmbin:$fakebin" "$bound")
+    elapsed=$(( $(date +%s) - started ))
+    line=$(daemon_line "$out")
+    assert_unestablished "$line" "it did not answer within 5s" hand \
+      "a wedged daemon behind the hostile bound '${bound:-<empty>}'"
+    [ "$elapsed" -lt 25 ] \
+      || fail "the bound '${bound:-<empty>}' must fall back to the 5s default, not disable the timeout; the fixture daemon sleeps 30s and startup waited ${elapsed}s"
+  done
+  pass "a hostile timeout value still bounds the call"
+}
+
 # --- 4. absence has an owner already ----------------------------------------
 
 # Repeating it here would give one fact two owners and tell the reader to start a
@@ -468,6 +503,7 @@ test_a_running_daemon_prints_nothing
 test_a_wedged_daemon_is_reported_as_unreadable_not_healthy
 test_an_unrecognised_answer_is_reported_as_unreadable
 test_a_seat_that_cannot_bound_the_call_says_so
+test_a_hostile_timeout_value_still_bounds_the_call
 test_a_down_daemon_worded_otherwise_is_never_an_all_clear
 test_a_below_floor_cli_names_the_upgrade_as_its_repair
 test_a_version_that_could_not_be_read_is_not_called_out_of_date

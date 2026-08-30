@@ -932,11 +932,11 @@ validation_daemon_unestablished() {
 # bootstrap runs with a FAKE no-mistakes, whose daemon answer is meaningless, so
 # the line would print under every unrelated assertion. tests/lib.sh disables it
 # suite-wide and tests/fm-validation-daemon-check.test.sh sets it back to 0.
-validation_daemon_check() {
+validation_daemon_check() {  # [already-read version parts]
   local timeout_bin out err rc=0 seconds version_reason parts err_file
   [ "${FM_VALIDATION_DAEMON_CHECK_DISABLE:-0}" != 1 ] || return 0
   command -v no-mistakes >/dev/null 2>&1 || return 0
-  parts=$(no_mistakes_version_parts 2>/dev/null) || parts=
+  if [ "$#" -gt 0 ]; then parts=$1; else parts=$(no_mistakes_version_parts 2>/dev/null) || parts=; fi
   if ! no_mistakes_compatible "$parts"; then
     if [ -n "$parts" ]; then
       version_reason="the installed no-mistakes is below the version floor this fleet requires, so it cannot be asked"
@@ -1380,11 +1380,17 @@ if fm_backend_list_contains "$TOOLS" treehouse \
   && command -v treehouse >/dev/null 2>&1 && ! treehouse_supports_lease; then
   echo "MISSING: treehouse (install: $(install_cmd treehouse))"
 fi
-if command -v no-mistakes >/dev/null 2>&1 && ! no_mistakes_compatible; then
+# One reading of an immutable fact, shared by the two checks that need it: the
+# MISSING: gate below and validation_daemon_check. Both distinguish a version
+# that parsed from one that did not, so the empty case is passed through rather
+# than collapsed.
+NO_MISTAKES_VERSION_PARTS=$(no_mistakes_version_parts 2>/dev/null) || NO_MISTAKES_VERSION_PARTS=
+if command -v no-mistakes >/dev/null 2>&1 \
+  && ! no_mistakes_compatible "$NO_MISTAKES_VERSION_PARTS"; then
   echo "MISSING: no-mistakes (install: $(install_cmd no-mistakes))"
 fi
 run_reader_reach_check
-validation_daemon_check
+validation_daemon_check "$NO_MISTAKES_VERSION_PARTS"
 if command -v tasks-axi >/dev/null 2>&1 && ! fm_tasks_axi_compatible; then
   echo "MISSING: tasks-axi (install: $(install_cmd tasks-axi))"
 fi
