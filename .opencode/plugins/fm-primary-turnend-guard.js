@@ -47,6 +47,30 @@ function runGuard(root) {
   return runProcess(`${root}/bin/fm-turnend-guard.sh`, [], '{"stop_hook_active":false}');
 }
 
+const OPERATOR_HEADLINE =
+  "TURN WOULD END BLIND - supervision is off. " +
+  "The watcher cycle is missing, failed, or unhealthy. Follow the harness recovery instruction below before ending the turn.";
+const WORKER_HEADLINE =
+  "SUPERVISION IS OFF IN THE HOME THAT LAUNCHED THIS TASK. " +
+  "Repairing it belongs to firstmate, not to a task worker: report the stalled supervision in your task status line " +
+  "and carry on with your own task in this worktree.";
+
+// This plugin prepends its own instruction to the shared guard's message, so it
+// has to pick the same addressee the shared guard did: the JS mirror of
+// fm_session_operates_home in bin/fm-primary-scope-lib.sh. The plugin is loaded
+// from the checkout the session runs in, while FM_ROOT_OVERRIDE still names the
+// home that launched a task worker. An unresolvable path answers "not the
+// operator", the addressee handed no command and so the safe fallback.
+function sessionOperatesHome(root) {
+  if (!root) return false;
+  const home = process.env.FM_ROOT_OVERRIDE || root;
+  try {
+    return realpathSync(root) === realpathSync(home);
+  } catch {
+    return false;
+  }
+}
+
 async function letWatchArmRun(sessionID, client) {
   const coordinator = globalThis[COORDINATOR_KEY];
   if (!coordinator?.ensureArmed) return false;
@@ -75,12 +99,11 @@ export const FmPrimaryTurnendGuard = async ({ client, directory, worktree }) => 
       if (result.code !== 2) return;
 
       try {
+        const headline = sessionOperatesHome(root) ? OPERATOR_HEADLINE : WORKER_HEADLINE;
         const text = await encodeFirstmateOperationalInput(
           root,
           "turn-end-guard",
-          "TURN WOULD END BLIND - supervision is off. " +
-            "The watcher cycle is missing, failed, or unhealthy. Follow the harness recovery instruction below before ending the turn.\n\n" +
-            result.stderr,
+          `${headline}\n\n${result.stderr}`,
         );
         await client.session.promptAsync({
           path: { id: sessionID },

@@ -33,9 +33,13 @@ fm_primary_scope_matches() {
 }
 
 # Return 0 when the session that invoked this hook is the one operating $2, the
-# home whose supervision was just evaluated: the checkout the running hook was
-# loaded from ($1) resolves to that same home. Firstmate runs the tracked hooks
-# out of its own home, and so does a secondmate in its own home, so both match.
+# home this session would be operating, which both call sites resolve as FM_ROOT:
+# the checkout the running hook was loaded from ($1) resolves to that same home.
+# The home whose supervision was judged derives from FM_HOME instead, and FM_ROOT
+# and FM_HOME coincide on every path traced, so nothing depends on that
+# difference today.
+# Firstmate runs the tracked hooks out of its own home, and so does a secondmate
+# in its own home, so both match.
 # A crewmate or scout runs the very same tracked hooks out of its disposable task
 # worktree while FM_ROOT_OVERRIDE still names the home that launched it, so the
 # two differ and the session is a worker that may not repair that home.

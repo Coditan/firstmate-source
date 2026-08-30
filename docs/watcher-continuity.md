@@ -30,11 +30,13 @@ Such a worker runs the identical hook while `FM_ROOT_OVERRIDE` still names the h
 What was wrong was the addressee.
 Three separate runtimes were each handed `bin/fm-watcher-service.sh restart` against a home with ten tasks in flight that none of them could see, and `AGENTS.md` section 1 reserves supervision repair to firstmate: a worker that obeys does damage and a worker that refuses is stuck, so both outcomes were the guard's fault rather than the worker's.
 
-`fm_session_operates_home` in `bin/fm-primary-scope-lib.sh` decides the addressee by asking whether the checkout the running hook was loaded from is the home just evaluated.
+`fm_session_operates_home` in `bin/fm-primary-scope-lib.sh` decides the addressee by asking whether the checkout the running hook was loaded from is the home this session would be operating, which both guards resolve as `FM_ROOT`.
+The home whose supervision was judged derives from `FM_HOME` instead, and `FM_ROOT` and `FM_HOME` coincide on every path traced, so nothing depends on that difference today.
 Firstmate's own session matches, a secondmate in its own home matches, and a task worktree does not.
 It decides only wording: which home is evaluated and whether that home's supervision is unhealthy are computed identically for both addressees, so a wrong answer here can misaddress a message but can never suppress a refusal.
 An operator keeps the recovery commands verbatim; a worker is told that repairing that home belongs to firstmate, is asked to report the stalled supervision in its task status line, and is handed no command at all.
-`bin/fm-turnend-guard-grok.sh` prepends its own instruction to the shared banner, so it reads the same predicate rather than carrying a second answer.
+`bin/fm-turnend-guard-grok.sh` and `.opencode/plugins/fm-primary-turnend-guard.js` each prepend their own instruction to the shared banner, so both read the same predicate rather than carrying a second answer.
+The OpenCode plugin resolves the predicate natively in JavaScript against `FM_ROOT_OVERRIDE`, and any unresolvable path answers "not the operator" there too.
 
 The turn-end guard remains the final backstop rather than the normal mechanism.
 Its own predicate is documented in `docs/turnend-guard.md`; since the delivery move it asks `fm_delivery_healthy` about this home's listener instead of asking whether the session armed a waiter.
@@ -53,7 +55,7 @@ Nothing now exits on a single stale reading, because nothing is a one-shot wait:
 `tests/fm-watcher-lock.test.sh` covers verified-successor attach, the typed self-eviction failure, bounded and successor-linked lifecycle rows, a SIGSTOP counterfactual that distinguishes a live PID from a stale beacon before classifying termination, and the guard's three states with work in flight.
 `tests/fm-continuity-pretool-check.test.sh` proves the Claude gate rejects only non-recovery fleet execution in the precise unhealthy state and preserves the existing Stop registration.
 It also pairs the two addressees: a worker running the gate from a task worktree is still refused but is handed none of the commands reserved to firstmate, while the session operating the home still gets its full recovery instruction.
-`tests/fm-turnend-guard.test.sh` pairs them the same way for the turn-end banner and for the grok adapter's prepended instruction.
+`tests/fm-turnend-guard.test.sh` pairs them the same way for the turn-end banner, for the grok adapter's prepended instruction, and for the OpenCode plugin's prepended headline.
 Both worker tests were run against the pre-fix code first and reproduced the defect verbatim.
 `tests/fm-watcher-service.test.sh` covers backend selection, consent, the keeper fallback, and source-version convergence.
 `tests/fm-delivery.test.sh` and `tests/fm-watcher-systemd-smoke.test.sh` own delivery's own coverage; `docs/wake-delivery.md` states what they prove.

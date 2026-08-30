@@ -44,7 +44,8 @@ SESSION_CLOSING_REASON='This forced continuation is internal maintenance; after 
 # delivery services are the repair itself; the drain and teardown are the other
 # fleet commands the operator banner offers, all reserved to firstmate.
 WORKER_FORBIDDEN_COMMANDS='bin/fm-watcher-service.sh bin/fm-delivery-service.sh bin/fm-wake-drain.sh bin/fm-teardown.sh'
-WORKER_REPORT_REASON='repairing it belongs to firstmate, not to a task worker: report the stalled supervision in your task status line'
+WORKER_REPORT_TAIL='report the stalled supervision in your task status line and carry on with your own task in this worktree'
+WORKER_REPORT_REASON="repairing it belongs to firstmate, not to a task worker: $WORKER_REPORT_TAIL"
 OPERATOR_DAEMON_REPAIR='Daemon repair: bin/fm-watcher-service.sh restart'
 
 assert_names_no_worker_forbidden_command() {
@@ -884,7 +885,7 @@ EOF
   [ -z "$out" ] || fail "grok adapter printed output: $out"
   assert_names_no_worker_forbidden_command "$(cat "$log")" "grok worker follow-up must hand a task worker no command AGENTS.md reserves to firstmate"
   assert_contains "$(cat "$log")" 'SUPERVISION IS OFF IN THE HOME THAT LAUNCHED THIS TASK' "grok worker follow-up must name the launching home, not this worktree"
-  assert_contains "$(cat "$log")" 'report the stalled supervision in your task status line' "grok worker follow-up must name reporting as the worker's action"
+  assert_contains "$(cat "$log")" "$WORKER_REPORT_TAIL" "grok worker follow-up must name reporting as the worker's action"
   pass "fm-turnend-guard-grok: a task worker is told to report the stalled supervision, never to repair it"
 }
 
@@ -1131,6 +1132,96 @@ EOF
   pass ".opencode primary plugin: guard path is anchored to worktree, not directory"
 }
 
+# The OpenCode plugin prepends its OWN headline to the shared guard's banner, so
+# it has to answer the addressee question the shared guard already answered.
+# fm-spawn.sh launches crewmates and scouts on opencode from a single template,
+# so a crewmate working on firstmate itself loads this tracked plugin out of its
+# task worktree while FM_ROOT_OVERRIDE still names the launching home. Both halves
+# below run the real guard out of a real checkout; only the addressee differs.
+opencode_plugin_driver() {
+  local file="$TMP_ROOT/opencode-addressee-driver.mjs"
+  if [ ! -f "$file" ]; then
+    mkdir -p "$TMP_ROOT"
+    cat > "$file" <<'JS'
+import { writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+let promptBody = "";
+const client = {
+  session: {
+    promptAsync: async (request) => {
+      promptBody = request.body.parts[0].text;
+    },
+  },
+};
+const hooks = await mod.FmPrimaryTurnendGuard({
+  client,
+  directory: process.env.WORKTREE,
+  worktree: process.env.WORKTREE,
+});
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-addressee" } } });
+writeFileSync(process.env.BODY_FILE, promptBody);
+JS
+  fi
+  printf '%s\n' "$file"
+}
+
+run_opencode_plugin_prompt() {
+  local worktree=$1 body_file=$2 home=${3:-} plugin driver
+  plugin="$ROOT/.opencode/plugins/fm-primary-turnend-guard.js"
+  [ -f "$plugin" ] || fail "tracked OpenCode primary plugin is missing"
+  driver=$(opencode_plugin_driver)
+  : > "$body_file"
+  # Runtime module-format warnings are host noise; these assertions own the
+  # forced follow-up's text only.
+  if [ -n "$home" ]; then
+    NODE_NO_WARNINGS=1 PLUGIN="$plugin" WORKTREE="$worktree" BODY_FILE="$body_file" \
+      FM_ROOT_OVERRIDE="$home" FM_HOME="$home" node "$driver"
+  else
+    NODE_NO_WARNINGS=1 PLUGIN="$plugin" WORKTREE="$worktree" BODY_FILE="$body_file" node "$driver"
+  fi
+}
+
+test_opencode_plugin_tells_a_worker_to_report_not_to_repair() {
+  local primary wt body_file body
+  primary=$(make_primary_dir "$TMP_ROOT/opencode-worker-primary")
+  wt="$TMP_ROOT/opencode-worker-wt"
+  make_crewmate_worktree_dir "$primary" "$wt" fm/turnend-guard-opencode-worker >/dev/null
+  : > "$primary/state/task1.meta"
+  body_file="$TMP_ROOT/opencode-worker-body.txt"
+  run_opencode_plugin_prompt "$wt" "$body_file" "$primary" \
+    || fail "OpenCode plugin must force a follow-up when the launching home's supervision is down"
+  body=$(cat "$body_file")
+  [ -n "$body" ] || fail "OpenCode plugin queued no follow-up for a task worker"
+  assert_contains "$body" 'SUPERVISION IS OFF IN THE HOME THAT LAUNCHED THIS TASK' \
+    "OpenCode worker follow-up must name the launching home, not this worktree"
+  assert_contains "$body" "$WORKER_REPORT_TAIL" \
+    "OpenCode worker follow-up must name reporting as the worker's action"
+  assert_not_contains "$body" 'Follow the harness recovery instruction below' \
+    "OpenCode worker follow-up must not point at a recovery instruction the worker banner does not carry"
+  assert_names_no_worker_forbidden_command "$body" \
+    "OpenCode worker follow-up must hand a task worker no command AGENTS.md reserves to firstmate"
+  pass ".opencode primary plugin: a task worker is told to report the stalled supervision, never to repair it"
+}
+
+test_opencode_plugin_operator_headline_is_unchanged() {
+  local dir body_file body
+  dir=$(make_primary_dir "$TMP_ROOT/opencode-operator-primary")
+  : > "$dir/state/task1.meta"
+  body_file="$TMP_ROOT/opencode-operator-body.txt"
+  run_opencode_plugin_prompt "$dir" "$body_file" \
+    || fail "OpenCode plugin must force a follow-up when this home's own supervision is down"
+  body=$(cat "$body_file")
+  assert_contains "$body" 'TURN WOULD END BLIND - supervision is off. The watcher cycle is missing, failed, or unhealthy. Follow the harness recovery instruction below before ending the turn.' \
+    "the session operating this home must keep the OpenCode plugin's original headline"
+  assert_contains "$body" "$OPERATOR_DAEMON_REPAIR" \
+    "the session operating this home must still be handed the daemon repair command"
+  assert_not_contains "$body" 'SUPERVISION IS OFF IN THE HOME THAT LAUNCHED THIS TASK' \
+    "the session operating this home must not be addressed as a task worker"
+  pass ".opencode primary plugin: the session operating this home keeps its recovery headline"
+}
+
 test_pi_extension_forces_followup() {
   local ext content
   ext="$ROOT/.pi/extensions/fm-primary-turnend-guard.ts"
@@ -1372,6 +1463,8 @@ test_codex_hook_uses_process_pwd_when_payload_cwd_is_outside_root
 test_codex_hook_ignores_nested_git_root_guard
 test_opencode_plugin_forces_followup
 test_opencode_plugin_anchors_guard_to_worktree
+test_opencode_plugin_tells_a_worker_to_report_not_to_repair
+test_opencode_plugin_operator_headline_is_unchanged
 test_pi_extension_forces_followup
 test_pi_extension_injects_once_per_logical_agent_run
 test_pi_extension_retries_after_followup_delivery_failure
