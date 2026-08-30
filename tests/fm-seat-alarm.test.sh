@@ -425,6 +425,123 @@ test_a_restarter_that_stopped_cycling_is_never_called_running() {
   pass "a restarter that has stopped cycling is never reported as running"
 }
 
+# THE ALARM BELONGS TO THE VESSEL IT WATCHES, AND ARMING IS WHERE THAT IS
+# DECIDED. A secondmate home inherits no Telegram configuration, so every send
+# from one fails; a failed send is never counted, so the transition line would
+# reprint on every sweep and append a durable wake to a queue nobody drains -
+# while addressing the captain about "this vessel" from a home that is not it.
+# The predicate misfiring the other way would silently disarm the vessel this
+# alarm exists for, so both directions are pinned here.
+test_a_secondmate_home_is_never_armed_and_is_disarmed_if_it_was() {
+  local home out
+  home=$(make_home secondmate-arming)
+  printf 'crew-alpha\n' > "$home/.fm-secondmate-home"
+
+  out=$(env FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ALARM" --arm) \
+    || fail "--arm failed on a secondmate home"
+  assert_contains "$out" "not armed:" \
+    "--arm on a secondmate home did not report that it armed nothing"
+  assert_not_contains "$out" "armed: $home/state/seat-vacancy.check.sh" \
+    "--arm on a secondmate home claimed it had armed the watch"
+  [ ! -e "$home/state/seat-vacancy.check.sh" ] \
+    || fail "a secondmate home was left carrying the alarm shim"
+  [ ! -e "$home/state/seat-vacancy.check-trust" ] \
+    || fail "a secondmate home was left carrying the alarm shim's trust file"
+
+  # A home armed by an earlier version of this script, under BOTH the current id
+  # and the pre-rename one. Nothing else in this fleet would ever take either
+  # away, so --arm is the only thing that can retire them.
+  printf '#!/usr/bin/env bash\necho stale\n' > "$home/state/seat-vacancy.check.sh"
+  printf '#!/usr/bin/env bash\necho stale\n' > "$home/state/seat-alarm.check.sh"
+  chmod +x "$home/state/seat-vacancy.check.sh" "$home/state/seat-alarm.check.sh"
+  printf 'trusted\n' > "$home/state/seat-vacancy.check-trust"
+  printf 'trusted\n' > "$home/state/seat-alarm.check-trust"
+
+  env FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ALARM" --arm >/dev/null \
+    || fail "--arm failed while retiring shims on a secondmate home"
+  [ ! -e "$home/state/seat-vacancy.check.sh" ] \
+    || fail "--arm left the current alarm shim running on a secondmate home"
+  [ ! -e "$home/state/seat-vacancy.check-trust" ] \
+    || fail "--arm left the current alarm shim's trust file on a secondmate home"
+  [ ! -e "$home/state/seat-alarm.check.sh" ] \
+    || fail "--arm left the pre-rename alarm shim running on a secondmate home"
+  [ ! -e "$home/state/seat-alarm.check-trust" ] \
+    || fail "--arm left the pre-rename alarm shim's trust file on a secondmate home"
+
+  # Nothing is armed there on purpose, so nothing is missing and the diagnostic
+  # has nothing to say - while a genuine vessel with no watch still speaks.
+  out=$(env FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ALARM" --armed)
+  [ -z "$out" ] || fail "a secondmate home was told its first-mate watch is missing: $out"
+  pass "a secondmate home is never armed, is disarmed if it was, and is not nagged"
+}
+
+# The other direction of the same predicate: the vessel this alarm is written
+# for must still arm, still report that it armed, and still be nagged when it
+# has no watch. A predicate that answered yes everywhere would disable the
+# branch's primary deliverable in silence.
+test_a_vessel_that_is_not_a_secondmate_home_is_armed_and_nagged() {
+  local home out
+  home=$(make_home primary-arming)
+
+  out=$(env FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ALARM" --armed)
+  assert_contains "$out" "nothing is watching whether this vessel still has a first mate" \
+    "an unarmed vessel was not told its first-mate watch is missing"
+
+  out=$(env FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ALARM" --arm) \
+    || fail "--arm failed on a vessel that is not a secondmate home"
+  assert_contains "$out" "armed: $home/state/seat-vacancy.check.sh" \
+    "--arm on a vessel did not report the shim it armed"
+  assert_not_contains "$out" "not armed:" \
+    "--arm on a vessel reported that it armed nothing"
+  [ -x "$home/state/seat-vacancy.check.sh" ] \
+    || fail "the vessel's alarm shim was not armed"
+  [ -f "$home/state/seat-vacancy.check-trust" ] \
+    || fail "the vessel's alarm shim was armed without being registered"
+
+  out=$(env FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ALARM" --armed)
+  [ -z "$out" ] || fail "a freshly armed vessel was called unwatched: $out"
+  pass "a vessel that is not a secondmate home is armed, says so, and is nagged when it is not"
+}
+
+# The restarter reading the captain acts on. A respawner that is cycling
+# normally while the seat it started never finished starting is NOT a recovery
+# under way, and reporting it as one puts "should bring it back on its own" on
+# the captain's phone every repeat of an absence that will not resolve without
+# him.
+test_a_restarter_holding_a_seat_that_never_started_is_not_called_running() {
+  local home restarter
+  home=$(make_home holding-restarter)
+  record_seat "$home" 999999
+  record_endpoint "$home"
+  restarter=$(start_harness_shaped_process "$home" claude)
+  mkdir -p "$home/state/.seat-respawner.lock"
+  {
+    printf 'pid=%s\n' "$restarter"
+    printf 'fm-home=%s\n' "$home"
+  } > "$home/state/.seat-respawner.lock/record"
+  # Cycling normally: a beacon this respawner just wrote.
+  : > "$home/state/.last-seat-respawner-beat"
+  # And a first turn it typed into a pane that never took this home's lock.
+  {
+    printf 'pane=%%9\n'
+    printf 'at=%s\n' "$(date +%s)"
+    printf 'submitted=%s\n' "$(date +%s)"
+    printf 'held=%s\n' "$(date +%s)"
+  } > "$home/state/.seat-first-turn"
+
+  run_alarm "$home" >/dev/null
+  kill "$restarter" 2>/dev/null || true
+  assert_no_grep "should bring it back on its own" "$home/outbox" \
+    "a restarter holding a seat that never started was reported as bringing the seat back"
+  assert_no_grep "Nothing on this vessel is currently trying to bring it back" "$home/outbox" \
+    "a restarter that had already started a seat was reported as nothing trying"
+  assert_grep "never finished starting" "$home/outbox" \
+    "the captain was not told the started seat never finished starting"
+  assert_grep "will not start another by itself" "$home/outbox" \
+    "the captain was not told this vessel will not start another seat by itself"
+  pass "a restarter holding a seat that never finished starting is reported honestly"
+}
+
 test_a_failed_send_is_retried_rather_than_counted() {
   local home now
   home=$(make_home send-failure)
@@ -556,4 +673,7 @@ test_it_speaks_on_change_then_repeats_on_its_own_cadence
 test_a_returning_first_mate_is_recorded_and_never_announced
 test_a_failed_send_is_retried_rather_than_counted
 test_a_restarter_that_stopped_cycling_is_never_called_running
+test_a_secondmate_home_is_never_armed_and_is_disarmed_if_it_was
+test_a_vessel_that_is_not_a_secondmate_home_is_armed_and_nagged
+test_a_restarter_holding_a_seat_that_never_started_is_not_called_running
 test_the_watcher_runs_the_armed_alarm_and_pages_the_captain_itself

@@ -55,7 +55,7 @@ So a give-up on a held episode names both counts, names the pane still holding i
 
 ## Limits
 
-`tests/fm-seat-respawner.test.sh` covers the portable properties: honoring the stay-down marker, reporting the give-up path, refusing to relaunch beside a live first mate or on a lock it could not read, holding the next launch while a first turn is owed, composing no `PATH` for the fresh seat, refusing a resume-style launch command, and the keeper convergence's place in the watcher's sweep.
+`tests/fm-seat-respawner.test.sh` covers the portable properties: honoring the stay-down marker, reporting the give-up path, refusing to relaunch beside a live first mate or on a lock it could not read, holding the next launch while a first turn is owed, still reaching the retry bound and giving up while held without counting those holds as launches, reporting a held first turn as `holding:` rather than `up:`, composing no `PATH` for the fresh seat, refusing a resume-style launch command, and the keeper convergence's place in the watcher's sweep.
 The real tmux effect is proved end to end by `tests/fm-seat-absence-e2e.test.sh`, on a throwaway `FM_HOME` with a private tmux socket, a stand-in delivery status that first reports `undeliverable:`, a harmless configured launch command, and a stand-in seat that is really killed; [seat-absence.md](seat-absence.md) owns what that run establishes and what it still cannot.
 Do not test this by killing the live firstmate seat.
 

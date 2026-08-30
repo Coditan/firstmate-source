@@ -399,6 +399,19 @@ bootstrap_check() {
   fi
 }
 
+# One field of the respawner's pending first-turn record, read the same way.
+recorded_first_turn_field() {  # <key>
+  local record="$STATE/.seat-first-turn"
+  [ -f "$record" ] && [ ! -L "$record" ] || return 0
+  sed -n "s/^$1=//p" "$record" 2>/dev/null | head -1
+}
+
+# A first turn that was typed into a pane still open past its deadline.  The
+# respawner marks this itself in the record it owns; this only reads it.
+first_turn_held() {
+  [ -n "$(recorded_first_turn_field held)" ]
+}
+
 # `up:` is composed into a sentence the captain reads on his phone during an
 # outage - bin/fm-seat-alarm.sh's restarter_clause turns it into "an automatic
 # restart is running and should bring it back on its own" - so it may only be
@@ -406,12 +419,25 @@ bootstrap_check() {
 # included. A live pid that has stopped cycling gets its own `stalled:` prefix,
 # as bin/fm-delivery-lib.sh already gives the listener; every reader that is not
 # looking for `up:` or `down:` reads it as unknown, which is the honest answer.
+#
+# A CYCLING RESPAWNER IS NOT THE SAME FACT AS A RECOVERY UNDER WAY, so a held
+# first turn gets its own `holding:` prefix beside those.  The respawner is
+# beating normally, which is what makes `up:` true of the process and false of
+# the vessel: a seat was started, it never finished starting, and this half will
+# not open another beside it.  Reporting that as `up:` would put "an automatic
+# restart is running and should bring it back on its own" on the captain's
+# phone every repeat of an absence that will not resolve without him - an
+# instrument reading healthy while the thing it watches is broken, which is the
+# shape this whole area exists to remove.
 status_report() {
   local age=999999 pid backend
   backend=$(select_backend)
   [ -e "$BEAT" ] && age=$(fm_path_age "$BEAT")
   pid=$(recorded_respawner_field pid)
-  if healthy_respawner; then
+  if healthy_respawner && first_turn_held; then
+    printf 'holding: respawner pid %s started a seat in pane %s that has not finished starting (last beat %ss ago, %s)\n' \
+      "$pid" "$(recorded_first_turn_field pane)" "$age" "$backend"
+  elif healthy_respawner; then
     printf 'up: respawner pid %s last beat %ss ago (%s)\n' "$pid" "$age" "$backend"
   elif [ "$(recorded_respawner_field fm-home)" = "$FM_HOME" ] \
     && [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then

@@ -333,6 +333,7 @@ read_restarter() {
   line=$(timeout "$PROBE_TIMEOUT" "$RESPAWNER_SERVICE" status 2>/dev/null) || true
   case "$line" in
     up:*) RESTARTER=up ;;
+    holding:*) RESTARTER=holding ;;
     down:*) RESTARTER=down ;;
     *) RESTARTER=unknown ;;
   esac
@@ -522,6 +523,7 @@ waiting_clause() {
 restarter_clause() {
   case "$RESTARTER" in
     up) printf 'An automatic restart is running and should bring it back on its own.' ;;
+    holding) printf 'A restart already started a first mate here and it never finished starting, so this vessel is waiting on that one and will not start another by itself.' ;;
     down) printf 'Nothing on this vessel is currently trying to bring it back.' ;;
     *) printf 'Whether anything is trying to bring it back could not be read.' ;;
   esac
@@ -603,13 +605,20 @@ notify() {  # <verdict> <duration-seconds>
 # captain about "this vessel" from a home that is not the vessel. So arming is
 # refused there rather than attempted and lost.
 #
-# It also REMOVES a shim armed by an earlier version of this script, because a
-# home that was armed before this rule existed would otherwise go on running it
-# forever: nothing else would ever take it away.
+# It also REMOVES BOTH shims an earlier version of this script could have armed
+# here - the current id and its pre-rename predecessor - because a home that was
+# armed before this rule existed would otherwise go on running one of them
+# forever: nothing else would ever take it away. Each is named exactly, never
+# globbed, for the reason the rename migration below gives.
 arm() {
   local desired current tmp
   if fm_root_is_secondmate_home "$FM_HOME"; then
-    rm -f -- "$CHECK" "$STATE/$CHECK_ID.check-trust"
+    rm -f -- "$CHECK" "$STATE/$CHECK_ID.check-trust" "$LEGACY_CHECK" "$LEGACY_TRUST" \
+      2>/dev/null || return 1
+    if [ -e "$CHECK" ] || [ -e "$STATE/$CHECK_ID.check-trust" ] \
+      || [ -e "$LEGACY_CHECK" ] || [ -e "$LEGACY_TRUST" ]; then
+      return 1
+    fi
     return 0
   fi
   desired=$(cat <<SHIM
