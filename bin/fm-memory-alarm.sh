@@ -165,26 +165,35 @@
 #   memory-alarm.log   one append-only line per spoken change, crossing,
 #                      recovery and change of watch alike, each carrying the
 #                      evidence it was decided on and a `watch=` field naming
-#                      the conditions whose INSTRUMENT could not be read on that
-#                      poll (`watch=all` when all three were readable). It lives
+#                      the conditions this alarm could not JUDGE on that poll -
+#                      whether because their instrument could not be read or
+#                      because the home deliberately left the gate unconfigured
+#                      (`watch=all` when all three were judged). It lives
 #                      in data/ rather than state/ because the question it
 #                      answers - has this happened before, and what was running
 #                      - is asked long after the volatile record of the moment
 #                      is gone.
 #
 # State, under FM_HOME/state:
-#   memory-alarm.state    "<state> <epoch> <watch>". The last state this alarm
-#                         decided, so a transition can be told from a
-#                         continuation, and the set of conditions whose
-#                         INSTRUMENT could not be read on that poll -
-#                         `headroom,horizon,stall` in that order, or `-` when
-#                         all three were readable. It is deliberately narrower
-#                         than "went unjudged": a condition suppressed by an
-#                         expected, self-clearing absence of data - no stored
-#                         growth sample yet, one too young to divide by, one
-#                         aged past its window - is scope rather than
-#                         blindness, resolves on the next poll that stores a
-#                         sample, and never enters the set. The watch
+#   memory-alarm.state    "<state> <epoch> <watch> <crossed>". The last state
+#                         this alarm decided, so a transition can be told from a
+#                         continuation; the set of conditions it could not JUDGE
+#                         on that poll - `headroom,horizon,stall` in that order,
+#                         or `-` when all three were judged; and the condition
+#                         that raised the crossing it is holding, or `-` when it
+#                         is holding none. A condition enters the watch set
+#                         because its instrument could not be read or because
+#                         the home deliberately left its gate unconfigured, and
+#                         for no other reason: one suppressed by an expected,
+#                         self-clearing absence of data - no stored growth
+#                         sample yet, one too young to divide by, one aged past
+#                         its window - is scope rather than blindness, resolves
+#                         on the next poll that stores a sample, and never
+#                         enters the set. The crossed condition is carried
+#                         because a condition that is blind but never crossed
+#                         says nothing about whether the shortage is over, so
+#                         only the one that RAISED the alarm may hold a
+#                         recovery back. The watch
 #                         set is carried because a machine only PARTLY watched
 #                         is not a watched machine: a change in it is a
 #                         transition and is spoken once, exactly as a crossing
@@ -364,11 +373,11 @@ OFFENDER=
 RESIDENT=
 CROSS_KIND=
 
-# Which of the three conditions had an INSTRUMENT this poll could not read, in a
-# fixed order so two polls that saw the same thing produce the same string. It is
-# derived from the flags the conditions already keep rather than tracked
-# separately, so it can never disagree with what the verdict says. A verdict of
-# unmeasured means no condition was reached at all, whatever the reason.
+# Which of the three conditions this poll could not JUDGE, in a fixed order so
+# two polls that saw the same thing produce the same string. It is derived from
+# the flags the conditions already keep rather than tracked separately, so it can
+# never disagree with what the verdict says. A verdict of unmeasured means no
+# condition was reached at all, whatever the reason.
 unjudged_conditions() {
   local set=
   if [ "$VERDICT" = unmeasured ]; then
@@ -830,7 +839,7 @@ read_state_since() {
 
 read_state_watch() {
   local watch=
-  [ -f "$STATE_FILE" ] && { read -r _ _ watch <"$STATE_FILE" 2>/dev/null || true; }
+  [ -f "$STATE_FILE" ] && { read -r _ _ watch _ <"$STATE_FILE" 2>/dev/null || true; }
   # Anything this alarm did not write itself reads as "all three judged", so a
   # record from before this field existed does not manufacture a change.
   case "${watch:-}" in
@@ -839,10 +848,23 @@ read_state_watch() {
   esac
 }
 
+# Which condition raised the crossing this alarm is currently holding, so a
+# later poll can tell whether the condition that RAISED it is the one it cannot
+# re-read. A blind condition that never crossed says nothing about whether the
+# shortage is over, and must not hold a recovery back.
+read_state_crossed() {
+  local kind=
+  [ -f "$STATE_FILE" ] && { read -r _ _ _ kind <"$STATE_FILE" 2>/dev/null || true; }
+  case "${kind:-}" in
+    headroom|horizon|stall) printf '%s' "$kind" ;;
+    *) printf '%s' - ;;
+  esac
+}
+
 write_state() {
-  local to=$1 since=$2 watch=$3
+  local to=$1 since=$2 watch=$3 crossed=$4
   mkdir -p "$STATE" 2>/dev/null || return 1
-  printf '%s %s %s\n' "$to" "$since" "$watch" >"$STATE_FILE" 2>/dev/null
+  printf '%s %s %s %s\n' "$to" "$since" "$watch" "$crossed" >"$STATE_FILE" 2>/dev/null
 }
 
 human_duration() {
@@ -966,6 +988,10 @@ evaluate
 PREVIOUS=$(read_state)
 SINCE=$(read_state_since)
 PREVIOUS_WATCH=$(read_state_watch)
+# The crossing this alarm is holding, if any: the stored one while a shortage is
+# still on, replaced by this poll's own when it crosses afresh.
+CROSSED_KIND=$(read_state_crossed)
+[ "$VERDICT" != crossed ] || CROSSED_KIND=${CROSS_KIND:--}
 # Taken BEFORE the recovery guard below can rewrite the verdict, because it
 # records what this poll could judge, not what it decided to say about it.
 WATCH=$(unjudged_conditions)
@@ -975,19 +1001,22 @@ WATCH=$(unjudged_conditions)
 # headroom alone. That is enough to stay quiet while already quiet, and never
 # enough to declare a shortage over - so a crossing lapses into "cannot see"
 # rather than into a recovery nobody measured.
-# It blocks on the CONDITIONS' own blindness and never on the reading's, because
-# an input no condition uses - a cgroup tree a container does not have, an
+# It blocks on the condition that RAISED this crossing and on nothing else. An
+# input no condition uses - a cgroup tree a container does not have, an
 # installation whose records this account cannot read - says nothing about
-# whether the shortage is over. Blocking on those would announce every genuine
-# recovery on such a host as a blindness, and then announce a restoration of
-# sight that never happened.
+# whether the shortage is over, and neither does a condition that is blind but
+# never crossed: a host whose memory-stall account can never be read must still
+# be able to report a headroom shortage as ended. Blocking on either would
+# announce every genuine recovery on such a host as a blindness, and then a
+# restoration of sight that never happened.
 if [ "$VERDICT" = ok ] && [ "$PREVIOUS" = crossed ] &&
-   { [ -n "$GROWTH_BLIND" ] || [ -n "$STALL_BLIND" ]; }; then
+   { { [ "$CROSSED_KIND" = horizon ] && [ -n "$GROWTH_BLIND" ]; } ||
+     { [ "$CROSSED_KIND" = stall ] && [ -n "$STALL_BLIND" ]; }; }; then
   VERDICT=unmeasured
-  if [ -n "$GROWTH_BLIND" ]; then
-    REASON="whether the shortage is over is unknown: growth could not be compared this run ($GROWTH_BLIND), so the conditions that raise this alarm were not re-evaluated in full"
+  if [ "$CROSSED_KIND" = horizon ]; then
+    REASON="whether the shortage is over is unknown: this alarm crossed on growth, and growth could not be compared this run ($GROWTH_BLIND), so the condition that raised it was not re-evaluated"
   else
-    REASON="whether the shortage is over is unknown: memory stall could not be read this run ($STALL_BLIND), so the conditions that raise this alarm were not re-evaluated in full"
+    REASON="whether the shortage is over is unknown: this alarm crossed on memory stall, and stall could not be read this run ($STALL_BLIND), so the condition that raised it was not re-evaluated"
   fi
   incomplete_note
   stall_gate_note
@@ -1007,7 +1036,7 @@ CURRENT=$VERDICT
 # whose stall account can never be read says so once and then goes quiet about
 # it, rather than either nagging every poll or never mentioning it at all.
 if [ "$CURRENT" = "$PREVIOUS" ] && [ "$WATCH" = "$PREVIOUS_WATCH" ]; then
-  write_state "$CURRENT" "$SINCE" "$WATCH" ||
+  write_state "$CURRENT" "$SINCE" "$WATCH" "$CROSSED_KIND" ||
     printf 'MEMORY_ALARM: the memory watch could not persist its %s state in %s; this poll was measured but not durably completed.\n' \
       "$CURRENT" "$STATE_FILE"
   exit 0
@@ -1016,11 +1045,22 @@ fi
 LINE=
 if [ "$CURRENT" = "$PREVIOUS" ]; then
   # The verdict has not moved; what this alarm can SEE has. It never reads as an
-  # all-clear and never as a crossing, because neither happened.
+  # all-clear and never as a crossing, because neither happened - but when the
+  # machine is ALREADY crossed this is the only line the poll emits, so it names
+  # the shortage it is still holding first. A reader must not be able to take a
+  # loss-of-sight notice for the whole story on a machine that is out of memory.
+  held=
+  if [ "$CURRENT" = crossed ]; then
+    if [ "$CROSSED_KIND" = stall ]; then
+      held="this machine is still stalling on memory, and "
+    else
+      held="this machine is still running out of RAM headroom, and "
+    fi
+  fi
   if [ "$WATCH" = - ]; then
-    LINE="MEMORY_ALARM: the memory watch can judge all three of its conditions on this machine again - $REASON."
+    LINE="MEMORY_ALARM: ${held}the memory watch can judge all three of its conditions on this machine again - $REASON."
   else
-    LINE="MEMORY_ALARM: the memory watch can no longer judge $WATCH on this machine, so it is only partly watched - $REASON. This is not an all-clear for what it cannot judge."
+    LINE="MEMORY_ALARM: ${held}the memory watch cannot judge $WATCH on this machine, so it is only partly watched - $REASON. This is not an all-clear for what it cannot judge."
   fi
 else
 case "$CURRENT" in
@@ -1036,13 +1076,15 @@ case "$CURRENT" in
     fi
     ;;
   ok)
-    if [ "$PREVIOUS" = crossed ]; then
+    if [ "$PREVIOUS" = crossed ] || [ "$CROSSED_KIND" != - ]; then
       LINE="MEMORY_ALARM: recovered - $REASON. The shortage lasted $(human_duration "$((NOW - SINCE))")."
     elif [ "$WATCH" = - ]; then
       LINE="MEMORY_ALARM: the memory watch can see this machine again - $REASON."
     else
       LINE="MEMORY_ALARM: the memory watch reads this machine as calm on the conditions it could judge, and it still cannot judge $WATCH, so this machine is only partly watched - $REASON. This is not an all-clear for what it cannot judge."
     fi
+    # The shortage is over, so the crossing this alarm was holding is released.
+    CROSSED_KIND=-
     ;;
   unmeasured)
     LINE="MEMORY_ALARM: the memory watch has gone blind - $REASON. This is not an all-clear."
@@ -1053,15 +1095,24 @@ fi
 [ -z "$DETAIL" ] || LINE="$LINE Unmeasured: $DETAIL"
 
 # A change of watch is not a change of state, so it must not restart the clock
-# that measures how long a shortage has lasted.
-if [ "$CURRENT" = "$PREVIOUS" ]; then SINCE_NEXT=$SINCE; else SINCE_NEXT=$NOW; fi
+# that measures how long a shortage has lasted. Nor does lapsing from crossed
+# into "cannot tell": the shortage did not end there, it stopped being
+# judgeable, so the clock keeps running and the recovery that finally comes can
+# still say how long it lasted.
+if [ "$CURRENT" = "$PREVIOUS" ]; then
+  SINCE_NEXT=$SINCE
+elif [ "$CROSSED_KIND" != - ] && [ "$PREVIOUS" != ok ]; then
+  SINCE_NEXT=$SINCE
+else
+  SINCE_NEXT=$NOW
+fi
 
 if ! record_transition "$PREVIOUS" "$CURRENT" "$LINE"; then
   printf 'MEMORY_ALARM: the memory watch could not record the %s to %s transition in %s; the transition was measured but not durably completed.\n' \
     "$PREVIOUS" "$CURRENT" "$LOG"
   exit 0
 fi
-if ! write_state "$CURRENT" "$SINCE_NEXT" "$WATCH"; then
+if ! write_state "$CURRENT" "$SINCE_NEXT" "$WATCH" "$CROSSED_KIND"; then
   printf 'MEMORY_ALARM: the memory watch recorded the %s to %s transition but could not persist its new state in %s; the transition was not durably completed.\n' \
     "$PREVIOUS" "$CURRENT" "$STATE_FILE"
   exit 0

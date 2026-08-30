@@ -306,14 +306,16 @@ Stated because a limit nobody wrote down is one somebody will later assume away.
   Pressure-stall is not present on every kernel or in every container, and where it is present it is not always accounted.
   Where `/proc/pressure/memory` is absent, unreadable, or provably not accounting, the reader marks it unmeasured, the reading is incomplete, and the alarm reports that it could not see rather than that the machine is fine.
   A calm verdict names the conditions it actually judged, so "all three read clear" can be told apart from "one of them was never evaluated", and a stall that could not be read is never printed as `0.00`.
-  Which conditions had an instrument the alarm could not read is itself carried in `state/memory-alarm.state` as a third field and in every `data/memory-alarm.log` line as `watch=`, so a change in that set is a transition and is spoken once on the watcher's channel, exactly as a crossing or a recovery is.
-  That set is narrower than "went unjudged" on purpose: growth the alarm could not compare because the stored sample was absent, too young, too old or unreadable is scope rather than blindness, is repaired by the next poll that stores a sample, and never enters it.
+  Which conditions the alarm could not judge is itself carried in `state/memory-alarm.state` as a third field and in every `data/memory-alarm.log` line as `watch=`, so a change in that set is a transition and is spoken once on the watcher's channel, exactly as a crossing or a recovery is.
+  A condition enters that set because its instrument could not be read or because the home deliberately left its gate unconfigured, and for no other reason: growth the alarm could not compare because the stored sample was absent, too young, too old or unreadable is scope rather than blindness, is repaired by the next poll that stores a sample, and never enters it.
   A home whose memory-stall account can never be read therefore says so once when it starts and then goes quiet about it, rather than either nagging on every poll or passing a partly watched machine off as a watched one.
-  A recovery, by contrast, is held back only by a condition that could not be re-evaluated, never by an unmeasured input no condition uses - a container with no cgroup tree recovers as any other host does.
+  A recovery, by contrast, is held back only by the condition that RAISED the crossing, and only when this poll could not re-evaluate it.
+  An unmeasured input no condition uses never holds one back - a container with no cgroup tree recovers as any other host does - and neither does a condition that is blind but never crossed, so a host whose memory-stall account can never be read still reports a headroom shortage as ended, with the duration it lasted.
+  The condition that raised the crossing is carried in `state/memory-alarm.state` as a fourth field for exactly that reason, and the shortage's clock keeps running across a poll that could not re-judge it, because a shortage nobody could measure did not thereby end.
   Blindness is per-condition and never blanket, though: an incomplete reading still yields the verdict of every condition whose own input was present, names every input it could not read alongside that verdict, and says on the same line that it is not a full all-clear.
   RAM headroom is the single exception, because the floor measures it and the horizon divides by it: a reading without it leaves nothing to judge at all.
   So `fm-memory-alarm.sh --status` exits 3 only when NO condition could be judged, 0 when at least one was judged and none crossed, and 4 when one crossed.
-  A crossed alarm is never declared recovered by a reading that could not read every input, so making blindness narrower cannot make recovery easier.
+  So making blindness narrower did not make recovery easier: what a recovery must clear is the condition that raised the alarm, which is a narrower and more exacting test than the reading's completeness ever was.
 
 ## Evidence
 
@@ -339,14 +341,15 @@ MEMORY_ALARM: recovered - 16080 MiB RAM headroom available, growth 8 MiB/min. Th
 (silent)
 ```
 
-Both transitions in `data/memory-alarm.log`, each carrying the evidence it was decided on and a `watch=` field naming the conditions whose instrument could not be read on that poll, or `watch=all` when all three were readable:
+Both transitions were recorded in `data/memory-alarm.log`, each carrying the evidence it was decided on.
+Quoted as they were written on 2026-08-13, before the stall condition and its `watch=` field existed:
 
 ```
-2026-08-13T20:10:39Z  ok -> crossed  14628 MiB RAM headroom available  1185 MiB/min growth  12.3 minutes left  0.00 memory stall for 0s  watch=all  python3 balloon.py (pid 1256767), account coditan, serving task ... (ship, firstmate-fork), growing 1184 MiB/min
-2026-08-13T20:13:07Z  crossed -> ok  16080 MiB RAM headroom available     8 MiB/min growth  ...  0.00 memory stall for 0s  watch=all  ...
+2026-08-13T20:10:39Z  ok -> crossed  14628 MiB RAM headroom available  1185 MiB/min growth  12.3 minutes left  python3 balloon.py (pid 1256767), account coditan, serving task ... (ship, firstmate-fork), growing 1184 MiB/min
+2026-08-13T20:13:07Z  crossed -> ok  16080 MiB RAM headroom available     8 MiB/min growth               ...
 ```
 
-A host whose memory-stall account cannot be read carries `watch=unjudged stall` on the same lines instead.
+A record written today carries two further fields between the growth figures and the named process: the stall reading with the run behind it, and `watch=`, which is `watch=all` when all three conditions were judged and `watch=unjudged stall` on a host whose memory-stall account cannot be read.
 
 `tests/fm-memory-alarm-crossing-e2e.test.sh` is that proof as a test: it drives a real runaway, sized from the host's own RAM headroom rather than a fixed number, and requires the alarm to fire, name the process and account, record both transitions, and leave the process running.
 It refuses to run on a host without generous headroom rather than adding pressure to a machine already under it.
