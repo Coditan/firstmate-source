@@ -162,16 +162,29 @@
 #   2  usage error
 #
 # Durable record, under FM_HOME/data:
-#   memory-alarm.log   one append-only line per state change, crossing and
-#                      recovery alike, each carrying the evidence it was decided
-#                      on. It lives in data/ rather than state/ because the
-#                      question it answers - has this happened before, and what
-#                      was running - is asked long after the volatile record of
-#                      the moment is gone.
+#   memory-alarm.log   one append-only line per spoken change, crossing,
+#                      recovery and change of watch alike, each carrying the
+#                      evidence it was decided on and a `watch=` field naming
+#                      the conditions that could NOT be judged on that poll
+#                      (`watch=all` when every one of the three was). It lives
+#                      in data/ rather than state/ because the question it
+#                      answers - has this happened before, and what was running
+#                      - is asked long after the volatile record of the moment
+#                      is gone.
 #
 # State, under FM_HOME/state:
-#   memory-alarm.state    the last state this alarm decided, so a transition can
-#                         be told from a continuation
+#   memory-alarm.state    "<state> <epoch> <watch>". The last state this alarm
+#                         decided, so a transition can be told from a
+#                         continuation, and the set of conditions it could NOT
+#                         judge on that poll - `headroom,horizon,stall` in that
+#                         order, or `-` when all three were judged. The watch
+#                         set is carried because a machine only PARTLY watched
+#                         is not a watched machine: a change in it is a
+#                         transition and is spoken once, exactly as a crossing
+#                         is, so a condition that goes unreadable can never
+#                         pass in silence and can never nag on every poll
+#                         either. A record written before this field existed
+#                         reads as `-`.
 #   memory-alarm.stall    the run of consecutive polls that have seen this
 #                         machine stalling: the epoch the current run began and
 #                         the epoch of the last poll that continued it. A run
@@ -327,6 +340,7 @@ VERDICT=unmeasured
 REASON=
 DETAIL=
 GROWTH_BLIND=
+GROWTH_SCOPED=
 STALL_BLIND=
 STALL_UNSET=
 AVAIL_MIB=0
@@ -342,6 +356,28 @@ SWAP_USED_MIB=
 OFFENDER=
 RESIDENT=
 CROSS_KIND=
+
+# Which of the three conditions this poll could NOT judge, in a fixed order so
+# two polls that saw the same thing produce the same string. It is derived from
+# the flags the conditions already keep rather than tracked separately, so it
+# can never disagree with what the verdict says. A verdict of unmeasured means
+# no condition was reached at all, whatever the reason.
+unjudged_conditions() {
+  local set=
+  if [ "$VERDICT" = unmeasured ]; then
+    printf 'headroom,horizon,stall'
+    return
+  fi
+  # Only a condition whose instrument failed counts here. A declared scope
+  # absence suppresses the horizon for one poll and resolves itself on the next,
+  # so counting it would announce a loss and a recovery of sight on the second
+  # poll of every fresh home.
+  if [ -n "$GROWTH_BLIND" ] && [ -z "$GROWTH_SCOPED" ]; then set=horizon; fi
+  if [ -n "$STALL_BLIND" ] || [ -n "$STALL_UNSET" ]; then
+    set="${set:+$set,}stall"
+  fi
+  printf '%s' "${set:--}"
+}
 
 # A threshold this alarm substituted for an unusable one is stated on every
 # verdict, whichever one is reached, so a fallback can never be mistaken for a
@@ -440,6 +476,11 @@ evaluate() {
     # broken instrument - but it is not a growth measurement either, and calling
     # it zero would be the substituted zero this whole programme refuses.
     | (.growth.scope_reason != null or .growth.unmeasured_reason != null) as $growth_blind
+    # Scope is not a failed instrument. A first run with no stored sample to
+    # compare against declares that absence and the very next poll resolves it,
+    # so it suppresses the horizon condition for this poll without meaning the
+    # machine has stopped being watched for growth.
+    | (.growth.scope_reason != null) as $growth_scoped
     # A completeness claim is not a stall measurement. The reading marks a
     # missing or unparsable pressure file unmeasured, so this should never fire
     # on a real reading - but if the number is absent while the reading calls
@@ -450,6 +491,7 @@ evaluate() {
         (if $incomplete then "incomplete" else "complete" end),
         (if $headroom_blind then "blind" else "read" end),
         (if $growth_blind then (.growth.scope_reason // .growth.unmeasured_reason) else "" end),
+        (if $growth_scoped then "scoped" else "" end),
         ($avail_mib | tostring),
         ($growth_kb_min / 1024 | floor | tostring),
         (if $minutes == null then "NA" else ($minutes * 10 | floor / 10 | tostring) end),
@@ -487,10 +529,10 @@ evaluate() {
     return
   fi
 
-  local completeness headroom_state growth_blind unmeasured_list
+  local completeness headroom_state growth_blind growth_scoped unmeasured_list
   local top_cmd top_pid top_account top_kind top_detail top_growth top_protected
   local res_cmd res_pid res_account res_kind res_detail res_rss res_protected
-  IFS=$'\037' read -r completeness headroom_state growth_blind AVAIL_MIB GROWTH_MIB_MIN MINUTES \
+  IFS=$'\037' read -r completeness headroom_state growth_blind growth_scoped AVAIL_MIB GROWTH_MIB_MIN MINUTES \
     top_cmd top_pid top_account top_kind top_detail top_growth top_protected unmeasured_list \
     STALL_BLIND STALL_FULL60 STALL_SOME60 SWAP_USED_MIB \
     res_cmd res_pid res_account res_kind res_detail res_rss res_protected \
@@ -526,6 +568,7 @@ evaluate() {
   fi
 
   GROWTH_BLIND="$growth_blind"
+  GROWTH_SCOPED="$growth_scoped"
   # Two different silences, and they must never be merged. STALL_BLIND means the
   # instrument failed, which blocks a recovery because the condition that raised
   # an alarm could not be re-read. STALL_UNSET means the fleet has not chosen a
@@ -662,7 +705,20 @@ evaluate() {
 read_stall_run() {  # sets STALL_RUN_SECONDS, and STALL_ACTIVE when a run is on
   local start="" last="" stalling=no
 
-  if [ -z "$STALL_BLIND" ] && [ -n "$STALL_MAX" ] &&
+  # A poll that could not read the account is not a poll that saw a calm
+  # machine, and it must not be treated more harshly than a poll that never
+  # happened at all: a gap is forgiven up to the continuity limit, so a blind
+  # reading is too. It neither extends the run nor erases it - the file is left
+  # exactly as it stands, and the continuity limit decides on the next poll that
+  # can actually see. Blindness that lasts therefore expires the run by the same
+  # rule a silent watcher does.
+  if [ -n "$STALL_BLIND" ]; then
+    STALL_RUN_SECONDS=0
+    STALL_ACTIVE=
+    return
+  fi
+
+  if [ -n "$STALL_MAX" ] &&
      awk -v s="$STALL_FULL60" -v g="$STALL_MAX" 'BEGIN { exit !(s + 0 >= g + 0) }'; then
     stalling=yes
   fi
@@ -726,9 +782,11 @@ record_transition() {
   else
     named="${OFFENDER:-no process was growing}"
   fi
-  printf '%s\t%s\t%s -> %s\t%s MiB RAM headroom available\t%s MiB/min growth\t%s minutes left\t%s memory stall for %s\t%s\t%s\n' \
+  printf '%s\t%s\t%s -> %s\t%s MiB RAM headroom available\t%s MiB/min growth\t%s minutes left\t%s memory stall for %s\twatch=%s\t%s\t%s\n' \
     "$NOW" "$(iso "$NOW")" "$from" "$to" "$AVAIL_MIB" "$GROWTH_MIB_MIN" "${MINUTES:-NA}" \
-    "${STALL_FULL60:-NA}" "$(human_duration "$STALL_RUN_SECONDS")" "$named" "$line" >>"$LOG" 2>/dev/null
+    "${STALL_FULL60:-NA}" "$(human_duration "$STALL_RUN_SECONDS")" \
+    "$([ "$WATCH" = - ] && printf all || printf 'unjudged %s' "$WATCH")" \
+    "$named" "$line" >>"$LOG" 2>/dev/null
 }
 
 read_state() {
@@ -750,10 +808,21 @@ read_state_since() {
   case "${since:-}" in ''|*[!0-9]*) printf '%s' "$NOW" ;; *) printf '%s' "$since" ;; esac
 }
 
+read_state_watch() {
+  local watch=
+  [ -f "$STATE_FILE" ] && { read -r _ _ watch <"$STATE_FILE" 2>/dev/null || true; }
+  # Anything this alarm did not write itself reads as "all three judged", so a
+  # record from before this field existed does not manufacture a change.
+  case "${watch:-}" in
+    -|headroom,horizon,stall|horizon|stall|horizon,stall) printf '%s' "$watch" ;;
+    *) printf '%s' - ;;
+  esac
+}
+
 write_state() {
-  local to=$1 since=$2
+  local to=$1 since=$2 watch=$3
   mkdir -p "$STATE" 2>/dev/null || return 1
-  printf '%s %s\n' "$to" "$since" >"$STATE_FILE" 2>/dev/null
+  printf '%s %s %s\n' "$to" "$since" "$watch" >"$STATE_FILE" 2>/dev/null
 }
 
 human_duration() {
@@ -876,22 +945,31 @@ evaluate
 
 PREVIOUS=$(read_state)
 SINCE=$(read_state_since)
+PREVIOUS_WATCH=$(read_state_watch)
+# Taken BEFORE the recovery guard below can rewrite the verdict, because it
+# records what this poll could judge, not what it decided to say about it.
+WATCH=$(unjudged_conditions)
 
 # Recovery from a crossing must be earned. When growth could not be compared,
 # the horizon condition was never evaluated this run, so a calm verdict rests on
 # headroom alone. That is enough to stay quiet while already quiet, and never
 # enough to declare a shortage over - so a crossing lapses into "cannot see"
 # rather than into a recovery nobody measured.
+# It blocks on the CONDITIONS' own blindness and never on the reading's, because
+# an input no condition uses - a cgroup tree a container does not have, an
+# installation whose records this account cannot read - says nothing about
+# whether the shortage is over. Blocking on those would announce every genuine
+# recovery on such a host as a blindness, and then announce a restoration of
+# sight that never happened.
 if [ "$VERDICT" = ok ] && [ "$PREVIOUS" = crossed ] &&
-   { [ -n "$GROWTH_BLIND" ] || [ -n "$STALL_BLIND" ] || [ -n "$READING_INCOMPLETE" ]; }; then
+   { [ -n "$GROWTH_BLIND" ] || [ -n "$STALL_BLIND" ]; }; then
   VERDICT=unmeasured
   if [ -n "$GROWTH_BLIND" ]; then
     REASON="whether the shortage is over is unknown: growth could not be compared this run ($GROWTH_BLIND), so the conditions that raise this alarm were not re-evaluated in full"
-  elif [ -n "$STALL_BLIND" ]; then
-    REASON="whether the shortage is over is unknown: memory stall could not be read this run ($STALL_BLIND), so the conditions that raise this alarm were not re-evaluated in full"
   else
-    REASON="whether the shortage is over is unknown: the reading could not read every input this run, so the conditions that raise this alarm were not re-evaluated in full"
+    REASON="whether the shortage is over is unknown: memory stall could not be read this run ($STALL_BLIND), so the conditions that raise this alarm were not re-evaluated in full"
   fi
+  incomplete_note
   stall_gate_note
 fi
 
@@ -901,14 +979,30 @@ fi
 CURRENT=$VERDICT
 [ "$CURRENT" = elevated ] && CURRENT=$PREVIOUS
 
-if [ "$CURRENT" = "$PREVIOUS" ]; then
-  write_state "$CURRENT" "$SINCE" ||
+# A machine only PARTLY watched is not a watched machine, so which conditions
+# went unjudged is a state in its own right: a change in that set is a
+# transition and is spoken once, exactly as a crossing or a recovery is. That
+# keeps the standing rule - an instrument this alarm cannot read is never
+# relayed as calm - without breaking the speaks-on-change discipline: a home
+# whose stall account can never be read says so once and then goes quiet about
+# it, rather than either nagging every poll or never mentioning it at all.
+if [ "$CURRENT" = "$PREVIOUS" ] && [ "$WATCH" = "$PREVIOUS_WATCH" ]; then
+  write_state "$CURRENT" "$SINCE" "$WATCH" ||
     printf 'MEMORY_ALARM: the memory watch could not persist its %s state in %s; this poll was measured but not durably completed.\n' \
       "$CURRENT" "$STATE_FILE"
   exit 0
 fi
 
 LINE=
+if [ "$CURRENT" = "$PREVIOUS" ]; then
+  # The verdict has not moved; what this alarm can SEE has. It never reads as an
+  # all-clear and never as a crossing, because neither happened.
+  if [ "$WATCH" = - ]; then
+    LINE="MEMORY_ALARM: the memory watch can judge all three of its conditions on this machine again - $REASON."
+  else
+    LINE="MEMORY_ALARM: the memory watch can no longer judge $WATCH on this machine, so it is only partly watched - $REASON. This is not an all-clear for what it cannot judge."
+  fi
+else
 case "$CURRENT" in
   crossed)
     # The opening clause is chosen by the condition, because "running out of RAM
@@ -932,15 +1026,20 @@ case "$CURRENT" in
     LINE="MEMORY_ALARM: the memory watch has gone blind - $REASON. This is not an all-clear."
     ;;
 esac
+fi
 # Whatever the line says, the inputs nobody could read are named on it.
 [ -z "$DETAIL" ] || LINE="$LINE Unmeasured: $DETAIL"
+
+# A change of watch is not a change of state, so it must not restart the clock
+# that measures how long a shortage has lasted.
+if [ "$CURRENT" = "$PREVIOUS" ]; then SINCE_NEXT=$SINCE; else SINCE_NEXT=$NOW; fi
 
 if ! record_transition "$PREVIOUS" "$CURRENT" "$LINE"; then
   printf 'MEMORY_ALARM: the memory watch could not record the %s to %s transition in %s; the transition was measured but not durably completed.\n' \
     "$PREVIOUS" "$CURRENT" "$LOG"
   exit 0
 fi
-if ! write_state "$CURRENT" "$NOW"; then
+if ! write_state "$CURRENT" "$SINCE_NEXT" "$WATCH"; then
   printf 'MEMORY_ALARM: the memory watch recorded the %s to %s transition but could not persist its new state in %s; the transition was not durably completed.\n' \
     "$PREVIOUS" "$CURRENT" "$STATE_FILE"
   exit 0

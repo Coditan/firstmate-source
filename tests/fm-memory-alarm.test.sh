@@ -54,7 +54,14 @@ reading() {
     procs=$(printf '[{"pid":4242,"account":"coditan","rss_kb":900000,"growth_kb_per_min":%s,"attribution":{"kind":"%s","detail":"%s","route":"cwd"},"protected":%s,"command":"python3 balloon.py"}]' \
       "$growth" "$kind" "$detail" "$protected")
   fi
-  [ "$complete" = false ] && unmeasured='[{"input":"process-table","reason":"the process table could not be read"}]'
+  # The real reader exits 3 for every incomplete reading, so a fixture that
+  # claims incompleteness has to exit 3 too, or the suite proves nothing about
+  # the status the alarm actually receives.
+  export FM_TEST_READING_EXIT=0
+  if [ "$complete" = false ]; then
+    unmeasured='[{"input":"process-table","reason":"the process table could not be read"}]'
+    export FM_TEST_READING_EXIT=3
+  fi
   printf '{"schema":"fm-memory-reading.v1","complete":%s,"unmeasured":%s,"headroom":{"total_kb":24019908,"available_kb":%s,"swap_total_kb":33554428,"swap_free_kb":33554428},"stall":%s,"growth":%s,"processes":%s}\n' \
     "$complete" "$unmeasured" "$((avail_mib * 1024))" "$(stall_obj "$FM_TEST_STALL")" "$growth_obj" "$procs" >"$ANSWER"
 }
@@ -80,6 +87,7 @@ stall_obj() {
 reading_thrashing() {
   local avail_mib=$1 stall=$2 swap_used=${3:-4245} rss_mib=${4:-2900} some=${5:-}
   local swap_total=33554428
+  export FM_TEST_READING_EXIT=0
   printf '{"schema":"fm-memory-reading.v1","complete":true,"unmeasured":[],"headroom":{"total_kb":24019908,"available_kb":%s,"swap_total_kb":%s,"swap_free_kb":%s},"stall":%s,"growth":{"interval_seconds":300,"scope_reason":null,"unmeasured_reason":null},"processes":[{"pid":9001,"account":"coditan","rss_kb":%s,"growth_kb_per_min":0,"attribution":{"kind":"task","detail":"beta (ship, beta-project)","route":"cwd"},"protected":false,"command":"chrome --headless"},{"pid":9002,"account":"coditan","rss_kb":40000,"growth_kb_per_min":0,"attribution":{"kind":"task","detail":"gamma (ship, gamma-project)","route":"cwd"},"protected":false,"command":"node small.js"}]}\n' \
     "$((avail_mib * 1024))" "$swap_total" "$((swap_total - swap_used * 1024))" \
     "$(stall_obj "$stall" "$some")" "$((rss_mib * 1024))" >"$ANSWER"
@@ -89,6 +97,7 @@ reading_thrashing() {
 # and fresh-kernel shape: headroom and growth are both there and both perfectly
 # judgeable, and only the one condition whose own input is missing is blind.
 reading_stall_unmeasured() {  # <available_mib>
+  export FM_TEST_READING_EXIT=3
   printf '{"schema":"fm-memory-reading.v1","complete":false,"unmeasured":[{"input":"stall","reason":"the memory pressure account has recorded exactly zero since boot beside a live io account"}],"headroom":{"total_kb":24019908,"available_kb":%s,"swap_total_kb":33554428,"swap_free_kb":33554428},"stall":%s,"growth":{"interval_seconds":300,"scope_reason":null,"unmeasured_reason":null},"processes":[]}\n' \
     "$(( $1 * 1024 ))" "$(stall_obj none)" >"$ANSWER"
 }
@@ -96,12 +105,14 @@ reading_stall_unmeasured() {  # <available_mib>
 # A reading that could not measure RAM headroom itself. Both other conditions
 # divide by it, so nothing here can be judged at all.
 reading_headroom_unmeasured() {
+  export FM_TEST_READING_EXIT=3
   printf '{"schema":"fm-memory-reading.v1","complete":false,"unmeasured":[{"input":"headroom","reason":"/proc/meminfo carries no usable MemTotal/MemAvailable pair"}],"headroom":{"total_kb":null,"available_kb":null,"swap_total_kb":null,"swap_free_kb":null},"stall":%s,"growth":{"interval_seconds":300,"scope_reason":null,"unmeasured_reason":null},"processes":[]}\n' \
     "$(stall_obj 0.00)" >"$ANSWER"
 }
 
 # A reading whose growth the instrument could not compare at all.
 reading_growth_scoped() {
+  export FM_TEST_READING_EXIT=0
   printf '{"schema":"fm-memory-reading.v1","complete":true,"unmeasured":[],"headroom":{"total_kb":24019908,"available_kb":%s,"swap_total_kb":33554428,"swap_free_kb":33554428},"stall":%s,"growth":{"interval_seconds":0,"scope_reason":"no stored sample yet","unmeasured_reason":null},"processes":[]}\n' \
     "$(( $1 * 1024 ))" "$(stall_obj "$FM_TEST_STALL")" >"$ANSWER"
 }
@@ -115,8 +126,10 @@ alarm() {
       "$ALARM" "$@"
 }
 
-# The alarm as a home gets it with no stall threshold chosen, which is how it
-# ships. `alarm` above sets one so the stall cases can exercise the condition.
+# The alarm with the stall condition deliberately switched OFF. This is NOT how
+# it ships: FM_MEMORY_ALARM_STALL unset defaults to the shipped 1.00 gate and the
+# armed shim exports nothing that would empty it, so the condition ships ON. Only
+# an explicitly empty value reaches this state.
 unconfigured_alarm() {
   env FM_HOME="$HOME_DIR" \
       FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
@@ -165,6 +178,7 @@ alarm_at() {  # <epoch-offset-seconds> [args...]
 
 reset_home() {
   rm -rf "$HOME_DIR"; mkdir -p "$HOME_DIR/state" "$HOME_DIR/data"
+  export FM_TEST_READING_EXIT=0
   FM_TEST_STALL=0.00
   FM_TEST_AT=
   FM_TEST_STALL_WINDOW=5400
@@ -321,7 +335,9 @@ test_one_unreadable_input_does_not_silence_the_conditions_that_were_read() {
 }
 
 test_a_recovery_is_never_declared_from_a_reading_that_missed_an_input() {
-  # Firing gets no harder on an incomplete reading; leaving must get no easier.
+  # Firing gets no harder on an incomplete reading; leaving must get no easier -
+  # but only for the CONDITIONS. A condition that raised the alarm and could not
+  # be re-read blocks the recovery absolutely.
   reset_home
   reading 1800 true 0
   alarm >/dev/null
@@ -329,9 +345,110 @@ test_a_recovery_is_never_declared_from_a_reading_that_missed_an_input() {
   reading_stall_unmeasured 16000
   out=$(alarm)
   assert_not_contains "$out" "recovered" \
-    "a shortage must not be declared over by a reading that could not read every input"
+    "a shortage must not be declared over by a poll that could not re-read a condition"
   assert_contains "$out" "gone blind" "the alarm must say instead that it cannot tell"
-  pass "a crossing is never left on the strength of a reading that missed an input"
+  assert_contains "$out" "memory stall could not be read" \
+    "and must name the condition it could not re-evaluate"
+  pass "a crossing is never left on the strength of a condition nobody could re-read"
+}
+
+test_an_input_no_condition_uses_does_not_hold_back_a_recovery() {
+  # A container with no cgroup tree, a host whose swap has no usable SwapFree, a
+  # home whose installation records cannot be read: each makes the reading
+  # incomplete forever while leaving all three conditions perfectly readable.
+  # Blocking recovery on that announces every genuine recovery as a blindness,
+  # and then announces a restoration of sight that never happened.
+  reset_home
+  reading 1800 false 0
+  local out
+  out=$(alarm)
+  assert_contains "$out" "MEMORY_ALARM:" "the headroom crossing must still be announced"
+  assert_contains "$out" "below the 2400 MiB floor" "and must name the threshold it crossed"
+
+  reading 16000 false 0
+  out=$(alarm)
+  assert_contains "$out" "recovered" \
+    "a recovery judged by all three conditions is a recovery, whatever else the reading missed"
+  assert_not_contains "$out" "gone blind" \
+    "a readable condition must never be reported as one the alarm could not re-evaluate"
+  assert_contains "$out" "process-table" "and the input it could not read is still named"
+
+  out=$(alarm)
+  assert_contains "|$out|" "||" \
+    "and no restoration of sight may follow, because nothing was ever lost"
+  [ "$(log_lines)" -eq 2 ] || fail "exactly the crossing and the recovery belong in the record"
+  pass "an unmeasured input no condition uses never turns a recovery into a blindness"
+}
+
+test_a_condition_that_becomes_unjudgeable_is_spoken_once() {
+  # The standing rule is that an instrument this alarm cannot read is never
+  # relayed as calm. A machine only PARTLY watched is not a watched machine, so
+  # the set of conditions it cannot judge is a state: a change in it is spoken
+  # once, and an unchanged set stays silent rather than nagging every poll.
+  reset_home
+  reading 16000 true 0
+  alarm >/dev/null
+
+  local out
+  reading_stall_unmeasured 16000
+  out=$(alarm)
+  assert_contains "$out" "MEMORY_ALARM:" \
+    "a condition that became unjudgeable must be spoken on the watcher's channel"
+  assert_contains "$out" "no longer judge stall" "and must name the condition it lost"
+  assert_contains "$out" "not an all-clear" "and must not read as an all-clear"
+  assert_not_contains "$out" "CROSSED" "and must never call a judged machine crossed"
+
+  # Still unjudgeable: the same silence a continuing shortage gets.
+  reading_stall_unmeasured 16000
+  out=$(alarm)
+  assert_contains "|$out|" "||" "an unchanged watch must not be repeated on every poll"
+
+  # The account comes back.
+  reading 16000 true 0
+  out=$(alarm)
+  assert_contains "$out" "can judge all three" "regaining a condition must be spoken once too"
+  out=$(alarm)
+  assert_contains "|$out|" "||" "and then must go quiet again"
+
+  [ "$(log_lines)" -eq 2 ] || fail "each change of watch belongs in the durable record exactly once"
+  assert_grep 'watch=unjudged stall' "$HOME_DIR/data/memory-alarm.log" \
+    "the record must carry which conditions the poll could not judge"
+  assert_grep 'watch=all' "$HOME_DIR/data/memory-alarm.log" \
+    "and must say so when it could judge every one of them"
+  pass "a change in what the alarm can judge is spoken exactly once and recorded"
+}
+
+test_a_blind_stall_poll_neither_erases_the_run_nor_credits_it() {
+  # A poll that could not read the account is not a poll that saw a calm
+  # machine. It must not be treated more harshly than a poll that never
+  # happened, which the continuity limit forgives up to 1260s.
+  reset_home
+  reading 16000 true 0
+  alarm_at 0 >/dev/null
+
+  reading_thrashing 3577 38.0
+  alarm_at 300 >/dev/null
+
+  # One unreadable poll in the middle of a genuine run.
+  reading_stall_unmeasured 3577
+  alarm_at 600 >/dev/null
+
+  # The run is still the one that began at 300, neither reset nor advanced by
+  # the poll that could not see.
+  local out
+  reading_thrashing 3577 38.0
+  out=$(alarm_at 900 --status)
+  assert_contains "$out" "stalling for 10m0s" \
+    "a blind poll must neither reset the clock nor credit itself to the run"
+
+  # Blindness that lasts expires the run by the same rule a silent watcher does.
+  reading_stall_unmeasured 3577
+  alarm_at 1200 >/dev/null
+  reading_thrashing 3577 38.0
+  out=$(alarm_at 2600 --status)
+  assert_contains "$out" "stalling for 0s" \
+    "a run must expire by the continuity limit when the blindness outlasts it"
+  pass "a blind stall poll leaves the run exactly as it stands and lets continuity decide"
 }
 
 test_a_reading_that_produced_nothing_is_blindness_not_health() {
@@ -965,6 +1082,9 @@ test_a_machine_hovering_at_the_line_does_not_flap
 test_an_instrument_that_could_not_read_is_never_an_all_clear
 test_one_unreadable_input_does_not_silence_the_conditions_that_were_read
 test_a_recovery_is_never_declared_from_a_reading_that_missed_an_input
+test_an_input_no_condition_uses_does_not_hold_back_a_recovery
+test_a_condition_that_becomes_unjudgeable_is_spoken_once
+test_a_blind_stall_poll_neither_erases_the_run_nor_credits_it
 test_a_reading_that_produced_nothing_is_blindness_not_health
 test_recovery_is_not_declared_on_growth_nobody_could_compare
 test_scoped_growth_on_a_calm_machine_is_not_a_growth_all_clear

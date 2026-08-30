@@ -306,6 +306,9 @@ Stated because a limit nobody wrote down is one somebody will later assume away.
   Pressure-stall is not present on every kernel or in every container, and where it is present it is not always accounted.
   Where `/proc/pressure/memory` is absent, unreadable, or provably not accounting, the reader marks it unmeasured, the reading is incomplete, and the alarm reports that it could not see rather than that the machine is fine.
   A calm verdict names the conditions it actually judged, so "all three read clear" can be told apart from "one of them was never evaluated", and a stall that could not be read is never printed as `0.00`.
+  Which conditions went unjudged is itself carried in `state/memory-alarm.state` as a third field and in every `data/memory-alarm.log` line as `watch=`, so a change in that set is a transition and is spoken once on the watcher's channel, exactly as a crossing or a recovery is.
+  A home whose memory-stall account can never be read therefore says so once when it starts and then goes quiet about it, rather than either nagging on every poll or passing a partly watched machine off as a watched one.
+  A recovery, by contrast, is held back only by a condition that could not be re-evaluated, never by an unmeasured input no condition uses - a container with no cgroup tree recovers as any other host does.
   Blindness is per-condition and never blanket, though: an incomplete reading still yields the verdict of every condition whose own input was present, names every input it could not read alongside that verdict, and says on the same line that it is not a full all-clear.
   RAM headroom is the single exception, because the floor measures it and the horizon divides by it: a reading without it leaves nothing to judge at all.
   So `fm-memory-alarm.sh --status` exits 3 only when NO condition could be judged, 0 when at least one was judged and none crossed, and 4 when one crossed.
@@ -335,7 +338,7 @@ MEMORY_ALARM: recovered - 16080 MiB RAM headroom available, growth 8 MiB/min. Th
 (silent)
 ```
 
-Both transitions in `data/memory-alarm.log`, each carrying the evidence it was decided on:
+Both transitions in `data/memory-alarm.log`, each carrying the evidence it was decided on and a `watch=` field naming which of the three conditions the poll could judge:
 
 ```
 2026-08-13T20:10:39Z  ok -> crossed  14628 MiB RAM headroom available  1185 MiB/min growth  12.3 minutes left  python3 balloon.py (pid 1256767), account coditan, serving task ... (ship, firstmate-fork), growing 1184 MiB/min
