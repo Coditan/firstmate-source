@@ -91,7 +91,9 @@ The message itself is built by `bin/fm-operational-input.sh` as a typed `session
 The pending first turn is recorded in `state/.seat-first-turn`, so it survives the respawner itself restarting, and it is bounded: a turn that never lands is abandoned out loud in `state/.seat-respawner.log` after `FM_SEAT_FIRST_TURN_DEADLINE` rather than retried forever in silence.
 That record is also what holds the next launch.
 The delivery verdict stays undeliverable until the fresh seat finishes session start and publishes an endpoint, which outlasts the first backoff, so a respawner that kept launching on schedule would leave a live agent in a window nothing tracks - one per retry.
-While the record stands, the retry schedule waits without consuming an attempt, and the same deadline is what eventually frees it.
+While the record stands the launch is withheld, but the wait is not free: each cycle that is otherwise due spends a hold, holds count toward the same bound as launches, and so a first turn that never lands reaches that bound, gives up, and says so rather than waiting forever in silence.
+A hold is never counted as a launch, because an episode whose first turn never lands makes exactly one window call and reporting five would send the captain to a machine whose real state is an open pane with an agent that never reached session start.
+Past the deadline the record is retired unless the turn was submitted *and* the pane is confidently still there - only a confident yes holds a launch, an unreachable backend still abandons - and a hold in that state is published by `bin/fm-seat-respawner-service.sh status` as its own `holding:` verdict, which the alarm renders as a seat that was started and never finished starting rather than as a restart under way.
 A stand-down declared while a turn is pending settles that turn instead of racing it: `state/.seat-stay-down` is read first, and it drops the pending record rather than letting the next cycle type into the pane.
 
 **The success test moved with it.**
@@ -207,7 +209,8 @@ Closing it is a design question rather than a patch - it needs either a sixth ve
 
 **A state directory that has been DELETED mostly cannot be reported, because the alarm goes with it.**
 The alarm runs only from `state/seat-vacancy.check.sh`, and `bin/fm-watch.sh` finds checks by globbing `$STATE/*.check.sh`, so when `state/` is removed the shim is removed too and nothing invokes the alarm at all.
-Re-arming happens at session start, which needs the seat that is by definition the thing missing.
+Re-arming happens at session start on the vessel the alarm watches, which needs the seat that is by definition the thing missing.
+A secondmate home is never armed at all - it inherits no outbound sender, so every send from one would fail, be uncounted, and reprint the transition line on every sweep - and `--arm` there retires any shim an earlier version installed instead of installing one.
 The `unmeasured` reading for unreachable records is still right and still taken - what reaches it on a real vessel is a `state/` that exists and is not a usable directory, a symlink being the realistic form, whose target can still hold the shim.
 Read the code and its test for that case, not for a deleted directory handled end to end.
 
@@ -309,6 +312,7 @@ bin/fm-seat-respawner-service.sh status
 `select` must answer `keeper` on this container and `status` must answer `up:` after the arm.
 `up:` is the whole reading and not merely a live pid: it requires this home's own respawner lock, a beacon inside `FM_SEAT_RESPAWNER_GRACE`, and the process alive.
 A respawner whose process is alive but has stopped cycling answers `stalled:` instead, and the alarm turns that into "whether anything is trying to bring it back could not be read" rather than into an assurance - so `stalled:` is a failed arm for this runbook's purposes, not a pass.
+A respawner that is cycling normally but is holding a first turn that never landed answers `holding:`, which the alarm renders as waiting on a seat that never finished starting and will not start another by itself; that is also not a pass for this runbook.
 Then, and only with the captain watching, the real end-to-end: note the seat's recorded pid from `bin/fm-lock.sh status`, close the seat, and confirm a message arrives on the captain's channel and that `bin/fm-lock.sh status` afterwards names a **different** live pid.
 
 **Expect that message on the SECOND watcher sweep, not the first.**

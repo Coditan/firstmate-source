@@ -323,6 +323,7 @@ The respawner itself reads the wake-delivery service verdict rather than probing
 ## Seat absence alarm
 
 `bin/fm-seat-alarm.sh` is the per-home watch for the seat's own absence, armed as a watcher check at every session start and reported by `SEAT_ALARM:` when it is unarmed or has stopped running.
+It arms only on the vessel it watches: a secondmate home inherits no outbound sender, so `--arm` there removes any shim an earlier version left, prints `not armed:` rather than `armed:`, and `--armed` stays silent because nothing is missing.
 It is the one alarm in this fleet that carries its own message out through `bin/fm-tg-send.sh` rather than printing a line for firstmate to route, because firstmate is the subject of its reading and cannot report its own absence.
 [`docs/seat-absence.md`](seat-absence.md) owns its verdicts, what it keys on, its cadence, and the residual it does not close.
 Its own header owns the tuning - the grace an absence must persist for, the repeat interval, the staleness bar `--armed` reads, and the send and probe timeouts - so the values are stated once, beside the code that applies them, rather than copied into the list below.

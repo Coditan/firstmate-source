@@ -317,12 +317,20 @@ deliver_first_turn() {
   # would find presence still absent and delivery still undeliverable and open a
   # SECOND seat beside the live one - the orphan this record exists to prevent,
   # arriving through the deadline rather than through a verdict. So the hold
-  # keeps standing while both facts hold, and nothing is spent by waiting: it
-  # consumes no launch attempt, the presence arm above still retires the record
-  # the moment any seat takes this home, and the confident-absence branch below
-  # still retires it the moment the pane goes. Only a CONFIDENT yes holds; an
-  # unreachable backend falls through and is abandoned as before, because a hold
-  # on a reading nobody could take is a hold on nothing.
+  # keeps standing while both facts hold: the presence arm above still retires
+  # the record the moment any seat takes this home, and the confident-absence
+  # branch below still retires it the moment the pane goes. Only a CONFIDENT yes
+  # holds; an unreachable backend falls through and is abandoned as before,
+  # because a hold on a reading nobody could take is a hold on nothing.
+  #
+  # WAITING IS NOT FREE, AND THAT IS WHAT BOUNDS THIS. one_cycle spends a HOLD on
+  # every cycle a wait is otherwise due, and holds count toward the same bound as
+  # launches, so a first turn that never lands reaches that bound and gives up out
+  # loud instead of waiting forever in silence. It is not counted as a launch,
+  # because it is not one. The `held` mark below is also what
+  # bin/fm-seat-respawner-service.sh reports as `holding:`, so the captain is told
+  # a seat was started and has not finished starting rather than that a restart is
+  # under way.
   if [ "$age" -ge "$FIRST_TURN_DEADLINE" ]; then
     if [ -n "$submitted" ] && [ -n "$pane" ]; then
       rc=0
@@ -556,7 +564,7 @@ one_cycle() {
       delay=$(fm_retry_backoff "$((count + holds))" "$BASE_BACKOFF" "$MAX_BACKOFF")
       next=$((now + delay))
       fm_retry_write_attempts "$ATTEMPTS" "$key" "$count" "$next" "$holds" || return 1
-      log "launch held ($holds of $((MAX_ATTEMPTS - count)) held cycle(s) available): the seat already started for this episode has not taken this home's lock yet"
+      log "launch held: the seat already started for this episode has not taken this home's lock yet (hold $holds, $((MAX_ATTEMPTS - count - holds)) cycle(s) left before this episode gives up)"
     fi
     return 0
   fi
