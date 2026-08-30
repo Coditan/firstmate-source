@@ -13,6 +13,21 @@ LIB="$ROOT/bin/fm-wake-lib.sh"
 
 fm_test_tmproot TMP_ROOT fm-watcher-lock-tests
 
+# fm-guard.sh names a repair command only for the session that OPERATES the home
+# it just judged, which it reads from the checkout the running script was loaded
+# from. A case that means "firstmate's own session" therefore has to run the
+# guard out of the fixture home's own bin/; see docs/watcher-continuity.md.
+install_operator_guard() {
+  local dir=$1 file
+  mkdir -p "$dir/bin"
+  for file in fm-guard.sh fm-wake-lib.sh fm-journal-lib.sh fm-delivery-lib.sh \
+    fm-harness-pid-lib.sh fm-tangle-lib.sh fm-supervision-lib.sh fm-primary-scope-lib.sh; do
+    cp "$ROOT/bin/$file" "$dir/bin/$file"
+  done
+  chmod +x "$dir/bin/fm-guard.sh"
+  printf '%s\n' "$dir/bin/fm-guard.sh"
+}
+
 mark_pr_check_migration_complete() {
   local state=$1
   printf '%s\n' fm-pr-check-migration-scan-v1 > "$state/.pr-check-migration-scan-v1"
@@ -112,7 +127,7 @@ test_guard_warnings() {
   #   (2) a fresh watcher and an empty queue: total silence.
   #   (3) a fresh watcher but no identity-matched delivery listener up: a
   #       targeted wake-delivery warning, without the daemon-down banner.
-  local dir state err first banner_line queue_line live identity
+  local dir state err first banner_line queue_line live identity guard
   dir=$(make_case guard)
   state="$dir/state"
   err="$dir/guard.err"
@@ -124,7 +139,8 @@ test_guard_warnings() {
   printf 'project=x\n' > "$state/task.meta"
   printf 'project=y\n' > "$state/task2.meta"
   append_wake "$state" heartbeat heartbeat heartbeat || fail "guard heartbeat append failed"
-  CLAUDECODE=1 PI_CODING_AGENT='' GROK_AGENT='' FM_ROOT_OVERRIDE="$dir" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=1 "$ROOT/bin/fm-guard.sh" 2> "$err" >/dev/null || fail "guard failed"
+  guard=$(install_operator_guard "$dir")
+  CLAUDECODE=1 PI_CODING_AGENT='' GROK_AGENT='' FM_ROOT_OVERRIDE="$dir" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=1 "$guard" 2> "$err" >/dev/null || fail "guard failed"
   first=$(grep -v '^[[:space:]]*$' "$err" | head -1)
   case "$first" in
     '●'*) ;;
