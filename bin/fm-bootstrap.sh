@@ -41,7 +41,10 @@
 #                 "RESPAWNER_UNIT: <consent, convergence, or health detail>",
 #                 "BOSUN_UNIT: <consent, convergence, judge-reach, or health detail>",
 #                 "RUN_READER: no-mistakes runs in this session (<path>) but a
-#                 context that inherits no shell setup cannot reach it (...)".
+#                 context that inherits no shell setup cannot reach it (...)",
+#                 "VALIDATION_DAEMON: the validation pipeline daemon is not
+#                 running (...)" or "VALIDATION_DAEMON: whether the validation
+#                 pipeline daemon is running is unestablished - <reason> (...)".
 #          When a RUNNING secondmate worktree is fast-forwarded to firstmate's
 #          own current default-branch commit (a purely LOCAL fast-forward, never
 #          an origin fetch) AND its loaded instruction surface (AGENTS.md, bin/,
@@ -842,6 +845,99 @@ run_reader_reach_check() {
   echo "RUN_READER: no-mistakes runs in this session ($resolved) but a context that inherits no shell setup cannot reach it, so crew run-state reads from the watcher, hooks and reviewer sessions answer 'degraded - run-reader-missing' instead of the real state (repair: $repair)"
 }
 
+# The forbidden neighbour of the repair, spelled once. Every line this check can
+# print names it, and two spellings of one rule leave a reader deciding which is
+# current (docs/validation-daemon.md owns why the update path is barred).
+VALIDATION_DAEMON_NOT_UPDATE='never no-mistakes update, which resets the daemon as part of a version change and would carry that change into parked runs'
+# What an unreadable answer asks for: a reading taken by hand BEFORE any action,
+# because every unreadable case is one where acting on the guess is the hazard.
+VALIDATION_DAEMON_REPAIR="take the reading by hand with no-mistakes daemon status, and if it is down bring it back with no-mistakes daemon start - $VALIDATION_DAEMON_NOT_UPDATE"
+
+# Startup assertion for the validation pipeline daemon.
+#
+# Why it is a check and not a habit (measured on the coditan vessel, 2026-08-30):
+# a seat restart killed every crewmate AND the no-mistakes daemon. The crewmates
+# were visible - each pane sat at a bare shell prompt - and the daemon was
+# visible nowhere:
+#
+#   connect to daemon socket: dial unix /home/coditan/.no-mistakes/socket: connect: connection refused
+#   recorded pid 3223240 no longer exists
+#
+# Four parked runs were unanswerable for about forty minutes with no status
+# line, no diagnostic, no wake and no failing command, and it surfaced only when
+# a relaunched worker tried to answer its own review gate. NOTHING on a seat
+# touches the daemon until something needs it, so a seat with no gate work in
+# flight carries a dead one indefinitely and reads perfectly healthy - the exact
+# shape no amount of care detects and one reading does.
+#
+# DETECT ONLY, deliberately, and not by analogy to the arming steps below. Those
+# arm per-HOME mechanisms under this home's own session lock; this daemon is
+# per-ACCOUNT - one socket under $HOME serving every firstmate home and
+# secondmate on the account - so the lock that guards them does not cover it.
+# Two homes can hold their own locks at the same moment and both act, and a home
+# holding its own lock has established nothing about its siblings - the daemon
+# process carries no home identity in its environment at all, so no home can even
+# enumerate them.
+#
+# The narrower argument rules out the smallest autonomy too: "start only when it
+# is provably absent" is exactly the reading a WEDGED socket gets wrong, and an
+# auto-start there puts a second process against the same root while parked runs
+# sit inside the first. The escalation from "not answering" to a start is the
+# whole hazard, so this check does not make it. The action goes to the reader,
+# who can see whether anything is running; docs/validation-daemon.md records the
+# measurements this rests on, including the sibling-home one this seat could not
+# take itself.
+#
+# Every home on the account prints this line, and that duplication is correct:
+# each of them really is impaired, so it is not a fleet-level fact reported N
+# times the way an unread GitHub thread would be. The line names the ACCOUNT and
+# never a number of homes, because no home can count its siblings.
+#
+# The answer is read from the OUTPUT, not the exit status: v1.48.0 exits 0 for
+# both "daemon running (pid N)" and "daemon not running", including with a stale
+# pid file recording a dead process. Anything else is an unreadable instrument
+# rather than a verdict, because guessing healthy hides a dead daemon and
+# guessing dead sends a reader to restart a live one.
+#
+# Absence is not this check's to report: MISSING: already owns an uninstalled
+# CLI, and its repair is to install it rather than to start a daemon.
+#
+# FM_VALIDATION_DAEMON_CHECK_DISABLE exists for the same reason the
+# currency-round and run-reader ones do: every behavior suite that composes
+# bootstrap runs with a FAKE no-mistakes, whose daemon answer is meaningless, so
+# the line would print under every unrelated assertion. tests/lib.sh disables it
+# suite-wide and tests/fm-validation-daemon-check.test.sh sets it back to 0.
+validation_daemon_check() {
+  local timeout_bin out rc=0 seconds
+  [ "${FM_VALIDATION_DAEMON_CHECK_DISABLE:-0}" != 1 ] || return 0
+  command -v no-mistakes >/dev/null 2>&1 || return 0
+  seconds=${FM_VALIDATION_DAEMON_TIMEOUT:-5}
+  case "$seconds" in ''|*[!0-9]*|0) seconds=5 ;; esac
+  timeout_bin=
+  if [ "${FM_VALIDATION_DAEMON_FORCE_UNBOUNDED:-0}" != 1 ]; then
+    if command -v timeout >/dev/null 2>&1; then timeout_bin=timeout
+    elif command -v gtimeout >/dev/null 2>&1; then timeout_bin=gtimeout
+    fi
+  fi
+  if [ -z "$timeout_bin" ]; then
+    echo "VALIDATION_DAEMON: whether the validation pipeline daemon is running is unestablished - this seat has neither timeout nor gtimeout to bound the call, and asking unbounded would hang session start behind a wedged daemon - so this is not an all-clear; $VALIDATION_DAEMON_REPAIR"
+    return 0
+  fi
+  out=$("$timeout_bin" "$seconds" no-mistakes daemon status 2>/dev/null) || rc=$?
+  if [ "$rc" -eq 124 ]; then
+    echo "VALIDATION_DAEMON: whether the validation pipeline daemon is running is unestablished - it did not answer within ${seconds}s, which is a wedged daemon rather than a dead one - so this is not an all-clear; $VALIDATION_DAEMON_REPAIR"
+    return 0
+  fi
+  case "$out" in
+    *"daemon not running"*)
+      echo "VALIDATION_DAEMON: the validation pipeline daemon is not running, so every parked review on this account is unanswerable until it is back and nothing else on this seat will say so (repair: no-mistakes daemon start - $VALIDATION_DAEMON_NOT_UPDATE)"
+      return 0
+      ;;
+    *"daemon running"*) return 0 ;;
+  esac
+  echo "VALIDATION_DAEMON: whether the validation pipeline daemon is running is unestablished - no-mistakes daemon status answered in a shape this check does not recognise (exit $rc), and this fleet does not own that tool's output - so this is not an all-clear; $VALIDATION_DAEMON_REPAIR"
+}
+
 x_mode_write_if_changed() {
   local dest=$1 content=$2 mode=$3 parent tmp parent_device current_mode
   parent=${dest%/*}
@@ -1235,6 +1331,7 @@ if command -v no-mistakes >/dev/null 2>&1 && ! no_mistakes_compatible; then
   echo "MISSING: no-mistakes (install: $(install_cmd no-mistakes))"
 fi
 run_reader_reach_check
+validation_daemon_check
 if command -v tasks-axi >/dev/null 2>&1 && ! fm_tasks_axi_compatible; then
   echo "MISSING: tasks-axi (install: $(install_cmd tasks-axi))"
 fi
