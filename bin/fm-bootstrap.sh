@@ -33,6 +33,8 @@
 #                 "CURRENCY_ROUND: the daily update check <is not armed|has stopped> (...)",
 #                 "MEMORY_ALARM: <nothing is watching this machine|the memory watch ... has stopped> (...)",
 #                 "GITHUB_INBOX: the GitHub notification watch ... has stopped (...)",
+#                 "FORGE_STATUS: the forge status watch could not be armed on this home (...)",
+#                 "SLOT_GUARD: the worktree-ownership watch could not be armed on this home (...)",
 #                 "CURATION_NUDGE|CODEBASE_SWEEP_NUDGE: <not armed|could not be armed|scheduler refusal|state persistence failure|state health indeterminate|supervision outage> (...)",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...",
 #                 "WATCHER_UNIT: <consent, convergence, or fallback detail>",
@@ -699,9 +701,9 @@ no_mistakes_version_parts() {
   printf '%s\n' "$output" | sed -nE 's/.*[vV]?([0-9]+)\.([0-9]+)\.([0-9]+).*/\1 \2 \3/p' | head -n 1
 }
 
-no_mistakes_compatible() {
+no_mistakes_compatible() {  # [already-read version parts]
   local parts major minor patch extra
-  parts=$(no_mistakes_version_parts) || return 1
+  if [ "$#" -gt 0 ]; then parts=$1; else parts=$(no_mistakes_version_parts) || return 1; fi
   IFS=' ' read -r major minor patch extra <<< "$parts"
   [ -n "$major" ] && [ -n "$minor" ] && [ -n "$patch" ] && [ -z "$extra" ] || return 1
   [ "$major" -gt "$NO_MISTAKES_MIN_MAJOR" ] && return 0
@@ -853,6 +855,10 @@ VALIDATION_DAEMON_NOT_UPDATE='never no-mistakes update, which resets the daemon 
 # because every unreadable case is one where acting on the guess is the hazard.
 VALIDATION_DAEMON_REPAIR="take the reading by hand with no-mistakes daemon status, and if it is down bring it back with no-mistakes daemon start - $VALIDATION_DAEMON_NOT_UPDATE"
 
+validation_daemon_upgrade_repair() {
+  echo "upgrade the CLI first with $(install_cmd no-mistakes), and take the reading once it answers on a supported version - $VALIDATION_DAEMON_NOT_UPDATE"
+}
+
 validation_daemon_unestablished() {
   echo "VALIDATION_DAEMON: whether the validation pipeline daemon is running is unestablished - $1 - so this is not an all-clear; ${2:-$VALIDATION_DAEMON_REPAIR}"
 }
@@ -903,6 +909,14 @@ validation_daemon_unestablished() {
 # rather than a verdict, because guessing healthy hides a dead daemon and
 # guessing dead sends a reader to restart a live one.
 #
+# A version that refuses the verb outright is the same class one band higher, and
+# it is read from the REFUSAL rather than inferred from a number, because when
+# the daemon verbs were introduced is a fact this fleet cannot establish for a
+# tool it does not own. That refusal reaches stderr on the measured CLI, so
+# stderr is captured separately and consulted only after stdout has failed to
+# yield a verdict - merging it would put the tool's own update banner inside the
+# text the healthy and down verdicts are matched against.
+#
 # Absence is not this check's to report: MISSING: already owns an uninstalled
 # CLI, and its repair is to install it rather than to start a daemon. A CLI that
 # IS installed but whose version does not clear the floor is the opposite case
@@ -919,17 +933,17 @@ validation_daemon_unestablished() {
 # the line would print under every unrelated assertion. tests/lib.sh disables it
 # suite-wide and tests/fm-validation-daemon-check.test.sh sets it back to 0.
 validation_daemon_check() {
-  local timeout_bin out rc=0 seconds version_reason
+  local timeout_bin out err rc=0 seconds version_reason parts err_file
   [ "${FM_VALIDATION_DAEMON_CHECK_DISABLE:-0}" != 1 ] || return 0
   command -v no-mistakes >/dev/null 2>&1 || return 0
-  if ! no_mistakes_compatible; then
-    if [ -n "$(no_mistakes_version_parts 2>/dev/null)" ]; then
+  parts=$(no_mistakes_version_parts 2>/dev/null) || parts=
+  if ! no_mistakes_compatible "$parts"; then
+    if [ -n "$parts" ]; then
       version_reason="the installed no-mistakes is below the version floor this fleet requires, so it cannot be asked"
     else
       version_reason="no-mistakes --version answered with no version this check could read, so whether the installed CLI meets the floor this fleet requires is itself unestablished and it cannot be asked"
     fi
-    validation_daemon_unestablished "$version_reason" \
-      "upgrade the CLI first with $(install_cmd no-mistakes), and take the reading once it answers on a supported version - $VALIDATION_DAEMON_NOT_UPDATE"
+    validation_daemon_unestablished "$version_reason" "$(validation_daemon_upgrade_repair)"
     return 0
   fi
   seconds=${FM_VALIDATION_DAEMON_TIMEOUT:-5}
@@ -945,7 +959,15 @@ validation_daemon_check() {
     validation_daemon_unestablished "this seat has neither timeout nor gtimeout to bound the call, and asking unbounded would hang session start behind a wedged daemon"
     return 0
   fi
-  out=$("$timeout_bin" "$seconds" no-mistakes daemon status 2>/dev/null) || rc=$?
+  err=
+  err_file=$(mktemp 2>/dev/null) || err_file=
+  if [ -n "$err_file" ]; then
+    out=$("$timeout_bin" "$seconds" no-mistakes daemon status 2>"$err_file") || rc=$?
+    err=$(cat "$err_file" 2>/dev/null) || err=
+    rm -f -- "$err_file"
+  else
+    out=$("$timeout_bin" "$seconds" no-mistakes daemon status 2>/dev/null) || rc=$?
+  fi
   if [ "$rc" -eq 124 ]; then
     validation_daemon_unestablished "it did not answer within ${seconds}s, which is a wedged daemon rather than a dead one"
     return 0
@@ -957,6 +979,14 @@ validation_daemon_check() {
       ;;
     *"not running"*|*"no daemon running"*) ;;
     *"daemon running (pid"*) return 0 ;;
+  esac
+  case "$out$err" in
+    *"unknown command "*|*"unknown subcommand"*|*"Available Commands:"*)
+      validation_daemon_unestablished \
+        "the installed no-mistakes refused daemon status as a command it does not have, so this version cannot be asked" \
+        "$(validation_daemon_upgrade_repair)"
+      return 0
+      ;;
   esac
   validation_daemon_unestablished "no-mistakes daemon status answered in a shape this check does not recognise (exit $rc), and this fleet does not own that tool's output"
 }

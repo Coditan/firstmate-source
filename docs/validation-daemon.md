@@ -72,6 +72,13 @@ What changes on that path is the repair rather than the verdict: `no-mistakes da
 So both version reasons name the upgrade instead, using the same install command `MISSING: no-mistakes` already prints, and the handling playbook routes both of them there rather than to a by-hand daemon reading.
 That command is the installer script, not `no-mistakes update`, so naming it does not reopen the path the next section bars; the line keeps that warning too.
 
+A third path joins them from the other side of the floor.
+`no_mistakes_compatible` only establishes that the version clears 1.31.2, and that floor was set for unrelated reasons; nothing here establishes when the `daemon` verbs were introduced, and this fleet cannot establish it for a tool it does not own.
+So the refusal is read from the ANSWER rather than inferred from a number, which needs no such measurement.
+Two refusal shapes were measured on 2026-08-30: an absent command GROUP answers `unknown command "daemon" for "no-mistakes"` on stderr with exit 1, while an absent VERB under a group that exists answers the group's help on stdout with exit 0.
+The first is why the check captures stderr at all, and why it captures it SEPARATELY: the same stream carries the CLI's own `Run "no-mistakes update" to update` banner, so merging it would put the one command this check bars inside the text the healthy and down verdicts are matched against.
+stderr is therefore consulted only after stdout has failed to yield a verdict, and only against refusal shapes.
+
 ## Why the repair is never `no-mistakes update`
 
 `no-mistakes update` resets the daemon as part of upgrading the tool.

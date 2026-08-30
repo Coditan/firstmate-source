@@ -70,7 +70,15 @@ new_case() {  # <name> -> echoes case dir
 #
 # BOTH exit 0, which is why the check reads the answer instead of the status.
 # `wedged` never answers at all, and `garbled` answers in a shape no version of
-# this check should guess at.
+# this check should guess at - deliberately NOT a subcommand refusal, which is
+# its own branch below.
+#
+# `unknown-cmd` and `daemon-help` are the two refusal shapes measured against the
+# real CLI on 2026-08-30, for a version that does not carry the verb: an absent
+# GROUP answers `unknown command "daemon" for "no-mistakes"` on STDERR with exit
+# 1, and an absent VERB under a group that exists answers the group's help on
+# stdout with exit 0. The stderr one is why the check captures that stream at
+# all, and a fixture that only wrote to stdout would not prove it does.
 #
 # Two <version> values are sentinels rather than versions: `UNREADABLE` answers
 # `--version` with a banner carrying no major.minor.patch, and `BROKEN` fails the
@@ -97,12 +105,14 @@ if [ "\${1:-}" = --version ]; then
 fi
 if [ "\${1:-}" = daemon ] && [ "\${2:-}" = status ]; then
   case "$mode" in
-    running)   printf '  \xe2\x97\x8f daemon running (pid 4242)\n'; exit 0 ;;
-    down)      printf '  \xe2\x97\x8b daemon not running\n'; exit 0 ;;
-    no-daemon) printf '  \xe2\x97\x8b no daemon running\n'; exit 0 ;;
-    stale-pid) printf '  \xe2\x97\x8b no daemon running (pid 3223240 no longer exists)\n'; exit 0 ;;
-    wedged)    sleep 30; exit 0 ;;
-    garbled)   printf 'unknown subcommand "status"\n'; exit 2 ;;
+    running)     printf '  \xe2\x97\x8f daemon running (pid 4242)\n'; exit 0 ;;
+    down)        printf '  \xe2\x97\x8b daemon not running\n'; exit 0 ;;
+    no-daemon)   printf '  \xe2\x97\x8b no daemon running\n'; exit 0 ;;
+    stale-pid)   printf '  \xe2\x97\x8b no daemon running (pid 3223240 no longer exists)\n'; exit 0 ;;
+    wedged)      sleep 30; exit 0 ;;
+    garbled)     printf '  daemon: state indeterminate\n'; exit 2 ;;
+    unknown-cmd) printf 'unknown command "daemon" for "no-mistakes"\n' >&2; exit 1 ;;
+    daemon-help) printf 'Manage the no-mistakes daemon\n\nUsage:\n  no-mistakes daemon [command]\n\nAvailable Commands:\n  start       Install or refresh the managed daemon service and start it\n'; exit 0 ;;
   esac
 fi
 exit 0
@@ -120,6 +130,26 @@ make_fakebin() {  # <dir> -> echoes fakebin path
   printf '%s\n' "$fakebin"
 }
 
+# Every assertion about this check's wording reads THIS line, never the whole
+# digest: forgejo_client_check runs in the same detect pass and prints the word
+# `unestablished` too, so an assertion against the full output would pass on a
+# neighbour's line and is specific only by accident of the fixture.
+daemon_line() {  # <bootstrap output> -> echoes the VALIDATION_DAEMON line, if any
+  printf '%s\n' "$1" | grep '^VALIDATION_DAEMON:' || true
+}
+
+# The upgrade command the fleet already prints for this tool, taken from the one
+# line that owns it rather than restated here: a seat with no no-mistakes at all
+# prints `MISSING: no-mistakes (install: <command>)`, and every VALIDATION_DAEMON
+# path that routes to an upgrade must name that same command.
+nm_install_cmd() {  # <bootstrap output> -> echoes the no-mistakes install command
+  local missing=$1
+  missing=$(printf '%s\n' "$missing" | grep '^MISSING: no-mistakes ' || true)
+  [ -n "$missing" ] || return 1
+  missing=${missing#*(install: }
+  printf '%s\n' "${missing%)}"
+}
+
 run_bootstrap() {  # <dir> <path-prefix>
   PATH="$2:${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" \
     FM_HOME="$1/home" FM_ROOT_OVERRIDE="$1/home" \
@@ -134,15 +164,16 @@ run_bootstrap() {  # <dir> <path-prefix>
 # a reader who has to go and find out what to do next is reading a report, not
 # a repair.
 test_a_dead_daemon_is_reported_at_startup() {
-  local d fakebin out
+  local d fakebin out line
   d=$(new_case dead)
   fakebin=$(make_fakebin "$d")
   make_fake_nm "$d/nmbin" down
 
   out=$(run_bootstrap "$d" "$d/nmbin:$fakebin")
-  assert_contains "$out" "VALIDATION_DAEMON:" \
+  line=$(daemon_line "$out")
+  assert_contains "$line" "VALIDATION_DAEMON:" \
     "startup must report a validation pipeline daemon that is not running"
-  assert_contains "$out" "no-mistakes daemon start" \
+  assert_contains "$line" "no-mistakes daemon start" \
     "the line must name the repair, not merely announce the condition"
   pass "a dead daemon is reported at startup"
 }
@@ -159,7 +190,7 @@ test_the_line_warns_against_the_update_path() {
   make_fake_nm "$d/nmbin" down
 
   out=$(run_bootstrap "$d" "$d/nmbin:$fakebin")
-  line=$(printf '%s\n' "$out" | grep '^VALIDATION_DAEMON:' || true)
+  line=$(daemon_line "$out")
   assert_contains "$line" "no-mistakes update" \
     "the line must name the update path so the reader recognises it"
   assert_contains "$line" "never" \
@@ -180,7 +211,7 @@ test_the_line_claims_no_count_of_homes() {
   make_fake_nm "$d/nmbin" down
 
   out=$(run_bootstrap "$d" "$d/nmbin:$fakebin")
-  line=$(printf '%s\n' "$out" | grep '^VALIDATION_DAEMON:' || true)
+  line=$(daemon_line "$out")
   assert_contains "$line" "on this account" \
     "the line must name the scope it can establish - the account the socket belongs to"
   assert_not_contains "$line" "home" \
@@ -209,7 +240,7 @@ test_a_running_daemon_prints_nothing() {
 # the digest must not stall waiting for it, and the silence must not be relayed
 # as an all-clear.
 test_a_wedged_daemon_is_reported_as_unreadable_not_healthy() {
-  local d fakebin out started elapsed
+  local d fakebin out line started elapsed
   d=$(new_case wedged)
   fakebin=$(make_fakebin "$d")
   make_fake_nm "$d/nmbin" wedged
@@ -217,9 +248,10 @@ test_a_wedged_daemon_is_reported_as_unreadable_not_healthy() {
   started=$(date +%s)
   out=$(run_bootstrap "$d" "$d/nmbin:$fakebin")
   elapsed=$(( $(date +%s) - started ))
-  assert_contains "$out" "VALIDATION_DAEMON:" \
+  line=$(daemon_line "$out")
+  assert_contains "$line" "VALIDATION_DAEMON:" \
     "a daemon that never answers must not pass as healthy by saying nothing"
-  assert_contains "$out" "unestablished" \
+  assert_contains "$line" "unestablished" \
     "a reading that could not be taken is reported as unable to read, never as healthy"
   [ "$elapsed" -lt 25 ] || fail "the check must bound its call; the fixture daemon sleeps 30s and startup waited ${elapsed}s"
   pass "a wedged daemon is reported as unreadable and does not stall startup"
@@ -230,15 +262,16 @@ test_a_wedged_daemon_is_reported_as_unreadable_not_healthy() {
 # than saying so: guessing healthy hides a dead daemon, and guessing dead sends
 # a reader to restart a live one and kill every other lane's in-flight run.
 test_an_unrecognised_answer_is_reported_as_unreadable() {
-  local d fakebin out
+  local d fakebin out line
   d=$(new_case garbled)
   fakebin=$(make_fakebin "$d")
   make_fake_nm "$d/nmbin" garbled
 
   out=$(run_bootstrap "$d" "$d/nmbin:$fakebin")
-  assert_contains "$out" "VALIDATION_DAEMON:" \
+  line=$(daemon_line "$out")
+  assert_contains "$line" "VALIDATION_DAEMON:" \
     "an answer this check cannot classify must not be classified as healthy"
-  assert_contains "$out" "unestablished" \
+  assert_contains "$line" "unestablished" \
     "the line must say the reading was not taken rather than assert a state"
   pass "an unrecognised answer is reported as unreadable"
 }
@@ -247,15 +280,16 @@ test_an_unrecognised_answer_is_reported_as_unreadable() {
 # it unbounded is the one outcome the check is forbidden to produce, because a
 # wedged daemon would then hang every session start on the seat.
 test_a_seat_that_cannot_bound_the_call_says_so() {
-  local d fakebin out
+  local d fakebin out line
   d=$(new_case unbounded)
   fakebin=$(make_fakebin "$d")
   make_fake_nm "$d/nmbin" running
 
   out=$(FM_VALIDATION_DAEMON_FORCE_UNBOUNDED=1 run_bootstrap "$d" "$d/nmbin:$fakebin")
-  assert_contains "$out" "VALIDATION_DAEMON:" \
+  line=$(daemon_line "$out")
+  assert_contains "$line" "VALIDATION_DAEMON:" \
     "a seat that cannot bound the call must say the reading was not taken"
-  assert_contains "$out" "unestablished" \
+  assert_contains "$line" "unestablished" \
     "an unbounded seat has taken no reading, so it must not report one"
   pass "a seat that cannot bound the call says so"
 }
@@ -266,16 +300,17 @@ test_a_seat_that_cannot_bound_the_call_says_so() {
 # check anchored on "daemon running" alone reads each as an all-clear and
 # reproduces the original defect against a differently worded tool.
 test_a_down_daemon_worded_otherwise_is_never_an_all_clear() {
-  local d fakebin out mode
+  local d fakebin out line mode
   for mode in no-daemon stale-pid; do
     d=$(new_case "worded-$mode")
     fakebin=$(make_fakebin "$d")
     make_fake_nm "$d/nmbin" "$mode"
 
     out=$(run_bootstrap "$d" "$d/nmbin:$fakebin")
-    assert_contains "$out" "VALIDATION_DAEMON:" \
+    line=$(daemon_line "$out")
+    assert_contains "$line" "VALIDATION_DAEMON:" \
       "an answer reporting a daemon that is down ($mode) must never pass as healthy by saying nothing"
-    assert_contains "$out" "unestablished" \
+    assert_contains "$line" "unestablished" \
       "wording this check cannot classify is a reading it did not take, not a verdict"
   done
   pass "a daemon reported down in other wording is never an all-clear"
@@ -286,19 +321,16 @@ test_a_down_daemon_worded_otherwise_is_never_an_all_clear() {
 # work either, because both daemon verbs need the upgrade first. The line has to
 # carry the action that IS available, which is the upgrade MISSING: already names.
 test_a_below_floor_cli_names_the_upgrade_as_its_repair() {
-  local d fakebin out line missing upgrade
+  local d fakebin out line upgrade
   d=$(new_case below-floor)
   fakebin=$(make_fakebin "$d")
   make_fake_nm "$d/nmbin" running v1.30.9
 
   out=$(run_bootstrap "$d" "$d/nmbin:$fakebin")
-  line=$(printf '%s\n' "$out" | grep '^VALIDATION_DAEMON:' || true)
+  line=$(daemon_line "$out")
   assert_contains "$line" "unestablished" \
     "a CLI that cannot be asked has taken no reading, so its daemon answer must not be relayed as one"
-  missing=$(printf '%s\n' "$out" | grep '^MISSING: no-mistakes ' || true)
-  upgrade=${missing#*(install: }
-  upgrade=${upgrade%)}
-  [ -n "$upgrade" ] && [ "$upgrade" != "$missing" ] \
+  upgrade=$(nm_install_cmd "$out") \
     || fail "the below-floor fixture must also produce the MISSING: line whose repair this one borrows"
   assert_contains "$line" "$upgrade" \
     "the repair must be the upgrade MISSING: already prints, because it is the only action that can succeed here"
@@ -319,27 +351,57 @@ test_a_below_floor_cli_names_the_upgrade_as_its_repair() {
 # measure. The verdict and the upgrade repair are right on all three paths; only
 # the reason has to say which reading was actually taken.
 test_a_version_that_could_not_be_read_is_not_called_out_of_date() {
-  local d fakebin out line missing upgrade version
+  local d fakebin out line upgrade version
   for version in UNREADABLE BROKEN; do
     d=$(new_case "version-$version")
     fakebin=$(make_fakebin "$d")
     make_fake_nm "$d/nmbin" running "$version"
 
     out=$(run_bootstrap "$d" "$d/nmbin:$fakebin")
-    line=$(printf '%s\n' "$out" | grep '^VALIDATION_DAEMON:' || true)
+    line=$(daemon_line "$out")
     assert_contains "$line" "unestablished" \
       "a CLI whose version could not be read ($version) has taken no reading, and its daemon answer must not be relayed as one"
     assert_not_contains "$line" "below the version floor" \
       "no version was established for $version, so the line must not assert the CLI is out of date"
-    missing=$(printf '%s\n' "$out" | grep '^MISSING: no-mistakes ' || true)
-    upgrade=${missing#*(install: }
-    upgrade=${upgrade%)}
-    [ -n "$upgrade" ] && [ "$upgrade" != "$missing" ] \
+    upgrade=$(nm_install_cmd "$out") \
       || fail "the $version fixture must also produce the MISSING: line whose repair this one borrows"
     assert_contains "$line" "$upgrade" \
       "an unreadable version is a broken install, so the upgrade stays the action the reader can take"
   done
   pass "a version that could not be read is not reported as an out-of-date CLI"
+}
+
+# A CLI old enough not to carry the daemon verbs refuses the call outright. That
+# refusal is DETECTABLE from the answer, so this branch needs no measurement of
+# when the verbs were introduced - a fact this fleet cannot establish for a tool
+# it does not own, and the reason a second version floor was not invented for it.
+# Both measured refusal shapes belong here, and the first is on stderr, so a
+# check that read only stdout would send the reader to a hand reading that
+# refuses exactly as the check just did.
+test_a_cli_that_refuses_the_verb_names_the_upgrade() {
+  local d fakebin out line upgrade mode
+  d=$(new_case refuses-baseline)
+  fakebin=$(make_fakebin "$d")
+  upgrade=$(nm_install_cmd "$(run_bootstrap "$d" "$fakebin")") \
+    || fail "a seat with no no-mistakes must print the MISSING: line this repair is compared against"
+
+  for mode in unknown-cmd daemon-help; do
+    d=$(new_case "refuses-$mode")
+    fakebin=$(make_fakebin "$d")
+    make_fake_nm "$d/nmbin" "$mode"
+
+    out=$(run_bootstrap "$d" "$d/nmbin:$fakebin")
+    line=$(daemon_line "$out")
+    assert_contains "$line" "unestablished" \
+      "a CLI that refuses the verb ($mode) has taken no reading, so its refusal must not be relayed as one"
+    assert_contains "$line" "$upgrade" \
+      "the repair must be the upgrade, because neither daemon verb exists on a CLI that refused this one"
+    assert_not_contains "$line" "take the reading by hand with no-mistakes daemon status" \
+      "a hand reading cannot be prescribed on a CLI that just refused that command"
+    assert_contains "$line" "never no-mistakes update" \
+      "naming an upgrade must not read as lifting the ban on the update path"
+  done
+  pass "a CLI that refuses the verb names the upgrade as its repair"
 }
 
 # --- 4. absence has an owner already ----------------------------------------
@@ -369,6 +431,7 @@ test_a_seat_that_cannot_bound_the_call_says_so
 test_a_down_daemon_worded_otherwise_is_never_an_all_clear
 test_a_below_floor_cli_names_the_upgrade_as_its_repair
 test_a_version_that_could_not_be_read_is_not_called_out_of_date
+test_a_cli_that_refuses_the_verb_names_the_upgrade
 test_a_wholly_absent_cli_is_left_to_the_missing_line
 
 printf 'all fm-validation-daemon-check tests passed\n'
