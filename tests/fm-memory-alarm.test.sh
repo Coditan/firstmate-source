@@ -110,6 +110,24 @@ reading_headroom_unmeasured() {
     "$(stall_obj 0.00)" >"$ANSWER"
 }
 
+# A reading whose stored growth sample has aged past the window a rate means
+# anything over. The reading marks it unmeasured rather than scoped, but it is
+# still the SAMPLE and not the process table, so the next poll that stores one
+# repairs it.
+reading_growth_sample_stale() {  # <available_mib>
+  export FM_TEST_READING_EXIT=3
+  printf '{"schema":"fm-memory-reading.v1","complete":false,"unmeasured":[{"input":"growth-sample","reason":"the stored sample is 1400s old, past the 1260s window a growth rate means anything over"}],"headroom":{"total_kb":24019908,"available_kb":%s,"swap_total_kb":33554428,"swap_free_kb":33554428},"stall":%s,"growth":{"interval_seconds":0,"scope_reason":null,"unmeasured_reason":"the stored sample is 1400s old, past the 1260s window a growth rate means anything over"},"processes":[]}\n' \
+    "$(( $1 * 1024 ))" "$(stall_obj "$FM_TEST_STALL")" >"$ANSWER"
+}
+
+# A reading whose PROCESS TABLE could not be read at all. That is the horizon's
+# own instrument failing, not a sample this run happened not to have.
+reading_process_table_unreadable() {  # <available_mib>
+  export FM_TEST_READING_EXIT=3
+  printf '{"schema":"fm-memory-reading.v1","complete":false,"unmeasured":[{"input":"processes","reason":"ps failed, so the process table could not be read at all"}],"headroom":{"total_kb":24019908,"available_kb":%s,"swap_total_kb":33554428,"swap_free_kb":33554428},"stall":%s,"growth":{"interval_seconds":0,"scope_reason":null,"unmeasured_reason":"the process table could not be read, so nothing could be compared"},"processes":[]}\n' \
+    "$(( $1 * 1024 ))" "$(stall_obj "$FM_TEST_STALL")" >"$ANSWER"
+}
+
 # A reading whose growth the instrument could not compare at all.
 reading_growth_scoped() {
   export FM_TEST_READING_EXIT=0
@@ -378,6 +396,88 @@ test_an_input_no_condition_uses_does_not_hold_back_a_recovery() {
     "and no restoration of sight may follow, because nothing was ever lost"
   [ "$(log_lines)" -eq 2 ] || fail "exactly the crossing and the recovery belong in the record"
   pass "an unmeasured input no condition uses never turns a recovery into a blindness"
+}
+
+test_a_recovery_states_how_long_the_shortage_actually_lasted() {
+  # The duration is read back out of state/memory-alarm.state, which is this
+  # alarm's own record and carries three fields. A reader that takes only two
+  # hands the epoch field the rest of the line, fails the numeric guard, and
+  # silently substitutes now - so every recovery the fleet ever sees would
+  # report a shortage that lasted 0s.
+  reset_home
+  reading 16000 true 0
+  alarm_at 0 >/dev/null
+  reading 1800 true 0
+  alarm_at 300 >/dev/null
+  reading 16000 true 0
+  local out
+  out=$(alarm_at 900)
+  assert_contains "$out" "recovered" "the end of the shortage must be announced"
+  assert_contains "$out" "The shortage lasted 10m0s" \
+    "the recovery must state the real elapsed shortage, not the moment it was read"
+  pass "a recovery states how long the shortage actually lasted"
+}
+
+test_sight_is_never_claimed_regained_while_a_condition_is_still_unreadable() {
+  # The WSL shape: the memory-stall account can never be read. Every verdict
+  # this alarm settles on must keep saying the machine is only partly watched,
+  # because nothing about that host ever changes back.
+  reset_home
+  reading 16000 true 0
+  alarm >/dev/null
+
+  local out
+  reading_stall_unmeasured 16000
+  out=$(alarm)
+  assert_contains "$out" "no longer judge stall" "the lost condition must be spoken once"
+
+  reading_stall_unmeasured 1800
+  out=$(alarm)
+  assert_contains "$out" "running out of RAM headroom" \
+    "headroom must still fire on a host whose stall account is unreadable"
+
+  reading_stall_unmeasured 16000
+  out=$(alarm)
+  assert_not_contains "$out" "can see this machine again" \
+    "sight must never be claimed regained while stall is still unreadable"
+
+  out=$(alarm)
+  assert_not_contains "$out" "can see this machine again" \
+    "and must not be claimed on the poll after it either"
+  assert_not_contains "$out" "can judge all three" \
+    "nor may all three conditions be claimed judged while one is not"
+  case "$out" in
+    ''|*"only partly watched"*) ;;
+    *) fail "a calm verdict on a partly watched machine must say so: |$out|" ;;
+  esac
+  pass "sight is never reported as regained while a condition is still unreadable"
+}
+
+test_a_growth_sample_that_merely_aged_out_is_not_a_lost_instrument() {
+  # A sample past its window is data this run did not have, and the next poll
+  # that stores one repairs it. Counting it would cost the fleet two watcher
+  # wakes and two durable records for a machine that was never in trouble, on
+  # nothing worse than a single watcher gap.
+  reset_home
+  reading 16000 true 0
+  alarm >/dev/null
+
+  local out
+  reading_growth_sample_stale 16000
+  out=$(alarm)
+  assert_contains "|$out|" "||" "a sample that merely aged out must not be spoken as a lost instrument"
+  reading 16000 true 0
+  out=$(alarm)
+  assert_contains "|$out|" "||" "and its repair must not be announced as sight regained"
+  [ "$(log_lines)" -eq 0 ] || fail "a self-clearing sample absence must leave no durable record"
+
+  # The process table itself is a different matter: that is the horizon's own
+  # instrument, and losing it is spoken.
+  reading_process_table_unreadable 16000
+  out=$(alarm)
+  assert_contains "$out" "no longer judge horizon" \
+    "a process table nobody could read is the horizon's instrument failing, and must be spoken"
+  pass "a growth sample that merely aged out is scope, not a lost instrument"
 }
 
 test_a_condition_that_becomes_unjudgeable_is_spoken_once() {
@@ -1083,6 +1183,9 @@ test_an_instrument_that_could_not_read_is_never_an_all_clear
 test_one_unreadable_input_does_not_silence_the_conditions_that_were_read
 test_a_recovery_is_never_declared_from_a_reading_that_missed_an_input
 test_an_input_no_condition_uses_does_not_hold_back_a_recovery
+test_a_recovery_states_how_long_the_shortage_actually_lasted
+test_sight_is_never_claimed_regained_while_a_condition_is_still_unreadable
+test_a_growth_sample_that_merely_aged_out_is_not_a_lost_instrument
 test_a_condition_that_becomes_unjudgeable_is_spoken_once
 test_a_blind_stall_poll_neither_erases_the_run_nor_credits_it
 test_a_reading_that_produced_nothing_is_blindness_not_health

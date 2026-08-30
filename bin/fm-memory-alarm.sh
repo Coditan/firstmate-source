@@ -165,8 +165,8 @@
 #   memory-alarm.log   one append-only line per spoken change, crossing,
 #                      recovery and change of watch alike, each carrying the
 #                      evidence it was decided on and a `watch=` field naming
-#                      the conditions that could NOT be judged on that poll
-#                      (`watch=all` when every one of the three was). It lives
+#                      the conditions whose INSTRUMENT could not be read on that
+#                      poll (`watch=all` when all three were readable). It lives
 #                      in data/ rather than state/ because the question it
 #                      answers - has this happened before, and what was running
 #                      - is asked long after the volatile record of the moment
@@ -175,9 +175,16 @@
 # State, under FM_HOME/state:
 #   memory-alarm.state    "<state> <epoch> <watch>". The last state this alarm
 #                         decided, so a transition can be told from a
-#                         continuation, and the set of conditions it could NOT
-#                         judge on that poll - `headroom,horizon,stall` in that
-#                         order, or `-` when all three were judged. The watch
+#                         continuation, and the set of conditions whose
+#                         INSTRUMENT could not be read on that poll -
+#                         `headroom,horizon,stall` in that order, or `-` when
+#                         all three were readable. It is deliberately narrower
+#                         than "went unjudged": a condition suppressed by an
+#                         expected, self-clearing absence of data - no stored
+#                         growth sample yet, one too young to divide by, one
+#                         aged past its window - is scope rather than
+#                         blindness, resolves on the next poll that stores a
+#                         sample, and never enters the set. The watch
 #                         set is carried because a machine only PARTLY watched
 #                         is not a watched machine: a change in it is a
 #                         transition and is spoken once, exactly as a crossing
@@ -357,21 +364,24 @@ OFFENDER=
 RESIDENT=
 CROSS_KIND=
 
-# Which of the three conditions this poll could NOT judge, in a fixed order so
-# two polls that saw the same thing produce the same string. It is derived from
-# the flags the conditions already keep rather than tracked separately, so it
-# can never disagree with what the verdict says. A verdict of unmeasured means
-# no condition was reached at all, whatever the reason.
+# Which of the three conditions had an INSTRUMENT this poll could not read, in a
+# fixed order so two polls that saw the same thing produce the same string. It is
+# derived from the flags the conditions already keep rather than tracked
+# separately, so it can never disagree with what the verdict says. A verdict of
+# unmeasured means no condition was reached at all, whatever the reason.
 unjudged_conditions() {
   local set=
   if [ "$VERDICT" = unmeasured ]; then
     printf 'headroom,horizon,stall'
     return
   fi
-  # Only a condition whose instrument failed counts here. A declared scope
-  # absence suppresses the horizon for one poll and resolves itself on the next,
-  # so counting it would announce a loss and a recovery of sight on the second
-  # poll of every fresh home.
+  # Only a condition whose instrument failed counts here. Growth that could not
+  # be compared because the stored SAMPLE was absent, too young, too old or
+  # unreadable is data this run did not have, and the next poll that stores one
+  # repairs it - counting that would announce a loss and a regain of sight on
+  # the second poll of every fresh home, and again after any watcher gap past
+  # the sample window. Only the process TABLE being unreadable is the horizon's
+  # instrument failing.
   if [ -n "$GROWTH_BLIND" ] && [ -z "$GROWTH_SCOPED" ]; then set=horizon; fi
   if [ -n "$STALL_BLIND" ] || [ -n "$STALL_UNSET" ]; then
     set="${set:+$set,}stall"
@@ -481,6 +491,12 @@ evaluate() {
     # so it suppresses the horizon condition for this poll without meaning the
     # machine has stopped being watched for growth.
     | (.growth.scope_reason != null) as $growth_scoped
+    # Growth can go unjudged for two quite different reasons, and only one of
+    # them is an instrument failing. The stored SAMPLE being absent, too young,
+    # too old, dated in the future or unreadable is data this run did not have,
+    # and the next poll that stores one repairs it. The process TABLE being
+    # unreadable is the instrument itself.
+    | ((.unmeasured // []) | map(.input) | index("processes") != null) as $processes_blind
     # A completeness claim is not a stall measurement. The reading marks a
     # missing or unparsable pressure file unmeasured, so this should never fire
     # on a real reading - but if the number is absent while the reading calls
@@ -491,7 +507,7 @@ evaluate() {
         (if $incomplete then "incomplete" else "complete" end),
         (if $headroom_blind then "blind" else "read" end),
         (if $growth_blind then (.growth.scope_reason // .growth.unmeasured_reason) else "" end),
-        (if $growth_scoped then "scoped" else "" end),
+        (if $growth_scoped or ($growth_blind and ($processes_blind | not)) then "scoped" else "" end),
         ($avail_mib | tostring),
         ($growth_kb_min / 1024 | floor | tostring),
         (if $minutes == null then "NA" else ($minutes * 10 | floor / 10 | tostring) end),
@@ -803,8 +819,12 @@ read_state() {
 }
 
 read_state_since() {
+  # The trailing discard is not optional: the LAST name in a `read` list is
+  # handed the whole remainder of the line, so without it `since` swallows the
+  # watch token, fails the numeric guard below, and silently reads as now -
+  # which would make every recovery report a shortage that lasted 0s.
   local since=
-  [ -f "$STATE_FILE" ] && { read -r _ since <"$STATE_FILE" 2>/dev/null || true; }
+  [ -f "$STATE_FILE" ] && { read -r _ since _ <"$STATE_FILE" 2>/dev/null || true; }
   case "${since:-}" in ''|*[!0-9]*) printf '%s' "$NOW" ;; *) printf '%s' "$since" ;; esac
 }
 
@@ -1018,8 +1038,10 @@ case "$CURRENT" in
   ok)
     if [ "$PREVIOUS" = crossed ]; then
       LINE="MEMORY_ALARM: recovered - $REASON. The shortage lasted $(human_duration "$((NOW - SINCE))")."
-    else
+    elif [ "$WATCH" = - ]; then
       LINE="MEMORY_ALARM: the memory watch can see this machine again - $REASON."
+    else
+      LINE="MEMORY_ALARM: the memory watch reads this machine as calm on the conditions it could judge, and it still cannot judge $WATCH, so this machine is only partly watched - $REASON. This is not an all-clear for what it cannot judge."
     fi
     ;;
   unmeasured)
