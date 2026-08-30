@@ -72,6 +72,11 @@ new_case() {  # <name> -> echoes case dir
 # `wedged` never answers at all, and `garbled` answers in a shape no version of
 # this check should guess at.
 #
+# Two <version> values are sentinels rather than versions: `UNREADABLE` answers
+# `--version` with a banner carrying no major.minor.patch, and `BROKEN` fails the
+# call outright. Both are seats where no version was established at all, which is
+# a different fact from a version that was read and found too old.
+#
 # `no-daemon` and `stale-pid` are the two rewordings that make a loose match
 # dangerous. Both report a daemon that is DOWN, both carry "daemon running" as a
 # substring, and neither carries "daemon not running". `stale-pid` is the harder
@@ -84,8 +89,11 @@ make_fake_nm() {  # <dir> <mode> [version]
 #!/usr/bin/env bash
 set -u
 if [ "\${1:-}" = --version ]; then
-  printf '%s\n' 'no-mistakes version $version (fake)'
-  exit 0
+  case "$version" in
+    UNREADABLE) printf '%s\n' 'no-mistakes (build 2ac3769, channel stable)'; exit 0 ;;
+    BROKEN)     printf '%s\n' 'error: install manifest unreadable' >&2; exit 1 ;;
+    *)          printf '%s\n' 'no-mistakes version $version (fake)'; exit 0 ;;
+  esac
 fi
 if [ "\${1:-}" = daemon ] && [ "\${2:-}" = status ]; then
   case "$mode" in
@@ -303,6 +311,37 @@ test_a_below_floor_cli_names_the_upgrade_as_its_repair() {
   pass "a below-floor CLI names the upgrade as its repair"
 }
 
+# `no_mistakes_compatible` fails for three different reasons, and only one of them
+# is an out-of-date CLI: `--version` can fail outright, or answer in a shape no
+# version parses out of. Reporting either as below the floor tells a reader on the
+# newest release that their CLI is old - a version reading this check never took,
+# in the one diagnostic whose whole premise is that it never states one it did not
+# measure. The verdict and the upgrade repair are right on all three paths; only
+# the reason has to say which reading was actually taken.
+test_a_version_that_could_not_be_read_is_not_called_out_of_date() {
+  local d fakebin out line missing upgrade version
+  for version in UNREADABLE BROKEN; do
+    d=$(new_case "version-$version")
+    fakebin=$(make_fakebin "$d")
+    make_fake_nm "$d/nmbin" running "$version"
+
+    out=$(run_bootstrap "$d" "$d/nmbin:$fakebin")
+    line=$(printf '%s\n' "$out" | grep '^VALIDATION_DAEMON:' || true)
+    assert_contains "$line" "unestablished" \
+      "a CLI whose version could not be read ($version) has taken no reading, and its daemon answer must not be relayed as one"
+    assert_not_contains "$line" "below the version floor" \
+      "no version was established for $version, so the line must not assert the CLI is out of date"
+    missing=$(printf '%s\n' "$out" | grep '^MISSING: no-mistakes ' || true)
+    upgrade=${missing#*(install: }
+    upgrade=${upgrade%)}
+    [ -n "$upgrade" ] && [ "$upgrade" != "$missing" ] \
+      || fail "the $version fixture must also produce the MISSING: line whose repair this one borrows"
+    assert_contains "$line" "$upgrade" \
+      "an unreadable version is a broken install, so the upgrade stays the action the reader can take"
+  done
+  pass "a version that could not be read is not reported as an out-of-date CLI"
+}
+
 # --- 4. absence has an owner already ----------------------------------------
 
 # Repeating it here would give one fact two owners and tell the reader to start a
@@ -329,6 +368,7 @@ test_an_unrecognised_answer_is_reported_as_unreadable
 test_a_seat_that_cannot_bound_the_call_says_so
 test_a_down_daemon_worded_otherwise_is_never_an_all_clear
 test_a_below_floor_cli_names_the_upgrade_as_its_repair
+test_a_version_that_could_not_be_read_is_not_called_out_of_date
 test_a_wholly_absent_cli_is_left_to_the_missing_line
 
 printf 'all fm-validation-daemon-check tests passed\n'

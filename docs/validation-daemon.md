@@ -61,8 +61,13 @@ Every current answer still costs no line, and a future rewording of either verdi
 A `no-mistakes` that is not installed at all is left silent here on purpose.
 `MISSING: no-mistakes` already owns absence, its repair is to install the tool rather than to start a daemon, and there is no reading to take from a tool that is not there.
 
-A CLI that IS installed but sits below the version floor this fleet requires is the opposite case, and it does print.
+A CLI that IS installed but whose version does not clear the floor this fleet requires is the opposite case, and it does print.
 It cannot be asked, so the check has taken no reading, and staying silent about an instrument that cannot read is exactly the all-clear this whole check exists to remove.
+
+That path covers two different readings, and the line says which one it took, because `no_mistakes_compatible` fails for reasons that are not the same fact.
+`below the version floor this fleet requires` is the case where a version WAS read and it is too old.
+`answered with no version this check could read` is the case where `no-mistakes --version` exited non-zero or printed a banner no major.minor.patch could be parsed out of, so no version was established at all.
+Collapsing the second into the first would tell a reader on the newest release that their CLI is out of date, which is a version reading the check never took, and reporting a reading it did not take is the one thing this check is built not to do.
 What changes on that path is the repair rather than the verdict: `no-mistakes daemon status` and `no-mistakes daemon start` cannot succeed until the upgrade lands, and a diagnostic that prescribes a command the reader cannot run is the defect the 2026-08-24 ruling names.
 So the below-floor line names the upgrade instead, using the same install command `MISSING: no-mistakes` already prints.
 That command is the installer script, not `no-mistakes update`, so naming it does not reopen the path the next section bars; the line keeps that warning too.

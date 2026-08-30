@@ -904,11 +904,14 @@ validation_daemon_unestablished() {
 # guessing dead sends a reader to restart a live one.
 #
 # Absence is not this check's to report: MISSING: already owns an uninstalled
-# CLI, and its repair is to install it rather than to start a daemon. A CLI
-# BELOW the version floor is the opposite case and does print here: it cannot
-# be asked, and silence about an instrument that cannot read is the all-clear
-# this check exists to remove. That path names the upgrade as its repair,
-# because neither daemon verb can succeed until the upgrade lands.
+# CLI, and its repair is to install it rather than to start a daemon. A CLI that
+# IS installed but whose version does not clear the floor is the opposite case
+# and does print here: it cannot be asked, and silence about an instrument that
+# cannot read is the all-clear this check exists to remove. That path names the
+# upgrade as its repair, because neither daemon verb can succeed until the
+# upgrade lands, and it says which of the two things it established - that the
+# version is below the floor, or that no version could be read at all - because
+# a version this seat never read is not a version it may report.
 #
 # FM_VALIDATION_DAEMON_CHECK_DISABLE exists for the same reason the
 # currency-round and run-reader ones do: every behavior suite that composes
@@ -916,12 +919,16 @@ validation_daemon_unestablished() {
 # the line would print under every unrelated assertion. tests/lib.sh disables it
 # suite-wide and tests/fm-validation-daemon-check.test.sh sets it back to 0.
 validation_daemon_check() {
-  local timeout_bin out rc=0 seconds
+  local timeout_bin out rc=0 seconds version_reason
   [ "${FM_VALIDATION_DAEMON_CHECK_DISABLE:-0}" != 1 ] || return 0
   command -v no-mistakes >/dev/null 2>&1 || return 0
   if ! no_mistakes_compatible; then
-    validation_daemon_unestablished \
-      "the installed no-mistakes is below the version floor this fleet requires, so it cannot be asked" \
+    if [ -n "$(no_mistakes_version_parts 2>/dev/null)" ]; then
+      version_reason="the installed no-mistakes is below the version floor this fleet requires, so it cannot be asked"
+    else
+      version_reason="no-mistakes --version answered with no version this check could read, so whether the installed CLI meets the floor this fleet requires is itself unestablished and it cannot be asked"
+    fi
+    validation_daemon_unestablished "$version_reason" \
       "upgrade the CLI first with $(install_cmd no-mistakes), and take the reading once it answers on a supported version - $VALIDATION_DAEMON_NOT_UPDATE"
     return 0
   fi
