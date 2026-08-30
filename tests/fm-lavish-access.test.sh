@@ -424,11 +424,13 @@ assert_contains "$(cat "$FM_TEST_TS_SERVE_LOG")" "serve status" \
   "the allocator still has to READ whether a route already exists"
 assert_not_contains "$(cat "$FM_TEST_TS_SERVE_LOG")" "--bg" \
   "nothing may be published for a run that will not leave a service listening"
-# One reason cannot say both that a route exists and that none was made.
+# One reason cannot say both that a route exists and that none was made, and a
+# deliberate choice is not a degradation: the caller's own flag has no business
+# in a line the captain reads.
 assert_not_contains "$unserved" "published onto" \
   "the reason must not claim a route this run did not make"
-assert_contains "$unserved" "no tailscale serve route was published" \
-  "the reason names what this run actually did"
+assert_not_contains "$unserved" "was not told" \
+  "the caller's flag is not a diagnosis and must not reach user-facing output"
 
 # Reading a route somebody else established is not making one, so an already
 # published port is still the reach it is.
@@ -446,6 +448,34 @@ assert_not_contains "$(cat "$FM_TEST_TS_SERVE_LOG")" "--bg" \
 : > "$FM_TEST_TS_SERVE_STATE"
 : > "$FM_TEST_TS_SERVE_LOG"
 pass "only a caller that will leave a service listening may publish a route onto the tailnet"
+
+# The proxied reading above is carried forward from a run that ACTUALLY published,
+# not asserted from tailscaled being up. On a vessel whose serve cannot publish,
+# a run that attempted it established loopback, and a later run that attempts
+# nothing must not overwrite that: doing so tells the session-start notice to
+# offer a reopen that only degrades to the same link again, and tells the fleet
+# registry that a vessel with no reach off the machine is proxy-reachable.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_P=$(make_home "$TMP_ROOT/vessel-p")
+tried=$(FM_TEST_TS_MODE=userspace FM_TEST_TS_SERVE=broken FM_HOME="$HOME_P" \
+  FM_SERVICE_PORT_RANGE=4846-4847 "$ROOT/bin/fm-service-port.sh" lavish --serving)
+[ "$(field reachability "$tried")" = loopback ] \
+  || fail "a run that attempted a publish and failed establishes loopback, got '$(field reachability "$tried")'"
+untested=$(FM_TEST_TS_MODE=userspace FM_TEST_TS_SERVE=broken FM_HOME="$HOME_P" \
+  FM_SERVICE_PORT_RANGE=4846-4847 "$ROOT/bin/fm-service-port.sh" lavish)
+[ "$(field reachability "$untested")" = loopback ] \
+  || fail "a run that tested nothing must not overwrite a tested host fact, got '$(field reachability "$untested")'"
+[ "$(field route "$untested")" = none ] || fail "no route exists, so route= says none"
+[ -z "$(field dnsname "$untested")" ] \
+  || fail "no name may be offered where no reach was established"
+assert_grep "reachability=loopback" "$HOME_P/state/service-port.lavish" \
+  "the published record keeps the resolution a run that tested it established"
+assert_not_contains "$untested" "was not told" \
+  "the caller's flag must not be named as the cause on a vessel that cannot publish at all"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a run that neither published nor found a route claims no proxy reach of its own"
 
 # Serve is the whole reason this case is not simply loopback, so a serve that
 # cannot publish must not be reported as reach.
@@ -1337,7 +1367,43 @@ assert_grep "reachability=tailnet-proxied" "$z_record" \
   "the published record keeps describing the host, which is still reachable by proxy"
 assert_grep "route=none" "$z_record" \
   "and carries this run's own outcome separately"
+assert_not_contains "$z_end" "was not told" \
+  "a deliberate non-serving run must not describe its own choice to the captain"
 pass "closing a board withdraws its route, publishes none, and still calls the host reachable by proxy"
+
+# --- entry point: a run that starts nothing does not rewrite the owner record --
+#
+# state/lavish/fm-owner is what a server was LAUNCHED with, and it is the only
+# input to the restart-on-mismatch comparison. A publication can vanish under a
+# live board - a neighbouring account running `tailscale serve reset`, or
+# tailscaled losing its serve configuration - and `end` then resolves a loopback
+# link host for a server that was started with the tailnet one.
+
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_O=$(make_home "$TMP_ROOT/vessel-o")
+make_serving_lavish "$HOME_O"
+o_out=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_O" FM_SERVICE_PORT_RANGE=4851-4852 \
+  "$ROOT/bin/fm-lavish.sh" "$HOME_O/.lavish/board.html" 2>/dev/null)
+o_port=$(printf '%s\n' "$o_out" | sed -n 's|.*://[^:]*:\([0-9][0-9]*\)/session/.*|\1|p' | head -1)
+[ -n "$o_port" ] || fail "the proxied open should emit a port, got: $o_out"
+o_owner="$HOME_O/state/lavish/fm-owner"
+assert_grep "link_host=192.0.2.1" "$o_owner" "the open records the link host it launched the server with"
+
+# The route disappears from under the still-running board.
+: > "$FM_TEST_TS_SERVE_STATE"
+FM_TEST_TS_MODE=userspace FM_HOME="$HOME_O" FM_SERVICE_PORT_RANGE=4851-4852 \
+  "$ROOT/bin/fm-lavish.sh" end "$HOME_O/.lavish/board.html" >/dev/null 2>&1
+assert_grep "link_host=192.0.2.1" "$o_owner" \
+  "a run that launched no server must not record a link host no server was started with"
+
+# The proof it matters: the next run that DOES serve republishes, resolves the
+# tailnet link host again, and must find the record it left agreeing with it.
+o_poll=$(FM_TEST_TS_MODE=userspace FM_HOME="$HOME_O" FM_SERVICE_PORT_RANGE=4851-4852 \
+  "$ROOT/bin/fm-lavish.sh" poll "$HOME_O/.lavish/board.html" 2>&1)
+assert_not_contains "$o_poll" "different address configuration" \
+  "a healthy board must not be torn down over a mismatch a non-serving run invented"
+pass "only a run that launches a server records what it was launched with"
 
 # --- entry point: an explicit --port earns no shortcut -----------------------
 #

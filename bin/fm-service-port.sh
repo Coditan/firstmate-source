@@ -111,6 +111,12 @@
 #               This describes the HOST and never this run. A vessel that can be
 #               reached by proxy stays tailnet-proxied on a run that published no
 #               route at all; read route= for what the run itself did.
+#
+#               A run that neither published a route nor found one already
+#               published has TESTED nothing about proxy capability, so it never
+#               asserts tailnet-proxied on its own: it carries forward whatever
+#               a previous allocation established, and claims loopback when there
+#               is nothing to carry.
 #   route       whether a `tailscale serve` route onto tailaddr exists for this
 #               port. Only meaningful under reachability=tailnet-proxied, and
 #               empty otherwise, including under --check, where there is no port
@@ -118,11 +124,11 @@
 #               published        a route is in place, so a link may name the
 #                                tailnet, and whoever holds the port owes its
 #                                withdrawal.
-#               none             this run made none, because --serving did not
-#                                say it would leave a service listening. A link
-#                                must not name the tailnet until a serving run
-#                                publishes one, even though the host itself is
-#                                still reachable by proxy.
+#               none             no route exists for this port: this run was not
+#                                told with --serving that it would leave a
+#                                service listening, so it made none, and none was
+#                                already in place. A link must not name the
+#                                tailnet until a serving run publishes one.
 #   seat        the deterministic preferred port for this service in this home.
 #   port        the port actually bound (absent under --check).
 #   reason      empty when fully nominal; otherwise one plain sentence naming
@@ -405,6 +411,14 @@ SEAT_SUM=$(printf '%s' "$SEAT_KEY" | cksum | awk '{print $1}')
 [ -n "$SEAT_SUM" ] || die "could not derive a deterministic seat (cksum unavailable)" 3
 SEAT=$((WINDOW_START + SEAT_SUM % WINDOW_SIZE))
 
+# The resolution a previous allocation for this service recorded, and nothing
+# else from that file. Empty when there is no readable record to carry forward.
+recorded_reachability() {
+  local record="$STATE/service-port.$SERVICE"
+  [ -r "$record" ] || return 0
+  sed -n 's/^reachability=\(.*\)$/\1/p' "$record" | head -1
+}
+
 emit() {
   printf 'service=%s\n' "$SERVICE"
   printf 'vessel=%s\n' "$VESSEL"
@@ -512,7 +526,26 @@ if [ "$REACHABILITY" = tailnet-proxied ]; then
     ROUTE=published
   else
     ROUTE=none
-    add_reason "no tailscale serve route was published for port $PORT onto $TAILADDR, because this run was not told it would leave a service listening on it"
+    # This run published nothing and found nothing published, so it has tested
+    # NOTHING about whether this node can be proxied at all: fm_tailnet_serve_available
+    # reports only that tailscaled is running, and publishability is unanswerable
+    # until a publish is actually attempted. Asserting tailnet-proxied from it
+    # would overwrite a host fact that a run which DID attempt one established -
+    # on a vessel whose serve cannot publish, that revives a session-start notice
+    # offering a remedy which only degrades to the same link again, and tells the
+    # fleet registry a vessel with no reach off the machine is proxy-reachable.
+    #
+    # Reading the record here is not the read this script forbids. What may never
+    # be read from it is whether a PORT is free, which only a successful bind
+    # answers; the resolution a previous allocation established is a different
+    # question, and carrying it forward is what stops an untested run overwriting
+    # a tested one.
+    PRIOR=$(recorded_reachability)
+    if [ "$PRIOR" != tailnet-proxied ]; then
+      REACHABILITY=loopback
+      DNSNAME=""
+      add_reason "no tailscale serve route onto $TAILADDR has been established for $SERVICE, so no reach off this machine is claimed until one is"
+    fi
   fi
 fi
 
