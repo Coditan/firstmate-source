@@ -960,7 +960,7 @@ validation_daemon_check() {
     return 0
   fi
   err=
-  err_file=$(mktemp 2>/dev/null) || err_file=
+  err_file=$(mktemp "${TMPDIR:-/tmp}/fm-validation-daemon.XXXXXX" 2>/dev/null) || err_file=
   if [ -n "$err_file" ]; then
     out=$("$timeout_bin" "$seconds" no-mistakes daemon status 2>"$err_file") || rc=$?
     err=$(cat "$err_file" 2>/dev/null) || err=

@@ -161,6 +161,27 @@ nm_install_cmd() {  # <bootstrap output> -> echoes the no-mistakes install comma
 # reasons that leave the CLI able to answer, `upgrade` for reasons whose blocker
 # is the installed tool itself and where the hand reading would be refused
 # exactly as the check's was.
+# The DOWN verdict is the one this whole check exists to produce, and it is the
+# easiest to lose without noticing: the generic unestablished line also ends in
+# `no-mistakes daemon start`, through VALIDATION_DAEMON_REPAIR, so asserting that
+# command proves nothing about which branch answered. Pin it by what only it
+# says - the verdict clause, its own `repair:` form, and the ABSENCE of the
+# unestablished hedge - so an arm reordering that drops the down fixture into
+# any unestablished branch fails here rather than passing quietly.
+assert_daemon_down() {  # <line> <what>
+  local line=$1 what=$2
+  assert_contains "$line" "VALIDATION_DAEMON:" \
+    "$what must print the line at all rather than passing as healthy by saying nothing"
+  assert_contains "$line" "the validation pipeline daemon is not running" \
+    "$what must report the daemon as down, which is the verdict this check exists to produce"
+  assert_not_contains "$line" "unestablished" \
+    "$what is a reading that WAS taken, so it must not be hedged as one that was not"
+  assert_contains "$line" "repair: no-mistakes daemon start" \
+    "$what must name the start as its own repair rather than borrowing the by-hand reading"
+  assert_contains "$line" "never no-mistakes update" \
+    "$what must keep the ban on the update path, which no reason varies"
+}
+
 assert_unestablished() {  # <line> <reason fragment> <hand|upgrade> <what>
   local line=$1 reason=$2 repair=$3 what=$4
   assert_contains "$line" "VALIDATION_DAEMON:" \
@@ -205,10 +226,7 @@ test_a_dead_daemon_is_reported_at_startup() {
 
   out=$(run_bootstrap "$d" "$d/nmbin:$fakebin")
   line=$(daemon_line "$out")
-  assert_contains "$line" "VALIDATION_DAEMON:" \
-    "startup must report a validation pipeline daemon that is not running"
-  assert_contains "$line" "no-mistakes daemon start" \
-    "the line must name the repair, not merely announce the condition"
+  assert_daemon_down "$line" "startup meeting a daemon that is not running"
   pass "a dead daemon is reported at startup"
 }
 
@@ -225,6 +243,7 @@ test_the_line_warns_against_the_update_path() {
 
   out=$(run_bootstrap "$d" "$d/nmbin:$fakebin")
   line=$(daemon_line "$out")
+  assert_daemon_down "$line" "the down line this case drives"
   assert_contains "$line" "no-mistakes update" \
     "the line must name the update path so the reader recognises it"
   assert_contains "$line" "never" \
@@ -246,6 +265,7 @@ test_the_line_claims_no_count_of_homes() {
 
   out=$(run_bootstrap "$d" "$d/nmbin:$fakebin")
   line=$(daemon_line "$out")
+  assert_daemon_down "$line" "the down line this case drives"
   assert_contains "$line" "on this account" \
     "the line must name the scope it can establish - the account the socket belongs to"
   assert_not_contains "$line" "home" \

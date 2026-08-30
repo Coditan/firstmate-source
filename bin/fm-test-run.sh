@@ -985,7 +985,18 @@ families_for_changed_path() {
       # (messaging-relay) would never select it from this path.
       printf '%s\n' "__script_required__:fm-bridge-relay.test.sh"
       ;;
-    bin/fm-session-start.sh|bin/fm-bootstrap.sh|\
+    bin/fm-bootstrap.sh)
+      printf '%s\n' session-bootstrap
+      # Every session-bootstrap suite runs with FM_VALIDATION_DAEMON_CHECK_DISABLE=1
+      # from tests/lib.sh, so none of them exercises validation_daemon_check; the
+      # one suite that does turns it back on, and its basename family
+      # (pure-contract-unit) would never select it from this path.
+      printf '%s\n' "__script_required__:fm-validation-daemon-check.test.sh"
+      # Same shape for the run-reader assertion, which tests/lib.sh silences the
+      # same way and whose suite sits in the same basename family.
+      printf '%s\n' "__script_required__:fm-run-reader-reach.test.sh"
+      ;;
+    bin/fm-session-start.sh|\
     bin/fm-sessionstart-nudge.sh|bin/fm-tangle*|bin/fm-update.sh|\
     bin/fm-gate-refuse*|bin/fm-lock*)
       printf '%s\n' session-bootstrap
