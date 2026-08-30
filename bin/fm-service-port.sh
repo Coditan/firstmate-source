@@ -136,8 +136,13 @@
 #               probed           this run tested the claim itself.
 #               carried          restated from a previous allocation's record.
 #               assumed          inferred from signals that do not test it, such
-#                                as tailscaled being up, or a --check run with no
-#                                port to test with.
+#                                as tailscaled being up. No path in this script
+#                                emits it: every verdict here is written only
+#                                after its own test, and the door refuses any
+#                                raise carrying it. It stays in the vocabulary
+#                                because that refusal is what the value is for,
+#                                and because a record written by an older
+#                                version can still carry it.
 #               none             nothing was established at all.
 #
 #               Claiming more reach than is currently held requires ESTABLISHED
@@ -329,6 +334,11 @@ tailscale_json() {
   tailscale status --json 2>/dev/null
 }
 
+# Returns 0 with the node's identity resolved, 1 when this host was READ and
+# genuinely has no usable tailnet, and 2 when the status could not be read at
+# all. The last is not a negative answer: a missing jq or a tailscaled that did
+# not respond tests nothing about reach, and calling it one would record a
+# tested no-reach on a vessel that may be perfectly reachable.
 resolve_tailnet() {
   local json state addr host suffix dnsname
   command -v tailscale >/dev/null 2>&1 || {
@@ -337,11 +347,11 @@ resolve_tailnet() {
   }
   json=$(tailscale_json) || {
     add_reason "tailscale status could not be read as JSON (jq missing or tailscale not responding)"
-    return 1
+    return 2
   }
   [ -n "$json" ] || {
     add_reason "tailscale status returned nothing"
-    return 1
+    return 2
   }
   state=$(printf '%s' "$json" | jq -r '.BackendState // empty' 2>/dev/null)
   [ "$state" = "Running" ] || {
@@ -385,13 +395,19 @@ resolve_tailnet() {
   return 0
 }
 
-if ! resolve_tailnet; then
+resolve_tailnet
+TAILNET_STATUS=$?
+if [ "$TAILNET_STATUS" -ne 0 ]; then
   ADDR=127.0.0.1
   TAILADDR=""
   DNSNAME=""
-  set_reachability_or_die loopback probed
-  fm_reachability_rule_out tailnet-proxied
   MACHINE=""
+  if [ "$TAILNET_STATUS" -eq 2 ]; then
+    set_reachability_or_die untested none
+  else
+    set_reachability_or_die loopback probed
+    fm_reachability_rule_out tailnet-proxied
+  fi
 fi
 [ -n "$MACHINE" ] || MACHINE="unknown-$VESSEL"
 
@@ -485,11 +501,22 @@ recorded_reachability() {
   sed -n 's/^reachability=\(.*\)$/\1/p' "$record" | head -1
 }
 
+# The one writer of both the stdout allocation and the published record, so the
+# field contract in this header is enforced in a single place. A name is offered
+# only under a verdict that has a reach for it to name: under loopback it would
+# point at reach this run tested and did not find, and under untested at reach
+# nothing has established, which is the link-that-opens-nowhere this whole
+# resolver exists to prevent.
 emit() {
+  local name=$DNSNAME
+  case "$REACHABILITY" in
+    tailnet|tailnet-proxied) ;;
+    *) name="" ;;
+  esac
   printf 'service=%s\n' "$SERVICE"
   printf 'vessel=%s\n' "$VESSEL"
   printf 'machine=%s\n' "$MACHINE"
-  printf 'dnsname=%s\n' "$DNSNAME"
+  printf 'dnsname=%s\n' "$name"
   printf 'addr=%s\n' "$ADDR"
   printf 'tailaddr=%s\n' "$TAILADDR"
   printf 'seat=%s\n' "$SEAT"
@@ -556,6 +583,13 @@ if [ -z "${PORT:-}" ]; then
   case "$PORT" in
     ''|*[!0-9]*) die "the port probe returned no usable port for $SERVICE on $ADDR" 3 ;;
   esac
+  # The walk just bound this node's own tailnet address, which is the very
+  # measurement the ephemeral probe above tries to take and can miss for a
+  # port-scoped reason. Holding that proof and still reporting untested would
+  # describe a board demonstrably serving on the tailnet as unestablished.
+  if [ -n "$TAILADDR" ] && [ "$ADDR" = "$TAILADDR" ]; then
+    set_reachability_or_die tailnet probed
+  fi
 fi
 
 # --- publish the proxy ------------------------------------------------------
