@@ -146,6 +146,35 @@ export FM_VESSEL_IDENTITY_DISABLE=1
 
 export FM_TEST_SKIP_WATCHER_SERVICE=1
 
+# NOTHING THAT ADDRESSES A HOME, OR SELECTS A SERVICE MODE, MAY ARRIVE AMBIENTLY.
+#
+# A worker started from inside the monitoring service's own process tree inherits
+# that service's whole environment. Measured in a task shell on coditan-vessel
+# 2026-08-30: FM_HOME, FM_ROOT_OVERRIDE and FM_STATE_OVERRIDE all naming the LIVE
+# home, plus FM_WATCH_DAEMON=1 and FM_WATCH_MANAGER=keeper. Both halves of that
+# broke suites on an unmodified origin/main, in the two ways this class breaks
+# things:
+#
+#   - FM_WATCH_DAEMON=1 made every watcher test drive the daemon shape of
+#     bin/fm-watch.sh while asserting the one-shot shape. wake() records a pending
+#     wake and returns instead of exiting, so tests/fm-wake-queue.test.sh hung to
+#     its timeout and reported "watcher did not exit for first signal".
+#   - FM_STATE_OVERRIDE outranks the FM_HOME a suite passes per invocation, so a
+#     fixture that recorded a dead seat in its own throwaway home had
+#     bin/fm-seat-alarm.sh read the LIVE home's session lock instead, find the
+#     running seat there, and report the fixture healthy. The suite was measuring
+#     the machine it was running on.
+#
+# The second is the worse shape and the reason this is a scrub rather than a
+# per-suite fix: a test that silently reads live state can PASS while proving
+# nothing, and it is one careless fixture away from writing there too. A suite
+# that needs a home names it on the invocation, which is where that choice
+# belongs; ROOT here comes from this file's own location and needs none of these.
+unset FM_HOME FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_CONFIG_OVERRIDE \
+  FM_FINDINGS_DIR FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
+unset FM_WATCH_DAEMON FM_WATCH_MANAGER FM_WATCH_SERVICE_PATH \
+  FM_WATCH_SOURCE_VERSION FM_WATCH_X_MODE_VERSION
+
 # --- reporters --------------------------------------------------------------
 
 fail() {

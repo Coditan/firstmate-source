@@ -328,7 +328,7 @@ deliver_first_turn() {
       rc=0
       fm_backend_target_exists tmux "$pane" || rc=$?
       if [ "$rc" -eq 0 ]; then
-        if [ -z "$(kv_get "$FIRST_TURN" held 2>/dev/null || true)" ]; then
+        if [ -z "$(fm_retry_kv_get "$FIRST_TURN" held 2>/dev/null || true)" ]; then
           first_turn_mark held || true
           log "first turn held past ${age}s: pane $pane was given its turn and is still open; not launching beside it"
         fi
@@ -391,12 +391,37 @@ clear_episode() {
   fm_retry_clear_episode "$ATTEMPTS" "$GIVEUP"
 }
 
-emit_giveup_finding() {  # <key> <status-line>
-  local key=$1 status_line=$2 out rc=0
+# THE ONE THING THIS FINDING MAY NOT DO IS OVERSTATE WHAT WAS TRIED.
+# It is read on a phone, by someone deciding whether a machine is worth walking
+# to. "Exhausted five launch attempts" and "made one launch and then waited out
+# the seat it had already started" call for opposite actions, and the second is
+# what a held episode actually is: the pane is open, an agent is in it, and the
+# only reason nothing more happens is that opening a second seat beside a live
+# one is the orphan this whole component exists to prevent. That refusal is the
+# fact he can act on, so it is stated rather than left to be inferred from
+# silence - the same standard by which the alarm on this branch declines to print
+# `armed` for a home it deliberately did not arm.
+#
+# The once-per-episode marker, the emit, and the log line are the shared
+# library's, because both seat supervisors owe those the same way. Only the
+# sentences are this file's, because only this file held a pane.
+emit_giveup_finding() {  # <key> <status-line> <launches> <holds> <pane>
+  local key=$1 status_line=$2 launches=$3 holds=$4 pane=$5 out rc=0
+  local claim measurement refuted
+  measurement=$status_line
+  refuted="A fresh delivery status for the same queued work becomes deliverable after a launch attempt, or the stay-down marker is set deliberately."
+  if [ "$holds" -gt 0 ]; then
+    claim="The primary firstmate seat respawner stopped retrying this episode at its $MAX_ATTEMPTS-cycle bound after $launches launch attempt(s) and $holds held cycle(s). A seat it started is still open in pane ${pane:-unknown} and has not taken this home's lock, so it is deliberately not opening another beside it; this home has an agent and no first mate."
+    measurement="$status_line | launches=$launches holds=$holds pane=${pane:-unknown}"
+    refuted="$refuted The pane above closing, or a seat taking this home's lock, also ends this episode."
+  else
+    claim="The primary firstmate seat respawner exhausted $MAX_ATTEMPTS launch attempt(s) for this home and stopped retrying this episode."
+  fi
   out=$(fm_retry_giveup_emit "$GIVEUP" "$key" fm-seat-respawner \
-    "The primary firstmate seat respawner exhausted $MAX_ATTEMPTS launch attempt(s) for this home and stopped retrying this episode." \
+    "$claim" \
     "bin/fm-seat-respawner.sh for $FM_HOME" \
-    "$status_line") || rc=$?
+    "$measurement" \
+    "$refuted") || rc=$?
   [ -z "$out" ] || log "$out"
   return "$rc"
 }
@@ -460,7 +485,7 @@ respawn_needed() {  # <status-line>
 }
 
 one_cycle() {
-  local status_line key now count next delay
+  local status_line key now count next delay holds pane spent
   beat || return 1
   revive_watcher_if_dead
   # The declared stand-down is read BEFORE any pending turn is delivered, and it
@@ -502,31 +527,46 @@ one_cycle() {
   fm_retry_read_attempts "$ATTEMPTS" "$key"
   count=$FM_RETRY_ATTEMPT_COUNT
   next=$FM_RETRY_ATTEMPT_NEXT
+  holds=$FM_RETRY_ATTEMPT_HOLDS
   now=$(date +%s)
+  spent=$((count + holds))
+  # THE BOUND IS ON THE EPISODE, NOT ON THE LAUNCHES, and it is tested before
+  # anything is spent so a held episode ends the same way a launching one does.
+  # A hold used to fall out of the loop above this test and so was bounded by
+  # nothing: a first turn that never landed left this home with an agent, no
+  # first mate, and no component anywhere willing to say so. The captain ruled
+  # the hold stays and the bound applies to it, so both spends count toward
+  # MAX_ATTEMPTS while only launches are ever reported as launches.
+  if [ "$spent" -ge "$MAX_ATTEMPTS" ]; then
+    pane=$(fm_retry_kv_get "$FIRST_TURN" pane 2>/dev/null || true)
+    first_turn_pending || pane=
+    emit_giveup_finding "$key" "$status_line" "$count" "$holds" "$pane" || true
+    return 0
+  fi
   # A seat this respawner already started, still on its way to the lock, is not
   # a reason to start another. The delivery verdict stays undeliverable until
   # session start publishes an endpoint - well past the first backoff - so
   # launching on schedule here would leave a live agent in a window nothing
-  # tracks or reports. Waiting costs no attempt, and FM_SEAT_FIRST_TURN_DEADLINE
-  # bounds it, so a pane that never presents a composer still frees the next one.
+  # tracks or reports. The wait is paced by the same backoff a launch would take
+  # and spends a hold rather than a launch, and FM_SEAT_FIRST_TURN_DEADLINE still
+  # frees a pane that never presents a composer.
   if first_turn_pending; then
-    if [ "$now" -ge "$next" ] && [ -z "$(fm_retry_kv_get "$FIRST_TURN" deferred 2>/dev/null || true)" ]; then
-      first_turn_mark deferred || true
-      log "launch held: the seat already started for this episode has not taken this home's lock yet"
+    if [ "$now" -ge "$next" ]; then
+      holds=$((holds + 1))
+      delay=$(fm_retry_backoff "$((count + holds))" "$BASE_BACKOFF" "$MAX_BACKOFF")
+      next=$((now + delay))
+      fm_retry_write_attempts "$ATTEMPTS" "$key" "$count" "$next" "$holds" || return 1
+      log "launch held ($holds of $((MAX_ATTEMPTS - count)) held cycle(s) available): the seat already started for this episode has not taken this home's lock yet"
     fi
-    return 0
-  fi
-  if [ "$count" -ge "$MAX_ATTEMPTS" ]; then
-    emit_giveup_finding "$key" "$status_line" || true
     return 0
   fi
   if [ "$now" -lt "$next" ]; then
     return 0
   fi
   count=$((count + 1))
-  delay=$(fm_retry_backoff "$count" "$BASE_BACKOFF" "$MAX_BACKOFF")
+  delay=$(fm_retry_backoff "$((count + holds))" "$BASE_BACKOFF" "$MAX_BACKOFF")
   next=$((now + delay))
-  fm_retry_write_attempts "$ATTEMPTS" "$key" "$count" "$next" || return 1
+  fm_retry_write_attempts "$ATTEMPTS" "$key" "$count" "$next" "$holds" || return 1
   if launch_in_tmux "$status_line"; then
     log "launch attempt $count submitted after: $status_line"
   else

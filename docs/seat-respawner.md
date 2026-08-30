@@ -50,6 +50,12 @@ The rules of that episode, the attempt record, the doubling backoff, and the sin
 Where each episode's record lives, and how long it outlives its process, stays with the supervisor that owns it.
 `tests/fm-retry-episode.test.sh` covers those shared rules where they live, so a change to them fails there rather than in one supervisor's tests alone.
 
+The bound is on the episode, and an episode spends two different things.
+A **launch** is a cycle on which a window was actually opened; a **hold** is a due cycle spent waiting on a seat this respawner had already started, which it will not open a second seat beside.
+Both count toward `FM_SEAT_RESPAWNER_MAX_ATTEMPTS`, so a first turn that never lands can no longer hold the episode open forever, and the two are recorded apart in `state/.seat-respawn-attempts` so only launches are ever reported as launches.
+That distinction is the finding's whole point on a held episode: an episode whose first turn never lands makes exactly one window call, and a record telling the captain that five launches were spent would send him to a machine whose actual state is an open pane with an agent in it that never reached session start.
+So a give-up on a held episode names both counts, names the pane still holding it, and says outright that the silence is a refusal to open a second seat rather than a restarter that quit.
+
 ## Limits
 
 `tests/fm-seat-respawner.test.sh` covers the portable properties: honoring the stay-down marker, reporting the give-up path, refusing to relaunch beside a live first mate or on a lock it could not read, holding the next launch while a first turn is owed, composing no `PATH` for the fresh seat, refusing a resume-style launch command, and the keeper convergence's place in the watcher's sweep.
