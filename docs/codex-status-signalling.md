@@ -86,7 +86,7 @@ state/<id>.turn-ended -> .crew-signal/<id>/turn-ended
 ```
 
 The Codex launch line's `writable_roots` array carries this per-task signal root for every Codex direct report.
-A ship or scout crewmate's array additionally carries its worktree's git common directory; [`docs/codex-sandbox-git-directory.md`](codex-sandbox-git-directory.md) owns that second root.
+A ship or scout crewmate's array additionally carries its worktree's git common directory and, in a gated project, its no-mistakes gate repository; [`docs/codex-sandbox-git-directory.md`](codex-sandbox-git-directory.md) owns that second root and [`docs/codex-sandbox-gate-repo.md`](codex-sandbox-gate-repo.md) the third.
 A secondmate receives the one-element form shown here:
 
 ```text
@@ -125,6 +125,6 @@ Metadata, parked markers, and other watcher signatures keep their existing non-d
 ## Scope
 
 The signal writable root is given to Codex ship, scout, and secondmate direct reports.
-The network grant remains crewmate-only and is still documented separately, as does the crewmate-only git-directory root that shares this same `writable_roots` array ([`docs/codex-sandbox-git-directory.md`](codex-sandbox-git-directory.md)).
+The network grant remains crewmate-only and is still documented separately, as do the crewmate-only git-directory and gate-repository roots that share this same `writable_roots` array ([`docs/codex-sandbox-git-directory.md`](codex-sandbox-git-directory.md), [`docs/codex-sandbox-gate-repo.md`](codex-sandbox-gate-repo.md)).
 No non-Codex harness receives a Codex sandbox writable-root override.
 Teardown removes the public symlinks and the private `state/.crew-signal/<id>` directory with the rest of the task's volatile state.

@@ -277,6 +277,11 @@ A Codex crewmate also receives its worktree's git common directory as a second `
 The project's working tree is never a writable root, and a secondmate receives neither this grant nor the network one; `docs/codex-sandbox-git-directory.md` owns the measurements and the blast radius.
 A Codex worker refused a ref write is not short of filesystem permission on the account: check the spawning home's own `bin/fm-spawn.sh` for the grant before touching permissions on the repository.
 
+A Codex crewmate also receives its project's no-mistakes gate repository as a third `sandbox_workspace_write.writable_roots` entry, because a push to a local gate runs `git-receive-pack` as the pushing process and the sandbox otherwise refuses the quarantine directory it creates, which kills every Codex-dispatched pipeline ship task at the gate push.
+The grant names one project's gate; the daemon's own directory and every other project's gate stay refused, and a secondmate receives none of the three grants.
+`docs/codex-sandbox-gate-repo.md` owns the measurements and the blast radius.
+A Codex worker whose gate push reports `unable to create temporary object directory` is not looking at a broken or unwritable gate: check the spawning home's own `bin/fm-spawn.sh` for the grant before inspecting the gate or the daemon.
+
 Reasoning effort is the one fact that moved.
 Codex's effort vocabulary is now per-model rather than fleet-wide, and the newest models accept levels above `xhigh`: as of 0.145.0 the bundled catalog gives `gpt-5.6-sol` and `gpt-5.6-terra` low through `ultra`, `gpt-5.6-luna` low through `max`, and every older model low through `xhigh`.
 Passing a level a model does not support is rejected outright on the `-c model_reasoning_effort=...` launch path firstmate actually uses, and the whole turn dies with it.

@@ -90,4 +90,4 @@ The measurement above was re-taken outside `/tmp` for that reason, and anyone re
 That understatement is the point of the grant rather than an objection to it: what the approval path allows is not what the launch line declares.
 
 The no-mistakes gate repository refusal recorded in [`docs/codex-sandbox-network.md`](codex-sandbox-network.md) section 9 (`PROBE2`) is a different path and is NOT covered here.
-It remains refused, and widening `writable_roots` to the no-mistakes data directory remains a separate captain decision.
+It is closed by a separate third writable root, owned by [`docs/codex-sandbox-gate-repo.md`](codex-sandbox-gate-repo.md).
