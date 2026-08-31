@@ -487,20 +487,29 @@ backoff_for() {  # <count-after-attempt>
 # fact he can act on, so it is stated rather than left to be inferred from
 # silence - the same standard by which the alarm on this branch declines to print
 # `armed` for a home it deliberately did not arm.
+#
+# WHICH CLAIM IS SELECTED IS DECIDED BY THE RECORD, NEVER BY THE HOLD COUNT.
+# A held cycle is evidence that a pane WAS open then; only a first-turn record
+# still standing now says one is open at the bound, and one_cycle passes an empty
+# <pane> for exactly that reason. Keying the refusal wording on `holds` instead
+# states the fact when it is false - an episode that held twice and then had its
+# pane close reports a seat open in "pane unknown" - and omits it when it is true
+# - an episode that reached the bound on launches alone while its last pane is
+# still sitting there. Both directions send him to the wrong machine, so the
+# discriminator is the pane and the counts are reported either way.
 emit_giveup_finding() {  # <key> <status-line> <launches> <holds> <pane>
   local key=$1 status_line=$2 launches=$3 holds=$4 pane=$5 out claim measurement refuted where
   if [ -f "$GIVEUP" ] && [ "$(kv_get "$GIVEUP" key 2>/dev/null || true)" = "$key" ]; then
     return 0
   fi
   where="bin/fm-seat-respawner.sh for $FM_HOME"
-  measurement=$status_line
+  measurement="$status_line | launches=$launches holds=$holds pane=${pane:-none}"
   refuted="A fresh delivery status for the same queued work becomes deliverable after a launch attempt, or the stay-down marker is set deliberately."
-  if [ "$holds" -gt 0 ]; then
-    claim="The primary firstmate seat respawner stopped retrying this episode at its $MAX_ATTEMPTS-cycle bound after $launches launch attempt(s) and $holds held cycle(s). A seat it started is still open in pane ${pane:-unknown} and has not taken this home's lock, so it is deliberately not opening another beside it; this home has an agent and no first mate."
-    measurement="$status_line | launches=$launches holds=$holds pane=${pane:-unknown}"
+  if [ -n "$pane" ]; then
+    claim="The primary firstmate seat respawner stopped retrying this episode at its $MAX_ATTEMPTS-cycle bound after $launches launch attempt(s) and $holds held cycle(s). A seat it started is still open in pane $pane and has not taken this home's lock, so it is deliberately not opening another beside it; this home has an agent and no first mate."
     refuted="$refuted The pane above closing, or a seat taking this home's lock, also ends this episode."
   else
-    claim="The primary firstmate seat respawner exhausted $MAX_ATTEMPTS launch attempt(s) for this home and stopped retrying this episode."
+    claim="The primary firstmate seat respawner exhausted $launches launch attempt(s) for this home and stopped retrying this episode at its $MAX_ATTEMPTS-cycle bound after $holds held cycle(s). No seat it started is still on record, so nothing is being held and no pane is being refused."
   fi
   if out=$(env FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" "$SCRIPT_DIR/fm-finding.sh" emit \
       --class evidence \
