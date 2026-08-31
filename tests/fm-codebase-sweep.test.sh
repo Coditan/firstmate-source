@@ -190,25 +190,12 @@ test_the_sweep_carries_the_five_source_grounded_subjects() {
   pass "the sweep carries all five source-grounded subjects"
 }
 
-test_codebase_design_has_a_version_independent_plain_file_fallback() {
+test_a_missing_codebase_design_stops_rather_than_improvising() {
   assert_grep 'mattpocock-skills:codebase-design' "$SKILL" \
     "the skill must name where codebase-design actually lives on this seat"
-  assert_grep 'installed_plugins.json' "$SKILL" \
-    "the fallback must resolve the installed plugin through its manifest"
-  assert_grep '<installPath>/skills/engineering/codebase-design/SKILL.md' "$SKILL" \
-    "the fallback must read the registered skill payload"
-  assert_grep 'never construct that path from a version number' "$SKILL" \
-    "the fallback must not freeze the plugin cache version"
-  assert_grep 'not invocation-equivalent' "$SKILL" \
-    "the fallback must distinguish content equivalence from harness invocation"
-  assert_grep 'Start every sweep report with the vocabulary route used' "$SKILL" \
-    "the report must identify how it received the vocabulary"
   assert_grep 'say so in the report and stop rather than improvising its vocabulary' "$SKILL" \
-    "a missing loaded skill and fallback file must stop the sweep rather than be improvised"
-  if grep -Eq '/mattpocock-skills/[0-9]+(\.[0-9]+)+/' "$SKILL"; then
-    fail "the skill must not hardcode a plugin version"
-  fi
-  pass "codebase-design has a version-independent plain-file fallback with report provenance"
+    "an absent codebase-design must stop the sweep rather than be improvised"
+  pass "an absent codebase-design stops the sweep instead of being improvised"
 }
 
 test_the_sort_is_by_tier_then_by_unblocked_findings() {
@@ -315,7 +302,7 @@ test_the_low_tier_grant_names_what_it_does_not_cover
 test_merge_authority_is_read_at_the_time_and_never_hardcoded
 test_the_sweep_is_per_repository_and_registers_no_cadence
 test_the_sweep_carries_the_five_source_grounded_subjects
-test_codebase_design_has_a_version_independent_plain_file_fallback
+test_a_missing_codebase_design_stops_rather_than_improvising
 test_the_sort_is_by_tier_then_by_unblocked_findings
 test_middle_and_high_findings_are_routed_as_durable_decisions
 test_the_skill_states_what_it_does_not_cover
