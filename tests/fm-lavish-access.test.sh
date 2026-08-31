@@ -790,9 +790,30 @@ assert_not_contains "$u1" "no tailnet on this host" \
   "nor that it has no tailnet, which it plainly has"
 assert_contains "$u1" "nothing has established whether" \
   "the captain is told which of the two it is: neither"
+assert_contains "$u1" "the next open settles the rest" \
+  "and that trying again resolves it, which on this vessel it does"
 : > "$FM_TEST_TS_SERVE_STATE"
 : > "$FM_TEST_TS_SERVE_LOG"
 pass "a run that established nothing says so rather than picking the flattering answer"
+
+# The other producer of untested, and the promise above is untrue for it: a host
+# whose tailscale cannot be READ answers the same way on every later run, so a
+# sentence telling the captain to open again would send him round a loop that
+# settles nothing.
+HOME_U2=$(make_home "$TMP_ROOT/vessel-u2")
+u2=$(FM_TEST_TS_MODE=unreadable FM_HOME="$HOME_U2" FM_SERVICE_PORT_RANGE=4891-4892 \
+  "$ROOT/bin/fm-lavish.sh" end "$HOME_U2/.lavish/board.html" 2>&1)
+assert_contains "$u2" "nothing here could read whether" \
+  "an unreadable tailscale is reported as unread, not as a tested answer"
+assert_contains "$u2" "jq missing or tailscale not responding" \
+  "and the concrete cause is named"
+assert_not_contains "$u2" "the next open settles the rest" \
+  "without promising a further open resolves what no further open can"
+assert_not_contains "$u2" "not reachable off this machine" \
+  "nor claiming the vessel was shown unreachable"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "only the vessel a later run can settle is told to try again"
 
 # --- entry point: a run that opens nothing publishes no route ----------------
 #
