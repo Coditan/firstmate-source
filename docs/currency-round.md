@@ -118,13 +118,39 @@ An `unmeasured` reading must repeat in two consecutive rounds before it surfaces
 
 ## The unmanaged tools
 
-`gh`, `treehouse`, `uv`, and `shellcheck` are checked at best and updated by nothing; the npm AXI suite has `bin/fm-axi-suite.sh` and these have no equivalent.
+`gh`, `treehouse`, `uv`, `shellcheck`, and `no-mistakes` are checked at best and updated by nothing; the npm AXI suite has `bin/fm-axi-suite.sh` and these have no equivalent.
 Each declares its own reference, because they are not all asking the same question.
 `gh`, `treehouse`, and `uv` compare against their latest upstream release.
 `shellcheck` compares against the version `bin/fm-lint.sh --required-version` prints, because `fm-lint.sh` refuses to run under any other version: a drift from that pin breaks the validation gate, while a newer upstream release is a pin-bump decision this repo has already made and not a currency defect.
 Chasing latest for `shellcheck` would spend a wake arguing with the repo's own pin.
+`no-mistakes` compares against the newer version it announces about itself, which is explained below.
+
+This table is also the ownership record.
+This home has no separate registry of who watches which tool, and inventing one would be a second place for the same fact to rot: a tool in this table is watched daily by this round, and a tool outside it is watched by nothing.
+The weekly sweep's tool-currency step subtracts both the managed AXI suite and this table, so what it reports with no owner is what neither covers.
 
 A tool this home has not installed is not a finding, so a home that does not use `uv` is never told about it and no configuration is needed to say so.
+
+## The tool that announced its own gap
+
+`no-mistakes` gates every ship task in this fleet, and until 2026-08-31 it was outside every check.
+The weekly sweep found it at v1.48.0 built 2026-08-08 while v1.60.2 was available - twelve releases - and its owner column read "nobody".
+
+The part worth keeping is that this was never invisible.
+The tool prints `A new version of no-mistakes is available: v1.48.0 -> v1.60.2` on every ordinary invocation, so that line was on every agent's screen, on every command, for weeks.
+A gap that announces itself and is still twelve releases wide is not an undetected failure, it is an unowned one, and the two need different fixes.
+Nothing louder would have helped; something that re-measures on a cadence and reports once was what was missing.
+
+Its reference is that same announcement rather than a forge.
+No repository for `no-mistakes` could be found in the binary, in its `doctor` output, or anywhere in this home's configuration, and a reading pointed at a source nobody here can establish is worse than no reading.
+The tool does its own update check and says the answer out loud, so the round asks the tool.
+The probe is `no-mistakes --help`: local, no repository needed, about 5ms because the answer is cached, and it never touches the shared daemon a running pipeline depends on.
+The tool's own `--version` is deliberately not the probe, because it is the one invocation that suppresses the notice; probing it would report the tool current forever.
+
+That reference has one limit, and the reading is worded around it rather than over it.
+Silence is read as "announces nothing", and a tool that reworded its notice would be silent here too, with no positive signal to check it against.
+So an `ok` reading says the tool announces no newer version, not that the tool is current: the round reports the claim it actually measured, and a reader who needs more than the tool's own word can see from the wording that it has only the tool's word.
+A probe that fails, prints nothing, or announces something unparseable reads `unmeasured` and never `ok`.
 
 Measured on this vessel on 2026-08-12, immediately after the table was written:
 
@@ -136,3 +162,13 @@ shellcheck  0.11.0   against the 0.11.0 this repo requires
 ```
 
 Three of the four unmanaged tools were behind at the moment the check that would have said so was first written.
+
+Measured on this vessel on 2026-08-31, immediately after `no-mistakes` was added to the table:
+
+```
+reading: tool:no-mistakes hop=installed state=behind detail=1.48.0 against the 1.60.2 no-mistakes announces about itself
+CURRENCY_ROUND: 1 finding(s) - tool:no-mistakes (installed) behind: 1.48.0 against the 1.60.2 no-mistakes announces about itself. Decide immediate or batch per the recorded criteria.
+```
+
+The fifth was behind too, by twelve releases, at the moment the reading that would have said so was first written.
+Taking that update is a separate, captain-timed act: `no-mistakes update` resets the shared daemon, which interrupts every pipeline run live at that moment, so the round reports the gap and the window for closing it is the captain's to pick.

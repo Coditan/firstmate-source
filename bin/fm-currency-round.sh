@@ -66,8 +66,11 @@
 #                                   and is skipped by name rather than faulted.
 #   tool:<name>          installed  the runtime tools nothing else updates. Each
 #                                   declares its own reference: a latest upstream
-#                                   release, or a version this repo pins. A tool
-#                                   this home has not installed is not a finding.
+#                                   release, a version this repo pins, or the
+#                                   newer version the tool announces about
+#                                   itself, for a tool with no forge this home
+#                                   can name. A tool this home has not installed
+#                                   is not a finding.
 #
 # The commit-graph distance between this checkout and its own origin is NOT
 # re-measured here: bin/fm-bootstrap.sh's SELF_DRIFT check owns it.
@@ -109,9 +112,11 @@
 #                               (default 12), so no single hung network call can
 #                               consume the watcher's whole per-check budget.
 #   FM_CURRENCY_ROUND_TOOLS     override the unmanaged tool table, ONE ENTRY PER
-#                               LINE as "<tool>:release:<owner/repo>" or
-#                               "<tool>:pinned:<command printing the version>".
-#                               Lines rather than words because a pinned
+#                               LINE as "<tool>:release:<owner/repo>",
+#                               "<tool>:pinned:<command printing the version>",
+#                               or "<tool>:announced:<command whose output the
+#                               tool prints its own update notice on>". Lines
+#                               rather than words because a pinned or announced
 #                               reference is a command with arguments (tests).
 #   FM_CURRENCY_ROUND_NOW       override the current epoch (tests).
 #   FM_CURRENCY_ROUND_DISABLE=1 silence detect and --armed only, so suites that
@@ -144,10 +149,25 @@ case "$STEP_TIMEOUT" in *[!0-9]*) STEP_TIMEOUT=12 ;; '') STEP_TIMEOUT=12 ;; esac
 # a drift from that pin breaks the validation gate rather than merely lagging it.
 # Chasing shellcheck's latest release here would fight that pin and spend a wake
 # on a decision this repo has already made.
+#
+# no-mistakes is the tool that gates every ship task in this fleet, and it was
+# outside every check until 2026-08-31, when a weekly sweep found it twelve
+# releases behind with its owner column reading "nobody". It was never invisible:
+# it announces the gap itself on every ordinary invocation, and that line printed
+# to every agent for weeks with nothing owning it. Unowned is a different failure
+# from undetected, so what it needed was a reading, not a louder notice.
+# Its reference is that announcement rather than a forge, because no repository
+# for it could be found in the binary, in its doctor output, or anywhere in this
+# home's configuration, and a reading must not be pointed at a source nobody here
+# can establish. The probe is --help: it is local, needs no repository, costs
+# about 5ms, and never touches the shared daemon that a running pipeline depends
+# on. The tool's own --version is deliberately not the probe, because it
+# suppresses the notice.
 DEFAULT_TOOLS="gh:release:cli/cli
 treehouse:release:kunchenguid/treehouse
 uv:release:astral-sh/uv
-shellcheck:pinned:$SCRIPT_DIR/fm-lint.sh --required-version"
+shellcheck:pinned:$SCRIPT_DIR/fm-lint.sh --required-version
+no-mistakes:announced:no-mistakes --help"
 TOOLS=${FM_CURRENCY_ROUND_TOOLS:-$DEFAULT_TOOLS}
 
 usage() {
@@ -263,6 +283,71 @@ installed_version() {  # <tool>
     | head -1
 }
 
+# --- the tool's own announcement -------------------------------------------
+#
+# Some tools have no forge this home can name, but do their own update check and
+# say the answer out loud. no-mistakes is the case this was written for: it
+# prints "A new version of no-mistakes is available: v1.48.0 -> v1.60.2" on every
+# ordinary invocation and carries no repository URL anywhere this home can read.
+# Its own announcement is therefore the only reference available, and the reading
+# names it as the tool's own claim rather than an independent measurement.
+#
+# THE LIMIT, STATED WHERE IT IS IMPLEMENTED: silence is read as "announces
+# nothing", and a tool that reworded its notice would also be silent here. That
+# case is indistinguishable from current, and there is no positive signal to
+# check it against. So the ok detail says the tool announces no newer version
+# rather than that the tool IS current: the round reports the claim it actually
+# measured, and a reader who needs more than the tool's word knows from the
+# wording that it has only the tool's word.
+#
+# Results are returned in globals rather than printed, because the reason a
+# reading failed must survive back to the caller and a command substitution runs
+# in a subshell that would discard it.
+ANNOUNCED_VERSION=
+ANNOUNCED_UNREADABLE=
+
+# Read the newer version a tool announces about itself by running <command...>.
+# Returns 0 with ANNOUNCED_VERSION set; 2 when the probe ran and announced
+# nothing, which is the tool saying it has nothing newer; 1 when no announcement
+# could be read at all, with the reason in ANNOUNCED_UNREADABLE. A probe that
+# fails is never a 2: an all-clear must never be inferred from an instrument that
+# did not report.
+announced_version() {  # <command...>
+  local out status=0 line version esc
+  ANNOUNCED_VERSION=
+  ANNOUNCED_UNREADABLE=
+  # The notice goes to stderr, so both streams are captured.
+  out=$(bounded "$@" 2>&1) || status=$?
+  # It is also colorized, so the version token would otherwise carry an escape
+  # sequence. The ESC is written with ANSI-C quoting rather than \x1B because BSD
+  # sed does not understand the escape and this repo runs on Darwin too.
+  esc=$(printf '\033')
+  out=$(printf '%s\n' "$out" | sed "s/${esc}\[[0-9;]*[a-zA-Z]//g")
+  line=$(printf '%s\n' "$out" | grep -i 'is available' | head -1)
+  if [ -n "$line" ]; then
+    version=$(printf '%s\n' "$line" \
+      | sed -n 's/.*-> *v\{0,1\}\([0-9][0-9.]*[0-9]\).*/\1/p' | head -1)
+    if [ -z "$version" ]; then
+      ANNOUNCED_UNREADABLE="it announced a newer version in a shape this round cannot parse: $line"
+      return 1
+    fi
+    ANNOUNCED_VERSION=$version
+    return 0
+  fi
+  if [ "$status" -ne 0 ]; then
+    ANNOUNCED_UNREADABLE="the probe exited $status (it may have exceeded ${STEP_TIMEOUT}s)"
+    return 1
+  fi
+  case "$out" in
+    *[![:space:]]*) ;;
+    *)
+      ANNOUNCED_UNREADABLE="the probe printed nothing, so it announced neither a newer version nor that it has none"
+      return 1
+      ;;
+  esac
+  return 2
+}
+
 latest_release() {  # <owner/repo>
   local tag
   command -v gh >/dev/null 2>&1 || return 1
@@ -364,7 +449,7 @@ read_seat_can_update() {
 }
 
 read_tools() {
-  local entry tool kind ref installed latest rel
+  local entry tool kind ref installed latest rel rc
   while IFS= read -r entry; do
     [ -n "$entry" ] || continue
     tool=${entry%%:*}
@@ -398,6 +483,24 @@ read_tools() {
           continue
         fi
         ;;
+      announced)
+        rc=0
+        # shellcheck disable=SC2086  # the probe is a configured word list.
+        announced_version $ref || rc=$?
+        case "$rc" in
+          0) latest=$ANNOUNCED_VERSION ;;
+          2)
+            reading "tool:$tool" installed ok \
+              "$installed, and $tool announces no newer version of itself (its own notice is the only reference this home has for it)"
+            continue
+            ;;
+          *)
+            reading "tool:$tool" installed unmeasured \
+              "what $tool announces about itself could not be read: $ANNOUNCED_UNREADABLE"
+            continue
+            ;;
+        esac
+        ;;
       *)
         reading "tool:$tool" installed unmeasured "unknown reference kind '$kind'"
         continue
@@ -413,6 +516,12 @@ read_tools() {
         ;;
       pinned:older|pinned:newer)
         reading "tool:$tool" installed behind "$installed against the $latest this repo requires ($ref)"
+        ;;
+      announced:older)
+        reading "tool:$tool" installed behind "$installed against the $latest $tool announces about itself"
+        ;;
+      announced:same|announced:newer)
+        reading "tool:$tool" installed ok "$installed, at or ahead of the $latest $tool announces about itself"
         ;;
       *)
         reading "tool:$tool" installed ok "$installed against $latest"

@@ -53,6 +53,24 @@ SH
 #!/usr/bin/env bash
 printf 'faketool version %s\n' "${STUB_TOOL_VERSION:-1.0.0}"
 SH
+  # Stands in for a tool whose only reference is its own update notice. It is
+  # shaped exactly like no-mistakes, the tool that kind was written for: the
+  # notice goes to STDERR and is colorized, and --version deliberately does not
+  # carry it. A tidied fixture would pass while the real parse failed on the
+  # stream and the escape sequences.
+  cat > "$home/stub/announcer" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then
+  printf 'announcer version v%s (abc1234) 2026-08-08T06:39:01Z\n' "${STUB_ANNOUNCE_INSTALLED:-1.48.0}"
+  exit 0
+fi
+[ "${STUB_ANNOUNCE_RC:-0}" = 0 ] || exit "$STUB_ANNOUNCE_RC"
+if [ -n "${STUB_ANNOUNCE_NOTICE:-}" ]; then
+  printf '\033[33m%s\n\033[0m' "$STUB_ANNOUNCE_NOTICE" >&2
+fi
+[ "${STUB_ANNOUNCE_QUIET:-0}" = 1 ] || printf 'announcer: a local tool with no forge to ask\n'
+exit 0
+SH
   chmod +x "$home/stub"/*
   printf '%s\n' "$home"
 }
@@ -76,9 +94,106 @@ run_round() {
   shift
   FM_HOME="$home" FM_ROOT_OVERRIDE="$home/repo" \
     FM_STATE_OVERRIDE="$home/state" FM_CONFIG_OVERRIDE="$home/config" \
-    FM_CURRENCY_ROUND_TOOLS="faketool:pinned:$home/stub/pin" \
+    FM_CURRENCY_ROUND_TOOLS="${TOOLS_OVERRIDE:-faketool:pinned:$home/stub/pin}" \
     PATH="$home/stub:$PATH" \
     "$home/stub/fm-currency-round.sh" "$@"
+}
+
+# --- the tool's own announcement as a reference -----------------------------
+#
+# Earned on 2026-08-31, when the weekly sweep found no-mistakes twelve releases
+# behind with its owner column reading "nobody". The gate every ship task passes
+# through announced that gap on every invocation for weeks, to every agent, and
+# nothing owned the line. These tests hold the reading that now does.
+
+test_a_tool_announcing_a_newer_version_reads_behind() {
+  local home out report
+  home=$(make_home announce-behind)
+  install_round "$home"
+
+  out=$(TOOLS_OVERRIDE='announcer:announced:announcer --help' \
+    STUB_ANNOUNCE_NOTICE='A new version of announcer is available: v1.48.0 -> v1.60.2' \
+    run_round "$home" --force)
+  assert_contains "$out" 'tool:announcer (installed) behind' \
+    "a tool announcing a newer version of itself must read behind"
+  report="$home/state/currency-round.report"
+  assert_grep '1.48.0 against the 1.60.2 announcer announces about itself' "$report" \
+    "the reading must name both versions and say whose claim the reference is"
+  pass "a tool that announces a newer version of itself reads behind"
+}
+
+# The case with no positive signal to check against: the tool prints its ordinary
+# output and no notice at all. That must read ok, and the detail must say the
+# tool announces nothing rather than that the tool IS current, because a reworded
+# notice is silent here too and the round only ever had the tool's word.
+test_a_tool_announcing_nothing_reads_ok_as_its_own_claim() {
+  local home out report
+  home=$(make_home announce-current)
+  install_round "$home"
+
+  out=$(TOOLS_OVERRIDE='announcer:announced:announcer --help' run_round "$home" --force)
+  [ -z "$out" ] || fail "a tool with nothing to announce must not wake anyone: $out"
+  report="$home/state/currency-round.report"
+  assert_grep 'reading: tool:announcer hop=installed state=ok' "$report" \
+    "a tool that announces no newer version must read ok"
+  assert_grep 'announces no newer version of itself' "$report" \
+    "the ok detail must report the tool's own claim, not an independent verdict"
+  pass "a tool announcing nothing reads ok, worded as the tool's own claim"
+}
+
+# The whole point of the reading: an instrument that did not report must never
+# produce an all-clear. Each way of failing to read is checked separately,
+# because one of them collapsing into ok is exactly the defect being prevented.
+test_an_unreadable_announcement_is_never_an_all_clear() {
+  local home report
+
+  home=$(make_home announce-exit)
+  install_round "$home"
+  TOOLS_OVERRIDE='announcer:announced:announcer --help' STUB_ANNOUNCE_RC=3 \
+    run_round "$home" --force > /dev/null
+  report="$home/state/currency-round.report"
+  assert_grep 'reading: tool:announcer hop=installed state=unmeasured' "$report" \
+    "a probe that could not run must read unmeasured, never ok"
+  assert_grep 'the probe exited 3' "$report" \
+    "the reading must name which failure it was"
+
+  home=$(make_home announce-silent)
+  install_round "$home"
+  TOOLS_OVERRIDE='announcer:announced:announcer --help' STUB_ANNOUNCE_QUIET=1 \
+    run_round "$home" --force > /dev/null
+  report="$home/state/currency-round.report"
+  assert_grep 'reading: tool:announcer hop=installed state=unmeasured' "$report" \
+    "a probe that printed nothing at all announced neither answer and must read unmeasured"
+  assert_grep 'printed nothing' "$report" \
+    "the reading must say the probe produced no output"
+
+  home=$(make_home announce-garbled)
+  install_round "$home"
+  TOOLS_OVERRIDE='announcer:announced:announcer --help' \
+    STUB_ANNOUNCE_NOTICE='A new version of announcer is available: v1.48.0 -> next-tuesday' \
+    run_round "$home" --force > /dev/null
+  report="$home/state/currency-round.report"
+  assert_grep 'reading: tool:announcer hop=installed state=unmeasured' "$report" \
+    "an announcement this round cannot parse must read unmeasured, never ok"
+  assert_grep 'shape this round cannot parse' "$report" \
+    "the reading must say the announcement itself was the part that could not be read"
+
+  pass "an announcement that could not be read never reports an all-clear"
+}
+
+# A tool the home has not installed is not a finding, and that must hold for the
+# announced kind too: the round must not report on a tool it cannot run.
+test_an_uninstalled_announcing_tool_is_not_a_finding() {
+  local home out report
+  home=$(make_home announce-absent)
+  install_round "$home"
+
+  out=$(TOOLS_OVERRIDE='nosuchtool:announced:nosuchtool --help' run_round "$home" --force)
+  [ -z "$out" ] || fail "a tool this home has not installed must not be a finding: $out"
+  report="$home/state/currency-round.report"
+  assert_no_grep 'tool:nosuchtool' "$report" \
+    "a tool that is not installed must produce no reading at all"
+  pass "an announcing tool this home has not installed is not a finding"
 }
 
 test_clean_seat_is_silent_and_says_which_hops_it_measured() {
@@ -337,3 +452,7 @@ test_arming_is_idempotent_and_registers_the_check
 test_an_unarmed_or_stopped_round_is_loud
 test_a_disabled_round_stays_out_of_composing_suites
 test_status_reports_without_writing_the_cadence
+test_a_tool_announcing_a_newer_version_reads_behind
+test_a_tool_announcing_nothing_reads_ok_as_its_own_claim
+test_an_unreadable_announcement_is_never_an_all_clear
+test_an_uninstalled_announcing_tool_is_not_a_finding
