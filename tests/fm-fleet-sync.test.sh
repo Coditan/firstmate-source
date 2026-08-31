@@ -474,6 +474,19 @@ test_whole_fleet_registered_missing_project_still_reports() {
   pass "registered missing projects still report as skipped"
 }
 
+test_whole_fleet_registered_missing_project_reports_without_projects_root() {
+  local home out
+  home=$(new_home)
+  register_project "$home" missing-root-registered
+  rm -rf "$home/projects"
+
+  out=$(run_sync "$home")
+
+  assert_contains "$out" "missing-root-registered: skipped: not a directory" \
+    "a registered project still reports when the projects root is absent"
+  pass "registered missing projects report even without projects root"
+}
+
 test_whole_fleet_registered_non_repo_project_still_reports() {
   local home out
   home=$(new_home)
@@ -696,6 +709,7 @@ test_single_project_by_projects_relative_name_ignores_cwd_shadow
 test_single_project_unresolvable_name_still_skips
 test_whole_fleet_form
 test_whole_fleet_registered_missing_project_still_reports
+test_whole_fleet_registered_missing_project_reports_without_projects_root
 test_whole_fleet_registered_non_repo_project_still_reports
 test_whole_fleet_unregistered_clone_still_syncs
 test_non_repo_directory_inside_enclosing_repo_skipped

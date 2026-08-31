@@ -452,10 +452,10 @@ if [ $# -eq 1 ]; then
   exit 0
 fi
 
-[ -d "$PROJECTS" ] || exit 0
 for name in $(registered_project_names); do
   sync_project "$PROJECTS/$name"
 done
+[ -d "$PROJECTS" ] || exit 0
 for proj in "$PROJECTS"/*; do
   [ -e "$proj" ] || continue
   [ -d "$proj" ] || continue
