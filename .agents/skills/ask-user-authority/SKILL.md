@@ -35,8 +35,8 @@ It stops at the finding, routes the decision to firstmate, and applies only the 
 
 ## Captain-facing escalation
 
-Open with the decision the captain is being asked to make and what it changes for the project, then give the five elements below as the supporting detail.
-State all five in one concise, evidence-first escalation, where evidence-first means every element is grounded in what was found rather than in deference, not that background leads.
+`AGENTS.md` section 9 owns the form; for an ask-user escalation the news it requires you to lead with is the decision the captain is being asked to make.
+State all five of these elements in one concise, evidence-first escalation: grounded in what was found rather than in deference.
 
 1. The original requirement or accepted task criterion.
 2. The proposed product or engineering contract expansion.

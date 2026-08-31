@@ -31,8 +31,11 @@ section_9() {
 immediate_escalation_list() {
   section_9 | awk '
     /^Reach the captain immediately for:$/ { found = 1; next }
-    found && /^Do not surface automatic fixes/ { exit }
-    found { print }
+    !found { next }
+    /^- / { started = 1; print; next }
+    started { exit }
+    /^$/ { next }
+    { exit }
   '
 }
 
@@ -146,9 +149,10 @@ test_verbatim_internal_evidence_is_rejected_from_chat() {
 # session. This pins the cold-readability axis and, in the same test, that it did
 # not become a licence to withhold: the escalation list must survive intact.
 test_section_9_binds_cold_readability_without_narrowing_the_bar() {
-  local contract bar_list
+  local contract bar_list bar_count
   contract=$(section_9)
   bar_list=$(immediate_escalation_list)
+  bar_count=$(printf '%s\n' "$bar_list" | grep -c '^- ' || true)
   assert_contains "$contract" "readable by someone who was not in the session" \
     "section 9 does not bind cold readability"
   assert_contains "$contract" "Lead with what happened and what it means for the project, then the evidence" \
@@ -169,7 +173,7 @@ test_section_9_binds_cold_readability_without_narrowing_the_bar() {
     "section 9 lets batching hold an escalation the bar requires immediately"
   assert_contains "$contract" '`docs/captain-facing-readability.md` carries the worked example' \
     "section 9 does not point at the worked example it came from"
-  [ -n "$bar_list" ] || fail "section 9 lost the immediate-escalation list under its own heading"
+  [ "$bar_count" -eq 6 ] || fail "section 9 must escalate immediately for exactly 6 items, found $bar_count"
   for bar in \
     "- Work ready for their review, with the full PR URL." \
     "- Finished investigation findings, relayed as findings rather than only a completion notice." \
@@ -177,8 +181,8 @@ test_section_9_binds_cold_readability_without_narrowing_the_bar() {
     "- A real blocker or failure after the relevant playbook is exhausted." \
     "- Anything destructive, irreversible, or security-sensitive." \
     "- A needed credential or login."; do
-    assert_contains "$bar_list" "$bar" \
-      "section 9 no longer escalates immediately for '$bar'"
+    printf '%s\n' "$bar_list" | grep -Fxq -- "$bar" ||
+      fail "section 9 no longer escalates immediately for '$bar'"
   done
   assert_present "$READABILITY" "the worked example section 9 points at is missing"
   assert_grep "make it binding on every vessel" "$READABILITY" \
