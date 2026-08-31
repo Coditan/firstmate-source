@@ -22,6 +22,11 @@ case "$*" in
   '--user enable --now '*)
     [ ! -e "${FM_TEST_RECEIVER_ACTIVE:-/nonexistent}" ] \
       || touch "${FM_TEST_RECEIVER_OVERLAP:?}"
+    if [ "${FM_TEST_START_SERVICE:-0}" = 1 ]; then
+      FM_TG_RECV_MANAGER=systemd FM_HOME="$FM_TEST_SERVICE_HOME" \
+        "$FM_TEST_SERVICE_ARM" > "$FM_TEST_SERVICE_OUT" 2>&1 &
+      printf '%s\n' "$!" > "$FM_TEST_SERVICE_PID"
+    fi
     touch "$FM_TEST_SYSTEMD_ENABLED" "$FM_TEST_SYSTEMD_ACTIVE"
     ;;
   '--user restart '*) touch "$FM_TEST_SYSTEMD_ACTIVE" ;;
@@ -50,6 +55,11 @@ service_env() {
     FM_TEST_SYSTEMD_ACTIVE="$TMP_ROOT/systemd.active" \
     FM_TEST_RECEIVER_ACTIVE="$home/state/receiver-active" \
     FM_TEST_RECEIVER_OVERLAP="$home/state/receiver-overlap" \
+    FM_TEST_START_SERVICE="${FM_TEST_START_SERVICE:-0}" \
+    FM_TEST_SERVICE_HOME="$home" \
+    FM_TEST_SERVICE_ARM="$ROOT/bin/fm-tg-recv-arm.sh" \
+    FM_TEST_SERVICE_OUT="$home/service.out" \
+    FM_TEST_SERVICE_PID="$home/state/service-wrapper-pid" \
     "$@"
 }
 
@@ -73,19 +83,43 @@ chmod +x "$home/config/fm-tg-recv.sh"
 cat > "$home/config/fm-tg-recv.sh" <<'SH'
 #!/usr/bin/env bash
 set -u
-touch "$FM_HOME/state/receiver-active"
-trap 'rm -f "$FM_HOME/state/receiver-active"; exit 0' TERM INT
+if ! mkdir "$FM_HOME/state/receiver-active" 2>/dev/null; then
+  touch "$FM_HOME/state/receiver-overlap"
+fi
+trap 'rmdir "$FM_HOME/state/receiver-active" 2>/dev/null || true; exit 0' TERM INT
 while :; do sleep 0.1; done
 SH
 chmod +x "$home/config/fm-tg-recv.sh"
 
-FM_HOME="$home" "$ROOT/bin/fm-tg-recv-arm.sh" > "$home/harness.out" 2>&1 &
+racebin="$TMP_ROOT/racebin"
+mkdir -p "$racebin"
+real_ln=$(command -v ln)
+cat > "$racebin/ln" <<'SH'
+#!/usr/bin/env bash
+set -u
+last=
+for arg in "$@"; do last=$arg; done
+if [ "$last" = "${FM_TEST_PAUSE_LOCK:?}" ]; then
+  touch "${FM_TEST_PAUSE_REACHED:?}"
+  while [ ! -e "${FM_TEST_PAUSE_RELEASE:?}" ]; do sleep 0.05; done
+fi
+exec "${FM_TEST_REAL_LN:?}" "$@"
+SH
+chmod +x "$racebin/ln"
+
+PATH="$racebin:$PATH" \
+  FM_TEST_REAL_LN="$real_ln" \
+  FM_TEST_PAUSE_LOCK="$home/state/.tg-recv.lock" \
+  FM_TEST_PAUSE_REACHED="$home/state/fallback-at-receiver-lock" \
+  FM_TEST_PAUSE_RELEASE="$home/state/release-fallback-lock" \
+  FM_HOME="$home" "$ROOT/bin/fm-tg-recv-arm.sh" > "$home/harness.out" 2>&1 &
 harness_pid=$!
 for _ in $(seq 1 50); do
-  [ -e "$home/state/.tg-recv.lock/pid" ] && [ -e "$home/state/receiver-active" ] && break
+  [ -e "$home/state/fallback-at-receiver-lock" ] && break
   sleep 0.1
 done
-[ -e "$home/state/receiver-active" ] || fail "harness receiver did not start before service installation"
+[ -e "$home/state/fallback-at-receiver-lock" ] \
+  || fail "fallback did not pause between its fence check and receiver-lock acquisition"
 
 out=$(service_env "$fakebin" "$home" "$unitdir" "$SERVICE" bootstrap)
 assert_contains "$out" "install telegram-receiver-unit" \
@@ -95,8 +129,14 @@ assert_absent "$unitdir/fm-tg-recv@.service" \
 assert_not_contains "$(cat "$TMP_ROOT/systemctl.log")" "enable --now" \
   "bootstrap silently enabled the Telegram receiver unit"
 
-service_env "$fakebin" "$home" "$unitdir" \
-  "$ROOT/bin/fm-bootstrap.sh" install telegram-receiver-unit > "$home/install.out"
+FM_TEST_START_SERVICE=1 service_env "$fakebin" "$home" "$unitdir" \
+  "$ROOT/bin/fm-bootstrap.sh" install telegram-receiver-unit > "$home/install.out" 2>&1 &
+install_pid=$!
+sleep 0.2
+assert_not_contains "$(cat "$TMP_ROOT/systemctl.log")" "enable --now" \
+  "installer crossed the handoff boundary while fallback held its shared gate"
+touch "$home/state/release-fallback-lock"
+wait "$install_pid" || fail "approved receiver service installation failed"
 assert_contains "$(cat "$home/install.out")" "installing telegram-receiver-unit" \
   "bootstrap install did not announce the approved Telegram receiver action"
 [ -f "$unitdir/fm-tg-recv@.service" ] || fail "approved installer did not copy the tracked receiver unit"
@@ -109,6 +149,11 @@ assert_absent "$home/state/receiver-overlap" \
 assert_absent "$home/state/.tg-recv-service-handoff" \
   "successful installation left the fallback receiver fenced"
 wait "$harness_pid"
+for _ in $(seq 1 50); do
+  [ -e "$home/state/receiver-active" ] && break
+  sleep 0.1
+done
+[ -e "$home/state/receiver-active" ] || fail "service-owned receiver did not start after handoff"
 
 service_env "$fakebin" "$home" "$unitdir" "$SERVICE" selected \
   || fail "healthy matching receiver service was not selected"
@@ -137,4 +182,7 @@ cmp -s "$ROOT/systemd/fm-tg-recv@.service" "$unitdir/fm-tg-recv@.service" \
   || fail "locked bootstrap did not converge tracked Telegram receiver unit bytes"
 assert_contains "$(cat "$TMP_ROOT/systemctl.log")" "--user restart fm-tg-recv@" \
   "locked bootstrap did not restart the stale Telegram receiver instance"
+service_pid=$(cat "$home/state/service-wrapper-pid")
+kill -TERM "$service_pid" 2>/dev/null || true
+wait "$service_pid" 2>/dev/null || true
 pass "Telegram receiver service installation is consent-gated and converges per home"

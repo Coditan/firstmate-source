@@ -29,10 +29,28 @@ TG_RECV_MANAGER=${FM_TG_RECV_MANAGER:-harness}
 FAILURE_WAKE_QUIET=${FM_TG_RECV_FAILURE_WAKE_QUIET:-300}
 FAILURE_WAKE_MARKER="$STATE/.tg-recv-last-failure-wake"
 SERVICE_HANDOFF_MARKER="$STATE/.tg-recv-service-handoff"
+SERVICE_HANDOFF_LOCK="$STATE/.tg-recv-service-handoff.lock"
 case "$FAILURE_WAKE_QUIET" in ''|*[!0-9]*) FAILURE_WAKE_QUIET=300 ;; esac
 
 harness_handoff_requested() {
   [ "$TG_RECV_MANAGER" != systemd ] && [ -f "$SERVICE_HANDOFF_MARKER" ]
+}
+
+acquire_receiver_lock() {
+  local rc
+  fm_lock_acquire_wait "$SERVICE_HANDOFF_LOCK" || return 3
+  if harness_handoff_requested; then
+    fm_lock_release "$SERVICE_HANDOFF_LOCK"
+    return 2
+  fi
+  if fm_lock_try_acquire "$RECV_LOCK"; then
+    TG_RECV_OWNER_DIR=$FM_LOCK_OWNER_DIR
+    rc=0
+  else
+    rc=$?
+  fi
+  fm_lock_release "$SERVICE_HANDOFF_LOCK"
+  return "$rc"
 }
 
 usage() {
@@ -206,20 +224,34 @@ fi
 
 clear_dead_recorded_receiver_lock
 
-if harness_handoff_requested; then
-  printf 'telegram receiver: service ownership handoff in progress\n'
-  exit 0
-fi
-
 ownerdir=
-if ! fm_lock_try_acquire "$RECV_LOCK"; then
+TG_RECV_OWNER_DIR=
+if acquire_receiver_lock; then
+  :
+else
+  acquire_rc=$?
+  [ "$acquire_rc" -ne 2 ] || {
+    printf 'telegram receiver: service ownership handoff in progress\n'
+    exit 0
+  }
+  [ "$acquire_rc" -eq 1 ] || {
+    printf 'telegram receiver: FAILED - receiver ownership gate could not be acquired\n'
+    exit 1
+  }
   attach_if_receiver_becomes_healthy
-  if ! fm_lock_try_acquire "$RECV_LOCK"; then
+  if acquire_receiver_lock; then
+    :
+  else
+    acquire_rc=$?
+    [ "$acquire_rc" -ne 2 ] || {
+      printf 'telegram receiver: service ownership handoff in progress\n'
+      exit 0
+    }
     printf 'telegram receiver: FAILED - receiver lock is held but no live matching receiver was confirmed\n'
     exit 1
   fi
 fi
-ownerdir=$FM_LOCK_OWNER_DIR
+ownerdir=$TG_RECV_OWNER_DIR
 
 child=
 child_out=

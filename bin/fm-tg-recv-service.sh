@@ -30,6 +30,7 @@ USER_UNIT_DIR=${FM_TG_RECV_SYSTEMD_UNIT_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/s
 UNIT_DEST="$USER_UNIT_DIR/fm-tg-recv@.service"
 SERVICE_ENV="$STATE/.tg-recv-service.env"
 SERVICE_HANDOFF_MARKER="$STATE/.tg-recv-service-handoff"
+SERVICE_HANDOFF_LOCK="$STATE/.tg-recv-service-handoff.lock"
 RECV_LOCK="$STATE/.tg-recv.lock"
 CONFIRM_TIMEOUT=${FM_TG_RECV_CONFIRM_TIMEOUT:-10}
 case "$CONFIRM_TIMEOUT" in ''|*[!0-9]*|0) CONFIRM_TIMEOUT=10 ;; esac
@@ -251,13 +252,20 @@ install_systemd() {
   install_unit_bytes || return 1
   write_service_env || return 1
   "$SYSTEMCTL" --user daemon-reload || return 1
-  begin_service_handoff || return 1
+  fm_lock_acquire_wait "$SERVICE_HANDOFF_LOCK" || return 1
+  begin_service_handoff || { fm_lock_release "$SERVICE_HANDOFF_LOCK"; return 1; }
   handoff=1
   if ! retire_harness_receiver \
-    || ! "$SYSTEMCTL" --user enable --now "$unit" \
-    || ! wait_for_active; then
+    || ! "$SYSTEMCTL" --user enable --now "$unit"; then
     rm -f "$SERVICE_HANDOFF_MARKER"
+    fm_lock_release "$SERVICE_HANDOFF_LOCK"
     [ "$handoff" -eq 0 ] || echo "error: $unit ownership handoff failed" >&2
+    return 1
+  fi
+  fm_lock_release "$SERVICE_HANDOFF_LOCK"
+  if ! wait_for_active; then
+    rm -f "$SERVICE_HANDOFF_MARKER"
+    echo "error: $unit ownership handoff failed" >&2
     return 1
   fi
   rm -f "$SERVICE_HANDOFF_MARKER"
