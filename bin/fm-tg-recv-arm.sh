@@ -28,7 +28,12 @@ TERM_WAIT_POLL=${FM_TG_RECV_TERM_WAIT_POLL:-0.1}
 TG_RECV_MANAGER=${FM_TG_RECV_MANAGER:-harness}
 FAILURE_WAKE_QUIET=${FM_TG_RECV_FAILURE_WAKE_QUIET:-300}
 FAILURE_WAKE_MARKER="$STATE/.tg-recv-last-failure-wake"
+SERVICE_HANDOFF_MARKER="$STATE/.tg-recv-service-handoff"
 case "$FAILURE_WAKE_QUIET" in ''|*[!0-9]*) FAILURE_WAKE_QUIET=300 ;; esac
+
+harness_handoff_requested() {
+  [ "$TG_RECV_MANAGER" != systemd ] && [ -f "$SERVICE_HANDOFF_MARKER" ]
+}
 
 usage() {
   printf 'usage: %s\n' "$(basename "$0")" >&2
@@ -48,6 +53,11 @@ fi
 if [ ! -x "$RECV" ]; then
   printf 'telegram receiver: FAILED - config/fm-tg-recv.sh missing or not executable\n'
   exit 1
+fi
+
+if harness_handoff_requested; then
+  printf 'telegram receiver: service ownership handoff in progress\n'
+  exit 0
 fi
 
 TG_HEALTHY_PID=
@@ -159,6 +169,7 @@ relay_recorded_receiver_output_once() {
 
 attach_and_wait() {
   while :; do
+    harness_handoff_requested && exit 0
     if healthy_receiver; then
       sleep "$ATTACH_POLL"
       continue
@@ -176,6 +187,7 @@ attach_if_receiver_becomes_healthy() {
   local deadline now
   deadline=$(($(date +%s) + ATTACH_CONFIRM_TIMEOUT))
   while [ -e "$RECV_LOCK" ] || [ -L "$RECV_LOCK" ]; do
+    harness_handoff_requested && exit 0
     if healthy_receiver; then
       printf 'telegram receiver: attached pid=%s\n' "$TG_HEALTHY_PID"
       attach_and_wait
@@ -193,6 +205,11 @@ if healthy_receiver; then
 fi
 
 clear_dead_recorded_receiver_lock
+
+if harness_handoff_requested; then
+  printf 'telegram receiver: service ownership handoff in progress\n'
+  exit 0
+fi
 
 ownerdir=
 if ! fm_lock_try_acquire "$RECV_LOCK"; then

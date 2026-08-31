@@ -19,7 +19,11 @@ case "$*" in
   '--user show-environment'|'--user daemon-reload') exit 0 ;;
   '--user is-enabled --quiet '*) [ -e "${FM_TEST_SYSTEMD_ENABLED:?}" ] ;;
   '--user is-active --quiet '*) [ -e "${FM_TEST_SYSTEMD_ACTIVE:?}" ] ;;
-  '--user enable --now '*) touch "$FM_TEST_SYSTEMD_ENABLED" "$FM_TEST_SYSTEMD_ACTIVE" ;;
+  '--user enable --now '*)
+    [ ! -e "${FM_TEST_RECEIVER_ACTIVE:-/nonexistent}" ] \
+      || touch "${FM_TEST_RECEIVER_OVERLAP:?}"
+    touch "$FM_TEST_SYSTEMD_ENABLED" "$FM_TEST_SYSTEMD_ACTIVE"
+    ;;
   '--user restart '*) touch "$FM_TEST_SYSTEMD_ACTIVE" ;;
   *) exit 1 ;;
 esac
@@ -44,6 +48,8 @@ service_env() {
     FM_TEST_SYSTEMCTL_LOG="$TMP_ROOT/systemctl.log" \
     FM_TEST_SYSTEMD_ENABLED="$TMP_ROOT/systemd.enabled" \
     FM_TEST_SYSTEMD_ACTIVE="$TMP_ROOT/systemd.active" \
+    FM_TEST_RECEIVER_ACTIVE="$home/state/receiver-active" \
+    FM_TEST_RECEIVER_OVERLAP="$home/state/receiver-overlap" \
     "$@"
 }
 
@@ -64,6 +70,23 @@ exit 0
 SH
 chmod +x "$home/config/fm-tg-recv.sh"
 
+cat > "$home/config/fm-tg-recv.sh" <<'SH'
+#!/usr/bin/env bash
+set -u
+touch "$FM_HOME/state/receiver-active"
+trap 'rm -f "$FM_HOME/state/receiver-active"; exit 0' TERM INT
+while :; do sleep 0.1; done
+SH
+chmod +x "$home/config/fm-tg-recv.sh"
+
+FM_HOME="$home" "$ROOT/bin/fm-tg-recv-arm.sh" > "$home/harness.out" 2>&1 &
+harness_pid=$!
+for _ in $(seq 1 50); do
+  [ -e "$home/state/.tg-recv.lock/pid" ] && [ -e "$home/state/receiver-active" ] && break
+  sleep 0.1
+done
+[ -e "$home/state/receiver-active" ] || fail "harness receiver did not start before service installation"
+
 out=$(service_env "$fakebin" "$home" "$unitdir" "$SERVICE" bootstrap)
 assert_contains "$out" "install telegram-receiver-unit" \
   "missing Telegram receiver unit did not request explicit consent"
@@ -81,8 +104,27 @@ assert_contains "$(cat "$TMP_ROOT/systemctl.log")" "enable --now fm-tg-recv@" \
   "approved installer did not enable and start the home-scoped receiver instance"
 assert_grep 'FM_TG_RECV_MANAGER=systemd' "$home/state/.tg-recv-service.env" \
   "service environment did not select durable service output routing"
+assert_absent "$home/state/receiver-overlap" \
+  "service installation started a second receiver before retiring the harness receiver"
+assert_absent "$home/state/.tg-recv-service-handoff" \
+  "successful installation left the fallback receiver fenced"
+wait "$harness_pid"
+
+service_env "$fakebin" "$home" "$unitdir" "$SERVICE" selected \
+  || fail "healthy matching receiver service was not selected"
+printf '%s\n' stale > "$home/state/.tg-recv-service.env"
+if service_env "$fakebin" "$home" "$unitdir" "$SERVICE" selected; then
+  fail "stale service environment suppressed the tracked receiver fallback"
+fi
+service_env "$fakebin" "$home" "$unitdir" "$SERVICE" ensure >/dev/null
+rm -f "$TMP_ROOT/systemd.active"
+if service_env "$fakebin" "$home" "$unitdir" "$SERVICE" selected; then
+  fail "inactive receiver service suppressed the tracked receiver fallback"
+fi
+touch "$TMP_ROOT/systemd.active"
 
 printf '%s\n' stale > "$unitdir/fm-tg-recv@.service"
+: > "$TMP_ROOT/systemctl.log"
 detect_out=$(FM_BOOTSTRAP_DETECT_ONLY=1 \
   service_env "$fakebin" "$home" "$unitdir" "$SERVICE" bootstrap)
 assert_contains "$detect_out" "needs locked convergence" \

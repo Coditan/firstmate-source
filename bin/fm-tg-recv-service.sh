@@ -29,6 +29,8 @@ SYSTEMD_ESCAPE=${FM_TG_RECV_SYSTEMD_ESCAPE:-systemd-escape}
 USER_UNIT_DIR=${FM_TG_RECV_SYSTEMD_UNIT_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user}
 UNIT_DEST="$USER_UNIT_DIR/fm-tg-recv@.service"
 SERVICE_ENV="$STATE/.tg-recv-service.env"
+SERVICE_HANDOFF_MARKER="$STATE/.tg-recv-service-handoff"
+RECV_LOCK="$STATE/.tg-recv.lock"
 CONFIRM_TIMEOUT=${FM_TG_RECV_CONFIRM_TIMEOUT:-10}
 case "$CONFIRM_TIMEOUT" in ''|*[!0-9]*|0) CONFIRM_TIMEOUT=10 ;; esac
 
@@ -171,6 +173,41 @@ wait_for_active() {
   systemd_active
 }
 
+begin_service_handoff() {
+  local tmp
+  mkdir -p "$STATE" || return 1
+  tmp=$(mktemp "$SERVICE_HANDOFF_MARKER.XXXXXX") || return 1
+  printf '%s\n' "$$" > "$tmp" || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$SERVICE_HANDOFF_MARKER"
+}
+
+retire_harness_receiver() {
+  local deadline pid lock_home lock_path record current
+  [ -e "$RECV_LOCK" ] || [ -L "$RECV_LOCK" ] || return 0
+  pid=$(cat "$RECV_LOCK/pid" 2>/dev/null || true)
+  lock_home=$(cat "$RECV_LOCK/fm-home" 2>/dev/null || true)
+  lock_path=$(cat "$RECV_LOCK/receiver-path" 2>/dev/null || true)
+  record=$(cat "$RECV_LOCK/pid-incarnation" 2>/dev/null || true)
+  [ -n "$record" ] || record=$(cat "$RECV_LOCK/pid-identity" 2>/dev/null || true)
+  current=$(fm_pid_incarnation "$pid" 2>/dev/null || true)
+  if fm_pid_alive "$pid"; then
+    [ "$lock_home" = "$FM_HOME" ] && [ "$lock_path" = "$RECV" ] \
+      && fm_pid_incarnation_matches_record "$current" "$record" || {
+        echo "error: receiver lock does not identify a safe handoff target" >&2
+        return 1
+      }
+    kill -TERM "$pid" 2>/dev/null || return 1
+  fi
+  deadline=$(( $(date +%s) + CONFIRM_TIMEOUT ))
+  while [ -e "$RECV_LOCK" ] || [ -L "$RECV_LOCK" ]; do
+    [ "$(date +%s)" -lt "$deadline" ] || {
+      echo "error: harness receiver did not release $RECV_LOCK" >&2
+      return 1
+    }
+    sleep 0.2
+  done
+}
+
 ensure_systemd() {
   local unit changed=0
   configured || return 0
@@ -206,7 +243,7 @@ ensure_systemd() {
 }
 
 install_systemd() {
-  local unit
+  local unit handoff=0
   configured || { echo "error: config/telegram.env is absent" >&2; return 1; }
   receiver_ready || { echo "error: config/fm-tg-recv.sh is missing or not executable" >&2; return 1; }
   systemd_usable || { echo "error: systemd --user is unavailable" >&2; return 1; }
@@ -214,8 +251,16 @@ install_systemd() {
   install_unit_bytes || return 1
   write_service_env || return 1
   "$SYSTEMCTL" --user daemon-reload || return 1
-  "$SYSTEMCTL" --user enable --now "$unit" || return 1
-  wait_for_active || { echo "error: $unit did not become active" >&2; return 1; }
+  begin_service_handoff || return 1
+  handoff=1
+  if ! retire_harness_receiver \
+    || ! "$SYSTEMCTL" --user enable --now "$unit" \
+    || ! wait_for_active; then
+    rm -f "$SERVICE_HANDOFF_MARKER"
+    [ "$handoff" -eq 0 ] || echo "error: $unit ownership handoff failed" >&2
+    return 1
+  fi
+  rm -f "$SERVICE_HANDOFF_MARKER"
 }
 
 bootstrap_check() {
@@ -244,7 +289,8 @@ bootstrap_check() {
 }
 
 selected() {
-  configured && receiver_ready && systemd_usable && systemd_installed && systemd_enabled
+  configured && receiver_ready && systemd_usable && systemd_installed && systemd_enabled \
+    && service_env_matches && systemd_active
 }
 
 status_report() {
