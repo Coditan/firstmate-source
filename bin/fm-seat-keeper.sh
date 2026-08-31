@@ -46,16 +46,16 @@ set -u
 }
 
 FM_HOME=$1
-STATE=$2
+KEEPER_STATE=$2
 TARGET_SOCKET=$3
 TARGET_SESSION=$4
 ACCOUNT_HOME=$5
 
-case "$FM_HOME$STATE$TARGET_SOCKET$TARGET_SESSION$ACCOUNT_HOME" in
+case "$FM_HOME$KEEPER_STATE$TARGET_SOCKET$TARGET_SESSION$ACCOUNT_HOME" in
   *$'\n'*|*$'\r'*) echo "fm-seat-keeper.sh: arguments must be single-line values" >&2; exit 2 ;;
 esac
 case "$FM_HOME" in /*) ;; *) echo "fm-seat-keeper.sh: fm-home must be absolute" >&2; exit 2 ;; esac
-case "$STATE" in /*) ;; *) echo "fm-seat-keeper.sh: state-dir must be absolute" >&2; exit 2 ;; esac
+case "$KEEPER_STATE" in /*) ;; *) echo "fm-seat-keeper.sh: state-dir must be absolute" >&2; exit 2 ;; esac
 case "$TARGET_SOCKET" in /*) ;; *) echo "fm-seat-keeper.sh: target-socket must be absolute" >&2; exit 2 ;; esac
 case "$ACCOUNT_HOME" in /*) ;; *) echo "fm-seat-keeper.sh: account-home must be absolute" >&2; exit 2 ;; esac
 case "$TARGET_SESSION" in ''|*[!A-Za-z0-9_-]*) echo "fm-seat-keeper.sh: target-session contains unsafe characters" >&2; exit 2 ;; esac
@@ -71,6 +71,13 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 # shellcheck source=bin/fm-retry-episode-lib.sh
 . "$SCRIPT_DIR/fm-retry-episode-lib.sh"
 
+# The arguments own this keeper's home and state directory. Both libraries above
+# define FM_HOME, and derive a STATE, from the environment for their own use, so
+# every path this keeper writes hangs off KEEPER_STATE, a name no library
+# reaches, and FM_HOME is restated here from the argument that was validated.
+FM_HOME=$1
+KEEPER_STATE=$2
+
 DELIVERY_SERVICE=${FM_SEAT_KEEPER_DELIVERY_SERVICE:-$SCRIPT_DIR/fm-delivery-service.sh}
 TMUX_CMD=${FM_SEAT_KEEPER_TMUX:-tmux}
 POLL=${FM_SEAT_KEEPER_POLL:-15}
@@ -79,13 +86,13 @@ MAX_BACKOFF=${FM_SEAT_KEEPER_MAX_BACKOFF:-900}
 MAX_ATTEMPTS=${FM_SEAT_KEEPER_MAX_ATTEMPTS:-5}
 # Bounded run for tests only: 0 means the production unbounded keeper loop.
 MAX_CYCLES=${FM_SEAT_KEEPER_MAX_CYCLES:-0}
-PIDFILE="$STATE/.seat-keeper.pid"
-LOCKDIR="$STATE/.seat-keeper.lock"
-TARGET_RECORD="$STATE/.seat-keeper-target"
-MARKER="$STATE/.seat-stay-down"
-ATTEMPTS="$STATE/.seat-keeper-attempts"
-GIVEUP="$STATE/.seat-keeper-giveup"
-LOG="$STATE/.seat-keeper.log"
+PIDFILE="$KEEPER_STATE/.seat-keeper.pid"
+LOCKDIR="$KEEPER_STATE/.seat-keeper.lock"
+TARGET_RECORD="$KEEPER_STATE/.seat-keeper-target"
+MARKER="$KEEPER_STATE/.seat-stay-down"
+ATTEMPTS="$KEEPER_STATE/.seat-keeper-attempts"
+GIVEUP="$KEEPER_STATE/.seat-keeper-giveup"
+LOG="$KEEPER_STATE/.seat-keeper.log"
 SEAT_COMMAND=${FM_SEAT_KEEPER_SEAT_COMMAND:-'exec bash -lic "claude; exec bash -l"'}
 # Read once, here: BASHPID inside a command substitution is the substitution's
 # own subshell, so a pid record and its identity taken separately would name two
@@ -99,7 +106,7 @@ MAX_ATTEMPTS=$(fm_retry_num_or_default "$MAX_ATTEMPTS" 5)
 case "$MAX_CYCLES" in ''|*[!0-9]*) MAX_CYCLES=0 ;; esac
 
 log() {
-  mkdir -p "$STATE" 2>/dev/null || true
+  mkdir -p "$KEEPER_STATE" 2>/dev/null || true
   printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG" 2>/dev/null || true
 }
 
@@ -118,30 +125,75 @@ another_keeper_holds_the_lock() {
   [ "$current" = "$identity" ]
 }
 
-take_lock() {
-  local tmp identity
-  mkdir -p "$STATE" || return 1
-  if ! mkdir "$LOCKDIR" 2>/dev/null; then
-    [ -d "$LOCKDIR" ] || return 1
-    if another_keeper_holds_the_lock; then
-      return 2
-    fi
+# The lock is a symlink to an owner directory whose record is complete before
+# the link exists, so the moment another keeper can see the lock it can also
+# read who holds it. A lock published in two steps has a window in between where
+# a second keeper reads an empty lock as a stale one and runs beside the first.
+publish_lock() {  # <owner-dir>
+  local owner=$1 stray
+  if [ -e "$LOCKDIR" ] || [ -L "$LOCKDIR" ]; then
+    return 1
   fi
+  ln -s "$owner" "$LOCKDIR" 2>/dev/null || return 1
+  if [ "$(readlink "$LOCKDIR" 2>/dev/null || true)" = "$owner" ]; then
+    return 0
+  fi
+  # ln into a lock another keeper published between the check and here lands
+  # INSIDE that keeper's owner directory rather than failing, so a link that
+  # does not point at this keeper's own owner is a stray to take back.
+  stray="$LOCKDIR/${owner##*/}"
+  if [ -L "$stray" ] && [ "$(readlink "$stray" 2>/dev/null || true)" = "$owner" ]; then
+    rm -f "$stray" 2>/dev/null || true
+  fi
+  return 1
+}
+
+release_lock_path() {
+  local owner
+  if [ -L "$LOCKDIR" ]; then
+    owner=$(readlink "$LOCKDIR" 2>/dev/null || true)
+    rm -f "$LOCKDIR" || return 1
+    if [ -n "$owner" ] && [ -d "$owner" ]; then
+      rm -f "$owner/record"
+      rmdir "$owner" 2>/dev/null || true
+    fi
+    return 0
+  fi
+  [ -e "$LOCKDIR" ] || return 0
+  rm -f "$LOCKDIR/record"
+  rmdir "$LOCKDIR" 2>/dev/null
+}
+
+take_lock() {
+  local owner identity attempts=3
+  mkdir -p "$KEEPER_STATE" || return 1
   identity=$(fm_pid_identity "$SELF_PID") || return 1
-  tmp=$(mktemp "$LOCKDIR/.tmp.XXXXXX") || return 1
+  owner=$(mktemp -d "$LOCKDIR.owner.XXXXXX") || return 1
   {
     printf 'pid=%s\n' "$SELF_PID"
     printf 'pid-identity=%s\n' "$identity"
     printf 'fm-home=%s\n' "$FM_HOME"
     printf 'target-socket=%s\n' "$TARGET_SOCKET"
     printf 'target-session=%s\n' "$TARGET_SESSION"
-  } > "$tmp" || { rm -f "$tmp"; return 1; }
-  mv -f "$tmp" "$LOCKDIR/record" || { rm -f "$tmp"; return 1; }
+  } > "$owner/record" || { rm -rf "$owner"; return 1; }
+  while [ "$attempts" -gt 0 ]; do
+    if publish_lock "$owner"; then
+      return 0
+    fi
+    if another_keeper_holds_the_lock; then
+      rm -rf "$owner"
+      return 2
+    fi
+    release_lock_path || { rm -rf "$owner"; return 1; }
+    attempts=$((attempts - 1))
+  done
+  rm -rf "$owner"
+  return 1
 }
 
 write_records() {
   local tmp
-  mkdir -p "$STATE" || return 1
+  mkdir -p "$KEEPER_STATE" || return 1
   printf '%s\n' "$SELF_PID" > "$PIDFILE" || return 1
   tmp=$(mktemp "$TARGET_RECORD.XXXXXX") || return 1
   {
@@ -161,8 +213,7 @@ cleanup() {
     rm -f "$PIDFILE"
   fi
   if [ "$(fm_retry_kv_get "$LOCKDIR/record" pid 2>/dev/null || true)" = "$SELF_PID" ]; then
-    rm -f "$LOCKDIR/record"
-    rmdir "$LOCKDIR" 2>/dev/null || true
+    release_lock_path || true
   fi
   exit 0
 }
@@ -318,7 +369,7 @@ attempt_restore() {  # <condition-key> <delivery-status-line>
 }
 
 main() {
-  local status verdict_rc verdict_key last_verdict='' seen=0 cycles=0 lock_rc=0
+  local status verdict_rc verdict_key last_verdict='' seen=0 cycles=0 lock_rc=0 cleared
   take_lock || lock_rc=$?
   if [ "$lock_rc" -eq 2 ]; then
     echo "fm-seat-keeper.sh: another keeper already holds $LOCKDIR for this state dir" >&2
@@ -327,6 +378,8 @@ main() {
   [ "$lock_rc" -eq 0 ] || { echo "fm-seat-keeper.sh: could not take the keeper lock" >&2; return 1; }
   write_records || { echo "fm-seat-keeper.sh: could not publish keeper records" >&2; return 1; }
   log "keeper started for socket=$TARGET_SOCKET session=$TARGET_SESSION"
+  cleared=$(fm_retry_clear_exhausted_episode "$ATTEMPTS" "$GIVEUP") \
+    && log "cleared the exhausted retry episode for condition $cleared; a hand-start is the operator deciding to try again"
   while :; do
     if stay_down; then
       clear_episode
