@@ -586,11 +586,15 @@ if [ -z "${PORT:-}" ]; then
   # tested its address and got an answer never arrives here.
   if [ "$probe_status" -ne 0 ] && [ -n "$TAILADDR" ] \
     && [ "$ADDR" = "$TAILADDR" ] && [ "$REACHABILITY" = untested ]; then
+    # Asked once and reused, because the two readings are not required to agree:
+    # a second answer arriving between them would leave the reason this branch
+    # chose and the verdict the publish block reaches describing different hosts.
+    SERVE_AVAILABLE=0
+    fm_tailnet_serve_available && SERVE_AVAILABLE=1
     if [ "$probe_status" -eq 4 ]; then
       # Every candidate met an address-scoped errno, which is the same verdict
       # the ephemeral probe failed to reach, established the harder way.
-      fm_reachability_rule_out tailnet
-      if fm_tailnet_serve_available; then
+      if [ "$SERVE_AVAILABLE" -eq 1 ]; then
         add_reason "this node has the tailnet address $TAILADDR but no local interface carries it (every candidate bind failed EADDRNOTAVAIL), which is what tailscale userspace networking mode looks like, so a port cannot be bound on that address and is bound on loopback instead"
       else
         set_reachability_or_die loopback probed
@@ -600,7 +604,12 @@ if [ -z "${PORT:-}" ]; then
     else
       add_reason "no port in $WINDOW_START-$WINDOW_END could be bound on $TAILADDR, and whether that address can be bound here at all was never established, so the window and this host's permissions are both unproved as the cause and a port is bound on loopback instead"
     fi
-    fm_tailnet_serve_available && PROXY_CANDIDATE=1
+    # From here this run binds loopback and not the node's own address, so
+    # `tailnet` is out for the rest of it however it got here and whatever any
+    # record claims: the verdict and the address it was established on move
+    # together, and a run may not emit one its own bind address disproves.
+    fm_reachability_rule_out tailnet
+    [ "$SERVE_AVAILABLE" -eq 1 ] && PROXY_CANDIDATE=1
     ADDR=127.0.0.1
     bind_in_window "$ADDR"
     probe_status=$?
