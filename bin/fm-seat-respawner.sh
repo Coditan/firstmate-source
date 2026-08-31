@@ -34,15 +34,13 @@ LOCKDIR="$STATE/.seat-respawner.lock"
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-delivery-lib.sh
 . "$SCRIPT_DIR/fm-delivery-lib.sh"
+# shellcheck source=bin/fm-retry-episode-lib.sh
+. "$SCRIPT_DIR/fm-retry-episode-lib.sh"
 
-num_or_default() {  # <value> <default>
-  case "$1" in ''|*[!0-9]*|0) printf '%s\n' "$2" ;; *) printf '%s\n' "$1" ;; esac
-}
-
-POLL=$(num_or_default "$POLL" 15)
-BASE_BACKOFF=$(num_or_default "$BASE_BACKOFF" 30)
-MAX_BACKOFF=$(num_or_default "$MAX_BACKOFF" 900)
-MAX_ATTEMPTS=$(num_or_default "$MAX_ATTEMPTS" 5)
+POLL=$(fm_retry_num_or_default "$POLL" 15)
+BASE_BACKOFF=$(fm_retry_num_or_default "$BASE_BACKOFF" 30)
+MAX_BACKOFF=$(fm_retry_num_or_default "$MAX_BACKOFF" 900)
+MAX_ATTEMPTS=$(fm_retry_num_or_default "$MAX_ATTEMPTS" 5)
 
 log() {
   mkdir -p "$STATE" 2>/dev/null || true
@@ -70,15 +68,6 @@ beat() {
 
 stay_down() {
   [ -f "$MARKER" ] && [ ! -L "$MARKER" ]
-}
-
-kv_get() {  # <file> <key>
-  local file=$1 key=$2 line
-  [ -f "$file" ] || return 1
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in "$key"=*) printf '%s\n' "${line#*=}"; return 0 ;; esac
-  done < "$file"
-  return 1
 }
 
 launch_command() {
@@ -119,8 +108,8 @@ endpoint_file() {
 tmux_socket_from_endpoint() {
   local server socket pid endpoint
   endpoint=$(endpoint_file)
-  [ "$(kv_get "$endpoint" backend 2>/dev/null || true)" = tmux ] || return 1
-  server=$(kv_get "$endpoint" tmux-server 2>/dev/null || true)
+  [ "$(fm_retry_kv_get "$endpoint" backend 2>/dev/null || true)" = tmux ] || return 1
+  server=$(fm_retry_kv_get "$endpoint" tmux-server 2>/dev/null || true)
   socket=${server%,*}
   pid=${server##*,}
   [ "$socket" != "$server" ] && [ -n "$socket" ] || return 1
@@ -151,70 +140,18 @@ launch_in_tmux() {  # <reason>
   "$TMUX_CMD" -S "$socket" new-window -n firstmate "$shell_command" >/dev/null
 }
 
-read_attempt_record() {  # <key>
-  local want=$1 key count next
-  key=$(kv_get "$ATTEMPTS" key 2>/dev/null || true)
-  if [ "$key" != "$want" ]; then
-    FM_SEAT_ATTEMPT_COUNT=0
-    FM_SEAT_ATTEMPT_NEXT=0
-    return 0
-  fi
-  count=$(kv_get "$ATTEMPTS" count 2>/dev/null || true)
-  next=$(kv_get "$ATTEMPTS" next 2>/dev/null || true)
-  case "$count" in ''|*[!0-9]*) count=0 ;; esac
-  case "$next" in ''|*[!0-9]*) next=0 ;; esac
-  FM_SEAT_ATTEMPT_COUNT=$count
-  FM_SEAT_ATTEMPT_NEXT=$next
-}
-
-write_attempt_record() {  # <key> <count> <next>
-  local tmp
-  mkdir -p "$STATE" || return 1
-  tmp=$(mktemp "$ATTEMPTS.XXXXXX") || return 1
-  {
-    printf 'key=%s\n' "$1"
-    printf 'count=%s\n' "$2"
-    printf 'next=%s\n' "$3"
-  } > "$tmp" || { rm -f "$tmp"; return 1; }
-  mv -f "$tmp" "$ATTEMPTS"
-}
-
 clear_episode() {
-  rm -f "$ATTEMPTS" "$GIVEUP"
-}
-
-backoff_for() {  # <count-after-attempt>
-  local count=$1 delay=$BASE_BACKOFF
-  while [ "$count" -gt 1 ]; do
-    delay=$((delay * 2))
-    [ "$delay" -le "$MAX_BACKOFF" ] || { delay=$MAX_BACKOFF; break; }
-    count=$((count - 1))
-  done
-  printf '%s\n' "$delay"
+  fm_retry_clear_episode "$ATTEMPTS" "$GIVEUP"
 }
 
 emit_giveup_finding() {  # <key> <status-line>
-  local key=$1 status_line=$2 out
-  if [ -f "$GIVEUP" ] && [ "$(kv_get "$GIVEUP" key 2>/dev/null || true)" = "$key" ]; then
-    return 0
-  fi
-  if out=$(env FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" "$SCRIPT_DIR/fm-finding.sh" emit \
-      --class evidence \
-      --severity high \
-      --officer fm-seat-respawner \
-      --claim "The primary firstmate seat respawner exhausted $MAX_ATTEMPTS launch attempt(s) for this home and stopped retrying this episode." \
-      --where "bin/fm-seat-respawner.sh for $FM_HOME" \
-      --measurement "$status_line" \
-      --refuted-by "A fresh delivery status for the same queued work becomes deliverable after a launch attempt, or the stay-down marker is set deliberately." 2>&1); then
-    {
-      printf 'key=%s\n' "$key"
-      printf 'finding=%s\n' "$(printf '%s\n' "$out" | awk -F= '/^id=/{print $2; exit}')"
-    } > "$GIVEUP" || true
-    log "give-up finding emitted for $key"
-    return 0
-  fi
-  log "give-up finding failed: $out"
-  return 1
+  local key=$1 status_line=$2 out rc=0
+  out=$(fm_retry_giveup_emit "$GIVEUP" "$key" fm-seat-respawner \
+    "The primary firstmate seat respawner exhausted $MAX_ATTEMPTS launch attempt(s) for this home and stopped retrying this episode." \
+    "bin/fm-seat-respawner.sh for $FM_HOME" \
+    "$status_line") || rc=$?
+  [ -z "$out" ] || log "$out"
+  return "$rc"
 }
 
 respawn_needed() {  # <status-line>
@@ -239,9 +176,9 @@ one_cycle() {
     return 0
   fi
   key=$(fm_delivery_condition_key "$status_line")
-  read_attempt_record "$key"
-  count=$FM_SEAT_ATTEMPT_COUNT
-  next=$FM_SEAT_ATTEMPT_NEXT
+  fm_retry_read_attempts "$ATTEMPTS" "$key"
+  count=$FM_RETRY_ATTEMPT_COUNT
+  next=$FM_RETRY_ATTEMPT_NEXT
   now=$(date +%s)
   if [ "$count" -ge "$MAX_ATTEMPTS" ]; then
     emit_giveup_finding "$key" "$status_line" || true
@@ -251,9 +188,9 @@ one_cycle() {
     return 0
   fi
   count=$((count + 1))
-  delay=$(backoff_for "$count")
+  delay=$(fm_retry_backoff "$count" "$BASE_BACKOFF" "$MAX_BACKOFF")
   next=$((now + delay))
-  write_attempt_record "$key" "$count" "$next" || return 1
+  fm_retry_write_attempts "$ATTEMPTS" "$key" "$count" "$next" || return 1
   if launch_in_tmux "$status_line"; then
     log "launch attempt $count submitted after: $status_line"
   else

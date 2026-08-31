@@ -66,6 +66,10 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 # verdict names, are owned there; this keeper never re-derives either.
 # shellcheck source=bin/fm-delivery-lib.sh
 . "$SCRIPT_DIR/fm-delivery-lib.sh"
+# The bounded-relaunch episode is owned there and shared with the respawner, so
+# both supervisors bound their relaunches by one rule.
+# shellcheck source=bin/fm-retry-episode-lib.sh
+. "$SCRIPT_DIR/fm-retry-episode-lib.sh"
 
 DELIVERY_SERVICE=${FM_SEAT_KEEPER_DELIVERY_SERVICE:-$SCRIPT_DIR/fm-delivery-service.sh}
 TMUX_CMD=${FM_SEAT_KEEPER_TMUX:-tmux}
@@ -88,28 +92,15 @@ SEAT_COMMAND=${FM_SEAT_KEEPER_SEAT_COMMAND:-'exec bash -lic "claude; exec bash -
 # different processes.
 SELF_PID=${BASHPID:-$$}
 
-num_or_default() {  # <value> <default>
-  case "$1" in ''|*[!0-9]*|0) printf '%s\n' "$2" ;; *) printf '%s\n' "$1" ;; esac
-}
-
-POLL=$(num_or_default "$POLL" 15)
-BASE_BACKOFF=$(num_or_default "$BASE_BACKOFF" 30)
-MAX_BACKOFF=$(num_or_default "$MAX_BACKOFF" 900)
-MAX_ATTEMPTS=$(num_or_default "$MAX_ATTEMPTS" 5)
+POLL=$(fm_retry_num_or_default "$POLL" 15)
+BASE_BACKOFF=$(fm_retry_num_or_default "$BASE_BACKOFF" 30)
+MAX_BACKOFF=$(fm_retry_num_or_default "$MAX_BACKOFF" 900)
+MAX_ATTEMPTS=$(fm_retry_num_or_default "$MAX_ATTEMPTS" 5)
 case "$MAX_CYCLES" in ''|*[!0-9]*) MAX_CYCLES=0 ;; esac
 
 log() {
   mkdir -p "$STATE" 2>/dev/null || true
   printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG" 2>/dev/null || true
-}
-
-kv_get() {  # <file> <key>
-  local file=$1 key=$2 line
-  [ -f "$file" ] || return 1
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in "$key"=*) printf '%s\n' "${line#*=}"; return 0 ;; esac
-  done < "$file"
-  return 1
 }
 
 # A hand-started keeper is easy to start twice, and two keepers race each other's
@@ -118,10 +109,10 @@ kv_get() {  # <file> <key>
 # keeper that died is taken over rather than being an eternal refusal.
 another_keeper_holds_the_lock() {
   local pid identity current
-  pid=$(kv_get "$LOCKDIR/record" pid 2>/dev/null) || return 1
+  pid=$(fm_retry_kv_get "$LOCKDIR/record" pid 2>/dev/null) || return 1
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
   [ "$pid" != "$SELF_PID" ] || return 1
-  identity=$(kv_get "$LOCKDIR/record" pid-identity 2>/dev/null) || return 1
+  identity=$(fm_retry_kv_get "$LOCKDIR/record" pid-identity 2>/dev/null) || return 1
   [ -n "$identity" ] || return 1
   current=$(fm_pid_identity "$pid" 2>/dev/null) || return 1
   [ "$current" = "$identity" ]
@@ -169,7 +160,7 @@ cleanup() {
   if [ "$(sed -n '1p' "$PIDFILE" 2>/dev/null || true)" = "$SELF_PID" ]; then
     rm -f "$PIDFILE"
   fi
-  if [ "$(kv_get "$LOCKDIR/record" pid 2>/dev/null || true)" = "$SELF_PID" ]; then
+  if [ "$(fm_retry_kv_get "$LOCKDIR/record" pid 2>/dev/null || true)" = "$SELF_PID" ]; then
     rm -f "$LOCKDIR/record"
     rmdir "$LOCKDIR" 2>/dev/null || true
   fi
@@ -291,70 +282,18 @@ ensure_topology() {  # <delivery-status-line>
   return 0
 }
 
-read_attempt_record() {  # <key>
-  local want=$1 key count next
-  key=$(kv_get "$ATTEMPTS" key 2>/dev/null || true)
-  if [ "$key" != "$want" ]; then
-    FM_SEAT_KEEPER_ATTEMPT_COUNT=0
-    FM_SEAT_KEEPER_ATTEMPT_NEXT=0
-    return 0
-  fi
-  count=$(kv_get "$ATTEMPTS" count 2>/dev/null || true)
-  next=$(kv_get "$ATTEMPTS" next 2>/dev/null || true)
-  case "$count" in ''|*[!0-9]*) count=0 ;; esac
-  case "$next" in ''|*[!0-9]*) next=0 ;; esac
-  FM_SEAT_KEEPER_ATTEMPT_COUNT=$count
-  FM_SEAT_KEEPER_ATTEMPT_NEXT=$next
-}
-
-write_attempt_record() {  # <key> <count> <next>
-  local tmp
-  mkdir -p "$STATE" || return 1
-  tmp=$(mktemp "$ATTEMPTS.XXXXXX") || return 1
-  {
-    printf 'key=%s\n' "$1"
-    printf 'count=%s\n' "$2"
-    printf 'next=%s\n' "$3"
-  } > "$tmp" || { rm -f "$tmp"; return 1; }
-  mv -f "$tmp" "$ATTEMPTS"
-}
-
 clear_episode() {
-  rm -f "$ATTEMPTS" "$GIVEUP"
-}
-
-backoff_for() {  # <count-after-attempt>
-  local count=$1 delay=$BASE_BACKOFF
-  while [ "$count" -gt 1 ]; do
-    delay=$((delay * 2))
-    [ "$delay" -le "$MAX_BACKOFF" ] || { delay=$MAX_BACKOFF; break; }
-    count=$((count - 1))
-  done
-  printf '%s\n' "$delay"
+  fm_retry_clear_episode "$ATTEMPTS" "$GIVEUP"
 }
 
 emit_giveup_finding() {  # <key> <status-line>
-  local key=$1 status_line=$2 out
-  if [ -f "$GIVEUP" ] && [ "$(kv_get "$GIVEUP" key 2>/dev/null || true)" = "$key" ]; then
-    return 0
-  fi
-  if out=$(env FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" "$SCRIPT_DIR/fm-finding.sh" emit \
-      --class evidence \
-      --severity high \
-      --officer fm-seat-keeper \
-      --claim "The terminal-hosted primary firstmate seat keeper exhausted $MAX_ATTEMPTS restore attempt(s) for this home and stopped retrying this episode." \
-      --where "bin/fm-seat-keeper.sh for $FM_HOME on $TARGET_SOCKET session $TARGET_SESSION" \
-      --measurement "$status_line" \
-      --refuted-by "A fresh delivery status for the same queued work stops naming seat death after a restore attempt, or the stay-down marker is set deliberately." 2>&1); then
-    {
-      printf 'key=%s\n' "$key"
-      printf 'finding=%s\n' "$(printf '%s\n' "$out" | awk -F= '/^id=/{print $2; exit}')"
-    } > "$GIVEUP" || true
-    log "give-up finding emitted for $key"
-    return 0
-  fi
-  log "give-up finding failed: $out"
-  return 1
+  local key=$1 status_line=$2 out rc=0
+  out=$(fm_retry_giveup_emit "$GIVEUP" "$key" fm-seat-keeper \
+    "The terminal-hosted primary firstmate seat keeper exhausted $MAX_ATTEMPTS restore attempt(s) for this home and stopped retrying this episode." \
+    "bin/fm-seat-keeper.sh for $FM_HOME on $TARGET_SOCKET session $TARGET_SESSION" \
+    "$status_line") || rc=$?
+  [ -z "$out" ] || log "$out"
+  return "$rc"
 }
 
 # A seat command that can never succeed must not be relaunched forever: the
@@ -362,9 +301,9 @@ emit_giveup_finding() {  # <key> <status-line>
 # by a doubling backoff, exactly as the respawner bounds its own.
 attempt_restore() {  # <condition-key> <delivery-status-line>
   local key=$1 status=$2 now count next delay
-  read_attempt_record "$key"
-  count=$FM_SEAT_KEEPER_ATTEMPT_COUNT
-  next=$FM_SEAT_KEEPER_ATTEMPT_NEXT
+  fm_retry_read_attempts "$ATTEMPTS" "$key"
+  count=$FM_RETRY_ATTEMPT_COUNT
+  next=$FM_RETRY_ATTEMPT_NEXT
   now=$(date +%s)
   if [ "$count" -ge "$MAX_ATTEMPTS" ]; then
     emit_giveup_finding "$key" "$status" || true
@@ -372,8 +311,8 @@ attempt_restore() {  # <condition-key> <delivery-status-line>
   fi
   [ "$now" -ge "$next" ] || return 0
   count=$((count + 1))
-  delay=$(backoff_for "$count")
-  write_attempt_record "$key" "$count" "$((now + delay))" || return 1
+  delay=$(fm_retry_backoff "$count" "$BASE_BACKOFF" "$MAX_BACKOFF")
+  fm_retry_write_attempts "$ATTEMPTS" "$key" "$count" "$((now + delay))" || return 1
   log "restore attempt $count after: $status"
   ensure_topology "$status" || true
 }

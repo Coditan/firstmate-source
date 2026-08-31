@@ -183,9 +183,10 @@ test_a_second_keeper_refuses_to_run() {
   dir=$(make_case second-keeper)
   FM_SEAT_KEEPER_STATUS_OVERRIDE='idle: listener pid 1 is up and the durable queue is empty' \
   FM_SEAT_KEEPER_TMUX="$dir/fake-tmux" \
-  FM_SEAT_KEEPER_POLL=5 \
-  FM_SEAT_KEEPER_MAX_CYCLES=2 \
-    "$KEEPER" "$dir/home" "$dir/home/state" "$dir/target.sock" seat "$dir/account" &
+  FM_SEAT_KEEPER_POLL=1 \
+  FM_SEAT_KEEPER_MAX_CYCLES=0 \
+    "$KEEPER" "$dir/home" "$dir/home/state" "$dir/target.sock" seat "$dir/account" \
+    > "$dir/first-keeper.out" 2>&1 &
   first_pid=$!
   while [ ! -f "$dir/home/state/.seat-keeper.lock/record" ] && [ "$waited" -lt 100 ]; do
     sleep 0.1

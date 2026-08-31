@@ -32,6 +32,8 @@ A mistaken restart is recoverable by running `bin/fm-seat-stay-down.sh down`, wh
 Respawns are bounded by `FM_SEAT_RESPAWNER_MAX_ATTEMPTS`, default `5`.
 Attempts back off from `FM_SEAT_RESPAWNER_BACKOFF`, default `30` seconds, up to `FM_SEAT_RESPAWNER_MAX_BACKOFF`, default `900` seconds.
 When the attempt bound is reached for the same delivery condition, the respawner stops retrying that episode and emits a high-severity evidence record through `bin/fm-finding.sh`.
+The rules of that episode, the attempt record, the doubling backoff, and the single give-up finding, live once in `bin/fm-retry-episode-lib.sh` and are sourced by both supervisors, so neither can drift from the other.
+Where each episode's record lives, and how long it outlives its process, stays with the supervisor that owns it.
 
 ## Limits
 
