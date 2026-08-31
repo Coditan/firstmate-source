@@ -8,7 +8,8 @@
 #   - the lock-refusal read-only path: banner leads, every mutating step is
 #     skipped (including bootstrap's eight mutating sweeps, verified by their
 #     ABSENCE), the digest still completes
-#   - output section ordering: diagnostics/banners lead, bulk file dumps follow
+#   - output section ordering: a bounded captain/learnings head leads, then
+#     diagnostics/banners, then bulk file dumps
 #   - context-aware next-step guidance for read-only, AFK, X mode, direct
 #     Telegram receiver arming, and normal watcher ownership
 #   - status-tail bounding, default and FM_SESSION_START_STATUS_TAIL override
@@ -396,6 +397,47 @@ EOF
 }
 
 # --- output ordering ----------------------------------------------------------
+
+test_captain_and_learnings_head_leads_the_digest() {
+  local rec root home fakebin out first_2048 captain_offset learnings_offset i
+  rec=$(new_world pair-first)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  printf '%s\n' 'CAPTAIN-PREFERENCE-SENTINEL: prefer measured outcomes' \
+    > "$home/data/captain.md"
+  printf '%s\n' 'LEARNINGS-SENTINEL: preserve the evidence trail' \
+    > "$home/data/learnings.md"
+  i=0
+  while [ "$i" -lt 100 ]; do
+    printf 'captain filler line %03d keeps the complete file beyond its bounded head\n' "$i" \
+      >> "$home/data/captain.md"
+    printf 'learnings filler line %03d keeps the complete file beyond its bounded head\n' "$i" \
+      >> "$home/data/learnings.md"
+    i=$((i + 1))
+  done
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  first_2048=$(printf '%s' "$out" | head -c 2048)
+  captain_offset=$(printf '%s' "$out" | LC_ALL=C grep -boF -m1 'CAPTAIN-PREFERENCE-SENTINEL' | cut -d: -f1)
+  learnings_offset=$(printf '%s' "$out" | LC_ALL=C grep -boF -m1 'LEARNINGS-SENTINEL' | cut -d: -f1)
+
+  assert_contains "$first_2048" 'CAPTAIN-PREFERENCE-SENTINEL: prefer measured outcomes' \
+    "captain preferences begin at byte $captain_offset, outside the first 2048 bytes"
+  assert_contains "$first_2048" 'LEARNINGS-SENTINEL: preserve the evidence trail' \
+    "learnings begin at byte $learnings_offset, outside the first 2048 bytes"
+  assert_contains "$first_2048" 'BOUNDED SUBSET' \
+    'the delivered head did not say that it contains only a subset'
+  assert_contains "$first_2048" 'Full output saved to' \
+    'the delivered head did not point to the receiving harness full-output path'
+  assert_contains "$first_2048" 'LOCK, BOOTSTRAP, WAKE QUEUE, and SUPERVISION' \
+    'the delivered head did not say where the operational sections remain reachable'
+
+  pass "captain/learnings heads begin at byte offsets $captain_offset/$learnings_offset and both survive 2048 bytes"
+}
 
 test_output_ordering_diagnostics_lead() {
   local rec root home fakebin out lock_line boot_line wake_line context_line fleet_line next_line
@@ -1169,6 +1211,7 @@ EOF
 
 test_context_digest_absent_empty_present
 test_lock_refusal_read_only_path
+test_captain_and_learnings_head_leads_the_digest
 test_output_ordering_diagnostics_lead
 test_herdr_backend_diagnostics_follow_real_session_start
 test_status_tail_bounding

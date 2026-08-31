@@ -22,10 +22,16 @@
 # sweeps - is an opt-in FM_BOOTSTRAP_DETECT_ONLY=1 flag on fm-bootstrap.sh
 # itself (default unset/0 = unchanged behavior), not a fork.
 #
-# ORDERING, and why the tmux own-window guard runs before LOCK, while LOCK
+# ORDERING, and why the captain/learnings head is the first output, while LOCK
 # still runs before BOOTSTRAP (the old AGENTS.md order was bootstrap-then-lock):
 #
-#   0. tmux window   - when firstmate is running inside a crew-shaped tmux
+#   0. priority head - print a bounded, explicitly incomplete head of
+#                       data/captain.md and data/learnings.md before any
+#                       scaffolding, so a receiving harness that previews only
+#                       the start still delivers both kinds of durable context.
+#                       The complete files and every operational section remain
+#                       later in the full digest saved by that harness.
+#   0a. tmux window  - when firstmate is running inside a crew-shaped tmux
 #                       fm-<id> window, rename the caller's own window to the
 #                       reserved firstmate name before any pane reads can confuse
 #                       firstmate with that crew. This is lock-free, targets only
@@ -288,6 +294,7 @@ STATUS_TAIL=${FM_SESSION_START_STATUS_TAIL:-5}
 case "$STATUS_TAIL" in ''|*[!0-9]*) STATUS_TAIL=5 ;; esac
 BACKLOG_LIMIT=${FM_SESSION_START_BACKLOG_LIMIT:-80}
 case "$BACKLOG_LIMIT" in ''|*[!0-9]*|0) BACKLOG_LIMIT=80 ;; esac
+PAIR_HEAD_BYTES=512
 
 RULE='================================================================================'
 SUBRULE='--------------------------------------------------------------------------------'
@@ -313,6 +320,42 @@ print_file_or_absent() {
   else
     printf 'ABSENT\n'
   fi
+}
+
+# print_bounded_file_head <path> <label>: a byte-bounded prefix made only of
+# complete lines, or an explicit empty/absent state. The full file is still
+# printed by the context digest below. Keeping the head bounded lets both files
+# lead the output without pretending either preview is the complete record.
+print_bounded_file_head() {
+  local path=$1 label=$2 total
+  subsection "$label"
+  if [ ! -f "$path" ]; then
+    printf 'absent - no material received from this file in the bounded subset.\n'
+    return
+  fi
+  if [ ! -s "$path" ]; then
+    printf 'present but empty - no material received from this file in the bounded subset.\n'
+    return
+  fi
+
+  total=$(wc -c < "$path")
+  if [ "$total" -le "$PAIR_HEAD_BYTES" ]; then
+    printf 'complete file (%s bytes; it fits inside the %s-byte per-file bound):\n' \
+      "$total" "$PAIR_HEAD_BYTES"
+    cat "$path"
+    return
+  fi
+
+  printf 'BOUNDED SUBSET: first complete lines within %s bytes of %s total bytes; the remainder was NOT received here.\n' \
+    "$PAIR_HEAD_BYTES" "$total"
+  LC_ALL=C awk -v max="$PAIR_HEAD_BYTES" '
+    {
+      bytes = length($0) + 1
+      if (used + bytes > max) exit
+      print
+      used += bytes
+    }
+  ' "$path"
 }
 
 print_backlog_pointer() {
@@ -420,6 +463,16 @@ pi_extension_loaded() {
   [ -n "$marker_pid" ] || return 1
   [ "$marker_version" = "$expected_version" ] && [ "$marker_pid" = "$lock_pid" ]
 }
+
+# --- 0. captain and learnings priority head -------------------------------
+section "CAPTAIN AND LEARNINGS - BOUNDED SUBSET"
+cat <<'EOF'
+This first-pass block carries a bounded head of each file before any startup scaffolding.
+The complete files plus LOCK, BOOTSTRAP, WAKE QUEUE, and SUPERVISION follow in this command's full output.
+If the receiving harness reports "Full output saved to: <path>", open that path for everything not delivered in its preview.
+EOF
+print_bounded_file_head "$DATA/captain.md" "data/captain.md - bounded head"
+print_bounded_file_head "$DATA/learnings.md" "data/learnings.md - bounded head"
 
 section "SESSION START - $FM_HOME"
 
