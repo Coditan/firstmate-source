@@ -170,6 +170,95 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+
+# --- per-step timing --------------------------------------------------------
+# A VESSEL COULD NOT READ ITS OWN STARTUP COST. Nothing here recorded a duration
+# anywhere, so no seat could tell whether its own session start was getting slower
+# as its in-flight count grew, and the one vessel that asked had to reconstruct the
+# shape afterwards from file timestamps - which is blind to exactly the steps that
+# touch no file, and those are several of the expensive ones.
+#
+# So every step is timed, and the breakdown is APPENDED to a log rather than
+# printed. The digest gains one line naming the total and where the breakdown is;
+# it does not gain another thing to read at every start. The cost is two clock
+# reads per step, both shell builtins where the shell has EPOCHREALTIME.
+#
+# THE CLOCK STARTS HERE, ahead of the harness probe and the library sources, and
+# not after them: a total that excludes real startup work under-reports the very
+# run it names, which is the blind spot this exists to remove. Only $STATE has to
+# be resolved first, and it is.
+TIMING_LOG="$STATE/session-start-timing.log"
+TIMING_KEEP=${FM_SESSION_START_TIMING_KEEP:-200}
+case "$TIMING_KEEP" in ''|*[!0-9]*|0) TIMING_KEEP=200 ;; esac
+TIMING_MARKS=""
+
+# Always prints an integer. Timing must never be able to break a startup digest,
+# so every read is validated as digits before it is trusted and the last resort is
+# whole seconds. The fallback branch is the shell without EPOCHREALTIME - bash
+# before 4.4, which in practice means the system bash on macOS, where `date` is BSD
+# date: it does not implement %N, prints it literally, and still exits 0, so an
+# unvalidated read yields a non-numeric string that no `||` ever catches.
+now_ms() {
+  local micros nanos secs
+  if [ -n "${EPOCHREALTIME:-}" ]; then
+    micros=${EPOCHREALTIME/[.,]/}
+    case "$micros" in ''|*[!0-9]*) micros="" ;; esac
+    if [ -n "$micros" ]; then
+      printf '%s' "$((10#$micros / 1000))"
+      return 0
+    fi
+  fi
+  nanos=$(date +%s%N 2>/dev/null)
+  case "$nanos" in ''|*[!0-9]*) nanos="" ;; esac
+  if [ -n "$nanos" ]; then
+    printf '%s' "$((10#$nanos / 1000000))"
+    return 0
+  fi
+  secs=$(date +%s 2>/dev/null)
+  case "$secs" in ''|*[!0-9]*) secs=0 ;; esac
+  printf '%s' "$((10#$secs * 1000))"
+}
+
+TIMING_T0=$(now_ms)
+TIMING_LAST=$TIMING_T0
+
+timing_mark() {  # <step-name>: record the elapsed time since the previous mark
+  local now
+  now=$(now_ms)
+  TIMING_MARKS="$TIMING_MARKS${TIMING_MARKS:+ }$1=$((now - TIMING_LAST))ms"
+  TIMING_LAST=$now
+}
+
+# Appended, then ROTATED once the log passes twice FM_SESSION_START_TIMING_KEEP
+# runs, so the one thing this adds to a home cannot grow without bound. Rotation
+# rather than a tail-and-replace because two sessions can be starting at once -
+# the read-only path a refused session takes reaches this too - and a rewrite from
+# a stale snapshot silently drops whatever the other session appended in between,
+# which is exactly the overlapping-startup sample a vessel most wants. An append is
+# atomic and a rename is atomic: a line already written to the old file is carried
+# into session-start-timing.log.1 rather than lost, and neither session waits on
+# the other. Every step here stays best-effort: a startup digest must never fail,
+# or block, because it could not write or rotate a timing line.
+timing_report() {
+  local total lines
+  timing_mark closing
+  total=$(( $(now_ms) - TIMING_T0 ))
+  if mkdir -p "$STATE" 2>/dev/null \
+    && printf '%s total=%sms %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$total" "$TIMING_MARKS" \
+         >> "$TIMING_LOG" 2>/dev/null; then
+    lines=$(wc -l < "$TIMING_LOG" 2>/dev/null | tr -d ' ')
+    case "$lines" in ''|*[!0-9]*) lines=0 ;; esac
+    if [ "$lines" -ge "$((TIMING_KEEP * 2))" ]; then
+      mv -f "$TIMING_LOG" "$TIMING_LOG.1" 2>/dev/null || true
+    fi
+    printf 'SESSION START took %sms; per-step breakdown for this run and the previous ones: %s\n' \
+      "$total" "$TIMING_LOG"
+  else
+    printf 'SESSION START took %sms; the per-step breakdown could not be written to %s\n' \
+      "$total" "$TIMING_LOG"
+  fi
+}
+
 # shellcheck source=bin/fm-axi-path-lib.sh
 . "$SCRIPT_DIR/fm-axi-path-lib.sh"
 fm_axi_prepend_path "$FM_HOME"
@@ -184,6 +273,11 @@ PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 # shellcheck source=bin/fm-tmux-lib.sh
 . "$SCRIPT_DIR/fm-tmux-lib.sh"
 
+# The harness probe above forks a subprocess that walks the process tree, and five
+# libraries are sourced. Named here so the breakdown stays a complete partition of
+# the total rather than charging this to the first step that follows it.
+timing_mark preamble
+
 STATUS_TAIL=${FM_SESSION_START_STATUS_TAIL:-5}
 case "$STATUS_TAIL" in ''|*[!0-9]*) STATUS_TAIL=5 ;; esac
 BACKLOG_LIMIT=${FM_SESSION_START_BACKLOG_LIMIT:-80}
@@ -194,67 +288,6 @@ SUBRULE='-----------------------------------------------------------------------
 
 section() { printf '\n%s\n%s\n%s\n' "$RULE" "$1" "$RULE"; }
 subsection() { printf '\n%s\n%s\n' "$1" "$SUBRULE"; }
-
-# --- per-step timing --------------------------------------------------------
-# A VESSEL COULD NOT READ ITS OWN STARTUP COST. Nothing here recorded a duration
-# anywhere, so no seat could tell whether its own session start was getting slower
-# as its in-flight count grew, and the one vessel that asked had to reconstruct the
-# shape afterwards from file timestamps - which is blind to exactly the steps that
-# touch no file, and those are several of the expensive ones.
-#
-# So every step is timed, and the breakdown is APPENDED to a log rather than
-# printed. The digest gains one line naming the total and where the breakdown is;
-# it does not gain another thing to read at every start. The cost is two clock
-# reads per step, both shell builtins where the shell has EPOCHREALTIME.
-TIMING_LOG="$STATE/session-start-timing.log"
-TIMING_KEEP=${FM_SESSION_START_TIMING_KEEP:-200}
-case "$TIMING_KEEP" in ''|*[!0-9]*|0) TIMING_KEEP=200 ;; esac
-TIMING_MARKS=""
-
-now_ms() {
-  if [ -n "${EPOCHREALTIME:-}" ]; then
-    local micros=${EPOCHREALTIME/[.,]/}
-    printf '%s' "$((10#$micros / 1000))"
-  else
-    printf '%s' "$(( $(date +%s%N 2>/dev/null || printf '0') / 1000000 ))"
-  fi
-}
-
-TIMING_T0=$(now_ms)
-TIMING_LAST=$TIMING_T0
-
-timing_mark() {  # <step-name>: record the elapsed time since the previous mark
-  local now
-  now=$(now_ms)
-  TIMING_MARKS="$TIMING_MARKS${TIMING_MARKS:+ }$1=$((now - TIMING_LAST))ms"
-  TIMING_LAST=$now
-}
-
-# Appended, then trimmed to the last FM_SESSION_START_TIMING_KEEP runs, so the one
-# thing this adds to a home cannot grow without bound. Every step here is
-# best-effort: a startup digest must never fail because it could not write a
-# timing line.
-timing_report() {
-  local total tmp
-  timing_mark closing
-  total=$(( $(now_ms) - TIMING_T0 ))
-  if mkdir -p "$STATE" 2>/dev/null \
-    && printf '%s total=%sms %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$total" "$TIMING_MARKS" \
-         >> "$TIMING_LOG" 2>/dev/null; then
-    if tmp=$(mktemp "$TIMING_LOG.XXXXXX" 2>/dev/null); then
-      if tail -n "$TIMING_KEEP" "$TIMING_LOG" > "$tmp" 2>/dev/null; then
-        mv -f "$tmp" "$TIMING_LOG" 2>/dev/null || rm -f "$tmp" 2>/dev/null
-      else
-        rm -f "$tmp" 2>/dev/null
-      fi
-    fi
-    printf 'SESSION START took %sms; per-step breakdown for this run and the previous ones: %s\n' \
-      "$total" "$TIMING_LOG"
-  else
-    printf 'SESSION START took %sms; the per-step breakdown could not be written to %s\n' \
-      "$total" "$TIMING_LOG"
-  fi
-}
 
 # print_file_or_absent <path> <label>: full contents under a labeled
 # subsection, or an explicit ABSENT marker. Absence is semantically
@@ -749,6 +782,7 @@ rebuild or create it per AGENTS.md), its contents looked unparseable/corrupt,
 or an individual full status log is needed for older wake-event history.
 EOF
 
+# --- 9. timing -----------------------------------------------------------
 timing_report
 
 exit 0
