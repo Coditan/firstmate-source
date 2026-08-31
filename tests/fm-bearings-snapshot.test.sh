@@ -389,6 +389,41 @@ EOF
   pass "a structured child captain hold reaches Captain's Call"
 }
 
+# The widening has to reach a secondmate-routed decision too, and it very nearly
+# did not. The home summary derived its captain holds from the queued projection,
+# which drops an in-flight held record whose child is still working - a second
+# copy of the same work-phase gate, sitting on the same shape: a question that
+# stopped work already under way. The main home projects the flag directly, so a
+# decision routed to a secondmate would otherwise have stayed less visible than
+# an identical one kept at home.
+test_secondmate_captain_hold_on_working_child_reaches_captains_call() {
+  local home mate fakebin json
+  home=$(make_home mate-inflight-decision)
+  mate="$TMP_ROOT/mate-inflight-decision-home"
+  write_domain_alpha_fixture "$home" "$mate"
+  mkdir -p "$mate/projects/phase9"
+  cat > "$mate/data/backlog.md" <<'EOF'
+## In flight
+- [ ] phase9 - Sample cutover (repo: sample) (kind: ship) (hold: captain approves the cutover) (hold-kind: captain)
+
+## Queued
+
+## Done
+- [x] phase7 - Sample rollout Phase 7 (repo: sample) (kind: ship) (done 2026-07-12)
+EOF
+  fm_write_meta "$mate/state/phase9.meta" \
+    "window=firstmate:fm-phase9" "worktree=$mate/projects/phase9" "project=sample" \
+    "harness=codex" "kind=ship" "mode=no-mistakes"
+  printf 'working: cutover rehearsal under way\n' > "$mate/state/phase9.status"
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    (.decisions_open | any(.[]; .id == "domain-alpha/phase9" and .verb == "captain-hold"))
+      and (.secondmates | any(.[]; .id == "domain-alpha" and .state == "captain_decision"))
+  ' >/dev/null || fail "a secondmate captain hold on work still running never reached the captain: $json"
+  pass "a secondmate captain hold on a still-working child reaches Captain's Call"
+}
+
 make_valid_secondmate_home() {  # <id> <home>
   local id=$1 home=$2
   mkdir -p "$home/state" "$home/data" "$home/config" "$home/projects" "$home/bin"
@@ -976,6 +1011,81 @@ EOF
       and (.gates | any(.[]; .id == "blocked-deploy" and .blocked_by == "ship-task"))
   ' >/dev/null || fail "a blocked captain hold must stay withheld exactly as before: $json"
   pass "a captain hold reaches the captain whatever the record kind, and a blocked one still does not"
+}
+
+# The projection this home reads is the captain-actionable set, and until
+# 2026-08-29 that set was gated on work phase: a captain hold on a record already
+# under way never reached decisions_open. That is the more urgent half, because
+# such a question did not merely precede the work, it stopped it.
+# The disclosure half is the other acceptance criterion and is not decoration: on
+# the reporting vessel a count of 2 looked complete for nineteen days because
+# nothing beside it said what it was not counting. Both are asserted here, on the
+# surface a reader of bearings actually sees.
+test_in_flight_captain_hold_reaches_bearings_and_withheld_ones_are_disclosed() {
+  local home fakebin json
+  home=$(make_home captain-hold-phase)
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+- [ ] under-way - Deployment window (repo: firstmate) (kind: ship) (hold: captain picks the window) (hold-kind: captain)
+- [ ] blocker-work - Work another decision waits on (repo: firstmate) (kind: ship) (since 2026-07-11)
+
+## Queued
+- [ ] before-start - API shape (repo: firstmate) (kind: ship) (hold: captain picks the shape) (hold-kind: captain)
+- [ ] gated - Vendor choice blocked-by: blocker-work - waits (repo: firstmate) (kind: captain) (hold: captain picks the vendor) (hold-kind: captain)
+
+## Done
+- [x] settled - Settled question (repo: firstmate) (kind: captain) (hold: captain picked it) (hold-kind: captain) (merged 2026-07-10)
+EOF
+  mkdir -p "$home/projects/blocker-wt"
+  fm_write_meta "$home/state/blocker-work.meta" \
+    "window=firstmate:fm-blocker-work" \
+    "worktree=$home/projects/blocker-wt" \
+    "project=firstmate" \
+    "harness=codex" \
+    "kind=ship" \
+    "mode=ship"
+  printf 'working: under way\n' > "$home/state/blocker-work.status"
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json)
+
+  printf '%s' "$json" | jq -e '
+    (.decisions_open | any(.[]; .id == "under-way" and .verb == "captain-hold"))
+      and (.decisions_open | any(.[]; .id == "before-start" and .verb == "captain-hold"))
+      and (.captain_actionable_holds_count == 2)
+  ' >/dev/null || fail "a captain hold on work already under way must reach decisions_open: $json"
+
+  # What the surface is NOT counting has to be readable from the surface itself.
+  # The count and the reasons are asserted, not merely the presence of a line,
+  # because a disclosure that says nothing measurable is the silence it replaces.
+  printf '%s' "$json" | jq -e '
+    .omitted | any(.[];
+      (.surface | startswith("captain holds withheld from decisions_open: 2"))
+      and (.surface | contains("blocked_by_unresolved 1"))
+      and (.surface | contains("state_terminal 1")))
+  ' >/dev/null || fail "the captain holds withheld from decisions_open were not disclosed on the surface: $json"
+
+  # The separately-filed blocker gap is disclosed here, never quietly closed.
+  printf '%s' "$json" | jq -e '
+    (.decisions_open | any(.[]; .id == "gated") | not)
+      and (.gates | any(.[]; .id == "gated" and .blocked_by == "blocker-work"))
+  ' >/dev/null || fail "a blocked captain hold must stay withheld exactly as before: $json"
+
+  # The board is built two layers up, and neither layer re-derives the predicate,
+  # so the widening and the disclosure are only real if they survive the passage.
+  # bin/fm-board.sh reads no fleet data at all - it takes --title/--body/--out and
+  # inlines assets - so bin/fm-decision-inventory.sh is the last reader that can
+  # lose either one.
+  local capture inventory
+  capture=$TMP_ROOT/captain-hold-phase-bearings.json
+  printf '%s' "$json" > "$capture"
+  inventory=$("$ROOT/bin/fm-decision-inventory.sh" --json --from "$capture") \
+    || fail "the decision inventory could not read this bearings capture"
+  printf '%s' "$inventory" | jq -e '
+    (.decisions_flat | any(.[]; .id == "under-way"))
+      and (.records == 2)
+      and (.withheld_captain_holds.surface | startswith("captain holds withheld from decisions_open: 2"))
+  ' >/dev/null || fail "the board's own input lost the in-flight decision or the withheld count: $inventory"
+  pass "an in-flight captain hold reaches bearings and the board input, and every withheld one is disclosed on both"
 }
 
 test_report_pointers_surface() {
@@ -2048,6 +2158,7 @@ test_gnu_stat_uses_file_formats_without_bsd_fallback_pollution
 test_parent_activity_evidence_is_bounded_and_disclosed
 test_active_child_overrides_old_parent_event
 test_structured_child_decision_reaches_captains_call
+test_secondmate_captain_hold_on_working_child_reaches_captains_call
 test_bad_secondmate_homes_never_revive_parent_work
 test_oversized_secondmate_summary_stays_strict_unknown
 test_secondmate_and_child_bounds_are_disclosed
@@ -2079,6 +2190,7 @@ test_secondmate_dangling_blocker_surfaces_ready_with_integrity_warning
 test_completed_scout_report_not_pending
 test_open_decision_surfaces_end_to_end
 test_captain_hold_on_a_non_captain_kind_record_surfaces
+test_in_flight_captain_hold_reaches_bearings_and_withheld_ones_are_disclosed
 test_report_pointers_surface
 test_superseded_queued_item_dropped_by_default
 test_include_prs_is_the_only_fetch_path

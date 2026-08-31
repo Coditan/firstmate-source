@@ -737,7 +737,14 @@ secondmate_home_summary_json() {  # <backlog-json> <tasks-json> <archive-json>
               (.state == "in_flight" and .current_role == "held"
                and (.id as $id
                     | any($tasks[]; .id == $id and .current_state.state == "working") | not)))) ]) as $queued_all
-    | ([ $queued_all[]
+    # Read the records, NOT $queued_all. $queued_all drops an in-flight held record
+    # whose child is still working, so deriving the captain holds from it kept a
+    # second copy of the work-phase gate this predicate was just freed of - and it
+    # kept it on exactly the shape that matters most, a question that stopped work
+    # already under way. The main home projects the flag directly
+    # (bin/fm-bearings-snapshot.sh), so reading it directly here is what makes a
+    # secondmate-routed captain decision as visible as a main-home one.
+    | ([ $backlog.records[]?
          | select(.captain_actionable == true)
          | {id,key:.id,verb:"captain-hold",summary:(.title | trunc(160)),
             reason:(.hold_reason | trunc(160)),source:"backlog"} ]) as $captain_holds_all

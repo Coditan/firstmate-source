@@ -252,15 +252,19 @@ It is silent when there is nothing to report, consistent with the rest of that s
 `bin/fm-fleet-snapshot.sh` sets `answered_pending_close` on any non-Done record whose first body line is the resolution marker, and withholds such a record from `captain_actionable`.
 Both `decisions_open` in the canonical snapshot and the decision board that reads it therefore stop presenting an answered decision as an open question.
 The board reaches that state through two layers rather than reading the store itself - `bin/fm-decision-inventory.sh` reads `bin/fm-bearings-snapshot.sh`, which reads the canonical snapshot - so it is covered by its own regression at the board's own input rather than inferred from the layer beneath it.
-The record is not dropped silently: it still appears in the queued gates surface, and both `bin/fm-fleet-snapshot.sh` and `bin/fm-bearings-snapshot.sh` replace its stale hold reason with one saying the decision is answered and the close unfinished.
+The record is not dropped silently: it still appears in the gates surface, it is counted with its reason in the snapshot's `backlog.omitted[]` disclosure, and both `bin/fm-fleet-snapshot.sh` and `bin/fm-bearings-snapshot.sh` replace its stale hold reason with one saying the decision is answered and the close unfinished.
 
 ## Structured read surfaces
 
 `bin/fm-fleet-snapshot.sh` parses canonical tasks-axi `(hold: ...)` and `(hold-kind: captain)` metadata alongside existing backlog fields.
 It resolves every repeated `blocked-by:` edge against structured Done records, keeps real unfinished blockers unresolved, records blocker ids found nowhere in the live backlog or done archive as dangling, and classifies only an unblocked captain hold as actionable.
+`bin/fm-captain-actionable-lib.sh` owns that predicate in full, including why it asks who is being asked rather than what phase the work is in: a captain hold on a record already under way is a question that stopped that work, and it reaches the surface exactly as a queued one does.
+Only a terminal record is excluded on state, and `!= "done"` is the whole of that in this schema.
+Every record carrying `hold-kind: captain` that the predicate did not return is counted, with its reason and its ids, in `backlog.omitted[]`, so shown plus withheld is exhaustive over that population and a short list is distinguishable from a filtered one.
 Its secondmate-home summary classifies an actionable captain hold as `captain_decision` and preserves blocked captain holds as queued work in the owning home.
 
 `bin/fm-bearings-snapshot.sh` projects actionable captain holds into `decisions_open`, labels the total as `captain_actionable_holds_count`, leaves blocked captain holds in ordinary queued gates, and surfaces dangling blocker edges in `integrity[]` as ready work with a data-integrity caution.
+It carries the snapshot's withheld count and reasons up into its own `omitted[]`, and `bin/fm-decision-inventory.sh` passes that entry through verbatim as `withheld_captain_holds`, so the board reads the count of what it is not showing beside the count it is.
 It excludes completed kind `captain` records from Recently Landed.
 The projection remains read-only and does not inspect historical prose.
 

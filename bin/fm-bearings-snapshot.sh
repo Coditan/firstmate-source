@@ -29,6 +29,12 @@
 # gaps in omitted[] and, when invalid, a Charted Next gate line so the four-section
 # chat cannot claim an empty fleet while main current state is broken.
 #
+# decisions_open is the CAPTAIN-ACTIONABLE set, not the open set. Every captain
+# hold this home withheld from it is counted in omitted[] with the reason the
+# canonical snapshot recorded (bin/fm-captain-actionable-lib.sh owns that
+# vocabulary), because a count that is short and a count that is complete look
+# identical, and that is how such a decision sat unseen for nineteen days.
+#
 # Dangling `blocked-by:` tokens are data-integrity warnings, not live blockers.
 # The canonical snapshot removes them from unresolved_blocker_ids and records
 # them in dangling_blocker_ids; this projection exposes those ready-with-caution
@@ -523,6 +529,23 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         (([($snap.secondmate_current.records // [])[] | select(.parent_event.activity_scan.input_truncated == true or .parent_event.activity_scan.retained_truncated == true)] | length) as $n | if $n > 0 then {surface:("secondmate parent activity evidence truncated for \($n) record(s)"), reveal:"raise FM_SNAPSHOT_PARENT_ACTIVITY_LINES, FM_SNAPSHOT_PARENT_ACTIVITY_BYTES, or FM_SNAPSHOT_PARENT_ACTIVITIES"} else empty end),
         (([($snap.secondmate_current.records // [])[] | select(.parent_event.activity_scan.available == false)] | length) as $n | if $n > 0 then {surface:("secondmate parent activity evidence unavailable for \($n) record(s)"), reveal:"inspect the parent status logs"} else empty end),
         (if $all_decisions == 0 and ($decisions_all | length) > $decisions_n then {surface:("decisions_open showing \($decisions_n) of \($decisions_all | length)"), reveal:"--all-decisions"} else empty end),
+        # decisions_open is the captain-actionable set, never the open set. A count
+        # that is short and a count that is complete look identical, and that is
+        # how a decision the captain had already approved sat unseen for nineteen
+        # days on a reporting vessel: nothing beside the count said what it was not
+        # counting. The canonical snapshot names every withheld captain hold with
+        # its reason (bin/fm-captain-actionable-lib.sh owns that vocabulary); carry
+        # the count and the reasons up here so a reader of THIS surface can tell a
+        # short list from a filtered one without going back to the snapshot. It
+        # covers the backlog of THIS home; a registered secondmate withholds inside
+        # its own home and discloses it there.
+        (([($snap.backlog.omitted // [])[] | select(.surface == "captain_actionable")]) as $captain_withheld
+         | if ($captain_withheld | length) > 0 then
+             {surface:("captain holds withheld from decisions_open: "
+                       + ([$captain_withheld[].count] | add | tostring)
+                       + " (" + ([$captain_withheld[] | "\(.reason) \(.count)"] | sort | join(", ")) + ")"),
+              reveal:"bin/fm-fleet-snapshot.sh --json, then read backlog.omitted"}
+           else empty end),
         (if $all_queued == 0 and ($gates_all | length) > $gates_n then {surface:("gates showing \($gates_n) of \($gates_all | length)"), reveal:"--all-queued"} else empty end),
         (if $all_queued == 0 and ($integrity_all | length) > $gates_n then {surface:("integrity warnings showing \($gates_n) of \($integrity_all | length)"), reveal:"--all-queued"} else empty end),
         (if $all_queued == 0 and $chart_kind_hidden > 0 then {surface:("sea-chart items (\($chart_kinds | join(", "))) kept out of gates: \($chart_kind_hidden)"), reveal:"--all-queued"} else empty end),
