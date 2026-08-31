@@ -314,15 +314,16 @@ Stated because a limit nobody wrote down is one somebody will later assume away.
   A recovery, by contrast, is held back only by the conditions that RAISED the crossing, and each of them holds it until a poll re-reads it and finds it clear of its threshold by the recovery margin.
   An unmeasured input no condition uses never holds one back - a container with no cgroup tree recovers as any other host does - and neither does a condition that is blind but never crossed, so a host whose memory-stall account can never be read still reports a headroom shortage as ended, with the duration it lasted.
   The set of conditions that raised the crossing is carried in `state/memory-alarm.state` as a fourth field for exactly that reason, and the shortage's clock keeps running across a poll that could not re-judge it, because a shortage nobody could measure did not thereby end.
-  A raiser leaves that set only on a poll that both re-read it and found it clear, so a machine merely hovering at the line holds its shortage rather than shedding it.
-  The one other way out is the fleet switching a condition off: a stall raiser recorded while a gate was configured is released once the gate is emptied, because a condition nobody is watching cannot be re-read and so would otherwise pin the home in "cannot tell" for ever.
-  It is released rather than cleared, and it keeps appearing in the watch set, so nothing about it passes for calm.
+  That set empties on exactly one poll: the one whose outcome announces the recovery, which is the first to reach calm with every raiser re-read and found clear of its threshold by the recovery margin.
+  Releasing a raiser and announcing the recovery are one decision rather than two, so a poll that says nothing - a machine merely hovering back under the line, a change of watch, a lapse into "cannot tell" - cannot end a shortage quietly and leave a later poll with nothing to recognise.
+  The one exception runs the other way: a stall raiser recorded while a gate was configured can never be re-read once the gate is emptied, so it stops holding the recovery back rather than pinning the home in "cannot tell" for ever.
+  It is let go rather than cleared, and it keeps appearing in the watch set, so nothing about it passes for calm.
   Blindness is per-condition and never blanket, though: an incomplete reading still yields the verdict of every condition whose own input was present, names every input it could not read alongside that verdict, and says on the same line that it is not a full all-clear.
   RAM headroom is the single exception, because the floor measures it and the horizon divides by it: a reading without it leaves nothing to judge at all.
   So `fm-memory-alarm.sh --status` exits 3 only when NO condition could be judged, 0 when at least one was judged and none crossed, and 4 when one crossed.
   This did make recovery easier in one direction and harder in another, and both halves are worth stating.
   Easier: a headroom or horizon crossing can now be declared over on a host where an unrelated condition is permanently blind, which before this change could never happen at all, because the old guard blocked recovery from ANY crossing whenever growth could not be compared.
-  Harder: the crossing is now carried in the state record and survives every poll that could not re-read it, so a raiser is cleared only by a reading that actually looked at it again and found it clear of its threshold by the recovery margin, however many polls that takes.
+  Harder: the crossing is now carried in the state record and survives every poll that does not announce its end, so a raiser is cleared only by the reading that actually looked at it again, found it clear of its threshold by the recovery margin, and said so, however many polls that takes.
   The justification for the first half is the second: a condition that never raised the alarm says nothing about whether the shortage is over, while one that did says everything, and it is now held to that for as long as the shortage lasts.
 
 ## Evidence

@@ -846,7 +846,7 @@ record_transition() {
   printf '%s\t%s\t%s -> %s\t%s MiB RAM headroom available\t%s MiB/min growth\t%s minutes left\t%s memory stall for %s\twatch=%s\t%s\t%s\n' \
     "$NOW" "$(iso "$NOW")" "$from" "$to" "$AVAIL_MIB" "$GROWTH_MIB_MIN" "${MINUTES:-NA}" \
     "${STALL_FULL60:-NA}" "$(human_duration "$STALL_RUN_SECONDS")" \
-    "$([ "$WATCH" = - ] && printf all || printf 'unjudged %s' "$WATCH")" \
+    "$([ "$OUT_WATCH" = - ] && printf all || printf 'unjudged %s' "$OUT_WATCH")" \
     "$named" "$line" >>"$LOG" 2>/dev/null
 }
 
@@ -935,26 +935,30 @@ condition_cleared() {  # <condition>
   esac
 }
 
-# The crossing still on the books after this poll. A raiser leaves it only by
-# being re-read AND found clear of its threshold by the margin; anything that
-# crossed on this poll joins it. So a shortage survives any number of polls that
-# could not see the condition holding it, survives a poll that saw it merely
-# hovering, and ends only on a reading that actually looked and found it clear.
+# Whether this poll has finished with a recorded raiser. A raiser is finished
+# with when this poll re-read it AND found it clear of its threshold by the
+# margin - merely dipping back under the line is not clearing, which is why the
+# elevated band settles nothing.
 #
 # The one other way out is the fleet switching a condition off. A stall raiser
 # recorded while a gate was configured cannot be re-read once the gate is empty,
 # so holding it would pin this home in "cannot tell" for ever; the home has
-# chosen to stop watching that condition, so the raiser is RELEASED rather than
+# chosen to stop watching that condition, so the raiser is let go rather than
 # cleared, and it keeps appearing in the watch set so nothing passes for calm.
-crossing_after_this_poll() {  # <held-set>
-  local held=$1 out='' c
+#
+# Being finished with a raiser is NOT the same as releasing it from the durable
+# record: that happens once, in decide_poll, on the poll whose outcome actually
+# announces the recovery.
+raiser_settled() {  # <condition>
+  condition_cleared "$1" && return 0
+  [ "$1" = stall ] && [ -n "$STALL_UNSET" ] && return 0
+  return 1
+}
+
+union_set() {  # <set> <set>
+  local out='' c
   for c in headroom horizon stall; do
-    if in_set "$c" "$CROSS_SET"; then
-      out="${out:+$out,}$c"
-    elif in_set "$c" "$held" && ! condition_cleared "$c" &&
-         ! { [ "$c" = stall ] && [ -n "$STALL_UNSET" ]; }; then
-      out="${out:+$out,}$c"
-    fi
+    if in_set "$c" "$1" || in_set "$c" "$2"; then out="${out:+$out,}$c"; fi
   done
   printf '%s' "${out:--}"
 }
@@ -992,6 +996,160 @@ held_raiser_reasons() {  # <set>
     out="${out:+$out, and }$why"
   done
   printf '%s' "$out"
+}
+
+# --- the poll's outcome -----------------------------------------------------
+#
+# ONE place turns (this run's reading, the state the last poll left behind) into
+# the whole of what this poll is: the final verdict after every damping, the set
+# of raisers that follows from it, the set of conditions it could judge, the
+# epoch the shortage it may be holding began, and the line to say - or no line
+# at all. Nothing after this recomputes or adjusts any part of it.
+#
+# It is one function because the alternative has failed four times. When the
+# raiser set, the durable record and the message are each derived separately,
+# any step that damps or rewrites the verdict afterwards drops a crossing that
+# nobody was told about, and the machine is later handed a recovery for a
+# shortage no reading ever ended. Here the release of a raiser IS the
+# announcement of the recovery: there is one decision, so there is nothing for a
+# later step to disagree with.
+#
+# Sets OUT_STATE, OUT_SINCE, OUT_WATCH, OUT_CROSSED and OUT_LINE.
+decide_poll() {
+  local blocking='' c held=
+
+  # Which conditions this poll could judge. Read before the guard below, because
+  # it records what the reading could see, not what the alarm decided to say
+  # about it - and the guard's own verdict would otherwise erase the answer.
+  OUT_WATCH=$(unjudged_conditions)
+
+  # Recovery from a crossing must be earned. A calm verdict reached without
+  # re-reading the condition that raised the alarm rests on the conditions that
+  # did not raise it, which is enough to stay quiet while already quiet and
+  # never enough to declare a shortage over - so a crossing lapses into "cannot
+  # see" rather than into a recovery nobody measured.
+  # It blocks on the conditions that RAISED this crossing and on nothing else.
+  # An input no condition uses - a cgroup tree a container does not have, an
+  # installation whose records this account cannot read - says nothing about
+  # whether the shortage is over, and neither does a condition that is blind but
+  # never crossed: a host whose memory-stall account can never be read must
+  # still be able to report a headroom shortage as ended.
+  # It keys on the crossing still on the books rather than on the previous
+  # poll's verdict, so it holds for as long as the shortage does, however many
+  # polls that is.
+  for c in headroom horizon stall; do
+    in_set "$c" "$HELD_CROSSED" || continue
+    raiser_settled "$c" || blocking="${blocking:+$blocking,}$c"
+  done
+  blocking=${blocking:--}
+  if [ "$VERDICT" = ok ] && [ "$blocking" != - ]; then
+    VERDICT=unmeasured
+    REASON="whether the shortage is over is unknown: this alarm crossed on $(raiser_names "$HELD_CROSSED"), and $(held_raiser_reasons "$blocking"), so not every condition that raised it has been re-read and found clear"
+    incomplete_note
+    stall_gate_note
+  fi
+
+  # elevated is a damping band, not a state worth announcing: it exists so that
+  # a machine hovering at the line does not alternate between crossed and
+  # recovered. It holds whatever the previous state was.
+  OUT_STATE=$VERDICT
+  [ "$OUT_STATE" = elevated ] && OUT_STATE=$PREVIOUS
+
+  # The raiser set follows from the FINAL state, so a raiser can only leave the
+  # record on a poll that reached calm - and reaching calm from anything else is
+  # exactly the poll that announces the recovery below. Every other outcome
+  # keeps what it was holding and adds whatever crossed here, so a poll that
+  # says nothing can never quietly end a shortage.
+  if [ "$OUT_STATE" = ok ]; then
+    OUT_CROSSED=-
+  else
+    OUT_CROSSED=$(union_set "$HELD_CROSSED" "$CROSS_SET")
+  fi
+
+  # Sight is regained when this poll can judge all three and the poll before it
+  # could not, either because a condition was unjudgeable or because the alarm
+  # could not see the machine at all. Said once, in one place, so no branch can
+  # claim a restoration nothing lost.
+  local regained=
+  [ "$OUT_WATCH" = - ] && { [ "$PREVIOUS_WATCH" != - ] || [ "$PREVIOUS" = unmeasured ]; } && regained=yes
+
+  OUT_LINE=
+  if [ "$OUT_STATE" = "$PREVIOUS" ] && [ "$OUT_WATCH" = "$PREVIOUS_WATCH" ]; then
+    OUT_SINCE=$SINCE
+    return
+  fi
+
+  if [ "$OUT_STATE" = "$PREVIOUS" ]; then
+    # The verdict has not moved; what this alarm can SEE has. It never reads as
+    # an all-clear and never as a crossing, because neither happened - but when
+    # a crossing is still on the books this is the only line the poll emits, so
+    # it names what it is still holding first. A reader must not be able to take
+    # a loss-of-sight notice for the whole story on a machine in trouble.
+    if [ -n "$CROSS_SET" ]; then
+      # Measured past a threshold on THIS reading, so the shortage is not a
+      # record being held: it is happening now.
+      if [ "$CROSS_KIND" = stall ]; then
+        held="this machine is still stalling on memory, and "
+      else
+        held="this machine is still running out of RAM headroom, and "
+      fi
+    elif [ "$OUT_CROSSED" != - ]; then
+      # Past no threshold on this reading, but nothing has ended the shortage
+      # either - the raiser was either not re-read or not yet clear by the
+      # margin - so the alarm says which of the two this is rather than letting
+      # a regained instrument read as an all-clear.
+      held="this alarm has not declared the earlier shortage over, and "
+    fi
+    if [ -n "$regained" ]; then
+      OUT_LINE="MEMORY_ALARM: ${held}the memory watch can judge all three of its conditions on this machine again - $REASON."
+    else
+      OUT_LINE="MEMORY_ALARM: ${held}the memory watch cannot judge $OUT_WATCH on this machine, so it is only partly watched - $REASON. This is not an all-clear for what it cannot judge."
+    fi
+  else
+    case "$OUT_STATE" in
+      crossed)
+        # The opening clause is chosen by the condition, because "running out of
+        # RAM headroom" is the one thing a stall crossing is NOT: its whole
+        # point is that headroom reads healthy while the machine is unusable,
+        # and a reader sent looking for a shortage would go looking for the
+        # wrong thing.
+        if [ "$CROSS_KIND" = stall ]; then
+          OUT_LINE="MEMORY_ALARM: this machine is stalling on memory - $REASON. Largest resident process: ${RESIDENT:-no tracked process holds enough memory for this reading to name}. Nothing has been limited or killed."
+        else
+          OUT_LINE="MEMORY_ALARM: this machine is running out of RAM headroom - $REASON. Largest grower: ${OFFENDER:-no tracked process was growing, so the headroom is going somewhere this reading does not attribute}. Nothing has been limited or killed."
+        fi
+        ;;
+      ok)
+        if [ "$PREVIOUS" = crossed ] || [ "$HELD_CROSSED" != - ]; then
+          OUT_LINE="MEMORY_ALARM: recovered - $REASON. The shortage lasted $(human_duration "$((NOW - SINCE))")."
+        elif [ -n "$regained" ]; then
+          OUT_LINE="MEMORY_ALARM: the memory watch can see this machine again - $REASON."
+        else
+          OUT_LINE="MEMORY_ALARM: the memory watch reads this machine as calm on the conditions it could judge, and it still cannot judge $OUT_WATCH, so this machine is only partly watched - $REASON. This is not an all-clear for what it cannot judge."
+        fi
+        ;;
+      unmeasured)
+        OUT_LINE="MEMORY_ALARM: the memory watch has gone blind - $REASON. This is not an all-clear."
+        ;;
+    esac
+  fi
+  # Whatever the line says, the inputs nobody could read are named on it.
+  [ -z "$DETAIL" ] || OUT_LINE="$OUT_LINE Unmeasured: $DETAIL"
+
+  # The clock belongs to the crossing, not to the state label. A crossing that
+  # was already on the books keeps the epoch it began at, through a change of
+  # watch and through a lapse into "cannot tell" alike - neither ended the
+  # shortage, so the recovery that finally comes can still say how long it
+  # lasted. One that is new on this poll starts here, whatever the previous
+  # state was, so a fresh shortage cannot inherit the moment some unrelated
+  # input went blind.
+  if [ "$OUT_CROSSED" != - ]; then
+    if [ "$HELD_CROSSED" != - ]; then OUT_SINCE=$SINCE; else OUT_SINCE=$NOW; fi
+  elif [ "$OUT_STATE" = "$PREVIOUS" ]; then
+    OUT_SINCE=$SINCE
+  else
+    OUT_SINCE=$NOW
+  fi
 }
 
 write_state() {
@@ -1121,49 +1279,14 @@ evaluate
 PREVIOUS=$(read_state)
 SINCE=$(read_state_since)
 PREVIOUS_WATCH=$(read_state_watch)
-# The crossing that was on the books BEFORE this poll, and the one that is on
-# them after it. They are separate because the second decides what to say and
-# the first decides how long the shortage has been running.
 HELD_CROSSED=$(read_state_crossed)
-CROSSED_KIND=$(crossing_after_this_poll "$HELD_CROSSED")
-# Taken BEFORE the recovery guard below can rewrite the verdict, because it
-# records what this poll could judge, not what it decided to say about it.
-WATCH=$(unjudged_conditions)
 
-# Recovery from a crossing must be earned. When growth could not be compared,
-# the horizon condition was never evaluated this run, so a calm verdict rests on
-# headroom alone. That is enough to stay quiet while already quiet, and never
-# enough to declare a shortage over - so a crossing lapses into "cannot see"
-# rather than into a recovery nobody measured.
-# It blocks on the conditions that RAISED this crossing and on nothing else. An
-# input no condition uses - a cgroup tree a container does not have, an
-# installation whose records this account cannot read - says nothing about
-# whether the shortage is over, and neither does a condition that is blind but
-# never crossed: a host whose memory-stall account can never be read must still
-# be able to report a headroom shortage as ended. Blocking on either would
-# announce every genuine recovery on such a host as a blindness, and then a
-# restoration of sight that never happened.
-#
-# It keys on the crossing still on the books rather than on the previous poll's
-# verdict, so it holds for as long as the shortage does. Keying on the verdict
-# would hold it for exactly ONE poll: the second consecutive poll that could not
-# re-read the raiser would find the previous verdict was `unmeasured` rather than
-# `crossed`, skip the block, and tell a machine still in shortage that the
-# shortage had ended.
-if [ "$VERDICT" = ok ] && [ "$CROSSED_KIND" != - ]; then
-  VERDICT=unmeasured
-  REASON="whether the shortage is over is unknown: this alarm crossed on $(raiser_names "$CROSSED_KIND"), and $(held_raiser_reasons "$CROSSED_KIND"), so not every condition that raised it has been re-read and found clear"
-  incomplete_note
-  stall_gate_note
-fi
-
-# elevated is a damping band, not a state worth announcing: it exists so that a
-# machine hovering at the line does not alternate between crossed and recovered.
-# It holds whatever the previous state was.
-CURRENT=$VERDICT
-[ "$CURRENT" = elevated ] && CURRENT=$PREVIOUS
-# Reaching calm means every raiser was re-read and cleared, so nothing is held.
-[ "$CURRENT" != ok ] || CROSSED_KIND=-
+OUT_STATE=
+OUT_SINCE=
+OUT_WATCH=
+OUT_CROSSED=
+OUT_LINE=
+decide_poll
 
 # A machine only PARTLY watched is not a watched machine, so which conditions
 # went unjudged is a state in its own right: a change in that set is a
@@ -1172,94 +1295,24 @@ CURRENT=$VERDICT
 # relayed as calm - without breaking the speaks-on-change discipline: a home
 # whose stall account can never be read says so once and then goes quiet about
 # it, rather than either nagging every poll or never mentioning it at all.
-if [ "$CURRENT" = "$PREVIOUS" ] && [ "$WATCH" = "$PREVIOUS_WATCH" ]; then
-  write_state "$CURRENT" "$SINCE" "$WATCH" "$CROSSED_KIND" ||
+# A poll with nothing to say still writes the state it decided on, and that
+# state is by construction the one it was already holding.
+if [ -z "$OUT_LINE" ]; then
+  write_state "$OUT_STATE" "$OUT_SINCE" "$OUT_WATCH" "$OUT_CROSSED" ||
     printf 'MEMORY_ALARM: the memory watch could not persist its %s state in %s; this poll was measured but not durably completed.\n' \
-      "$CURRENT" "$STATE_FILE"
+      "$OUT_STATE" "$STATE_FILE"
   exit 0
 fi
 
-LINE=
-if [ "$CURRENT" = "$PREVIOUS" ]; then
-  # The verdict has not moved; what this alarm can SEE has. It never reads as an
-  # all-clear and never as a crossing, because neither happened - but when a
-  # crossing is still on the books this is the only line the poll emits, so it
-  # names the shortage it is still holding first. A reader must not be able to
-  # take a loss-of-sight notice for the whole story on a machine that is out of
-  # memory.
-  # It asks the raiser set rather than the state label, because the state label
-  # outlives the shortage: the elevated band holds the previous state, so a poll
-  # that released every raiser while hovering at the line still reads as crossed
-  # while holding nothing at all, and must not announce a shortage that is over.
-  held=
-  if [ "$CROSSED_KIND" != - ]; then
-    if [ "$CROSSED_KIND" = stall ]; then
-      held="this machine is still stalling on memory, and "
-    else
-      held="this machine is still running out of RAM headroom, and "
-    fi
-  fi
-  if [ "$WATCH" = - ]; then
-    LINE="MEMORY_ALARM: ${held}the memory watch can judge all three of its conditions on this machine again - $REASON."
-  else
-    LINE="MEMORY_ALARM: ${held}the memory watch cannot judge $WATCH on this machine, so it is only partly watched - $REASON. This is not an all-clear for what it cannot judge."
-  fi
-else
-case "$CURRENT" in
-  crossed)
-    # The opening clause is chosen by the condition, because "running out of RAM
-    # headroom" is the one thing a stall crossing is NOT: its whole point is
-    # that headroom reads healthy while the machine is unusable, and a reader
-    # sent looking for a shortage would go looking for the wrong thing.
-    if [ "$CROSS_KIND" = stall ]; then
-      LINE="MEMORY_ALARM: this machine is stalling on memory - $REASON. Largest resident process: ${RESIDENT:-no tracked process holds enough memory for this reading to name}. Nothing has been limited or killed."
-    else
-      LINE="MEMORY_ALARM: this machine is running out of RAM headroom - $REASON. Largest grower: ${OFFENDER:-no tracked process was growing, so the headroom is going somewhere this reading does not attribute}. Nothing has been limited or killed."
-    fi
-    ;;
-  ok)
-    if [ "$PREVIOUS" = crossed ] || [ "$HELD_CROSSED" != - ]; then
-      LINE="MEMORY_ALARM: recovered - $REASON. The shortage lasted $(human_duration "$((NOW - SINCE))")."
-    elif [ "$WATCH" = - ]; then
-      LINE="MEMORY_ALARM: the memory watch can see this machine again - $REASON."
-    else
-      LINE="MEMORY_ALARM: the memory watch reads this machine as calm on the conditions it could judge, and it still cannot judge $WATCH, so this machine is only partly watched - $REASON. This is not an all-clear for what it cannot judge."
-    fi
-    ;;
-  unmeasured)
-    LINE="MEMORY_ALARM: the memory watch has gone blind - $REASON. This is not an all-clear."
-    ;;
-esac
-fi
-# Whatever the line says, the inputs nobody could read are named on it.
-[ -z "$DETAIL" ] || LINE="$LINE Unmeasured: $DETAIL"
-
-# A change of watch is not a change of state, so it must not restart the clock
-# that measures how long a shortage has lasted. Nor does lapsing from crossed
-# into "cannot tell": the shortage did not end there, it stopped being
-# judgeable, so the clock keeps running and the recovery that finally comes can
-# still say how long it lasted.
-# A crossing that was ALREADY on the books keeps its clock; one that is new on
-# this poll starts it here, whatever the previous state was. Reading the held
-# crossing rather than the one this poll leaves behind is what keeps a fresh
-# shortage from inheriting the epoch at which some unrelated input went blind.
-if [ "$CURRENT" = "$PREVIOUS" ]; then
-  SINCE_NEXT=$SINCE
-elif [ "$CURRENT" != ok ] && [ "$HELD_CROSSED" != - ]; then
-  SINCE_NEXT=$SINCE
-else
-  SINCE_NEXT=$NOW
-fi
-
-if ! record_transition "$PREVIOUS" "$CURRENT" "$LINE"; then
+if ! record_transition "$PREVIOUS" "$OUT_STATE" "$OUT_LINE"; then
   printf 'MEMORY_ALARM: the memory watch could not record the %s to %s transition in %s; the transition was measured but not durably completed.\n' \
-    "$PREVIOUS" "$CURRENT" "$LOG"
+    "$PREVIOUS" "$OUT_STATE" "$LOG"
   exit 0
 fi
-if ! write_state "$CURRENT" "$SINCE_NEXT" "$WATCH" "$CROSSED_KIND"; then
+if ! write_state "$OUT_STATE" "$OUT_SINCE" "$OUT_WATCH" "$OUT_CROSSED"; then
   printf 'MEMORY_ALARM: the memory watch recorded the %s to %s transition but could not persist its new state in %s; the transition was not durably completed.\n' \
-    "$PREVIOUS" "$CURRENT" "$STATE_FILE"
+    "$PREVIOUS" "$OUT_STATE" "$STATE_FILE"
   exit 0
 fi
-printf '%s\n' "$LINE"
+printf '%s\n' "$OUT_LINE"
 exit 0
