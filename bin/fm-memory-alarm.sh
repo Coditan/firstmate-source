@@ -165,10 +165,12 @@
 #   memory-alarm.log   one append-only line per spoken change, crossing,
 #                      recovery and change of watch alike, each carrying the
 #                      evidence it was decided on and a `watch=` field naming
-#                      the conditions this alarm could not JUDGE on that poll -
-#                      whether because their instrument could not be read or
-#                      because the home deliberately left the gate unconfigured
-#                      (`watch=all` when all three were judged). It lives
+#                      the conditions this alarm was NOT WATCHING on that poll
+#                      and would not start watching again on its own - their
+#                      instrument could not be read, or the home deliberately
+#                      left the gate unconfigured (`watch=all` when it was
+#                      watching all three). A condition it watches but could
+#                      not judge this run is not in it. It lives
 #                      in data/ rather than state/ because the question it
 #                      answers - has this happened before, and what was running
 #                      - is asked long after the volatile record of the moment
@@ -177,20 +179,25 @@
 # State, under FM_HOME/state:
 #   memory-alarm.state    "<state> <epoch> <watch> <crossed>". The last state
 #                         this alarm decided, so a transition can be told from a
-#                         continuation; the set of conditions it could not JUDGE
-#                         on that poll - `headroom,horizon,stall` in that order,
-#                         or `-` when all three were judged; and the set of
-#                         conditions that raised the crossing it is holding, in
-#                         the same order, or `-` when it is holding none. A
-#                         condition enters the watch set
+#                         continuation; the set of conditions it was NOT
+#                         WATCHING on that poll - `headroom,horizon,stall` in
+#                         that order, or `-` when it was watching all three; and
+#                         the set of conditions that raised the crossing it is
+#                         holding, in the same order, or `-` when it is holding
+#                         none. A condition enters the watch set
 #                         because its instrument could not be read or because
 #                         the home deliberately left its gate unconfigured, and
-#                         for no other reason: one suppressed by an expected,
-#                         self-clearing absence of data - no stored growth
-#                         sample yet, one too young to divide by, one aged past
-#                         its window - is scope rather than blindness, resolves
-#                         on the next poll that stores a sample, and never
-#                         enters the set. The crossed set is carried because a
+#                         for no other reason - those are the two ways a
+#                         condition stops being watched and does not start
+#                         again by itself. A condition the alarm is watching but
+#                         could not JUDGE this run, because an expected,
+#                         self-clearing absence of data left it nothing to
+#                         compare - no stored growth sample yet, one too young
+#                         to divide by, one aged past its window - is scope
+#                         rather than blindness, resolves on the next poll that
+#                         stores a sample, and never enters the set. So `-`
+#                         says every condition is being watched, not that every
+#                         condition was judged this run. The crossed set is carried because a
 #                         condition that is blind but never crossed says nothing
 #                         about whether the shortage is over, so only the ones
 #                         that RAISED the alarm may hold a recovery back - and
@@ -392,7 +399,7 @@ FLOOR_CLEAR=
 HORIZON_CLEAR=
 STALL_CLEAR=
 
-# Which of the three conditions this poll could not JUDGE, in a fixed order so
+# Which of the three conditions this poll was NOT WATCHING, in a fixed order so
 # two polls that saw the same thing produce the same string. It is derived from
 # the flags the conditions already keep rather than tracked separately, so it can
 # never disagree with what the verdict says. A verdict of unmeasured means no
@@ -986,12 +993,14 @@ raiser_names() {  # <set>
 # verdict at `elevated`, which the guard never sees and which announces nothing.
 held_raiser_reasons() {  # <set>
   local set=$1 out='' c why
-  for c in headroom horizon stall; do
+  # Headroom is not among them: a reading that could not take it returns
+  # `unmeasured` before this path is reachable, and a calm verdict means it was
+  # read and found clear, so a headroom raiser is never one still held here.
+  for c in horizon stall; do
     in_set "$c" "$set" || continue
     case "$c" in
       horizon) why="growth could not be compared this run ($GROWTH_BLIND)" ;;
-      stall)   why="memory stall could not be read this run ($STALL_BLIND)" ;;
-      *)       why="RAM headroom could not be read this run" ;;
+      *)       why="memory stall could not be read this run ($STALL_BLIND)" ;;
     esac
     out="${out:+$out, and }$why"
   done
@@ -1066,12 +1075,15 @@ decide_poll() {
     OUT_CROSSED=$(union_set "$HELD_CROSSED" "$CROSS_SET")
   fi
 
-  # Sight is regained when this poll can judge all three and the poll before it
-  # could not, either because a condition was unjudgeable or because the alarm
-  # could not see the machine at all. Said once, in one place, so no branch can
-  # claim a restoration nothing lost.
+  # Sight is regained when the poll before this one had a condition it was not
+  # watching and this one has none. It reads the watch sets themselves and no
+  # state label: `elevated` damps the state into whatever the previous poll
+  # decided, so a poll that watched all three and merely found the machine
+  # hovering still carries the label `unmeasured`, and a label is therefore no
+  # evidence that anything was ever lost. Said once, in one place, so no branch
+  # can claim a restoration nothing lost.
   local regained=
-  [ "$OUT_WATCH" = - ] && { [ "$PREVIOUS_WATCH" != - ] || [ "$PREVIOUS" = unmeasured ]; } && regained=yes
+  [ "$OUT_WATCH" = - ] && [ "$PREVIOUS_WATCH" != - ] && regained=yes
 
   OUT_LINE=
   if [ "$OUT_STATE" = "$PREVIOUS" ] && [ "$OUT_WATCH" = "$PREVIOUS_WATCH" ]; then
@@ -1101,7 +1113,7 @@ decide_poll() {
       held="this alarm has not declared the earlier shortage over, and "
     fi
     if [ -n "$regained" ]; then
-      OUT_LINE="MEMORY_ALARM: ${held}the memory watch can judge all three of its conditions on this machine again - $REASON."
+      OUT_LINE="MEMORY_ALARM: ${held}the memory watch has all three of its conditions back under watch on this machine - $REASON."
     else
       OUT_LINE="MEMORY_ALARM: ${held}the memory watch cannot judge $OUT_WATCH on this machine, so it is only partly watched - $REASON. This is not an all-clear for what it cannot judge."
     fi
@@ -1124,6 +1136,11 @@ decide_poll() {
           OUT_LINE="MEMORY_ALARM: recovered - $REASON. The shortage lasted $(human_duration "$((NOW - SINCE))")."
         elif [ -n "$regained" ]; then
           OUT_LINE="MEMORY_ALARM: the memory watch can see this machine again - $REASON."
+        elif [ "$OUT_WATCH" = - ]; then
+          # Nothing was lost and nothing regained: the state label was being
+          # held by the damping band, and this poll is the one that measures
+          # the machine calm. It may not claim a restoration of sight.
+          OUT_LINE="MEMORY_ALARM: the memory watch reads this machine as calm, and is watching all three of its conditions - $REASON."
         else
           OUT_LINE="MEMORY_ALARM: the memory watch reads this machine as calm on the conditions it could judge, and it still cannot judge $OUT_WATCH, so this machine is only partly watched - $REASON. This is not an all-clear for what it cannot judge."
         fi

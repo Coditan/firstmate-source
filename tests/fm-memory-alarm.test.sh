@@ -450,8 +450,8 @@ test_sight_is_never_claimed_regained_while_a_condition_is_still_unreadable() {
   out=$(alarm)
   assert_not_contains "$out" "can see this machine again" \
     "and must not be claimed on the poll after it either"
-  assert_not_contains "$out" "can judge all three" \
-    "nor may all three conditions be claimed judged while one is not"
+  assert_not_contains "$out" "back under watch on this machine" \
+    "nor may all three conditions be claimed watched while one is not"
   case "$out" in
     ''|*"only partly watched"*) ;;
     *) fail "a calm verdict on a partly watched machine must say so: |$out|" ;;
@@ -837,7 +837,7 @@ test_a_shortage_survives_a_damped_poll_and_is_still_reported_as_ended() {
     "a damped poll must not end a shortage it never announced the end of"
   assert_not_contains "$out" "can see this machine again" \
     "nor claim a restoration on a poll whose state did not move"
-  assert_contains "$out" "can judge all three of its conditions" \
+  assert_contains "$out" "back under watch on this machine" \
     "it must still report the instruments it got back"
   assert_contains "$out" "has not declared the earlier shortage over" \
     "and must say the shortage it recorded is still on the books"
@@ -860,6 +860,43 @@ test_a_shortage_survives_a_damped_poll_and_is_still_reported_as_ended() {
   [ "$(grep -c 'can see this machine again' "$log")" -eq 0 ] \
     || fail "no poll in this sequence regained sight it had not lost"
   pass "a shortage survives a damped poll and is still reported as ended"
+}
+
+test_sight_is_reported_regained_once_for_one_loss() {
+  # `elevated` damps the state label into whatever the previous poll decided, so
+  # a poll that watched all three conditions and merely found the machine
+  # hovering still carries the label `unmeasured`. A restoration keyed on that
+  # label is announced a second time on the next poll, where nothing had been
+  # blind at all, and the durable log then shows one blind period ending twice.
+  reset_home
+  reading 16000 true 0
+  alarm_at 0 >/dev/null
+
+  local out
+  reading_headroom_unmeasured
+  out=$(alarm_at 300)
+  assert_contains "$out" "gone blind" "a poll that could not read headroom judges nothing"
+
+  # 2800 MiB is above the 2400 MiB floor but short of the 3000 the 1.25 margin
+  # demands, so this poll judges every condition and lands in the elevated band.
+  reading 2800 true 0
+  out=$(alarm_at 600)
+  assert_contains "$out" "back under watch on this machine" \
+    "the poll that got the instruments back must say so"
+
+  reading 16000 true 0
+  out=$(alarm_at 900)
+  assert_not_contains "$out" "can see this machine again" \
+    "a poll whose predecessor was not blind must not announce a restoration"
+  assert_not_contains "$out" "back under watch on this machine" \
+    "nor announce the same restoration a second time"
+
+  local log="$HOME_DIR/data/memory-alarm.log"
+  [ "$(grep -c 'back under watch on this machine' "$log")" -eq 1 ] \
+    || fail "one loss of sight must leave exactly one restoration in the record"
+  [ "$(grep -c 'can see this machine again' "$log")" -eq 0 ] \
+    || fail "the restoration was already spoken, so it must not be spoken again"
+  pass "sight is reported regained once for one loss"
 }
 
 test_an_unconfigured_gate_is_not_reported_as_a_condition_the_alarm_lost() {
@@ -904,13 +941,13 @@ test_a_condition_that_becomes_unjudgeable_is_spoken_once() {
   # The account comes back.
   reading 16000 true 0
   out=$(alarm)
-  assert_contains "$out" "can judge all three" "regaining a condition must be spoken once too"
+  assert_contains "$out" "back under watch on this machine" "regaining a condition must be spoken once too"
   out=$(alarm)
   assert_contains "|$out|" "||" "and then must go quiet again"
 
   [ "$(log_lines)" -eq 2 ] || fail "each change of watch belongs in the durable record exactly once"
   assert_grep 'watch=unjudged stall' "$HOME_DIR/data/memory-alarm.log" \
-    "the record must carry which conditions the poll could not judge"
+    "the record must carry which conditions the poll was not watching"
   assert_grep 'watch=all' "$HOME_DIR/data/memory-alarm.log" \
     "and must say so when it could judge every one of them"
   pass "a change in what the alarm can judge is spoken exactly once and recorded"
@@ -1595,6 +1632,7 @@ test_a_shortage_the_crossed_condition_could_not_re_read_keeps_its_clock
 test_a_watch_change_on_a_crossed_machine_says_it_is_still_crossed
 test_a_watch_change_past_no_threshold_does_not_claim_a_live_shortage
 test_a_shortage_survives_a_damped_poll_and_is_still_reported_as_ended
+test_sight_is_reported_regained_once_for_one_loss
 test_an_unconfigured_gate_is_not_reported_as_a_condition_the_alarm_lost
 test_a_condition_that_becomes_unjudgeable_is_spoken_once
 test_a_blind_stall_poll_neither_erases_the_run_nor_credits_it
