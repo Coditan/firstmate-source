@@ -5,9 +5,9 @@
 #
 # Coverage:
 #   - absent-file markers vs empty-but-present files in the context digest
-#   - the lock-refusal read-only path: banner leads, every mutating step is
-#     skipped (including bootstrap's eight mutating sweeps, verified by their
-#     ABSENCE), the digest still completes
+#   - the lock-refusal read-only path: the banner leads the operational
+#     sections, every mutating step is skipped (including bootstrap's eight
+#     mutating sweeps, verified by their ABSENCE), the digest still completes
 #   - output section ordering: a bounded captain/learnings head leads, then
 #     diagnostics/banners, then bulk file dumps
 #   - context-aware next-step guidance for read-only, AFK, X mode, direct

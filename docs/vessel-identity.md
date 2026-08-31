@@ -17,7 +17,7 @@ The status bar carries the vessel label from the first frame after an attach, wi
 ```
 
 Three facts, in order: which home on which host, the tmux session name the person typed to get here, and when this session started.
-The digest states the same label in text at the head of every session start:
+The digest states the same label in text near the start of every session, after the bounded captain and learnings context:
 
 ```
 VESSEL: coditan-firstmate@hlr-web-1 (status bar armed)
