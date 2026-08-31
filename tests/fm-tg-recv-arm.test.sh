@@ -402,10 +402,29 @@ printf '%s\n' message > "$service_home/state/receiver-mode"
 FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" "$ARM" > "$service_home/state/service-message.out" 2>&1
 assert_grep 'CAPTAIN-TELEGRAM: service message' "$service_home/state/.wake-queue" \
   "systemd receiver message was left in the service journal instead of the durable wake queue"
+assert_grep 'receiver exited 0 after delivering output' "$service_home/state/.wake-queue" \
+  "receiver exit after a delivered message was not reported as a durable failure"
 FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" "$ARM" > "$service_home/state/service-message-second.out" 2>&1
 message_rows=$(grep -c 'CAPTAIN-TELEGRAM: service message' "$service_home/state/.wake-queue")
 [ "$message_rows" -eq 2 ] \
   || fail "two messages shared one wake identity and would be deduplicated at drain time: $message_rows rows"
+
+unknown_home="$TMP_ROOT/unknown-exit-home"
+mkdir -p "$unknown_home/config" "$unknown_home/state/.tg-recv.lock.owner.unknown"
+cp "$service_home/config/telegram.env" "$unknown_home/config/telegram.env"
+cp "$service_home/config/fm-tg-recv.sh" "$unknown_home/config/fm-tg-recv.sh"
+printf '%s\n' empty-exit > "$unknown_home/state/receiver-mode"
+printf '%s\n' 'CAPTAIN-TELEGRAM: recovered message' > "$unknown_home/state/recovered-output"
+printf '%s\n' 999999 > "$unknown_home/state/.tg-recv.lock.owner.unknown/pid"
+printf '%s\n' "$unknown_home" > "$unknown_home/state/.tg-recv.lock.owner.unknown/fm-home"
+printf '%s\n' "$unknown_home/config/fm-tg-recv.sh" > "$unknown_home/state/.tg-recv.lock.owner.unknown/receiver-path"
+printf '%s\n' "$unknown_home/state/recovered-output" > "$unknown_home/state/.tg-recv.lock.owner.unknown/output-path"
+ln -s "$unknown_home/state/.tg-recv.lock.owner.unknown" "$unknown_home/state/.tg-recv.lock"
+FM_TG_RECV_MANAGER=systemd FM_HOME="$unknown_home" "$ARM" > "$unknown_home/state/recovery.out" 2>&1
+assert_grep 'CAPTAIN-TELEGRAM: recovered message' "$unknown_home/state/.wake-queue" \
+  "unknown-status recovery did not durably relay captured output"
+assert_grep 'recorded receiver exited with status unavailable' "$unknown_home/state/.wake-queue" \
+  "unknown-status dead receiver recovery omitted the durable failure"
 
 refused_home="$TMP_ROOT/refused-wake-home"
 mkdir -p "$refused_home/config" "$refused_home/state/refused-wake-queue"
@@ -424,6 +443,7 @@ assert_grep 'CAPTAIN-TELEGRAM: service message' "$preserved_output" \
   "a refused durable wake discarded the captured receiver message"
 
 : > "$service_home/state/.wake-queue"
+rm -f "$service_home/state/.tg-recv-last-failure-wake"
 printf '%s\n' failure > "$service_home/state/receiver-mode"
 service_rc=0
 FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" "$ARM" > "$service_home/state/service-failure.out" 2>&1 \

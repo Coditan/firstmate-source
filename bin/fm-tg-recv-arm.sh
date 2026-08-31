@@ -172,9 +172,15 @@ queue_service_output() {
     record_failure_wake \
       "check: telegram receiver: FAILED - receiver exited $receiver_status; the service will restart it" \
       "$relay_path" || return 1
-  elif [ "$had_output" -eq 0 ]; then
+  elif [ "$receiver_status" = unknown ]; then
     record_failure_wake \
-      "check: telegram receiver: FAILED - receiver exited without a message or diagnostic; the service will restart it" || return 1
+      "check: telegram receiver: FAILED - recorded receiver exited with status unavailable; the service will restart it" || return 1
+  elif [ "$had_output" -eq 1 ]; then
+    record_failure_wake \
+      "check: telegram receiver: FAILED - receiver exited 0 after delivering output; the service will restart it" || return 1
+  else
+    record_failure_wake \
+      "check: telegram receiver: FAILED - receiver exited 0 without a message or diagnostic; the service will restart it" || return 1
   fi
 }
 
