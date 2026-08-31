@@ -130,6 +130,47 @@ SH
   chmod +x "$path"
 }
 
+# The same confirming fake, but only while <switch> exists. Removing the switch
+# is a tmux server that has exited: the round trip stops completing, so every
+# later probe is unanswerable rather than a confident absence - which is what a
+# container restart or a last window closing actually presents, and the only way
+# to drive a confirmation that later goes stale.
+write_switchable_fake_tmux() {
+  local path=$1 log=$2 switch=$3
+  cat > "$path" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$log"
+for arg do
+  if [ "\$arg" = new-window ]; then
+    printf '%%9\n'
+    exit 0
+  fi
+done
+[ -e "$switch" ] || exit 0
+idx=0
+i=0
+for arg do
+  i=\$((i + 1))
+  [ "\$arg" = if-shell ] && idx=\$((i + 2))
+done
+[ "\$idx" -gt 0 ] || exit 0
+cmd=
+last=
+i=0
+for arg do
+  i=\$((i + 1))
+  [ "\$i" = "\$idx" ] && cmd=\$arg
+  last=\$arg
+done
+case "\$cmd" in
+  *list-panes*|*pane_id*) printf '%%9\n' ;;
+esac
+printf '%s\n' "\$last"
+exit 0
+SH
+  chmod +x "$path"
+}
+
 write_executing_fake_tmux() {
   local path=$1 log=$2
   cat > "$path" <<SH
@@ -317,9 +358,17 @@ test_a_pending_first_turn_holds_the_next_launch() {
 # The bound without the honest count reports five launches that never happened;
 # the honest count without the bound reports nothing at all, forever.
 #
-# It also asserts the one fact he can act on and the finding used not to carry:
-# that a pane is still open holding this episode, so the silence is a deliberate
-# refusal to open a second seat beside a live one, not a restarter that quit.
+# THE BOUND AND THE ACCOUNTING ARE THIS TEST'S PROPERTY, AND THE PANE IS ONLY
+# NAMED HERE. This fixture's backend never completes the server round trip, so no
+# probe of the pane can be answered and the give-up cannot take - and must not
+# take - the pane-still-open wording. What is asserted below is therefore that the
+# episode reached its bound at all, that one launch is reported as one launch, and
+# that the pane is NAMED whichever sentence carries it. The still-open claim is
+# proved by test_a_giveup_reached_without_holds_still_names_the_open_pane, the one
+# case given a confirming backend, and the refusal to make that claim on an
+# unanswerable probe by test_a_giveup_whose_pane_could_not_be_read_claims_neither_way.
+# Those two drive nearly the same fixture as this one and are not redundant with
+# it: each pins a different property of the same episode.
 test_a_held_episode_is_bounded_and_the_giveup_counts_launches_as_launches() {
   local home delivery tmux log status launches findings i
   home=$(make_home held-bound)
@@ -356,7 +405,7 @@ test_a_held_episode_is_bounded_and_the_giveup_counts_launches_as_launches() {
   assert_grep "1 launch attempt" "$home/data/findings/"*.json \
     "the give-up finding did not name the one launch that was actually made"
   assert_grep "%9" "$home/data/findings/"*.json \
-    "the give-up finding did not name the pane still holding this episode"
+    "the give-up finding did not name the pane this episode is standing on"
   pass "a held episode is bounded and its give-up counts launches as launches"
 }
 
@@ -544,6 +593,130 @@ test_a_giveup_whose_pane_could_not_be_read_claims_neither_way() {
   assert_grep "1 launch attempt" "$home/data/findings/"*.json \
     "the give-up did not name the one launch that was actually made"
   pass "a give-up whose pane could not be read claims neither way"
+}
+
+# A CONFIRMATION THAT HAS GONE STALE IS NOT A CONFIRMATION, and this is the
+# DOMINANT shape of a held episode rather than a corner of it: typing the first
+# turn requires a probe that answered, so nearly every episode that ever held has
+# a pane once confirmed. The sibling above covers the narrow case where the server
+# was already gone by the first probe; this covers the one that actually happened
+# on 2026-08-27 - a seat confirmed early, and then a tmux server that exits.
+#
+# The record keeps its durable "a pane was confirmed here" mark, which is correct
+# and is asserted below through `pane-confirmed=yes` in the measurement. What may
+# not happen is a PRESENT-TENSE sentence resting on it: after the server goes,
+# every probe is unanswerable, and the bound lands well inside the first-turn
+# deadline so the deadline's own recheck never runs and never retires the record.
+test_a_stale_confirmation_never_claims_the_pane_is_still_open() {
+  local home delivery tmux log status switch launches findings i
+
+  home=$(make_home giveup-stale-confirmation)
+  status="$home/status.txt"
+  delivery="$home/fake-delivery"
+  tmux="$home/fake-tmux"
+  log="$home/tmux.log"
+  switch="$home/tmux-server-up"
+  printf 'undeliverable: listener pid 1 is up with 1 wake(s) pending, but no session has published where the model turn lives\n' > "$status"
+  write_fake_delivery "$delivery"
+  write_switchable_fake_tmux "$tmux" "$log" "$switch"
+  : > "$switch"
+
+  # Cycle 1 launches; cycle 2 probes a server that is still answering, so the
+  # pane is genuinely confirmed and the durable mark is written.
+  i=0
+  while [ "$i" -lt 2 ]; do
+    [ "$i" -eq 0 ] || sleep 2
+    FM_SEAT_FIRST_TURN_DEADLINE=600 FM_SEAT_RESPAWNER_MAX_ATTEMPTS=3 \
+      FM_FAKE_DELIVERY_STATUS="$status" run_respawner_once "$home" "$delivery" "$tmux" \
+      || fail "respawner refused cycle $i"
+    i=$((i + 1))
+  done
+  assert_grep "pane-seen=" "$home/state/.seat-first-turn" \
+    "the fixture never confirmed the pane, so there is no stale confirmation to test"
+
+  # The tmux server exits. Every probe from here is unanswerable, and the record
+  # correctly keeps standing - so the bound arrives with a confirmation that is
+  # now old and a pane nothing can currently see.
+  rm -f "$switch"
+  i=0
+  while [ "$i" -lt 2 ]; do
+    sleep 3
+    FM_SEAT_FIRST_TURN_DEADLINE=600 FM_SEAT_RESPAWNER_MAX_ATTEMPTS=3 \
+      FM_FAKE_DELIVERY_STATUS="$status" run_respawner_once "$home" "$delivery" "$tmux" \
+      || fail "respawner refused post-exit cycle $i"
+    i=$((i + 1))
+  done
+
+  [ -f "$home/state/.seat-first-turn" ] \
+    || fail "the record was retired, so the stale-confirmation case was not reached"
+  launches=$(grep -c new-window "$log" 2>/dev/null || printf 0)
+  [ "$launches" = 1 ] \
+    || fail "this episode opened more than one seat; got $launches launches"
+  findings=$(find "$home/data/findings" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')
+  [ "$findings" = 1 ] \
+    || fail "the episode never reached its bound; got $findings give-up findings"
+  assert_grep "pane-confirmed=yes" "$home/data/findings/"*.json \
+    "the give-up dropped the durable record that a pane was once confirmed"
+  assert_no_grep "is still open in pane" "$home/data/findings/"*.json \
+    "the give-up claimed an open pane from a confirmation that had gone stale"
+  assert_grep "cannot tell whether that pane is still there" "$home/data/findings/"*.json \
+    "the give-up did not fall back to saying the reading could not be taken"
+  assert_grep "holds=2" "$home/data/findings/"*.json \
+    "the hold count was dropped when the confirmation went stale"
+  assert_grep "1 launch attempt" "$home/data/findings/"*.json \
+    "the give-up did not name the one launch that was actually made"
+  pass "a stale confirmation never claims the pane is still open"
+}
+
+# The container-restart shape of the same defect. state/ outlives the process, so
+# a respawner starting fresh finds a first-turn record carrying a `pane-seen` that
+# a DIFFERENT process wrote against a tmux server that died with it. This one has
+# confirmed nothing itself, and the mark it inherited may not speak for it.
+test_an_inherited_confirmation_never_claims_the_pane_is_still_open() {
+  local home delivery tmux log status findings i
+
+  home=$(make_home giveup-inherited-confirmation)
+  status="$home/status.txt"
+  delivery="$home/fake-delivery"
+  tmux="$home/fake-tmux"
+  log="$home/tmux.log"
+  printf 'undeliverable: listener pid 1 is up with 1 wake(s) pending, but no session has published where the model turn lives\n' > "$status"
+  write_fake_delivery "$delivery"
+  write_pane_fake_tmux "$tmux" "$log"
+
+  FM_SEAT_FIRST_TURN_DEADLINE=600 FM_SEAT_RESPAWNER_MAX_ATTEMPTS=3 \
+    FM_FAKE_DELIVERY_STATUS="$status" run_respawner_once "$home" "$delivery" "$tmux" \
+    || fail "respawner refused the launching cycle"
+  [ -f "$home/state/.seat-first-turn" ] \
+    || fail "the launch recorded no first turn to carry a mark across"
+
+  # state/.seat-first-turn is this component's own persisted record; the mark the
+  # dead process left in it is exactly what survives a container restart.
+  printf 'pane-seen=%s\n' "$(($(date +%s) - 3600))" >> "$home/state/.seat-first-turn"
+
+  i=0
+  while [ "$i" -lt 3 ]; do
+    sleep 3
+    FM_SEAT_FIRST_TURN_DEADLINE=600 FM_SEAT_RESPAWNER_MAX_ATTEMPTS=3 \
+      FM_FAKE_DELIVERY_STATUS="$status" run_respawner_once "$home" "$delivery" "$tmux" \
+      || fail "respawner refused cycle $i after the restart"
+    i=$((i + 1))
+  done
+
+  [ -f "$home/state/.seat-first-turn" ] \
+    || fail "the record was retired, so the inherited-mark case was not reached"
+  findings=$(find "$home/data/findings" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')
+  [ "$findings" = 1 ] \
+    || fail "the episode never reached its bound; got $findings give-up findings"
+  assert_grep "pane-confirmed=yes" "$home/data/findings/"*.json \
+    "the fixture's inherited mark never reached the finding, so nothing was tested"
+  assert_no_grep "is still open in pane" "$home/data/findings/"*.json \
+    "the give-up claimed an open pane from a mark this process never confirmed"
+  assert_grep "cannot tell whether that pane is still there" "$home/data/findings/"*.json \
+    "the give-up did not fall back to saying the reading could not be taken"
+  assert_grep "holds=2" "$home/data/findings/"*.json \
+    "the hold count was dropped when the confirmation was only inherited"
+  pass "an inherited confirmation never claims the pane is still open"
 }
 
 # The verdict the alarm turns into a sentence on the captain's phone. A
@@ -904,6 +1077,8 @@ test_a_held_episode_is_bounded_and_the_giveup_counts_launches_as_launches
 test_a_giveup_with_no_standing_record_never_claims_an_open_pane
 test_a_giveup_reached_without_holds_still_names_the_open_pane
 test_a_giveup_whose_pane_could_not_be_read_claims_neither_way
+test_a_stale_confirmation_never_claims_the_pane_is_still_open
+test_an_inherited_confirmation_never_claims_the_pane_is_still_open
 test_a_held_first_turn_is_reported_as_holding_rather_than_up
 test_an_armed_restart_that_never_ran_is_reported
 test_launch_does_not_pin_the_respawners_path

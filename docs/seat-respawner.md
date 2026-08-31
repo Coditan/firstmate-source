@@ -55,11 +55,14 @@ A **launch** is a cycle on which a window was actually opened; a **hold** is a d
 Both count toward `FM_SEAT_RESPAWNER_MAX_ATTEMPTS`, so a first turn that never lands can no longer hold the episode open forever, and the two are recorded apart in `state/.seat-respawn-attempts` so only launches are ever reported as launches.
 That distinction is the finding's whole point on a held episode: an episode whose first turn never lands makes exactly one window call, and a record telling the captain that five launches were spent would send him to a machine whose actual state is an open pane with an agent in it that never reached session start.
 So every give-up names both counts, and there are **three** things it can then honestly say, one sentence each.
-When the pane was **confirmed present** by a probe that was actually answered, it names that pane and says outright that the silence is a refusal to open a second seat rather than a restarter that quit — the fact the captain acts on.
-When a first-turn record still stands but **no probe of its pane could be answered**, it names the pane and says it cannot tell whether that pane is still there, asserting neither that the seat is open nor that it is gone.
+When **this cycle's probe** confirmed the pane present, it names that pane and says outright that the silence is a refusal to open a second seat rather than a restarter that quit — the fact the captain acts on.
+When a first-turn record still stands but **the last probe of its pane could not be answered**, it names the pane and says it cannot tell whether that pane is still there, asserting neither that the seat is open nor that it is gone.
 When **no record stands**, it reports the launches spent and that nothing is being held.
-The selector is what was established, never the hold count and never a record merely standing: a hold is evidence a pane was open *then*, and `deliver_first_turn` deliberately keeps the record through every answer that is not a confident absence, so an endpoint whose tmux server has exited leaves a record standing that no later probe can confirm.
-Reading either of those as an open pane is the same defect the alarm's `unmeasured` verdict exists to prevent — a reading nobody could take reported as one that was.
+The selector is what was established *on the cycle that composed the finding*, never the hold count, never a record merely standing, and never a confirmation that has since gone stale.
+`deliver_first_turn` records the last probe's outcome in `pane-probe`, rewritten every cycle, and `one_cycle` runs it immediately before the bound test, so the present-tense sentence rests on a reading that was just taken.
+That matters because the durable `pane-seen` mark is written once and never cleared — right for "was a pane ever confirmed here", wrong for "is still open", since a seat confirmed on an early cycle keeps that mark through every unanswerable probe after its tmux server exits, and across a container restart, `state/` carries it over from a process that died with that server.
+Both stale cases therefore fall to the middle sentence; `pane-seen` is still reported as `pane-confirmed=` in the measurement, so nothing is lost by not letting it speak in the present tense.
+Reading any of them as an open pane is the same defect the alarm's `unmeasured` verdict exists to prevent — a reading nobody could take reported as one that was.
 
 ## Limits
 
