@@ -396,14 +396,17 @@ EOF
       == ["before-start", "under-way"]
   ' >/dev/null || fail "a captain hold on work under way did not reach the actionable surface: $out"
 
-  # Every captain-kind hold is either on the surface or named in omitted[] with a
-  # reason. The invariant is what makes a short list distinguishable from a
-  # filtered one, so it is asserted as an invariant and not as a list of cases.
+  # Every captain-kind hold that COULD have reached the surface is either on it or
+  # named in omitted[] with a reason. The population is the non-terminal ones: a
+  # Done record was never a candidate, and counting it as withheld made the
+  # disclosure announce a withholding that was not one. The invariant is what
+  # makes a short list distinguishable from a filtered one, so it is asserted as
+  # an invariant and not as a list of cases.
   printf '%s' "$out" | jq -e '
-    ([.backlog.records[] | select(.structured and .hold_kind == "captain")] | length) as $held
+    ([.backlog.records[] | select(.structured and .hold_kind == "captain" and .state != "done")] | length) as $candidates
     | ([.backlog.records[] | select(.captain_actionable == true)] | length) as $shown
     | ([.backlog.omitted[] | select(.surface == "captain_actionable") | .count] | add // 0) as $withheld
-    | ($held == $shown + $withheld)
+    | ($candidates == $shown + $withheld)
   ' >/dev/null || fail "captain holds were neither shown nor disclosed as withheld: $out"
 
   printf '%s' "$out" | jq -e '
@@ -411,9 +414,16 @@ EOF
       | {reason, ids}] | sort_by(.reason))
       == [{reason: "answered_pending_close", ids: ["answered"]},
           {reason: "blocked_by_unresolved", ids: ["gated"]},
-          {reason: "dangling_blocker_edge", ids: ["phantom"]},
-          {reason: "state_terminal", ids: ["settled"]}]
+          {reason: "dangling_blocker_edge", ids: ["phantom"]}]
   ' >/dev/null || fail "the withheld captain holds were not disclosed with their reasons: $out"
+
+  # A settled question is not a withholding. It was never a candidate for the
+  # surface, so it must not be named in the disclosure the captain reads as
+  # "decisions you are not being shown".
+  printf '%s' "$out" | jq -e '
+    ([.backlog.omitted[] | select(.surface == "captain_actionable") | .ids[]]
+      | index("settled")) == null
+  ' >/dev/null || fail "a settled captain hold was counted as withheld from the surface: $out"
   pass "a captain hold reaches the surface whatever phase its work is in, and every withheld one is named"
 }
 

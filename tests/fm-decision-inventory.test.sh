@@ -210,15 +210,15 @@ test_withheld_captain_holds_reach_the_board_input() {
 {"schema":"fm-bearings.v1",
  "decisions_open":[{"id":"under-way","key":"under-way","verb":"captain-hold","summary":"Deployment window","owner":"(main)"}],
  "omitted":[{"surface":"backlog item bodies","reveal":"--fields bodies"},
-            {"surface":"captain holds withheld from decisions_open: 3 (blocked_by_unresolved 1, state_terminal 2)","reveal":"bin/fm-fleet-snapshot.sh --json, then read backlog.omitted"}]}
+            {"surface":"captain holds withheld from decisions_open: 3 (answered_pending_close 2, blocked_by_unresolved 1)","reveal":"bin/fm-fleet-snapshot.sh --json, then read backlog.omitted and secondmate_current.records[].omitted"}]}
 JSON
   out=$(inv "$cap")
   [ "$(printf '%s' "$out" | jq -r '.withheld_captain_holds.surface')" \
-    = "captain holds withheld from decisions_open: 3 (blocked_by_unresolved 1, state_terminal 2)" ] \
+    = "captain holds withheld from decisions_open: 3 (answered_pending_close 2, blocked_by_unresolved 1)" ] \
     || fail "the withheld-captain-hold disclosure must reach the board input verbatim: $out"
   # It must be the disclosure that is carried, not merely the first omitted entry.
   [ "$(printf '%s' "$out" | jq -r '.withheld_captain_holds.reveal')" \
-    = "bin/fm-fleet-snapshot.sh --json, then read backlog.omitted" ] \
+    = "bin/fm-fleet-snapshot.sh --json, then read backlog.omitted and secondmate_current.records[].omitted" ] \
     || fail "the wrong omitted entry was carried through: $out"
   assert_contains "$("$INV" --summary --from "$cap")" "withheld from this reading:" \
     "the human summary must say what the reading did not count"

@@ -29,10 +29,13 @@
 #     `--backlog-json` is intentionally raw per-file input: it does not read the
 #     paired live/archive file, so missing ids stay in unresolved_blocker_ids there
 #     and dangling_blocker_ids is absent.
-#     omitted[] is {surface,reason,count,ids} and names every record carrying
-#     `hold-kind: captain` that captain_actionable did not return, so the two sets
-#     are exhaustive over that population and a short list is distinguishable from
-#     a filtered one. bin/fm-captain-actionable-lib.sh owns the predicate, the
+#     omitted[] is {surface,reason,count,ids} and names every NON-TERMINAL record
+#     carrying `hold-kind: captain` that captain_actionable did not return, so the
+#     two sets are exhaustive over the population that could have reached the
+#     surface and a short list is distinguishable from a filtered one. A Done
+#     record was never a candidate, so it is not counted as withheld and the count
+#     is 0 exactly when nothing answerable is hidden.
+#     bin/fm-captain-actionable-lib.sh owns the predicate, the
 #     reason vocabulary, and why each clause is there; under `--backlog-json` the
 #     reasons follow that file's own blocker resolution, as everything else there
 #     does.
@@ -65,7 +68,11 @@
 #     untrusted supplements only and never override readable structured-home facts.
 #     Each structured-home record carries active_children, decisions_open, holds,
 #     queued, landed, endpoints, counts, and omitted. Actionable captain holds
-#     appear in decisions_open; blocked captain holds remain queued with metadata.
+#     appear in decisions_open; blocked captain holds remain queued with metadata
+#     and are named in that home's own omitted[] under surface captain_actionable,
+#     in the same {surface,reason,count,ids} shape backlog.omitted[] uses, so a
+#     reader aggregating decisions_open across homes can disclose what every home
+#     withheld rather than only what this one did.
 #   secondmate_landed: {records[],truncated[],unreadable[],partial[]} - the
 #     compatibility landed-work roll-up derived from secondmate_current. Readable
 #     structured homes with an unknown current classification are partial, not
@@ -712,7 +719,7 @@ secondmate_home_summary_json() {  # <backlog-json> <tasks-json> <archive-json>
     --argjson queued_n "$FM_SNAPSHOT_SECONDMATE_QUEUED" \
     --argjson decisions_n "$FM_SNAPSHOT_SECONDMATE_DECISIONS" \
     --argjson landed_n "$FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME" \
-    "$FM_BLOCKER_CLASS_JQ"'
+    "$FM_BLOCKER_CLASS_JQ$FM_CAPTAIN_ACTIONABLE_JQ"'
     input as $raw_backlog | input as $tasks | input as $archive
     | ([ $raw_backlog.records[]? | select(.structured and .id != null) | {key:.id, value:true} ]
         | from_entries) as $live_ids
@@ -872,7 +879,15 @@ secondmate_home_summary_json() {  # <backlog-json> <tasks-json> <archive-json>
           (if ($decisions_all | length) > $decisions_n then {surface:"decisions_open",count:(($decisions_all | length) - $decisions_n)} else empty end),
           (if ($queued_all | length) > $queued_n then {surface:"queued",count:(($queued_all | length) - $queued_n)} else empty end),
           (if ($tasks | length) > $child_n then {surface:"endpoints",count:(($tasks | length) - $child_n)} else empty end),
-          (if $landed_n > 0 and ($landed_all | length) > $landed_n then {surface:"landed",count:(($landed_all | length) - $landed_n)} else empty end)
+          (if $landed_n > 0 and ($landed_all | length) > $landed_n then {surface:"landed",count:(($landed_all | length) - $landed_n)} else empty end),
+          # decisions_open above is the captain-actionable set of THIS home, and a
+          # parent rolls it up with the set of every other home into one list. If
+          # a withheld captain hold is disclosed only inside this home, that
+          # roll-up counts it nowhere and reads as complete - the same silence the
+          # actionable surface exists against, just moved one hop out. Emit it
+          # here, from the one owner of the reason vocabulary, so the parent can
+          # add it into the count the captain actually reads.
+          (fm_captain_actionable_omitted($backlog.records)[])
         ]
       }'
 }

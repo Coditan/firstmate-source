@@ -424,6 +424,77 @@ EOF
   pass "a secondmate captain hold on a still-working child reaches Captain's Call"
 }
 
+# decisions_open is one list built from several homes, so the line that says what
+# it is not counting has to be built from the same several homes. Here the main
+# home withholds nothing at all and a secondmate withholds a blocked captain
+# hold: before the roll-up carried it, the captain read an empty decision list
+# with no disclosure beside it - a filtered list that looks exactly like a
+# complete one, which is the failure this whole surface exists against.
+test_a_secondmate_withholding_is_disclosed_on_the_fleet_surface() {
+  local home mate fakebin json
+  home=$(make_home mate-only-withholding)
+  mate="$TMP_ROOT/mate-only-withholding-home"
+  write_domain_alpha_fixture "$home" "$mate"
+  cat > "$mate/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] mate-vendor - Vendor choice blocked-by: mate-groundwork - waits (repo: sample) (kind: ship) (hold: captain picks the vendor) (hold-kind: captain)
+- [ ] mate-groundwork - Groundwork the decision waits on (repo: sample) (kind: ship)
+
+## Done
+- [x] phase7 - Sample rollout Phase 7 (repo: sample) (kind: ship) (done 2026-07-12)
+EOF
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json)
+
+  # The main home has no backlog of its own here, so it can withhold nothing: any
+  # disclosure below is the secondmate's, carried up rather than restated.
+  printf '%s' "$json" | jq -e '
+    (.decisions_open | length) == 0
+  ' >/dev/null || fail "this fixture must surface no decisions at all: $json"
+
+  printf '%s' "$json" | jq -e '
+    .omitted | any(.[];
+      .surface == "captain holds withheld from decisions_open: 1 (blocked_by_unresolved 1)")
+  ' >/dev/null || fail "a captain hold a secondmate withheld was counted nowhere: $json"
+  pass "a captain hold withheld inside a secondmate home is disclosed on the fleet surface"
+}
+
+# A held decision and running work are not alternatives. Ranking the home as
+# captain_decision is right - the question must reach the captain - but selecting
+# the in-flight list on that ranking made the work the question stopped disappear
+# from it. The home belongs on BOTH surfaces: named as a decision on one, named
+# by what its child is doing on the other.
+test_secondmate_with_running_work_and_a_held_decision_is_on_both_surfaces() {
+  local home mate fakebin json
+  home=$(make_home mate-decision-and-work)
+  mate="$TMP_ROOT/mate-decision-and-work-home"
+  write_domain_alpha_fixture "$home" "$mate"
+  mkdir -p "$mate/projects/phase9"
+  cat > "$mate/data/backlog.md" <<'EOF'
+## In flight
+- [ ] phase9 - Sample cutover (repo: sample) (kind: ship) (hold: captain approves the cutover) (hold-kind: captain)
+
+## Queued
+
+## Done
+- [x] phase7 - Sample rollout Phase 7 (repo: sample) (kind: ship) (done 2026-07-12)
+EOF
+  fm_write_meta "$mate/state/phase9.meta" \
+    "window=firstmate:fm-phase9" "worktree=$mate/projects/phase9" "project=sample" \
+    "harness=codex" "kind=ship" "mode=no-mistakes"
+  printf 'working: cutover rehearsal under way\n' > "$mate/state/phase9.status"
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    (.decisions_open | any(.[]; .id == "domain-alpha/phase9" and .verb == "captain-hold"))
+      and (.in_flight | any(.[];
+             .id == "domain-alpha" and (.doing | test("phase9: cutover rehearsal under way"))))
+  ' >/dev/null || fail "running work vanished from in_flight the moment the captain was asked about it: $json"
+  pass "a secondmate with running work and a held decision appears on both surfaces"
+}
+
 make_valid_secondmate_home() {  # <id> <home>
   local id=$1 home=$2
   mkdir -p "$home/state" "$home/data" "$home/config" "$home/projects" "$home/bin"
@@ -1057,11 +1128,11 @@ EOF
   # What the surface is NOT counting has to be readable from the surface itself.
   # The count and the reasons are asserted, not merely the presence of a line,
   # because a disclosure that says nothing measurable is the silence it replaces.
+  # `settled` is Done and so was never a candidate for decisions_open; counting it
+  # would make this line announce a withholding that is not one.
   printf '%s' "$json" | jq -e '
     .omitted | any(.[];
-      (.surface | startswith("captain holds withheld from decisions_open: 2"))
-      and (.surface | contains("blocked_by_unresolved 1"))
-      and (.surface | contains("state_terminal 1")))
+      .surface == "captain holds withheld from decisions_open: 1 (blocked_by_unresolved 1)")
   ' >/dev/null || fail "the captain holds withheld from decisions_open were not disclosed on the surface: $json"
 
   # The separately-filed blocker gap is disclosed here, never quietly closed.
@@ -1083,7 +1154,7 @@ EOF
   printf '%s' "$inventory" | jq -e '
     (.decisions_flat | any(.[]; .id == "under-way"))
       and (.records == 2)
-      and (.withheld_captain_holds.surface | startswith("captain holds withheld from decisions_open: 2"))
+      and (.withheld_captain_holds.surface == "captain holds withheld from decisions_open: 1 (blocked_by_unresolved 1)")
   ' >/dev/null || fail "the board's own input lost the in-flight decision or the withheld count: $inventory"
   pass "an in-flight captain hold reaches bearings and the board input, and every withheld one is disclosed on both"
 }
@@ -2191,6 +2262,8 @@ test_completed_scout_report_not_pending
 test_open_decision_surfaces_end_to_end
 test_captain_hold_on_a_non_captain_kind_record_surfaces
 test_in_flight_captain_hold_reaches_bearings_and_withheld_ones_are_disclosed
+test_a_secondmate_withholding_is_disclosed_on_the_fleet_surface
+test_secondmate_with_running_work_and_a_held_decision_is_on_both_surfaces
 test_report_pointers_surface
 test_superseded_queued_item_dropped_by_default
 test_include_prs_is_the_only_fetch_path

@@ -44,14 +44,28 @@
 # A count that is short and a count that is complete look identical. The
 # nineteen-day record was not missed because the rule was indefensible, it was
 # missed because a count of 2 looked whole and nothing beside it said what it was
-# not counting. So every record carrying `hold-kind: captain` either comes back
-# on the surface or is named in the omitted projection with the reason it did
-# not, and those two sets are exhaustive over that population by construction.
+# not counting. So every NON-TERMINAL record carrying `hold-kind: captain` either
+# comes back on the surface or is named in the omitted projection with the reason
+# it did not, and those two sets are exhaustive over that population by
+# construction.
 #
+# THE DISCLOSED POPULATION IS THE CANDIDATE POPULATION, NOT EVERY CAPTAIN HOLD
+# A Done record was never a candidate for this surface, so counting it as
+# "withheld" made the disclosure announce a withholding that was not one - on the
+# main home the only entry it ever produced was a closed, already-answered
+# decision, and the number therefore did not mean "decisions you are not being
+# shown". `fm_captain_candidate` is that population: held for the captain AND not
+# terminal. Shown plus withheld is exhaustive over it, and the count is 0 exactly
+# when nothing answerable is hidden.
+#
+# fm_captain_candidate($r) - a captain-kind hold that could have reached the
+#   surface: the population the predicate selects from and the disclosure is
+#   exhaustive over.
 # fm_captain_actionable($r) - the predicate. Read the FINAL record, after any
 #   caller-side blocker reclassification, so a caller that rewrites
 #   unresolved_blocker_ids decides for itself whether to re-evaluate it.
-# fm_captain_withheld_reason($r) - why a captain-kind hold is not on the surface.
+# fm_captain_withheld_reason($r) - why a candidate captain-kind hold is not on the
+#   surface.
 #   Never null for such a record: an unforeseen shape returns "unclassified"
 #   rather than falling out of the disclosure, because silently dropping a
 #   withheld record is the exact failure this file exists against.
@@ -72,15 +86,15 @@
 FM_CAPTAIN_ACTIONABLE_JQ='
   def fm_captain_held($r):
     ($r.structured == true) and ($r.hold_kind == "captain");
+  def fm_captain_candidate($r):
+    fm_captain_held($r) and ($r.state != "done");
   def fm_captain_actionable($r):
-    fm_captain_held($r)
-    and ($r.state != "done")
+    fm_captain_candidate($r)
     and ($r.hold_reason != null)
     and ((($r.unresolved_blocker_ids // []) | length) == 0)
     and ((($r.answered_pending_close // false)) | not);
   def fm_captain_withheld_reason($r):
-    if ($r.state == "done") then "state_terminal"
-    elif ($r.hold_reason == null) then "hold_reason_missing"
+    if ($r.hold_reason == null) then "hold_reason_missing"
     elif (($r.answered_pending_close // false)) then "answered_pending_close"
     elif ((($r.unresolved_blocker_ids // []) | length) > 0) then "blocked_by_unresolved"
     elif ((($r.dangling_blocker_ids // []) | length) > 0) then "dangling_blocker_edge"
@@ -89,7 +103,7 @@ FM_CAPTAIN_ACTIONABLE_JQ='
     if ($r | has("captain_actionable")) then ($r.captain_actionable == true)
     else fm_captain_actionable($r) end;
   def fm_captain_actionable_omitted($records):
-    [ $records[] | select(fm_captain_held(.) and (fm_captain_returned(.) | not)) ]
+    [ $records[] | select(fm_captain_candidate(.) and (fm_captain_returned(.) | not)) ]
     | group_by(fm_captain_withheld_reason(.))
     | map({surface:"captain_actionable",
            reason:fm_captain_withheld_reason(.[0]),
