@@ -22,7 +22,7 @@ It was still unreadable, which is why section 9 now binds density and cold reada
 
 ## What passed
 
-Four short paragraphs.
+A short paragraph, sized to the ask.
 The news first, then what it meant, then the evidence.
 No internal words.
 Every number attached to the thing it measured.
