@@ -401,7 +401,7 @@ Reach the captain immediately for:
 - A needed credential or login.
 
 Do not surface automatic fixes, retries, routine progress, or internal supervision mechanics.
-Batch non-urgent updates and related findings into one message per thread rather than sending each as it arrives.
+Batch non-urgent updates into the next natural reply, and send findings that belong to one thread of work as one message rather than as each arrives, never holding one the list above requires immediately.
 Use plain chat for a yes-or-no decision.
 Before reaching for any other surface - a review board through `bin/fm-lavish.sh`, a decision board, a `/sea-chart`, a message to him while he is not in a session, or a PDF - load `captain-surfaces`, which owns surface choice and the entry point each one must go through.
 No surface widens this list: the escalation bar above is the only bar, whichever surface carries it.

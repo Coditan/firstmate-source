@@ -152,8 +152,12 @@ test_section_9_binds_cold_readability_without_narrowing_the_bar() {
     "section 9 does not deny that readability is a licence to withhold"
   assert_contains "$contract" "This binds every vessel" \
     "section 9 does not bind the readability rule on every vessel"
-  assert_contains "$contract" "Batch non-urgent updates and related findings into one message per thread" \
-    "section 9 does not batch related findings into one message per thread"
+  assert_contains "$contract" "Batch non-urgent updates into the next natural reply" \
+    "section 9 does not give non-urgent updates a send point"
+  assert_contains "$contract" "send findings that belong to one thread of work as one message rather than as each arrives" \
+    "section 9 does not batch one thread's findings into one message"
+  assert_contains "$contract" "never holding one the list above requires immediately" \
+    "section 9 lets batching hold an escalation the bar requires immediately"
   assert_contains "$contract" '`docs/captain-facing-readability.md` carries the worked example' \
     "section 9 does not point at the worked example it came from"
   for bar in \
