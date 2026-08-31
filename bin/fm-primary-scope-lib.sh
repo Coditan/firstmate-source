@@ -33,11 +33,14 @@ fm_primary_scope_matches() {
 }
 
 # Return 0 when the session that invoked this hook is the one operating $2, the
-# home this session would be operating, which both call sites resolve as FM_ROOT:
-# the checkout the running hook was loaded from ($1) resolves to that same home.
-# The home whose supervision was judged derives from FM_HOME instead, and FM_ROOT
-# and FM_HOME coincide on every path traced, so nothing depends on that
-# difference today.
+# checkout-derived firstmate root, which all three call sites resolve as FM_ROOT:
+# the checkout the running hook was loaded from ($1) resolves to that same root.
+# The addressee is therefore decided from WHERE the guard was loaded, not from
+# which home it went on to judge. FM_ROOT and FM_HOME are not interchangeable
+# here: they diverge whenever FM_HOME names a home other than the checkout, which
+# docs/configuration.md documents as the normal meaning of FM_HOME.
+# The known limit of deciding it this way is recorded at the bin/fm-guard.sh call
+# site and tracked as backlog item fm-guard-addressee-fm-root-callers.
 # Firstmate runs the tracked hooks out of its own home, and so does a secondmate
 # in its own home, so both match.
 # A crewmate or scout runs the very same tracked hooks out of its disposable task

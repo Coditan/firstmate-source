@@ -942,6 +942,15 @@ families_for_changed_path() {
       # gate, whose test lives in the pure-contract-unit family.
       printf '%s\n' pure-contract-unit
       ;;
+    bin/fm-primary-scope-lib.sh)
+      printf '%s\n' pure-contract-unit
+      # fm_session_operates_home decides the banner wording of bin/fm-guard.sh and
+      # bin/fm-turnend-guard.sh, whose owning suites all live in watcher-wake-lock,
+      # and the relay classifies those banner lines by prefix. Select what covers
+      # the behaviour, not just the lib's own contract test.
+      printf '%s\n' watcher-wake-lock
+      printf '%s\n' "__script_required__:fm-bridge-relay.test.sh"
+      ;;
     bin/fm-guard.sh)
       printf '%s\n' watcher-wake-lock
       # bin/fm-bridge-relay.sh matches this script's supervision alarms line by
@@ -1040,7 +1049,7 @@ families_for_changed_path() {
     bin/fm-decision-hold.sh|bin/fm-supervision*|bin/fm-transition-lib.sh|\
     bin/fm-tmux-lib.sh|bin/fm-marker-lib.sh|bin/fm-operational-input.sh|bin/fm-tasks-axi-lib.sh|\
     bin/fm-axi-path-lib.sh|\
-    bin/fm-primary-scope-lib.sh|bin/fm-project-mode.sh|bin/fm-promote.sh|\
+    bin/fm-project-mode.sh|bin/fm-promote.sh|\
     bin/fm-ff-lib.sh|bin/fm-gotmp*|bin/*pretool*)
       printf '%s\n' pure-contract-unit
       ;;
