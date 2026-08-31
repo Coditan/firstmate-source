@@ -211,8 +211,10 @@ test_custom_registration_cli_explains_its_boundary() {
     "custom-check help did not name the pre-existing check path"
   assert_contains "$out" 'mode 0700' \
     "custom-check help did not name the private executable mode"
-  assert_contains "$out" 'neither creates the check nor gives it a wall-clock cadence' \
-    "custom-check help blurred registration with creation or scheduling"
+  assert_contains "$out" 'neither creates the check' \
+    "custom-check help blurred registration with creation"
+  assert_contains "$out" 'cadence' \
+    "custom-check help blurred registration with scheduling"
   assert_contains "$out" 'FM_CHECK_INTERVAL' \
     "custom-check help did not name the sweep interval the watcher actually uses"
   [ ! -e "$home" ] || fail "custom-check help created operational home state"

@@ -11,8 +11,12 @@
 # SHA-256 hash; register it again after changing its bytes.
 #
 # This command neither creates the check nor gives it a wall-clock cadence.
-# The watcher sweeps every state/*.check.sh once per FM_CHECK_INTERVAL seconds
-# (default 300) and runs each registered one, so a check that must run less often
+# The watcher sweeps state/*.check.sh no more often than once per
+# FM_CHECK_INTERVAL seconds (default 300), and a sweep stops at the first
+# registered check that reports. It stamps the interval before it stops, so the
+# checks sorted after that one wait for the next sweep rather than running later
+# in the same pass: a check is not guaranteed to run once per interval when an
+# earlier-sorting check is chatty. A check that must run less often therefore
 # owns that schedule itself and stays silent when it is not due.
 set -u
 
