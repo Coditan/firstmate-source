@@ -10,6 +10,12 @@
 # and every state/*.status.
 # Every one of those reads is UNCONDITIONAL at every session start, so they
 # belong in a script, not in N agent turns.
+# A harness tool-result limit can still keep stdout from reaching the session.
+# The REQUIRED SESSION READS block therefore leads every potentially verbose
+# subsection and tells the session to read data/captain.md and data/learnings.md
+# itself in bounded chunks through EOF.
+# Their later full copies remain compatibility output for harnesses that deliver
+# the complete digest, but printing those copies is not delivery proof.
 #
 # COMPOSITION, NOT DUPLICATION: this script calls fm-lock.sh, fm-bootstrap.sh,
 # and fm-wake-drain.sh as real subprocesses and prints their real output. It
@@ -44,6 +50,12 @@
 #                       health: bin/fm-vessel-identity.sh owns the mechanics and
 #                       docs/vessel-identity.md owns what it shows when a moved
 #                       vessel's old seat is still running.
+#   0c. required reads - before any potentially verbose output, tell the
+#                       session to read data/captain.md and data/learnings.md
+#                       itself in bounded chunks through EOF after this command
+#                       returns. The block states PRESENT or ABSENT for each
+#                       path, so tool-output truncation cannot silently turn a
+#                       printed file into a false delivery claim.
 #   1. lock          - acquire the per-home session lock FIRST, before any
 #                       shared-state mutating step runs.
 #   2. bootstrap      - detect-only diagnostics always run. The eight
@@ -90,6 +102,8 @@
 #                       then data/projects.md, data/secondmates.md,
 #                       data/captain.md, data/captain-shared.md,
 #                       data/learnings.md: read-only, always safe, always runs.
+#                       The captain and learnings copies are compatibility
+#                       output; step 0c owns their delivery to the session.
 #   7. fleet digest   - a compact data/backlog.md identity/metadata listing,
 #                       the standing context-ceiling condition from
 #                       docs/context-reset.md, every state/*.meta, a bounded
@@ -365,6 +379,23 @@ print_bounded_file_head() {
   fi
 }
 
+print_required_session_read_state() {
+  local path=$1 label=$2
+  if [ -f "$path" ]; then
+    printf '%s: PRESENT - %s\n' "$label" "$path"
+  else
+    printf '%s: ABSENT - %s\n' "$label" "$path"
+  fi
+}
+
+print_required_session_reads() {
+  printf 'REQUIRED SESSION READS\n'
+  printf 'Before any action, read every PRESENT path in bounded chunks and continue until EOF.\n'
+  printf 'Later full copies are compatibility output, not delivery proof.\n'
+  print_required_session_read_state "$DATA/captain.md" "data/captain.md"
+  print_required_session_read_state "$DATA/learnings.md" "data/learnings.md"
+}
+
 print_backlog_pointer() {
   printf 'Full task bodies remain available on demand: tasks-axi show <id> --full when compatible tasks-axi is available, or data/backlog.md.\n'
 }
@@ -470,6 +501,11 @@ pi_extension_loaded() {
   [ -n "$marker_pid" ] || return 1
   [ "$marker_version" = "$expected_version" ] && [ "$marker_pid" = "$lock_pid" ]
 }
+
+# Tool-output limits differ by harness and can replace or truncate the digest
+# after this process exits. Put the session-owned reads ahead of every verbose
+# subsection so even a short preview still carries the recovery path.
+print_required_session_reads
 
 # --- 0. captain and learnings priority head -------------------------------
 section "CAPTAIN AND LEARNINGS - BOUNDED SUBSET"
@@ -829,12 +865,15 @@ This script never starts long-lived polls itself.
 EOF
 fi
 cat <<'EOF'
-This command emitted the complete session-start digest, but the receiving
-harness may have delivered only a preview. If you are reading its saved full
-output, do NOT re-read data/projects.md, data/secondmates.md, data/captain.md,
-data/captain-shared.md, data/learnings.md, or state/*.meta now - those files
-were printed in full there. Do NOT bulk-read data/backlog.md now either from
-the saved full output: its compact listing includes targeted full-body pointers.
+The script's digest above is complete, but model-visible tool output may be shorter.
+The REQUIRED SESSION READS block at the top still applies now.
+Compatibility context still includes full copies of data/captain.md,
+data/captain-shared.md, and data/learnings.md;
+REQUIRED SESSION READS governs which files must be read again after this command.
+Do NOT re-read data/projects.md, data/secondmates.md,
+data/captain-shared.md, or state/*.meta now - they were just printed in full.
+Do NOT bulk-read data/backlog.md now either: the compact identity/metadata
+listing was just printed with a pointer for targeted full-body follow-up.
 Do NOT bulk-read state/*.status now either: their bounded tails were just
 printed there with full log paths for targeted older-history follow-up.
 If you received only a preview, open the `Full output saved to` path named in
@@ -844,8 +883,7 @@ The settled captain decisions printed above are answers he has ALREADY given.
 Treat them as decided. Do not re-ask a question they answer, and do not
 paraphrase one back to him as though it were still open; if one of them needs
 revisiting, say which answer you are reopening and why.
-After reading the saved full output, re-read a file only if that digest flagged
-it ABSENT (then
+Outside REQUIRED SESSION READS, re-read a file only if this digest flagged it ABSENT (then
 rebuild or create it per AGENTS.md), its contents looked unparseable/corrupt,
 or an individual full status log is needed for older wake-event history.
 EOF
