@@ -29,6 +29,11 @@
 # home's data/projects.md first, preserving their parsed skip lines for missing
 # or non-repository entries, then scans this home's projects dir for
 # unregistered directories only when they are git roots.
+# A registry that is PRESENT and cannot be read stops the whole-fleet form with
+# "fleet: STUCK: cannot read the project registry ..." on stdout and exit 3,
+# because a home that cannot tell which projects it has must not report that it
+# has none. An ABSENT registry is not a fault: the directory scan is the whole
+# answer for a home that registers nothing.
 # The single-project form accepts either a path (absolute, or relative to the
 # caller's cwd) or a bare "<name>"/"projects/<name>" form, resolved against
 # this home's projects dir ($FM_HOME/projects, or $FM_PROJECTS_OVERRIDE).
@@ -81,6 +86,35 @@ project_label() {
     projects/*) basename "$PROJ" ;;
     *) printf '%s\n' "$PROJ" ;;
   esac
+}
+
+# AN UNREADABLE REGISTRY IS NOT AN EMPTY ONE. registered_project_names is called in
+# a command substitution, so its exit status is discarded by the `for` that consumes
+# it: a parse that failed used to fall through to an empty name list, every
+# registered project dropped out of the run without a line, and the whole-fleet form
+# exited 0. Nothing downstream - bootstrap's relay included - could tell a home with
+# no projects from a home that could not look. So the readability of the registry is
+# established ONCE, before the walk, by a function that names the concrete cause.
+#
+# An ABSENT registry is not a fault: a home that registers no projects has no file,
+# and the directory scan below is the whole answer for it.
+registry_fault() {  # prints why the registry cannot be read, and returns 0 when so
+  [ -e "$REG" ] || return 1
+  if [ ! -f "$REG" ]; then
+    printf 'not a regular file\n'
+    return 0
+  fi
+  if [ ! -r "$REG" ]; then
+    printf 'permission denied\n'
+    return 0
+  fi
+  # Readable by mode and still unreadable in fact - an I/O error, a dead network
+  # mount - is only visible by reading it.
+  if ! awk 'END { }' "$REG" 2>/dev/null; then
+    printf 'the registry could not be parsed\n'
+    return 0
+  fi
+  return 1
 }
 
 registered_project_names() {
@@ -454,6 +488,14 @@ sync_project() {
 if [ $# -eq 1 ]; then
   sync_project "$(resolve_project_arg "$1")"
   exit 0
+fi
+
+# The refusal goes to STDOUT and carries the "STUCK:" word its readers classify by:
+# bin/fm-bootstrap.sh relays this stream and discards stderr, so a registry fault
+# announced on stderr alone would be a fault nobody hears.
+if REG_FAULT=$(registry_fault); then
+  echo "fleet: STUCK: cannot read the project registry $REG: $REG_FAULT - this home cannot tell which projects it has, so it is not reporting that it has none - needs attention"
+  exit 3
 fi
 
 for name in $(registered_project_names); do
