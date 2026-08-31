@@ -28,6 +28,14 @@ section_9() {
   ' "$AGENTS"
 }
 
+immediate_escalation_list() {
+  section_9 | awk '
+    /^Reach the captain immediately for:$/ { found = 1; next }
+    found && /^Do not surface automatic fixes/ { exit }
+    found { print }
+  '
+}
+
 test_section_9_owns_positive_translation_contract() {
   local contract
   contract=$(section_9)
@@ -138,14 +146,15 @@ test_verbatim_internal_evidence_is_rejected_from_chat() {
 # session. This pins the cold-readability axis and, in the same test, that it did
 # not become a licence to withhold: the escalation list must survive intact.
 test_section_9_binds_cold_readability_without_narrowing_the_bar() {
-  local contract
+  local contract bar_list
   contract=$(section_9)
+  bar_list=$(immediate_escalation_list)
   assert_contains "$contract" "readable by someone who was not in the session" \
     "section 9 does not bind cold readability"
   assert_contains "$contract" "Lead with what happened and what it means for the project, then the evidence" \
     "section 9 does not put the news before the evidence"
-  assert_contains "$contract" "Introduce any term he has not already been given in the same breath as its first use, and attach every number to the thing it measures." \
-    "section 9 does not bind unintroduced terms and unattached numbers"
+  assert_contains "$contract" "Introduce every term a reader arriving cold would not know in the same breath as its first use, and attach every number to the thing it measures." \
+    "section 9 does not hold terms and numbers to the cold reader"
   assert_contains "$contract" "Match the length to the ask" \
     "section 9 does not bind length to the size of the ask"
   assert_contains "$contract" "it shortens what he reads rather than narrowing what reaches him" \
@@ -160,14 +169,16 @@ test_section_9_binds_cold_readability_without_narrowing_the_bar() {
     "section 9 lets batching hold an escalation the bar requires immediately"
   assert_contains "$contract" '`docs/captain-facing-readability.md` carries the worked example' \
     "section 9 does not point at the worked example it came from"
+  [ -n "$bar_list" ] || fail "section 9 lost the immediate-escalation list under its own heading"
   for bar in \
-    "Work ready for their review, with the full PR URL." \
-    "Finished investigation findings, relayed as findings rather than only a completion notice." \
-    "Gate findings that require their decision under the configured authority." \
-    "A real blocker or failure after the relevant playbook is exhausted." \
-    "Anything destructive, irreversible, or security-sensitive." \
-    "A needed credential or login."; do
-    assert_contains "$contract" "$bar" "section 9 escalation bar lost '$bar'"
+    "- Work ready for their review, with the full PR URL." \
+    "- Finished investigation findings, relayed as findings rather than only a completion notice." \
+    "- Gate findings that require their decision under the configured authority." \
+    "- A real blocker or failure after the relevant playbook is exhausted." \
+    "- Anything destructive, irreversible, or security-sensitive." \
+    "- A needed credential or login."; do
+    assert_contains "$bar_list" "$bar" \
+      "section 9 no longer escalates immediately for '$bar'"
   done
   assert_present "$READABILITY" "the worked example section 9 points at is missing"
   assert_grep "make it binding on every vessel" "$READABILITY" \
