@@ -923,6 +923,11 @@ pass "an unbindable address with no working proxy is reported as loopback rather
 : > "$FM_TEST_TS_SERVE_LOG"
 node "$PROBE" addr 1.2.3.4.5 >/dev/null 2>&1
 expect_code 1 "$?" "a bind that failed for a port-scoped reason answers nothing about the address"
+# Seeded rather than inherited: this vessel binds loopback, so a record claiming
+# the tailnet address is exactly what it must refuse to carry forward, and a case
+# that leans on whatever an earlier case last wrote proves nothing about that.
+printf 'port=4816\nreachability=tailnet\nreachability_evidence=probed\n' \
+  > "$HOME_B/state/service-port.lavish"
 portscoped=$(FM_TEST_TS_MODE=portscoped FM_HOME="$HOME_B" FM_SERVICE_PORT_RANGE=4816-4817 \
   "$ROOT/bin/fm-service-port.sh" lavish 2>&1)
 expect_code 0 "$?" "an address nothing could answer for still gets a board, on loopback"
@@ -938,7 +943,11 @@ assert_not_contains "$portscoped" "EADDRNOTAVAIL" \
 [ "$(field reachability "$portscoped")" != tailnet-proxied ] \
   || fail "a port-scoped failure must not claim a proxy reach nothing tested"
 [ "$(field reachability "$portscoped")" != tailnet ] \
-  || fail "nor reach on an address no bind ever succeeded on"
+  || fail "nor reach on an address no bind ever succeeded on, even carried from a record"
+assert_grep "addr=127.0.0.1" "$HOME_B/state/service-port.lavish" \
+  "the published record binds loopback"
+grep -q '^reachability=tailnet$' "$HOME_B/state/service-port.lavish" \
+  && fail "and must not publish a verdict its own bind address disproves: $(cat "$HOME_B/state/service-port.lavish")"
 # Reading serve status is how the run learns whether a route already exists;
 # what it must not do is make one, and a publication is what carries --http=.
 grep -q -- '--http=' "$FM_TEST_TS_SERVE_LOG" \

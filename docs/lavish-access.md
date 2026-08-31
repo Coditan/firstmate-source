@@ -112,6 +112,9 @@ The rule is that no URL is emitted implying reach the vessel has not established
 - **The link host does not answer after the board opens** - the wrapper names the address form that does work.
 - **Every candidate port is taken** - `bin/fm-service-port.sh` exits non-zero with one plain sentence and no board is opened.
   There is deliberately no silent loopback downgrade here, because that would reproduce the original bug somewhere new.
+- **The walk failed on an address this run never established as bindable** - a different state from the one above, and it degrades rather than refusing.
+  Nothing has shown whether that address can carry a bind at all, so the failure is not evidence about the window either, and the walk is retried on loopback with the proxy published as it is for an address proved unbindable.
+  The refusal above stands only where the window itself is what ran out; `bin/fm-service-port.sh`'s exit-code note owns which failure is which.
 - **The address cannot be bound at all** - the vessel says so and is served anyway, over a published proxy; see "A tailnet address that cannot be bound" below.
   When even that is unavailable the allocator degrades to `reachability=loopback` carrying the same diagnosis, because a proxy that could not be published is not reach.
   The wrapper says `this vessel is not reachable off this machine (<reason>) - this board opens only on this machine.` on that degrade, not the no-tailnet sentence above, because this node does have a tailnet address and sending the reader hunting a missing one is the misdirection the reason lines exist to avoid.
