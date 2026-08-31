@@ -449,7 +449,8 @@ EOF
   make_fake_ps_claude "$fakebin"
 
   printf 'CAPTAIN-LONG-FIRST-LINE:' > "$home/data/captain.md"
-  printf '%0600d\n' 0 >> "$home/data/captain.md"
+  printf '%0487d' 0 >> "$home/data/captain.md"
+  printf 'é%0100d\n' 0 >> "$home/data/captain.md"
   printf 'LEARNINGS-LONG-FIRST-LINE:' > "$home/data/learnings.md"
   printf '%0600d\n' 0 >> "$home/data/learnings.md"
 
@@ -462,6 +463,8 @@ EOF
     'an oversized learnings first line contributed no content to the bounded subset'
   assert_contains "$first_2048" '[partial final line; truncated at 512 bytes]' \
     'an oversized first line was not explicitly labeled partial'
+  printf '%s' "$out" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 || \
+    fail 'a multibyte character straddling byte 512 produced invalid UTF-8 output'
 
   pass 'oversized first lines deliver bounded, explicitly partial content'
 }

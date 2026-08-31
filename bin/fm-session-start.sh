@@ -358,7 +358,7 @@ print_bounded_file_head() {
     END { exit used == 0 }
   ' "$path"
   then
-    head -c "$PAIR_HEAD_BYTES" "$path"
+    head -c "$PAIR_HEAD_BYTES" "$path" | iconv -c -f UTF-8 -t UTF-8 2>/dev/null
     printf '\n[partial final line; truncated at %s bytes]\n' "$PAIR_HEAD_BYTES"
   fi
 }
