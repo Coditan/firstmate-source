@@ -37,9 +37,17 @@ The home whose supervision was judged derives from `FM_HOME` instead, and `FM_RO
 `bin/fm-spawn.sh` prepends only `FM_HOME=<launching home>` to a crewmate's launch command, so with `FM_ROOT_OVERRIDE` unset that file's `FM_ROOT` is the worker's own worktree while the home it judges is still the launching one, and an `FM_ROOT` comparison would answer "operator" for exactly the worker case the split exists to catch.
 Firstmate's own session matches, a secondmate in its own home matches, and a task worktree does not.
 It decides only wording: which home is evaluated and whether that home's supervision is unhealthy are computed identically for both addressees, so a wrong answer here can misaddress a message but can never suppress a refusal.
-An operator keeps the recovery commands verbatim; a worker is told that repairing that home belongs to firstmate, is asked to report the stalled supervision in its task status line, and is handed no command at all.
+An operator keeps the recovery commands verbatim; a worker is told that repairing that home belongs to firstmate and is asked to report the stalled supervision in its task status line.
+On the PreToolUse gate and the turn-end guard that worker message names no command at all.
 `bin/fm-guard.sh` splits three ways rather than two, because its existing `FM_GUARD_READ_ONLY` branch answers whether the session may write and not who it is; its worker branch keeps the border, the headline, the in-flight and beacon line, and the continuation line, and drops only the `Daemon repair:` line and the delivery repair tail.
 That delivery warning keeps its `WARNING: wake delivery listener ` prefix for every addressee, because `bin/fm-bridge-relay.sh` classifies the line by that prefix.
+`bin/fm-guard.sh` is therefore not command-free for a worker: its queued-wakes warning is still gated only on `FM_GUARD_READ_ONLY`, so a worker is still told to drain them with `bin/fm-wake-drain.sh`.
+That branch was left alone on purpose, because `bin/fm-wake-drain.sh` is on the continuity gate's worker allowlist and draining a queue is not the supervision repair `AGENTS.md` section 1 reserves to firstmate.
+
+One limit of this design is accepted rather than fixed.
+The addressee is decided from the checkout the running script was LOADED FROM, so it is only correct when the session runs its own copy.
+Seven callers invoke `"$FM_ROOT/bin/fm-guard.sh"` rather than `"$SCRIPT_DIR/fm-guard.sh"` - `bin/fm-teardown.sh`, `bin/fm-pr-check.sh`, `bin/fm-review-diff.sh`, `bin/fm-merge-local.sh`, `bin/fm-promote.sh`, `bin/fm-fleet-sync.sh` and `bin/fm-spawn.sh` - and when a worker inherits `FM_ROOT_OVERRIDE` naming the launching home those run that home's copy, which reads as the operator and still prints the repair.
+Repointing them is scope resolution, which is a separate open captain decision; the gap is tracked as backlog item `fm-guard-addressee-fm-root-callers`.
 `bin/fm-turnend-guard-grok.sh` and `.opencode/plugins/fm-primary-turnend-guard.js` each prepend their own instruction to the shared banner, so both read the same predicate rather than carrying a second answer.
 The OpenCode plugin resolves the predicate natively in JavaScript against `FM_ROOT_OVERRIDE`, and any unresolvable path answers "not the operator" there too.
 
