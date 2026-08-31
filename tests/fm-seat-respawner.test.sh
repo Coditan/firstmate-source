@@ -316,6 +316,112 @@ test_a_held_episode_is_bounded_and_the_giveup_counts_launches_as_launches() {
   pass "a held episode is bounded and its give-up counts launches as launches"
 }
 
+# THE PANE-STILL-OPEN FACT IS STATED EXACTLY WHEN IT IS TRUE, AND THE TWO WAYS
+# THAT CAN GO WRONG ARE OPPOSITE, SO THEY ARE ASSERTED SEPARATELY.
+#
+# It is the one fact the captain acts on: "a seat is open in this pane and the
+# respawner is deliberately not opening another beside it" sends him to a machine
+# to look at that pane, while "the launches ran out" sends him to start one. A
+# give-up that picks between them by whether any cycle was ever HELD gets both
+# wrong, because a hold is evidence that a pane was open THEN and says nothing
+# about now. This half is the false positive: the episode held, its pane then
+# went away, and the record was retired - so nothing is open and nothing is being
+# refused, and the finding may not say a seat is sitting in some pane it cannot
+# even name.
+test_a_giveup_with_no_standing_record_never_claims_an_open_pane() {
+  local home delivery tmux log status launches findings i
+
+  home=$(make_home giveup-no-record)
+  status="$home/status.txt"
+  delivery="$home/fake-delivery"
+  tmux="$home/fake-tmux"
+  log="$home/tmux.log"
+  printf 'undeliverable: listener pid 1 is up with 1 wake(s) pending, but no session has published where the model turn lives\n' > "$status"
+  write_fake_delivery "$delivery"
+  write_pane_fake_tmux "$tmux" "$log"
+
+  # One launch, then two held cycles, each past its backoff so the pending first
+  # turn is the only thing that can be holding it.
+  i=0
+  while [ "$i" -lt 3 ]; do
+    [ "$i" -eq 0 ] || sleep 3
+    FM_SEAT_FIRST_TURN_DEADLINE=600 FM_SEAT_RESPAWNER_MAX_ATTEMPTS=3 \
+      FM_FAKE_DELIVERY_STATUS="$status" run_respawner_once "$home" "$delivery" "$tmux" \
+      || fail "respawner refused cycle $i"
+    i=$((i + 1))
+  done
+  [ -f "$home/state/.seat-first-turn" ] \
+    || fail "the pending first turn was dropped, so no cycle was actually held"
+
+  # The pane goes: the record is retired and the episode reaches its bound with
+  # holds already spent and nothing left standing.
+  FM_SEAT_FIRST_TURN_DEADLINE=1 FM_SEAT_RESPAWNER_MAX_ATTEMPTS=3 \
+    FM_FAKE_DELIVERY_STATUS="$status" run_respawner_once "$home" "$delivery" "$tmux" \
+    || fail "respawner refused the give-up cycle"
+
+  [ ! -e "$home/state/.seat-first-turn" ] \
+    || fail "the first-turn record still stands, so this is not the no-record case"
+  launches=$(grep -c new-window "$log" 2>/dev/null || printf 0)
+  [ "$launches" = 1 ] \
+    || fail "this episode opened more than one seat; got $launches launches"
+  findings=$(find "$home/data/findings" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')
+  [ "$findings" = 1 ] \
+    || fail "a held episode never reached its bound; got $findings give-up findings"
+  assert_no_grep "pane unknown" "$home/data/findings/"*.json \
+    "the give-up finding placed an open seat in a pane it could not name"
+  assert_no_grep "is still open in pane" "$home/data/findings/"*.json \
+    "the give-up finding claimed a seat was still open when no record stood"
+  assert_grep "holds=2" "$home/data/findings/"*.json \
+    "the held cycles were dropped from the measurement when the pane was gone"
+  assert_grep "1 launch attempt" "$home/data/findings/"*.json \
+    "the give-up finding did not name the one launch that was actually made"
+  pass "a give-up with no standing record never claims an open pane"
+}
+
+# The other direction, and the false negative. Every cycle here is a launch - no
+# cycle is ever held - so an episode that reached its bound on launches alone
+# still ends with the record of its last one standing. The pane IS open, and the
+# fact the captain acts on must be carried whether or not any hold was spent.
+test_a_giveup_reached_without_holds_still_names_the_open_pane() {
+  local home delivery tmux log status launches findings
+
+  home=$(make_home giveup-open-pane)
+  status="$home/status.txt"
+  delivery="$home/fake-delivery"
+  tmux="$home/fake-tmux"
+  log="$home/tmux.log"
+  printf 'undeliverable: listener pid 1 is up with 1 wake(s) pending, but no session has published where the model turn lives\n' > "$status"
+  write_fake_delivery "$delivery"
+  write_pane_fake_tmux "$tmux" "$log"
+
+  # A one-launch bound: the single launch exhausts it, so the bound is reached on
+  # the next cycle before any wait is due and no hold is ever spent.
+  FM_SEAT_FIRST_TURN_DEADLINE=600 FM_SEAT_RESPAWNER_MAX_ATTEMPTS=1 \
+    FM_FAKE_DELIVERY_STATUS="$status" run_respawner_once "$home" "$delivery" "$tmux" \
+    || fail "respawner refused the first unreachable check"
+  [ -f "$home/state/.seat-first-turn" ] \
+    || fail "the launch recorded no pending first turn, so no pane is open to report"
+  FM_SEAT_FIRST_TURN_DEADLINE=600 FM_SEAT_RESPAWNER_MAX_ATTEMPTS=1 \
+    FM_FAKE_DELIVERY_STATUS="$status" run_respawner_once "$home" "$delivery" "$tmux" \
+    || fail "respawner refused the give-up check"
+
+  [ -f "$home/state/.seat-first-turn" ] \
+    || fail "the record was retired, so this is not the still-open case"
+  launches=$(grep -c new-window "$log" 2>/dev/null || printf 0)
+  [ "$launches" = 1 ] \
+    || fail "the bound did not stop the launches; got $launches launches"
+  findings=$(find "$home/data/findings" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')
+  [ "$findings" = 1 ] \
+    || fail "the episode never reached its bound; got $findings give-up findings"
+  assert_grep "is still open in pane %9" "$home/data/findings/"*.json \
+    "an unheld give-up dropped the open pane the captain acts on"
+  assert_grep "not opening another beside it" "$home/data/findings/"*.json \
+    "the give-up finding did not say the silence is a deliberate refusal"
+  assert_grep "holds=0" "$home/data/findings/"*.json \
+    "the hold count was dropped from the measurement when no cycle was held"
+  pass "a give-up reached without holds still names the pane still open"
+}
+
 # The verdict the alarm turns into a sentence on the captain's phone. A
 # respawner that is beating normally while the seat it started never finished
 # starting is not a recovery under way, so it may not answer `up:`.
@@ -603,10 +709,10 @@ test_only_a_provably_dead_watcher_is_revived() {
   pass "only a provably dead watcher is revived, never a live one whose beacon aged out"
 }
 
-# The watcher breaks its check sweep at the FIRST check that prints a line
-# (bin/fm-watch.sh:1698-1701), so "converged on every watcher sweep" is only true
-# if no sibling that speaks sorts ahead of the convergence shim. The seat alarm
-# is the sibling that would, so the two ids carry the ordering. Measured through
+# The watcher runs every due check and defers its wakes to the end of the sweep,
+# so "converged on every watcher sweep" is a property of the sweep and neither
+# shim can displace the other. The two ids therefore carry only an ordering: the
+# restarter's convergence runs before the alarm reads the seat. Measured through
 # the watcher's own glob rather than argued from the names.
 test_convergence_is_swept_before_the_alarm_and_supersedes_its_old_shim() {
   local home shims restart_at vacancy_at i legacy id c
@@ -658,7 +764,7 @@ test_convergence_is_swept_before_the_alarm_and_supersedes_its_old_shim() {
   [ "$restart_at" -ge 0 ] && [ "$vacancy_at" -ge 0 ] \
     || fail "the sweep did not yield both shims: ${shims[*]}"
   [ "$restart_at" -lt "$vacancy_at" ] \
-    || fail "the alarm is swept before the convergence, so it can displace it: ${shims[*]}"
+    || fail "the alarm is swept before the convergence, so the seat is read before it is restarted: ${shims[*]}"
   pass "the restarter's convergence is swept before the alarm and supersedes the old shims"
 }
 
@@ -671,6 +777,8 @@ test_convergence_is_swept_before_the_alarm_and_supersedes_its_old_shim
 test_an_unreadable_lock_never_produces_a_launch
 test_a_pending_first_turn_holds_the_next_launch
 test_a_held_episode_is_bounded_and_the_giveup_counts_launches_as_launches
+test_a_giveup_with_no_standing_record_never_claims_an_open_pane
+test_a_giveup_reached_without_holds_still_names_the_open_pane
 test_a_held_first_turn_is_reported_as_holding_rather_than_up
 test_an_armed_restart_that_never_ran_is_reported
 test_launch_does_not_pin_the_respawners_path

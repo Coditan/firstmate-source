@@ -453,18 +453,19 @@ status_report() {
 # is re-ensured by a process that outlives the seat rather than by a session that
 # cannot start while the seat is gone.
 #
-# THE ID CARRIES THE ORDERING, AND THAT IS WHY "EVERY SWEEP" IS TRUE.
-# bin/fm-watch.sh globs "$STATE"/*.check.sh in collation order and breaks out of
-# the sweep at the FIRST check that prints a line, so a check is only reached on
-# sweeps where no earlier-sorting sibling speaks.  `seat-restart` sorts before
-# `seat-vacancy`, the seat alarm's shim, so the alarm can never displace this
-# one - which matters most in the state the alarm is loudest in: while the
-# captain's channel is refusing, the alarm reprints its line every sweep, and
-# under the old `seat-alarm` / `seat-respawner` ordering that skipped this
-# convergence for the whole outage, exactly when a keeper that died mid-outage
-# needed restarting.  Ordering it first costs the alarm nothing, because this
-# check is SILENT while the restarter is healthy - it prints only when it had to
-# act or cannot - so on an ordinary sweep it does not break anything at all.
+# "EVERY SWEEP" IS A PROPERTY OF THE SWEEP, AND THE ID CARRIES ONLY AN ORDERING.
+# bin/fm-watch.sh globs "$STATE"/*.check.sh in collation order and runs EVERY due
+# check, queueing each speaking check's wake as it goes and delivering once the
+# sweep is over, so no check can displace another and this one is reached whatever
+# a sibling had to say.  `seat-restart` still sorts before `seat-vacancy`, the
+# seat alarm's shim, so the restarter is converged before the seat is read - the
+# useful order while the captain's channel is refusing and the alarm reprints its
+# line every sweep, because a keeper that died mid-outage is restarted before the
+# alarm reports on the seat it was supposed to bring back.  That is an ordering
+# and nothing more: it is not what makes either check reachable, and nothing here
+# may be rewritten to depend on it again.  It costs the alarm nothing either way,
+# because this check is SILENT while the restarter is healthy - it prints only
+# when it had to act or cannot.
 arm_check() {
   local desired current tmp
   desired=$(cat <<SHIM

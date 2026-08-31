@@ -168,8 +168,12 @@
 # State, under FM_HOME/state:
 #   seat-vacancy.check.sh  the armed watcher check (with .check-trust). The id
 #                      sorts AFTER seat-restart.check.sh on purpose, so the
-#                      restarter's convergence is never the check this alarm
-#                      displaces; bin/fm-seat-respawner-service.sh owns why.
+#                      restarter's convergence runs before this alarm reads the
+#                      seat. That is an ordering and nothing more: the watcher
+#                      runs every due check and defers its wakes to the end of
+#                      the sweep, so neither shim can displace the other and
+#                      neither name protects the other's reachability;
+#                      bin/fm-seat-respawner-service.sh owns why.
 #
 # Environment:
 #   FM_SEAT_ALARM_REPEAT    seconds between repeats while absent or unmeasured
