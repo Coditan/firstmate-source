@@ -25,6 +25,10 @@
 # answer at all, so rewording one changes that decision and must re-run
 # tests/fm-bridge-relay.test.sh (bin/fm-test-run.sh selects it from this path).
 # Usage: fm-fleet-sync.sh [<project-dir-or-name>]
+# With no argument, whole-fleet sync processes projects registered in this
+# home's data/projects.md first, preserving their parsed skip lines for missing
+# or non-repository entries, then scans this home's projects dir for
+# unregistered directories only when they are git roots.
 # The single-project form accepts either a path (absolute, or relative to the
 # caller's cwd) or a bare "<name>"/"projects/<name>" form, resolved against
 # this home's projects dir ($FM_HOME/projects, or $FM_PROJECTS_OVERRIDE).
