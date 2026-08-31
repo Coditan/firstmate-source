@@ -30,15 +30,16 @@ It was that away mode had been quietly withdrawing an authority granted elsewher
 
 ## The wording that landed
 
-Two bullets replace the one:
+Three bullets replace the one:
 
 - Away mode changes what reaches the captain, never who approves what: the authority that stands while he is present stands unchanged while he is away, neither widened nor withdrawn.
-- So a merge or an ask-user finding that section 7's approval-authority contract already places with firstmate stays firstmate's while he is away, a merge on that section's own head-commit reading of the required checks and never on a whole-branch view, while destructive actions, irreversible actions, and security-sensitive choices wait for his explicit word however long he is gone.
+- Whatever section 7's approval-authority contract already places with firstmate, a routine merge and an ask-user finding alike, stays firstmate's while he is away, and a merge only on that section's own head-commit reading of the required checks and never on a whole-branch view.
+- Destructive actions, irreversible actions, and security-sensitive choices wait for his explicit word however long he is gone.
 
-Three properties this wording is holding, deliberately:
+Four properties this wording is holding, deliberately:
 
 - **The absolute part of the list did not move.**
-  Destructive actions, irreversible actions and security-sensitive choices are named again, in the same words, and still wait for the captain however long he is gone, because section 7 has firstmate escalate those three even with `yolo` on.
+  Destructive actions, irreversible actions and security-sensitive choices are named again, in the same words, in a bullet of their own, and still wait for the captain however long he is gone, because section 7 has firstmate escalate those three even with `yolo` on.
   Narrowing the merge case must not become cover for widening any of those.
   Ask-user findings sit with merges rather than with those three: section 7 places them with the captain wherever `yolo` is off and with firstmate wherever it is on, so stating them as an absolute wait would have withdrawn an authority granted elsewhere in exactly the way the merge item did.
 - **"Green" has exactly one owner.**
@@ -47,6 +48,10 @@ Three properties this wording is holding, deliberately:
   A second definition of green inside the away-mode stub is the failure mode this note is about, one file later.
 - **`AGENTS.md` is always loaded in full.**
   A reader of the stub at three in the morning has section 7 in front of them, so the cross-reference resolves with nothing else loaded.
+- **Nothing is scoped by proximity.**
+  An earlier attempt carried all three conditions in one sentence, as `a merge or an ask-user finding that section 7 ... already places with firstmate`, where the qualifying clause could be read as reaching only the nearer noun and leaving the merge unconditional, which is reading (b) below arriving as a parse rather than as a claim.
+  The condition is therefore the grammatical subject of its own bullet and names both items it governs, and the absolute three sit in a separate bullet that no conditional clause can reach.
+  A reader never has to decide by proximity which items a qualifier covers.
 
 ## The reading that was rejected, and why
 
@@ -84,7 +89,7 @@ It is a general property of what "green" means, so it belongs to section 7's mer
 
 ## Where this boundary is stated
 
-- `AGENTS.md` section 8, "Away-mode stub" - the two bullets above, always loaded.
+- `AGENTS.md` section 8, "Away-mode stub" - the three bullets above, always loaded.
 - `AGENTS.md` section 7, "Selected delivery path and approval authority" - the merge contract itself, the only owner.
 - `.agents/skills/afk/SKILL.md`, "Orthogonal to approval authority" - the same principle in the skill that away mode actually loads, pointing at section 7 rather than restating it.
 
