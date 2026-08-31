@@ -183,6 +183,12 @@
 #      allocation carrying that diagnosis, so a consumer reads it from
 #      reachability=loopback rather than from an exit code.
 #
+#      Neither 1 nor 3 is reported for a walk that failed on an address this run
+#      never established as bindable: that failure says nothing about the window
+#      on its own, so the walk is retried on loopback and the codes above
+#      describe THAT walk. Refusing on the first failure would deny a board to
+#      exactly the vessel this resolver exists to serve.
+#
 # The port window defaults to 4400-4499: above lavish-axi's compiled-in 4387
 # default so a stray bare invocation never lands on an allocated seat, and far
 # below the ephemeral range. Override with FM_SERVICE_PORT_RANGE=<start>-<end>.
@@ -562,9 +568,44 @@ if [ -z "${PORT:-}" ]; then
 
   # The probe's stderr is deliberately not discarded: it is silent on success,
   # and on failure it is the only thing that names the concrete errnos.
-  # shellcheck disable=SC2086
-  PORT=$(node "$PROBE" bind "$ADDR" $CANDIDATES)
+  bind_in_window() {
+    # shellcheck disable=SC2086
+    PORT=$(node "$PROBE" bind "$1" $CANDIDATES)
+  }
+
+  bind_in_window "$ADDR"
   probe_status=$?
+
+  # An address no probe ever answered for makes EVERY walk failure ambiguous:
+  # the window may be full, or the address may be one nothing here can bind, and
+  # this run cannot tell those apart. Refusing outright would leave the vessel
+  # this whole mechanism exists for with no board at all whenever its address
+  # probe met a port-scoped errno instead of EADDRNOTAVAIL, so the run takes the
+  # same loopback-and-publish fallback a PROVED unbindable address already gets.
+  # The state is what selects this, never the particular status: a run that
+  # tested its address and got an answer never arrives here.
+  if [ "$probe_status" -ne 0 ] && [ -n "$TAILADDR" ] \
+    && [ "$ADDR" = "$TAILADDR" ] && [ "$REACHABILITY" = untested ]; then
+    if [ "$probe_status" -eq 4 ]; then
+      # Every candidate met an address-scoped errno, which is the same verdict
+      # the ephemeral probe failed to reach, established the harder way.
+      fm_reachability_rule_out tailnet
+      if fm_tailnet_serve_available; then
+        add_reason "this node has the tailnet address $TAILADDR but no local interface carries it (every candidate bind failed EADDRNOTAVAIL), which is what tailscale userspace networking mode looks like, so a port cannot be bound on that address and is bound on loopback instead"
+      else
+        set_reachability_or_die loopback probed
+        DNSNAME=""
+        add_reason "this node has the tailnet address $TAILADDR but no local interface carries it (every candidate bind failed EADDRNOTAVAIL) and tailscale serve is not available to publish a loopback port onto it, so nothing here is reachable off this machine"
+      fi
+    else
+      add_reason "no port in $WINDOW_START-$WINDOW_END could be bound on $TAILADDR, and whether that address can be bound here at all was never established, so the window and this host's permissions are both unproved as the cause and a port is bound on loopback instead"
+    fi
+    fm_tailnet_serve_available && PROXY_CANDIDATE=1
+    ADDR=127.0.0.1
+    bind_in_window "$ADDR"
+    probe_status=$?
+  fi
+
   case "$probe_status" in
     0) ;;
     3)
