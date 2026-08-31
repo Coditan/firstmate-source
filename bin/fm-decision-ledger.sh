@@ -379,13 +379,37 @@ memo_key() {
 
 # THE FILE SHAPE IS THE WHOLE POINT. A reuse only wins if reading it back costs
 # less than recomputing it, and the model is a megabyte of JSON: round-tripping it
-# through jq cost more than the walk it was meant to save, measured. So the memo is
-# four lines - `<key> <epoch>`, then the three compact JSON values exactly as the
-# shell already holds them - read back with shell builtins alone. No parse, no
-# process, and the values downstream get are byte-identical to the computed ones.
+# through jq - parsing it and emitting it again - cost more than the walk it was
+# meant to save, measured. So the memo is four lines - `<key> <epoch>`, then the
+# three compact JSON values exactly as the shell already holds them - read back with
+# shell builtins alone, and the values downstream get are byte-identical to the
+# computed ones.
+#
+# WHAT THAT SHAPE MUST NOT BUY IS AN UNPARSED PAYLOAD. Each value used to be
+# accepted on its FIRST CHARACTER: a line opening with `[` was taken as the stored
+# model whether or not any parser could read it, which is what a truncated or
+# interrupted write leaves behind. Downstream then held a value no jq could parse,
+# and `--records` printed nothing and exited 0 - a home holding decisions reporting
+# that it held none, successfully, to the intake gate that reads it. So each payload
+# is now PARSED before it is trusted. On this fleet's largest home (620 records, a
+# 1.3MB memo) that validation costs 92ms against a 1253ms full walk, so the reuse
+# still wins by about a second and it now wins honestly.
 MEMO_CLASSIFIED=""
 MEMO_VERIFIED=""
 MEMO_ALTERED=""
+
+# <payload> <allowed-opening-character>...: the cheap shape check first, so a
+# payload that is not even the right kind of value never reaches jq, then the parse
+# that is the actual test. jq absent is a miss like any other, and a miss recomputes.
+memo_payload_parses() {
+  local payload=$1 opener ok=1
+  shift
+  for opener in "$@"; do
+    case "$payload" in "$opener"*) ok=0; break ;; esac
+  done
+  [ "$ok" -eq 0 ] || return 1
+  printf '%s' "$payload" | jq -e . >/dev/null 2>&1
+}
 
 memo_read() {  # <key>; on a hit fills MEMO_* and returns 0, otherwise returns 1
   local key=$1 header stored_key stored_at now c v a
@@ -399,10 +423,11 @@ memo_read() {  # <key>; on a hit fills MEMO_* and returns 0, otherwise returns 1
   case "$stored_at" in ''|*[!0-9]*) return 1 ;; esac
   now=${EPOCHSECONDS:-$(date +%s)}
   [ "$((now - stored_at))" -ge 0 ] && [ "$((now - stored_at))" -le "$MEMO_TTL" ] || return 1
-  # A truncated or otherwise unreadable payload is a miss, not a guess.
-  case "$c" in '['*|'{'*) ;; *) return 1 ;; esac
-  case "$v" in '['*) ;; *) return 1 ;; esac
-  case "$a" in '['*) ;; *) return 1 ;; esac
+  # A truncated or otherwise unreadable payload is a miss, not a guess - and only a
+  # parse can tell the difference, because the truncation keeps the opening bracket.
+  memo_payload_parses "$c" '[' '{' || return 1
+  memo_payload_parses "$v" '[' || return 1
+  memo_payload_parses "$a" '[' || return 1
   MEMO_CLASSIFIED=$c
   MEMO_VERIFIED=$v
   MEMO_ALTERED=$a
@@ -772,8 +797,14 @@ fi  # end of the full parse-and-classify walk a memo hit skips
 # The intake gate in bin/fm-decision-hold.sh reads this. It is deliberately a flat
 # tab-separated list rather than the full model: the gate needs the identity, the
 # disposition and the question, and nothing it has to parse a body to obtain.
+# A LIST THIS READER COULD NOT BUILD IS NOT AN EMPTY LIST. The gate in
+# bin/fm-decision-hold.sh proceeds when this prints nothing, so a jq that could not
+# read the model here - and every path that could hand it one is a fault, never a
+# clean home - must refuse in one named line rather than exit 0 having printed
+# nothing. A home with no captain records still prints nothing, and jq still exits 0
+# on it: the difference between the two is exactly this status.
 if [ "$MODE" = records ]; then
-  printf '%s' "$CLASSIFIED" | jq -r --arg repo "$RECORDS_REPO" '
+  RECORDS_TSV=$(printf '%s' "$CLASSIFIED" | jq -r --arg repo "$RECORDS_REPO" '
     [.captain[]
      | select($repo == "" or .repo == $repo)
      | {cls: (if .settled then "settled" elif .superseded then "superseded"
@@ -783,7 +814,9 @@ if [ "$MODE" = records ]; then
     | (map(select(.cls == "open")) | sort_by(.id))
       + (map(select(.cls == "settled")) | sort_by(.closed) | reverse)
       + (map(select(.cls == "superseded" or .cls == "answered-elsewhere" or .cls == "closed")) | sort_by(.id))
-    | .[] | [.cls, .id, .repo, .title] | @tsv'
+    | .[] | [.cls, .id, .repo, .title] | @tsv') \
+    || die "could not read this home's captain decision records: jq could not read the record model this read holds, and its own parse error is on stderr above; refusing to report that this home holds no decisions"
+  [ -z "$RECORDS_TSV" ] || printf '%s\n' "$RECORDS_TSV"
   exit 0
 fi
 

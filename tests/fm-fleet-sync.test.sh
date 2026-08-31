@@ -539,6 +539,73 @@ test_non_repo_directory_inside_enclosing_repo_skipped() {
   pass "non-repo container inside an enclosing repository is skipped cleanly"
 }
 
+# AN UNREADABLE REGISTRY IS NOT AN EMPTY ONE. Whole-fleet sync used to take a
+# registry it could not read as a home with nothing registered: the parse failed
+# into an empty name list, every registered project fell out of the run without a
+# line, and the command exited 0. Nothing downstream could tell "this home has no
+# projects" from "this home could not look".
+#
+# These two use a home of their own rather than new_home, because new_home is called
+# in a command substitution and every test in this file therefore shares home-1 with
+# its accumulated clones - which is fine for a per-project outcome and useless for a
+# whole-registry one.
+unreadable_registry_home() {  # <name>; echoes a home whose registry cannot be read
+  local home="$TMP_ROOT/$1"
+  rm -rf "$home"
+  mkdir -p "$home/data" "$home/projects"
+  printf -- '- registered-but-unreadable - test project (added 2026-08-31)\n' \
+    > "$home/data/projects.md"
+  chmod 000 "$home/data/projects.md" || return 1
+  # A root-run suite can still read it, and a test that cannot arrange its own
+  # premise says so instead of passing.
+  if head -c 1 "$home/data/projects.md" >/dev/null 2>&1; then
+    chmod 644 "$home/data/projects.md"
+    return 1
+  fi
+  printf '%s\n' "$home"
+}
+
+test_an_unreadable_registry_is_never_reported_as_an_empty_one() {
+  local home out rc=0
+  home=$(unreadable_registry_home registry-unreadable) || {
+    echo "skip: this environment can still read a mode-000 file (running as root?)"
+    return 0
+  }
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-fleet-sync.sh" 2>/dev/null) || rc=$?
+  chmod 644 "$home/data/projects.md"
+
+  [ "$rc" -ne 0 ] \
+    || fail "a sync that could not read the registry must not report success: $out"
+  assert_contains "$out" "cannot read the project registry" \
+    "the refusal must name the registry as what could not be read: $out"
+  assert_contains "$out" "$home/data/projects.md" \
+    "the refusal must name the concrete file: $out"
+  assert_contains "$out" "permission denied" \
+    "the refusal must name why it could not be read: $out"
+  pass "an unreadable registry is never reported as an empty one"
+}
+
+# THE CALLER MAY NOT DISCARD IT EITHER. bin/fm-bootstrap.sh runs the whole-fleet
+# refresh in the background and threw its exit status away, so even once the sync
+# refuses, a session start would print nothing about the registry it could not read.
+test_bootstrap_surfaces_a_refresh_that_could_not_read_the_registry() {
+  local home out
+  home=$(unreadable_registry_home registry-unreadable-bootstrap) || {
+    echo "skip: this environment can still read a mode-000 file (running as root?)"
+    return 0
+  }
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  chmod 644 "$home/data/projects.md"
+
+  assert_contains "$out" "cannot read the project registry" \
+    "the session start must relay what the fleet refresh could not read: $out"
+  assert_contains "$out" "FLEET_SYNC: fleet: refresh failed" \
+    "the session start must say the refresh itself did not complete: $out"
+  pass "bootstrap surfaces a refresh that could not read the registry"
+}
+
 test_bootstrap_relays_recovered_and_stuck() {
   local home stuck rec out
   home=$(new_home)
@@ -714,6 +781,8 @@ test_whole_fleet_registered_non_repo_project_still_reports
 test_whole_fleet_unregistered_clone_still_syncs
 test_non_repo_directory_inside_enclosing_repo_skipped
 test_bootstrap_relays_recovered_and_stuck
+test_an_unreadable_registry_is_never_reported_as_an_empty_one
+test_bootstrap_surfaces_a_refresh_that_could_not_read_the_registry
 test_orphaned_stale_packed_refs_lock_recovers
 test_live_packed_refs_lock_is_never_removed
 test_live_git_cwd_in_clone_dir_blocks_removal

@@ -1316,6 +1316,82 @@ test_a_reuse_is_read_back_rather_than_recomputed() {
   pass "a reuse is read back rather than recomputed"
 }
 
+# A REUSE THAT DOES NOT PARSE IS NOT A READ. The stored payload used to be accepted
+# on its first character alone, so a memo whose CLASSIFIED line was prefix-shaped but
+# invalid JSON counted as a hit. Every consumer downstream then got a value that no
+# jq could parse, and `--records` - which the intake gate in bin/fm-decision-hold.sh
+# reads - printed nothing and exited 0. A home holding decisions reported that it
+# held none, successfully.
+#
+# The memo's own contract is that every failure path recomputes, so the corrupted
+# payload must cost a full walk and return the records this home actually holds.
+test_a_reuse_that_does_not_parse_never_reads_as_no_records() {
+  local home memo records rc=0
+  home=$(make_home reuse-malformed)
+  printf 'the only answer\n' > "$home/d.txt"
+  run_hold "$home" record probe key --door chat --decision-file "$home/d.txt" \
+    --title "A question" --repo firstmate >/dev/null 2>&1 || fail "recording failed"
+
+  run_ledger "$home" --json --all >/dev/null || fail "the priming read failed"
+  memo="$home/state/.decision-ledger-memo"
+  [ -f "$memo" ] || fail "a full read must leave the computed model for the next caller"
+
+  # Prefix-shaped and invalid: it opens with the character the stored model opens
+  # with, and no parser can read it. A truncated write leaves exactly this.
+  { head -n 1 "$memo"
+    printf '%s\n' '[{"captain":['
+    sed -n '3,4p' "$memo"
+  } > "$memo.rewritten" || fail "could not stage the malformed memo"
+  mv -f "$memo.rewritten" "$memo" || fail "could not replace the memo"
+
+  records=$(run_ledger "$home" --records) || rc=$?
+  [ "$rc" -eq 0 ] || fail "a malformed reuse must cost a walk, not a refusal (exit $rc): $records"
+  assert_contains "$records" "probe-decision-key" \
+    "a malformed reuse must not make this home report that it holds no decision records: [$records]"
+
+  pass "a reuse that does not parse never reads as no records"
+}
+
+# THE GATE MAY NOT PROCEED ON A READ THAT DID NOT HAPPEN. bin/fm-decision-hold.sh
+# refuses a new question until the filer has disposed of the ones already open, and
+# it learns what is open from `--records`. That call discarded its own failure into
+# an empty list, so a home whose records could not be read filed the new question
+# unchallenged - the one outcome this gate exists to prevent.
+test_the_intake_gate_refuses_when_the_records_cannot_be_read() {
+  local home archive out rc=0
+  home=$(make_home gate-unreadable-records)
+  printf 'the first answer\n' > "$home/d1.txt"
+  printf 'the second answer\n' > "$home/d2.txt"
+  run_hold "$home" record probe key --door chat --decision-file "$home/d1.txt" \
+    --title "A question" --repo firstmate >/dev/null 2>&1 || fail "recording failed"
+
+  # An archive file that exists and cannot be read: the ledger stops rather than
+  # guessing, which is what the gate then has to notice.
+  archive="$home/data/done-archive.md"
+  printf '## Done\n' > "$archive"
+  chmod 000 "$archive" || fail "could not make the archive unreadable"
+  if run_ledger "$home" --records >/dev/null 2>&1; then
+    chmod 644 "$archive"
+    echo "skip: this environment can still read a mode-000 file (running as root?)"
+    return 0
+  fi
+  rm -f "$home/state/.decision-ledger-memo"
+
+  out=$(run_hold "$home" record probe3 key3 --door chat --decision-file "$home/d2.txt" \
+    --title "Third question" --repo firstmate 2>&1) || rc=$?
+  chmod 644 "$archive"
+
+  [ "$rc" -ne 0 ] \
+    || fail "the gate filed a new decision on records it could not read: $out"
+  assert_contains "$out" "could not read" \
+    "the refusal must name what could not be read rather than a generic failure: $out"
+  case "$out" in
+    *"recorded: probe3-decision-key3"*) fail "the record was filed anyway: $out" ;;
+  esac
+
+  pass "the intake gate refuses when the records cannot be read"
+}
+
 # The reuse must be a cost decision and nothing else: turning it off must not change
 # a single byte of what a reader is shown.
 test_turning_the_reuse_off_changes_no_output() {
@@ -1372,3 +1448,5 @@ test_a_recheck_that_cannot_size_its_input_refuses_instead_of_reporting
 test_a_reused_read_is_dropped_the_moment_the_records_change
 test_a_reuse_is_read_back_rather_than_recomputed
 test_turning_the_reuse_off_changes_no_output
+test_a_reuse_that_does_not_parse_never_reads_as_no_records
+test_the_intake_gate_refuses_when_the_records_cannot_be_read
