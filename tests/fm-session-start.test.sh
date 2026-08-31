@@ -990,6 +990,15 @@ SH
   assert_contains "$out" "The Telegram receiver is service-owned and needs no tracked task" \
     "next step tried to start a fallback for a degraded service-owned receiver"
 
+  rm -f "$home/config/telegram.env"
+  printf '%s\n' 'receiver service stop and disable failed during deconfiguration retirement' \
+    > "$home/state/.tg-recv-retirement-failure"
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" "receiver service stop and disable failed during deconfiguration retirement" \
+    "session start hid the durable deconfiguration retirement failure"
+  assert_not_contains "$out" "inactive (config/telegram.env absent)" \
+    "session start falsely reported inactive while retirement remained failed"
+
   pass "session start exposes degraded persistent Telegram service ownership"
 }
 

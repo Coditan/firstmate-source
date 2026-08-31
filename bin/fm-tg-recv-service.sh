@@ -32,6 +32,7 @@ SERVICE_ENV="$STATE/.tg-recv-service.env"
 SERVICE_HANDOFF_MARKER="$STATE/.tg-recv-service-handoff"
 SERVICE_HANDOFF_LOCK="$STATE/.tg-recv-service-handoff.lock"
 RECEIVER_OWNER_FILE="$STATE/.tg-recv-owner"
+RETIREMENT_FAILURE="$STATE/.tg-recv-retirement-failure"
 RECV_LOCK="$STATE/.tg-recv.lock"
 CONFIRM_TIMEOUT=${FM_TG_RECV_CONFIRM_TIMEOUT:-10}
 case "$CONFIRM_TIMEOUT" in ''|*[!0-9]*|0) CONFIRM_TIMEOUT=10 ;; esac
@@ -192,19 +193,41 @@ write_handoff_marker() {
   mv -f "$tmp" "$SERVICE_HANDOFF_MARKER"
 }
 
+record_retirement_failure() {
+  local reason=$1 tmp
+  mkdir -p "$STATE" || return 1
+  tmp=$(mktemp "$RETIREMENT_FAILURE.XXXXXX") || return 1
+  printf '%s\n' "$reason" > "$tmp" || { rm -f "$tmp"; return 1; }
+  chmod 600 "$tmp" || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$RETIREMENT_FAILURE"
+}
+
 retire_service_ownership() {
   local unit
   owned || return 0
-  systemd_usable || return 1
-  unit=$(unit_instance) || return 1
-  fm_lock_acquire_wait "$SERVICE_HANDOFF_LOCK" || return 1
-  write_handoff_marker || { fm_lock_release "$SERVICE_HANDOFF_LOCK"; return 1; }
-  if ! "$SYSTEMCTL" --user disable --now "$unit" || ! retire_harness_receiver; then
+  systemd_usable || { record_retirement_failure "systemd user manager unavailable during deconfiguration retirement"; return 1; }
+  unit=$(unit_instance) || { record_retirement_failure "receiver unit identity unavailable during deconfiguration retirement"; return 1; }
+  fm_lock_acquire_wait "$SERVICE_HANDOFF_LOCK" \
+    || { record_retirement_failure "receiver ownership gate unavailable during deconfiguration retirement"; return 1; }
+  write_handoff_marker || {
+    record_retirement_failure "receiver handoff fence unavailable during deconfiguration retirement"
+    fm_lock_release "$SERVICE_HANDOFF_LOCK"
+    return 1
+  }
+  if ! "$SYSTEMCTL" --user disable --now "$unit"; then
+    record_retirement_failure "receiver service stop and disable failed during deconfiguration retirement"
+    rm -f "$SERVICE_HANDOFF_MARKER"
+    fm_lock_release "$SERVICE_HANDOFF_LOCK"
+    return 1
+  fi
+  if ! retire_harness_receiver; then
+    record_retirement_failure "receiver process retirement failed during deconfiguration"
     rm -f "$SERVICE_HANDOFF_MARKER"
     fm_lock_release "$SERVICE_HANDOFF_LOCK"
     return 1
   fi
   rm -f "$RECEIVER_OWNER_FILE" "$SERVICE_ENV"
+  rm -f "$RETIREMENT_FAILURE"
   rm -f "$SERVICE_HANDOFF_MARKER"
   fm_lock_release "$SERVICE_HANDOFF_LOCK"
 }
@@ -328,6 +351,7 @@ bootstrap_check() {
         echo "TELEGRAM_RECEIVER_UNIT: configuration absent; persistent service ownership needs locked retirement"
       elif ! retire_service_ownership; then
         echo "TELEGRAM_RECEIVER_UNIT: configuration absent but persistent service ownership retirement failed"
+        return 1
       fi
     fi
     return 0
@@ -365,6 +389,10 @@ owned() {
 
 ownership_status() {
   owned || { echo "fallback: receiver ownership is not assigned to systemd"; return 1; }
+  if [ -s "$RETIREMENT_FAILURE" ]; then
+    printf 'down: %s\n' "$(cat "$RETIREMENT_FAILURE" 2>/dev/null || printf 'deconfiguration retirement failed')"
+    return 1
+  fi
   systemd_usable || { echo "down: systemd user manager is unavailable"; return 1; }
   systemd_installed || { echo "down: receiver service unit is not installed"; return 1; }
   systemd_enabled || { echo "down: receiver service unit is disabled"; return 1; }

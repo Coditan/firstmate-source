@@ -16,7 +16,8 @@ make_fake_systemd() {
 set -u
 printf '%s\n' "$*" >> "${FM_TEST_SYSTEMCTL_LOG:?}"
 case "$*" in
-  '--user show-environment'|'--user daemon-reload') exit 0 ;;
+  '--user show-environment') [ "${FM_TEST_SYSTEMD_UNAVAILABLE:-0}" != 1 ] ;;
+  '--user daemon-reload') exit 0 ;;
   '--user is-enabled --quiet '*) [ -e "${FM_TEST_SYSTEMD_ENABLED:?}" ] ;;
   '--user is-active --quiet '*) [ -e "${FM_TEST_SYSTEMD_ACTIVE:?}" ] ;;
   '--user enable --now '*)
@@ -48,6 +49,7 @@ case "$*" in
     touch "$FM_TEST_SYSTEMD_ACTIVE"
     ;;
   '--user disable --now '*)
+    [ "${FM_TEST_DISABLE_FAIL:-0}" != 1 ] || exit 1
     old_pid=$(cat "$FM_TEST_SERVICE_PID" 2>/dev/null || true)
     case "$old_pid" in ''|*[!0-9]*) ;; *) kill -TERM "$old_pid" 2>/dev/null || true ;; esac
     for _ in $(seq 1 50); do
@@ -87,6 +89,8 @@ service_env() {
     FM_TEST_SERVICE_OUT="$home/service.out" \
     FM_TEST_SERVICE_PID="$home/state/service-wrapper-pid" \
     FM_TEST_RESTART_FAIL="${FM_TEST_RESTART_FAIL:-0}" \
+    FM_TEST_SYSTEMD_UNAVAILABLE="${FM_TEST_SYSTEMD_UNAVAILABLE:-0}" \
+    FM_TEST_DISABLE_FAIL="${FM_TEST_DISABLE_FAIL:-0}" \
     "$@"
 }
 
@@ -257,12 +261,39 @@ assert_contains "$(cat "$TMP_ROOT/systemctl.log")" "--user restart fm-tg-recv@" 
   "locked bootstrap did not restart the stale Telegram receiver instance"
 
 rm -f "$home/config/telegram.env"
+retire_rc=0
+FM_TEST_SYSTEMD_UNAVAILABLE=1 service_env "$fakebin" "$home" "$unitdir" "$SERVICE" bootstrap \
+  > "$home/retire-unavailable.out" 2>&1 || retire_rc=$?
+[ "$retire_rc" -ne 0 ] || fail "unavailable systemd retirement failure returned success"
+assert_grep 'systemd user manager unavailable during deconfiguration retirement' \
+  "$home/state/.tg-recv-retirement-failure" \
+  "unavailable systemd retirement failure was not durable"
+assert_grep 'systemd user manager unavailable during deconfiguration retirement' \
+  <(service_env "$fakebin" "$home" "$unitdir" "$SERVICE" ownership-status 2>&1 || true) \
+  "unavailable systemd retirement failure was not supervision-visible"
+assert_grep 'systemd' "$home/state/.tg-recv-owner" \
+  "unavailable systemd retirement failure cleared persistent ownership"
+[ -e "$TMP_ROOT/systemd.enabled" ] || fail "unavailable systemd retirement failure hid a still-enabled unit"
+
+retire_rc=0
+FM_TEST_DISABLE_FAIL=1 service_env "$fakebin" "$home" "$unitdir" "$SERVICE" bootstrap \
+  > "$home/retire-disable-failed.out" 2>&1 || retire_rc=$?
+[ "$retire_rc" -ne 0 ] || fail "disable failure during retirement returned success"
+assert_grep 'receiver service stop and disable failed during deconfiguration retirement' \
+  "$home/state/.tg-recv-retirement-failure" \
+  "disable failure during retirement was not durable"
+assert_grep 'systemd' "$home/state/.tg-recv-owner" \
+  "disable failure during retirement cleared persistent ownership"
+[ -e "$TMP_ROOT/systemd.enabled" ] || fail "disable failure during retirement hid a still-enabled unit"
+
 service_env "$fakebin" "$home" "$unitdir" "$SERVICE" bootstrap >/dev/null \
   || fail "deconfiguration did not retire persistent service ownership"
 assert_contains "$(cat "$TMP_ROOT/systemctl.log")" "--user disable --now fm-tg-recv@" \
   "deconfiguration did not stop and disable the receiver service"
 assert_absent "$home/state/.tg-recv-owner" \
   "deconfiguration left persistent systemd ownership behind"
+assert_absent "$home/state/.tg-recv-retirement-failure" \
+  "successful deconfiguration left a stale degraded-state record"
 assert_absent "$home/state/.tg-recv.lock" \
   "deconfiguration left a receiver process recorded"
 assert_absent "$home/state/receiver-active" \
