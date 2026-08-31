@@ -322,7 +322,7 @@ Stated because a limit nobody wrote down is one somebody will later assume away.
   So `fm-memory-alarm.sh --status` exits 3 only when NO condition could be judged, 0 when at least one was judged and none crossed, and 4 when one crossed.
   This did make recovery easier in one direction and harder in another, and both halves are worth stating.
   Easier: a headroom or horizon crossing can now be declared over on a host where an unrelated condition is permanently blind, which before this change could never happen at all, because the old guard blocked recovery from ANY crossing whenever growth could not be compared.
-  Harder: the crossing is now carried in the state record and survives every poll that could not re-read it, so a raiser is cleared only by a reading that actually looked at it again and found it below its threshold, however many polls that takes.
+  Harder: the crossing is now carried in the state record and survives every poll that could not re-read it, so a raiser is cleared only by a reading that actually looked at it again and found it clear of its threshold by the recovery margin, however many polls that takes.
   The justification for the first half is the second: a condition that never raised the alarm says nothing about whether the shortage is over, while one that did says everything, and it is now held to that for as long as the shortage lasts.
 
 ## Evidence

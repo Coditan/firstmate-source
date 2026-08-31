@@ -196,10 +196,18 @@
 #                         that RAISED the alarm may hold a recovery back - and
 #                         they hold it for as long as they cannot be re-read,
 #                         not for one poll. A raiser leaves the set only on a
-#                         reading that re-read it and found it below its
-#                         threshold, so an affirmative recovery is announced
-#                         only once every raiser has actually been looked at
-#                         again and cleared. The watch
+#                         reading that re-read it and found it clear of its
+#                         threshold BY THE RECOVERY MARGIN, so a poll that saw
+#                         it merely dip back under the line releases nothing and
+#                         an affirmative recovery is announced only once every
+#                         raiser has actually been looked at again and cleared.
+#                         The one other way out is the fleet switching a
+#                         condition off: a stall raiser recorded while a gate
+#                         was configured is released once FM_MEMORY_ALARM_STALL
+#                         is emptied, because a condition nobody is watching can
+#                         never be re-read and would otherwise pin this home in
+#                         "cannot tell" for ever. It is released rather than
+#                         cleared, and it keeps appearing in the watch set. The watch
 #                         set is carried because a machine only PARTLY watched
 #                         is not a watched machine: a change in it is a
 #                         transition and is spoken once, exactly as a crossing
@@ -966,26 +974,21 @@ raiser_names() {  # <set>
   printf '%s' "$out"
 }
 
-# Why each still-held raiser is still held, in its own words: either this poll
-# could not read it at all, or it read it and found it not yet clear of its
-# threshold by the recovery margin.
+# Why each still-held raiser is still held, in its own words. The only caller is
+# the recovery guard, which runs on a calm verdict, and a calm verdict means
+# every condition this poll actually judged came back clear of its threshold by
+# the margin - so every raiser still held here is one this poll could not read
+# at all. A raiser held because it was read and found merely hovering leaves the
+# verdict at `elevated`, which the guard never sees and which announces nothing.
 held_raiser_reasons() {  # <set>
   local set=$1 out='' c why
   for c in headroom horizon stall; do
     in_set "$c" "$set" || continue
-    if condition_reread "$c"; then
-      case "$c" in
-        horizon) why="growth was compared but has not cleared the horizon by the recovery margin" ;;
-        stall)   why="the memory-stall run was read but has not fallen clear of the window by the recovery margin" ;;
-        *)       why="RAM headroom was read but has not risen clear of the floor by the recovery margin" ;;
-      esac
-    else
-      case "$c" in
-        horizon) why="growth could not be compared this run ($GROWTH_BLIND)" ;;
-        stall)   why="memory stall could not be read this run ($STALL_BLIND)" ;;
-        *)       why="RAM headroom could not be read this run" ;;
-      esac
-    fi
+    case "$c" in
+      horizon) why="growth could not be compared this run ($GROWTH_BLIND)" ;;
+      stall)   why="memory stall could not be read this run ($STALL_BLIND)" ;;
+      *)       why="RAM headroom could not be read this run" ;;
+    esac
     out="${out:+$out, and }$why"
   done
   printf '%s' "$out"
@@ -1179,12 +1182,17 @@ fi
 LINE=
 if [ "$CURRENT" = "$PREVIOUS" ]; then
   # The verdict has not moved; what this alarm can SEE has. It never reads as an
-  # all-clear and never as a crossing, because neither happened - but when the
-  # machine is ALREADY crossed this is the only line the poll emits, so it names
-  # the shortage it is still holding first. A reader must not be able to take a
-  # loss-of-sight notice for the whole story on a machine that is out of memory.
+  # all-clear and never as a crossing, because neither happened - but when a
+  # crossing is still on the books this is the only line the poll emits, so it
+  # names the shortage it is still holding first. A reader must not be able to
+  # take a loss-of-sight notice for the whole story on a machine that is out of
+  # memory.
+  # It asks the raiser set rather than the state label, because the state label
+  # outlives the shortage: the elevated band holds the previous state, so a poll
+  # that released every raiser while hovering at the line still reads as crossed
+  # while holding nothing at all, and must not announce a shortage that is over.
   held=
-  if [ "$CURRENT" = crossed ]; then
+  if [ "$CROSSED_KIND" != - ]; then
     if [ "$CROSSED_KIND" = stall ]; then
       held="this machine is still stalling on memory, and "
     else
