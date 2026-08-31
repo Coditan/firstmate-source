@@ -68,7 +68,8 @@ unset FM_AXI_AMBIENT_PATH FM_AXI_AMBIENT_PATH_OWNER
 # Clearing them here is the half that scales: it holds for every case in every
 # suite, including ones not written yet, and it does not depend on any case
 # remembering. bin/fm-check-lib.sh holds the other half, refusing the write
-# itself for every caller including the ones outside this repository.
+# itself in every arm path and in the registrar, including for the callers of
+# those that live outside this repository.
 #
 # --arm stays deliberately un-silenced, so the bootstrap suites still exercise
 # arming against fixture homes. Arming a fixture home is legitimate; reaching

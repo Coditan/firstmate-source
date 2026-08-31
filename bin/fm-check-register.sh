@@ -56,12 +56,12 @@ CHECK="$STATE/$ID.check.sh"
 TRUST="$STATE/$ID.check-trust"
 CHECK_DISPLAY="state/$ID.check.sh"
 [ -d "$STATE" ] && [ ! -L "$STATE" ] || { echo "error: state directory is unavailable" >&2; exit 1; }
-# The choke point. Not every armed check is rendered by a script in this
-# directory - a caller can write its own shim and borrow only this registrar -
-# so the cross-home predicate has to hold here too, or the arm paths' guard has
-# a door beside it. bin/fm-check-lib.sh owns the predicate and why it exists.
-REFUSAL=$(fm_check_arm_home_refusal "$STATE" "$FM_HOME") \
-  || { printf 'fm-check-register: %s\n' "$REFUSAL" >&2; exit 1; }
+# The choke point for every check that registers. Not every armed check is
+# rendered by a script in this directory - a caller can write its own shim and
+# borrow only this registrar - so the cross-home predicate has to hold here too,
+# or the arm paths' guard has a door beside it. bin/fm-check-lib.sh owns the
+# predicate and why it exists.
+fm_check_arm_refuse fm-check-register "$STATE" "$FM_HOME" || exit 1
 # Each condition fm_pr_private_file_valid folds into one boolean is named
 # separately here, so the refusal states the remedy instead of implying it.
 [ -e "$CHECK" ] || [ -L "$CHECK" ] \
