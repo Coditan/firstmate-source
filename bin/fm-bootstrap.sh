@@ -20,6 +20,9 @@
 #                 "DECISION_LEDGER: baseline recorded|absent|rejected - <what the adoption baseline covers or refuses>",
 #                 "DECISION_LEDGER: and <n> more not shown here; run bin/fm-decision-ledger.sh --audit for the full list",
 #                 "FLEET_SYNC: <repo>: skipped|recovered|STUCK: <detail>",
+#                 "FLEET_SYNC: fleet: STUCK: cannot read the project registry <path>: <cause> ...",
+#                 "FLEET_SYNC: fleet: STUCK: cannot list the projects directory <path>: <cause> ...",
+#                 "FLEET_SYNC: fleet: refresh failed (exit <rc>); <what the outcomes above cover>",
 #                 "PR_CHECK_MIGRATION: <private remediation>",
 #                 "TANGLE: <remediation>",
 #                 "SELF_DRIFT: primary checkout default branch '<branch>' is <N> ahead, <M> behind origin/<branch> (<state>) - needs attention",
@@ -124,6 +127,8 @@ PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+# shellcheck source=bin/fm-absence-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-absence-lib.sh"
 # shellcheck source=bin/fm-axi-path-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-axi-path-lib.sh"
 fm_axi_prepend_path "$FM_HOME"
@@ -211,7 +216,12 @@ fleet_sync_relay_all_output() {
 fleet_sync() {
   local rc
   [ -x "$FM_ROOT/bin/fm-fleet-sync.sh" ] || return 0
-  [ -d "$PROJECTS" ] || return 0
+  # A home that genuinely keeps no clones must still cost nothing here. But `test -d`
+  # is false for a dangling symlink and for a path whose absence this process cannot
+  # establish, and both are readings fm-fleet-sync.sh refuses on: returning 0 here
+  # would swallow its refusal and hand the session start the same silence a home with
+  # nothing to sync produces. So those two fall through and let that reader speak.
+  [ -d "$PROJECTS" ] || [ -L "$PROJECTS" ] || fm_absence_unprovable "$PROJECTS" >/dev/null || return 0
 
   tmp=$(mktemp "${TMPDIR:-/tmp}/fm-fleet-sync.XXXXXX" 2>/dev/null) || return 0
   timeout=$(fleet_sync_bootstrap_timeout)
