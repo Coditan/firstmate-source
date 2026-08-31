@@ -323,9 +323,11 @@ print_file_or_absent() {
 }
 
 # print_bounded_file_head <path> <label>: a byte-bounded prefix, or an explicit
-# empty/absent state. The full file is still
-# printed by the context digest below. Keeping the head bounded lets both files
-# lead the output without pretending either preview is the complete record.
+# empty/absent state. The full file is still printed by the context digest below.
+# The partial-line fallback trims only incomplete UTF-8 code points; preserving
+# combining-mark or emoji grapheme clusters would require a broader boundary and
+# is deliberately out of scope. Keeping the head bounded lets both files lead
+# the output without pretending either preview is the complete record.
 print_bounded_file_head() {
   local path=$1 label=$2 total
   subsection "$label"
