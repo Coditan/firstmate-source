@@ -324,11 +324,29 @@ selected() {
     && service_env_matches && systemd_active
 }
 
+owned() {
+  [ "$(cat "$RECEIVER_OWNER_FILE" 2>/dev/null || true)" = systemd ]
+}
+
+ownership_status() {
+  owned || { echo "fallback: receiver ownership is not assigned to systemd"; return 1; }
+  systemd_usable || { echo "down: systemd user manager is unavailable"; return 1; }
+  systemd_installed || { echo "down: receiver service unit is not installed"; return 1; }
+  systemd_enabled || { echo "down: receiver service unit is disabled"; return 1; }
+  service_env_matches || { echo "down: receiver service environment is stale"; return 1; }
+  systemd_active || { echo "down: receiver service is not active"; return 1; }
+  echo "active: receiver service ownership and health match"
+}
+
 status_report() {
   local pid record current
   configured || { echo "inactive: config/telegram.env absent"; return 0; }
-  selected || { echo "fallback: receiver service is not installed and enabled"; return 1; }
-  systemd_active || { echo "down: receiver service is not active"; return 1; }
+  if owned; then
+    ownership_status >/dev/null || { ownership_status; return 1; }
+  elif ! selected; then
+    echo "fallback: receiver service does not own this home"
+    return 1
+  fi
   pid=$(cat "$STATE/.tg-recv.lock/pid" 2>/dev/null || true)
   record=$(cat "$STATE/.tg-recv.lock/pid-incarnation" 2>/dev/null || true)
   fm_pid_alive "$pid" || { echo "down: service is active but no live receiver is recorded"; return 1; }
@@ -343,9 +361,11 @@ case "${1:-}" in
   ensure) ensure_systemd ;;
   install-unit) install_systemd ;;
   selected) selected ;;
+  owned) owned ;;
+  ownership-status) ownership_status ;;
   status) status_report ;;
   *)
-    echo "usage: $(basename "$0") {bootstrap|ensure|install-unit|selected|status}" >&2
+    echo "usage: $(basename "$0") {bootstrap|ensure|install-unit|selected|owned|ownership-status|status}" >&2
     exit 2
     ;;
 esac

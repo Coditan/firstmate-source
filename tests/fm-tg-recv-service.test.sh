@@ -30,6 +30,10 @@ case "$*" in
     touch "$FM_TEST_SYSTEMD_ENABLED" "$FM_TEST_SYSTEMD_ACTIVE"
     ;;
   '--user restart '*)
+    if [ "${FM_TEST_RESTART_FAIL:-0}" = 1 ]; then
+      rm -f "$FM_TEST_SYSTEMD_ACTIVE"
+      exit 1
+    fi
     if [ "${FM_TEST_START_SERVICE:-0}" = 1 ]; then
       old_pid=$(cat "$FM_TEST_SERVICE_PID" 2>/dev/null || true)
       case "$old_pid" in ''|*[!0-9]*) ;; *) kill -TERM "$old_pid" 2>/dev/null || true ;; esac
@@ -73,6 +77,7 @@ service_env() {
     FM_TEST_SERVICE_ARM="$ROOT/bin/fm-tg-recv-arm.sh" \
     FM_TEST_SERVICE_OUT="$home/service.out" \
     FM_TEST_SERVICE_PID="$home/state/service-wrapper-pid" \
+    FM_TEST_RESTART_FAIL="${FM_TEST_RESTART_FAIL:-0}" \
     "$@"
 }
 
@@ -188,11 +193,44 @@ for _ in $(seq 1 50); do
 done
 assert_absent "$home/state/receiver-overlap" \
   "service convergence restarted alongside a harness-owned receiver"
+
+rm -f "$TMP_ROOT/systemd.enabled"
+disabled_status=$(service_env "$fakebin" "$home" "$unitdir" "$SERVICE" ownership-status 2>&1 || true)
+assert_contains "$disabled_status" "receiver service unit is disabled" \
+  "disabled persistent service ownership was not visible"
+FM_HOME="$home" "$ROOT/bin/fm-tg-recv-arm.sh" > "$home/disabled-fallback.out" 2>&1
+assert_contains "$(cat "$home/disabled-fallback.out")" "service ownership handoff in progress" \
+  "disabled service ownership allowed a fallback receiver"
+touch "$TMP_ROOT/systemd.enabled"
+
 rm -f "$TMP_ROOT/systemd.active"
 if service_env "$fakebin" "$home" "$unitdir" "$SERVICE" selected; then
   fail "inactive receiver service suppressed the tracked receiver fallback"
 fi
+inactive_status=$(service_env "$fakebin" "$home" "$unitdir" "$SERVICE" ownership-status 2>&1 || true)
+assert_contains "$inactive_status" "receiver service is not active" \
+  "inactive persistent service ownership was not visible"
+FM_HOME="$home" "$ROOT/bin/fm-tg-recv-arm.sh" > "$home/inactive-fallback.out" 2>&1
+assert_contains "$(cat "$home/inactive-fallback.out")" "service ownership handoff in progress" \
+  "inactive service ownership allowed a fallback receiver"
 touch "$TMP_ROOT/systemd.active"
+
+printf '%s\n' stale > "$home/state/.tg-recv-service.env"
+stale_status=$(service_env "$fakebin" "$home" "$unitdir" "$SERVICE" ownership-status 2>&1 || true)
+assert_contains "$stale_status" "receiver service environment is stale" \
+  "stale persistent service environment was not visible"
+FM_HOME="$home" "$ROOT/bin/fm-tg-recv-arm.sh" > "$home/stale-environment-fallback.out" 2>&1
+assert_contains "$(cat "$home/stale-environment-fallback.out")" "service ownership handoff in progress" \
+  "stale service environment allowed a fallback receiver"
+FM_TEST_RESTART_FAIL=1 service_env "$fakebin" "$home" "$unitdir" "$SERVICE" ensure >/dev/null 2>&1 \
+  && fail "failed convergence reported success"
+failed_status=$(service_env "$fakebin" "$home" "$unitdir" "$SERVICE" ownership-status 2>&1 || true)
+assert_contains "$failed_status" "receiver service is not active" \
+  "failed convergence did not leave a visible persistent down state"
+FM_HOME="$home" "$ROOT/bin/fm-tg-recv-arm.sh" > "$home/failed-convergence-fallback.out" 2>&1
+assert_contains "$(cat "$home/failed-convergence-fallback.out")" "service ownership handoff in progress" \
+  "failed convergence allowed a fallback receiver"
+FM_TEST_START_SERVICE=1 service_env "$fakebin" "$home" "$unitdir" "$SERVICE" ensure >/dev/null
 
 printf '%s\n' stale > "$unitdir/fm-tg-recv@.service"
 : > "$TMP_ROOT/systemctl.log"

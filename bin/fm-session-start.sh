@@ -605,6 +605,10 @@ elif [ ! -x "$CONFIG/fm-tg-recv.sh" ]; then
 elif "$SCRIPT_DIR/fm-tg-recv-service.sh" selected >/dev/null 2>&1; then
   TELEGRAM_SERVICE_SELECTED=1
   printf '%s\n' "TELEGRAM_RECEIVER: active - bin/fm-tg-recv-service.sh owns the receiver outside this session; no tracked background task is required"
+elif "$SCRIPT_DIR/fm-tg-recv-service.sh" owned >/dev/null 2>&1; then
+  TELEGRAM_SERVICE_SELECTED=1
+  TELEGRAM_SERVICE_STATE=$("$SCRIPT_DIR/fm-tg-recv-service.sh" ownership-status 2>/dev/null || true)
+  printf '%s\n' "TELEGRAM_RECEIVER: service-owned but unavailable - ${TELEGRAM_SERVICE_STATE:-down: health could not be determined}; no tracked fallback will start"
 elif [ "$READ_ONLY" -eq 1 ]; then
   printf '%s\n' 'skipped (read-only session) - the session holding the lock owns the tracked Telegram receiver fallback.'
 else
