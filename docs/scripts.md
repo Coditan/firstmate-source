@@ -144,6 +144,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-supervision-lib.sh`  | Shared in-flight-work and watcher-beacon status                                       |
 | `fm-ff-lib.sh`           | Shared guarded fast-forward helper for origin pulls and local secondmate syncs       |
 | `fm-lock-lib.sh`         | Shared "is this git lock provably abandoned?" proof used by teardown and fleet-sync   |
+| `fm-absence-lib.sh`      | Shared rule for whether a path's ABSENCE was established or is merely what a failed stat reports, used by fleet-sync and bootstrap |
 | `fm-slot-lib.sh`         | Shared fail-safe proof of which live tasks hold a pooled worktree                    |
 | `fm-transition-lib.sh`   | Shared backend-neutral agent-state transition record and supervision policy          |
 | `fm-config-inherit-lib.sh` | Shared primary-to-secondmate inherited local-material propagation and config-reread delivery |
