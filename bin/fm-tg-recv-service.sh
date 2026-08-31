@@ -259,6 +259,7 @@ converge_service_receiver() {
     rm -f "$SERVICE_HANDOFF_MARKER"
     return 1
   fi
+  rm -f "$RETIREMENT_FAILURE"
   rm -f "$SERVICE_HANDOFF_MARKER"
 }
 
@@ -322,6 +323,7 @@ ensure_systemd() {
   [ "$FM_TG_RECV_ENV_CHANGED" -eq 0 ] || changed=1
   owner=$(cat "$RECEIVER_OWNER_FILE" 2>/dev/null || true)
   [ "$owner" = systemd ] || changed=1
+  [ ! -e "$RETIREMENT_FAILURE" ] || changed=1
   if [ "$changed" -eq 1 ] || ! systemd_active; then
     converge_service_receiver "$unit" restart || return 1
   fi

@@ -286,6 +286,16 @@ assert_grep 'systemd' "$home/state/.tg-recv-owner" \
   "disable failure during retirement cleared persistent ownership"
 [ -e "$TMP_ROOT/systemd.enabled" ] || fail "disable failure during retirement hid a still-enabled unit"
 
+printf 'BOT_TOKEN=fake\nCHAT_ID=fake\n' > "$home/config/telegram.env"
+service_env "$fakebin" "$home" "$unitdir" "$SERVICE" ensure >/dev/null \
+  || fail "restored configuration did not converge the persistently owned service"
+assert_absent "$home/state/.tg-recv-retirement-failure" \
+  "successful reconfiguration left the obsolete retirement failure visible"
+reconfigured_status=$(service_env "$fakebin" "$home" "$unitdir" "$SERVICE" ownership-status)
+assert_contains "$reconfigured_status" "active: receiver service ownership and health match" \
+  "successful reconfiguration still reported the service as degraded"
+
+rm -f "$home/config/telegram.env"
 service_env "$fakebin" "$home" "$unitdir" "$SERVICE" bootstrap >/dev/null \
   || fail "deconfiguration did not retire persistent service ownership"
 assert_contains "$(cat "$TMP_ROOT/systemctl.log")" "--user disable --now fm-tg-recv@" \
