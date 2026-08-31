@@ -33,11 +33,18 @@ Name the repository before the sweep starts; a sweep with no named repository ha
 ## Step 1 - sweep
 
 Load `codebase-design` first.
-On this seat it is a plugin skill (`mattpocock-skills:codebase-design`), not a directory inside any repository, so reach it through the harness skill mechanism rather than looking for it in the project.
-If it is not installed here, say so in the report and stop rather than improvising its vocabulary from memory.
+On this seat it is a plugin skill (`mattpocock-skills:codebase-design`), not a directory inside any repository, so prefer the harness skill mechanism rather than looking for it in the project.
+If the harness cannot load it, resolve the current plugin root from the `installPath` field of the `mattpocock-skills@claude-plugins-official` entry in `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/installed_plugins.json`; never construct that path from a version number.
+Read `<installPath>/skills/engineering/codebase-design/SKILL.md` in full as the fallback.
+The sibling `<installPath>/docs/engineering/codebase-design.md` is an ordinary readable supplement, not a substitute for `SKILL.md`: it explains the skill for a human reader but is a different document.
+For the vocabulary this sweep requires, reading `SKILL.md` in full is content-equivalent to the loaded route because that file is the plugin's registered skill payload and contains the complete glossary and principles.
+It is not invocation-equivalent: the fallback bypasses the harness's discovery and activation mechanism, and neither route loads the referenced `DEEPENING.md` or `DESIGN-IT-TWICE.md` unless they are opened separately.
+If neither the harness skill nor that resolved file is available, say so in the report and stop rather than improvising its vocabulary from memory.
 A sweep that silently drops the vocabulary it claims to use is an unmeasured claim wearing the clothes of a measured one, and that is the defect class this whole instrument exists to avoid.
 Its `DEEPENING.md` is worth opening when a finding needs a proposed shape rather than only a diagnosis.
 For the shape itself, load `design-it-twice` rather than its `DESIGN-IT-TWICE.md`: this fleet's version of that exercise is wired to the real model panel, and it carries the test for when a middle finding is contested enough to spend one on.
+Start every sweep report with the vocabulary route used: either the loaded `mattpocock-skills:codebase-design` skill or the resolved plain `SKILL.md` path with the harness route marked unavailable.
+Name any supporting file opened separately, so a later reader can see exactly what the sweep received.
 
 Then work the five subjects below.
 Every one of them is in the talk, and the wording is kept close to it on purpose; `docs/codebase-sweep-provenance.md` carries the transcript's own words beside each.
