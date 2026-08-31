@@ -1094,13 +1094,30 @@ EOF
 # is itself an attestation, so the two combine and either alone satisfies the gate.
 require_disposition() {  # <new-id> <repo> <supersedes-space-list> <new-ground 0|1>
   local id=$1 repo=$2 folds=$3 new_ground=$4 records listing='' count=0 settled_seen=0 fold
+  local rc=0 records_err reader_says=''
   command -v jq >/dev/null 2>&1 \
     || fail "jq is required to file a captain decision: the intake gate must read the records already open before this one can be added, and it will not add one unchecked"
   # Read the whole home, then scope the LISTING to this repository below. The two
   # scopes differ on purpose: what a filer is asked to read is bounded to the
   # repository it is filing against, but an id it names explicitly is folded
   # wherever it lives, because the filer has already identified it.
-  records=$("$SCRIPT_DIR/fm-decision-ledger.sh" --records 2>/dev/null) || records=''
+  # THE GATE MAY NOT PROCEED ON A READ THAT DID NOT HAPPEN. This failure used to be
+  # discarded into an empty list, and an empty list is what a home with no records
+  # looks like - so a seat whose records could not be read filed the new question
+  # unchallenged, which is the one outcome this gate exists to prevent. The reader's
+  # own message is kept and relayed, because "could not read" is only actionable
+  # with the thing it could not read named.
+  records_err=$(mktemp "${TMPDIR:-/tmp}/fm-decision-gate.XXXXXX" 2>/dev/null) || records_err=""
+  if [ -n "$records_err" ]; then
+    records=$("$SCRIPT_DIR/fm-decision-ledger.sh" --records 2>"$records_err") || rc=$?
+    reader_says=$(tr '\n' ' ' < "$records_err" | cut -c1-300)
+    rm -f "$records_err"
+  else
+    records=$("$SCRIPT_DIR/fm-decision-ledger.sh" --records) || rc=$?
+    reader_says="its message is on stderr above"
+  fi
+  [ "$rc" -eq 0 ] \
+    || fail "the captain decision records this home already holds could not be read (bin/fm-decision-ledger.sh --records exited $rc: ${reader_says:-no message}), so $id cannot be checked against the questions already open; fix that read rather than filing a record this home could not check"
   # Every OPEN question is listed, with no cap: those are what this record might be
   # re-asking, and a capped list would let the one that matters be the one withheld.
   # Recent ANSWERS are listed too - the second canvass seat's duplicates were both

@@ -175,6 +175,10 @@ So `hold` and `record` refuse to add a captain record while this home holds othe
 `--supersedes <id>` folds one; `--new-ground` attests that none of them asks this question.
 The gate is on the answer as well as the question, because an answer that cannot fold what it settles leaves it standing: that is exactly how the second seat kept two records open on a question the captain had ruled on hours earlier with the fix already in an open pull request.
 
+The gate reads that set through `bin/fm-decision-ledger.sh --records`, and a read that could not be taken is not an empty set.
+That call used to have its failure discarded into an empty list, which is indistinguishable from a home holding no records, so a seat whose records could not be read filed the new question unchallenged.
+Both sides now refuse instead: the reader stops with a named cause rather than printing nothing and exiting 0, and the gate relays that cause rather than filing a record it could not check.
+
 `bin/fm-decision-ledger.sh --audit` also reports `duplicate-suspect` and `open-but-settled`, which are structural and provable.
 They are a backstop for records filed before this gate existed, not the mechanism, and the header of that script states the limit in the same words.
 
