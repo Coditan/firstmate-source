@@ -286,6 +286,7 @@ timing_report() {
   timing_mark closing
   if [ -n "$TIMING_CLOCK_FAULT" ] || ! now=$(now_ms); then
     total=""
+    [ -n "$TIMING_CLOCK_FAULT" ] || TIMING_CLOCK_FAULT=$TIMING_CLOCK_UNREADABLE
   else
     total=$((now - TIMING_T0))
   fi
