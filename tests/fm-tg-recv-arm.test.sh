@@ -118,16 +118,17 @@ done
 FM_HOME="$home" "$ARM" > "$home/state/arm2.out" 2>&1 &
 arm2=$!
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-  if grep -q 'telegram receiver: attached pid=' "$home/state/arm2.out" 2>/dev/null; then
+  if grep -q 'telegram receiver: already armed pid=' "$home/state/arm2.out" 2>/dev/null; then
     break
   fi
   sleep 0.1
 done
-grep -q 'telegram receiver: attached pid=' "$home/state/arm2.out" || fail "second arm did not attach"
+grep -q 'telegram receiver: already armed pid=' "$home/state/arm2.out" || fail "second arm did not stand down: $(cat "$home/state/arm2.out")"
+grep -Eq 'telegram receiver arms: measured count=[12] expected=1' "$home/state/arm2.out" || fail "second arm did not print the arm-count reading: $(cat "$home/state/arm2.out")"
+wait "$arm2"
 
 touch "$home/state/stop-receiver"
 wait "$arm1"
-wait "$arm2"
 
 cat > "$home/config/fm-tg-recv.sh" <<'SH'
 #!/usr/bin/env bash
@@ -262,13 +263,19 @@ printf 'CAPTAIN-TELEGRAM: settled receiver\n'
 SH
 chmod +x "$exec_home/config/fm-tg-recv.sh"
 
-FM_HOME="$exec_home" "$ARM" > "$exec_home/state/exec-arm1.out" 2>&1 &
+sleep 0.5 &
+exec_parent=$!
+FM_TG_RECV_ARM_PARENT_PID="$exec_parent" FM_HOME="$exec_home" "$ARM" > "$exec_home/state/exec-arm1.out" 2>&1 &
 exec_arm1=$!
 for _ in $(seq 60); do
   [ -s "$exec_home/state/receiver.pid" ] && break
   sleep 0.1
 done
 [ -s "$exec_home/state/receiver.pid" ] || fail "receiver behind a slow interpreter hop did not start: $(cat "$exec_home/state/exec-arm1.out")"
+wait "$exec_arm1"
+wait "$exec_parent" 2>/dev/null || true
+grep -q 'telegram receiver: arm parent gone; receiver left running pid=' "$exec_home/state/exec-arm1.out" || fail "arm with a gone parent did not detach from the receiver: $(cat "$exec_home/state/exec-arm1.out")"
+[ ! -e "$exec_home/state/.tg-recv-arm.lock" ] && [ ! -L "$exec_home/state/.tg-recv-arm.lock" ] || fail "arm lock remained after parent-gone detach"
 
 # The settled image differs from the one the child carried when the arm forked
 # it; without that, this fixture would prove nothing.
@@ -281,34 +288,39 @@ case "$settled_identity" in
     fail "receiver never left its interpreter image, so the exec transition was not exercised" ;;
 esac
 
-# Re-arm several times: a healthy receiver must be confirmed every time.
-for attempt in 1 2 3; do
-  FM_TG_RECV_ATTACH_CONFIRM_TIMEOUT=3 FM_TG_RECV_ATTACH_POLL=0.1 FM_HOME="$exec_home" \
-    "$ARM" > "$exec_home/state/exec-rearm.$attempt.out" 2>&1 &
-  rearm=$!
-  for _ in $(seq 40); do
-    if grep -q 'telegram receiver: attached pid=' "$exec_home/state/exec-rearm.$attempt.out" 2>/dev/null; then
-      break
-    fi
-    if grep -q 'FAILED' "$exec_home/state/exec-rearm.$attempt.out" 2>/dev/null; then
-      break
-    fi
-    sleep 0.1
-  done
-  case "$(cat "$exec_home/state/exec-rearm.$attempt.out")" in
-    *'telegram receiver: attached pid='*) : ;;
-    *) fail "re-arm $attempt reported a healthy receiver as unconfirmable: $(cat "$exec_home/state/exec-rearm.$attempt.out")" ;;
-  esac
-  rearm_pids="${rearm_pids:-} $rearm"
+# Re-arm once after the original wrapper has detached: a healthy receiver must
+# still be confirmed across the exec transition.
+FM_TG_RECV_ATTACH_CONFIRM_TIMEOUT=3 FM_TG_RECV_ATTACH_POLL=0.1 FM_HOME="$exec_home" \
+  "$ARM" > "$exec_home/state/exec-rearm.out" 2>&1 &
+rearm=$!
+for _ in $(seq 40); do
+  if grep -q 'telegram receiver: attached pid=' "$exec_home/state/exec-rearm.out" 2>/dev/null; then
+    break
+  fi
+  if grep -q 'FAILED' "$exec_home/state/exec-rearm.out" 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
 done
+case "$(cat "$exec_home/state/exec-rearm.out")" in
+  *'telegram receiver: attached pid='*) : ;;
+  *) fail "re-arm reported a healthy receiver as unconfirmable: $(cat "$exec_home/state/exec-rearm.out")" ;;
+esac
 [ "$(wc -l < "$exec_home/state/receiver.starts")" -eq 1 ] || fail "re-arming a healthy receiver started a second one"
+
+FM_HOME="$exec_home" "$ARM" > "$exec_home/state/duplicate-rearm.out" 2>&1
+grep -q 'telegram receiver: already armed pid=' "$exec_home/state/duplicate-rearm.out" || fail "a duplicate arm did not stand down behind an attached arm: $(cat "$exec_home/state/duplicate-rearm.out")"
 
 # A lock already written by the older wrapper - image half and all, captured
 # before the exec transition finished - still names a receiver this one can
 # confirm, so updating over a live receiver cannot raise the false alarm once.
 lock_owner=$(readlink "$exec_home/state/.tg-recv.lock")
 [ -n "$lock_owner" ] || fail "receiver lock is not the expected owner symlink"
+kill "$rearm" 2>/dev/null || true
+wait "$rearm" 2>/dev/null || true
 rm -f "$lock_owner/pid-incarnation"
+rm -f "$exec_home/state/.tg-recv-arm.lock"
+rm -rf "$exec_home/state"/.tg-recv-arm.lock.owner.*
 printf '%s cmdline-hex=%s\n' "${settled_identity%% cmdline-hex=*}" "$interp_hex" > "$lock_owner/pid-identity"
 FM_TG_RECV_ATTACH_CONFIRM_TIMEOUT=3 FM_TG_RECV_ATTACH_POLL=0.1 FM_HOME="$exec_home" \
   "$ARM" > "$exec_home/state/legacy-rearm.out" 2>&1 &
@@ -324,11 +336,7 @@ case "$(cat "$exec_home/state/legacy-rearm.out")" in
 esac
 
 touch "$exec_home/state/stop-receiver"
-wait "$exec_arm1"
 wait "$legacy_rearm"
-for rearm in ${rearm_pids:-}; do
-  wait "$rearm"
-done
 
 # When the incarnation genuinely cannot be established, the wrapper must refuse
 # and say so, never record an unusable lock and report a start.

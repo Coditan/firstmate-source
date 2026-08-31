@@ -236,6 +236,10 @@ fm_lock_clean_known_files() {
     "$lockdir/daemon" \
     "$lockdir/receiver-path" \
     "$lockdir/output-path" \
+    "$lockdir/arm-path" \
+    "$lockdir/arm-mode" \
+    "$lockdir/parent-pid" \
+    "$lockdir/parent-incarnation" \
     2>/dev/null || true
 }
 
