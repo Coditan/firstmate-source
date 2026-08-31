@@ -1142,10 +1142,22 @@ render_human() {
   if [ -n "$STALL_SOME10" ]; then
     printf '  some  avg10=%s  avg60=%s        (at least one task stalled)\n' "$STALL_SOME10" "$STALL_SOME60"
     printf '  full  avg10=%s  avg60=%s        (every task stalled)\n' "$STALL_FULL10" "$STALL_FULL60"
-    # Shown so a reader can see that the zeros above are a live account rather
-    # than an absent one. Monotonic since boot: evidence, never a trigger.
-    printf '  since boot: some %sus, full %sus  (proof the averages are accounted)\n' \
-      "$STALL_SOME_TOTAL" "$STALL_FULL_TOTAL"
+    # Shown so a reader can see whether the zeros above are a live account or an
+    # absent one. Monotonic since boot: evidence, never a trigger - and the
+    # caption claims only what the counters can carry. Counters that have
+    # themselves recorded nothing prove nothing, and this is the one shape where
+    # the io control could not settle it either, so the reading says that rather
+    # than captioning a zero as evidence.
+    if [ "$STALL_SOME_TOTAL" -gt 0 ] || [ "$STALL_FULL_TOTAL" -gt 0 ]; then
+      printf '  since boot: some %sus, full %sus  (proof the averages are accounted)\n' \
+        "$STALL_SOME_TOTAL" "$STALL_FULL_TOTAL"
+    elif [ "$STALL_IO_CONTROL" = unreadable ]; then
+      printf '  since boot: some 0us, full 0us  (this account has recorded nothing at all, and %s could not be read as a control, so these zeros are not shown to be a measurement)\n' \
+        "$PRESSURE_IO"
+    else
+      printf '  since boot: some 0us, full 0us  (this account has recorded nothing at all, and %s is flat too, so nothing here tells a quiet machine from a kernel that does not account memory pressure)\n' \
+        "$PRESSURE_IO"
+    fi
   else
     printf '  UNMEASURED - see the unmeasured section below\n'
   fi

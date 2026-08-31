@@ -755,6 +755,40 @@ test_the_cumulative_counter_is_carried_as_proof_and_never_as_a_trigger() {
   pass "the cumulative stall counters are carried in the reading as proof the averages are live"
 }
 
+test_counters_that_recorded_nothing_are_not_captioned_as_proof() {
+  # The human render is this reading's own reported output, and the caption
+  # beside the counters is a claim about them. A live account can carry that
+  # claim; an account that has recorded nothing at all cannot, and both totals
+  # at zero beside a control that settles nothing is exactly the residual
+  # docs/memory-alarm.md records under what the alarm cannot see.
+  local dir="$TMP_ROOT/proofcaption" out stall
+  new_scene "$dir"
+  out=$(run_reading "$dir")
+  stall=$(stall_block "$out")
+  assert_contains "$stall" 'proof the averages are accounted' \
+    'a live account did not carry the counters as proof'
+
+  printf 'some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n' > "$dir/pressure"
+  printf 'some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n' > "$dir/io-pressure"
+  out=$(run_reading "$dir" "FM_MEMORY_PRESSURE_IO=$dir/io-pressure")
+  stall=$(stall_block "$out")
+  assert_not_contains "$stall" 'proof the averages are accounted' \
+    'counters that have recorded nothing were captioned as proof they had'
+  assert_contains "$stall" 'recorded nothing at all' \
+    'the reading did not say the counters carry no evidence'
+  assert_contains "$stall" 'is flat too' \
+    'the reading did not name the control that failed to settle it'
+
+  rm -f "$dir/io-pressure"
+  out=$(run_reading "$dir" "FM_MEMORY_PRESSURE_IO=$dir/io-pressure")
+  stall=$(stall_block "$out")
+  assert_not_contains "$stall" 'proof the averages are accounted' \
+    'counters that have recorded nothing were captioned as proof they had'
+  assert_contains "$stall" 'could not be read as a control' \
+    'a control nobody could read was not told apart from one that read zero'
+  pass "counters that have recorded nothing are not captioned as proof"
+}
+
 test_each_unreadable_input_is_named_and_forces_a_non_zero_exit() {
   local dir="$TMP_ROOT/badinputs" out status case_name
 
@@ -972,6 +1006,7 @@ test_a_genuinely_calm_stall_reading_is_not_confusable_with_a_blind_one
 test_a_kernel_that_accounts_no_memory_pressure_is_unmeasured_not_calm
 test_an_io_control_nobody_could_read_is_told_apart_from_a_flat_one
 test_the_cumulative_counter_is_carried_as_proof_and_never_as_a_trigger
+test_counters_that_recorded_nothing_are_not_captioned_as_proof
 test_each_unreadable_input_is_named_and_forces_a_non_zero_exit
 test_a_cgroup_tree_nobody_read_is_not_reported_as_an_account_with_no_session
 test_a_nonsearchable_cgroup_tree_is_unmeasured

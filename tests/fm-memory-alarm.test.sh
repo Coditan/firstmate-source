@@ -754,12 +754,13 @@ test_a_watch_change_on_a_crossed_machine_says_it_is_still_crossed() {
   pass "a watch change on a crossed machine names the shortage it is still holding"
 }
 
-test_a_watch_change_holding_no_raiser_does_not_claim_a_shortage() {
-  # `crossed` outlives the shortage: the elevated damping band holds whatever
-  # the previous state was, so a poll that released every raiser can still read
-  # as crossed while holding nothing. The held-shortage clause must follow the
-  # raisers, not the label, or this line tells the fleet a machine with 16000
-  # MiB free is running out of RAM headroom.
+test_a_watch_change_past_no_threshold_does_not_claim_a_live_shortage() {
+  # `crossed` outlives the reading: the elevated damping band holds whatever the
+  # previous state was, so a poll that measured 16000 MiB of headroom still
+  # reads as crossed. The held-shortage clause must follow what THIS reading
+  # measured, not the state label, or the line tells the fleet a machine with
+  # 16000 MiB free is running out of RAM headroom. The shortage is still on the
+  # books, and the line says that instead.
   reset_home
   reading 16000 true 0
   alarm_at 0 >/dev/null
@@ -791,7 +792,74 @@ test_a_watch_change_holding_no_raiser_does_not_claim_a_shortage() {
   assert_contains "$out" "cannot judge horizon" "it must still report the instrument it lost"
   assert_contains "$out" "16000 MiB RAM headroom available" \
     "and must state the headroom it actually measured"
-  pass "a watch change holding no raiser does not claim a shortage"
+  assert_contains "$out" "has not declared the earlier shortage over" \
+    "but it must still say the shortage it recorded has not been declared over"
+  pass "a watch change past no threshold does not claim a live shortage"
+}
+
+test_a_shortage_survives_a_damped_poll_and_is_still_reported_as_ended() {
+  # The whole poll outcome is one decision, so a raiser can leave the durable
+  # record only on the poll that announces the recovery. Four polls, and the
+  # third is the one that used to lose the shortage: the machine is readable
+  # again and headroom is clear by the margin, but a stall run sitting inside
+  # the margin band damps the verdict to `elevated`, which announces nothing.
+  # A raiser released there leaves the fourth poll with nothing to recognise,
+  # so a real ten-minute shortage ends with no recovery, no duration, and a
+  # claim that sight was restored where nothing had been lost.
+  reset_home
+  reading 16000 true 0
+  alarm_at 0 >/dev/null
+
+  # The run starts at t=300 and is credited every 300s, so by t=5400 it stands
+  # at 5100s: short of the 5400s window, so nothing crosses on stall, but past
+  # 5400/1.25, so the stall condition is not clear by the margin either.
+  local out t
+  for t in 300 600 900 1200 1500 1800 2100 2400 2700 3000 3300 3600 3900 4200 4500; do
+    reading_thrashing 16000 38.0
+    out=$(alarm_at "$t")
+    assert_contains "|$out|" "||" "a calm machine with a run under way says nothing"
+  done
+
+  reading_thrashing 1800 38.0
+  out=$(alarm_at 4800)
+  assert_contains "$out" "running out of RAM headroom" "the headroom crossing must be announced"
+
+  reading_headroom_unmeasured
+  out=$(alarm_at 5100)
+  assert_contains "$out" "gone blind" "a poll that could not read headroom judges nothing"
+  assert_not_contains "$out" "recovered" "and must not end the shortage"
+
+  # Sight returns and headroom is clear by the margin, but the stall run damps
+  # the verdict, so this poll announces neither a crossing nor a recovery.
+  reading_thrashing 16000 38.0
+  out=$(alarm_at 5400)
+  assert_not_contains "$out" "recovered" \
+    "a damped poll must not end a shortage it never announced the end of"
+  assert_not_contains "$out" "can see this machine again" \
+    "nor claim a restoration on a poll whose state did not move"
+  assert_contains "$out" "can judge all three of its conditions" \
+    "it must still report the instruments it got back"
+  assert_contains "$out" "has not declared the earlier shortage over" \
+    "and must say the shortage it recorded is still on the books"
+
+  reading_thrashing 16000 0.00
+  out=$(alarm_at 5700)
+  assert_contains "$out" "recovered" "the shortage must be reported as ended once it can be"
+  # The crossing was declared at t=4800 and ends at t=5700. A clock restarted by
+  # either of the two intervening polls would report 10m0s or 5m0s instead.
+  assert_contains "$out" "The shortage lasted 15m0s" \
+    "and the duration must run from the original crossing"
+  assert_not_contains "$out" "can see this machine again" \
+    "a shortage that ended is a recovery, not a regained instrument"
+
+  local log="$HOME_DIR/data/memory-alarm.log"
+  [ "$(grep -c 'recovered' "$log")" -eq 1 ] \
+    || fail "the durable record must carry the recovery exactly once"
+  [ "$(grep -c 'The shortage lasted 15m0s' "$log")" -eq 1 ] \
+    || fail "the durable record must carry the duration measured from the crossing"
+  [ "$(grep -c 'can see this machine again' "$log")" -eq 0 ] \
+    || fail "no poll in this sequence regained sight it had not lost"
+  pass "a shortage survives a damped poll and is still reported as ended"
 }
 
 test_an_unconfigured_gate_is_not_reported_as_a_condition_the_alarm_lost() {
@@ -1525,7 +1593,8 @@ test_a_crossing_after_a_blind_stretch_is_timed_from_the_crossing
 test_a_shortage_ends_even_where_another_condition_can_never_be_read
 test_a_shortage_the_crossed_condition_could_not_re_read_keeps_its_clock
 test_a_watch_change_on_a_crossed_machine_says_it_is_still_crossed
-test_a_watch_change_holding_no_raiser_does_not_claim_a_shortage
+test_a_watch_change_past_no_threshold_does_not_claim_a_live_shortage
+test_a_shortage_survives_a_damped_poll_and_is_still_reported_as_ended
 test_an_unconfigured_gate_is_not_reported_as_a_condition_the_alarm_lost
 test_a_condition_that_becomes_unjudgeable_is_spoken_once
 test_a_blind_stall_poll_neither_erases_the_run_nor_credits_it
