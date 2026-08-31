@@ -16,7 +16,7 @@ The whole skill was on the table.
 Three reasons put only its `DESIGN-IT-TWICE.md` half on our side of the line:
 
 1. **This fleet already decided to load `codebase-design` rather than adopt it, and published that decision.**
-   [`codebase-sweep-provenance.md`](codebase-sweep-provenance.md) records that the sweep loads the plugin skill and copies nothing from it.
+   [`codebase-sweep-provenance.md`](codebase-sweep-provenance.md) owns how the sweep consumes the installed plugin without copying it.
    Copying the glossary here now would create a second owner of terms this fleet already reaches through the plugin, and two copies of a glossary drift the moment only one is edited, which is exactly what this repository's one-owner rule exists to prevent.
 2. **Only the design-it-twice half has a fleet mechanism that is better than what upstream describes.**
    `bin/fm-model-panel.sh` and the `panel` skill do that file's fan-out with a guarantee ad-hoc sub-agents cannot make.
