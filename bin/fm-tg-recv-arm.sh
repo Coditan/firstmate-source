@@ -157,22 +157,46 @@ record_failure_wake() {
 }
 
 queue_service_output() {
-  local relay_path=$1 receiver_status=$2 line had_event=0 output_seq=0 diagnostic_path
+  local relay_path=$1 receiver_status=$2 stderr_path=${3:-} line event_payload had_event=0 output_seq=0 diagnostic_path
   diagnostic_path=$(mktemp "$STATE/.tg-recv-diagnostic.XXXXXX") || return 1
   chmod 600 "$diagnostic_path" || { rm -f "$diagnostic_path"; return 1; }
   while IFS= read -r line || [ -n "$line" ]; do
     [ -n "$line" ] || continue
     case "$line" in
       'FM_TG_EVENT_V1:'*)
-        had_event=1
-        output_seq=$((output_seq + 1))
-        fm_wake_append signal "telegram.$(date +%s).$(fm_current_pid).$output_seq" "$line" \
-          || { rm -f "$diagnostic_path"; return 1; }
+        if event_payload=$(python3 - "${line#FM_TG_EVENT_V1:}" <<'PY'
+import base64
+import sys
+
+try:
+    event = base64.b64decode(sys.argv[1], validate=True).decode("utf-8")
+except Exception:
+    sys.exit(1)
+if event.endswith("\n"):
+    event = event[:-1]
+if not event.startswith(("CAPTAIN-TELEGRAM: ", "CAPTAIN-TELEGRAM-BILD: ", "FIRSTMATE_OP: ")):
+    sys.exit(1)
+event = event.replace("\\", "\\\\").replace("\t", "\\t").replace("\r", "\\r").replace("\n", "\\n")
+sys.stdout.write(event)
+PY
+        ); then
+          had_event=1
+          output_seq=$((output_seq + 1))
+          fm_wake_append signal "telegram.v1.$(date +%s).$(fm_current_pid).$output_seq" "$event_payload" \
+            || { rm -f "$diagnostic_path"; return 1; }
+        else
+          printf '%s\n' "$line" >> "$diagnostic_path" \
+            || { rm -f "$diagnostic_path"; return 1; }
+        fi
         ;;
       *) printf '%s\n' "$line" >> "$diagnostic_path" \
         || { rm -f "$diagnostic_path"; return 1; } ;;
     esac
   done < "$relay_path"
+  if [ -n "$stderr_path" ] && [ -s "$stderr_path" ]; then
+    cat "$stderr_path" >> "$diagnostic_path" \
+      || { rm -f "$diagnostic_path"; return 1; }
+  fi
   [ -s "$diagnostic_path" ] || { rm -f "$diagnostic_path"; diagnostic_path=; }
 
   if [ "$receiver_status" = shutdown ]; then
@@ -221,13 +245,13 @@ PY
 }
 
 relay_output_file_once() {
-  local output_path=$1 receiver_status=${2:-unknown} relay_path
+  local output_path=$1 receiver_status=${2:-unknown} stderr_path=${3:-} relay_path
   [ -n "$output_path" ] || return 0
   [ -e "$output_path" ] || return 0
   relay_path="$output_path.relay.$$"
   if mv "$output_path" "$relay_path" 2>/dev/null; then
     if [ "$TG_RECV_MANAGER" = systemd ]; then
-      if ! queue_service_output "$relay_path" "$receiver_status"; then
+      if ! queue_service_output "$relay_path" "$receiver_status" "$stderr_path"; then
         mv "$relay_path" "$output_path" 2>/dev/null || true
         return 1
       fi
@@ -235,13 +259,15 @@ relay_output_file_once() {
       decode_receiver_output < "$relay_path"
     fi
     rm -f "$relay_path" 2>/dev/null || true
+    [ -n "$stderr_path" ] && rm -f "$stderr_path" 2>/dev/null || true
   fi
 }
 
 relay_recorded_receiver_output_once() {
-  local output_path
+  local output_path stderr_path
   output_path=$(cat "$RECV_LOCK/output-path" 2>/dev/null || true)
-  relay_output_file_once "$output_path"
+  stderr_path=$(cat "$RECV_LOCK/diagnostic-path" 2>/dev/null || true)
+  relay_output_file_once "$output_path" unknown "$stderr_path"
 }
 
 attach_and_wait() {
@@ -314,6 +340,7 @@ ownerdir=$TG_RECV_OWNER_DIR
 
 child=
 child_out=
+child_err=
 release_lock_if_owned() {
   [ -n "$ownerdir" ] || return 0
   if fm_lock_points_to_owner "$RECV_LOCK" "$ownerdir"; then
@@ -333,6 +360,7 @@ record_child_lock_metadata_if_possible() {
     printf '%s\n' "$current_incarnation" > "$ownerdir/pid-incarnation"
     printf '%s\n' "$RECV" > "$ownerdir/receiver-path"
     [ -n "$child_out" ] && printf '%s\n' "$child_out" > "$ownerdir/output-path"
+    [ -n "$child_err" ] && printf '%s\n' "$child_err" > "$ownerdir/diagnostic-path"
   } 2>/dev/null || true
 }
 
@@ -366,12 +394,13 @@ terminate_child_bounded() {
 cleanup() {
   record_child_lock_metadata_if_possible
   if terminate_child_bounded; then
-    if [ -n "$child_out" ] && ! relay_output_file_once "$child_out" shutdown; then
+    if [ -n "$child_out" ] && ! relay_output_file_once "$child_out" shutdown "$child_err"; then
       printf 'telegram receiver: FAILED - receiver output could not be durably relayed during shutdown\n' >&2
       return 1
     fi
     release_lock_if_owned
     [ -n "$child_out" ] && rm -f "$child_out" 2>/dev/null || true
+    [ -n "$child_err" ] && rm -f "$child_err" 2>/dev/null || true
     return
   fi
 }
@@ -383,8 +412,18 @@ child_out=$(mktemp "$STATE/.tg-recv-output.XXXXXX") || {
   printf 'telegram receiver: FAILED - could not create output capture\n'
   exit 1
 }
+child_err=$(mktemp "$STATE/.tg-recv-diagnostic.XXXXXX") || {
+  cleanup
+  printf 'telegram receiver: FAILED - could not create diagnostic capture\n'
+  exit 1
+}
+chmod 600 "$child_out" "$child_err" || {
+  cleanup
+  printf 'telegram receiver: FAILED - could not secure receiver captures\n'
+  exit 1
+}
 
-FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" FM_STATE_OVERRIDE="$STATE" "$RECV" >"$child_out" &
+FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" FM_STATE_OVERRIDE="$STATE" "$RECV" >"$child_out" 2>"$child_err" &
 child=$!
 incarnation=$(fm_pid_incarnation "$child" 2>/dev/null || true)
 if [ -z "$incarnation" ]; then
@@ -396,14 +435,16 @@ if [ -z "$incarnation" ]; then
       printf '%s\n' "$FM_HOME" > "$ownerdir/fm-home"
       printf '%s\n' "$RECV" > "$ownerdir/receiver-path"
       printf '%s\n' "$child_out" > "$ownerdir/output-path"
+      printf '%s\n' "$child_err" > "$ownerdir/diagnostic-path"
     } 2>/dev/null || true
-    if ! relay_output_file_once "$child_out" "$rc"; then
+    if ! relay_output_file_once "$child_out" "$rc" "$child_err"; then
       printf 'telegram receiver: FAILED - receiver output could not be durably relayed\n'
       trap - HUP TERM INT
       exit 1
     fi
     release_lock_if_owned
     rm -f "$child_out" 2>/dev/null || true
+    rm -f "$child_err" 2>/dev/null || true
     trap - HUP TERM INT
     exit "$rc"
   fi
@@ -418,6 +459,7 @@ fi
   printf '%s\n' "$incarnation" > "$ownerdir/pid-incarnation"
   printf '%s\n' "$RECV" > "$ownerdir/receiver-path"
   printf '%s\n' "$child_out" > "$ownerdir/output-path"
+  printf '%s\n' "$child_err" > "$ownerdir/diagnostic-path"
 } 2>/dev/null || {
   cleanup
   printf 'telegram receiver: FAILED - could not record receiver lock metadata\n'
@@ -427,12 +469,13 @@ fi
 printf 'telegram receiver: started pid=%s\n' "$child"
 wait "$child"
 rc=$?
-if ! relay_output_file_once "$child_out" "$rc"; then
+if ! relay_output_file_once "$child_out" "$rc" "$child_err"; then
   printf 'telegram receiver: FAILED - receiver output could not be durably relayed\n'
   trap - HUP TERM INT
   exit 1
 fi
 release_lock_if_owned
 rm -f "$child_out" 2>/dev/null || true
+rm -f "$child_err" 2>/dev/null || true
 trap - HUP TERM INT
 exit "$rc"

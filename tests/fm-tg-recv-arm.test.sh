@@ -395,13 +395,13 @@ case "$(cat "$FM_HOME/state/receiver-mode")" in
     ;;
   failure)
     emit_event $'CAPTAIN-TELEGRAM: message delivered before failure\ncontinued captain message'
-    printf 'request failed for https://api.telegram.org/botSECRET-TOKEN/getUpdates: denied\n'
-    head -c 5000 /dev/zero | tr '\0' x
-    printf '\n'
+    printf 'request failed for https://api.telegram.org/botSECRET-TOKEN/getUpdates: denied\n' >&2
+    head -c 5000 /dev/zero | tr '\0' x >&2
+    printf '\n' >&2
     exit 7
     ;;
   diagnostic-exit)
-    printf 'request failed for https://api.telegram.org/botPRIVATE-TOKEN/getUpdates: denied\n'
+    printf 'request failed for https://api.telegram.org/botPRIVATE-TOKEN/getUpdates: denied\n' >&2
     exit 0
     ;;
   empty-exit)
@@ -413,14 +413,23 @@ chmod +x "$service_home/config/fm-tg-recv.sh"
 
 decoded_queue() {
   python3 - "$1" <<'PY'
-import base64
 import sys
 
 for row in open(sys.argv[1], encoding="utf-8"):
-    payload = row.rstrip("\n").split("\t", 4)[-1]
-    if payload.startswith("FM_TG_EVENT_V1:"):
-        print(base64.b64decode(payload.split(":", 1)[1], validate=True).decode(), end="")
-        print()
+    fields = row.rstrip("\n").split("\t", 4)
+    if len(fields) == 5 and fields[2] == "signal" and fields[3].startswith("telegram.v1."):
+        payload = fields[4]
+        result = []
+        index = 0
+        escapes = {"n": "\n", "r": "\r", "t": "\t", "\\": "\\"}
+        while index < len(payload):
+            if payload[index] == "\\" and index + 1 < len(payload) and payload[index + 1] in escapes:
+                result.append(escapes[payload[index + 1]])
+                index += 2
+            else:
+                result.append(payload[index])
+                index += 1
+        print("".join(result))
 PY
 }
 
@@ -519,12 +528,16 @@ assert_grep 'check: telegram receiver: FAILED' "$service_home/state/.wake-queue"
   "systemd receiver failure was indistinguishable from healthy silence"
 assert_contains "$(decoded_queue "$service_home/state/.wake-queue")" 'CAPTAIN-TELEGRAM: message delivered before failure' \
   "valid receiver event was discarded when the receiver exited nonzero"
+assert_not_contains "$(cat "$service_home/state/.wake-queue")" 'FM_TG_EVENT_V1:' \
+  "durable wake retained an opaque receiver frame"
 assert_contains "$(decoded_queue "$service_home/state/.wake-queue")" 'continued captain message' \
   "multiline receiver event was truncated when the receiver exited nonzero"
 assert_grep 'private diagnostic: state/.tg-recv-last-failure-diagnostic' "$service_home/state/.wake-queue" \
   "receiver failure wake did not reference its private diagnostic"
 assert_not_contains "$(cat "$service_home/state/.wake-queue")" 'SECRET-TOKEN' \
   "receiver failure wake exposed a token-bearing diagnostic"
+assert_not_contains "$(cat "$service_home/state/service-failure.out")" 'SECRET-TOKEN' \
+  "receiver stderr exposed a token-bearing diagnostic in service output"
 assert_grep 'SECRET-TOKEN' "$service_home/state/.tg-recv-last-failure-diagnostic" \
   "private receiver failure diagnostic discarded the captured evidence"
 assert_not_contains "$(cat "$service_home/state/.tg-recv-last-failure-diagnostic")" \
@@ -539,6 +552,17 @@ else
   diagnostic_mode=$(stat -c %a "$service_home/state/.tg-recv-last-failure-diagnostic")
 fi
 [ "$diagnostic_mode" = 600 ] || fail "private receiver failure diagnostic mode was $diagnostic_mode instead of 600"
+
+drain_home="$TMP_ROOT/downstream-drain-home"
+mkdir -p "$drain_home/config" "$drain_home/state"
+cp "$service_home/state/.wake-queue" "$drain_home/state/.wake-queue"
+drained=$(FM_HOME="$drain_home" "$ROOT/bin/fm-wake-drain.sh" 2>&1)
+assert_contains "$drained" 'CAPTAIN-TELEGRAM: message delivered before failure' \
+  "the real wake drain did not receive the decoded Telegram event"
+assert_contains "$drained" 'continued captain message' \
+  "the real wake drain did not preserve the multiline Telegram event"
+assert_not_contains "$drained" 'SECRET-TOKEN' \
+  "the real wake drain exposed a private receiver diagnostic"
 
 first_failure_rows=$(grep -c 'check: telegram receiver: FAILED' "$service_home/state/.wake-queue")
 service_rc=0
