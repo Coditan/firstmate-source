@@ -437,7 +437,7 @@ EOF
     'the delivered head did not say where the operational sections remain reachable'
   assert_not_contains "$out" 'The digest above is complete for this session start' \
     'the closing guidance unconditionally claimed that the receiving harness delivered the complete digest'
-  assert_contains "$out" 'If you received only a preview, open the `Full output saved to` path' \
+  assert_contains "$out" "If you received only a preview, open the \`Full output saved to\` path" \
     'the closing guidance did not tell a truncated session how to recover the missing digest'
   assert_contains "$out" 'Never treat the bounded subset as the complete files.' \
     'the closing guidance did not distinguish the bounded subset from the complete knowledge files'
