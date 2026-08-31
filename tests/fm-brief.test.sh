@@ -137,6 +137,43 @@ test_ship_project_memory_wording() {
   pass "fm-brief.sh: ship project-memory wording carries the AGENTS.md authoring bar"
 }
 
+# The captain made "correct a claim that outruns its own run" standing on 2026-08-31,
+# after firstmate's own count in that day's decision records recorded six findings of
+# that class reaching him and each being answered the same way. The rule changes when a worker escalates, so it has to sit where a worker
+# actually reads - the generated brief - and not only in the skill firstmate loads.
+# The says-versus-does edge is the whole difference between this rule and a licence to
+# make a claim true by changing behaviour, so it is asserted separately from the rule.
+#
+# It is deliberately absent from the scout scaffold: a scout may not push, so it cannot
+# take the correction the rule obliges, and telling it to would contradict scout rule 1.
+test_claim_correction_rule_is_in_the_ship_brief_only() {
+  local home id brief
+  home="$TMP_ROOT/claim-rule-home"
+  mkdir -p "$home/data"
+  id="brief-claim-rule-e1"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "ship brief was not scaffolded"
+  assert_grep "A sentence is not a decision" "$brief" \
+    "ship brief lost the claims-that-outrun-the-run correction rule"
+  assert_grep "claims more" "$brief" \
+    "ship brief lost the trigger describing an overstated claim"
+  assert_grep "only what the code says, not what it does" "$brief" \
+    "ship brief lost the says-versus-does boundary"
+  assert_grep "Changing what the code DOES so the claim becomes" "$brief" \
+    "ship brief lost the escalation edge for behaviour changes"
+  assert_grep "inside the module you are already changing" "$brief" \
+    "ship brief lost the module containment condition"
+
+  id="brief-claim-rule-e2"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --scout >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "scout brief was not scaffolded"
+  assert_no_grep "A sentence is not a decision" "$brief" \
+    "scout brief gained a correction rule it cannot act on without pushing"
+  pass "fm-brief.sh: ship brief carries the claim-correction rule with its says-versus-does edge"
+}
+
 test_herdr_lab_contract_is_explicit_and_complete() {
   local home id brief
   home="$TMP_ROOT/herdr-lab-home"
@@ -627,6 +664,7 @@ test_ship_modes_generate_clean_briefs
 test_faster_paths_use_configured_authority_without_stacked_review
 test_no_mistakes_dod_wording
 test_ship_project_memory_wording
+test_claim_correction_rule_is_in_the_ship_brief_only
 test_herdr_lab_contract_is_explicit_and_complete
 test_herdr_lab_contract_quotes_foreign_firstmate_path
 test_herdr_lab_omission_is_loud_for_ship_and_scout

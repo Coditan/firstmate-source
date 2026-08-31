@@ -263,6 +263,8 @@ The path's worker, automated gates, and captain approval remain authoritative:
 
 Delivery mode and `yolo` are orthogonal.
 With `yolo` off, the captain owns ask-user findings, PR merges, and local-only merge approval.
+One standing exception holds under either posture: a finding that only brings a message, comment, help text, or document sentence back to what its own run measured, inside the module already under change, is a correction rather than a question and never reaches him, because it alters only what the code says, not what it does.
+`ask-user-authority` owns that boundary and the cases that still escalate, chief among them changing what the code does so the claim becomes true.
 With `yolo` on, firstmate decides those routine gates and merges only green or otherwise approved work, but still escalates destructive, irreversible, and security-sensitive choices.
 Current GitHub enforcement is mixed rather than fleet-wide ungated: measured 2026-08-31, `Coditan/firstmate-source` carries active default-branch ruleset `fleet-main-signoff` requiring `Repo invariants`, `Lint shell scripts`, `Test coverage guard`, `Behavior portable serial`, and `PR must be raised via no-mistakes`, while its classic branch-protection endpoint returns `Branch not protected (HTTP 404)`.
 Every other registered GitHub merge target in this home was readable only far enough to learn `main` as the default branch; both its ruleset and branch-protection endpoints returned `error: Insufficient permissions for this action` with `code: FORBIDDEN`, so its enforcement state is unreadable here rather than known unenforced.

@@ -55,6 +55,12 @@
 # default branch but is Bridge's delivery step, so the ban does not cover it, and
 # an envelope id proves composition rather than delivery. The secondmate charter
 # has no rule 1 and so carries no such note.
+# Ship rule 6 carries the captain's 2026-08-31 standing rule: a sentence claiming
+# more than the run measured is corrected in place, not raised, when the fix is
+# inside the module already under change and alters only what the code says, not
+# what it does. Changing behaviour to make such a claim true is still raised.
+# It is ship-only: a scout may not push, so it cannot take the correction the rule
+# obliges. `.agents/skills/ask-user-authority/SKILL.md` owns the full boundary.
 # Every scaffold's status protocol distinguishes the configured
 # declared-external-wait verb (FM_CLASSIFY_PAUSED_VERB, default "paused") from
 # "blocked:": pause for a known external wait expected to clear on its own,
@@ -442,7 +448,7 @@ Do not hand-edit, commit, or fix findings yourself while a run is active - the p
 Two firstmate-specific rules layer on top of that guidance:
 - ask-user findings are not yours to answer: escalate to firstmate (rule 6) and stop.
   When the decision comes back, feed it to the gate with \`no-mistakes axi respond\` and let the pipeline apply it - do not route the question to "the user" or implement the fix yourself.
-- Avoid \`--yes\`: the captain, not you, owns the ask-user decisions it would silently auto-resolve.
+- Avoid \`--yes\`: the ask-user decisions it would silently auto-resolve are firstmate's or the captain's, never yours.
 
 After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), append \`done: PR {url} checks green\` and stop. You are finished.
 EOF
@@ -496,6 +502,14 @@ $RULE1
    When firstmate replies or a blocker clears and you resume, append \`resolved: {how it was decided or unblocked}\`,
    or \`resolved [key=<slug>]: {how it was decided or unblocked}\` with the same key if you opened it with one,
    so the decision or blocker is durably closed and does not keep resurfacing.
+   A sentence is not a decision. When a message, comment, help text, or document line claims more
+   than the run actually measured, correct the sentence in the same change rather than raising it:
+   that is covered when the correction is inside the module you are already changing and alters
+   only what the code says, not what it does. Changing what the code DOES so the claim becomes
+   true is a different thing - it decides what the right behaviour is - and that one is raised
+   here. This governs what you raise on your own; a finding of this class that arrives through an
+   active validation gate still goes to firstmate like any other gate finding, and the pipeline
+   applies the fix.
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
    daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
