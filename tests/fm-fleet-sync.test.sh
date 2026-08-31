@@ -39,8 +39,17 @@ HOME_N=0
 new_home() {
   HOME_N=$((HOME_N + 1))
   local h="$TMP_ROOT/home-$HOME_N"
-  mkdir -p "$h/projects"
+  mkdir -p "$h/data" "$h/projects"
   printf '%s\n' "$h"
+}
+
+register_project() {
+  local home=$1 name=$2 mode=${3:-}
+  if [ -n "$mode" ]; then
+    printf -- '- %s [%s] - test project (added 2026-08-31)\n' "$name" "$mode" >> "$home/data/projects.md"
+  else
+    printf -- '- %s - test project (added 2026-08-31)\n' "$name" >> "$home/data/projects.md"
+  fi
 }
 
 commit_file() {
@@ -361,8 +370,7 @@ test_local_only_skipped() {
   home=$(new_home)
   clone=$(build_pair "$home" iota)
   advance_origin "$home" iota C1
-  mkdir -p "$home/data"
-  printf -- '- iota [local-only] - test project (added 2026-06-27)\n' > "$home/data/projects.md"
+  register_project "$home" iota local-only
 
   out=$(run_sync "$home" "$clone")
 
@@ -436,19 +444,62 @@ test_single_project_unresolvable_name_still_skips() {
 }
 
 test_whole_fleet_form() {
-  local home behind current out
+  local home behind current pool out
   home=$(new_home)
   behind=$(build_pair "$home" fleet-behind)
   advance_origin "$home" fleet-behind C1
   current=$(build_pair "$home" fleet-current)
+  pool="$home/projects/fleet-gnhf-worktrees"
+  mkdir -p "$pool/worktree-slot"
 
   # Whole-fleet form: no project-dir argument.
   out=$(run_sync "$home")
 
   assert_contains "$out" "fleet-behind: synced" "whole-fleet form syncs a behind clone"
   assert_contains "$out" "fleet-current: already current" "whole-fleet form reports a current clone"
-  : "$behind $current"
-  pass "whole-fleet form processes every clone under projects/"
+  assert_not_contains "$out" "fleet-gnhf-worktrees" "whole-fleet form ignores unregistered non-repo pools"
+  : "$behind $current $pool"
+  pass "whole-fleet form processes clone roots and ignores unregistered non-repo pools"
+}
+
+test_whole_fleet_registered_missing_project_still_reports() {
+  local home out
+  home=$(new_home)
+  register_project "$home" missing-registered
+
+  out=$(run_sync "$home")
+
+  assert_contains "$out" "missing-registered: skipped: not a directory" \
+    "a registered project with no directory still reports the existing skip"
+  pass "registered missing projects still report as skipped"
+}
+
+test_whole_fleet_registered_non_repo_project_still_reports() {
+  local home out
+  home=$(new_home)
+  register_project "$home" broken-registered
+  mkdir -p "$home/projects/broken-registered/subdir"
+
+  out=$(run_sync "$home")
+
+  assert_contains "$out" "broken-registered: skipped: not a git repo" \
+    "a registered project whose directory is not a git repo still reports the existing skip"
+  pass "registered non-repo projects still report as skipped"
+}
+
+test_whole_fleet_unregistered_clone_still_syncs() {
+  local home clone out
+  home=$(new_home)
+  clone=$(build_pair "$home" unregistered-clone)
+  advance_origin "$home" unregistered-clone C1
+
+  out=$(run_sync "$home")
+
+  assert_contains "$out" "unregistered-clone: synced" \
+    "an unregistered directory that is a real clone is still synced"
+  [ "$(head_sha "$clone")" = "$(git -C "$clone" rev-parse origin/main)" ] \
+    || fail "unregistered clone was not fast-forwarded"
+  pass "unregistered clone roots remain visible to whole-fleet sync"
 }
 
 test_non_repo_directory_inside_enclosing_repo_skipped() {
@@ -644,6 +695,9 @@ test_single_project_by_projects_relative_name_resolves
 test_single_project_by_projects_relative_name_ignores_cwd_shadow
 test_single_project_unresolvable_name_still_skips
 test_whole_fleet_form
+test_whole_fleet_registered_missing_project_still_reports
+test_whole_fleet_registered_non_repo_project_still_reports
+test_whole_fleet_unregistered_clone_still_syncs
 test_non_repo_directory_inside_enclosing_repo_skipped
 test_bootstrap_relays_recovered_and_stuck
 test_orphaned_stale_packed_refs_lock_recovers

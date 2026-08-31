@@ -37,6 +37,8 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+REG="$DATA/projects.md"
 PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 # shellcheck source=bin/fm-lock-lib.sh
 . "$SCRIPT_DIR/fm-lock-lib.sh"
@@ -75,6 +77,29 @@ project_label() {
     projects/*) basename "$PROJ" ;;
     *) printf '%s\n' "$PROJ" ;;
   esac
+}
+
+registered_project_names() {
+  [ -f "$REG" ] || return 0
+  awk '$1=="-" && $2!="" { print $2 }' "$REG"
+}
+
+registry_has_project() {
+  local name=$1
+  [ -f "$REG" ] || return 1
+  awk -v n="$name" '
+    $1=="-" && $2==n { found=1; exit }
+    END { exit found ? 0 : 1 }
+  ' "$REG"
+}
+
+project_is_git_root() {
+  local proj=$1 git_root project_root
+  [ -d "$proj" ] || return 1
+  git_root=$(git -C "$proj" rev-parse --show-toplevel 2>/dev/null) || return 1
+  project_root=$(cd "$proj" && pwd -P) || return 1
+  [ -n "$git_root" ] \
+    && [ "$(cd "$git_root" 2>/dev/null && pwd -P)" = "$project_root" ]
 }
 
 # resolve_project_arg <arg>: accept a path (used as-is when it already exists)
@@ -295,7 +320,6 @@ report_stuck() {
 }
 
 sync_project() {
-  local git_root project_root
   PROJ=$1
   label=$(project_label)
 
@@ -303,10 +327,7 @@ sync_project() {
     echo "$label: skipped: not a directory"
     return 0
   fi
-  git_root=$(git -C "$PROJ" rev-parse --show-toplevel 2>/dev/null) || git_root=
-  project_root=$(cd "$PROJ" && pwd -P) || project_root=
-  if [ -z "$git_root" ] || [ -z "$project_root" ] \
-      || [ "$(cd "$git_root" 2>/dev/null && pwd -P)" != "$project_root" ]; then
+  if ! project_is_git_root "$PROJ"; then
     echo "$label: skipped: not a git repo"
     return 0
   fi
@@ -432,8 +453,14 @@ if [ $# -eq 1 ]; then
 fi
 
 [ -d "$PROJECTS" ] || exit 0
+for name in $(registered_project_names); do
+  sync_project "$PROJECTS/$name"
+done
 for proj in "$PROJECTS"/*; do
   [ -e "$proj" ] || continue
   [ -d "$proj" ] || continue
+  name=$(basename "$proj")
+  registry_has_project "$name" && continue
+  project_is_git_root "$proj" || continue
   sync_project "$proj"
 done
