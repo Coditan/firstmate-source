@@ -1429,8 +1429,15 @@ fi
 # nature: the question leaves the open surfaces while the answer never lands. The
 # recovery-point case on 2026-08-17 sat in exactly that state with nothing detecting
 # it, which is why this is a detect-only bootstrap step rather than something a
-# session is expected to remember to run. Read-only, no network, one pass over two
-# local files.
+# session is expected to remember to run. No network, one pass over two local
+# files, and it reads no fleet state. The one thing it writes is its own scratch
+# memo under state/ (state/.decision-ledger-memo, via a temp file and a rename, so
+# a concurrent reader sees one whole memo or the other), which is what lets the
+# digest's settled list later in this same session start reuse this read instead of
+# walking every record a second time. That memo is not fleet state, so it stays
+# safe on the lock-refused path: the mutating steps the read-only banner promises
+# to skip are the fleet-mutating sweeps, not a private cache this home rewrites
+# from its own records.
 if command -v jq >/dev/null 2>&1; then
   # Exit 1 means findings; 0 is clean and stays silent, and anything else is an
   # environment fault this step declines to turn into a false alarm.

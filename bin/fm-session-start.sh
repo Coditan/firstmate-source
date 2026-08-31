@@ -109,6 +109,16 @@
 #                       names, and wake delivery stays outside the harness
 #                       entirely as a supervised service (docs/wake-delivery.md).
 #
+#   9. timing        - one line naming what this whole run cost, and the path of
+#                       state/session-start-timing.log, where the per-step
+#                       breakdown for this run and the previous ones was appended.
+#                       A vessel had no way to see its own startup getting slower
+#                       as its in-flight count grew, and reconstructing it from
+#                       file timestamps afterwards is blind to every step that
+#                       touches no file. This is that reading, kept to one line so
+#                       the digest does not gain another thing to read at every
+#                       start.
+#
 # These numbers are the section markers in the body below, and are kept in step
 # with them on purpose: a header that renumbers independently of the code it
 # describes is a map of a script that no longer exists.
@@ -160,6 +170,101 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+
+# --- per-step timing --------------------------------------------------------
+# A VESSEL COULD NOT READ ITS OWN STARTUP COST. Nothing here recorded a duration
+# anywhere, so no seat could tell whether its own session start was getting slower
+# as its in-flight count grew, and the one vessel that asked had to reconstruct the
+# shape afterwards from file timestamps - which is blind to exactly the steps that
+# touch no file, and those are several of the expensive ones.
+#
+# So every step is timed, and the breakdown is APPENDED to a log rather than
+# printed. The digest gains one line naming the total and where the breakdown is;
+# it does not gain another thing to read at every start. The cost is two clock
+# reads per step, both shell builtins where the shell has EPOCHREALTIME.
+#
+# THE CLOCK STARTS HERE, ahead of the harness probe and the library sources, and
+# not after them: a total that excludes real startup work under-reports the very
+# run it names, which is the blind spot this exists to remove. Only $STATE has to
+# be resolved first, and it is.
+TIMING_LOG="$STATE/session-start-timing.log"
+TIMING_KEEP=${FM_SESSION_START_TIMING_KEEP:-200}
+case "$TIMING_KEEP" in ''|*[!0-9]*|0) TIMING_KEEP=200 ;; esac
+TIMING_MARKS=""
+
+# Always prints an integer. Timing must never be able to break a startup digest,
+# so every read is validated as digits before it is trusted and the last resort is
+# whole seconds. The fallback branch is the shell without EPOCHREALTIME - bash
+# before 4.4, which in practice means the system bash on macOS, where `date` is BSD
+# date: it does not implement %N, prints it literally, and still exits 0, so an
+# unvalidated read yields a non-numeric string that no `||` ever catches.
+now_ms() {
+  local micros nanos secs
+  if [ -n "${EPOCHREALTIME:-}" ]; then
+    micros=${EPOCHREALTIME/[.,]/}
+    case "$micros" in ''|*[!0-9]*) micros="" ;; esac
+    if [ -n "$micros" ]; then
+      printf '%s' "$((10#$micros / 1000))"
+      return 0
+    fi
+  fi
+  nanos=$(date +%s%N 2>/dev/null)
+  case "$nanos" in ''|*[!0-9]*) nanos="" ;; esac
+  if [ -n "$nanos" ]; then
+    printf '%s' "$((10#$nanos / 1000000))"
+    return 0
+  fi
+  secs=$(date +%s 2>/dev/null)
+  case "$secs" in ''|*[!0-9]*) secs=0 ;; esac
+  printf '%s' "$((10#$secs * 1000))"
+}
+
+TIMING_T0=$(now_ms)
+TIMING_LAST=$TIMING_T0
+
+timing_mark() {  # <step-name>: record the elapsed time since the previous mark
+  local now
+  now=$(now_ms)
+  TIMING_MARKS="$TIMING_MARKS${TIMING_MARKS:+ }$1=$((now - TIMING_LAST))ms"
+  TIMING_LAST=$now
+}
+
+# ROTATED once the log passes twice FM_SESSION_START_TIMING_KEEP runs, and this
+# run's line is appended after that, so the one thing this adds to a home cannot
+# grow without bound and the path the digest names always holds the run it names.
+# Rotation rather than a tail-and-replace because two sessions can be starting at
+# once - the read-only path a refused session takes reaches this too - and a
+# rewrite from a stale snapshot silently drops whatever the other session appended
+# in between, which is exactly the overlapping-startup sample a vessel most wants.
+# An append is atomic and a rename is atomic: a line already written to the old
+# file is carried into session-start-timing.log.1 rather than lost, and neither
+# session waits on the other. Every step here stays best-effort: a startup digest
+# must never fail, or block, because it could not write or rotate a timing line.
+timing_report() {
+  local total lines
+  timing_mark closing
+  total=$(( $(now_ms) - TIMING_T0 ))
+  # `2>/dev/null` goes FIRST on both of these. A redirection is applied left to
+  # right, so a failing `<` or `>>` announced before stderr is silenced puts a bare
+  # shell error in the digest - which the very first start in a new home, where
+  # there is no log to read yet, would do every time.
+  if mkdir -p "$STATE" 2>/dev/null; then
+    lines=$(wc -l 2>/dev/null < "$TIMING_LOG" | tr -d ' ')
+    case "$lines" in ''|*[!0-9]*) lines=0 ;; esac
+    if [ "$lines" -ge "$((TIMING_KEEP * 2))" ]; then
+      mv -f "$TIMING_LOG" "$TIMING_LOG.1" 2>/dev/null || true
+    fi
+  fi
+  if printf '%s total=%sms %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$total" "$TIMING_MARKS" \
+       2>/dev/null >> "$TIMING_LOG"; then
+    printf 'SESSION START took %sms; per-step breakdown for this run and the previous ones: %s\n' \
+      "$total" "$TIMING_LOG"
+  else
+    printf 'SESSION START took %sms; the per-step breakdown could not be written to %s\n' \
+      "$total" "$TIMING_LOG"
+  fi
+}
+
 # shellcheck source=bin/fm-axi-path-lib.sh
 . "$SCRIPT_DIR/fm-axi-path-lib.sh"
 fm_axi_prepend_path "$FM_HOME"
@@ -173,6 +278,11 @@ PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 . "$SCRIPT_DIR/fm-role-lib.sh"
 # shellcheck source=bin/fm-tmux-lib.sh
 . "$SCRIPT_DIR/fm-tmux-lib.sh"
+
+# The harness probe above forks a subprocess that walks the process tree, and five
+# libraries are sourced. Named here so the breakdown stays a complete partition of
+# the total rather than charging this to the first step that follows it.
+timing_mark preamble
 
 STATUS_TAIL=${FM_SESSION_START_STATUS_TAIL:-5}
 case "$STATUS_TAIL" in ''|*[!0-9]*) STATUS_TAIL=5 ;; esac
@@ -333,6 +443,8 @@ case "$VESSEL_ARM" in
 esac
 printf 'VESSEL: %s (%s)\n' "${VESSEL_LABEL:-unresolved-home}" "$VESSEL_SURFACE"
 
+timing_mark vessel-identity
+
 # --- 1. lock -----------------------------------------------------------
 subsection "LOCK"
 LOCK_OUT=$("$SCRIPT_DIR/fm-lock.sh" 2>&1)
@@ -357,6 +469,8 @@ if [ "$LOCK_RC" -ne 0 ]; then
   }
 fi
 
+timing_mark lock
+
 # --- 2. bootstrap --------------------------------------------------------
 subsection "BOOTSTRAP"
 if [ "$READ_ONLY" -eq 1 ]; then
@@ -369,6 +483,8 @@ if [ -n "$BOOT_OUT" ]; then
 else
   printf '(silent - all good)\n'
 fi
+
+timing_mark bootstrap
 
 # --- 2b. wake delivery ------------------------------------------------------
 # The listener that turns a queued wake into a model turn runs outside this
@@ -390,6 +506,8 @@ else
   printf '%s\n' "$PUBLISH_OUT"
   "$SCRIPT_DIR/fm-delivery-service.sh" status || true
 fi
+
+timing_mark wake-delivery
 
 # --- 3. wake-drain -------------------------------------------------------
 # Drained records are this turn's first work queue (AGENTS.md section 8); the
@@ -415,6 +533,8 @@ else
   fi
 fi
 
+timing_mark wake-queue
+
 # --- 4. direct Telegram receiver ---------------------------------------------
 TELEGRAM_PRESENT=0
 [ -f "$CONFIG/telegram.env" ] && TELEGRAM_PRESENT=1
@@ -429,6 +549,8 @@ elif [ ! -x "$CONFIG/fm-tg-recv.sh" ]; then
 else
   printf '%s\n' "TELEGRAM_RECEIVER: active - run bin/fm-tg-recv-arm.sh as its own tracked background task, never shell &; it starts or attaches to this home's receiver"
 fi
+
+timing_mark telegram
 
 # --- 5. supervision operating instructions ----------------------------------
 AFK_PRESENT=0
@@ -453,6 +575,8 @@ fi
   --afk "$AFK_PRESENT" \
   --x-mode "$X_MODE_PRESENT"
 
+timing_mark supervision
+
 # --- 6. context digest -----------------------------------------------------
 section "CONTEXT"
 # The active role overlay leads the context digest because it amends AGENTS.md
@@ -473,6 +597,8 @@ print_file_or_absent "$DATA/secondmates.md" "data/secondmates.md"
 print_file_or_absent "$DATA/captain.md" "data/captain.md"
 print_file_or_absent "$DATA/captain-shared.md" "data/captain-shared.md (shared, main-authoritative, read-only in secondmate homes)"
 print_file_or_absent "$DATA/learnings.md" "data/learnings.md"
+
+timing_mark context
 
 # --- 7. fleet-state digest ---------------------------------------------
 section "FLEET STATE"
@@ -606,6 +732,8 @@ else
   printf 'absent\n'
 fi
 
+timing_mark fleet-state
+
 # --- 8. closing reminder -----------------------------------------------
 section "NEXT STEP"
 if [ "$READ_ONLY" -eq 1 ]; then
@@ -659,5 +787,8 @@ Re-read a file only if this digest flagged it ABSENT (then
 rebuild or create it per AGENTS.md), its contents looked unparseable/corrupt,
 or an individual full status log is needed for older wake-event history.
 EOF
+
+# --- 9. timing -----------------------------------------------------------
+timing_report
 
 exit 0

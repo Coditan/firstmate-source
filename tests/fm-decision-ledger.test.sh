@@ -98,6 +98,115 @@ write_oversized_decision_backlog() {  # <home> <count>
   } > "$home/data/backlog.md"
 }
 
+# The fixture above deliberately writes rows with NO resolution envelope, so every
+# record it makes reads as settled=false. That keeps the audit and baseline paths
+# oversized while leaving the digest re-check with an empty settled set - which is
+# precisely how a recomputed digest list travelling on argv reached review without
+# the suite noticing. This one writes genuinely SETTLED records instead: a full
+# resolution envelope, a stored digest, decision text, and closed routed work, so
+# `settled` is true for every row and the re-check runs at scale.
+#
+# The stored digests are deliberately wrong, so every record reports altered. That
+# is the point: it drives the whole staging, hashing, count-check and hand-off
+# without the fixture having to compute two thousand real digests.
+write_oversized_settled_backlog() {  # <home> <count>
+  local home=$1 count=$2 i
+  {
+    printf '## In flight\n\n## Queued\n\n## Done\n'
+    for i in $(seq 1 "$count"); do
+      printf -- '- [x] bulk-%04d-decision-key - Synthetic settled decision %04d (repo: synth) (kind: captain) (done 2026-08-01)\n' \
+        "$i" "$i"
+      printf '  Resolution recorded by fm-decision-hold.\n'
+      printf '  Decision digest: %s\n' "$(printf '0%.0s' $(seq 1 64))"
+      printf '  Door: chat\n\n'
+      printf '  Captain decision:\n'
+      printf '  synthetic answer %04d\n\n' "$i"
+      printf '  Routed work:\n  - (none)\n'
+    done
+  } > "$home/data/backlog.md"
+}
+
+# THE DIGEST RE-CHECK HAS ITS OWN CEILING, and it is not the backlog's. The
+# recomputed digest list is 64 hex characters plus a newline per SETTLED record, so
+# it clears the 131072-byte argv ceiling at about 2017 settled records while the
+# backlog that produced it is still comfortably parseable. A re-check that hands
+# that list to jq through --arg fails execve with E2BIG at this size; one that hands
+# it over on stdin does not. This drives the read at that size and asserts it still
+# reports every record correctly.
+test_the_digest_recheck_stays_off_argv_at_scale() {
+  local home count digest_bytes backlog_bytes audit settled rc=0
+  home=$(make_home oversized-settled-recheck)
+  count=2100
+  write_oversized_settled_backlog "$home" "$count"
+
+  # 64 hex characters and a separator per record, less the trailing newline the
+  # command substitution that captures the list strips.
+  digest_bytes=$(( count * 65 - 1 ))
+  assert_over_argv_ceiling "$digest_bytes" "the recomputed digest list for $count settled records"
+  backlog_bytes=$(LC_ALL=C wc -c < "$home/data/backlog.md" | tr -d '[:space:]')
+  [ "$backlog_bytes" -gt 0 ] || fail "the oversized settled fixture wrote nothing"
+
+  settled=$(run_ledger "$home" --json --all) \
+    || fail "an oversized settled read must complete, not refuse: $settled"
+  [ "$(printf '%s' "$settled" | jq '.settled | length')" -eq "$count" ] \
+    || fail "the oversized read did not present every settled record"
+  [ "$(printf '%s' "$settled" | jq '[.settled[] | select(.verbatim)] | length')" -eq 0 ] \
+    || fail "a record whose stored digest cannot match must never read as verbatim"
+
+  audit=$(run_ledger "$home" --audit --json) || rc=$?
+  [ "$rc" -eq 1 ] || fail "an oversized altered set must report findings, got exit $rc"
+  [ "$(printf '%s' "$audit" | jq '[.audit[] | select(.class == "altered-record")] | length')" -eq "$count" ] \
+    || fail "the re-check dropped altered-record findings above the argv ceiling"
+
+  pass "the digest re-check stays off argv when the recomputed list clears the ceiling"
+}
+
+# THE STAGED FILES ARE THE CAPTAIN'S VERBATIM WORDS. The re-check writes one per
+# settled record, and the implementation it replaced used only pipes and left
+# nothing behind, so a read that is interrupted - a vessel pressing Ctrl-C during a
+# session start, a supervisor ending the run - must not leave them in TMPDIR.
+#
+# TMPDIR is pointed at a directory this test owns, so what is asserted is exactly
+# what the ledger left there and nothing else on the machine.
+test_an_interrupted_recheck_leaves_no_staged_decision_text() {
+  local home priv pid seen=0 left i
+  home=$(make_home interrupted-recheck)
+  write_oversized_settled_backlog "$home" 3000
+  priv="$home/private-tmp"
+  mkdir -p "$priv"
+
+  # Job control, so the read gets its own process group and the interrupt below
+  # reaches the staging subshell too - which is what a Ctrl-C at the terminal does,
+  # and what a cleanup owned by that subshell alone cannot survive.
+  set -m
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" FM_DATA_OVERRIDE="$home/data" TMPDIR="$priv" \
+    "$LEDGER" --audit >/dev/null 2>&1 &
+  pid=$!
+  set +m
+  for i in $(seq 1 600); do
+    if compgen -G "$priv/fm-decision-ledger.*" >/dev/null 2>&1; then seen=1; break; fi
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.05
+  done
+  if [ "$seen" -ne 1 ]; then
+    kill -TERM -- -"$pid" 2>/dev/null || kill "$pid" 2>/dev/null
+    wait "$pid" 2>/dev/null
+    fail "the re-check never staged anything, so this test proved nothing about cleanup"
+  fi
+
+  kill -TERM -- -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    compgen -G "$priv/fm-decision-ledger.*" >/dev/null 2>&1 || break
+    sleep 0.1
+  done
+  left=$(compgen -G "$priv/fm-decision-ledger.*" 2>/dev/null | wc -l | tr -d '[:space:]')
+  [ "$left" -eq 0 ] \
+    || fail "an interrupted re-check left $left staging directory(ies) of decision text behind"
+
+  pass "an interrupted re-check leaves no staged decision text behind"
+}
+
 # A decision must outlive the session that took it AND the retention that rotates
 # its record out of the live backlog, because both of those are exactly what the
 # three temporary homes it used to live in did not.
@@ -1012,6 +1121,226 @@ EOF
   pass "an answer pointer that no longer resolves reports instead of settling"
 }
 
+# THE REWRITE THIS DEFENDS. The digest re-check used to walk the settled records
+# one at a time, spending about four jq launches per record: on the main home on
+# 2026-08-31 that was 933 launches and 13.6 of the command's 14.1 seconds, against
+# 0.5 for everything else the script does. It is now one pass - the texts are handed
+# over NUL-separated and hashed by a single sha256sum over the set.
+#
+# The hazard a single pass introduces that a per-record loop could not have is
+# MISALIGNMENT: the recomputed digests come back as a list, and pairing entry N with
+# record N is an assumption rather than something each iteration carried with it. So
+# this checks a mixed set where SOME records are altered and the rest are not, and
+# insists every verdict lands on the right record - not merely that the right
+# NUMBER of records read as altered.
+test_the_single_pass_recheck_puts_every_verdict_on_the_right_record() {
+  local home json audit rc=0 i
+  home=$(make_home single-pass-alignment)
+  local ground=""
+  for i in 1 2 3 4 5 6; do
+    printf 'answer %s line one\nanswer %s line two\n' "$i" "$i" > "$home/d$i.txt"
+    # Each of these is a genuinely distinct question, which is exactly what the
+    # intake gate makes the filer say out loud rather than infer from wording.
+    # shellcheck disable=SC2086
+    run_hold "$home" record "probe$i" "key$i" --door chat --decision-file "$home/d$i.txt" \
+      --title "Question $i" --repo firstmate $ground >/dev/null 2>&1 \
+      || fail "recording decision $i failed"
+    ground="--new-ground"
+  done
+
+  # Alter the second and the fifth only, leaving four intact around them, so a
+  # verdict that slid by one record shows up as a wrong id rather than a wrong count.
+  sed -i.bak 's/^  answer 2 line two$/  answer 2 line two EDITED/' "$home/data/backlog.md"
+  sed -i.bak 's/^  answer 5 line one$/  answer 5 line one EDITED/' "$home/data/backlog.md"
+
+  audit=$(run_ledger "$home" --audit) || rc=$?
+  [ "$rc" -eq 1 ] || fail "two altered records must make the audit report findings"
+  assert_contains "$audit" "altered-record probe2-decision-key2" \
+    "the altered second record must be named"
+  assert_contains "$audit" "altered-record probe5-decision-key5" \
+    "the altered fifth record must be named"
+  assert_not_contains "$audit" "altered-record probe1-decision-key1" \
+    "an untouched record next to an altered one must not inherit its verdict"
+  assert_not_contains "$audit" "altered-record probe3-decision-key3" \
+    "an untouched record next to an altered one must not inherit its verdict"
+  assert_not_contains "$audit" "altered-record probe4-decision-key4" \
+    "an untouched record must not be reported as altered"
+  assert_not_contains "$audit" "altered-record probe6-decision-key6" \
+    "an untouched record must not be reported as altered"
+
+  json=$(run_ledger "$home" --json --all) || fail "the ledger could not read the home"
+  printf '%s' "$json" | jq -e '
+    (.settled | map({key: .id, value: .verbatim}) | from_entries) as $v
+    | ($v["probe2-decision-key2"] == false)
+      and ($v["probe5-decision-key5"] == false)
+      and ($v["probe1-decision-key1"] == true)
+      and ($v["probe3-decision-key3"] == true)
+      and ($v["probe4-decision-key4"] == true)
+      and ($v["probe6-decision-key6"] == true)' >/dev/null \
+    || fail "each record's verbatim verdict must be its own: $json"
+
+  pass "the single-pass digest re-check puts every verdict on the record it belongs to"
+}
+
+# The texts are handed to the hasher NUL-separated because a decision legally
+# contains newlines, tabs, quotes, and genuinely blank lines - every delimiter
+# except the one byte markdown cannot hold. A record whose text is awkward in each
+# of those ways must still verify, or the separator is silently eating content and
+# every such decision would read as altered.
+test_awkward_decision_text_still_verifies_through_the_single_pass() {
+  local home json
+  home=$(make_home awkward-text)
+  printf 'first line\n\nafter a blank line\n\twith a leading tab\nand "quotes" and a backslash \\ too\n' \
+    > "$home/awkward.txt"
+  run_hold "$home" record shapes payload --door chat --decision-file "$home/awkward.txt" \
+    --title "Text with every delimiter that is not NUL" --repo firstmate >/dev/null 2>&1 \
+    || fail "recording the awkward decision failed"
+  printf 'plain\n' > "$home/plain.txt"
+  run_hold "$home" record shapes2 plain --door chat --decision-file "$home/plain.txt" \
+    --title "An ordinary neighbour" --repo firstmate --new-ground >/dev/null 2>&1 \
+    || fail "recording the neighbouring decision failed"
+
+  json=$(run_ledger "$home" --json --all) || fail "the ledger could not read the home"
+  printf '%s' "$json" | jq -e '
+    (.settled | map({key: .id, value: .verbatim}) | from_entries) as $v
+    | ($v["shapes-decision-payload"] == true) and ($v["shapes2-decision-plain"] == true)' >/dev/null \
+    || fail "a decision containing blank lines, tabs, quotes and a backslash must still verify: $json"
+  printf '%s' "$json" | jq -e '
+    [.settled[] | select(.id == "shapes-decision-payload") | .decision]
+    | first | contains("after a blank line") and contains("\"quotes\"")' >/dev/null \
+    || fail "the awkward text must come back whole, not truncated at a delimiter: $json"
+
+  pass "a decision holding blank lines, tabs, quotes and backslashes still verifies"
+}
+
+# A READER THAT CANNOT SIZE ITS OWN INPUT MUST NOT REPORT ON IT. The single pass
+# recomputes the digests as a set, so a set that does not line up one-to-one with
+# the records means some record was not re-hashed on this read - and this command's
+# entire claim is that every settled record it shows WAS. It refuses rather than
+# letting the unmatched ones quietly read as altered, or worse as verified.
+test_a_recheck_that_cannot_size_its_input_refuses_instead_of_reporting() {
+  local home out rc=0
+  home=$(make_home unsizable-recheck)
+  printf 'a decision\n' > "$home/d.txt"
+  run_hold "$home" record probe key --door chat --decision-file "$home/d.txt" \
+    --title "A question" --repo firstmate >/dev/null 2>&1 || fail "recording failed"
+
+  # A jq that answers nothing is the shape a stubbed or broken one takes, and it
+  # used to leave the count empty and the walk silently skipped.
+  cat > "$home/fakebin/jq" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$home/fakebin/jq"
+  out=$(run_ledger "$home" --limit 5 2>&1) || rc=$?
+  rm -f "$home/fakebin/jq"
+  [ "$rc" -eq 2 ] || fail "an unreadable count must be an environment refusal, got exit $rc: $out"
+  assert_contains "$out" "refusing to report on records this read could not size" \
+    "the refusal must say why it will not report, not fall out as a shell error"
+  assert_not_contains "$out" "integer expression expected" \
+    "the refusal must be this script's own sentence, not a bash arithmetic complaint"
+
+  pass "a re-check that cannot size its own input refuses instead of reporting"
+}
+
+# ONE FULL READ PER SESSION START, NOT ONE PER CALLER. bin/fm-bootstrap.sh runs
+# --audit and bin/fm-session-start.sh runs --limit 5 seconds later over the same two
+# files; the second used to redo the whole walk to print five records.
+#
+# The reuse is only honest while its key holds, and this is the case that proves it:
+# a record edited BETWEEN the two calls must not come back carrying the verdict the
+# first call gave it. That is the exact failure a cache on a verification reader can
+# cause, and the whole reason the key is the content rather than a timestamp.
+test_a_reused_read_is_dropped_the_moment_the_records_change() {
+  local home first second rc=0
+  home=$(make_home reuse-key)
+  printf 'the first answer\n' > "$home/d.txt"
+  run_hold "$home" record probe key --door chat --decision-file "$home/d.txt" \
+    --title "A question" --repo firstmate >/dev/null 2>&1 || fail "recording failed"
+
+  first=$(run_ledger "$home" --json --all) || fail "the first read failed"
+  printf '%s' "$first" | jq -e '[.settled[] | select(.id == "probe-decision-key") | .verbatim] | first' \
+    >/dev/null || fail "the first read must verify the record: $first"
+  [ -f "$home/state/.decision-ledger-memo" ] \
+    || fail "a full read must leave the computed model where the next caller in this session start can reuse it"
+
+  # The second call inside the same session start reuses it - same bytes, same answer.
+  second=$(run_ledger "$home" --json --all) || fail "the reusing read failed"
+  [ "$second" = "$first" ] || fail "a reuse must return exactly what the walk returned"
+
+  # Now edit the stored decision, as a hand-edit between the two calls would. The
+  # key is the content, so the reuse must be dropped and the record must read as
+  # altered - never as the verified record the previous call saw.
+  sed -i.bak 's/^  the first answer$/  the second answer/' "$home/data/backlog.md"
+  local audit
+  audit=$(run_ledger "$home" --audit) || rc=$?
+  [ "$rc" -eq 1 ] || fail "an edit between two reads must be caught, not served from the previous read"
+  assert_contains "$audit" "altered-record probe-decision-key" \
+    "the record edited after the first read must report as altered on the next one"
+
+  pass "a reused read is dropped the moment the records it was taken from change"
+}
+
+# THE REUSE HAS TO BE READ BACK, NOT MERELY WRITTEN. Comparing two reads proves
+# nothing about it: a full recomputation returns exactly the same bytes, so an
+# equality assertion still passes if the memo is never hit at all - a broken key, a
+# validation case that always falls through, an expired TTL.
+#
+# state/.decision-ledger-memo is the script's own persisted artifact with a stated
+# four-line shape - `<key> <epoch>`, then CLASSIFIED, VERIFIED and ALTERED - so this
+# primes it, then rewrites the stored ALTERED payload alone, leaving the key line
+# untouched. The planted finding can reach a reader only through a genuine hit: a
+# read that recomputes derives its findings from the records, where this id does not
+# exist.
+test_a_reuse_is_read_back_rather_than_recomputed() {
+  local home memo audit rc=0
+  home=$(make_home reuse-hit)
+  printf 'the only answer\n' > "$home/d.txt"
+  run_hold "$home" record probe key --door chat --decision-file "$home/d.txt" \
+    --title "A question" --repo firstmate >/dev/null 2>&1 || fail "recording failed"
+
+  run_ledger "$home" --json --all >/dev/null || fail "the priming read failed"
+  memo="$home/state/.decision-ledger-memo"
+  [ -f "$memo" ] || fail "a full read must leave the computed model for the next caller"
+
+  { head -n 3 "$memo"
+    printf '%s\n' '[{"class":"altered-record","id":"planted-in-the-memo","detail":"only a reused read can surface this"}]'
+  } > "$memo.rewritten" || fail "could not stage the rewritten memo"
+  mv -f "$memo.rewritten" "$memo" || fail "could not replace the memo"
+
+  audit=$(run_ledger "$home" --audit) || rc=$?
+  [ "$rc" -eq 1 ] || fail "the reusing read must report the stored findings, got exit $rc: $audit"
+  assert_contains "$audit" "altered-record planted-in-the-memo" \
+    "the second read in a session start must read the stored model back, not walk the records again"
+
+  pass "a reuse is read back rather than recomputed"
+}
+
+# The reuse must be a cost decision and nothing else: turning it off must not change
+# a single byte of what a reader is shown.
+test_turning_the_reuse_off_changes_no_output() {
+  local home with without i
+  home=$(make_home reuse-neutral)
+  local ground=""
+  for i in 1 2 3; do
+    printf 'answer %s\n' "$i" > "$home/d$i.txt"
+    # shellcheck disable=SC2086
+    run_hold "$home" record "probe$i" "key$i" --door chat --decision-file "$home/d$i.txt" \
+      --title "Question $i" --repo firstmate $ground >/dev/null 2>&1 || fail "recording $i failed"
+    ground="--new-ground"
+  done
+  sed -i.bak 's/^  answer 2$/  answer 2 EDITED/' "$home/data/backlog.md"
+
+  run_ledger "$home" --json --all >/dev/null || true   # prime the reuse
+  with=$(run_ledger "$home" --json --all) || fail "the reusing read failed"
+  rm -f "$home/state/.decision-ledger-memo"
+  without=$(export FM_DECISION_LEDGER_NO_MEMO=1; run_ledger "$home" --json --all) \
+    || fail "the read with the reuse disabled failed"
+  [ "$with" = "$without" ] || fail "the reuse must be a cost decision, not an output one"
+
+  pass "turning the reuse off changes no byte of what a reader is shown"
+}
+
 test_settled_decision_survives_retention_into_the_archive
 test_open_count_labels_name_distinct_sets_without_changing_predicates
 test_a_second_question_cannot_be_filed_without_disposing_of_the_first
@@ -1030,8 +1359,16 @@ test_the_baseline_converges_the_audit_without_hiding_what_it_covers
 test_a_baseline_cannot_silence_a_repairable_record
 test_removing_a_baseline_entry_invalidates_every_entry
 test_oversized_decision_payloads_do_not_travel_on_argv
+test_the_digest_recheck_stays_off_argv_at_scale
+test_an_interrupted_recheck_leaves_no_staged_decision_text
 test_the_decision_board_input_never_carries_an_answered_question
 test_a_recovered_answer_disposes_a_record_no_other_verb_can_reach
 test_attesting_an_answer_cannot_reach_a_live_or_answered_or_unanswered_record
 test_attestation_binds_validation_and_digest_to_one_answer_row
 test_an_answer_pointer_that_no_longer_resolves_reports_again
+test_the_single_pass_recheck_puts_every_verdict_on_the_right_record
+test_awkward_decision_text_still_verifies_through_the_single_pass
+test_a_recheck_that_cannot_size_its_input_refuses_instead_of_reporting
+test_a_reused_read_is_dropped_the_moment_the_records_change
+test_a_reuse_is_read_back_rather_than_recomputed
+test_turning_the_reuse_off_changes_no_output

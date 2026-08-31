@@ -30,6 +30,13 @@
 # is visible here rather than quietly authoritative, and "these are his words" is
 # something this output demonstrates rather than asserts.
 #
+# The whole set is re-hashed in ONE pass, and one full read is reusable by the next
+# caller in the same session start through the script-owned `state/.decision-ledger-memo`.
+# Both are cost changes and neither weakens the re-check: the reuse is keyed on the
+# content of the record files and of this script, so it is only ever returned when
+# recomputing would give the same answer. See "THE SAME RE-CHECK" and "ONE FULL READ
+# PER SESSION START" in the body.
+#
 # WHAT --audit FINDS
 # Every class below is STRUCTURAL. None of them reads prose to guess that a
 # decision happened, which the lifecycle rightly forbids; each one is a shape the
@@ -194,9 +201,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-$FM_ROOT}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 BACKLOG="$DATA/backlog.md"
 ARCHIVE="$DATA/done-archive.md"
 BASELINE="$DATA/decision-baseline.md"
+# This script's own scratch record under state/, per AGENTS.md section 2: the
+# script that writes a state file is the only thing that ever changes it.
+MEMO="$STATE/.decision-ledger-memo"
+MEMO_TTL="${FM_DECISION_LEDGER_MEMO_TTL:-120}"
+case "$MEMO_TTL" in ''|*[!0-9]*) MEMO_TTL=120 ;; esac
+[ "${FM_DECISION_LEDGER_NO_MEMO:-0}" = 1 ] && MEMO_TTL=0
 
 # The only two classes a baseline may cover, and the reason is the same for both:
 # each sits on a record that is already CLOSED, so its answer is either stored or
@@ -270,6 +284,146 @@ sha256_text() {  # <text>
   else
     die "shasum or sha256sum is required"
   fi
+}
+
+# THE SAME RE-CHECK, IN TWO PROCESSES INSTEAD OF FOUR PER RECORD.
+#
+# Every settled record still has its digest recomputed from its stored text on
+# every read; what changed is only what that costs. The record-at-a-time loop this
+# replaced spent about four jq launches per record and re-serialised a growing
+# accumulator on each pass: measured on the main home on 2026-08-31, 232 settled
+# records cost 933 jq launches and 13.6 of the command's 14.1 seconds, while
+# everything else this script does - both awk passes over 3.4 MB of markdown and
+# the whole classification - accounted for the remaining 0.5.
+#
+# jq has no sha256, and sha256sum hashes files rather than a stream of records, so
+# the texts are handed over NUL-separated and written one file each by shell
+# builtins - no process per record - then hashed by a single pass over the set.
+# The separator has to be NUL: most decision texts contain newlines, and none can
+# contain a NUL, because they are markdown read out of the backlog.
+# The staging directory is created and removed by the CALLER, not here. What is
+# staged is the captain's verbatim words, one file per settled record, and this
+# function only ever runs inside a command substitution - a separate process the
+# signal that ends a session start is not delivered to. A cleanup owned by this
+# subshell therefore never runs in the case it exists for, so the directory belongs
+# to the process that lives long enough to release it.
+sha256_each_decision() {  # <settled-json> <staging-dir> -> one hex digest per record, in record order
+  local settled=$1 dir=$2 text i=0
+  local -a files=() hasher=()
+  if command -v shasum >/dev/null 2>&1; then
+    hasher=(shasum -a 256)
+  elif command -v sha256sum >/dev/null 2>&1; then
+    hasher=(sha256sum)
+  else
+    die "shasum or sha256sum is required"
+  fi
+  # `.decision` is chomped of trailing newlines to reproduce EXACTLY the text the
+  # per-record loop hashed: it read the text through a command substitution, which
+  # strips them, so a record whose decision ends in a blank line was hashed without
+  # it. Preserving that is deliberate - this rewrite is a cost change and must not
+  # move any record's verbatim verdict - and it is why the chomp is spelled out
+  # rather than left to happen by accident.
+  while IFS= read -r -d '' text; do
+    printf '%s' "$text" > "$dir/$i" \
+      || die "could not stage a decision text for the digest re-check"
+    files[i]="$dir/$i"
+    i=$((i + 1))
+  done < <(printf '%s' "$settled" | jq -j '
+    def chomp: if endswith("\n") then .[0:-1] | chomp else . end;
+    .[] | (.decision | chomp), "\u0000"')
+  # xargs batches the file list, so the pass still works on a home holding more
+  # settled records than one argument list can carry, and its batches run in order.
+  if [ "$i" -gt 0 ]; then
+    printf '%s\0' "${files[@]}" | xargs -0 "${hasher[@]}" | awk '{print $1}'
+  fi
+}
+
+# ONE FULL READ PER SESSION START, NOT ONE PER CALLER.
+#
+# bin/fm-bootstrap.sh runs --audit and bin/fm-session-start.sh runs --limit 5 a few
+# seconds later, inside the SAME session start, over the same two files. The second
+# used to redo the whole walk to print five records.
+#
+# THE KEY IS WHAT MAKES A REUSE HONEST. What is memoised is the entire computed
+# model, and the key is the content of everything that model is derived from: this
+# script's own bytes, both record files, and the baseline - hashed with their paths,
+# so a home reading a different data directory can never collide with this one. A
+# hit is therefore only ever returned when recomputing would provably produce the
+# same answer, and a hand-edit between the two calls - exactly the thing the digest
+# re-check exists to catch - changes the key and the walk runs again. That is what
+# keeps this reader's claim true: every settled record it shows had its digest
+# verified against these bytes, in this session start, seconds ago.
+#
+# The TTL is the second bound. A memo older than FM_DECISION_LEDGER_MEMO_TTL
+# seconds (default 120, which is a session start's width and not a working day's)
+# is ignored, so "the same session start" stays a wall-clock statement and not just
+# a content one. FM_DECISION_LEDGER_NO_MEMO=1 turns the reuse off entirely.
+#
+# Every failure path here recomputes. A memo that cannot be read, written, keyed,
+# or parsed costs a full walk and never a wrong answer.
+memo_key() {
+  local f hashes='' missing=''
+  local -a present=()
+  for f in "${BASH_SOURCE[0]}" "$BACKLOG" "$ARCHIVE" "$BASELINE"; do
+    if [ -f "$f" ]; then present+=("$f"); else missing="$missing absent:$f"; fi
+  done
+  if [ "${#present[@]}" -gt 0 ]; then
+    if command -v shasum >/dev/null 2>&1; then
+      hashes=$(shasum -a 256 "${present[@]}" 2>/dev/null) || return 1
+    else
+      hashes=$(sha256sum "${present[@]}" 2>/dev/null) || return 1
+    fi
+  fi
+  sha256_text "$hashes$missing"
+}
+
+# THE FILE SHAPE IS THE WHOLE POINT. A reuse only wins if reading it back costs
+# less than recomputing it, and the model is a megabyte of JSON: round-tripping it
+# through jq cost more than the walk it was meant to save, measured. So the memo is
+# four lines - `<key> <epoch>`, then the three compact JSON values exactly as the
+# shell already holds them - read back with shell builtins alone. No parse, no
+# process, and the values downstream get are byte-identical to the computed ones.
+MEMO_CLASSIFIED=""
+MEMO_VERIFIED=""
+MEMO_ALTERED=""
+
+memo_read() {  # <key>; on a hit fills MEMO_* and returns 0, otherwise returns 1
+  local key=$1 header stored_key stored_at now c v a
+  [ "$MEMO_TTL" -gt 0 ] || return 1
+  [ -f "$MEMO" ] || return 1
+  { IFS= read -r header && IFS= read -r c && IFS= read -r v && IFS= read -r a; } < "$MEMO" 2>/dev/null \
+    || return 1
+  stored_key=${header%% *}
+  stored_at=${header#* }
+  [ -n "$stored_key" ] && [ "$stored_key" = "$key" ] || return 1
+  case "$stored_at" in ''|*[!0-9]*) return 1 ;; esac
+  now=${EPOCHSECONDS:-$(date +%s)}
+  [ "$((now - stored_at))" -ge 0 ] && [ "$((now - stored_at))" -le "$MEMO_TTL" ] || return 1
+  # A truncated or otherwise unreadable payload is a miss, not a guess.
+  case "$c" in '['*|'{'*) ;; *) return 1 ;; esac
+  case "$v" in '['*) ;; *) return 1 ;; esac
+  case "$a" in '['*) ;; *) return 1 ;; esac
+  MEMO_CLASSIFIED=$c
+  MEMO_VERIFIED=$v
+  MEMO_ALTERED=$a
+  return 0
+}
+
+memo_write() {  # <key> <classified> <verified> <altered>; best-effort, never fatal
+  local key=$1 tmp
+  [ "$MEMO_TTL" -gt 0 ] || return 0
+  [ -n "$key" ] || return 0
+  mkdir -p "$STATE" 2>/dev/null || return 0
+  tmp=$(mktemp "$MEMO.XXXXXX" 2>/dev/null) || return 0
+  if { printf '%s %s\n' "$key" "${EPOCHSECONDS:-$(date +%s)}"
+       printf '%s\n' "$2" "$3" "$4"; } > "$tmp" 2>/dev/null; then
+    # Rename, so a concurrent reader sees either the previous memo whole or this one
+    # whole, and never a half-written file it would have to guess about.
+    mv -f "$tmp" "$MEMO" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  else
+    rm -f "$tmp" 2>/dev/null
+  fi
+  return 0
 }
 
 # Feed JSON values that can grow with a home's backlog to jq on stdin instead of
@@ -431,6 +585,16 @@ parse_records() {
   ' "$@"
 }
 
+MEMO_KEY=$(memo_key 2>/dev/null) || MEMO_KEY=""
+MEMO_HIT=0
+if [ -n "$MEMO_KEY" ] && memo_read "$MEMO_KEY"; then
+  MEMO_HIT=1
+fi
+
+if [ "$MEMO_HIT" -eq 1 ]; then
+  CLASSIFIED=$MEMO_CLASSIFIED
+else
+
 FILES=""
 [ -f "$BACKLOG" ] && FILES="$BACKLOG"
 [ -f "$ARCHIVE" ] && FILES="$FILES${FILES:+ }$ARCHIVE"
@@ -447,7 +611,9 @@ printf '%s' "$RECORDS" | jq -e . >/dev/null 2>&1 \
 # Classify. `acted-but-open` needs the state of every task in the home, not just the
 # captain ones, so the dependent-state map is built from the full record set before
 # the captain rows are filtered out.
-CLASSIFIED=$(printf '%s' "$RECORDS" | jq '
+# Compact, because this value is a megabyte on a working home: every consumer
+# below re-parses it, and the memo stores it as one line.
+CLASSIFIED=$(printf '%s' "$RECORDS" | jq -c '
   (map({key: .id, value: .state}) | from_entries) as $state
   | (map(select((.blockers // "") != "")
          | . as $t
@@ -598,6 +764,8 @@ CLASSIFIED=$(printf '%s' "$RECORDS" | jq '
     }
 ')
 
+fi  # end of the full parse-and-classify walk a memo hit skips
+
 # Digest re-check. Only the settled records are re-hashed, because they are the ones
 # whose text a reader is about to act on; an unfinished record has no verified text
 # to offer either way.
@@ -619,29 +787,88 @@ if [ "$MODE" = records ]; then
   exit 0
 fi
 
+# A count this reader cannot read is an environment fault, and it says so in one
+# line rather than limping on. A jq that answers nothing - a stubbed or broken one -
+# leaves every value here empty, and a verification reader that continues from an
+# unreadable count is asserting exactly what it just failed to establish.
+require_count() {  # <value> <what>
+  case "$1" in
+    ''|*[!0-9]*) die "could not count $2 (jq answered '$1'); refusing to report on records this read could not size" ;;
+  esac
+}
+
+if [ "$MEMO_HIT" -eq 1 ]; then
+  # Reused, not skipped: these are the verdicts the walk moments ago took from
+  # these exact bytes, and the key is what says so. See the memo note above.
+  VERIFIED=$MEMO_VERIFIED
+  ALTERED=$MEMO_ALTERED
+  COUNT=$(printf '%s' "$VERIFIED" | jq 'length')
+  require_count "$COUNT" "the settled decision records"
+else
+
 SETTLED=$(printf '%s' "$CLASSIFIED" | jq -c '[.captain[] | select(.settled)] | sort_by(.closed) | reverse')
-VERIFIED='[]'
-ALTERED='[]'
 COUNT=$(printf '%s' "$SETTLED" | jq 'length')
-i=0
-while [ "$i" -lt "$COUNT" ]; do
-  rec=$(printf '%s' "$SETTLED" | jq -c ".[$i]")
-  text=$(printf '%s' "$rec" | jq -r '.decision')
-  want=$(printf '%s' "$rec" | jq -r '.digest')
-  got=$(sha256_text "$text")
-  if [ "$got" = "$want" ]; then
-    VERIFIED=$(json_stdin "$VERIFIED" "$rec" \
-      | jq -cn 'input as $verified | input as $r | $verified + [$r + {verbatim: true}]')
-  else
-    VERIFIED=$(json_stdin "$VERIFIED" "$rec" \
-      | jq -cn 'input as $verified | input as $r | $verified + [$r + {verbatim: false}]')
-    ALTERED=$(json_stdin "$ALTERED" "$rec" \
-      | jq -cn 'input as $altered | input as $r
-        | $altered + [{class: "altered-record", id: $r.id,
-                       detail: "the stored decision text no longer matches its recorded digest"}]')
-  fi
-  i=$((i + 1))
-done
+require_count "$COUNT" "the settled decision records"
+RECHECK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-decision-ledger.XXXXXX") \
+  || die "could not create a working directory for the digest re-check"
+# The staging subshell is dying from the same signal at the same moment, so it can
+# still be writing a file into this directory while the removal walks it - which
+# fails with ENOTEMPTY and leaves exactly what the cleanup exists to remove. A few
+# bounded retries close that window; nothing here waits longer than a moment, and
+# the normal path never retries because the subshell is already gone.
+recheck_cleanup() {
+  local i
+  for i in 1 2 3; do
+    rm -rf "$RECHECK_DIR" 2>/dev/null
+    [ -d "$RECHECK_DIR" ] || return 0
+    sleep 0.05 2>/dev/null || true
+  done
+  rm -rf "$RECHECK_DIR" 2>/dev/null || true
+}
+# INT and TERM clean up and then re-raise on the default disposition, so an
+# interrupted session start still reads as an interrupted session start rather than
+# having the signal swallowed here, and the captain's staged words do not outlive
+# the read that staged them.
+trap 'recheck_cleanup' EXIT
+trap 'recheck_cleanup; trap - INT; kill -INT $$' INT
+trap 'recheck_cleanup; trap - TERM; kill -TERM $$' TERM
+RECOMPUTED=$(sha256_each_decision "$SETTLED" "$RECHECK_DIR")
+recheck_cleanup
+trap - EXIT INT TERM
+# A COUNT MISMATCH IS A REFUSAL, NOT A DEFAULT. If the recomputed set does not line
+# up one-to-one with the records, some record's text was not re-hashed on this read,
+# and the whole claim this output makes is that every settled record it shows was.
+# Presenting them anyway - with the unmatched ones silently reading as altered, or
+# worse as verified - would be the reader asserting what it failed to demonstrate.
+RECOMPUTED_COUNT=0
+[ -n "$RECOMPUTED" ] && RECOMPUTED_COUNT=$(printf '%s\n' "$RECOMPUTED" | wc -l | tr -d ' ')
+[ "$RECOMPUTED_COUNT" -eq "$COUNT" ] \
+  || die "the digest re-check recomputed $RECOMPUTED_COUNT digest(s) for $COUNT settled record(s); refusing to present decisions whose stored text was not re-hashed on this read"
+# The digest set grows with the record set, so it reaches jq on stdin like every
+# other value here does, never through argv. Turning it into a JSON array is itself
+# a stdin hand-off for the same reason.
+RECOMPUTED_JSON=$(printf '%s' "$RECOMPUTED" | jq -R -s -c 'if . == "" then [] else split("\n") end')
+VERIFICATION=$(json_stdin "$SETTLED" "$RECOMPUTED_JSON" | jq -cn '
+  input as $settled
+  | input as $got
+  | [$settled | to_entries[] | .value + {verbatim: (.value.digest == $got[.key])}] as $verified
+  | {verified: $verified,
+     altered: [$verified[] | select(.verbatim | not)
+               | {class: "altered-record", id: .id,
+                  detail: "the stored decision text no longer matches its recorded digest"}]}')
+VERIFIED=$(printf '%s' "$VERIFICATION" | jq -c '.verified')
+ALTERED=$(printf '%s' "$VERIFICATION" | jq -c '.altered')
+# THE SAME REFUSAL, ON THE OTHER SIDE OF THE PASS. A re-check that produced fewer
+# verdicts than there are records - a jq that could not run, an input it could not
+# take - must refuse for the same reason the recomputed-count mismatch above does,
+# rather than present a short or empty set as the records this read verified.
+VERIFIED_COUNT=$(printf '%s' "$VERIFIED" | jq 'length' 2>/dev/null)
+require_count "$VERIFIED_COUNT" "the verified decision records"
+[ "$VERIFIED_COUNT" -eq "$COUNT" ] \
+  || die "the digest re-check returned $VERIFIED_COUNT verdict(s) for $COUNT settled record(s); refusing to present decisions whose stored text was not re-hashed on this read"
+memo_write "$MEMO_KEY" "$CLASSIFIED" "$VERIFIED" "$ALTERED"
+
+fi  # end of the full digest re-check a memo hit skips
 
 AUDIT_ALL=$(json_stdin "$CLASSIFIED" "$ALTERED" \
   | jq -cn 'input as $classified | input as $altered | $classified.audit + $altered')
