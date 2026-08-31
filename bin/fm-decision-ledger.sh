@@ -816,15 +816,28 @@ RECOMPUTED_COUNT=0
 [ -n "$RECOMPUTED" ] && RECOMPUTED_COUNT=$(printf '%s\n' "$RECOMPUTED" | wc -l | tr -d ' ')
 [ "$RECOMPUTED_COUNT" -eq "$COUNT" ] \
   || die "the digest re-check recomputed $RECOMPUTED_COUNT digest(s) for $COUNT settled record(s); refusing to present decisions whose stored text was not re-hashed on this read"
-VERIFICATION=$(printf '%s' "$SETTLED" | jq -c --arg recomputed "$RECOMPUTED" '
-  (if $recomputed == "" then [] else ($recomputed | split("\n")) end) as $got
-  | [to_entries[] | .value + {verbatim: (.value.digest == $got[.key])}] as $verified
+# The digest set grows with the record set, so it reaches jq on stdin like every
+# other value here does, never through argv. Turning it into a JSON array is itself
+# a stdin hand-off for the same reason.
+RECOMPUTED_JSON=$(printf '%s' "$RECOMPUTED" | jq -R -s -c 'if . == "" then [] else split("\n") end')
+VERIFICATION=$(json_stdin "$SETTLED" "$RECOMPUTED_JSON" | jq -cn '
+  input as $settled
+  | input as $got
+  | [$settled | to_entries[] | .value + {verbatim: (.value.digest == $got[.key])}] as $verified
   | {verified: $verified,
      altered: [$verified[] | select(.verbatim | not)
                | {class: "altered-record", id: .id,
                   detail: "the stored decision text no longer matches its recorded digest"}]}')
 VERIFIED=$(printf '%s' "$VERIFICATION" | jq -c '.verified')
 ALTERED=$(printf '%s' "$VERIFICATION" | jq -c '.altered')
+# THE SAME REFUSAL, ON THE OTHER SIDE OF THE PASS. A re-check that produced fewer
+# verdicts than there are records - a jq that could not run, an input it could not
+# take - must refuse for the same reason the recomputed-count mismatch above does,
+# rather than present a short or empty set as the records this read verified.
+VERIFIED_COUNT=$(printf '%s' "$VERIFIED" | jq 'length' 2>/dev/null)
+require_count "$VERIFIED_COUNT" "the verified decision records"
+[ "$VERIFIED_COUNT" -eq "$COUNT" ] \
+  || die "the digest re-check returned $VERIFIED_COUNT verdict(s) for $COUNT settled record(s); refusing to present decisions whose stored text was not re-hashed on this read"
 memo_write "$MEMO_KEY" "$CLASSIFIED" "$VERIFIED" "$ALTERED"
 
 fi  # end of the full digest re-check a memo hit skips

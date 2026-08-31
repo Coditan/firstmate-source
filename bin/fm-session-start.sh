@@ -229,28 +229,30 @@ timing_mark() {  # <step-name>: record the elapsed time since the previous mark
   TIMING_LAST=$now
 }
 
-# Appended, then ROTATED once the log passes twice FM_SESSION_START_TIMING_KEEP
-# runs, so the one thing this adds to a home cannot grow without bound. Rotation
-# rather than a tail-and-replace because two sessions can be starting at once -
-# the read-only path a refused session takes reaches this too - and a rewrite from
-# a stale snapshot silently drops whatever the other session appended in between,
-# which is exactly the overlapping-startup sample a vessel most wants. An append is
-# atomic and a rename is atomic: a line already written to the old file is carried
-# into session-start-timing.log.1 rather than lost, and neither session waits on
-# the other. Every step here stays best-effort: a startup digest must never fail,
-# or block, because it could not write or rotate a timing line.
+# ROTATED once the log passes twice FM_SESSION_START_TIMING_KEEP runs, and this
+# run's line is appended after that, so the one thing this adds to a home cannot
+# grow without bound and the path the digest names always holds the run it names.
+# Rotation rather than a tail-and-replace because two sessions can be starting at
+# once - the read-only path a refused session takes reaches this too - and a
+# rewrite from a stale snapshot silently drops whatever the other session appended
+# in between, which is exactly the overlapping-startup sample a vessel most wants.
+# An append is atomic and a rename is atomic: a line already written to the old
+# file is carried into session-start-timing.log.1 rather than lost, and neither
+# session waits on the other. Every step here stays best-effort: a startup digest
+# must never fail, or block, because it could not write or rotate a timing line.
 timing_report() {
   local total lines
   timing_mark closing
   total=$(( $(now_ms) - TIMING_T0 ))
-  if mkdir -p "$STATE" 2>/dev/null \
-    && printf '%s total=%sms %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$total" "$TIMING_MARKS" \
-         >> "$TIMING_LOG" 2>/dev/null; then
+  if mkdir -p "$STATE" 2>/dev/null; then
     lines=$(wc -l < "$TIMING_LOG" 2>/dev/null | tr -d ' ')
     case "$lines" in ''|*[!0-9]*) lines=0 ;; esac
     if [ "$lines" -ge "$((TIMING_KEEP * 2))" ]; then
       mv -f "$TIMING_LOG" "$TIMING_LOG.1" 2>/dev/null || true
     fi
+  fi
+  if printf '%s total=%sms %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$total" "$TIMING_MARKS" \
+       >> "$TIMING_LOG" 2>/dev/null; then
     printf 'SESSION START took %sms; per-step breakdown for this run and the previous ones: %s\n' \
       "$total" "$TIMING_LOG"
   else

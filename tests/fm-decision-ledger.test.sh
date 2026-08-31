@@ -1172,6 +1172,41 @@ test_a_reused_read_is_dropped_the_moment_the_records_change() {
   pass "a reused read is dropped the moment the records it was taken from change"
 }
 
+# THE REUSE HAS TO BE READ BACK, NOT MERELY WRITTEN. Comparing two reads proves
+# nothing about it: a full recomputation returns exactly the same bytes, so an
+# equality assertion still passes if the memo is never hit at all - a broken key, a
+# validation case that always falls through, an expired TTL.
+#
+# state/.decision-ledger-memo is the script's own persisted artifact with a stated
+# four-line shape - `<key> <epoch>`, then CLASSIFIED, VERIFIED and ALTERED - so this
+# primes it, then rewrites the stored ALTERED payload alone, leaving the key line
+# untouched. The planted finding can reach a reader only through a genuine hit: a
+# read that recomputes derives its findings from the records, where this id does not
+# exist.
+test_a_reuse_is_read_back_rather_than_recomputed() {
+  local home memo audit rc=0
+  home=$(make_home reuse-hit)
+  printf 'the only answer\n' > "$home/d.txt"
+  run_hold "$home" record probe key --door chat --decision-file "$home/d.txt" \
+    --title "A question" --repo firstmate >/dev/null 2>&1 || fail "recording failed"
+
+  run_ledger "$home" --json --all >/dev/null || fail "the priming read failed"
+  memo="$home/state/.decision-ledger-memo"
+  [ -f "$memo" ] || fail "a full read must leave the computed model for the next caller"
+
+  { head -n 3 "$memo"
+    printf '%s\n' '[{"class":"altered-record","id":"planted-in-the-memo","detail":"only a reused read can surface this"}]'
+  } > "$memo.rewritten" || fail "could not stage the rewritten memo"
+  mv -f "$memo.rewritten" "$memo" || fail "could not replace the memo"
+
+  audit=$(run_ledger "$home" --audit) || rc=$?
+  [ "$rc" -eq 1 ] || fail "the reusing read must report the stored findings, got exit $rc: $audit"
+  assert_contains "$audit" "altered-record planted-in-the-memo" \
+    "the second read in a session start must read the stored model back, not walk the records again"
+
+  pass "a reuse is read back rather than recomputed"
+}
+
 # The reuse must be a cost decision and nothing else: turning it off must not change
 # a single byte of what a reader is shown.
 test_turning_the_reuse_off_changes_no_output() {
@@ -1224,4 +1259,5 @@ test_the_single_pass_recheck_puts_every_verdict_on_the_right_record
 test_awkward_decision_text_still_verifies_through_the_single_pass
 test_a_recheck_that_cannot_size_its_input_refuses_instead_of_reporting
 test_a_reused_read_is_dropped_the_moment_the_records_change
+test_a_reuse_is_read_back_rather_than_recomputed
 test_turning_the_reuse_off_changes_no_output
