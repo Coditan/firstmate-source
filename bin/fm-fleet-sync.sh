@@ -32,13 +32,17 @@
 # A registry that is PRESENT and cannot be read stops the whole-fleet form with
 # "fleet: STUCK: cannot read the project registry ..." on stdout and exit 3,
 # because a home that cannot tell which projects it has must not report that it
-# has none. An ABSENT registry is not a fault: the directory scan is the whole
-# answer for a home that registers nothing.
+# has none. It refuses on a registry that is not a regular file, one that cannot be
+# read or parsed, a dangling symlink, and a path whose own ABSENCE cannot be
+# established because an ancestor directory cannot be searched. An ABSENT registry
+# under a directory this process can look in is not a fault: the directory scan is
+# the whole answer for a home that registers nothing.
 # The directory scan is held to the same standard: a projects dir that is PRESENT
-# and cannot be listed stops the whole-fleet form with "fleet: STUCK: cannot list
-# the projects directory ..." on stdout and exit 3, because an unlistable dir would
-# otherwise render as a home holding no unregistered clones. An ABSENT projects dir
-# is not a fault either, for the same reason.
+# and cannot be listed - or one whose absence cannot be established - stops the
+# whole-fleet form with "fleet: STUCK: cannot list the projects directory ..." on
+# stdout and exit 3, because an unlistable dir would otherwise render as a home
+# holding no unregistered clones. An ABSENT projects dir is not a fault either, for
+# the same reason.
 # The single-project form accepts either a path (absolute, or relative to the
 # caller's cwd) or a bare "<name>"/"projects/<name>" form, resolved against
 # this home's projects dir ($FM_HOME/projects, or $FM_PROJECTS_OVERRIDE).
@@ -93,6 +97,36 @@ project_label() {
   esac
 }
 
+# ABSENCE IS A READING TOO, and `test -e` is false whenever the STAT fails rather
+# than only when the file is not there: a containing directory this process cannot
+# look in makes a present, populated path answer exactly like a missing one. Absence
+# may therefore only be concluded from an ancestor that can actually be searched,
+# and this names the nearest one that cannot.
+absence_unprovable() {  # <path>; prints the nearest ancestor that cannot be searched
+  local dir=$1
+  while :; do
+    case "$dir" in
+      /) return 1 ;;
+      */*) dir=${dir%/*}; [ -n "$dir" ] || dir=/ ;;
+      *) dir=. ;;
+    esac
+    if [ -e "$dir" ]; then
+      if [ ! -d "$dir" ] || [ ! -x "$dir" ] || [ ! -r "$dir" ]; then
+        printf '%s\n' "$dir"
+        return 0
+      fi
+      return 1
+    fi
+    if [ -L "$dir" ]; then
+      printf '%s\n' "$dir"
+      return 0
+    fi
+    case "$dir" in
+      /|.) return 1 ;;
+    esac
+  done
+}
+
 # AN UNREADABLE REGISTRY IS NOT AN EMPTY ONE. registered_project_names is called in
 # a command substitution, so its exit status is discarded by the `for` that consumes
 # it: a parse that failed used to fall through to an empty name list, every
@@ -107,9 +141,14 @@ registry_fault() {  # prints why the registry cannot be read, and returns 0 when
   # A symlink that does not resolve is a PRESENT registry that cannot be read, not
   # an absent one: `test -e` follows the link and answers for the target, so this
   # asks about the link itself before concluding the home simply has no file.
+  local unsearchable
   if [ ! -e "$REG" ]; then
     if [ -L "$REG" ]; then
       printf 'broken symlink to %s\n' "$(readlink "$REG" 2>/dev/null || printf '%s' 'an unreadable target')"
+      return 0
+    fi
+    if unsearchable=$(absence_unprovable "$REG"); then
+      printf 'cannot tell whether the registry exists: %s cannot be searched\n' "$unsearchable"
       return 0
     fi
     return 1
@@ -139,9 +178,14 @@ registry_fault() {  # prints why the registry cannot be read, and returns 0 when
 # An ABSENT projects dir is not a fault: a home that keeps no clones has no such
 # directory, and the registered walk above is the whole answer for it.
 projects_dir_fault() {  # prints why the projects dir cannot be listed, returns 0 when so
+  local unsearchable
   if [ ! -e "$PROJECTS" ]; then
     if [ -L "$PROJECTS" ]; then
       printf 'broken symlink to %s\n' "$(readlink "$PROJECTS" 2>/dev/null || printf '%s' 'an unreadable target')"
+      return 0
+    fi
+    if unsearchable=$(absence_unprovable "$PROJECTS"); then
+      printf 'cannot tell whether the projects directory exists: %s cannot be searched\n' "$unsearchable"
       return 0
     fi
     return 1

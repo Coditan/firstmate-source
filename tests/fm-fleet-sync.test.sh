@@ -697,6 +697,71 @@ test_a_projects_dir_that_cannot_be_listed_is_never_reported_as_an_empty_one() {
   pass "a projects directory that cannot be listed is never reported as an empty one"
 }
 
+# ABSENCE IS A READING TOO. `test -e` is false whenever the stat FAILS, not only
+# when the file is missing, so a populated registry under a data/ this process
+# cannot search answered exactly like a home that registers nothing: the pre-walk
+# gate passed it through as the one case it deliberately allows, the registered walk
+# printed no line, and the whole-fleet form exited 0 with bootstrap relaying silence.
+test_a_registry_whose_absence_cannot_be_established_is_never_taken_as_absent() {
+  local home out rc=0
+  home="$TMP_ROOT/registry-unstatable"
+  rm -rf "$home"
+  mkdir -p "$home/data" "$home/projects"
+  printf -- '- a-clone - test project (added 2026-08-31)\n' > "$home/data/projects.md"
+  chmod 000 "$home/data" || fail "could not make the registry's directory unsearchable"
+  # A root-run suite can still traverse it, and a test that cannot arrange its own
+  # premise says so instead of passing.
+  if [ -r "$home/data/projects.md" ]; then
+    chmod 755 "$home/data"
+    echo "skip: this environment can still search a mode-000 directory (running as root?)"
+    return 0
+  fi
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-fleet-sync.sh" 2>/dev/null) || rc=$?
+  chmod 755 "$home/data"
+
+  [ "$rc" -eq 3 ] \
+    || fail "a registry this home cannot even stat must refuse with exit 3, got $rc: $out"
+  assert_contains "$out" "STUCK: cannot read the project registry" \
+    "the refusal must name the registry as what could not be read: $out"
+  assert_contains "$out" "cannot tell whether the registry exists" \
+    "the cause must say the absence itself could not be established: $out"
+  assert_contains "$out" "$home/data" \
+    "the cause must name the directory that could not be searched: $out"
+  pass "a registry whose absence cannot be established is never taken as absent"
+}
+
+# The scan half holds the same line: a projects dir whose absence cannot be
+# established is not an absent one either. The registry here is genuinely absent
+# under a data/ this home can look in, so the deliberate non-fault still stands and
+# the directory is the whole answer - which makes its silence the defect.
+test_a_projects_dir_whose_absence_cannot_be_established_is_never_taken_as_absent() {
+  local home out rc=0
+  home="$TMP_ROOT/projects-unstatable"
+  rm -rf "$home"
+  mkdir -p "$home/data" "$home/outer/projects/a-clone"
+  chmod 000 "$home/outer" || fail "could not make the projects dir's parent unsearchable"
+  if [ -d "$home/outer/projects" ]; then
+    chmod 755 "$home/outer"
+    echo "skip: this environment can still search a mode-000 directory (running as root?)"
+    return 0
+  fi
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_PROJECTS_OVERRIDE="$home/outer/projects" "$ROOT/bin/fm-fleet-sync.sh" 2>/dev/null) || rc=$?
+  chmod 755 "$home/outer"
+
+  [ "$rc" -eq 3 ] \
+    || fail "a projects dir this home cannot even stat must refuse with exit 3, got $rc: $out"
+  assert_contains "$out" "STUCK: cannot list the projects directory" \
+    "the refusal must name the projects directory as what could not be read: $out"
+  assert_contains "$out" "cannot tell whether the projects directory exists" \
+    "the cause must say the absence itself could not be established: $out"
+  assert_contains "$out" "$home/outer" \
+    "the cause must name the directory that could not be searched: $out"
+  pass "a projects dir whose absence cannot be established is never taken as absent"
+}
+
 test_bootstrap_relays_recovered_and_stuck() {
   local home stuck rec out
   home=$(new_home)
@@ -877,6 +942,8 @@ test_bootstrap_surfaces_a_refresh_that_could_not_read_the_registry
 test_a_dangling_registry_symlink_is_never_reported_as_an_empty_one
 test_an_absent_registry_is_still_not_a_fault
 test_a_projects_dir_that_cannot_be_listed_is_never_reported_as_an_empty_one
+test_a_registry_whose_absence_cannot_be_established_is_never_taken_as_absent
+test_a_projects_dir_whose_absence_cannot_be_established_is_never_taken_as_absent
 test_orphaned_stale_packed_refs_lock_recovers
 test_live_packed_refs_lock_is_never_removed
 test_live_git_cwd_in_clone_dir_blocks_removal
