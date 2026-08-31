@@ -32,6 +32,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-backlog-handoff.sh`  | Validate and delegate queued backlog-item moves into a secondmate home               |
 | `fm-backlog-lint.sh`     | Detect-only report of mechanically stale `blocked-by:` edges in the durable backlog  |
 | `fm-blocker-class-lib.sh` | Shared jq predicate for whether a `blocked-by:` target is real in the live backlog or done archive |
+| `fm-captain-actionable-lib.sh` | Shared jq predicate for whether a record is asking the captain, and the disclosure naming every captain hold the surface withheld |
 | `fm-decision-hold.sh`    | File, answer, fold, attest as answered elsewhere, re-measure, verify, and complete durable captain decision records - the store's only writer |
 | `fm-decision-ledger.sh`  | Read that store: the captain's settled decisions verbatim, the open ones with their premises, the records left structurally unfinished, and the adoption baseline that keeps pre-mechanism losses from burying them |
 | `fm-decision-inventory.sh` | Group the open captain decisions by originating investigation and keep the judge's record where a judge ruled, for `/decisionboard` (the fold is assumed, not verified) |

@@ -87,6 +87,12 @@
 #   groups[]         one per origin group: group, has_judge, decisions[], variants[]
 #   decisions[]      id, key, group, role, summary, owner, variants[]
 #   variants[]       id, key, role, summary, paired (true only on an exact key match)
+#   withheld_captain_holds
+#                    the bearings omitted[] entry naming the captain holds the
+#                    actionable surface did not return, passed through verbatim,
+#                    or null when it withheld none. `records` is the
+#                    captain-actionable set and never the open set, so a board
+#                    built from this must print this beside the count.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -149,6 +155,7 @@ INVENTORY=$(printf '%s' "$SNAPSHOT" | jq '
       | {id: .id, summary: (.summary // ""), owner: (.owner // ""),
          key: $q.key, group: $q.group, role: $q.role}
   )) as $recs
+  | . as $snapshot
 
   | ($recs
       | group_by(.group)
@@ -193,11 +200,23 @@ INVENTORY=$(printf '%s' "$SNAPSHOT" | jq '
       groups: ($groups | map(del(.auth)))
     }
   | .decisions_flat = (.groups | map(.decisions) | add // [])
+  # What bearings did NOT count, carried through verbatim rather than re-derived.
+  # `records` above is the captain-actionable set, and a count that is short and a
+  # count that is complete look identical; on one vessel that is exactly why a
+  # decision sat unseen for nineteen days. Passing the bearings omitted[] entry
+  # through unchanged keeps one owner for the wording and gives the board
+  # something to print. null when this reading withheld nothing.
+  | .withheld_captain_holds =
+      ([$snapshot.omitted[]?
+        | select(.surface | startswith("captain holds withheld from decisions_open"))][0] // null)
 ')
 
 if [ "$MODE" = "summary" ]; then
   printf '%s' "$INVENTORY" | jq -r '
     "records: \(.records)   decisions kept: \(.decisions)",
+    (if .withheld_captain_holds != null
+     then "withheld from this reading: \(.withheld_captain_holds.surface)  (reveal: \(.withheld_captain_holds.reveal))"
+     else empty end),
     "a judged group keeps the judge records and folds the rest away; that the",
     "judge raised one hold per distinct analyst question is NOT verified here, so",
     "every folded record is listed below and belongs on the board as well.",

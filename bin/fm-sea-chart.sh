@@ -961,7 +961,7 @@ CHART_JSON=$(printf '%s\n%s\n%s\n' "$LIVE" "$ARCH" "$INV" 2>/dev/null | jq -n \
   # way not merely undercounted but invisible, every count reading zero - the same
   # silent loss this chart exists against, on a third flank.
   # This baseline stays narrower than the captain-actionable predicate, which
-  # admits any queued record held with `hold-kind: captain`. That is deliberate:
+  # admits any non-terminal record held with `hold-kind: captain`. That is deliberate:
   # an UNBLOCKED record of some other kind now reaches `decisions_open` on its own
   # and is drawn from the inventory, so naming it here would only reconcile it
   # against a surface that already carries it. A BLOCKED one reaches neither: the

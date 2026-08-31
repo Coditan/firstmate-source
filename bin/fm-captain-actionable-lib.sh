@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck shell=bash
 # fm-captain-actionable-lib.sh - one owner of "is this record asking the captain",
 # and of the disclosure that says which captain holds it did not return.
 #
@@ -62,8 +63,12 @@
 # fm_captain_actionable_omitted($records) - the disclosure, in the snapshot's
 #   existing `omitted[]` shape ({surface,count}) with the reason and the ids that
 #   make it answerable rather than merely countable.
-# The value is a jq program fragment: the $-names are jq bindings, never shell.
-# shellcheck disable=SC2016
+# The value is a jq program fragment: the $-names are jq bindings, never shell,
+# and the quotes inside it are jq string literals that must survive verbatim into
+# the program text - which is exactly what SC2089/SC2090 warn about and exactly
+# what is wanted here. Every caller splices this into a jq program string, never
+# into a command line, so the array they recommend cannot express it.
+# shellcheck disable=SC2016,SC2089
 FM_CAPTAIN_ACTIONABLE_JQ='
   def fm_captain_held($r):
     ($r.structured == true) and ($r.hold_kind == "captain");
@@ -91,4 +96,5 @@ FM_CAPTAIN_ACTIONABLE_JQ='
            count:length,
            ids:[.[].id]});
 '
+# shellcheck disable=SC2090
 export FM_CAPTAIN_ACTIONABLE_JQ
