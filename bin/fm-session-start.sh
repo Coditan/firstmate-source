@@ -22,10 +22,16 @@
 # sweeps - is an opt-in FM_BOOTSTRAP_DETECT_ONLY=1 flag on fm-bootstrap.sh
 # itself (default unset/0 = unchanged behavior), not a fork.
 #
-# ORDERING, and why the tmux own-window guard runs before LOCK, while LOCK
+# ORDERING, and why the captain/learnings head is the first output, while LOCK
 # still runs before BOOTSTRAP (the old AGENTS.md order was bootstrap-then-lock):
 #
-#   0. tmux window   - when firstmate is running inside a crew-shaped tmux
+#   0. priority head - print a bounded, explicitly incomplete head of
+#                       data/captain.md and data/learnings.md before any
+#                       scaffolding, so a receiving harness that previews only
+#                       the start still delivers both kinds of durable context.
+#                       The complete files and every operational section remain
+#                       later in the full digest saved by that harness.
+#   0a. tmux window  - when firstmate is running inside a crew-shaped tmux
 #                       fm-<id> window, rename the caller's own window to the
 #                       reserved firstmate name before any pane reads can confuse
 #                       firstmate with that crew. This is lock-free, targets only
@@ -288,6 +294,7 @@ STATUS_TAIL=${FM_SESSION_START_STATUS_TAIL:-5}
 case "$STATUS_TAIL" in ''|*[!0-9]*) STATUS_TAIL=5 ;; esac
 BACKLOG_LIMIT=${FM_SESSION_START_BACKLOG_LIMIT:-80}
 case "$BACKLOG_LIMIT" in ''|*[!0-9]*|0) BACKLOG_LIMIT=80 ;; esac
+PAIR_HEAD_BYTES=512
 
 RULE='================================================================================'
 SUBRULE='--------------------------------------------------------------------------------'
@@ -312,6 +319,49 @@ print_file_or_absent() {
     fi
   else
     printf 'ABSENT\n'
+  fi
+}
+
+# print_bounded_file_head <path> <label>: a byte-bounded prefix, or an explicit
+# empty/absent state. The full file is still printed by the context digest below.
+# The partial-line fallback trims only incomplete UTF-8 code points; preserving
+# combining-mark or emoji grapheme clusters would require a broader boundary and
+# is deliberately out of scope. Keeping the head bounded lets both files lead
+# the output without pretending either preview is the complete record.
+print_bounded_file_head() {
+  local path=$1 label=$2 total
+  subsection "$label"
+  if [ ! -f "$path" ]; then
+    printf 'absent - no material received from this file in the bounded subset.\n'
+    return
+  fi
+  if [ ! -s "$path" ]; then
+    printf 'present but empty - no material received from this file in the bounded subset.\n'
+    return
+  fi
+
+  total=$(wc -c < "$path")
+  if [ "$total" -le "$PAIR_HEAD_BYTES" ]; then
+    printf 'complete file (%s bytes; it fits inside the %s-byte per-file bound):\n' \
+      "$total" "$PAIR_HEAD_BYTES"
+    cat "$path"
+    return
+  fi
+
+  printf 'BOUNDED SUBSET: first complete lines within %s bytes of %s total bytes; the remainder was NOT received here.\n' \
+    "$PAIR_HEAD_BYTES" "$total"
+  if ! LC_ALL=C awk -v max="$PAIR_HEAD_BYTES" '
+    {
+      bytes = length($0) + 1
+      if (used + bytes > max) exit
+      print
+      used += bytes
+    }
+    END { exit used == 0 }
+  ' "$path"
+  then
+    head -c "$PAIR_HEAD_BYTES" "$path" | iconv -c -f UTF-8 -t UTF-8 2>/dev/null
+    printf '\n[partial final line; truncated at %s bytes]\n' "$PAIR_HEAD_BYTES"
   fi
 }
 
@@ -420,6 +470,16 @@ pi_extension_loaded() {
   [ -n "$marker_pid" ] || return 1
   [ "$marker_version" = "$expected_version" ] && [ "$marker_pid" = "$lock_pid" ]
 }
+
+# --- 0. captain and learnings priority head -------------------------------
+section "CAPTAIN AND LEARNINGS - BOUNDED SUBSET"
+cat <<'EOF'
+This first-pass block carries a bounded head of each file before any startup scaffolding.
+The complete files plus LOCK, BOOTSTRAP, WAKE QUEUE, and SUPERVISION follow in this command's full output.
+If the receiving harness reports "Full output saved to: <path>", open that path for everything not delivered in its preview.
+EOF
+print_bounded_file_head "$DATA/captain.md" "data/captain.md - bounded head"
+print_bounded_file_head "$DATA/learnings.md" "data/learnings.md - bounded head"
 
 section "SESSION START - $FM_HOME"
 
@@ -769,21 +829,23 @@ This script never starts long-lived polls itself.
 EOF
 fi
 cat <<'EOF'
-The digest above is complete for this session start. Do NOT re-read
-data/projects.md, data/secondmates.md, data/captain.md,
-data/captain-shared.md, data/learnings.md,
-or state/*.meta now - they were just printed in full.
-Do NOT bulk-read data/backlog.md now either: the compact identity/metadata
-listing was just printed with a pointer for targeted full-body follow-up.
+This command emitted the complete session-start digest, but the receiving
+harness may have delivered only a preview. If you are reading its saved full
+output, do NOT re-read data/projects.md, data/secondmates.md, data/captain.md,
+data/captain-shared.md, data/learnings.md, or state/*.meta now - those files
+were printed in full there. Do NOT bulk-read data/backlog.md now either from
+the saved full output: its compact listing includes targeted full-body pointers.
 Do NOT bulk-read state/*.status now either: their bounded tails were just
-printed with full log paths for targeted follow-up when older wake-event
-history is actually needed. Re-reading everything defeats the entire point
-of this command.
+printed there with full log paths for targeted older-history follow-up.
+If you received only a preview, open the `Full output saved to` path named in
+the bounded priority section, or read any missing knowledge file directly
+before proceeding. Never treat the bounded subset as the complete files.
 The settled captain decisions printed above are answers he has ALREADY given.
 Treat them as decided. Do not re-ask a question they answer, and do not
 paraphrase one back to him as though it were still open; if one of them needs
 revisiting, say which answer you are reopening and why.
-Re-read a file only if this digest flagged it ABSENT (then
+After reading the saved full output, re-read a file only if that digest flagged
+it ABSENT (then
 rebuild or create it per AGENTS.md), its contents looked unparseable/corrupt,
 or an individual full status log is needed for older wake-event history.
 EOF
