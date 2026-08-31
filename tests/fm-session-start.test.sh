@@ -957,8 +957,8 @@ SH
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
 
   assert_contains "$out" "TELEGRAM RECEIVER" "Telegram receiver section missing"
-  assert_contains "$out" "TELEGRAM_RECEIVER: active - run bin/fm-tg-recv-arm.sh as its own tracked background task, never shell &"     "session-start did not emit the tracked Telegram background arm step"
-  assert_contains "$out" "If the Telegram receiver section is active, keep that separate background task armed too"     "next step did not preserve Telegram receiver follow-up"
+  assert_contains "$out" "TELEGRAM_RECEIVER: fallback active - run bin/fm-tg-recv-arm.sh as its own tracked background task until the consent-gated receiver service is installed"     "session-start did not emit the tracked Telegram fallback arm step"
+  assert_contains "$out" "The Telegram receiver fallback is active, so keep its separate tracked task armed until the service is installed"     "next step did not preserve Telegram receiver fallback follow-up"
 
   pass "locked session-start emits the direct Telegram receiver arm step when configured"
 }

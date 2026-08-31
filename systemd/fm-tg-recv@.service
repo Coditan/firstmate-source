@@ -1,0 +1,13 @@
+[Unit]
+Description=Firstmate direct Telegram receiver for %I
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+EnvironmentFile=/%I/state/.tg-recv-service.env
+ExecStart=/usr/bin/env bash ${FM_TG_RECV_EXEC}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

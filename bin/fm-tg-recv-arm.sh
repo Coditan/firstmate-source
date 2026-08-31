@@ -6,9 +6,11 @@
 # harness-tracked background task, never bundled onto another command and never
 # with shell `&`.
 # It starts one receiver for this FM_HOME or attaches to an already running one.
-# The receiver remains this wrapper's child when started here, so the harness
-# gets notified when a Telegram message makes the receiver print one routed
-# captain or operational-input line and exit.
+# Under the legacy harness-owned path, the receiver remains this wrapper's child
+# and its output returns to that tracked task. Under the service-owned path,
+# selected only by FM_TG_RECV_MANAGER=systemd in the generated service
+# environment, routed messages and receiver failures go to the durable wake
+# queue before this wrapper exits and systemd restarts it.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,6 +25,10 @@ ATTACH_POLL=${FM_TG_RECV_ATTACH_POLL:-0.5}
 ATTACH_CONFIRM_TIMEOUT=${FM_TG_RECV_ATTACH_CONFIRM_TIMEOUT:-2}
 TERM_WAIT_CYCLES=${FM_TG_RECV_TERM_WAIT_CYCLES:-30}
 TERM_WAIT_POLL=${FM_TG_RECV_TERM_WAIT_POLL:-0.1}
+TG_RECV_MANAGER=${FM_TG_RECV_MANAGER:-harness}
+FAILURE_WAKE_QUIET=${FM_TG_RECV_FAILURE_WAKE_QUIET:-300}
+FAILURE_WAKE_MARKER="$STATE/.tg-recv-last-failure-wake"
+case "$FAILURE_WAKE_QUIET" in ''|*[!0-9]*) FAILURE_WAKE_QUIET=300 ;; esac
 
 usage() {
   printf 'usage: %s\n' "$(basename "$0")" >&2
@@ -83,17 +89,64 @@ clear_dead_recorded_receiver_lock() {
   [ "$lock_home" = "$FM_HOME" ] || return 0
   [ "$lock_path" = "$RECV" ] || return 0
   fm_pid_alive "$pid" && return 0
-  relay_recorded_receiver_output_once
+  relay_recorded_receiver_output_once || return 1
   fm_lock_remove_path "$RECV_LOCK" || true
 }
 
+service_failure_is_due() {
+  local now last
+  now=$(date +%s)
+  last=$(cat "$FAILURE_WAKE_MARKER" 2>/dev/null || printf '0')
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  [ $((now - last)) -ge "$FAILURE_WAKE_QUIET" ] || return 1
+}
+
+record_failure_wake() {
+  local payload=$1 now
+  service_failure_is_due || return 0
+  fm_wake_append check telegram-receiver "$payload" || return 1
+  now=$(date +%s)
+  ( umask 077 && printf '%s\n' "$now" > "$FAILURE_WAKE_MARKER" ) || {
+    printf 'telegram receiver: FAILED - failure wake was queued but its quiet-window marker could not be recorded\n' >&2
+    return 0
+  }
+}
+
+queue_service_output() {
+  local relay_path=$1 receiver_status=$2 line had_output=0 output_seq=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ -n "$line" ] || continue
+    had_output=1
+    if [ "$receiver_status" = 0 ] || [ "$receiver_status" = unknown ]; then
+      output_seq=$((output_seq + 1))
+      fm_wake_append signal "telegram.$(date +%s).$(fm_current_pid).$output_seq" "$line" || return 1
+    fi
+  done < "$relay_path"
+
+  [ "$receiver_status" = shutdown ] && return 0
+  if [ "$receiver_status" != 0 ] && [ "$receiver_status" != unknown ]; then
+    record_failure_wake \
+      "check: telegram receiver: FAILED - receiver exited $receiver_status; the service will restart it" || return 1
+  elif [ "$had_output" -eq 0 ]; then
+    record_failure_wake \
+      "check: telegram receiver: FAILED - receiver exited without a message or diagnostic; the service will restart it" || return 1
+  fi
+}
+
 relay_output_file_once() {
-  local output_path=$1 relay_path
+  local output_path=$1 receiver_status=${2:-unknown} relay_path
   [ -n "$output_path" ] || return 0
   [ -e "$output_path" ] || return 0
   relay_path="$output_path.relay.$$"
   if mv "$output_path" "$relay_path" 2>/dev/null; then
-    [ -s "$relay_path" ] && cat "$relay_path"
+    if [ "$TG_RECV_MANAGER" = systemd ]; then
+      if ! queue_service_output "$relay_path" "$receiver_status"; then
+        mv "$relay_path" "$output_path" 2>/dev/null || true
+        return 1
+      fi
+    elif [ -s "$relay_path" ]; then
+      cat "$relay_path"
+    fi
     rm -f "$relay_path" 2>/dev/null || true
   fi
 }
@@ -110,7 +163,10 @@ attach_and_wait() {
       sleep "$ATTACH_POLL"
       continue
     fi
-    relay_recorded_receiver_output_once
+    relay_recorded_receiver_output_once || {
+      printf 'telegram receiver: FAILED - receiver output could not be durably relayed\n'
+      exit 1
+    }
     clear_dead_recorded_receiver_lock
     exit 0
   done
@@ -202,8 +258,11 @@ terminate_child_bounded() {
 cleanup() {
   record_child_lock_metadata_if_possible
   if terminate_child_bounded; then
+    if [ -n "$child_out" ] && ! relay_output_file_once "$child_out" shutdown; then
+      printf 'telegram receiver: FAILED - receiver output could not be durably relayed during shutdown\n' >&2
+      return 1
+    fi
     release_lock_if_owned
-    [ -n "$child_out" ] && relay_output_file_once "$child_out"
     [ -n "$child_out" ] && rm -f "$child_out" 2>/dev/null || true
     return
   fi
@@ -224,7 +283,17 @@ if [ -z "$incarnation" ]; then
   if [ -s "$child_out" ] || ! fm_pid_alive "$child"; then
     wait "$child"
     rc=$?
-    [ -s "$child_out" ] && cat "$child_out"
+    {
+      printf '%s\n' "$child" > "$ownerdir/pid"
+      printf '%s\n' "$FM_HOME" > "$ownerdir/fm-home"
+      printf '%s\n' "$RECV" > "$ownerdir/receiver-path"
+      printf '%s\n' "$child_out" > "$ownerdir/output-path"
+    } 2>/dev/null || true
+    if ! relay_output_file_once "$child_out" "$rc"; then
+      printf 'telegram receiver: FAILED - receiver output could not be durably relayed\n'
+      trap - HUP TERM INT
+      exit 1
+    fi
     release_lock_if_owned
     rm -f "$child_out" 2>/dev/null || true
     trap - HUP TERM INT
@@ -250,7 +319,11 @@ fi
 printf 'telegram receiver: started pid=%s\n' "$child"
 wait "$child"
 rc=$?
-relay_output_file_once "$child_out"
+if ! relay_output_file_once "$child_out" "$rc"; then
+  printf 'telegram receiver: FAILED - receiver output could not be durably relayed\n'
+  trap - HUP TERM INT
+  exit 1
+fi
 release_lock_if_owned
 rm -f "$child_out" 2>/dev/null || true
 trap - HUP TERM INT

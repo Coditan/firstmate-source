@@ -598,7 +598,8 @@ export function commandPosition(tokens) {
 // Wake delivery is no longer a session-held command, so the three arm, checkpoint,
 // and stub entries that used to head this list have no scripts behind them any
 // more. What remains protected is what a session can still shell wrong: the
-// Telegram receiver arm, which IS still a tracked background task, and the
+// Telegram receiver fallback arm, which remains a tracked background task
+// until its consent-gated service is installed, and the
 // watcher loop itself, which must never be run by hand.
 const PROTECTED_SCRIPTS = [
   { relative: "bin/fm-tg-recv-arm.sh", kind: "arm" },

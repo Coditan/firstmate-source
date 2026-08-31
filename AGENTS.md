@@ -291,7 +291,7 @@ Fleet supervision is an always-loaded operational contract; `docs/architecture.m
 The watcher service owns the long-running supervision loop, and a companion service owns wake delivery.
 Both are supervised outside this harness, so a session holds no delivery object of any kind: there is nothing to arm, nothing to re-arm, and nothing a session can lose by ending a turn.
 The one thing a session still owes delivery is its address, published once under the lock at session start; `docs/wake-delivery.md` owns that contract and the verdicts the listener reports.
-When the session-start digest reports direct Telegram receive as active, keep `bin/fm-tg-recv-arm.sh` armed as its own separate tracked background task; it starts or attaches to the receiver for this home, and it is the only remaining tracked background job supervision needs.
+When the session-start digest reports the direct Telegram receiver fallback as active, keep `bin/fm-tg-recv-arm.sh` armed as its own separate tracked background task until the consent-gated receiver service is installed; a service-owned receiver needs no session task.
 A wake arrives in the composer and is handled by draining first, before reading anything else and before composing any reply.
 Never infer that delivery is working from an empty drain: an empty queue and a dead listener look identical from there, which is why `bin/fm-delivery-service.sh status` states which one it is in one line.
 No turn ends blind while work is under way, including turns described as holding or waiting; what that now means is that a down or stalled listener is repaired rather than left, not that a wait is re-established.

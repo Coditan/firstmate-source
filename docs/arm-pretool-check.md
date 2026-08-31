@@ -4,7 +4,7 @@ This document is the authoritative human-readable contract for the protected-com
 
 It used to guard four commands, three of which were wake-delivery arms.
 Wake delivery moved out of the harness on 2026-08-13 (`docs/wake-delivery.md`), so no session runs a delivery command any more and the three arm entries have no scripts behind them.
-The policy is unchanged in shape and narrower in scope: what a session can still shell wrong is the Telegram receiver arm, which IS still a tracked background task, and the watcher loop itself, which must never be run by hand.
+The policy is unchanged in shape and narrower in scope: what a session can still shell wrong before the consent-gated receiver unit is installed is the Telegram receiver fallback arm, while the watcher loop itself must never be run by hand.
 `bin/fm-arm-command-policy.mjs` is the single semantic owner.
 `bin/fm-arm-pretool-check.sh` is only the stable harness transport and output renderer.
 The tracked harness adapters forward command text without classifying it.
@@ -12,7 +12,7 @@ The tracked harness adapters forward command text without classifying it.
 
 ## Purpose and boundary
 
-A firstmate primary must arm `bin/fm-tg-recv-arm.sh` through an observable harness call, and must never run `bin/fm-watch.sh` itself.
+A firstmate primary must arm `bin/fm-tg-recv-arm.sh` through an observable harness call only when session start reports the fallback active, and must never run `bin/fm-watch.sh` itself.
 A shell background operator, pipeline, redirection, wrapper, or unrelated command list can hide failure or let the supervised child die with the tool call.
 The seatbelt rejects those command shapes before execution.
 

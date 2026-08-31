@@ -368,3 +368,80 @@ esac
 if [ -e "$home/state/.tg-recv.lock" ] || [ -L "$home/state/.tg-recv.lock" ]; then
   fail "stale partial receiver lock was left after reclaimed receiver exited"
 fi
+
+# A systemd-owned receiver has no harness background task to carry its output
+# into the primary seat. Its successful message and its sustained failure must
+# therefore take the same durable wake path as the rest of supervision. The
+# failure fixture exits without output on purpose: an empty receiver exit must
+# not be allowed to look like an empty mailbox, and repeated service restarts
+# must not flood the queue with the same outage.
+service_home="$TMP_ROOT/service-home"
+mkdir -p "$service_home/config" "$service_home/state"
+printf 'BOT_TOKEN=x\nCHAT_ID=y\n' > "$service_home/config/telegram.env"
+cat > "$service_home/config/fm-tg-recv.sh" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "$(cat "$FM_HOME/state/receiver-mode")" in
+  message)
+    printf 'CAPTAIN-TELEGRAM: service message\n'
+    ;;
+  failure)
+    exit 7
+    ;;
+  empty-exit)
+    exit 0
+    ;;
+esac
+SH
+chmod +x "$service_home/config/fm-tg-recv.sh"
+
+printf '%s\n' message > "$service_home/state/receiver-mode"
+FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" "$ARM" > "$service_home/state/service-message.out" 2>&1
+assert_grep 'CAPTAIN-TELEGRAM: service message' "$service_home/state/.wake-queue" \
+  "systemd receiver message was left in the service journal instead of the durable wake queue"
+FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" "$ARM" > "$service_home/state/service-message-second.out" 2>&1
+message_rows=$(grep -c 'CAPTAIN-TELEGRAM: service message' "$service_home/state/.wake-queue")
+[ "$message_rows" -eq 2 ] \
+  || fail "two messages shared one wake identity and would be deduplicated at drain time: $message_rows rows"
+
+refused_home="$TMP_ROOT/refused-wake-home"
+mkdir -p "$refused_home/config" "$refused_home/state/refused-wake-queue"
+cp "$service_home/config/telegram.env" "$refused_home/config/telegram.env"
+cp "$service_home/config/fm-tg-recv.sh" "$refused_home/config/fm-tg-recv.sh"
+printf '%s\n' message > "$refused_home/state/receiver-mode"
+service_rc=0
+FM_WAKE_QUEUE="$refused_home/state/refused-wake-queue" \
+  FM_TG_RECV_MANAGER=systemd FM_HOME="$refused_home" "$ARM" \
+  > "$refused_home/state/refused-wake.out" 2>&1 || service_rc=$?
+[ "$service_rc" -eq 1 ] || fail "a refused durable wake exited $service_rc instead of failing visibly"
+assert_grep 'receiver output could not be durably relayed' "$refused_home/state/refused-wake.out" \
+  "a refused durable wake looked like successful delivery"
+preserved_output=$(cat "$refused_home/state/.tg-recv.lock/output-path" 2>/dev/null || true)
+assert_grep 'CAPTAIN-TELEGRAM: service message' "$preserved_output" \
+  "a refused durable wake discarded the captured receiver message"
+
+: > "$service_home/state/.wake-queue"
+printf '%s\n' failure > "$service_home/state/receiver-mode"
+service_rc=0
+FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" "$ARM" > "$service_home/state/service-failure.out" 2>&1 \
+  || service_rc=$?
+[ "$service_rc" -eq 7 ] || fail "service receiver failure exited $service_rc instead of preserving receiver exit 7"
+assert_grep 'check: telegram receiver: FAILED' "$service_home/state/.wake-queue" \
+  "systemd receiver failure was indistinguishable from healthy silence"
+
+first_failure_rows=$(wc -l < "$service_home/state/.wake-queue" | tr -d ' ')
+service_rc=0
+FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" "$ARM" > "$service_home/state/service-failure-repeat.out" 2>&1 \
+  || service_rc=$?
+[ "$service_rc" -eq 7 ] || fail "repeated service receiver failure exited $service_rc instead of preserving receiver exit 7"
+second_failure_rows=$(wc -l < "$service_home/state/.wake-queue" | tr -d ' ')
+[ "$second_failure_rows" -eq "$first_failure_rows" ] \
+  || fail "one outage queued $second_failure_rows failure wakes across service restarts instead of $first_failure_rows"
+
+: > "$service_home/state/.wake-queue"
+rm -f "$service_home/state/.tg-recv-last-failure-wake"
+printf '%s\n' empty-exit > "$service_home/state/receiver-mode"
+FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" "$ARM" > "$service_home/state/service-empty.out" 2>&1
+assert_grep 'check: telegram receiver: FAILED' "$service_home/state/.wake-queue" \
+  "an empty receiver exit was treated as an empty mailbox"
+pass "service-owned receiver output is durable, and one sustained outage wakes once"
