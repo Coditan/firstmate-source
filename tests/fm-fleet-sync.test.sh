@@ -814,6 +814,28 @@ test_bootstrap_surfaces_a_projects_path_it_cannot_resolve() {
   pass "bootstrap surfaces a projects path it cannot resolve"
 }
 
+# The same guard, the third reading it has to let through: a projects path present as
+# a REGULAR FILE. `test -d` is false, `test -L` is false, and its absence is provable
+# because the home is searchable - so all three clauses skipped, and a home with a
+# present, populated registry reached the session start as silence while the reader
+# it never ran refuses with 'not a directory'.
+test_bootstrap_surfaces_a_projects_path_that_is_not_a_directory() {
+  local home out
+  home="$TMP_ROOT/projects-regular-file-bootstrap"
+  rm -rf "$home"
+  mkdir -p "$home/data"
+  : > "$home/projects" || fail "could not stage a regular file at the projects path"
+  printf -- '- a-clone - test project (added 2026-08-31)\n' > "$home/data/projects.md"
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+
+  assert_contains "$out" "cannot list the projects directory" \
+    "the session start must relay a projects path that is not a directory: $out"
+  assert_contains "$out" "not a directory" \
+    "the relayed refusal must carry its own named cause: $out"
+  pass "bootstrap surfaces a projects path that is not a directory"
+}
+
 # The guard it falls through is still a guard: a home with no projects directory at
 # all must not pay for a refresh walk, and must say nothing about a fleet it has.
 test_bootstrap_stays_silent_for_a_home_that_keeps_no_clones() {
@@ -1013,6 +1035,7 @@ test_a_registry_whose_absence_cannot_be_established_is_never_taken_as_absent
 test_a_projects_dir_whose_absence_cannot_be_established_is_never_taken_as_absent
 test_a_searchable_unreadable_data_dir_still_proves_an_absent_registry
 test_bootstrap_surfaces_a_projects_path_it_cannot_resolve
+test_bootstrap_surfaces_a_projects_path_that_is_not_a_directory
 test_bootstrap_stays_silent_for_a_home_that_keeps_no_clones
 test_orphaned_stale_packed_refs_lock_recovers
 test_live_packed_refs_lock_is_never_removed

@@ -217,12 +217,13 @@ fleet_sync_relay_all_output() {
 fleet_sync() {
   local rc
   [ -x "$FM_ROOT/bin/fm-fleet-sync.sh" ] || return 0
-  # A home that genuinely keeps no clones must still cost nothing here. But `test -d`
-  # is false for a dangling symlink and for a path whose absence this process cannot
-  # establish, and both are readings fm-fleet-sync.sh refuses on: returning 0 here
-  # would swallow its refusal and hand the session start the same silence a home with
-  # nothing to sync produces. So those two fall through and let that reader speak.
-  [ -d "$PROJECTS" ] || [ -L "$PROJECTS" ] || fm_absence_unprovable "$PROJECTS" >/dev/null || return 0
+  # A home that genuinely keeps no clones must still cost nothing here. Every other
+  # reading falls through: a path that is PRESENT as anything at all, a dangling
+  # symlink, and a path whose absence this process cannot establish are all readings
+  # fm-fleet-sync.sh refuses on, and returning 0 on any of them would swallow that
+  # refusal and hand the session start the same silence a home with nothing to sync
+  # produces. Only a provable absence skips, because only that one is an answer.
+  [ -e "$PROJECTS" ] || [ -L "$PROJECTS" ] || fm_absence_unprovable "$PROJECTS" >/dev/null || return 0
 
   tmp=$(mktemp "${TMPDIR:-/tmp}/fm-fleet-sync.XXXXXX" 2>/dev/null) || return 0
   timeout=$(fleet_sync_bootstrap_timeout)
