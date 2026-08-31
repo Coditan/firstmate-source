@@ -324,10 +324,22 @@ test_a_held_episode_is_bounded_and_the_giveup_counts_launches_as_launches() {
 # to look at that pane, while "the launches ran out" sends him to start one. A
 # give-up that picks between them by whether any cycle was ever HELD gets both
 # wrong, because a hold is evidence that a pane was open THEN and says nothing
-# about now. This half is the false positive: the episode held, its pane then
-# went away, and the record was retired - so nothing is open and nothing is being
-# refused, and the finding may not say a seat is sitting in some pane it cannot
-# even name.
+# about now. This half is the false positive: the episode held, the record was
+# then retired, and at the bound nothing is open and nothing is being refused -
+# so the finding may not say a seat is sitting in some pane it cannot even name.
+#
+# THE ROUTE THAT RETIRES THE RECORD HERE IS THE DEADLINE, NOT A VANISHED PANE.
+# The fixture shrinks FM_SEAT_FIRST_TURN_DEADLINE on the last cycle, and with
+# `submitted` never set the record is abandoned as one whose pane "never
+# presented an empty agent composer". The confident pane-disappearance route is
+# NOT exercised here and cannot be by a fake backend: write_pane_fake_tmux
+# answers every non-new-window call with empty output, which reaches
+# fm_backend_target_exists as "the backend could not be asked" rather than as a
+# confident absence - which is exactly why the sibling test above asserts the
+# record SURVIVES while its pane could not be read. Both routes end the same way
+# for what is asserted below, a bound reached with no record standing, so this
+# still bisects a selector keyed on the hold count; it simply does not prove
+# anything about a pane that really closed.
 test_a_giveup_with_no_standing_record_never_claims_an_open_pane() {
   local home delivery tmux log status launches findings i
 
@@ -353,8 +365,9 @@ test_a_giveup_with_no_standing_record_never_claims_an_open_pane() {
   [ -f "$home/state/.seat-first-turn" ] \
     || fail "the pending first turn was dropped, so no cycle was actually held"
 
-  # The pane goes: the record is retired and the episode reaches its bound with
-  # holds already spent and nothing left standing.
+  # The first-turn deadline expires with nothing ever submitted, so the record is
+  # abandoned, and the episode reaches its bound with holds already spent and
+  # nothing left standing.
   FM_SEAT_FIRST_TURN_DEADLINE=1 FM_SEAT_RESPAWNER_MAX_ATTEMPTS=3 \
     FM_FAKE_DELIVERY_STATUS="$status" run_respawner_once "$home" "$delivery" "$tmux" \
     || fail "respawner refused the give-up cycle"

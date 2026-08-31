@@ -170,7 +170,16 @@ export FM_TEST_SKIP_WATCHER_SERVICE=1
 # nothing, and it is one careless fixture away from writing there too. A suite
 # that needs a home names it on the invocation, which is where that choice
 # belongs; ROOT here comes from this file's own location and needs none of these.
+#
+# The home-addressing half is the set bin/fm-test-isolation-proof.sh already
+# clears before it runs a candidate suite, kept identical here so the two do not
+# drift into disagreeing about what a leaked home looks like. FM_DATA_OVERRIDE
+# earns its place the same way FM_STATE_OVERRIDE did: bin/fm-seat-alarm.sh
+# resolves its durable history and the memory its grace and repeat cadence are
+# paced from under it, and tests/fm-seat-alarm.test.sh addresses its fixture with
+# FM_HOME alone, so a leaked value both reads a live home and writes into it.
 unset FM_HOME FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_CONFIG_OVERRIDE \
+  FM_DATA_OVERRIDE FM_PROJECTS_OVERRIDE \
   FM_FINDINGS_DIR FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
 unset FM_WATCH_DAEMON FM_WATCH_MANAGER FM_WATCH_SERVICE_PATH \
   FM_WATCH_SOURCE_VERSION FM_WATCH_X_MODE_VERSION
