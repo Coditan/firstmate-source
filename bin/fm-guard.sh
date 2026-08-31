@@ -52,17 +52,22 @@ STALE_BANNER_MARKER="$STATE/.guard-watcher-stale-banner"
 # Who this guard is talking to, decided once. READ_ONLY answers whether the
 # session may write, not who it is, so a crewmate or scout falls through it and
 # would otherwise be handed a repair AGENTS.md section 1 reserves to firstmate.
-# The comparison is against FM_HOME rather than FM_ROOT, unlike the two guards
-# that additionally gate on fm_primary_scope_matches: this file has no such gate,
-# FM_HOME is the home it actually judges (STATE, fm_watcher_healthy and
-# fm_delivery_healthy all take it), and bin/fm-spawn.sh prepends only
-# FM_HOME=<launching home> to a crewmate's launch command, so with
-# FM_ROOT_OVERRIDE unset FM_ROOT is the worker's OWN worktree and an FM_ROOT
-# comparison would answer "operator" for the exact case this split exists to
-# catch. This decides wording only; every health verdict below is unchanged and
-# the alarm still prints for every addressee.
+# The second argument is FM_ROOT, matching the two other call sites. An FM_HOME
+# comparison was tried and measured to regress a documented shape: FM_HOME names
+# the operational home while scripts still run from this checkout's bin/
+# (docs/configuration.md), and docs/cmux-backend.md records
+# FM_HOME=<scratch> bin/fm-spawn.sh run from the primary checkout, where
+# bin/fm-spawn.sh invokes "$FM_ROOT/bin/fm-guard.sh" - so comparing FM_HOME
+# addresses firstmate itself as a worker and withholds its own repair command.
+# This predicate is not complete. With FM_ROOT, a worker whose environment does
+# not carry FM_ROOT_OVERRIDE still reads as an operator, and so does any worker
+# that reaches this guard through one of the seven "$FM_ROOT/bin/fm-guard.sh"
+# callers, because both make FM_ROOT the checkout the script was loaded from.
+# Backlog item fm-guard-addressee-fm-root-callers owns both.
+# This decides wording only; every health verdict below is unchanged and the
+# alarm still prints for every addressee.
 OPERATES_HOME=0
-fm_session_operates_home "$SCRIPT_DIR/.." "$FM_HOME" && OPERATES_HOME=1
+fm_session_operates_home "$SCRIPT_DIR/.." "$FM_ROOT" && OPERATES_HOME=1
 
 # Deterministic episode key from beacon state: same continuous stale beacon
 # (or continuous absence) shares a key; a recovered-then-restale beacon gets a

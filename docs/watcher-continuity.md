@@ -33,12 +33,12 @@ Three separate runtimes were each handed `bin/fm-watcher-service.sh restart` aga
 
 `fm_session_operates_home` in `bin/fm-primary-scope-lib.sh` decides the addressee by asking whether the checkout the running hook was loaded from is the home this session would be operating, which the gate and the turn-end guard resolve as `FM_ROOT`.
 The home whose supervision was judged derives from `FM_HOME` instead, and `FM_ROOT` and `FM_HOME` coincide on every path traced through those two, so nothing depends on that difference there.
-`bin/fm-guard.sh` deliberately passes `FM_HOME` instead, because it is the one emitter with no `fm_primary_scope_matches` gate in front of it.
-`bin/fm-spawn.sh` prepends only `FM_HOME=<launching home>` to a crewmate's launch command, so with `FM_ROOT_OVERRIDE` unset that file's `FM_ROOT` is the worker's own worktree while the home it judges is still the launching one, and an `FM_ROOT` comparison would answer "operator" for exactly the worker case the split exists to catch.
+`bin/fm-guard.sh` passes `FM_ROOT` too.
+An `FM_HOME` comparison was tried there and reverted: `FM_HOME` selects the operational home while scripts still run from this checkout's `bin/` (`docs/configuration.md`), and `docs/cmux-backend.md` records `FM_HOME=<scratch> bin/fm-spawn.sh` run from the primary checkout, so comparing `FM_HOME` addresses firstmate itself as a worker and withholds its own repair command.
 Firstmate's own session matches, a secondmate in its own home matches, and a task worktree does not.
 It decides only wording: which home is evaluated and whether that home's supervision is unhealthy are computed identically for both addressees, so a wrong answer here can misaddress a message but can never suppress a refusal.
 An operator keeps the recovery commands verbatim; a worker is told that repairing that home belongs to firstmate and is asked to report the stalled supervision in its task status line.
-On the PreToolUse gate and the turn-end guard that worker message names no command at all.
+On the PreToolUse gate and the turn-end guard that worker message names no command at all, with one deliberate exception: a forced teardown is refused because only the ordinary literal `bin/fm-teardown.sh` is allowed during recovery, and that remedy holds for every addressee, so a worker gets it rather than a supervision-repair diagnosis that does not match why it was blocked.
 `bin/fm-guard.sh` splits three ways rather than two, because its existing `FM_GUARD_READ_ONLY` branch answers whether the session may write and not who it is; its worker branch keeps the border, the headline, the in-flight and beacon line, and the continuation line, and drops only the `Daemon repair:` line and the delivery repair tail.
 That delivery warning keeps its `WARNING: wake delivery listener ` prefix for every addressee, because `bin/fm-bridge-relay.sh` classifies the line by that prefix.
 `bin/fm-guard.sh` is therefore not command-free for a worker: its queued-wakes warning is still gated only on `FM_GUARD_READ_ONLY`, so a worker is still told to drain them with `bin/fm-wake-drain.sh`.
@@ -47,6 +47,7 @@ That branch was left alone on purpose, because `bin/fm-wake-drain.sh` is on the 
 One limit of this design is accepted rather than fixed.
 The addressee is decided from the checkout the running script was LOADED FROM, so it is only correct when the session runs its own copy.
 Seven callers invoke `"$FM_ROOT/bin/fm-guard.sh"` rather than `"$SCRIPT_DIR/fm-guard.sh"` - `bin/fm-teardown.sh`, `bin/fm-pr-check.sh`, `bin/fm-review-diff.sh`, `bin/fm-merge-local.sh`, `bin/fm-promote.sh`, `bin/fm-fleet-sync.sh` and `bin/fm-spawn.sh` - and when a worker inherits `FM_ROOT_OVERRIDE` naming the launching home those run that home's copy, which reads as the operator and still prints the repair.
+A worker whose environment carries no `FM_ROOT_OVERRIDE` at all also reads as an operator, because `FM_ROOT` then falls back to the checkout the script was loaded from.
 Repointing them is scope resolution, which is a separate open captain decision; the gap is tracked as backlog item `fm-guard-addressee-fm-root-callers`.
 `bin/fm-turnend-guard-grok.sh` and `.opencode/plugins/fm-primary-turnend-guard.js` each prepend their own instruction to the shared banner, so both read the same predicate rather than carrying a second answer.
 The OpenCode plugin resolves the predicate natively in JavaScript against `FM_ROOT_OVERRIDE`, and any unresolvable path answers "not the operator" there too.

@@ -142,6 +142,10 @@ WORKER_FORBIDDEN_COMMANDS='bin/fm-watcher-service.sh bin/fm-delivery-service.sh 
 # claim the gate forbids every fleet command against that home, because the
 # recovery allowlist in bin/fm-continuity-command-policy.mjs does not.
 WORKER_REPORT_TAIL='report the stalled supervision in your task status line and carry on with your own task in this worktree'
+# The ordinary literal bin/fm-teardown.sh and bin/fm-wake-drain.sh stay allowed
+# for every addressee, so only the two supervision-repair services are reserved.
+# An unsafe-teardown refusal must therefore still name the literal retry.
+WORKER_RESERVED_COMMANDS='bin/fm-watcher-service.sh bin/fm-delivery-service.sh'
 
 make_worker_worktree() {
   local dir="$TMP_ROOT/worker-wt"
@@ -184,18 +188,36 @@ test_worker_refusal_names_no_command_reserved_to_firstmate() {
     "worker refusal must name reporting as the worker's own next action, and claim nothing the gate does not enforce"
   assert_contains "$message" "(blocked: fm-crew-state.sh)" "worker refusal must still name the command it refused"
 
-  # A forced teardown reaches the gate through the other reason code, and its
-  # operator wording tells the reader to retry the literal bin/fm-teardown.sh.
-  # A worker may not run that one either, so this branch must not leak it.
+  pass "continuity gate refuses a task worker without naming any command AGENTS.md reserves to firstmate"
+}
+
+# A forced teardown is refused for a different reason: not that supervision
+# repair belongs to firstmate, but that only the ordinary literal invocation is
+# allowed during recovery. That remedy is true for every addressee, so a worker
+# must get it rather than a diagnosis that does not match why it was blocked.
+test_worker_forced_teardown_gets_the_literal_retry_remedy() {
+  local rc=0 message command
+  rm -rf "$STATE/.watch.lock"
+  printf 'project=fixture\n' > "$STATE/task.meta"
+
   run_command_as_worker 'bin/fm-teardown.sh task --force' || rc=$?
   [ "$rc" -eq 2 ] || fail "a worker must still be refused a forced teardown"
   message=$(jq -r '.systemMessage' "$ERR")
-  for command in $WORKER_FORBIDDEN_COMMANDS; do
+  assert_contains "$message" 'in the home that launched this task' \
+    "a worker must be told which home the refusal is about, not that it is its own"
+  assert_contains "$message" 'only the ordinary literal bin/fm-teardown.sh is allowed' \
+    "a worker refused a forced teardown must be told which invocation is allowed"
+  assert_contains "$message" 'drop --force and any shell-expanded arguments and retry the literal invocation' \
+    "a worker refused a forced teardown must get the actionable remedy, not the supervision-repair wording"
+  assert_not_contains "$message" "$WORKER_REPORT_TAIL" \
+    "a forced teardown is not a supervision-repair refusal, so it must not carry that diagnosis"
+  assert_contains "$message" '(blocked: fm-teardown.sh)' "worker refusal must still name the command it refused"
+  for command in $WORKER_RESERVED_COMMANDS; do
     case "$message" in
       *"$command"*) fail "worker forced-teardown refusal handed a task worker $command: $message" ;;
     esac
   done
-  pass "continuity gate refuses a task worker without naming any command AGENTS.md reserves to firstmate"
+  pass "continuity gate hands a task worker the literal-teardown remedy rather than a supervision-repair diagnosis"
 }
 
 # The other half of the pair: the session that operates this home must keep the
@@ -229,5 +251,6 @@ test_gate_scope_and_recovery_exceptions
 test_live_lock_allows_fleet_command_even_with_stale_beacon
 test_child_worktree_and_malformed_input_fail_open
 test_worker_refusal_names_no_command_reserved_to_firstmate
+test_worker_forced_teardown_gets_the_literal_retry_remedy
 test_operator_refusal_still_names_the_recovery_commands
 test_claude_hook_registration_preserves_stop_backstop

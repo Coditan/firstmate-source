@@ -34,11 +34,10 @@ install_guard_scripts() {
 }
 
 make_guard_case() {
-  local name=$1 dir home root
+  local name=$1 dir home
   dir="$TMP_ROOT/$name"
   home="$dir/home"
-  root="$dir/root"
-  mkdir -p "$home/state" "$home/config" "$root"
+  mkdir -p "$home/state" "$home/config"
   fm_write_meta "$home/state/task.meta" "window=firstmate:fm-task" "kind=ship"
   install_guard_scripts "$home"
   printf '%s\n' "$dir"
@@ -48,14 +47,14 @@ case_home() {
   printf '%s/home\n' "$1"
 }
 
-case_root() {
-  printf '%s/root\n' "$1"
-}
-
+# The operator shape: FM_ROOT_OVERRIDE names the same checkout the guard is run
+# out of, which is what firstmate's own session looks like. The home is not a git
+# repo, so the worktree-tangle check stays inert and these cases stay pure
+# assertions about watcher state.
 run_guard_case() {
   local dir=$1 home
   home=$(case_home "$dir")
-  FM_ROOT_OVERRIDE="$(case_root "$dir")" \
+  FM_ROOT_OVERRIDE="$home" \
     FM_HOME="$home" \
     FM_GUARD_GRACE=999 \
     FM_WATCH_SERVICE_FORCE_BACKEND=keeper \
@@ -65,7 +64,7 @@ run_guard_case() {
 run_guard_case_read_only() {
   local dir=$1 home
   home=$(case_home "$dir")
-  FM_ROOT_OVERRIDE="$(case_root "$dir")" \
+  FM_ROOT_OVERRIDE="$home" \
     FM_HOME="$home" \
     FM_GUARD_GRACE=999 \
     FM_GUARD_READ_ONLY=1 \
@@ -73,11 +72,9 @@ run_guard_case_read_only() {
     "$home/bin/fm-guard.sh" 2>&1
 }
 
-# The worker shape bin/fm-spawn.sh actually produces: the task worktree carries
-# its own tracked copy of the guard, the launch command prepends only
-# FM_HOME=<launching home>, and FM_ROOT_OVERRIDE is deliberately left unset so
-# FM_ROOT resolves to the worker's own worktree. That is the shape an FM_ROOT
-# comparison would misread as the operator.
+# The worker shape: the task worktree carries its own tracked copy of the guard
+# while FM_ROOT_OVERRIDE still names the home that launched the task, so the
+# checkout the guard was loaded from is not FM_ROOT.
 case_worker() {
   printf '%s/worker\n' "$1"
 }
@@ -90,9 +87,11 @@ make_worker_checkout() {
 }
 
 run_guard_case_as_worker() {
-  local dir=$1 worker
+  local dir=$1 worker home
   worker=$(make_worker_checkout "$dir")
-  FM_HOME="$(case_home "$dir")" \
+  home=$(case_home "$dir")
+  FM_ROOT_OVERRIDE="$home" \
+    FM_HOME="$home" \
     FM_GUARD_GRACE=999 \
     FM_WATCH_SERVICE_FORCE_BACKEND=keeper \
     "$worker/bin/fm-guard.sh" 2>&1

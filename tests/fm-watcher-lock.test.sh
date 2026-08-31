@@ -178,13 +178,10 @@ test_guard_warnings() {
   queue_line=$(grep -n 'queued wakes pending - drain them' "$err" | head -1 | cut -d: -f1)
   [ "$banner_line" -lt "$queue_line" ] || fail "queued-wakes warning printed before the no-watcher banner"
 
-  # X-mode cadence is the wake-delivery owner's, so the only guard line that can
-  # ever carry it is the generated DELIVERY repair - and only the session that
-  # operates this home is handed that line at all. The shape is therefore a
-  # healthy daemon, a down delivery listener, and x-mode set, which is the one
-  # state where fm-supervision-instructions.sh actually runs with --x-mode 1.
-  # The positive assertion keeps the negative one from going vacuous: without it
-  # a suppressed repair line would satisfy the negative for the wrong reason.
+  # X-mode set must not disturb the operator's generated delivery repair. That is
+  # all this case can prove today: fm-supervision-instructions.sh's --repair-line
+  # ignores --x-mode entirely, so there is no x-mode-specific text to assert on
+  # and a check for one would test nothing.
   dir=$(make_case guard-xmode)
   state="$dir/state"
   err="$dir/guard.err"
@@ -200,7 +197,6 @@ test_guard_warnings() {
   wait "$live" 2>/dev/null || true
   grep -F 'repair it with bin/fm-delivery-service.sh restart' "$err" >/dev/null \
     || fail "the session operating this home lost its generated delivery repair: $(cat "$err")"
-  ! grep -F "source '$dir/config/x-mode.env' first" "$err" >/dev/null || fail "guard repair line still made the session own X-mode cadence"
 
   # (2) fresh watcher, empty queue -> silence.
   dir=$(make_case guard-fresh)
