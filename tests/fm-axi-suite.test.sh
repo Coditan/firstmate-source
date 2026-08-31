@@ -86,7 +86,7 @@ SH
 
 run_case() {
   local root=$1 tools=$2
-  PATH="$root/bin:$BASE_PATH" FM_HOME="$root/home" FM_STATE_OVERRIDE="$root/state" \
+  PATH="$root/bin:$BASE_PATH" FM_HOME="$root/home" FM_STATE_OVERRIDE="$root/home/state" \
     FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="$tools" FM_AXI_SUITE_CHECK_INTERVAL=0 \
     FM_TEST_VERSIONS="$root/versions" FM_TEST_INSTALL_LOG="$root/install.log" \
     FM_TEST_HOOK_LOG="$root/hook.log" \
@@ -96,7 +96,7 @@ run_case() {
 test_patch_and_minor_auto_update() {
   local w out
   w="$TMP_ROOT/automatic"
-  mkdir -p "$w/bin" "$w/home" "$w/state"
+  mkdir -p "$w/bin" "$w/home" "$w/home/state"
   make_npm "$w/bin" "$w/versions" "$w/install.log"
   make_tool "$w/bin" patch-axi 1.2.3
   make_tool "$w/bin" minor-axi 1.2.3
@@ -114,7 +114,7 @@ test_patch_and_minor_auto_update() {
 test_major_and_missing_wait_for_review() {
   local w out
   w="$TMP_ROOT/review"
-  mkdir -p "$w/bin" "$w/home" "$w/state"
+  mkdir -p "$w/bin" "$w/home" "$w/home/state"
   make_npm "$w/bin" "$w/versions" "$w/install.log"
   make_tool "$w/bin" major-axi 1.9.9
   printf '%s\n' 'major-axi=2.0.0' > "$w/versions"
@@ -129,55 +129,55 @@ test_major_and_missing_wait_for_review() {
 test_failed_update_persists_stuck_signal() {
   local w out
   w="$TMP_ROOT/stuck"
-  mkdir -p "$w/bin" "$w/home" "$w/state"
+  mkdir -p "$w/bin" "$w/home" "$w/home/state"
   make_npm "$w/bin" "$w/versions" "$w/install.log"
   make_tool "$w/bin" stuck-axi 1.0.0
   printf '%s\n' 'stuck-axi=1.0.1' > "$w/versions"
   sed -i 's/if \[ "${1:-}" = install \]; then/if [ "${1:-}" = install ]; then exit 1; fi\nif false; then/' "$w/bin/npm"
   out=$(run_case "$w" "stuck-axi")
   assert_contains "$out" 'AXI_SUITE_STUCK: stuck-axi automatic update 1.0.0 -> 1.0.1 failed' "failed update was not surfaced"
-  assert_grep 'AXI_SUITE_STUCK:' "$w/state/axi-suite-update.stuck" "stuck signal was not persisted"
+  assert_grep 'AXI_SUITE_STUCK:' "$w/home/state/axi-suite-update.stuck" "stuck signal was not persisted"
   pass "failed updates persist a local stuck signal"
 }
 
 test_check_only_never_runs_hook_setup() {
   local w out
   w="$TMP_ROOT/check-only-hooks"
-  mkdir -p "$w/bin" "$w/home" "$w/state"
+  mkdir -p "$w/bin" "$w/home" "$w/home/state"
   make_npm "$w/bin" "$w/versions" "$w/install.log"
   make_hook_tool "$w/bin" gh-axi 2.0.0 "$w/hook.log"
   : > "$w/hook.log"
   printf '%s\n' 'gh-axi=2.0.0' > "$w/versions"
-  printf 'AXI_SUITE_STUCK: gh-axi hook setup failed (already at 2.0.0)\n' > "$w/state/axi-suite-update.stuck"
-  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/state" \
+  printf 'AXI_SUITE_STUCK: gh-axi hook setup failed (already at 2.0.0)\n' > "$w/home/state/axi-suite-update.stuck"
+  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/home/state" \
     FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="gh-axi" FM_AXI_SUITE_CHECK_INTERVAL=0 \
     FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
     "$ROOT/bin/fm-axi-suite.sh" --force --check-only)
   [ ! -s "$w/hook.log" ] || fail "check-only ran the mutating hook setup command"
   assert_contains "$out" 'AXI_SUITE_STUCK: gh-axi hook setup retry pending' "check-only did not report the pending hook retry"
-  assert_grep 'AXI_SUITE_STUCK:' "$w/state/axi-suite-update.stuck" "check-only cleared the stuck signal"
+  assert_grep 'AXI_SUITE_STUCK:' "$w/home/state/axi-suite-update.stuck" "check-only cleared the stuck signal"
   pass "check-only never mutates hooks and keeps reporting the pending retry"
 }
 
 test_hook_retry_self_clears_stuck_signal() {
   local w out
   w="$TMP_ROOT/hook-retry"
-  mkdir -p "$w/bin" "$w/home" "$w/state"
+  mkdir -p "$w/bin" "$w/home" "$w/home/state"
   make_npm "$w/bin" "$w/versions" "$w/install.log"
   make_hook_tool "$w/bin" gh-axi 2.0.0 "$w/hook.log"
   : > "$w/hook.log"
   printf '%s\n' 'gh-axi=2.0.0' > "$w/versions"
-  printf 'AXI_SUITE_STUCK: gh-axi hook setup failed (already at 2.0.0)\n' > "$w/state/axi-suite-update.stuck"
+  printf 'AXI_SUITE_STUCK: gh-axi hook setup failed (already at 2.0.0)\n' > "$w/home/state/axi-suite-update.stuck"
   run_case "$w" "gh-axi" >/dev/null
   assert_grep 'gh-axi setup hooks' "$w/hook.log" "a normal run did not retry hook setup"
-  [ ! -f "$w/state/axi-suite-update.stuck" ] || fail "stuck signal was not self-cleared after a successful hook retry"
+  [ ! -f "$w/home/state/axi-suite-update.stuck" ] || fail "stuck signal was not self-cleared after a successful hook retry"
   pass "a successful hook retry self-clears the stuck signal on a normal run"
 }
 
 test_version_gt_without_sort_dash_v() {
   local w out
   w="$TMP_ROOT/no-sort-v"
-  mkdir -p "$w/bin" "$w/home" "$w/state"
+  mkdir -p "$w/bin" "$w/home" "$w/home/state"
   make_npm "$w/bin" "$w/versions" "$w/install.log"
   make_tool "$w/bin" ahead-axi 2.1.0
   printf '%s\n' 'ahead-axi=2.0.5' > "$w/versions"
@@ -201,7 +201,7 @@ test_bounded_kills_hung_call_without_timeout_binary() {
   local w out minbin f name start end elapsed
   w="$TMP_ROOT/no-timeout-binary"
   minbin="$w/minbin"
-  mkdir -p "$w/bin" "$w/home" "$w/state" "$minbin"
+  mkdir -p "$w/bin" "$w/home" "$w/home/state" "$minbin"
   for f in /usr/bin/* /bin/*; do
     name=$(basename "$f")
     case "$name" in timeout|gtimeout) continue ;; esac
@@ -215,7 +215,7 @@ SH
   chmod +x "$w/bin/npm"
   make_tool "$w/bin" hang-axi 1.0.0
   start=$(date +%s)
-  out=$(PATH="$w/bin:$minbin" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/state" \
+  out=$(PATH="$w/bin:$minbin" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/home/state" \
     FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="hang-axi" FM_AXI_SUITE_CHECK_INTERVAL=0 \
     FM_AXI_SUITE_NETWORK_TIMEOUT=1 \
     "$ROOT/bin/fm-axi-suite.sh" --force)
@@ -229,7 +229,7 @@ SH
 test_cumulative_timeout_across_tools() {
   local w out start end elapsed
   w="$TMP_ROOT/cumulative-timeout"
-  mkdir -p "$w/bin" "$w/home" "$w/state"
+  mkdir -p "$w/bin" "$w/home" "$w/home/state"
   cat > "$w/bin/npm" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = view ]; then sleep 5; exit 0; fi
@@ -241,7 +241,7 @@ SH
   make_tool "$w/bin" hang-three-axi 1.0.0
   make_tool "$w/bin" hang-four-axi 1.0.0
   start=$(date +%s)
-  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/state" \
+  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/home/state" \
     FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="hang-one-axi hang-two-axi hang-three-axi hang-four-axi" \
     FM_AXI_SUITE_CHECK_INTERVAL=0 FM_AXI_SUITE_NETWORK_TIMEOUT=2 \
     "$ROOT/bin/fm-axi-suite.sh" --force)
@@ -400,7 +400,7 @@ test_path_lib_is_sourceable_and_shadows_only_the_prefix() {
 test_documented_profile_form_leaves_no_shadow_alarm() {
   local w out
   w="$TMP_ROOT/profile-shadow"
-  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/home/state"
   make_npm "$w/bin" "$w/versions" "$w/install.log"
   make_tool "$w/home/.local/axi/bin" prof-axi 1.2.4
   make_tool "$w/bin" prof-axi 1.2.3
@@ -408,7 +408,7 @@ test_documented_profile_form_leaves_no_shadow_alarm() {
   write_documented_profile "$w/profile.sh"
   # shellcheck disable=SC2016 # The inner shell must expand these, not this one.
   out=$(env -u FM_AXI_AMBIENT_PATH -u FM_AXI_AMBIENT_PATH_OWNER \
-    FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/home" FM_STATE_OVERRIDE="$w/state" \
+    FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/home" FM_STATE_OVERRIDE="$w/home/state" \
     FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="prof-axi" FM_AXI_SUITE_CHECK_INTERVAL=0 \
     FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
     FM_TEST_HOOK_LOG="$w/hook.log" FM_TEST_LIB="$ROOT/bin/fm-axi-path-lib.sh" \
@@ -510,7 +510,7 @@ test_unreadable_vessel_copy_is_replaced() {
     "the removed vessel copy was not reseeded from the intact external copy"
   [ "$("$w/home/.local/axi/bin/repair-axi" --version)" = 'repair-axi 1.2.3' ] \
     || fail "the repaired vessel copy still cannot report its version"
-  assert_absent "$w/state/axi-suite-update.stuck" \
+  assert_absent "$w/home/state/axi-suite-update.stuck" \
     "the broken vessel copy left a permanent stuck signal"
   pass "an unreadable vessel copy is removed instead of shadowing the intact external copy"
 }
@@ -518,14 +518,14 @@ test_unreadable_vessel_copy_is_replaced() {
 test_hung_vessel_copy_is_bounded_and_kept() {
   local w out start end elapsed
   w="$TMP_ROOT/hung-copy"
-  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/home/state"
   make_npm "$w/bin" "$w/versions" "$w/install.log"
   make_tool "$w/bin" hungcopy-axi 1.0.0
   printf '#!/usr/bin/env bash\nsleep 30\n' > "$w/home/.local/axi/bin/hungcopy-axi"
   chmod +x "$w/home/.local/axi/bin/hungcopy-axi"
   printf '%s\n' 'hungcopy-axi=1.0.0' > "$w/versions"
   start=$(date +%s)
-  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/state" \
+  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/home/state" \
     FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS=hungcopy-axi FM_AXI_SUITE_CHECK_INTERVAL=0 \
     FM_AXI_SUITE_PROBE_TIMEOUT=1 \
     FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
@@ -537,7 +537,7 @@ test_hung_vessel_copy_is_bounded_and_kept() {
     "a hung vessel copy was not reported"
   assert_present "$w/home/.local/axi/bin/hungcopy-axi" \
     "a vessel copy that only failed to answer in time was removed"
-  assert_present "$w/state/axi-suite-prefix-v1.cutover" \
+  assert_present "$w/home/state/axi-suite-prefix-v1.cutover" \
     "a hung vessel copy blocked the cadence marker"
   pass "a hung vessel copy is bounded, reported, and not removed"
 }
@@ -546,14 +546,14 @@ test_first_cutover_seeds_whole_suite_without_alarming() {
   local w out t tools
   w="$TMP_ROOT/first-cutover"
   tools="one-axi two-axi three-axi four-axi five-axi six-axi"
-  mkdir -p "$w/bin" "$w/home" "$w/state"
+  mkdir -p "$w/bin" "$w/home" "$w/home/state"
   make_npm "$w/bin" "$w/versions" "$w/install.log"
   : > "$w/versions"
   for t in $tools; do
     make_tool "$w/bin" "$t" 1.0.0
     printf '%s=1.0.0\n' "$t" >> "$w/versions"
   done
-  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/state" \
+  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/home/state" \
     FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="$tools" FM_AXI_SUITE_CHECK_INTERVAL=0 \
     FM_AXI_SUITE_NETWORK_TIMEOUT=3 FM_AXI_SUITE_SEED_TIMEOUT=60 \
     FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
@@ -565,7 +565,7 @@ test_first_cutover_seeds_whole_suite_without_alarming() {
     assert_grep "--prefix $w/home/.local/axi $t@1.0.0" "$w/install.log" \
       "$t never reached the vessel prefix"
   done
-  assert_absent "$w/state/axi-suite-update.stuck" \
+  assert_absent "$w/home/state/axi-suite-update.stuck" \
     "a healthy six-tool first cutover raised a stuck alarm"
   assert_grep 'seeding this vessel AXI prefix' "$w/progress.log" \
     "the first cutover never announced that seeding was in progress"
@@ -577,13 +577,13 @@ test_first_cutover_seeds_whole_suite_without_alarming() {
 test_stalled_first_cutover_alarms_and_stays_bounded() {
   local w out start end elapsed
   w="$TMP_ROOT/stalled-cutover"
-  mkdir -p "$w/bin" "$w/home" "$w/state"
+  mkdir -p "$w/bin" "$w/home" "$w/home/state"
   make_npm "$w/bin" "$w/versions" "$w/install.log"
   make_tool "$w/bin" stall-one-axi 1.0.0
   make_tool "$w/bin" stall-two-axi 1.0.0
   printf '%s\n' 'stall-one-axi=1.0.0' 'stall-two-axi=1.0.0' > "$w/versions"
   start=$(date +%s)
-  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/state" \
+  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/home/state" \
     FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="stall-one-axi stall-two-axi" \
     FM_AXI_SUITE_CHECK_INTERVAL=0 FM_AXI_SUITE_SEED_TIMEOUT=1 \
     FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
@@ -598,7 +598,7 @@ test_stalled_first_cutover_alarms_and_stays_bounded() {
     "the tool left unseeded by the spent budget was not reported"
   assert_contains "$out" 'seeding budget is spent' \
     "the unattempted seed did not name the spent seeding budget"
-  assert_present "$w/state/axi-suite-prefix-v1.cutover" \
+  assert_present "$w/home/state/axi-suite-prefix-v1.cutover" \
     "a stalled first cutover blocked the cadence marker"
   pass "a stalled first cutover alarms clearly and stays inside its seeding budget"
 }
@@ -606,12 +606,12 @@ test_stalled_first_cutover_alarms_and_stays_bounded() {
 test_stalled_cutover_of_stale_installs_reports_the_same_way() {
   local w out
   w="$TMP_ROOT/stalled-stale-cutover"
-  mkdir -p "$w/bin" "$w/home" "$w/state"
+  mkdir -p "$w/bin" "$w/home" "$w/home/state"
   make_npm "$w/bin" "$w/versions" "$w/install.log"
   make_tool "$w/bin" stale-one-axi 1.0.0
   make_tool "$w/bin" stale-two-axi 1.0.0
   printf '%s\n' 'stale-one-axi=1.0.1' 'stale-two-axi=1.0.1' > "$w/versions"
-  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/state" \
+  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/home/state" \
     FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="stale-one-axi stale-two-axi" \
     FM_AXI_SUITE_CHECK_INTERVAL=0 FM_AXI_SUITE_SEED_TIMEOUT=1 \
     FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
@@ -631,14 +631,14 @@ test_stalled_cutover_of_stale_installs_reports_the_same_way() {
 test_registry_and_install_time_do_not_spend_the_probe_budget() {
   local w out t
   w="$TMP_ROOT/probe-budget"
-  mkdir -p "$w/bin" "$w/home" "$w/state"
+  mkdir -p "$w/bin" "$w/home" "$w/home/state"
   make_npm "$w/bin" "$w/versions" "$w/install.log"
   : > "$w/versions"
   for t in slow-one-axi slow-two-axi slow-three-axi; do
     make_tool "$w/bin" "$t" 1.0.0
     printf '%s=1.0.0\n' "$t" >> "$w/versions"
   done
-  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/state" \
+  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/home/state" \
     FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="slow-one-axi slow-two-axi slow-three-axi" \
     FM_AXI_SUITE_CHECK_INTERVAL=0 FM_AXI_SUITE_NETWORK_TIMEOUT=60 FM_AXI_SUITE_PROBE_TIMEOUT=2 \
     FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
@@ -652,7 +652,7 @@ test_registry_and_install_time_do_not_spend_the_probe_budget() {
     assert_grep "--prefix $w/home/.local/axi $t@1.0.0" "$w/install.log" \
       "$t never reached the vessel prefix"
   done
-  assert_absent "$w/state/axi-suite-update.stuck" "a successful cutover persisted a stuck signal"
+  assert_absent "$w/home/state/axi-suite-update.stuck" "a successful cutover persisted a stuck signal"
   pass "registry and install time never spends the local probe budget"
 }
 
@@ -667,10 +667,10 @@ test_unpublished_ahead_version_is_not_a_recurring_alarm() {
   out=$(run_case "$w" "dev-axi")
   assert_contains "$out" 'AXI_SUITE_REVIEW: dev-axi 3.1.0 is ahead of registry latest 3.0.0' \
     "an unpublishable locally-ahead build was not reported for review"
-  assert_absent "$w/state/axi-suite-update.stuck" \
+  assert_absent "$w/home/state/axi-suite-update.stuck" \
     "an unpublishable locally-ahead build raised a permanent stuck alarm"
   assert_no_grep 'dev-axi@3.0.0' "$w/install.log" "the locally-ahead build was downgraded to the registry latest"
-  assert_present "$w/state/axi-suite-prefix-v1.cutover" \
+  assert_present "$w/home/state/axi-suite-prefix-v1.cutover" \
     "an unpublishable locally-ahead build blocked the cadence marker"
   pass "an unpublishable locally-ahead build reports for review instead of alarming forever"
 }
@@ -693,7 +693,7 @@ test_unpublished_ahead_version_is_not_a_recurring_alarm() {
 test_shadowed_suite_is_reported_even_while_the_maintained_copy_is_current() {
   local w out
   w="$TMP_ROOT/shadowed"
-  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/home/state"
   make_npm "$w/bin" "$w/versions" "$w/install.log"
   # The maintained copy is current, and an older copy earlier on the ambient
   # PATH is what actually runs.
@@ -712,13 +712,13 @@ test_shadowed_suite_is_reported_even_while_the_maintained_copy_is_current() {
 test_unshadowed_suite_reports_nothing_extra() {
   local w out
   w="$TMP_ROOT/unshadowed"
-  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/home/state"
   make_npm "$w/bin" "$w/versions" "$w/install.log"
   make_tool "$w/home/.local/axi/bin" solo-axi 1.2.4
   printf '%s\n' 'solo-axi=1.2.4' > "$w/versions"
   # The maintained bin directory is on the ambient PATH ahead of everything else,
   # which is what a correctly resolving firstmate-launched process looks like.
-  out=$(PATH="$w/home/.local/axi/bin:$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/state" \
+  out=$(PATH="$w/home/.local/axi/bin:$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/home/state" \
     FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="solo-axi" FM_AXI_SUITE_CHECK_INTERVAL=0 \
     FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
     FM_TEST_HOOK_LOG="$w/hook.log" "$ROOT/bin/fm-axi-suite.sh" --force)
@@ -738,7 +738,7 @@ test_unshadowed_suite_reports_nothing_extra() {
 test_shadow_report_survives_an_entrypoint_that_prepended_first() {
   local w out
   w="$TMP_ROOT/shadow-through-bootstrap"
-  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/home/state"
   make_npm "$w/bin" "$w/versions" "$w/install.log"
   make_tool "$w/home/.local/axi/bin" boot-axi 1.2.4
   make_tool "$w/bin" boot-axi 1.2.3
@@ -746,7 +746,7 @@ test_shadow_report_survives_an_entrypoint_that_prepended_first() {
   # FM_ROOT_OVERRIDE points the worktree-tangle check at the non-git home so the
   # ambient checkout cannot leak an unrelated line into this fixture.
   out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/home" \
-    FM_STATE_OVERRIDE="$w/state" FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="boot-axi" \
+    FM_STATE_OVERRIDE="$w/home/state" FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="boot-axi" \
     FM_AXI_SUITE_CHECK_INTERVAL=0 FM_TEST_VERSIONS="$w/versions" \
     FM_TEST_INSTALL_LOG="$w/install.log" FM_TEST_HOOK_LOG="$w/hook.log" \
     "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
@@ -765,7 +765,7 @@ test_shadow_report_survives_an_entrypoint_that_prepended_first() {
 test_unseeded_vessel_reports_no_shadowing() {
   local w out
   w="$TMP_ROOT/unseeded-shadow"
-  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/home/state"
   make_npm "$w/bin" "$w/versions" "$w/install.log"
   make_tool "$w/bin" fresh-axi 1.2.4
   printf '%s\n' 'fresh-axi=1.2.4' > "$w/versions"
@@ -800,14 +800,14 @@ dead_pid() {
 test_a_marker_from_a_dead_process_tree_is_not_trusted() {
   local w out gone frozen
   w="$TMP_ROOT/stale-marker"
-  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/home/state"
   make_npm "$w/bin" "$w/versions" "$w/install.log"
   make_tool "$w/home/.local/axi/bin" stale-axi 1.2.4
   make_tool "$w/bin" stale-axi 1.2.3
   printf '%s\n' 'stale-axi=1.2.4' > "$w/versions"
   gone=$(dead_pid)
   frozen="$w/home/.local/axi/bin:$BASE_PATH"
-  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/state" \
+  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/home/state" \
     FM_AXI_AMBIENT_PATH="$frozen" FM_AXI_AMBIENT_PATH_OWNER="$gone" \
     FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="stale-axi" FM_AXI_SUITE_CHECK_INTERVAL=0 \
     FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
@@ -825,14 +825,14 @@ test_a_marker_from_a_dead_process_tree_is_not_trusted() {
 test_an_unattributable_environment_reports_that_it_cannot_tell() {
   local w out gone frozen
   w="$TMP_ROOT/unattributable-marker"
-  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/home/state"
   make_npm "$w/bin" "$w/versions" "$w/install.log"
   make_tool "$w/home/.local/axi/bin" opaque-axi 1.2.4
   make_tool "$w/bin" opaque-axi 1.2.3
   printf '%s\n' 'opaque-axi=1.2.4' > "$w/versions"
   gone=$(dead_pid)
   frozen="$w/home/.local/axi/bin:$BASE_PATH"
-  out=$(PATH="$w/home/.local/axi/bin:$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/state" \
+  out=$(PATH="$w/home/.local/axi/bin:$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/home/state" \
     FM_AXI_AMBIENT_PATH="$frozen" FM_AXI_AMBIENT_PATH_OWNER="$gone" \
     FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="opaque-axi" FM_AXI_SUITE_CHECK_INTERVAL=0 \
     FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \
@@ -854,13 +854,13 @@ test_an_unattributable_environment_reports_that_it_cannot_tell() {
 test_a_half_recorded_marker_is_not_answered_for() {
   local w out
   w="$TMP_ROOT/half-marker"
-  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/state"
+  mkdir -p "$w/bin" "$w/home/.local/axi/bin" "$w/home/state"
   make_npm "$w/bin" "$w/versions" "$w/install.log"
   make_tool "$w/home/.local/axi/bin" half-axi 1.2.4
   make_tool "$w/bin" half-axi 1.2.3
   printf '%s\n' 'half-axi=1.2.4' > "$w/versions"
   [ -z "${FM_AXI_AMBIENT_PATH+set}" ] || fail "the fixture needs the ambient value unset"
-  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/state" \
+  out=$(PATH="$w/bin:$BASE_PATH" FM_HOME="$w/home" FM_STATE_OVERRIDE="$w/home/state" \
     FM_AXI_AMBIENT_PATH_OWNER="$$" \
     FM_AXI_SUITE_DISABLE=0 FM_AXI_SUITE_TOOLS="half-axi" FM_AXI_SUITE_CHECK_INTERVAL=0 \
     FM_TEST_VERSIONS="$w/versions" FM_TEST_INSTALL_LOG="$w/install.log" \

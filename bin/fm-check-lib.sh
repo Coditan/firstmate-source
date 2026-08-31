@@ -103,6 +103,21 @@ fm_custom_check_snapshot_cleanup() {
 # suites exercise arming against fixture homes on purpose. This bans neither
 # that nor arming from a test; it bans arming a home that is not the one the
 # state directory belongs to.
+#
+# HOW FAR THE GUARANTEE REACHES, stated exactly
+#
+# No REGISTRAR-BACKED check can be armed with a home its state directory does
+# not belong to. That is every check written by one of the six `--arm` paths and
+# every check a caller renders itself and registers through
+# bin/fm-check-register.sh.
+#
+# It is NOT every armed check. bin/fm-bootstrap.sh's x_mode_setup writes and, on
+# opt-out, removes state/x-watch.check.sh without passing the registrar, so this
+# predicate never sees it; bin/fm-watch.sh will not RUN a foreign-home x-watch
+# shim, because it rebuilds the expected content from its own FM_HOME and
+# FM_ROOT and compares byte for byte, but an incoherent caller can still
+# overwrite or delete the live one. Closing that is separate work; the half of
+# this change in tests/lib.sh is what keeps a test run from being that caller.
 
 # The home a state directory belongs to, or nothing when it names none.
 #
