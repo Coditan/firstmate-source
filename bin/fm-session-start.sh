@@ -868,7 +868,7 @@ cat <<'EOF'
 The script's digest above is complete, but model-visible tool output may be shorter.
 The REQUIRED SESSION READS block at the top still applies now.
 Compatibility context still includes full copies of data/captain.md,
-data/captain-shared.md, and data/learnings.md;
+data/captain-shared.md, data/learnings.md;
 REQUIRED SESSION READS governs which files must be read again after this command.
 Do NOT re-read data/projects.md, data/secondmates.md,
 data/captain-shared.md, or state/*.meta now - they were just printed in full.
