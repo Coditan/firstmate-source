@@ -1,7 +1,7 @@
 # Auditing merge gates: query both mechanisms, then prove the gate
 
 `AGENTS.md` is the merge-authority owner.
-Use its "Selected delivery path and approval authority" section for the current fleet merge contract, including the temporary ungated-fleet rule and its reversal condition.
+Use its "Selected delivery path and approval authority" section for the current fleet merge contract, including the dated enforcement map and its revision condition.
 Use this document only when auditing GitHub's enforcement mechanisms or updating a dated gate snapshot after that authority changes.
 
 A GitHub required-status-check gate that blocks merges can live in either of two independent mechanisms.
@@ -72,45 +72,26 @@ Prove a required-check gate by breaking a real invariant and watching the gate r
 5. Close the pull request without merging, then delete its remote branch explicitly.
    `gh pr close --delete-branch` (and the `gh-axi` wrapper) accepts the flag but does not delete the remote branch, so run `git push origin --delete <branch>` and confirm `GET /repos/<owner>/<repo>/branches/<branch>` returns `404`.
 
-## Historical heavyliftrental fleet state (2026-08-05)
+## Current fleet gate reading (2026-08-31)
 
-On 2026-08-05, thirteen fleet repositories carried a required-check merge gate: `hlr-certsync`, `hlr-vat-steward`, `hlr-adsbot`, `hlr-einkauf`, `hlr-engineering-vault`, `hlr-knowledge`, `hlr-infra`, `hlr-librechat`, `hlr-tank-cad`, `hlr-reporting`, `hlr-dms`, `hlr-pim`, and `hlr-research`.
+This reading covers the active registered GitHub merge targets in `/home/crew/firstmate/data/projects.md` plus this repository's `origin`, `Coditan/firstmate-source`.
+It excludes `heavyliftrental/hlr-tank-cad`, which the registry marks retired and not dispatchable.
+Every listed repository reported `main` as its default branch through `gh-axi api repos/<repo> --jq .default_branch`.
 
-The chosen fleet standard for the required-check gate was the repository ruleset with no bypass actors.
-The reasons are that twelve of the thirteen were already there, that rulesets are the newer mechanism, that the admiralty branch-protection doctrine already prescribes a ruleset with no bypass actors (see [admiralty-fleet-repo.md](admiralty-fleet-repo.md)), and that a no-bypass ruleset closes the administrator walk-through that classic protection leaves open.
+`Coditan/firstmate-source` is enforced by a readable repository ruleset.
+`GET /repos/Coditan/firstmate-source/rulesets` returned active branch ruleset `fleet-main-signoff` id `19750697`.
+`GET /repos/Coditan/firstmate-source/rulesets/19750697` returned `conditions.ref_name.include: ~DEFAULT_BRANCH`, `enforcement: active`, `bypass_actors: []`, `current_user_can_bypass: never`, and a `required_status_checks` rule requiring `Repo invariants`, `Lint shell scripts`, `Test coverage guard`, `Behavior portable serial`, and `PR must be raised via no-mistakes`.
+`GET /repos/Coditan/firstmate-source/branches/main/protection` returned exactly `error: "gh: Branch not protected (HTTP 404)"` and `code: UNKNOWN`, which is the expected empty classic-protection half for a ruleset-gated repository.
 
-`hlr-research` was the one repository on the classic path.
-The reason was a rollout artifact, not a property of the repository: during the 2026-08-04 rollout a ruleset could not be activated until its workflow had already run on `main` and produced its check, or the repository would lock (the `hlr-reporting` bootstrap deadlock), and `hlr-research` correctly refused to activate until its `pr-tests.yml` existed on `main`.
-By 2026-08-05 that workflow existed on `main` and produced the `Research regression tests` check on every pull request, so the blocker was gone and the classic path was no longer required.
+No registered GitHub merge target was measured as unenforced in this reading.
+The remaining registered merge targets were unreadable for enforcement rather than known ungated, because both `gh-axi api repos/<repo>/rulesets --full` and `gh-axi api repos/<repo>/branches/main/protection --full` returned exactly `error: Insufficient permissions for this action` and `code: FORBIDDEN`.
+The unreadable Coditan repositories were `Coditan/coditan`, `Coditan/coditan-bridge`, and `Coditan/coditan-secret-store`.
+The unreadable HLR infrastructure and application repositories were `heavyliftrental/hlr-access-portal`, `heavyliftrental/hlr-adsbot`, `heavyliftrental/hlr-certsync`, `heavyliftrental/hlr-dms`, `heavyliftrental/hlr-einkauf`, `heavyliftrental/hlr-infra`, `heavyliftrental/hlr-librechat`, `heavyliftrental/hlr-odoo-interocopy`, `heavyliftrental/hlr-pim`, `heavyliftrental/hlr-reporting`, and `heavyliftrental/hlr-vat-steward`.
+The unreadable HLR calculation, simulation, and spreader repositories were `heavyliftrental/hlr-calc`, `heavyliftrental/hlr-hyls-1250`, `heavyliftrental/hlr-hyls-sim`, `heavyliftrental/hlr-loadmeasuring`, `heavyliftrental/hlr-loadmeasuring-manual`, `heavyliftrental/hlr-spreader-admin`, `heavyliftrental/hlr-spreader-calc`, `heavyliftrental/hlr-spreader-core`, and `heavyliftrental/hlr-spreader-tools`.
+The unreadable HLR knowledge and publishing repositories were `heavyliftrental/hlr-design-system`, `heavyliftrental/hlr-engineering-vault`, `heavyliftrental/hlr-knowledge`, `heavyliftrental/hlr-onboarding`, `heavyliftrental/hlr-presentations`, `heavyliftrental/hlr-research`, and `heavyliftrental/hlr-sling-physics`.
 
-On 2026-08-05 `hlr-research` was converted:
-its required-check gate then lived in ruleset `Research required PR tests` (id `20456354`), with `strict_required_status_checks_policy: true`, context `Research regression tests`, `bypass_actors: []`, `current_user_can_bypass: never`, matching the other twelve.
-Its classic branch protection was reduced to the push restriction only (`restrictions.users: [Freudator86]`, no required check), matching the ten peers that keep a push restriction.
-The gate was re-proven after conversion: a broken WLL-classification invariant drove `Research regression tests` to `conclusion: failure` and the pull request to `mergeable_state: blocked`; restoring the invariant drove the check to `conclusion: success` and the pull request to `mergeable_state: clean`; the throwaway pull request was closed unmerged and its branch deleted and confirmed `404`.
-
-After that 2026-08-05 change, the required-check gate was uniformly on rulesets for all thirteen, so a required-check-only audit had a single home in that snapshot.
-The both-endpoints rule still stands, for two durable reasons:
-a push restriction lives only in classic branch protection and exists on ten of the thirteen repositories (`hlr-certsync`, `hlr-engineering-vault`, and `hlr-knowledge` have no classic protection at all), and a repository added before its ruleset is safe to activate will sit on classic protection exactly as `hlr-research` and `hlr-reporting` did during rollout.
-
-### Where each control lived, and which endpoint answered for it
-
-| Control | Mechanism | Endpoint to query |
-| --- | --- | --- |
-| Required-check merge gate (all 13) | Repository ruleset | `/repos/<r>/rulesets` then `/rulesets/<id>` |
-| Push restriction (10 of 13) | Classic branch protection | `/repos/<r>/branches/main/protection` |
-| Actions check result on a commit | Checks API | `/repos/<r>/commits/<ref>/check-runs` |
-
-### Bypass picture
-
-- At the time, all thirteen required-check ruleset gates: `bypass_actors: []`, `current_user_can_bypass: never`.
-  No one, including the administrator, could merge past a red required check.
-- The ten classic push restrictions: `enforce_admins.enabled: false`.
-  An administrator can push directly to `main`, stepping around the push restriction.
-  In that single-maintainer snapshot the sole administrator (`Freudator86`) was also the sole user the push restriction allowed, so the bypass granted that user nothing extra; it would matter if another administrator were added.
-- Before conversion, `hlr-research`'s required check sat in classic protection with `enforce_admins: false`, so it was administrator-bypassable, unlike the other twelve.
-  The conversion to a no-bypass ruleset closed that one hole and is the only bypass state this task changed.
-
-Whether to set `enforce_admins: true` on the ten push restrictions is a separate decision, deliberately not taken here, and is recorded so it can be decided rather than discovered later.
+The merge contract therefore keeps the hand-check rule everywhere, including the enforced and unreadable repositories: before merging, read every required check against the pull request's own head commit, never a whole-branch aggregate view.
+The dated map in `AGENTS.md` must be revised whenever a registered merge target moves repository, account, plan, or forge, or when either GitHub endpoint starts returning a different answer.
 
 ## Maintaining this file
 
