@@ -88,10 +88,13 @@ The cadence is a separate mechanism and is not the skill's to build or to regist
 ## What is adopted and what is only loaded
 
 `codebase-design` is a plugin skill from **[`mattpocock/skills`](https://github.com/mattpocock/skills)**, by **Matt Pocock**, installed on this seat through the official plugin marketplace at `mattpocock-skills/*/skills/engineering/codebase-design`.
-`codebase-sweep` **loads** it and copies nothing from it, so no file here is derived from it and no licence notice travels with this page.
+`codebase-sweep` prefers to **load** it through the harness and otherwise reads the installed plugin's `SKILL.md` directly after resolving its current `installPath` from Claude's plugin manifest.
+It copies nothing from it, so no file here is derived from the plugin and no licence notice travels with this page.
+For the sweep's vocabulary, a full direct read is content-equivalent because `SKILL.md` is the payload registered by the plugin and contains the complete glossary and principles.
+It is not invocation-equivalent because a direct read bypasses harness discovery and activation; the sibling docs page is a different, supplementary document, and supporting files are read separately in either route.
 Where this repository does adopt from that source, the notice lands with the adoption; see `docs/domain-modeling-provenance.md`, `docs/to-backlog-provenance.md`, `docs/sea-chart-provenance.md`, and `docs/design-it-twice-provenance.md`.
 That last one is an adoption of one file of `codebase-design` itself, its `DESIGN-IT-TWICE.md`, made after this page was written.
-It narrows nothing here: the sweep still only loads the plugin skill and still copies nothing from it, and the vocabulary is reached through the plugin exactly as this section says.
+It narrows nothing here: the sweep still copies nothing from the plugin, and the vocabulary is reached from the installed plugin exactly as this section says.
 
 ## Re-measure before repeating any of this
 

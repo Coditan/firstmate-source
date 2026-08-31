@@ -277,7 +277,7 @@ Third-party material from a different upstream, on different terms:
   [`docs/axi-skill-provenance.md`](docs/axi-skill-provenance.md) carries that copyright notice and licence text, records the installed commit and content hash, and states why the file stays untouched; `.agents/skills/axi/LICENSE` carries the notice beside the copy itself.
   This fleet's own additions, which the AXI specification does not cover, live separately in `.agents/skills/axi-tool-intake/` and restate none of it.
 
-`/codebase-sweep` is not on that list: it loads the `codebase-design` plugin skill and copies nothing from it, and its sweep subjects are traced to a talk by the same author rather than derived from his code. [`docs/codebase-sweep-provenance.md`](docs/codebase-sweep-provenance.md) records what came from that talk, what did not, and the measurement behind the difference.
+`/codebase-sweep` is not on that list: it consumes the installed `codebase-design` plugin skill through the harness or its plain-file fallback and copies nothing from it, and its sweep subjects are traced to a talk by the same author rather than derived from his code. [`docs/codebase-sweep-provenance.md`](docs/codebase-sweep-provenance.md) records what came from that talk, what did not, and the measurement behind the difference.
 That still holds beside the `/design-it-twice` entry above: the adoption of that plugin skill's `DESIGN-IT-TWICE.md` belongs to `/design-it-twice`, and `/codebase-sweep` continues to reach the vocabulary through the plugin and to copy none of it.
 
 Operational provenance records for installed local tools and Codex-managed bundles that are not vendored into this repository live in [`docs/provenance-metadata-followups.md`](docs/provenance-metadata-followups.md).
