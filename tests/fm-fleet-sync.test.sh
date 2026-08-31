@@ -762,6 +762,73 @@ test_a_projects_dir_whose_absence_cannot_be_established_is_never_taken_as_absent
   pass "a projects dir whose absence cannot be established is never taken as absent"
 }
 
+# PROVING A NAMED CHILD ABSENT NEEDS SEARCH ON THE PARENT, NOT READ. A data/ that
+# is searchable and not readable still answers "there is no projects.md here", so a
+# home that simply registers nothing must sync exactly as it always did. Requiring
+# read as well turned that deliberate non-fault into a hard refusal at every session
+# start, which is a worse failure than the one the refusal exists to prevent.
+test_a_searchable_unreadable_data_dir_still_proves_an_absent_registry() {
+  local home out rc=0
+  home="$TMP_ROOT/registry-absent-unreadable-parent"
+  rm -rf "$home"
+  mkdir -p "$home/data" "$home/projects"
+  chmod 0111 "$home/data" || fail "could not make the registry's directory search-only"
+  # A root-run suite can still read it, and a test that cannot arrange its own
+  # premise says so instead of passing.
+  if ls "$home/data" >/dev/null 2>&1; then
+    chmod 755 "$home/data"
+    echo "skip: this environment can still read a search-only directory (running as root?)"
+    return 0
+  fi
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-fleet-sync.sh" 2>/dev/null) || rc=$?
+  chmod 755 "$home/data"
+
+  [ "$rc" -eq 0 ] \
+    || fail "a home that registers nothing must sync cleanly, got exit $rc: $out"
+  assert_not_contains "$out" "STUCK" \
+    "an absence the parent directory does prove must not be reported as unreadable: $out"
+  pass "a searchable, unreadable data dir still proves an absent registry"
+}
+
+# THE CALLER MAY NOT SWALLOW THE REFUSAL EITHER. bin/fm-bootstrap.sh skips the
+# refresh entirely when the projects path is not a directory, and `test -d` is false
+# for a dangling symlink - so fm-fleet-sync.sh's own refusal never ran, and a home
+# with a present, populated registry reached the session start as silence at the one
+# caller that matters. A home that genuinely keeps no clones must still cost nothing.
+test_bootstrap_surfaces_a_projects_path_it_cannot_resolve() {
+  local home out
+  home="$TMP_ROOT/projects-dangling-bootstrap"
+  rm -rf "$home"
+  mkdir -p "$home/data"
+  ln -s "$home/gone-projects" "$home/projects" \
+    || fail "could not stage a dangling projects symlink"
+  printf -- '- a-clone - test project (added 2026-08-31)\n' > "$home/data/projects.md"
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+
+  assert_contains "$out" "cannot list the projects directory" \
+    "the session start must relay the projects path the refresh could not resolve: $out"
+  assert_contains "$out" "broken symlink" \
+    "the relayed refusal must carry its own named cause: $out"
+  pass "bootstrap surfaces a projects path it cannot resolve"
+}
+
+# The guard it falls through is still a guard: a home with no projects directory at
+# all must not pay for a refresh walk, and must say nothing about a fleet it has.
+test_bootstrap_stays_silent_for_a_home_that_keeps_no_clones() {
+  local home out
+  home="$TMP_ROOT/projects-absent-bootstrap"
+  rm -rf "$home"
+  mkdir -p "$home/data"
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+
+  assert_not_contains "$out" "FLEET_SYNC" \
+    "a home that keeps no clones must not report on a fleet refresh at all: $out"
+  pass "bootstrap stays silent for a home that keeps no clones"
+}
+
 test_bootstrap_relays_recovered_and_stuck() {
   local home stuck rec out
   home=$(new_home)
@@ -944,6 +1011,9 @@ test_an_absent_registry_is_still_not_a_fault
 test_a_projects_dir_that_cannot_be_listed_is_never_reported_as_an_empty_one
 test_a_registry_whose_absence_cannot_be_established_is_never_taken_as_absent
 test_a_projects_dir_whose_absence_cannot_be_established_is_never_taken_as_absent
+test_a_searchable_unreadable_data_dir_still_proves_an_absent_registry
+test_bootstrap_surfaces_a_projects_path_it_cannot_resolve
+test_bootstrap_stays_silent_for_a_home_that_keeps_no_clones
 test_orphaned_stale_packed_refs_lock_recovers
 test_live_packed_refs_lock_is_never_removed
 test_live_git_cwd_in_clone_dir_blocks_removal
