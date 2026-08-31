@@ -25,6 +25,10 @@
 # log, so these functions print what happened and let the caller record it where
 # its operator already looks.
 #
+# That split is why fm_retry_clear_exhausted_episode exists but is called by one
+# caller only: a hand-start is an operator deciding to try again, and a unit
+# restarting itself is not.
+#
 # fm_retry_giveup_emit shells out to bin/fm-finding.sh, so a caller must have set
 # FM_HOME and FM_ROOT before calling it.
 
@@ -79,6 +83,22 @@ fm_retry_write_attempts() {  # <record-file> <key> <count> <next>
 
 fm_retry_clear_episode() {  # <record-file> <giveup-file>
   rm -f "$1" "$2"
+}
+
+# Lifting an exhausted bound is an operator's decision, so only a supervisor
+# whose start IS that decision calls this. bin/fm-seat-keeper.sh is hand-started
+# and calls it once at startup; bin/fm-seat-respawner.sh runs as a unit that
+# restarts itself, which is nobody's decision, so it deliberately never calls
+# this and carries its episode across a restart. Prints the condition key whose
+# bound was lifted, so the caller can name it where its operator looks, and
+# returns 1 when there was no exhausted episode to lift.
+fm_retry_clear_exhausted_episode() {  # <record-file> <giveup-file>
+  local record=$1 giveup=$2 key
+  [ -f "$giveup" ] || return 1
+  key=$(fm_retry_kv_get "$giveup" key 2>/dev/null || true)
+  [ -n "$key" ] || key=unknown
+  fm_retry_clear_episode "$record" "$giveup"
+  printf '%s\n' "$key"
 }
 
 fm_retry_backoff() {  # <count-after-attempt> <base> <max>

@@ -211,6 +211,77 @@ test_a_second_keeper_refuses_to_run() {
   pass "a second keeper refuses to run beside a live one"
 }
 
+test_the_state_dir_argument_wins_over_the_environment() {
+  local dir strays
+  dir=$(make_case state-dir-argument)
+  mkdir -p "$dir/elsewhere"
+  FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$dir/home/state" \
+    "$STAY_DOWN" down "test stay down" >/dev/null \
+    || fail "could not declare the stay-down marker"
+
+  FM_STATE_OVERRIDE="$dir/elsewhere" \
+    run_keeper "$dir" "$DEAD_PANE" 3 || fail "keeper exited non-zero with FM_STATE_OVERRIDE set"
+
+  [ "$(launch_calls "$dir")" = 0 ] \
+    || fail "keeper read the stay-down marker from FM_STATE_OVERRIDE instead of the state dir it was given"
+  [ -f "$dir/home/state/.seat-keeper.log" ] \
+    || fail "the keeper log did not land under the state dir given as the argument"
+  [ -f "$dir/home/state/.seat-keeper-target" ] \
+    || fail "the keeper target record did not land under the state dir given as the argument"
+  strays=$(find "$dir/elsewhere" -maxdepth 1 -name '.seat-keeper*' | wc -l | tr -d ' ')
+  [ "$strays" = 0 ] \
+    || fail "keeper records landed in FM_STATE_OVERRIDE; got $strays of them"
+  pass "the state-dir argument owns every keeper record, whatever the environment says"
+}
+
+test_a_hand_start_lifts_an_exhausted_bound() {
+  local dir key
+  dir=$(make_case restart-clears-giveup)
+  FM_FINDINGS_DIR="$dir/home/data/findings" \
+  FM_SEAT_KEEPER_MAX_ATTEMPTS=1 \
+    run_keeper "$dir" "$DEAD_PANE" 4 || fail "keeper exited non-zero on the give-up path"
+  [ -f "$dir/home/state/.seat-keeper-giveup" ] || fail "the give-up episode marker was not recorded"
+  key=$(sed -n 's/^key=//p' "$dir/home/state/.seat-keeper-giveup")
+  [ -n "$key" ] || fail "the give-up marker named no condition"
+  [ "$(session_creations "$dir")" = 1 ] || fail "the first run did not restore exactly once"
+
+  FM_FINDINGS_DIR="$dir/home/data/findings" \
+  FM_SEAT_KEEPER_MAX_ATTEMPTS=1 \
+    run_keeper "$dir" "$DEAD_PANE" 3 || fail "keeper exited non-zero on the restart"
+  [ "$(session_creations "$dir")" = 2 ] \
+    || fail "the restart inherited the exhausted bound and restored nothing"
+  assert_grep "cleared the exhausted retry episode for condition $key" \
+    "$dir/home/state/.seat-keeper.log" \
+    "the restart did not say which exhausted condition it lifted"
+  pass "a hand-start lifts an exhausted bound and names the condition it lifted"
+}
+
+test_a_dead_keepers_lock_is_taken_over() {
+  local dir first_pid waited=0
+  dir=$(make_case dead-lock)
+  FM_SEAT_KEEPER_STATUS_OVERRIDE='idle: listener pid 1 is up and the durable queue is empty' \
+  FM_SEAT_KEEPER_TMUX="$dir/fake-tmux" \
+  FM_SEAT_KEEPER_POLL=1 \
+  FM_SEAT_KEEPER_MAX_CYCLES=0 \
+    "$KEEPER" "$dir/home" "$dir/home/state" "$dir/target.sock" seat "$dir/account" \
+    > "$dir/first-keeper.out" 2>&1 &
+  first_pid=$!
+  while [ ! -f "$dir/home/state/.seat-keeper.lock/record" ] && [ "$waited" -lt 100 ]; do
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  kill -KILL "$first_pid" 2>/dev/null || true
+  wait "$first_pid" 2>/dev/null || true
+  [ -e "$dir/home/state/.seat-keeper.lock" ] \
+    || fail "the killed keeper left no lock behind, so there was nothing to take over"
+
+  run_keeper "$dir" "$DEAD_PANE" 2 \
+    || fail "a keeper refused to start over a dead keeper's lock"
+  [ "$(launch_calls "$dir")" -gt 0 ] \
+    || fail "the keeper that took over the dead lock never restored the seat"
+  pass "a dead keeper's lock is taken over rather than refusing every later keeper"
+}
+
 test_dead_seat_verdict_restores_the_seat
 test_one_reading_is_not_enough
 test_a_changing_wake_count_is_still_one_condition
@@ -219,4 +290,7 @@ test_listener_down_with_a_live_session_is_not_seat_death
 test_unrecognised_verdict_resets_the_evidence
 test_declared_stay_down_leaves_the_seat_down
 test_restore_attempts_are_bounded_and_reported
+test_the_state_dir_argument_wins_over_the_environment
+test_a_hand_start_lifts_an_exhausted_bound
 test_a_second_keeper_refuses_to_run
+test_a_dead_keepers_lock_is_taken_over

@@ -65,6 +65,8 @@ While `state/.seat-stay-down` exists it clears its retry episode and leaves the 
 Restores are bounded the same way too: `FM_SEAT_KEEPER_MAX_ATTEMPTS` attempts for one delivery condition, backing off from `FM_SEAT_KEEPER_RETRY_SEC` up to `FM_SEAT_KEEPER_MAX_BACKOFF`, then a give-up marker and one high-severity evidence record through `bin/fm-finding.sh` instead of relaunching a seat that can never come up forever.
 The condition a restore episode counts is the delivery verdict's stable key, owned by `bin/fm-delivery-lib.sh` and shared with the respawner, so a wake arriving between two readings cannot look like a different condition.
 One keeper runs per state directory: a second hand-started keeper finds the live one's identity-matched lock record and refuses rather than racing it.
+Restarting the keeper by hand lifts an exhausted bound: at startup it clears a give-up episode left in its state directory and logs which condition it lifted, because a hand-start is an operator deciding to try again.
+The respawner does not lift its own bound that way, because a unit restarting itself is not that decision.
 
 Two limits of this stopgap are known, deliberate, and not fixed here.
 The keeper does not read `config/seat-launch-command`, and its default relaunch command starts `claude`.
