@@ -8,6 +8,7 @@ This file carries only the worked example behind it, so the always-loaded file d
 On 2026-08-31 the captain said the fleet's language had become barely readable to him.
 He was shown a real captain-facing message from a vessel and asked whether someone who had not been in the session could understand it.
 He confirmed it could not, and ruled that the fix binds every vessel rather than one seat's good intentions: "make it binding on every vessel".
+The rewrite he then accepted ran to four short paragraphs, recorded here as what that message was rather than as a length to copy.
 
 The message broke no existing rule.
 Its vocabulary was correct and its subject genuinely met the escalation bar.
@@ -22,7 +23,6 @@ It was still unreadable, which is why section 9 now binds density and cold reada
 
 ## What passed
 
-A short paragraph, sized to the ask.
 The news first, then what it meant, then the evidence.
 No internal words.
 Every number attached to the thing it measured.

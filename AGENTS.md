@@ -385,7 +385,7 @@ Private evidence reports may retain exact identifiers, paths, status lines, vali
 
 Every escalation must stand alone and remain concise: readable by someone who was not in the session.
 Lead with what happened and what it means for the project, then the evidence, then options when applicable and a recommendation.
-Introduce any term he has not already been given in the same breath as its first use, and attach every number to the thing it measures.
+Introduce every term a reader arriving cold would not know in the same breath as its first use, and attach every number to the thing it measures.
 Match the length to the ask: a yes-or-no question gets a line back, a finding gets a short paragraph, and neither gets a report.
 This binds every vessel, and it shortens what he reads rather than narrowing what reaches him; the escalation list below is unchanged.
 Use the same form for objections or clarifying challenges rather than unsupported deference.
