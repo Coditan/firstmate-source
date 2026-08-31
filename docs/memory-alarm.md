@@ -308,8 +308,10 @@ Stated because a limit nobody wrote down is one somebody will later assume away.
   Pressure-stall is not present on every kernel or in every container, and where it is present it is not always accounted.
   Where `/proc/pressure/memory` is absent, unreadable, or provably not accounting, the reader marks it unmeasured, the reading is incomplete, and the alarm reports that it could not see rather than that the machine is fine.
   A calm verdict names the conditions it actually judged, so "all three read clear" can be told apart from "one of them was never evaluated", and a stall that could not be read is never printed as `0.00`.
-  Which conditions the alarm could not judge is itself carried in `state/memory-alarm.state` as a third field and in every `data/memory-alarm.log` line as `watch=`, so a change in that set is a transition and is spoken once on the watcher's channel, exactly as a crossing or a recovery is.
-  A condition enters that set because its instrument could not be read or because the home deliberately left its gate unconfigured, and for no other reason: growth the alarm could not compare because the stored sample was absent, too young, too old or unreadable is scope rather than blindness, is repaired by the next poll that stores a sample, and never enters it.
+  Which conditions the alarm is not watching is itself carried in `state/memory-alarm.state` as a third field and in every `data/memory-alarm.log` line as `watch=`, so a change in that set is a transition and is spoken once on the watcher's channel, exactly as a crossing or a recovery is.
+  A condition enters that set because its instrument could not be read or because the home deliberately left its gate unconfigured, and for no other reason - those are the two ways a condition stops being watched and does not start again by itself.
+  A condition the alarm is watching but could not judge this run is not in it: growth the alarm could not compare because the stored sample was absent, too young, too old or unreadable is scope rather than blindness, is repaired by the next poll that stores a sample, and never enters it.
+  So an empty set says every condition is being watched, which is a narrower claim than every condition having been judged on that poll, and the alarm says only the narrower thing.
   A home whose memory-stall account can never be read therefore says so once when it starts and then goes quiet about it, rather than either nagging on every poll or passing a partly watched machine off as a watched one.
   A recovery, by contrast, is held back only by the conditions that RAISED the crossing, and each of them holds it until a poll re-reads it and finds it clear of its threshold by the recovery margin.
   An unmeasured input no condition uses never holds one back - a container with no cgroup tree recovers as any other host does - and neither does a condition that is blind but never crossed, so a host whose memory-stall account can never be read still reports a headroom shortage as ended, with the duration it lasted.
@@ -358,7 +360,7 @@ Quoted as they were written on 2026-08-13, before the stall condition and its `w
 2026-08-13T20:13:07Z  crossed -> ok  16080 MiB RAM headroom available     8 MiB/min growth               ...
 ```
 
-A record written today carries two further fields between the growth figures and the named process: the stall reading with the run behind it, and `watch=`, which is `watch=all` when all three conditions were judged and `watch=unjudged stall` on a host whose memory-stall account cannot be read.
+A record written today carries two further fields between the growth figures and the named process: the stall reading with the run behind it, and `watch=`, which is `watch=all` when the alarm was watching all three conditions and `watch=unjudged stall` on a host whose memory-stall account cannot be read.
 
 `tests/fm-memory-alarm-crossing-e2e.test.sh` is that proof as a test: it drives a real runaway, sized from the host's own RAM headroom rather than a fixed number, and requires the alarm to fire, name the process and account, record both transitions, and leave the process running.
 It refuses to run on a host without generous headroom rather than adding pressure to a machine already under it.
