@@ -1027,6 +1027,146 @@ EOF
   pass "session start rejects Pi loaded markers from previous sessions"
 }
 
+# --- per-step timing ---------------------------------------------------------
+#
+# A VESSEL COULD NOT READ ITS OWN STARTUP COST, and the block that fixed that had no
+# test: four separate defects came out of it under review - a clock fallback that
+# emitted arithmetic errors instead of a number, a start taken after the harness
+# probe so the total under-reported the run it named, a missing section marker, and
+# a digest line naming a file the rotation had just renamed away - and nothing here
+# would have caught any of them. These assert what a reader actually gets: the one
+# digest line, the log it names, and the breakdown that log holds.
+#
+# state/session-start-timing.log is this script's own appended record, one line per
+# run, so reading it back is reading the artifact the step exists to produce.
+
+timing_total_from_digest() {  # <digest-output> -> the integer ms the digest named
+  printf '%s\n' "$1" | sed -n 's/^SESSION START took \([0-9][0-9]*\)ms;.*/\1/p'
+}
+
+timing_log_from_digest() {  # <digest-output> -> the path the digest named
+  printf '%s\n' "$1" | sed -n 's/^SESSION START took .*previous ones: //p'
+}
+
+test_the_digest_names_this_run_s_own_cost_and_where_the_breakdown_is() {
+  local rec root home fakebin out total named line sum step part
+  rec=$(new_world timing-readable)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  # A fresh home has no timing log yet, which is the case that used to put a bare
+  # shell redirection error in front of a reader.
+  local errfile="$home/timing.err"
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH" 2>"$errfile")
+  [ ! -s "$errfile" ] || fail "the first start in a new home must not print to stderr: $(cat "$errfile")"
+
+  [ "$(printf '%s\n' "$out" | grep -c '^SESSION START took ')" -eq 1 ] \
+    || fail "the digest must name its cost exactly once, not zero times and not per step: $out"
+
+  total=$(timing_total_from_digest "$out")
+  case "$total" in ''|*[!0-9]*) fail "the digest must name an integer total, got '$total'" ;; esac
+  # A real session start runs a lock, a bootstrap and several subprocesses. A total
+  # of 0 is the shape a clock that cannot read the time takes, not a fast run.
+  [ "$total" -gt 0 ] || fail "a session start that did real work cannot have cost 0ms"
+
+  named=$(timing_log_from_digest "$out")
+  [ -n "$named" ] || fail "the digest must say where the per-step breakdown is: $out"
+  [ "$named" = "$home/state/session-start-timing.log" ] \
+    || fail "the breakdown belongs in this home's state, got $named"
+  [ -f "$named" ] || fail "the digest named a path that does not exist: $named"
+
+  line=$(grep -F "total=${total}ms" "$named") \
+    || fail "the named log must hold the run the digest just named: $(cat "$named")"
+
+  # The breakdown must be a PARTITION of the total, not a sample of it: the preamble
+  # ahead of the first step and the closing behind the last one are the two ends
+  # that went missing before, and the parts have to add back up to the whole.
+  for step in preamble vessel-identity lock bootstrap context fleet-state closing; do
+    case "$line" in
+      *" $step="*) ;;
+      *) fail "the breakdown does not account for the $step step: $line" ;;
+    esac
+  done
+  sum=0
+  for part in $line; do
+    case "$part" in
+      total=*) continue ;;
+      *=*ms)
+        part=${part#*=}
+        part=${part%ms}
+        case "$part" in ''|*[!0-9]*) fail "a step duration is not a number: $line" ;; esac
+        sum=$((sum + part))
+        ;;
+    esac
+  done
+  [ "$sum" -le "$total" ] || fail "the steps claim more time than the run took: sum=$sum total=$total"
+  [ "$((total - sum))" -le 100 ] \
+    || fail "the breakdown leaves $((total - sum))ms of the run unattributed: $line"
+
+  pass "the digest names this run's own cost and the log that holds its breakdown"
+}
+
+# THE ROTATION MUST NEVER POINT AT A FILE IT JUST RENAMED AWAY. With one run kept,
+# the third start is the one that rotates, and the path the digest names on that run
+# has to be the file that actually holds that run's line.
+test_the_timing_log_rotates_without_ever_naming_an_absent_file() {
+  local rec root home fakebin out total named i
+  rec=$(new_world timing-rotation)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  for i in 1 2 3; do
+    out=$(FM_SESSION_START_TIMING_KEEP=1 run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+    total=$(timing_total_from_digest "$out")
+    named=$(timing_log_from_digest "$out")
+    case "$total" in ''|*[!0-9]*) fail "run $i named no integer total: $out" ;; esac
+    [ -f "$named" ] || fail "run $i named a path that does not exist: $named"
+    grep -qF "total=${total}ms" "$named" \
+      || fail "run $i named a file that does not hold run $i: $named"
+  done
+
+  [ -f "$home/state/session-start-timing.log.1" ] \
+    || fail "a rotation must carry the older runs aside rather than dropping them"
+  [ "$(wc -l < "$home/state/session-start-timing.log" | tr -d '[:space:]')" -eq 1 ] \
+    || fail "the live log must hold only the runs since the rotation"
+
+  pass "the timing log rotates without ever naming a file it just renamed away"
+}
+
+# EVERY TIMING STEP IS BEST-EFFORT. A startup digest reports; it is not a gate, and
+# it must not become one because a debug line could not be written.
+test_a_timing_log_that_cannot_be_written_does_not_fail_the_digest() {
+  local rec root home fakebin out status=0
+  rec=$(new_world timing-unwritable)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  # A directory where the log goes: the append cannot succeed, and nothing else about
+  # the run changes.
+  mkdir -p "$home/state/session-start-timing.log"
+
+  local errfile="$home/timing.err"
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH" 2>"$errfile") || status=$?
+
+  [ "$status" -eq 0 ] || fail "a timing line that could not be written must not fail the digest (exit $status)"
+  [ ! -s "$errfile" ] || fail "an unwritable timing log must not leak a shell error: $(cat "$errfile")"
+  assert_contains "$out" "the per-step breakdown could not be written to" \
+    "the digest must say the breakdown is missing rather than pretend it was written"
+  [ "$(printf '%s\n' "$out" | grep -c '^SESSION START took ')" -eq 1 ] \
+    || fail "the digest must still name what the run cost: $out"
+  assert_contains "$out" "NEXT STEP" "the digest must still complete when the timing line could not be written"
+
+  pass "a timing log that cannot be written does not fail the digest"
+}
+
 test_context_digest_absent_empty_present
 test_lock_refusal_read_only_path
 test_output_ordering_diagnostics_lead
@@ -1051,3 +1191,6 @@ test_pi_diagnostic_rejects_stale_loaded_marker
 test_pi_diagnostic_accepts_prelock_loaded_marker
 test_pi_diagnostic_rejects_absent_turnend_guard_marker
 test_pi_diagnostic_rejects_previous_session_loaded_marker
+test_the_digest_names_this_run_s_own_cost_and_where_the_breakdown_is
+test_the_timing_log_rotates_without_ever_naming_an_absent_file
+test_a_timing_log_that_cannot_be_written_does_not_fail_the_digest

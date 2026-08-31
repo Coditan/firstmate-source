@@ -301,8 +301,14 @@ sha256_text() {  # <text>
 # builtins - no process per record - then hashed by a single pass over the set.
 # The separator has to be NUL: most decision texts contain newlines, and none can
 # contain a NUL, because they are markdown read out of the backlog.
-sha256_each_decision() {  # <settled-json> -> one hex digest per record, in record order
-  local settled=$1 dir text i=0
+# The staging directory is created and removed by the CALLER, not here. What is
+# staged is the captain's verbatim words, one file per settled record, and this
+# function only ever runs inside a command substitution - a separate process the
+# signal that ends a session start is not delivered to. A cleanup owned by this
+# subshell therefore never runs in the case it exists for, so the directory belongs
+# to the process that lives long enough to release it.
+sha256_each_decision() {  # <settled-json> <staging-dir> -> one hex digest per record, in record order
+  local settled=$1 dir=$2 text i=0
   local -a files=() hasher=()
   if command -v shasum >/dev/null 2>&1; then
     hasher=(shasum -a 256)
@@ -311,8 +317,6 @@ sha256_each_decision() {  # <settled-json> -> one hex digest per record, in reco
   else
     die "shasum or sha256sum is required"
   fi
-  dir=$(mktemp -d "${TMPDIR:-/tmp}/fm-decision-ledger.XXXXXX") \
-    || die "could not create a working directory for the digest re-check"
   # `.decision` is chomped of trailing newlines to reproduce EXACTLY the text the
   # per-record loop hashed: it read the text through a command substitution, which
   # strips them, so a record whose decision ends in a blank line was hashed without
@@ -321,7 +325,7 @@ sha256_each_decision() {  # <settled-json> -> one hex digest per record, in reco
   # rather than left to happen by accident.
   while IFS= read -r -d '' text; do
     printf '%s' "$text" > "$dir/$i" \
-      || { rm -rf "$dir"; die "could not stage a decision text for the digest re-check"; }
+      || die "could not stage a decision text for the digest re-check"
     files[i]="$dir/$i"
     i=$((i + 1))
   done < <(printf '%s' "$settled" | jq -j '
@@ -332,7 +336,6 @@ sha256_each_decision() {  # <settled-json> -> one hex digest per record, in reco
   if [ "$i" -gt 0 ]; then
     printf '%s\0' "${files[@]}" | xargs -0 "${hasher[@]}" | awk '{print $1}'
   fi
-  rm -rf "$dir"
 }
 
 # ONE FULL READ PER SESSION START, NOT ONE PER CALLER.
@@ -806,7 +809,32 @@ else
 SETTLED=$(printf '%s' "$CLASSIFIED" | jq -c '[.captain[] | select(.settled)] | sort_by(.closed) | reverse')
 COUNT=$(printf '%s' "$SETTLED" | jq 'length')
 require_count "$COUNT" "the settled decision records"
-RECOMPUTED=$(sha256_each_decision "$SETTLED")
+RECHECK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-decision-ledger.XXXXXX") \
+  || die "could not create a working directory for the digest re-check"
+# The staging subshell is dying from the same signal at the same moment, so it can
+# still be writing a file into this directory while the removal walks it - which
+# fails with ENOTEMPTY and leaves exactly what the cleanup exists to remove. A few
+# bounded retries close that window; nothing here waits longer than a moment, and
+# the normal path never retries because the subshell is already gone.
+recheck_cleanup() {
+  local i
+  for i in 1 2 3; do
+    rm -rf "$RECHECK_DIR" 2>/dev/null
+    [ -d "$RECHECK_DIR" ] || return 0
+    sleep 0.05 2>/dev/null || true
+  done
+  rm -rf "$RECHECK_DIR" 2>/dev/null || true
+}
+# INT and TERM clean up and then re-raise on the default disposition, so an
+# interrupted session start still reads as an interrupted session start rather than
+# having the signal swallowed here, and the captain's staged words do not outlive
+# the read that staged them.
+trap 'recheck_cleanup' EXIT
+trap 'recheck_cleanup; trap - INT; kill -INT $$' INT
+trap 'recheck_cleanup; trap - TERM; kill -TERM $$' TERM
+RECOMPUTED=$(sha256_each_decision "$SETTLED" "$RECHECK_DIR")
+recheck_cleanup
+trap - EXIT INT TERM
 # A COUNT MISMATCH IS A REFUSAL, NOT A DEFAULT. If the recomputed set does not line
 # up one-to-one with the records, some record's text was not re-hashed on this read,
 # and the whole claim this output makes is that every settled record it shows was.

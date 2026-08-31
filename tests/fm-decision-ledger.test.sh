@@ -98,6 +98,115 @@ write_oversized_decision_backlog() {  # <home> <count>
   } > "$home/data/backlog.md"
 }
 
+# The fixture above deliberately writes rows with NO resolution envelope, so every
+# record it makes reads as settled=false. That keeps the audit and baseline paths
+# oversized while leaving the digest re-check with an empty settled set - which is
+# precisely how a recomputed digest list travelling on argv reached review without
+# the suite noticing. This one writes genuinely SETTLED records instead: a full
+# resolution envelope, a stored digest, decision text, and closed routed work, so
+# `settled` is true for every row and the re-check runs at scale.
+#
+# The stored digests are deliberately wrong, so every record reports altered. That
+# is the point: it drives the whole staging, hashing, count-check and hand-off
+# without the fixture having to compute two thousand real digests.
+write_oversized_settled_backlog() {  # <home> <count>
+  local home=$1 count=$2 i
+  {
+    printf '## In flight\n\n## Queued\n\n## Done\n'
+    for i in $(seq 1 "$count"); do
+      printf -- '- [x] bulk-%04d-decision-key - Synthetic settled decision %04d (repo: synth) (kind: captain) (done 2026-08-01)\n' \
+        "$i" "$i"
+      printf '  Resolution recorded by fm-decision-hold.\n'
+      printf '  Decision digest: %s\n' "$(printf '0%.0s' $(seq 1 64))"
+      printf '  Door: chat\n\n'
+      printf '  Captain decision:\n'
+      printf '  synthetic answer %04d\n\n' "$i"
+      printf '  Routed work:\n  - (none)\n'
+    done
+  } > "$home/data/backlog.md"
+}
+
+# THE DIGEST RE-CHECK HAS ITS OWN CEILING, and it is not the backlog's. The
+# recomputed digest list is 64 hex characters plus a newline per SETTLED record, so
+# it clears the 131072-byte argv ceiling at about 2017 settled records while the
+# backlog that produced it is still comfortably parseable. A re-check that hands
+# that list to jq through --arg fails execve with E2BIG at this size; one that hands
+# it over on stdin does not. This drives the read at that size and asserts it still
+# reports every record correctly.
+test_the_digest_recheck_stays_off_argv_at_scale() {
+  local home count digest_bytes backlog_bytes audit settled rc=0
+  home=$(make_home oversized-settled-recheck)
+  count=2100
+  write_oversized_settled_backlog "$home" "$count"
+
+  # 64 hex characters and a separator per record, less the trailing newline the
+  # command substitution that captures the list strips.
+  digest_bytes=$(( count * 65 - 1 ))
+  assert_over_argv_ceiling "$digest_bytes" "the recomputed digest list for $count settled records"
+  backlog_bytes=$(LC_ALL=C wc -c < "$home/data/backlog.md" | tr -d '[:space:]')
+  [ "$backlog_bytes" -gt 0 ] || fail "the oversized settled fixture wrote nothing"
+
+  settled=$(run_ledger "$home" --json --all) \
+    || fail "an oversized settled read must complete, not refuse: $settled"
+  [ "$(printf '%s' "$settled" | jq '.settled | length')" -eq "$count" ] \
+    || fail "the oversized read did not present every settled record"
+  [ "$(printf '%s' "$settled" | jq '[.settled[] | select(.verbatim)] | length')" -eq 0 ] \
+    || fail "a record whose stored digest cannot match must never read as verbatim"
+
+  audit=$(run_ledger "$home" --audit --json) || rc=$?
+  [ "$rc" -eq 1 ] || fail "an oversized altered set must report findings, got exit $rc"
+  [ "$(printf '%s' "$audit" | jq '[.audit[] | select(.class == "altered-record")] | length')" -eq "$count" ] \
+    || fail "the re-check dropped altered-record findings above the argv ceiling"
+
+  pass "the digest re-check stays off argv when the recomputed list clears the ceiling"
+}
+
+# THE STAGED FILES ARE THE CAPTAIN'S VERBATIM WORDS. The re-check writes one per
+# settled record, and the implementation it replaced used only pipes and left
+# nothing behind, so a read that is interrupted - a vessel pressing Ctrl-C during a
+# session start, a supervisor ending the run - must not leave them in TMPDIR.
+#
+# TMPDIR is pointed at a directory this test owns, so what is asserted is exactly
+# what the ledger left there and nothing else on the machine.
+test_an_interrupted_recheck_leaves_no_staged_decision_text() {
+  local home priv pid seen=0 left i
+  home=$(make_home interrupted-recheck)
+  write_oversized_settled_backlog "$home" 3000
+  priv="$home/private-tmp"
+  mkdir -p "$priv"
+
+  # Job control, so the read gets its own process group and the interrupt below
+  # reaches the staging subshell too - which is what a Ctrl-C at the terminal does,
+  # and what a cleanup owned by that subshell alone cannot survive.
+  set -m
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" FM_DATA_OVERRIDE="$home/data" TMPDIR="$priv" \
+    "$LEDGER" --audit >/dev/null 2>&1 &
+  pid=$!
+  set +m
+  for i in $(seq 1 600); do
+    if compgen -G "$priv/fm-decision-ledger.*" >/dev/null 2>&1; then seen=1; break; fi
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.05
+  done
+  if [ "$seen" -ne 1 ]; then
+    kill -TERM -- -"$pid" 2>/dev/null || kill "$pid" 2>/dev/null
+    wait "$pid" 2>/dev/null
+    fail "the re-check never staged anything, so this test proved nothing about cleanup"
+  fi
+
+  kill -TERM -- -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    compgen -G "$priv/fm-decision-ledger.*" >/dev/null 2>&1 || break
+    sleep 0.1
+  done
+  left=$(compgen -G "$priv/fm-decision-ledger.*" 2>/dev/null | wc -l | tr -d '[:space:]')
+  [ "$left" -eq 0 ] \
+    || fail "an interrupted re-check left $left staging directory(ies) of decision text behind"
+
+  pass "an interrupted re-check leaves no staged decision text behind"
+}
+
 # A decision must outlive the session that took it AND the retention that rotates
 # its record out of the live backlog, because both of those are exactly what the
 # three temporary homes it used to live in did not.
@@ -1250,6 +1359,8 @@ test_the_baseline_converges_the_audit_without_hiding_what_it_covers
 test_a_baseline_cannot_silence_a_repairable_record
 test_removing_a_baseline_entry_invalidates_every_entry
 test_oversized_decision_payloads_do_not_travel_on_argv
+test_the_digest_recheck_stays_off_argv_at_scale
+test_an_interrupted_recheck_leaves_no_staged_decision_text
 test_the_decision_board_input_never_carries_an_answered_question
 test_a_recovered_answer_disposes_a_record_no_other_verb_can_reach
 test_attesting_an_answer_cannot_reach_a_live_or_answered_or_unanswered_record

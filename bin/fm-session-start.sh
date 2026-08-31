@@ -244,15 +244,19 @@ timing_report() {
   local total lines
   timing_mark closing
   total=$(( $(now_ms) - TIMING_T0 ))
+  # `2>/dev/null` goes FIRST on both of these. A redirection is applied left to
+  # right, so a failing `<` or `>>` announced before stderr is silenced puts a bare
+  # shell error in the digest - which the very first start in a new home, where
+  # there is no log to read yet, would do every time.
   if mkdir -p "$STATE" 2>/dev/null; then
-    lines=$(wc -l < "$TIMING_LOG" 2>/dev/null | tr -d ' ')
+    lines=$(wc -l 2>/dev/null < "$TIMING_LOG" | tr -d ' ')
     case "$lines" in ''|*[!0-9]*) lines=0 ;; esac
     if [ "$lines" -ge "$((TIMING_KEEP * 2))" ]; then
       mv -f "$TIMING_LOG" "$TIMING_LOG.1" 2>/dev/null || true
     fi
   fi
   if printf '%s total=%sms %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$total" "$TIMING_MARKS" \
-       >> "$TIMING_LOG" 2>/dev/null; then
+       2>/dev/null >> "$TIMING_LOG"; then
     printf 'SESSION START took %sms; per-step breakdown for this run and the previous ones: %s\n' \
       "$total" "$TIMING_LOG"
   else
