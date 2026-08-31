@@ -787,7 +787,7 @@ CLASSIFIED=$(printf '%s' "$RECORDS" | jq -c '
                                    + "; read that answer before putting this to the captain")}))
       )
     }
-')
+') || die "could not classify this home's records: jq could not read the record set this walk parsed, and its own parse error is on stderr above; refusing to report on records this read could not classify"
 
 fi  # end of the full parse-and-classify walk a memo hit skips
 
@@ -804,6 +804,8 @@ fi  # end of the full parse-and-classify walk a memo hit skips
 # nothing. A home with no captain records still prints nothing, and jq still exits 0
 # on it: the difference between the two is exactly this status.
 if [ "$MODE" = records ]; then
+  [ -n "$CLASSIFIED" ] \
+    || die "could not read this home's captain decision records: this read holds no record model at all, and an empty value is not a record set - a home with no captain records still holds a model with an empty list; refusing to report that this home holds no decisions"
   RECORDS_TSV=$(printf '%s' "$CLASSIFIED" | jq -r --arg repo "$RECORDS_REPO" '
     [.captain[]
      | select($repo == "" or .repo == $repo)
