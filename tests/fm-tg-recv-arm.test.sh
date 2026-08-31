@@ -381,21 +381,28 @@ printf 'BOT_TOKEN=x\nCHAT_ID=y\n' > "$service_home/config/telegram.env"
 cat > "$service_home/config/fm-tg-recv.sh" <<'SH'
 #!/usr/bin/env bash
 set -u
+emit_event() {
+  python3 -c 'import base64,sys; print("FM_TG_EVENT_V1:" + base64.b64encode(sys.argv[1].encode()).decode(), flush=True)' "$1"
+}
 case "$(cat "$FM_HOME/state/receiver-mode")" in
   message)
-    printf 'CAPTAIN-TELEGRAM: service message\n'
+    emit_event 'CAPTAIN-TELEGRAM: service message'
     ;;
   handoff)
-    printf 'CAPTAIN-TELEGRAM: captured before handoff\n'
+    emit_event 'CAPTAIN-TELEGRAM: captured before handoff'
     trap 'exit 0' TERM INT
     while :; do sleep 0.1; done
     ;;
   failure)
-    printf 'CAPTAIN-TELEGRAM: message delivered before failure\n'
+    emit_event $'CAPTAIN-TELEGRAM: message delivered before failure\ncontinued captain message'
     printf 'request failed for https://api.telegram.org/botSECRET-TOKEN/getUpdates: denied\n'
     head -c 5000 /dev/zero | tr '\0' x
     printf '\n'
     exit 7
+    ;;
+  diagnostic-exit)
+    printf 'request failed for https://api.telegram.org/botPRIVATE-TOKEN/getUpdates: denied\n'
+    exit 0
     ;;
   empty-exit)
     exit 0
@@ -404,14 +411,41 @@ esac
 SH
 chmod +x "$service_home/config/fm-tg-recv.sh"
 
+decoded_queue() {
+  python3 - "$1" <<'PY'
+import base64
+import sys
+
+for row in open(sys.argv[1], encoding="utf-8"):
+    payload = row.rstrip("\n").split("\t", 4)[-1]
+    if payload.startswith("FM_TG_EVENT_V1:"):
+        print(base64.b64decode(payload.split(":", 1)[1], validate=True).decode(), end="")
+        print()
+PY
+}
+
+decoded_output_file() {
+  python3 - "$1" <<'PY'
+import base64
+import sys
+
+for line in open(sys.argv[1], encoding="utf-8"):
+    line = line.rstrip("\n")
+    if line.startswith("FM_TG_EVENT_V1:"):
+        print(base64.b64decode(line.split(":", 1)[1], validate=True).decode())
+    else:
+        print(line)
+PY
+}
+
 printf '%s\n' message > "$service_home/state/receiver-mode"
 FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" "$ARM" > "$service_home/state/service-message.out" 2>&1
-assert_grep 'CAPTAIN-TELEGRAM: service message' "$service_home/state/.wake-queue" \
+assert_contains "$(decoded_queue "$service_home/state/.wake-queue")" 'CAPTAIN-TELEGRAM: service message' \
   "systemd receiver message was left in the service journal instead of the durable wake queue"
 assert_grep 'receiver exited 0 after delivering output' "$service_home/state/.wake-queue" \
   "receiver exit after a delivered message was not reported as a durable failure"
 FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" "$ARM" > "$service_home/state/service-message-second.out" 2>&1
-message_rows=$(grep -c 'CAPTAIN-TELEGRAM: service message' "$service_home/state/.wake-queue")
+message_rows=$(decoded_queue "$service_home/state/.wake-queue" | grep -c 'CAPTAIN-TELEGRAM: service message')
 [ "$message_rows" -eq 2 ] \
   || fail "two messages shared one wake identity and would be deduplicated at drain time: $message_rows rows"
 
@@ -420,14 +454,14 @@ mkdir -p "$unknown_home/config" "$unknown_home/state/.tg-recv.lock.owner.unknown
 cp "$service_home/config/telegram.env" "$unknown_home/config/telegram.env"
 cp "$service_home/config/fm-tg-recv.sh" "$unknown_home/config/fm-tg-recv.sh"
 printf '%s\n' empty-exit > "$unknown_home/state/receiver-mode"
-printf '%s\n' 'CAPTAIN-TELEGRAM: recovered message' > "$unknown_home/state/recovered-output"
+python3 -c 'import base64; print("FM_TG_EVENT_V1:" + base64.b64encode(b"CAPTAIN-TELEGRAM: recovered message").decode())' > "$unknown_home/state/recovered-output"
 printf '%s\n' 999999 > "$unknown_home/state/.tg-recv.lock.owner.unknown/pid"
 printf '%s\n' "$unknown_home" > "$unknown_home/state/.tg-recv.lock.owner.unknown/fm-home"
 printf '%s\n' "$unknown_home/config/fm-tg-recv.sh" > "$unknown_home/state/.tg-recv.lock.owner.unknown/receiver-path"
 printf '%s\n' "$unknown_home/state/recovered-output" > "$unknown_home/state/.tg-recv.lock.owner.unknown/output-path"
 ln -s "$unknown_home/state/.tg-recv.lock.owner.unknown" "$unknown_home/state/.tg-recv.lock"
 FM_TG_RECV_MANAGER=systemd FM_HOME="$unknown_home" "$ARM" > "$unknown_home/state/recovery.out" 2>&1
-assert_grep 'CAPTAIN-TELEGRAM: recovered message' "$unknown_home/state/.wake-queue" \
+assert_contains "$(decoded_queue "$unknown_home/state/.wake-queue")" 'CAPTAIN-TELEGRAM: recovered message' \
   "unknown-status recovery did not durably relay captured output"
 assert_grep 'recorded receiver exited with status unavailable' "$unknown_home/state/.wake-queue" \
   "unknown-status dead receiver recovery omitted the durable failure"
@@ -441,16 +475,17 @@ FM_TG_RECV_MANAGER=systemd FM_HOME="$handoff_home" "$ARM" > "$handoff_home/state
 handoff_wrapper_pid=$!
 for _ in $(seq 1 50); do
   handoff_output=$(cat "$handoff_home/state/.tg-recv.lock/output-path" 2>/dev/null || true)
-  [ -n "$handoff_output" ] && grep -q 'captured before handoff' "$handoff_output" 2>/dev/null && break
+  handoff_decoded=$([ -n "$handoff_output" ] && decoded_output_file "$handoff_output" 2>/dev/null || true)
+  [ -n "$handoff_output" ] && printf '%s\n' "$handoff_decoded" | grep -q 'captured before handoff' && break
   sleep 0.1
 done
-[ -n "${handoff_output:-}" ] && grep -q 'captured before handoff' "$handoff_output" 2>/dev/null \
+[ -n "${handoff_output:-}" ] && printf '%s\n' "${handoff_decoded:-}" | grep -q 'captured before handoff' \
   || fail "handoff fixture did not capture its captain message before TERM"
 kill -TERM "$handoff_wrapper_pid"
 wait "$handoff_wrapper_pid" 2>/dev/null || true
-assert_grep 'CAPTAIN-TELEGRAM: captured before handoff' "$handoff_home/state/.wake-queue" \
+assert_contains "$(decoded_queue "$handoff_home/state/.wake-queue")" 'CAPTAIN-TELEGRAM: captured before handoff' \
   "intentional service handoff discarded already-captured captain output"
-handoff_message_rows=$(grep -c 'CAPTAIN-TELEGRAM: captured before handoff' "$handoff_home/state/.wake-queue")
+handoff_message_rows=$(decoded_queue "$handoff_home/state/.wake-queue" | grep -c 'CAPTAIN-TELEGRAM: captured before handoff')
 [ "$handoff_message_rows" -eq 1 ] \
   || fail "intentional service handoff relayed captured output $handoff_message_rows times instead of once"
 assert_not_contains "$(cat "$handoff_home/state/.wake-queue")" 'telegram receiver: FAILED' \
@@ -468,8 +503,9 @@ FM_WAKE_QUEUE="$refused_home/state/refused-wake-queue" \
 [ "$service_rc" -eq 1 ] || fail "a refused durable wake exited $service_rc instead of failing visibly"
 assert_grep 'receiver output could not be durably relayed' "$refused_home/state/refused-wake.out" \
   "a refused durable wake looked like successful delivery"
-preserved_output=$(cat "$refused_home/state/.tg-recv.lock/output-path" 2>/dev/null || true)
-assert_grep 'CAPTAIN-TELEGRAM: service message' "$preserved_output" \
+preserved_output_path=$(cat "$refused_home/state/.tg-recv.lock/output-path" 2>/dev/null || true)
+preserved_output=$([ -n "$preserved_output_path" ] && decoded_output_file "$preserved_output_path" 2>/dev/null || true)
+assert_contains "$preserved_output" 'CAPTAIN-TELEGRAM: service message' \
   "a refused durable wake discarded the captured receiver message"
 
 : > "$service_home/state/.wake-queue"
@@ -481,8 +517,10 @@ FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" "$ARM" > "$service_home/state
 [ "$service_rc" -eq 7 ] || fail "service receiver failure exited $service_rc instead of preserving receiver exit 7"
 assert_grep 'check: telegram receiver: FAILED' "$service_home/state/.wake-queue" \
   "systemd receiver failure was indistinguishable from healthy silence"
-assert_grep 'CAPTAIN-TELEGRAM: message delivered before failure' "$service_home/state/.wake-queue" \
+assert_contains "$(decoded_queue "$service_home/state/.wake-queue")" 'CAPTAIN-TELEGRAM: message delivered before failure' \
   "valid receiver event was discarded when the receiver exited nonzero"
+assert_contains "$(decoded_queue "$service_home/state/.wake-queue")" 'continued captain message' \
+  "multiline receiver event was truncated when the receiver exited nonzero"
 assert_grep 'private diagnostic: state/.tg-recv-last-failure-diagnostic' "$service_home/state/.wake-queue" \
   "receiver failure wake did not reference its private diagnostic"
 assert_not_contains "$(cat "$service_home/state/.wake-queue")" 'SECRET-TOKEN' \
@@ -517,4 +555,17 @@ printf '%s\n' empty-exit > "$service_home/state/receiver-mode"
 FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" "$ARM" > "$service_home/state/service-empty.out" 2>&1
 assert_grep 'check: telegram receiver: FAILED' "$service_home/state/.wake-queue" \
   "an empty receiver exit was treated as an empty mailbox"
+
+: > "$service_home/state/.wake-queue"
+rm -f "$service_home/state/.tg-recv-last-failure-wake"
+printf '%s\n' diagnostic-exit > "$service_home/state/receiver-mode"
+FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" "$ARM" > "$service_home/state/service-diagnostic.out" 2>&1
+assert_grep 'receiver exited 0 with diagnostic output but no valid event' "$service_home/state/.wake-queue" \
+  "diagnostic-only zero exit was mislabeled as empty"
+assert_grep 'private diagnostic: state/.tg-recv-last-failure-diagnostic' "$service_home/state/.wake-queue" \
+  "diagnostic-only zero exit did not reference private evidence"
+assert_not_contains "$(cat "$service_home/state/.wake-queue")" 'PRIVATE-TOKEN' \
+  "diagnostic-only zero exit leaked private evidence into its wake"
+assert_grep 'PRIVATE-TOKEN' "$service_home/state/.tg-recv-last-failure-diagnostic" \
+  "diagnostic-only zero exit did not preserve private evidence"
 pass "service-owned receiver output is durable, and one sustained outage wakes once"

@@ -163,7 +163,7 @@ queue_service_output() {
   while IFS= read -r line || [ -n "$line" ]; do
     [ -n "$line" ] || continue
     case "$line" in
-      'CAPTAIN-TELEGRAM: '*|'CAPTAIN-TELEGRAM-BILD: '*)
+      'FM_TG_EVENT_V1:'*)
         had_event=1
         output_seq=$((output_seq + 1))
         fm_wake_append signal "telegram.$(date +%s).$(fm_current_pid).$output_seq" "$line" \
@@ -191,12 +191,33 @@ queue_service_output() {
     record_failure_wake \
       "check: telegram receiver: FAILED - receiver exited 0 after delivering output; the service will restart it" \
       "$diagnostic_path" || { [ -z "$diagnostic_path" ] || rm -f "$diagnostic_path"; return 1; }
+  elif [ -n "$diagnostic_path" ]; then
+    record_failure_wake \
+      "check: telegram receiver: FAILED - receiver exited 0 with diagnostic output but no valid event; the service will restart it" \
+      "$diagnostic_path" || { rm -f "$diagnostic_path"; return 1; }
   else
     record_failure_wake \
       "check: telegram receiver: FAILED - receiver exited 0 without a message or diagnostic; the service will restart it" \
       "$diagnostic_path" || { [ -z "$diagnostic_path" ] || rm -f "$diagnostic_path"; return 1; }
   fi
   [ -z "$diagnostic_path" ] || rm -f "$diagnostic_path"
+}
+
+decode_receiver_output() {
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      'FM_TG_EVENT_V1:'*)
+        python3 - "${line#FM_TG_EVENT_V1:}" <<'PY'
+import base64
+import sys
+
+sys.stdout.buffer.write(base64.b64decode(sys.argv[1], validate=True))
+PY
+        ;;
+      *) printf '%s\n' "$line" ;;
+    esac
+  done
 }
 
 relay_output_file_once() {
@@ -211,7 +232,7 @@ relay_output_file_once() {
         return 1
       fi
     elif [ -s "$relay_path" ]; then
-      cat "$relay_path"
+      decode_receiver_output < "$relay_path"
     fi
     rm -f "$relay_path" 2>/dev/null || true
   fi
