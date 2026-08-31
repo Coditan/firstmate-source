@@ -161,7 +161,8 @@ queue_service_output() {
   while IFS= read -r line || [ -n "$line" ]; do
     [ -n "$line" ] || continue
     had_output=1
-    if [ "$receiver_status" = 0 ] || [ "$receiver_status" = unknown ]; then
+    if [ "$receiver_status" = 0 ] || [ "$receiver_status" = unknown ] \
+      || [ "$receiver_status" = shutdown ]; then
       output_seq=$((output_seq + 1))
       fm_wake_append signal "telegram.$(date +%s).$(fm_current_pid).$output_seq" "$line" || return 1
     fi

@@ -385,6 +385,11 @@ case "$(cat "$FM_HOME/state/receiver-mode")" in
   message)
     printf 'CAPTAIN-TELEGRAM: service message\n'
     ;;
+  handoff)
+    printf 'CAPTAIN-TELEGRAM: captured before handoff\n'
+    trap 'exit 0' TERM INT
+    while :; do sleep 0.1; done
+    ;;
   failure)
     printf 'request failed for https://api.telegram.org/botSECRET-TOKEN/getUpdates: denied\n'
     head -c 5000 /dev/zero | tr '\0' x
@@ -425,6 +430,30 @@ assert_grep 'CAPTAIN-TELEGRAM: recovered message' "$unknown_home/state/.wake-que
   "unknown-status recovery did not durably relay captured output"
 assert_grep 'recorded receiver exited with status unavailable' "$unknown_home/state/.wake-queue" \
   "unknown-status dead receiver recovery omitted the durable failure"
+
+handoff_home="$TMP_ROOT/handoff-output-home"
+mkdir -p "$handoff_home/config" "$handoff_home/state"
+cp "$service_home/config/telegram.env" "$handoff_home/config/telegram.env"
+cp "$service_home/config/fm-tg-recv.sh" "$handoff_home/config/fm-tg-recv.sh"
+printf '%s\n' handoff > "$handoff_home/state/receiver-mode"
+FM_TG_RECV_MANAGER=systemd FM_HOME="$handoff_home" "$ARM" > "$handoff_home/state/wrapper.out" 2>&1 &
+handoff_wrapper_pid=$!
+for _ in $(seq 1 50); do
+  handoff_output=$(cat "$handoff_home/state/.tg-recv.lock/output-path" 2>/dev/null || true)
+  [ -n "$handoff_output" ] && grep -q 'captured before handoff' "$handoff_output" 2>/dev/null && break
+  sleep 0.1
+done
+[ -n "${handoff_output:-}" ] && grep -q 'captured before handoff' "$handoff_output" 2>/dev/null \
+  || fail "handoff fixture did not capture its captain message before TERM"
+kill -TERM "$handoff_wrapper_pid"
+wait "$handoff_wrapper_pid" 2>/dev/null || true
+assert_grep 'CAPTAIN-TELEGRAM: captured before handoff' "$handoff_home/state/.wake-queue" \
+  "intentional service handoff discarded already-captured captain output"
+handoff_message_rows=$(grep -c 'CAPTAIN-TELEGRAM: captured before handoff' "$handoff_home/state/.wake-queue")
+[ "$handoff_message_rows" -eq 1 ] \
+  || fail "intentional service handoff relayed captured output $handoff_message_rows times instead of once"
+assert_not_contains "$(cat "$handoff_home/state/.wake-queue")" 'telegram receiver: FAILED' \
+  "intentional service handoff emitted a receiver-exit failure wake"
 
 refused_home="$TMP_ROOT/refused-wake-home"
 mkdir -p "$refused_home/config" "$refused_home/state/refused-wake-queue"
