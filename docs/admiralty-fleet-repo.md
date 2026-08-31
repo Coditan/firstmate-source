@@ -151,17 +151,11 @@ None of that means the canonical upstream template absorbed those patches: the v
 
 - Cutover is not finished, and this document does not track where any individual vessel stands.
   A vessel's own `origin` is the authority on whether that vessel has been cut over; read it there.
-- Restoring the ancestry as this fork's `main` advances past `e52cc76` is an open captain decision, not a solved problem.
-  Ancestry is a property of the commit graph and not of tree content, so a pin bump alone does not restore it: a bump commit on `admiralty` copies the fork's newer tree, but it does not add the fork's newer commits to `admiralty`'s ancestor set.
-  Absorbing that history so an already-updated vessel stays fast-forwardable needs a true merge of the fork's `main` into `admiralty`'s `main`, for the same ancestry-preserving reason [forgejo-merge-helper.md](forgejo-merge-helper.md) records for vendored pin merges.
-  How such a merge interacts with the drift gate is no longer the open part: `admiralty`'s own `fleet/doctrine/pin-and-bump.md` owns the merge-bump procedure, including regenerating the manifest in that same commit and the verification to put in the pull request.
-  **The procedure has since been applied.**
-  `admiralty`'s `chore(pin): bump vendored firstmate to b5c0bf6` (commit `4bf4acfd3f9eb5ad6edc99e84c2221843f0b500b`, 2026-08-04) lands as a true merge: its second parent is this fork's `b5c0bf65d43ca274e8f8ae3b700426d614e7585c`, so `admiralty`'s ancestor set now includes the fork's history up to that commit, not just its tree.
-  A vessel sitting exactly at that pin can now fast-forward onto `admiralty`.
-  Measured on 2026-08-05 UTC in a throwaway clone of `Freudator86/admiralty` whose `main` was `d16bf0cd19c316376f77615f46fd0e8e85fde45a`, with this fork fetched into it so both sides are present: `git merge-base --is-ancestor b5c0bf65d43ca274e8f8ae3b700426d614e7585c d16bf0cd19c316376f77615f46fd0e8e85fde45a` exits 0.
-  Name the `admiralty` commit rather than a bare `origin/main`, because inside that clone `origin` is `admiralty`, while in this repository `origin` is the fork; the same command against the wrong side answers a different question.
-  The newest fork commit that is an ancestor of that `admiralty` `main` is the pin itself, `b5c0bf6`, dated 2026-08-04: the merge absorbed the fork's history exactly up to the commit it pinned, no further.
-  This fork's `main` has since advanced past the pin again: in this same review pass, `git merge-base --is-ancestor b5c0bf65d43ca274e8f8ae3b700426d614e7585c origin/main` exits 0 and `git rev-list --count b5c0bf65d43ca274e8f8ae3b700426d614e7585c..origin/main` reports 36 commits.
-  The same open question - restoring ancestry as the fork keeps moving - recurs at every pin bump, and each one needs its own merge, not just the first.
+- Preserving ancestry as this fork's `main` advances requires the merge-bump path on every pin bump, not only the first.
+  A plain bump copies the newer tree without adding the pin source's newer commits to `admiralty`'s ancestry, so it does not preserve fast-forwardability.
+  `admiralty`'s own `fleet/doctrine/pin-and-bump.md` owns the merge-bump procedure, including regenerating the manifest in that same commit and the verification to put in the pull request.
+  From the root of an `admiralty` checkout, take the current reading with `git merge-base --is-ancestor "$(sed -n 's/^commit=//p' firstmate.lock)" HEAD`; exit 0 means the current pin is an ancestor and exit 1 means it is not.
+  `bin/fm-ff-lib.sh` advances a checkout only when its `HEAD` is an ancestor of the new base; otherwise it prints `<label>: skipped: diverged from <base>` while returning success.
+  The lapse is therefore legible in the helper's output but invisible in its exit status, an asymmetry that let it go unnoticed across several bumps.
   That merge bump cannot be raised through no-mistakes, because its rebase would flatten the ancestry the merge exists to create, so each one is authorized on the captain's word instead.
 - The Bridge extraction, the fork-maintenance tooling retirement, and the Bucket-A upstreaming are unstarted; the fork-first ratchet prices each as its own reviewed pin bump.
