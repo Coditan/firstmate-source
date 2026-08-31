@@ -584,6 +584,64 @@ assert_grep "reachability=tailnet" "$HOME_WB/state/service-port.lavish" \
   "the published record carries the same answer"
 pass "a successful walk on the tailnet address is evidence, not something to discard"
 
+# The vessel this whole resolver exists for, reached the hard way: its address
+# probe meets a port-scoped errno instead of EADDRNOTAVAIL, so nothing is
+# established before the walk, and the walk itself then meets the real
+# EADDRNOTAVAIL on 192.0.2.1. Refusing there hands the captain no board at all.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_WU=$(make_home "$TMP_ROOT/vessel-wu")
+walkfall=$(PATH="$REFUSES_ADDR:$PATH" FM_TEST_TS_MODE=userspace FM_HOME="$HOME_WU" \
+  FM_SERVICE_PORT_RANGE=4893-4894 "$ROOT/bin/fm-service-port.sh" lavish --serving)
+expect_code 0 "$?" "an address the probe could not answer for must still get a board"
+[ "$(field addr "$walkfall")" = 127.0.0.1 ] \
+  || fail "the board falls back to loopback, got '$(field addr "$walkfall")'"
+[ "$(field reachability "$walkfall")" = tailnet-proxied ] \
+  || fail "and is reached over the published route, got '$(field reachability "$walkfall")'"
+[ "$(field route "$walkfall")" = published ] \
+  || fail "which this run actually made, got '$(field route "$walkfall")'"
+assert_contains "$walkfall" "EADDRNOTAVAIL" \
+  "the userspace diagnosis is still named, established by the walk this time"
+grep -q "4893\|4894" "$FM_TEST_TS_SERVE_LOG" \
+  || fail "the port it bound is the port it published: $(cat "$FM_TEST_TS_SERVE_LOG")"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a walk that proves the address unbindable degrades to the proxy rather than refusing"
+
+# The shape measured on the captain's own seat: the walk fails port-scoped
+# rather than address-scoped, so it establishes nothing about the address
+# either. That is still not grounds to refuse a board, and the run must not
+# dress an unanswered address as an exhausted window.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+NOWALK="$TMP_ROOT/nowalk-bin"
+mkdir -p "$NOWALK"
+cat > "$NOWALK/node" <<SH
+#!/usr/bin/env bash
+[ "\${2:-}" = addr ] && exit 1
+if [ "\${2:-}" = bind ] && [ "\${3:-}" = 192.0.2.1 ]; then
+  printf 'fm-service-port-probe: refused\\n' >&2
+  exit 5
+fi
+exec "$REAL_NODE" "\$@"
+SH
+chmod +x "$NOWALK/node"
+HOME_WP=$(make_home "$TMP_ROOT/vessel-wp")
+portscoped_walk=$(PATH="$NOWALK:$PATH" FM_TEST_TS_MODE=userspace FM_HOME="$HOME_WP" \
+  FM_SERVICE_PORT_RANGE=4896-4897 "$ROOT/bin/fm-service-port.sh" lavish --serving 2>/dev/null)
+expect_code 0 "$?" "a port-scoped walk failure on an unestablished address must not refuse a board"
+[ "$(field addr "$portscoped_walk")" = 127.0.0.1 ] \
+  || fail "the board falls back to loopback, got '$(field addr "$portscoped_walk")'"
+[ "$(field reachability "$portscoped_walk")" = tailnet-proxied ] \
+  || fail "and is reached over the published route, got '$(field reachability "$portscoped_walk")'"
+assert_not_contains "$portscoped_walk" "EADDRNOTAVAIL" \
+  "an errno this run never met must not be named"
+assert_contains "$portscoped_walk" "never established" \
+  "the reason says what was actually not established rather than blaming the window"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "an unanswerable address is never dressed as an exhausted window"
+
 # A tailscale that cannot be READ has tested nothing. Recording that as a tested
 # no-reach would silence the bootstrap notice and bar the proxy verdict for the
 # rest of the run on the strength of a missing jq.
@@ -867,16 +925,27 @@ node "$PROBE" addr 1.2.3.4.5 >/dev/null 2>&1
 expect_code 1 "$?" "a bind that failed for a port-scoped reason answers nothing about the address"
 portscoped=$(FM_TEST_TS_MODE=portscoped FM_HOME="$HOME_B" FM_SERVICE_PORT_RANGE=4816-4817 \
   "$ROOT/bin/fm-service-port.sh" lavish 2>&1)
-expect_code 1 "$?" "an unreadable address answer falls through to the window walk, which refuses honestly"
+expect_code 0 "$?" "an address nothing could answer for still gets a board, on loopback"
+[ "$(field addr "$portscoped")" = 127.0.0.1 ] \
+  || fail "and binds it there, got '$(field addr "$portscoped")'"
 assert_not_contains "$portscoped" "userspace" \
   "a userspace-mode diagnosis must never be asserted from a probe answer that did not say it"
 assert_not_contains "$portscoped" "EADDRNOTAVAIL" \
   "the errno this run never met must not be named"
-assert_not_contains "$portscoped" "tailnet-proxied" \
-  "a port-scoped failure must not rebind the vessel behind a proxy it never needed"
-[ ! -s "$FM_TEST_TS_SERVE_LOG" ] \
-  || fail "nothing may be published for an address that was never proved unbindable: $(cat "$FM_TEST_TS_SERVE_LOG")"
-pass "only an address-scoped probe verdict turns a vessel into a proxied one"
+# The round-2 rule still stands where it was aimed: a port-scoped failure is not
+# a licence to CLAIM proxy reach. Falling back to loopback is what the run does;
+# asserting the tailnet is reached is what it still may not say.
+[ "$(field reachability "$portscoped")" != tailnet-proxied ] \
+  || fail "a port-scoped failure must not claim a proxy reach nothing tested"
+[ "$(field reachability "$portscoped")" != tailnet ] \
+  || fail "nor reach on an address no bind ever succeeded on"
+# Reading serve status is how the run learns whether a route already exists;
+# what it must not do is make one, and a publication is what carries --http=.
+grep -q -- '--http=' "$FM_TEST_TS_SERVE_LOG" \
+  && fail "a run that leaves no service listening publishes nothing: $(cat "$FM_TEST_TS_SERVE_LOG")"
+[ ! -s "$FM_TEST_TS_SERVE_STATE" ] \
+  || fail "and leaves nothing published behind it: $(cat "$FM_TEST_TS_SERVE_STATE")"
+pass "an address no probe could answer for is served locally without claiming reach"
 
 # The no-tailnet vessel is unchanged by any of this: same reachability, same
 # message, and no serve configuration touched on its behalf.
