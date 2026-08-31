@@ -30,10 +30,13 @@ FAILURE_WAKE_QUIET=${FM_TG_RECV_FAILURE_WAKE_QUIET:-300}
 FAILURE_WAKE_MARKER="$STATE/.tg-recv-last-failure-wake"
 SERVICE_HANDOFF_MARKER="$STATE/.tg-recv-service-handoff"
 SERVICE_HANDOFF_LOCK="$STATE/.tg-recv-service-handoff.lock"
+RECEIVER_OWNER_FILE="$STATE/.tg-recv-owner"
 case "$FAILURE_WAKE_QUIET" in ''|*[!0-9]*) FAILURE_WAKE_QUIET=300 ;; esac
 
 harness_handoff_requested() {
-  [ "$TG_RECV_MANAGER" != systemd ] && [ -f "$SERVICE_HANDOFF_MARKER" ]
+  [ "$TG_RECV_MANAGER" != systemd ] \
+    && { [ -f "$SERVICE_HANDOFF_MARKER" ] \
+      || [ "$(cat "$RECEIVER_OWNER_FILE" 2>/dev/null || true)" = systemd ]; }
 }
 
 acquire_receiver_lock() {

@@ -29,7 +29,20 @@ case "$*" in
     fi
     touch "$FM_TEST_SYSTEMD_ENABLED" "$FM_TEST_SYSTEMD_ACTIVE"
     ;;
-  '--user restart '*) touch "$FM_TEST_SYSTEMD_ACTIVE" ;;
+  '--user restart '*)
+    if [ "${FM_TEST_START_SERVICE:-0}" = 1 ]; then
+      old_pid=$(cat "$FM_TEST_SERVICE_PID" 2>/dev/null || true)
+      case "$old_pid" in ''|*[!0-9]*) ;; *) kill -TERM "$old_pid" 2>/dev/null || true ;; esac
+      for _ in $(seq 1 50); do
+        [ ! -e "$FM_TEST_RECEIVER_ACTIVE" ] && break
+        sleep 0.05
+      done
+      FM_TG_RECV_MANAGER=systemd FM_HOME="$FM_TEST_SERVICE_HOME" \
+        "$FM_TEST_SERVICE_ARM" > "$FM_TEST_SERVICE_OUT" 2>&1 &
+      printf '%s\n' "$!" > "$FM_TEST_SERVICE_PID"
+    fi
+    touch "$FM_TEST_SYSTEMD_ACTIVE"
+    ;;
   *) exit 1 ;;
 esac
 SH
@@ -55,7 +68,7 @@ service_env() {
     FM_TEST_SYSTEMD_ACTIVE="$TMP_ROOT/systemd.active" \
     FM_TEST_RECEIVER_ACTIVE="$home/state/receiver-active" \
     FM_TEST_RECEIVER_OVERLAP="$home/state/receiver-overlap" \
-    FM_TEST_START_SERVICE="${FM_TEST_START_SERVICE:-0}" \
+    FM_TEST_START_SERVICE="${FM_TEST_START_SERVICE:-1}" \
     FM_TEST_SERVICE_HOME="$home" \
     FM_TEST_SERVICE_ARM="$ROOT/bin/fm-tg-recv-arm.sh" \
     FM_TEST_SERVICE_OUT="$home/service.out" \
@@ -161,7 +174,20 @@ printf '%s\n' stale > "$home/state/.tg-recv-service.env"
 if service_env "$fakebin" "$home" "$unitdir" "$SERVICE" selected; then
   fail "stale service environment suppressed the tracked receiver fallback"
 fi
-service_env "$fakebin" "$home" "$unitdir" "$SERVICE" ensure >/dev/null
+FM_HOME="$home" "$ROOT/bin/fm-tg-recv-arm.sh" > "$home/stale-fallback.out" 2>&1 &
+stale_fallback_pid=$!
+wait "$stale_fallback_pid" || fail "persistently service-owned receiver made fallback fail noisily"
+assert_contains "$(cat "$home/stale-fallback.out")" "service ownership handoff in progress" \
+  "stale service health allowed a fallback wrapper to attach to the service receiver"
+assert_absent "$home/state/receiver-overlap" \
+  "stale service health allowed service and fallback receivers to coexist"
+FM_TEST_START_SERVICE=1 service_env "$fakebin" "$home" "$unitdir" "$SERVICE" ensure >/dev/null
+for _ in $(seq 1 50); do
+  [ -e "$home/state/receiver-active" ] && break
+  sleep 0.1
+done
+assert_absent "$home/state/receiver-overlap" \
+  "service convergence restarted alongside a harness-owned receiver"
 rm -f "$TMP_ROOT/systemd.active"
 if service_env "$fakebin" "$home" "$unitdir" "$SERVICE" selected; then
   fail "inactive receiver service suppressed the tracked receiver fallback"
@@ -177,7 +203,7 @@ assert_contains "$detect_out" "needs locked convergence" \
 assert_not_contains "$(cat "$TMP_ROOT/systemctl.log")" "--user restart" \
   "detect-only bootstrap restarted the Telegram receiver"
 
-service_env "$fakebin" "$home" "$unitdir" "$SERVICE" bootstrap > /dev/null
+FM_TEST_START_SERVICE=1 service_env "$fakebin" "$home" "$unitdir" "$SERVICE" bootstrap > /dev/null
 cmp -s "$ROOT/systemd/fm-tg-recv@.service" "$unitdir/fm-tg-recv@.service" \
   || fail "locked bootstrap did not converge tracked Telegram receiver unit bytes"
 assert_contains "$(cat "$TMP_ROOT/systemctl.log")" "--user restart fm-tg-recv@" \

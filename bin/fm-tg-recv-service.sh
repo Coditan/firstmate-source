@@ -31,6 +31,7 @@ UNIT_DEST="$USER_UNIT_DIR/fm-tg-recv@.service"
 SERVICE_ENV="$STATE/.tg-recv-service.env"
 SERVICE_HANDOFF_MARKER="$STATE/.tg-recv-service-handoff"
 SERVICE_HANDOFF_LOCK="$STATE/.tg-recv-service-handoff.lock"
+RECEIVER_OWNER_FILE="$STATE/.tg-recv-owner"
 RECV_LOCK="$STATE/.tg-recv.lock"
 CONFIRM_TIMEOUT=${FM_TG_RECV_CONFIRM_TIMEOUT:-10}
 case "$CONFIRM_TIMEOUT" in ''|*[!0-9]*|0) CONFIRM_TIMEOUT=10 ;; esac
@@ -175,11 +176,44 @@ wait_for_active() {
 }
 
 begin_service_handoff() {
-  local tmp
+  local tmp owner_tmp
   mkdir -p "$STATE" || return 1
+  owner_tmp=$(mktemp "$RECEIVER_OWNER_FILE.XXXXXX") || return 1
+  printf '%s\n' systemd > "$owner_tmp" || { rm -f "$owner_tmp"; return 1; }
+  mv -f "$owner_tmp" "$RECEIVER_OWNER_FILE" || return 1
   tmp=$(mktemp "$SERVICE_HANDOFF_MARKER.XXXXXX") || return 1
   printf '%s\n' "$$" > "$tmp" || { rm -f "$tmp"; return 1; }
   mv -f "$tmp" "$SERVICE_HANDOFF_MARKER"
+}
+
+converge_service_receiver() {
+  local unit=$1 action=$2
+  fm_lock_acquire_wait "$SERVICE_HANDOFF_LOCK" || return 1
+  begin_service_handoff || { fm_lock_release "$SERVICE_HANDOFF_LOCK"; return 1; }
+  if ! retire_harness_receiver; then
+    rm -f "$SERVICE_HANDOFF_MARKER"
+    fm_lock_release "$SERVICE_HANDOFF_LOCK"
+    return 1
+  fi
+  if [ "$action" = enable ]; then
+    if ! "$SYSTEMCTL" --user enable --now "$unit"; then
+      rm -f "$SERVICE_HANDOFF_MARKER"
+      fm_lock_release "$SERVICE_HANDOFF_LOCK"
+      return 1
+    fi
+  else
+    if ! "$SYSTEMCTL" --user restart "$unit"; then
+      rm -f "$SERVICE_HANDOFF_MARKER"
+      fm_lock_release "$SERVICE_HANDOFF_LOCK"
+      return 1
+    fi
+  fi
+  fm_lock_release "$SERVICE_HANDOFF_LOCK"
+  if ! wait_for_active; then
+    rm -f "$SERVICE_HANDOFF_MARKER"
+    return 1
+  fi
+  rm -f "$SERVICE_HANDOFF_MARKER"
 }
 
 retire_harness_receiver() {
@@ -210,7 +244,7 @@ retire_harness_receiver() {
 }
 
 ensure_systemd() {
-  local unit changed=0
+  local unit changed=0 owner
   configured || return 0
   receiver_ready || {
     echo "TELEGRAM_RECEIVER_UNIT: config/telegram.env exists but config/fm-tg-recv.sh is missing or not executable" >&2
@@ -237,14 +271,16 @@ ensure_systemd() {
   FM_TG_RECV_ENV_CHANGED=0
   write_service_env || return 1
   [ "$FM_TG_RECV_ENV_CHANGED" -eq 0 ] || changed=1
+  owner=$(cat "$RECEIVER_OWNER_FILE" 2>/dev/null || true)
+  [ "$owner" = systemd ] || changed=1
   if [ "$changed" -eq 1 ] || ! systemd_active; then
-    "$SYSTEMCTL" --user restart "$unit" || return 1
+    converge_service_receiver "$unit" restart || return 1
   fi
   wait_for_active
 }
 
 install_systemd() {
-  local unit handoff=0
+  local unit
   configured || { echo "error: config/telegram.env is absent" >&2; return 1; }
   receiver_ready || { echo "error: config/fm-tg-recv.sh is missing or not executable" >&2; return 1; }
   systemd_usable || { echo "error: systemd --user is unavailable" >&2; return 1; }
@@ -252,23 +288,10 @@ install_systemd() {
   install_unit_bytes || return 1
   write_service_env || return 1
   "$SYSTEMCTL" --user daemon-reload || return 1
-  fm_lock_acquire_wait "$SERVICE_HANDOFF_LOCK" || return 1
-  begin_service_handoff || { fm_lock_release "$SERVICE_HANDOFF_LOCK"; return 1; }
-  handoff=1
-  if ! retire_harness_receiver \
-    || ! "$SYSTEMCTL" --user enable --now "$unit"; then
-    rm -f "$SERVICE_HANDOFF_MARKER"
-    fm_lock_release "$SERVICE_HANDOFF_LOCK"
-    [ "$handoff" -eq 0 ] || echo "error: $unit ownership handoff failed" >&2
-    return 1
-  fi
-  fm_lock_release "$SERVICE_HANDOFF_LOCK"
-  if ! wait_for_active; then
-    rm -f "$SERVICE_HANDOFF_MARKER"
+  if ! converge_service_receiver "$unit" enable; then
     echo "error: $unit ownership handoff failed" >&2
     return 1
   fi
-  rm -f "$SERVICE_HANDOFF_MARKER"
 }
 
 bootstrap_check() {
