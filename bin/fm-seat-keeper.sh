@@ -75,6 +75,9 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 # define FM_HOME, and derive a STATE, from the environment for their own use, so
 # every path this keeper writes hangs off KEEPER_STATE, a name no library
 # reaches, and FM_HOME is restated here from the argument that was validated.
+# The same ownership binds outward: the delivery service derives its own state
+# from FM_STATE_OVERRIDE, so delivery_status states this keeper's state dir on
+# that call rather than letting an inherited one pick which home it reads.
 FM_HOME=$1
 KEEPER_STATE=$2
 
@@ -228,7 +231,8 @@ delivery_status() {
   if [ -n "${FM_SEAT_KEEPER_STATUS_OVERRIDE:-}" ]; then
     status=$FM_SEAT_KEEPER_STATUS_OVERRIDE
   else
-    status=$(FM_HOME="$FM_HOME" "$DELIVERY_SERVICE" status 2>&1 || true)
+    status=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$KEEPER_STATE" \
+      "$DELIVERY_SERVICE" status 2>&1 || true)
   fi
   case "$status" in *$'\n'*) status=${status%%$'\n'*} ;; esac
   printf '%s\n' "$status"
@@ -414,8 +418,10 @@ main() {
           seen=0
           ;;
         *)
-          log "unrecognised delivery verdict; resetting consecutive seat-death evidence: $status"
-          last_verdict=''
+          if [ "$last_verdict" != unrecognised ]; then
+            log "unrecognised delivery verdict; resetting consecutive seat-death evidence: $status"
+          fi
+          last_verdict=unrecognised
           seen=0
           ;;
       esac

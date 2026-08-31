@@ -45,6 +45,19 @@ SH
   chmod +x "$path"
 }
 
+# A delivery service that answers from the state directory it is told to read,
+# which is how bin/fm-delivery-service.sh derives its own state: FM_STATE_OVERRIDE
+# first, then FM_HOME/state.
+write_state_reading_delivery() {
+  local path=$1
+  cat > "$path" <<'SH'
+#!/usr/bin/env bash
+state=${FM_STATE_OVERRIDE:-$FM_HOME/state}
+cat "$state/verdict"
+SH
+  chmod +x "$path"
+}
+
 make_case() {  # <name> -> echoes the case dir
   local dir="$TMP_ROOT/$1"
   mkdir -p "$dir/home/state" "$dir/home/data/findings" "$dir/account"
@@ -139,7 +152,9 @@ test_unrecognised_verdict_resets_the_evidence() {
     || fail "keeper acted on an unrecognised delivery verdict"
   assert_grep "unrecognised delivery verdict" "$dir/home/state/.seat-keeper.log" \
     "unrecognised verdict was not operator-visible in the keeper log"
-  pass "seat keeper refuses to act on an unrecognised verdict and says so"
+  [ "$(grep -c 'unrecognised delivery verdict' "$dir/home/state/.seat-keeper.log")" = 1 ] \
+    || fail "the same unrecognised verdict was announced once per poll rather than once per onset"
+  pass "seat keeper refuses to act on an unrecognised verdict and says so once"
 }
 
 test_declared_stay_down_leaves_the_seat_down() {
@@ -163,16 +178,17 @@ test_declared_stay_down_leaves_the_seat_down() {
 }
 
 test_restore_attempts_are_bounded_and_reported() {
-  local dir findings
+  local dir finding
   dir=$(make_case giveup)
   FM_FINDINGS_DIR="$dir/home/data/findings" \
   FM_SEAT_KEEPER_MAX_ATTEMPTS=1 \
     run_keeper "$dir" "$DEAD_PANE" 4 || fail "keeper exited non-zero on the give-up path"
   [ "$(session_creations "$dir")" = 1 ] \
     || fail "keeper kept relaunching past its attempt bound; got $(session_creations "$dir") restores"
-  findings=$(find "$dir/home/data/findings" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')
-  [ "$findings" = 1 ] || fail "give-up path did not emit exactly one finding; got $findings"
-  assert_grep "exhausted 1 restore attempt" "$dir/home/data/findings/"*.json \
+  finding=$(find "$dir/home/data/findings" -maxdepth 1 -type f -name '*.json')
+  [ "$(printf '%s\n' "$finding" | wc -l | tr -d ' ')" = 1 ] && [ -n "$finding" ] \
+    || fail "give-up path did not emit exactly one finding; got: $finding"
+  assert_grep "exhausted 1 restore attempt" "$finding" \
     "give-up finding did not name the exhausted attempt bound"
   [ -f "$dir/home/state/.seat-keeper-giveup" ] || fail "give-up episode marker was not recorded"
   pass "seat keeper bounds its restore attempts and reports giving up as evidence"
@@ -282,6 +298,23 @@ test_a_dead_keepers_lock_is_taken_over() {
   pass "a dead keeper's lock is taken over rather than refusing every later keeper"
 }
 
+test_the_delivery_verdict_is_read_for_the_home_given() {
+  local dir
+  dir=$(make_case delivery-state-argument)
+  mkdir -p "$dir/decoy/state"
+  printf '%s\n' "$DEAD_PANE" > "$dir/home/state/verdict"
+  printf 'idle: listener pid 1 is up and the durable queue is empty\n' > "$dir/decoy/state/verdict"
+  write_state_reading_delivery "$dir/fake-delivery"
+
+  FM_SEAT_KEEPER_DELIVERY_SERVICE="$dir/fake-delivery" \
+  FM_STATE_OVERRIDE="$dir/decoy/state" \
+    run_keeper "$dir" "" 2 || fail "keeper exited non-zero reading the delivery verdict"
+
+  [ "$(launch_calls "$dir")" -gt 0 ] \
+    || fail "keeper acted on the decoy home's verdict from FM_STATE_OVERRIDE and left its own dead seat down"
+  pass "the delivery verdict is read for the home the keeper was given, not the environment's"
+}
+
 test_dead_seat_verdict_restores_the_seat
 test_one_reading_is_not_enough
 test_a_changing_wake_count_is_still_one_condition
@@ -291,6 +324,7 @@ test_unrecognised_verdict_resets_the_evidence
 test_declared_stay_down_leaves_the_seat_down
 test_restore_attempts_are_bounded_and_reported
 test_the_state_dir_argument_wins_over_the_environment
+test_the_delivery_verdict_is_read_for_the_home_given
 test_a_hand_start_lifts_an_exhausted_bound
 test_a_second_keeper_refuses_to_run
 test_a_dead_keepers_lock_is_taken_over
