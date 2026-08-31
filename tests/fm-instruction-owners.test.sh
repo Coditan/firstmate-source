@@ -648,6 +648,62 @@ test_record_quotes_the_stub_verbatim() {
   pass "the record quotes the away-mode stub bullets byte for byte"
 }
 
+# The captain made "correct a claim that outruns its own run" standing on
+# 2026-08-31, after firstmate's own count in that day's decision records recorded
+# six findings of that class reaching him and each being answered the same way. It lands on three surfaces because three different
+# readers need it: `ask-user-authority` is the owner and states it in full,
+# AGENTS.md section 7 carries the carve-out because without it the always-loaded
+# file still says the captain owns EVERY ask-user finding with `yolo` off, and
+# the generated ship brief carries the worker-facing line because a worker reads
+# neither of the other two.
+#
+# A rule contradicted one file over is not landed, so the shared load-bearing
+# clause is asserted on all three by the same wording. The says-versus-does edge
+# is asserted separately on the owner and the brief: it is the whole difference
+# between this rule and a licence to make a claim true by changing behaviour,
+# and it is the half that would be quietly dropped first.
+test_claims_that_outrun_measurement_agree_across_surfaces() {
+  local file section
+  for file in "$ASKUSER" "$AGENTS" "$BRIEF"; do
+    assert_grep "only what the code says, not what it does" "$file" \
+      "$(basename "$file") lost the shared says-versus-does clause"
+  done
+
+  assert_grep '## Claims that outrun what the run measured' "$ASKUSER" \
+    "ask-user-authority lost the section that owns the standing claim-correction rule"
+  section=$(awk '
+    /^## Claims that outrun what the run measured$/ { found = 1; next }
+    found && /^## / { exit }
+    found { print }
+  ' "$ASKUSER")
+  assert_contains "$section" "defect in the same class as a wrong result" \
+    "the rule lost the reason a reader acts on an overstated claim"
+  assert_contains "$section" "does not reach the captain under either \`yolo\` posture" \
+    "the rule lost the posture-independent grant that retires the escalation"
+  assert_contains "$section" "never a licence to make a claim true by altering behaviour" \
+    "the rule lost the explicit refusal to change behaviour to fit a claim"
+  assert_contains "$section" "change what the code does rather than what it says" \
+    "the rule lost the behaviour-change escalation case"
+  assert_contains "$section" "reaches outside the module already under change" \
+    "the rule lost the module-boundary escalation case"
+  assert_contains "$section" "deciding what the right behaviour is" \
+    "the rule lost the escalation case where the right behaviour is itself undecided"
+
+  # The blanket in step 1 is the sentence these six findings were escalated
+  # under, so it has to name the exception where it is read, not only below.
+  assert_grep 'The one standing exception is the class in "Claims that outrun what the run measured" below' "$ASKUSER" \
+    "the yolo-off blanket no longer names the standing exception"
+
+  assert_grep 'One standing exception holds under either posture' "$AGENTS" \
+    "AGENTS.md section 7 still gives the captain every ask-user finding with yolo off"
+  assert_grep '`ask-user-authority` owns that boundary and the cases that still escalate' "$AGENTS" \
+    "AGENTS.md section 7 lost the pointer to the owner of the boundary"
+
+  assert_grep "Changing what the code DOES so the claim becomes" "$BRIEF" \
+    "the generated brief lost the behaviour-change escalation edge"
+  pass "the claims-that-outrun-measurement rule is stated once and agrees on all three surfaces"
+}
+
 test_new_skill_metadata_and_triggers
 test_every_skill_declares_a_load_trigger
 test_domain_modeling_owner_is_triggered_and_attributed
@@ -655,6 +711,7 @@ test_diagnostic_owner_covers_causal_procedure
 test_project_management_owner_covers_guarded_operations
 test_secrets_owner_covers_exposure_response
 test_ask_user_owner_covers_authority_procedure
+test_claims_that_outrun_measurement_agree_across_surfaces
 test_generic_effort_fallback_respects_precedence
 test_shared_authoring_requirements_are_owned
 test_secondmate_registry_contract_stays_concise
