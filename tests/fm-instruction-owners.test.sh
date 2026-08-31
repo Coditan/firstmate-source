@@ -24,6 +24,8 @@ BRIEF="$ROOT/bin/fm-brief.sh"
 DOMAIN="$ROOT/.agents/skills/domain-modeling/SKILL.md"
 DOMAIN_PROVENANCE="$ROOT/docs/domain-modeling-provenance.md"
 README="$ROOT/README.md"
+AFK="$ROOT/.agents/skills/afk/SKILL.md"
+AWAY_RECORD="$ROOT/docs/away-mode-approval-authority.md"
 
 test_new_skill_metadata_and_triggers() {
   local skill name skill_trigger agents_trigger count i
@@ -508,6 +510,107 @@ test_agents_md_tells_a_worker_it_is_not_addressed() {
   pass "AGENTS.md tells a worker it is not the addressee, before the contract begins"
 }
 
+# AGENTS.md is the shipped operating contract itself, not a description of one:
+# every session loads it in full, so the section-8 away-mode stub and the
+# section-7 approval-authority contract are read together, by the same session,
+# with nothing else loaded. That makes the ownership relation BETWEEN those two
+# sections the thing under test, and both are read here as parsed sections
+# rather than as one flat file, so a phrase that survives in the wrong section
+# cannot satisfy the contract.
+#
+# The invariant: section 7 is the only place merge authority is created, and the
+# away-mode stub creates none of its own in either direction - it neither
+# withdraws what section 7 grants nor grants anything section 7 does not.
+# docs/away-mode-approval-authority.md records why.
+test_away_mode_neither_widens_nor_withdraws_authority() {
+  local stub auth absolute conditional
+  stub=$(awk '/^### Away-mode stub/{f=1} f && /^### Stuck-worker trigger/{exit} f' "$AGENTS")
+  auth=$(awk '/^### Selected delivery path and approval authority/{f=1} f && /^### PR ready, landing/{exit} f' "$AGENTS")
+  [ -n "$stub" ] || fail "AGENTS.md away-mode stub is missing or unparseable"
+  [ -n "$auth" ] || fail "AGENTS.md approval-authority contract is missing or unparseable"
+
+  # The stub's cross-reference resolves with nothing else loaded, and the
+  # section it defers to still owns every merge rule the stub declines to
+  # restate. A pointer at a section that no longer owns them is the same defect
+  # as no pointer at all.
+  assert_contains "$stub" "section 7's approval-authority contract" \
+    "the away-mode stub no longer defers to section 7's approval-authority contract"
+  assert_contains "$auth" 'With `yolo` off, the captain owns ask-user findings, PR merges' \
+    "section 7 no longer places merges with the captain where yolo is off"
+  assert_contains "$auth" 'With `yolo` on, firstmate decides those routine gates and merges only green or otherwise approved work' \
+    "section 7 no longer places routine green merges with firstmate where yolo is on"
+  assert_contains "$auth" "Never merge a red PR." \
+    "section 7 no longer owns the red-PR prohibition the stub points at"
+  assert_contains "$auth" "reads every required check against the pull request's head commit before merging" \
+    "section 7 no longer owns the head-commit reading of the required checks"
+
+  # One owner for what counts as green: the stub names section 7's head-commit
+  # reading as section 7's own and defines nothing itself. A second definition
+  # here is the failure mode the wording exists to avoid.
+  assert_contains "$stub" "that section's own head-commit reading" \
+    "the away-mode stub no longer sends an unattended merger to the head-commit reading"
+  assert_not_contains "$stub" "green" \
+    "the away-mode stub installs a second definition of green beside section 7's"
+  assert_not_contains "$stub" "Never merge a red PR" \
+    "the away-mode stub restates section 7's merge prohibition instead of pointing at it"
+
+  # Withdraws nothing: the bundled prohibition that read as "no merging while
+  # away" is gone from the whole always-loaded file, not merely from one section.
+  assert_no_grep "Away mode never expands approval authority" "$AGENTS" \
+    "AGENTS.md still withdraws, while away, a merge authority section 7 grants"
+
+  # Widens nothing: the three absolutes are named again, in the same words, in a
+  # bullet of their own that no conditional clause can reach, so narrowing the
+  # merge case cannot become cover for widening any of them.
+  absolute=$(printf '%s\n' "$stub" | grep -F -- "- Destructive actions, irreversible actions, and security-sensitive choices")
+  [ -n "$absolute" ] || fail "the away-mode stub no longer states the absolute escalation list in a bullet of its own"
+  assert_contains "$absolute" "wait for his explicit word however long he is gone" \
+    "the absolute escalation list no longer waits for the captain for the whole absence"
+  assert_not_contains "$absolute" "section 7" \
+    "the absolute escalation list was made conditional on section 7's placement"
+  assert_not_contains "$absolute" "Whatever" \
+    "a conditional clause reaches the absolute escalation list"
+
+  # The conditional bullet names both items it governs, so no reader has to
+  # decide by proximity whether the qualifier covers the merge.
+  conditional=$(printf '%s\n' "$stub" | grep -F -- "- Whatever section 7's approval-authority contract")
+  [ -n "$conditional" ] || fail "the away-mode stub no longer carries section 7's placement as its own bullet"
+  assert_contains "$conditional" "a routine merge and an ask-user finding alike" \
+    "the placement bullet no longer names both items the section 7 condition governs"
+  pass "away-mode stub defers merge authority to section 7, withdrawing none and granting none"
+}
+
+# A contradiction moved from one file to another is not resolved, so the skill
+# away mode actually loads is held to the same ownership relation, and the
+# pointers both surfaces make must resolve on the disk a vessel has after a pin
+# bump.
+test_afk_skill_keeps_one_merge_authority_owner() {
+  local section
+  section=$(awk '/^## Orthogonal to approval authority/{f=1} f && /^## Operational prefix contract/{exit} f' "$AFK")
+  [ -n "$section" ] || fail "the afk skill lost its approval-authority section"
+  assert_contains "$section" "section 7's approval-authority contract" \
+    "the afk skill no longer points at section 7 as the merge-authority owner"
+  assert_contains "$section" "away mode adds no merge authority and withdraws none" \
+    "the afk skill no longer states away mode as authority-neutral"
+  assert_not_contains "$section" "still waits for the captain's" \
+    "the afk skill still makes a merge-ready PR wait for the captain that section 7 places with firstmate"
+  assert_not_contains "$section" "green" \
+    "the afk skill installs a second definition of green beside section 7's"
+
+  # The record exists where the skill sends a reader, and it is indexed for a
+  # human in README's docs list.
+  assert_present "$AWAY_RECORD" "docs/away-mode-approval-authority.md is missing"
+  assert_contains "$section" "docs/away-mode-approval-authority.md" \
+    "the afk skill no longer points at the record of why this is the wording"
+  assert_grep "docs/away-mode-approval-authority.md" "$README" \
+    "README's docs list does not index the away-mode approval-authority record"
+  # Deliberately NOT reachable from AGENTS.md: its token cost is paid by every
+  # session of every fleet member, and only away mode needs the record.
+  assert_no_grep "away-mode-approval-authority" "$AGENTS" \
+    "AGENTS.md charges every session for a record only away mode needs"
+  pass "the afk skill defers to the same owner and its record is reachable where it belongs"
+}
+
 test_new_skill_metadata_and_triggers
 test_every_skill_declares_a_load_trigger
 test_domain_modeling_owner_is_triggered_and_attributed
@@ -522,4 +625,6 @@ test_state_startup_and_ordinary_recovery_placement
 test_recovery_stop_is_keyed_on_the_degraded_state
 test_compressed_agents_owner_map
 test_compressed_agents_retains_authority_and_supervision_safety
+test_away_mode_neither_widens_nor_withdraws_authority
+test_afk_skill_keeps_one_merge_authority_owner
 test_agents_md_tells_a_worker_it_is_not_addressed
