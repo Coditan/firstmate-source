@@ -152,7 +152,6 @@ Silence is read as "announces nothing", and a tool that reworded its notice woul
 So an `ok` reading says the tool announces no newer version, not that the tool is current: the round reports the claim it actually measured, and a reader who needs more than the tool's own word can see from the wording that it has only the tool's word.
 A probe that fails, prints nothing, or announces something unparseable reads `unmeasured` and never `ok`.
 
-
 Measured on this vessel on 2026-08-12, immediately after the table was written:
 
 ```
