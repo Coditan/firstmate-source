@@ -72,3 +72,77 @@ fm_custom_check_snapshot_cleanup() {
   [ -z "$FM_CUSTOM_CHECK_SNAPSHOT" ] || rm -f -- "$FM_CUSTOM_CHECK_SNAPSHOT"
   FM_CUSTOM_CHECK_SNAPSHOT=
 }
+
+# --- the cross-home arm guard -----------------------------------------------
+#
+# THE DEFECT THIS CLOSES, measured 2026-08-30
+#
+# An armed watcher check BAKES its home rather than inheriting one, because
+# bin/fm-watch.sh runs it from a private snapshot with the watcher's own
+# environment. So `--arm` writes whatever FM_HOME it was called with into
+# whatever state directory it resolved, and nothing made those two agree.
+#
+# A caller that sets FM_HOME for a fixture home while FM_STATE_OVERRIDE is
+# still inherited from a live session therefore resolves a FIXTURE home and a
+# LIVE state directory. It overwrites that live home's armed check with the
+# fixture's locations and reports success. Six of this fleet's live checks were
+# overwritten that way in a single day. A leaked check then runs, looks in a
+# temporary directory that no longer exists, prints nothing, and is
+# indistinguishable from a healthy check with nothing to report - one had been
+# silent for weeks.
+#
+# THE PREDICATE
+#
+# An armed check must be COHERENT: the state directory it lands in must be the
+# state directory of the home it bakes. Every legitimate arm satisfies that -
+# bin/fm-bootstrap.sh arming this home at every locked session start, and every
+# suite arming its own fixture home, set both to one home. Only an arm whose
+# home and state directory came from different places fails it.
+#
+# Arming a fixture home stays legitimate and necessary, because the bootstrap
+# suites exercise arming against fixture homes on purpose. This bans neither
+# that nor arming from a test; it bans arming a home that is not the one the
+# state directory belongs to.
+
+# The home a state directory belongs to, or nothing when it names none.
+#
+# docs/configuration.md owns the layout: FM_HOME selects that home's private
+# state/, so a directory literally named `state` names its owner in its own
+# path and needs no marker file to say so. A directory called anything else is
+# a deliberately relocated state directory that claims no owner, and this
+# prints nothing rather than inventing one.
+fm_check_state_home() {  # <state dir> -> the owning home, or nothing
+  local state=$1 real parent base
+  real=$(cd -P -- "$state" 2>/dev/null && pwd -P) || real=
+  if [ -z "$real" ]; then
+    # Not created yet. Canonicalize the parent instead so the reading is the
+    # same before and after the directory exists; an arm path that creates its
+    # own state directory must not be able to slip past the guard by running
+    # one step earlier.
+    base=$(basename -- "$state")
+    parent=$(cd -P -- "$(dirname -- "$state")" 2>/dev/null && pwd -P) || return 0
+    case "$parent" in
+      /) real="/$base" ;;
+      *) real="$parent/$base" ;;
+    esac
+  fi
+  [ "${real##*/}" = state ] || return 0
+  parent=${real%/*}
+  [ -n "$parent" ] || parent=/
+  printf '%s' "$parent"
+}
+
+# Whether an arm may write into this state directory for this home.
+#
+# Prints the refusal and returns 1 when the two disagree; silent and 0
+# otherwise, including when the state directory names no owner.
+fm_check_arm_home_refusal() {  # <state dir> <FM_HOME>
+  local state=$1 home=$2 owner real
+  owner=$(fm_check_state_home "$state") || return 0
+  [ -n "$owner" ] || return 0
+  real=$(cd -P -- "$home" 2>/dev/null && pwd -P) || real=$home
+  [ "$real" != "$owner" ] || return 0
+  printf 'refusing to arm %s: that state directory belongs to home %s, not to %s. Arming it would bake the wrong home into a check that home has to run, and the check would then read a directory it does not own. Point FM_HOME and FM_STATE_OVERRIDE at one home - an FM_STATE_OVERRIDE inherited from another session is the usual cause.' \
+    "$state" "$owner" "$real"
+  return 1
+}
