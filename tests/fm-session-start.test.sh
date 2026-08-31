@@ -439,6 +439,33 @@ EOF
   pass "captain/learnings heads begin at byte offsets $captain_offset/$learnings_offset and both survive 2048 bytes"
 }
 
+test_oversized_first_lines_deliver_bounded_partial_content() {
+  local rec root home fakebin out first_2048
+  rec=$(new_world pair-long-first-line)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  printf 'CAPTAIN-LONG-FIRST-LINE:' > "$home/data/captain.md"
+  printf '%0600d\n' 0 >> "$home/data/captain.md"
+  printf 'LEARNINGS-LONG-FIRST-LINE:' > "$home/data/learnings.md"
+  printf '%0600d\n' 0 >> "$home/data/learnings.md"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  first_2048=$(printf '%s' "$out" | head -c 2048)
+
+  assert_contains "$first_2048" 'CAPTAIN-LONG-FIRST-LINE:' \
+    'an oversized captain first line contributed no content to the bounded subset'
+  assert_contains "$first_2048" 'LEARNINGS-LONG-FIRST-LINE:' \
+    'an oversized learnings first line contributed no content to the bounded subset'
+  assert_contains "$first_2048" '[partial final line; truncated at 512 bytes]' \
+    'an oversized first line was not explicitly labeled partial'
+
+  pass 'oversized first lines deliver bounded, explicitly partial content'
+}
+
 test_output_ordering_diagnostics_lead() {
   local rec root home fakebin out lock_line boot_line wake_line context_line fleet_line next_line
   rec=$(new_world ordering)
@@ -1212,6 +1239,7 @@ EOF
 test_context_digest_absent_empty_present
 test_lock_refusal_read_only_path
 test_captain_and_learnings_head_leads_the_digest
+test_oversized_first_lines_deliver_bounded_partial_content
 test_output_ordering_diagnostics_lead
 test_herdr_backend_diagnostics_follow_real_session_start
 test_status_tail_bounding

@@ -322,8 +322,8 @@ print_file_or_absent() {
   fi
 }
 
-# print_bounded_file_head <path> <label>: a byte-bounded prefix made only of
-# complete lines, or an explicit empty/absent state. The full file is still
+# print_bounded_file_head <path> <label>: a byte-bounded prefix, or an explicit
+# empty/absent state. The full file is still
 # printed by the context digest below. Keeping the head bounded lets both files
 # lead the output without pretending either preview is the complete record.
 print_bounded_file_head() {
@@ -348,14 +348,19 @@ print_bounded_file_head() {
 
   printf 'BOUNDED SUBSET: first complete lines within %s bytes of %s total bytes; the remainder was NOT received here.\n' \
     "$PAIR_HEAD_BYTES" "$total"
-  LC_ALL=C awk -v max="$PAIR_HEAD_BYTES" '
+  if ! LC_ALL=C awk -v max="$PAIR_HEAD_BYTES" '
     {
       bytes = length($0) + 1
       if (used + bytes > max) exit
       print
       used += bytes
     }
+    END { exit used == 0 }
   ' "$path"
+  then
+    head -c "$PAIR_HEAD_BYTES" "$path"
+    printf '\n[partial final line; truncated at %s bytes]\n' "$PAIR_HEAD_BYTES"
+  fi
 }
 
 print_backlog_pointer() {
