@@ -488,8 +488,10 @@ for _ in $(seq 1 50); do
   [ -n "$handoff_output" ] && printf '%s\n' "$handoff_decoded" | grep -q 'captured before handoff' && break
   sleep 0.1
 done
-[ -n "${handoff_output:-}" ] && printf '%s\n' "${handoff_decoded:-}" | grep -q 'captured before handoff' \
-  || fail "handoff fixture did not capture its captain message before TERM"
+if ! { [ -n "${handoff_output:-}" ] \
+  && printf '%s\n' "${handoff_decoded:-}" | grep -q 'captured before handoff'; }; then
+  fail "handoff fixture did not capture its captain message before TERM"
+fi
 kill -TERM "$handoff_wrapper_pid"
 wait "$handoff_wrapper_pid" 2>/dev/null || true
 assert_contains "$(decoded_queue "$handoff_home/state/.wake-queue")" 'CAPTAIN-TELEGRAM: captured before handoff' \

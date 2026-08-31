@@ -273,11 +273,11 @@ retire_harness_receiver() {
   [ -n "$record" ] || record=$(cat "$RECV_LOCK/pid-identity" 2>/dev/null || true)
   current=$(fm_pid_incarnation "$pid" 2>/dev/null || true)
   if fm_pid_alive "$pid"; then
-    [ "$lock_home" = "$FM_HOME" ] && [ "$lock_path" = "$RECV" ] \
-      && fm_pid_incarnation_matches_record "$current" "$record" || {
-        echo "error: receiver lock does not identify a safe handoff target" >&2
-        return 1
-      }
+    if ! { [ "$lock_home" = "$FM_HOME" ] && [ "$lock_path" = "$RECV" ] \
+      && fm_pid_incarnation_matches_record "$current" "$record"; }; then
+      echo "error: receiver lock does not identify a safe handoff target" >&2
+      return 1
+    fi
     kill -TERM "$pid" 2>/dev/null || return 1
   fi
   deadline=$(( $(date +%s) + CONFIRM_TIMEOUT ))
