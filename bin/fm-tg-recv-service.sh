@@ -181,9 +181,32 @@ begin_service_handoff() {
   owner_tmp=$(mktemp "$RECEIVER_OWNER_FILE.XXXXXX") || return 1
   printf '%s\n' systemd > "$owner_tmp" || { rm -f "$owner_tmp"; return 1; }
   mv -f "$owner_tmp" "$RECEIVER_OWNER_FILE" || return 1
+  write_handoff_marker
+}
+
+write_handoff_marker() {
+  local tmp
+  mkdir -p "$STATE" || return 1
   tmp=$(mktemp "$SERVICE_HANDOFF_MARKER.XXXXXX") || return 1
   printf '%s\n' "$$" > "$tmp" || { rm -f "$tmp"; return 1; }
   mv -f "$tmp" "$SERVICE_HANDOFF_MARKER"
+}
+
+retire_service_ownership() {
+  local unit
+  owned || return 0
+  systemd_usable || return 1
+  unit=$(unit_instance) || return 1
+  fm_lock_acquire_wait "$SERVICE_HANDOFF_LOCK" || return 1
+  write_handoff_marker || { fm_lock_release "$SERVICE_HANDOFF_LOCK"; return 1; }
+  if ! "$SYSTEMCTL" --user disable --now "$unit" || ! retire_harness_receiver; then
+    rm -f "$SERVICE_HANDOFF_MARKER"
+    fm_lock_release "$SERVICE_HANDOFF_LOCK"
+    return 1
+  fi
+  rm -f "$RECEIVER_OWNER_FILE" "$SERVICE_ENV"
+  rm -f "$SERVICE_HANDOFF_MARKER"
+  fm_lock_release "$SERVICE_HANDOFF_LOCK"
 }
 
 converge_service_receiver() {
@@ -245,7 +268,10 @@ retire_harness_receiver() {
 
 ensure_systemd() {
   local unit changed=0 owner
-  configured || return 0
+  if ! configured; then
+    retire_service_ownership
+    return "$?"
+  fi
   receiver_ready || {
     echo "TELEGRAM_RECEIVER_UNIT: config/telegram.env exists but config/fm-tg-recv.sh is missing or not executable" >&2
     return 2
@@ -296,7 +322,16 @@ install_systemd() {
 
 bootstrap_check() {
   local unit
-  configured || return 0
+  if ! configured; then
+    if owned; then
+      if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" = 1 ]; then
+        echo "TELEGRAM_RECEIVER_UNIT: configuration absent; persistent service ownership needs locked retirement"
+      elif ! retire_service_ownership; then
+        echo "TELEGRAM_RECEIVER_UNIT: configuration absent but persistent service ownership retirement failed"
+      fi
+    fi
+    return 0
+  fi
   if ! receiver_ready; then
     echo "TELEGRAM_RECEIVER_UNIT: config/telegram.env exists but config/fm-tg-recv.sh is missing or not executable"
     return 0

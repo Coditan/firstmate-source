@@ -598,7 +598,10 @@ TELEGRAM_PRESENT=0
 TELEGRAM_SERVICE_SELECTED=0
 
 subsection "TELEGRAM RECEIVER"
-if [ "$TELEGRAM_PRESENT" -eq 0 ]; then
+if [ "$TELEGRAM_PRESENT" -eq 0 ] && "$SCRIPT_DIR/fm-tg-recv-service.sh" owned >/dev/null 2>&1; then
+  TELEGRAM_SERVICE_SELECTED=1
+  printf '%s\n' 'TELEGRAM_RECEIVER: service-owned but unavailable - configuration is absent and service retirement is incomplete; no tracked fallback will start'
+elif [ "$TELEGRAM_PRESENT" -eq 0 ]; then
   printf '%s\n' 'inactive (config/telegram.env absent)'
 elif [ ! -x "$CONFIG/fm-tg-recv.sh" ]; then
   printf '%s\n' 'TELEGRAM_RECEIVER: config/telegram.env exists but config/fm-tg-recv.sh is missing or not executable; direct Telegram receive is not armed'

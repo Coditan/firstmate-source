@@ -28,10 +28,13 @@ TERM_WAIT_POLL=${FM_TG_RECV_TERM_WAIT_POLL:-0.1}
 TG_RECV_MANAGER=${FM_TG_RECV_MANAGER:-harness}
 FAILURE_WAKE_QUIET=${FM_TG_RECV_FAILURE_WAKE_QUIET:-300}
 FAILURE_WAKE_MARKER="$STATE/.tg-recv-last-failure-wake"
+FAILURE_DIAGNOSTIC="$STATE/.tg-recv-last-failure-diagnostic"
+FAILURE_DIAGNOSTIC_LIMIT=${FM_TG_RECV_FAILURE_DIAGNOSTIC_LIMIT:-4096}
 SERVICE_HANDOFF_MARKER="$STATE/.tg-recv-service-handoff"
 SERVICE_HANDOFF_LOCK="$STATE/.tg-recv-service-handoff.lock"
 RECEIVER_OWNER_FILE="$STATE/.tg-recv-owner"
 case "$FAILURE_WAKE_QUIET" in ''|*[!0-9]*) FAILURE_WAKE_QUIET=300 ;; esac
+case "$FAILURE_DIAGNOSTIC_LIMIT" in ''|*[!0-9]*|0) FAILURE_DIAGNOSTIC_LIMIT=4096 ;; esac
 
 harness_handoff_requested() {
   [ "$TG_RECV_MANAGER" != systemd ] \
@@ -133,8 +136,18 @@ service_failure_is_due() {
 }
 
 record_failure_wake() {
-  local payload=$1 now
+  local payload=$1 diagnostic_source=${2:-} now tmp
   service_failure_is_due || return 0
+  if [ -n "$diagnostic_source" ] && [ -s "$diagnostic_source" ]; then
+    tmp=$(mktemp "$FAILURE_DIAGNOSTIC.XXXXXX") || return 1
+    if ! LC_ALL=C head -c "$FAILURE_DIAGNOSTIC_LIMIT" "$diagnostic_source" > "$tmp"; then
+      rm -f "$tmp"
+      return 1
+    fi
+    chmod 600 "$tmp" || { rm -f "$tmp"; return 1; }
+    mv -f "$tmp" "$FAILURE_DIAGNOSTIC" || { rm -f "$tmp"; return 1; }
+    payload="$payload; private diagnostic: state/.tg-recv-last-failure-diagnostic"
+  fi
   fm_wake_append check telegram-receiver "$payload" || return 1
   now=$(date +%s)
   ( umask 077 && printf '%s\n' "$now" > "$FAILURE_WAKE_MARKER" ) || {
@@ -157,7 +170,8 @@ queue_service_output() {
   [ "$receiver_status" = shutdown ] && return 0
   if [ "$receiver_status" != 0 ] && [ "$receiver_status" != unknown ]; then
     record_failure_wake \
-      "check: telegram receiver: FAILED - receiver exited $receiver_status; the service will restart it" || return 1
+      "check: telegram receiver: FAILED - receiver exited $receiver_status; the service will restart it" \
+      "$relay_path" || return 1
   elif [ "$had_output" -eq 0 ]; then
     record_failure_wake \
       "check: telegram receiver: FAILED - receiver exited without a message or diagnostic; the service will restart it" || return 1

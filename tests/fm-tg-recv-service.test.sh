@@ -47,6 +47,15 @@ case "$*" in
     fi
     touch "$FM_TEST_SYSTEMD_ACTIVE"
     ;;
+  '--user disable --now '*)
+    old_pid=$(cat "$FM_TEST_SERVICE_PID" 2>/dev/null || true)
+    case "$old_pid" in ''|*[!0-9]*) ;; *) kill -TERM "$old_pid" 2>/dev/null || true ;; esac
+    for _ in $(seq 1 50); do
+      [ ! -e "$FM_TEST_RECEIVER_ACTIVE" ] && break
+      sleep 0.05
+    done
+    rm -f "$FM_TEST_SYSTEMD_ENABLED" "$FM_TEST_SYSTEMD_ACTIVE"
+    ;;
   *) exit 1 ;;
 esac
 SH
@@ -246,7 +255,19 @@ cmp -s "$ROOT/systemd/fm-tg-recv@.service" "$unitdir/fm-tg-recv@.service" \
   || fail "locked bootstrap did not converge tracked Telegram receiver unit bytes"
 assert_contains "$(cat "$TMP_ROOT/systemctl.log")" "--user restart fm-tg-recv@" \
   "locked bootstrap did not restart the stale Telegram receiver instance"
-service_pid=$(cat "$home/state/service-wrapper-pid")
-kill -TERM "$service_pid" 2>/dev/null || true
-wait "$service_pid" 2>/dev/null || true
+
+rm -f "$home/config/telegram.env"
+service_env "$fakebin" "$home" "$unitdir" "$SERVICE" bootstrap >/dev/null \
+  || fail "deconfiguration did not retire persistent service ownership"
+assert_contains "$(cat "$TMP_ROOT/systemctl.log")" "--user disable --now fm-tg-recv@" \
+  "deconfiguration did not stop and disable the receiver service"
+assert_absent "$home/state/.tg-recv-owner" \
+  "deconfiguration left persistent systemd ownership behind"
+assert_absent "$home/state/.tg-recv.lock" \
+  "deconfiguration left a receiver process recorded"
+assert_absent "$home/state/receiver-active" \
+  "deconfiguration left the receiver polling"
+sleep 0.2
+assert_absent "$home/state/receiver-active" \
+  "deconfigured service continued its restart loop"
 pass "Telegram receiver service installation is consent-gated and converges per home"
