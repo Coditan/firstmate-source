@@ -313,6 +313,7 @@ fm_reachability_init
 ROUTE=""
 REASON=""
 PROXY_CANDIDATE=0
+ADDR_UNBINDABLE=0
 
 # Every write below is made immediately after the test that backs it, so the
 # door can only refuse one if this sequence has been reordered wrongly. That is
@@ -450,8 +451,10 @@ if [ -n "$TAILADDR" ]; then
     set_reachability_or_die tailnet probed
   elif [ "${ADDR_PROBE_STATUS:-0}" -eq 4 ]; then
     # The bind was attempted and the address cannot carry it, so tailnet is out
-    # for the rest of this run whatever any record says about it.
+    # for the rest of this run whatever any record says about it, and a later
+    # publish failure may be reported as the tested no-reach it then is.
     fm_reachability_rule_out tailnet
+    ADDR_UNBINDABLE=1
     if fm_tailnet_serve_available; then
       # No verdict yet: tailscaled being up says nothing about whether a route
       # can actually be published, and only the publish attempt below answers
@@ -569,8 +572,22 @@ if [ -z "${PORT:-}" ]; then
   # The probe's stderr is deliberately not discarded: it is silent on success,
   # and on failure it is the only thing that names the concrete errnos.
   bind_in_window() {
+    local combined status
     # shellcheck disable=SC2086
-    PORT=$(node "$PROBE" bind "$1" $CANDIDATES)
+    combined=$(node "$PROBE" bind "$1" $CANDIDATES 2>&1)
+    status=$?
+    PORT=$(printf '%s\n' "$combined" | sed -n 's/^\([0-9][0-9]*\)$/\1/p' | head -1)
+    WALK_DIAGNOSIS=$(printf '%s\n' "$combined" | grep -v '^[0-9][0-9]*$' || true)
+    [ -z "$WALK_DIAGNOSIS" ] || printf '%s\n' "$WALK_DIAGNOSIS" >&2
+    return "$status"
+  }
+
+  # The probe names the errno it actually met, and this is the only place that
+  # knows it. Reading it back beats restating a guess in a sentence the captain
+  # sees on every open, because exit 4 covers EAFNOSUPPORT and EINVAL too.
+  walk_errno() {
+    printf '%s\n' "${WALK_DIAGNOSIS:-}" \
+      | sed -n 's/.*cannot bind [^ ]* on this host (\([A-Z][A-Z0-9]*\)).*/\1/p' | head -1
   }
 
   bind_in_window "$ADDR"
@@ -592,14 +609,19 @@ if [ -z "${PORT:-}" ]; then
     SERVE_AVAILABLE=0
     fm_tailnet_serve_available && SERVE_AVAILABLE=1
     if [ "$probe_status" -eq 4 ]; then
-      # Every candidate met an address-scoped errno, which is the same verdict
-      # the ephemeral probe failed to reach, established the harder way.
+      # A candidate bind met an address-scoped errno, which ends the walk then
+      # and there because no port on that address could have bound. That is the
+      # same verdict the ephemeral probe failed to reach, established the harder
+      # way, so this run HAS tested the address and may say so.
+      ADDR_UNBINDABLE=1
+      WALK_ERRNO=$(walk_errno)
+      [ -n "$WALK_ERRNO" ] || WALK_ERRNO="an address-scoped errno"
       if [ "$SERVE_AVAILABLE" -eq 1 ]; then
-        add_reason "this node has the tailnet address $TAILADDR but no local interface carries it (every candidate bind failed EADDRNOTAVAIL), which is what tailscale userspace networking mode looks like, so a port cannot be bound on that address and is bound on loopback instead"
+        add_reason "this node has the tailnet address $TAILADDR but no local interface carries it (a candidate bind was refused with $WALK_ERRNO, which ends the walk because no port on that address could have bound), which is what tailscale userspace networking mode looks like, so a port cannot be bound on that address and is bound on loopback instead"
       else
         set_reachability_or_die loopback probed
         DNSNAME=""
-        add_reason "this node has the tailnet address $TAILADDR but no local interface carries it (every candidate bind failed EADDRNOTAVAIL) and tailscale serve is not available to publish a loopback port onto it, so nothing here is reachable off this machine"
+        add_reason "this node has the tailnet address $TAILADDR but no local interface carries it (a candidate bind was refused with $WALK_ERRNO, which ends the walk because no port on that address could have bound) and tailscale serve is not available to publish a loopback port onto it, so nothing here is reachable off this machine"
       fi
     else
       add_reason "no port in $WINDOW_START-$WINDOW_END could be bound on $TAILADDR, and whether that address can be bound here at all was never established, so the window and this host's permissions are both unproved as the cause and a port is bound on loopback instead"
@@ -669,10 +691,17 @@ if [ "$PROXY_CANDIDATE" -eq 1 ]; then
     if fm_tailnet_serve_publish "$PORT"; then
       ROUTE=published
       set_reachability_or_die tailnet-proxied probed
-    else
+    elif [ "$ADDR_UNBINDABLE" -eq 1 ]; then
       set_reachability_or_die loopback probed
       DNSNAME=""
       add_reason "publishing port $PORT onto $TAILADDR with tailscale serve failed, so this board is reachable only on this machine"
+    else
+      # The publish is the only thing this run tested, and it failed. Whether
+      # the address itself binds was never established, so the route's absence
+      # is not a tested no-reach and must not be recorded as one.
+      set_reachability_or_die untested none
+      DNSNAME=""
+      add_reason "publishing port $PORT onto $TAILADDR with tailscale serve failed, and whether that address can be bound here at all was never established, so neither reach nor its absence is claimed"
     fi
   elif fm_tailnet_serve_published "$PORT"; then
     ROUTE=published

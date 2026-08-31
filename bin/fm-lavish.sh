@@ -105,6 +105,9 @@
 #   - No free port in the window: bin/fm-service-port.sh refuses. There is no
 #     silent loopback downgrade, because that would reproduce the original bug
 #     somewhere new.
+#   - The walk failed on an address this run never established as bindable: a
+#     different state from the one above, and it retries on loopback with the
+#     proxy published rather than refusing.
 #
 # docs/lavish-access.md's "Honest degradation" list is the one owner of the
 # exact sentences; this list names the branches they cover.
@@ -353,10 +356,18 @@ resolve_link_identity
 # distinguishes our server from a same-version one belonging to another UNIX
 # account on this machine.
 
-port_is_ours() {
+port_is_ours_on() {
   command -v node >/dev/null 2>&1 || return 1
   [ -f "$PROBE" ] || return 1
-  node "$PROBE" http "http://$ADDR:$1/health" "$CLAIM_TOKEN" >/dev/null 2>&1
+  node "$PROBE" http "http://$1:$2/health" "$CLAIM_TOKEN" >/dev/null 2>&1
+}
+
+port_is_ours() {
+  local a
+  for a in $(own_addresses); do
+    port_is_ours_on "$a" "$1" && return 0
+  done
+  return 1
 }
 
 # Deliberately without the token: it separates "a board is serving here and it
@@ -370,22 +381,16 @@ port_answers_on() {
   node "$PROBE" http "http://$1:$2/health" >/dev/null 2>&1
 }
 
-port_answers() {
-  port_answers_on "$ADDR" "$1"
-}
-
 # The other half of the ownership rule: a port nothing is serving on may be
-# withdrawn by anyone, so this has to be sure of BOTH listeners. A publication
-# always forwards to loopback, while this run may have resolved the tailnet
-# address to bind, and after a node regains kernel-mode networking those are
-# different places. Asking only the bind address would call a co-hosted vessel's
-# live proxied board silent and take it off the tailnet.
+# withdrawn by anyone, so this has to be sure of EVERY listener a board of ours
+# could be on, for the same reason port_is_ours asks all of them. Asking only
+# the bind address this run resolved would call a co-hosted vessel's live
+# proxied board silent and take it off the tailnet.
 nothing_serves_on() {
-  port_answers "$1" && return 1
-  # On every vessel this mechanism exists for, ADDR already IS loopback, so the
-  # second probe would spawn a node process to ask a question just answered.
-  [ "$ADDR" = 127.0.0.1 ] && return 0
-  port_answers_on 127.0.0.1 "$1" && return 1
+  local a
+  for a in $(own_addresses); do
+    port_answers_on "$a" "$1" && return 1
+  done
   return 0
 }
 
@@ -395,6 +400,32 @@ recorded_port() {
   recorded=$(sed -n 's/^port=\([0-9][0-9]*\)$/\1/p' "$record" | head -1)
   [ -n "$recorded" ] || return 1
   printf '%s\n' "$recorded"
+}
+
+recorded_addr() {
+  local record="$STATE/service-port.lavish" recorded=""
+  [ -r "$record" ] || return 1
+  recorded=$(sed -n 's/^addr=\(.*\)$/\1/p' "$record" | head -1)
+  [ -n "$recorded" ] || return 1
+  printf '%s\n' "$recorded"
+}
+
+# Every address a board of THIS vessel could be listening on, most authoritative
+# first. The record leads because it names the address the allocation actually
+# resolved, and the --check pre-read cannot answer that: whether a proxy will
+# publish is unanswerable until a port exists, so a run that degraded to
+# loopback after the pre-read reported the tailnet address is bound there and
+# nowhere else. Loopback is always asked last because a published proxy forwards
+# there whatever this run resolved for itself. The claim token is what keeps
+# asking widely safe: a neighbour's board on any of these never carries it.
+own_addresses() {
+  local seen="" a
+  for a in "$(recorded_addr || true)" "$ADDR" 127.0.0.1; do
+    [ -n "$a" ] || continue
+    case " $seen " in *" $a "*) continue ;; esac
+    seen="$seen $a"
+    printf '%s\n' "$a"
+  done
 }
 
 owned_port() {
