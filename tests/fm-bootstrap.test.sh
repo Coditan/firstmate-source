@@ -1104,21 +1104,23 @@ SH
   assert_not_contains "$out" "LAVISH_ACCESS:" \
     "a host with no tailnet is honestly limited, not regressed, so it stays silent"
 
-  # The vessel this whole mechanism exists for: it HAS a tailnet address it can
-  # neither bind nor publish onto, so --check answers tailnet-proxied while the
-  # allocation that opened these boards correctly degraded to a loopback link.
-  # Deciding from the pre-read fires a notice on every single session start whose
-  # only remedy, reopening the board, re-degrades and re-emits the same link.
+  # The case that proves the notice decides from the RECORD and not from the
+  # pre-read: the pre-read here claims MORE reach than the allocation that
+  # actually opened these boards established. Deciding from it would fire a
+  # notice on every single session start whose only remedy, reopening the board,
+  # re-emits the same link. The guard below is what keeps this case honest -
+  # once the pre-read stops claiming the flattering answer, this shape proves
+  # nothing and must be rebuilt rather than left standing as if it did.
   record_as loopback
   preread=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
-    HOME="$case_dir/fakehome" FM_FAKE_TAILNET=userspace \
+    HOME="$case_dir/fakehome" FM_FAKE_TAILNET=on \
     "$ROOT/bin/fm-service-port.sh" lavish --check 2>/dev/null \
     | sed -n 's/^reachability=\(.*\)$/\1/p' | head -1)
-  [ "$preread" = untested ] \
-    || fail "this case only means anything while the pre-read still disagrees with the record, got '$preread'"
-  out=$(run_case userspace)
+  [ "$preread" = tailnet ] \
+    || fail "this case only discriminates while the pre-read claims more reach than the record, got '$preread'"
+  out=$(run_case on)
   assert_not_contains "$out" "LAVISH_ACCESS:" \
-    "a board that correctly degraded to loopback is not a stale link, and cannot be reopened into a better one"
+    "a board that correctly degraded to loopback is not a stale link, however reachable the pre-read says the host is"
 
   record_as tailnet
 

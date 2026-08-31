@@ -617,8 +617,19 @@ if [ "$NEEDS_PORT" -eq 1 ]; then
       ;;
     untested)
       # Neither reach nor its absence has been established, and saying either
-      # would be the same unbacked assertion in opposite directions.
-      note "nothing has established whether this vessel is reachable off this machine (${REASON:-reason unavailable}) - this board certainly opens here, and the next open settles the rest."
+      # would be the same unbacked assertion in opposite directions. Which of
+      # the two sentences applies turns on whether this node's own identity was
+      # readable at all, because that decides whether a later run can settle
+      # anything: a vessel whose address IS known and merely has no route yet
+      # gets one from the next open, which publishes; a vessel whose tailscale
+      # could not be read returns the same non-answer every time, so promising
+      # that a further open resolves it would be the false-concrete-diagnosis
+      # class the reason lines exist to avoid.
+      if [ -n "$TAILADDR" ]; then
+        note "nothing has established whether this vessel is reachable off this machine (${REASON:-reason unavailable}) - this board certainly opens here, and the next open settles the rest."
+      else
+        note "nothing here could read whether this vessel has any reach off this machine (${REASON:-reason unavailable}) - this board certainly opens here, and nothing more can be settled until that can be read."
+      fi
       ;;
     *)
       # A vessel that HAS a tailnet address it can neither bind nor publish is

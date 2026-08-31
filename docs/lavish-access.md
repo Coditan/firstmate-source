@@ -103,8 +103,12 @@ The rule is that no URL is emitted implying reach the vessel has not established
   The board still opens locally and is never presented as reachable.
 - **The tailnet name does not resolve to the bound address** - the link falls back to the address and the reason says so, rather than writing an unchecked name into the captain's link.
 - **The tailnet name could not be checked at all**, because `node` or the probe is unavailable - the link falls back to the address and the reason says *that*, since reporting a resolution failure that was never attempted is a concrete diagnosis that happens to be untrue.
-- **Nothing established either way** - `reachability=untested`, on a vessel whose first port-claiming run neither published a route nor found one, and the wrapper prints `nothing has established whether this vessel is reachable off this machine (<reason>) - this board certainly opens here, and the next open settles the rest.`
-  That is deliberately not either loopback sentence: an untested vessel has not been shown unreachable.
+- **Nothing established either way** - `reachability=untested`, which two different runs produce, and the wrapper says a different sentence for each because only one of them can be settled by trying again.
+  On a vessel whose first port-claiming run neither published a route nor found one, it prints `nothing has established whether this vessel is reachable off this machine (<reason>) - this board certainly opens here, and the next open settles the rest.`
+  That next open passes `--serving`, so it attempts a publish and resolves the question either way.
+  On a host whose `tailscale status` could not be READ at all, because `jq` is absent or tailscaled is not answering, it prints `nothing here could read whether this vessel has any reach off this machine (<reason>) - this board certainly opens here, and nothing more can be settled until that can be read.`
+  Every later run on that host returns the same non-answer, so the first sentence's closing promise would be untrue there; `bin/fm-service-port.sh`'s header owns which run resolves which value.
+  Neither is either loopback sentence: an untested vessel has not been shown unreachable.
 - **The link host does not answer after the board opens** - the wrapper names the address form that does work.
 - **Every candidate port is taken** - `bin/fm-service-port.sh` exits non-zero with one plain sentence and no board is opened.
   There is deliberately no silent loopback downgrade here, because that would reproduce the original bug somewhere new.
