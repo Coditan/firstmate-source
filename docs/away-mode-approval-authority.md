@@ -65,7 +65,7 @@ This is what landed.
 This was rejected.
 `yolo` off is the captain's own per-project statement that he owns merges there.
 Reading (b) would let a decision he made in one place be reversed by him stepping away from his desk, which is the class of silent widening an unattended agent must never perform.
-It would also create a fourth source of merge authority alongside `yolo` and his explicit word, sitting in the away-mode stub rather than in section 7 where the merge contract lives.
+It would also create a third source of merge authority alongside `yolo` and his explicit word, sitting in the away-mode stub rather than in section 7 where the merge contract lives.
 
 If (b) is what he meant, the change belongs in section 7's `yolo` contract and needs his word; it is not a wording choice, and nothing here forecloses it.
 The practical consequence of (a) is narrow: in a `yolo`-on home the driver merges green work while he is away, which is the case his ruling was about, and in a `yolo`-off home a merge waits, exactly as it waited when he was at his desk.
@@ -78,7 +78,7 @@ That framing was adopted in its structure and its limits: the list is split rath
 
 It was departed from in one respect.
 sc1 described the task as permitting away-mode merges, which points at a grant.
-Stating it as a grant is what would produce reading (b) and its fourth authority source, so the wording states orthogonality instead: away mode neither adds nor withdraws, and section 7 remains the only place a merge authority is created.
+Stating it as a grant is what would produce reading (b) and its third authority source, so the wording states orthogonality instead: away mode neither adds nor withdraws, and section 7 remains the only place a merge authority is created.
 That resolves the contradiction with strictly less new authority than a grant would, and it keeps the merge contract in one file.
 
 ## What deliberately was not added
