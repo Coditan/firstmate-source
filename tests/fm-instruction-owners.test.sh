@@ -611,6 +611,43 @@ test_afk_skill_keeps_one_merge_authority_owner() {
   pass "the afk skill defers to the same owner and its record is reachable where it belongs"
 }
 
+# The record's whole purpose is explaining why precisely THAT wording landed, so
+# it quotes the stub bullets verbatim - and a verbatim copy of always-loaded
+# safety material is a copy that drifts. These quotes already needed re-syncing
+# twice while this one change was being written, which is the case for asserting
+# the agreement rather than remembering it.
+#
+# Neither side of the comparison is written down here: the expected text is read
+# from AGENTS.md and the actual text from the record. Hard-coding the bullets in
+# this file would be a third copy, and the drift this test exists to catch one
+# file further along.
+test_record_quotes_the_stub_verbatim() {
+  local stub_bullets quoted count line
+  stub_bullets=$(awk '/^### Away-mode stub/{f=1} f && /^### Stuck-worker trigger/{exit} f' "$AGENTS" | grep '^- ')
+  [ -n "$stub_bullets" ] || fail "AGENTS.md away-mode stub has no bullets to quote"
+
+  # The record quotes the replacement bullets between two of its own prose
+  # anchors. The commentary bullets after the second anchor discuss the wording
+  # rather than reproduce it, so they are deliberately outside the comparison.
+  quoted=$(awk '/^Three bullets replace the one:/{f=1;next} f && /^Four properties this wording is holding/{exit} f && /^- /' "$AWAY_RECORD")
+  [ -n "$quoted" ] || fail "the record no longer quotes the away-mode stub bullets, or its anchors moved"
+
+  count=0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    count=$((count + 1))
+    printf '%s\n' "$stub_bullets" | grep -Fxq -- "$line" \
+      || fail "the record quotes an away-mode stub bullet AGENTS.md no longer carries byte for byte:"$'\n'"$line"
+  done <<<"$quoted"
+
+  # Presence alone would pass vacuously if a bullet were reworded in AGENTS.md
+  # and simply dropped from the record, so the count is held against the
+  # record's own sentence introducing the block.
+  [ "$count" -eq 3 ] \
+    || fail "the record says three bullets replace the one but quotes $count"
+  pass "the record quotes the away-mode stub bullets byte for byte"
+}
+
 test_new_skill_metadata_and_triggers
 test_every_skill_declares_a_load_trigger
 test_domain_modeling_owner_is_triggered_and_attributed
@@ -627,4 +664,5 @@ test_compressed_agents_owner_map
 test_compressed_agents_retains_authority_and_supervision_safety
 test_away_mode_neither_widens_nor_withdraws_authority
 test_afk_skill_keeps_one_merge_authority_owner
+test_record_quotes_the_stub_verbatim
 test_agents_md_tells_a_worker_it_is_not_addressed

@@ -53,6 +53,12 @@ Four properties this wording is holding, deliberately:
   The condition is therefore the grammatical subject of its own bullet and names both items it governs, and the absolute three sit in a separate bullet that no conditional clause can reach.
   A reader never has to decide by proximity which items a qualifier covers.
 
+## What the orthogonality bullet does not claim
+
+The first bullet compares the captain present against the captain away, and it is not a claim about the third state, where his absence is established and away mode is off.
+There firstmate may hold an authority autonomously that turning away mode on does withdraw, and the known case is the context-ceiling reset, owned by `AGENTS.md` section 8's wake-handling list (line 309) and by `docs/context-reset.md` and deliberately not restated here.
+That precision belongs in this note rather than in the stub because nothing loads this file at runtime, while every line of `AGENTS.md` is paid for by every session of every fleet member.
+
 ## The reading that was rejected, and why
 
 The ruling admits two readings.
