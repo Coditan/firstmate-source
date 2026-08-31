@@ -109,6 +109,16 @@
 #                       names, and wake delivery stays outside the harness
 #                       entirely as a supervised service (docs/wake-delivery.md).
 #
+#   9. timing        - one line naming what this whole run cost, and the path of
+#                       state/session-start-timing.log, where the per-step
+#                       breakdown for this run and the previous ones was appended.
+#                       A vessel had no way to see its own startup getting slower
+#                       as its in-flight count grew, and reconstructing it from
+#                       file timestamps afterwards is blind to every step that
+#                       touches no file. This is that reading, kept to one line so
+#                       the digest does not gain another thing to read at every
+#                       start.
+#
 # These numbers are the section markers in the body below, and are kept in step
 # with them on purpose: a header that renumbers independently of the code it
 # describes is a map of a script that no longer exists.
@@ -184,6 +194,67 @@ SUBRULE='-----------------------------------------------------------------------
 
 section() { printf '\n%s\n%s\n%s\n' "$RULE" "$1" "$RULE"; }
 subsection() { printf '\n%s\n%s\n' "$1" "$SUBRULE"; }
+
+# --- per-step timing --------------------------------------------------------
+# A VESSEL COULD NOT READ ITS OWN STARTUP COST. Nothing here recorded a duration
+# anywhere, so no seat could tell whether its own session start was getting slower
+# as its in-flight count grew, and the one vessel that asked had to reconstruct the
+# shape afterwards from file timestamps - which is blind to exactly the steps that
+# touch no file, and those are several of the expensive ones.
+#
+# So every step is timed, and the breakdown is APPENDED to a log rather than
+# printed. The digest gains one line naming the total and where the breakdown is;
+# it does not gain another thing to read at every start. The cost is two clock
+# reads per step, both shell builtins where the shell has EPOCHREALTIME.
+TIMING_LOG="$STATE/session-start-timing.log"
+TIMING_KEEP=${FM_SESSION_START_TIMING_KEEP:-200}
+case "$TIMING_KEEP" in ''|*[!0-9]*|0) TIMING_KEEP=200 ;; esac
+TIMING_MARKS=""
+
+now_ms() {
+  if [ -n "${EPOCHREALTIME:-}" ]; then
+    local micros=${EPOCHREALTIME/[.,]/}
+    printf '%s' "$((10#$micros / 1000))"
+  else
+    printf '%s' "$(( $(date +%s%N 2>/dev/null || printf '0') / 1000000 ))"
+  fi
+}
+
+TIMING_T0=$(now_ms)
+TIMING_LAST=$TIMING_T0
+
+timing_mark() {  # <step-name>: record the elapsed time since the previous mark
+  local now
+  now=$(now_ms)
+  TIMING_MARKS="$TIMING_MARKS${TIMING_MARKS:+ }$1=$((now - TIMING_LAST))ms"
+  TIMING_LAST=$now
+}
+
+# Appended, then trimmed to the last FM_SESSION_START_TIMING_KEEP runs, so the one
+# thing this adds to a home cannot grow without bound. Every step here is
+# best-effort: a startup digest must never fail because it could not write a
+# timing line.
+timing_report() {
+  local total tmp
+  timing_mark closing
+  total=$(( $(now_ms) - TIMING_T0 ))
+  if mkdir -p "$STATE" 2>/dev/null \
+    && printf '%s total=%sms %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$total" "$TIMING_MARKS" \
+         >> "$TIMING_LOG" 2>/dev/null; then
+    if tmp=$(mktemp "$TIMING_LOG.XXXXXX" 2>/dev/null); then
+      if tail -n "$TIMING_KEEP" "$TIMING_LOG" > "$tmp" 2>/dev/null; then
+        mv -f "$tmp" "$TIMING_LOG" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+      else
+        rm -f "$tmp" 2>/dev/null
+      fi
+    fi
+    printf 'SESSION START took %sms; per-step breakdown for this run and the previous ones: %s\n' \
+      "$total" "$TIMING_LOG"
+  else
+    printf 'SESSION START took %sms; the per-step breakdown could not be written to %s\n' \
+      "$total" "$TIMING_LOG"
+  fi
+}
 
 # print_file_or_absent <path> <label>: full contents under a labeled
 # subsection, or an explicit ABSENT marker. Absence is semantically
@@ -333,6 +404,8 @@ case "$VESSEL_ARM" in
 esac
 printf 'VESSEL: %s (%s)\n' "${VESSEL_LABEL:-unresolved-home}" "$VESSEL_SURFACE"
 
+timing_mark vessel-identity
+
 # --- 1. lock -----------------------------------------------------------
 subsection "LOCK"
 LOCK_OUT=$("$SCRIPT_DIR/fm-lock.sh" 2>&1)
@@ -357,6 +430,8 @@ if [ "$LOCK_RC" -ne 0 ]; then
   }
 fi
 
+timing_mark lock
+
 # --- 2. bootstrap --------------------------------------------------------
 subsection "BOOTSTRAP"
 if [ "$READ_ONLY" -eq 1 ]; then
@@ -369,6 +444,8 @@ if [ -n "$BOOT_OUT" ]; then
 else
   printf '(silent - all good)\n'
 fi
+
+timing_mark bootstrap
 
 # --- 2b. wake delivery ------------------------------------------------------
 # The listener that turns a queued wake into a model turn runs outside this
@@ -390,6 +467,8 @@ else
   printf '%s\n' "$PUBLISH_OUT"
   "$SCRIPT_DIR/fm-delivery-service.sh" status || true
 fi
+
+timing_mark wake-delivery
 
 # --- 3. wake-drain -------------------------------------------------------
 # Drained records are this turn's first work queue (AGENTS.md section 8); the
@@ -415,6 +494,8 @@ else
   fi
 fi
 
+timing_mark wake-queue
+
 # --- 4. direct Telegram receiver ---------------------------------------------
 TELEGRAM_PRESENT=0
 [ -f "$CONFIG/telegram.env" ] && TELEGRAM_PRESENT=1
@@ -429,6 +510,8 @@ elif [ ! -x "$CONFIG/fm-tg-recv.sh" ]; then
 else
   printf '%s\n' "TELEGRAM_RECEIVER: active - run bin/fm-tg-recv-arm.sh as its own tracked background task, never shell &; it starts or attaches to this home's receiver"
 fi
+
+timing_mark telegram
 
 # --- 5. supervision operating instructions ----------------------------------
 AFK_PRESENT=0
@@ -453,6 +536,8 @@ fi
   --afk "$AFK_PRESENT" \
   --x-mode "$X_MODE_PRESENT"
 
+timing_mark supervision
+
 # --- 6. context digest -----------------------------------------------------
 section "CONTEXT"
 # The active role overlay leads the context digest because it amends AGENTS.md
@@ -473,6 +558,8 @@ print_file_or_absent "$DATA/secondmates.md" "data/secondmates.md"
 print_file_or_absent "$DATA/captain.md" "data/captain.md"
 print_file_or_absent "$DATA/captain-shared.md" "data/captain-shared.md (shared, main-authoritative, read-only in secondmate homes)"
 print_file_or_absent "$DATA/learnings.md" "data/learnings.md"
+
+timing_mark context
 
 # --- 7. fleet-state digest ---------------------------------------------
 section "FLEET STATE"
@@ -606,6 +693,8 @@ else
   printf 'absent\n'
 fi
 
+timing_mark fleet-state
+
 # --- 8. closing reminder -----------------------------------------------
 section "NEXT STEP"
 if [ "$READ_ONLY" -eq 1 ]; then
@@ -659,5 +748,7 @@ Re-read a file only if this digest flagged it ABSENT (then
 rebuild or create it per AGENTS.md), its contents looked unparseable/corrupt,
 or an individual full status log is needed for older wake-event history.
 EOF
+
+timing_report
 
 exit 0

@@ -1012,6 +1012,191 @@ EOF
   pass "an answer pointer that no longer resolves reports instead of settling"
 }
 
+# THE REWRITE THIS DEFENDS. The digest re-check used to walk the settled records
+# one at a time, spending about four jq launches per record: on the main home on
+# 2026-08-31 that was 933 launches and 13.6 of the command's 14.1 seconds, against
+# 0.5 for everything else the script does. It is now one pass - the texts are handed
+# over NUL-separated and hashed by a single sha256sum over the set.
+#
+# The hazard a single pass introduces that a per-record loop could not have is
+# MISALIGNMENT: the recomputed digests come back as a list, and pairing entry N with
+# record N is an assumption rather than something each iteration carried with it. So
+# this checks a mixed set where SOME records are altered and the rest are not, and
+# insists every verdict lands on the right record - not merely that the right
+# NUMBER of records read as altered.
+test_the_single_pass_recheck_puts_every_verdict_on_the_right_record() {
+  local home json audit rc=0 i
+  home=$(make_home single-pass-alignment)
+  local ground=""
+  for i in 1 2 3 4 5 6; do
+    printf 'answer %s line one\nanswer %s line two\n' "$i" "$i" > "$home/d$i.txt"
+    # Each of these is a genuinely distinct question, which is exactly what the
+    # intake gate makes the filer say out loud rather than infer from wording.
+    # shellcheck disable=SC2086
+    run_hold "$home" record "probe$i" "key$i" --door chat --decision-file "$home/d$i.txt" \
+      --title "Question $i" --repo firstmate $ground >/dev/null 2>&1 \
+      || fail "recording decision $i failed"
+    ground="--new-ground"
+  done
+
+  # Alter the second and the fifth only, leaving four intact around them, so a
+  # verdict that slid by one record shows up as a wrong id rather than a wrong count.
+  sed -i.bak 's/^  answer 2 line two$/  answer 2 line two EDITED/' "$home/data/backlog.md"
+  sed -i.bak 's/^  answer 5 line one$/  answer 5 line one EDITED/' "$home/data/backlog.md"
+
+  audit=$(run_ledger "$home" --audit) || rc=$?
+  [ "$rc" -eq 1 ] || fail "two altered records must make the audit report findings"
+  assert_contains "$audit" "altered-record probe2-decision-key2" \
+    "the altered second record must be named"
+  assert_contains "$audit" "altered-record probe5-decision-key5" \
+    "the altered fifth record must be named"
+  assert_not_contains "$audit" "altered-record probe1-decision-key1" \
+    "an untouched record next to an altered one must not inherit its verdict"
+  assert_not_contains "$audit" "altered-record probe3-decision-key3" \
+    "an untouched record next to an altered one must not inherit its verdict"
+  assert_not_contains "$audit" "altered-record probe4-decision-key4" \
+    "an untouched record must not be reported as altered"
+  assert_not_contains "$audit" "altered-record probe6-decision-key6" \
+    "an untouched record must not be reported as altered"
+
+  json=$(run_ledger "$home" --json --all) || fail "the ledger could not read the home"
+  printf '%s' "$json" | jq -e '
+    (.settled | map({key: .id, value: .verbatim}) | from_entries) as $v
+    | ($v["probe2-decision-key2"] == false)
+      and ($v["probe5-decision-key5"] == false)
+      and ($v["probe1-decision-key1"] == true)
+      and ($v["probe3-decision-key3"] == true)
+      and ($v["probe4-decision-key4"] == true)
+      and ($v["probe6-decision-key6"] == true)' >/dev/null \
+    || fail "each record's verbatim verdict must be its own: $json"
+
+  pass "the single-pass digest re-check puts every verdict on the record it belongs to"
+}
+
+# The texts are handed to the hasher NUL-separated because a decision legally
+# contains newlines, tabs, quotes, and genuinely blank lines - every delimiter
+# except the one byte markdown cannot hold. A record whose text is awkward in each
+# of those ways must still verify, or the separator is silently eating content and
+# every such decision would read as altered.
+test_awkward_decision_text_still_verifies_through_the_single_pass() {
+  local home json
+  home=$(make_home awkward-text)
+  printf 'first line\n\nafter a blank line\n\twith a leading tab\nand "quotes" and a backslash \\ too\n' \
+    > "$home/awkward.txt"
+  run_hold "$home" record shapes payload --door chat --decision-file "$home/awkward.txt" \
+    --title "Text with every delimiter that is not NUL" --repo firstmate >/dev/null 2>&1 \
+    || fail "recording the awkward decision failed"
+  printf 'plain\n' > "$home/plain.txt"
+  run_hold "$home" record shapes2 plain --door chat --decision-file "$home/plain.txt" \
+    --title "An ordinary neighbour" --repo firstmate --new-ground >/dev/null 2>&1 \
+    || fail "recording the neighbouring decision failed"
+
+  json=$(run_ledger "$home" --json --all) || fail "the ledger could not read the home"
+  printf '%s' "$json" | jq -e '
+    (.settled | map({key: .id, value: .verbatim}) | from_entries) as $v
+    | ($v["shapes-decision-payload"] == true) and ($v["shapes2-decision-plain"] == true)' >/dev/null \
+    || fail "a decision containing blank lines, tabs, quotes and a backslash must still verify: $json"
+  printf '%s' "$json" | jq -e '
+    [.settled[] | select(.id == "shapes-decision-payload") | .decision]
+    | first | contains("after a blank line") and contains("\"quotes\"")' >/dev/null \
+    || fail "the awkward text must come back whole, not truncated at a delimiter: $json"
+
+  pass "a decision holding blank lines, tabs, quotes and backslashes still verifies"
+}
+
+# A READER THAT CANNOT SIZE ITS OWN INPUT MUST NOT REPORT ON IT. The single pass
+# recomputes the digests as a set, so a set that does not line up one-to-one with
+# the records means some record was not re-hashed on this read - and this command's
+# entire claim is that every settled record it shows WAS. It refuses rather than
+# letting the unmatched ones quietly read as altered, or worse as verified.
+test_a_recheck_that_cannot_size_its_input_refuses_instead_of_reporting() {
+  local home out rc=0
+  home=$(make_home unsizable-recheck)
+  printf 'a decision\n' > "$home/d.txt"
+  run_hold "$home" record probe key --door chat --decision-file "$home/d.txt" \
+    --title "A question" --repo firstmate >/dev/null 2>&1 || fail "recording failed"
+
+  # A jq that answers nothing is the shape a stubbed or broken one takes, and it
+  # used to leave the count empty and the walk silently skipped.
+  cat > "$home/fakebin/jq" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$home/fakebin/jq"
+  out=$(run_ledger "$home" --limit 5 2>&1) || rc=$?
+  rm -f "$home/fakebin/jq"
+  [ "$rc" -eq 2 ] || fail "an unreadable count must be an environment refusal, got exit $rc: $out"
+  assert_contains "$out" "refusing to report on records this read could not size" \
+    "the refusal must say why it will not report, not fall out as a shell error"
+  assert_not_contains "$out" "integer expression expected" \
+    "the refusal must be this script's own sentence, not a bash arithmetic complaint"
+
+  pass "a re-check that cannot size its own input refuses instead of reporting"
+}
+
+# ONE FULL READ PER SESSION START, NOT ONE PER CALLER. bin/fm-bootstrap.sh runs
+# --audit and bin/fm-session-start.sh runs --limit 5 seconds later over the same two
+# files; the second used to redo the whole walk to print five records.
+#
+# The reuse is only honest while its key holds, and this is the case that proves it:
+# a record edited BETWEEN the two calls must not come back carrying the verdict the
+# first call gave it. That is the exact failure a cache on a verification reader can
+# cause, and the whole reason the key is the content rather than a timestamp.
+test_a_reused_read_is_dropped_the_moment_the_records_change() {
+  local home first second rc=0
+  home=$(make_home reuse-key)
+  printf 'the first answer\n' > "$home/d.txt"
+  run_hold "$home" record probe key --door chat --decision-file "$home/d.txt" \
+    --title "A question" --repo firstmate >/dev/null 2>&1 || fail "recording failed"
+
+  first=$(run_ledger "$home" --json --all) || fail "the first read failed"
+  printf '%s' "$first" | jq -e '[.settled[] | select(.id == "probe-decision-key") | .verbatim] | first' \
+    >/dev/null || fail "the first read must verify the record: $first"
+  [ -f "$home/state/.decision-ledger-memo" ] \
+    || fail "a full read must leave the computed model where the next caller in this session start can reuse it"
+
+  # The second call inside the same session start reuses it - same bytes, same answer.
+  second=$(run_ledger "$home" --json --all) || fail "the reusing read failed"
+  [ "$second" = "$first" ] || fail "a reuse must return exactly what the walk returned"
+
+  # Now edit the stored decision, as a hand-edit between the two calls would. The
+  # key is the content, so the reuse must be dropped and the record must read as
+  # altered - never as the verified record the previous call saw.
+  sed -i.bak 's/^  the first answer$/  the second answer/' "$home/data/backlog.md"
+  local audit
+  audit=$(run_ledger "$home" --audit) || rc=$?
+  [ "$rc" -eq 1 ] || fail "an edit between two reads must be caught, not served from the previous read"
+  assert_contains "$audit" "altered-record probe-decision-key" \
+    "the record edited after the first read must report as altered on the next one"
+
+  pass "a reused read is dropped the moment the records it was taken from change"
+}
+
+# The reuse must be a cost decision and nothing else: turning it off must not change
+# a single byte of what a reader is shown.
+test_turning_the_reuse_off_changes_no_output() {
+  local home with without i
+  home=$(make_home reuse-neutral)
+  local ground=""
+  for i in 1 2 3; do
+    printf 'answer %s\n' "$i" > "$home/d$i.txt"
+    # shellcheck disable=SC2086
+    run_hold "$home" record "probe$i" "key$i" --door chat --decision-file "$home/d$i.txt" \
+      --title "Question $i" --repo firstmate $ground >/dev/null 2>&1 || fail "recording $i failed"
+    ground="--new-ground"
+  done
+  sed -i.bak 's/^  answer 2$/  answer 2 EDITED/' "$home/data/backlog.md"
+
+  run_ledger "$home" --json --all >/dev/null || true   # prime the reuse
+  with=$(run_ledger "$home" --json --all) || fail "the reusing read failed"
+  rm -f "$home/state/.decision-ledger-memo"
+  without=$(export FM_DECISION_LEDGER_NO_MEMO=1; run_ledger "$home" --json --all) \
+    || fail "the read with the reuse disabled failed"
+  [ "$with" = "$without" ] || fail "the reuse must be a cost decision, not an output one"
+
+  pass "turning the reuse off changes no byte of what a reader is shown"
+}
+
 test_settled_decision_survives_retention_into_the_archive
 test_open_count_labels_name_distinct_sets_without_changing_predicates
 test_a_second_question_cannot_be_filed_without_disposing_of_the_first
@@ -1035,3 +1220,8 @@ test_a_recovered_answer_disposes_a_record_no_other_verb_can_reach
 test_attesting_an_answer_cannot_reach_a_live_or_answered_or_unanswered_record
 test_attestation_binds_validation_and_digest_to_one_answer_row
 test_an_answer_pointer_that_no_longer_resolves_reports_again
+test_the_single_pass_recheck_puts_every_verdict_on_the_right_record
+test_awkward_decision_text_still_verifies_through_the_single_pass
+test_a_recheck_that_cannot_size_its_input_refuses_instead_of_reporting
+test_a_reused_read_is_dropped_the_moment_the_records_change
+test_turning_the_reuse_off_changes_no_output
