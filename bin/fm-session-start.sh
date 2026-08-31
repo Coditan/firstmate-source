@@ -827,21 +827,23 @@ This script never starts long-lived polls itself.
 EOF
 fi
 cat <<'EOF'
-The digest above is complete for this session start. Do NOT re-read
-data/projects.md, data/secondmates.md, data/captain.md,
-data/captain-shared.md, data/learnings.md,
-or state/*.meta now - they were just printed in full.
-Do NOT bulk-read data/backlog.md now either: the compact identity/metadata
-listing was just printed with a pointer for targeted full-body follow-up.
+This command emitted the complete session-start digest, but the receiving
+harness may have delivered only a preview. If you are reading its saved full
+output, do NOT re-read data/projects.md, data/secondmates.md, data/captain.md,
+data/captain-shared.md, data/learnings.md, or state/*.meta now - those files
+were printed in full there. Do NOT bulk-read data/backlog.md now either from
+the saved full output: its compact listing includes targeted full-body pointers.
 Do NOT bulk-read state/*.status now either: their bounded tails were just
-printed with full log paths for targeted follow-up when older wake-event
-history is actually needed. Re-reading everything defeats the entire point
-of this command.
+printed there with full log paths for targeted older-history follow-up.
+If you received only a preview, open the `Full output saved to` path named in
+the bounded priority section, or read any missing knowledge file directly
+before proceeding. Never treat the bounded subset as the complete files.
 The settled captain decisions printed above are answers he has ALREADY given.
 Treat them as decided. Do not re-ask a question they answer, and do not
 paraphrase one back to him as though it were still open; if one of them needs
 revisiting, say which answer you are reopening and why.
-Re-read a file only if this digest flagged it ABSENT (then
+After reading the saved full output, re-read a file only if that digest flagged
+it ABSENT (then
 rebuild or create it per AGENTS.md), its contents looked unparseable/corrupt,
 or an individual full status log is needed for older wake-event history.
 EOF

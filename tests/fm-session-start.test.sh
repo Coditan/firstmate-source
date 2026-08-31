@@ -435,6 +435,12 @@ EOF
     'the delivered head did not point to the receiving harness full-output path'
   assert_contains "$first_2048" 'LOCK, BOOTSTRAP, WAKE QUEUE, and SUPERVISION' \
     'the delivered head did not say where the operational sections remain reachable'
+  assert_not_contains "$out" 'The digest above is complete for this session start' \
+    'the closing guidance unconditionally claimed that the receiving harness delivered the complete digest'
+  assert_contains "$out" 'If you received only a preview, open the `Full output saved to` path' \
+    'the closing guidance did not tell a truncated session how to recover the missing digest'
+  assert_contains "$out" 'Never treat the bounded subset as the complete files.' \
+    'the closing guidance did not distinguish the bounded subset from the complete knowledge files'
 
   pass "captain/learnings heads begin at byte offsets $captain_offset/$learnings_offset and both survive 2048 bytes"
 }
@@ -450,7 +456,10 @@ EOF
 
   printf 'CAPTAIN-LONG-FIRST-LINE:' > "$home/data/captain.md"
   printf '%0487d' 0 >> "$home/data/captain.md"
-  printf 'é%0100d\n' 0 >> "$home/data/captain.md"
+  # These files use precomposed ö, ü, and ß, so a whole UTF-8 code point is
+  # the deliberate and sufficient boundary here. Combining marks or emoji would
+  # require grapheme-cluster boundaries; that broader unit is out of scope.
+  printf 'öüß%0100d\n' 0 >> "$home/data/captain.md"
   printf 'LEARNINGS-LONG-FIRST-LINE:' > "$home/data/learnings.md"
   printf '%0600d\n' 0 >> "$home/data/learnings.md"
 
