@@ -188,6 +188,76 @@ assert_valid_scan_marker() {
   [ "$(awk 'END { print NR + 0 }' "$marker")" -eq 1 ] || fail "migration scan marker had extra records"
 }
 
+# Registration is driven by hand at a terminal, so what it PRINTS is part of its
+# contract: a help request must not be read as a check id, and a refusal must name
+# which condition it hit rather than leaving the caller to guess the remedy.
+# FM_STATE_OVERRIDE outranks FM_HOME in the script and a firstmate session may
+# export it, so every invocation here pins the state directory explicitly.
+register_here() {
+  local home=$1
+  shift
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$home/state" "$REGISTER" "$@"
+}
+
+test_custom_registration_cli_explains_its_boundary() {
+  local home state out short rc missing_out mode_out
+
+  home="$TMP_ROOT/register-help-home"
+  out=$(register_here "$home" --help) || fail "custom-check --help was refused"
+  short=$(register_here "$home" -h) || fail "custom-check -h was refused"
+
+  [ "$out" = "$short" ] || fail "custom-check -h and --help rendered different contracts"
+  assert_contains "$out" 'state/<id>.check.sh' \
+    "custom-check help did not name the pre-existing check path"
+  assert_contains "$out" 'mode 0700' \
+    "custom-check help did not name the private executable mode"
+  assert_contains "$out" 'neither creates the check nor gives it a wall-clock cadence' \
+    "custom-check help blurred registration with creation or scheduling"
+  assert_contains "$out" 'FM_CHECK_INTERVAL' \
+    "custom-check help did not name the sweep interval the watcher actually uses"
+  [ ! -e "$home" ] || fail "custom-check help created operational home state"
+
+  # Why help needs its own guard: every spelling of it is path-safe, so an
+  # unguarded caller asking for help is read as a check named "--help".
+  fm_pr_task_id_valid --help \
+    || fail "test premise gone: --help is no longer accepted as a task id"
+
+  home="$TMP_ROOT/register-diagnostics-home"
+  state="$home/state"
+  mkdir -p "$state"
+
+  if missing_out=$(register_here "$home" missing 2>&1); then
+    fail "custom-check registration accepted a missing script"
+  else
+    rc=$?
+  fi
+  [ "$rc" -eq 1 ] || fail "missing custom-check script exited $rc instead of 1"
+  [ "$missing_out" = 'error: custom check script does not exist: state/missing.check.sh' ] \
+    || fail "missing custom-check script did not identify what was absent: $missing_out"
+  [ ! -e "$state/missing.check-trust" ] \
+    || fail "missing custom-check script received a trust record"
+
+  printf '#!/usr/bin/env bash\nprintf "finding\\n"\n' > "$state/wrong-mode.check.sh"
+  chmod 0755 "$state/wrong-mode.check.sh"
+  if mode_out=$(register_here "$home" wrong-mode 2>&1); then
+    fail "custom-check registration accepted mode 0755"
+  else
+    rc=$?
+  fi
+  [ "$rc" -eq 1 ] || fail "wrong-mode custom-check script exited $rc instead of 1"
+  [ "$mode_out" = 'error: custom check script must have mode 0700: state/wrong-mode.check.sh (found 0755)' ] \
+    || fail "wrong-mode custom-check script did not identify the required and found modes: $mode_out"
+  [ ! -e "$state/wrong-mode.check-trust" ] \
+    || fail "wrong-mode custom-check script received a trust record"
+
+  # The defect itself: these two remedies are opposite, so one shared line for
+  # both is the bug, however precise either line is on its own.
+  [ "$missing_out" != "$mode_out" ] \
+    || fail "missing and wrong-mode custom-check scripts were refused indistinguishably"
+
+  pass "custom-check CLI distinguishes help, missing scripts, and wrong modes"
+}
+
 LINK_KIND=
 LINK_TARGET=
 LINK_CONTENT=
@@ -3071,6 +3141,7 @@ test_forgejo_pull_request_identity() {
 }
 
 test_parser_matrix
+test_custom_registration_cli_explains_its_boundary
 test_gitlab_merge_watch
 test_forgejo_pull_request_identity
 test_invalid_entrypoints_have_zero_side_effects
