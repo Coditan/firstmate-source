@@ -21,11 +21,30 @@ install_operator_guard() {
   local dir=$1 file
   mkdir -p "$dir/bin"
   for file in fm-guard.sh fm-wake-lib.sh fm-journal-lib.sh fm-delivery-lib.sh \
-    fm-harness-pid-lib.sh fm-tangle-lib.sh fm-supervision-lib.sh fm-primary-scope-lib.sh; do
+    fm-harness-pid-lib.sh fm-tangle-lib.sh fm-supervision-lib.sh fm-primary-scope-lib.sh \
+    fm-supervision-instructions.sh fm-harness.sh fm-delivery-service.sh \
+    fm-service-path-lib.sh fm-axi-path-lib.sh; do
     cp "$ROOT/bin/$file" "$dir/bin/$file"
   done
-  chmod +x "$dir/bin/fm-guard.sh"
+  mkdir -p "$dir/docs"
+  cp -R "$ROOT/docs/supervision-protocols" "$dir/docs/supervision-protocols"
+  chmod +x "$dir/bin/fm-guard.sh" "$dir/bin/fm-supervision-instructions.sh" "$dir/bin/fm-harness.sh"
   printf '%s\n' "$dir/bin/fm-guard.sh"
+}
+
+# A live, identity-matched watcher for the fixture home. The recorded path must
+# be the fm-watch.sh path the guard under test will compute from its OWN
+# location, because fm_watcher_lock_matches_pid compares the two as strings.
+record_live_watcher() {
+  local dir=$1 pid=$2 watch_path=$3 state identity
+  state="$dir/state"
+  identity=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$pid")
+  mkdir -p "$state/.watch.lock"
+  printf '%s\n' "$pid" > "$state/.watch.lock/pid"
+  printf '%s\n' "$dir" > "$state/.watch.lock/fm-home"
+  printf '%s\n' "$watch_path" > "$state/.watch.lock/watcher-path"
+  printf '%s\n' "$identity" > "$state/.watch.lock/pid-identity"
+  touch "$state/.last-watcher-beat"
 }
 
 mark_pr_check_migration_complete() {
@@ -159,13 +178,28 @@ test_guard_warnings() {
   queue_line=$(grep -n 'queued wakes pending - drain them' "$err" | head -1 | cut -d: -f1)
   [ "$banner_line" -lt "$queue_line" ] || fail "queued-wakes warning printed before the no-watcher banner"
 
+  # X-mode cadence is the wake-delivery owner's, so the only guard line that can
+  # ever carry it is the generated DELIVERY repair - and only the session that
+  # operates this home is handed that line at all. The shape is therefore a
+  # healthy daemon, a down delivery listener, and x-mode set, which is the one
+  # state where fm-supervision-instructions.sh actually runs with --x-mode 1.
+  # The positive assertion keeps the negative one from going vacuous: without it
+  # a suppressed repair line would satisfy the negative for the wrong reason.
   dir=$(make_case guard-xmode)
   state="$dir/state"
   err="$dir/guard.err"
   mkdir -p "$dir/config"
   printf 'project=x\n' > "$state/task.meta"
   : > "$dir/config/x-mode.env"
-  FM_ROOT_OVERRIDE="$dir" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=1 "$ROOT/bin/fm-guard.sh" 2> "$err" >/dev/null || fail "guard failed"
+  guard=$(install_operator_guard "$dir")
+  sleep 60 &
+  live=$!
+  record_live_watcher "$dir" "$live" "$dir/bin/fm-watch.sh"
+  CLAUDECODE=1 PI_CODING_AGENT='' GROK_AGENT='' FM_ROOT_OVERRIDE="$dir" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=300 "$guard" 2> "$err" >/dev/null || fail "guard failed"
+  kill "$live" 2>/dev/null || true
+  wait "$live" 2>/dev/null || true
+  grep -F 'repair it with bin/fm-delivery-service.sh restart' "$err" >/dev/null \
+    || fail "the session operating this home lost its generated delivery repair: $(cat "$err")"
   ! grep -F "source '$dir/config/x-mode.env' first" "$err" >/dev/null || fail "guard repair line still made the session own X-mode cadence"
 
   # (2) fresh watcher, empty queue -> silence.
@@ -199,20 +233,17 @@ test_guard_warnings() {
   state="$dir/state"
   err="$dir/guard.err"
   printf 'project=x\n' > "$state/task.meta"
+  guard=$(install_operator_guard "$dir")
   sleep 60 &
   live=$!
-  identity=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$live")
-  mkdir -p "$state/.watch.lock"
-  printf '%s\n' "$live" > "$state/.watch.lock/pid"
-  printf '%s\n' "$dir" > "$state/.watch.lock/fm-home"
-  printf '%s\n' "$ROOT/bin/fm-watch.sh" > "$state/.watch.lock/watcher-path"
-  printf '%s\n' "$identity" > "$state/.watch.lock/pid-identity"
-  touch "$state/.last-watcher-beat"
-  FM_ROOT_OVERRIDE="$dir" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=300 "$ROOT/bin/fm-guard.sh" 2> "$err" >/dev/null || fail "guard failed"
+  record_live_watcher "$dir" "$live" "$dir/bin/fm-watch.sh"
+  CLAUDECODE=1 PI_CODING_AGENT='' GROK_AGENT='' FM_ROOT_OVERRIDE="$dir" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=300 "$guard" 2> "$err" >/dev/null || fail "guard failed"
   kill "$live" 2>/dev/null || true
   wait "$live" 2>/dev/null || true
   grep -F 'WARNING: wake delivery listener down: no live identity-matched delivery listener' "$err" >/dev/null \
     || fail "guard did not name the down delivery listener with a healthy daemon: $(cat "$err")"
+  grep -F 'repair it with bin/fm-delivery-service.sh restart' "$err" >/dev/null \
+    || fail "the session operating this home was not handed the delivery repair: $(cat "$err")"
   ! grep -F 'WATCHER DAEMON DOWN' "$err" >/dev/null \
     || fail "guard printed the daemon-down banner despite a healthy watcher: $(cat "$err")"
 
