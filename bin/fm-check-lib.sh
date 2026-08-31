@@ -146,3 +146,15 @@ fm_check_arm_home_refusal() {  # <state dir> <FM_HOME>
     "$state" "$owner" "$real"
   return 1
 }
+
+# The whole refusal, for a caller that has nothing to add to it.
+#
+# Every arm path wants the same three steps - ask the predicate, print what it
+# said on stderr under the caller's own name, fail - so they live here beside
+# the predicate rather than in six copies that can drift apart.
+fm_check_arm_refuse() {  # <label> <state dir> <FM_HOME>
+  local label=$1 refusal
+  refusal=$(fm_check_arm_home_refusal "$2" "$3") && return 0
+  printf '%s: %s\n' "$label" "$refusal" >&2
+  return 1
+}

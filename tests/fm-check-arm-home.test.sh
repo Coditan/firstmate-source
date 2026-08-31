@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for the cross-home arm refusal: bin/fm-check-lib.sh's coherence guard,
 # the six `--arm` paths that call it, and bin/fm-check-register.sh as the
-# choke point every armed check has to pass through.
+# choke point every check that registers has to pass through.
 #
 # THE FAILURE THESE REPRODUCE, measured 2026-08-30
 #
@@ -50,6 +50,29 @@ set -u
 
 REGISTER="$ROOT/bin/fm-check-register.sh"
 
+# --- the stand-in GitHub reader ---------------------------------------------
+#
+# bin/fm-github-inbox.sh will not arm on a feed it could not read, so every case
+# in the table would otherwise need a live, authenticated gh-axi to reach the
+# guard at all - and this suite's family in bin/fm-test-run.sh promises it needs
+# nothing but this repository.
+#
+# It answers every request with a well-formed EMPTY feed. The response marker is
+# taken back out of the caller's own --jq program rather than hardcoded, so this
+# stays a reader of the envelope the script asks for and not a copy of a
+# constant; an empty payload needs neither jq nor base64.
+fm_test_tmproot SUITE_ROOT fm-check-arm-home-reader
+FAKE_GH="$SUITE_ROOT/fake-gh"
+cat >"$FAKE_GH" <<'EOF'
+#!/usr/bin/env bash
+set -u
+expr=${4:-}
+mark=${expr#*\"}
+mark=${mark%%\"*}
+printf 'api_response:\n  body: %s\n  truncated: false\n' "$mark"
+EOF
+chmod +x "$FAKE_GH" || fail "could not install the stand-in GitHub reader"
+
 # Every `--arm` path in bin/, as "<check id>|<script>|<args>". A script added to
 # this table is a script whose arm path must carry the guard; case (a) then
 # fails for it until it does.
@@ -80,6 +103,7 @@ run_arm() {  # <script> <arg string>, with ARM_HOME/ARM_STATE set by the caller
   read -r -a args <<<"$argstr"
   env FM_HOME="$ARM_HOME" FM_STATE_OVERRIDE="$ARM_STATE" \
     FM_CONFIG_OVERRIDE="$ARM_HOME/config" FM_DATA_OVERRIDE="$ARM_HOME/data" \
+    FM_GH_INBOX_GH="$FAKE_GH" \
     "$ROOT/bin/$script" "${args[@]}" 2>&1
 }
 
@@ -149,7 +173,8 @@ test_bootstraps_own_shape_is_never_refused() {
     status=0
     read -r -a flags <<<"$args"
     out=$(env -u FM_STATE_OVERRIDE -u FM_CONFIG_OVERRIDE -u FM_DATA_OVERRIDE \
-      FM_HOME="$home" "$ROOT/bin/$script" "${flags[@]}" 2>&1) || status=$?
+      FM_HOME="$home" FM_GH_INBOX_GH="$FAKE_GH" \
+      "$ROOT/bin/$script" "${flags[@]}" 2>&1) || status=$?
     [ "$status" -eq 0 ] \
       || fail "$id: arming with FM_HOME alone must succeed - that is bootstrap's own shape: $out"
     assert_present "$home/state/$id.check.sh" "$id: bootstrap's shape must write the check"
