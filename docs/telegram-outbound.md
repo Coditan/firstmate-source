@@ -1,7 +1,7 @@
 # Reaching the captain and registered correspondent on Telegram
 
 A firstmate home that has been given a Telegram channel can already hear the captain.
-`bin/fm-tg-recv-service.sh` owns the consent-gated receiver service, `bin/fm-tg-recv-arm.sh` owns its attach-or-start process, and `config/telegram.env` holds the credential.
+`bin/fm-tg-recv-service.sh` owns the consent-gated receiver service, `bin/fm-tg-recv-arm.sh` owns its attach-or-start process, and the private local receiver retains sole access to its credential.
 Until now nothing could speak back on its own, so anything worth interrupting the captain with had to wait for him to open a session and ask.
 
 `bin/fm-tg-send.sh` is the outbound half of that same seam.
