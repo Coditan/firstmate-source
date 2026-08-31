@@ -34,6 +34,11 @@
 # because a home that cannot tell which projects it has must not report that it
 # has none. An ABSENT registry is not a fault: the directory scan is the whole
 # answer for a home that registers nothing.
+# The directory scan is held to the same standard: a projects dir that is PRESENT
+# and cannot be listed stops the whole-fleet form with "fleet: STUCK: cannot list
+# the projects directory ..." on stdout and exit 3, because an unlistable dir would
+# otherwise render as a home holding no unregistered clones. An ABSENT projects dir
+# is not a fault either, for the same reason.
 # The single-project form accepts either a path (absolute, or relative to the
 # caller's cwd) or a bare "<name>"/"projects/<name>" form, resolved against
 # this home's projects dir ($FM_HOME/projects, or $FM_PROJECTS_OVERRIDE).
@@ -121,6 +126,38 @@ registry_fault() {  # prints why the registry cannot be read, and returns 0 when
   # mount - is only visible by reading it.
   if ! awk 'END { }' "$REG" 2>/dev/null; then
     printf 'the registry could not be parsed\n'
+    return 0
+  fi
+  return 1
+}
+
+# The scan half of the same answer. `[ -d "$PROJECTS" ]` only stats, so a projects
+# dir that is present and cannot be listed left the glob unexpanded, every clone in
+# it dropped out of the run without a line, and the whole-fleet form exited 0 - the
+# same silence a home with no clones produces.
+#
+# An ABSENT projects dir is not a fault: a home that keeps no clones has no such
+# directory, and the registered walk above is the whole answer for it.
+projects_dir_fault() {  # prints why the projects dir cannot be listed, returns 0 when so
+  if [ ! -e "$PROJECTS" ]; then
+    if [ -L "$PROJECTS" ]; then
+      printf 'broken symlink to %s\n' "$(readlink "$PROJECTS" 2>/dev/null || printf '%s' 'an unreadable target')"
+      return 0
+    fi
+    return 1
+  fi
+  if [ ! -d "$PROJECTS" ]; then
+    printf 'not a directory\n'
+    return 0
+  fi
+  # Listing needs read, and stat-ing what the listing names needs search; without
+  # either one the walk sees nothing and cannot tell that from an empty dir.
+  if [ ! -r "$PROJECTS" ] || [ ! -x "$PROJECTS" ]; then
+    printf 'permission denied\n'
+    return 0
+  fi
+  if ! ls -A "$PROJECTS" >/dev/null 2>&1; then
+    printf 'the projects directory could not be listed\n'
     return 0
   fi
   return 1
@@ -504,6 +541,11 @@ fi
 # announced on stderr alone would be a fault nobody hears.
 if REG_FAULT=$(registry_fault); then
   echo "fleet: STUCK: cannot read the project registry $REG: $REG_FAULT - this home cannot tell which projects it has, so it is not reporting that it has none - needs attention"
+  exit 3
+fi
+
+if PROJECTS_FAULT=$(projects_dir_fault); then
+  echo "fleet: STUCK: cannot list the projects directory $PROJECTS: $PROJECTS_FAULT - this home cannot tell which clones it holds, so it is not reporting that it holds none - needs attention"
   exit 3
 fi
 

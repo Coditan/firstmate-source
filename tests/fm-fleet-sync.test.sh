@@ -648,6 +648,55 @@ test_an_absent_registry_is_still_not_a_fault() {
   pass "an absent registry is still not a fault"
 }
 
+# A PROJECTS DIRECTORY THAT CANNOT BE LISTED IS NOT AN EMPTY ONE. The registry half
+# of the whole-fleet answer is gated; this is the other half. `[ -d "$PROJECTS" ]`
+# only stats, so a present-but-unlistable projects dir left the glob unexpanded,
+# every clone in it fell out of the run without a line, and the command exited 0 -
+# the same silence a home holding no clones produces, relayed by bootstrap as a
+# fleet with nothing to say. The home here registers nothing, which is deliberately
+# not a fault, so the directory is the whole answer and its silence is the defect.
+test_a_projects_dir_that_cannot_be_listed_is_never_reported_as_an_empty_one() {
+  local home out rc=0 solo
+  home="$TMP_ROOT/projects-unlistable"
+  rm -rf "$home"
+  mkdir -p "$home/data" "$home/projects/a-clone" "$home/elsewhere"
+  solo="$home/elsewhere/solo"
+  git init -q -b main "$solo"
+  git -C "$solo" commit -q --allow-empty -m init
+  chmod 000 "$home/projects" || fail "could not make the projects directory unlistable"
+  # A root-run suite can still list it, and a test that cannot arrange its own
+  # premise says so instead of passing.
+  if ls -A "$home/projects" >/dev/null 2>&1; then
+    chmod 755 "$home/projects"
+    echo "skip: this environment can still list a mode-000 directory (running as root?)"
+    return 0
+  fi
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-fleet-sync.sh" 2>/dev/null) || rc=$?
+
+  # The single-project form asks about one named clone and never walks the dir, so
+  # the new refusal must not reach it.
+  local solo_out solo_rc=0
+  solo_out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-fleet-sync.sh" "$solo" 2>/dev/null) || solo_rc=$?
+  chmod 755 "$home/projects"
+
+  [ "$rc" -eq 3 ] \
+    || fail "a sync that could not list the projects directory must refuse with exit 3, got $rc: $out"
+  assert_contains "$out" "STUCK: cannot list the projects directory" \
+    "the refusal must name the projects directory as what could not be read: $out"
+  assert_contains "$out" "$home/projects" \
+    "the refusal must name the concrete directory: $out"
+  assert_contains "$out" "permission denied" \
+    "the cause must be its own, distinct from the registry causes: $out"
+
+  [ "$solo_rc" -eq 0 ] \
+    || fail "the single-project form must be unaffected by the whole-fleet gate, got $solo_rc: $solo_out"
+  assert_contains "$solo_out" "solo" \
+    "the single-project form must still report on the clone it was asked about: $solo_out"
+
+  pass "a projects directory that cannot be listed is never reported as an empty one"
+}
+
 test_bootstrap_relays_recovered_and_stuck() {
   local home stuck rec out
   home=$(new_home)
@@ -827,6 +876,7 @@ test_an_unreadable_registry_is_never_reported_as_an_empty_one
 test_bootstrap_surfaces_a_refresh_that_could_not_read_the_registry
 test_a_dangling_registry_symlink_is_never_reported_as_an_empty_one
 test_an_absent_registry_is_still_not_a_fault
+test_a_projects_dir_that_cannot_be_listed_is_never_reported_as_an_empty_one
 test_orphaned_stale_packed_refs_lock_recovers
 test_live_packed_refs_lock_is_never_removed
 test_live_git_cwd_in_clone_dir_blocks_removal
