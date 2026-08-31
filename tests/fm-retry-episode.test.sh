@@ -68,7 +68,7 @@ test_clearing_an_episode_removes_both_records() {
 }
 
 test_the_give_up_finding_is_filed_once_per_condition() {
-  local home giveup findings out
+  local home giveup findings out record
   home=$(make_home give-up)
   giveup="$home/state/.giveup"
 
@@ -97,8 +97,10 @@ test_the_give_up_finding_is_filed_once_per_condition() {
     >/dev/null || fail "a give-up for a new condition failed"
   findings=$(find "$home/data/findings" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')
   [ "$findings" = 2 ] || fail "a newly exhausted condition was not filed; got $findings findings"
-  assert_grep "fm-test-officer" "$home/data/findings/"*.json \
-    "the finding did not carry the officer the caller named"
+  for record in "$home/data/findings/"*.json; do
+    assert_grep "fm-test-officer" "$record" \
+      "a filed finding did not carry the officer the caller named: $record"
+  done
   pass "an exhausted condition is filed once, and a new condition is filed again"
 }
 
