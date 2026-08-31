@@ -13,13 +13,13 @@
 # weaken the Stop hook.
 #
 # One refusal, two addressees. The recovery commands this message names are
-# reserved to the session that operates this home, so they are printed only when
-# this hook was loaded from that home's own checkout. The comparison is against
-# FM_ROOT, the home this session would be operating, which coincides with the
-# FM_HOME the supervision predicate judged on every path traced. A worker running
+# reserved to the session that operates this checkout, so they are printed only
+# when this hook was loaded from it: the comparison is against FM_ROOT, and it is
+# deliberately not the home the supervision predicate judged. A worker running
 # the same tracked hook from its task worktree is told to report the stalled
 # supervision instead and is handed no command. See fm_session_operates_home in
-# bin/fm-primary-scope-lib.sh; the refusal is identical either way.
+# bin/fm-primary-scope-lib.sh, which owns that contract and its limits; the
+# refusal is identical either way.
 #
 # Input is Claude PreToolUse JSON on stdin. Tests may pass --command directly.
 # Malformed transport, missing jq/Node, a missing classifier, or classifier
