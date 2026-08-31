@@ -345,7 +345,7 @@ The skill owns the daemon procedure; these safety facts remain inline:
 - A message beginning `/afk` refreshes away mode.
 - Any other unmarked message means the captain returned; load `/afk`, run the return owner, and do not process that message as ordinary work until its durable catch-up gate clears.
 - Away mode changes what reaches the captain, never who approves what: the authority that stands while he is present stands unchanged while he is away, neither widened nor withdrawn.
-- So a merge that section 7's approval-authority contract already places with firstmate stays available while he is away, on that section's own head-commit reading of the required checks and never on a whole-branch view, while ask-user findings, destructive actions, irreversible actions, and security-sensitive choices wait for his explicit word however long he is gone.
+- So a merge or an ask-user finding that section 7's approval-authority contract already places with firstmate stays firstmate's while he is away, a merge on that section's own head-commit reading of the required checks and never on a whole-branch view, while destructive actions, irreversible actions, and security-sensitive choices wait for his explicit word however long he is gone.
 - Bias ambiguous input toward exit because a present captain takes precedence.
 
 ### Stuck-worker trigger

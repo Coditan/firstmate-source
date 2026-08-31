@@ -33,13 +33,14 @@ It was that away mode had been quietly withdrawing an authority granted elsewher
 Two bullets replace the one:
 
 - Away mode changes what reaches the captain, never who approves what: the authority that stands while he is present stands unchanged while he is away, neither widened nor withdrawn.
-- So a merge that section 7's approval-authority contract already places with firstmate stays available while he is away, on that section's own head-commit reading of the required checks and never on a whole-branch view, while ask-user findings, destructive actions, irreversible actions, and security-sensitive choices wait for his explicit word however long he is gone.
+- So a merge or an ask-user finding that section 7's approval-authority contract already places with firstmate stays firstmate's while he is away, a merge on that section's own head-commit reading of the required checks and never on a whole-branch view, while destructive actions, irreversible actions, and security-sensitive choices wait for his explicit word however long he is gone.
 
 Three properties this wording is holding, deliberately:
 
-- **The rest of the list did not move.**
-  Ask-user findings, destructive actions, irreversible actions and security-sensitive choices are named again, in the same words, and still wait for the captain.
+- **The absolute part of the list did not move.**
+  Destructive actions, irreversible actions and security-sensitive choices are named again, in the same words, and still wait for the captain however long he is gone, because section 7 has firstmate escalate those three even with `yolo` on.
   Narrowing the merge case must not become cover for widening any of those.
+  Ask-user findings sit with merges rather than with those three: section 7 places them with the captain wherever `yolo` is off and with firstmate wherever it is on, so stating them as an absolute wait would have withdrawn an authority granted elsewhere in exactly the way the merge item did.
 - **"Green" has exactly one owner.**
   The stub defines nothing; it points at section 7, which owns `Never merge a red PR`, the dated enforcement map, and the requirement to read every required check against the pull request's head commit rather than a whole-branch aggregate that can report superseded failures as current.
   An unattended merger is precisely where that distinction stops being theoretical, which is why the pointer names the head-commit reading rather than only the section.

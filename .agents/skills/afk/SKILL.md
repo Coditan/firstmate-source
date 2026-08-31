@@ -76,7 +76,8 @@ a false exit is self-correcting (the captain re-runs `/afk`).
 
 afk changes how aggressively firstmate surfaces things, **not who approves what**.
 "Away" never means "approves more," and it never means "approves less" either: the authority that stands while the captain is present stands unchanged while he is away, neither widened nor withdrawn.
-A needs-decision finding, and anything destructive, irreversible, or security-sensitive, still waits for his explicit word - the daemon just batches the notification.
+A needs-decision finding waits for him exactly where `AGENTS.md` section 7's approval-authority contract and the `ask-user-authority` skill already place it with him, and is firstmate's to decide wherever they place it with firstmate.
+Anything destructive, irreversible, or security-sensitive still waits for his explicit word however long he is gone - the daemon just batches the notification.
 A merge waits exactly when it would have waited with him present, which is `AGENTS.md` section 7's approval-authority contract and not this skill's to restate; away mode adds no merge authority and withdraws none.
 `docs/away-mode-approval-authority.md` records why that is the wording, so the question is not re-opened from memory.
 
