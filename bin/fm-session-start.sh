@@ -108,9 +108,10 @@
 #   8. closing reminder - points back to the step-5 block and keeps only the
 #                       lock, afk, X-mode, and read-once reminders. This script
 #                       deliberately never runs long-lived polls itself; the
-#                       step-4 receiver arm is the one tracked background job it
-#                       names, and wake delivery stays outside the harness
-#                       entirely as a supervised service (docs/wake-delivery.md).
+#                       step-4 receiver fallback is the one tracked background
+#                       job it may name before the receiver service is installed,
+#                       and wake delivery stays outside the harness entirely as
+#                       a supervised service (docs/wake-delivery.md).
 #
 #   9. timing        - one line naming what this whole run cost, and the path of
 #                       state/session-start-timing.log, where the per-step

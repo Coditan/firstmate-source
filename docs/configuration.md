@@ -410,7 +410,7 @@ Before that unit is installed, a locked `bin/fm-session-start.sh` retains the se
 When `config/telegram.env` is absent the feature stays silent except for the session-start inactive line.
 When `config/telegram.env` exists but `config/fm-tg-recv.sh` is missing or not executable, session start reports that direct Telegram receive is not armed.
 The wrapper records the receiver incarnation in `state/.tg-recv.lock` with the same portable lock discipline as watcher state and relays any captured receiver output once before cleaning a dead recorded receiver.
-In service mode, a routed message becomes a durable `signal` wake and an empty or non-zero receiver exit becomes a rate-limited `check` wake before systemd restarts the wrapper.
+In service mode, each routed message becomes a durable `signal` wake and every receiver process exit other than service shutdown becomes a rate-limited `check` wake before systemd restarts the wrapper, including a zero exit after a message, diagnostic output, or no output.
 The first failing receiver process wakes immediately because a process exit means the receiver's own retry policy was exhausted; restarts in the same 300-second outage stay quiet so one failure cannot flood supervision.
 Run `bin/fm-tg-recv-arm.sh` as its own harness-tracked background task only when the digest reports the fallback active; never bundle it with another command, pipe it, redirect it, or use shell `&`.
 
