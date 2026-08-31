@@ -120,8 +120,10 @@ queue_pending=0
 # AGENTS.md reserves supervision repair to firstmate, and a worker can see
 # neither the other homes on this account nor what else is in flight. So the
 # repair commands are computed and printed only for the session that operates
-# this home, measured against FM_ROOT - the home this session would be operating,
-# which coincides with the FM_HOME judged above on every path traced.
+# this checkout, measured against FM_ROOT. That decides the addressee from WHERE
+# this hook was loaded and deliberately not from the home judged above;
+# fm_session_operates_home in bin/fm-primary-scope-lib.sh owns that contract and
+# records its limits.
 # Nothing above this line changes: which home is evaluated and whether its
 # supervision is unhealthy are decided identically for both addressees.
 operator=0

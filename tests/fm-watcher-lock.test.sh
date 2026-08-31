@@ -23,13 +23,32 @@ install_operator_guard() {
   for file in fm-guard.sh fm-wake-lib.sh fm-journal-lib.sh fm-delivery-lib.sh \
     fm-harness-pid-lib.sh fm-tangle-lib.sh fm-supervision-lib.sh fm-primary-scope-lib.sh \
     fm-supervision-instructions.sh fm-harness.sh fm-delivery-service.sh \
-    fm-service-path-lib.sh fm-axi-path-lib.sh; do
+    fm-service-path-lib.sh fm-axi-path-lib.sh fm-tmux-lib.sh fm-keeper-name-lib.sh \
+    fm-composer-lib.sh; do
     cp "$ROOT/bin/$file" "$dir/bin/$file"
   done
   mkdir -p "$dir/docs"
   cp -R "$ROOT/docs/supervision-protocols" "$dir/docs/supervision-protocols"
   chmod +x "$dir/bin/fm-guard.sh" "$dir/bin/fm-supervision-instructions.sh" "$dir/bin/fm-harness.sh"
   printf '%s\n' "$dir/bin/fm-guard.sh"
+}
+
+# The two fixed halves of the delivery repair bin/fm-supervision-instructions.sh
+# generates, either side of the backend-specific command it interpolates. The
+# command itself is a systemctl line on a host with a usable systemd user manager
+# and bin/fm-delivery-service.sh restart otherwise, so pinning it would make these
+# cases pass or fail by host. These two are literals of that one generated line
+# and appear nowhere in the worker wording, so the pair still proves the operator
+# branch emitted its repair.
+OPERATOR_DELIVERY_REPAIR_HEAD='wake-delivery listener is not running, so nothing will turn a queued wake into a turn: repair it with '
+OPERATOR_DELIVERY_REPAIR_TAIL=', confirm with bin/fm-delivery-service.sh status, and do not arm a session delivery wait instead'
+
+assert_operator_delivery_repair() {
+  local err=$1 context=$2
+  grep -F "$OPERATOR_DELIVERY_REPAIR_HEAD" "$err" >/dev/null \
+    || fail "$context: no generated delivery repair: $(cat "$err")"
+  grep -F "$OPERATOR_DELIVERY_REPAIR_TAIL" "$err" >/dev/null \
+    || fail "$context: delivery repair was truncated before its confirmation step: $(cat "$err")"
 }
 
 # A live, identity-matched watcher for the fixture home. The recorded path must
@@ -195,8 +214,7 @@ test_guard_warnings() {
   CLAUDECODE=1 PI_CODING_AGENT='' GROK_AGENT='' FM_ROOT_OVERRIDE="$dir" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=300 "$guard" 2> "$err" >/dev/null || fail "guard failed"
   kill "$live" 2>/dev/null || true
   wait "$live" 2>/dev/null || true
-  grep -F 'repair it with bin/fm-delivery-service.sh restart' "$err" >/dev/null \
-    || fail "the session operating this home lost its generated delivery repair: $(cat "$err")"
+  assert_operator_delivery_repair "$err" "the session operating this home lost its generated delivery repair"
 
   # (2) fresh watcher, empty queue -> silence.
   dir=$(make_case guard-fresh)
@@ -238,8 +256,7 @@ test_guard_warnings() {
   wait "$live" 2>/dev/null || true
   grep -F 'WARNING: wake delivery listener down: no live identity-matched delivery listener' "$err" >/dev/null \
     || fail "guard did not name the down delivery listener with a healthy daemon: $(cat "$err")"
-  grep -F 'repair it with bin/fm-delivery-service.sh restart' "$err" >/dev/null \
-    || fail "the session operating this home was not handed the delivery repair: $(cat "$err")"
+  assert_operator_delivery_repair "$err" "the session operating this home was not handed the delivery repair"
   ! grep -F 'WATCHER DAEMON DOWN' "$err" >/dev/null \
     || fail "guard printed the daemon-down banner despite a healthy watcher: $(cat "$err")"
 

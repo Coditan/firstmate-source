@@ -31,10 +31,10 @@ Such a worker runs the identical hook while `FM_ROOT_OVERRIDE` still names the h
 What was wrong was the addressee.
 Three separate runtimes were each handed `bin/fm-watcher-service.sh restart` against a home with ten tasks in flight that none of them could see, and `AGENTS.md` section 1 reserves supervision repair to firstmate: a worker that obeys does damage and a worker that refuses is stuck, so both outcomes were the guard's fault rather than the worker's.
 
-`fm_session_operates_home` in `bin/fm-primary-scope-lib.sh` decides the addressee by asking whether the checkout the running hook was loaded from is the home this session would be operating, which the gate and the turn-end guard resolve as `FM_ROOT`.
-The home whose supervision was judged derives from `FM_HOME` instead, and `FM_ROOT` and `FM_HOME` coincide on every path traced through those two, so nothing depends on that difference there.
-`bin/fm-guard.sh` passes `FM_ROOT` too.
-An `FM_HOME` comparison was tried there and reverted: `FM_HOME` selects the operational home while scripts still run from this checkout's `bin/` (`docs/configuration.md`), and `docs/cmux-backend.md` records `FM_HOME=<scratch> bin/fm-spawn.sh` run from the primary checkout, so comparing `FM_HOME` addresses firstmate itself as a worker and withholds its own repair command.
+`fm_session_operates_home` in `bin/fm-primary-scope-lib.sh` decides the addressee by asking whether the checkout the running hook was loaded from is the checkout-derived firstmate root, which all three emitters resolve as `FM_ROOT`.
+So the addressee is decided from where the guard was loaded, and deliberately not from the home whose supervision was judged, which derives from `FM_HOME`.
+The two are not interchangeable: they diverge whenever `FM_HOME` names a home other than the checkout, which `docs/configuration.md` documents as the normal meaning of `FM_HOME`.
+An `FM_HOME` comparison was tried in `bin/fm-guard.sh` and reverted: `FM_HOME` selects the operational home while scripts still run from this checkout's `bin/` (`docs/configuration.md`), and `docs/cmux-backend.md` records `FM_HOME=<scratch> bin/fm-spawn.sh` run from the primary checkout, so comparing `FM_HOME` addresses firstmate itself as a worker and withholds its own repair command.
 Firstmate's own session matches, a secondmate in its own home matches, and a task worktree does not.
 It decides only wording: which home is evaluated and whether that home's supervision is unhealthy are computed identically for both addressees, so a wrong answer here can misaddress a message but can never suppress a refusal.
 An operator keeps the recovery commands verbatim; a worker is told that repairing that home belongs to firstmate and is asked to report the stalled supervision in its task status line.
