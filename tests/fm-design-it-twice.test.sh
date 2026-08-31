@@ -156,9 +156,9 @@ test_the_partial_adoption_is_defended_and_its_cost_is_named() {
     "each dropped capability must carry its cost"
   assert_grep 'published issue body, the prepared pull-request sequence and why it could not run' "$PROV" \
     "the provenance must point at the sent offer record without stale pre-send framing"
-  # The sweep's published record says it copies nothing from codebase-design.
-  # That claim is still true and must not be silently contradicted.
-  assert_grep 'the sweep still only loads the plugin skill and still copies nothing from it' \
+  # The sweep's published record says it consumes the installed plugin without
+  # copying it. That claim is still true across both supported vocabulary routes.
+  assert_grep 'the sweep still copies nothing from the plugin, and the vocabulary is reached from the installed plugin' \
     "$ROOT/docs/codebase-sweep-provenance.md" \
     "the sweep's provenance must reconcile with the new adoption rather than be contradicted by it"
   pass "the partial adoption is defended and its cost is named"
