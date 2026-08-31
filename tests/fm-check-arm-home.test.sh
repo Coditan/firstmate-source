@@ -94,6 +94,16 @@ make_home() {  # <path>
   mkdir -p "$1/state" "$1/config" "$1/data" || fail "could not build fixture home $1"
 }
 
+# The refusal names homes the way bin/fm-check-lib.sh resolves them, with
+# `cd -P`. An expectation built from the raw mktemp path would differ from it on
+# any host whose TMPDIR traverses a symlink - macOS resolves /var to /private/var
+# - so every case that matches a home against the refusal compares this instead.
+canonical_home() {  # <path>
+  local real
+  real=$(cd -P -- "$1" && pwd -P) || fail "could not canonicalize $1"
+  printf '%s' "$real"
+}
+
 # Run one subject's arm path against an explicit home and state directory.
 # The argument string comes from the table above and is deliberately word-split
 # into the subject's own flags.
@@ -108,7 +118,7 @@ run_arm() {  # <script> <arg string>, with ARM_HOME/ARM_STATE set by the caller
 }
 
 test_arming_another_homes_state_is_refused() {
-  local root id script args victim intruder out status
+  local root id script args victim intruder out status victim_real intruder_real
   fm_test_tmproot root fm-check-arm-home
   while IFS='|' read -r id script args; do
     [ -n "$id" ] || continue
@@ -116,6 +126,8 @@ test_arming_another_homes_state_is_refused() {
     intruder="$root/$id/intruder"
     make_home "$victim"
     make_home "$intruder"
+    victim_real=$(canonical_home "$victim")
+    intruder_real=$(canonical_home "$intruder")
 
     # The victim is a correctly armed home first, so the case measures what an
     # intruding arm does to a LIVE check rather than to an empty directory.
@@ -126,9 +138,9 @@ test_arming_another_homes_state_is_refused() {
     out=$(ARM_HOME=$intruder ARM_STATE="$victim/state" run_arm "$script" "$args") || status=$?
     [ "$status" -ne 0 ] \
       || fail "$id: arming $victim/state with FM_HOME=$intruder reported success: $out"
-    assert_contains "$out" "$victim" \
+    assert_contains "$out" "$victim_real" \
       "$id: the refusal must name the home whose state directory it protected"
-    assert_contains "$out" "$intruder" \
+    assert_contains "$out" "$intruder_real" \
       "$id: the refusal must name the home the arm would have baked in"
   done < <(arm_subjects)
   pass "an arm whose state directory belongs to another home is refused, naming both"
@@ -217,12 +229,13 @@ test_the_registrar_refuses_the_same_mismatch() {
   # Not every armed check is rendered by bin/. A caller can write its own shim
   # and borrow only bin/fm-check-register.sh, so the registrar has to hold the
   # same predicate or the guard has a door beside it.
-  local root victim intruder out status
+  local root victim intruder out status victim_real
   fm_test_tmproot root fm-check-arm-home
   victim="$root/victim"
   intruder="$root/intruder"
   make_home "$victim"
   make_home "$intruder"
+  victim_real=$(canonical_home "$victim")
 
   ARM_HOME=$victim ARM_STATE="$victim/state" \
     run_arm fm-currency-round.sh --arm >/dev/null || fail "arming the victim must succeed"
@@ -232,7 +245,7 @@ test_the_registrar_refuses_the_same_mismatch() {
     "$REGISTER" currency-round 2>&1) || status=$?
   [ "$status" -ne 0 ] \
     || fail "registering into another home's state directory reported success: $out"
-  assert_contains "$out" "$victim" "the registrar's refusal must name the owning home"
+  assert_contains "$out" "$victim_real" "the registrar's refusal must name the owning home"
 
   status=0
   out=$(env FM_HOME="$victim" FM_STATE_OVERRIDE="$victim/state" \
