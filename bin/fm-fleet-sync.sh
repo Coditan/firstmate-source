@@ -99,7 +99,16 @@ project_label() {
 # An ABSENT registry is not a fault: a home that registers no projects has no file,
 # and the directory scan below is the whole answer for it.
 registry_fault() {  # prints why the registry cannot be read, and returns 0 when so
-  [ -e "$REG" ] || return 1
+  # A symlink that does not resolve is a PRESENT registry that cannot be read, not
+  # an absent one: `test -e` follows the link and answers for the target, so this
+  # asks about the link itself before concluding the home simply has no file.
+  if [ ! -e "$REG" ]; then
+    if [ -L "$REG" ]; then
+      printf 'broken symlink to %s\n' "$(readlink "$REG" 2>/dev/null || printf '%s' 'an unreadable target')"
+      return 0
+    fi
+    return 1
+  fi
   if [ ! -f "$REG" ]; then
     printf 'not a regular file\n'
     return 0

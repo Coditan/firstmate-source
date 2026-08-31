@@ -1392,6 +1392,79 @@ test_the_intake_gate_refuses_when_the_records_cannot_be_read() {
   pass "the intake gate refuses when the records cannot be read"
 }
 
+# A CLASSIFICATION THAT DID NOT HAPPEN IS NOT AN EMPTY ONE. The walk's classify
+# step is the only place the record model is built, and its exit status used to be
+# discarded: a jq that failed there left the model as the empty string and the
+# script - which runs `set -u` and no `set -e` - carried on. `--records` then piped
+# that empty string into jq, which exits 0 having printed nothing, so the intake
+# gate in bin/fm-decision-hold.sh read a clean, empty list from a read that never
+# happened.
+#
+# jq is stubbed rather than the records corrupted, because the classify step runs
+# after the parse and the validate that already refuse: this is the failure that
+# only the classify's own status can catch.
+stub_classify_jq() {  # <home> <exit-status>; a jq that answers <status> to the classify
+  local home=$1 status=$2 real
+  real=$(command -v jq) || fail "this suite needs a real jq to stub around"
+  cat > "$home/fakebin/jq" <<SH
+#!/usr/bin/env bash
+for a in "\$@"; do
+  case "\$a" in *all_deps_done*) exit $status ;; esac
+done
+exec $real "\$@"
+SH
+  chmod +x "$home/fakebin/jq"
+}
+
+test_a_classify_that_failed_never_reads_as_no_records() {
+  local home out rc=0
+  home=$(make_home classify-failed)
+  printf 'the only answer\n' > "$home/d.txt"
+  run_hold "$home" record probe key --door chat --decision-file "$home/d.txt" \
+    --title "A question" --repo firstmate >/dev/null 2>&1 || fail "recording failed"
+
+  stub_classify_jq "$home" 5
+  out=$(run_ledger "$home" --records 2>&1) || rc=$?
+  rm -f "$home/fakebin/jq"
+
+  [ "$rc" -ne 0 ] \
+    || fail "a classify that failed must not report this home's records as readable: $out"
+  assert_contains "$out" "could not classify this home's records" \
+    "the refusal must name the step that could not be taken: $out"
+  case "$out" in
+    *probe-decision-key*) fail "a failed classify must print no record lines: $out" ;;
+  esac
+
+  pass "a classify that failed never reads as no records"
+}
+
+# The other half of the same hole: a classify that answers NOTHING - the shape a
+# stubbed or broken jq takes - exits 0 and leaves the model empty. An empty value is
+# not a record set: a home with no captain records still holds a well-formed model
+# with an empty list, so `--records` must refuse on it rather than lean on a status
+# an empty stdin never produces.
+test_an_empty_record_model_never_reads_as_no_records() {
+  local home out rc=0
+  home=$(make_home classify-silent)
+  printf 'the only answer\n' > "$home/d.txt"
+  run_hold "$home" record probe key --door chat --decision-file "$home/d.txt" \
+    --title "A question" --repo firstmate >/dev/null 2>&1 || fail "recording failed"
+
+  stub_classify_jq "$home" 0
+  out=$(run_ledger "$home" --records 2>&1) || rc=$?
+  rm -f "$home/fakebin/jq"
+
+  [ "$rc" -ne 0 ] \
+    || fail "an empty record model must not be reported as a home holding no decisions: $out"
+  assert_contains "$out" "refusing to report that this home holds no decisions" \
+    "the refusal must say what it will not report: $out"
+  case "$out" in
+    *probe-decision-key*) fail "an empty model must print no record lines: $out" ;;
+  esac
+
+  pass "an empty record model never reads as no records"
+}
+
 # The reuse must be a cost decision and nothing else: turning it off must not change
 # a single byte of what a reader is shown.
 test_turning_the_reuse_off_changes_no_output() {
@@ -1450,3 +1523,5 @@ test_a_reuse_is_read_back_rather_than_recomputed
 test_turning_the_reuse_off_changes_no_output
 test_a_reuse_that_does_not_parse_never_reads_as_no_records
 test_the_intake_gate_refuses_when_the_records_cannot_be_read
+test_a_classify_that_failed_never_reads_as_no_records
+test_an_empty_record_model_never_reads_as_no_records

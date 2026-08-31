@@ -606,6 +606,48 @@ test_bootstrap_surfaces_a_refresh_that_could_not_read_the_registry() {
   pass "bootstrap surfaces a refresh that could not read the registry"
 }
 
+# A DANGLING SYMLINK IS A PRESENT REGISTRY, NOT AN ABSENT ONE. `test -e` follows
+# the link and answers for its target, so a data/projects.md symlinked into a
+# checkout that has since moved used to read as "this home registers nothing": the
+# registered walk printed no line and the whole-fleet form exited 0. The one case
+# this gate deliberately lets through is a home that has no registry file at all.
+test_a_dangling_registry_symlink_is_never_reported_as_an_empty_one() {
+  local home out rc=0
+  home="$TMP_ROOT/registry-dangling"
+  rm -rf "$home"
+  mkdir -p "$home/data" "$home/projects"
+  ln -s "$home/data/moved-away-projects.md" "$home/data/projects.md" \
+    || fail "could not stage a dangling registry symlink"
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-fleet-sync.sh" 2>/dev/null) || rc=$?
+
+  [ "$rc" -ne 0 ] \
+    || fail "a sync that could not follow the registry link must not report success: $out"
+  assert_contains "$out" "cannot read the project registry" \
+    "the refusal must name the registry as what could not be read: $out"
+  assert_contains "$out" "broken symlink" \
+    "the cause must name the broken link, not permission or file type: $out"
+  assert_contains "$out" "moved-away-projects.md" \
+    "the cause must name the target the link no longer resolves to: $out"
+  pass "a dangling registry symlink is never reported as an empty one"
+}
+
+# The absent case stays a non-fault, because a home that registers no projects has
+# no file, and the directory scan is the whole answer for it.
+test_an_absent_registry_is_still_not_a_fault() {
+  local home out rc=0
+  home="$TMP_ROOT/registry-absent"
+  rm -rf "$home"
+  mkdir -p "$home/data" "$home/projects"
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-fleet-sync.sh" 2>/dev/null) || rc=$?
+
+  [ "$rc" -eq 0 ] || fail "a home that registers nothing must sync cleanly, got exit $rc: $out"
+  assert_not_contains "$out" "cannot read the project registry" \
+    "an absent registry must not be reported as unreadable: $out"
+  pass "an absent registry is still not a fault"
+}
+
 test_bootstrap_relays_recovered_and_stuck() {
   local home stuck rec out
   home=$(new_home)
@@ -783,6 +825,8 @@ test_non_repo_directory_inside_enclosing_repo_skipped
 test_bootstrap_relays_recovered_and_stuck
 test_an_unreadable_registry_is_never_reported_as_an_empty_one
 test_bootstrap_surfaces_a_refresh_that_could_not_read_the_registry
+test_a_dangling_registry_symlink_is_never_reported_as_an_empty_one
+test_an_absent_registry_is_still_not_a_fault
 test_orphaned_stale_packed_refs_lock_recovers
 test_live_packed_refs_lock_is_never_removed
 test_live_git_cwd_in_clone_dir_blocks_removal
