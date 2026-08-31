@@ -754,6 +754,46 @@ test_a_watch_change_on_a_crossed_machine_says_it_is_still_crossed() {
   pass "a watch change on a crossed machine names the shortage it is still holding"
 }
 
+test_a_watch_change_holding_no_raiser_does_not_claim_a_shortage() {
+  # `crossed` outlives the shortage: the elevated damping band holds whatever
+  # the previous state was, so a poll that released every raiser can still read
+  # as crossed while holding nothing. The held-shortage clause must follow the
+  # raisers, not the label, or this line tells the fleet a machine with 16000
+  # MiB free is running out of RAM headroom.
+  reset_home
+  reading 16000 true 0
+  alarm_at 0 >/dev/null
+
+  # Crossed on headroom, with a memory stall running underneath it.
+  local out t
+  reading_thrashing 1800 38.0
+  out=$(alarm_at 300)
+  assert_contains "$out" "running out of RAM headroom" "the headroom crossing must be announced"
+  # Polls close enough together to keep the run continuous, so that by t=5100 it
+  # stands at 4800s: short of the 5400s window, so the stall condition has not
+  # crossed, but 4800 * 1.25 is past it, so it has not cleared the margin either.
+  for t in 1500 2700 3900; do
+    reading_thrashing 1800 38.0
+    out=$(alarm_at "$t")
+    assert_contains "|$out|" "||" "a continuing shortage stays silent"
+  done
+
+  # Headroom comes back clear of the margin, which releases the only raiser,
+  # while the process table goes unreadable, which changes the watch set and so
+  # makes this poll speak.
+  FM_TEST_STALL=38.0
+  reading_process_table_unreadable 16000
+  out=$(alarm_at 5100)
+  assert_not_contains "$out" "still running out of RAM headroom" \
+    "a poll holding no raiser must not claim a shortage it released"
+  assert_not_contains "$out" "still stalling on memory" \
+    "nor one no condition ever raised"
+  assert_contains "$out" "cannot judge horizon" "it must still report the instrument it lost"
+  assert_contains "$out" "16000 MiB RAM headroom available" \
+    "and must state the headroom it actually measured"
+  pass "a watch change holding no raiser does not claim a shortage"
+}
+
 test_an_unconfigured_gate_is_not_reported_as_a_condition_the_alarm_lost() {
   # A home that never configured the gate must still be told the condition is
   # unwatched - that is the standing rule - but it was never judged, so it was
@@ -1485,6 +1525,7 @@ test_a_crossing_after_a_blind_stretch_is_timed_from_the_crossing
 test_a_shortage_ends_even_where_another_condition_can_never_be_read
 test_a_shortage_the_crossed_condition_could_not_re_read_keeps_its_clock
 test_a_watch_change_on_a_crossed_machine_says_it_is_still_crossed
+test_a_watch_change_holding_no_raiser_does_not_claim_a_shortage
 test_an_unconfigured_gate_is_not_reported_as_a_condition_the_alarm_lost
 test_a_condition_that_becomes_unjudgeable_is_spoken_once
 test_a_blind_stall_poll_neither_erases_the_run_nor_credits_it
