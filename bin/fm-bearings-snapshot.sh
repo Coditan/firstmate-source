@@ -29,11 +29,15 @@
 # gaps in omitted[] and, when invalid, a Charted Next gate line so the four-section
 # chat cannot claim an empty fleet while main current state is broken.
 #
-# decisions_open is the CAPTAIN-ACTIONABLE set, not the open set. Every captain
-# hold this home withheld from it is counted in omitted[] with the reason the
+# decisions_open is the CAPTAIN-ACTIONABLE set, not the open set, and it is a
+# MIXED population: this home's backlog plus every registered secondmate's own
+# actionable set. Every captain hold withheld from it - by this home OR by any of
+# those secondmates - is counted in one omitted[] line with the reason the
 # canonical snapshot recorded (bin/fm-captain-actionable-lib.sh owns that
 # vocabulary), because a count that is short and a count that is complete look
-# identical, and that is how such a decision sat unseen for nineteen days.
+# identical, and that is how such a decision sat unseen for nineteen days. The
+# count covers the same population the list does, so a reader never has to know
+# which home a decision was routed to before he can trust it.
 #
 # Dangling `blocked-by:` tokens are data-integrity warnings, not live blockers.
 # The canonical snapshot removes them from unresolved_blocker_ids and records
@@ -398,9 +402,15 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         doing: ((.current_state.detail // "") as $d
                 | (if $d != "" then $d else (.hints.last_event_text // "") end) | trunc(90))
       } ]
+     # Select on the running work itself, never on the headline state of the home. A
+     # home with a working child AND a held captain decision ranks as
+     # captain_decision in the canonical snapshot - correctly, the decision must
+     # surface - and gating this list on that state made its running work vanish
+     # from in_flight the moment someone asked the captain a question about it.
+     # A home can be on both surfaces; here it is named by what it is doing.
      + [ $secondmate_views[]
-         | select(.bearings_state == "active_child_work")
-         | {id,kind:"secondmate",state:.bearings_state,
+         | select((.active_children | length) > 0)
+         | {id,kind:"secondmate",state:"active_child_work",
             doing:([.active_children[] | .id + ": " + (.doing // .state)] | join("; ") | trunc(90))} ]) as $in_flight_all
   | ([ .backlog.records[]
          | select(.structured and .captain_actionable == true)
@@ -536,15 +546,23 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         # counting. The canonical snapshot names every withheld captain hold with
         # its reason (bin/fm-captain-actionable-lib.sh owns that vocabulary); carry
         # the count and the reasons up here so a reader of THIS surface can tell a
-        # short list from a filtered one without going back to the snapshot. It
-        # covers the backlog of THIS home; a registered secondmate withholds inside
-        # its own home and discloses it there.
-        (([($snap.backlog.omitted // [])[] | select(.surface == "captain_actionable")]) as $captain_withheld
+        # short list from a filtered one without going back to the snapshot.
+        # decisions_open mixes this home with every registered secondmate, so this
+        # line must cover the same population the list does: a secondmate that
+        # withheld a captain hold inside its own home is added into the SAME count,
+        # or a filtered fleet list would read as complete whenever the withholding
+        # happened to sit one hop out. Reasons are summed per reason so the fleet
+        # reads as one population and not as one line per home.
+        (([($snap.backlog.omitted // [])[] | select(.surface == "captain_actionable")]
+          + [($snap.secondmate_current.records // [])[] | (.omitted // [])[]
+             | select(.surface == "captain_actionable")]) as $captain_withheld
          | if ($captain_withheld | length) > 0 then
              {surface:("captain holds withheld from decisions_open: "
                        + ([$captain_withheld[].count] | add | tostring)
-                       + " (" + ([$captain_withheld[] | "\(.reason) \(.count)"] | sort | join(", ")) + ")"),
-              reveal:"bin/fm-fleet-snapshot.sh --json, then read backlog.omitted"}
+                       + " (" + ([$captain_withheld | group_by(.reason)[]
+                                  | "\((.[0].reason // "unclassified")) \([.[].count] | add)"]
+                                 | sort | join(", ")) + ")"),
+              reveal:"bin/fm-fleet-snapshot.sh --json, then read backlog.omitted and secondmate_current.records[].omitted"}
            else empty end),
         (if $all_queued == 0 and ($gates_all | length) > $gates_n then {surface:("gates showing \($gates_n) of \($gates_all | length)"), reveal:"--all-queued"} else empty end),
         (if $all_queued == 0 and ($integrity_all | length) > $gates_n then {surface:("integrity warnings showing \($gates_n) of \($integrity_all | length)"), reveal:"--all-queued"} else empty end),
