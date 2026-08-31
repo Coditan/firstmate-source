@@ -642,6 +642,58 @@ assert_contains "$portscoped_walk" "never established" \
 : > "$FM_TEST_TS_SERVE_LOG"
 pass "an unanswerable address is never dressed as an exhausted window"
 
+# The publish is the only thing this run tested, and it failed. Whether the
+# address binds was never established, so the run may not record the tested
+# no-reach - that value silences the bootstrap notice and is carried forward by
+# every later non-serving run.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_PF=$(make_home "$TMP_ROOT/vessel-pf")
+pubfail=$(PATH="$NOWALK:$PATH" FM_TEST_TS_MODE=userspace FM_TEST_TS_SERVE=broken \
+  FM_HOME="$HOME_PF" FM_SERVICE_PORT_RANGE=4898-4899 \
+  "$ROOT/bin/fm-service-port.sh" lavish --serving 2>/dev/null)
+expect_code 0 "$?" "a board still opens locally when the publish does not take"
+[ "$(field reachability "$pubfail")" = untested ] \
+  || fail "a failed publish on an untested address is not a tested no-reach, got '$(field reachability "$pubfail")'"
+[ "$(field reachability_evidence "$pubfail")" = none ] \
+  || fail "and nothing backs it, got '$(field reachability_evidence "$pubfail")'"
+assert_contains "$pubfail" "never established" \
+  "the reason and the verdict agree about what was not established"
+assert_not_contains "$pubfail" "EADDRNOTAVAIL" \
+  "an errno this run never met must not be named"
+assert_grep "reachability=untested" "$HOME_PF/state/service-port.lavish" \
+  "and the published record carries the same answer"
+# The proved-unbindable vessel is the other caller of that same branch, and it
+# HAS tested the address, so a failed publish there really is a tested no-reach.
+HOME_PU=$(make_home "$TMP_ROOT/vessel-pu")
+provenfail=$(FM_TEST_TS_MODE=userspace FM_TEST_TS_SERVE=broken FM_HOME="$HOME_PU" \
+  FM_SERVICE_PORT_RANGE=4901-4902 "$ROOT/bin/fm-service-port.sh" lavish --serving)
+[ "$(field reachability "$provenfail")" = loopback ] \
+  || fail "a proved-unbindable address with no route is reach tested and absent, got '$(field reachability "$provenfail")'"
+[ "$(field reachability_evidence "$provenfail")" = probed ] \
+  || fail "and this run tested it, got '$(field reachability_evidence "$provenfail")'"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a failed publish claims a tested no-reach only where the address was tested"
+
+# The errno the walk actually met, read back from the probe rather than guessed.
+# Exit 4 also covers EAFNOSUPPORT and EINVAL, and the walk stops at the FIRST
+# address-scoped verdict rather than trying every candidate.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_ER=$(make_home "$TMP_ROOT/vessel-er")
+errno_out=$(PATH="$REFUSES_ADDR:$PATH" FM_TEST_TS_MODE=userspace FM_HOME="$HOME_ER" \
+  FM_SERVICE_PORT_RANGE=4903-4904 "$ROOT/bin/fm-service-port.sh" lavish --serving)
+expect_code 0 "$?" "the walk-established userspace vessel still gets its board"
+assert_contains "$errno_out" "EADDRNOTAVAIL" \
+  "the reason carries the errno the probe reported"
+assert_not_contains "$errno_out" "every candidate bind failed" \
+  "and does not claim candidates the walk never tried"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "the walk names the errno it met rather than a hardcoded guess"
+
+
 # A tailscale that cannot be READ has tested nothing. Recording that as a tested
 # no-reach would silence the bootstrap notice and bar the proxy verdict for the
 # rest of the run on the strength of a missing jq.
@@ -1862,6 +1914,33 @@ out=$(FM_HOME="$HOME_C" FM_SERVICE_PORT_RANGE=4792-4793 \
   "$ROOT/bin/fm-lavish.sh" stop --port "$own_port" 2>&1)
 expect_code 0 "$?" "an explicit --port on a proven-own server is a normal stop"
 assert_contains "$out" "stopped" "a proven-own port is still stopped when named explicitly"
+
+# The ownership proof has to ask where the board actually IS. On the vessel this
+# whole branch exists for, the --check pre-read names the tailnet address while
+# the allocation binds loopback, so a wrapper that probes the pre-read cannot
+# recognise its own board: it reports nothing to stop, refuses its own port, and
+# every poll drifts to a fresh one while the old route is left standing.
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_OW=$(make_home "$TMP_ROOT/vessel-ow")
+make_serving_lavish "$HOME_OW"
+ow_env=(PATH="$NOWALK:$PATH" FM_TEST_TS_MODE=userspace FM_HOME="$HOME_OW"
+  FM_SERVICE_PORT_RANGE=4915-4916)
+ow_preread=$(env "${ow_env[@]}" "$ROOT/bin/fm-service-port.sh" lavish --check)
+[ "$(field addr "$ow_preread")" = 192.0.2.1 ] \
+  || fail "this case only discriminates while the pre-read names another address, got '$(field addr "$ow_preread")'"
+ow_open=$(env "${ow_env[@]}" "$ROOT/bin/fm-lavish.sh" "$HOME_OW/.lavish/board.html" 2>/dev/null)
+ow_port=$(printf '%s\n' "$ow_open" | sed -n 's|.*:\([0-9][0-9]*\)/session.*|\1|p')
+[ -n "$ow_port" ] || fail "the board must open on this vessel, got '$ow_open'"
+assert_grep "addr=127.0.0.1" "$HOME_OW/state/service-port.lavish" \
+  "and the allocation records the loopback address it actually bound"
+ow_stop=$(env "${ow_env[@]}" "$ROOT/bin/fm-lavish.sh" stop 2>&1)
+expect_code 0 "$?" "stopping this vessel's own board succeeds"
+assert_contains "$ow_stop" "stopped" \
+  "and the wrapper recognises the board it opened rather than reporting nothing to stop"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a board is looked for where the allocation bound it, not where the pre-read guessed"
 
 neighbour_ready="$TMP_ROOT/neighbour.ready"
 rm -f "$neighbour_ready"
