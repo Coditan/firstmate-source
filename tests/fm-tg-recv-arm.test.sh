@@ -407,6 +407,11 @@ case "$(cat "$FM_HOME/state/receiver-mode")" in
   empty-exit)
     exit 0
     ;;
+  hang-after-message)
+    emit_event 'CAPTAIN-TELEGRAM: accepted before receiver hang'
+    trap 'exit 0' TERM INT
+    while :; do sleep 0.1; done
+    ;;
 esac
 SH
 chmod +x "$service_home/config/fm-tg-recv.sh"
@@ -457,6 +462,21 @@ FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" "$ARM" > "$service_home/state
 message_rows=$(decoded_queue "$service_home/state/.wake-queue" | grep -c 'CAPTAIN-TELEGRAM: service message')
 [ "$message_rows" -eq 2 ] \
   || fail "two messages shared one wake identity and would be deduplicated at drain time: $message_rows rows"
+
+: > "$service_home/state/.wake-queue"
+rm -f "$service_home/state/.tg-recv-last-failure-wake"
+printf '%s\n' hang-after-message > "$service_home/state/receiver-mode"
+hang_rc=0
+FM_TG_RECV_MANAGER=systemd FM_TG_RECV_HANG_TIMEOUT=1 FM_TG_RECV_HANG_CHECK_POLL=0.05 \
+  FM_HOME="$service_home" "$ARM" > "$service_home/state/service-hang.out" 2>&1 || hang_rc=$?
+[ "$hang_rc" -eq 124 ] || fail "hung service receiver exited $hang_rc instead of watchdog status 124"
+assert_contains "$(decoded_queue "$service_home/state/.wake-queue")" \
+  'CAPTAIN-TELEGRAM: accepted before receiver hang' \
+  "watchdog termination discarded a message already accepted by the receiver"
+assert_grep 'receiver exceeded 1s without exiting' "$service_home/state/.wake-queue" \
+  "hung receiver was not externally visible in the durable wake queue"
+assert_not_contains "$(cat "$service_home/state/.wake-queue")" 'FM_TG_EVENT_V1:' \
+  "watchdog relay retained an opaque receiver frame"
 
 unknown_home="$TMP_ROOT/unknown-exit-home"
 mkdir -p "$unknown_home/config" "$unknown_home/state/.tg-recv.lock.owner.unknown"

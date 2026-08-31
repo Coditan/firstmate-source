@@ -30,11 +30,14 @@ FAILURE_WAKE_QUIET=${FM_TG_RECV_FAILURE_WAKE_QUIET:-300}
 FAILURE_WAKE_MARKER="$STATE/.tg-recv-last-failure-wake"
 FAILURE_DIAGNOSTIC="$STATE/.tg-recv-last-failure-diagnostic"
 FAILURE_DIAGNOSTIC_LIMIT=${FM_TG_RECV_FAILURE_DIAGNOSTIC_LIMIT:-4096}
+HANG_TIMEOUT=${FM_TG_RECV_HANG_TIMEOUT:-120}
+HANG_CHECK_POLL=${FM_TG_RECV_HANG_CHECK_POLL:-0.5}
 SERVICE_HANDOFF_MARKER="$STATE/.tg-recv-service-handoff"
 SERVICE_HANDOFF_LOCK="$STATE/.tg-recv-service-handoff.lock"
 RECEIVER_OWNER_FILE="$STATE/.tg-recv-owner"
 case "$FAILURE_WAKE_QUIET" in ''|*[!0-9]*) FAILURE_WAKE_QUIET=300 ;; esac
 case "$FAILURE_DIAGNOSTIC_LIMIT" in ''|*[!0-9]*|0) FAILURE_DIAGNOSTIC_LIMIT=4096 ;; esac
+case "$HANG_TIMEOUT" in ''|*[!0-9]*|0) HANG_TIMEOUT=120 ;; esac
 
 harness_handoff_requested() {
   [ "$TG_RECV_MANAGER" != systemd ] \
@@ -203,7 +206,11 @@ PY
     [ -z "$diagnostic_path" ] || rm -f "$diagnostic_path"
     return 0
   fi
-  if [ "$receiver_status" != 0 ] && [ "$receiver_status" != unknown ]; then
+  if [ "$receiver_status" = hung ]; then
+    record_failure_wake \
+      "check: telegram receiver: FAILED - receiver exceeded ${HANG_TIMEOUT}s without exiting; the service terminated it and will restart it" \
+      "$diagnostic_path" || { [ -z "$diagnostic_path" ] || rm -f "$diagnostic_path"; return 1; }
+  elif [ "$receiver_status" != 0 ] && [ "$receiver_status" != unknown ]; then
     record_failure_wake \
       "check: telegram receiver: FAILED - receiver exited $receiver_status; the service will restart it" \
       "$diagnostic_path" || { [ -z "$diagnostic_path" ] || rm -f "$diagnostic_path"; return 1; }
@@ -467,9 +474,26 @@ fi
 }
 
 printf 'telegram receiver: started pid=%s\n' "$child"
-wait "$child"
-rc=$?
-if ! relay_output_file_once "$child_out" "$rc" "$child_err"; then
+receiver_started=$SECONDS
+receiver_status=
+while child_still_running; do
+  if [ $((SECONDS - receiver_started)) -ge "$HANG_TIMEOUT" ]; then
+    receiver_status=hung
+    break
+  fi
+  sleep "$HANG_CHECK_POLL"
+done
+if [ "$receiver_status" = hung ]; then
+  if ! terminate_child_bounded; then
+    printf 'telegram receiver: FAILED - hung receiver could not be terminated\n' >&2
+  fi
+  rc=124
+else
+  wait "$child"
+  rc=$?
+  receiver_status=$rc
+fi
+if ! relay_output_file_once "$child_out" "$receiver_status" "$child_err"; then
   printf 'telegram receiver: FAILED - receiver output could not be durably relayed\n'
   trap - HUP TERM INT
   exit 1
