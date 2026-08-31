@@ -157,32 +157,46 @@ record_failure_wake() {
 }
 
 queue_service_output() {
-  local relay_path=$1 receiver_status=$2 line had_output=0 output_seq=0
+  local relay_path=$1 receiver_status=$2 line had_event=0 output_seq=0 diagnostic_path
+  diagnostic_path=$(mktemp "$STATE/.tg-recv-diagnostic.XXXXXX") || return 1
+  chmod 600 "$diagnostic_path" || { rm -f "$diagnostic_path"; return 1; }
   while IFS= read -r line || [ -n "$line" ]; do
     [ -n "$line" ] || continue
-    had_output=1
-    if [ "$receiver_status" = 0 ] || [ "$receiver_status" = unknown ] \
-      || [ "$receiver_status" = shutdown ]; then
-      output_seq=$((output_seq + 1))
-      fm_wake_append signal "telegram.$(date +%s).$(fm_current_pid).$output_seq" "$line" || return 1
-    fi
+    case "$line" in
+      'CAPTAIN-TELEGRAM: '*|'CAPTAIN-TELEGRAM-BILD: '*)
+        had_event=1
+        output_seq=$((output_seq + 1))
+        fm_wake_append signal "telegram.$(date +%s).$(fm_current_pid).$output_seq" "$line" \
+          || { rm -f "$diagnostic_path"; return 1; }
+        ;;
+      *) printf '%s\n' "$line" >> "$diagnostic_path" \
+        || { rm -f "$diagnostic_path"; return 1; } ;;
+    esac
   done < "$relay_path"
+  [ -s "$diagnostic_path" ] || { rm -f "$diagnostic_path"; diagnostic_path=; }
 
-  [ "$receiver_status" = shutdown ] && return 0
+  if [ "$receiver_status" = shutdown ]; then
+    [ -z "$diagnostic_path" ] || rm -f "$diagnostic_path"
+    return 0
+  fi
   if [ "$receiver_status" != 0 ] && [ "$receiver_status" != unknown ]; then
     record_failure_wake \
       "check: telegram receiver: FAILED - receiver exited $receiver_status; the service will restart it" \
-      "$relay_path" || return 1
+      "$diagnostic_path" || { [ -z "$diagnostic_path" ] || rm -f "$diagnostic_path"; return 1; }
   elif [ "$receiver_status" = unknown ]; then
     record_failure_wake \
-      "check: telegram receiver: FAILED - recorded receiver exited with status unavailable; the service will restart it" || return 1
-  elif [ "$had_output" -eq 1 ]; then
+      "check: telegram receiver: FAILED - recorded receiver exited with status unavailable; the service will restart it" \
+      "$diagnostic_path" || { [ -z "$diagnostic_path" ] || rm -f "$diagnostic_path"; return 1; }
+  elif [ "$had_event" -eq 1 ]; then
     record_failure_wake \
-      "check: telegram receiver: FAILED - receiver exited 0 after delivering output; the service will restart it" || return 1
+      "check: telegram receiver: FAILED - receiver exited 0 after delivering output; the service will restart it" \
+      "$diagnostic_path" || { [ -z "$diagnostic_path" ] || rm -f "$diagnostic_path"; return 1; }
   else
     record_failure_wake \
-      "check: telegram receiver: FAILED - receiver exited 0 without a message or diagnostic; the service will restart it" || return 1
+      "check: telegram receiver: FAILED - receiver exited 0 without a message or diagnostic; the service will restart it" \
+      "$diagnostic_path" || { [ -z "$diagnostic_path" ] || rm -f "$diagnostic_path"; return 1; }
   fi
+  [ -z "$diagnostic_path" ] || rm -f "$diagnostic_path"
 }
 
 relay_output_file_once() {

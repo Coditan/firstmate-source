@@ -391,6 +391,7 @@ case "$(cat "$FM_HOME/state/receiver-mode")" in
     while :; do sleep 0.1; done
     ;;
   failure)
+    printf 'CAPTAIN-TELEGRAM: message delivered before failure\n'
     printf 'request failed for https://api.telegram.org/botSECRET-TOKEN/getUpdates: denied\n'
     head -c 5000 /dev/zero | tr '\0' x
     printf '\n'
@@ -480,12 +481,17 @@ FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" "$ARM" > "$service_home/state
 [ "$service_rc" -eq 7 ] || fail "service receiver failure exited $service_rc instead of preserving receiver exit 7"
 assert_grep 'check: telegram receiver: FAILED' "$service_home/state/.wake-queue" \
   "systemd receiver failure was indistinguishable from healthy silence"
+assert_grep 'CAPTAIN-TELEGRAM: message delivered before failure' "$service_home/state/.wake-queue" \
+  "valid receiver event was discarded when the receiver exited nonzero"
 assert_grep 'private diagnostic: state/.tg-recv-last-failure-diagnostic' "$service_home/state/.wake-queue" \
   "receiver failure wake did not reference its private diagnostic"
 assert_not_contains "$(cat "$service_home/state/.wake-queue")" 'SECRET-TOKEN' \
   "receiver failure wake exposed a token-bearing diagnostic"
 assert_grep 'SECRET-TOKEN' "$service_home/state/.tg-recv-last-failure-diagnostic" \
   "private receiver failure diagnostic discarded the captured evidence"
+assert_not_contains "$(cat "$service_home/state/.tg-recv-last-failure-diagnostic")" \
+  'CAPTAIN-TELEGRAM: message delivered before failure' \
+  "valid receiver event was misclassified as a private diagnostic"
 diagnostic_size=$(wc -c < "$service_home/state/.tg-recv-last-failure-diagnostic" | tr -d ' ')
 [ "$diagnostic_size" -le 4096 ] \
   || fail "private receiver failure diagnostic exceeded its 4096-byte bound: $diagnostic_size"
@@ -496,12 +502,12 @@ else
 fi
 [ "$diagnostic_mode" = 600 ] || fail "private receiver failure diagnostic mode was $diagnostic_mode instead of 600"
 
-first_failure_rows=$(wc -l < "$service_home/state/.wake-queue" | tr -d ' ')
+first_failure_rows=$(grep -c 'check: telegram receiver: FAILED' "$service_home/state/.wake-queue")
 service_rc=0
 FM_TG_RECV_MANAGER=systemd FM_HOME="$service_home" "$ARM" > "$service_home/state/service-failure-repeat.out" 2>&1 \
   || service_rc=$?
 [ "$service_rc" -eq 7 ] || fail "repeated service receiver failure exited $service_rc instead of preserving receiver exit 7"
-second_failure_rows=$(wc -l < "$service_home/state/.wake-queue" | tr -d ' ')
+second_failure_rows=$(grep -c 'check: telegram receiver: FAILED' "$service_home/state/.wake-queue")
 [ "$second_failure_rows" -eq "$first_failure_rows" ] \
   || fail "one outage queued $second_failure_rows failure wakes across service restarts instead of $first_failure_rows"
 
