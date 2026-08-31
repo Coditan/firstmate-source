@@ -58,6 +58,8 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 REG="$DATA/projects.md"
 PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
+# shellcheck source=bin/fm-absence-lib.sh
+. "$SCRIPT_DIR/fm-absence-lib.sh"
 # shellcheck source=bin/fm-lock-lib.sh
 . "$SCRIPT_DIR/fm-lock-lib.sh"
 FM_LOCK_LOG_PREFIX=fleet-sync
@@ -97,36 +99,6 @@ project_label() {
   esac
 }
 
-# ABSENCE IS A READING TOO, and `test -e` is false whenever the STAT fails rather
-# than only when the file is not there: a containing directory this process cannot
-# look in makes a present, populated path answer exactly like a missing one. Absence
-# may therefore only be concluded from an ancestor that can actually be searched,
-# and this names the nearest one that cannot.
-absence_unprovable() {  # <path>; prints the nearest ancestor that cannot be searched
-  local dir=$1
-  while :; do
-    case "$dir" in
-      /) return 1 ;;
-      */*) dir=${dir%/*}; [ -n "$dir" ] || dir=/ ;;
-      *) dir=. ;;
-    esac
-    if [ -e "$dir" ]; then
-      if [ ! -d "$dir" ] || [ ! -x "$dir" ] || [ ! -r "$dir" ]; then
-        printf '%s\n' "$dir"
-        return 0
-      fi
-      return 1
-    fi
-    if [ -L "$dir" ]; then
-      printf '%s\n' "$dir"
-      return 0
-    fi
-    case "$dir" in
-      /|.) return 1 ;;
-    esac
-  done
-}
-
 # AN UNREADABLE REGISTRY IS NOT AN EMPTY ONE. registered_project_names is called in
 # a command substitution, so its exit status is discarded by the `for` that consumes
 # it: a parse that failed used to fall through to an empty name list, every
@@ -147,7 +119,7 @@ registry_fault() {  # prints why the registry cannot be read, and returns 0 when
       printf 'broken symlink to %s\n' "$(readlink "$REG" 2>/dev/null || printf '%s' 'an unreadable target')"
       return 0
     fi
-    if unsearchable=$(absence_unprovable "$REG"); then
+    if unsearchable=$(fm_absence_unprovable "$REG"); then
       printf 'cannot tell whether the registry exists: %s cannot be searched\n' "$unsearchable"
       return 0
     fi
@@ -184,7 +156,7 @@ projects_dir_fault() {  # prints why the projects dir cannot be listed, returns 
       printf 'broken symlink to %s\n' "$(readlink "$PROJECTS" 2>/dev/null || printf '%s' 'an unreadable target')"
       return 0
     fi
-    if unsearchable=$(absence_unprovable "$PROJECTS"); then
+    if unsearchable=$(fm_absence_unprovable "$PROJECTS"); then
       printf 'cannot tell whether the projects directory exists: %s cannot be searched\n' "$unsearchable"
       return 0
     fi
