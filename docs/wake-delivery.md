@@ -158,7 +158,7 @@ The claim is that none remains, so it was checked against the tree rather than a
    A snippet that quietly reintroduced an arm step would fail that test.
 4. `state/.wake-stub.lock` - the record a session-held waiter published - has no writer and no reader left; `bin/fm-wake-lib.sh` no longer defines the predicates that judged it.
 
-The one background job a primary session still holds is the optional Telegram receiver arm, which is not wake delivery and is stated as such in the operating block.
+Until its separately consented service is installed, the one background job a primary session may still hold is the optional Telegram receiver fallback arm, which is not wake delivery and is stated as such in the operating block.
 
 ## What is not covered
 

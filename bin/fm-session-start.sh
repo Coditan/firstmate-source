@@ -70,11 +70,8 @@
 #                       tangle and watcher-liveness alarms still print in
 #                       advisory wording with no repair command attached.
 #   4. telegram      - reports whether this home's optional direct Telegram
-#                       receiver is inactive, skipped read-only, misconfigured,
-#                       or active. When active it names bin/fm-tg-recv-arm.sh as
-#                       its own tracked background task; this script never arms
-#                       it, and a read-only session is told the lock holder owns
-#                       arming.
+#                       receiver is inactive, misconfigured, service-owned, or
+#                       still on the consent-preserving tracked-task fallback.
 #   5. supervision    - emits exactly ONE operating block for the DETECTED
 #                       primary harness, rendered by
 #                       bin/fm-supervision-instructions.sh from
@@ -111,9 +108,10 @@
 #   8. closing reminder - points back to the step-5 block and keeps only the
 #                       lock, afk, X-mode, and read-once reminders. This script
 #                       deliberately never runs long-lived polls itself; the
-#                       step-4 receiver arm is the one tracked background job it
-#                       names, and wake delivery stays outside the harness
-#                       entirely as a supervised service (docs/wake-delivery.md).
+#                       step-4 receiver fallback is the one tracked background
+#                       job it may name before the receiver service is installed,
+#                       and wake delivery stays outside the harness entirely as
+#                       a supervised service (docs/wake-delivery.md).
 #
 #   9. timing        - one line naming what this whole run cost, and the path of
 #                       state/session-start-timing.log, where the per-step
@@ -598,16 +596,28 @@ timing_mark wake-queue
 # --- 4. direct Telegram receiver ---------------------------------------------
 TELEGRAM_PRESENT=0
 [ -f "$CONFIG/telegram.env" ] && TELEGRAM_PRESENT=1
+TELEGRAM_SERVICE_SELECTED=0
 
 subsection "TELEGRAM RECEIVER"
-if [ "$TELEGRAM_PRESENT" -eq 0 ]; then
+if [ "$TELEGRAM_PRESENT" -eq 0 ] && "$SCRIPT_DIR/fm-tg-recv-service.sh" owned >/dev/null 2>&1; then
+  TELEGRAM_SERVICE_SELECTED=1
+  TELEGRAM_SERVICE_STATE=$("$SCRIPT_DIR/fm-tg-recv-service.sh" ownership-status 2>/dev/null || true)
+  printf '%s\n' "TELEGRAM_RECEIVER: service-owned but unavailable - ${TELEGRAM_SERVICE_STATE:-down: configuration absent and retirement incomplete}; no tracked fallback will start"
+elif [ "$TELEGRAM_PRESENT" -eq 0 ]; then
   printf '%s\n' 'inactive (config/telegram.env absent)'
-elif [ "$READ_ONLY" -eq 1 ]; then
-  printf '%s\n' 'skipped (read-only session) - the session holding the lock owns Telegram receiver arming.'
 elif [ ! -x "$CONFIG/fm-tg-recv.sh" ]; then
   printf '%s\n' 'TELEGRAM_RECEIVER: config/telegram.env exists but config/fm-tg-recv.sh is missing or not executable; direct Telegram receive is not armed'
+elif "$SCRIPT_DIR/fm-tg-recv-service.sh" selected >/dev/null 2>&1; then
+  TELEGRAM_SERVICE_SELECTED=1
+  printf '%s\n' "TELEGRAM_RECEIVER: active - bin/fm-tg-recv-service.sh owns the receiver outside this session; no tracked background task is required"
+elif "$SCRIPT_DIR/fm-tg-recv-service.sh" owned >/dev/null 2>&1; then
+  TELEGRAM_SERVICE_SELECTED=1
+  TELEGRAM_SERVICE_STATE=$("$SCRIPT_DIR/fm-tg-recv-service.sh" ownership-status 2>/dev/null || true)
+  printf '%s\n' "TELEGRAM_RECEIVER: service-owned but unavailable - ${TELEGRAM_SERVICE_STATE:-down: health could not be determined}; no tracked fallback will start"
+elif [ "$READ_ONLY" -eq 1 ]; then
+  printf '%s\n' 'skipped (read-only session) - the session holding the lock owns the tracked Telegram receiver fallback.'
 else
-  printf '%s\n' "TELEGRAM_RECEIVER: active - run bin/fm-tg-recv-arm.sh as its own tracked background task, never shell &; it starts or attaches to this home's receiver"
+  printf '%s\n' "TELEGRAM_RECEIVER: fallback active - run bin/fm-tg-recv-arm.sh as its own tracked background task until the consent-gated receiver service is installed; it starts or attaches to this home's receiver"
 fi
 
 timing_mark telegram
@@ -811,19 +821,29 @@ queue.
 
 EOF
 elif [ -f "$CONFIG/x-mode.env" ]; then
+  TELEGRAM_NEXT=
+  if [ "$TELEGRAM_PRESENT" -eq 1 ] && [ "$TELEGRAM_SERVICE_SELECTED" -eq 0 ] && [ -x "$CONFIG/fm-tg-recv.sh" ]; then
+    TELEGRAM_NEXT='The Telegram receiver fallback is active, so keep its separate tracked task armed until the service is installed.'
+  elif [ "$TELEGRAM_SERVICE_SELECTED" -eq 1 ]; then
+    TELEGRAM_NEXT='The Telegram receiver is service-owned and needs no tracked task in this session.'
+  fi
   cat <<EOF
 Follow the supervision operating instructions block above for harness '$PRIMARY_HARNESS'.
 X mode is active, so the emitted block's cadence instruction applies.
-If the Telegram receiver section is active, keep that separate background task armed too;
-it is the only tracked background job supervision needs, because wake delivery is a service.
+$TELEGRAM_NEXT
 This script never starts long-lived polls itself.
 
 EOF
 else
+TELEGRAM_NEXT=
+if [ "$TELEGRAM_PRESENT" -eq 1 ] && [ "$TELEGRAM_SERVICE_SELECTED" -eq 0 ] && [ -x "$CONFIG/fm-tg-recv.sh" ]; then
+  TELEGRAM_NEXT='The Telegram receiver fallback is active, so keep its separate tracked task armed until the service is installed.'
+elif [ "$TELEGRAM_SERVICE_SELECTED" -eq 1 ]; then
+  TELEGRAM_NEXT='The Telegram receiver is service-owned and needs no tracked task in this session.'
+fi
 cat <<EOF
 Follow the supervision operating instructions block above for harness '$PRIMARY_HARNESS'.
-If the Telegram receiver section is active, keep that separate background task armed too;
-it is the only tracked background job supervision needs, because wake delivery is a service.
+$TELEGRAM_NEXT
 This script never starts long-lived polls itself.
 
 EOF

@@ -38,6 +38,15 @@ run_route() {  # <home> <event-path>
   CHAT_ID=1001 FM_HOME="$home" "$ROUTE" < "$event" 2>&1
 }
 
+decode_frame() {
+  python3 - "${1#FM_TG_EVENT_V1:}" <<'PY'
+import base64
+import sys
+
+sys.stdout.buffer.write(base64.b64decode(sys.argv[1], validate=True))
+PY
+}
+
 assert_inbox_record() {  # <jsonl-path> <jq-filter> <failure-message>
   local inbox=$1 filter=$2 message=$3
   [ -f "$inbox" ] || fail "$message: inbox missing at $inbox"
@@ -52,6 +61,7 @@ test_a_captain_message_keeps_the_legacy_output_and_inbox() {
 
   out=$(run_route "$home" "$event") || status=$?
   expect_code 10 "$status" "a captain Telegram event"
+  out=$(decode_frame "$out") || fail "the captain event frame was invalid"
   assert_contains "$out" "CAPTAIN-TELEGRAM: approve the safe path" \
     "the captain text output changed"
   assert_not_contains "$out" "telegram-correspondent" \
@@ -70,6 +80,7 @@ test_a_registered_correspondent_message_is_tagged_and_spooled() {
 
   out=$(run_route "$home" "$event") || status=$?
   expect_code 10 "$status" "a registered correspondent Telegram event"
+  out=$(decode_frame "$out") || fail "the correspondent event frame was invalid"
   assert_contains "$out" "FIRSTMATE_OP: v1 telegram-correspondent:" \
     "the correspondent event was not emitted as typed operational input"
   assert_contains "$out" "third-party Telegram message from requirements" \
@@ -148,6 +159,7 @@ test_a_correspondent_media_event_uses_the_same_inbox_boundary() {
 
   out=$(run_route "$home" "$event") || status=$?
   expect_code 10 "$status" "a registered correspondent media event"
+  out=$(decode_frame "$out") || fail "the correspondent media event frame was invalid"
   assert_contains "$out" "telegram-correspondent" \
     "the correspondent media event was not operationally tagged"
   inbox="$home/state/tg-correspondents/requirements/inbox.jsonl"
@@ -164,9 +176,23 @@ test_a_captain_media_event_keeps_the_legacy_media_prefix() {
 
   out=$(run_route "$home" "$event") || status=$?
   expect_code 10 "$status" "a captain media Telegram event"
+  out=$(decode_frame "$out") || fail "the captain media event frame was invalid"
   assert_contains "$out" "CAPTAIN-TELEGRAM-BILD: $home/state/tg-recv-media/photo.jpg | caption: caption text" \
     "the captain media output changed"
   pass "a captain media event keeps the legacy captain media prefix"
+}
+
+test_a_multiline_captain_message_is_one_complete_event() {
+  local home="$TMP_ROOT/captain-multiline" event="$TMP_ROOT/captain-multiline.json" out status=0 expected
+  new_home "$home"
+  expected=$'CAPTAIN-TELEGRAM: first line\nsecond line\nthird line'
+  event_json "$event" 1001 46 TEXT $'first line\nsecond line\nthird line'
+
+  out=$(run_route "$home" "$event") || status=$?
+  expect_code 10 "$status" "a multiline captain Telegram event"
+  out=$(decode_frame "$out") || fail "the multiline captain event frame was invalid"
+  [ "$out" = "$expected" ] || fail "the multiline captain event changed: $out"
+  pass "a multiline captain message remains one complete framed event"
 }
 
 test_a_captain_message_keeps_the_legacy_output_and_inbox
@@ -176,5 +202,6 @@ test_an_unknown_sender_stays_silent_when_correspondent_config_is_malformed
 test_a_registered_correspondent_gets_a_visible_diagnostic_when_config_is_malformed
 test_a_correspondent_media_event_uses_the_same_inbox_boundary
 test_a_captain_media_event_keeps_the_legacy_media_prefix
+test_a_multiline_captain_message_is_one_complete_event
 
 echo "# all fm-tg-recv-route tests passed"

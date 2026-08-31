@@ -27,9 +27,9 @@
 #   INBOX                optional captain inbox path compatibility override
 #
 # Output and exit:
-#   captain event        prints the legacy CAPTAIN-TELEGRAM line and exits 10
+#   captain event        prints one FM_TG_EVENT_V1 frame and exits 10
 #   correspondent event  records it under state/tg-correspondents/<name>/,
-#                        prints a FIRSTMATE_OP telegram-correspondent line, and
+#                        prints one FM_TG_EVENT_V1 frame, and
 #                        exits 10
 #   unknown event        prints nothing and exits 0
 #
@@ -53,7 +53,7 @@ usage() {
 usage: fm-tg-recv-route.sh < normalized-event.json
 
 Routes one already-fetched Telegram event from the private receiver.
-The captain lane keeps the legacy CAPTAIN-TELEGRAM output.
+The captain lane frames the complete legacy CAPTAIN-TELEGRAM output.
 A registered correspondent lane writes state/tg-correspondents/<name>/inbox.jsonl
 and emits a typed FIRSTMATE_OP telegram-correspondent wake.
 Unknown senders are silently dropped.
@@ -138,7 +138,11 @@ with open(inbox, "a", encoding="utf-8") as handle:
 PY
 }
 
-print_captain_line() {
+frame_output() {
+  python3 -c 'import base64,sys; sys.stdout.write("FM_TG_EVENT_V1:" + base64.b64encode(sys.stdin.buffer.read()).decode("ascii") + "\n")'
+}
+
+print_captain_event() {
   python3 - "$event_file" <<'PY'
 import json
 import sys
@@ -170,7 +174,7 @@ esac
 if [ "$chat_id" = "$CHAT_ID" ]; then
   captain_inbox=${INBOX:-$STATE/tg-recv.inbox.jsonl}
   append_event_json "$captain_inbox" captain ''
-  print_captain_line || die 'could not format the captain Telegram event'
+  print_captain_event | frame_output || die 'could not format the captain Telegram event'
   exit 10
 fi
 
@@ -183,7 +187,7 @@ if fm_tg_correspondent_probe_chat_id "$CONFIG" \
   body="third-party Telegram message from $FM_TG_CORRESPONDENT_NAME recorded at $inbox; this correspondent has no captain decision authority"
   fm_operational_input_encode telegram-correspondent "$body" output \
     || die 'could not encode the correspondent Telegram event'
-  printf '%s\n' "$output"
+  printf '%s\n' "$output" | frame_output
   exit 10
 fi
 

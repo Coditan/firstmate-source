@@ -957,10 +957,49 @@ SH
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
 
   assert_contains "$out" "TELEGRAM RECEIVER" "Telegram receiver section missing"
-  assert_contains "$out" "TELEGRAM_RECEIVER: active - run bin/fm-tg-recv-arm.sh as its own tracked background task, never shell &"     "session-start did not emit the tracked Telegram background arm step"
-  assert_contains "$out" "If the Telegram receiver section is active, keep that separate background task armed too"     "next step did not preserve Telegram receiver follow-up"
+  assert_contains "$out" "TELEGRAM_RECEIVER: fallback active - run bin/fm-tg-recv-arm.sh as its own tracked background task until the consent-gated receiver service is installed"     "session-start did not emit the tracked Telegram fallback arm step"
+  assert_contains "$out" "The Telegram receiver fallback is active, so keep its separate tracked task armed until the service is installed"     "next step did not preserve Telegram receiver fallback follow-up"
 
   pass "locked session-start emits the direct Telegram receiver arm step when configured"
+}
+
+test_telegram_service_owned_down_guidance() {
+  local rec root home fakebin out
+  rec=$(new_world telegram-service-owned-down)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  printf 'BOT_TOKEN=fake\nCHAT_ID=fake\n' > "$home/config/telegram.env"
+  cat > "$home/config/fm-tg-recv.sh" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$home/config/fm-tg-recv.sh"
+  printf '%s\n' systemd > "$home/state/.tg-recv-owner"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+
+  assert_contains "$out" "TELEGRAM_RECEIVER: service-owned but unavailable" \
+    "session start hid the persistently owned receiver's down state"
+  assert_contains "$out" "no tracked fallback will start" \
+    "session start advertised fallback for a service-owned receiver"
+  assert_not_contains "$out" "TELEGRAM_RECEIVER: fallback active" \
+    "session start offered an unusable fallback for persistent service ownership"
+  assert_contains "$out" "The Telegram receiver is service-owned and needs no tracked task" \
+    "next step tried to start a fallback for a degraded service-owned receiver"
+
+  rm -f "$home/config/telegram.env"
+  printf '%s\n' 'receiver service stop and disable failed during deconfiguration retirement' \
+    > "$home/state/.tg-recv-retirement-failure"
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" "receiver service stop and disable failed during deconfiguration retirement" \
+    "session start hid the durable deconfiguration retirement failure"
+  assert_not_contains "$out" "inactive (config/telegram.env absent)" \
+    "session start falsely reported inactive while retirement remained failed"
+
+  pass "session start exposes degraded persistent Telegram service ownership"
 }
 
 test_next_step_afk_delegates_to_daemon() {
@@ -1268,6 +1307,7 @@ test_fleet_digest_reports_a_working_standing_context_ceiling_condition
 test_digest_states_which_vessel_this_session_belongs_to
 test_next_step_sources_x_mode_cadence
 test_telegram_receiver_guidance
+test_telegram_service_owned_down_guidance
 test_next_step_afk_delegates_to_daemon
 test_supervision_block_exactly_one_and_pi_diagnostic
 test_pi_diagnostic_rejects_stale_loaded_marker

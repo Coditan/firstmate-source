@@ -2,7 +2,7 @@
 name: bootstrap-diagnostics
 description: >-
   Agent-only handling playbook for session-start bootstrap diagnostics.
-  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, NEEDS_GH_AUTH, SELF_DRIFT, CURRENCY_ROUND, MEMORY_ALARM, RUN_READER, VALIDATION_DAEMON, GROSSREINSCHIFF, SLOT_GUARD, or any of the other prefixes this playbook's body carries an entry for, the full set being the lines bin/fm-bootstrap.sh's header documents - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
+  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, NEEDS_GH_AUTH, SELF_DRIFT, CURRENCY_ROUND, MEMORY_ALARM, RUN_READER, VALIDATION_DAEMON, TELEGRAM_RECEIVER_UNIT, GROSSREINSCHIFF, SLOT_GUARD, or any of the other prefixes this playbook's body carries an entry for, the full set being the lines bin/fm-bootstrap.sh's header documents - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
   A silent bootstrap section, or a BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -64,6 +64,11 @@ When any diagnostic needs captain attention, report the plain consequence and re
 - `DELIVERY_UNIT: systemd --user unavailable ... tmux keeper fallback ...` - the selected fallback is automatic and needs no captain consent.
 - `DELIVERY_UNIT: systemd --user is unavailable and tmux is not installed ...` - nothing can supervise a listener here, so queued wakes will sit undelivered; do not dispatch until one backend is available.
 - `DELIVERY_UNIT: the listener's recorded PATH cannot reach <tools> ...` - the same two forms as the watcher's PATH lines above, with the same repair; a listener that cannot reach its session-backend CLI cannot submit a wake at all.
+- `TELEGRAM_RECEIVER_UNIT: missing ...` or `TELEGRAM_RECEIVER_UNIT: ... disabled ...` - explain that the configured receiver still depends on a session-owned fallback and therefore stops when that session does, ask for explicit consent, then run `bin/fm-bootstrap.sh install telegram-receiver-unit` only after approval.
+  The installation copies the tracked template, writes this home's private environment without copying or printing its credential, reloads the user manager, and enables and starts only the instance encoded from this home.
+- `TELEGRAM_RECEIVER_UNIT: <instance> needs locked convergence ...` - this read-only session found stale unit bytes, receiver or wrapper bytes, environment, or runtime state; leave repair to the lock-holding session.
+- `TELEGRAM_RECEIVER_UNIT: <instance> convergence failed ...` - inspect the named `systemctl --user status` result, run `bin/fm-tg-recv-service.sh status`, and inspect only the home-scoped lock and wake record; never print or source the credential while diagnosing it.
+- `TELEGRAM_RECEIVER_UNIT: systemd --user is unavailable ...` - the session-owned tracked task remains the explicit fallback, so receive works only while that task and its session remain alive.
 - `RESPAWNER_UNIT: missing ...` or `RESPAWNER_UNIT: ... disabled ...` - explain that queued wakes can still pile up beside a dead primary seat unless the per-home respawner is installed, ask for explicit consent, then run `bin/fm-bootstrap.sh install seat-respawner-unit` only after approval.
 - `RESPAWNER_UNIT: <instance> needs locked convergence ...` - this read-only session found stale unit bytes, source path or version, runtime state, or service environment; leave repair to the lock-holding session.
 - `RESPAWNER_UNIT: <instance> convergence failed ...` - inspect the named `systemctl --user status` result, the home-scoped respawner lock and beacon, `state/.seat-respawner.log`, and the configured fresh launch command.

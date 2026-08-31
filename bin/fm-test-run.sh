@@ -316,7 +316,7 @@ family_for_basename() {
       printf '%s\n' messaging-relay
       ;;
     fm-bosun-service.test.sh|fm-frequency-monitor-service.test.sh|\
-    fm-watcher-service.test.sh)
+    fm-tg-recv-service.test.sh|fm-watcher-service.test.sh)
       printf '%s\n' service-units
       ;;
     fm-watcher-systemd-smoke.test.sh)

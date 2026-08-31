@@ -236,6 +236,7 @@ fm_lock_clean_known_files() {
     "$lockdir/daemon" \
     "$lockdir/receiver-path" \
     "$lockdir/output-path" \
+    "$lockdir/diagnostic-path" \
     2>/dev/null || true
 }
 

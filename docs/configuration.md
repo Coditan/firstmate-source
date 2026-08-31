@@ -404,12 +404,22 @@ That file is the single place to set the second correspondent's chat id when it 
 `bin/fm-tg-recv-route.sh` lets the local receiver route one normalized event through that registration without learning the bot token.
 A correspondent event is recorded under `state/tg-correspondents/<name>/inbox.jsonl` and emitted as typed `telegram-correspondent` operational input, so transcript, away-mode, and approval readers do not treat it as a captain message.
 Unknown senders still produce no output and no inbox record.
-The tracked `bin/fm-tg-recv-arm.sh` wrapper owns only the session-start arm shape: it starts one receiver for the effective `FM_HOME` or attaches to an already running matching receiver.
-When a locked `bin/fm-session-start.sh` sees both files, its digest emits the separate tracked-background arm step for `bin/fm-tg-recv-arm.sh`; read-only sessions report that the lock holder owns arming.
+The tracked `bin/fm-tg-recv-arm.sh` wrapper starts one receiver for the effective `FM_HOME` or attaches to an already running matching receiver.
+`bin/fm-tg-recv-service.sh` owns the consent-gated `fm-tg-recv@.service` installation and later per-home convergence.
+Before that unit is installed, a locked `bin/fm-session-start.sh` retains the separate tracked-background arm step for `bin/fm-tg-recv-arm.sh`; after installation the digest reports the service owner and asks for no session task.
+Installation fences new fallback arms, waits for any fallback owner to release the shared handoff gate, retires its receiver, and only then enables the service, so ownership changes without two pollers running at once.
+Once selected, service ownership remains authoritative even when the unit, environment, or receiver is down: session start reports the degraded owner instead of starting a competing fallback, and locked bootstrap converges it.
 When `config/telegram.env` is absent the feature stays silent except for the session-start inactive line.
 When `config/telegram.env` exists but `config/fm-tg-recv.sh` is missing or not executable, session start reports that direct Telegram receive is not armed.
+The service environment contains only resolved paths, home locations, the wrapper mode, and a source-version digest; it neither sources nor copies the bot credential, which remains owned by the private local receiver.
 The wrapper records the receiver incarnation in `state/.tg-recv.lock` with the same portable lock discipline as watcher state and relays any captured receiver output once before cleaning a dead recorded receiver.
-Run `bin/fm-tg-recv-arm.sh` as its own harness-tracked background task when the digest says active; never bundle it with another command, pipe it, redirect it, use shell `&`, or replace the session-start watcher protocol with it.
+In service mode, each routed message becomes a durable `signal` wake and every receiver process exit other than service shutdown becomes a rate-limited `check` wake before systemd restarts the wrapper, including a zero exit after a message, diagnostic output, or no output.
+Complete valid event frames are appended before any failure wake, lock cleanup, or restart, including recovery of a dead recorded process whose exit status is unavailable.
+Other receiver stdout and stderr stay out of the wake payload and are kept, with mode `0600` and a 4096-byte ceiling, at `state/.tg-recv-last-failure-diagnostic`; the rate-limited wake contains only a pointer to that private file.
+The wrapper also treats a receiver that has not exited within 120 seconds as hung, terminates it, durably relays any complete event it already emitted, records a rate-limited failure wake, and exits so systemd restarts it.
+`FM_TG_RECV_HANG_TIMEOUT` overrides that positive whole-second ceiling for a deployment whose local receiver has a different bounded polling contract.
+The first failing receiver process wakes immediately because a process exit means the receiver's own retry policy was exhausted; restarts in the same 300-second outage stay quiet so one failure cannot flood supervision.
+Run `bin/fm-tg-recv-arm.sh` as its own harness-tracked background task only when the digest reports the fallback active; never bundle it with another command, pipe it, redirect it, or use shell `&`.
 
 `config/crew-harness` is a local, gitignored file containing one adapter name for crewmate and scout launches.
 When it is absent or contains `default`, crewmates mirror the firstmate's own harness.

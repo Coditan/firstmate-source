@@ -133,6 +133,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-tg-correspondent-lib.sh` | Parse the local non-captain Telegram correspondent registration and derive its private inbox path |
 | `fm-tg-recv-route.sh`    | Route one normalized Telegram receiver event to the captain lane, the registered correspondent lane, or silent drop |
 | `fm-tg-recv-arm.sh`      | Verified home-scoped direct Telegram receiver arm wrapper with attach-or-start behavior |
+| `fm-tg-recv-service.sh`  | Install, converge, and report the home-scoped direct Telegram receiver unit |
 | `fm-tg-send.sh`          | Send the captain by default, or the registered correspondent only with an explicit target, refusing loudly rather than reporting a delivery nobody got |
 | `fm-afk-start.sh`        | Run the common sourceable away-mode daemon entry in the foreground                      |
 | `fm-afk-launch.sh`       | Own away-mode entry, exit, rollback, and any backend terminal lifecycle                 |

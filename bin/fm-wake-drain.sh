@@ -86,7 +86,28 @@ fi
 if [ -n "$FM_WAKE_ECHO_ROWS" ]; then
   # Print-before-delete is the deliberate at-least-once no-loss boundary: a
   # crash in this micro-gap may replay a wake, and annotations stay outside it.
-  printf '%s\n' "$FM_WAKE_ECHO_ROWS" || exit "$?"
+  printf '%s\n' "$FM_WAKE_ECHO_ROWS" | python3 -c '
+import sys
+
+def unescape(value):
+    result = []
+    index = 0
+    escapes = {"n": "\n", "r": "\r", "t": "\t", "\\": "\\"}
+    while index < len(value):
+        if value[index] == "\\" and index + 1 < len(value) and value[index + 1] in escapes:
+            result.append(escapes[value[index + 1]])
+            index += 2
+        else:
+            result.append(value[index])
+            index += 1
+    return "".join(result)
+
+for row in sys.stdin:
+    fields = row.rstrip("\n").split("\t", 4)
+    if len(fields) == 5 and fields[2] == "signal" and fields[3].startswith("telegram.v1."):
+        fields[4] = unescape(fields[4])
+    print("\t".join(fields))
+' || exit "$?"
 fi
 if [ -n "$OVERFLOW_PATH" ]; then
   printf 'wake echo: %s record(s) withheld and %s row(s) shortened by the drain echo bound; every drained record in full: %s\n' \
