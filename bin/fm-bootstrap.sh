@@ -210,6 +210,7 @@ fleet_sync_relay_all_output() {
 }
 
 fleet_sync() {
+  local rc
   [ -x "$FM_ROOT/bin/fm-fleet-sync.sh" ] || return 0
   [ -d "$PROJECTS" ] || return 0
 
@@ -235,10 +236,17 @@ fleet_sync() {
     fi
     sleep 1
   done
-  wait "$pid" 2>/dev/null || true
+  rc=0
+  wait "$pid" 2>/dev/null || rc=$?
   [ "$monitor_was_on" -eq 1 ] || set +m 2>/dev/null || true
 
   fleet_sync_relay_filtered_output "$tmp"
+  # A REFRESH THAT DID NOT COMPLETE IS NOT A REFRESH. This status was thrown away,
+  # so a sync that stopped without producing a per-project line - the shape a home
+  # that cannot read its own project registry takes - reached a session start as
+  # silence, which reads exactly like a fleet with nothing to say.
+  [ "$rc" -eq 0 ] \
+    || echo "FLEET_SYNC: fleet: refresh failed (exit $rc); the outcomes above are only what it managed before stopping"
   rm -f "$tmp"
 }
 
