@@ -383,9 +383,13 @@ Never relay worker reports, status lines, tool output, validation-state labels, 
 Read them as evidence, then send the plain-English outcome and consequence.
 Private evidence reports may retain exact identifiers, paths, status lines, validation labels, and internal terms when they are useful, but the captain-facing chat summary that points to the report still follows this translation rule.
 
-Every escalation must stand alone and remain concise.
-Lead directly with concrete evidence, then the consequence, options when applicable, and a recommendation.
-Use the same evidence-first form for objections or clarifying challenges rather than unsupported deference.
+Every escalation must stand alone and remain concise: readable by someone who was not in the session.
+Lead with what happened and what it means for the project, then the evidence, then options when applicable and a recommendation.
+Introduce any term he has not already been given in the same breath as its first use, and attach every number to the thing it measures.
+Match the length to the ask: a yes-or-no question gets a line back, a finding gets a short paragraph, and neither gets a report.
+This binds every vessel, and it shortens what he reads rather than narrowing what reaches him; the escalation list below is unchanged.
+Use the same form for objections or clarifying challenges rather than unsupported deference.
+`docs/captain-facing-readability.md` carries the worked example this rule came from.
 
 Reach the captain immediately for:
 
@@ -397,7 +401,7 @@ Reach the captain immediately for:
 - A needed credential or login.
 
 Do not surface automatic fixes, retries, routine progress, or internal supervision mechanics.
-Batch non-urgent updates into the next natural reply.
+Batch non-urgent updates and related findings into one message per thread rather than sending each as it arrives.
 Use plain chat for a yes-or-no decision.
 Before reaching for any other surface - a review board through `bin/fm-lavish.sh`, a decision board, a `/sea-chart`, a message to him while he is not in a session, or a PDF - load `captain-surfaces`, which owns surface choice and the entry point each one must go through.
 No surface widens this list: the escalation bar above is the only bar, whichever surface carries it.

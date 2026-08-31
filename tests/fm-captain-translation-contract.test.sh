@@ -17,6 +17,7 @@ CODEXAPP="$ROOT/.agents/skills/firstmate-codexapp/SKILL.md"
 FMX="$ROOT/.agents/skills/fmx-respond/SKILL.md"
 UPDATE="$ROOT/.agents/skills/updatefirstmate/SKILL.md"
 AHOY="$ROOT/.agents/skills/ahoy/SKILL.md"
+READABILITY="$ROOT/docs/captain-facing-readability.md"
 README="$ROOT/README.md"
 
 section_9() {
@@ -130,6 +131,46 @@ test_verbatim_internal_evidence_is_rejected_from_chat() {
   assert_contains "$contract" "the captain-facing chat summary that points to the report still follows this translation rule" \
     "section 9 does not keep chat summaries plain English"
   pass "captain chat rejects verbatim internal evidence while private reports stay precise"
+}
+
+# Vocabulary and the escalation bar were already governed; density was not, so a
+# message could pass both and still be unreadable to someone who was not in the
+# session. This pins the cold-readability axis and, in the same test, that it did
+# not become a licence to withhold: the escalation list must survive intact.
+test_section_9_binds_cold_readability_without_narrowing_the_bar() {
+  local contract
+  contract=$(section_9)
+  assert_contains "$contract" "readable by someone who was not in the session" \
+    "section 9 does not bind cold readability"
+  assert_contains "$contract" "Lead with what happened and what it means for the project, then the evidence" \
+    "section 9 does not put the news before the evidence"
+  assert_contains "$contract" "Introduce any term he has not already been given in the same breath as its first use, and attach every number to the thing it measures." \
+    "section 9 does not bind unintroduced terms and unattached numbers"
+  assert_contains "$contract" "Match the length to the ask" \
+    "section 9 does not bind length to the size of the ask"
+  assert_contains "$contract" "it shortens what he reads rather than narrowing what reaches him" \
+    "section 9 does not deny that readability is a licence to withhold"
+  assert_contains "$contract" "This binds every vessel" \
+    "section 9 does not bind the readability rule on every vessel"
+  assert_contains "$contract" "Batch non-urgent updates and related findings into one message per thread" \
+    "section 9 does not batch related findings into one message per thread"
+  assert_contains "$contract" '`docs/captain-facing-readability.md` carries the worked example' \
+    "section 9 does not point at the worked example it came from"
+  for bar in \
+    "Work ready for their review, with the full PR URL." \
+    "Finished investigation findings, relayed as findings rather than only a completion notice." \
+    "Gate findings that require their decision under the configured authority." \
+    "A real blocker or failure after the relevant playbook is exhausted." \
+    "Anything destructive, irreversible, or security-sensitive." \
+    "A needed credential or login."; do
+    assert_contains "$contract" "$bar" "section 9 escalation bar lost '$bar'"
+  done
+  assert_present "$READABILITY" "the worked example section 9 points at is missing"
+  assert_grep "make it binding on every vessel" "$READABILITY" \
+    "the worked example does not record the ruling it came from"
+  assert_grep "It is not permission to send him less." "$READABILITY" \
+    "the worked example does not deny that readability narrows the bar"
+  pass "section 9 binds cold readability and keeps the escalation bar intact"
 }
 
 test_outward_facing_skill_points_reference_section_9_owner() {
@@ -265,6 +306,7 @@ test_section_9_exempts_proper_nouns_from_translation
 test_compressed_safety_labels_have_plain_renderings
 test_mapping_list_covers_high_risk_internal_families
 test_verbatim_internal_evidence_is_rejected_from_chat
+test_section_9_binds_cold_readability_without_narrowing_the_bar
 test_outward_facing_skill_points_reference_section_9_owner
 test_section_9_owner_is_not_duplicated_into_skills
 test_ahoy_is_an_internal_user_invocable_skill
