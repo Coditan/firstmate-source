@@ -279,6 +279,7 @@ Every-door recording, supersession, intake gate, and premise re-measurement veri
 Adoption-baseline, board-input, and startup-cap verification date: 2026-08-17.
 Oversized decision-ledger argv-boundary verification date: 2026-08-18.
 Decision-count label verification date: 2026-08-25.
+Single-pass digest re-check and one-read-per-session-start reuse verification date: 2026-08-31.
 
 The baseline measurement was taken against a copy of the main home's `data/backlog.md` and `data/done-archive.md`, read-only, with `FM_HOME` pointed at the copy.
 The 2026-08-24 record reproduction measured the label defect with bearings showing 2 captain-actionable holds while the ledger showed 0 open captain decision records.
@@ -298,6 +299,13 @@ Fourth-disposition (`answered-by`) verification date: 2026-08-25.
 `test_an_answer_pointer_that_no_longer_resolves_reports_again` proves the pointer is read back rather than trusted.
 
 The oversized synthetic backlog regression crosses the 131072-byte argv ceiling with 350 already-closed captain records, proves `--records` returns all 350 records, proves pre-baseline `--audit --json` reports all 350 findings with none excluded, then proves `--record-baseline` and the post-baseline audit carry all 350 as withheld rather than dropping any.
+
+The 2026-08-31 single-pass re-check and its reuse are a cost change, and they were verified as one rather than argued as one.
+Every read view - `--audit`, `--audit --json`, `--limit 0/3/5`, `--all`, `--json --all`, `--json --limit 5`, `--records`, `--records --repo`, `--premises`, `--premises --json`, and the default digest - was byte-identical to the previous implementation against a copy of the main home's 232 settled records, both clean and with one settled decision hand-edited so it must report `altered-record`, and with the reuse both on and off.
+The re-check loop it replaced was the cost: `--records`, which exits before it, took 0.51s of the command's 14.1s.
+One `--audit` read fell from 14.1s to 1.40s and the reusing second read to 0.57s, and a whole session start fell from 55.0s to 25.2s - measured by running the previous `bin/` and the current one against the same records in an isolated home, which held no project clones, so the separate clone-refresh cost is in neither figure.
+`test_the_single_pass_recheck_puts_every_verdict_on_the_right_record` is the one a per-record loop could not have failed: it alters the second and fifth of six records and asserts each verdict lands on the right record id, not merely that the right number of records read as altered.
+`test_awkward_decision_text_still_verifies_through_the_single_pass`, `test_a_recheck_that_cannot_size_its_input_refuses_instead_of_reporting`, `test_a_reused_read_is_dropped_the_moment_the_records_change`, and `test_turning_the_reuse_off_changes_no_output` hold the NUL-separated hand-off, the refusal, the key, and the byte-identity.
 
 Two defects were found by these regressions rather than by reading, and both are recorded because each is a shape the next change could reproduce.
 The first: `record` wrote its resolution body with the routed-work list run onto the `Routed work:` line, because a command substitution ate the terminating newline; the write-then-close ordering meant the failing verification left exactly the visibly unfinished record it is designed to leave, which is how it was noticed.
