@@ -86,6 +86,50 @@ SH
   chmod +x "$path"
 }
 
+# A fake tmux that also completes the SERVER-IDENTITY ROUND TRIP a real one
+# does, so the existence probe comes back CONFIRMED rather than unanswerable.
+# bin/fm-tmux-lib.sh addresses a recorded server as
+#   tmux -S <sock> if-shell <identity-test> <command> <mismatch-print> \; <completion-print>
+# and reads the reply as "the server answered" only when the completion marker is
+# the last line; anything else is rc=126, the backend could not be asked. The
+# plain fake above never prints that marker, which is why it produces an
+# unreadable pane and not a present one - the two are different fixtures because
+# they are different facts, and the give-up says different things about them.
+write_confirming_fake_tmux() {
+  local path=$1 log=$2
+  cat > "$path" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$log"
+for arg do
+  if [ "\$arg" = new-window ]; then
+    printf '%%9\n'
+    exit 0
+  fi
+done
+idx=0
+i=0
+for arg do
+  i=\$((i + 1))
+  [ "\$arg" = if-shell ] && idx=\$((i + 2))
+done
+[ "\$idx" -gt 0 ] || exit 0
+cmd=
+last=
+i=0
+for arg do
+  i=\$((i + 1))
+  [ "\$i" = "\$idx" ] && cmd=\$arg
+  last=\$arg
+done
+case "\$cmd" in
+  *list-panes*|*pane_id*) printf '%%9\n' ;;
+esac
+printf '%s\n' "\$last"
+exit 0
+SH
+  chmod +x "$path"
+}
+
 write_executing_fake_tmux() {
   local path=$1 log=$2
   cat > "$path" <<SH
@@ -395,6 +439,13 @@ test_a_giveup_with_no_standing_record_never_claims_an_open_pane() {
 # cycle is ever held - so an episode that reached its bound on launches alone
 # still ends with the record of its last one standing. The pane IS open, and the
 # fact the captain acts on must be carried whether or not any hold was spent.
+#
+# THE BACKEND HERE ANSWERS, WHICH IS WHAT MAKES "STILL OPEN" SAYABLE AT ALL.
+# write_confirming_fake_tmux completes the server round trip, so the existence
+# probe returns a confirmed pane and the respawner records that it saw one. The
+# plain fake would leave the probe unanswerable, and the sibling test below is
+# what covers that case; a fixture that could not confirm the pane must not be
+# the one asserting the pane is open.
 test_a_giveup_reached_without_holds_still_names_the_open_pane() {
   local home delivery tmux log status launches findings
 
@@ -405,7 +456,7 @@ test_a_giveup_reached_without_holds_still_names_the_open_pane() {
   log="$home/tmux.log"
   printf 'undeliverable: listener pid 1 is up with 1 wake(s) pending, but no session has published where the model turn lives\n' > "$status"
   write_fake_delivery "$delivery"
-  write_pane_fake_tmux "$tmux" "$log"
+  write_confirming_fake_tmux "$tmux" "$log"
 
   # A one-launch bound: the single launch exhausts it, so the bound is reached on
   # the next cycle before any wait is due and no hold is ever spent.
@@ -433,6 +484,66 @@ test_a_giveup_reached_without_holds_still_names_the_open_pane() {
   assert_grep "holds=0" "$home/data/findings/"*.json \
     "the hold count was dropped from the measurement when no cycle was held"
   pass "a give-up reached without holds still names the pane still open"
+}
+
+# THE READING NOBODY COULD TAKE, WHICH IS THE PRODUCTION CASE.
+#
+# An endpoint whose tmux server has exited - a container restart, or the last
+# window closing - answers no probe at all. deliver_first_turn deliberately keeps
+# the first-turn record through every such answer, because reading "I could not
+# ask" as "the pane is gone" would release a launch beside a seat that may still
+# be sitting there. That refusal is right, and it means a STANDING RECORD IS NOT
+# EVIDENCE OF AN OPEN PANE: the record outlives the server. So the give-up may
+# not turn it into one. It must say what it actually has - a seat was started
+# here, and whether its pane is still there could not be read - in the register
+# the alarm uses for `unmeasured`, asserting neither that the seat is open nor
+# that it is gone. The plain fake tmux never completes the server round trip,
+# which is exactly the shape a dead server presents.
+test_a_giveup_whose_pane_could_not_be_read_claims_neither_way() {
+  local home delivery tmux log status launches findings i
+
+  home=$(make_home giveup-unreadable-pane)
+  status="$home/status.txt"
+  delivery="$home/fake-delivery"
+  tmux="$home/fake-tmux"
+  log="$home/tmux.log"
+  printf 'undeliverable: listener pid 1 is up with 1 wake(s) pending, but no session has published where the model turn lives\n' > "$status"
+  write_fake_delivery "$delivery"
+  write_pane_fake_tmux "$tmux" "$log"
+
+  # One launch, then two held cycles, each past its backoff. The deadline stays
+  # long, so the record is still standing when the bound arrives - and no probe
+  # along the way was ever answered.
+  i=0
+  while [ "$i" -lt 4 ]; do
+    [ "$i" -eq 0 ] || sleep 3
+    FM_SEAT_FIRST_TURN_DEADLINE=600 FM_SEAT_RESPAWNER_MAX_ATTEMPTS=3 \
+      FM_FAKE_DELIVERY_STATUS="$status" run_respawner_once "$home" "$delivery" "$tmux" \
+      || fail "respawner refused cycle $i"
+    i=$((i + 1))
+  done
+
+  [ -f "$home/state/.seat-first-turn" ] \
+    || fail "the record was retired, so this is not the unreadable-probe case"
+  launches=$(grep -c new-window "$log" 2>/dev/null || printf 0)
+  [ "$launches" = 1 ] \
+    || fail "this episode opened more than one seat; got $launches launches"
+  findings=$(find "$home/data/findings" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')
+  [ "$findings" = 1 ] \
+    || fail "a held episode never reached its bound; got $findings give-up findings"
+  assert_no_grep "is still open in pane" "$home/data/findings/"*.json \
+    "the give-up asserted an open pane on a probe that was never answered"
+  assert_no_grep "no longer exists" "$home/data/findings/"*.json \
+    "the give-up asserted the pane was gone on a probe that was never answered"
+  assert_grep "cannot tell whether that pane is still there" "$home/data/findings/"*.json \
+    "the give-up did not say plainly that the reading could not be taken"
+  assert_grep "%9" "$home/data/findings/"*.json \
+    "the give-up did not name the pane it started a seat in"
+  assert_grep "holds=2" "$home/data/findings/"*.json \
+    "the hold count was dropped when the pane could not be read"
+  assert_grep "1 launch attempt" "$home/data/findings/"*.json \
+    "the give-up did not name the one launch that was actually made"
+  pass "a give-up whose pane could not be read claims neither way"
 }
 
 # The verdict the alarm turns into a sentence on the captain's phone. A
@@ -792,6 +903,7 @@ test_a_pending_first_turn_holds_the_next_launch
 test_a_held_episode_is_bounded_and_the_giveup_counts_launches_as_launches
 test_a_giveup_with_no_standing_record_never_claims_an_open_pane
 test_a_giveup_reached_without_holds_still_names_the_open_pane
+test_a_giveup_whose_pane_could_not_be_read_claims_neither_way
 test_a_held_first_turn_is_reported_as_holding_rather_than_up
 test_an_armed_restart_that_never_ran_is_reported
 test_launch_does_not_pin_the_respawners_path

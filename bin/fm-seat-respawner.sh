@@ -284,6 +284,22 @@ abandon_first_turn() {  # <reason>
   log "first turn dropped: $1"
 }
 
+# A STANDING RECORD IS NOT A PANE THAT IS THERE, so the one probe that can say
+# so writes it down. deliver_first_turn deliberately KEEPS the record on every
+# probe answer that is not a confident absence, because "I could not ask" must
+# never release a launch beside a seat that may be sitting there. That same
+# refusal means the record survives an endpoint whose tmux server has exited, so
+# reading the record as evidence of an open pane converts a reading nobody could
+# take into a fact - which is exactly what bin/fm-seat-presence-lib.sh refuses to
+# do for the lock, and why the alarm has five verdicts rather than two. Only
+# rc=0, a CONFIRMED pane, marks; the mark is written once and never cleared,
+# because a pane that was confirmed present and later became unreadable is still
+# the best answer this component has.
+first_turn_confirm_pane() {
+  [ -z "$(kv_get "$FIRST_TURN" pane-seen 2>/dev/null || true)" ] || return 0
+  first_turn_mark pane-seen || true
+}
+
 # Always returns 0. The record is retired only when the turn has LANDED (a seat
 # holds this home), when the pane is confidently gone, or when the deadline
 # passes - never merely because the keystroke was typed, because session start
@@ -345,6 +361,7 @@ deliver_first_turn() {
       rc=0
       fm_backend_target_exists tmux "$pane" || rc=$?
       if [ "$rc" -eq 0 ]; then
+        first_turn_confirm_pane
         if [ -z "$(kv_get "$FIRST_TURN" held 2>/dev/null || true)" ]; then
           first_turn_mark held || true
           log "first turn held past ${age}s: pane $pane was given its turn and is still open; not launching beside it"
@@ -374,6 +391,7 @@ deliver_first_turn() {
     return 0
   fi
   [ "$rc" -eq 0 ] || return 0
+  first_turn_confirm_pane
   # Typed once: a seat mid-session-start must not be typed into a second time.
   [ -z "$submitted" ] || return 0
   # The same two reads delivery takes, from the same owners, for the same
@@ -488,26 +506,37 @@ backoff_for() {  # <count-after-attempt>
 # silence - the same standard by which the alarm on this branch declines to print
 # `armed` for a home it deliberately did not arm.
 #
-# WHICH CLAIM IS SELECTED IS DECIDED BY THE RECORD, NEVER BY THE HOLD COUNT.
-# A held cycle is evidence that a pane WAS open then; only a first-turn record
-# still standing now says one is open at the bound, and one_cycle passes an empty
-# <pane> for exactly that reason. Keying the refusal wording on `holds` instead
-# states the fact when it is false - an episode that held twice and then had its
-# pane close reports a seat open in "pane unknown" - and omits it when it is true
-# - an episode that reached the bound on launches alone while its last pane is
-# still sitting there. Both directions send him to the wrong machine, so the
-# discriminator is the pane and the counts are reported either way.
-emit_giveup_finding() {  # <key> <status-line> <launches> <holds> <pane>
-  local key=$1 status_line=$2 launches=$3 holds=$4 pane=$5 out claim measurement refuted where
+# WHICH CLAIM IS SELECTED IS DECIDED BY WHAT WAS ACTUALLY ESTABLISHED, NEVER BY
+# THE HOLD COUNT AND NEVER BY A RECORD MERELY STANDING.
+# A held cycle is evidence that a pane WAS open then, and says nothing about now.
+# A standing record says almost as little, because deliver_first_turn keeps the
+# record on every probe answer that is not a confident absence - so an endpoint
+# whose tmux server has exited leaves a record standing forever while no probe
+# after the first can be answered at all. There are therefore THREE things this
+# can honestly say, and each has its own sentence: the pane was confirmed present
+# and a second seat is being refused beside it; a seat was started and whether its
+# pane is still there could not be read; or no record stands at all. The middle one
+# exists because collapsing it into either neighbour is the same defect in
+# opposite directions - the fleet's rule, enforced for the lock by
+# bin/fm-seat-presence-lib.sh and for the seat by the alarm's five verdicts, is
+# that a reading nobody could take is never reported as one that was.
+emit_giveup_finding() {  # <key> <status-line> <launches> <holds> <pane> <pane-confirmed>
+  local key=$1 status_line=$2 launches=$3 holds=$4 pane=$5 confirmed=$6 out claim measurement refuted where seen
   if [ -f "$GIVEUP" ] && [ "$(kv_get "$GIVEUP" key 2>/dev/null || true)" = "$key" ]; then
     return 0
   fi
   where="bin/fm-seat-respawner.sh for $FM_HOME"
-  measurement="$status_line | launches=$launches holds=$holds pane=${pane:-none}"
+  seen=no
+  [ -z "$confirmed" ] || seen=yes
+  [ -n "$pane" ] || seen=none
+  measurement="$status_line | launches=$launches holds=$holds pane=${pane:-none} pane-confirmed=$seen"
   refuted="A fresh delivery status for the same queued work becomes deliverable after a launch attempt, or the stay-down marker is set deliberately."
-  if [ -n "$pane" ]; then
+  if [ -n "$pane" ] && [ -n "$confirmed" ]; then
     claim="The primary firstmate seat respawner stopped retrying this episode at its $MAX_ATTEMPTS-cycle bound after $launches launch attempt(s) and $holds held cycle(s). A seat it started is still open in pane $pane and has not taken this home's lock, so it is deliberately not opening another beside it; this home has an agent and no first mate."
     refuted="$refuted The pane above closing, or a seat taking this home's lock, also ends this episode."
+  elif [ -n "$pane" ]; then
+    claim="The primary firstmate seat respawner stopped retrying this episode at its $MAX_ATTEMPTS-cycle bound after $launches launch attempt(s) and $holds held cycle(s). It started a seat in pane $pane and cannot tell whether that pane is still there: no probe of it could be answered, which is what an endpoint whose tmux server has exited looks like. That is not a report that a seat is open and not a report that it is gone; either way this home has no first mate."
+    refuted="$refuted A probe of the pane above being answered either way, or a seat taking this home's lock, also ends this episode."
   else
     claim="The primary firstmate seat respawner exhausted $launches launch attempt(s) for this home and stopped retrying this episode at its $MAX_ATTEMPTS-cycle bound after $holds held cycle(s). No seat it started is still on record, so nothing is being held and no pane is being refused."
   fi
@@ -589,7 +618,7 @@ respawn_needed() {  # <status-line>
 }
 
 one_cycle() {
-  local status_line key now count next delay holds pane spent
+  local status_line key now count next delay holds pane seen spent
   beat || return 1
   revive_watcher_if_dead
   # The declared stand-down is read BEFORE any pending turn is delivered, and it
@@ -643,8 +672,9 @@ one_cycle() {
   # MAX_ATTEMPTS while only launches are ever reported as launches.
   if [ "$spent" -ge "$MAX_ATTEMPTS" ]; then
     pane=$(kv_get "$FIRST_TURN" pane 2>/dev/null || true)
-    first_turn_pending || pane=
-    emit_giveup_finding "$key" "$status_line" "$count" "$holds" "$pane" || true
+    seen=$(kv_get "$FIRST_TURN" pane-seen 2>/dev/null || true)
+    first_turn_pending || { pane=; seen=; }
+    emit_giveup_finding "$key" "$status_line" "$count" "$holds" "$pane" "$seen" || true
     return 0
   fi
   # A seat this respawner already started, still on its way to the lock, is not
