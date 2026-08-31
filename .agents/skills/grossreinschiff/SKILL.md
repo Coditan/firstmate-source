@@ -170,8 +170,10 @@ If that audit answers `baseline absent`, this home is still re-reporting losses 
 
 **Surface:** this host.
 **Look for:** a tool the fleet depends on that no currency check covers.
-**Test:** list the tools actually used, subtract those the managed AXI-suite check covers (`bin/fm-axi-suite.sh`, `docs/configuration.md` "AXI-suite self-update"), and for each remainder compare the installed version against its registry version. Report the gap in releases, not just "outdated".
+**Test:** list the tools actually used, subtract those the managed AXI-suite check covers (`bin/fm-axi-suite.sh`, `docs/configuration.md` "AXI-suite self-update") and those the daily currency round's tool table already reads (`bin/fm-currency-round.sh`, `docs/currency-round.md` "The unmanaged tools"), and for each remainder compare the installed version against its registry version. Report the gap in releases, not just "outdated".
+That second subtraction is what the owner column reports: a tool in the round's table has the round as its owner, and a remainder after both subtractions is a tool with no owner at all.
 **Second, sharper test:** find every published claim that rests on one of those tools, and check whether age alone has made it false.
+**Care:** a tool announcing its own gap is not a tool being watched. `no-mistakes` printed "A new version of no-mistakes is available" on every invocation, to every agent, for weeks while twelve releases behind, and this sweep still found it in 2026-08-31 with owner "nobody" - the notice was never missing, an owner was. Judge by whether something re-measures the tool, never by whether the gap was visible.
 **Care:** a bare shell resolves the *shared* copy, not this vessel's managed prefix, so a version read without `export PATH="$FM_HOME/.local/axi/bin:$PATH"` may not be the version firstmate's own scripts use (`data/learnings.md`, 2026-07-29).
 **Who acts:** firstmate measures; an upgrade that changes fleet behaviour is a dispatched task.
 **Evidence:** `graphify` sat 22 releases behind on two homes and 20 on a third, because the currency check only looks inside the managed prefix - and a capability claim published to the Commodore was false purely through age. Measured 2026-08-02/03; re-measure before repeating either number.
