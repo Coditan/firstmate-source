@@ -121,6 +121,10 @@ fm_axi_prepend_path "$FM_HOME"
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# The fleet's one bounded-execution ladder, shared with the watcher, so the
+# deadline around bin/fm-pr-poll.sh is the same one wherever that program runs.
+# shellcheck source=bin/fm-bounded-lib.sh
+. "$SCRIPT_DIR/fm-bounded-lib.sh"
 # shellcheck source=bin/fm-slot-lib.sh
 . "$SCRIPT_DIR/fm-slot-lib.sh"  # fm_slot_conflicting_holders: who else is standing in this worktree
 if [ "$#" -lt 1 ] || ! fm_task_id_path_safe "$1"; then
@@ -386,24 +390,21 @@ remove_grok_turnend_auth() {
 # waiting for, so leaving it armed costs nothing and losing it would cost that.
 #
 # The poll's read is a forge round-trip, and this helper now runs on every
-# refusal - including ones already decided from purely local facts - so it is
-# bounded by the same deadline the watcher gives this exact program
-# (FM_CHECK_TIMEOUT). A stalled forge must not hold a refusal open forever. A
-# timeout is simply a read that did not answer "merged": the poll stays armed,
-# the refusal prints and exits as it already does, and nothing is lost, because
-# an unfulfilled or unreadable poll is silent.
+# refusal - including ones already decided from purely local facts - so it runs
+# under bin/fm-bounded-lib.sh's ladder with the same deadline the watcher gives
+# this exact program (FM_CHECK_TIMEOUT). That ladder is bounded on every seat the
+# fleet runs on, including a Darwin seat with neither timeout nor gtimeout, which
+# is where a two-branch form would have fallen through to an unbounded call. A
+# stalled forge must not hold a refusal open forever. A deadline that fires is
+# simply a read that did not answer "merged": it is evidence of nothing either
+# way, so the poll stays armed, the refusal prints and exits as it already does,
+# and nothing is lost, because an unfulfilled or unreadable poll is silent.
 retire_fulfilled_pr_poll() {  # <state dir> <task id>
   local state_dir=$1 id=$2 out
   fm_pr_poll_artifacts_valid "$state_dir" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" || return 0
-  if command -v timeout >/dev/null 2>&1; then
-    out=$(timeout "${FM_CHECK_TIMEOUT:-30}" "$SCRIPT_DIR/fm-pr-poll.sh" --validated \
-      "$FM_PR_DATA_PROVIDER" "$FM_PR_DATA_URL" "$FM_PR_DATA_HOST" \
-      "$FM_PR_DATA_PATH" "$FM_PR_DATA_NUMBER" 2>/dev/null) || return 0
-  else
-    out=$("$SCRIPT_DIR/fm-pr-poll.sh" --validated "$FM_PR_DATA_PROVIDER" \
-      "$FM_PR_DATA_URL" "$FM_PR_DATA_HOST" "$FM_PR_DATA_PATH" \
-      "$FM_PR_DATA_NUMBER" 2>/dev/null) || return 0
-  fi
+  out=$(fm_run_bounded "${FM_CHECK_TIMEOUT:-30}" "$SCRIPT_DIR/fm-pr-poll.sh" --validated \
+    "$FM_PR_DATA_PROVIDER" "$FM_PR_DATA_URL" "$FM_PR_DATA_HOST" \
+    "$FM_PR_DATA_PATH" "$FM_PR_DATA_NUMBER") || return 0
   [ "$out" = merged ] || return 0
   fm_pr_poll_retire "$state_dir" "$id" || return 0
   echo "RETIRED MERGE POLL: $id's pull request is already merged, so its poll had nothing left to report and has been removed. The refusal above still stands and the work is untouched." >&2

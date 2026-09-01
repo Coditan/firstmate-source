@@ -323,6 +323,35 @@ SH
   chmod +x "$case_dir/fakebin/gh-axi" "$case_dir/fakebin/gh"
 }
 
+# A PATH with no timeout(1) and no gtimeout(1) and every other command still
+# reachable - a Darwin seat that never installed coreutils, which is the seat a
+# two-branch "timeout or run it bare" form leaves entirely unbounded. Built once
+# and reused, because it is a directory of symlinks rather than a fixture.
+FM_TEST_NO_TIMEOUT_PATH=
+path_without_timeout_binaries() {
+  local dir entry name dirs
+  if [ -n "$FM_TEST_NO_TIMEOUT_PATH" ]; then
+    printf '%s' "$FM_TEST_NO_TIMEOUT_PATH"
+    return 0
+  fi
+  FM_TEST_NO_TIMEOUT_PATH="$TMP_ROOT/no-timeout-bin"
+  mkdir -p "$FM_TEST_NO_TIMEOUT_PATH"
+  IFS=: read -r -a dirs <<< "$PATH"
+  for dir in "${dirs[@]}"; do
+    [ -d "$dir" ] || continue
+    for entry in "$dir"/*; do
+      [ -f "$entry" ] && [ -x "$entry" ] || continue
+      name=${entry##*/}
+      case "$name" in timeout|gtimeout) continue ;; esac
+      [ -e "$FM_TEST_NO_TIMEOUT_PATH/$name" ] || ln -s "$entry" "$FM_TEST_NO_TIMEOUT_PATH/$name"
+    done
+  done
+  command -v timeout >/dev/null 2>&1 || fail "the host has no timeout(1), so the two rungs cannot be told apart"
+  PATH="$FM_TEST_NO_TIMEOUT_PATH" command -v timeout >/dev/null 2>&1 \
+    && fail "the timeout-less PATH still resolves timeout(1)"
+  printf '%s' "$FM_TEST_NO_TIMEOUT_PATH"
+}
+
 # Arm the task's real merge poll through bin/fm-pr-check.sh, exactly as landing
 # does. Args: case_dir
 arm_merge_poll() {
@@ -769,36 +798,53 @@ test_refused_sibling_teardown_keeps_an_unfulfilled_poll() {
 # what it protects. It sits above teardown's own poll pre-flight, so it used to
 # exit before any retirement could run and strand a spent poll exactly as the
 # reported incident did. Its own exit status - not a flattened 1 - must survive.
+# Run on both rungs of the bounded-execution ladder: on a seat with a timeout
+# binary, and on one with neither timeout nor gtimeout, which falls to the perl
+# alarm. A rung that cannot read the poll's answer would retire nothing while
+# every "stays armed" assertion elsewhere still passed, so this is the positive
+# control for both.
 test_ownership_refusal_retires_a_fulfilled_poll() {
-  local case_dir rc head_before left
-  case_dir=$(make_case ownership-refusal-retires-poll)
-  write_meta "$case_dir" no-mistakes ship
-  wt_commit_file "$case_dir" pending.txt "not landed" "work still in review"
-  head_before=$(git -C "$case_dir/wt" rev-parse HEAD)
-  add_gh_pr_state_and_head "$case_dir" MERGED "$(git -C "$case_dir/wt" rev-parse origin/main)"
-  arm_merge_poll "$case_dir"
-  printf 'holder=task-other\n' > "$case_dir/state/task-x1.slot-disputed"
+  local case_dir rc head_before left label case_path
+  for label in timeout-binary no-timeout-binary; do
+    case_dir=$(make_case "ownership-refusal-retires-poll-$label")
+    write_meta "$case_dir" no-mistakes ship
+    wt_commit_file "$case_dir" pending.txt "not landed" "work still in review"
+    head_before=$(git -C "$case_dir/wt" rev-parse HEAD)
+    add_gh_pr_state_and_head "$case_dir" MERGED "$(git -C "$case_dir/wt" rev-parse origin/main)"
+    arm_merge_poll "$case_dir"
+    printf 'holder=task-other\n' > "$case_dir/state/task-x1.slot-disputed"
 
-  set +e
-  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
-  rc=$?
-  set -e
+    if [ "$label" = no-timeout-binary ]; then
+      case_path="$case_dir/fakebin:$(path_without_timeout_binaries)"
+    else
+      case_path="$case_dir/fakebin:$PATH"
+    fi
 
-  expect_code 4 "$rc" "ownership-refusal-retires-poll: the slot-held refusal must keep its own exit status"
-  grep -q 'is held by task-other, which is still live' "$case_dir/stderr" \
-    || fail "ownership-refusal-retires-poll: the ownership REFUSED line is gone: $(cat "$case_dir/stderr")"
-  [ "$(git -C "$case_dir/wt" rev-parse HEAD)" = "$head_before" ] \
-    || fail "ownership-refusal-retires-poll: the refused teardown moved the worktree HEAD"
-  [ -f "$case_dir/wt/pending.txt" ] \
-    || fail "ownership-refusal-retires-poll: the refused teardown discarded the unlanded work"
-  [ -f "$case_dir/state/task-x1.meta" ] \
-    || fail "ownership-refusal-retires-poll: the refused teardown removed the task record"
+    set +e
+    FM_ROOT_OVERRIDE="$ROOT" \
+    FM_STATE_OVERRIDE="$case_dir/state" \
+    FM_CONFIG_OVERRIDE="$case_dir/config" \
+    PATH="$case_path" \
+      "$TEARDOWN" task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
 
-  left=$(poll_artifacts_left "$case_dir")
-  [ -z "$left" ] || fail "ownership-refusal-retires-poll: the spent poll survived the ownership refusal: $left"
-  grep -q 'RETIRED MERGE POLL' "$case_dir/stderr" \
-    || fail "ownership-refusal-retires-poll: the refusal did not say the poll had been retired"
-  pass "a teardown refused for a contested pooled slot still retires an already-merged PR's poll"
+    expect_code 4 "$rc" "$label: the slot-held refusal must keep its own exit status"
+    grep -q 'is held by task-other, which is still live' "$case_dir/stderr" \
+      || fail "$label: the ownership REFUSED line is gone: $(cat "$case_dir/stderr")"
+    [ "$(git -C "$case_dir/wt" rev-parse HEAD)" = "$head_before" ] \
+      || fail "$label: the refused teardown moved the worktree HEAD"
+    [ -f "$case_dir/wt/pending.txt" ] \
+      || fail "$label: the refused teardown discarded the unlanded work"
+    [ -f "$case_dir/state/task-x1.meta" ] \
+      || fail "$label: the refused teardown removed the task record"
+
+    left=$(poll_artifacts_left "$case_dir")
+    [ -z "$left" ] || fail "$label: the spent poll survived the ownership refusal: $left"
+    grep -q 'RETIRED MERGE POLL' "$case_dir/stderr" \
+      || fail "$label: the refusal did not say the poll had been retired"
+  done
+  pass "a teardown refused for a contested pooled slot retires an already-merged PR's poll on either timeout rung"
 }
 
 # Retirement asks the forge, and it now runs on refusals that were decided from
@@ -806,45 +852,61 @@ test_ownership_refusal_retires_a_fulfilled_poll() {
 # gives this exact program. A stalled forge must not hold a refusal open: the
 # refusal prints and exits on time, and the unanswered poll simply stays armed,
 # which costs nothing because an unfulfilled poll is silent.
+# Bounded on EVERY seat, not only on one with GNU coreutils. The second vector
+# runs teardown on a PATH with no timeout(1) and no gtimeout(1) - a Darwin seat
+# without coreutils - which is the seat where a two-branch form runs the forge
+# read with no deadline at all and hangs a refusal that was already decided from
+# purely local facts. Both must refuse on time and leave the poll armed.
 test_refusal_is_not_held_open_by_a_stalled_forge() {
-  local case_dir rc left
-  case_dir=$(make_case refusal-bounded-forge-read)
-  write_meta "$case_dir" no-mistakes ship
-  wt_commit_file "$case_dir" pending.txt "not landed" "work still in review"
-  add_gh_pr_state_and_head "$case_dir" MERGED "$(git -C "$case_dir/wt" rev-parse origin/main)"
-  arm_merge_poll "$case_dir"
-  printf 'holder=task-other\n' > "$case_dir/state/task-x1.slot-disputed"
-  # Only now does the forge stall - the fixture had to be armed against a
-  # readable one first.
-  cat > "$case_dir/fakebin/gh" <<'SH'
+  local case_dir rc left label case_path
+  for label in timeout-binary no-timeout-binary; do
+    case_dir=$(make_case "refusal-bounded-forge-read-$label")
+    write_meta "$case_dir" no-mistakes ship
+    wt_commit_file "$case_dir" pending.txt "not landed" "work still in review"
+    add_gh_pr_state_and_head "$case_dir" MERGED "$(git -C "$case_dir/wt" rev-parse origin/main)"
+    arm_merge_poll "$case_dir"
+    printf 'holder=task-other\n' > "$case_dir/state/task-x1.slot-disputed"
+    # Only now does the forge stall - the fixture had to be armed against a
+    # readable one first.
+    cat > "$case_dir/fakebin/gh" <<'SH'
 #!/usr/bin/env bash
 sleep 600
 SH
-  chmod +x "$case_dir/fakebin/gh"
+    chmod +x "$case_dir/fakebin/gh"
 
-  set +e
-  FM_ROOT_OVERRIDE="$ROOT" \
-  FM_STATE_OVERRIDE="$case_dir/state" \
-  FM_CONFIG_OVERRIDE="$case_dir/config" \
-  FM_CHECK_TIMEOUT=1 \
-  PATH="$case_dir/fakebin:$PATH" \
-    timeout 60 "$TEARDOWN" task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
-  rc=$?
-  set -e
+    if [ "$label" = no-timeout-binary ]; then
+      case_path="$case_dir/fakebin:$(path_without_timeout_binaries)"
+    else
+      case_path="$case_dir/fakebin:$PATH"
+    fi
 
-  [ "$rc" -ne 124 ] || fail "refusal-bounded-forge-read: a stalled forge held the refusal open"
-  expect_code 4 "$rc" "refusal-bounded-forge-read: the refusal must exit with its own status"
-  grep -q 'is held by task-other, which is still live' "$case_dir/stderr" \
-    || fail "refusal-bounded-forge-read: the ownership REFUSED line is gone: $(cat "$case_dir/stderr")"
-  [ -f "$case_dir/wt/pending.txt" ] \
-    || fail "refusal-bounded-forge-read: the refused teardown discarded the unlanded work"
+    # The deadline on the whole run is this test's own, resolved on the test's
+    # PATH; only teardown itself runs on the seat's PATH.
+    set +e
+    timeout 60 env \
+      FM_ROOT_OVERRIDE="$ROOT" \
+      FM_STATE_OVERRIDE="$case_dir/state" \
+      FM_CONFIG_OVERRIDE="$case_dir/config" \
+      FM_CHECK_TIMEOUT=1 \
+      PATH="$case_path" \
+      "$TEARDOWN" task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
 
-  # The read never answered, so it is evidence of nothing: the poll stays armed.
-  left=$(poll_artifacts_left "$case_dir")
-  case "$left" in *task-x1.check.sh*) ;; *) fail "refusal-bounded-forge-read: an unread poll was retired: '$left'" ;; esac
-  ! grep -q 'RETIRED MERGE POLL' "$case_dir/stderr" \
-    || fail "refusal-bounded-forge-read: teardown claimed to retire a poll it could not read"
-  pass "a stalled forge cannot hold a teardown refusal open, and an unread poll stays armed"
+    [ "$rc" -ne 124 ] || fail "$label: a stalled forge held the refusal open"
+    expect_code 4 "$rc" "$label: the refusal must exit with its own status"
+    grep -q 'is held by task-other, which is still live' "$case_dir/stderr" \
+      || fail "$label: the ownership REFUSED line is gone: $(cat "$case_dir/stderr")"
+    [ -f "$case_dir/wt/pending.txt" ] \
+      || fail "$label: the refused teardown discarded the unlanded work"
+
+    # The read never answered, so it is evidence of nothing: the poll stays armed.
+    left=$(poll_artifacts_left "$case_dir")
+    case "$left" in *task-x1.check.sh*) ;; *) fail "$label: an unread poll was retired: '$left'" ;; esac
+    ! grep -q 'RETIRED MERGE POLL' "$case_dir/stderr" \
+      || fail "$label: teardown claimed to retire a poll it could not read"
+  done
+  pass "a stalled forge cannot hold a teardown refusal open on either timeout rung, and an unread poll stays armed"
 }
 
 test_local_only_fork_remote_allows() {
