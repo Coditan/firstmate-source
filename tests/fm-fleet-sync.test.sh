@@ -836,6 +836,36 @@ test_bootstrap_surfaces_a_projects_path_that_is_not_a_directory() {
   pass "bootstrap surfaces a projects path that is not a directory"
 }
 
+# THE REGISTRY IS THE OTHER PATH THAT READER SPEAKS ABOUT, and it refuses on it
+# BEFORE it ever walks the clones. A guard keyed on the projects directory alone
+# therefore still swallowed a registry refusal whenever the projects directory was
+# provably absent - a home whose registry is present and populated and cannot be read
+# reached the session start as silence, which is the defect this whole change exists
+# to remove, at the one caller that matters.
+test_bootstrap_surfaces_an_unreadable_registry_when_it_keeps_no_clones() {
+  local home out reg
+  home="$TMP_ROOT/registry-unreadable-no-projects-dir"
+  rm -rf "$home"
+  mkdir -p "$home/data"
+  reg="$home/data/projects.md"
+  printf -- '- a-clone - test project (added 2026-08-31)\n' > "$reg"
+  chmod 000 "$reg" || fail "could not make the registry unreadable"
+  if head -c 1 "$reg" >/dev/null 2>&1; then
+    chmod 644 "$reg"
+    echo "skip: this environment can still read a mode-000 file (running as root?)"
+    return 0
+  fi
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  chmod 644 "$reg"
+
+  assert_contains "$out" "cannot read the project registry" \
+    "the session start must relay a registry the refresh could not read, even with no projects dir: $out"
+  assert_contains "$out" "permission denied" \
+    "the relayed refusal must carry its own named cause: $out"
+  pass "bootstrap surfaces an unreadable registry when it keeps no clones"
+}
+
 # The guard it falls through is still a guard: a home with no projects directory at
 # all must not pay for a refresh walk, and must say nothing about a fleet it has.
 test_bootstrap_stays_silent_for_a_home_that_keeps_no_clones() {
@@ -1036,6 +1066,7 @@ test_a_projects_dir_whose_absence_cannot_be_established_is_never_taken_as_absent
 test_a_searchable_unreadable_data_dir_still_proves_an_absent_registry
 test_bootstrap_surfaces_a_projects_path_it_cannot_resolve
 test_bootstrap_surfaces_a_projects_path_that_is_not_a_directory
+test_bootstrap_surfaces_an_unreadable_registry_when_it_keeps_no_clones
 test_bootstrap_stays_silent_for_a_home_that_keeps_no_clones
 test_orphaned_stale_packed_refs_lock_recovers
 test_live_packed_refs_lock_is_never_removed

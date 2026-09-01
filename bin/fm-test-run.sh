@@ -1031,6 +1031,13 @@ families_for_changed_path() {
     bin/fm-bearings-snapshot.sh|bin/fm-fleet-snapshot.sh|bin/fm-fleet-view.sh)
       printf '%s\n' snapshot-bearings
       ;;
+    bin/fm-absence-lib.sh)
+      # The one owner of "was this path's absence established, or is it just what a
+      # failed stat reports", sourced by fleet sync and by bootstrap's guard over it.
+      # No test names this file by basename, so the bin/* grep resolution below
+      # cannot reach its readers: name their family explicitly.
+      printf '%s\n' session-bootstrap
+      ;;
     bin/fm-blocker-class-lib.sh)
       # The one owner of "is a blocked-by target real", spliced into the fleet
       # snapshot, bearings, sea chart, and backlog lint. Its tests do not name this

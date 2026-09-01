@@ -214,16 +214,24 @@ fleet_sync_relay_all_output() {
   done < "$tmp"
 }
 
+fleet_sync_path_may_speak() {  # <path>: false only when this path is provably absent
+  [ -e "$1" ] || [ -L "$1" ] || fm_absence_unprovable "$1" >/dev/null
+}
+
 fleet_sync() {
   local rc
   [ -x "$FM_ROOT/bin/fm-fleet-sync.sh" ] || return 0
-  # A home that genuinely keeps no clones must still cost nothing here. Every other
-  # reading falls through: a path that is PRESENT as anything at all, a dangling
-  # symlink, and a path whose absence this process cannot establish are all readings
-  # fm-fleet-sync.sh refuses on, and returning 0 on any of them would swallow that
-  # refusal and hand the session start the same silence a home with nothing to sync
-  # produces. Only a provable absence skips, because only that one is an answer.
-  [ -e "$PROJECTS" ] || [ -L "$PROJECTS" ] || fm_absence_unprovable "$PROJECTS" >/dev/null || return 0
+  # A home that genuinely keeps no clones and registers no projects must still cost
+  # nothing here. Every other reading falls through: a path that is PRESENT as
+  # anything at all, a dangling symlink, and a path whose absence this process cannot
+  # establish are all readings fm-fleet-sync.sh refuses on, and returning 0 on any of
+  # them would swallow that refusal and hand the session start the same silence a
+  # home with nothing to sync produces. Only a provable absence skips, because only
+  # that one is an answer - and it has to be provable for BOTH paths that reader
+  # speaks about, since it refuses on the registry before it ever walks the clones.
+  fleet_sync_path_may_speak "$PROJECTS" \
+    || fleet_sync_path_may_speak "$DATA/projects.md" \
+    || return 0
 
   tmp=$(mktemp "${TMPDIR:-/tmp}/fm-fleet-sync.XXXXXX" 2>/dev/null) || return 0
   timeout=$(fleet_sync_bootstrap_timeout)
