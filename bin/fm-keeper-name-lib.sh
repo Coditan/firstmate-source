@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# fm-keeper-name-lib.sh - stable per-home tmux keeper names.
 
 fm_keeper_home_digest() {  # <home>
   local home=$1
