@@ -4,6 +4,8 @@
 # (recovery) into one ordered digest.
 #
 # Coverage:
+#   - a required-read directive reaches the first 2 KiB before verbose output
+#     and points to intact captain/learnings files for bounded follow-up reads
 #   - absent-file markers vs empty-but-present files in the context digest
 #   - the lock-refusal read-only path: the banner leads the operational
 #     sections, every mutating step is skipped (including bootstrap's eight
@@ -320,6 +322,10 @@ EOF
 
   assert_contains "$out" "data/secondmates.md" "digest did not label the secondmates.md section"
   assert_contains "$out" "data/learnings.md" "digest did not label the learnings.md section"
+  assert_contains "$out" "data/captain.md: PRESENT - $home/data/captain.md" \
+    "required-read block did not report the present captain file"
+  assert_contains "$out" "data/learnings.md: ABSENT - $home/data/learnings.md" \
+    "required-read block did not report the absent learnings file"
 
   # Exactly four context ABSENT markers (secondmates.md, captain-shared.md,
   # learnings.md; backlog.md is covered by its own test) - and the
@@ -331,6 +337,65 @@ EOF
   assert_contains "$cap_section" "(present, empty)" "empty-but-present captain.md was not distinguished from ABSENT"
 
   pass "context digest distinguishes ABSENT, empty-but-present, and populated files"
+}
+
+test_required_session_reads_reach_a_short_preview() {
+  local rec root home fakebin out output_file preview required_offset lock_offset
+  local captain_pointer_offset learnings_pointer_offset captain_read learnings_read
+  rec=$(new_world required-session-reads)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  awk 'BEGIN { for (i = 0; i < 180; i++) print "- demo project registry filler that pushes context beyond a short harness preview" }' \
+    > "$home/data/projects.md"
+  {
+    printf '%s\n' 'CAPTAIN_BEGIN_SENTINEL'
+    awk 'BEGIN { for (i = 0; i < 900; i++) print "captain preference filler" }'
+    printf '%s\n' 'CAPTAIN_END_SENTINEL'
+  } > "$home/data/captain.md"
+  {
+    printf '%s\n' 'LEARNINGS_BEGIN_SENTINEL'
+    awk 'BEGIN { for (i = 0; i < 500; i++) print "fleet learning filler" }'
+    printf '%s\n' 'LEARNINGS_END_SENTINEL'
+  } > "$home/data/learnings.md"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  output_file="$root/session-start.out"
+  printf '%s' "$out" > "$output_file"
+  preview=$(head -c 2048 "$output_file")
+  required_offset=$(LC_ALL=C grep -abo -m1 '^REQUIRED SESSION READS$' "$output_file" | cut -d: -f1)
+  lock_offset=$(LC_ALL=C grep -abo -m1 '^LOCK$' "$output_file" | cut -d: -f1)
+  captain_pointer_offset=$(LC_ALL=C grep -Fabo -m1 "data/captain.md: PRESENT - $home/data/captain.md" "$output_file" | cut -d: -f1)
+  learnings_pointer_offset=$(LC_ALL=C grep -Fabo -m1 "data/learnings.md: PRESENT - $home/data/learnings.md" "$output_file" | cut -d: -f1)
+
+  [ -n "$required_offset" ] || fail "required-read directive was absent from the session-start output"
+  [ "$required_offset" -lt 2048 ] || fail "required-read directive began outside a 2 KiB preview at byte $required_offset"
+  [ "$required_offset" -lt "$lock_offset" ] || fail "required-read directive did not precede LOCK"
+  [ "$captain_pointer_offset" -lt 2048 ] || fail "captain pointer began outside a 2 KiB preview at byte $captain_pointer_offset"
+  [ "$learnings_pointer_offset" -lt 2048 ] || fail "learnings pointer began outside a 2 KiB preview at byte $learnings_pointer_offset"
+  assert_contains "$preview" "REQUIRED SESSION READS" "a 2 KiB preview omitted the required-read directive"
+  assert_contains "$preview" "bounded chunks and continue until EOF" \
+    "the delivered directive did not protect its own follow-up reads from truncation"
+  assert_contains "$preview" "data/captain.md: PRESENT - $home/data/captain.md" \
+    "the delivered directive omitted the captain file path"
+  assert_contains "$preview" "data/learnings.md: PRESENT - $home/data/learnings.md" \
+    "the delivered directive omitted the learnings file path"
+  assert_not_contains "$preview" "CAPTAIN_END_SENTINEL" \
+    "the preview unexpectedly contained the late captain sentinel and did not exercise the delivery gap"
+  assert_not_contains "$preview" "LEARNINGS_END_SENTINEL" \
+    "the preview unexpectedly contained the late learnings sentinel and did not exercise the delivery gap"
+
+  captain_read=$(<"$home/data/captain.md")
+  learnings_read=$(<"$home/data/learnings.md")
+  assert_contains "$captain_read" "CAPTAIN_BEGIN_SENTINEL" "the pointed captain file lost its first sentinel"
+  assert_contains "$captain_read" "CAPTAIN_END_SENTINEL" "the pointed captain file lost its last sentinel"
+  assert_contains "$learnings_read" "LEARNINGS_BEGIN_SENTINEL" "the pointed learnings file lost its first sentinel"
+  assert_contains "$learnings_read" "LEARNINGS_END_SENTINEL" "the pointed learnings file lost its last sentinel"
+
+  pass "required reads begin at byte $required_offset; captain/learnings pointers at bytes $captain_pointer_offset/$learnings_pointer_offset reach a 2 KiB preview and intact files"
 }
 
 # --- lock refusal: read-only path --------------------------------------------
@@ -1288,6 +1353,7 @@ EOF
 }
 
 test_context_digest_absent_empty_present
+test_required_session_reads_reach_a_short_preview
 test_lock_refusal_read_only_path
 test_captain_and_learnings_head_leads_the_digest
 test_oversized_first_lines_deliver_bounded_partial_content

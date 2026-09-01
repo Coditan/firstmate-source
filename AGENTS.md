@@ -96,8 +96,9 @@ Its header is the single owner of composed commands, ordering, and digest conten
 Do not reimplement it by separately running its lock, bootstrap, or initial wake-drain components.
 Tracked native session-open adapters only nudge this command; `docs/sessionstart-nudge.md` owns their enforcement mechanics and verification evidence.
 
-Read the complete digest once and trust it as this turn's startup and recovery input.
-Do not separately re-read the context, backlog, metadata, or bulk status inputs it just printed unless a source was reported absent or corrupt, older history is specifically needed, or a targeted workflow must inspect before writing.
+After the command returns, obey its leading `REQUIRED SESSION READS` block before taking any other action; the script owns those follow-up reads.
+Then read the model-visible digest once and trust it as this turn's startup and recovery input.
+Outside the required-read block, do not separately re-read the context, backlog, metadata, or bulk status inputs it just printed unless a source was reported absent or corrupt, older history is specifically needed, or a targeted workflow must inspect before writing.
 An `ABSENT` captain, shared-captain, secondmate, or learnings file means the firstmate repo's built-in defaults, no shared captain preferences, no registered secondmates, or no captured learnings; rebuild an absent or stale project registry from the clones before dispatch.
 
 If the session lock is refused, report the refusal reason and remain read-only.
