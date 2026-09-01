@@ -323,17 +323,16 @@ SH
   chmod +x "$case_dir/fakebin/gh-axi" "$case_dir/fakebin/gh"
 }
 
-# A PATH with no timeout(1) and no gtimeout(1) and every other command still
-# reachable - a Darwin seat that never installed coreutils, which is the seat a
-# two-branch "timeout or run it bare" form leaves entirely unbounded. Built once
-# and reused, because it is a directory of symlinks rather than a fixture.
+# Set FM_TEST_NO_TIMEOUT_PATH to a directory of symlinks that reaches every
+# command on PATH except timeout(1) and gtimeout(1) - a Darwin seat that never
+# installed coreutils, which is the seat a two-branch "timeout or run it bare"
+# form leaves entirely unbounded. Called as a plain statement rather than through
+# a command substitution, so the built path and any failure both land in the
+# caller's own shell, and the walk happens once for the whole suite.
 FM_TEST_NO_TIMEOUT_PATH=
-path_without_timeout_binaries() {
+ensure_no_timeout_path() {
   local dir entry name dirs
-  if [ -n "$FM_TEST_NO_TIMEOUT_PATH" ]; then
-    printf '%s' "$FM_TEST_NO_TIMEOUT_PATH"
-    return 0
-  fi
+  [ -z "$FM_TEST_NO_TIMEOUT_PATH" ] || return 0
   FM_TEST_NO_TIMEOUT_PATH="$TMP_ROOT/no-timeout-bin"
   mkdir -p "$FM_TEST_NO_TIMEOUT_PATH"
   IFS=: read -r -a dirs <<< "$PATH"
@@ -349,7 +348,7 @@ path_without_timeout_binaries() {
   command -v timeout >/dev/null 2>&1 || fail "the host has no timeout(1), so the two rungs cannot be told apart"
   PATH="$FM_TEST_NO_TIMEOUT_PATH" command -v timeout >/dev/null 2>&1 \
     && fail "the timeout-less PATH still resolves timeout(1)"
-  printf '%s' "$FM_TEST_NO_TIMEOUT_PATH"
+  return 0
 }
 
 # Arm the task's real merge poll through bin/fm-pr-check.sh, exactly as landing
@@ -815,7 +814,8 @@ test_ownership_refusal_retires_a_fulfilled_poll() {
     printf 'holder=task-other\n' > "$case_dir/state/task-x1.slot-disputed"
 
     if [ "$label" = no-timeout-binary ]; then
-      case_path="$case_dir/fakebin:$(path_without_timeout_binaries)"
+      ensure_no_timeout_path
+      case_path="$case_dir/fakebin:$FM_TEST_NO_TIMEOUT_PATH"
     else
       case_path="$case_dir/fakebin:$PATH"
     fi
@@ -875,7 +875,8 @@ SH
     chmod +x "$case_dir/fakebin/gh"
 
     if [ "$label" = no-timeout-binary ]; then
-      case_path="$case_dir/fakebin:$(path_without_timeout_binaries)"
+      ensure_no_timeout_path
+      case_path="$case_dir/fakebin:$FM_TEST_NO_TIMEOUT_PATH"
     else
       case_path="$case_dir/fakebin:$PATH"
     fi

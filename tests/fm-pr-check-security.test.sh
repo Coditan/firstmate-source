@@ -2813,6 +2813,80 @@ test_disarm_refuses_a_check_that_is_not_provably_a_merge_poll() {
   pass "--disarm removes a check only after proving it is this task's merge poll"
 }
 
+# What a retirement VALIDATES has to follow what it may remove, or the shared
+# safety check refuses on a file the caller would never have touched. --disarm
+# never removes state/<id>.check-trust, so an odd-shaped one - a symlink, or one
+# carrying a second hard link - must not stop it retiring a merge poll it has
+# positively identified. Refusing there would block the verb for exactly the
+# operators who have a custom check registered, which is the population an
+# earlier design was rejected for blocking.
+test_disarm_ignores_an_odd_shaped_trust_record() {
+  local dir state out rc shape
+  for shape in symlink extra-hard-link; do
+    dir=$(make_case "disarm-odd-trust-$shape")
+    state="$dir/home/state"
+    write_task_meta "$dir"
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/9 >/dev/null 2>&1 \
+      || fail "$shape: arming the fixture poll failed"
+    printf 'fm-custom-check-v1\n' > "$dir/trust-source"
+    chmod 0600 "$dir/trust-source"
+    if [ "$shape" = symlink ]; then
+      ln -s "$dir/trust-source" "$state/task-a.check-trust"
+    else
+      cp "$dir/trust-source" "$state/task-a.check-trust"
+      ln "$state/task-a.check-trust" "$dir/trust-alias"
+    fi
+
+    set +e
+    out=$(run_check_entry "$dir" --disarm task-a 2>&1)
+    rc=$?
+    set -e
+    [ "$rc" -eq 0 ] || fail "$shape: an odd-shaped trust record blocked disarming an identified merge poll: $out"
+    case "$out" in *disarmed*) ;; *) fail "$shape: disarm did not report the retirement: $out" ;; esac
+    for artifact in check.sh pr-poll pr-poll-registration; do
+      [ ! -e "$state/task-a.$artifact" ] || fail "$shape: disarm left task-a.$artifact behind"
+    done
+    [ -e "$state/task-a.check-trust" ] || [ -L "$state/task-a.check-trust" ] \
+      || fail "$shape: disarm removed the trust record it does not own"
+    [ "$(cat "$dir/trust-source")" = fm-custom-check-v1 ] \
+      || fail "$shape: disarm changed what the trust record points at"
+  done
+
+  # The converse: a teardown DOES remove the trust record, so it must go on
+  # validating it and refusing an odd-shaped one, removing nothing.
+  dir=$(make_case teardown-odd-trust)
+  state="$dir/home/state"
+  fm_write_meta "$state/task-a.meta" \
+    'window=fm-task-a' \
+    "worktree=$dir/missing-worktree" \
+    "project=$dir/project" \
+    'kind=ship' \
+    'mode=local-only'
+  printf 'check sentinel\n' > "$state/task-a.check.sh"
+  printf 'data sentinel\n' > "$state/task-a.pr-poll"
+  printf 'fm-custom-check-v1\n' > "$dir/trust-source"
+  ln -s "$dir/trust-source" "$state/task-a.check-trust"
+  cat > "$dir/fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$dir/fakebin/tmux"
+  touch "$state/.last-watcher-beat"
+
+  set +e
+  FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" PATH="$dir/fakebin:$BASE_PATH" \
+    "$TEARDOWN" task-a --force > "$dir/teardown.out" 2> "$dir/teardown.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "teardown accepted a symlinked trust record it would have removed"
+  grep -q REFUSED "$dir/teardown.err" || fail "teardown did not report a refusal: $(cat "$dir/teardown.err")"
+  [ "$(cat "$state/task-a.check.sh")" = 'check sentinel' ] \
+    || fail "the refused teardown removed the task check"
+  [ -L "$state/task-a.check-trust" ] || fail "the refused teardown removed the symlinked trust record"
+  [ -e "$state/task-a.meta" ] || fail "the refused teardown removed task metadata"
+  pass "an odd-shaped trust record blocks the scope that removes it and never the scope that does not"
+}
+
 test_teardown_removes_poll_artifacts() {
   local dir fakebin kind artifact counterpart rc
   dir=$(make_case teardown-cleanup)
@@ -3285,3 +3359,4 @@ test_teardown_removes_poll_artifacts
 test_disarm_retires_the_whole_poll_artifact_set
 test_disarm_refuses_a_registered_custom_check
 test_disarm_refuses_a_check_that_is_not_provably_a_merge_poll
+test_disarm_ignores_an_odd_shaped_trust_record

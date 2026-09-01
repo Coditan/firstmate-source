@@ -236,12 +236,8 @@ project_registered_remote_urls() {
 # a failed read costs the remote its vote.
 fetch_landing_remote() {  # <remote name>
   local name=$1
-  if command -v timeout >/dev/null 2>&1; then
-    timeout "${FM_TEARDOWN_FETCH_TIMEOUT_SECS:-120}" \
-      git -C "$WT" fetch --quiet --prune "$name" >/dev/null 2>&1
-  else
-    git -C "$WT" fetch --quiet --prune "$name" >/dev/null 2>&1
-  fi
+  fm_run_bounded "${FM_TEARDOWN_FETCH_TIMEOUT_SECS:-120}" \
+    git -C "$WT" fetch --quiet --prune "$name" >/dev/null
 }
 
 # Resolve, once per run, which of the worktree's remotes count and refresh them.

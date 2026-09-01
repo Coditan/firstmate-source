@@ -723,14 +723,27 @@ fm_pr_poll_artifacts_valid() {
 # or none of it: a half-removed set is what leaves a sidecar behind a deleted
 # runnable name, which nothing then reads and nothing then cleans up.
 #
+# The validation follows the same scope the removal does: it inspects exactly the
+# artifacts the requested scope may remove. Under the poll scope the trust record
+# is neither counted as something to retire nor required to be well-shaped, so an
+# odd-shaped one cannot block --disarm from retiring a merge poll it has
+# positively identified and would never have touched. Under the task scope it is
+# validated exactly as before, because that scope does remove it.
+#
 # This pair is the single owner of that removal. It lives here rather than in
 # bin/fm-teardown.sh because retirement is not a teardown step: a poll holds no
 # work and cannot hold any, so the question "may this poll be removed" is
 # entirely separate from "may this worktree be discarded". Both bin/fm-teardown.sh
 # and the disarm path of bin/fm-pr-check.sh call these.
-fm_pr_poll_retire_validate() {  # <state dir> <task id>
-  local state_dir=$1 id=$2 quarantine state_device artifact has_artifact=0
+fm_pr_poll_retire_validate() {  # <state dir> <task id> [scope: task|poll]
+  local state_dir=$1 id=$2 scope=${3:-task} quarantine state_device artifact has_artifact=0
+  local -a artifacts
   fm_task_id_path_safe "$id" || return 0
+  artifacts=("$state_dir/$id.check.sh" "$state_dir/$id.pr-poll" \
+    "$state_dir/$id.pr-poll-registration")
+  if [ "$scope" = task ]; then
+    artifacts+=("$state_dir/$id.check-trust")
+  fi
   quarantine="$state_dir/.pr-check-quarantine"
   if [ "$id" = _noncanonical ] \
     && { [ -e "$quarantine/_noncanonical.diagnostic.pending-noncanonical" ] \
@@ -740,8 +753,7 @@ fm_pr_poll_retire_validate() {  # <state dir> <task id>
     echo "REFUSED: legacy PR-check quarantine migration is incomplete; preserving task state." >&2
     return 1
   fi
-  for artifact in "$state_dir/$id.check.sh" "$state_dir/$id.pr-poll" \
-    "$state_dir/$id.pr-poll-registration" "$state_dir/$id.check-trust"; do
+  for artifact in "${artifacts[@]}"; do
     [ -e "$artifact" ] || [ -L "$artifact" ] || continue
     has_artifact=1
   done
@@ -751,8 +763,7 @@ fm_pr_poll_retire_validate() {  # <state dir> <task id>
   [ "$has_artifact" -eq 1 ] || return 0
   [ -d "$state_dir" ] && [ ! -L "$state_dir" ] || return 1
   state_device=$(fm_pr_file_device "$state_dir") || return 1
-  for artifact in "$state_dir/$id.check.sh" "$state_dir/$id.pr-poll" \
-    "$state_dir/$id.pr-poll-registration" "$state_dir/$id.check-trust"; do
+  for artifact in "${artifacts[@]}"; do
     [ -e "$artifact" ] || [ -L "$artifact" ] || continue
     if [ ! -f "$artifact" ] || [ -L "$artifact" ] \
       || [ "$(fm_pr_file_device "$artifact")" != "$state_device" ] \
@@ -799,7 +810,7 @@ fm_pr_poll_retire_validate() {  # <state dir> <task id>
 # it as something to remove.
 fm_pr_poll_retire_scoped() {  # <state dir> <task id> <scope: task|poll>
   local state_dir=$1 id=$2 scope=$3 quarantine artifact
-  fm_pr_poll_retire_validate "$state_dir" "$id" || return 1
+  fm_pr_poll_retire_validate "$state_dir" "$id" "$scope" || return 1
   rm -f "$state_dir/$id.check.sh" "$state_dir/$id.pr-poll" \
     "$state_dir/$id.pr-poll-registration" || return 1
   if [ "$scope" = task ]; then
