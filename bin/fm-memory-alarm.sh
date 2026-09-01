@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Wake the fleet when this machine is running out of RAM headroom, and name the
-# process responsible.
+# Wake the fleet when this machine is running out of RAM headroom, or is
+# already stalling on the memory it has, and name the process responsible.
 #
 # WHAT THIS IS FOR
 # hlr-web-1 now has swap as a shock absorber, no memory limit on this seat yet,
@@ -95,7 +95,7 @@
 # 1 GiB/min to trip, and at 2 GB RAM headroom it takes 136 MiB/min.
 #
 # HOW THE THRESHOLDS WERE CHOSEN, AND WHAT WOULD HAVE TO HAPPEN TO CROSS THEM
-# Both are derived from measurements recorded in docs/memory-alarm.md, not
+# All three are derived from measurements recorded in docs/memory-alarm.md, not
 # picked. In short:
 #   horizon    3x the watcher's 300s check sweep, so a crossing is seen at
 #              least twice before the RAM headroom it predicts is gone. A
@@ -121,7 +121,7 @@
 #              further gigabytes to cross it - and the horizon condition fires
 #              long before that, which is the point of having both.
 # A threshold set so high nothing reaches it is indistinguishable from a healthy
-# machine, so both are stated here, both are reproducible from the doc, and the
+# machine, so all three are stated here, each reproducible from the doc, and the
 # alarm was proven by driving a real crossing rather than by argument.
 #
 # THE SAME NUMBERS ARE NOT WORTH THE SAME ON EVERY MACHINE

@@ -49,7 +49,7 @@ Every reading prints the installations it read, and anything they do not cover i
 That boundary is permanent and known in advance, so it is reported as declared scope rather than as an instrument failure.
 Treating it as unmeasured would make incompleteness the permanent norm and destroy the signal the exit status carries.
 The remedy is to run the reading from the other installation too, or to point `--home` at records this account can read.
-The captain chose the same scope treatment for an account with no active session slice, an ordinary first run with no stored growth sample, and a stored or explicit sample interval younger than the minimum interval.
+The captain chose the same scope treatment for an account with no active session slice, an ordinary first run with no stored growth sample, a stored or explicit sample interval younger than the minimum interval, and - since 2026-08-30 - a stored sample this run cannot use but does replace with its own, which puts the reading in the same known absence a first run is already in.
 Those are known absences or operator cadence, not failed instruments.
 If they forced exit 3, the alarm would learn to discount the failure status it must consume.
 The wall-clock and peak-memory cost figures measure the reading itself rather than machine memory.
