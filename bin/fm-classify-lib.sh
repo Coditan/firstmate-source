@@ -125,11 +125,16 @@ check_reason_payload() {  # <full reason>
 
 # Does this check wake report a terminal outcome - a fact that cannot revert, and
 # so carries nothing new if the same check reports it again?
+#
+# The payload is matched WHOLE, not line by line. A check's output is arbitrary
+# program output and may be several lines; a line-oriented match would call a
+# multi-line report terminal because one of its lines happened to read "merged",
+# and would then absorb the next identical report of the live condition standing
+# beside it. A closed vocabulary a multi-line payload can defeat is not closed.
 check_reports_terminal_outcome() {  # <full reason>
   local payload
   payload=$(check_reason_payload "$1") || return 1
-  printf '%s' "$payload" \
-    | grep -Eq "${FM_CLASSIFY_TERMINAL_CHECK_RE:-$FM_CLASSIFY_TERMINAL_CHECK_RE_DEFAULT}"
+  [[ $payload =~ ${FM_CLASSIFY_TERMINAL_CHECK_RE:-$FM_CLASSIFY_TERMINAL_CHECK_RE_DEFAULT} ]]
 }
 
 # Bounded re-surface cadence for a declared pause or a dead-agent captain hold.

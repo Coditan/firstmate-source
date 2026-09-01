@@ -764,6 +764,89 @@ test_refused_sibling_teardown_keeps_an_unfulfilled_poll() {
   pass "a sibling refusal leaves an unmerged PR's poll armed"
 }
 
+# The ownership refusal is the same class as the refusals already routed: it
+# protects a THIRD party's uncommitted work in a pooled slot, and a poll is not
+# what it protects. It sits above teardown's own poll pre-flight, so it used to
+# exit before any retirement could run and strand a spent poll exactly as the
+# reported incident did. Its own exit status - not a flattened 1 - must survive.
+test_ownership_refusal_retires_a_fulfilled_poll() {
+  local case_dir rc head_before left
+  case_dir=$(make_case ownership-refusal-retires-poll)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" pending.txt "not landed" "work still in review"
+  head_before=$(git -C "$case_dir/wt" rev-parse HEAD)
+  add_gh_pr_state_and_head "$case_dir" MERGED "$(git -C "$case_dir/wt" rev-parse origin/main)"
+  arm_merge_poll "$case_dir"
+  printf 'holder=task-other\n' > "$case_dir/state/task-x1.slot-disputed"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 4 "$rc" "ownership-refusal-retires-poll: the slot-held refusal must keep its own exit status"
+  grep -q 'is held by task-other, which is still live' "$case_dir/stderr" \
+    || fail "ownership-refusal-retires-poll: the ownership REFUSED line is gone: $(cat "$case_dir/stderr")"
+  [ "$(git -C "$case_dir/wt" rev-parse HEAD)" = "$head_before" ] \
+    || fail "ownership-refusal-retires-poll: the refused teardown moved the worktree HEAD"
+  [ -f "$case_dir/wt/pending.txt" ] \
+    || fail "ownership-refusal-retires-poll: the refused teardown discarded the unlanded work"
+  [ -f "$case_dir/state/task-x1.meta" ] \
+    || fail "ownership-refusal-retires-poll: the refused teardown removed the task record"
+
+  left=$(poll_artifacts_left "$case_dir")
+  [ -z "$left" ] || fail "ownership-refusal-retires-poll: the spent poll survived the ownership refusal: $left"
+  grep -q 'RETIRED MERGE POLL' "$case_dir/stderr" \
+    || fail "ownership-refusal-retires-poll: the refusal did not say the poll had been retired"
+  pass "a teardown refused for a contested pooled slot still retires an already-merged PR's poll"
+}
+
+# Retirement asks the forge, and it now runs on refusals that were decided from
+# purely local facts, so that read is bounded by the same deadline the watcher
+# gives this exact program. A stalled forge must not hold a refusal open: the
+# refusal prints and exits on time, and the unanswered poll simply stays armed,
+# which costs nothing because an unfulfilled poll is silent.
+test_refusal_is_not_held_open_by_a_stalled_forge() {
+  local case_dir rc left
+  case_dir=$(make_case refusal-bounded-forge-read)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" pending.txt "not landed" "work still in review"
+  add_gh_pr_state_and_head "$case_dir" MERGED "$(git -C "$case_dir/wt" rev-parse origin/main)"
+  arm_merge_poll "$case_dir"
+  printf 'holder=task-other\n' > "$case_dir/state/task-x1.slot-disputed"
+  # Only now does the forge stall - the fixture had to be armed against a
+  # readable one first.
+  cat > "$case_dir/fakebin/gh" <<'SH'
+#!/usr/bin/env bash
+sleep 600
+SH
+  chmod +x "$case_dir/fakebin/gh"
+
+  set +e
+  FM_ROOT_OVERRIDE="$ROOT" \
+  FM_STATE_OVERRIDE="$case_dir/state" \
+  FM_CONFIG_OVERRIDE="$case_dir/config" \
+  FM_CHECK_TIMEOUT=1 \
+  PATH="$case_dir/fakebin:$PATH" \
+    timeout 60 "$TEARDOWN" task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  [ "$rc" -ne 124 ] || fail "refusal-bounded-forge-read: a stalled forge held the refusal open"
+  expect_code 4 "$rc" "refusal-bounded-forge-read: the refusal must exit with its own status"
+  grep -q 'is held by task-other, which is still live' "$case_dir/stderr" \
+    || fail "refusal-bounded-forge-read: the ownership REFUSED line is gone: $(cat "$case_dir/stderr")"
+  [ -f "$case_dir/wt/pending.txt" ] \
+    || fail "refusal-bounded-forge-read: the refused teardown discarded the unlanded work"
+
+  # The read never answered, so it is evidence of nothing: the poll stays armed.
+  left=$(poll_artifacts_left "$case_dir")
+  case "$left" in *task-x1.check.sh*) ;; *) fail "refusal-bounded-forge-read: an unread poll was retired: '$left'" ;; esac
+  ! grep -q 'RETIRED MERGE POLL' "$case_dir/stderr" \
+    || fail "refusal-bounded-forge-read: teardown claimed to retire a poll it could not read"
+  pass "a stalled forge cannot hold a teardown refusal open, and an unread poll stays armed"
+}
+
 test_local_only_fork_remote_allows() {
   local case_dir rc
   case_dir=$(make_case fork-allow)
@@ -1975,3 +2058,5 @@ test_refused_teardown_retires_a_fulfilled_poll
 test_refused_teardown_keeps_an_unfulfilled_poll
 test_refused_sibling_teardown_retires_a_fulfilled_poll
 test_refused_sibling_teardown_keeps_an_unfulfilled_poll
+test_ownership_refusal_retires_a_fulfilled_poll
+test_refusal_is_not_held_open_by_a_stalled_forge

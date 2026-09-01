@@ -168,6 +168,7 @@ Classify each wake this way:
 - `check` -> escalate, with one narrowing: an identical repeat of an already-delivered terminal outcome from the same check is self-handled.
   Check scripts print only when firstmate should wake, so a check wake is actionable by default.
   A terminal outcome is one that cannot revert - a pull request reported merged - so a repeat of it carries nothing the first report did not, while a repeated non-terminal check still escalates every time because the condition it names can still change.
+  The repeat must be the same PULL REQUEST as well as the same check, read from the task's own record, so a task re-armed for a new pull request still escalates that one's first merge; where no such record is readable, the wake escalates.
   `bin/fm-classify-lib.sh`'s terminal-check-outcomes section owns the vocabulary and the reasoning, including why this is a second line of defence rather than the fix for a poll that should have been retired at its source.
 - `stale` with a terminal status or bare legacy captain-relevant line -> escalate.
   Nonterminal progress remains transient even when its prose contains a legacy free-text token or its seen-status marker already matches, so record a marker and self-handle.

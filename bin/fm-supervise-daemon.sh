@@ -178,6 +178,13 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # shellcheck source=bin/fm-state-marker-prune-lib.sh
 . "$FM_DAEMON_DIR/fm-state-marker-prune-lib.sh"
 
+# The canonical pull request identity recorded in state/<task>.meta, and the
+# task-id validation that guards a state path built from a check script's name.
+# bin/fm-pr-lib.sh is the one owner of both; the terminal-check seen marker below
+# needs the identity to tell one pull request's merge from the next one's.
+# shellcheck source=bin/fm-pr-lib.sh
+. "$FM_DAEMON_DIR/fm-pr-lib.sh"
+
 # Supervisor-pane discovery (FM_SUPERVISOR_TARGET_DEFAULT,
 # FM_SUPERVISOR_BACKEND_DEFAULT, discover_supervisor_target,
 # discover_supervisor_backend). Shared with the script-owned away launcher
@@ -417,10 +424,11 @@ classify_stale() {  # <window> <state>
 # bin/fm-classify-lib.sh's terminal-check-outcomes section, which is the shared
 # triage owner. The first report of that outcome still escalates.
 classify_check() {  # <full reason> <state dir>
-  local reason=$1 state=${2-} seen
+  local reason=$1 state=${2-} seen record
   if [ -n "$state" ] && check_reports_terminal_outcome "$reason" \
-    && seen=$(check_seen_marker "$state" "$reason"); then
-    if [ "$(cat "$seen" 2>/dev/null || true)" = "$reason" ]; then
+    && seen=$(check_seen_marker "$state" "$reason") \
+    && record=$(check_seen_record "$state" "$reason"); then
+    if [ "$(cat "$seen" 2>/dev/null || true)" = "$record" ]; then
       printf 'self|repeat of a terminal check outcome already escalated: %s' "$reason"
       return
     fi
@@ -461,7 +469,37 @@ check_seen_marker() {  # <state dir> <full reason>
   name=${script##*/}
   name=${name%.check.sh}
   [ -n "$name" ] || return 1
+  fm_pr_task_id_valid "$name" || return 1
   printf '%s' "$state/.subsuper-seen-check-$(_stale_key "$name")"
+}
+
+# What a terminal check wake DELIVERED, as the durable record the marker holds.
+# It is the wake reason plus the task's canonical pull request identity, because
+# the reason alone cannot tell two pull requests apart: the watcher builds it as
+# "check: state/<task>.check.sh: merged", which is byte-identical for every pull
+# request the same task is ever armed for. A task re-armed for a new pull request
+# after --disarm would otherwise have its FIRST merge report absorbed by the
+# marker the previous one left behind, which trades this change's noise for lost
+# signal - strictly the worse failure.
+#
+# The identity comes from the task's own durable record, the canonical pr= line
+# in state/<task>.meta, parsed by its owner. Returns non-zero whenever that
+# identity is absent, unreadable, or ambiguous, and every caller then escalates
+# and records nothing: absorbing on an unknown identity is the defect itself.
+#
+# The MARKER is still keyed on the task alone, so bin/fm-state-marker-prune-lib.sh
+# keeps retiring it with the task record; only its content distinguishes the
+# pull request.
+check_seen_record() {  # <state dir> <full reason>
+  local state=$1 reason=$2 script name
+  script=$(check_reason_script "$reason") || return 1
+  name=${script##*/}
+  name=${name%.check.sh}
+  [ -n "$name" ] || return 1
+  fm_pr_task_id_valid "$name" || return 1
+  fm_pr_metadata_identity_parse "$state/$name.meta" || return 1
+  [ -n "$FM_PR_META_URL" ] || return 1
+  printf 'pr=%s\n%s' "$FM_PR_META_URL" "$reason"
 }
 
 stale_marker_record() {  # <window> <state>  — create if absent
@@ -564,7 +602,7 @@ mark_status_seen() {  # <state> <task> <last-line>
 # seen, so the catch-all scan does not re-escalate the same line within
 # HEARTBEAT_SCAN_SECS. Mirrors classify_signal/classify_stale's relevance test.
 mark_escalated_seen() {  # <kind> <arg> <state>
-  local kind=$1 arg=$2 state=$3 f last task
+  local kind=$1 arg=$2 state=$3 f last task record
   case "$kind" in
     signal)
       for f in $arg; do
@@ -585,7 +623,8 @@ mark_escalated_seen() {  # <kind> <arg> <state>
       # check leaves no marker, so it can never be absorbed as a repeat later.
       check_reports_terminal_outcome "$arg" || return 0
       f=$(check_seen_marker "$state" "$arg") || return 0
-      printf '%s' "$arg" > "$f" ;;
+      record=$(check_seen_record "$state" "$arg") || return 0
+      printf '%s' "$record" > "$f" ;;
   esac
 }
 

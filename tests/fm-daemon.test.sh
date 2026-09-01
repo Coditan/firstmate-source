@@ -199,6 +199,9 @@ test_repeated_terminal_check_outcome_is_absorbed_after_the_first() {
   local dir state reason out key
   dir=$(make_supercase terminal-check-repeat)
   state="$dir/state"
+  # Absorption is keyed on the pull request the task is armed for, read from its
+  # own canonical record, so the fixture carries one.
+  fm_write_meta "$state/task-x1.meta" "window=fm-task-x1" "pr=https://github.com/o/r/pull/7"
   reason="check: $state/task-x1.check.sh: merged"
 
   FM_STATE_OVERRIDE="$state" handle_wake "$reason" "$state"
@@ -218,6 +221,7 @@ test_repeated_terminal_check_outcome_is_absorbed_after_the_first() {
 
   # The marker is keyed on the task, so the shared per-task pruner retires it
   # with the task record instead of leaving it in state forever.
+  rm -f "$state/task-x1.meta"
   fm_state_marker_prune_subsuper "$state"
   [ -e "$state/.subsuper-seen-check-$key" ] \
     && fail "the seen marker for a task with no record survived pruning"
@@ -253,6 +257,8 @@ test_terminal_check_absorption_is_keyed_on_the_check_and_its_output() {
   local dir state
   dir=$(make_supercase terminal-check-keying)
   state="$dir/state"
+  fm_write_meta "$state/task-a.meta" "window=fm-task-a" "pr=https://github.com/o/r/pull/1"
+  fm_write_meta "$state/task-b.meta" "window=fm-task-b" "pr=https://github.com/o/r/pull/2"
   FM_STATE_OVERRIDE="$state" handle_wake "check: $state/task-a.check.sh: merged" "$state"
   : > "$state/.subsuper-escalations"
 
@@ -265,6 +271,96 @@ test_terminal_check_absorption_is_keyed_on_the_check_and_its_output() {
   [ -s "$state/.subsuper-escalations" ] \
     || fail "a changed payload from an already-escalated check was absorbed"
   pass "terminal-outcome absorption is keyed on the check and its exact output, never on either alone"
+}
+
+# The wake reason for a merge poll is "check: state/<task>.check.sh: merged" and
+# names no pull request, so it is byte-identical for every pull request the same
+# task is ever armed for. A task re-armed after --disarm - the documented flow -
+# would otherwise have the FIRST merge report of its NEW pull request absorbed by
+# the marker the previous one left behind. Absorbing a wake that was never
+# delivered trades this change's noise for lost signal, which is strictly worse
+# than the noise it set out to remove.
+test_rearmed_poll_first_merge_is_never_absorbed() {
+  local dir state reason
+  dir=$(make_supercase terminal-check-rearm)
+  state="$dir/state"
+  reason="check: $state/task-x1.check.sh: merged"
+  fm_write_meta "$state/task-x1.meta" "window=fm-task-x1" "pr=https://github.com/o/r/pull/1"
+
+  FM_STATE_OVERRIDE="$state" handle_wake "$reason" "$state"
+  [ -s "$state/.subsuper-escalations" ] \
+    || fail "the first pull request's merged report was not escalated"
+  : > "$state/.subsuper-escalations"
+  FM_STATE_OVERRIDE="$state" handle_wake "$reason" "$state"
+  [ -s "$state/.subsuper-escalations" ] \
+    && fail "an identical repeat for the same pull request was escalated again"
+
+  # Same task, same wake reason, NEW pull request: this merge has never been
+  # delivered, so it must reach the model.
+  fm_write_meta "$state/task-x1.meta" "window=fm-task-x1" "pr=https://github.com/o/r/pull/2"
+  FM_STATE_OVERRIDE="$state" handle_wake "$reason" "$state"
+  [ -s "$state/.subsuper-escalations" ] \
+    || fail "the first merged report of a re-armed poll's new pull request was absorbed"
+
+  # And the new pull request's own repeat is absorbed exactly as the first's was.
+  : > "$state/.subsuper-escalations"
+  FM_STATE_OVERRIDE="$state" handle_wake "$reason" "$state"
+  [ -s "$state/.subsuper-escalations" ] \
+    && fail "an identical repeat for the re-armed pull request was escalated again"
+  pass "a re-armed poll's first merge escalates while each pull request's own repeat is absorbed"
+}
+
+# Absorption may never rest on an identity the daemon could not read. With no
+# canonical pull request record - or an ambiguous one - every report escalates,
+# because absorbing on an unknown identity is the defect above.
+test_terminal_check_without_a_readable_pr_identity_always_escalates() {
+  local dir state reason
+  dir=$(make_supercase terminal-check-no-identity)
+  state="$dir/state"
+  reason="check: $state/task-x1.check.sh: merged"
+
+  FM_STATE_OVERRIDE="$state" handle_wake "$reason" "$state"
+  [ -s "$state/.subsuper-escalations" ] || fail "a merged report with no task record was absorbed"
+  : > "$state/.subsuper-escalations"
+  FM_STATE_OVERRIDE="$state" handle_wake "$reason" "$state"
+  [ -s "$state/.subsuper-escalations" ] \
+    || fail "a repeat with no readable pull request identity was absorbed"
+
+  # Two pr= lines are ambiguous, not a second identity: still escalate.
+  fm_write_meta "$state/task-x1.meta" "window=fm-task-x1" \
+    "pr=https://github.com/o/r/pull/1" "pr=https://github.com/o/r/pull/2"
+  : > "$state/.subsuper-escalations"
+  FM_STATE_OVERRIDE="$state" handle_wake "$reason" "$state"
+  [ -s "$state/.subsuper-escalations" ] || fail "an ambiguous pull request record absorbed a report"
+  : > "$state/.subsuper-escalations"
+  FM_STATE_OVERRIDE="$state" handle_wake "$reason" "$state"
+  [ -s "$state/.subsuper-escalations" ] \
+    || fail "an ambiguous pull request record absorbed a repeat"
+  pass "a terminal check with no readable pull request identity escalates every time"
+}
+
+# The terminal vocabulary is closed, and a closed set a multi-line payload can
+# defeat is not closed. A custom check's report that merely CONTAINS a line
+# reading "merged" beside a still-live condition is not a terminal outcome, so it
+# escalates every time and records no marker that could absorb a later report.
+test_multiline_check_payload_containing_merged_is_not_terminal() {
+  local dir state reason key
+  dir=$(make_supercase terminal-check-multiline)
+  state="$dir/state"
+  fm_write_meta "$state/task-x1.meta" "window=fm-task-x1" "pr=https://github.com/o/r/pull/7"
+  reason=$(printf 'check: %s/task-x1.check.sh: upstream: 3 behind\nmerged\naction needed' "$state")
+
+  FM_STATE_OVERRIDE="$state" handle_wake "$reason" "$state"
+  [ -s "$state/.subsuper-escalations" ] || fail "the first multi-line report was not escalated"
+  key=$(_stale_key task-x1)
+  [ -e "$state/.subsuper-seen-check-$key" ] \
+    && fail "a multi-line payload merely containing 'merged' recorded an absorbing marker"
+
+  : > "$state/.subsuper-escalations"
+  FM_STATE_OVERRIDE="$state" handle_wake "$reason" "$state"
+  [ -s "$state/.subsuper-escalations" ] \
+    || fail "a repeat of a still-live multi-line condition was absorbed as a terminal outcome"
+  pass "a multi-line payload containing a 'merged' line is never treated as terminal"
 }
 
 test_stale_transient_self_records_marker() {
@@ -1964,3 +2060,6 @@ test_inject_msg_defers_on_dead_shell_unknown
 test_repeated_terminal_check_outcome_is_absorbed_after_the_first
 test_repeated_non_terminal_check_still_escalates_every_time
 test_terminal_check_absorption_is_keyed_on_the_check_and_its_output
+test_rearmed_poll_first_merge_is_never_absorbed
+test_terminal_check_without_a_readable_pr_identity_always_escalates
+test_multiline_check_payload_containing_merged_is_not_terminal

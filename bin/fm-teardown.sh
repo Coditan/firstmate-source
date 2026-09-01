@@ -384,12 +384,26 @@ remove_grok_turnend_auth() {
 # Only a fulfilled poll is retired. An unfulfilled poll prints nothing and so
 # wakes nobody, and it is still carrying the merge notification the task is
 # waiting for, so leaving it armed costs nothing and losing it would cost that.
+#
+# The poll's read is a forge round-trip, and this helper now runs on every
+# refusal - including ones already decided from purely local facts - so it is
+# bounded by the same deadline the watcher gives this exact program
+# (FM_CHECK_TIMEOUT). A stalled forge must not hold a refusal open forever. A
+# timeout is simply a read that did not answer "merged": the poll stays armed,
+# the refusal prints and exits as it already does, and nothing is lost, because
+# an unfulfilled or unreadable poll is silent.
 retire_fulfilled_pr_poll() {  # <state dir> <task id>
   local state_dir=$1 id=$2 out
   fm_pr_poll_artifacts_valid "$state_dir" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" || return 0
-  out=$("$SCRIPT_DIR/fm-pr-poll.sh" --validated "$FM_PR_DATA_PROVIDER" \
-    "$FM_PR_DATA_URL" "$FM_PR_DATA_HOST" "$FM_PR_DATA_PATH" \
-    "$FM_PR_DATA_NUMBER" 2>/dev/null) || return 0
+  if command -v timeout >/dev/null 2>&1; then
+    out=$(timeout "${FM_CHECK_TIMEOUT:-30}" "$SCRIPT_DIR/fm-pr-poll.sh" --validated \
+      "$FM_PR_DATA_PROVIDER" "$FM_PR_DATA_URL" "$FM_PR_DATA_HOST" \
+      "$FM_PR_DATA_PATH" "$FM_PR_DATA_NUMBER" 2>/dev/null) || return 0
+  else
+    out=$("$SCRIPT_DIR/fm-pr-poll.sh" --validated "$FM_PR_DATA_PROVIDER" \
+      "$FM_PR_DATA_URL" "$FM_PR_DATA_HOST" "$FM_PR_DATA_PATH" \
+      "$FM_PR_DATA_NUMBER" 2>/dev/null) || return 0
+  fi
   [ "$out" = merged ] || return 0
   fm_pr_poll_retire "$state_dir" "$id" || return 0
   echo "RETIRED MERGE POLL: $id's pull request is already merged, so its poll had nothing left to report and has been removed. The refusal above still stands and the work is untouched." >&2
@@ -1364,9 +1378,11 @@ fi
 
 # Every pool-backed target is checked as soon as it is known, before any path can mutate or descend into it, and each later mutation rechecks immediately before acting, but an unleased check and return are not atomic.
 if [ "$KIND" = secondmate ]; then
-  refresh_firstmate_home_ownership_if_pooled "$HOME_PATH" "secondmate home" "$ID" "$STATE" || exit $?
+  refresh_firstmate_home_ownership_if_pooled "$HOME_PATH" "secondmate home" "$ID" "$STATE" \
+    || refuse_after_retiring_fulfilled_poll "$?"
 elif [ -d "$WT" ] && current_worktree_uses_treehouse; then
-  refresh_teardown_return_ownership "$WT" "$PROJ" "worktree" "$ID" "$STATE" || exit $?
+  refresh_teardown_return_ownership "$WT" "$PROJ" "worktree" "$ID" "$STATE" \
+    || refuse_after_retiring_fulfilled_poll "$?"
 fi
 
 fm_pr_poll_retire_validate "$STATE" "$ID" || exit 1
