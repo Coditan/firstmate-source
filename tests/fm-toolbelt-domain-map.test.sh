@@ -98,6 +98,50 @@ SH
   pass "check mode rejects commands with no domain"
 }
 
+test_map_preserves_wrapped_purposes_and_path_kinds() {
+  local tmp repo out
+  fm_test_tmproot tmp fm-toolbelt-map-source-kinds
+  # shellcheck disable=SC2031 # fm_test_tmproot assigns the caller's variable by name.
+  repo="$tmp/repo"
+  mkdir -p "$repo/bin" "$repo/tests" "$repo/docs"
+  cp "$MAPPER" "$repo/bin/fm-toolbelt-domain-map.py"
+  chmod +x "$repo/bin/fm-toolbelt-domain-map.py"
+  cat >"$repo/bin/fm-watch-fixture.sh" <<'SH'
+#!/usr/bin/env bash
+# fm-watch-fixture.sh - Watcher fixture purpose wraps across
+# two lines for the generated public map.
+printf 'watcher fixture\n'
+SH
+  chmod +x "$repo/bin/fm-watch-fixture.sh"
+  cat >"$repo/bin/fm-ordinary.sh" <<'SH'
+#!/usr/bin/env bash
+# mentions systemd and fm-watch-fixture.sh without becoming a service script.
+printf 'ordinary fixture\n'
+SH
+  chmod +x "$repo/bin/fm-ordinary.sh"
+  cat >"$repo/tests/fm-reference.test.sh" <<'SH'
+#!/usr/bin/env bash
+# mentions systemd and fm-watch-fixture.sh from a test.
+:
+SH
+  git -C "$repo" init -q
+  git -C "$repo" add .
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm baseline
+
+  out=$("$repo/bin/fm-toolbelt-domain-map.py" --root "$repo" --stdout)
+  assert_contains "$out" "| \`fm-watch-fixture.sh\` | Watcher fixture purpose wraps across two lines for the generated public map |" \
+    "generated map did not preserve a wrapped header purpose"
+  assert_contains "$out" "scripts: bin/fm-ordinary.sh" \
+    "generated map did not classify an ordinary bin reference by path"
+  assert_contains "$out" "tests: tests/fm-reference.test.sh" \
+    "generated map did not classify a test reference by path"
+  assert_not_contains "$out" "scripts/systemd: bin/fm-ordinary.sh" \
+    "ordinary script reference was misclassified from file content"
+  assert_not_contains "$out" "systemd: tests/fm-reference.test.sh" \
+    "test reference was misclassified from file content"
+  pass "map preserves wrapped purposes and path-based source kinds"
+}
+
 test_coverage_guard_runs_map_check() {
   local tmp repo out rc
   fm_test_tmproot tmp fm-toolbelt-map-runner
@@ -153,5 +197,6 @@ test_committed_map_is_current
 test_generation_is_deterministic
 test_check_rejects_stale_map
 test_check_rejects_unplaced_command
+test_map_preserves_wrapped_purposes_and_path_kinds
 test_coverage_guard_runs_map_check
 test_map_records_required_counts

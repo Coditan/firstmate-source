@@ -498,14 +498,27 @@ def header_lines(path: Path) -> list[str]:
 def purpose_for(path: Path) -> str:
     base = path.name
     header = header_lines(path)
-    for line in header:
+    for index, line in enumerate(header):
         match = re.match(rf"(?:bin/)?{re.escape(base)}\s+[-:]\s+(.+)$", line)
         if match:
-            return one_line(match.group(1))
-    for line in header:
+            return one_line(header_sentence([match.group(1), *header[index + 1 :]]))
+    for index, line in enumerate(header):
         if line and not line.lower().startswith(("usage:", "why ", "safety", "mechanics")):
-            return one_line(line)
+            return one_line(header_sentence(header[index:]))
     return "No one-line header purpose found."
+
+
+def header_sentence(lines: list[str]) -> str:
+    parts: list[str] = []
+    for line in lines:
+        if not line:
+            break
+        if line.lower().startswith(("usage:", "why ", "safety", "mechanics")):
+            break
+        parts.append(line)
+        if line.endswith((".", "!", "?")):
+            break
+    return " ".join(parts)
 
 
 def one_line(value: str) -> str:
@@ -515,8 +528,10 @@ def one_line(value: str) -> str:
 
 def source_kind(path: Path, text: str) -> str:
     rel = path.as_posix()
+    if rel.startswith("tests/"):
+        return "tests"
     if rel.startswith("bin/"):
-        if "systemd" in text.lower() or "service" in path.name:
+        if path.name.endswith(("-service.sh", "-keeper.sh")):
             return "scripts/systemd"
         return "scripts"
     if rel.startswith(".agents/skills/"):
@@ -527,10 +542,8 @@ def source_kind(path: Path, text: str) -> str:
         return "workflows"
     if rel.startswith(".codex/") or rel.startswith(".claude/") or rel.startswith(".pi/"):
         return "hooks"
-    if "systemd" in text.lower() or rel.endswith(".service"):
+    if rel.endswith(".service") or "systemd" in text.lower():
         return "systemd"
-    if rel.startswith("tests/"):
-        return "tests"
     return "tracked"
 
 
