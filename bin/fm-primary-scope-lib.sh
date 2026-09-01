@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Shared marker-or-plain-checkout predicate for tracked hooks that must act only
 # in a genuine firstmate primary home.
+# It also owns fm_session_operates_home, the predicate the supervision guards use
+# to decide whether they address the session operating a home or a task worker
+# (docs/watcher-continuity.md).
 # This file is sourced by hook entrypoints and has no side effects on source.
 
 # Return 0 when $1 carries a genuine secondmate-home marker.
@@ -33,7 +36,7 @@ fm_primary_scope_matches() {
 }
 
 # Return 0 when the session that invoked this hook is the one operating $2, the
-# checkout-derived firstmate root, which all three call sites resolve as FM_ROOT:
+# checkout-derived firstmate root, which every shell call site resolves as FM_ROOT:
 # the checkout the running hook was loaded from ($1) resolves to that same root.
 # The addressee is therefore decided from WHERE the guard was loaded, not from
 # which home it went on to judge. FM_ROOT and FM_HOME are not interchangeable
