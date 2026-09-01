@@ -138,14 +138,15 @@ Measured on a two-decision fixture, adding one `blocked-by` edge takes the repor
 So this is the captain-actionable set, not the open set: say that on the board in the same breath as the unverified fold, and never present it as everything waiting on him.
 
 How many are missing is no longer unknowable, so say the number rather than only the caveat.
-The snapshot's `backlog.omitted[]` counts every record carrying `hold-kind: captain` that the surface withheld, with the reason for each, and bearings carries that count up into its own `omitted[]`; `bin/fm-decision-inventory.sh` passes both through under `withheld_captain_holds`.
+The snapshot's `backlog.omitted[]` counts every non-terminal record carrying `hold-kind: captain` that the surface withheld, with the reason for each - a decision already settled as Done was never a candidate and is never counted as withheld, so the number always means decisions he is not being shown.
+Bearings makes that count fleet-wide, summing it with the same disclosure from every registered secondmate home, so a decision routed away from this home is counted no differently from one kept here; `bin/fm-decision-inventory.sh` passes that line through under `withheld_captain_holds`.
 Print the count and its reasons in the reservation block beside the two sentences above, because a count of two looked complete for nineteen days on one vessel purely because nothing beside it said what it was not counting.
 
 These sentences have a component and a position, and both matter.
 They go in `.fm-reserve`, the reservation block, **above the entries** - a declaration of what the sheet does not show, printed under the entries, is one he reads after he has already decided.
 `docs/board-layout.md` owns its markup.
 
-For one named undertaking, `.agents/skills/sea-chart` reconciles its own records against the backlog and reports each withheld one by name with its cause; fleet-wide the count now exists too, in `backlog.omitted[]`, though it counts and names ids rather than restating each record.
+For one named undertaking, `.agents/skills/sea-chart` reconciles its own records against the backlog and reports each withheld one by name with its cause; fleet-wide the count now exists too, in the bearings `omitted[]` line assembled from `backlog.omitted[]` and every secondmate home's own, though it counts and names ids rather than restating each record.
 The blocker is the only shape of this loss left, and it belongs to the snapshot rather than to this board.
 Two shapes that used to belong to it no longer do: the predicate reads the hold kind alone, so a captain hold carried on a record of any other kind reaches here, and it no longer asks what phase the work is in, so a captain hold that stopped work already under way reaches here too.
 

@@ -260,11 +260,13 @@ The record is not dropped silently: it still appears in the gates surface, it is
 It resolves every repeated `blocked-by:` edge against structured Done records, keeps real unfinished blockers unresolved, records blocker ids found nowhere in the live backlog or done archive as dangling, and classifies only an unblocked captain hold as actionable.
 `bin/fm-captain-actionable-lib.sh` owns that predicate in full, including why it asks who is being asked rather than what phase the work is in: a captain hold on a record already under way is a question that stopped that work, and it reaches the surface exactly as a queued one does.
 Only a terminal record is excluded on state, and `!= "done"` is the whole of that in this schema.
-Every record carrying `hold-kind: captain` that the predicate did not return is counted, with its reason and its ids, in `backlog.omitted[]`, so shown plus withheld is exhaustive over that population and a short list is distinguishable from a filtered one.
+Every NON-TERMINAL record carrying `hold-kind: captain` that the predicate did not return is counted, with its reason and its ids, in `backlog.omitted[]`, so shown plus withheld is exhaustive over the population that could have reached the surface and a short list is distinguishable from a filtered one.
+A Done record was never a candidate for it, so it is not counted as withheld and the count is zero exactly when nothing answerable is hidden.
 Its secondmate-home summary classifies an actionable captain hold as `captain_decision` and preserves blocked captain holds as queued work in the owning home.
 
 `bin/fm-bearings-snapshot.sh` projects actionable captain holds into `decisions_open`, labels the total as `captain_actionable_holds_count`, leaves blocked captain holds in ordinary queued gates, and surfaces dangling blocker edges in `integrity[]` as ready work with a data-integrity caution.
 It carries the snapshot's withheld count and reasons up into its own `omitted[]`, and `bin/fm-decision-inventory.sh` passes that entry through verbatim as `withheld_captain_holds`, so the board reads the count of what it is not showing beside the count it is.
+That count is fleet-wide, not main-home: `decisions_open` mixes this home with every registered secondmate, so bearings sums `backlog.omitted[]` with each `secondmate_current.records[].omitted` entry on the same `captain_actionable` surface, including the holds a home dropped to its own `decisions_open` bound under reason `bounded_by_home_limit`.
 It excludes completed kind `captain` records from Recently Landed.
 The projection remains read-only and does not inspect historical prose.
 

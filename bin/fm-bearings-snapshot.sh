@@ -32,12 +32,15 @@
 # decisions_open is the CAPTAIN-ACTIONABLE set, not the open set, and it is a
 # MIXED population: this home's backlog plus every registered secondmate's own
 # actionable set. Every captain hold withheld from it - by this home OR by any of
-# those secondmates - is counted in one omitted[] line with the reason the
-# canonical snapshot recorded (bin/fm-captain-actionable-lib.sh owns that
-# vocabulary), because a count that is short and a count that is complete look
-# identical, and that is how such a decision sat unseen for nineteen days. The
-# count covers the same population the list does, so a reader never has to know
-# which home a decision was routed to before he can trust it.
+# those secondmates, and whether the predicate withheld it or a per-home bound
+# dropped it - is counted in one omitted[] line with the reason the canonical
+# snapshot recorded (bin/fm-captain-actionable-lib.sh owns that vocabulary),
+# because a count that is short and a count that is complete look identical, and
+# that is how such a decision sat unseen for nineteen days. The count covers the
+# same population the list does, so a reader never has to know which home a
+# decision was routed to, or which bound it fell past, before he can trust it.
+# captain_actionable_holds_count is the complement: the holds this projection
+# actually received. The two are read together, never one alone.
 #
 # Dangling `blocked-by:` tokens are data-integrity warnings, not live blockers.
 # The canonical snapshot removes them from unresolved_blocker_ids and records
@@ -122,7 +125,9 @@ Default is LOCAL-ONLY (no network); --include-prs is the only path that fetches.
 
 Default fields: schema, home, generated, prs, in_flight{id,kind,state,doing},
   secondmates{id,state,doing,provenance,freshness,age_seconds,contradiction,reason},
-  captain_actionable_holds_count, decisions_open{id,key,verb,summary,owner},
+  captain_actionable_holds_count (the actionable captain holds this projection
+    received; omitted[] says how many more were withheld before it, and by what),
+  decisions_open{id,key,verb,summary,owner},
   landed{id,what,artifact,owner},
   gates{id,title,blocked_by,reason,owner}, reports{id,path}, recorded_prs{id,url},
   integrity{id,title,phantom_blocked_by,owner}, unhealthy_endpoints{...} (only when non-empty),
@@ -402,15 +407,20 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         doing: ((.current_state.detail // "") as $d
                 | (if $d != "" then $d else (.hints.last_event_text // "") end) | trunc(90))
       } ]
-     # Select on the running work itself, never on the headline state of the home. A
-     # home with a working child AND a held captain decision ranks as
+     # SELECT on the running work itself, never on the headline state of the home.
+     # A home with a working child AND a held captain decision ranks as
      # captain_decision in the canonical snapshot - correctly, the decision must
      # surface - and gating this list on that state made its running work vanish
      # from in_flight the moment someone asked the captain a question about it.
-     # A home can be on both surfaces; here it is named by what it is doing.
+     # REPORT the state the snapshot actually reached, never a label chosen by the
+     # selection: a home whose child state the snapshot could not read keeps its
+     # populated active_children while its state stays "unknown", and asserting
+     # "active_child_work" over it would have this surface contradict the one two
+     # lines down. A home can be on both surfaces; the doing text is what names
+     # the child activity here, because the working children are why the row is.
      + [ $secondmate_views[]
          | select((.active_children | length) > 0)
-         | {id,kind:"secondmate",state:"active_child_work",
+         | {id,kind:"secondmate",state:.bearings_state,
             doing:([.active_children[] | .id + ": " + (.doing // .state)] | join("; ") | trunc(90))} ]) as $in_flight_all
   | ([ .backlog.records[]
          | select(.structured and .captain_actionable == true)
@@ -551,8 +561,12 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         # line must cover the same population the list does: a secondmate that
         # withheld a captain hold inside its own home is added into the SAME count,
         # or a filtered fleet list would read as complete whenever the withholding
-        # happened to sit one hop out. Reasons are summed per reason so the fleet
-        # reads as one population and not as one line per home.
+        # happened to sit one hop out. That includes the holds a home dropped to
+        # its own decisions_open bound rather than to the predicate; the snapshot
+        # names them on this same surface under bounded_by_home_limit, so they
+        # arrive here without this line having to know that bound exists. Reasons
+        # are summed per reason so the fleet reads as one population and not as
+        # one line per home.
         (([($snap.backlog.omitted // [])[] | select(.surface == "captain_actionable")]
           + [($snap.secondmate_current.records // [])[] | (.omitted // [])[]
              | select(.surface == "captain_actionable")]) as $captain_withheld

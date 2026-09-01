@@ -77,6 +77,18 @@
 # fm_captain_actionable_omitted($records) - the disclosure, in the snapshot's
 #   existing `omitted[]` shape ({surface,count}) with the reason and the ids that
 #   make it answerable rather than merely countable.
+# fm_captain_bound_omitted($returned; $limit) - the SECOND way a hold goes
+#   missing. The predicate is not the only thing that withholds: a bounded
+#   projection that hands its parent only the first $limit of what it returned
+#   drops the rest just as completely, and such a record carries
+#   captain_actionable == true so the predicate disclosure above cannot name it.
+#   It is emitted on the same `captain_actionable` surface under reason
+#   `bounded_by_home_limit`, so one roll-up covers both causes and the reason
+#   breakdown still says which one applied. $returned must be the ordered list
+#   the projection sliced, so the tail it names is the tail the parent lost.
+# Callers that publish into a byte-bounded projection must bound `ids` themselves
+#   the way they bound every neighbouring field; `count` is the true total and
+#   stays honest when the list is clipped.
 # The value is a jq program fragment: the $-names are jq bindings, never shell,
 # and the quotes inside it are jq string literals that must survive verbatim into
 # the program text - which is exactly what SC2089/SC2090 warn about and exactly
@@ -102,6 +114,13 @@ FM_CAPTAIN_ACTIONABLE_JQ='
   def fm_captain_returned($r):
     if ($r | has("captain_actionable")) then ($r.captain_actionable == true)
     else fm_captain_actionable($r) end;
+  def fm_captain_bound_omitted($returned; $limit):
+    if ($returned | length) > $limit then
+      [{surface:"captain_actionable",
+        reason:"bounded_by_home_limit",
+        count:(($returned | length) - $limit),
+        ids:[$returned[$limit:][].id]}]
+    else [] end;
   def fm_captain_actionable_omitted($records):
     [ $records[] | select(fm_captain_candidate(.) and (fm_captain_returned(.) | not)) ]
     | group_by(fm_captain_withheld_reason(.))

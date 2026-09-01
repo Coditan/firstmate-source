@@ -72,7 +72,11 @@
 #     and are named in that home's own omitted[] under surface captain_actionable,
 #     in the same {surface,reason,count,ids} shape backlog.omitted[] uses, so a
 #     reader aggregating decisions_open across homes can disclose what every home
-#     withheld rather than only what this one did.
+#     withheld rather than only what this one did. That surface also carries the
+#     holds the per-home decisions_open bound dropped, under reason
+#     bounded_by_home_limit, because such a hold is actionable and so is named by
+#     no predicate reason. Its ids are truncated and capped like every sibling
+#     field in this bounded projection while count stays the true total.
 #   secondmate_landed: {records[],truncated[],unreadable[],partial[]} - the
 #     compatibility landed-work roll-up derived from secondmate_current. Readable
 #     structured homes with an unknown current classification are partial, not
@@ -887,7 +891,20 @@ secondmate_home_summary_json() {  # <backlog-json> <tasks-json> <archive-json>
           # actionable surface exists against, just moved one hop out. Emit it
           # here, from the one owner of the reason vocabulary, so the parent can
           # add it into the count the captain actually reads.
-          (fm_captain_actionable_omitted($backlog.records)[])
+          # Two causes, one surface. The predicate withholds, and so does the
+          # $decisions_n slice above: captain holds lead $decisions_all, so the
+          # holds beyond the bound are the tail of $captain_holds_all and carry
+          # captain_actionable == true, which is exactly why the predicate
+          # disclosure cannot name them. The sibling `decisions_open` entry counts
+          # them mixed in with dropped status decisions the parent never wanted,
+          # so it cannot stand in for this one.
+          # ids are bounded here, not in the library: this projection is byte-
+          # capped by the parent and an all-or-nothing rejection would cost the
+          # home its entire current state to pay for the disclosure. count stays
+          # the true total.
+          ((fm_captain_actionable_omitted($backlog.records)
+            + fm_captain_bound_omitted($captain_holds_all; $decisions_n))[]
+           | .ids = ([.ids[] | trunc(120)][:$decisions_n]))
         ]
       }'
 }

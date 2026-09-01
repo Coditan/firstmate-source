@@ -487,12 +487,97 @@ EOF
   printf 'working: cutover rehearsal under way\n' > "$mate/state/phase9.status"
   fakebin=$(make_fakebin "$home")
   json=$(run "$home" "$fakebin" --json)
+  # The row carries the state the snapshot reached, not a label chosen by the
+  # selection: it is on in_flight because its child is working, and it says
+  # captain_decision because that is what the same snapshot says of this home.
   printf '%s' "$json" | jq -e '
     (.decisions_open | any(.[]; .id == "domain-alpha/phase9" and .verb == "captain-hold"))
       and (.in_flight | any(.[];
-             .id == "domain-alpha" and (.doing | test("phase9: cutover rehearsal under way"))))
+             .id == "domain-alpha"
+               and .state == "captain_decision"
+               and (.doing | test("phase9: cutover rehearsal under way"))))
+      and (.secondmates | any(.[]; .id == "domain-alpha" and .state == "captain_decision"))
   ' >/dev/null || fail "running work vanished from in_flight the moment the captain was asked about it: $json"
   pass "a secondmate with running work and a held decision appears on both surfaces"
+}
+
+# One surface must not assert what another denies. This home has a child that is
+# genuinely working AND a child whose current state the snapshot could not read,
+# so the snapshot calls the home unknown while keeping its active children. The
+# working child is real evidence and puts the home on in_flight; the row must
+# still say "unknown" there, because the same reading says so two lines down.
+test_in_flight_row_never_claims_a_state_the_snapshot_could_not_reach() {
+  local home mate fakebin json
+  home=$(make_home mate-unreadable-child)
+  mate="$TMP_ROOT/mate-unreadable-child-home"
+  write_domain_alpha_fixture "$home" "$mate"
+  mkdir -p "$mate/projects/runner" "$mate/projects/silent"
+  cat > "$mate/data/backlog.md" <<'EOF'
+## In flight
+- [ ] runner - Rehearsal run (repo: sample) (kind: ship)
+- [ ] silent - Build submission (repo: sample) (kind: ship)
+
+## Queued
+
+## Done
+- [x] phase7 - Sample rollout Phase 7 (repo: sample) (kind: ship) (done 2026-07-12)
+EOF
+  fm_write_meta "$mate/state/runner.meta" \
+    "window=firstmate:fm-runner" "worktree=$mate/projects/runner" "project=sample" \
+    "harness=codex" "kind=ship" "mode=no-mistakes"
+  printf 'working: rehearsal under way\n' > "$mate/state/runner.status"
+  fm_write_meta "$mate/state/silent.meta" \
+    "window=firstmate:fm-silent" "worktree=$mate/projects/silent" "project=sample" \
+    "harness=codex" "kind=ship" "mode=no-mistakes"
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    (.secondmates | any(.[]; .id == "domain-alpha" and .state == "unknown"))
+      and (.in_flight | any(.[];
+             .id == "domain-alpha"
+               and .state == "unknown"
+               and (.doing | test("runner: rehearsal under way"))))
+  ' >/dev/null || fail "the in-flight row claimed a state the snapshot could not reach: $json"
+  pass "an in-flight secondmate row carries the state the snapshot reached, not the selection"
+}
+
+# The predicate is not the only thing that withholds a captain hold. A secondmate
+# home hands its parent only the first FM_SNAPSHOT_SECONDMATE_DECISIONS of its
+# actionable set, and a hold dropped by that bound is captain_actionable == true,
+# so no predicate reason names it. Counting only predicate withholdings would let
+# the fleet line read complete while a real, answerable decision sat past a cap -
+# the same silence, arriving by a different road.
+test_holds_dropped_by_the_per_home_bound_are_counted_in_the_same_disclosure() {
+  local home mate fakebin json
+  home=$(make_home mate-bounded-decisions)
+  mate="$TMP_ROOT/mate-bounded-decisions-home"
+  write_domain_alpha_fixture "$home" "$mate"
+  cat > "$mate/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] mate-call-a - Vendor choice (repo: sample) (kind: ship) (hold: captain picks the vendor) (hold-kind: captain)
+- [ ] mate-call-b - Window choice (repo: sample) (kind: ship) (hold: captain picks the window) (hold-kind: captain)
+- [ ] mate-call-c - Name choice (repo: sample) (kind: ship) (hold: captain picks the name) (hold-kind: captain)
+
+## Done
+- [x] phase7 - Sample rollout Phase 7 (repo: sample) (kind: ship) (done 2026-07-12)
+EOF
+  fakebin=$(make_fakebin "$home")
+  json=$(FM_SNAPSHOT_SECONDMATE_DECISIONS=2 run "$home" "$fakebin" --json)
+
+  # Two of the three reach the fleet list; nothing the predicate withheld exists
+  # here, so the whole disclosure below is the bound speaking.
+  printf '%s' "$json" | jq -e '
+    ([.decisions_open[] | select(.owner == "domain-alpha")] | length) == 2
+      and .captain_actionable_holds_count == 2
+  ' >/dev/null || fail "the per-home bound did not drop exactly one actionable hold: $json"
+
+  printf '%s' "$json" | jq -e '
+    .omitted | any(.[];
+      .surface == "captain holds withheld from decisions_open: 1 (bounded_by_home_limit 1)")
+  ' >/dev/null || fail "a captain hold dropped by the per-home bound was counted nowhere: $json"
+  pass "a captain hold dropped by a per-home bound is counted in the same disclosure"
 }
 
 make_valid_secondmate_home() {  # <id> <home>
@@ -2264,6 +2349,8 @@ test_captain_hold_on_a_non_captain_kind_record_surfaces
 test_in_flight_captain_hold_reaches_bearings_and_withheld_ones_are_disclosed
 test_a_secondmate_withholding_is_disclosed_on_the_fleet_surface
 test_secondmate_with_running_work_and_a_held_decision_is_on_both_surfaces
+test_in_flight_row_never_claims_a_state_the_snapshot_could_not_reach
+test_holds_dropped_by_the_per_home_bound_are_counted_in_the_same_disclosure
 test_report_pointers_surface
 test_superseded_queued_item_dropped_by_default
 test_include_prs_is_the_only_fetch_path
