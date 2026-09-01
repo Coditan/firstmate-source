@@ -71,9 +71,36 @@ test_run_bounded_bare_statement_caller_is_unaffected_by_failure() {
   pass "a caller that never reads run_bounded's exit status (the Bridge fetch call site's shape) is unaffected by the real exit code now propagating"
 }
 
+# The ladder behind run_bounded has three rungs - timeout, gtimeout, then a perl
+# alarm - because a Darwin seat without coreutils has neither binary, and a form
+# that falls through to running the command bare is bounded only where the
+# fallback was never needed. FM_CHECK_FORCE_FALLBACK=1 skips both binaries and
+# takes the last rung. The deadline has to hold on every rung, and report the
+# same 124 a fired deadline reports, or a caller cannot tell a timeout from an
+# answer.
+test_run_bounded_holds_its_deadline_on_every_rung() {
+  local rc force started elapsed
+  for force in 0 1; do
+    started=$(date +%s)
+    (
+      CHECK_TIMEOUT=1
+      FM_CHECK_FORCE_FALLBACK=$force
+      run_bounded sleep 60
+    )
+    rc=$?
+    elapsed=$(( $(date +%s) - started ))
+    [ "$rc" -eq 124 ] \
+      || fail "run_bounded did not report a fired deadline as 124 with FM_CHECK_FORCE_FALLBACK=$force (rc=$rc)"
+    [ "$elapsed" -lt 30 ] \
+      || fail "run_bounded let a 60s command run past its 1s deadline with FM_CHECK_FORCE_FALLBACK=$force (${elapsed}s elapsed)"
+  done
+  pass "run_bounded holds its deadline on both the timeout-binary rung and the fallback rung a seat without coreutils takes"
+}
+
 test_run_bounded_preserves_a_failing_exit_code
 test_run_bounded_preserves_a_succeeding_exit_code
 test_run_bounded_still_discards_stderr
 test_run_bounded_bare_statement_caller_is_unaffected_by_failure
+test_run_bounded_holds_its_deadline_on_every_rung
 
 echo "# fm-watch-run-bounded.test.sh: all assertions passed"

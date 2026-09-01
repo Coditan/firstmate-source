@@ -714,3 +714,144 @@ fm_pr_poll_artifacts_valid() {
   [ "$FM_PR_META_PATH" = "$FM_PR_DATA_PATH" ] || return 1
   [ "$FM_PR_META_NUMBER" = "$FM_PR_DATA_NUMBER" ]
 }
+
+# --- retiring an armed poll -------------------------------------------------
+#
+# A task's poll artifact set is state/<id>.check.sh, state/<id>.pr-poll,
+# state/<id>.pr-poll-registration, state/<id>.check-trust, and any entry for
+# that task under state/.pr-check-quarantine. Retirement removes the whole set
+# or none of it: a half-removed set is what leaves a sidecar behind a deleted
+# runnable name, which nothing then reads and nothing then cleans up.
+#
+# The validation follows the same scope the removal does: it inspects exactly the
+# artifacts the requested scope may remove. Under the poll scope the trust record
+# is neither counted as something to retire nor required to be well-shaped, so an
+# odd-shaped one cannot block --disarm from retiring a merge poll it has
+# positively identified and would never have touched. Under the task scope it is
+# validated exactly as before, because that scope does remove it.
+#
+# This pair is the single owner of that removal. It lives here rather than in
+# bin/fm-teardown.sh because retirement is not a teardown step: a poll holds no
+# work and cannot hold any, so the question "may this poll be removed" is
+# entirely separate from "may this worktree be discarded". Both bin/fm-teardown.sh
+# and the disarm path of bin/fm-pr-check.sh call these.
+fm_pr_poll_retire_validate() {  # <state dir> <task id> [scope: task|poll]
+  local state_dir=$1 id=$2 scope=${3:-task} quarantine state_device artifact has_artifact=0
+  local -a artifacts
+  fm_task_id_path_safe "$id" || return 0
+  artifacts=("$state_dir/$id.check.sh" "$state_dir/$id.pr-poll" \
+    "$state_dir/$id.pr-poll-registration")
+  if [ "$scope" = task ]; then
+    artifacts+=("$state_dir/$id.check-trust")
+  fi
+  quarantine="$state_dir/.pr-check-quarantine"
+  if [ "$id" = _noncanonical ] \
+    && { [ -e "$quarantine/_noncanonical.diagnostic.pending-noncanonical" ] \
+      || [ -L "$quarantine/_noncanonical.diagnostic.pending-noncanonical" ] \
+      || [ -e "$quarantine/_noncanonical.diagnostic.noncanonical" ] \
+      || [ -L "$quarantine/_noncanonical.diagnostic.noncanonical" ]; }; then
+    echo "REFUSED: legacy PR-check quarantine migration is incomplete; preserving task state." >&2
+    return 1
+  fi
+  for artifact in "${artifacts[@]}"; do
+    [ -e "$artifact" ] || [ -L "$artifact" ] || continue
+    has_artifact=1
+  done
+  if [ -e "$quarantine" ] || [ -L "$quarantine" ]; then
+    has_artifact=1
+  fi
+  [ "$has_artifact" -eq 1 ] || return 0
+  [ -d "$state_dir" ] && [ ! -L "$state_dir" ] || return 1
+  state_device=$(fm_pr_file_device "$state_dir") || return 1
+  for artifact in "${artifacts[@]}"; do
+    [ -e "$artifact" ] || [ -L "$artifact" ] || continue
+    if [ ! -f "$artifact" ] || [ -L "$artifact" ] \
+      || [ "$(fm_pr_file_device "$artifact")" != "$state_device" ] \
+      || [ "$(fm_pr_file_link_count "$artifact")" != 1 ]; then
+      echo "REFUSED: unsafe task PR-check artifact; preserving task state." >&2
+      return 1
+    fi
+  done
+  [ -e "$quarantine" ] || [ -L "$quarantine" ] || return 0
+  if [ ! -d "$state_dir" ] || [ -L "$state_dir" ] \
+    || [ ! -d "$quarantine" ] || [ -L "$quarantine" ]; then
+    echo "REFUSED: unsafe PR-check quarantine path $quarantine; preserving task state." >&2
+    return 1
+  fi
+  if [ "$(fm_pr_file_device "$quarantine")" != "$state_device" ] \
+    || [ "$(fm_pr_file_mode "$quarantine")" != 700 ]; then
+    echo "REFUSED: PR-check quarantine is not on the task state device; preserving task state." >&2
+    return 1
+  fi
+  for artifact in "$quarantine/$id."*; do
+    [ -e "$artifact" ] || [ -L "$artifact" ] || continue
+    if ! fm_pr_private_file_valid "$artifact" 600 "$state_device"; then
+      echo "REFUSED: unsafe task quarantine entry; preserving task state." >&2
+      return 1
+    fi
+  done
+}
+
+# Every member of the set is removed with `rm -f`, and each `[ -e ] || continue`
+# above is an existence test rather than a requirement, so a set that is already
+# partly gone retires cleanly instead of refusing. That is deliberate: a partial
+# set is exactly the state a hand-removal leaves behind, and the whole point of
+# offering a retirement verb is that finishing such a set never needs another
+# hand-removal.
+#
+# The two callers share this validation and differ only in REACH.
+# bin/fm-teardown.sh ends the whole TASK, so its scope is every artifact under
+# that task's name, the custom-check trust record included: nothing about that
+# task survives it. bin/fm-pr-check.sh --disarm claims only the merge POLL, and a
+# merge poll has no trust record at all - fm_pr_poll_prepare writes the check at
+# mode 600 and writes no trust, and only bin/fm-check-register.sh ever writes
+# that file - so under the poll scope a trust record is by construction another
+# tool's state. A verb that retires merge polls never removes it and never counts
+# it as something to remove.
+fm_pr_poll_retire_scoped() {  # <state dir> <task id> <scope: task|poll>
+  local state_dir=$1 id=$2 scope=$3 quarantine artifact
+  fm_pr_poll_retire_validate "$state_dir" "$id" "$scope" || return 1
+  rm -f "$state_dir/$id.check.sh" "$state_dir/$id.pr-poll" \
+    "$state_dir/$id.pr-poll-registration" || return 1
+  if [ "$scope" = task ]; then
+    rm -f "$state_dir/$id.check-trust" || return 1
+  fi
+  if fm_task_id_path_safe "$id"; then
+    quarantine="$state_dir/.pr-check-quarantine"
+    if [ -d "$quarantine" ] && [ ! -L "$quarantine" ]; then
+      for artifact in "$quarantine/$id."*; do
+        [ -e "$artifact" ] || [ -L "$artifact" ] || continue
+        rm -f -- "$artifact" || return 1
+      done
+      rmdir "$quarantine" 2>/dev/null || true
+    fi
+  fi
+}
+
+fm_pr_poll_retire() {  # <state dir> <task id>
+  fm_pr_poll_retire_scoped "$1" "$2" task
+}
+
+fm_pr_poll_disarm() {  # <state dir> <task id>
+  fm_pr_poll_retire_scoped "$1" "$2" poll
+}
+
+# Does this task still have any poll artifact on disk? Used to report whether a
+# retirement had anything to do, and to tell a fully-armed set apart from the
+# partial remains of a hand-removal. The trust record is not on this list for the
+# reason above: it is not a poll artifact, so its presence alone must never make
+# a task look armed.
+fm_pr_poll_artifacts_present() {  # <state dir> <task id>
+  local state_dir=$1 id=$2 artifact
+  fm_task_id_path_safe "$id" || return 1
+  for artifact in "$state_dir/$id.check.sh" "$state_dir/$id.pr-poll" \
+    "$state_dir/$id.pr-poll-registration"; do
+    [ -e "$artifact" ] || [ -L "$artifact" ] || continue
+    return 0
+  done
+  for artifact in "$state_dir/.pr-check-quarantine/$id."*; do
+    [ -e "$artifact" ] || [ -L "$artifact" ] || continue
+    return 0
+  done
+  return 1
+}

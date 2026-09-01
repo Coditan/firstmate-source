@@ -21,6 +21,8 @@ cleanup_process_file() {
 
 cleanup() {
   cleanup_process_file "$TMP_ROOT/systemd-watcher.pid"
+  cleanup_process_file "$TMP_ROOT/libversion-watcher.pid"
+  cleanup_process_file "$TMP_ROOT/libversion-home/state/.watch.lock/pid"
   cleanup_process_file "$TMP_ROOT/keeper.pid"
   cleanup_process_file "$TMP_ROOT/keeperpath.pid"
   cleanup_process_file "$TMP_ROOT/keeperreport.pid"
@@ -235,6 +237,65 @@ test_installed_unit_converges_source_and_x_mode() {
   env_text=$(cat "$home/state/.watch-service.env")
   assert_not_contains "$env_text" 'FM_WATCH_X_MODE_VERSION="absent"' "X-mode hash stayed absent after convergence"
   pass "locked bootstrap restarts stale source and X-mode systemd instances"
+}
+
+# FM_WATCH_SOURCE_VERSION is the convergence signal: a running watcher is
+# restarted only when it changes, and docs/configuration.md describes it as the
+# watcher-plus-loaded-library content version. So every library the watcher
+# actually loads has to be inside it. The deadline library is the case that made
+# this concrete - it was lifted out of fm-watch.sh, which IS fingerprinted, into
+# its own file, and a library outside the fingerprint means a later fix to the
+# deadline around every check would land on a home whose watcher keeps running
+# the old one until some unrelated edit happens to bump the digest.
+#
+# This runs against a COPY of bin/, so the library can be changed for real and
+# the service asked what it does about it.
+test_a_change_to_a_loaded_library_reconverges_the_watcher() {
+  local fakebin home unitdir log repo service old_pid new_pid detect_out
+  fakebin="$TMP_ROOT/libversion-bin"
+  home="$TMP_ROOT/libversion-home"
+  unitdir="$TMP_ROOT/libversion-units"
+  log="$TMP_ROOT/systemctl-libversion.log"
+  repo="$TMP_ROOT/libversion-repo"
+  mkdir -p "$home/state" "$home/config" "$unitdir" "$repo"
+  cp -a "$ROOT/bin" "$repo/bin"
+  cp -a "$ROOT/systemd" "$repo/systemd"
+  service="$repo/bin/fm-watcher-service.sh"
+  make_fake_systemd "$fakebin"
+  cp "$ROOT/systemd/fm-watch@.service" "$unitdir/fm-watch@.service"
+  : > "$log"
+  : > "$TMP_ROOT/loginctl-libversion.log"
+
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_WATCH_SERVICE_FORCE_BACKEND=systemd \
+    FM_WATCH_SYSTEMCTL="$fakebin/systemctl" FM_WATCH_SYSTEMD_UNIT_DIR="$unitdir" \
+    FM_TEST_SYSTEMCTL_LOG="$log" FM_TEST_SYSTEMD_PID_FILE="$TMP_ROOT/libversion-watcher.pid" \
+    FM_TEST_SERVICE_ENV="$home/state/.watch-service.env" \
+    FM_TEST_LOGINCTL_LOG="$TMP_ROOT/loginctl-libversion.log" FM_ARM_CONFIRM_TIMEOUT=5 \
+    "$service" ensure || fail "the copied tree did not establish a healthy watcher"
+  old_pid=$(cat "$home/state/.watch.lock/pid")
+
+  # Change the deadline library the watcher loads, and nothing else.
+  printf '\n# behaviour change under test\n' >> "$repo/bin/fm-bounded-lib.sh"
+
+  detect_out=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_WATCH_SERVICE_FORCE_BACKEND=systemd \
+    FM_WATCH_SYSTEMCTL="$fakebin/systemctl" FM_WATCH_SYSTEMD_UNIT_DIR="$unitdir" \
+    FM_TEST_SYSTEMCTL_LOG="$log" FM_TEST_SYSTEMD_PID_FILE="$TMP_ROOT/libversion-watcher.pid" \
+    FM_TEST_SERVICE_ENV="$home/state/.watch-service.env" \
+    FM_TEST_LOGINCTL_LOG="$TMP_ROOT/loginctl-libversion.log" FM_BOOTSTRAP_DETECT_ONLY=1 \
+    "$service" bootstrap)
+  assert_contains "$detect_out" "needs locked convergence" \
+    "a changed watcher library left the running watcher reported as converged"
+
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_WATCH_SERVICE_FORCE_BACKEND=systemd \
+    FM_WATCH_SYSTEMCTL="$fakebin/systemctl" FM_WATCH_SYSTEMD_UNIT_DIR="$unitdir" \
+    FM_TEST_SYSTEMCTL_LOG="$log" FM_TEST_SYSTEMD_PID_FILE="$TMP_ROOT/libversion-watcher.pid" \
+    FM_TEST_SERVICE_ENV="$home/state/.watch-service.env" \
+    FM_TEST_LOGINCTL_LOG="$TMP_ROOT/loginctl-libversion.log" FM_ARM_CONFIRM_TIMEOUT=5 \
+    "$service" bootstrap >/dev/null || fail "bootstrap did not converge the changed watcher library"
+  new_pid=$(cat "$home/state/.watch.lock/pid")
+  [ "$new_pid" != "$old_pid" ] \
+    || fail "a changed watcher library did not restart the running watcher"
+  pass "changing a library the watcher loads reconverges the running watcher"
 }
 
 # The unit template sets no PATH, so a service that records none inherits
@@ -473,6 +534,7 @@ test_unusable_systemd_selects_tmux_keeper
 test_missing_systemd_unit_requires_separate_consent
 test_keeper_fallback_establishes_real_watcher
 test_installed_unit_converges_source_and_x_mode
+test_a_change_to_a_loaded_library_reconverges_the_watcher
 test_service_env_records_a_reaching_path_and_reports_one_that_does_not
 test_a_required_tool_this_session_cannot_resolve_is_still_reported
 test_service_path_keeps_every_directory_the_unit_inherited

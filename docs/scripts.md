@@ -146,6 +146,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-supervision-lib.sh`  | Shared in-flight-work and watcher-beacon status                                       |
 | `fm-ff-lib.sh`           | Shared guarded fast-forward helper for origin pulls and local secondmate syncs       |
 | `fm-lock-lib.sh`         | Shared "is this git lock provably abandoned?" proof used by teardown and fleet-sync   |
+| `fm-bounded-lib.sh`      | The fleet's one bounded-execution ladder (`timeout`, `gtimeout`, then a perl alarm), so a deadline holds on a seat that has neither binary |
 | `fm-slot-lib.sh`         | Shared fail-safe proof of which live tasks hold a pooled worktree                    |
 | `fm-transition-lib.sh`   | Shared backend-neutral agent-state transition record and supervision policy          |
 | `fm-config-inherit-lib.sh` | Shared primary-to-secondmate inherited local-material propagation and config-reread delivery |
@@ -169,10 +170,10 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-peek.sh`             | Print a bounded tail of a crewmate endpoint                                          |
 | `fm-check-register.sh`   | Bind an intentional custom watcher check to its current bytes                       |
 | `fm-check-lib.sh`        | Validate custom-check registrations and prepare private execution snapshots          |
-| `fm-pr-lib.sh`           | Own canonical task and PR validation plus private atomic PR-poll and provenance publication |
+| `fm-pr-lib.sh`           | Own canonical task and PR validation plus private atomic PR-poll and provenance publication, and own the one safety-validated removal of a task's poll artifact set that both teardown and `fm-pr-check.sh --disarm` call |
 | `fm-pr-poll.sh`          | Provide the byte-static watcher program for validated PR/MR-poll sidecars           |
 | `fm-pr-check-migrate.sh` | Quarantine older task polls without execution and rebuild only canonical polls       |
-| `fm-pr-check.sh`         | Record validated `pr=` and `pr_head=` values, then atomically arm a static merge poll; `--no-watch` records without arming and says no watch exists |
+| `fm-pr-check.sh`         | Record validated `pr=` and `pr_head=` values, then atomically arm a static merge poll; `--no-watch` records without arming and says no watch exists; `--disarm <id>` retires an armed poll, removing the poll's whole artifact set and leaving the recorded `pr=`, and refuses without removing anything unless it can prove the task's check IS that merge poll |
 | `fm-pr-merge.sh`         | Refuse a placeholder PR title, and separately a title it could not read, record PR metadata, then merge a task's canonical full PR URL on GitHub or on the fleet's own Forgejo instance, where it passes the head the forge requires and reports the branch deletion and merge watch it cannot give; `--no-local-task` lands a PR no task here owns, recording nothing and saying so |
 | `fm-promote.sh`          | Promote a scout task in place to a protected ship task                               |
 | `fm-slot-guard.sh`       | Watch recorded pooled worktrees for conflicting live task holders                    |

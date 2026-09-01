@@ -38,6 +38,14 @@
 # device. It refuses and preserves task state when that proof fails; otherwise
 # it removes the task's check, trust record, PR sidecar, publication record, and
 # quarantine entries with the rest of the volatile state.
+# That removal is owned by bin/fm-pr-lib.sh, and a refusal about commits does not
+# stop it. A merge poll holds no work and cannot hold any, so a teardown refused
+# for unlanded work still retires a poll whose pull request has already merged,
+# says so alongside the refusal, and exits 1 unchanged. Before that split, the
+# poll of an already-merged pull request survived every refusal and kept waking
+# the seat every few minutes for as long as the refusal stood, which could be
+# until the captain returned. Retirement outside teardown is fm-pr-check.sh
+# --disarm; retire_fulfilled_pr_poll below owns why only a fulfilled poll goes.
 # Orca tasks use the same safety checks, then close the recorded terminal and
 # remove the recorded worktree through `orca worktree rm`; teardown never guesses
 # an Orca target from ambient CLI state.
@@ -113,6 +121,10 @@ fm_axi_prepend_path "$FM_HOME"
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# The fleet's one bounded-execution ladder, shared with the watcher, so the
+# deadline around bin/fm-pr-poll.sh is the same one wherever that program runs.
+# shellcheck source=bin/fm-bounded-lib.sh
+. "$SCRIPT_DIR/fm-bounded-lib.sh"
 # shellcheck source=bin/fm-slot-lib.sh
 . "$SCRIPT_DIR/fm-slot-lib.sh"  # fm_slot_conflicting_holders: who else is standing in this worktree
 if [ "$#" -lt 1 ] || ! fm_task_id_path_safe "$1"; then
@@ -224,12 +236,8 @@ project_registered_remote_urls() {
 # a failed read costs the remote its vote.
 fetch_landing_remote() {  # <remote name>
   local name=$1
-  if command -v timeout >/dev/null 2>&1; then
-    timeout "${FM_TEARDOWN_FETCH_TIMEOUT_SECS:-120}" \
-      git -C "$WT" fetch --quiet --prune "$name" >/dev/null 2>&1
-  else
-    git -C "$WT" fetch --quiet --prune "$name" >/dev/null 2>&1
-  fi
+  fm_run_bounded "${FM_TEARDOWN_FETCH_TIMEOUT_SECS:-120}" \
+    git -C "$WT" fetch --quiet --prune "$name" >/dev/null
 }
 
 # Resolve, once per run, which of the worktree's remotes count and refresh them.
@@ -349,74 +357,82 @@ remove_grok_turnend_auth() {
   rm -f "$hooks_dir/$token"
 }
 
-validate_pr_poll_cleanup() {
-  local state_dir=$1 id=$2 quarantine state_device artifact has_artifact=0
-  fm_task_id_path_safe "$id" || return 0
-  quarantine="$state_dir/.pr-check-quarantine"
-  if [ "$id" = _noncanonical ] \
-    && { [ -e "$quarantine/_noncanonical.diagnostic.pending-noncanonical" ] \
-      || [ -L "$quarantine/_noncanonical.diagnostic.pending-noncanonical" ] \
-      || [ -e "$quarantine/_noncanonical.diagnostic.noncanonical" ] \
-      || [ -L "$quarantine/_noncanonical.diagnostic.noncanonical" ]; }; then
-    echo "REFUSED: legacy PR-check quarantine migration is incomplete; preserving task state." >&2
-    return 1
-  fi
-  for artifact in "$state_dir/$id.check.sh" "$state_dir/$id.pr-poll" \
-    "$state_dir/$id.pr-poll-registration" "$state_dir/$id.check-trust"; do
-    [ -e "$artifact" ] || [ -L "$artifact" ] || continue
-    has_artifact=1
-  done
-  if [ -e "$quarantine" ] || [ -L "$quarantine" ]; then
-    has_artifact=1
-  fi
-  [ "$has_artifact" -eq 1 ] || return 0
-  [ -d "$state_dir" ] && [ ! -L "$state_dir" ] || return 1
-  state_device=$(fm_pr_file_device "$state_dir") || return 1
-  for artifact in "$state_dir/$id.check.sh" "$state_dir/$id.pr-poll" \
-    "$state_dir/$id.pr-poll-registration" "$state_dir/$id.check-trust"; do
-    [ -e "$artifact" ] || [ -L "$artifact" ] || continue
-    if [ ! -f "$artifact" ] || [ -L "$artifact" ] \
-      || [ "$(fm_pr_file_device "$artifact")" != "$state_device" ] \
-      || [ "$(fm_pr_file_link_count "$artifact")" != 1 ]; then
-      echo "REFUSED: unsafe task PR-check artifact; preserving task state." >&2
-      return 1
-    fi
-  done
-  [ -e "$quarantine" ] || [ -L "$quarantine" ] || return 0
-  if [ ! -d "$state_dir" ] || [ -L "$state_dir" ] \
-    || [ ! -d "$quarantine" ] || [ -L "$quarantine" ]; then
-    echo "REFUSED: unsafe PR-check quarantine path $quarantine; preserving task state." >&2
-    return 1
-  fi
-  if [ "$(fm_pr_file_device "$quarantine")" != "$state_device" ] \
-    || [ "$(fm_pr_file_mode "$quarantine")" != 700 ]; then
-    echo "REFUSED: PR-check quarantine is not on the task state device; preserving task state." >&2
-    return 1
-  fi
-  for artifact in "$quarantine/$id."*; do
-    [ -e "$artifact" ] || [ -L "$artifact" ] || continue
-    if ! fm_pr_private_file_valid "$artifact" 600 "$state_device"; then
-      echo "REFUSED: unsafe task quarantine entry; preserving task state." >&2
-      return 1
-    fi
-  done
+# Retiring a task's merge poll - both its safety validation and its removal - is
+# owned by bin/fm-pr-lib.sh (fm_pr_poll_retire_validate, fm_pr_poll_retire), not
+# by this file. It used to live here, and that placement was the defect: it made
+# a poll's retirement reachable only through a completed teardown, so a teardown
+# correctly refused for unlanded work left the poll armed with no way to stop it.
+
+# Retire a poll whose pull request has ALREADY MERGED, on a path where teardown
+# is about to refuse. The refusal below protects unlanded WORK; a poll artifact
+# is not work and cannot hold any, so keeping the two coupled turned a correct
+# safety refusal into an unbounded wake source. One seat measured a spent poll
+# waking it every five minutes for hours after its pull request merged - 31% of
+# every wake that reached the model that day - because a merged pull request
+# makes bin/fm-pr-poll.sh print "merged" on every run, forever, and a check wake
+# is actionable by contract.
+#
+# Fulfilment is decided by running the poll's own program against its own
+# validated sidecar: the same read the watcher makes, and the poll's own
+# definition of spent. That is deliberately NOT work_is_landed/pr_is_merged
+# below, which additionally require the local commits to be contained in the
+# merged head. That is a question about the WORK, and in the incident this fixes
+# it answered false - the branch had been rebased and the local copy still held
+# superseded commits - while the pull request was merged and the poll was
+# shouting. Asking it here would have retired nothing.
+#
+# Only a fulfilled poll is retired. An unfulfilled poll prints nothing and so
+# wakes nobody, and it is still carrying the merge notification the task is
+# waiting for, so leaving it armed costs nothing and losing it would cost that.
+#
+# This takes the POLL scope, the same reach --disarm has, rather than the task
+# scope the end of this script takes. Every caller of it is a path where teardown
+# REFUSES, so the task does not end and its custom-check trust record is not this
+# removal's to take - the reach has to follow whether the task actually ends. No
+# live artifact is saved by that today: this runs only once
+# fm_pr_poll_artifacts_valid has proved check.sh IS the poll template at mode
+# 600, while a trust record authenticates a check at mode 700 whose hash it
+# records, so any trust record present here is already orphaned from a check
+# arming overwrote. But that is a three-condition chain, any link of which a
+# later change can break with nothing to catch it, and the subject of this whole
+# path is not removing what has not been proved.
+#
+# The poll's read is a forge round-trip, and this helper now runs on every
+# refusal - including ones already decided from purely local facts - so it runs
+# under bin/fm-bounded-lib.sh's ladder with the same deadline the watcher gives
+# this exact program (FM_CHECK_TIMEOUT). That ladder is bounded on every seat the
+# fleet runs on, including a Darwin seat with neither timeout nor gtimeout, which
+# is where a two-branch form would have fallen through to an unbounded call. A
+# stalled forge must not hold a refusal open forever. A deadline that fires is
+# simply a read that did not answer "merged": it is evidence of nothing either
+# way, so the poll stays armed, the refusal prints and exits as it already does,
+# and nothing is lost, because an unfulfilled or unreadable poll is silent.
+retire_fulfilled_pr_poll() {  # <state dir> <task id>
+  local state_dir=$1 id=$2 out
+  fm_pr_poll_artifacts_valid "$state_dir" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" || return 0
+  out=$(fm_run_bounded "${FM_CHECK_TIMEOUT:-30}" "$SCRIPT_DIR/fm-pr-poll.sh" --validated \
+    "$FM_PR_DATA_PROVIDER" "$FM_PR_DATA_URL" "$FM_PR_DATA_HOST" \
+    "$FM_PR_DATA_PATH" "$FM_PR_DATA_NUMBER") || return 0
+  [ "$out" = merged ] || return 0
+  fm_pr_poll_disarm "$state_dir" "$id" || return 0
+  echo "RETIRED MERGE POLL: $id's pull request is already merged, so its poll had nothing left to report and has been removed. The refusal above still stands and the work is untouched." >&2
 }
 
-remove_pr_poll_artifacts() {
-  local state_dir=$1 id=$2 quarantine artifact
-  validate_pr_poll_cleanup "$state_dir" "$id" || return 1
-  rm -f "$state_dir/$id.check.sh" "$state_dir/$id.pr-poll" \
-    "$state_dir/$id.pr-poll-registration" "$state_dir/$id.check-trust" || return 1
-  if fm_task_id_path_safe "$id"; then
-    quarantine="$state_dir/.pr-check-quarantine"
-    if [ -d "$quarantine" ] && [ ! -L "$quarantine" ]; then
-      for artifact in "$quarantine/$id."*; do
-        [ -e "$artifact" ] || [ -L "$artifact" ] || continue
-        rm -f -- "$artifact" || return 1
-      done
-      rmdir "$quarantine" 2>/dev/null || true
-    fi
-  fi
+# The one exit every teardown refusal takes once the poll's own artifact
+# validation has passed. It retires a spent poll and then exits exactly as
+# before: the refusal is not softened, retried, or made conditional on the poll;
+# only the poll's survival stops depending on it. The optional argument carries
+# a caller's own status through unchanged, defaulting to 1.
+#
+# It is attached to the refusal rather than to one call site because every
+# refusal below fails for the same reason - teardown will not discard what it
+# cannot verify - and a poll is not what any of them protect. Wiring it to the
+# worktree-safety check alone left the identical outcome reachable through its
+# siblings: the same predicate refusing after the treehouse lock is taken, an
+# Orca ship task whose worktree is gone, a scout with no report.
+refuse_after_retiring_fulfilled_poll() {  # [exit status]
+  retire_fulfilled_pr_poll "$STATE" "$ID" || true
+  exit "${1:-1}"
 }
 
 # Resolve the PR number for a worktree branch via gh-axi. Echoes the number on a
@@ -1234,7 +1250,7 @@ validate_firstmate_home_children_removal() {
   for child_meta in "$sub_state"/*.meta; do
     [ -e "$child_meta" ] || continue
     child_id=$(basename "$child_meta" .meta)
-    validate_pr_poll_cleanup "$sub_state" "$child_id" || return 1
+    fm_pr_poll_retire_validate "$sub_state" "$child_id" || return 1
     child_wt=$(meta_value "$child_meta" worktree)
     child_kind=$(meta_value "$child_meta" kind)
     [ -n "$child_kind" ] || child_kind=ship
@@ -1350,7 +1366,7 @@ cleanup_firstmate_home_children() {
       fi
     fi
     remove_grok_turnend_auth "$sub_state" "$child_id"
-    remove_pr_poll_artifacts "$sub_state" "$child_id" || return 1
+    fm_pr_poll_retire "$sub_state" "$child_id" || return 1
     rm -f "$sub_state/$child_id.status" "$sub_state/$child_id.turn-ended" "$sub_state/$child_id.meta" "$sub_state/$child_id.pi-ext.ts" "$sub_state/$child_id.grok-turnend-token"
     rm -rf "$sub_state/.crew-signal/$child_id"
   done
@@ -1371,12 +1387,14 @@ fi
 
 # Every pool-backed target is checked as soon as it is known, before any path can mutate or descend into it, and each later mutation rechecks immediately before acting, but an unleased check and return are not atomic.
 if [ "$KIND" = secondmate ]; then
-  refresh_firstmate_home_ownership_if_pooled "$HOME_PATH" "secondmate home" "$ID" "$STATE" || exit $?
+  refresh_firstmate_home_ownership_if_pooled "$HOME_PATH" "secondmate home" "$ID" "$STATE" \
+    || refuse_after_retiring_fulfilled_poll "$?"
 elif [ -d "$WT" ] && current_worktree_uses_treehouse; then
-  refresh_teardown_return_ownership "$WT" "$PROJ" "worktree" "$ID" "$STATE" || exit $?
+  refresh_teardown_return_ownership "$WT" "$PROJ" "worktree" "$ID" "$STATE" \
+    || refuse_after_retiring_fulfilled_poll "$?"
 fi
 
-validate_pr_poll_cleanup "$STATE" "$ID" || exit 1
+fm_pr_poll_retire_validate "$STATE" "$ID" || exit 1
 
 if [ "$KIND" = secondmate ]; then
   if [ "$FORCE" = "--force" ]; then
@@ -1391,7 +1409,7 @@ if [ "$KIND" = secondmate ] && [ "$FORCE" != "--force" ]; then
       [ -e "$child_meta" ] || continue
       echo "REFUSED: secondmate $ID still has in-flight work in $SUB_STATE." >&2
       echo "Found $(basename "$child_meta"). Let that home finish or explicitly discard with --force." >&2
-      exit 1
+      refuse_after_retiring_fulfilled_poll
     done
   fi
 fi
@@ -1406,13 +1424,13 @@ if [ "$KIND" = scout ] && [ "$FORCE" != "--force" ]; then
   if [ ! -f "$REPORT" ]; then
     echo "REFUSED: scout task $ID has no report at $REPORT." >&2
     echo "The report is the work product. Have the crewmate write it, or use --force after explicit discard approval." >&2
-    exit 1
+    refuse_after_retiring_fulfilled_poll
   fi
   if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
       FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-decision-hold.sh" verify "$ID" >/dev/null; then
     echo "REFUSED: scout task $ID has not passed the unresolved-decision completion gate." >&2
     echo "Inventory its report and any visual review through bin/fm-decision-hold.sh before teardown." >&2
-    exit 1
+    refuse_after_retiring_fulfilled_poll
   fi
 fi
 
@@ -1420,9 +1438,10 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ] &&
   if ! inspectable_git_worktree "$WT"; then
     echo "REFUSED: Orca ship task $ID has no inspectable git worktree at ${WT:-<missing>}." >&2
     echo "Cannot verify dirty or unlanded work; restore the worktree path or get explicit OK to discard, then --force." >&2
-    exit 1
+    refuse_after_retiring_fulfilled_poll
   fi
-  require_orca_worktree_path_match "$ORCA_WORKTREE_ID" "$WT" || exit 1
+  require_orca_worktree_path_match "$ORCA_WORKTREE_ID" "$WT" \
+    || refuse_after_retiring_fulfilled_poll
   ORCA_PATH_MATCH_VERIFIED=1
 fi
 
@@ -1436,10 +1455,11 @@ if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
       if current_worktree_uses_treehouse; then
         stale_lock_ownership_refresh=refresh_current_treehouse_ownership
       fi
-      cleanup_stale_lock_for_safety_check "$WT" "$stale_lock_ownership_refresh" || exit $?
-      validate_worktree_teardown_safety || exit 1
+      cleanup_stale_lock_for_safety_check "$WT" "$stale_lock_ownership_refresh" \
+        || refuse_after_retiring_fulfilled_poll "$?"
+      validate_worktree_teardown_safety || refuse_after_retiring_fulfilled_poll
     else
-      exit 1
+      refuse_after_retiring_fulfilled_poll
     fi
   fi
 fi
@@ -1447,7 +1467,8 @@ fi
 # Best-effort: drop the local task branch so the shared repo does not accumulate refs.
 if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
   if [ "$ORCA_PATH_MATCH_VERIFIED" != 1 ]; then
-    require_orca_worktree_path_match_if_present "$ORCA_WORKTREE_ID" "$WT" || exit 1
+    require_orca_worktree_path_match_if_present "$ORCA_WORKTREE_ID" "$WT" \
+      || refuse_after_retiring_fulfilled_poll
     ORCA_PATH_MATCH_VERIFIED=1
   fi
   branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
@@ -1476,7 +1497,7 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
     if [ "$return_rc" -eq "$TEARDOWN_TREEHOUSE_LOCK_REFUSED" ]; then
       return_rc=1
     fi
-    exit "$return_rc"
+    refuse_after_retiring_fulfilled_poll "$return_rc"
   fi
 fi
 
@@ -1548,7 +1569,7 @@ fm_backend_clear_transition "$BACKEND" "$STATE" "$T" || true
 # Remove the per-task temp root (/tmp/fm-<id>/, incl. its gotmp/) recorded by spawn.
 # Read before the state-file rm below; empty (pre-fix tasks without tasktmp=) is a no-op.
 [ -n "$TASK_TMP" ] && rm -rf "$TASK_TMP"
-remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
+fm_pr_poll_retire "$STATE" "$ID" || exit 1
 rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" "$STATE/$ID.pi-ext.ts" "$STATE/$ID.grok-turnend-token"
 rm -rf "$STATE/.crew-signal/$ID"
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then

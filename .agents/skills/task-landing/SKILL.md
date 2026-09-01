@@ -27,6 +27,10 @@ For any custom `state/<id>.check.sh` you write yourself, keep it an ordinary sin
 Tear down a ship task only after landing is confirmed.
 A teardown refusal for uncommitted or unlanded work is a stop-and-investigate result, never an obstacle to bypass.
 Never force teardown without explicit discard authority.
+The refusal no longer strands the task's merge poll: a teardown that refuses still retires a poll whose pull request has already merged, and says so in its own output alongside the refusal.
+To retire a poll on any other occasion, run `bin/fm-pr-check.sh --disarm <id>`, which removes the poll's whole artifact set, leaves the recorded `pr=` alone, and is safe to run twice or on a set already partly removed by hand.
+It retires merge polls only: it removes a `state/<id>.check.sh` only after proving that file is that task's merge poll, refusing and removing nothing otherwise - including while a custom check you wrote is edited but not yet re-registered - and it never removes a `state/<id>.check-trust`, which belongs to the check you registered rather than to any poll.
+Never remove a poll's files by hand: that is the state machinery `AGENTS.md` section 2 protects, and a half-removed set is what hand-removal leaves behind.
 After successful teardown, record completion, retain only the configured recent Done history, and re-evaluate queued work whose blockers and time gates have cleared.
 
 After relaying a terminal task outcome and confirming that only external human action remains, run `bin/fm-mark-parked.sh <window>` (the exact window recorded in its meta) so repeated pane changes use the bounded external-wait cadence; it refuses an unrecognized window or a `kind=secondmate` window instead of silently creating a marker that matches nothing or that fights pause tracking.

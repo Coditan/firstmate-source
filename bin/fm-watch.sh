@@ -83,6 +83,11 @@ mkdir -p "$STATE"
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# The fleet's one bounded-execution ladder (timeout, gtimeout, perl alarm), so
+# the deadline this watcher puts around a check is the same deadline
+# bin/fm-teardown.sh puts around bin/fm-pr-poll.sh.
+# shellcheck source=bin/fm-bounded-lib.sh
+. "$SCRIPT_DIR/fm-bounded-lib.sh"
 # Shared wake classifier (captain-relevant verbs + signal/stale/heartbeat
 # predicates), the SAME library the away-mode daemon uses, so the triage policy
 # has one definition.
@@ -1141,15 +1146,12 @@ run_check() {
 # differently from "the command ran and said healthy" can read $? after a
 # capturing call (certsync_health_reason does). A caller that discards the exit
 # status anyway (e.g. a fire-and-forget git fetch) is unaffected.
+#
+# The ladder itself is bin/fm-bounded-lib.sh's. It reads $CHECK_TIMEOUT here at
+# call time, so the certsync health read's temporary narrowing of that variable
+# still applies to the run it wraps.
 run_bounded() {
-  if [ "${FM_CHECK_FORCE_FALLBACK:-0}" != 1 ] && command -v timeout >/dev/null 2>&1; then
-    timeout "$CHECK_TIMEOUT" "$@" 2>/dev/null
-  elif [ "${FM_CHECK_FORCE_FALLBACK:-0}" != 1 ] && command -v gtimeout >/dev/null 2>&1; then
-    gtimeout "$CHECK_TIMEOUT" "$@" 2>/dev/null
-  else
-    # shellcheck disable=SC2016
-    perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setpgrp(0, 0); exec @ARGV } local $SIG{ALRM} = sub { kill "TERM", -$pid; select undef, undef, undef, 0.2; kill "KILL", -$pid; exit 124 }; alarm $t; waitpid $pid, 0; exit($? >> 8)' "$CHECK_TIMEOUT" "$@" 2>/dev/null
-  fi
+  fm_run_bounded "$CHECK_TIMEOUT" "$@"
 }
 
 FM_ACTIVE_CHECK_PID=

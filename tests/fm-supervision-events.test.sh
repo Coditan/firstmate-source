@@ -219,7 +219,7 @@ fm_write_meta "$STATE_DIR/live.meta" "window=default:wLive:p1" "backend=herdr" "
 printf 'done: waiting on relay\n' > "$STATE_DIR/live.status"
 live_task_key=$(fm_state_marker_key live)
 old_task_key=$(fm_state_marker_key old)
-for prefix in .subsuper-seen-status- .subsuper-stale- .subsuper-paused-; do
+for prefix in .subsuper-seen-status- .subsuper-seen-check- .subsuper-stale- .subsuper-paused-; do
   : > "$STATE_DIR/${prefix}${live_task_key}"
   : > "$STATE_DIR/${prefix}${old_task_key}"
 done
@@ -227,7 +227,7 @@ printf 'pending digest\n' > "$STATE_DIR/.subsuper-escalations"
 printf 'oldest\n' > "$STATE_DIR/.subsuper-escalations.since"
 printf 'wedged\n' > "$STATE_DIR/.subsuper-inject-wedged"
 fm_state_marker_prune_subsuper "$STATE_DIR"
-for prefix in .subsuper-seen-status- .subsuper-stale- .subsuper-paused-; do
+for prefix in .subsuper-seen-status- .subsuper-seen-check- .subsuper-stale- .subsuper-paused-; do
   [ -e "$STATE_DIR/${prefix}${live_task_key}" ] || fail "subsuper prune removed live ${prefix}${live_task_key}"
   [ ! -e "$STATE_DIR/${prefix}${old_task_key}" ] || fail "subsuper prune retained orphaned ${prefix}${old_task_key}"
 done

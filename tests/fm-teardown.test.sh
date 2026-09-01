@@ -290,6 +290,90 @@ SH
   chmod +x "$case_dir/fakebin/gh-axi" "$case_dir/fakebin/gh"
 }
 
+# Override GitHub lookups so BOTH reads the teardown path makes are answered: the
+# landed-work read (`--json state,headRefOid`) and bin/fm-pr-poll.sh's own read
+# (`--json state`, the whole poll). $2 is the state both report and $3 the head
+# the merged pull request is reported to carry. Args: case_dir state head
+add_gh_pr_state_and_head() {
+  local case_dir=$1 state=$2 head=$3
+  cat > "$case_dir/fakebin/gh-axi" <<SH
+#!/usr/bin/env bash
+case "\${1:-} \${2:-}" in
+  "pr list")
+    printf '%s\n' "count: 1 (showing first 1)" "pull_requests[1]{number,state}:" "  7,$state" ; exit 0 ;;
+  "pr view")
+    printf '%s\n' "pull_request:" "  number: 7" "  state: $state" ; exit 0 ;;
+esac
+exit 0
+SH
+  cat > "$case_dir/fakebin/gh" <<SH
+#!/usr/bin/env bash
+case "\${1:-} \${2:-}" in
+  "pr view")
+    case " \$* " in
+      *"state,headRefOid"*) printf '%s\t%s\n' '$state' '$head' ; exit 0 ;;
+      *"headRefOid"*) printf '%s\n' '$head' ; exit 0 ;;
+      *"--json state"*) printf '%s\n' '$state' ; exit 0 ;;
+    esac
+    ;;
+esac
+echo "error: pull request not found" >&2
+exit 1
+SH
+  chmod +x "$case_dir/fakebin/gh-axi" "$case_dir/fakebin/gh"
+}
+
+# Set FM_TEST_NO_TIMEOUT_PATH to a directory of symlinks that reaches every
+# command on PATH except timeout(1) and gtimeout(1) - a Darwin seat that never
+# installed coreutils, which is the seat a two-branch "timeout or run it bare"
+# form leaves entirely unbounded. Called as a plain statement rather than through
+# a command substitution, so the built path and any failure both land in the
+# caller's own shell, and the walk happens once for the whole suite.
+FM_TEST_NO_TIMEOUT_PATH=
+ensure_no_timeout_path() {
+  local dir entry name dirs
+  [ -z "$FM_TEST_NO_TIMEOUT_PATH" ] || return 0
+  FM_TEST_NO_TIMEOUT_PATH="$TMP_ROOT/no-timeout-bin"
+  mkdir -p "$FM_TEST_NO_TIMEOUT_PATH"
+  IFS=: read -r -a dirs <<< "$PATH"
+  for dir in "${dirs[@]}"; do
+    [ -d "$dir" ] || continue
+    for entry in "$dir"/*; do
+      [ -f "$entry" ] && [ -x "$entry" ] || continue
+      name=${entry##*/}
+      case "$name" in timeout|gtimeout) continue ;; esac
+      [ -e "$FM_TEST_NO_TIMEOUT_PATH/$name" ] || ln -s "$entry" "$FM_TEST_NO_TIMEOUT_PATH/$name"
+    done
+  done
+  command -v timeout >/dev/null 2>&1 || fail "the host has no timeout(1), so the two rungs cannot be told apart"
+  PATH="$FM_TEST_NO_TIMEOUT_PATH" command -v timeout >/dev/null 2>&1 \
+    && fail "the timeout-less PATH still resolves timeout(1)"
+  return 0
+}
+
+# Arm the task's real merge poll through bin/fm-pr-check.sh, exactly as landing
+# does. Args: case_dir
+arm_merge_poll() {
+  local case_dir=$1
+  FM_ROOT_OVERRIDE="$ROOT" \
+  FM_STATE_OVERRIDE="$case_dir/state" \
+  PATH="$case_dir/fakebin:$PATH" \
+    "$PR_CHECK" task-x1 https://github.com/example/repo/pull/7 >/dev/null
+}
+
+# Every file the task's merge poll consists of. A retirement removes all of them
+# or none of them, so the assertions below check the whole set rather than the
+# runnable name alone. Args: case_dir
+poll_artifacts_left() {
+  local case_dir=$1 artifact left=
+  for artifact in check.sh pr-poll pr-poll-registration check-trust; do
+    if [ -e "$case_dir/state/task-x1.$artifact" ]; then
+      left="$left task-x1.$artifact"
+    fi
+  done
+  printf '%s' "${left# }"
+}
+
 append_pr_meta_for_current_head() {
   local case_dir=$1 head
   head=$(git -C "$case_dir/wt" rev-parse HEAD)
@@ -549,6 +633,335 @@ run_teardown() {
   FM_CONFIG_OVERRIDE="$case_dir/config" \
   PATH="$case_dir/fakebin:$PATH" \
     "$TEARDOWN" task-x1 "$@"
+}
+
+# The defect this fixes: retiring a merge poll was reachable ONLY through a
+# completed teardown, so a teardown correctly refused for unlanded work left the
+# poll armed with nothing able to stop it. On the seat that reported it, the poll
+# for an already-merged pull request then woke the session every five minutes for
+# hours - 31% of every wake that reached the model that day - and the refusal was
+# correct the whole time, because discarding those commits was the captain's call
+# and he was away.
+#
+# The fixture is that exact shape: the pull request is MERGED, and the local copy
+# still holds a commit the merged head does not contain, so the landed-work check
+# refuses. Before the fix the poll survived that refusal.
+test_refused_teardown_retires_a_fulfilled_poll() {
+  local case_dir rc head_before merged_head left
+  case_dir=$(make_case refused-retires-poll)
+  write_meta "$case_dir" no-mistakes ship
+  # The merged pull request's head is origin/main's tip: a real commit that does
+  # not contain the task's own work.
+  merged_head=$(git -C "$case_dir/wt" rev-parse origin/main)
+  wt_commit_file "$case_dir" superseded.txt "pre-rebase" "work the merged head does not carry"
+  head_before=$(git -C "$case_dir/wt" rev-parse HEAD)
+  add_gh_pr_state_and_head "$case_dir" MERGED "$merged_head"
+  arm_merge_poll "$case_dir"
+  [ -e "$case_dir/state/task-x1.check.sh" ] || fail "refused-retires-poll: fixture armed no poll"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  # The refusal must be exactly as strong as before: same exit status, same
+  # REFUSED line, and the work itself untouched.
+  expect_code 1 "$rc" "refused-retires-poll: teardown must still refuse unlanded work"
+  grep -q REFUSED "$case_dir/stderr" || fail "refused-retires-poll: no REFUSED line in stderr"
+  [ "$(git -C "$case_dir/wt" rev-parse HEAD)" = "$head_before" ] \
+    || fail "refused-retires-poll: the refused teardown moved the worktree HEAD"
+  [ -f "$case_dir/wt/superseded.txt" ] \
+    || fail "refused-retires-poll: the refused teardown discarded the unlanded work"
+  [ -f "$case_dir/state/task-x1.meta" ] \
+    || fail "refused-retires-poll: the refused teardown removed the task record"
+
+  left=$(poll_artifacts_left "$case_dir")
+  [ -z "$left" ] || fail "refused-retires-poll: the spent poll survived the refusal: $left"
+  grep -q 'RETIRED MERGE POLL' "$case_dir/stderr" \
+    || fail "refused-retires-poll: the refusal did not say the poll had been retired"
+  pass "a teardown refused for unlanded work still retires the poll of an already-merged PR"
+}
+
+# The other half of the same rule: only a FULFILLED poll is retired. An unmerged
+# poll prints nothing, so it wakes nobody and costs nothing, and it is still
+# carrying the merge notification the task is waiting for. Retiring it on a
+# refusal would trade a loud defect for a silent one.
+test_refused_teardown_keeps_an_unfulfilled_poll() {
+  local case_dir rc
+  case_dir=$(make_case refused-keeps-poll)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" pending.txt "not landed" "work still in review"
+  add_gh_pr_state_and_head "$case_dir" OPEN "$(git -C "$case_dir/wt" rev-parse origin/main)"
+  arm_merge_poll "$case_dir"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "refused-keeps-poll: teardown must refuse unlanded work"
+  grep -q REFUSED "$case_dir/stderr" || fail "refused-keeps-poll: no REFUSED line in stderr"
+  [ -e "$case_dir/state/task-x1.check.sh" ] \
+    || fail "refused-keeps-poll: an open PR's poll was retired, losing its merge notification"
+  [ -e "$case_dir/state/task-x1.pr-poll" ] \
+    || fail "refused-keeps-poll: an open PR's sidecar was removed"
+  ! grep -q 'RETIRED MERGE POLL' "$case_dir/stderr" \
+    || fail "refused-keeps-poll: teardown claimed to retire an unmerged PR's poll"
+  pass "a refused teardown leaves an unmerged PR's poll armed, so no merge notification is lost"
+}
+
+# The refusal, not one call site, is what a spent poll must not survive. Wiring
+# the retirement to the worktree-safety check alone left the identical outcome -
+# a teardown refuses, and a poll whose pull request has already merged stays
+# armed and keeps printing "merged" every CHECK_INTERVAL - reachable through
+# every sibling refusal that fails for the same reason. This fixture takes one of
+# them: a scout whose report was never written, refused before the worktree is
+# ever inspected, carrying a poll for a merged pull request.
+test_refused_sibling_teardown_retires_a_fulfilled_poll() {
+  local case_dir rc head_before left
+  case_dir=$(make_case refused-sibling-retires-poll)
+  write_meta "$case_dir" no-mistakes scout
+  mkdir -p "$case_dir/data"
+  wt_commit_file "$case_dir" findings.txt "unwritten" "work the scout has not reported"
+  head_before=$(git -C "$case_dir/wt" rev-parse HEAD)
+  add_gh_pr_state_and_head "$case_dir" MERGED "$(git -C "$case_dir/wt" rev-parse origin/main)"
+  arm_merge_poll "$case_dir"
+  [ -e "$case_dir/state/task-x1.check.sh" ] \
+    || fail "refused-sibling-retires-poll: fixture armed no poll"
+
+  set +e
+  FM_ROOT_OVERRIDE="$ROOT" \
+  FM_STATE_OVERRIDE="$case_dir/state" \
+  FM_CONFIG_OVERRIDE="$case_dir/config" \
+  FM_DATA_OVERRIDE="$case_dir/data" \
+  PATH="$case_dir/fakebin:$PATH" \
+    "$TEARDOWN" task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  # The refusal is exactly as strong as before: same exit status, its own REFUSED
+  # line, and the work untouched.
+  expect_code 1 "$rc" "refused-sibling-retires-poll: teardown must still refuse a reportless scout"
+  grep -q 'REFUSED: scout task task-x1 has no report' "$case_dir/stderr" \
+    || fail "refused-sibling-retires-poll: the scout refusal line is gone: $(cat "$case_dir/stderr")"
+  [ "$(git -C "$case_dir/wt" rev-parse HEAD)" = "$head_before" ] \
+    || fail "refused-sibling-retires-poll: the refused teardown moved the worktree HEAD"
+  [ -f "$case_dir/wt/findings.txt" ] \
+    || fail "refused-sibling-retires-poll: the refused teardown discarded the unreported work"
+  [ -f "$case_dir/state/task-x1.meta" ] \
+    || fail "refused-sibling-retires-poll: the refused teardown removed the task record"
+
+  left=$(poll_artifacts_left "$case_dir")
+  [ -z "$left" ] || fail "refused-sibling-retires-poll: the spent poll survived a sibling refusal: $left"
+  grep -q 'RETIRED MERGE POLL' "$case_dir/stderr" \
+    || fail "refused-sibling-retires-poll: the refusal did not say the poll had been retired"
+  pass "a sibling teardown refusal retires the poll of an already-merged PR too"
+}
+
+# The same half-rule holds on the sibling path: only a FULFILLED poll goes. An
+# open pull request's poll still carries the merge notification the task waits
+# for, and it wakes nobody until it arrives.
+test_refused_sibling_teardown_keeps_an_unfulfilled_poll() {
+  local case_dir rc
+  case_dir=$(make_case refused-sibling-keeps-poll)
+  write_meta "$case_dir" no-mistakes scout
+  mkdir -p "$case_dir/data"
+  wt_commit_file "$case_dir" findings.txt "unwritten" "work the scout has not reported"
+  add_gh_pr_state_and_head "$case_dir" OPEN "$(git -C "$case_dir/wt" rev-parse origin/main)"
+  arm_merge_poll "$case_dir"
+
+  set +e
+  FM_ROOT_OVERRIDE="$ROOT" \
+  FM_STATE_OVERRIDE="$case_dir/state" \
+  FM_CONFIG_OVERRIDE="$case_dir/config" \
+  FM_DATA_OVERRIDE="$case_dir/data" \
+  PATH="$case_dir/fakebin:$PATH" \
+    "$TEARDOWN" task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "refused-sibling-keeps-poll: teardown must refuse a reportless scout"
+  grep -q 'REFUSED: scout task task-x1 has no report' "$case_dir/stderr" \
+    || fail "refused-sibling-keeps-poll: the scout refusal line is gone"
+  [ -e "$case_dir/state/task-x1.check.sh" ] \
+    || fail "refused-sibling-keeps-poll: an open PR's poll was retired, losing its merge notification"
+  [ -e "$case_dir/state/task-x1.pr-poll" ] \
+    || fail "refused-sibling-keeps-poll: an open PR's sidecar was removed"
+  ! grep -q 'RETIRED MERGE POLL' "$case_dir/stderr" \
+    || fail "refused-sibling-keeps-poll: teardown claimed to retire an unmerged PR's poll"
+  pass "a sibling refusal leaves an unmerged PR's poll armed"
+}
+
+# The ownership refusal is the same class as the refusals already routed: it
+# protects a THIRD party's uncommitted work in a pooled slot, and a poll is not
+# what it protects. It sits above teardown's own poll pre-flight, so it used to
+# exit before any retirement could run and strand a spent poll exactly as the
+# reported incident did. Its own exit status - not a flattened 1 - must survive.
+# Run on both rungs of the bounded-execution ladder: on a seat with a timeout
+# binary, and on one with neither timeout nor gtimeout, which falls to the perl
+# alarm. A rung that cannot read the poll's answer would retire nothing while
+# every "stays armed" assertion elsewhere still passed, so this is the positive
+# control for both.
+test_ownership_refusal_retires_a_fulfilled_poll() {
+  local case_dir rc head_before left label case_path
+  for label in timeout-binary no-timeout-binary; do
+    case_dir=$(make_case "ownership-refusal-retires-poll-$label")
+    write_meta "$case_dir" no-mistakes ship
+    wt_commit_file "$case_dir" pending.txt "not landed" "work still in review"
+    head_before=$(git -C "$case_dir/wt" rev-parse HEAD)
+    add_gh_pr_state_and_head "$case_dir" MERGED "$(git -C "$case_dir/wt" rev-parse origin/main)"
+    arm_merge_poll "$case_dir"
+    printf 'holder=task-other\n' > "$case_dir/state/task-x1.slot-disputed"
+
+    if [ "$label" = no-timeout-binary ]; then
+      ensure_no_timeout_path
+      case_path="$case_dir/fakebin:$FM_TEST_NO_TIMEOUT_PATH"
+    else
+      case_path="$case_dir/fakebin:$PATH"
+    fi
+
+    set +e
+    FM_ROOT_OVERRIDE="$ROOT" \
+    FM_STATE_OVERRIDE="$case_dir/state" \
+    FM_CONFIG_OVERRIDE="$case_dir/config" \
+    PATH="$case_path" \
+      "$TEARDOWN" task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+
+    expect_code 4 "$rc" "$label: the slot-held refusal must keep its own exit status"
+    grep -q 'is held by task-other, which is still live' "$case_dir/stderr" \
+      || fail "$label: the ownership REFUSED line is gone: $(cat "$case_dir/stderr")"
+    [ "$(git -C "$case_dir/wt" rev-parse HEAD)" = "$head_before" ] \
+      || fail "$label: the refused teardown moved the worktree HEAD"
+    [ -f "$case_dir/wt/pending.txt" ] \
+      || fail "$label: the refused teardown discarded the unlanded work"
+    [ -f "$case_dir/state/task-x1.meta" ] \
+      || fail "$label: the refused teardown removed the task record"
+
+    left=$(poll_artifacts_left "$case_dir")
+    [ -z "$left" ] || fail "$label: the spent poll survived the ownership refusal: $left"
+    grep -q 'RETIRED MERGE POLL' "$case_dir/stderr" \
+      || fail "$label: the refusal did not say the poll had been retired"
+  done
+  pass "a teardown refused for a contested pooled slot retires an already-merged PR's poll on either timeout rung"
+}
+
+# Retirement asks the forge, and it now runs on refusals that were decided from
+# purely local facts, so that read is bounded by the same deadline the watcher
+# gives this exact program. A stalled forge must not hold a refusal open: the
+# refusal prints and exits on time, and the unanswered poll simply stays armed,
+# which costs nothing because an unfulfilled poll is silent.
+# Bounded on EVERY seat, not only on one with GNU coreutils. The second vector
+# runs teardown on a PATH with no timeout(1) and no gtimeout(1) - a Darwin seat
+# without coreutils - which is the seat where a two-branch form runs the forge
+# read with no deadline at all and hangs a refusal that was already decided from
+# purely local facts. Both must refuse on time and leave the poll armed.
+test_refusal_is_not_held_open_by_a_stalled_forge() {
+  local case_dir rc left label case_path
+  for label in timeout-binary no-timeout-binary; do
+    case_dir=$(make_case "refusal-bounded-forge-read-$label")
+    write_meta "$case_dir" no-mistakes ship
+    wt_commit_file "$case_dir" pending.txt "not landed" "work still in review"
+    add_gh_pr_state_and_head "$case_dir" MERGED "$(git -C "$case_dir/wt" rev-parse origin/main)"
+    arm_merge_poll "$case_dir"
+    printf 'holder=task-other\n' > "$case_dir/state/task-x1.slot-disputed"
+    # Only now does the forge stall - the fixture had to be armed against a
+    # readable one first.
+    cat > "$case_dir/fakebin/gh" <<'SH'
+#!/usr/bin/env bash
+sleep 600
+SH
+    chmod +x "$case_dir/fakebin/gh"
+
+    if [ "$label" = no-timeout-binary ]; then
+      ensure_no_timeout_path
+      case_path="$case_dir/fakebin:$FM_TEST_NO_TIMEOUT_PATH"
+    else
+      case_path="$case_dir/fakebin:$PATH"
+    fi
+
+    # The deadline on the whole run is this test's own, resolved on the test's
+    # PATH; only teardown itself runs on the seat's PATH.
+    set +e
+    timeout 60 env \
+      FM_ROOT_OVERRIDE="$ROOT" \
+      FM_STATE_OVERRIDE="$case_dir/state" \
+      FM_CONFIG_OVERRIDE="$case_dir/config" \
+      FM_CHECK_TIMEOUT=1 \
+      PATH="$case_path" \
+      "$TEARDOWN" task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+
+    [ "$rc" -ne 124 ] || fail "$label: a stalled forge held the refusal open"
+    expect_code 4 "$rc" "$label: the refusal must exit with its own status"
+    grep -q 'is held by task-other, which is still live' "$case_dir/stderr" \
+      || fail "$label: the ownership REFUSED line is gone: $(cat "$case_dir/stderr")"
+    [ -f "$case_dir/wt/pending.txt" ] \
+      || fail "$label: the refused teardown discarded the unlanded work"
+
+    # The read never answered, so it is evidence of nothing: the poll stays armed.
+    left=$(poll_artifacts_left "$case_dir")
+    case "$left" in *task-x1.check.sh*) ;; *) fail "$label: an unread poll was retired: '$left'" ;; esac
+    ! grep -q 'RETIRED MERGE POLL' "$case_dir/stderr" \
+      || fail "$label: teardown claimed to retire a poll it could not read"
+  done
+  pass "a stalled forge cannot hold a teardown refusal open on either timeout rung, and an unread poll stays armed"
+}
+
+# The reach of a retirement has to follow whether the task actually ENDS. A
+# refusal does not end it, so on that path the poll's own files go and the
+# custom-check trust record - which belongs to bin/fm-check-register.sh, not to
+# any poll - stays. A completed teardown does end the task, and legitimately
+# takes the trust record with everything else. Both halves are asserted here so
+# the two paths cannot quietly converge on either scope.
+test_refusal_and_completion_differ_in_what_they_may_remove() {
+  local case_dir rc left pr_head
+  case_dir=$(make_case refusal-keeps-trust-record)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" superseded.txt "pre-rebase" "work the merged head does not carry"
+  add_gh_pr_state_and_head "$case_dir" MERGED "$(git -C "$case_dir/wt" rev-parse origin/main)"
+  arm_merge_poll "$case_dir"
+  printf 'fm-custom-check-v1\n' > "$case_dir/state/task-x1.check-trust"
+  chmod 0600 "$case_dir/state/task-x1.check-trust"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "refusal-keeps-trust-record: teardown must still refuse unlanded work"
+  grep -q REFUSED "$case_dir/stderr" || fail "refusal-keeps-trust-record: no REFUSED line in stderr"
+  grep -q 'RETIRED MERGE POLL' "$case_dir/stderr" \
+    || fail "refusal-keeps-trust-record: the refusal did not retire the spent poll"
+  [ ! -e "$case_dir/state/task-x1.check.sh" ] \
+    || fail "refusal-keeps-trust-record: the spent poll's check survived the refusal"
+  [ ! -e "$case_dir/state/task-x1.pr-poll" ] \
+    || fail "refusal-keeps-trust-record: the spent poll's sidecar survived the refusal"
+  [ -e "$case_dir/state/task-x1.check-trust" ] \
+    || fail "refusal-keeps-trust-record: a refused teardown removed a trust record it does not own"
+
+  # A teardown that COMPLETES ends the task, so the same shape loses both.
+  case_dir=$(make_case completion-removes-trust-record)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  append_pr_meta_for_current_head "$case_dir"
+  pr_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  add_gh_pr_merged_for_head "$case_dir" "$pr_head"
+  printf 'fm-custom-check-v1\n' > "$case_dir/state/task-x1.check-trust"
+  chmod 0600 "$case_dir/state/task-x1.check-trust"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "completion-removes-trust-record: teardown should succeed on a merged PR"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "completion-removes-trust-record: teardown printed a REFUSED line"
+  left=$(poll_artifacts_left "$case_dir")
+  [ -z "$left" ] || fail "completion-removes-trust-record: a completed teardown left task state behind: $left"
+  pass "a refused teardown retires only the poll; a completed one ends the task and takes the trust record too"
 }
 
 test_local_only_fork_remote_allows() {
@@ -1758,3 +2171,10 @@ test_transient_index_lock_clears_after_first_attempt_and_retry_succeeds
 test_persistent_index_lock_exhausts_retries_and_refuses_loudly
 test_empty_retry_wait_uses_default_without_aborting
 test_fractional_legacy_retry_wait_refuses_without_arithmetic_error
+test_refused_teardown_retires_a_fulfilled_poll
+test_refused_teardown_keeps_an_unfulfilled_poll
+test_refused_sibling_teardown_retires_a_fulfilled_poll
+test_refused_sibling_teardown_keeps_an_unfulfilled_poll
+test_ownership_refusal_retires_a_fulfilled_poll
+test_refusal_is_not_held_open_by_a_stalled_forge
+test_refusal_and_completion_differ_in_what_they_may_remove

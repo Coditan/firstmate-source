@@ -2632,6 +2632,261 @@ SH
   pass "returned custom check descendants are drained on installed and fallback timeout paths"
 }
 
+# Arming had no inverse. The only removal in the fleet was a side effect of a
+# completed teardown, so a poll whose teardown was refused could be stopped only
+# by hand-editing state, which AGENTS.md section 2 forbids - and a seat that
+# refused to break either rule left a half-removed artifact set standing. This
+# verb is what makes that choice unnecessary, so it has to finish such a set as
+# readily as it retires a whole one.
+test_disarm_retires_the_whole_poll_artifact_set() {
+  local dir state out rc snapshot
+  dir=$(make_case disarm-armed)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/9 >/dev/null 2>&1 \
+    || fail "arming the fixture poll failed"
+  fm_pr_poll_artifacts_valid "$state" task-a "$POLL" || fail "the fixture poll was not validly armed"
+  mkdir -p "$state/.pr-check-quarantine"
+  chmod 0700 "$state/.pr-check-quarantine"
+  printf 'legacy\n' > "$state/.pr-check-quarantine/task-a.check.abc123"
+  chmod 0600 "$state/.pr-check-quarantine/task-a.check.abc123"
+  printf 'trust\n' > "$state/task-a.check-trust"
+  chmod 0600 "$state/task-a.check-trust"
+
+  out=$(run_check_entry "$dir" --disarm task-a 2>&1) || fail "disarm failed on an armed poll: $out"
+  case "$out" in *disarmed*) ;; *) fail "disarm did not report the retirement: $out" ;; esac
+  for artifact in check.sh pr-poll pr-poll-registration; do
+    [ ! -e "$state/task-a.$artifact" ] || fail "disarm left task-a.$artifact behind"
+  done
+  [ ! -e "$state/.pr-check-quarantine/task-a.check.abc123" ] \
+    || fail "disarm left a quarantine entry behind"
+  # A merge poll never has a trust record - only bin/fm-check-register.sh writes
+  # one - so under this verb's scope it is by construction another tool's state
+  # and survives. A teardown, which ends the whole task, still takes it.
+  [ -e "$state/task-a.check-trust" ] \
+    || fail "disarm removed a trust record, which is not a merge poll artifact"
+  rm -f "$state/task-a.check-trust"
+  # The recorded pull request is metadata, not a poll artifact: it must survive,
+  # so a rearm needs no re-derivation and teardown can still verify landed work.
+  grep -qxF 'pr=https://github.com/o/r/pull/9' "$state/task-a.meta" \
+    || fail "disarm removed the recorded pull request from the task metadata"
+
+  # Idempotent: running it again is a no-op that succeeds and says so.
+  snapshot=$(state_snapshot "$state")
+  out=$(run_check_entry "$dir" --disarm task-a 2>&1) || fail "a second disarm failed: $out"
+  case "$out" in *"not armed"*) ;; *) fail "a second disarm did not report nothing to do: $out" ;; esac
+  [ "$(state_snapshot "$state")" = "$snapshot" ] || fail "a second disarm changed state"
+
+  # A partly-removed set - the exact residue a hand-removal leaves, a sidecar and
+  # a registration standing behind a deleted runnable name - retires cleanly
+  # rather than refusing and sending the operator back to hand-editing.
+  dir=$(make_case disarm-partial)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/9 >/dev/null 2>&1 \
+    || fail "arming the partial fixture failed"
+  rm -f "$state/task-a.check.sh"
+
+  out=$(run_check_entry "$dir" --disarm task-a 2>&1) || fail "disarm refused a partly-removed set: $out"
+  case "$out" in *disarmed*) ;; *) fail "disarm of a partial set did not report the retirement: $out" ;; esac
+  [ ! -e "$state/task-a.pr-poll" ] || fail "disarm left the orphaned sidecar behind"
+  [ ! -e "$state/task-a.pr-poll-registration" ] || fail "disarm left the orphaned registration behind"
+
+  # Safety is unchanged: an artifact that is not a plain single-link file is
+  # refused, and nothing at all is removed.
+  dir=$(make_case disarm-unsafe)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/9 >/dev/null 2>&1 \
+    || fail "arming the unsafe fixture failed"
+  rm -f "$state/task-a.pr-poll"
+  mkdir "$state/task-a.pr-poll"
+  printf 'sentinel\n' > "$state/task-a.pr-poll/sentinel"
+  set +e
+  out=$(run_check_entry "$dir" --disarm task-a 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "disarm accepted a directory-shaped sidecar"
+  case "$out" in *REFUSED*) ;; *) fail "disarm did not report a refusal: $out" ;; esac
+  [ -e "$state/task-a.check.sh" ] || fail "disarm removed the runnable check before refusing"
+  [ "$(cat "$state/task-a.pr-poll/sentinel")" = sentinel ] || fail "disarm changed the unsafe path"
+
+  # The verb takes exactly one task id, validated like every other entry point.
+  for bad in "" "task-a https://github.com/o/r/pull/9" "../escape"; do
+    set +e
+    # shellcheck disable=SC2086 # Deliberate word splitting: each case is an argv.
+    out=$(run_check_entry "$dir" --disarm $bad 2>&1)
+    rc=$?
+    set -e
+    [ "$rc" -eq 2 ] || fail "disarm accepted the invalid argv '$bad' (rc $rc): $out"
+  done
+  pass "--disarm retires the whole poll artifact set, is idempotent, finishes a partial set, and keeps every safety refusal"
+}
+
+# state/<id>.check.sh and state/<id>.check-trust are not the merge poll's private
+# names: bin/fm-check-register.sh binds a hand-written custom watcher check to
+# exactly those two paths for the same task id, and the task-landing skill tells
+# operators to write them. Deciding from artifact PRESENCE that what is there is
+# a poll therefore let --disarm delete a registered custom check and its trust
+# record and then report that a merge poll had been retired - state destroyed,
+# and the output naming something that never existed. The verb asks the same
+# discriminator that authenticates that check for the watcher instead.
+test_disarm_refuses_a_registered_custom_check() {
+  local dir state out rc snapshot
+  dir=$(make_case disarm-custom-check)
+  state="$dir/home/state"
+  printf '#!/usr/bin/env bash\nprintf "custom-ready\\n"\n' > "$state/custom.check.sh"
+  chmod 0700 "$state/custom.check.sh"
+  FM_HOME="$dir/home" "$REGISTER" custom >/dev/null \
+    || fail "could not register the custom check fixture"
+  fm_custom_check_registered "$state" custom \
+    || fail "the custom check fixture did not register"
+  snapshot=$(state_snapshot "$state")
+
+  set +e
+  out=$(run_check_entry "$dir" --disarm custom 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "disarm claimed to retire a merge poll for a registered custom check: $out"
+  case "$out" in *REFUSED*) ;; *) fail "disarm did not report a refusal: $out" ;; esac
+  case "$out" in *disarmed*) fail "disarm reported retiring a poll that never existed: $out" ;; esac
+  [ -e "$state/custom.check.sh" ] || fail "disarm deleted the registered custom check"
+  [ -e "$state/custom.check-trust" ] || fail "disarm deleted the custom check's trust record"
+  fm_custom_check_registered "$state" custom \
+    || fail "disarm left the custom check unauthenticated"
+  [ "$(state_snapshot "$state")" = "$snapshot" ] || fail "the refused disarm changed state"
+  pass "--disarm refuses a registered custom watcher check and removes none of it"
+}
+
+# The custom-check guard used to be a NEGATIVE test - "this is not a registered
+# custom check, so it must be a poll" - and a negative test fails open on every
+# state nobody anticipated. The one that found it is ordinary: bin/fm-check-register.sh
+# binds a check to its CURRENT bytes, so between editing a custom check and
+# re-registering it, its recorded hash no longer matches and it authenticates as
+# nothing. The watcher is already refusing to run it at that moment, and an
+# operator reading that wake as a stuck poll would have lost the script and its
+# trust record to --disarm, told a merge poll had been retired. The verb now
+# proves the check IS a merge poll before removing anything under that name.
+test_disarm_refuses_a_check_that_is_not_provably_a_merge_poll() {
+  local dir state out rc snapshot
+  dir=$(make_case disarm-drifted-check)
+  state="$dir/home/state"
+  printf '#!/usr/bin/env bash\nprintf "custom-ready\\n"\n' > "$state/custom.check.sh"
+  chmod 0700 "$state/custom.check.sh"
+  FM_HOME="$dir/home" "$REGISTER" custom >/dev/null \
+    || fail "could not register the custom check fixture"
+  # The edit that has not been re-registered yet.
+  printf '#!/usr/bin/env bash\nprintf "custom-ready and then some\\n"\n' > "$state/custom.check.sh"
+  chmod 0700 "$state/custom.check.sh"
+  fm_custom_check_registered "$state" custom \
+    && fail "the drifted fixture still authenticates, so it does not reach the gap under test"
+  snapshot=$(state_snapshot "$state")
+
+  set +e
+  out=$(run_check_entry "$dir" --disarm custom 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "disarm accepted a check it could not prove is a merge poll: $out"
+  case "$out" in *REFUSED*) ;; *) fail "disarm did not report a refusal: $out" ;; esac
+  case "$out" in *disarmed*) fail "disarm reported retiring a poll that never existed: $out" ;; esac
+  [ -e "$state/custom.check.sh" ] || fail "disarm deleted a mid-edit custom check"
+  [ -e "$state/custom.check-trust" ] || fail "disarm deleted the custom check's trust record"
+  [ "$(state_snapshot "$state")" = "$snapshot" ] || fail "the refused disarm changed state"
+
+  # The same holds for a check that was never registered at all: the safety is
+  # the positive proof, not any particular thing the check turns out to be.
+  dir=$(make_case disarm-foreign-check)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  printf '#!/usr/bin/env bash\nprintf "something else\\n"\n' > "$state/task-a.check.sh"
+  chmod 0600 "$state/task-a.check.sh"
+  snapshot=$(state_snapshot "$state")
+
+  set +e
+  out=$(run_check_entry "$dir" --disarm task-a 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "disarm accepted an unrecognized check as a merge poll: $out"
+  case "$out" in *REFUSED*) ;; *) fail "disarm did not refuse an unrecognized check: $out" ;; esac
+  [ -e "$state/task-a.check.sh" ] || fail "disarm deleted an unrecognized check"
+  [ "$(state_snapshot "$state")" = "$snapshot" ] || fail "the refused disarm changed state"
+  pass "--disarm removes a check only after proving it is this task's merge poll"
+}
+
+# What a retirement VALIDATES has to follow what it may remove, or the shared
+# safety check refuses on a file the caller would never have touched. --disarm
+# never removes state/<id>.check-trust, so an odd-shaped one - a symlink, or one
+# carrying a second hard link - must not stop it retiring a merge poll it has
+# positively identified. Refusing there would block the verb for exactly the
+# operators who have a custom check registered, which is the population an
+# earlier design was rejected for blocking.
+test_disarm_ignores_an_odd_shaped_trust_record() {
+  local dir state out rc shape
+  for shape in symlink extra-hard-link; do
+    dir=$(make_case "disarm-odd-trust-$shape")
+    state="$dir/home/state"
+    write_task_meta "$dir"
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/9 >/dev/null 2>&1 \
+      || fail "$shape: arming the fixture poll failed"
+    printf 'fm-custom-check-v1\n' > "$dir/trust-source"
+    chmod 0600 "$dir/trust-source"
+    if [ "$shape" = symlink ]; then
+      ln -s "$dir/trust-source" "$state/task-a.check-trust"
+    else
+      cp "$dir/trust-source" "$state/task-a.check-trust"
+      ln "$state/task-a.check-trust" "$dir/trust-alias"
+    fi
+
+    set +e
+    out=$(run_check_entry "$dir" --disarm task-a 2>&1)
+    rc=$?
+    set -e
+    [ "$rc" -eq 0 ] || fail "$shape: an odd-shaped trust record blocked disarming an identified merge poll: $out"
+    case "$out" in *disarmed*) ;; *) fail "$shape: disarm did not report the retirement: $out" ;; esac
+    for artifact in check.sh pr-poll pr-poll-registration; do
+      [ ! -e "$state/task-a.$artifact" ] || fail "$shape: disarm left task-a.$artifact behind"
+    done
+    [ -e "$state/task-a.check-trust" ] || [ -L "$state/task-a.check-trust" ] \
+      || fail "$shape: disarm removed the trust record it does not own"
+    [ "$(cat "$dir/trust-source")" = fm-custom-check-v1 ] \
+      || fail "$shape: disarm changed what the trust record points at"
+  done
+
+  # The converse: a teardown DOES remove the trust record, so it must go on
+  # validating it and refusing an odd-shaped one, removing nothing.
+  dir=$(make_case teardown-odd-trust)
+  state="$dir/home/state"
+  fm_write_meta "$state/task-a.meta" \
+    'window=fm-task-a' \
+    "worktree=$dir/missing-worktree" \
+    "project=$dir/project" \
+    'kind=ship' \
+    'mode=local-only'
+  printf 'check sentinel\n' > "$state/task-a.check.sh"
+  printf 'data sentinel\n' > "$state/task-a.pr-poll"
+  printf 'fm-custom-check-v1\n' > "$dir/trust-source"
+  ln -s "$dir/trust-source" "$state/task-a.check-trust"
+  cat > "$dir/fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$dir/fakebin/tmux"
+  touch "$state/.last-watcher-beat"
+
+  set +e
+  FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" PATH="$dir/fakebin:$BASE_PATH" \
+    "$TEARDOWN" task-a --force > "$dir/teardown.out" 2> "$dir/teardown.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "teardown accepted a symlinked trust record it would have removed"
+  grep -q REFUSED "$dir/teardown.err" || fail "teardown did not report a refusal: $(cat "$dir/teardown.err")"
+  [ "$(cat "$state/task-a.check.sh")" = 'check sentinel' ] \
+    || fail "the refused teardown removed the task check"
+  [ -L "$state/task-a.check-trust" ] || fail "the refused teardown removed the symlinked trust record"
+  [ -e "$state/task-a.meta" ] || fail "the refused teardown removed task metadata"
+  pass "an odd-shaped trust record blocks the scope that removes it and never the scope that does not"
+}
+
 test_teardown_removes_poll_artifacts() {
   local dir fakebin kind artifact counterpart rc
   dir=$(make_case teardown-cleanup)
@@ -3101,3 +3356,7 @@ test_bootstrap_isolates_incomplete_poll_migration
 test_custom_snapshot_cleanup_on_signal
 test_returned_custom_check_descendants_are_drained
 test_teardown_removes_poll_artifacts
+test_disarm_retires_the_whole_poll_artifact_set
+test_disarm_refuses_a_registered_custom_check
+test_disarm_refuses_a_check_that_is_not_provably_a_merge_poll
+test_disarm_ignores_an_odd_shaped_trust_record

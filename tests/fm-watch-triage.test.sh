@@ -21,6 +21,10 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/wake-helpers.sh"
 # shellcheck source=bin/fm-classify-lib.sh
 . "$ROOT/bin/fm-classify-lib.sh"
+# The fleet's one bounded-execution ladder, used here to put an outer deadline
+# around the harness's own stop-and-reap assertion.
+# shellcheck source=bin/fm-bounded-lib.sh
+. "$ROOT/bin/fm-bounded-lib.sh"
 
 WATCH="$ROOT/bin/fm-watch.sh"
 MARK_PARKED="$ROOT/bin/fm-mark-parked.sh"
@@ -98,7 +102,79 @@ seen_sig() {
   if [ "$(uname)" = Darwin ]; then stat -f '%z:%Fm' "$1" 2>/dev/null; else stat -c '%s:%Y' "$1" 2>/dev/null; fi
 }
 
-reap() { kill "$1" 2>/dev/null || true; wait "$1" 2>/dev/null || true; }
+# Stop a watcher this suite left running. The escalation and the bound belong to
+# the shared harness (tests/wake-helpers.sh), so a watcher that never acts on the
+# SIGTERM cannot block this suite - and with it the whole serial lane - forever.
+reap() { fm_test_stop_and_reap "$1"; }
+
+# --- the harness's own stop-and-reap bound ----------------------------------
+
+# Every watcher case below ends by stopping a live fm-watch.sh, and it does that
+# with SIGTERM - a request the watcher is free not to act on. bash runs a signal
+# trap by re-parsing the trap string, and a parse failure there leaves the
+# watcher looping with its handler never run; a `wait` placed straight behind the
+# `kill` then blocks with no bound, which once cancelled a whole serial lane at
+# its 40-minute cap and left every remaining test unreported.
+#
+# So both stop paths - the shared wait_for_exit's timeout fallback and this
+# suite's reap - must come back even when the child never honours SIGTERM, and
+# must leave nothing running. The child here refuses SIGTERM outright (its own
+# lifetime is bounded so a regression cannot leave an immortal process behind),
+# and the whole scenario runs under an outer deadline, so a return to the
+# unbounded form fails this assertion instead of hanging the lane.
+test_stop_and_reap_returns_on_a_watcher_that_ignores_sigterm() {
+  local dir driver out rc
+  dir=$(make_case reap-ignores-sigterm)
+  driver="$dir/driver.sh"
+  cat > "$driver" <<DRIVER
+#!/usr/bin/env bash
+set -u
+. "$ROOT/tests/wake-helpers.sh"
+reap() { fm_test_stop_and_reap "\$1"; }
+
+# A child with fm-watch.sh's shape - a poll loop - whose TERM handler never runs.
+spawn_deaf_child() {
+  bash -c 'trap "" TERM; i=0; while [ \$i -lt 150 ]; do sleep 0.2; i=\$((i + 1)); done' &
+}
+
+spawn_deaf_child
+child=\$!
+wait_for_exit "\$child" 5
+printf 'wait_for_exit=%s\n' "\$?"
+is_live_non_zombie "\$child" && printf 'wait_for_exit-left-it-running\n' || printf 'wait_for_exit-reaped\n'
+
+spawn_deaf_child
+child=\$!
+reap "\$child"
+printf 'reap-returned\n'
+is_live_non_zombie "\$child" && printf 'reap-left-it-running\n' || printf 'reap-reaped\n'
+DRIVER
+  chmod +x "$driver"
+
+  set +e
+  out=$(fm_run_bounded 25 bash "$driver")
+  rc=$?
+  set -e
+  [ "$rc" -ne 124 ] \
+    || fail "the harness never came back from stopping a watcher that ignores SIGTERM: $out"
+  case "$out" in
+    *"wait_for_exit=124"*) ;;
+    *) fail "wait_for_exit did not report its timeout for a watcher that ignores SIGTERM: $out" ;;
+  esac
+  case "$out" in
+    *wait_for_exit-reaped*) ;;
+    *) fail "wait_for_exit returned but left the watcher running: $out" ;;
+  esac
+  case "$out" in
+    *reap-returned*) ;;
+    *) fail "reap never returned for a watcher that ignores SIGTERM: $out" ;;
+  esac
+  case "$out" in
+    *reap-reaped*) ;;
+    *) fail "reap returned but left the watcher running: $out" ;;
+  esac
+  pass "stopping a watcher that ignores SIGTERM is bounded and leaves nothing running"
+}
 
 # --- pure classifier predicates (fm-classify-lib.sh) ------------------------
 
@@ -2739,6 +2815,7 @@ test_afk_paused_changed_pane_hands_off_plain_stale() {
   pass "AFK changed paused panes hand off plain stale identities for daemon-owned pause triage"
 }
 
+test_stop_and_reap_returns_on_a_watcher_that_ignores_sigterm
 test_signal_reason_is_actionable_classifier
 test_stale_is_terminal_classifier
 test_scan_captain_relevant_statuses_classifier
