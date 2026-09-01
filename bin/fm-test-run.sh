@@ -4,11 +4,12 @@
 # timing markers, and the complete-regression coverage guard.
 #
 # --check-coverage is this repository's one zero-drift gate location. It proves
-# three derived things, and every file set it compares is derived from the
+# four derived things, and every file set it compares is derived from the
 # directory or the document itself, never from a list kept here by hand:
 #   1. the lane partition equals the complete tests/*.test.sh inventory
 #   2. docs/scripts.md names every bin/*.sh, once, and nothing that is gone
 #   3. every tests/*.test.sh carries a decided family - there is no catch-all
+#   4. docs/command-domain-map.md matches the current top-level bin/ inventory
 # A second gate location would be a second hand-kept thing, so new derived
 # invariants belong here rather than in a new script or a new CI job.
 #
@@ -27,9 +28,9 @@
 #   fm-test-run.sh --list --lane portable-parallel-1
 #   fm-test-run.sh --list-families
 #   fm-test-run.sh --list-lanes
-#   fm-test-run.sh --check-coverage   (also proves the two derived zero-drift
-#                                      guards: the docs/scripts.md index and the
-#                                      test-family map)
+#   fm-test-run.sh --check-coverage   (also proves derived zero-drift guards:
+#                                      docs/scripts.md, the test-family map, and
+#                                      docs/command-domain-map.md)
 #
 # Aggregation (no suite execution):
 #   fm-test-run.sh --aggregate-json <out.json> <lane.json> [more lane.json...]
@@ -239,7 +240,8 @@ family_for_basename() {
     fm-test-lib.test.sh|fm-tmux-submit-busy.test.sh|\
     fm-tmux-target-resolve.test.sh|fm-transcript-archive.test.sh|\
     fm-transition-lib.test.sh|\
-    fm-test-run.test.sh|fm-test-isolation-proof.test.sh)
+    fm-test-run.test.sh|fm-test-isolation-proof.test.sh|\
+    fm-toolbelt-domain-map.test.sh)
       printf '%s\n' pure-contract-unit
       ;;
     fm-bosun.test.sh|fm-context-reset.test.sh|fm-daemon.test.sh|\
@@ -620,6 +622,10 @@ run_script_index_guard() {
   return "$rc"
 }
 
+run_toolbelt_domain_map_guard() {
+  "$ROOT/bin/fm-toolbelt-domain-map.py" --check
+}
+
 # Every tests/*.test.sh must carry a decided family, and every family must state
 # the boundary it claims. There is no catch-all to fall into, so this names every
 # gap at once rather than dying on the first.
@@ -665,10 +671,11 @@ run_coverage_guard() {
   local -a saved_scripts=()
   local rc=0
 
-  # The two derived zero-drift guards run first: the family guard names every
+  # The derived zero-drift guards run first: the family guard names every
   # unmapped test at once, which the lane selections below could not do because
   # family_for_script refuses on the first one it meets.
   run_script_index_guard || rc=1
+  run_toolbelt_domain_map_guard || rc=1
   run_family_guard || rc=1
   [ "$rc" -eq 0 ] || return 1
 
@@ -913,7 +920,8 @@ families_for_changed_path() {
       # resolution in the caller; emit a marker family of __script__
       printf '%s\n' "__script__:$(basename "$path")"
       ;;
-    bin/fm-test-run.sh|bin/fm-test-isolation-proof.sh)
+    bin/fm-test-run.sh|bin/fm-test-isolation-proof.sh|bin/fm-toolbelt-domain-map.py|\
+    docs/command-domain-map.md)
       printf '%s\n' pure-contract-unit
       ;;
     bin/backends/herdr*|bin/fm-herdr-lab.sh|tests/herdr-test-safety.sh)

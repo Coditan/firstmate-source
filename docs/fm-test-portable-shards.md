@@ -78,6 +78,7 @@ The original Phase 1 artifacts measured the serial remainder at about **13 minut
 5. `docs/scripts.md` names every `bin/*.sh`, names each one once, and names nothing that is gone (`FM_SCRIPT_INDEX ok`).
 6. Every `tests/*.test.sh` carries a decided family (`FM_TEST_FAMILIES ok`); there is no catch-all family to fall into, so an unmapped test refuses here and at every selection rather than defaulting.
 7. Every family states the boundary it claims, in the block above `family_for_basename`, so a classification the fleet has to live with cannot outlive its reasoning.
+8. `docs/command-domain-map.md` matches the current top-level `bin/` inventory and the generator's deterministic output (`FM_TOOLBELT_DOMAIN_MAP ok`).
 
 Every file set the guard compares is derived from the directory or the document itself.
 What each family means, and the discriminator against the family it is most easily confused with, lives at the map in `bin/fm-test-run.sh` rather than here, so a reviewer meets the reasoning where the mapping is made.
