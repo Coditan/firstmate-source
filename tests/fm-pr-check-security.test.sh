@@ -2632,6 +2632,91 @@ SH
   pass "returned custom check descendants are drained on installed and fallback timeout paths"
 }
 
+# Arming had no inverse. The only removal in the fleet was a side effect of a
+# completed teardown, so a poll whose teardown was refused could be stopped only
+# by hand-editing state, which AGENTS.md section 2 forbids - and a seat that
+# refused to break either rule left a half-removed artifact set standing. This
+# verb is what makes that choice unnecessary, so it has to finish such a set as
+# readily as it retires a whole one.
+test_disarm_retires_the_whole_poll_artifact_set() {
+  local dir state out rc snapshot
+  dir=$(make_case disarm-armed)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/9 >/dev/null 2>&1 \
+    || fail "arming the fixture poll failed"
+  fm_pr_poll_artifacts_valid "$state" task-a "$POLL" || fail "the fixture poll was not validly armed"
+  mkdir -p "$state/.pr-check-quarantine"
+  chmod 0700 "$state/.pr-check-quarantine"
+  printf 'legacy\n' > "$state/.pr-check-quarantine/task-a.check.abc123"
+  chmod 0600 "$state/.pr-check-quarantine/task-a.check.abc123"
+  printf 'trust\n' > "$state/task-a.check-trust"
+  chmod 0600 "$state/task-a.check-trust"
+
+  out=$(run_check_entry "$dir" --disarm task-a 2>&1) || fail "disarm failed on an armed poll: $out"
+  case "$out" in *disarmed*) ;; *) fail "disarm did not report the retirement: $out" ;; esac
+  for artifact in check.sh pr-poll pr-poll-registration check-trust; do
+    [ ! -e "$state/task-a.$artifact" ] || fail "disarm left task-a.$artifact behind"
+  done
+  [ ! -e "$state/.pr-check-quarantine/task-a.check.abc123" ] \
+    || fail "disarm left a quarantine entry behind"
+  # The recorded pull request is metadata, not a poll artifact: it must survive,
+  # so a rearm needs no re-derivation and teardown can still verify landed work.
+  grep -qxF 'pr=https://github.com/o/r/pull/9' "$state/task-a.meta" \
+    || fail "disarm removed the recorded pull request from the task metadata"
+
+  # Idempotent: running it again is a no-op that succeeds and says so.
+  snapshot=$(state_snapshot "$state")
+  out=$(run_check_entry "$dir" --disarm task-a 2>&1) || fail "a second disarm failed: $out"
+  case "$out" in *"not armed"*) ;; *) fail "a second disarm did not report nothing to do: $out" ;; esac
+  [ "$(state_snapshot "$state")" = "$snapshot" ] || fail "a second disarm changed state"
+
+  # A partly-removed set - the exact residue a hand-removal leaves, a sidecar and
+  # a registration standing behind a deleted runnable name - retires cleanly
+  # rather than refusing and sending the operator back to hand-editing.
+  dir=$(make_case disarm-partial)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/9 >/dev/null 2>&1 \
+    || fail "arming the partial fixture failed"
+  rm -f "$state/task-a.check.sh"
+
+  out=$(run_check_entry "$dir" --disarm task-a 2>&1) || fail "disarm refused a partly-removed set: $out"
+  case "$out" in *disarmed*) ;; *) fail "disarm of a partial set did not report the retirement: $out" ;; esac
+  [ ! -e "$state/task-a.pr-poll" ] || fail "disarm left the orphaned sidecar behind"
+  [ ! -e "$state/task-a.pr-poll-registration" ] || fail "disarm left the orphaned registration behind"
+
+  # Safety is unchanged: an artifact that is not a plain single-link file is
+  # refused, and nothing at all is removed.
+  dir=$(make_case disarm-unsafe)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/9 >/dev/null 2>&1 \
+    || fail "arming the unsafe fixture failed"
+  rm -f "$state/task-a.pr-poll"
+  mkdir "$state/task-a.pr-poll"
+  printf 'sentinel\n' > "$state/task-a.pr-poll/sentinel"
+  set +e
+  out=$(run_check_entry "$dir" --disarm task-a 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "disarm accepted a directory-shaped sidecar"
+  case "$out" in *REFUSED*) ;; *) fail "disarm did not report a refusal: $out" ;; esac
+  [ -e "$state/task-a.check.sh" ] || fail "disarm removed the runnable check before refusing"
+  [ "$(cat "$state/task-a.pr-poll/sentinel")" = sentinel ] || fail "disarm changed the unsafe path"
+
+  # The verb takes exactly one task id, validated like every other entry point.
+  for bad in "" "task-a https://github.com/o/r/pull/9" "../escape"; do
+    set +e
+    # shellcheck disable=SC2086 # Deliberate word splitting: each case is an argv.
+    out=$(run_check_entry "$dir" --disarm $bad 2>&1)
+    rc=$?
+    set -e
+    [ "$rc" -eq 2 ] || fail "disarm accepted the invalid argv '$bad' (rc $rc): $out"
+  done
+  pass "--disarm retires the whole poll artifact set, is idempotent, finishes a partial set, and keeps every safety refusal"
+}
+
 test_teardown_removes_poll_artifacts() {
   local dir fakebin kind artifact counterpart rc
   dir=$(make_case teardown-cleanup)
@@ -3101,3 +3186,4 @@ test_bootstrap_isolates_incomplete_poll_migration
 test_custom_snapshot_cleanup_on_signal
 test_returned_custom_check_descendants_are_drained
 test_teardown_removes_poll_artifacts
+test_disarm_retires_the_whole_poll_artifact_set

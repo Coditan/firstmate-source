@@ -411,8 +411,21 @@ classify_stale() {  # <window> <state>
   printf 'self|transient stale (%s): %s' "$win" "${last:-no status}"
 }
 
-classify_check() {  # <full reason>  — check scripts print only when firstmate should wake
-  printf 'escalate|%s' "$1"
+# Check scripts print only when firstmate should wake, so a check wake escalates.
+# The one narrowing - an identical repeat of an already-delivered TERMINAL check
+# outcome is absorbed - and the full reasoning for it live in
+# bin/fm-classify-lib.sh's terminal-check-outcomes section, which is the shared
+# triage owner. The first report of that outcome still escalates.
+classify_check() {  # <full reason> <state dir>
+  local reason=$1 state=${2-} seen
+  if [ -n "$state" ] && check_reports_terminal_outcome "$reason" \
+    && seen=$(check_seen_marker "$state" "$reason"); then
+    if [ "$(cat "$seen" 2>/dev/null || true)" = "$reason" ]; then
+      printf 'self|repeat of a terminal check outcome already escalated: %s' "$reason"
+      return
+    fi
+  fi
+  printf 'escalate|%s' "$reason"
 }
 
 classify_heartbeat() {
@@ -431,8 +444,25 @@ classify_unknown() {  # <reason>
 # Buffer:   state/.subsuper-escalations    one distilled line per escalation.
 # Seen:     state/.subsuper-seen-status-<task>  last status line the scan
 #           escalated, so the catch-all does not re-fire the same terminal.
+# Seen:     state/.subsuper-seen-check-<task>   the terminal check wake already
+#           escalated for that check, so an identical repeat is absorbed.
 
 _stale_key() { printf '%s' "$1" | tr ':/.' '___'; }
+
+# The seen-marker path for a check wake, keyed the way every other per-task
+# marker here is keyed: on the task, taken from the check script's own name
+# (state/<task>.check.sh). That keying is what lets bin/fm-state-marker-prune-lib.sh
+# retire the marker with the task record instead of leaving it behind forever.
+# Returns non-zero when the reason names no check script, so no marker is written
+# for a wake this classifier could not parse.
+check_seen_marker() {  # <state dir> <full reason>
+  local state=$1 reason=$2 script name
+  script=$(check_reason_script "$reason") || return 1
+  name=${script##*/}
+  name=${name%.check.sh}
+  [ -n "$name" ] || return 1
+  printf '%s' "$state/.subsuper-seen-check-$(_stale_key "$name")"
+}
 
 stale_marker_record() {  # <window> <state>  — create if absent
   local win=$1 state=$2 key marker
@@ -550,6 +580,12 @@ mark_escalated_seen() {  # <kind> <arg> <state>
       last=$(last_status_line "$state/$task.status")
       [ -n "$last" ] && status_is_captain_relevant "$last" \
         && mark_status_seen "$state" "$task" "$last" ;;
+    check)
+      # Record the delivered reason only for a terminal outcome. A non-terminal
+      # check leaves no marker, so it can never be absorbed as a repeat later.
+      check_reports_terminal_outcome "$arg" || return 0
+      f=$(check_seen_marker "$state" "$arg") || return 0
+      printf '%s' "$arg" > "$f" ;;
   esac
 }
 
@@ -1148,7 +1184,8 @@ handle_wake() {  # <reason> <state>
               decision=$(classify_signal "$arg" "$state") ;;
     stale:*)  kind=stale; arg="${reason#stale: }"
               decision=$(classify_stale "$arg" "$state") ;;
-    check:*)  decision=$(classify_check "$reason") ;;
+    check:*)  kind=check; arg=$reason
+              decision=$(classify_check "$reason" "$state") ;;
     heartbeat|heartbeat:*) decision=$(classify_heartbeat) ;;
     *)        decision=$(classify_unknown "$reason") ;;
   esac

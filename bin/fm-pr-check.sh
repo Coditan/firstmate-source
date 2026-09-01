@@ -29,7 +29,23 @@
 # SHA like every other pr_head, and the caller that supplies it is the merge
 # path, which has to resolve the head anyway to pass it to a forge that requires
 # it. Nothing is inferred: an absent flag still means the ordinary lookup.
+# --disarm retires a task's armed poll and takes no pull request URL. Arming had
+# no inverse before it, and the only removal in the fleet was a side effect of a
+# completed teardown - so a poll whose teardown was refused could be stopped only
+# by hand-editing state, which AGENTS.md section 2 forbids. A seat facing that
+# choice left a half-removed artifact set in place rather than break either rule,
+# and a spent poll on another seat woke it every five minutes for hours. This
+# verb is what makes that choice unnecessary.
+#
+# It removes the WHOLE artifact set - the runnable check, the sidecar, the
+# registration, the trust record, and any quarantine entry for the task - or
+# refuses and removes none of it. It is idempotent, and it deliberately succeeds
+# on a set that is already partly gone: finishing a hand-removal is one of the
+# states it exists to resolve. It never touches the task metadata, so the
+# recorded pr= survives and the poll can be armed again with a plain rearm.
+#
 # Usage: fm-pr-check.sh [--no-watch] [--pr-head <sha>] <task-id> <pr-url>
+#        fm-pr-check.sh --disarm <task-id>
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -39,6 +55,29 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+
+# --disarm is handled before the arming path's own parsing and before the legacy
+# migration runs. It takes no URL, so none of the identity resolution below
+# applies, and it must not invoke a migration whose job is to REBUILD polls.
+if [ "${1-}" = --disarm ]; then
+  shift
+  if [ "$#" -ne 1 ]; then
+    echo "error: invalid PR check request" >&2
+    exit 2
+  fi
+  DISARM_ID=$1
+  if ! fm_pr_task_id_valid "$DISARM_ID"; then
+    echo "error: invalid PR check request" >&2
+    exit 2
+  fi
+  if ! fm_pr_poll_artifacts_present "$STATE" "$DISARM_ID"; then
+    echo "not armed: $DISARM_ID has no merge poll artifacts; nothing to disarm."
+    exit 0
+  fi
+  fm_pr_poll_retire "$STATE" "$DISARM_ID" || exit 1
+  echo "disarmed: $DISARM_ID's merge poll is retired; no watcher check remains for it."
+  exit 0
+fi
 
 NO_WATCH=0
 SUPPLIED_PR_HEAD=

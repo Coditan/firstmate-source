@@ -57,6 +57,81 @@ FM_CLASSIFY_CAPTAIN_RE_DEFAULT='done:|needs-decision:|blocked:|failed:|PR ready|
 # drift between the two consumers. FM_CLASSIFY_PAUSED_VERB overrides it.
 FM_CLASSIFY_PAUSED_VERB_DEFAULT='paused'
 
+# --- terminal check outcomes ------------------------------------------------
+#
+# A watcher check script prints only when firstmate should wake, so a check wake
+# escalates. That rule is sound for a check that prints BECAUSE SOMETHING
+# HAPPENED, and exactly wrong for one whose fact is spent: bin/fm-pr-poll.sh
+# prints "merged" on every single run once its pull request has merged, and a
+# merged pull request never un-merges. Every repeat therefore carries the same
+# fact the first one already delivered, while sitting in the one wake category
+# away mode may not absorb - so the highest-volume wake source in a session was
+# the one it was structurally forbidden to filter, and its cost was bounded only
+# by the captain's return. One seat measured forty such wakes, 31% of everything
+# that reached the model that day, from a single spent poll.
+#
+# The narrowing: the FIRST report of a terminal outcome escalates exactly as
+# before, and an identical repeat of that same terminal outcome from that same
+# check is absorbed. Nothing else changes. A repeated NON-terminal check still
+# escalates every time, however alike two of its wakes look, because a condition
+# that can still change is worth waking for again.
+#
+# This is a second line of defence and not the fix. A spent poll should be
+# retired at its source (bin/fm-pr-check.sh --disarm, and bin/fm-teardown.sh
+# retiring a fulfilled poll even when it refuses to discard work) and never reach
+# this classifier at all. The classification above is defensible on its own
+# terms, so it is narrowed only to what it can state truthfully - a repeat of a
+# fact already delivered - and not bent into a filter for an upstream leak.
+#
+# The vocabulary is a named, closed set rather than a pattern. A check's output
+# is arbitrary program output, and treating an unrecognized payload as terminal
+# would silently absorb a live condition, which is the failure this rule exists
+# to prevent. It holds one entry: bin/fm-pr-poll.sh emits exactly the word
+# "merged", only for a merged pull or merge request, and for nothing else.
+# FM_CLASSIFY_TERMINAL_CHECK_RE overrides the whole set.
+FM_CLASSIFY_TERMINAL_CHECK_RE_DEFAULT='^merged$'
+
+# Split a watcher check wake reason - "check: <script>: <output>" - into its two
+# parts. The script path carries no ": ", so the first separator divides them.
+# Echoes the script path; returns non-zero when the reason is not that shape (the
+# watcher also emits check wakes that name no script, such as its rejected-check
+# report), so a caller cannot key a marker on a reason it did not parse.
+check_reason_script() {  # <full reason>
+  local reason=${1-} rest script
+  case "$reason" in
+    'check: '*) rest=${reason#check: } ;;
+    *) return 1 ;;
+  esac
+  case "$rest" in
+    *': '*) ;;
+    *) return 1 ;;
+  esac
+  script=${rest%%: *}
+  case "$script" in
+    *.check.sh) ;;
+    *) return 1 ;;
+  esac
+  printf '%s' "$script"
+}
+
+# Echo a check wake reason's output payload; returns non-zero on the same shapes
+# check_reason_script rejects, so the two always agree about what parsed.
+check_reason_payload() {  # <full reason>
+  local reason=${1-} rest
+  check_reason_script "$reason" >/dev/null || return 1
+  rest=${reason#check: }
+  printf '%s' "${rest#*: }"
+}
+
+# Does this check wake report a terminal outcome - a fact that cannot revert, and
+# so carries nothing new if the same check reports it again?
+check_reports_terminal_outcome() {  # <full reason>
+  local payload
+  payload=$(check_reason_payload "$1") || return 1
+  printf '%s' "$payload" \
+    | grep -Eq "${FM_CLASSIFY_TERMINAL_CHECK_RE:-$FM_CLASSIFY_TERMINAL_CHECK_RE_DEFAULT}"
+}
+
 # Bounded re-surface cadence for a declared pause or a dead-agent captain hold.
 # Far longer than the wedge threshold (FM_STALE_ESCALATE_SECS, default 240s), it
 # avoids nagging a deliberate wait while ensuring a forgotten hold cannot rot

@@ -108,5 +108,5 @@ fm_state_marker_prune_subsuper() {  # <state-dir>
   [ -d "$state" ] || return 0
   live_tasks=$(fm_state_marker_live_task_keys "$state")
   fm_state_marker_prune_prefix_set "$state" "$live_tasks" \
-    .subsuper-seen-status- .subsuper-stale- .subsuper-paused-
+    .subsuper-seen-status- .subsuper-seen-check- .subsuper-stale- .subsuper-paused-
 }

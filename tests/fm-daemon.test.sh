@@ -177,14 +177,94 @@ test_classify_terminal_signal_escalates() {
 }
 
 test_classify_check_and_unknown_escalate() {
-  local out
-  out=$(classify_check "check: /s/c.check.sh: merged: https://x")
+  local dir state out
+  dir=$(make_supercase classify-check)
+  state="$dir/state"
+  out=$(classify_check "check: /s/c.check.sh: merged: https://x" "$state")
   case "$out" in escalate\|*) ;; *) fail "check did not escalate: $out" ;; esac
   out=$(classify_unknown "frobnicate: weird")
   case "$out" in escalate\|*) ;; *) fail "unknown did not fail-safe escalate: $out" ;; esac
   out=$(classify_heartbeat)
   case "$out" in self\|*) ;; *) fail "heartbeat did not self-handle: $out" ;; esac
   pass "check + unknown escalate; heartbeat self-handles"
+}
+
+# A merge poll whose pull request has merged prints "merged" on every run for as
+# long as it stays armed, and every one of those reached the model because a
+# check wake escalates by contract. One seat measured forty of them from a single
+# spent poll, 31% of everything it saw that day, while away mode was structurally
+# forbidden to absorb any of them. The first report still escalates; only an
+# identical repeat of that terminal outcome is self-handled.
+test_repeated_terminal_check_outcome_is_absorbed_after_the_first() {
+  local dir state reason out key
+  dir=$(make_supercase terminal-check-repeat)
+  state="$dir/state"
+  reason="check: $state/task-x1.check.sh: merged"
+
+  FM_STATE_OVERRIDE="$state" handle_wake "$reason" "$state"
+  [ -s "$state/.subsuper-escalations" ] \
+    || fail "the first merged report was not escalated"
+  key=$(_stale_key task-x1)
+  [ -e "$state/.subsuper-seen-check-$key" ] \
+    || fail "the escalated terminal outcome left no seen marker"
+
+  : > "$state/.subsuper-escalations"
+  FM_STATE_OVERRIDE="$state" handle_wake "$reason" "$state"
+  [ -s "$state/.subsuper-escalations" ] \
+    && fail "an identical repeat of an already-delivered merged report was escalated again"
+
+  out=$(classify_check "$reason" "$state")
+  case "$out" in self\|*) ;; *) fail "the repeat did not classify as self-handled: $out" ;; esac
+
+  # The marker is keyed on the task, so the shared per-task pruner retires it
+  # with the task record instead of leaving it in state forever.
+  fm_state_marker_prune_subsuper "$state"
+  [ -e "$state/.subsuper-seen-check-$key" ] \
+    && fail "the seen marker for a task with no record survived pruning"
+  pass "a repeated terminal check outcome escalates once, is absorbed thereafter, and its marker is pruned with the task"
+}
+
+# The narrowing must not become a general check filter. A non-terminal check
+# names a condition that can still change, so two identical reports of it are two
+# reports worth waking for - and no marker is recorded that could absorb one.
+test_repeated_non_terminal_check_still_escalates_every_time() {
+  local dir state reason key
+  dir=$(make_supercase non-terminal-check-repeat)
+  state="$dir/state"
+  reason="check: $state/certsync.check.sh: unhealthy: heartbeat stale"
+
+  FM_STATE_OVERRIDE="$state" handle_wake "$reason" "$state"
+  [ -s "$state/.subsuper-escalations" ] || fail "the first non-terminal check was not escalated"
+  key=$(_stale_key certsync)
+  [ -e "$state/.subsuper-seen-check-$key" ] \
+    && fail "a non-terminal check recorded a seen marker that could absorb a later repeat"
+
+  : > "$state/.subsuper-escalations"
+  FM_STATE_OVERRIDE="$state" handle_wake "$reason" "$state"
+  [ -s "$state/.subsuper-escalations" ] \
+    || fail "a repeated non-terminal check was absorbed"
+  pass "a repeated non-terminal check escalates every time and records no absorbing marker"
+}
+
+# The absorbed repeat is keyed on BOTH the check and its exact output: a
+# different check reporting the same terminal word, or the same check reporting
+# something new, is a wake that has not been delivered yet.
+test_terminal_check_absorption_is_keyed_on_the_check_and_its_output() {
+  local dir state
+  dir=$(make_supercase terminal-check-keying)
+  state="$dir/state"
+  FM_STATE_OVERRIDE="$state" handle_wake "check: $state/task-a.check.sh: merged" "$state"
+  : > "$state/.subsuper-escalations"
+
+  FM_STATE_OVERRIDE="$state" handle_wake "check: $state/task-b.check.sh: merged" "$state"
+  [ -s "$state/.subsuper-escalations" ] \
+    || fail "a different task's first merged report was absorbed by another task's marker"
+
+  : > "$state/.subsuper-escalations"
+  FM_STATE_OVERRIDE="$state" handle_wake "check: $state/task-a.check.sh: merged and reverted" "$state"
+  [ -s "$state/.subsuper-escalations" ] \
+    || fail "a changed payload from an already-escalated check was absorbed"
+  pass "terminal-outcome absorption is keyed on the check and its exact output, never on either alone"
 }
 
 test_stale_transient_self_records_marker() {
@@ -1881,3 +1961,6 @@ test_inject_msg_herdr_composer_guard_defers
 test_inject_msg_herdr_pane_gone_defers
 test_inject_msg_herdr_submits_through_backend_dispatch
 test_inject_msg_defers_on_dead_shell_unknown
+test_repeated_terminal_check_outcome_is_absorbed_after_the_first
+test_repeated_non_terminal_check_still_escalates_every_time
+test_terminal_check_absorption_is_keyed_on_the_check_and_its_output

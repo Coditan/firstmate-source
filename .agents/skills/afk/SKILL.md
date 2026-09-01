@@ -165,7 +165,10 @@ Classify each wake this way:
   Other signals with no captain-relevant status -> self-handle.
 - `signal` or `stale` for a declared `paused:` external wait -> self-handle and track the pause rather than a wedge.
   If it remains declared and idle past `FM_PAUSE_RESURFACE_SECS` (default 3600s), housekeeping sends one awaiting-external recheck and resets the pause window.
-- `check` -> always escalate. Check scripts print only when firstmate should wake.
+- `check` -> escalate, with one narrowing: an identical repeat of an already-delivered terminal outcome from the same check is self-handled.
+  Check scripts print only when firstmate should wake, so a check wake is actionable by default.
+  A terminal outcome is one that cannot revert - a pull request reported merged - so a repeat of it carries nothing the first report did not, while a repeated non-terminal check still escalates every time because the condition it names can still change.
+  `bin/fm-classify-lib.sh`'s terminal-check-outcomes section owns the vocabulary and the reasoning, including why this is a second line of defence rather than the fix for a poll that should have been retired at its source.
 - `stale` with a terminal status or bare legacy captain-relevant line -> escalate.
   Nonterminal progress remains transient even when its prose contains a legacy free-text token or its seen-status marker already matches, so record a marker and self-handle.
   If the pane is still idle past `FM_STALE_ESCALATE_SECS` (default 240s), housekeeping escalates it as a possible wedge.
