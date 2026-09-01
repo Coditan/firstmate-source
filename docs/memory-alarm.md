@@ -209,6 +209,15 @@ The fastest growth ordinary work produced was 31.5 MiB/min, so the bar sits **31
 
 This condition is the only one of the three that does not decide on a level, and the reason is measured rather than preferred.
 
+**It ships with this gate and this window in force, not switched off** - any statement that it ships unconfigured is stale and describes an earlier commit on this branch.
+Host memory stall at or above `full avg60` 1.00 starts a clock, and only a run held continuously past 7,200 seconds crosses.
+The level alone means nothing, which is the point: ordinary heavy work goes far over the gate and then **finishes**, so it never reaches the window, while the measured starvation ran 21h45m.
+Both numbers are derived below from measurements taken on this seat and can be re-taken.
+They are the captain's decision of 2026-08-28, "take yachts persistence route", answering a filed question that carried the measurements, three options and a recommendation.
+
+A later record of 2026-08-30 named a different pair on a different averaging window - `full avg10` above 60 held for 30 continuous seconds - and it does **not** supersede the shipped pair: it was put back to the captain on 2026-09-01 and he confirmed them, "take the persistence route, the shipped numbers stand".
+The measurement that makes that legible: this seat under nothing but this repository's own tooling peaked at `full avg10` 49.45 while never coming within 8.9 GB of the alarm's floor and recovering the moment the load stopped, so 60 on the ten-second window sits only 1.21 times above a measured healthy peak - and ordinary work here already held the much lower shipped gate for 216 continuous seconds, seven times the 30 seconds that pair would have required.
+
 #### Why no level works
 
 The quiet readings looked decisive at first.

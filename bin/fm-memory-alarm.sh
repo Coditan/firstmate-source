@@ -208,7 +208,11 @@
 #                         compare - no stored growth sample yet, one too young
 #                         to divide by, one aged past its window - is scope
 #                         rather than blindness, resolves on the next poll that
-#                         stores a sample, and never enters the set. So `-`
+#                         stores a sample, and does not enter the set. The one
+#                         exception is a growth absence THIS RUN'S OWN STORE
+#                         failed to repair, which is settled as blindness and
+#                         does enter it; docs/memory-alarm.md owns which is
+#                         which. So `-`
 #                         says every condition is being watched, not that every
 #                         condition was judged this run. The crossed set is carried because a
 #                         condition that is blind but never crossed says nothing
