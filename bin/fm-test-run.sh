@@ -4,7 +4,7 @@
 # timing markers, and the complete-regression coverage guard.
 #
 # --check-coverage is this repository's one zero-drift gate location. It proves
-# three derived things, and every file set it compares is derived from the
+# four derived things, and every file set it compares is derived from the
 # directory or the document itself, never from a list kept here by hand:
 #   1. the lane partition equals the complete tests/*.test.sh inventory
 #   2. docs/scripts.md names every bin/*.sh, once, and nothing that is gone
@@ -28,9 +28,9 @@
 #   fm-test-run.sh --list --lane portable-parallel-1
 #   fm-test-run.sh --list-families
 #   fm-test-run.sh --list-lanes
-#   fm-test-run.sh --check-coverage   (also proves the two derived zero-drift
-#                                      guards: the docs/scripts.md index and the
-#                                      test-family map)
+#   fm-test-run.sh --check-coverage   (also proves derived zero-drift guards:
+#                                      docs/scripts.md, the test-family map, and
+#                                      docs/command-domain-map.md)
 #
 # Aggregation (no suite execution):
 #   fm-test-run.sh --aggregate-json <out.json> <lane.json> [more lane.json...]
@@ -671,7 +671,7 @@ run_coverage_guard() {
   local -a saved_scripts=()
   local rc=0
 
-  # The two derived zero-drift guards run first: the family guard names every
+  # The derived zero-drift guards run first: the family guard names every
   # unmapped test at once, which the lane selections below could not do because
   # family_for_script refuses on the first one it meets.
   run_script_index_guard || rc=1

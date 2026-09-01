@@ -82,7 +82,7 @@ bin/fm-test-run.sh --family pure-contract-unit   # ordinary family-scoped local 
 bin/fm-test-run.sh --changed   # conservative changed-file-informed set (never silent full suite)
 bin/fm-test-run.sh --proven-isolated --jobs 4   # explicit local parallel of the proven set only (default is serial)
 bin/fm-test-run.sh --lane portable-serial   # portable serial remainder (watcher/AFK/tmux/stateful)
-bin/fm-test-run.sh --check-coverage   # the one zero-drift gate: lane partition, docs/scripts.md index, test-family map
+bin/fm-test-run.sh --check-coverage   # the one zero-drift gate: lane partition, docs/scripts.md index, test-family map, command-domain map
 bin/fm-test-run.sh --all   # deliberate complete regression (optional local full walk; not no-mistakes Test)
 bin/fm-test-isolation-proof.sh --list   # proven parallel candidate set (Phase 2 owner)
 bin/fm-test-isolation-proof.sh --jobs 4 --json /tmp/fm-isolation-proof.json   # re-run concurrent isolation proof only
