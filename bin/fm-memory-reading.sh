@@ -50,7 +50,12 @@
 # nothing replaces it and the reason stays unmeasured, and a sample path that
 # is not a regular file stays unmeasured whatever the mode, under its own input
 # name `growth-sample-path`, because no replacement can be written over it and
-# that absence never clears by itself. See read_prior below.
+# that absence never clears by itself. Both scope verdicts that rest on this
+# run storing - that one and a first run with no sample at all - are settled
+# only once the store has been attempted, and a sample that did not land makes
+# them unmeasured under the input name `growth-sample-store`, because a run
+# that stored nothing has left the next run no better placed than itself.
+# See read_prior and settle_growth_scope below.
 # The wall-clock and peak-memory cost figures measure this instrument rather
 # than machine memory. Their platform-dependent absence is scope and stays
 # visible without making the memory reading untrustworthy.
@@ -825,6 +830,27 @@ GROWTH_REASON=
 GROWTH_SCOPE=0
 GROWTH_SAMPLE_DROPPED=0
 INTERVAL_WAITED=0
+STORE_OK=1
+
+# SCOPE THAT RESTS ON THIS RUN'S SAMPLE LANDING IS NOT SETTLED UNTIL IT HAS
+# A growth absence is scope rather than blindness only because the NEXT run is
+# better placed than this one, and the only thing that makes it so is this run
+# storing its own sample. That is attempted after the prior is read, so the
+# verdict cannot honestly be pronounced where it is reached: a store that never
+# lands leaves a reading claiming a replacement that did not happen, and an
+# alarm treating a permanently dead growth instrument as an ordinary absence
+# nobody needs to hear about. Every such verdict is recorded here as PROVISIONAL
+# and settled by settle_growth_scope below, against the store's real outcome
+# rather than against the wording of the reason.
+GROWTH_SCOPE_BASE=
+GROWTH_SCOPE_PENDING_STORE=0
+
+scope_pending_store() {  # <reason> <clause earned by this run's sample landing>
+  GROWTH_SCOPE_BASE="$1"
+  GROWTH_REASON="$1$2"
+  GROWTH_SCOPE=1
+  GROWTH_SCOPE_PENDING_STORE=1
+}
 
 # A STORED SAMPLE THIS RUN CANNOT USE IS NOT A BROKEN INSTRUMENT, IF THIS RUN
 # REPLACES IT
@@ -840,17 +866,16 @@ INTERVAL_WAITED=0
 # sample, the next run would be just as blind as this one, and the reason stays
 # unmeasured.
 #
-# A fresh sample that FAILS is still unmeasured. Two separate mechanisms hold
-# that, and neither depends on the caller: a sample path that is not a regular
-# file cannot be written over at all and never reaches this helper, and a
+# A fresh sample that FAILS is still unmeasured. Three separate mechanisms hold
+# that, and none depends on the caller: a sample path that is not a regular
+# file cannot be written over at all and never reaches this helper, a
 # replacement that cannot be written is marked unmeasured by store_sample
-# below, which makes the whole reading incomplete however this growth reason
-# reads.
+# below, and the scope verdict this helper reaches is provisional until
+# settle_growth_scope has seen whether that replacement actually landed.
 unusable_prior() {  # <reason>
   : > "$PRIOR_FILE"
   if [ "$STORE" -eq 1 ]; then
-    GROWTH_REASON="$1, so it was discarded and this run's own sample takes its place"
-    GROWTH_SCOPE=1
+    scope_pending_store "$1" ", so it was discarded and this run's own sample takes its place"
     return
   fi
   GROWTH_REASON="$1, and this reading was asked not to store, so nothing replaces it"
@@ -888,8 +913,7 @@ read_prior() {
     return
   fi
   if [ ! -e "$SAMPLES" ]; then
-    GROWTH_REASON="no stored sample yet, so this run has nothing to compare against"
-    GROWTH_SCOPE=1
+    scope_pending_store "no stored sample yet" ", so this run has nothing to compare against"
     return
   fi
   # A path that is not a regular file is the one unusable prior a fresh sample
@@ -970,6 +994,7 @@ store_sample() {
   local tmp
   [ "$STORE" -eq 1 ] || return 0
   if [ ! -d "$STATE" ] && ! mkdir -p "$STATE" 2>/dev/null; then
+    STORE_OK=0
     unmeasured sample-storage "$STATE could not be created"
     return 0
   fi
@@ -991,12 +1016,36 @@ store_sample() {
     ' "$PROCS_FILE"
   } > "$tmp" 2>/dev/null; then
     rm -f "$tmp"
+    STORE_OK=0
     unmeasured sample-storage "$tmp could not be written from a valid non-empty process sample"
     return 0
   fi
   if ! mv -f "$tmp" "$SAMPLES" 2>/dev/null; then
     rm -f "$tmp"
+    STORE_OK=0
     unmeasured sample-storage "$SAMPLES could not be replaced"
+  fi
+}
+
+# The other half of scope_pending_store, run once the store has actually been
+# attempted. A run that stored keeps today's verdict and today's wording to the
+# byte. A run whose sample did not land has not put the next run in a better
+# place than this one, so the absence is blindness and is named as such - under
+# its own input, so the alarm can tell it from the absences that do clear
+# themselves without reading either end's prose.
+settle_growth_scope() {
+  [ "$GROWTH_SCOPE_PENDING_STORE" -eq 1 ] || return 0
+  [ "$STORE_OK" -eq 0 ] || return 0
+  GROWTH_REASON="$GROWTH_SCOPE_BASE, and this run's own sample could not be stored, so the next run has nothing more to compare against than this one did"
+  GROWTH_SCOPE=0
+  unmeasured growth-sample-store "$GROWTH_REASON"
+  # The per-process records were built from the provisional verdict, so they are
+  # brought with it rather than left contradicting the reading they sit in.
+  if awk -F'\t' -v OFS='\t' -v reason="$GROWTH_REASON" '
+    $7 == "scoped" { $6 = reason; $7 = "unmeasured" }
+    { print }
+  ' "$PROCS_FILE" > "$TMP/procs-settled.tsv" 2>/dev/null; then
+    mv -f "$TMP/procs-settled.tsv" "$PROCS_FILE" 2>/dev/null || :
   fi
 }
 
@@ -1486,6 +1535,7 @@ if [ "$PS_OK" -eq 1 ]; then
   fi
   build_records
   store_sample
+  settle_growth_scope
 else
   : > "$PROCS_FILE"
   : > "$CANDIDATES_FILE"

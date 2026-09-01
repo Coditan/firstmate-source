@@ -177,7 +177,7 @@ The alarm still does not judge the horizon condition on such a run, still says i
 The fresh sample is the process table this run had already read and was already about to store.
 There is no second read, no wait, and no new failure mode.
 
-**A fresh sample that fails is still unmeasured**, held by two separate mechanisms rather than by the caller remembering to check:
+**A fresh sample that fails is still unmeasured**, held by three separate mechanisms rather than by the caller remembering to check:
 
 - `--no-store` takes no fresh sample, so nothing replaces the unusable prior and the next run would be just as blind.
   The reason stays unmeasured there, which is also why `fm-memory-alarm.sh --status` and its detect mode can honestly disagree about the same machine: `--status` is deliberately forbidden from advancing the sample it is reading.
@@ -185,8 +185,11 @@ There is no second read, no wait, and no new failure mode.
   Storing writes aside and moves into place, and moving a file onto a directory lands it inside that directory, so such a prior would survive every replacement and the instrument would be blind for good while reporting itself merely scoped.
   It is reported under its own unmeasured input, `growth-sample-path`, and the alarm keys on that name: the horizon enters the watch set, and the poll says the machine is only partly watched.
   An aged, corrupt or future-dated prior keeps the input name `growth-sample` and stays scope, because a storing poll repairs it.
-- A replacement that could not be written is reported as `sample-storage` and makes the whole reading incomplete, so the alarm names it among the unmeasured inputs on whatever verdict it reaches.
-  It does not by itself put the horizon in the watch set: a write that failed can succeed on the next poll, so that absence is not the permanent one above.
+- A replacement that could not be written is reported as `sample-storage` and makes the whole reading incomplete.
+  It also settles the growth verdict itself, which is the point: scope is earned by the NEXT run being better placed than this one, and only this run's sample landing makes it so.
+  So the two scope verdicts that rest on that promise - an unusable prior this run meant to replace, and a first run with no sample at all - are provisional until the store has been attempted, and a store that did not land turns them into the unmeasured input `growth-sample-store`.
+  The alarm keys on that name too: the horizon enters the watch set and the poll says the machine is only partly watched, rather than the alarm going silent for as long as the state directory stays unwritable.
+  A run that stored keeps the scope verdict and its wording unchanged.
 
 **What this does not cover.**
 The gap itself is still not reported by this alarm.

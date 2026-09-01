@@ -440,8 +440,9 @@ unjudged_conditions() {
   # repairs it - counting that would announce a loss and a regain of sight on
   # the second poll of every fresh home, and again after any watcher gap past
   # the sample window. The process TABLE being unreadable is the horizon's
-  # instrument failing, and so is a sample PATH that is not a regular file: no
-  # storing poll can replace it, so that absence never clears by itself.
+  # instrument failing, and so is a growth prior no poll can repair - a sample
+  # PATH no store can move onto, or a sample this run could not store at all:
+  # those absences never clear by themselves.
   if [ -n "$GROWTH_BLIND" ] && [ -z "$GROWTH_SCOPED" ]; then set=horizon; fi
   if [ -n "$STALL_BLIND" ] || [ -n "$STALL_UNSET" ]; then
     set="${set:+$set,}stall"
@@ -551,17 +552,20 @@ evaluate() {
     # so it suppresses the horizon condition for this poll without meaning the
     # machine has stopped being watched for growth.
     | (.growth.scope_reason != null) as $growth_scoped
-    # Growth can go unjudged for three quite different reasons, and two of them
-    # are an instrument failing. The stored SAMPLE being absent, too young, too
-    # old, dated in the future or unreadable is data this run did not have, and
-    # the next poll that stores one repairs it. The process TABLE being
-    # unreadable is the instrument itself. So is the stored sample PATH not
-    # being a regular file: storing writes aside and moves into place, so no
-    # replacement can ever land on it and no later poll repairs it. Both are
-    # read from the input the reading names rather than from its prose, so the
-    # two ends of this contract cannot drift apart.
-    | ((.unmeasured // []) | map(.input) | index("processes") != null) as $processes_blind
-    | ((.unmeasured // []) | map(.input) | index("growth-sample-path") != null) as $sample_path_blind
+    # Growth can go unjudged for several quite different reasons, and the line
+    # between them is whether a LATER POLL REPAIRS IT. The stored SAMPLE being
+    # absent, too young, too old, dated in the future or unreadable is data this
+    # run did not have, and the next poll that stores one repairs it. The
+    # process TABLE being unreadable is the instrument itself. So are the two
+    # ways the repair can be impossible: a sample PATH that is not a regular
+    # file, which storing can never move onto, and a sample this run could not
+    # store at all, which leaves the next poll no better placed than this one.
+    # All of them are read from the input the reading names rather than from its
+    # prose, so the two ends of this contract cannot drift apart.
+    | ((.unmeasured // []) | map(.input)) as $unmeasured_inputs
+    | ($unmeasured_inputs | index("processes") != null) as $processes_blind
+    | (($unmeasured_inputs | index("growth-sample-path")) != null
+       or ($unmeasured_inputs | index("growth-sample-store")) != null) as $sample_unrepairable
     # A completeness claim is not a stall measurement. The reading marks a
     # missing or unparsable pressure file unmeasured, so this should never fire
     # on a real reading - but if the number is absent while the reading calls
@@ -572,7 +576,7 @@ evaluate() {
         (if $incomplete then "incomplete" else "complete" end),
         (if $headroom_blind then "blind" else "read" end),
         (if $growth_blind then (.growth.scope_reason // .growth.unmeasured_reason) else "" end),
-        (if $growth_scoped or ($growth_blind and ($processes_blind | not) and ($sample_path_blind | not)) then "scoped" else "" end),
+        (if $growth_scoped or ($growth_blind and ($processes_blind | not) and ($sample_unrepairable | not)) then "scoped" else "" end),
         ($avail_mib | tostring),
         ($growth_kb_min / 1024 | floor | tostring),
         (if $minutes == null then "NA" else ($minutes * 10 | floor / 10 | tostring) end),

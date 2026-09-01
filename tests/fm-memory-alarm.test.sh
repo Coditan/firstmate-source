@@ -150,6 +150,17 @@ reading_growth_sample_path_unusable() {  # <available_mib>
     "$why" "$(( $1 * 1024 ))" "$(stall_obj "$FM_TEST_STALL")" "$why" >"$ANSWER"
 }
 
+# A reading whose growth prior was unusable and whose own replacement sample
+# could not be stored. Scope is earned by the NEXT poll being better placed than
+# this one, and a store that never lands earns nothing: the reading settles that
+# verdict as blindness under its own input rather than as an ordinary absence.
+reading_growth_sample_store_failed() {  # <available_mib>
+  local why="the stored sample is 1400s old, past the 1260s window a growth rate means anything over, and this run's own sample could not be stored, so the next run has nothing more to compare against than this one did"
+  export FM_TEST_READING_EXIT=3
+  printf '{"schema":"fm-memory-reading.v1","complete":false,"unmeasured":[{"input":"sample-storage","reason":"the sample could not be replaced"},{"input":"growth-sample-store","reason":"%s"}],"headroom":{"total_kb":24019908,"available_kb":%s,"swap_total_kb":33554428,"swap_free_kb":33554428},"stall":%s,"growth":{"interval_seconds":0,"scope_reason":null,"unmeasured_reason":"%s"},"processes":[]}\n' \
+    "$why" "$(( $1 * 1024 ))" "$(stall_obj "$FM_TEST_STALL")" "$why" >"$ANSWER"
+}
+
 # A reading whose growth the instrument could not compare at all.
 reading_growth_scoped() {
   export FM_TEST_READING_EXIT=0
@@ -552,6 +563,45 @@ test_a_growth_sample_no_poll_can_replace_is_a_lost_instrument() {
   [ "$(watch_field)" = - ] ||
     fail "a sample a later poll repairs must not enter the watch set (watch=$(watch_field))"
   pass "a growth sample no poll can replace is a lost instrument, and one that repairs is not"
+}
+
+test_a_growth_sample_that_could_not_be_stored_is_a_lost_instrument() {
+  # The sibling route to the same defect the case above closes. An unusable
+  # prior is scope only because this run replaces it; on a host where the store
+  # keeps failing nothing replaces it, the absence never clears, and reporting
+  # it as scope leaves the horizon dead with nothing said on the watcher
+  # channel for as long as the fault lasts.
+  reset_home
+  reading 16000 true 0
+  alarm >/dev/null
+  [ "$(watch_field)" = - ] || fail "a healthy poll must be watching all three conditions"
+
+  local out
+  reading_growth_sample_store_failed 16000
+  out=$(alarm)
+  assert_contains "$out" "cannot judge horizon" \
+    "a growth prior whose replacement never landed must be spoken as a lost instrument"
+  assert_contains "$out" "only partly watched" \
+    "and the poll must say this machine is only partly watched"
+  [ "$(watch_field)" = horizon ] ||
+    fail "the horizon must enter the durable watch set, not read as scope (watch=$(watch_field))"
+
+  # Spoken once, on the change, like every other condition.
+  reading_growth_sample_store_failed 16000
+  out=$(alarm)
+  assert_contains "|$out|" "||" "an unchanged watch set must not be spoken again"
+
+  # A run whose store DID land is ordinary scope: nothing enters the watch set
+  # and the poll stays silent.
+  reset_home
+  reading 16000 true 0
+  alarm >/dev/null
+  reading_growth_scoped 16000
+  out=$(alarm)
+  assert_contains "|$out|" "||" "a growth absence the next poll repairs must stay silent"
+  [ "$(watch_field)" = - ] ||
+    fail "a growth absence the next poll repairs must not enter the watch set (watch=$(watch_field))"
+  pass "a growth sample that could not be stored is a lost instrument, and one that was is not"
 }
 
 test_a_raiser_that_only_dipped_under_its_threshold_is_not_released() {
@@ -1763,6 +1813,7 @@ test_a_recovery_states_how_long_the_shortage_actually_lasted
 test_sight_is_never_claimed_regained_while_a_condition_is_still_unreadable
 test_a_growth_sample_that_merely_aged_out_is_not_a_lost_instrument
 test_a_growth_sample_no_poll_can_replace_is_a_lost_instrument
+test_a_growth_sample_that_could_not_be_stored_is_a_lost_instrument
 test_a_raiser_that_only_dipped_under_its_threshold_is_not_released
 test_a_raiser_survives_the_poll_that_could_not_read_its_own_input
 test_switching_the_stall_gate_off_releases_a_stall_raiser_it_would_otherwise_pin

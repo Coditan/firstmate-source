@@ -952,6 +952,42 @@ test_sample_storage_failure_is_visible_and_no_store_is_scoped() {
   pass "sample storage failures exit 3 while --no-store remains successful"
 }
 
+test_an_unusable_prior_whose_replacement_did_not_land_is_not_reported_as_replaced() {
+  local dir="$TMP_ROOT/prior-store-failed" out status=0
+  new_scene "$dir"
+  mkdir -p "$dir/locked"
+  # An aged prior that IS readable, so the run reaches the unusable-prior path
+  # and means to replace it, beside a directory the replacement cannot be
+  # written into. That is the shape an unwritable state directory produces.
+  write_sample "$dir/locked/samples" $((NOW - 1400)) "1000=$((NOW - 3000)):512000"
+  chmod a-w "$dir/locked"
+  if ( : > "$dir/locked/probe" ) 2>/dev/null; then
+    rm -f "$dir/locked/probe"; chmod u+w "$dir/locked"
+    printf 'ok - SKIP directory write permissions do not restrict this user\n'
+    return
+  fi
+
+  out=$(run_reading "$dir" "FM_MEMORY_SAMPLES=$dir/locked/samples" 2>&1) || status=$?
+  chmod u+w "$dir/locked"
+  expect_code 3 "$status" "an unusable prior whose replacement could not be stored"
+  assert_contains "$out" 'growth-sample-store' \
+    'a scope verdict resting on a store that never landed was not named as a failed input'
+  assert_not_contains "$out" 'takes its place' \
+    'the reading claimed a replacement that provably did not happen'
+  assert_contains "$out" 'sample-storage' 'the storage failure itself was not named'
+
+  # The same aged prior with a writable destination: the replacement lands, so
+  # the verdict and its wording stay exactly as they were.
+  status=0
+  write_sample "$dir/samples" $((NOW - 1400)) "1000=$((NOW - 3000)):512000"
+  out=$(run_reading "$dir") || status=$?
+  expect_code 0 "$status" "an unusable prior this run did replace"
+  assert_contains "$out" 'takes its place' 'a replacement that landed was not reported as scope'
+  assert_not_contains "$out" 'growth-sample-store' \
+    'a replacement that landed was reported as a lost growth instrument'
+  pass "a replacement that did not land is never reported as one that did"
+}
+
 # --- machine-readable form ---------------------------------------------------
 
 test_the_json_form_carries_the_same_completeness_verdict() {
@@ -1074,6 +1110,7 @@ test_a_nonsearchable_cgroup_tree_is_unmeasured
 test_an_account_with_no_readable_slice_still_gets_its_process_total
 test_a_malformed_account_slice_file_forces_an_incomplete_reading
 test_sample_storage_failure_is_visible_and_no_store_is_scoped
+test_an_unusable_prior_whose_replacement_did_not_land_is_not_reported_as_replaced
 test_the_json_form_carries_the_same_completeness_verdict
 test_the_reading_does_not_kill_or_limit
 test_usage_errors_exit_two

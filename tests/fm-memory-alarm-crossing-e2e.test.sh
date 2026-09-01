@@ -90,7 +90,7 @@ READING_JSON=$(env FM_STATE_OVERRIDE="$HOME_DIR/state" \
 [ "$(printf '%s' "$READING_JSON" | jq -r '.headroom.available_kb')" != null ] ||
   skip "this host's RAM headroom is unmeasured, so no condition could judge a crossing"
 [ "$(printf '%s' "$READING_JSON" | jq -r \
-    '[.unmeasured[].input] | map(select(. == "processes" or . == "growth-sample")) | length')" = 0 ] ||
+    '[.unmeasured[].input] | map(select(. == "processes" or . == "growth-sample" or . == "growth-sample-path" or . == "growth-sample-store")) | length')" = 0 ] ||
   skip "this host's process table or growth sample is unmeasured, so a crossing could not be attributed to anything"
 
 # --- the runaway ------------------------------------------------------------
