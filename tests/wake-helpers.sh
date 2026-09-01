@@ -258,6 +258,37 @@ SH
   printf '%s\n' "$dir"
 }
 
+# Stop a watcher this suite spawned and reap it, in bounded time.
+#
+# SIGTERM is a REQUEST, and every caller here reaches for it exactly when it has
+# already concluded the process is not behaving. A bash watcher runs its TERM
+# handler by re-parsing the trap string, and when that parse fails the handler
+# never runs and the watcher keeps looping - so a `wait` placed straight behind
+# the `kill` waits on a process that was never going to exit, with no bound at
+# all. One portable-serial run lost its entire verdict that way: a watcher
+# outlived the SIGTERM this harness sent, the `wait` behind it blocked for twelve
+# minutes, and the lane was cancelled at its cap with every remaining test
+# unreported and no failing assertion to read.
+#
+# So escalate. SIGTERM first, so a healthy watcher still exits through its own
+# cleanup and releases its lock; then, only if it is still there, SIGKILL, which
+# cannot be trapped, ignored, or lost to a parse error. `wait` is reached only
+# after a signal the process cannot refuse has been sent, so it always returns,
+# and a stuck watcher costs the suite one assertion instead of the whole lane.
+fm_test_stop_and_reap() {  # <pid> [0.1s ticks to allow for a graceful exit]
+  local pid=$1 limit=${2:-20} i=0
+  kill -TERM "$pid" 2>/dev/null || true
+  while [ "$i" -lt "$limit" ]; do
+    is_live_non_zombie "$pid" || break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if is_live_non_zombie "$pid"; then
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+  wait "$pid" 2>/dev/null || true
+}
+
 wait_for_exit() {
   local pid=$1 limit=${2:-50} i=0
   while [ "$i" -lt "$limit" ]; do
@@ -268,8 +299,7 @@ wait_for_exit() {
     sleep 0.1
     i=$((i + 1))
   done
-  kill "$pid" 2>/dev/null || true
-  wait "$pid" 2>/dev/null || true
+  fm_test_stop_and_reap "$pid"
   return 124
 }
 
