@@ -787,11 +787,24 @@ fm_pr_poll_retire_validate() {  # <state dir> <task id>
 # set is exactly the state a hand-removal leaves behind, and the whole point of
 # offering a retirement verb is that finishing such a set never needs another
 # hand-removal.
-fm_pr_poll_retire() {  # <state dir> <task id>
-  local state_dir=$1 id=$2 quarantine artifact
+#
+# The two callers share this validation and differ only in REACH.
+# bin/fm-teardown.sh ends the whole TASK, so its scope is every artifact under
+# that task's name, the custom-check trust record included: nothing about that
+# task survives it. bin/fm-pr-check.sh --disarm claims only the merge POLL, and a
+# merge poll has no trust record at all - fm_pr_poll_prepare writes the check at
+# mode 600 and writes no trust, and only bin/fm-check-register.sh ever writes
+# that file - so under the poll scope a trust record is by construction another
+# tool's state. A verb that retires merge polls never removes it and never counts
+# it as something to remove.
+fm_pr_poll_retire_scoped() {  # <state dir> <task id> <scope: task|poll>
+  local state_dir=$1 id=$2 scope=$3 quarantine artifact
   fm_pr_poll_retire_validate "$state_dir" "$id" || return 1
   rm -f "$state_dir/$id.check.sh" "$state_dir/$id.pr-poll" \
-    "$state_dir/$id.pr-poll-registration" "$state_dir/$id.check-trust" || return 1
+    "$state_dir/$id.pr-poll-registration" || return 1
+  if [ "$scope" = task ]; then
+    rm -f "$state_dir/$id.check-trust" || return 1
+  fi
   if fm_task_id_path_safe "$id"; then
     quarantine="$state_dir/.pr-check-quarantine"
     if [ -d "$quarantine" ] && [ ! -L "$quarantine" ]; then
@@ -804,14 +817,24 @@ fm_pr_poll_retire() {  # <state dir> <task id>
   fi
 }
 
+fm_pr_poll_retire() {  # <state dir> <task id>
+  fm_pr_poll_retire_scoped "$1" "$2" task
+}
+
+fm_pr_poll_disarm() {  # <state dir> <task id>
+  fm_pr_poll_retire_scoped "$1" "$2" poll
+}
+
 # Does this task still have any poll artifact on disk? Used to report whether a
 # retirement had anything to do, and to tell a fully-armed set apart from the
-# partial remains of a hand-removal.
+# partial remains of a hand-removal. The trust record is not on this list for the
+# reason above: it is not a poll artifact, so its presence alone must never make
+# a task look armed.
 fm_pr_poll_artifacts_present() {  # <state dir> <task id>
   local state_dir=$1 id=$2 artifact
   fm_task_id_path_safe "$id" || return 1
   for artifact in "$state_dir/$id.check.sh" "$state_dir/$id.pr-poll" \
-    "$state_dir/$id.pr-poll-registration" "$state_dir/$id.check-trust"; do
+    "$state_dir/$id.pr-poll-registration"; do
     [ -e "$artifact" ] || [ -L "$artifact" ] || continue
     return 0
   done

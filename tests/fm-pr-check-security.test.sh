@@ -2655,11 +2655,17 @@ test_disarm_retires_the_whole_poll_artifact_set() {
 
   out=$(run_check_entry "$dir" --disarm task-a 2>&1) || fail "disarm failed on an armed poll: $out"
   case "$out" in *disarmed*) ;; *) fail "disarm did not report the retirement: $out" ;; esac
-  for artifact in check.sh pr-poll pr-poll-registration check-trust; do
+  for artifact in check.sh pr-poll pr-poll-registration; do
     [ ! -e "$state/task-a.$artifact" ] || fail "disarm left task-a.$artifact behind"
   done
   [ ! -e "$state/.pr-check-quarantine/task-a.check.abc123" ] \
     || fail "disarm left a quarantine entry behind"
+  # A merge poll never has a trust record - only bin/fm-check-register.sh writes
+  # one - so under this verb's scope it is by construction another tool's state
+  # and survives. A teardown, which ends the whole task, still takes it.
+  [ -e "$state/task-a.check-trust" ] \
+    || fail "disarm removed a trust record, which is not a merge poll artifact"
+  rm -f "$state/task-a.check-trust"
   # The recorded pull request is metadata, not a poll artifact: it must survive,
   # so a rearm needs no re-derivation and teardown can still verify landed work.
   grep -qxF 'pr=https://github.com/o/r/pull/9' "$state/task-a.meta" \
@@ -2750,6 +2756,61 @@ test_disarm_refuses_a_registered_custom_check() {
     || fail "disarm left the custom check unauthenticated"
   [ "$(state_snapshot "$state")" = "$snapshot" ] || fail "the refused disarm changed state"
   pass "--disarm refuses a registered custom watcher check and removes none of it"
+}
+
+# The custom-check guard used to be a NEGATIVE test - "this is not a registered
+# custom check, so it must be a poll" - and a negative test fails open on every
+# state nobody anticipated. The one that found it is ordinary: bin/fm-check-register.sh
+# binds a check to its CURRENT bytes, so between editing a custom check and
+# re-registering it, its recorded hash no longer matches and it authenticates as
+# nothing. The watcher is already refusing to run it at that moment, and an
+# operator reading that wake as a stuck poll would have lost the script and its
+# trust record to --disarm, told a merge poll had been retired. The verb now
+# proves the check IS a merge poll before removing anything under that name.
+test_disarm_refuses_a_check_that_is_not_provably_a_merge_poll() {
+  local dir state out rc snapshot
+  dir=$(make_case disarm-drifted-check)
+  state="$dir/home/state"
+  printf '#!/usr/bin/env bash\nprintf "custom-ready\\n"\n' > "$state/custom.check.sh"
+  chmod 0700 "$state/custom.check.sh"
+  FM_HOME="$dir/home" "$REGISTER" custom >/dev/null \
+    || fail "could not register the custom check fixture"
+  # The edit that has not been re-registered yet.
+  printf '#!/usr/bin/env bash\nprintf "custom-ready and then some\\n"\n' > "$state/custom.check.sh"
+  chmod 0700 "$state/custom.check.sh"
+  fm_custom_check_registered "$state" custom \
+    && fail "the drifted fixture still authenticates, so it does not reach the gap under test"
+  snapshot=$(state_snapshot "$state")
+
+  set +e
+  out=$(run_check_entry "$dir" --disarm custom 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "disarm accepted a check it could not prove is a merge poll: $out"
+  case "$out" in *REFUSED*) ;; *) fail "disarm did not report a refusal: $out" ;; esac
+  case "$out" in *disarmed*) fail "disarm reported retiring a poll that never existed: $out" ;; esac
+  [ -e "$state/custom.check.sh" ] || fail "disarm deleted a mid-edit custom check"
+  [ -e "$state/custom.check-trust" ] || fail "disarm deleted the custom check's trust record"
+  [ "$(state_snapshot "$state")" = "$snapshot" ] || fail "the refused disarm changed state"
+
+  # The same holds for a check that was never registered at all: the safety is
+  # the positive proof, not any particular thing the check turns out to be.
+  dir=$(make_case disarm-foreign-check)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  printf '#!/usr/bin/env bash\nprintf "something else\\n"\n' > "$state/task-a.check.sh"
+  chmod 0600 "$state/task-a.check.sh"
+  snapshot=$(state_snapshot "$state")
+
+  set +e
+  out=$(run_check_entry "$dir" --disarm task-a 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "disarm accepted an unrecognized check as a merge poll: $out"
+  case "$out" in *REFUSED*) ;; *) fail "disarm did not refuse an unrecognized check: $out" ;; esac
+  [ -e "$state/task-a.check.sh" ] || fail "disarm deleted an unrecognized check"
+  [ "$(state_snapshot "$state")" = "$snapshot" ] || fail "the refused disarm changed state"
+  pass "--disarm removes a check only after proving it is this task's merge poll"
 }
 
 test_teardown_removes_poll_artifacts() {
@@ -3223,3 +3284,4 @@ test_returned_custom_check_descendants_are_drained
 test_teardown_removes_poll_artifacts
 test_disarm_retires_the_whole_poll_artifact_set
 test_disarm_refuses_a_registered_custom_check
+test_disarm_refuses_a_check_that_is_not_provably_a_merge_poll

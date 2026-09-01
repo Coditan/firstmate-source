@@ -37,22 +37,36 @@
 # and a spent poll on another seat woke it every five minutes for hours. This
 # verb is what makes that choice unnecessary.
 #
-# It removes the WHOLE artifact set - the runnable check, the sidecar, the
-# registration, the trust record, and any quarantine entry for the task - or
-# refuses and removes none of it. It is idempotent, and it deliberately succeeds
-# on a set that is already partly gone: finishing a hand-removal is one of the
-# states it exists to resolve. It never touches the task metadata, so the
-# recorded pr= survives and the poll can be armed again with a plain rearm.
+# It removes the poll's whole artifact set - the runnable check, the sidecar, the
+# registration, and any quarantine entry for the task - or refuses and removes
+# none of it. It is idempotent, and it deliberately succeeds on a set that is
+# already partly gone: finishing a hand-removal is one of the states it exists to
+# resolve. It never touches the task metadata, so the recorded pr= survives and
+# the poll can be armed again with a plain rearm.
 #
 # state/<id>.check.sh is a shared name: bin/fm-check-register.sh binds a
-# hand-written custom watcher check to exactly that path and to the same trust
-# record this verb removes. Artifact presence therefore cannot decide that what
-# is there is a merge poll, so this verb asks the one discriminator that already
-# exists - fm_custom_check_registered in bin/fm-check-lib.sh, the same
-# authentication the watcher runs - and refuses outright when the task's check is
-# a registered custom check. bin/fm-teardown.sh needs no such guard: it ends the
-# whole task and removes a custom check along with everything else, whereas this
-# verb claims only a merge poll and has no licence beyond it.
+# hand-written custom watcher check to exactly that path. So before removing
+# anything under that name, this verb PROVES the check is a merge poll rather
+# than assuming it, with fm_pr_poll_artifacts_valid - the same identity proof the
+# watcher itself makes, asked the right way round. The check must be byte-
+# identical to bin/fm-pr-poll.sh, its sidecar must parse, its registration must
+# bind both to the recorded pull request, and the task metadata must name that
+# same pull request. When a check.sh exists and that proof does not hold, the
+# verb refuses and removes nothing, WHATEVER the reason it failed.
+#
+# Asking it the other way round - proving the check is not something else - was
+# tried and fails open on every case nobody anticipated. The one that found it: a
+# registered custom check edited but not yet re-registered no longer matches its
+# recorded hash, which is the ordinary mid-iteration state and exactly when the
+# watcher is already refusing to run it. A negative test lets that through; a
+# positive proof does not, and neither does it let through the next such state.
+#
+# The trust record is never removed here under any path. A merge poll has none -
+# fm_pr_poll_prepare writes the check at mode 600 and writes no trust - and only
+# bin/fm-check-register.sh writes that file, so it is by construction not a merge
+# poll artifact. bin/fm-teardown.sh is deliberately different: it ends the whole
+# task and takes the custom check and its trust with it. The safety validation is
+# shared; only the reach differs.
 #
 # Usage: fm-pr-check.sh [--no-watch] [--pr-head <sha>] <task-id> <pr-url>
 #        fm-pr-check.sh --disarm <task-id>
@@ -82,16 +96,22 @@ if [ "${1-}" = --disarm ]; then
     echo "error: invalid PR check request" >&2
     exit 2
   fi
-  if fm_custom_check_registered "$STATE" "$DISARM_ID"; then
-    echo "REFUSED: state/$DISARM_ID.check.sh is a registered custom watcher check, not a merge poll; nothing was removed." >&2
-    echo "Retire it with the tool that owns it, or tear the task down; --disarm retires merge polls only." >&2
+  DISARM_CHECK="$STATE/$DISARM_ID.check.sh"
+  if { [ -e "$DISARM_CHECK" ] || [ -L "$DISARM_CHECK" ]; } \
+    && ! fm_pr_poll_artifacts_valid "$STATE" "$DISARM_ID" "$SCRIPT_DIR/fm-pr-poll.sh"; then
+    if fm_custom_check_registered "$STATE" "$DISARM_ID"; then
+      echo "REFUSED: state/$DISARM_ID.check.sh is a registered custom watcher check, not a merge poll; nothing was removed." >&2
+    else
+      echo "REFUSED: state/$DISARM_ID.check.sh does not prove to be this task's merge poll; nothing was removed." >&2
+    fi
+    echo "Retire it with the tool that owns it, or tear the task down; --disarm removes only a merge poll it can identify." >&2
     exit 1
   fi
   if ! fm_pr_poll_artifacts_present "$STATE" "$DISARM_ID"; then
     echo "not armed: $DISARM_ID has no merge poll artifacts; nothing to disarm."
     exit 0
   fi
-  fm_pr_poll_retire "$STATE" "$DISARM_ID" || exit 1
+  fm_pr_poll_disarm "$STATE" "$DISARM_ID" || exit 1
   echo "disarmed: $DISARM_ID's merge poll is retired; no watcher check remains for it."
   exit 0
 fi

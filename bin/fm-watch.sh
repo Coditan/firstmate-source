@@ -83,15 +83,14 @@ mkdir -p "$STATE"
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
-# Shared wake classifier (captain-relevant verbs + signal/stale/heartbeat
-# predicates), the SAME library the away-mode daemon uses, so the triage policy
-# has one definition.
 # The fleet's one bounded-execution ladder (timeout, gtimeout, perl alarm), so
 # the deadline this watcher puts around a check is the same deadline
 # bin/fm-teardown.sh puts around bin/fm-pr-poll.sh.
 # shellcheck source=bin/fm-bounded-lib.sh
 . "$SCRIPT_DIR/fm-bounded-lib.sh"
-
+# Shared wake classifier (captain-relevant verbs + signal/stale/heartbeat
+# predicates), the SAME library the away-mode daemon uses, so the triage policy
+# has one definition.
 # shellcheck source=bin/fm-classify-lib.sh
 . "$SCRIPT_DIR/fm-classify-lib.sh"
 # The DEFAULT EVENT SOURCE: this watcher's poll loop over the pull primitives
