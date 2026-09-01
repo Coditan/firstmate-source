@@ -1002,6 +1002,20 @@ store_sample() {
   # Written aside and moved into place, so a reading interrupted mid-write
   # leaves the previous sample intact rather than a truncated one the next run
   # would quietly measure growth against.
+  #
+  # The destination is opened by a simple command of its own, and 2>/dev/null
+  # comes FIRST. A redirection the shell cannot open aborts the compound command
+  # carrying it WITHOUT applying the surrounding negation, so a group that holds
+  # its own output redirection can never detect its own open failing and would
+  # report the move it never reached as the step that failed; and redirections
+  # are applied left to right, so suppressing stderr afterwards leaves the raw
+  # interpreter error on the output of a check that speaks in its own voice.
+  # bin/fm-memory-alarm.sh states the same rule where it persists its run.
+  if ! : 2>/dev/null >"$tmp"; then
+    STORE_OK=0
+    unmeasured sample-storage "$tmp could not be opened to write this run's sample aside"
+    return 0
+  fi
   if ! {
     printf '# fm-memory-reading.samples v1\n'
     printf 'epoch %s\n' "$NOW"
@@ -1014,7 +1028,7 @@ store_sample() {
       { bad = 1 }
       END { if (bad || rows == 0) exit 1 }
     ' "$PROCS_FILE"
-  } > "$tmp" 2>/dev/null; then
+  } 2>/dev/null >"$tmp"; then
     rm -f "$tmp"
     STORE_OK=0
     unmeasured sample-storage "$tmp could not be written from a valid non-empty process sample"

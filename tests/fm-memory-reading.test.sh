@@ -953,7 +953,7 @@ test_sample_storage_failure_is_visible_and_no_store_is_scoped() {
 }
 
 test_an_unusable_prior_whose_replacement_did_not_land_is_not_reported_as_replaced() {
-  local dir="$TMP_ROOT/prior-store-failed" out status=0
+  local dir="$TMP_ROOT/prior-store-failed" out status=0 err
   new_scene "$dir"
   mkdir -p "$dir/locked"
   # An aged prior that IS readable, so the run reaches the unusable-prior path
@@ -967,7 +967,10 @@ test_an_unusable_prior_whose_replacement_did_not_land_is_not_reported_as_replace
     return
   fi
 
-  out=$(run_reading "$dir" "FM_MEMORY_SAMPLES=$dir/locked/samples" 2>&1) || status=$?
+  # The two streams are kept apart on purpose. Merging them would absorb any raw
+  # interpreter error into the report and make both faults below invisible.
+  err="$dir/store-stderr"
+  out=$(run_reading "$dir" "FM_MEMORY_SAMPLES=$dir/locked/samples" 2>"$err") || status=$?
   chmod u+w "$dir/locked"
   expect_code 3 "$status" "an unusable prior whose replacement could not be stored"
   assert_contains "$out" 'growth-sample-store' \
@@ -975,6 +978,14 @@ test_an_unusable_prior_whose_replacement_did_not_land_is_not_reported_as_replace
   assert_not_contains "$out" 'takes its place' \
     'the reading claimed a replacement that provably did not happen'
   assert_contains "$out" 'sample-storage' 'the storage failure itself was not named'
+  # The step named must be the one that actually failed: the temporary file this
+  # run writes aside, not the target it never got as far as replacing.
+  assert_contains "$out" "$dir/locked/samples." \
+    'the storage failure named the target rather than the temporary file it could not write'
+  assert_not_contains "$out" 'could not be replaced' \
+    'a temporary file that could not be opened was reported as a failed replacement'
+  # A monitoring check speaks in its own voice and in no other.
+  [ ! -s "$err" ] || fail "the reading leaked to its own stderr: $(cat "$err")"
 
   # The same aged prior with a writable destination: the replacement lands, so
   # the verdict and its wording stay exactly as they were.
