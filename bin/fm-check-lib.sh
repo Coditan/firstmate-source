@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# fm-check-lib.sh - shared custom-check trust and snapshot helpers.
+# fm-check-lib.sh - shared custom-check trust and snapshot helpers, and the
+# cross-home arm guard every --arm path and the registrar refuse through.
 
 FM_CUSTOM_CHECK_HASH=
 FM_CUSTOM_CHECK_SNAPSHOT=
