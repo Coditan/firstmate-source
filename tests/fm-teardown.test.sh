@@ -909,6 +909,60 @@ SH
   pass "a stalled forge cannot hold a teardown refusal open on either timeout rung, and an unread poll stays armed"
 }
 
+# The reach of a retirement has to follow whether the task actually ENDS. A
+# refusal does not end it, so on that path the poll's own files go and the
+# custom-check trust record - which belongs to bin/fm-check-register.sh, not to
+# any poll - stays. A completed teardown does end the task, and legitimately
+# takes the trust record with everything else. Both halves are asserted here so
+# the two paths cannot quietly converge on either scope.
+test_refusal_and_completion_differ_in_what_they_may_remove() {
+  local case_dir rc left pr_head
+  case_dir=$(make_case refusal-keeps-trust-record)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" superseded.txt "pre-rebase" "work the merged head does not carry"
+  add_gh_pr_state_and_head "$case_dir" MERGED "$(git -C "$case_dir/wt" rev-parse origin/main)"
+  arm_merge_poll "$case_dir"
+  printf 'fm-custom-check-v1\n' > "$case_dir/state/task-x1.check-trust"
+  chmod 0600 "$case_dir/state/task-x1.check-trust"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "refusal-keeps-trust-record: teardown must still refuse unlanded work"
+  grep -q REFUSED "$case_dir/stderr" || fail "refusal-keeps-trust-record: no REFUSED line in stderr"
+  grep -q 'RETIRED MERGE POLL' "$case_dir/stderr" \
+    || fail "refusal-keeps-trust-record: the refusal did not retire the spent poll"
+  [ ! -e "$case_dir/state/task-x1.check.sh" ] \
+    || fail "refusal-keeps-trust-record: the spent poll's check survived the refusal"
+  [ ! -e "$case_dir/state/task-x1.pr-poll" ] \
+    || fail "refusal-keeps-trust-record: the spent poll's sidecar survived the refusal"
+  [ -e "$case_dir/state/task-x1.check-trust" ] \
+    || fail "refusal-keeps-trust-record: a refused teardown removed a trust record it does not own"
+
+  # A teardown that COMPLETES ends the task, so the same shape loses both.
+  case_dir=$(make_case completion-removes-trust-record)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  append_pr_meta_for_current_head "$case_dir"
+  pr_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  add_gh_pr_merged_for_head "$case_dir" "$pr_head"
+  printf 'fm-custom-check-v1\n' > "$case_dir/state/task-x1.check-trust"
+  chmod 0600 "$case_dir/state/task-x1.check-trust"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "completion-removes-trust-record: teardown should succeed on a merged PR"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "completion-removes-trust-record: teardown printed a REFUSED line"
+  left=$(poll_artifacts_left "$case_dir")
+  [ -z "$left" ] || fail "completion-removes-trust-record: a completed teardown left task state behind: $left"
+  pass "a refused teardown retires only the poll; a completed one ends the task and takes the trust record too"
+}
+
 test_local_only_fork_remote_allows() {
   local case_dir rc
   case_dir=$(make_case fork-allow)
@@ -2122,3 +2176,4 @@ test_refused_sibling_teardown_retires_a_fulfilled_poll
 test_refused_sibling_teardown_keeps_an_unfulfilled_poll
 test_ownership_refusal_retires_a_fulfilled_poll
 test_refusal_is_not_held_open_by_a_stalled_forge
+test_refusal_and_completion_differ_in_what_they_may_remove

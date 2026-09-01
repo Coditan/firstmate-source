@@ -389,6 +389,18 @@ remove_grok_turnend_auth() {
 # wakes nobody, and it is still carrying the merge notification the task is
 # waiting for, so leaving it armed costs nothing and losing it would cost that.
 #
+# This takes the POLL scope, the same reach --disarm has, rather than the task
+# scope the end of this script takes. Every caller of it is a path where teardown
+# REFUSES, so the task does not end and its custom-check trust record is not this
+# removal's to take - the reach has to follow whether the task actually ends. No
+# live artifact is saved by that today: this runs only once
+# fm_pr_poll_artifacts_valid has proved check.sh IS the poll template at mode
+# 600, while a trust record authenticates a check at mode 700 whose hash it
+# records, so any trust record present here is already orphaned from a check
+# arming overwrote. But that is a three-condition chain, any link of which a
+# later change can break with nothing to catch it, and the subject of this whole
+# path is not removing what has not been proved.
+#
 # The poll's read is a forge round-trip, and this helper now runs on every
 # refusal - including ones already decided from purely local facts - so it runs
 # under bin/fm-bounded-lib.sh's ladder with the same deadline the watcher gives
@@ -406,7 +418,7 @@ retire_fulfilled_pr_poll() {  # <state dir> <task id>
     "$FM_PR_DATA_PROVIDER" "$FM_PR_DATA_URL" "$FM_PR_DATA_HOST" \
     "$FM_PR_DATA_PATH" "$FM_PR_DATA_NUMBER") || return 0
   [ "$out" = merged ] || return 0
-  fm_pr_poll_retire "$state_dir" "$id" || return 0
+  fm_pr_poll_disarm "$state_dir" "$id" || return 0
   echo "RETIRED MERGE POLL: $id's pull request is already merged, so its poll had nothing left to report and has been removed. The refusal above still stands and the work is untouched." >&2
 }
 
