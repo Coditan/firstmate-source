@@ -65,6 +65,7 @@ While `state/.seat-stay-down` exists it clears its retry episode and leaves the 
 Restores are bounded the same way too: `FM_SEAT_KEEPER_MAX_ATTEMPTS` attempts for one delivery condition, backing off from `FM_SEAT_KEEPER_RETRY_SEC` up to `FM_SEAT_KEEPER_MAX_BACKOFF`, then a give-up marker and one high-severity evidence record through `bin/fm-finding.sh` instead of relaunching a seat that can never come up forever.
 The condition a restore episode counts is the delivery verdict's stable key, owned by `bin/fm-delivery-lib.sh` and shared with the respawner, so a wake arriving between two readings cannot look like a different condition.
 One keeper runs per state directory: a second hand-started keeper finds the live one's identity-matched lock record and refuses rather than racing it.
+The state directory it is given must be the state directory of the home it is given, and it refuses to start otherwise; the script header owns that rule and the reason for it.
 Restarting the keeper by hand lifts an exhausted bound: at startup it clears a give-up episode left in its state directory and logs which condition it lifted, because a hand-start is an operator deciding to try again.
 The respawner does not lift its own bound that way, because a unit restarting itself is not that decision.
 
@@ -72,10 +73,12 @@ Two limits of this stopgap are known, deliberate, and not fixed here.
 The keeper does not read `config/seat-launch-command`, and its default relaunch command starts `claude`.
 A home whose primary seat is Codex, OpenCode, Pi, Grok, or any other tool must set `FM_SEAT_KEEPER_SEAT_COMMAND`, or the keeper brings back the wrong seat.
 The keeper also assumes the target terminal server uses `base-index 0`.
-On a server configured with `base-index 1` it logs `launch refused: <session>:1 exists as 'bash', not firstmate` every cycle and never restores the seat.
+On a server configured with `base-index 1` the created session's only window lands where the keeper expects the firstmate window, so it logs `launch refused: <session>:1 exists as 'bash', not firstmate` and does not restore the seat.
+That refusal is a failed restore like any other, so the attempt bound above ends it: an operator sees at most `FM_SEAT_KEEPER_MAX_ATTEMPTS` of those lines, spaced by the doubling backoff, five over roughly seven and a half minutes at the defaults, and then a give-up marker and one high-severity evidence record through `bin/fm-finding.sh`.
+The log goes quiet after that until the keeper is hand-started again, so this condition reaches an operator as a finding rather than as a line repeating forever.
 
-Its arguments and environment are owned by the script's own header, which states both limits again where someone reading the script meets them.
-`tests/fm-seat-keeper.test.sh` covers the behaviour: that a named dead-seat verdict restores the seat, that one reading is not enough, that a wake count changing between two readings is still one condition, that a healthy verdict and a listener restart both leave the seat alone, that an unrecognised verdict is refused and logged, that a declared stay-down is honoured and released, that the attempt bound gives up with a finding, and that a second keeper refuses to run.
+Its arguments and environment are owned by the script's own header, which states the launch-command limit again where someone reading the script meets it and points here for the base-index one.
+`tests/fm-seat-keeper.test.sh` covers the behaviour: that a named dead-seat verdict restores the seat, that one reading is not enough, that a wake count changing between two readings is still one condition, that a healthy verdict and a listener restart both leave the seat alone, that an unrecognised verdict is refused and logged, that a declared stay-down is honoured and released, that the attempt bound gives up with a finding, that a state directory which is not the home's own is refused, and that a second keeper refuses to run.
 
 This is a stopgap, not a replacement for the respawner.
 A home that gains a working per-user service manager should install the unit above and stop hand-starting the keeper.

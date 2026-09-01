@@ -2,6 +2,15 @@
 # Portable tmux-hosted keeper for a vessel's primary Firstmate seat.
 # Usage: fm-seat-keeper.sh <fm-home> <state-dir> <target-socket> <target-session> <account-home>
 #
+# <state-dir> is the state directory OF <fm-home>, and this keeper refuses to
+# start when it is given anything else. It is not a free-standing keeper-private
+# directory: it selects both where this keeper's own lock, log, attempts and
+# give-up records live AND, through bin/fm-delivery-service.sh, which delivery
+# queue, endpoint and beat the seat-death verdict is computed from. A private
+# directory would answer that verdict from an empty wake queue, which reads as a
+# healthy seat, and silence next to a dead seat is the exact failure this keeper
+# exists to close, so refusing to start is cheaper than serving two meanings.
+#
 # This is a container stopgap for a home whose systemd user manager is absent.
 # It consumes bin/fm-delivery-service.sh's named status verdict and never uses a
 # socket pathname or a process-name match as its seat-death detector. The keeper
@@ -23,11 +32,10 @@
 #      must set FM_SEAT_KEEPER_SEAT_COMMAND or this keeper brings back the wrong
 #      seat. The respawner remains the component that reads the configured
 #      launch command.
-#   2. This keeper assumes the target terminal server uses base-index 0. On a
-#      server configured with base-index 1 the created session's only window
-#      lands where this keeper expects the firstmate window, so it logs
-#      "launch refused: <session>:1 exists as 'bash', not firstmate" and never
-#      restores the seat.
+#   2. This keeper assumes the target terminal server uses base-index 0 and
+#      refuses to restore the seat on a server configured with base-index 1.
+#      docs/seat-respawner.md owns that symptom: the line it logs, how the
+#      attempt bound ends it, and what an operator sees.
 #
 # Environment: FM_SEAT_KEEPER_POLL (seconds between readings, default 15),
 # FM_SEAT_KEEPER_RETRY_SEC (seconds before the first retry of one condition,
@@ -60,6 +68,21 @@ case "$TARGET_SOCKET" in /*) ;; *) echo "fm-seat-keeper.sh: target-socket must b
 case "$ACCOUNT_HOME" in /*) ;; *) echo "fm-seat-keeper.sh: account-home must be absolute" >&2; exit 2 ;; esac
 case "$TARGET_SESSION" in ''|*[!A-Za-z0-9_-]*) echo "fm-seat-keeper.sh: target-session contains unsafe characters" >&2; exit 2 ;; esac
 
+strip_trailing_slashes() {  # <path>
+  local value=$1
+  while [ "${value%/}" != "$value" ]; do value=${value%/}; done
+  [ -n "$value" ] || value=/
+  printf '%s\n' "$value"
+}
+
+FM_HOME=$(strip_trailing_slashes "$FM_HOME")
+KEEPER_STATE=$(strip_trailing_slashes "$KEEPER_STATE")
+if [ "$KEEPER_STATE" != "$FM_HOME/state" ]; then
+  echo "fm-seat-keeper.sh: state-dir must be the state directory of fm-home; got state-dir=$KEEPER_STATE for fm-home=$FM_HOME, expected $FM_HOME/state" >&2
+  exit 2
+fi
+KEEPER_HOME=$FM_HOME
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 # The delivery verdict grammar, and the one stable key for the condition a
@@ -74,12 +97,12 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 # The arguments own this keeper's home and state directory. Both libraries above
 # define FM_HOME, and derive a STATE, from the environment for their own use, so
 # every path this keeper writes hangs off KEEPER_STATE, a name no library
-# reaches, and FM_HOME is restated here from the argument that was validated.
-# The same ownership binds outward: the delivery service derives its own state
-# from FM_STATE_OVERRIDE, so delivery_status states this keeper's state dir on
-# that call rather than letting an inherited one pick which home it reads.
-FM_HOME=$1
-KEEPER_STATE=$2
+# reaches, and FM_HOME is restated here from the validated argument rather than
+# left as whichever value a library settled on. The same ownership binds
+# outward: the delivery service derives its own state from FM_STATE_OVERRIDE, so
+# delivery_status states this keeper's state dir on that call rather than
+# letting an inherited one pick which home it reads.
+FM_HOME=$KEEPER_HOME
 
 DELIVERY_SERVICE=${FM_SEAT_KEEPER_DELIVERY_SERVICE:-$SCRIPT_DIR/fm-delivery-service.sh}
 TMUX_CMD=${FM_SEAT_KEEPER_TMUX:-tmux}

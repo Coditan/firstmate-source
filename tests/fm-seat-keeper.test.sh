@@ -315,6 +315,35 @@ test_the_delivery_verdict_is_read_for_the_home_given() {
   pass "the delivery verdict is read for the home the keeper was given, not the environment's"
 }
 
+test_a_state_dir_that_is_not_the_homes_own_is_refused() {
+  local dir out rc=0
+  dir=$(make_case foreign-state)
+  mkdir -p "$dir/elsewhere"
+  out=$(FM_SEAT_KEEPER_STATUS_OVERRIDE="$DEAD_PANE" \
+    FM_SEAT_KEEPER_TMUX="$dir/fake-tmux" \
+    FM_SEAT_KEEPER_POLL=1 \
+    FM_SEAT_KEEPER_MAX_CYCLES=2 \
+      "$KEEPER" "$dir/home" "$dir/elsewhere" "$dir/target.sock" seat "$dir/account" 2>&1) || rc=$?
+  [ "$rc" = 2 ] || fail "a state dir that is not the home's own was not refused with exit 2; got $rc"
+  case "$out" in *"$dir/elsewhere"*) ;; *) fail "the refusal did not name the state dir it was given: $out" ;; esac
+  case "$out" in *"$dir/home/state"*) ;; *) fail "the refusal did not name the state dir it expected: $out" ;; esac
+  [ ! -e "$dir/elsewhere/.seat-keeper.log" ] && [ ! -e "$dir/elsewhere/.seat-keeper.lock" ] \
+    || fail "the refused keeper still published records into the state dir it was given"
+  [ "$(launch_calls "$dir")" = 0 ] || fail "the refused keeper still touched the target terminal"
+
+  rc=0
+  FM_SEAT_KEEPER_STATUS_OVERRIDE="$DEAD_PANE" \
+  FM_SEAT_KEEPER_TMUX="$dir/fake-tmux" \
+  FM_SEAT_KEEPER_POLL=1 \
+  FM_SEAT_KEEPER_RETRY_SEC=1 \
+  FM_SEAT_KEEPER_MAX_CYCLES=2 \
+    "$KEEPER" "$dir/home" "$dir/home/state//" "$dir/target.sock" seat "$dir/account" || rc=$?
+  [ "$rc" = 0 ] || fail "the home's own state dir with a trailing slash was refused; got $rc"
+  [ "$(launch_calls "$dir")" -gt 0 ] \
+    || fail "a trailing slash on the home's own state dir stopped the keeper restoring the seat"
+  pass "a state dir that is not the home's own is refused before the keeper takes anything"
+}
+
 test_dead_seat_verdict_restores_the_seat
 test_one_reading_is_not_enough
 test_a_changing_wake_count_is_still_one_condition
@@ -324,6 +353,7 @@ test_unrecognised_verdict_resets_the_evidence
 test_declared_stay_down_leaves_the_seat_down
 test_restore_attempts_are_bounded_and_reported
 test_the_state_dir_argument_wins_over_the_environment
+test_a_state_dir_that_is_not_the_homes_own_is_refused
 test_the_delivery_verdict_is_read_for_the_home_given
 test_a_hand_start_lifts_an_exhausted_bound
 test_a_second_keeper_refuses_to_run
