@@ -663,8 +663,15 @@ test_record_quotes_the_stub_verbatim() {
 # between this rule and a licence to make a claim true by changing behaviour,
 # and it is the half that would be quietly dropped first.
 test_claims_that_outrun_measurement_agree_across_surfaces() {
-  local file section
-  for file in "$ASKUSER" "$AGENTS" "$BRIEF"; do
+  local file section home id brief
+  fm_test_tmproot home fm-instruction-owners
+  mkdir -p "$home/data"
+  id="owners-claim-rule-e1"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "ship brief was not scaffolded"
+
+  for file in "$ASKUSER" "$AGENTS" "$brief"; do
     assert_grep "only what the code says, not what it does" "$file" \
       "$(basename "$file") lost the shared says-versus-does clause"
   done
@@ -699,7 +706,7 @@ test_claims_that_outrun_measurement_agree_across_surfaces() {
   assert_grep '`ask-user-authority` owns that boundary and the cases that still escalate' "$AGENTS" \
     "AGENTS.md section 7 lost the pointer to the owner of the boundary"
 
-  assert_grep "Changing what the code DOES so the claim becomes" "$BRIEF" \
+  assert_grep "Changing what the code DOES so the claim becomes" "$brief" \
     "the generated brief lost the behaviour-change escalation edge"
   pass "the claims-that-outrun-measurement rule is stated once and agrees on all three surfaces"
 }
