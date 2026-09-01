@@ -32,7 +32,9 @@
 #                          firstmate hands it to a no-mistakes validation. A declared
 #                          external-wait pause or firstmate-declared parked terminal
 #                          wait is absorbed instead with its own long re-surface
-#                          cadence, never as a wedge. A run parked at a decision gate
+#                          cadence, never as a wedge; parked rechecks falling due
+#                          together share one record, keyed parked-recheck.
+#                          A run parked at a decision gate
 #                          whose worker is confirmed alive surfaces its first sighting
 #                          like any other stopped crew, then holds the wedge ladder on
 #                          the same bounded-recheck terms as an active run. Only when
@@ -212,6 +214,9 @@ STALE_ESCALATE_SECS=${FM_STALE_ESCALATE_SECS:-240}  # idle secs before a provabl
 # wedge-escalated and re-surfaces once for a recheck every PAUSE_RESURFACE_SECS -
 # far longer than the wedge threshold, but finite so a forgotten wait cannot rot
 # invisibly. Status writes and metadata changes clear a parked declaration.
+# Parked rechecks that come due together are carried on ONE record naming every
+# task it covers, not one record per task (parked_recheck_enqueue). The cadence
+# is per task and unchanged; only the number of records carrying it is.
 PAUSE_RESURFACE_SECS=${FM_PAUSE_RESURFACE_SECS:-$FM_PAUSE_RESURFACE_SECS_DEFAULT}
 # Delivery bound for an unchanged possible-wedge finding that has already
 # surfaced once. The watcher still evaluates it every STALE_ESCALATE_SECS and
@@ -766,10 +771,10 @@ reconcile_parked_markers() {
   done
 }
 
-# Print the bounded recheck reason when a parked wait is due, or nothing while
-# still inside the cadence. Pure detection lets both poll and backend-push paths
-# enqueue before advancing their respective suppression markers.
-parked_recheck_reason() {  # <window>
+# Print the age of a parked wait whose bounded recheck is due, or nothing while
+# still inside the cadence. Pure detection, so both the poll path and the
+# backend-push path can gather every due window before either of them enqueues.
+parked_recheck_due_age() {  # <window> -> parked age in seconds, or 1 when not due
   local win=$1 key marker mtime age rf rf_age
   key=$(window_state_key "$win")
   marker="$STATE/.parked-$key"
@@ -779,24 +784,89 @@ parked_recheck_reason() {  # <window>
   age=$(( $(date +%s) - mtime ))
   rf="$STATE/.parkedresurfaced-$key"
   rf_age=$(age_of "$rf")
-  if [ "$age" -ge "$PAUSE_RESURFACE_SECS" ] && [ "$rf_age" -ge "$PAUSE_RESURFACE_SECS" ]; then
-    printf 'stale: %s (parked %ss, awaiting external human action - supervisor-declared terminal wait, rechecked on a long cadence not a wedge; confirm the wait still holds)' "$win" "$age"
+  [ "$age" -ge "$PAUSE_RESURFACE_SECS" ] && [ "$rf_age" -ge "$PAUSE_RESURFACE_SECS" ] || return 1
+  printf '%s' "$age"
+}
+
+# Gathered by parked_recheck_enqueue, consumed by parked_recheck_commit. They are
+# globals rather than a return value because the commit half has to advance a
+# throttle marker per gathered window AFTER its caller has finished its own
+# bookkeeping, and a command substitution would run the gather in a subshell
+# where the list dies with it.
+PARKED_DUE_WINDOWS=()
+PARKED_DUE_REASON=
+
+# Enqueue ONE wake record covering every parked window whose recheck is due,
+# starting from the window that came due at the call site. Fleet-wide tasks get
+# parked in batches - firstmate relays a run of outcomes and parks each one - so
+# their markers age together and their rechecks come due together. Surfaced one
+# per window, that arrives as one full-context turn per task to learn N times
+# that nothing changed: 14 parked tasks put 14 records on the queue over three
+# and a half minutes on 2026-09-01, because the window loop below surfaces at
+# most one wake per pass and then re-polls. Coalescing changes only how many
+# records carry the recheck, never whether it happens: every gathered window's
+# throttle is advanced together in parked_recheck_commit, so a window left out of
+# this gather keeps its due state and is carried by the next pass.
+# A single due window keeps its exact historical record - same key, same text -
+# so nothing downstream sees a new shape for the common case.
+# The gather is deliberately pane-INDEPENDENT: it asks each parked window only
+# whether its own bounded cadence is due, not what its pane is doing. The cadence
+# is anchored on the marker for exactly that reason (pane redraws must not
+# postpone it), and a parked declaration survives only while no status write or
+# metadata change has cleared it, so a window folded in here is genuinely due and
+# is delivered no later than a pane-gated one would have been.
+parked_recheck_enqueue() {  # <window that came due> -> 1 when nothing is due
+  local trigger=$1 win age list='' n i
+  local -a ages=()
+  age=$(parked_recheck_due_age "$trigger") || return 1
+  PARKED_DUE_WINDOWS=("$trigger")
+  ages=("$age")
+  while IFS= read -r win; do
+    [ "$win" = "$trigger" ] && continue
+    age=$(parked_recheck_due_age "$win") || continue
+    PARKED_DUE_WINDOWS+=("$win")
+    ages+=("$age")
+  done < <(recorded_windows)
+  n=${#PARKED_DUE_WINDOWS[@]}
+  if [ "$n" -eq 1 ]; then
+    PARKED_DUE_REASON=$(printf 'stale: %s (parked %ss, awaiting external human action - supervisor-declared terminal wait, rechecked on a long cadence not a wedge; confirm the wait still holds)' "$trigger" "${ages[0]}")
+    fm_wake_append stale "$trigger" "$PARKED_DUE_REASON" || exit 1
+    return 0
   fi
+  for (( i = 0; i < n; i++ )); do
+    list="$list${list:+, }${PARKED_DUE_WINDOWS[i]} parked ${ages[i]}s"
+  done
+  PARKED_DUE_REASON=$(printf 'stale: %s parked tasks due for recheck (%s) - awaiting external human action - supervisor-declared terminal waits, rechecked on a long cadence not a wedge; confirm each wait still holds' "$n" "$list")
+  # A key of its own: this record speaks for a set, so collapsing it on drain
+  # against a later single-window stale for any one of them would lose the rest.
+  fm_wake_append stale parked-recheck "$PARKED_DUE_REASON" || exit 1
+  return 0
+}
+
+# Advance every gathered throttle, then wake once. Split from the enqueue half so
+# each caller keeps its own ordering between the queue append and its own
+# bookkeeping - the push path has a transition to commit in between, and wake()
+# exits the process outright in session mode.
+parked_recheck_commit() {
+  local win
+  for win in "${PARKED_DUE_WINDOWS[@]:-}"; do
+    [ -n "$win" ] || continue
+    date +%s > "$STATE/.parkedresurfaced-$(window_state_key "$win")"
+  done
+  PARKED_DUE_WINDOWS=()
+  wake "$PARKED_DUE_REASON"
 }
 
 # Absorb pane churn for a terminal task whose outcome firstmate already relayed
 # and explicitly parked while external human action remains. The marker mtime is
 # the cadence anchor, so pane redraws cannot postpone the bounded recheck.
 handle_parked_stale() {  # <window> <hash>
-  local win=$1 h=$2 key reason age
+  local win=$1 h=$2 key age
   key=$(window_state_key "$win")
   printf '%s' "$h" > "$STATE/.stale-$key"
   rm -f "$STATE/.stale-since-$key" "$STATE/.wedge-escalations-$key" "$STATE/.wedgeheld-$key"
-  reason=$(parked_recheck_reason "$win")
-  if [ -n "$reason" ]; then
-    fm_wake_append stale "$win" "$reason" || exit 1
-    date +%s > "$STATE/.parkedresurfaced-$key"
-    wake "$reason"
+  if parked_recheck_enqueue "$win"; then
+    parked_recheck_commit
     return
   fi
   age=$(age_of "$STATE/.parked-$key")
@@ -1495,12 +1565,11 @@ handle_push_transition() {  # <backend> <session> <record>
   reconcile_parked_markers
   key=$(window_state_key "$window")
   if ! afk_present && [ -e "$STATE/.parked-$key" ]; then
-    reason=$(parked_recheck_reason "$window")
-    if [ -n "$reason" ]; then
-      fm_wake_append stale "$window" "$reason" || exit 1
+    # Same coalescing as the poll path, and reachable by the same burst: a batch
+    # of parked panes produces a transition record each, one per wait cycle.
+    if parked_recheck_enqueue "$window"; then
       fm_backend_commit_transition "$backend" "$STATE" "$session" "$record" || exit 1
-      date +%s > "$STATE/.parkedresurfaced-$key"
-      wake "$reason"
+      parked_recheck_commit
       return
     fi
     triage_log "absorbed push $to (parked terminal wait, awaiting external human action): $window"

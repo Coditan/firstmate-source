@@ -60,11 +60,17 @@ FM_CLASSIFY_PAUSED_VERB_DEFAULT='paused'
 # Bounded re-surface cadence for a declared pause or a dead-agent captain hold.
 # Far longer than the wedge threshold (FM_STALE_ESCALATE_SECS, default 240s), it
 # avoids nagging a deliberate wait while ensuring a forgotten hold cannot rot
-# invisibly - it re-surfaces once for a recheck every window. One hour by default;
-# both consumers read FM_PAUSE_RESURFACE_SECS with this default so the cadence has
-# one owner.
+# invisibly - it re-surfaces once for a recheck every window. Both consumers read
+# FM_PAUSE_RESURFACE_SECS with this default so the cadence has one owner.
+# 3000s (50 min), deliberately UNDER an hour: the seat's prompt cache holds for
+# one hour, so a recheck anchored on a full hour reliably lands after the cache it
+# would otherwise have reused has expired, and every bounded recheck then pays for
+# a cold context it did not have to. Staying inside that window keeps the cache
+# warm between rechecks. The watcher runs as a systemd unit whose only
+# environment files are state/.watch-service.env and config/x-mode.env, so there
+# is no operator knob for this in practice - the default IS the cadence.
 # shellcheck disable=SC2034 # Read by the watcher and daemon (fm-watch.sh, fm-supervise-daemon.sh), not this lib.
-FM_PAUSE_RESURFACE_SECS_DEFAULT=3600
+FM_PAUSE_RESURFACE_SECS_DEFAULT=3000
 
 # The resolution verb and durable-backlog-transfer verb that CLOSE a keyed
 # status decision opened by needs-decision or blocked. See status_open_decisions

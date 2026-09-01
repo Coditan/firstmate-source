@@ -44,6 +44,15 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # re-enables it against its isolated fake npm registry.
 export FM_AXI_SUITE_DISABLE=1
 
+# A suite launched from inside a firstmate session inherits that session's
+# watcher environment. FM_WATCH_DAEMON=1 is the one that silently changes a
+# subject's behavior rather than its inputs: it turns wake() from "exit after the
+# durable append" into "record and keep looping", so every one-shot watcher
+# fixture that waits for the process to exit hangs until its timeout and reports
+# the subject as broken. Cleared for the whole suite; a test that wants daemon
+# mode sets it explicitly on the command it launches.
+unset FM_WATCH_DAEMON
+
 # fm_axi_prepend_path records the pre-prepend PATH here and never overwrites it,
 # so a suite launched from inside a firstmate session would otherwise inherit the
 # operator's own ambient environment and ask the shadow check about that instead

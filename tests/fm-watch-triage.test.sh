@@ -92,6 +92,15 @@ file_mtime() {
   if [ "$(uname)" = Darwin ]; then stat -f %m "$1" 2>/dev/null; else stat -c %Y "$1" 2>/dev/null; fi
 }
 
+# Set a file's mtime to an absolute epoch, so a test can age a marker past a
+# cadence without sleeping through it.
+backdate() {  # <epoch> <file>...
+  local epoch=$1
+  shift
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$epoch" '+%Y%m%d%H%M.%S')" "$@"
+  else touch -m -d "@$epoch" "$@"; fi
+}
+
 # Signature a primed .seen-* marker must hold so the per-poll signal scan does not
 # fire on a pre-existing ordinary status file.
 seen_sig() {
@@ -635,6 +644,85 @@ test_terminal_stale_parked_absorbed_then_resurfaced() {
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after parked re-surface failed"
   grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "parked re-surface was not queued"
   pass "a relayed terminal task absorbs parked pane churn and re-surfaces on the bounded cadence"
+}
+
+# --- parked rechecks that fall due together reach the seat as ONE wake -------
+# Fourteen tasks parked within minutes of each other put fourteen separate stale
+# records on the queue once an hour (measured 2026-09-01, queue seq 8678-8691),
+# because the window loop surfaces at most one wake per pass and then restarts:
+# one record per pass, one pass per poll, each submitted into the seat as its own
+# message. The recheck must still happen for every parked task on its bounded
+# cadence - it is the only thing standing between a forgotten wait and invisible
+# rot - so the fix is to carry them all on ONE record, not to drop any.
+test_parked_rechecks_coalesce_into_one_wake() {
+  local dir state fakebin out capture_file window_list pane_hash back i key rows payload pid
+  local -a wins keys
+  dir=$(make_case parked-coalesce); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  printf 'finished, awaiting review' > "$capture_file"
+  pane_hash=$(hash_text "finished, awaiting review")
+  back=$(( $(date +%s) - 500 ))
+  wins=(); keys=(); window_list=''
+  for i in 1 2 3; do
+    wins+=("test:fm-pk$i")
+    key=$(printf '%s' "test:fm-pk$i" | tr ':/.' '___')
+    keys+=("$key")
+    window_list="$window_list${window_list:+$'\n'}test:fm-pk$i"
+    printf 'window=test:fm-pk%s\nkind=ship\n' "$i" > "$state/pk$i.meta"
+    printf 'done: PR https://example.test/pr/%s checks green\n' "$i" > "$state/pk$i.status"
+    printf '%s' "$(seen_sig "$state/pk$i.status")" > "$state/.seen-pk${i}_status"
+    printf '%s' "$pane_hash" > "$state/.hash-$key"
+    printf '1\n' > "$state/.count-$key"
+    : > "$state/.parked-$key"
+    # The marker must not be older than the metadata it declares, or
+    # reconcile_parked_markers reads the metadata as newer and revokes the
+    # declaration before the cadence is ever consulted.
+    backdate "$(( back - 60 ))" "$state/pk$i.meta"
+    backdate "$back" "$state/.parked-$key"
+  done
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window_list" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WATCH_DAEMON=1 "$WATCH" > "$out" 2>&1 &
+  pid=$!
+  # Every due recheck is accounted for once its throttle marker is down; only
+  # then is the record count meaningful.
+  for key in "${keys[@]}"; do
+    wait_numeric_file "$state/.parkedresurfaced-$key" 60 \
+      || { reap "$pid"; fail "a parked task's due recheck never happened: $key"$'\n'"--- watcher ---"$'\n'"$(cat "$out")"; }
+  done
+  reap "$pid"
+
+  rows=$(grep -c "$(printf '\tstale\t')" "$state/.wake-queue" 2>/dev/null || true)
+  [ "$rows" = 1 ] \
+    || fail "three parked rechecks falling due together produced $rows stale records, not one"$'\n'"--- queue ---"$'\n'"$(cat "$state/.wake-queue")"
+  payload=$(cat "$state/.wake-queue")
+  for i in 1 2 3; do
+    assert_contains "$payload" "test:fm-pk$i" "the coalesced parked recheck did not name every task it carries"
+  done
+  assert_contains "$payload" "awaiting external human action" "the coalesced parked recheck lost its external-human reason"
+  assert_not_contains "$payload" "possible wedge" "the coalesced parked recheck was mislabeled a wedge"
+  # What the seat actually receives is the drain, not the queue file: one record
+  # is only one turn if it survives the drain as one record.
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/drain.out" 2>/dev/null \
+    || fail "drain after the coalesced parked recheck failed"
+  rows=$(grep -c "$(printf '\tstale\t')" "$dir/drain.out" 2>/dev/null || true)
+  [ "$rows" = 1 ] \
+    || fail "the coalesced parked recheck reached the seat as $rows records, not one"$'\n'"--- drain ---"$'\n'"$(cat "$dir/drain.out")"
+  pass "parked rechecks falling due together reach the seat as one wake naming all of them"
+}
+
+# The cadence default is a prompt-cache decision, not a round number: the seat's
+# prompt cache holds for one hour, so a recheck at exactly 3600s reliably arrives
+# after the cache it would otherwise have reused has expired. Pinned here because
+# the value is what makes that hold; docs/configuration.md and the definition's
+# own comment carry the reason.
+test_pause_resurface_default_stays_under_the_prompt_cache_hour() {
+  [ "$FM_PAUSE_RESURFACE_SECS_DEFAULT" = 3000 ] \
+    || fail "FM_PAUSE_RESURFACE_SECS_DEFAULT is $FM_PAUSE_RESURFACE_SECS_DEFAULT, not the 3000s that keeps a recheck inside the seat's one-hour prompt cache"
+  [ "$FM_PAUSE_RESURFACE_SECS_DEFAULT" -lt 3600 ] \
+    || fail "the bounded recheck cadence reached the one-hour prompt-cache window"
+  pass "the bounded recheck cadence defaults inside the seat's one-hour prompt cache"
 }
 
 test_parked_marker_clears_on_status_write() {
@@ -2759,6 +2847,8 @@ test_lone_turn_end_keeps_its_own_key
 test_signal_symlink_target_append_surfaces
 test_terminal_stale_surfaced
 test_terminal_stale_parked_absorbed_then_resurfaced
+test_parked_rechecks_coalesce_into_one_wake
+test_pause_resurface_default_stays_under_the_prompt_cache_hour
 test_parked_marker_clears_on_status_write
 test_parked_marker_clears_on_meta_change
 test_mark_parked_wrapper
