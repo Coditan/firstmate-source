@@ -183,7 +183,10 @@ There is no second read, no wait, and no new failure mode.
   The reason stays unmeasured there, which is also why `fm-memory-alarm.sh --status` and its detect mode can honestly disagree about the same machine: `--status` is deliberately forbidden from advancing the sample it is reading.
 - A sample path that is not a regular file stays unmeasured whatever the mode.
   Storing writes aside and moves into place, and moving a file onto a directory lands it inside that directory, so such a prior would survive every replacement and the instrument would be blind for good while reporting itself merely scoped.
-- A replacement that could not be written is reported as `sample-storage` and makes the whole reading incomplete, which the alarm reads as blindness however the growth reason itself reads.
+  It is reported under its own unmeasured input, `growth-sample-path`, and the alarm keys on that name: the horizon enters the watch set, and the poll says the machine is only partly watched.
+  An aged, corrupt or future-dated prior keeps the input name `growth-sample` and stays scope, because a storing poll repairs it.
+- A replacement that could not be written is reported as `sample-storage` and makes the whole reading incomplete, so the alarm names it among the unmeasured inputs on whatever verdict it reaches.
+  It does not by itself put the horizon in the watch set: a write that failed can succeed on the next poll, so that absence is not the permanent one above.
 
 **What this does not cover.**
 The gap itself is still not reported by this alarm.
@@ -395,6 +398,11 @@ Stated because a limit nobody wrote down is one somebody will later assume away.
   On a machine where both accounts are still at zero - a fresh boot, or a container with no disk activity - a dead memory account and a genuinely quiet one are indistinguishable, and the reading reports the zeros.
   A control that could not be read at all is a third state and not the same as one that read zero, so the reading names which of the three it was in `stall.io_control` (`live`, `flat`, or `unreadable`) rather than letting an instrument nobody could read pass for a counter that answered.
   It still reports the zeros in the `unreadable` case, because a control it could not consult is not evidence against the account it was meant to check.
+- **A host that has genuinely never stalled on memory is reported as unmeasured rather than calm.**
+  The positive readability test condemns the memory account when its cumulative some and full totals are both zero beside a live io counter.
+  A host with pressure accounting enabled that has truly never stalled on memory - no eviction, no refault, no direct reclaim - while doing ordinary disk IO reads exactly the same as a kernel that accounts pressure but not memory pressure, so the reading calls that account unmeasured and the alarm says on every poll that it cannot judge stall on that machine.
+  This is a deliberate accepted trade rather than an oversight: it never produces a false crossing, and it self-heals on the first microsecond of real memory stall the host ever records, after which the alarm announces that it can see the machine again.
+  The alternative - reading a zero beside a live disk counter as calm - is the substituted zero this alarm exists to refuse.
 - **The stall condition is host-wide, and so is the process it names.**
   It reads `/proc/pressure/memory`, so a stall generated inside one container or cgroup is reported as the machine stalling.
   The process it names is the largest resident one the reading can see, which is the best available answer to who to talk to and not proof of who caused the wait.

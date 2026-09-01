@@ -48,8 +48,9 @@
 # - joins them ONLY when this run replaces it with its own, which puts the
 # reading in the same known absence a first run is already in. Under --no-store
 # nothing replaces it and the reason stays unmeasured, and a sample path that
-# is not a regular file stays unmeasured whatever the mode, because no
-# replacement can be written over it. See read_prior below.
+# is not a regular file stays unmeasured whatever the mode, under its own input
+# name `growth-sample-path`, because no replacement can be written over it and
+# that absence never clears by itself. See read_prior below.
 # The wall-clock and peak-memory cost figures measure this instrument rather
 # than machine memory. Their platform-dependent absence is scope and stays
 # visible without making the memory reading untrustworthy.
@@ -895,10 +896,12 @@ read_prior() {
   # cannot repair: storing writes aside and moves into place, and moving a file
   # onto a directory puts it INSIDE that directory, so the unreadable prior
   # would survive every replacement and the growth instrument would be blind
-  # for good while reporting itself merely scoped.
+  # for good while reporting itself merely scoped. It carries its own input
+  # name, `growth-sample-path`, because that permanence is what anything reading
+  # this must act on and a reason phrased in prose would drift away from it.
   if [ ! -f "$SAMPLES" ]; then
     GROWTH_REASON="the stored sample path exists but is not a regular file, so nothing can be read from it or written over it"
-    unmeasured growth-sample "$GROWTH_REASON"
+    unmeasured growth-sample-path "$GROWTH_REASON"
     return
   fi
   if [ ! -r "$SAMPLES" ]; then

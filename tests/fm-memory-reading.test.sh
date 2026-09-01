@@ -461,7 +461,8 @@ test_a_sample_path_no_replacement_can_overwrite_stays_unmeasured() {
   mkdir "$dir/samples"
   out=$(run_reading "$dir") || status=$?
   expect_code 3 "$status" "a stored sample path that is not a regular file"
-  assert_contains "$out" 'growth-sample' 'the failed growth instrument was not named'
+  assert_contains "$out" 'growth-sample-path' \
+    'the one growth failure no later run can repair was not named under its own input'
   assert_contains "$out" 'is not a regular file' 'the unwritable sample path was not named'
   assert_not_contains "$out" 'takes its place' 'a prior no replacement can overwrite was reported as replaced'
   pass "a stored sample path no fresh sample can overwrite stays unmeasured"
@@ -604,6 +605,8 @@ test_corrupt_and_future_samples_are_replaced_or_reported() {
     out=$(run_reading "$dir" --no-store) || status=$?
     expect_code 3 "$status" "a $case_name stored sample nothing replaces"
     assert_contains "$out" 'growth-sample' "a $case_name sample did not name the failed input"
+    assert_not_contains "$out" 'growth-sample-path' \
+      "a $case_name sample a later storing run repairs was named as the permanent failure"
 
     status=0
     out=$(run_reading "$dir") || status=$?

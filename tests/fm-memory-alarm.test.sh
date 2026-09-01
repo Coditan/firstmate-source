@@ -138,6 +138,18 @@ reading_process_table_unreadable() {  # <available_mib>
     "$(( $1 * 1024 ))" "$(stall_obj "$FM_TEST_STALL")" >"$ANSWER"
 }
 
+# A reading whose stored sample PATH is not a regular file. Storing writes aside
+# and moves into place, and a move onto a directory lands inside it, so no later
+# poll can ever replace this prior: it is the one growth failure a fresh sample
+# cannot repair, and the reading names it under its own input rather than
+# leaving it to be told apart from a merely aged one by its wording.
+reading_growth_sample_path_unusable() {  # <available_mib>
+  local why="the stored sample path exists but is not a regular file, so nothing can be read from it or written over it"
+  export FM_TEST_READING_EXIT=3
+  printf '{"schema":"fm-memory-reading.v1","complete":false,"unmeasured":[{"input":"growth-sample-path","reason":"%s"}],"headroom":{"total_kb":24019908,"available_kb":%s,"swap_total_kb":33554428,"swap_free_kb":33554428},"stall":%s,"growth":{"interval_seconds":0,"scope_reason":null,"unmeasured_reason":"%s"},"processes":[]}\n' \
+    "$why" "$(( $1 * 1024 ))" "$(stall_obj "$FM_TEST_STALL")" "$why" >"$ANSWER"
+}
+
 # A reading whose growth the instrument could not compare at all.
 reading_growth_scoped() {
   export FM_TEST_READING_EXIT=0
@@ -496,6 +508,50 @@ test_a_growth_sample_that_merely_aged_out_is_not_a_lost_instrument() {
   assert_contains "$out" "cannot judge horizon" \
     "a process table nobody could read is the horizon's instrument failing, and must be spoken"
   pass "a growth sample that merely aged out is scope, not a lost instrument"
+}
+
+# The watch field of the durable state record: "<state> <epoch> <watch> <crossed>".
+watch_field() {
+  awk '{print $3}' "$HOME_DIR/state/memory-alarm.state" 2>/dev/null
+}
+
+test_a_growth_sample_no_poll_can_replace_is_a_lost_instrument() {
+  # The sibling of the case above, and its opposite. A sample path that is not a
+  # regular file cannot be written over, so no storing poll repairs it and the
+  # absence never clears by itself. Reported as scope it would leave the horizon
+  # - the condition that gives warning rather than confirmation - permanently
+  # dead with nothing ever said on the watcher channel.
+  reset_home
+  reading 16000 true 0
+  alarm >/dev/null
+  [ "$(watch_field)" = - ] || fail "a healthy poll must be watching all three conditions"
+
+  local out
+  reading_growth_sample_path_unusable 16000
+  out=$(alarm)
+  assert_contains "$out" "cannot judge horizon" \
+    "a growth sample no poll can ever replace must be spoken as a lost instrument"
+  assert_contains "$out" "only partly watched" \
+    "and the poll must say this machine is only partly watched"
+  [ "$(watch_field)" = horizon ] ||
+    fail "the horizon must enter the durable watch set, not read as scope (watch=$(watch_field))"
+
+  # Spoken once, on the change, like every other condition.
+  reading_growth_sample_path_unusable 16000
+  out=$(alarm)
+  assert_contains "|$out|" "||" "an unchanged watch set must not be spoken again"
+
+  # And the repairable kind, on the same machine, is still scope: it neither
+  # enters the watch set nor says anything.
+  reset_home
+  reading 16000 true 0
+  alarm >/dev/null
+  reading_growth_sample_stale 16000
+  out=$(alarm)
+  assert_contains "|$out|" "||" "a sample a later poll repairs must stay silent"
+  [ "$(watch_field)" = - ] ||
+    fail "a sample a later poll repairs must not enter the watch set (watch=$(watch_field))"
+  pass "a growth sample no poll can replace is a lost instrument, and one that repairs is not"
 }
 
 test_a_raiser_that_only_dipped_under_its_threshold_is_not_released() {
@@ -1706,6 +1762,7 @@ test_an_input_no_condition_uses_does_not_hold_back_a_recovery
 test_a_recovery_states_how_long_the_shortage_actually_lasted
 test_sight_is_never_claimed_regained_while_a_condition_is_still_unreadable
 test_a_growth_sample_that_merely_aged_out_is_not_a_lost_instrument
+test_a_growth_sample_no_poll_can_replace_is_a_lost_instrument
 test_a_raiser_that_only_dipped_under_its_threshold_is_not_released
 test_a_raiser_survives_the_poll_that_could_not_read_its_own_input
 test_switching_the_stall_gate_off_releases_a_stall_raiser_it_would_otherwise_pin

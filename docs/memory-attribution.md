@@ -164,7 +164,7 @@ An unusable prior that nothing replaces stays unmeasured, because the next run w
 | stored sample has no usable process records | unusable prior, same rule |
 | stored sample is future-dated | unusable prior, same rule |
 | stored sample older than the growth window | unusable prior, same rule, and the age and window are always named |
-| stored sample path is not a regular file | `unmeasured` input `growth-sample`; exit 3, whatever the mode, because no replacement can be written over it |
+| stored sample path is not a regular file | `unmeasured` input `growth-sample-path`; exit 3, whatever the mode, because no replacement can be written over it. Its own input name, not `growth-sample`, because this is the one growth failure no later run repairs, and `bin/fm-memory-alarm.sh` reads that name to decide the horizon is blind rather than merely scoped |
 | stored or explicit interval shorter than the divide-by floor | scope, with the interval and floor; exit 0 remains possible |
 | second process-table read fails during `--interval` | `unmeasured` input `growth-sample`; exit 3 |
 | the pid now belongs to a later process | per-process `unmeasured`, "different, later process" - never counted as growth |
