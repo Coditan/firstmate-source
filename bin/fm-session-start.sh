@@ -282,7 +282,7 @@ timing_mark() {  # <step-name>: record the elapsed time since the previous mark
 # session waits on the other. Every step here stays best-effort: a startup digest
 # must never fail, or block, because it could not write or rotate a timing line.
 timing_report() {
-  local total lines now total_field
+  local total lines now total_field duration cause_field stamp
   timing_mark closing
   if [ -n "$TIMING_CLOCK_FAULT" ] || ! now=$(now_ms); then
     total=""
@@ -301,25 +301,31 @@ timing_report() {
       mv -f "$TIMING_LOG" "$TIMING_LOG.1" 2>/dev/null || true
     fi
   fi
-  # The log gets the same word the digest gets: a later reader of this file must not
-  # be able to mistake an unmeasured run for a run that cost nothing.
-  if [ -n "$total" ]; then total_field="${total}ms"; else total_field="unreadable"; fi
-  if printf '%s total=%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-       "$total_field" "$TIMING_MARKS" \
-       2>/dev/null >> "$TIMING_LOG"; then
-    if [ -n "$total" ]; then
-      printf 'SESSION START took %sms; per-step breakdown for this run and the previous ones: %s\n' \
-        "$total" "$TIMING_LOG"
-    else
-      printf 'SESSION START duration unreadable (%s); per-step breakdown for this run and the previous ones: %s\n' \
-        "$TIMING_CLOCK_FAULT" "$TIMING_LOG"
-    fi
-  elif [ -n "$total" ]; then
-    printf 'SESSION START took %sms; the per-step breakdown could not be written to %s\n' \
-      "$total" "$TIMING_LOG"
+  # The log gets what the digest gets, cause included: a later reader of this file
+  # must not be able to mistake an unmeasured run for a run that cost nothing, and
+  # must be able to tell WHY it was unmeasured without a second source. The cause is
+  # the last field because it is a sentence; everything a reader parses positionally
+  # stays ahead of it. Phrased once here so the log and the digest cannot drift.
+  if [ -n "$total" ]; then
+    total_field="${total}ms"
+    duration="took ${total}ms"
+    cause_field=""
   else
-    printf 'SESSION START duration unreadable (%s); the per-step breakdown could not be written to %s\n' \
-      "$TIMING_CLOCK_FAULT" "$TIMING_LOG"
+    total_field="unreadable"
+    duration="duration unreadable ($TIMING_CLOCK_FAULT)"
+    cause_field=" cause=$TIMING_CLOCK_FAULT"
+  fi
+  # The line's own timestamp comes from the same clock, so it gets the same word
+  # rather than an empty field that would leave the line starting with a space.
+  stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) || stamp=""
+  [ -n "$stamp" ] || stamp=unreadable
+  if printf '%s total=%s %s%s\n' "$stamp" "$total_field" "$TIMING_MARKS" "$cause_field" \
+       2>/dev/null >> "$TIMING_LOG"; then
+    printf 'SESSION START %s; per-step breakdown for this run and the previous ones: %s\n' \
+      "$duration" "$TIMING_LOG"
+  else
+    printf 'SESSION START %s; the per-step breakdown could not be written to %s\n' \
+      "$duration" "$TIMING_LOG"
   fi
 }
 

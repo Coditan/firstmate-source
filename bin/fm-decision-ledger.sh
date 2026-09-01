@@ -391,16 +391,21 @@ memo_key() {
 # interrupted write leaves behind. Downstream then held a value no jq could parse,
 # and `--records` printed nothing and exited 0 - a home holding decisions reporting
 # that it held none, successfully, to the intake gate that reads it. So each payload
-# is now PARSED before it is trusted. On this fleet's largest home (620 records, a
-# 1.3MB memo) that validation costs 92ms against a 1253ms full walk, so the reuse
-# still wins by about a second and it now wins honestly.
+# is now PARSED before it is trusted, with `jq empty`, which parses without emitting
+# the document again - the re-serialisation is the expensive half, and nothing here
+# wants the output. Measured with the re-serialising form on this fleet's largest
+# home (620 records, a 1.3MB memo) that validation cost 92ms against a 1253ms full
+# walk; parsing alone is strictly less work than that, so the reuse still wins by
+# about a second and it now wins honestly.
 MEMO_CLASSIFIED=""
 MEMO_VERIFIED=""
 MEMO_ALTERED=""
 
 # <payload> <allowed-opening-character>...: the cheap shape check first, so a
 # payload that is not even the right kind of value never reaches jq, then the parse
-# that is the actual test. jq absent is a miss like any other, and a miss recomputes.
+# that is the actual test. The opening-character check is also what makes `jq empty`
+# safe here: it exits 0 on a bare `null` too, and this never hands it one.
+# jq absent is a miss like any other, and a miss recomputes.
 memo_payload_parses() {
   local payload=$1 opener ok=1
   shift
@@ -408,7 +413,7 @@ memo_payload_parses() {
     case "$payload" in "$opener"*) ok=0; break ;; esac
   done
   [ "$ok" -eq 0 ] || return 1
-  printf '%s' "$payload" | jq -e . >/dev/null 2>&1
+  printf '%s' "$payload" | jq empty >/dev/null 2>&1
 }
 
 memo_read() {  # <key>; on a hit fills MEMO_* and returns 0, otherwise returns 1
@@ -630,7 +635,7 @@ else
   RECORDS=$(parse_records $FILES) || die "could not read $DATA"
 fi
 
-printf '%s' "$RECORDS" | jq -e . >/dev/null 2>&1 \
+printf '%s' "$RECORDS" | jq empty >/dev/null 2>&1 \
   || die "backlog parse produced invalid records; inspect $BACKLOG"
 
 # Classify. `acted-but-open` needs the state of every task in the home, not just the
