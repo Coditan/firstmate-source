@@ -33,7 +33,9 @@
 #                          external-wait pause or firstmate-declared parked terminal
 #                          wait is absorbed instead with its own long re-surface
 #                          cadence, never as a wedge; parked rechecks falling due
-#                          together share one record, keyed parked-recheck.
+#                          together share one record, keyed parked-recheck, that
+#                          lists the windows once with one shared age (a range
+#                          when they differ).
 #                          A run parked at a decision gate
 #                          whose worker is confirmed alive surfaces its first sighting
 #                          like any other stopped crew, then holds the wedge ladder on
@@ -816,7 +818,7 @@ PARKED_DUE_REASON=
 # metadata change has cleared it, so a window folded in here is genuinely due and
 # is delivered no later than a pane-gated one would have been.
 parked_recheck_enqueue() {  # <window that came due> -> 1 when nothing is due
-  local trigger=$1 win age list='' n i
+  local trigger=$1 win age list='' n i lo hi span
   local -a ages=()
   age=$(parked_recheck_due_age "$trigger") || return 1
   PARKED_DUE_WINDOWS=("$trigger")
@@ -833,10 +835,19 @@ parked_recheck_enqueue() {  # <window that came due> -> 1 when nothing is due
     fm_wake_append stale "$trigger" "$PARKED_DUE_REASON" || exit 1
     return 0
   fi
+  # Names once, comma-separated, and ONE age for the whole set: parked markers
+  # age together (that is the premise of coalescing them), so a per-window age
+  # buys nothing and costs the bytes that push a fleet-sized record past the
+  # drain's per-row echo bound (fm_wake_bound_echo), where it would be shortened
+  # and the seat would need a second read to learn which tasks it covers.
+  lo=${ages[0]}; hi=${ages[0]}
   for (( i = 0; i < n; i++ )); do
-    list="$list${list:+, }${PARKED_DUE_WINDOWS[i]} parked ${ages[i]}s"
+    list="$list${list:+, }${PARKED_DUE_WINDOWS[i]}"
+    if [ "${ages[i]}" -lt "$lo" ]; then lo=${ages[i]}; fi
+    if [ "${ages[i]}" -gt "$hi" ]; then hi=${ages[i]}; fi
   done
-  PARKED_DUE_REASON=$(printf 'stale: %s parked tasks due for recheck (%s) - awaiting external human action - supervisor-declared terminal waits, rechecked on a long cadence not a wedge; confirm each wait still holds' "$n" "$list")
+  if [ "$lo" -eq "$hi" ]; then span="parked ${lo}s"; else span="parked ${lo}s-${hi}s"; fi
+  PARKED_DUE_REASON=$(printf 'stale: %s parked tasks due for recheck (%s; %s) - awaiting external human action - supervisor-declared terminal waits, rechecked on a long cadence not a wedge; confirm each wait still holds' "$n" "$span" "$list")
   # A key of its own: this record speaks for a set, so collapsing it on drain
   # against a later single-window stale for any one of them would lose the rest.
   fm_wake_append stale parked-recheck "$PARKED_DUE_REASON" || exit 1

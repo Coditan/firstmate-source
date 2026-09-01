@@ -702,6 +702,13 @@ test_parked_rechecks_coalesce_into_one_wake() {
   done
   assert_contains "$payload" "awaiting external human action" "the coalesced parked recheck lost its external-human reason"
   assert_not_contains "$payload" "possible wedge" "the coalesced parked recheck was mislabeled a wedge"
+  # One shared age for the set, stated once, then the windows once. Markers
+  # parked together read one age unless the gather straddles a clock tick, in
+  # which case the age is the one-second range, so either shape is the contract.
+  [ "$(grep -o 'parked [0-9]*s' "$state/.wake-queue" | wc -l | tr -d ' ')" = 1 ] \
+    || fail "the coalesced parked recheck did not state one shared age for the set"$'\n'"--- queue ---"$'\n'"$payload"
+  printf '%s' "$payload" | grep -Eq 'parked [0-9]+s(-[0-9]+s)?; test:fm-pk1, test:fm-pk2, test:fm-pk3\)' \
+    || fail "the coalesced parked recheck did not list the windows once after a single shared age"$'\n'"--- queue ---"$'\n'"$payload"
   # What the seat actually receives is the drain, not the queue file: one record
   # is only one turn if it survives the drain as one record.
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/drain.out" 2>/dev/null \
@@ -710,6 +717,81 @@ test_parked_rechecks_coalesce_into_one_wake() {
   [ "$rows" = 1 ] \
     || fail "the coalesced parked recheck reached the seat as $rows records, not one"$'\n'"--- drain ---"$'\n'"$(cat "$dir/drain.out")"
   pass "parked rechecks falling due together reach the seat as one wake naming all of them"
+}
+
+# A fleet-sized batch must still arrive as ONE record after the drain: the drain
+# shortens any row above FM_WAKE_ECHO_ROW_BYTES (1024 by default) and then keeps
+# the queue file and prints its path, so a coalesced record that outgrows the
+# bound costs the seat a second read to learn which tasks it covers - the turn
+# it was built to save. Real fleet windows are the long tmux
+# "firstmate:fm-<task-slug>" shape, and the per-window cost is what decides
+# whether the reported fourteen-task burst fits, so that is the shape used here.
+test_parked_coalesced_record_fits_the_drain_row_bound() {
+  local dir state fakebin out capture_file window_list pane_hash back i n win key rows row pid
+  local -a keys
+  dir=$(make_case parked-coalesce-bound); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  printf 'finished, awaiting review' > "$capture_file"
+  pane_hash=$(hash_text "finished, awaiting review")
+  back=$(( $(date +%s) - 500 ))
+  keys=(); window_list=''
+  for i in $(seq 1 14); do
+    n=$(printf '%02d' "$i")
+    win="firstmate:fm-parked-recheck-wake-storm-task-$n"
+    key=$(printf '%s' "$win" | tr ':/.' '___')
+    keys+=("$key")
+    window_list="$window_list${window_list:+$'\n'}$win"
+    printf 'window=%s\nkind=ship\n' "$win" > "$state/pk$n.meta"
+    printf 'done: PR https://example.test/pr/%s checks green\n' "$i" > "$state/pk$n.status"
+    printf '%s' "$(seen_sig "$state/pk$n.status")" > "$state/.seen-pk${n}_status"
+    printf '%s' "$pane_hash" > "$state/.hash-$key"
+    printf '1\n' > "$state/.count-$key"
+    : > "$state/.parked-$key"
+    # Two parking batches two minutes apart, so the shared age is a range.
+    if [ "$i" -le 7 ]; then
+      backdate "$(( back - 60 ))" "$state/pk$n.meta"; backdate "$back" "$state/.parked-$key"
+    else
+      backdate "$(( back - 180 ))" "$state/pk$n.meta"; backdate "$(( back - 120 ))" "$state/.parked-$key"
+    fi
+  done
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window_list" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WATCH_DAEMON=1 "$WATCH" > "$out" 2>&1 &
+  pid=$!
+  # Fourteen windows is several times the per-pass work of the other watcher
+  # fixtures, so the first pass alone takes tens of seconds on a loaded host.
+  for key in "${keys[@]}"; do
+    wait_numeric_file "$state/.parkedresurfaced-$key" 600 \
+      || { reap "$pid"; fail "a parked task's due recheck never happened: $key"$'\n'"--- watcher ---"$'\n'"$(cat "$out")"; }
+  done
+  reap "$pid"
+
+  rows=$(grep -c "$(printf '\tstale\t')" "$state/.wake-queue" 2>/dev/null || true)
+  [ "$rows" = 1 ] \
+    || fail "fourteen parked rechecks falling due together produced $rows stale records, not one"$'\n'"--- queue ---"$'\n'"$(cat "$state/.wake-queue")"
+  row=$(cat "$state/.wake-queue")
+  printf '%s' "$row" | grep -Eq 'parked [0-9]+s-[0-9]+s; firstmate:fm-' \
+    || fail "two parking batches did not surface as one shared age range"$'\n'"--- queue ---"$'\n'"$row"
+  # The same bound the drain applies, on the same row, with the default cap
+  # (an empty override falls back to it). A separate process rather than a
+  # subshell, so sourcing the wake lib cannot touch this test's own variables.
+  FM_WAKE_ECHO_ROW_BYTES='' FM_WAKE_ECHO_BYTES='' FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1/bin/fm-wake-lib.sh" >/dev/null 2>&1
+    fm_wake_bound_echo "$2"
+    printf "shortened=%s omitted=%s bytes=%s\n" "$FM_WAKE_ECHO_SHORTENED" "$FM_WAKE_ECHO_OMITTED" "${#2}"
+    [ "$FM_WAKE_ECHO_SHORTENED" = 0 ] && [ "$FM_WAKE_ECHO_OMITTED" = 0 ]
+  ' bound-check "$ROOT" "$row" > "$dir/bound.out" 2>&1 \
+    || fail "a fourteen-window coalesced record does not survive the drain row bound unshortened ($(cat "$dir/bound.out"))"$'\n'"--- queue ---"$'\n'"$row"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/drain.out" 2>/dev/null \
+    || fail "drain after the fourteen-window parked recheck failed"
+  grep -q '^wake echo:' "$dir/drain.out" \
+    && fail "the drain withheld or shortened the fourteen-window parked recheck"$'\n'"--- drain ---"$'\n'"$(cat "$dir/drain.out")"
+  for i in $(seq 1 14); do
+    assert_contains "$(cat "$dir/drain.out")" "firstmate:fm-parked-recheck-wake-storm-task-$(printf '%02d' "$i")" \
+      "the drained fourteen-window parked recheck did not name every task it carries"
+  done
+  pass "a fourteen-window coalesced parked recheck reaches the seat whole, inside the drain row bound"
 }
 
 # The cadence default is a prompt-cache decision, not a round number: the seat's
@@ -2848,6 +2930,7 @@ test_signal_symlink_target_append_surfaces
 test_terminal_stale_surfaced
 test_terminal_stale_parked_absorbed_then_resurfaced
 test_parked_rechecks_coalesce_into_one_wake
+test_parked_coalesced_record_fits_the_drain_row_bound
 test_pause_resurface_default_stays_under_the_prompt_cache_hour
 test_parked_marker_clears_on_status_write
 test_parked_marker_clears_on_meta_change
