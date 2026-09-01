@@ -1399,13 +1399,23 @@ pidfile="\$FM_TEST_SERVERS/\${LAVISH_AXI_PORT:-none}.pid"
 if [ "\${1:-}" = stop ]; then
   target="\${3:-\$LAVISH_AXI_PORT}"
   pidfile="\$FM_TEST_SERVERS/\$target.pid"
+  hostfile="\$FM_TEST_SERVERS/\$target.host"
+  # The real tool reaches its target at LAVISH_AXI_HOST and reports not-running
+  # when nothing answers there, so a stop aimed at an address this board is not
+  # bound to must leave it serving rather than kill it by pidfile.
+  if [ -s "\$hostfile" ] && [ "\$(cat "\$hostfile")" != "\${LAVISH_AXI_HOST:-}" ]; then
+    printf 'not-running %s\n' "\$target"
+    exit 0
+  fi
   if [ -s "\$pidfile" ]; then kill "\$(cat "\$pidfile")" 2>/dev/null || true; rm -f "\$pidfile"; fi
+  rm -f "\$hostfile"
   printf 'stopped %s\n' "\$target"
   exit 0
 fi
 if [ ! -s "\$pidfile" ]; then
   ready="\$FM_TEST_SERVERS/\${LAVISH_AXI_PORT}.ready"
   rm -f "\$ready"
+  printf '%s\n' "\$LAVISH_AXI_HOST" > "\$FM_TEST_SERVERS/\${LAVISH_AXI_PORT}.host"
   # Detach every stream: a background child that inherits stdout would keep the
   # caller's command substitution open until it exits, which never happens.
   node "$TMP_ROOT/board-server.mjs" "\$ready" "\$LAVISH_AXI_HOST" "\$LAVISH_AXI_PORT" \$LAVISH_AXI_ALLOWED_HOSTS \\
@@ -1938,9 +1948,67 @@ ow_stop=$(env "${ow_env[@]}" "$ROOT/bin/fm-lavish.sh" stop 2>&1)
 expect_code 0 "$?" "stopping this vessel's own board succeeds"
 assert_contains "$ow_stop" "stopped" \
   "and the wrapper recognises the board it opened rather than reporting nothing to stop"
+# Finding it is half the job. lavish-axi reaches its target at LAVISH_AXI_HOST,
+# so a stop still aimed at the pre-read address withdraws the route and then
+# reports the board not running while it keeps serving on the port it holds.
+assert_not_contains "$ow_stop" "not-running" \
+  "the stop must reach the board at the address it was actually bound on"
+ow_alive=$(node "$ROOT/bin/fm-service-port-probe.mjs" \
+  http "http://127.0.0.1:$ow_port/health" 2>/dev/null)
+[ "$ow_alive" != 200 ] \
+  || fail "the board is still serving on 127.0.0.1:$ow_port after it was reported stopped"
+
+# And with the board gone, the sentence must describe the check that was made:
+# every address a board of this vessel could be on was asked, so naming the one
+# the pre-read guessed hands the reader the single address it is not on.
+ow_none=$(env "${ow_env[@]}" "$ROOT/bin/fm-lavish.sh" stop 2>&1)
+expect_code 0 "$?" "a stop with nothing left of this vessel's own is not a failure"
+assert_contains "$ow_none" "nothing to stop" "and reports that nothing was there"
+assert_not_contains "$ow_none" "192.0.2.1" \
+  "without naming the pre-read address as the scope of a check that asked every address"
 : > "$FM_TEST_TS_SERVE_STATE"
 : > "$FM_TEST_TS_SERVE_LOG"
-pass "a board is looked for where the allocation bound it, not where the pre-read guessed"
+pass "a board is looked for, and stopped, where the allocation bound it"
+
+# --- entry point: a run that walks nothing rewrites nothing -------------------
+#
+# --mine hands the allocator a port the caller is already listening on, so it
+# deliberately walks no window and tests no address. On a vessel whose address
+# probe answers a port-scoped errno, the pre-read still names the tailnet
+# address while the allocation bound loopback, so a run that re-derives its
+# resolution from that pre-read publishes the tailnet address for a board that
+# is not on it - and the wrapper, seeing its link configuration change,
+# restarts a healthy board onto an address that cannot bind. Every poll on a
+# live board takes this path.
+
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+HOME_MP=$(make_home "$TMP_ROOT/vessel-mp")
+make_serving_lavish "$HOME_MP"
+mp_env=(FM_TEST_TS_MODE=portscoped FM_HOME="$HOME_MP" FM_SERVICE_PORT_RANGE=4970-4971)
+mp_open=$(env "${mp_env[@]}" "$ROOT/bin/fm-lavish.sh" "$HOME_MP/.lavish/board.html" 2>/dev/null)
+mp_port=$(printf '%s\n' "$mp_open" | sed -n 's|.*:\([0-9][0-9]*\)/session.*|\1|p' | head -1)
+[ -n "$mp_port" ] || fail "the board must open on this vessel, got '$mp_open'"
+mp_record="$HOME_MP/state/service-port.lavish"
+assert_grep "addr=127.0.0.1" "$mp_record" "the open records the loopback address it bound"
+mp_pid=$(cat "$FM_TEST_SERVERS/$mp_port.pid" 2>/dev/null)
+[ -n "$mp_pid" ] || fail "the open should have left a board server running on $mp_port"
+
+mp_poll=$(env "${mp_env[@]}" "$ROOT/bin/fm-lavish.sh" poll "$HOME_MP/.lavish/board.html" 2>&1)
+assert_grep "addr=127.0.0.1" "$mp_record" \
+  "a run that tested nothing must not overwrite the address a run that did establish"
+grep -q '^reachability=untested$' "$mp_record" \
+  && fail "nor the verdict that run established: $(cat "$mp_record")"
+assert_not_contains "$mp_poll" "different address configuration" \
+  "so the poll finds the configuration its own open left and restarts nothing"
+[ "$(cat "$FM_TEST_SERVERS/$mp_port.pid" 2>/dev/null)" = "$mp_pid" ] \
+  || fail "the healthy board server was restarted by a run that established nothing"
+mp_alive=$(node "$ROOT/bin/fm-service-port-probe.mjs" \
+  http "http://127.0.0.1:$mp_port/health" 2>/dev/null)
+[ "$mp_alive" = 200 ] || fail "and the reviewer's board must still be serving after a poll"
+: > "$FM_TEST_TS_SERVE_STATE"
+: > "$FM_TEST_TS_SERVE_LOG"
+pass "a poll on a live board carries the established resolution instead of re-deriving one"
 
 neighbour_ready="$TMP_ROOT/neighbour.ready"
 rm -f "$neighbour_ready"

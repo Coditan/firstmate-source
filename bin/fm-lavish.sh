@@ -362,10 +362,21 @@ port_is_ours_on() {
   node "$PROBE" http "http://$1:$2/health" "$CLAIM_TOKEN" >/dev/null 2>&1
 }
 
+# The address the proof actually answered on, kept because it is where a board
+# of ours IS: lavish-axi builds every target it reaches from LAVISH_AXI_HOST, so
+# a run that hands it any other address takes the route down and then reports
+# nothing running while the board keeps serving. On a run that allocates, the
+# allocation resolved that address; on `stop`, which allocates nothing, only
+# this proof can name it.
+PROVEN_ADDR=""
+
 port_is_ours() {
   local a
   for a in $(own_addresses); do
-    port_is_ours_on "$a" "$1" && return 0
+    if port_is_ours_on "$a" "$1"; then
+      PROVEN_ADDR=$a
+      return 0
+    fi
   done
   return 1
 }
@@ -432,7 +443,7 @@ owned_port() {
   local recorded
   recorded=$(recorded_port) || return 1
   port_is_ours "$recorded" || return 1
-  printf '%s\n' "$recorded"
+  PROVEN=$recorded
 }
 
 owner_field() {
@@ -458,7 +469,7 @@ stop_server() {
   # It deliberately leaves the publication alone: a caller that is about to bind
   # the same port again still needs it, and a caller that is walking away says
   # so by calling withdraw_proxy itself.
-  LAVISH_AXI_HOST=$ADDR LAVISH_AXI_PORT=$1 \
+  LAVISH_AXI_HOST=${PROVEN_ADDR:-$ADDR} LAVISH_AXI_PORT=$1 \
     "$LAVISH" stop --port "$1" >/dev/null 2>&1 || true
 }
 
@@ -513,7 +524,8 @@ fi
 
 MINE=""
 RELOCATE_FROM=""
-PROVEN=$(owned_port) || PROVEN=""
+PROVEN=""
+owned_port || PROVEN=""
 if [ -n "$PROVEN" ]; then
   if in_window "$PROVEN"; then
     # Whether the running server was started with the configuration this run
@@ -582,7 +594,7 @@ fi
 # Without the probe there is no proof either way, and "nothing to stop" would be
 # a concrete claim this vessel cannot make.
 if [ "$SUBCOMMAND" = stop ] && { ! command -v node >/dev/null 2>&1 || [ ! -f "$PROBE" ]; }; then
-  die "cannot check whether a board server on $ADDR belongs to this vessel (node or $PROBE is unavailable), so nothing was stopped" 7
+  die "cannot check whether any board server on this machine belongs to this vessel (node or $PROBE is unavailable), so nothing was stopped" 7
 fi
 
 if [ "$SUBCOMMAND" = stop ] && [ "$EXPLICIT_PORT" -eq 1 ]; then
@@ -602,7 +614,7 @@ if [ "$SUBCOMMAND" = stop ] && [ "$EXPLICIT_PORT" -eq 1 ]; then
       die "something is serving on port $EXPLICIT_PORT_VALUE on this machine and this vessel cannot prove it is its own, so it was not stopped; only the home that opened a board may stop it" 7
     fi
     withdraw_proxy "$EXPLICIT_PORT_VALUE"
-    note "no review-board server owned by this vessel is running on $ADDR port $EXPLICIT_PORT_VALUE; nothing to stop"
+    note "nothing owned by this vessel answers on port $EXPLICIT_PORT_VALUE on any address one of its boards could be listening on; nothing to stop"
     exit 0
   fi
   PORT=$EXPLICIT_PORT_VALUE
@@ -613,13 +625,21 @@ elif [ "$SUBCOMMAND" = stop ] && [ -z "$PROVEN" ]; then
   # branch applies is required: a publication is only withdrawn where nothing is
   # serving behind it at all.
   nothing_serves_on "$PORT" && withdraw_proxy "$PORT"
-  note "no review-board server owned by this vessel is running on $ADDR; nothing to stop"
+  note "nothing owned by this vessel answers on port $PORT on any address one of its boards could be listening on; nothing to stop"
   exit 0
 fi
 
 # --- environment ------------------------------------------------------------
 
-export LAVISH_AXI_HOST="$ADDR"
+# `stop` allocates nothing, so $ADDR here is still the --check pre-read, which
+# cannot know where the allocation bound: on a vessel whose address probe gives
+# no verdict it names the tailnet address while the board is on loopback. The
+# board is reached at the address its ownership proof answered on.
+if [ "$SUBCOMMAND" = stop ] && [ -n "$PROVEN_ADDR" ]; then
+  export LAVISH_AXI_HOST="$PROVEN_ADDR"
+else
+  export LAVISH_AXI_HOST="$ADDR"
+fi
 export LAVISH_AXI_PORT="$PORT"
 export LAVISH_AXI_LINK_HOST="$LINK_HOST"
 export LAVISH_AXI_ALLOWED_HOSTS="$ALLOWED"

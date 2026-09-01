@@ -39,7 +39,12 @@
 #               The first such port is returned unprobed, because probing a port
 #               you are yourself listening on would report a false collision.
 #               The ownership proof belongs to the caller; this script does not
-#               and cannot verify it.
+#               and cannot verify it. Such a run walks no window, so it tests no
+#               address either: where it established no verdict of its own, the
+#               address AND the reach a previous allocation established are
+#               carried forward together rather than re-derived from a probe
+#               that answered nothing, because the two are one fact and a
+#               re-derived address would name a listener the caller is not on.
 #   --serving   this run WILL leave a service listening on the returned port.
 #               It is the only thing that authorises publishing a proxy under
 #               reachability=tailnet-proxied, and it is the caller's statement to
@@ -472,7 +477,7 @@ if [ -n "$TAILADDR" ]; then
   else
     # Exits 1, 2 and 3 are not address verdicts, and neither is a probe that
     # could not run at all, so nothing is claimed either way.
-    add_reason "whether $TAILADDR can be bound here was not established (the address probe did not answer), so no reach off this machine is claimed and the window walk below reports what it actually meets"
+    add_reason "whether $TAILADDR can be bound here was not established (the address probe did not answer), so no reach off this machine is claimed on the strength of it"
   fi
 fi
 
@@ -508,6 +513,15 @@ recorded_reachability() {
   local record="$STATE/service-port.$SERVICE"
   [ -r "$record" ] || return 0
   sed -n 's/^reachability=\(.*\)$/\1/p' "$record" | head -1
+}
+
+# The address that resolution was established ON, which travels with it: a
+# verdict and the address it was reached at are one fact, and reading either
+# without the other is what puts a link on an address nothing is bound to.
+recorded_addr() {
+  local record="$STATE/service-port.$SERVICE"
+  [ -r "$record" ] || return 0
+  sed -n 's/^addr=\(.*\)$/\1/p' "$record" | head -1
 }
 
 # The one writer of both the stdout allocation and the published record, so the
@@ -661,6 +675,36 @@ if [ -z "${PORT:-}" ]; then
   # describe a board demonstrably serving on the tailnet as unestablished.
   if [ -n "$TAILADDR" ] && [ "$ADDR" = "$TAILADDR" ]; then
     set_reachability_or_die tailnet probed
+  fi
+else
+  # --mine returns a port the caller is already listening on, so this run walks
+  # nothing and tests nothing: it deliberately does not hunt. What it must not
+  # do is RE-DERIVE the address from a pre-read that answered nothing. On a
+  # vessel whose address probe gives no verdict, that pre-read still names the
+  # tailnet address while the allocation that opened the board bound loopback,
+  # so re-emitting it would overwrite the record's own addr with an address the
+  # board is not on - and the caller, seeing its link host change, would restart
+  # a healthy board onto an address that cannot bind.
+  #
+  # So where this run established nothing, the resolution a run that DID test
+  # established is carried forward whole: the verdict through the same door,
+  # which refuses anything this run has ruled out, and the address it was
+  # established on with it.
+  if [ -n "$TAILADDR" ] && [ "$ADDR" = "$TAILADDR" ] \
+    && [ "$REACHABILITY" = untested ]; then
+    PRIOR=$(recorded_reachability)
+    PRIOR_ADDR=$(recorded_addr)
+    if [ -n "$PRIOR" ] && [ -n "$PRIOR_ADDR" ] \
+      && fm_set_reachability "$PRIOR" carried 2>/dev/null; then
+      ADDR=$PRIOR_ADDR
+      # A carried tailnet-proxied says a route is the one way off this machine,
+      # which is what the publish block below is for. Reaching it is how this
+      # run reports the route as it stands rather than dropping a live one.
+      if [ "$REACHABILITY" = tailnet-proxied ]; then
+        PROXY_CANDIDATE=1
+      fi
+      add_reason "this run bound no port of its own, so the address and reach a previous allocation established for $SERVICE are carried forward rather than re-derived from a probe that answered nothing"
+    fi
   fi
 fi
 
