@@ -395,12 +395,21 @@ retire_fulfilled_pr_poll() {  # <state dir> <task id>
   echo "RETIRED MERGE POLL: $id's pull request is already merged, so its poll had nothing left to report and has been removed. The refusal above still stands and the work is untouched." >&2
 }
 
-# The one exit taken when worktree safety refuses. It retires a spent poll and
-# then exits 1 exactly as before: the refusal is not softened, retried, or made
-# conditional on the poll; only the poll's survival stops depending on it.
-refuse_after_retiring_fulfilled_poll() {
+# The one exit every teardown refusal takes once the poll's own artifact
+# validation has passed. It retires a spent poll and then exits exactly as
+# before: the refusal is not softened, retried, or made conditional on the poll;
+# only the poll's survival stops depending on it. The optional argument carries
+# a caller's own status through unchanged, defaulting to 1.
+#
+# It is attached to the refusal rather than to one call site because every
+# refusal below fails for the same reason - teardown will not discard what it
+# cannot verify - and a poll is not what any of them protect. Wiring it to the
+# worktree-safety check alone left the identical outcome reachable through its
+# siblings: the same predicate refusing after the treehouse lock is taken, an
+# Orca ship task whose worktree is gone, a scout with no report.
+refuse_after_retiring_fulfilled_poll() {  # [exit status]
   retire_fulfilled_pr_poll "$STATE" "$ID" || true
-  exit 1
+  exit "${1:-1}"
 }
 
 # Resolve the PR number for a worktree branch via gh-axi. Echoes the number on a
@@ -1375,7 +1384,7 @@ if [ "$KIND" = secondmate ] && [ "$FORCE" != "--force" ]; then
       [ -e "$child_meta" ] || continue
       echo "REFUSED: secondmate $ID still has in-flight work in $SUB_STATE." >&2
       echo "Found $(basename "$child_meta"). Let that home finish or explicitly discard with --force." >&2
-      exit 1
+      refuse_after_retiring_fulfilled_poll
     done
   fi
 fi
@@ -1390,13 +1399,13 @@ if [ "$KIND" = scout ] && [ "$FORCE" != "--force" ]; then
   if [ ! -f "$REPORT" ]; then
     echo "REFUSED: scout task $ID has no report at $REPORT." >&2
     echo "The report is the work product. Have the crewmate write it, or use --force after explicit discard approval." >&2
-    exit 1
+    refuse_after_retiring_fulfilled_poll
   fi
   if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
       FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-decision-hold.sh" verify "$ID" >/dev/null; then
     echo "REFUSED: scout task $ID has not passed the unresolved-decision completion gate." >&2
     echo "Inventory its report and any visual review through bin/fm-decision-hold.sh before teardown." >&2
-    exit 1
+    refuse_after_retiring_fulfilled_poll
   fi
 fi
 
@@ -1404,9 +1413,10 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ] &&
   if ! inspectable_git_worktree "$WT"; then
     echo "REFUSED: Orca ship task $ID has no inspectable git worktree at ${WT:-<missing>}." >&2
     echo "Cannot verify dirty or unlanded work; restore the worktree path or get explicit OK to discard, then --force." >&2
-    exit 1
+    refuse_after_retiring_fulfilled_poll
   fi
-  require_orca_worktree_path_match "$ORCA_WORKTREE_ID" "$WT" || exit 1
+  require_orca_worktree_path_match "$ORCA_WORKTREE_ID" "$WT" \
+    || refuse_after_retiring_fulfilled_poll
   ORCA_PATH_MATCH_VERIFIED=1
 fi
 
@@ -1420,7 +1430,8 @@ if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
       if current_worktree_uses_treehouse; then
         stale_lock_ownership_refresh=refresh_current_treehouse_ownership
       fi
-      cleanup_stale_lock_for_safety_check "$WT" "$stale_lock_ownership_refresh" || exit $?
+      cleanup_stale_lock_for_safety_check "$WT" "$stale_lock_ownership_refresh" \
+        || refuse_after_retiring_fulfilled_poll "$?"
       validate_worktree_teardown_safety || refuse_after_retiring_fulfilled_poll
     else
       refuse_after_retiring_fulfilled_poll
@@ -1431,7 +1442,8 @@ fi
 # Best-effort: drop the local task branch so the shared repo does not accumulate refs.
 if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
   if [ "$ORCA_PATH_MATCH_VERIFIED" != 1 ]; then
-    require_orca_worktree_path_match_if_present "$ORCA_WORKTREE_ID" "$WT" || exit 1
+    require_orca_worktree_path_match_if_present "$ORCA_WORKTREE_ID" "$WT" \
+      || refuse_after_retiring_fulfilled_poll
     ORCA_PATH_MATCH_VERIFIED=1
   fi
   branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
@@ -1460,7 +1472,7 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
     if [ "$return_rc" -eq "$TEARDOWN_TREEHOUSE_LOCK_REFUSED" ]; then
       return_rc=1
     fi
-    exit "$return_rc"
+    refuse_after_retiring_fulfilled_poll "$return_rc"
   fi
 fi
 

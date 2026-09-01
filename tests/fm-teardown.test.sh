@@ -682,6 +682,88 @@ test_refused_teardown_keeps_an_unfulfilled_poll() {
   pass "a refused teardown leaves an unmerged PR's poll armed, so no merge notification is lost"
 }
 
+# The refusal, not one call site, is what a spent poll must not survive. Wiring
+# the retirement to the worktree-safety check alone left the identical outcome -
+# a teardown refuses, and a poll whose pull request has already merged stays
+# armed and keeps printing "merged" every CHECK_INTERVAL - reachable through
+# every sibling refusal that fails for the same reason. This fixture takes one of
+# them: a scout whose report was never written, refused before the worktree is
+# ever inspected, carrying a poll for a merged pull request.
+test_refused_sibling_teardown_retires_a_fulfilled_poll() {
+  local case_dir rc head_before left
+  case_dir=$(make_case refused-sibling-retires-poll)
+  write_meta "$case_dir" no-mistakes scout
+  mkdir -p "$case_dir/data"
+  wt_commit_file "$case_dir" findings.txt "unwritten" "work the scout has not reported"
+  head_before=$(git -C "$case_dir/wt" rev-parse HEAD)
+  add_gh_pr_state_and_head "$case_dir" MERGED "$(git -C "$case_dir/wt" rev-parse origin/main)"
+  arm_merge_poll "$case_dir"
+  [ -e "$case_dir/state/task-x1.check.sh" ] \
+    || fail "refused-sibling-retires-poll: fixture armed no poll"
+
+  set +e
+  FM_ROOT_OVERRIDE="$ROOT" \
+  FM_STATE_OVERRIDE="$case_dir/state" \
+  FM_CONFIG_OVERRIDE="$case_dir/config" \
+  FM_DATA_OVERRIDE="$case_dir/data" \
+  PATH="$case_dir/fakebin:$PATH" \
+    "$TEARDOWN" task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  # The refusal is exactly as strong as before: same exit status, its own REFUSED
+  # line, and the work untouched.
+  expect_code 1 "$rc" "refused-sibling-retires-poll: teardown must still refuse a reportless scout"
+  grep -q 'REFUSED: scout task task-x1 has no report' "$case_dir/stderr" \
+    || fail "refused-sibling-retires-poll: the scout refusal line is gone: $(cat "$case_dir/stderr")"
+  [ "$(git -C "$case_dir/wt" rev-parse HEAD)" = "$head_before" ] \
+    || fail "refused-sibling-retires-poll: the refused teardown moved the worktree HEAD"
+  [ -f "$case_dir/wt/findings.txt" ] \
+    || fail "refused-sibling-retires-poll: the refused teardown discarded the unreported work"
+  [ -f "$case_dir/state/task-x1.meta" ] \
+    || fail "refused-sibling-retires-poll: the refused teardown removed the task record"
+
+  left=$(poll_artifacts_left "$case_dir")
+  [ -z "$left" ] || fail "refused-sibling-retires-poll: the spent poll survived a sibling refusal: $left"
+  grep -q 'RETIRED MERGE POLL' "$case_dir/stderr" \
+    || fail "refused-sibling-retires-poll: the refusal did not say the poll had been retired"
+  pass "a sibling teardown refusal retires the poll of an already-merged PR too"
+}
+
+# The same half-rule holds on the sibling path: only a FULFILLED poll goes. An
+# open pull request's poll still carries the merge notification the task waits
+# for, and it wakes nobody until it arrives.
+test_refused_sibling_teardown_keeps_an_unfulfilled_poll() {
+  local case_dir rc
+  case_dir=$(make_case refused-sibling-keeps-poll)
+  write_meta "$case_dir" no-mistakes scout
+  mkdir -p "$case_dir/data"
+  wt_commit_file "$case_dir" findings.txt "unwritten" "work the scout has not reported"
+  add_gh_pr_state_and_head "$case_dir" OPEN "$(git -C "$case_dir/wt" rev-parse origin/main)"
+  arm_merge_poll "$case_dir"
+
+  set +e
+  FM_ROOT_OVERRIDE="$ROOT" \
+  FM_STATE_OVERRIDE="$case_dir/state" \
+  FM_CONFIG_OVERRIDE="$case_dir/config" \
+  FM_DATA_OVERRIDE="$case_dir/data" \
+  PATH="$case_dir/fakebin:$PATH" \
+    "$TEARDOWN" task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "refused-sibling-keeps-poll: teardown must refuse a reportless scout"
+  grep -q 'REFUSED: scout task task-x1 has no report' "$case_dir/stderr" \
+    || fail "refused-sibling-keeps-poll: the scout refusal line is gone"
+  [ -e "$case_dir/state/task-x1.check.sh" ] \
+    || fail "refused-sibling-keeps-poll: an open PR's poll was retired, losing its merge notification"
+  [ -e "$case_dir/state/task-x1.pr-poll" ] \
+    || fail "refused-sibling-keeps-poll: an open PR's sidecar was removed"
+  ! grep -q 'RETIRED MERGE POLL' "$case_dir/stderr" \
+    || fail "refused-sibling-keeps-poll: teardown claimed to retire an unmerged PR's poll"
+  pass "a sibling refusal leaves an unmerged PR's poll armed"
+}
+
 test_local_only_fork_remote_allows() {
   local case_dir rc
   case_dir=$(make_case fork-allow)
@@ -1891,3 +1973,5 @@ test_empty_retry_wait_uses_default_without_aborting
 test_fractional_legacy_retry_wait_refuses_without_arithmetic_error
 test_refused_teardown_retires_a_fulfilled_poll
 test_refused_teardown_keeps_an_unfulfilled_poll
+test_refused_sibling_teardown_retires_a_fulfilled_poll
+test_refused_sibling_teardown_keeps_an_unfulfilled_poll

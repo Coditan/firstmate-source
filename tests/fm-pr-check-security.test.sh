@@ -2717,6 +2717,41 @@ test_disarm_retires_the_whole_poll_artifact_set() {
   pass "--disarm retires the whole poll artifact set, is idempotent, finishes a partial set, and keeps every safety refusal"
 }
 
+# state/<id>.check.sh and state/<id>.check-trust are not the merge poll's private
+# names: bin/fm-check-register.sh binds a hand-written custom watcher check to
+# exactly those two paths for the same task id, and the task-landing skill tells
+# operators to write them. Deciding from artifact PRESENCE that what is there is
+# a poll therefore let --disarm delete a registered custom check and its trust
+# record and then report that a merge poll had been retired - state destroyed,
+# and the output naming something that never existed. The verb asks the same
+# discriminator that authenticates that check for the watcher instead.
+test_disarm_refuses_a_registered_custom_check() {
+  local dir state out rc snapshot
+  dir=$(make_case disarm-custom-check)
+  state="$dir/home/state"
+  printf '#!/usr/bin/env bash\nprintf "custom-ready\\n"\n' > "$state/custom.check.sh"
+  chmod 0700 "$state/custom.check.sh"
+  FM_HOME="$dir/home" "$REGISTER" custom >/dev/null \
+    || fail "could not register the custom check fixture"
+  fm_custom_check_registered "$state" custom \
+    || fail "the custom check fixture did not register"
+  snapshot=$(state_snapshot "$state")
+
+  set +e
+  out=$(run_check_entry "$dir" --disarm custom 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "disarm claimed to retire a merge poll for a registered custom check: $out"
+  case "$out" in *REFUSED*) ;; *) fail "disarm did not report a refusal: $out" ;; esac
+  case "$out" in *disarmed*) fail "disarm reported retiring a poll that never existed: $out" ;; esac
+  [ -e "$state/custom.check.sh" ] || fail "disarm deleted the registered custom check"
+  [ -e "$state/custom.check-trust" ] || fail "disarm deleted the custom check's trust record"
+  fm_custom_check_registered "$state" custom \
+    || fail "disarm left the custom check unauthenticated"
+  [ "$(state_snapshot "$state")" = "$snapshot" ] || fail "the refused disarm changed state"
+  pass "--disarm refuses a registered custom watcher check and removes none of it"
+}
+
 test_teardown_removes_poll_artifacts() {
   local dir fakebin kind artifact counterpart rc
   dir=$(make_case teardown-cleanup)
@@ -3187,3 +3222,4 @@ test_custom_snapshot_cleanup_on_signal
 test_returned_custom_check_descendants_are_drained
 test_teardown_removes_poll_artifacts
 test_disarm_retires_the_whole_poll_artifact_set
+test_disarm_refuses_a_registered_custom_check

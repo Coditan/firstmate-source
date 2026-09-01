@@ -29,6 +29,7 @@ A teardown refusal for uncommitted or unlanded work is a stop-and-investigate re
 Never force teardown without explicit discard authority.
 The refusal no longer strands the task's merge poll: a teardown that refuses still retires a poll whose pull request has already merged, and says so in its own output alongside the refusal.
 To retire a poll on any other occasion, run `bin/fm-pr-check.sh --disarm <id>`, which removes the whole artifact set, leaves the recorded `pr=` alone, and is safe to run twice or on a set already partly removed by hand.
+It retires merge polls only: on a task whose `state/<id>.check.sh` is a custom check you registered, it refuses and removes nothing, because that name and its trust record belong to the check you wrote.
 Never remove a poll's files by hand: that is the state machinery `AGENTS.md` section 2 protects, and a half-removed set is what hand-removal leaves behind.
 After successful teardown, record completion, retain only the configured recent Done history, and re-evaluate queued work whose blockers and time gates have cleared.
 

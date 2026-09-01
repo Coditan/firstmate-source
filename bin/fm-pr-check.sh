@@ -44,6 +44,16 @@
 # states it exists to resolve. It never touches the task metadata, so the
 # recorded pr= survives and the poll can be armed again with a plain rearm.
 #
+# state/<id>.check.sh is a shared name: bin/fm-check-register.sh binds a
+# hand-written custom watcher check to exactly that path and to the same trust
+# record this verb removes. Artifact presence therefore cannot decide that what
+# is there is a merge poll, so this verb asks the one discriminator that already
+# exists - fm_custom_check_registered in bin/fm-check-lib.sh, the same
+# authentication the watcher runs - and refuses outright when the task's check is
+# a registered custom check. bin/fm-teardown.sh needs no such guard: it ends the
+# whole task and removes a custom check along with everything else, whereas this
+# verb claims only a merge poll and has no licence beyond it.
+#
 # Usage: fm-pr-check.sh [--no-watch] [--pr-head <sha>] <task-id> <pr-url>
 #        fm-pr-check.sh --disarm <task-id>
 set -eu
@@ -55,6 +65,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-check-lib.sh
+. "$SCRIPT_DIR/fm-check-lib.sh"
 
 # --disarm is handled before the arming path's own parsing and before the legacy
 # migration runs. It takes no URL, so none of the identity resolution below
@@ -69,6 +81,11 @@ if [ "${1-}" = --disarm ]; then
   if ! fm_pr_task_id_valid "$DISARM_ID"; then
     echo "error: invalid PR check request" >&2
     exit 2
+  fi
+  if fm_custom_check_registered "$STATE" "$DISARM_ID"; then
+    echo "REFUSED: state/$DISARM_ID.check.sh is a registered custom watcher check, not a merge poll; nothing was removed." >&2
+    echo "Retire it with the tool that owns it, or tear the task down; --disarm retires merge polls only." >&2
+    exit 1
   fi
   if ! fm_pr_poll_artifacts_present "$STATE" "$DISARM_ID"; then
     echo "not armed: $DISARM_ID has no merge poll artifacts; nothing to disarm."
