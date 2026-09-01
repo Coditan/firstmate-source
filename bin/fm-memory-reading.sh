@@ -44,6 +44,18 @@
 # interval younger than the configured floor are also scope. The first two are
 # expected absences and the last is the operator's own cadence. They do not
 # force exit 3, so the next slice's alarm does not learn to discount failure.
+# A stored sample this run cannot use - stale, corrupt, or dated in the future
+# - joins them ONLY when this run replaces it with its own, which puts the
+# reading in the same known absence a first run is already in. Under --no-store
+# nothing replaces it and the reason stays unmeasured, and a sample path that
+# is not a regular file stays unmeasured whatever the mode, under its own input
+# name `growth-sample-path`, because no replacement can be written over it and
+# that absence never clears by itself. Both scope verdicts that rest on this
+# run storing - that one and a first run with no sample at all - are settled
+# only once the store has been attempted, and a sample that did not land makes
+# them unmeasured under the input name `growth-sample-store`, because a run
+# that stored nothing has left the next run no better placed than itself.
+# See read_prior and settle_growth_scope below.
 # The wall-clock and peak-memory cost figures measure this instrument rather
 # than machine memory. Their platform-dependent absence is scope and stays
 # visible without making the memory reading untrustworthy.
@@ -66,6 +78,11 @@
 # run on a home reports growth as scoped rather than as zero. Pass --interval
 # with an interval at or above the configured floor to take both samples inside
 # one run instead; a shorter explicit interval stays scoped without waiting.
+# A stored sample that has gone unusable is DISCARDED AND REPLACED rather than
+# reported as blindness, at no cost beyond the sample this run was storing
+# anyway: no extra process-table read, no wait, and nothing that can hang.
+# read_prior owns exactly when that applies and when the reason stays
+# unmeasured.
 #
 # WAKE DELIVERY IS LABELLED, NOT RANKED
 # The per-session wake-delivery listener is a few megabytes and is what makes
@@ -118,8 +135,9 @@
 #   FM_MEMORY_TRACK_MIB       tracking floor in MiB (default 32)
 #   FM_MEMORY_GROWTH_MIB_MIN  MiB/min at or above which a process is called
 #                             growing rather than steady (default 5)
-#   FM_MEMORY_SAMPLE_MAX_AGE  how old the stored sample may be before growth is
-#                             unmeasured rather than meaningless (default 1260)
+#   FM_MEMORY_SAMPLE_MAX_AGE  how old the stored sample may be before it is
+#                             discarded and replaced rather than divided by
+#                             (default 1260)
 #   FM_MEMORY_SAMPLE_MIN_AGE  interval below which growth is scoped because the
 #                             operator ran it too soon to divide by (default 270)
 #   FM_MEMORY_SAMPLES         path of the stored sample. Tests use it for
@@ -132,6 +150,9 @@
 #                             looking at the machine
 #   FM_MEMORY_MEMINFO         headroom source (default /proc/meminfo)
 #   FM_MEMORY_PRESSURE        stall source (default /proc/pressure/memory)
+#   FM_MEMORY_PRESSURE_IO     the io stall source, read ONLY to prove that this
+#                             kernel accounts pressure at all
+#                             (default /proc/pressure/io)
 #   FM_MEMORY_CGROUP_ROOT     cgroup root (default /sys/fs/cgroup)
 #   FM_MEMORY_PS              process-table command (tests); must print
 #                             pid ppid user rss etimes args
@@ -152,6 +173,7 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
 MEMINFO=${FM_MEMORY_MEMINFO:-/proc/meminfo}
 PRESSURE=${FM_MEMORY_PRESSURE:-/proc/pressure/memory}
+PRESSURE_IO=${FM_MEMORY_PRESSURE_IO:-/proc/pressure/io}
 CGROUP_ROOT=${FM_MEMORY_CGROUP_ROOT:-/sys/fs/cgroup}
 PROC=${FM_MEMORY_PROC:-/proc}
 SAMPLES=${FM_MEMORY_SAMPLES:-$STATE/memory-reading.samples}
@@ -310,11 +332,42 @@ read_headroom() {
 # least one task (some) or every task (full) was stalled waiting on memory.
 # This is the reading that separates "the machine is busy" from "the machine is
 # thrashing", and unlike free-memory arithmetic it cannot be argued with.
+#
+# A SUCCESSFUL READ IS NOT A MEASUREMENT
+# A kernel can expose /proc/pressure/memory, answer every field, and account
+# nothing into it. A WSL seat measured on 2026-08-28 read all four averages as
+# 0.00 AND a cumulative total of exactly zero over 3,526 seconds of uptime,
+# while its io counter stood at 2,063,189 - so pressure accounting worked there
+# and only the memory account was flat. From a single read that is
+# indistinguishable from a genuinely quiet machine, and it looks exactly like
+# calm, which is the one thing this reading may never report when it cannot see.
+#
+# So the memory account has to prove itself rather than merely answer. The
+# cumulative `total=` counter is what proves it: it is monotonic since boot, so
+# on any machine that has ever waited on memory it is positive, and the io
+# counter is the control that separates "this kernel does not account memory
+# pressure" from "this kernel accounts nothing yet". A flat memory account
+# beside a live io account is reported as unmeasured.
+#
+# The counter is used ONLY for that proof and never as a trigger. It never
+# falls, so a condition built on it would fire permanently after any past
+# starvation and could never recover.
 
 STALL_SOME10=
 STALL_SOME60=
 STALL_FULL10=
 STALL_FULL60=
+STALL_SOME_TOTAL=
+STALL_FULL_TOTAL=
+STALL_IO_TOTAL=
+# Which of three states the io control was in when the readability test needed
+# it: `live` (it has accounted pressure, so a flat memory account is a dead
+# one), `flat` (it has accounted none either, so nothing distinguishes a dead
+# account from a machine that has not stalled yet), or `unreadable` (the control
+# itself could not be read, which is not the same as a zero and must never be
+# reported as one). Empty when the test did not need a control, because the
+# memory account was not flat.
+STALL_IO_CONTROL=
 
 parse_pressure_file() {  # <file> -> "some10 some60 full10 full60" or empty
   awk '
@@ -330,8 +383,20 @@ parse_pressure_file() {  # <file> -> "some10 some60 full10 full60" or empty
   ' "$1" 2>/dev/null
 }
 
+pressure_totals() {  # <file> -> "some_total full_total" or empty
+  awk '
+    function num(s) { sub(/^[a-z]+=/, "", s); return s }
+    $1 == "some" { for (i = 2; i <= NF; i++) if ($i ~ /^total=/) s = num($i) }
+    $1 == "full" { for (i = 2; i <= NF; i++) if ($i ~ /^total=/) f = num($i) }
+    END {
+      if (s !~ /^[0-9]+$/ || f !~ /^[0-9]+$/) exit 1
+      printf "%s %s\n", s, f
+    }
+  ' "$1" 2>/dev/null
+}
+
 read_stall() {
-  local parsed
+  local parsed totals io_totals
   if [ ! -e "$PRESSURE" ]; then
     unmeasured stall "$PRESSURE does not exist (this kernel exposes no memory pressure metric)"
     return
@@ -345,6 +410,36 @@ read_stall() {
     unmeasured stall "$PRESSURE carries no recognisable some/full averages"
     return
   fi
+  totals=$(pressure_totals "$PRESSURE")
+  if [ -z "$totals" ]; then
+    unmeasured stall "$PRESSURE carries no recognisable some/full total counters, so its averages cannot be shown to mean anything"
+    return
+  fi
+  read -r STALL_SOME_TOTAL STALL_FULL_TOTAL <<< "$totals"
+
+  # The positive readability test. A flat memory account is only evidence of a
+  # dead account when something proves this kernel accounts pressure at all, so
+  # the io counter is read purely as that control and is never reported as a
+  # stall.
+  if [ "$STALL_SOME_TOTAL" -eq 0 ] && [ "$STALL_FULL_TOTAL" -eq 0 ]; then
+    io_totals=$(pressure_totals "$PRESSURE_IO")
+    STALL_IO_TOTAL=${io_totals%% *}
+    case "$STALL_IO_TOTAL" in ''|*[!0-9]*) STALL_IO_TOTAL= ;; esac
+    if [ -z "$STALL_IO_TOTAL" ]; then
+      STALL_IO_CONTROL=unreadable
+    elif [ "$STALL_IO_TOTAL" -gt 0 ]; then
+      STALL_IO_CONTROL=live
+    else
+      STALL_IO_CONTROL=flat
+    fi
+    if [ "$STALL_IO_CONTROL" = live ]; then
+      unmeasured stall "$PRESSURE has accounted exactly zero memory stall since boot while $PRESSURE_IO has accounted $STALL_IO_TOTAL, so this kernel accounts pressure but not memory pressure: its zeros are an absent measurement rather than a quiet machine"
+      STALL_SOME_TOTAL=
+      STALL_FULL_TOTAL=
+      return
+    fi
+  fi
+
   read -r STALL_SOME10 STALL_SOME60 STALL_FULL10 STALL_FULL60 <<< "$parsed"
 }
 
@@ -735,6 +830,57 @@ GROWTH_REASON=
 GROWTH_SCOPE=0
 GROWTH_SAMPLE_DROPPED=0
 INTERVAL_WAITED=0
+STORE_OK=1
+
+# SCOPE THAT RESTS ON THIS RUN'S SAMPLE LANDING IS NOT SETTLED UNTIL IT HAS
+# A growth absence is scope rather than blindness only because the NEXT run is
+# better placed than this one, and the only thing that makes it so is this run
+# storing its own sample. That is attempted after the prior is read, so the
+# verdict cannot honestly be pronounced where it is reached: a store that never
+# lands leaves a reading claiming a replacement that did not happen, and an
+# alarm treating a permanently dead growth instrument as an ordinary absence
+# nobody needs to hear about. Every such verdict is recorded here as PROVISIONAL
+# and settled by settle_growth_scope below, against the store's real outcome
+# rather than against the wording of the reason.
+GROWTH_SCOPE_BASE=
+GROWTH_SCOPE_PENDING_STORE=0
+
+scope_pending_store() {  # <reason> <clause earned by this run's sample landing>
+  GROWTH_SCOPE_BASE="$1"
+  GROWTH_REASON="$1$2"
+  GROWTH_SCOPE=1
+  GROWTH_SCOPE_PENDING_STORE=1
+}
+
+# A STORED SAMPLE THIS RUN CANNOT USE IS NOT A BROKEN INSTRUMENT, IF THIS RUN
+# REPLACES IT
+# A host that was frozen for hours comes back with a stored sample far too old
+# to divide by, and reporting that as blindness relays a machine nobody could
+# measure as a machine nobody can see. The repair is to discard the unusable
+# sample and let this run's own take its place, which leaves the reading in
+# exactly the state a first run on a new home is already in - a known absence
+# this reading has always reported as SCOPED and exited 0 for.
+#
+# The replacement is what earns the softer word, so it is only taken when this
+# run is actually storing. Under --no-store nothing replaces the unusable
+# sample, the next run would be just as blind as this one, and the reason stays
+# unmeasured.
+#
+# A fresh sample that FAILS is still unmeasured. Three separate mechanisms hold
+# that, and none depends on the caller: a sample path that is not a regular
+# file cannot be written over at all and never reaches this helper, a
+# replacement that cannot be written is marked unmeasured by store_sample
+# below, and the scope verdict this helper reaches is provisional until
+# settle_growth_scope has seen whether that replacement actually landed.
+unusable_prior() {  # <reason>
+  : > "$PRIOR_FILE"
+  if [ "$STORE" -eq 1 ]; then
+    scope_pending_store "$1" ", so it was discarded and this run's own sample takes its place"
+    return
+  fi
+  GROWTH_REASON="$1, and this reading was asked not to store, so nothing replaces it"
+  unmeasured growth-sample "$GROWTH_REASON"
+}
 
 read_prior() {
   local epoch age parse_status="$TMP/prior-status" epoch_file="$TMP/prior-epoch" status dropped=0
@@ -767,13 +913,23 @@ read_prior() {
     return
   fi
   if [ ! -e "$SAMPLES" ]; then
-    GROWTH_REASON="no stored sample yet, so this run has nothing to compare against"
-    GROWTH_SCOPE=1
+    scope_pending_store "no stored sample yet" ", so this run has nothing to compare against"
     return
   fi
-  if [ ! -f "$SAMPLES" ] || [ ! -r "$SAMPLES" ]; then
-    GROWTH_REASON="the stored sample exists but could not be read"
-    unmeasured growth-sample "$GROWTH_REASON"
+  # A path that is not a regular file is the one unusable prior a fresh sample
+  # cannot repair: storing writes aside and moves into place, and moving a file
+  # onto a directory puts it INSIDE that directory, so the unreadable prior
+  # would survive every replacement and the growth instrument would be blind
+  # for good while reporting itself merely scoped. It carries its own input
+  # name, `growth-sample-path`, because that permanence is what anything reading
+  # this must act on and a reason phrased in prose would drift away from it.
+  if [ ! -f "$SAMPLES" ]; then
+    GROWTH_REASON="the stored sample path exists but is not a regular file, so nothing can be read from it or written over it"
+    unmeasured growth-sample-path "$GROWTH_REASON"
+    return
+  fi
+  if [ ! -r "$SAMPLES" ]; then
+    unusable_prior "the stored sample exists but could not be read"
     return
   fi
   : > "$parse_status"
@@ -802,13 +958,13 @@ read_prior() {
       if (dropped) print "dropped " dropped > status_file
     }
   ' "$SAMPLES" > "$PRIOR_FILE" 2>/dev/null; then
+    local why
     case "$(head -1 "$parse_status" 2>/dev/null)" in
-      timestamp) GROWTH_REASON="the stored sample carries no usable timestamp" ;;
-      empty) GROWTH_REASON="the stored sample carries no usable process records" ;;
-      *) GROWTH_REASON="the stored sample body could not be read" ;;
+      timestamp) why="the stored sample carries no usable timestamp" ;;
+      empty) why="the stored sample carries no usable process records" ;;
+      *) why="the stored sample body could not be read" ;;
     esac
-    : > "$PRIOR_FILE"
-    unmeasured growth-sample "$GROWTH_REASON"
+    unusable_prior "$why"
     return
   fi
   status=$(head -1 "$parse_status" 2>/dev/null)
@@ -818,13 +974,11 @@ read_prior() {
   epoch=$(head -1 "$epoch_file" 2>/dev/null)
   age=$((NOW - epoch))
   if [ "$age" -lt 0 ]; then
-    GROWTH_REASON="the stored sample is dated in the future, so the interval cannot be trusted"
-    unmeasured growth-sample "$GROWTH_REASON"
+    unusable_prior "the stored sample is dated in the future, so the interval cannot be trusted"
     return
   fi
   if [ "$age" -gt "$SAMPLE_MAX_AGE" ]; then
-    GROWTH_REASON="the stored sample is ${age}s old, past the ${SAMPLE_MAX_AGE}s window a growth rate means anything over"
-    unmeasured growth-sample "$GROWTH_REASON"
+    unusable_prior "the stored sample is ${age}s old, past the ${SAMPLE_MAX_AGE}s window a growth rate means anything over"
     return
   fi
   if [ "$age" -lt "$SAMPLE_MIN_AGE" ]; then
@@ -840,6 +994,7 @@ store_sample() {
   local tmp
   [ "$STORE" -eq 1 ] || return 0
   if [ ! -d "$STATE" ] && ! mkdir -p "$STATE" 2>/dev/null; then
+    STORE_OK=0
     unmeasured sample-storage "$STATE could not be created"
     return 0
   fi
@@ -847,6 +1002,20 @@ store_sample() {
   # Written aside and moved into place, so a reading interrupted mid-write
   # leaves the previous sample intact rather than a truncated one the next run
   # would quietly measure growth against.
+  #
+  # The destination is opened by a simple command of its own, and 2>/dev/null
+  # comes FIRST. A redirection the shell cannot open aborts the compound command
+  # carrying it WITHOUT applying the surrounding negation, so a group that holds
+  # its own output redirection can never detect its own open failing and would
+  # report the move it never reached as the step that failed; and redirections
+  # are applied left to right, so suppressing stderr afterwards leaves the raw
+  # interpreter error on the output of a check that speaks in its own voice.
+  # bin/fm-memory-alarm.sh states the same rule where it persists its run.
+  if ! : 2>/dev/null >"$tmp"; then
+    STORE_OK=0
+    unmeasured sample-storage "$tmp could not be opened to write this run's sample aside"
+    return 0
+  fi
   if ! {
     printf '# fm-memory-reading.samples v1\n'
     printf 'epoch %s\n' "$NOW"
@@ -859,14 +1028,38 @@ store_sample() {
       { bad = 1 }
       END { if (bad || rows == 0) exit 1 }
     ' "$PROCS_FILE"
-  } > "$tmp" 2>/dev/null; then
+  } 2>/dev/null >"$tmp"; then
     rm -f "$tmp"
+    STORE_OK=0
     unmeasured sample-storage "$tmp could not be written from a valid non-empty process sample"
     return 0
   fi
   if ! mv -f "$tmp" "$SAMPLES" 2>/dev/null; then
     rm -f "$tmp"
+    STORE_OK=0
     unmeasured sample-storage "$SAMPLES could not be replaced"
+  fi
+}
+
+# The other half of scope_pending_store, run once the store has actually been
+# attempted. A run that stored keeps today's verdict and today's wording to the
+# byte. A run whose sample did not land has not put the next run in a better
+# place than this one, so the absence is blindness and is named as such - under
+# its own input, so the alarm can tell it from the absences that do clear
+# themselves without reading either end's prose.
+settle_growth_scope() {
+  [ "$GROWTH_SCOPE_PENDING_STORE" -eq 1 ] || return 0
+  [ "$STORE_OK" -eq 0 ] || return 0
+  GROWTH_REASON="$GROWTH_SCOPE_BASE, and this run's own sample could not be stored, so the next run has nothing more to compare against than this one did"
+  GROWTH_SCOPE=0
+  unmeasured growth-sample-store "$GROWTH_REASON"
+  # The per-process records were built from the provisional verdict, so they are
+  # brought with it rather than left contradicting the reading they sit in.
+  if awk -F'\t' -v OFS='\t' -v reason="$GROWTH_REASON" '
+    $7 == "scoped" { $6 = reason; $7 = "unmeasured" }
+    { print }
+  ' "$PROCS_FILE" > "$TMP/procs-settled.tsv" 2>/dev/null; then
+    mv -f "$TMP/procs-settled.tsv" "$PROCS_FILE" 2>/dev/null || :
   fi
 }
 
@@ -1065,6 +1258,22 @@ render_human() {
   if [ -n "$STALL_SOME10" ]; then
     printf '  some  avg10=%s  avg60=%s        (at least one task stalled)\n' "$STALL_SOME10" "$STALL_SOME60"
     printf '  full  avg10=%s  avg60=%s        (every task stalled)\n' "$STALL_FULL10" "$STALL_FULL60"
+    # Shown so a reader can see whether the zeros above are a live account or an
+    # absent one. Monotonic since boot: evidence, never a trigger - and the
+    # caption claims only what the counters can carry. Counters that have
+    # themselves recorded nothing prove nothing, and this is the one shape where
+    # the io control could not settle it either, so the reading says that rather
+    # than captioning a zero as evidence.
+    if [ "$STALL_SOME_TOTAL" -gt 0 ] || [ "$STALL_FULL_TOTAL" -gt 0 ]; then
+      printf '  since boot: some %sus, full %sus  (proof the averages are accounted)\n' \
+        "$STALL_SOME_TOTAL" "$STALL_FULL_TOTAL"
+    elif [ "$STALL_IO_CONTROL" = unreadable ]; then
+      printf '  since boot: some 0us, full 0us  (this account has recorded nothing at all, and %s could not be read as a control, so these zeros are not shown to be a measurement)\n' \
+        "$PRESSURE_IO"
+    else
+      printf '  since boot: some 0us, full 0us  (this account has recorded nothing at all, and %s is flat too, so nothing here tells a quiet machine from a kernel that does not account memory pressure)\n' \
+        "$PRESSURE_IO"
+    fi
   else
     printf '  UNMEASURED - see the unmeasured section below\n'
   fi
@@ -1249,6 +1458,8 @@ render_json() {
     --arg swap_free_kb "${SWAP_FREE_KB:-}" \
     --arg some10 "${STALL_SOME10:-}" --arg some60 "${STALL_SOME60:-}" \
     --arg full10 "${STALL_FULL10:-}" --arg full60 "${STALL_FULL60:-}" \
+    --arg some_total "${STALL_SOME_TOTAL:-}" --arg full_total "${STALL_FULL_TOTAL:-}" \
+    --arg io_control "${STALL_IO_CONTROL:-}" \
     --rawfile unmeasured "$UNMEASURED_FILE" \
     --rawfile accounts "$ACCOUNTS_FILE" \
     --rawfile procs "$PROCS_FILE" \
@@ -1280,7 +1491,15 @@ render_json() {
       },
       stall: {
         some_avg10: num($some10), some_avg60: num($some60),
-        full_avg10: num($full10), full_avg60: num($full60)
+        full_avg10: num($full10), full_avg60: num($full60),
+        # Proof that the averages above mean something, never a trigger: this
+        # counter is monotonic since boot and so can never fall.
+        some_total_us: num($some_total), full_total_us: num($full_total),
+        # Which state the io control was in when the readability test needed
+        # it, and null when it needed no control at all. A control that could
+        # not be read is not a control that read zero, and this is where the
+        # two are told apart.
+        io_control: (if $io_control == "" then null else $io_control end)
       },
       accounts: ($accounts | lines | map(split("\t") | . as $f | {
         uid: $f[0], account: $f[1],
@@ -1330,6 +1549,7 @@ if [ "$PS_OK" -eq 1 ]; then
   fi
   build_records
   store_sample
+  settle_growth_scope
 else
   : > "$PROCS_FILE"
   : > "$CANDIDATES_FILE"

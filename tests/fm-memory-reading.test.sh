@@ -451,26 +451,54 @@ test_growth_with_no_prior_sample_is_unmeasured_never_zero() {
   pass "growth with no prior sample is reported unmeasured, never as zero growth"
 }
 
-test_an_unreadable_prior_sample_is_an_instrument_failure() {
+test_a_sample_path_no_replacement_can_overwrite_stays_unmeasured() {
   local dir="$TMP_ROOT/unreadable-sample" out status=0
   new_scene "$dir"
+  # A directory, not a file. Storing writes aside and moves into place, and a
+  # move onto a directory lands INSIDE it, so this prior would survive every
+  # replacement - which is why it is the one unusable prior the fresh sample
+  # below is not allowed to soften.
   mkdir "$dir/samples"
   out=$(run_reading "$dir") || status=$?
-  expect_code 3 "$status" "an existing unreadable stored sample"
-  assert_contains "$out" 'growth-sample' 'the failed growth instrument was not named'
-  assert_contains "$out" 'exists but could not be read' 'the unreadable sample was reported absent'
-  pass "an unreadable stored sample is incomplete, not scoped"
+  expect_code 3 "$status" "a stored sample path that is not a regular file"
+  assert_contains "$out" 'growth-sample-path' \
+    'the one growth failure no later run can repair was not named under its own input'
+  assert_contains "$out" 'is not a regular file' 'the unwritable sample path was not named'
+  assert_not_contains "$out" 'takes its place' 'a prior no replacement can overwrite was reported as replaced'
+  pass "a stored sample path no fresh sample can overwrite stays unmeasured"
 }
 
-test_a_stale_prior_sample_is_unmeasured_rather_than_meaningless() {
-  local dir="$TMP_ROOT/stale" out status=0
+test_an_unusable_prior_is_replaced_rather_than_reported_as_blindness() {
+  local dir="$TMP_ROOT/stale" out status=0 stored
   new_scene "$dir"
+  # A host frozen for hours comes back to exactly this: a stored sample far too
+  # old to divide by. The instrument is not broken, and saying it is relays a
+  # machine nobody could measure as a machine nobody can see.
   write_sample "$dir/samples" $((NOW - 100000)) "1000=$((NOW - 600)):1000"
   out=$(run_reading "$dir") || status=$?
-  expect_code 3 "$status" "a stale stored sample"
-  assert_contains "$out" 'growth unmeasured for every process above' 'a stale sample was used as if current'
+  expect_code 0 "$status" "a stale stored sample this run replaces"
+  assert_contains "$out" 'growth scoped for every process above' 'a replaced stale sample was still reported as blindness'
+  assert_not_contains "$out" 'growth unmeasured for every process above' 'a replaced stale sample was reported unmeasured'
   assert_contains "$out" 'past the' 'the staleness reason is missing'
-  pass "a prior sample older than the growth window is reported unmeasured"
+  assert_contains "$out" 'takes its place' 'the reading did not say the unusable sample was replaced'
+  assert_not_contains "$out" '+0.0 MiB/min' 'a replaced sample produced a growth rate it never measured'
+  # The replacement is the whole claim, so it is read back rather than assumed.
+  stored=$(awk '/^epoch /{print $2}' "$dir/samples")
+  [ "$stored" = "$NOW" ] || fail "the unusable stored sample was not replaced with this run's own (epoch $stored)"
+  pass "an unusable stored sample is discarded and replaced rather than reported as blindness"
+}
+
+test_an_unusable_prior_nothing_replaces_is_still_unmeasured() {
+  local dir="$TMP_ROOT/stale-nostore" out status=0
+  new_scene "$dir"
+  write_sample "$dir/samples" $((NOW - 100000)) "1000=$((NOW - 600)):1000"
+  # --no-store takes no fresh sample, so the next run would be just as blind.
+  # The softer word is earned by the replacement, and there is none here.
+  out=$(run_reading "$dir" --no-store) || status=$?
+  expect_code 3 "$status" "a stale stored sample nothing replaces"
+  assert_contains "$out" 'growth unmeasured for every process above' 'an unreplaced stale sample was reported as scope'
+  assert_contains "$out" 'nothing replaces it' 'the reading did not say why the stale sample stood'
+  pass "an unusable stored sample nothing replaces stays unmeasured"
 }
 
 test_too_short_an_interval_is_scoped_rather_than_divided_by() {
@@ -540,22 +568,32 @@ test_the_observed_delayed_interval_remains_measurable() {
   pass "the observed 926-second delayed interval remains measurable"
 }
 
-test_an_interval_past_the_new_ceiling_stays_unmeasured() {
+test_an_interval_past_the_ceiling_is_never_divided_by() {
   local dir="$TMP_ROOT/past-window" out line status=0
   new_scene "$dir"
   write_sample "$dir/samples" $((NOW - 1261)) "1000=$((NOW - 2000)):1000"
+  # Replacing the sample is not the same as accepting it. The ceiling still
+  # refuses to divide by this interval; what changed is that the refusal is
+  # repaired in the same run instead of being reported as a broken instrument.
   out=$(run_reading "$dir") || status=$?
-  expect_code 3 "$status" "an interval past the 1260-second ceiling"
-  assert_contains "$out" 'growth unmeasured for every process above' 'an over-age sample was treated as measured'
-  assert_contains "$out" 'past the 1260s window' 'the new ceiling was not named in the blindness report'
+  expect_code 0 "$status" "an over-age sample this run replaces"
+  assert_contains "$out" 'past the 1260s window' 'the ceiling was not named in the growth report'
   line=$(process_line_from_section "$out" 'LARGEST TRACKED PROCESSES' 1000)
-  assert_contains "$line" 'unmeasured' 'an over-age process was not marked unmeasured'
+  assert_contains "$line" 'scoped' 'an over-age process was not marked scoped'
   assert_not_contains "$line" 'MiB/min' 'an over-age sample produced a growth rate'
-  pass "an interval past the new ceiling remains explicitly unmeasured"
+
+  write_sample "$dir/samples" $((NOW - 1261)) "1000=$((NOW - 2000)):1000"
+  status=0
+  out=$(run_reading "$dir" --no-store) || status=$?
+  expect_code 3 "$status" "an over-age sample nothing replaces"
+  assert_contains "$out" 'growth unmeasured for every process above' 'an over-age sample nothing replaced was treated as scope'
+  line=$(process_line_from_section "$out" 'LARGEST TRACKED PROCESSES' 1000)
+  assert_not_contains "$line" 'MiB/min' 'an over-age sample produced a growth rate'
+  pass "an interval past the ceiling is never divided by, replaced or not"
 }
 
-test_corrupt_and_future_samples_force_incomplete_readings() {
-  local dir="$TMP_ROOT/badsample" out status case_name
+test_corrupt_and_future_samples_are_replaced_or_reported() {
+  local dir="$TMP_ROOT/badsample" out status case_name stored
   for case_name in corrupt future; do
     rm -rf "$dir"
     new_scene "$dir"
@@ -564,11 +602,20 @@ test_corrupt_and_future_samples_force_incomplete_readings() {
       future) write_sample "$dir/samples" $((NOW + 60)) "1000=$((NOW - 600)):512000" ;;
     esac
     status=0
-    out=$(run_reading "$dir") || status=$?
-    expect_code 3 "$status" "a $case_name stored sample"
+    out=$(run_reading "$dir" --no-store) || status=$?
+    expect_code 3 "$status" "a $case_name stored sample nothing replaces"
     assert_contains "$out" 'growth-sample' "a $case_name sample did not name the failed input"
+    assert_not_contains "$out" 'growth-sample-path' \
+      "a $case_name sample a later storing run repairs was named as the permanent failure"
+
+    status=0
+    out=$(run_reading "$dir") || status=$?
+    expect_code 0 "$status" "a $case_name stored sample this run replaces"
+    assert_contains "$out" 'takes its place' "a $case_name sample was not reported as replaced"
+    stored=$(awk '/^epoch /{print $2}' "$dir/samples")
+    [ "$stored" = "$NOW" ] || fail "a $case_name stored sample was not replaced (epoch $stored)"
   done
-  pass "corrupt and future-dated samples force incomplete readings"
+  pass "corrupt and future-dated samples are replaced when storing and reported when not"
 }
 
 test_sample_body_failures_are_not_first_sightings() {
@@ -587,10 +634,16 @@ EOF
     printf 'exec %q "$@"\n' "$real_awk"
   } > "$dir/bin/awk"
   chmod +x "$dir/bin/awk"
-  out=$(run_reading "$dir" "PATH=$dir/bin:$PATH" "FAIL_SAMPLE=$dir/samples") || status=$?
-  expect_code 3 "$status" "a sample whose body could not be read"
+  out=$(run_reading "$dir" --no-store "PATH=$dir/bin:$PATH" "FAIL_SAMPLE=$dir/samples") || status=$?
+  expect_code 3 "$status" "a sample whose body could not be read and nothing replaces"
   assert_contains "$out" 'stored sample body could not be read' 'the failed sample body was not named'
   assert_not_contains "$out" 'first sighting of this process' 'the failed sample body became ordinary first sightings'
+
+  status=0
+  out=$(run_reading "$dir" "PATH=$dir/bin:$PATH" "FAIL_SAMPLE=$dir/samples") || status=$?
+  expect_code 0 "$status" "a sample whose body could not be read and this run replaces"
+  assert_contains "$out" 'stored sample body could not be read' 'the replaced sample body was not named'
+  assert_not_contains "$out" 'first sighting of this process' 'a replaced sample body became ordinary first sightings'
 
   rm -rf "$dir"
   new_scene "$dir"
@@ -624,15 +677,22 @@ EOF
   write_sample "$dir/samples" $((NOW - 300))
   printf 'not-a-pid\t123\t456\n' >> "$dir/samples"
   status=0
-  out=$(run_reading "$dir") || status=$?
+  out=$(run_reading "$dir" --no-store) || status=$?
   expect_code 3 "$status" "a stored sample with no usable process records"
   assert_contains "$out" 'carries no usable process records' 'an all-bad sample body was not refused'
 
   write_sample "$dir/samples" $((NOW - 300))
   status=0
-  out=$(run_reading "$dir") || status=$?
+  out=$(run_reading "$dir" --no-store) || status=$?
   expect_code 3 "$status" "a stored sample with an empty process body"
   assert_contains "$out" 'carries no usable process records' 'an empty sample body was not refused'
+
+  write_sample "$dir/samples" $((NOW - 300))
+  status=0
+  out=$(run_reading "$dir") || status=$?
+  expect_code 0 "$status" "an empty sample body this run replaces"
+  assert_contains "$out" 'carries no usable process records' 'a replaced empty sample body was not named'
+  assert_not_contains "$out" 'first sighting of this process' 'a replaced empty sample body became ordinary first sightings'
   pass "sample body failures are incomplete while isolated malformed records are dropped and counted"
 }
 
@@ -675,11 +735,126 @@ test_a_genuinely_calm_stall_reading_is_not_confusable_with_a_blind_one() {
   pass "a measured calm stall and an unreadable one differ in text and in exit status"
 }
 
+test_a_kernel_that_accounts_no_memory_pressure_is_unmeasured_not_calm() {
+  # Measured on a WSL seat on 2026-08-28: every memory pressure average 0.00 AND
+  # a cumulative total of exactly zero over 3,526 seconds of uptime, while the io
+  # counter stood at 2,063,189. Pressure accounting worked there; only the memory
+  # account was flat. From a single read that is indistinguishable from a quiet
+  # machine, so the reading has to prove the account is live rather than trust
+  # that the file answered.
+  local dir="$TMP_ROOT/flatmem" out status=0
+  new_scene "$dir"
+  printf 'some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n' > "$dir/pressure"
+  printf 'some avg10=0.00 avg60=0.00 avg300=0.00 total=2063189\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=1031594\n' > "$dir/io-pressure"
+  out=$(run_reading "$dir" "FM_MEMORY_PRESSURE_IO=$dir/io-pressure") || status=$?
+
+  expect_code 3 "$status" "a kernel that accounts no memory pressure"
+  assert_contains "$out" 'memory-reading: INCOMPLETE' \
+    'a flat memory account beside a live io account was accepted as a complete reading'
+  assert_contains "$out" 'accounted exactly zero memory stall since boot' \
+    'the reading did not say why it distrusts these zeros'
+  assert_not_contains "$(stall_block "$out")" 'avg10=' \
+    'the reading printed stall averages it had just decided were meaningless'
+
+  # The control: same flat memory account, but io is flat too, so nothing proves
+  # this kernel accounts pressure at all and the zeros are not called dead.
+  printf 'some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n' > "$dir/io-pressure"
+  status=0
+  out=$(run_reading "$dir" "FM_MEMORY_PRESSURE_IO=$dir/io-pressure") || status=$?
+  expect_code 0 "$status" "a freshly booted machine with both accounts still at zero"
+  assert_contains "$(stall_block "$out")" 'avg10=0.00' \
+    'a machine with no pressure accounted anywhere yet must not be called blind on that alone'
+  pass "a kernel that accounts pressure but not memory pressure reports unmeasured, never calm"
+}
+
+test_an_io_control_nobody_could_read_is_told_apart_from_a_flat_one() {
+  # Both leave the memory account's zeros standing, so from the verdict alone
+  # they are the same outcome - but "the control has accounted no pressure
+  # anywhere yet" and "the control could not be read at all" are different
+  # facts, and this reader never reports an instrument it could not read as a
+  # zero. The reading's own json (schema fm-memory-reading.v1) is the contract
+  # where it says which of the two it was.
+  local dir="$TMP_ROOT/iocontrol" out
+  new_scene "$dir"
+  printf 'some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n' > "$dir/pressure"
+
+  printf 'some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n' > "$dir/io-pressure"
+  out=$(run_reading "$dir" --json "FM_MEMORY_PRESSURE_IO=$dir/io-pressure")
+  [ "$(printf '%s' "$out" | jq -r '.stall.io_control')" = flat ] \
+    || fail 'an io control that read zero was not reported as a flat account'
+
+  rm -f "$dir/io-pressure"
+  out=$(run_reading "$dir" --json "FM_MEMORY_PRESSURE_IO=$dir/io-pressure")
+  [ "$(printf '%s' "$out" | jq -r '.stall.io_control')" = unreadable ] \
+    || fail 'an io control that could not be read was reported as though it had read zero'
+
+  printf 'some avg10=0.00 avg60=0.00 avg300=0.00 total=2063189\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=1031594\n' > "$dir/io-pressure"
+  out=$(run_reading "$dir" --json "FM_MEMORY_PRESSURE_IO=$dir/io-pressure" || true)
+  [ "$(printf '%s' "$out" | jq -r '.stall.io_control')" = live ] \
+    || fail 'a live io control was not named as the control that condemned the memory account'
+
+  # A machine whose memory account is not flat needs no control at all, so the
+  # reading says it consulted none rather than inventing a reading of one.
+  make_pressure_calm "$dir/pressure"
+  out=$(run_reading "$dir" --json "FM_MEMORY_PRESSURE_IO=$dir/io-pressure")
+  [ "$(printf '%s' "$out" | jq -r '.stall.io_control')" = null ] \
+    || fail 'the reading claimed an io control state on a run that never needed one'
+  pass "an io control that could not be read is told apart from one that read zero"
+}
+
+test_the_cumulative_counter_is_carried_as_proof_and_never_as_a_trigger() {
+  # The counter is monotonic since boot, so anything that fired on it could never
+  # recover. It is carried so a reader can check the averages mean something.
+  local dir="$TMP_ROOT/totals" out
+  new_scene "$dir"
+  out=$(run_reading "$dir" --json)
+  [ "$(printf '%s' "$out" | jq -r '.stall.some_total_us')" = 5135032 ] \
+    || fail 'the json did not carry the cumulative some counter'
+  [ "$(printf '%s' "$out" | jq -r '.stall.full_total_us')" = 4911577 ] \
+    || fail 'the json did not carry the cumulative full counter'
+  pass "the cumulative stall counters are carried in the reading as proof the averages are live"
+}
+
+test_counters_that_recorded_nothing_are_not_captioned_as_proof() {
+  # The human render is this reading's own reported output, and the caption
+  # beside the counters is a claim about them. A live account can carry that
+  # claim; an account that has recorded nothing at all cannot, and both totals
+  # at zero beside a control that settles nothing is exactly the residual
+  # docs/memory-alarm.md records under what the alarm cannot see.
+  local dir="$TMP_ROOT/proofcaption" out stall
+  new_scene "$dir"
+  out=$(run_reading "$dir")
+  stall=$(stall_block "$out")
+  assert_contains "$stall" 'proof the averages are accounted' \
+    'a live account did not carry the counters as proof'
+
+  printf 'some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n' > "$dir/pressure"
+  printf 'some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n' > "$dir/io-pressure"
+  out=$(run_reading "$dir" "FM_MEMORY_PRESSURE_IO=$dir/io-pressure")
+  stall=$(stall_block "$out")
+  assert_not_contains "$stall" 'proof the averages are accounted' \
+    'counters that have recorded nothing were captioned as proof they had'
+  assert_contains "$stall" 'recorded nothing at all' \
+    'the reading did not say the counters carry no evidence'
+  assert_contains "$stall" 'is flat too' \
+    'the reading did not name the control that failed to settle it'
+
+  rm -f "$dir/io-pressure"
+  out=$(run_reading "$dir" "FM_MEMORY_PRESSURE_IO=$dir/io-pressure")
+  stall=$(stall_block "$out")
+  assert_not_contains "$stall" 'proof the averages are accounted' \
+    'counters that have recorded nothing were captioned as proof they had'
+  assert_contains "$stall" 'could not be read as a control' \
+    'a control nobody could read was not told apart from one that read zero'
+  pass "counters that have recorded nothing are not captioned as proof"
+}
+
 test_each_unreadable_input_is_named_and_forces_a_non_zero_exit() {
   local dir="$TMP_ROOT/badinputs" out status case_name
 
   # Every case is an input constructed to be bad on purpose.
   for case_name in pressure-empty pressure-garbage pressure-missing \
+                   pressure-no-totals \
                    meminfo-empty meminfo-garbage meminfo-no-available \
                    ps-fails ps-empty ps-malformed cgroup-absent home-unreadable; do
     rm -rf "$dir"
@@ -689,6 +864,7 @@ test_each_unreadable_input_is_named_and_forces_a_non_zero_exit() {
       pressure-empty)      : > "$dir/pressure" ;;
       pressure-garbage)    printf 'nothing about memory here\n' > "$dir/pressure" ;;
       pressure-missing)    rm -f "$dir/pressure" ;;
+      pressure-no-totals)  printf 'some avg10=0.00 avg60=0.00 avg300=0.00\nfull avg10=0.00 avg60=0.00 avg300=0.00\n' > "$dir/pressure" ;;
       meminfo-empty)       : > "$dir/meminfo" ;;
       meminfo-garbage)     printf 'MemTotal: not-a-number\n' > "$dir/meminfo" ;;
       meminfo-no-available) printf 'MemTotal: 24019276 kB\nMemFree: 100 kB\n' > "$dir/meminfo" ;;
@@ -774,6 +950,53 @@ test_sample_storage_failure_is_visible_and_no_store_is_scoped() {
   expect_code 0 "$status" "--no-store with unavailable storage"
   assert_contains "$out" 'UNMEASURED INPUTS (0)' '--no-store registered a persistence failure'
   pass "sample storage failures exit 3 while --no-store remains successful"
+}
+
+test_an_unusable_prior_whose_replacement_did_not_land_is_not_reported_as_replaced() {
+  local dir="$TMP_ROOT/prior-store-failed" out status=0 err
+  new_scene "$dir"
+  mkdir -p "$dir/locked"
+  # An aged prior that IS readable, so the run reaches the unusable-prior path
+  # and means to replace it, beside a directory the replacement cannot be
+  # written into. That is the shape an unwritable state directory produces.
+  write_sample "$dir/locked/samples" $((NOW - 1400)) "1000=$((NOW - 3000)):512000"
+  chmod a-w "$dir/locked"
+  if ( : > "$dir/locked/probe" ) 2>/dev/null; then
+    rm -f "$dir/locked/probe"; chmod u+w "$dir/locked"
+    printf 'ok - SKIP directory write permissions do not restrict this user\n'
+    return
+  fi
+
+  # The two streams are kept apart on purpose. Merging them would absorb any raw
+  # interpreter error into the report and make both faults below invisible.
+  err="$dir/store-stderr"
+  out=$(run_reading "$dir" "FM_MEMORY_SAMPLES=$dir/locked/samples" 2>"$err") || status=$?
+  chmod u+w "$dir/locked"
+  expect_code 3 "$status" "an unusable prior whose replacement could not be stored"
+  assert_contains "$out" 'growth-sample-store' \
+    'a scope verdict resting on a store that never landed was not named as a failed input'
+  assert_not_contains "$out" 'takes its place' \
+    'the reading claimed a replacement that provably did not happen'
+  assert_contains "$out" 'sample-storage' 'the storage failure itself was not named'
+  # The step named must be the one that actually failed: the temporary file this
+  # run writes aside, not the target it never got as far as replacing.
+  assert_contains "$out" "$dir/locked/samples." \
+    'the storage failure named the target rather than the temporary file it could not write'
+  assert_not_contains "$out" 'could not be replaced' \
+    'a temporary file that could not be opened was reported as a failed replacement'
+  # A monitoring check speaks in its own voice and in no other.
+  [ ! -s "$err" ] || fail "the reading leaked to its own stderr: $(cat "$err")"
+
+  # The same aged prior with a writable destination: the replacement lands, so
+  # the verdict and its wording stay exactly as they were.
+  status=0
+  write_sample "$dir/samples" $((NOW - 1400)) "1000=$((NOW - 3000)):512000"
+  out=$(run_reading "$dir") || status=$?
+  expect_code 0 "$status" "an unusable prior this run did replace"
+  assert_contains "$out" 'takes its place' 'a replacement that landed was not reported as scope'
+  assert_not_contains "$out" 'growth-sample-store' \
+    'a replacement that landed was reported as a lost growth instrument'
+  pass "a replacement that did not land is never reported as one that did"
 }
 
 # --- machine-readable form ---------------------------------------------------
@@ -875,24 +1098,30 @@ test_wake_delivery_is_labelled_protected_however_small
 test_a_worker_that_merely_mentions_the_delivery_script_is_not_labelled
 test_growth_separates_a_large_steady_process_from_a_fast_growing_one
 test_growth_with_no_prior_sample_is_unmeasured_never_zero
-test_an_unreadable_prior_sample_is_an_instrument_failure
-test_a_stale_prior_sample_is_unmeasured_rather_than_meaningless
+test_a_sample_path_no_replacement_can_overwrite_stays_unmeasured
+test_an_unusable_prior_is_replaced_rather_than_reported_as_blindness
+test_an_unusable_prior_nothing_replaces_is_still_unmeasured
 test_too_short_an_interval_is_scoped_rather_than_divided_by
 test_a_short_explicit_interval_uses_the_same_floor
 test_an_explicit_floor_override_preserves_the_short_survey
 test_the_watcher_interval_still_reports_a_real_rate
 test_the_observed_delayed_interval_remains_measurable
-test_an_interval_past_the_new_ceiling_stays_unmeasured
-test_corrupt_and_future_samples_force_incomplete_readings
+test_an_interval_past_the_ceiling_is_never_divided_by
+test_corrupt_and_future_samples_are_replaced_or_reported
 test_sample_body_failures_are_not_first_sightings
 test_a_reused_pid_is_not_reported_as_growth
 test_a_genuinely_calm_stall_reading_is_not_confusable_with_a_blind_one
+test_a_kernel_that_accounts_no_memory_pressure_is_unmeasured_not_calm
+test_an_io_control_nobody_could_read_is_told_apart_from_a_flat_one
+test_the_cumulative_counter_is_carried_as_proof_and_never_as_a_trigger
+test_counters_that_recorded_nothing_are_not_captioned_as_proof
 test_each_unreadable_input_is_named_and_forces_a_non_zero_exit
 test_a_cgroup_tree_nobody_read_is_not_reported_as_an_account_with_no_session
 test_a_nonsearchable_cgroup_tree_is_unmeasured
 test_an_account_with_no_readable_slice_still_gets_its_process_total
 test_a_malformed_account_slice_file_forces_an_incomplete_reading
 test_sample_storage_failure_is_visible_and_no_store_is_scoped
+test_an_unusable_prior_whose_replacement_did_not_land_is_not_reported_as_replaced
 test_the_json_form_carries_the_same_completeness_verdict
 test_the_reading_does_not_kill_or_limit
 test_usage_errors_exit_two

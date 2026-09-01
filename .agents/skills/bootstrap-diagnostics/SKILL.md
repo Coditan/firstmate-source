@@ -139,7 +139,7 @@ When any diagnostic needs captain attention, report the plain consequence and re
   `armed ... and has never completed a round` or `stopped being checked` means the check exists but the monitoring service is not running it, which is a supervision fault rather than a currency one: repair it through the emitted supervision instructions, exactly as for a lapsed watcher.
   Never treat this line as a currency verdict - it says the instrument is not reading, not that this home is behind.
   The findings the round itself raises arrive as a `check:` wake, not here; run `bin/fm-currency-round.sh --status` for the full round when you need every reading.
-- `MEMORY_ALARM: <detail>` - nothing is watching this machine for RAM-headroom loss and runaway growth; swap is a shock absorber rather than an all-clear, and any future memory limit is outside this alarm.
+- `MEMORY_ALARM: <detail>` - nothing is watching this machine for RAM-headroom loss, runaway growth, or memory stall held continuously past the window; swap is a shock absorber rather than an all-clear, and any future memory limit is outside this alarm.
   `nothing is watching` or `could not be armed` means the alarm was never installed or the arm failed; run `bin/fm-memory-alarm.sh --arm` and report the reason if it refuses.
   `has never completed a reading` or `has stopped running` means the alarm exists but the monitoring service is not running it, which is a supervision fault rather than a memory one: repair it through the emitted supervision instructions, exactly as for a lapsed watcher.
   Never read this line as a verdict on memory - it says the instrument is not reading, not that this machine is fine; `bin/fm-memory-alarm.sh --status` gives the current reading when you need it.

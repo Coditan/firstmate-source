@@ -49,7 +49,7 @@ Every reading prints the installations it read, and anything they do not cover i
 That boundary is permanent and known in advance, so it is reported as declared scope rather than as an instrument failure.
 Treating it as unmeasured would make incompleteness the permanent norm and destroy the signal the exit status carries.
 The remedy is to run the reading from the other installation too, or to point `--home` at records this account can read.
-The captain chose the same scope treatment for an account with no active session slice, an ordinary first run with no stored growth sample, and a stored or explicit sample interval younger than the minimum interval.
+The captain chose the same scope treatment for an account with no active session slice, an ordinary first run with no stored growth sample, a stored or explicit sample interval younger than the minimum interval, and - since 2026-08-30 - a stored sample this run cannot use but does replace with its own, which puts the reading in the same known absence a first run is already in.
 Those are known absences or operator cadence, not failed instruments.
 If they forced exit 3, the alarm would learn to discount the failure status it must consume.
 The wall-clock and peak-memory cost figures measure the reading itself rather than machine memory.
@@ -107,10 +107,12 @@ The third line is the honest case: a 599 MiB worker of another account, named an
 
 ### A calm reading and a blind one are not confusable
 
-The sharpest pair, because both look calm:
+The sharpest pair, because both look calm.
+A file whose averages really are zero is only reported `complete` when its cumulative `total=` counters corroborate those zeros: either they are non-zero, so this kernel has accounted memory stall at some point and is simply quiet now, or the io control is flat as well, so nothing distinguishes a dead account from a machine that has just booted.
+Zero averages beside a cumulative total of exactly zero, on a kernel whose io account is live, are an absent measurement rather than a quiet machine, and are reported unmeasured.
 
 ```
-$ FM_MEMORY_PRESSURE=<file with real zero averages> ./bin/fm-memory-reading.sh
+$ FM_MEMORY_PRESSURE=<file with real zero averages over non-zero totals> ./bin/fm-memory-reading.sh
 memory-reading: complete - every input in scope was measured
   some  avg10=0.00  avg60=0.00
 exit 0
@@ -128,6 +130,8 @@ Every deliberately bad input constructed, and what the reading said:
 | stall file empty | 3 | `stall`: carries no recognisable some/full averages |
 | stall file holding unrelated text | 3 | `stall`: carries no recognisable some/full averages |
 | stall file absent | 3 | `stall`: this kernel exposes no memory pressure metric |
+| stall file with averages but no some/full `total=` counters | 3 | `stall`: carries no recognisable some/full total counters, so its averages cannot be shown to mean anything |
+| stall file flat at zero, both totals zero, beside a live io account | 3 | `stall`: this kernel accounts pressure but not memory pressure, so its zeros are an absent measurement rather than a quiet machine |
 | headroom file empty | 3 | `headroom`: no usable MemTotal/MemAvailable pair |
 | headroom file with a non-numeric MemTotal | 3 | `headroom`: no usable MemTotal/MemAvailable pair |
 | headroom file with MemTotal but no MemAvailable | 3 | `headroom`: no usable MemTotal/MemAvailable pair |
@@ -145,17 +149,24 @@ The cgroup case was found by constructing it.
 A bogus cgroup root originally exited 0, because every account then reported "no active session slice" - the identical wording a genuinely logged-out account produces.
 That is the same defect in miniature, so the reading now establishes once whether the tree was readable at all and separates the two.
 
-Growth has its own set, because an unmeasurable growth rate is the easiest thing in the reading to report as zero:
+Growth has its own set, because an unmeasurable growth rate is the easiest thing in the reading to report as zero.
+Several rows below turn on whether the run is storing, and the rule is one rule: a stored sample this run cannot use is an **unusable prior**, and an unusable prior that this run REPLACES with its own sample is scope, because the reading is then in the same known absence a first run on a new home is already in.
+An unusable prior that nothing replaces stays unmeasured, because the next run would be just as blind as this one.
+`--no-store` never replaces one, and a replacement that could not be written is reported as `sample-storage` and makes the reading incomplete anyway.
+Because that promise is what earns the softer word, a scope verdict resting on it is not settled until the store has been attempted: a sample that did not land turns it into the `unmeasured` input `growth-sample-store`, and a run that stored keeps the verdict and its wording exactly.
+`docs/memory-alarm.md` "A stored sample this run cannot use" owns why that distinction exists.
 
 | Condition | Reported as |
 | --------- | ----------- |
-| no prior sample | scope, "nothing to compare against" - never `+0.0 MiB/min`; exit 0 remains possible |
-| stored sample has no usable epoch | `unmeasured` input `growth-sample`; exit 3 |
-| stored sample body cannot be read | `unmeasured` input `growth-sample`; never converted into first sightings; exit 3 |
+| no prior sample | scope, "nothing to compare against" - never `+0.0 MiB/min`; exit 0 remains possible, unless this run's own sample could not be stored |
+| this run's replacement sample could not be stored | the scope verdict that rested on it becomes `unmeasured` input `growth-sample-store`, beside `sample-storage`; exit 3, because the next run is no better placed than this one |
+| stored sample has no usable epoch | unusable prior: scope when this run replaces it, `unmeasured` input `growth-sample` and exit 3 when it does not |
+| stored sample body cannot be read | unusable prior, same rule; never converted into first sightings either way |
 | stored sample contains some malformed process records | malformed records are dropped, counted in the growth section and JSON, and growth is measured from the remaining records; exit 0 remains possible |
-| stored sample has no usable process records | `unmeasured` input `growth-sample`; exit 3 |
-| stored sample is future-dated | `unmeasured` input `growth-sample`; exit 3 |
-| stored sample older than the growth window | `unmeasured` input `growth-sample`, with the age and window; exit 3 |
+| stored sample has no usable process records | unusable prior, same rule |
+| stored sample is future-dated | unusable prior, same rule |
+| stored sample older than the growth window | unusable prior, same rule, and the age and window are always named |
+| stored sample path is not a regular file | `unmeasured` input `growth-sample-path`; exit 3, whatever the mode, because no replacement can be written over it. Its own input name, not `growth-sample`, because this is the one growth failure no later run repairs, and `bin/fm-memory-alarm.sh` reads that name to decide the horizon is blind rather than merely scoped |
 | stored or explicit interval shorter than the divide-by floor | scope, with the interval and floor; exit 0 remains possible |
 | second process-table read fails during `--interval` | `unmeasured` input `growth-sample`; exit 3 |
 | the pid now belongs to a later process | per-process `unmeasured`, "different, later process" - never counted as growth |
