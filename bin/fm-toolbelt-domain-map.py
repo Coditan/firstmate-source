@@ -21,6 +21,11 @@ from pathlib import Path
 
 
 MAP_PATH = Path("docs/command-domain-map.md")
+REFERENCE_EXCLUDE_PATHS = {
+    MAP_PATH,
+    Path("docs/scripts.md"),
+    Path("bin/fm-toolbelt-domain-map.py"),
+}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -534,7 +539,7 @@ def references_for(root: Path, command: Path, tracked_texts: dict[Path, str]) ->
     needle = command.name
     for path, text in tracked_texts.items():
         rel = path.relative_to(root)
-        if rel == MAP_PATH or rel == Path("docs/scripts.md"):
+        if rel in REFERENCE_EXCLUDE_PATHS:
             continue
         if path == command or not path.is_file():
             continue

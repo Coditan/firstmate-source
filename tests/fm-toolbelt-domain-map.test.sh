@@ -99,13 +99,40 @@ SH
 }
 
 test_coverage_guard_runs_map_check() {
-  assert_grep 'run_toolbelt_domain_map_guard || rc=1' "$RUNNER" \
-    "fm-test-run.sh --check-coverage must run the command-domain map guard"
-  assert_grep 'bin/fm-toolbelt-domain-map.py' "$RUNNER" \
-    "changed-file selection must route mapper changes to this test family"
-  assert_contains "$("$RUNNER" --list tests/fm-toolbelt-domain-map.test.sh)" \
+  local tmp repo out rc
+  fm_test_tmproot tmp fm-toolbelt-map-runner
+  # shellcheck disable=SC2031 # fm_test_tmproot assigns the caller's variable by name.
+  repo="$tmp/repo"
+  mkdir -p "$repo/bin" "$repo/docs" "$repo/tests"
+  cp "$RUNNER" "$repo/bin/fm-test-run.sh"
+  chmod +x "$repo/bin/fm-test-run.sh"
+  cat >"$repo/bin/fm-toolbelt-domain-map.py" <<'PY'
+#!/usr/bin/env python3
+import sys
+print("fixture-domain-map-check-ran", file=sys.stderr)
+sys.exit(1)
+PY
+  chmod +x "$repo/bin/fm-toolbelt-domain-map.py"
+  cat >"$repo/docs/scripts.md" <<'MD'
+| Script | Purpose |
+| --- | --- |
+| `fm-test-run.sh` | Fixture runner. |
+MD
+  : >"$repo/tests/fm-toolbelt-domain-map.test.sh"
+  git -C "$repo" init -q
+  git -C "$repo" add .
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm baseline
+
+  rc=0
+  out=$("$repo/bin/fm-test-run.sh" --check-coverage 2>&1) || rc=$?
+  [ "$rc" -eq 1 ] || fail "--check-coverage returned $rc instead of the mapper guard failure"
+  assert_contains "$out" "fixture-domain-map-check-ran" \
+    "--check-coverage did not invoke the command-domain map check"
+
+  printf '# mapper changed\n' >>"$repo/bin/fm-toolbelt-domain-map.py"
+  assert_contains "$("$repo/bin/fm-test-run.sh" --list --changed --base HEAD)" \
     "tests/fm-toolbelt-domain-map.test.sh" \
-    "runner must know the command-domain map test"
+    "changed mapper path did not select the command-domain map test"
   pass "coverage guard owns command-domain map freshness"
 }
 
