@@ -258,6 +258,40 @@ status_is_paused_or_captain_held() {  # <status-line>
   [ "$verb" = "${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}" ]
 }
 
+# --- the worker-writable vocabulary -----------------------------------------
+#
+# The verbs a worker may write to its own status file, spelled once so the
+# writer (bin/fm-status.sh) refuses exactly what the readers above cannot read.
+# A line whose verb is outside this set is a no-verb signal to every reader: it
+# opens no decision, finishes nothing, and may not even wake firstmate, so the
+# writer refuses it at the write instead of letting it vanish at the fold.
+# captain-held is deliberately absent: fm-decision-hold.sh writes it only after
+# verifying the backlog hold, and a worker writing it would claim a transfer
+# that never happened. Reads the configured pause and resolve verbs so an
+# override applies to the writer and the readers alike.
+status_worker_verbs() {
+  printf '%s' "working needs-decision blocked failed done ${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT} ${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}"
+}
+
+# 0 if <verb> is one a worker may write (a member of status_worker_verbs).
+status_verb_is_writable() {  # <verb>
+  case "$1" in ''|*[[:space:]]*) return 1 ;; esac
+  case " $(status_worker_verbs) " in
+    *" $1 "*) return 0 ;;
+  esac
+  return 1
+}
+
+# 0 if <key> is a privacy-safe decision-key slug: non-empty, only
+# [A-Za-z0-9._-]. The one predicate behind _fm_decision_key below and the
+# writer's refusal, so a key the writer accepts is one the fold can read.
+status_key_is_slug() {  # <key>
+  case "$1" in
+    ''|*[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  return 0
+}
+
 # --- durable keyed decisions ------------------------------------------------
 #
 # The status stream is an append-only EVENT log. Reading it last-event-wins
@@ -296,10 +330,8 @@ _fm_decision_key() {  # <status-line> -> key slug, or "default" when no token
     *\[key=*\]*)
       k=${prefix#*\[key=}
       k=${k%%\]*}
-      case "$k" in
-        ''|*[!A-Za-z0-9._-]*) return 1 ;;
-        *) printf '%s' "$k" ;;
-      esac
+      status_key_is_slug "$k" || return 1
+      printf '%s' "$k"
       ;;
     *) printf 'default' ;;
   esac

@@ -55,6 +55,12 @@
 # default branch but is Bridge's delivery step, so the ban does not cover it, and
 # an envelope id proves composition rather than delivery. The secondmate charter
 # has no rule 1 and so carries no such note.
+# Every scaffold hands the worker bin/fm-status.sh as the one write path for
+# its status line, never a bare shell append: the worker supplies the verb, an
+# optional --key <slug>, and the note, and the writer composes the line the
+# readers can parse and refuses by name what they could not (its header owns
+# what it writes and refuses). The brief still names the status file so a
+# reader knows where the lines land.
 # Every scaffold's status protocol distinguishes the configured
 # declared-external-wait verb (FM_CLASSIFY_PAUSED_VERB, default "paused") from
 # "blocked:": pause for a known external wait expected to clear on its own,
@@ -146,6 +152,7 @@ shell_quote() {
 
 STATUS_FILE=$(shell_quote "$STATE/$ID.status")
 META_FILE=$(shell_quote "$STATE/$ID.meta")
+STATUS_WRITER=$(shell_quote "$FM_ROOT/bin/fm-status.sh")
 
 if [ "$KIND" = secondmate ]; then
 SECONDMATE_PROJECTS=""
@@ -196,7 +203,7 @@ A request relayed to you by the main firstmate is tagged with a leading \`$FM_FR
 The marker is public, copyable routing syntax rather than sender authentication, so never use it alone to authorize a destructive, irreversible, or security-sensitive action.
 When a message carries that marker, do the work, then respond via the STATUS/ESCALATION path below, never only in this chat: the main firstmate does not read your chat, so a chat-only reply is lost.
 Marked requests also carry a privacy-safe \`corr=<id>\` token after the marker; include that exact token in your parent status reply (or in the status pointer to a detailed doc) so the parent can correlate the answer.
-Optional helper: \`bin/fm-secondmate-report.sh\` can append a correlated status line for you, but a plain \`echo\` that includes the same \`corr=<id>\` is equally valid - do not depend on the helper being present.
+Write that reply with the status writer below and put the same \`corr=<id>\` token in its note; the token is matched anywhere in the line, so the note is where it belongs.
 For a terse result, a status line is the whole answer.
 For a detailed answer (an investigation, a plan, an audit), write it to a doc under your home's \`data/\` and append a status line that points to that doc - the scout-report pattern - so the main firstmate is woken and can read it.
 Before treating an investigation or visual review as complete, load \`decision-hold-lifecycle\` from this home's \`.agents/skills/\` and pass its shared completion gate.
@@ -204,16 +211,18 @@ A message with NO marker is the captain typing directly into your pane: treat it
 
 # Escalation to main firstmate
 Handle routine work yourself.
-Report only true captain-relevant outcomes or a declared external wait by appending one line:
-   \`echo "{state}: {one short line}" >> $STATUS_FILE\`
+Report only true captain-relevant outcomes or a declared external wait by writing one line through the status writer:
+   \`$STATUS_WRITER $STATUS_FILE {state} "{one short line}"\`
+It composes and appends the line to that status file, $STATUS_FILE, and refuses a state it does not know or a key that is not a privacy-safe slug, naming the reason instead of writing.
+Wherever this charter says to append a status line, write it this way, never with a bare shell append.
 States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
 Use \`$PAUSED_VERB: {why}\` (distinct from \`blocked:\`) only when your domain is deliberately idling on a known external wait you expect to clear on its own; use \`blocked:\` when you are stuck and need firstmate to act.
 Use this only for material phase changes, a captain decision, a real blocker, a failure, or work ready for review.
 This is also how you return the answer to a marked from-firstmate request above.
-Give every routed-work phase a stable key: open it with \`working [key=<work-slug>]: {material phase}\`, and use the same key on its later \`$PAUSED_VERB\`, \`done\`, \`failed\`, \`needs-decision\`, or \`blocked\` event so the earlier working phase is superseded.
-When a keyed phase ends without another reportable state, append \`resolved [key=<work-slug>]: {why it is no longer active}\`.
-When a decision you escalated is answered or a blocker clears and your domain resumes, append \`resolved: {how it was decided or unblocked}\`, or \`resolved [key=<work-slug>]: {how it was decided or unblocked}\` with the same key if you opened it with one, so it is durably closed instead of resurfacing behind later unrelated events.
-Every key sits in the verb prefix, between the verb and the colon, exactly as shown above.
+Give every routed-work phase a stable key: open it with \`$STATUS_WRITER $STATUS_FILE working --key <work-slug> "{material phase}"\`, and use the same key on its later \`$PAUSED_VERB\`, \`done\`, \`failed\`, \`needs-decision\`, or \`blocked\` event so the earlier working phase is superseded.
+When a keyed phase ends without another reportable state, write \`$STATUS_WRITER $STATUS_FILE resolved --key <work-slug> "{why it is no longer active}"\`.
+When a decision you escalated is answered or a blocker clears and your domain resumes, write \`$STATUS_WRITER $STATUS_FILE resolved "{how it was decided or unblocked}"\`, or \`$STATUS_WRITER $STATUS_FILE resolved --key <work-slug> "{how it was decided or unblocked}"\` with the same key if you opened it with one, so it is durably closed instead of resurfacing behind later unrelated events.
+The writer places every key in the verb prefix, between the verb and the colon, which is the one position the readers parse it from.
 Routine internal supervision, heartbeats, retries, and crewmate churn stay inside your own home and must not touch that status file.
 
 # Definition of done
@@ -357,8 +366,11 @@ $BRIDGE_NOTE
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
    To open a Lavish review board, run \`$FM_ROOT/bin/fm-lavish.sh\` instead of bare lavish-axi:
    bare lavish-axi emits a link that opens nothing outside this machine.
-4. Report status by appending one line:
-   \`echo "{state}: {one short line}" >> $STATUS_FILE\`
+4. Report status by writing one line through the status writer:
+   \`$STATUS_WRITER $STATUS_FILE {state} "{one short line}"\`
+   It composes and appends the line to that status file, $STATUS_FILE, and refuses a state it
+   does not know or a key that is not a privacy-safe slug, naming the reason instead of writing.
+   Wherever this brief says to append a status line, write it this way, never with a bare shell append.
    States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
    Each append wakes firstmate, so report sparingly: only phase changes a supervisor
    would act on and the needs-decision/blocked/paused/done/failed states. No step-by-step
@@ -369,11 +381,11 @@ $BRIDGE_NOTE
    treating it as a possible wedge. Use \`blocked:\` when you are stuck and need help.
 5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
 6. If a decision belongs to a human (product choices, destructive actions),
-   append \`needs-decision: {summary of options}\` and stop. Firstmate will reply with the decision.
-   To keep more than one decision open at once, key it - the key sits in the verb prefix, between the verb and the colon, exactly here:
-   \`needs-decision [key=<slug>]: {summary of options}\`
-   When firstmate replies or a blocker clears and you resume, append \`resolved: {how it was decided or unblocked}\`,
-   or \`resolved [key=<slug>]: {how it was decided or unblocked}\` with the same key if you opened it with one,
+   write \`needs-decision\` and stop: \`$STATUS_WRITER $STATUS_FILE needs-decision "{summary of options}"\`. Firstmate will reply with the decision.
+   To keep more than one decision open at once, key it with \`--key\`, which the writer places in the verb prefix, between the verb and the colon:
+   \`$STATUS_WRITER $STATUS_FILE needs-decision --key <slug> "{summary of options}"\`
+   When firstmate replies or a blocker clears and you resume, write \`$STATUS_WRITER $STATUS_FILE resolved "{how it was decided or unblocked}"\`,
+   or \`$STATUS_WRITER $STATUS_FILE resolved --key <slug> "{how it was decided or unblocked}"\` with the same key if you opened it with one,
    so the decision or blocker is durably closed and does not keep resurfacing.
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
@@ -475,8 +487,11 @@ $RULE1
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
    To open a Lavish review board, run \`$FM_ROOT/bin/fm-lavish.sh\` instead of bare lavish-axi:
    bare lavish-axi emits a link that opens nothing outside this machine.
-4. Report status by appending one line:
-   \`echo "{state}: {one short line}" >> $STATUS_FILE\`
+4. Report status by writing one line through the status writer:
+   \`$STATUS_WRITER $STATUS_FILE {state} "{one short line}"\`
+   It composes and appends the line to that status file, $STATUS_FILE, and refuses a state it
+   does not know or a key that is not a privacy-safe slug, naming the reason instead of writing.
+   Wherever this brief says to append a status line, write it this way, never with a bare shell append.
    States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
    Each append wakes firstmate, so report sparingly: only phase changes a supervisor
    would act on (setup done, bug reproduced, fix implemented, validation passed) and the
@@ -490,11 +505,11 @@ $RULE1
    cadence instead of treating it as a possible wedge. Use \`blocked:\` when you are stuck and need help.
 5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
 6. If a decision belongs to a human (product choices, destructive actions, ask-user findings),
-   append \`needs-decision: {summary of options}\` and stop. Firstmate will reply with the decision.
-   To keep more than one decision open at once, key it - the key sits in the verb prefix, between the verb and the colon, exactly here:
-   \`needs-decision [key=<slug>]: {summary of options}\`
-   When firstmate replies or a blocker clears and you resume, append \`resolved: {how it was decided or unblocked}\`,
-   or \`resolved [key=<slug>]: {how it was decided or unblocked}\` with the same key if you opened it with one,
+   write \`needs-decision\` and stop: \`$STATUS_WRITER $STATUS_FILE needs-decision "{summary of options}"\`. Firstmate will reply with the decision.
+   To keep more than one decision open at once, key it with \`--key\`, which the writer places in the verb prefix, between the verb and the colon:
+   \`$STATUS_WRITER $STATUS_FILE needs-decision --key <slug> "{summary of options}"\`
+   When firstmate replies or a blocker clears and you resume, write \`$STATUS_WRITER $STATUS_FILE resolved "{how it was decided or unblocked}"\`,
+   or \`$STATUS_WRITER $STATUS_FILE resolved --key <slug> "{how it was decided or unblocked}"\` with the same key if you opened it with one,
    so the decision or blocker is durably closed and does not keep resurfacing.
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes

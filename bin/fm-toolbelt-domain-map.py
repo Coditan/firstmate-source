@@ -355,6 +355,7 @@ NAME_HINTS: tuple[tuple[str, str, int], ...] = (
     ("fm-project-*", "secondmates-projects", 4),
     ("fm-backlog-handoff.sh", "secondmates-projects", 4),
     ("fm-brief.sh", "task-lifecycle", 5),
+    ("fm-status.sh", "task-lifecycle", 5),
     ("fm-promote.sh", "task-lifecycle", 6),
     ("fm-mark-parked.sh", "task-lifecycle", 5),
     ("fm-crew-state.sh", "task-lifecycle", 5),
