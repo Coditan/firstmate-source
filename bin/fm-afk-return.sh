@@ -177,7 +177,7 @@ return_reconcile() {
     printf 'fm-afk-return: catch-up must finish before the captain request\n' >&2
     print_evidence "$GATE" >&2
     print_blockers "$GATE" >&2
-    printf 'fm-afk-return: handle each blocker now, or close it with resolved [key=...] and append a durable reclassification reason, then run bin/fm-afk-return.sh check\n' >&2
+    printf 'fm-afk-return: handle each blocker now, or close its key with bin/fm-status.sh <status-file> resolved --key <key> "<reason>", then run bin/fm-afk-return.sh check\n' >&2
     rm -f "$evidence" "$blockers"
     return 3
   fi
