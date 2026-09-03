@@ -29,7 +29,8 @@
 #     path, and the file itself is left as it is found: a Codex direct report's
 #     public state/<id>.status is a symlink into its per-task writable signal
 #     directory (docs/codex-status-signalling.md), and the append follows it.
-# Every refusal prints one "fm-status: <reason>" line to stderr and exits 2.
+# Every refusal prints one "fm-status: <reason>" line to stderr and exits 2,
+# with CR and LF in a rejected value rendered as visible \r and \n escapes.
 #
 # The append is one write of one line with O_APPEND, so two writers reaching
 # the same file never interleave inside a line. After writing, the script reads
@@ -63,7 +64,10 @@ esac
 . "$SCRIPT_DIR/fm-classify-lib.sh"
 
 refuse() {
-  printf 'fm-status: %s\n' "$*" >&2
+  local message=$*
+  message=${message//$'\r'/\\r}
+  message=${message//$'\n'/\\n}
+  printf 'fm-status: %s\n' "$message" >&2
   exit 2
 }
 

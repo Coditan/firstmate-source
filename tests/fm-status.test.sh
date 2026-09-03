@@ -140,6 +140,25 @@ test_refused_key_writes_nothing() {
   pass "fm-status.sh: a key that is not a privacy-safe slug is refused by name and nothing is written"
 }
 
+test_refused_key_control_characters_stay_on_one_stderr_line() {
+  local f="$STATE/key-control.status"
+  run_writer "$f" needs-decision --key $'bad\nkey' "pick"
+  expect_code 2 "$RC" "a key containing LF must be refused"
+  [ "$(printf '%s\n' "$ERR" | wc -l | tr -d ' ')" = 1 ] \
+    || fail "LF refusal occupied more than one stderr line: [$ERR]"
+  [ "$ERR" = 'fm-status: decision key must be a privacy-safe slug: bad\nkey' ] \
+    || fail "LF refusal did not name the key with a visible escape: [$ERR]"
+  assert_absent "$f" "a key containing LF must write nothing"
+  run_writer "$f" needs-decision --key $'bad\rkey' "pick"
+  expect_code 2 "$RC" "a key containing CR must be refused"
+  [ "$(printf '%s\n' "$ERR" | wc -l | tr -d ' ')" = 1 ] \
+    || fail "CR refusal occupied more than one stderr line: [$ERR]"
+  [ "$ERR" = 'fm-status: decision key must be a privacy-safe slug: bad\rkey' ] \
+    || fail "CR refusal did not name the key with a visible escape: [$ERR]"
+  assert_absent "$f" "a key containing CR must write nothing"
+  pass "fm-status.sh: refused key control characters render visibly on one stderr line"
+}
+
 test_refused_note_shapes_write_nothing() {
   local f="$STATE/note.status"
   run_writer "$f" "done" "first line
@@ -224,6 +243,7 @@ test_keyed_working_phase_reads_back
 test_configured_pause_and_resolve_verbs_are_accepted
 test_refused_verb_writes_nothing
 test_refused_key_writes_nothing
+test_refused_key_control_characters_stay_on_one_stderr_line
 test_refused_note_shapes_write_nothing
 test_refused_path_outside_state_writes_nothing
 test_state_override_selects_the_home
