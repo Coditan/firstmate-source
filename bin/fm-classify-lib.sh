@@ -265,12 +265,23 @@ status_is_paused_or_captain_held() {  # <status-line>
 # A line whose verb is outside this set is a no-verb signal to every reader: it
 # opens no decision, finishes nothing, and may not even wake firstmate, so the
 # writer refuses it at the write instead of letting it vanish at the fold.
-# captain-held is deliberately absent: fm-decision-hold.sh writes it only after
+# The configured captain-held verb is always filtered out, including when a
+# pause or resolve override names it: fm-decision-hold.sh writes it only after
 # verifying the backlog hold, and a worker writing it would claim a transfer
-# that never happened. Reads the configured pause and resolve verbs so an
-# override applies to the writer and the readers alike.
+# that never happened. Valid pause and resolve overrides still apply to the
+# writer and the readers alike.
 status_worker_verbs() {
-  printf '%s' "working needs-decision blocked failed done ${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT} ${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}"
+  local held verb out=''
+  held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
+  for verb in working needs-decision blocked failed done \
+    "${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}" \
+    "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}"; do
+    case "$verb" in
+      ''|*[[:space:]]*|"$held") continue ;;
+    esac
+    out="${out}${out:+ }${verb}"
+  done
+  printf '%s' "$out"
 }
 
 # 0 if <verb> is one a worker may write (a member of status_worker_verbs).

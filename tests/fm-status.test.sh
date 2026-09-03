@@ -124,6 +124,21 @@ test_refused_verb_writes_nothing() {
   pass "fm-status.sh: an unknown verb is refused by name and nothing is written"
 }
 
+test_captain_held_cannot_enter_worker_vocabulary_through_overrides() {
+  local f="$STATE/captain-held.status"
+  FM_CLASSIFY_RESOLVE_VERB=captain-held run_writer "$f" captain-held "claimed transfer"
+  expect_code 2 "$RC" "a resolve override must not admit captain-held"
+  assert_contains "$ERR" "fm-status: unknown status verb 'captain-held'" \
+    "resolve override did not refuse captain-held by name"
+  assert_absent "$f" "a resolve override admitted a captain-held line"
+  FM_CLASSIFY_PAUSED_VERB=captain-held run_writer "$f" captain-held "claimed transfer"
+  expect_code 2 "$RC" "a pause override must not admit captain-held"
+  assert_contains "$ERR" "fm-status: unknown status verb 'captain-held'" \
+    "pause override did not refuse captain-held by name"
+  assert_absent "$f" "a pause override admitted a captain-held line"
+  pass "fm-status.sh: overrides cannot admit captain-held to the worker vocabulary"
+}
+
 test_refused_key_writes_nothing() {
   local f="$STATE/key.status" bad
   for bad in "route choice" "api/shape" "key=x" ""; do
@@ -242,6 +257,7 @@ test_keyed_resolved_closes_that_key_only
 test_keyed_working_phase_reads_back
 test_configured_pause_and_resolve_verbs_are_accepted
 test_refused_verb_writes_nothing
+test_captain_held_cannot_enter_worker_vocabulary_through_overrides
 test_refused_key_writes_nothing
 test_refused_key_control_characters_stay_on_one_stderr_line
 test_refused_note_shapes_write_nothing
