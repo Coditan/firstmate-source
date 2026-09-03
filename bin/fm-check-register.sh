@@ -10,6 +10,12 @@
 # Registration writes state/<id>.check-trust, binding the check to its current
 # SHA-256 hash; register it again after changing its bytes.
 #
+# The state directory must belong to the home this command runs as: when
+# FM_STATE_OVERRIDE names another home's state/, registration is refused rather
+# than binding a check that home would run with the wrong locations baked in.
+# bin/fm-check-lib.sh owns that predicate; docs/configuration.md owns the
+# override layout it reads.
+#
 # This command neither creates the check nor gives it a wall-clock cadence.
 # The watcher sweeps state/*.check.sh no more often than once per
 # FM_CHECK_INTERVAL seconds (default 300), and every due check in a sweep runs:
