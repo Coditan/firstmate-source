@@ -704,6 +704,7 @@ In a read-only session that did not get the fleet lock, the same line is advisor
 When `FM_ROOT` sits on its default branch instead, bootstrap reports a `SELF_DRIFT:` line if that branch and its own origin disagree; [architecture.md](architecture.md#self-updates-stay-safe) owns the detection and remediation, and `FM_SELF_DRIFT_BOOTSTRAP_TIMEOUT` below bounds its fetch.
 The locked session-start bootstrap step also runs a best-effort project clone refresh through `fm-fleet-sync.sh`.
 It emits `FLEET_SYNC:` for skipped refreshes that may matter, recovered self-heals, and `STUCK:` alarms.
+A refresh that could not read this home's `data/projects.md` or list its projects dir refuses as `FLEET_SYNC: fleet: STUCK:` with the named cause rather than reporting that the home has no projects, and a refresh that stopped for any reason is followed by `FLEET_SYNC: fleet: refresh failed (exit <rc>)`; the [bootstrap-diagnostics skill](../.agents/skills/bootstrap-diagnostics/SKILL.md) owns each line's remediation.
 Normal completed runs keep local-only and no-origin skips silent.
 If bootstrap kills a timed-out refresh, it replays any completed `fm-fleet-sync.sh` output before the aggregate timeout skip so no finished result is lost.
 A killed refresh (or a teardown process kill) can leave an orphaned `.git/packed-refs.lock` in a clone, which makes the next refresh's fetch fail with Git's `Unable to create '...packed-refs.lock': File exists`.
