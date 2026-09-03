@@ -2214,6 +2214,17 @@ test_chat_contract_four_sections() {
   assert_contains "$body" "no At Anchor section" "the At Anchor exclusion must be documented"
   assert_contains "$body" "materially shorter" "the chat must be materially shorter than the report file"
   assert_contains "$body" "links to" "the chat must link to the report file"
+  # The renderer reads this skill, not the projection. The in_flight selector picks
+  # a secondmate home on its RUNNING CHILDREN and reports whatever state the
+  # snapshot reached, so a rule saying such a row appears only for
+  # `active_child_work` would have the renderer drop a row the projection emitted -
+  # exactly the running work this surface was widened to stop losing.
+  grep -Fq 'select((.active_children | length) > 0)' "$ROOT/bin/fm-bearings-snapshot.sh" \
+    || fail "the in_flight selector no longer selects a secondmate home on its running children"
+  # shellcheck disable=SC2016 # Backticks are literal Markdown in the expected text.
+  assert_no_grep 'appears Underway only for `active_child_work`' "$skill" \
+    "the bearings skill must not restrict an Underway secondmate row to one state the projection no longer gates on"
+  assert_contains "$(cat "$skill")" "running children" "the skill must state what actually puts a secondmate row on Underway"
   pass "the /bearings skill states the four-section chat contract in order, with empty-states and the At Anchor exclusion"
 }
 

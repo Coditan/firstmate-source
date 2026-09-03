@@ -427,6 +427,36 @@ EOF
   pass "a captain hold reaches the surface whatever phase its work is in, and every withheld one is named"
 }
 
+# The predicate has produced false invisibility three times, each time because a
+# clause of it looked obviously right where it was written. Its defence is that
+# there is exactly ONE place to re-read: bin/fm-captain-actionable-lib.sh. A
+# second hand-spelled copy anywhere in bin/ would put the fourth instance
+# somewhere nobody thinks to look, so no other script may spell the audience
+# test itself: the snapshot sources the library and every downstream reader takes
+# the decided `captain_actionable` field rather than re-deriving it.
+test_captain_actionable_predicate_has_one_owner() {
+  local lib owner_hits
+  lib="$ROOT/bin/fm-captain-actionable-lib.sh"
+  [ -f "$lib" ] || fail "bin/fm-captain-actionable-lib.sh is missing"
+
+  # shellcheck disable=SC1090
+  . "$lib"
+  case "${FM_CAPTAIN_ACTIONABLE_JQ:-}" in
+    *fm_captain_actionable*) : ;;
+    *) fail "sourcing bin/fm-captain-actionable-lib.sh did not define the predicate program" ;;
+  esac
+
+  owner_hits=$(grep -rlF 'hold_kind == "captain"' "$ROOT/bin" | sed "s#^$ROOT/##" | sort | tr '\n' ' ')
+  [ "$owner_hits" = "bin/fm-captain-actionable-lib.sh " ] \
+    || fail "the captain-audience test is spelled outside its owner: $owner_hits"
+
+  grep -qF 'fm-captain-actionable-lib.sh' "$ROOT/bin/fm-fleet-snapshot.sh" \
+    || fail "bin/fm-fleet-snapshot.sh no longer sources the predicate owner"
+  grep -qF 'FM_CAPTAIN_ACTIONABLE_JQ' "$ROOT/bin/fm-fleet-snapshot.sh" \
+    || fail "bin/fm-fleet-snapshot.sh no longer splices the shared predicate program"
+  pass "the captain-actionable predicate has exactly one owner and the snapshot splices it"
+}
+
 # The canonical snapshot decides "is this blocker target real" across BOTH the
 # live backlog and the done archive, so a target that is real in neither is a
 # data-integrity fault the reader must surface, while a target still present as a
@@ -893,6 +923,7 @@ test_fixture_snapshot_json
 test_main_inventory_orphan_and_unstructured_disclosure
 test_normalized_roles_and_plural_blocker_readiness
 test_captain_hold_reaches_the_surface_whatever_phase_the_work_is_in
+test_captain_actionable_predicate_has_one_owner
 test_dangling_blocker_is_integrity_not_a_gate
 test_event_hints_follow_reconciled_current_state
 test_open_decision_survives_later_unrelated_event
