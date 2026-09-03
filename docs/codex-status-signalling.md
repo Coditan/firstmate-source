@@ -58,8 +58,8 @@ Although the brief explicitly requires a terminal done status, directly appendin
 ```
 
 That made the instruction surface part of the bug.
-`AGENTS.md` now states explicitly that a worker appending its own sparse line to the status file named in its brief is the authorized status protocol.
-Since the composing writer landed, the brief hands that append as `bin/fm-status.sh`, and the section "The writer through the symlink" below records that the writer reaches the signal directory from inside the sandbox.
+`AGENTS.md` now states explicitly that a worker writing its own sparse line through `bin/fm-status.sh` to the status file named in its brief is the authorized status protocol.
+The section "The writer through the symlink" below records that the writer reaches the signal directory from inside the sandbox.
 The wording fix alone is still not enough, because another live refusal described the same append as an external write.
 The runtime fix removes the external write from the normal path.
 The runtime fix also stops success from depending on which way the same reviewer happens to reason about an otherwise identical status append.
