@@ -795,6 +795,77 @@ test_parked_rechecks_coalesce_into_one_wake() {
   pass "parked rechecks falling due together reach the seat as one wake naming all of them"
 }
 
+# Two gathers that fall due at different times must BOTH reach the seat. The
+# drain keeps only the last row per (kind,key), so a fixed key on the set record
+# collapses an earlier undrained gather under a later one: A,B are gathered and
+# their throttles advanced, the seat is mid-turn so nothing drains, then C,D come
+# due and are gathered, and at drain only C,D print - A,B's recheck is silently
+# lost and they wait another full cadence, the exact rot the cadence exists to
+# prevent. Each gather must therefore carry a key of its own.
+test_parked_gathers_that_fall_due_apart_both_survive_the_drain() {
+  local dir state fakebin out capture_file window_list pane_hash back i key rows pid drained
+  local -a keys
+  dir=$(make_case parked-coalesce-two-gathers); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  printf 'finished, awaiting review' > "$capture_file"
+  pane_hash=$(hash_text "finished, awaiting review")
+  back=$(( $(date +%s) - 500 ))
+  keys=(); window_list=''
+  for i in 1 2 3 4; do
+    key=$(printf '%s' "test:fm-pg$i" | tr ':/.' '___')
+    keys+=("$key")
+    window_list="$window_list${window_list:+$'\n'}test:fm-pg$i"
+    printf 'window=test:fm-pg%s\nkind=ship\n' "$i" > "$state/pg$i.meta"
+    printf 'done: PR https://example.test/pr/%s checks green\n' "$i" > "$state/pg$i.status"
+    printf '%s' "$(seen_sig "$state/pg$i.status")" > "$state/.seen-pg${i}_status"
+    printf '%s' "$pane_hash" > "$state/.hash-$key"
+    printf '1\n' > "$state/.count-$key"
+    : > "$state/.parked-$key"
+    backdate "$(( back - 60 ))" "$state/pg$i.meta"
+    # The first pair is due now; the second pair is freshly parked and stays
+    # inside the cadence until this test ages it, so it cannot join the first
+    # gather.
+    [ "$i" -le 2 ] && backdate "$back" "$state/.parked-$key"
+  done
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window_list" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_WATCH_DAEMON=1 "$WATCH" > "$out" 2>&1 &
+  pid=$!
+  for key in "${keys[0]}" "${keys[1]}"; do
+    wait_numeric_file "$state/.parkedresurfaced-$key" 120 \
+      || { reap "$pid"; fail "the first parked pair's due recheck never happened: $key"$'\n'"--- watcher ---"$'\n'"$(cat "$out")"; }
+  done
+  [ ! -e "$state/.parkedresurfaced-${keys[2]}" ] && [ ! -e "$state/.parkedresurfaced-${keys[3]}" ] \
+    || { reap "$pid"; fail "a not-yet-due parked task was folded into the first gather"$'\n'"--- queue ---"$'\n'"$(cat "$state/.wake-queue")"; }
+  # Nothing drains between the gathers: the seat is mid-turn. Now the second
+  # pair comes due.
+  backdate "$back" "$state/.parked-${keys[2]}" "$state/.parked-${keys[3]}"
+  for key in "${keys[2]}" "${keys[3]}"; do
+    wait_numeric_file "$state/.parkedresurfaced-$key" 120 \
+      || { reap "$pid"; fail "the second parked pair's due recheck never happened: $key"$'\n'"--- watcher ---"$'\n'"$(cat "$out")"; }
+  done
+  reap "$pid"
+
+  rows=$(grep -c "$(printf '\tstale\t')" "$state/.wake-queue" 2>/dev/null || true)
+  [ "$rows" = 2 ] \
+    || fail "two gathers falling due apart produced $rows stale records, not two"$'\n'"--- queue ---"$'\n'"$(cat "$state/.wake-queue")"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/drain.out" 2>/dev/null \
+    || fail "drain after two parked gathers failed"
+  drained=$(cat "$dir/drain.out")
+  rows=$(printf '%s\n' "$drained" | grep -c "$(printf '\tstale\t')" || true)
+  [ "$rows" = 2 ] \
+    || fail "two parked gathers reached the seat as $rows records, not two: the earlier gather was collapsed at drain"$'\n'"--- drain ---"$'\n'"$drained"
+  for i in 1 2 3 4; do
+    assert_contains "$drained" "test:fm-pg$i" "a parked task gathered before the drain was not named to the seat"
+  done
+  printf '%s\n' "$drained" | grep -Eq 'test:fm-pg1, test:fm-pg2\)' \
+    || fail "the first gather did not reach the seat as its own record naming A and B"$'\n'"--- drain ---"$'\n'"$drained"
+  printf '%s\n' "$drained" | grep -Eq 'test:fm-pg3, test:fm-pg4\)' \
+    || fail "the second gather did not reach the seat as its own record naming C and D"$'\n'"--- drain ---"$'\n'"$drained"
+  pass "parked gathers that fall due apart both survive the drain, each naming its own tasks"
+}
+
 # A fleet-sized batch must still arrive as ONE record after the drain: the drain
 # shortens any row above FM_WAKE_ECHO_ROW_BYTES (1024 by default) and then keeps
 # the queue file and prints its path, so a coalesced record that outgrows the
@@ -3177,6 +3248,7 @@ test_signal_symlink_target_append_surfaces
 test_terminal_stale_surfaced
 test_terminal_stale_parked_absorbed_then_resurfaced
 test_parked_rechecks_coalesce_into_one_wake
+test_parked_gathers_that_fall_due_apart_both_survive_the_drain
 test_parked_coalesced_record_fits_the_drain_row_bound
 test_pause_resurface_default_stays_under_the_prompt_cache_hour
 test_parked_marker_clears_on_status_write

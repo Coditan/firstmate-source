@@ -34,9 +34,12 @@
 #                          external-wait pause or firstmate-declared parked terminal
 #                          wait is absorbed instead with its own long re-surface
 #                          cadence, never as a wedge; parked rechecks falling due
-#                          together share one record, keyed parked-recheck, that
-#                          lists the windows once with one shared age (a range
-#                          when they differ).
+#                          together share one record that lists the windows once
+#                          with one shared age (a range when they differ), keyed
+#                          parked-recheck-<epoch>-<gather#> - unique per gather,
+#                          never a window name - so the drain's (kind,key) dedupe
+#                          can neither collapse two gathers of different windows
+#                          nor fold the set under a later stale for one member.
 #                          A run parked at a decision gate
 #                          whose worker is confirmed alive surfaces its first sighting
 #                          like any other stopped crew, then holds the wedge ladder on
@@ -824,7 +827,7 @@ PARKED_DUE_REASON=
 # metadata change has cleared it, so a window folded in here is genuinely due and
 # is delivered no later than a pane-gated one would have been.
 parked_recheck_enqueue() {  # <window that came due> -> 1 when nothing is due
-  local trigger=$1 win age list='' n i lo hi span
+  local trigger=$1 win age list='' n i lo hi span gather gather_file="$STATE/.parked-recheck-gather"
   local -a ages=()
   age=$(parked_recheck_due_age "$trigger") || return 1
   PARKED_DUE_WINDOWS=("$trigger")
@@ -854,9 +857,18 @@ parked_recheck_enqueue() {  # <window that came due> -> 1 when nothing is due
   done
   if [ "$lo" -eq "$hi" ]; then span="parked ${lo}s"; else span="parked ${lo}s-${hi}s"; fi
   PARKED_DUE_REASON=$(printf 'stale: %s parked tasks due for recheck (%s; %s) - awaiting external human action - supervisor-declared terminal waits, rechecked on a long cadence not a wedge; confirm each wait still holds' "$n" "$span" "$list")
-  # A key of its own: this record speaks for a set, so collapsing it on drain
-  # against a later single-window stale for any one of them would lose the rest.
-  fm_wake_append stale parked-recheck "$PARKED_DUE_REASON" || exit 1
+  # A key of its own, unique per gather: this record speaks for a set, so it
+  # must never carry a window name - the drain keeps one row per (kind,key),
+  # and a later single-window stale for any one member would swallow the rest.
+  # Nor may two gathers share a key: the throttles advance on commit, so a
+  # later gather covers different windows, and one fixed key would drop the
+  # earlier set from a drain that finds both records waiting. The counter
+  # keeps two gathers inside one second apart.
+  gather=$(cat "$gather_file" 2>/dev/null || echo 0)
+  case "$gather" in ''|*[!0-9]*) gather=0 ;; esac
+  gather=$((gather + 1))
+  printf '%s\n' "$gather" > "$gather_file"
+  fm_wake_append stale "parked-recheck-$(date +%s)-$gather" "$PARKED_DUE_REASON" || exit 1
   return 0
 }
 
