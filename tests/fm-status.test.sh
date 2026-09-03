@@ -110,6 +110,21 @@ test_configured_pause_and_resolve_verbs_are_accepted() {
   pass "fm-status.sh: the vocabulary follows the configured pause verb"
 }
 
+test_invalid_and_colliding_verb_overrides_refuse_closed() {
+  local f="$STATE/invalid-override.status"
+  FM_CLASSIFY_PAUSED_VERB='paused:' run_writer "$f" 'paused:' "vendor wait"
+  expect_code 2 "$RC" "a grammar-character pause override must be refused"
+  assert_contains "$ERR" "fm-status: unknown status verb 'paused:'" \
+    "grammar-character override was not refused by name"
+  assert_absent "$f" "a grammar-character override wrote a status line"
+  FM_CLASSIFY_PAUSED_VERB=done run_writer "$f" done "colliding alias"
+  expect_code 2 "$RC" "a colliding pause override must refuse the vocabulary"
+  assert_contains "$ERR" "fm-status: unknown status verb 'done'" \
+    "colliding override did not refuse closed"
+  assert_absent "$f" "a colliding override wrote a status line"
+  pass "fm-status.sh: invalid and colliding verb overrides refuse closed"
+}
+
 test_refused_verb_writes_nothing() {
   local f="$STATE/verb.status"
   run_writer "$f" finished "all good"
@@ -256,6 +271,7 @@ test_keyed_needs_decision_opens_that_key
 test_keyed_resolved_closes_that_key_only
 test_keyed_working_phase_reads_back
 test_configured_pause_and_resolve_verbs_are_accepted
+test_invalid_and_colliding_verb_overrides_refuse_closed
 test_refused_verb_writes_nothing
 test_captain_held_cannot_enter_worker_vocabulary_through_overrides
 test_refused_key_writes_nothing

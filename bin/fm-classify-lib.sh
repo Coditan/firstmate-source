@@ -265,29 +265,37 @@ status_is_paused_or_captain_held() {  # <status-line>
 # A line whose verb is outside this set is a no-verb signal to every reader: it
 # opens no decision, finishes nothing, and may not even wake firstmate, so the
 # writer refuses it at the write instead of letting it vanish at the fold.
-# The configured captain-held verb is always filtered out, including when a
-# pause or resolve override names it: fm-decision-hold.sh writes it only after
-# verifying the backlog hold, and a worker writing it would claim a transfer
-# that never happened. Valid pause and resolve overrides still apply to the
-# writer and the readers alike.
+# Every configured verb that feeds this vocabulary must match
+# [A-Za-z0-9_-]+, stay distinct from every built-in and configured sibling,
+# and differ from the valid configured captain-held verb; otherwise the whole
+# vocabulary refuses closed. The captain-held verb itself is never included:
+# fm-decision-hold.sh writes it only after verifying the backlog hold, and a
+# worker writing it would claim a transfer that never happened.
 status_worker_verbs() {
-  local held verb out=''
+  local builtins='working needs-decision blocked failed done' held resolve pause verb
   held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
-  for verb in working needs-decision blocked failed done \
-    "${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}" \
-    "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}"; do
+  resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
+  pause=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}
+  for verb in "$held" "$resolve" "$pause"; do
     case "$verb" in
-      ''|*[[:space:]]*|"$held") continue ;;
+      ''|*[!A-Za-z0-9_-]*) return 1 ;;
     esac
-    out="${out}${out:+ }${verb}"
   done
-  printf '%s' "$out"
+  case " $builtins " in
+    *" $held "*|*" $resolve "*|*" $pause "*) return 1 ;;
+  esac
+  [ "$resolve" != "$held" ] || return 1
+  [ "$pause" != "$held" ] || return 1
+  [ "$pause" != "$resolve" ] || return 1
+  printf '%s' "$builtins $resolve $pause"
 }
 
 # 0 if <verb> is one a worker may write (a member of status_worker_verbs).
 status_verb_is_writable() {  # <verb>
+  local verbs
   case "$1" in ''|*[[:space:]]*) return 1 ;; esac
-  case " $(status_worker_verbs) " in
+  verbs=$(status_worker_verbs) || return 1
+  case " $verbs " in
     *" $1 "*) return 0 ;;
   esac
   return 1
