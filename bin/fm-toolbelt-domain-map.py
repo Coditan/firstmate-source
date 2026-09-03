@@ -412,6 +412,7 @@ NAME_HINTS: tuple[tuple[str, str, int], ...] = (
     ("fm-sessionstart-nudge.sh", "session-bootstrap", 5),
     ("fm-bootstrap.sh", "session-bootstrap", 5),
     ("fm-fleet-sync.sh", "session-bootstrap", 5),
+    ("fm-absence-lib.sh", "session-bootstrap", 3),
     ("fm-update.sh", "session-bootstrap", 5),
     ("fm-vessel-identity.sh", "session-bootstrap", 5),
     ("fm-primary-scope-lib.sh", "policy-hooks", 5),
