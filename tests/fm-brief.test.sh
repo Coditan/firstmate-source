@@ -260,7 +260,7 @@ test_premise_omission_is_loud_for_ship_and_scout() {
     brief="$home/data/$id/brief.md"
     assert_grep "# Premise declaration - NONE ASSERTED" "$brief" \
       "$kind brief silently omitted the premise declaration"
-    assert_grep "append \`blocked: brief asserts a fact but was scaffolded without --premise\` to the status file and stop" "$brief" \
+    assert_grep "'$ROOT/bin/fm-status.sh' '$home/state/$id.status' blocked \"brief asserts a fact but was scaffolded without --premise\"" "$brief" \
       "$kind brief missing the fail-visible stop-and-report the reader can actually perform"
     assert_grep "Do not write a disproof step into this unguarded brief by hand." "$brief" \
       "$kind brief missing the ban on hand-written disproof wording"

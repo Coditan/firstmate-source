@@ -231,7 +231,7 @@ On startup and restart, run normal firstmate bootstrap and recovery through \`bi
 The main firstmate's marked routed-text send changes your parent record to \`state=active\` before delivery, so real assigned work remains under supervision.
 When you have no assigned or in-flight work after reconciliation, no open escalation, and no fresh result left to report, run \`bin/fm-secondmate-state.sh resting $META_FILE\`, then go idle and wait silently for the main firstmate to route you a task.
 An empty queue is a healthy resting state, not a cue to invent work: never spawn a survey, audit, or any self-directed "find work" task on your own initiative.
-If this charter cannot be carried out, append \`blocked: {why}\` or \`failed: {why}\` to the main status file and stop.
+If this charter cannot be carried out, write \`$STATUS_WRITER $STATUS_FILE blocked "{why}"\` or \`$STATUS_WRITER $STATUS_FILE failed "{why}"\` and stop.
 EOF
 if [ "$SECONDMATE_CHARTER" = "{TASK}" ]; then
   echo "scaffolded: $BRIEF (secondmate charter; replace {TASK})"
@@ -322,11 +322,13 @@ PREMISE_SECTION=$(cat <<'EOF'
 # Premise declaration - NONE ASSERTED
 **DECLARED ABSENT:** this scaffold cannot inspect the task text that replaces `{TASK}` later.
 This brief is declared to hand you no asserted fact you would act on without re-deriving it first.
-If the task text does hand you one - which branch is stale, which file holds the value, which commit is the right one, that a named path is safe to take - append `blocked: brief asserts a fact but was scaffolded without --premise` to the status file and stop; firstmate will regenerate it.
+If the task text does hand you one - which branch is stale, which file holds the value, which commit is the right one, that a named path is safe to take - write \`__STATUS_WRITER__ __STATUS_FILE__ blocked "brief asserts a fact but was scaffolded without --premise"\` and stop; firstmate will regenerate it.
 Do not write a disproof step into this unguarded brief by hand.
 EOF
 )
 fi
+PREMISE_SECTION=${PREMISE_SECTION//__STATUS_WRITER__/$STATUS_WRITER}
+PREMISE_SECTION=${PREMISE_SECTION//__STATUS_FILE__/$STATUS_FILE}
 
 # Rule 1 forbids pushing to the default branch, and publishing a Bridge envelope
 # targets the default branch - but that push IS Bridge's delivery step, not a code
@@ -379,7 +381,7 @@ $BRIDGE_NOTE
    known external wait you expect to clear on its own (an upstream release, a rate-limit reset):
    firstmate then leaves your idle pane alone and rechecks it on a long cadence instead of
    treating it as a possible wedge. Use \`blocked:\` when you are stuck and need help.
-5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
+5. If you hit the same obstacle twice, write \`$STATUS_WRITER $STATUS_FILE blocked "{why}"\` and stop; firstmate will help.
 6. If a decision belongs to a human (product choices, destructive actions),
    write \`needs-decision\` and stop: \`$STATUS_WRITER $STATUS_FILE needs-decision "{summary of options}"\`. Firstmate will reply with the decision.
    To keep more than one decision open at once, key it with \`--key\`, which the writer places in the verb prefix, between the verb and the colon:
@@ -389,13 +391,13 @@ $BRIDGE_NOTE
    so the decision or blocker is durably closed and does not keep resurfacing.
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
-   daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
+   daemon error, write \`$STATUS_WRITER $STATUS_FILE blocked "{the daemon error}"\` and stop; only firstmate manages the daemon.
 
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
 The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), and what you recommend.
 Before reporting done, read and follow \`$FM_ROOT/.agents/skills/decision-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.
-When the report is complete, append \`done: {one-line conclusion}\` to the status file and stop.
+When the report is complete, write \`$STATUS_WRITER $STATUS_FILE done "{one-line conclusion}"\` and stop.
 If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.
 EOF
 echo "scaffolded: $BRIEF (scout; replace $REPLACE_NOTE)"
@@ -417,7 +419,7 @@ case "$MODE" in
 # Definition of done
 This project ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
 The task is complete only when committed on your branch.
-When it is implemented and committed, push your branch and open a PR with \`gh-axi\`, then append \`done: PR {url}\` to the status file and stop.
+When it is implemented and committed, push your branch and open a PR with \`gh-axi\`, then write \`$STATUS_WRITER $STATUS_FILE done "PR {url}"\` and stop.
 Do NOT run /no-mistakes. The configured merge authority decides whether to merge the PR; firstmate relays the outcome.
 EOF
 )
@@ -431,7 +433,7 @@ $BRIDGE_NOTE"
 This project ships **local-only**: no remote, no PR, no pipeline.
 The task is complete only when committed on your branch \`fm/$ID\`. Do NOT push, do NOT open a PR, do NOT merge.
 Keep your branch a clean fast-forward onto the current default branch - if \`main\` has advanced, rebase onto it so the eventual merge stays a fast-forward.
-When it is implemented and committed, append \`done: ready in branch fm/$ID\` to the status file and stop.
+When it is implemented and committed, write \`$STATUS_WRITER $STATUS_FILE done "ready in branch fm/$ID"\` and stop.
 The configured merge authority approves the ready branch, then firstmate merges it into local \`main\` through the guarded fast-forward path.
 EOF
 )
@@ -444,7 +446,7 @@ EOF
     DOD=$(cat <<EOF
 # Definition of done
 The task is complete only when committed on your branch.
-When you believe it is complete, append \`done: {summary}\` to the status file and stop.
+When you believe it is complete, write \`$STATUS_WRITER $STATUS_FILE done "{summary}"\` and stop.
 Firstmate will then instruct you to run /no-mistakes to validate and ship a PR.
 
 You drive no-mistakes by responding to its gates, not by implementing fixes.
@@ -456,7 +458,7 @@ Two firstmate-specific rules layer on top of that guidance:
   When the decision comes back, feed it to the gate with \`no-mistakes axi respond\` and let the pipeline apply it - do not route the question to "the user" or implement the fix yourself.
 - Avoid \`--yes\`: the captain, not you, owns the ask-user decisions it would silently auto-resolve.
 
-After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), append \`done: PR {url} checks green\` and stop. You are finished.
+After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), write \`$STATUS_WRITER $STATUS_FILE done "PR {url} checks green"\` and stop. You are finished.
 EOF
 )
     ;;
@@ -477,7 +479,7 @@ You are in a disposable git worktree of $REPO, at a detached HEAD on a clean def
 
 **Verify isolation before anything else.** Run \`pwd -P\` and \`git rev-parse --show-toplevel\`; both must resolve to the disposable task worktree you were launched in, such as a treehouse pool path or an Orca-managed worktree, not the primary checkout firstmate operates from.
 The path check is authoritative: \`git rev-parse --git-dir\` and \`git rev-parse --git-common-dir\` can help inspect the repo, but they do not prove you are outside the primary checkout.
-If the top-level path is the primary checkout or not the worktree you were launched in, STOP - do not branch or commit here - append \`blocked: launched in primary checkout, not an isolated worktree\` to the status file and stop.
+If the top-level path is the primary checkout or not the worktree you were launched in, STOP - do not branch or commit here - write \`$STATUS_WRITER $STATUS_FILE blocked "launched in primary checkout, not an isolated worktree"\` and stop.
 
 1. First action: create your branch: \`git checkout -b fm/$ID\`$SETUP2
 
@@ -503,7 +505,7 @@ $RULE1
    known external wait you expect to clear on its own (an upstream release, a rate-limit reset,
    a scheduled window): firstmate then leaves your idle pane alone and rechecks it on a long
    cadence instead of treating it as a possible wedge. Use \`blocked:\` when you are stuck and need help.
-5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
+5. If you hit the same obstacle twice, write \`$STATUS_WRITER $STATUS_FILE blocked "{why}"\` and stop; firstmate will help.
 6. If a decision belongs to a human (product choices, destructive actions, ask-user findings),
    write \`needs-decision\` and stop: \`$STATUS_WRITER $STATUS_FILE needs-decision "{summary of options}"\`. Firstmate will reply with the decision.
    To keep more than one decision open at once, key it with \`--key\`, which the writer places in the verb prefix, between the verb and the colon:
@@ -513,7 +515,7 @@ $RULE1
    so the decision or blocker is durably closed and does not keep resurfacing.
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
-   daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
+   daemon error, write \`$STATUS_WRITER $STATUS_FILE blocked "{the daemon error}"\` and stop; only firstmate manages the daemon.
 
 # Project memory
 If \`AGENTS.md\` or \`CLAUDE.md\` already exists, or if this task produced durable project-intrinsic knowledge, run \`$FM_ROOT/bin/fm-ensure-agents-md.sh .\` in the worktree.
