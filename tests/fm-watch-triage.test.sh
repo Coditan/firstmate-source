@@ -866,6 +866,70 @@ test_parked_gathers_that_fall_due_apart_both_survive_the_drain() {
   pass "parked gathers that fall due apart both survive the drain, each naming its own tasks"
 }
 
+# Two gathers inside ONE wall-clock second must still carry distinct keys, and
+# nothing the gather does may leave a file the watcher's own marker cleanup
+# (reconcile_parked_markers, the .parked-* prune) would delete out from under
+# it. A disambiguator persisted under state/.parked-<anything> reads as a
+# parked marker with no metadata and is cleared on the very next pass, so every
+# gather restarts at the same count and same-second gathers collide at drain.
+# Driven against the sourced watcher with the clock frozen, so both gathers
+# provably share a second and the key must tell them apart on its own.
+test_parked_same_second_gathers_get_distinct_keys_without_state_files() {
+  local dir state i key now drained rows keys_seen markers
+  dir=$(make_case parked-same-second); state="$dir/state"
+  now=$(date +%s)
+  for i in 1 2 3 4; do
+    key=$(printf '%s' "test:fm-ss$i" | tr ':/.' '___')
+    printf 'window=test:fm-ss%s\nkind=ship\n' "$i" > "$state/ss$i.meta"
+    printf 'done: PR https://example.test/pr/%s checks green\n' "$i" > "$state/ss$i.status"
+    : > "$state/.parked-$key"
+    backdate "$(( now - 560 ))" "$state/ss$i.meta"
+    if [ "$i" -le 2 ]; then backdate "$(( now - 500 ))" "$state/.parked-$key"
+    else backdate "$now" "$state/.parked-$key"; fi
+  done
+  # A separate process: sourcing the watcher must not touch this suite's own
+  # variables, and the frozen clock must not leak past the two gathers.
+  FM_STATE_OVERRIDE="$state" FM_WATCH_DAEMON=1 FM_PAUSE_RESURFACE_SECS=240 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 bash -c '
+    . "$1" >/dev/null 2>&1 || exit 97
+    frozen=$2
+    date() { if [ "${1-}" = "+%s" ]; then printf "%s\n" "$frozen"; else command date "$@"; fi; }
+    parked_recheck_enqueue "test:fm-ss1" || exit 91
+    parked_recheck_commit >/dev/null
+    reconcile_parked_markers
+    for k in test_fm-ss3 test_fm-ss4; do
+      if [ "$(uname)" = Darwin ]; then touch -mt "$(command date -r "$((frozen - 500))" "+%Y%m%d%H%M.%S")" "$STATE/.parked-$k"
+      else touch -m -d "@$((frozen - 500))" "$STATE/.parked-$k"; fi
+    done
+    parked_recheck_enqueue "test:fm-ss3" || exit 93
+    parked_recheck_commit >/dev/null
+  ' sourced-watcher "$WATCH" "$now" > "$dir/sourced.out" 2>&1 \
+    || fail "sourced watcher gathers failed (exit $?)"$'\n'"--- output ---"$'\n'"$(cat "$dir/sourced.out")"
+
+  markers=$(cd "$state" && ls -d .parked-* | sort | tr '\n' ' ')
+  [ "$markers" = ".parked-test_fm-ss1 .parked-test_fm-ss2 .parked-test_fm-ss3 .parked-test_fm-ss4 " ] \
+    || fail "the parked gather left a file in the parked-marker namespace: $markers"
+  rows=$(grep -c "$(printf '\tstale\t')" "$state/.wake-queue" 2>/dev/null || true)
+  [ "$rows" = 2 ] \
+    || fail "two same-second gathers produced $rows stale records, not two"$'\n'"--- queue ---"$'\n'"$(cat "$state/.wake-queue")"
+  keys_seen=$(awk -F '\t' '$3 == "stale" { print $4 }' "$state/.wake-queue" | sort -u | wc -l | tr -d ' ')
+  [ "$keys_seen" = 2 ] \
+    || fail "two same-second gathers with a reconcile pass between them share one key"$'\n'"--- queue ---"$'\n'"$(cat "$state/.wake-queue")"
+  awk -F '\t' '$3 == "stale" { print $4 }' "$state/.wake-queue" | grep -q '^test:fm-ss' \
+    && fail "a coalesced parked recheck was keyed on a member window"$'\n'"--- queue ---"$'\n'"$(cat "$state/.wake-queue")"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/drain.out" 2>/dev/null \
+    || fail "drain after two same-second gathers failed"
+  drained=$(cat "$dir/drain.out")
+  rows=$(printf '%s\n' "$drained" | grep -c "$(printf '\tstale\t')" || true)
+  [ "$rows" = 2 ] \
+    || fail "two same-second gathers reached the seat as $rows records, not two"$'\n'"--- drain ---"$'\n'"$drained"
+  printf '%s\n' "$drained" | grep -Eq 'test:fm-ss1, test:fm-ss2\)' \
+    || fail "the first same-second gather did not reach the seat naming its own tasks"$'\n'"--- drain ---"$'\n'"$drained"
+  printf '%s\n' "$drained" | grep -Eq 'test:fm-ss3, test:fm-ss4\)' \
+    || fail "the second same-second gather did not reach the seat naming its own tasks"$'\n'"--- drain ---"$'\n'"$drained"
+  pass "same-second parked gathers keep distinct keys with no state file for a marker scan to prune"
+}
+
 # A fleet-sized batch must still arrive as ONE record after the drain: the drain
 # shortens any row above FM_WAKE_ECHO_ROW_BYTES (1024 by default) and then keeps
 # the queue file and prints its path, so a coalesced record that outgrows the
@@ -3249,6 +3313,7 @@ test_terminal_stale_surfaced
 test_terminal_stale_parked_absorbed_then_resurfaced
 test_parked_rechecks_coalesce_into_one_wake
 test_parked_gathers_that_fall_due_apart_both_survive_the_drain
+test_parked_same_second_gathers_get_distinct_keys_without_state_files
 test_parked_coalesced_record_fits_the_drain_row_bound
 test_pause_resurface_default_stays_under_the_prompt_cache_hour
 test_parked_marker_clears_on_status_write

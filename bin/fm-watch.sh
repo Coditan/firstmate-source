@@ -36,10 +36,11 @@
 #                          cadence, never as a wedge; parked rechecks falling due
 #                          together share one record that lists the windows once
 #                          with one shared age (a range when they differ), keyed
-#                          parked-recheck-<epoch>-<gather#> - unique per gather,
-#                          never a window name - so the drain's (kind,key) dedupe
-#                          can neither collapse two gathers of different windows
-#                          nor fold the set under a later stale for one member.
+#                          parked-recheck-<epoch>-<watcher pid>-<gather#> - unique
+#                          per gather and built from nothing on disk, never a
+#                          window name - so the drain's (kind,key) dedupe can
+#                          neither collapse two gathers of different windows nor
+#                          fold the set under a later stale for one member.
 #                          A run parked at a decision gate
 #                          whose worker is confirmed alive surfaces its first sighting
 #                          like any other stopped crew, then holds the wedge ladder on
@@ -806,6 +807,7 @@ parked_recheck_due_age() {  # <window> -> parked age in seconds, or 1 when not d
 # where the list dies with it.
 PARKED_DUE_WINDOWS=()
 PARKED_DUE_REASON=
+PARKED_GATHER_COUNT=0
 
 # Enqueue ONE wake record covering every parked window whose recheck is due,
 # starting from the window that came due at the call site. Fleet-wide tasks get
@@ -827,7 +829,7 @@ PARKED_DUE_REASON=
 # metadata change has cleared it, so a window folded in here is genuinely due and
 # is delivered no later than a pane-gated one would have been.
 parked_recheck_enqueue() {  # <window that came due> -> 1 when nothing is due
-  local trigger=$1 win age list='' n i lo hi span gather gather_file="$STATE/.parked-recheck-gather"
+  local trigger=$1 win age list='' n i lo hi span
   local -a ages=()
   age=$(parked_recheck_due_age "$trigger") || return 1
   PARKED_DUE_WINDOWS=("$trigger")
@@ -862,13 +864,13 @@ parked_recheck_enqueue() {  # <window that came due> -> 1 when nothing is due
   # and a later single-window stale for any one member would swallow the rest.
   # Nor may two gathers share a key: the throttles advance on commit, so a
   # later gather covers different windows, and one fixed key would drop the
-  # earlier set from a drain that finds both records waiting. The counter
-  # keeps two gathers inside one second apart.
-  gather=$(cat "$gather_file" 2>/dev/null || echo 0)
-  case "$gather" in ''|*[!0-9]*) gather=0 ;; esac
-  gather=$((gather + 1))
-  printf '%s\n' "$gather" > "$gather_file"
-  fm_wake_append stale "parked-recheck-$(date +%s)-$gather" "$PARKED_DUE_REASON" || exit 1
+  # earlier set from a drain that finds both records waiting. The key is built
+  # from nothing on disk - a file under $STATE would sit inside some marker
+  # namespace and be pruned out from under it. Epoch seconds separate passes,
+  # the watcher's pid separates same-second gathers from different processes,
+  # and an in-process count separates same-second gathers within one.
+  PARKED_GATHER_COUNT=$((PARKED_GATHER_COUNT + 1))
+  fm_wake_append stale "parked-recheck-$(date +%s)-$$-$PARKED_GATHER_COUNT" "$PARKED_DUE_REASON" || exit 1
   return 0
 }
 
