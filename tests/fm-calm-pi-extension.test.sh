@@ -783,6 +783,7 @@ test_interactive_terminal_e2e() {
     "$ROOT/bin/fm-primary-scope-lib.sh" \
     "$ROOT/bin/fm-gate-refuse-lib.sh" \
     "$ROOT/bin/fm-operational-input.sh" \
+    "$ROOT/bin/fm-harness-pid-lib.sh" \
     "$project/bin/"
   chmod +x "$project/bin/"*.sh
   cat >"$project/.pi/extensions/fm-calm-e2e-inject.ts" <<'TS'

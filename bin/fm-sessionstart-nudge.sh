@@ -11,14 +11,20 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
+# A library that cannot be loaded leaves this wrapper unable to prove anything
+# about who it is, so it writes nothing and prints nothing rather than running
+# on with its gate functions undefined. Measured 2026-09-03: a copy of this
+# script without fm-harness-pid-lib.sh ran with a live home's FM_HOME in its
+# environment, every `command not found` from the gate fell through to the
+# write, and that home's good record was replaced by an error record.
 # shellcheck source=bin/fm-gate-refuse-lib.sh
-. "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
+. "$SCRIPT_DIR/fm-gate-refuse-lib.sh" 2>/dev/null || exit 0
 # shellcheck source=bin/fm-primary-scope-lib.sh
-. "$SCRIPT_DIR/fm-primary-scope-lib.sh"
+. "$SCRIPT_DIR/fm-primary-scope-lib.sh" 2>/dev/null || exit 0
 # shellcheck source=bin/fm-operational-input.sh
-. "$SCRIPT_DIR/fm-operational-input.sh"
+. "$SCRIPT_DIR/fm-operational-input.sh" 2>/dev/null || exit 0
 # shellcheck source=bin/fm-harness-pid-lib.sh
-. "$SCRIPT_DIR/fm-harness-pid-lib.sh"
+. "$SCRIPT_DIR/fm-harness-pid-lib.sh" 2>/dev/null || exit 0
 
 RECORD="$STATE/.primary-transcript"
 LOCK="$STATE/.lock"
@@ -33,8 +39,17 @@ LOCK="$STATE/.lock"
 # A legacy record naming no table keeps the old ancestry reading because this
 # hook runs before fm-lock.sh can replace that record on the first upgraded
 # session; refusing it here would leave that session's context ceiling unmeasured.
-lock_is_in_ancestry() {
-  local lock_pid pid=$$ _ mine_ns
+# The optional <own-harness-pid> makes the proof exact: the walk stops at this
+# session's own nearest harness process, so a lock pid that sits ABOVE it is
+# another harness session this one merely descends from, and the answer is 1.
+# Measured 2026-09-03: Claude Code's background-job daemon started a helper
+# session in the primary's own cwd, four hops under the primary, and the
+# unbounded walk found the primary's lock pid in the helper's ancestry and took
+# the helper for the lock holder. Without the argument the walk is unbounded,
+# which is still the right reading for "did session start already run somewhere
+# above me" - a helper under the primary must not be told to run it again.
+lock_is_in_ancestry() {  # [own-harness-pid]
+  local lock_pid pid=$$ _ mine_ns own=${1-}
   fm_session_lock_record_read "$LOCK" || return 1
   lock_pid=$FM_LOCK_RECORD_PID
   case "$lock_pid" in
@@ -47,10 +62,40 @@ lock_is_in_ancestry() {
   kill -0 "$lock_pid" 2>/dev/null || return 1
   for _ in 1 2 3 4 5 6 7 8; do
     [ "$pid" = "$lock_pid" ] && return 0
+    [ -n "$own" ] && [ "$pid" = "$own" ] && return 1
     pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
     [ -n "$pid" ] && [ "$pid" -gt 1 ] || return 1
   done
   return 1
+}
+
+# Read one field of the existing record. This wrapper is the record's producer
+# and reads back only what it wrote; the consumer-side reader is
+# fm_context_kv in bin/fm-context-lib.sh, which is not sourced here because it
+# pulls the classification library into a hook that has to stay small.
+record_field() {  # <key>
+  local key=$1 line
+  [ -f "$RECORD" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      "$key"=*) printf '%s' "${line#*=}"; return 0 ;;
+    esac
+  done < "$RECORD"
+  return 1
+}
+
+# 0 when the record already standing is a good one whose owner is still alive.
+# Liveness is the kernel's answer, not the process table's: on 2026-09-03 the
+# table a run consulted was a test's fake `ps`, which called the live holder
+# dead and let an error record through.
+good_record_owner_is_alive() {
+  local owner
+  [ "$(record_field status)" = ok ] || return 1
+  owner=$(record_field harness_pid) || return 1
+  case "$owner" in
+    ''|*[!0-9]*|0|1) return 1 ;;
+  esac
+  kill -0 "$owner" 2>/dev/null
 }
 
 # 0 when this session must not touch the record, because another live session
@@ -64,12 +109,26 @@ lock_is_in_ancestry() {
 # meant to apply.
 # Two independent proofs that the lock is this session's own are accepted, and
 # either is enough: the holder is this session's harness pid, or the holder is
-# in this process's ancestry. When neither can be shown the record is left
-# alone, which is the conservative reading of a session that cannot say who it
-# is: leaving another session's true record in place costs nothing, and
-# overwriting it costs the measurement.
+# in this process's ancestry at or below this session's own harness process.
+# The ancestry proof is handed that harness pid so it stops there: a lock pid
+# further up belongs to a session this one descends from, not to this one, and
+# a descendant that could replace its parent's record is the same defect through
+# a third door. When neither can be shown the record is left alone, which is
+# the conservative reading of a session that cannot say who it is: leaving
+# another session's true record in place costs nothing, and overwriting it
+# costs the measurement.
+# A session that cannot name its own harness process has nothing better to
+# offer than a good record whose owner is still alive, so it leaves that record
+# alone whatever the lock says - measured twice on 2026-09-03 as
+# `status=error error=no-harness-process harness_pid=` written over a live
+# holder's good record. The cost accepted here is narrow: a lock holder that
+# clears its context and at that instant cannot resolve its own harness keeps
+# its previous transcript path instead of recording the failure.
 record_belongs_to_another_session() {  # <this-session-harness-pid>
-  lock_is_in_ancestry && return 1
+  if [ -z "$1" ] && good_record_owner_is_alive; then
+    return 0
+  fi
+  lock_is_in_ancestry "$1" && return 1
   fm_session_lock_held_by_other "$LOCK" "$1"
 }
 

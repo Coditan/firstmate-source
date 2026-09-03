@@ -15,6 +15,7 @@ The Shared Predicate section of `docs/turnend-guard.md` remains authoritative fo
 
 Before printing, the wrapper parses `state/.lock` through `bin/fm-harness-pid-lib.sh` and walks at most eight parents from its own pid, the ancestry depth Pi's `lockOwnership()` and the shared library also use.
 If the lock names this session's pid table and a live pid in that ancestry, session-start already ran in this harness session and the wrapper stays silent.
+That silence deliberately keeps the unbounded ancestry reading even though the record gate below uses the exact one: a helper session a harness starts under the primary's own process tree is not a session that should be told to run session start, so it is left silent and read-only rather than nudged.
 Every path exits 0, including malformed state and adapter errors, because Claude SessionStart exit 2 blocks session initialization.
 
 ## Primary transcript record
@@ -64,8 +65,19 @@ A SECOND primary session in a home that already had one rewrote the record with 
 And a session that could not resolve its own harness process wrote `status=error` over a working record, which is how this seat's record came to read `status=error, error=no-harness-process` for a whole day.
 Both leave the session most likely to be over the ceiling as the one nothing is watching, which is the protection being absent exactly where it was meant to apply.
 
-Two independent proofs that the lock is this session's own are accepted, and either is enough: the holder is this session's resolved harness pid in the recorded pid table, or the holder sits in this process's own ancestry and the recorded pid table matches this session's.
+Two independent proofs that the lock is this session's own are accepted, and either is enough: the holder is this session's resolved harness pid in the recorded pid table, or the holder sits in this process's own ancestry, at or below this session's own nearest harness process, and the recorded pid table matches this session's.
 The second exists because the first can fail: an ancestry walk answers even when no ancestor matches a known harness name, and a `/clear` inside the lock holder must still replace its own record.
+The ancestry proof is exact, not merely bounded: the walk stops at the nearest harness process above the hook, so a lock pid that sits further up names a harness session this one descends from, and a descendant is not the holder.
+That distinction is load-bearing because a harness can start a second session inside the primary's own process tree: on 2026-09-03 Claude Code's background-job daemon started a helper session in the primary's cwd, four hops under the primary, and the helper's SessionStart hook found the lock pid in its ancestry, took itself for the holder, and rewrote the record with a transcript that stopped existing seconds later.
+When the harness pid cannot be resolved, the walk has no process to stop at and keeps its unbounded reading, which is the settled `no-harness-process` case the fallback exists for.
+
+A session that cannot name its own harness process never replaces a `status=ok` record whose owner is still alive.
+Liveness here is the kernel's answer through `kill -0`, not the process table's, because the table a run consults can be wrong: on 2026-09-03 two runs wrote `status=error error=no-harness-process harness_pid=` over the live holder's good record, and the one measured to the second was consulting a test's fake `ps` that called the live holder dead.
+Such a session has nothing better to offer than the record already standing, so the fallback below records only when no good live record is there to protect.
+The cost accepted is narrow and stated: a lock holder that clears its context and at that instant cannot resolve its own harness keeps its previous transcript path instead of recording the failure.
+
+A wrapper that cannot load one of its libraries writes nothing and prints nothing.
+Without the library its gate functions are undefined, and a gate call that fails with `command not found` used to fall through to the write; that is how a test copy of the wrapper, run without `bin/fm-harness-pid-lib.sh` and with a live home's `FM_HOME` still in the environment, replaced that home's record from inside a test run.
 A session that cannot name its own pid table cannot use the ancestry proof and leaves the record alone rather than accepting a colliding pid number.
 A legacy lock record naming no pid table keeps the old ancestry reading because the SessionStart hook runs before `bin/fm-lock.sh` rewrites that record on the first upgraded session, and refusing it there would leave that session's context ceiling unenforced for its whole life.
 When neither can be shown - a session that cannot say who it is, next to a lock that names a live harness - the record is left alone.
