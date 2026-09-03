@@ -58,7 +58,8 @@ Although the brief explicitly requires a terminal done status, directly appendin
 ```
 
 That made the instruction surface part of the bug.
-`AGENTS.md` now states explicitly that a worker appending its own sparse line to the status file named in its brief is the authorized status protocol.
+`AGENTS.md` now states explicitly that a worker writing its own sparse line through `bin/fm-status.sh` to the status file named in its brief is the authorized status protocol.
+The section "The writer through the symlink" below records that the writer reaches the signal directory from inside the sandbox.
 The wording fix alone is still not enough, because another live refusal described the same append as an external write.
 The runtime fix removes the external write from the normal path.
 The runtime fix also stops success from depending on which way the same reviewer happens to reason about an otherwise identical status append.
@@ -93,7 +94,7 @@ A secondmate receives the one-element form shown here:
 -c 'sandbox_workspace_write.writable_roots=["<FM_HOME>/state/.crew-signal/<id>"]'
 ```
 
-The worker still appends to the public path named in its brief, `state/<id>.status`.
+The worker still writes to the public path named in its brief, `state/<id>.status`, through `bin/fm-status.sh`.
 The write lands through the symlink into the private per-task directory that Codex is allowed to modify.
 This preserves the public status-file contract for firstmate, watcher, wake-drain, brief text, and any existing reader.
 A symlinked public status path is a fleet-wide contract change, so reviewers should judge it as a change to every reader and cleaner that touches `state/<id>.status` or `state/<id>.turn-ended`, not as a Codex-only launch detail.
@@ -114,6 +115,43 @@ probe
 ```
 
 The hardlink variant was rejected with `Read-only file system`, so the implementation uses symlinks.
+
+## The writer through the symlink
+
+The brief now hands the worker `bin/fm-status.sh` instead of a bare append, and that script lives in the vendored `bin/`, which the sandbox never grants write access to.
+The question was whether a writer executed from a read-only root still reaches the per-task signal directory through the public symlink, and whether its refusal path writes nothing there.
+Measured 2026-09-03 on `codex-cli 0.147.0`, with the fixture home under the source worktree and the sandbox's cwd a separate empty directory, so nothing but the listed root was writable.
+
+```sh
+mkdir -p "$P/home/state/.crew-signal/probe"
+ln -s .crew-signal/probe/status "$P/home/state/probe.status"
+# control: no writable root
+codex sandbox -c 'sandbox_mode="workspace-write"' \
+  -- bash -lc "FM_HOME='$P/home' '$W/bin/fm-status.sh' '$P/home/state/probe.status' done 'control'"
+# accept
+codex sandbox -c 'sandbox_mode="workspace-write"' \
+  -c "sandbox_workspace_write.writable_roots=[\"$P/home/state/.crew-signal/probe\"]" \
+  -- bash -lc "FM_HOME='$P/home' '$W/bin/fm-status.sh' '$P/home/state/probe.status' needs-decision --key route 'pick north or south'"
+# refuse
+codex sandbox -c 'sandbox_mode="workspace-write"' \
+  -c "sandbox_workspace_write.writable_roots=[\"$P/home/state/.crew-signal/probe\"]" \
+  -- bash -lc "FM_HOME='$P/home' '$W/bin/fm-status.sh' '$P/home/state/probe.status' needs-decision --key 'route choice' 'pick'"
+```
+
+The three runs returned, in order:
+
+```text
+bin/fm-status.sh: line 129: .../home/state/probe.status: Read-only file system
+exit=1
+appended: needs-decision [key=route]: pick north or south
+exit=0
+fm-status: decision key must be a privacy-safe slug: route choice
+exit=2
+```
+
+After the three runs the signal directory's `status` file held exactly one line, `needs-decision [key=route]: pick north or south`.
+So the writer reaches the signal root through the symlink exactly as the bare append did, the sandbox still refuses it without that root, and a refused key leaves the file untouched.
+A `codex sandbox` run whose cwd is the home directory or `/tmp` proves nothing about the root, because that sandbox leaves the whole cwd and `/tmp` writable; the control above was only meaningful once the fixture sat outside both.
 
 ## Watcher implication
 

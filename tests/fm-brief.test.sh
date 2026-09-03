@@ -246,6 +246,30 @@ test_premise_step_is_narrow_and_repair_worded() {
   pass "fm-brief.sh: --premise emits the narrow repair-worded disproof step"
 }
 
+test_premise_writer_paths_preserve_ampersands() {
+  local home id brief kind writer status
+  home="$TMP_ROOT/premise-&-home"
+  mkdir -p "$home/data"
+  writer="'$ROOT/bin/fm-status.sh'"
+  for kind in ship scout; do
+    id="brief-premise-ampersand-$kind"
+    if [ "$kind" = scout ]; then
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --scout --premise >/dev/null 2>&1
+    else
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --premise >/dev/null 2>&1
+    fi
+    brief="$home/data/$id/brief.md"
+    status="'$home/state/$id.status'"
+    assert_grep "$writer $status done \"{what you did instead and why}\"" "$brief" \
+      "$kind --premise brief corrupted an ampersand in the writer command"
+    assert_no_grep "__STATUS_WRITER__" "$brief" \
+      "$kind --premise brief retained the writer placeholder"
+    assert_no_grep "__STATUS_FILE__" "$brief" \
+      "$kind --premise brief retained the status-file placeholder"
+  done
+  pass "fm-brief.sh: premise writer paths preserve ampersands"
+}
+
 test_premise_omission_is_loud_for_ship_and_scout() {
   local home id brief kind
   home="$TMP_ROOT/premise-gate-home"
@@ -260,7 +284,7 @@ test_premise_omission_is_loud_for_ship_and_scout() {
     brief="$home/data/$id/brief.md"
     assert_grep "# Premise declaration - NONE ASSERTED" "$brief" \
       "$kind brief silently omitted the premise declaration"
-    assert_grep "append \`blocked: brief asserts a fact but was scaffolded without --premise\` to the status file and stop" "$brief" \
+    assert_grep "'$ROOT/bin/fm-status.sh' '$home/state/$id.status' blocked \"brief asserts a fact but was scaffolded without --premise\"" "$brief" \
       "$kind brief missing the fail-visible stop-and-report the reader can actually perform"
     assert_grep "Do not write a disproof step into this unguarded brief by hand." "$brief" \
       "$kind brief missing the ban on hand-written disproof wording"
@@ -420,10 +444,10 @@ test_secondmate_no_projects_charter() {
     "project-less charter operating model lost the pooled-worktree note"
   assert_no_grep "The projects above are local clones" "$brief" \
     "project-less charter kept the with-projects operating-model line"
-  assert_grep 'working [key=<work-slug>]' "$brief" \
-    "secondmate charter did not key material routed-work phases"
-  assert_grep 'resolved [key=<work-slug>]' "$brief" \
-    "secondmate charter did not close a quietly ended routed-work phase"
+  assert_grep 'working --key <work-slug> "{material phase}"' "$brief" \
+    "secondmate charter did not key material routed-work phases through the writer"
+  assert_grep 'resolved --key <work-slug> "{why it is no longer active}"' "$brief" \
+    "secondmate charter did not close a quietly ended routed-work phase through the writer"
   assert_grep 'use the same key on its later' "$brief" \
     "secondmate charter did not supersede working phases with later states"
   if grep -nE '^-[[:space:]]*$' "$brief" >/dev/null; then
@@ -520,13 +544,16 @@ test_scout_and_secondmate_load_decision_hold_policy() {
 # The decision key is read from the status line's verb PREFIX only
 # (bin/fm-classify-lib.sh's _fm_decision_key), so a key written anywhere else
 # does not name the decision the worker meant, and the failure surfaces far from
-# the line that caused it. Every scaffold must SHOW the keyed shape rather than
-# describe it, and state the one position the key sits in.
-# It must promise NOTHING beyond that. Nothing enforces the position, so a brief
-# that names a check or spells out what goes wrong is asserting behaviour with no
-# mechanism behind it, which is worse than the shown shape standing alone.
-test_status_key_position_is_shown_in_every_scaffold() {
-  local home ship scout charter
+# the line that caused it. Every scaffold therefore hands the worker
+# bin/fm-status.sh, which composes the line from parts and refuses a bad key at
+# the write, in place of a bare shell append that left the grammar to be typed.
+# The brief may say the writer refuses only because the writer actually does:
+# the last block below runs the exact command the brief shows, at the exact
+# path it names, and requires the refusal, so the promise is measured here
+# rather than asserted. An earlier version of this test forbade the words
+# "refuses it by name" because nothing performed the refusal then.
+test_status_writer_replaces_bare_echo_in_every_scaffold() {
+  local home ship scout charter writer status out rc
   home="$TMP_ROOT/key-position-home"
   write_registry "$home"
 
@@ -541,25 +568,54 @@ test_status_key_position_is_shown_in_every_scaffold() {
   scout="$home/data/key-scout/brief.md"
   charter="$home/data/key-mate/brief.md"
 
+  writer="'$ROOT/bin/fm-status.sh'"
   for brief in "$ship" "$scout"; do
-    assert_grep 'needs-decision [key=<slug>]: {summary of options}' "$brief" \
-      "$brief does not show the keyed needs-decision shape"
-    assert_grep 'resolved [key=<slug>]: {how it was decided or unblocked}' "$brief" \
-      "$brief does not show the keyed resolved shape"
+    status="'$home/state/$(basename "$(dirname "$brief")").status'"
+    assert_grep "$writer $status {state} \"{one short line}\"" "$brief" \
+      "$brief does not hand the worker the status writer for a plain line"
+    assert_grep "$writer $status needs-decision --key <slug> \"{summary of options}\"" "$brief" \
+      "$brief does not show the keyed needs-decision write"
+    assert_grep "$writer $status resolved --key <slug> \"{how it was decided or unblocked}\"" "$brief" \
+      "$brief does not show the keyed resolved write"
   done
-  assert_grep 'working [key=<work-slug>]: {material phase}' "$charter" \
-    "charter does not show the keyed working shape"
-  assert_grep 'resolved [key=<work-slug>]: {how it was decided or unblocked}' "$charter" \
-    "charter does not show the keyed resolved shape for an answered decision"
+  status="'$home/state/key-mate.status'"
+  assert_grep "$writer $status {state} \"{one short line}\"" "$charter" \
+    "charter does not hand the secondmate the status writer for a plain line"
+  assert_grep "$writer $status working --key <work-slug> \"{material phase}\"" "$charter" \
+    "charter does not show the keyed working write"
+  assert_grep "$writer $status resolved --key <work-slug> \"{how it was decided or unblocked}\"" "$charter" \
+    "charter does not show the keyed resolved write for an answered decision"
   for brief in "$ship" "$scout" "$charter"; do
     assert_grep 'in the verb prefix, between the verb and the colon' "$brief" \
-      "$brief does not state where the decision key goes"
-    assert_no_grep 'refuses it by name' "$brief" \
-      "$brief promises an enforcement check that nothing performs"
-    assert_no_grep 'not read as a key at all' "$brief" \
-      "$brief describes a failure mode instead of letting the shown shape stand alone"
+      "$brief does not state where the writer puts the decision key"
+    assert_grep 'never with a bare shell append' "$brief" \
+      "$brief does not route every status append through the writer"
+    assert_no_grep 'echo "{state}' "$brief" \
+      "$brief still shows a bare echo status append"
+    assert_no_grep '>> '"'"'' "$brief" \
+      "$brief still shows a shell append onto a quoted path"
+    assert_no_grep '[key=<slug>]' "$brief" \
+      "$brief still shows the key grammar for the worker to type by hand"
+    assert_no_grep '[key=<work-slug>]' "$brief" \
+      "$brief still shows the key grammar for the worker to type by hand"
   done
-  pass "fm-brief.sh: every scaffold shows the keyed status shape and states its position"
+
+  # The refusal the briefs describe is performed by the command they name: run it
+  # as the worker would, with a key the fold could not read, at the ship brief's
+  # own status path, and require the refusal by name with nothing written.
+  mkdir -p "$home/state"
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-status.sh" "$home/state/key-ship.status" \
+    needs-decision --key 'route choice' 'pick' 2>&1); rc=$?
+  expect_code 2 "$rc" "the writer the ship brief names did not refuse a bad key"
+  assert_contains "$out" "fm-status: decision key must be a privacy-safe slug: route choice" \
+    "the writer's refusal did not name the key"
+  assert_absent "$home/state/key-ship.status" "a refused key wrote a status line"
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-status.sh" "$home/state/key-ship.status" \
+    needs-decision --key route-choice 'pick' 2>&1); rc=$?
+  expect_code 0 "$rc" "the writer the ship brief names refused a good key: $out"
+  assert_grep 'needs-decision [key=route-choice]: pick' "$home/state/key-ship.status" \
+    "the accepted key did not land in the verb prefix"
+  pass "fm-brief.sh: every scaffold hands the worker the status writer, and the writer refuses as described"
 }
 
 # Rule 1's push ban and Bridge's publish step both target the default branch, and a
@@ -632,6 +688,7 @@ test_herdr_lab_contract_quotes_foreign_firstmate_path
 test_herdr_lab_omission_is_loud_for_ship_and_scout
 test_herdr_lab_contract_applies_to_scouts_but_not_secondmates
 test_premise_step_is_narrow_and_repair_worded
+test_premise_writer_paths_preserve_ampersands
 test_premise_omission_is_loud_for_ship_and_scout
 test_premise_scaffold_stdout_names_every_placeholder
 test_every_brief_declares_exactly_one_premise_state
@@ -640,6 +697,6 @@ test_premise_is_rejected_for_secondmate_charters
 test_secondmate_no_projects_charter
 test_pause_verb_override_renders_all_brief_scaffolds
 test_scout_and_secondmate_load_decision_hold_policy
-test_status_key_position_is_shown_in_every_scaffold
+test_status_writer_replaces_bare_echo_in_every_scaffold
 test_rule_one_states_its_bridge_boundary
 test_scout_and_secondmate_scaffold

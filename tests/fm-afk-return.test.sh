@@ -80,6 +80,7 @@ test_return_gate_orders_catchup_before_bearings() {
   gate="$dir/home/state/.afk-return-catchup"
   [ -s "$gate" ] || fail "return begin did not persist its fail-closed catch-up gate"
   assert_contains "$out" 'firstmate-actionable blocker: repair-task [key=synthetic-dependency]' "return output did not assign blocker remediation to Firstmate"
+  assert_contains "$out" 'bin/fm-status.sh <status-file> resolved --key <key> "<reason>"' "return output did not direct keyed blocker closure through the status writer"
   grep -F $'evidence\twake\t1784074271' "$gate" >/dev/null || fail "drained wake evidence was not retained in the durable gate"
   grep -F $'evidence\twake\twake annotation: latest wake-EVENT observed at drain, not current state: repair-task.status: blocked synthetic dependency' "$gate" >/dev/null \
     || fail "the separate drain annotation was not retained as away-return evidence"

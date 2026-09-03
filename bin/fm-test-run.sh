@@ -235,6 +235,7 @@ family_for_basename() {
     fm-role-config.test.sh|fm-run-reader-reach.test.sh|\
     fm-validation-daemon-check.test.sh|fm-runtime-ignore.test.sh|\
     fm-send-popup-settle.test.sh|fm-send-settle.test.sh|fm-slot-guard.test.sh|\
+    fm-status.test.sh|\
     fm-stow-contract.test.sh|fm-subagent-pretool-check.test.sh|\
     fm-supervision-cost.test.sh|fm-supervision-instructions.test.sh|\
     fm-test-lib.test.sh|fm-tmux-submit-busy.test.sh|\

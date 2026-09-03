@@ -182,13 +182,38 @@ status_is_terminal_verb() {
 # FM_CLASSIFY_FINISHED_VERBS overrides the set.
 FM_CLASSIFY_FINISHED_VERBS_DEFAULT='done failed'
 
+_status_finished_verbs() {
+  local configured held resolve pause verb out='' reserved='working needs-decision blocked'
+  local -a verbs
+  held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
+  resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
+  pause=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}
+  if [ "${FM_CLASSIFY_FINISHED_VERBS+x}" = x ]; then
+    configured=$FM_CLASSIFY_FINISHED_VERBS
+  else
+    configured=$FM_CLASSIFY_FINISHED_VERBS_DEFAULT
+  fi
+  read -r -a verbs <<< "$configured"
+  for verb in "${verbs[@]}"; do
+    case "$verb" in
+      ''|*[!A-Za-z0-9_-]*|"$held"|"$resolve"|"$pause") continue ;;
+    esac
+    case " $reserved $out " in
+      *" $verb "*) continue ;;
+    esac
+    out="${out}${out:+ }${verb}"
+  done
+  printf '%s' "$out"
+}
+
 # 0 if the given status line's leading verb declares the task finished.
 status_is_finished_verb() {  # <status-line>
-  local line=$1 verb
+  local line=$1 verb finished
   [ -n "$line" ] || return 1
   verb=$(status_line_verb "$line")
   [ -n "$verb" ] || return 1
-  case " ${FM_CLASSIFY_FINISHED_VERBS:-$FM_CLASSIFY_FINISHED_VERBS_DEFAULT} " in
+  finished=$(_status_finished_verbs)
+  case " $finished " in
     *" $verb "*) return 0 ;;
   esac
   return 1
@@ -258,6 +283,77 @@ status_is_paused_or_captain_held() {  # <status-line>
   [ "$verb" = "${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}" ]
 }
 
+# --- the worker-writable vocabulary -----------------------------------------
+#
+# The verbs a worker may write to its own status file, spelled once so the
+# writer (bin/fm-status.sh) refuses exactly what the readers above cannot read.
+# A line whose verb is outside this set is a no-verb signal to every reader: it
+# opens no decision, finishes nothing, and may not even wake firstmate, so the
+# writer refuses it at the write instead of letting it vanish at the fold.
+# All four verb overrides - captain-held, finished, pause, and resolve - pass
+# through this boundary. Every admitted token must match [A-Za-z0-9_-]+, stay
+# distinct from every built-in and configured sibling, and differ from the
+# valid configured captain-held verb. Invalid finished tokens are dropped;
+# invalid scalar configuration refuses the whole vocabulary closed. The
+# captain-held verb itself is never included: fm-decision-hold.sh writes it
+# only after verifying the backlog hold, and a worker writing it would claim a
+# transfer that never happened.
+status_worker_verbs() {
+  local builtins='working needs-decision blocked' held resolve pause verb finished configured_finished out
+  local -a finished_verbs
+  held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
+  resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
+  pause=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}
+  for verb in "$held" "$resolve" "$pause"; do
+    case "$verb" in
+      ''|*[!A-Za-z0-9_-]*) return 1 ;;
+    esac
+  done
+  case " $builtins " in
+    *" $held "*|*" $resolve "*|*" $pause "*) return 1 ;;
+  esac
+  [ "$resolve" != "$held" ] || return 1
+  [ "$pause" != "$held" ] || return 1
+  [ "$pause" != "$resolve" ] || return 1
+  if [ "${FM_CLASSIFY_FINISHED_VERBS+x}" = x ]; then
+    configured_finished=$FM_CLASSIFY_FINISHED_VERBS
+  else
+    configured_finished=$FM_CLASSIFY_FINISHED_VERBS_DEFAULT
+  fi
+  read -r -a finished_verbs <<< "$configured_finished"
+  for verb in "${finished_verbs[@]}"; do
+    case "$verb" in
+      ''|*[!A-Za-z0-9_-]*|"$held") continue ;;
+    esac
+    [ "$verb" != "$resolve" ] || return 1
+    [ "$verb" != "$pause" ] || return 1
+  done
+  finished=$(_status_finished_verbs)
+  out="$builtins${finished:+ $finished} $resolve $pause"
+  printf '%s' "$out"
+}
+
+# 0 if <verb> is one a worker may write (a member of status_worker_verbs).
+status_verb_is_writable() {  # <verb>
+  local verbs
+  case "$1" in ''|*[[:space:]]*) return 1 ;; esac
+  verbs=$(status_worker_verbs) || return 1
+  case " $verbs " in
+    *" $1 "*) return 0 ;;
+  esac
+  return 1
+}
+
+# 0 if <key> is a privacy-safe decision-key slug: non-empty, only
+# [A-Za-z0-9._-]. The one predicate behind _fm_decision_key below and the
+# writer's refusal, so a key the writer accepts is one the fold can read.
+status_key_is_slug() {  # <key>
+  case "$1" in
+    ''|*[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  return 0
+}
+
 # --- durable keyed decisions ------------------------------------------------
 #
 # The status stream is an append-only EVENT log. Reading it last-event-wins
@@ -296,10 +392,8 @@ _fm_decision_key() {  # <status-line> -> key slug, or "default" when no token
     *\[key=*\]*)
       k=${prefix#*\[key=}
       k=${k%%\]*}
-      case "$k" in
-        ''|*[!A-Za-z0-9._-]*) return 1 ;;
-        *) printf '%s' "$k" ;;
-      esac
+      status_key_is_slug "$k" || return 1
+      printf '%s' "$k"
       ;;
     *) printf 'default' ;;
   esac
