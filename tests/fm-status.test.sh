@@ -121,7 +121,7 @@ test_configured_finished_verbs_align_writer_and_classifier() {
   FM_CLASSIFY_FINISHED_VERBS='complete failed' status_has_finished_event "$f" \
     || fail "the classifier did not find the written complete event"
   OUT=$(FM_HOME="$HOME_DIR" FM_CLASSIFY_FINISHED_VERBS='complete failed' \
-    "$WRITER" "$refused" done "old completion" 2>&1); RC=$?
+    "$WRITER" "$refused" "done" "old completion" 2>&1); RC=$?
   expect_code 2 "$RC" "an overridden-away finished verb must be refused"
   assert_absent "$refused" "an overridden-away done verb wrote a status line"
   pass "fm-status.sh: configured finished verbs align writer and classifier"
@@ -149,7 +149,7 @@ test_invalid_and_colliding_verb_overrides_refuse_closed() {
   assert_contains "$ERR" "fm-status: unknown status verb 'paused:'" \
     "grammar-character override was not refused by name"
   assert_absent "$f" "a grammar-character override wrote a status line"
-  FM_CLASSIFY_PAUSED_VERB=done run_writer "$f" done "colliding alias"
+  FM_CLASSIFY_PAUSED_VERB="done" run_writer "$f" "done" "colliding alias"
   expect_code 2 "$RC" "a colliding pause override must refuse the vocabulary"
   assert_contains "$ERR" "fm-status: unknown status verb 'done'" \
     "colliding override did not refuse closed"
