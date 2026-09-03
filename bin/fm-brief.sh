@@ -294,21 +294,21 @@ fi
 # exists so a premise-carrying brief cannot depend on firstmate remembering to.
 if [ "$PREMISE" -eq 1 ]; then
 REPLACE_NOTE="{TASK} and {PREMISE}"
-PREMISE_SECTION=$(cat <<'EOF'
+PREMISE_SECTION=$(cat <<EOF
 # The premise this brief asserts
-This brief was scaffolded with `--premise` because it hands you one asserted fact you are expected to act on without re-deriving it:
+This brief was scaffolded with \`--premise\` because it hands you one asserted fact you are expected to act on without re-deriving it:
 
 {PREMISE}
 
 That is an assertion made by someone who is not looking at this code.
 BEFORE you act on it, name the single check whose result would show that assertion is WRONG, run that check, and paste its output.
-If it shows the assertion is wrong, do NOT follow this brief literally: carry out what it was actually trying to achieve, and say in your `done:` line what you did instead and why.
+If it shows the assertion is wrong, do NOT follow this brief literally: carry out what it was actually trying to achieve, and say in your \`$STATUS_WRITER $STATUS_FILE done "{what you did instead and why}"\` line what you did instead and why.
 This is one named assertion, not a standing instruction to re-check the rest of the brief.
 EOF
 )
 elif [ "$NO_PREMISE" -eq 1 ]; then
 REPLACE_NOTE="{TASK}"
-PREMISE_SECTION=$(cat <<'EOF'
+PREMISE_SECTION=$(cat <<EOF
 # Premise declaration - DECLARED NONE
 **DECLARED NONE:** this brief's scaffolding names no asserted premise for you to disprove, and that is the whole of what this declaration covers.
 It says nothing about the task text above, which a programmatic caller composed on its own.
@@ -318,17 +318,15 @@ EOF
 )
 else
 REPLACE_NOTE="{TASK}"
-PREMISE_SECTION=$(cat <<'EOF'
+PREMISE_SECTION=$(cat <<EOF
 # Premise declaration - NONE ASSERTED
-**DECLARED ABSENT:** this scaffold cannot inspect the task text that replaces `{TASK}` later.
+**DECLARED ABSENT:** this scaffold cannot inspect the task text that replaces \`{TASK}\` later.
 This brief is declared to hand you no asserted fact you would act on without re-deriving it first.
-If the task text does hand you one - which branch is stale, which file holds the value, which commit is the right one, that a named path is safe to take - write \`__STATUS_WRITER__ __STATUS_FILE__ blocked "brief asserts a fact but was scaffolded without --premise"\` and stop; firstmate will regenerate it.
+If the task text does hand you one - which branch is stale, which file holds the value, which commit is the right one, that a named path is safe to take - write \`$STATUS_WRITER $STATUS_FILE blocked "brief asserts a fact but was scaffolded without --premise"\` and stop; firstmate will regenerate it.
 Do not write a disproof step into this unguarded brief by hand.
 EOF
 )
 fi
-PREMISE_SECTION=${PREMISE_SECTION//__STATUS_WRITER__/$STATUS_WRITER}
-PREMISE_SECTION=${PREMISE_SECTION//__STATUS_FILE__/$STATUS_FILE}
 
 # Rule 1 forbids pushing to the default branch, and publishing a Bridge envelope
 # targets the default branch - but that push IS Bridge's delivery step, not a code

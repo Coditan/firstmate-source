@@ -246,6 +246,30 @@ test_premise_step_is_narrow_and_repair_worded() {
   pass "fm-brief.sh: --premise emits the narrow repair-worded disproof step"
 }
 
+test_premise_writer_paths_preserve_ampersands() {
+  local home id brief kind writer status
+  home="$TMP_ROOT/premise-&-home"
+  mkdir -p "$home/data"
+  writer="'$ROOT/bin/fm-status.sh'"
+  for kind in ship scout; do
+    id="brief-premise-ampersand-$kind"
+    if [ "$kind" = scout ]; then
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --scout --premise >/dev/null 2>&1
+    else
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --premise >/dev/null 2>&1
+    fi
+    brief="$home/data/$id/brief.md"
+    status="'$home/state/$id.status'"
+    assert_grep "$writer $status done \"{what you did instead and why}\"" "$brief" \
+      "$kind --premise brief corrupted an ampersand in the writer command"
+    assert_no_grep "__STATUS_WRITER__" "$brief" \
+      "$kind --premise brief retained the writer placeholder"
+    assert_no_grep "__STATUS_FILE__" "$brief" \
+      "$kind --premise brief retained the status-file placeholder"
+  done
+  pass "fm-brief.sh: premise writer paths preserve ampersands"
+}
+
 test_premise_omission_is_loud_for_ship_and_scout() {
   local home id brief kind
   home="$TMP_ROOT/premise-gate-home"
@@ -664,6 +688,7 @@ test_herdr_lab_contract_quotes_foreign_firstmate_path
 test_herdr_lab_omission_is_loud_for_ship_and_scout
 test_herdr_lab_contract_applies_to_scouts_but_not_secondmates
 test_premise_step_is_narrow_and_repair_worded
+test_premise_writer_paths_preserve_ampersands
 test_premise_omission_is_loud_for_ship_and_scout
 test_premise_scaffold_stdout_names_every_placeholder
 test_every_brief_declares_exactly_one_premise_state
