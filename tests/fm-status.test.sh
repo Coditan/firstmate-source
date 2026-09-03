@@ -110,6 +110,38 @@ test_configured_pause_and_resolve_verbs_are_accepted() {
   pass "fm-status.sh: the vocabulary follows the configured pause verb"
 }
 
+test_configured_finished_verbs_align_writer_and_classifier() {
+  local f="$STATE/configured-finished.status" refused="$STATE/configured-done.status" line
+  OUT=$(FM_HOME="$HOME_DIR" FM_CLASSIFY_FINISHED_VERBS='complete failed' \
+    "$WRITER" "$f" complete "custom completion" 2>&1); RC=$?
+  expect_code 0 "$RC" "a valid configured finished verb must be writable: $OUT"
+  line=$(cat "$f")
+  FM_CLASSIFY_FINISHED_VERBS='complete failed' status_is_finished_verb "$line" \
+    || fail "the classifier did not read complete as a finished verb"
+  FM_CLASSIFY_FINISHED_VERBS='complete failed' status_has_finished_event "$f" \
+    || fail "the classifier did not find the written complete event"
+  OUT=$(FM_HOME="$HOME_DIR" FM_CLASSIFY_FINISHED_VERBS='complete failed' \
+    "$WRITER" "$refused" done "old completion" 2>&1); RC=$?
+  expect_code 2 "$RC" "an overridden-away finished verb must be refused"
+  assert_absent "$refused" "an overridden-away done verb wrote a status line"
+  pass "fm-status.sh: configured finished verbs align writer and classifier"
+}
+
+test_invalid_finished_verb_tokens_are_dropped() {
+  local f="$STATE/invalid-finished.status"
+  FM_CLASSIFY_FINISHED_VERBS='complete: failed' run_writer "$f" 'complete:' "bad grammar"
+  expect_code 2 "$RC" "a grammar-character finished token must be refused"
+  assert_contains "$ERR" "fm-status: unknown status verb 'complete:'" \
+    "grammar-character finished token was not refused by name"
+  assert_absent "$f" "a grammar-character finished token wrote a status line"
+  FM_CLASSIFY_FINISHED_VERBS='captain-held failed' run_writer "$f" captain-held "claimed transfer"
+  expect_code 2 "$RC" "a reserved finished token must be refused"
+  assert_contains "$ERR" "fm-status: unknown status verb 'captain-held'" \
+    "reserved finished token was not refused by name"
+  assert_absent "$f" "a reserved finished token wrote a status line"
+  pass "fm-status.sh: invalid finished verb tokens are dropped"
+}
+
 test_invalid_and_colliding_verb_overrides_refuse_closed() {
   local f="$STATE/invalid-override.status"
   FM_CLASSIFY_PAUSED_VERB='paused:' run_writer "$f" 'paused:' "vendor wait"
@@ -130,7 +162,7 @@ test_refused_verb_writes_nothing() {
   run_writer "$f" finished "all good"
   expect_code 2 "$RC" "unknown verb must exit 2"
   assert_contains "$ERR" "fm-status: unknown status verb 'finished'" "refusal did not name the verb"
-  assert_contains "$ERR" "working needs-decision blocked failed done resolved paused" \
+  assert_contains "$ERR" "working needs-decision blocked done failed resolved paused" \
     "refusal did not list the vocabulary"
   assert_absent "$f" "a refused verb must write nothing"
   run_writer "$f" captain-held "tracked by someone"
@@ -271,6 +303,8 @@ test_keyed_needs_decision_opens_that_key
 test_keyed_resolved_closes_that_key_only
 test_keyed_working_phase_reads_back
 test_configured_pause_and_resolve_verbs_are_accepted
+test_configured_finished_verbs_align_writer_and_classifier
+test_invalid_finished_verb_tokens_are_dropped
 test_invalid_and_colliding_verb_overrides_refuse_closed
 test_refused_verb_writes_nothing
 test_captain_held_cannot_enter_worker_vocabulary_through_overrides
