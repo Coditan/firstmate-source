@@ -165,7 +165,7 @@ Classify each wake this way:
   A nonterminal progress verb remains nonterminal even when its prose contains a legacy free-text token such as `PR ready`, `checks green`, `ready in branch`, or `merged`; only a bare legacy line with such a token escalates.
   Other signals with no captain-relevant status -> self-handle.
 - `signal` or `stale` for a declared `paused:` external wait -> self-handle and track the pause rather than a wedge.
-  If it remains declared and idle past `FM_PAUSE_RESURFACE_SECS` (default 3600s), housekeeping sends one awaiting-external recheck and resets the pause window.
+  If it remains declared and idle past `FM_PAUSE_RESURFACE_SECS` (default owned by `FM_PAUSE_RESURFACE_SECS_DEFAULT` in `bin/fm-classify-lib.sh`, documented in `docs/configuration.md`), housekeeping sends one awaiting-external recheck and resets the pause window.
 - `check` -> escalate, with one narrowing: an identical repeat of an already-delivered terminal outcome from the same check is self-handled.
   Check scripts print only when firstmate should wake, so a check wake is actionable by default.
   A terminal outcome is one that cannot revert - a pull request reported merged - so a repeat of it carries nothing the first report did not, while a repeated non-terminal check still escalates every time because the condition it names can still change.
