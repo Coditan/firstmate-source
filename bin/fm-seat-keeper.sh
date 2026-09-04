@@ -129,6 +129,7 @@ SEAT_COMMAND=${FM_SEAT_KEEPER_SEAT_COMMAND:-'exec bash -lic "claude; exec bash -
 # own subshell, so a pid record and its identity taken separately would name two
 # different processes.
 SELF_PID=${BASHPID:-$$}
+LAST_KILL_REFUSAL=''
 
 POLL=$(fm_retry_num_or_default "$POLL" 15)
 BASE_BACKOFF=$(fm_retry_num_or_default "$BASE_BACKOFF" 30)
@@ -302,6 +303,24 @@ window_name() {  # <index>
   return 1
 }
 
+# The delivery verdict stays the seat-death detector; this reading only
+# corroborates the one branch that destroys work, the way a down: verdict is
+# only death when an independent session reading agrees. The composer-unknown
+# verdict names two different worlds - a dead shell prompt and a pane that could
+# not be read - and only the first of them may be killed.
+pane_reading() {  # <window-index>
+  "$TMUX_CMD" -S "$TARGET_SOCKET" display-message -p -t "$TARGET_SESSION:$1" \
+    '#{pane_dead}:#{pane_current_command}' 2>/dev/null
+}
+
+reading_is_a_dead_shell() {  # <reading>
+  local reading=$1
+  [ -n "$reading" ] || return 1
+  [ "${reading%%:*}" = 1 ] && return 0
+  case "${reading#*:}" in bash|sh|zsh|dash|ksh|fish|login|-bash|-sh|-zsh) return 0 ;; esac
+  return 1
+}
+
 start_bash_window() {
   "$TMUX_CMD" -S "$TARGET_SOCKET" new-window -d -t "$TARGET_SESSION:0" -n bash \
     -c "$ACCOUNT_HOME" 'exec bash -l'
@@ -314,7 +333,7 @@ start_firstmate_window() {
 }
 
 ensure_topology() {  # <delivery-status-line>
-  local status=$1 name changed=0
+  local status=$1 name changed=0 reading detail
 
   # A real tmux command proves the target server survived. Do not create a new
   # target server: this stopgap is only for seat/session loss while it survives.
@@ -346,6 +365,20 @@ ensure_topology() {  # <delivery-status-line>
           log "launch refused: $TARGET_SESSION:1 exists as '$name', not firstmate"
           return 1
         }
+        reading=$(pane_reading 1 || true)
+        if ! reading_is_a_dead_shell "$reading"; then
+          if [ -z "$reading" ]; then
+            detail="could not be read"
+          else
+            detail="reads pane_dead=${reading%%:*} pane_current_command=${reading#*:}"
+          fi
+          if [ "$LAST_KILL_REFUSAL" != "${reading:-unreadable}" ]; then
+            log "kill refused: the composer-unknown verdict was not corroborated; $TARGET_SESSION:1 $detail, which is not a dead shell"
+            LAST_KILL_REFUSAL=${reading:-unreadable}
+          fi
+          return 1
+        fi
+        LAST_KILL_REFUSAL=''
         "$TMUX_CMD" -S "$TARGET_SOCKET" kill-window -t "$TARGET_SESSION:1" || return 1
         name=
       fi

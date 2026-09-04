@@ -61,6 +61,9 @@ The keeper must run on a terminal socket separate from the one it watches, becau
 That rule is enforced at startup rather than only asserted: when `$TMUX` says the keeper was hand-started on the terminal server hosting the target socket it refuses to run, and it names both the mistake and the fix.
 A keeper started outside a terminal server, or on any other one, is unaffected by that refusal.
 It restores a session and its windows on a target server that survived, and it deliberately refuses to create a new target server: total server loss is not what this stopgap covers.
+Restoring is otherwise additive, with one exception an operator can lose work to: on the composer-unknown verdict the keeper kills the existing window named `firstmate` before relaunching it, because that verdict says the seat's own composer row is a bare prompt rather than an agent.
+It kills that window only when an independent reading of the pane confirms a dead shell, `#{pane_dead}` or a shell as `#{pane_current_command}`, and refuses otherwise, because the same verdict is also emitted for a pane that could not be read, and a live agent must not be killed on an inconclusive reading.
+The refusal is logged once per onset, naming what was read, and the delivery verdict remains the seat-death detector: that reading only corroborates the kill and never triggers one.
 
 The keeper obeys the same declarations the respawner obeys, because a home running it as the stand-in for the unit must not lose them.
 While `state/.seat-stay-down` exists it clears its retry episode and leaves the seat down.

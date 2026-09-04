@@ -23,6 +23,7 @@ for arg do
     list-sessions) exit 0 ;;
     has-session) exit "\$(cat "$dirvar/has-session-rc")" ;;
     list-windows) cat "$dirvar/windows"; exit 0 ;;
+    display-message) [ -f "$dirvar/pane-reading" ] || exit 1; cat "$dirvar/pane-reading"; exit 0 ;;
   esac
 done
 exit 0
@@ -90,6 +91,25 @@ session_creations() {  # <case-dir>
 }
 
 DEAD_PANE='undeliverable: listener pid 1 is up with 1 wake(s) pending, but the published pane %9 no longer exists'
+COMPOSER_UNKNOWN='undeliverable: listener pid 1 is up with 1 wake(s) pending, but the session composer could not be confirmed empty (state=unknown: dead shell prompt or unreadable pane)'
+
+# The composer-unknown verdict is the one death verdict whose restore destroys
+# work: it replaces an existing firstmate window. These two cases stand the
+# keeper in front of the same verdict with a live pane and with a dead one.
+kill_calls() {  # <case-dir>
+  local n
+  n=$(grep -cE 'kill-window' "$1/tmux.log" 2>/dev/null) || n=0
+  printf '%s\n' "$n"
+}
+
+make_live_session_case() {  # <name> <pane-reading> -> echoes the case dir
+  local dir
+  dir=$(make_case "$1")
+  printf '0\n' > "$dir/has-session-rc"
+  printf '0:bash\n1:firstmate\n' > "$dir/windows"
+  printf '%s\n' "$2" > "$dir/pane-reading"
+  printf '%s\n' "$dir"
+}
 
 test_dead_seat_verdict_restores_the_seat() {
   local dir
@@ -429,6 +449,46 @@ test_a_keeper_on_the_targets_own_server_is_refused() {
   pass "a keeper on the target socket's own server is refused, and any other start is untouched"
 }
 
+test_composer_unknown_does_not_kill_a_live_seat() {
+  local dir
+  dir=$(make_live_session_case composer-unknown-live '0:node')
+  run_keeper "$dir" "$COMPOSER_UNKNOWN" 2 || fail "keeper exited non-zero on a composer-unknown verdict over a live pane"
+  [ "$(kill_calls "$dir")" = 0 ] \
+    || fail "the keeper killed a live firstmate window on an uncorroborated composer-unknown verdict"
+  [ "$(launch_calls "$dir")" = 0 ] \
+    || fail "the keeper relaunched over a live firstmate window"
+  assert_grep "kill refused" "$dir/home/state/.seat-keeper.log" \
+    "the refused kill was not logged"
+  assert_grep "pane_current_command=node" "$dir/home/state/.seat-keeper.log" \
+    "the refusal did not name what it read"
+  pass "a composer-unknown verdict over a live pane leaves the seat alone and says why"
+}
+
+test_composer_unknown_over_a_dead_shell_still_relaunches() {
+  local dir
+  dir=$(make_live_session_case composer-unknown-dead '0:bash')
+  run_keeper "$dir" "$COMPOSER_UNKNOWN" 2 || fail "keeper exited non-zero on a composer-unknown verdict over a dead shell"
+  [ "$(kill_calls "$dir")" -gt 0 ] \
+    || fail "the keeper did not kill the dead-shell firstmate window"
+  assert_grep "new-window" "$dir/tmux.log" \
+    "the keeper killed the dead-shell window without relaunching the seat"
+  assert_no_grep "kill refused" "$dir/home/state/.seat-keeper.log" \
+    "the keeper refused a kill although the pane was a dead shell"
+  pass "a composer-unknown verdict over a dead shell still kills and relaunches the seat"
+}
+
+test_composer_unknown_over_an_unreadable_pane_is_refused() {
+  local dir
+  dir=$(make_live_session_case composer-unknown-unreadable '')
+  rm -f "$dir/pane-reading"
+  run_keeper "$dir" "$COMPOSER_UNKNOWN" 2 || fail "keeper exited non-zero on a composer-unknown verdict over an unreadable pane"
+  [ "$(kill_calls "$dir")" = 0 ] \
+    || fail "the keeper killed a firstmate window whose pane it could not read"
+  assert_grep "could not be read" "$dir/home/state/.seat-keeper.log" \
+    "the refusal did not say the pane could not be read"
+  pass "a composer-unknown verdict over an unreadable pane leaves the seat alone"
+}
+
 test_dead_seat_verdict_restores_the_seat
 test_one_reading_is_not_enough
 test_a_changing_wake_count_is_still_one_condition
@@ -440,6 +500,9 @@ test_restore_attempts_are_bounded_and_reported
 test_the_state_dir_argument_wins_over_the_environment
 test_a_state_dir_that_is_not_the_homes_own_is_refused
 test_a_keeper_on_the_targets_own_server_is_refused
+test_composer_unknown_does_not_kill_a_live_seat
+test_composer_unknown_over_a_dead_shell_still_relaunches
+test_composer_unknown_over_an_unreadable_pane_is_refused
 test_the_delivery_verdict_is_read_for_the_home_given
 test_a_hand_start_lifts_an_exhausted_bound
 test_a_hand_start_lifts_an_exhausted_but_unfiled_bound
