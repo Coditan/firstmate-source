@@ -82,16 +82,16 @@ FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel'
 # background shells, rendered while its composer is idle. Verified 2026-09-04 on
 # Claude Code 2.1.260 (docs/tmux-backend.md "claude's idle composer with
 # background shells"): the status footer reads `· 1 shell ·` / `· 2 shells ·`
-# and the turn summary reads `done 11:18 PM · 2 shells still running`, with no
-# `esc to interrupt` anywhere, because the agent is waiting for its own shells
-# rather than generating. Deliberately NOT folded into the busy set above: a pane
-# showing only this is idle by the busy rule, so it still goes stale and still
+# while the static turn summary can read `done 11:18 PM · 2 shells still
+# running`. Only the live footer is evidence because the previous turn's summary
+# can outlive its shell count. Deliberately NOT folded into the busy set above:
+# a pane showing only this is idle by the busy rule, so it still goes stale and still
 # reaches the wedge ladder's bounded recheck; what the indicator changes is how
 # that stale is CLASSIFIED (bin/fm-crew-state.sh reads it as working · source:
 # pane), never whether it is detected. The interpunct separators are part of
 # the match so prose that merely mentions "2 shells" in output text cannot
 # satisfy it. FM_BACKGROUND_WORK_REGEX overrides it.
-FM_TMUX_BACKGROUND_WORK_REGEX_DEFAULT='· [0-9]+ shells?( still running| ·)'
+FM_TMUX_BACKGROUND_WORK_REGEX_DEFAULT='· [0-9]+ shells? ·'
 
 fm_tmux_quote_command_arg() {
   local value=$1

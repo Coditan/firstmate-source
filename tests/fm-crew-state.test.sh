@@ -962,6 +962,31 @@ EOF
   pass "output prose that mentions shell counts is not the background-shell indicator"
 }
 
+test_no_run_idle_pane_stale_shell_summary_is_not_evidence() {
+  reset_fakes
+  local d out
+  d=$(new_case stale-shell-summary)
+  make_repo_on_branch "$d/wt" fm/feat-stale-shell-summary
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/stale-shell-summary.meta" "window=fm:fm-stale-shell-summary" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'paused: waiting for direction\n' > "$d/state/stale-shell-summary.status"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_RUNS_LIST=""
+  FM_FAKE_BUSY=0
+  cat > "$d/pane.txt" <<'EOF'
+✻ Sautéed for 53s · done 11:18 PM · 2 shells still running
+❯
+───────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents · ↓ to…
+EOF
+  FM_FAKE_PANE_FILE="$d/pane.txt"
+  out=$(run_crew_state "$d" stale-shell-summary)
+  assert_not_contains "$out" "source: pane" "a stale turn summary must not read as live background work"
+  assert_contains "$out" "state: paused" "without a live footer count the status log must answer"
+  assert_contains "$out" "source: status-log" "the stale summary must fall through to the status log"
+  pass "a stale shell-count turn summary is not live background-work evidence"
+}
+
 test_no_run_turn_ended_with_status_line_reads_the_log() {
   reset_fakes
   local d out
@@ -2012,6 +2037,7 @@ test_no_run_busy_pane
 test_no_run_turn_ended_busy_pane_reads_working
 test_no_run_idle_pane_waiting_on_background_shells_reads_working
 test_no_run_idle_pane_prose_about_shells_is_not_evidence
+test_no_run_idle_pane_stale_shell_summary_is_not_evidence
 test_no_run_turn_ended_with_status_line_reads_the_log
 test_no_run_herdr_unknown_uses_backend_capture
 test_no_run_herdr_idle_agent_status_corroborated_by_busy_pane

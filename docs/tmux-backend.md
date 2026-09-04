@@ -253,7 +253,7 @@ The count is claude's own tracking of its background tasks, and each such task i
 4037447 3845587 SNs        59:28 /bin/bash -c source /home/firstmate/.claude/shell-snapshots/snapshot-bash-…
 ```
 
-`fm_pane_background_work` (`bin/fm-tmux-lib.sh`) reads that footer indicator on the same six-line bound as the busy reader, and `bin/fm-crew-state.sh` reports such a pane as `working · source: pane` when no run is attributed.
+`fm_pane_background_work` (`bin/fm-tmux-lib.sh`) reads only that live footer form on the same six-line bound as the busy reader, and `bin/fm-crew-state.sh` reports such a pane as `working · source: pane` when no run is attributed; the static previous-turn summary is not evidence because it can outlive the footer count.
 The indicator is deliberately kept out of `FM_BUSY_REGEX`: a pane showing only it is idle by the busy rule, so it still goes stale and still reaches the wedge ladder, where a `working` reading holds the ladder on the bounded recheck cadence rather than escalating.
 That is the ceiling: a worker whose background shell never returns still surfaces, once per `FM_PAUSE_RESURFACE_SECS`, as a bounded recheck rather than a wedge; a worker whose indicator has gone (no shells, idle composer) escalates on the unchanged ladder; and a worker whose claude process has exited shows a bare shell and no footer at all.
 The 2026-09-03 baseline this closes is in the fm-firstmate-wake-noise-reduction pull request: four stale wakes and every bare turn-end of two such workers reached the supervising seat and were answered with no action.
