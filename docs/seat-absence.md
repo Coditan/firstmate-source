@@ -232,6 +232,28 @@ So for as long as `bin/fm-tg-send.sh` keeps refusing - a revoked token, a sustai
 `bin/fm-watch.sh` enqueues a durable wake for any non-empty check line and `fm_wake_append` does not deduplicate by kind or key, so that grows the queue once per sweep during exactly the window in which nobody is draining it, and an investigator reads one episode as five.
 This is a known residual rather than an oversight: separating the two facts needs another field in the alarm's own record, and that record is one of the things this file has already had to move out of the directory it measures.
 
+**The `gave-up:` verdict rests on a record three defects can make wrong, and all three are known and unfixed.**
+The verdict answers "has this restarter stopped retrying" out of `state/.seat-respawn-giveup`, and the alarm renders it to the captain as a restart that has stopped and will not start another without him.
+Three things about that record do not hold, and each is reachable rather than theoretical.
+
+- **The record is written only when the outward finding could be filed.**
+  `emit_giveup_finding` writes `state/.seat-respawn-giveup` inside the success branch of the `bin/fm-finding.sh emit`, and `one_cycle` swallows the failure, so an emit that fails leaves no record at all.
+  `status_report` then falls through to `up:` and the captain is told an automatic restart is running and should bring the seat back on its own, for an episode that will never launch again.
+  The door is one this file has already measured: a home whose `data/` cannot be written cannot take the finding either - and on exactly that home the alarm's memory-unpersistable path forces the grace pass and sends every sweep, so the wrong sentence is repeated once per sweep rather than once per repeat cadence.
+  A keeper `PATH` without `jq` produces the same result, because the emit needs it.
+- **The give-up condition is tested ahead of the held-pane condition.**
+  An episode that is both holding a confirmed-open pane and past its bound therefore reports only `gave-up:`, and the open pane - the one fact the captain could act on - is dropped from the message he gets.
+  That combination is reachable on the shipped defaults, not only on tuned ones: a held episode paces on the same backoff as a launching one, so the cycle that marks the record `held` past the deadline is also the cycle that meets the bound.
+  The give-up finding does carry the pane, but findings are drained by a seat and there is no seat, so while the vessel is absent the alarm is the only outward channel and that sentence reaches nobody.
+  Neither sentence is false; this is information loss rather than a false claim, which is why it is recorded here rather than treated as the overclaim class this area otherwise refuses.
+- **The equality the verdict reads is not maintained by anything.**
+  `gave_up_on_current_condition` takes `state/.seat-respawn-giveup` naming the same condition key as `state/.seat-respawn-attempts` to mean the episode being counted is spent, but `clear_episode` is the record's only remover and it fires on the stay-down marker, presence turning `present`, or a status that is no longer undeliverable - never on a condition key that merely changes.
+  A dead seat's blocked reason is not stable, so an A-to-B-to-A change of that reason retires one episode and starts another under the first key: a fresh episode that is actively launching is then reported as having stopped retrying, and its own give-up is silenced, because the emit returns early on the record the first episode left.
+
+The repair for the third of these was written and is not in this branch: it was reverted, because the attempt introduced a further defect of the same class - the cleanup it added decided whether the launch proceeded, so a cleanup that failed persisted a counted launch that was never made and the give-up would have reported launches that never happened.
+Three successive attempts in this corner each produced another finding of this class, which is why it is documented here rather than patched a fourth time.
+All three defects above are known and unfixed; whoever picks this up starts from them rather than rediscovering them.
+
 One further dependency of the restart path is worth naming because it is invisible until it bites.
 The respawner launches into the tmux server recorded in `state/.primary-endpoint`, and refuses when that server is gone.
 On the real vessel the server outlives the seat only because the entrypoint's bare `vessel:0` window keeps it alive; if the seat's window were the only one, the server would exit with the seat and the respawner would correctly refuse to launch.
