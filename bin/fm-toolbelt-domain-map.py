@@ -437,6 +437,7 @@ NAME_HINTS: tuple[tuple[str, str, int], ...] = (
     ("fm-pane-activity-lib.sh", "supervision-wake", 3),
     ("fm-bounded-lib.sh", "supervision-wake", 3),
     ("fm-state-marker-prune-lib.sh", "supervision-wake", 3),
+    ("fm-retry-episode-lib.sh", "supervision-wake", 3),
 )
 
 

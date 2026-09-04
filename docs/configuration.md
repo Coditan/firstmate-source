@@ -38,6 +38,7 @@ Several vessels can share one machine as separate UNIX accounts, so a successful
 Watcher coordination uses `state/.watch.lock` for the daemon pid, executable, home, manager, source, and X-mode identities plus the keeper tier's handed-down service `PATH`, `state/.last-watcher-beat` for daemon freshness, `state/.wake-queue` for durable delivery, and `state/.wake-queue.lock` for atomic append and drain.
 Delivery coordination is the companion service's, in the same shape: `state/.delivery.lock` for the listener pid, executable, home, manager, and source identities, `state/.last-delivery-beat` for listener freshness, and `state/.primary-endpoint` for the address the locked session published (docs/wake-delivery.md).
 Seat-respawner coordination uses `state/.seat-respawner.lock` for the respawner pid, home, and executable identity, `state/.last-seat-respawner-beat` for respawner freshness, `state/.seat-stay-down` for the declared stop marker, and `state/.seat-respawn-attempts`, `state/.seat-respawn-giveup`, and `state/.seat-respawner.log` for one unreachable-seat retry episode (docs/seat-respawner.md).
+The terminal-hosted seat keeper that stands in for that unit shares `state/.seat-stay-down` and keeps its own `state/.seat-keeper.lock` for the keeper pid and pid identity, `state/.seat-keeper.pid`, `state/.seat-keeper-target`, and `state/.seat-keeper-attempts`, `state/.seat-keeper-giveup`, and `state/.seat-keeper.log` for its retry episode (docs/seat-respawner.md).
 The tmux fallback also records `state/.watch-keeper.pid`, while systemd convergence writes the private mode-`0600` `state/.watch-service.env` environment file.
 
 `bin/fm-session-start.sh`'s header is the single owner of session-start ordering, composed commands, digest contents, and the digest's startup mechanism.
@@ -1031,6 +1032,7 @@ FM_SEAT_RESPAWNER_BACKOFF=30 # seconds before the second attempt for one unreach
 FM_SEAT_RESPAWNER_MAX_BACKOFF=900 # maximum seconds between respawn attempts for one episode
 FM_SEAT_RESPAWNER_MAX_ATTEMPTS=5 # attempts before the respawner emits a finding and stops retrying that episode
 FM_SEAT_LAUNCH_COMMAND=      # test or specialized override for config/seat-launch-command; must be a fresh start, not resume-style
+# FM_SEAT_KEEPER_* tune the hand-started container stopgap instead (bin/fm-seat-keeper.sh); its own header owns that list, and docs/seat-respawner.md owns what the keeper is for
 FM_TG_RECV_ATTACH_POLL=0.5  # seconds between checks while fm-tg-recv-arm is attached to an existing receiver
 FM_TG_RECV_ATTACH_CONFIRM_TIMEOUT=2  # seconds fm-tg-recv-arm waits for a competing arm to publish receiver metadata
 FM_TG_RECV_TERM_WAIT_CYCLES=30  # termination polling cycles before fm-tg-recv-arm preserves a live receiver lock after wrapper shutdown
