@@ -115,11 +115,14 @@
 #              4311s - and 33x the longest stretch any ordinary work was
 #              measured holding the gate at all. docs/memory-alarm.md owns
 #              both measurements.
-#   floor      well below the lowest headroom measured across a real busy
-#              period on this fleet, so ordinary work does not reach it. From
-#              that busy low, something would have to consume roughly ten
-#              further gigabytes to cross it - and the horizon condition fires
-#              long before that, which is the point of having both.
+#   floor      a SHARE of total RAM, not a number of megabytes: 10.2%, which is
+#              where the 2,400 MiB measured on the 23,456 MiB calibration host
+#              sat, well below the lowest headroom measured across a real busy
+#              period there. On that host, something would have to consume
+#              roughly ten further gigabytes from the busy low to cross it, and
+#              the horizon condition fires long before that. The share is what
+#              transfers; see "the floor" below for why it, and not the absolute
+#              figure, is what ships.
 # A threshold set so high nothing reaches it is indistinguishable from a healthy
 # machine, so all three are stated here, each reproducible from the doc, and the
 # alarm was proven by driving a real crossing rather than by argument.
@@ -130,12 +133,14 @@
 # swap a shortage degrades and only `stall` can see it; without swap there is
 # no degrading stretch at all and the floor is the entire warning. So the alarm
 # reads MemTotal and SwapTotal from the same reading and states, in its own
-# voice, what its margin is worth on the machine it is on - including that the
-# floor is a far larger share of a small host than of the one it was derived
-# on, and that no ordinary-headroom baseline exists for a small swapless host
-# to place it against. It states this and moves no threshold, because a floor
-# for that shape would be an invented number rather than a measured one; see
-# machine_shape below and docs/memory-alarm.md.
+# voice, what its margin is worth on the machine it is on. MemTotal is what the
+# floor is DERIVED from, so the floor is a property of the running machine;
+# SwapTotal changes what that floor is worth rather than where it sits, and no
+# swapless-specific floor is invented, because no ordinary-headroom baseline
+# exists for a small swapless host to place one against. Every crossing states
+# where its own floor came from, on every shape: an inherited margin that goes
+# unstated is one nobody re-reads after a host move, which is what happened.
+# See "the floor" and machine_shape below, and docs/memory-alarm.md.
 #
 # NOISE CONTROL: IT SPEAKS ON CHANGE, NEVER ON CADENCE
 # A watcher check that printed on every sweep while memory was tight would cost
@@ -255,7 +260,15 @@
 #   memory-alarm.check.sh the armed watcher check (with .check-trust)
 #
 # Environment:
-#   FM_MEMORY_ALARM_FLOOR_MIB    headroom floor in MiB (default 2400)
+#   FM_MEMORY_ALARM_FLOOR_MIB    headroom floor in MiB. Unset, the floor is
+#                                DERIVED from the machine this run is on rather
+#                                than shipped as a number; see "The floor" below.
+#                                Set, it wins over that derivation, and every
+#                                verdict says the floor was configured rather
+#                                than derived. A value that is not a positive
+#                                number of MiB is a typo rather than a choice,
+#                                so it falls back to the derivation and every
+#                                verdict says that instead.
 #   FM_MEMORY_ALARM_HORIZON_MIN  RAM-headroom horizon in minutes (default 15)
 #   FM_MEMORY_ALARM_STALL        host memory pressure-stall `full avg60` at or
 #                                above which this machine counts as stalling at
@@ -310,7 +323,7 @@ SAMPLES="$STATE/memory-alarm.samples"
 STALL_RUN_FILE="$STATE/memory-alarm.stall"
 CHECK="$STATE/memory-alarm.check.sh"
 
-FLOOR_MIB=${FM_MEMORY_ALARM_FLOOR_MIB:-2400}
+FLOOR_OVERRIDE_MIB=${FM_MEMORY_ALARM_FLOOR_MIB:-}
 HORIZON_MIN=${FM_MEMORY_ALARM_HORIZON_MIN:-15}
 STALL_MAX=${FM_MEMORY_ALARM_STALL-1.00}
 STALL_WINDOW=${FM_MEMORY_ALARM_STALL_WINDOW:-7200}
@@ -318,7 +331,18 @@ RECOVERY=${FM_MEMORY_ALARM_RECOVERY:-1.25}
 STALE=${FM_MEMORY_ALARM_STALE:-1800}
 NOW=${FM_MEMORY_ALARM_NOW:-$(date +%s)}
 
-case "$FLOOR_MIB" in *[!0-9]*|'') FLOOR_MIB=2400 ;; esac
+FLOOR_NOTE_PENDING=
+case "$FLOOR_OVERRIDE_MIB" in
+  '') ;;
+  *[!0-9]*)
+    FLOOR_NOTE_PENDING="the FM_MEMORY_ALARM_FLOOR_MIB configured for this home was not a number of MiB, so the floor this alarm derives from the machine is in force instead of it"
+    FLOOR_OVERRIDE_MIB= ;;
+  *)
+    if [ "$FLOOR_OVERRIDE_MIB" -le 0 ]; then
+      FLOOR_NOTE_PENDING="the FM_MEMORY_ALARM_FLOOR_MIB configured for this home was zero, which no reading can ever fall below, so the floor this alarm derives from the machine is in force instead of it"
+      FLOOR_OVERRIDE_MIB=
+    fi ;;
+esac
 case "$HORIZON_MIN" in *[!0-9]*|'') HORIZON_MIN=15 ;; esac
 case "$STALE" in *[!0-9]*|'') STALE=1800 ;; esac
 # A stall threshold is a percentage and so may carry one decimal point. An
@@ -334,16 +358,19 @@ case "$STALE" in *[!0-9]*|'') STALE=1800 ;; esac
 # run never resets, and past the window the alarm is pinned crossed with nothing
 # wrong. It is the value an operator reaches for to mean "off" - the documented
 # off switch is the empty string - so it falls back rather than firing.
-STALL_GATE_NOTE=
+# Every threshold a home configured but could not be used travels in one note,
+# because the reason a verdict was reached against a shipped or derived value
+# rather than the configured one is the same fact whichever threshold it was.
+THRESHOLD_NOTE=$FLOOR_NOTE_PENDING
 case "$STALL_MAX" in
   '') ;;
   .|*.|*[!0-9.]*|*.*.*)
     STALL_MAX=1.00
-    STALL_GATE_NOTE="the FM_MEMORY_ALARM_STALL configured for this home was not a usable percentage, so the shipped default gate of $STALL_MAX% is in force instead of it" ;;
+    THRESHOLD_NOTE="${THRESHOLD_NOTE:+$THRESHOLD_NOTE, and }the FM_MEMORY_ALARM_STALL configured for this home was not a usable percentage, so the shipped default gate of $STALL_MAX% is in force instead of it" ;;
   *)
     if ! awk -v g="$STALL_MAX" 'BEGIN { exit !(g + 0 > 0) }'; then
       STALL_MAX=1.00
-      STALL_GATE_NOTE="the FM_MEMORY_ALARM_STALL configured for this home was zero, which no reading can ever fall below, so the shipped default gate of $STALL_MAX% is in force instead of it"
+      THRESHOLD_NOTE="${THRESHOLD_NOTE:+$THRESHOLD_NOTE, and }the FM_MEMORY_ALARM_STALL configured for this home was zero, which no reading can ever fall below, so the shipped default gate of $STALL_MAX% is in force instead of it"
     fi ;;
 esac
 case "$STALL_WINDOW" in *[!0-9]*|'') STALL_WINDOW=7200 ;; esac
@@ -352,14 +379,36 @@ case "$STALL_WINDOW" in *[!0-9]*|'') STALL_WINDOW=7200 ;; esac
 # poll.
 if [ "$STALL_WINDOW" -le 0 ]; then
   STALL_WINDOW=7200
-  STALL_GATE_NOTE="${STALL_GATE_NOTE:+$STALL_GATE_NOTE, and }the FM_MEMORY_ALARM_STALL_WINDOW configured for this home was zero, which any run at all outlasts, so the shipped default window of $STALL_WINDOW seconds is in force instead of it"
+  THRESHOLD_NOTE="${THRESHOLD_NOTE:+$THRESHOLD_NOTE, and }the FM_MEMORY_ALARM_STALL_WINDOW configured for this home was zero, which any run at all outlasts, so the shipped default window of $STALL_WINDOW seconds is in force instead of it"
 fi
 
-# The floor's derivation, which docs/memory-alarm.md "Floor: 2,400 MiB" owns:
-# the shipped 2400 MiB was 10.2% of the 23,456 MiB host it was measured on, and
-# 6.1 times below the lowest RAM headroom ordinary busy work reached there.
-# Both figures are properties of THAT host, so the alarm carries them to state
-# what its own margin is worth on the machine it is actually running on.
+# --- the floor --------------------------------------------------------------
+#
+# The floor's calibration, which docs/memory-alarm.md "The floor" owns: the
+# 2,400 MiB measured on 2026-08-13 was 10.2% of the 23,456 MiB host it was
+# measured on, and 6.1 times below the lowest RAM headroom ordinary busy work
+# reached there. Both figures are properties of THAT host.
+#
+# What ships is therefore the RATIO and not the number. The alarm reads
+# `MemTotal` on every poll already, so it derives the floor as the same SHARE of
+# whatever machine it is actually on.
+#
+# Why the share and not the other derivation the record holds. The alternative
+# is the floor as a DISTANCE the poll cadence must cover - how much memory work
+# can take between two 300-second polls - and it is the better argument, but the
+# number it needs has never been measured in this fleet, on any host. A floor
+# derived from it would be a preference wearing a derivation's clothes. The
+# share, by contrast, is measured: it is exactly the relationship the 2,400 MiB
+# was in to its own host, carried across unchanged. It leaves the calibration
+# host's behaviour where it was and it stops the floor from landing inside
+# ordinary operation on a smaller one, which is the failure that produced this
+# change - the same 2,400 MiB is 31% of a 7,746 MiB machine, and this repository
+# runs single checks measured at 3,860 MiB.
+#
+# What the share does NOT establish, and the crossing line says so rather than
+# leaving it to be assumed: that this fleet's ordinary busy headroom is itself
+# proportional to machine size. Only one host has an ordinary-operation baseline.
+# The share transfers the calibration honestly; it does not verify it elsewhere.
 CALIBRATION_FLOOR_MIB=2400
 CALIBRATION_TOTAL_MIB=23456
 
@@ -418,6 +467,8 @@ SWAP_USED_MIB=
 TOTAL_MIB=
 SWAP_TOTAL_MIB=
 SHAPE_NOTE=
+FLOOR_MIB=$CALIBRATION_FLOOR_MIB
+FLOOR_NOTE=
 OFFENDER=
 RESIDENT=
 CROSS_KIND=
@@ -457,8 +508,8 @@ unjudged_conditions() {
 # A threshold this alarm substituted for an unusable one is stated on every
 # verdict, whichever one is reached, so a fallback can never be mistaken for a
 # home that chose the number.
-stall_gate_note() {
-  [ -z "$STALL_GATE_NOTE" ] || REASON="$REASON; $STALL_GATE_NOTE"
+threshold_note() {
+  [ -z "$THRESHOLD_NOTE" ] || REASON="$REASON; $THRESHOLD_NOTE"
 }
 
 # A verdict reached from a reading that could not read every input carries that
@@ -496,12 +547,12 @@ evaluate() {
 
   if ! command -v jq >/dev/null 2>&1; then
     REASON="jq is not on PATH, so the reading could not be parsed"
-    stall_gate_note
+    threshold_note
     return
   fi
   if [ ! -x "$READING" ]; then
     REASON="the memory reading at $READING is missing or not executable, so there was nothing to read"
-    stall_gate_note
+    threshold_note
     return
   fi
 
@@ -518,7 +569,7 @@ evaluate() {
 
   if [ -z "$raw" ]; then
     REASON="the memory reading produced nothing (exit $status), so this machine is unmeasured rather than fine"
-    stall_gate_note
+    threshold_note
     return
   fi
 
@@ -621,7 +672,7 @@ evaluate() {
 
   if [ -z "$record" ]; then
     REASON="the memory reading could not be parsed, so this machine is unmeasured rather than fine"
-    stall_gate_note
+    threshold_note
     return
   fi
 
@@ -648,14 +699,14 @@ evaluate() {
     # empty initialiser, because a held raiser is released on these very flags.
     FLOOR_CLEAR=no; HORIZON_CLEAR=no; STALL_CLEAR=no
     REASON="the memory reading could not read this machine's RAM headroom, so no condition could be judged and whether this machine is in trouble is unknown"
-    stall_gate_note
+    threshold_note
     return
   fi
   # Exit 3 is the reading's incompleteness status and is handled above; any
   # other non-zero exit means its numbers themselves are not to be trusted.
   if [ "$status" -ne 0 ] && [ "$status" -ne 3 ]; then
     REASON="the memory reading exited $status, so its numbers were not trusted"
-    stall_gate_note
+    threshold_note
     return
   fi
 
@@ -678,6 +729,10 @@ evaluate() {
   # watching has to say so rather than pass for a clear reading.
   [ -n "$STALL_MAX" ] || STALL_UNSET="no stall gate is configured for this home, so this machine is not being watched for memory stall at all"
   read_stall_run
+  # Before any condition is judged: the headroom floor is a property of the
+  # machine this reading just described, so it cannot be settled until the
+  # reading has been parsed.
+  derive_floor
   machine_shape
 
   # Whether each condition is clear of its threshold BY THE MARGIN, decided here
@@ -750,7 +805,7 @@ evaluate() {
         fi ;;
     esac
     incomplete_note
-    stall_gate_note
+    threshold_note
     return
   fi
 
@@ -804,7 +859,7 @@ evaluate() {
     [ -z "$unjudged" ] || REASON="$REASON; $unjudged, $unjudged_tail"
   fi
   incomplete_note
-  stall_gate_note
+  threshold_note
 }
 
 # --- the machine's shape ----------------------------------------------------
@@ -819,20 +874,48 @@ evaluate() {
 # floor is the entire warning, because there is no thrashing stretch for the
 # stall condition to see and no growth left to extrapolate once the kill lands.
 #
-# That distance is not a fixed number of megabytes. The floor was derived as a
-# share of one host's RAM and as a ratio to the lowest headroom ordinary work
-# reached ON THAT HOST, and neither figure travels: 2400 MiB is 10.2% of the
-# 23,456 MiB machine it was measured on and 31% of a 7,746 MiB one, where it
-# stops being a backstop below ordinary operation and becomes a line ordinary
-# operation may sit near. No ordinary-headroom distribution has ever been
-# measured on a small swapless host in this fleet, so this alarm does NOT
-# invent a floor for one - inventing it is the one thing the evidence does not
-# support. It reads the shape it is actually on and states what its own margin
-# is worth there, which is the half that is measurable today and is what lets
-# somebody re-measure the other half. docs/memory-alarm.md owns both.
+# That distance is not a fixed number of megabytes, which is why the floor above
+# is derived from total RAM rather than shipped. What this shape reading adds is
+# the other half: on a machine with no swap the floor is the WHOLE warning, and
+# no ordinary-headroom distribution has ever been measured on a small swapless
+# host in this fleet. The derived floor carries the calibration host's share
+# across honestly; it does not verify that share on a host with no thrashing
+# phase, and this note says so rather than letting the derivation imply it.
+# docs/memory-alarm.md owns both halves.
 #
-# Nothing here changes when the alarm fires. It changes what the alarm says
-# about what its silence is worth, which is the part that was missing.
+# Nothing here changes when the alarm fires. The shape reading changes what the
+# alarm says about what its silence is worth; the floor's own derivation, above,
+# is what changes where the headroom condition sits.
+
+derive_floor() {  # sets FLOOR_MIB and FLOOR_NOTE, from TOTAL_MIB
+  local share
+  share=$(awk -v f="$CALIBRATION_FLOOR_MIB" -v t="$CALIBRATION_TOTAL_MIB" \
+    'BEGIN { printf "%.1f", f * 100 / t }')
+  if [ -n "$FLOOR_OVERRIDE_MIB" ]; then
+    FLOOR_MIB=$FLOOR_OVERRIDE_MIB
+    FLOOR_NOTE="The $FLOOR_MIB MiB floor is the one this home configures, which wins over the $share% of total RAM the alarm would otherwise derive"
+    if [ -n "$TOTAL_MIB" ] && [ "$TOTAL_MIB" -gt 0 ]; then
+      FLOOR_NOTE="$FLOOR_NOTE - $(awk -v f="$CALIBRATION_FLOOR_MIB" -v c="$CALIBRATION_TOTAL_MIB" -v t="$TOTAL_MIB" \
+        'BEGIN { printf "%d", f * t / c + 0.5 }') MiB on this machine's $TOTAL_MIB MiB."
+    else
+      FLOOR_NOTE="$FLOOR_NOTE, which could not be computed here because this machine's total RAM was not read."
+    fi
+    return
+  fi
+  # No total, no derivation. Falling back to the calibration host's own number is
+  # the only figure there is, and it is INHERITED here rather than derived, so it
+  # is named as inherited: that silence is what let a 23,456 MiB margin sit
+  # unremarked on a 7,746 MiB machine for as long as it did.
+  if [ -z "$TOTAL_MIB" ] || [ "$TOTAL_MIB" -le 0 ]; then
+    FLOOR_MIB=$CALIBRATION_FLOOR_MIB
+    FLOOR_NOTE="This machine's total RAM could not be read, so the floor could not be derived from it: the $FLOOR_MIB MiB in force is the figure measured on a $CALIBRATION_TOTAL_MIB MiB host, inherited here rather than derived, and on a smaller machine that is a line ordinary work may sit near."
+    return
+  fi
+  FLOOR_MIB=$(awk -v f="$CALIBRATION_FLOOR_MIB" -v c="$CALIBRATION_TOTAL_MIB" -v t="$TOTAL_MIB" \
+    'BEGIN { printf "%d", f * t / c + 0.5 }')
+  [ "$FLOOR_MIB" -ge 1 ] || FLOOR_MIB=1
+  FLOOR_NOTE="The $FLOOR_MIB MiB floor is derived from this machine, not shipped: $share% of its $TOTAL_MIB MiB, the same share the $CALIBRATION_FLOOR_MIB MiB floor stood at on the $CALIBRATION_TOTAL_MIB MiB host it was measured on. The share is what carries across; the absolute figure does not, and this fleet has an ordinary-headroom baseline on that one host only."
+}
 
 machine_shape() {  # sets SHAPE_NOTE
   SHAPE_NOTE=
@@ -852,10 +935,9 @@ machine_shape() {  # sets SHAPE_NOTE
     SHAPE_NOTE="This machine has no swap configured, so the floor is the whole warning - but its total RAM could not be read, so what that floor is worth here cannot be stated."
     return
   fi
-  local share cal_share
+  local share
   share=$(awk -v f="$FLOOR_MIB" -v t="$TOTAL_MIB" 'BEGIN { printf "%.1f", f * 100 / t }')
-  cal_share=$(awk -v f="$CALIBRATION_FLOOR_MIB" -v t="$CALIBRATION_TOTAL_MIB" 'BEGIN { printf "%.1f", f * 100 / t }')
-  SHAPE_NOTE="This machine has no swap configured, so there is no degradation phase below the floor: it runs, and then the kernel kills something. The $FLOOR_MIB MiB floor is the whole warning, and here it is $share% of this machine's $TOTAL_MIB MiB against the $cal_share% it was derived at on a $CALIBRATION_TOTAL_MIB MiB host - no ordinary-headroom baseline has been measured on a machine this size, so that margin is inherited here rather than verified."
+  SHAPE_NOTE="This machine has no swap configured, so there is no degradation phase below the floor: it runs, and then the kernel kills something. The $FLOOR_MIB MiB floor is the whole warning here, and it is $share% of this machine's $TOTAL_MIB MiB - no ordinary-headroom baseline has been measured on a machine this size, so what that distance buys on a host with no thrashing phase is unverified."
 }
 
 # --- the stall run ----------------------------------------------------------
@@ -1153,7 +1235,7 @@ decide_poll() {
     VERDICT=unmeasured
     REASON="whether the shortage is over is unknown: this alarm crossed on $(raiser_names "$HELD_CROSSED"), and $(held_raiser_reasons "$blocking"), so not every condition that raised it has been re-read and found clear"
     incomplete_note
-    stall_gate_note
+    threshold_note
   fi
 
   # elevated is a damping band, not a state worth announcing: it exists so that
@@ -1232,6 +1314,10 @@ decide_poll() {
         # anywhere to put the pressure, and the reader cannot know which
         # machine this is.
         [ -z "$SHAPE_NOTE" ] || OUT_LINE="$OUT_LINE $SHAPE_NOTE"
+        # Where the floor came from, on EVERY machine and not only the swapless
+        # one. An inherited margin that is never stated is one nobody re-reads
+        # after a host move, which is the whole reason this is derived at all.
+        [ -z "$FLOOR_NOTE" ] || OUT_LINE="$OUT_LINE $FLOOR_NOTE"
         OUT_LINE="$OUT_LINE Nothing has been limited or killed."
         ;;
       ok)
@@ -1363,6 +1449,7 @@ case "$MODE" in
         fi
         [ -z "$DETAIL" ] || printf 'unmeasured inputs: %s\n' "$DETAIL"
         [ -z "$SHAPE_NOTE" ] || printf 'machine shape: %s\n' "$SHAPE_NOTE"
+        [ -z "$FLOOR_NOTE" ] || printf 'headroom floor: %s\n' "$FLOOR_NOTE"
         printf 'nothing has been limited, throttled, or killed by this alarm, and nothing here can be\n'
         exit 4 ;;
       unmeasured)
@@ -1378,6 +1465,7 @@ case "$MODE" in
         # of the three conditions this machine is actually relying on, so a
         # reader can tell a calm reading from a calm reading that means little.
         [ -z "$SHAPE_NOTE" ] || printf 'machine shape: %s\n' "$SHAPE_NOTE"
+        [ -z "$FLOOR_NOTE" ] || printf 'headroom floor: %s\n' "$FLOOR_NOTE"
         exit 0 ;;
     esac ;;
 esac
