@@ -130,8 +130,8 @@
 # destination is exactly the thing a chart is supposed to stop being.
 #
 # THE SILENT LOSS THIS EXISTS TO PREVENT - MEASURED, NOT ASSUMED
-# Captain-actionability is one predicate (bin/fm-fleet-snapshot.sh) and a decision
-# blocked by anything fails it. It then leaves `decisions_open` entirely and lands
+# Captain-actionability is one predicate (bin/fm-captain-actionable-lib.sh) and a
+# decision blocked by anything fails it. It then leaves `decisions_open` entirely and lands
 # in `gates`, which carries no kind - so it is indistinguishable from a blocked
 # ship task, on a surface that is already truncated. Measured on a two-decision
 # fixture: adding one `blocked-by` edge takes the reported inventory from
@@ -142,13 +142,19 @@
 # captain-gated records straight from the backlog and RECONCILES: any record
 # under this chart that the actionable surface did not return is reported in
 # `withheld[]`, named, counted, and given the reason it did not reach the
-# surface - blocked, in flight, or held some other way. A record the surface DID
+# surface - `blocked` by an unresolved record, `no-hold` with nothing recorded as
+# asked, `other-hold` for an audience that is not the captain, `stale-edge` or
+# `dangling-edge` where the only thing holding it is an edge that resolves to
+# nothing, or `not-returned` when none of those explains it. There is no
+# in-flight cause: the phase clause is gone from the predicate, so a record whose
+# work is under way reaches the decision list instead of arriving here.
+# A record the surface DID
 # return and the collapse rule then folded away without pairing it to any judge
 # ruling in its group is reported there too, as `unpaired-variant`: the fold
 # rests on an assumption nothing verifies, so a question only an analyst raised
 # must stay on the page rather than fall between the two surfaces. What makes a record
 # captain-gated is its KIND, never its name: what captain-actionability admits is
-# `hold-kind: captain` (bin/fm-fleet-snapshot.sh), and a captain record named
+# `hold-kind: captain` (bin/fm-captain-actionable-lib.sh), and a captain record named
 # without `-decision-` is exactly as lost when it is blocked. This chart draws its
 # own reconciliation baseline narrower, from records of `kind: captain` under this
 # chart, because those are the ones its sections can classify. An UNBLOCKED

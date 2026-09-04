@@ -138,7 +138,7 @@ Measured on a two-decision fixture, adding one `blocked-by` edge takes the repor
 So this is the captain-actionable set, not the open set: say that on the board in the same breath as the unverified fold, and never present it as everything waiting on him.
 
 How many are missing is no longer unknowable, so say the number rather than only the caveat.
-The snapshot's `backlog.omitted[]` counts every non-terminal record carrying `hold-kind: captain` that the surface withheld, with the reason for each - a decision already settled as Done was never a candidate and is never counted as withheld, so the number always means decisions he is not being shown.
+The snapshot's `backlog.omitted[]` counts every non-terminal record carrying `hold-kind: captain` that the surface withheld, with the reason for each - a decision already settled as Done was never a candidate and is never counted as withheld, so the number means decisions this surface is not showing him rather than decisions that exist. Read it with its reasons: a record he has already answered whose close is unfinished is counted under `answered_pending_close`, so the reasons beside the number are what separate the decisions still waiting on him from the ones he has already made.
 Bearings makes that count fleet-wide, summing it with the same disclosure from every registered secondmate home, so a decision routed away from this home is counted no differently from one kept here; `bin/fm-decision-inventory.sh` passes that line through under `withheld_captain_holds`.
 Print the count and its reasons in the reservation block beside the two sentences above, because a count of two looked complete for nineteen days on one vessel purely because nothing beside it said what it was not counting.
 

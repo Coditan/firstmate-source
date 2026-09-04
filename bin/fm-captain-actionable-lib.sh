@@ -55,8 +55,13 @@
 # main home the only entry it ever produced was a closed, already-answered
 # decision, and the number therefore did not mean "decisions you are not being
 # shown". `fm_captain_candidate` is that population: held for the captain AND not
-# terminal. Shown plus withheld is exhaustive over it, and the count is 0 exactly
-# when nothing answerable is hidden.
+# terminal. Shown plus withheld is exhaustive over it, and the count is the
+# records withheld from this surface. It is not by itself a count of unanswered
+# questions: a record the captain has already answered whose close is unfinished
+# is still a candidate and is still withheld, so it is counted too. The
+# per-reason breakdown printed beside the total is what tells the two apart -
+# `answered_pending_close` is the already-answered one, every other reason still
+# awaits him.
 #
 # fm_captain_candidate($r) - a captain-kind hold that could have reached the
 #   surface: the population the predicate selects from and the disclosure is
