@@ -135,9 +135,11 @@
 # in `gates`, which carries no kind - so it is indistinguishable from a blocked
 # ship task, on a surface that is already truncated. Measured on a two-decision
 # fixture: adding one `blocked-by` edge takes the reported inventory from
-# "records: 2 decisions kept: 2" to "records: 1 decisions kept: 1", with no
-# footnote anywhere. A chart built naively on that surface drops an open decision
-# and says nothing.
+# "records: 2 decisions kept: 2" to "records: 1 decisions kept: 1". A withheld
+# count and its reason now travel beside that number
+# (bin/fm-captain-actionable-lib.sh), so the drop is no longer silent - but the
+# count never says WHICH decision, so a chart built naively on that surface still
+# drops an open decision off its own page.
 # So this script never trusts that surface alone. It reads its own chart's
 # captain-gated records straight from the backlog and RECONCILES: any record
 # under this chart that the actionable surface did not return is reported in

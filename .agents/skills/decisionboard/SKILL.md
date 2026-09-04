@@ -134,7 +134,7 @@ Never assert which question an unpaired variant restates.
 
 A decision blocked by another record is not on this board at all, and nothing on the board marks that it is missing.
 Captain-actionability is a single predicate, owned by `bin/fm-captain-actionable-lib.sh`, and a record blocked by anything fails it, so that decision leaves `decisions_open` entirely; real blockers land it in `gates`, while a dangling target found nowhere is surfaced separately through bearings `integrity[]`.
-Measured on a two-decision fixture, adding one `blocked-by` edge takes the reported inventory from "records: 2 decisions kept: 2" to "records: 1 decisions kept: 1", with no footnote anywhere.
+Measured on a two-decision fixture, adding one `blocked-by` edge takes the reported inventory from "records: 2 decisions kept: 2" to "records: 1 decisions kept: 1"; the kept count says nothing about the drop, and only the withheld count described next reports that it happened.
 So this is the captain-actionable set, not the open set: say that on the board in the same breath as the unverified fold, and never present it as everything waiting on him.
 
 How many are missing is no longer unknowable, so say the number rather than only the caveat.
