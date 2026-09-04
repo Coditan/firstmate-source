@@ -106,7 +106,8 @@ Asserting only the healthy path would let the whole distinguishability property 
 ## Machine-readable status contract
 
 The prose line above is for humans.
-A consumer on another repository that matched its first word held a contract that lived in two repositories and was owned by neither: the Coditan vessel's health probe did exactly that until this section existed.
+Before this contract was published, a consumer in another repository that matched the prose line's first word held a contract that lived in two repositories and was owned by neither.
+The Coditan vessel's health probe still matches that prose pending the follow-up named below.
 The captain's decision of 2026-09-03 (vessel sweep, decision 3) places that contract in firstmate-source, and `tests/fm-delivery-status-contract.test.sh` is the test that holds it.
 
 The consumer call is:
