@@ -435,6 +435,33 @@ deliver_first_turn() {
   return 0
 }
 
+# THE GIVE-UP RECORD BELONGS TO THE EPISODE BEING COUNTED, AND THIS IS WHERE
+# THAT IS MADE TRUE.
+#
+# Everything that reads state/.seat-respawn-giveup - this file's own early
+# return in fm_retry_giveup_emit, and the `gave-up:` verdict in
+# bin/fm-seat-respawner-service.sh - takes its key matching the attempt
+# record's as "this episode is spent". Nothing maintained that. clear_episode
+# is the only other remover and it fires on stay-down, presence turning
+# `present`, or a status that is no longer undeliverable; a condition key that
+# merely CHANGES takes none of those doors, and a dead seat's blocked reason is
+# not stable - a bare shell in the published pane and one unanswerable tmux
+# probe are different reasons and therefore different keys. So the reasons
+# flipping A-B-A left a give-up written for the first A episode standing while a
+# second one counted under the same key, which reported a launching restarter as
+# one that had stopped and silenced the new episode's own give-up.
+#
+# Every spend of an episode passes through here, launches and holds alike, and
+# this is where the new key actually lands - so a give-up naming a different
+# condition is dropped as the record is written. The shared library's write is
+# deliberately not where this lives: what a stale give-up means is this
+# supervisor's, and the read that would pair with it is a reader, asked on
+# cycles that spend nothing, so a probe still does not mutate what it measures.
+write_attempt_record() {  # <key> <count> <next> <holds>
+  fm_retry_write_attempts "$ATTEMPTS" "$1" "$2" "$3" "$4" || return 1
+  [ "$(fm_retry_kv_get "$GIVEUP" key 2>/dev/null || true)" = "$1" ] || rm -f "$GIVEUP"
+}
+
 clear_episode() {
   fm_retry_clear_episode "$ATTEMPTS" "$GIVEUP"
 }
@@ -648,7 +675,7 @@ one_cycle() {
       holds=$((holds + 1))
       delay=$(fm_retry_backoff "$((count + holds))" "$BASE_BACKOFF" "$MAX_BACKOFF")
       next=$((now + delay))
-      fm_retry_write_attempts "$ATTEMPTS" "$key" "$count" "$next" "$holds" || return 1
+      write_attempt_record "$key" "$count" "$next" "$holds" || return 1
       log "launch held: the seat already started for this episode has not taken this home's lock yet (hold $holds, $((MAX_ATTEMPTS - count - holds)) cycle(s) left before this episode gives up)"
     fi
     return 0
@@ -659,7 +686,7 @@ one_cycle() {
   count=$((count + 1))
   delay=$(fm_retry_backoff "$((count + holds))" "$BASE_BACKOFF" "$MAX_BACKOFF")
   next=$((now + delay))
-  fm_retry_write_attempts "$ATTEMPTS" "$key" "$count" "$next" "$holds" || return 1
+  write_attempt_record "$key" "$count" "$next" "$holds" || return 1
   if launch_in_tmux "$status_line"; then
     log "launch attempt $count submitted after: $status_line"
   else

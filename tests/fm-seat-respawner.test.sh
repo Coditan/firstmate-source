@@ -962,6 +962,113 @@ test_a_respawner_that_gave_up_is_not_reported_as_a_running_restart() {
   pass "a respawner that gave up on the standing condition is never reported as up"
 }
 
+# A GIVE-UP ON RECORD MUST BE ABOUT THE EPISODE BEING COUNTED, AND NOTHING ELSE
+# KEEPS THAT TRUE.
+#
+# The delivery reason a dead seat presents is not stable: a bare shell in the
+# published pane reads as a composer that could not be confirmed empty, and one
+# unanswerable tmux probe reads as a server that could not be verified. Each is
+# its own condition key, so the reasons flipping A-B-A retires one episode and
+# starts another - and nothing on that path clears the give-up written for A,
+# because clear_episode fires only on stay-down, presence turning `present`, or
+# a status that is no longer undeliverable. The record for the FIRST A episode
+# would then meet the key the SECOND A episode is counting under, and the
+# captain would be told the restarter has stopped retrying while it is in the
+# middle of launching. It also silences the new episode's own give-up, because
+# emit_giveup_finding returns early on a record naming the key it is about to
+# report.
+test_a_new_episode_under_a_previously_given_up_key_is_still_live() {
+  local home delivery tmux log status_a status_b findings out
+
+  home=$(make_home giveup-key-flip)
+  status_a="$home/status-a.txt"
+  status_b="$home/status-b.txt"
+  delivery="$home/fake-delivery"
+  tmux="$home/fake-tmux"
+  log="$home/tmux.log"
+  printf 'undeliverable: listener pid 1 is up with 1 wake(s) pending, but the session composer could not be confirmed empty\n' > "$status_a"
+  printf 'undeliverable: listener pid 1 is up with 1 wake(s) pending, but the published tmux server could not be verified\n' > "$status_b"
+  write_fake_delivery "$delivery"
+  write_fake_tmux "$tmux" "$log"
+  # A seat that is gone, so presence reads absent and the alarm below has an
+  # absence to report on.
+  record_seat "$home" 999999
+  # The captain's channel, recording what it was handed.
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'cat >> "%s/outbox"\n' "$home"
+  } > "$home/send"
+  chmod +x "$home/send"
+
+  cycle() {  # <status-file>
+    FM_SEAT_RESPAWNER_MAX_ATTEMPTS=2 FM_FAKE_DELIVERY_STATUS="$1" \
+      run_respawner_once "$home" "$delivery" "$tmux"
+  }
+  run_status() {
+    env FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$home/state" \
+      FM_CONFIG_OVERRIDE="$home/config" FM_SEAT_RESPAWNER_FORCE_BACKEND=keeper \
+      "$SERVICE" status
+  }
+  publish_healthy_respawner() {
+    mkdir -p "$home/state/.seat-respawner.lock"
+    {
+      printf 'pid=%s\n' "$$"
+      printf 'fm-home=%s\n' "$home"
+    } > "$home/state/.seat-respawner.lock/record"
+    : > "$home/state/.last-seat-respawner-beat"
+  }
+
+  # An episode that spends its whole bound on condition A and gives up.
+  cycle "$status_a" || fail "respawner refused the first cycle on condition A"
+  sleep 2
+  cycle "$status_a" || fail "respawner refused the second cycle on condition A"
+  sleep 3
+  cycle "$status_a" || fail "respawner refused the give-up cycle on condition A"
+  findings=$(find "$home/data/findings" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')
+  [ "$findings" = 1 ] \
+    || fail "the first episode never reached its bound; got $findings give-up findings"
+  [ -f "$home/state/.seat-respawn-giveup" ] \
+    || fail "the first episode recorded no give-up, so nothing can go stale"
+
+  # One cycle under a different blocked reason retires that episode and starts
+  # another, and the reason then returns.
+  cycle "$status_b" || fail "respawner refused the cycle on condition B"
+  cycle "$status_a" || fail "respawner refused the cycle that returned to condition A"
+
+  publish_healthy_respawner
+  out=$(run_status)
+  case "$out" in
+    gave-up:*) fail "a fresh episode was reported as one that had stopped retrying: $out" ;;
+  esac
+
+  # The same reading as the captain gets it.
+  env FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_SEAT_ALARM_DISABLE=0 \
+    FM_SEAT_ALARM_SEND="$home/send" FM_SEAT_ALARM_GRACE=0 \
+    "$ROOT/bin/fm-seat-alarm.sh" >/dev/null
+  [ -s "$home/outbox" ] \
+    || fail "the alarm reported nothing, so the restarter sentence was never composed"
+  assert_no_grep "stopped retrying" "$home/outbox" \
+    "the captain was told the restart had stopped retrying while a fresh episode was launching"
+
+  # And the fresh episode reaches its OWN bound with its own finding, rather
+  # than being silenced by the record the first one left.
+  sleep 2
+  cycle "$status_a" || fail "respawner refused the second cycle of the fresh episode"
+  sleep 3
+  cycle "$status_a" || fail "respawner refused the give-up cycle of the fresh episode"
+  findings=$(find "$home/data/findings" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')
+  [ "$findings" = 2 ] \
+    || fail "the fresh episode gave up in silence; got $findings give-up findings"
+
+  publish_healthy_respawner
+  out=$(run_status)
+  case "$out" in
+    gave-up:*) : ;;
+    *) fail "the fresh episode's own give-up was not reported: $out" ;;
+  esac
+  pass "an episode started under a previously given-up key is reported and bounded as its own"
+}
+
 # The state this whole area exists to remove is a restarter that is in the tree
 # and has never once run, so an armed home with no beacon at all must be the
 # loudest case rather than the one that stays silent.
@@ -1280,6 +1387,7 @@ test_a_stale_confirmation_never_claims_the_pane_is_still_open
 test_an_inherited_confirmation_never_claims_the_pane_is_still_open
 test_a_held_first_turn_is_reported_as_holding_rather_than_up
 test_a_respawner_that_gave_up_is_not_reported_as_a_running_restart
+test_a_new_episode_under_a_previously_given_up_key_is_still_live
 test_an_armed_restart_that_never_ran_is_reported
 test_launch_does_not_pin_the_respawners_path
 test_resume_style_launch_command_is_refused
