@@ -1912,6 +1912,22 @@ test_a_configured_floor_wins_over_the_derived_one() {
   assert_contains "$out" "the one this home configures" "a configured floor was not reported as configured"
   assert_contains "$out" "793 MiB on this machine" "a configured floor did not state what the derivation would have given"
 
+  # Above the calibration host the derivation is the CAP, not the share, and the
+  # note has to name the figure it actually would have used. A reader who checks
+  # the multiplication must find it true: 10.2% of 65,536 MiB is 6,706 MiB, and
+  # 2,400 MiB is what the cap leaves, so neither may be printed under the other's
+  # label.
+  reset_home
+  FM_TEST_TOTAL_KB=67108864
+  FM_TEST_FLOOR=4096
+  reading 1800 true 0
+  out=$(derived_floor_alarm)
+  unset FM_TEST_FLOOR
+  assert_contains "$out" "below the 4096 MiB floor" "a configured floor did not win on a machine larger than the calibration host"
+  assert_contains "$out" "2400 MiB, capped there rather than derived upward" "a configured floor did not name the capped figure the derivation would have given"
+  assert_contains "$out" "would be 6706 MiB" "a configured floor did not name the share the cap declined"
+  assert_not_contains "$out" "2400 MiB on this machine" "the capped figure was presented as this machine's share of total RAM"
+
   # An unusable value is a typo rather than a choice, so it falls back to the
   # derivation the same way an unusable stall gate falls back to the shipped one -
   # and says so, rather than silently switching the condition off.

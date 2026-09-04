@@ -392,10 +392,10 @@ fi
 
 # --- the floor --------------------------------------------------------------
 #
-# The floor's calibration, which docs/memory-alarm.md "The floor" owns: the
-# 2,400 MiB measured on 2026-08-13 was 10.2% of the 23,456 MiB host it was
-# measured on, and 6.1 times below the lowest RAM headroom ordinary busy work
-# reached there. Both figures are properties of THAT host.
+# The floor's calibration, which docs/memory-alarm.md "Floor: 10.2% of total
+# RAM" owns: the 2,400 MiB measured on 2026-08-13 was 10.2% of the 23,456 MiB
+# host it was measured on, and 6.1 times below the lowest RAM headroom ordinary
+# busy work reached there. Both figures are properties of THAT host.
 #
 # What ships is therefore the RATIO and not the number. The alarm reads
 # `MemTotal` on every poll already, so it derives the floor as the same SHARE of
@@ -930,10 +930,16 @@ derive_floor() {  # sets FLOOR_MIB and FLOOR_NOTE, from TOTAL_MIB
     'BEGIN { printf "%.1f", f * 100 / t }')
   if [ -n "$FLOOR_OVERRIDE_MIB" ]; then
     FLOOR_MIB=$FLOOR_OVERRIDE_MIB
-    FLOOR_NOTE="The $FLOOR_MIB MiB floor is the one this home configures, which wins over the $share% of total RAM the alarm would otherwise derive"
+    FLOOR_NOTE="The $FLOOR_MIB MiB floor is the one this home configures, which wins over the floor this alarm would otherwise derive from the machine"
     if [ -n "$TOTAL_MIB" ] && [ "$TOTAL_MIB" -gt 0 ]; then
       pair=$(derived_floor_mib)
-      FLOOR_NOTE="$FLOOR_NOTE - ${pair%% *} MiB on this machine's $TOTAL_MIB MiB."
+      derived=${pair%% *}
+      uncapped=${pair#* }
+      if [ "$derived" != "$uncapped" ]; then
+        FLOOR_NOTE="$FLOOR_NOTE - $derived MiB, capped there rather than derived upward, because $share% of this machine's $TOTAL_MIB MiB would be $uncapped MiB."
+      else
+        FLOOR_NOTE="$FLOOR_NOTE - $share% of total RAM, $derived MiB on this machine's $TOTAL_MIB MiB."
+      fi
     else
       FLOOR_NOTE="$FLOOR_NOTE, which could not be computed here because this machine's total RAM was not read."
     fi

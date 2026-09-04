@@ -331,7 +331,8 @@ Only one host has an ordinary-operation baseline.
 The share transfers the calibration honestly; it does not verify it anywhere else.
 
 **`FM_MEMORY_ALARM_FLOOR_MIB` still wins.**
-A home that sets it gets that floor, and every verdict says the floor was configured rather than derived and names what the derivation would have given.
+A home that sets it gets that floor, and the crossing line says the floor was configured rather than derived and names what the derivation would have given - as does `--status`, on both the crossed and the calm verdict.
+That note rides the same places the derivation's own does: it is what a reader has in front of them when the floor is what fired, and it is not repeated on a recovery, a quiet poll, or a verdict that could not be reached, which would cost noise on every sweep to restate a number that did not decide anything.
 A value that is not a positive number of MiB is a typo rather than a choice, so it falls back to the derivation and every verdict says that too - the same way an unusable stall gate does.
 
 **When the total cannot be read**, the floor cannot be derived from it, and the alarm falls back to the 2,400 MiB calibration figure and names it as **inherited here rather than derived** - because a margin nobody restates after a host move is the exact failure this derivation replaced.
