@@ -41,8 +41,8 @@
 # `captain` is the kind durable captain decisions carry, and those are owned by
 # bin/fm-decision-hold.sh under .agents/skills/decision-hold-lifecycle. This
 # script never calls `tasks-axi hold`, and a hold is what
-# bin/fm-fleet-snapshot.sh reads for captain-actionability, so the refusal is
-# about ownership rather than the surface. `fog` and
+# bin/fm-captain-actionable-lib.sh reads for captain-actionability, so the
+# refusal is about ownership rather than the surface. `fog` and
 # `out-of-course` are the sea chart's own kinds, spelled by
 # bin/fm-chart-kinds-lib.sh and carried on `-fog-`/`-oos-` ids this script does
 # not compose. Slicing work must never manufacture a record of any of the three

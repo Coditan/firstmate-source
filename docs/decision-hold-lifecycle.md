@@ -261,7 +261,8 @@ It resolves every repeated `blocked-by:` edge against structured Done records, k
 `bin/fm-captain-actionable-lib.sh` owns that predicate in full, including why it asks who is being asked rather than what phase the work is in: a captain hold on a record already under way is a question that stopped that work, and it reaches the surface exactly as a queued one does.
 Only a terminal record is excluded on state, and `!= "done"` is the whole of that in this schema.
 Every NON-TERMINAL record carrying `hold-kind: captain` that the predicate did not return is counted, with its reason and its ids, in `backlog.omitted[]`, so shown plus withheld is exhaustive over the population that could have reached the surface and a short list is distinguishable from a filtered one.
-A Done record was never a candidate for it, so it is not counted as withheld and the count is zero exactly when nothing answerable is hidden.
+A Done record was never a candidate for it, so it is not counted as withheld; the count is the records withheld from the captain-actionable surface rather than a count of unanswered questions, because a record the captain has already answered whose close is unfinished is still a candidate and is still withheld.
+Read it with the per-reason breakdown printed beside it: `answered_pending_close` is the one he has already answered, and every other reason is a decision still awaiting his answer.
 Its secondmate-home summary classifies an actionable captain hold as `captain_decision` and preserves blocked captain holds as queued work in the owning home.
 
 `bin/fm-bearings-snapshot.sh` projects actionable captain holds into `decisions_open`, labels the total as `captain_actionable_holds_count`, leaves blocked captain holds in ordinary queued gates, and surfaces dangling blocker edges in `integrity[]` as ready work with a data-integrity caution.

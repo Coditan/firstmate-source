@@ -2193,7 +2193,7 @@ EOF
 # empty-state sentence, documents the At Anchor exclusion, and mandates a chat that is
 # materially shorter than and links to the report file.
 test_chat_contract_four_sections() {
-  local skill body headings report_headings expected
+  local skill body headings report_headings expected underway_rule
   skill="$ROOT/.agents/skills/bearings/SKILL.md"
   [ -f "$skill" ] || fail "bearings SKILL.md missing at $skill"
   body=$(awk '/^## Chat-response contract$/{capture=1; next} capture && /^## /{exit} capture' "$skill")
@@ -2223,7 +2223,15 @@ test_chat_contract_four_sections() {
   # shellcheck disable=SC2016 # Backticks are literal Markdown in the expected text.
   assert_no_grep 'appears Underway only for `active_child_work`' "$skill" \
     "the bearings skill must not restrict an Underway secondmate row to one state the projection no longer gates on"
-  assert_contains "$(cat "$skill")" "running children" "the skill must state what actually puts a secondmate row on Underway"
+  # Assert the RULE, not one spelling of it: the skill must somewhere tie the
+  # Underway bucket to the children the home is running. "running children",
+  # "active child work", and "the children a home is running" all state it
+  # honestly and must all pass; going silent on it must not, because silence is
+  # how a renderer starts dropping the row again.
+  underway_rule=$(grep -Ei 'underway|in_flight' "$skill" \
+    | grep -Ei '(runn|activ|live|under way|working)[^.]{0,40}child|child[^.]{0,60}(runn|activ|under way|working)')
+  [ -n "$underway_rule" ] \
+    || fail "the skill must state that the children a home is running are what put a secondmate row on Underway"
   pass "the /bearings skill states the four-section chat contract in order, with empty-states and the At Anchor exclusion"
 }
 

@@ -33,8 +33,12 @@
 #     carrying `hold-kind: captain` that captain_actionable did not return, so the
 #     two sets are exhaustive over the population that could have reached the
 #     surface and a short list is distinguishable from a filtered one. A Done
-#     record was never a candidate, so it is not counted as withheld and the count
-#     is 0 exactly when nothing answerable is hidden.
+#     record was never a candidate, so it is not counted as withheld. The count is
+#     the records withheld from the surface, not a count of unanswered questions:
+#     a record the captain has already answered whose close is unfinished is
+#     still a candidate and is still withheld. The per-reason breakdown beside it
+#     is what separates the two - answered_pending_close is the already-answered
+#     one, every other reason still awaits his answer.
 #     bin/fm-captain-actionable-lib.sh owns the predicate, the
 #     reason vocabulary, and why each clause is there; under `--backlog-json` the
 #     reasons follow that file's own blocker resolution, as everything else there
