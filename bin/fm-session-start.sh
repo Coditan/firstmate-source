@@ -833,14 +833,39 @@ for meta in "$STATE"/*.meta; do
   target=$(fm_backend_target_of_meta "$meta")
   if [ -n "$window" ]; then
     backend=$(fm_backend_of_meta "$meta")
-    if fm_backend_target_exists "$backend" "${target:-$window}" "fm-$id"; then
-      printf 'endpoint: alive (backend=%s window=%s)\n' "$backend" "$window"
+    # Two questions, asked separately, because collapsing them cost a whole
+    # fleet on 2026-09-04: the container was rebuilt, all fourteen workers
+    # died, and every one of them still printed "endpoint: alive" here.
+    # fm_backend_target_exists answers only whether the ENDPOINT is there,
+    # which is the right contract for its own callers - on herdr it maps both
+    # `no-agent` and `live` to present (bin/fm-backend.sh). Printing that
+    # presence answer with the word for a live worker is what this digest got
+    # wrong, and the digest is the first thing a session reads: firstmate took
+    # it as the fleet's state and steered four dead panes as if crew were in
+    # them. So existence decides dead-vs-there, and fm_backend_agent_alive
+    # decides what is actually IN it. Anything the agent probe cannot confirm
+    # - an unreadable read, or a backend with no agent probe at all - reports
+    # unknown and names it, never the reassuring word.
+    fm_backend_target_exists "$backend" "${target:-$window}" "fm-$id"
+    endpoint_status=$?
+    if [ "$endpoint_status" -eq 0 ]; then
+      case "$(fm_backend_agent_alive "$backend" "${target:-$window}")" in
+        alive)
+          printf 'endpoint: alive (backend=%s window=%s)\n' "$backend" "$window"
+          ;;
+        dead)
+          printf 'endpoint: NO AGENT - the window exists but nothing is running in it (backend=%s window=%s)\n' \
+            "$backend" "$window"
+          ;;
+        *)
+          printf 'endpoint: unknown (backend=%s window=%s exists, agent state unreadable)\n' \
+            "$backend" "$window"
+          ;;
+      esac
+    elif [ "$endpoint_status" -eq 1 ]; then
+      printf 'endpoint: dead (backend=%s window=%s)\n' "$backend" "$window"
     else
-      if [ "$?" -eq 1 ]; then
-        printf 'endpoint: dead (backend=%s window=%s)\n' "$backend" "$window"
-      else
-        printf 'endpoint: unknown (backend=%s window=%s unreadable)\n' "$backend" "$window"
-      fi
+      printf 'endpoint: unknown (backend=%s window=%s unreadable)\n' "$backend" "$window"
     fi
   else
     printf 'endpoint: unknown (no window recorded)\n'
